@@ -174,6 +174,16 @@ export function App() {
             ]
           })
           break
+        case 'context-compacted':
+          setBlocks((prev) => [
+            ...prev,
+            {
+              kind: 'notice',
+              id: `b${nextId.current++}`,
+              text: `上下文已压缩（${event.level === 'full' ? '摘要' : '清理'}：${Math.round(event.preTokens / 1000)}k → ${Math.round(event.postTokens / 1000)}k tokens）`,
+            },
+          ])
+          break
         case 'error':
           setBlocks((prev) => [...prev, { kind: 'error', id: `b${nextId.current++}`, text: event.message }])
           break

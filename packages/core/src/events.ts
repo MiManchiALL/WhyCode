@@ -68,6 +68,14 @@ export type CoreEvent =
     }
   /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
+  // --- 上下文压缩（M2-d）---
+  | {
+      type: 'context-compacted'
+      /** micro = 仅清理旧工具输出；full = 摘要压缩 */
+      level: 'micro' | 'full'
+      preTokens: number
+      postTokens: number
+    }
 
 export type StopReason = 'completed' | 'aborted' | 'max-turns' | 'error'
 
