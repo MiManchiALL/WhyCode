@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
-import { PERMISSION_MODES, type PermissionMode } from '@whycode/core'
-import type { AgentStatus, CoreEvent } from '@whycode/core'
+// 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
+// Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
+import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
+import type { AgentStatus, CoreEvent } from '@whycode/core/events'
 
 interface ToolCall {
   id: string
