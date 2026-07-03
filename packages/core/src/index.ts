@@ -19,3 +19,5 @@ export {
   type ToolContext,
   type ToolResult,
 } from './tools/tool.ts'
+export { AgentSession, type AgentSessionOptions } from './agent/session.ts'
+export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'

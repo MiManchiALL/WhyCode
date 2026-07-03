@@ -6,6 +6,8 @@ import { IPC } from '../shared/ipc.ts'
 const api = {
   sendCommand: (command: CoreCommand): Promise<void> =>
     ipcRenderer.invoke(IPC.command, command),
+  listModels: (): Promise<{ id: string; displayName: string }[]> =>
+    ipcRenderer.invoke(IPC.listModels),
   onEvent: (listener: (event: CoreEvent) => void): (() => void) => {
     const wrapped = (_: unknown, event: CoreEvent) => listener(event)
     ipcRenderer.on(IPC.event, wrapped)

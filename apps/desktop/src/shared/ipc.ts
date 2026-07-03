@@ -7,4 +7,6 @@ export const IPC = {
   command: 'whycode:command',
   /** Main → Renderer：CoreEvent 事件流 */
   event: 'whycode:event',
+  /** Renderer → Main：获取可用模型列表 */
+  listModels: 'whycode:list-models',
 } as const
