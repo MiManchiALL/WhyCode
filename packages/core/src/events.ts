@@ -68,6 +68,14 @@ export type CoreEvent =
     }
   /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
+  // --- 上下文压缩（M2-d）---
+  | {
+      type: 'context-compacted'
+      /** micro = 仅清理旧工具输出；full = 摘要压缩 */
+      level: 'micro' | 'full'
+      preTokens: number
+      postTokens: number
+    }
 
 export type StopReason = 'completed' | 'aborted' | 'max-turns' | 'error'
 
@@ -93,6 +101,8 @@ export type CoreCommand =
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
+  /** 手动触发上下文压缩（仅空闲时） */
+  | { type: 'compact' }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */
 export type CoreEventSink = (event: CoreEvent) => void

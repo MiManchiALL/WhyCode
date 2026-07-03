@@ -45,7 +45,6 @@ function broadcastEvent(event: CoreEvent): void {
 
 /** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
 let session: AgentSession | null = null
-let currentAbort: AbortController | null = null
 /** 当前项目目录；未选择时为 null，发消息前必须先选 */
 let projectDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
@@ -118,18 +117,15 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'agent-status', status: 'idle' })
         return
       }
-      if (!session!.isRunning) {
-        currentAbort = new AbortController()
-      }
-      // 运行中 = 排队（steering，urgent 则打断当前步骤立即注入）；空闲 = 开新 turn
-      await session!.handleUserMessage(command.text, currentAbort!.signal, command.urgent)
+      // 运行中/压缩中 = 排队（steering）；空闲 = 开新 turn；中止器由 session 自管
+      await session!.handleUserMessage(command.text, command.urgent)
       break
     }
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
       for (const resolve of pendingApprovals.values()) resolve({ approved: false })
       pendingApprovals.clear()
-      currentAbort?.abort()
+      session?.abort()
       break
     }
     case 'set-permission-mode': {
@@ -139,6 +135,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
     }
     case 'restore-checkpoint': {
       await session?.restoreCheckpoint(command.toolUseId, command.scope)
+      break
+    }
+    case 'compact': {
+      if (!session) {
+        broadcastEvent({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
+        break
+      }
+      await session.compactNow()
       break
     }
     case 'set-model': {

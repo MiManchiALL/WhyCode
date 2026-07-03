@@ -6,6 +6,11 @@ import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
 import { checkToolPermission } from '../permissions/engine.ts'
 import { CheckpointManager } from '../checkpoints/manager.ts'
+import { autoCompactThreshold, estimateContextTokens, type TokenBaseline } from '../context/tokens.ts'
+import { microcompact } from '../context/microcompact.ts'
+import { compactMessages } from '../context/compact.ts'
+import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
+import { resolveAllowed } from '../tools/fs-utils.ts'
 import {
   createPermissionContext,
   type ApprovalSuggestion,
@@ -14,6 +19,7 @@ import {
 } from '../permissions/types.ts'
 
 const MAX_STEPS = 25
+const MAX_COMPACT_FAILURES = 3
 
 export interface AgentSessionOptions {
   model: ModelEntry
@@ -78,6 +84,16 @@ export class AgentSession {
   private firstCheckpointOfTurn = new Map<string, string>()
   /** 当前 turn 信息（快照记录用） */
   private activeTurn: { id: string; startLen: number } | null = null
+  /** 当前操作（turn 或压缩）的中止器，session 自管 */
+  private opAbort: AbortController | null = null
+  /** 手动压缩进行中（此间用户消息排队，压缩后接续） */
+  private compacting = false
+  /** token 计量基线（最后一次 API usage）；改写历史后置 null 全量重估 */
+  private tokenBaseline: TokenBaseline | null = null
+  /** 压缩熔断：连续失败 3 次后本会话停止尝试，成功清零 */
+  private compactFailures = 0
+  /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
+  private recentReadFiles = new Map<string, number>()
 
   constructor(options: AgentSessionOptions) {
     this.options = options
@@ -107,29 +123,36 @@ export class AgentSession {
   }
 
   /**
-   * 用户消息统一入口：空闲时开始新 turn；运行中则排队（steering）。
+   * 用户消息统一入口：空闲时开始新 turn；运行中/压缩中则排队（steering）。
    * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
    */
-  handleUserMessage(
-    text: string,
-    abortSignal: AbortSignal,
-    urgent = false,
-  ): Promise<void> | void {
-    if (this.running) {
+  handleUserMessage(text: string, urgent = false): Promise<void> | void {
+    if (this.running || this.compacting) {
       const item = { id: crypto.randomUUID(), text }
       this.queue.push(item)
       this.options.emit({ type: 'message-queued', id: item.id, text })
-      if (urgent) {
+      if (urgent && this.running) {
         // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
         this.currentStepAbort?.abort('interrupt')
       }
       return
     }
-    return this.runLoop([{ role: 'user', content: text }], abortSignal)
+    return this.startTurn([{ role: 'user', content: text }])
+  }
+
+  /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
+  private startTurn(initialMessages: ModelMessage[]): Promise<void> {
+    this.opAbort = new AbortController()
+    return this.runLoop(initialMessages, this.opAbort.signal)
+  }
+
+  /** 用户点「停止」：中止当前 turn 或压缩 */
+  abort(): void {
+    this.opAbort?.abort('user-cancel')
   }
 
   /** 中断收尾：排队消息弹回输入框，不静默丢弃 */
-  onAborted(): void {
+  private onAborted(): void {
     if (this.queue.length > 0) {
       const text = this.queue.map((q) => q.text).join('\n')
       this.queue = []
@@ -183,6 +206,7 @@ export class AgentSession {
       let steps = 0
       while (steps < MAX_STEPS) {
         steps++
+        await this.compactIfNeeded(abortSignal)
         const hadToolCalls = await this.runOneStep(usage, abortSignal)
         if (abortSignal.aborted) {
           stopReason = 'aborted'
@@ -220,13 +244,117 @@ export class AgentSession {
       for (const item of drained) {
         emit({ type: 'message-injected', id: item.id, text: item.text })
       }
-      return this.runLoop(
-        drained.map((q) => ({ role: 'user' as const, content: q.text })),
-        abortSignal,
-      )
+      return this.startTurn(drained.map((q) => ({ role: 'user' as const, content: q.text })))
     }
 
     emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
+  }
+
+  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；期间用户消息排队，完成后接续 */
+  async compactNow(): Promise<void> {
+    const { emit } = this.options
+    if (this.running || this.compacting) {
+      emit({ type: 'error', message: 'Agent 工作中，请先停止再压缩', recoverable: true })
+      return
+    }
+    if (this.messages.length < 2) {
+      emit({ type: 'error', message: '对话太短，无需压缩', recoverable: true })
+      return
+    }
+    this.compacting = true
+    this.opAbort = new AbortController()
+    const signal = this.opAbort.signal
+    const preTokens = estimateContextTokens(this.messages, this.tokenBaseline)
+    emit({ type: 'agent-status', status: 'working' })
+    try {
+      const result = await compactMessages(
+        this.options.model.create(this.options.providerConfig),
+        this.messages,
+        [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
+        signal,
+      )
+      this.messages = result.messages
+      this.tokenBaseline = null
+      this.compactFailures = 0
+      for (const [key, rec] of this.checkpointIndex) {
+        this.checkpointIndex.set(key, { ...rec, turnStartLen: -1 })
+      }
+      emit({
+        type: 'context-compacted',
+        level: 'full',
+        preTokens,
+        postTokens: estimateContextTokens(this.messages, null),
+      })
+    } catch (error) {
+      emit({
+        type: 'error',
+        message: signal.aborted
+          ? '压缩已取消'
+          : `压缩失败：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      })
+    }
+    this.compacting = false
+    emit({ type: 'agent-status', status: 'idle' })
+
+    // 压缩期间排队的消息：取消则弹回输入框；正常结束则在新上下文上接续为新 turn
+    if (signal.aborted) {
+      this.onAborted()
+    } else if (this.queue.length > 0) {
+      const drained = this.drainQueue()
+      for (const item of drained) {
+        emit({ type: 'message-injected', id: item.id, text: item.text })
+      }
+      return this.startTurn(drained.map((q) => ({ role: 'user' as const, content: q.text })))
+    }
+  }
+
+  /**
+   * 上下文压缩检查（每次模型请求前，文档一 §3.4）：
+   * 超阈值 → 先微清理（零成本）→ 仍超 → 全量摘要压缩；连续失败熔断。
+   */
+  private async compactIfNeeded(abortSignal: AbortSignal): Promise<void> {
+    const { emit } = this.options
+    const threshold = autoCompactThreshold(this.options.model.capabilities)
+    let estimate = estimateContextTokens(this.messages, this.tokenBaseline)
+    if (estimate < threshold || this.compactFailures >= MAX_COMPACT_FAILURES) return
+
+    const preTokens = estimate
+    // 第一级：微清理旧工具输出（改写历史后基线失效，全量重估）
+    const cleaned = microcompact(this.messages)
+    if (cleaned) {
+      this.messages = cleaned
+      this.tokenBaseline = null
+      estimate = estimateContextTokens(this.messages, null)
+      if (estimate < threshold) {
+        emit({ type: 'context-compacted', level: 'micro', preTokens, postTokens: estimate })
+        return
+      }
+    }
+
+    // 第二级：全量摘要压缩
+    try {
+      const result = await compactMessages(
+        this.options.model.create(this.options.providerConfig),
+        this.messages,
+        [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
+        abortSignal,
+      )
+      this.messages = result.messages
+      this.tokenBaseline = null
+      this.compactFailures = 0
+      // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用），turn 起点重置
+      for (const [key, rec] of this.checkpointIndex) {
+        this.checkpointIndex.set(key, { ...rec, turnStartLen: -1 })
+      }
+      if (this.activeTurn) this.activeTurn = { ...this.activeTurn, startLen: 0 }
+      const postTokens = estimateContextTokens(this.messages, null)
+      emit({ type: 'context-compacted', level: 'full', preTokens, postTokens })
+    } catch (error) {
+      if (abortSignal.aborted) throw error
+      this.compactFailures++
+      // 失败不阻塞：请求可能仍能成功（估算偏保守），连续 3 次后停止尝试
+    }
   }
 
   /** 单步：一次模型调用 + 步内工具执行；返回是否发生了工具调用 */
@@ -252,6 +380,7 @@ export class AgentSession {
 
       let hadToolCalls = false
       let thinkingStartedAt: number | null = null
+      let stepTotalTokens = 0
 
       for await (const part of result.fullStream) {
         switch (part.type) {
@@ -281,6 +410,9 @@ export class AgentSession {
             usage.inputTokens += part.totalUsage.inputTokens ?? 0
             usage.outputTokens += part.totalUsage.outputTokens ?? 0
             usage.cachedInputTokens += part.totalUsage.inputTokenDetails.cacheReadTokens ?? 0
+            // 本步的 input+output = 请求结束时完整上下文大小，作为计量基线
+            stepTotalTokens =
+              (part.totalUsage.inputTokens ?? 0) + (part.totalUsage.outputTokens ?? 0)
             break
           case 'error':
             throw part.error instanceof Error ? part.error : new Error(String(part.error))
@@ -296,6 +428,12 @@ export class AgentSession {
       // 本步产生的消息（assistant + tool 结果）并入历史
       const response = await result.response
       this.messages.push(...response.messages)
+      if (stepTotalTokens > 0) {
+        this.tokenBaseline = {
+          usageTokens: stepTotalTokens,
+          coveredMessageCount: this.messages.length,
+        }
+      }
       return hadToolCalls
     } catch (error) {
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
@@ -387,6 +525,15 @@ export class AgentSession {
               onProgress: (output) =>
                 emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
             })
+            // 记录读过的文件（压缩后重注入，防失忆）
+            if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
+              try {
+                const abs = resolveAllowed(toolCtx, (parsed.data as { path: string }).path)
+                this.recentReadFiles.set(abs, Date.now())
+              } catch {
+                /* 越界读取已被权限层处理，这里忽略 */
+              }
+            }
             emit({
               type: 'tool-end',
               toolUseId: toolCallId,
@@ -422,6 +569,17 @@ export class AgentSession {
     }
     // 文件+对话：文件回到该 turn 第一个快照（=turn 起点状态），与对话截断保持一致；
     // 仅文件：精确回到该操作前
+    if (scope === 'files-and-chat' && record.turnStartLen < 0) {
+      emit({
+        type: 'checkpoint-restored',
+        toolUseId,
+        turnId: record.turnId,
+        scope,
+        ok: false,
+        error: '该操作早于上下文压缩，只能回滚文件（选「仅文件」）',
+      })
+      return
+    }
     const targetHash =
       scope === 'files-and-chat'
         ? (this.firstCheckpointOfTurn.get(record.turnId) ?? record.hash)
