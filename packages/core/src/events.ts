@@ -45,6 +45,11 @@ export type CoreEvent =
   | { type: 'turn-end'; turnId: string; usage: UsageInfo; stopReason: StopReason }
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
+  // --- steering（M2-a）：运行中插话 ---
+  | { type: 'message-queued'; id: string; text: string }
+  | { type: 'message-injected'; id: string; text: string }
+  /** 中断后把排队文本还给输入框（不静默丢弃） */
+  | { type: 'queue-restored'; text: string }
 
 export type StopReason = 'completed' | 'aborted' | 'max-turns' | 'error'
 
@@ -53,6 +58,8 @@ export type CoreCommand =
   | {
       type: 'user-message'
       text: string
+      /** true = 立即插话：打断当前步骤马上注入（Claude Code 的 now 语义）；默认排队到步骤间 */
+      urgent?: boolean
       /** 附件文件路径（宠物文件投递复用此通道） */
       attachmentPaths?: string[]
     }

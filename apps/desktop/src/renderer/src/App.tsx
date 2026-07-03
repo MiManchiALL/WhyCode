@@ -35,6 +35,7 @@ export function App() {
   const [approval, setApproval] = useState<Approval | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [projectDir, setProjectDir] = useState<string | null>(null)
+  const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
 
@@ -52,6 +53,20 @@ export function App() {
       switch (event.type) {
         case 'agent-status':
           setStatus(event.status)
+          break
+        case 'message-queued':
+          setQueued((prev) => [...prev, { id: event.id, text: event.text }])
+          break
+        case 'message-injected':
+          setQueued((prev) => prev.filter((q) => q.id !== event.id))
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'user', id: `b${nextId.current++}`, text: event.text },
+          ])
+          break
+        case 'queue-restored':
+          setQueued([])
+          setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
           break
         case 'text-delta':
           setBlocks((prev) => appendText(prev, event.text, nextId))
@@ -122,12 +137,15 @@ export function App() {
     })
   }, [])
 
-  const send = useCallback(() => {
+  const send = useCallback((urgent = false) => {
     const text = input.trim()
-    if (!text || busy) return
-    setBlocks((prev) => [...prev, { kind: 'user', id: `b${nextId.current++}`, text }])
+    if (!text) return
+    // 忙碌时不直接显示为用户消息——Main 会排队并回 message-queued 事件
+    if (!busy) {
+      setBlocks((prev) => [...prev, { kind: 'user', id: `b${nextId.current++}`, text }])
+    }
     setInput('')
-    void window.whycode.sendCommand({ type: 'user-message', text })
+    void window.whycode.sendCommand({ type: 'user-message', text, urgent })
   }, [input, busy])
 
   const respondApproval = useCallback((approved: boolean) => {
@@ -192,7 +210,7 @@ export function App() {
           <p className="mt-24 text-center text-sm text-neutral-400">
             {projectDir
               ? '与 WhyCode 对话，它能读写文件、执行命令（写操作需你确认）'
-              : '先选择项目目录，然后开始对话'}
+              : '纯聊天模式：可直接对话；选择项目目录后解锁文件与命令能力'}
           </p>
         )}
         {blocks.map((b) => (
@@ -209,31 +227,52 @@ export function App() {
       </main>
 
       <footer className="border-t border-neutral-200 p-4">
+        {queued.length > 0 && (
+          <div className="mb-2 space-y-1">
+            {queued.map((q) => (
+              <div key={q.id} className="truncate rounded bg-neutral-100 px-3 py-1 text-xs text-neutral-400">
+                ⏳ 已排队 · {q.text}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex gap-2">
           <input
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder={busy ? '处理中…' : projectDir ? '输入消息…' : '先选择项目目录'}
-            disabled={busy || !projectDir}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return
+              // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
+              send(e.ctrlKey)
+            }}
+            placeholder={busy ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话' : projectDir ? '输入消息…' : '纯聊天模式，输入消息…'}
           />
-          {busy ? (
+          {busy && (
             <button
               className="rounded-md border border-neutral-300 px-4 py-2 text-sm"
               onClick={() => window.whycode.sendCommand({ type: 'abort' })}
             >
               停止
             </button>
-          ) : (
+          )}
+          {busy && (
             <button
-              className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
-              onClick={send}
+              className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
+              onClick={() => send(true)}
               disabled={!input.trim()}
+              title="打断当前步骤，立即插话"
             >
-              发送
+              立即
             </button>
           )}
+          <button
+            className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
+            onClick={() => send(false)}
+            disabled={!input.trim()}
+          >
+            {busy ? '排队' : '发送'}
+          </button>
         </div>
       </footer>
     </div>

@@ -87,7 +87,6 @@ function resolveDefaultModelId(): string | null {
 }
 
 function ensureSession(): string | null {
-  if (!projectDir) return '请先选择项目目录'
   currentModelId ??= resolveDefaultModelId()
   if (!currentModelId) return '没有任何已配置 key 的模型可用'
   const err = validateModel(currentModelId)
@@ -97,10 +96,13 @@ function ensureSession(): string | null {
   if (session) {
     session.setModel(entry, providerConfig)
   } else {
+    // projectDir 为 null = 纯聊天模式（无工具），core 侧按此适配
     session = new AgentSession({
       model: entry,
       providerConfig,
       promptContext: { projectDir, osPlatform: process.platform },
+      emit: broadcastEvent,
+      requestApproval,
     })
   }
   return null
@@ -115,9 +117,11 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'agent-status', status: 'idle' })
         return
       }
-      currentAbort = new AbortController()
-      await session!.run(command.text, currentAbort.signal, broadcastEvent, requestApproval)
-      currentAbort = null
+      if (!session!.isRunning) {
+        currentAbort = new AbortController()
+      }
+      // 运行中 = 排队（steering，urgent 则打断当前步骤立即注入）；空闲 = 开新 turn
+      await session!.handleUserMessage(command.text, currentAbort!.signal, command.urgent)
       break
     }
     case 'abort': {
