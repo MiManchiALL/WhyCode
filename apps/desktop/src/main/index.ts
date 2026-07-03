@@ -100,6 +100,7 @@ function ensureSession(): string | null {
       model: entry,
       providerConfig,
       promptContext: { projectDir, osPlatform: process.platform },
+      checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
       emit: broadcastEvent,
       requestApproval,
     })
@@ -134,6 +135,10 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
     case 'set-permission-mode': {
       session?.setPermissionMode(command.mode)
       pendingPermissionMode = command.mode
+      break
+    }
+    case 'restore-checkpoint': {
+      await session?.restoreCheckpoint(command.toolUseId, command.scope)
       break
     }
     case 'set-model': {

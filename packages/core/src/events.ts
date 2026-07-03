@@ -54,6 +54,20 @@ export type CoreEvent =
   | { type: 'message-injected'; id: string; text: string }
   /** 中断后把排队文本还给输入框（不静默丢弃） */
   | { type: 'queue-restored'; text: string }
+  // --- 检查点（M2-c）---
+  /** 写类工具执行前的快照已建立（hash 供回滚） */
+  | { type: 'checkpoint-created'; toolUseId: string; hash: string }
+  | {
+      type: 'checkpoint-restored'
+      toolUseId: string
+      /** 所属 turn（files-and-chat 回滚时 UI 据此截断到 turn 起点） */
+      turnId: string
+      scope: 'files' | 'files-and-chat'
+      ok: boolean
+      error?: string
+    }
+  /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
+  | { type: 'checkpoint-disabled'; reason: string }
 
 export type StopReason = 'completed' | 'aborted' | 'max-turns' | 'error'
 
@@ -77,6 +91,8 @@ export type CoreCommand =
   | { type: 'abort' }
   | { type: 'set-model'; modelId: string }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
+  /** 回滚到某写操作执行前的快照（仅空闲时） */
+  | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */
 export type CoreEventSink = (event: CoreEvent) => void
