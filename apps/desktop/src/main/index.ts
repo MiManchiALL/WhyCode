@@ -120,8 +120,8 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       if (!session!.isRunning) {
         currentAbort = new AbortController()
       }
-      // 运行中 = 排队（steering），空闲 = 开新 turn；由 session 统一分派
-      await session!.handleUserMessage(command.text, currentAbort!.signal)
+      // 运行中 = 排队（steering，urgent 则打断当前步骤立即注入）；空闲 = 开新 turn
+      await session!.handleUserMessage(command.text, currentAbort!.signal, command.urgent)
       break
     }
     case 'abort': {

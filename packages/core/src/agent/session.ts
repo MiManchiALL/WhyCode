@@ -40,6 +40,8 @@ export class AgentSession {
   private messages: ModelMessage[] = []
   private queue: QueuedMessage[] = []
   private running = false
+  /** 当前步骤的中止器：turn 级取消与 urgent 插话都经由它，用 reason 区分意图 */
+  private currentStepAbort: AbortController | null = null
   private options: AgentSessionOptions
 
   constructor(options: AgentSessionOptions) {
@@ -55,14 +57,22 @@ export class AgentSession {
   }
 
   /**
-   * 用户消息统一入口：空闲时开始新 turn；运行中则排队（steering），
-   * 由循环在步骤间注入或 turn 结束后续跑。
+   * 用户消息统一入口：空闲时开始新 turn；运行中则排队（steering）。
+   * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
    */
-  handleUserMessage(text: string, abortSignal: AbortSignal): Promise<void> | void {
+  handleUserMessage(
+    text: string,
+    abortSignal: AbortSignal,
+    urgent = false,
+  ): Promise<void> | void {
     if (this.running) {
       const item = { id: crypto.randomUUID(), text }
       this.queue.push(item)
       this.options.emit({ type: 'message-queued', id: item.id, text })
+      if (urgent) {
+        // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
+        this.currentStepAbort?.abort('interrupt')
+      }
       return
     }
     return this.runLoop([{ role: 'user', content: text }], abortSignal)
@@ -168,65 +178,83 @@ export class AgentSession {
   }
 
   /** 单步：一次模型调用 + 步内工具执行；返回是否发生了工具调用 */
-  private async runOneStep(usage: UsageInfo, abortSignal: AbortSignal): Promise<boolean> {
+  private async runOneStep(usage: UsageInfo, turnAbortSignal: AbortSignal): Promise<boolean> {
     const { emit } = this.options
-    const result = streamText({
-      model: this.options.model.create(this.options.providerConfig),
-      system: buildSystemPrompt(this.options.promptContext),
-      messages: this.messages,
-      tools: this.buildToolSet(abortSignal),
-      stopWhen: stepCountIs(1),
-      providerOptions: this.options.model.providerOptions,
-      abortSignal,
-    })
+    // 步骤级中止器：turn 取消（user-cancel）与 urgent 插话（interrupt）都作用在这里
+    const stepAbort = new AbortController()
+    this.currentStepAbort = stepAbort
+    const onTurnAbort = () => stepAbort.abort('user-cancel')
+    turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
+    if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
 
-    let hadToolCalls = false
-    let thinkingStartedAt: number | null = null
+    try {
+      const result = streamText({
+        model: this.options.model.create(this.options.providerConfig),
+        system: buildSystemPrompt(this.options.promptContext),
+        messages: this.messages,
+        tools: this.buildToolSet(stepAbort.signal),
+        stopWhen: stepCountIs(1),
+        providerOptions: this.options.model.providerOptions,
+        abortSignal: stepAbort.signal,
+      })
 
-    for await (const part of result.fullStream) {
-      switch (part.type) {
-        case 'reasoning-delta': {
-          if (thinkingStartedAt === null) {
-            thinkingStartedAt = Date.now()
-            emit({ type: 'agent-status', status: 'thinking' })
+      let hadToolCalls = false
+      let thinkingStartedAt: number | null = null
+
+      for await (const part of result.fullStream) {
+        switch (part.type) {
+          case 'reasoning-delta': {
+            if (thinkingStartedAt === null) {
+              thinkingStartedAt = Date.now()
+              emit({ type: 'agent-status', status: 'thinking' })
+            }
+            emit({ type: 'thinking-delta', text: part.text })
+            break
           }
-          emit({ type: 'thinking-delta', text: part.text })
-          break
-        }
-        case 'reasoning-end': {
-          if (thinkingStartedAt !== null) {
-            emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
-            emit({ type: 'agent-status', status: 'working' })
-            thinkingStartedAt = null
+          case 'reasoning-end': {
+            if (thinkingStartedAt !== null) {
+              emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
+              emit({ type: 'agent-status', status: 'working' })
+              thinkingStartedAt = null
+            }
+            break
           }
-          break
+          case 'text-delta':
+            emit({ type: 'text-delta', text: part.text })
+            break
+          case 'tool-call':
+            hadToolCalls = true
+            break
+          case 'finish':
+            usage.inputTokens += part.totalUsage.inputTokens ?? 0
+            usage.outputTokens += part.totalUsage.outputTokens ?? 0
+            usage.cachedInputTokens += part.totalUsage.inputTokenDetails.cacheReadTokens ?? 0
+            break
+          case 'error':
+            throw part.error instanceof Error ? part.error : new Error(String(part.error))
+          default:
+            break
         }
-        case 'text-delta':
-          emit({ type: 'text-delta', text: part.text })
-          break
-        case 'tool-call':
-          hadToolCalls = true
-          break
-        case 'finish':
-          usage.inputTokens += part.totalUsage.inputTokens ?? 0
-          usage.outputTokens += part.totalUsage.outputTokens ?? 0
-          usage.cachedInputTokens += part.totalUsage.inputTokenDetails.cacheReadTokens ?? 0
-          break
-        case 'error':
-          throw part.error instanceof Error ? part.error : new Error(String(part.error))
-        default:
-          break
       }
-    }
 
-    if (thinkingStartedAt !== null) {
-      emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
-    }
+      if (thinkingStartedAt !== null) {
+        emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
+      }
 
-    // 本步产生的消息（assistant + tool 结果）并入历史
-    const response = await result.response
-    this.messages.push(...response.messages)
-    return hadToolCalls
+      // 本步产生的消息（assistant + tool 结果）并入历史
+      const response = await result.response
+      this.messages.push(...response.messages)
+      return hadToolCalls
+    } catch (error) {
+      // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
+      if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
+        return false
+      }
+      throw error
+    } finally {
+      turnAbortSignal.removeEventListener('abort', onTurnAbort)
+      this.currentStepAbort = null
+    }
   }
 
   /** 把 WhyCode 工具定义包装成 AI SDK ToolSet；纯聊天模式（无项目目录）返回空集 */

@@ -137,7 +137,7 @@ export function App() {
     })
   }, [])
 
-  const send = useCallback(() => {
+  const send = useCallback((urgent = false) => {
     const text = input.trim()
     if (!text) return
     // 忙碌时不直接显示为用户消息——Main 会排队并回 message-queued 事件
@@ -145,7 +145,7 @@ export function App() {
       setBlocks((prev) => [...prev, { kind: 'user', id: `b${nextId.current++}`, text }])
     }
     setInput('')
-    void window.whycode.sendCommand({ type: 'user-message', text })
+    void window.whycode.sendCommand({ type: 'user-message', text, urgent })
   }, [input, busy])
 
   const respondApproval = useCallback((approved: boolean) => {
@@ -241,8 +241,12 @@ export function App() {
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder={busy ? '工作中——发送的消息将排队插话…' : projectDir ? '输入消息…' : '纯聊天模式，输入消息…'}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return
+              // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
+              send(e.ctrlKey)
+            }}
+            placeholder={busy ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话' : projectDir ? '输入消息…' : '纯聊天模式，输入消息…'}
           />
           {busy && (
             <button
@@ -252,9 +256,19 @@ export function App() {
               停止
             </button>
           )}
+          {busy && (
+            <button
+              className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
+              onClick={() => send(true)}
+              disabled={!input.trim()}
+              title="打断当前步骤，立即插话"
+            >
+              立即
+            </button>
+          )}
           <button
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
-            onClick={send}
+            onClick={() => send(false)}
             disabled={!input.trim()}
           >
             {busy ? '排队' : '发送'}

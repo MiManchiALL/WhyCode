@@ -58,6 +58,8 @@ export type CoreCommand =
   | {
       type: 'user-message'
       text: string
+      /** true = 立即插话：打断当前步骤马上注入（Claude Code 的 now 语义）；默认排队到步骤间 */
+      urgent?: boolean
       /** 附件文件路径（宠物文件投递复用此通道） */
       attachmentPaths?: string[]
     }
