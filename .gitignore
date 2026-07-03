@@ -1,5 +1,8 @@
 # --- 依赖与构建产物 ---
 node_modules/
+.pnpm-store/
+.pnpm-cache/
+.cache/
 dist/
 out/
 build/

@@ -1,0 +1,4 @@
+# 统一行尾为 LF，消除 Windows 上的 CRLF 噪音
+* text=auto eol=lf
+*.png binary
+*.ico binary
