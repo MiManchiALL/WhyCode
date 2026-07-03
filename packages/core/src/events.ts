@@ -101,6 +101,8 @@ export type CoreCommand =
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
+  /** 手动触发上下文压缩（仅空闲时） */
+  | { type: 'compact' }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */
 export type CoreEventSink = (event: CoreEvent) => void

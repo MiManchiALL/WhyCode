@@ -242,6 +242,48 @@ export class AgentSession {
     emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
   }
 
+  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要 */
+  async compactNow(): Promise<void> {
+    const { emit } = this.options
+    if (this.running) {
+      emit({ type: 'error', message: 'Agent 工作中，请先停止再压缩', recoverable: true })
+      return
+    }
+    if (this.messages.length < 2) {
+      emit({ type: 'error', message: '对话太短，无需压缩', recoverable: true })
+      return
+    }
+    const preTokens = estimateContextTokens(this.messages, this.tokenBaseline)
+    emit({ type: 'agent-status', status: 'working' })
+    try {
+      const result = await compactMessages(
+        this.options.model.create(this.options.providerConfig),
+        this.messages,
+        [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
+        new AbortController().signal,
+      )
+      this.messages = result.messages
+      this.tokenBaseline = null
+      this.compactFailures = 0
+      for (const [key, rec] of this.checkpointIndex) {
+        this.checkpointIndex.set(key, { ...rec, turnStartLen: -1 })
+      }
+      emit({
+        type: 'context-compacted',
+        level: 'full',
+        preTokens,
+        postTokens: estimateContextTokens(this.messages, null),
+      })
+    } catch (error) {
+      emit({
+        type: 'error',
+        message: `压缩失败：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      })
+    }
+    emit({ type: 'agent-status', status: 'idle' })
+  }
+
   /**
    * 上下文压缩检查（每次模型请求前，文档一 §3.4）：
    * 超阈值 → 先微清理（零成本）→ 仍超 → 全量摘要压缩；连续失败熔断。

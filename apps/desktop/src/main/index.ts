@@ -141,6 +141,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       await session?.restoreCheckpoint(command.toolUseId, command.scope)
       break
     }
+    case 'compact': {
+      if (!session) {
+        broadcastEvent({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
+        break
+      }
+      await session.compactNow()
+      break
+    }
     case 'set-model': {
       const err = validateModel(command.modelId)
       if (err) {

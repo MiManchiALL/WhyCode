@@ -257,6 +257,14 @@ export function App() {
           </button>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
+            onClick={() => window.whycode.sendCommand({ type: 'compact' })}
+            disabled={busy}
+            title="手动压缩上下文：把较早的对话浓缩为摘要，释放上下文空间"
+          >
+            🗜 压缩
+          </button>
           <select
             className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
             value={permMode}
