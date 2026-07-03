@@ -146,7 +146,10 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
         break
       }
-      await session.compactNow()
+      // 挂到 currentAbort 上：压缩期间「停止」按钮可取消
+      currentAbort = new AbortController()
+      await session.compactNow(currentAbort.signal)
+      currentAbort = null
       break
     }
     case 'set-model': {

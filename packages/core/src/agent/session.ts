@@ -242,8 +242,8 @@ export class AgentSession {
     emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
   }
 
-  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要 */
-  async compactNow(): Promise<void> {
+  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；可被 abort 取消 */
+  async compactNow(abortSignal: AbortSignal): Promise<void> {
     const { emit } = this.options
     if (this.running) {
       emit({ type: 'error', message: 'Agent 工作中，请先停止再压缩', recoverable: true })
@@ -260,7 +260,7 @@ export class AgentSession {
         this.options.model.create(this.options.providerConfig),
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
-        new AbortController().signal,
+        abortSignal,
       )
       this.messages = result.messages
       this.tokenBaseline = null
@@ -277,7 +277,9 @@ export class AgentSession {
     } catch (error) {
       emit({
         type: 'error',
-        message: `压缩失败：${error instanceof Error ? error.message : String(error)}`,
+        message: abortSignal.aborted
+          ? '压缩已取消'
+          : `压缩失败：${error instanceof Error ? error.message : String(error)}`,
         recoverable: true,
       })
     }
