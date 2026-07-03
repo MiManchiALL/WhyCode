@@ -60,6 +60,8 @@ export type CoreEvent =
   | {
       type: 'checkpoint-restored'
       toolUseId: string
+      /** 所属 turn（files-and-chat 回滚时 UI 据此截断到 turn 起点） */
+      turnId: string
       scope: 'files' | 'files-and-chat'
       ok: boolean
       error?: string

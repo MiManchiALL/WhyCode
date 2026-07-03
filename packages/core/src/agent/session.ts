@@ -69,8 +69,15 @@ export class AgentSession {
   private permissions: PermissionContext
   private checkpoints: CheckpointManager | null = null
   private checkpointDisabledNotified = false
-  /** toolUseId → 快照记录（写操作执行前的状态 + 当时的消息长度，供对话回滚） */
-  private checkpointIndex = new Map<string, { hash: string; messagesLen: number }>()
+  /** toolUseId → 快照记录；对话回滚锚定 turn 起点（含触发指令），保证「从没发生过」语义 */
+  private checkpointIndex = new Map<
+    string,
+    { hash: string; turnId: string; turnStartLen: number }
+  >()
+  /** turnId → 该 turn 第一个快照 hash（文件+对话回滚时文件也回到 turn 起点，与对话一致） */
+  private firstCheckpointOfTurn = new Map<string, string>()
+  /** 当前 turn 信息（快照记录用） */
+  private activeTurn: { id: string; startLen: number } | null = null
 
   constructor(options: AgentSessionOptions) {
     this.options = options
@@ -162,6 +169,8 @@ export class AgentSession {
     const { emit } = this.options
     this.running = true
     const turnId = crypto.randomUUID()
+    // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
+    this.activeTurn = { id: turnId, startLen: this.messages.length }
     this.messages.push(...initialMessages)
 
     emit({ type: 'turn-start', turnId })
@@ -356,10 +365,14 @@ export class AgentSession {
           }
 
           // 写类操作执行前拍快照（回滚语义 =「恢复到此操作前」）；失败静默禁用不阻塞
-          if (def.kind !== 'read' && this.checkpoints) {
+          if (def.kind !== 'read' && this.checkpoints && this.activeTurn) {
             const hash = await this.checkpoints.save()
             if (hash) {
-              this.checkpointIndex.set(toolCallId, { hash, messagesLen: this.messages.length })
+              const { id: turnId, startLen } = this.activeTurn
+              this.checkpointIndex.set(toolCallId, { hash, turnId, turnStartLen: startLen })
+              if (!this.firstCheckpointOfTurn.has(turnId)) {
+                this.firstCheckpointOfTurn.set(turnId, hash)
+              }
               emit({ type: 'checkpoint-created', toolUseId: toolCallId, hash })
             } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
               this.checkpointDisabledNotified = true
@@ -392,7 +405,7 @@ export class AgentSession {
     return toolSet
   }
 
-  /** 回滚到某写操作执行前（仅空闲时）；files-and-chat 同时截断消息历史 */
+  /** 回滚到某写操作执行前（仅空闲时）；files-and-chat = 整个 turn「从没发生过」 */
   async restoreCheckpoint(
     toolUseId: string,
     scope: 'files' | 'files-and-chat',
@@ -400,18 +413,31 @@ export class AgentSession {
     const { emit } = this.options
     const record = this.checkpointIndex.get(toolUseId)
     if (!record || !this.checkpoints) {
-      emit({ type: 'checkpoint-restored', toolUseId, scope, ok: false, error: '该操作没有可用快照' })
+      emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
       return
     }
     if (this.running) {
-      emit({ type: 'checkpoint-restored', toolUseId, scope, ok: false, error: 'Agent 工作中，请先停止' })
+      emit({ type: 'checkpoint-restored', toolUseId, turnId: record.turnId, scope, ok: false, error: 'Agent 工作中，请先停止' })
       return
     }
-    const result = await this.checkpoints.restoreFiles(record.hash)
+    // 文件+对话：文件回到该 turn 第一个快照（=turn 起点状态），与对话截断保持一致；
+    // 仅文件：精确回到该操作前
+    const targetHash =
+      scope === 'files-and-chat'
+        ? (this.firstCheckpointOfTurn.get(record.turnId) ?? record.hash)
+        : record.hash
+    const result = await this.checkpoints.restoreFiles(targetHash)
     if (result.ok && scope === 'files-and-chat') {
-      this.messages = this.messages.slice(0, record.messagesLen)
+      this.messages = this.messages.slice(0, record.turnStartLen)
     }
-    emit({ type: 'checkpoint-restored', toolUseId, scope, ok: result.ok, error: result.error })
+    emit({
+      type: 'checkpoint-restored',
+      toolUseId,
+      turnId: record.turnId,
+      scope,
+      ok: result.ok,
+      error: result.error,
+    })
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */

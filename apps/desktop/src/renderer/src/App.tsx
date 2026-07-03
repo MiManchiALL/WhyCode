@@ -47,6 +47,10 @@ export function App() {
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
+  /** 发送用户消息时暂存的 block 位置，turn-start 到来时与 turnId 关联 */
+  const pendingTurnStart = useRef<number | null>(null)
+  /** turnId → turn 起点的 block 下标（文件+对话回滚时截断到这里） */
+  const turnStartBlocks = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     void window.whycode.listModels().then((list) => {
@@ -62,6 +66,12 @@ export function App() {
       switch (event.type) {
         case 'agent-status':
           setStatus(event.status)
+          break
+        case 'turn-start':
+          if (pendingTurnStart.current !== null) {
+            turnStartBlocks.current.set(event.turnId, pendingTurnStart.current)
+            pendingTurnStart.current = null
+          }
           break
         case 'message-queued':
           setQueued((prev) => [...prev, { id: event.id, text: event.text }])
@@ -140,7 +150,18 @@ export function App() {
             }
             let next = prev
             if (event.scope === 'files-and-chat') {
-              const idx = prev.findIndex((b) => b.kind === 'tool' && b.call.id === event.toolUseId)
+              // 截断到 turn 起点（含触发指令）；无记录时回退为工具卡片前最近的用户消息
+              let idx = turnStartBlocks.current.get(event.turnId) ?? -1
+              if (idx < 0) {
+                const toolIdx = prev.findIndex((b) => b.kind === 'tool' && b.call.id === event.toolUseId)
+                idx = toolIdx
+                for (let i = toolIdx; i >= 0; i--) {
+                  if (prev[i]!.kind === 'user') {
+                    idx = i
+                    break
+                  }
+                }
+              }
               if (idx >= 0) next = prev.slice(0, idx)
             }
             return [
@@ -148,7 +169,7 @@ export function App() {
               {
                 kind: 'notice',
                 id: `b${nextId.current++}`,
-                text: event.scope === 'files-and-chat' ? '已回滚文件与对话到该操作前' : '已回滚文件到该操作前（对话保留）',
+                text: event.scope === 'files-and-chat' ? '已回滚：该轮对话与文件改动均已撤销' : '已回滚文件到该操作前（对话保留）',
               },
             ]
           })
@@ -182,7 +203,11 @@ export function App() {
     if (!text) return
     // 忙碌时不直接显示为用户消息——Main 会排队并回 message-queued 事件
     if (!busy) {
-      setBlocks((prev) => [...prev, { kind: 'user', id: `b${nextId.current++}`, text }])
+      setBlocks((prev) => {
+        // 记录 turn 起点（用户消息之前），供「文件+对话」回滚截断
+        pendingTurnStart.current = prev.length
+        return [...prev, { kind: 'user', id: `b${nextId.current++}`, text }]
+      })
     }
     setInput('')
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
