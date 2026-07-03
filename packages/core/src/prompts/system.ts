@@ -32,7 +32,21 @@ function safetySection(): string {
   ].join('\n')
 }
 
+function toolUsageSection(): string {
+  return [
+    '# 工具使用',
+    '- 回答关于项目的问题前，先用只读工具（ReadFile/ListDir/Glob/Grep）查看实际代码，不要凭空猜测。',
+    '- 修改文件优先用 EditFile（精确替换）；新建或整文件重写才用 WriteFile。',
+    '- 编辑前先 ReadFile 确认现有内容。',
+    '- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。',
+  ].join('\n')
+}
+
 export function buildSystemPrompt(ctx: PromptContext): string {
-  // M1-c 接入工具后追加工具使用 section（按 capability flags 条件插拔）
-  return [identitySection(), environmentSection(ctx), safetySection()].join('\n\n')
+  return [
+    identitySection(),
+    environmentSection(ctx),
+    toolUsageSection(),
+    safetySection(),
+  ].join('\n\n')
 }

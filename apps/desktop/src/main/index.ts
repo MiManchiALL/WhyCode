@@ -44,6 +44,20 @@ function broadcastEvent(event: CoreEvent): void {
 /** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
 let session: AgentSession | null = null
 let currentAbort: AbortController | null = null
+/** 待用户审批的请求：requestId → resolve */
+const pendingApprovals = new Map<string, (approved: boolean) => void>()
+
+function requestApproval(request: {
+  requestId: string
+  toolName: string
+  input: unknown
+  diff?: string
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    pendingApprovals.set(request.requestId, resolve)
+    broadcastEvent({ type: 'approval-request', ...request })
+  })
+}
 
 function initSession(modelId: string): string | null {
   const config = loadConfig()
@@ -86,13 +100,14 @@ async function handleCommand(command: CoreCommand): Promise<void> {
         }
       }
       currentAbort = new AbortController()
-      for await (const event of session!.run(command.text, currentAbort.signal)) {
-        broadcastEvent(event)
-      }
+      await session!.run(command.text, currentAbort.signal, broadcastEvent, requestApproval)
       currentAbort = null
       break
     }
     case 'abort': {
+      // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
+      for (const resolve of pendingApprovals.values()) resolve(false)
+      pendingApprovals.clear()
       currentAbort?.abort()
       break
     }
@@ -103,9 +118,14 @@ async function handleCommand(command: CoreCommand): Promise<void> {
       }
       break
     }
-    case 'approval-response':
-      // M1-c 工具审批时实现
+    case 'approval-response': {
+      const resolve = pendingApprovals.get(command.requestId)
+      if (resolve) {
+        pendingApprovals.delete(command.requestId)
+        resolve(command.approved)
+      }
       break
+    }
   }
 }
 

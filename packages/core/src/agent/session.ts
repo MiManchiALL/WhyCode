@@ -1,21 +1,31 @@
-import { streamText, type ModelMessage } from 'ai'
+import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
 import type { CoreEvent, StopReason, UsageInfo } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
+import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
+import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
 
-/**
- * Agent 会话：M1-b 版本（纯文本对话，无工具）。
- *
- * 设计对齐文档二 §5.1：async generator 状态机，每轮 = 一次流式模型调用；
- * M1-c 接入工具后，这里扩展为「响应含 tool_use 则执行工具并续轮」的完整循环。
- * 自愈（重试/降级）后续在循环内实现，不抛异常终止会话。
- */
+const MAX_STEPS = 25
+
 export interface AgentSessionOptions {
   model: ModelEntry
   providerConfig: ProviderConfig
   promptContext: PromptContext
 }
 
+/** 宿主注入的审批回调：返回用户是否批准。M1 由 Electron Main 弹给 Renderer。 */
+export type ApprovalHandler = (request: {
+  requestId: string
+  toolName: string
+  input: unknown
+  diff?: string
+}) => Promise<boolean>
+
+/**
+ * Agent 会话（M1-c：完整工具循环）。
+ * 多轮循环交给 AI SDK 的 stopWhen 机制（模型不再发工具调用即停止）；
+ * 审批在工具 execute 内 await，批准前不落盘。
+ */
 export class AgentSession {
   private messages: ModelMessage[] = []
   private options: AgentSessionOptions
@@ -28,13 +38,90 @@ export class AgentSession {
     this.options = { ...this.options, model, providerConfig }
   }
 
-  /** 处理一条用户消息，yield CoreEvent 流。宿主用 for await 消费。 */
-  async *run(userText: string, abortSignal: AbortSignal): AsyncGenerator<CoreEvent> {
+  /** 把 WhyCode 工具定义包装成 AI SDK ToolSet；审批与事件都在 execute 内处理 */
+  private buildToolSet(
+    emit: (event: CoreEvent) => void,
+    requestApproval: ApprovalHandler,
+    abortSignal: AbortSignal,
+  ): ToolSet {
+    const toolCtx: ToolContext = {
+      projectDir: this.options.promptContext.projectDir,
+      abortSignal,
+    }
+    const toolSet: ToolSet = {}
+    for (const def of BUILTIN_TOOLS as ToolDefinition[]) {
+      toolSet[def.name] = aiTool({
+        description: def.prompt,
+        inputSchema: def.inputSchema,
+        execute: async (input: unknown, { toolCallId }) => {
+          const parsed = def.inputSchema.safeParse(input)
+          if (!parsed.success) {
+            const msg = `参数校验失败：${parsed.error.message}`
+            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            return msg
+          }
+          emit({
+            type: 'tool-start',
+            toolUseId: toolCallId,
+            toolName: def.name,
+            input: parsed.data,
+          })
+
+          if (def.needsApproval(parsed.data)) {
+            emit({ type: 'agent-status', status: 'waiting-approval' })
+            const diff = await def
+              .renderDiff?.(parsed.data, toolCtx)
+              .catch(() => undefined)
+            const approved = await requestApproval({
+              requestId: toolCallId,
+              toolName: def.name,
+              input: parsed.data,
+              diff,
+            })
+            emit({ type: 'agent-status', status: 'working' })
+            if (!approved) {
+              const msg = '用户拒绝了此操作'
+              emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+              return msg
+            }
+          }
+
+          try {
+            const result = await def.execute(parsed.data, {
+              ...toolCtx,
+              onProgress: (output) =>
+                emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
+            })
+            emit({
+              type: 'tool-end',
+              toolUseId: toolCallId,
+              result: result.data,
+              isError: result.isError,
+            })
+            return result.data
+          } catch (error) {
+            const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
+            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            return msg
+          }
+        },
+      })
+    }
+    return toolSet
+  }
+
+  /** 处理一条用户消息。事件经 emit 回调吐出（工具审批期间也能持续发事件）。 */
+  async run(
+    userText: string,
+    abortSignal: AbortSignal,
+    emit: (event: CoreEvent) => void,
+    requestApproval: ApprovalHandler,
+  ): Promise<void> {
     const turnId = crypto.randomUUID()
     this.messages.push({ role: 'user', content: userText })
 
-    yield { type: 'turn-start', turnId }
-    yield { type: 'agent-status', status: 'working' }
+    emit({ type: 'turn-start', turnId })
+    emit({ type: 'agent-status', status: 'working' })
 
     let stopReason: StopReason = 'completed'
     const usage: UsageInfo = {
@@ -45,86 +132,75 @@ export class AgentSession {
     }
 
     try {
-      const languageModel = this.options.model.create(this.options.providerConfig)
       const result = streamText({
-        model: languageModel,
+        model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
         messages: this.messages,
+        tools: this.buildToolSet(emit, requestApproval, abortSignal),
+        stopWhen: stepCountIs(MAX_STEPS),
         abortSignal,
       })
 
-      let assistantText = ''
       let thinkingStartedAt: number | null = null
-      let emittedThinking = false
 
       for await (const part of result.fullStream) {
         switch (part.type) {
           case 'reasoning-delta': {
             if (thinkingStartedAt === null) {
               thinkingStartedAt = Date.now()
-              yield { type: 'agent-status', status: 'thinking' }
+              emit({ type: 'agent-status', status: 'thinking' })
             }
-            emittedThinking = true
-            yield { type: 'thinking-delta', text: part.text }
+            emit({ type: 'thinking-delta', text: part.text })
             break
           }
           case 'reasoning-end': {
-            if (emittedThinking && thinkingStartedAt !== null) {
-              yield { type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt }
-              yield { type: 'agent-status', status: 'working' }
+            if (thinkingStartedAt !== null) {
+              emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
+              emit({ type: 'agent-status', status: 'working' })
               thinkingStartedAt = null
-              emittedThinking = false
             }
             break
           }
-          case 'text-delta': {
-            assistantText += part.text
-            yield { type: 'text-delta', text: part.text }
+          case 'text-delta':
+            emit({ type: 'text-delta', text: part.text })
             break
-          }
-          case 'finish': {
+          case 'finish':
             usage.inputTokens = part.totalUsage.inputTokens ?? 0
             usage.outputTokens = part.totalUsage.outputTokens ?? 0
             usage.cachedInputTokens =
               part.totalUsage.inputTokenDetails.cacheReadTokens ?? 0
             break
-          }
-          case 'error': {
-            throw part.error instanceof Error
-              ? part.error
-              : new Error(String(part.error))
-          }
-          case 'abort': {
+          case 'error':
+            throw part.error instanceof Error ? part.error : new Error(String(part.error))
+          case 'abort':
             stopReason = 'aborted'
             break
-          }
           default:
             break
         }
       }
 
-      // reasoning 流被 abort 等原因截断时补齐 thinking-end
-      if (emittedThinking && thinkingStartedAt !== null) {
-        yield { type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt }
+      if (thinkingStartedAt !== null) {
+        emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
       }
 
-      if (assistantText) {
-        this.messages.push({ role: 'assistant', content: assistantText })
-      }
+      // 把本轮完整消息（含 tool call/result）并入历史，供下一轮使用
+      const response = await result.response
+      this.messages.push(...response.messages)
     } catch (error) {
       if (abortSignal.aborted) {
         stopReason = 'aborted'
       } else {
         stopReason = 'error'
-        yield {
+        emit({
           type: 'error',
           message: error instanceof Error ? error.message : String(error),
           recoverable: true,
-        }
+        })
       }
     }
 
-    yield { type: 'turn-end', turnId, usage, stopReason }
-    yield { type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' }
+    emit({ type: 'turn-end', turnId, usage, stopReason })
+    emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
   }
 }
