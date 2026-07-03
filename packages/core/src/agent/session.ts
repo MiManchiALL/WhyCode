@@ -4,6 +4,13 @@ import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
+import { checkToolPermission } from '../permissions/engine.ts'
+import {
+  createPermissionContext,
+  type ApprovalSuggestion,
+  type PermissionContext,
+  type PermissionMode,
+} from '../permissions/types.ts'
 
 const MAX_STEPS = 25
 
@@ -13,16 +20,28 @@ export interface AgentSessionOptions {
   promptContext: PromptContext
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
-  /** 审批回调（宿主注入）：返回用户是否批准 */
+  /** 审批回调（宿主注入）：返回用户的决定 */
   requestApproval: ApprovalHandler
 }
 
-export type ApprovalHandler = (request: {
+export interface ApprovalRequest {
   requestId: string
   toolName: string
   input: unknown
+  /** 为什么需要审批（权限引擎给出） */
+  reason: string
   diff?: string
-}) => Promise<boolean>
+  /** 批准时可勾选的「记住」建议（add-dir / allow-tool），无建议则只能单次批准 */
+  suggestion?: ApprovalSuggestion
+}
+
+export interface ApprovalResponse {
+  approved: boolean
+  /** true = 采纳 suggestion（本会话记住） */
+  remember?: boolean
+}
+
+export type ApprovalHandler = (request: ApprovalRequest) => Promise<ApprovalResponse>
 
 interface QueuedMessage {
   id: string
@@ -43,9 +62,20 @@ export class AgentSession {
   /** 当前步骤的中止器：turn 级取消与 urgent 插话都经由它，用 reason 区分意图 */
   private currentStepAbort: AbortController | null = null
   private options: AgentSessionOptions
+  /** 权限上下文（mode / 额外授权目录 / 会话内记住的工具） */
+  private permissions: PermissionContext
 
   constructor(options: AgentSessionOptions) {
     this.options = options
+    this.permissions = createPermissionContext(options.promptContext.projectDir)
+  }
+
+  setPermissionMode(mode: PermissionMode): void {
+    this.permissions.mode = mode
+  }
+
+  get permissionMode(): PermissionMode {
+    return this.permissions.mode
   }
 
   setModel(model: ModelEntry, providerConfig: ProviderConfig): void {
@@ -263,13 +293,18 @@ export class AgentSession {
     if (!projectDir) return undefined
 
     const { emit, requestApproval } = this.options
-    const toolCtx: ToolContext = { projectDir, abortSignal }
     const toolSet: ToolSet = {}
     for (const def of BUILTIN_TOOLS as ToolDefinition[]) {
       toolSet[def.name] = aiTool({
         description: def.prompt,
         inputSchema: def.inputSchema,
         execute: async (input: unknown, { toolCallId }) => {
+          // additionalDirs 会在审批中变化，每次调用取最新
+          const toolCtx: ToolContext = {
+            projectDir,
+            additionalDirs: this.permissions.additionalDirs,
+            abortSignal,
+          }
           const parsed = def.inputSchema.safeParse(input)
           if (!parsed.success) {
             const msg = `参数校验失败：${parsed.error.message}`
@@ -278,26 +313,39 @@ export class AgentSession {
           }
           emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
 
-          if (def.needsApproval(parsed.data)) {
+          // 权限判定链（文档一 §3.2）
+          const decision = checkToolPermission(def, parsed.data, this.permissions)
+          if (decision.behavior === 'deny') {
+            const msg = `操作被拒绝：${decision.reason}`
+            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            return msg
+          }
+          if (decision.behavior === 'ask') {
             emit({ type: 'agent-status', status: 'waiting-approval' })
             const diff = await def.renderDiff?.(parsed.data, toolCtx).catch(() => undefined)
-            const approved = await requestApproval({
+            const response = await requestApproval({
               requestId: toolCallId,
               toolName: def.name,
               input: parsed.data,
+              reason: decision.reason,
               diff,
+              suggestion: decision.suggestion,
             })
             emit({ type: 'agent-status', status: 'working' })
-            if (!approved) {
-              const msg = '用户拒绝了此操作'
+            if (!response.approved) {
+              const msg = `用户拒绝了此操作（${decision.reason}）`
               emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
               return msg
+            }
+            if (response.remember && decision.suggestion) {
+              this.applySuggestion(decision.suggestion)
             }
           }
 
           try {
             const result = await def.execute(parsed.data, {
               ...toolCtx,
+              additionalDirs: this.permissions.additionalDirs,
               onProgress: (output) =>
                 emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
             })
@@ -317,5 +365,16 @@ export class AgentSession {
       })
     }
     return toolSet
+  }
+
+  /** 采纳审批建议（本会话内生效，不落盘） */
+  private applySuggestion(suggestion: ApprovalSuggestion): void {
+    if (suggestion.kind === 'add-dir') {
+      if (!this.permissions.additionalDirs.includes(suggestion.dir)) {
+        this.permissions.additionalDirs.push(suggestion.dir)
+      }
+    } else if (!this.permissions.sessionAllowedTools.includes(suggestion.toolName)) {
+      this.permissions.sessionAllowedTools.push(suggestion.toolName)
+    }
   }
 }

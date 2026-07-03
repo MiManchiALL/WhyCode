@@ -14,8 +14,10 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   inputSchema: Schema
   /** 只读工具可与其它只读工具并行执行 */
   isReadOnly: boolean
-  /** 是否需要用户审批（M1：所有写类工具恒为 true） */
-  needsApproval: (input: z.infer<Schema>) => boolean
+  /** 权限档位判定用的操作类别：read 免审批 / edit 受 acceptEdits 档控制 / execute 最严 */
+  kind: 'read' | 'edit' | 'execute'
+  /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
+  extractPaths?: (input: z.infer<Schema>) => string[]
   /** 写文件类工具生成变更预览（unified diff），用于审批 UI */
   renderDiff?: (input: z.infer<Schema>, ctx: ToolContext) => Promise<string | undefined>
   execute: (input: z.infer<Schema>, ctx: ToolContext) => Promise<ToolResult>
@@ -24,6 +26,8 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
 export interface ToolContext {
   /** 项目根目录（所有相对路径的基准） */
   projectDir: string
+  /** 本会话内额外授权的目录（与权限上下文同步） */
+  additionalDirs: readonly string[]
   abortSignal: AbortSignal
   /** 长时工具的增量输出回调（终端输出等） */
   onProgress?: (output: string) => void
@@ -37,8 +41,8 @@ export interface ToolResult {
 
 const CONSERVATIVE_DEFAULTS = {
   isReadOnly: false,
-  needsApproval: () => true,
-} as const
+  kind: 'execute' as const,
+}
 
 /** 集中填充 fail-closed 默认值 */
 export function buildTool<Schema extends z.ZodObject>(

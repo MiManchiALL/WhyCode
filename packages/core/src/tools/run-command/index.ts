@@ -17,7 +17,7 @@ export const runCommandTool = buildTool({
     timeoutMs: z.number().int().min(1000).max(600_000).optional().describe('超时毫秒数'),
   }),
   isReadOnly: false,
-  needsApproval: () => true,
+  kind: 'execute',
   async execute(input, ctx) {
     return new Promise((resolvePromise) => {
       const child = spawn(input.command, {

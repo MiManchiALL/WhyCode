@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
-import type { AgentStatus, CoreEvent } from '@whycode/core'
+// 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
+// Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
+import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
+import type { AgentStatus, CoreEvent } from '@whycode/core/events'
 
 interface ToolCall {
   id: string
@@ -22,7 +25,9 @@ interface Approval {
   requestId: string
   toolName: string
   input: unknown
+  reason: string
   diff?: string
+  suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
 }
 
 /** M1-c 主界面：文本 + thinking + 工具卡片 + 审批。正式组件化（Streamdown/shadcn）在 M1 收尾时做。 */
@@ -36,6 +41,7 @@ export function App() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
+  const [permMode, setPermMode] = useState<PermissionMode>('default')
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
 
@@ -110,7 +116,9 @@ export function App() {
             requestId: event.requestId,
             toolName: event.toolName,
             input: event.input,
+            reason: event.reason,
             diff: event.diff,
+            suggestion: event.suggestion,
           })
           break
         case 'error':
@@ -148,12 +156,13 @@ export function App() {
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
   }, [input, busy])
 
-  const respondApproval = useCallback((approved: boolean) => {
+  const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
     void window.whycode.sendCommand({
       type: 'approval-response',
       requestId: approval.requestId,
       approved,
+      remember,
     })
     setApproval(null)
   }, [approval])
@@ -180,29 +189,45 @@ export function App() {
             {projectDir ?? '📁 选择项目目录'}
           </button>
         </div>
-        <select
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-          value={modelId}
-          onChange={(e) => {
-            const prev = modelId
-            const next = e.target.value
-            setModelId(next)
-            void window.whycode
-              .sendCommand({ type: 'set-model', modelId: next })
-              .then((r) => {
-                // 切换失败（如没配 key）回退选择，避免下拉框与实际模型不一致
-                if (!r || !r.ok) setModelId(prev)
-              })
-          }}
-          disabled={busy}
-        >
-          {models.map((m) => (
-            <option key={m.id} value={m.id} disabled={!m.hasKey}>
-              {m.displayName}
-              {m.hasKey ? '' : '（未配置 key）'}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+            value={permMode}
+            onChange={(e) => {
+              const mode = e.target.value as PermissionMode
+              setPermMode(mode)
+              void window.whycode.sendCommand({ type: 'set-permission-mode', mode })
+            }}
+            title="权限档位：控制哪些操作需要审批"
+          >
+            {PERMISSION_MODES.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+          <select
+            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+            value={modelId}
+            onChange={(e) => {
+              const prev = modelId
+              const next = e.target.value
+              setModelId(next)
+              void window.whycode
+                .sendCommand({ type: 'set-model', modelId: next })
+                .then((r) => {
+                  // 切换失败（如没配 key）回退选择，避免下拉框与实际模型不一致
+                  if (!r || !r.ok) setModelId(prev)
+                })
+            }}
+            disabled={busy}
+          >
+            {models.map((m) => (
+              <option key={m.id} value={m.id} disabled={!m.hasKey}>
+                {m.displayName}
+                {m.hasKey ? '' : '（未配置 key）'}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
 
       <main ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
@@ -348,13 +373,20 @@ function ApprovalCard({
   onRespond,
 }: {
   approval: Approval
-  onRespond: (approved: boolean) => void
+  onRespond: (approved: boolean, remember?: boolean) => void
 }) {
+  const rememberLabel =
+    approval.suggestion?.kind === 'add-dir'
+      ? '允许并记住此目录（本会话）'
+      : approval.suggestion?.kind === 'allow-tool'
+        ? `允许且本会话不再询问 ${approval.suggestion.toolName}`
+        : null
   return (
     <div className="mb-2 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
-      <div className="mb-2 font-medium text-amber-800">
+      <div className="mb-1 font-medium text-amber-800">
         请求执行：{approval.toolName}
       </div>
+      <div className="mb-2 text-xs text-amber-700">{approval.reason}</div>
       {approval.diff ? (
         <pre className="mb-2 max-h-64 overflow-auto rounded bg-white p-2 text-xs">
           {approval.diff.split('\n').map((line, i) => (
@@ -377,13 +409,21 @@ function ApprovalCard({
           {summarizeInput(approval.input)}
         </pre>
       )}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button
           className="rounded bg-neutral-900 px-3 py-1 text-xs text-white"
-          onClick={() => onRespond(true)}
+          onClick={() => onRespond(true, false)}
         >
-          批准
+          批准（仅本次）
         </button>
+        {rememberLabel && (
+          <button
+            className="rounded border border-neutral-400 bg-white px-3 py-1 text-xs"
+            onClick={() => onRespond(true, true)}
+          >
+            {rememberLabel}
+          </button>
+        )}
         <button
           className="rounded border border-neutral-300 px-3 py-1 text-xs"
           onClick={() => onRespond(false)}

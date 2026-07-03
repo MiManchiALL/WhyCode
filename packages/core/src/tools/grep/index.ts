@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
-import { resolveInProject, IGNORED_DIRS } from '../fs-utils.ts'
+import { resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
 
 export const GREP_TOOL_NAME = 'Grep'
 
@@ -29,7 +29,8 @@ export const grepTool = buildTool({
     path: z.string().optional().describe('限定搜索目录，默认项目根目录'),
   }),
   isReadOnly: true,
-  needsApproval: () => false,
+  kind: 'read',
+  extractPaths: (input) => (input.path ? [input.path] : []),
   async execute(input, ctx) {
     const re = new RegExp(input.pattern)
     const includeRe = input.include
@@ -37,7 +38,7 @@ export const grepTool = buildTool({
           `^${input.include.replaceAll(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*')}$`,
         )
       : null
-    const root = resolveInProject(ctx.projectDir, input.path ?? '.')
+    const root = resolveAllowed(ctx, input.path ?? '.')
     const matches: string[] = []
 
     async function search(dir: string): Promise<void> {
