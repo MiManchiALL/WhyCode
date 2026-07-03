@@ -1,0 +1,28 @@
+# --- 依赖与构建产物 ---
+node_modules/
+dist/
+out/
+build/
+release/
+*.tsbuildinfo
+
+# --- 密钥与本地配置 ---
+.env
+.env.*
+*.local.json
+**/secrets*
+**/apikeys*
+
+# --- Agent 临时区 ---
+.agent_scratch/
+.whycode/
+
+# --- 系统与编辑器 ---
+.DS_Store
+Thumbs.db
+*.log
+
+# --- 严禁提交的外部源码 ---
+# Claude Code 源码位于仓库外（E:\workspace\Claude Code），若被误拷入仓库也一律忽略
+Claude Code/
+claude-code/
