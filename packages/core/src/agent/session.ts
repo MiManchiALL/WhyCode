@@ -5,6 +5,7 @@ import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
 import { checkToolPermission } from '../permissions/engine.ts'
+import { CheckpointManager } from '../checkpoints/manager.ts'
 import {
   createPermissionContext,
   type ApprovalSuggestion,
@@ -18,6 +19,8 @@ export interface AgentSessionOptions {
   model: ModelEntry
   providerConfig: ProviderConfig
   promptContext: PromptContext
+  /** 检查点存储根目录（宿主注入，如 Electron userData/checkpoints）；不传则禁用检查点 */
+  checkpointStorageDir?: string
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
   /** 审批回调（宿主注入）：返回用户的决定 */
@@ -64,10 +67,20 @@ export class AgentSession {
   private options: AgentSessionOptions
   /** 权限上下文（mode / 额外授权目录 / 会话内记住的工具） */
   private permissions: PermissionContext
+  private checkpoints: CheckpointManager | null = null
+  private checkpointDisabledNotified = false
+  /** toolUseId → 快照记录（写操作执行前的状态 + 当时的消息长度，供对话回滚） */
+  private checkpointIndex = new Map<string, { hash: string; messagesLen: number }>()
 
   constructor(options: AgentSessionOptions) {
     this.options = options
     this.permissions = createPermissionContext(options.promptContext.projectDir)
+    if (options.checkpointStorageDir && options.promptContext.projectDir) {
+      this.checkpoints = new CheckpointManager(
+        options.promptContext.projectDir,
+        options.checkpointStorageDir,
+      )
+    }
   }
 
   setPermissionMode(mode: PermissionMode): void {
@@ -342,6 +355,18 @@ export class AgentSession {
             }
           }
 
+          // 写类操作执行前拍快照（回滚语义 =「恢复到此操作前」）；失败静默禁用不阻塞
+          if (def.kind !== 'read' && this.checkpoints) {
+            const hash = await this.checkpoints.save()
+            if (hash) {
+              this.checkpointIndex.set(toolCallId, { hash, messagesLen: this.messages.length })
+              emit({ type: 'checkpoint-created', toolUseId: toolCallId, hash })
+            } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
+              this.checkpointDisabledNotified = true
+              emit({ type: 'checkpoint-disabled', reason: this.checkpoints.disabled })
+            }
+          }
+
           try {
             const result = await def.execute(parsed.data, {
               ...toolCtx,
@@ -365,6 +390,28 @@ export class AgentSession {
       })
     }
     return toolSet
+  }
+
+  /** 回滚到某写操作执行前（仅空闲时）；files-and-chat 同时截断消息历史 */
+  async restoreCheckpoint(
+    toolUseId: string,
+    scope: 'files' | 'files-and-chat',
+  ): Promise<void> {
+    const { emit } = this.options
+    const record = this.checkpointIndex.get(toolUseId)
+    if (!record || !this.checkpoints) {
+      emit({ type: 'checkpoint-restored', toolUseId, scope, ok: false, error: '该操作没有可用快照' })
+      return
+    }
+    if (this.running) {
+      emit({ type: 'checkpoint-restored', toolUseId, scope, ok: false, error: 'Agent 工作中，请先停止' })
+      return
+    }
+    const result = await this.checkpoints.restoreFiles(record.hash)
+    if (result.ok && scope === 'files-and-chat') {
+      this.messages = this.messages.slice(0, record.messagesLen)
+    }
+    emit({ type: 'checkpoint-restored', toolUseId, scope, ok: result.ok, error: result.error })
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */

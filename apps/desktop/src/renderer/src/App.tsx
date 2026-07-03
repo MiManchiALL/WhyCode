@@ -12,6 +12,8 @@ interface ToolCall {
   status: 'running' | 'done' | 'error'
   result?: string
   progress: string
+  /** 有执行前快照，可回滚 */
+  hasCheckpoint?: boolean
 }
 
 type Block =
@@ -19,6 +21,7 @@ type Block =
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
   | { kind: 'tool'; id: string; call: ToolCall }
+  | { kind: 'notice'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
 
 interface Approval {
@@ -119,6 +122,35 @@ export function App() {
             reason: event.reason,
             diff: event.diff,
             suggestion: event.suggestion,
+          })
+          break
+        case 'checkpoint-created':
+          setBlocks((prev) => updateTool(prev, event.toolUseId, (c) => ({ ...c, hasCheckpoint: true })))
+          break
+        case 'checkpoint-disabled':
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `检查点已禁用：${event.reason}` },
+          ])
+          break
+        case 'checkpoint-restored':
+          setBlocks((prev) => {
+            if (!event.ok) {
+              return [...prev, { kind: 'error', id: `b${nextId.current++}`, text: `回滚失败：${event.error}` }]
+            }
+            let next = prev
+            if (event.scope === 'files-and-chat') {
+              const idx = prev.findIndex((b) => b.kind === 'tool' && b.call.id === event.toolUseId)
+              if (idx >= 0) next = prev.slice(0, idx)
+            }
+            return [
+              ...next,
+              {
+                kind: 'notice',
+                id: `b${nextId.current++}`,
+                text: event.scope === 'files-and-chat' ? '已回滚文件与对话到该操作前' : '已回滚文件到该操作前（对话保留）',
+              },
+            ]
           })
           break
         case 'error':
@@ -326,6 +358,9 @@ function BlockView({
   if (block.kind === 'error') {
     return <div className="mb-2 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{block.text}</div>
   }
+  if (block.kind === 'notice') {
+    return <div className="mb-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{block.text}</div>
+  }
   if (block.kind === 'thinking') {
     const streaming = block.durationMs === null
     const open = streaming || expanded
@@ -351,20 +386,55 @@ function BlockView({
   const summary = summarizeInput(call.input)
   return (
     <div className="mb-2 rounded border border-neutral-200 bg-white text-sm">
-      <button
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-        onClick={onToggle}
-      >
-        <span className={call.status === 'error' ? 'text-red-500' : 'text-neutral-500'}>{icon}</span>
-        <span className="font-medium">{call.name}</span>
-        <span className="truncate text-xs text-neutral-400">{summary}</span>
-      </button>
+      <div className="flex w-full items-center gap-2 px-3 py-2">
+        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>
+          <span className={call.status === 'error' ? 'text-red-500' : 'text-neutral-500'}>{icon}</span>
+          <span className="font-medium">{call.name}</span>
+          <span className="truncate text-xs text-neutral-400">{summary}</span>
+        </button>
+        {call.hasCheckpoint && call.status !== 'running' && (
+          <RestoreButton toolUseId={call.id} />
+        )}
+      </div>
       {expanded && (call.result || call.progress) && (
         <pre className="max-h-64 overflow-auto border-t border-neutral-100 px-3 py-2 text-xs text-neutral-600">
           {call.result || call.progress}
         </pre>
       )}
     </div>
+  )
+}
+
+/** 回滚按钮：点击展开两种范围选择 */
+function RestoreButton({ toolUseId }: { toolUseId: string }) {
+  const [open, setOpen] = useState(false)
+  const restore = (scope: 'files' | 'files-and-chat') => {
+    setOpen(false)
+    void window.whycode.sendCommand({ type: 'restore-checkpoint', toolUseId, scope })
+  }
+  if (!open) {
+    return (
+      <button
+        className="shrink-0 text-xs text-neutral-400 hover:text-neutral-700"
+        title="回滚到此操作执行前"
+        onClick={() => setOpen(true)}
+      >
+        ⟲ 回滚
+      </button>
+    )
+  }
+  return (
+    <span className="flex shrink-0 gap-1 text-xs">
+      <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => restore('files')}>
+        仅文件
+      </button>
+      <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => restore('files-and-chat')}>
+        文件+对话
+      </button>
+      <button className="px-1 text-neutral-400" onClick={() => setOpen(false)}>
+        ✕
+      </button>
+    </span>
   )
 }
 
