@@ -8,8 +8,8 @@ import {
 } from './path-safety.ts'
 
 /**
- * 权限判定引擎（M2-b）。判定链顺序不可交换（文档一 §3.2 / Claude Code 不变式）：
- * 可疑路径拒绝 → 敏感路径强制审批 → 越界审批 → 只读档拦写 → 会话 allow 规则 → 模式快速通道 → 默认策略。
+ * 权限判定引擎（M2-b，M3 增讨论档）。判定链顺序不可交换（文档一 §3.2 / Claude Code 不变式）：
+ * 可疑路径拒绝 → 敏感路径强制审批 → 越界审批（讨论档拒绝） → 讨论档规则 → 只读档拦写 → 会话 allow 规则 → 模式快速通道 → 默认策略。
  * deny 与敏感路径检查永远在任何 allow / 模式放行之前。
  */
 export function checkToolPermission(
@@ -40,15 +40,47 @@ export function checkToolPermission(
     }
   }
 
-  // 3. 工作区边界：越界 → 审批 + add-dir 建议（批准可选择本会话记住该目录）
+  // 3. 工作区边界：越界 → 审批 + add-dir 建议；讨论档直接拒绝（B/C 不得申请漫游授权）
   for (const p of rawPaths) {
     const outside = findOutsideBoundary(p, projectDir, ctx.additionalDirs)
     if (outside) {
+      if (ctx.discussion) {
+        return { behavior: 'deny', reason: `讨论阶段不可访问工作区之外的路径：${outside}` }
+      }
       return {
         behavior: 'ask',
         reason: `路径超出项目目录：${outside}`,
         suggestion: { kind: 'add-dir', dir: outside },
       }
+    }
+  }
+
+  // 3.5 讨论档（M3 协议 §11.1 / §14.4）：读放行；写只许 scratch；scratch 内命令自动放行。
+  // 相对路径必须先按执行语义（projectDir 基准）绝对化，再对 scratch 边界检查——否则相对路径会被误判在 scratch 内
+  if (ctx.discussion) {
+    if (def.kind === 'read') return { behavior: 'allow' }
+    const scratchDir = ctx.discussion.scratchDir
+    const outsideScratch = rawPaths
+      .map((p) => {
+        const abs = isAbsolute(p) ? resolve(p) : resolve(projectDir, p)
+        return findOutsideBoundary(abs, scratchDir, [])
+      })
+      .find((p) => p !== null)
+    if (def.kind === 'edit') {
+      return outsideScratch
+        ? {
+            behavior: 'deny',
+            reason: `讨论阶段禁止修改原项目或工作区外文件（${outsideScratch}），实验文件请写入你的临时工作区：${ctx.discussion.scratchDir}`,
+          }
+        : { behavior: 'allow' }
+    }
+    // execute：全部路径都在 scratch 内 → 自动放行；涉及外部路径或未显式指定 scratch cwd → 审批（不提供记住建议）
+    if (rawPaths.length > 0 && !outsideScratch) return { behavior: 'allow' }
+    return {
+      behavior: 'ask',
+      reason: outsideScratch
+        ? `讨论阶段命令涉及临时工作区之外的路径：${outsideScratch}`
+        : '讨论阶段命令未限定在临时工作区内（请显式传 cwd 为你的 scratch 目录）',
     }
   }
 

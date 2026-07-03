@@ -20,10 +20,24 @@ export interface PermissionContext {
   additionalDirs: string[]
   /** 本会话「记住允许」的整工具名规则 */
   sessionAllowedTools: string[]
+  /**
+   * 讨论档（M3 协商讨论阶段，协议 §11.1）：写只许 scratch 内（项目一律拒绝），
+   * scratch 内命令自动放行，越界一律拒绝（不给 add-dir 建议）。
+   */
+  discussion?: { scratchDir: string }
 }
 
-export function createPermissionContext(projectDir: string | null): PermissionContext {
-  return { mode: 'default', projectDir, additionalDirs: [], sessionAllowedTools: [] }
+export function createPermissionContext(
+  projectDir: string | null,
+  discussion?: { scratchDir: string },
+): PermissionContext {
+  return {
+    mode: 'default',
+    projectDir,
+    additionalDirs: discussion ? [discussion.scratchDir] : [],
+    sessionAllowedTools: [],
+    discussion,
+  }
 }
 
 /** 判定结果：ask 可携带批准后的持久化建议（由判定层生成，UI 只负责选择回传） */

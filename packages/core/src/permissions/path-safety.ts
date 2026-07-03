@@ -43,6 +43,8 @@ export function findSuspiciousWindowsPattern(rawPath: string): string | null {
   if (withoutDrive.includes(':')) return 'NTFS 数据流（冒号）'
   for (const segment of withoutDrive.split(/[\\/]/)) {
     if (!segment) continue
+    // 纯导航段「.」「..」是合法相对路径写法，不属于 Win32 尾部点剥离攻击面
+    if (segment === '.' || segment === '..') continue
     if (/~\d+$/.test(segment)) return '8.3 短文件名'
     if (/[. ]$/.test(segment)) return '尾部点或空格'
     if (segment === '...') return '连续点路径段'
