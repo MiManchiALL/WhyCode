@@ -61,47 +61,59 @@ function requestApproval(request: {
   })
 }
 
-function initSession(modelId: string): string | null {
+/** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
+let currentModelId: string | null = null
+
+/** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
+function validateModel(modelId: string): string | null {
   const config = loadConfig()
   if (!config) {
-    return `未找到配置文件 ${getConfigPath()}，请创建并填入 API key（格式见该文件路径旁的文档说明）`
+    return `未找到配置文件 ${getConfigPath()}，请创建并填入 API key（格式见 apps/desktop/src/main/config.ts 注释）`
   }
   const entry = getModelEntry(modelId)
-  const providerConfig = config.providers[entry.provider]
-  if (!providerConfig?.apiKey) {
-    return `配置文件缺少 ${entry.provider} 的 apiKey`
+  if (!config.providers[entry.provider]?.apiKey) {
+    return `尚未配置 ${entry.provider} 的 API key，无法使用 ${entry.displayName}`
   }
-  if (!projectDir) {
-    return '请先选择项目目录'
+  return null
+}
+
+/** 解析默认模型：配置指定的 > 第一个有 key 的 */
+function resolveDefaultModelId(): string | null {
+  const config = loadConfig()
+  if (config?.defaultModel && !validateModel(config.defaultModel)) {
+    return config.defaultModel
   }
+  return MODEL_REGISTRY.find((m) => !validateModel(m.id))?.id ?? null
+}
+
+function ensureSession(): string | null {
+  if (!projectDir) return '请先选择项目目录'
+  currentModelId ??= resolveDefaultModelId()
+  if (!currentModelId) return '没有任何已配置 key 的模型可用'
+  const err = validateModel(currentModelId)
+  if (err) return err
+  const entry = getModelEntry(currentModelId)
+  const providerConfig = loadConfig()!.providers[entry.provider]!
   if (session) {
     session.setModel(entry, providerConfig)
   } else {
     session = new AgentSession({
       model: entry,
       providerConfig,
-      promptContext: {
-        projectDir,
-        osPlatform: process.platform,
-      },
+      promptContext: { projectDir, osPlatform: process.platform },
     })
   }
   return null
 }
 
-async function handleCommand(command: CoreCommand): Promise<void> {
+async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
   switch (command.type) {
     case 'user-message': {
-      if (!session) {
-        const config = loadConfig()
-        const modelId =
-          config?.defaultModel ?? MODEL_REGISTRY[0]?.id ?? 'anthropic:claude-sonnet-4-6'
-        const err = initSession(modelId)
-        if (err) {
-          broadcastEvent({ type: 'error', message: err, recoverable: true })
-          broadcastEvent({ type: 'agent-status', status: 'idle' })
-          return
-        }
+      const err = ensureSession()
+      if (err) {
+        broadcastEvent({ type: 'error', message: err, recoverable: true })
+        broadcastEvent({ type: 'agent-status', status: 'idle' })
+        return
       }
       currentAbort = new AbortController()
       await session!.run(command.text, currentAbort.signal, broadcastEvent, requestApproval)
@@ -116,11 +128,17 @@ async function handleCommand(command: CoreCommand): Promise<void> {
       break
     }
     case 'set-model': {
-      const err = initSession(command.modelId)
+      const err = validateModel(command.modelId)
       if (err) {
         broadcastEvent({ type: 'error', message: err, recoverable: true })
+        return { ok: false }
       }
-      break
+      currentModelId = command.modelId
+      if (session) {
+        const entry = getModelEntry(command.modelId)
+        session.setModel(entry, loadConfig()!.providers[entry.provider]!)
+      }
+      return { ok: true }
     }
     case 'approval-response': {
       const resolve = pendingApprovals.get(command.requestId)
@@ -135,9 +153,14 @@ async function handleCommand(command: CoreCommand): Promise<void> {
 
 void app.whenReady().then(() => {
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
-  ipcMain.handle(IPC.listModels, () =>
-    MODEL_REGISTRY.map((m) => ({ id: m.id, displayName: m.displayName })),
-  )
+  ipcMain.handle(IPC.listModels, () => {
+    const config = loadConfig()
+    return MODEL_REGISTRY.map((m) => ({
+      id: m.id,
+      displayName: m.displayName,
+      hasKey: Boolean(config?.providers[m.provider]?.apiKey),
+    }))
+  })
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
   ipcMain.handle(IPC.pickProjectDir, async () => {
     const result = await dialog.showOpenDialog({

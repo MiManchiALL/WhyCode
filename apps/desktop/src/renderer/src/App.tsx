@@ -30,7 +30,7 @@ export function App() {
   const [blocks, setBlocks] = useState<Block[]>([])
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<AgentStatus>('idle')
-  const [models, setModels] = useState<{ id: string; displayName: string }[]>([])
+  const [models, setModels] = useState<{ id: string; displayName: string; hasKey: boolean }[]>([])
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -41,7 +41,8 @@ export function App() {
   useEffect(() => {
     void window.whycode.listModels().then((list) => {
       setModels(list)
-      if (list[0]) setModelId(list[0].id)
+      const first = list.find((m) => m.hasKey)
+      if (first) setModelId(first.id)
     })
     void window.whycode.getProjectDir().then(setProjectDir)
   }, [])
@@ -165,13 +166,23 @@ export function App() {
           className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
           value={modelId}
           onChange={(e) => {
-            setModelId(e.target.value)
-            void window.whycode.sendCommand({ type: 'set-model', modelId: e.target.value })
+            const prev = modelId
+            const next = e.target.value
+            setModelId(next)
+            void window.whycode
+              .sendCommand({ type: 'set-model', modelId: next })
+              .then((r) => {
+                // 切换失败（如没配 key）回退选择，避免下拉框与实际模型不一致
+                if (!r || !r.ok) setModelId(prev)
+              })
           }}
           disabled={busy}
         >
           {models.map((m) => (
-            <option key={m.id} value={m.id}>{m.displayName}</option>
+            <option key={m.id} value={m.id} disabled={!m.hasKey}>
+              {m.displayName}
+              {m.hasKey ? '' : '（未配置 key）'}
+            </option>
           ))}
         </select>
       </header>
