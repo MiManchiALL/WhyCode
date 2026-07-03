@@ -4,8 +4,8 @@
  */
 
 export interface PromptContext {
-  /** 项目根目录（属于会话级静态信息，整个会话不变，可进提示词） */
-  projectDir: string
+  /** 项目根目录；null = 纯聊天模式（无工具，仅对话） */
+  projectDir: string | null
   osPlatform: NodeJS.Platform
 }
 
@@ -16,19 +16,11 @@ function identitySection(): string {
   ].join('\n')
 }
 
-function environmentSection(ctx: PromptContext): string {
+function environmentSection(projectDir: string, osPlatform: NodeJS.Platform): string {
   return [
     '# 环境',
-    `- 项目目录：${ctx.projectDir}`,
-    `- 操作系统：${ctx.osPlatform === 'win32' ? 'Windows' : ctx.osPlatform}`,
-  ].join('\n')
-}
-
-function safetySection(): string {
-  return [
-    '# 行为约束',
-    '- 不编造不存在的文件或代码；不确定的内容明确说明不确定。',
-    '- 只讨论与用户项目和编程相关的任务。',
+    `- 项目目录：${projectDir}`,
+    `- 操作系统：${osPlatform === 'win32' ? 'Windows' : osPlatform}`,
   ].join('\n')
 }
 
@@ -42,11 +34,29 @@ function toolUsageSection(): string {
   ].join('\n')
 }
 
-export function buildSystemPrompt(ctx: PromptContext): string {
+function chatOnlySection(): string {
   return [
-    identitySection(),
-    environmentSection(ctx),
-    toolUsageSection(),
-    safetySection(),
-  ].join('\n\n')
+    '# 当前模式',
+    '当前未打开项目目录，处于纯对话模式：没有任何文件或命令工具可用。',
+    '如果用户想操作代码或文件，提示其先在顶栏选择项目目录。',
+  ].join('\n')
+}
+
+function safetySection(): string {
+  return [
+    '# 行为约束',
+    '- 不编造不存在的文件或代码；不确定的内容明确说明不确定。',
+    '- 只讨论与用户项目和编程相关的任务。',
+  ].join('\n')
+}
+
+export function buildSystemPrompt(ctx: PromptContext): string {
+  const sections = [identitySection()]
+  if (ctx.projectDir) {
+    sections.push(environmentSection(ctx.projectDir, ctx.osPlatform), toolUsageSection())
+  } else {
+    sections.push(chatOnlySection())
+  }
+  sections.push(safetySection())
+  return sections.join('\n\n')
 }
