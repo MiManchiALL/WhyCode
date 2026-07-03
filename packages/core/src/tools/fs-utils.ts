@@ -1,13 +1,17 @@
-import { resolve, relative, isAbsolute } from 'node:path'
+import { resolve, isAbsolute } from 'node:path'
+import { findOutsideBoundary } from '../permissions/path-safety.ts'
+import type { ToolContext } from './tool.ts'
 
-/** 把工具传入的路径限制在项目目录内，越界抛错。返回解析后的绝对路径。 */
-export function resolveInProject(projectDir: string, inputPath: string): string {
-  const abs = isAbsolute(inputPath) ? inputPath : resolve(projectDir, inputPath)
-  const rel = relative(projectDir, abs)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error(`路径超出项目目录：${inputPath}`)
+/**
+ * 工具侧的路径解析：限制在项目目录 + 会话内已授权目录内。
+ * 权限引擎在执行前已做过边界审批，这里是执行时的最后防线（越界抛错）。
+ */
+export function resolveAllowed(ctx: ToolContext, inputPath: string): string {
+  const outside = findOutsideBoundary(inputPath, ctx.projectDir, [...ctx.additionalDirs])
+  if (outside) {
+    throw new Error(`路径超出允许范围：${inputPath}`)
   }
-  return abs
+  return isAbsolute(inputPath) ? resolve(inputPath) : resolve(ctx.projectDir, inputPath)
 }
 
 /** 目录遍历时跳过的项（避免扫进依赖和版本库） */

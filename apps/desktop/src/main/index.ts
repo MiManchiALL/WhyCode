@@ -4,6 +4,8 @@ import {
   AgentSession,
   getModelEntry,
   MODEL_REGISTRY,
+  type ApprovalRequest,
+  type ApprovalResponse,
   type CoreCommand,
   type CoreEvent,
 } from '@whycode/core'
@@ -47,14 +49,9 @@ let currentAbort: AbortController | null = null
 /** 当前项目目录；未选择时为 null，发消息前必须先选 */
 let projectDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
-const pendingApprovals = new Map<string, (approved: boolean) => void>()
+const pendingApprovals = new Map<string, (response: ApprovalResponse) => void>()
 
-function requestApproval(request: {
-  requestId: string
-  toolName: string
-  input: unknown
-  diff?: string
-}): Promise<boolean> {
+function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
   return new Promise((resolve) => {
     pendingApprovals.set(request.requestId, resolve)
     broadcastEvent({ type: 'approval-request', ...request })
@@ -63,6 +60,8 @@ function requestApproval(request: {
 
 /** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
 let currentModelId: string | null = null
+/** 会话创建前用户已选的权限档位（创建时应用） */
+let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
 function validateModel(modelId: string): string | null {
@@ -104,6 +103,7 @@ function ensureSession(): string | null {
       emit: broadcastEvent,
       requestApproval,
     })
+    if (pendingPermissionMode) session.setPermissionMode(pendingPermissionMode)
   }
   return null
 }
@@ -126,9 +126,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
     }
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
-      for (const resolve of pendingApprovals.values()) resolve(false)
+      for (const resolve of pendingApprovals.values()) resolve({ approved: false })
       pendingApprovals.clear()
       currentAbort?.abort()
+      break
+    }
+    case 'set-permission-mode': {
+      session?.setPermissionMode(command.mode)
+      pendingPermissionMode = command.mode
       break
     }
     case 'set-model': {
@@ -148,7 +153,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       const resolve = pendingApprovals.get(command.requestId)
       if (resolve) {
         pendingApprovals.delete(command.requestId)
-        resolve(command.approved)
+        resolve({ approved: command.approved, remember: command.remember })
       }
       break
     }

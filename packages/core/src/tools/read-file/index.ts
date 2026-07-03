@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
-import { resolveInProject } from '../fs-utils.ts'
+import { resolveAllowed } from '../fs-utils.ts'
 
 export const READ_FILE_TOOL_NAME = 'ReadFile'
 
@@ -18,9 +18,10 @@ export const readFileTool = buildTool({
     limit: z.number().int().min(1).optional().describe('最多读取的行数'),
   }),
   isReadOnly: true,
-  needsApproval: () => false,
+  kind: 'read',
+  extractPaths: (input) => [input.path],
   async execute(input, ctx) {
-    const abs = resolveInProject(ctx.projectDir, input.path)
+    const abs = resolveAllowed(ctx, input.path)
     const content = await readFile(abs, 'utf-8')
     const lines = content.split('\n')
     const start = (input.offset ?? 1) - 1

@@ -39,8 +39,12 @@ export type CoreEvent =
       requestId: string
       toolName: string
       input: unknown
+      /** 为什么需要审批（权限引擎给出） */
+      reason: string
       /** 写文件类工具附带的变更预览（unified diff 文本） */
       diff?: string
+      /** 批准时可选择「本会话记住」的建议（无则只能单次批准） */
+      suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
     }
   | { type: 'turn-end'; turnId: string; usage: UsageInfo; stopReason: StopReason }
   | { type: 'agent-status'; status: AgentStatus }
@@ -63,9 +67,16 @@ export type CoreCommand =
       /** 附件文件路径（宠物文件投递复用此通道） */
       attachmentPaths?: string[]
     }
-  | { type: 'approval-response'; requestId: string; approved: boolean }
+  | {
+      type: 'approval-response'
+      requestId: string
+      approved: boolean
+      /** true = 采纳审批建议（本会话记住目录/工具） */
+      remember?: boolean
+    }
   | { type: 'abort' }
   | { type: 'set-model'; modelId: string }
+  | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */
 export type CoreEventSink = (event: CoreEvent) => void

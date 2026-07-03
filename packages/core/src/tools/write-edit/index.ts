@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
-import { resolveInProject } from '../fs-utils.ts'
+import { resolveAllowed } from '../fs-utils.ts'
 
 export const WRITE_FILE_TOOL_NAME = 'WriteFile'
 export const EDIT_FILE_TOOL_NAME = 'EditFile'
@@ -38,14 +38,15 @@ export const writeFileTool = buildTool({
     content: z.string().describe('完整文件内容'),
   }),
   isReadOnly: false,
-  needsApproval: () => true,
+  kind: 'edit',
+  extractPaths: (input) => [input.path],
   async renderDiff(input, ctx) {
-    const abs = resolveInProject(ctx.projectDir, input.path)
+    const abs = resolveAllowed(ctx, input.path)
     const old = await readFile(abs, 'utf-8').catch(() => '')
     return makeDiff(input.path, old, input.content)
   },
   async execute(input, ctx) {
-    const abs = resolveInProject(ctx.projectDir, input.path)
+    const abs = resolveAllowed(ctx, input.path)
     await mkdir(dirname(abs), { recursive: true })
     await writeFile(abs, input.content, 'utf-8')
     return { data: `已写入 ${input.path}`, isError: false }
@@ -63,16 +64,17 @@ export const editFileTool = buildTool({
     newText: z.string().describe('替换后的文本'),
   }),
   isReadOnly: false,
-  needsApproval: () => true,
+  kind: 'edit',
+  extractPaths: (input) => [input.path],
   async renderDiff(input, ctx) {
-    const abs = resolveInProject(ctx.projectDir, input.path)
+    const abs = resolveAllowed(ctx, input.path)
     const old = await readFile(abs, 'utf-8')
     const idx = old.indexOf(input.oldText)
     if (idx === -1) return undefined
     return makeDiff(input.path, old, old.replace(input.oldText, input.newText))
   },
   async execute(input, ctx) {
-    const abs = resolveInProject(ctx.projectDir, input.path)
+    const abs = resolveAllowed(ctx, input.path)
     const old = await readFile(abs, 'utf-8')
     const first = old.indexOf(input.oldText)
     if (first === -1) {

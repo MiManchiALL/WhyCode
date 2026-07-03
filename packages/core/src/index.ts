@@ -23,6 +23,13 @@ export {
   AgentSession,
   type AgentSessionOptions,
   type ApprovalHandler,
+  type ApprovalRequest,
+  type ApprovalResponse,
 } from './agent/session.ts'
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
+export {
+  PERMISSION_MODES,
+  type PermissionMode,
+  type ApprovalSuggestion,
+} from './permissions/types.ts'
