@@ -84,6 +84,10 @@ export class AgentSession {
   private firstCheckpointOfTurn = new Map<string, string>()
   /** 当前 turn 信息（快照记录用） */
   private activeTurn: { id: string; startLen: number } | null = null
+  /** 当前操作（turn 或压缩）的中止器，session 自管 */
+  private opAbort: AbortController | null = null
+  /** 手动压缩进行中（此间用户消息排队，压缩后接续） */
+  private compacting = false
   /** token 计量基线（最后一次 API usage）；改写历史后置 null 全量重估 */
   private tokenBaseline: TokenBaseline | null = null
   /** 压缩熔断：连续失败 3 次后本会话停止尝试，成功清零 */
@@ -119,29 +123,36 @@ export class AgentSession {
   }
 
   /**
-   * 用户消息统一入口：空闲时开始新 turn；运行中则排队（steering）。
+   * 用户消息统一入口：空闲时开始新 turn；运行中/压缩中则排队（steering）。
    * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
    */
-  handleUserMessage(
-    text: string,
-    abortSignal: AbortSignal,
-    urgent = false,
-  ): Promise<void> | void {
-    if (this.running) {
+  handleUserMessage(text: string, urgent = false): Promise<void> | void {
+    if (this.running || this.compacting) {
       const item = { id: crypto.randomUUID(), text }
       this.queue.push(item)
       this.options.emit({ type: 'message-queued', id: item.id, text })
-      if (urgent) {
+      if (urgent && this.running) {
         // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
         this.currentStepAbort?.abort('interrupt')
       }
       return
     }
-    return this.runLoop([{ role: 'user', content: text }], abortSignal)
+    return this.startTurn([{ role: 'user', content: text }])
+  }
+
+  /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
+  private startTurn(initialMessages: ModelMessage[]): Promise<void> {
+    this.opAbort = new AbortController()
+    return this.runLoop(initialMessages, this.opAbort.signal)
+  }
+
+  /** 用户点「停止」：中止当前 turn 或压缩 */
+  abort(): void {
+    this.opAbort?.abort('user-cancel')
   }
 
   /** 中断收尾：排队消息弹回输入框，不静默丢弃 */
-  onAborted(): void {
+  private onAborted(): void {
     if (this.queue.length > 0) {
       const text = this.queue.map((q) => q.text).join('\n')
       this.queue = []
@@ -233,19 +244,16 @@ export class AgentSession {
       for (const item of drained) {
         emit({ type: 'message-injected', id: item.id, text: item.text })
       }
-      return this.runLoop(
-        drained.map((q) => ({ role: 'user' as const, content: q.text })),
-        abortSignal,
-      )
+      return this.startTurn(drained.map((q) => ({ role: 'user' as const, content: q.text })))
     }
 
     emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
   }
 
-  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；可被 abort 取消 */
-  async compactNow(abortSignal: AbortSignal): Promise<void> {
+  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；期间用户消息排队，完成后接续 */
+  async compactNow(): Promise<void> {
     const { emit } = this.options
-    if (this.running) {
+    if (this.running || this.compacting) {
       emit({ type: 'error', message: 'Agent 工作中，请先停止再压缩', recoverable: true })
       return
     }
@@ -253,6 +261,9 @@ export class AgentSession {
       emit({ type: 'error', message: '对话太短，无需压缩', recoverable: true })
       return
     }
+    this.compacting = true
+    this.opAbort = new AbortController()
+    const signal = this.opAbort.signal
     const preTokens = estimateContextTokens(this.messages, this.tokenBaseline)
     emit({ type: 'agent-status', status: 'working' })
     try {
@@ -260,7 +271,7 @@ export class AgentSession {
         this.options.model.create(this.options.providerConfig),
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
-        abortSignal,
+        signal,
       )
       this.messages = result.messages
       this.tokenBaseline = null
@@ -277,13 +288,25 @@ export class AgentSession {
     } catch (error) {
       emit({
         type: 'error',
-        message: abortSignal.aborted
+        message: signal.aborted
           ? '压缩已取消'
           : `压缩失败：${error instanceof Error ? error.message : String(error)}`,
         recoverable: true,
       })
     }
+    this.compacting = false
     emit({ type: 'agent-status', status: 'idle' })
+
+    // 压缩期间排队的消息：取消则弹回输入框；正常结束则在新上下文上接续为新 turn
+    if (signal.aborted) {
+      this.onAborted()
+    } else if (this.queue.length > 0) {
+      const drained = this.drainQueue()
+      for (const item of drained) {
+        emit({ type: 'message-injected', id: item.id, text: item.text })
+      }
+      return this.startTurn(drained.map((q) => ({ role: 'user' as const, content: q.text })))
+    }
   }
 
   /**
