@@ -13,13 +13,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "ai": "^7.0.14",
     "@ai-sdk/anthropic": "^4.0.7",
     "@ai-sdk/deepseek": "^3.0.5",
+    "@ai-sdk/openai": "^4.0.7",
+    "@ai-sdk/openai-compatible": "^3.0.5",
+    "ai": "^7.0.14",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
-    "@types/node": "^24.0.0"
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3"
   }
 }

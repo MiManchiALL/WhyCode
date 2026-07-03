@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Streamdown } from 'streamdown'
 import type { AgentStatus, CoreEvent } from '@whycode/core'
 
 interface ToolCall {
@@ -33,6 +34,7 @@ export function App() {
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [projectDir, setProjectDir] = useState<string | null>(null)
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
 
@@ -41,6 +43,7 @@ export function App() {
       setModels(list)
       if (list[0]) setModelId(list[0].id)
     })
+    void window.whycode.getProjectDir().then(setProjectDir)
   }, [])
 
   useEffect(() => {
@@ -109,6 +112,15 @@ export function App() {
 
   const busy = status !== 'idle' && status !== 'error'
 
+  const pickProject = useCallback(() => {
+    void window.whycode.pickProjectDir().then((dir) => {
+      if (dir) {
+        setProjectDir(dir)
+        setBlocks([])
+      }
+    })
+  }, [])
+
   const send = useCallback(() => {
     const text = input.trim()
     if (!text || busy) return
@@ -138,7 +150,17 @@ export function App() {
   return (
     <div className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
       <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
-        <span className="text-sm font-medium">WhyCode</span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium">WhyCode</span>
+          <button
+            className="max-w-96 truncate rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:border-neutral-500"
+            onClick={pickProject}
+            disabled={busy}
+            title={projectDir ?? '选择要工作的项目目录'}
+          >
+            {projectDir ?? '📁 选择项目目录'}
+          </button>
+        </div>
         <select
           className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
           value={modelId}
@@ -157,7 +179,9 @@ export function App() {
       <main ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
         {blocks.length === 0 && (
           <p className="mt-24 text-center text-sm text-neutral-400">
-            与 WhyCode 对话，它能读写文件、执行命令（写操作需你确认）
+            {projectDir
+              ? '与 WhyCode 对话，它能读写文件、执行命令（写操作需你确认）'
+              : '先选择项目目录，然后开始对话'}
           </p>
         )}
         {blocks.map((b) => (
@@ -180,8 +204,8 @@ export function App() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder={busy ? '处理中…' : '输入消息…'}
-            disabled={busy}
+            placeholder={busy ? '处理中…' : projectDir ? '输入消息…' : '先选择项目目录'}
+            disabled={busy || !projectDir}
           />
           {busy ? (
             <button
@@ -218,7 +242,11 @@ function BlockView({
     return <div className="mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">{block.text}</div>
   }
   if (block.kind === 'text') {
-    return <div className="mb-2 whitespace-pre-wrap px-3 py-2 text-sm">{block.text}</div>
+    return (
+      <div className="prose prose-sm prose-neutral mb-2 max-w-none px-3 py-2">
+        <Streamdown>{block.text}</Streamdown>
+      </div>
+    )
   }
   if (block.kind === 'error') {
     return <div className="mb-2 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{block.text}</div>

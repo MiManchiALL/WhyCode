@@ -138,6 +138,7 @@ export class AgentSession {
         messages: this.messages,
         tools: this.buildToolSet(emit, requestApproval, abortSignal),
         stopWhen: stepCountIs(MAX_STEPS),
+        providerOptions: this.options.model.providerOptions,
         abortSignal,
       })
 

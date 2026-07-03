@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'node:path'
 import {
   AgentSession,
@@ -44,6 +44,8 @@ function broadcastEvent(event: CoreEvent): void {
 /** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
 let session: AgentSession | null = null
 let currentAbort: AbortController | null = null
+/** 当前项目目录；未选择时为 null，发消息前必须先选 */
+let projectDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
 const pendingApprovals = new Map<string, (approved: boolean) => void>()
 
@@ -69,6 +71,9 @@ function initSession(modelId: string): string | null {
   if (!providerConfig?.apiKey) {
     return `配置文件缺少 ${entry.provider} 的 apiKey`
   }
+  if (!projectDir) {
+    return '请先选择项目目录'
+  }
   if (session) {
     session.setModel(entry, providerConfig)
   } else {
@@ -76,8 +81,7 @@ function initSession(modelId: string): string | null {
       model: entry,
       providerConfig,
       promptContext: {
-        // M1 先以进程工作目录为项目目录；项目选择器属后续 UI 模块
-        projectDir: process.cwd(),
+        projectDir,
         osPlatform: process.platform,
       },
     })
@@ -134,6 +138,19 @@ void app.whenReady().then(() => {
   ipcMain.handle(IPC.listModels, () =>
     MODEL_REGISTRY.map((m) => ({ id: m.id, displayName: m.displayName })),
   )
+  ipcMain.handle(IPC.getProjectDir, () => projectDir)
+  ipcMain.handle(IPC.pickProjectDir, async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择项目目录',
+      properties: ['openDirectory'],
+    })
+    const dir = result.filePaths[0]
+    if (!dir) return null
+    projectDir = dir
+    // 换项目 = 换会话（消息历史与旧项目强相关）
+    session = null
+    return dir
+  })
 
   createWindow()
 

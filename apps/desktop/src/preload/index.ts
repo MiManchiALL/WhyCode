@@ -8,6 +8,8 @@ const api = {
     ipcRenderer.invoke(IPC.command, command),
   listModels: (): Promise<{ id: string; displayName: string }[]> =>
     ipcRenderer.invoke(IPC.listModels),
+  getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),
+  pickProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickProjectDir),
   onEvent: (listener: (event: CoreEvent) => void): (() => void) => {
     const wrapped = (_: unknown, event: CoreEvent) => listener(event)
     ipcRenderer.on(IPC.event, wrapped)
