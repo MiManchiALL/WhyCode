@@ -1,7 +1,14 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'node:path'
-import type { CoreCommand, CoreEvent } from '@whycode/core'
+import {
+  AgentSession,
+  getModelEntry,
+  MODEL_REGISTRY,
+  type CoreCommand,
+  type CoreEvent,
+} from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
+import { getConfigPath, loadConfig } from './config.ts'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -12,7 +19,7 @@ function createWindow(): BrowserWindow {
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: join(import.meta.dirname, '../preload/index.mjs'),
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
       contextIsolation: true,
     },
@@ -28,24 +35,144 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-/** 向所有窗口广播 CoreEvent（后续接入 core 的事件出口） */
 function broadcastEvent(event: CoreEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(IPC.event, event)
   }
 }
 
-void app.whenReady().then(() => {
-  ipcMain.handle(IPC.command, (_e, command: CoreCommand) => {
-    // 骨架阶段：回显命令，验证 IPC 链路。M1-b 接入 Agent loop 后替换。
-    if (command.type === 'user-message') {
-      broadcastEvent({ type: 'agent-status', status: 'working' })
-      broadcastEvent({
-        type: 'text-delta',
-        text: `【骨架回显】收到消息：${command.text}`,
-      })
-      broadcastEvent({ type: 'agent-status', status: 'idle' })
+/** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
+let session: AgentSession | null = null
+let currentAbort: AbortController | null = null
+/** 当前项目目录；未选择时为 null，发消息前必须先选 */
+let projectDir: string | null = null
+/** 待用户审批的请求：requestId → resolve */
+const pendingApprovals = new Map<string, (approved: boolean) => void>()
+
+function requestApproval(request: {
+  requestId: string
+  toolName: string
+  input: unknown
+  diff?: string
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    pendingApprovals.set(request.requestId, resolve)
+    broadcastEvent({ type: 'approval-request', ...request })
+  })
+}
+
+/** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
+let currentModelId: string | null = null
+
+/** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
+function validateModel(modelId: string): string | null {
+  const config = loadConfig()
+  if (!config) {
+    return `未找到配置文件 ${getConfigPath()}，请创建并填入 API key（格式见 apps/desktop/src/main/config.ts 注释）`
+  }
+  const entry = getModelEntry(modelId)
+  if (!config.providers[entry.provider]?.apiKey) {
+    return `尚未配置 ${entry.provider} 的 API key，无法使用 ${entry.displayName}`
+  }
+  return null
+}
+
+/** 解析默认模型：配置指定的 > 第一个有 key 的 */
+function resolveDefaultModelId(): string | null {
+  const config = loadConfig()
+  if (config?.defaultModel && !validateModel(config.defaultModel)) {
+    return config.defaultModel
+  }
+  return MODEL_REGISTRY.find((m) => !validateModel(m.id))?.id ?? null
+}
+
+function ensureSession(): string | null {
+  if (!projectDir) return '请先选择项目目录'
+  currentModelId ??= resolveDefaultModelId()
+  if (!currentModelId) return '没有任何已配置 key 的模型可用'
+  const err = validateModel(currentModelId)
+  if (err) return err
+  const entry = getModelEntry(currentModelId)
+  const providerConfig = loadConfig()!.providers[entry.provider]!
+  if (session) {
+    session.setModel(entry, providerConfig)
+  } else {
+    session = new AgentSession({
+      model: entry,
+      providerConfig,
+      promptContext: { projectDir, osPlatform: process.platform },
+    })
+  }
+  return null
+}
+
+async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
+  switch (command.type) {
+    case 'user-message': {
+      const err = ensureSession()
+      if (err) {
+        broadcastEvent({ type: 'error', message: err, recoverable: true })
+        broadcastEvent({ type: 'agent-status', status: 'idle' })
+        return
+      }
+      currentAbort = new AbortController()
+      await session!.run(command.text, currentAbort.signal, broadcastEvent, requestApproval)
+      currentAbort = null
+      break
     }
+    case 'abort': {
+      // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
+      for (const resolve of pendingApprovals.values()) resolve(false)
+      pendingApprovals.clear()
+      currentAbort?.abort()
+      break
+    }
+    case 'set-model': {
+      const err = validateModel(command.modelId)
+      if (err) {
+        broadcastEvent({ type: 'error', message: err, recoverable: true })
+        return { ok: false }
+      }
+      currentModelId = command.modelId
+      if (session) {
+        const entry = getModelEntry(command.modelId)
+        session.setModel(entry, loadConfig()!.providers[entry.provider]!)
+      }
+      return { ok: true }
+    }
+    case 'approval-response': {
+      const resolve = pendingApprovals.get(command.requestId)
+      if (resolve) {
+        pendingApprovals.delete(command.requestId)
+        resolve(command.approved)
+      }
+      break
+    }
+  }
+}
+
+void app.whenReady().then(() => {
+  ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
+  ipcMain.handle(IPC.listModels, () => {
+    const config = loadConfig()
+    return MODEL_REGISTRY.map((m) => ({
+      id: m.id,
+      displayName: m.displayName,
+      hasKey: Boolean(config?.providers[m.provider]?.apiKey),
+    }))
+  })
+  ipcMain.handle(IPC.getProjectDir, () => projectDir)
+  ipcMain.handle(IPC.pickProjectDir, async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择项目目录',
+      properties: ['openDirectory'],
+    })
+    const dir = result.filePaths[0]
+    if (!dir) return null
+    projectDir = dir
+    // 换项目 = 换会话（消息历史与旧项目强相关）
+    session = null
+    return dir
   })
 
   createWindow()

@@ -1,6 +1,8 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createDeepSeek } from '@ai-sdk/deepseek'
-import type { LanguageModel } from 'ai'
+import { createOpenAI } from '@ai-sdk/openai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import type { LanguageModel, ProviderMetadata } from 'ai'
 
 /**
  * 模型能力标记 —— 提示词条件 section、结构化输出分层、thinking 处理都依据这里。
@@ -29,6 +31,8 @@ export interface ModelEntry {
   capabilities: ModelCapabilities
   /** 创建 AI SDK LanguageModel 实例 */
   create: (config: ProviderConfig) => LanguageModel
+  /** 随每次请求透传给 AI SDK 的 providerOptions（厂商特殊参数逃生舱） */
+  providerOptions?: ProviderMetadata
 }
 
 export interface ProviderConfig {
@@ -37,7 +41,7 @@ export interface ProviderConfig {
   baseURL?: string
 }
 
-/** M1 首批模型注册表：Anthropic + DeepSeek（OpenAI/智谱 M1 后半段补） */
+/** M1 模型注册表：四厂商各一个代表模型，后续做设置界面时允许用户自定义增删 */
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
   {
     id: 'anthropic:claude-sonnet-4-6',
@@ -72,6 +76,44 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       createDeepSeek({ apiKey: config.apiKey, baseURL: config.baseURL })(
         'deepseek-v4-flash',
       ),
+  },
+  {
+    id: 'zhipu:glm-4.7',
+    displayName: 'GLM-4.7',
+    provider: 'zhipu',
+    capabilities: {
+      supportsNativeTools: true,
+      // GLM-4.7 thinking+工具调用会把最终答案吞进 reasoning_content（两种协议端点均复现，2026-07-04），
+      // 暂关 thinking 保工具循环可用，等厂商修复后恢复（见便签）
+      reasoningExposure: 'none',
+      structuredOutput: 'json-schema',
+      promptCaching: 'auto',
+      contextWindow: 128_000,
+      maxOutput: 32_000,
+    },
+    providerOptions: { zhipu: { thinking: { type: 'disabled' } } },
+    // 智谱兼容 OpenAI 协议但路径是 /api/paas/v4（不是 /v1），用 openai-compatible 显式指 baseURL
+    create: (config) =>
+      createOpenAICompatible({
+        name: 'zhipu',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? 'https://open.bigmodel.cn/api/paas/v4',
+      })('glm-4.7'),
+  },
+  {
+    id: 'openai:gpt-5.2',
+    displayName: 'GPT-5.2',
+    provider: 'openai',
+    capabilities: {
+      supportsNativeTools: true,
+      reasoningExposure: 'summary',
+      structuredOutput: 'json-schema',
+      promptCaching: 'auto',
+      contextWindow: 400_000,
+      maxOutput: 128_000,
+    },
+    create: (config) =>
+      createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })('gpt-5.2'),
   },
 ] as const
 

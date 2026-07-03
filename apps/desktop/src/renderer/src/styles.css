@@ -1,1 +1,3 @@
 @import 'tailwindcss';
+/* Streamdown 组件内部类名需要纳入 Tailwind 扫描 */
+@source '../../../node_modules/streamdown/dist/*.js';

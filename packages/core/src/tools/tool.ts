@@ -17,7 +17,7 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   /** 是否需要用户审批（M1：所有写类工具恒为 true） */
   needsApproval: (input: z.infer<Schema>) => boolean
   /** 写文件类工具生成变更预览（unified diff），用于审批 UI */
-  renderDiff?: (input: z.infer<Schema>) => Promise<string | undefined>
+  renderDiff?: (input: z.infer<Schema>, ctx: ToolContext) => Promise<string | undefined>
   execute: (input: z.infer<Schema>, ctx: ToolContext) => Promise<ToolResult>
 }
 

@@ -7,4 +7,10 @@ export const IPC = {
   command: 'whycode:command',
   /** Main → Renderer：CoreEvent 事件流 */
   event: 'whycode:event',
+  /** Renderer → Main：获取可用模型列表 */
+  listModels: 'whycode:list-models',
+  /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
+  pickProjectDir: 'whycode:pick-project-dir',
+  /** Renderer → Main：查询当前项目目录 */
+  getProjectDir: 'whycode:get-project-dir',
 } as const

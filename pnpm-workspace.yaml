@@ -13,3 +13,5 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/provider-utils@5.0.5'
   - '@ai-sdk/provider@4.0.2'
   - ai@7.0.14
+  - '@ai-sdk/openai-compatible@3.0.5'
+  - '@ai-sdk/openai@4.0.7'
