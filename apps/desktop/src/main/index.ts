@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   AgentSession,
@@ -254,6 +255,10 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
 }
 
 void app.whenReady().then(() => {
+  // 上次运行的检查点/协商 scratch 重启后均不可达（回滚索引与对话都在内存），启动时清空防磁盘累积
+  for (const dir of ['checkpoints', 'scratch']) {
+    void rm(join(app.getPath('userData'), dir), { recursive: true, force: true }).catch(() => {})
+  }
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () => {
     const config = loadConfig()
