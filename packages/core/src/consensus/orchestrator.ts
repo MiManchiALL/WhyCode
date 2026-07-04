@@ -5,7 +5,7 @@ import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
 import { extractMemorySummary, formatMemories } from './memory.ts'
-import { buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
+import { buildConversationDigest, buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
 import { createTaskScratch } from './scratch.ts'
 import type { AgentMemorySummary, CandidateContent, ConsensusAgentId, ProtocolOutput } from './types.ts'
 
@@ -53,6 +53,8 @@ export class ConsensusCoordinator {
   private sessionScore: Record<ConsensusAgentId, number> = { Main: 0, B: 0, C: 0 }
   /** B/C 跨任务记忆（协议 §10：任务结束只留结构化摘要，下任务注入） */
   private memories: Record<'B' | 'C', AgentMemorySummary[]> = { B: [], C: [] }
+  /** 对话内任务脉络（含 main_only；B/C 首轮注入摘要，补齐"刚才那个"类指代） */
+  private taskLog: { taskId: string; userText: string; m1Summary: string }[] = []
 
   constructor(options: ConsensusCoordinatorOptions) {
     this.options = options
@@ -127,6 +129,9 @@ export class ConsensusCoordinator {
         candidateId: 'M1',
         summary: m1.candidate?.summary ?? '',
       })
+      // 任务脉络：摘要给本任务的 B/C（不含本任务），随后登记本任务（main_only 也登记）
+      const digest = buildConversationDigest(this.taskLog)
+      this.taskLog.push({ taskId, userText, m1Summary: m1.candidate?.summary ?? '' })
 
       // main_only：无需评审，恢复执行档直接放行（协议 §6.1，行为与单 Agent 一致）
       if (mode === 'main_only') {
@@ -153,14 +158,14 @@ export class ConsensusCoordinator {
           taskId,
           userText,
           m1,
-          memoryOf: (agentId) => formatMemories(this.memories[agentId]),
+          memoryOf: (agentId) => digest + formatMemories(this.memories[agentId]),
           sessionScore: this.sessionScore,
           isAborted: () => this.aborted,
         })
         packageText = result?.packageText ?? null
         if (result) this.saveMemories(taskId, [...result.outputs.values()])
       } else {
-        packageText = await this.runQuickReview(userText, m1.candidate, taskId, scratch.agentDirs)
+        packageText = await this.runQuickReview(userText, m1.candidate, taskId, scratch.agentDirs, digest)
       }
       this.peerPhase = false
       if (this.aborted || packageText === null) return
@@ -191,6 +196,7 @@ export class ConsensusCoordinator {
     m1: CandidateContent | null,
     taskId: string,
     agentDirs: Record<ConsensusAgentId, string>,
+    digest: string,
   ): Promise<string | null> {
     const { emit } = this.options
     const spec = {
@@ -203,7 +209,7 @@ export class ConsensusCoordinator {
     const run = async (agentId: 'B' | 'C') => {
       const peer = this.makePeer(agentId, agentDirs[agentId])
       const result = await peer.runRound(
-        buildQuickReviewPrompt(agentId, userText, m1, formatMemories(this.memories[agentId])),
+        buildQuickReviewPrompt(agentId, userText, m1, digest + formatMemories(this.memories[agentId])),
         { ...spec, agentId },
       )
       return { agentId, result }

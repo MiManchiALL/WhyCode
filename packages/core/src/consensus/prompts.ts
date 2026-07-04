@@ -131,3 +131,23 @@ export function candidateText(title: string, c: CandidateContent | null): string
   if (c.knownRisks?.length) lines.push(`known_risks: ${c.knownRisks.join('；')}`)
   return lines.join('\n')
 }
+
+const DIGEST_KEEP = 6
+const DIGEST_CLIP = 120
+
+/**
+ * 对话脉络摘要（协议 §4.3「必要上下文」）：B/C 不保留普通轮次的会话，
+ * 用户请求若指代此前对话（"刚才那个函数"），靠这里补齐脉络。
+ */
+export function buildConversationDigest(
+  entries: { taskId: string; userText: string; m1Summary: string }[],
+): string {
+  if (entries.length === 0) return ''
+  const clip = (s: string) => (s.length > DIGEST_CLIP ? s.slice(0, DIGEST_CLIP) + '…' : s)
+  const lines = ['[本对话此前的任务脉络]']
+  for (const e of entries.slice(-DIGEST_KEEP)) {
+    lines.push(`- ${e.taskId}：用户「${clip(e.userText)}」→ Main 结论「${clip(e.m1Summary)}」`)
+  }
+  lines.push('')
+  return lines.join('\n')
+}
