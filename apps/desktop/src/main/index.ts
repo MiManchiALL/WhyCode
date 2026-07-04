@@ -132,14 +132,14 @@ function ensureSession(): string | null {
   return null
 }
 
-/** 协商可用性检查：三 Agent 配置齐备 + 模型已注册 + 已选项目目录。返回不可用原因或 null */
+/** 协商可用性检查：B/C 评审员配置齐备 + 模型已注册 + 已选项目目录。返回不可用原因或 null */
 function checkConsensusReady(): string | null {
   if (!projectDir) return '协商需要先选择项目目录'
   const config = loadConfig()
   if (!consensusAgentsReady(config)) {
-    return '协商需要在配置文件中为 Main/B/C 各配置 model 与 apiKey（consensusAgents 字段）'
+    return '协商需要在配置文件中为评审员 B/C 各配置 model 与 apiKey（consensusAgents 字段）'
   }
-  for (const id of ['Main', 'B', 'C'] as const) {
+  for (const id of ['B', 'C'] as const) {
     try {
       getModelEntry(config!.consensusAgents![id]!.model)
     } catch {
