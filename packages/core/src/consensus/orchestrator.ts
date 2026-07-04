@@ -15,7 +15,7 @@ export interface ConsensusAgentSetup {
 
 /** 用户显式要求多 Agent 协商的表述（协议 §1.1 的升级触发词；控制面确定性规则，不依赖模型自觉） */
 const EXPLICIT_CONSENSUS_RE =
-  /充分讨论|多视角|多角度|互相评价|互相讨论|达成共识|完整共识|共识决策|三个\s*agent|多个\s*agent|full[_\s-]?consensus/i
+  /充分讨论|多视角|多角度|互相评价|互相讨论|达成共识|完整共识|共识决策|你们.{0,4}讨论|大家.{0,6}讨论|一起讨论|三个\s*agent|多个\s*agent|full[_\s-]?consensus/i
 
 export interface ConsensusCoordinatorOptions {
   /** Main = 用户对话的既有会话（最终执行者，保留完整上下文） */
