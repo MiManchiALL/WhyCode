@@ -3,6 +3,7 @@ import type { CoreEventSink } from '../events.ts'
 import type { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import {
+  buildIndependentNotePrompt,
   buildRound1PeerPrompt,
   buildRound2MainPrompt,
   buildRound2PeerPrompt,
@@ -12,7 +13,8 @@ import {
 import type { ConsensusAgentId, ProtocolOutput, Vote } from './types.ts'
 
 /**
- * full_consensus 三轮驱动（协议 §8）。返回执行阶段输入包文本；aborted 返回 null。
+ * full_consensus 三轮驱动（协议 §8，含 §9 独立初判）。返回执行包文本与全部协议输出
+ * （协调器据此提取 B/C 记忆）；aborted 返回 null。
  * 任一协议输出 invalid 时走降级路径：把已有材料交 Main 终判（保证永不卡死）。
  */
 export interface FullConsensusDeps {
@@ -22,18 +24,26 @@ export interface FullConsensusDeps {
   taskId: string
   userText: string
   m1: ProtocolOutput
+  /** 该 Agent 的历史记忆文本块（协议 §10；无记忆为空串） */
+  memoryOf: (agentId: 'B' | 'C') => string
   /** 对话级累计分数（协调器持有，跨任务保留，新对话重置） */
   sessionScore: Record<ConsensusAgentId, number>
   isAborted: () => boolean
 }
 
-export async function runFullConsensus(deps: FullConsensusDeps): Promise<string | null> {
+export interface FullConsensusResult {
+  packageText: string
+  /** candidateId → 协议输出（含降级时已收集的部分；协调器提取 B/C 记忆用） */
+  outputs: Map<string, ProtocolOutput>
+}
+
+export async function runFullConsensus(deps: FullConsensusDeps): Promise<FullConsensusResult | null> {
   const { emit, mainSession, taskId, sessionScore } = deps
   /** 候选登记表：candidateId → 输出（投票目标校验与执行包组装的依据） */
   const outputs = new Map<string, ProtocolOutput>()
   outputs.set('M1', deps.m1)
 
-  // ---------- 第一轮：B/C 并行（评价 M1 + 各自候选） ----------
+  // ---------- 第一轮：独立初判（§9，看到 M1 前先形成判断）→ 评 M1 + 各自候选 ----------
   const peerB = deps.makePeer('B')
   const peerC = deps.makePeer('C')
   const r1Spec = {
@@ -43,10 +53,15 @@ export async function runFullConsensus(deps: FullConsensusDeps): Promise<string 
     existingCandidateIds: ['M1'],
     requireProtocolMode: false,
   }
-  const [b1r, c1r] = await Promise.all([
-    peerB.runRound(buildRound1PeerPrompt('B', deps.userText, deps.m1.candidate), { ...r1Spec, agentId: 'B' }),
-    peerC.runRound(buildRound1PeerPrompt('C', deps.userText, deps.m1.candidate), { ...r1Spec, agentId: 'C' }),
-  ])
+  const runPeerRound1 = async (peer: PeerAgent, agentId: 'B' | 'C') => {
+    await peer.explore(buildIndependentNotePrompt(agentId, deps.userText, deps.memoryOf(agentId)))
+    if (deps.isAborted()) return { ok: false as const, error: 'aborted' }
+    return peer.runRound(buildRound1PeerPrompt(agentId, deps.userText, deps.m1.candidate), {
+      ...r1Spec,
+      agentId,
+    })
+  }
+  const [b1r, c1r] = await Promise.all([runPeerRound1(peerB, 'B'), runPeerRound1(peerC, 'C')])
   if (deps.isAborted()) return null
   if (!b1r.ok || !c1r.ok) {
     return degrade(deps, outputs, `第一轮存在无效输出（B:${b1r.ok ? '有效' : b1r.error}；C:${c1r.ok ? '有效' : c1r.error}）`)
@@ -66,6 +81,7 @@ export async function runFullConsensus(deps: FullConsensusDeps): Promise<string 
       scores: { ...sessionScore },
     })
     return buildPackage(
+      outputs,
       [{ candidateId: 'M1', output: deps.m1, votes: votesOn('M1', [b1r.output, c1r.output]) }],
       'B/C 均接受 M1。请评估支持票中的 suggested_change（可采纳/部分采纳/拒绝），合成最终方案并执行。',
     )
@@ -135,6 +151,7 @@ export async function runFullConsensus(deps: FullConsensusDeps): Promise<string 
       C1: [m2r.output, b2r.output],
     }
     return buildPackage(
+      outputs,
       selected.map((id) => ({ candidateId: id, output: outputs.get(id)!, votes: votesOn(id, sources[id]) })),
       selected.length > 1
         ? '多个候选获得 2 票：优先合并兼容部分；实现细节冲突时由你判断解决，形成一个可执行的最终方案。来自 B/C 的候选必须保持其核心方向，不得反向覆盖。'
@@ -157,6 +174,7 @@ export async function runFullConsensus(deps: FullConsensusDeps): Promise<string 
       scores: { ...sessionScore },
     })
     return buildPackage(
+      outputs,
       [{ candidateId, output: outputs.get(candidateId)!, votes: [] }],
       `按对话内历史分数采用 ${candidateId}（无支持票）。请保持其整体方向合成完整方案并执行——可加入你的执行建议，不得反向覆盖其核心思路。`,
     )
@@ -176,6 +194,7 @@ export async function runFullConsensus(deps: FullConsensusDeps): Promise<string 
   )
   if (deps.isAborted()) return null
   if (!m3r.ok) return degrade(deps, outputs, `第三轮 Main 输出无效（${m3r.error}）`)
+  outputs.set('M3', m3r.output)
   announce(emit, 'M3', m3r.output)
   emit({
     type: 'negotiation-decided',
@@ -185,6 +204,7 @@ export async function runFullConsensus(deps: FullConsensusDeps): Promise<string 
     scores: { ...sessionScore },
   })
   return buildPackage(
+    outputs,
     [{ candidateId: 'M3', output: m3r.output, votes: [] }],
     '你的最终候选 M3 已被采用，请直接执行。',
   )
@@ -246,9 +266,10 @@ function votesOn(target: string, sources: ProtocolOutput[]): Vote[] {
 
 /** 执行阶段输入包（协议 §15.2 文本化） */
 function buildPackage(
+  outputs: Map<string, ProtocolOutput>,
   selected: { candidateId: string; output: ProtocolOutput; votes: Vote[] }[],
   instruction: string,
-): string {
+): FullConsensusResult {
   const lines = ['[协商结果 · execution_allowed]', instruction, '']
   for (const s of selected) {
     lines.push(candidateText(`被选中候选 ${s.candidateId}（${OWNER[s.candidateId]}）`, s.output.candidate))
@@ -258,11 +279,15 @@ function buildPackage(
     lines.push('')
   }
   lines.push('你已恢复正常执行权限，现在开始执行。')
-  return lines.join('\n')
+  return { packageText: lines.join('\n'), outputs }
 }
 
 /** 降级路径：协议输出 invalid 时把已有材料交 Main 终判（协议 §14 精神：可追责且不卡死） */
-function degrade(deps: FullConsensusDeps, outputs: Map<string, ProtocolOutput>, why: string): string {
+function degrade(
+  deps: FullConsensusDeps,
+  outputs: Map<string, ProtocolOutput>,
+  why: string,
+): FullConsensusResult {
   deps.emit({ type: 'error', message: `full_consensus 降级为 Main 终判：${why}`, recoverable: true })
   deps.emit({
     type: 'negotiation-decided',
@@ -282,5 +307,5 @@ function degrade(deps: FullConsensusDeps, outputs: Map<string, ProtocolOutput>, 
     lines.push('')
   }
   lines.push('你已恢复正常执行权限，现在开始执行。')
-  return lines.join('\n')
+  return { packageText: lines.join('\n'), outputs }
 }

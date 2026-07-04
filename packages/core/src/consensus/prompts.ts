@@ -21,9 +21,10 @@ export function buildQuickReviewPrompt(
   agentId: 'B' | 'C',
   userText: string,
   m1: CandidateContent | null,
+  memoryBlock = '',
 ): string {
   return [
-    '[多 Agent 协商 · quick_review 快评]',
+    memoryBlock + '[多 Agent 协商 · quick_review 快评]',
     '用户请求：',
     userText,
     '',
@@ -32,6 +33,23 @@ export function buildQuickReviewPrompt(
     `你的任务（Agent ${agentId}）：独立评价 M1 能否直接采用——必要时读代码/在你的临时工作区做小实验验证其关键论断。`,
     '完成后调用 SubmitProtocolOutput 提交对 M1 的投票（accept / accept_with_minor_edits / reject）。',
     '这是快评模式：不需要提出你自己的完整候选方案。',
+  ].join('\n')
+}
+
+/** 独立初判（协议 §9）：B/C 在看到 M1 之前先形成自己的判断，防锚定；不参与计票 */
+export function buildIndependentNotePrompt(
+  agentId: 'B' | 'C',
+  userText: string,
+  memoryBlock = '',
+): string {
+  return [
+    memoryBlock + '[多 Agent 协商 · full_consensus 独立初判]',
+    '用户请求：',
+    userText,
+    '',
+    `你的任务（Agent ${agentId}）：在看到任何其他 Agent 的方案**之前**，独立探索这个问题（读代码、必要时在临时工作区实验），`,
+    '用普通文本简要写下你的初步判断：问题根因/关键取舍/你倾向的处理方向。',
+    '这一步不是正式协议输出，不要调用 SubmitProtocolOutput——写完初判即结束本回合，稍后你会收到待评审的候选。',
   ].join('\n')
 }
 
@@ -48,7 +66,7 @@ export function buildRound1PeerPrompt(
     candidateText('M1（Main 的候选）', m1),
     '',
     `你的任务（Agent ${agentId}）：`,
-    '1. 独立探索问题（读代码、在你的临时工作区实验）。不要被 M1 锚定——先形成自己的判断，再对照 M1。',
+    '1. 基于你刚才的独立初判对照评估 M1，必要时补充探索。',
     `2. 调用 SubmitProtocolOutput 提交：对 M1 的投票（必须），以及你自己的候选方案 ${agentId}1（完整处理思路，可以支持 M1 的方向，也可以提出不同思路）。`,
   ].join('\n')
 }

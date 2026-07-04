@@ -45,6 +45,12 @@ export class PeerAgent {
     return runProtocolRound(this.session, roundInput, spec)
   }
 
+  /** 自由探索回合（独立初判用，协议 §9）：无协议工具，产出留在自身上下文 */
+  async explore(input: string): Promise<void> {
+    this.session.setExtraTools([])
+    await this.session.handleUserMessage(input)
+  }
+
   /** 中止当前探索（用户取消整个协商时） */
   abort(): void {
     this.session.abort()

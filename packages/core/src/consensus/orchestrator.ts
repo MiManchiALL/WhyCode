@@ -4,9 +4,10 @@ import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
+import { extractMemorySummary, formatMemories } from './memory.ts'
 import { buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
 import { createTaskScratch } from './scratch.ts'
-import type { CandidateContent, ConsensusAgentId } from './types.ts'
+import type { AgentMemorySummary, CandidateContent, ConsensusAgentId, ProtocolOutput } from './types.ts'
 
 export interface ConsensusAgentSetup {
   model: ModelEntry
@@ -16,6 +17,9 @@ export interface ConsensusAgentSetup {
 /** 用户显式要求多 Agent 协商的表述（协议 §1.1 的升级触发词；控制面确定性规则，不依赖模型自觉） */
 const EXPLICIT_CONSENSUS_RE =
   /充分讨论|多视角|多角度|互相评价|互相讨论|达成共识|完整共识|共识决策|你们.{0,4}讨论|大家.{0,6}讨论|一起讨论|三个\s*agent|多个\s*agent|full[_\s-]?consensus/i
+
+/** 硬性风险触发词（协议 §1.1：高风险任务必须 full_consensus；保守收窄，避免误伤日常任务） */
+const HARD_RISK_RE = /(数据库|数据)\s*迁移|删库|生产环境|支付|payment/i
 
 export interface ConsensusCoordinatorOptions {
   /** Main = 用户对话的既有会话（最终执行者，保留完整上下文） */
@@ -47,6 +51,8 @@ export class ConsensusCoordinator {
   private aborted = false
   /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
   private sessionScore: Record<ConsensusAgentId, number> = { Main: 0, B: 0, C: 0 }
+  /** B/C 跨任务记忆（协议 §10：任务结束只留结构化摘要，下任务注入） */
+  private memories: Record<'B' | 'C', AgentMemorySummary[]> = { B: [], C: [] }
 
   constructor(options: ConsensusCoordinatorOptions) {
     this.options = options
@@ -110,9 +116,9 @@ export class ConsensusCoordinator {
         return
       }
       const m1 = m1Result.output
-      // 协议 §1.1：用户显式要求多视角/充分讨论/共识时，Orchestrator 强制升级 full_consensus（只升不降）
+      // 协议 §1.1：用户显式要求多视角/共识、或命中硬性风险词时，Orchestrator 强制升级 full_consensus（只升不降）
       let mode = m1.protocolMode ?? 'main_only'
-      if (mode !== 'full_consensus' && EXPLICIT_CONSENSUS_RE.test(userText)) {
+      if (mode !== 'full_consensus' && (EXPLICIT_CONSENSUS_RE.test(userText) || HARD_RISK_RE.test(userText))) {
         mode = 'full_consensus'
       }
       emit({
@@ -140,16 +146,19 @@ export class ConsensusCoordinator {
 
       let packageText: string | null
       if (mode === 'full_consensus') {
-        packageText = await runFullConsensus({
+        const result = await runFullConsensus({
           emit,
           mainSession,
           makePeer: (agentId) => this.makePeer(agentId, scratch.agentDirs[agentId]),
           taskId,
           userText,
           m1,
+          memoryOf: (agentId) => formatMemories(this.memories[agentId]),
           sessionScore: this.sessionScore,
           isAborted: () => this.aborted,
         })
+        packageText = result?.packageText ?? null
+        if (result) this.saveMemories(taskId, [...result.outputs.values()])
       } else {
         packageText = await this.runQuickReview(userText, m1.candidate, taskId, scratch.agentDirs)
       }
@@ -193,14 +202,18 @@ export class ConsensusCoordinator {
     }
     const run = async (agentId: 'B' | 'C') => {
       const peer = this.makePeer(agentId, agentDirs[agentId])
-      const result = await peer.runRound(buildQuickReviewPrompt(agentId, userText, m1), {
-        ...spec,
-        agentId,
-      })
+      const result = await peer.runRound(
+        buildQuickReviewPrompt(agentId, userText, m1, formatMemories(this.memories[agentId])),
+        { ...spec, agentId },
+      )
       return { agentId, result }
     }
     const reviews = await Promise.all([run('B'), run('C')])
     if (this.aborted) return null
+    this.saveMemories(
+      taskId,
+      reviews.filter((r) => r.result.ok).map((r) => (r.result as { ok: true; output: ProtocolOutput }).output),
+    )
 
     for (const r of reviews) {
       if (r.result.ok) {
@@ -245,6 +258,16 @@ export class ConsensusCoordinator {
     }
     lines.push('', '你已恢复正常执行权限，现在开始执行。')
     return lines.join('\n')
+  }
+
+  /** 任务结束：从 B/C 本任务的协议输出提取记忆（协议 §10：随后 Peer 会话即被丢弃） */
+  private saveMemories(taskId: string, outputs: ProtocolOutput[]): void {
+    for (const agentId of ['B', 'C'] as const) {
+      const own = outputs.filter((o) => o.agentId === agentId)
+      if (own.length > 0) {
+        this.memories[agentId].push(extractMemorySummary(agentId, taskId, own))
+      }
+    }
   }
 
   /** 创建受限讨论 Agent：过程流包进 peer-event，审批请求带身份前缀防 requestId 撞车 */
