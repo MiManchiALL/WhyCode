@@ -122,8 +122,9 @@ export class ConsensusCoordinator {
         return
       }
 
-      // quick_review：B/C 并行快评 M1（协议 §1.2）
+      // quick_review：B/C 并行快评 M1（协议 §1.2）；Main 已空闲，全局状态由协调器接管
       emit({ type: 'negotiation-started', taskId, mode })
+      emit({ type: 'agent-status', status: 'working' })
       this.peerPhase = true
       const reviews = await this.runQuickReviews(userText, m1.candidate, scratch.agentDirs)
       this.peerPhase = false
@@ -171,6 +172,8 @@ export class ConsensusCoordinator {
       this.peers = []
       this.peerPhase = false
       this.running = false
+      // 收尾兜底：此时无任何在跑的回合，状态归位（对 UI 幂等）
+      emit({ type: 'agent-status', status: 'idle' })
     }
   }
 

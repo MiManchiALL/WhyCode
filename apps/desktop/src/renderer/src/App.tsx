@@ -48,6 +48,8 @@ export function App() {
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
+  /** 协商进行中的状态条文案（null = 无协商） */
+  const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
@@ -73,6 +75,8 @@ export function App() {
       switch (event.type) {
         case 'agent-status':
           setStatus(event.status)
+          // 空闲 = 一切结束（中止/异常兜底），协商状态条不残留
+          if (event.status === 'idle') setNegoStatus(null)
           break
         case 'turn-start':
           if (pendingTurnStart.current !== null) {
@@ -213,6 +217,9 @@ export function App() {
           })
           break
         case 'vote-cast':
+          setNegoStatus((prev) =>
+            prev ? `${event.from} 已投票（${voteLabel(event.vote)}）· 等待其余评审…` : prev,
+          )
           setBlocks((prev) => {
             // B/C 的票落到自己的卡片上并收口；Main 的票（M3-c）走主线通知
             const idx = prev.findLastIndex(
@@ -244,6 +251,7 @@ export function App() {
           ])
           break
         case 'negotiation-started':
+          setNegoStatus('B、C 正在独立评审 M1…')
           setBlocks((prev) => [
             ...prev,
             { kind: 'notice', id: `b${nextId.current++}`, text: `🤝 协商开始（${event.mode === 'quick_review' ? '快速评审' : '完整共识'}）：B/C 正在独立评审…` },
@@ -256,6 +264,7 @@ export function App() {
           ])
           break
         case 'execution-started':
+          setNegoStatus(null)
           setBlocks((prev) => [
             ...prev,
             { kind: 'notice', id: `b${nextId.current++}`, text: '▶ Main 进入执行阶段' },
@@ -446,9 +455,6 @@ export function App() {
             onToggle={() => toggle(b.id)}
           />
         ))}
-        {approval && (
-          <ApprovalCard approval={approval} onRespond={respondApproval} />
-        )}
       </main>
 
       {showJumpBottom && (
@@ -460,6 +466,19 @@ export function App() {
           >
             ↓ 回到底部
           </button>
+        </div>
+      )}
+
+      {/* 审批卡常驻输入框上方：Agent 在等答复，绝不能被滚动藏住 */}
+      {approval && (
+        <div className="border-t border-amber-200 px-6 pt-3">
+          <ApprovalCard approval={approval} onRespond={respondApproval} />
+        </div>
+      )}
+
+      {negoStatus && (
+        <div className="border-t border-violet-100 bg-violet-50/60 px-6 py-1.5 text-xs text-violet-700">
+          🤝 {negoStatus}
         </div>
       )}
 
@@ -483,7 +502,15 @@ export function App() {
               // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
               send(e.ctrlKey)
             }}
-            placeholder={busy ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话' : projectDir ? '输入消息…' : '纯聊天模式，输入消息…'}
+            placeholder={
+              status === 'waiting-approval'
+                ? '⏸ Agent 在等你审批上方的请求…'
+                : busy
+                  ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话'
+                  : projectDir
+                    ? '输入消息…'
+                    : '纯聊天模式，输入消息…'
+            }
           />
           {busy && (
             <button

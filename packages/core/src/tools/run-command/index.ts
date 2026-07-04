@@ -29,7 +29,8 @@ export const runCommandTool = buildTool({
   name: BASH_TOOL_NAME,
   description: '执行终端命令',
   prompt:
-    '在项目目录下执行 shell 命令（Windows 上为 PowerShell）。可用 cwd 指定工作目录（绝对路径）。返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
+    '在项目目录下执行 shell 命令（Windows 上为 PowerShell 5.1：不支持 && 链接符，多条命令用 ; 分隔或分多次调用）。' +
+    '可用 cwd 指定工作目录（绝对路径）。返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
   inputSchema: z.object({
     command: z.string().describe('要执行的命令'),
     cwd: z.string().optional().describe('工作目录（绝对路径），默认项目目录'),

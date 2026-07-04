@@ -67,20 +67,29 @@ export function PeerCard({
 }) {
   const header =
     peer.status === 'working'
-      ? `Agent ${peer.agentId} · 评审中…`
+      ? `Agent ${peer.agentId} · 评审中`
       : peer.vote
         ? `Agent ${peer.agentId} · ${voteLabel(peer.vote.vote)}`
         : `Agent ${peer.agentId} · 已结束`
+  const lastTool = peer.tools.at(-1)
   return (
     <div className="mb-2 rounded border border-violet-200 bg-violet-50/50 text-sm">
       <button className="flex w-full items-center gap-2 px-3 py-2 text-left" onClick={onToggle}>
-        <span className="text-violet-500">{peer.status === 'working' ? '◌' : '●'}</span>
+        <span className={peer.status === 'working' ? 'animate-pulse text-violet-500' : 'text-violet-500'}>
+          {peer.status === 'working' ? '◌' : '●'}
+        </span>
         <span className="font-medium text-violet-900">{header}</span>
-        <span className="ml-auto text-xs text-violet-400">
+        <span className="ml-auto shrink-0 text-xs text-violet-400">
           {peer.tools.length > 0 && `${peer.tools.length} 次工具调用 `}
           {expanded ? '▾' : '▸'}
         </span>
       </button>
+      {/* 工作中实时显示当前动作，让用户看得到 B/C 在干什么 */}
+      {peer.status === 'working' && lastTool && (
+        <div className="truncate border-t border-violet-100 px-3 py-1.5 text-xs text-violet-500">
+          正在：{lastTool.name} <span className="text-violet-400">{lastTool.summary}</span>
+        </div>
+      )}
       {peer.status === 'done' && peer.vote && (
         <div className="border-t border-violet-100 px-3 py-2 text-xs text-violet-800">
           {peer.vote.reason}
