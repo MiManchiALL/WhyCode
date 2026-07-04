@@ -50,6 +50,9 @@ export function App() {
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
+  /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
+  const stickToBottom = useRef(true)
+  const [showJumpBottom, setShowJumpBottom] = useState(false)
   /** 发送用户消息时暂存的 block 位置，turn-start 到来时与 turnId 关联 */
   const pendingTurnStart = useRef<number | null>(null)
   /** turnId → turn 起点的 block 下标（文件+对话回滚时截断到这里） */
@@ -265,8 +268,24 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    if (stickToBottom.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    }
   }, [blocks, approval])
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    stickToBottom.current = nearBottom
+    setShowJumpBottom(!nearBottom)
+  }, [])
+
+  const jumpToBottom = useCallback(() => {
+    stickToBottom.current = true
+    setShowJumpBottom(false)
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [])
 
   const busy = status !== 'idle' && status !== 'error'
 
@@ -301,6 +320,9 @@ export function App() {
       })
     }
     setInput('')
+    // 自己发消息 = 主动行为，恢复贴底跟随
+    stickToBottom.current = true
+    setShowJumpBottom(false)
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
   }, [input, busy])
 
@@ -408,7 +430,7 @@ export function App() {
         </div>
       </header>
 
-      <main ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
+      <main ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto px-6 py-4">
         {blocks.length === 0 && (
           <p className="mt-24 text-center text-sm text-neutral-400">
             {projectDir
@@ -428,6 +450,18 @@ export function App() {
           <ApprovalCard approval={approval} onRespond={respondApproval} />
         )}
       </main>
+
+      {showJumpBottom && (
+        <div className="relative">
+          <button
+            className="absolute -top-10 left-1/2 -translate-x-1/2 rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-600 shadow hover:border-neutral-500"
+            onClick={jumpToBottom}
+            title="回到底部并恢复自动跟随"
+          >
+            ↓ 回到底部
+          </button>
+        </div>
+      )}
 
       <footer className="border-t border-neutral-200 p-4">
         {queued.length > 0 && (
