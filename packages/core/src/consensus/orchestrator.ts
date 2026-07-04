@@ -3,13 +3,19 @@ import type { CoreEvent, CoreEventSink } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
+import { runFullConsensus } from './full-consensus.ts'
+import { buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
 import { createTaskScratch } from './scratch.ts'
-import type { CandidateContent, ProtocolOutput, Vote } from './types.ts'
+import type { CandidateContent, ConsensusAgentId } from './types.ts'
 
 export interface ConsensusAgentSetup {
   model: ModelEntry
   providerConfig: ProviderConfig
 }
+
+/** 用户显式要求多 Agent 协商的表述（协议 §1.1 的升级触发词；控制面确定性规则，不依赖模型自觉） */
+const EXPLICIT_CONSENSUS_RE =
+  /充分讨论|多视角|多角度|互相评价|互相讨论|达成共识|完整共识|共识决策|三个\s*agent|多个\s*agent|full[_\s-]?consensus/i
 
 export interface ConsensusCoordinatorOptions {
   /** Main = 用户对话的既有会话（最终执行者，保留完整上下文） */
@@ -25,20 +31,22 @@ export interface ConsensusCoordinatorOptions {
 }
 
 /**
- * 协商协调器（M3-b：main_only + quick_review）。Orchestrator 是控制面代码非 LLM（协议 §4.3）：
- * 只管流程/模式锁定/输入包组装/事件广播，不判断方案质量。
- * 流程：Main 讨论档输出 M1（锁定 protocol_mode）→ main_only 直接放行执行 /
- * quick_review 时 B、C 并行快评 → 评审结果一次性注入 Main → Main 终判并执行（协议 §1.2）。
+ * 协商协调器（M3-b/c：三种协议模式）。Orchestrator 是控制面代码非 LLM（协议 §4.3）：
+ * 只管流程/模式锁定/输入包组装/计分/事件广播，不判断方案质量。
+ * Main 讨论档输出 M1（锁定 protocol_mode）→ main_only 直接放行 / quick_review 一轮快评 /
+ * full_consensus 三轮完整协商（full-consensus.ts）→ 执行包注入 Main → Main 执行。
  */
 export class ConsensusCoordinator {
   private options: ConsensusCoordinatorOptions
   private taskCounter = 0
   private peers: PeerAgent[] = []
   private running = false
-  /** B/C 评审期间（Main 空闲）用户插话暂存，注入执行阶段输入包 */
+  /** B/C 工作期间（Main 空闲）用户插话暂存，注入执行阶段输入包 */
   private pendingTexts: { id: string; text: string }[] = []
   private peerPhase = false
   private aborted = false
+  /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
+  private sessionScore: Record<ConsensusAgentId, number> = { Main: 0, B: 0, C: 0 }
 
   constructor(options: ConsensusCoordinatorOptions) {
     this.options = options
@@ -48,7 +56,7 @@ export class ConsensusCoordinator {
     return this.running
   }
 
-  /** 用户消息入口：空闲开新协商任务；Main 探索中走会话自身 steering；B/C 评审中暂存 */
+  /** 用户消息入口：空闲开新协商任务；Main 探索中走会话自身 steering；B/C 工作中暂存 */
   handleUserMessage(text: string, urgent = false): Promise<void> | void {
     if (!this.running) return this.runTask(text)
     if (this.peerPhase) {
@@ -95,7 +103,6 @@ export class ConsensusCoordinator {
         mustVote: [],
         existingCandidateIds: [],
         requireProtocolMode: true,
-        allowedModes: ['main_only', 'quick_review'], // full_consensus 待 M3-c 实现后放开
       })
       if (this.aborted) return
       if (!m1Result.ok) {
@@ -103,7 +110,11 @@ export class ConsensusCoordinator {
         return
       }
       const m1 = m1Result.output
-      const mode = m1.protocolMode ?? 'main_only'
+      // 协议 §1.1：用户显式要求多视角/充分讨论/共识时，Orchestrator 强制升级 full_consensus（只升不降）
+      let mode = m1.protocolMode ?? 'main_only'
+      if (mode !== 'full_consensus' && EXPLICIT_CONSENSUS_RE.test(userText)) {
+        mode = 'full_consensus'
+      }
       emit({
         type: 'candidate-submitted',
         agentId: 'Main',
@@ -122,45 +133,33 @@ export class ConsensusCoordinator {
         return
       }
 
-      // quick_review：B/C 并行快评 M1（协议 §1.2）；Main 已空闲，全局状态由协调器接管
+      // 需评审的模式：B/C 开始工作，全局状态由协调器接管
       emit({ type: 'negotiation-started', taskId, mode })
       emit({ type: 'agent-status', status: 'working' })
       this.peerPhase = true
-      const reviews = await this.runQuickReviews(userText, m1.candidate, scratch.agentDirs)
-      this.peerPhase = false
-      if (this.aborted) return
 
-      for (const r of reviews) {
-        if (r.result.ok) {
-          const vote = r.result.output.votes[0]!
-          emit({
-            type: 'vote-cast',
-            from: r.agentId,
-            target: vote.target,
-            vote: vote.vote,
-            reason: vote.reason,
-            suggestedChange: vote.suggestedChange,
-          })
-        }
+      let packageText: string | null
+      if (mode === 'full_consensus') {
+        packageText = await runFullConsensus({
+          emit,
+          mainSession,
+          makePeer: (agentId) => this.makePeer(agentId, scratch.agentDirs[agentId]),
+          taskId,
+          userText,
+          m1,
+          sessionScore: this.sessionScore,
+          isAborted: () => this.aborted,
+        })
+      } else {
+        packageText = await this.runQuickReview(userText, m1.candidate, taskId, scratch.agentDirs)
       }
+      this.peerPhase = false
+      if (this.aborted || packageText === null) return
 
-      // 计票：accept 与 accept_with_minor_edits 都算接受；invalid 视为未接受（Main 终判兜底）
-      const bothAccept = reviews.every(
-        (r) => r.result.ok && r.result.output.votes[0]!.vote !== 'reject',
-      )
-      emit({
-        type: 'negotiation-decided',
-        taskId,
-        selectedCandidateIds: ['M1'],
-        reason: bothAccept
-          ? 'B/C 均接受 M1，Main 评估意见后执行'
-          : '评审存在异议，由 Main 终判后执行',
-      })
-
-      // 执行阶段：评审结果一次性注入 Main（协议 §15.2），恢复执行档
+      // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
-      await mainSession.handleUserMessage(this.buildExecutionPackage(bothAccept, reviews))
+      await mainSession.handleUserMessage(this.appendPendingTexts(packageText))
     } catch (error) {
       emit({
         type: 'error',
@@ -177,13 +176,14 @@ export class ConsensusCoordinator {
     }
   }
 
-  /** B、C 并行快评；单个失败不拖垮另一个（invalid 在终判中说明） */
-  private async runQuickReviews(
+  /** quick_review：B、C 并行快评 → 执行包（协议 §1.2；不更新 session_score） */
+  private async runQuickReview(
     userText: string,
     m1: CandidateContent | null,
-    agentDirs: Record<'Main' | 'B' | 'C', string>,
-  ): Promise<QuickReview[]> {
-    const { emit, requestApproval } = this.options
+    taskId: string,
+    agentDirs: Record<ConsensusAgentId, string>,
+  ): Promise<string | null> {
+    const { emit } = this.options
     const spec = {
       round: 1 as const,
       kind: 'quick' as const,
@@ -191,33 +191,42 @@ export class ConsensusCoordinator {
       existingCandidateIds: ['M1'],
       requireProtocolMode: false,
     }
-    const run = async (agentId: 'B' | 'C'): Promise<QuickReview> => {
-      const peer = new PeerAgent({
-        agentId,
-        ...this.options.agents[agentId],
-        projectDir: this.options.projectDir,
-        scratchDir: agentDirs[agentId],
-        osPlatform: this.options.osPlatform,
-        // B/C 过程流包进 peer-event；审批请求带上身份前缀防 requestId 撞车
-        emit: (event: CoreEvent) => emit({ type: 'peer-event', agentId, event }),
-        requestApproval: (req) =>
-          requestApproval({
-            ...req,
-            requestId: `${agentId}-${req.requestId}`,
-            reason: `[Agent ${agentId}] ${req.reason}`,
-          }),
-      })
-      this.peers.push(peer)
+    const run = async (agentId: 'B' | 'C') => {
+      const peer = this.makePeer(agentId, agentDirs[agentId])
       const result = await peer.runRound(buildQuickReviewPrompt(agentId, userText, m1), {
         ...spec,
         agentId,
       })
       return { agentId, result }
     }
-    return Promise.all([run('B'), run('C')])
-  }
+    const reviews = await Promise.all([run('B'), run('C')])
+    if (this.aborted) return null
 
-  private buildExecutionPackage(bothAccept: boolean, reviews: QuickReview[]): string {
+    for (const r of reviews) {
+      if (r.result.ok) {
+        const vote = r.result.output.votes[0]!
+        emit({
+          type: 'vote-cast',
+          from: r.agentId,
+          target: vote.target,
+          vote: vote.vote,
+          reason: vote.reason,
+          suggestedChange: vote.suggestedChange,
+        })
+      }
+    }
+
+    // accept 与 accept_with_minor_edits 都算接受；invalid 视为未接受（Main 终判兜底）
+    const bothAccept = reviews.every(
+      (r) => r.result.ok && r.result.output.votes[0]!.vote !== 'reject',
+    )
+    emit({
+      type: 'negotiation-decided',
+      taskId,
+      selectedCandidateIds: ['M1'],
+      reason: bothAccept ? 'B/C 均接受 M1，Main 评估意见后执行' : '评审存在异议，由 Main 终判后执行',
+    })
+
     const lines = [
       bothAccept ? '[协商结果 · execution_allowed]' : '[协商结果 · 需要你终判]',
       bothAccept
@@ -234,15 +243,40 @@ export class ConsensusCoordinator {
       lines.push(`- Agent ${r.agentId}：${v.vote} —— ${v.reason}`)
       if (v.suggestedChange) lines.push(`  建议修改：${v.suggestedChange}`)
     }
-    if (this.pendingTexts.length > 0) {
-      lines.push('', '[用户在评审期间的补充]')
-      for (const p of this.pendingTexts) {
-        lines.push(p.text)
-        this.options.emit({ type: 'message-injected', id: p.id, text: p.text })
-      }
-      this.pendingTexts = []
-    }
     lines.push('', '你已恢复正常执行权限，现在开始执行。')
+    return lines.join('\n')
+  }
+
+  /** 创建受限讨论 Agent：过程流包进 peer-event，审批请求带身份前缀防 requestId 撞车 */
+  private makePeer(agentId: 'B' | 'C', scratchDir: string): PeerAgent {
+    const { emit, requestApproval } = this.options
+    const peer = new PeerAgent({
+      agentId,
+      ...this.options.agents[agentId],
+      projectDir: this.options.projectDir,
+      scratchDir,
+      osPlatform: this.options.osPlatform,
+      emit: (event: CoreEvent) => emit({ type: 'peer-event', agentId, event }),
+      requestApproval: (req) =>
+        requestApproval({
+          ...req,
+          requestId: `${agentId}-${req.requestId}`,
+          reason: `[Agent ${agentId}] ${req.reason}`,
+        }),
+    })
+    this.peers.push(peer)
+    return peer
+  }
+
+  /** 把 B/C 工作期间暂存的用户插话拼进执行包 */
+  private appendPendingTexts(packageText: string): string {
+    if (this.pendingTexts.length === 0) return packageText
+    const lines = [packageText, '', '[用户在协商期间的补充]']
+    for (const p of this.pendingTexts) {
+      lines.push(p.text)
+      this.options.emit({ type: 'message-injected', id: p.id, text: p.text })
+    }
+    this.pendingTexts = []
     return lines.join('\n')
   }
 
@@ -250,50 +284,4 @@ export class ConsensusCoordinator {
     this.options.mainSession.setDiscussion(null)
     this.options.mainSession.setExtraTools([])
   }
-}
-
-interface QuickReview {
-  agentId: 'B' | 'C'
-  result: Awaited<ReturnType<PeerAgent['runRound']>>
-}
-
-function buildM1Prompt(userText: string): string {
-  return [
-    '[多 Agent 协商任务]',
-    '用户请求：',
-    userText,
-    '',
-    '请先做必要探索（当前为讨论阶段，不可修改项目），然后调用 SubmitProtocolOutput 提交候选 M1 并选定 protocol_mode：',
-    '- main_only：简单任务（小范围修改/直接问答/低风险机械改动）——提交后你将恢复正常权限直接执行',
-    '- quick_review：中等任务（单模块修复/小范围重构/方案选择）——B/C 将快速评审你的 M1，之后你综合意见执行',
-    '选 quick_review 时 M1 只是处理思路（final_answer_or_plan 写清楚改什么、怎么改），提交前不要尝试执行任何修改。',
-  ].join('\n')
-}
-
-function buildQuickReviewPrompt(
-  agentId: 'B' | 'C',
-  userText: string,
-  m1: CandidateContent | null,
-): string {
-  const lines = [
-    '[多 Agent 协商 · quick_review 快评]',
-    '用户请求：',
-    userText,
-    '',
-    'Main 的候选 M1：',
-    `summary: ${m1?.summary ?? '（无）'}`,
-    `final_answer_or_plan: ${m1?.finalAnswerOrPlan ?? '（无）'}`,
-  ]
-  if (m1?.evidenceRefs?.length) lines.push(`evidence_refs: ${m1.evidenceRefs.join('；')}`)
-  if (m1?.scratchArtifacts?.length) {
-    lines.push(`scratch_artifacts（Main 的实验产物，可读取参考，勿修改原件）: ${m1.scratchArtifacts.join('；')}`)
-  }
-  if (m1?.knownRisks?.length) lines.push(`known_risks: ${m1.knownRisks.join('；')}`)
-  lines.push(
-    '',
-    `你的任务（Agent ${agentId}）：独立评价 M1 能否直接采用——必要时读代码/在你的临时工作区做小实验验证其关键论断。`,
-    '完成后调用 SubmitProtocolOutput 提交对 M1 的投票（accept / accept_with_minor_edits / reject）。',
-    '这是快评模式：不需要提出你自己的完整候选方案。',
-  )
-  return lines.join('\n')
 }

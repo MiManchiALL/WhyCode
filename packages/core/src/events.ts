@@ -79,6 +79,7 @@ export type CoreEvent =
   // --- 多 Agent 协商（M3）---
   /** 协议模式锁定为需评审的模式，B/C 开始工作（main_only 不发） */
   | { type: 'negotiation-started'; taskId: string; mode: 'quick_review' | 'full_consensus' }
+  | { type: 'round-started'; taskId: string; round: 2 | 3 }
   | { type: 'candidate-submitted'; agentId: 'Main' | 'B' | 'C'; candidateId: string; summary: string }
   | {
       type: 'vote-cast'
@@ -88,7 +89,14 @@ export type CoreEvent =
       reason: string
       suggestedChange?: string
     }
-  | { type: 'negotiation-decided'; taskId: string; selectedCandidateIds: string[]; reason: string }
+  | {
+      type: 'negotiation-decided'
+      taskId: string
+      selectedCandidateIds: string[]
+      reason: string
+      /** full_consensus 时附带当前对话累计分数 */
+      scores?: { Main: number; B: number; C: number }
+    }
   | { type: 'execution-started'; taskId: string }
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
   | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }

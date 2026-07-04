@@ -39,6 +39,12 @@ export {
 } from './consensus/peer-agent.ts'
 export { runProtocolRound, type RoundResult } from './consensus/run-round.ts'
 export {
+  runFullConsensus,
+  passesRound1,
+  countRound2Votes,
+  round3Winner,
+} from './consensus/full-consensus.ts'
+export {
   ConsensusCoordinator,
   type ConsensusCoordinatorOptions,
   type ConsensusAgentSetup,

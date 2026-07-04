@@ -257,10 +257,23 @@ export function App() {
             { kind: 'notice', id: `b${nextId.current++}`, text: `🤝 协商开始（${event.mode === 'quick_review' ? '快速评审' : '完整共识'}）：B/C 正在独立评审…` },
           ])
           break
+        case 'round-started':
+          setNegoStatus(event.round === 2 ? '第二轮：Main 修订候选，B/C 再评…' : '第三轮：最终兜底决策…')
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `🔁 进入第 ${event.round} 轮协商` },
+          ])
+          break
         case 'negotiation-decided':
           setBlocks((prev) => [
             ...prev,
-            { kind: 'notice', id: `b${nextId.current++}`, text: `⚖️ 协商决定（${event.selectedCandidateIds.join('、')}）：${event.reason}` },
+            {
+              kind: 'notice',
+              id: `b${nextId.current++}`,
+              text: `⚖️ 协商决定（${event.selectedCandidateIds.join('、') || '降级'}）：${event.reason}${
+                event.scores ? `｜分数 Main ${event.scores.Main} / B ${event.scores.B} / C ${event.scores.C}` : ''
+              }`,
+            },
           ])
           break
         case 'execution-started':
