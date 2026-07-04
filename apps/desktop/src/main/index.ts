@@ -32,6 +32,16 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => win.show())
 
+  // 渲染端错误转发到终端：白屏类问题（历史上已 3 次）无 DevTools 也能在 pnpm dev 输出里定位
+  win.webContents.on('console-message', (event) => {
+    if (event.level === 'error') {
+      console.error(`[renderer] ${event.message} (${event.sourceId}:${event.lineNumber})`)
+    }
+  })
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[renderer] 页面加载失败：${code} ${desc} ${url}`)
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
