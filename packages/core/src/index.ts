@@ -33,3 +33,39 @@ export {
   type PermissionMode,
   type ApprovalSuggestion,
 } from './permissions/types.ts'
+export {
+  PeerAgent,
+  type PeerAgentOptions,
+} from './consensus/peer-agent.ts'
+export { runProtocolRound, type RoundResult } from './consensus/run-round.ts'
+export {
+  runFullConsensus,
+  passesRound1,
+  countRound2Votes,
+  round3Winner,
+} from './consensus/full-consensus.ts'
+export {
+  ConsensusCoordinator,
+  type ConsensusCoordinatorOptions,
+  type ConsensusAgentSetup,
+} from './consensus/orchestrator.ts'
+export {
+  createProtocolOutputTool,
+  PROTOCOL_OUTPUT_TOOL_NAME,
+  type ProtocolToolSpec,
+} from './consensus/protocol-tool.ts'
+export {
+  createTaskScratch,
+  cleanupConversationScratch,
+  type TaskScratch,
+} from './consensus/scratch.ts'
+export type {
+  ConsensusAgentId,
+  ProtocolMode,
+  VoteValue,
+  Vote,
+  Candidate,
+  CandidateContent,
+  ProtocolOutput,
+  AgentMemorySummary,
+} from './consensus/types.ts'

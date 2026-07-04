@@ -13,4 +13,6 @@ export const IPC = {
   pickProjectDir: 'whycode:pick-project-dir',
   /** Renderer → Main：查询当前项目目录 */
   getProjectDir: 'whycode:get-project-dir',
+  /** Renderer → Main：查询协商可用状态（M3） */
+  consensusStatus: 'whycode:consensus-status',
 } as const

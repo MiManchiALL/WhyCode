@@ -4,6 +4,7 @@ import { Streamdown } from 'streamdown'
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
 import type { AgentStatus, CoreEvent } from '@whycode/core/events'
+import { applyPeerEvent, createPeerBlock, PeerCard, voteLabel, type PeerBlockData } from './consensus-blocks.tsx'
 
 interface ToolCall {
   id: string
@@ -23,6 +24,7 @@ type Block =
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'notice'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
+  | { kind: 'peer'; id: string; peer: PeerBlockData }
 
 interface Approval {
   requestId: string
@@ -45,8 +47,14 @@ export function App() {
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
+  const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
+  /** 协商进行中的状态条文案（null = 无协商） */
+  const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
+  /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
+  const stickToBottom = useRef(true)
+  const [showJumpBottom, setShowJumpBottom] = useState(false)
   /** 发送用户消息时暂存的 block 位置，turn-start 到来时与 turnId 关联 */
   const pendingTurnStart = useRef<number | null>(null)
   /** turnId → turn 起点的 block 下标（文件+对话回滚时截断到这里） */
@@ -59,6 +67,7 @@ export function App() {
       if (first) setModelId(first.id)
     })
     void window.whycode.getProjectDir().then(setProjectDir)
+    void window.whycode.consensusStatus().then(setConsensus)
   }, [])
 
   useEffect(() => {
@@ -66,6 +75,8 @@ export function App() {
       switch (event.type) {
         case 'agent-status':
           setStatus(event.status)
+          // 空闲 = 一切结束（中止/异常兜底），协商状态条不残留
+          if (event.status === 'idle') setNegoStatus(null)
           break
         case 'turn-start':
           if (pendingTurnStart.current !== null) {
@@ -187,6 +198,91 @@ export function App() {
         case 'error':
           setBlocks((prev) => [...prev, { kind: 'error', id: `b${nextId.current++}`, text: event.message }])
           break
+        // --- 多 Agent 协商（M3）---
+        case 'peer-event':
+          setBlocks((prev) => {
+            const idx = prev.findLastIndex(
+              (b) => b.kind === 'peer' && b.peer.agentId === event.agentId && b.peer.status === 'working',
+            )
+            if (idx < 0) {
+              return [
+                ...prev,
+                { kind: 'peer', id: `b${nextId.current++}`, peer: applyPeerEvent(createPeerBlock(event.agentId), event.event) },
+              ]
+            }
+            const block = prev[idx]! as Extract<Block, { kind: 'peer' }>
+            const next = [...prev]
+            next[idx] = { ...block, peer: applyPeerEvent(block.peer, event.event) }
+            return next
+          })
+          break
+        case 'vote-cast':
+          setNegoStatus((prev) =>
+            prev ? `${event.from} 已投票（${voteLabel(event.vote)}）· 等待其余评审…` : prev,
+          )
+          setBlocks((prev) => {
+            // B/C 的票落到自己的卡片上并收口；Main 的票（M3-c）走主线通知
+            const idx = prev.findLastIndex(
+              (b) => b.kind === 'peer' && b.peer.agentId === event.from && b.peer.status === 'working',
+            )
+            if (idx < 0) {
+              return [
+                ...prev,
+                { kind: 'notice', id: `b${nextId.current++}`, text: `${event.from} 对 ${event.target} 投票 ${voteLabel(event.vote)}：${event.reason}` },
+              ]
+            }
+            const block = prev[idx]! as Extract<Block, { kind: 'peer' }>
+            const next = [...prev]
+            next[idx] = {
+              ...block,
+              peer: {
+                ...block.peer,
+                status: 'done',
+                vote: { vote: event.vote, reason: event.reason, suggestedChange: event.suggestedChange },
+              },
+            }
+            return next
+          })
+          break
+        case 'candidate-submitted':
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `📋 候选 ${event.candidateId}（${event.agentId}）：${event.summary}` },
+          ])
+          break
+        case 'negotiation-started':
+          setNegoStatus('B、C 正在独立评审 M1…')
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `🤝 协商开始（${event.mode === 'quick_review' ? '快速评审' : '完整共识'}）：B/C 正在独立评审…` },
+          ])
+          break
+        case 'round-started':
+          setNegoStatus(event.round === 2 ? '第二轮：Main 修订候选，B/C 再评…' : '第三轮：最终兜底决策…')
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `🔁 进入第 ${event.round} 轮协商` },
+          ])
+          break
+        case 'negotiation-decided':
+          setBlocks((prev) => [
+            ...prev,
+            {
+              kind: 'notice',
+              id: `b${nextId.current++}`,
+              text: `⚖️ 协商决定（${event.selectedCandidateIds.join('、') || '降级'}）：${event.reason}${
+                event.scores ? `｜分数 Main ${event.scores.Main} / B ${event.scores.B} / C ${event.scores.C}` : ''
+              }`,
+            },
+          ])
+          break
+        case 'execution-started':
+          setNegoStatus(null)
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: '▶ Main 进入执行阶段' },
+          ])
+          break
         default:
           break
       }
@@ -194,8 +290,24 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    if (stickToBottom.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    }
   }, [blocks, approval])
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    stickToBottom.current = nearBottom
+    setShowJumpBottom(!nearBottom)
+  }, [])
+
+  const jumpToBottom = useCallback(() => {
+    stickToBottom.current = true
+    setShowJumpBottom(false)
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [])
 
   const busy = status !== 'idle' && status !== 'error'
 
@@ -204,9 +316,19 @@ export function App() {
       if (dir) {
         setProjectDir(dir)
         setBlocks([])
+        void window.whycode.consensusStatus().then(setConsensus)
       }
     })
   }, [])
+
+  const toggleConsensus = useCallback(() => {
+    const enabled = !consensus.enabled
+    void window.whycode
+      .sendCommand({ type: 'set-consensus', enabled })
+      .then((r) => {
+        if (r && r.ok) setConsensus((prev) => ({ ...prev, enabled }))
+      })
+  }, [consensus.enabled])
 
   const send = useCallback((urgent = false) => {
     const text = input.trim()
@@ -220,6 +342,9 @@ export function App() {
       })
     }
     setInput('')
+    // 自己发消息 = 主动行为，恢复贴底跟随
+    stickToBottom.current = true
+    setShowJumpBottom(false)
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
   }, [input, busy])
 
@@ -257,6 +382,22 @@ export function App() {
           </button>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${
+              consensus.enabled
+                ? 'border-violet-400 bg-violet-50 text-violet-700'
+                : 'border-neutral-300 text-neutral-500 hover:border-neutral-500'
+            }`}
+            onClick={toggleConsensus}
+            disabled={busy || (!consensus.enabled && !consensus.ready)}
+            title={
+              consensus.enabled
+                ? '多 Agent 协商已开启：Main 提案，B/C 独立评审'
+                : consensus.reason ?? '开启多 Agent 协商：Main 提案，B/C 独立评审后再执行'
+            }
+          >
+            🤝 协商{consensus.enabled ? '·开' : ''}
+          </button>
           <button
             className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
             onClick={() => {
@@ -311,7 +452,7 @@ export function App() {
         </div>
       </header>
 
-      <main ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
+      <main ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto px-6 py-4">
         {blocks.length === 0 && (
           <p className="mt-24 text-center text-sm text-neutral-400">
             {projectDir
@@ -327,10 +468,32 @@ export function App() {
             onToggle={() => toggle(b.id)}
           />
         ))}
-        {approval && (
-          <ApprovalCard approval={approval} onRespond={respondApproval} />
-        )}
       </main>
+
+      {showJumpBottom && (
+        <div className="relative">
+          <button
+            className="absolute -top-10 left-1/2 -translate-x-1/2 rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-600 shadow hover:border-neutral-500"
+            onClick={jumpToBottom}
+            title="回到底部并恢复自动跟随"
+          >
+            ↓ 回到底部
+          </button>
+        </div>
+      )}
+
+      {/* 审批卡常驻输入框上方：Agent 在等答复，绝不能被滚动藏住 */}
+      {approval && (
+        <div className="border-t border-amber-200 px-6 pt-3">
+          <ApprovalCard approval={approval} onRespond={respondApproval} />
+        </div>
+      )}
+
+      {negoStatus && (
+        <div className="border-t border-violet-100 bg-violet-50/60 px-6 py-1.5 text-xs text-violet-700">
+          🤝 {negoStatus}
+        </div>
+      )}
 
       <footer className="border-t border-neutral-200 p-4">
         {queued.length > 0 && (
@@ -352,7 +515,15 @@ export function App() {
               // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
               send(e.ctrlKey)
             }}
-            placeholder={busy ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话' : projectDir ? '输入消息…' : '纯聊天模式，输入消息…'}
+            placeholder={
+              status === 'waiting-approval'
+                ? '⏸ Agent 在等你审批上方的请求…'
+                : busy
+                  ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话'
+                  : projectDir
+                    ? '输入消息…'
+                    : '纯聊天模式，输入消息…'
+            }
           />
           {busy && (
             <button
@@ -409,6 +580,9 @@ function BlockView({
   }
   if (block.kind === 'notice') {
     return <div className="mb-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{block.text}</div>
+  }
+  if (block.kind === 'peer') {
+    return <PeerCard peer={block.peer} expanded={expanded} onToggle={onToggle} />
   }
   if (block.kind === 'thinking') {
     const streaming = block.durationMs === null

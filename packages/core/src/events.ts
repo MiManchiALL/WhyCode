@@ -76,6 +76,30 @@ export type CoreEvent =
       preTokens: number
       postTokens: number
     }
+  // --- 多 Agent 协商（M3）---
+  /** 协议模式锁定为需评审的模式，B/C 开始工作（main_only 不发） */
+  | { type: 'negotiation-started'; taskId: string; mode: 'quick_review' | 'full_consensus' }
+  | { type: 'round-started'; taskId: string; round: 2 | 3 }
+  | { type: 'candidate-submitted'; agentId: 'Main' | 'B' | 'C'; candidateId: string; summary: string }
+  | {
+      type: 'vote-cast'
+      from: 'Main' | 'B' | 'C'
+      target: string
+      vote: 'accept' | 'accept_with_minor_edits' | 'reject'
+      reason: string
+      suggestedChange?: string
+    }
+  | {
+      type: 'negotiation-decided'
+      taskId: string
+      selectedCandidateIds: string[]
+      reason: string
+      /** full_consensus 时附带当前对话累计分数 */
+      scores?: { Main: number; B: number; C: number }
+    }
+  | { type: 'execution-started'; taskId: string }
+  /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
+  | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }
 
 export type StopReason = 'completed' | 'aborted' | 'max-turns' | 'error'
 
@@ -103,6 +127,8 @@ export type CoreCommand =
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 手动触发上下文压缩（仅空闲时） */
   | { type: 'compact' }
+  /** 开关多 Agent 协商（需 Main/B/C 三者 key 齐备 + 已选项目目录） */
+  | { type: 'set-consensus'; enabled: boolean }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */
 export type CoreEventSink = (event: CoreEvent) => void

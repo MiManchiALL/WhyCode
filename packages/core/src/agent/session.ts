@@ -27,6 +27,8 @@ export interface AgentSessionOptions {
   promptContext: PromptContext
   /** 检查点存储根目录（宿主注入，如 Electron userData/checkpoints）；不传则禁用检查点 */
   checkpointStorageDir?: string
+  /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
+  extraTools?: ToolDefinition[]
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
   /** 审批回调（宿主注入）：返回用户的决定 */
@@ -97,8 +99,16 @@ export class AgentSession {
 
   constructor(options: AgentSessionOptions) {
     this.options = options
-    this.permissions = createPermissionContext(options.promptContext.projectDir)
-    if (options.checkpointStorageDir && options.promptContext.projectDir) {
+    this.permissions = createPermissionContext(
+      options.promptContext.projectDir,
+      options.promptContext.discussion,
+    )
+    // 讨论阶段的会话不做检查点（不写项目，无需快照）
+    if (
+      options.checkpointStorageDir &&
+      options.promptContext.projectDir &&
+      !options.promptContext.discussion
+    ) {
       this.checkpoints = new CheckpointManager(
         options.promptContext.projectDir,
         options.checkpointStorageDir,
@@ -116,6 +126,26 @@ export class AgentSession {
 
   setModel(model: ModelEntry, providerConfig: ProviderConfig): void {
     this.options = { ...this.options, model, providerConfig }
+  }
+
+  /** 替换注入的额外工具（M3：每轮协商换入该轮的协议输出工具） */
+  setExtraTools(tools: ToolDefinition[]): void {
+    this.options = { ...this.options, extraTools: tools }
+  }
+
+  /**
+   * 切换讨论档（M3）：进入协商讨论阶段时禁写项目、写实验限 scratch；null = 恢复正常执行档。
+   * scratch 目录保留在 additionalDirs 中，执行阶段 Main 仍可读取实验产物。
+   */
+  setDiscussion(discussion: { agentId: 'Main' | 'B' | 'C'; scratchDir: string } | null): void {
+    this.options = {
+      ...this.options,
+      promptContext: { ...this.options.promptContext, discussion: discussion ?? undefined },
+    }
+    this.permissions.discussion = discussion ? { scratchDir: discussion.scratchDir } : undefined
+    if (discussion && !this.permissions.additionalDirs.includes(discussion.scratchDir)) {
+      this.permissions.additionalDirs.push(discussion.scratchDir)
+    }
   }
 
   get isRunning(): boolean {
@@ -454,7 +484,8 @@ export class AgentSession {
 
     const { emit, requestApproval } = this.options
     const toolSet: ToolSet = {}
-    for (const def of BUILTIN_TOOLS as ToolDefinition[]) {
+    const defs = [...(BUILTIN_TOOLS as ToolDefinition[]), ...(this.options.extraTools ?? [])]
+    for (const def of defs) {
       toolSet[def.name] = aiTool({
         description: def.prompt,
         inputSchema: def.inputSchema,
@@ -502,8 +533,13 @@ export class AgentSession {
             }
           }
 
-          // 写类操作执行前拍快照（回滚语义 =「恢复到此操作前」）；失败静默禁用不阻塞
-          if (def.kind !== 'read' && this.checkpoints && this.activeTurn) {
+          // 写类操作执行前拍快照（回滚语义 =「恢复到此操作前」）；讨论档只写 scratch，无需快照
+          if (
+            def.kind !== 'read' &&
+            this.checkpoints &&
+            this.activeTurn &&
+            !this.permissions.discussion
+          ) {
             const hash = await this.checkpoints.save()
             if (hash) {
               const { id: turnId, startLen } = this.activeTurn

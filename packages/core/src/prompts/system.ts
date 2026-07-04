@@ -7,6 +7,8 @@ export interface PromptContext {
   /** 项目根目录；null = 纯聊天模式（无工具，仅对话） */
   projectDir: string | null
   osPlatform: NodeJS.Platform
+  /** 协商讨论阶段（M3）：当前 Agent 身份与临时工作区 */
+  discussion?: { agentId: 'Main' | 'B' | 'C'; scratchDir: string }
 }
 
 function identitySection(): string {
@@ -50,10 +52,27 @@ function safetySection(): string {
   ].join('\n')
 }
 
+function discussionSection(ctx: { agentId: string; scratchDir: string }): string {
+  const role =
+    ctx.agentId === 'Main'
+      ? '你是 Main Agent——协商的首个发言者与最终执行者。当前处于讨论阶段：目标是探索问题并提出候选方案，协议确定最终方案前不得执行修改。'
+      : '你是多 Agent 协商中的平级推理者，当前处于讨论阶段——目标是独立探索问题并形成自己的判断，不是直接完成修改。'
+  return [
+    `# 协商讨论阶段（你的身份：Agent ${ctx.agentId}）`,
+    role,
+    '- 原项目目录**只读**：禁止修改、删除、移动其中任何文件。',
+    `- 实验文件、测试脚本、复制来的文件副本一律放进你的临时工作区：${ctx.scratchDir}`,
+    '- 运行命令时必须显式把 cwd 设为你的临时工作区（否则会触发用户审批）。命令里不要引用工作区外的路径，读项目文件请用 ReadFile。',
+    '- 探索完成后，**必须调用 SubmitProtocolOutput 工具**提交你的正式结论（候选方案/投票）。普通文本回复不会被计入协商——没有调用该工具就等于没有发言。',
+    '- 结论若依赖实验产物（脚本/日志/复现 demo），把路径列进 scratch_artifacts。',
+  ].join('\n')
+}
+
 export function buildSystemPrompt(ctx: PromptContext): string {
   const sections = [identitySection()]
   if (ctx.projectDir) {
     sections.push(environmentSection(ctx.projectDir, ctx.osPlatform), toolUsageSection())
+    if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
   } else {
     sections.push(chatOnlySection())
   }
