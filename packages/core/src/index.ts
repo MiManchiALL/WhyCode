@@ -36,8 +36,13 @@ export {
 export {
   PeerAgent,
   type PeerAgentOptions,
-  type RoundResult,
 } from './consensus/peer-agent.ts'
+export { runProtocolRound, type RoundResult } from './consensus/run-round.ts'
+export {
+  ConsensusCoordinator,
+  type ConsensusCoordinatorOptions,
+  type ConsensusAgentSetup,
+} from './consensus/orchestrator.ts'
 export {
   createProtocolOutputTool,
   PROTOCOL_OUTPUT_TOOL_NAME,

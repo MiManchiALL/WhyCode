@@ -53,9 +53,13 @@ function safetySection(): string {
 }
 
 function discussionSection(ctx: { agentId: string; scratchDir: string }): string {
+  const role =
+    ctx.agentId === 'Main'
+      ? '你是 Main Agent——协商的首个发言者与最终执行者。当前处于讨论阶段：目标是探索问题并提出候选方案，协议确定最终方案前不得执行修改。'
+      : '你是多 Agent 协商中的平级推理者，当前处于讨论阶段——目标是独立探索问题并形成自己的判断，不是直接完成修改。'
   return [
     `# 协商讨论阶段（你的身份：Agent ${ctx.agentId}）`,
-    '你是多 Agent 协商中的平级推理者，当前处于讨论阶段——目标是独立探索问题并形成候选方案，不是直接完成修改。',
+    role,
     '- 原项目目录**只读**：禁止修改、删除、移动其中任何文件。',
     `- 实验文件、测试脚本、复制来的文件副本一律放进你的临时工作区：${ctx.scratchDir}`,
     '- 运行命令时必须显式把 cwd 设为你的临时工作区（否则会触发用户审批）。命令里不要引用工作区外的路径，读项目文件请用 ReadFile。',

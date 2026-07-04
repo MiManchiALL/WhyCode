@@ -4,6 +4,7 @@ import { Streamdown } from 'streamdown'
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
 import type { AgentStatus, CoreEvent } from '@whycode/core/events'
+import { applyPeerEvent, createPeerBlock, PeerCard, voteLabel, type PeerBlockData } from './consensus-blocks.tsx'
 
 interface ToolCall {
   id: string
@@ -23,6 +24,7 @@ type Block =
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'notice'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
+  | { kind: 'peer'; id: string; peer: PeerBlockData }
 
 interface Approval {
   requestId: string
@@ -45,6 +47,7 @@ export function App() {
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
+  const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
   /** 发送用户消息时暂存的 block 位置，turn-start 到来时与 turnId 关联 */
@@ -59,6 +62,7 @@ export function App() {
       if (first) setModelId(first.id)
     })
     void window.whycode.getProjectDir().then(setProjectDir)
+    void window.whycode.consensusStatus().then(setConsensus)
   }, [])
 
   useEffect(() => {
@@ -187,6 +191,73 @@ export function App() {
         case 'error':
           setBlocks((prev) => [...prev, { kind: 'error', id: `b${nextId.current++}`, text: event.message }])
           break
+        // --- 多 Agent 协商（M3）---
+        case 'peer-event':
+          setBlocks((prev) => {
+            const idx = prev.findLastIndex(
+              (b) => b.kind === 'peer' && b.peer.agentId === event.agentId && b.peer.status === 'working',
+            )
+            if (idx < 0) {
+              return [
+                ...prev,
+                { kind: 'peer', id: `b${nextId.current++}`, peer: applyPeerEvent(createPeerBlock(event.agentId), event.event) },
+              ]
+            }
+            const block = prev[idx]! as Extract<Block, { kind: 'peer' }>
+            const next = [...prev]
+            next[idx] = { ...block, peer: applyPeerEvent(block.peer, event.event) }
+            return next
+          })
+          break
+        case 'vote-cast':
+          setBlocks((prev) => {
+            // B/C 的票落到自己的卡片上并收口；Main 的票（M3-c）走主线通知
+            const idx = prev.findLastIndex(
+              (b) => b.kind === 'peer' && b.peer.agentId === event.from && b.peer.status === 'working',
+            )
+            if (idx < 0) {
+              return [
+                ...prev,
+                { kind: 'notice', id: `b${nextId.current++}`, text: `${event.from} 对 ${event.target} 投票 ${voteLabel(event.vote)}：${event.reason}` },
+              ]
+            }
+            const block = prev[idx]! as Extract<Block, { kind: 'peer' }>
+            const next = [...prev]
+            next[idx] = {
+              ...block,
+              peer: {
+                ...block.peer,
+                status: 'done',
+                vote: { vote: event.vote, reason: event.reason, suggestedChange: event.suggestedChange },
+              },
+            }
+            return next
+          })
+          break
+        case 'candidate-submitted':
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `📋 候选 ${event.candidateId}（${event.agentId}）：${event.summary}` },
+          ])
+          break
+        case 'negotiation-started':
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `🤝 协商开始（${event.mode === 'quick_review' ? '快速评审' : '完整共识'}）：B/C 正在独立评审…` },
+          ])
+          break
+        case 'negotiation-decided':
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: `⚖️ 协商决定（${event.selectedCandidateIds.join('、')}）：${event.reason}` },
+          ])
+          break
+        case 'execution-started':
+          setBlocks((prev) => [
+            ...prev,
+            { kind: 'notice', id: `b${nextId.current++}`, text: '▶ Main 进入执行阶段' },
+          ])
+          break
         default:
           break
       }
@@ -204,9 +275,19 @@ export function App() {
       if (dir) {
         setProjectDir(dir)
         setBlocks([])
+        void window.whycode.consensusStatus().then(setConsensus)
       }
     })
   }, [])
+
+  const toggleConsensus = useCallback(() => {
+    const enabled = !consensus.enabled
+    void window.whycode
+      .sendCommand({ type: 'set-consensus', enabled })
+      .then((r) => {
+        if (r && r.ok) setConsensus((prev) => ({ ...prev, enabled }))
+      })
+  }, [consensus.enabled])
 
   const send = useCallback((urgent = false) => {
     const text = input.trim()
@@ -257,6 +338,22 @@ export function App() {
           </button>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${
+              consensus.enabled
+                ? 'border-violet-400 bg-violet-50 text-violet-700'
+                : 'border-neutral-300 text-neutral-500 hover:border-neutral-500'
+            }`}
+            onClick={toggleConsensus}
+            disabled={busy || (!consensus.enabled && !consensus.ready)}
+            title={
+              consensus.enabled
+                ? '多 Agent 协商已开启：Main 提案，B/C 独立评审'
+                : consensus.reason ?? '开启多 Agent 协商：Main 提案，B/C 独立评审后再执行'
+            }
+          >
+            🤝 协商{consensus.enabled ? '·开' : ''}
+          </button>
           <button
             className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
             onClick={() => {
@@ -409,6 +506,9 @@ function BlockView({
   }
   if (block.kind === 'notice') {
     return <div className="mb-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{block.text}</div>
+  }
+  if (block.kind === 'peer') {
+    return <PeerCard peer={block.peer} expanded={expanded} onToggle={onToggle} />
   }
   if (block.kind === 'thinking') {
     const streaming = block.durationMs === null

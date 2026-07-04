@@ -22,6 +22,8 @@ export interface ProtocolToolSpec {
   existingCandidateIds: string[]
   /** 当前 task 首个 M1：必须携带 protocol_mode（协议 §1.1） */
   requireProtocolMode: boolean
+  /** 允许的协议模式（未实现的模式先不放进 schema；默认全部） */
+  allowedModes?: readonly (typeof PROTOCOL_MODES)[number][]
 }
 
 /**
@@ -57,7 +59,7 @@ export function createProtocolOutputTool(
     ...(spec.requireProtocolMode
       ? {
           protocol_mode: z
-            .enum(PROTOCOL_MODES)
+            .enum((spec.allowedModes ?? PROTOCOL_MODES) as [string, ...string[]])
             .describe('本任务协议模式：简单任务 main_only / 中等 quick_review / 高风险 full_consensus'),
         }
       : {}),

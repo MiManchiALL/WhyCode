@@ -10,6 +10,8 @@ const api = {
     ipcRenderer.invoke(IPC.listModels),
   getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),
   pickProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickProjectDir),
+  consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
+    ipcRenderer.invoke(IPC.consensusStatus),
   onEvent: (listener: (event: CoreEvent) => void): (() => void) => {
     const wrapped = (_: unknown, event: CoreEvent) => listener(event)
     ipcRenderer.on(IPC.event, wrapped)

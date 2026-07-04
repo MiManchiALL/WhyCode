@@ -2,15 +2,18 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'node:path'
 import {
   AgentSession,
+  cleanupConversationScratch,
+  ConsensusCoordinator,
   getModelEntry,
   MODEL_REGISTRY,
   type ApprovalRequest,
   type ApprovalResponse,
+  type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
-import { getConfigPath, loadConfig } from './config.ts'
+import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -49,6 +52,11 @@ let session: AgentSession | null = null
 let projectDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
 const pendingApprovals = new Map<string, (response: ApprovalResponse) => void>()
+// --- 多 Agent 协商（M3）---
+let consensusEnabled = false
+let coordinator: ConsensusCoordinator | null = null
+/** 会话级对话 ID（scratch 目录归属；换项目即换对话） */
+let conversationId = `conv-${Date.now()}`
 
 function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
   return new Promise((resolve) => {
@@ -104,7 +112,50 @@ function ensureSession(): string | null {
       requestApproval,
     })
     if (pendingPermissionMode) session.setPermissionMode(pendingPermissionMode)
+    coordinator = null // 新会话必须换新协调器（session_score 等按对话重置）
   }
+  if (consensusEnabled && !coordinator) {
+    const err2 = buildCoordinator()
+    if (err2) return err2
+  }
+  return null
+}
+
+/** 协商可用性检查：三 Agent 配置齐备 + 模型已注册 + 已选项目目录。返回不可用原因或 null */
+function checkConsensusReady(): string | null {
+  if (!projectDir) return '协商需要先选择项目目录'
+  const config = loadConfig()
+  if (!consensusAgentsReady(config)) {
+    return '协商需要在配置文件中为 Main/B/C 各配置 model 与 apiKey（consensusAgents 字段）'
+  }
+  for (const id of ['Main', 'B', 'C'] as const) {
+    try {
+      getModelEntry(config!.consensusAgents![id]!.model)
+    } catch {
+      return `consensusAgents.${id} 的模型 ID 未注册：${config!.consensusAgents![id]!.model}`
+    }
+  }
+  return null
+}
+
+function buildCoordinator(): string | null {
+  const notReady = checkConsensusReady()
+  if (notReady) return notReady
+  const agents = loadConfig()!.consensusAgents!
+  const setup = (id: 'B' | 'C'): ConsensusAgentSetup => ({
+    model: getModelEntry(agents[id]!.model),
+    providerConfig: { apiKey: agents[id]!.apiKey, baseURL: agents[id]!.baseURL },
+  })
+  coordinator = new ConsensusCoordinator({
+    mainSession: session!,
+    projectDir: projectDir!,
+    scratchRoot: join(app.getPath('userData'), 'scratch'),
+    conversationId,
+    agents: { B: setup('B'), C: setup('C') },
+    osPlatform: process.platform,
+    emit: broadcastEvent,
+    requestApproval,
+  })
   return null
 }
 
@@ -117,16 +168,39 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'agent-status', status: 'idle' })
         return
       }
-      // 运行中/压缩中 = 排队（steering）；空闲 = 开新 turn；中止器由 session 自管
-      await session!.handleUserMessage(command.text, command.urgent)
+      // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
+      if (consensusEnabled && coordinator) {
+        await coordinator.handleUserMessage(command.text, command.urgent)
+      } else {
+        // 运行中/压缩中 = 排队（steering）；空闲 = 开新 turn；中止器由 session 自管
+        await session!.handleUserMessage(command.text, command.urgent)
+      }
       break
     }
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
       for (const resolve of pendingApprovals.values()) resolve({ approved: false })
       pendingApprovals.clear()
+      coordinator?.abort()
       session?.abort()
       break
+    }
+    case 'set-consensus': {
+      if (!command.enabled) {
+        if (coordinator?.busy) {
+          broadcastEvent({ type: 'error', message: '协商进行中，请先停止再关闭', recoverable: true })
+          return { ok: false }
+        }
+        consensusEnabled = false
+        return { ok: true }
+      }
+      const notReady = checkConsensusReady()
+      if (notReady) {
+        broadcastEvent({ type: 'error', message: notReady, recoverable: true })
+        return { ok: false }
+      }
+      consensusEnabled = true
+      return { ok: true }
     }
     case 'set-permission-mode': {
       session?.setPermissionMode(command.mode)
@@ -180,6 +254,11 @@ void app.whenReady().then(() => {
     }))
   })
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
+  ipcMain.handle(IPC.consensusStatus, () => ({
+    ready: checkConsensusReady() === null,
+    reason: checkConsensusReady(),
+    enabled: consensusEnabled,
+  }))
   ipcMain.handle(IPC.pickProjectDir, async () => {
     const result = await dialog.showOpenDialog({
       title: '选择项目目录',
@@ -188,8 +267,11 @@ void app.whenReady().then(() => {
     const dir = result.filePaths[0]
     if (!dir) return null
     projectDir = dir
-    // 换项目 = 换会话（消息历史与旧项目强相关）
+    // 换项目 = 换会话（消息历史与旧项目强相关）；协商 scratch 随旧对话清理
     session = null
+    coordinator = null
+    void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), conversationId)
+    conversationId = `conv-${Date.now()}`
     return dir
   })
 
