@@ -159,6 +159,14 @@ export class ConsensusCoordinator {
         agentId: 'Main',
         candidateId: 'M1',
         summary: m1.candidate?.summary ?? '',
+        // main_only 随后会交付完整答案；仅在真正进入 B/C 评审时展开 M1，避免重复展示。
+        details: mode !== 'main_only' && m1.candidate
+          ? {
+              finalAnswerOrPlan: m1.candidate.finalAnswerOrPlan,
+              evidenceRefs: m1.candidate.evidenceRefs,
+              knownRisks: m1.candidate.knownRisks,
+            }
+          : undefined,
       })
       // 任务脉络：摘要给本任务的 B/C（不含本任务），随后登记本任务（main_only 也登记）
       const digest = buildConversationDigest(this.taskLog)

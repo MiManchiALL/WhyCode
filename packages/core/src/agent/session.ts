@@ -468,7 +468,6 @@ export class AgentSession {
       for await (const part of result.fullStream) {
         switch (part.type) {
           case 'reasoning-delta': {
-            if (this.protocolRound) break
             if (thinkingStartedAt === null) {
               thinkingStartedAt = Date.now()
               emit({ type: 'agent-status', status: 'thinking' })
@@ -477,7 +476,6 @@ export class AgentSession {
             break
           }
           case 'reasoning-end': {
-            if (this.protocolRound) break
             if (thinkingStartedAt !== null) {
               emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
               emit({ type: 'agent-status', status: 'working' })

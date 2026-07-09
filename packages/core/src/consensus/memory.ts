@@ -21,7 +21,6 @@ export function extractMemorySummary(
     rejectedCandidates: [...new Set(votes.filter((v) => v.vote === 'reject').map((v) => v.target))],
     importantSuggestions: votes.map((v) => v.suggestedChange).filter((s): s is string => Boolean(s?.trim())),
     evidenceRefs: lastCandidate?.evidenceRefs ?? [],
-    scratchArtifacts: ownOutputs.flatMap((o) => o.candidate?.scratchArtifacts ?? []),
   }
 }
 

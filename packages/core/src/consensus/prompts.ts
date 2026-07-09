@@ -13,6 +13,8 @@ export function buildM1Prompt(userText: string): string {
     '- quick_review：中等任务（需要比较取舍、快速复核或小范围方案选择）——B/C 快速评审你的 M1，之后你综合意见处理',
     '- full_consensus：高风险或用户明确要求充分讨论的任务——三 Agent 完整协商投票',
     '用户明确要求多 Agent 讨论、充分评审或共识决策时，必须选 full_consensus。',
+    '候选内容必须是你对任务本身的实质分析：summary 概括核心结论，final_answer_or_plan 写清事实判断、依据和处理方向。',
+    '禁止用“用户要求三个 Agent”“采用 full_consensus”“将进行协商/投票”等流程复述代替任务分析。',
     '选 quick_review / full_consensus 时 M1 只是处理思路（final_answer_or_plan 写清楚改什么、怎么改），提交前不要尝试执行任何修改。',
   ].join('\n')
 }

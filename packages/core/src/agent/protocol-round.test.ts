@@ -17,6 +17,11 @@ describe('协议回合终止语义', () => {
     assert.equal(model.doStreamCalls.length, 1)
     assert.equal(events.some((event) => event.type === 'text-delta'), false)
     assert.equal(
+      events.some((event) => event.type === 'thinking-delta' && event.text === '正在形成实质判断'),
+      true,
+    )
+    assert.equal(events.some((event) => event.type === 'thinking-end'), true)
+    assert.equal(
       events.some(
         (event) => event.type === 'tool-start' && event.toolName === 'SubmitProtocolOutput',
       ),
@@ -100,6 +105,13 @@ function mockModel(toolInputs: Record<string, unknown>[]): MockLanguageModelV4 {
     doStream: toolInputs.map((input, index) => ({
       stream: simulateReadableStream({
         chunks: [
+          { type: 'reasoning-start' as const, id: `reasoning-${index}` },
+          {
+            type: 'reasoning-delta' as const,
+            id: `reasoning-${index}`,
+            delta: '正在形成实质判断',
+          },
+          { type: 'reasoning-end' as const, id: `reasoning-${index}` },
           { type: 'text-start' as const, id: `text-${index}` },
           { type: 'text-delta' as const, id: `text-${index}`, delta: '协议阶段候选说明' },
           { type: 'text-end' as const, id: `text-${index}` },

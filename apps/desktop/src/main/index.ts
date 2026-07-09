@@ -16,7 +16,11 @@ import {
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
-import type { ResumeSessionResult, SessionActionResult } from '../shared/session.ts'
+import type {
+  DeleteSessionResult,
+  ResumeSessionResult,
+  SessionActionResult,
+} from '../shared/session.ts'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -334,12 +338,17 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
   }
 }
 
-async function deleteSession(sessionId: string): Promise<SessionActionResult> {
+async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再删除会话' }
-  if (sessions.currentSessionId === sessionId) resetRuntime()
+  const deletedCurrent = sessions.currentSessionId === sessionId
   try {
     const deleted = await sessions.delete(sessionId)
-    return deleted ? { ok: true } : { ok: false, error: '会话不存在' }
+    if (!deleted) return { ok: false, error: '会话不存在' }
+    if (deletedCurrent) {
+      resetRuntime()
+      projectDir = null
+    }
+    return { ok: true, deletedCurrent }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

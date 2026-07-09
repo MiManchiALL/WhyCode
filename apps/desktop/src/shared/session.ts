@@ -13,3 +13,7 @@ export interface SessionActionResult {
   ok: boolean
   error?: string
 }
+
+export type DeleteSessionResult =
+  | { ok: true; deletedCurrent: boolean }
+  | { ok: false; error: string }

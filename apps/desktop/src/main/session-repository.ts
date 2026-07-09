@@ -40,7 +40,9 @@ export class DesktopSessionRepository {
   }
 
   async delete(sessionId: string): Promise<boolean> {
-    if (this.current?.sessionId === sessionId) this.current = null
-    return this.store.delete(sessionId)
+    const deletingCurrent = this.current?.sessionId === sessionId
+    const deleted = await this.store.delete(sessionId)
+    if (deleted && deletingCurrent) this.current = null
+    return deleted
   }
 }

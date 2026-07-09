@@ -30,6 +30,8 @@ describe('通用 Agent 提示约束', () => {
 
     assert.match(prompt, /通用问题直接围绕问题本身推理/)
     assert.match(prompt, /直接问答/)
+    assert.match(prompt, /summary 概括核心结论/)
+    assert.match(prompt, /禁止用“用户要求三个 Agent”/)
   })
 
   it('main_only 正式回合必须重新交付完整答案', () => {

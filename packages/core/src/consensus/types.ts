@@ -61,7 +61,6 @@ export interface AgentMemorySummary {
   rejectedCandidates: string[]
   importantSuggestions: string[]
   evidenceRefs: string[]
-  scratchArtifacts: string[]
 }
 
 const memorySummarySchema = z.object({
@@ -72,7 +71,6 @@ const memorySummarySchema = z.object({
   rejectedCandidates: z.array(z.string()),
   importantSuggestions: z.array(z.string()),
   evidenceRefs: z.array(z.string()),
-  scratchArtifacts: z.array(z.string()),
 })
 
 /**

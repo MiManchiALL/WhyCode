@@ -62,8 +62,14 @@ export function createProtocolOutputTool(
         }
       : {}),
     candidate: z.object({
-      summary: z.string().min(1).describe('候选方案一句话摘要'),
-      final_answer_or_plan: z.string().min(1).describe('完整方案或可执行计划'),
+      summary: z
+        .string()
+        .min(1)
+        .describe('任务结论的一句话实质摘要；禁止复述用户要求、Agent 数量或协商模式'),
+      final_answer_or_plan: z
+        .string()
+        .min(1)
+        .describe('对任务本身的完整分析、事实依据与可执行处理方向；禁止只描述协商流程'),
       evidence_refs: z.array(z.string()).optional().describe('关键证据：文件路径/测试结果/日志摘要'),
       scratch_artifacts: z.array(z.string()).optional().describe('临时实验产物路径（结论依赖实验时必填）'),
       known_risks: z.array(z.string()).optional(),
