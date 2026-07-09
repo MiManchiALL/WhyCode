@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "pnpm --filter @whycode/desktop dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "packageManager": "pnpm@11.9.0"
 }

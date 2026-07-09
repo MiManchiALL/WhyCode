@@ -15,6 +15,8 @@ import {
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
+import { DesktopSessionRepository } from './session-repository.ts'
+import type { ResumeSessionResult, SessionActionResult } from '../shared/session.ts'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -68,6 +70,8 @@ let consensusEnabled = false
 let coordinator: ConsensusCoordinator | null = null
 /** 会话级对话 ID（scratch 目录归属；换项目即换对话） */
 let conversationId = `conv-${Date.now()}`
+/** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
+let sessions: DesktopSessionRepository
 
 function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
   return new Promise((resolve) => {
@@ -87,7 +91,12 @@ function validateModel(modelId: string): string | null {
   if (!config) {
     return `未找到配置文件 ${getConfigPath()}，请创建并填入 API key（格式见 apps/desktop/src/main/config.ts 注释）`
   }
-  const entry = getModelEntry(modelId)
+  let entry: ReturnType<typeof getModelEntry>
+  try {
+    entry = getModelEntry(modelId)
+  } catch {
+    return `模型 ID 未注册：${modelId}`
+  }
   if (!config.providers[entry.provider]?.apiKey) {
     return `尚未配置 ${entry.provider} 的 API key，无法使用 ${entry.displayName}`
   }
@@ -103,7 +112,7 @@ function resolveDefaultModelId(): string | null {
   return MODEL_REGISTRY.find((m) => !validateModel(m.id))?.id ?? null
 }
 
-function ensureSession(): string | null {
+async function ensureSession(): Promise<string | null> {
   currentModelId ??= resolveDefaultModelId()
   if (!currentModelId) return '没有任何已配置 key 的模型可用'
   const err = validateModel(currentModelId)
@@ -113,12 +122,15 @@ function ensureSession(): string | null {
   if (session) {
     session.setModel(entry, providerConfig)
   } else {
+    const recorder = await sessions.ensure(projectDir, currentModelId)
+    conversationId = recorder.sessionId
     // projectDir 为 null = 纯聊天模式（无工具），core 侧按此适配
     session = new AgentSession({
       model: entry,
       providerConfig,
       promptContext: { projectDir, osPlatform: process.platform },
       checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
+      sessionRecorder: recorder,
       emit: broadcastEvent,
       requestApproval,
     })
@@ -152,6 +164,8 @@ function checkConsensusReady(): string | null {
 function buildCoordinator(): string | null {
   const notReady = checkConsensusReady()
   if (notReady) return notReady
+  const journal = sessions.journal
+  if (!journal) return '会话记录尚未初始化，无法启动协商'
   const agents = loadConfig()!.consensusAgents!
   const setup = (id: 'B' | 'C'): ConsensusAgentSetup => ({
     model: getModelEntry(agents[id]!.model),
@@ -166,6 +180,10 @@ function buildCoordinator(): string | null {
     osPlatform: process.platform,
     emit: broadcastEvent,
     requestApproval,
+    initialState: journal.initialConsensusState,
+    onTaskStart: (taskId, state) => journal.recordConsensusTaskStart(taskId, state),
+    onTaskEnd: (taskId, outcome, state) =>
+      journal.recordConsensusTaskEnd(taskId, outcome, state),
   })
   return null
 }
@@ -173,12 +191,13 @@ function buildCoordinator(): string | null {
 async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
   switch (command.type) {
     case 'user-message': {
-      const err = ensureSession()
+      const err = await ensureSession()
       if (err) {
         broadcastEvent({ type: 'error', message: err, recoverable: true })
         broadcastEvent({ type: 'agent-status', status: 'idle' })
         return
       }
+      await recordUserInput(command.text)
       // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
       if (consensusEnabled && coordinator) {
         await coordinator.handleUserMessage(command.text, command.urgent)
@@ -254,11 +273,86 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
   }
 }
 
+function runtimeBusy(): boolean {
+  return Boolean(session?.isRunning || coordinator?.busy)
+}
+
+async function recordUserInput(text: string): Promise<void> {
+  try {
+    await sessions.journal!.recordUserInput(text)
+  } catch (error) {
+    broadcastEvent({
+      type: 'error',
+      message: `用户消息未能写入会话记录：${error instanceof Error ? error.message : String(error)}`,
+      recoverable: true,
+    })
+  }
+}
+
+function resetRuntime(keepJournal = false): void {
+  const oldConversationId = conversationId
+  session = null
+  coordinator = null
+  if (!keepJournal) sessions.reset()
+  conversationId = `conv-${Date.now()}`
+  void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), oldConversationId)
+}
+
+async function startNewSession(): Promise<SessionActionResult> {
+  if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再新建会话' }
+  resetRuntime()
+  return { ok: true }
+}
+
+async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
+  if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再恢复会话' }
+  resetRuntime()
+  try {
+    const journal = await sessions.resume(sessionId)
+    const metadata = journal.metadataSnapshot
+    const recoveredFromInterruption = Boolean(
+      journal.interruptedTurnId || journal.interruptedConsensusTaskId,
+    )
+    await journal.recoverInterruptedWork()
+    projectDir = metadata.projectDir
+    currentModelId = !validateModel(metadata.modelId)
+      ? metadata.modelId
+      : resolveDefaultModelId()
+    if (!currentModelId) throw new Error('没有任何已配置 key 的模型可用')
+    if (currentModelId !== metadata.modelId) await journal.updateModel(currentModelId)
+    conversationId = journal.sessionId
+    if (!projectDir) consensusEnabled = false
+    const error = await ensureSession()
+    if (error) throw new Error(error)
+    return {
+      ok: true,
+      session: journal.metadataSnapshot,
+      messageCount: journal.initialMessages.length,
+      recoveredFromInterruption,
+    }
+  } catch (error) {
+    resetRuntime()
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function deleteSession(sessionId: string): Promise<SessionActionResult> {
+  if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再删除会话' }
+  if (sessions.currentSessionId === sessionId) resetRuntime()
+  try {
+    const deleted = await sessions.delete(sessionId)
+    return deleted ? { ok: true } : { ok: false, error: '会话不存在' }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 void app.whenReady().then(() => {
   // 上次运行的检查点/协商 scratch 重启后均不可达（回滚索引与对话都在内存），启动时清空防磁盘累积
   for (const dir of ['checkpoints', 'scratch']) {
     void rm(join(app.getPath('userData'), dir), { recursive: true, force: true }).catch(() => {})
   }
+  sessions = new DesktopSessionRepository(join(app.getPath('userData'), 'sessions'))
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () => {
     const config = loadConfig()
@@ -274,6 +368,10 @@ void app.whenReady().then(() => {
     reason: checkConsensusReady(),
     enabled: consensusEnabled,
   }))
+  ipcMain.handle(IPC.listSessions, () => sessions.list())
+  ipcMain.handle(IPC.newSession, () => startNewSession())
+  ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
+  ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
   ipcMain.handle(IPC.pickProjectDir, async () => {
     const result = await dialog.showOpenDialog({
       title: '选择项目目录',
@@ -285,6 +383,7 @@ void app.whenReady().then(() => {
     // 换项目 = 换会话（消息历史与旧项目强相关）；协商 scratch 随旧对话清理
     session = null
     coordinator = null
+    sessions.reset()
     void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), conversationId)
     conversationId = `conv-${Date.now()}`
     return dir

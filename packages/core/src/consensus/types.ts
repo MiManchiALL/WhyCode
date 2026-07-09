@@ -3,6 +3,8 @@
  * agent_id / round / candidate_id 由 Orchestrator 分配记录，不由模型自报（减少格式错误面）。
  */
 
+import { z } from 'zod'
+
 export type ConsensusAgentId = 'Main' | 'B' | 'C'
 
 export type ProtocolMode = 'main_only' | 'quick_review' | 'full_consensus'
@@ -61,3 +63,41 @@ export interface AgentMemorySummary {
   evidenceRefs: string[]
   scratchArtifacts: string[]
 }
+
+const memorySummarySchema = z.object({
+  agentId: z.enum(['Main', 'B', 'C']),
+  taskId: z.string().min(1),
+  stance: z.string(),
+  supportedCandidates: z.array(z.string()),
+  rejectedCandidates: z.array(z.string()),
+  importantSuggestions: z.array(z.string()),
+  evidenceRefs: z.array(z.string()),
+  scratchArtifacts: z.array(z.string()),
+})
+
+/**
+ * 跨任务唯一允许恢复的共识状态。任务内候选、投票原文和 Peer 会话都不进入这里，
+ * 避免重启后误续跑半截协议或无限膨胀上下文。
+ */
+export const consensusPersistedStateSchema = z.object({
+  taskCounter: z.number().int().nonnegative(),
+  sessionScore: z.object({
+    Main: z.number().int().nonnegative(),
+    B: z.number().int().nonnegative(),
+    C: z.number().int().nonnegative(),
+  }),
+  memories: z.object({
+    B: z.array(memorySummarySchema),
+    C: z.array(memorySummarySchema),
+  }),
+  taskLog: z.array(
+    z.object({
+      taskId: z.string().min(1),
+      userText: z.string(),
+      m1Summary: z.string(),
+    }),
+  ),
+})
+
+export type ConsensusPersistedState = z.infer<typeof consensusPersistedStateSchema>
+export type ConsensusTaskOutcome = 'completed' | 'aborted' | 'error'

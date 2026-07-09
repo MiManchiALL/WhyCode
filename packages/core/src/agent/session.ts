@@ -9,6 +9,7 @@ import { CheckpointManager } from '../checkpoints/manager.ts'
 import { autoCompactThreshold, estimateContextTokens, type TokenBaseline } from '../context/tokens.ts'
 import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
+import type { SessionRecorder } from '../session/types.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
 import {
@@ -29,6 +30,8 @@ export interface AgentSessionOptions {
   checkpointStorageDir?: string
   /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
   extraTools?: ToolDefinition[]
+  /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
+  sessionRecorder?: SessionRecorder
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
   /** 审批回调（宿主注入）：返回用户的决定 */
@@ -96,9 +99,12 @@ export class AgentSession {
   private compactFailures = 0
   /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
   private recentReadFiles = new Map<string, number>()
+  /** 持久化失败后本会话降级内存模式，避免每个 step 重复报错 */
+  private persistenceFailed = false
 
   constructor(options: AgentSessionOptions) {
     this.options = options
+    this.messages = [...(options.sessionRecorder?.initialMessages ?? [])]
     this.permissions = createPermissionContext(
       options.promptContext.projectDir,
       options.promptContext.discussion,
@@ -126,6 +132,7 @@ export class AgentSession {
 
   setModel(model: ModelEntry, providerConfig: ProviderConfig): void {
     this.options = { ...this.options, model, providerConfig }
+    void this.persist((recorder) => recorder.updateModel(model.id))
   }
 
   /** 替换注入的额外工具（M3：每轮协商换入该轮的协议输出工具） */
@@ -150,6 +157,18 @@ export class AgentSession {
 
   get isRunning(): boolean {
     return this.running
+  }
+
+  /** 协商事务锚点：返回隔离副本，失败/取消时由 Orchestrator 恢复。 */
+  captureMessageSnapshot(): ModelMessage[] {
+    return structuredClone(this.messages)
+  }
+
+  /** 仅允许在回合结束后恢复，持久化回滚由共识任务终点统一提交。 */
+  restoreMessageSnapshot(messages: ModelMessage[]): void {
+    if (this.running || this.compacting) throw new Error('Agent 工作中，不能恢复消息快照')
+    this.messages = structuredClone(messages)
+    this.tokenBaseline = null
   }
 
   /**
@@ -198,9 +217,10 @@ export class AgentSession {
   }
 
   /** 步骤间注入：包 system-reminder + 必须回应的前导语 */
-  private injectQueuedMidTurn(): void {
+  private async injectQueuedMidTurn(): Promise<void> {
+    const injected: ModelMessage[] = []
     for (const item of this.drainQueue()) {
-      this.messages.push({
+      const message: ModelMessage = {
         role: 'user',
         content: [
           '<system-reminder>',
@@ -209,8 +229,13 @@ export class AgentSession {
           '完成当前任务后必须回应这条消息，不要忽略它。若它改变了任务方向，优先遵循它。',
           '</system-reminder>',
         ].join('\n'),
-      })
+      }
+      this.messages.push(message)
+      injected.push(message)
       this.options.emit({ type: 'message-injected', id: item.id, text: item.text })
+    }
+    if (injected.length > 0 && this.activeTurn) {
+      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, injected))
     }
   }
 
@@ -225,6 +250,7 @@ export class AgentSession {
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
     this.activeTurn = { id: turnId, startLen: this.messages.length }
     this.messages.push(...initialMessages)
+    await this.persist((recorder) => recorder.recordTurnStart(turnId, initialMessages))
 
     emit({ type: 'turn-start', turnId })
     emit({ type: 'agent-status', status: 'working' })
@@ -244,7 +270,7 @@ export class AgentSession {
         }
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
         if (this.queue.length > 0) {
-          this.injectQueuedMidTurn()
+          await this.injectQueuedMidTurn()
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
         if (!hadToolCalls) break
@@ -265,6 +291,7 @@ export class AgentSession {
 
     this.running = false
     if (stopReason === 'aborted') this.onAborted()
+    await this.persist((recorder) => recorder.recordTurnEnd(turnId, stopReason))
 
     emit({ type: 'turn-end', turnId, usage, stopReason })
 
@@ -304,6 +331,7 @@ export class AgentSession {
         signal,
       )
       this.messages = result.messages
+      await this.persist((recorder) => recorder.recordSnapshot('compact', this.messages))
       this.tokenBaseline = null
       this.compactFailures = 0
       for (const [key, rec] of this.checkpointIndex) {
@@ -371,6 +399,9 @@ export class AgentSession {
         abortSignal,
       )
       this.messages = result.messages
+      await this.persist((recorder) =>
+        recorder.recordSnapshot('compact', this.messages, this.activeTurn?.id),
+      )
       this.tokenBaseline = null
       this.compactFailures = 0
       // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用），turn 起点重置
@@ -458,6 +489,7 @@ export class AgentSession {
       // 本步产生的消息（assistant + tool 结果）并入历史
       const response = await result.response
       this.messages.push(...response.messages)
+      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, response.messages))
       if (stepTotalTokens > 0) {
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
@@ -623,6 +655,7 @@ export class AgentSession {
     const result = await this.checkpoints.restoreFiles(targetHash)
     if (result.ok && scope === 'files-and-chat') {
       this.messages = this.messages.slice(0, record.turnStartLen)
+      await this.persist((recorder) => recorder.recordSnapshot('rollback', this.messages))
     }
     emit({
       type: 'checkpoint-restored',
@@ -642,6 +675,22 @@ export class AgentSession {
       }
     } else if (!this.permissions.sessionAllowedTools.includes(suggestion.toolName)) {
       this.permissions.sessionAllowedTools.push(suggestion.toolName)
+    }
+  }
+
+  /** 持久化是可靠性增强而非 Agent 可用性的单点：失败一次后明确告警并降级内存模式 */
+  private async persist(action: (recorder: SessionRecorder) => Promise<void>): Promise<void> {
+    const recorder = this.options.sessionRecorder
+    if (!recorder || this.persistenceFailed) return
+    try {
+      await action(recorder)
+    } catch (error) {
+      this.persistenceFailed = true
+      this.options.emit({
+        type: 'error',
+        message: `会话持久化失败，已降级为内存模式：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      })
     }
   }
 }

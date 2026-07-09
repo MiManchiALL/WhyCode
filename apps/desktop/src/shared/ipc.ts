@@ -15,4 +15,9 @@ export const IPC = {
   getProjectDir: 'whycode:get-project-dir',
   /** Renderer → Main：查询协商可用状态（M3） */
   consensusStatus: 'whycode:consensus-status',
+  /** Renderer → Main：会话列表与生命周期（M4） */
+  listSessions: 'whycode:list-sessions',
+  resumeSession: 'whycode:resume-session',
+  newSession: 'whycode:new-session',
+  deleteSession: 'whycode:delete-session',
 } as const
