@@ -144,9 +144,8 @@ async function ensureSession(): Promise<string | null> {
   return null
 }
 
-/** 协商可用性检查：B/C 评审员配置齐备 + 模型已注册 + 已选项目目录。返回不可用原因或 null */
+/** 协商可用性检查：B/C 评审员配置齐备且模型已注册；纯聊天也允许协商。 */
 function checkConsensusReady(): string | null {
-  if (!projectDir) return '协商需要先选择项目目录'
   const config = loadConfig()
   if (!consensusAgentsReady(config)) {
     return '协商需要在配置文件中为评审员 B/C 各配置 model 与 apiKey（consensusAgents 字段）'
@@ -173,7 +172,7 @@ function buildCoordinator(): string | null {
   })
   coordinator = new ConsensusCoordinator({
     mainSession: session!,
-    projectDir: projectDir!,
+    projectDir,
     scratchRoot: join(app.getPath('userData'), 'scratch'),
     conversationId,
     agents: { B: setup('B'), C: setup('C') },
@@ -321,7 +320,6 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     if (!currentModelId) throw new Error('没有任何已配置 key 的模型可用')
     if (currentModelId !== metadata.modelId) await journal.updateModel(currentModelId)
     conversationId = journal.sessionId
-    if (!projectDir) consensusEnabled = false
     const error = await ensureSession()
     if (error) throw new Error(error)
     return {

@@ -85,6 +85,8 @@ export function createProtocolOutputTool(
     inputSchema: (spec.kind === 'quick' ? quickSchema : fullSchema) as z.ZodObject,
     isReadOnly: true,
     kind: 'read',
+    availableWithoutProject: true,
+    endsTurnOnSuccess: true,
     async execute(input) {
       if (submitted) {
         return { data: '协议输出已提交过，本轮不能重复提交。', isError: true }
@@ -98,7 +100,7 @@ export function createProtocolOutputTool(
       }
       submitted = true
       onSubmit(output)
-      return { data: '协议输出已记录。本轮工作完成，请简短总结后结束。', isError: false }
+      return { data: '协议输出已记录，本轮立即结束。', isError: false }
     },
   })
 }

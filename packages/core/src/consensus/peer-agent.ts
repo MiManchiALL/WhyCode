@@ -9,7 +9,7 @@ export interface PeerAgentOptions {
   agentId: ConsensusAgentId
   model: ModelEntry
   providerConfig: ProviderConfig
-  projectDir: string
+  projectDir: string | null
   scratchDir: string
   osPlatform: NodeJS.Platform
   /** 事件出口；Orchestrator 负责按 agentId 包装区分 */

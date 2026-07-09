@@ -11,7 +11,7 @@
     "./permissions": "./src/permissions/types.ts"
   },
   "scripts": {
-    "test": "node --test src/session/store.test.ts",
+    "test": "node --test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
