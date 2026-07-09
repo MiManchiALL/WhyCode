@@ -5,7 +5,12 @@ import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
 import { extractMemorySummary, formatMemories } from './memory.ts'
-import { buildConversationDigest, buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
+import {
+  buildConversationDigest,
+  buildM1Prompt,
+  buildMainOnlyExecutionPrompt,
+  buildQuickReviewPrompt,
+} from './prompts.ts'
 import { createTaskScratch } from './scratch.ts'
 import {
   consensusPersistedStateSchema,
@@ -163,10 +168,7 @@ export class ConsensusCoordinator {
       if (mode === 'main_only') {
         this.restoreExecution()
         emit({ type: 'execution-started', taskId })
-        await mainSession.handleUserMessage(
-          '[协商] 协议模式 main_only 已锁定：无需评审。你已恢复正常执行权限，请直接完成用户请求；' +
-            '若探索阶段已得出完整答案，直接给出最终回答即可，不要重复已说过的内容。',
-        )
+        await mainSession.handleUserMessage(buildMainOnlyExecutionPrompt(userText, m1.candidate))
         outcome = this.aborted ? 'aborted' : 'completed'
         return
       }

@@ -17,6 +17,26 @@ export function buildM1Prompt(userText: string): string {
   ].join('\n')
 }
 
+/** main_only 的协议内容不直接展示，执行回合必须重新交付一份完整的用户答案。 */
+export function buildMainOnlyExecutionPrompt(
+  userText: string,
+  m1: CandidateContent | null,
+): string {
+  return [
+    '[协商控制 · main_only 正式处理]',
+    '协议阶段只用于内部判断，用户没有看到 M1 的详细内容。',
+    '用户原始请求：',
+    userText,
+    '',
+    candidateText('内部 M1（仅供你执行参考）', m1),
+    '',
+    '你已恢复正常执行权限。现在直接完成用户请求：',
+    '- 问答、解释或项目分析：给出完整、自包含、可独立阅读的最终答案，不能只给收尾句。',
+    '- 需要修改代码：按 M1 执行必要操作、验证结果，再向用户报告完成情况。',
+    '- 不得使用“如上、前面已经说明、无需重复”等指代，因为协议内容没有展示给用户。',
+  ].join('\n')
+}
+
 export function buildQuickReviewPrompt(
   agentId: 'B' | 'C',
   userText: string,

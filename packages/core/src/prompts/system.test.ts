@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { buildM1Prompt } from '../consensus/prompts.ts'
+import { buildM1Prompt, buildMainOnlyExecutionPrompt } from '../consensus/prompts.ts'
 import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
@@ -30,5 +30,17 @@ describe('通用 Agent 提示约束', () => {
 
     assert.match(prompt, /通用问题直接围绕问题本身推理/)
     assert.match(prompt, /直接问答/)
+  })
+
+  it('main_only 正式回合必须重新交付完整答案', () => {
+    const prompt = buildMainOnlyExecutionPrompt('分析这个项目是做什么的', {
+      summary: 'FastAPI 演示项目',
+      finalAnswerOrPlan: '分析入口、数据库、鉴权和核心业务。',
+    })
+
+    assert.match(prompt, /用户没有看到 M1 的详细内容/)
+    assert.match(prompt, /完整、自包含、可独立阅读/)
+    assert.match(prompt, /不得使用“如上、前面已经说明、无需重复”/)
+    assert.match(prompt, /FastAPI 演示项目/)
   })
 })
