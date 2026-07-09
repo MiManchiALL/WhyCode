@@ -7,7 +7,15 @@ import { runFullConsensus } from './full-consensus.ts'
 import { extractMemorySummary, formatMemories } from './memory.ts'
 import { buildConversationDigest, buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
 import { createTaskScratch } from './scratch.ts'
-import type { AgentMemorySummary, CandidateContent, ConsensusAgentId, ProtocolOutput } from './types.ts'
+import {
+  consensusPersistedStateSchema,
+  type AgentMemorySummary,
+  type CandidateContent,
+  type ConsensusAgentId,
+  type ConsensusPersistedState,
+  type ConsensusTaskOutcome,
+  type ProtocolOutput,
+} from './types.ts'
 
 export interface ConsensusAgentSetup {
   model: ModelEntry
@@ -32,6 +40,14 @@ export interface ConsensusCoordinatorOptions {
   osPlatform: NodeJS.Platform
   emit: CoreEventSink
   requestApproval: ApprovalHandler
+  /** M4：只恢复上一任务已提交的稳定状态，不恢复 Peer 会话或半截协议。 */
+  initialState?: ConsensusPersistedState | null
+  onTaskStart?: (taskId: string, state: ConsensusPersistedState) => Promise<void>
+  onTaskEnd?: (
+    taskId: string,
+    outcome: ConsensusTaskOutcome,
+    state: ConsensusPersistedState,
+  ) => Promise<void>
 }
 
 /**
@@ -58,6 +74,7 @@ export class ConsensusCoordinator {
 
   constructor(options: ConsensusCoordinatorOptions) {
     this.options = options
+    if (options.initialState) this.restoreState(options.initialState)
   }
 
   get busy(): boolean {
@@ -95,7 +112,13 @@ export class ConsensusCoordinator {
     this.running = true
     this.aborted = false
     const taskId = `task-${++this.taskCounter}`
+    const startState = this.snapshotState()
+    const startMessages = mainSession.captureMessageSnapshot()
+    let outcome: ConsensusTaskOutcome = 'error'
+    let taskBoundaryStarted = false
     try {
+      taskBoundaryStarted = await this.persistTaskStart(taskId, startState)
+      if (!taskBoundaryStarted) return
       const scratch = await createTaskScratch(
         this.options.scratchRoot,
         this.options.conversationId,
@@ -112,7 +135,10 @@ export class ConsensusCoordinator {
         existingCandidateIds: [],
         requireProtocolMode: true,
       })
-      if (this.aborted) return
+      if (this.aborted) {
+        outcome = 'aborted'
+        return
+      }
       if (!m1Result.ok) {
         emit({ type: 'error', message: `协商失败（Main 未产出 M1）：${m1Result.error}`, recoverable: true })
         return
@@ -141,6 +167,7 @@ export class ConsensusCoordinator {
           '[协商] 协议模式 main_only 已锁定：无需评审。你已恢复正常执行权限，请直接完成用户请求；' +
             '若探索阶段已得出完整答案，直接给出最终回答即可，不要重复已说过的内容。',
         )
+        outcome = this.aborted ? 'aborted' : 'completed'
         return
       }
 
@@ -168,12 +195,16 @@ export class ConsensusCoordinator {
         packageText = await this.runQuickReview(userText, m1.candidate, taskId, scratch.agentDirs, digest)
       }
       this.peerPhase = false
-      if (this.aborted || packageText === null) return
+      if (this.aborted || packageText === null) {
+        outcome = this.aborted ? 'aborted' : 'error'
+        return
+      }
 
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
       await mainSession.handleUserMessage(this.appendPendingTexts(packageText))
+      outcome = this.aborted ? 'aborted' : 'completed'
     } catch (error) {
       emit({
         type: 'error',
@@ -181,6 +212,13 @@ export class ConsensusCoordinator {
         recoverable: true,
       })
     } finally {
+      if (outcome !== 'completed') {
+        this.restoreState(startState)
+        mainSession.restoreMessageSnapshot(startMessages)
+      }
+      if (taskBoundaryStarted) {
+        await this.persistTaskEnd(taskId, outcome, this.snapshotState())
+      }
       this.restoreExecution()
       this.peers = []
       this.peerPhase = false
@@ -312,5 +350,55 @@ export class ConsensusCoordinator {
   private restoreExecution(): void {
     this.options.mainSession.setDiscussion(null)
     this.options.mainSession.setExtraTools([])
+  }
+
+  private snapshotState(): ConsensusPersistedState {
+    return consensusPersistedStateSchema.parse({
+      taskCounter: this.taskCounter,
+      sessionScore: this.sessionScore,
+      memories: this.memories,
+      taskLog: this.taskLog,
+    })
+  }
+
+  private restoreState(state: ConsensusPersistedState): void {
+    const parsed = consensusPersistedStateSchema.parse(state)
+    this.taskCounter = parsed.taskCounter
+    this.sessionScore = parsed.sessionScore
+    this.memories = parsed.memories
+    this.taskLog = parsed.taskLog
+  }
+
+  private async persistTaskStart(
+    taskId: string,
+    state: ConsensusPersistedState,
+  ): Promise<boolean> {
+    try {
+      await this.options.onTaskStart?.(taskId, state)
+      return true
+    } catch (error) {
+      this.reportPersistenceError('起点', error)
+      return false
+    }
+  }
+
+  private async persistTaskEnd(
+    taskId: string,
+    outcome: ConsensusTaskOutcome,
+    state: ConsensusPersistedState,
+  ): Promise<void> {
+    try {
+      await this.options.onTaskEnd?.(taskId, outcome, state)
+    } catch (error) {
+      this.reportPersistenceError('终点', error)
+    }
+  }
+
+  private reportPersistenceError(boundary: string, error: unknown): void {
+    this.options.emit({
+      type: 'error',
+      message: `共识任务${boundary}未能写入会话记录：${error instanceof Error ? error.message : String(error)}`,
+      recoverable: true,
+    })
   }
 }

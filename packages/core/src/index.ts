@@ -68,4 +68,14 @@ export type {
   CandidateContent,
   ProtocolOutput,
   AgentMemorySummary,
+  ConsensusPersistedState,
+  ConsensusTaskOutcome,
 } from './consensus/types.ts'
+export { consensusPersistedStateSchema } from './consensus/types.ts'
+export { SessionStore, SessionJournal } from './session/store.ts'
+export type {
+  LoadedSession,
+  SessionCreateInput,
+  SessionMetadata,
+  SessionRecorder,
+} from './session/types.ts'

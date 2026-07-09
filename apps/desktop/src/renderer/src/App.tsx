@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
-import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
+import type { SessionMetadata } from '@whycode/core'
+import type { PermissionMode } from '@whycode/core/permissions'
 import type { AgentStatus, CoreEvent } from '@whycode/core/events'
 import { applyPeerEvent, createPeerBlock, PeerCard, voteLabel, type PeerBlockData } from './consensus-blocks.tsx'
+import { AppHeader } from './app-header.tsx'
+import { SessionPanel } from './session-panel.tsx'
 
 interface ToolCall {
   id: string
@@ -48,6 +51,8 @@ export function App() {
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
+  const [sessions, setSessions] = useState<SessionMetadata[]>([])
+  const [showSessions, setShowSessions] = useState(false)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const nextId = useRef(0)
@@ -60,6 +65,14 @@ export function App() {
   /** turnId → turn 起点的 block 下标（文件+对话回滚时截断到这里） */
   const turnStartBlocks = useRef<Map<string, number>>(new Map())
 
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessions(await window.whycode.listSessions())
+    } catch {
+      setSessions([])
+    }
+  }, [])
+
   useEffect(() => {
     void window.whycode.listModels().then((list) => {
       setModels(list)
@@ -68,7 +81,8 @@ export function App() {
     })
     void window.whycode.getProjectDir().then(setProjectDir)
     void window.whycode.consensusStatus().then(setConsensus)
-  }, [])
+    void refreshSessions()
+  }, [refreshSessions])
 
   useEffect(() => {
     return window.whycode.onEvent((event: CoreEvent) => {
@@ -83,6 +97,9 @@ export function App() {
             turnStartBlocks.current.set(event.turnId, pendingTurnStart.current)
             pendingTurnStart.current = null
           }
+          break
+        case 'turn-end':
+          void refreshSessions()
           break
         case 'message-queued':
           setQueued((prev) => [...prev, { id: event.id, text: event.text }])
@@ -287,7 +304,7 @@ export function App() {
           break
       }
     })
-  }, [])
+  }, [refreshSessions])
 
   useEffect(() => {
     if (stickToBottom.current) {
@@ -317,9 +334,10 @@ export function App() {
         setProjectDir(dir)
         setBlocks([])
         void window.whycode.consensusStatus().then(setConsensus)
+        void refreshSessions()
       }
     })
-  }, [])
+  }, [refreshSessions])
 
   const toggleConsensus = useCallback(() => {
     const enabled = !consensus.enabled
@@ -329,6 +347,76 @@ export function App() {
         if (r && r.ok) setConsensus((prev) => ({ ...prev, enabled }))
       })
   }, [consensus.enabled])
+
+  const resetView = useCallback((notice?: string) => {
+    setBlocks(
+      notice ? [{ kind: 'notice', id: `b${nextId.current++}`, text: notice }] : [],
+    )
+    setQueued([])
+    setApproval(null)
+    setExpanded(new Set())
+    pendingTurnStart.current = null
+    turnStartBlocks.current.clear()
+  }, [])
+
+  const addError = useCallback((text: string) => {
+    setBlocks((prev) => [...prev, { kind: 'error', id: `b${nextId.current++}`, text }])
+  }, [])
+
+  const startNewSession = useCallback(() => {
+    void window.whycode.newSession().then((result) => {
+      if (!result.ok) return addError(result.error ?? '新建会话失败')
+      resetView()
+      setShowSessions(false)
+      void refreshSessions()
+    })
+  }, [addError, refreshSessions, resetView])
+
+  const resumeSession = useCallback((sessionId: string) => {
+    void window.whycode.resumeSession(sessionId).then((result) => {
+      if (!result.ok) return addError(result.error)
+      const interrupted = result.recoveredFromInterruption
+        ? '；已回退到安全边界，未完成工具和半截协商不会自动重放'
+        : ''
+      resetView(`已恢复「${result.session.title || '未命名会话'}」的 ${result.messageCount} 条模型上下文${interrupted}`)
+      setProjectDir(result.session.projectDir)
+      if (models.some((model) => model.id === result.session.modelId && model.hasKey)) {
+        setModelId(result.session.modelId)
+      }
+      setShowSessions(false)
+      void window.whycode.consensusStatus().then(setConsensus)
+      void refreshSessions()
+    })
+  }, [addError, models, refreshSessions, resetView])
+
+  const deleteSession = useCallback((sessionId: string) => {
+    if (!window.confirm('确定删除这个会话？此操作不会修改项目文件。')) return
+    void window.whycode.deleteSession(sessionId).then((result) => {
+      if (!result.ok) return addError(result.error ?? '删除会话失败')
+      void refreshSessions()
+    })
+  }, [addError, refreshSessions])
+
+  const compact = useCallback(() => {
+    setBlocks((prev) => [
+      ...prev,
+      { kind: 'notice', id: `b${nextId.current++}`, text: '正在压缩上下文（生成摘要中，可点停止取消）…' },
+    ])
+    void window.whycode.sendCommand({ type: 'compact' })
+  }, [])
+
+  const changePermission = useCallback((mode: PermissionMode) => {
+    setPermMode(mode)
+    void window.whycode.sendCommand({ type: 'set-permission-mode', mode })
+  }, [])
+
+  const changeModel = useCallback((next: string) => {
+    const previous = modelId
+    setModelId(next)
+    void window.whycode.sendCommand({ type: 'set-model', modelId: next }).then((result) => {
+      if (!result || !result.ok) setModelId(previous)
+    })
+  }, [modelId])
 
   const send = useCallback((urgent = false) => {
     const text = input.trim()
@@ -368,89 +456,35 @@ export function App() {
   }, [])
 
   return (
-    <div className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
-      <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium">WhyCode</span>
-          <button
-            className="max-w-96 truncate rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:border-neutral-500"
-            onClick={pickProject}
-            disabled={busy}
-            title={projectDir ?? '选择要工作的项目目录'}
-          >
-            {projectDir ?? '📁 选择项目目录'}
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${
-              consensus.enabled
-                ? 'border-violet-400 bg-violet-50 text-violet-700'
-                : 'border-neutral-300 text-neutral-500 hover:border-neutral-500'
-            }`}
-            onClick={toggleConsensus}
-            disabled={busy || (!consensus.enabled && !consensus.ready)}
-            title={
-              consensus.enabled
-                ? '多 Agent 协商已开启：Main 提案，B/C 独立评审'
-                : consensus.reason ?? '开启多 Agent 协商：Main 提案，B/C 独立评审后再执行'
-            }
-          >
-            🤝 协商{consensus.enabled ? '·开' : ''}
-          </button>
-          <button
-            className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
-            onClick={() => {
-              setBlocks((prev) => [
-                ...prev,
-                { kind: 'notice', id: `b${nextId.current++}`, text: '正在压缩上下文（生成摘要中，可点停止取消）…' },
-              ])
-              void window.whycode.sendCommand({ type: 'compact' })
-            }}
-            disabled={busy}
-            title="手动压缩上下文：把较早的对话浓缩为摘要，释放上下文空间"
-          >
-            🗜 压缩
-          </button>
-          <select
-            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-            value={permMode}
-            onChange={(e) => {
-              const mode = e.target.value as PermissionMode
-              setPermMode(mode)
-              void window.whycode.sendCommand({ type: 'set-permission-mode', mode })
-            }}
-            title="权限档位：控制哪些操作需要审批"
-          >
-            {PERMISSION_MODES.map((m) => (
-              <option key={m.id} value={m.id}>{m.label}</option>
-            ))}
-          </select>
-          <select
-            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-            value={modelId}
-            onChange={(e) => {
-              const prev = modelId
-              const next = e.target.value
-              setModelId(next)
-              void window.whycode
-                .sendCommand({ type: 'set-model', modelId: next })
-                .then((r) => {
-                  // 切换失败（如没配 key）回退选择，避免下拉框与实际模型不一致
-                  if (!r || !r.ok) setModelId(prev)
-                })
-            }}
-            disabled={busy}
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id} disabled={!m.hasKey}>
-                {m.displayName}
-                {m.hasKey ? '' : '（未配置 key）'}
-              </option>
-            ))}
-          </select>
-        </div>
-      </header>
+    <div className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900">
+      <AppHeader
+        projectDir={projectDir}
+        busy={busy}
+        consensus={consensus}
+        permMode={permMode}
+        models={models}
+        modelId={modelId}
+        onPickProject={pickProject}
+        onToggleConsensus={toggleConsensus}
+        onCompact={compact}
+        onPermissionChange={changePermission}
+        onModelChange={changeModel}
+        onOpenSessions={() => {
+          setShowSessions(true)
+          void refreshSessions()
+        }}
+        onNewSession={startNewSession}
+      />
+
+      {showSessions && (
+        <SessionPanel
+          sessions={sessions}
+          busy={busy}
+          onClose={() => setShowSessions(false)}
+          onResume={resumeSession}
+          onDelete={deleteSession}
+        />
+      )}
 
       <main ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto px-6 py-4">
         {blocks.length === 0 && (
