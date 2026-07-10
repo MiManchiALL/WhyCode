@@ -34,5 +34,5 @@ describe('DesktopSessionRepository 删除语义', () => {
 async function createRepository(): Promise<DesktopSessionRepository> {
   const root = await mkdtemp(join(tmpdir(), 'whycode-desktop-session-'))
   tempRoots.push(root)
-  return new DesktopSessionRepository(root)
+  return new DesktopSessionRepository(root, join(root, '..', 'checkpoints'))
 }

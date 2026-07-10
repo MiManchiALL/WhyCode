@@ -22,10 +22,22 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   endsTurnOnSuccess: boolean
   /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
   extractPaths?: (input: z.infer<Schema>) => string[]
+  /**
+   * 回滚覆盖契约。它与权限路径分开：权限回答“能否执行”，这里回答“能否完整撤销”。
+   * 未声明的写工具按不可回滚处理，避免 UI 给出虚假的成功承诺。
+   */
+  checkpointScope?: (
+    input: z.infer<Schema>,
+    ctx: ToolContext,
+  ) => ToolCheckpointScope | Promise<ToolCheckpointScope>
   /** 写文件类工具生成变更预览（unified diff），用于审批 UI */
   renderDiff?: (input: z.infer<Schema>, ctx: ToolContext) => Promise<string | undefined>
   execute: (input: z.infer<Schema>, ctx: ToolContext) => Promise<ToolResult>
 }
+
+export type ToolCheckpointScope =
+  | { kind: 'exact-files'; paths: string[] }
+  | { kind: 'workspace-roots'; roots: string[]; warning: string }
 
 export interface ToolContext {
   /** 项目根目录（所有相对路径的基准） */

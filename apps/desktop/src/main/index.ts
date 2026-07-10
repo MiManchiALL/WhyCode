@@ -375,11 +375,12 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
 }
 
 void app.whenReady().then(() => {
-  // 上次运行的检查点/协商 scratch 重启后均不可达（回滚索引与对话都在内存），启动时清空防磁盘累积
-  for (const dir of ['checkpoints', 'scratch']) {
-    void rm(join(app.getPath('userData'), dir), { recursive: true, force: true }).catch(() => {})
-  }
-  sessions = new DesktopSessionRepository(join(app.getPath('userData'), 'sessions'))
+  // scratch 只服务当次协商；资源检查点属于会话持久化数据，重启后必须保留。
+  void rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }).catch(() => {})
+  sessions = new DesktopSessionRepository(
+    join(app.getPath('userData'), 'sessions'),
+    join(app.getPath('userData'), 'checkpoints'),
+  )
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () => {
     const config = loadConfig()

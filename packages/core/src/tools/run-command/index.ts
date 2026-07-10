@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { resolve } from 'node:path'
+import { lstat } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 
@@ -25,6 +26,12 @@ export function scanCommandPaths(command: string): string[] {
   return [...found]
 }
 
+async function checkpointRoot(path: string): Promise<string> {
+  const absolute = resolve(path)
+  const stats = await lstat(absolute).catch(() => null)
+  return stats?.isDirectory() ? absolute : dirname(absolute)
+}
+
 export const runCommandTool = buildTool({
   name: BASH_TOOL_NAME,
   description: '执行终端命令',
@@ -42,6 +49,16 @@ export const runCommandTool = buildTool({
     ...(input.cwd ? [input.cwd] : []),
     ...scanCommandPaths(input.command),
   ],
+  async checkpointScope(input, ctx) {
+    const cwd = resolve(ctx.projectDir, input.cwd ?? '.')
+    const candidates = [ctx.projectDir, cwd, ...scanCommandPaths(input.command)]
+    const roots = await Promise.all(candidates.map(checkpointRoot))
+    return {
+      kind: 'workspace-roots',
+      roots,
+      warning: '命令可影响进程、网络及未识别路径；依赖、缓存、敏感文件和大型二进制也不纳入树快照。',
+    }
+  },
   async execute(input, ctx) {
     return new Promise((resolvePromise) => {
       const child = spawn(input.command, {

@@ -8,8 +8,10 @@ export interface ToolCall {
   status: 'running' | 'done' | 'error'
   result?: string
   progress: string
-  /** 有执行前快照，可回滚；检查点不跨重启，所以该事件不进入持久化时间线。 */
+  /** 有持久化资源检查点；切换会话或重启后仍可回滚。 */
   hasCheckpoint?: boolean
+  checkpointCoverage?: 'complete' | 'partial'
+  checkpointWarning?: string
 }
 
 export interface PeerBlockData {
@@ -111,7 +113,12 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
         result: String(event.result),
       }))
     case 'checkpoint-created':
-      return updateTool(state, event.toolUseId, (call) => ({ ...call, hasCheckpoint: true }))
+      return updateTool(state, event.toolUseId, (call) => ({
+        ...call,
+        hasCheckpoint: true,
+        checkpointCoverage: event.coverage,
+        checkpointWarning: event.warning,
+      }))
     case 'checkpoint-disabled':
       return appendNotice(state, `检查点已禁用：${event.reason}`)
     case 'checkpoint-restored':
@@ -284,6 +291,12 @@ function applyCheckpointRestored(
     text: `回滚失败：${event.error}`,
   })
   let blocks = state.blocks
+  const invalidated = new Set(event.invalidatedToolUseIds ?? [event.toolUseId])
+  blocks = blocks.map((block) =>
+    block.kind === 'tool' && invalidated.has(block.call.id)
+      ? { ...block, call: { ...block.call, hasCheckpoint: false } }
+      : block,
+  )
   if (event.scope === 'files-and-chat') {
     let idx = state.turnStartBlocks.get(event.turnId) ?? -1
     if (idx < 0) {
@@ -304,7 +317,7 @@ function applyCheckpointRestored(
     { ...state, blocks },
     event.scope === 'files-and-chat'
       ? '已回滚：该轮对话与文件改动均已撤销'
-      : '已回滚文件到该操作前（对话保留）',
+      : '已回滚检查点覆盖的文件（对话保留）',
   )
 }
 

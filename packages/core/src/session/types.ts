@@ -86,6 +86,11 @@ const snapshotSchema = chainedEntrySchema.extend({
   consensusState: consensusPersistedStateSchema.nullable(),
   modelId: z.string().min(1),
   messages: messagesSchema,
+  /** 回滚换根后仍保留新根内较早 turn 的边界；压缩快照写空数组。 */
+  turnStartMessages: z.array(z.object({
+    turnId: z.string().min(1),
+    messages: messagesSchema,
+  })).optional(),
 })
 
 export const sessionEntrySchema = z.discriminatedUnion('type', [
@@ -126,6 +131,7 @@ export interface LoadedSession {
   metadata: SessionMetadata
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
+  turnStartMessages: Map<string, ModelMessage[]>
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
@@ -136,11 +142,14 @@ export interface LoadedSession {
 
 export interface SessionRecorder {
   readonly sessionId: string
+  readonly checkpointDirectory: string
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
   readonly interruptedTurnId: string | null
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
+  /** 仅返回仍位于当前活动父链上的 turn 起点；压缩/旧回滚之前的 turn 返回 null。 */
+  messagesBeforeTurn(turnId: string): ModelMessage[] | null
   recordUserInput(text: string): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void>

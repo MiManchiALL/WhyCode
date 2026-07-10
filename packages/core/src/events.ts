@@ -59,8 +59,14 @@ export type CoreEvent =
   /** 中断后把排队文本还给输入框（不静默丢弃） */
   | { type: 'queue-restored'; text: string }
   // --- 检查点（M2-c）---
-  /** 写类工具执行前的快照已建立（hash 供回滚） */
-  | { type: 'checkpoint-created'; toolUseId: string; hash: string }
+  /** 写类工具的 before/after 资源清单已持久化；hash 当前承载稳定 checkpointId。 */
+  | {
+      type: 'checkpoint-created'
+      toolUseId: string
+      hash: string
+      coverage: 'complete' | 'partial'
+      warning?: string
+    }
   | {
       type: 'checkpoint-restored'
       toolUseId: string
@@ -69,6 +75,8 @@ export type CoreEvent =
       scope: 'files' | 'files-and-chat'
       ok: boolean
       error?: string
+      /** 本次逆向恢复会同时使这些较新的回滚点失效。 */
+      invalidatedToolUseIds?: string[]
     }
   /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }

@@ -40,6 +40,10 @@ export const writeFileTool = buildTool({
   isReadOnly: false,
   kind: 'edit',
   extractPaths: (input) => [input.path],
+  checkpointScope: (input, ctx) => ({
+    kind: 'exact-files',
+    paths: [resolveAllowed(ctx, input.path)],
+  }),
   async renderDiff(input, ctx) {
     const abs = resolveAllowed(ctx, input.path)
     const old = await readFile(abs, 'utf-8').catch(() => '')
@@ -66,6 +70,10 @@ export const editFileTool = buildTool({
   isReadOnly: false,
   kind: 'edit',
   extractPaths: (input) => [input.path],
+  checkpointScope: (input, ctx) => ({
+    kind: 'exact-files',
+    paths: [resolveAllowed(ctx, input.path)],
+  }),
   async renderDiff(input, ctx) {
     const abs = resolveAllowed(ctx, input.path)
     const old = await readFile(abs, 'utf-8')

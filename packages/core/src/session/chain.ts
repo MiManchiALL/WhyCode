@@ -46,6 +46,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     ? (work.interruptedConsensusBaseMessages ?? [])
     : collectMessages(chain)
   const consensusState = collectConsensusState(chain)
+  const turnStartMessages = collectTurnStartMessages(chain)
   const viewEvents = collectViewEvents(entries)
   const modelId = collectModelId(chain, start.modelId)
   const { interruptedTurnId, interruptedConsensusTaskId, interruptedConsensusBaseMessages } = work
@@ -58,6 +59,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     entries,
     messages,
     viewEvents,
+    turnStartMessages,
     leafUuid: last.uuid,
     interruptedTurnId,
     interruptedConsensusTaskId,
@@ -75,6 +77,26 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       status,
     },
   }
+}
+
+function collectTurnStartMessages(chain: SessionEntry[]): Map<string, ModelMessage[]> {
+  const starts = new Map<string, ModelMessage[]>()
+  let messages: ModelMessage[] = []
+  for (const entry of chain) {
+    if (entry.type === 'snapshot') {
+      starts.clear()
+      messages = [...entry.messages]
+      for (const start of entry.turnStartMessages ?? []) {
+        starts.set(start.turnId, structuredClone(start.messages))
+      }
+    }
+    if (entry.type === 'turn-start') starts.set(entry.turnId, structuredClone(messages))
+    if (entry.type === 'messages') messages.push(...entry.messages)
+    if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
+      messages = [...entry.rollbackMessages]
+    }
+  }
+  return starts
 }
 
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */

@@ -60,7 +60,7 @@ export class SessionStore {
       flush: true,
     })
     await writeMetadata(paths.metadata, metadata)
-    return new SessionJournal(paths, metadata, start.uuid, [], [], null, null, null, null)
+    return new SessionJournal(paths, metadata, start.uuid, [], [], new Map(), null, null, null, null)
   }
 
   async open(sessionId: string): Promise<SessionJournal> {
@@ -77,6 +77,7 @@ export class SessionStore {
       loaded.leafUuid,
       loaded.messages,
       loaded.viewEvents,
+      loaded.turnStartMessages,
       loaded.interruptedTurnId,
       loaded.interruptedConsensusTaskId,
       loaded.interruptedConsensusBaseMessages,
@@ -138,6 +139,7 @@ export class SessionJournal implements SessionRecorder {
   private leafUuid: string
   private messages: ModelMessage[]
   private viewEvents: ViewEvent[]
+  private turnStartMessages: Map<string, ModelMessage[]>
   private activeTurnId: string | null
   private activeConsensusTaskId: string | null
   private activeConsensusBaseMessages: ModelMessage[] | null
@@ -150,6 +152,7 @@ export class SessionJournal implements SessionRecorder {
     leafUuid: string,
     messages: ModelMessage[],
     viewEvents: ViewEvent[],
+    turnStartMessages: Map<string, ModelMessage[]>,
     interruptedTurnId: string | null,
     interruptedConsensusTaskId: string | null,
     interruptedConsensusBaseMessages: ModelMessage[] | null,
@@ -161,6 +164,9 @@ export class SessionJournal implements SessionRecorder {
     this.leafUuid = leafUuid
     this.messages = [...messages]
     this.viewEvents = [...viewEvents]
+    this.turnStartMessages = new Map(
+      [...turnStartMessages].map(([turnId, messages]) => [turnId, structuredClone(messages)]),
+    )
     this.activeTurnId = interruptedTurnId
     this.activeConsensusTaskId = interruptedConsensusTaskId
     this.activeConsensusBaseMessages = interruptedConsensusBaseMessages
@@ -169,6 +175,15 @@ export class SessionJournal implements SessionRecorder {
 
   get initialMessages(): readonly ModelMessage[] {
     return this.messages
+  }
+
+  get checkpointDirectory(): string {
+    return this.paths.checkpoints
+  }
+
+  messagesBeforeTurn(turnId: string): ModelMessage[] | null {
+    const messages = this.turnStartMessages.get(turnId)
+    return messages ? structuredClone(messages) : null
   }
 
   get initialViewEvents(): readonly ViewEvent[] {
@@ -215,6 +230,7 @@ export class SessionJournal implements SessionRecorder {
 
   recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void> {
     return this.enqueue(async () => {
+      this.turnStartMessages.set(turnId, structuredClone(this.messages))
       const started = this.entry({ type: 'turn-start', turnId })
       const batch = this.entry({ type: 'messages', turnId, messages }, started.uuid)
       await this.appendEntries([started, batch])
@@ -270,11 +286,18 @@ export class SessionJournal implements SessionRecorder {
           consensusState: this.consensusState,
           modelId: this.metadata.modelId,
           messages,
+          turnStartMessages: reason === 'rollback'
+            ? this.turnStartsWithin(messages)
+            : [],
         },
         null,
       )
       await this.appendEntries([snapshot])
       this.messages = [...messages]
+      this.turnStartMessages = new Map(
+        (snapshot.type === 'snapshot' ? snapshot.turnStartMessages ?? [] : [])
+          .map((start) => [start.turnId, structuredClone(start.messages)]),
+      )
       this.activeTurnId = activeTurnId ?? null
       this.metadata.updatedAt = snapshot.timestamp
       await writeMetadata(this.paths.metadata, this.metadata)
@@ -350,6 +373,7 @@ export class SessionJournal implements SessionRecorder {
           consensusState: this.consensusState,
           modelId: this.metadata.modelId,
           messages: this.messages,
+          turnStartMessages: this.turnStartsWithin(this.messages),
         },
         null,
       )
@@ -359,6 +383,10 @@ export class SessionJournal implements SessionRecorder {
       this.activeConsensusBaseMessages = null
       this.metadata.updatedAt = recovered.timestamp
       this.metadata.status = 'idle'
+      this.turnStartMessages = new Map(
+        (recovered.type === 'snapshot' ? recovered.turnStartMessages ?? [] : [])
+          .map((start) => [start.turnId, structuredClone(start.messages)]),
+      )
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }
@@ -388,6 +416,12 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
+  private turnStartsWithin(messages: ModelMessage[]): { turnId: string; messages: ModelMessage[] }[] {
+    return [...this.turnStartMessages]
+      .filter(([, start]) => start.length < messages.length && isMessagePrefix(start, messages))
+      .map(([turnId, start]) => ({ turnId, messages: structuredClone(start) }))
+  }
+
   private async appendEntries(entries: SessionEntry[]): Promise<void> {
     const text = entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
     await appendFile(this.paths.transcript, text, { encoding: 'utf8', flush: true })
@@ -399,6 +433,13 @@ export class SessionJournal implements SessionRecorder {
     this.writeQueue = next.catch(() => {})
     return next
   }
+}
+
+function isMessagePrefix(prefix: ModelMessage[], messages: ModelMessage[]): boolean {
+  if (prefix.length > messages.length) return false
+  return prefix.every((message, index) =>
+    JSON.stringify(message) === JSON.stringify(messages[index]),
+  )
 }
 
 function clip(text: string): string {

@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import { pushCoalescedViewEvent, toViewEvent, viewEventSchema, type ViewEvent } from './view-events.ts'
 
 describe('用户可见事件契约', () => {
-  it('只接收可恢复内容，排除审批、运行状态和失效检查点', () => {
+  it('只接收可恢复内容，排除审批和运行状态，并保留持久化检查点', () => {
     assert.equal(toViewEvent({ type: 'agent-status', status: 'working' }), null)
     assert.equal(
       toViewEvent({
@@ -15,9 +15,22 @@ describe('用户可见事件契约', () => {
       }),
       null,
     )
-    assert.equal(
-      toViewEvent({ type: 'checkpoint-created', toolUseId: 'tool-1', hash: 'abc' }),
-      null,
+    assert.deepEqual(
+      toViewEvent({
+        type: 'checkpoint-created',
+        toolUseId: 'tool-1',
+        hash: 'abc',
+        coverage: 'complete',
+      }),
+      {
+        type: 'core-event',
+        event: {
+          type: 'checkpoint-created',
+          toolUseId: 'tool-1',
+          hash: 'abc',
+          coverage: 'complete',
+        },
+      },
     )
     assert.deepEqual(
       toViewEvent({ type: 'message-injected', id: 'queue-1', text: '补充要求' }),
