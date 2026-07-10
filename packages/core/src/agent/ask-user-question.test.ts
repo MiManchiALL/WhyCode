@@ -4,10 +4,22 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
-import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/ask-user-question/index.ts'
+import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  createAskUserQuestionTool,
+} from '../tools/ask-user-question/index.ts'
 import { AgentSession } from './session.ts'
 
 describe('Main 主动提问', () => {
+  it('工具说明将问题卡限制为未完成任务的必要等待点', () => {
+    const prompt = createAskUserQuestionTool(() => {}).prompt
+
+    assert.match(prompt, /当前用户目标尚未完成/)
+    assert.match(prompt, /回答是继续完成该目标的必要条件/)
+    assert.match(prompt, /当前任务已经可以完整交付，不得调用本工具/)
+    assert.match(prompt, /不得用本工具询问用户是否满意、是否继续或是否需要更多帮助/)
+  })
+
   it('提交问题后结束 turn 并等待用户回答', async () => {
     const model = new MockLanguageModelV4({ doStream: [questionStep(), finalStep()] })
     const events: CoreEvent[] = []
@@ -57,6 +69,25 @@ describe('Main 主动提问', () => {
       tool.type === 'function' ? tool.name : '',
     )
     assert.equal(names.includes(ASK_USER_QUESTION_TOOL_NAME), false)
+  })
+
+  it('任务已完成后的普通文本追问不会产生问题卡或等待状态', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [finalStep('修改和验证已经完成；如果之后想继续优化缓存，可以再告诉我。')],
+    })
+    const events: CoreEvent[] = []
+    const session = createSession(model, events)
+
+    const stopReason = await session.handleUserMessage('完成当前修改')
+
+    assert.equal(stopReason, 'completed')
+    assert.equal(events.some((event) => event.type === 'user-question'), false)
+    assert.equal(
+      events.some(
+        (event) => event.type === 'text-delta' && event.text.includes('之后想继续优化'),
+      ),
+      true,
+    )
   })
 })
 
@@ -110,12 +141,12 @@ function questionStep() {
   }
 }
 
-function finalStep() {
+function finalStep(text = '评审完成') {
   return {
     stream: simulateReadableStream({
       chunks: [
         { type: 'text-start' as const, id: 'final' },
-        { type: 'text-delta' as const, id: 'final', delta: '评审完成' },
+        { type: 'text-delta' as const, id: 'final', delta: text },
         { type: 'text-end' as const, id: 'final' },
         {
           type: 'finish' as const,
