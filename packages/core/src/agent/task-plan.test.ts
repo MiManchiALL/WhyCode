@@ -4,6 +4,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
+import { activeTaskPlanSchema, type ActiveTaskPlan } from '../tasks/types.ts'
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
@@ -77,7 +78,77 @@ describe('Main 长任务端到端控制', () => {
     )
     assert.equal(session.captureTaskPlanSnapshot()?.goal, '不能半途结束')
   })
+
+  it('恢复的未结束计划不覆盖新用户问题，也不阻止普通回答结束', async () => {
+    const model = modelWithSteps([finalStep('你刚刚要求不要安装依赖。')])
+    const { session } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const result = await session.handleUserMessage('我刚刚说了什么')
+
+    assert.equal(result, 'completed')
+    assert.equal(model.doStreamCalls.length, 1)
+    assert.equal(session.captureTaskPlanSnapshot()?.goal, '完成旧的复杂任务')
+    const request = JSON.stringify(model.doStreamCalls[0])
+    assert.match(request, /当前未结束任务计划（背景状态）/)
+    assert.ok(
+      request.indexOf('当前未结束任务计划（背景状态）') < request.indexOf('我刚刚说了什么'),
+      '计划背景必须位于最新真实用户消息之前',
+    )
+  })
+
+  it('恢复计划在本轮重新更新后重新启用未完成保护', async () => {
+    const model = modelWithSteps([
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+        item_id: 'T1',
+        status: 'in_progress',
+      }),
+      finalStep('过早结束一'),
+      finalStep('过早结束二'),
+      finalStep('过早结束三'),
+    ])
+    const { session, events } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const result = await session.handleUserMessage('继续刚才的任务')
+
+    assert.equal(result, 'paused')
+    assert.equal(model.doStreamCalls.length, 4)
+    assert.equal(
+      events.some(
+        (event) => event.type === 'error' && event.message.includes('尝试提前结束'),
+      ),
+      true,
+    )
+  })
 })
+
+function activePlan(): ActiveTaskPlan {
+  return activeTaskPlanSchema.parse({
+    id: '00000000-0000-4000-8000-000000000001',
+    goal: '完成旧的复杂任务',
+    status: 'active',
+    revision: 3,
+    items: [
+      {
+        id: 'T1',
+        kind: 'work',
+        title: '实现剩余功能',
+        acceptance: '代码完成',
+        status: 'in_progress',
+        evidence: [],
+      },
+      {
+        id: 'T2',
+        kind: 'verification',
+        title: '验证结果',
+        acceptance: '测试通过',
+        status: 'pending',
+        evidence: [],
+      },
+    ],
+  })
+}
 
 function createSession(model: MockLanguageModelV4) {
   const events: CoreEvent[] = []
