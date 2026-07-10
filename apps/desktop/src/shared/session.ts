@@ -1,4 +1,4 @@
-import type { SessionMetadata } from '@whycode/core'
+import type { SessionMetadata, ViewEvent } from '@whycode/core'
 
 export type SessionListItem = SessionMetadata & { isCurrent: boolean }
 
@@ -6,7 +6,7 @@ export type ResumeSessionResult =
   | {
       ok: true
       session: SessionMetadata
-      messageCount: number
+      viewEvents: ViewEvent[]
       recoveredFromInterruption: boolean
     }
   | { ok: false; error: string }

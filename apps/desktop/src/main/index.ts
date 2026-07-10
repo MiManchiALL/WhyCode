@@ -12,10 +12,12 @@ import {
   type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
+  type ViewEvent,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
+import { ViewTimeline } from './view-timeline.ts'
 import type {
   DeleteSessionResult,
   ResumeSessionResult,
@@ -58,7 +60,8 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-function broadcastEvent(event: CoreEvent): void {
+function broadcastEvent(event: CoreEvent, persistView = true): void {
+  if (persistView) viewTimeline.capture(sessions?.journal ?? null, event)
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(IPC.event, event)
   }
@@ -77,6 +80,16 @@ let coordinator: ConsensusCoordinator | null = null
 let conversationId = `conv-${Date.now()}`
 /** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
 let sessions: DesktopSessionRepository
+const viewTimeline = new ViewTimeline((error) => {
+  broadcastEvent(
+    {
+      type: 'error',
+      message: `界面历史未能写入会话记录：${error instanceof Error ? error.message : String(error)}`,
+      recoverable: true,
+    },
+    false,
+  )
+})
 
 function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
   return new Promise((resolve) => {
@@ -201,7 +214,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'agent-status', status: 'idle' })
         return
       }
-      await recordUserInput(command.text)
+      await recordUserInput(command.text, !runtimeBusy())
       // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
       if (consensusEnabled && coordinator) {
         await coordinator.handleUserMessage(command.text, command.urgent)
@@ -281,9 +294,14 @@ function runtimeBusy(): boolean {
   return Boolean(session?.isRunning || coordinator?.busy)
 }
 
-async function recordUserInput(text: string): Promise<void> {
+async function recordUserInput(text: string, startsTurn: boolean): Promise<void> {
   try {
-    await sessions.journal!.recordUserInput(text)
+    const journal = sessions.journal!
+    await journal.recordUserInput(text)
+    if (startsTurn) {
+      const viewEvent: ViewEvent = { type: 'user-message', text, startsTurn: true }
+      await journal.recordViewEvents([viewEvent])
+    }
   } catch (error) {
     broadcastEvent({
       type: 'error',
@@ -297,6 +315,7 @@ function resetRuntime(keepJournal = false): void {
   const oldConversationId = conversationId
   session = null
   coordinator = null
+  viewTimeline.discardAll()
   if (!keepJournal) sessions.reset()
   conversationId = `conv-${Date.now()}`
   void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), oldConversationId)
@@ -330,7 +349,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     return {
       ok: true,
       session: journal.metadataSnapshot,
-      messageCount: journal.initialMessages.length,
+      viewEvents: [...journal.initialViewEvents],
       recoveredFromInterruption,
     }
   } catch (error) {
@@ -397,6 +416,7 @@ void app.whenReady().then(() => {
     // 换项目 = 换会话（消息历史与旧项目强相关）；协商 scratch 随旧对话清理
     session = null
     coordinator = null
+    viewTimeline.discardAll()
     sessions.reset()
     void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), conversationId)
     conversationId = `conv-${Date.now()}`

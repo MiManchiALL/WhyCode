@@ -6,37 +6,20 @@ import type { PermissionMode } from '@whycode/core/permissions'
 import type { AgentStatus, CoreEvent } from '@whycode/core/events'
 import type { SessionListItem } from '../../shared/session.ts'
 import {
-  applyPeerEvent,
-  CandidateCard,
-  createPeerBlock,
-  PeerCard,
+  applyCoreEvent,
+  appendNotice,
+  appendUserMessage,
+  createConversationState,
+  toggleExpanded,
   voteLabel,
-  type CandidateBlockData,
-  type PeerBlockData,
+  type Block,
+} from './conversation-state.ts'
+import {
+  CandidateCard,
+  PeerCard,
 } from './consensus-blocks.tsx'
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
-
-interface ToolCall {
-  id: string
-  name: string
-  input: unknown
-  status: 'running' | 'done' | 'error'
-  result?: string
-  progress: string
-  /** 有执行前快照，可回滚 */
-  hasCheckpoint?: boolean
-}
-
-type Block =
-  | { kind: 'user'; id: string; text: string }
-  | { kind: 'text'; id: string; text: string }
-  | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
-  | { kind: 'tool'; id: string; call: ToolCall }
-  | { kind: 'notice'; id: string; text: string }
-  | { kind: 'error'; id: string; text: string }
-  | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
-  | { kind: 'peer'; id: string; peer: PeerBlockData }
 
 interface Approval {
   requestId: string
@@ -49,13 +32,12 @@ interface Approval {
 
 /** M1-c 主界面：文本 + thinking + 工具卡片 + 审批。正式组件化（Streamdown/shadcn）在 M1 收尾时做。 */
 export function App() {
-  const [blocks, setBlocks] = useState<Block[]>([])
+  const [view, setView] = useState(() => createConversationState())
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [models, setModels] = useState<{ id: string; displayName: string; hasKey: boolean }[]>([])
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
@@ -64,15 +46,11 @@ export function App() {
   const [showSessions, setShowSessions] = useState(false)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
-  const nextId = useRef(0)
   const scrollRef = useRef<HTMLElement>(null)
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
-  /** 发送用户消息时暂存的 block 位置，turn-start 到来时与 turnId 关联 */
-  const pendingTurnStart = useRef<number | null>(null)
-  /** turnId → turn 起点的 block 下标（文件+对话回滚时截断到这里） */
-  const turnStartBlocks = useRef<Map<string, number>>(new Map())
+  const blocks = view.blocks
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -95,17 +73,12 @@ export function App() {
 
   useEffect(() => {
     return window.whycode.onEvent((event: CoreEvent) => {
+      setView((previous) => applyCoreEvent(previous, event))
       switch (event.type) {
         case 'agent-status':
           setStatus(event.status)
           // 空闲 = 一切结束（中止/异常兜底），协商状态条不残留
           if (event.status === 'idle') setNegoStatus(null)
-          break
-        case 'turn-start':
-          if (pendingTurnStart.current !== null) {
-            turnStartBlocks.current.set(event.turnId, pendingTurnStart.current)
-            pendingTurnStart.current = null
-          }
           break
         case 'turn-end':
           void refreshSessions()
@@ -115,51 +88,10 @@ export function App() {
           break
         case 'message-injected':
           setQueued((prev) => prev.filter((q) => q.id !== event.id))
-          setBlocks((prev) => [
-            ...prev,
-            { kind: 'user', id: `b${nextId.current++}`, text: event.text },
-          ])
           break
         case 'queue-restored':
           setQueued([])
           setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
-          break
-        case 'text-delta':
-          setBlocks((prev) => appendText(prev, event.text, nextId))
-          break
-        case 'thinking-delta':
-          setBlocks((prev) => appendThinking(prev, event.text, nextId))
-          break
-        case 'thinking-end':
-          setBlocks((prev) => endThinking(prev, event.durationMs))
-          break
-        case 'tool-start':
-          setBlocks((prev) => [
-            ...prev,
-            {
-              kind: 'tool',
-              id: `b${nextId.current++}`,
-              call: {
-                id: event.toolUseId,
-                name: event.toolName,
-                input: event.input,
-                status: 'running',
-                progress: '',
-              },
-            },
-          ])
-          break
-        case 'tool-progress':
-          setBlocks((prev) => updateTool(prev, event.toolUseId, (c) => ({ ...c, progress: c.progress + event.output })))
-          break
-        case 'tool-end':
-          setBlocks((prev) =>
-            updateTool(prev, event.toolUseId, (c) => ({
-              ...c,
-              status: event.isError ? 'error' : 'done',
-              result: String(event.result),
-            })),
-          )
           break
         case 'approval-request':
           setApproval({
@@ -171,156 +103,19 @@ export function App() {
             suggestion: event.suggestion,
           })
           break
-        case 'checkpoint-created':
-          setBlocks((prev) => updateTool(prev, event.toolUseId, (c) => ({ ...c, hasCheckpoint: true })))
-          break
-        case 'checkpoint-disabled':
-          setBlocks((prev) => [
-            ...prev,
-            { kind: 'notice', id: `b${nextId.current++}`, text: `检查点已禁用：${event.reason}` },
-          ])
-          break
-        case 'checkpoint-restored':
-          setBlocks((prev) => {
-            if (!event.ok) {
-              return [...prev, { kind: 'error', id: `b${nextId.current++}`, text: `回滚失败：${event.error}` }]
-            }
-            let next = prev
-            if (event.scope === 'files-and-chat') {
-              // 截断到 turn 起点（含触发指令）；无记录时回退为工具卡片前最近的用户消息
-              let idx = turnStartBlocks.current.get(event.turnId) ?? -1
-              if (idx < 0) {
-                const toolIdx = prev.findIndex((b) => b.kind === 'tool' && b.call.id === event.toolUseId)
-                idx = toolIdx
-                for (let i = toolIdx; i >= 0; i--) {
-                  if (prev[i]!.kind === 'user') {
-                    idx = i
-                    break
-                  }
-                }
-              }
-              if (idx >= 0) next = prev.slice(0, idx)
-            }
-            return [
-              ...next,
-              {
-                kind: 'notice',
-                id: `b${nextId.current++}`,
-                text: event.scope === 'files-and-chat' ? '已回滚：该轮对话与文件改动均已撤销' : '已回滚文件到该操作前（对话保留）',
-              },
-            ]
-          })
-          break
-        case 'context-compacted':
-          setBlocks((prev) => [
-            ...prev,
-            {
-              kind: 'notice',
-              id: `b${nextId.current++}`,
-              text: `上下文已压缩（${event.level === 'full' ? '摘要' : '清理'}：${Math.round(event.preTokens / 1000)}k → ${Math.round(event.postTokens / 1000)}k tokens）`,
-            },
-          ])
-          break
-        case 'error':
-          setBlocks((prev) => [...prev, { kind: 'error', id: `b${nextId.current++}`, text: event.message }])
-          break
-        // --- 多 Agent 协商（M3）---
-        case 'peer-event':
-          setBlocks((prev) => {
-            const idx = prev.findLastIndex(
-              (b) => b.kind === 'peer' && b.peer.agentId === event.agentId && b.peer.status === 'working',
-            )
-            if (idx < 0) {
-              return [
-                ...prev,
-                { kind: 'peer', id: `b${nextId.current++}`, peer: applyPeerEvent(createPeerBlock(event.agentId), event.event) },
-              ]
-            }
-            const block = prev[idx]! as Extract<Block, { kind: 'peer' }>
-            const next = [...prev]
-            next[idx] = { ...block, peer: applyPeerEvent(block.peer, event.event) }
-            return next
-          })
-          break
         case 'vote-cast':
           setNegoStatus((prev) =>
             prev ? `${event.from} 已投票（${voteLabel(event.vote)}）· 等待其余评审…` : prev,
           )
-          setBlocks((prev) => {
-            // B/C 的票落到自己的卡片上并收口；Main 的票（M3-c）走主线通知
-            const idx = prev.findLastIndex(
-              (b) => b.kind === 'peer' && b.peer.agentId === event.from && b.peer.status === 'working',
-            )
-            if (idx < 0) {
-              return [
-                ...prev,
-                { kind: 'notice', id: `b${nextId.current++}`, text: `${event.from} 对 ${event.target} 投票 ${voteLabel(event.vote)}：${event.reason}` },
-              ]
-            }
-            const block = prev[idx]! as Extract<Block, { kind: 'peer' }>
-            const next = [...prev]
-            next[idx] = {
-              ...block,
-              peer: {
-                ...block.peer,
-                status: 'done',
-                vote: { vote: event.vote, reason: event.reason, suggestedChange: event.suggestedChange },
-              },
-            }
-            return next
-          })
-          break
-        case 'candidate-submitted':
-          {
-            const id = `b${nextId.current++}`
-            setExpanded((prev) => new Set(prev).add(id))
-            setBlocks((prev) => [
-              ...prev,
-              {
-                kind: 'candidate',
-                id,
-                candidate: {
-                  agentId: event.agentId,
-                  candidateId: event.candidateId,
-                  summary: event.summary,
-                  details: event.details,
-                },
-              },
-            ])
-          }
           break
         case 'negotiation-started':
           setNegoStatus('B、C 正在独立评审 M1…')
-          setBlocks((prev) => [
-            ...prev,
-            { kind: 'notice', id: `b${nextId.current++}`, text: `🤝 协商开始（${event.mode === 'quick_review' ? '快速评审' : '完整共识'}）：B/C 正在独立评审…` },
-          ])
           break
         case 'round-started':
           setNegoStatus(event.round === 2 ? '第二轮：Main 修订候选，B/C 再评…' : '第三轮：最终兜底决策…')
-          setBlocks((prev) => [
-            ...prev,
-            { kind: 'notice', id: `b${nextId.current++}`, text: `🔁 进入第 ${event.round} 轮协商` },
-          ])
-          break
-        case 'negotiation-decided':
-          setBlocks((prev) => [
-            ...prev,
-            {
-              kind: 'notice',
-              id: `b${nextId.current++}`,
-              text: `⚖️ 协商决定（${event.selectedCandidateIds.join('、') || '降级'}）：${event.reason}${
-                event.scores ? `｜分数 Main ${event.scores.Main} / B ${event.scores.B} / C ${event.scores.C}` : ''
-              }`,
-            },
-          ])
           break
         case 'execution-started':
           setNegoStatus(null)
-          setBlocks((prev) => [
-            ...prev,
-            { kind: 'notice', id: `b${nextId.current++}`, text: '▶ Main 进入执行阶段' },
-          ])
           break
         default:
           break
@@ -354,7 +149,7 @@ export function App() {
     void window.whycode.pickProjectDir().then((dir) => {
       if (dir) {
         setProjectDir(dir)
-        setBlocks([])
+        setView(createConversationState())
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
       }
@@ -371,18 +166,20 @@ export function App() {
   }, [consensus.enabled])
 
   const resetView = useCallback((notice?: string) => {
-    setBlocks(
-      notice ? [{ kind: 'notice', id: `b${nextId.current++}`, text: notice }] : [],
-    )
+    const empty = createConversationState()
+    setView(notice ? appendNotice(empty, notice) : empty)
     setQueued([])
     setApproval(null)
-    setExpanded(new Set())
-    pendingTurnStart.current = null
-    turnStartBlocks.current.clear()
+    setStatus('idle')
+    setNegoStatus(null)
+    stickToBottom.current = true
+    setShowJumpBottom(false)
   }, [])
 
   const addError = useCallback((text: string) => {
-    setBlocks((prev) => [...prev, { kind: 'error', id: `b${nextId.current++}`, text }])
+    setView((previous) =>
+      applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
+    )
   }, [])
 
   const startNewSession = useCallback(() => {
@@ -400,7 +197,19 @@ export function App() {
       const interrupted = result.recoveredFromInterruption
         ? '；已回退到安全边界，未完成工具和半截协商不会自动重放'
         : ''
-      resetView(`已恢复「${result.session.title || '未命名会话'}」的 ${result.messageCount} 条模型上下文${interrupted}`)
+      const restored = createConversationState(result.viewEvents)
+      setView(
+        appendNotice(
+          restored,
+          `已恢复「${result.session.title || '未命名会话'}」${interrupted}`,
+        ),
+      )
+      setQueued([])
+      setApproval(null)
+      setStatus('idle')
+      setNegoStatus(null)
+      stickToBottom.current = true
+      setShowJumpBottom(false)
       setProjectDir(result.session.projectDir)
       if (models.some((model) => model.id === result.session.modelId && model.hasKey)) {
         setModelId(result.session.modelId)
@@ -409,7 +218,7 @@ export function App() {
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
     })
-  }, [addError, models, refreshSessions, resetView])
+  }, [addError, models, refreshSessions])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (!window.confirm('确定删除这个会话？此操作不会修改项目文件。')) return
@@ -426,10 +235,9 @@ export function App() {
   }, [addError, refreshSessions, resetView])
 
   const compact = useCallback(() => {
-    setBlocks((prev) => [
-      ...prev,
-      { kind: 'notice', id: `b${nextId.current++}`, text: '正在压缩上下文（生成摘要中，可点停止取消）…' },
-    ])
+    setView((previous) =>
+      appendNotice(previous, '正在压缩上下文（生成摘要中，可点停止取消）…'),
+    )
     void window.whycode.sendCommand({ type: 'compact' })
   }, [])
 
@@ -451,11 +259,7 @@ export function App() {
     if (!text) return
     // 忙碌时不直接显示为用户消息——Main 会排队并回 message-queued 事件
     if (!busy) {
-      setBlocks((prev) => {
-        // 记录 turn 起点（用户消息之前），供「文件+对话」回滚截断
-        pendingTurnStart.current = prev.length
-        return [...prev, { kind: 'user', id: `b${nextId.current++}`, text }]
-      })
+      setView((previous) => appendUserMessage(previous, text, true))
     }
     setInput('')
     // 自己发消息 = 主动行为，恢复贴底跟随
@@ -476,11 +280,7 @@ export function App() {
   }, [approval])
 
   const toggle = useCallback((id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
+    setView((previous) => toggleExpanded(previous, id))
   }, [])
 
   return (
@@ -526,7 +326,7 @@ export function App() {
           <BlockView
             key={b.id}
             block={b}
-            expanded={expanded.has(b.id)}
+            expanded={view.expanded.has(b.id)}
             onToggle={() => toggle(b.id)}
           />
         ))}
@@ -801,38 +601,4 @@ function summarizeInput(input: unknown): string {
     if (typeof obj.command === 'string') return obj.command
   }
   return JSON.stringify(input)
-}
-
-// --- 事件应用到 blocks 的纯函数（保持 reducer 简单） ---
-
-type IdRef = { current: number }
-
-function appendText(prev: Block[], text: string, id: IdRef): Block[] {
-  const last = prev.at(-1)
-  if (last?.kind === 'text') {
-    return [...prev.slice(0, -1), { ...last, text: last.text + text }]
-  }
-  return [...prev, { kind: 'text', id: `b${id.current++}`, text }]
-}
-
-function appendThinking(prev: Block[], text: string, id: IdRef): Block[] {
-  const last = prev.at(-1)
-  if (last?.kind === 'thinking' && last.durationMs === null) {
-    return [...prev.slice(0, -1), { ...last, text: last.text + text }]
-  }
-  return [...prev, { kind: 'thinking', id: `b${id.current++}`, text, durationMs: null }]
-}
-
-function endThinking(prev: Block[], durationMs: number): Block[] {
-  const last = prev.at(-1)
-  if (last?.kind === 'thinking' && last.durationMs === null) {
-    return [...prev.slice(0, -1), { ...last, durationMs }]
-  }
-  return prev
-}
-
-function updateTool(prev: Block[], toolId: string, fn: (c: ToolCall) => ToolCall): Block[] {
-  return prev.map((b) =>
-    b.kind === 'tool' && b.call.id === toolId ? { ...b, call: fn(b.call) } : b,
-  )
 }

@@ -28,6 +28,10 @@ export type AgentStatus =
 /** core → 宿主 的事件流 */
 export type CoreEvent =
   | { type: 'turn-start'; turnId: string }
+  /** 当前 step 的模型消息已提交到稳定会话记录；宿主可据此提交对应可见事件。 */
+  | { type: 'step-committed' }
+  /** 当前 step 未进入模型历史（取消/urgent/异常）；宿主必须丢弃对应未提交可见事件。 */
+  | { type: 'step-discarded' }
   | { type: 'text-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'thinking-end'; durationMs: number }
