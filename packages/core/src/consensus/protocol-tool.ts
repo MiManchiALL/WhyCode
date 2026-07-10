@@ -98,8 +98,9 @@ export function createProtocolOutputTool(
         ? '提交你对 M1 的快速评价（协商正式输出）。整个回合只能调用一次，调用前先完成必要探索。'
         : '提交你本轮的候选方案与投票（协商正式输出）。整个回合只能调用一次，调用前先完成必要探索。',
     inputSchema: (spec.kind === 'quick' ? quickSchema : fullSchema) as z.ZodObject,
-    isReadOnly: true,
-    kind: 'read',
+    // 提交会改变本协议回合的内部状态，必须与其它控制工具串行。
+    isReadOnly: false,
+    kind: 'control',
     availableWithoutProject: true,
     endsTurnOnSuccess: true,
     async execute(input) {

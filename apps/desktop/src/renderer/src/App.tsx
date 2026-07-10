@@ -3,7 +3,7 @@ import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
-import type { AgentStatus, CoreEvent } from '@whycode/core/events'
+import type { AgentStatus, CoreEvent, UserQuestion } from '@whycode/core/events'
 import type { SessionListItem } from '../../shared/session.ts'
 import {
   applyCoreEvent,
@@ -36,6 +36,7 @@ export function App() {
   const [view, setView] = useState(() => createConversationState())
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<AgentStatus>('idle')
+  const [stopping, setStopping] = useState(false)
   const [models, setModels] = useState<{ id: string; displayName: string; hasKey: boolean }[]>([])
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
@@ -78,6 +79,7 @@ export function App() {
       switch (event.type) {
         case 'agent-status':
           setStatus(event.status)
+          if (event.status === 'idle' || event.status === 'error') setStopping(false)
           // 空闲 = 一切结束（中止/异常兜底），协商状态条不残留
           if (event.status === 'idle') setNegoStatus(null)
           break
@@ -172,6 +174,7 @@ export function App() {
     setQueued([])
     setApproval(null)
     setStatus('idle')
+    setStopping(false)
     setNegoStatus(null)
     stickToBottom.current = true
     setShowJumpBottom(false)
@@ -182,6 +185,16 @@ export function App() {
       applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
     )
   }, [])
+
+  const stop = useCallback(() => {
+    if (stopping) return
+    setStopping(true)
+    setApproval(null)
+    void window.whycode.sendCommand({ type: 'abort' }).catch(() => {
+      setStopping(false)
+      addError('停止请求发送失败，请重试')
+    })
+  }, [addError, stopping])
 
   const startNewSession = useCallback(() => {
     void window.whycode.newSession().then((result) => {
@@ -208,6 +221,7 @@ export function App() {
       setQueued([])
       setApproval(null)
       setStatus('idle')
+      setStopping(false)
       setNegoStatus(null)
       stickToBottom.current = true
       setShowJumpBottom(false)
@@ -268,6 +282,16 @@ export function App() {
     setShowJumpBottom(false)
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
   }, [input, busy])
+
+  const answerQuestion = useCallback((answer: string) => {
+    const question = view.pendingQuestion
+    if (!question || busy || stopping) return
+    const text = `回答「${question.question}」：${answer}`
+    setView((previous) => appendUserMessage(previous, text, true))
+    stickToBottom.current = true
+    setShowJumpBottom(false)
+    void window.whycode.sendCommand({ type: 'user-message', text })
+  }, [busy, stopping, view.pendingQuestion])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
@@ -347,6 +371,17 @@ export function App() {
         </div>
       )}
 
+      {view.pendingQuestion && (
+        <div className="border-t border-violet-200 px-6 pt-3">
+          <QuestionCard
+            key={view.pendingQuestion.id}
+            question={view.pendingQuestion}
+            disabled={busy || stopping}
+            onAnswer={answerQuestion}
+          />
+        </div>
+      )}
+
       {/* 审批卡常驻输入框上方：Agent 在等答复，绝不能被滚动藏住 */}
       {approval && (
         <div className="border-t border-amber-200 px-6 pt-3">
@@ -375,34 +410,38 @@ export function App() {
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            disabled={stopping}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
               send(e.ctrlKey)
             }}
             placeholder={
-              status === 'waiting-approval'
-                ? '⏸ Agent 在等你审批上方的请求…'
-                : busy
-                  ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话'
-                  : projectDir
-                    ? '输入消息…'
-                    : '纯聊天模式，输入消息…'
+              stopping
+                ? '正在停止当前任务并清理子进程…'
+                : status === 'waiting-approval'
+                  ? '⏸ Agent 在等你审批上方的请求…'
+                  : busy
+                    ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话'
+                    : projectDir
+                      ? '输入消息…'
+                      : '纯聊天模式，输入消息…'
             }
           />
           {busy && (
             <button
-              className="rounded-md border border-neutral-300 px-4 py-2 text-sm"
-              onClick={() => window.whycode.sendCommand({ type: 'abort' })}
+              className="rounded-md border border-neutral-300 px-4 py-2 text-sm disabled:opacity-40"
+              onClick={stop}
+              disabled={stopping}
             >
-              停止
+              {stopping ? '停止中…' : '停止'}
             </button>
           )}
           {busy && (
             <button
               className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
               onClick={() => send(true)}
-              disabled={!input.trim()}
+              disabled={stopping || !input.trim()}
               title="打断当前步骤，立即插话"
             >
               立即
@@ -411,12 +450,66 @@ export function App() {
           <button
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
             onClick={() => send(false)}
-            disabled={!input.trim()}
+            disabled={stopping || !input.trim()}
           >
             {busy ? '排队' : '发送'}
           </button>
         </div>
       </footer>
+    </div>
+  )
+}
+
+function QuestionCard({
+  question,
+  disabled,
+  onAnswer,
+}: {
+  question: UserQuestion
+  disabled: boolean
+  onAnswer: (answer: string) => void
+}) {
+  const [customAnswer, setCustomAnswer] = useState('')
+  const submitCustom = () => {
+    const answer = customAnswer.trim()
+    if (answer && !disabled) onAnswer(answer)
+  }
+  return (
+    <div className="mb-2 rounded border border-violet-300 bg-violet-50 p-3 text-sm">
+      <div className="mb-1 text-xs font-medium text-violet-600">{question.header}</div>
+      <div className="mb-3 font-medium text-violet-950">{question.question}</div>
+      <div className="mb-3 grid gap-2 sm:grid-cols-2">
+        {question.options.map((option) => (
+          <button
+            key={option.label}
+            className="rounded border border-violet-200 bg-white p-2 text-left hover:border-violet-400 disabled:opacity-40"
+            disabled={disabled}
+            onClick={() => onAnswer(option.label)}
+          >
+            <div className="font-medium text-violet-900">{option.label}</div>
+            <div className="mt-0.5 text-xs text-violet-600">{option.description}</div>
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="min-w-0 flex-1 rounded border border-violet-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-violet-400"
+          value={customAnswer}
+          disabled={disabled}
+          placeholder="或者直接输入你的回答"
+          onChange={(event) => setCustomAnswer(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') submitCustom()
+          }}
+        />
+        <button
+          className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-40"
+          disabled={disabled || !customAnswer.trim()}
+          onClick={submitCustom}
+        >
+          回答
+        </button>
+      </div>
     </div>
   )
 }

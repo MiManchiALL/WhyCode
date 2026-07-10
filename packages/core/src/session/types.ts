@@ -64,7 +64,7 @@ const messagesEntrySchema = chainedEntrySchema.extend({
 const turnEndSchema = chainedEntrySchema.extend({
   type: z.literal('turn-end'),
   turnId: z.string().min(1),
-  stopReason: z.enum(['completed', 'paused', 'aborted', 'max-turns', 'error']),
+  stopReason: z.enum(['completed', 'waiting-user', 'paused', 'aborted', 'max-turns', 'error']),
 })
 
 const taskStateSchema = chainedEntrySchema.extend({
@@ -134,7 +134,15 @@ export const sessionMetadataSchema = z.object({
   lastUserText: z.string(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
-  status: z.enum(['idle', 'running', 'paused', 'max-turns', 'interrupted', 'error']),
+  status: z.enum([
+    'idle',
+    'running',
+    'waiting-user',
+    'paused',
+    'max-turns',
+    'interrupted',
+    'error',
+  ]),
 })
 
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>

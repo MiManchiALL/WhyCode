@@ -36,6 +36,33 @@ describe('SessionStore', () => {
     assert.deepEqual(reopened.messagesBeforeTurn('turn-1'), [])
   })
 
+  it('持久化等待用户状态和问题卡', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const question = {
+      type: 'core-event' as const,
+      event: {
+        type: 'user-question' as const,
+        question: {
+          id: 'question-1',
+          header: '实现偏好',
+          question: '你更看重哪一点？',
+          options: [
+            { label: '简单可靠', description: '减少复杂度' },
+            { label: '功能完整', description: '覆盖更多场景' },
+          ],
+        },
+      },
+    }
+    await journal.recordTurnStart('turn-question', [message('user', '帮我选择')])
+    await journal.recordViewEvents([question])
+    await journal.recordTurnEnd('turn-question', 'waiting-user')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.metadataSnapshot.status, 'waiting-user')
+    assert.deepEqual(reopened.initialViewEvents, [question])
+  })
+
   it('忽略崩溃留下的最后半行', async () => {
     const { store, journal, transcript } = await completedSession()
     await appendFile(transcript, '{"schemaVersion":1,"type":"messages"', 'utf8')

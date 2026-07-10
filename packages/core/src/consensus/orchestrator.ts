@@ -122,6 +122,7 @@ export class ConsensusCoordinator {
     const { mainSession, emit } = this.options
     this.running = true
     this.aborted = false
+    mainSession.setUserQuestionsEnabled(false)
     const taskId = `task-${++this.taskCounter}`
     const startState = this.snapshotState()
     const startMessages = mainSession.captureMessageSnapshot()
@@ -246,6 +247,7 @@ export class ConsensusCoordinator {
       }
       if (taskPlanRolledBack) emit({ type: 'task-plan-restored', plan: startTaskPlan })
       this.restoreExecution()
+      mainSession.setUserQuestionsEnabled(true)
       this.peers = []
       this.peerPhase = false
       this.running = false

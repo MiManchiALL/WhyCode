@@ -13,6 +13,8 @@ describe('通用 Agent 提示约束', () => {
     })
 
     assert.match(prompt, /通用型桌面 AI Agent/)
+    assert.match(prompt, /尤其擅长代码编写、代码理解、调试及其他编程相关任务/)
+    assert.doesNotMatch(prompt, /软件开发是你的核心专长/)
     assert.match(prompt, /非项目问题直接回答/)
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
     assert.match(prompt, /项目外也使用 WriteFile\/EditFile/)

@@ -1,0 +1,48 @@
+import { z } from 'zod'
+import type { UserQuestion } from '../../events.ts'
+import { buildTool } from '../tool.ts'
+
+export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
+
+const optionSchema = z.object({
+  label: z.string().min(1).max(40).describe('简短选项名称'),
+  description: z.string().min(1).max(240).describe('这个选项的影响或取舍'),
+})
+
+const inputSchema = z.object({
+  header: z.string().min(1).max(12).describe('问题卡的短标题，不超过 12 个字符'),
+  question: z.string().min(1).max(500).describe('需要用户明确回答的单个问题'),
+  options: z.array(optionSchema).min(2).max(4).describe('2~4 个互斥建议选项；界面会自动提供自由输入'),
+})
+
+export function createAskUserQuestionTool(
+  onQuestion: (question: UserQuestion) => void,
+) {
+  let questionSubmitted = false
+  return buildTool({
+    name: ASK_USER_QUESTION_TOOL_NAME,
+    description: '暂停尚未完成的任务，并向用户请求继续所必需的决策',
+    prompt:
+      '仅当当前用户目标尚未完成，而且用户回答是继续完成该目标的必要条件时使用。缺失信息必须会实质改变下一步行动，且无法从现有上下文或只读工具查明；若答案不会改变后续具体行动，不要提问。若存在安全、合理且容易撤销的默认选择，应直接继续并说明假设。若当前任务已经可以完整交付，不得调用本工具；应正常完成任务，并在最终文本中说明可选问题或后续方向。不得用本工具询问用户是否满意、是否继续或是否需要更多帮助。一次只问一个清晰问题，提供 2~4 个互斥选项及具体取舍；不要添加“其它”，界面会自动提供自由输入。调用成功会暂停当前任务，用户回答后必须继续原任务的明确后续行动。',
+    inputSchema,
+    isReadOnly: false,
+    kind: 'control',
+    availableWithoutProject: true,
+    endsTurnOnSuccess: true,
+    turnEndReasonOnSuccess: 'waiting-user',
+    async execute(input) {
+      if (questionSubmitted) {
+        return {
+          data: '本回合已经提交了一个问题；请等待用户回答，不要重复提问。',
+          isError: true,
+        }
+      }
+      questionSubmitted = true
+      onQuestion({ id: crypto.randomUUID(), ...input })
+      return {
+        data: '问题已展示给用户；当前回合结束，等待用户回答后继续。',
+        isError: false,
+      }
+    },
+  })
+}

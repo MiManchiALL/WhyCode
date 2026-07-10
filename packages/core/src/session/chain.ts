@@ -273,13 +273,14 @@ function deriveStatus(
   chain: SessionEntry[],
   interruptedTurnId: string | null,
   interruptedConsensusTaskId: string | null,
-): 'idle' | 'paused' | 'max-turns' | 'interrupted' | 'error' {
+): 'idle' | 'waiting-user' | 'paused' | 'max-turns' | 'interrupted' | 'error' {
   if (interruptedTurnId || interruptedConsensusTaskId) return 'interrupted'
   const lastEnd = [...chain]
     .reverse()
     .find((entry) => entry.type === 'turn-end' || entry.type === 'consensus-task-end')
   if (lastEnd?.type === 'turn-end') {
     if (lastEnd.stopReason === 'error') return 'error'
+    if (lastEnd.stopReason === 'waiting-user') return 'waiting-user'
     if (lastEnd.stopReason === 'paused') return 'paused'
     return lastEnd.stopReason === 'max-turns' ? 'max-turns' : 'idle'
   }
