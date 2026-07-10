@@ -25,6 +25,7 @@ const STEP_SCOPED_EVENTS = new Set<CoreEvent['type']>([
   'tool-end',
   'checkpoint-created',
   'checkpoint-disabled',
+  'task-plan-updated',
 ])
 
 /**

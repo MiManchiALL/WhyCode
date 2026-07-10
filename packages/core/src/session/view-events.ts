@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
+import { taskPlanSchema } from '../tasks/types.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -57,6 +58,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     ok: z.boolean(),
     error: z.string().optional(),
     invalidatedToolUseIds: z.array(z.string()).optional(),
+    taskPlan: taskPlanSchema.nullable().optional(),
   }),
   z.object({
     type: z.literal('context-compacted'),
@@ -101,6 +103,8 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
       .optional(),
   }),
   z.object({ type: z.literal('execution-started'), taskId: z.string() }),
+  z.object({ type: z.literal('task-plan-updated'), plan: taskPlanSchema }),
+  z.object({ type: z.literal('task-plan-restored'), plan: taskPlanSchema.nullable() }),
 ])
 
 export const viewEventSchema = z.discriminatedUnion('type', [
@@ -143,6 +147,8 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'round-started':
     case 'negotiation-decided':
     case 'execution-started':
+    case 'task-plan-updated':
+    case 'task-plan-restored':
       return viewEventSchema.parse({ type: 'core-event', event })
     default:
       return null

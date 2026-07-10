@@ -24,6 +24,16 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /必须调用 SubmitProtocolOutput/)
     assert.match(prompt, /不提供文件或命令工具/)
     assert.doesNotMatch(prompt, /原项目目录\*\*只读/)
+    assert.doesNotMatch(prompt, /CreateTaskPlan/)
+  })
+
+  it('只有 Main 正常执行阶段获得长任务计划规则', () => {
+    const prompt = buildSystemPrompt({ projectDir: null, osPlatform: 'win32' })
+
+    assert.match(prompt, /CreateTaskPlan/)
+    assert.match(prompt, /UpdateTaskItem/)
+    assert.match(prompt, /最终 verification/)
+    assert.match(prompt, /简单问答和一步操作不要创建计划/)
   })
 
   it('M1 模式选择不再把所有任务强制解释为代码问题', () => {

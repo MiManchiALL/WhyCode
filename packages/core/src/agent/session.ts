@@ -12,6 +12,10 @@ import { compactMessages } from '../context/compact.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
+import { TaskPlanController } from '../tasks/controller.ts'
+import { LoopHealthMonitor } from '../tasks/loop-health.ts'
+import { createTaskPlanTools } from '../tasks/tools.ts'
+import type { ActiveTaskPlan } from '../tasks/types.ts'
 import {
   createPermissionContext,
   type ApprovalSuggestion,
@@ -19,8 +23,9 @@ import {
   type PermissionMode,
 } from '../permissions/types.ts'
 
-const MAX_STEPS = 40
+const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
+const TASK_STOP_REMINDER_LIMIT = 2
 const MAX_COMPACT_FAILURES = 3
 
 export interface AgentSessionOptions {
@@ -66,6 +71,7 @@ interface QueuedMessage {
 interface StepResult {
   hadToolCalls: boolean
   endedByTool: boolean
+  taskPlanChanged: boolean
 }
 
 /**
@@ -102,6 +108,9 @@ export class AgentSession {
   private persistenceFailed = false
   /** 正式协议回合只通过结构化事件展示结果，避免内部候选文本混入最终回答。 */
   private protocolRound = false
+  /** 仅 Main 正常执行拥有任务控制；B/C 创建时已经处于 discussion，因此不会获得。 */
+  private taskPlan: TaskPlanController | null = null
+  private loopHealth = new LoopHealthMonitor()
 
   constructor(options: AgentSessionOptions) {
     this.options = options
@@ -110,6 +119,11 @@ export class AgentSession {
       options.promptContext.projectDir,
       options.promptContext.discussion,
     )
+    if (!options.promptContext.discussion) {
+      this.taskPlan = new TaskPlanController(
+        options.sessionRecorder?.initialTaskPlan ?? null,
+      )
+    }
     // 讨论阶段的会话不做检查点（不写项目，无需快照）
     if (
       options.checkpointStorageDir &&
@@ -177,6 +191,15 @@ export class AgentSession {
     if (this.running || this.compacting) throw new Error('Agent 工作中，不能恢复消息快照')
     this.messages = structuredClone(messages)
     this.tokenBaseline = null
+  }
+
+  captureTaskPlanSnapshot(): ActiveTaskPlan | null {
+    return this.taskPlan?.snapshot ?? null
+  }
+
+  restoreTaskPlanSnapshot(plan: ActiveTaskPlan | null): void {
+    if (this.running || this.compacting) throw new Error('Agent 工作中，不能恢复任务计划')
+    this.taskPlan?.restore(plan)
   }
 
   /**
@@ -265,18 +288,24 @@ export class AgentSession {
 
     let stopReason: StopReason = 'completed'
     let endedByTool = false
+    const maxSteps = this.options.promptContext.discussion || this.protocolRound
+      ? BOUNDED_MAX_STEPS
+      : null
+    this.loopHealth = new LoopHealthMonitor()
     const usage: UsageInfo = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }
 
     try {
       let steps = 0
       let finishedNaturally = false
-      while (steps < MAX_STEPS) {
+      let taskStopReminders = 0
+      while (maxSteps === null || steps < maxSteps) {
         steps++
-        if (steps === MAX_STEPS - FINALIZATION_RESERVE_STEPS) {
+        if (maxSteps !== null && steps === maxSteps - FINALIZATION_RESERVE_STEPS) {
           await this.injectStepLimitReminder()
         }
         await this.compactIfNeeded(abortSignal)
         const step = await this.runOneStep(usage, abortSignal)
+        if (step.taskPlanChanged) taskStopReminders = 0
         if (abortSignal.aborted) {
           stopReason = 'aborted'
           break
@@ -290,21 +319,51 @@ export class AgentSession {
           await this.injectQueuedMidTurn()
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
+        const loopReason = this.loopHealth.consumePauseReason()
+        if (loopReason) {
+          stopReason = 'paused'
+          emit({
+            type: 'error',
+            message: `长任务已安全暂停：${loopReason}请检查当前计划后再继续。`,
+            recoverable: true,
+          })
+          break
+        }
         if (!step.hadToolCalls) {
+          const decision = this.taskPlan?.naturalStopDecision() ?? { kind: 'allow' as const }
+          if (decision.kind === 'pause') {
+            stopReason = 'paused'
+            finishedNaturally = true
+            break
+          }
+          if (decision.kind === 'continue' && taskStopReminders < TASK_STOP_REMINDER_LIMIT) {
+            taskStopReminders++
+            await this.injectTaskStopReminder(decision.reminder)
+            continue
+          }
+          if (decision.kind === 'continue') {
+            stopReason = 'paused'
+            emit({
+              type: 'error',
+              message: `长任务仍有未完成计划，模型连续 ${TASK_STOP_REMINDER_LIMIT} 次尝试提前结束，已保留进度并安全暂停。`,
+              recoverable: true,
+            })
+          }
           finishedNaturally = true
           break
         }
       }
       if (
         stopReason === 'completed' &&
-        steps >= MAX_STEPS &&
+        maxSteps !== null &&
+        steps >= maxSteps &&
         !endedByTool &&
         !finishedNaturally
       ) {
         stopReason = 'max-turns'
         emit({
           type: 'error',
-          message: `当前回合已达到 ${MAX_STEPS} 步工具循环安全上限，可能尚未完成。请发送“继续”让 Agent 基于现有上下文接着处理。`,
+          message: `当前协商回合已达到 ${maxSteps} 步安全上限，可能尚未完成。`,
           recoverable: true,
         })
       }
@@ -346,10 +405,21 @@ export class AgentSession {
       role: 'user',
       content: [
         '<system-reminder>',
-        `当前回合还剩 ${FINALIZATION_RESERVE_STEPS + 1} 次模型请求即达到工具循环安全上限。`,
+        `当前协商回合还剩 ${FINALIZATION_RESERVE_STEPS + 1} 次模型请求即达到安全上限。`,
         '请停止扩展性探索，只做必要收尾；能完成时立即给出完整结论，协议阶段则立即提交正式协议输出。',
         '</system-reminder>',
       ].join('\n'),
+    }
+    this.messages.push(reminder)
+    if (this.activeTurn) {
+      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
+    }
+  }
+
+  private async injectTaskStopReminder(text: string): Promise<void> {
+    const reminder: ModelMessage = {
+      role: 'user',
+      content: ['<system-reminder>', text, '</system-reminder>'].join('\n'),
     }
     this.messages.push(reminder)
     if (this.activeTurn) {
@@ -475,11 +545,13 @@ export class AgentSession {
     if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
 
     const stepControl = { endedByTool: false }
+    this.taskPlan?.beginStep()
     try {
+      const taskReminder = this.taskPlan?.reminderMessage()
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
-        messages: this.messages,
+        messages: taskReminder ? [...this.messages, taskReminder] : this.messages,
         tools: this.buildToolSet(stepAbort.signal, () => {
           stepControl.endedByTool = true
         }),
@@ -537,8 +609,14 @@ export class AgentSession {
 
       // 本步产生的消息（assistant + tool 结果）并入历史
       const response = await result.response
+      const taskPlanCommit = this.taskPlan?.commitStep()
       this.messages.push(...response.messages)
-      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, response.messages))
+      await this.persist((recorder) =>
+        recorder.recordStep(this.activeTurn!.id, response.messages, taskPlanCommit?.activePlan),
+      )
+      if (taskPlanCommit) {
+        emit({ type: 'task-plan-updated', plan: taskPlanCommit.displayPlan })
+      }
       emit({ type: 'step-committed' })
       if (stepTotalTokens > 0) {
         this.tokenBaseline = {
@@ -546,12 +624,17 @@ export class AgentSession {
           coveredMessageCount: this.messages.length,
         }
       }
-      return { hadToolCalls, endedByTool: stepControl.endedByTool }
+      return {
+        hadToolCalls,
+        endedByTool: stepControl.endedByTool,
+        taskPlanChanged: taskPlanCommit !== undefined,
+      }
     } catch (error) {
+      this.taskPlan?.discardStep()
       emit({ type: 'step-discarded' })
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
-        return { hadToolCalls: false, endedByTool: false }
+        return { hadToolCalls: false, endedByTool: false, taskPlanChanged: false }
       }
       throw error
     } finally {
@@ -567,11 +650,15 @@ export class AgentSession {
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
+    const taskTools = this.taskPlan && !this.options.promptContext.discussion && !this.protocolRound
+      ? createTaskPlanTools(this.taskPlan)
+      : []
+    const controlTools = [...extraTools, ...taskTools]
     const defs = projectDir
-      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...extraTools]
-      : extraTools.filter((tool) => tool.availableWithoutProject)
-    const toolProjectDir = projectDir ?? this.options.promptContext.discussion?.scratchDir
-    if (!toolProjectDir || defs.length === 0) return undefined
+      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...controlTools]
+      : controlTools.filter((tool) => tool.availableWithoutProject)
+    const toolProjectDir = projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
+    if (defs.length === 0) return undefined
 
     const { emit, requestApproval } = this.options
     const toolSet: ToolSet = {}
@@ -590,6 +677,7 @@ export class AgentSession {
           if (!parsed.success) {
             const msg = `参数校验失败：${parsed.error.message}`
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            this.loopHealth.record(def.name, input, msg, true)
             return msg
           }
           emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
@@ -602,6 +690,7 @@ export class AgentSession {
           if (decision.behavior === 'deny') {
             const msg = `操作被拒绝：${decision.reason}`
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            this.loopHealth.record(def.name, parsed.data, msg, true)
             return msg
           }
           if (decision.behavior === 'ask') {
@@ -619,6 +708,7 @@ export class AgentSession {
             if (!response.approved) {
               const msg = `用户拒绝了此操作（${decision.reason}）`
               emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+              this.loopHealth.record(def.name, parsed.data, msg, true)
               return msg
             }
             if (response.remember && decision.suggestion) {
@@ -708,11 +798,13 @@ export class AgentSession {
               isError: result.isError,
             })
             if (def.endsTurnOnSuccess && !result.isError) onTurnEndingTool()
+            this.loopHealth.record(def.name, parsed.data, result.data, result.isError)
             return result.data
           } catch (error) {
             await finalizeCheckpoint()
             const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            this.loopHealth.record(def.name, parsed.data, msg, true)
             return msg
           }
         },
@@ -744,7 +836,13 @@ export class AgentSession {
     const rollbackMessages = scope === 'files-and-chat'
       ? recorder?.messagesBeforeTurn(record.turnId) ?? null
       : null
-    if (scope === 'files-and-chat' && !rollbackMessages) {
+    const rollbackTaskPlan = scope === 'files-and-chat'
+      ? recorder?.taskPlanBeforeTurn(record.turnId)
+      : undefined
+    if (
+      scope === 'files-and-chat' &&
+      (rollbackMessages === null || rollbackTaskPlan === undefined)
+    ) {
       emit({
         type: 'checkpoint-restored',
         toolUseId,
@@ -756,18 +854,21 @@ export class AgentSession {
       return
     }
     const originalMessages = structuredClone(this.messages)
+    const originalTaskPlan = this.taskPlan?.snapshot ?? null
     const result = await this.checkpoints.restore(
       toolUseId,
       scope,
-      rollbackMessages && recorder ? {
+      rollbackMessages !== null && recorder ? {
         commit: async () => {
-          await recorder.recordSnapshot('rollback', rollbackMessages)
+          await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskPlan)
           this.messages = structuredClone(rollbackMessages)
+          this.taskPlan?.restore(rollbackTaskPlan ?? null)
           this.tokenBaseline = null
         },
         compensate: async () => {
-          await recorder.recordSnapshot('rollback', originalMessages)
+          await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskPlan)
           this.messages = structuredClone(originalMessages)
+          this.taskPlan?.restore(originalTaskPlan)
           this.tokenBaseline = null
         },
       } : undefined,
@@ -780,6 +881,9 @@ export class AgentSession {
       ok: result.ok,
       error: result.error,
       invalidatedToolUseIds: result.invalidatedToolUseIds,
+      ...(result.ok && scope === 'files-and-chat'
+        ? { taskPlan: rollbackTaskPlan ?? null }
+        : {}),
     })
   }
 

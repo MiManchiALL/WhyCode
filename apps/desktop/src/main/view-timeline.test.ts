@@ -92,4 +92,46 @@ describe('ViewTimeline', () => {
     assert.match(JSON.stringify(writer.batches), /实质结论/)
     assert.match(JSON.stringify(writer.batches), /checkpoint-created/)
   })
+
+  it('任务计划只在所属 step 稳定提交后写入历史', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    const event = { type: 'task-plan-updated' as const, plan: taskPlan() }
+
+    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'step-discarded' })
+    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'step-committed' })
+    await Promise.resolve()
+
+    assert.equal(writer.batches.length, 1)
+    assert.match(JSON.stringify(writer.batches), /完成长任务/)
+  })
 })
+
+function taskPlan() {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    goal: '完成长任务',
+    status: 'active' as const,
+    revision: 1,
+    items: [
+      {
+        id: 'T1',
+        kind: 'work' as const,
+        title: '实现',
+        acceptance: '代码完成',
+        status: 'in_progress' as const,
+        evidence: [],
+      },
+      {
+        id: 'T2',
+        kind: 'verification' as const,
+        title: '验证',
+        acceptance: '测试通过',
+        status: 'pending' as const,
+        evidence: [],
+      },
+    ],
+  }
+}

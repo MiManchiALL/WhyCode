@@ -7,6 +7,8 @@
  * - 与 docs/02-技术栈与架构.md §6 保持同步，改这里必须改文档。
  */
 
+import type { TaskPlan } from './tasks/types.ts'
+
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
   inputTokens: number
@@ -77,6 +79,8 @@ export type CoreEvent =
       error?: string
       /** 本次逆向恢复会同时使这些较新的回滚点失效。 */
       invalidatedToolUseIds?: string[]
+      /** 文件+对话回滚后的活动任务计划；省略表示本次未改变任务状态。 */
+      taskPlan?: TaskPlan | null
     }
   /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
@@ -121,10 +125,14 @@ export type CoreEvent =
       scores?: { Main: number; B: number; C: number }
     }
   | { type: 'execution-started'; taskId: string }
+  // --- Main 长任务控制 ---
+  | { type: 'task-plan-updated'; plan: TaskPlan }
+  /** 共识事务取消/异常时，把任务卡恢复到协商开始前。 */
+  | { type: 'task-plan-restored'; plan: TaskPlan | null }
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
   | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }
 
-export type StopReason = 'completed' | 'aborted' | 'max-turns' | 'error'
+export type StopReason = 'completed' | 'paused' | 'aborted' | 'max-turns' | 'error'
 
 /** 宿主 → core 的命令 */
 export type CoreCommand =
@@ -150,7 +158,7 @@ export type CoreCommand =
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 手动触发上下文压缩（仅空闲时） */
   | { type: 'compact' }
-  /** 开关多 Agent 协商（需 Main/B/C 三者 key 齐备 + 已选项目目录） */
+  /** 开关多 Agent 协商（需 Main/B/C 三者 key 齐备；纯聊天也可使用） */
   | { type: 'set-consensus'; enabled: boolean }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */

@@ -98,6 +98,7 @@ function SessionRow({
 function statusLabel(status: SessionMetadata['status']): string {
   if (status === 'interrupted') return '上次意外中断'
   if (status === 'error') return '上次出错'
+  if (status === 'paused') return '已安全暂停，可继续'
   if (status === 'max-turns') return '达到循环上限，可继续'
   if (status === 'running') return '运行中'
   return '可恢复'

@@ -20,6 +20,7 @@ import {
 } from './consensus-blocks.tsx'
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
+import { TaskPlanCard } from './task-plan-card.tsx'
 
 interface Approval {
   requestId: string
@@ -313,6 +314,8 @@ export function App() {
           onDelete={deleteSession}
         />
       )}
+
+      {view.taskPlan && <TaskPlanCard key={view.taskPlan.id} plan={view.taskPlan} />}
 
       <main ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto px-6 py-4">
         {blocks.length === 0 && (
