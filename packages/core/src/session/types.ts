@@ -65,7 +65,7 @@ const consensusTaskStartSchema = chainedEntrySchema.extend({
 const consensusTaskEndSchema = chainedEntrySchema.extend({
   type: z.literal('consensus-task-end'),
   taskId: z.string().min(1),
-  outcome: z.enum(['completed', 'aborted', 'error']),
+  outcome: z.enum(['completed', 'max-turns', 'aborted', 'error']),
   state: consensusPersistedStateSchema,
   rollbackMessages: messagesSchema.nullable(),
 })
@@ -105,7 +105,7 @@ export const sessionMetadataSchema = z.object({
   lastUserText: z.string(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
-  status: z.enum(['idle', 'running', 'interrupted', 'error']),
+  status: z.enum(['idle', 'running', 'max-turns', 'interrupted', 'error']),
 })
 
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>

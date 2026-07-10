@@ -2,13 +2,16 @@ import type { CandidateContent } from './types.ts'
 
 /** 协商各轮次的输入包模板（Orchestrator 组装上下文的唯一文案来源） */
 
-export function buildM1Prompt(userText: string): string {
+export function buildM1Prompt(userText: string, forceFullConsensus = false): string {
   return [
     '[多 Agent 协商任务]',
     '用户请求：',
     userText,
     '',
     '请先做必要分析（当前为讨论阶段，不可修改项目）。项目相关任务应按需查看真实代码；通用问题直接围绕问题本身推理，不要强行关联项目。然后调用 SubmitProtocolOutput 提交候选 M1 并选定 protocol_mode：',
+    ...(forceFullConsensus
+      ? ['控制面已根据用户的明确要求或任务风险锁定 full_consensus；protocol_mode 必须提交 full_consensus，不得降级。']
+      : []),
     '- main_only：简单任务（直接问答、小范围修改、低风险机械操作）——提交后你将恢复正常权限直接处理',
     '- quick_review：中等任务（需要比较取舍、快速复核或小范围方案选择）——B/C 快速评审你的 M1，之后你综合意见处理',
     '- full_consensus：高风险或用户明确要求充分讨论的任务——三 Agent 完整协商投票',

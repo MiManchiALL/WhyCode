@@ -1,10 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CoreCommand, CoreEvent, SessionMetadata } from '@whycode/core'
+import type { CoreCommand, CoreEvent } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
   ResumeSessionResult,
   SessionActionResult,
+  SessionListItem,
 } from '../shared/session.ts'
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
@@ -17,7 +18,7 @@ const api = {
   pickProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickProjectDir),
   consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
     ipcRenderer.invoke(IPC.consensusStatus),
-  listSessions: (): Promise<SessionMetadata[]> => ipcRenderer.invoke(IPC.listSessions),
+  listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
   resumeSession: (sessionId: string): Promise<ResumeSessionResult> =>
     ipcRenderer.invoke(IPC.resumeSession, sessionId),
   newSession: (): Promise<SessionActionResult> => ipcRenderer.invoke(IPC.newSession),

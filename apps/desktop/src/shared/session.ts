@@ -1,5 +1,7 @@
 import type { SessionMetadata } from '@whycode/core'
 
+export type SessionListItem = SessionMetadata & { isCurrent: boolean }
+
 export type ResumeSessionResult =
   | {
       ok: true

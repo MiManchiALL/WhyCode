@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { buildM1Prompt, buildMainOnlyExecutionPrompt } from '../consensus/prompts.ts'
+import { requiresFullConsensus } from '../consensus/orchestrator.ts'
 import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
@@ -32,6 +33,19 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /直接问答/)
     assert.match(prompt, /summary 概括核心结论/)
     assert.match(prompt, /禁止用“用户要求三个 Agent”/)
+  })
+
+  it('显式三 Agent 请求在 M1 前由控制面锁定完整共识', () => {
+    for (const text of [
+      '进行三agent协商，详细看看项目',
+      '请让三个 Agent 一起分析',
+      '用 3 个模型讨论这个方案',
+      '请做三方评审',
+    ]) {
+      assert.equal(requiresFullConsensus(text), true, text)
+    }
+    assert.equal(requiresFullConsensus('你一个人简单看看项目'), false)
+    assert.match(buildM1Prompt('进行三agent协商', true), /已.*锁定 full_consensus/)
   })
 
   it('main_only 正式回合必须重新交付完整答案', () => {

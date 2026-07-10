@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai'
+import { keepsConsensusProgress } from '../consensus/types.ts'
 import { sessionEntrySchema, type LoadedSession, type SessionEntry } from './types.ts'
 
 export class SessionCorruptError extends Error {}
@@ -98,7 +99,7 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
       }
     }
     if (entry.type === 'consensus-task-end') {
-      const shouldRollback = entry.outcome !== 'completed'
+      const shouldRollback = !keepsConsensusProgress(entry.outcome)
       if (shouldRollback !== (entry.rollbackMessages !== null)) {
         throw new SessionCorruptError('共识任务终点的回滚语义无效')
       }
@@ -197,13 +198,20 @@ function deriveStatus(
   chain: SessionEntry[],
   interruptedTurnId: string | null,
   interruptedConsensusTaskId: string | null,
-): 'idle' | 'interrupted' | 'error' {
+): 'idle' | 'max-turns' | 'interrupted' | 'error' {
   if (interruptedTurnId || interruptedConsensusTaskId) return 'interrupted'
   const lastEnd = [...chain]
     .reverse()
     .find((entry) => entry.type === 'turn-end' || entry.type === 'consensus-task-end')
-  if (lastEnd?.type === 'turn-end') return lastEnd.stopReason === 'error' ? 'error' : 'idle'
-  return lastEnd?.type === 'consensus-task-end' && lastEnd.outcome === 'error' ? 'error' : 'idle'
+  if (lastEnd?.type === 'turn-end') {
+    if (lastEnd.stopReason === 'error') return 'error'
+    return lastEnd.stopReason === 'max-turns' ? 'max-turns' : 'idle'
+  }
+  if (lastEnd?.type === 'consensus-task-end') {
+    if (lastEnd.outcome === 'error') return 'error'
+    return lastEnd.outcome === 'max-turns' ? 'max-turns' : 'idle'
+  }
+  return 'idle'
 }
 
 function userText(message: ModelMessage): string[] {

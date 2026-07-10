@@ -1,7 +1,8 @@
 import type { SessionMetadata } from '@whycode/core'
+import type { SessionListItem } from '../../shared/session.ts'
 
 interface SessionPanelProps {
-  sessions: SessionMetadata[]
+  sessions: SessionListItem[]
   busy: boolean
   onClose: () => void
   onResume: (sessionId: string) => void
@@ -47,20 +48,39 @@ function SessionRow({
   onResume,
   onDelete,
 }: {
-  session: SessionMetadata
+  session: SessionListItem
   busy: boolean
   onResume: (sessionId: string) => void
   onDelete: (sessionId: string) => void
 }) {
   return (
-    <div className="rounded border border-neutral-200 p-3 hover:border-neutral-400">
-      <button className="w-full text-left" disabled={busy} onClick={() => onResume(session.sessionId)}>
-        <div className="truncate text-sm font-medium">{session.title || '未命名会话'}</div>
+    <div
+      className={
+        session.isCurrent
+          ? 'rounded border border-blue-500 bg-blue-50/60 p-3 ring-1 ring-blue-200'
+          : 'rounded border border-neutral-200 p-3 hover:border-neutral-400'
+      }
+    >
+      <button
+        className="w-full text-left"
+        disabled={busy || session.isCurrent}
+        onClick={() => onResume(session.sessionId)}
+      >
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1 truncate text-sm font-medium">
+            {session.title || '未命名会话'}
+          </div>
+          {session.isCurrent && (
+            <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-700">
+              当前
+            </span>
+          )}
+        </div>
         <div className="mt-1 truncate text-xs text-neutral-400">
           {session.projectDir ?? '纯聊天'}
         </div>
         <div className="mt-1 flex justify-between text-xs text-neutral-400">
-          <span>{statusLabel(session.status)}</span>
+          <span>{session.isCurrent ? '当前对话' : statusLabel(session.status)}</span>
           <time>{new Date(session.updatedAt).toLocaleString()}</time>
         </div>
       </button>
@@ -78,6 +98,7 @@ function SessionRow({
 function statusLabel(status: SessionMetadata['status']): string {
   if (status === 'interrupted') return '上次意外中断'
   if (status === 'error') return '上次出错'
+  if (status === 'max-turns') return '达到循环上限，可继续'
   if (status === 'running') return '运行中'
   return '可恢复'
 }

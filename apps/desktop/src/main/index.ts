@@ -20,6 +20,7 @@ import type {
   DeleteSessionResult,
   ResumeSessionResult,
   SessionActionResult,
+  SessionListItem,
 } from '../shared/session.ts'
 
 function createWindow(): BrowserWindow {
@@ -375,7 +376,13 @@ void app.whenReady().then(() => {
     reason: checkConsensusReady(),
     enabled: consensusEnabled,
   }))
-  ipcMain.handle(IPC.listSessions, () => sessions.list())
+  ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
+    const currentSessionId = sessions.currentSessionId
+    return (await sessions.list()).map((item) => ({
+      ...item,
+      isCurrent: item.sessionId === currentSessionId,
+    }))
+  })
   ipcMain.handle(IPC.newSession, () => startNewSession())
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))

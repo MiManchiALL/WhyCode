@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
-import type { SessionMetadata } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import type { AgentStatus, CoreEvent } from '@whycode/core/events'
+import type { SessionListItem } from '../../shared/session.ts'
 import {
   applyPeerEvent,
   CandidateCard,
@@ -60,7 +60,7 @@ export function App() {
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
-  const [sessions, setSessions] = useState<SessionMetadata[]>([])
+  const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [showSessions, setShowSessions] = useState(false)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)

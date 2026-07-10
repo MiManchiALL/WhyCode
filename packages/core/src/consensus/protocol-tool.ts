@@ -1,6 +1,12 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
-import type { ConsensusAgentId, ProtocolOutput, Vote, VoteValue } from './types.ts'
+import type {
+  ConsensusAgentId,
+  ProtocolMode,
+  ProtocolOutput,
+  Vote,
+  VoteValue,
+} from './types.ts'
 
 export const PROTOCOL_OUTPUT_TOOL_NAME = 'SubmitProtocolOutput'
 
@@ -22,6 +28,8 @@ export interface ProtocolToolSpec {
   existingCandidateIds: string[]
   /** 当前 task 首个 M1：必须携带 protocol_mode（协议 §1.1） */
   requireProtocolMode: boolean
+  /** 控制面已锁定模式时，schema 直接收窄，避免模型提交与实际流程不一致。 */
+  forcedProtocolMode?: ProtocolMode
 }
 
 /**
@@ -56,9 +64,10 @@ export function createProtocolOutputTool(
   const fullSchema = z.object({
     ...(spec.requireProtocolMode
       ? {
-          protocol_mode: z
-            .enum(PROTOCOL_MODES)
-            .describe('本任务协议模式：简单任务 main_only / 中等 quick_review / 高风险 full_consensus'),
+          protocol_mode: (spec.forcedProtocolMode
+            ? z.literal(spec.forcedProtocolMode)
+            : z.enum(PROTOCOL_MODES)
+          ).describe('本任务协议模式：简单任务 main_only / 中等 quick_review / 高风险 full_consensus'),
         }
       : {}),
     candidate: z.object({

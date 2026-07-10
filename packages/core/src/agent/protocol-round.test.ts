@@ -47,6 +47,22 @@ describe('协议回合终止语义', () => {
     assert.equal(result.ok, true)
     assert.equal(model.doStreamCalls.length, 2)
   })
+
+  it('控制面锁定 full_consensus 后拒绝模型降级', async () => {
+    const model = mockModel([
+      validSubmission('main_only'),
+      validSubmission('full_consensus'),
+    ])
+    const result = await runProtocolRound(
+      createSession(model).session,
+      '进行三agent协商',
+      { ...m1Spec, forcedProtocolMode: 'full_consensus' },
+    )
+
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.output.protocolMode, 'full_consensus')
+    assert.equal(model.doStreamCalls.length, 2)
+  })
 })
 
 const m1Spec = {
