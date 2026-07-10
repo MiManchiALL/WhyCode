@@ -88,3 +88,15 @@ export type {
   SessionMetadata,
   SessionRecorder,
 } from './session/types.ts'
+export {
+  activeTaskPlanSchema,
+  taskItemSchema,
+  taskItemStatusSchema,
+  taskPlanSchema,
+} from './tasks/types.ts'
+export type {
+  ActiveTaskPlan,
+  TaskItem,
+  TaskItemStatus,
+  TaskPlan,
+} from './tasks/types.ts'

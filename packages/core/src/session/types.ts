@@ -6,9 +6,14 @@ import {
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
 import type { StopReason } from '../events.ts'
+import {
+  activeTaskPlanSchema,
+  type ActiveTaskPlan,
+  type TaskPlanStepUpdate,
+} from '../tasks/types.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 
-export const SESSION_SCHEMA_VERSION = 1
+export const SESSION_SCHEMA_VERSION = 2
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -59,21 +64,29 @@ const messagesEntrySchema = chainedEntrySchema.extend({
 const turnEndSchema = chainedEntrySchema.extend({
   type: z.literal('turn-end'),
   turnId: z.string().min(1),
-  stopReason: z.enum(['completed', 'aborted', 'max-turns', 'error']),
+  stopReason: z.enum(['completed', 'paused', 'aborted', 'max-turns', 'error']),
+})
+
+const taskStateSchema = chainedEntrySchema.extend({
+  type: z.literal('task-state'),
+  activePlan: activeTaskPlanSchema.nullable(),
 })
 
 const consensusTaskStartSchema = chainedEntrySchema.extend({
   type: z.literal('consensus-task-start'),
   taskId: z.string().min(1),
   state: consensusPersistedStateSchema,
+  baseTaskPlan: activeTaskPlanSchema.nullable(),
 })
 
 const consensusTaskEndSchema = chainedEntrySchema.extend({
   type: z.literal('consensus-task-end'),
   taskId: z.string().min(1),
-  outcome: z.enum(['completed', 'max-turns', 'aborted', 'error']),
+  outcome: z.enum(['completed', 'paused', 'max-turns', 'aborted', 'error']),
   state: consensusPersistedStateSchema,
   rollbackMessages: messagesSchema.nullable(),
+  /** 本条记录生效后的活动计划；取消/异常时等于任务起点状态。 */
+  taskPlan: activeTaskPlanSchema.nullable(),
 })
 
 const snapshotSchema = chainedEntrySchema.extend({
@@ -83,14 +96,17 @@ const snapshotSchema = chainedEntrySchema.extend({
   activeTurnId: z.string().min(1).nullable(),
   activeConsensusTaskId: z.string().min(1).nullable(),
   activeConsensusBaseMessages: messagesSchema.nullable(),
+  activeConsensusBaseTaskPlan: activeTaskPlanSchema.nullable(),
   consensusState: consensusPersistedStateSchema.nullable(),
+  taskPlan: activeTaskPlanSchema.nullable(),
   modelId: z.string().min(1),
   messages: messagesSchema,
   /** 回滚换根后仍保留新根内较早 turn 的边界；压缩快照写空数组。 */
   turnStartMessages: z.array(z.object({
     turnId: z.string().min(1),
     messages: messagesSchema,
-  })).optional(),
+    taskPlan: activeTaskPlanSchema.nullable(),
+  })),
 })
 
 export const sessionEntrySchema = z.discriminatedUnion('type', [
@@ -100,6 +116,7 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   viewEventsEntrySchema,
   turnStartSchema,
   messagesEntrySchema,
+  taskStateSchema,
   turnEndSchema,
   consensusTaskStartSchema,
   consensusTaskEndSchema,
@@ -117,7 +134,7 @@ export const sessionMetadataSchema = z.object({
   lastUserText: z.string(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
-  status: z.enum(['idle', 'running', 'max-turns', 'interrupted', 'error']),
+  status: z.enum(['idle', 'running', 'paused', 'max-turns', 'interrupted', 'error']),
 })
 
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>
@@ -132,12 +149,15 @@ export interface LoadedSession {
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
   turnStartMessages: Map<string, ModelMessage[]>
+  turnStartTaskPlans: Map<string, ActiveTaskPlan | null>
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
+  interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null
   consensusState: ConsensusPersistedState | null
+  activeTaskPlan: ActiveTaskPlan | null
 }
 
 export interface SessionRecorder {
@@ -148,17 +168,25 @@ export interface SessionRecorder {
   readonly interruptedTurnId: string | null
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
+  readonly initialTaskPlan: ActiveTaskPlan | null
   /** 仅返回仍位于当前活动父链上的 turn 起点；压缩/旧回滚之前的 turn 返回 null。 */
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
+  /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
+  taskPlanBeforeTurn(turnId: string): ActiveTaskPlan | null | undefined
   recordUserInput(text: string): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void>
-  recordStep(turnId: string, messages: ModelMessage[]): Promise<void>
+  recordStep(
+    turnId: string,
+    messages: ModelMessage[],
+    taskPlan?: TaskPlanStepUpdate,
+  ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>
   recordSnapshot(
     reason: 'compact' | 'rollback',
     messages: ModelMessage[],
     activeTurnId?: string,
+    taskPlan?: ActiveTaskPlan | null,
   ): Promise<void>
   recordConsensusTaskStart(taskId: string, state: ConsensusPersistedState): Promise<void>
   recordConsensusTaskEnd(

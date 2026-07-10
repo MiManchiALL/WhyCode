@@ -96,8 +96,57 @@ describe('会话界面时间线重建', () => {
     assert.equal(tool?.kind === 'tool' ? tool.call.hasCheckpoint : null, false)
     assert.match(JSON.stringify(state.blocks), /已回滚检查点覆盖的文件/)
   })
+
+  it('恢复结构化任务计划，并在文件和对话回滚时同步恢复计划状态', () => {
+    const active = taskPlan(1)
+    const advanced = taskPlan(2)
+    const state = createConversationState([
+      core({ type: 'task-plan-updated', plan: active }),
+      { type: 'user-message', text: '推进计划', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-plan' }),
+      core({ type: 'task-plan-updated', plan: advanced }),
+      core({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-plan',
+        turnId: 'turn-plan',
+        scope: 'files-and-chat',
+        ok: true,
+        taskPlan: active,
+      }),
+    ])
+
+    assert.deepEqual(state.taskPlan, active)
+    assert.doesNotMatch(JSON.stringify(state.blocks), /推进计划/)
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {
   return { type: 'core-event', event }
+}
+
+function taskPlan(revision: number) {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    goal: '完成长任务',
+    status: 'active' as const,
+    revision,
+    items: [
+      {
+        id: 'T1',
+        kind: 'work' as const,
+        title: '实现',
+        acceptance: '代码完成',
+        status: revision > 1 ? 'completed' as const : 'in_progress' as const,
+        evidence: revision > 1 ? ['完成'] : [],
+      },
+      {
+        id: 'T2',
+        kind: 'verification' as const,
+        title: '验证',
+        acceptance: '测试通过',
+        status: revision > 1 ? 'in_progress' as const : 'pending' as const,
+        evidence: [],
+      },
+    ],
+  }
 }

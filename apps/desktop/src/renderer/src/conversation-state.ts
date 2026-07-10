@@ -1,4 +1,4 @@
-import type { ViewEvent } from '@whycode/core'
+import type { TaskPlan, ViewEvent } from '@whycode/core'
 import type { CoreEvent } from '@whycode/core/events'
 
 export interface ToolCall {
@@ -43,6 +43,8 @@ export interface ConversationState {
   nextId: number
   pendingTurnStart: number | null
   turnStartBlocks: Map<string, number>
+  /** 当前/最近一个结构化计划；独立于聊天块，避免频繁进度更新刷屏。 */
+  taskPlan: TaskPlan | null
 }
 
 const VOTE_LABELS: Record<string, string> = {
@@ -62,6 +64,7 @@ export function createConversationState(events: readonly ViewEvent[] = []): Conv
     nextId: 0,
     pendingTurnStart: null,
     turnStartBlocks: new Map(),
+    taskPlan: null,
   }
   for (const event of events) state = applyViewEvent(state, event)
   return state
@@ -166,6 +169,10 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       )
     case 'execution-started':
       return appendNotice(state, '▶ Main 进入执行阶段')
+    case 'task-plan-updated':
+      return { ...state, taskPlan: structuredClone(event.plan) }
+    case 'task-plan-restored':
+      return { ...state, taskPlan: structuredClone(event.plan) }
     default:
       return state
   }
@@ -313,8 +320,11 @@ function applyCheckpointRestored(
     }
     if (idx >= 0) blocks = blocks.slice(0, idx)
   }
+  const taskPlan = event.scope === 'files-and-chat' && event.taskPlan !== undefined
+    ? structuredClone(event.taskPlan)
+    : state.taskPlan
   return appendNotice(
-    { ...state, blocks },
+    { ...state, blocks, taskPlan },
     event.scope === 'files-and-chat'
       ? '已回滚：该轮对话与文件改动均已撤销'
       : '已回滚检查点覆盖的文件（对话保留）',

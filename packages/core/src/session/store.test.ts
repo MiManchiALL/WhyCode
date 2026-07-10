@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
 import type { ConsensusPersistedState } from '../consensus/types.ts'
+import { activeTaskPlanSchema, type ActiveTaskPlan } from '../tasks/types.ts'
 import { SessionCorruptError } from './chain.ts'
 import { SessionStore } from './store.ts'
 
@@ -201,6 +202,67 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.status, 'max-turns')
   })
 
+  it('任务计划随稳定 step 持久化，并记录每个 turn 的计划起点', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const plan = taskPlan(1)
+    await journal.recordTurnStart('turn-1', [message('user', '开始长任务')])
+    await journal.recordStep('turn-1', [message('assistant', '已建立计划')], plan)
+    await journal.recordTurnEnd('turn-1', 'paused')
+    await journal.recordTurnStart('turn-2', [message('user', '继续')])
+    await journal.recordTurnEnd('turn-2', 'completed')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialTaskPlan, plan)
+    assert.equal(reopened.taskPlanBeforeTurn('turn-1'), null)
+    assert.deepEqual(reopened.taskPlanBeforeTurn('turn-2'), plan)
+    assert.equal(reopened.metadataSnapshot.status, 'idle')
+  })
+
+  it('压缩保留活动计划，对话回滚恢复 turn 起点计划', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const plan = taskPlan(1)
+    await journal.recordTurnStart('turn-1', [message('user', '开始')])
+    await journal.recordStep('turn-1', [message('assistant', '计划中')], plan)
+    await journal.recordTurnEnd('turn-1', 'paused')
+    await journal.recordSnapshot('compact', [message('user', '摘要')])
+
+    let reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialTaskPlan, plan)
+
+    await reopened.recordTurnStart('turn-2', [message('user', '新一轮')])
+    const changed = taskPlan(2)
+    await reopened.recordStep('turn-2', [message('assistant', '推进')], changed)
+    await reopened.recordTurnEnd('turn-2', 'completed')
+    const beforeTurn = reopened.taskPlanBeforeTurn('turn-2')
+    assert.deepEqual(beforeTurn, plan)
+    await reopened.recordSnapshot('rollback', [message('user', '摘要')], undefined, beforeTurn)
+
+    reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialTaskPlan, plan)
+  })
+
+  it('半截共识恢复和取消都会回到任务起点的计划状态', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const base = taskPlan(1)
+    await journal.recordTurnStart('base', [message('user', '已有任务')])
+    await journal.recordStep('base', [message('assistant', '已有计划')], base)
+    await journal.recordTurnEnd('base', 'paused')
+    await journal.recordConsensusTaskStart('task-1', consensusState(1))
+    await journal.recordTurnStart('execution', [message('user', '执行新方案')])
+    await journal.recordStep('execution', [message('assistant', '推进中')], taskPlan(2))
+
+    const interrupted = await store.open(journal.sessionId)
+    assert.deepEqual(interrupted.initialTaskPlan, base)
+
+    await journal.recordTurnEnd('execution', 'aborted')
+    await journal.recordConsensusTaskEnd('task-1', 'aborted', consensusState(1))
+    const cancelled = await store.open(journal.sessionId)
+    assert.deepEqual(cancelled.initialTaskPlan, base)
+  })
+
   it('快照保留活动共识边界和最后稳定状态', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
@@ -293,4 +355,31 @@ function consensusState(taskCounter: number, summary?: string): ConsensusPersist
     memories: { B: [], C: [] },
     taskLog: summary ? [{ taskId: `task-${taskCounter}`, userText: '请求', m1Summary: summary }] : [],
   }
+}
+
+function taskPlan(revision: number): ActiveTaskPlan {
+  return activeTaskPlanSchema.parse({
+    id: '11111111-1111-4111-8111-111111111111',
+    goal: '完成长任务',
+    status: 'active',
+    revision,
+    items: [
+      {
+        id: 'T1',
+        kind: 'work',
+        title: '实现',
+        acceptance: '实现完成',
+        status: revision > 1 ? 'completed' : 'in_progress',
+        evidence: revision > 1 ? ['代码完成'] : [],
+      },
+      {
+        id: 'T2',
+        kind: 'verification',
+        title: '验证',
+        acceptance: '测试通过',
+        status: revision > 1 ? 'in_progress' : 'pending',
+        evidence: [],
+      },
+    ],
+  })
 }

@@ -125,8 +125,10 @@ export class ConsensusCoordinator {
     const taskId = `task-${++this.taskCounter}`
     const startState = this.snapshotState()
     const startMessages = mainSession.captureMessageSnapshot()
+    const startTaskPlan = mainSession.captureTaskPlanSnapshot()
     let outcome: ConsensusTaskOutcome = 'error'
     let taskBoundaryStarted = false
+    let taskPlanRolledBack = false
     try {
       taskBoundaryStarted = await this.persistTaskStart(taskId, startState)
       if (!taskBoundaryStarted) return
@@ -236,10 +238,13 @@ export class ConsensusCoordinator {
       if (!keepsConsensusProgress(outcome)) {
         this.restoreState(startState)
         mainSession.restoreMessageSnapshot(startMessages)
+        mainSession.restoreTaskPlanSnapshot(startTaskPlan)
+        taskPlanRolledBack = true
       }
       if (taskBoundaryStarted) {
         await this.persistTaskEnd(taskId, outcome, this.snapshotState())
       }
+      if (taskPlanRolledBack) emit({ type: 'task-plan-restored', plan: startTaskPlan })
       this.restoreExecution()
       this.peers = []
       this.peerPhase = false
@@ -376,6 +381,7 @@ export class ConsensusCoordinator {
   private executionOutcome(stopReason: StopReason | void): ConsensusTaskOutcome {
     if (this.aborted || stopReason === 'aborted') return 'aborted'
     if (stopReason === 'max-turns') return 'max-turns'
+    if (stopReason === 'paused') return 'paused'
     return stopReason === 'completed' ? 'completed' : 'error'
   }
 

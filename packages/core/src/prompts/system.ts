@@ -3,8 +3,14 @@
  * 静态段禁止时间戳/随机数（缓存卫生）；动态信息走 <system-reminder> 注入消息流，不进这里。
  */
 
+import {
+  CLOSE_TASK_PLAN_TOOL_NAME,
+  CREATE_TASK_PLAN_TOOL_NAME,
+  UPDATE_TASK_ITEM_TOOL_NAME,
+} from '../tasks/tools.ts'
+
 export interface PromptContext {
-  /** 项目根目录；null = 纯聊天模式（无工具，仅对话） */
+  /** 项目根目录；null = 纯聊天模式（无文件与命令工具） */
   projectDir: string | null
   osPlatform: NodeJS.Platform
   /** 协商讨论阶段（M3）：当前 Agent 身份与临时工作区 */
@@ -53,6 +59,16 @@ function safetySection(): string {
   ].join('\n')
 }
 
+function taskPlanningSection(): string {
+  return [
+    '# 长任务控制',
+    `- 需要至少三个实质步骤、可能跨上下文压缩或需要多轮验证的任务，开始执行前调用 ${CREATE_TASK_PLAN_TOOL_NAME}；简单问答和一步操作不要创建计划。`,
+    `- 始终围绕唯一 in_progress 项推进；完成时调用 ${UPDATE_TASK_ITEM_TOOL_NAME} 并提供文件、测试或结果证据，不能用主观声称代替验证。`,
+    `- 所有任务项完成并通过最终 verification 后调用 ${CLOSE_TASK_PLAN_TOOL_NAME}，再向用户交付最终结果。`,
+    '- 遇到外部阻塞时明确标记 blocked 并说明原因；用户改变目标时可明确放弃旧计划后建立新计划。',
+  ].join('\n')
+}
+
 function discussionSection(
   ctx: { agentId: string; scratchDir: string },
   hasProject: boolean,
@@ -86,6 +102,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     sections.push(chatOnlySection())
   }
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion, Boolean(ctx.projectDir)))
+  if (!ctx.discussion) sections.push(taskPlanningSection())
   sections.push(safetySection())
   return sections.join('\n\n')
 }

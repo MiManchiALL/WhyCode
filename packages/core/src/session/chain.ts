@@ -1,6 +1,12 @@
 import type { ModelMessage } from 'ai'
 import { keepsConsensusProgress } from '../consensus/types.ts'
-import { sessionEntrySchema, type LoadedSession, type SessionEntry } from './types.ts'
+import type { ActiveTaskPlan } from '../tasks/types.ts'
+import {
+  SESSION_SCHEMA_VERSION,
+  sessionEntrySchema,
+  type LoadedSession,
+  type SessionEntry,
+} from './types.ts'
 import type { ViewEvent } from './view-events.ts'
 
 export class SessionCorruptError extends Error {}
@@ -46,7 +52,10 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     ? (work.interruptedConsensusBaseMessages ?? [])
     : collectMessages(chain)
   const consensusState = collectConsensusState(chain)
-  const turnStartMessages = collectTurnStartMessages(chain)
+  const turnStarts = collectTurnStarts(chain)
+  const activeTaskPlan = work.interruptedConsensusTaskId
+    ? work.interruptedConsensusBaseTaskPlan
+    : collectTaskPlan(chain)
   const viewEvents = collectViewEvents(entries)
   const modelId = collectModelId(chain, start.modelId)
   const { interruptedTurnId, interruptedConsensusTaskId, interruptedConsensusBaseMessages } = work
@@ -59,14 +68,17 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     entries,
     messages,
     viewEvents,
-    turnStartMessages,
+    turnStartMessages: turnStarts.messages,
+    turnStartTaskPlans: turnStarts.taskPlans,
     leafUuid: last.uuid,
     interruptedTurnId,
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
+    interruptedConsensusBaseTaskPlan: work.interruptedConsensusBaseTaskPlan,
     consensusState,
+    activeTaskPlan,
     metadata: {
-      schemaVersion: 1,
+      schemaVersion: SESSION_SCHEMA_VERSION,
       sessionId: start.sessionId,
       projectDir: start.projectDir,
       modelId,
@@ -79,24 +91,37 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   }
 }
 
-function collectTurnStartMessages(chain: SessionEntry[]): Map<string, ModelMessage[]> {
+function collectTurnStarts(chain: SessionEntry[]): {
+  messages: Map<string, ModelMessage[]>
+  taskPlans: Map<string, ActiveTaskPlan | null>
+} {
   const starts = new Map<string, ModelMessage[]>()
+  const taskPlans = new Map<string, ActiveTaskPlan | null>()
   let messages: ModelMessage[] = []
+  let taskPlan: ActiveTaskPlan | null = null
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
       starts.clear()
+      taskPlans.clear()
       messages = [...entry.messages]
-      for (const start of entry.turnStartMessages ?? []) {
+      taskPlan = entry.taskPlan
+      for (const start of entry.turnStartMessages) {
         starts.set(start.turnId, structuredClone(start.messages))
+        taskPlans.set(start.turnId, structuredClone(start.taskPlan))
       }
     }
-    if (entry.type === 'turn-start') starts.set(entry.turnId, structuredClone(messages))
+    if (entry.type === 'turn-start') {
+      starts.set(entry.turnId, structuredClone(messages))
+      taskPlans.set(entry.turnId, structuredClone(taskPlan))
+    }
     if (entry.type === 'messages') messages.push(...entry.messages)
+    if (entry.type === 'task-state') taskPlan = entry.activePlan
     if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
       messages = [...entry.rollbackMessages]
     }
+    if (entry.type === 'consensus-task-end') taskPlan = entry.taskPlan
   }
-  return starts
+  return { messages: starts, taskPlans }
 }
 
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
@@ -182,6 +207,16 @@ function collectConsensusState(chain: SessionEntry[]): LoadedSession['consensusS
   return state
 }
 
+function collectTaskPlan(chain: SessionEntry[]): ActiveTaskPlan | null {
+  let plan: ActiveTaskPlan | null = null
+  for (const entry of chain) {
+    if (entry.type === 'snapshot') plan = entry.taskPlan
+    if (entry.type === 'task-state') plan = entry.activePlan
+    if (entry.type === 'consensus-task-end') plan = entry.taskPlan
+  }
+  return plan
+}
+
 function collectModelId(chain: SessionEntry[], initialModelId: string): string {
   let modelId = initialModelId
   for (const entry of chain) {
@@ -194,10 +229,12 @@ function findInterruptedWork(chain: SessionEntry[]): {
   interruptedTurnId: string | null
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
+  interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null
 } {
   let interruptedTurnId: string | null = null
   let interruptedConsensusTaskId: string | null = null
   let interruptedConsensusBaseMessages: ModelMessage[] | null = null
+  let interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null = null
   let visibleMessages: ModelMessage[] = []
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
@@ -205,6 +242,7 @@ function findInterruptedWork(chain: SessionEntry[]): {
       interruptedTurnId = entry.activeTurnId
       interruptedConsensusTaskId = entry.activeConsensusTaskId
       interruptedConsensusBaseMessages = entry.activeConsensusBaseMessages
+      interruptedConsensusBaseTaskPlan = entry.activeConsensusBaseTaskPlan
     }
     if (entry.type === 'messages') visibleMessages.push(...entry.messages)
     if (entry.type === 'turn-start') interruptedTurnId = entry.turnId
@@ -214,31 +252,40 @@ function findInterruptedWork(chain: SessionEntry[]): {
     if (entry.type === 'consensus-task-start') {
       interruptedConsensusTaskId = entry.taskId
       interruptedConsensusBaseMessages = [...visibleMessages]
+      interruptedConsensusBaseTaskPlan = entry.baseTaskPlan
     }
     if (entry.type === 'consensus-task-end' && entry.taskId === interruptedConsensusTaskId) {
       if (entry.rollbackMessages) visibleMessages = [...entry.rollbackMessages]
       interruptedConsensusTaskId = null
       interruptedConsensusBaseMessages = null
+      interruptedConsensusBaseTaskPlan = null
     }
   }
-  return { interruptedTurnId, interruptedConsensusTaskId, interruptedConsensusBaseMessages }
+  return {
+    interruptedTurnId,
+    interruptedConsensusTaskId,
+    interruptedConsensusBaseMessages,
+    interruptedConsensusBaseTaskPlan,
+  }
 }
 
 function deriveStatus(
   chain: SessionEntry[],
   interruptedTurnId: string | null,
   interruptedConsensusTaskId: string | null,
-): 'idle' | 'max-turns' | 'interrupted' | 'error' {
+): 'idle' | 'paused' | 'max-turns' | 'interrupted' | 'error' {
   if (interruptedTurnId || interruptedConsensusTaskId) return 'interrupted'
   const lastEnd = [...chain]
     .reverse()
     .find((entry) => entry.type === 'turn-end' || entry.type === 'consensus-task-end')
   if (lastEnd?.type === 'turn-end') {
     if (lastEnd.stopReason === 'error') return 'error'
+    if (lastEnd.stopReason === 'paused') return 'paused'
     return lastEnd.stopReason === 'max-turns' ? 'max-turns' : 'idle'
   }
   if (lastEnd?.type === 'consensus-task-end') {
     if (lastEnd.outcome === 'error') return 'error'
+    if (lastEnd.outcome === 'paused') return 'paused'
     return lastEnd.outcome === 'max-turns' ? 'max-turns' : 'idle'
   }
   return 'idle'
