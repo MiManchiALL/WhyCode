@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai'
 import { keepsConsensusProgress } from '../consensus/types.ts'
 import { sessionEntrySchema, type LoadedSession, type SessionEntry } from './types.ts'
+import type { ViewEvent } from './view-events.ts'
 
 export class SessionCorruptError extends Error {}
 
@@ -45,6 +46,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     ? (work.interruptedConsensusBaseMessages ?? [])
     : collectMessages(chain)
   const consensusState = collectConsensusState(chain)
+  const viewEvents = collectViewEvents(entries)
   const modelId = collectModelId(chain, start.modelId)
   const { interruptedTurnId, interruptedConsensusTaskId, interruptedConsensusBaseMessages } = work
   const last = chain.at(-1)!
@@ -55,6 +57,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   return {
     entries,
     messages,
+    viewEvents,
     leafUuid: last.uuid,
     interruptedTurnId,
     interruptedConsensusTaskId,
@@ -72,6 +75,11 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       status,
     },
   }
+}
+
+/** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
+function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
+  return entries.flatMap((entry) => (entry.type === 'view-events' ? entry.events : []))
 }
 
 function findLastContentIndex(lines: string[]): number {

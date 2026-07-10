@@ -1,66 +1,13 @@
 import { Streamdown } from 'streamdown'
-import type { CoreEvent } from '@whycode/core/events'
+import {
+  voteLabel,
+  type CandidateBlockData,
+  type PeerBlockData,
+} from './conversation-state.ts'
 
 /**
  * 协商 UI（M3-b MVP）：B/C 的讨论过程折叠在卡片里，主线只显示关键节点（候选/投票/决策）。
  */
-export interface PeerBlockData {
-  agentId: 'B' | 'C'
-  status: 'working' | 'done'
-  text: string
-  tools: { id: string; name: string; summary: string; isError: boolean }[]
-  vote?: { vote: string; reason: string; suggestedChange?: string }
-}
-
-export type CandidateBlockData = Omit<
-  Extract<CoreEvent, { type: 'candidate-submitted' }>,
-  'type'
->
-
-export function createPeerBlock(agentId: 'B' | 'C'): PeerBlockData {
-  return { agentId, status: 'working', text: '', tools: [] }
-}
-
-/** 把 B/C 的内层事件归集进卡片数据（thinking 流不展示，保持卡片轻量） */
-export function applyPeerEvent(data: PeerBlockData, event: CoreEvent): PeerBlockData {
-  switch (event.type) {
-    case 'text-delta':
-      return { ...data, text: data.text + event.text }
-    case 'tool-start':
-      return {
-        ...data,
-        tools: [
-          ...data.tools,
-          {
-            id: event.toolUseId,
-            name: event.toolName,
-            summary: peerSummarize(event.input),
-            isError: false,
-          },
-        ],
-      }
-    case 'tool-end':
-      return {
-        ...data,
-        tools: data.tools.map((t) =>
-          t.id === event.toolUseId ? { ...t, isError: event.isError } : t,
-        ),
-      }
-    default:
-      return data
-  }
-}
-
-const VOTE_LABELS: Record<string, string> = {
-  accept: '✅ 接受',
-  accept_with_minor_edits: '☑️ 接受（小修改）',
-  reject: '❌ 拒绝',
-}
-
-export function voteLabel(vote: string): string {
-  return VOTE_LABELS[vote] ?? vote
-}
-
 /** 正式候选的实质内容。默认展开，用户可自行收起长分析。 */
 export function CandidateCard({
   candidate,
@@ -169,14 +116,4 @@ export function PeerCard({
       )}
     </div>
   )
-}
-
-function peerSummarize(input: unknown): string {
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    if (typeof obj.path === 'string') return obj.path
-    if (typeof obj.pattern === 'string') return obj.pattern
-    if (typeof obj.command === 'string') return obj.command
-  }
-  return ''
 }

@@ -21,6 +21,8 @@ describe('协议回合终止语义', () => {
       true,
     )
     assert.equal(events.some((event) => event.type === 'thinking-end'), true)
+    assert.equal(events.filter((event) => event.type === 'step-committed').length, 1)
+    assert.equal(events.some((event) => event.type === 'step-discarded'), false)
     assert.equal(
       events.some(
         (event) => event.type === 'tool-start' && event.toolName === 'SubmitProtocolOutput',

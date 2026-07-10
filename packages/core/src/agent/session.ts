@@ -550,6 +550,7 @@ export class AgentSession {
       const response = await result.response
       this.messages.push(...response.messages)
       await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, response.messages))
+      emit({ type: 'step-committed' })
       if (stepTotalTokens > 0) {
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
@@ -558,6 +559,7 @@ export class AgentSession {
       }
       return { hadToolCalls, endedByTool: stepControl.endedByTool }
     } catch (error) {
+      emit({ type: 'step-discarded' })
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
         return { hadToolCalls: false, endedByTool: false }

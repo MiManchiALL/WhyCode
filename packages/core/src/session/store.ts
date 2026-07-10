@@ -9,6 +9,7 @@ import {
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
 import type { StopReason } from '../events.ts'
+import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import {
   getSessionPaths,
@@ -59,7 +60,7 @@ export class SessionStore {
       flush: true,
     })
     await writeMetadata(paths.metadata, metadata)
-    return new SessionJournal(paths, metadata, start.uuid, [], null, null, null, null)
+    return new SessionJournal(paths, metadata, start.uuid, [], [], null, null, null, null)
   }
 
   async open(sessionId: string): Promise<SessionJournal> {
@@ -75,6 +76,7 @@ export class SessionStore {
       metadata,
       loaded.leafUuid,
       loaded.messages,
+      loaded.viewEvents,
       loaded.interruptedTurnId,
       loaded.interruptedConsensusTaskId,
       loaded.interruptedConsensusBaseMessages,
@@ -135,6 +137,7 @@ export class SessionJournal implements SessionRecorder {
   private metadata: SessionMetadata
   private leafUuid: string
   private messages: ModelMessage[]
+  private viewEvents: ViewEvent[]
   private activeTurnId: string | null
   private activeConsensusTaskId: string | null
   private activeConsensusBaseMessages: ModelMessage[] | null
@@ -146,6 +149,7 @@ export class SessionJournal implements SessionRecorder {
     metadata: SessionMetadata,
     leafUuid: string,
     messages: ModelMessage[],
+    viewEvents: ViewEvent[],
     interruptedTurnId: string | null,
     interruptedConsensusTaskId: string | null,
     interruptedConsensusBaseMessages: ModelMessage[] | null,
@@ -156,6 +160,7 @@ export class SessionJournal implements SessionRecorder {
     this.sessionId = metadata.sessionId
     this.leafUuid = leafUuid
     this.messages = [...messages]
+    this.viewEvents = [...viewEvents]
     this.activeTurnId = interruptedTurnId
     this.activeConsensusTaskId = interruptedConsensusTaskId
     this.activeConsensusBaseMessages = interruptedConsensusBaseMessages
@@ -164,6 +169,10 @@ export class SessionJournal implements SessionRecorder {
 
   get initialMessages(): readonly ModelMessage[] {
     return this.messages
+  }
+
+  get initialViewEvents(): readonly ViewEvent[] {
+    return this.viewEvents
   }
 
   get interruptedTurnId(): string | null {
@@ -191,6 +200,16 @@ export class SessionJournal implements SessionRecorder {
       if (!this.metadata.title) this.metadata.title = clipped
       this.metadata.updatedAt = input.timestamp
       await writeMetadata(this.paths.metadata, this.metadata)
+    })
+  }
+
+  recordViewEvents(events: ViewEvent[]): Promise<void> {
+    if (events.length === 0) return Promise.resolve()
+    const parsed = events.map((event) => viewEventSchema.parse(event))
+    return this.enqueue(async () => {
+      const entry = this.entry({ type: 'view-events', events: parsed })
+      await this.appendEntries([entry])
+      this.viewEvents.push(...parsed)
     })
   }
 

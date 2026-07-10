@@ -92,6 +92,27 @@ describe('SessionStore', () => {
     ])
   })
 
+  it('模型压缩换根后仍完整保留用户可见时间线', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const visible = [
+      { type: 'user-message' as const, text: '旧问题', startsTurn: true },
+      { type: 'core-event' as const, event: { type: 'text-delta' as const, text: '旧回答' } },
+    ]
+    await journal.recordViewEvents(visible)
+    await journal.recordSnapshot('compact', [message('user', '模型摘要')])
+    await journal.recordViewEvents([
+      { type: 'user-message', text: '新问题', startsTurn: true },
+    ])
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialViewEvents, [
+      ...visible,
+      { type: 'user-message', text: '新问题', startsTurn: true },
+    ])
+    assert.deepEqual(reopened.initialMessages, [message('user', '模型摘要')])
+  })
+
   it('自动压缩快照保留正在运行的 turn 标记', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })

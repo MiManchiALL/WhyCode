@@ -73,6 +73,13 @@ export type {
 } from './consensus/types.ts'
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
+export {
+  pushCoalescedViewEvent,
+  toViewEvent,
+  viewEventSchema,
+  visibleCoreEventSchema,
+} from './session/view-events.ts'
+export type { ViewEvent, VisibleCoreEvent } from './session/view-events.ts'
 export type {
   LoadedSession,
   SessionCreateInput,

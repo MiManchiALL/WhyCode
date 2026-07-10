@@ -6,6 +6,7 @@ import {
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
 import type { StopReason } from '../events.ts'
+import { viewEventSchema, type ViewEvent } from './view-events.ts'
 
 export const SESSION_SCHEMA_VERSION = 1
 
@@ -42,6 +43,11 @@ const userInputSchema = chainedEntrySchema.extend({
 const modelChangeSchema = chainedEntrySchema.extend({
   type: z.literal('model-change'),
   modelId: z.string().min(1),
+})
+
+const viewEventsEntrySchema = chainedEntrySchema.extend({
+  type: z.literal('view-events'),
+  events: z.array(viewEventSchema).min(1),
 })
 
 const messagesEntrySchema = chainedEntrySchema.extend({
@@ -86,6 +92,7 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   sessionStartSchema,
   userInputSchema,
   modelChangeSchema,
+  viewEventsEntrySchema,
   turnStartSchema,
   messagesEntrySchema,
   turnEndSchema,
@@ -118,6 +125,7 @@ export interface SessionCreateInput {
 export interface LoadedSession {
   metadata: SessionMetadata
   messages: ModelMessage[]
+  viewEvents: ViewEvent[]
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
@@ -129,10 +137,12 @@ export interface LoadedSession {
 export interface SessionRecorder {
   readonly sessionId: string
   readonly initialMessages: readonly ModelMessage[]
+  readonly initialViewEvents: readonly ViewEvent[]
   readonly interruptedTurnId: string | null
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
   recordUserInput(text: string): Promise<void>
+  recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void>
   recordStep(turnId: string, messages: ModelMessage[]): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>
