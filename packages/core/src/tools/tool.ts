@@ -16,6 +16,10 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   isReadOnly: boolean
   /** 权限档位判定用的操作类别：read 免审批 / edit 受 acceptEdits 档控制 / execute 最严 */
   kind: 'read' | 'edit' | 'execute'
+  /** 控制面工具可在无项目的讨论会话中使用；默认 false，避免意外暴露文件/命令工具。 */
+  availableWithoutProject: boolean
+  /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
+  endsTurnOnSuccess: boolean
   /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
   extractPaths?: (input: z.infer<Schema>) => string[]
   /** 写文件类工具生成变更预览（unified diff），用于审批 UI */
@@ -42,6 +46,8 @@ export interface ToolResult {
 const CONSERVATIVE_DEFAULTS = {
   isReadOnly: false,
   kind: 'execute' as const,
+  availableWithoutProject: false,
+  endsTurnOnSuccess: false,
 }
 
 /** 集中填充 fail-closed 默认值 */

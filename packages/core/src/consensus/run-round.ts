@@ -20,18 +20,21 @@ export async function runProtocolRound(
 ): Promise<RoundResult> {
   let output: ProtocolOutput | null = null
   session.setExtraTools([createProtocolOutputTool(spec, (o) => (output = o))])
+  session.setProtocolRound(true)
 
-  let prompt = roundInput
-  for (let attempt = 0; attempt <= MAX_SUBMIT_REMINDERS; attempt++) {
-    try {
+  try {
+    let prompt = roundInput
+    for (let attempt = 0; attempt <= MAX_SUBMIT_REMINDERS; attempt++) {
       await session.handleUserMessage(prompt)
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      if (output) return { ok: true, output }
+      prompt =
+        '你结束了回合但没有调用 SubmitProtocolOutput 工具——没有它你的结论不会被计入协商。' +
+        '请立即调用 SubmitProtocolOutput 提交你的正式输出。'
     }
-    if (output) return { ok: true, output }
-    prompt =
-      '你结束了回合但没有调用 SubmitProtocolOutput 工具——没有它你的结论不会被计入协商。' +
-      '请立即调用 SubmitProtocolOutput 提交你的正式输出。'
+    return { ok: false, error: `连续 ${MAX_SUBMIT_REMINDERS + 1} 次未提交协议输出，本轮标记 invalid` }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    session.setProtocolRound(false)
   }
-  return { ok: false, error: `连续 ${MAX_SUBMIT_REMINDERS + 1} 次未提交协议输出，本轮标记 invalid` }
 }

@@ -13,7 +13,7 @@ export interface PromptContext {
 
 function identitySection(): string {
   return [
-    '你是 WhyCode，一个桌面端 AI 编程助手，帮助用户理解和修改本地项目代码。',
+    '你是 WhyCode，一个通用型桌面 AI Agent，能够处理生活、写作、规划、知识问答与软件开发任务，其中软件开发是你的核心专长。',
     '回答使用用户的语言（中文用户用中文）。保持简洁直接，先给结论再给必要的解释。',
   ].join('\n')
 }
@@ -29,6 +29,7 @@ function environmentSection(projectDir: string, osPlatform: NodeJS.Platform): st
 function toolUsageSection(): string {
   return [
     '# 工具使用',
+    '- 只在用户问题与当前项目相关时使用项目工具；非项目问题直接回答，不要强行关联代码或无故读取项目。',
     '- 回答关于项目的问题前，先用只读工具（ReadFile/ListDir/Glob/Grep）查看实际代码，不要凭空猜测。',
     '- 修改文件优先用 EditFile（精确替换）；新建或整文件重写才用 WriteFile。',
     '- 编辑前先 ReadFile 确认现有内容。',
@@ -39,7 +40,7 @@ function toolUsageSection(): string {
 function chatOnlySection(): string {
   return [
     '# 当前模式',
-    '当前未打开项目目录，处于纯对话模式：没有任何文件或命令工具可用。',
+    '当前未打开项目目录，处于纯对话模式：可以正常处理通用任务，但没有文件或命令工具可用。',
     '如果用户想操作代码或文件，提示其先在顶栏选择项目目录。',
   ].join('\n')
 }
@@ -48,22 +49,31 @@ function safetySection(): string {
   return [
     '# 行为约束',
     '- 不编造不存在的文件或代码；不确定的内容明确说明不确定。',
-    '- 只讨论与用户项目和编程相关的任务。',
+    '- 不因当前打开了代码项目而拒绝生活、写作、规划或其他非编程问题。',
   ].join('\n')
 }
 
-function discussionSection(ctx: { agentId: string; scratchDir: string }): string {
+function discussionSection(
+  ctx: { agentId: string; scratchDir: string },
+  hasProject: boolean,
+): string {
   const role =
     ctx.agentId === 'Main'
       ? '你是 Main Agent——协商的首个发言者与最终执行者。当前处于讨论阶段：目标是探索问题并提出候选方案，协议确定最终方案前不得执行修改。'
       : '你是多 Agent 协商中的平级推理者，当前处于讨论阶段——目标是独立探索问题并形成自己的判断，不是直接完成修改。'
+  const resources = hasProject
+    ? [
+        '- 原项目目录**只读**：禁止修改、删除、移动其中任何文件。',
+        `- 实验文件、测试脚本、复制来的文件副本一律放进你的临时工作区：${ctx.scratchDir}`,
+        '- 运行命令时必须显式把 cwd 设为你的临时工作区（否则会触发用户审批）。命令里不要引用工作区外的路径，读项目文件请用 ReadFile。',
+      ]
+    : ['- 当前没有打开项目，不提供文件或命令工具；请基于已有知识和推理完成协商。']
   return [
     `# 协商讨论阶段（你的身份：Agent ${ctx.agentId}）`,
     role,
-    '- 原项目目录**只读**：禁止修改、删除、移动其中任何文件。',
-    `- 实验文件、测试脚本、复制来的文件副本一律放进你的临时工作区：${ctx.scratchDir}`,
-    '- 运行命令时必须显式把 cwd 设为你的临时工作区（否则会触发用户审批）。命令里不要引用工作区外的路径，读项目文件请用 ReadFile。',
-    '- 探索完成后，**必须调用 SubmitProtocolOutput 工具**提交你的正式结论（候选方案/投票）。普通文本回复不会被计入协商——没有调用该工具就等于没有发言。',
+    '- 用户问题可以是编程任务，也可以是生活、写作、规划或其他通用问题；只按问题本身需要分析，不要强行关联代码。',
+    ...resources,
+    '- 当前轮次要求正式协议输出时，必须调用 SubmitProtocolOutput；若输入明确说明是“独立初判”，则按要求仅输出普通文本。',
     '- 结论若依赖实验产物（脚本/日志/复现 demo），把路径列进 scratch_artifacts。',
   ].join('\n')
 }
@@ -72,10 +82,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const sections = [identitySection()]
   if (ctx.projectDir) {
     sections.push(environmentSection(ctx.projectDir, ctx.osPlatform), toolUsageSection())
-    if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
   } else {
     sections.push(chatOnlySection())
   }
+  if (ctx.discussion) sections.push(discussionSection(ctx.discussion, Boolean(ctx.projectDir)))
   sections.push(safetySection())
   return sections.join('\n\n')
 }

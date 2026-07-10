@@ -2,7 +2,7 @@
   "name": "whycode",
   "private": true,
   "version": "0.1.0",
-  "description": "桌面端多模型 AI 编程 Agent，核心特色为多 Agent 协商决策",
+  "description": "以软件开发为核心专长的通用桌面 AI Agent，支持多模型协商决策",
   "scripts": {
     "dev": "pnpm --filter @whycode/desktop dev",
     "build": "pnpm -r build",

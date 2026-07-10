@@ -61,7 +61,6 @@ export interface AgentMemorySummary {
   rejectedCandidates: string[]
   importantSuggestions: string[]
   evidenceRefs: string[]
-  scratchArtifacts: string[]
 }
 
 const memorySummarySchema = z.object({
@@ -72,7 +71,6 @@ const memorySummarySchema = z.object({
   rejectedCandidates: z.array(z.string()),
   importantSuggestions: z.array(z.string()),
   evidenceRefs: z.array(z.string()),
-  scratchArtifacts: z.array(z.string()),
 })
 
 /**
@@ -100,4 +98,9 @@ export const consensusPersistedStateSchema = z.object({
 })
 
 export type ConsensusPersistedState = z.infer<typeof consensusPersistedStateSchema>
-export type ConsensusTaskOutcome = 'completed' | 'aborted' | 'error'
+export type ConsensusTaskOutcome = 'completed' | 'max-turns' | 'aborted' | 'error'
+
+/** 正常完成和安全上限停止都保留既有进度，便于用户继续；取消/异常才回滚事务。 */
+export function keepsConsensusProgress(outcome: ConsensusTaskOutcome): boolean {
+  return outcome === 'completed' || outcome === 'max-turns'
+}

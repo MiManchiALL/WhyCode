@@ -142,6 +142,24 @@ describe('SessionStore', () => {
     assert.deepEqual(reopened.initialConsensusState, committed)
   })
 
+  it('达到工具循环上限时保留执行进度供用户继续', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordConsensusTaskStart('task-1', consensusState(1))
+    const user = message('user', '继续长任务')
+    const assistant = message('assistant', '已完成部分工作')
+    await journal.recordTurnStart('execution', [user])
+    await journal.recordStep('execution', [assistant])
+    await journal.recordTurnEnd('execution', 'max-turns')
+    const committed = consensusState(1, '部分进度')
+    await journal.recordConsensusTaskEnd('task-1', 'max-turns', committed)
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialMessages, [user, assistant])
+    assert.deepEqual(reopened.initialConsensusState, committed)
+    assert.equal(reopened.metadataSnapshot.status, 'max-turns')
+  })
+
   it('快照保留活动共识边界和最后稳定状态', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })

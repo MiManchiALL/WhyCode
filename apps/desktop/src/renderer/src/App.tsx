@@ -2,10 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
-import type { SessionMetadata } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import type { AgentStatus, CoreEvent } from '@whycode/core/events'
-import { applyPeerEvent, createPeerBlock, PeerCard, voteLabel, type PeerBlockData } from './consensus-blocks.tsx'
+import type { SessionListItem } from '../../shared/session.ts'
+import {
+  applyPeerEvent,
+  CandidateCard,
+  createPeerBlock,
+  PeerCard,
+  voteLabel,
+  type CandidateBlockData,
+  type PeerBlockData,
+} from './consensus-blocks.tsx'
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
 
@@ -27,6 +35,7 @@ type Block =
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'notice'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
+  | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
 
 interface Approval {
@@ -51,7 +60,7 @@ export function App() {
   const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
-  const [sessions, setSessions] = useState<SessionMetadata[]>([])
+  const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [showSessions, setShowSessions] = useState(false)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
@@ -262,10 +271,23 @@ export function App() {
           })
           break
         case 'candidate-submitted':
-          setBlocks((prev) => [
-            ...prev,
-            { kind: 'notice', id: `b${nextId.current++}`, text: `📋 候选 ${event.candidateId}（${event.agentId}）：${event.summary}` },
-          ])
+          {
+            const id = `b${nextId.current++}`
+            setExpanded((prev) => new Set(prev).add(id))
+            setBlocks((prev) => [
+              ...prev,
+              {
+                kind: 'candidate',
+                id,
+                candidate: {
+                  agentId: event.agentId,
+                  candidateId: event.candidateId,
+                  summary: event.summary,
+                  details: event.details,
+                },
+              },
+            ])
+          }
           break
         case 'negotiation-started':
           setNegoStatus('B、C 正在独立评审 M1…')
@@ -393,9 +415,15 @@ export function App() {
     if (!window.confirm('确定删除这个会话？此操作不会修改项目文件。')) return
     void window.whycode.deleteSession(sessionId).then((result) => {
       if (!result.ok) return addError(result.error ?? '删除会话失败')
+      if (result.deletedCurrent) {
+        resetView()
+        setProjectDir(null)
+        setShowSessions(false)
+        void window.whycode.consensusStatus().then(setConsensus)
+      }
       void refreshSessions()
     })
-  }, [addError, refreshSessions])
+  }, [addError, refreshSessions, resetView])
 
   const compact = useCallback(() => {
     setBlocks((prev) => [
@@ -617,6 +645,9 @@ function BlockView({
   }
   if (block.kind === 'peer') {
     return <PeerCard peer={block.peer} expanded={expanded} onToggle={onToggle} />
+  }
+  if (block.kind === 'candidate') {
+    return <CandidateCard candidate={block.candidate} expanded={expanded} onToggle={onToggle} />
   }
   if (block.kind === 'thinking') {
     const streaming = block.durationMs === null

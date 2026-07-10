@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
 import {
   consensusPersistedStateSchema,
+  keepsConsensusProgress,
   type ConsensusPersistedState,
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
@@ -223,7 +224,13 @@ export class SessionJournal implements SessionRecorder {
       if (this.activeTurnId === turnId) this.activeTurnId = null
       this.metadata.updatedAt = ended.timestamp
       this.metadata.status =
-        stopReason === 'error' ? 'error' : this.activeConsensusTaskId ? 'running' : 'idle'
+        stopReason === 'error'
+          ? 'error'
+          : this.activeConsensusTaskId
+            ? 'running'
+            : stopReason === 'max-turns'
+              ? 'max-turns'
+              : 'idle'
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }
@@ -281,8 +288,9 @@ export class SessionJournal implements SessionRecorder {
       if (this.activeConsensusTaskId !== taskId || !this.activeConsensusBaseMessages) {
         throw new Error(`共识任务 ${taskId} 没有匹配的活动起点`)
       }
-      const rollbackMessages =
-        outcome === 'completed' ? null : this.activeConsensusBaseMessages
+      const rollbackMessages = keepsConsensusProgress(outcome)
+        ? null
+        : this.activeConsensusBaseMessages
       const ended = this.entry({
         type: 'consensus-task-end',
         taskId,
@@ -298,7 +306,13 @@ export class SessionJournal implements SessionRecorder {
       this.consensusState = ended.state
       this.metadata.updatedAt = ended.timestamp
       this.metadata.status =
-        outcome === 'error' ? 'error' : this.activeTurnId ? 'running' : 'idle'
+        outcome === 'error'
+          ? 'error'
+          : this.activeTurnId
+            ? 'running'
+            : outcome === 'max-turns'
+              ? 'max-turns'
+              : 'idle'
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }

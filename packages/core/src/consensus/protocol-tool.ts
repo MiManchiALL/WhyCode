@@ -1,6 +1,12 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
-import type { ConsensusAgentId, ProtocolOutput, Vote, VoteValue } from './types.ts'
+import type {
+  ConsensusAgentId,
+  ProtocolMode,
+  ProtocolOutput,
+  Vote,
+  VoteValue,
+} from './types.ts'
 
 export const PROTOCOL_OUTPUT_TOOL_NAME = 'SubmitProtocolOutput'
 
@@ -22,6 +28,8 @@ export interface ProtocolToolSpec {
   existingCandidateIds: string[]
   /** 当前 task 首个 M1：必须携带 protocol_mode（协议 §1.1） */
   requireProtocolMode: boolean
+  /** 控制面已锁定模式时，schema 直接收窄，避免模型提交与实际流程不一致。 */
+  forcedProtocolMode?: ProtocolMode
 }
 
 /**
@@ -56,14 +64,21 @@ export function createProtocolOutputTool(
   const fullSchema = z.object({
     ...(spec.requireProtocolMode
       ? {
-          protocol_mode: z
-            .enum(PROTOCOL_MODES)
-            .describe('本任务协议模式：简单任务 main_only / 中等 quick_review / 高风险 full_consensus'),
+          protocol_mode: (spec.forcedProtocolMode
+            ? z.literal(spec.forcedProtocolMode)
+            : z.enum(PROTOCOL_MODES)
+          ).describe('本任务协议模式：简单任务 main_only / 中等 quick_review / 高风险 full_consensus'),
         }
       : {}),
     candidate: z.object({
-      summary: z.string().min(1).describe('候选方案一句话摘要'),
-      final_answer_or_plan: z.string().min(1).describe('完整方案或可执行计划'),
+      summary: z
+        .string()
+        .min(1)
+        .describe('任务结论的一句话实质摘要；禁止复述用户要求、Agent 数量或协商模式'),
+      final_answer_or_plan: z
+        .string()
+        .min(1)
+        .describe('对任务本身的完整分析、事实依据与可执行处理方向；禁止只描述协商流程'),
       evidence_refs: z.array(z.string()).optional().describe('关键证据：文件路径/测试结果/日志摘要'),
       scratch_artifacts: z.array(z.string()).optional().describe('临时实验产物路径（结论依赖实验时必填）'),
       known_risks: z.array(z.string()).optional(),
@@ -85,6 +100,8 @@ export function createProtocolOutputTool(
     inputSchema: (spec.kind === 'quick' ? quickSchema : fullSchema) as z.ZodObject,
     isReadOnly: true,
     kind: 'read',
+    availableWithoutProject: true,
+    endsTurnOnSuccess: true,
     async execute(input) {
       if (submitted) {
         return { data: '协议输出已提交过，本轮不能重复提交。', isError: true }
@@ -98,7 +115,7 @@ export function createProtocolOutputTool(
       }
       submitted = true
       onSubmit(output)
-      return { data: '协议输出已记录。本轮工作完成，请简短总结后结束。', isError: false }
+      return { data: '协议输出已记录，本轮立即结束。', isError: false }
     },
   })
 }

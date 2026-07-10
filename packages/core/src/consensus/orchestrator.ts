@@ -1,14 +1,20 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
-import type { CoreEvent, CoreEventSink } from '../events.ts'
+import type { CoreEvent, CoreEventSink, StopReason } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
 import { extractMemorySummary, formatMemories } from './memory.ts'
-import { buildConversationDigest, buildM1Prompt, buildQuickReviewPrompt } from './prompts.ts'
+import {
+  buildConversationDigest,
+  buildM1Prompt,
+  buildMainOnlyExecutionPrompt,
+  buildQuickReviewPrompt,
+} from './prompts.ts'
 import { createTaskScratch } from './scratch.ts'
 import {
   consensusPersistedStateSchema,
+  keepsConsensusProgress,
   type AgentMemorySummary,
   type CandidateContent,
   type ConsensusAgentId,
@@ -24,15 +30,20 @@ export interface ConsensusAgentSetup {
 
 /** 用户显式要求多 Agent 协商的表述（协议 §1.1 的升级触发词；控制面确定性规则，不依赖模型自觉） */
 const EXPLICIT_CONSENSUS_RE =
-  /充分讨论|多视角|多角度|互相评价|互相讨论|达成共识|完整共识|共识决策|你们.{0,4}讨论|大家.{0,6}讨论|一起讨论|三个\s*agent|多个\s*agent|full[_\s-]?consensus/i
+  /充分讨论|多视角|多角度|互相评价|互相讨论|达成共识|完整共识|共识决策|你们.{0,4}讨论|大家.{0,6}讨论|一起讨论|(?:三|3)\s*(?:个\s*)?(?:agent|模型)|三方(?:协商|讨论|评审)|多个\s*agent|full[_\s-]?consensus/i
 
 /** 硬性风险触发词（协议 §1.1：高风险任务必须 full_consensus；保守收窄，避免误伤日常任务） */
 const HARD_RISK_RE = /(数据库|数据)\s*迁移|删库|生产环境|支付|payment/i
 
+/** 用户明确指定多方协商或任务命中硬风险时，由控制面锁定 full_consensus。 */
+export function requiresFullConsensus(userText: string): boolean {
+  return EXPLICIT_CONSENSUS_RE.test(userText) || HARD_RISK_RE.test(userText)
+}
+
 export interface ConsensusCoordinatorOptions {
   /** Main = 用户对话的既有会话（最终执行者，保留完整上下文） */
   mainSession: AgentSession
-  projectDir: string
+  projectDir: string | null
   /** scratch 存储根（宿主注入，如 userData/scratch） */
   scratchRoot: string
   conversationId: string
@@ -90,7 +101,7 @@ export class ConsensusCoordinator {
       this.options.emit({ type: 'message-queued', id, text })
       return
     }
-    return this.options.mainSession.handleUserMessage(text, urgent)
+    this.options.mainSession.handleUserMessage(text, urgent)
   }
 
   /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
@@ -126,15 +137,21 @@ export class ConsensusCoordinator {
       )
 
       // 第一步：Main 讨论档输出 M1 + protocol_mode（协议 §1.1：模式只出现在首个 M1）
+      const forceFullConsensus = requiresFullConsensus(userText)
       mainSession.setDiscussion({ agentId: 'Main', scratchDir: scratch.agentDirs.Main })
-      const m1Result = await runProtocolRound(mainSession, buildM1Prompt(userText), {
-        agentId: 'Main',
-        round: 1,
-        kind: 'full',
-        mustVote: [],
-        existingCandidateIds: [],
-        requireProtocolMode: true,
-      })
+      const m1Result = await runProtocolRound(
+        mainSession,
+        buildM1Prompt(userText, forceFullConsensus),
+        {
+          agentId: 'Main',
+          round: 1,
+          kind: 'full',
+          mustVote: [],
+          existingCandidateIds: [],
+          requireProtocolMode: true,
+          forcedProtocolMode: forceFullConsensus ? 'full_consensus' : undefined,
+        },
+      )
       if (this.aborted) {
         outcome = 'aborted'
         return
@@ -145,15 +162,20 @@ export class ConsensusCoordinator {
       }
       const m1 = m1Result.output
       // 协议 §1.1：用户显式要求多视角/共识、或命中硬性风险词时，Orchestrator 强制升级 full_consensus（只升不降）
-      let mode = m1.protocolMode ?? 'main_only'
-      if (mode !== 'full_consensus' && (EXPLICIT_CONSENSUS_RE.test(userText) || HARD_RISK_RE.test(userText))) {
-        mode = 'full_consensus'
-      }
+      const mode = forceFullConsensus ? 'full_consensus' : (m1.protocolMode ?? 'main_only')
       emit({
         type: 'candidate-submitted',
         agentId: 'Main',
         candidateId: 'M1',
         summary: m1.candidate?.summary ?? '',
+        // main_only 随后会交付完整答案；仅在真正进入 B/C 评审时展开 M1，避免重复展示。
+        details: mode !== 'main_only' && m1.candidate
+          ? {
+              finalAnswerOrPlan: m1.candidate.finalAnswerOrPlan,
+              evidenceRefs: m1.candidate.evidenceRefs,
+              knownRisks: m1.candidate.knownRisks,
+            }
+          : undefined,
       })
       // 任务脉络：摘要给本任务的 B/C（不含本任务），随后登记本任务（main_only 也登记）
       const digest = buildConversationDigest(this.taskLog)
@@ -163,11 +185,10 @@ export class ConsensusCoordinator {
       if (mode === 'main_only') {
         this.restoreExecution()
         emit({ type: 'execution-started', taskId })
-        await mainSession.handleUserMessage(
-          '[协商] 协议模式 main_only 已锁定：无需评审。你已恢复正常执行权限，请直接完成用户请求；' +
-            '若探索阶段已得出完整答案，直接给出最终回答即可，不要重复已说过的内容。',
+        const stopReason = await mainSession.handleUserMessage(
+          buildMainOnlyExecutionPrompt(userText, m1.candidate),
         )
-        outcome = this.aborted ? 'aborted' : 'completed'
+        outcome = this.executionOutcome(stopReason)
         return
       }
 
@@ -203,8 +224,8 @@ export class ConsensusCoordinator {
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
-      await mainSession.handleUserMessage(this.appendPendingTexts(packageText))
-      outcome = this.aborted ? 'aborted' : 'completed'
+      const stopReason = await mainSession.handleUserMessage(this.appendPendingTexts(packageText))
+      outcome = this.executionOutcome(stopReason)
     } catch (error) {
       emit({
         type: 'error',
@@ -212,7 +233,7 @@ export class ConsensusCoordinator {
         recoverable: true,
       })
     } finally {
-      if (outcome !== 'completed') {
+      if (!keepsConsensusProgress(outcome)) {
         this.restoreState(startState)
         mainSession.restoreMessageSnapshot(startMessages)
       }
@@ -350,6 +371,12 @@ export class ConsensusCoordinator {
   private restoreExecution(): void {
     this.options.mainSession.setDiscussion(null)
     this.options.mainSession.setExtraTools([])
+  }
+
+  private executionOutcome(stopReason: StopReason | void): ConsensusTaskOutcome {
+    if (this.aborted || stopReason === 'aborted') return 'aborted'
+    if (stopReason === 'max-turns') return 'max-turns'
+    return stopReason === 'completed' ? 'completed' : 'error'
   }
 
   private snapshotState(): ConsensusPersistedState {

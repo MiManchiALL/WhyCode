@@ -16,7 +16,12 @@ import {
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
-import type { ResumeSessionResult, SessionActionResult } from '../shared/session.ts'
+import type {
+  DeleteSessionResult,
+  ResumeSessionResult,
+  SessionActionResult,
+  SessionListItem,
+} from '../shared/session.ts'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -144,9 +149,8 @@ async function ensureSession(): Promise<string | null> {
   return null
 }
 
-/** 协商可用性检查：B/C 评审员配置齐备 + 模型已注册 + 已选项目目录。返回不可用原因或 null */
+/** 协商可用性检查：B/C 评审员配置齐备且模型已注册；纯聊天也允许协商。 */
 function checkConsensusReady(): string | null {
-  if (!projectDir) return '协商需要先选择项目目录'
   const config = loadConfig()
   if (!consensusAgentsReady(config)) {
     return '协商需要在配置文件中为评审员 B/C 各配置 model 与 apiKey（consensusAgents 字段）'
@@ -173,7 +177,7 @@ function buildCoordinator(): string | null {
   })
   coordinator = new ConsensusCoordinator({
     mainSession: session!,
-    projectDir: projectDir!,
+    projectDir,
     scratchRoot: join(app.getPath('userData'), 'scratch'),
     conversationId,
     agents: { B: setup('B'), C: setup('C') },
@@ -321,7 +325,6 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     if (!currentModelId) throw new Error('没有任何已配置 key 的模型可用')
     if (currentModelId !== metadata.modelId) await journal.updateModel(currentModelId)
     conversationId = journal.sessionId
-    if (!projectDir) consensusEnabled = false
     const error = await ensureSession()
     if (error) throw new Error(error)
     return {
@@ -336,12 +339,17 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
   }
 }
 
-async function deleteSession(sessionId: string): Promise<SessionActionResult> {
+async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再删除会话' }
-  if (sessions.currentSessionId === sessionId) resetRuntime()
+  const deletedCurrent = sessions.currentSessionId === sessionId
   try {
     const deleted = await sessions.delete(sessionId)
-    return deleted ? { ok: true } : { ok: false, error: '会话不存在' }
+    if (!deleted) return { ok: false, error: '会话不存在' }
+    if (deletedCurrent) {
+      resetRuntime()
+      projectDir = null
+    }
+    return { ok: true, deletedCurrent }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -368,7 +376,13 @@ void app.whenReady().then(() => {
     reason: checkConsensusReady(),
     enabled: consensusEnabled,
   }))
-  ipcMain.handle(IPC.listSessions, () => sessions.list())
+  ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
+    const currentSessionId = sessions.currentSessionId
+    return (await sessions.list()).map((item) => ({
+      ...item,
+      isCurrent: item.sessionId === currentSessionId,
+    }))
+  })
   ipcMain.handle(IPC.newSession, () => startNewSession())
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))

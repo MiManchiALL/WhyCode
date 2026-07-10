@@ -80,7 +80,18 @@ export type CoreEvent =
   /** 协议模式锁定为需评审的模式，B/C 开始工作（main_only 不发） */
   | { type: 'negotiation-started'; taskId: string; mode: 'quick_review' | 'full_consensus' }
   | { type: 'round-started'; taskId: string; round: 2 | 3 }
-  | { type: 'candidate-submitted'; agentId: 'Main' | 'B' | 'C'; candidateId: string; summary: string }
+  | {
+      type: 'candidate-submitted'
+      agentId: 'Main' | 'B' | 'C'
+      candidateId: string
+      summary: string
+      /** 正式候选的实质分析；可选以兼容旧事件消费者。scratch 临时路径不进入 UI 事件。 */
+      details?: {
+        finalAnswerOrPlan: string
+        evidenceRefs?: string[]
+        knownRisks?: string[]
+      }
+    }
   | {
       type: 'vote-cast'
       from: 'Main' | 'B' | 'C'

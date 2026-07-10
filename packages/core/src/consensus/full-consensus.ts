@@ -253,7 +253,17 @@ export function round3Winner(score: Record<ConsensusAgentId, number>): 'B' | 'C'
 /** 广播候选与其投票（UI 主线通知 + 卡片收口） */
 function announce(emit: CoreEventSink, candidateId: string, output: ProtocolOutput): void {
   if (output.candidate) {
-    emit({ type: 'candidate-submitted', agentId: output.agentId, candidateId, summary: output.candidate.summary })
+    emit({
+      type: 'candidate-submitted',
+      agentId: output.agentId,
+      candidateId,
+      summary: output.candidate.summary,
+      details: {
+        finalAnswerOrPlan: output.candidate.finalAnswerOrPlan,
+        evidenceRefs: output.candidate.evidenceRefs,
+        knownRisks: output.candidate.knownRisks,
+      },
+    })
   }
   for (const v of output.votes) {
     emit({ type: 'vote-cast', from: v.from, target: v.target, vote: v.vote, reason: v.reason, suggestedChange: v.suggestedChange })

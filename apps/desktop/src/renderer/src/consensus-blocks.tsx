@@ -12,6 +12,11 @@ export interface PeerBlockData {
   vote?: { vote: string; reason: string; suggestedChange?: string }
 }
 
+export type CandidateBlockData = Omit<
+  Extract<CoreEvent, { type: 'candidate-submitted' }>,
+  'type'
+>
+
 export function createPeerBlock(agentId: 'B' | 'C'): PeerBlockData {
   return { agentId, status: 'working', text: '', tools: [] }
 }
@@ -54,6 +59,56 @@ const VOTE_LABELS: Record<string, string> = {
 
 export function voteLabel(vote: string): string {
   return VOTE_LABELS[vote] ?? vote
+}
+
+/** 正式候选的实质内容。默认展开，用户可自行收起长分析。 */
+export function CandidateCard({
+  candidate,
+  expanded,
+  onToggle,
+}: {
+  candidate: CandidateBlockData
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const hasDetails = Boolean(candidate.details?.finalAnswerOrPlan)
+  return (
+    <div className="mb-2 rounded border border-blue-200 bg-blue-50/60 text-sm">
+      <button
+        className="flex w-full items-start gap-2 px-3 py-2 text-left"
+        disabled={!hasDetails}
+        onClick={hasDetails ? onToggle : undefined}
+      >
+        <span>📋</span>
+        <span className="min-w-0 flex-1 text-blue-900">
+          <span className="font-medium">
+            候选 {candidate.candidateId}（{candidate.agentId}）
+          </span>
+          <span className="ml-2">{candidate.summary}</span>
+        </span>
+        {hasDetails && (
+          <span className="shrink-0 text-xs text-blue-400">{expanded ? '▾' : '▸'}</span>
+        )}
+      </button>
+      {expanded && candidate.details && (
+        <div className="border-t border-blue-100 px-3 py-2 text-blue-950">
+          <div className="prose prose-sm max-w-none">
+            <Streamdown>{candidate.details.finalAnswerOrPlan}</Streamdown>
+          </div>
+          {candidate.details.evidenceRefs?.length ? (
+            <div className="mt-2 text-xs text-blue-700">
+              证据：{candidate.details.evidenceRefs.join('；')}
+            </div>
+          ) : null}
+          {candidate.details.knownRisks?.length ? (
+            <div className="mt-1 text-xs text-amber-700">
+              已知风险：{candidate.details.knownRisks.join('；')}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function PeerCard({

@@ -2,18 +2,43 @@ import type { CandidateContent } from './types.ts'
 
 /** 协商各轮次的输入包模板（Orchestrator 组装上下文的唯一文案来源） */
 
-export function buildM1Prompt(userText: string): string {
+export function buildM1Prompt(userText: string, forceFullConsensus = false): string {
   return [
     '[多 Agent 协商任务]',
     '用户请求：',
     userText,
     '',
-    '请先做必要探索（当前为讨论阶段，不可修改项目），然后调用 SubmitProtocolOutput 提交候选 M1 并选定 protocol_mode：',
-    '- main_only：简单任务（小范围修改/直接问答/低风险机械改动）——提交后你将恢复正常权限直接执行',
-    '- quick_review：中等任务（单模块修复/小范围重构/方案选择）——B/C 快速评审你的 M1，之后你综合意见执行',
-    '- full_consensus：高风险任务（跨模块改动/架构设计/数据迁移/安全权限相关）——三 Agent 完整协商投票',
+    '请先做必要分析（当前为讨论阶段，不可修改项目）。项目相关任务应按需查看真实代码；通用问题直接围绕问题本身推理，不要强行关联项目。然后调用 SubmitProtocolOutput 提交候选 M1 并选定 protocol_mode：',
+    ...(forceFullConsensus
+      ? ['控制面已根据用户的明确要求或任务风险锁定 full_consensus；protocol_mode 必须提交 full_consensus，不得降级。']
+      : []),
+    '- main_only：简单任务（直接问答、小范围修改、低风险机械操作）——提交后你将恢复正常权限直接处理',
+    '- quick_review：中等任务（需要比较取舍、快速复核或小范围方案选择）——B/C 快速评审你的 M1，之后你综合意见处理',
+    '- full_consensus：高风险或用户明确要求充分讨论的任务——三 Agent 完整协商投票',
     '用户明确要求多 Agent 讨论、充分评审或共识决策时，必须选 full_consensus。',
+    '候选内容必须是你对任务本身的实质分析：summary 概括核心结论，final_answer_or_plan 写清事实判断、依据和处理方向。',
+    '禁止用“用户要求三个 Agent”“采用 full_consensus”“将进行协商/投票”等流程复述代替任务分析。',
     '选 quick_review / full_consensus 时 M1 只是处理思路（final_answer_or_plan 写清楚改什么、怎么改），提交前不要尝试执行任何修改。',
+  ].join('\n')
+}
+
+/** main_only 的协议内容不直接展示，执行回合必须重新交付一份完整的用户答案。 */
+export function buildMainOnlyExecutionPrompt(
+  userText: string,
+  m1: CandidateContent | null,
+): string {
+  return [
+    '[协商控制 · main_only 正式处理]',
+    '协议阶段只用于内部判断，用户没有看到 M1 的详细内容。',
+    '用户原始请求：',
+    userText,
+    '',
+    candidateText('内部 M1（仅供你执行参考）', m1),
+    '',
+    '你已恢复正常执行权限。现在直接完成用户请求：',
+    '- 问答、解释或项目分析：给出完整、自包含、可独立阅读的最终答案，不能只给收尾句。',
+    '- 需要修改代码：按 M1 执行必要操作、验证结果，再向用户报告完成情况。',
+    '- 不得使用“如上、前面已经说明、无需重复”等指代，因为协议内容没有展示给用户。',
   ].join('\n')
 }
 
@@ -30,7 +55,7 @@ export function buildQuickReviewPrompt(
     '',
     candidateText('M1（Main 的候选）', m1),
     '',
-    `你的任务（Agent ${agentId}）：独立评价 M1 能否直接采用——必要时读代码/在你的临时工作区做小实验验证其关键论断。`,
+    `你的任务（Agent ${agentId}）：独立评价 M1 能否直接采用。按问题性质核实关键事实；仅当任务确实涉及当前项目时才读代码或做实验。`,
     '完成后调用 SubmitProtocolOutput 提交对 M1 的投票（accept / accept_with_minor_edits / reject）。',
     '这是快评模式：不需要提出你自己的完整候选方案。',
   ].join('\n')
@@ -47,7 +72,7 @@ export function buildIndependentNotePrompt(
     '用户请求：',
     userText,
     '',
-    `你的任务（Agent ${agentId}）：在看到任何其他 Agent 的方案**之前**，独立探索这个问题（读代码、必要时在临时工作区实验），`,
+    `你的任务（Agent ${agentId}）：在看到任何其他 Agent 的方案**之前**，独立分析这个问题（项目任务按需读代码，通用问题直接推理），`,
     '用普通文本简要写下你的初步判断：问题根因/关键取舍/你倾向的处理方向。',
     '这一步不是正式协议输出，不要调用 SubmitProtocolOutput——写完初判即结束本回合，稍后你会收到待评审的候选。',
   ].join('\n')

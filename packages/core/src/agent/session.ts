@@ -19,7 +19,8 @@ import {
   type PermissionMode,
 } from '../permissions/types.ts'
 
-const MAX_STEPS = 25
+const MAX_STEPS = 40
+const FINALIZATION_RESERVE_STEPS = 5
 const MAX_COMPACT_FAILURES = 3
 
 export interface AgentSessionOptions {
@@ -62,6 +63,11 @@ interface QueuedMessage {
   text: string
 }
 
+interface StepResult {
+  hadToolCalls: boolean
+  endedByTool: boolean
+}
+
 /**
  * Agent 会话（M2-a：自持外层循环 + steering 消息队列）。
  *
@@ -101,6 +107,8 @@ export class AgentSession {
   private recentReadFiles = new Map<string, number>()
   /** 持久化失败后本会话降级内存模式，避免每个 step 重复报错 */
   private persistenceFailed = false
+  /** 正式协议回合只通过结构化事件展示结果，避免内部候选文本混入最终回答。 */
+  private protocolRound = false
 
   constructor(options: AgentSessionOptions) {
     this.options = options
@@ -140,6 +148,10 @@ export class AgentSession {
     this.options = { ...this.options, extraTools: tools }
   }
 
+  setProtocolRound(active: boolean): void {
+    this.protocolRound = active
+  }
+
   /**
    * 切换讨论档（M3）：进入协商讨论阶段时禁写项目、写实验限 scratch；null = 恢复正常执行档。
    * scratch 目录保留在 additionalDirs 中，执行阶段 Main 仍可读取实验产物。
@@ -175,7 +187,7 @@ export class AgentSession {
    * 用户消息统一入口：空闲时开始新 turn；运行中/压缩中则排队（steering）。
    * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
    */
-  handleUserMessage(text: string, urgent = false): Promise<void> | void {
+  handleUserMessage(text: string, urgent = false): Promise<StopReason> | void {
     if (this.running || this.compacting) {
       const item = { id: crypto.randomUUID(), text }
       this.queue.push(item)
@@ -190,7 +202,7 @@ export class AgentSession {
   }
 
   /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
-  private startTurn(initialMessages: ModelMessage[]): Promise<void> {
+  private startTurn(initialMessages: ModelMessage[]): Promise<StopReason> {
     this.opAbort = new AbortController()
     return this.runLoop(initialMessages, this.opAbort.signal)
   }
@@ -243,7 +255,7 @@ export class AgentSession {
   private async runLoop(
     initialMessages: ModelMessage[],
     abortSignal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<StopReason> {
     const { emit } = this.options
     this.running = true
     const turnId = crypto.randomUUID()
@@ -256,16 +268,25 @@ export class AgentSession {
     emit({ type: 'agent-status', status: 'working' })
 
     let stopReason: StopReason = 'completed'
+    let endedByTool = false
     const usage: UsageInfo = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }
 
     try {
       let steps = 0
+      let finishedNaturally = false
       while (steps < MAX_STEPS) {
         steps++
+        if (steps === MAX_STEPS - FINALIZATION_RESERVE_STEPS) {
+          await this.injectStepLimitReminder()
+        }
         await this.compactIfNeeded(abortSignal)
-        const hadToolCalls = await this.runOneStep(usage, abortSignal)
+        const step = await this.runOneStep(usage, abortSignal)
         if (abortSignal.aborted) {
           stopReason = 'aborted'
+          break
+        }
+        if (step.endedByTool) {
+          endedByTool = true
           break
         }
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
@@ -273,9 +294,24 @@ export class AgentSession {
           await this.injectQueuedMidTurn()
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
-        if (!hadToolCalls) break
+        if (!step.hadToolCalls) {
+          finishedNaturally = true
+          break
+        }
       }
-      if (steps >= MAX_STEPS) stopReason = 'max-turns'
+      if (
+        stopReason === 'completed' &&
+        steps >= MAX_STEPS &&
+        !endedByTool &&
+        !finishedNaturally
+      ) {
+        stopReason = 'max-turns'
+        emit({
+          type: 'error',
+          message: `当前回合已达到 ${MAX_STEPS} 步工具循环安全上限，可能尚未完成。请发送“继续”让 Agent 基于现有上下文接着处理。`,
+          recoverable: true,
+        })
+      }
     } catch (error) {
       if (abortSignal.aborted) {
         stopReason = 'aborted'
@@ -296,7 +332,7 @@ export class AgentSession {
     emit({ type: 'turn-end', turnId, usage, stopReason })
 
     // turn 正常结束后队列仍有剩余（极端时序）→ 作为新 turn 续跑
-    if (stopReason === 'completed' && this.queue.length > 0) {
+    if (stopReason === 'completed' && !endedByTool && this.queue.length > 0) {
       const drained = this.drainQueue()
       for (const item of drained) {
         emit({ type: 'message-injected', id: item.id, text: item.text })
@@ -305,6 +341,24 @@ export class AgentSession {
     }
 
     emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
+    return stopReason
+  }
+
+  /** 给模型预留收尾窗口，避免一直扩展探索直到安全上限才突然停止。 */
+  private async injectStepLimitReminder(): Promise<void> {
+    const reminder: ModelMessage = {
+      role: 'user',
+      content: [
+        '<system-reminder>',
+        `当前回合还剩 ${FINALIZATION_RESERVE_STEPS + 1} 次模型请求即达到工具循环安全上限。`,
+        '请停止扩展性探索，只做必要收尾；能完成时立即给出完整结论，协议阶段则立即提交正式协议输出。',
+        '</system-reminder>',
+      ].join('\n'),
+    }
+    this.messages.push(reminder)
+    if (this.activeTurn) {
+      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
+    }
   }
 
   /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；期间用户消息排队，完成后接续 */
@@ -363,7 +417,7 @@ export class AgentSession {
       for (const item of drained) {
         emit({ type: 'message-injected', id: item.id, text: item.text })
       }
-      return this.startTurn(drained.map((q) => ({ role: 'user' as const, content: q.text })))
+      await this.startTurn(drained.map((q) => ({ role: 'user' as const, content: q.text })))
     }
   }
 
@@ -418,8 +472,11 @@ export class AgentSession {
     }
   }
 
-  /** 单步：一次模型调用 + 步内工具执行；返回是否发生了工具调用 */
-  private async runOneStep(usage: UsageInfo, turnAbortSignal: AbortSignal): Promise<boolean> {
+  /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
+  private async runOneStep(
+    usage: UsageInfo,
+    turnAbortSignal: AbortSignal,
+  ): Promise<StepResult> {
     const { emit } = this.options
     // 步骤级中止器：turn 取消（user-cancel）与 urgent 插话（interrupt）都作用在这里
     const stepAbort = new AbortController()
@@ -428,12 +485,15 @@ export class AgentSession {
     turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
     if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
 
+    const stepControl = { endedByTool: false }
     try {
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
         messages: this.messages,
-        tools: this.buildToolSet(stepAbort.signal),
+        tools: this.buildToolSet(stepAbort.signal, () => {
+          stepControl.endedByTool = true
+        }),
         stopWhen: stepCountIs(1),
         providerOptions: this.options.model.providerOptions,
         abortSignal: stepAbort.signal,
@@ -462,7 +522,7 @@ export class AgentSession {
             break
           }
           case 'text-delta':
-            emit({ type: 'text-delta', text: part.text })
+            if (!this.protocolRound) emit({ type: 'text-delta', text: part.text })
             break
           case 'tool-call':
             hadToolCalls = true
@@ -496,11 +556,11 @@ export class AgentSession {
           coveredMessageCount: this.messages.length,
         }
       }
-      return hadToolCalls
+      return { hadToolCalls, endedByTool: stepControl.endedByTool }
     } catch (error) {
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
-        return false
+        return { hadToolCalls: false, endedByTool: false }
       }
       throw error
     } finally {
@@ -509,14 +569,21 @@ export class AgentSession {
     }
   }
 
-  /** 把 WhyCode 工具定义包装成 AI SDK ToolSet；纯聊天模式（无项目目录）返回空集 */
-  private buildToolSet(abortSignal: AbortSignal): ToolSet | undefined {
+  /** 包装工具集；无项目时只开放显式声明的控制面工具。 */
+  private buildToolSet(
+    abortSignal: AbortSignal,
+    onTurnEndingTool: () => void,
+  ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
-    if (!projectDir) return undefined
+    const extraTools = this.options.extraTools ?? []
+    const defs = projectDir
+      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...extraTools]
+      : extraTools.filter((tool) => tool.availableWithoutProject)
+    const toolProjectDir = projectDir ?? this.options.promptContext.discussion?.scratchDir
+    if (!toolProjectDir || defs.length === 0) return undefined
 
     const { emit, requestApproval } = this.options
     const toolSet: ToolSet = {}
-    const defs = [...(BUILTIN_TOOLS as ToolDefinition[]), ...(this.options.extraTools ?? [])]
     for (const def of defs) {
       toolSet[def.name] = aiTool({
         description: def.prompt,
@@ -524,7 +591,7 @@ export class AgentSession {
         execute: async (input: unknown, { toolCallId }) => {
           // additionalDirs 会在审批中变化，每次调用取最新
           const toolCtx: ToolContext = {
-            projectDir,
+            projectDir: toolProjectDir,
             additionalDirs: this.permissions.additionalDirs,
             abortSignal,
           }
@@ -537,7 +604,10 @@ export class AgentSession {
           emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
 
           // 权限判定链（文档一 §3.2）
-          const decision = checkToolPermission(def, parsed.data, this.permissions)
+          const decision =
+            !projectDir && def.availableWithoutProject
+              ? ({ behavior: 'allow' } as const)
+              : checkToolPermission(def, parsed.data, this.permissions)
           if (decision.behavior === 'deny') {
             const msg = `操作被拒绝：${decision.reason}`
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
@@ -608,6 +678,7 @@ export class AgentSession {
               result: result.data,
               isError: result.isError,
             })
+            if (def.endsTurnOnSuccess && !result.isError) onTurnEndingTool()
             return result.data
           } catch (error) {
             const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
