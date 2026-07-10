@@ -9,7 +9,7 @@ import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('Agent 长任务循环策略', () => {
-  it('Main 超过 40 个工具步骤仍继续，并在任务自然完成时结束', async () => {
+  it('Main 超过 40 个工具步骤仍继续，且不注入固定步数审计', async () => {
     const model = finiteModel(45)
     const { session, events } = createSession(model)
 
@@ -18,7 +18,10 @@ describe('Agent 长任务循环策略', () => {
     assert.equal(stopReason, 'completed')
     assert.equal(model.doStreamCalls.length, 46)
     assert.equal(events.some((event) => event.type === 'error'), false)
-    assert.match(JSON.stringify(model.doStreamCalls[40]), /进度审计|已执行 40 个模型步骤/)
+    assert.equal(
+      model.doStreamCalls.some((call) => JSON.stringify(call).includes('已执行 40 个模型步骤')),
+      false,
+    )
   })
 
   it('协商讨论 Agent 仍在 40 步停止，避免评审无限探索', async () => {

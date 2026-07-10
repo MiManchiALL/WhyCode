@@ -25,7 +25,6 @@ import {
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
-const PROGRESS_AUDIT_INTERVAL = 40
 const TASK_STOP_REMINDER_LIMIT = 2
 const MAX_COMPACT_FAILURES = 3
 
@@ -303,12 +302,6 @@ export class AgentSession {
         steps++
         if (maxSteps !== null && steps === maxSteps - FINALIZATION_RESERVE_STEPS) {
           await this.injectStepLimitReminder()
-        } else if (
-          maxSteps === null &&
-          steps > 1 &&
-          (steps - 1) % PROGRESS_AUDIT_INTERVAL === 0
-        ) {
-          await this.injectProgressAudit(steps - 1)
         }
         await this.compactIfNeeded(abortSignal)
         const step = await this.runOneStep(usage, abortSignal)
@@ -414,23 +407,6 @@ export class AgentSession {
         '<system-reminder>',
         `当前协商回合还剩 ${FINALIZATION_RESERVE_STEPS + 1} 次模型请求即达到安全上限。`,
         '请停止扩展性探索，只做必要收尾；能完成时立即给出完整结论，协议阶段则立即提交正式协议输出。',
-        '</system-reminder>',
-      ].join('\n'),
-    }
-    this.messages.push(reminder)
-    if (this.activeTurn) {
-      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
-    }
-  }
-
-  /** Main 不设固定步数上限；每完成一段工作只做进度审计，不强迫大任务提前收尾。 */
-  private async injectProgressAudit(steps: number): Promise<void> {
-    const reminder: ModelMessage = {
-      role: 'user',
-      content: [
-        '<system-reminder>',
-        `当前长任务已执行 ${steps} 个模型步骤。`,
-        '请核对目标和任务计划：更新已完成项及验证证据；仍在取得有效进展则继续。若没有计划但任务明显复杂，请先建立计划；若重复失败则明确阻塞，不要原地循环。',
         '</system-reminder>',
       ].join('\n'),
     }
