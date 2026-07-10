@@ -12,6 +12,7 @@ import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
+import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
@@ -71,7 +72,7 @@ interface QueuedMessage {
 
 interface StepResult {
   hadToolCalls: boolean
-  endedByTool: boolean
+  toolEndReason: 'completed' | 'waiting-user' | null
   taskPlanChanged: boolean
 }
 
@@ -114,6 +115,10 @@ export class AgentSession {
   /** 仅 Main 正常执行拥有任务控制；B/C 创建时已经处于 discussion，因此不会获得。 */
   private taskPlan: TaskPlanController | null = null
   private loopHealth = new LoopHealthMonitor()
+  /** 非只读工具的会话级串行尾链：审批、检查点与执行必须属于同一临界区。 */
+  private serialToolTail: Promise<void> = Promise.resolve()
+  /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
+  private userQuestionsEnabled = true
 
   constructor(options: AgentSessionOptions) {
     this.options = options
@@ -163,6 +168,10 @@ export class AgentSession {
 
   setProtocolRound(active: boolean): void {
     this.protocolRound = active
+  }
+
+  setUserQuestionsEnabled(enabled: boolean): void {
+    this.userQuestionsEnabled = enabled
   }
 
   /**
@@ -232,6 +241,15 @@ export class AgentSession {
   /** 用户点「停止」：中止当前 turn 或压缩 */
   abort(): void {
     this.opAbort?.abort('user-cancel')
+  }
+
+  private enqueueSerialTool<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.serialToolTail.then(operation, operation)
+    this.serialToolTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
   }
 
   /** 中断收尾：排队消息弹回输入框，不静默丢弃 */
@@ -313,8 +331,9 @@ export class AgentSession {
           stopReason = 'aborted'
           break
         }
-        if (step.endedByTool) {
+        if (step.toolEndReason) {
           endedByTool = true
+          stopReason = step.toolEndReason
           break
         }
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
@@ -547,7 +566,9 @@ export class AgentSession {
     turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
     if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
 
-    const stepControl = { endedByTool: false }
+    const stepControl: { toolEndReason: StepResult['toolEndReason'] } = {
+      toolEndReason: null,
+    }
     this.taskPlan?.beginStep()
     try {
       const taskReminder = this.taskPlan?.reminderMessage()
@@ -555,8 +576,8 @@ export class AgentSession {
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
         messages: taskReminder ? [...this.messages, taskReminder] : this.messages,
-        tools: this.buildToolSet(stepAbort.signal, () => {
-          stepControl.endedByTool = true
+        tools: this.buildToolSet(stepAbort.signal, (reason) => {
+          stepControl.toolEndReason = reason
         }),
         stopWhen: stepCountIs(1),
         providerOptions: this.options.model.providerOptions,
@@ -629,7 +650,7 @@ export class AgentSession {
       }
       return {
         hadToolCalls,
-        endedByTool: stepControl.endedByTool,
+        toolEndReason: stepControl.toolEndReason,
         taskPlanChanged: taskPlanCommit !== undefined,
       }
     } catch (error) {
@@ -637,7 +658,7 @@ export class AgentSession {
       emit({ type: 'step-discarded' })
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
-        return { hadToolCalls: false, endedByTool: false, taskPlanChanged: false }
+        return { hadToolCalls: false, toolEndReason: null, taskPlanChanged: false }
       }
       throw error
     } finally {
@@ -649,180 +670,197 @@ export class AgentSession {
   /** 包装工具集；无项目时只开放显式声明的控制面工具。 */
   private buildToolSet(
     abortSignal: AbortSignal,
-    onTurnEndingTool: () => void,
+    onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
-    const taskTools = this.taskPlan && !this.options.promptContext.discussion && !this.protocolRound
-      ? createTaskPlanTools(this.taskPlan)
-      : []
-    const controlTools = [...extraTools, ...taskTools]
+    const taskTools =
+      this.taskPlan && !this.options.promptContext.discussion && !this.protocolRound
+        ? createTaskPlanTools(this.taskPlan)
+        : []
+    const questionTools =
+      this.userQuestionsEnabled && !this.options.promptContext.discussion && !this.protocolRound
+        ? [
+            createAskUserQuestionTool((question) =>
+              this.options.emit({ type: 'user-question', question }),
+            ),
+          ]
+        : []
+    const controlTools: ToolDefinition[] = [...extraTools, ...taskTools, ...questionTools]
     const defs = projectDir
       ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...controlTools]
       : controlTools.filter((tool) => tool.availableWithoutProject)
-    const toolProjectDir = projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
+    const toolProjectDir =
+      projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
     if (defs.length === 0) return undefined
 
     const { emit, requestApproval } = this.options
     const toolSet: ToolSet = {}
     for (const def of defs) {
+      const executeTool = async (
+        input: unknown,
+        { toolCallId }: { toolCallId: string },
+      ): Promise<string> => {
+        if (abortSignal.aborted) return '操作已取消'
+        // additionalDirs 会在审批中变化，每次调用取最新
+        let toolCtx: ToolContext = {
+          projectDir: toolProjectDir,
+          additionalDirs: this.permissions.additionalDirs,
+          abortSignal,
+        }
+        const parsed = def.inputSchema.safeParse(input)
+        if (!parsed.success) {
+          const msg = `参数校验失败：${parsed.error.message}`
+          emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+          this.loopHealth.record(def.name, input, msg, true)
+          return msg
+        }
+        emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
+
+        // 权限判定链（文档一 §3.2）
+        const decision =
+          !projectDir && def.availableWithoutProject
+            ? ({ behavior: 'allow' } as const)
+            : checkToolPermission(def, parsed.data, this.permissions)
+        if (decision.behavior === 'deny') {
+          const msg = `操作被拒绝：${decision.reason}`
+          emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+          this.loopHealth.record(def.name, parsed.data, msg, true)
+          return msg
+        }
+        if (decision.behavior === 'ask') {
+          emit({ type: 'agent-status', status: 'waiting-approval' })
+          const diff = await def.renderDiff?.(parsed.data, toolCtx).catch(() => undefined)
+          const response = await requestApproval({
+            requestId: toolCallId,
+            toolName: def.name,
+            input: parsed.data,
+            reason: decision.reason,
+            diff,
+            suggestion: decision.suggestion,
+          })
+          emit({ type: 'agent-status', status: 'working' })
+          if (!response.approved) {
+            const msg = `用户拒绝了此操作（${decision.reason}）`
+            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            this.loopHealth.record(def.name, parsed.data, msg, true)
+            return msg
+          }
+          const approvedPaths = def.extractPaths?.(parsed.data) ?? []
+          if (approvedPaths.length > 0) {
+            // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
+            toolCtx = {
+              ...toolCtx,
+              additionalDirs: [
+                ...toolCtx.additionalDirs,
+                ...approvedPaths.map((path) =>
+                  isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
+                ),
+              ],
+            }
+          }
+          if (response.remember && decision.suggestion) {
+            this.applySuggestion(decision.suggestion)
+          }
+        }
+
+        // 只有工具显式声明资源边界才建立检查点；权限路径不能替代回滚覆盖契约。
+        let preparedCheckpoint: Awaited<ReturnType<CheckpointManager['prepare']>> = null
+        if (
+          (def.kind === 'edit' || def.kind === 'execute') &&
+          this.checkpoints &&
+          this.activeTurn &&
+          !this.permissions.discussion
+        ) {
+          const turnId = this.activeTurn.id
+          if (!def.checkpointScope) {
+            await this.checkpoints
+              .recordBarrier(toolCallId, turnId, `${def.name} 未声明可回滚资源范围`)
+              .catch(() => {})
+          } else {
+            try {
+              const checkpointScope = await def.checkpointScope(parsed.data, toolCtx)
+              preparedCheckpoint = await this.checkpoints.prepare(
+                toolCallId,
+                turnId,
+                checkpointScope,
+              )
+              if (!preparedCheckpoint) {
+                await this.checkpoints.recordBarrier(
+                  toolCallId,
+                  turnId,
+                  this.checkpoints.disabled ?? `${def.name} 未建立检查点`,
+                )
+              }
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error)
+              await this.checkpoints.recordBarrier(toolCallId, turnId, reason).catch(() => {})
+              if (!this.checkpointDisabledNotified) {
+                this.checkpointDisabledNotified = true
+                emit({ type: 'checkpoint-disabled', reason })
+              }
+            }
+          }
+        }
+
+        const finalizeCheckpoint = async (): Promise<void> => {
+          if (!preparedCheckpoint || !this.checkpoints) return
+          const ready = await this.checkpoints.finalize(preparedCheckpoint)
+          if (ready) {
+            emit({
+              type: 'checkpoint-created',
+              toolUseId: toolCallId,
+              hash: ready.id,
+              coverage: ready.coverage,
+              warning: ready.warning,
+            })
+          } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
+            this.checkpointDisabledNotified = true
+            emit({ type: 'checkpoint-disabled', reason: this.checkpoints.disabled })
+          }
+        }
+
+        try {
+          const result = await def.execute(parsed.data, {
+            ...toolCtx,
+            onProgress: (output) =>
+              emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
+          })
+          // 记录读过的文件（压缩后重注入，防失忆）
+          if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
+            try {
+              const abs = resolveAllowed(toolCtx, (parsed.data as { path: string }).path)
+              this.recentReadFiles.set(abs, Date.now())
+            } catch {
+              /* 越界读取已被权限层处理，这里忽略 */
+            }
+          }
+          await finalizeCheckpoint()
+          emit({
+            type: 'tool-end',
+            toolUseId: toolCallId,
+            result: result.data,
+            isError: result.isError,
+          })
+          if (def.endsTurnOnSuccess && !result.isError) {
+            onTurnEndingTool(def.turnEndReasonOnSuccess)
+          }
+          this.loopHealth.record(def.name, parsed.data, result.data, result.isError)
+          return result.data
+        } catch (error) {
+          await finalizeCheckpoint()
+          const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
+          emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+          this.loopHealth.record(def.name, parsed.data, msg, true)
+          return msg
+        }
+      }
+      const executeSerially = (input: unknown, context: { toolCallId: string }) =>
+        this.enqueueSerialTool(() => executeTool(input, context))
       toolSet[def.name] = aiTool({
         description: def.prompt,
         inputSchema: def.inputSchema,
-        execute: async (input: unknown, { toolCallId }) => {
-          // additionalDirs 会在审批中变化，每次调用取最新
-          let toolCtx: ToolContext = {
-            projectDir: toolProjectDir,
-            additionalDirs: this.permissions.additionalDirs,
-            abortSignal,
-          }
-          const parsed = def.inputSchema.safeParse(input)
-          if (!parsed.success) {
-            const msg = `参数校验失败：${parsed.error.message}`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, input, msg, true)
-            return msg
-          }
-          emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
-
-          // 权限判定链（文档一 §3.2）
-          const decision =
-            !projectDir && def.availableWithoutProject
-              ? ({ behavior: 'allow' } as const)
-              : checkToolPermission(def, parsed.data, this.permissions)
-          if (decision.behavior === 'deny') {
-            const msg = `操作被拒绝：${decision.reason}`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, parsed.data, msg, true)
-            return msg
-          }
-          if (decision.behavior === 'ask') {
-            emit({ type: 'agent-status', status: 'waiting-approval' })
-            const diff = await def.renderDiff?.(parsed.data, toolCtx).catch(() => undefined)
-            const response = await requestApproval({
-              requestId: toolCallId,
-              toolName: def.name,
-              input: parsed.data,
-              reason: decision.reason,
-              diff,
-              suggestion: decision.suggestion,
-            })
-            emit({ type: 'agent-status', status: 'working' })
-            if (!response.approved) {
-              const msg = `用户拒绝了此操作（${decision.reason}）`
-              emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-              this.loopHealth.record(def.name, parsed.data, msg, true)
-              return msg
-            }
-            const approvedPaths = def.extractPaths?.(parsed.data) ?? []
-            if (approvedPaths.length > 0) {
-              // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
-              toolCtx = {
-                ...toolCtx,
-                additionalDirs: [
-                  ...toolCtx.additionalDirs,
-                  ...approvedPaths.map((path) =>
-                    isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
-                  ),
-                ],
-              }
-            }
-            if (response.remember && decision.suggestion) {
-              this.applySuggestion(decision.suggestion)
-            }
-          }
-
-          // 只有工具显式声明资源边界才建立检查点；权限路径不能替代回滚覆盖契约。
-          let preparedCheckpoint: Awaited<ReturnType<CheckpointManager['prepare']>> = null
-          if (
-            def.kind !== 'read' &&
-            this.checkpoints &&
-            this.activeTurn &&
-            !this.permissions.discussion
-          ) {
-            const turnId = this.activeTurn.id
-            if (!def.checkpointScope) {
-              await this.checkpoints.recordBarrier(
-                toolCallId,
-                turnId,
-                `${def.name} 未声明可回滚资源范围`,
-              ).catch(() => {})
-            } else {
-              try {
-                const checkpointScope = await def.checkpointScope(parsed.data, toolCtx)
-                preparedCheckpoint = await this.checkpoints.prepare(
-                  toolCallId,
-                  turnId,
-                  checkpointScope,
-                )
-                if (!preparedCheckpoint) {
-                  await this.checkpoints.recordBarrier(
-                    toolCallId,
-                    turnId,
-                    this.checkpoints.disabled ?? `${def.name} 未建立检查点`,
-                  )
-                }
-              } catch (error) {
-                const reason = error instanceof Error ? error.message : String(error)
-                await this.checkpoints.recordBarrier(toolCallId, turnId, reason).catch(() => {})
-                if (!this.checkpointDisabledNotified) {
-                  this.checkpointDisabledNotified = true
-                  emit({ type: 'checkpoint-disabled', reason })
-                }
-              }
-            }
-          }
-
-          const finalizeCheckpoint = async (): Promise<void> => {
-            if (!preparedCheckpoint || !this.checkpoints) return
-            const ready = await this.checkpoints.finalize(preparedCheckpoint)
-            if (ready) {
-              emit({
-                type: 'checkpoint-created',
-                toolUseId: toolCallId,
-                hash: ready.id,
-                coverage: ready.coverage,
-                warning: ready.warning,
-              })
-            } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
-              this.checkpointDisabledNotified = true
-              emit({ type: 'checkpoint-disabled', reason: this.checkpoints.disabled })
-            }
-          }
-
-          try {
-            const result = await def.execute(parsed.data, {
-              ...toolCtx,
-              onProgress: (output) =>
-                emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
-            })
-            // 记录读过的文件（压缩后重注入，防失忆）
-            if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
-              try {
-                const abs = resolveAllowed(toolCtx, (parsed.data as { path: string }).path)
-                this.recentReadFiles.set(abs, Date.now())
-              } catch {
-                /* 越界读取已被权限层处理，这里忽略 */
-              }
-            }
-            await finalizeCheckpoint()
-            emit({
-              type: 'tool-end',
-              toolUseId: toolCallId,
-              result: result.data,
-              isError: result.isError,
-            })
-            if (def.endsTurnOnSuccess && !result.isError) onTurnEndingTool()
-            this.loopHealth.record(def.name, parsed.data, result.data, result.isError)
-            return result.data
-          } catch (error) {
-            await finalizeCheckpoint()
-            const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, parsed.data, msg, true)
-            return msg
-          }
-        },
+        execute: def.isReadOnly ? executeTool : executeSerially,
       })
     }
     return toolSet

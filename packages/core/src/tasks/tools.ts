@@ -13,7 +13,7 @@ const draftSchema = z.object({
   acceptance: z.string().min(1).describe('可核验的完成标准'),
 })
 
-/** Main 专用控制面工具：kind=read 表示不触碰外部资源，因此无需审批或资源检查点。 */
+/** Main 专用控制面工具：不触碰外部资源，因此无需审批或资源检查点。 */
 export function createTaskPlanTools(controller: TaskPlanController): ToolDefinition[] {
   return [
     buildTool({
@@ -26,7 +26,7 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
         items: z.array(draftSchema).min(2).max(20).describe('有序任务项，最后一项必须验证整体结果'),
       }),
       isReadOnly: false,
-      kind: 'read',
+      kind: 'control',
       availableWithoutProject: true,
       async execute(input) {
         const result = controller.create(input.goal, input.items)
@@ -43,7 +43,7 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
         acceptance: z.string().min(1).describe('新增工作项的可核验完成标准'),
       }),
       isReadOnly: false,
-      kind: 'read',
+      kind: 'control',
       availableWithoutProject: true,
       async execute(input) {
         const result = controller.addItem({ ...input, kind: 'work' })
@@ -62,7 +62,7 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
         blocked_reason: z.string().min(1).optional().describe('标记 blocked 时必填'),
       }),
       isReadOnly: false,
-      kind: 'read',
+      kind: 'control',
       availableWithoutProject: true,
       async execute(input) {
         const result = controller.updateItem(
@@ -84,7 +84,7 @@ export function createTaskPlanTools(controller: TaskPlanController): ToolDefinit
         summary: z.string().min(1).describe('完成结果或放弃原因'),
       }),
       isReadOnly: false,
-      kind: 'read',
+      kind: 'control',
       availableWithoutProject: true,
       async execute(input) {
         const result = controller.close(input.outcome, input.summary)

@@ -15,11 +15,13 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   /** 只读工具可与其它只读工具并行执行 */
   isReadOnly: boolean
   /** 权限档位判定用的操作类别：read 免审批 / edit 受 acceptEdits 档控制 / execute 最严 */
-  kind: 'read' | 'edit' | 'execute'
+  kind: 'read' | 'edit' | 'execute' | 'control'
   /** 控制面工具可在无项目的讨论会话中使用；默认 false，避免意外暴露文件/命令工具。 */
   availableWithoutProject: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
   endsTurnOnSuccess: boolean
+  /** 终止型工具成功后的语义；waiting-user 会保留计划并等待下一条用户消息。 */
+  turnEndReasonOnSuccess: 'completed' | 'waiting-user'
   /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
   extractPaths?: (input: z.infer<Schema>) => string[]
   /**
@@ -60,6 +62,7 @@ const CONSERVATIVE_DEFAULTS = {
   kind: 'execute' as const,
   availableWithoutProject: false,
   endsTurnOnSuccess: false,
+  turnEndReasonOnSuccess: 'completed' as const,
 }
 
 /** 集中填充 fail-closed 默认值 */

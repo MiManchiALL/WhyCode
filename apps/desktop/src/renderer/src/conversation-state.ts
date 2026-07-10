@@ -1,5 +1,5 @@
 import type { TaskPlan, ViewEvent } from '@whycode/core'
-import type { CoreEvent } from '@whycode/core/events'
+import type { CoreEvent, UserQuestion } from '@whycode/core/events'
 
 export interface ToolCall {
   id: string
@@ -45,6 +45,8 @@ export interface ConversationState {
   turnStartBlocks: Map<string, number>
   /** 当前/最近一个结构化计划；独立于聊天块，避免频繁进度更新刷屏。 */
   taskPlan: TaskPlan | null
+  /** 最近一个尚未被用户消息回答的问题；由可见事件重放恢复。 */
+  pendingQuestion: UserQuestion | null
 }
 
 const VOTE_LABELS: Record<string, string> = {
@@ -65,6 +67,7 @@ export function createConversationState(events: readonly ViewEvent[] = []): Conv
     pendingTurnStart: null,
     turnStartBlocks: new Map(),
     taskPlan: null,
+    pendingQuestion: null,
   }
   for (const event of events) state = applyViewEvent(state, event)
   return state
@@ -133,6 +136,8 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       )
     case 'error':
       return appendBlock(state, { kind: 'error', id: nextBlockId(state), text: event.message })
+    case 'user-question':
+      return { ...state, pendingQuestion: structuredClone(event.question) }
     case 'peer-event':
       return applyPeerCoreEvent(state, event.agentId, event.event)
     case 'vote-cast':
@@ -184,7 +189,7 @@ export function appendUserMessage(
   startsTurn: boolean,
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
-  return appendBlock({ ...state, pendingTurnStart }, {
+  return appendBlock({ ...state, pendingTurnStart, pendingQuestion: null }, {
     kind: 'user',
     id: nextBlockId(state),
     text,
@@ -324,7 +329,12 @@ function applyCheckpointRestored(
     ? structuredClone(event.taskPlan)
     : state.taskPlan
   return appendNotice(
-    { ...state, blocks, taskPlan },
+    {
+      ...state,
+      blocks,
+      taskPlan,
+      pendingQuestion: event.scope === 'files-and-chat' ? null : state.pendingQuestion,
+    },
     event.scope === 'files-and-chat'
       ? '已回滚：该轮对话与文件改动均已撤销'
       : '已回滚检查点覆盖的文件（对话保留）',

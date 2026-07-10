@@ -317,11 +317,13 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeConsensusTaskId
             ? 'running'
-            : stopReason === 'paused'
-              ? 'paused'
-            : stopReason === 'max-turns'
-              ? 'max-turns'
-              : 'idle'
+            : stopReason === 'waiting-user'
+              ? 'waiting-user'
+              : stopReason === 'paused'
+                ? 'paused'
+                : stopReason === 'max-turns'
+                  ? 'max-turns'
+                  : 'idle'
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }

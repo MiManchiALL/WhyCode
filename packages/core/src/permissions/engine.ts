@@ -31,7 +31,7 @@ export function checkToolPermission(
   }
 
   // 2. 敏感路径 + 写操作：强制审批（bypass 免疫，不提供「记住允许」建议）
-  if (def.kind !== 'read') {
+  if (def.kind === 'edit' || def.kind === 'execute') {
     for (const p of rawPaths) {
       const abs = isAbsolute(p) ? resolve(p) : resolve(projectDir, p)
       if (isSensitivePath(abs)) {
@@ -58,7 +58,7 @@ export function checkToolPermission(
   // 3.5 讨论档（M3 协议 §11.1 / §14.4）：读放行；写只许 scratch；scratch 内命令自动放行。
   // 相对路径必须先按执行语义（projectDir 基准）绝对化，再对 scratch 边界检查——否则相对路径会被误判在 scratch 内
   if (ctx.discussion) {
-    if (def.kind === 'read') return { behavior: 'allow' }
+    if (def.kind === 'read' || def.kind === 'control') return { behavior: 'allow' }
     const scratchDir = ctx.discussion.scratchDir
     const outsideScratch = rawPaths
       .map((p) => {
@@ -85,12 +85,12 @@ export function checkToolPermission(
   }
 
   // 4. 只读档：一切非读操作直接拒绝
-  if (ctx.mode === 'readonly' && def.kind !== 'read') {
+  if (ctx.mode === 'readonly' && def.kind !== 'read' && def.kind !== 'control') {
     return { behavior: 'deny', reason: '当前为只读模式，不允许修改或执行' }
   }
 
   // 5. 读操作：边界内一律放行
-  if (def.kind === 'read') return { behavior: 'allow' }
+  if (def.kind === 'read' || def.kind === 'control') return { behavior: 'allow' }
 
   // 6. 会话内「记住允许」的工具
   if (ctx.sessionAllowedTools.includes(def.name)) return { behavior: 'allow' }

@@ -107,6 +107,32 @@ describe('ViewTimeline', () => {
     assert.equal(writer.batches.length, 1)
     assert.match(JSON.stringify(writer.batches), /完成长任务/)
   })
+
+  it('待回答问题只在所属 step 提交后写入历史', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    const event = {
+      type: 'user-question' as const,
+      question: {
+        id: 'question-1',
+        header: '实现偏好',
+        question: '你更看重哪一点？',
+        options: [
+          { label: '简单可靠', description: '减少复杂度' },
+          { label: '功能完整', description: '覆盖更多场景' },
+        ],
+      },
+    }
+
+    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'step-discarded' })
+    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'step-committed' })
+    await Promise.resolve()
+
+    assert.equal(writer.batches.length, 1)
+    assert.match(JSON.stringify(writer.batches), /你更看重哪一点/)
+  })
 })
 
 function taskPlan() {

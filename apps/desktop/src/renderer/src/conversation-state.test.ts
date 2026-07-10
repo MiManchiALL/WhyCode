@@ -118,6 +118,26 @@ describe('会话界面时间线重建', () => {
     assert.deepEqual(state.taskPlan, active)
     assert.doesNotMatch(JSON.stringify(state.blocks), /推进计划/)
   })
+
+  it('恢复待回答问题，并在下一条用户消息出现后清除等待卡', () => {
+    const question = {
+      id: 'question-1',
+      header: '实现偏好',
+      question: '你更看重哪一点？',
+      options: [
+        { label: '简单可靠', description: '减少复杂度' },
+        { label: '功能完整', description: '覆盖更多场景' },
+      ],
+    }
+    const waiting = createConversationState([core({ type: 'user-question', question })])
+    assert.deepEqual(waiting.pendingQuestion, question)
+
+    const answered = createConversationState([
+      core({ type: 'user-question', question }),
+      { type: 'user-message', text: '选择简单可靠', startsTurn: true },
+    ])
+    assert.equal(answered.pendingQuestion, null)
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {

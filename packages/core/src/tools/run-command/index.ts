@@ -3,6 +3,7 @@ import { lstat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
+import { terminateProcessTree } from './process-termination.ts'
 
 export const BASH_TOOL_NAME = 'RunCommand'
 
@@ -87,10 +88,15 @@ export const runCommandTool = buildTool({
         // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位
         cwd: input.cwd ? resolve(ctx.projectDir, input.cwd) : ctx.projectDir,
         windowsHide: true,
+        // POSIX 以独立进程组启动，停止时才能连同 shell 的后代一起终止。
+        detached: process.platform !== 'win32',
       })
 
       let output = ''
+      let done = false
+      let stopping: 'timeout' | 'abort' | null = null
       const append = (chunk: Buffer) => {
+        if (done) return
         const text = chunk.toString('utf-8')
         output += text
         ctx.onProgress?.(text)
@@ -98,18 +104,6 @@ export const runCommandTool = buildTool({
       child.stdout.on('data', append)
       child.stderr.on('data', append)
 
-      const timeout = setTimeout(() => {
-        child.kill()
-        finish(`[命令超时（${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms），已终止]\n`, true)
-      }, input.timeoutMs ?? DEFAULT_TIMEOUT_MS)
-
-      const onAbort = () => {
-        child.kill()
-        finish('[已被用户中断]\n', true)
-      }
-      ctx.abortSignal.addEventListener('abort', onAbort, { once: true })
-
-      let done = false
       const finish = (suffix: string, isError: boolean) => {
         if (done) return
         done = true
@@ -122,10 +116,36 @@ export const runCommandTool = buildTool({
         resolvePromise({ data: data || '（无输出）', isError })
       }
 
+      const requestStop = (reason: 'timeout' | 'abort') => {
+        if (done || stopping) return
+        stopping = reason
+        void terminateProcessTree(child)
+          .catch(() => false)
+          .then((treeStopped) => {
+            const suffix =
+              reason === 'timeout'
+                ? `[命令超时（${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms），已请求终止]`
+                : '[已被用户中断]'
+            const warning = treeStopped ? '' : '\n[警告：未能确认全部子进程均已终止]'
+            finish(`${suffix}${warning}\n`, true)
+          })
+      }
+      const timeout = setTimeout(
+        () => requestStop('timeout'),
+        input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      )
+      const onAbort = () => requestStop('abort')
+      ctx.abortSignal.addEventListener('abort', onAbort, { once: true })
+
       child.on('close', (code) => {
+        if (stopping) return
         finish(code === 0 ? '' : `\n[退出码 ${code}]`, code !== 0)
       })
-      child.on('error', (err) => finish(`[启动失败：${err.message}]`, true))
+      child.on('error', (err) => {
+        if (!stopping) finish(`[启动失败：${err.message}]`, true)
+      })
+      // AbortSignal 在监听器注册前已中止时不会补发事件，必须显式检查。
+      if (ctx.abortSignal.aborted) requestStop('abort')
     })
   },
 })

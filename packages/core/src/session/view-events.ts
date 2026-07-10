@@ -34,6 +34,16 @@ const candidateDetailsSchema = z.object({
   knownRisks: z.array(z.string()).optional(),
 })
 
+const userQuestionSchema = z.object({
+  id: z.string().min(1),
+  header: z.string().min(1),
+  question: z.string().min(1),
+  options: z
+    .array(z.object({ label: z.string().min(1), description: z.string().min(1) }))
+    .min(2)
+    .max(4),
+})
+
 export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('turn-start'), turnId: z.string() }),
   z.object({ type: z.literal('text-delta'), text: z.string() }),
@@ -67,6 +77,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     postTokens: z.number(),
   }),
   z.object({ type: z.literal('error'), message: z.string(), recoverable: z.boolean() }),
+  z.object({ type: z.literal('user-question'), question: userQuestionSchema }),
   z.object({
     type: z.literal('peer-event'),
     agentId: z.enum(['B', 'C']),
@@ -141,6 +152,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'checkpoint-restored':
     case 'context-compacted':
     case 'error':
+    case 'user-question':
     case 'candidate-submitted':
     case 'vote-cast':
     case 'negotiation-started':

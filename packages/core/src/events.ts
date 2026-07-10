@@ -19,6 +19,19 @@ export interface UsageInfo {
   costUsd: number
 }
 
+export interface UserQuestionOption {
+  label: string
+  description: string
+}
+
+/** Main 需要用户决策时展示的可恢复问题卡。 */
+export interface UserQuestion {
+  id: string
+  header: string
+  question: string
+  options: UserQuestionOption[]
+}
+
 /** Agent 整体状态，宠物接口消费的核心事件 */
 export type AgentStatus =
   | 'idle'
@@ -55,6 +68,7 @@ export type CoreEvent =
   | { type: 'turn-end'; turnId: string; usage: UsageInfo; stopReason: StopReason }
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
+  | { type: 'user-question'; question: UserQuestion }
   // --- steering（M2-a）：运行中插话 ---
   | { type: 'message-queued'; id: string; text: string }
   | { type: 'message-injected'; id: string; text: string }
@@ -132,7 +146,13 @@ export type CoreEvent =
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
   | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }
 
-export type StopReason = 'completed' | 'paused' | 'aborted' | 'max-turns' | 'error'
+export type StopReason =
+  | 'completed'
+  | 'waiting-user'
+  | 'paused'
+  | 'aborted'
+  | 'max-turns'
+  | 'error'
 
 /** 宿主 → core 的命令 */
 export type CoreCommand =
