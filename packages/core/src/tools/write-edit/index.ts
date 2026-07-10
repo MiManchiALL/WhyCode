@@ -32,7 +32,7 @@ export const writeFileTool = buildTool({
   name: WRITE_FILE_TOOL_NAME,
   description: '写入/创建文件',
   prompt:
-    '将完整内容写入项目内的文件（覆盖已有内容，自动创建父目录）。只适合新文件或整文件重写；修改已有文件优先用 EditFile。',
+    '将完整内容写入允许范围内的文件（项目路径或经用户授权的外部路径；覆盖已有内容，自动创建父目录）。只适合新文件或整文件重写；修改已有文件优先用 EditFile。',
   inputSchema: z.object({
     path: z.string().describe('文件路径'),
     content: z.string().describe('完整文件内容'),
@@ -61,7 +61,7 @@ export const editFileTool = buildTool({
   name: EDIT_FILE_TOOL_NAME,
   description: '编辑文件（精确替换）',
   prompt:
-    '在项目文件中做精确字符串替换。oldText 必须与文件现有内容完全一致且唯一（含缩进），否则失败。先用 ReadFile 确认内容。',
+    '在允许范围内的文件中做精确字符串替换（项目路径或经用户授权的外部路径）。oldText 必须与文件现有内容完全一致且唯一（含缩进），否则失败。先用 ReadFile 确认内容。',
   inputSchema: z.object({
     path: z.string().describe('文件路径'),
     oldText: z.string().describe('要替换的原文（必须唯一匹配）'),

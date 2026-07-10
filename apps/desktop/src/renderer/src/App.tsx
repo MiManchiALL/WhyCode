@@ -511,9 +511,34 @@ function RestoreButton({
   warning?: string
 }) {
   const [open, setOpen] = useState(false)
-  const restore = (scope: 'files' | 'files-and-chat') => {
+  const [pending, setPending] = useState(false)
+  const pendingRef = useRef(false)
+  const mountedRef = useRef(true)
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
+  const restore = async (scope: 'files' | 'files-and-chat') => {
+    if (pendingRef.current) return
+    pendingRef.current = true
+    setPending(true)
     setOpen(false)
-    void window.whycode.sendCommand({ type: 'restore-checkpoint', toolUseId, scope })
+    try {
+      await window.whycode.sendCommand({ type: 'restore-checkpoint', toolUseId, scope })
+    } finally {
+      pendingRef.current = false
+      if (mountedRef.current) setPending(false)
+    }
+  }
+  if (pending) {
+    return (
+      <button
+        className="shrink-0 cursor-wait text-xs text-neutral-400"
+        disabled
+        aria-busy="true"
+      >
+        ○ 回滚中…
+      </button>
+    )
   }
   if (!open) {
     return (
@@ -528,11 +553,11 @@ function RestoreButton({
   }
   return (
     <span className="flex shrink-0 gap-1 text-xs">
-      <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => restore('files')}>
+      <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => void restore('files')}>
         仅文件
       </button>
       {coverage === 'complete' && (
-        <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => restore('files-and-chat')}>
+        <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => void restore('files-and-chat')}>
           文件+对话
         </button>
       )}

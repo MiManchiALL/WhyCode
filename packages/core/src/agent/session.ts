@@ -1,4 +1,5 @@
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
+import { isAbsolute, resolve } from 'node:path'
 import type { CoreEvent, StopReason, UsageInfo } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
@@ -92,6 +93,8 @@ export class AgentSession {
   private permissions: PermissionContext
   private checkpoints: CheckpointManager | null = null
   private checkpointDisabledNotified = false
+  /** 回滚是文件与会话的补偿事务；同一会话同一时刻只允许一个事务运行。 */
+  private restoringCheckpoint = false
   /** 当前 turn ID（资源检查点归属用） */
   private activeTurn: { id: string } | null = null
   /** 当前操作（turn 或压缩）的中止器，session 自管 */
@@ -668,7 +671,7 @@ export class AgentSession {
         inputSchema: def.inputSchema,
         execute: async (input: unknown, { toolCallId }) => {
           // additionalDirs 会在审批中变化，每次调用取最新
-          const toolCtx: ToolContext = {
+          let toolCtx: ToolContext = {
             projectDir: toolProjectDir,
             additionalDirs: this.permissions.additionalDirs,
             abortSignal,
@@ -710,6 +713,19 @@ export class AgentSession {
               emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
               this.loopHealth.record(def.name, parsed.data, msg, true)
               return msg
+            }
+            const approvedPaths = def.extractPaths?.(parsed.data) ?? []
+            if (approvedPaths.length > 0) {
+              // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
+              toolCtx = {
+                ...toolCtx,
+                additionalDirs: [
+                  ...toolCtx.additionalDirs,
+                  ...approvedPaths.map((path) =>
+                    isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
+                  ),
+                ],
+              }
             }
             if (response.remember && decision.suggestion) {
               this.applySuggestion(decision.suggestion)
@@ -777,7 +793,6 @@ export class AgentSession {
           try {
             const result = await def.execute(parsed.data, {
               ...toolCtx,
-              additionalDirs: this.permissions.additionalDirs,
               onProgress: (output) =>
                 emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
             })
@@ -827,64 +842,71 @@ export class AgentSession {
       emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: 'Agent 工作中，请先停止' })
       return
     }
-    const record = await this.checkpoints.getReady(toolUseId)
-    if (!record) {
-      emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
-      return
-    }
-    const recorder = this.options.sessionRecorder
-    const rollbackMessages = scope === 'files-and-chat'
-      ? recorder?.messagesBeforeTurn(record.turnId) ?? null
-      : null
-    const rollbackTaskPlan = scope === 'files-and-chat'
-      ? recorder?.taskPlanBeforeTurn(record.turnId)
-      : undefined
-    if (
-      scope === 'files-and-chat' &&
-      (rollbackMessages === null || rollbackTaskPlan === undefined)
-    ) {
+    // Renderer 会立即禁用按钮；这里仍做核心层单飞，防 IPC 重复提交或其它宿主并发调用。
+    if (this.restoringCheckpoint) return
+    this.restoringCheckpoint = true
+    try {
+      const record = await this.checkpoints.getReady(toolUseId)
+      if (!record) {
+        emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
+        return
+      }
+      const recorder = this.options.sessionRecorder
+      const rollbackMessages = scope === 'files-and-chat'
+        ? recorder?.messagesBeforeTurn(record.turnId) ?? null
+        : null
+      const rollbackTaskPlan = scope === 'files-and-chat'
+        ? recorder?.taskPlanBeforeTurn(record.turnId)
+        : undefined
+      if (
+        scope === 'files-and-chat' &&
+        (rollbackMessages === null || rollbackTaskPlan === undefined)
+      ) {
+        emit({
+          type: 'checkpoint-restored',
+          toolUseId,
+          turnId: record.turnId,
+          scope,
+          ok: false,
+          error: '该轮早于上下文压缩或当前活动历史，只能回滚文件（选「仅文件」）',
+        })
+        return
+      }
+      const originalMessages = structuredClone(this.messages)
+      const originalTaskPlan = this.taskPlan?.snapshot ?? null
+      const result = await this.checkpoints.restore(
+        toolUseId,
+        scope,
+        rollbackMessages !== null && recorder ? {
+          commit: async () => {
+            await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskPlan)
+            this.messages = structuredClone(rollbackMessages)
+            this.taskPlan?.restore(rollbackTaskPlan ?? null)
+            this.tokenBaseline = null
+          },
+          compensate: async () => {
+            await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskPlan)
+            this.messages = structuredClone(originalMessages)
+            this.taskPlan?.restore(originalTaskPlan)
+            this.tokenBaseline = null
+          },
+        } : undefined,
+      )
       emit({
         type: 'checkpoint-restored',
         toolUseId,
-        turnId: record.turnId,
+        turnId: result.turnId ?? record.turnId,
         scope,
-        ok: false,
-        error: '该轮早于上下文压缩或当前活动历史，只能回滚文件（选「仅文件」）',
+        ok: result.ok,
+        error: result.error,
+        invalidatedToolUseIds: result.invalidatedToolUseIds,
+        ...(result.ok && scope === 'files-and-chat'
+          ? { taskPlan: rollbackTaskPlan ?? null }
+          : {}),
       })
-      return
+    } finally {
+      this.restoringCheckpoint = false
     }
-    const originalMessages = structuredClone(this.messages)
-    const originalTaskPlan = this.taskPlan?.snapshot ?? null
-    const result = await this.checkpoints.restore(
-      toolUseId,
-      scope,
-      rollbackMessages !== null && recorder ? {
-        commit: async () => {
-          await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskPlan)
-          this.messages = structuredClone(rollbackMessages)
-          this.taskPlan?.restore(rollbackTaskPlan ?? null)
-          this.tokenBaseline = null
-        },
-        compensate: async () => {
-          await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskPlan)
-          this.messages = structuredClone(originalMessages)
-          this.taskPlan?.restore(originalTaskPlan)
-          this.tokenBaseline = null
-        },
-      } : undefined,
-    )
-    emit({
-      type: 'checkpoint-restored',
-      toolUseId,
-      turnId: result.turnId ?? record.turnId,
-      scope,
-      ok: result.ok,
-      error: result.error,
-      invalidatedToolUseIds: result.invalidatedToolUseIds,
-      ...(result.ok && scope === 'files-and-chat'
-        ? { taskPlan: rollbackTaskPlan ?? null }
-        : {}),
-    })
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */
