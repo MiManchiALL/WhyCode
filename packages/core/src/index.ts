@@ -30,6 +30,18 @@ export {
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
 export {
+  CommandSessionManager,
+  createBackgroundCommandTools,
+  START_COMMAND_TOOL_NAME,
+  LIST_COMMANDS_TOOL_NAME,
+  GET_COMMAND_OUTPUT_TOOL_NAME,
+  WRITE_COMMAND_INPUT_TOOL_NAME,
+  STOP_COMMAND_TOOL_NAME,
+  type CommandOutputChunk,
+  type CommandTaskSnapshot,
+  type CommandTaskStatus,
+} from './tools/background-command/index.ts'
+export {
   PERMISSION_MODES,
   type PermissionMode,
   type ApprovalSuggestion,

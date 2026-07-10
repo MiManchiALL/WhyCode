@@ -38,6 +38,8 @@ export interface AgentSessionOptions {
   checkpointStorageDir?: string
   /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
   extraTools?: ToolDefinition[]
+  /** 宿主为普通 Main 注入的会话工具；讨论/协议回合物理移除（如后台命令）。 */
+  mainTools?: ToolDefinition[]
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** 事件出口（宿主注入） */
@@ -697,7 +699,16 @@ export class AgentSession {
             ),
           ]
         : []
-    const controlTools: ToolDefinition[] = [...extraTools, ...taskTools, ...questionTools]
+    const mainTools =
+      !this.options.promptContext.discussion && !this.protocolRound
+        ? (this.options.mainTools ?? [])
+        : []
+    const controlTools: ToolDefinition[] = [
+      ...extraTools,
+      ...taskTools,
+      ...questionTools,
+      ...mainTools,
+    ]
     const defs = projectDir
       ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...controlTools]
       : controlTools.filter((tool) => tool.availableWithoutProject)
