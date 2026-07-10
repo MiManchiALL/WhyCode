@@ -146,7 +146,11 @@ async function ensureSession(): Promise<string | null> {
     session = new AgentSession({
       model: entry,
       providerConfig,
-      promptContext: { projectDir, osPlatform: process.platform },
+      promptContext: {
+        projectDir,
+        osPlatform: process.platform,
+        homeDir: app.getPath('home'),
+      },
       checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
       sessionRecorder: recorder,
       emit: broadcastEvent,

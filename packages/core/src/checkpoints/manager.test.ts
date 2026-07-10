@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { simpleGit } from 'simple-git'
@@ -168,6 +168,21 @@ describe('持久化资源检查点', () => {
     assert.equal(await readFile(untouched, 'utf8'), 'stay')
     await assert.rejects(access(created))
     await access(join(env.project, '.git'))
+  })
+
+  it('命令只影响被拒绝的大范围目录时明确说明没有可回滚文件', async () => {
+    const env = await createEnvironment()
+    const desktop = join(homedir(), 'Desktop')
+    const prepared = await env.manager.prepare('tool-uncovered', 'turn-1', {
+      kind: 'workspace-roots',
+      roots: [env.project, desktop],
+      warning: '命令影响范围无法完全证明',
+    })
+    assert.ok(prepared)
+
+    assert.equal(await env.manager.finalize(prepared), null)
+    assert.match(env.manager.disabled ?? '', /未进入可回滚范围/)
+    assert.match(env.manager.disabled ?? '', /Desktop/)
   })
 })
 

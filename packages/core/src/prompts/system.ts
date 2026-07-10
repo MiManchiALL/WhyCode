@@ -13,6 +13,8 @@ export interface PromptContext {
   /** 项目根目录；null = 纯聊天模式（无文件与命令工具） */
   projectDir: string | null
   osPlatform: NodeJS.Platform
+  /** 用户主目录；桌面、文档等项目外路径需要明确绝对化时供模型参考。 */
+  homeDir?: string
   /** 协商讨论阶段（M3）：当前 Agent 身份与临时工作区 */
   discussion?: { agentId: 'Main' | 'B' | 'C'; scratchDir: string }
 }
@@ -24,12 +26,18 @@ function identitySection(): string {
   ].join('\n')
 }
 
-function environmentSection(projectDir: string, osPlatform: NodeJS.Platform): string {
-  return [
+function environmentSection(
+  projectDir: string,
+  osPlatform: NodeJS.Platform,
+  homeDir?: string,
+): string {
+  const lines = [
     '# 环境',
     `- 项目目录：${projectDir}`,
     `- 操作系统：${osPlatform === 'win32' ? 'Windows' : osPlatform}`,
-  ].join('\n')
+  ]
+  if (homeDir) lines.push(`- 用户主目录：${homeDir}`)
+  return lines.join('\n')
 }
 
 function toolUsageSection(): string {
@@ -38,6 +46,7 @@ function toolUsageSection(): string {
     '- 只在用户问题与当前项目相关时使用项目工具；非项目问题直接回答，不要强行关联代码或无故读取项目。',
     '- 回答关于项目的问题前，先用只读工具（ReadFile/ListDir/Glob/Grep）查看实际代码，不要凭空猜测。',
     '- 修改文件优先用 EditFile（精确替换）；新建或整文件重写才用 WriteFile。',
+    '- 用户明确要求创建或修改具体文件时，即使路径在项目外也使用 WriteFile/EditFile；授权由工具流程处理，不要改用 RunCommand 绕过路径边界。',
     '- 编辑前先 ReadFile 确认现有内容。',
     '- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。',
   ].join('\n')
@@ -97,7 +106,10 @@ function discussionSection(
 export function buildSystemPrompt(ctx: PromptContext): string {
   const sections = [identitySection()]
   if (ctx.projectDir) {
-    sections.push(environmentSection(ctx.projectDir, ctx.osPlatform), toolUsageSection())
+    sections.push(
+      environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir),
+      toolUsageSection(),
+    )
   } else {
     sections.push(chatOnlySection())
   }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { lstat } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 
@@ -8,6 +8,17 @@ export const BASH_TOOL_NAME = 'RunCommand'
 
 const MAX_OUTPUT_CHARS = 30_000
 const DEFAULT_TIMEOUT_MS = 120_000
+const QUOTED_ENV_PATH_RE = /["'](\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^"']*)?)["']/gi
+const BARE_ENV_PATH_RE = /(?:^|[\s=(,])(\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^\s"'|<>)\],;]+)?)/gi
+
+function expandEnvironmentPath(raw: string, name: string): string | null {
+  const value = Object.entries(process.env).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase(),
+  )?.[1]
+  if (!value || !isAbsolute(value)) return null
+  const suffix = raw.slice(raw.indexOf(name) + name.length)
+  return resolve(`${value}${suffix}`)
+}
 
 /**
  * 从命令串里扫出绝对路径（Windows 盘符风格），供权限引擎做敏感/边界/讨论档判定。
@@ -15,6 +26,15 @@ const DEFAULT_TIMEOUT_MS = 120_000
  */
 export function scanCommandPaths(command: string): string[] {
   const found = new Set<string>()
+  // PowerShell 常用的 $env:USERPROFILE\Desktop 写法也必须进入权限与检查点边界。
+  for (const match of command.matchAll(QUOTED_ENV_PATH_RE)) {
+    const expanded = expandEnvironmentPath(match[1]!, match[2]!)
+    if (expanded) found.add(expanded)
+  }
+  for (const match of command.matchAll(BARE_ENV_PATH_RE)) {
+    const expanded = expandEnvironmentPath(match[1]!, match[2]!)
+    if (expanded) found.add(expanded)
+  }
   // 引号内的完整路径（可含空格）优先
   for (const m of command.matchAll(/["']([A-Za-z]:[\\/][^"']*)["']/g)) {
     found.add(m[1]!)
@@ -37,7 +57,8 @@ export const runCommandTool = buildTool({
   description: '执行终端命令',
   prompt:
     '在项目目录下执行 shell 命令（Windows 上为 PowerShell 5.1：不支持 && 链接符，多条命令用 ; 分隔或分多次调用）。' +
-    '可用 cwd 指定工作目录（绝对路径）。返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
+    '可用 cwd 指定工作目录（绝对路径）。创建或修改明确的单个文件应使用 WriteFile/EditFile，不要用命令绕过其路径授权。' +
+    '返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
   inputSchema: z.object({
     command: z.string().describe('要执行的命令'),
     cwd: z.string().optional().describe('工作目录（绝对路径），默认项目目录'),

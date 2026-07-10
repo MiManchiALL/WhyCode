@@ -183,6 +183,10 @@ export class CheckpointManager {
         if (changedPaths.length > 0) resources.push({ ...resource, afterHash, changedPaths })
       }
       if (resources.length === 0) {
+        const uncovered = manifest.warnings.filter((warning) => warning.startsWith('未覆盖 '))
+        if (uncovered.length > 0) {
+          this.disabledReason = `命令涉及的路径未进入可回滚范围：${uncovered.join('；')}`
+        }
         await this.releaseManifestRefs(manifest)
         await this.store.remove(manifest.id)
         return null

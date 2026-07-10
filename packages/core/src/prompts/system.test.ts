@@ -6,10 +6,17 @@ import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
   it('打开项目时仍允许处理非编程问题', () => {
-    const prompt = buildSystemPrompt({ projectDir: 'C:\\work\\demo', osPlatform: 'win32' })
+    const prompt = buildSystemPrompt({
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32',
+      homeDir: 'C:\\Users\\tester',
+    })
 
     assert.match(prompt, /通用型桌面 AI Agent/)
     assert.match(prompt, /非项目问题直接回答/)
+    assert.match(prompt, /用户主目录：C:\\Users\\tester/)
+    assert.match(prompt, /项目外也使用 WriteFile\/EditFile/)
+    assert.match(prompt, /不要改用 RunCommand 绕过路径边界/)
     assert.doesNotMatch(prompt, /只讨论与用户项目和编程相关/)
   })
 
