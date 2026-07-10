@@ -4,6 +4,8 @@ import { LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME } from '../tools/list-glob/index.ts'
 import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
 import { WRITE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '../tools/write-edit/index.ts'
 import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
+import { BATCH_EDIT_TOOL_NAME } from '../tools/batch-edit/index.ts'
+import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
 
 /**
  * 微清理（M2-d 第一级，零模型成本）：把「可重现」工具的旧输出替换为占位文本。
@@ -18,6 +20,9 @@ const COMPACTABLE_TOOLS = new Set([
   GREP_TOOL_NAME,
   WRITE_FILE_TOOL_NAME,
   EDIT_FILE_TOOL_NAME,
+  BATCH_EDIT_TOOL_NAME,
+  DELETE_FILE_TOOL_NAME,
+  MOVE_FILE_TOOL_NAME,
   BASH_TOOL_NAME,
 ])
 

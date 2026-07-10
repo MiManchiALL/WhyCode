@@ -58,7 +58,7 @@ export const runCommandTool = buildTool({
   description: '执行终端命令',
   prompt:
     '在项目目录下执行 shell 命令（Windows 上为 PowerShell 5.1：不支持 && 链接符，多条命令用 ; 分隔或分多次调用）。' +
-    '可用 cwd 指定工作目录（绝对路径）。创建或修改明确的单个文件应使用 WriteFile/EditFile，不要用命令绕过其路径授权。' +
+    '可用 cwd 指定工作目录（绝对路径）。创建、修改、批量替换、删除或移动明确文件应使用 WriteFile/EditFile/BatchEdit/DeleteFile/MoveFile，不要用命令绕过其路径授权。' +
     '返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
   inputSchema: z.object({
     command: z.string().describe('要执行的命令'),
