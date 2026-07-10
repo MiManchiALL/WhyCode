@@ -45,8 +45,8 @@ function toolUsageSection(): string {
     '# 工具使用',
     '- 只在用户问题与当前项目相关时使用项目工具；非项目问题直接回答，不要强行关联代码或无故读取项目。',
     '- 回答关于项目的问题前，先用只读工具（ReadFile/ListDir/Glob/Grep）查看实际代码，不要凭空猜测。',
-    '- 修改文件优先用 EditFile（精确替换）；新建或整文件重写才用 WriteFile。',
-    '- 用户明确要求创建或修改具体文件时，即使路径在项目外也使用 WriteFile/EditFile；授权由工具流程处理，不要改用 RunCommand 绕过路径边界。',
+    '- 单处修改优先用 EditFile；多处相关精确替换用 BatchEdit，减少往返并保证全部预检后再写入；新建或整文件重写才用 WriteFile。',
+    '- 删除、移动或重命名明确文件必须使用 DeleteFile/MoveFile。用户授权的项目外文件同样使用专用文件工具；授权由工具流程处理，不要改用 RunCommand 绕过路径边界。',
     '- 编辑前先 ReadFile 确认现有内容。',
     '- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。',
   ].join('\n')
