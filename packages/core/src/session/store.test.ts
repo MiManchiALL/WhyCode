@@ -32,6 +32,7 @@ describe('SessionStore', () => {
     assert.equal(reopened.interruptedTurnId, null)
     assert.equal(reopened.metadataSnapshot.title, '修复登录问题')
     assert.equal(reopened.metadataSnapshot.status, 'idle')
+    assert.deepEqual(reopened.messagesBeforeTurn('turn-1'), [])
   })
 
   it('忽略崩溃留下的最后半行', async () => {
@@ -90,6 +91,25 @@ describe('SessionStore', () => {
       message('user', '新问题'),
       message('assistant', '新答案'),
     ])
+    assert.equal(reopened.messagesBeforeTurn('turn-1'), null)
+    assert.deepEqual(reopened.messagesBeforeTurn('turn-2'), [summary])
+  })
+
+  it('对话回滚换根后仍保留新根内更早 turn 的回滚边界', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const first = [message('user', '第一问'), message('assistant', '第一答')]
+    await journal.recordTurnStart('turn-1', [first[0]!])
+    await journal.recordStep('turn-1', [first[1]!])
+    await journal.recordTurnEnd('turn-1', 'completed')
+    await journal.recordTurnStart('turn-2', [message('user', '第二问')])
+    await journal.recordStep('turn-2', [message('assistant', '第二答')])
+    await journal.recordTurnEnd('turn-2', 'completed')
+
+    await journal.recordSnapshot('rollback', first)
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.messagesBeforeTurn('turn-1'), [])
+    assert.equal(reopened.messagesBeforeTurn('turn-2'), null)
   })
 
   it('模型压缩换根后仍完整保留用户可见时间线', async () => {

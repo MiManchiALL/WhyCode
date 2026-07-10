@@ -69,6 +69,33 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /需要回滚的问题/)
     assert.match(JSON.stringify(state.blocks), /已回滚/)
   })
+
+  it('重启重放后保留检查点覆盖级别，并在恢复后清除失效按钮', () => {
+    const state = createConversationState([
+      core({ type: 'tool-start', toolUseId: 'tool-1', toolName: 'RunCommand', input: {} }),
+      core({
+        type: 'checkpoint-created',
+        toolUseId: 'tool-1',
+        hash: 'checkpoint-1',
+        coverage: 'partial',
+        warning: '只覆盖工作区文件',
+      }),
+      core({ type: 'tool-end', toolUseId: 'tool-1', result: 'ok', isError: false }),
+      core({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-1',
+        turnId: 'turn-1',
+        scope: 'files',
+        ok: true,
+        invalidatedToolUseIds: ['tool-1'],
+      }),
+    ])
+
+    const tool = state.blocks.find((block) => block.kind === 'tool')
+    assert.equal(tool?.kind === 'tool' ? tool.call.checkpointCoverage : null, 'partial')
+    assert.equal(tool?.kind === 'tool' ? tool.call.hasCheckpoint : null, false)
+    assert.match(JSON.stringify(state.blocks), /已回滚检查点覆盖的文件/)
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {

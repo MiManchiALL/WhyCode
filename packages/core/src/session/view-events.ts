@@ -41,6 +41,13 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   toolStartSchema,
   toolProgressSchema,
   toolEndSchema,
+  z.object({
+    type: z.literal('checkpoint-created'),
+    toolUseId: z.string(),
+    hash: z.string(),
+    coverage: z.enum(['complete', 'partial']),
+    warning: z.string().optional(),
+  }),
   z.object({ type: z.literal('checkpoint-disabled'), reason: z.string() }),
   z.object({
     type: z.literal('checkpoint-restored'),
@@ -49,6 +56,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     scope: z.enum(['files', 'files-and-chat']),
     ok: z.boolean(),
     error: z.string().optional(),
+    invalidatedToolUseIds: z.array(z.string()).optional(),
   }),
   z.object({
     type: z.literal('context-compacted'),
@@ -124,6 +132,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'tool-start':
     case 'tool-progress':
     case 'tool-end':
+    case 'checkpoint-created':
     case 'checkpoint-disabled':
     case 'checkpoint-restored':
     case 'context-compacted':

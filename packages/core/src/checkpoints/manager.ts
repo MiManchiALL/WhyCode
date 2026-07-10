@@ -1,201 +1,328 @@
-import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync, existsSync, readdirSync, renameSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { simpleGit, type SimpleGit } from 'simple-git'
+import { randomUUID } from 'node:crypto'
+import { relative, resolve } from 'node:path'
+import type { ToolCheckpointScope } from '../tools/tool.ts'
+import { captureFileState } from './file-history.ts'
+import { CheckpointManifestStore } from './manifest-store.ts'
+import { ResourceRestoreTransaction } from './restore-transaction.ts'
+import { ShadowRepository, releaseShadowRefs } from './shadow-repository.ts'
+import {
+  CHECKPOINT_MANIFEST_VERSION,
+  type CheckpointManifest,
+  type CheckpointResource,
+  type FileState,
+  type PreparedCheckpoint,
+  type ReadyCheckpoint,
+} from './types.ts'
 
-/**
- * Shadow git 检查点（M2-c，文档一 §3.3）。设计取舍见调研：
- * - 隔离用 GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* 环境变量（Gemini CLI 方案），免疫用户全局 git 配置
- * - 用户项目里零文件；排除表写 shadow 仓库的 .git/info/exclude
- * - 快照在写类工具执行前（恢复语义直达「执行前」）；工作区干净则复用 HEAD
- * - 核心不变量：任何失败只禁用、不抛错到 Agent 循环
- */
-
-const INIT_TIMEOUT_MS = 20_000
-
-/** 排除表（Cline pattern 表精简版 + Windows 项 + .env 默认排除——用户决策 2026-07-04） */
-const EXCLUDE_PATTERNS = [
-  '.git/', '.git_disabled/', 'node_modules/', 'dist/', 'out/', 'build/', 'release/',
-  'target/', '__pycache__/', 'venv/', '.venv/', 'vendor/', '.next/', '.nuxt/',
-  '.gradle/', '.idea/', '.vscode/', '.vs/', 'coverage/', '.cache/', '.pnpm-store/',
-  '.pnpm-cache/', '.whycode/',
-  '*.env*', '*.local',
-  '*.jpg', '*.jpeg', '*.png', '*.gif', '*.mp4', '*.mp3', '*.wav', '*.mov', '*.pdf',
-  '*.zip', '*.tar', '*.gz', '*.7z', '*.iso', '*.exe', '*.dll', '*.so', '*.dylib',
-  '*.sqlite', '*.db', '*.parquet',
-  '*.tmp', '*.log', '*.swp', 'Thumbs.db', 'desktop.ini', '.DS_Store',
-]
-
-/** 在这些目录直接启用检查点等于把整个用户空间 add 进 git，拒绝 */
-function isForbiddenRoot(projectDir: string): boolean {
-  const home = resolve(homedir())
-  const norm = resolve(projectDir)
-  const forbidden = [home, ...['Desktop', 'Documents', 'Downloads'].map((d) => join(home, d))]
-  return forbidden.some((f) => f.toLowerCase() === norm.toLowerCase())
+export interface CheckpointManagerOptions {
+  projectDir: string
+  storageRoot: string
+  sessionDir: string
+  sessionId: string
 }
 
-export class CheckpointManager {
-  private git: SimpleGit | null = null
-  private disabledReason: string | null = null
-  private initPromise: Promise<void> | null = null
-  private readonly projectDir: string
-  private readonly repoDir: string
+export interface RestoreCheckpointResult {
+  ok: boolean
+  turnId?: string
+  invalidatedToolUseIds?: string[]
+  error?: string
+}
 
-  constructor(projectDir: string, storageRoot: string) {
-    this.projectDir = resolve(projectDir)
-    const hash = createHash('sha256')
-      .update(this.projectDir.toLowerCase())
-      .digest('hex')
-      .slice(0, 16)
-    this.repoDir = join(storageRoot, hash)
+export interface RestoreTransactionHooks {
+  commit: () => Promise<void>
+  compensate: () => Promise<void>
+}
+
+function pathKey(path: string): string {
+  const absolute = resolve(path)
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Map(paths.map((path) => [pathKey(path), resolve(path)])).values()]
+}
+
+function dedupeRoots(roots: string[]): string[] {
+  const sorted = uniquePaths(roots).sort((left, right) => left.length - right.length)
+  return sorted.filter((candidate, index) =>
+    !sorted.slice(0, index).some((parent) => {
+      const rel = relative(parent, candidate)
+      return rel === '' || (!rel.startsWith('..') && !/^[A-Za-z]:/.test(rel))
+    }),
+  )
+}
+
+function sameFileState(left: FileState, right: FileState): boolean {
+  return left.kind === right.kind && (
+    left.kind === 'missing' || left.contentHash === right.contentHash
+  )
+}
+
+function readyResource(resource: CheckpointResource): boolean {
+  return resource.kind === 'exact-file'
+    ? resource.after !== undefined
+    : resource.afterHash !== undefined && resource.changedPaths !== undefined
+}
+
+/**
+ * 持久化资源检查点：精确文件备份负责完整性，Shadow Git 只作为命令型批量变更的内容后端。
+ * manifest 才是回滚事实源，因此切换会话和重启后仍能恢复同一批资源边界。
+ */
+export class CheckpointManager {
+  private readonly options: CheckpointManagerOptions
+  private readonly store: CheckpointManifestStore
+  private readonly repositories = new Map<string, ShadowRepository>()
+  private disabledReason: string | null = null
+
+  constructor(options: CheckpointManagerOptions) {
+    this.options = { ...options, projectDir: resolve(options.projectDir) }
+    this.store = new CheckpointManifestStore(options.sessionDir)
   }
 
   get disabled(): string | null {
     return this.disabledReason
   }
 
-  /** 懒初始化（幂等，防并发重入）；失败/超时 → 永久禁用本会话检查点 */
-  private ensureInit(): Promise<void> {
-    this.initPromise ??= Promise.race([
-      this.doInit(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`初始化超时（${INIT_TIMEOUT_MS}ms），项目可能过大`)), INIT_TIMEOUT_MS),
-      ),
-    ]).catch((error: unknown) => {
-      this.disabledReason = error instanceof Error ? error.message : String(error)
-      this.git = null
-    })
-    return this.initPromise
-  }
-
-  private async doInit(): Promise<void> {
-    if (isForbiddenRoot(this.projectDir)) {
-      throw new Error('项目目录是主目录/桌面/文档等系统目录，已禁用检查点')
-    }
-    mkdirSync(this.repoDir, { recursive: true })
-    const gitDir = join(this.repoDir, '.git')
-    // 专用配置：免疫用户全局 gitconfig（autocrlf/签名/代理等）
-    const configPath = join(this.repoDir, 'gitconfig')
-    const emptyConfig = join(this.repoDir, 'gitconfig.empty')
-    writeFileSync(
-      configPath,
-      [
-        '[user]', '\tname = WhyCode Checkpoint', '\temail = checkpoint@whycode.local',
-        '[commit]', '\tgpgsign = false',
-        '[core]', '\tautocrlf = false', '\tlongpaths = true',
-        '[gc]', '\tauto = 0',
-      ].join('\n') + '\n',
-    )
-    if (!existsSync(emptyConfig)) writeFileSync(emptyConfig, '')
-
-    const git = simpleGit({
-      baseDir: this.projectDir,
-      // GIT_CONFIG_* 路径完全由本类生成（storage 目录内），非用户输入；
-      // 该开关只放开「用环境变量指定配置路径」这一类，其余安全检查保持默认
-      unsafe: { allowUnsafeConfigPaths: true },
-    }).env({
-      GIT_DIR: gitDir,
-      GIT_WORK_TREE: this.projectDir,
-      GIT_CONFIG_GLOBAL: configPath,
-      GIT_CONFIG_SYSTEM: emptyConfig,
-    })
-    await git.version() // git 不存在时在此抛错 → 禁用
-
-    // 启动清理：上次进程崩溃可能遗留 .git_disabled
-    this.renameNestedGitRepos(false)
-
-    if (!existsSync(gitDir)) {
-      await git.init()
-      writeFileSync(join(gitDir, 'info', 'exclude'), EXCLUDE_PATTERNS.join('\n') + '\n')
-      await this.commitAll(git, 'baseline')
-    } else {
-      // 已有仓库：校验归属，防路径哈希碰撞/项目被移动
-      const worktree = await git.raw(['config', '--local', 'core.whycodeProject']).catch(() => '')
-      if (worktree.trim() && worktree.trim() !== this.projectDir.toLowerCase()) {
-        throw new Error('检查点仓库与当前项目不匹配')
-      }
-      writeFileSync(join(gitDir, 'info', 'exclude'), EXCLUDE_PATTERNS.join('\n') + '\n')
-    }
-    await git.raw(['config', '--local', 'core.whycodeProject', this.projectDir.toLowerCase()])
-    this.git = git
-  }
-
-  /** 拍快照：返回 commit hash；干净则复用 HEAD；失败返回 null（绝不抛） */
-  async save(): Promise<string | null> {
+  async prepare(
+    toolUseId: string,
+    turnId: string,
+    scope: ToolCheckpointScope,
+  ): Promise<PreparedCheckpoint | null> {
+    this.disabledReason = null
     try {
-      await this.ensureInit()
-      if (!this.git) return null
-      const status = await this.git.status()
-      if (status.files.length === 0) {
-        return (await this.git.revparse(['HEAD'])).trim()
-      }
-      return await this.commitAll(this.git, 'checkpoint')
-    } catch {
-      return null // 不变量：检查点失败不中断 Agent
-    }
-  }
+      const previous = await this.store.list()
+      const id = randomUUID()
+      const warnings: string[] = []
+      let coverage: CheckpointManifest['coverage'] = 'complete'
+      let resources: CheckpointResource[] = []
 
-  /** 恢复文件到某快照：restore --source（不动 HEAD，可再前进）+ clean 清掉快照后新建的文件 */
-  async restoreFiles(hash: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      await this.ensureInit()
-      if (!this.git) return { ok: false, error: this.disabledReason ?? '检查点不可用' }
-      this.renameNestedGitRepos(true)
-      try {
-        // --staged 必须带：只恢复 worktree 的话，复活的已删除文件在 index 中缺失，
-        // 会被随后的 clean -fd 当 untracked 再删掉
-        await this.git.raw(['restore', '--source', hash, '--staged', '--worktree', '--', '.'])
-        await this.git.raw(['clean', '-fd'])
-      } finally {
-        this.renameNestedGitRepos(false)
-      }
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
-  private async commitAll(git: SimpleGit, message: string): Promise<string> {
-    this.renameNestedGitRepos(true)
-    try {
-      await git.raw(['add', '-A', '--ignore-errors']).catch(() => git.raw(['add', '-A']))
-      const result = await git.raw(['commit', '-m', message, '--allow-empty', '--no-verify'])
-      void result
-      return (await git.revparse(['HEAD'])).trim()
-    } finally {
-      this.renameNestedGitRepos(false)
-    }
-  }
-
-  /**
-   * 嵌套 git 仓库改名防御（根级 .git 由 GIT_DIR 隔离天然无关）：
-   * add 前 .git → .git_disabled，避免被当 submodule；finally 还原。
-   */
-  private renameNestedGitRepos(disable: boolean): void {
-    const [from, to] = disable ? ['.git', '.git_disabled'] : ['.git_disabled', '.git']
-    const scan = (dir: string, depth: number): void => {
-      if (depth > 6) return
-      let entries
-      try {
-        entries = readdirSync(dir, { withFileTypes: true })
-      } catch {
-        return
-      }
-      for (const e of entries) {
-        if (!e.isDirectory() || e.name === 'node_modules') continue
-        const full = join(dir, e.name)
-        if (e.name === from && dir !== this.projectDir) {
+      if (scope.kind === 'exact-files') {
+        resources = await Promise.all(uniquePaths(scope.paths).map(async (path) => ({
+          kind: 'exact-file' as const,
+          path,
+          before: await captureFileState(path, this.store.blobDir),
+        })))
+      } else {
+        coverage = 'partial'
+        warnings.push(scope.warning)
+        for (const root of dedupeRoots(scope.roots)) {
           try {
-            renameSync(full, join(dir, to))
-          } catch {
-            /* Windows 文件锁：跳过该仓库，不阻塞整体 */
+            const repo = this.repository(root)
+            resources.push({
+              kind: 'tree',
+              root,
+              beforeHash: await repo.capture(this.options.sessionId, id, 'before'),
+            })
+          } catch (error) {
+            warnings.push(`未覆盖 ${root}：${error instanceof Error ? error.message : String(error)}`)
           }
-        } else if (!e.name.startsWith('.git')) {
-          scan(full, depth + 1)
         }
       }
+      if (resources.length === 0) {
+        this.disabledReason = warnings.join('；') || '工具没有可捕获的资源'
+        return null
+      }
+
+      await this.store.put({
+        version: CHECKPOINT_MANIFEST_VERSION,
+        id,
+        sessionId: this.options.sessionId,
+        toolUseId,
+        turnId,
+        sequence: (previous.at(-1)?.sequence ?? 0) + 1,
+        createdAt: new Date().toISOString(),
+        coverage,
+        warnings,
+        status: 'pending',
+        resources,
+      })
+      return { id }
+    } catch (error) {
+      this.disabledReason = error instanceof Error ? error.message : String(error)
+      return null
     }
-    scan(this.projectDir, 0)
   }
+
+  /** 未声明资源契约或快照失败的写操作形成覆盖屏障，阻止旧检查点越过它误报成功。 */
+  async recordBarrier(toolUseId: string, turnId: string, warning: string): Promise<void> {
+    const previous = await this.store.list()
+    await this.store.put({
+      version: CHECKPOINT_MANIFEST_VERSION,
+      id: randomUUID(),
+      sessionId: this.options.sessionId,
+      toolUseId,
+      turnId,
+      sequence: (previous.at(-1)?.sequence ?? 0) + 1,
+      createdAt: new Date().toISOString(),
+      coverage: 'none',
+      warnings: [warning],
+      status: 'ready',
+      resources: [],
+    })
+  }
+
+  /** 工具结束后补齐 after 状态；没有实际文件变化时不生成可见回滚点。 */
+  async finalize(prepared: PreparedCheckpoint): Promise<ReadyCheckpoint | null> {
+    try {
+      const manifest = await this.store.get(prepared.id)
+      if (!manifest || manifest.status !== 'pending') return null
+      const resources: CheckpointResource[] = []
+      for (const resource of manifest.resources) {
+        if (resource.kind === 'exact-file') {
+          const after = await captureFileState(resource.path, this.store.blobDir)
+          if (!sameFileState(resource.before, after)) resources.push({ ...resource, after })
+          continue
+        }
+        const repo = this.repository(resource.root)
+        const afterHash = await repo.capture(
+          this.options.sessionId,
+          manifest.id,
+          'after',
+        )
+        const changedPaths = await repo.changedPaths(resource.beforeHash, afterHash)
+        if (changedPaths.length > 0) resources.push({ ...resource, afterHash, changedPaths })
+      }
+      if (resources.length === 0) {
+        await this.releaseManifestRefs(manifest)
+        await this.store.remove(manifest.id)
+        return null
+      }
+      const ready: CheckpointManifest = { ...manifest, resources, status: 'ready' }
+      if (!ready.resources.every(readyResource)) throw new Error('检查点 after 状态不完整')
+      await this.store.put(ready)
+      return {
+        id: ready.id,
+        toolUseId: ready.toolUseId,
+        turnId: ready.turnId,
+        coverage: ready.coverage as 'complete' | 'partial',
+        warning: ready.warnings.join('；') || undefined,
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      this.disabledReason = reason
+      const pending = await this.store.get(prepared.id).catch(() => null)
+      if (pending?.status === 'pending') {
+        await this.store.put({
+          ...pending,
+          coverage: 'none',
+          warnings: [...pending.warnings, `检查点收尾失败：${reason}`],
+          status: 'ready',
+          resources: [],
+        }).catch(() => {})
+      }
+      return null
+    }
+  }
+
+  async restore(
+    toolUseId: string,
+    scope: 'files' | 'files-and-chat',
+    hooks?: RestoreTransactionHooks,
+  ): Promise<RestoreCheckpointResult> {
+    const ready = (await this.store.list()).filter((item) => item.status === 'ready')
+    const selected = ready.find((item) => item.toolUseId === toolUseId)
+    if (!selected || selected.coverage === 'none') {
+      return { ok: false, error: '该操作没有可用检查点' }
+    }
+    const target = scope === 'files-and-chat'
+      ? (ready.find((item) => item.turnId === selected.turnId) ?? selected)
+      : selected
+    const manifests = ready.filter((item) => item.sequence >= target.sequence)
+    if (manifests.some((item) => item.coverage === 'none')) {
+      return {
+        ok: false,
+        turnId: selected.turnId,
+        error: '目标之后存在未覆盖的写操作，无法保证安全恢复',
+      }
+    }
+    if (scope === 'files-and-chat' && manifests.some((item) => item.coverage !== 'complete')) {
+      return {
+        ok: false,
+        turnId: selected.turnId,
+        error: '这段操作包含部分覆盖的命令检查点，只能回滚已覆盖文件，不能同时截断对话',
+      }
+    }
+
+    const transaction = new ResourceRestoreTransaction({
+      manifests,
+      blobDir: this.store.blobDir,
+      sessionId: this.options.sessionId,
+      repository: (root) => this.repository(root),
+    })
+    let hookStarted = false
+    try {
+      await transaction.apply()
+      if (hooks) {
+        hookStarted = true
+        await hooks.commit()
+      }
+      for (const manifest of manifests) {
+        await this.store.put({ ...manifest, status: 'invalidated' })
+      }
+    } catch (error) {
+      const compensationErrors: unknown[] = []
+      if (hookStarted && hooks) {
+        await hooks.compensate().catch((compensation) => compensationErrors.push(compensation))
+      }
+      await transaction.compensate()
+        .catch((compensation) => compensationErrors.push(compensation))
+      for (const manifest of manifests) {
+        await this.store.put(manifest).catch((compensation) => compensationErrors.push(compensation))
+      }
+      await transaction.releaseTransientRefs()
+      const detail = error instanceof Error ? error.message : String(error)
+      return {
+        ok: false,
+        turnId: selected.turnId,
+        error: compensationErrors.length > 0
+          ? `${detail}；安全补偿也失败：${compensationErrors.map((item) => item instanceof Error ? item.message : String(item)).join('；')}`
+          : detail,
+      }
+    }
+
+    await transaction.releaseTransientRefs()
+    for (const manifest of manifests) {
+      await this.releaseManifestRefs(manifest).catch(() => {})
+    }
+    return {
+      ok: true,
+      turnId: selected.turnId,
+      invalidatedToolUseIds: manifests.map((item) => item.toolUseId),
+    }
+  }
+
+  async getReady(toolUseId: string): Promise<ReadyCheckpoint | null> {
+    const manifest = (await this.store.list()).find(
+      (item) => item.status === 'ready' && item.coverage !== 'none' && item.toolUseId === toolUseId,
+    )
+    return manifest ? {
+      id: manifest.id,
+      toolUseId: manifest.toolUseId,
+      turnId: manifest.turnId,
+      coverage: manifest.coverage as 'complete' | 'partial',
+      warning: manifest.warnings.join('；') || undefined,
+    } : null
+  }
+
+  private repository(root: string): ShadowRepository {
+    const key = pathKey(root)
+    let repository = this.repositories.get(key)
+    if (!repository) {
+      repository = new ShadowRepository(root, this.options.storageRoot)
+      this.repositories.set(key, repository)
+    }
+    return repository
+  }
+
+  private async releaseManifestRefs(manifest: CheckpointManifest): Promise<void> {
+    const roots = uniquePaths(manifest.resources.flatMap((resource) =>
+      resource.kind === 'tree' ? [resource.root] : [],
+    ))
+    await Promise.all(roots.map((root) =>
+      this.repository(root).deleteCheckpointRefs(manifest.sessionId, manifest.id),
+    ))
+  }
+
 }
+
+export { releaseShadowRefs }

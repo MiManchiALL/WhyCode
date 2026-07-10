@@ -17,6 +17,7 @@ export {
   buildTool,
   type ToolDefinition,
   type ToolContext,
+  type ToolCheckpointScope,
   type ToolResult,
 } from './tools/tool.ts'
 export {
@@ -73,6 +74,7 @@ export type {
 } from './consensus/types.ts'
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
+export { releaseShadowRefs } from './checkpoints/manager.ts'
 export {
   pushCoalescedViewEvent,
   toViewEvent,

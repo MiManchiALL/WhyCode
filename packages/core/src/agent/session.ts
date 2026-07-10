@@ -86,15 +86,8 @@ export class AgentSession {
   private permissions: PermissionContext
   private checkpoints: CheckpointManager | null = null
   private checkpointDisabledNotified = false
-  /** toolUseId → 快照记录；对话回滚锚定 turn 起点（含触发指令），保证「从没发生过」语义 */
-  private checkpointIndex = new Map<
-    string,
-    { hash: string; turnId: string; turnStartLen: number }
-  >()
-  /** turnId → 该 turn 第一个快照 hash（文件+对话回滚时文件也回到 turn 起点，与对话一致） */
-  private firstCheckpointOfTurn = new Map<string, string>()
-  /** 当前 turn 信息（快照记录用） */
-  private activeTurn: { id: string; startLen: number } | null = null
+  /** 当前 turn ID（资源检查点归属用） */
+  private activeTurn: { id: string } | null = null
   /** 当前操作（turn 或压缩）的中止器，session 自管 */
   private opAbort: AbortController | null = null
   /** 手动压缩进行中（此间用户消息排队，压缩后接续） */
@@ -121,12 +114,15 @@ export class AgentSession {
     if (
       options.checkpointStorageDir &&
       options.promptContext.projectDir &&
+      options.sessionRecorder &&
       !options.promptContext.discussion
     ) {
-      this.checkpoints = new CheckpointManager(
-        options.promptContext.projectDir,
-        options.checkpointStorageDir,
-      )
+      this.checkpoints = new CheckpointManager({
+        projectDir: options.promptContext.projectDir,
+        storageRoot: options.checkpointStorageDir,
+        sessionDir: options.sessionRecorder.checkpointDirectory,
+        sessionId: options.sessionRecorder.sessionId,
+      })
     }
   }
 
@@ -260,7 +256,7 @@ export class AgentSession {
     this.running = true
     const turnId = crypto.randomUUID()
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
-    this.activeTurn = { id: turnId, startLen: this.messages.length }
+    this.activeTurn = { id: turnId }
     this.messages.push(...initialMessages)
     await this.persist((recorder) => recorder.recordTurnStart(turnId, initialMessages))
 
@@ -388,9 +384,6 @@ export class AgentSession {
       await this.persist((recorder) => recorder.recordSnapshot('compact', this.messages))
       this.tokenBaseline = null
       this.compactFailures = 0
-      for (const [key, rec] of this.checkpointIndex) {
-        this.checkpointIndex.set(key, { ...rec, turnStartLen: -1 })
-      }
       emit({
         type: 'context-compacted',
         level: 'full',
@@ -458,11 +451,7 @@ export class AgentSession {
       )
       this.tokenBaseline = null
       this.compactFailures = 0
-      // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用），turn 起点重置
-      for (const [key, rec] of this.checkpointIndex) {
-        this.checkpointIndex.set(key, { ...rec, turnStartLen: -1 })
-      }
-      if (this.activeTurn) this.activeTurn = { ...this.activeTurn, startLen: 0 }
+      // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用）
       const postTokens = estimateContextTokens(this.messages, null)
       emit({ type: 'context-compacted', level: 'full', preTokens, postTokens })
     } catch (error) {
@@ -637,21 +626,58 @@ export class AgentSession {
             }
           }
 
-          // 写类操作执行前拍快照（回滚语义 =「恢复到此操作前」）；讨论档只写 scratch，无需快照
+          // 只有工具显式声明资源边界才建立检查点；权限路径不能替代回滚覆盖契约。
+          let preparedCheckpoint: Awaited<ReturnType<CheckpointManager['prepare']>> = null
           if (
             def.kind !== 'read' &&
             this.checkpoints &&
             this.activeTurn &&
             !this.permissions.discussion
           ) {
-            const hash = await this.checkpoints.save()
-            if (hash) {
-              const { id: turnId, startLen } = this.activeTurn
-              this.checkpointIndex.set(toolCallId, { hash, turnId, turnStartLen: startLen })
-              if (!this.firstCheckpointOfTurn.has(turnId)) {
-                this.firstCheckpointOfTurn.set(turnId, hash)
+            const turnId = this.activeTurn.id
+            if (!def.checkpointScope) {
+              await this.checkpoints.recordBarrier(
+                toolCallId,
+                turnId,
+                `${def.name} 未声明可回滚资源范围`,
+              ).catch(() => {})
+            } else {
+              try {
+                const checkpointScope = await def.checkpointScope(parsed.data, toolCtx)
+                preparedCheckpoint = await this.checkpoints.prepare(
+                  toolCallId,
+                  turnId,
+                  checkpointScope,
+                )
+                if (!preparedCheckpoint) {
+                  await this.checkpoints.recordBarrier(
+                    toolCallId,
+                    turnId,
+                    this.checkpoints.disabled ?? `${def.name} 未建立检查点`,
+                  )
+                }
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error)
+                await this.checkpoints.recordBarrier(toolCallId, turnId, reason).catch(() => {})
+                if (!this.checkpointDisabledNotified) {
+                  this.checkpointDisabledNotified = true
+                  emit({ type: 'checkpoint-disabled', reason })
+                }
               }
-              emit({ type: 'checkpoint-created', toolUseId: toolCallId, hash })
+            }
+          }
+
+          const finalizeCheckpoint = async (): Promise<void> => {
+            if (!preparedCheckpoint || !this.checkpoints) return
+            const ready = await this.checkpoints.finalize(preparedCheckpoint)
+            if (ready) {
+              emit({
+                type: 'checkpoint-created',
+                toolUseId: toolCallId,
+                hash: ready.id,
+                coverage: ready.coverage,
+                warning: ready.warning,
+              })
             } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
               this.checkpointDisabledNotified = true
               emit({ type: 'checkpoint-disabled', reason: this.checkpoints.disabled })
@@ -674,6 +700,7 @@ export class AgentSession {
                 /* 越界读取已被权限层处理，这里忽略 */
               }
             }
+            await finalizeCheckpoint()
             emit({
               type: 'tool-end',
               toolUseId: toolCallId,
@@ -683,6 +710,7 @@ export class AgentSession {
             if (def.endsTurnOnSuccess && !result.isError) onTurnEndingTool()
             return result.data
           } catch (error) {
+            await finalizeCheckpoint()
             const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
             return msg
@@ -699,44 +727,59 @@ export class AgentSession {
     scope: 'files' | 'files-and-chat',
   ): Promise<void> {
     const { emit } = this.options
-    const record = this.checkpointIndex.get(toolUseId)
-    if (!record || !this.checkpoints) {
+    if (!this.checkpoints) {
       emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
       return
     }
     if (this.running) {
-      emit({ type: 'checkpoint-restored', toolUseId, turnId: record.turnId, scope, ok: false, error: 'Agent 工作中，请先停止' })
+      emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: 'Agent 工作中，请先停止' })
       return
     }
-    // 文件+对话：文件回到该 turn 第一个快照（=turn 起点状态），与对话截断保持一致；
-    // 仅文件：精确回到该操作前
-    if (scope === 'files-and-chat' && record.turnStartLen < 0) {
+    const record = await this.checkpoints.getReady(toolUseId)
+    if (!record) {
+      emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
+      return
+    }
+    const recorder = this.options.sessionRecorder
+    const rollbackMessages = scope === 'files-and-chat'
+      ? recorder?.messagesBeforeTurn(record.turnId) ?? null
+      : null
+    if (scope === 'files-and-chat' && !rollbackMessages) {
       emit({
         type: 'checkpoint-restored',
         toolUseId,
         turnId: record.turnId,
         scope,
         ok: false,
-        error: '该操作早于上下文压缩，只能回滚文件（选「仅文件」）',
+        error: '该轮早于上下文压缩或当前活动历史，只能回滚文件（选「仅文件」）',
       })
       return
     }
-    const targetHash =
-      scope === 'files-and-chat'
-        ? (this.firstCheckpointOfTurn.get(record.turnId) ?? record.hash)
-        : record.hash
-    const result = await this.checkpoints.restoreFiles(targetHash)
-    if (result.ok && scope === 'files-and-chat') {
-      this.messages = this.messages.slice(0, record.turnStartLen)
-      await this.persist((recorder) => recorder.recordSnapshot('rollback', this.messages))
-    }
+    const originalMessages = structuredClone(this.messages)
+    const result = await this.checkpoints.restore(
+      toolUseId,
+      scope,
+      rollbackMessages && recorder ? {
+        commit: async () => {
+          await recorder.recordSnapshot('rollback', rollbackMessages)
+          this.messages = structuredClone(rollbackMessages)
+          this.tokenBaseline = null
+        },
+        compensate: async () => {
+          await recorder.recordSnapshot('rollback', originalMessages)
+          this.messages = structuredClone(originalMessages)
+          this.tokenBaseline = null
+        },
+      } : undefined,
+    )
     emit({
       type: 'checkpoint-restored',
       toolUseId,
-      turnId: record.turnId,
+      turnId: result.turnId ?? record.turnId,
       scope,
       ok: result.ok,
       error: result.error,
+      invalidatedToolUseIds: result.invalidatedToolUseIds,
     })
   }
 

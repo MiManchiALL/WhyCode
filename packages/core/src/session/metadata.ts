@@ -10,11 +10,13 @@ import {
 
 const TRANSCRIPT_FILE = 'transcript.jsonl'
 const METADATA_FILE = 'metadata.json'
+const CHECKPOINTS_DIR = 'checkpoints'
 
 export interface SessionPaths {
   sessionDir: string
   transcript: string
   metadata: string
+  checkpoints: string
 }
 
 export function getSessionPaths(rootDir: string, sessionId: string): SessionPaths {
@@ -23,6 +25,7 @@ export function getSessionPaths(rootDir: string, sessionId: string): SessionPath
     sessionDir,
     transcript: join(sessionDir, TRANSCRIPT_FILE),
     metadata: join(sessionDir, METADATA_FILE),
+    checkpoints: join(sessionDir, CHECKPOINTS_DIR),
   }
 }
 

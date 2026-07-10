@@ -70,10 +70,16 @@ describe('ViewTimeline', () => {
     assert.doesNotMatch(JSON.stringify(writer.batches), /C 的半截分析/)
   })
 
-  it('协商节点立即写入，失效检查点不进入恢复时间线', async () => {
+  it('协商节点立即写入，检查点随所属 step 提交', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
-    timeline.capture(writer, { type: 'checkpoint-created', toolUseId: 'tool-1', hash: 'abc' })
+    timeline.capture(writer, {
+      type: 'checkpoint-created',
+      toolUseId: 'tool-1',
+      hash: 'abc',
+      coverage: 'complete',
+    })
+    timeline.capture(writer, { type: 'step-committed' })
     timeline.capture(writer, {
       type: 'candidate-submitted',
       agentId: 'Main',
@@ -82,8 +88,8 @@ describe('ViewTimeline', () => {
     })
     await Promise.resolve()
 
-    assert.equal(writer.batches.length, 1)
-    assert.match(JSON.stringify(writer.batches[0]), /实质结论/)
-    assert.doesNotMatch(JSON.stringify(writer.batches), /checkpoint-created/)
+    assert.equal(writer.batches.length, 2)
+    assert.match(JSON.stringify(writer.batches), /实质结论/)
+    assert.match(JSON.stringify(writer.batches), /checkpoint-created/)
   })
 })
