@@ -319,6 +319,9 @@ export class AgentSession {
       let steps = 0
       let finishedNaturally = false
       let taskStopReminders = 0
+      // 未结束计划可以跨 turn 保留，但不能绑架之后的普通问答。只有本轮实际修改过
+      // 计划状态，才启用“未完成不得提前结束”的强保护。
+      let planExecutionEngaged = false
       while (maxSteps === null || steps < maxSteps) {
         steps++
         if (maxSteps !== null && steps === maxSteps - FINALIZATION_RESERVE_STEPS) {
@@ -326,7 +329,10 @@ export class AgentSession {
         }
         await this.compactIfNeeded(abortSignal)
         const step = await this.runOneStep(usage, abortSignal)
-        if (step.taskPlanChanged) taskStopReminders = 0
+        if (step.taskPlanChanged) {
+          planExecutionEngaged = true
+          taskStopReminders = 0
+        }
         if (abortSignal.aborted) {
           stopReason = 'aborted'
           break
@@ -352,7 +358,9 @@ export class AgentSession {
           break
         }
         if (!step.hadToolCalls) {
-          const decision = this.taskPlan?.naturalStopDecision() ?? { kind: 'allow' as const }
+          const decision = planExecutionEngaged
+            ? this.taskPlan?.naturalStopDecision() ?? { kind: 'allow' as const }
+            : { kind: 'allow' as const }
           if (decision.kind === 'pause') {
             stopReason = 'paused'
             finishedNaturally = true
@@ -571,11 +579,14 @@ export class AgentSession {
     }
     this.taskPlan?.beginStep()
     try {
-      const taskReminder = this.taskPlan?.reminderMessage()
+      const taskContext = this.taskPlan?.contextSection()
+      const system = [buildSystemPrompt(this.options.promptContext), taskContext]
+        .filter((section): section is string => Boolean(section))
+        .join('\n\n')
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
-        system: buildSystemPrompt(this.options.promptContext),
-        messages: taskReminder ? [...this.messages, taskReminder] : this.messages,
+        system,
+        messages: this.messages,
         tools: this.buildToolSet(stepAbort.signal, (reason) => {
           stepControl.toolEndReason = reason
         }),

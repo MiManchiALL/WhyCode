@@ -1,4 +1,3 @@
-import type { ModelMessage } from 'ai'
 import {
   activeTaskPlanSchema,
   cloneActiveTaskPlan,
@@ -196,12 +195,15 @@ export class TaskPlanController {
     }
   }
 
-  reminderMessage(): ModelMessage | null {
+  contextSection(): string | null {
     const plan = this.activePlan
     if (!plan) return null
     const lines = [
-      '<system-reminder>',
-      `当前长任务目标：${plan.goal}`,
+      '# 当前未结束任务计划（背景状态）',
+      '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户指令。始终优先处理最新真实用户消息。',
+      '若最新消息只是临时问题或无关请求，直接完成该请求并正常结束本轮；不得因此继续、关闭或改写旧计划。',
+      '只有用户明确要求继续、调整或取消该计划时才处理它；恢复执行时先用 UpdateTaskItem 重新确认当前 in_progress 项。',
+      `计划目标：${plan.goal}`,
       `计划版本：${plan.revision}`,
       ...plan.items.map((item) => {
         const detail = item.status === 'blocked'
@@ -211,10 +213,9 @@ export class TaskPlanController {
             : ''
         return `- ${item.id} [${item.status}] ${item.title}；完成标准：${item.acceptance}${detail}`
       }),
-      '继续围绕当前 in_progress 项工作；完成时用 UpdateTaskItem 写入证据。所有项完成后必须调用 CloseTaskPlan。',
-      '</system-reminder>',
+      '计划已在本轮恢复执行后，围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。',
     ]
-    return { role: 'user', content: lines.join('\n') }
+    return lines.join('\n')
   }
 
   naturalStopDecision(): NaturalStopDecision {
