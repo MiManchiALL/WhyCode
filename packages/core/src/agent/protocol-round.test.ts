@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
+import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
+import { buildTool } from '../tools/tool.ts'
 import { runProtocolRound } from '../consensus/run-round.ts'
 import { AgentSession } from './session.ts'
 
@@ -94,6 +96,20 @@ function createSession(model: MockLanguageModelV4): {
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: null, osPlatform: 'win32' },
+    mainTools: [
+      buildTool({
+        name: 'MainOnlyProbe',
+        description: '只允许普通 Main 使用',
+        prompt: '只允许普通 Main 使用',
+        inputSchema: z.object({}),
+        isReadOnly: true,
+        kind: 'read',
+        availableWithoutProject: true,
+        async execute() {
+          return { data: '不应执行', isError: false }
+        },
+      }),
+    ],
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
   })

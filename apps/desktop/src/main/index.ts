@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import {
   AgentSession,
   cleanupConversationScratch,
+  CommandSessionManager,
   ConsensusCoordinator,
+  createBackgroundCommandTools,
   getModelEntry,
   MODEL_REGISTRY,
   type ApprovalRequest,
@@ -80,6 +82,8 @@ let coordinator: ConsensusCoordinator | null = null
 let conversationId = `conv-${Date.now()}`
 /** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
 let sessions: DesktopSessionRepository
+/** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
+let commandSessions: CommandSessionManager
 const viewTimeline = new ViewTimeline((error) => {
   broadcastEvent(
     {
@@ -153,6 +157,7 @@ async function ensureSession(): Promise<string | null> {
       },
       checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
       sessionRecorder: recorder,
+      mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
       emit: broadcastEvent,
       requestApproval,
     })
@@ -366,8 +371,11 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再删除会话' }
   const deletedCurrent = sessions.currentSessionId === sessionId
   try {
+    // 会话删除后不能再留下仍可改动用户文件的后台进程。
+    await commandSessions.stopSession(sessionId)
     const deleted = await sessions.delete(sessionId)
     if (!deleted) return { ok: false, error: '会话不存在' }
+    await commandSessions.removeSession(sessionId)
     if (deletedCurrent) {
       resetRuntime()
       projectDir = null
@@ -378,13 +386,15 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   }
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   // scratch 只服务当次协商；资源检查点属于会话持久化数据，重启后必须保留。
   void rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }).catch(() => {})
   sessions = new DesktopSessionRepository(
     join(app.getPath('userData'), 'sessions'),
     join(app.getPath('userData'), 'checkpoints'),
   )
+  commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
+  await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () => {
     const config = loadConfig()
@@ -437,4 +447,15 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+let shutdownStarted = false
+app.on('before-quit', (event) => {
+  if (shutdownStarted || !commandSessions) return
+  event.preventDefault()
+  shutdownStarted = true
+  void commandSessions
+    .shutdown()
+    .catch((error) => console.error('后台命令退出清理失败：', error))
+    .finally(() => app.quit())
 })

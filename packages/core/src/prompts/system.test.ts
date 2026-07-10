@@ -21,7 +21,19 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /不要改用 RunCommand 绕过路径边界/)
     assert.match(prompt, /多处相关精确替换用 BatchEdit/)
     assert.match(prompt, /DeleteFile\/MoveFile/)
+    assert.match(prompt, /开发服务器、watch、长测试.*StartCommand/)
     assert.doesNotMatch(prompt, /只讨论与用户项目和编程相关/)
+  })
+
+  it('协商讨论阶段不向模型宣传已物理移除的后台命令工具', () => {
+    const prompt = buildSystemPrompt({
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32',
+      discussion: { agentId: 'B', scratchDir: 'C:\\scratch' },
+    })
+
+    assert.doesNotMatch(prompt, /StartCommand/)
+    assert.doesNotMatch(prompt, /GetCommandOutput/)
   })
 
   it('无项目讨论阶段保留协议能力但不声称拥有文件工具', () => {
