@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
 import type { ConsensusPersistedState } from '../consensus/types.ts'
+import {
+  createUserQuestionMarker,
+  hasPendingUserQuestion,
+} from '../tasks/answer-resume.ts'
 import { activeTaskPlanSchema, type ActiveTaskPlan } from '../tasks/types.ts'
-import { SessionCorruptError } from './chain.ts'
+import { buildLoadedSession, parseTranscript, SessionCorruptError } from './chain.ts'
+import { createTurnAbortedMessage, isTurnAbortedMessage } from './interruption.ts'
 import { SessionStore } from './store.ts'
+import { SESSION_SCHEMA_VERSION, sessionEntrySchema } from './types.ts'
 
 const tempRoots: string[] = []
 const storeRoots = new WeakMap<SessionStore, string>()
@@ -23,7 +30,7 @@ describe('SessionStore', () => {
     const user = message('user', '修复登录问题')
     const assistant = message('assistant', '已经完成')
 
-    await journal.recordUserInput('修复登录问题')
+    await journal.recordUserInput('修复登录问题', true)
     await journal.recordTurnStart('turn-1', [user])
     await journal.recordStep('turn-1', [assistant])
     await journal.recordTurnEnd('turn-1', 'completed')
@@ -63,6 +70,218 @@ describe('SessionStore', () => {
     assert.deepEqual(reopened.initialViewEvents, [question])
   })
 
+  it('问题 step 已提交但 turn-end 前崩溃时，恢复后仍保持 waiting-user', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const question = {
+      id: 'question-before-turn-end',
+      header: '运行系统',
+      question: '你使用哪个系统？',
+      options: [
+        { label: 'Windows', description: '按 Windows 环境处理' },
+        { label: 'macOS', description: '按 macOS 环境处理' },
+      ],
+    }
+    await journal.recordTurnStart('turn-question-crash', [message('user', '继续配置')])
+    await journal.recordStep(
+      'turn-question-crash',
+      [createUserQuestionMarker(question, false)],
+    )
+
+    const interrupted = await store.open(journal.sessionId)
+    assert.equal(interrupted.metadataSnapshot.status, 'interrupted')
+    await interrupted.recoverInterruptedWork()
+
+    assert.equal(interrupted.metadataSnapshot.status, 'waiting-user')
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.metadataSnapshot.status, 'waiting-user')
+    assert.equal(hasPendingUserQuestion([...reopened.initialMessages]), true)
+    assert.equal(
+      reopened.initialViewEvents.some((entry) =>
+        entry.type === 'core-event'
+        && entry.event.type === 'user-question'
+        && entry.event.question.id === question.id),
+      true,
+    )
+  })
+
+  it('尚未建立 turn 的根用户回答按中断输入恢复，不丢回答或重开问题卡', async () => {
+    const { store, journal, questionEvent, answer } = await waitingQuestionSession()
+    await journal.recordUserInput(answer, true)
+
+    const interrupted = await store.open(journal.sessionId)
+    assert.equal(interrupted.metadataSnapshot.status, 'interrupted')
+    assert.equal(interrupted.undeliveredUserInputIds.length, 1)
+    assert.deepEqual(interrupted.initialMessages.at(-1), message('user', answer))
+    assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
+    assert.deepEqual(interrupted.initialViewEvents, [
+      questionEvent,
+      { type: 'user-message', text: answer, startsTurn: true },
+    ])
+
+    await interrupted.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    assert.equal(recovered.metadataSnapshot.status, 'idle')
+    assert.equal(recovered.undeliveredUserInputIds.length, 0)
+    assert.deepEqual(recovered.initialMessages.at(-2), message('user', answer))
+    assert.equal(isTurnAbortedMessage(recovered.initialMessages.at(-1)!), true)
+
+    const restartedAgain = await store.open(journal.sessionId)
+    assert.equal(restartedAgain.initialMessages.filter(isTurnAbortedMessage).length, 1)
+    assert.equal(countMessage(restartedAgain.initialMessages, message('user', answer)), 1)
+  })
+
+  it('turn-start 已落而首批 messages 尾行截断时仍恢复根用户回答', async () => {
+    const { store, journal, answer } = await waitingQuestionSession()
+    await journal.recordUserInput(answer, true)
+    const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
+    const entries = (await readFile(transcript, 'utf8')).trimEnd().split('\n')
+    const input = sessionEntrySchema.parse(JSON.parse(entries.at(-1)!))
+    assert.equal(input.type, 'user-input')
+    const partialTurn = sessionEntrySchema.parse({
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      type: 'turn-start',
+      sessionId: journal.sessionId,
+      uuid: randomUUID(),
+      parentUuid: input.uuid,
+      timestamp: new Date().toISOString(),
+      turnId: 'answer-partial-turn',
+    })
+    await appendFile(
+      transcript,
+      `${JSON.stringify(partialTurn)}\n{"schemaVersion":3,"type":"messages"`,
+      'utf8',
+    )
+
+    const interrupted = await store.open(journal.sessionId)
+    assert.equal(interrupted.interruptedTurnId, 'answer-partial-turn')
+    assert.equal(interrupted.undeliveredUserInputIds.length, 1)
+    assert.deepEqual(interrupted.initialMessages.at(-1), message('user', answer))
+    assert.equal(interrupted.messagesBeforeTurn('answer-partial-turn'), null)
+    assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
+
+    await interrupted.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    assert.equal(recovered.interruptedTurnId, null)
+    assert.equal(recovered.undeliveredUserInputIds.length, 0)
+    assert.equal(countMessage(recovered.initialMessages, message('user', answer)), 1)
+    assert.equal(recovered.initialMessages.filter(isTurnAbortedMessage).length, 1)
+  })
+
+  it('完整回答 messages 落盘后只保留一份回答，旧问题卡保持关闭', async () => {
+    const { store, journal, questionEvent, answer } = await waitingQuestionSession()
+    await journal.recordUserInput(answer, true)
+    await journal.recordTurnStart('answer-complete-turn', [message('user', answer)])
+
+    const interrupted = await store.open(journal.sessionId)
+    assert.equal(interrupted.interruptedTurnId, 'answer-complete-turn')
+    assert.equal(interrupted.undeliveredUserInputIds.length, 0)
+    assert.equal(countMessage(interrupted.initialMessages, message('user', answer)), 1)
+    assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
+    assert.deepEqual(interrupted.initialViewEvents, [
+      questionEvent,
+      { type: 'user-message', text: answer, startsTurn: true },
+    ])
+
+    await interrupted.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    assert.equal(countMessage(recovered.initialMessages, message('user', answer)), 1)
+    assert.equal(recovered.initialMessages.filter(isTurnAbortedMessage).length, 1)
+  })
+
+  it('连续根输入混合已交付与未交付状态时保持原始顺序', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordUserInput('第一条未交付消息', true)
+    await journal.recordUserInput('第二条已交付消息', true)
+    await journal.recordTurnStart('second-turn', [message('user', '第二条已交付消息')])
+    await journal.recordTurnEnd('second-turn', 'completed')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(journal.metadataSnapshot.status, 'interrupted')
+    assert.equal(reopened.metadataSnapshot.status, journal.metadataSnapshot.status)
+    assert.deepEqual(reopened.initialMessages, [
+      message('user', '第一条未交付消息'),
+      message('user', '第二条已交付消息'),
+    ])
+    assert.deepEqual(reopened.messagesBeforeTurn('second-turn'), [
+      message('user', '第一条未交付消息'),
+    ])
+    assert.equal(reopened.undeliveredUserInputIds.length, 1)
+
+    const consensusJournal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await consensusJournal.recordUserInput('共识前未交付消息', true)
+    await consensusJournal.recordUserInput('正式共识请求', true)
+    await consensusJournal.recordConsensusTaskStart(
+      'task-order',
+      consensusState(1),
+      '正式共识请求',
+    )
+    const consensusReopened = await store.open(consensusJournal.sessionId)
+    assert.deepEqual(consensusReopened.initialMessages, [
+      message('user', '共识前未交付消息'),
+      message('user', '正式共识请求'),
+    ])
+    assert.equal(consensusReopened.undeliveredUserInputIds.length, 1)
+
+    const lateJournal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await lateJournal.recordUserInput('原始共识请求', true)
+    await lateJournal.recordConsensusTaskStart(
+      'task-late-input',
+      consensusState(1),
+      '原始共识请求',
+    )
+    await lateJournal.recordUserInput('共识起点后的未交付消息', true)
+    const lateReopened = await store.open(lateJournal.sessionId)
+    assert.deepEqual(lateReopened.initialMessages, [
+      message('user', '原始共识请求'),
+      message('user', '共识起点后的未交付消息'),
+    ])
+    assert.equal(lateReopened.undeliveredUserInputIds.length, 1)
+  })
+
+  it('文件和对话回滚到提问点后，重启会恢复待回答问题卡', async () => {
+    const { store, journal, questionEvent, answer } = await waitingQuestionSession()
+    const rollbackMessages = [...journal.initialMessages]
+    await journal.recordUserInput(answer, true)
+    await journal.recordTurnStart('answer-rollback-turn', [message('user', answer)])
+    await journal.recordStep('answer-rollback-turn', [message('assistant', '继续执行并修改文件')])
+    await journal.recordTurnEnd('answer-rollback-turn', 'completed')
+    await journal.recordSnapshot('rollback', rollbackMessages)
+    assert.equal(journal.metadataSnapshot.status, 'waiting-user')
+    await journal.recordViewEvents([{
+      type: 'core-event',
+      event: {
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-after-answer',
+        turnId: 'answer-rollback-turn',
+        scope: 'files-and-chat',
+        ok: true,
+      },
+    }])
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(hasPendingUserQuestion([...reopened.initialMessages]), true)
+    assert.deepEqual(reopened.initialViewEvents.at(-1), questionEvent)
+    assert.equal(
+      reopened.initialViewEvents.filter((entry) =>
+        entry.type === 'core-event' && entry.event.type === 'user-question').length,
+      2,
+    )
+  })
+
+  it('对话回滚离开提问点后清除 waiting-user 状态', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordTurnStart('turn-question', [message('user', '帮我选择')])
+    await journal.recordTurnEnd('turn-question', 'waiting-user')
+
+    await journal.recordSnapshot('rollback', [])
+    const reopened = await store.open(journal.sessionId)
+
+    assert.equal(reopened.metadataSnapshot.status, 'idle')
+  })
+
   it('忽略崩溃留下的最后半行', async () => {
     const { store, journal, transcript } = await completedSession()
     await appendFile(transcript, '{"schemaVersion":1,"type":"messages"', 'utf8')
@@ -70,6 +289,28 @@ describe('SessionStore', () => {
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.initialMessages.length, 2)
     assert.equal(reopened.metadataSnapshot.status, 'idle')
+  })
+
+  it('完整末行缺少换行时先补分隔符，后续追加和重启不会粘行丢记录', async () => {
+    const { store, journal, transcript } = await completedSession()
+    const original = await readFile(transcript, 'utf8')
+    assert.equal(original.endsWith('\n'), true)
+    await writeFile(transcript, original.slice(0, -1), 'utf8')
+
+    const repaired = await store.open(journal.sessionId)
+    assert.equal((await readFile(transcript, 'utf8')).endsWith('\n'), true)
+    await repaired.recordUserInput('修复后追加消息', true)
+    await repaired.recordTurnStart('turn-after-repair', [message('user', '修复后追加消息')])
+    await repaired.recordTurnEnd('turn-after-repair', 'completed')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialMessages.at(-1), message('user', '修复后追加消息'))
+    await reopened.updateModel('test:after-repair')
+    const restartedAgain = await store.open(journal.sessionId)
+    assert.equal(restartedAgain.metadataSnapshot.modelId, 'test:after-repair')
+    for (const line of (await readFile(transcript, 'utf8')).trimEnd().split('\n')) {
+      assert.doesNotThrow(() => JSON.parse(line))
+    }
   })
 
   it('最后一行 JSON 完整但结构非法时拒绝恢复', async () => {
@@ -93,11 +334,40 @@ describe('SessionStore', () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     await journal.recordTurnStart('turn-crashed', [message('user', '继续执行')])
+    const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
+    await appendFile(transcript, '{"schemaVersion":3,"type":"messages"', 'utf8')
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.interruptedTurnId, 'turn-crashed')
     assert.equal(reopened.metadataSnapshot.status, 'interrupted')
     assert.deepEqual(reopened.initialMessages, [message('user', '继续执行')])
+
+    await reopened.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    assert.equal(recovered.interruptedTurnId, null)
+    assert.equal(recovered.initialMessages.some(isTurnAbortedMessage), true)
+    assert.match(JSON.stringify(recovered.initialMessages), /process-interruption/)
+    const restartedAgain = await store.open(journal.sessionId)
+    assert.equal(restartedAgain.interruptedTurnId, null)
+    assert.equal(restartedAgain.metadataSnapshot.status, 'idle')
+  })
+
+  it('连续中断恢复时总是在最新半截回合之后建立新边界', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordTurnStart('turn-aborted', [message('user', '第一次任务')])
+    await journal.recordStep('turn-aborted', [createTurnAbortedMessage()])
+    await journal.recordTurnEnd('turn-aborted', 'aborted')
+    await journal.recordTurnStart('turn-crashed', [message('user', '第二次任务')])
+
+    const reopened = await store.open(journal.sessionId)
+    await reopened.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    const markers = recovered.initialMessages.filter(isTurnAbortedMessage)
+
+    assert.equal(markers.length, 2)
+    assert.match(JSON.stringify(markers.at(-1)), /process-interruption/)
+    assert.equal(isTurnAbortedMessage(recovered.initialMessages.at(-1)!), true)
   })
 
   it('快照建立新根并丢弃旧活动链', async () => {
@@ -180,7 +450,8 @@ describe('SessionStore', () => {
     await journal.recordStep('base', [baseMessages[1]!])
     await journal.recordTurnEnd('base', 'completed')
     const state = consensusState(1)
-    await journal.recordConsensusTaskStart('task-1', state)
+    const consensusRequest = '讨论方案'
+    await journal.recordConsensusTaskStart('task-1', state, consensusRequest)
     await journal.recordTurnStart('m1', [message('user', '讨论方案')])
     await journal.recordTurnEnd('m1', 'completed')
 
@@ -189,19 +460,29 @@ describe('SessionStore', () => {
     assert.equal(reopened.interruptedConsensusTaskId, 'task-1')
     assert.equal(reopened.metadataSnapshot.status, 'interrupted')
     assert.deepEqual(reopened.initialConsensusState, state)
-    assert.deepEqual(reopened.initialMessages, baseMessages)
+    assert.deepEqual(reopened.initialMessages, [
+      ...baseMessages,
+      message('user', consensusRequest),
+    ])
+    assert.deepEqual(reopened.messagesBeforeTurn('base'), [])
+    assert.equal(reopened.messagesBeforeTurn('m1'), null)
 
     await reopened.recoverInterruptedWork()
     const recovered = await store.open(journal.sessionId)
     assert.equal(recovered.interruptedConsensusTaskId, null)
     assert.equal(recovered.metadataSnapshot.status, 'idle')
-    assert.deepEqual(recovered.initialMessages, baseMessages)
+    assert.deepEqual(recovered.initialMessages.slice(0, -1), [
+      ...baseMessages,
+      message('user', consensusRequest),
+    ])
+    assert.equal(isTurnAbortedMessage(recovered.initialMessages.at(-1)!), true)
+    assert.equal(recovered.messagesBeforeTurn('m1'), null)
   })
 
   it('共识任务终点原子提交稳定状态', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
-    await journal.recordConsensusTaskStart('task-1', consensusState(1))
+    await journal.recordConsensusTaskStart('task-1', consensusState(1), '提交共识任务')
     const committed = consensusState(1, '最终方案')
     await journal.recordConsensusTaskEnd('task-1', 'completed', committed)
 
@@ -214,7 +495,7 @@ describe('SessionStore', () => {
   it('达到工具循环上限时保留执行进度供用户继续', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
-    await journal.recordConsensusTaskStart('task-1', consensusState(1))
+    await journal.recordConsensusTaskStart('task-1', consensusState(1), '继续长任务')
     const user = message('user', '继续长任务')
     const assistant = message('assistant', '已完成部分工作')
     await journal.recordTurnStart('execution', [user])
@@ -244,6 +525,45 @@ describe('SessionStore', () => {
     assert.equal(reopened.taskPlanBeforeTurn('turn-1'), null)
     assert.deepEqual(reopened.taskPlanBeforeTurn('turn-2'), plan)
     assert.equal(reopened.metadataSnapshot.status, 'idle')
+  })
+
+  it('重启后恢复替换后的活动计划，并保留被替代计划的完整历史事件', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const previous = taskPlan(1)
+    await journal.recordTurnStart('old-task', [message('user', '开发蔚蓝')])
+    await journal.recordStep('old-task', [message('assistant', '建立旧计划')], previous)
+    await journal.recordTurnEnd('old-task', 'paused')
+
+    const next = activeTaskPlanSchema.parse({
+      ...taskPlan(1),
+      id: '22222222-2222-4222-8222-222222222222',
+      goal: '开发 CSGO',
+    })
+    await journal.recordTurnStart('replacement', [message('user', '改做 CSGO')])
+    await journal.recordViewEvents([{ type: 'core-event', event: {
+      type: 'task-plan-replaced',
+      previous: {
+        ...previous,
+        status: 'superseded',
+        summary: '用户明确切换游戏',
+        replacedByPlanId: next.id,
+      },
+      plan: next,
+    } }])
+    await journal.recordStep('replacement', [message('assistant', '已替换计划')], next)
+    await journal.recordTurnEnd('replacement', 'paused')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialTaskPlan, next)
+    const replacement = reopened.initialViewEvents.find((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-replaced')
+    assert.equal(
+      replacement?.type === 'core-event'
+      && replacement.event.type === 'task-plan-replaced'
+      && replacement.event.previous.goal,
+      '完成长任务',
+    )
   })
 
   it('压缩保留活动计划，对话回滚恢复 turn 起点计划', async () => {
@@ -277,7 +597,8 @@ describe('SessionStore', () => {
     await journal.recordTurnStart('base', [message('user', '已有任务')])
     await journal.recordStep('base', [message('assistant', '已有计划')], base)
     await journal.recordTurnEnd('base', 'paused')
-    await journal.recordConsensusTaskStart('task-1', consensusState(1))
+    await journal.recordUserInput('执行新方案', true)
+    await journal.recordConsensusTaskStart('task-1', consensusState(1), '执行新方案')
     await journal.recordTurnStart('execution', [message('user', '执行新方案')])
     await journal.recordStep('execution', [message('assistant', '推进中')], taskPlan(2))
 
@@ -294,13 +615,46 @@ describe('SessionStore', () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     const state = consensusState(1)
-    await journal.recordConsensusTaskStart('task-1', state)
+    await journal.recordUserInput('压缩中的共识请求', true)
+    await journal.recordConsensusTaskStart('task-1', state, '压缩中的共识请求')
     await journal.recordSnapshot('compact', [message('user', '压缩摘要')])
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.interruptedConsensusTaskId, 'task-1')
+    assert.equal(reopened.undeliveredUserInputIds.length, 0)
     assert.deepEqual(reopened.initialConsensusState, state)
-    assert.deepEqual(reopened.initialMessages, [])
+    assert.deepEqual(reopened.initialMessages, [message('user', '压缩中的共识请求')])
+  })
+
+  it('活动共识快照后的未交付根输入在取消恢复时只出现一次，且重放不修改记录', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const state = consensusState(1)
+    await journal.recordUserInput('原始共识请求', true)
+    await journal.recordConsensusTaskStart('task-snapshot-root', state, '原始共识请求')
+    await journal.recordSnapshot('compact', [message('user', '压缩摘要')])
+    await journal.recordUserInput('快照后的未交付消息', true)
+    await journal.recordConsensusTaskEnd('task-snapshot-root', 'aborted', state)
+
+    const transcript = join(
+      storeRoots.get(store)!,
+      journal.sessionId,
+      'transcript.jsonl',
+    )
+    const entries = parseTranscript(await readFile(transcript, 'utf8'))
+    const originalEntries = structuredClone(entries)
+    const first = buildLoadedSession(entries)
+    const second = buildLoadedSession(entries)
+
+    assert.deepEqual(entries, originalEntries)
+    assert.deepEqual(first.messages.slice(0, -1), [
+      message('user', '原始共识请求'),
+      message('user', '快照后的未交付消息'),
+    ])
+    assert.equal(first.messages.filter((entry) =>
+      JSON.stringify(entry).includes('快照后的未交付消息')).length, 1)
+    assert.equal(isTurnAbortedMessage(first.messages.at(-1)!), true)
+    assert.deepEqual(second.messages, first.messages)
   })
 
   it('共识取消时回滚任务内模型消息', async () => {
@@ -311,15 +665,25 @@ describe('SessionStore', () => {
     await journal.recordStep('base', [baseMessages[1]!])
     await journal.recordTurnEnd('base', 'completed')
     const state = consensusState(1)
-    await journal.recordConsensusTaskStart('task-1', state)
+    await journal.recordConsensusTaskStart('task-1', state, '分析新请求')
     await journal.recordTurnStart('m1', [message('user', '内部协议提示')])
     await journal.recordStep('m1', [message('assistant', '半截候选')])
     await journal.recordTurnEnd('m1', 'completed')
     await journal.recordConsensusTaskEnd('task-1', 'aborted', state)
 
+    assert.deepEqual(journal.messagesBeforeTurn('base'), [])
+    assert.equal(journal.messagesBeforeTurn('m1'), null)
+    assert.equal(journal.taskPlanBeforeTurn('m1'), undefined)
+
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.metadataSnapshot.status, 'idle')
-    assert.deepEqual(reopened.initialMessages, baseMessages)
+    assert.deepEqual(reopened.initialMessages.slice(0, -1), [
+      ...baseMessages,
+      message('user', '分析新请求'),
+    ])
+    assert.equal(isTurnAbortedMessage(reopened.initialMessages.at(-1)!), true)
+    assert.equal(reopened.messagesBeforeTurn('m1'), null)
+    assert.equal(reopened.taskPlanBeforeTurn('m1'), undefined)
   })
 
   it('metadata 损坏时从 transcript 重建会话列表', async () => {
@@ -358,7 +722,7 @@ async function createStore(): Promise<SessionStore> {
 async function completedSession() {
   const store = await createStore()
   const journal = await store.create({ projectDir: null, modelId: 'test:model' })
-  await journal.recordUserInput('hello')
+  await journal.recordUserInput('hello', true)
   await journal.recordTurnStart('turn-1', [message('user', 'hello')])
   await journal.recordStep('turn-1', [message('assistant', 'world')])
   await journal.recordTurnEnd('turn-1', 'completed')
@@ -371,8 +735,37 @@ async function completedSession() {
   }
 }
 
+async function waitingQuestionSession() {
+  const store = await createStore()
+  const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+  const question = {
+    id: 'question-crash-window',
+    header: '运行系统',
+    question: '你使用哪个系统？',
+    options: [
+      { label: 'Windows', description: '按 Windows 环境处理' },
+      { label: 'macOS', description: '按 macOS 环境处理' },
+    ],
+  }
+  const questionEvent = {
+    type: 'core-event' as const,
+    event: { type: 'user-question' as const, question },
+  }
+  const answer = '回答「你使用哪个系统？」：Windows'
+  await journal.recordTurnStart('question-turn', [message('user', '继续任务')])
+  await journal.recordStep('question-turn', [createUserQuestionMarker(question, true)])
+  await journal.recordViewEvents([questionEvent])
+  await journal.recordTurnEnd('question-turn', 'waiting-user')
+  return { store, journal, questionEvent, answer }
+}
+
 function message(role: 'user' | 'assistant', content: string): ModelMessage {
   return { role, content }
+}
+
+function countMessage(messages: readonly ModelMessage[], expected: ModelMessage): number {
+  const serialized = JSON.stringify(expected)
+  return messages.filter((entry) => JSON.stringify(entry) === serialized).length
 }
 
 function consensusState(taskCounter: number, summary?: string): ConsensusPersistedState {

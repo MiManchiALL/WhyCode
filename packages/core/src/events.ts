@@ -7,7 +7,7 @@
  * - 与 docs/02-技术栈与架构.md §6 保持同步，改这里必须改文档。
  */
 
-import type { TaskPlan } from './tasks/types.ts'
+import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -69,9 +69,11 @@ export type CoreEvent =
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
+  /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
+  | { type: 'user-message-accepted'; text: string; startsTurn: true }
   // --- steering（M2-a）：运行中插话 ---
   | { type: 'message-queued'; id: string; text: string }
-  | { type: 'message-injected'; id: string; text: string }
+  | { type: 'message-injected'; id: string; text: string; startsTurn?: boolean }
   /** 中断后把排队文本还给输入框（不静默丢弃） */
   | { type: 'queue-restored'; text: string }
   // --- 检查点（M2-c）---
@@ -95,6 +97,8 @@ export type CoreEvent =
       invalidatedToolUseIds?: string[]
       /** 文件+对话回滚后的活动任务计划；省略表示本次未改变任务状态。 */
       taskPlan?: TaskPlan | null
+      /** 文件+对话回滚后重新生效的等待问题；null 表示回滚点没有待回答问题。 */
+      question?: UserQuestion | null
     }
   /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
@@ -141,6 +145,12 @@ export type CoreEvent =
   | { type: 'execution-started'; taskId: string }
   // --- Main 长任务控制 ---
   | { type: 'task-plan-updated'; plan: TaskPlan }
+  /** 用户明确切换独立复杂任务；旧计划归档与新计划激活属于同一稳定 step。 */
+  | {
+      type: 'task-plan-replaced'
+      previous: SupersededTaskPlan
+      plan: ActiveTaskPlan
+    }
   /** 共识事务取消/异常时，把任务卡恢复到协商开始前。 */
   | { type: 'task-plan-restored'; plan: TaskPlan | null }
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */

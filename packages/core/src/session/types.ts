@@ -13,7 +13,7 @@ import {
 } from '../tasks/types.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 
-export const SESSION_SCHEMA_VERSION = 2
+export const SESSION_SCHEMA_VERSION = 3
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -43,6 +43,8 @@ const turnStartSchema = chainedEntrySchema.extend({
 const userInputSchema = chainedEntrySchema.extend({
   type: z.literal('user-input'),
   text: z.string().min(1),
+  /** true 时该输入同时是可见时间线中的新回合消息。 */
+  startsTurn: z.boolean(),
 })
 
 const modelChangeSchema = chainedEntrySchema.extend({
@@ -77,6 +79,10 @@ const consensusTaskStartSchema = chainedEntrySchema.extend({
   taskId: z.string().min(1),
   state: consensusPersistedStateSchema,
   baseTaskPlan: activeTaskPlanSchema.nullable(),
+  /** 共识失败/取消后仍需保留的原始请求；随中断标记一起恢复。 */
+  userText: z.string().min(1),
+  /** 共识任务开始前仍有效的对话回滚锚点；任务内锚点在回滚时必须丢弃。 */
+  baseTurnIds: z.array(z.string().min(1)),
 })
 
 const consensusTaskEndSchema = chainedEntrySchema.extend({
@@ -97,6 +103,7 @@ const snapshotSchema = chainedEntrySchema.extend({
   activeConsensusTaskId: z.string().min(1).nullable(),
   activeConsensusBaseMessages: messagesSchema.nullable(),
   activeConsensusBaseTaskPlan: activeTaskPlanSchema.nullable(),
+  activeConsensusBaseTurnIds: z.array(z.string().min(1)).nullable(),
   consensusState: consensusPersistedStateSchema.nullable(),
   taskPlan: activeTaskPlanSchema.nullable(),
   modelId: z.string().min(1),
@@ -161,9 +168,12 @@ export interface LoadedSession {
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
+  /** 已展示但尚未进入完整 turn/messages 或共识起点的根用户输入。 */
+  undeliveredUserInputIds: string[]
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
   interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null
+  interruptedConsensusBaseTurnIds: string[] | null
   consensusState: ConsensusPersistedState | null
   activeTaskPlan: ActiveTaskPlan | null
 }
@@ -174,6 +184,7 @@ export interface SessionRecorder {
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
   readonly interruptedTurnId: string | null
+  readonly undeliveredUserInputIds: readonly string[]
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
   readonly initialTaskPlan: ActiveTaskPlan | null
@@ -181,7 +192,7 @@ export interface SessionRecorder {
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
   taskPlanBeforeTurn(turnId: string): ActiveTaskPlan | null | undefined
-  recordUserInput(text: string): Promise<void>
+  recordUserInput(text: string, startsTurn: boolean): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void>
   recordStep(
@@ -196,7 +207,11 @@ export interface SessionRecorder {
     activeTurnId?: string,
     taskPlan?: ActiveTaskPlan | null,
   ): Promise<void>
-  recordConsensusTaskStart(taskId: string, state: ConsensusPersistedState): Promise<void>
+  recordConsensusTaskStart(
+    taskId: string,
+    state: ConsensusPersistedState,
+    userText: string,
+  ): Promise<void>
   recordConsensusTaskEnd(
     taskId: string,
     outcome: ConsensusTaskOutcome,

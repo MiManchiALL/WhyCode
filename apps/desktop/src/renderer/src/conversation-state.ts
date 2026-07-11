@@ -33,6 +33,12 @@ export type Block =
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'notice'; id: string; text: string }
+  | {
+      kind: 'plan-replaced'
+      id: string
+      previous: Extract<TaskPlan, { status: 'superseded' }>
+      nextGoal: string
+    }
   | { kind: 'error'; id: string; text: string }
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
@@ -88,7 +94,9 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       return { ...state, pendingTurnStart: null, turnStartBlocks }
     }
     case 'message-injected':
-      return appendUserMessage(state, event.text, false)
+      return appendUserMessage(state, event.text, event.startsTurn ?? false)
+    case 'user-message-accepted':
+      return appendUserMessage(state, event.text, event.startsTurn)
     case 'text-delta':
       return appendText(state, event.text)
     case 'thinking-delta':
@@ -176,6 +184,15 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       return appendNotice(state, '▶ Main 进入执行阶段')
     case 'task-plan-updated':
       return { ...state, taskPlan: structuredClone(event.plan) }
+    case 'task-plan-replaced': {
+      const next = appendBlock(state, {
+        kind: 'plan-replaced',
+        id: nextBlockId(state),
+        previous: structuredClone(event.previous),
+        nextGoal: event.plan.goal,
+      })
+      return { ...next, taskPlan: structuredClone(event.plan) }
+    }
     case 'task-plan-restored':
       return { ...state, taskPlan: structuredClone(event.plan) }
     default:
@@ -333,7 +350,9 @@ function applyCheckpointRestored(
       ...state,
       blocks,
       taskPlan,
-      pendingQuestion: event.scope === 'files-and-chat' ? null : state.pendingQuestion,
+      pendingQuestion: event.scope === 'files-and-chat'
+        ? structuredClone(event.question ?? null)
+        : state.pendingQuestion,
     },
     event.scope === 'files-and-chat'
       ? '已回滚：该轮对话与文件改动均已撤销'

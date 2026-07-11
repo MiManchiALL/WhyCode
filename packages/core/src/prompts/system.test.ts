@@ -54,6 +54,7 @@ describe('通用 Agent 提示约束', () => {
     const prompt = buildSystemPrompt({ projectDir: null, osPlatform: 'win32' })
 
     assert.match(prompt, /CreateTaskPlan/)
+    assert.match(prompt, /ReplaceTaskPlan/)
     assert.match(prompt, /UpdateTaskItem/)
     assert.match(prompt, /最终 verification/)
     assert.match(prompt, /简单问答和一步操作不要创建计划/)

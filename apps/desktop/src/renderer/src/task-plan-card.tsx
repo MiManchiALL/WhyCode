@@ -12,11 +12,13 @@ export function TaskPlanCard({ plan }: { plan: TaskPlan }) {
   const [expanded, setExpanded] = useState(plan.status === 'active')
   const completed = plan.items.filter((item) => item.status === 'completed').length
   const percent = Math.round((completed / plan.items.length) * 100)
-  const stateLabel = plan.status === 'completed'
-    ? '已完成'
-    : plan.status === 'abandoned'
-      ? '已放弃'
-      : `${completed}/${plan.items.length}`
+  const stateLabel = plan.status === 'active'
+    ? `${completed}/${plan.items.length}`
+    : plan.status === 'completed'
+      ? '已完成'
+      : plan.status === 'superseded'
+        ? '已替换'
+        : '已放弃'
 
   return (
     <section className="border-b border-blue-100 bg-blue-50/50 px-6 py-2.5">

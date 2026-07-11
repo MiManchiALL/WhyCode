@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
-import { taskPlanSchema } from '../tasks/types.ts'
+import {
+  activeTaskPlanSchema,
+  supersededTaskPlanSchema,
+  taskPlanSchema,
+} from '../tasks/types.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -69,6 +73,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     error: z.string().optional(),
     invalidatedToolUseIds: z.array(z.string()).optional(),
     taskPlan: taskPlanSchema.nullable().optional(),
+    question: userQuestionSchema.nullable().optional(),
   }),
   z.object({
     type: z.literal('context-compacted'),
@@ -115,6 +120,11 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('execution-started'), taskId: z.string() }),
   z.object({ type: z.literal('task-plan-updated'), plan: taskPlanSchema }),
+  z.object({
+    type: z.literal('task-plan-replaced'),
+    previous: supersededTaskPlanSchema,
+    plan: activeTaskPlanSchema,
+  }),
   z.object({ type: z.literal('task-plan-restored'), plan: taskPlanSchema.nullable() }),
 ])
 
@@ -133,7 +143,7 @@ export type ViewEvent = z.infer<typeof viewEventSchema>
 /** CoreEvent → 可持久化的用户可见事件；运行态、审批和已失效检查点不会进入时间线。 */
 export function toViewEvent(event: CoreEvent): ViewEvent | null {
   if (event.type === 'message-injected') {
-    return { type: 'user-message', text: event.text, startsTurn: false }
+    return { type: 'user-message', text: event.text, startsTurn: event.startsTurn ?? false }
   }
   if (event.type === 'peer-event') {
     if (!['text-delta', 'tool-start', 'tool-end'].includes(event.event.type)) return null
@@ -160,6 +170,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'negotiation-decided':
     case 'execution-started':
     case 'task-plan-updated':
+    case 'task-plan-replaced':
     case 'task-plan-restored':
       return viewEventSchema.parse({ type: 'core-event', event })
     default:

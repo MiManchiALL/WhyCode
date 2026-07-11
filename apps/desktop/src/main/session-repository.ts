@@ -10,6 +10,8 @@ export class DesktopSessionRepository {
   private readonly store: SessionStore
   private readonly checkpointStorageRoot: string
   private current: SessionJournal | null = null
+  private pendingCreate: Promise<SessionJournal> | null = null
+  private generation = 0
 
   constructor(storageRoot: string, checkpointStorageRoot: string) {
     this.store = new SessionStore(storageRoot)
@@ -25,16 +27,36 @@ export class DesktopSessionRepository {
   }
 
   async ensure(projectDir: string | null, modelId: string): Promise<SessionJournal> {
-    this.current ??= await this.store.create({ projectDir, modelId })
-    return this.current
+    if (this.current) return this.current
+    if (!this.pendingCreate) {
+      const generation = this.generation
+      const create = this.store.create({ projectDir, modelId }).then(async (journal) => {
+        if (generation !== this.generation) {
+          await this.store.delete(journal.sessionId).catch(() => false)
+          throw new Error('会话初始化已失效')
+        }
+        this.current ??= journal
+        return this.current
+      })
+      let pending: Promise<SessionJournal>
+      pending = create.finally(() => {
+        if (this.pendingCreate === pending) this.pendingCreate = null
+      })
+      this.pendingCreate = pending
+    }
+    return this.pendingCreate
   }
 
   async resume(sessionId: string): Promise<SessionJournal> {
+    this.generation++
+    this.pendingCreate = null
     this.current = await this.store.open(sessionId)
     return this.current
   }
 
   reset(): void {
+    this.generation++
+    this.pendingCreate = null
     this.current = null
   }
 

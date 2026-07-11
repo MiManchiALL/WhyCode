@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai'
 import { keepsConsensusProgress } from '../consensus/types.ts'
 import type { ActiveTaskPlan } from '../tasks/types.ts'
+import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
 import {
   SESSION_SCHEMA_VERSION,
   sessionEntrySchema,
@@ -47,20 +48,48 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   validateEntrySemantics(entries)
 
   const chain = buildActiveChain(entries)
-  const work = findInterruptedWork(chain)
+  const undeliveredUserInputs = findUndeliveredUserInputs(chain)
+  const undeliveredById = new Map(undeliveredUserInputs.map((input) => [input.id, input]))
+  const work = findInterruptedWork(chain, undeliveredById)
   const messages = work.interruptedConsensusTaskId
     ? (work.interruptedConsensusBaseMessages ?? [])
-    : collectMessages(chain)
+    : collectMessages(chain, undeliveredById)
   const consensusState = collectConsensusState(chain)
-  const turnStarts = collectTurnStarts(chain)
+  const turnStarts = collectTurnStarts(chain, undeliveredById)
   const activeTaskPlan = work.interruptedConsensusTaskId
     ? work.interruptedConsensusBaseTaskPlan
     : collectTaskPlan(chain)
   const viewEvents = collectViewEvents(entries)
+  const pendingUserQuestion = findPendingUserQuestion(messages)
+  if (
+    pendingUserQuestion
+    && pendingVisibleQuestionId(viewEvents) !== pendingUserQuestion.question.id
+  ) {
+    // 模型 step 已落盘、ViewTimeline 尚未来得及提交就崩溃时，从同一 step 的
+    // 完整绑定恢复唯一可回答的问题卡，避免 UI 与模型事实源分裂。
+    viewEvents.push({
+      type: 'core-event',
+      event: {
+        type: 'user-question',
+        question: structuredClone(pendingUserQuestion.question),
+      },
+    })
+  }
   const modelId = collectModelId(chain, start.modelId)
-  const { interruptedTurnId, interruptedConsensusTaskId, interruptedConsensusBaseMessages } = work
+  const {
+    interruptedTurnId,
+    interruptedConsensusTaskId,
+    interruptedConsensusBaseMessages,
+    interruptedConsensusBaseTurnIds,
+  } = work
   const last = chain.at(-1)!
-  const status = deriveStatus(chain, interruptedTurnId, interruptedConsensusTaskId)
+  const status = deriveStatus(
+    chain,
+    interruptedTurnId,
+    interruptedConsensusTaskId,
+    undeliveredUserInputs.length > 0,
+    pendingUserQuestion !== null,
+  )
   const recordedInputs = entries.flatMap((entry) => (entry.type === 'user-input' ? [entry.text] : []))
   const userTexts = recordedInputs.length > 0 ? recordedInputs : messages.flatMap(userText)
 
@@ -72,9 +101,11 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     turnStartTaskPlans: turnStarts.taskPlans,
     leafUuid: last.uuid,
     interruptedTurnId,
+    undeliveredUserInputIds: undeliveredUserInputs.map((input) => input.id),
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
     interruptedConsensusBaseTaskPlan: work.interruptedConsensusBaseTaskPlan,
+    interruptedConsensusBaseTurnIds,
     consensusState,
     activeTaskPlan,
     metadata: {
@@ -91,7 +122,10 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   }
 }
 
-function collectTurnStarts(chain: SessionEntry[]): {
+function collectTurnStarts(
+  chain: SessionEntry[],
+  undeliveredById: ReadonlyMap<string, UndeliveredUserInput>,
+): {
   messages: Map<string, ModelMessage[]>
   taskPlans: Map<string, ActiveTaskPlan | null>
 } {
@@ -99,34 +133,121 @@ function collectTurnStarts(chain: SessionEntry[]): {
   const taskPlans = new Map<string, ActiveTaskPlan | null>()
   let messages: ModelMessage[] = []
   let taskPlan: ActiveTaskPlan | null = null
+  let activeConsensusBaseMessages: ModelMessage[] | null = null
+  let activeConsensusBaseTurnIds: Set<string> | null = null
+  const partialTurnIds = new Set(
+    [...undeliveredById.values()].flatMap((input) => input.partialTurnId ?? []),
+  )
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
       starts.clear()
       taskPlans.clear()
       messages = [...entry.messages]
       taskPlan = entry.taskPlan
+      activeConsensusBaseMessages = entry.activeConsensusBaseMessages
+        ? [...entry.activeConsensusBaseMessages]
+        : null
+      activeConsensusBaseTurnIds = entry.activeConsensusBaseTurnIds
+        ? new Set(entry.activeConsensusBaseTurnIds)
+        : null
       for (const start of entry.turnStartMessages) {
         starts.set(start.turnId, structuredClone(start.messages))
         taskPlans.set(start.turnId, structuredClone(start.taskPlan))
       }
     }
-    if (entry.type === 'turn-start') {
+    if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
+      const message: ModelMessage = { role: 'user', content: entry.text }
+      messages.push(message)
+      activeConsensusBaseMessages?.push(message)
+    }
+    if (entry.type === 'consensus-task-start') {
+      activeConsensusBaseMessages = [
+        ...messages,
+        { role: 'user', content: entry.userText },
+      ]
+      activeConsensusBaseTurnIds = new Set(entry.baseTurnIds)
+    }
+    if (entry.type === 'turn-start' && !partialTurnIds.has(entry.turnId)) {
       starts.set(entry.turnId, structuredClone(messages))
       taskPlans.set(entry.turnId, structuredClone(taskPlan))
     }
     if (entry.type === 'messages') messages.push(...entry.messages)
     if (entry.type === 'task-state') taskPlan = entry.activePlan
     if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
-      messages = [...entry.rollbackMessages]
+      messages = consensusRollbackMessages(entry.rollbackMessages, activeConsensusBaseMessages)
+      if (activeConsensusBaseTurnIds) {
+        retainMapKeys(starts, activeConsensusBaseTurnIds)
+        retainMapKeys(taskPlans, activeConsensusBaseTurnIds)
+      }
     }
-    if (entry.type === 'consensus-task-end') taskPlan = entry.taskPlan
+    if (entry.type === 'consensus-task-end') {
+      taskPlan = entry.taskPlan
+      activeConsensusBaseMessages = null
+      activeConsensusBaseTurnIds = null
+    }
+  }
+  if (activeConsensusBaseTurnIds) {
+    retainMapKeys(starts, activeConsensusBaseTurnIds)
+    retainMapKeys(taskPlans, activeConsensusBaseTurnIds)
   }
   return { messages: starts, taskPlans }
 }
 
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
 function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
-  return entries.flatMap((entry) => (entry.type === 'view-events' ? entry.events : []))
+  return entries.flatMap((entry): ViewEvent[] => {
+    if (entry.type === 'view-events') return entry.events
+    if (entry.type === 'user-input' && entry.startsTurn) {
+      return [{ type: 'user-message', text: entry.text, startsTurn: true }]
+    }
+    return []
+  })
+}
+
+interface UndeliveredUserInput {
+  id: string
+  text: string
+  partialTurnId: string | null
+}
+
+/** 根用户输入只有进入完整 messages 批次或共识起点后才算已交付给模型。 */
+function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[] {
+  const childByParent = new Map<string, SessionEntry>()
+  for (const entry of chain) {
+    if (entry.parentUuid) childByParent.set(entry.parentUuid, entry)
+  }
+
+  return chain.flatMap((entry): UndeliveredUserInput[] => {
+    if (entry.type !== 'user-input' || !entry.startsTurn) return []
+    const delivery = childByParent.get(entry.uuid)
+    if (delivery?.type === 'consensus-task-start') return []
+    if (delivery?.type === 'turn-start') {
+      const batch = childByParent.get(delivery.uuid)
+      if (batch?.type === 'messages' && batch.turnId === delivery.turnId) return []
+      return [{ id: entry.uuid, text: entry.text, partialTurnId: delivery.turnId }]
+    }
+    return [{ id: entry.uuid, text: entry.text, partialTurnId: null }]
+  })
+}
+
+function pendingVisibleQuestionId(events: ViewEvent[]): string | null {
+  let pendingQuestionId: string | null = null
+  for (const entry of events) {
+    if (entry.type === 'user-message') {
+      pendingQuestionId = null
+      continue
+    }
+    const event = entry.event
+    if (event.type === 'user-question') pendingQuestionId = event.question.id
+    if (
+      event.type === 'checkpoint-restored'
+      && event.ok
+      && event.scope === 'files-and-chat'
+    ) {
+      pendingQuestionId = event.question?.id ?? null
+    }
+  }
+  return pendingQuestionId
 }
 
 function findLastContentIndex(lines: string[]): number {
@@ -149,7 +270,12 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
     if (entry.type === 'snapshot') {
       const hasTask = entry.activeConsensusTaskId !== null
       const hasBase = entry.activeConsensusBaseMessages !== null
-      if (hasTask !== hasBase || (hasTask && entry.consensusState === null)) {
+      const hasBaseTurnIds = entry.activeConsensusBaseTurnIds !== null
+      if (
+        hasTask !== hasBase
+        || hasTask !== hasBaseTurnIds
+        || (hasTask && entry.consensusState === null)
+      ) {
         throw new SessionCorruptError('snapshot 的活动共识边界不完整')
       }
     }
@@ -184,14 +310,35 @@ function buildActiveChain(entries: SessionEntry[]): SessionEntry[] {
   return chain
 }
 
-function collectMessages(chain: SessionEntry[]): ModelMessage[] {
+function collectMessages(
+  chain: SessionEntry[],
+  undeliveredById: ReadonlyMap<string, UndeliveredUserInput>,
+): ModelMessage[] {
   let messages: ModelMessage[] = []
+  let activeConsensusBaseMessages: ModelMessage[] | null = null
   for (const entry of chain) {
-    if (entry.type === 'snapshot') messages = [...entry.messages]
+    if (entry.type === 'snapshot') {
+      messages = [...entry.messages]
+      activeConsensusBaseMessages = entry.activeConsensusBaseMessages
+        ? [...entry.activeConsensusBaseMessages]
+        : null
+    }
+    if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
+      const message: ModelMessage = { role: 'user', content: entry.text }
+      messages.push(message)
+      activeConsensusBaseMessages?.push(message)
+    }
+    if (entry.type === 'consensus-task-start') {
+      activeConsensusBaseMessages = [
+        ...messages,
+        { role: 'user', content: entry.userText },
+      ]
+    }
     if (entry.type === 'messages') messages.push(...entry.messages)
     if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
-      messages = [...entry.rollbackMessages]
+      messages = consensusRollbackMessages(entry.rollbackMessages, activeConsensusBaseMessages)
     }
+    if (entry.type === 'consensus-task-end') activeConsensusBaseMessages = null
   }
   return messages
 }
@@ -225,24 +372,36 @@ function collectModelId(chain: SessionEntry[], initialModelId: string): string {
   return modelId
 }
 
-function findInterruptedWork(chain: SessionEntry[]): {
+function findInterruptedWork(
+  chain: SessionEntry[],
+  undeliveredById: ReadonlyMap<string, UndeliveredUserInput>,
+): {
   interruptedTurnId: string | null
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
   interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null
+  interruptedConsensusBaseTurnIds: string[] | null
 } {
   let interruptedTurnId: string | null = null
   let interruptedConsensusTaskId: string | null = null
   let interruptedConsensusBaseMessages: ModelMessage[] | null = null
   let interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null = null
+  let interruptedConsensusBaseTurnIds: string[] | null = null
   let visibleMessages: ModelMessage[] = []
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
-      visibleMessages = [...entry.messages]
+      visibleMessages = structuredClone(entry.messages)
       interruptedTurnId = entry.activeTurnId
       interruptedConsensusTaskId = entry.activeConsensusTaskId
-      interruptedConsensusBaseMessages = entry.activeConsensusBaseMessages
-      interruptedConsensusBaseTaskPlan = entry.activeConsensusBaseTaskPlan
+      // 重放是纯读取：后续遇到未交付输入时会向工作副本 push，绝不能污染已解析快照。
+      interruptedConsensusBaseMessages = structuredClone(entry.activeConsensusBaseMessages)
+      interruptedConsensusBaseTaskPlan = structuredClone(entry.activeConsensusBaseTaskPlan)
+      interruptedConsensusBaseTurnIds = structuredClone(entry.activeConsensusBaseTurnIds)
+    }
+    if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
+      const message: ModelMessage = { role: 'user', content: entry.text }
+      visibleMessages.push(message)
+      interruptedConsensusBaseMessages?.push(message)
     }
     if (entry.type === 'messages') visibleMessages.push(...entry.messages)
     if (entry.type === 'turn-start') interruptedTurnId = entry.turnId
@@ -251,14 +410,24 @@ function findInterruptedWork(chain: SessionEntry[]): {
     }
     if (entry.type === 'consensus-task-start') {
       interruptedConsensusTaskId = entry.taskId
-      interruptedConsensusBaseMessages = [...visibleMessages]
-      interruptedConsensusBaseTaskPlan = entry.baseTaskPlan
+      interruptedConsensusBaseMessages = [
+        ...visibleMessages,
+        { role: 'user', content: entry.userText },
+      ]
+      interruptedConsensusBaseTaskPlan = structuredClone(entry.baseTaskPlan)
+      interruptedConsensusBaseTurnIds = [...entry.baseTurnIds]
     }
     if (entry.type === 'consensus-task-end' && entry.taskId === interruptedConsensusTaskId) {
-      if (entry.rollbackMessages) visibleMessages = [...entry.rollbackMessages]
+      if (entry.rollbackMessages) {
+        visibleMessages = consensusRollbackMessages(
+          entry.rollbackMessages,
+          interruptedConsensusBaseMessages,
+        )
+      }
       interruptedConsensusTaskId = null
       interruptedConsensusBaseMessages = null
       interruptedConsensusBaseTaskPlan = null
+      interruptedConsensusBaseTurnIds = null
     }
   }
   return {
@@ -266,6 +435,21 @@ function findInterruptedWork(chain: SessionEntry[]): {
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
     interruptedConsensusBaseTaskPlan,
+    interruptedConsensusBaseTurnIds,
+  }
+}
+
+function consensusRollbackMessages(
+  persistedMessages: ModelMessage[],
+  effectiveBaseMessages: ModelMessage[] | null,
+): ModelMessage[] {
+  if (!effectiveBaseMessages || persistedMessages.length === 0) return [...persistedMessages]
+  return [...effectiveBaseMessages, persistedMessages.at(-1)!]
+}
+
+function retainMapKeys<T>(map: Map<string, T>, allowedKeys: ReadonlySet<string>): void {
+  for (const key of map.keys()) {
+    if (!allowedKeys.has(key)) map.delete(key)
   }
 }
 
@@ -273,8 +457,13 @@ function deriveStatus(
   chain: SessionEntry[],
   interruptedTurnId: string | null,
   interruptedConsensusTaskId: string | null,
+  hasUndeliveredUserInput: boolean,
+  hasPendingUserQuestion: boolean,
 ): 'idle' | 'waiting-user' | 'paused' | 'max-turns' | 'interrupted' | 'error' {
-  if (interruptedTurnId || interruptedConsensusTaskId) return 'interrupted'
+  if (interruptedTurnId || interruptedConsensusTaskId || hasUndeliveredUserInput) {
+    return 'interrupted'
+  }
+  if (hasPendingUserQuestion) return 'waiting-user'
   const lastEnd = [...chain]
     .reverse()
     .find((entry) => entry.type === 'turn-end' || entry.type === 'consensus-task-end')

@@ -12,6 +12,18 @@ afterEach(async () => {
 })
 
 describe('DesktopSessionRepository 删除语义', () => {
+  it('并发确保首次会话时只创建一个 journal', async () => {
+    const repository = await createRepository()
+
+    const [first, second] = await Promise.all([
+      repository.ensure('C:\\work\\demo', 'test:model'),
+      repository.ensure('C:\\work\\demo', 'test:model'),
+    ])
+
+    assert.equal(first, second)
+    assert.equal((await repository.list()).length, 1)
+  })
+
   it('删除当前会话后解除当前 journal', async () => {
     const repository = await createRepository()
     const journal = await repository.ensure('C:\\work\\demo', 'test:model')

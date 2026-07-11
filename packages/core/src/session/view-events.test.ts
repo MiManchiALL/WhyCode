@@ -7,6 +7,14 @@ describe('用户可见事件契约', () => {
     assert.equal(toViewEvent({ type: 'agent-status', status: 'working' }), null)
     assert.equal(
       toViewEvent({
+        type: 'user-message-accepted',
+        text: '仅用于当前窗口即时显示',
+        startsTurn: true,
+      }),
+      null,
+    )
+    assert.equal(
+      toViewEvent({
         type: 'approval-request',
         requestId: 'approval-1',
         toolName: 'WriteFile',
@@ -35,6 +43,15 @@ describe('用户可见事件契约', () => {
     assert.deepEqual(
       toViewEvent({ type: 'message-injected', id: 'queue-1', text: '补充要求' }),
       { type: 'user-message', text: '补充要求', startsTurn: false },
+    )
+    assert.deepEqual(
+      toViewEvent({
+        type: 'message-injected',
+        id: 'queue-2',
+        text: '下一项任务',
+        startsTurn: true,
+      }),
+      { type: 'user-message', text: '下一项任务', startsTurn: true },
     )
   })
 

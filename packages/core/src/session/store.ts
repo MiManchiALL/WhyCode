@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open as openFile, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
 import {
@@ -14,8 +14,10 @@ import {
   type ActiveTaskPlan,
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
+import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
+import { createTurnAbortedMessage } from './interruption.ts'
 import {
   getSessionPaths,
   isSessionId,
@@ -74,6 +76,8 @@ export class SessionStore {
       new Map(),
       new Map(),
       null,
+      [],
+      null,
       null,
       null,
       null,
@@ -86,7 +90,30 @@ export class SessionStore {
     validateSessionId(sessionId)
     const paths = this.pathsFor(sessionId)
     const text = await readFile(paths.transcript, 'utf8')
-    const loaded = buildLoadedSession(parseTranscript(text))
+    const entries = parseTranscript(text)
+    const repairLength = validPrefixByteLengthBeforeTrailingPartialJson(text)
+    if (repairLength !== null) {
+      // parseTranscript 允许崩溃留下的最后半行；在 journal 继续 append 前必须物理修剪，
+      // 否则 recovery snapshot 会粘在半行后并把下一次重启变成中间损坏。
+      const file = await openFile(paths.transcript, 'r+')
+      try {
+        await file.truncate(repairLength)
+        await file.sync()
+      } finally {
+        await file.close()
+      }
+    } else if (text.length > 0 && !text.endsWith('\n')) {
+      // 完整 JSON 也可能在换行写入前崩溃；先补分隔符再允许后续 append，
+      // 否则下一条记录会与它粘成一行并在再下次启动时一起被当作坏尾丢弃。
+      const file = await openFile(paths.transcript, 'a')
+      try {
+        await file.write('\n')
+        await file.sync()
+      } finally {
+        await file.close()
+      }
+    }
+    const loaded = buildLoadedSession(entries)
     if (loaded.metadata.sessionId !== sessionId) throw new Error('会话 ID 与目录不匹配')
     const metadata = loaded.metadata
     await writeMetadata(paths.metadata, metadata)
@@ -99,9 +126,11 @@ export class SessionStore {
       loaded.turnStartMessages,
       loaded.turnStartTaskPlans,
       loaded.interruptedTurnId,
+      loaded.undeliveredUserInputIds,
       loaded.interruptedConsensusTaskId,
       loaded.interruptedConsensusBaseMessages,
       loaded.interruptedConsensusBaseTaskPlan,
+      loaded.interruptedConsensusBaseTurnIds,
       loaded.consensusState,
       loaded.activeTaskPlan,
     )
@@ -164,9 +193,11 @@ export class SessionJournal implements SessionRecorder {
   private turnStartMessages: Map<string, ModelMessage[]>
   private turnStartTaskPlans: Map<string, ActiveTaskPlan | null>
   private activeTurnId: string | null
+  private undeliveredUserInputIdSet: Set<string>
   private activeConsensusTaskId: string | null
   private activeConsensusBaseMessages: ModelMessage[] | null
   private activeConsensusBaseTaskPlan: ActiveTaskPlan | null
+  private activeConsensusBaseTurnIds: Set<string> | null
   private consensusState: ConsensusPersistedState | null
   private activeTaskPlan: ActiveTaskPlan | null
   private writeQueue: Promise<void> = Promise.resolve()
@@ -180,9 +211,11 @@ export class SessionJournal implements SessionRecorder {
     turnStartMessages: Map<string, ModelMessage[]>,
     turnStartTaskPlans: Map<string, ActiveTaskPlan | null>,
     interruptedTurnId: string | null,
+    undeliveredUserInputIds: string[],
     interruptedConsensusTaskId: string | null,
     interruptedConsensusBaseMessages: ModelMessage[] | null,
     interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null,
+    interruptedConsensusBaseTurnIds: string[] | null,
     consensusState: ConsensusPersistedState | null,
     activeTaskPlan: ActiveTaskPlan | null,
   ) {
@@ -199,9 +232,13 @@ export class SessionJournal implements SessionRecorder {
       [...turnStartTaskPlans].map(([turnId, plan]) => [turnId, structuredClone(plan)]),
     )
     this.activeTurnId = interruptedTurnId
+    this.undeliveredUserInputIdSet = new Set(undeliveredUserInputIds)
     this.activeConsensusTaskId = interruptedConsensusTaskId
     this.activeConsensusBaseMessages = interruptedConsensusBaseMessages
     this.activeConsensusBaseTaskPlan = interruptedConsensusBaseTaskPlan
+    this.activeConsensusBaseTurnIds = interruptedConsensusBaseTurnIds
+      ? new Set(interruptedConsensusBaseTurnIds)
+      : null
     this.consensusState = consensusState
     this.activeTaskPlan = activeTaskPlan
   }
@@ -216,11 +253,22 @@ export class SessionJournal implements SessionRecorder {
 
   messagesBeforeTurn(turnId: string): ModelMessage[] | null {
     const messages = this.turnStartMessages.get(turnId)
-    return messages ? structuredClone(messages) : null
+    if (
+      !messages
+      || messages.length >= this.messages.length
+      || !isMessagePrefix(messages, this.messages)
+    ) return null
+    return structuredClone(messages)
   }
 
   taskPlanBeforeTurn(turnId: string): ActiveTaskPlan | null | undefined {
-    if (!this.turnStartTaskPlans.has(turnId)) return undefined
+    const messages = this.turnStartMessages.get(turnId)
+    if (
+      !messages
+      || messages.length >= this.messages.length
+      || !isMessagePrefix(messages, this.messages)
+      || !this.turnStartTaskPlans.has(turnId)
+    ) return undefined
     return structuredClone(this.turnStartTaskPlans.get(turnId) ?? null)
   }
 
@@ -230,6 +278,10 @@ export class SessionJournal implements SessionRecorder {
 
   get interruptedTurnId(): string | null {
     return this.activeTurnId
+  }
+
+  get undeliveredUserInputIds(): readonly string[] {
+    return [...this.undeliveredUserInputIdSet]
   }
 
   get interruptedConsensusTaskId(): string | null {
@@ -250,14 +302,21 @@ export class SessionJournal implements SessionRecorder {
     return { ...this.metadata }
   }
 
-  recordUserInput(text: string): Promise<void> {
+  recordUserInput(text: string, startsTurn: boolean): Promise<void> {
     return this.enqueue(async () => {
-      const input = this.entry({ type: 'user-input', text })
+      const input = this.entry({ type: 'user-input', text, startsTurn })
       await this.appendEntries([input])
+      if (input.type === 'user-input' && input.startsTurn) {
+        this.undeliveredUserInputIdSet.add(input.uuid)
+        this.viewEvents.push({ type: 'user-message', text: input.text, startsTurn: true })
+      }
       const clipped = clip(text)
       this.metadata.lastUserText = clipped
       if (!this.metadata.title) this.metadata.title = clipped
       this.metadata.updatedAt = input.timestamp
+      if (input.type === 'user-input' && input.startsTurn) {
+        this.metadata.status = 'interrupted'
+      }
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }
@@ -274,11 +333,13 @@ export class SessionJournal implements SessionRecorder {
 
   recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void> {
     return this.enqueue(async () => {
+      const parentUuid = this.leafUuid
       this.turnStartMessages.set(turnId, structuredClone(this.messages))
       this.turnStartTaskPlans.set(turnId, structuredClone(this.activeTaskPlan))
       const started = this.entry({ type: 'turn-start', turnId })
       const batch = this.entry({ type: 'messages', turnId, messages }, started.uuid)
       await this.appendEntries([started, batch])
+      this.undeliveredUserInputIdSet.delete(parentUuid)
       this.messages.push(...messages)
       this.activeTurnId = turnId
       this.metadata.updatedAt = started.timestamp
@@ -317,13 +378,15 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeConsensusTaskId
             ? 'running'
-            : stopReason === 'waiting-user'
-              ? 'waiting-user'
-              : stopReason === 'paused'
-                ? 'paused'
-                : stopReason === 'max-turns'
-                  ? 'max-turns'
-                  : 'idle'
+            : this.undeliveredUserInputIdSet.size > 0
+              ? 'interrupted'
+              : stopReason === 'waiting-user'
+                ? 'waiting-user'
+                : stopReason === 'paused'
+                  ? 'paused'
+                  : stopReason === 'max-turns'
+                    ? 'max-turns'
+                    : 'idle'
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }
@@ -335,6 +398,9 @@ export class SessionJournal implements SessionRecorder {
     taskPlan?: ActiveTaskPlan | null,
   ): Promise<void> {
     return this.enqueue(async () => {
+      if (this.undeliveredUserInputIdSet.size > 0) {
+        throw new Error('存在尚未交付给模型的用户输入，不能建立会话快照')
+      }
       const snapshot = this.entry(
         {
           type: 'snapshot',
@@ -343,6 +409,9 @@ export class SessionJournal implements SessionRecorder {
           activeConsensusTaskId: this.activeConsensusTaskId,
           activeConsensusBaseMessages: this.activeConsensusBaseMessages,
           activeConsensusBaseTaskPlan: this.activeConsensusBaseTaskPlan,
+          activeConsensusBaseTurnIds: this.activeConsensusBaseTurnIds
+            ? [...this.activeConsensusBaseTurnIds]
+            : null,
           consensusState: this.consensusState,
           taskPlan: taskPlan === undefined ? this.activeTaskPlan : taskPlan,
           modelId: this.metadata.modelId,
@@ -356,6 +425,11 @@ export class SessionJournal implements SessionRecorder {
       await this.appendEntries([snapshot])
       this.messages = [...messages]
       this.activeTaskPlan = snapshot.type === 'snapshot' ? snapshot.taskPlan : null
+      this.undeliveredUserInputIdSet.clear()
+      this.activeConsensusBaseTurnIds = snapshot.type === 'snapshot'
+        && snapshot.activeConsensusBaseTurnIds
+        ? new Set(snapshot.activeConsensusBaseTurnIds)
+        : null
       this.turnStartMessages = new Map(
         (snapshot.type === 'snapshot' ? snapshot.turnStartMessages : [])
           .map((start) => [start.turnId, structuredClone(start.messages)]),
@@ -366,26 +440,46 @@ export class SessionJournal implements SessionRecorder {
       )
       this.activeTurnId = activeTurnId ?? null
       this.metadata.updatedAt = snapshot.timestamp
+      if (reason === 'rollback') {
+        this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
+          ? 'running'
+          : hasPendingUserQuestion(messages)
+            ? 'waiting-user'
+            : 'idle'
+      }
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }
 
-  recordConsensusTaskStart(taskId: string, state: ConsensusPersistedState): Promise<void> {
+  recordConsensusTaskStart(
+    taskId: string,
+    state: ConsensusPersistedState,
+    userText: string,
+  ): Promise<void> {
     return this.enqueue(async () => {
       if (this.activeConsensusTaskId) {
         throw new Error(`共识任务 ${this.activeConsensusTaskId} 尚未结束`)
       }
+      const parentUuid = this.leafUuid
+      const baseTurnIds = [...this.turnStartMessages.keys()]
       const started = this.entry({
         type: 'consensus-task-start',
         taskId,
         state,
         baseTaskPlan: this.activeTaskPlan,
+        userText,
+        baseTurnIds,
       })
       if (started.type !== 'consensus-task-start') throw new Error('无法写入共识任务起点')
       await this.appendEntries([started])
+      this.undeliveredUserInputIdSet.delete(parentUuid)
       this.activeConsensusTaskId = taskId
-      this.activeConsensusBaseMessages = [...this.messages]
+      this.activeConsensusBaseMessages = [
+        ...this.messages,
+        { role: 'user', content: userText },
+      ]
       this.activeConsensusBaseTaskPlan = structuredClone(this.activeTaskPlan)
+      this.activeConsensusBaseTurnIds = new Set(started.baseTurnIds)
       this.consensusState = started.state
       this.metadata.updatedAt = started.timestamp
       this.metadata.status = 'running'
@@ -399,12 +493,21 @@ export class SessionJournal implements SessionRecorder {
     state: ConsensusPersistedState,
   ): Promise<void> {
     return this.enqueue(async () => {
-      if (this.activeConsensusTaskId !== taskId || !this.activeConsensusBaseMessages) {
+      if (
+        this.activeConsensusTaskId !== taskId
+        || !this.activeConsensusBaseMessages
+        || !this.activeConsensusBaseTurnIds
+      ) {
         throw new Error(`共识任务 ${taskId} 没有匹配的活动起点`)
       }
       const rollbackMessages = keepsConsensusProgress(outcome)
         ? null
-        : this.activeConsensusBaseMessages
+        : [
+            ...this.activeConsensusBaseMessages,
+            createTurnAbortedMessage(
+              outcome === 'aborted' ? 'user-cancel' : 'consensus-failure',
+            ),
+          ]
       const taskPlan = keepsConsensusProgress(outcome)
         ? this.activeTaskPlan
         : this.activeConsensusBaseTaskPlan
@@ -418,11 +521,15 @@ export class SessionJournal implements SessionRecorder {
       })
       if (ended.type !== 'consensus-task-end') throw new Error('无法写入共识任务终点')
       await this.appendEntries([ended])
-      if (ended.rollbackMessages) this.messages = [...ended.rollbackMessages]
+      if (ended.rollbackMessages) {
+        this.messages = [...ended.rollbackMessages]
+        this.retainTurnStarts(this.activeConsensusBaseTurnIds)
+      }
       this.activeTaskPlan = structuredClone(ended.taskPlan)
       if (this.activeConsensusTaskId === taskId) this.activeConsensusTaskId = null
       this.activeConsensusBaseMessages = null
       this.activeConsensusBaseTaskPlan = null
+      this.activeConsensusBaseTurnIds = null
       this.consensusState = ended.state
       this.metadata.updatedAt = ended.timestamp
       this.metadata.status =
@@ -430,11 +537,13 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeTurnId
             ? 'running'
-            : outcome === 'paused'
-              ? 'paused'
-            : outcome === 'max-turns'
-              ? 'max-turns'
-              : 'idle'
+            : this.undeliveredUserInputIdSet.size > 0
+              ? 'interrupted'
+              : outcome === 'paused'
+                ? 'paused'
+                : outcome === 'max-turns'
+                  ? 'max-turns'
+                  : 'idle'
       await writeMetadata(this.paths.metadata, this.metadata)
     })
   }
@@ -442,7 +551,18 @@ export class SessionJournal implements SessionRecorder {
   /** 用户显式恢复时切断崩溃留下的活动边界；旧记录保留在 JSONL 中但不再进入活动父链。 */
   recoverInterruptedWork(): Promise<void> {
     return this.enqueue(async () => {
-      if (!this.activeTurnId && !this.activeConsensusTaskId) return
+      if (
+        !this.activeTurnId
+        && !this.activeConsensusTaskId
+        && this.undeliveredUserInputIdSet.size === 0
+      ) return
+      const recoveredMessages = [
+        ...this.messages,
+        createTurnAbortedMessage('process-interruption'),
+      ]
+      const recoverableTurnIds = this.activeConsensusTaskId
+        ? this.activeConsensusBaseTurnIds ?? new Set<string>()
+        : undefined
       const recovered = this.entry(
         {
           type: 'snapshot',
@@ -451,21 +571,25 @@ export class SessionJournal implements SessionRecorder {
           activeConsensusTaskId: null,
           activeConsensusBaseMessages: null,
           activeConsensusBaseTaskPlan: null,
+          activeConsensusBaseTurnIds: null,
           consensusState: this.consensusState,
           taskPlan: this.activeTaskPlan,
           modelId: this.metadata.modelId,
-          messages: this.messages,
-          turnStartMessages: this.turnStartsWithin(this.messages),
+          messages: recoveredMessages,
+          turnStartMessages: this.turnStartsWithin(recoveredMessages, recoverableTurnIds),
         },
         null,
       )
       await this.appendEntries([recovered])
+      this.messages = [...recoveredMessages]
       this.activeTurnId = null
+      this.undeliveredUserInputIdSet.clear()
       this.activeConsensusTaskId = null
       this.activeConsensusBaseMessages = null
       this.activeConsensusBaseTaskPlan = null
+      this.activeConsensusBaseTurnIds = null
       this.metadata.updatedAt = recovered.timestamp
-      this.metadata.status = 'idle'
+      this.metadata.status = hasPendingUserQuestion(recoveredMessages) ? 'waiting-user' : 'idle'
       this.turnStartMessages = new Map(
         (recovered.type === 'snapshot' ? recovered.turnStartMessages : [])
           .map((start) => [start.turnId, structuredClone(start.messages)]),
@@ -503,18 +627,30 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
-  private turnStartsWithin(messages: ModelMessage[]): {
+  private turnStartsWithin(messages: ModelMessage[], allowedTurnIds?: ReadonlySet<string>): {
     turnId: string
     messages: ModelMessage[]
     taskPlan: ActiveTaskPlan | null
   }[] {
     return [...this.turnStartMessages]
-      .filter(([, start]) => start.length < messages.length && isMessagePrefix(start, messages))
+      .filter(([turnId, start]) =>
+        (allowedTurnIds === undefined || allowedTurnIds.has(turnId))
+        && start.length < messages.length
+        && isMessagePrefix(start, messages))
       .map(([turnId, start]) => ({
         turnId,
         messages: structuredClone(start),
         taskPlan: structuredClone(this.turnStartTaskPlans.get(turnId) ?? null),
       }))
+  }
+
+  private retainTurnStarts(turnIds: ReadonlySet<string>): void {
+    this.turnStartMessages = new Map(
+      [...this.turnStartMessages].filter(([turnId]) => turnIds.has(turnId)),
+    )
+    this.turnStartTaskPlans = new Map(
+      [...this.turnStartTaskPlans].filter(([turnId]) => turnIds.has(turnId)),
+    )
   }
 
   private async appendEntries(entries: SessionEntry[]): Promise<void> {
@@ -544,4 +680,22 @@ function clip(text: string): string {
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
+}
+
+function validPrefixByteLengthBeforeTrailingPartialJson(text: string): number | null {
+  const lines = text.split('\n')
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index]!.trim()
+    if (!line) continue
+    try {
+      JSON.parse(line)
+      return null
+    } catch {
+      const prefixCharacters = lines
+        .slice(0, index)
+        .reduce((total, entry) => total + entry.length + 1, 0)
+      return Buffer.byteLength(text.slice(0, prefixCharacters), 'utf8')
+    }
+  }
+  return null
 }

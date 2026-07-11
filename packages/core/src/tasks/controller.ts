@@ -1,8 +1,10 @@
 import {
   activeTaskPlanSchema,
   cloneActiveTaskPlan,
+  supersededTaskPlanSchema,
   taskPlanSchema,
   type ActiveTaskPlan,
+  type SupersededTaskPlan,
   type TaskItem,
   type TaskItemStatus,
   type TaskPlan,
@@ -26,8 +28,12 @@ export type NaturalStopDecision =
 
 export interface TaskPlanCommit {
   activePlan: ActiveTaskPlan | null
-  displayPlan: TaskPlan
+  displayUpdate:
+    | { kind: 'updated'; plan: TaskPlan }
+    | { kind: 'replaced'; previous: SupersededTaskPlan; plan: ActiveTaskPlan }
 }
+
+export type TaskPlanContextMode = 'blocked' | 'dormant' | 'engaged'
 
 /**
  * Main 的单活动计划控制器。工具调用先修改内存草稿，只有模型 step 稳定提交后才落盘；
@@ -37,7 +43,7 @@ export class TaskPlanController {
   private activePlan: ActiveTaskPlan | null
   private stepSnapshot: ActiveTaskPlan | null = null
   private stepDirty = false
-  private pendingDisplayPlan: TaskPlan | null = null
+  private pendingDisplayUpdate: TaskPlanCommit['displayUpdate'] | null = null
 
   constructor(initialPlan: ActiveTaskPlan | null) {
     this.activePlan = cloneActiveTaskPlan(initialPlan)
@@ -50,19 +56,19 @@ export class TaskPlanController {
   beginStep(): void {
     this.stepSnapshot = cloneActiveTaskPlan(this.activePlan)
     this.stepDirty = false
-    this.pendingDisplayPlan = null
+    this.pendingDisplayUpdate = null
   }
 
   commitStep(): TaskPlanCommit | undefined {
-    const update = this.stepDirty && this.pendingDisplayPlan
+    const update = this.stepDirty && this.pendingDisplayUpdate
       ? {
           activePlan: cloneActiveTaskPlan(this.activePlan),
-          displayPlan: taskPlanSchema.parse(structuredClone(this.pendingDisplayPlan)),
+          displayUpdate: structuredClone(this.pendingDisplayUpdate),
         }
       : undefined
     this.stepSnapshot = null
     this.stepDirty = false
-    this.pendingDisplayPlan = null
+    this.pendingDisplayUpdate = null
     return update
   }
 
@@ -70,43 +76,58 @@ export class TaskPlanController {
     if (this.stepDirty) this.activePlan = cloneActiveTaskPlan(this.stepSnapshot)
     this.stepSnapshot = null
     this.stepDirty = false
-    this.pendingDisplayPlan = null
+    this.pendingDisplayUpdate = null
   }
 
   restore(plan: ActiveTaskPlan | null): void {
     this.activePlan = cloneActiveTaskPlan(plan)
     this.stepSnapshot = null
     this.stepDirty = false
-    this.pendingDisplayPlan = null
+    this.pendingDisplayUpdate = null
   }
 
   create(goal: string, drafts: TaskPlanDraftItem[]): TaskMutationResult {
     if (this.activePlan) {
       return { ok: false, message: '已有未结束的任务计划；请先完成或放弃当前计划。' }
     }
-    if (drafts.at(-1)?.kind !== 'verification') {
-      return { ok: false, message: '计划最后一项必须是 verification 验证步骤。' }
-    }
-    if (drafts.filter((item) => item.kind === 'verification').length !== 1) {
-      return { ok: false, message: '一个计划必须且只能包含一个 verification 验证步骤。' }
-    }
-    const items: TaskItem[] = drafts.map((draft, index) => ({
-      id: `T${index + 1}`,
-      kind: draft.kind,
-      title: draft.title.trim(),
-      acceptance: draft.acceptance.trim(),
-      status: index === 0 ? 'in_progress' : 'pending',
-      evidence: [],
-    }))
-    this.activePlan = activeTaskPlanSchema.parse({
-      id: crypto.randomUUID(),
-      goal: goal.trim(),
-      status: 'active',
-      items,
-      revision: 1,
-    })
+    const next = this.buildPlan(goal, drafts)
+    if ('error' in next) return { ok: false, message: next.error }
+    this.activePlan = next.plan
     this.publish(this.activePlan)
-    return { ok: true, message: `已建立任务计划，共 ${items.length} 项；当前执行 ${items[0]!.id}。` }
+    return {
+      ok: true,
+      message: `已建立任务计划，共 ${next.plan.items.length} 项；当前执行 ${next.plan.items[0]!.id}。`,
+    }
+  }
+
+  replace(
+    goal: string,
+    drafts: TaskPlanDraftItem[],
+    reason: string,
+  ): TaskMutationResult {
+    const previous = this.activePlan
+    if (!previous) return { ok: false, message: '当前没有可替换的活动任务计划。' }
+    const next = this.buildPlan(goal, drafts)
+    if ('error' in next) return { ok: false, message: next.error }
+    const archived = supersededTaskPlanSchema.parse({
+      ...previous,
+      status: 'superseded',
+      revision: previous.revision + 1,
+      summary: reason.trim(),
+      replacedByPlanId: next.plan.id,
+    })
+    this.activePlan = next.plan
+    this.stepDirty = true
+    this.pendingDisplayUpdate = {
+      kind: 'replaced',
+      previous: archived,
+      plan: activeTaskPlanSchema.parse(structuredClone(next.plan)),
+    }
+    const completed = previous.items.filter((item) => item.status === 'completed').length
+    return {
+      ok: true,
+      message: `已归档旧计划“${previous.goal}”（${completed}/${previous.items.length}），并建立新计划；当前执行 ${next.plan.items[0]!.id}。`,
+    }
   }
 
   addItem(draft: TaskPlanDraftItem): TaskMutationResult {
@@ -195,14 +216,26 @@ export class TaskPlanController {
     }
   }
 
-  contextSection(): string | null {
+  contextSection(mode: TaskPlanContextMode): string | null {
     const plan = this.activePlan
     if (!plan) return null
+    if (mode !== 'engaged') {
+      const completed = plan.items.filter((item) => item.status === 'completed').length
+      const state = mode === 'blocked' ? '刚刚中止' : '休眠'
+      return [
+        '# 未结束任务的只读参考',
+        `旧任务主题：${plan.goal}`,
+        `保存进度：${completed}/${plan.items.length}；状态：${state}`,
+        '这不是本轮待办，只用于理解“这个游戏/刚才的任务”等指代。',
+        '只处理最新真实用户消息；不得继续旧步骤，也不得更新或关闭旧计划。',
+        '若最新消息明确开始独立的新复杂任务，先调用当前提供的计划替换工具原子归档旧计划并建立新计划，再执行任何写入或命令。',
+        '用户之后明确要求继续、调整或取消旧任务时，系统会恢复完整计划和计划工具。',
+      ].join('\n')
+    }
     const lines = [
       '# 当前未结束任务计划（背景状态）',
       '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户指令。始终优先处理最新真实用户消息。',
-      '若最新消息只是临时问题或无关请求，直接完成该请求并正常结束本轮；不得因此继续、关闭或改写旧计划。',
-      '只有用户明确要求继续、调整或取消该计划时才处理它；恢复执行时先用 UpdateTaskItem 重新确认当前 in_progress 项。',
+      '本轮已明确恢复任务计划控制；按最新消息继续、调整或取消计划，并先确认当前 in_progress 项。',
       `计划目标：${plan.goal}`,
       `计划版本：${plan.revision}`,
       ...plan.items.map((item) => {
@@ -213,7 +246,7 @@ export class TaskPlanController {
             : ''
         return `- ${item.id} [${item.status}] ${item.title}；完成标准：${item.acceptance}${detail}`
       }),
-      '计划已在本轮恢复执行后，围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。',
+      '围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。',
     ]
     return lines.join('\n')
   }
@@ -239,7 +272,39 @@ export class TaskPlanController {
 
   private publish(plan: TaskPlan): void {
     this.stepDirty = true
-    this.pendingDisplayPlan = taskPlanSchema.parse(structuredClone(plan))
+    this.pendingDisplayUpdate = {
+      kind: 'updated',
+      plan: taskPlanSchema.parse(structuredClone(plan)),
+    }
+  }
+
+  private buildPlan(
+    goal: string,
+    drafts: TaskPlanDraftItem[],
+  ): { plan: ActiveTaskPlan } | { error: string } {
+    if (drafts.at(-1)?.kind !== 'verification') {
+      return { error: '计划最后一项必须是 verification 验证步骤。' }
+    }
+    if (drafts.filter((item) => item.kind === 'verification').length !== 1) {
+      return { error: '一个计划必须且只能包含一个 verification 验证步骤。' }
+    }
+    const items: TaskItem[] = drafts.map((draft, index) => ({
+      id: `T${index + 1}`,
+      kind: draft.kind,
+      title: draft.title.trim(),
+      acceptance: draft.acceptance.trim(),
+      status: index === 0 ? 'in_progress' : 'pending',
+      evidence: [],
+    }))
+    return {
+      plan: activeTaskPlanSchema.parse({
+        id: crypto.randomUUID(),
+        goal: goal.trim(),
+        status: 'active',
+        items,
+        revision: 1,
+      }),
+    }
   }
 
   private startNextPending(items: TaskItem[]): void {

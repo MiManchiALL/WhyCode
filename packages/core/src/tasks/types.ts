@@ -45,6 +45,12 @@ export const activeTaskPlanSchema = z.object({
   revision: z.number().int().positive(),
 })
 
+export const supersededTaskPlanSchema = activeTaskPlanSchema.extend({
+  status: z.literal('superseded'),
+  summary: z.string().min(1),
+  replacedByPlanId: z.string().uuid(),
+})
+
 export const taskPlanSchema = z.discriminatedUnion('status', [
   activeTaskPlanSchema,
   activeTaskPlanSchema.extend({
@@ -55,11 +61,13 @@ export const taskPlanSchema = z.discriminatedUnion('status', [
     status: z.literal('abandoned'),
     summary: z.string().min(1),
   }),
+  supersededTaskPlanSchema,
 ])
 
 export type TaskItemStatus = z.infer<typeof taskItemStatusSchema>
 export type TaskItem = z.infer<typeof taskItemSchema>
 export type ActiveTaskPlan = z.infer<typeof activeTaskPlanSchema>
+export type SupersededTaskPlan = z.infer<typeof supersededTaskPlanSchema>
 export type TaskPlan = z.infer<typeof taskPlanSchema>
 
 export type TaskPlanStepUpdate = ActiveTaskPlan | null | undefined

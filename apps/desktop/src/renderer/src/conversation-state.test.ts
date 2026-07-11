@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
-import { createConversationState } from './conversation-state.ts'
+import { applyCoreEvent, createConversationState } from './conversation-state.ts'
 
 describe('会话界面时间线重建', () => {
   it('按原顺序恢复用户、思考、工具、候选和 B/C 卡片', () => {
@@ -70,6 +70,41 @@ describe('会话界面时间线重建', () => {
     assert.match(JSON.stringify(state.blocks), /已回滚/)
   })
 
+  it('主进程确认的新根消息建立唯一回滚锚点，随后排队插话不覆盖它', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '保留的旧问题', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-old' }),
+      core({ type: 'text-delta', text: '保留的旧回答' }),
+    ])
+    state = applyCoreEvent(state, {
+      type: 'user-message-accepted',
+      text: '新的根消息',
+      startsTurn: true,
+    })
+    state = applyCoreEvent(state, { type: 'turn-start', turnId: 'turn-new' })
+    state = applyCoreEvent(state, {
+      type: 'message-injected',
+      id: 'steering-1',
+      text: '运行中的补充要求',
+      startsTurn: false,
+    })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '新回答' })
+    state = applyCoreEvent(state, {
+      type: 'checkpoint-restored',
+      toolUseId: 'tool-new',
+      turnId: 'turn-new',
+      scope: 'files-and-chat',
+      ok: true,
+    })
+
+    const serialized = JSON.stringify(state.blocks)
+    assert.match(serialized, /保留的旧问题/)
+    assert.match(serialized, /保留的旧回答/)
+    assert.doesNotMatch(serialized, /新的根消息/)
+    assert.doesNotMatch(serialized, /运行中的补充要求/)
+    assert.doesNotMatch(serialized, /新回答/)
+  })
+
   it('重启重放后保留检查点覆盖级别，并在恢复后清除失效按钮', () => {
     const state = createConversationState([
       core({ type: 'tool-start', toolUseId: 'tool-1', toolName: 'RunCommand', input: {} }),
@@ -119,6 +154,26 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /推进计划/)
   })
 
+  it('恢复计划替换历史块，同时只把新计划置于顶部活动状态', () => {
+    const previousActive = taskPlan(1)
+    const next = { ...taskPlan(1), id: '22222222-2222-4222-8222-222222222222', goal: '开发 CSGO' }
+    const state = createConversationState([core({
+      type: 'task-plan-replaced',
+      previous: {
+        ...previousActive,
+        status: 'superseded',
+        summary: '用户明确切换游戏',
+        replacedByPlanId: next.id,
+      },
+      plan: next,
+    })])
+
+    assert.deepEqual(state.taskPlan, next)
+    const archived = state.blocks.find((block) => block.kind === 'plan-replaced')
+    assert.equal(archived?.kind === 'plan-replaced' && archived.previous.status, 'superseded')
+    assert.equal(archived?.kind === 'plan-replaced' && archived.nextGoal, '开发 CSGO')
+  })
+
   it('恢复待回答问题，并在下一条用户消息出现后清除等待卡', () => {
     const question = {
       id: 'question-1',
@@ -137,6 +192,20 @@ describe('会话界面时间线重建', () => {
       { type: 'user-message', text: '选择简单可靠', startsTurn: true },
     ])
     assert.equal(answered.pendingQuestion, null)
+
+    const restored = createConversationState([
+      core({ type: 'user-question', question }),
+      { type: 'user-message', text: '选择简单可靠', startsTurn: true },
+      core({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-after-answer',
+        turnId: 'turn-after-answer',
+        scope: 'files-and-chat',
+        ok: true,
+        question,
+      }),
+    ])
+    assert.deepEqual(restored.pendingQuestion, question)
   })
 })
 

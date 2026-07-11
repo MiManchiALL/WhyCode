@@ -2,6 +2,8 @@ import { generateText, type LanguageModel, type ModelMessage } from 'ai'
 import { readFile } from 'node:fs/promises'
 import { estimateMessageTokens, estimateTextTokens } from './tokens.ts'
 import { COMPACT_SUMMARY_PROMPT, COMPACT_CONTINUATION_PREFIX } from '../prompts/compact.ts'
+import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
+import { findPendingUserQuestionIndex } from '../tasks/answer-resume.ts'
 
 /**
  * 全量摘要压缩（M2-d 第二级）。重建顺序：摘要 → 保留尾部 → 重注入最近读过的文件。
@@ -45,6 +47,17 @@ export function pickTailStart(messages: ModelMessage[]): number {
   // 回退到 user 消息边界（turn 起点），天然不会切断工具配对
   while (start < messages.length && messages[start]!.role !== 'user') start++
   return start
+}
+
+/** 摘要前缀终点；尚未消费的中断边界及其后新消息必须逐字保留。 */
+export function pickSummaryEnd(messages: ModelMessage[]): number {
+  const tailStart = pickTailStart(messages)
+  const defaultEnd = tailStart === 0 ? messages.length : tailStart
+  const protectedIndexes = [
+    findPendingTurnAbortedIndex(messages),
+    findPendingUserQuestionIndex(messages),
+  ].filter((index): index is number => index !== null)
+  return protectedIndexes.length === 0 ? defaultEnd : Math.min(defaultEnd, ...protectedIndexes)
 }
 
 /** 调用当前模型生成摘要（关工具），剥掉 <analysis> 草稿 */
@@ -95,8 +108,8 @@ export async function compactMessages(
   abortSignal: AbortSignal,
 ): Promise<CompactResult> {
   // 尾部起点为 0 = 全部历史都在尾部预算内，此时「摘要+全量尾部」只会更大——退化为纯摘要替换
-  const tailStart = pickTailStart(messages)
-  const effectiveTailStart = tailStart === 0 ? messages.length : tailStart
+  const effectiveTailStart = pickSummaryEnd(messages)
+  if (effectiveTailStart === 0) return { messages: [...messages], summaryText: '' }
   const toSummarize = messages.slice(0, effectiveTailStart)
   const tail = messages.slice(effectiveTailStart)
   const summaryText = await summarize(model, toSummarize, abortSignal)
