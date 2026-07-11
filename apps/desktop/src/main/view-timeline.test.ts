@@ -108,6 +108,32 @@ describe('ViewTimeline', () => {
     assert.match(JSON.stringify(writer.batches), /完成长任务/)
   })
 
+  it('计划替换的旧快照与新活动计划在同一稳定 step 写入', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    const next = taskPlan()
+    const event = {
+      type: 'task-plan-replaced' as const,
+      previous: {
+        ...taskPlan(),
+        status: 'superseded' as const,
+        summary: '用户切换到新任务',
+        replacedByPlanId: next.id,
+      },
+      plan: next,
+    }
+
+    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'step-discarded' })
+    timeline.capture(writer, event)
+    timeline.capture(writer, { type: 'step-committed' })
+    await Promise.resolve()
+
+    assert.equal(writer.batches.length, 1)
+    assert.match(JSON.stringify(writer.batches), /task-plan-replaced/)
+    assert.match(JSON.stringify(writer.batches), /用户切换到新任务/)
+  })
+
   it('待回答问题只在所属 step 提交后写入历史', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))

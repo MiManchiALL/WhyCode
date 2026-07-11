@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
-import { taskPlanSchema } from '../tasks/types.ts'
+import {
+  activeTaskPlanSchema,
+  supersededTaskPlanSchema,
+  taskPlanSchema,
+} from '../tasks/types.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -116,6 +120,11 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('execution-started'), taskId: z.string() }),
   z.object({ type: z.literal('task-plan-updated'), plan: taskPlanSchema }),
+  z.object({
+    type: z.literal('task-plan-replaced'),
+    previous: supersededTaskPlanSchema,
+    plan: activeTaskPlanSchema,
+  }),
   z.object({ type: z.literal('task-plan-restored'), plan: taskPlanSchema.nullable() }),
 ])
 
@@ -161,6 +170,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'negotiation-decided':
     case 'execution-started':
     case 'task-plan-updated':
+    case 'task-plan-replaced':
     case 'task-plan-restored':
       return viewEventSchema.parse({ type: 'core-event', event })
     default:

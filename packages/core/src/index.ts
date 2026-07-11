@@ -102,12 +102,14 @@ export type {
 } from './session/types.ts'
 export {
   activeTaskPlanSchema,
+  supersededTaskPlanSchema,
   taskItemSchema,
   taskItemStatusSchema,
   taskPlanSchema,
 } from './tasks/types.ts'
 export type {
   ActiveTaskPlan,
+  SupersededTaskPlan,
   TaskItem,
   TaskItemStatus,
   TaskPlan,

@@ -527,6 +527,45 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.status, 'idle')
   })
 
+  it('重启后恢复替换后的活动计划，并保留被替代计划的完整历史事件', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const previous = taskPlan(1)
+    await journal.recordTurnStart('old-task', [message('user', '开发蔚蓝')])
+    await journal.recordStep('old-task', [message('assistant', '建立旧计划')], previous)
+    await journal.recordTurnEnd('old-task', 'paused')
+
+    const next = activeTaskPlanSchema.parse({
+      ...taskPlan(1),
+      id: '22222222-2222-4222-8222-222222222222',
+      goal: '开发 CSGO',
+    })
+    await journal.recordTurnStart('replacement', [message('user', '改做 CSGO')])
+    await journal.recordViewEvents([{ type: 'core-event', event: {
+      type: 'task-plan-replaced',
+      previous: {
+        ...previous,
+        status: 'superseded',
+        summary: '用户明确切换游戏',
+        replacedByPlanId: next.id,
+      },
+      plan: next,
+    } }])
+    await journal.recordStep('replacement', [message('assistant', '已替换计划')], next)
+    await journal.recordTurnEnd('replacement', 'paused')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialTaskPlan, next)
+    const replacement = reopened.initialViewEvents.find((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-replaced')
+    assert.equal(
+      replacement?.type === 'core-event'
+      && replacement.event.type === 'task-plan-replaced'
+      && replacement.event.previous.goal,
+      '完成长任务',
+    )
+  })
+
   it('压缩保留活动计划，对话回滚恢复 turn 起点计划', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })

@@ -543,6 +543,34 @@ function BlockView({
   if (block.kind === 'notice') {
     return <div className="mb-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{block.text}</div>
   }
+  if (block.kind === 'plan-replaced') {
+    const completed = block.previous.items.filter((item) => item.status === 'completed').length
+    return (
+      <div className="mb-2 rounded border border-slate-200 bg-slate-50 text-xs text-slate-600">
+        <button
+          className="flex w-full items-center gap-2 px-3 py-2 text-left"
+          onClick={onToggle}
+        >
+          <span>↪</span>
+          <span className="min-w-0 flex-1 truncate">
+            已归档未完成计划“{block.previous.goal}”（{completed}/{block.previous.items.length}）
+          </span>
+          <span className="text-slate-400">{expanded ? '▾' : '▸'}</span>
+        </button>
+        {expanded && (
+          <div className="space-y-1 border-t border-slate-200 px-3 py-2">
+            <div>替换原因：{block.previous.summary}</div>
+            <div>当前计划：{block.nextGoal}</div>
+            {block.previous.items.map((item) => (
+              <div key={item.id} className="text-slate-400">
+                {item.id} [{item.status}] {item.title}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
   if (block.kind === 'peer') {
     return <PeerCard peer={block.peer} expanded={expanded} onToggle={onToggle} />
   }

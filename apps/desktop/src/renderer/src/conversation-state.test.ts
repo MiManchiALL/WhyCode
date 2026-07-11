@@ -154,6 +154,26 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /推进计划/)
   })
 
+  it('恢复计划替换历史块，同时只把新计划置于顶部活动状态', () => {
+    const previousActive = taskPlan(1)
+    const next = { ...taskPlan(1), id: '22222222-2222-4222-8222-222222222222', goal: '开发 CSGO' }
+    const state = createConversationState([core({
+      type: 'task-plan-replaced',
+      previous: {
+        ...previousActive,
+        status: 'superseded',
+        summary: '用户明确切换游戏',
+        replacedByPlanId: next.id,
+      },
+      plan: next,
+    })])
+
+    assert.deepEqual(state.taskPlan, next)
+    const archived = state.blocks.find((block) => block.kind === 'plan-replaced')
+    assert.equal(archived?.kind === 'plan-replaced' && archived.previous.status, 'superseded')
+    assert.equal(archived?.kind === 'plan-replaced' && archived.nextGoal, '开发 CSGO')
+  })
+
   it('恢复待回答问题，并在下一条用户消息出现后清除等待卡', () => {
     const question = {
       id: 'question-1',

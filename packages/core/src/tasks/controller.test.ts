@@ -17,7 +17,8 @@ describe('Main 长任务计划控制器', () => {
       'in_progress',
       'pending',
     ])
-    assert.equal(controller.commitStep()?.displayPlan.items.at(-1)?.kind, 'verification')
+    const update = controller.commitStep()?.displayUpdate
+    assert.equal(update?.kind === 'updated' && update.plan.items.at(-1)?.kind, 'verification')
   })
 
   it('完成项必须有证据，并自动推进到下一项', () => {
@@ -40,6 +41,25 @@ describe('Main 长任务计划控制器', () => {
     controller.discardStep()
 
     assert.deepEqual(controller.snapshot, before)
+  })
+
+  it('新复杂任务原子归档旧计划，丢弃半步时恢复原状态', () => {
+    const { controller } = activeController()
+    const before = controller.snapshot
+    controller.beginStep()
+    assert.equal(controller.replace('交付新游戏', drafts, '用户明确切换游戏').ok, true)
+    assert.equal(controller.snapshot?.goal, '交付新游戏')
+    controller.discardStep()
+    assert.deepEqual(controller.snapshot, before)
+
+    controller.beginStep()
+    assert.equal(controller.replace('交付新游戏', drafts, '用户明确切换游戏').ok, true)
+    const committed = controller.commitStep()
+    assert.equal(committed?.displayUpdate.kind, 'replaced')
+    if (committed?.displayUpdate.kind !== 'replaced') return
+    assert.equal(committed.displayUpdate.previous.status, 'superseded')
+    assert.equal(committed.displayUpdate.previous.replacedByPlanId, committed.displayUpdate.plan.id)
+    assert.equal(committed.activePlan?.goal, '交付新游戏')
   })
 
   it('所有任务和验证完成前拒绝关闭计划', () => {

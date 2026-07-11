@@ -26,6 +26,7 @@ const TOOL_ACTION = /(?:新建|创建|编写|写入|写个|写一个|做个|做�
 const INSPECTION_ACTION = /(?:查看|看看|读取|读一下|分析|检查|搜索|查找|列出|统计|梳理|审查|解释)|\b(?:inspect|review|read|analyze|check|search|find|list|count|explain)\b/i
 const WORKSPACE_SUBJECT = /(?:项目|代码|源码|文件|目录|文件夹|日志|报错|错误|堆栈|配置|实现|工作区|仓库|数据库|测试)|\b(?:project|code|source|file|directory|folder|log|error|stack|config|implementation|workspace|repository|database|test)\b/i
 const INFORMATIONAL_WORKSPACE_QUESTION = /(?:是什么|什么|做什么|干什么|怎么|为什么|哪里|哪个|哪些|多少|情况|原因|作用|内容|结构|架构|有没有|是否|吗|呢|[？?])|\b(?:what|why|how|where|which|status|structure|architecture)\b/i
+const INDEPENDENT_COMPLEX_TASK = /(?:完整(?:地)?(?:开发|制作|实现|重做)|重新(?:开发|制作|实现|做)(?:一个)?|(?:开发|制作|做)(?:一个)?[^，。！？!?]{0,36}(?:游戏|项目|应用|程序|系统|网站))|\b(?:build|develop|implement|rebuild)\b[^.!?]{0,48}\b(?:game|project|app|application|system|website)\b/i
 
 export type DormantTurnToolAccess = 'none' | 'read-only' | 'all'
 
@@ -64,7 +65,7 @@ export function dormantTurnToolAccess(text: string): DormantTurnToolAccess {
   if (requestsTaskPlanControl(normalized) || requestsInterruptedTaskResume(normalized)) {
     return 'all'
   }
-  if (TOOL_ACTION.test(normalized)) return 'all'
+  if (requestsIndependentComplexTask(normalized) || TOOL_ACTION.test(normalized)) return 'all'
   if (
     WORKSPACE_SUBJECT.test(normalized)
     && (
@@ -73,6 +74,19 @@ export function dormantTurnToolAccess(text: string): DormantTurnToolAccess {
     )
   ) return 'read-only'
   return 'none'
+}
+
+/** 明确开始一个足以建立独立计划的新复杂目标；用于旧计划替换的结构化提醒。 */
+export function requestsIndependentComplexTask(text: string): boolean {
+  const normalized = normalize(text)
+  if (
+    !normalized
+    || CONSULTATIVE.test(normalized)
+    || CONSULTATIVE_SUFFIX.test(normalized)
+    || NEGATED_STATEMENT.test(normalized)
+    || /^(?:请|麻烦)?(?:不要|不用|别)/.test(normalized)
+  ) return false
+  return INDEPENDENT_COMPLEX_TASK.test(normalized)
 }
 
 function normalize(text: string): string {

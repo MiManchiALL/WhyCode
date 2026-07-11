@@ -3,6 +3,7 @@ import { buildTool, type ToolDefinition } from '../tools/tool.ts'
 import { TaskPlanController } from './controller.ts'
 
 export const CREATE_TASK_PLAN_TOOL_NAME = 'CreateTaskPlan'
+export const REPLACE_TASK_PLAN_TOOL_NAME = 'ReplaceTaskPlan'
 export const ADD_TASK_ITEM_TOOL_NAME = 'AddTaskItem'
 export const UPDATE_TASK_ITEM_TOOL_NAME = 'UpdateTaskItem'
 export const CLOSE_TASK_PLAN_TOOL_NAME = 'CloseTaskPlan'
@@ -12,6 +13,29 @@ const draftSchema = z.object({
   title: z.string().min(1).describe('清晰、可执行的任务项标题'),
   acceptance: z.string().min(1).describe('可核验的完成标准'),
 })
+
+export function createReplaceTaskPlanTool(
+  controller: TaskPlanController,
+): ToolDefinition {
+  return buildTool({
+    name: REPLACE_TASK_PLAN_TOOL_NAME,
+    description: '用新的复杂任务原子替换休眠中的旧计划',
+    prompt:
+      '仅当最新用户消息明确开始一个与旧目标不同的独立复杂任务时使用，并且必须在任何写入或执行之前调用。旧计划会以 superseded 状态完整归档，新计划在同一个稳定步骤中成为唯一活动计划。临时问答、项目查看、简单的一步操作或旧任务续作不要调用。',
+    inputSchema: z.object({
+      goal: z.string().min(1).describe('新任务最终要达成的可验证目标'),
+      items: z.array(draftSchema).min(2).max(20).describe('新任务的有序任务项，最后一项必须验证整体结果'),
+      reason: z.string().min(1).describe('为什么最新用户要求已取代旧任务'),
+    }),
+    isReadOnly: false,
+    kind: 'control',
+    availableWithoutProject: true,
+    async execute(input) {
+      const result = controller.replace(input.goal, input.items, input.reason)
+      return { data: result.message, isError: !result.ok }
+    },
+  })
+}
 
 /** Main 专用控制面工具：不触碰外部资源，因此无需审批或资源检查点。 */
 export function createTaskPlanTools(controller: TaskPlanController): ToolDefinition[] {

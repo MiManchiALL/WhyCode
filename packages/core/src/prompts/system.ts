@@ -6,6 +6,7 @@
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
+  REPLACE_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import {
@@ -86,7 +87,8 @@ function taskPlanningSection(): string {
     `- 需要至少三个实质步骤、可能跨上下文压缩或需要多轮验证的任务，开始执行前调用 ${CREATE_TASK_PLAN_TOOL_NAME}；简单问答和一步操作不要创建计划。`,
     `- 始终围绕唯一 in_progress 项推进；完成时调用 ${UPDATE_TASK_ITEM_TOOL_NAME} 并提供文件、测试或结果证据，不能用主观声称代替验证。`,
     `- 所有任务项完成并通过最终 verification 后调用 ${CLOSE_TASK_PLAN_TOOL_NAME}，再向用户交付最终结果。`,
-    '- 遇到外部阻塞时明确标记 blocked 并说明原因；用户改变目标时可明确放弃旧计划后建立新计划。',
+    `- 已有未结束计划时，若用户明确开始一个独立的新复杂任务，必须在任何写入或执行前调用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子归档旧计划并建立新计划；不要用两次关闭、创建调用拼接。`,
+    '- 遇到外部阻塞时明确标记 blocked 并说明原因；只有用户明确不再继续且没有替代任务时才放弃计划。',
     '- 未结束计划是可恢复的背景状态，不会自动成为每个新回合的任务。新用户消息若只是临时问题或无关请求，直接处理并保留旧计划；只有用户明确继续、调整或取消时才操作旧计划。',
   ].join('\n')
 }

@@ -7,7 +7,7 @@
  * - 与 docs/02-技术栈与架构.md §6 保持同步，改这里必须改文档。
  */
 
-import type { TaskPlan } from './tasks/types.ts'
+import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -145,6 +145,12 @@ export type CoreEvent =
   | { type: 'execution-started'; taskId: string }
   // --- Main 长任务控制 ---
   | { type: 'task-plan-updated'; plan: TaskPlan }
+  /** 用户明确切换独立复杂任务；旧计划归档与新计划激活属于同一稳定 step。 */
+  | {
+      type: 'task-plan-replaced'
+      previous: SupersededTaskPlan
+      plan: ActiveTaskPlan
+    }
   /** 共识事务取消/异常时，把任务卡恢复到协商开始前。 */
   | { type: 'task-plan-restored'; plan: TaskPlan | null }
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
