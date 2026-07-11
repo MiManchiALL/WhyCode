@@ -91,14 +91,15 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(model.doStreamCalls.length, 1)
     assert.equal(session.captureTaskPlanSnapshot()?.goal, '完成旧的复杂任务')
     const request = JSON.stringify(model.doStreamCalls[0])
-    assert.match(request, /当前未结束任务计划（背景状态）/)
-    assert.match(request, /旧计划本轮仍是休眠背景/)
+    assert.match(request, /未结束任务的只读参考/)
+    assert.match(request, /旧任务主题：完成旧的复杂任务/)
+    assert.doesNotMatch(request, /实现剩余功能|验证结果|代码完成|测试通过/)
     assert.ok(
-      request.indexOf('当前未结束任务计划（背景状态）') < request.indexOf('我刚刚说了什么'),
+      request.indexOf('未结束任务的只读参考') < request.indexOf('我刚刚说了什么'),
       '计划背景必须位于最新真实用户消息之前',
     )
     for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), false)
     }
   })
 
@@ -112,8 +113,39 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(result, 'completed')
     assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
     for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), false)
     }
+  })
+
+  it('休眠计划按最新消息收窄本地工具，明确新操作也不会误改旧计划', async () => {
+    const model = modelWithSteps([
+      finalStep('《蔚蓝》仍有稳定玩家群体。'),
+      finalStep('这是一个游戏项目。'),
+      finalStep('可以新建文件。'),
+    ])
+    const { session } = createSession(model, 'E:\\Test')
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    assert.equal(await session.handleUserMessage('这个游戏目前玩的人多吗'), 'completed')
+    const knowledgeTools = toolNames(model.doStreamCalls[0])
+    assert.equal(knowledgeTools.includes('ReadFile'), false)
+    assert.equal(knowledgeTools.includes('RunCommand'), false)
+
+    assert.equal(await session.handleUserMessage('看看这个项目是干什么的'), 'completed')
+    const inspectionTools = toolNames(model.doStreamCalls[1])
+    assert.equal(inspectionTools.includes('ReadFile'), true)
+    assert.equal(inspectionTools.includes('ListDir'), true)
+    assert.equal(inspectionTools.includes('WriteFile'), false)
+    assert.equal(inspectionTools.includes('RunCommand'), false)
+
+    assert.equal(await session.handleUserMessage('新建一个 hello.txt 文件'), 'completed')
+    const actionTools = toolNames(model.doStreamCalls[2])
+    assert.equal(actionTools.includes('WriteFile'), true)
+    assert.equal(actionTools.includes('RunCommand'), true)
+    for (const name of taskPlanToolNames()) {
+      assert.equal(actionTools.includes(name), false)
+    }
+    assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
   })
 
   it('恢复计划在本轮重新更新后重新启用未完成保护', async () => {
@@ -217,13 +249,13 @@ function activePlan(): ActiveTaskPlan {
   })
 }
 
-function createSession(model: MockLanguageModelV4) {
+function createSession(model: MockLanguageModelV4, projectDir: string | null = null) {
   const events: CoreEvent[] = []
   return {
     session: new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir, osPlatform: 'win32' },
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: false }),
     }),

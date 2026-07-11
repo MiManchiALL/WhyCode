@@ -15,6 +15,8 @@ import {
   createTurnAbortedConsumedMessage,
   createTurnAbortedMessage,
   findPendingTurnAbortedIndex,
+  interruptedTurnMessageView,
+  interruptedUserReference,
 } from '../session/interruption.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
@@ -24,8 +26,10 @@ import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import { createTaskPlanTools } from '../tasks/tools.ts'
 import type { ActiveTaskPlan } from '../tasks/types.ts'
 import {
+  dormantTurnToolAccess,
   requestsInterruptedTaskResume,
   requestsTaskPlanControl,
+  type DormantTurnToolAccess,
 } from '../tasks/turn-intent.ts'
 import {
   createUserQuestionMarker,
@@ -89,6 +93,11 @@ interface QueuedMessage {
 
 type TaskPlanControl = 'auto' | 'resume' | 'new-task'
 type QueuedPlanIntent = 'none' | 'open' | 'resume'
+
+interface QueuedTurnIntent {
+  planIntent: QueuedPlanIntent
+  toolAccess: DormantTurnToolAccess
+}
 
 interface StepResult {
   hadToolCalls: boolean
@@ -345,9 +354,10 @@ export class AgentSession {
   }
 
   /** 步骤间注入：包 system-reminder + 必须回应的前导语 */
-  private async injectQueuedMidTurn(): Promise<QueuedPlanIntent> {
+  private async injectQueuedMidTurn(): Promise<QueuedTurnIntent> {
     const injected: ModelMessage[] = []
     let planIntent: QueuedPlanIntent = 'none'
+    let toolAccess: DormantTurnToolAccess = 'none'
     for (const item of this.drainQueue()) {
       const explicitlyResumes = item.taskPlanControl === 'resume'
         || (item.taskPlanControl === 'auto' && requestsTaskPlanControl(item.text))
@@ -355,6 +365,7 @@ export class AgentSession {
         || (item.taskPlanControl === 'auto' && requestsInterruptedTaskResume(item.text))
       if (explicitlyResumes) planIntent = 'resume'
       else if (opensInterruptedPlan && planIntent === 'none') planIntent = 'open'
+      toolAccess = broaderToolAccess(toolAccess, dormantTurnToolAccess(item.text))
       const message: ModelMessage = {
         role: 'user',
         content: [
@@ -372,7 +383,7 @@ export class AgentSession {
     if (injected.length > 0 && this.activeTurn) {
       await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, injected))
     }
-    return planIntent
+    return { planIntent, toolAccess }
   }
 
   /** 外层循环：turn（含 steering 续跑）→ step → 工具，直到无工具调用且队列为空 */
@@ -419,20 +430,38 @@ export class AgentSession {
     const opensInterruptedPlan = explicitlyResumesPlan
       || (requestedTaskPlanControl === 'auto'
         && initialMessages.some(messageRequestsInterruptedTaskResume))
+    const initialUserText = initialMessages
+      .filter((message) => message.role === 'user')
+      .map(modelMessageText)
+      .join('\n')
+    let planExecutionEngaged = hadPlanAtStart && (
+      explicitlyResumesPlan || (interruptedBoundaryPending && opensInterruptedPlan)
+    )
+    let turnToolAccess: DormantTurnToolAccess =
+      planExecutionEngaged || (!hadPlanAtStart && !interruptedBoundaryPending)
+        ? 'all'
+        : requestedTaskPlanControl === 'new-task'
+          ? 'all'
+          : dormantTurnToolAccess(initialUserText)
     let taskPlanControlEnabled = taskPlanControlsAvailable && (
       explicitlyResumesPlan
       || (
-        requestedTaskPlanControl === 'new-task'
-        && !hadPlanAtStart
-        && !interruptedBoundaryPending
+        !hadPlanAtStart
+        && (
+          (
+            requestedTaskPlanControl === 'new-task'
+            && !interruptedBoundaryPending
+          )
+          || (
+            requestedTaskPlanControl === 'auto'
+            && (
+              !interruptedBoundaryPending
+              || opensInterruptedPlan
+              || turnToolAccess === 'all'
+            )
+          )
+        )
       )
-      || (
-        requestedTaskPlanControl === 'auto'
-        && (!interruptedBoundaryPending || opensInterruptedPlan)
-      )
-    )
-    let planExecutionEngaged = hadPlanAtStart && (
-      explicitlyResumesPlan || (interruptedBoundaryPending && opensInterruptedPlan)
     )
 
     try {
@@ -459,6 +488,7 @@ export class AgentSession {
           taskPlanControlEnabled,
           contextMode,
           planExecutionEngaged,
+          turnToolAccess,
           interruptedBoundaryPending
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
@@ -467,6 +497,7 @@ export class AgentSession {
         if (step.interruptionBoundaryConsumed) interruptionBoundaryConsumed = true
         if (step.taskPlanChanged) {
           planExecutionEngaged = true
+          turnToolAccess = 'all'
           taskStopReminders = 0
         }
         const naturalDecision = !step.hadToolCalls
@@ -492,7 +523,11 @@ export class AgentSession {
             }
             break
           }
-          const planIntent = await this.injectQueuedMidTurn()
+          const queuedIntent = await this.injectQueuedMidTurn()
+          if (!planExecutionEngaged) {
+            turnToolAccess = broaderToolAccess(turnToolAccess, queuedIntent.toolAccess)
+          }
+          const planIntent = queuedIntent.planIntent
           if (taskPlanControlsAvailable && planIntent !== 'none') {
             taskPlanControlEnabled = true
             if (
@@ -757,6 +792,7 @@ export class AgentSession {
     taskPlanControlEnabled: boolean,
     taskPlanContextMode: TaskPlanContextMode,
     planExecutionEngaged: boolean,
+    toolAccess: DormantTurnToolAccess,
     consumeInterruptionBoundary: boolean,
   ): Promise<StepResult> {
     const { emit } = this.options
@@ -774,16 +810,27 @@ export class AgentSession {
     this.taskPlan?.beginStep()
     try {
       const taskContext = this.taskPlan?.contextSection(taskPlanContextMode)
-      const system = [buildSystemPrompt(this.options.promptContext), taskContext]
+      const interruptedReference = taskPlanContextMode !== 'engaged' && !taskContext
+        ? interruptedUserReference(this.messages)
+        : null
+      const system = [
+        buildSystemPrompt(this.options.promptContext),
+        taskContext,
+        interruptedReference,
+      ]
         .filter((section): section is string => Boolean(section))
         .join('\n\n')
+      const requestMessages = taskPlanContextMode === 'engaged'
+        ? this.messages
+        : interruptedTurnMessageView(this.messages)
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system,
-        messages: this.messages,
+        messages: requestMessages,
         tools: this.buildToolSet(
           stepAbort.signal,
           taskPlanControlEnabled,
+          toolAccess,
           (question) => { userQuestion = question },
           (reason) => { stepControl.toolEndReason = reason },
         ),
@@ -905,19 +952,23 @@ export class AgentSession {
   private buildToolSet(
     abortSignal: AbortSignal,
     taskPlanControlEnabled: boolean,
+    toolAccess: DormantTurnToolAccess,
     onUserQuestion: (question: UserQuestion) => void,
     onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
-    const taskTools = this.taskPlan
+    const taskTools = toolAccess === 'all'
+      && this.taskPlan
       && taskPlanControlEnabled
       && !this.options.promptContext.discussion
       && !this.protocolRound
       ? createTaskPlanTools(this.taskPlan)
       : []
-    const questionTools =
-      this.userQuestionsEnabled && !this.options.promptContext.discussion && !this.protocolRound
+    const questionTools: ToolDefinition[] =
+      this.userQuestionsEnabled
+      && !this.options.promptContext.discussion
+      && !this.protocolRound
         ? [
             createAskUserQuestionTool((question) => {
               onUserQuestion(question)
@@ -925,7 +976,9 @@ export class AgentSession {
           ]
         : []
     const mainTools =
-      !this.options.promptContext.discussion && !this.protocolRound
+      toolAccess === 'all'
+      && !this.options.promptContext.discussion
+      && !this.protocolRound
         ? (this.options.mainTools ?? [])
         : []
     const controlTools: ToolDefinition[] = [
@@ -934,9 +987,18 @@ export class AgentSession {
       ...questionTools,
       ...mainTools,
     ]
-    const defs = projectDir
+    const availableDefs: ToolDefinition[] = projectDir
       ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...controlTools]
       : controlTools.filter((tool) => tool.availableWithoutProject)
+    const defs: ToolDefinition[] = toolAccess === 'none'
+      ? questionTools
+      : toolAccess === 'read-only'
+        ? [
+            ...availableDefs.filter((tool) =>
+              tool.isReadOnly && !questionTools.includes(tool)),
+            ...questionTools,
+          ]
+        : availableDefs
     const toolProjectDir =
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
     if (defs.length === 0) return undefined
@@ -1252,4 +1314,16 @@ function modelMessageText(message: ModelMessage): string {
 function queuedTaskPlanControl(messages: QueuedMessage[]): TaskPlanControl {
   if (messages.some((message) => message.taskPlanControl === 'resume')) return 'resume'
   return messages.every((message) => message.taskPlanControl === 'new-task') ? 'new-task' : 'auto'
+}
+
+function broaderToolAccess(
+  current: DormantTurnToolAccess,
+  incoming: DormantTurnToolAccess,
+): DormantTurnToolAccess {
+  const rank: Record<DormantTurnToolAccess, number> = {
+    none: 0,
+    'read-only': 1,
+    all: 2,
+  }
+  return rank[incoming] > rank[current] ? incoming : current
 }

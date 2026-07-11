@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  dormantTurnToolAccess,
   requestsInterruptedTaskResume,
   requestsTaskPlanControl,
 } from './turn-intent.ts'
@@ -17,6 +18,8 @@ describe('任务计划回合意图', () => {
       '继续刚才的任务，看看为什么测试失败',
       '取消当前计划并告诉我为什么',
       '不要再继续刚才的任务',
+      '那你继续做吧',
+      '按这个改吧',
       'please resume the previous task',
       'cancel the current plan',
     ]
@@ -56,6 +59,32 @@ describe('任务计划回合意图', () => {
     }
     for (const text of ['你觉得现在开始怎么样？', '是否开始做比较好？', 'go ahead?']) {
       assert.equal(requestsInterruptedTaskResume(text), false, text)
+    }
+  })
+
+  it('休眠计划按最新消息收缩本地工具，而不是按编程领域一刀切', () => {
+    for (const text of [
+      'TTL是什么意思',
+      '这个游戏目前玩的人多吗',
+      '今天吃什么好一点',
+      '帮我写首诗',
+    ]) {
+      assert.equal(dormantTurnToolAccess(text), 'none', text)
+    }
+    for (const text of [
+      '你一个人看看这个项目是干什么的',
+      '当前文件写了什么',
+      '分析一下这段代码为什么报错',
+    ]) {
+      assert.equal(dormantTurnToolAccess(text), 'read-only', text)
+    }
+    for (const text of [
+      '新建一个 hello.txt',
+      '修复这个登录 bug',
+      '运行测试并告诉我结果',
+      '给我做一个新的小游戏',
+    ]) {
+      assert.equal(dormantTurnToolAccess(text), 'all', text)
     }
   })
 })

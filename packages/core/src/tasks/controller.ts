@@ -200,19 +200,22 @@ export class TaskPlanController {
   contextSection(mode: TaskPlanContextMode): string | null {
     const plan = this.activePlan
     if (!plan) return null
-    const controlGuidance = mode === 'engaged'
-      ? '本轮已明确恢复任务计划控制；按最新消息继续、调整或取消计划，并先确认当前 in_progress 项。'
-      : mode === 'blocked'
-        ? '用户刚刚中止了上一回合，本轮尚未明确恢复旧任务，计划工具不会提供；只处理最新消息。'
-        : '旧计划本轮仍是休眠背景；除非最新消息明确继续、调整或取消它，否则不得调用计划工具改写进度。'
-    const closingGuidance = mode === 'engaged'
-      ? '围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。'
-      : '旧计划保持休眠和原样保存；若用户之后明确要求恢复，再重新进入计划执行。'
+    if (mode !== 'engaged') {
+      const completed = plan.items.filter((item) => item.status === 'completed').length
+      const state = mode === 'blocked' ? '刚刚中止' : '休眠'
+      return [
+        '# 未结束任务的只读参考',
+        `旧任务主题：${plan.goal}`,
+        `保存进度：${completed}/${plan.items.length}；状态：${state}`,
+        '这不是本轮待办，只用于理解“这个游戏/刚才的任务”等指代。',
+        '只处理最新真实用户消息；不得继续旧步骤，也不得更新或关闭旧计划。',
+        '用户之后明确要求继续、调整或取消旧任务时，系统会恢复完整计划和计划工具。',
+      ].join('\n')
+    }
     const lines = [
       '# 当前未结束任务计划（背景状态）',
       '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户指令。始终优先处理最新真实用户消息。',
-      '若最新消息只是临时问题或无关请求，直接完成该请求并正常结束本轮；不得因此继续、关闭或改写旧计划。',
-      controlGuidance,
+      '本轮已明确恢复任务计划控制；按最新消息继续、调整或取消计划，并先确认当前 in_progress 项。',
       `计划目标：${plan.goal}`,
       `计划版本：${plan.revision}`,
       ...plan.items.map((item) => {
@@ -223,7 +226,7 @@ export class TaskPlanController {
             : ''
         return `- ${item.id} [${item.status}] ${item.title}；完成标准：${item.acceptance}${detail}`
       }),
-      closingGuidance,
+      '围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。',
     ]
     return lines.join('\n')
   }

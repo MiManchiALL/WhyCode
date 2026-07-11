@@ -98,6 +98,42 @@ describe('用户中断后的新回合', () => {
     assert.equal(toolNames(model.doStreamCalls[2]).includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
   })
 
+  it('中止开发后询问游戏热度时，隔离旧执行链并移除本地执行工具', async () => {
+    let firstRequest = true
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        if (firstRequest) {
+          firstRequest = false
+          return abortableStep(options.abortSignal)
+        }
+        return finalStep('《蔚蓝》目前仍有稳定的活跃玩家。')
+      },
+    })
+    const session = createMemorySession(model, 'E:\\Test')
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const interrupted = session.handleUserMessage('继续刚才的任务')
+    await waitFor(() => model.doStreamCalls.length === 1)
+    session.abort()
+    assert.equal(await interrupted, 'aborted')
+
+    const result = await session.handleUserMessage('这个游戏目前玩的人多吗')
+
+    assert.equal(result, 'completed')
+    assert.equal(model.doStreamCalls.length, 2)
+    const request = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    assert.match(request, /whycode-turn-aborted/)
+    assert.match(request, /这个游戏目前玩的人多吗/)
+    assert.match(request, /旧任务主题：完成旧任务/)
+    assert.doesNotMatch(request, /继续刚才的任务|实现功能|验证功能|实现完成|测试通过/)
+    const names = toolNames(model.doStreamCalls[1])
+    assert.equal(names.includes('ReadFile'), false)
+    assert.equal(names.includes('RunCommand'), false)
+    assert.equal(names.includes(UPDATE_TASK_ITEM_TOOL_NAME), false)
+    assert.equal(names.includes(CLOSE_TASK_PLAN_TOOL_NAME), false)
+    assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
+  })
+
   it('重启后主动提问的回答仍能重新接合活动计划', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
@@ -688,11 +724,14 @@ function createSession(
   })
 }
 
-function createMemorySession(model: MockLanguageModelV4): AgentSession {
+function createMemorySession(
+  model: MockLanguageModelV4,
+  projectDir: string | null = null,
+): AgentSession {
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir, osPlatform: 'win32' },
     emit: () => {},
     requestApproval: async () => ({ approved: false }),
   })
