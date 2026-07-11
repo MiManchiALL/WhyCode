@@ -69,9 +69,11 @@ export type CoreEvent =
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
+  /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
+  | { type: 'user-message-accepted'; text: string; startsTurn: true }
   // --- steering（M2-a）：运行中插话 ---
   | { type: 'message-queued'; id: string; text: string }
-  | { type: 'message-injected'; id: string; text: string }
+  | { type: 'message-injected'; id: string; text: string; startsTurn?: boolean }
   /** 中断后把排队文本还给输入框（不静默丢弃） */
   | { type: 'queue-restored'; text: string }
   // --- 检查点（M2-c）---
@@ -95,6 +97,8 @@ export type CoreEvent =
       invalidatedToolUseIds?: string[]
       /** 文件+对话回滚后的活动任务计划；省略表示本次未改变任务状态。 */
       taskPlan?: TaskPlan | null
+      /** 文件+对话回滚后重新生效的等待问题；null 表示回滚点没有待回答问题。 */
+      question?: UserQuestion | null
     }
   /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }

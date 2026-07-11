@@ -1,6 +1,18 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
 import type { CoreEvent, CoreEventSink, StopReason } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
+import {
+  createTurnAbortedMessage,
+  findPendingTurnAbortedIndex,
+} from '../session/interruption.ts'
+import {
+  requestsInterruptedTaskResume,
+  requestsTaskPlanControl,
+} from '../tasks/turn-intent.ts'
+import {
+  findPendingUserQuestion,
+  isUserQuestionAnswer,
+} from '../tasks/answer-resume.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
@@ -53,7 +65,11 @@ export interface ConsensusCoordinatorOptions {
   requestApproval: ApprovalHandler
   /** M4：只恢复上一任务已提交的稳定状态，不恢复 Peer 会话或半截协议。 */
   initialState?: ConsensusPersistedState | null
-  onTaskStart?: (taskId: string, state: ConsensusPersistedState) => Promise<void>
+  onTaskStart?: (
+    taskId: string,
+    state: ConsensusPersistedState,
+    userText: string,
+  ) => Promise<void>
   onTaskEnd?: (
     taskId: string,
     outcome: ConsensusTaskOutcome,
@@ -74,6 +90,8 @@ export class ConsensusCoordinator {
   private running = false
   /** B/C 工作期间（Main 空闲）用户插话暂存，注入执行阶段输入包 */
   private pendingTexts: { id: string; text: string }[] = []
+  /** Main 已结束、协调器仍在提交任务终点时到达的消息；任务提交后按新协商任务交接。 */
+  private deferredTaskTexts: { id: string; text: string }[] = []
   private peerPhase = false
   private aborted = false
   /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
@@ -94,14 +112,47 @@ export class ConsensusCoordinator {
 
   /** 用户消息入口：空闲开新协商任务；Main 探索中走会话自身 steering；B/C 工作中暂存 */
   handleUserMessage(text: string, urgent = false): Promise<void> | void {
-    if (!this.running) return this.runTask(text)
+    if (!this.running) {
+      if (this.options.mainSession.isBusy) return this.deferUntilMainIdle(text)
+      return this.runTask(text)
+    }
     if (this.peerPhase) {
       const id = `cq-${Date.now()}-${this.pendingTexts.length}`
       this.pendingTexts.push({ id, text })
       this.options.emit({ type: 'message-queued', id, text })
       return
     }
+    if (!this.options.mainSession.isRunning) {
+      const id = `cq-next-${Date.now()}-${this.deferredTaskTexts.length}`
+      this.deferredTaskTexts.push({ id, text })
+      this.options.emit({ type: 'message-queued', id, text })
+      return
+    }
     this.options.mainSession.handleUserMessage(text, urgent)
+  }
+
+  private async deferUntilMainIdle(text: string): Promise<void> {
+    const id = `cq-wait-${Date.now()}-${this.deferredTaskTexts.length}`
+    this.deferredTaskTexts.push({ id, text })
+    this.running = true
+    this.aborted = false
+    this.options.emit({ type: 'message-queued', id, text })
+    await this.options.mainSession.waitUntilIdle()
+    if (this.aborted) {
+      this.running = false
+      this.options.emit({ type: 'agent-status', status: 'idle' })
+      return
+    }
+    const next = this.deferredTaskTexts.shift()
+    this.running = false
+    if (!next) return
+    this.options.emit({
+      type: 'message-injected',
+      id: next.id,
+      text: next.text,
+      startsTurn: true,
+    })
+    await this.runTask(next.text)
   }
 
   /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
@@ -116,28 +167,59 @@ export class ConsensusCoordinator {
       })
       this.pendingTexts = []
     }
+    if (this.deferredTaskTexts.length > 0) {
+      this.options.emit({
+        type: 'queue-restored',
+        text: this.deferredTaskTexts.map((message) => message.text).join('\n'),
+      })
+      this.deferredTaskTexts = []
+    }
   }
 
   private async runTask(userText: string): Promise<void> {
     const { mainSession, emit } = this.options
     this.running = true
     this.aborted = false
+    emit({ type: 'agent-status', status: 'working' })
+    mainSession.setTerminalStatusManaged(true)
     mainSession.setUserQuestionsEnabled(false)
     const taskId = `task-${++this.taskCounter}`
     const startState = this.snapshotState()
     const startMessages = mainSession.captureMessageSnapshot()
+    const interruptedBaseMessages = [
+      ...startMessages,
+      { role: 'user' as const, content: userText },
+    ]
     const startTaskPlan = mainSession.captureTaskPlanSnapshot()
+    const pendingUserQuestion = findPendingUserQuestion(startMessages)
+    const resumeExistingTaskPlan = requestsTaskPlanControl(userText)
+      || (
+        pendingUserQuestion?.resumesTaskPlan === true
+        && isUserQuestionAnswer(pendingUserQuestion, userText)
+      )
+      || (
+        findPendingTurnAbortedIndex(startMessages) !== null
+        && requestsInterruptedTaskResume(userText)
+      )
     let outcome: ConsensusTaskOutcome = 'error'
     let taskBoundaryStarted = false
     let taskPlanRolledBack = false
     try {
-      taskBoundaryStarted = await this.persistTaskStart(taskId, startState)
+      taskBoundaryStarted = await this.persistTaskStart(taskId, startState, userText)
       if (!taskBoundaryStarted) return
+      if (this.aborted) {
+        outcome = 'aborted'
+        return
+      }
       const scratch = await createTaskScratch(
         this.options.scratchRoot,
         this.options.conversationId,
         taskId,
       )
+      if (this.aborted) {
+        outcome = 'aborted'
+        return
+      }
 
       // 第一步：Main 讨论档输出 M1 + protocol_mode（协议 §1.1：模式只出现在首个 M1）
       const forceFullConsensus = requiresFullConsensus(userText)
@@ -188,8 +270,9 @@ export class ConsensusCoordinator {
       if (mode === 'main_only') {
         this.restoreExecution()
         emit({ type: 'execution-started', taskId })
-        const stopReason = await mainSession.handleUserMessage(
+        const stopReason = await mainSession.handleExecutionMessage(
           buildMainOnlyExecutionPrompt(userText, m1.candidate),
+          resumeExistingTaskPlan,
         )
         outcome = this.executionOutcome(stopReason)
         return
@@ -227,7 +310,12 @@ export class ConsensusCoordinator {
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
-      const stopReason = await mainSession.handleUserMessage(this.appendPendingTexts(packageText))
+      const resumePlanAfterNegotiation = resumeExistingTaskPlan
+        || this.pendingTexts.some((message) => requestsTaskPlanControl(message.text))
+      const stopReason = await mainSession.handleExecutionMessage(
+        this.appendPendingTexts(packageText),
+        resumePlanAfterNegotiation,
+      )
       outcome = this.executionOutcome(stopReason)
     } catch (error) {
       emit({
@@ -238,7 +326,13 @@ export class ConsensusCoordinator {
     } finally {
       if (!keepsConsensusProgress(outcome)) {
         this.restoreState(startState)
-        mainSession.restoreMessageSnapshot(startMessages)
+        const rollbackMessages = [
+          ...interruptedBaseMessages,
+          createTurnAbortedMessage(
+            outcome === 'aborted' ? 'user-cancel' : 'consensus-failure',
+          ),
+        ]
+        mainSession.restoreMessageSnapshot(rollbackMessages)
         mainSession.restoreTaskPlanSnapshot(startTaskPlan)
         taskPlanRolledBack = true
       }
@@ -248,11 +342,22 @@ export class ConsensusCoordinator {
       if (taskPlanRolledBack) emit({ type: 'task-plan-restored', plan: startTaskPlan })
       this.restoreExecution()
       mainSession.setUserQuestionsEnabled(true)
+      mainSession.setTerminalStatusManaged(false)
       this.peers = []
       this.peerPhase = false
       this.running = false
       // 收尾兜底：此时无任何在跑的回合，状态归位（对 UI 幂等）
       emit({ type: 'agent-status', status: 'idle' })
+      const nextTask = this.deferredTaskTexts.shift()
+      if (nextTask) {
+        emit({
+          type: 'message-injected',
+          id: nextTask.id,
+          text: nextTask.text,
+          startsTurn: true,
+        })
+        await this.runTask(nextTask.text)
+      }
     }
   }
 
@@ -407,9 +512,10 @@ export class ConsensusCoordinator {
   private async persistTaskStart(
     taskId: string,
     state: ConsensusPersistedState,
+    userText: string,
   ): Promise<boolean> {
     try {
-      await this.options.onTaskStart?.(taskId, state)
+      await this.options.onTaskStart?.(taskId, state, userText)
       return true
     } catch (error) {
       this.reportPersistenceError('起点', error)

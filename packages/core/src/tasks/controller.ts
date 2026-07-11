@@ -29,6 +29,8 @@ export interface TaskPlanCommit {
   displayPlan: TaskPlan
 }
 
+export type TaskPlanContextMode = 'blocked' | 'dormant' | 'engaged'
+
 /**
  * Main 的单活动计划控制器。工具调用先修改内存草稿，只有模型 step 稳定提交后才落盘；
  * urgent/取消/异常丢弃 step 时恢复旧状态，避免会话中出现半截进度。
@@ -195,14 +197,22 @@ export class TaskPlanController {
     }
   }
 
-  contextSection(): string | null {
+  contextSection(mode: TaskPlanContextMode): string | null {
     const plan = this.activePlan
     if (!plan) return null
+    const controlGuidance = mode === 'engaged'
+      ? '本轮已明确恢复任务计划控制；按最新消息继续、调整或取消计划，并先确认当前 in_progress 项。'
+      : mode === 'blocked'
+        ? '用户刚刚中止了上一回合，本轮尚未明确恢复旧任务，计划工具不会提供；只处理最新消息。'
+        : '旧计划本轮仍是休眠背景；除非最新消息明确继续、调整或取消它，否则不得调用计划工具改写进度。'
+    const closingGuidance = mode === 'engaged'
+      ? '围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。'
+      : '旧计划保持休眠和原样保存；若用户之后明确要求恢复，再重新进入计划执行。'
     const lines = [
       '# 当前未结束任务计划（背景状态）',
       '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户指令。始终优先处理最新真实用户消息。',
       '若最新消息只是临时问题或无关请求，直接完成该请求并正常结束本轮；不得因此继续、关闭或改写旧计划。',
-      '只有用户明确要求继续、调整或取消该计划时才处理它；恢复执行时先用 UpdateTaskItem 重新确认当前 in_progress 项。',
+      controlGuidance,
       `计划目标：${plan.goal}`,
       `计划版本：${plan.revision}`,
       ...plan.items.map((item) => {
@@ -213,7 +223,7 @@ export class TaskPlanController {
             : ''
         return `- ${item.id} [${item.status}] ${item.title}；完成标准：${item.acceptance}${detail}`
       }),
-      '计划已在本轮恢复执行后，围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。',
+      closingGuidance,
     ]
     return lines.join('\n')
   }

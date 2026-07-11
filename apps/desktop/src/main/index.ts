@@ -14,11 +14,11 @@ import {
   type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
-  type ViewEvent,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
+import { routeUserMessage } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
 import type {
   DeleteSessionResult,
@@ -71,6 +71,7 @@ function broadcastEvent(event: CoreEvent, persistView = true): void {
 
 /** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
 let session: AgentSession | null = null
+let sessionInitialization: Promise<string | null> | null = null
 /** 当前项目目录；未选择时为 null，发消息前必须先选 */
 let projectDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
@@ -144,25 +145,38 @@ async function ensureSession(): Promise<string | null> {
   if (session) {
     session.setModel(entry, providerConfig)
   } else {
-    const recorder = await sessions.ensure(projectDir, currentModelId)
-    conversationId = recorder.sessionId
-    // projectDir 为 null = 纯聊天模式（无工具），core 侧按此适配
-    session = new AgentSession({
-      model: entry,
-      providerConfig,
-      promptContext: {
-        projectDir,
-        osPlatform: process.platform,
-        homeDir: app.getPath('home'),
-      },
-      checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
-      sessionRecorder: recorder,
-      mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
-      emit: broadcastEvent,
-      requestApproval,
-    })
-    if (pendingPermissionMode) session.setPermissionMode(pendingPermissionMode)
-    coordinator = null // 新会话必须换新协调器（session_score 等按对话重置）
+    if (!sessionInitialization) {
+      let pending: Promise<string | null>
+      pending = (async () => {
+        const recorder = await sessions.ensure(projectDir, currentModelId!)
+        if (!session) {
+          conversationId = recorder.sessionId
+          // projectDir 为 null = 纯聊天模式（无工具），core 侧按此适配
+          session = new AgentSession({
+            model: entry,
+            providerConfig,
+            promptContext: {
+              projectDir,
+              osPlatform: process.platform,
+              homeDir: app.getPath('home'),
+            },
+            checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
+            sessionRecorder: recorder,
+            mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
+            emit: broadcastEvent,
+            requestApproval,
+          })
+          if (pendingPermissionMode) session.setPermissionMode(pendingPermissionMode)
+          coordinator = null // 新会话必须换新协调器（session_score 等按对话重置）
+        }
+        if (consensusEnabled && !coordinator) return buildCoordinator()
+        return null
+      })().finally(() => {
+        if (sessionInitialization === pending) sessionInitialization = null
+      })
+      sessionInitialization = pending
+    }
+    return sessionInitialization
   }
   if (consensusEnabled && !coordinator) {
     const err2 = buildCoordinator()
@@ -207,7 +221,8 @@ function buildCoordinator(): string | null {
     emit: broadcastEvent,
     requestApproval,
     initialState: journal.initialConsensusState,
-    onTaskStart: (taskId, state) => journal.recordConsensusTaskStart(taskId, state),
+    onTaskStart: (taskId, state, userText) =>
+      journal.recordConsensusTaskStart(taskId, state, userText),
     onTaskEnd: (taskId, outcome, state) =>
       journal.recordConsensusTaskEnd(taskId, outcome, state),
   })
@@ -223,14 +238,21 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'agent-status', status: 'idle' })
         return
       }
-      await recordUserInput(command.text, !runtimeBusy())
-      // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
-      if (consensusEnabled && coordinator) {
-        await coordinator.handleUserMessage(command.text, command.urgent)
-      } else {
-        // 运行中/压缩中 = 排队（steering）；空闲 = 开新 turn；中止器由 session 自管
-        await session!.handleUserMessage(command.text, command.urgent)
-      }
+      await routeUserMessage(command.text, command.urgent ?? false, {
+        isBusy: runtimeBusy,
+        record: recordUserInput,
+        acceptRoot: (text) => {
+          broadcastEvent({ type: 'user-message-accepted', text, startsTurn: true }, false)
+        },
+        deliver: (text, urgent) => {
+          // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
+          if (consensusEnabled && coordinator) {
+            return coordinator.handleUserMessage(text, urgent)
+          }
+          // 运行中/压缩中 = 排队；空闲 = 新 turn；中止器由 session 自管。
+          return session!.handleUserMessage(text, urgent)
+        },
+      })
       break
     }
     case 'abort': {
@@ -264,6 +286,17 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'restore-checkpoint': {
+      if (runtimeBusy()) {
+        broadcastEvent({
+          type: 'checkpoint-restored',
+          toolUseId: command.toolUseId,
+          turnId: '',
+          scope: command.scope,
+          ok: false,
+          error: 'Agent 工作中，请等待当前任务结束后再回滚',
+        }, false)
+        break
+      }
       await session?.restoreCheckpoint(command.toolUseId, command.scope)
       break
     }
@@ -300,17 +333,13 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
 }
 
 function runtimeBusy(): boolean {
-  return Boolean(session?.isRunning || coordinator?.busy)
+  return Boolean(sessionInitialization || session?.isBusy || coordinator?.busy)
 }
 
 async function recordUserInput(text: string, startsTurn: boolean): Promise<void> {
   try {
     const journal = sessions.journal!
-    await journal.recordUserInput(text)
-    if (startsTurn) {
-      const viewEvent: ViewEvent = { type: 'user-message', text, startsTurn: true }
-      await journal.recordViewEvents([viewEvent])
-    }
+    await journal.recordUserInput(text, startsTurn)
   } catch (error) {
     broadcastEvent({
       type: 'error',
@@ -323,6 +352,7 @@ async function recordUserInput(text: string, startsTurn: boolean): Promise<void>
 function resetRuntime(keepJournal = false): void {
   const oldConversationId = conversationId
   session = null
+  sessionInitialization = null
   coordinator = null
   viewTimeline.discardAll()
   if (!keepJournal) sessions.reset()
@@ -343,7 +373,9 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     const journal = await sessions.resume(sessionId)
     const metadata = journal.metadataSnapshot
     const recoveredFromInterruption = Boolean(
-      journal.interruptedTurnId || journal.interruptedConsensusTaskId,
+      journal.interruptedTurnId
+      || journal.undeliveredUserInputIds.length > 0
+      || journal.interruptedConsensusTaskId,
     )
     await journal.recoverInterruptedWork()
     projectDir = metadata.projectDir
@@ -421,20 +453,32 @@ void app.whenReady().then(async () => {
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
   ipcMain.handle(IPC.pickProjectDir, async () => {
+    if (runtimeBusy()) {
+      broadcastEvent({
+        type: 'error',
+        message: 'Agent 工作中，请先停止并等待当前操作结束后再切换项目',
+        recoverable: true,
+      })
+      return null
+    }
     const result = await dialog.showOpenDialog({
       title: '选择项目目录',
       properties: ['openDirectory'],
     })
     const dir = result.filePaths[0]
     if (!dir) return null
+    // 目录选择框打开期间也可能从其它入口启动任务；提交切换前必须再次权威检查。
+    if (runtimeBusy()) {
+      broadcastEvent({
+        type: 'error',
+        message: '当前操作已经开始，项目切换已取消；请停止后重试',
+        recoverable: true,
+      })
+      return null
+    }
     projectDir = dir
     // 换项目 = 换会话（消息历史与旧项目强相关）；协商 scratch 随旧对话清理
-    session = null
-    coordinator = null
-    viewTimeline.discardAll()
-    sessions.reset()
-    void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), conversationId)
-    conversationId = `conv-${Date.now()}`
+    resetRuntime()
     return dir
   })
 

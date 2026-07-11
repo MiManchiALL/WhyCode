@@ -8,7 +8,6 @@ import type { SessionListItem } from '../../shared/session.ts'
 import {
   applyCoreEvent,
   appendNotice,
-  appendUserMessage,
   createConversationState,
   toggleExpanded,
   voteLabel,
@@ -37,6 +36,7 @@ export function App() {
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [stopping, setStopping] = useState(false)
+  const [questionSubmitting, setQuestionSubmitting] = useState(false)
   const [models, setModels] = useState<{ id: string; displayName: string; hasKey: boolean }[]>([])
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
@@ -49,6 +49,7 @@ export function App() {
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
+  const questionSubmittingRef = useRef(false)
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
@@ -272,25 +273,25 @@ export function App() {
   const send = useCallback((urgent = false) => {
     const text = input.trim()
     if (!text) return
-    // 忙碌时不直接显示为用户消息——Main 会排队并回 message-queued 事件
-    if (!busy) {
-      setView((previous) => appendUserMessage(previous, text, true))
-    }
     setInput('')
     // 自己发消息 = 主动行为，恢复贴底跟随
     stickToBottom.current = true
     setShowJumpBottom(false)
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
-  }, [input, busy])
+  }, [input])
 
   const answerQuestion = useCallback((answer: string) => {
     const question = view.pendingQuestion
-    if (!question || busy || stopping) return
+    if (!question || busy || stopping || questionSubmittingRef.current) return
     const text = `回答「${question.question}」：${answer}`
-    setView((previous) => appendUserMessage(previous, text, true))
+    questionSubmittingRef.current = true
+    setQuestionSubmitting(true)
     stickToBottom.current = true
     setShowJumpBottom(false)
-    void window.whycode.sendCommand({ type: 'user-message', text })
+    void window.whycode.sendCommand({ type: 'user-message', text }).finally(() => {
+      questionSubmittingRef.current = false
+      setQuestionSubmitting(false)
+    })
   }, [busy, stopping, view.pendingQuestion])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
@@ -354,6 +355,7 @@ export function App() {
             key={b.id}
             block={b}
             expanded={view.expanded.has(b.id)}
+            busy={busy}
             onToggle={() => toggle(b.id)}
           />
         ))}
@@ -376,7 +378,7 @@ export function App() {
           <QuestionCard
             key={view.pendingQuestion.id}
             question={view.pendingQuestion}
-            disabled={busy || stopping}
+            disabled={busy || stopping || questionSubmitting}
             onAnswer={answerQuestion}
           />
         </div>
@@ -517,10 +519,12 @@ function QuestionCard({
 function BlockView({
   block,
   expanded,
+  busy,
   onToggle,
 }: {
   block: Block
   expanded: boolean
+  busy: boolean
   onToggle: () => void
 }) {
   if (block.kind === 'user') {
@@ -581,6 +585,7 @@ function BlockView({
             toolUseId={call.id}
             coverage={call.checkpointCoverage ?? 'complete'}
             warning={call.checkpointWarning}
+            busy={busy}
           />
         )}
       </div>
@@ -598,10 +603,12 @@ function RestoreButton({
   toolUseId,
   coverage,
   warning,
+  busy,
 }: {
   toolUseId: string
   coverage: 'complete' | 'partial'
   warning?: string
+  busy: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
@@ -611,7 +618,7 @@ function RestoreButton({
     mountedRef.current = false
   }, [])
   const restore = async (scope: 'files' | 'files-and-chat') => {
-    if (pendingRef.current) return
+    if (pendingRef.current || busy) return
     pendingRef.current = true
     setPending(true)
     setOpen(false)
@@ -637,6 +644,7 @@ function RestoreButton({
     return (
       <button
         className="shrink-0 text-xs text-neutral-400 hover:text-neutral-700"
+        disabled={busy}
         title={warning ?? '回滚到此操作执行前'}
         onClick={() => setOpen(true)}
       >
@@ -646,11 +654,19 @@ function RestoreButton({
   }
   return (
     <span className="flex shrink-0 gap-1 text-xs">
-      <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => void restore('files')}>
+      <button
+        className="rounded border border-neutral-300 px-2 py-0.5"
+        disabled={busy}
+        onClick={() => void restore('files')}
+      >
         仅文件
       </button>
       {coverage === 'complete' && (
-        <button className="rounded border border-neutral-300 px-2 py-0.5" onClick={() => void restore('files-and-chat')}>
+        <button
+          className="rounded border border-neutral-300 px-2 py-0.5"
+          disabled={busy}
+          onClick={() => void restore('files-and-chat')}
+        >
           文件+对话
         </button>
       )}

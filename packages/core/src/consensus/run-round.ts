@@ -25,7 +25,8 @@ export async function runProtocolRound(
   try {
     let prompt = roundInput
     for (let attempt = 0; attempt <= MAX_SUBMIT_REMINDERS; attempt++) {
-      await session.handleUserMessage(prompt)
+      const stopReason = await session.handleUserMessage(prompt)
+      if (stopReason === 'aborted') return { ok: false, error: 'aborted' }
       if (output) return { ok: true, output }
       prompt =
         '你结束了回合但没有调用 SubmitProtocolOutput 工具——没有它你的结论不会被计入协商。' +

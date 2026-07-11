@@ -88,7 +88,9 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       return { ...state, pendingTurnStart: null, turnStartBlocks }
     }
     case 'message-injected':
-      return appendUserMessage(state, event.text, false)
+      return appendUserMessage(state, event.text, event.startsTurn ?? false)
+    case 'user-message-accepted':
+      return appendUserMessage(state, event.text, event.startsTurn)
     case 'text-delta':
       return appendText(state, event.text)
     case 'thinking-delta':
@@ -333,7 +335,9 @@ function applyCheckpointRestored(
       ...state,
       blocks,
       taskPlan,
-      pendingQuestion: event.scope === 'files-and-chat' ? null : state.pendingQuestion,
+      pendingQuestion: event.scope === 'files-and-chat'
+        ? structuredClone(event.question ?? null)
+        : state.pendingQuestion,
     },
     event.scope === 'files-and-chat'
       ? '已回滚：该轮对话与文件改动均已撤销'

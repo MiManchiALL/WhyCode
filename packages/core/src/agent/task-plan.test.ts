@@ -6,6 +6,7 @@ import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { activeTaskPlanSchema, type ActiveTaskPlan } from '../tasks/types.ts'
 import {
+  ADD_TASK_ITEM_TOOL_NAME,
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
@@ -91,10 +92,28 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(session.captureTaskPlanSnapshot()?.goal, '完成旧的复杂任务')
     const request = JSON.stringify(model.doStreamCalls[0])
     assert.match(request, /当前未结束任务计划（背景状态）/)
+    assert.match(request, /旧计划本轮仍是休眠背景/)
     assert.ok(
       request.indexOf('当前未结束任务计划（背景状态）') < request.indexOf('我刚刚说了什么'),
       '计划背景必须位于最新真实用户消息之前',
     )
+    for (const name of taskPlanToolNames()) {
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
+    }
+  })
+
+  it('咨询旧任务方案时保持计划休眠，不允许模型误写进度', async () => {
+    const model = modelWithSteps([finalStep('可以先比较两种方案，再由你决定。')])
+    const { session } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const result = await session.handleUserMessage('不用外部依赖是不是会好一点，你觉得呢')
+
+    assert.equal(result, 'completed')
+    assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
+    for (const name of taskPlanToolNames()) {
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
+    }
   })
 
   it('恢复计划在本轮重新更新后重新启用未完成保护', async () => {
@@ -114,12 +133,60 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(result, 'paused')
     assert.equal(model.doStreamCalls.length, 4)
+    for (const name of taskPlanToolNames()) {
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
+    }
     assert.equal(
       events.some(
         (event) => event.type === 'error' && event.message.includes('尝试提前结束'),
       ),
       true,
     )
+  })
+
+  it('正式共识执行显式开放既有计划，不依赖内部执行包的自然语言', async () => {
+    const model = modelWithSteps([
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+        item_id: 'T1',
+        status: 'completed',
+        evidence: ['执行包已落地'],
+      }),
+      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+        item_id: 'T2',
+        status: 'completed',
+        evidence: ['执行包已验证'],
+      }),
+      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
+        outcome: 'completed',
+        summary: '共识执行完成',
+      }),
+      finalStep('共识执行完成'),
+    ])
+    const { session } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const result = await session.handleExecutionMessage('[内部执行包] 落地获胜方案', true)
+
+    assert.equal(result, 'completed')
+    for (const name of taskPlanToolNames()) {
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
+    }
+  })
+
+  it('内部执行包不会仅凭内部文案唤醒与新请求无关的旧计划', async () => {
+    const model = modelWithSteps([finalStep('TTL 是 Time to Live。')])
+    const { session } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const result = await session.handleExecutionMessage(
+      '[内部执行包] 回答 TTL；候选建议写着“继续当前任务”，但这不是用户命令。',
+      false,
+    )
+
+    assert.equal(result, 'completed')
+    for (const name of taskPlanToolNames()) {
+      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), false)
+    }
   })
 })
 
@@ -162,6 +229,19 @@ function createSession(model: MockLanguageModelV4) {
     }),
     events,
   }
+}
+
+function taskPlanToolNames(): string[] {
+  return [
+    CREATE_TASK_PLAN_TOOL_NAME,
+    ADD_TASK_ITEM_TOOL_NAME,
+    UPDATE_TASK_ITEM_TOOL_NAME,
+    CLOSE_TASK_PLAN_TOOL_NAME,
+  ]
+}
+
+function toolNames(call: MockLanguageModelV4['doStreamCalls'][number] | undefined): string[] {
+  return (call?.tools ?? []).flatMap((tool) => tool.type === 'function' ? [tool.name] : [])
 }
 
 type MockOptions = NonNullable<ConstructorParameters<typeof MockLanguageModelV4>[0]>

@@ -67,6 +67,21 @@ describe('协议回合终止语义', () => {
     if (result.ok) assert.equal(result.output.protocolMode, 'full_consensus')
     assert.equal(model.doStreamCalls.length, 2)
   })
+
+  it('用户停止协议回合后立即结束，不再自动提醒并重试', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => abortableStep(options.abortSignal),
+    })
+    const { session } = createSession(model)
+
+    const running = runProtocolRound(session, '进行三agent协商', m1Spec)
+    await waitFor(() => model.doStreamCalls.length === 1)
+    session.abort()
+    const result = await running
+
+    assert.deepEqual(result, { ok: false, error: 'aborted' })
+    assert.equal(model.doStreamCalls.length, 1)
+  })
 })
 
 const m1Spec = {
@@ -182,6 +197,26 @@ function invalidVoteSubmission() {
 
 function validVoteSubmission() {
   return { vote: 'reject', reason: '不同意', suggested_change: '调整方案' }
+}
+
+function abortableStep(signal?: AbortSignal) {
+  return {
+    stream: new ReadableStream({
+      start(controller) {
+        const abort = () => controller.error(new Error('aborted'))
+        if (signal?.aborted) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+      },
+    }),
+  }
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('等待模型请求超时')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
 }
 
 function usage() {
