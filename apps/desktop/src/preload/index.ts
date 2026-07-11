@@ -4,6 +4,8 @@ import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
   ResumeSessionResult,
+  RuntimeSnapshot,
+  RuntimeEventEnvelope,
   SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
@@ -15,6 +17,7 @@ const api = {
   listModels: (): Promise<{ id: string; displayName: string; hasKey: boolean }[]> =>
     ipcRenderer.invoke(IPC.listModels),
   getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),
+  runtimeSnapshot: (): Promise<RuntimeSnapshot> => ipcRenderer.invoke(IPC.runtimeSnapshot),
   pickProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickProjectDir),
   consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
     ipcRenderer.invoke(IPC.consensusStatus),
@@ -24,8 +27,10 @@ const api = {
   newSession: (): Promise<SessionActionResult> => ipcRenderer.invoke(IPC.newSession),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),
-  onEvent: (listener: (event: CoreEvent) => void): (() => void) => {
-    const wrapped = (_: unknown, event: CoreEvent) => listener(event)
+  onEvent: (listener: (event: CoreEvent, sequence: number) => void): (() => void) => {
+    const wrapped = (_: unknown, envelope: RuntimeEventEnvelope) => {
+      listener(envelope.event, envelope.sequence)
+    }
     ipcRenderer.on(IPC.event, wrapped)
     return () => ipcRenderer.off(IPC.event, wrapped)
   },

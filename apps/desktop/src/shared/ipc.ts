@@ -13,6 +13,8 @@ export const IPC = {
   pickProjectDir: 'whycode:pick-project-dir',
   /** Renderer → Main：查询当前项目目录 */
   getProjectDir: 'whycode:get-project-dir',
+  /** Renderer 重载/崩溃恢复：重新取得当前会话、稳定时间线与主进程运行态。 */
+  runtimeSnapshot: 'whycode:runtime-snapshot',
   /** Renderer → Main：查询协商可用状态（M3） */
   consensusStatus: 'whycode:consensus-status',
   /** Renderer → Main：会话列表与生命周期（M4） */

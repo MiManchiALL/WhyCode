@@ -1,9 +1,35 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
-import { applyCoreEvent, createConversationState } from './conversation-state.ts'
+import {
+  applyCoreEvent,
+  createConversationState,
+  eventsAfterRuntimeSnapshot,
+  restoreRuntimeConversation,
+} from './conversation-state.ts'
 
 describe('会话界面时间线重建', () => {
+  it('Renderer 重载时恢复稳定对话，并保留停止当前任务的入口提示', () => {
+    const state = restoreRuntimeConversation([
+      { type: 'user-message', text: '读取桌面 PDF', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'pdf-turn' }),
+      core({ type: 'text-delta', text: '我先找到文件。' }),
+    ], true)
+
+    assert.deepEqual(state.blocks.map((block) => block.kind), ['user', 'text', 'notice'])
+    const last = state.blocks.at(-1)
+    assert.match(last?.kind === 'notice' ? last.text : '', /重新连接当前任务|使用“停止”/)
+  })
+
+  it('Renderer 初始化只接续快照边界之后的实时事件', () => {
+    const events = eventsAfterRuntimeSnapshot([
+      { sequence: 10, event: { type: 'text-delta', text: '已包含在快照中' } },
+      { sequence: 11, event: { type: 'text-delta', text: '快照之后的新内容' } },
+    ], 10)
+
+    assert.deepEqual(events, [{ type: 'text-delta', text: '快照之后的新内容' }])
+  })
+
   it('按原顺序恢复用户、思考、工具、候选和 B/C 卡片', () => {
     const state = createConversationState([
       { type: 'user-message', text: '分析项目', startsTurn: true },
