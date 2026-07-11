@@ -9,6 +9,8 @@ import {
   applyCoreEvent,
   appendNotice,
   createConversationState,
+  eventsAfterRuntimeSnapshot,
+  restoreRuntimeConversation,
   toggleExpanded,
   voteLabel,
   type Block,
@@ -63,69 +65,102 @@ export function App() {
     }
   }, [])
 
+  const consumeEvent = useCallback((event: CoreEvent) => {
+    setView((previous) => applyCoreEvent(previous, event))
+    switch (event.type) {
+      case 'agent-status':
+        setStatus(event.status)
+        if (event.status === 'idle' || event.status === 'error') setStopping(false)
+        if (event.status === 'idle') setNegoStatus(null)
+        break
+      case 'turn-end':
+        void refreshSessions()
+        break
+      case 'message-queued':
+        setQueued((prev) => [...prev, { id: event.id, text: event.text }])
+        break
+      case 'message-injected':
+        setQueued((prev) => prev.filter((q) => q.id !== event.id))
+        break
+      case 'queue-restored':
+        setQueued([])
+        setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
+        break
+      case 'approval-request':
+        setApproval({
+          requestId: event.requestId,
+          toolName: event.toolName,
+          input: event.input,
+          reason: event.reason,
+          diff: event.diff,
+          suggestion: event.suggestion,
+        })
+        break
+      case 'vote-cast':
+        setNegoStatus((prev) =>
+          prev ? `${event.from} 已投票（${voteLabel(event.vote)}）· 等待其余评审…` : prev,
+        )
+        break
+      case 'negotiation-started':
+        setNegoStatus('B、C 正在独立评审 M1…')
+        break
+      case 'round-started':
+        setNegoStatus(event.round === 2 ? '第二轮：Main 修订候选，B/C 再评…' : '第三轮：最终兜底决策…')
+        break
+      case 'execution-started':
+        setNegoStatus(null)
+        break
+      default:
+        break
+    }
+  }, [refreshSessions])
+
   useEffect(() => {
     void window.whycode.listModels().then((list) => {
       setModels(list)
       const first = list.find((m) => m.hasKey)
-      if (first) setModelId(first.id)
+      if (first) setModelId((current) => current || first.id)
     })
-    void window.whycode.getProjectDir().then(setProjectDir)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
   }, [refreshSessions])
 
   useEffect(() => {
-    return window.whycode.onEvent((event: CoreEvent) => {
-      setView((previous) => applyCoreEvent(previous, event))
-      switch (event.type) {
-        case 'agent-status':
-          setStatus(event.status)
-          if (event.status === 'idle' || event.status === 'error') setStopping(false)
-          // 空闲 = 一切结束（中止/异常兜底），协商状态条不残留
-          if (event.status === 'idle') setNegoStatus(null)
-          break
-        case 'turn-end':
-          void refreshSessions()
-          break
-        case 'message-queued':
-          setQueued((prev) => [...prev, { id: event.id, text: event.text }])
-          break
-        case 'message-injected':
-          setQueued((prev) => prev.filter((q) => q.id !== event.id))
-          break
-        case 'queue-restored':
-          setQueued([])
-          setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
-          break
-        case 'approval-request':
-          setApproval({
-            requestId: event.requestId,
-            toolName: event.toolName,
-            input: event.input,
-            reason: event.reason,
-            diff: event.diff,
-            suggestion: event.suggestion,
-          })
-          break
-        case 'vote-cast':
-          setNegoStatus((prev) =>
-            prev ? `${event.from} 已投票（${voteLabel(event.vote)}）· 等待其余评审…` : prev,
-          )
-          break
-        case 'negotiation-started':
-          setNegoStatus('B、C 正在独立评审 M1…')
-          break
-        case 'round-started':
-          setNegoStatus(event.round === 2 ? '第二轮：Main 修订候选，B/C 再评…' : '第三轮：最终兜底决策…')
-          break
-        case 'execution-started':
-          setNegoStatus(null)
-          break
-        default:
-          break
-      }
+    let disposed = false
+    let hydrated = false
+    const buffered: { event: CoreEvent; sequence: number }[] = []
+    const unsubscribe = window.whycode.onEvent((event, sequence) => {
+      if (hydrated) consumeEvent(event)
+      else buffered.push({ event, sequence })
     })
-  }, [refreshSessions])
+    void window.whycode.runtimeSnapshot().then((snapshot) => {
+      if (disposed) return
+      const restored = restoreRuntimeConversation(snapshot.viewEvents, snapshot.busy)
+      setView(restored)
+      setProjectDir(snapshot.projectDir)
+      setStatus(snapshot.status)
+      setStopping(false)
+      setQueued([])
+      setApproval(snapshot.approval)
+      if (snapshot.modelId) setModelId(snapshot.modelId)
+      hydrated = true
+      const pendingEvents = eventsAfterRuntimeSnapshot(
+        buffered.splice(0),
+        snapshot.eventSequence,
+      )
+      for (const event of pendingEvents) consumeEvent(event)
+      void refreshSessions()
+    }).catch(() => {
+      if (disposed) return
+      hydrated = true
+      for (const bufferedEvent of buffered.splice(0)) consumeEvent(bufferedEvent.event)
+      void window.whycode.getProjectDir().then(setProjectDir)
+    })
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
+  }, [consumeEvent, refreshSessions])
 
   useEffect(() => {
     if (stickToBottom.current) {

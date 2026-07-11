@@ -14,6 +14,7 @@ import {
   type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
+  type AgentStatus,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
@@ -23,6 +24,8 @@ import { ViewTimeline } from './view-timeline.ts'
 import type {
   DeleteSessionResult,
   ResumeSessionResult,
+  RuntimeSnapshot,
+  RuntimeEventEnvelope,
   SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
@@ -63,9 +66,11 @@ function createWindow(): BrowserWindow {
 }
 
 function broadcastEvent(event: CoreEvent, persistView = true): void {
+  if (event.type === 'agent-status') currentAgentStatus = event.status
   if (persistView) viewTimeline.capture(sessions?.journal ?? null, event)
+  const envelope: RuntimeEventEnvelope = { sequence: ++runtimeEventSequence, event }
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(IPC.event, event)
+    win.webContents.send(IPC.event, envelope)
   }
 }
 
@@ -75,7 +80,13 @@ let sessionInitialization: Promise<string | null> | null = null
 /** 当前项目目录；未选择时为 null，发消息前必须先选 */
 let projectDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
-const pendingApprovals = new Map<string, (response: ApprovalResponse) => void>()
+const pendingApprovals = new Map<string, {
+  request: ApprovalRequest
+  resolve: (response: ApprovalResponse) => void
+}>()
+/** Renderer 可以重载，权威运行态必须保留在不会随页面消失的主进程。 */
+let currentAgentStatus: AgentStatus = 'idle'
+let runtimeEventSequence = 0
 // --- 多 Agent 协商（M3）---
 let consensusEnabled = false
 let coordinator: ConsensusCoordinator | null = null
@@ -98,7 +109,7 @@ const viewTimeline = new ViewTimeline((error) => {
 
 function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
   return new Promise((resolve) => {
-    pendingApprovals.set(request.requestId, resolve)
+    pendingApprovals.set(request.requestId, { request: structuredClone(request), resolve })
     broadcastEvent({ type: 'approval-request', ...request })
   })
 }
@@ -257,7 +268,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
     }
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
-      for (const resolve of pendingApprovals.values()) resolve({ approved: false })
+      for (const pending of pendingApprovals.values()) pending.resolve({ approved: false })
       pendingApprovals.clear()
       coordinator?.abort()
       session?.abort()
@@ -325,7 +336,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       const resolve = pendingApprovals.get(command.requestId)
       if (resolve) {
         pendingApprovals.delete(command.requestId)
-        resolve({ approved: command.approved, remember: command.remember })
+        resolve.resolve({ approved: command.approved, remember: command.remember })
       }
       break
     }
@@ -354,10 +365,25 @@ function resetRuntime(keepJournal = false): void {
   session = null
   sessionInitialization = null
   coordinator = null
+  currentAgentStatus = 'idle'
   viewTimeline.discardAll()
   if (!keepJournal) sessions.reset()
   conversationId = `conv-${Date.now()}`
   void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), oldConversationId)
+}
+
+function runtimeSnapshot(): RuntimeSnapshot {
+  const journal = sessions?.journal ?? null
+  const busy = runtimeBusy()
+  return {
+    projectDir,
+    modelId: currentModelId,
+    status: busy && currentAgentStatus === 'idle' ? 'working' : currentAgentStatus,
+    busy,
+    viewEvents: journal ? [...journal.initialViewEvents] : [],
+    approval: [...pendingApprovals.values()].at(-1)?.request ?? null,
+    eventSequence: runtimeEventSequence,
+  }
 }
 
 async function startNewSession(): Promise<SessionActionResult> {
@@ -437,6 +463,7 @@ void app.whenReady().then(async () => {
     }))
   })
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
+  ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
   ipcMain.handle(IPC.consensusStatus, () => ({
     ready: checkConsensusReady() === null,
     reason: checkConsensusReady(),

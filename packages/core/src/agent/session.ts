@@ -24,6 +24,11 @@ import { resolveAllowed } from '../tools/fs-utils.ts'
 import { TaskPlanController, type TaskPlanContextMode } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import {
+  MODEL_INACTIVITY_ABORT_REASON,
+  MODEL_INACTIVITY_TIMEOUT_MS,
+  ModelInactivityWatchdog,
+} from './model-inactivity-watchdog.ts'
+import {
   createReplaceTaskPlanTool,
   createTaskPlanTools,
   REPLACE_TASK_PLAN_TOOL_NAME,
@@ -855,10 +860,12 @@ export class AgentSession {
     const { emit } = this.options
     // 步骤级中止器：turn 取消（user-cancel）与 urgent 插话（interrupt）都作用在这里
     const stepAbort = new AbortController()
+    const inactivityWatchdog = new ModelInactivityWatchdog(stepAbort)
     this.currentStepAbort = stepAbort
     const onTurnAbort = () => stepAbort.abort('user-cancel')
     turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
     if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
+    inactivityWatchdog.start()
 
     const stepControl: { toolEndReason: StepResult['toolEndReason'] } = {
       toolEndReason: null,
@@ -899,6 +906,8 @@ export class AgentSession {
         stopWhen: stepCountIs(1),
         providerOptions: this.options.model.providerOptions,
         abortSignal: stepAbort.signal,
+        onToolExecutionStart: () => { inactivityWatchdog.toolStarted() },
+        onToolExecutionEnd: () => { inactivityWatchdog.toolEnded() },
       })
 
       let hadToolCalls = false
@@ -906,6 +915,7 @@ export class AgentSession {
       let stepTotalTokens = 0
 
       for await (const part of result.fullStream) {
+        inactivityWatchdog.noteStreamActivity()
         switch (part.type) {
           case 'reasoning-delta': {
             if (thinkingStartedAt === null) {
@@ -1005,6 +1015,14 @@ export class AgentSession {
     } catch (error) {
       this.taskPlan?.discardStep()
       emit({ type: 'step-discarded' })
+      if (
+        stepAbort.signal.aborted
+        && stepAbort.signal.reason === MODEL_INACTIVITY_ABORT_REASON
+      ) {
+        throw new Error(
+          `模型连续 ${Math.round(MODEL_INACTIVITY_TIMEOUT_MS / 1000)} 秒没有返回数据，当前未提交步骤已安全丢弃；请重试或切换模型。`,
+        )
+      }
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
         return {
@@ -1016,6 +1034,7 @@ export class AgentSession {
       }
       throw error
     } finally {
+      inactivityWatchdog.stop()
       turnAbortSignal.removeEventListener('abort', onTurnAbort)
       this.currentStepAbort = null
     }
