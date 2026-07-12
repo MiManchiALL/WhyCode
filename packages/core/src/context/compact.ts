@@ -1,7 +1,11 @@
 import { generateText, type LanguageModel, type ModelMessage } from 'ai'
 import { readFile } from 'node:fs/promises'
 import { estimateMessageTokens, estimateTextTokens } from './tokens.ts'
-import { COMPACT_SUMMARY_PROMPT, COMPACT_CONTINUATION_PREFIX } from '../prompts/compact.ts'
+import {
+  COMPACT_CONTINUATION_PREFIX,
+  COMPACT_CONTINUATION_SUFFIX,
+  COMPACT_SUMMARY_PROMPT,
+} from '../prompts/compact.ts'
 import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
 import { findPendingUserQuestionIndex } from '../tasks/answer-resume.ts'
 
@@ -22,7 +26,7 @@ export interface CompactResult {
 }
 
 /**
- * 选择保留的尾部起点：从末尾向前累积到 ≥10k tokens 且 ≥5 条含文本消息（上限 40k），
+ * 选择保留的尾部起点：从末尾向前累积到 ≥10k tokens 且 ≥5 条真实文本消息（40k 软上限），
  * 再回退到最近的 user 消息边界（保证不切断 assistant tool-call 与 tool result 配对）。
  */
 export function pickTailStart(messages: ModelMessage[]): number {
@@ -31,22 +35,17 @@ export function pickTailStart(messages: ModelMessage[]): number {
   let start = messages.length
   for (let i = messages.length - 1; i >= 0; i--) {
     const t = estimateMessageTokens(messages[i]!)
-    if (tokens + t > KEEP_TAIL_MAX_TOKENS) break
+    if (tokens + t > KEEP_TAIL_MAX_TOKENS && textMessages >= KEEP_TAIL_MIN_TEXT_MESSAGES) break
     tokens += t
-    const m = messages[i]!
-    if (
-      m.role !== 'tool' &&
-      (typeof m.content === 'string' ||
-        m.content.some((p) => p.type === 'text' && p.text.trim()))
-    ) {
-      textMessages++
-    }
+    if (isConversationTextMessage(messages[i]!)) textMessages++
     start = i
     if (tokens >= KEEP_TAIL_MIN_TOKENS && textMessages >= KEEP_TAIL_MIN_TEXT_MESSAGES) break
   }
-  // 回退到 user 消息边界（turn 起点），天然不会切断工具配对
-  while (start < messages.length && messages[start]!.role !== 'user') start++
-  return start
+  // 回退到包含当前起点的真实 user turn，避免切断 assistant tool-call/result。
+  for (let i = Math.min(start, messages.length - 1); i >= 0; i--) {
+    if (isRealUserMessage(messages[i]!)) return i
+  }
+  return 0
 }
 
 /** 摘要前缀终点；尚未消费的中断边界及其后新消息必须逐字保留。 */
@@ -56,6 +55,7 @@ export function pickSummaryEnd(messages: ModelMessage[]): number {
   const protectedIndexes = [
     findPendingTurnAbortedIndex(messages),
     findPendingUserQuestionIndex(messages),
+    trailingUserBatchStart(messages),
   ].filter((index): index is number => index !== null)
   return protectedIndexes.length === 0 ? defaultEnd : Math.min(defaultEnd, ...protectedIndexes)
 }
@@ -97,7 +97,7 @@ async function buildFileReinjection(
     sections.push(`### ${f.path}\n${text}`)
   }
   if (sections.length === 0) return null
-  return `<system-reminder>\n压缩前最近读过的文件（当前最新内容，供继续工作参考）：\n\n${sections.join('\n\n')}\n</system-reminder>`
+  return `压缩前最近读过的文件（当前最新内容）：\n\n${sections.join('\n\n')}`
 }
 
 /** 执行完整压缩：摘要 + 尾部保留 + 文件重注入，返回重建后的消息数组 */
@@ -106,6 +106,7 @@ export async function compactMessages(
   messages: ModelMessage[],
   recentReadFiles: { path: string; readAt: number }[],
   abortSignal: AbortSignal,
+  applicationContext?: string,
 ): Promise<CompactResult> {
   // 尾部起点为 0 = 全部历史都在尾部预算内，此时「摘要+全量尾部」只会更大——退化为纯摘要替换
   const effectiveTailStart = pickSummaryEnd(messages)
@@ -115,12 +116,52 @@ export async function compactMessages(
   const summaryText = await summarize(model, toSummarize, abortSignal)
 
   const rebuilt: ModelMessage[] = [
-    { role: 'user', content: COMPACT_CONTINUATION_PREFIX + summaryText },
+    {
+      role: 'user',
+      content: COMPACT_CONTINUATION_PREFIX + summaryText + COMPACT_CONTINUATION_SUFFIX,
+    },
     ...tail,
   ]
-  const reinjection = await buildFileReinjection(recentReadFiles)
-  if (reinjection) {
-    rebuilt.push({ role: 'user', content: reinjection })
+  const internalSections = [
+    await buildFileReinjection(recentReadFiles),
+    applicationContext,
+  ].filter((section): section is string => Boolean(section))
+  if (internalSections.length > 0) {
+    const internalMessage: ModelMessage = {
+      role: 'user',
+      content: ['<system-reminder>', ...internalSections, '</system-reminder>'].join('\n\n'),
+    }
+    let insertAt = rebuilt.length
+    while (insertAt > 0 && isRealUserMessage(rebuilt[insertAt - 1]!)) insertAt--
+    rebuilt.splice(insertAt, 0, internalMessage)
   }
   return { messages: rebuilt, summaryText }
+}
+
+function isConversationTextMessage(message: ModelMessage): boolean {
+  if (message.role === 'tool') return false
+  if (isInternalMessage(message)) return false
+  return modelMessageText(message).trim().length > 0
+}
+
+function trailingUserBatchStart(messages: ModelMessage[]): number | null {
+  if (messages.length === 0 || !isRealUserMessage(messages.at(-1)!)) return null
+  let start = messages.length - 1
+  while (start > 0 && isRealUserMessage(messages[start - 1]!)) start--
+  return start
+}
+
+function isRealUserMessage(message: ModelMessage): boolean {
+  return message.role === 'user' && !isInternalMessage(message)
+}
+
+function isInternalMessage(message: ModelMessage): boolean {
+  if (message.role !== 'user') return false
+  const text = modelMessageText(message).trimStart()
+  return text.startsWith('<system-reminder>')
+}
+
+function modelMessageText(message: ModelMessage): string {
+  if (typeof message.content === 'string') return message.content
+  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
 }

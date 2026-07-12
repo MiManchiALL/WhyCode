@@ -13,7 +13,10 @@ import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   REPLACE_TASK_PLAN_TOOL_NAME,
 } from '../tasks/tools.ts'
-import { activeTaskPlanSchema } from '../tasks/types.ts'
+import {
+  activeTaskPlanSchema,
+  type TaskPlanState,
+} from '../tasks/types.ts'
 import { AgentSession } from './session.ts'
 
 const roots: string[] = []
@@ -121,7 +124,8 @@ describe('Agent 资源检查点联动', () => {
     const project = join(root, 'project')
     const target = join(project, 'csgo.html')
     await mkdir(project)
-    const recorder = await new SessionStore(join(root, 'sessions')).create({
+    const store = new SessionStore(join(root, 'sessions'))
+    const recorder = await store.create({
       projectDir: project,
       modelId: 'test:checkpoint',
     })
@@ -141,8 +145,23 @@ describe('Agent 资源检查点联动', () => {
         },
       ],
     })
+    const oldState: TaskPlanState = {
+      version: 7,
+      activePlan: oldPlan,
+      historicalPlans: [{
+        id: '33333333-3333-4333-8333-333333333333',
+        goal: '完成 Minecraft 游戏',
+        status: 'completed',
+        summary: '功能和验证均已完成',
+        completedItems: 2,
+        totalItems: 2,
+        revision: 4,
+      }],
+      resumeRequired: true,
+      interruptionReason: 'user-cancel',
+    }
     await recorder.recordTurnStart('old-plan', [{ role: 'user', content: '开发蔚蓝' }])
-    await recorder.recordStep('old-plan', [{ role: 'assistant', content: '已建立计划' }], oldPlan)
+    await recorder.recordStep('old-plan', [{ role: 'assistant', content: '已建立计划' }], oldState)
     await recorder.recordTurnEnd('old-plan', 'paused')
     const events: CoreEvent[] = []
     const session = new AgentSession({
@@ -163,7 +182,9 @@ describe('Agent 资源检查点联动', () => {
     await session.restoreCheckpoint(checkpoint.toolUseId, 'files-and-chat')
 
     await assert.rejects(access(target))
-    assert.deepEqual(session.captureTaskPlanSnapshot(), oldPlan)
+    assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, oldPlan)
+    assert.deepEqual(session.captureTaskStateSnapshot(), oldState)
+    assert.deepEqual((await store.open(recorder.sessionId)).initialTaskState, oldState)
     const restored = events.findLast((event) => event.type === 'checkpoint-restored')
     assert.equal(restored?.type === 'checkpoint-restored' && restored.ok, true)
     assert.deepEqual(restored?.type === 'checkpoint-restored' ? restored.taskPlan : null, oldPlan)
@@ -191,6 +212,8 @@ function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
       toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
+        expected_active_plan_id: '11111111-1111-4111-8111-111111111111',
+        replacement_authorized: true,
         goal: '开发 CSGO 游戏',
         reason: '用户明确切换到新的独立游戏任务',
         items: [

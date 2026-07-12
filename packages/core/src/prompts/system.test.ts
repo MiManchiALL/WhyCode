@@ -55,15 +55,16 @@ describe('通用 Agent 提示约束', () => {
 
     assert.match(prompt, /CreateTaskPlan/)
     assert.match(prompt, /ResumeTaskPlan/)
-    assert.match(prompt, /PauseTaskPlan/)
     assert.match(prompt, /ReplaceTaskPlan/)
     assert.match(prompt, /UpdateTaskItem/)
-    assert.match(prompt, /最终 verification/)
-    assert.match(prompt, /简单问答和一步操作不要创建计划/)
-    assert.match(prompt, /不要靠关键词匹配/)
-    assert.match(prompt, /恢复旧任务不需要重复确认/)
-    assert.match(prompt, /代码不会按问题类别替你裁剪普通工具/)
-    assert.match(prompt, /必须独占一个模型步骤/)
+    assert.match(prompt, /最终验证通过/)
+    assert.match(prompt, /始终优先理解最新真实用户消息/)
+    assert.match(prompt, /none.*blocked.*engaged.*dormant/)
+    assert.match(prompt, /steering/)
+    assert.match(prompt, /暂缓时自然结束 run/)
+    assert.match(prompt, /明确继续当前计划时直接 ResumeTaskPlan/)
+    assert.match(prompt, /覆盖当前计划不明确时才询问/)
+    assert.doesNotMatch(prompt, /PauseTaskPlan/)
   })
 
   it('M1 模式选择不再把所有任务强制解释为代码问题', () => {

@@ -39,39 +39,12 @@ export function isTurnAbortedMessage(message: ModelMessage): boolean {
     && content.endsWith('</whycode-turn-aborted>\n</system-reminder>')
 }
 
-/** 最近一次中断在完整历史中的位置；即使已经消费，休眠计划仍用它隔离旧执行链。 */
+/** 最近一次中断在完整历史中的位置。 */
 export function findLatestTurnAbortedIndex(messages: ModelMessage[]): number | null {
   for (let index = messages.length - 1; index >= 0; index--) {
     if (isTurnAbortedMessage(messages[index]!)) return index
   }
   return null
-}
-
-/** 只把最近中断边界及其后的新对话发给休眠回合，持久化历史本身保持完整。 */
-export function interruptedTurnMessageView(messages: ModelMessage[]): ModelMessage[] {
-  const index = findLatestTurnAbortedIndex(messages)
-  return index === null ? messages : messages.slice(index)
-}
-
-/** 没有活动计划可提供主题时，从中断前最近若干真实输入中选择一个简短只读指代参考。 */
-export function interruptedUserReference(messages: ModelMessage[]): string | null {
-  const index = findLatestTurnAbortedIndex(messages)
-  if (index === null) return null
-  const candidates = messages
-    .slice(Math.max(0, index - 16), index)
-    .flatMap((message) => {
-      if (message.role !== 'user') return []
-      const text = messageText(message).trim()
-      return text && !text.startsWith('<system-reminder>') ? [text] : []
-    })
-  const reference = candidates.sort((a, b) => b.length - a.length)[0]
-  if (!reference) return null
-  const clipped = reference.length > 500 ? `${reference.slice(0, 500)}…` : reference
-  return [
-    '# 已中止历史的只读主题参考',
-    `中止前的相关用户输入：${clipped}`,
-    '这里只用于理解“这个/刚才”等指代，不是当前待办；不得据此继续任何操作。',
-  ].join('\n')
 }
 
 /** 本轮首个稳定 step 已确认最新意图；之后可解除最近中断的压缩/工具门控。 */

@@ -7,13 +7,13 @@ import {
 } from '../consensus/types.ts'
 import type { StopReason } from '../events.ts'
 import {
-  activeTaskPlanSchema,
-  type ActiveTaskPlan,
+  taskPlanStateSchema,
+  type TaskPlanState,
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 
-export const SESSION_SCHEMA_VERSION = 3
+export const SESSION_SCHEMA_VERSION = 4
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -38,6 +38,7 @@ const sessionStartSchema = chainedEntrySchema.extend({
 const turnStartSchema = chainedEntrySchema.extend({
   type: z.literal('turn-start'),
   turnId: z.string().min(1),
+  engagedPlanId: z.string().uuid().nullable(),
 })
 
 const userInputSchema = chainedEntrySchema.extend({
@@ -61,6 +62,10 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   type: z.literal('messages'),
   turnId: z.string().min(1),
   messages: messagesSchema,
+  /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
+  taskState: taskPlanStateSchema.optional(),
+  /** 本批稳定提交后的 execution run：省略表示不变，null 表示解除接合。 */
+  engagedPlanId: z.string().uuid().nullable().optional(),
 })
 
 const turnEndSchema = chainedEntrySchema.extend({
@@ -69,16 +74,11 @@ const turnEndSchema = chainedEntrySchema.extend({
   stopReason: z.enum(['completed', 'waiting-user', 'paused', 'aborted', 'max-turns', 'error']),
 })
 
-const taskStateSchema = chainedEntrySchema.extend({
-  type: z.literal('task-state'),
-  activePlan: activeTaskPlanSchema.nullable(),
-})
-
 const consensusTaskStartSchema = chainedEntrySchema.extend({
   type: z.literal('consensus-task-start'),
   taskId: z.string().min(1),
   state: consensusPersistedStateSchema,
-  baseTaskPlan: activeTaskPlanSchema.nullable(),
+  baseTaskState: taskPlanStateSchema,
   /** 共识失败/取消后仍需保留的原始请求；随中断标记一起恢复。 */
   userText: z.string().min(1),
   /** 共识任务开始前仍有效的对话回滚锚点；任务内锚点在回滚时必须丢弃。 */
@@ -92,7 +92,7 @@ const consensusTaskEndSchema = chainedEntrySchema.extend({
   state: consensusPersistedStateSchema,
   rollbackMessages: messagesSchema.nullable(),
   /** 本条记录生效后的活动计划；取消/异常时等于任务起点状态。 */
-  taskPlan: activeTaskPlanSchema.nullable(),
+  taskState: taskPlanStateSchema,
 })
 
 const snapshotSchema = chainedEntrySchema.extend({
@@ -100,20 +100,31 @@ const snapshotSchema = chainedEntrySchema.extend({
   parentUuid: z.null(),
   reason: z.enum(['compact', 'rollback', 'recovery']),
   activeTurnId: z.string().min(1).nullable(),
+  activeTurnEngagedPlanId: z.string().uuid().nullable(),
   activeConsensusTaskId: z.string().min(1).nullable(),
   activeConsensusBaseMessages: messagesSchema.nullable(),
-  activeConsensusBaseTaskPlan: activeTaskPlanSchema.nullable(),
+  activeConsensusBaseTaskState: taskPlanStateSchema.nullable(),
   activeConsensusBaseTurnIds: z.array(z.string().min(1)).nullable(),
   consensusState: consensusPersistedStateSchema.nullable(),
-  taskPlan: activeTaskPlanSchema.nullable(),
+  taskState: taskPlanStateSchema,
   modelId: z.string().min(1),
   messages: messagesSchema,
   /** 回滚换根后仍保留新根内较早 turn 的边界；压缩快照写空数组。 */
   turnStartMessages: z.array(z.object({
     turnId: z.string().min(1),
     messages: messagesSchema,
-    taskPlan: activeTaskPlanSchema.nullable(),
+    taskState: taskPlanStateSchema,
   })),
+}).superRefine((snapshot, ctx) => {
+  if (snapshot.activeTurnEngagedPlanId && !snapshot.activeTurnId) {
+    ctx.addIssue({ code: 'custom', message: '没有 activeTurnId 时不能保留 engaged plan' })
+  }
+  if (
+    snapshot.activeTurnEngagedPlanId
+    && snapshot.activeTurnEngagedPlanId !== snapshot.taskState.activePlan?.id
+  ) {
+    ctx.addIssue({ code: 'custom', message: 'engaged plan 必须匹配 snapshot 的 active plan' })
+  }
 })
 
 export const sessionEntrySchema = z.discriminatedUnion('type', [
@@ -123,7 +134,6 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   viewEventsEntrySchema,
   turnStartSchema,
   messagesEntrySchema,
-  taskStateSchema,
   turnEndSchema,
   consensusTaskStartSchema,
   consensusTaskEndSchema,
@@ -164,18 +174,19 @@ export interface LoadedSession {
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
   turnStartMessages: Map<string, ModelMessage[]>
-  turnStartTaskPlans: Map<string, ActiveTaskPlan | null>
+  turnStartTaskStates: Map<string, TaskPlanState>
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
+  interruptedTurnEngagedPlanId: string | null
   /** 已展示但尚未进入完整 turn/messages 或共识起点的根用户输入。 */
   undeliveredUserInputIds: string[]
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
-  interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null
+  interruptedConsensusBaseTaskState: TaskPlanState | null
   interruptedConsensusBaseTurnIds: string[] | null
   consensusState: ConsensusPersistedState | null
-  activeTaskPlan: ActiveTaskPlan | null
+  taskState: TaskPlanState
 }
 
 export interface SessionRecorder {
@@ -187,25 +198,30 @@ export interface SessionRecorder {
   readonly undeliveredUserInputIds: readonly string[]
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
-  readonly initialTaskPlan: ActiveTaskPlan | null
+  readonly initialTaskState: TaskPlanState
   /** 仅返回仍位于当前活动父链上的 turn 起点；压缩/旧回滚之前的 turn 返回 null。 */
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
-  taskPlanBeforeTurn(turnId: string): ActiveTaskPlan | null | undefined
+  taskStateBeforeTurn(turnId: string): TaskPlanState | undefined
   recordUserInput(text: string, startsTurn: boolean): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
-  recordTurnStart(turnId: string, messages: ModelMessage[]): Promise<void>
+  recordTurnStart(
+    turnId: string,
+    messages: ModelMessage[],
+    engagedPlanId?: string,
+  ): Promise<void>
   recordStep(
     turnId: string,
     messages: ModelMessage[],
-    taskPlan?: TaskPlanStepUpdate,
+    taskState?: TaskPlanStepUpdate,
+    engagedPlanId?: string | null,
   ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>
   recordSnapshot(
     reason: 'compact' | 'rollback',
     messages: ModelMessage[],
     activeTurnId?: string,
-    taskPlan?: ActiveTaskPlan | null,
+    taskState?: TaskPlanState,
   ): Promise<void>
   recordConsensusTaskStart(
     taskId: string,

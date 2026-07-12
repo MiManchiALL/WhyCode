@@ -103,14 +103,18 @@ export type {
 export {
   activeTaskPlanSchema,
   supersededTaskPlanSchema,
+  taskPlanStateSchema,
+  historicalTaskPlanSummarySchema,
   taskItemSchema,
   taskItemStatusSchema,
   taskPlanSchema,
 } from './tasks/types.ts'
 export type {
   ActiveTaskPlan,
+  HistoricalTaskPlanSummary,
   SupersededTaskPlan,
   TaskItem,
   TaskItemStatus,
   TaskPlan,
+  TaskPlanState,
 } from './tasks/types.ts'

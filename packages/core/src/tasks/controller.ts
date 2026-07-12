@@ -1,13 +1,18 @@
 import {
   activeTaskPlanSchema,
   cloneActiveTaskPlan,
+  cloneTaskPlanState,
+  emptyTaskPlanState,
+  interruptTaskPlanState,
   supersededTaskPlanSchema,
   taskPlanSchema,
   type ActiveTaskPlan,
+  type HistoricalTaskPlanSummary,
   type SupersededTaskPlan,
   type TaskItem,
   type TaskItemStatus,
   type TaskPlan,
+  type TaskPlanState,
 } from './types.ts'
 
 export interface TaskPlanDraftItem {
@@ -16,9 +21,31 @@ export interface TaskPlanDraftItem {
   acceptance: string
 }
 
-export interface TaskMutationResult {
-  ok: boolean
-  message: string
+export type TaskMutationError =
+  | 'step_conflict'
+  | 'active_plan_exists'
+  | 'no_active_plan'
+  | 'active_plan_conflict'
+  | 'plan_id_mismatch'
+  | 'resume_required'
+  | 'not_engaged'
+  | 'invalid_plan'
+  | 'item_not_found'
+  | 'invalid_transition'
+  | 'evidence_required'
+  | 'blocked_reason_required'
+  | 'no_state_change'
+  | 'incomplete_plan'
+
+export type TaskMutationResult =
+  | { ok: true; message: string }
+  | { ok: false; error: TaskMutationError; message: string }
+
+function mutationFailure(
+  error: TaskMutationError,
+  message: string,
+): TaskMutationResult {
+  return { ok: false, error, message }
 }
 
 export type NaturalStopDecision =
@@ -27,35 +54,37 @@ export type NaturalStopDecision =
   | { kind: 'continue'; reminder: string }
 
 export interface TaskPlanCommit {
-  activePlan: ActiveTaskPlan | null
+  state: TaskPlanState
   displayUpdate:
     | { kind: 'updated'; plan: TaskPlan }
     | { kind: 'replaced'; previous: SupersededTaskPlan; plan: ActiveTaskPlan }
 }
-
-export type TaskPlanContextMode = 'blocked' | 'dormant' | 'engaged'
 
 /**
  * Main 的单活动计划控制器。工具调用先修改内存草稿，只有模型 step 稳定提交后才落盘；
  * urgent/取消/异常丢弃 step 时恢复旧状态，避免会话中出现半截进度。
  */
 export class TaskPlanController {
-  private activePlan: ActiveTaskPlan | null
-  private stepSnapshot: ActiveTaskPlan | null = null
+  private state: TaskPlanState
+  private stepSnapshot: TaskPlanState | null = null
   private stepDirty = false
   private stepBoundary: 'create' | 'replace' | null = null
   private pendingDisplayUpdate: TaskPlanCommit['displayUpdate'] | null = null
 
-  constructor(initialPlan: ActiveTaskPlan | null) {
-    this.activePlan = cloneActiveTaskPlan(initialPlan)
+  constructor(initialState: TaskPlanState = emptyTaskPlanState()) {
+    this.state = cloneTaskPlanState(initialState)
   }
 
   get snapshot(): ActiveTaskPlan | null {
-    return cloneActiveTaskPlan(this.activePlan)
+    return cloneActiveTaskPlan(this.state.activePlan)
+  }
+
+  get stateSnapshot(): TaskPlanState {
+    return cloneTaskPlanState(this.state)
   }
 
   beginStep(): void {
-    this.stepSnapshot = cloneActiveTaskPlan(this.activePlan)
+    this.stepSnapshot = cloneTaskPlanState(this.state)
     this.stepDirty = false
     this.stepBoundary = null
     this.pendingDisplayUpdate = null
@@ -64,7 +93,7 @@ export class TaskPlanController {
   commitStep(): TaskPlanCommit | undefined {
     const update = this.stepDirty && this.pendingDisplayUpdate
       ? {
-          activePlan: cloneActiveTaskPlan(this.activePlan),
+          state: cloneTaskPlanState(this.state),
           displayUpdate: structuredClone(this.pendingDisplayUpdate),
         }
       : undefined
@@ -76,15 +105,15 @@ export class TaskPlanController {
   }
 
   discardStep(): void {
-    if (this.stepDirty) this.activePlan = cloneActiveTaskPlan(this.stepSnapshot)
+    if (this.stepDirty && this.stepSnapshot) this.state = cloneTaskPlanState(this.stepSnapshot)
     this.stepSnapshot = null
     this.stepDirty = false
     this.stepBoundary = null
     this.pendingDisplayUpdate = null
   }
 
-  restore(plan: ActiveTaskPlan | null): void {
-    this.activePlan = cloneActiveTaskPlan(plan)
+  restore(state: TaskPlanState): void {
+    this.state = cloneTaskPlanState(state)
     this.stepSnapshot = null
     this.stepDirty = false
     this.stepBoundary = null
@@ -93,16 +122,18 @@ export class TaskPlanController {
 
   create(goal: string, drafts: TaskPlanDraftItem[]): TaskMutationResult {
     if (this.stepDirty) {
-      return { ok: false, message: 'CreateTaskPlan 必须作为本步骤唯一的计划变更。' }
+      return mutationFailure('step_conflict', 'CreateTaskPlan 必须作为本步骤唯一的计划变更。')
     }
-    if (this.activePlan) {
-      return { ok: false, message: '已有未结束的任务计划；请先完成或放弃当前计划。' }
+    if (this.state.activePlan) {
+      return mutationFailure('active_plan_exists', '已有未结束的任务计划；请先完成或放弃当前计划。')
     }
     const next = this.buildPlan(goal, drafts)
-    if ('error' in next) return { ok: false, message: next.error }
-    this.activePlan = next.plan
+    if ('error' in next) return mutationFailure('invalid_plan', next.error)
+    this.state.activePlan = next.plan
+    this.state.resumeRequired = false
+    this.state.interruptionReason = null
     this.stepBoundary = 'create'
-    this.publish(this.activePlan)
+    this.publish(next.plan)
     return {
       ok: true,
       message: `已建立任务计划，共 ${next.plan.items.length} 项；当前执行 ${next.plan.items[0]!.id}。`,
@@ -110,26 +141,42 @@ export class TaskPlanController {
   }
 
   replace(
+    expectedPlanId: string,
+    replacementAuthorized: boolean,
     goal: string,
     drafts: TaskPlanDraftItem[],
     reason: string,
   ): TaskMutationResult {
     if (this.stepDirty) {
-      return { ok: false, message: 'ReplaceTaskPlan 必须作为本步骤唯一的计划变更。' }
+      return mutationFailure('step_conflict', 'ReplaceTaskPlan 必须作为本步骤唯一的计划变更。')
     }
-    const previous = this.activePlan
-    if (!previous) return { ok: false, message: '当前没有可替换的活动任务计划。' }
+    const previous = this.state.activePlan
+    if (!previous) return mutationFailure('no_active_plan', '当前没有可替换的活动任务计划。')
+    if (previous.id !== expectedPlanId) {
+      return mutationFailure('plan_id_mismatch', '活动计划已变化，请读取最新任务状态后重新判断。')
+    }
+    if (!replacementAuthorized) {
+      return mutationFailure(
+        'active_plan_conflict',
+        `当前仍有活动计划“${previous.goal}”；请先确认用户是否授权覆盖。`,
+      )
+    }
+    const normalizedReason = reason.trim()
+    if (!normalizedReason) return mutationFailure('invalid_plan', '替换原因不能为空。')
     const next = this.buildPlan(goal, drafts)
-    if ('error' in next) return { ok: false, message: next.error }
+    if ('error' in next) return mutationFailure('invalid_plan', next.error)
     const archived = supersededTaskPlanSchema.parse({
       ...previous,
       status: 'superseded',
       revision: previous.revision + 1,
-      summary: reason.trim(),
+      summary: normalizedReason,
       replacedByPlanId: next.plan.id,
     })
-    this.activePlan = next.plan
-    this.stepDirty = true
+    this.state.activePlan = next.plan
+    this.state.historicalPlans.push(this.toHistoricalSummary(archived))
+    this.state.resumeRequired = false
+    this.state.interruptionReason = null
+    this.markDirty()
     this.stepBoundary = 'replace'
     this.pendingDisplayUpdate = {
       kind: 'replaced',
@@ -145,19 +192,25 @@ export class TaskPlanController {
 
   addItem(draft: TaskPlanDraftItem): TaskMutationResult {
     if (this.stepBoundary) {
-      return { ok: false, message: '计划身份刚刚变化；请在下一模型步骤再修改任务项。' }
+      return mutationFailure('step_conflict', '计划身份刚刚变化；请在下一模型步骤再修改任务项。')
     }
-    const plan = this.activePlan
-    if (!plan) return { ok: false, message: '当前没有活动任务计划。' }
+    const plan = this.state.activePlan
+    if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
+    if (this.state.resumeRequired) return this.resumeRequiredError()
     if (draft.kind === 'verification') {
-      return { ok: false, message: '计划已经有验证步骤，不能重复添加。' }
+      return mutationFailure('invalid_plan', '计划已经有验证步骤，不能重复添加。')
+    }
+    const title = draft.title.trim()
+    const acceptance = draft.acceptance.trim()
+    if (!title || !acceptance) {
+      return mutationFailure('invalid_plan', '任务项标题和验收标准不能为空。')
     }
     const nextNumber = Math.max(...plan.items.map((item) => Number(item.id.slice(1)))) + 1
     const item: TaskItem = {
       id: `T${nextNumber}`,
       kind: 'work',
-      title: draft.title.trim(),
-      acceptance: draft.acceptance.trim(),
+      title,
+      acceptance,
       status: plan.items.some((entry) => entry.status === 'in_progress') ? 'pending' : 'in_progress',
       evidence: [],
     }
@@ -175,39 +228,68 @@ export class TaskPlanController {
     blockedReason?: string,
   ): TaskMutationResult {
     if (this.stepBoundary) {
-      return { ok: false, message: '计划身份刚刚变化；请在下一模型步骤再更新任务项。' }
+      return mutationFailure('step_conflict', '计划身份刚刚变化；请在下一模型步骤再更新任务项。')
     }
-    const plan = this.activePlan
-    if (!plan) return { ok: false, message: '当前没有活动任务计划。' }
+    const plan = this.state.activePlan
+    if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
+    if (this.state.resumeRequired) return this.resumeRequiredError()
     const item = plan.items.find((entry) => entry.id === itemId)
-    if (!item) return { ok: false, message: `任务项不存在：${itemId}` }
+    if (!item) return mutationFailure('item_not_found', `任务项不存在：${itemId}`)
     if (item.status === 'completed') {
-      return { ok: false, message: `${itemId} 已完成；已确认的完成项不能静默重开。` }
+      return mutationFailure(
+        'invalid_transition',
+        `${itemId} 已完成；已确认的完成项不能静默重开。`,
+      )
     }
+    const normalizedEvidence = evidence.map((entry) => entry.trim()).filter(Boolean)
     if (status === 'in_progress') {
+      if (item.status === 'in_progress') {
+        return mutationFailure(
+          'no_state_change',
+          `${itemId} 已在进行中；请继续工作，不要用空更新制造进度。`,
+        )
+      }
       const running = plan.items.find(
         (entry) => entry.status === 'in_progress' && entry.id !== itemId,
       )
       if (running) {
-        return { ok: false, message: `同一时间只能执行一项；请先处理 ${running.id}。` }
+        return mutationFailure(
+          'invalid_transition',
+          `同一时间只能执行一项；请先处理 ${running.id}。`,
+        )
       }
       item.status = 'in_progress'
       item.blockedReason = undefined
     } else if (status === 'completed') {
-      if (evidence.length === 0) {
-        return { ok: false, message: `完成 ${itemId} 必须提供可核验的 evidence。` }
+      if (normalizedEvidence.length === 0) {
+        return mutationFailure(
+          'evidence_required',
+          `完成 ${itemId} 必须提供可核验的 evidence。`,
+        )
       }
       item.status = 'completed'
-      item.evidence = [...evidence]
+      item.evidence = normalizedEvidence
       item.blockedReason = undefined
       this.startNextPending(plan.items)
     } else {
       if (!blockedReason?.trim()) {
-        return { ok: false, message: `阻塞 ${itemId} 必须说明 blocked_reason。` }
+        return mutationFailure(
+          'blocked_reason_required',
+          `阻塞 ${itemId} 必须说明 blocked_reason。`,
+        )
+      }
+      const normalizedReason = blockedReason.trim()
+      if (
+        item.status === 'blocked'
+        && item.blockedReason === normalizedReason
+        && item.evidence.length === normalizedEvidence.length
+        && item.evidence.every((entry, index) => entry === normalizedEvidence[index])
+      ) {
+        return mutationFailure('no_state_change', `${itemId} 的阻塞状态没有实质变化。`)
       }
       item.status = 'blocked'
-      item.blockedReason = blockedReason.trim()
-      item.evidence = [...evidence]
+      item.blockedReason = normalizedReason
+      item.evidence = normalizedEvidence
       this.startNextPending(plan.items)
     }
     plan.revision++
@@ -217,20 +299,29 @@ export class TaskPlanController {
 
   close(outcome: 'completed' | 'abandoned', summary: string): TaskMutationResult {
     if (this.stepBoundary) {
-      return { ok: false, message: '计划身份刚刚变化；请在下一模型步骤再关闭计划。' }
+      return mutationFailure('step_conflict', '计划身份刚刚变化；请在下一模型步骤再关闭计划。')
     }
-    const plan = this.activePlan
-    if (!plan) return { ok: false, message: '当前没有活动任务计划。' }
+    const plan = this.state.activePlan
+    if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
     if (outcome === 'completed' && plan.items.some((item) => item.status !== 'completed')) {
-      return { ok: false, message: '仍有未完成或阻塞的任务项，不能把整个计划标记为完成。' }
+      return mutationFailure(
+        'incomplete_plan',
+        '仍有未完成或阻塞的任务项，不能把整个计划标记为完成。',
+      )
     }
+    const normalizedSummary = summary.trim()
+    if (!normalizedSummary) return mutationFailure('invalid_plan', '计划总结不能为空。')
     const closed = taskPlanSchema.parse({
       ...plan,
       status: outcome,
       revision: plan.revision + 1,
-      summary: summary.trim(),
+      summary: normalizedSummary,
     })
-    this.activePlan = null
+    if (closed.status === 'active') throw new Error('关闭计划产生了无效活动状态')
+    this.state.activePlan = null
+    this.state.historicalPlans.push(this.toHistoricalSummary(closed))
+    this.state.resumeRequired = false
+    this.state.interruptionReason = null
     this.publish(closed)
     return {
       ok: true,
@@ -238,45 +329,35 @@ export class TaskPlanController {
     }
   }
 
-  contextSection(mode: TaskPlanContextMode): string | null {
-    const plan = this.activePlan
-    if (!plan) return null
-    if (mode !== 'engaged') {
-      const completed = plan.items.filter((item) => item.status === 'completed').length
-      const state = mode === 'blocked' ? '刚刚中止' : '休眠'
-      return [
-        '# 未结束任务的只读参考',
-        `计划 ID：${plan.id}`,
-        `旧任务主题：${plan.goal}`,
-        `保存进度：${completed}/${plan.items.length}；状态：${state}`,
-        '这是动态保存状态，不是用户消息，也不自动成为本轮待办。最新真实用户消息是当前唯一指令；请依据完整语义自行判断它与旧任务是否相关，不要匹配特定词句。',
-        '若用户明确要求继续、恢复、调整或结束旧任务，直接单独调用 ResumeTaskPlan 并传入上述计划 ID，不要再次确认；工具稳定提交后的下一模型步骤才会提供完整计划。若用户只要求继续保持暂停，说明计划已经休眠即可。',
-        '若用户只是在询问状态、讨论方案、提出无关请求或独立的一步操作，正常处理当前请求并让旧计划保持休眠；普通工具可按当前请求正常使用。',
-        '若用户要开始一个独立的新复杂任务，在任何新任务写入或命令前调用 ReplaceTaskPlan；只有覆盖意图不明确时才先用 AskUserQuestion 询问，用户已明确授权时不要重复确认。',
-      ].join('\n')
+  resume(planId: string): TaskMutationResult {
+    const plan = this.state.activePlan
+    if (!plan) return mutationFailure('no_active_plan', '当前没有未结束的任务计划。')
+    if (plan.id !== planId) {
+      return mutationFailure('plan_id_mismatch', '计划 ID 已变化，请读取最新任务状态。')
     }
-    const lines = [
-      '# 当前未结束任务计划（背景状态）',
-      '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户消息。最新真实用户消息始终优先。',
-      '本轮已通过 CreateTaskPlan、ReplaceTaskPlan、ResumeTaskPlan 或结构化问题卡回答取得计划执行权；按最新用户意图继续、调整、暂停或结束计划，并先确认中断后实际状态。',
-      `计划 ID：${plan.id}`,
-      `计划目标：${plan.goal}`,
-      `计划版本：${plan.revision}`,
-      ...plan.items.map((item) => {
-        const detail = item.status === 'blocked'
-          ? `；阻塞原因：${item.blockedReason}`
-          : item.evidence.length > 0
-            ? `；证据：${item.evidence.join('；')}`
-            : ''
-        return `- ${item.id} [${item.status}] ${item.title}；完成标准：${item.acceptance}${detail}`
-      }),
-      '围绕唯一 in_progress 项工作；完成时用 UpdateTaskItem 写入证据，所有项完成后调用 CloseTaskPlan。',
-    ]
-    return lines.join('\n')
+    if (this.state.resumeRequired) {
+      this.state.resumeRequired = false
+      this.state.interruptionReason = null
+      this.publish(plan)
+    }
+    return { ok: true, message: '当前执行已接合活动计划。' }
+  }
+
+  interrupt(
+    reason: NonNullable<TaskPlanState['interruptionReason']>,
+  ): TaskPlanState | null {
+    if (!this.state.activePlan) return null
+    if (this.state.resumeRequired && this.state.interruptionReason === reason) return null
+    this.state = interruptTaskPlanState(this.state, reason)
+    return this.stateSnapshot
+  }
+
+  hasUnfinishedWork(): boolean {
+    return Boolean(this.state.activePlan?.items.some((item) => item.status !== 'completed'))
   }
 
   naturalStopDecision(): NaturalStopDecision {
-    const plan = this.activePlan
+    const plan = this.state.activePlan
     if (!plan) return { kind: 'allow' }
     if (plan.items.every((item) => item.status === 'completed')) {
       return {
@@ -295,10 +376,35 @@ export class TaskPlanController {
   }
 
   private publish(plan: TaskPlan): void {
-    this.stepDirty = true
+    this.markDirty()
     this.pendingDisplayUpdate = {
       kind: 'updated',
       plan: taskPlanSchema.parse(structuredClone(plan)),
+    }
+  }
+
+  private markDirty(): void {
+    this.state.version++
+    this.stepDirty = true
+  }
+
+  private resumeRequiredError(): TaskMutationResult {
+    return mutationFailure(
+      'resume_required',
+      '任务执行已被中断；请先调用 ResumeTaskPlan，或按用户明确意图替换/结束计划。',
+    )
+  }
+
+  private toHistoricalSummary(plan: TaskPlan): HistoricalTaskPlanSummary {
+    if (plan.status === 'active') throw new Error('活动计划不能写入历史目录')
+    return {
+      id: plan.id,
+      goal: plan.goal,
+      status: plan.status,
+      summary: plan.summary,
+      completedItems: plan.items.filter((item) => item.status === 'completed').length,
+      totalItems: plan.items.length,
+      revision: plan.revision,
     }
   }
 
@@ -306,24 +412,34 @@ export class TaskPlanController {
     goal: string,
     drafts: TaskPlanDraftItem[],
   ): { plan: ActiveTaskPlan } | { error: string } {
+    const normalizedGoal = goal.trim()
+    if (!normalizedGoal) return { error: '计划目标不能为空。' }
     if (drafts.at(-1)?.kind !== 'verification') {
       return { error: '计划最后一项必须是 verification 验证步骤。' }
     }
     if (drafts.filter((item) => item.kind === 'verification').length !== 1) {
       return { error: '一个计划必须且只能包含一个 verification 验证步骤。' }
     }
-    const items: TaskItem[] = drafts.map((draft, index) => ({
-      id: `T${index + 1}`,
-      kind: draft.kind,
+    const normalizedDrafts = drafts.map((draft) => ({
+      ...draft,
       title: draft.title.trim(),
       acceptance: draft.acceptance.trim(),
+    }))
+    if (normalizedDrafts.some((draft) => !draft.title || !draft.acceptance)) {
+      return { error: '任务项标题和验收标准不能为空。' }
+    }
+    const items: TaskItem[] = normalizedDrafts.map((draft, index) => ({
+      id: `T${index + 1}`,
+      kind: draft.kind,
+      title: draft.title,
+      acceptance: draft.acceptance,
       status: index === 0 ? 'in_progress' : 'pending',
       evidence: [],
     }))
     return {
       plan: activeTaskPlanSchema.parse({
         id: crypto.randomUUID(),
-        goal: goal.trim(),
+        goal: normalizedGoal,
         status: 'active',
         items,
         revision: 1,

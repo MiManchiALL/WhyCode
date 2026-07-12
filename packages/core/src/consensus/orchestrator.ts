@@ -179,7 +179,7 @@ export class ConsensusCoordinator {
       ...startMessages,
       { role: 'user' as const, content: userText },
     ]
-    const startTaskPlan = mainSession.captureTaskPlanSnapshot()
+    const startTaskState = mainSession.captureTaskStateSnapshot()
     let outcome: ConsensusTaskOutcome = 'error'
     let taskBoundaryStarted = false
     let taskPlanRolledBack = false
@@ -308,13 +308,15 @@ export class ConsensusCoordinator {
           ),
         ]
         mainSession.restoreMessageSnapshot(rollbackMessages)
-        mainSession.restoreTaskPlanSnapshot(startTaskPlan)
+        if (startTaskState) mainSession.restoreTaskStateSnapshot(startTaskState)
         taskPlanRolledBack = true
       }
       if (taskBoundaryStarted) {
         await this.persistTaskEnd(taskId, outcome, this.snapshotState())
       }
-      if (taskPlanRolledBack) emit({ type: 'task-plan-restored', plan: startTaskPlan })
+      if (taskPlanRolledBack) {
+        emit({ type: 'task-plan-restored', plan: startTaskState?.activePlan ?? null })
+      }
       this.restoreExecution()
       mainSession.setUserQuestionsEnabled(true)
       mainSession.setTerminalStatusManaged(false)

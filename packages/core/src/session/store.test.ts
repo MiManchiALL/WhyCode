@@ -10,7 +10,11 @@ import {
   createUserQuestionMarker,
   hasPendingUserQuestion,
 } from '../tasks/answer-resume.ts'
-import { activeTaskPlanSchema, type ActiveTaskPlan } from '../tasks/types.ts'
+import {
+  activeTaskPlanSchema,
+  type ActiveTaskPlan,
+  type TaskPlanState,
+} from '../tasks/types.ts'
 import { buildLoadedSession, parseTranscript, SessionCorruptError } from './chain.ts'
 import { createTurnAbortedMessage, isTurnAbortedMessage } from './interruption.ts'
 import { SessionStore } from './store.ts'
@@ -146,6 +150,7 @@ describe('SessionStore', () => {
       parentUuid: input.uuid,
       timestamp: new Date().toISOString(),
       turnId: 'answer-partial-turn',
+      engagedPlanId: null,
     })
     await appendFile(
       transcript,
@@ -166,6 +171,47 @@ describe('SessionStore', () => {
     assert.equal(recovered.undeliveredUserInputIds.length, 0)
     assert.equal(countMessage(recovered.initialMessages, message('user', answer)), 1)
     assert.equal(recovered.initialMessages.filter(isTurnAbortedMessage).length, 1)
+  })
+
+  it('稳定 step 的消息、engagement 与 TaskPlanState 只以单条记录原子恢复', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const initialState = state(taskPlan(1))
+    await journal.recordTurnStart('seed-plan', [message('user', '建立计划')])
+    await journal.recordStep('seed-plan', [message('assistant', '计划已建立')], initialState)
+    await journal.recordTurnEnd('seed-plan', 'paused')
+
+    await journal.recordTurnStart('crashed-step', [message('user', '继续计划')])
+    const advancedState = state(taskPlan(2))
+    await journal.recordStep(
+      'crashed-step',
+      [message('assistant', '本步已完成 T1')],
+      advancedState,
+      advancedState.activePlan!.id,
+    )
+    const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
+    const lines = (await readFile(transcript, 'utf8')).trimEnd().split('\n')
+    const committedStep = lines.pop()!
+    const parsedStep = JSON.parse(committedStep) as Record<string, unknown>
+    assert.equal(parsedStep.type, 'messages')
+    assert.ok(parsedStep.taskState)
+    assert.equal(parsedStep.engagedPlanId, advancedState.activePlan!.id)
+    await writeFile(
+      transcript,
+      `${lines.join('\n')}\n${committedStep.slice(0, Math.floor(committedStep.length / 2))}`,
+      'utf8',
+    )
+
+    const recovered = await store.open(journal.sessionId)
+    assert.deepEqual(recovered.initialTaskState, initialState)
+    assert.equal(
+      recovered.initialMessages.some((entry) =>
+        entry.role === 'assistant' && entry.content === '本步已完成 T1'),
+      false,
+    )
+    await recovered.recoverInterruptedWork()
+    const restarted = await store.open(journal.sessionId)
+    assert.deepEqual(restarted.initialTaskState, initialState)
   })
 
   it('完整回答 messages 落盘后只保留一份回答，旧问题卡保持关闭', async () => {
@@ -352,6 +398,39 @@ describe('SessionStore', () => {
     assert.equal(restartedAgain.metadataSnapshot.status, 'idle')
   })
 
+  it('进程恢复只阻塞被中断的 engaged 计划，不误伤 dormant 计划', async () => {
+    const dormantStore = await createStore()
+    const dormantJournal = await dormantStore.create({ projectDir: null, modelId: 'test:model' })
+    const plan = taskPlan(1)
+    const savedState = state(plan)
+    await dormantJournal.recordTurnStart('seed-dormant', [message('user', '建立计划')])
+    await dormantJournal.recordStep('seed-dormant', [message('assistant', '计划已建立')], savedState)
+    await dormantJournal.recordTurnEnd('seed-dormant', 'paused')
+    await dormantJournal.recordTurnStart('dormant-question', [message('user', 'TTL 是什么')])
+
+    const dormantCrash = await dormantStore.open(dormantJournal.sessionId)
+    await dormantCrash.recoverInterruptedWork()
+    const dormantRecovered = await dormantStore.open(dormantJournal.sessionId)
+    assert.deepEqual(dormantRecovered.initialTaskState, savedState)
+
+    const engagedStore = await createStore()
+    const engagedJournal = await engagedStore.create({ projectDir: null, modelId: 'test:model' })
+    await engagedJournal.recordTurnStart('seed-engaged', [message('user', '建立计划')])
+    await engagedJournal.recordStep('seed-engaged', [message('assistant', '计划已建立')], savedState)
+    await engagedJournal.recordTurnEnd('seed-engaged', 'paused')
+    await engagedJournal.recordTurnStart(
+      'engaged-work',
+      [message('user', '继续计划')],
+      plan.id,
+    )
+
+    const engagedCrash = await engagedStore.open(engagedJournal.sessionId)
+    await engagedCrash.recoverInterruptedWork()
+    const engagedRecovered = await engagedStore.open(engagedJournal.sessionId)
+    assert.equal(engagedRecovered.initialTaskState.resumeRequired, true)
+    assert.equal(engagedRecovered.initialTaskState.interruptionReason, 'process-interruption')
+  })
+
   it('连续中断恢复时总是在最新半截回合之后建立新边界', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
@@ -514,31 +593,96 @@ describe('SessionStore', () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     const plan = taskPlan(1)
+    const currentState = state(plan)
     await journal.recordTurnStart('turn-1', [message('user', '开始长任务')])
-    await journal.recordStep('turn-1', [message('assistant', '已建立计划')], plan)
+    await journal.recordStep('turn-1', [message('assistant', '已建立计划')], currentState)
     await journal.recordTurnEnd('turn-1', 'paused')
     await journal.recordTurnStart('turn-2', [message('user', '继续')])
     await journal.recordTurnEnd('turn-2', 'completed')
 
     const reopened = await store.open(journal.sessionId)
-    assert.deepEqual(reopened.initialTaskPlan, plan)
-    assert.equal(reopened.taskPlanBeforeTurn('turn-1'), null)
-    assert.deepEqual(reopened.taskPlanBeforeTurn('turn-2'), plan)
+    assert.deepEqual(reopened.initialTaskState, currentState)
+    assert.deepEqual(reopened.taskStateBeforeTurn('turn-1'), state(null))
+    assert.deepEqual(reopened.taskStateBeforeTurn('turn-2'), currentState)
     assert.equal(reopened.metadataSnapshot.status, 'idle')
+  })
+
+  it('重启时用权威 TaskPlanState 修复计划卡的窄崩溃窗口', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const plan = taskPlan(1)
+    const activeState = state(plan)
+    await journal.recordTurnStart('create-plan', [message('user', '建立计划')])
+    await journal.recordStep('create-plan', [message('assistant', '计划已建立')], activeState)
+    await journal.recordTurnEnd('create-plan', 'paused')
+
+    const recoveredCreate = await store.open(journal.sessionId)
+    const restoredActive = recoveredCreate.initialViewEvents.findLast((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-restored')
+    assert.equal(
+      restoredActive?.type === 'core-event'
+      && restoredActive.event.type === 'task-plan-restored'
+      && restoredActive.event.plan?.id,
+      plan.id,
+    )
+
+    await recoveredCreate.recordViewEvents([{ type: 'core-event', event: {
+      type: 'task-plan-updated',
+      plan,
+    } }])
+    await recoveredCreate.recordTurnStart('close-plan', [message('user', '放弃计划')])
+    await recoveredCreate.recordStep(
+      'close-plan',
+      [message('assistant', '计划已放弃')],
+      state(null, 2, {
+        historicalPlans: [{
+          id: plan.id,
+          goal: plan.goal,
+          status: 'abandoned',
+          summary: '用户明确放弃',
+          completedItems: 0,
+          totalItems: plan.items.length,
+          revision: 2,
+        }],
+      }),
+    )
+    await recoveredCreate.recordTurnEnd('close-plan', 'completed')
+
+    const recoveredClose = await store.open(journal.sessionId)
+    const restoredNull = recoveredClose.initialViewEvents.findLast((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-restored')
+    assert.equal(
+      restoredNull?.type === 'core-event'
+      && restoredNull.event.type === 'task-plan-restored'
+      && restoredNull.event.plan,
+      null,
+    )
   })
 
   it('重启后恢复替换后的活动计划，并保留被替代计划的完整历史事件', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     const previous = taskPlan(1)
+    const previousState = state(previous)
     await journal.recordTurnStart('old-task', [message('user', '开发蔚蓝')])
-    await journal.recordStep('old-task', [message('assistant', '建立旧计划')], previous)
+    await journal.recordStep('old-task', [message('assistant', '建立旧计划')], previousState)
     await journal.recordTurnEnd('old-task', 'paused')
 
     const next = activeTaskPlanSchema.parse({
       ...taskPlan(1),
       id: '22222222-2222-4222-8222-222222222222',
       goal: '开发 CSGO',
+    })
+    const nextState = state(next, 2, {
+      historicalPlans: [{
+        id: previous.id,
+        goal: previous.goal,
+        status: 'superseded',
+        summary: '用户明确切换游戏',
+        completedItems: 0,
+        totalItems: previous.items.length,
+        revision: previous.revision + 1,
+      }],
     })
     await journal.recordTurnStart('replacement', [message('user', '改做 CSGO')])
     await journal.recordViewEvents([{ type: 'core-event', event: {
@@ -551,11 +695,11 @@ describe('SessionStore', () => {
       },
       plan: next,
     } }])
-    await journal.recordStep('replacement', [message('assistant', '已替换计划')], next)
+    await journal.recordStep('replacement', [message('assistant', '已替换计划')], nextState)
     await journal.recordTurnEnd('replacement', 'paused')
 
     const reopened = await store.open(journal.sessionId)
-    assert.deepEqual(reopened.initialTaskPlan, next)
+    assert.deepEqual(reopened.initialTaskState, nextState)
     const replacement = reopened.initialViewEvents.find((entry) =>
       entry.type === 'core-event' && entry.event.type === 'task-plan-replaced')
     assert.equal(
@@ -566,49 +710,65 @@ describe('SessionStore', () => {
     )
   })
 
-  it('压缩保留活动计划，对话回滚恢复 turn 起点计划', async () => {
+  it('压缩和对话回滚跨重启保留完整任务状态', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     const plan = taskPlan(1)
+    const savedState = state(plan, 7, {
+      historicalPlans: [{
+        id: '33333333-3333-4333-8333-333333333333',
+        goal: '已完成的历史任务',
+        status: 'completed',
+        summary: '历史任务已验证交付',
+        completedItems: 2,
+        totalItems: 2,
+        revision: 3,
+      }],
+      resumeRequired: true,
+      interruptionReason: 'user-cancel',
+    })
     await journal.recordTurnStart('turn-1', [message('user', '开始')])
-    await journal.recordStep('turn-1', [message('assistant', '计划中')], plan)
+    await journal.recordStep('turn-1', [message('assistant', '计划中')], savedState)
     await journal.recordTurnEnd('turn-1', 'paused')
     await journal.recordSnapshot('compact', [message('user', '摘要')])
 
     let reopened = await store.open(journal.sessionId)
-    assert.deepEqual(reopened.initialTaskPlan, plan)
+    assert.deepEqual(reopened.initialTaskState, savedState)
 
     await reopened.recordTurnStart('turn-2', [message('user', '新一轮')])
-    const changed = taskPlan(2)
-    await reopened.recordStep('turn-2', [message('assistant', '推进')], changed)
+    const changedState = state(taskPlan(2), 8, {
+      historicalPlans: savedState.historicalPlans,
+    })
+    await reopened.recordStep('turn-2', [message('assistant', '推进')], changedState)
     await reopened.recordTurnEnd('turn-2', 'completed')
-    const beforeTurn = reopened.taskPlanBeforeTurn('turn-2')
-    assert.deepEqual(beforeTurn, plan)
+    const beforeTurn = reopened.taskStateBeforeTurn('turn-2')
+    assert.deepEqual(beforeTurn, savedState)
     await reopened.recordSnapshot('rollback', [message('user', '摘要')], undefined, beforeTurn)
 
     reopened = await store.open(journal.sessionId)
-    assert.deepEqual(reopened.initialTaskPlan, plan)
+    assert.deepEqual(reopened.initialTaskState, savedState)
   })
 
   it('半截共识恢复和取消都会回到任务起点的计划状态', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     const base = taskPlan(1)
+    const baseState = state(base)
     await journal.recordTurnStart('base', [message('user', '已有任务')])
-    await journal.recordStep('base', [message('assistant', '已有计划')], base)
+    await journal.recordStep('base', [message('assistant', '已有计划')], baseState)
     await journal.recordTurnEnd('base', 'paused')
     await journal.recordUserInput('执行新方案', true)
     await journal.recordConsensusTaskStart('task-1', consensusState(1), '执行新方案')
     await journal.recordTurnStart('execution', [message('user', '执行新方案')])
-    await journal.recordStep('execution', [message('assistant', '推进中')], taskPlan(2))
+    await journal.recordStep('execution', [message('assistant', '推进中')], state(taskPlan(2)))
 
     const interrupted = await store.open(journal.sessionId)
-    assert.deepEqual(interrupted.initialTaskPlan, base)
+    assert.deepEqual(interrupted.initialTaskState, baseState)
 
     await journal.recordTurnEnd('execution', 'aborted')
     await journal.recordConsensusTaskEnd('task-1', 'aborted', consensusState(1))
     const cancelled = await store.open(journal.sessionId)
-    assert.deepEqual(cancelled.initialTaskPlan, base)
+    assert.deepEqual(cancelled.initialTaskState, baseState)
   })
 
   it('快照保留活动共识边界和最后稳定状态', async () => {
@@ -673,7 +833,7 @@ describe('SessionStore', () => {
 
     assert.deepEqual(journal.messagesBeforeTurn('base'), [])
     assert.equal(journal.messagesBeforeTurn('m1'), null)
-    assert.equal(journal.taskPlanBeforeTurn('m1'), undefined)
+    assert.equal(journal.taskStateBeforeTurn('m1'), undefined)
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.metadataSnapshot.status, 'idle')
@@ -683,7 +843,7 @@ describe('SessionStore', () => {
     ])
     assert.equal(isTurnAbortedMessage(reopened.initialMessages.at(-1)!), true)
     assert.equal(reopened.messagesBeforeTurn('m1'), null)
-    assert.equal(reopened.taskPlanBeforeTurn('m1'), undefined)
+    assert.equal(reopened.taskStateBeforeTurn('m1'), undefined)
   })
 
   it('metadata 损坏时从 transcript 重建会话列表', async () => {
@@ -802,4 +962,22 @@ function taskPlan(revision: number): ActiveTaskPlan {
       },
     ],
   })
+}
+
+function state(
+  activePlan: ActiveTaskPlan | null,
+  version = activePlan?.revision ?? 0,
+  overrides: Partial<Pick<
+    TaskPlanState,
+    'historicalPlans' | 'resumeRequired' | 'interruptionReason'
+  >> = {},
+): TaskPlanState {
+  return {
+    version,
+    activePlan,
+    historicalPlans: [],
+    resumeRequired: false,
+    interruptionReason: null,
+    ...overrides,
+  }
 }

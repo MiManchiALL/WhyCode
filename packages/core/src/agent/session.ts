@@ -15,13 +15,11 @@ import {
   createTurnAbortedConsumedMessage,
   createTurnAbortedMessage,
   findPendingTurnAbortedIndex,
-  interruptedTurnMessageView,
-  interruptedUserReference,
 } from '../session/interruption.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
-import { TaskPlanController, type TaskPlanContextMode } from '../tasks/controller.ts'
+import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import {
   MODEL_INACTIVITY_ABORT_REASON,
@@ -31,9 +29,13 @@ import {
 import {
   createTaskPlanTools,
   type TaskPlanEngagementAction,
-  type TaskPlanToolMode,
 } from '../tasks/tools.ts'
-import type { ActiveTaskPlan } from '../tasks/types.ts'
+import type { TaskPlanState } from '../tasks/types.ts'
+import {
+  createTaskContextMessage,
+  createTaskExecutionBoundaryMessage,
+  taskContextBlock,
+} from '../tasks/context.ts'
 import {
   createUserQuestionMarker,
   findPendingUserQuestion,
@@ -49,6 +51,7 @@ import {
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
 const TASK_STOP_REMINDER_LIMIT = 2
+const TASK_PROGRESS_REMINDER_STEPS = 10
 const MAX_COMPACT_FAILURES = 3
 
 export interface AgentSessionOptions {
@@ -94,6 +97,7 @@ interface QueuedMessage {
 }
 
 interface StepResult {
+  committed: boolean
   hadToolCalls: boolean
   toolEndReason: 'completed' | 'waiting-user' | null
   taskPlanChanged: boolean
@@ -158,7 +162,7 @@ export class AgentSession {
     )
     if (!options.promptContext.discussion) {
       this.taskPlan = new TaskPlanController(
-        options.sessionRecorder?.initialTaskPlan ?? null,
+        options.sessionRecorder?.initialTaskState,
       )
     }
     // 讨论阶段的会话不做检查点（不写项目，无需快照）
@@ -247,13 +251,13 @@ export class AgentSession {
     this.tokenBaseline = null
   }
 
-  captureTaskPlanSnapshot(): ActiveTaskPlan | null {
-    return this.taskPlan?.snapshot ?? null
+  captureTaskStateSnapshot(): TaskPlanState | null {
+    return this.taskPlan?.stateSnapshot ?? null
   }
 
-  restoreTaskPlanSnapshot(plan: ActiveTaskPlan | null): void {
+  restoreTaskStateSnapshot(state: TaskPlanState): void {
     if (this.isBusy) throw new Error('Agent 工作中，不能恢复任务计划')
-    this.taskPlan?.restore(plan)
+    this.taskPlan?.restore(state)
   }
 
   /**
@@ -370,10 +374,33 @@ export class AgentSession {
     this.abortRequestedDuringFinalization = false
     const turnId = crypto.randomUUID()
     const pendingUserQuestion = findPendingUserQuestion(this.messages)
+    const answersPendingUserQuestion = pendingUserQuestion !== null
+      && initialMessages.some((message) =>
+        message.role === 'user'
+        && isUserQuestionAnswer(pendingUserQuestion, modelMessageText(message)))
+    const resumesUserQuestion = answersPendingUserQuestion
+      && pendingUserQuestion.resumesTaskPlan
+    let planExecutionEngaged = resumesUserQuestion
+      && Boolean(this.taskPlan?.snapshot)
+      && !this.taskPlan?.stateSnapshot.resumeRequired
+    const initialContext = this.taskPlan?.snapshot && !planExecutionEngaged
+      ? [
+          createTaskExecutionBoundaryMessage(
+            this.taskPlan.stateSnapshot.resumeRequired ? 'blocked' : 'dormant',
+          ),
+          ...initialMessages,
+        ]
+      : initialMessages
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
     this.activeTurn = { id: turnId }
-    this.messages.push(...initialMessages)
-    await this.persist((recorder) => recorder.recordTurnStart(turnId, initialMessages))
+    this.messages.push(...initialContext)
+    await this.persist((recorder) =>
+      recorder.recordTurnStart(
+        turnId,
+        initialContext,
+        planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
+      ),
+    )
 
     emit({ type: 'turn-start', turnId })
     emit({ type: 'agent-status', status: 'working' })
@@ -386,58 +413,62 @@ export class AgentSession {
     this.loopHealth = new LoopHealthMonitor()
     const usage: UsageInfo = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }
     const interruptedBoundaryPending = findPendingTurnAbortedIndex(this.messages) !== null
-    const answersPendingUserQuestion = pendingUserQuestion !== null
-      && initialMessages.some((message) =>
-        message.role === 'user'
-        && isUserQuestionAnswer(pendingUserQuestion, modelMessageText(message)))
-    const resumesUserQuestion = answersPendingUserQuestion
-      && pendingUserQuestion.resumesTaskPlan
-    let planExecutionEngaged = resumesUserQuestion && Boolean(this.taskPlan?.snapshot)
 
     try {
       let steps = 0
       let finishedNaturally = false
       let taskStopReminders = 0
       let interruptionBoundaryConsumed = false
+      let steeringDecisionPending = false
+      let stepsSincePlanMutation = 0
+      let stepsSincePlanReminder = 0
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
       // 只有稳定提交 Create/Replace/Resume，或回答计划自身的问题卡，才启用未完成保护。
       while (maxSteps === null || steps < maxSteps) {
+        if (
+          planExecutionEngaged
+          && this.taskPlan?.hasUnfinishedWork()
+          && stepsSincePlanMutation >= TASK_PROGRESS_REMINDER_STEPS
+          && stepsSincePlanReminder >= TASK_PROGRESS_REMINDER_STEPS
+        ) {
+          await this.injectTaskProgressReminder()
+          stepsSincePlanReminder = 0
+        }
         steps++
         if (maxSteps !== null && steps === maxSteps - FINALIZATION_RESERVE_STEPS) {
           await this.injectStepLimitReminder()
         }
-        await this.compactIfNeeded(abortSignal)
-        const contextMode: TaskPlanContextMode = planExecutionEngaged
-          ? 'engaged'
-          : interruptedBoundaryPending && !interruptionBoundaryConsumed
-            ? 'blocked'
-            : 'dormant'
+        await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
         const step = await this.runOneStep(
           usage,
           abortSignal,
-          contextMode,
           planExecutionEngaged,
           interruptedBoundaryPending
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
             && !this.protocolRound,
         )
+        const steeringMayEndRun = steeringDecisionPending && !step.hadToolCalls
+        steeringDecisionPending = false
         if (step.interruptionBoundaryConsumed) interruptionBoundaryConsumed = true
         if (step.taskPlanChanged) {
           planExecutionEngaged = Boolean(this.taskPlan?.snapshot)
           taskStopReminders = 0
+          stepsSincePlanMutation = 0
+          stepsSincePlanReminder = 0
+        } else if (step.committed && planExecutionEngaged) {
+          stepsSincePlanMutation++
+          stepsSincePlanReminder++
         }
         const engagement = step.taskPlanEngagement
         if (engagement && engagement.planId === this.taskPlan?.snapshot?.id) {
-          if (engagement.type === 'resume') {
-            planExecutionEngaged = true
-            taskStopReminders = 0
-          } else {
-            planExecutionEngaged = false
-          }
+          planExecutionEngaged = true
+          taskStopReminders = 0
+          stepsSincePlanMutation = 0
+          stepsSincePlanReminder = 0
         }
         const naturalDecision = !step.hadToolCalls
-          ? planExecutionEngaged
+          ? planExecutionEngaged && !steeringMayEndRun
             ? this.taskPlan?.naturalStopDecision() ?? { kind: 'allow' as const }
             : { kind: 'allow' as const }
           : null
@@ -460,6 +491,7 @@ export class AgentSession {
             break
           }
           await this.injectQueuedMidTurn()
+          steeringDecisionPending = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
         if (abortSignal.aborted && step.hadToolCalls) {
@@ -537,9 +569,18 @@ export class AgentSession {
     // 循环已产生稳定终态；后续短暂持久化窗口不再接受“停止”去回滚已提交 step。
     this.opAbort = null
     if (stopReason === 'aborted') {
-      const marker = createTurnAbortedMessage()
-      this.messages.push(marker)
-      await this.persist((recorder) => recorder.recordStep(turnId, [marker]))
+      const interruptedState = planExecutionEngaged
+        ? this.taskPlan?.interrupt('user-cancel') ?? null
+        : null
+      const markers: ModelMessage[] = [createTurnAbortedMessage()]
+      if (interruptedState) {
+        const taskContext = createTaskContextMessage(interruptedState)
+        if (taskContext) markers.push(taskContext)
+      }
+      this.messages.push(...markers)
+      await this.persist((recorder) =>
+        recorder.recordStep(turnId, markers, interruptedState ?? undefined, null),
+      )
     }
     await this.persist((recorder) => recorder.recordTurnEnd(turnId, stopReason))
     this.activeTurn = null
@@ -599,6 +640,27 @@ export class AgentSession {
     }
   }
 
+  private async injectTaskProgressReminder(): Promise<void> {
+    const plan = this.taskPlan?.snapshot
+    if (!plan) return
+    const current = plan.items.find((item) => item.status === 'in_progress')
+    const reminder: ModelMessage = {
+      role: 'user',
+      content: [
+        '<system-reminder>',
+        `计划 ${plan.id} 已有 ${TASK_PROGRESS_REMINDER_STEPS} 个模型步骤没有更新。`,
+        current ? `当前任务项：${current.id} ${current.title}。` : '',
+        '若进度、阻塞或任务项已实质变化，请更新计划；若复杂测试或排查尚无结论，继续工作即可，不要制造进度。',
+        '不要向用户提及本提醒。',
+        '</system-reminder>',
+      ].filter(Boolean).join('\n'),
+    }
+    this.messages.push(reminder)
+    if (this.activeTurn) {
+      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
+    }
+  }
+
   /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；期间用户消息排队，完成后接续 */
   async compactNow(): Promise<void> {
     const { emit } = this.options
@@ -621,9 +683,12 @@ export class AgentSession {
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
+        this.compactTaskContext(),
       )
       this.messages = result.messages
-      await this.persist((recorder) => recorder.recordSnapshot('compact', this.messages))
+      await this.persist((recorder) =>
+        recorder.recordSnapshot('compact', this.messages, undefined, this.taskPlan?.stateSnapshot),
+      )
       this.tokenBaseline = null
       this.compactFailures = 0
       emit({
@@ -663,7 +728,11 @@ export class AgentSession {
    * 上下文压缩检查（每次模型请求前，文档一 §3.4）：
    * 超阈值 → 先微清理（零成本）→ 仍超 → 全量摘要压缩；连续失败熔断。
    */
-  private async compactIfNeeded(abortSignal: AbortSignal): Promise<void> {
+  private async compactIfNeeded(
+    abortSignal: AbortSignal,
+    planExecutionEngaged: boolean,
+    turnId: string,
+  ): Promise<void> {
     const { emit } = this.options
     const threshold = autoCompactThreshold(this.options.model.capabilities)
     let estimate = estimateContextTokens(this.messages, this.tokenBaseline)
@@ -689,10 +758,16 @@ export class AgentSession {
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
+        this.compactTaskContext(planExecutionEngaged, turnId),
       )
       this.messages = result.messages
       await this.persist((recorder) =>
-        recorder.recordSnapshot('compact', this.messages, this.activeTurn?.id),
+        recorder.recordSnapshot(
+          'compact',
+          this.messages,
+          this.activeTurn?.id,
+          this.taskPlan?.stateSnapshot,
+        ),
       )
       this.tokenBaseline = null
       this.compactFailures = 0
@@ -706,11 +781,19 @@ export class AgentSession {
     }
   }
 
+  private compactTaskContext(planExecutionEngaged = false, turnId?: string): string | undefined {
+    const state = this.taskPlan?.stateSnapshot
+    if (!state || (!state.activePlan && state.historicalPlans.length === 0)) return undefined
+    const continuation = planExecutionEngaged && turnId && state.activePlan
+      ? { turnId, engagedPlanId: state.activePlan.id }
+      : undefined
+    return taskContextBlock(state, continuation)
+  }
+
   /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
   private async runOneStep(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
-    taskPlanContextMode: TaskPlanContextMode,
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
   ): Promise<StepResult> {
@@ -734,24 +817,10 @@ export class AgentSession {
     let userQuestion: UserQuestion | null = null
     this.taskPlan?.beginStep()
     try {
-      const taskContext = this.taskPlan?.contextSection(taskPlanContextMode)
-      const interruptedReference = taskPlanContextMode !== 'engaged' && !taskContext
-        ? interruptedUserReference(this.messages)
-        : null
-      const system = [
-        buildSystemPrompt(this.options.promptContext),
-        taskContext,
-        interruptedReference,
-      ]
-        .filter((section): section is string => Boolean(section))
-        .join('\n\n')
-      const requestMessages = taskPlanContextMode === 'engaged'
-        ? this.messages
-        : interruptedTurnMessageView(this.messages)
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
-        system,
-        messages: requestMessages,
+        system: buildSystemPrompt(this.options.promptContext),
+        messages: this.messages,
         tools: this.buildToolSet(
           stepAbort.signal,
           planExecutionEngaged,
@@ -820,12 +889,11 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const taskPlanCommit = this.taskPlan?.commitStep()
       const planRemainsActive = Boolean(
-        taskPlanCommit ? taskPlanCommit.activePlan : this.taskPlan?.snapshot,
+        taskPlanCommit ? taskPlanCommit.state.activePlan : this.taskPlan?.snapshot,
       )
       const questionResumesTaskPlan = userQuestion !== null
         && stepControl.toolEndReason === 'waiting-user'
         && planRemainsActive
-        && stepControl.taskPlanEngagement?.type !== 'pause'
         && (
           planExecutionEngaged
           || stepControl.taskPlanEngagement?.type === 'resume'
@@ -842,9 +910,17 @@ export class AgentSession {
         ))
       }
       const committedMessages = [...response.messages, ...internalMarkers]
+      const engagementUpdate = taskPlanCommit
+        ? taskPlanCommit.state.activePlan?.id ?? null
+        : stepControl.taskPlanEngagement?.planId
       this.messages.push(...committedMessages)
       await this.persist((recorder) =>
-        recorder.recordStep(this.activeTurn!.id, committedMessages, taskPlanCommit?.activePlan),
+        recorder.recordStep(
+          this.activeTurn!.id,
+          committedMessages,
+          taskPlanCommit?.state,
+          engagementUpdate,
+        ),
       )
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         emit({ type: 'user-question', question: userQuestion })
@@ -863,6 +939,7 @@ export class AgentSession {
         }
       }
       return {
+        committed: true,
         hadToolCalls,
         toolEndReason: stepControl.toolEndReason,
         taskPlanChanged: taskPlanCommit !== undefined,
@@ -883,6 +960,7 @@ export class AgentSession {
       // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
         return {
+          committed: false,
           hadToolCalls: false,
           toolEndReason: null,
           taskPlanChanged: false,
@@ -908,14 +986,12 @@ export class AgentSession {
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
-    const taskPlanMode: TaskPlanToolMode = this.taskPlan?.snapshot
-      ? planExecutionEngaged ? 'engaged' : 'dormant'
-      : 'empty'
     const taskTools = this.taskPlan
       && !this.options.promptContext.discussion
       && !this.protocolRound
-      ? createTaskPlanTools(this.taskPlan, taskPlanMode, {
+      ? createTaskPlanTools(this.taskPlan, {
           onEngagementAction: onTaskPlanEngagement,
+          isEngaged: () => planExecutionEngaged,
         })
       : []
     const questionTools: ToolDefinition[] =
@@ -1175,12 +1251,12 @@ export class AgentSession {
       const rollbackMessages = scope === 'files-and-chat'
         ? recorder?.messagesBeforeTurn(record.turnId) ?? null
         : null
-      const rollbackTaskPlan = scope === 'files-and-chat'
-        ? recorder?.taskPlanBeforeTurn(record.turnId)
+      const rollbackTaskState = scope === 'files-and-chat'
+        ? recorder?.taskStateBeforeTurn(record.turnId)
         : undefined
       if (
         scope === 'files-and-chat' &&
-        (rollbackMessages === null || rollbackTaskPlan === undefined)
+        (rollbackMessages === null || rollbackTaskState === undefined)
       ) {
         emit({
           type: 'checkpoint-restored',
@@ -1193,7 +1269,7 @@ export class AgentSession {
         return
       }
       const originalMessages = structuredClone(this.messages)
-      const originalTaskPlan = this.taskPlan?.snapshot ?? null
+      const originalTaskState = this.taskPlan?.stateSnapshot
       const rollbackQuestion = rollbackMessages === null
         ? undefined
         : findPendingUserQuestion(rollbackMessages)?.question ?? null
@@ -1202,15 +1278,15 @@ export class AgentSession {
         scope,
         rollbackMessages !== null && recorder ? {
           commit: async () => {
-            await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskPlan)
+            await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskState)
             this.messages = structuredClone(rollbackMessages)
-            this.taskPlan?.restore(rollbackTaskPlan ?? null)
+            this.taskPlan?.restore(rollbackTaskState!)
             this.tokenBaseline = null
           },
           compensate: async () => {
-            await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskPlan)
+            await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskState)
             this.messages = structuredClone(originalMessages)
-            this.taskPlan?.restore(originalTaskPlan)
+            if (originalTaskState) this.taskPlan?.restore(originalTaskState)
             this.tokenBaseline = null
           },
         } : undefined,
@@ -1224,7 +1300,7 @@ export class AgentSession {
         error: result.error,
         invalidatedToolUseIds: result.invalidatedToolUseIds,
         ...(result.ok && scope === 'files-and-chat'
-          ? { taskPlan: rollbackTaskPlan ?? null, question: rollbackQuestion ?? null }
+          ? { taskPlan: rollbackTaskState?.activePlan ?? null, question: rollbackQuestion ?? null }
           : {}),
       })
     } finally {

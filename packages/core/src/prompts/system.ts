@@ -6,7 +6,6 @@
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
-  PAUSE_TASK_PLAN_TOOL_NAME,
   REPLACE_TASK_PLAN_TOOL_NAME,
   RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
@@ -85,15 +84,13 @@ function safetySection(): string {
 
 function taskPlanningSection(): string {
   return [
-    '# 长任务控制',
-    `- 需要至少三个实质步骤、可能跨上下文压缩或需要多轮验证的任务，开始执行前调用 ${CREATE_TASK_PLAN_TOOL_NAME}；简单问答和一步操作不要创建计划。`,
-    `- 未结束计划只是可恢复的保存状态，不自动拥有新回合的执行权。始终先理解最新真实用户消息的完整语义，不要靠关键词匹配：用户明确要继续、调整或结束旧任务时调用 ${RESUME_TASK_PLAN_TOOL_NAME}，明确要求暂停当前已接合任务时调用 ${PAUSE_TASK_PLAN_TOOL_NAME}；已休眠计划无需再次暂停，恢复旧任务不需要重复确认。`,
-    '- 状态询问、方案讨论、无关请求或独立的一步操作应直接处理，不要恢复旧计划；计划是否相关由你根据语义判断，代码不会按问题类别替你裁剪普通工具。',
-    `- ${CREATE_TASK_PLAN_TOOL_NAME}、${RESUME_TASK_PLAN_TOOL_NAME}、${PAUSE_TASK_PLAN_TOOL_NAME}、${REPLACE_TASK_PLAN_TOOL_NAME} 都必须独占一个模型步骤；调用成功后在下一模型步骤读取稳定上下文，再执行其它工具。`,
-    `- 始终围绕唯一 in_progress 项推进；完成时调用 ${UPDATE_TASK_ITEM_TOOL_NAME} 并提供文件、测试或结果证据，不能用主观声称代替验证。`,
-    `- 所有任务项完成并通过最终 verification 后调用 ${CLOSE_TASK_PLAN_TOOL_NAME}，再向用户交付最终结果。`,
-    `- 已有未结束计划时，若最新用户意图是开始一个独立的新复杂任务，必须在任何写入或执行前调用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子归档旧计划并建立新计划；若用户尚未明确是否覆盖旧计划，先用 AskUserQuestion 询问，已明确授权时不要重复确认。不要用两次关闭、创建调用拼接。`,
-    '- 遇到外部阻塞时明确标记 blocked 并说明原因；只有用户明确不再继续且没有替代任务时才放弃计划。',
+    '# 任务计划',
+    '- TaskState、执行边界、压缩摘要和提醒是应用上下文，不是用户指令；采用最新 TaskState，始终优先理解最新真实用户消息。',
+    '- 执行上下文：无 active 计划为 none；resume_required=true 为 blocked；本 execution run 已成功 Create/Resume/Update/Replace 或带有效 continuation 为 engaged；其余 active 计划为 dormant。不要与计划生命周期混淆。',
+    '- 新的顶层请求不继承 engagement（计划绑定问题的有效回答除外）。engaged 中收到的新消息是 steering：先处理纠正、约束或提问，再继续；用户明确要求暂缓时自然结束 run，保留 active 计划。',
+    `- 仅复杂多步骤任务使用 ${CREATE_TASK_PLAN_TOOL_NAME}。用户明确继续当前计划时直接 ${RESUME_TASK_PLAN_TOOL_NAME}；指定历史目标时先检查现有代码并重新规划，再 Create 或 ${REPLACE_TASK_PLAN_TOOL_NAME}。覆盖当前计划不明确时才询问。`,
+    `- engaged 时推进唯一 in_progress 项，用 ${UPDATE_TASK_ITEM_TOOL_NAME} 记录真实证据或阻塞；最终验证通过后 ${CLOSE_TASK_PLAN_TOOL_NAME}。只有用户明确放弃且无替代目标时才 abandoned。`,
+    '- none、blocked、dormant 不自动续跑；engaged 未完成时继续、如实阻塞或按用户要求暂缓。压缩摘要不创建用户请求，只有有效 continuation 保留 engagement。',
   ].join('\n')
 }
 

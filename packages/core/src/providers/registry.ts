@@ -55,6 +55,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       contextWindow: 200_000,
       maxOutput: 64_000,
     },
+    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     create: (config) =>
       createAnthropic({ apiKey: config.apiKey, baseURL: config.baseURL })(
         'claude-sonnet-4-6',
