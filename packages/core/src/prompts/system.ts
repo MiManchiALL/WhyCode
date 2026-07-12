@@ -6,7 +6,9 @@
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
+  PAUSE_TASK_PLAN_TOOL_NAME,
   REPLACE_TASK_PLAN_TOOL_NAME,
+  RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import {
@@ -85,11 +87,13 @@ function taskPlanningSection(): string {
   return [
     '# 长任务控制',
     `- 需要至少三个实质步骤、可能跨上下文压缩或需要多轮验证的任务，开始执行前调用 ${CREATE_TASK_PLAN_TOOL_NAME}；简单问答和一步操作不要创建计划。`,
+    `- 未结束计划只是可恢复的保存状态，不自动拥有新回合的执行权。始终先理解最新真实用户消息的完整语义，不要靠关键词匹配：用户明确要继续、调整或结束旧任务时调用 ${RESUME_TASK_PLAN_TOOL_NAME}，明确要求暂停当前已接合任务时调用 ${PAUSE_TASK_PLAN_TOOL_NAME}；已休眠计划无需再次暂停，恢复旧任务不需要重复确认。`,
+    '- 状态询问、方案讨论、无关请求或独立的一步操作应直接处理，不要恢复旧计划；计划是否相关由你根据语义判断，代码不会按问题类别替你裁剪普通工具。',
+    `- ${CREATE_TASK_PLAN_TOOL_NAME}、${RESUME_TASK_PLAN_TOOL_NAME}、${PAUSE_TASK_PLAN_TOOL_NAME}、${REPLACE_TASK_PLAN_TOOL_NAME} 都必须独占一个模型步骤；调用成功后在下一模型步骤读取稳定上下文，再执行其它工具。`,
     `- 始终围绕唯一 in_progress 项推进；完成时调用 ${UPDATE_TASK_ITEM_TOOL_NAME} 并提供文件、测试或结果证据，不能用主观声称代替验证。`,
     `- 所有任务项完成并通过最终 verification 后调用 ${CLOSE_TASK_PLAN_TOOL_NAME}，再向用户交付最终结果。`,
-    `- 已有未结束计划时，若用户明确开始一个独立的新复杂任务，必须在任何写入或执行前调用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子归档旧计划并建立新计划；不要用两次关闭、创建调用拼接。`,
+    `- 已有未结束计划时，若最新用户意图是开始一个独立的新复杂任务，必须在任何写入或执行前调用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子归档旧计划并建立新计划；若用户尚未明确是否覆盖旧计划，先用 AskUserQuestion 询问，已明确授权时不要重复确认。不要用两次关闭、创建调用拼接。`,
     '- 遇到外部阻塞时明确标记 blocked 并说明原因；只有用户明确不再继续且没有替代任务时才放弃计划。',
-    '- 未结束计划是可恢复的背景状态，不会自动成为每个新回合的任务。新用户消息若只是临时问题或无关请求，直接处理并保留旧计划；只有用户明确继续、调整或取消时才操作旧计划。',
   ].join('\n')
 }
 

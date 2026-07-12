@@ -54,10 +54,16 @@ describe('通用 Agent 提示约束', () => {
     const prompt = buildSystemPrompt({ projectDir: null, osPlatform: 'win32' })
 
     assert.match(prompt, /CreateTaskPlan/)
+    assert.match(prompt, /ResumeTaskPlan/)
+    assert.match(prompt, /PauseTaskPlan/)
     assert.match(prompt, /ReplaceTaskPlan/)
     assert.match(prompt, /UpdateTaskItem/)
     assert.match(prompt, /最终 verification/)
     assert.match(prompt, /简单问答和一步操作不要创建计划/)
+    assert.match(prompt, /不要靠关键词匹配/)
+    assert.match(prompt, /恢复旧任务不需要重复确认/)
+    assert.match(prompt, /代码不会按问题类别替你裁剪普通工具/)
+    assert.match(prompt, /必须独占一个模型步骤/)
   })
 
   it('M1 模式选择不再把所有任务强制解释为代码问题', () => {

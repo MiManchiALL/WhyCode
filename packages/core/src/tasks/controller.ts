@@ -43,6 +43,7 @@ export class TaskPlanController {
   private activePlan: ActiveTaskPlan | null
   private stepSnapshot: ActiveTaskPlan | null = null
   private stepDirty = false
+  private stepBoundary: 'create' | 'replace' | null = null
   private pendingDisplayUpdate: TaskPlanCommit['displayUpdate'] | null = null
 
   constructor(initialPlan: ActiveTaskPlan | null) {
@@ -56,6 +57,7 @@ export class TaskPlanController {
   beginStep(): void {
     this.stepSnapshot = cloneActiveTaskPlan(this.activePlan)
     this.stepDirty = false
+    this.stepBoundary = null
     this.pendingDisplayUpdate = null
   }
 
@@ -68,6 +70,7 @@ export class TaskPlanController {
       : undefined
     this.stepSnapshot = null
     this.stepDirty = false
+    this.stepBoundary = null
     this.pendingDisplayUpdate = null
     return update
   }
@@ -76,6 +79,7 @@ export class TaskPlanController {
     if (this.stepDirty) this.activePlan = cloneActiveTaskPlan(this.stepSnapshot)
     this.stepSnapshot = null
     this.stepDirty = false
+    this.stepBoundary = null
     this.pendingDisplayUpdate = null
   }
 
@@ -83,16 +87,21 @@ export class TaskPlanController {
     this.activePlan = cloneActiveTaskPlan(plan)
     this.stepSnapshot = null
     this.stepDirty = false
+    this.stepBoundary = null
     this.pendingDisplayUpdate = null
   }
 
   create(goal: string, drafts: TaskPlanDraftItem[]): TaskMutationResult {
+    if (this.stepDirty) {
+      return { ok: false, message: 'CreateTaskPlan 必须作为本步骤唯一的计划变更。' }
+    }
     if (this.activePlan) {
       return { ok: false, message: '已有未结束的任务计划；请先完成或放弃当前计划。' }
     }
     const next = this.buildPlan(goal, drafts)
     if ('error' in next) return { ok: false, message: next.error }
     this.activePlan = next.plan
+    this.stepBoundary = 'create'
     this.publish(this.activePlan)
     return {
       ok: true,
@@ -105,6 +114,9 @@ export class TaskPlanController {
     drafts: TaskPlanDraftItem[],
     reason: string,
   ): TaskMutationResult {
+    if (this.stepDirty) {
+      return { ok: false, message: 'ReplaceTaskPlan 必须作为本步骤唯一的计划变更。' }
+    }
     const previous = this.activePlan
     if (!previous) return { ok: false, message: '当前没有可替换的活动任务计划。' }
     const next = this.buildPlan(goal, drafts)
@@ -118,6 +130,7 @@ export class TaskPlanController {
     })
     this.activePlan = next.plan
     this.stepDirty = true
+    this.stepBoundary = 'replace'
     this.pendingDisplayUpdate = {
       kind: 'replaced',
       previous: archived,
@@ -131,6 +144,9 @@ export class TaskPlanController {
   }
 
   addItem(draft: TaskPlanDraftItem): TaskMutationResult {
+    if (this.stepBoundary) {
+      return { ok: false, message: '计划身份刚刚变化；请在下一模型步骤再修改任务项。' }
+    }
     const plan = this.activePlan
     if (!plan) return { ok: false, message: '当前没有活动任务计划。' }
     if (draft.kind === 'verification') {
@@ -158,6 +174,9 @@ export class TaskPlanController {
     evidence: string[],
     blockedReason?: string,
   ): TaskMutationResult {
+    if (this.stepBoundary) {
+      return { ok: false, message: '计划身份刚刚变化；请在下一模型步骤再更新任务项。' }
+    }
     const plan = this.activePlan
     if (!plan) return { ok: false, message: '当前没有活动任务计划。' }
     const item = plan.items.find((entry) => entry.id === itemId)
@@ -197,6 +216,9 @@ export class TaskPlanController {
   }
 
   close(outcome: 'completed' | 'abandoned', summary: string): TaskMutationResult {
+    if (this.stepBoundary) {
+      return { ok: false, message: '计划身份刚刚变化；请在下一模型步骤再关闭计划。' }
+    }
     const plan = this.activePlan
     if (!plan) return { ok: false, message: '当前没有活动任务计划。' }
     if (outcome === 'completed' && plan.items.some((item) => item.status !== 'completed')) {
@@ -224,18 +246,20 @@ export class TaskPlanController {
       const state = mode === 'blocked' ? '刚刚中止' : '休眠'
       return [
         '# 未结束任务的只读参考',
+        `计划 ID：${plan.id}`,
         `旧任务主题：${plan.goal}`,
         `保存进度：${completed}/${plan.items.length}；状态：${state}`,
-        '这不是本轮待办，只用于理解“这个游戏/刚才的任务”等指代。',
-        '只处理最新真实用户消息；不得继续旧步骤，也不得更新或关闭旧计划。',
-        '若最新消息明确开始独立的新复杂任务，先调用当前提供的计划替换工具原子归档旧计划并建立新计划，再执行任何写入或命令。',
-        '用户之后明确要求继续、调整或取消旧任务时，系统会恢复完整计划和计划工具。',
+        '这是动态保存状态，不是用户消息，也不自动成为本轮待办。最新真实用户消息是当前唯一指令；请依据完整语义自行判断它与旧任务是否相关，不要匹配特定词句。',
+        '若用户明确要求继续、恢复、调整或结束旧任务，直接单独调用 ResumeTaskPlan 并传入上述计划 ID，不要再次确认；工具稳定提交后的下一模型步骤才会提供完整计划。若用户只要求继续保持暂停，说明计划已经休眠即可。',
+        '若用户只是在询问状态、讨论方案、提出无关请求或独立的一步操作，正常处理当前请求并让旧计划保持休眠；普通工具可按当前请求正常使用。',
+        '若用户要开始一个独立的新复杂任务，在任何新任务写入或命令前调用 ReplaceTaskPlan；只有覆盖意图不明确时才先用 AskUserQuestion 询问，用户已明确授权时不要重复确认。',
       ].join('\n')
     }
     const lines = [
       '# 当前未结束任务计划（背景状态）',
-      '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户指令。始终优先处理最新真实用户消息。',
-      '本轮已明确恢复任务计划控制；按最新消息继续、调整或取消计划，并先确认当前 in_progress 项。',
+      '这份计划用于跨步骤、压缩和重启保存进度，不是本轮新的用户消息。最新真实用户消息始终优先。',
+      '本轮已通过 CreateTaskPlan、ReplaceTaskPlan、ResumeTaskPlan 或结构化问题卡回答取得计划执行权；按最新用户意图继续、调整、暂停或结束计划，并先确认中断后实际状态。',
+      `计划 ID：${plan.id}`,
       `计划目标：${plan.goal}`,
       `计划版本：${plan.revision}`,
       ...plan.items.map((item) => {

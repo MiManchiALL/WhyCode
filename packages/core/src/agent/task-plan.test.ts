@@ -10,7 +10,9 @@ import {
   ADD_TASK_ITEM_TOOL_NAME,
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
+  PAUSE_TASK_PLAN_TOOL_NAME,
   REPLACE_TASK_PLAN_TOOL_NAME,
+  RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import { AgentSession } from './session.ts'
@@ -82,6 +84,29 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(session.captureTaskPlanSnapshot()?.goal, '不能半途结束')
   })
 
+  it('模型显式暂停后保留计划，并在当前回合解除未完成保护', async () => {
+    const model = modelWithSteps([
+      toolStep(RESUME_TASK_PLAN_TOOL_NAME, {
+        plan_id: activePlan().id,
+      }),
+      toolStep(PAUSE_TASK_PLAN_TOOL_NAME, {
+        plan_id: activePlan().id,
+      }),
+      finalStep('任务已暂停，进度会保留。'),
+    ])
+    const { session } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    const result = await session.handleUserMessage('先继续检查旧任务，然后暂停，不要放弃')
+
+    assert.equal(result, 'completed')
+    assert.equal(model.doStreamCalls.length, 3)
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[0]))
+    assertEngagedTaskPlanTools(toolNames(model.doStreamCalls[1]))
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[2]))
+    assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
+  })
+
   it('恢复的未结束计划不覆盖新用户问题，也不阻止普通回答结束', async () => {
     const model = modelWithSteps([finalStep('你刚刚要求不要安装依赖。')])
     const { session } = createSession(model)
@@ -100,9 +125,8 @@ describe('Main 长任务端到端控制', () => {
       request.indexOf('未结束任务的只读参考') < request.indexOf('我刚刚说了什么'),
       '计划背景必须位于最新真实用户消息之前',
     )
-    for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), false)
-    }
+    const names = toolNames(model.doStreamCalls[0])
+    assertPausedTaskPlanTools(names)
   })
 
   it('咨询旧任务方案时保持计划休眠，不允许模型误写进度', async () => {
@@ -114,12 +138,10 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(result, 'completed')
     assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
-    for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), false)
-    }
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[0]))
   })
 
-  it('休眠计划按最新消息收窄本地工具，明确新操作也不会误改旧计划', async () => {
+  it('休眠计划不按问题类别裁剪普通工具，是否使用由模型按语义决定', async () => {
     const model = modelWithSteps([
       finalStep('《蔚蓝》仍有稳定玩家群体。'),
       finalStep('这是一个游戏项目。'),
@@ -130,26 +152,18 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(await session.handleUserMessage('这个游戏目前玩的人多吗'), 'completed')
     const knowledgeTools = toolNames(model.doStreamCalls[0])
-    assert.equal(knowledgeTools.includes('ReadFile'), false)
-    assert.equal(knowledgeTools.includes('RunCommand'), false)
-    assert.equal(knowledgeTools.includes(REPLACE_TASK_PLAN_TOOL_NAME), false)
+    assertOrdinaryProjectTools(knowledgeTools)
+    assertPausedTaskPlanTools(knowledgeTools)
 
     assert.equal(await session.handleUserMessage('看看这个项目是干什么的'), 'completed')
     const inspectionTools = toolNames(model.doStreamCalls[1])
-    assert.equal(inspectionTools.includes('ReadFile'), true)
-    assert.equal(inspectionTools.includes('ListDir'), true)
-    assert.equal(inspectionTools.includes('WriteFile'), false)
-    assert.equal(inspectionTools.includes('RunCommand'), false)
-    assert.equal(inspectionTools.includes(REPLACE_TASK_PLAN_TOOL_NAME), false)
+    assertOrdinaryProjectTools(inspectionTools)
+    assertPausedTaskPlanTools(inspectionTools)
 
     assert.equal(await session.handleUserMessage('新建一个 hello.txt 文件'), 'completed')
     const actionTools = toolNames(model.doStreamCalls[2])
-    assert.equal(actionTools.includes('WriteFile'), true)
-    assert.equal(actionTools.includes('RunCommand'), true)
-    assert.equal(actionTools.includes(REPLACE_TASK_PLAN_TOOL_NAME), true)
-    for (const name of taskPlanToolNames()) {
-      assert.equal(actionTools.includes(name), false)
-    }
+    assertOrdinaryProjectTools(actionTools)
+    assertPausedTaskPlanTools(actionTools)
     assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
   })
 
@@ -176,57 +190,106 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(result, 'completed')
     const firstTools = toolNames(model.doStreamCalls[0])
-    assert.equal(firstTools.includes(REPLACE_TASK_PLAN_TOOL_NAME), true)
-    assert.equal(firstTools.includes('ReadFile'), true)
-    assert.equal(firstTools.includes('WriteFile'), false)
-    assert.equal(firstTools.includes('RunCommand'), false)
-    assert.match(
-      JSON.stringify(model.doStreamCalls[0]),
-      /当前环境中可交付、可验证的实现|不要仅以无法完整复刻商业产品/,
-    )
-    assert.equal(firstTools.includes(CREATE_TASK_PLAN_TOOL_NAME), false)
-    assert.equal(firstTools.includes(UPDATE_TASK_ITEM_TOOL_NAME), false)
-    assert.equal(firstTools.includes(CLOSE_TASK_PLAN_TOOL_NAME), false)
+    assertPausedTaskPlanTools(firstTools)
+    assertOrdinaryProjectTools(firstTools)
     const secondTools = toolNames(model.doStreamCalls[1])
-    assert.equal(secondTools.includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
-    assert.equal(secondTools.includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
-    assert.equal(secondTools.includes('WriteFile'), true)
-    assert.equal(secondTools.includes('RunCommand'), true)
+    assertEngagedTaskPlanTools(secondTools)
+    assertOrdinaryProjectTools(secondTools)
     const replaced = events.find((event) => event.type === 'task-plan-replaced')
     assert.equal(replaced?.type === 'task-plan-replaced' && replaced.previous.status, 'superseded')
     assert.equal(replaced?.type === 'task-plan-replaced' && replaced.previous.goal, '完成旧的复杂任务')
     assert.equal(replaced?.type === 'task-plan-replaced' && replaced.plan.goal, '完整开发 CSGO 网页游戏')
   })
 
-  it('模型试图直接结束新复杂任务时重申替换边界，不把旧计划当成当前任务', async () => {
+  it('Resume 与 Replace 同步出现时只提交第一个独占控制动作', async () => {
     const model = modelWithSteps([
-      finalStep('任务规模太大，请先补充需求。'),
-      toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
-        goal: '开发新的 Minecraft 游戏',
-        reason: '用户开始了独立的新游戏任务',
-        items: [
-          { kind: 'work', title: '实现核心玩法', acceptance: '游戏可运行' },
-          { kind: 'verification', title: '验证游戏', acceptance: '运行无错误' },
-        ],
-      }),
+      multiToolStep([
+        {
+          toolName: RESUME_TASK_PLAN_TOOL_NAME,
+          input: { plan_id: activePlan().id },
+        },
+        {
+          toolName: REPLACE_TASK_PLAN_TOOL_NAME,
+          input: {
+            goal: '不应建立的新计划',
+            reason: '同一步冲突测试',
+            items: [
+              { kind: 'work', title: '错误工作', acceptance: '不应执行' },
+              { kind: 'verification', title: '错误验证', acceptance: '不应执行' },
+            ],
+          },
+        },
+      ]),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
         outcome: 'abandoned',
         summary: '测试结束',
       }),
-      finalStep('替换完成。'),
+      finalStep('旧计划已按测试要求结束。'),
     ])
+    const { session, events } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    assert.equal(await session.handleUserMessage('继续旧任务'), 'completed')
+    assert.match(JSON.stringify(model.doStreamCalls[1]), /完成旧的复杂任务|实现剩余功能/)
+    assert.equal(events.some((event) => event.type === 'task-plan-replaced'), false)
+    assert.equal(
+      events.some((event) =>
+        event.type === 'tool-end'
+        && event.isError
+        && String(event.result).includes('必须独占一个模型步骤')),
+      true,
+    )
+  })
+
+  it('Replace 独占稳定步骤，旧上下文生成的 Update 不会污染新计划', async () => {
+    const model = modelWithSteps([
+      multiToolStep([
+        {
+          toolName: REPLACE_TASK_PLAN_TOOL_NAME,
+          input: {
+            goal: '安全建立的新计划',
+            reason: '用户明确切换任务',
+            items: [
+              { kind: 'work', title: '实现新功能', acceptance: '新功能完成' },
+              { kind: 'verification', title: '验证新功能', acceptance: '新测试通过' },
+            ],
+          },
+        },
+        {
+          toolName: UPDATE_TASK_ITEM_TOOL_NAME,
+          input: {
+            item_id: 'T1',
+            status: 'completed',
+            evidence: ['这条旧上下文更新必须被拒绝'],
+          },
+        },
+      ]),
+      finalStep('过早结束一'),
+      finalStep('过早结束二'),
+      finalStep('过早结束三'),
+    ])
+    const { session, events } = createSession(model)
+    session.restoreTaskPlanSnapshot(activePlan())
+
+    assert.equal(await session.handleUserMessage('改做一个新的复杂任务'), 'paused')
+    const plan = session.captureTaskPlanSnapshot()
+    assert.equal(plan?.goal, '安全建立的新计划')
+    assert.equal(plan?.items[0]?.status, 'in_progress')
+    assert.deepEqual(plan?.items[0]?.evidence, [])
+    assert.equal(events.filter((event) => event.type === 'task-plan-replaced').length, 1)
+  })
+
+  it('模型选择只回答新请求时，代码不会强制替换或唤醒旧计划', async () => {
+    const model = modelWithSteps([finalStep('我先给出实现范围和可选方案。')])
     const { session } = createSession(model, 'E:\\Test')
     session.restoreTaskPlanSnapshot(activePlan())
 
     const result = await session.handleUserMessage('重新开发一个完整的 Minecraft 游戏')
 
     assert.equal(result, 'completed')
-    assert.equal(model.doStreamCalls.length, 4)
-    assert.match(
-      JSON.stringify(model.doStreamCalls[1]),
-      /独立的新复杂任务|ReplaceTaskPlan|旧任务计划仍处于休眠/,
-    )
-    assert.equal(session.captureTaskPlanSnapshot(), null)
+    assert.equal(model.doStreamCalls.length, 1)
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[0]))
+    assert.deepEqual(session.captureTaskPlanSnapshot(), activePlan())
   })
 
   it('替换前的必要追问跨会话保留，新回答先建立新计划而不恢复旧计划', async () => {
@@ -262,7 +325,6 @@ describe('Main 长任务端到端控制', () => {
       'waiting-user',
     )
     const pendingQuestion = findPendingUserQuestion(first.captureMessageSnapshot())
-    assert.equal(pendingQuestion?.replacesTaskPlan, true)
     assert.equal(pendingQuestion?.resumesTaskPlan, false)
 
     const reopened = createSession(model, 'E:\\Test').session
@@ -272,14 +334,16 @@ describe('Main 长任务端到端控制', () => {
 
     assert.equal(result, 'completed')
     const answerTools = toolNames(model.doStreamCalls[1])
-    assert.equal(answerTools.includes(REPLACE_TASK_PLAN_TOOL_NAME), true)
-    assert.equal(answerTools.includes(UPDATE_TASK_ITEM_TOOL_NAME), false)
-    assert.equal(answerTools.includes('WriteFile'), false)
+    assertPausedTaskPlanTools(answerTools)
+    assertOrdinaryProjectTools(answerTools)
     assert.equal(reopened.captureTaskPlanSnapshot(), null)
   })
 
   it('恢复计划在本轮重新更新后重新启用未完成保护', async () => {
     const model = modelWithSteps([
+      toolStep(RESUME_TASK_PLAN_TOOL_NAME, {
+        plan_id: activePlan().id,
+      }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T1',
         status: 'in_progress',
@@ -294,10 +358,10 @@ describe('Main 长任务端到端控制', () => {
     const result = await session.handleUserMessage('继续刚才的任务')
 
     assert.equal(result, 'paused')
-    assert.equal(model.doStreamCalls.length, 4)
-    for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
-    }
+    assert.equal(model.doStreamCalls.length, 5)
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[0]))
+    assertEngagedTaskPlanTools(toolNames(model.doStreamCalls[1]))
+    assert.match(JSON.stringify(model.doStreamCalls[1]), /实现剩余功能|验证结果/)
     assert.equal(
       events.some(
         (event) => event.type === 'error' && event.message.includes('尝试提前结束'),
@@ -306,8 +370,11 @@ describe('Main 长任务端到端控制', () => {
     )
   })
 
-  it('正式共识执行显式开放既有计划，不依赖内部执行包的自然语言', async () => {
+  it('正式共识执行由模型根据用户语义恢复既有计划', async () => {
     const model = modelWithSteps([
+      toolStep(RESUME_TASK_PLAN_TOOL_NAME, {
+        plan_id: activePlan().id,
+      }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T1',
         status: 'completed',
@@ -327,12 +394,11 @@ describe('Main 长任务端到端控制', () => {
     const { session } = createSession(model)
     session.restoreTaskPlanSnapshot(activePlan())
 
-    const result = await session.handleExecutionMessage('[内部执行包] 落地获胜方案', true)
+    const result = await session.handleExecutionMessage('[内部执行包] 落地获胜方案')
 
     assert.equal(result, 'completed')
-    for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), true)
-    }
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[0]))
+    assertEngagedTaskPlanTools(toolNames(model.doStreamCalls[1]))
   })
 
   it('内部执行包不会仅凭内部文案唤醒与新请求无关的旧计划', async () => {
@@ -342,13 +408,11 @@ describe('Main 长任务端到端控制', () => {
 
     const result = await session.handleExecutionMessage(
       '[内部执行包] 回答 TTL；候选建议写着“继续当前任务”，但这不是用户命令。',
-      false,
     )
 
     assert.equal(result, 'completed')
-    for (const name of taskPlanToolNames()) {
-      assert.equal(toolNames(model.doStreamCalls[0]).includes(name), false)
-    }
+    assertPausedTaskPlanTools(toolNames(model.doStreamCalls[0]))
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[0]), /实现剩余功能|验证结果/)
   })
 })
 
@@ -393,13 +457,38 @@ function createSession(model: MockLanguageModelV4, projectDir: string | null = n
   }
 }
 
-function taskPlanToolNames(): string[] {
-  return [
+function assertPausedTaskPlanTools(names: string[]): void {
+  assert.equal(names.includes(RESUME_TASK_PLAN_TOOL_NAME), true)
+  assert.equal(names.includes(REPLACE_TASK_PLAN_TOOL_NAME), true)
+  for (const name of [
     CREATE_TASK_PLAN_TOOL_NAME,
+    PAUSE_TASK_PLAN_TOOL_NAME,
     ADD_TASK_ITEM_TOOL_NAME,
     UPDATE_TASK_ITEM_TOOL_NAME,
     CLOSE_TASK_PLAN_TOOL_NAME,
-  ]
+  ]) {
+    assert.equal(names.includes(name), false)
+  }
+}
+
+function assertEngagedTaskPlanTools(names: string[]): void {
+  for (const name of [
+    PAUSE_TASK_PLAN_TOOL_NAME,
+    REPLACE_TASK_PLAN_TOOL_NAME,
+    ADD_TASK_ITEM_TOOL_NAME,
+    UPDATE_TASK_ITEM_TOOL_NAME,
+    CLOSE_TASK_PLAN_TOOL_NAME,
+  ]) {
+    assert.equal(names.includes(name), true)
+  }
+  assert.equal(names.includes(CREATE_TASK_PLAN_TOOL_NAME), false)
+  assert.equal(names.includes(RESUME_TASK_PLAN_TOOL_NAME), false)
+}
+
+function assertOrdinaryProjectTools(names: string[]): void {
+  for (const name of ['ReadFile', 'ListDir', 'WriteFile', 'RunCommand']) {
+    assert.equal(names.includes(name), true)
+  }
 }
 
 function toolNames(call: MockLanguageModelV4['doStreamCalls'][number] | undefined): string[] {
@@ -422,6 +511,26 @@ function toolStep(toolName: string, input: unknown) {
           toolName,
           input: JSON.stringify(input),
         },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function multiToolStep(calls: Array<{ toolName: string; input: unknown }>) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        ...calls.map(({ toolName, input }) => ({
+          type: 'tool-call' as const,
+          toolCallId: crypto.randomUUID(),
+          toolName,
+          input: JSON.stringify(input),
+        })),
         {
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },

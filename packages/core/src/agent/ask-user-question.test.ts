@@ -11,13 +11,15 @@ import {
 import { AgentSession } from './session.ts'
 
 describe('Main 主动提问', () => {
-  it('工具说明将问题卡限制为未完成任务的必要等待点', () => {
+  it('工具说明只在必要决策和替换冲突时提问，不重复确认明确意图', () => {
     const prompt = createAskUserQuestionTool(() => {}).prompt
 
-    assert.match(prompt, /当前用户目标尚未完成/)
-    assert.match(prompt, /回答是继续完成该目标的必要条件/)
-    assert.match(prompt, /当前任务已经可以完整交付，不得调用本工具/)
-    assert.match(prompt, /不得用本工具询问用户是否满意、是否继续或是否需要更多帮助/)
+    assert.match(prompt, /实质改变下一步行动/)
+    assert.match(prompt, /保留旧计划还是原子替换/)
+    assert.match(prompt, /明确授权替换时不要重复确认/)
+    assert.match(prompt, /当前请求已经可以完整交付，不得调用本工具/)
+    assert.match(prompt, /不得用本工具询问用户是否满意、是否还需要帮助/)
+    assert.match(prompt, /已经明确的恢复意图再次确认/)
   })
 
   it('提交问题后结束 turn 并等待用户回答', async () => {

@@ -29,18 +29,11 @@ import {
   ModelInactivityWatchdog,
 } from './model-inactivity-watchdog.ts'
 import {
-  createReplaceTaskPlanTool,
   createTaskPlanTools,
-  REPLACE_TASK_PLAN_TOOL_NAME,
+  type TaskPlanEngagementAction,
+  type TaskPlanToolMode,
 } from '../tasks/tools.ts'
 import type { ActiveTaskPlan } from '../tasks/types.ts'
-import {
-  dormantTurnToolAccess,
-  requestsIndependentComplexTask,
-  requestsInterruptedTaskResume,
-  requestsTaskPlanControl,
-  type DormantTurnToolAccess,
-} from '../tasks/turn-intent.ts'
 import {
   createUserQuestionMarker,
   findPendingUserQuestion,
@@ -56,7 +49,6 @@ import {
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
 const TASK_STOP_REMINDER_LIMIT = 2
-const TASK_REPLACEMENT_REMINDER_LIMIT = 2
 const MAX_COMPACT_FAILURES = 3
 
 export interface AgentSessionOptions {
@@ -99,22 +91,13 @@ export type ApprovalHandler = (request: ApprovalRequest) => Promise<ApprovalResp
 interface QueuedMessage {
   id: string
   text: string
-  taskPlanControl: TaskPlanControl
-}
-
-type TaskPlanControl = 'auto' | 'resume' | 'new-task'
-type QueuedPlanIntent = 'none' | 'open' | 'resume'
-type TaskPlanToolAccess = 'none' | 'full' | 'replace'
-
-interface QueuedTurnIntent {
-  planIntent: QueuedPlanIntent
-  toolAccess: DormantTurnToolAccess
 }
 
 interface StepResult {
   hadToolCalls: boolean
   toolEndReason: 'completed' | 'waiting-user' | null
   taskPlanChanged: boolean
+  taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
 }
 
@@ -278,24 +261,20 @@ export class AgentSession {
    * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
    */
   handleUserMessage(text: string, urgent = false): Promise<StopReason> | void {
-    return this.handleMessage(text, urgent, 'auto')
+    return this.handleMessage(text, urgent)
   }
 
-  /** 协商执行包不参与自然语言识别；是否接合旧计划由原始用户消息显式决定。 */
-  handleExecutionMessage(
-    text: string,
-    resumeExistingTaskPlan: boolean,
-  ): Promise<StopReason> | void {
-    return this.handleMessage(text, false, resumeExistingTaskPlan ? 'resume' : 'new-task')
+  /** 协商执行包走同一模型意图路径，但不作为 urgent steering。 */
+  handleExecutionMessage(text: string): Promise<StopReason> | void {
+    return this.handleMessage(text, false)
   }
 
   private handleMessage(
     text: string,
     urgent: boolean,
-    taskPlanControl: TaskPlanControl,
   ): Promise<StopReason> | void {
     if (this.isBusy) {
-      const item = { id: crypto.randomUUID(), text, taskPlanControl }
+      const item = { id: crypto.randomUUID(), text }
       this.queue.push(item)
       this.options.emit({ type: 'message-queued', id: item.id, text })
       if (urgent && this.running) {
@@ -304,16 +283,15 @@ export class AgentSession {
       }
       return
     }
-    return this.startTurn([{ role: 'user', content: text }], taskPlanControl)
+    return this.startTurn([{ role: 'user', content: text }])
   }
 
   /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
   private startTurn(
     initialMessages: ModelMessage[],
-    taskPlanControl: TaskPlanControl = 'auto',
   ): Promise<StopReason> {
     this.opAbort = new AbortController()
-    return this.runLoop(initialMessages, this.opAbort.signal, taskPlanControl)
+    return this.runLoop(initialMessages, this.opAbort.signal)
   }
 
   /** 用户点「停止」：中止当前 turn 或压缩 */
@@ -365,28 +343,13 @@ export class AgentSession {
     this.idleWaiters.clear()
   }
 
-  /** 步骤间注入：包 system-reminder + 必须回应的前导语 */
-  private async injectQueuedMidTurn(): Promise<QueuedTurnIntent> {
+  /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
+  private async injectQueuedMidTurn(): Promise<void> {
     const injected: ModelMessage[] = []
-    let planIntent: QueuedPlanIntent = 'none'
-    let toolAccess: DormantTurnToolAccess = 'none'
     for (const item of this.drainQueue()) {
-      const explicitlyResumes = item.taskPlanControl === 'resume'
-        || (item.taskPlanControl === 'auto' && requestsTaskPlanControl(item.text))
-      const opensInterruptedPlan = explicitlyResumes
-        || (item.taskPlanControl === 'auto' && requestsInterruptedTaskResume(item.text))
-      if (explicitlyResumes) planIntent = 'resume'
-      else if (opensInterruptedPlan && planIntent === 'none') planIntent = 'open'
-      toolAccess = broaderToolAccess(toolAccess, dormantTurnToolAccess(item.text))
       const message: ModelMessage = {
         role: 'user',
-        content: [
-          '<system-reminder>',
-          '用户在你工作时发来了新消息：',
-          item.text,
-          '完成当前任务后必须回应这条消息，不要忽略它。若它改变了任务方向，优先遵循它。',
-          '</system-reminder>',
-        ].join('\n'),
+        content: item.text,
       }
       this.messages.push(message)
       injected.push(message)
@@ -395,14 +358,12 @@ export class AgentSession {
     if (injected.length > 0 && this.activeTurn) {
       await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, injected))
     }
-    return { planIntent, toolAccess }
   }
 
   /** 外层循环：turn（含 steering 续跑）→ step → 工具，直到无工具调用且队列为空 */
   private async runLoop(
     initialMessages: ModelMessage[],
     abortSignal: AbortSignal,
-    requestedTaskPlanControl: TaskPlanControl,
   ): Promise<StopReason> {
     const { emit } = this.options
     this.running = true
@@ -424,69 +385,22 @@ export class AgentSession {
       : null
     this.loopHealth = new LoopHealthMonitor()
     const usage: UsageInfo = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }
-    const taskPlanControlsAvailable = Boolean(this.taskPlan)
-      && !this.options.promptContext.discussion
-      && !this.protocolRound
-    const hadPlanAtStart = Boolean(this.taskPlan?.snapshot)
     const interruptedBoundaryPending = findPendingTurnAbortedIndex(this.messages) !== null
-    const answersPendingUserQuestion = taskPlanControlsAvailable
-      && requestedTaskPlanControl === 'auto'
-      && pendingUserQuestion !== null
+    const answersPendingUserQuestion = pendingUserQuestion !== null
       && initialMessages.some((message) =>
         message.role === 'user'
         && isUserQuestionAnswer(pendingUserQuestion, modelMessageText(message)))
     const resumesUserQuestion = answersPendingUserQuestion
       && pendingUserQuestion.resumesTaskPlan
-    const replacesUserQuestion = answersPendingUserQuestion
-      && pendingUserQuestion.replacesTaskPlan
-    const explicitlyResumesPlan = requestedTaskPlanControl === 'resume'
-      || resumesUserQuestion
-      || (requestedTaskPlanControl === 'auto'
-        && initialMessages.some(messageRequestsTaskPlanControl))
-    const opensInterruptedPlan = explicitlyResumesPlan
-      || (requestedTaskPlanControl === 'auto'
-        && initialMessages.some(messageRequestsInterruptedTaskResume))
-    const initialUserText = initialMessages
-      .filter((message) => message.role === 'user')
-      .map(modelMessageText)
-      .join('\n')
-    const replacementRequired = hadPlanAtStart && (
-      replacesUserQuestion
-      || (
-        requestedTaskPlanControl === 'auto'
-        && requestsIndependentComplexTask(initialUserText)
-      )
-    )
-    const replacementSourcePlanId = replacementRequired
-      ? this.taskPlan?.snapshot?.id ?? null
-      : null
-    let planExecutionEngaged = hadPlanAtStart && (
-      explicitlyResumesPlan || (interruptedBoundaryPending && opensInterruptedPlan)
-    )
-    let turnToolAccess: DormantTurnToolAccess =
-      replacementRequired || planExecutionEngaged || (!hadPlanAtStart && !interruptedBoundaryPending)
-        ? 'all'
-        : requestedTaskPlanControl === 'new-task'
-          ? 'all'
-          : dormantTurnToolAccess(initialUserText)
-    let taskPlanToolAccess = initialTaskPlanToolAccess({
-      controlsAvailable: taskPlanControlsAvailable,
-      hadPlanAtStart,
-      explicitlyResumesPlan,
-      opensInterruptedPlan,
-      interruptedBoundaryPending,
-      requestedControl: requestedTaskPlanControl,
-      turnToolAccess,
-    })
+    let planExecutionEngaged = resumesUserQuestion && Boolean(this.taskPlan?.snapshot)
 
     try {
       let steps = 0
       let finishedNaturally = false
       let taskStopReminders = 0
-      let taskReplacementReminders = 0
       let interruptionBoundaryConsumed = false
-      // 未结束计划可以跨 turn 保留，但不能绑架普通问答。新计划在本轮首次修改后接合；
-      // 已有计划只有获得明确的回合授权后，才启用“未完成不得提前结束”的强保护。
+      // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
+      // 只有稳定提交 Create/Replace/Resume，或回答计划自身的问题卡，才启用未完成保护。
       while (maxSteps === null || steps < maxSteps) {
         steps++
         if (maxSteps !== null && steps === maxSteps - FINALIZATION_RESERVE_STEPS) {
@@ -495,17 +409,14 @@ export class AgentSession {
         await this.compactIfNeeded(abortSignal)
         const contextMode: TaskPlanContextMode = planExecutionEngaged
           ? 'engaged'
-          : interruptedBoundaryPending
+          : interruptedBoundaryPending && !interruptionBoundaryConsumed
             ? 'blocked'
             : 'dormant'
         const step = await this.runOneStep(
           usage,
           abortSignal,
-          taskPlanToolAccess,
           contextMode,
           planExecutionEngaged,
-          replacementRequired,
-          turnToolAccess,
           interruptedBoundaryPending
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
@@ -513,13 +424,18 @@ export class AgentSession {
         )
         if (step.interruptionBoundaryConsumed) interruptionBoundaryConsumed = true
         if (step.taskPlanChanged) {
-          planExecutionEngaged = true
-          turnToolAccess = 'all'
-          taskPlanToolAccess = 'full'
+          planExecutionEngaged = Boolean(this.taskPlan?.snapshot)
           taskStopReminders = 0
         }
-        const replacementStillPending = replacementSourcePlanId !== null
-          && this.taskPlan?.snapshot?.id === replacementSourcePlanId
+        const engagement = step.taskPlanEngagement
+        if (engagement && engagement.planId === this.taskPlan?.snapshot?.id) {
+          if (engagement.type === 'resume') {
+            planExecutionEngaged = true
+            taskStopReminders = 0
+          } else {
+            planExecutionEngaged = false
+          }
+        }
         const naturalDecision = !step.hadToolCalls
           ? planExecutionEngaged
             ? this.taskPlan?.naturalStopDecision() ?? { kind: 'allow' as const }
@@ -543,27 +459,7 @@ export class AgentSession {
             }
             break
           }
-          const queuedIntent = await this.injectQueuedMidTurn()
-          if (!planExecutionEngaged) {
-            turnToolAccess = broaderToolAccess(turnToolAccess, queuedIntent.toolAccess)
-          }
-          const planIntent = queuedIntent.planIntent
-          if (taskPlanControlsAvailable && planIntent !== 'none') {
-            taskPlanToolAccess = 'full'
-            if (
-              (planIntent === 'resume' || (interruptedBoundaryPending && planIntent === 'open'))
-              && this.taskPlan?.snapshot
-            ) {
-              planExecutionEngaged = true
-            }
-          } else if (
-            taskPlanControlsAvailable
-            && !planExecutionEngaged
-            && this.taskPlan?.snapshot
-            && turnToolAccess === 'all'
-          ) {
-            taskPlanToolAccess = 'replace'
-          }
+          await this.injectQueuedMidTurn()
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
         if (abortSignal.aborted && step.hadToolCalls) {
@@ -582,24 +478,6 @@ export class AgentSession {
           break
         }
         if (!step.hadToolCalls) {
-          if (
-            replacementStillPending
-            && taskReplacementReminders < TASK_REPLACEMENT_REMINDER_LIMIT
-          ) {
-            taskReplacementReminders++
-            await this.injectTaskReplacementReminder()
-            continue
-          }
-          if (replacementStillPending) {
-            stopReason = 'paused'
-            emit({
-              type: 'error',
-              message: '新的复杂任务尚未建立计划，旧计划仍保持休眠；已安全暂停，未执行写入。',
-              recoverable: true,
-            })
-            finishedNaturally = true
-            break
-          }
           const decision = naturalDecision!
           if (decision.kind === 'continue' && abortSignal.aborted) {
             stopReason = 'aborted'
@@ -680,7 +558,6 @@ export class AgentSession {
       this.emitDrainedMessages(drained)
       return this.startTurn(
         drained.map((q) => ({ role: 'user' as const, content: q.text })),
-        queuedTaskPlanControl(drained),
       )
     }
 
@@ -715,22 +592,6 @@ export class AgentSession {
     const reminder: ModelMessage = {
       role: 'user',
       content: ['<system-reminder>', text, '</system-reminder>'].join('\n'),
-    }
-    this.messages.push(reminder)
-    if (this.activeTurn) {
-      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
-    }
-  }
-
-  /** 明确的新复杂任务不能被休眠旧计划吞掉，也不能绕过计划替换直接写入。 */
-  private async injectTaskReplacementReminder(): Promise<void> {
-    const reminder: ModelMessage = {
-      role: 'user',
-      content: [
-        '<system-reminder>',
-        taskReplacementInstruction(),
-        '</system-reminder>',
-      ].join('\n'),
     }
     this.messages.push(reminder)
     if (this.activeTurn) {
@@ -791,7 +652,6 @@ export class AgentSession {
       this.emitDrainedMessages(drained)
       await this.startTurn(
         drained.map((q) => ({ role: 'user' as const, content: q.text })),
-        queuedTaskPlanControl(drained),
       )
       return
     }
@@ -850,11 +710,8 @@ export class AgentSession {
   private async runOneStep(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
-    taskPlanToolAccess: TaskPlanToolAccess,
     taskPlanContextMode: TaskPlanContextMode,
     planExecutionEngaged: boolean,
-    replacementRequired: boolean,
-    toolAccess: DormantTurnToolAccess,
     consumeInterruptionBoundary: boolean,
   ): Promise<StepResult> {
     const { emit } = this.options
@@ -867,8 +724,12 @@ export class AgentSession {
     if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
     inactivityWatchdog.start()
 
-    const stepControl: { toolEndReason: StepResult['toolEndReason'] } = {
+    const stepControl: {
+      toolEndReason: StepResult['toolEndReason']
+      taskPlanEngagement: TaskPlanEngagementAction | null
+    } = {
       toolEndReason: null,
+      taskPlanEngagement: null,
     }
     let userQuestion: UserQuestion | null = null
     this.taskPlan?.beginStep()
@@ -877,12 +738,8 @@ export class AgentSession {
       const interruptedReference = taskPlanContextMode !== 'engaged' && !taskContext
         ? interruptedUserReference(this.messages)
         : null
-      const replacementBoundary = replacementRequired && taskPlanToolAccess === 'replace'
-        ? taskReplacementInstruction()
-        : null
       const system = [
         buildSystemPrompt(this.options.promptContext),
-        replacementBoundary,
         taskContext,
         interruptedReference,
       ]
@@ -897,9 +754,8 @@ export class AgentSession {
         messages: requestMessages,
         tools: this.buildToolSet(
           stepAbort.signal,
-          taskPlanToolAccess,
-          toolAccess,
-          replacementRequired,
+          planExecutionEngaged,
+          (action) => { stepControl.taskPlanEngagement = action },
           (question) => { userQuestion = question },
           (reason) => { stepControl.toolEndReason = reason },
         ),
@@ -969,11 +825,12 @@ export class AgentSession {
       const questionResumesTaskPlan = userQuestion !== null
         && stepControl.toolEndReason === 'waiting-user'
         && planRemainsActive
-        && (planExecutionEngaged || taskPlanCommit !== undefined)
-      const questionReplacesTaskPlan = userQuestion !== null
-        && stepControl.toolEndReason === 'waiting-user'
-        && replacementRequired
-        && taskPlanCommit === undefined
+        && stepControl.taskPlanEngagement?.type !== 'pause'
+        && (
+          planExecutionEngaged
+          || stepControl.taskPlanEngagement?.type === 'resume'
+          || taskPlanCommit !== undefined
+        )
       const internalMarkers: ModelMessage[] = []
       if (consumeInterruptionBoundary) {
         internalMarkers.push(createTurnAbortedConsumedMessage())
@@ -981,8 +838,7 @@ export class AgentSession {
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         internalMarkers.push(createUserQuestionMarker(
           userQuestion,
-          questionReplacesTaskPlan ? false : questionResumesTaskPlan,
-          questionReplacesTaskPlan,
+          questionResumesTaskPlan,
         ))
       }
       const committedMessages = [...response.messages, ...internalMarkers]
@@ -1010,6 +866,7 @@ export class AgentSession {
         hadToolCalls,
         toolEndReason: stepControl.toolEndReason,
         taskPlanChanged: taskPlanCommit !== undefined,
+        taskPlanEngagement: stepControl.taskPlanEngagement,
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
       }
     } catch (error) {
@@ -1029,6 +886,7 @@ export class AgentSession {
           hadToolCalls: false,
           toolEndReason: null,
           taskPlanChanged: false,
+          taskPlanEngagement: null,
           interruptionBoundaryConsumed: false,
         }
       }
@@ -1043,22 +901,22 @@ export class AgentSession {
   /** 包装工具集；无项目时只开放显式声明的控制面工具。 */
   private buildToolSet(
     abortSignal: AbortSignal,
-    taskPlanToolAccess: TaskPlanToolAccess,
-    toolAccess: DormantTurnToolAccess,
-    replacementRequired: boolean,
+    planExecutionEngaged: boolean,
+    onTaskPlanEngagement: (action: TaskPlanEngagementAction) => void,
     onUserQuestion: (question: UserQuestion) => void,
     onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
-    const taskTools = toolAccess === 'all'
-      && this.taskPlan
-      && taskPlanToolAccess !== 'none'
+    const taskPlanMode: TaskPlanToolMode = this.taskPlan?.snapshot
+      ? planExecutionEngaged ? 'engaged' : 'dormant'
+      : 'empty'
+    const taskTools = this.taskPlan
       && !this.options.promptContext.discussion
       && !this.protocolRound
-      ? taskPlanToolAccess === 'replace'
-        ? [createReplaceTaskPlanTool(this.taskPlan)]
-        : createTaskPlanTools(this.taskPlan)
+      ? createTaskPlanTools(this.taskPlan, taskPlanMode, {
+          onEngagementAction: onTaskPlanEngagement,
+        })
       : []
     const questionTools: ToolDefinition[] =
       this.userQuestionsEnabled
@@ -1070,12 +928,10 @@ export class AgentSession {
             }),
           ]
         : []
-    const mainTools =
-      toolAccess === 'all'
-      && !this.options.promptContext.discussion
+    const mainTools = !this.options.promptContext.discussion
       && !this.protocolRound
-        ? (this.options.mainTools ?? [])
-        : []
+      ? (this.options.mainTools ?? [])
+      : []
     const controlTools: ToolDefinition[] = [
       ...extraTools,
       ...taskTools,
@@ -1085,27 +941,26 @@ export class AgentSession {
     const availableDefs: ToolDefinition[] = projectDir
       ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...controlTools]
       : controlTools.filter((tool) => tool.availableWithoutProject)
-    const accessDefs: ToolDefinition[] = toolAccess === 'none'
-      ? questionTools
-      : toolAccess === 'read-only'
-        ? [
-            ...availableDefs.filter((tool) =>
-              tool.isReadOnly && !questionTools.includes(tool)),
-            ...questionTools,
-          ]
-        : availableDefs
-    const defs = replacementRequired && taskPlanToolAccess === 'replace'
-      ? accessDefs.filter((tool) =>
-          tool.isReadOnly
-          || questionTools.includes(tool)
-          || tool.name === REPLACE_TASK_PLAN_TOOL_NAME)
-      : accessDefs
+    const defs = availableDefs
     const toolProjectDir =
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
     if (defs.length === 0) return undefined
 
     const { emit, requestApproval } = this.options
     const toolSet: ToolSet = {}
+    let firstStepToolName: string | null = null
+    let standaloneStepToolName: string | null = null
+    const claimStepTool = (def: ToolDefinition): string | null => {
+      if (standaloneStepToolName) {
+        return `${standaloneStepToolName} 必须独占一个模型步骤；请在下一模型步骤再调用 ${def.name}。`
+      }
+      if (def.requiresStandaloneStep && firstStepToolName) {
+        return `${def.name} 必须独占一个模型步骤，但本步骤已经调用 ${firstStepToolName}；请在下一模型步骤单独调用 ${def.name}。`
+      }
+      firstStepToolName ??= def.name
+      if (def.requiresStandaloneStep) standaloneStepToolName = def.name
+      return null
+    }
     for (const def of defs) {
       const executeTool = async (
         input: unknown,
@@ -1265,12 +1120,29 @@ export class AgentSession {
           return msg
         }
       }
-      const executeSerially = (input: unknown, context: { toolCallId: string }) =>
-        this.enqueueSerialTool(() => executeTool(input, context))
+      const executeWithStepGate = (
+        input: unknown,
+        context: { toolCallId: string },
+      ): Promise<string> => {
+        const conflict = claimStepTool(def)
+        if (conflict) {
+          emit({
+            type: 'tool-end',
+            toolUseId: context.toolCallId,
+            result: conflict,
+            isError: true,
+          })
+          this.loopHealth.record(def.name, input, conflict, true)
+          return Promise.resolve(conflict)
+        }
+        return def.isReadOnly
+          ? executeTool(input, context)
+          : this.enqueueSerialTool(() => executeTool(input, context))
+      }
       toolSet[def.name] = aiTool({
         description: def.prompt,
         inputSchema: def.inputSchema,
-        execute: def.isReadOnly ? executeTool : executeSerially,
+        execute: executeWithStepGate,
       })
     }
     return toolSet
@@ -1362,7 +1234,6 @@ export class AgentSession {
         this.emitDrainedMessages(drained)
         await this.startTurn(
           drained.map((item) => ({ role: 'user' as const, content: item.text })),
-          queuedTaskPlanControl(drained),
         )
       }
       this.resolveIdleWaiters()
@@ -1397,69 +1268,7 @@ export class AgentSession {
   }
 }
 
-function messageRequestsTaskPlanControl(message: ModelMessage): boolean {
-  if (message.role !== 'user') return false
-  return requestsTaskPlanControl(modelMessageText(message))
-}
-
-function messageRequestsInterruptedTaskResume(message: ModelMessage): boolean {
-  if (message.role !== 'user') return false
-  return requestsInterruptedTaskResume(modelMessageText(message))
-}
-
 function modelMessageText(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content
   return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
-}
-
-function queuedTaskPlanControl(messages: QueuedMessage[]): TaskPlanControl {
-  if (messages.some((message) => message.taskPlanControl === 'resume')) return 'resume'
-  return messages.every((message) => message.taskPlanControl === 'new-task') ? 'new-task' : 'auto'
-}
-
-function broaderToolAccess(
-  current: DormantTurnToolAccess,
-  incoming: DormantTurnToolAccess,
-): DormantTurnToolAccess {
-  const rank: Record<DormantTurnToolAccess, number> = {
-    none: 0,
-    'read-only': 1,
-    all: 2,
-  }
-  return rank[incoming] > rank[current] ? incoming : current
-}
-
-function initialTaskPlanToolAccess(input: {
-  controlsAvailable: boolean
-  hadPlanAtStart: boolean
-  explicitlyResumesPlan: boolean
-  opensInterruptedPlan: boolean
-  interruptedBoundaryPending: boolean
-  requestedControl: TaskPlanControl
-  turnToolAccess: DormantTurnToolAccess
-}): TaskPlanToolAccess {
-  if (!input.controlsAvailable) return 'none'
-  if (input.explicitlyResumesPlan) return 'full'
-  if (input.hadPlanAtStart) {
-    return input.turnToolAccess === 'all' ? 'replace' : 'none'
-  }
-  if (input.requestedControl === 'new-task') {
-    return input.interruptedBoundaryPending ? 'none' : 'full'
-  }
-  return !input.interruptedBoundaryPending
-    || input.opensInterruptedPlan
-    || input.turnToolAccess === 'all'
-    ? 'full'
-    : 'none'
-}
-
-function taskReplacementInstruction(): string {
-  return [
-    '<task-replacement-required>',
-    '最新用户消息明确开始了一个独立的新复杂任务；它是当前目标，旧任务计划仅作为休眠历史。',
-    `在写入文件或执行命令前，必须先调用 ${REPLACE_TASK_PLAN_TOOL_NAME}，原子归档旧计划并建立新计划。`,
-    '任务范围很大时，应把目标解释为当前环境中可交付、可验证的实现，建立分阶段计划并推进；不要仅以无法完整复刻商业产品或任务规模较大为由拒绝。',
-    '只有缺少会实质改变实现方向、且无法安全假设的选择时，才调用 AskUserQuestion。',
-    '</task-replacement-required>',
-  ].join('\n')
 }

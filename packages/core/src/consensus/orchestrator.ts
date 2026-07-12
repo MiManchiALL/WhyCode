@@ -1,18 +1,7 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
 import type { CoreEvent, CoreEventSink, StopReason } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
-import {
-  createTurnAbortedMessage,
-  findPendingTurnAbortedIndex,
-} from '../session/interruption.ts'
-import {
-  requestsInterruptedTaskResume,
-  requestsTaskPlanControl,
-} from '../tasks/turn-intent.ts'
-import {
-  findPendingUserQuestion,
-  isUserQuestionAnswer,
-} from '../tasks/answer-resume.ts'
+import { createTurnAbortedMessage } from '../session/interruption.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
@@ -191,16 +180,6 @@ export class ConsensusCoordinator {
       { role: 'user' as const, content: userText },
     ]
     const startTaskPlan = mainSession.captureTaskPlanSnapshot()
-    const pendingUserQuestion = findPendingUserQuestion(startMessages)
-    const resumeExistingTaskPlan = requestsTaskPlanControl(userText)
-      || (
-        pendingUserQuestion?.resumesTaskPlan === true
-        && isUserQuestionAnswer(pendingUserQuestion, userText)
-      )
-      || (
-        findPendingTurnAbortedIndex(startMessages) !== null
-        && requestsInterruptedTaskResume(userText)
-      )
     let outcome: ConsensusTaskOutcome = 'error'
     let taskBoundaryStarted = false
     let taskPlanRolledBack = false
@@ -272,7 +251,6 @@ export class ConsensusCoordinator {
         emit({ type: 'execution-started', taskId })
         const stopReason = await mainSession.handleExecutionMessage(
           buildMainOnlyExecutionPrompt(userText, m1.candidate),
-          resumeExistingTaskPlan,
         )
         outcome = this.executionOutcome(stopReason)
         return
@@ -310,11 +288,8 @@ export class ConsensusCoordinator {
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
-      const resumePlanAfterNegotiation = resumeExistingTaskPlan
-        || this.pendingTexts.some((message) => requestsTaskPlanControl(message.text))
       const stopReason = await mainSession.handleExecutionMessage(
         this.appendPendingTexts(packageText),
-        resumePlanAfterNegotiation,
       )
       outcome = this.executionOutcome(stopReason)
     } catch (error) {

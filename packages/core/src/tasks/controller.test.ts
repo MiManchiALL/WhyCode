@@ -62,6 +62,25 @@ describe('Main 长任务计划控制器', () => {
     assert.equal(committed.activePlan?.goal, '交付新游戏')
   })
 
+  it('计划身份切换必须独占计划变更，替换事件不会被后续更新覆盖', () => {
+    const { controller } = activeController()
+    controller.beginStep()
+
+    assert.equal(controller.replace('交付新游戏', drafts, '用户明确切换游戏').ok, true)
+    assert.equal(
+      controller.updateItem('T1', 'completed', ['旧上下文证据']).ok,
+      false,
+    )
+    const committed = controller.commitStep()
+    assert.equal(committed?.displayUpdate.kind, 'replaced')
+    assert.equal(committed?.activePlan?.items[0]?.status, 'in_progress')
+
+    controller.beginStep()
+    assert.equal(controller.updateItem('T1', 'completed', ['新计划证据']).ok, true)
+    assert.equal(controller.replace('不应覆盖', drafts, '同一步二次切换').ok, false)
+    assert.equal(controller.commitStep()?.displayUpdate.kind, 'updated')
+  })
+
   it('所有任务和验证完成前拒绝关闭计划', () => {
     const { controller } = activeController()
     controller.beginStep()
