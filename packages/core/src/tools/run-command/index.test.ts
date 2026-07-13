@@ -7,9 +7,9 @@ import { runCommandTool, scanCommandPaths } from './index.ts'
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
 
-function failAfter(ms: number): Promise<never> {
+function failAfter(ms: number, message = 'RunCommand 未及时返回'): Promise<never> {
   return new Promise((_, reject) => {
-    const timer = setTimeout(() => reject(new Error('RunCommand 未在中止后及时返回')), ms)
+    const timer = setTimeout(() => reject(new Error(message)), ms)
     timer.unref()
   })
 }
@@ -37,12 +37,15 @@ async function forceKill(pid: number): Promise<void> {
 }
 
 function nodeCommand(script: string): string {
+  // Windows PowerShell 5.1 会剥掉原生参数中的嵌套引号，测试脚本先编码再传递。
+  const encoded = Buffer.from(script, 'utf8').toString('base64')
+  const runner = 'eval(atob(process.argv[1]))'
   if (process.platform === 'win32') {
     const executable = process.execPath.replaceAll("'", "''")
-    return `& '${executable}' -e '${script}'`
+    return `& '${executable}' -e '${runner}' '${encoded}'`
   }
   const executable = process.execPath.replaceAll("'", "'\\''")
-  return `'${executable}' -e '${script}'`
+  return `'${executable}' -e '${runner}' '${encoded}'`
 }
 
 function descendantCommand(): string {
@@ -110,6 +113,54 @@ describe('RunCommand 中止', () => {
 })
 
 describe('RunCommand 结果', () => {
+  it('关闭 stdin，让等待输入结束的命令立即收到 EOF', async () => {
+    const abortController = new AbortController()
+    const execution = runCommandTool.execute(
+      {
+        command: nodeCommand(
+          'process.stdin.resume(); process.stdin.on("end", () => console.log("stdin-closed"))',
+        ),
+        timeoutMs: 30_000,
+      },
+      {
+        projectDir: process.cwd(),
+        additionalDirs: [],
+        abortSignal: abortController.signal,
+      },
+    )
+
+    try {
+      const result = await Promise.race([
+        execution,
+        failAfter(4_000, 'RunCommand 没有向等待输入的命令发送 EOF'),
+      ])
+      assert.equal(result.isError, false, result.data)
+      assert.match(result.data, /stdin-closed/)
+    } finally {
+      abortController.abort('test-cleanup')
+    }
+  })
+
+  it('Windows PowerShell 交互提示快速失败而不是等待命令超时', {
+    skip: process.platform !== 'win32',
+  }, async () => {
+    const result = await Promise.race([
+      runCommandTool.execute(
+        { command: "Read-Host 'confirm'", timeoutMs: 30_000 },
+        {
+          projectDir: process.cwd(),
+          additionalDirs: [],
+          abortSignal: new AbortController().signal,
+        },
+      ),
+      failAfter(8_000, 'PowerShell 交互提示没有快速失败'),
+    ])
+
+    assert.equal(result.isError, true)
+    assert.match(result.data, /NonInteractive|ReadHostCommand/)
+    assert.doesNotMatch(result.data, /命令超时/)
+  })
+
   it('没有 stdout 时明确区分命令成功和失败', async () => {
     const context = {
       projectDir: process.cwd(),
@@ -128,7 +179,18 @@ describe('RunCommand 结果', () => {
     assert.equal(success.isError, false)
     assert.equal(success.data, '（命令成功，无标准输出）')
     assert.equal(failure.isError, true)
-    assert.match(failure.data, /\[退出码 [1-9]\d*\]/)
+    assert.match(failure.data, /\[退出码 2\]/)
     assert.doesNotMatch(failure.data, /命令成功/)
+
+    if (process.platform === 'win32') {
+      const cmdletFailure = await runCommandTool.execute(
+        {
+          command: `${nodeCommand('process.exit(0)')}; Get-Item -LiteralPath 'whycode-missing-command-result' -ErrorAction SilentlyContinue`,
+        },
+        context,
+      )
+      assert.equal(cmdletFailure.isError, true)
+      assert.match(cmdletFailure.data, /\[退出码 1\]/)
+    }
   })
 })
