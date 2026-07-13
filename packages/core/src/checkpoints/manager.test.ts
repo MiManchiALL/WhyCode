@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -27,7 +27,7 @@ describe('持久化资源检查点', () => {
     assert.ok(await env.manager.finalize(prepared))
 
     const restored = await env.manager.restore('tool-create', 'files')
-    assert.equal(restored.ok, true)
+    assert.equal(restored.ok, true, restored.error)
     await assert.rejects(access(path))
     await assert.rejects(access(join(env.external, 'new-parent')))
   })
@@ -162,12 +162,35 @@ describe('持久化资源检查点', () => {
     assert.equal(ready?.coverage, 'partial')
 
     const restored = await env.manager.restore('tool-command', 'files')
-    assert.equal(restored.ok, true)
+    assert.equal(restored.ok, true, restored.error)
     assert.equal(await readFile(modified, 'utf8'), 'before modified')
     assert.equal(await readFile(deleted, 'utf8'), 'before deleted')
     assert.equal(await readFile(untouched, 'utf8'), 'stay')
     await assert.rejects(access(created))
     await access(join(env.project, '.git'))
+  })
+
+  it('树回滚只捕获变更路径，不重新扫描无关超大文件', async () => {
+    const env = await createEnvironment()
+    const target = join(env.project, 'target.txt')
+    await writeFile(target, 'before')
+    const prepared = await env.manager.prepare('tool-scoped-restore', 'turn-1', {
+      kind: 'workspace-roots',
+      roots: [env.project],
+      warning: '命令影响范围无法完全证明',
+    })
+    assert.ok(prepared, env.manager.disabled ?? '树检查点准备失败')
+    await writeFile(target, 'after')
+    assert.ok(await env.manager.finalize(prepared))
+
+    const unrelated = join(env.project, 'unrelated.csv')
+    await writeFile(unrelated, '')
+    await truncate(unrelated, 65 * 1024 * 1024)
+
+    const restored = await env.manager.restore('tool-scoped-restore', 'files')
+    assert.equal(restored.ok, true, restored.error)
+    assert.equal(await readFile(target, 'utf8'), 'before')
+    await access(unrelated)
   })
 
   it('命令只影响被拒绝的大范围目录时明确说明没有可回滚文件', async () => {

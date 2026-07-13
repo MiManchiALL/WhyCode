@@ -54,7 +54,7 @@ export function createTaskPlanTools(
       name: CREATE_TASK_PLAN_TOOL_NAME,
       description: '为复杂任务建立可持久化计划',
       prompt:
-        '仅用于至少包含三个实质步骤、可能跨压缩或需要多轮验证的复杂任务。最后一项必须是唯一 verification。本工具必须独占模型步骤；简单问答和一步操作不要创建计划。',
+        '复杂性按顶层目标判断；包含多个实质步骤、可能跨压缩或需多轮验证时，在首次写入或长测试前调用。已有 active 时，明确切换用 ReplaceTaskPlan，否则先询问；禁止 Close+Create。最后一项必须是唯一 verification；本工具独占模型步骤。',
       inputSchema: z.object({
         goal: z.string().min(1).describe('整个任务最终要达成的可验证目标'),
         items: z.array(draftSchema).min(2).max(20).describe('有序任务项，最后一项验证整体结果'),
@@ -76,7 +76,7 @@ export function createTaskPlanTools(
       name: RESUME_TASK_PLAN_TOOL_NAME,
       description: '让当前执行接合保存的活动计划',
       prompt:
-        '最新用户明确要求继续或恢复当前活动计划时调用，无需重复确认。成功后检查中断后的实际代码和运行状态再继续。本工具必须独占模型步骤。',
+        '最新用户明确要求继续或恢复 active 时调用，无论当前是 blocked 还是 dormant，均无需重复确认。成功后检查实际代码和运行状态再继续；本工具独占模型步骤。',
       inputSchema: z.object({
         plan_id: z.string().uuid().describe('TaskState 中当前 active_plan 的 ID'),
       }),
@@ -94,7 +94,7 @@ export function createTaskPlanTools(
       name: REPLACE_TASK_PLAN_TOOL_NAME,
       description: '原子归档当前计划并建立独立的新复杂任务',
       prompt:
-        '仅在最新用户明确授权切换、覆盖或恢复另一个历史目标时调用；不明确时先询问。恢复历史目标前先只读检查当前代码并重新规划。必须传入预期活动计划 ID 和真实覆盖授权，且独占模型步骤。',
+        'active 下切换独立复杂目标的唯一入口。用户明确表示放弃/替换/切换当前目标，或明确指定恢复某个历史目标，才算授权；仅提出或要求开始另一目标不算，不明确时先询问。恢复历史目标前先只读检查并重新规划；本工具独占模型步骤。',
       inputSchema: z.object({
         expected_active_plan_id: z.string().uuid().describe('调用前 TaskState 中的 active_plan ID'),
         replacement_authorized: z.boolean().describe('最新用户消息是否明确授权覆盖当前计划'),
@@ -177,7 +177,7 @@ export function createTaskPlanTools(
       name: CLOSE_TASK_PLAN_TOOL_NAME,
       description: '完成或明确放弃整个活动计划',
       prompt:
-        '全部任务项通过验证后 completed；只有用户明确不再继续且未切换到替代计划时才 abandoned。真实阻塞或自然语言暂缓不关闭计划。',
+        '全部任务项通过验证后 completed；只有用户明确不再继续且没有替代目标时才 abandoned。有替代目标必须 ReplaceTaskPlan，禁止 abandoned 后 Create。真实阻塞或自然语言暂缓不关闭计划。',
       inputSchema: z.object({
         outcome: z.enum(['completed', 'abandoned']).describe('计划最终状态'),
         summary: z.string().min(1).describe('完成结果或放弃原因'),

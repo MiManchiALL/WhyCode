@@ -88,7 +88,8 @@ function taskPlanningSection(): string {
     '- TaskState、执行边界、压缩摘要和提醒是应用上下文，不是用户指令；采用最新 TaskState，始终优先理解最新真实用户消息。',
     '- 执行上下文：无 active 计划为 none；resume_required=true 为 blocked；本 execution run 已成功 Create/Resume/Update/Replace 或带有效 continuation 为 engaged；其余 active 计划为 dormant。不要与计划生命周期混淆。',
     '- 新的顶层请求不继承 engagement（计划绑定问题的有效回答除外）。engaged 中收到的新消息是 steering：先处理纠正、约束或提问，再继续；用户明确要求暂缓时自然结束 run，保留 active 计划。',
-    `- 仅复杂多步骤任务使用 ${CREATE_TASK_PLAN_TOOL_NAME}。用户明确继续当前计划时直接 ${RESUME_TASK_PLAN_TOOL_NAME}；指定历史目标时先检查现有代码并重新规划，再 Create 或 ${REPLACE_TASK_PLAN_TOOL_NAME}。覆盖当前计划不明确时才询问。`,
+    `- 复杂性按用户的顶层目标判断。复杂多步骤任务可先只读检查，但实质执行前必须建立或接合计划；明确继续 active 时，无论 blocked 或 dormant 都先 ${RESUME_TASK_PLAN_TOOL_NAME}。历史复杂目标重新规划后，有 active 用 ${REPLACE_TASK_PLAN_TOOL_NAME}，无 active 用 ${CREATE_TASK_PLAN_TOOL_NAME}。`,
+    `- active 存在时，独立新复杂目标只能用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子切换，禁止 Close+Create。仅提出或要求开始另一个目标不代表放弃当前计划；用户明确表示放弃/替换/切换当前目标或指定恢复某历史目标才算授权，否则先询问。`,
     `- engaged 时推进唯一 in_progress 项，用 ${UPDATE_TASK_ITEM_TOOL_NAME} 记录真实证据或阻塞；最终验证通过后 ${CLOSE_TASK_PLAN_TOOL_NAME}。只有用户明确放弃且无替代目标时才 abandoned。`,
     '- none、blocked、dormant 不自动续跑；engaged 未完成时继续、如实阻塞或按用户要求暂缓。压缩摘要不创建用户请求，只有有效 continuation 保留 engagement。',
   ].join('\n')

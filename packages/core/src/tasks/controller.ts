@@ -125,7 +125,10 @@ export class TaskPlanController {
       return mutationFailure('step_conflict', 'CreateTaskPlan 必须作为本步骤唯一的计划变更。')
     }
     if (this.state.activePlan) {
-      return mutationFailure('active_plan_exists', '已有未结束的任务计划；请先完成或放弃当前计划。')
+      return mutationFailure(
+        'active_plan_exists',
+        '当前已有 active 计划：验证完成后才能 CloseTaskPlan(completed)；明确切换独立复杂目标时使用 ReplaceTaskPlan；覆盖不明确时先询问。禁止用 CloseTaskPlan(abandoned)+CreateTaskPlan 代替 ReplaceTaskPlan。',
+      )
     }
     const next = this.buildPlan(goal, drafts)
     if ('error' in next) return mutationFailure('invalid_plan', next.error)

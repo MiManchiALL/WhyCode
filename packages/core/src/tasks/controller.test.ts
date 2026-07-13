@@ -183,6 +183,22 @@ describe('Main 长任务计划控制器', () => {
     assert.equal(result.ok ? null : result.error, 'active_plan_conflict')
     assert.deepEqual(controller.stateSnapshot, before)
   })
+
+  it('已有计划时 Create 引导原子替换而不是先放弃', () => {
+    const { controller } = activeController()
+    controller.beginStep()
+
+    const result = controller.create('另一个复杂任务', drafts)
+
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? null : result.error, 'active_plan_exists')
+    assert.match(result.ok ? '' : result.message, /ReplaceTaskPlan/)
+    assert.match(
+      result.ok ? '' : result.message,
+      /禁止用 CloseTaskPlan\(abandoned\)\+CreateTaskPlan/,
+    )
+    assert.deepEqual(controller.snapshot?.goal, '交付功能')
+  })
 })
 
 function createController() {

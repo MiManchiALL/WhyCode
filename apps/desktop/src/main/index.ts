@@ -395,16 +395,18 @@ function resetRuntime(keepJournal = false): void {
 function runtimeSnapshot(): RuntimeSnapshot {
   const journal = sessions?.journal ?? null
   const busy = runtimeBusy()
+  const checkpointRestoreToolUseId = session?.checkpointRestoreToolUseId ?? null
   return {
     projectDir,
     modelId: currentModelId,
     permissionMode: pendingPermissionMode ?? 'default',
     status: sessionDeletionId
       ? 'working'
-      : busy && currentAgentStatus === 'idle'
+      : busy && currentAgentStatus === 'idle' && !checkpointRestoreToolUseId
         ? 'working'
         : currentAgentStatus,
     busy,
+    checkpointRestoreToolUseId,
     deletingSessionId: sessionDeletionId,
     viewEvents: journal ? [...journal.initialViewEvents] : [],
     approval: [...pendingApprovals.values()].at(-1)?.request ?? null,
@@ -418,7 +420,9 @@ async function startNewSession(): Promise<SessionActionResult> {
       ok: false,
       error: sessionDeletionId
         ? '会话数据删除中，请等待完成后再新建会话'
-        : 'Agent 工作中，请先停止再新建会话',
+        : session?.checkpointRestoreToolUseId
+          ? '文件回滚中，请等待完成后再新建会话'
+          : 'Agent 工作中，请先停止再新建会话',
     }
   }
   resetRuntime()
@@ -431,7 +435,9 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       ok: false,
       error: sessionDeletionId
         ? '会话数据删除中，请等待完成后再恢复会话'
-        : 'Agent 工作中，请先停止再恢复会话',
+        : session?.checkpointRestoreToolUseId
+          ? '文件回滚中，请等待完成后再恢复会话'
+          : 'Agent 工作中，请先停止再恢复会话',
     }
   }
   resetRuntime()
@@ -471,7 +477,9 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       ok: false,
       error: sessionDeletionId
         ? '已有会话正在删除，请等待完成'
-        : 'Agent 工作中，请先停止再删除会话',
+        : session?.checkpointRestoreToolUseId
+          ? '文件回滚中，请等待完成后再删除会话'
+          : 'Agent 工作中，请先停止再删除会话',
     }
   }
   const deletedCurrent = sessions.currentSessionId === sessionId
@@ -564,7 +572,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
         type: 'error',
         message: sessionDeletionId
           ? '会话数据删除中，请等待完成后再切换项目'
-          : 'Agent 工作中，请先停止并等待当前操作结束后再切换项目',
+          : session?.checkpointRestoreToolUseId
+            ? '文件回滚中，请等待完成后再切换项目'
+            : 'Agent 工作中，请先停止并等待当前操作结束后再切换项目',
         recoverable: true,
       })
       return null
@@ -579,7 +589,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (runtimeBusy()) {
       broadcastEvent({
         type: 'error',
-        message: '当前操作已经开始，项目切换已取消；请停止后重试',
+        message: session?.checkpointRestoreToolUseId
+          ? '文件回滚已经开始，项目切换已取消；请等待完成后重试'
+          : '当前操作已经开始，项目切换已取消；请停止后重试',
         recoverable: true,
       })
       return null

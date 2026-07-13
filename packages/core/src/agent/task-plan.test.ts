@@ -311,7 +311,9 @@ describe('Main 长任务端到端控制', () => {
     const { session, events } = createSession(model, 'E:\\Test')
     session.restoreTaskStateSnapshot(activeState())
 
-    const result = await session.handleUserMessage('你现在给我完整开发一个 CSGO 枪战游戏')
+    const result = await session.handleUserMessage(
+      '放弃当前旧任务，切换到完整开发一个 CSGO 枪战游戏',
+    )
 
     assert.equal(result, 'completed')
     const firstTools = toolNames(model.doStreamCalls[0])
@@ -446,22 +448,22 @@ describe('Main 长任务端到端控制', () => {
     assert.deepEqual(session.captureTaskStateSnapshot(), activeState())
   })
 
-  it('替换前的必要追问跨会话保留，新回答先建立新计划而不恢复旧计划', async () => {
-    const question = '新游戏优先采用哪种呈现方式？'
+  it('替换确认跨会话保留，明确回答后原子建立新计划', async () => {
+    const question = '是否放弃当前任务并改做 CSGO？'
     const model = modelWithSteps([
       toolStep('AskUserQuestion', {
-        header: '呈现方式',
+        header: '替换任务',
         question,
         options: [
-          { label: '网页 3D', description: '浏览器直接运行' },
-          { label: '桌面 2D', description: '实现成本更低' },
+          { label: '确认切换', description: '归档当前计划并建立 CSGO 计划' },
+          { label: '保留旧任务', description: '不覆盖当前活动计划' },
         ],
       }),
       toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
         expected_active_plan_id: activePlan().id,
         replacement_authorized: true,
         goal: '完整开发新的 CSGO 游戏',
-        reason: '用户回答了新任务的必要选择',
+        reason: '用户在替换确认问题中明确选择了确认切换',
         items: [
           { kind: 'work', title: '实现游戏', acceptance: '核心玩法可运行' },
           { kind: 'verification', title: '验证游戏', acceptance: '运行无错误' },
@@ -486,7 +488,7 @@ describe('Main 长任务端到端控制', () => {
     const reopened = createSession(model, 'E:\\Test').session
     reopened.restoreMessageSnapshot(first.captureMessageSnapshot())
     reopened.restoreTaskStateSnapshot(first.captureTaskStateSnapshot()!)
-    const result = await reopened.handleUserMessage(`回答「${question}」：网页 3D`)
+    const result = await reopened.handleUserMessage(`回答「${question}」：确认切换`)
 
     assert.equal(result, 'completed')
     const answerTools = toolNames(model.doStreamCalls[1])

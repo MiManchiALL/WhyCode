@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict'
-import { access, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  truncate,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -174,7 +183,10 @@ describe('Agent 资源检查点联动', () => {
       requestApproval: async () => ({ approved: true }),
     })
 
-    assert.equal(await session.handleUserMessage('现在完整开发 CSGO'), 'completed')
+    assert.equal(
+      await session.handleUserMessage('放弃当前蔚蓝任务，切换到完整开发 CSGO'),
+      'completed',
+    )
     const checkpoint = events.find((event) => event.type === 'checkpoint-created')
     assert.ok(checkpoint?.type === 'checkpoint-created')
     assert.equal(await readFile(target, 'utf8'), 'csgo')
@@ -189,26 +201,47 @@ describe('Agent 资源检查点联动', () => {
     assert.equal(restored?.type === 'checkpoint-restored' && restored.ok, true)
     assert.deepEqual(restored?.type === 'checkpoint-restored' ? restored.taskPlan : null, oldPlan)
   })
+
+  it('超大工作区快速降级为不可回滚屏障并明确通知', async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-checkpoint-budget-'))
+    roots.push(root)
+    const project = join(root, 'project')
+    await mkdir(project)
+    const oversized = join(project, 'oversized.csv')
+    await writeFile(oversized, '')
+    await truncate(oversized, 65 * 1024 * 1024)
+    const recorder = await new SessionStore(join(root, 'sessions')).create({
+      projectDir: project,
+      modelId: 'test:checkpoint',
+    })
+    const events: CoreEvent[] = []
+    const session = new AgentSession({
+      model: modelEntry(modelRunningCommand()),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: project, osPlatform: process.platform },
+      checkpointStorageDir: join(root, 'checkpoints'),
+      sessionRecorder: recorder,
+      emit: (event) => events.push(event),
+      requestApproval: async () => ({ approved: true }),
+    })
+
+    assert.equal(await session.handleUserMessage('运行一个短命令'), 'completed')
+    const disabled = events.find((event) => event.type === 'checkpoint-disabled')
+    assert.match(disabled?.type === 'checkpoint-disabled' ? disabled.reason : '', /单文件预算/)
+    assert.equal(events.some((event) => event.type === 'checkpoint-created'), false)
+  })
 })
 
-function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
-  const toolStep = (toolName: string, input: unknown, id: string) => ({
-    stream: simulateReadableStream({
-      chunks: [
-        {
-          type: 'tool-call' as const,
-          toolCallId: id,
-          toolName,
-          input: JSON.stringify(input),
-        },
-        {
-          type: 'finish' as const,
-          finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: usage(),
-        },
-      ],
-    }),
+function modelRunningCommand(): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doStream: [
+      toolStep('RunCommand', { command: 'echo ok' }, 'run-command-without-checkpoint'),
+      textStep('命令完成', 'command-final'),
+    ],
   })
+}
+
+function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
       toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
@@ -226,20 +259,7 @@ function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
         outcome: 'abandoned',
         summary: '测试结束',
       }, 'close-plan'),
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'text-start' as const, id: 'replacement-final' },
-            { type: 'text-delta' as const, id: 'replacement-final', delta: '替换完成' },
-            { type: 'text-end' as const, id: 'replacement-final' },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'stop' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
+      textStep('替换完成', 'replacement-final'),
     ],
   })
 }
@@ -247,39 +267,47 @@ function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
 function modelWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            {
-              type: 'tool-call' as const,
-              toolCallId: 'write-external',
-              toolName: 'WriteFile',
-              input: JSON.stringify({ path, content: 'hello' }),
-            },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'tool-calls' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'text-start' as const, id: 'final' },
-            { type: 'text-delta' as const, id: 'final', delta: '已创建' },
-            { type: 'text-end' as const, id: 'final' },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'stop' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
+      toolStep('WriteFile', { path, content: 'hello' }, 'write-external'),
+      textStep('已创建', 'final'),
     ],
   })
+}
+
+function toolStep(toolName: string, input: unknown, id: string) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: 'tool-call' as const,
+          toolCallId: id,
+          toolName,
+          input: JSON.stringify(input),
+        },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function textStep(text: string, id: string) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: 'text-start' as const, id },
+        { type: 'text-delta' as const, id, delta: text },
+        { type: 'text-end' as const, id },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
 }
 
 function modelEntry(model: MockLanguageModelV4): ModelEntry {

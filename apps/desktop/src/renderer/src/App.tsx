@@ -50,6 +50,7 @@ export function App() {
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [showSessions, setShowSessions] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
@@ -83,6 +84,11 @@ export function App() {
         break
       case 'turn-end':
         void refreshSessions()
+        break
+      case 'checkpoint-restored':
+        setCheckpointRestoreToolUseId((current) =>
+          current === event.toolUseId ? null : current,
+        )
         break
       case 'message-queued':
         setQueued((prev) => [...prev, { id: event.id, text: event.text }])
@@ -143,12 +149,16 @@ export function App() {
     })
     void window.whycode.runtimeSnapshot().then((snapshot) => {
       if (disposed) return
-      const restored = restoreRuntimeConversation(snapshot.viewEvents, snapshot.busy)
+      const restored = restoreRuntimeConversation(
+        snapshot.viewEvents,
+        snapshot.busy && !snapshot.checkpointRestoreToolUseId,
+      )
       setView(restored)
       setProjectDir(snapshot.projectDir)
       setPermMode(snapshot.permissionMode)
       setStatus(snapshot.status)
       setDeletingSessionId(snapshot.deletingSessionId)
+      setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
       setStopping(false)
       setQueued([])
       setApproval(snapshot.approval)
@@ -193,7 +203,13 @@ export function App() {
   }, [])
 
   const busy = status !== 'idle' && status !== 'error'
-  const interactionBusy = busy || deletingSessionId !== null
+  const interactionBusy = busy || deletingSessionId !== null || checkpointRestoreToolUseId !== null
+
+  const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
+    setCheckpointRestoreToolUseId((current) =>
+      pending ? (current ?? toolUseId) : current === toolUseId ? null : current,
+    )
+  }, [])
 
   const pickProject = useCallback(() => {
     void window.whycode.pickProjectDir().then((dir) => {
@@ -222,6 +238,7 @@ export function App() {
     setApproval(null)
     setStatus('idle')
     setStopping(false)
+    setCheckpointRestoreToolUseId(null)
     setNegoStatus(null)
     stickToBottom.current = true
     setShowJumpBottom(false)
@@ -269,6 +286,7 @@ export function App() {
       setApproval(null)
       setStatus('idle')
       setStopping(false)
+      setCheckpointRestoreToolUseId(null)
       setNegoStatus(null)
       stickToBottom.current = true
       setShowJumpBottom(false)
@@ -329,7 +347,7 @@ export function App() {
   }, [modelId])
 
   const send = useCallback((urgent = false) => {
-    if (deletingSessionId) return
+    if (deletingSessionId || checkpointRestoreToolUseId) return
     const text = input.trim()
     if (!text) return
     setInput('')
@@ -337,7 +355,7 @@ export function App() {
     stickToBottom.current = true
     setShowJumpBottom(false)
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
-  }, [deletingSessionId, input])
+  }, [checkpointRestoreToolUseId, deletingSessionId, input])
 
   const answerQuestion = useCallback((answer: string) => {
     const question = view.pendingQuestion
@@ -417,6 +435,8 @@ export function App() {
             block={b}
             expanded={view.expanded.has(b.id)}
             busy={interactionBusy}
+            checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+            onCheckpointRestoreChange={changeCheckpointRestore}
             onToggle={() => toggle(b.id)}
           />
         ))}
@@ -473,7 +493,7 @@ export function App() {
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={stopping || deletingSessionId !== null}
+            disabled={stopping || deletingSessionId !== null || checkpointRestoreToolUseId !== null}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
@@ -484,6 +504,8 @@ export function App() {
                 ? '正在停止当前任务并清理子进程…'
                 : deletingSessionId
                   ? '正在删除会话及其关联数据…'
+                : checkpointRestoreToolUseId
+                  ? '正在安全回滚文件，请等待完成…'
                 : status === 'waiting-approval'
                   ? '⏸ Agent 在等你审批上方的请求…'
                   : busy
@@ -515,7 +537,12 @@ export function App() {
           <button
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
             onClick={() => send(false)}
-            disabled={stopping || deletingSessionId !== null || !input.trim()}
+            disabled={
+              stopping
+              || deletingSessionId !== null
+              || checkpointRestoreToolUseId !== null
+              || !input.trim()
+            }
           >
             {busy ? '排队' : '发送'}
           </button>
@@ -583,11 +610,15 @@ function BlockView({
   block,
   expanded,
   busy,
+  checkpointRestoreToolUseId,
+  onCheckpointRestoreChange,
   onToggle,
 }: {
   block: Block
   expanded: boolean
   busy: boolean
+  checkpointRestoreToolUseId: string | null
+  onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onToggle: () => void
 }) {
   if (block.kind === 'user') {
@@ -677,6 +708,8 @@ function BlockView({
             coverage={call.checkpointCoverage ?? 'complete'}
             warning={call.checkpointWarning}
             busy={busy}
+            pending={checkpointRestoreToolUseId === call.id}
+            onPendingChange={onCheckpointRestoreChange}
           />
         )}
       </div>
@@ -695,29 +728,28 @@ function RestoreButton({
   coverage,
   warning,
   busy,
+  pending,
+  onPendingChange,
 }: {
   toolUseId: string
   coverage: 'complete' | 'partial'
   warning?: string
   busy: boolean
+  pending: boolean
+  onPendingChange: (toolUseId: string, pending: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [pending, setPending] = useState(false)
   const pendingRef = useRef(false)
-  const mountedRef = useRef(true)
-  useEffect(() => () => {
-    mountedRef.current = false
-  }, [])
   const restore = async (scope: 'files' | 'files-and-chat') => {
     if (pendingRef.current || busy) return
     pendingRef.current = true
-    setPending(true)
+    onPendingChange(toolUseId, true)
     setOpen(false)
     try {
       await window.whycode.sendCommand({ type: 'restore-checkpoint', toolUseId, scope })
     } finally {
       pendingRef.current = false
-      if (mountedRef.current) setPending(false)
+      onPendingChange(toolUseId, false)
     }
   }
   if (pending) {

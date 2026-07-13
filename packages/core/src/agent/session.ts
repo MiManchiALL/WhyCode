@@ -124,7 +124,7 @@ export class AgentSession {
   private checkpoints: CheckpointManager | null = null
   private checkpointDisabledNotified = false
   /** 回滚是文件与会话的补偿事务；同一会话同一时刻只允许一个事务运行。 */
-  private restoringCheckpoint = false
+  private restoringCheckpointToolUseId: string | null = null
   private readonly idleWaiters = new Set<() => void>()
   /** 当前 turn ID（资源检查点归属用） */
   private activeTurn: { id: string } | null = null
@@ -231,7 +231,11 @@ export class AgentSession {
   }
 
   get isBusy(): boolean {
-    return this.running || this.compacting || this.restoringCheckpoint
+    return this.running || this.compacting || this.restoringCheckpointToolUseId !== null
+  }
+
+  get checkpointRestoreToolUseId(): string | null {
+    return this.restoringCheckpointToolUseId
   }
 
   waitUntilIdle(): Promise<void> {
@@ -1127,11 +1131,16 @@ export class AgentSession {
                 checkpointScope,
               )
               if (!preparedCheckpoint) {
+                const reason = this.checkpoints.disabled ?? `${def.name} 未建立检查点`
                 await this.checkpoints.recordBarrier(
                   toolCallId,
                   turnId,
-                  this.checkpoints.disabled ?? `${def.name} 未建立检查点`,
+                  reason,
                 )
+                if (!this.checkpointDisabledNotified) {
+                  this.checkpointDisabledNotified = true
+                  emit({ type: 'checkpoint-disabled', reason })
+                }
               }
             } catch (error) {
               const reason = error instanceof Error ? error.message : String(error)
@@ -1229,22 +1238,30 @@ export class AgentSession {
     toolUseId: string,
     scope: 'files' | 'files-and-chat',
   ): Promise<void> {
-    const { emit } = this.options
     if (!this.checkpoints) {
-      emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
+      this.emitCheckpointRestored({
+        type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false,
+        error: '该操作没有可用快照',
+      })
       return
     }
     if (this.running || this.compacting) {
-      emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: 'Agent 工作中，请先停止' })
+      this.emitCheckpointRestored({
+        type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false,
+        error: 'Agent 工作中，请先停止',
+      })
       return
     }
     // Renderer 会立即禁用按钮；这里仍做核心层单飞，防 IPC 重复提交或其它宿主并发调用。
-    if (this.restoringCheckpoint) return
-    this.restoringCheckpoint = true
+    if (this.restoringCheckpointToolUseId) return
+    this.restoringCheckpointToolUseId = toolUseId
     try {
       const record = await this.checkpoints.getReady(toolUseId)
       if (!record) {
-        emit({ type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false, error: '该操作没有可用快照' })
+        this.emitCheckpointRestored({
+          type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false,
+          error: '该操作没有可用快照',
+        })
         return
       }
       const recorder = this.options.sessionRecorder
@@ -1258,7 +1275,7 @@ export class AgentSession {
         scope === 'files-and-chat' &&
         (rollbackMessages === null || rollbackTaskState === undefined)
       ) {
-        emit({
+        this.emitCheckpointRestored({
           type: 'checkpoint-restored',
           toolUseId,
           turnId: record.turnId,
@@ -1291,7 +1308,7 @@ export class AgentSession {
           },
         } : undefined,
       )
-      emit({
+      this.emitCheckpointRestored({
         type: 'checkpoint-restored',
         toolUseId,
         turnId: result.turnId ?? record.turnId,
@@ -1304,7 +1321,7 @@ export class AgentSession {
           : {}),
       })
     } finally {
-      this.restoringCheckpoint = false
+      this.restoringCheckpointToolUseId = null
       if (this.queue.length > 0) {
         const drained = this.drainQueue()
         this.emitDrainedMessages(drained)
@@ -1314,6 +1331,13 @@ export class AgentSession {
       }
       this.resolveIdleWaiters()
     }
+  }
+
+  private emitCheckpointRestored(
+    event: Extract<CoreEvent, { type: 'checkpoint-restored' }>,
+  ): void {
+    this.restoringCheckpointToolUseId = null
+    this.options.emit(event)
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */

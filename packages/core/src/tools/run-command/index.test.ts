@@ -36,14 +36,17 @@ async function forceKill(pid: number): Promise<void> {
   process.kill(pid, 'SIGKILL')
 }
 
-function descendantCommand(): string {
-  const script = 'console.log(process.pid); setInterval(() => {}, 1000)'
+function nodeCommand(script: string): string {
   if (process.platform === 'win32') {
     const executable = process.execPath.replaceAll("'", "''")
     return `& '${executable}' -e '${script}'`
   }
   const executable = process.execPath.replaceAll("'", "'\\''")
   return `'${executable}' -e '${script}'`
+}
+
+function descendantCommand(): string {
+  return nodeCommand('console.log(process.pid); setInterval(() => {}, 1000)')
 }
 
 describe('RunCommand 路径扫描', () => {
@@ -103,5 +106,29 @@ describe('RunCommand 中止', () => {
       abortController.abort('test-cleanup')
       if (descendantPid) await forceKill(descendantPid)
     }
+  })
+})
+
+describe('RunCommand 结果', () => {
+  it('没有 stdout 时明确区分命令成功和失败', async () => {
+    const context = {
+      projectDir: process.cwd(),
+      additionalDirs: [],
+      abortSignal: new AbortController().signal,
+    }
+    const success = await runCommandTool.execute(
+      { command: nodeCommand('void 0') },
+      context,
+    )
+    const failure = await runCommandTool.execute(
+      { command: nodeCommand('process.exit(2)') },
+      context,
+    )
+
+    assert.equal(success.isError, false)
+    assert.equal(success.data, '（命令成功，无标准输出）')
+    assert.equal(failure.isError, true)
+    assert.match(failure.data, /\[退出码 [1-9]\d*\]/)
+    assert.doesNotMatch(failure.data, /命令成功/)
   })
 })

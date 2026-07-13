@@ -93,6 +93,7 @@ export class ResourceRestoreTransaction {
           this.sessionId,
           this.id,
           `safety-${randomUUID()}`,
+          [...entry.paths],
         ),
         paths: [...entry.paths],
       })
@@ -188,6 +189,7 @@ export class ResourceRestoreTransaction {
         this.sessionId,
         this.id,
         `verify-${randomUUID()}`,
+        tree.paths,
       )
       if (!await this.repository(tree.root).matchesSnapshot(tree.hash, actual, tree.paths)) {
         throw new Error(`树回滚校验失败：${tree.root}`)
@@ -195,4 +197,3 @@ export class ResourceRestoreTransaction {
     }
   }
 }
-

@@ -78,7 +78,7 @@ export const runCommandTool = buildTool({
     return {
       kind: 'workspace-roots',
       roots,
-      warning: '命令可影响进程、网络及未识别路径；依赖、缓存、敏感文件和大型二进制也不纳入树快照。',
+      warning: '命令可影响进程、网络及未识别路径；依赖、缓存、敏感内容和超出预算的工作区不提供回滚。',
     }
   },
   async execute(input, ctx) {
@@ -113,7 +113,10 @@ export const runCommandTool = buildTool({
         if (data.length > MAX_OUTPUT_CHARS) {
           data = `[输出过长，仅保留尾部 ${MAX_OUTPUT_CHARS} 字符]\n` + data.slice(-MAX_OUTPUT_CHARS)
         }
-        resolvePromise({ data: data || '（无输出）', isError })
+        resolvePromise({
+          data: data || (isError ? '（命令失败，无标准输出）' : '（命令成功，无标准输出）'),
+          isError,
+        })
       }
 
       const requestStop = (reason: 'timeout' | 'abort') => {

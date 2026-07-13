@@ -206,6 +206,7 @@ export class CheckpointManager {
       this.disabledReason = reason
       const pending = await this.store.get(prepared.id).catch(() => null)
       if (pending?.status === 'pending') {
+        await this.releaseManifestRefs(pending).catch(() => {})
         await this.store.put({
           ...pending,
           coverage: 'none',

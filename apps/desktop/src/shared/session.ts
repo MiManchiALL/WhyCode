@@ -17,6 +17,8 @@ export interface RuntimeSnapshot {
   permissionMode: PermissionMode
   status: AgentStatus
   busy: boolean
+  /** 正在回滚的工具调用；用于 Renderer 重载后恢复不可取消的回滚活动态。 */
+  checkpointRestoreToolUseId: string | null
   /** Renderer 重载时恢复主进程中的会话删除锁。 */
   deletingSessionId: string | null
   viewEvents: ViewEvent[]
