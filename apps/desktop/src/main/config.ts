@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { getModelEntry, MODEL_REGISTRY } from '@whycode/core'
 
 /**
  * M1 阶段的配置读取：~/.whycode/config.json（不入库）。
@@ -44,6 +45,23 @@ export function loadConfig(): WhycodeConfig | null {
   } catch {
     return null
   }
+}
+
+function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolean {
+  if (!config) return false
+  try {
+    return Boolean(config.providers[getModelEntry(modelId).provider]?.apiKey)
+  } catch {
+    return false
+  }
+}
+
+/** 配置指定的可用模型优先，否则按注册表顺序选择第一个已配置 key 的模型。 */
+export function resolveDefaultModelId(config: WhycodeConfig | null): string | null {
+  if (config?.defaultModel && hasConfiguredKey(config, config.defaultModel)) {
+    return config.defaultModel
+  }
+  return MODEL_REGISTRY.find((model) => hasConfiguredKey(config, model.id))?.id ?? null
 }
 
 /** M3：评审员 B/C 都配置了 model+key 才允许开启协商（Main 永远用当前会话模型，上下文天然连续） */

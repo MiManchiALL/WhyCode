@@ -2,12 +2,41 @@ import { constants } from 'node:fs'
 import { copyFile, lstat, mkdir, readFile, rename, rm, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
-import { buildTool } from '../tool.ts'
+import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { makeDiff } from '../write-edit/index.ts'
 
 export const DELETE_FILE_TOOL_NAME = 'DeleteFile'
 export const MOVE_FILE_TOOL_NAME = 'MoveFile'
+
+const deleteFileInputSchema = z.object({
+  paths: z
+    .array(z.string())
+    .min(1)
+    .max(50)
+    .describe('要删除的普通文件路径，最多 50 个'),
+})
+
+type DeleteFileInput = z.infer<typeof deleteFileInputSchema>
+
+interface DeleteTarget {
+  absolute: string
+  displayPath: string
+}
+
+function pathKey(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
+function resolveDeleteTargets(input: DeleteFileInput, ctx: ToolContext): DeleteTarget[] {
+  const targets = new Map<string, DeleteTarget>()
+  for (const displayPath of input.paths) {
+    const absolute = resolveAllowed(ctx, displayPath)
+    const key = pathKey(absolute)
+    if (!targets.has(key)) targets.set(key, { absolute, displayPath })
+  }
+  return [...targets.values()]
+}
 
 async function requireRegularFile(path: string, label: string): Promise<void> {
   const stats = await lstat(path).catch(() => null)
@@ -17,35 +46,61 @@ async function requireRegularFile(path: string, label: string): Promise<void> {
 
 export const deleteFileTool = buildTool({
   name: DELETE_FILE_TOOL_NAME,
-  description: '删除单个文件',
+  description: '删除一个或多个文件',
   prompt:
-    '删除允许范围内的单个普通文件，并建立可恢复的精确检查点。不要用 RunCommand 删除明确文件。本工具不会删除目录、符号链接或执行递归删除。',
-  inputSchema: z.object({
-    path: z.string().describe('要删除的文件路径'),
-  }),
+    '删除允许范围内的一个或多个普通文件，并为本次调用建立可恢复的精确检查点。所有路径会在删除前完成校验。不要用 RunCommand 删除明确文件。本工具不会删除目录、符号链接或执行递归删除。',
+  inputSchema: deleteFileInputSchema,
   isReadOnly: false,
   kind: 'edit',
-  extractPaths: (input) => [input.path],
+  extractPaths: (input) => input.paths,
   checkpointScope: (input, ctx) => ({
     kind: 'exact-files',
-    paths: [resolveAllowed(ctx, input.path)],
+    paths: resolveDeleteTargets(input, ctx).map((target) => target.absolute),
   }),
   async renderDiff(input, ctx) {
-    const absolute = resolveAllowed(ctx, input.path)
-    const content = await readFile(absolute, 'utf8')
-    return makeDiff(input.path, content, '')
+    const targets = resolveDeleteTargets(input, ctx)
+    return (await Promise.all(
+      targets.map(async ({ absolute, displayPath }) =>
+        makeDiff(displayPath, await readFile(absolute, 'utf8'), ''),
+      ),
+    )).filter(Boolean).join('\n\n')
   },
   async execute(input, ctx) {
-    const absolute = resolveAllowed(ctx, input.path)
+    let targets: DeleteTarget[]
     try {
-      await requireRegularFile(absolute, `文件 ${input.path}`)
-      await unlink(absolute)
-      return { data: `已删除 ${input.path}`, isError: false }
+      targets = resolveDeleteTargets(input, ctx)
+      await Promise.all(
+        targets.map(({ absolute, displayPath }) =>
+          requireRegularFile(absolute, `文件 ${displayPath}`),
+        ),
+      )
     } catch (error) {
       return {
-        data: `删除失败：${error instanceof Error ? error.message : String(error)}`,
+        data: `删除未执行：${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
+    }
+
+    let deleted = 0
+    try {
+      for (const target of targets) {
+        await unlink(target.absolute)
+        deleted++
+      }
+    } catch (error) {
+      return {
+        data:
+          `删除中断：${error instanceof Error ? error.message : String(error)}` +
+          `；已删除 ${deleted}/${targets.length} 个文件，可使用检查点回滚`,
+        isError: true,
+      }
+    }
+
+    return {
+      data: targets.length === 1
+        ? `已删除 ${targets[0]!.displayPath}`
+        : `已删除 ${targets.length} 个文件`,
+      isError: false,
     }
   },
 })

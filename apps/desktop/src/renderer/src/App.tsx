@@ -130,11 +130,7 @@ export function App() {
   }, [refreshSessions])
 
   useEffect(() => {
-    void window.whycode.listModels().then((list) => {
-      setModels(list)
-      const first = list.find((m) => m.hasKey)
-      if (first) setModelId((current) => current || first.id)
-    })
+    void window.whycode.listModels().then(setModels)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
   }, [refreshSessions])
@@ -291,14 +287,12 @@ export function App() {
       stickToBottom.current = true
       setShowJumpBottom(false)
       setProjectDir(result.session.projectDir)
-      if (models.some((model) => model.id === result.session.modelId && model.hasKey)) {
-        setModelId(result.session.modelId)
-      }
+      setModelId(result.session.modelId)
       setShowSessions(false)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
     })
-  }, [addError, models, refreshSessions])
+  }, [addError, refreshSessions])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (deletingSessionId) return

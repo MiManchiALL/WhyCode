@@ -13,6 +13,29 @@ afterEach(async () => {
 })
 
 describe('持久化资源检查点', () => {
+  it('一个检查点完整恢复同批删除的多个文件', async () => {
+    const env = await createEnvironment()
+    const first = join(env.project, 'first.txt')
+    const second = join(env.project, 'second.txt')
+    await Promise.all([
+      writeFile(first, 'first content'),
+      writeFile(second, 'second content'),
+    ])
+
+    const prepared = await env.manager.prepare('tool-delete-many', 'turn-1', {
+      kind: 'exact-files',
+      paths: [first, second],
+    })
+    assert.ok(prepared)
+    await Promise.all([rm(first), rm(second)])
+    assert.ok(await env.manager.finalize(prepared))
+
+    const restored = await env.manager.restore('tool-delete-many', 'files')
+    assert.equal(restored.ok, true, restored.error)
+    assert.equal(await readFile(first, 'utf8'), 'first content')
+    assert.equal(await readFile(second, 'utf8'), 'second content')
+  })
+
   it('精确撤销项目外新建文件，并清理本次新建的空父目录', async () => {
     const env = await createEnvironment()
     const path = join(env.external, 'new-parent', 'created.txt')

@@ -17,7 +17,12 @@ import {
   type AgentStatus,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
-import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
+import {
+  consensusAgentsReady,
+  getConfigPath,
+  loadConfig,
+  resolveDefaultModelId,
+} from './config.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { routeUserMessage } from './user-message-routing.ts'
@@ -140,21 +145,18 @@ function validateModel(modelId: string): string | null {
   return null
 }
 
-/** 解析默认模型：配置指定的 > 第一个有 key 的 */
-function resolveDefaultModelId(): string | null {
-  const config = loadConfig()
-  if (config?.defaultModel && !validateModel(config.defaultModel)) {
-    return config.defaultModel
-  }
-  return MODEL_REGISTRY.find((m) => !validateModel(m.id))?.id ?? null
+/** Main 持有模型选择事实；首次读取时按配置初始化，之后保留用户的会话内选择。 */
+function resolveCurrentModelId(): string | null {
+  currentModelId ??= resolveDefaultModelId(loadConfig())
+  return currentModelId
 }
 
 async function ensureSession(): Promise<string | null> {
-  currentModelId ??= resolveDefaultModelId()
-  if (!currentModelId) return '没有任何已配置 key 的模型可用'
-  const err = validateModel(currentModelId)
+  const modelId = resolveCurrentModelId()
+  if (!modelId) return '没有任何已配置 key 的模型可用'
+  const err = validateModel(modelId)
   if (err) return err
-  const entry = getModelEntry(currentModelId)
+  const entry = getModelEntry(modelId)
   const providerConfig = loadConfig()!.providers[entry.provider]!
   if (session) {
     session.setModel(entry, providerConfig)
@@ -162,7 +164,7 @@ async function ensureSession(): Promise<string | null> {
     if (!sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const recorder = await sessions.ensure(projectDir, currentModelId!)
+        const recorder = await sessions.ensure(projectDir, modelId)
         if (!session) {
           conversationId = recorder.sessionId
           // projectDir 为 null = 纯聊天模式（无工具），core 侧按此适配
@@ -397,7 +399,7 @@ function runtimeSnapshot(): RuntimeSnapshot {
   const checkpointRestoreToolUseId = session?.checkpointRestoreToolUseId ?? null
   return {
     projectDir,
-    modelId: currentModelId,
+    modelId: resolveCurrentModelId(),
     permissionMode: pendingPermissionMode ?? 'default',
     status: sessionDeletionId
       ? 'working'
@@ -452,7 +454,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     projectDir = metadata.projectDir
     currentModelId = !validateModel(metadata.modelId)
       ? metadata.modelId
-      : resolveDefaultModelId()
+      : resolveDefaultModelId(loadConfig())
     if (!currentModelId) throw new Error('没有任何已配置 key 的模型可用')
     if (currentModelId !== metadata.modelId) await journal.updateModel(currentModelId)
     conversationId = journal.sessionId

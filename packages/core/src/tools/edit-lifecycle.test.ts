@@ -91,15 +91,59 @@ describe('文件生命周期工具', () => {
     assert.equal(await readFile(join(ctx.projectDir, 'other.txt'), 'utf8'), 'other')
   })
 
-  it('删除文件但拒绝目录', async () => {
+  it('一次删除多个文件，并用一个检查点覆盖全部目标', async () => {
     const ctx = await context()
-    await writeFile(join(ctx.projectDir, 'delete-me.txt'), 'content')
-    const deleted = await deleteFileTool.execute({ path: 'delete-me.txt' }, ctx)
-    assert.equal(deleted.isError, false)
-    await assert.rejects(readFile(join(ctx.projectDir, 'delete-me.txt')))
+    await writeFile(join(ctx.projectDir, 'delete-a.txt'), 'content a')
+    await writeFile(join(ctx.projectDir, 'delete-b.txt'), 'content b')
 
+    const input = { paths: ['delete-a.txt', 'delete-b.txt'] }
+    const scope = await deleteFileTool.checkpointScope!(input, ctx)
+    assert.deepEqual(scope, {
+      kind: 'exact-files',
+      paths: [
+        resolve(ctx.projectDir, 'delete-a.txt'),
+        resolve(ctx.projectDir, 'delete-b.txt'),
+      ],
+    })
+
+    const deleted = await deleteFileTool.execute(input, ctx)
+    assert.equal(deleted.isError, false)
+    assert.equal(deleted.data, '已删除 2 个文件')
+    await assert.rejects(readFile(join(ctx.projectDir, 'delete-a.txt')))
+    await assert.rejects(readFile(join(ctx.projectDir, 'delete-b.txt')))
+  })
+
+  it('删除前验证全部目标并拒绝目录', async () => {
+    const ctx = await context()
+    await writeFile(join(ctx.projectDir, 'keep-file.txt'), 'content')
     await mkdir(join(ctx.projectDir, 'keep-dir'))
-    const refused = await deleteFileTool.execute({ path: 'keep-dir' }, ctx)
+
+    const refused = await deleteFileTool.execute(
+      { paths: ['keep-file.txt', 'keep-dir'] },
+      ctx,
+    )
+
     assert.equal(refused.isError, true)
+    assert.equal(await readFile(join(ctx.projectDir, 'keep-file.txt'), 'utf8'), 'content')
+  })
+
+  it('删除路径去重且输入数量有界', async () => {
+    const ctx = await context()
+    await writeFile(join(ctx.projectDir, 'once.txt'), 'content')
+
+    const deleted = await deleteFileTool.execute(
+      { paths: ['once.txt', './once.txt'] },
+      ctx,
+    )
+
+    assert.equal(deleted.isError, false)
+    assert.equal(deleted.data, '已删除 once.txt')
+    assert.equal(deleteFileTool.inputSchema.safeParse({ paths: [] }).success, false)
+    assert.equal(
+      deleteFileTool.inputSchema.safeParse({
+        paths: Array.from({ length: 51 }, (_, index) => `${index}.txt`),
+      }).success,
+      false,
+    )
   })
 })
