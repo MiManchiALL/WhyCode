@@ -4,6 +4,7 @@ import { lstat, readdir, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { simpleGit, type SimpleGit } from 'simple-git'
+import { validateSessionId } from '../session/metadata.ts'
 
 const INIT_TIMEOUT_MS = 20_000
 
@@ -120,6 +121,12 @@ export class ShadowRepository {
   }
 
   private ensureInit(): Promise<void> {
+    // 共享仓库可能在最后一个会话 ref 被释放后整库回收；其它会话持有的实例
+    // 必须在下一次使用时自愈，不能永久保留一个已失效的 GIT_DIR。
+    if (this.git && !existsSync(this.gitDir)) {
+      this.git = null
+      this.initPromise = null
+    }
     this.initPromise ??= new Promise<void>((resolvePromise, reject) => {
       const timer = setTimeout(
         () => reject(new Error(`树快照初始化超时（${INIT_TIMEOUT_MS}ms）：${this.root}`)),
@@ -187,8 +194,9 @@ export class ShadowRepository {
   }
 }
 
-/** 删除会话时释放共享仓库中的引用；对象随后才有资格被 Git GC。 */
+/** 删除会话的共享引用，并立即回收不再被其他引用持有的对象。 */
 export async function releaseShadowRefs(storageRoot: string, sessionId: string): Promise<void> {
+  validateSessionId(sessionId)
   const rootsDir = join(resolve(storageRoot), 'roots')
   const entries = await readdir(rootsDir, { withFileTypes: true }).catch(
     (error: NodeJS.ErrnoException) => {
@@ -201,12 +209,37 @@ export async function releaseShadowRefs(storageRoot: string, sessionId: string):
     const storageDir = join(rootsDir, entry.name)
     const gitDir = join(storageDir, '.git')
     if (!existsSync(gitDir)) continue
-    const git = simpleGit({ baseDir: storageDir }).env({ GIT_DIR: gitDir })
+    const git = simpleGit({
+      baseDir: storageDir,
+      unsafe: { allowUnsafeConfigPaths: true },
+    }).env({
+      GIT_DIR: gitDir,
+      GIT_CONFIG_GLOBAL: join(storageDir, 'gitconfig'),
+      GIT_CONFIG_SYSTEM: join(storageDir, 'gitconfig.empty'),
+    })
     const prefix = `refs/whycode/${sessionId}/`
     const refs = (await git.raw(['for-each-ref', '--format=%(refname)', prefix]))
       .split(/\r?\n/)
       .filter(Boolean)
     for (const ref of refs) await git.raw(['update-ref', '-d', ref])
-    if (refs.length > 0) await git.raw(['gc', '--prune=now']).catch(() => {})
+
+    // index 只是下一次 capture 的临时工作区，不是检查点事实源。若保留最后一次树，
+    // Git 会把已删除会话的 blob 当成 index 可达对象，导致删 ref + GC 后内容仍残留。
+    await git.raw(['read-tree', '--empty'])
+    await git.raw(['reflog', 'expire', '--expire=now', '--expire-unreachable=now', '--all'])
+
+    const remainingRefs = (await git.raw(['for-each-ref', '--format=%(refname)']))
+      .split(/\r?\n/)
+      .filter(Boolean)
+    if (remainingRefs.length === 0) {
+      await rm(storageDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      })
+      continue
+    }
+    await git.raw(['gc', '--prune=now'])
   }
 }

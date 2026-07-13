@@ -47,7 +47,9 @@ export function App() {
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const [sessions, setSessions] = useState<SessionListItem[]>([])
+  const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [showSessions, setShowSessions] = useState(false)
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
@@ -60,8 +62,11 @@ export function App() {
   const refreshSessions = useCallback(async () => {
     try {
       setSessions(await window.whycode.listSessions())
-    } catch {
-      setSessions([])
+      setSessionListError(null)
+    } catch (error) {
+      setSessionListError(
+        `会话历史读取失败：${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }, [])
 
@@ -70,7 +75,10 @@ export function App() {
     switch (event.type) {
       case 'agent-status':
         setStatus(event.status)
-        if (event.status === 'idle' || event.status === 'error') setStopping(false)
+        if (event.status === 'idle' || event.status === 'error') {
+          setStopping(false)
+          setDeletingSessionId(null)
+        }
         if (event.status === 'idle') setNegoStatus(null)
         break
       case 'turn-end':
@@ -138,7 +146,9 @@ export function App() {
       const restored = restoreRuntimeConversation(snapshot.viewEvents, snapshot.busy)
       setView(restored)
       setProjectDir(snapshot.projectDir)
+      setPermMode(snapshot.permissionMode)
       setStatus(snapshot.status)
+      setDeletingSessionId(snapshot.deletingSessionId)
       setStopping(false)
       setQueued([])
       setApproval(snapshot.approval)
@@ -183,6 +193,7 @@ export function App() {
   }, [])
 
   const busy = status !== 'idle' && status !== 'error'
+  const interactionBusy = busy || deletingSessionId !== null
 
   const pickProject = useCallback(() => {
     void window.whycode.pickProjectDir().then((dir) => {
@@ -272,18 +283,26 @@ export function App() {
   }, [addError, models, refreshSessions])
 
   const deleteSession = useCallback((sessionId: string) => {
-    if (!window.confirm('确定删除这个会话？此操作不会修改项目文件。')) return
+    if (deletingSessionId) return
+    if (!window.confirm(
+      '将永久删除这个会话的对话、任务状态、检查点、后台命令记录和临时数据；不会修改项目文件。确定继续？',
+    )) return
+    setDeletingSessionId(sessionId)
     void window.whycode.deleteSession(sessionId).then((result) => {
-      if (!result.ok) return addError(result.error ?? '删除会话失败')
       if (result.deletedCurrent) {
         resetView()
         setProjectDir(null)
-        setShowSessions(false)
+        if (result.ok) setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
       }
+      if (!result.ok) addError(result.error ?? '删除会话失败')
+    }).catch(() => {
+      addError('删除会话失败，请重试')
+    }).finally(() => {
+      setDeletingSessionId(null)
       void refreshSessions()
     })
-  }, [addError, refreshSessions, resetView])
+  }, [addError, deletingSessionId, refreshSessions, resetView])
 
   const compact = useCallback(() => {
     setView((previous) =>
@@ -293,9 +312,13 @@ export function App() {
   }, [])
 
   const changePermission = useCallback((mode: PermissionMode) => {
+    const previous = permMode
     setPermMode(mode)
-    void window.whycode.sendCommand({ type: 'set-permission-mode', mode })
-  }, [])
+    const rollback = () => setPermMode((current) => current === mode ? previous : current)
+    void window.whycode.sendCommand({ type: 'set-permission-mode', mode }).then((result) => {
+      if (!result || !result.ok) rollback()
+    }).catch(rollback)
+  }, [permMode])
 
   const changeModel = useCallback((next: string) => {
     const previous = modelId
@@ -306,6 +329,7 @@ export function App() {
   }, [modelId])
 
   const send = useCallback((urgent = false) => {
+    if (deletingSessionId) return
     const text = input.trim()
     if (!text) return
     setInput('')
@@ -313,11 +337,11 @@ export function App() {
     stickToBottom.current = true
     setShowJumpBottom(false)
     void window.whycode.sendCommand({ type: 'user-message', text, urgent })
-  }, [input])
+  }, [deletingSessionId, input])
 
   const answerQuestion = useCallback((answer: string) => {
     const question = view.pendingQuestion
-    if (!question || busy || stopping || questionSubmittingRef.current) return
+    if (!question || interactionBusy || stopping || questionSubmittingRef.current) return
     const text = `回答「${question.question}」：${answer}`
     questionSubmittingRef.current = true
     setQuestionSubmitting(true)
@@ -327,7 +351,7 @@ export function App() {
       questionSubmittingRef.current = false
       setQuestionSubmitting(false)
     })
-  }, [busy, stopping, view.pendingQuestion])
+  }, [interactionBusy, stopping, view.pendingQuestion])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
@@ -348,7 +372,8 @@ export function App() {
     <div className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900">
       <AppHeader
         projectDir={projectDir}
-        busy={busy}
+        busy={interactionBusy}
+        permissionLocked={deletingSessionId !== null}
         consensus={consensus}
         permMode={permMode}
         models={models}
@@ -368,7 +393,8 @@ export function App() {
       {showSessions && (
         <SessionPanel
           sessions={sessions}
-          busy={busy}
+          error={sessionListError}
+          busy={interactionBusy}
           onClose={() => setShowSessions(false)}
           onResume={resumeSession}
           onDelete={deleteSession}
@@ -390,7 +416,7 @@ export function App() {
             key={b.id}
             block={b}
             expanded={view.expanded.has(b.id)}
-            busy={busy}
+            busy={interactionBusy}
             onToggle={() => toggle(b.id)}
           />
         ))}
@@ -413,7 +439,7 @@ export function App() {
           <QuestionCard
             key={view.pendingQuestion.id}
             question={view.pendingQuestion}
-            disabled={busy || stopping || questionSubmitting}
+            disabled={interactionBusy || stopping || questionSubmitting}
             onAnswer={answerQuestion}
           />
         </div>
@@ -447,7 +473,7 @@ export function App() {
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={stopping}
+            disabled={stopping || deletingSessionId !== null}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
@@ -456,6 +482,8 @@ export function App() {
             placeholder={
               stopping
                 ? '正在停止当前任务并清理子进程…'
+                : deletingSessionId
+                  ? '正在删除会话及其关联数据…'
                 : status === 'waiting-approval'
                   ? '⏸ Agent 在等你审批上方的请求…'
                   : busy
@@ -465,7 +493,7 @@ export function App() {
                       : '纯聊天模式，输入消息…'
             }
           />
-          {busy && (
+          {busy && deletingSessionId === null && (
             <button
               className="rounded-md border border-neutral-300 px-4 py-2 text-sm disabled:opacity-40"
               onClick={stop}
@@ -474,7 +502,7 @@ export function App() {
               {stopping ? '停止中…' : '停止'}
             </button>
           )}
-          {busy && (
+          {busy && deletingSessionId === null && (
             <button
               className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
               onClick={() => send(true)}
@@ -487,7 +515,7 @@ export function App() {
           <button
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
             onClick={() => send(false)}
-            disabled={stopping || !input.trim()}
+            disabled={stopping || deletingSessionId !== null || !input.trim()}
           >
             {busy ? '排队' : '发送'}
           </button>

@@ -3,6 +3,7 @@ import type { SessionListItem } from '../../shared/session.ts'
 
 interface SessionPanelProps {
   sessions: SessionListItem[]
+  error: string | null
   busy: boolean
   onClose: () => void
   onResume: (sessionId: string) => void
@@ -22,8 +23,15 @@ export function SessionPanel(props: SessionPanelProps) {
             ✕
           </button>
         </div>
+        {props.error && (
+          <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+            {props.error}
+          </p>
+        )}
         {props.sessions.length === 0 ? (
-          <p className="py-12 text-center text-sm text-neutral-400">还没有可恢复的会话</p>
+          <p className="py-12 text-center text-sm text-neutral-400">
+            {props.error ? '暂时无法读取会话列表' : '还没有会话'}
+          </p>
         ) : (
           <div className="space-y-2">
             {props.sessions.map((session) => (
@@ -55,6 +63,7 @@ function SessionRow({
 }) {
   return (
     <div
+      title={session.resumable ? undefined : session.unavailableReason}
       className={
         session.isCurrent
           ? 'rounded border border-blue-500 bg-blue-50/60 p-3 ring-1 ring-blue-200'
@@ -63,7 +72,7 @@ function SessionRow({
     >
       <button
         className="w-full text-left"
-        disabled={busy || session.isCurrent}
+        disabled={busy || session.isCurrent || !session.resumable}
         onClick={() => onResume(session.sessionId)}
       >
         <div className="flex items-center gap-2">
@@ -75,13 +84,24 @@ function SessionRow({
               当前
             </span>
           )}
+          {!session.resumable && (
+            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700">
+              仅可删除
+            </span>
+          )}
         </div>
         <div className="mt-1 truncate text-xs text-neutral-400">
-          {session.projectDir ?? '纯聊天'}
+          {session.projectDir === undefined ? '项目未知' : (session.projectDir ?? '纯聊天')}
         </div>
         <div className="mt-1 flex justify-between text-xs text-neutral-400">
-          <span>{session.isCurrent ? '当前对话' : statusLabel(session.status)}</span>
-          <time>{new Date(session.updatedAt).toLocaleString()}</time>
+          <span className="min-w-0 truncate">
+            {session.isCurrent
+              ? '当前对话'
+              : session.resumable
+                ? statusLabel(session.status)
+                : session.unavailableReason}
+          </span>
+          <time className="ml-2 shrink-0">{new Date(session.updatedAt).toLocaleString()}</time>
         </div>
       </button>
       <button

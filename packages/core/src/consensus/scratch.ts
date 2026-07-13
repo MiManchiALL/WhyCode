@@ -28,14 +28,15 @@ export async function createTaskScratch(
   return { taskDir, agentDirs }
 }
 
-/** 对话结束时清理该对话的全部任务 scratch；失败不抛（残留目录无害，下次覆盖） */
+/** 对话结束时清理该对话的全部任务 scratch；调用方决定是否允许降级为尽力清理。 */
 export async function cleanupConversationScratch(
   storageRoot: string,
   conversationId: string,
 ): Promise<void> {
-  try {
-    await rm(join(storageRoot, conversationId), { recursive: true, force: true })
-  } catch {
-    /* 忽略：占用中的文件等，残留无害 */
-  }
+  await rm(join(storageRoot, conversationId), {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  })
 }

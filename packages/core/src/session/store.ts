@@ -23,9 +23,14 @@ import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createTurnAbortedMessage } from './interruption.ts'
 import {
   getSessionPaths,
+  getSessionDeletionMarkersDir,
+  hasSessionDeletionMarker,
   isSessionId,
   metadataFromStart,
+  resumableSessionSummary,
   sameProject,
+  SESSION_DELETION_PENDING_REASON,
+  unavailableSessionSummary,
   validateSessionId,
   writeMetadata,
   type SessionPaths,
@@ -37,6 +42,7 @@ import {
   type SessionEntry,
   type SessionMetadata,
   type SessionRecorder,
+  type SessionSummary,
 } from './types.ts'
 
 export class SessionStore {
@@ -93,6 +99,9 @@ export class SessionStore {
   async open(sessionId: string): Promise<SessionJournal> {
     validateSessionId(sessionId)
     const paths = this.pathsFor(sessionId)
+    if (await hasSessionDeletionMarker(paths)) {
+      throw new Error(SESSION_DELETION_PENDING_REASON)
+    }
     const text = await readFile(paths.transcript, 'utf8')
     const entries = parseTranscript(text)
     const repairLength = validPrefixByteLengthBeforeTrailingPartialJson(text)
@@ -144,27 +153,78 @@ export class SessionStore {
   async list(
     projectDir?: string | null,
     liveSession?: SessionMetadata,
-  ): Promise<SessionMetadata[]> {
+  ): Promise<SessionSummary[]> {
     await mkdir(this.rootDir, { recursive: true, mode: 0o700 })
     const entries = await readdir(this.rootDir, { withFileTypes: true })
+    const markerEntries = await readdir(getSessionDeletionMarkersDir(this.rootDir), {
+      withFileTypes: true,
+    }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    const sessionIds = new Set([
+      ...entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+      ...markerEntries.map((entry) => entry.name),
+    ].filter(isSessionId))
     const sessions = await Promise.all(
-      entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => this.readSummary(entry.name, liveSession)),
+      [...sessionIds].map((sessionId) => this.readSummary(sessionId, liveSession)),
     )
     return sessions
-      .filter((item): item is SessionMetadata => Boolean(item))
-      .filter((item) => projectDir === undefined || sameProject(item.projectDir, projectDir))
+      .filter((item): item is SessionSummary => Boolean(item))
+      .filter((item) =>
+        projectDir === undefined
+        || (item.projectDir !== undefined && sameProject(item.projectDir, projectDir)))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
   async delete(sessionId: string): Promise<boolean> {
     validateSessionId(sessionId)
     const paths = this.pathsFor(sessionId)
+    const deletionMarked = await hasSessionDeletionMarker(paths)
+    let sessionExisted = true
     try {
-      await rm(paths.sessionDir, { recursive: true, force: false })
+      await rm(paths.sessionDir, {
+        recursive: true,
+        force: false,
+        maxRetries: 5,
+        retryDelay: 100,
+      })
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      sessionExisted = false
+    }
+    if (!sessionExisted && !deletionMarked) return false
+    // 会话目录已经完整消失后才移除外置 marker；marker 删除失败会继续作为重试入口。
+    await rm(paths.deletionMarker, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    })
+    return true
+  }
+
+  async markDeleting(sessionId: string): Promise<boolean> {
+    validateSessionId(sessionId)
+    const paths = this.pathsFor(sessionId)
+    if (await hasSessionDeletionMarker(paths)) return true
+    try {
+      await readdir(paths.sessionDir)
+    } catch (error) {
+      if (isNotFound(error)) return false
+      throw error
+    }
+    await mkdir(paths.deletionMarkersDir, { recursive: true, mode: 0o700 })
+    try {
+      await writeFile(paths.deletionMarker, '', {
+        encoding: 'utf8',
+        mode: 0o600,
+        flag: 'wx',
+        flush: true,
+      })
       return true
     } catch (error) {
+      if (isAlreadyExists(error)) return true
       if (isNotFound(error)) return false
       throw error
     }
@@ -173,13 +233,22 @@ export class SessionStore {
   private async readSummary(
     sessionId: string,
     liveSession?: SessionMetadata,
-  ): Promise<SessionMetadata | null> {
+  ): Promise<SessionSummary | null> {
     if (!isSessionId(sessionId)) return null
-    if (liveSession?.sessionId === sessionId) return { ...liveSession }
+    const paths = this.pathsFor(sessionId)
+    const deletionMarked = await hasSessionDeletionMarker(paths).catch(() => null)
+    if (deletionMarked) {
+      return unavailableSessionSummary(paths, sessionId, SESSION_DELETION_PENDING_REASON)
+    }
+    if (deletionMarked === null) return unavailableSessionSummary(paths, sessionId)
+    if (liveSession?.sessionId === sessionId) return resumableSessionSummary(liveSession)
     try {
-      return (await this.open(sessionId)).metadataSnapshot
+      return resumableSessionSummary((await this.open(sessionId)).metadataSnapshot)
     } catch {
-      return null
+      const reason = await hasSessionDeletionMarker(paths).catch(() => false)
+        ? SESSION_DELETION_PENDING_REASON
+        : undefined
+      return unavailableSessionSummary(paths, sessionId, reason)
     }
   }
 
@@ -723,6 +792,10 @@ function clip(text: string): string {
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST')
 }
 
 function validPrefixByteLengthBeforeTrailingPartialJson(text: string): number | null {

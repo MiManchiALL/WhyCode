@@ -32,11 +32,11 @@ describe('DesktopSessionRepository 删除语义', () => {
     assert.equal(repository.currentSessionId, null)
   })
 
-  it('删除历史会话不影响当前会话', async () => {
+  it('删除同一项目的历史会话不影响当前会话', async () => {
     const repository = await createRepository()
-    const historical = await repository.ensure('C:\\work\\old', 'test:model')
+    const historical = await repository.ensure('C:\\work\\shared', 'test:model')
     repository.reset()
-    const current = await repository.ensure('C:\\work\\current', 'test:model')
+    const current = await repository.ensure('C:\\work\\shared', 'test:model')
 
     assert.equal(await repository.delete(historical.sessionId), true)
     assert.equal(repository.currentSessionId, current.sessionId)
@@ -46,5 +46,5 @@ describe('DesktopSessionRepository 删除语义', () => {
 async function createRepository(): Promise<DesktopSessionRepository> {
   const root = await mkdtemp(join(tmpdir(), 'whycode-desktop-session-'))
   tempRoots.push(root)
-  return new DesktopSessionRepository(root, join(root, '..', 'checkpoints'))
+  return new DesktopSessionRepository(join(root, 'sessions'), join(root, 'checkpoints'))
 }

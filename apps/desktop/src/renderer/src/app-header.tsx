@@ -15,6 +15,7 @@ interface ConsensusStatus {
 interface AppHeaderProps {
   projectDir: string | null
   busy: boolean
+  permissionLocked: boolean
   consensus: ConsensusStatus
   permMode: PermissionMode
   models: ModelOption[]
@@ -70,6 +71,7 @@ export function AppHeader(props: AppHeaderProps) {
           className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
           value={props.permMode}
           onChange={(event) => props.onPermissionChange(event.target.value as PermissionMode)}
+          disabled={props.permissionLocked}
           title="权限档位：控制哪些操作需要审批"
         >
           {PERMISSION_MODES.map((mode) => (

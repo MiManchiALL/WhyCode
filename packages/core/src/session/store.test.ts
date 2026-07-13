@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -17,6 +17,7 @@ import {
 } from '../tasks/types.ts'
 import { buildLoadedSession, parseTranscript, SessionCorruptError } from './chain.ts'
 import { createTurnAbortedMessage, isTurnAbortedMessage } from './interruption.ts'
+import { getSessionPaths } from './metadata.ts'
 import { SessionStore } from './store.ts'
 import { SESSION_SCHEMA_VERSION, sessionEntrySchema } from './types.ts'
 
@@ -854,18 +855,134 @@ describe('SessionStore', () => {
     const sessions = await store.list()
     assert.equal(sessions.length, 1)
     assert.equal(sessions[0]!.sessionId, journal.sessionId)
+    assert.equal(sessions[0]!.resumable, true)
     assert.equal(sessions[0]!.title, 'hello')
     assert.equal(sessions[0]!.modelId, 'test:other-model')
+  })
+
+  it('旧 schema 会话仍在列表中可见但不可恢复', async () => {
+    const store = await createStore()
+    const root = storeRoots.get(store)!
+    const sessionId = randomUUID()
+    const sessionDir = join(root, sessionId)
+    const timestamp = '2026-07-10T01:02:03.000Z'
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({
+      schemaVersion: 2,
+      type: 'session-start',
+      sessionId,
+      uuid: randomUUID(),
+      parentUuid: null,
+      timestamp,
+      projectDir: 'C:\\work\\legacy',
+      modelId: 'test:legacy',
+    })}\n`, 'utf8')
+    await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify({
+      schemaVersion: 2,
+      sessionId,
+      projectDir: 'C:\\work\\legacy',
+      modelId: 'test:legacy',
+      title: '旧版会话',
+      lastUserText: '继续旧任务',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      status: 'idle',
+    }), 'utf8')
+
+    const [summary] = await store.list()
+    assert.equal(summary?.sessionId, sessionId)
+    assert.equal(summary?.title, '旧版会话')
+    assert.equal(summary?.projectDir, 'C:\\work\\legacy')
+    assert.equal(summary?.modelId, 'test:legacy')
+    assert.equal(summary?.status, 'unavailable')
+    assert.equal(summary?.resumable, false)
+    assert.match(summary?.unavailableReason ?? '', /无法恢复/)
+    assert.equal((await store.list('C:\\work\\legacy')).length, 1)
+  })
+
+  it('损坏的 UUID 会话目录返回最小摘要，非 UUID 目录仍忽略', async () => {
+    const store = await createStore()
+    const root = storeRoots.get(store)!
+    const sessionId = randomUUID()
+    await mkdir(join(root, sessionId), { recursive: true })
+    await writeFile(join(root, sessionId, 'transcript.jsonl'), '{broken', 'utf8')
+    await writeFile(join(root, sessionId, 'metadata.json'), JSON.stringify({
+      sessionId: randomUUID(),
+      projectDir: null,
+      title: '其它会话的标题',
+      updatedAt: '2026-07-10T01:02:03.000Z',
+    }), 'utf8')
+    await mkdir(join(root, 'not-a-session'), { recursive: true })
+    await writeFile(join(root, 'not-a-session', 'transcript.jsonl'), '{broken', 'utf8')
+
+    const sessions = await store.list()
+    assert.equal(sessions.length, 1)
+    assert.equal(sessions[0]!.sessionId, sessionId)
+    assert.equal(sessions[0]!.title, '无法恢复的会话')
+    assert.equal(sessions[0]!.projectDir, undefined)
+    assert.equal(sessions[0]!.resumable, false)
+    assert.equal(sessions[0]!.status, 'unavailable')
+    assert.doesNotThrow(() => new Date(sessions[0]!.updatedAt).toISOString())
+    assert.equal((await store.list(null)).length, 0)
+  })
+
+  it('持久删除标记优先于 live metadata，且只允许重试删除', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: 'C:\\work\\delete', modelId: 'test:model' })
+    await journal.recordUserInput('待删除会话', true)
+
+    assert.equal(await store.markDeleting(journal.sessionId), true)
+    assert.equal(await store.markDeleting(journal.sessionId), true)
+
+    const [summary] = await store.list(undefined, journal.metadataSnapshot)
+    assert.equal(summary?.sessionId, journal.sessionId)
+    assert.equal(summary?.resumable, false)
+    assert.equal(summary?.status, 'unavailable')
+    assert.match(summary?.unavailableReason ?? '', /删除未完成.*重试删除/)
+    await assert.rejects(store.open(journal.sessionId), /删除未完成.*重试删除/)
+
+    assert.equal(await store.delete(journal.sessionId), true)
+    assert.equal((await store.list()).length, 0)
+  })
+
+  it('会话目录已消失时，外置删除标记仍保留重试入口', async () => {
+    const store = await createStore()
+    const root = storeRoots.get(store)!
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const paths = getSessionPaths(root, journal.sessionId)
+    assert.equal(await store.markDeleting(journal.sessionId), true)
+
+    // 模拟递归删除完成后、清除 tombstone 前进程退出。
+    await rm(paths.sessionDir, { recursive: true, force: true })
+    await access(paths.deletionMarker)
+    const [summary] = await store.list(undefined, journal.metadataSnapshot)
+    assert.equal(summary?.sessionId, journal.sessionId)
+    assert.equal(summary?.resumable, false)
+    assert.match(summary?.unavailableReason ?? '', /重试删除/)
+
+    assert.equal(await store.delete(journal.sessionId), true)
+    await assert.rejects(access(paths.deletionMarker))
+    assert.equal((await store.list()).length, 0)
+  })
+
+  it('不存在的会话不能建立持久删除标记', async () => {
+    const store = await createStore()
+    assert.equal(await store.markDeleting(randomUUID()), false)
   })
 
   it('按项目过滤并安全删除会话', async () => {
     const store = await createStore()
     const first = await store.create({ projectDir: 'C:\\work\\one', modelId: 'test:model' })
     await store.create({ projectDir: 'C:\\work\\two', modelId: 'test:model' })
+    const firstDir = join(storeRoots.get(store)!, first.sessionId)
+    await mkdir(join(firstDir, 'checkpoints', 'manifests'), { recursive: true })
+    await writeFile(join(firstDir, 'metadata.json.leftover.tmp'), 'temporary', 'utf8')
+    await writeFile(join(firstDir, 'checkpoints', 'manifests', 'checkpoint.json'), '{}', 'utf8')
 
     assert.equal((await store.list('C:\\work\\one')).length, 1)
     assert.equal(await store.delete(first.sessionId), true)
     assert.equal(await store.delete(first.sessionId), false)
+    await assert.rejects(access(firstDir))
     assert.equal((await store.list()).length, 1)
     await assert.rejects(store.open('../escape'), /无效会话 ID/)
   })

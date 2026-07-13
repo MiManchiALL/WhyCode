@@ -18,6 +18,7 @@ import {
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import { consensusAgentsReady, getConfigPath, loadConfig } from './config.ts'
+import { deleteSessionArtifacts } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { routeUserMessage } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
@@ -96,6 +97,8 @@ let conversationId = `conv-${Date.now()}`
 let sessions: DesktopSessionRepository
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
+/** 会话删除跨多个存储，必须在主进程内单飞并阻止新输入/切换。 */
+let sessionDeletionId: string | null = null
 const viewTimeline = new ViewTimeline((error) => {
   broadcastEvent(
     {
@@ -241,6 +244,14 @@ function buildCoordinator(): string | null {
 }
 
 async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
+  if (sessionDeletionId) {
+    broadcastEvent({
+      type: 'error',
+      message: '会话数据删除中，请等待完成后再操作',
+      recoverable: true,
+    })
+    return { ok: false }
+  }
   switch (command.type) {
     case 'user-message': {
       const err = await ensureSession()
@@ -294,7 +305,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
     case 'set-permission-mode': {
       session?.setPermissionMode(command.mode)
       pendingPermissionMode = command.mode
-      break
+      return { ok: true }
     }
     case 'restore-checkpoint': {
       if (runtimeBusy()) {
@@ -344,7 +355,12 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
 }
 
 function runtimeBusy(): boolean {
-  return Boolean(sessionInitialization || session?.isBusy || coordinator?.busy)
+  return Boolean(
+    sessionDeletionId
+    || sessionInitialization
+    || session?.isBusy
+    || coordinator?.busy,
+  )
 }
 
 async function recordUserInput(text: string, startsTurn: boolean): Promise<void> {
@@ -369,7 +385,11 @@ function resetRuntime(keepJournal = false): void {
   viewTimeline.discardAll()
   if (!keepJournal) sessions.reset()
   conversationId = `conv-${Date.now()}`
-  void cleanupConversationScratch(join(app.getPath('userData'), 'scratch'), oldConversationId)
+  // 普通运行态切换仍可尽力清临时目录；显式删除会在移除事实源前严格等待清理完成。
+  void cleanupConversationScratch(
+    join(app.getPath('userData'), 'scratch'),
+    oldConversationId,
+  ).catch(() => {})
 }
 
 function runtimeSnapshot(): RuntimeSnapshot {
@@ -378,8 +398,14 @@ function runtimeSnapshot(): RuntimeSnapshot {
   return {
     projectDir,
     modelId: currentModelId,
-    status: busy && currentAgentStatus === 'idle' ? 'working' : currentAgentStatus,
+    permissionMode: pendingPermissionMode ?? 'default',
+    status: sessionDeletionId
+      ? 'working'
+      : busy && currentAgentStatus === 'idle'
+        ? 'working'
+        : currentAgentStatus,
     busy,
+    deletingSessionId: sessionDeletionId,
     viewEvents: journal ? [...journal.initialViewEvents] : [],
     approval: [...pendingApprovals.values()].at(-1)?.request ?? null,
     eventSequence: runtimeEventSequence,
@@ -387,13 +413,27 @@ function runtimeSnapshot(): RuntimeSnapshot {
 }
 
 async function startNewSession(): Promise<SessionActionResult> {
-  if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再新建会话' }
+  if (runtimeBusy()) {
+    return {
+      ok: false,
+      error: sessionDeletionId
+        ? '会话数据删除中，请等待完成后再新建会话'
+        : 'Agent 工作中，请先停止再新建会话',
+    }
+  }
   resetRuntime()
   return { ok: true }
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再恢复会话' }
+  if (runtimeBusy()) {
+    return {
+      ok: false,
+      error: sessionDeletionId
+        ? '会话数据删除中，请等待完成后再恢复会话'
+        : 'Agent 工作中，请先停止再恢复会话',
+    }
+  }
   resetRuntime()
   try {
     const journal = await sessions.resume(sessionId)
@@ -426,25 +466,64 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-  if (runtimeBusy()) return { ok: false, error: 'Agent 工作中，请先停止再删除会话' }
-  const deletedCurrent = sessions.currentSessionId === sessionId
-  try {
-    // 会话删除后不能再留下仍可改动用户文件的后台进程。
-    await commandSessions.stopSession(sessionId)
-    const deleted = await sessions.delete(sessionId)
-    if (!deleted) return { ok: false, error: '会话不存在' }
-    await commandSessions.removeSession(sessionId)
-    if (deletedCurrent) {
-      resetRuntime()
-      projectDir = null
+  if (runtimeBusy()) {
+    return {
+      ok: false,
+      error: sessionDeletionId
+        ? '已有会话正在删除，请等待完成'
+        : 'Agent 工作中，请先停止再删除会话',
     }
+  }
+  const deletedCurrent = sessions.currentSessionId === sessionId
+  const statusBeforeDeletion = currentAgentStatus
+  let detachedCurrent = false
+  sessionDeletionId = sessionId
+  broadcastEvent({ type: 'agent-status', status: 'working' }, false)
+  try {
+    const deleted = await deleteSessionArtifacts({
+      sessionId,
+      sessions,
+      commandSessions,
+      scratchRoot: join(app.getPath('userData'), 'scratch'),
+      onDeletionMarked: () => {
+        if (!deletedCurrent) return
+        resetRuntime()
+        projectDir = null
+        detachedCurrent = true
+      },
+    })
+    if (!deleted) return { ok: false, error: '会话不存在', deletedCurrent: detachedCurrent }
     return { ok: true, deletedCurrent }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      deletedCurrent: detachedCurrent || undefined,
+    }
+  } finally {
+    sessionDeletionId = null
+    broadcastEvent({
+      type: 'agent-status',
+      status: detachedCurrent ? 'idle' : statusBeforeDeletion,
+    }, false)
   }
 }
 
-void app.whenReady().then(async () => {
+// userData 中的会话、命令和共享检查点由单一主进程协调；第二实例只能聚焦现有窗口。
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  })
+}
+
+if (primaryInstance) void app.whenReady().then(async () => {
   // scratch 只服务当次协商；资源检查点属于会话持久化数据，重启后必须保留。
   void rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }).catch(() => {})
   sessions = new DesktopSessionRepository(
@@ -483,7 +562,9 @@ void app.whenReady().then(async () => {
     if (runtimeBusy()) {
       broadcastEvent({
         type: 'error',
-        message: 'Agent 工作中，请先停止并等待当前操作结束后再切换项目',
+        message: sessionDeletionId
+          ? '会话数据删除中，请等待完成后再切换项目'
+          : 'Agent 工作中，请先停止并等待当前操作结束后再切换项目',
         recoverable: true,
       })
       return null

@@ -164,6 +164,35 @@ export const sessionMetadataSchema = z.object({
 
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>
 
+interface SessionSummaryBase {
+  sessionId: string
+  title: string
+  lastUserText: string
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * 会话列表的只读摘要。列表可见性不等于可恢复性：旧版本或损坏的合法会话目录
+ * 仍必须暴露给宿主，以便用户删除，而不能成为磁盘上的隐形残留。
+ */
+export type SessionSummary =
+  | SessionSummaryBase & {
+      resumable: true
+      projectDir: string | null
+      modelId: string
+      status: SessionStatus
+      unavailableReason?: never
+    }
+  | SessionSummaryBase & {
+      resumable: false
+      /** 旧 metadata 无法可信读取时保持 unknown，不能误标成纯聊天。 */
+      projectDir?: string | null
+      modelId: string | null
+      status: 'unavailable'
+      unavailableReason: string
+    }
+
 export interface SessionCreateInput {
   projectDir: string | null
   modelId: string
