@@ -268,9 +268,9 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       if (imagePreparationInProgress) {
         return rejectUserMessage('上一条图片消息仍在准备，请稍后重试')
       }
-      const attachmentPaths = command.attachmentPaths ?? []
+      const attachmentInputs = command.attachments ?? []
       let imageAttachments: ImageAttachment[] = []
-      if (attachmentPaths.length > 0) {
+      if (attachmentInputs.length > 0) {
         const modelId = resolveCurrentModelId()
         if (!modelId) return rejectUserMessage('没有任何已配置 key 的模型可用')
         const model = getModelEntry(modelId)
@@ -288,7 +288,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
           const journal = sessions.journal
           if (!journal) throw new Error('会话记录尚未初始化，无法保存图片')
           imageAttachments = await importImageAttachments(
-            attachmentPaths,
+            attachmentInputs,
             journal.attachmentDirectory,
             journal.sessionId,
           )

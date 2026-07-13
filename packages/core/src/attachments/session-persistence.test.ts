@@ -21,7 +21,7 @@ describe('图片会话持久化', () => {
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
-        [source],
+        [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
         journal.sessionId,
       )
@@ -69,7 +69,7 @@ describe('图片会话持久化', () => {
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
-        [source],
+        [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
         journal.sessionId,
       )
@@ -93,7 +93,7 @@ describe('图片会话持久化', () => {
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
-        [source],
+        [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
         journal.sessionId,
       )
@@ -119,7 +119,7 @@ describe('图片会话持久化', () => {
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
-        [source],
+        [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
         journal.sessionId,
       )

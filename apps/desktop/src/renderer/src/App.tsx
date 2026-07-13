@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
@@ -29,6 +29,8 @@ import {
   useImageDrafts,
   UserImageGallery,
 } from './image-attachments.tsx'
+import { prepareImageDrafts } from './image-draft.ts'
+import { collectPastedImageFiles } from './image-paste.ts'
 
 interface Approval {
   requestId: string
@@ -391,23 +393,29 @@ export function App() {
       setInput((current) => current ? `${text}\n${current}` : text)
       restoreImageDrafts(sentDrafts)
     }
-    void window.whycode.sendCommand({
-      type: 'user-message',
-      text,
-      urgent,
-      ...(sentDrafts.length ? { attachmentPaths: sentDrafts.map((draft) => draft.path) } : {}),
-    }).then((result) => {
-      if (!result?.ok) {
+    void (async () => {
+      try {
+        const attachments = await prepareImageDrafts(sentDrafts)
+        const result = await window.whycode.sendCommand({
+          type: 'user-message',
+          text,
+          urgent,
+          ...(attachments.length ? { attachments } : {}),
+        })
+        if (result?.ok) {
+          releaseImageDrafts(sentDrafts)
+          return
+        }
         restoreRejectedInput()
-        return
+      } catch {
+        restoreRejectedInput()
+        addError(sentDrafts.length
+          ? '图片读取或消息发送失败，内容已恢复到输入框'
+          : '消息发送失败，内容已恢复到输入框')
+      } finally {
+        if (sentDrafts.length > 0) setImageSubmissionPending(false)
       }
-      releaseImageDrafts(sentDrafts)
-    }).catch(() => {
-      restoreRejectedInput()
-      addError('消息发送失败，内容已恢复到输入框')
-    }).finally(() => {
-      if (sentDrafts.length > 0) setImageSubmissionPending(false)
-    })
+    })()
   }, [
     addError,
     busy,
@@ -451,6 +459,20 @@ export function App() {
 
   const selectedModel = models.find((model) => model.id === modelId)
   const canAttachImages = Boolean(selectedModel?.hasKey && selectedModel.supportsImageInput)
+  const pasteImages = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
+    const files = collectPastedImageFiles(event.clipboardData)
+    if (files.length === 0) return
+    event.preventDefault()
+    if (!canAttachImages) {
+      addError('当前模型不支持粘贴图片；请切换到带“图片”标记的模型')
+      return
+    }
+    if (interactionBusy) {
+      addError('Agent 工作中；图片只能在空闲时粘贴，不能排队或立即插话')
+      return
+    }
+    addImageFiles(files)
+  }, [addError, addImageFiles, canAttachImages, interactionBusy])
 
   return (
     <div className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900">
@@ -565,6 +587,7 @@ export function App() {
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={pasteImages}
             disabled={stopping || deletingSessionId !== null || checkpointRestoreToolUseId !== null}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return

@@ -96,6 +96,7 @@ export {
   imageAttachmentsSchema,
   imageAttachmentStorageNameSchema,
   type ImageAttachment,
+  type ImageAttachmentInput,
   type ImageMediaType,
 } from './attachments/types.ts'
 export {

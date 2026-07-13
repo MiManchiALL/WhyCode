@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ImageAttachment } from '@whycode/core'
+import {
+  MAX_IMAGE_DRAFT_BYTES,
+  MAX_IMAGE_DRAFTS,
+  type ImageDraft,
+} from './image-draft.ts'
 
-export interface ImageDraft {
-  path: string
-  name: string
-  previewUrl: string
-}
-
-/** UI 预检镜像；安全上限仍由 Core/Main 的同值常量权威执行。 */
-export const MAX_IMAGE_DRAFTS = 4
+const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp'])
 
 export function useImageDrafts(onError: (message: string) => void) {
   const [drafts, setDrafts] = useState<ImageDraft[]>([])
@@ -26,40 +24,17 @@ export function useImageDrafts(onError: (message: string) => void) {
     replace([])
   }, [replace])
 
-  const addFiles = useCallback((files: FileList | null) => {
+  const addFiles = useCallback((files: FileList | readonly File[] | null) => {
     if (!files?.length) return
-    const next = [...draftsRef.current]
-    const knownPaths = new Set(next.map((draft) => normalizePath(draft.path)))
-    let omitted = 0
-    for (const file of files) {
-      if (next.length >= MAX_IMAGE_DRAFTS) {
-        omitted++
-        continue
-      }
-      let path = ''
-      try {
-        path = window.whycode.getPathForFile(file)
-      } catch {
-        omitted++
-        continue
-      }
-      const normalized = normalizePath(path)
-      if (!path || knownPaths.has(normalized)) {
-        omitted++
-        continue
-      }
-      knownPaths.add(normalized)
-      next.push({ path, name: file.name, previewUrl: URL.createObjectURL(file) })
-    }
-    replace(next)
-    if (omitted > 0) {
-      onError(`每条消息最多添加 ${MAX_IMAGE_DRAFTS} 张且不能重复；已忽略 ${omitted} 张`)
-    }
+    const result = appendImageDrafts(draftsRef.current, Array.from(files))
+    replace(result.drafts)
+    const error = formatDraftError(result)
+    if (error) onError(error)
   }, [onError, replace])
 
-  const remove = useCallback((path: string) => {
+  const remove = useCallback((id: string) => {
     const next = draftsRef.current.filter((draft) => {
-      if (draft.path !== path) return true
+      if (draft.id !== id) return true
       URL.revokeObjectURL(draft.previewUrl)
       return false
     })
@@ -74,11 +49,11 @@ export function useImageDrafts(onError: (message: string) => void) {
 
   const restore = useCallback((rejected: readonly ImageDraft[]) => {
     const current = draftsRef.current
-    const known = new Set(current.map((draft) => normalizePath(draft.path)))
-    for (const duplicate of rejected.filter((draft) => known.has(normalizePath(draft.path)))) {
+    const known = new Set(current.map((draft) => draft.id))
+    for (const duplicate of rejected.filter((draft) => known.has(draft.id))) {
       URL.revokeObjectURL(duplicate.previewUrl)
     }
-    const candidates = rejected.filter((draft) => !known.has(normalizePath(draft.path)))
+    const candidates = rejected.filter((draft) => !known.has(draft.id))
     const restored = candidates.slice(0, Math.max(0, MAX_IMAGE_DRAFTS - current.length))
     releaseImageDrafts(candidates.slice(restored.length))
     replace([...restored, ...current])
@@ -92,17 +67,17 @@ export function ImageDraftStrip({
   onRemove,
 }: {
   drafts: readonly ImageDraft[]
-  onRemove: (path: string) => void
+  onRemove: (id: string) => void
 }) {
   if (drafts.length === 0) return null
   return (
     <div className="mb-2 flex flex-wrap gap-2">
       {drafts.map((draft) => (
-        <div key={draft.path} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
+        <div key={draft.id} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
           <img src={draft.previewUrl} alt={draft.name} className="h-full w-full object-cover" />
           <button
             className="absolute right-1 top-1 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-80 hover:opacity-100"
-            onClick={() => onRemove(draft.path)}
+            onClick={() => onRemove(draft.id)}
             title={`移除 ${draft.name}`}
             aria-label={`移除 ${draft.name}`}
           >
@@ -148,7 +123,7 @@ export function ImagePickerButton({
         disabled={!enabled}
         title={
           enabled
-            ? `添加图片（最多 ${MAX_IMAGE_DRAFTS} 张）`
+            ? `添加图片或在输入框按 Ctrl+V 粘贴（最多 ${MAX_IMAGE_DRAFTS} 张）`
             : supportsImageInput
               ? 'Agent 工作中；图片消息不能排队或立即插话'
               : '当前模型不支持识图；请切换到带“图片”标记的模型'
@@ -188,4 +163,69 @@ function normalizePath(path: string): string {
   return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
     ? normalized.toLowerCase()
     : normalized
+}
+
+interface AppendDraftResult {
+  drafts: ImageDraft[]
+  duplicateOrLimit: number
+  unsupported: number
+  invalidSize: number
+}
+
+function appendImageDrafts(current: readonly ImageDraft[], files: readonly File[]): AppendDraftResult {
+  const result: AppendDraftResult = {
+    drafts: [...current], duplicateOrLimit: 0, unsupported: 0, invalidSize: 0,
+  }
+  const knownPaths = new Set(current.flatMap((draft) =>
+    draft.kind === 'path' ? [normalizePath(draft.path)] : []))
+  const knownMemory = new Set(current.flatMap((draft) =>
+    draft.kind === 'memory' ? [draft.file] : []))
+
+  for (const file of files) {
+    if (result.drafts.length >= MAX_IMAGE_DRAFTS) {
+      result.duplicateOrLimit++
+      continue
+    }
+    if (file.size <= 0 || file.size > MAX_IMAGE_DRAFT_BYTES) {
+      result.invalidSize++
+      continue
+    }
+    const path = getLocalPath(file)
+    const normalizedPath = normalizePath(path)
+    if (path ? knownPaths.has(normalizedPath) : knownMemory.has(file)) {
+      result.duplicateOrLimit++
+      continue
+    }
+    if (!path && !supportsInlineImage(file)) {
+      result.unsupported++
+      continue
+    }
+    if (path) knownPaths.add(normalizedPath)
+    else knownMemory.add(file)
+    const previewUrl = URL.createObjectURL(file)
+    const base = { id: previewUrl, name: file.name || 'clipboard-image', previewUrl }
+    result.drafts.push(path ? { ...base, kind: 'path', path } : { ...base, kind: 'memory', file })
+  }
+  return result
+}
+
+function formatDraftError(result: AppendDraftResult): string | null {
+  const details: string[] = []
+  if (result.duplicateOrLimit) details.push(`重复或超过 ${MAX_IMAGE_DRAFTS} 张：${result.duplicateOrLimit} 张`)
+  if (result.unsupported) details.push(`非 PNG/JPEG/WebP：${result.unsupported} 张`)
+  if (result.invalidSize) details.push(`为空或超过 3.75 MB：${result.invalidSize} 张`)
+  return details.length ? `部分图片未添加（${details.join('；')}）` : null
+}
+
+function getLocalPath(file: File): string {
+  try {
+    return window.whycode.getPathForFile(file)
+  } catch {
+    return ''
+  }
+}
+
+function supportsInlineImage(file: File): boolean {
+  return INLINE_IMAGE_TYPES.has(file.type.toLowerCase())
+    || /\.(?:png|jpe?g|webp)$/i.test(file.name)
 }

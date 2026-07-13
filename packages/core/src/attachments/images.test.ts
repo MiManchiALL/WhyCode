@@ -47,7 +47,9 @@ describe('图片附件', () => {
       const attachments = join(directory, 'attachments')
       await writeFile(source, ONE_PIXEL_PNG)
 
-      const [attachment] = await importImageAttachments([source], attachments, SESSION_ID)
+      const [attachment] = await importImageAttachments(
+        [{ kind: 'path', path: source }], attachments, SESSION_ID,
+      )
       assert.ok(attachment)
       assert.equal(attachment.mediaType, 'image/png')
       assert.equal(attachment.width, 1)
@@ -60,12 +62,45 @@ describe('图片附件', () => {
     })
   })
 
+  it('接收无路径图片的瞬时 Base64，并对混合来源执行原子去重', async () => {
+    await withTempDirectory(async (directory) => {
+      const attachments = join(directory, 'attachments')
+      const [pasted] = await importImageAttachments([{
+        kind: 'inline', name: '剪贴板截图.png', base64: ONE_PIXEL_PNG.toString('base64'),
+      }], attachments, SESSION_ID)
+      assert.ok(pasted)
+      assert.equal(pasted.name, '剪贴板截图.png')
+      assert.deepEqual(await readFile(join(attachments, pasted.storageName)), ONE_PIXEL_PNG)
+
+      await assert.rejects(
+        importImageAttachments([{
+          kind: 'inline', name: 'broken.png', base64: 'not-base64',
+        }], attachments, SESSION_ID),
+        /编码无效/,
+      )
+
+      const source = join(directory, 'same.png')
+      const duplicateBatch = join(directory, 'duplicate-batch')
+      await writeFile(source, ONE_PIXEL_PNG)
+      await assert.rejects(
+        importImageAttachments([
+          { kind: 'path', path: source },
+          { kind: 'inline', name: 'same-copy.png', base64: ONE_PIXEL_PNG.toString('base64') },
+        ], duplicateBatch, SESSION_ID),
+        /不能重复添加/,
+      )
+      assert.deepEqual(await readdir(duplicateBatch), [])
+    })
+  })
+
   it('长期历史只存附件引用，视觉请求边界才装载 Base64', async () => {
     await withTempDirectory(async (directory) => {
       const source = join(directory, 'screen.png')
       const attachments = join(directory, 'attachments')
       await writeFile(source, ONE_PIXEL_PNG)
-      const imported = await importImageAttachments([source], attachments, SESSION_ID)
+      const imported = await importImageAttachments(
+        [{ kind: 'path', path: source }], attachments, SESSION_ID,
+      )
       const runtime = [createImageUserMessage('分析截图', imported)]
 
       const persisted = dehydrateImageMessages(runtime)
@@ -109,7 +144,9 @@ describe('图片附件', () => {
       const fake = join(directory, 'fake.png')
       await writeFile(fake, 'not an image')
       await assert.rejects(
-        importImageAttachments([fake], join(directory, 'attachments'), SESSION_ID),
+        importImageAttachments(
+          [{ kind: 'path', path: fake }], join(directory, 'attachments'), SESSION_ID,
+        ),
         /只支持真实的/,
       )
 
@@ -120,7 +157,9 @@ describe('图片附件', () => {
       const gifPath = join(directory, 'unsupported.gif')
       await writeFile(gifPath, gif)
       await assert.rejects(
-        importImageAttachments([gifPath], join(directory, 'attachments'), SESSION_ID),
+        importImageAttachments(
+          [{ kind: 'path', path: gifPath }], join(directory, 'attachments'), SESSION_ID,
+        ),
         /只支持真实的 PNG、JPEG 或 WebP/,
       )
 
@@ -132,7 +171,9 @@ describe('图片附件', () => {
       const hugePath = join(directory, 'huge.png')
       await writeFile(hugePath, huge)
       await assert.rejects(
-        importImageAttachments([hugePath], join(directory, 'attachments'), SESSION_ID),
+        importImageAttachments(
+          [{ kind: 'path', path: hugePath }], join(directory, 'attachments'), SESSION_ID,
+        ),
         /分辨率过大/,
       )
     })
@@ -147,7 +188,10 @@ describe('图片附件', () => {
       await writeFile(fake, 'not an image')
 
       await assert.rejects(
-        importImageAttachments([valid, fake], attachments, SESSION_ID),
+        importImageAttachments([
+          { kind: 'path', path: valid },
+          { kind: 'path', path: fake },
+        ], attachments, SESSION_ID),
         /只支持真实的/,
       )
       assert.deepEqual(await readdir(attachments), [])

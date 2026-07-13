@@ -8,6 +8,11 @@ export const IMAGE_ATTACHMENT_MAX_BYTES = 3_750_000
 export const IMAGE_ATTACHMENT_MAX_DIMENSION = 8_192
 export const IMAGE_ATTACHMENT_MAX_PIXELS = 20_000_000
 
+/** 宿主交付的有序图片来源；inline Base64 只允许在落盘边界短暂存在。 */
+export type ImageAttachmentInput =
+  | { kind: 'path'; path: string }
+  | { kind: 'inline'; name: string; base64: string }
+
 export const imageMediaTypeSchema = z.enum([
   'image/png',
   'image/jpeg',

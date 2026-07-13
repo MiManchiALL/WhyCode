@@ -8,7 +8,7 @@
  */
 
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
-import type { ImageAttachment } from './attachments/types.ts'
+import type { ImageAttachment, ImageAttachmentInput } from './attachments/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -179,8 +179,8 @@ export type CoreCommand =
       text: string
       /** true = 立即插话：打断当前步骤马上注入（Claude Code 的 now 语义）；默认排队到步骤间 */
       urgent?: boolean
-      /** 附件文件路径（宠物文件投递复用此通道） */
-      attachmentPaths?: string[]
+      /** 有序图片来源；剪贴板 Base64 在主进程落盘后不得持久化。 */
+      attachments?: ImageAttachmentInput[]
     }
   | {
       type: 'approval-response'
