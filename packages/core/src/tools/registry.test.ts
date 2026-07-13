@@ -5,6 +5,7 @@ import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from './file-lifecycle/ind
 import { GREP_TOOL_NAME } from './grep/index.ts'
 import { GLOB_TOOL_NAME } from './list-glob/index.ts'
 import { BUILTIN_TOOLS } from './registry.ts'
+import { BASH_TOOL_NAME } from './run-command/index.ts'
 
 describe('内置工具注册表', () => {
   it('注册名唯一，并包含搜索与完整文件生命周期能力', () => {
@@ -29,5 +30,13 @@ describe('内置工具注册表', () => {
       assert.equal(tool.kind, 'edit')
       assert.equal(typeof tool.checkpointScope, 'function')
     }
+  })
+
+  it('RunCommand 保持执行审批但不承诺文件回滚', () => {
+    const tool = BUILTIN_TOOLS.find((candidate) => candidate.name === BASH_TOOL_NAME)
+    assert.ok(tool)
+    assert.equal(tool.isReadOnly, false)
+    assert.equal(tool.kind, 'execute')
+    assert.equal(tool.checkpointScope, undefined)
   })
 })

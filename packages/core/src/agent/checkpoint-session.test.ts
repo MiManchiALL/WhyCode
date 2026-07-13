@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict'
-import { access, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  truncate,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -13,7 +22,10 @@ import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   REPLACE_TASK_PLAN_TOOL_NAME,
 } from '../tasks/tools.ts'
-import { activeTaskPlanSchema } from '../tasks/types.ts'
+import {
+  activeTaskPlanSchema,
+  type TaskPlanState,
+} from '../tasks/types.ts'
 import { AgentSession } from './session.ts'
 
 const roots: string[] = []
@@ -41,7 +53,6 @@ describe('Agent 资源检查点联动', () => {
       model: modelEntry(modelWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => {
@@ -95,7 +106,6 @@ describe('Agent 资源检查点联动', () => {
       model: modelEntry(modelWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: true }),
@@ -121,7 +131,8 @@ describe('Agent 资源检查点联动', () => {
     const project = join(root, 'project')
     const target = join(project, 'csgo.html')
     await mkdir(project)
-    const recorder = await new SessionStore(join(root, 'sessions')).create({
+    const store = new SessionStore(join(root, 'sessions'))
+    const recorder = await store.create({
       projectDir: project,
       modelId: 'test:checkpoint',
     })
@@ -141,21 +152,38 @@ describe('Agent 资源检查点联动', () => {
         },
       ],
     })
+    const oldState: TaskPlanState = {
+      version: 7,
+      activePlan: oldPlan,
+      historicalPlans: [{
+        id: '33333333-3333-4333-8333-333333333333',
+        goal: '完成 Minecraft 游戏',
+        status: 'completed',
+        summary: '功能和验证均已完成',
+        completedItems: 2,
+        totalItems: 2,
+        revision: 4,
+      }],
+      resumeRequired: true,
+      interruptionReason: 'user-cancel',
+    }
     await recorder.recordTurnStart('old-plan', [{ role: 'user', content: '开发蔚蓝' }])
-    await recorder.recordStep('old-plan', [{ role: 'assistant', content: '已建立计划' }], oldPlan)
+    await recorder.recordStep('old-plan', [{ role: 'assistant', content: '已建立计划' }], oldState)
     await recorder.recordTurnEnd('old-plan', 'paused')
     const events: CoreEvent[] = []
     const session = new AgentSession({
       model: modelEntry(modelReplacingAndWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: true }),
     })
 
-    assert.equal(await session.handleUserMessage('现在完整开发 CSGO'), 'completed')
+    assert.equal(
+      await session.handleUserMessage('放弃当前蔚蓝任务，切换到完整开发 CSGO'),
+      'completed',
+    )
     const checkpoint = events.find((event) => event.type === 'checkpoint-created')
     assert.ok(checkpoint?.type === 'checkpoint-created')
     assert.equal(await readFile(target, 'utf8'), 'csgo')
@@ -163,15 +191,85 @@ describe('Agent 资源检查点联动', () => {
     await session.restoreCheckpoint(checkpoint.toolUseId, 'files-and-chat')
 
     await assert.rejects(access(target))
-    assert.deepEqual(session.captureTaskPlanSnapshot(), oldPlan)
+    assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, oldPlan)
+    assert.deepEqual(session.captureTaskStateSnapshot(), oldState)
+    assert.deepEqual((await store.open(recorder.sessionId)).initialTaskState, oldState)
     const restored = events.findLast((event) => event.type === 'checkpoint-restored')
     assert.equal(restored?.type === 'checkpoint-restored' && restored.ok, true)
     assert.deepEqual(restored?.type === 'checkpoint-restored' ? restored.taskPlan : null, oldPlan)
   })
+
+  it('RunCommand 在超大工作区也不扫描或建立文件检查点', async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-command-no-checkpoint-'))
+    roots.push(root)
+    const project = join(root, 'project')
+    await mkdir(project)
+    const oversized = join(project, 'oversized.csv')
+    await writeFile(oversized, '')
+    await truncate(oversized, 65 * 1024 * 1024)
+    const recorder = await new SessionStore(join(root, 'sessions')).create({
+      projectDir: project,
+      modelId: 'test:checkpoint',
+    })
+    const events: CoreEvent[] = []
+    const session = new AgentSession({
+      model: modelEntry(modelRunningCommand()),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: project, osPlatform: process.platform },
+      sessionRecorder: recorder,
+      emit: (event) => events.push(event),
+      requestApproval: async () => ({ approved: true }),
+    })
+
+    assert.equal(await session.handleUserMessage('运行一个短命令'), 'completed')
+    assert.equal(events.some((event) => event.type === 'checkpoint-created'), false)
+    assert.equal(events.some((event) => event.type === 'checkpoint-disabled'), false)
+  })
 })
 
+function modelRunningCommand(): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doStream: [
+      toolStep('RunCommand', { command: 'echo ok' }, 'run-command-without-checkpoint'),
+      textStep('命令完成', 'command-final'),
+    ],
+  })
+}
+
 function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
-  const toolStep = (toolName: string, input: unknown, id: string) => ({
+  return new MockLanguageModelV4({
+    doStream: [
+      toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
+        expected_active_plan_id: '11111111-1111-4111-8111-111111111111',
+        replacement_authorized: true,
+        goal: '开发 CSGO 游戏',
+        reason: '用户明确切换到新的独立游戏任务',
+        items: [
+          { kind: 'work', title: '实现 CSGO', acceptance: '游戏可以运行' },
+          { kind: 'verification', title: '验证 CSGO', acceptance: '运行无错误' },
+        ],
+      }, 'replace-plan'),
+      toolStep('WriteFile', { path, content: 'csgo' }, 'write-csgo'),
+      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
+        outcome: 'abandoned',
+        summary: '测试结束',
+      }, 'close-plan'),
+      textStep('替换完成', 'replacement-final'),
+    ],
+  })
+}
+
+function modelWriting(path: string): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doStream: [
+      toolStep('WriteFile', { path, content: 'hello' }, 'write-external'),
+      textStep('已创建', 'final'),
+    ],
+  })
+}
+
+function toolStep(toolName: string, input: unknown, id: string) {
+  return {
     stream: simulateReadableStream({
       chunks: [
         {
@@ -187,76 +285,24 @@ function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
         },
       ],
     }),
-  })
-  return new MockLanguageModelV4({
-    doStream: [
-      toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
-        goal: '开发 CSGO 游戏',
-        reason: '用户明确切换到新的独立游戏任务',
-        items: [
-          { kind: 'work', title: '实现 CSGO', acceptance: '游戏可以运行' },
-          { kind: 'verification', title: '验证 CSGO', acceptance: '运行无错误' },
-        ],
-      }, 'replace-plan'),
-      toolStep('WriteFile', { path, content: 'csgo' }, 'write-csgo'),
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-        outcome: 'abandoned',
-        summary: '测试结束',
-      }, 'close-plan'),
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'text-start' as const, id: 'replacement-final' },
-            { type: 'text-delta' as const, id: 'replacement-final', delta: '替换完成' },
-            { type: 'text-end' as const, id: 'replacement-final' },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'stop' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
-    ],
-  })
+  }
 }
 
-function modelWriting(path: string): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            {
-              type: 'tool-call' as const,
-              toolCallId: 'write-external',
-              toolName: 'WriteFile',
-              input: JSON.stringify({ path, content: 'hello' }),
-            },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'tool-calls' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'text-start' as const, id: 'final' },
-            { type: 'text-delta' as const, id: 'final', delta: '已创建' },
-            { type: 'text-end' as const, id: 'final' },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'stop' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
-    ],
-  })
+function textStep(text: string, id: string) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: 'text-start' as const, id },
+        { type: 'text-delta' as const, id, delta: text },
+        { type: 'text-end' as const, id },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
 }
 
 function modelEntry(model: MockLanguageModelV4): ModelEntry {

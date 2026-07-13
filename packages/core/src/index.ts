@@ -86,7 +86,7 @@ export type {
 } from './consensus/types.ts'
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
-export { releaseShadowRefs } from './checkpoints/manager.ts'
+export { validateSessionId } from './session/metadata.ts'
 export {
   pushCoalescedViewEvent,
   toViewEvent,
@@ -99,18 +99,23 @@ export type {
   SessionCreateInput,
   SessionMetadata,
   SessionRecorder,
+  SessionSummary,
 } from './session/types.ts'
 export {
   activeTaskPlanSchema,
   supersededTaskPlanSchema,
+  taskPlanStateSchema,
+  historicalTaskPlanSummarySchema,
   taskItemSchema,
   taskItemStatusSchema,
   taskPlanSchema,
 } from './tasks/types.ts'
 export type {
   ActiveTaskPlan,
+  HistoricalTaskPlanSummary,
   SupersededTaskPlan,
   TaskItem,
   TaskItemStatus,
   TaskPlan,
+  TaskPlanState,
 } from './tasks/types.ts'

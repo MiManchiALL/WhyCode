@@ -1,21 +1,18 @@
 import {
   SessionStore,
-  releaseShadowRefs,
   type SessionJournal,
-  type SessionMetadata,
+  type SessionSummary,
 } from '@whycode/core'
 
 /** Electron 宿主的会话仓库：只管理当前 journal 与磁盘列表，不持有 Agent 运行态。 */
 export class DesktopSessionRepository {
   private readonly store: SessionStore
-  private readonly checkpointStorageRoot: string
   private current: SessionJournal | null = null
   private pendingCreate: Promise<SessionJournal> | null = null
   private generation = 0
 
-  constructor(storageRoot: string, checkpointStorageRoot: string) {
+  constructor(storageRoot: string) {
     this.store = new SessionStore(storageRoot)
-    this.checkpointStorageRoot = checkpointStorageRoot
   }
 
   get journal(): SessionJournal | null {
@@ -60,16 +57,19 @@ export class DesktopSessionRepository {
     this.current = null
   }
 
-  list(projectDir?: string | null): Promise<SessionMetadata[]> {
+  list(projectDir?: string | null): Promise<SessionSummary[]> {
     return this.store.list(projectDir, this.current?.metadataSnapshot)
+  }
+
+  async markDeleting(sessionId: string): Promise<boolean> {
+    const marked = await this.store.markDeleting(sessionId)
+    if (marked && this.current?.sessionId === sessionId) this.current = null
+    return marked
   }
 
   async delete(sessionId: string): Promise<boolean> {
     const deletingCurrent = this.current?.sessionId === sessionId
     const deleted = await this.store.delete(sessionId)
-    if (deleted) {
-      await releaseShadowRefs(this.checkpointStorageRoot, sessionId).catch(() => {})
-    }
     if (deleted && deletingCurrent) this.current = null
     return deleted
   }

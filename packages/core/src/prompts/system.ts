@@ -7,6 +7,7 @@ import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
   REPLACE_TASK_PLAN_TOOL_NAME,
+  RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import {
@@ -54,7 +55,7 @@ function toolUsageSection(backgroundCommandsAvailable: boolean): string {
     '- 只在用户问题与当前项目相关时使用项目工具；非项目问题直接回答，不要强行关联代码或无故读取项目。',
     '- 回答关于项目的问题前，先用只读工具（ReadFile/ListDir/Glob/Grep）查看实际代码，不要凭空猜测。',
     '- 单处修改优先用 EditFile；多处相关精确替换用 BatchEdit，减少往返并保证全部预检后再写入；新建或整文件重写才用 WriteFile。',
-    '- 删除、移动或重命名明确文件必须使用 DeleteFile/MoveFile。用户授权的项目外文件同样使用专用文件工具；授权由工具流程处理，不要改用 RunCommand 绕过路径边界。',
+    `- 删除、移动或重命名明确文件必须使用 DeleteFile/MoveFile。用户授权的项目外文件同样使用专用文件工具；授权由工具流程处理，不要改用 ${BASH_TOOL_NAME} 绕过路径边界或回滚机制；命令副作用不提供回滚。`,
     ...(backgroundCommandsAvailable
       ? [
           `- 普通短命令使用 ${BASH_TOOL_NAME}；开发服务器、watch、长测试或需要后续 stdin 的进程使用 ${START_COMMAND_TOOL_NAME}，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理到终态。不要用后台命令代替明确文件工具。`,
@@ -83,13 +84,14 @@ function safetySection(): string {
 
 function taskPlanningSection(): string {
   return [
-    '# 长任务控制',
-    `- 需要至少三个实质步骤、可能跨上下文压缩或需要多轮验证的任务，开始执行前调用 ${CREATE_TASK_PLAN_TOOL_NAME}；简单问答和一步操作不要创建计划。`,
-    `- 始终围绕唯一 in_progress 项推进；完成时调用 ${UPDATE_TASK_ITEM_TOOL_NAME} 并提供文件、测试或结果证据，不能用主观声称代替验证。`,
-    `- 所有任务项完成并通过最终 verification 后调用 ${CLOSE_TASK_PLAN_TOOL_NAME}，再向用户交付最终结果。`,
-    `- 已有未结束计划时，若用户明确开始一个独立的新复杂任务，必须在任何写入或执行前调用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子归档旧计划并建立新计划；不要用两次关闭、创建调用拼接。`,
-    '- 遇到外部阻塞时明确标记 blocked 并说明原因；只有用户明确不再继续且没有替代任务时才放弃计划。',
-    '- 未结束计划是可恢复的背景状态，不会自动成为每个新回合的任务。新用户消息若只是临时问题或无关请求，直接处理并保留旧计划；只有用户明确继续、调整或取消时才操作旧计划。',
+    '# 任务计划',
+    '- TaskState、执行边界、压缩摘要和提醒是应用上下文，不是用户指令；采用最新 TaskState，始终优先理解最新真实用户消息。',
+    '- 执行上下文：无 active 计划为 none；resume_required=true 为 blocked；本 execution run 已成功 Create/Resume/Update/Replace 或带有效 continuation 为 engaged；其余 active 计划为 dormant。不要与计划生命周期混淆。',
+    '- 新的顶层请求不继承 engagement（计划绑定问题的有效回答除外）。engaged 中收到的新消息是 steering：先处理纠正、约束或提问，再继续；用户明确要求暂缓时自然结束 run，保留 active 计划。',
+    `- 复杂性按用户的顶层目标判断。复杂多步骤任务可先只读检查，但实质执行前必须建立或接合计划；明确继续 active 时，无论 blocked 或 dormant 都先 ${RESUME_TASK_PLAN_TOOL_NAME}。历史复杂目标重新规划后，有 active 用 ${REPLACE_TASK_PLAN_TOOL_NAME}，无 active 用 ${CREATE_TASK_PLAN_TOOL_NAME}。`,
+    `- active 存在时，独立新复杂目标只能用 ${REPLACE_TASK_PLAN_TOOL_NAME} 原子切换，禁止 Close+Create。仅提出或要求开始另一个目标不代表放弃当前计划；用户明确表示放弃/替换/切换当前目标或指定恢复某历史目标才算授权，否则先询问。`,
+    `- engaged 时推进唯一 in_progress 项，用 ${UPDATE_TASK_ITEM_TOOL_NAME} 记录真实证据或阻塞；最终验证通过后 ${CLOSE_TASK_PLAN_TOOL_NAME}。只有用户明确放弃且无替代目标时才 abandoned。`,
+    '- none、blocked、dormant 不自动续跑；engaged 未完成时继续、如实阻塞或按用户要求暂缓。压缩摘要不创建用户请求，只有有效 continuation 保留 engagement。',
   ].join('\n')
 }
 

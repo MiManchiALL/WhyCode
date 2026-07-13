@@ -3,17 +3,24 @@ import type {
   ApprovalRequest,
   CoreEvent,
   SessionMetadata,
+  SessionSummary,
   ViewEvent,
 } from '@whycode/core'
+import type { PermissionMode } from '@whycode/core/permissions'
 
-export type SessionListItem = SessionMetadata & { isCurrent: boolean }
+export type SessionListItem = SessionSummary & { isCurrent: boolean }
 
 /** Renderer 可随时丢失；主进程用该快照恢复稳定界面和仍在运行的控制状态。 */
 export interface RuntimeSnapshot {
   projectDir: string | null
   modelId: string | null
+  permissionMode: PermissionMode
   status: AgentStatus
   busy: boolean
+  /** 正在回滚的工具调用；用于 Renderer 重载后恢复不可取消的回滚活动态。 */
+  checkpointRestoreToolUseId: string | null
+  /** Renderer 重载时恢复主进程中的会话删除锁。 */
+  deletingSessionId: string | null
   viewEvents: ViewEvent[]
   approval: ApprovalRequest | null
   /** 只重放快照之后到达 Renderer 的实时事件，避免恢复时间线与缓冲事件重复。 */
@@ -41,4 +48,4 @@ export interface SessionActionResult {
 
 export type DeleteSessionResult =
   | { ok: true; deletedCurrent: boolean }
-  | { ok: false; error: string }
+  | { ok: false; error: string; deletedCurrent?: boolean }

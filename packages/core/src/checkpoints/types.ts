@@ -3,7 +3,6 @@ import { z } from 'zod'
 export const CHECKPOINT_MANIFEST_VERSION = 1
 
 export const checkpointCoverageSchema = z.enum(['complete', 'partial', 'none'])
-export type CheckpointCoverage = z.infer<typeof checkpointCoverageSchema>
 
 export const fileStateSchema = z.object({
   path: z.string().min(1),
@@ -25,7 +24,8 @@ const exactFileResourceSchema = z.object({
   after: fileStateSchema.optional(),
 })
 
-const treeResourceSchema = z.object({
+/** 仅用于读取既有 v1 清单并把它当作非完整边界；新代码不再创建或恢复树快照。 */
+const legacyTreeResourceSchema = z.object({
   kind: z.literal('tree'),
   root: z.string().min(1),
   beforeHash: z.string().min(1),
@@ -35,7 +35,7 @@ const treeResourceSchema = z.object({
 
 export const checkpointResourceSchema = z.discriminatedUnion('kind', [
   exactFileResourceSchema,
-  treeResourceSchema,
+  legacyTreeResourceSchema,
 ])
 
 export type CheckpointResource = z.infer<typeof checkpointResourceSchema>
@@ -64,6 +64,4 @@ export interface ReadyCheckpoint {
   id: string
   toolUseId: string
   turnId: string
-  coverage: Exclude<CheckpointCoverage, 'none'>
-  warning?: string
 }

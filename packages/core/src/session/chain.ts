@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { keepsConsensusProgress } from '../consensus/types.ts'
-import type { ActiveTaskPlan } from '../tasks/types.ts'
+import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
 import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
 import {
   SESSION_SCHEMA_VERSION,
@@ -56,10 +56,11 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     : collectMessages(chain, undeliveredById)
   const consensusState = collectConsensusState(chain)
   const turnStarts = collectTurnStarts(chain, undeliveredById)
-  const activeTaskPlan = work.interruptedConsensusTaskId
-    ? work.interruptedConsensusBaseTaskPlan
-    : collectTaskPlan(chain)
+  const taskState = work.interruptedConsensusTaskId
+    ? work.interruptedConsensusBaseTaskState ?? emptyTaskPlanState()
+    : collectTaskState(chain)
   const viewEvents = collectViewEvents(entries)
+  reconcileTaskPlanView(viewEvents, taskState)
   const pendingUserQuestion = findPendingUserQuestion(messages)
   if (
     pendingUserQuestion
@@ -78,6 +79,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   const modelId = collectModelId(chain, start.modelId)
   const {
     interruptedTurnId,
+    interruptedTurnEngagedPlanId,
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
     interruptedConsensusBaseTurnIds,
@@ -98,16 +100,17 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     messages,
     viewEvents,
     turnStartMessages: turnStarts.messages,
-    turnStartTaskPlans: turnStarts.taskPlans,
+    turnStartTaskStates: turnStarts.taskStates,
     leafUuid: last.uuid,
     interruptedTurnId,
+    interruptedTurnEngagedPlanId,
     undeliveredUserInputIds: undeliveredUserInputs.map((input) => input.id),
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
-    interruptedConsensusBaseTaskPlan: work.interruptedConsensusBaseTaskPlan,
+    interruptedConsensusBaseTaskState: work.interruptedConsensusBaseTaskState,
     interruptedConsensusBaseTurnIds,
     consensusState,
-    activeTaskPlan,
+    taskState,
     metadata: {
       schemaVersion: SESSION_SCHEMA_VERSION,
       sessionId: start.sessionId,
@@ -127,12 +130,12 @@ function collectTurnStarts(
   undeliveredById: ReadonlyMap<string, UndeliveredUserInput>,
 ): {
   messages: Map<string, ModelMessage[]>
-  taskPlans: Map<string, ActiveTaskPlan | null>
+  taskStates: Map<string, TaskPlanState>
 } {
   const starts = new Map<string, ModelMessage[]>()
-  const taskPlans = new Map<string, ActiveTaskPlan | null>()
+  const taskStates = new Map<string, TaskPlanState>()
   let messages: ModelMessage[] = []
-  let taskPlan: ActiveTaskPlan | null = null
+  let taskState = emptyTaskPlanState()
   let activeConsensusBaseMessages: ModelMessage[] | null = null
   let activeConsensusBaseTurnIds: Set<string> | null = null
   const partialTurnIds = new Set(
@@ -141,9 +144,9 @@ function collectTurnStarts(
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
       starts.clear()
-      taskPlans.clear()
+      taskStates.clear()
       messages = [...entry.messages]
-      taskPlan = entry.taskPlan
+      taskState = cloneTaskPlanState(entry.taskState)
       activeConsensusBaseMessages = entry.activeConsensusBaseMessages
         ? [...entry.activeConsensusBaseMessages]
         : null
@@ -152,7 +155,7 @@ function collectTurnStarts(
         : null
       for (const start of entry.turnStartMessages) {
         starts.set(start.turnId, structuredClone(start.messages))
-        taskPlans.set(start.turnId, structuredClone(start.taskPlan))
+        taskStates.set(start.turnId, cloneTaskPlanState(start.taskState))
       }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
@@ -169,28 +172,30 @@ function collectTurnStarts(
     }
     if (entry.type === 'turn-start' && !partialTurnIds.has(entry.turnId)) {
       starts.set(entry.turnId, structuredClone(messages))
-      taskPlans.set(entry.turnId, structuredClone(taskPlan))
+      taskStates.set(entry.turnId, cloneTaskPlanState(taskState))
     }
-    if (entry.type === 'messages') messages.push(...entry.messages)
-    if (entry.type === 'task-state') taskPlan = entry.activePlan
+    if (entry.type === 'messages') {
+      messages.push(...entry.messages)
+      if (entry.taskState) taskState = cloneTaskPlanState(entry.taskState)
+    }
     if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
       messages = consensusRollbackMessages(entry.rollbackMessages, activeConsensusBaseMessages)
       if (activeConsensusBaseTurnIds) {
         retainMapKeys(starts, activeConsensusBaseTurnIds)
-        retainMapKeys(taskPlans, activeConsensusBaseTurnIds)
+        retainMapKeys(taskStates, activeConsensusBaseTurnIds)
       }
     }
     if (entry.type === 'consensus-task-end') {
-      taskPlan = entry.taskPlan
+      taskState = cloneTaskPlanState(entry.taskState)
       activeConsensusBaseMessages = null
       activeConsensusBaseTurnIds = null
     }
   }
   if (activeConsensusBaseTurnIds) {
     retainMapKeys(starts, activeConsensusBaseTurnIds)
-    retainMapKeys(taskPlans, activeConsensusBaseTurnIds)
+    retainMapKeys(taskStates, activeConsensusBaseTurnIds)
   }
-  return { messages: starts, taskPlans }
+  return { messages: starts, taskStates }
 }
 
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
@@ -354,14 +359,74 @@ function collectConsensusState(chain: SessionEntry[]): LoadedSession['consensusS
   return state
 }
 
-function collectTaskPlan(chain: SessionEntry[]): ActiveTaskPlan | null {
-  let plan: ActiveTaskPlan | null = null
+function collectTaskState(chain: SessionEntry[]): TaskPlanState {
+  let state = emptyTaskPlanState()
   for (const entry of chain) {
-    if (entry.type === 'snapshot') plan = entry.taskPlan
-    if (entry.type === 'task-state') plan = entry.activePlan
-    if (entry.type === 'consensus-task-end') plan = entry.taskPlan
+    if (entry.type === 'snapshot') state = cloneTaskPlanState(entry.taskState)
+    if (entry.type === 'messages' && entry.taskState) {
+      state = cloneTaskPlanState(entry.taskState)
+    }
+    if (entry.type === 'consensus-task-end') state = cloneTaskPlanState(entry.taskState)
   }
-  return plan
+  return state
+}
+
+function reconcileTaskPlanView(
+  viewEvents: ViewEvent[],
+  taskState: TaskPlanState,
+): void {
+  const visible = latestVisibleTaskPlan(viewEvents)
+  const active = taskState.activePlan
+  if (active) {
+    if (visible?.kind === 'active' && visible.id === active.id && visible.revision === active.revision) {
+      return
+    }
+    viewEvents.push({
+      type: 'core-event',
+      event: { type: 'task-plan-restored', plan: structuredClone(active) },
+    })
+    return
+  }
+  if (!visible || visible.kind === 'none') return
+  const latestHistory = taskState.historicalPlans.at(-1)
+  if (
+    visible.kind === 'terminal'
+    && visible.id === latestHistory?.id
+    && visible.revision === latestHistory.revision
+  ) return
+  viewEvents.push({
+    type: 'core-event',
+    event: { type: 'task-plan-restored', plan: null },
+  })
+}
+
+function latestVisibleTaskPlan(
+  viewEvents: ViewEvent[],
+): { kind: 'none' } | { kind: 'active' | 'terminal'; id: string; revision: number } | null {
+  for (let index = viewEvents.length - 1; index >= 0; index--) {
+    const entry = viewEvents[index]
+    if (entry?.type !== 'core-event') continue
+    const event = entry.event
+    if (event.type === 'task-plan-replaced') {
+      return { kind: 'active', id: event.plan.id, revision: event.plan.revision }
+    }
+    if (event.type === 'task-plan-updated') {
+      return {
+        kind: event.plan.status === 'active' ? 'active' : 'terminal',
+        id: event.plan.id,
+        revision: event.plan.revision,
+      }
+    }
+    if (event.type === 'task-plan-restored') {
+      if (!event.plan) return { kind: 'none' }
+      return {
+        kind: event.plan.status === 'active' ? 'active' : 'terminal',
+        id: event.plan.id,
+        revision: event.plan.revision,
+      }
+    }
+  }
+  return null
 }
 
 function collectModelId(chain: SessionEntry[], initialModelId: string): string {
@@ -377,25 +442,28 @@ function findInterruptedWork(
   undeliveredById: ReadonlyMap<string, UndeliveredUserInput>,
 ): {
   interruptedTurnId: string | null
+  interruptedTurnEngagedPlanId: string | null
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
-  interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null
+  interruptedConsensusBaseTaskState: TaskPlanState | null
   interruptedConsensusBaseTurnIds: string[] | null
 } {
   let interruptedTurnId: string | null = null
+  let interruptedTurnEngagedPlanId: string | null = null
   let interruptedConsensusTaskId: string | null = null
   let interruptedConsensusBaseMessages: ModelMessage[] | null = null
-  let interruptedConsensusBaseTaskPlan: ActiveTaskPlan | null = null
+  let interruptedConsensusBaseTaskState: TaskPlanState | null = null
   let interruptedConsensusBaseTurnIds: string[] | null = null
   let visibleMessages: ModelMessage[] = []
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
       visibleMessages = structuredClone(entry.messages)
       interruptedTurnId = entry.activeTurnId
+      interruptedTurnEngagedPlanId = entry.activeTurnEngagedPlanId
       interruptedConsensusTaskId = entry.activeConsensusTaskId
       // 重放是纯读取：后续遇到未交付输入时会向工作副本 push，绝不能污染已解析快照。
       interruptedConsensusBaseMessages = structuredClone(entry.activeConsensusBaseMessages)
-      interruptedConsensusBaseTaskPlan = structuredClone(entry.activeConsensusBaseTaskPlan)
+      interruptedConsensusBaseTaskState = structuredClone(entry.activeConsensusBaseTaskState)
       interruptedConsensusBaseTurnIds = structuredClone(entry.activeConsensusBaseTurnIds)
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
@@ -403,10 +471,19 @@ function findInterruptedWork(
       visibleMessages.push(message)
       interruptedConsensusBaseMessages?.push(message)
     }
-    if (entry.type === 'messages') visibleMessages.push(...entry.messages)
-    if (entry.type === 'turn-start') interruptedTurnId = entry.turnId
+    if (entry.type === 'messages') {
+      visibleMessages.push(...entry.messages)
+      if (entry.turnId === interruptedTurnId && entry.engagedPlanId !== undefined) {
+        interruptedTurnEngagedPlanId = entry.engagedPlanId
+      }
+    }
+    if (entry.type === 'turn-start') {
+      interruptedTurnId = entry.turnId
+      interruptedTurnEngagedPlanId = entry.engagedPlanId
+    }
     if (entry.type === 'turn-end' && entry.turnId === interruptedTurnId) {
       interruptedTurnId = null
+      interruptedTurnEngagedPlanId = null
     }
     if (entry.type === 'consensus-task-start') {
       interruptedConsensusTaskId = entry.taskId
@@ -414,7 +491,7 @@ function findInterruptedWork(
         ...visibleMessages,
         { role: 'user', content: entry.userText },
       ]
-      interruptedConsensusBaseTaskPlan = structuredClone(entry.baseTaskPlan)
+      interruptedConsensusBaseTaskState = cloneTaskPlanState(entry.baseTaskState)
       interruptedConsensusBaseTurnIds = [...entry.baseTurnIds]
     }
     if (entry.type === 'consensus-task-end' && entry.taskId === interruptedConsensusTaskId) {
@@ -426,15 +503,16 @@ function findInterruptedWork(
       }
       interruptedConsensusTaskId = null
       interruptedConsensusBaseMessages = null
-      interruptedConsensusBaseTaskPlan = null
+      interruptedConsensusBaseTaskState = null
       interruptedConsensusBaseTurnIds = null
     }
   }
   return {
     interruptedTurnId,
+    interruptedTurnEngagedPlanId,
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
-    interruptedConsensusBaseTaskPlan,
+    interruptedConsensusBaseTaskState,
     interruptedConsensusBaseTurnIds,
   }
 }

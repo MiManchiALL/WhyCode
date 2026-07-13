@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process'
-import { lstat } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { spawn, type ChildProcessByStdio } from 'node:child_process'
+import { isAbsolute, resolve } from 'node:path'
+import type { Readable } from 'node:stream'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { terminateProcessTree } from './process-termination.ts'
@@ -11,6 +11,41 @@ const MAX_OUTPUT_CHARS = 30_000
 const DEFAULT_TIMEOUT_MS = 120_000
 const QUOTED_ENV_PATH_RE = /["'](\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^"']*)?)["']/gi
 const BARE_ENV_PATH_RE = /(?:^|[\s=(,])(\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^\s"'|<>)\],;]+)?)/gi
+
+function encodePowerShellCommand(command: string): string {
+  // powershell.exe 不会可靠透传最后一个原生命令的退出码，显式收口才能保留失败语义。
+  const script = [
+    command,
+    '$__whycodeCommandSucceeded = $?',
+    '$__whycodeCommandExitCode = $LASTEXITCODE',
+    'if ($__whycodeCommandSucceeded) { exit 0 }',
+    'if (($null -ne $__whycodeCommandExitCode) -and ($__whycodeCommandExitCode -ne 0)) { exit $__whycodeCommandExitCode }',
+    'exit 1',
+  ].join('\n')
+  return Buffer.from(script, 'utf16le').toString('base64')
+}
+
+function spawnNonInteractiveCommand(
+  command: string,
+  cwd: string,
+): ChildProcessByStdio<null, Readable, Readable> {
+  const options = {
+    cwd,
+    windowsHide: true,
+    // POSIX 以独立进程组启动，停止时才能连同 shell 的后代一起终止。
+    detached: process.platform !== 'win32',
+  }
+  if (process.platform === 'win32') {
+    return spawn('powershell.exe', [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      encodePowerShellCommand(command),
+    ], { ...options, stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  return spawn(command, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+}
 
 function expandEnvironmentPath(raw: string, name: string): string | null {
   const value = Object.entries(process.env).find(
@@ -47,18 +82,14 @@ export function scanCommandPaths(command: string): string[] {
   return [...found]
 }
 
-async function checkpointRoot(path: string): Promise<string> {
-  const absolute = resolve(path)
-  const stats = await lstat(absolute).catch(() => null)
-  return stats?.isDirectory() ? absolute : dirname(absolute)
-}
-
 export const runCommandTool = buildTool({
   name: BASH_TOOL_NAME,
   description: '执行终端命令',
   prompt:
     '在项目目录下执行 shell 命令（Windows 上为 PowerShell 5.1：不支持 && 链接符，多条命令用 ; 分隔或分多次调用）。' +
+    '本工具以非交互方式执行且不接受 stdin，不要用于需要确认输入或交互式终端的程序。' +
     '可用 cwd 指定工作目录（绝对路径）。创建、修改、批量替换、删除或移动明确文件应使用 WriteFile/EditFile/BatchEdit/DeleteFile/MoveFile，不要用命令绕过其路径授权。' +
+    '命令产生的文件及外部副作用不建立检查点，无法回滚。' +
     '返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
   inputSchema: z.object({
     command: z.string().describe('要执行的命令'),
@@ -71,26 +102,11 @@ export const runCommandTool = buildTool({
     ...(input.cwd ? [input.cwd] : []),
     ...scanCommandPaths(input.command),
   ],
-  async checkpointScope(input, ctx) {
-    const cwd = resolve(ctx.projectDir, input.cwd ?? '.')
-    const candidates = [ctx.projectDir, cwd, ...scanCommandPaths(input.command)]
-    const roots = await Promise.all(candidates.map(checkpointRoot))
-    return {
-      kind: 'workspace-roots',
-      roots,
-      warning: '命令可影响进程、网络及未识别路径；依赖、缓存、敏感文件和大型二进制也不纳入树快照。',
-    }
-  },
   async execute(input, ctx) {
     return new Promise((resolvePromise) => {
-      const child = spawn(input.command, {
-        shell: process.platform === 'win32' ? 'powershell.exe' : true,
-        // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位
-        cwd: input.cwd ? resolve(ctx.projectDir, input.cwd) : ctx.projectDir,
-        windowsHide: true,
-        // POSIX 以独立进程组启动，停止时才能连同 shell 的后代一起终止。
-        detached: process.platform !== 'win32',
-      })
+      // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位。
+      const cwd = input.cwd ? resolve(ctx.projectDir, input.cwd) : ctx.projectDir
+      const child = spawnNonInteractiveCommand(input.command, cwd)
 
       let output = ''
       let done = false
@@ -113,7 +129,10 @@ export const runCommandTool = buildTool({
         if (data.length > MAX_OUTPUT_CHARS) {
           data = `[输出过长，仅保留尾部 ${MAX_OUTPUT_CHARS} 字符]\n` + data.slice(-MAX_OUTPUT_CHARS)
         }
-        resolvePromise({ data: data || '（无输出）', isError })
+        resolvePromise({
+          data: data || (isError ? '（命令失败，无标准输出）' : '（命令成功，无标准输出）'),
+          isError,
+        })
       }
 
       const requestStop = (reason: 'timeout' | 'abort') => {

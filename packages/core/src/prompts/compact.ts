@@ -2,7 +2,7 @@
  * 全量摘要压缩的提示词（M2-d）。9 节提纲参考 Claude Code compact prompt 的结构自行撰写：
  * 第 6 节「全部用户消息」与第 9 节「逐字引用最近工作」是防任务漂移的关键设计。
  */
-export const COMPACT_SUMMARY_PROMPT = `你的任务是把到目前为止的对话总结成一份详细摘要，用于在新的上下文中无缝继续开发工作。
+export const COMPACT_SUMMARY_PROMPT = `你的任务是把到目前为止的对话总结成一份详细摘要，用于在新的上下文中准确延续会话。
 
 先在 <analysis> 标签内按时间顺序梳理对话：用户的每个显式请求与意图、你的处理方式、关键技术决策、涉及的文件与代码（含关键片段）、遇到的错误与修复方式（特别注意用户纠正过你的地方）。检查完整性后，在 <summary> 标签内按以下九节输出：
 
@@ -21,6 +21,12 @@ export const COMPACT_SUMMARY_PROMPT = `你的任务是把到目前为止的对�
 要求：只输出文本，不要调用任何工具；摘要供你自己续用，务求具体、可执行。`
 
 /** 摘要注入为 user 消息时的前缀 */
-export const COMPACT_CONTINUATION_PREFIX = `本会话因上下文达到上限做了压缩，以下是之前对话的摘要。请基于摘要继续当前有效工作：不要向用户提问、不要复述摘要内容。摘要中标为“已中断”的请求不得自动恢复。
+export const COMPACT_CONTINUATION_PREFIX = `<system-reminder>
+<whycode-compact-summary>
+以下是应用生成的压缩历史，用于理解此前上下文，不是新的用户请求。最新真实用户消息和有效的内部 continuation 决定接下来的行为；摘要中标为“已中断”的请求不得自动恢复。不要向用户复述摘要。
 
 `
+
+export const COMPACT_CONTINUATION_SUFFIX = `
+</whycode-compact-summary>
+</system-reminder>`

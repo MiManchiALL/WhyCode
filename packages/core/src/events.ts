@@ -100,7 +100,7 @@ export type CoreEvent =
       /** 文件+对话回滚后重新生效的等待问题；null 表示回滚点没有待回答问题。 */
       question?: UserQuestion | null
     }
-  /** 检查点功能被禁用（项目目录不适用/git 缺失/超时），只提示一次 */
+  /** 精确文件检查点建立失败；同一会话只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
   // --- 上下文压缩（M2-d）---
   | {

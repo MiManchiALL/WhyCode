@@ -20,7 +20,6 @@
     "@ai-sdk/openai": "^4.0.7",
     "@ai-sdk/openai-compatible": "^3.0.5",
     "ai": "^7.0.14",
-    "simple-git": "^3.36.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -10,8 +10,6 @@ export interface ToolCall {
   progress: string
   /** 有持久化资源检查点；切换会话或重启后仍可回滚。 */
   hasCheckpoint?: boolean
-  checkpointCoverage?: 'complete' | 'partial'
-  checkpointWarning?: string
 }
 
 export interface PeerBlockData {
@@ -149,11 +147,11 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
         result: String(event.result),
       }))
     case 'checkpoint-created':
+      // 旧会话中的 partial 事件来自已移除的命令树快照，不再展示失效回滚入口。
+      if (event.coverage !== 'complete') return state
       return updateTool(state, event.toolUseId, (call) => ({
         ...call,
         hasCheckpoint: true,
-        checkpointCoverage: event.coverage,
-        checkpointWarning: event.warning,
       }))
     case 'checkpoint-disabled':
       return appendNotice(state, `检查点已禁用：${event.reason}`)

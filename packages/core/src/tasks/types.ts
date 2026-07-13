@@ -70,8 +70,72 @@ export type ActiveTaskPlan = z.infer<typeof activeTaskPlanSchema>
 export type SupersededTaskPlan = z.infer<typeof supersededTaskPlanSchema>
 export type TaskPlan = z.infer<typeof taskPlanSchema>
 
-export type TaskPlanStepUpdate = ActiveTaskPlan | null | undefined
+export const historicalTaskPlanSummarySchema = z.object({
+  id: z.string().uuid(),
+  goal: z.string().min(1),
+  status: z.enum(['completed', 'abandoned', 'superseded']),
+  summary: z.string().min(1),
+  completedItems: z.number().int().nonnegative(),
+  totalItems: z.number().int().positive(),
+  revision: z.number().int().positive(),
+}).superRefine((plan, ctx) => {
+  if (plan.completedItems > plan.totalItems) {
+    ctx.addIssue({ code: 'custom', message: '历史计划的完成项不能超过总项数' })
+  }
+})
+
+export const taskPlanStateSchema = z.object({
+  version: z.number().int().nonnegative(),
+  activePlan: activeTaskPlanSchema.nullable(),
+  historicalPlans: z.array(historicalTaskPlanSummarySchema),
+  resumeRequired: z.boolean(),
+  interruptionReason: z
+    .enum(['user-cancel', 'process-interruption', 'consensus-failure'])
+    .nullable(),
+}).superRefine((state, ctx) => {
+  if (state.resumeRequired !== Boolean(state.interruptionReason)) {
+    ctx.addIssue({ code: 'custom', message: 'resumeRequired 与 interruptionReason 必须同时存在或清空' })
+  }
+  if (!state.activePlan && state.resumeRequired) {
+    ctx.addIssue({ code: 'custom', message: '没有 activePlan 时不能要求恢复' })
+  }
+  const ids = state.historicalPlans.map((plan) => plan.id)
+  if (new Set(ids).size !== ids.length || ids.includes(state.activePlan?.id ?? '')) {
+    ctx.addIssue({ code: 'custom', message: '活动计划和历史计划 ID 必须唯一' })
+  }
+})
+
+export type HistoricalTaskPlanSummary = z.infer<typeof historicalTaskPlanSummarySchema>
+export type TaskPlanState = z.infer<typeof taskPlanStateSchema>
+export type TaskPlanStepUpdate = TaskPlanState | undefined
 
 export function cloneActiveTaskPlan(plan: ActiveTaskPlan | null): ActiveTaskPlan | null {
   return plan ? activeTaskPlanSchema.parse(structuredClone(plan)) : null
+}
+
+export function emptyTaskPlanState(): TaskPlanState {
+  return {
+    version: 0,
+    activePlan: null,
+    historicalPlans: [],
+    resumeRequired: false,
+    interruptionReason: null,
+  }
+}
+
+export function cloneTaskPlanState(state: TaskPlanState): TaskPlanState {
+  return taskPlanStateSchema.parse(structuredClone(state))
+}
+
+export function interruptTaskPlanState(
+  state: TaskPlanState,
+  reason: NonNullable<TaskPlanState['interruptionReason']>,
+): TaskPlanState {
+  const next = cloneTaskPlanState(state)
+  if (!next.activePlan) return next
+  if (next.resumeRequired && next.interruptionReason === reason) return next
+  next.version++
+  next.resumeRequired = true
+  next.interruptionReason = reason
+  return taskPlanStateSchema.parse(next)
 }
