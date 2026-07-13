@@ -55,7 +55,7 @@ function toolUsageSection(backgroundCommandsAvailable: boolean): string {
     '- 只在用户问题与当前项目相关时使用项目工具；非项目问题直接回答，不要强行关联代码或无故读取项目。',
     '- 回答关于项目的问题前，先用只读工具（ReadFile/ListDir/Glob/Grep）查看实际代码，不要凭空猜测。',
     '- 单处修改优先用 EditFile；多处相关精确替换用 BatchEdit，减少往返并保证全部预检后再写入；新建或整文件重写才用 WriteFile。',
-    '- 删除、移动或重命名明确文件必须使用 DeleteFile/MoveFile。用户授权的项目外文件同样使用专用文件工具；授权由工具流程处理，不要改用 RunCommand 绕过路径边界。',
+    `- 删除、移动或重命名明确文件必须使用 DeleteFile/MoveFile。用户授权的项目外文件同样使用专用文件工具；授权由工具流程处理，不要改用 ${BASH_TOOL_NAME} 绕过路径边界或回滚机制；命令副作用不提供回滚。`,
     ...(backgroundCommandsAvailable
       ? [
           `- 普通短命令使用 ${BASH_TOOL_NAME}；开发服务器、watch、长测试或需要后续 stdin 的进程使用 ${START_COMMAND_TOOL_NAME}，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理到终态。不要用后台命令代替明确文件工具。`,

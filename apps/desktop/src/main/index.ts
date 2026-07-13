@@ -174,7 +174,6 @@ async function ensureSession(): Promise<string | null> {
               osPlatform: process.platform,
               homeDir: app.getPath('home'),
             },
-            checkpointStorageDir: join(app.getPath('userData'), 'checkpoints'),
             sessionRecorder: recorder,
             mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
             emit: broadcastEvent,
@@ -517,7 +516,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   }
 }
 
-// userData 中的会话、命令和共享检查点由单一主进程协调；第二实例只能聚焦现有窗口。
+// userData 中的会话和命令由单一主进程协调；第二实例只能聚焦现有窗口。
 const primaryInstance = app.requestSingleInstanceLock()
 if (!primaryInstance) {
   app.quit()
@@ -532,12 +531,12 @@ if (!primaryInstance) {
 }
 
 if (primaryInstance) void app.whenReady().then(async () => {
-  // scratch 只服务当次协商；资源检查点属于会话持久化数据，重启后必须保留。
-  void rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }).catch(() => {})
-  sessions = new DesktopSessionRepository(
-    join(app.getPath('userData'), 'sessions'),
-    join(app.getPath('userData'), 'checkpoints'),
-  )
+  // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
+  void Promise.all([
+    rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
+    rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true }),
+  ]).catch(() => {})
+  sessions = new DesktopSessionRepository(join(app.getPath('userData'), 'sessions'))
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))

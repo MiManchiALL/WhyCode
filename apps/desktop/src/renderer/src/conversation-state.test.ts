@@ -131,7 +131,7 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(serialized, /新回答/)
   })
 
-  it('重启重放后保留检查点覆盖级别，并在恢复后清除失效按钮', () => {
+  it('重启重放时忽略旧命令快照，并在恢复后清除精确检查点按钮', () => {
     const state = createConversationState([
       core({ type: 'tool-start', toolUseId: 'tool-1', toolName: 'RunCommand', input: {} }),
       core({
@@ -142,19 +142,27 @@ describe('会话界面时间线重建', () => {
         warning: '只覆盖工作区文件',
       }),
       core({ type: 'tool-end', toolUseId: 'tool-1', result: 'ok', isError: false }),
+      core({ type: 'tool-start', toolUseId: 'tool-2', toolName: 'EditFile', input: {} }),
+      core({
+        type: 'checkpoint-created',
+        toolUseId: 'tool-2',
+        hash: 'checkpoint-2',
+        coverage: 'complete',
+      }),
+      core({ type: 'tool-end', toolUseId: 'tool-2', result: 'ok', isError: false }),
       core({
         type: 'checkpoint-restored',
-        toolUseId: 'tool-1',
+        toolUseId: 'tool-2',
         turnId: 'turn-1',
         scope: 'files',
         ok: true,
-        invalidatedToolUseIds: ['tool-1'],
+        invalidatedToolUseIds: ['tool-2'],
       }),
     ])
 
-    const tool = state.blocks.find((block) => block.kind === 'tool')
-    assert.equal(tool?.kind === 'tool' ? tool.call.checkpointCoverage : null, 'partial')
-    assert.equal(tool?.kind === 'tool' ? tool.call.hasCheckpoint : null, false)
+    const tools = state.blocks.filter((block) => block.kind === 'tool')
+    assert.equal(tools[0]?.kind === 'tool' ? tools[0].call.hasCheckpoint : null, undefined)
+    assert.equal(tools[1]?.kind === 'tool' ? tools[1].call.hasCheckpoint : null, false)
     assert.match(JSON.stringify(state.blocks), /已回滚检查点覆盖的文件/)
   })
 

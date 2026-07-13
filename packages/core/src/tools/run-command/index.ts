@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
-import { lstat } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import type { Readable } from 'node:stream'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
@@ -83,12 +82,6 @@ export function scanCommandPaths(command: string): string[] {
   return [...found]
 }
 
-async function checkpointRoot(path: string): Promise<string> {
-  const absolute = resolve(path)
-  const stats = await lstat(absolute).catch(() => null)
-  return stats?.isDirectory() ? absolute : dirname(absolute)
-}
-
 export const runCommandTool = buildTool({
   name: BASH_TOOL_NAME,
   description: '执行终端命令',
@@ -96,6 +89,7 @@ export const runCommandTool = buildTool({
     '在项目目录下执行 shell 命令（Windows 上为 PowerShell 5.1：不支持 && 链接符，多条命令用 ; 分隔或分多次调用）。' +
     '本工具以非交互方式执行且不接受 stdin，不要用于需要确认输入或交互式终端的程序。' +
     '可用 cwd 指定工作目录（绝对路径）。创建、修改、批量替换、删除或移动明确文件应使用 WriteFile/EditFile/BatchEdit/DeleteFile/MoveFile，不要用命令绕过其路径授权。' +
+    '命令产生的文件及外部副作用不建立检查点，无法回滚。' +
     '返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',
   inputSchema: z.object({
     command: z.string().describe('要执行的命令'),
@@ -108,16 +102,6 @@ export const runCommandTool = buildTool({
     ...(input.cwd ? [input.cwd] : []),
     ...scanCommandPaths(input.command),
   ],
-  async checkpointScope(input, ctx) {
-    const cwd = resolve(ctx.projectDir, input.cwd ?? '.')
-    const candidates = [ctx.projectDir, cwd, ...scanCommandPaths(input.command)]
-    const roots = await Promise.all(candidates.map(checkpointRoot))
-    return {
-      kind: 'workspace-roots',
-      roots,
-      warning: '命令可影响进程、网络及未识别路径；依赖、缓存、敏感内容和超出预算的工作区不提供回滚。',
-    }
-  },
   async execute(input, ctx) {
     return new Promise((resolvePromise) => {
       // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位。

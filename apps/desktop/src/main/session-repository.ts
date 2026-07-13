@@ -1,6 +1,5 @@
 import {
   SessionStore,
-  releaseShadowRefs,
   type SessionJournal,
   type SessionSummary,
 } from '@whycode/core'
@@ -8,14 +7,12 @@ import {
 /** Electron 宿主的会话仓库：只管理当前 journal 与磁盘列表，不持有 Agent 运行态。 */
 export class DesktopSessionRepository {
   private readonly store: SessionStore
-  private readonly checkpointStorageRoot: string
   private current: SessionJournal | null = null
   private pendingCreate: Promise<SessionJournal> | null = null
   private generation = 0
 
-  constructor(storageRoot: string, checkpointStorageRoot: string) {
+  constructor(storageRoot: string) {
     this.store = new SessionStore(storageRoot)
-    this.checkpointStorageRoot = checkpointStorageRoot
   }
 
   get journal(): SessionJournal | null {
@@ -72,8 +69,6 @@ export class DesktopSessionRepository {
 
   async delete(sessionId: string): Promise<boolean> {
     const deletingCurrent = this.current?.sessionId === sessionId
-    // 先清共享资源，最后删除会话目录；失败时事实源仍在列表中，用户可以安全重试。
-    await releaseShadowRefs(this.checkpointStorageRoot, sessionId)
     const deleted = await this.store.delete(sessionId)
     if (deleted && deletingCurrent) this.current = null
     return deleted

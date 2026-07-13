@@ -705,8 +705,6 @@ function BlockView({
         {call.hasCheckpoint && call.status !== 'running' && (
           <RestoreButton
             toolUseId={call.id}
-            coverage={call.checkpointCoverage ?? 'complete'}
-            warning={call.checkpointWarning}
             busy={busy}
             pending={checkpointRestoreToolUseId === call.id}
             onPendingChange={onCheckpointRestoreChange}
@@ -725,15 +723,11 @@ function BlockView({
 /** 回滚按钮：点击展开两种范围选择 */
 function RestoreButton({
   toolUseId,
-  coverage,
-  warning,
   busy,
   pending,
   onPendingChange,
 }: {
   toolUseId: string
-  coverage: 'complete' | 'partial'
-  warning?: string
   busy: boolean
   pending: boolean
   onPendingChange: (toolUseId: string, pending: boolean) => void
@@ -768,10 +762,10 @@ function RestoreButton({
       <button
         className="shrink-0 text-xs text-neutral-400 hover:text-neutral-700"
         disabled={busy}
-        title={warning ?? '回滚到此操作执行前'}
+        title="回滚到此操作执行前"
         onClick={() => setOpen(true)}
       >
-        ⟲ {coverage === 'partial' ? '有限回滚' : '回滚'}
+        ⟲ 回滚
       </button>
     )
   }
@@ -784,15 +778,13 @@ function RestoreButton({
       >
         仅文件
       </button>
-      {coverage === 'complete' && (
-        <button
-          className="rounded border border-neutral-300 px-2 py-0.5"
-          disabled={busy}
-          onClick={() => void restore('files-and-chat')}
-        >
-          文件+对话
-        </button>
-      )}
+      <button
+        className="rounded border border-neutral-300 px-2 py-0.5"
+        disabled={busy}
+        onClick={() => void restore('files-and-chat')}
+      >
+        文件+对话
+      </button>
       <button className="px-1 text-neutral-400" onClick={() => setOpen(false)}>
         ✕
       </button>

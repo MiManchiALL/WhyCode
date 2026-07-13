@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { simpleGit } from 'simple-git'
 import { CheckpointManager } from './manager.ts'
 
 const roots: string[] = []
@@ -21,7 +20,7 @@ describe('持久化资源检查点', () => {
       kind: 'exact-files',
       paths: [path],
     })
-    assert.ok(prepared, env.manager.disabled ?? '树检查点准备失败')
+    assert.ok(prepared, env.manager.disabled ?? '精确文件检查点准备失败')
     await mkdir(join(env.external, 'new-parent'))
     await writeFile(path, 'agent content')
     assert.ok(await env.manager.finalize(prepared))
@@ -117,7 +116,7 @@ describe('持久化资源检查点', () => {
     assert.equal(await readFile(path, 'utf8'), 'before')
   })
 
-  it('后续存在未覆盖写操作时阻止旧检查点越界恢复', async () => {
+  it('命令屏障允许精确文件恢复，但禁止同时截断对话', async () => {
     const env = await createEnvironment()
     const path = join(env.external, 'barrier.txt')
     await writeFile(path, 'before')
@@ -129,83 +128,13 @@ describe('持久化资源检查点', () => {
     assert.ok(await env.manager.finalize(prepared))
     await env.manager.recordBarrier('tool-unknown', 'turn-2', '未知写操作')
 
-    const restored = await env.manager.restore('tool-covered', 'files')
-    assert.equal(restored.ok, false)
-    assert.match(restored.error ?? '', /未覆盖的写操作/)
-    assert.equal(await readFile(path, 'utf8'), 'agent')
-  })
+    const chatRestore = await env.manager.restore('tool-covered', 'files-and-chat')
+    assert.equal(chatRestore.ok, false)
+    assert.match(chatRestore.error ?? '', /只能回滚专用文件工具跟踪的文件/)
 
-  it('树快照只恢复命令实际改变的受控路径，并标注部分覆盖', async () => {
-    const env = await createEnvironment()
-    await simpleGit(env.project).init()
-    const modified = join(env.project, 'modified.txt')
-    const deleted = join(env.project, 'deleted.txt')
-    const untouched = join(env.project, 'untouched.txt')
-    const created = join(env.project, 'created.txt')
-    await Promise.all([
-      writeFile(modified, 'before modified'),
-      writeFile(deleted, 'before deleted'),
-      writeFile(untouched, 'stay'),
-    ])
-    const prepared = await env.manager.prepare('tool-command', 'turn-1', {
-      kind: 'workspace-roots',
-      roots: [env.project],
-      warning: '命令影响范围无法完全证明',
-    })
-    assert.ok(prepared, env.manager.disabled ?? '树检查点准备失败')
-    await Promise.all([
-      writeFile(modified, 'after modified'),
-      rm(deleted),
-      writeFile(created, 'created'),
-    ])
-    const ready = await env.manager.finalize(prepared)
-    assert.equal(ready?.coverage, 'partial')
-
-    const restored = await env.manager.restore('tool-command', 'files')
-    assert.equal(restored.ok, true, restored.error)
-    assert.equal(await readFile(modified, 'utf8'), 'before modified')
-    assert.equal(await readFile(deleted, 'utf8'), 'before deleted')
-    assert.equal(await readFile(untouched, 'utf8'), 'stay')
-    await assert.rejects(access(created))
-    await access(join(env.project, '.git'))
-  })
-
-  it('树回滚只捕获变更路径，不重新扫描无关超大文件', async () => {
-    const env = await createEnvironment()
-    const target = join(env.project, 'target.txt')
-    await writeFile(target, 'before')
-    const prepared = await env.manager.prepare('tool-scoped-restore', 'turn-1', {
-      kind: 'workspace-roots',
-      roots: [env.project],
-      warning: '命令影响范围无法完全证明',
-    })
-    assert.ok(prepared, env.manager.disabled ?? '树检查点准备失败')
-    await writeFile(target, 'after')
-    assert.ok(await env.manager.finalize(prepared))
-
-    const unrelated = join(env.project, 'unrelated.csv')
-    await writeFile(unrelated, '')
-    await truncate(unrelated, 65 * 1024 * 1024)
-
-    const restored = await env.manager.restore('tool-scoped-restore', 'files')
-    assert.equal(restored.ok, true, restored.error)
-    assert.equal(await readFile(target, 'utf8'), 'before')
-    await access(unrelated)
-  })
-
-  it('命令只影响被拒绝的大范围目录时明确说明没有可回滚文件', async () => {
-    const env = await createEnvironment()
-    const desktop = join(homedir(), 'Desktop')
-    const prepared = await env.manager.prepare('tool-uncovered', 'turn-1', {
-      kind: 'workspace-roots',
-      roots: [env.project, desktop],
-      warning: '命令影响范围无法完全证明',
-    })
-    assert.ok(prepared)
-
-    assert.equal(await env.manager.finalize(prepared), null)
-    assert.match(env.manager.disabled ?? '', /未进入可回滚范围/)
-    assert.match(env.manager.disabled ?? '', /Desktop/)
+    const fileRestore = await env.manager.restore('tool-covered', 'files')
+    assert.equal(fileRestore.ok, true, fileRestore.error)
+    assert.equal(await readFile(path, 'utf8'), 'before')
   })
 })
 
@@ -213,7 +142,6 @@ interface TestEnvironment {
   root: string
   project: string
   external: string
-  storage: string
   sessionDir: string
   sessionId: string
   manager: CheckpointManager
@@ -224,14 +152,12 @@ async function createEnvironment(): Promise<TestEnvironment> {
   roots.push(root)
   const project = join(root, 'project')
   const external = join(root, 'external')
-  const storage = join(root, 'shadow')
   const sessionDir = join(root, 'session-checkpoints')
   await Promise.all([mkdir(project), mkdir(external)])
   const env = {
     root,
     project,
     external,
-    storage,
     sessionDir,
     sessionId: randomUUID(),
   }
@@ -240,8 +166,6 @@ async function createEnvironment(): Promise<TestEnvironment> {
 
 function managerFor(env: Omit<TestEnvironment, 'manager'>): CheckpointManager {
   return new CheckpointManager({
-    projectDir: env.project,
-    storageRoot: env.storage,
     sessionDir: env.sessionDir,
     sessionId: env.sessionId,
   })

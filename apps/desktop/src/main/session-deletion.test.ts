@@ -24,7 +24,7 @@ describe('会话关联数据删除', () => {
     const projectFile = join(project, 'keep.txt')
     await writeFile(projectFile, 'user data')
 
-    const sessions = new DesktopSessionRepository(sessionsRoot, join(root, 'checkpoints'))
+    const sessions = new DesktopSessionRepository(sessionsRoot)
     const deletedJournal = await sessions.ensure(project, 'test:model')
     sessions.reset()
     const currentJournal = await sessions.ensure(project, 'test:model')
@@ -86,10 +86,7 @@ describe('会话关联数据删除', () => {
 
   it('前置清理失败时持久标成仅可重试删除', async () => {
     const root = await createRoot()
-    const sessions = new DesktopSessionRepository(
-      join(root, 'sessions'),
-      join(root, 'checkpoints'),
-    )
+    const sessions = new DesktopSessionRepository(join(root, 'sessions'))
     const journal = await sessions.ensure(null, 'test:model')
     await assert.rejects(
       deleteSessionArtifacts({

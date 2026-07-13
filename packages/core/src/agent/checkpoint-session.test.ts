@@ -53,7 +53,6 @@ describe('Agent 资源检查点联动', () => {
       model: modelEntry(modelWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => {
@@ -107,7 +106,6 @@ describe('Agent 资源检查点联动', () => {
       model: modelEntry(modelWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: true }),
@@ -177,7 +175,6 @@ describe('Agent 资源检查点联动', () => {
       model: modelEntry(modelReplacingAndWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: true }),
@@ -202,8 +199,8 @@ describe('Agent 资源检查点联动', () => {
     assert.deepEqual(restored?.type === 'checkpoint-restored' ? restored.taskPlan : null, oldPlan)
   })
 
-  it('超大工作区快速降级为不可回滚屏障并明确通知', async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-checkpoint-budget-'))
+  it('RunCommand 在超大工作区也不扫描或建立文件检查点', async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-command-no-checkpoint-'))
     roots.push(root)
     const project = join(root, 'project')
     await mkdir(project)
@@ -219,16 +216,14 @@ describe('Agent 资源检查点联动', () => {
       model: modelEntry(modelRunningCommand()),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
-      checkpointStorageDir: join(root, 'checkpoints'),
       sessionRecorder: recorder,
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: true }),
     })
 
     assert.equal(await session.handleUserMessage('运行一个短命令'), 'completed')
-    const disabled = events.find((event) => event.type === 'checkpoint-disabled')
-    assert.match(disabled?.type === 'checkpoint-disabled' ? disabled.reason : '', /单文件预算/)
     assert.equal(events.some((event) => event.type === 'checkpoint-created'), false)
+    assert.equal(events.some((event) => event.type === 'checkpoint-disabled'), false)
   })
 })
 

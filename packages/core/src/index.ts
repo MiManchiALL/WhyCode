@@ -87,7 +87,6 @@ export type {
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
 export { validateSessionId } from './session/metadata.ts'
-export { releaseShadowRefs } from './checkpoints/manager.ts'
 export {
   pushCoalescedViewEvent,
   toViewEvent,

@@ -58,8 +58,6 @@ export interface AgentSessionOptions {
   model: ModelEntry
   providerConfig: ProviderConfig
   promptContext: PromptContext
-  /** 检查点存储根目录（宿主注入，如 Electron userData/checkpoints）；不传则禁用检查点 */
-  checkpointStorageDir?: string
   /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
   extraTools?: ToolDefinition[]
   /** 宿主为普通 Main 注入的会话工具；讨论/协议回合物理移除（如后台命令）。 */
@@ -167,14 +165,11 @@ export class AgentSession {
     }
     // 讨论阶段的会话不做检查点（不写项目，无需快照）
     if (
-      options.checkpointStorageDir &&
       options.promptContext.projectDir &&
       options.sessionRecorder &&
       !options.promptContext.discussion
     ) {
       this.checkpoints = new CheckpointManager({
-        projectDir: options.promptContext.projectDir,
-        storageRoot: options.checkpointStorageDir,
         sessionDir: options.sessionRecorder.checkpointDirectory,
         sessionId: options.sessionRecorder.sessionId,
       })
@@ -1161,8 +1156,7 @@ export class AgentSession {
               type: 'checkpoint-created',
               toolUseId: toolCallId,
               hash: ready.id,
-              coverage: ready.coverage,
-              warning: ready.warning,
+              coverage: 'complete',
             })
           } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
             this.checkpointDisabledNotified = true

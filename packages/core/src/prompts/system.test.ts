@@ -19,6 +19,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
     assert.match(prompt, /项目外文件同样使用专用文件工具/)
     assert.match(prompt, /不要改用 RunCommand 绕过路径边界/)
+    assert.match(prompt, /命令副作用不提供回滚/)
     assert.match(prompt, /多处相关精确替换用 BatchEdit/)
     assert.match(prompt, /DeleteFile\/MoveFile/)
     assert.match(prompt, /开发服务器、watch、长测试.*StartCommand/)

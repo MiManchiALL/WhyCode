@@ -39,9 +39,7 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   execute: (input: z.infer<Schema>, ctx: ToolContext) => Promise<ToolResult>
 }
 
-export type ToolCheckpointScope =
-  | { kind: 'exact-files'; paths: string[] }
-  | { kind: 'workspace-roots'; roots: string[]; warning: string }
+export type ToolCheckpointScope = { kind: 'exact-files'; paths: string[] }
 
 export interface ToolContext {
   /** 项目根目录（所有相对路径的基准） */
