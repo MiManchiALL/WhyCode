@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { CoreCommand, CoreEvent } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
@@ -14,8 +14,15 @@ import type {
 const api = {
   sendCommand: (command: CoreCommand): Promise<{ ok: boolean } | void> =>
     ipcRenderer.invoke(IPC.command, command),
-  listModels: (): Promise<{ id: string; displayName: string; hasKey: boolean }[]> =>
+  listModels: (): Promise<{
+    id: string
+    displayName: string
+    hasKey: boolean
+    supportsImageInput: boolean
+  }[]> =>
     ipcRenderer.invoke(IPC.listModels),
+  /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),
   runtimeSnapshot: (): Promise<RuntimeSnapshot> => ipcRenderer.invoke(IPC.runtimeSnapshot),
   pickProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickProjectDir),

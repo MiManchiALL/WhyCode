@@ -8,6 +8,7 @@
  */
 
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
+import type { ImageAttachment } from './attachments/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -70,7 +71,12 @@ export type CoreEvent =
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
   /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
-  | { type: 'user-message-accepted'; text: string; startsTurn: true }
+  | {
+      type: 'user-message-accepted'
+      text: string
+      startsTurn: true
+      attachments?: ImageAttachment[]
+    }
   // --- steering（M2-a）：运行中插话 ---
   | { type: 'message-queued'; id: string; text: string }
   | { type: 'message-injected'; id: string; text: string; startsTurn?: boolean }
@@ -143,6 +149,8 @@ export type CoreEvent =
       scores?: { Main: number; B: number; C: number }
     }
   | { type: 'execution-started'; taskId: string }
+  /** 图片轮次只交给当前视觉 Main；未读取图片的 B/C 不参与表决。 */
+  | { type: 'consensus-skipped'; reason: 'image-input' }
   // --- Main 长任务控制 ---
   | { type: 'task-plan-updated'; plan: TaskPlan }
   /** 用户明确切换独立复杂任务；旧计划归档与新计划激活属于同一稳定 step。 */

@@ -9,6 +9,8 @@ import {
   type SessionEntry,
 } from './types.ts'
 import type { ViewEvent } from './view-events.ts'
+import { createImageUserMessage } from '../attachments/messages.ts'
+import type { ImageAttachment } from '../attachments/types.ts'
 
 export class SessionCorruptError extends Error {}
 
@@ -159,7 +161,7 @@ function collectTurnStarts(
       }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message: ModelMessage = { role: 'user', content: entry.text }
+      const message = userInputMessage(entry.text, entry.attachments)
       messages.push(message)
       activeConsensusBaseMessages?.push(message)
     }
@@ -203,7 +205,12 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
   return entries.flatMap((entry): ViewEvent[] => {
     if (entry.type === 'view-events') return entry.events
     if (entry.type === 'user-input' && entry.startsTurn) {
-      return [{ type: 'user-message', text: entry.text, startsTurn: true }]
+      return [{
+        type: 'user-message',
+        text: entry.text,
+        startsTurn: true,
+        ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+      }]
     }
     return []
   })
@@ -212,6 +219,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
 interface UndeliveredUserInput {
   id: string
   text: string
+  attachments: ImageAttachment[]
   partialTurnId: string | null
 }
 
@@ -229,9 +237,19 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
     if (delivery?.type === 'turn-start') {
       const batch = childByParent.get(delivery.uuid)
       if (batch?.type === 'messages' && batch.turnId === delivery.turnId) return []
-      return [{ id: entry.uuid, text: entry.text, partialTurnId: delivery.turnId }]
+      return [{
+        id: entry.uuid,
+        text: entry.text,
+        attachments: entry.attachments ?? [],
+        partialTurnId: delivery.turnId,
+      }]
     }
-    return [{ id: entry.uuid, text: entry.text, partialTurnId: null }]
+    return [{
+      id: entry.uuid,
+      text: entry.text,
+      attachments: entry.attachments ?? [],
+      partialTurnId: null,
+    }]
   })
 }
 
@@ -329,7 +347,7 @@ function collectMessages(
         : null
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message: ModelMessage = { role: 'user', content: entry.text }
+      const message = userInputMessage(entry.text, entry.attachments)
       messages.push(message)
       activeConsensusBaseMessages?.push(message)
     }
@@ -467,7 +485,7 @@ function findInterruptedWork(
       interruptedConsensusBaseTurnIds = structuredClone(entry.activeConsensusBaseTurnIds)
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message: ModelMessage = { role: 'user', content: entry.text }
+      const message = userInputMessage(entry.text, entry.attachments)
       visibleMessages.push(message)
       interruptedConsensusBaseMessages?.push(message)
     }
@@ -515,6 +533,15 @@ function findInterruptedWork(
     interruptedConsensusBaseTaskState,
     interruptedConsensusBaseTurnIds,
   }
+}
+
+function userInputMessage(
+  text: string,
+  attachments: readonly ImageAttachment[] | undefined,
+): ModelMessage {
+  return attachments?.length
+    ? createImageUserMessage(text, attachments)
+    : { role: 'user', content: text }
 }
 
 function consensusRollbackMessages(

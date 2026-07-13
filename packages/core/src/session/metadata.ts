@@ -13,6 +13,7 @@ import {
 const TRANSCRIPT_FILE = 'transcript.jsonl'
 const METADATA_FILE = 'metadata.json'
 const CHECKPOINTS_DIR = 'checkpoints'
+const ATTACHMENTS_DIR = 'attachments'
 const UNAVAILABLE_SESSION_REASON = '会话版本不兼容或数据损坏，无法恢复；可以安全删除'
 export const SESSION_DELETION_PENDING_REASON = '会话删除未完成，仅可重试删除'
 const DELETION_MARKERS_DIR = '.deleting'
@@ -32,6 +33,7 @@ export interface SessionPaths {
   transcript: string
   metadata: string
   checkpoints: string
+  attachments: string
   deletionMarkersDir: string
   deletionMarker: string
 }
@@ -48,6 +50,7 @@ export function getSessionPaths(rootDir: string, sessionId: string): SessionPath
     transcript: join(sessionDir, TRANSCRIPT_FILE),
     metadata: join(sessionDir, METADATA_FILE),
     checkpoints: join(sessionDir, CHECKPOINTS_DIR),
+    attachments: join(sessionDir, ATTACHMENTS_DIR),
     deletionMarkersDir,
     // marker 必须位于被删目录之外，避免递归删除部分失败后重新暴露成可恢复会话。
     deletionMarker: join(deletionMarkersDir, sessionId),

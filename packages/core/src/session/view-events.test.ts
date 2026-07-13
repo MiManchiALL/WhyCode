@@ -45,6 +45,10 @@ describe('用户可见事件契约', () => {
       { type: 'user-message', text: '补充要求', startsTurn: false },
     )
     assert.deepEqual(
+      toViewEvent({ type: 'consensus-skipped', reason: 'image-input' }),
+      { type: 'core-event', event: { type: 'consensus-skipped', reason: 'image-input' } },
+    )
+    assert.deepEqual(
       toViewEvent({
         type: 'message-injected',
         id: 'queue-2',
@@ -73,6 +77,31 @@ describe('用户可见事件契约', () => {
       viewEventSchema.safeParse({ type: 'core-event', event: { type: 'tool-end' } }).success,
       false,
     )
+  })
+
+  it('图片元数据可持久化，但不允许把图片字节混入可见事件', () => {
+    const event = {
+      type: 'user-message',
+      text: '分析图片',
+      startsTurn: true,
+      attachments: [{
+        id: '22222222-2222-4222-8222-222222222222',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+        name: 'screen.png',
+        storageName: '22222222-2222-4222-8222-222222222222.png',
+        mediaType: 'image/png',
+        byteLength: 68,
+        width: 1,
+        height: 1,
+      }],
+    }
+    assert.equal(viewEventSchema.safeParse(event).success, true)
+    const parsed = viewEventSchema.parse({
+      ...event,
+      attachments: [{ ...event.attachments[0], base64: 'x' }],
+    })
+    assert.doesNotMatch(JSON.stringify(parsed), /base64/)
+    assert.equal(viewEventSchema.safeParse({ ...event, startsTurn: false }).success, false)
   })
 })
 

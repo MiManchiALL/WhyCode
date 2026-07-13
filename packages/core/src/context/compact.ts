@@ -107,13 +107,19 @@ export async function compactMessages(
   recentReadFiles: { path: string; readAt: number }[],
   abortSignal: AbortSignal,
   applicationContext?: string,
+  prepareMessagesForModel?: (
+    messages: ModelMessage[],
+  ) => ModelMessage[] | Promise<ModelMessage[]>,
 ): Promise<CompactResult> {
   // 尾部起点为 0 = 全部历史都在尾部预算内，此时「摘要+全量尾部」只会更大——退化为纯摘要替换
   const effectiveTailStart = pickSummaryEnd(messages)
   if (effectiveTailStart === 0) return { messages: [...messages], summaryText: '' }
   const toSummarize = messages.slice(0, effectiveTailStart)
   const tail = messages.slice(effectiveTailStart)
-  const summaryText = await summarize(model, toSummarize, abortSignal)
+  const preparedMessages = prepareMessagesForModel
+    ? await prepareMessagesForModel(toSummarize)
+    : toSummarize
+  const summaryText = await summarize(model, preparedMessages, abortSignal)
 
   const rebuilt: ModelMessage[] = [
     {

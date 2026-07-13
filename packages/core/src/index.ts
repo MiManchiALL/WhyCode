@@ -88,6 +88,22 @@ export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
 export { validateSessionId } from './session/metadata.ts'
 export {
+  IMAGE_ATTACHMENT_MAX_BYTES,
+  IMAGE_ATTACHMENT_MAX_COUNT,
+  IMAGE_ATTACHMENT_MAX_DIMENSION,
+  IMAGE_ATTACHMENT_MAX_PIXELS,
+  imageAttachmentSchema,
+  imageAttachmentsSchema,
+  imageAttachmentStorageNameSchema,
+  type ImageAttachment,
+  type ImageMediaType,
+} from './attachments/types.ts'
+export {
+  importImageAttachments,
+  readStoredImage,
+  validateStoredImageAttachments,
+} from './attachments/storage.ts'
+export {
   pushCoalescedViewEvent,
   toViewEvent,
   viewEventSchema,

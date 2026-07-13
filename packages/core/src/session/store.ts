@@ -21,6 +21,9 @@ import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createTurnAbortedMessage } from './interruption.ts'
+import { dehydrateImageMessages } from '../attachments/messages.ts'
+import type { ImageAttachment } from '../attachments/types.ts'
+import { validateStoredImageAttachments } from '../attachments/storage.ts'
 import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
@@ -40,6 +43,7 @@ import {
   sessionEntrySchema,
   type SessionCreateInput,
   type SessionEntry,
+  type LoadedSession,
   type SessionMetadata,
   type SessionRecorder,
   type SessionSummary,
@@ -126,7 +130,10 @@ export class SessionStore {
         await file.close()
       }
     }
-    const loaded = buildLoadedSession(entries)
+    const loaded = await validateLoadedSessionAttachments(
+      buildLoadedSession(entries),
+      paths.attachments,
+    )
     if (loaded.metadata.sessionId !== sessionId) throw new Error('会话 ID 与目录不匹配')
     const metadata = loaded.metadata
     await writeMetadata(paths.metadata, metadata)
@@ -328,6 +335,10 @@ export class SessionJournal implements SessionRecorder {
     return this.paths.checkpoints
   }
 
+  get attachmentDirectory(): string {
+    return this.paths.attachments
+  }
+
   messagesBeforeTurn(turnId: string): ModelMessage[] | null {
     const messages = this.turnStartMessages.get(turnId)
     if (
@@ -377,13 +388,27 @@ export class SessionJournal implements SessionRecorder {
     return { ...this.metadata }
   }
 
-  recordUserInput(text: string, startsTurn: boolean): Promise<void> {
+  recordUserInput(
+    text: string,
+    startsTurn: boolean,
+    attachments: readonly ImageAttachment[] = [],
+  ): Promise<void> {
     return this.enqueue(async () => {
-      const input = this.entry({ type: 'user-input', text, startsTurn })
+      const input = this.entry({
+        type: 'user-input',
+        text,
+        startsTurn,
+        ...(attachments.length ? { attachments } : {}),
+      })
       await this.appendEntries([input])
       if (input.type === 'user-input' && input.startsTurn) {
         this.undeliveredUserInputIdSet.add(input.uuid)
-        this.viewEvents.push({ type: 'user-message', text: input.text, startsTurn: true })
+        this.viewEvents.push({
+          type: 'user-message',
+          text: input.text,
+          startsTurn: true,
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        })
       }
       const clipped = clip(text)
       this.metadata.lastUserText = clipped
@@ -421,7 +446,12 @@ export class SessionJournal implements SessionRecorder {
         engagedPlanId: engagedPlanId ?? null,
       })
       const batch = this.entry(
-        { type: 'messages', turnId, messages, engagedPlanId: engagedPlanId ?? null },
+        {
+          type: 'messages',
+          turnId,
+          messages: dehydrateImageMessages(messages),
+          engagedPlanId: engagedPlanId ?? null,
+        },
         started.uuid,
       )
       await this.appendEntries([started, batch])
@@ -445,7 +475,7 @@ export class SessionJournal implements SessionRecorder {
       const batch = this.entry({
         type: 'messages',
         turnId,
-        messages,
+        messages: dehydrateImageMessages(messages),
         ...(taskState !== undefined ? { taskState } : {}),
         ...(engagedPlanId !== undefined ? { engagedPlanId } : {}),
       })
@@ -495,6 +525,7 @@ export class SessionJournal implements SessionRecorder {
       if (this.undeliveredUserInputIdSet.size > 0) {
         throw new Error('存在尚未交付给模型的用户输入，不能建立会话快照')
       }
+      const runtimeTurnStarts = reason === 'rollback' ? this.turnStartsWithin(messages) : []
       const snapshot = this.entry(
         {
           type: 'snapshot',
@@ -502,7 +533,9 @@ export class SessionJournal implements SessionRecorder {
           activeTurnId: activeTurnId ?? null,
           activeTurnEngagedPlanId: activeTurnId ? this.activeTurnEngagedPlanId : null,
           activeConsensusTaskId: this.activeConsensusTaskId,
-          activeConsensusBaseMessages: this.activeConsensusBaseMessages,
+          activeConsensusBaseMessages: this.activeConsensusBaseMessages
+            ? dehydrateImageMessages(this.activeConsensusBaseMessages)
+            : null,
           activeConsensusBaseTaskState: this.activeConsensusBaseTaskState,
           activeConsensusBaseTurnIds: this.activeConsensusBaseTurnIds
             ? [...this.activeConsensusBaseTurnIds]
@@ -510,10 +543,11 @@ export class SessionJournal implements SessionRecorder {
           consensusState: this.consensusState,
           taskState: taskState === undefined ? this.taskState : taskState,
           modelId: this.metadata.modelId,
-          messages,
-          turnStartMessages: reason === 'rollback'
-            ? this.turnStartsWithin(messages)
-            : [],
+          messages: dehydrateImageMessages(messages),
+          turnStartMessages: runtimeTurnStarts.map((start) => ({
+            ...start,
+            messages: dehydrateImageMessages(start.messages),
+          })),
         },
         null,
       )
@@ -526,11 +560,11 @@ export class SessionJournal implements SessionRecorder {
         ? new Set(snapshot.activeConsensusBaseTurnIds)
         : null
       this.turnStartMessages = new Map(
-        (snapshot.type === 'snapshot' ? snapshot.turnStartMessages : [])
+        runtimeTurnStarts
           .map((start) => [start.turnId, structuredClone(start.messages)]),
       )
       this.turnStartTaskStates = new Map(
-        (snapshot.type === 'snapshot' ? snapshot.turnStartMessages : [])
+        runtimeTurnStarts
           .map((start) => [start.turnId, cloneTaskPlanState(start.taskState)]),
       )
       this.activeTurnId = activeTurnId ?? null
@@ -615,13 +649,13 @@ export class SessionJournal implements SessionRecorder {
         taskId,
         outcome,
         state,
-        rollbackMessages,
+        rollbackMessages: rollbackMessages ? dehydrateImageMessages(rollbackMessages) : null,
         taskState,
       })
       if (ended.type !== 'consensus-task-end') throw new Error('无法写入共识任务终点')
       await this.appendEntries([ended])
-      if (ended.rollbackMessages) {
-        this.messages = [...ended.rollbackMessages]
+      if (rollbackMessages) {
+        this.messages = [...rollbackMessages]
         this.retainTurnStarts(this.activeConsensusBaseTurnIds)
       }
       this.taskState = cloneTaskPlanState(ended.taskState)
@@ -672,6 +706,7 @@ export class SessionJournal implements SessionRecorder {
       const recoverableTurnIds = this.activeConsensusTaskId
         ? this.activeConsensusBaseTurnIds ?? new Set<string>()
         : undefined
+      const runtimeTurnStarts = this.turnStartsWithin(recoveredMessages, recoverableTurnIds)
       const recovered = this.entry(
         {
           type: 'snapshot',
@@ -685,8 +720,11 @@ export class SessionJournal implements SessionRecorder {
           consensusState: this.consensusState,
           taskState: recoveredTaskState,
           modelId: this.metadata.modelId,
-          messages: recoveredMessages,
-          turnStartMessages: this.turnStartsWithin(recoveredMessages, recoverableTurnIds),
+          messages: dehydrateImageMessages(recoveredMessages),
+          turnStartMessages: runtimeTurnStarts.map((start) => ({
+            ...start,
+            messages: dehydrateImageMessages(start.messages),
+          })),
         },
         null,
       )
@@ -703,11 +741,11 @@ export class SessionJournal implements SessionRecorder {
       this.metadata.updatedAt = recovered.timestamp
       this.metadata.status = hasPendingUserQuestion(recoveredMessages) ? 'waiting-user' : 'idle'
       this.turnStartMessages = new Map(
-        (recovered.type === 'snapshot' ? recovered.turnStartMessages : [])
+        runtimeTurnStarts
           .map((start) => [start.turnId, structuredClone(start.messages)]),
       )
       this.turnStartTaskStates = new Map(
-        (recovered.type === 'snapshot' ? recovered.turnStartMessages : [])
+        runtimeTurnStarts
           .map((start) => [start.turnId, cloneTaskPlanState(start.taskState)]),
       )
       await writeMetadata(this.paths.metadata, this.metadata)
@@ -814,4 +852,17 @@ function validPrefixByteLengthBeforeTrailingPartialJson(text: string): number | 
     }
   }
   return null
+}
+
+async function validateLoadedSessionAttachments(
+  loaded: LoadedSession,
+  attachmentDirectory: string,
+): Promise<LoadedSession> {
+  await validateStoredImageAttachments(
+    attachmentDirectory,
+    loaded.metadata.sessionId,
+    loaded.viewEvents.flatMap((event) =>
+      event.type === 'user-message' ? event.attachments ?? [] : []),
+  )
+  return loaded
 }

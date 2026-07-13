@@ -12,6 +12,10 @@ import {
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
+import {
+  imageAttachmentsSchema,
+  type ImageAttachment,
+} from '../attachments/types.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -46,6 +50,25 @@ const userInputSchema = chainedEntrySchema.extend({
   text: z.string().min(1),
   /** true 时该输入同时是可见时间线中的新回合消息。 */
   startsTurn: z.boolean(),
+  /** 图片字节位于会话 attachments/；这里只保存可恢复的元数据。 */
+  attachments: imageAttachmentsSchema.optional(),
+}).superRefine((input, ctx) => {
+  if (input.attachments?.length && !input.startsTurn) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['attachments'],
+      message: '图片附件只能属于空闲根消息',
+    })
+  }
+  input.attachments?.forEach((attachment, index) => {
+    if (attachment.sessionId !== input.sessionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['attachments', index, 'sessionId'],
+        message: '附件必须属于当前会话',
+      })
+    }
+  })
 })
 
 const modelChangeSchema = chainedEntrySchema.extend({
@@ -221,6 +244,7 @@ export interface LoadedSession {
 export interface SessionRecorder {
   readonly sessionId: string
   readonly checkpointDirectory: string
+  readonly attachmentDirectory: string
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
   readonly interruptedTurnId: string | null
@@ -232,7 +256,11 @@ export interface SessionRecorder {
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
   taskStateBeforeTurn(turnId: string): TaskPlanState | undefined
-  recordUserInput(text: string, startsTurn: boolean): Promise<void>
+  recordUserInput(
+    text: string,
+    startsTurn: boolean,
+    attachments?: readonly ImageAttachment[],
+  ): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(
     turnId: string,

@@ -241,6 +241,34 @@ describe('会话界面时间线重建', () => {
     ])
     assert.deepEqual(restored.pendingQuestion, question)
   })
+
+  it('恢复图片缩略图元数据，并明确显示本轮跳过协商', () => {
+    const state = createConversationState([
+      {
+        type: 'user-message',
+        text: '分析截图',
+        startsTurn: true,
+        attachments: [{
+          id: '22222222-2222-4222-8222-222222222222',
+          sessionId: '11111111-1111-4111-8111-111111111111',
+          name: 'screen.png',
+          storageName: '22222222-2222-4222-8222-222222222222.png',
+          mediaType: 'image/png',
+          byteLength: 68,
+          width: 1,
+          height: 1,
+        }],
+      },
+      core({ type: 'consensus-skipped', reason: 'image-input' }),
+    ])
+
+    assert.equal(state.blocks[0]?.kind, 'user')
+    assert.equal(state.blocks[0]?.kind === 'user' ? state.blocks[0].attachments?.[0]?.name : '', 'screen.png')
+    assert.match(
+      state.blocks[1]?.kind === 'notice' ? state.blocks[1].text : '',
+      /仅由当前视觉模型处理|跳过协商/,
+    )
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {
