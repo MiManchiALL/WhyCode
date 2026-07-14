@@ -23,6 +23,14 @@ export function estimateMessageTokens(message: ModelMessage): number {
   }
   let total = 4
   for (const part of message.content) {
+    if (
+      part.type === 'image'
+      || (part.type === 'file' && part.mediaType.startsWith('image/'))
+    ) {
+      // Base64 长度不是视觉 token；固定保守估计也避免图片把自动压缩误判成超窗。
+      total += 2_000
+      continue
+    }
     // 统一按 stringify 估：文本部分即正文，工具部分包含参数/结果 JSON
     total += estimateTextTokens(JSON.stringify(part))
   }

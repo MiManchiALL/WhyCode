@@ -175,6 +175,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     provider: 'openai',
     capabilities: {
       supportsNativeTools: true,
+      supportsImageInput: false,
       reasoningExposure: 'none',
       structuredOutput: 'tool-based',
       promptCaching: 'none',

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
@@ -22,6 +22,15 @@ import {
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
 import { TaskPlanCard } from './task-plan-card.tsx'
+import {
+  ImageDraftStrip,
+  ImagePickerButton,
+  releaseImageDrafts,
+  useImageDrafts,
+  UserImageGallery,
+} from './image-attachments.tsx'
+import { prepareImageDrafts } from './image-draft.ts'
+import { collectPastedImageFiles } from './image-paste.ts'
 
 interface Approval {
   requestId: string
@@ -39,7 +48,13 @@ export function App() {
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [stopping, setStopping] = useState(false)
   const [questionSubmitting, setQuestionSubmitting] = useState(false)
-  const [models, setModels] = useState<{ id: string; displayName: string; hasKey: boolean }[]>([])
+  const [imageSubmissionPending, setImageSubmissionPending] = useState(false)
+  const [models, setModels] = useState<{
+    id: string
+    displayName: string
+    hasKey: boolean
+    supportsImageInput: boolean
+  }[]>([])
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
   const [projectDir, setProjectDir] = useState<string | null>(null)
@@ -59,6 +74,19 @@ export function App() {
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const blocks = view.blocks
+  const addError = useCallback((text: string) => {
+    setView((previous) =>
+      applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
+    )
+  }, [])
+  const {
+    drafts: imageDrafts,
+    addFiles: addImageFiles,
+    remove: removeImageDraft,
+    clear: clearImageDrafts,
+    detach: detachImageDrafts,
+    restore: restoreImageDrafts,
+  } = useImageDrafts(addError)
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -199,7 +227,10 @@ export function App() {
   }, [])
 
   const busy = status !== 'idle' && status !== 'error'
-  const interactionBusy = busy || deletingSessionId !== null || checkpointRestoreToolUseId !== null
+  const interactionBusy = busy
+    || imageSubmissionPending
+    || deletingSessionId !== null
+    || checkpointRestoreToolUseId !== null
 
   const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
     setCheckpointRestoreToolUseId((current) =>
@@ -212,11 +243,12 @@ export function App() {
       if (dir) {
         setProjectDir(dir)
         setView(createConversationState())
+        clearImageDrafts()
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
       }
     })
-  }, [refreshSessions])
+  }, [clearImageDrafts, refreshSessions])
 
   const toggleConsensus = useCallback(() => {
     const enabled = !consensus.enabled
@@ -234,17 +266,13 @@ export function App() {
     setApproval(null)
     setStatus('idle')
     setStopping(false)
+    setImageSubmissionPending(false)
     setCheckpointRestoreToolUseId(null)
     setNegoStatus(null)
+    clearImageDrafts()
     stickToBottom.current = true
     setShowJumpBottom(false)
-  }, [])
-
-  const addError = useCallback((text: string) => {
-    setView((previous) =>
-      applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
-    )
-  }, [])
+  }, [clearImageDrafts])
 
   const stop = useCallback(() => {
     if (stopping) return
@@ -279,6 +307,7 @@ export function App() {
         ),
       )
       setQueued([])
+      clearImageDrafts()
       setApproval(null)
       setStatus('idle')
       setStopping(false)
@@ -292,7 +321,7 @@ export function App() {
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
     })
-  }, [addError, refreshSessions])
+  }, [addError, clearImageDrafts, refreshSessions])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (deletingSessionId) return
@@ -333,23 +362,71 @@ export function App() {
   }, [permMode])
 
   const changeModel = useCallback((next: string) => {
+    const nextModel = models.find((model) => model.id === next)
+    if (imageDrafts.length > 0 && !nextModel?.supportsImageInput) {
+      addError('已添加图片；请先移除图片再切换到非视觉模型')
+      return
+    }
     const previous = modelId
     setModelId(next)
+    const rollback = () => setModelId((current) => current === next ? previous : current)
     void window.whycode.sendCommand({ type: 'set-model', modelId: next }).then((result) => {
-      if (!result || !result.ok) setModelId(previous)
-    })
-  }, [modelId])
+      if (!result || !result.ok) rollback()
+    }).catch(rollback)
+  }, [addError, imageDrafts.length, modelId, models])
 
   const send = useCallback((urgent = false) => {
-    if (deletingSessionId || checkpointRestoreToolUseId) return
-    const text = input.trim()
+    if (deletingSessionId || checkpointRestoreToolUseId || imageSubmissionPending) return
+    if (imageDrafts.length > 0 && busy) {
+      addError('图片消息只能在 Agent 空闲时发送；文字消息仍可排队或立即插话')
+      return
+    }
+    const text = input.trim() || (imageDrafts.length ? '请分析这些图片。' : '')
     if (!text) return
+    const sentDrafts = detachImageDrafts()
+    if (sentDrafts.length > 0) setImageSubmissionPending(true)
     setInput('')
     // 自己发消息 = 主动行为，恢复贴底跟随
     stickToBottom.current = true
     setShowJumpBottom(false)
-    void window.whycode.sendCommand({ type: 'user-message', text, urgent })
-  }, [checkpointRestoreToolUseId, deletingSessionId, input])
+    const restoreRejectedInput = () => {
+      setInput((current) => current ? `${text}\n${current}` : text)
+      restoreImageDrafts(sentDrafts)
+    }
+    void (async () => {
+      try {
+        const attachments = await prepareImageDrafts(sentDrafts)
+        const result = await window.whycode.sendCommand({
+          type: 'user-message',
+          text,
+          urgent,
+          ...(attachments.length ? { attachments } : {}),
+        })
+        if (result?.ok) {
+          releaseImageDrafts(sentDrafts)
+          return
+        }
+        restoreRejectedInput()
+      } catch {
+        restoreRejectedInput()
+        addError(sentDrafts.length
+          ? '图片读取或消息发送失败，内容已恢复到输入框'
+          : '消息发送失败，内容已恢复到输入框')
+      } finally {
+        if (sentDrafts.length > 0) setImageSubmissionPending(false)
+      }
+    })()
+  }, [
+    addError,
+    busy,
+    checkpointRestoreToolUseId,
+    deletingSessionId,
+    detachImageDrafts,
+    imageDrafts.length,
+    imageSubmissionPending,
+    input,
+    restoreImageDrafts,
+  ])
 
   const answerQuestion = useCallback((answer: string) => {
     const question = view.pendingQuestion
@@ -379,6 +456,23 @@ export function App() {
   const toggle = useCallback((id: string) => {
     setView((previous) => toggleExpanded(previous, id))
   }, [])
+
+  const selectedModel = models.find((model) => model.id === modelId)
+  const canAttachImages = Boolean(selectedModel?.hasKey && selectedModel.supportsImageInput)
+  const pasteImages = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
+    const files = collectPastedImageFiles(event.clipboardData)
+    if (files.length === 0) return
+    event.preventDefault()
+    if (!canAttachImages) {
+      addError('当前模型不支持粘贴图片；请切换到带“图片”标记的模型')
+      return
+    }
+    if (interactionBusy) {
+      addError('Agent 工作中；图片只能在空闲时粘贴，不能排队或立即插话')
+      return
+    }
+    addImageFiles(files)
+  }, [addError, addImageFiles, canAttachImages, interactionBusy])
 
   return (
     <div className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900">
@@ -482,11 +576,18 @@ export function App() {
             ))}
           </div>
         )}
+        <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
         <div className="flex gap-2">
+          <ImagePickerButton
+            supportsImageInput={canAttachImages}
+            disabled={interactionBusy}
+            onFiles={addImageFiles}
+          />
           <input
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={pasteImages}
             disabled={stopping || deletingSessionId !== null || checkpointRestoreToolUseId !== null}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
@@ -522,7 +623,7 @@ export function App() {
             <button
               className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
               onClick={() => send(true)}
-              disabled={stopping || !input.trim()}
+              disabled={stopping || imageSubmissionPending || imageDrafts.length > 0 || !input.trim()}
               title="打断当前步骤，立即插话"
             >
               立即
@@ -533,9 +634,11 @@ export function App() {
             onClick={() => send(false)}
             disabled={
               stopping
+              || imageSubmissionPending
               || deletingSessionId !== null
               || checkpointRestoreToolUseId !== null
-              || !input.trim()
+              || (busy && imageDrafts.length > 0)
+              || (!input.trim() && imageDrafts.length === 0)
             }
           >
             {busy ? '排队' : '发送'}
@@ -616,7 +719,12 @@ function BlockView({
   onToggle: () => void
 }) {
   if (block.kind === 'user') {
-    return <div className="mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">{block.text}</div>
+    return (
+      <div className="mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">
+        <UserImageGallery attachments={block.attachments} />
+        <div className="whitespace-pre-wrap">{block.text}</div>
+      </div>
+    )
   }
   if (block.kind === 'text') {
     return (

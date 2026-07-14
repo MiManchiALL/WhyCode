@@ -8,6 +8,7 @@ import {
   ConsensusCoordinator,
   createBackgroundCommandTools,
   getModelEntry,
+  importImageAttachments,
   MODEL_REGISTRY,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -15,6 +16,7 @@ import {
   type CoreCommand,
   type CoreEvent,
   type AgentStatus,
+  type ImageAttachment,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import {
@@ -35,6 +37,12 @@ import type {
   SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
+import {
+  registerAttachmentProtocol,
+  registerAttachmentScheme,
+} from './image-protocol.ts'
+
+registerAttachmentScheme()
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -104,6 +112,8 @@ let sessions: DesktopSessionRepository
 let commandSessions: CommandSessionManager
 /** 会话删除跨多个存储，必须在主进程内单飞并阻止新输入/切换。 */
 let sessionDeletionId: string | null = null
+/** 图片复制期间拒绝其它输入，避免附件落盘与根消息分类之间发生竞态。 */
+let imagePreparationInProgress = false
 const viewTimeline = new ViewTimeline((error) => {
   broadcastEvent(
     {
@@ -255,19 +265,65 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
   }
   switch (command.type) {
     case 'user-message': {
-      const err = await ensureSession()
-      if (err) {
-        broadcastEvent({ type: 'error', message: err, recoverable: true })
-        broadcastEvent({ type: 'agent-status', status: 'idle' })
-        return
+      if (imagePreparationInProgress) {
+        return rejectUserMessage('上一条图片消息仍在准备，请稍后重试')
       }
-      await routeUserMessage(command.text, command.urgent ?? false, {
+      const attachmentInputs = command.attachments ?? []
+      let imageAttachments: ImageAttachment[] = []
+      if (attachmentInputs.length > 0) {
+        const modelId = resolveCurrentModelId()
+        if (!modelId) return rejectUserMessage('没有任何已配置 key 的模型可用')
+        const model = getModelEntry(modelId)
+        if (!model.capabilities.supportsImageInput) {
+          return rejectUserMessage(`${model.displayName} 不支持识图；请切换到带“图片”标记的模型`)
+        }
+        if (sessionInitialization || session?.isBusy || coordinator?.busy) {
+          return rejectUserMessage('图片消息只能在 Agent 空闲时发送，不能排队或立即插话')
+        }
+        imagePreparationInProgress = true
+        let preparationError: string | null = null
+        try {
+          const err = await ensureSession()
+          if (err) throw new Error(err)
+          const journal = sessions.journal
+          if (!journal) throw new Error('会话记录尚未初始化，无法保存图片')
+          imageAttachments = await importImageAttachments(
+            attachmentInputs,
+            journal.attachmentDirectory,
+            journal.sessionId,
+          )
+        } catch (error) {
+          preparationError = `图片添加失败：${error instanceof Error ? error.message : String(error)}`
+        } finally {
+          imagePreparationInProgress = false
+        }
+        if (preparationError) return rejectUserMessage(preparationError)
+      } else {
+        const err = await ensureSession()
+        if (err) return rejectUserMessage(err)
+      }
+
+      const userText = command.text.trim()
+        || (imageAttachments.length ? '请分析这些图片。' : '')
+      if (!userText) return rejectUserMessage('消息不能为空')
+      await routeUserMessage(userText, command.urgent ?? false, {
         isBusy: runtimeBusy,
-        record: recordUserInput,
+        record: (text, startsTurn) => recordUserInput(text, startsTurn, imageAttachments),
         acceptRoot: (text) => {
-          broadcastEvent({ type: 'user-message-accepted', text, startsTurn: true }, false)
+          broadcastEvent({
+            type: 'user-message-accepted',
+            text,
+            startsTurn: true,
+            ...(imageAttachments.length ? { attachments: imageAttachments } : {}),
+          }, false)
         },
         deliver: (text, urgent) => {
+          if (imageAttachments.length > 0) {
+            if (consensusEnabled) {
+              broadcastEvent({ type: 'consensus-skipped', reason: 'image-input' })
+            }
+            return session!.handleUserMessage(text, false, imageAttachments)
+          }
           // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
           if (consensusEnabled && coordinator) {
             return coordinator.handleUserMessage(text, urgent)
@@ -276,7 +332,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
           return session!.handleUserMessage(text, urgent)
         },
       })
-      break
+      return { ok: true }
     }
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
@@ -324,6 +380,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'compact': {
+      if (imagePreparationInProgress) {
+        broadcastEvent({
+          type: 'error',
+          message: '图片消息准备中，请等待提交完成后再压缩',
+          recoverable: true,
+        })
+        return { ok: false }
+      }
       if (!session) {
         broadcastEvent({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
         break
@@ -332,6 +396,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'set-model': {
+      if (imagePreparationInProgress) {
+        broadcastEvent({
+          type: 'error',
+          message: '图片消息准备中，请等待提交完成后再切换模型',
+          recoverable: true,
+        })
+        return { ok: false }
+      }
       const err = validateModel(command.modelId)
       if (err) {
         broadcastEvent({ type: 'error', message: err, recoverable: true })
@@ -358,16 +430,21 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
 function runtimeBusy(): boolean {
   return Boolean(
     sessionDeletionId
+    || imagePreparationInProgress
     || sessionInitialization
     || session?.isBusy
     || coordinator?.busy,
   )
 }
 
-async function recordUserInput(text: string, startsTurn: boolean): Promise<void> {
+async function recordUserInput(
+  text: string,
+  startsTurn: boolean,
+  attachments: readonly ImageAttachment[] = [],
+): Promise<void> {
   try {
     const journal = sessions.journal!
-    await journal.recordUserInput(text, startsTurn)
+    await journal.recordUserInput(text, startsTurn, attachments)
   } catch (error) {
     broadcastEvent({
       type: 'error',
@@ -375,6 +452,12 @@ async function recordUserInput(text: string, startsTurn: boolean): Promise<void>
       recoverable: true,
     })
   }
+}
+
+function rejectUserMessage(message: string): { ok: false } {
+  broadcastEvent({ type: 'error', message, recoverable: true })
+  if (!runtimeBusy()) broadcastEvent({ type: 'agent-status', status: 'idle' })
+  return { ok: false }
 }
 
 function resetRuntime(keepJournal = false): void {
@@ -539,6 +622,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true }),
   ]).catch(() => {})
   sessions = new DesktopSessionRepository(join(app.getPath('userData'), 'sessions'))
+  registerAttachmentProtocol(() => sessions.journal)
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
@@ -548,6 +632,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       id: m.id,
       displayName: m.displayName,
       hasKey: Boolean(config?.providers[m.provider]?.apiKey),
+      supportsImageInput: m.capabilities.supportsImageInput,
     }))
   })
   ipcMain.handle(IPC.getProjectDir, () => projectDir)

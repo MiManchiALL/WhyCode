@@ -4,6 +4,7 @@ interface ModelOption {
   id: string
   displayName: string
   hasKey: boolean
+  supportsImageInput: boolean
 }
 
 interface ConsensusStatus {
@@ -86,7 +87,7 @@ export function AppHeader(props: AppHeaderProps) {
         >
           {props.models.map((model) => (
             <option key={model.id} value={model.id} disabled={!model.hasKey}>
-              {model.displayName}{model.hasKey ? '' : '（未配置 key）'}
+              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}{model.hasKey ? '' : '（未配置 key）'}
             </option>
           ))}
         </select>

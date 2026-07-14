@@ -93,6 +93,19 @@ describe('ViewTimeline', () => {
     assert.match(JSON.stringify(writer.batches), /checkpoint-created/)
   })
 
+  it('图片协商降级作为稳定控制事件立即写入', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+
+    timeline.capture(writer, { type: 'consensus-skipped', reason: 'image-input' })
+    await Promise.resolve()
+
+    assert.deepEqual(writer.batches, [[{
+      type: 'core-event',
+      event: { type: 'consensus-skipped', reason: 'image-input' },
+    }]])
+  })
+
   it('任务计划只在所属 step 稳定提交后写入历史', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))

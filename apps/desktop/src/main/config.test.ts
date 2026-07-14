@@ -44,4 +44,13 @@ describe('默认模型选择', () => {
     assert.equal(resolveDefaultModelId(config({})), null)
     assert.equal(resolveDefaultModelId(null), null)
   })
+
+  it('识别 providers.mimo 中配置的 MiMo V2.5 密钥', () => {
+    assert.equal(
+      resolveDefaultModelId(
+        config({ mimo: { apiKey: 'mimo-key' } }, 'mimo:mimo-v2.5'),
+      ),
+      'mimo:mimo-v2.5',
+    )
+  })
 })

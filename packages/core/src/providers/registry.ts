@@ -11,6 +11,8 @@ import type { LanguageModel, ProviderMetadata } from 'ai'
 export interface ModelCapabilities {
   /** 原生 function calling 是否可靠可用（false 时走 XML fallback，暂未实现） */
   supportsNativeTools: boolean
+  /** 是否允许在 user message 中发送图片；未知或未验证的接入一律标 false。 */
+  supportsImageInput: boolean
   /** reasoning 暴露方式：block=Anthropic thinking block；field=reasoning_content 字段；summary=仅摘要；none=无 */
   reasoningExposure: 'block' | 'field' | 'summary' | 'none'
   /** 结构化输出最高档位，对应文档三 §2.2 的四级协商 */
@@ -27,7 +29,7 @@ export interface ModelEntry {
   /** WhyCode 内部模型 ID，格式 provider:model */
   id: string
   displayName: string
-  provider: 'anthropic' | 'deepseek' | 'openai' | 'zhipu'
+  provider: 'anthropic' | 'deepseek' | 'mimo' | 'openai' | 'zhipu'
   capabilities: ModelCapabilities
   /** 创建 AI SDK LanguageModel 实例 */
   create: (config: ProviderConfig) => LanguageModel
@@ -41,7 +43,7 @@ export interface ProviderConfig {
   baseURL?: string
 }
 
-/** M1 模型注册表：四厂商各一个代表模型，后续做设置界面时允许用户自定义增删 */
+/** 内置模型注册表；后续做设置界面时允许用户自定义增删。 */
 export const MODEL_REGISTRY: readonly ModelEntry[] = [
   {
     id: 'anthropic:claude-sonnet-4-6',
@@ -49,6 +51,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     provider: 'anthropic',
     capabilities: {
       supportsNativeTools: true,
+      supportsImageInput: false,
       reasoningExposure: 'block',
       structuredOutput: 'json-schema',
       promptCaching: 'explicit',
@@ -67,6 +70,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     provider: 'deepseek',
     capabilities: {
       supportsNativeTools: true,
+      supportsImageInput: false,
       reasoningExposure: 'field',
       structuredOutput: 'json-object',
       promptCaching: 'auto',
@@ -79,11 +83,57 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       ),
   },
   {
+    id: 'mimo:mimo-v2.5',
+    displayName: 'MiMo V2.5',
+    provider: 'mimo',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'field',
+      structuredOutput: 'json-object',
+      promptCaching: 'auto',
+      contextWindow: 1_048_576,
+      maxOutput: 131_072,
+    },
+    // openai-compatible 会把 reasoning_content 映射为可持久化 reasoning part，
+    // 下一模型步骤再逐字还原；MiMo 的 thinking 工具多轮契约由专用回归测试锁定。
+    providerOptions: { mimo: { thinking: { type: 'enabled' } } },
+    create: (config) =>
+      createOpenAICompatible({
+        name: 'mimo',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? 'https://api.xiaomimimo.com/v1',
+      })('mimo-v2.5'),
+  },
+  {
+    id: 'zhipu:glm-5v-turbo',
+    displayName: 'GLM-5V-Turbo',
+    provider: 'zhipu',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'none',
+      structuredOutput: 'tool-based',
+      promptCaching: 'auto',
+      contextWindow: 200_000,
+      maxOutput: 128_000,
+    },
+    // 首选视觉模型也先关闭 thinking，保持现有“工具调用后继续回答”的稳定循环。
+    providerOptions: { zhipu: { thinking: { type: 'disabled' } } },
+    create: (config) =>
+      createOpenAICompatible({
+        name: 'zhipu',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? 'https://open.bigmodel.cn/api/paas/v4',
+      })('glm-5v-turbo'),
+  },
+  {
     id: 'zhipu:glm-4.7',
     displayName: 'GLM-4.7',
     provider: 'zhipu',
     capabilities: {
       supportsNativeTools: true,
+      supportsImageInput: false,
       // GLM-4.7 thinking+工具调用会把最终答案吞进 reasoning_content（两种协议端点均复现，2026-07-04），
       // 暂关 thinking 保工具循环可用，等厂商修复后恢复（见便签）
       reasoningExposure: 'none',
@@ -107,6 +157,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     provider: 'openai',
     capabilities: {
       supportsNativeTools: true,
+      supportsImageInput: false,
       reasoningExposure: 'summary',
       structuredOutput: 'json-schema',
       promptCaching: 'auto',

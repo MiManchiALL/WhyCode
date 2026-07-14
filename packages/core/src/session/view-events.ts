@@ -5,6 +5,7 @@ import {
   supersededTaskPlanSchema,
   taskPlanSchema,
 } from '../tasks/types.ts'
+import { imageAttachmentsSchema } from '../attachments/types.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -119,6 +120,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
       .optional(),
   }),
   z.object({ type: z.literal('execution-started'), taskId: z.string() }),
+  z.object({ type: z.literal('consensus-skipped'), reason: z.literal('image-input') }),
   z.object({ type: z.literal('task-plan-updated'), plan: taskPlanSchema }),
   z.object({
     type: z.literal('task-plan-replaced'),
@@ -128,12 +130,19 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('task-plan-restored'), plan: taskPlanSchema.nullable() }),
 ])
 
+const userMessageViewEventSchema = z.object({
+  type: z.literal('user-message'),
+  text: z.string().min(1),
+  startsTurn: z.boolean(),
+  attachments: imageAttachmentsSchema.optional(),
+}).superRefine((event, ctx) => {
+  if (event.attachments?.length && !event.startsTurn) {
+    ctx.addIssue({ code: 'custom', path: ['attachments'], message: '图片附件只能属于根消息' })
+  }
+})
+
 export const viewEventSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('user-message'),
-    text: z.string().min(1),
-    startsTurn: z.boolean(),
-  }),
+  userMessageViewEventSchema,
   z.object({ type: z.literal('core-event'), event: visibleCoreEventSchema }),
 ])
 
@@ -169,6 +178,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'round-started':
     case 'negotiation-decided':
     case 'execution-started':
+    case 'consensus-skipped':
     case 'task-plan-updated':
     case 'task-plan-replaced':
     case 'task-plan-restored':

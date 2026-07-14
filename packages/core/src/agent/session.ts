@@ -16,6 +16,11 @@ import {
   createTurnAbortedMessage,
   findPendingTurnAbortedIndex,
 } from '../session/interruption.ts'
+import {
+  createImageUserMessage,
+  messagesForModel,
+} from '../attachments/messages.ts'
+import type { ImageAttachment } from '../attachments/types.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
@@ -263,7 +268,16 @@ export class AgentSession {
    * 用户消息统一入口：空闲时开始新 turn；运行中/压缩中则排队（steering）。
    * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
    */
-  handleUserMessage(text: string, urgent = false): Promise<StopReason> | void {
+  handleUserMessage(
+    text: string,
+    urgent = false,
+    imageAttachments: readonly ImageAttachment[] = [],
+  ): Promise<StopReason> | void {
+    if (imageAttachments.length > 0) {
+      if (this.isBusy) throw new Error('图片消息不能在 Agent 工作中排队或立即插话')
+      if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
+      return this.startTurn([createImageUserMessage(text, imageAttachments)])
+    }
     return this.handleMessage(text, urgent)
   }
 
@@ -683,6 +697,7 @@ export class AgentSession {
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
         this.compactTaskContext(),
+        (messages) => this.messagesForCurrentModel(messages),
       )
       this.messages = result.messages
       await this.persist((recorder) =>
@@ -758,6 +773,7 @@ export class AgentSession {
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
         this.compactTaskContext(planExecutionEngaged, turnId),
+        (messages) => this.messagesForCurrentModel(messages),
       )
       this.messages = result.messages
       await this.persist((recorder) =>
@@ -787,6 +803,20 @@ export class AgentSession {
       ? { turnId, engagedPlanId: state.activePlan.id }
       : undefined
     return taskContextBlock(state, continuation)
+  }
+
+  private messagesForCurrentModel(messages: ModelMessage[]): Promise<ModelMessage[]> {
+    return messagesForModel(
+      messages,
+      this.options.model.capabilities.supportsImageInput,
+      this.options.sessionRecorder?.attachmentDirectory,
+      this.sessionImageAttachments(),
+    )
+  }
+
+  private sessionImageAttachments(): ImageAttachment[] {
+    return (this.options.sessionRecorder?.initialViewEvents ?? []).flatMap((event) =>
+      event.type === 'user-message' ? event.attachments ?? [] : [])
   }
 
   /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
@@ -819,7 +849,7 @@ export class AgentSession {
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
-        messages: this.messages,
+        messages: await this.messagesForCurrentModel(this.messages),
         tools: this.buildToolSet(
           stepAbort.signal,
           planExecutionEngaged,
