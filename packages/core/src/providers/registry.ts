@@ -89,14 +89,15 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: true,
-      reasoningExposure: 'none',
+      reasoningExposure: 'field',
       structuredOutput: 'json-object',
       promptCaching: 'auto',
       contextWindow: 1_048_576,
       maxOutput: 131_072,
     },
-    // thinking 工具多轮要求完整回传 reasoning_content；首版关闭以保持现有历史协议稳定。
-    providerOptions: { mimo: { thinking: { type: 'disabled' } } },
+    // openai-compatible 会把 reasoning_content 映射为可持久化 reasoning part，
+    // 下一模型步骤再逐字还原；MiMo 的 thinking 工具多轮契约由专用回归测试锁定。
+    providerOptions: { mimo: { thinking: { type: 'enabled' } } },
     create: (config) =>
       createOpenAICompatible({
         name: 'mimo',

@@ -19,10 +19,11 @@ describe('MODEL_REGISTRY 图片能力', () => {
     assert.equal(mimo.provider, 'mimo')
     assert.equal(mimo.capabilities.supportsNativeTools, true)
     assert.equal(mimo.capabilities.supportsImageInput, true)
+    assert.equal(mimo.capabilities.reasoningExposure, 'field')
     assert.equal(mimo.capabilities.contextWindow, 1_048_576)
     assert.equal(mimo.capabilities.maxOutput, 131_072)
     assert.deepEqual(mimo.providerOptions, {
-      mimo: { thinking: { type: 'disabled' } },
+      mimo: { thinking: { type: 'enabled' } },
     })
   })
 })
