@@ -31,6 +31,7 @@ import {
 } from './image-attachments.tsx'
 import { prepareImageDrafts } from './image-draft.ts'
 import { collectPastedImageFiles } from './image-paste.ts'
+import { useImageDropTarget } from './image-drop.ts'
 
 interface Approval {
   requestId: string
@@ -473,9 +474,27 @@ export function App() {
     }
     addImageFiles(files)
   }, [addError, addImageFiles, canAttachImages, interactionBusy])
+  const imageDrop = useImageDropTarget({
+    canAttachImages,
+    interactionBusy,
+    onFiles: addImageFiles,
+    onError: addError,
+  })
 
   return (
-    <div className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900">
+    <div
+      className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900"
+      {...imageDrop.handlers}
+    >
+      {imageDrop.active && (
+        <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-50/90 text-base font-medium text-violet-700 shadow-lg">
+          {!canAttachImages
+            ? '当前模型不支持图片'
+            : interactionBusy
+              ? 'Agent 工作中，暂不能添加图片'
+              : '松开以添加图片（PNG、JPEG、WebP，最多 4 张）'}
+        </div>
+      )}
       <AppHeader
         projectDir={projectDir}
         busy={interactionBusy}
@@ -813,6 +832,11 @@ function BlockView({
           />
         )}
       </div>
+      {call.attachments?.length ? (
+        <div className="border-t border-neutral-100 px-3 pt-2">
+          <UserImageGallery attachments={call.attachments} />
+        </div>
+      ) : null}
       {expanded && (call.result || call.progress) && (
         <pre className="max-h-64 overflow-auto border-t border-neutral-100 px-3 py-2 text-xs text-neutral-600">
           {call.result || call.progress}

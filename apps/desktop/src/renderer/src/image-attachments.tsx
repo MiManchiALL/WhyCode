@@ -5,8 +5,9 @@ import {
   MAX_IMAGE_DRAFTS,
   type ImageDraft,
 } from './image-draft.ts'
+import { ImagePreviewDialog, type ImagePreviewTarget } from './image-preview.tsx'
 
-const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp'])
+const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp'])
 
 export function useImageDrafts(onError: (message: string) => void) {
   const [drafts, setDrafts] = useState<ImageDraft[]>([])
@@ -69,26 +70,38 @@ export function ImageDraftStrip({
   drafts: readonly ImageDraft[]
   onRemove: (id: string) => void
 }) {
+  const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
   if (drafts.length === 0) return null
   return (
-    <div className="mb-2 flex flex-wrap gap-2">
-      {drafts.map((draft) => (
-        <div key={draft.id} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
-          <img src={draft.previewUrl} alt={draft.name} className="h-full w-full object-cover" />
-          <button
-            className="absolute right-1 top-1 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-80 hover:opacity-100"
-            onClick={() => onRemove(draft.id)}
-            title={`移除 ${draft.name}`}
-            aria-label={`移除 ${draft.name}`}
-          >
-            ×
-          </button>
-          <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
-            {draft.name}
+    <>
+      <div className="mb-2 flex flex-wrap gap-2">
+        {drafts.map((draft) => (
+          <div key={draft.id} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
+            <button
+              type="button"
+              className="block h-full w-full cursor-zoom-in"
+              onClick={() => setPreview({ src: draft.previewUrl, name: draft.name })}
+              title={`查看 ${draft.name}`}
+            >
+              <img src={draft.previewUrl} alt={draft.name} className="h-full w-full object-cover" />
+            </button>
+            <button
+              type="button"
+              className="absolute right-1 top-1 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-80 hover:opacity-100"
+              onClick={() => onRemove(draft.id)}
+              title={`移除 ${draft.name}`}
+              aria-label={`移除 ${draft.name}`}
+            >
+              ×
+            </button>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
+              {draft.name}
+            </div>
           </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      <ImagePreviewDialog target={preview} onClose={() => setPreview(null)} />
+    </>
   )
 }
 
@@ -123,7 +136,7 @@ export function ImagePickerButton({
         disabled={!enabled}
         title={
           enabled
-            ? `添加图片或在输入框按 Ctrl+V 粘贴（最多 ${MAX_IMAGE_DRAFTS} 张）`
+            ? `添加、拖放或在输入框按 Ctrl+V 粘贴图片（最多 ${MAX_IMAGE_DRAFTS} 张）`
             : supportsImageInput
               ? 'Agent 工作中；图片消息不能排队或立即插话'
               : '当前模型不支持识图；请切换到带“图片”标记的模型'
@@ -137,20 +150,34 @@ export function ImagePickerButton({
 }
 
 export function UserImageGallery({ attachments }: { attachments?: readonly ImageAttachment[] }) {
+  const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
   if (!attachments?.length) return null
   return (
-    <div className="mb-2 flex flex-wrap gap-2">
-      {attachments.map((attachment) => (
-        <img
-          key={attachment.id}
-          src={`whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`}
-          alt={attachment.name}
-          title={`${attachment.name} · ${attachment.width}×${attachment.height}`}
-          loading="lazy"
-          className="max-h-56 max-w-72 rounded border border-neutral-300 bg-white object-contain"
-        />
-      ))}
-    </div>
+    <>
+      <div className="mb-2 flex flex-wrap gap-2">
+        {attachments.map((attachment) => {
+          const src = `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`
+          const details = `${attachment.width}×${attachment.height} · ${formatBytes(attachment.byteLength)}`
+          return (
+            <button
+              key={attachment.id}
+              type="button"
+              className="cursor-zoom-in rounded border border-neutral-300 bg-white p-0.5"
+              onClick={() => setPreview({ src, name: attachment.name, details })}
+              title={`${attachment.name} · ${details} · 点击查看原图`}
+            >
+              <img
+                src={src}
+                alt={attachment.name}
+                loading="lazy"
+                className="max-h-56 max-w-72 object-contain"
+              />
+            </button>
+          )
+        })}
+      </div>
+      <ImagePreviewDialog target={preview} onClose={() => setPreview(null)} />
+    </>
   )
 }
 
@@ -196,7 +223,7 @@ function appendImageDrafts(current: readonly ImageDraft[], files: readonly File[
       result.duplicateOrLimit++
       continue
     }
-    if (!path && !supportsInlineImage(file)) {
+    if (!supportsImageFile(file)) {
       result.unsupported++
       continue
     }
@@ -225,7 +252,13 @@ function getLocalPath(file: File): string {
   }
 }
 
-function supportsInlineImage(file: File): boolean {
-  return INLINE_IMAGE_TYPES.has(file.type.toLowerCase())
+function supportsImageFile(file: File): boolean {
+  return SUPPORTED_IMAGE_TYPES.has(file.type.toLowerCase())
     || /\.(?:png|jpe?g|webp)$/i.test(file.name)
+}
+
+function formatBytes(bytes: number): string {
+  return bytes < 1_000_000
+    ? `${(bytes / 1_000).toFixed(1)} KB`
+    : `${(bytes / 1_000_000).toFixed(2)} MB`
 }

@@ -23,6 +23,7 @@ const STEP_SCOPED_EVENTS = new Set<CoreEvent['type']>([
   'tool-start',
   'tool-progress',
   'tool-end',
+  'image-viewed',
   'checkpoint-created',
   'checkpoint-disabled',
   'task-plan-updated',

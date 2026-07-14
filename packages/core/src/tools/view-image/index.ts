@@ -30,12 +30,14 @@ export function createViewImageTool(options: {
         [{ kind: 'path', path: absolute }],
         options.attachmentDirectory,
         options.sessionId,
+        ctx.abortSignal,
       )
       const attachment = attachments[0]!
       try {
         const prepared = await prepareImageAttachmentForModel(
           options.attachmentDirectory,
           attachment,
+          ctx.abortSignal,
         )
         const rendition = prepared.optimized
           ? `模型副本 ${prepared.width}×${prepared.height}、${formatBytes(prepared.bytes.byteLength)}、${prepared.mediaType}`

@@ -5,13 +5,14 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
+import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { VIEW_IMAGE_TOOL_NAME } from '../tools/view-image/index.ts'
 import { AgentSession } from './session.ts'
 
 const ONE_PIXEL_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2Z3sAAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
   'base64',
 )
 
@@ -34,8 +35,18 @@ describe('ViewImage Agent 链路', () => {
           return finalStep('图片已读取。')
         },
       })
-      const session = createSession(visualModel, journal, projectDir, true)
+      const events: CoreEvent[] = []
+      const session = createSession(
+        visualModel,
+        journal,
+        projectDir,
+        true,
+        (event) => events.push(event),
+      )
       assert.equal(await session.handleUserMessage('请查看项目截图'), 'completed')
+      const viewed = events.filter((event) => event.type === 'image-viewed')
+      assert.equal(viewed.length, 1)
+      assert.equal(viewed[0]?.type === 'image-viewed' ? viewed[0].attachments[0]?.name : '', 'screen.png')
 
       const transcript = await readFile(
         join(sessionRoot, journal.sessionId, 'transcript.jsonl'),
@@ -147,13 +158,14 @@ function createSession(
   recorder: Awaited<ReturnType<SessionStore['create']>>,
   projectDir: string,
   supportsImageInput: boolean,
+  emit: (event: CoreEvent) => void = () => {},
 ): AgentSession {
   return new AgentSession({
     model: modelEntry(model, supportsImageInput),
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir, osPlatform: 'win32' },
     sessionRecorder: recorder,
-    emit: () => {},
+    emit,
     requestApproval: async () => ({ approved: false }),
   })
 }

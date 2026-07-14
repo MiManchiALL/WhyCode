@@ -710,7 +710,7 @@ export class AgentSession {
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
         this.compactTaskContext(),
-        (messages) => this.messagesForCurrentModel(messages),
+        (messages) => this.messagesForCurrentModel(messages, signal),
       )
       this.messages = result.messages
       await this.persist((recorder) =>
@@ -786,7 +786,7 @@ export class AgentSession {
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
         this.compactTaskContext(planExecutionEngaged, turnId),
-        (messages) => this.messagesForCurrentModel(messages),
+        (messages) => this.messagesForCurrentModel(messages, abortSignal),
       )
       this.messages = result.messages
       await this.persist((recorder) =>
@@ -818,12 +818,16 @@ export class AgentSession {
     return taskContextBlock(state, continuation)
   }
 
-  private messagesForCurrentModel(messages: ModelMessage[]): Promise<ModelMessage[]> {
+  private messagesForCurrentModel(
+    messages: ModelMessage[],
+    abortSignal?: AbortSignal,
+  ): Promise<ModelMessage[]> {
     return messagesForModel(
       messages,
       this.options.model.capabilities.supportsImageInput,
       this.options.sessionRecorder?.attachmentDirectory,
       this.sessionImageAttachments(),
+      abortSignal,
     )
   }
 
@@ -865,7 +869,7 @@ export class AgentSession {
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
-        messages: await this.messagesForCurrentModel(this.messages),
+        messages: await this.messagesForCurrentModel(this.messages, stepAbort.signal),
         tools: this.buildToolSet(
           stepAbort.signal,
           planExecutionEngaged,
@@ -1270,9 +1274,11 @@ export class AgentSession {
             onProgress: (output) =>
               emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
           })
+          let viewedAttachments: readonly ImageAttachment[] = []
           if (result.attachments?.length) {
             const error = await onImageAttachments(toolCallId, result.attachments)
             if (error) result = { data: error, isError: true }
+            else if (!result.isError) viewedAttachments = result.attachments
           }
           // 记录读过的文件（压缩后重注入，防失忆）
           if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
@@ -1284,6 +1290,13 @@ export class AgentSession {
             }
           }
           await finalizeCheckpoint()
+          if (viewedAttachments.length > 0) {
+            emit({
+              type: 'image-viewed',
+              toolUseId: toolCallId,
+              attachments: [...viewedAttachments],
+            })
+          }
           emit({
             type: 'tool-end',
             toolUseId: toolCallId,

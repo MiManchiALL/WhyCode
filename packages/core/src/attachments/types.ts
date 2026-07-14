@@ -33,6 +33,8 @@ export const imageAttachmentSchema = z.object({
   name: z.string().min(1).max(255),
   storageName: imageAttachmentStorageNameSchema,
   mediaType: imageMediaTypeSchema,
+  /** 新附件必写；optional 仅用于读取图片第二阶段验收期间已产生的旧 v4 会话。 */
+  sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   byteLength: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES),
   width: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
   height: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),

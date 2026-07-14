@@ -58,6 +58,11 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   toolProgressSchema,
   toolEndSchema,
   z.object({
+    type: z.literal('image-viewed'),
+    toolUseId: z.string(),
+    attachments: imageAttachmentsSchema.min(1),
+  }),
+  z.object({
     type: z.literal('checkpoint-created'),
     toolUseId: z.string(),
     hash: z.string(),
@@ -166,6 +171,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'tool-start':
     case 'tool-progress':
     case 'tool-end':
+    case 'image-viewed':
     case 'checkpoint-created':
     case 'checkpoint-disabled':
     case 'checkpoint-restored':

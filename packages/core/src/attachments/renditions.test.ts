@@ -40,10 +40,21 @@ describe('图片模型衍生图', () => {
         await readFile(join(attachmentDirectory, attachment.storageName)),
         source,
       )
-      assert.equal((await readdir(join(attachmentDirectory, '.model-renditions'))).length, 1)
+      const cacheDirectory = join(attachmentDirectory, '.model-renditions')
+      const [cacheName] = await readdir(cacheDirectory)
+      assert.ok(cacheName)
 
       const cached = await prepareImageAttachmentForModel(attachmentDirectory, attachment)
       assert.deepEqual(cached, prepared)
+
+      const cachePath = join(cacheDirectory, cacheName)
+      const cacheBytes = await readFile(cachePath)
+      const truncated = cacheBytes.subarray(0, Math.floor(cacheBytes.byteLength / 2))
+      assert.doesNotThrow(() => inspectImage(truncated))
+      await writeFile(cachePath, truncated)
+      const regenerated = await prepareImageAttachmentForModel(attachmentDirectory, attachment)
+      assert.deepEqual(regenerated, prepared)
+      assert.deepEqual(await readFile(cachePath), prepared.bytes)
 
       const [request] = await messagesForModel(
         [createImageUserMessage('查看宽图', [attachment])],

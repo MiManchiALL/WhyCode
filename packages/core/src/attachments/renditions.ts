@@ -1,6 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { rm } from 'node:fs/promises'
 import sharp, { type Metadata } from 'sharp'
 import {
   IMAGE_ATTACHMENT_MAX_PIXELS,
@@ -13,12 +11,21 @@ import {
 import {
   attachmentPath,
   inspectImage,
-  readBoundedImageFile,
   readStoredImage,
 } from './storage.ts'
+import {
+  IMAGE_PROCESSING_TIMEOUT_SECONDS,
+  imageSha256,
+  runSharpOperation,
+  validateImageDecodes,
+} from './decoder.ts'
+import {
+  readRenditionCache,
+  removeRenditionCacheEntry,
+  removeRenditionCaches,
+  writeRenditionCache,
+} from './rendition-cache.ts'
 
-const RENDITION_DIRECTORY = '.model-renditions'
-const RENDITION_VERSION = 'v1'
 const MIN_RENDITION_DIMENSION = 256
 const MAX_RESIZE_ATTEMPTS = 5
 
@@ -39,17 +46,24 @@ interface EncodePlan {
 export async function prepareImageAttachmentForModel(
   attachmentDirectory: string,
   value: ImageAttachment,
+  abortSignal?: AbortSignal,
 ): Promise<PreparedImage> {
   const attachment = imageAttachmentSchema.parse(value)
   const stored = await readStoredImage(attachmentDirectory, attachment.storageName)
-  assertStoredMetadata(stored, attachment)
-  const cached = await readCachedRendition(attachmentDirectory, attachment)
+  const sourceDigest = imageSha256(stored.bytes)
+  assertStoredMetadata(stored, attachment, sourceDigest)
+  const legacyMetadata = attachment.sha256 === undefined
+    ? await validateImageDecodes(stored.bytes, stored, abortSignal)
+    : null
+  const cached = await readCachedRendition(
+    attachmentDirectory,
+    attachment,
+    sourceDigest,
+    abortSignal,
+  )
   if (cached) return cached
 
-  const metadata = await sharp(stored.bytes, {
-    failOn: 'warning',
-    limitInputPixels: IMAGE_ATTACHMENT_MAX_PIXELS,
-  }).metadata()
+  const metadata = legacyMetadata ?? await readImageMetadata(stored.bytes, abortSignal)
   const orientation = metadata.orientation ?? 1
   if (
     stored.bytes.byteLength <= IMAGE_MODEL_MAX_BYTES
@@ -60,8 +74,19 @@ export async function prepareImageAttachmentForModel(
     return { ...stored, optimized: false }
   }
 
-  const generated = await generateRendition(stored.bytes, stored.mediaType, metadata)
-  await writeCachedRendition(attachmentDirectory, attachment, generated.bytes)
+  const generated = await generateRendition(
+    stored.bytes,
+    stored.mediaType,
+    metadata,
+    abortSignal,
+  )
+  // 缓存只是可再生优化；缓存目录故障不能丢弃已成功生成的模型输入。
+  await writeRenditionCache(
+    attachmentDirectory,
+    attachment,
+    sourceDigest,
+    generated.bytes,
+  ).catch(() => {})
   return generated
 }
 
@@ -70,16 +95,18 @@ export async function removeImageAttachmentFiles(
   attachmentDirectory: string,
   attachments: readonly ImageAttachment[],
 ): Promise<void> {
-  await Promise.all(attachments.flatMap((attachment) => [
-    rm(attachmentPath(attachmentDirectory, attachment.storageName), { force: true }),
-    rm(renditionPath(attachmentDirectory, attachment), { force: true }),
-  ]))
+  await Promise.all([
+    ...attachments.map((attachment) =>
+      rm(attachmentPath(attachmentDirectory, attachment.storageName), { force: true })),
+    removeRenditionCaches(attachmentDirectory, attachments),
+  ])
 }
 
 async function generateRendition(
   source: Buffer,
   mediaType: ImageMediaType,
   metadata: Metadata,
+  abortSignal?: AbortSignal,
 ): Promise<PreparedImage> {
   const orientedWidth = orientationSwapsAxes(metadata.orientation) ? metadata.height : metadata.width
   const orientedHeight = orientationSwapsAxes(metadata.orientation) ? metadata.width : metadata.height
@@ -93,7 +120,7 @@ async function generateRendition(
   for (let attempt = 0; attempt < MAX_RESIZE_ATTEMPTS; attempt++) {
     let smallest: PreparedImage | null = null
     for (const plan of plans) {
-      const candidate = await encodeCandidate(source, maxDimension, plan)
+      const candidate = await encodeCandidate(source, maxDimension, plan, abortSignal)
       if (!smallest || candidate.bytes.byteLength < smallest.bytes.byteLength) {
         smallest = candidate
       }
@@ -115,6 +142,7 @@ async function encodeCandidate(
   source: Buffer,
   maxDimension: number,
   plan: EncodePlan,
+  abortSignal?: AbortSignal,
 ): Promise<PreparedImage> {
   let pipeline = sharp(source, {
     failOn: 'warning',
@@ -129,6 +157,7 @@ async function encodeCandidate(
       kernel: sharp.kernel.lanczos3,
     })
     .keepIccProfile()
+    .timeout({ seconds: IMAGE_PROCESSING_TIMEOUT_SECONDS })
 
   if (plan.format === 'png') {
     pipeline = pipeline.png({ compressionLevel: 9, adaptiveFiltering: true })
@@ -137,7 +166,11 @@ async function encodeCandidate(
   } else {
     pipeline = pipeline.webp({ quality: plan.quality, alphaQuality: 100, effort: 4 })
   }
-  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true })
+  const { data, info } = await runSharpOperation(
+    pipeline,
+    abortSignal,
+    () => pipeline.toBuffer({ resolveWithObject: true }),
+  )
   const inspected = inspectImage(data)
   if (inspected.width !== info.width || inspected.height !== info.height) {
     throw new Error('图片衍生图尺寸校验失败')
@@ -170,66 +203,48 @@ function encodePlans(mediaType: ImageMediaType, hasAlpha: boolean): EncodePlan[]
 async function readCachedRendition(
   attachmentDirectory: string,
   attachment: ImageAttachment,
+  sourceDigest: string,
+  abortSignal?: AbortSignal,
 ): Promise<PreparedImage | null> {
-  const path = renditionPath(attachmentDirectory, attachment)
-  let bytes: Buffer
-  try {
-    bytes = await readBoundedImageFile(path, IMAGE_MODEL_MAX_BYTES)
-  } catch (error) {
-    if (isNotFound(error)) return null
-    // 有 errno 的失败属于真实文件系统故障；不能伪装成缓存未命中继续执行。
-    if (errorCode(error)) throw error
-    await rm(path, { force: true }).catch(() => {})
-    return null
-  }
+  const bytes = await readRenditionCache(attachmentDirectory, attachment, sourceDigest)
+  if (!bytes) return null
   try {
     const info = inspectImage(bytes)
     if (info.width > IMAGE_MODEL_MAX_DIMENSION || info.height > IMAGE_MODEL_MAX_DIMENSION) {
       throw new Error('缓存衍生图尺寸超过上限')
     }
+    await validateImageDecodes(bytes, info, abortSignal)
     return { bytes, mediaType: info.mediaType, width: info.width, height: info.height, optimized: true }
-  } catch {
-    await rm(path, { force: true }).catch(() => {})
+  } catch (error) {
+    if (abortSignal?.aborted) throw error
+    await removeRenditionCacheEntry(
+      attachmentDirectory,
+      attachment.id,
+      sourceDigest,
+    ).catch(() => {})
     return null
   }
 }
 
-async function writeCachedRendition(
-  attachmentDirectory: string,
-  attachment: ImageAttachment,
-  bytes: Buffer,
-): Promise<void> {
-  const directory = renditionDirectory(attachmentDirectory)
-  const target = renditionPath(attachmentDirectory, attachment)
-  const temporary = join(directory, `${attachment.id}.${randomUUID()}.tmp`)
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600, flush: true })
-  try {
-    await rename(temporary, target)
-  } catch (error) {
-    if (!isAlreadyExists(error)) throw error
-  } finally {
-    await rm(temporary, { force: true }).catch(() => {})
-  }
-}
-
-function renditionDirectory(attachmentDirectory: string): string {
-  return join(resolve(attachmentDirectory), RENDITION_DIRECTORY)
-}
-
-function renditionPath(attachmentDirectory: string, attachment: ImageAttachment): string {
-  return join(renditionDirectory(attachmentDirectory), `${attachment.id}.${RENDITION_VERSION}`)
+async function readImageMetadata(bytes: Buffer, abortSignal?: AbortSignal): Promise<Metadata> {
+  const pipeline = sharp(bytes, {
+    failOn: 'warning',
+    limitInputPixels: IMAGE_ATTACHMENT_MAX_PIXELS,
+  }).timeout({ seconds: IMAGE_PROCESSING_TIMEOUT_SECONDS })
+  return runSharpOperation(pipeline, abortSignal, () => pipeline.metadata())
 }
 
 function assertStoredMetadata(
   stored: { bytes: Buffer; mediaType: ImageMediaType; width: number; height: number },
   attachment: ImageAttachment,
+  sourceDigest: string,
 ): void {
   if (
     stored.mediaType !== attachment.mediaType
     || stored.bytes.byteLength !== attachment.byteLength
     || stored.width !== attachment.width
     || stored.height !== attachment.height
+    || (attachment.sha256 !== undefined && sourceDigest !== attachment.sha256)
   ) {
     throw new Error(`图片附件元数据与磁盘文件不一致：${attachment.storageName}`)
   }
@@ -237,18 +252,4 @@ function assertStoredMetadata(
 
 function orientationSwapsAxes(orientation: number | undefined): boolean {
   return orientation !== undefined && orientation >= 5 && orientation <= 8
-}
-
-function isNotFound(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
-}
-
-function isAlreadyExists(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST')
-}
-
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-    ? error.code
-    : undefined
 }

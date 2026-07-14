@@ -89,7 +89,7 @@ describe('用户可见事件契约', () => {
         sessionId: '11111111-1111-4111-8111-111111111111',
         name: 'screen.png',
         storageName: '22222222-2222-4222-8222-222222222222.png',
-        mediaType: 'image/png',
+        mediaType: 'image/png' as const,
         byteLength: 68,
         width: 1,
         height: 1,
@@ -102,6 +102,25 @@ describe('用户可见事件契约', () => {
     })
     assert.doesNotMatch(JSON.stringify(parsed), /base64/)
     assert.equal(viewEventSchema.safeParse({ ...event, startsTurn: false }).success, false)
+
+    const viewed = viewEventSchema.parse({
+      type: 'core-event',
+      event: {
+        type: 'image-viewed',
+        toolUseId: 'view-image-1',
+        attachments: [{ ...event.attachments[0], base64: 'forbidden' }],
+      },
+    })
+    assert.match(JSON.stringify(viewed), /image-viewed/)
+    assert.doesNotMatch(JSON.stringify(viewed), /base64|forbidden/)
+    assert.deepEqual(
+      toViewEvent({
+        type: 'image-viewed',
+        toolUseId: 'view-image-1',
+        attachments: event.attachments,
+      }),
+      viewed,
+    )
   })
 })
 

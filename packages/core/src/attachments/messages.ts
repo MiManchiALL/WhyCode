@@ -54,6 +54,7 @@ export async function hydrateImageMessages(
   messages: readonly ModelMessage[],
   attachmentDirectory: string,
   attachmentMetadata?: readonly ImageAttachment[],
+  abortSignal?: AbortSignal,
 ): Promise<ModelMessage[]> {
   const metadataByStorageName = indexAttachmentMetadata(attachmentMetadata ?? [])
   const hydrated: ModelMessage[] = []
@@ -77,7 +78,11 @@ export async function hydrateImageMessages(
       const expected = metadataByStorageName.get(storageName)
       if (!expected) throw new Error('图片附件引用缺少权威元数据')
       if (expected.mediaType !== part.mediaType) throw new Error('图片附件媒体类型不一致')
-      const prepared = await prepareImageAttachmentForModel(attachmentDirectory, expected)
+      const prepared = await prepareImageAttachmentForModel(
+        attachmentDirectory,
+        expected,
+        abortSignal,
+      )
       content.push({
         ...part,
         data: prepared.bytes.toString('base64'),
@@ -95,11 +100,17 @@ export async function messagesForModel(
   supportsImageInput: boolean,
   attachmentDirectory?: string,
   attachmentMetadata?: readonly ImageAttachment[],
+  abortSignal?: AbortSignal,
 ): Promise<ModelMessage[]> {
   if (supportsImageInput) {
     if (!hasStoredImageReferences(messages)) return [...messages]
     if (!attachmentDirectory) throw new Error('视觉模型请求缺少会话附件目录')
-    return hydrateImageMessages(messages, attachmentDirectory, attachmentMetadata)
+    return hydrateImageMessages(
+      messages,
+      attachmentDirectory,
+      attachmentMetadata,
+      abortSignal,
+    )
   }
   return messages.map((message) => {
     if (message.role !== 'user' || typeof message.content === 'string') return message
