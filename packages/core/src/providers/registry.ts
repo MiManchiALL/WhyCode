@@ -29,7 +29,7 @@ export interface ModelEntry {
   /** WhyCode 内部模型 ID，格式 provider:model */
   id: string
   displayName: string
-  provider: 'anthropic' | 'deepseek' | 'openai' | 'zhipu'
+  provider: 'anthropic' | 'deepseek' | 'mimo' | 'openai' | 'zhipu'
   capabilities: ModelCapabilities
   /** 创建 AI SDK LanguageModel 实例 */
   create: (config: ProviderConfig) => LanguageModel
@@ -81,6 +81,28 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       createDeepSeek({ apiKey: config.apiKey, baseURL: config.baseURL })(
         'deepseek-v4-flash',
       ),
+  },
+  {
+    id: 'mimo:mimo-v2.5',
+    displayName: 'MiMo V2.5',
+    provider: 'mimo',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'none',
+      structuredOutput: 'json-object',
+      promptCaching: 'auto',
+      contextWindow: 1_048_576,
+      maxOutput: 131_072,
+    },
+    // thinking 工具多轮要求完整回传 reasoning_content；首版关闭以保持现有历史协议稳定。
+    providerOptions: { mimo: { thinking: { type: 'disabled' } } },
+    create: (config) =>
+      createOpenAICompatible({
+        name: 'mimo',
+        apiKey: config.apiKey,
+        baseURL: config.baseURL ?? 'https://api.xiaomimimo.com/v1',
+      })('mimo-v2.5'),
   },
   {
     id: 'zhipu:glm-5v-turbo',

@@ -11,7 +11,8 @@ import { getModelEntry, MODEL_REGISTRY } from '@whycode/core'
  * {
  *   "providers": {
  *     "anthropic": { "apiKey": "sk-...", "baseURL": "可选" },
- *     "deepseek": { "apiKey": "sk-..." }
+ *     "deepseek": { "apiKey": "sk-..." },
+ *     "mimo": { "apiKey": "sk-...", "baseURL": "可选" }
  *   },
  *   "defaultModel": "anthropic:claude-sonnet-4-6",
  *   "consensusAgents": {                          // M3：协商评审员 B/C（Main 永远 = 顶栏当前模型）
