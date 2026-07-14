@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import { readStoredImage } from './storage.ts'
+import { prepareImageAttachmentForModel } from './renditions.ts'
 import {
   imageAttachmentSchema,
   imageAttachmentStorageNameSchema,
@@ -15,7 +15,21 @@ export function createImageUserMessage(
   return buildImageUserMessage(text, attachments.map((attachment) => ({
     attachment,
     data: attachmentReference(attachment.storageName),
-  })))
+  })), (attachment, index) => `[图片 ${index + 1}：${attachment.name}]`)
+}
+
+/** 图片工具的内部模型消息；不进入用户可见时间线。 */
+export function createImageToolResultMessage(
+  attachments: readonly ImageAttachment[],
+): ModelMessage {
+  return buildImageUserMessage(
+    '以下图片由 ViewImage 工具从本地文件读取，仅作为刚才工具调用的视觉结果。',
+    attachments.map((attachment) => ({
+      attachment,
+      data: attachmentReference(attachment.storageName),
+    })),
+    (attachment, index) => `[ViewImage 结果 ${index + 1}：${attachment.name}]`,
+  )
 }
 
 export function dehydrateImageMessages(messages: readonly ModelMessage[]): ModelMessage[] {
@@ -41,9 +55,7 @@ export async function hydrateImageMessages(
   attachmentDirectory: string,
   attachmentMetadata?: readonly ImageAttachment[],
 ): Promise<ModelMessage[]> {
-  const metadataByStorageName = attachmentMetadata
-    ? indexAttachmentMetadata(attachmentMetadata)
-    : null
+  const metadataByStorageName = indexAttachmentMetadata(attachmentMetadata ?? [])
   const hydrated: ModelMessage[] = []
   for (const message of messages) {
     if (message.role !== 'user' || typeof message.content === 'string') {
@@ -62,19 +74,15 @@ export async function hydrateImageMessages(
         continue
       }
       if (part.filename !== storageName) throw new Error('图片附件引用与文件名不一致')
-      const expected = metadataByStorageName?.get(storageName)
-      if (metadataByStorageName && !expected) throw new Error('图片附件引用缺少权威元数据')
-      const stored = await readStoredImage(attachmentDirectory, storageName)
-      if (stored.mediaType !== part.mediaType) throw new Error('图片附件媒体类型不一致')
-      if (expected && (
-        stored.bytes.byteLength !== expected.byteLength
-        || stored.width !== expected.width
-        || stored.height !== expected.height
-        || stored.mediaType !== expected.mediaType
-      )) {
-        throw new Error(`图片附件元数据与磁盘文件不一致：${storageName}`)
-      }
-      content.push({ ...part, data: stored.bytes.toString('base64') })
+      const expected = metadataByStorageName.get(storageName)
+      if (!expected) throw new Error('图片附件引用缺少权威元数据')
+      if (expected.mediaType !== part.mediaType) throw new Error('图片附件媒体类型不一致')
+      const prepared = await prepareImageAttachmentForModel(attachmentDirectory, expected)
+      content.push({
+        ...part,
+        data: prepared.bytes.toString('base64'),
+        mediaType: prepared.mediaType,
+      })
     }
     hydrated.push({ ...message, content })
   }
@@ -144,13 +152,14 @@ function hasStoredImageReferences(messages: readonly ModelMessage[]): boolean {
 function buildImageUserMessage(
   text: string,
   entries: readonly { attachment: ImageAttachment; data: string }[],
+  label: (attachment: ImageAttachment, index: number) => string,
 ): ModelMessage {
   return {
     role: 'user',
     content: [
       { type: 'text', text },
       ...entries.flatMap(({ attachment, data }, index) => [
-        { type: 'text' as const, text: `[图片 ${index + 1}：${attachment.name}]` },
+        { type: 'text' as const, text: label(attachment, index) },
         {
           type: 'file' as const,
           data,

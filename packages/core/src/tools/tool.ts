@@ -1,4 +1,5 @@
 import type { z } from 'zod'
+import type { ImageAttachment } from '../attachments/types.ts'
 
 /**
  * WhyCode 工具接口。Zod schema 为单一事实源：类型推导 + 运行时校验 + JSON Schema 派生。
@@ -55,6 +56,8 @@ export interface ToolResult {
   /** 回传给模型的内容 */
   data: string
   isError: boolean
+  /** 工具新导入的会话图片；由 AgentSession 在稳定 step 中注入并持久化。 */
+  attachments?: readonly ImageAttachment[]
 }
 
 const CONSERVATIVE_DEFAULTS = {

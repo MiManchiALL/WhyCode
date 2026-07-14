@@ -85,10 +85,22 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   type: z.literal('messages'),
   turnId: z.string().min(1),
   messages: messagesSchema,
+  /** 本 step 由图片工具导入的会话附件；图片字节仍只位于 attachments/。 */
+  attachments: imageAttachmentsSchema.optional(),
   /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
   taskState: taskPlanStateSchema.optional(),
   /** 本批稳定提交后的 execution run：省略表示不变，null 表示解除接合。 */
   engagedPlanId: z.string().uuid().nullable().optional(),
+}).superRefine((entry, ctx) => {
+  entry.attachments?.forEach((attachment, index) => {
+    if (attachment.sessionId !== entry.sessionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['attachments', index, 'sessionId'],
+        message: '附件必须属于当前会话',
+      })
+    }
+  })
 })
 
 const turnEndSchema = chainedEntrySchema.extend({
@@ -225,6 +237,8 @@ export interface LoadedSession {
   metadata: SessionMetadata
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
+  /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
+  imageAttachments: ImageAttachment[]
   turnStartMessages: Map<string, ModelMessage[]>
   turnStartTaskStates: Map<string, TaskPlanState>
   entries: SessionEntry[]
@@ -247,6 +261,7 @@ export interface SessionRecorder {
   readonly attachmentDirectory: string
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
+  readonly initialImageAttachments: readonly ImageAttachment[]
   readonly interruptedTurnId: string | null
   readonly undeliveredUserInputIds: readonly string[]
   readonly interruptedConsensusTaskId: string | null
@@ -272,6 +287,7 @@ export interface SessionRecorder {
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
     engagedPlanId?: string | null,
+    attachments?: readonly ImageAttachment[],
   ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>
   recordSnapshot(

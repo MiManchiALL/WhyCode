@@ -213,7 +213,7 @@ function formatDraftError(result: AppendDraftResult): string | null {
   const details: string[] = []
   if (result.duplicateOrLimit) details.push(`重复或超过 ${MAX_IMAGE_DRAFTS} 张：${result.duplicateOrLimit} 张`)
   if (result.unsupported) details.push(`非 PNG/JPEG/WebP：${result.unsupported} 张`)
-  if (result.invalidSize) details.push(`为空或超过 3.75 MB：${result.invalidSize} 张`)
+  if (result.invalidSize) details.push(`为空或超过 20 MB：${result.invalidSize} 张`)
   return details.length ? `部分图片未添加（${details.join('；')}）` : null
 }
 

@@ -88,10 +88,12 @@ export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
 export { validateSessionId } from './session/metadata.ts'
 export {
-  IMAGE_ATTACHMENT_MAX_BYTES,
   IMAGE_ATTACHMENT_MAX_COUNT,
   IMAGE_ATTACHMENT_MAX_DIMENSION,
   IMAGE_ATTACHMENT_MAX_PIXELS,
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+  IMAGE_MODEL_MAX_BYTES,
+  IMAGE_MODEL_MAX_DIMENSION,
   imageAttachmentSchema,
   imageAttachmentsSchema,
   imageAttachmentStorageNameSchema,

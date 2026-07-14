@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import {
-  IMAGE_ATTACHMENT_MAX_BYTES,
   IMAGE_ATTACHMENT_MAX_COUNT,
   IMAGE_ATTACHMENT_MAX_DIMENSION,
   IMAGE_ATTACHMENT_MAX_PIXELS,
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
   imageAttachmentSchema,
   imageAttachmentStorageNameSchema,
   type ImageAttachment,
@@ -38,16 +38,17 @@ export async function importImageAttachments(
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const written: string[] = []
   const attachments: ImageAttachment[] = []
-  const seenBytes: Buffer[] = []
+  const seenDigests = new Set<string>()
   try {
     for (const source of sources) {
       const bytes = source.kind === 'path'
-        ? await readBoundedFile(source.path)
+        ? await readBoundedImageFile(source.path)
         : decodeInlineImage(source)
-      if (seenBytes.some((seen) => seen.equals(bytes))) {
+      const digest = createHash('sha256').update(bytes).digest('hex')
+      if (seenDigests.has(digest)) {
         throw new Error('同一张图片不能重复添加')
       }
-      seenBytes.push(bytes)
+      seenDigests.add(digest)
       const info = inspectImage(bytes)
       const id = randomUUID()
       const storageName = `${id}.${info.extension}`
@@ -78,7 +79,7 @@ export async function readStoredImage(
   attachmentDirectory: string,
   storageName: string,
 ): Promise<{ bytes: Buffer; mediaType: ImageMediaType; width: number; height: number }> {
-  const bytes = await readBoundedFile(attachmentPath(attachmentDirectory, storageName))
+  const bytes = await readBoundedImageFile(attachmentPath(attachmentDirectory, storageName))
   const info = inspectImage(bytes)
   if (info.extension !== storageName.slice(storageName.lastIndexOf('.') + 1).toLowerCase()) {
     throw new Error(`图片附件格式与存储名不一致：${storageName}`)
@@ -138,14 +139,17 @@ export function inspectImage(bytes: Buffer): ImageInfo {
   return info
 }
 
-async function readBoundedFile(path: string): Promise<Buffer> {
+export async function readBoundedImageFile(
+  path: string,
+  maxBytes = IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+): Promise<Buffer> {
   const file = await open(path, 'r')
   try {
     const stat = await file.stat()
     if (!stat.isFile()) throw new Error(`附件不是普通文件：${path}`)
     if (stat.size <= 0) throw new Error(`图片文件为空：${path}`)
-    if (stat.size > IMAGE_ATTACHMENT_MAX_BYTES) {
-      throw new Error(`图片不能超过 ${(IMAGE_ATTACHMENT_MAX_BYTES / 1_000_000).toFixed(2)} MB：${basename(path)}`)
+    if (stat.size > maxBytes) {
+      throw new Error(`图片不能超过 ${(maxBytes / 1_000_000).toFixed(2)} MB：${basename(path)}`)
     }
     const bytes = Buffer.alloc(Number(stat.size))
     let offset = 0
@@ -164,7 +168,7 @@ function decodeInlineImage(input: Extract<ImageAttachmentInput, { kind: 'inline'
   if (!input || typeof input.name !== 'string' || typeof input.base64 !== 'string') {
     throw new Error('内存图片数据无效')
   }
-  const maxBase64Length = 4 * Math.ceil(IMAGE_ATTACHMENT_MAX_BYTES / 3)
+  const maxBase64Length = 4 * Math.ceil(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES / 3)
   if (
     input.base64.length === 0
     || input.base64.length > maxBase64Length
@@ -177,8 +181,8 @@ function decodeInlineImage(input: Extract<ImageAttachmentInput, { kind: 'inline'
   if (bytes.toString('base64') !== input.base64) {
     throw new Error('内存图片编码无效或超过大小上限')
   }
-  if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_ATTACHMENT_MAX_BYTES) {
-    throw new Error(`图片不能超过 ${(IMAGE_ATTACHMENT_MAX_BYTES / 1_000_000).toFixed(2)} MB`)
+  if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_ATTACHMENT_MAX_SOURCE_BYTES) {
+    throw new Error(`图片不能超过 ${(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES / 1_000_000).toFixed(2)} MB`)
   }
   return bytes
 }

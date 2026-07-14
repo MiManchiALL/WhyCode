@@ -2,11 +2,15 @@ import { z } from 'zod'
 
 /** 单条消息最多携带的图片数；与桌面选择器和持久化 schema 共用。 */
 export const IMAGE_ATTACHMENT_MAX_COUNT = 4
-/** 避免 Base64 膨胀后把单张图片请求推到常见 5 MB 上限之外。 */
-export const IMAGE_ATTACHMENT_MAX_BYTES = 3_750_000
-/** 不在 Core 引入图像处理依赖；用像素边界拒绝解压炸弹。 */
+/** 会话允许保存的原图上限；模型请求使用更小的衍生图边界。 */
+export const IMAGE_ATTACHMENT_MAX_SOURCE_BYTES = 20_000_000
+/** 避免 Base64 膨胀后把单张模型输入推到常见 5 MB 上限之外。 */
+export const IMAGE_MODEL_MAX_BYTES = 3_750_000
+/** 原图解码安全边界，用于拒绝像素炸弹。 */
 export const IMAGE_ATTACHMENT_MAX_DIMENSION = 8_192
 export const IMAGE_ATTACHMENT_MAX_PIXELS = 20_000_000
+/** 当前已验通视觉 Provider 共用的请求级最长边。 */
+export const IMAGE_MODEL_MAX_DIMENSION = 2_048
 
 /** 宿主交付的有序图片来源；inline Base64 只允许在落盘边界短暂存在。 */
 export type ImageAttachmentInput =
@@ -29,7 +33,7 @@ export const imageAttachmentSchema = z.object({
   name: z.string().min(1).max(255),
   storageName: imageAttachmentStorageNameSchema,
   mediaType: imageMediaTypeSchema,
-  byteLength: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_BYTES),
+  byteLength: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES),
   width: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
   height: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
 }).superRefine((attachment, ctx) => {

@@ -17,11 +17,20 @@ import {
   findPendingTurnAbortedIndex,
 } from '../session/interruption.ts'
 import {
+  createImageToolResultMessage,
   createImageUserMessage,
+  dehydrateImageMessages,
   messagesForModel,
 } from '../attachments/messages.ts'
-import type { ImageAttachment } from '../attachments/types.ts'
+import {
+  IMAGE_ATTACHMENT_MAX_COUNT,
+  imageAttachmentSchema,
+  imageAttachmentsSchema,
+  type ImageAttachment,
+} from '../attachments/types.ts'
+import { removeImageAttachmentFiles } from '../attachments/renditions.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
+import { createViewImageTool } from '../tools/view-image/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
@@ -143,6 +152,8 @@ export class AgentSession {
   private compactFailures = 0
   /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
   private recentReadFiles = new Map<string, number>()
+  /** 用户输入与图片工具导入的权威附件元数据；长期消息只保存其稳定引用。 */
+  private imageAttachments = new Map<string, ImageAttachment>()
   /** 持久化失败后本会话降级内存模式，避免每个 step 重复报错 */
   private persistenceFailed = false
   /** 正式协议回合只通过结构化事件展示结果，避免内部候选文本混入最终回答。 */
@@ -159,6 +170,7 @@ export class AgentSession {
   constructor(options: AgentSessionOptions) {
     this.options = options
     this.messages = [...(options.sessionRecorder?.initialMessages ?? [])]
+    this.addImageAttachments(options.sessionRecorder?.initialImageAttachments ?? [])
     this.permissions = createPermissionContext(
       options.promptContext.projectDir,
       options.promptContext.discussion,
@@ -276,6 +288,7 @@ export class AgentSession {
     if (imageAttachments.length > 0) {
       if (this.isBusy) throw new Error('图片消息不能在 Agent 工作中排队或立即插话')
       if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
+      this.addImageAttachments(imageAttachments)
       return this.startTurn([createImageUserMessage(text, imageAttachments)])
     }
     return this.handleMessage(text, urgent)
@@ -815,8 +828,7 @@ export class AgentSession {
   }
 
   private sessionImageAttachments(): ImageAttachment[] {
-    return (this.options.sessionRecorder?.initialViewEvents ?? []).flatMap((event) =>
-      event.type === 'user-message' ? event.attachments ?? [] : [])
+    return [...this.imageAttachments.values()]
   }
 
   /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
@@ -844,6 +856,10 @@ export class AgentSession {
       taskPlanEngagement: null,
     }
     let userQuestion: UserQuestion | null = null
+    const toolCallOrder: string[] = []
+    const stepImageAttachments = new Map<string, ImageAttachment[]>()
+    let stepImageAttachmentCount = 0
+    let attachmentsCommitted = false
     this.taskPlan?.beginStep()
     try {
       const result = streamText({
@@ -856,6 +872,26 @@ export class AgentSession {
           (action) => { stepControl.taskPlanEngagement = action },
           (question) => { userQuestion = question },
           (reason) => { stepControl.toolEndReason = reason },
+          async (toolCallId, attachments) => {
+            const parsed = imageAttachmentsSchema.safeParse(attachments)
+            if (
+              !parsed.success
+              || parsed.data.some((attachment) =>
+                attachment.sessionId !== this.options.sessionRecorder?.sessionId)
+            ) {
+              return '图片工具返回了无效或不属于当前会话的附件'
+            }
+            if (stepImageAttachmentCount + parsed.data.length > IMAGE_ATTACHMENT_MAX_COUNT) {
+              await removeImageAttachmentFiles(
+                this.options.sessionRecorder!.attachmentDirectory,
+                parsed.data,
+              ).catch(() => {})
+              return `单个模型步骤最多查看 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片，请下一步继续`
+            }
+            stepImageAttachmentCount += parsed.data.length
+            stepImageAttachments.set(toolCallId, parsed.data)
+            return null
+          },
         ),
         stopWhen: stepCountIs(1),
         providerOptions: this.options.model.providerOptions,
@@ -892,6 +928,7 @@ export class AgentSession {
             break
           case 'tool-call':
             hadToolCalls = true
+            toolCallOrder.push(part.toolCallId)
             break
           case 'finish':
             usage.inputTokens += part.totalUsage.inputTokens ?? 0
@@ -938,19 +975,31 @@ export class AgentSession {
           questionResumesTaskPlan,
         ))
       }
-      const committedMessages = [...response.messages, ...internalMarkers]
+      const orderedImageAttachments = toolCallOrder.flatMap((toolCallId) =>
+        stepImageAttachments.get(toolCallId) ?? [])
+      const toolImageMessages = orderedImageAttachments.length > 0
+        ? [createImageToolResultMessage(orderedImageAttachments)]
+        : []
+      const committedMessages = dehydrateImageMessages([
+        ...response.messages,
+        ...toolImageMessages,
+        ...internalMarkers,
+      ])
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null
         : stepControl.taskPlanEngagement?.planId
       this.messages.push(...committedMessages)
+      attachmentsCommitted = true
       await this.persist((recorder) =>
         recorder.recordStep(
           this.activeTurn!.id,
           committedMessages,
           taskPlanCommit?.state,
           engagementUpdate,
+          orderedImageAttachments,
         ),
       )
+      this.addImageAttachments(orderedImageAttachments)
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         emit({ type: 'user-question', question: userQuestion })
       }
@@ -976,6 +1025,12 @@ export class AgentSession {
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
       }
     } catch (error) {
+      if (!attachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
+        await removeImageAttachmentFiles(
+          this.options.sessionRecorder.attachmentDirectory,
+          [...stepImageAttachments.values()].flat(),
+        ).catch(() => {})
+      }
       this.taskPlan?.discardStep()
       emit({ type: 'step-discarded' })
       if (
@@ -1012,6 +1067,10 @@ export class AgentSession {
     onTaskPlanEngagement: (action: TaskPlanEngagementAction) => void,
     onUserQuestion: (question: UserQuestion) => void,
     onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
+    onImageAttachments: (
+      toolCallId: string,
+      attachments: readonly ImageAttachment[],
+    ) => Promise<string | null>,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
@@ -1043,8 +1102,19 @@ export class AgentSession {
       ...questionTools,
       ...mainTools,
     ]
+    const imageTools: ToolDefinition[] =
+      projectDir
+      && this.options.model.capabilities.supportsImageInput
+      && this.options.sessionRecorder
+      && !this.options.promptContext.discussion
+      && !this.protocolRound
+        ? [createViewImageTool({
+            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+            sessionId: this.options.sessionRecorder.sessionId,
+          })]
+        : []
     const availableDefs: ToolDefinition[] = projectDir
-      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...controlTools]
+      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...imageTools, ...controlTools]
       : controlTools.filter((tool) => tool.availableWithoutProject)
     const defs = availableDefs
     const toolProjectDir =
@@ -1195,11 +1265,15 @@ export class AgentSession {
         }
 
         try {
-          const result = await def.execute(parsed.data, {
+          let result = await def.execute(parsed.data, {
             ...toolCtx,
             onProgress: (output) =>
               emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
           })
+          if (result.attachments?.length) {
+            const error = await onImageAttachments(toolCallId, result.attachments)
+            if (error) result = { data: error, isError: true }
+          }
           // 记录读过的文件（压缩后重注入，防失忆）
           if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
             try {
@@ -1362,6 +1436,23 @@ export class AgentSession {
   ): void {
     this.restoringCheckpointToolUseId = null
     this.options.emit(event)
+  }
+
+  private addImageAttachments(values: readonly ImageAttachment[]): void {
+    for (const value of values) {
+      const attachment = imageAttachmentSchema.parse(value)
+      if (
+        this.options.sessionRecorder
+        && attachment.sessionId !== this.options.sessionRecorder.sessionId
+      ) {
+        throw new Error('图片附件不属于当前会话')
+      }
+      const previous = this.imageAttachments.get(attachment.storageName)
+      if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+        throw new Error(`同一图片附件存在冲突元数据：${attachment.storageName}`)
+      }
+      this.imageAttachments.set(attachment.storageName, attachment)
+    }
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */

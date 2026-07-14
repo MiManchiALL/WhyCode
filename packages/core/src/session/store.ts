@@ -86,6 +86,7 @@ export class SessionStore {
       start.uuid,
       [],
       [],
+      [],
       new Map(),
       new Map(),
       null,
@@ -143,6 +144,7 @@ export class SessionStore {
       loaded.leafUuid,
       loaded.messages,
       loaded.viewEvents,
+      loaded.imageAttachments,
       loaded.turnStartMessages,
       loaded.turnStartTaskStates,
       loaded.interruptedTurnId,
@@ -271,6 +273,7 @@ export class SessionJournal implements SessionRecorder {
   private leafUuid: string
   private messages: ModelMessage[]
   private viewEvents: ViewEvent[]
+  private imageAttachments: ImageAttachment[]
   private turnStartMessages: Map<string, ModelMessage[]>
   private turnStartTaskStates: Map<string, TaskPlanState>
   private activeTurnId: string | null
@@ -290,6 +293,7 @@ export class SessionJournal implements SessionRecorder {
     leafUuid: string,
     messages: ModelMessage[],
     viewEvents: ViewEvent[],
+    imageAttachments: ImageAttachment[],
     turnStartMessages: Map<string, ModelMessage[]>,
     turnStartTaskStates: Map<string, TaskPlanState>,
     interruptedTurnId: string | null,
@@ -308,6 +312,7 @@ export class SessionJournal implements SessionRecorder {
     this.leafUuid = leafUuid
     this.messages = [...messages]
     this.viewEvents = [...viewEvents]
+    this.imageAttachments = [...imageAttachments]
     this.turnStartMessages = new Map(
       [...turnStartMessages].map(([turnId, messages]) => [turnId, structuredClone(messages)]),
     )
@@ -364,6 +369,10 @@ export class SessionJournal implements SessionRecorder {
     return this.viewEvents
   }
 
+  get initialImageAttachments(): readonly ImageAttachment[] {
+    return this.imageAttachments
+  }
+
   get interruptedTurnId(): string | null {
     return this.activeTurnId
   }
@@ -401,6 +410,7 @@ export class SessionJournal implements SessionRecorder {
         ...(attachments.length ? { attachments } : {}),
       })
       await this.appendEntries([input])
+      this.imageAttachments.push(...attachments)
       if (input.type === 'user-input' && input.startsTurn) {
         this.undeliveredUserInputIdSet.add(input.uuid)
         this.viewEvents.push({
@@ -470,17 +480,20 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
     engagedPlanId?: string | null,
+    attachments: readonly ImageAttachment[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
       const batch = this.entry({
         type: 'messages',
         turnId,
         messages: dehydrateImageMessages(messages),
+        ...(attachments.length ? { attachments } : {}),
         ...(taskState !== undefined ? { taskState } : {}),
         ...(engagedPlanId !== undefined ? { engagedPlanId } : {}),
       })
       await this.appendEntries([batch])
       this.messages.push(...messages)
+      this.imageAttachments.push(...attachments)
       if (taskState !== undefined) this.taskState = cloneTaskPlanState(taskState)
       if (engagedPlanId !== undefined) this.activeTurnEngagedPlanId = engagedPlanId
       this.metadata.updatedAt = batch.timestamp
@@ -861,8 +874,7 @@ async function validateLoadedSessionAttachments(
   await validateStoredImageAttachments(
     attachmentDirectory,
     loaded.metadata.sessionId,
-    loaded.viewEvents.flatMap((event) =>
-      event.type === 'user-message' ? event.attachments ?? [] : []),
+    loaded.imageAttachments,
   )
   return loaded
 }

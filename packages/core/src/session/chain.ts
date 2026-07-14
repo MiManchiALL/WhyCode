@@ -62,6 +62,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     ? work.interruptedConsensusBaseTaskState ?? emptyTaskPlanState()
     : collectTaskState(chain)
   const viewEvents = collectViewEvents(entries)
+  const imageAttachments = collectImageAttachments(entries)
   reconcileTaskPlanView(viewEvents, taskState)
   const pendingUserQuestion = findPendingUserQuestion(messages)
   if (
@@ -101,6 +102,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     entries,
     messages,
     viewEvents,
+    imageAttachments,
     turnStartMessages: turnStarts.messages,
     turnStartTaskStates: turnStarts.taskStates,
     leafUuid: last.uuid,
@@ -125,6 +127,24 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       status,
     },
   }
+}
+
+function collectImageAttachments(entries: SessionEntry[]): ImageAttachment[] {
+  const attachments = new Map<string, { serialized: string; value: ImageAttachment }>()
+  for (const entry of entries) {
+    const values = entry.type === 'user-input' || entry.type === 'messages'
+      ? entry.attachments ?? []
+      : []
+    for (const value of values) {
+      const serialized = JSON.stringify(value)
+      const previous = attachments.get(value.storageName)
+      if (previous && previous.serialized !== serialized) {
+        throw new SessionCorruptError(`图片附件元数据冲突：${value.storageName}`)
+      }
+      if (!previous) attachments.set(value.storageName, { serialized, value })
+    }
+  }
+  return [...attachments.values()].map(({ value }) => value)
 }
 
 function collectTurnStarts(
