@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import {
   IMAGE_ATTACHMENT_MAX_COUNT,
@@ -15,13 +15,47 @@ import { inspectImage } from './inspection.ts'
 
 export { inspectImage } from './inspection.ts'
 
+export interface ImageAttachmentImportTransaction {
+  readonly attachments: readonly ImageAttachment[]
+  commit(): Promise<void>
+  rollback(): Promise<void>
+}
+
+export type ImageImportSource = ImageAttachmentInput | {
+  kind: 'bytes'
+  name: string
+  bytes: Uint8Array
+}
+
 export async function importImageAttachments(
-  sources: readonly ImageAttachmentInput[],
+  sources: readonly ImageImportSource[],
   attachmentDirectory: string,
   sessionId: string,
   abortSignal?: AbortSignal,
 ): Promise<ImageAttachment[]> {
-  if (sources.length === 0) return []
+  const transaction = await prepareImageAttachmentImport(
+    sources,
+    attachmentDirectory,
+    sessionId,
+    abortSignal,
+  )
+  await transaction.commit()
+  return [...transaction.attachments]
+}
+
+export async function prepareImageAttachmentImport(
+  sources: readonly ImageImportSource[],
+  attachmentDirectory: string,
+  sessionId: string,
+  abortSignal?: AbortSignal,
+): Promise<ImageAttachmentImportTransaction> {
+  if (sources.length === 0) {
+    return {
+      attachments: [],
+      commit: async () => {},
+      rollback: async () => {},
+    }
+  }
   if (sources.length > IMAGE_ATTACHMENT_MAX_COUNT) {
     throw new Error(`每条消息最多添加 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
   }
@@ -32,7 +66,8 @@ export async function importImageAttachments(
 
   const directory = resolve(attachmentDirectory)
   await mkdir(directory, { recursive: true, mode: 0o700 })
-  const written: string[] = []
+  const stagingDirectory = join(directory, `.image-import-${randomUUID()}`)
+  await mkdir(stagingDirectory, { mode: 0o700 })
   const attachments: ImageAttachment[] = []
   const seenDigests = new Set<string>()
   try {
@@ -40,7 +75,9 @@ export async function importImageAttachments(
       throwIfImageImportAborted(abortSignal)
       const bytes = source.kind === 'path'
         ? await readBoundedImageFile(source.path)
-        : decodeInlineImage(source)
+        : source.kind === 'inline'
+          ? decodeInlineImage(source)
+          : boundedImageBytes(source.bytes)
       const digest = imageSha256(bytes)
       if (seenDigests.has(digest)) {
         throw new Error('同一张图片不能重复添加')
@@ -51,9 +88,11 @@ export async function importImageAttachments(
       throwIfImageImportAborted(abortSignal)
       const id = randomUUID()
       const storageName = `${id}.${info.extension}`
-      const target = attachmentPath(directory, storageName)
-      await writeFile(target, bytes, { flag: 'wx', mode: 0o600, flush: true })
-      written.push(target)
+      await writeFile(join(stagingDirectory, storageName), bytes, {
+        flag: 'wx',
+        mode: 0o600,
+        flush: true,
+      })
       attachments.push(imageAttachmentSchema.parse({
         id,
         sessionId,
@@ -68,10 +107,68 @@ export async function importImageAttachments(
         height: info.height,
       }))
     }
-    return attachments
+    return createImportTransaction(directory, stagingDirectory, attachments)
   } catch (error) {
-    await Promise.all(written.map((path) => rm(path, { force: true }).catch(() => {})))
+    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
     throw error
+  }
+}
+
+/** 会话事实源加载完成后清除 staging 与不再被任何元数据引用的原图。 */
+export async function cleanupUnreferencedImageAttachments(
+  attachmentDirectory: string,
+  attachments: readonly ImageAttachment[],
+): Promise<void> {
+  const allowed = new Set(attachments.map((attachment) => attachment.storageName))
+  const entries = await readdir(resolve(attachmentDirectory), { withFileTypes: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    },
+  )
+  await Promise.all(entries.flatMap((entry) => {
+    const path = join(resolve(attachmentDirectory), entry.name)
+    if (entry.isDirectory() && entry.name.startsWith('.image-import-')) {
+      return [rm(path, { recursive: true, force: true })]
+    }
+    if (entry.isFile() && !allowed.has(entry.name)) return [rm(path, { force: true })]
+    return []
+  }))
+}
+
+function createImportTransaction(
+  directory: string,
+  stagingDirectory: string,
+  attachments: ImageAttachment[],
+): ImageAttachmentImportTransaction {
+  let state: 'prepared' | 'committed' | 'rolled-back' = 'prepared'
+  const committedPaths: string[] = []
+  return {
+    attachments,
+    async commit() {
+      if (state === 'committed') return
+      if (state === 'rolled-back') throw new Error('图片导入事务已回滚')
+      try {
+        for (const attachment of attachments) {
+          const target = attachmentPath(directory, attachment.storageName)
+          await rename(join(stagingDirectory, attachment.storageName), target)
+          committedPaths.push(target)
+        }
+        await rm(stagingDirectory, { recursive: true, force: true })
+        state = 'committed'
+      } catch (error) {
+        await Promise.all(committedPaths.map((path) => rm(path, { force: true }).catch(() => {})))
+        await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+        state = 'rolled-back'
+        throw error
+      }
+    },
+    async rollback() {
+      if (state === 'rolled-back') return
+      await Promise.all(committedPaths.map((path) => rm(path, { force: true }).catch(() => {})))
+      await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+      state = 'rolled-back'
+    },
   }
 }
 
@@ -177,6 +274,14 @@ function decodeInlineImage(input: Extract<ImageAttachmentInput, { kind: 'inline'
   if (bytes.toString('base64') !== input.base64) {
     throw new Error('内存图片编码无效或超过大小上限')
   }
+  if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_ATTACHMENT_MAX_SOURCE_BYTES) {
+    throw new Error(`图片不能超过 ${(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES / 1_000_000).toFixed(2)} MB`)
+  }
+  return bytes
+}
+
+function boundedImageBytes(value: Uint8Array): Buffer {
+  const bytes = Buffer.from(value)
   if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_ATTACHMENT_MAX_SOURCE_BYTES) {
     throw new Error(`图片不能超过 ${(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES / 1_000_000).toFixed(2)} MB`)
   }

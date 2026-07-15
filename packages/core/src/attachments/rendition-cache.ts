@@ -5,7 +5,7 @@ import { readBoundedImageFile } from './storage.ts'
 import { IMAGE_MODEL_MAX_BYTES, type ImageAttachment } from './types.ts'
 
 const RENDITION_DIRECTORY = '.model-renditions'
-const RENDITION_VERSION = 'v2'
+const RENDITION_VERSION = 'v3'
 const MAX_RENDITION_CACHE_BYTES = 64 * 1024 * 1024
 const STALE_TEMP_MILLISECONDS = 60 * 60 * 1_000
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/
@@ -14,10 +14,12 @@ export async function readRenditionCache(
   attachmentDirectory: string,
   attachment: ImageAttachment,
   sourceDigest: string,
+  variantDigest: string = sourceDigest,
+  maxBytes = IMAGE_MODEL_MAX_BYTES,
 ): Promise<Buffer | null> {
-  const path = renditionPath(attachmentDirectory, attachment.id, sourceDigest)
+  const path = renditionPath(attachmentDirectory, attachment.id, sourceDigest, variantDigest)
   try {
-    const bytes = await readBoundedImageFile(path, IMAGE_MODEL_MAX_BYTES)
+    const bytes = await readBoundedImageFile(path, maxBytes)
     const now = new Date()
     await utimes(path, now, now).catch(() => {})
     return bytes
@@ -33,9 +35,15 @@ export async function writeRenditionCache(
   attachment: ImageAttachment,
   sourceDigest: string,
   bytes: Buffer,
+  variantDigest: string = sourceDigest,
 ): Promise<void> {
   const directory = renditionDirectory(attachmentDirectory)
-  const target = renditionPath(attachmentDirectory, attachment.id, sourceDigest)
+  const target = renditionPath(
+    attachmentDirectory,
+    attachment.id,
+    sourceDigest,
+    variantDigest,
+  )
   const temporary = join(directory, `${attachment.id}.${randomUUID()}.tmp`)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600, flush: true })
@@ -60,8 +68,12 @@ export async function removeRenditionCacheEntry(
   attachmentDirectory: string,
   attachmentId: string,
   sourceDigest: string,
+  variantDigest: string = sourceDigest,
 ): Promise<void> {
-  await rm(renditionPath(attachmentDirectory, attachmentId, sourceDigest), { force: true })
+  await rm(
+    renditionPath(attachmentDirectory, attachmentId, sourceDigest, variantDigest),
+    { force: true },
+  )
 }
 
 export async function removeRenditionCaches(
@@ -130,20 +142,22 @@ function renditionPath(
   attachmentDirectory: string,
   attachmentId: string,
   sourceDigest: string,
+  variantDigest: string,
 ): string {
   if (!DIGEST_PATTERN.test(sourceDigest)) throw new Error('图片内容摘要无效')
+  if (!DIGEST_PATTERN.test(variantDigest)) throw new Error('图片变换摘要无效')
   return join(
     renditionDirectory(attachmentDirectory),
-    `${attachmentId}.${sourceDigest}.${RENDITION_VERSION}`,
+    `${attachmentId}.${sourceDigest}.${variantDigest}.${RENDITION_VERSION}`,
   )
 }
 
 function isCacheName(name: string): boolean {
-  return /^[0-9a-f-]{36}\.[0-9a-f]{64}\.v2$/i.test(name)
+  return /^[0-9a-f-]{36}\.[0-9a-f]{64}\.[0-9a-f]{64}\.v3$/i.test(name)
 }
 
 function isOldCacheName(name: string): boolean {
-  return /^[0-9a-f-]{36}\.v1$/i.test(name)
+  return /^[0-9a-f-]{36}(?:\.v1|\.[0-9a-f]{64}\.v2)$/i.test(name)
 }
 
 function isTemporaryName(name: string): boolean {

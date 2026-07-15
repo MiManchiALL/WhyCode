@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -111,7 +112,7 @@ describe('图片会话持久化', () => {
     }
   })
 
-  it('拒绝把图片记录为运行中插话', async () => {
+  it('图片插话在送达确认前可恢复，确认后只进入模型历史一次', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-steering-'))
     try {
       const store = new SessionStore(root)
@@ -124,10 +125,35 @@ describe('图片会话持久化', () => {
         journal.sessionId,
       )
 
-      await assert.rejects(
-        journal.recordUserInput('图片插话', false, attachments),
-        /图片附件只能属于空闲根消息/,
+      await journal.recordUserInput('开始任务', true)
+      await journal.recordTurnStart('turn-steering', [{ role: 'user', content: '开始任务' }])
+      const inputId = randomUUID()
+      await journal.recordUserInputWithId(inputId, '图片插话', false, attachments)
+
+      const queued = await store.open(journal.sessionId)
+      assert.deepEqual(queued.pendingUserInputs, [{
+        id: inputId,
+        text: '图片插话',
+        attachments,
+        state: 'queued',
+      }])
+
+      await queued.recordStep(
+        'turn-steering',
+        [createImageUserMessage('图片插话', attachments)],
+        undefined,
+        undefined,
+        attachments,
+        [inputId],
       )
+      const delivered = await store.open(journal.sessionId)
+      assert.deepEqual(delivered.pendingUserInputs, [])
+      assert.equal(delivered.initialMessages.length, 2)
+      const transcript = await readFile(
+        join(root, journal.sessionId, 'transcript.jsonl'),
+        'utf8',
+      )
+      assert.doesNotMatch(transcript, /iVBORw0KGgo/)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

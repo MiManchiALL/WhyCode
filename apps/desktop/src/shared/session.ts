@@ -2,6 +2,7 @@ import type {
   AgentStatus,
   ApprovalRequest,
   CoreEvent,
+  QueuedUserMessage,
   SessionMetadata,
   SessionSummary,
   ViewEvent,
@@ -22,6 +23,8 @@ export interface RuntimeSnapshot {
   /** Renderer 重载时恢复主进程中的会话删除锁。 */
   deletingSessionId: string | null
   viewEvents: ViewEvent[]
+  queuedInputs: QueuedUserMessage[]
+  restoredInputs: QueuedUserMessage[]
   approval: ApprovalRequest | null
   /** 只重放快照之后到达 Renderer 的实时事件，避免恢复时间线与缓冲事件重复。 */
   eventSequence: number
@@ -37,6 +40,8 @@ export type ResumeSessionResult =
       ok: true
       session: SessionMetadata
       viewEvents: ViewEvent[]
+      queuedInputs: QueuedUserMessage[]
+      restoredInputs: QueuedUserMessage[]
       recoveredFromInterruption: boolean
     }
   | { ok: false; error: string }

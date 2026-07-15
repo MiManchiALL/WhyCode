@@ -3,12 +3,13 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   AgentSession,
+  cleanupUnreferencedImageAttachments,
   cleanupConversationScratch,
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
   getModelEntry,
-  importImageAttachments,
+  prepareImageAttachmentImport,
   MODEL_REGISTRY,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -17,6 +18,10 @@ import {
   type CoreEvent,
   type AgentStatus,
   type ImageAttachment,
+  type ImageAttachmentInput,
+  type ImageAttachmentImportTransaction,
+  type SessionJournal,
+  IMAGE_ATTACHMENT_MAX_COUNT,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import {
@@ -27,8 +32,9 @@ import {
 } from './config.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
-import { routeUserMessage } from './user-message-routing.ts'
+import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
+import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import type {
   DeleteSessionResult,
   ResumeSessionResult,
@@ -114,6 +120,8 @@ let commandSessions: CommandSessionManager
 let sessionDeletionId: string | null = null
 /** 图片复制期间拒绝其它输入，避免附件落盘与根消息分类之间发生竞态。 */
 let imagePreparationInProgress = false
+/** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
+const userMessageRoutingGate = new UserMessageRoutingGate()
 const viewTimeline = new ViewTimeline((error) => {
   broadcastEvent(
     {
@@ -188,6 +196,7 @@ async function ensureSession(): Promise<string | null> {
             },
             sessionRecorder: recorder,
             mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
+            captureScreenshot: captureDesktopScreenshot,
             emit: broadcastEvent,
             requestApproval,
           })
@@ -246,10 +255,11 @@ function buildCoordinator(): string | null {
     emit: broadcastEvent,
     requestApproval,
     initialState: journal.initialConsensusState,
-    onTaskStart: (taskId, state, userText) =>
-      journal.recordConsensusTaskStart(taskId, state, userText),
+    onTaskStart: (taskId, state, userText, deliveredInputIds) =>
+      journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds),
     onTaskEnd: (taskId, outcome, state) =>
       journal.recordConsensusTaskEnd(taskId, outcome, state),
+    onInputsRestored: (inputIds) => journal.markUserInputsRestored(inputIds),
   })
   return null
 }
@@ -264,82 +274,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
     return { ok: false }
   }
   switch (command.type) {
-    case 'user-message': {
-      if (imagePreparationInProgress) {
-        return rejectUserMessage('上一条图片消息仍在准备，请稍后重试')
-      }
-      const attachmentInputs = command.attachments ?? []
-      let imageAttachments: ImageAttachment[] = []
-      if (attachmentInputs.length > 0) {
-        const modelId = resolveCurrentModelId()
-        if (!modelId) return rejectUserMessage('没有任何已配置 key 的模型可用')
-        const model = getModelEntry(modelId)
-        if (!model.capabilities.supportsImageInput) {
-          return rejectUserMessage(`${model.displayName} 不支持识图；请切换到带“图片”标记的模型`)
-        }
-        if (sessionInitialization || session?.isBusy || coordinator?.busy) {
-          return rejectUserMessage('图片消息只能在 Agent 空闲时发送，不能排队或立即插话')
-        }
-        imagePreparationInProgress = true
-        let preparationError: string | null = null
-        try {
-          const err = await ensureSession()
-          if (err) throw new Error(err)
-          const journal = sessions.journal
-          if (!journal) throw new Error('会话记录尚未初始化，无法保存图片')
-          imageAttachments = await importImageAttachments(
-            attachmentInputs,
-            journal.attachmentDirectory,
-            journal.sessionId,
-          )
-        } catch (error) {
-          preparationError = `图片添加失败：${error instanceof Error ? error.message : String(error)}`
-        } finally {
-          imagePreparationInProgress = false
-        }
-        if (preparationError) return rejectUserMessage(preparationError)
-      } else {
-        const err = await ensureSession()
-        if (err) return rejectUserMessage(err)
-      }
-
-      const userText = command.text.trim()
-        || (imageAttachments.length ? '请分析这些图片。' : '')
-      if (!userText) return rejectUserMessage('消息不能为空')
-      await routeUserMessage(userText, command.urgent ?? false, {
-        isBusy: runtimeBusy,
-        record: (text, startsTurn) => recordUserInput(text, startsTurn, imageAttachments),
-        acceptRoot: (text) => {
-          broadcastEvent({
-            type: 'user-message-accepted',
-            text,
-            startsTurn: true,
-            ...(imageAttachments.length ? { attachments: imageAttachments } : {}),
-          }, false)
-        },
-        deliver: (text, urgent) => {
-          if (imageAttachments.length > 0) {
-            if (consensusEnabled) {
-              broadcastEvent({ type: 'consensus-skipped', reason: 'image-input' })
-            }
-            return session!.handleUserMessage(text, false, imageAttachments)
-          }
-          // 协商开启时消息进协调器（Main 探索中仍走会话 steering，B/C 评审中暂存）
-          if (consensusEnabled && coordinator) {
-            return coordinator.handleUserMessage(text, urgent)
-          }
-          // 运行中/压缩中 = 排队；空闲 = 新 turn；中止器由 session 自管。
-          return session!.handleUserMessage(text, urgent)
-        },
-      })
-      return { ok: true }
-    }
+    case 'user-message':
+      return handleUserMessageCommand(command)
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
       for (const pending of pendingApprovals.values()) pending.resolve({ approved: false })
       pendingApprovals.clear()
-      coordinator?.abort()
-      session?.abort()
+      if (coordinator) await coordinator.abort()
+      else session?.abort()
       break
     }
     case 'set-consensus': {
@@ -427,31 +369,215 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
   }
 }
 
+type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
+
+interface PreparedUserMessageImages {
+  attachments: ImageAttachment[]
+  importTransaction: ImageAttachmentImportTransaction | null
+  restoredInputIds: string[]
+}
+
+async function prepareUserMessageImages(
+  command: UserMessageCommand,
+): Promise<PreparedUserMessageImages> {
+  const attachmentInputs = command.attachments ?? []
+  const restoredInputIds = command.restoredInputIds ?? []
+  if (attachmentInputs.length === 0 && restoredInputIds.length === 0) {
+    const error = await ensureSession()
+    if (error) throw new Error(error)
+    return { attachments: [], importTransaction: null, restoredInputIds }
+  }
+
+  const modelId = resolveCurrentModelId()
+  if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
+  const model = getModelEntry(modelId)
+  if (attachmentInputs.length > 0 && !model.capabilities.supportsImageInput) {
+    throw new Error(`${model.displayName} 不支持识图；请切换到带“图片”标记的模型`)
+  }
+
+  imagePreparationInProgress = true
+  let importTransaction: ImageAttachmentImportTransaction | null = null
+  try {
+    const error = await ensureSession()
+    if (error) throw new Error(error)
+    const journal = sessions.journal
+    if (!journal) throw new Error('会话记录尚未初始化，无法保存图片')
+    const restoredAttachments = resolveRestoredAttachments(
+      journal,
+      attachmentInputs.flatMap((input) =>
+        input.kind === 'stored' ? [input.attachmentId] : []),
+      restoredInputIds,
+    )
+    const freshInputs = attachmentInputs.filter(
+      (input): input is ImageAttachmentInput => input.kind !== 'stored',
+    )
+    importTransaction = await prepareImageAttachmentImport(
+      freshInputs,
+      journal.attachmentDirectory,
+      journal.sessionId,
+    )
+    const attachments = [...restoredAttachments, ...importTransaction.attachments]
+    validatePreparedAttachments(attachments)
+    await importTransaction.commit()
+    return { attachments, importTransaction, restoredInputIds }
+  } catch (error) {
+    await importTransaction?.rollback().catch(() => {})
+    throw new Error(`图片添加失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    imagePreparationInProgress = false
+  }
+}
+
+async function handleUserMessageCommand(
+  command: UserMessageCommand,
+): Promise<{ ok: boolean }> {
+  if (imagePreparationInProgress) {
+    return rejectUserMessage('上一条图片消息仍在准备，请稍后重试')
+  }
+  let prepared: PreparedUserMessageImages
+  try {
+    prepared = await prepareUserMessageImages(command)
+  } catch (error) {
+    return rejectUserMessage(error instanceof Error ? error.message : String(error))
+  }
+
+  const userText = command.text.trim()
+    || (prepared.attachments.length ? '请分析这些图片。' : '')
+  if (!userText) return rejectUserMessage('消息不能为空')
+  try {
+    await routeUserMessage(userText, command.urgent ?? false, {
+      isBusy: runtimeBusy,
+      reserve: () => userMessageRoutingGate.reserve(),
+      record: (inputId, text, startsTurn) => recordUserInput(
+        inputId,
+        text,
+        startsTurn,
+        prepared.attachments,
+        prepared.restoredInputIds,
+      ),
+      acceptRoot: (text) => broadcastEvent({
+        type: 'user-message-accepted',
+        text,
+        startsTurn: true,
+        ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
+      }, false),
+      deliver: (inputId, text, urgent, startsTurn) => deliverUserMessage(
+        inputId,
+        text,
+        urgent,
+        startsTurn,
+        prepared.attachments,
+      ),
+      onDeliveryError: reportUserMessageDeliveryError,
+    })
+  } catch (error) {
+    const journal = sessions.journal
+    if (prepared.importTransaction && journal) {
+      await cleanupUnreferencedImageAttachments(
+        journal.attachmentDirectory,
+        journal.initialImageAttachments,
+      ).catch(() => {})
+    }
+    return rejectUserMessage(
+      `用户消息未能安全交付：${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  return { ok: true }
+}
+
+function deliverUserMessage(
+  inputId: string,
+  text: string,
+  urgent: boolean,
+  startsTurn: boolean,
+  attachments: readonly ImageAttachment[],
+): Promise<unknown> | void {
+  const persistedInputId = startsTurn ? undefined : inputId
+  if (consensusEnabled && coordinator) {
+    return coordinator.handleUserMessage(text, urgent, attachments, persistedInputId)
+  }
+  return session!.handleUserMessage(text, urgent, attachments, persistedInputId)
+}
+
+function reportUserMessageDeliveryError(error: unknown): void {
+  broadcastEvent({
+    type: 'error',
+    message: `Agent 接收消息后异常退出：${error instanceof Error ? error.message : String(error)}`,
+    recoverable: true,
+  })
+}
+
 function runtimeBusy(): boolean {
   return Boolean(
     sessionDeletionId
     || imagePreparationInProgress
+    || userMessageRoutingGate.busy
     || sessionInitialization
     || session?.isBusy
     || coordinator?.busy,
   )
 }
 
+function resolveRestoredAttachments(
+  journal: SessionJournal,
+  attachmentIds: readonly string[],
+  restoredInputIds: readonly string[],
+): ImageAttachment[] {
+  if (new Set(restoredInputIds).size !== restoredInputIds.length) {
+    throw new Error('恢复输入 ID 不能重复')
+  }
+  if (new Set(attachmentIds).size !== attachmentIds.length) {
+    throw new Error('恢复图片不能重复添加')
+  }
+  const restoredById = new Map(
+    journal.pendingUserInputs
+      .filter((input) => input.state === 'restored')
+      .map((input) => [input.id, input]),
+  )
+  const selectedInputs = restoredInputIds.map((inputId) => {
+    const input = restoredById.get(inputId)
+    if (!input) throw new Error(`恢复输入已失效或不属于当前会话：${inputId}`)
+    return input
+  })
+  const allowedAttachments = new Map(
+    selectedInputs.flatMap((input) => input.attachments ?? []).map((attachment) => [
+      attachment.id,
+      attachment,
+    ]),
+  )
+  return attachmentIds.map((attachmentId) => {
+    const attachment = allowedAttachments.get(attachmentId)
+    if (!attachment) throw new Error(`恢复图片已失效或不属于所选输入：${attachmentId}`)
+    return attachment
+  })
+}
+
+function validatePreparedAttachments(attachments: readonly ImageAttachment[]): void {
+  if (attachments.length > IMAGE_ATTACHMENT_MAX_COUNT) {
+    throw new Error(`每条消息最多添加 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
+  }
+  const identities = attachments.map((attachment) =>
+    attachment.sha256 ?? attachment.storageName)
+  if (new Set(identities).size !== identities.length) {
+    throw new Error('同一张图片不能重复添加')
+  }
+}
+
 async function recordUserInput(
+  inputId: string,
   text: string,
   startsTurn: boolean,
   attachments: readonly ImageAttachment[] = [],
+  consumesInputIds: readonly string[] = [],
 ): Promise<void> {
-  try {
-    const journal = sessions.journal!
-    await journal.recordUserInput(text, startsTurn, attachments)
-  } catch (error) {
-    broadcastEvent({
-      type: 'error',
-      message: `用户消息未能写入会话记录：${error instanceof Error ? error.message : String(error)}`,
-      recoverable: true,
-    })
-  }
+  const journal = sessions.journal!
+  await journal.recordUserInputWithId(
+    inputId,
+    text,
+    startsTurn,
+    attachments,
+    consumesInputIds,
+  )
 }
 
 function rejectUserMessage(message: string): { ok: false } {
@@ -493,6 +619,8 @@ function runtimeSnapshot(): RuntimeSnapshot {
     checkpointRestoreToolUseId,
     deletingSessionId: sessionDeletionId,
     viewEvents: journal ? [...journal.initialViewEvents] : [],
+    queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
+    restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: [...pendingApprovals.values()].at(-1)?.request ?? null,
     eventSequence: runtimeEventSequence,
   }
@@ -531,7 +659,8 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     const recoveredFromInterruption = Boolean(
       journal.interruptedTurnId
       || journal.undeliveredUserInputIds.length > 0
-      || journal.interruptedConsensusTaskId,
+      || journal.interruptedConsensusTaskId
+      || journal.pendingUserInputs.some((input) => input.state === 'queued'),
     )
     await journal.recoverInterruptedWork()
     projectDir = metadata.projectDir
@@ -547,12 +676,27 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       ok: true,
       session: journal.metadataSnapshot,
       viewEvents: [...journal.initialViewEvents],
+      queuedInputs: pendingInputs(journal, 'queued'),
+      restoredInputs: pendingInputs(journal, 'restored'),
       recoveredFromInterruption,
     }
   } catch (error) {
     resetRuntime()
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
+}
+
+function pendingInputs(
+  journal: SessionJournal,
+  state: 'queued' | 'restored',
+): { id: string; text: string; attachments?: ImageAttachment[] }[] {
+  return journal.pendingUserInputs
+    .filter((input) => input.state === state)
+    .map((input) => ({
+      id: input.id,
+      text: input.text,
+      ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
+    }))
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {

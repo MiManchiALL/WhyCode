@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import type { ImageAttachment } from '../attachments/types.ts'
+import type { ImageAttachment, ImageTransform } from '../attachments/types.ts'
 
 /**
  * WhyCode 工具接口。Zod schema 为单一事实源：类型推导 + 运行时校验 + JSON Schema 派生。
@@ -23,6 +23,8 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
   endsTurnOnSuccess: boolean
+  /** 隐私敏感读操作首次使用也需审批；会话记住后才按普通权限链放行。 */
+  initialApprovalReason?: string
   /** 终止型工具成功后的语义；waiting-user 会保留计划并等待下一条用户消息。 */
   turnEndReasonOnSuccess: 'completed' | 'waiting-user'
   /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
@@ -58,6 +60,8 @@ export interface ToolResult {
   isError: boolean
   /** 工具新导入的会话图片；由 AgentSession 在稳定 step 中注入并持久化。 */
   attachments?: readonly ImageAttachment[]
+  /** 模型读取这些附件时使用的像素策略；不影响持久化原图。 */
+  imageTransform?: ImageTransform
 }
 
 const CONSERVATIVE_DEFAULTS = {

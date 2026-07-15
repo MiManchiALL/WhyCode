@@ -4,9 +4,12 @@ import {
   imageAttachmentSchema,
   imageAttachmentStorageNameSchema,
   type ImageAttachment,
+  type ImageTransform,
 } from './types.ts'
 
-const ATTACHMENT_REF_PREFIX = 'whycode-attachment-ref:v1:'
+const ATTACHMENT_REF_V1_PREFIX = 'whycode-attachment-ref:v1:'
+const ATTACHMENT_REF_V2_PREFIX = 'whycode-attachment-ref:v2:'
+const DEFAULT_IMAGE_TRANSFORM: ImageTransform = { detail: 'high' }
 
 export function createImageUserMessage(
   text: string,
@@ -21,14 +24,15 @@ export function createImageUserMessage(
 /** 图片工具的内部模型消息；不进入用户可见时间线。 */
 export function createImageToolResultMessage(
   attachments: readonly ImageAttachment[],
+  transform: ImageTransform = DEFAULT_IMAGE_TRANSFORM,
 ): ModelMessage {
   return buildImageUserMessage(
-    '以下图片由 ViewImage 工具从本地文件读取，仅作为刚才工具调用的视觉结果。',
+    '以下图片由视觉工具读取或采集，仅作为刚才工具调用的视觉结果。',
     attachments.map((attachment) => ({
       attachment,
-      data: attachmentReference(attachment.storageName),
+      data: attachmentReference(attachment.storageName, transform),
     })),
-    (attachment, index) => `[ViewImage 结果 ${index + 1}：${attachment.name}]`,
+    (attachment, index) => `[视觉工具结果 ${index + 1}：${attachment.name}]`,
   )
 }
 
@@ -44,7 +48,16 @@ export function dehydrateImageMessages(messages: readonly ModelMessage[]): Model
           || !part.filename
           || !imageAttachmentStorageNameSchema.safeParse(part.filename).success
         ) return structuredClone(part)
-        return { ...part, data: attachmentReference(part.filename) }
+        const existing = typeof part.data === 'string'
+          ? parseAttachmentReference(part.data)
+          : null
+        return {
+          ...part,
+          data: attachmentReference(
+            part.filename,
+            existing?.storageName === part.filename ? existing.transform : DEFAULT_IMAGE_TRANSFORM,
+          ),
+        }
       }),
     }
   })
@@ -69,19 +82,20 @@ export async function hydrateImageMessages(
         content.push(structuredClone(part))
         continue
       }
-      const storageName = parseAttachmentReference(part.data)
-      if (!storageName) {
+      const reference = parseAttachmentReference(part.data)
+      if (!reference) {
         content.push(structuredClone(part))
         continue
       }
-      if (part.filename !== storageName) throw new Error('图片附件引用与文件名不一致')
-      const expected = metadataByStorageName.get(storageName)
+      if (part.filename !== reference.storageName) throw new Error('图片附件引用与文件名不一致')
+      const expected = metadataByStorageName.get(reference.storageName)
       if (!expected) throw new Error('图片附件引用缺少权威元数据')
       if (expected.mediaType !== part.mediaType) throw new Error('图片附件媒体类型不一致')
       const prepared = await prepareImageAttachmentForModel(
         attachmentDirectory,
         expected,
         abortSignal,
+        reference.transform,
       )
       content.push({
         ...part,
@@ -157,7 +171,10 @@ function hasStoredImageReferences(messages: readonly ModelMessage[]): boolean {
     && message.content.some((part) =>
       part.type === 'file'
       && typeof part.data === 'string'
-      && part.data.startsWith(ATTACHMENT_REF_PREFIX)))
+      && (
+        part.data.startsWith(ATTACHMENT_REF_V1_PREFIX)
+        || part.data.startsWith(ATTACHMENT_REF_V2_PREFIX)
+      )))
 }
 
 function buildImageUserMessage(
@@ -182,11 +199,61 @@ function buildImageUserMessage(
   }
 }
 
-function attachmentReference(storageName: string): string {
-  return `${ATTACHMENT_REF_PREFIX}${imageAttachmentStorageNameSchema.parse(storageName)}`
+function attachmentReference(
+  storageName: string,
+  transform: ImageTransform = DEFAULT_IMAGE_TRANSFORM,
+): string {
+  const safeName = imageAttachmentStorageNameSchema.parse(storageName)
+  if (transform.detail === 'high' && !transform.region) {
+    return `${ATTACHMENT_REF_V1_PREFIX}${safeName}`
+  }
+  const region = transform.region
+    ? `${transform.region.x},${transform.region.y},${transform.region.width},${transform.region.height}`
+    : '-'
+  return `${ATTACHMENT_REF_V2_PREFIX}${safeName}:${transform.detail}:${region}`
 }
 
-function parseAttachmentReference(value: string): string | null {
-  if (!value.startsWith(ATTACHMENT_REF_PREFIX)) return null
-  return imageAttachmentStorageNameSchema.parse(value.slice(ATTACHMENT_REF_PREFIX.length))
+function parseAttachmentReference(
+  value: string,
+): { storageName: string; transform: ImageTransform } | null {
+  if (value.startsWith(ATTACHMENT_REF_V1_PREFIX)) {
+    return {
+      storageName: imageAttachmentStorageNameSchema.parse(
+        value.slice(ATTACHMENT_REF_V1_PREFIX.length),
+      ),
+      transform: DEFAULT_IMAGE_TRANSFORM,
+    }
+  }
+  if (!value.startsWith(ATTACHMENT_REF_V2_PREFIX)) return null
+  const [storageName, detail, regionValue, ...extra] = value
+    .slice(ATTACHMENT_REF_V2_PREFIX.length)
+    .split(':')
+  if (!storageName || !detail || !regionValue || extra.length > 0) {
+    throw new Error('图片附件变换引用无效')
+  }
+  const region = regionValue === '-'
+    ? undefined
+    : parseRegion(regionValue)
+  return {
+    storageName: imageAttachmentStorageNameSchema.parse(storageName),
+    transform: {
+      detail: detail === 'original' ? 'original' : detail === 'high' ? 'high' : invalidDetail(),
+      ...(region ? { region } : {}),
+    },
+  }
+}
+
+function parseRegion(value: string): NonNullable<ImageTransform['region']> {
+  const numbers = value.split(',').map(Number)
+  if (
+    numbers.length !== 4
+    || numbers.some((number) => !Number.isSafeInteger(number))
+  ) throw new Error('图片区域引用无效')
+  const [x, y, width, height] = numbers as [number, number, number, number]
+  if (x < 0 || y < 0 || width <= 0 || height <= 0) throw new Error('图片区域引用无效')
+  return { x, y, width, height }
+}
+
+function invalidDetail(): never {
+  throw new Error('图片细节级别引用无效')
 }

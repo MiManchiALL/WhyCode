@@ -1,6 +1,12 @@
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
 import { isAbsolute, resolve } from 'node:path'
-import type { CoreEvent, StopReason, UsageInfo, UserQuestion } from '../events.ts'
+import type {
+  CoreEvent,
+  QueuedUserMessage,
+  StopReason,
+  UsageInfo,
+  UserQuestion,
+} from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
@@ -26,11 +32,17 @@ import {
   IMAGE_ATTACHMENT_MAX_COUNT,
   imageAttachmentSchema,
   imageAttachmentsSchema,
+  imageTransformSchema,
   type ImageAttachment,
+  type ImageTransform,
 } from '../attachments/types.ts'
 import { removeImageAttachmentFiles } from '../attachments/renditions.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { createViewImageTool } from '../tools/view-image/index.ts'
+import {
+  createCaptureScreenshotTool,
+  type ScreenshotCaptureHandler,
+} from '../tools/capture-screenshot/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
@@ -76,6 +88,8 @@ export interface AgentSessionOptions {
   extraTools?: ToolDefinition[]
   /** 宿主为普通 Main 注入的会话工具；讨论/协议回合物理移除（如后台命令）。 */
   mainTools?: ToolDefinition[]
+  /** Electron 等宿主注入的桌面采集能力；Core 不依赖具体窗口系统。 */
+  captureScreenshot?: ScreenshotCaptureHandler
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** 事件出口（宿主注入） */
@@ -106,6 +120,15 @@ export type ApprovalHandler = (request: ApprovalRequest) => Promise<ApprovalResp
 interface QueuedMessage {
   id: string
   text: string
+  attachments: ImageAttachment[]
+  /** Desktop 预写了 user-input 时，送达/恢复必须携带同一稳定 ID。 */
+  persisted: boolean
+}
+
+function queuedMessageForModel(message: QueuedMessage): ModelMessage {
+  return message.attachments.length
+    ? createImageUserMessage(message.text, message.attachments)
+    : { role: 'user', content: message.text }
 }
 
 interface StepResult {
@@ -171,6 +194,14 @@ export class AgentSession {
     this.options = options
     this.messages = [...(options.sessionRecorder?.initialMessages ?? [])]
     this.addImageAttachments(options.sessionRecorder?.initialImageAttachments ?? [])
+    this.queue = (options.sessionRecorder?.pendingUserInputs ?? [])
+      .filter((input) => input.state === 'queued')
+      .map((input) => ({
+        id: input.id,
+        text: input.text,
+        attachments: [...(input.attachments ?? [])],
+        persisted: true,
+      }))
     this.permissions = createPermissionContext(
       options.promptContext.projectDir,
       options.promptContext.discussion,
@@ -284,44 +315,90 @@ export class AgentSession {
     text: string,
     urgent = false,
     imageAttachments: readonly ImageAttachment[] = [],
+    persistedInputId?: string,
   ): Promise<StopReason> | void {
     if (imageAttachments.length > 0) {
-      if (this.isBusy) throw new Error('图片消息不能在 Agent 工作中排队或立即插话')
       if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
       this.addImageAttachments(imageAttachments)
-      return this.startTurn([createImageUserMessage(text, imageAttachments)])
     }
-    return this.handleMessage(text, urgent)
+    return this.handleMessage(text, urgent, imageAttachments, persistedInputId)
   }
 
   /** 协商执行包走同一模型意图路径，但不作为 urgent steering。 */
-  handleExecutionMessage(text: string): Promise<StopReason> | void {
-    return this.handleMessage(text, false)
+  handleExecutionMessage(
+    text: string,
+    steeringInputs: readonly QueuedUserMessage[] = [],
+  ): Promise<StopReason> | void {
+    if (this.isBusy) throw new Error('Main 尚未空闲，不能启动协商执行阶段')
+    const delivered = steeringInputs.map((input) => ({
+      id: input.id,
+      text: input.text,
+      attachments: [...(input.attachments ?? [])],
+      persisted: this.options.sessionRecorder?.pendingUserInputs.some(
+        (pending) => pending.id === input.id && pending.state === 'queued',
+      ) ?? false,
+    }))
+    const attachments = delivered.flatMap((input) => input.attachments)
+    if (attachments.length > 0) {
+      if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
+      this.addImageAttachments(attachments)
+    }
+    return this.startTurn(
+      [
+        { role: 'user', content: text },
+        ...delivered.map(queuedMessageForModel),
+      ],
+      delivered,
+    )
   }
 
   private handleMessage(
     text: string,
     urgent: boolean,
+    imageAttachments: readonly ImageAttachment[] = [],
+    persistedInputId?: string,
   ): Promise<StopReason> | void {
     if (this.isBusy) {
-      const item = { id: crypto.randomUUID(), text }
+      const item: QueuedMessage = {
+        id: persistedInputId ?? crypto.randomUUID(),
+        text,
+        attachments: [...imageAttachments],
+        persisted: persistedInputId !== undefined,
+      }
       this.queue.push(item)
-      this.options.emit({ type: 'message-queued', id: item.id, text })
+      this.options.emit({
+        type: 'message-queued',
+        id: item.id,
+        text,
+        ...(item.attachments.length ? { attachments: item.attachments } : {}),
+      })
       if (urgent && this.running) {
         // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
         this.currentStepAbort?.abort('interrupt')
       }
       return
     }
-    return this.startTurn([{ role: 'user', content: text }])
+    const message = imageAttachments.length
+      ? createImageUserMessage(text, imageAttachments)
+      : { role: 'user' as const, content: text }
+    const delivered = persistedInputId
+      ? [{
+          id: persistedInputId,
+          text,
+          attachments: [...imageAttachments],
+          persisted: true,
+        }]
+      : []
+    return this.startTurn([message], delivered)
   }
 
   /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
   private startTurn(
     initialMessages: ModelMessage[],
+    deliveredInputs: readonly QueuedMessage[] = [],
   ): Promise<StopReason> {
     this.opAbort = new AbortController()
-    return this.runLoop(initialMessages, this.opAbort.signal)
+    return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs)
   }
 
   /** 用户点「停止」：中止当前 turn 或压缩 */
@@ -340,12 +417,27 @@ export class AgentSession {
   }
 
   /** 不能安全自动接续时，排队消息弹回输入框，不静默丢弃。 */
-  private restoreQueuedInput(): void {
-    if (this.queue.length > 0) {
-      const text = this.queue.map((q) => q.text).join('\n')
-      this.queue = []
-      this.options.emit({ type: 'queue-restored', text })
+  private async restoreQueuedInput(): Promise<void> {
+    const items = [...this.queue]
+    if (items.length === 0) return
+    const persistedIds = items.filter((item) => item.persisted).map((item) => item.id)
+    if (persistedIds.length > 0) {
+      await this.persistRequired(
+        (recorder) => recorder.markUserInputsRestored(persistedIds),
+        '恢复排队输入',
+      )
     }
+    const restoredIds = new Set(items.map((item) => item.id))
+    this.queue = this.queue.filter((item) => !restoredIds.has(item.id))
+    this.options.emit({
+      type: 'queue-restored',
+      text: items.map((item) => item.text).join('\n'),
+      items: items.map((item) => ({
+        id: item.id,
+        text: item.text,
+        ...(item.attachments.length ? { attachments: item.attachments } : {}),
+      })),
+    })
   }
 
   /** 取出全部排队消息（清空队列） */
@@ -363,6 +455,7 @@ export class AgentSession {
         id: item.id,
         text: item.text,
         startsTurn: index === 0,
+        ...(item.attachments.length ? { attachments: item.attachments } : {}),
       })
     })
   }
@@ -375,18 +468,37 @@ export class AgentSession {
 
   /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
   private async injectQueuedMidTurn(): Promise<void> {
+    const drained = this.drainQueue()
     const injected: ModelMessage[] = []
-    for (const item of this.drainQueue()) {
-      const message: ModelMessage = {
-        role: 'user',
-        content: item.text,
-      }
-      this.messages.push(message)
-      injected.push(message)
-      this.options.emit({ type: 'message-injected', id: item.id, text: item.text })
+    for (const item of drained) {
+      injected.push(item.attachments.length
+        ? createImageUserMessage(item.text, item.attachments)
+        : { role: 'user', content: item.text })
     }
     if (injected.length > 0 && this.activeTurn) {
-      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, injected))
+      try {
+        await this.persistRequired(
+          (recorder) => recorder.recordStep(
+            this.activeTurn!.id,
+            injected,
+            undefined,
+            undefined,
+            drained.flatMap((item) => item.attachments),
+            drained.filter((item) => item.persisted).map((item) => item.id),
+          ),
+          '确认排队输入送达',
+        )
+      } catch (error) {
+        this.queue = [...drained, ...this.queue]
+        throw error
+      }
+      this.messages.push(...injected)
+      drained.forEach((item) => this.options.emit({
+        type: 'message-injected',
+        id: item.id,
+        text: item.text,
+        ...(item.attachments.length ? { attachments: item.attachments } : {}),
+      }))
     }
   }
 
@@ -394,6 +506,7 @@ export class AgentSession {
   private async runLoop(
     initialMessages: ModelMessage[],
     abortSignal: AbortSignal,
+    deliveredInputs: readonly QueuedMessage[] = [],
   ): Promise<StopReason> {
     const { emit } = this.options
     this.running = true
@@ -418,15 +531,36 @@ export class AgentSession {
         ]
       : initialMessages
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
+    const initialMessageCount = this.messages.length
     this.activeTurn = { id: turnId }
     this.messages.push(...initialContext)
-    await this.persist((recorder) =>
-      recorder.recordTurnStart(
-        turnId,
-        initialContext,
-        planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
-      ),
-    )
+    try {
+      await this.persistRequired(
+        (recorder) => recorder.recordTurnStart(
+          turnId,
+          initialContext,
+          planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
+          deliveredInputs.filter((input) => input.persisted).map((input) => input.id),
+        ),
+        '提交回合起点',
+      )
+    } catch (error) {
+      this.messages.length = initialMessageCount
+      if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
+      this.activeTurn = null
+      this.opAbort = null
+      this.running = false
+      this.abortRequestedDuringFinalization = false
+      emit({
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        recoverable: true,
+      })
+      if (!this.terminalStatusManaged) emit({ type: 'agent-status', status: 'error' })
+      this.resolveIdleWaiters()
+      return 'error'
+    }
+    if (deliveredInputs.length > 0) this.emitDrainedMessages([...deliveredInputs])
 
     emit({ type: 'turn-start', turnId })
     emit({ type: 'agent-status', status: 'working' })
@@ -620,17 +754,29 @@ export class AgentSession {
       && stopReason !== 'aborted'
       && !this.protocolRound
       && !this.abortRequestedDuringFinalization
+      && !this.persistenceFailed
     ) {
       const drained = this.drainQueue()
-      this.emitDrainedMessages(drained)
       return this.startTurn(
-        drained.map((q) => ({ role: 'user' as const, content: q.text })),
+        drained.map(queuedMessageForModel),
+        drained,
       )
     }
 
     this.running = false
     this.abortRequestedDuringFinalization = false
-    if (this.queue.length > 0) this.restoreQueuedInput()
+    if (this.queue.length > 0 && !this.persistenceFailed) {
+      try {
+        await this.restoreQueuedInput()
+      } catch (error) {
+        stopReason = 'error'
+        emit({
+          type: 'error',
+          message: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        })
+      }
+    }
     if (!this.terminalStatusManaged) {
       emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
     }
@@ -738,12 +884,12 @@ export class AgentSession {
 
     // 压缩期间排队的消息：取消则弹回输入框；正常结束则在新上下文上接续为新 turn
     if (signal.aborted) {
-      this.restoreQueuedInput()
+      await this.restoreQueuedInput()
     } else if (this.queue.length > 0) {
       const drained = this.drainQueue()
-      this.emitDrainedMessages(drained)
       await this.startTurn(
-        drained.map((q) => ({ role: 'user' as const, content: q.text })),
+        drained.map(queuedMessageForModel),
+        drained,
       )
       return
     }
@@ -842,6 +988,9 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
   ): Promise<StepResult> {
+    if (this.options.sessionRecorder && this.persistenceFailed) {
+      throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
+    }
     const { emit } = this.options
     // 步骤级中止器：turn 取消（user-cancel）与 urgent 插话（interrupt）都作用在这里
     const stepAbort = new AbortController()
@@ -861,9 +1010,14 @@ export class AgentSession {
     }
     let userQuestion: UserQuestion | null = null
     const toolCallOrder: string[] = []
-    const stepImageAttachments = new Map<string, ImageAttachment[]>()
+    const stepImageAttachments = new Map<string, {
+      attachments: ImageAttachment[]
+      transform: ImageTransform
+    }>()
     let stepImageAttachmentCount = 0
     let attachmentsCommitted = false
+    const taskStateBeforeStep = this.taskPlan?.stateSnapshot
+    let taskPlanFinalized = false
     this.taskPlan?.beginStep()
     try {
       const result = streamText({
@@ -876,10 +1030,12 @@ export class AgentSession {
           (action) => { stepControl.taskPlanEngagement = action },
           (question) => { userQuestion = question },
           (reason) => { stepControl.toolEndReason = reason },
-          async (toolCallId, attachments) => {
+          async (toolCallId, attachments, transform) => {
             const parsed = imageAttachmentsSchema.safeParse(attachments)
+            const parsedTransform = imageTransformSchema.safeParse(transform ?? { detail: 'high' })
             if (
               !parsed.success
+              || !parsedTransform.success
               || parsed.data.some((attachment) =>
                 attachment.sessionId !== this.options.sessionRecorder?.sessionId)
             ) {
@@ -893,7 +1049,10 @@ export class AgentSession {
               return `单个模型步骤最多查看 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片，请下一步继续`
             }
             stepImageAttachmentCount += parsed.data.length
-            stepImageAttachments.set(toolCallId, parsed.data)
+            stepImageAttachments.set(toolCallId, {
+              attachments: parsed.data,
+              transform: parsedTransform.data,
+            })
             return null
           },
         ),
@@ -958,6 +1117,7 @@ export class AgentSession {
       const response = await result.response
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const taskPlanCommit = this.taskPlan?.commitStep()
+      taskPlanFinalized = Boolean(this.taskPlan)
       const planRemainsActive = Boolean(
         taskPlanCommit ? taskPlanCommit.state.activePlan : this.taskPlan?.snapshot,
       )
@@ -979,11 +1139,13 @@ export class AgentSession {
           questionResumesTaskPlan,
         ))
       }
-      const orderedImageAttachments = toolCallOrder.flatMap((toolCallId) =>
-        stepImageAttachments.get(toolCallId) ?? [])
-      const toolImageMessages = orderedImageAttachments.length > 0
-        ? [createImageToolResultMessage(orderedImageAttachments)]
-        : []
+      const orderedImageResults = toolCallOrder.flatMap((toolCallId) => {
+        const result = stepImageAttachments.get(toolCallId)
+        return result ? [result] : []
+      })
+      const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
+      const toolImageMessages = orderedImageResults.map((result) =>
+        createImageToolResultMessage(result.attachments, result.transform))
       const committedMessages = dehydrateImageMessages([
         ...response.messages,
         ...toolImageMessages,
@@ -992,17 +1154,19 @@ export class AgentSession {
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null
         : stepControl.taskPlanEngagement?.planId
-      this.messages.push(...committedMessages)
-      attachmentsCommitted = true
-      await this.persist((recorder) =>
-        recorder.recordStep(
+      this.assertImageAttachmentsCompatible(orderedImageAttachments)
+      await this.persistRequired(
+        (recorder) => recorder.recordStep(
           this.activeTurn!.id,
           committedMessages,
           taskPlanCommit?.state,
           engagementUpdate,
           orderedImageAttachments,
         ),
+        '提交模型步骤',
       )
+      attachmentsCommitted = true
+      this.messages.push(...committedMessages)
       this.addImageAttachments(orderedImageAttachments)
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         emit({ type: 'user-question', question: userQuestion })
@@ -1032,10 +1196,14 @@ export class AgentSession {
       if (!attachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
         await removeImageAttachmentFiles(
           this.options.sessionRecorder.attachmentDirectory,
-          [...stepImageAttachments.values()].flat(),
+          [...stepImageAttachments.values()].flatMap((result) => result.attachments),
         ).catch(() => {})
       }
-      this.taskPlan?.discardStep()
+      if (taskPlanFinalized && !attachmentsCommitted && taskStateBeforeStep) {
+        this.taskPlan?.restore(taskStateBeforeStep)
+      } else {
+        this.taskPlan?.discardStep()
+      }
       emit({ type: 'step-discarded' })
       if (
         stepAbort.signal.aborted
@@ -1074,6 +1242,7 @@ export class AgentSession {
     onImageAttachments: (
       toolCallId: string,
       attachments: readonly ImageAttachment[],
+      transform: ImageTransform | undefined,
     ) => Promise<string | null>,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
@@ -1107,19 +1276,33 @@ export class AgentSession {
       ...mainTools,
     ]
     const imageTools: ToolDefinition[] =
-      projectDir
-      && this.options.model.capabilities.supportsImageInput
+      this.options.model.capabilities.supportsImageInput
       && this.options.sessionRecorder
       && !this.options.promptContext.discussion
       && !this.protocolRound
-        ? [createViewImageTool({
-            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
-            sessionId: this.options.sessionRecorder.sessionId,
-          })]
+        ? [
+            ...(projectDir
+              ? [createViewImageTool({
+                  attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+                  sessionId: this.options.sessionRecorder.sessionId,
+                  supportsOriginalDetail:
+                    this.options.model.capabilities.supportsOriginalImageDetail === true,
+                })]
+              : []),
+            ...(this.options.captureScreenshot
+              ? [createCaptureScreenshotTool({
+                  attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+                  sessionId: this.options.sessionRecorder.sessionId,
+                  capture: this.options.captureScreenshot,
+                  supportsOriginalDetail:
+                    this.options.model.capabilities.supportsOriginalImageDetail === true,
+                })]
+              : []),
+          ]
         : []
     const availableDefs: ToolDefinition[] = projectDir
       ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...imageTools, ...controlTools]
-      : controlTools.filter((tool) => tool.availableWithoutProject)
+      : [...imageTools, ...controlTools].filter((tool) => tool.availableWithoutProject)
     const defs = availableDefs
     const toolProjectDir =
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
@@ -1162,8 +1345,14 @@ export class AgentSession {
         emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
 
         // 权限判定链（文档一 §3.2）
-        const decision =
-          !projectDir && def.availableWithoutProject
+        const decision = def.initialApprovalReason
+          && !this.permissions.sessionAllowedTools.includes(def.name)
+          ? ({
+              behavior: 'ask',
+              reason: def.initialApprovalReason,
+              suggestion: { kind: 'allow-tool', toolName: def.name },
+            } as const)
+          : !projectDir && def.availableWithoutProject
             ? ({ behavior: 'allow' } as const)
             : checkToolPermission(def, parsed.data, this.permissions)
         if (decision.behavior === 'deny') {
@@ -1276,7 +1465,11 @@ export class AgentSession {
           })
           let viewedAttachments: readonly ImageAttachment[] = []
           if (result.attachments?.length) {
-            const error = await onImageAttachments(toolCallId, result.attachments)
+            const error = await onImageAttachments(
+              toolCallId,
+              result.attachments,
+              result.imageTransform,
+            )
             if (error) result = { data: error, isError: true }
             else if (!result.isError) viewedAttachments = result.attachments
           }
@@ -1435,9 +1628,9 @@ export class AgentSession {
       this.restoringCheckpointToolUseId = null
       if (this.queue.length > 0) {
         const drained = this.drainQueue()
-        this.emitDrainedMessages(drained)
         await this.startTurn(
-          drained.map((item) => ({ role: 'user' as const, content: item.text })),
+          drained.map(queuedMessageForModel),
+          drained,
         )
       }
       this.resolveIdleWaiters()
@@ -1452,6 +1645,14 @@ export class AgentSession {
   }
 
   private addImageAttachments(values: readonly ImageAttachment[]): void {
+    this.assertImageAttachmentsCompatible(values)
+    for (const value of values) {
+      const attachment = imageAttachmentSchema.parse(value)
+      this.imageAttachments.set(attachment.storageName, attachment)
+    }
+  }
+
+  private assertImageAttachmentsCompatible(values: readonly ImageAttachment[]): void {
     for (const value of values) {
       const attachment = imageAttachmentSchema.parse(value)
       if (
@@ -1464,7 +1665,6 @@ export class AgentSession {
       if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
         throw new Error(`同一图片附件存在冲突元数据：${attachment.storageName}`)
       }
-      this.imageAttachments.set(attachment.storageName, attachment)
     }
   }
 
@@ -1492,6 +1692,27 @@ export class AgentSession {
         message: `会话持久化失败，已降级为内存模式：${error instanceof Error ? error.message : String(error)}`,
         recoverable: true,
       })
+    }
+  }
+
+  /** 用户输入送达与稳定 step 不能降级成内存提交，否则崩溃后会重复执行。 */
+  private async persistRequired(
+    action: (recorder: SessionRecorder) => Promise<void>,
+    boundary: string,
+  ): Promise<void> {
+    const recorder = this.options.sessionRecorder
+    if (!recorder) return
+    if (this.persistenceFailed) {
+      throw new Error(`会话持久化已不可用，无法安全${boundary}`)
+    }
+    try {
+      await action(recorder)
+    } catch (error) {
+      this.persistenceFailed = true
+      throw new Error(
+        `会话持久化失败，已停止${boundary}以避免重复执行：${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
     }
   }
 }

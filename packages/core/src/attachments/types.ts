@@ -17,6 +17,11 @@ export type ImageAttachmentInput =
   | { kind: 'path'; path: string }
   | { kind: 'inline'; name: string; base64: string }
 
+/** Renderer 重新提交中断后恢复的会话图片时只回传不透明 ID，Main 再按事实源解析。 */
+export type ImageMessageAttachmentInput =
+  | ImageAttachmentInput
+  | { kind: 'stored'; attachmentId: string }
+
 export const imageMediaTypeSchema = z.enum([
   'image/png',
   'image/jpeg',
@@ -61,4 +66,21 @@ export const imageAttachmentsSchema = z
   })
 
 export type ImageMediaType = z.infer<typeof imageMediaTypeSchema>
+
+export const imageDetailSchema = z.enum(['high', 'original'])
+export type ImageDetail = z.infer<typeof imageDetailSchema>
+
+export const imageRegionSchema = z.object({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().positive().max(100_000),
+  height: z.number().int().positive().max(100_000),
+})
+export type ImageRegion = z.infer<typeof imageRegionSchema>
+
+export const imageTransformSchema = z.object({
+  detail: imageDetailSchema.default('high'),
+  region: imageRegionSchema.optional(),
+})
+export type ImageTransform = z.infer<typeof imageTransformSchema>
 export type ImageAttachment = z.infer<typeof imageAttachmentSchema>

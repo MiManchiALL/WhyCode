@@ -12,8 +12,10 @@ import {
   messagesForModel,
 } from './messages.ts'
 import {
+  cleanupUnreferencedImageAttachments,
   importImageAttachments,
   inspectImage,
+  prepareImageAttachmentImport,
   validateStoredImageAttachments,
 } from './storage.ts'
 
@@ -122,6 +124,35 @@ describe('图片附件', () => {
         /图片处理已取消/,
       )
       assert.deepEqual(await readdir(attachmentDirectory), [])
+    })
+  })
+
+  it('导入事务只在 commit 后公开原图，回滚与启动清理不留孤儿文件', async () => {
+    await withTempDirectory(async (directory) => {
+      const attachmentDirectory = join(directory, 'attachments')
+      const transaction = await prepareImageAttachmentImport([{
+        kind: 'bytes', name: 'capture.png', bytes: ONE_PIXEL_PNG,
+      }], attachmentDirectory, SESSION_ID)
+      const [attachment] = transaction.attachments
+      assert.ok(attachment)
+      assert.equal((await readdir(attachmentDirectory)).some((name) => name.startsWith('.image-import-')), true)
+      await transaction.rollback()
+      assert.deepEqual(await readdir(attachmentDirectory), [])
+
+      const committed = await prepareImageAttachmentImport([{
+        kind: 'bytes', name: 'capture.png', bytes: ONE_PIXEL_PNG,
+      }], attachmentDirectory, SESSION_ID)
+      await committed.commit()
+      assert.deepEqual(await readdir(attachmentDirectory), [committed.attachments[0]!.storageName])
+      await cleanupUnreferencedImageAttachments(attachmentDirectory, [])
+      assert.deepEqual(await readdir(attachmentDirectory), [])
+
+      const retained = await prepareImageAttachmentImport([{
+        kind: 'bytes', name: 'capture.png', bytes: ONE_PIXEL_PNG,
+      }], attachmentDirectory, SESSION_ID)
+      await retained.commit()
+      await cleanupUnreferencedImageAttachments(attachmentDirectory, retained.attachments)
+      assert.deepEqual(await readdir(attachmentDirectory), [retained.attachments[0]!.storageName])
     })
   })
 

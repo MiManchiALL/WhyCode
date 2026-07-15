@@ -2,11 +2,16 @@ import { rm } from 'node:fs/promises'
 import sharp, { type Metadata } from 'sharp'
 import {
   IMAGE_ATTACHMENT_MAX_PIXELS,
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
   IMAGE_MODEL_MAX_BYTES,
   IMAGE_MODEL_MAX_DIMENSION,
   imageAttachmentSchema,
+  imageTransformSchema,
   type ImageAttachment,
+  type ImageDetail,
   type ImageMediaType,
+  type ImageRegion,
+  type ImageTransform,
 } from './types.ts'
 import {
   attachmentPath,
@@ -35,6 +40,13 @@ export interface PreparedImage {
   width: number
   height: number
   optimized: boolean
+  detail: ImageDetail
+  /** 坐标均基于 autoOrient 后的源图像素。 */
+  sourceWidth: number
+  sourceHeight: number
+  selectedRegion: ImageRegion
+  modelToSourceScaleX: number
+  modelToSourceScaleY: number
 }
 
 interface EncodePlan {
@@ -42,52 +54,82 @@ interface EncodePlan {
   quality?: number
 }
 
+type EncodedImage = Pick<
+  PreparedImage,
+  'bytes' | 'mediaType' | 'width' | 'height' | 'optimized'
+>
+
 /** 保留原图；仅在模型请求边界读取或生成受限的会话级衍生图。 */
 export async function prepareImageAttachmentForModel(
   attachmentDirectory: string,
   value: ImageAttachment,
   abortSignal?: AbortSignal,
+  valueTransform: ImageTransform = { detail: 'high' },
 ): Promise<PreparedImage> {
   const attachment = imageAttachmentSchema.parse(value)
+  const transform = imageTransformSchema.parse(valueTransform)
   const stored = await readStoredImage(attachmentDirectory, attachment.storageName)
   const sourceDigest = imageSha256(stored.bytes)
   assertStoredMetadata(stored, attachment, sourceDigest)
-  const legacyMetadata = attachment.sha256 === undefined
-    ? await validateImageDecodes(stored.bytes, stored, abortSignal)
-    : null
-  const cached = await readCachedRendition(
-    attachmentDirectory,
-    attachment,
-    sourceDigest,
-    abortSignal,
-  )
-  if (cached) return cached
-
-  const metadata = legacyMetadata ?? await readImageMetadata(stored.bytes, abortSignal)
+  if (attachment.sha256 === undefined) {
+    await validateImageDecodes(stored.bytes, stored, abortSignal)
+  }
+  const metadata = await readImageMetadata(stored.bytes, abortSignal)
   const orientation = metadata.orientation ?? 1
+  const sourceWidth = orientationSwapsAxes(orientation) ? metadata.height : metadata.width
+  const sourceHeight = orientationSwapsAxes(orientation) ? metadata.width : metadata.height
+  if (!sourceWidth || !sourceHeight) throw new Error('无法读取图片解码尺寸')
+  const selectedRegion = resolveSelectedRegion(transform.region, sourceWidth, sourceHeight)
+
+  if (transform.detail === 'original' && !transform.region && orientation === 1) {
+    return withMapping({ ...stored, optimized: false }, transform.detail, sourceWidth, sourceHeight, selectedRegion)
+  }
   if (
-    stored.bytes.byteLength <= IMAGE_MODEL_MAX_BYTES
+    transform.detail === 'high'
+    && !transform.region
+    && stored.bytes.byteLength <= IMAGE_MODEL_MAX_BYTES
     && stored.width <= IMAGE_MODEL_MAX_DIMENSION
     && stored.height <= IMAGE_MODEL_MAX_DIMENSION
     && orientation === 1
   ) {
-    return { ...stored, optimized: false }
+    return withMapping({ ...stored, optimized: false }, transform.detail, sourceWidth, sourceHeight, selectedRegion)
   }
 
-  const generated = await generateRendition(
-    stored.bytes,
-    stored.mediaType,
-    metadata,
+  const variantDigest = imageSha256(Buffer.from(JSON.stringify({ version: 3, transform })))
+  const cached = await readCachedRendition(
+    attachmentDirectory,
+    attachment,
+    sourceDigest,
+    variantDigest,
+    transform.detail,
+    selectedRegion,
     abortSignal,
   )
+  if (cached) return withMapping(cached, transform.detail, sourceWidth, sourceHeight, selectedRegion)
+
+  const generated = transform.detail === 'original'
+    ? await generateOriginalRendition(
+        stored.bytes,
+        stored.mediaType,
+        selectedRegion,
+        abortSignal,
+      )
+    : await generateRendition(
+        stored.bytes,
+        stored.mediaType,
+        metadata,
+        selectedRegion,
+        abortSignal,
+      )
   // 缓存只是可再生优化；缓存目录故障不能丢弃已成功生成的模型输入。
   await writeRenditionCache(
     attachmentDirectory,
     attachment,
     sourceDigest,
     generated.bytes,
+    variantDigest,
   ).catch(() => {})
-  return generated
+  return withMapping(generated, transform.detail, sourceWidth, sourceHeight, selectedRegion)
 }
 
 /** 丢弃未提交 step 新导入的原图与其衍生图。 */
@@ -106,21 +148,24 @@ async function generateRendition(
   source: Buffer,
   mediaType: ImageMediaType,
   metadata: Metadata,
+  selectedRegion: ImageRegion,
   abortSignal?: AbortSignal,
-): Promise<PreparedImage> {
-  const orientedWidth = orientationSwapsAxes(metadata.orientation) ? metadata.height : metadata.width
-  const orientedHeight = orientationSwapsAxes(metadata.orientation) ? metadata.width : metadata.height
-  if (!orientedWidth || !orientedHeight) throw new Error('无法读取图片解码尺寸')
-
+): Promise<EncodedImage> {
   let maxDimension = Math.min(
     IMAGE_MODEL_MAX_DIMENSION,
-    Math.max(orientedWidth, orientedHeight),
+    Math.max(selectedRegion.width, selectedRegion.height),
   )
   const plans = encodePlans(mediaType, metadata.hasAlpha === true)
   for (let attempt = 0; attempt < MAX_RESIZE_ATTEMPTS; attempt++) {
-    let smallest: PreparedImage | null = null
+    let smallest: EncodedImage | null = null
     for (const plan of plans) {
-      const candidate = await encodeCandidate(source, maxDimension, plan, abortSignal)
+      const candidate = await encodeCandidate(
+        source,
+        selectedRegion,
+        maxDimension,
+        plan,
+        abortSignal,
+      )
       if (!smallest || candidate.bytes.byteLength < smallest.bytes.byteLength) {
         smallest = candidate
       }
@@ -140,15 +185,22 @@ async function generateRendition(
 
 async function encodeCandidate(
   source: Buffer,
+  selectedRegion: ImageRegion,
   maxDimension: number,
   plan: EncodePlan,
   abortSignal?: AbortSignal,
-): Promise<PreparedImage> {
+): Promise<EncodedImage> {
   let pipeline = sharp(source, {
     failOn: 'warning',
     limitInputPixels: IMAGE_ATTACHMENT_MAX_PIXELS,
   })
     .autoOrient()
+    .extract({
+      left: selectedRegion.x,
+      top: selectedRegion.y,
+      width: selectedRegion.width,
+      height: selectedRegion.height,
+    })
     .resize({
       width: maxDimension,
       height: maxDimension,
@@ -190,6 +242,44 @@ async function encodeCandidate(
   }
 }
 
+async function generateOriginalRendition(
+  source: Buffer,
+  mediaType: ImageMediaType,
+  selectedRegion: ImageRegion,
+  abortSignal?: AbortSignal,
+): Promise<EncodedImage> {
+  let pipeline = sharp(source, {
+    failOn: 'warning',
+    limitInputPixels: IMAGE_ATTACHMENT_MAX_PIXELS,
+  })
+    .autoOrient()
+    .extract({
+      left: selectedRegion.x,
+      top: selectedRegion.y,
+      width: selectedRegion.width,
+      height: selectedRegion.height,
+    })
+    .keepIccProfile()
+    .timeout({ seconds: IMAGE_PROCESSING_TIMEOUT_SECONDS })
+  if (mediaType === 'image/png') pipeline = pipeline.png({ compressionLevel: 9, adaptiveFiltering: true })
+  else if (mediaType === 'image/jpeg') pipeline = pipeline.jpeg({ quality: 100, mozjpeg: true })
+  else pipeline = pipeline.webp({ quality: 100, alphaQuality: 100, effort: 4 })
+  const { data } = await runSharpOperation(
+    pipeline,
+    abortSignal,
+    () => pipeline.toBuffer({ resolveWithObject: true }),
+  )
+  if (data.byteLength > IMAGE_ATTACHMENT_MAX_SOURCE_BYTES) {
+    throw new Error('original 图片变换后超过 20 MB，请改用 high 或缩小区域')
+  }
+  const inspected = inspectImage(data)
+  if (
+    inspected.width !== selectedRegion.width
+    || inspected.height !== selectedRegion.height
+  ) throw new Error('original 图片区域尺寸校验失败')
+  return { ...inspected, bytes: data, optimized: true }
+}
+
 function encodePlans(mediaType: ImageMediaType, hasAlpha: boolean): EncodePlan[] {
   if (mediaType === 'image/png') {
     return hasAlpha
@@ -204,15 +294,31 @@ async function readCachedRendition(
   attachmentDirectory: string,
   attachment: ImageAttachment,
   sourceDigest: string,
+  variantDigest: string,
+  detail: ImageDetail,
+  selectedRegion: ImageRegion,
   abortSignal?: AbortSignal,
-): Promise<PreparedImage | null> {
-  const bytes = await readRenditionCache(attachmentDirectory, attachment, sourceDigest)
+): Promise<EncodedImage | null> {
+  const bytes = await readRenditionCache(
+    attachmentDirectory,
+    attachment,
+    sourceDigest,
+    variantDigest,
+    detail === 'original' ? IMAGE_ATTACHMENT_MAX_SOURCE_BYTES : IMAGE_MODEL_MAX_BYTES,
+  )
   if (!bytes) return null
   try {
     const info = inspectImage(bytes)
-    if (info.width > IMAGE_MODEL_MAX_DIMENSION || info.height > IMAGE_MODEL_MAX_DIMENSION) {
+    if (
+      detail === 'high'
+      && (info.width > IMAGE_MODEL_MAX_DIMENSION || info.height > IMAGE_MODEL_MAX_DIMENSION)
+    ) {
       throw new Error('缓存衍生图尺寸超过上限')
     }
+    if (
+      detail === 'original'
+      && (info.width !== selectedRegion.width || info.height !== selectedRegion.height)
+    ) throw new Error('original 缓存区域尺寸不一致')
     await validateImageDecodes(bytes, info, abortSignal)
     return { bytes, mediaType: info.mediaType, width: info.width, height: info.height, optimized: true }
   } catch (error) {
@@ -221,8 +327,44 @@ async function readCachedRendition(
       attachmentDirectory,
       attachment.id,
       sourceDigest,
+      variantDigest,
     ).catch(() => {})
     return null
+  }
+}
+
+function resolveSelectedRegion(
+  region: ImageRegion | undefined,
+  sourceWidth: number,
+  sourceHeight: number,
+): ImageRegion {
+  const selected = region ?? { x: 0, y: 0, width: sourceWidth, height: sourceHeight }
+  if (
+    selected.x + selected.width > sourceWidth
+    || selected.y + selected.height > sourceHeight
+  ) {
+    throw new Error(
+      `图片区域超出 autoOrient 后的源图边界 ${sourceWidth}×${sourceHeight}`,
+    )
+  }
+  return selected
+}
+
+function withMapping(
+  image: EncodedImage,
+  detail: ImageDetail,
+  sourceWidth: number,
+  sourceHeight: number,
+  selectedRegion: ImageRegion,
+): PreparedImage {
+  return {
+    ...image,
+    detail,
+    sourceWidth,
+    sourceHeight,
+    selectedRegion,
+    modelToSourceScaleX: selectedRegion.width / image.width,
+    modelToSourceScaleY: selectedRegion.height / image.height,
   }
 }
 

@@ -13,6 +13,8 @@ export interface ModelCapabilities {
   supportsNativeTools: boolean
   /** 是否允许在 user message 中发送图片；未知或未验证的接入一律标 false。 */
   supportsImageInput: boolean
+  /** WhyCode 已验证该模型可接收不缩放（仍受 20 MB 安全上限）的图片。 */
+  supportsOriginalImageDetail?: boolean
   /** reasoning 暴露方式：block=Anthropic thinking block；field=reasoning_content 字段；summary=仅摘要；none=无 */
   reasoningExposure: 'block' | 'field' | 'summary' | 'none'
   /** 结构化输出最高档位，对应文档三 §2.2 的四级协商 */
@@ -89,6 +91,7 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: true,
+      supportsOriginalImageDetail: true,
       reasoningExposure: 'field',
       structuredOutput: 'json-object',
       promptCaching: 'auto',

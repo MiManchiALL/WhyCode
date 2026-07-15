@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { prepareImageDrafts, type ImageDraft } from './image-draft.ts'
+import {
+  prepareImageDrafts,
+  restoredImageDrafts,
+  type ImageDraft,
+} from './image-draft.ts'
 
 describe('图片草稿传输', () => {
   it('混合本地文件与剪贴板图片时保留原始顺序', async () => {
@@ -26,5 +30,30 @@ describe('图片草稿传输', () => {
       ]),
       /为空或超过/,
     )
+  })
+
+  it('把中断恢复图片保留为不透明 ID，不在 Renderer 重新读取 Base64', async () => {
+    const attachment = {
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      name: 'queued.png',
+      storageName: '22222222-2222-4222-8222-222222222222.png',
+      mediaType: 'image/png' as const,
+      sha256: 'a'.repeat(64),
+      byteLength: 100,
+      width: 20,
+      height: 10,
+    }
+    const [draft] = restoredImageDrafts([{
+      id: 'input-1',
+      text: '恢复图片',
+      attachments: [attachment],
+    }])
+    assert.ok(draft?.kind === 'stored')
+    assert.match(draft.previewUrl, /^whycode-attachment:/)
+    assert.deepEqual(await prepareImageDrafts([draft]), [{
+      kind: 'stored',
+      attachmentId: attachment.id,
+    }])
   })
 })

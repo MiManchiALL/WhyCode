@@ -42,7 +42,7 @@ describe('用户可见事件契约', () => {
     )
     assert.deepEqual(
       toViewEvent({ type: 'message-injected', id: 'queue-1', text: '补充要求' }),
-      { type: 'user-message', text: '补充要求', startsTurn: false },
+      { type: 'user-message', inputId: 'queue-1', text: '补充要求', startsTurn: false },
     )
     assert.deepEqual(
       toViewEvent({ type: 'consensus-skipped', reason: 'image-input' }),
@@ -55,7 +55,7 @@ describe('用户可见事件契约', () => {
         text: '下一项任务',
         startsTurn: true,
       }),
-      { type: 'user-message', text: '下一项任务', startsTurn: true },
+      { type: 'user-message', inputId: 'queue-2', text: '下一项任务', startsTurn: true },
     )
   })
 
@@ -101,7 +101,7 @@ describe('用户可见事件契约', () => {
       attachments: [{ ...event.attachments[0], base64: 'x' }],
     })
     assert.doesNotMatch(JSON.stringify(parsed), /base64/)
-    assert.equal(viewEventSchema.safeParse({ ...event, startsTurn: false }).success, false)
+    assert.equal(viewEventSchema.safeParse({ ...event, startsTurn: false }).success, true)
 
     const viewed = viewEventSchema.parse({
       type: 'core-event',

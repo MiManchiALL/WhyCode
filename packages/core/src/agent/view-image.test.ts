@@ -8,7 +8,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
-import { VIEW_IMAGE_TOOL_NAME } from '../tools/view-image/index.ts'
+import { createViewImageTool, VIEW_IMAGE_TOOL_NAME } from '../tools/view-image/index.ts'
 import { AgentSession } from './session.ts'
 
 const ONE_PIXEL_PNG = Buffer.from(
@@ -17,6 +17,27 @@ const ONE_PIXEL_PNG = Buffer.from(
 )
 
 describe('ViewImage Agent 链路', () => {
+  it('original 只在模型能力已验证时进入工具 schema', () => {
+    const base = {
+      attachmentDirectory: process.cwd(),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+    }
+    const highOnly = createViewImageTool(base)
+    assert.equal(
+      highOnly.inputSchema.safeParse({ path: 'screen.png', detail: 'original' }).success,
+      false,
+    )
+    const original = createViewImageTool({ ...base, supportsOriginalDetail: true })
+    assert.equal(
+      original.inputSchema.safeParse({
+        path: 'screen.png',
+        detail: 'original',
+        region: { x: 10, y: 20, width: 30, height: 40 },
+      }).success,
+      true,
+    )
+  })
+
   it('只向视觉 Main 注册，并以稳定引用跨重启恢复', async () => {
     await withTempDirectory(async (directory) => {
       const projectDir = join(directory, 'project')

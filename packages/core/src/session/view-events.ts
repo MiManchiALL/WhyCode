@@ -137,13 +137,11 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
 
 const userMessageViewEventSchema = z.object({
   type: z.literal('user-message'),
+  /** steering 的稳定身份；旧会话与根消息允许省略。 */
+  inputId: z.string().min(1).optional(),
   text: z.string().min(1),
   startsTurn: z.boolean(),
   attachments: imageAttachmentsSchema.optional(),
-}).superRefine((event, ctx) => {
-  if (event.attachments?.length && !event.startsTurn) {
-    ctx.addIssue({ code: 'custom', path: ['attachments'], message: '图片附件只能属于根消息' })
-  }
 })
 
 export const viewEventSchema = z.discriminatedUnion('type', [
@@ -157,7 +155,13 @@ export type ViewEvent = z.infer<typeof viewEventSchema>
 /** CoreEvent → 可持久化的用户可见事件；运行态、审批和已失效检查点不会进入时间线。 */
 export function toViewEvent(event: CoreEvent): ViewEvent | null {
   if (event.type === 'message-injected') {
-    return { type: 'user-message', text: event.text, startsTurn: event.startsTurn ?? false }
+    return {
+      type: 'user-message',
+      inputId: event.id,
+      text: event.text,
+      startsTurn: event.startsTurn ?? false,
+      ...(event.attachments?.length ? { attachments: event.attachments } : {}),
+    }
   }
   if (event.type === 'peer-event') {
     if (!['text-delta', 'tool-start', 'tool-end'].includes(event.event.type)) return null

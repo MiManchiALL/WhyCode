@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
+import type { ImageAttachment } from '../attachments/types.ts'
 import type { ConsensusPersistedState } from '../consensus/types.ts'
 import {
   createUserQuestionMarker,
@@ -46,6 +47,145 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.title, '修复登录问题')
     assert.equal(reopened.metadataSnapshot.status, 'idle')
     assert.deepEqual(reopened.messagesBeforeTurn('turn-1'), [])
+  })
+
+  it('steering 队列跨快照保留，并以模型消息批次原子确认送达', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordUserInput('开始', true)
+    await journal.recordTurnStart('turn-queue', [message('user', '开始')])
+    const firstId = randomUUID()
+    const secondId = randomUUID()
+    await journal.recordUserInputWithId(firstId, '第一条插话', false)
+    await journal.recordUserInputWithId(secondId, '第二条插话', false)
+    await journal.recordSnapshot('compact', [...journal.initialMessages], 'turn-queue')
+
+    const queued = await store.open(journal.sessionId)
+    assert.deepEqual(queued.pendingUserInputs.map(({ id, text, state }) => ({ id, text, state })), [
+      { id: firstId, text: '第一条插话', state: 'queued' },
+      { id: secondId, text: '第二条插话', state: 'queued' },
+    ])
+    await queued.recordStep(
+      'turn-queue',
+      [message('user', '第一条插话'), message('user', '第二条插话')],
+      undefined,
+      undefined,
+      undefined,
+      [firstId, secondId],
+    )
+
+    const delivered = await store.open(journal.sessionId)
+    assert.deepEqual(delivered.pendingUserInputs, [])
+    assert.deepEqual(delivered.initialMessages.map(modelText), ['开始', '第一条插话', '第二条插话'])
+  })
+
+  it('送达确认后崩溃缺失即时事件时，在原交付位置补回 steering 时间线', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordUserInput('开始', true)
+    await journal.recordTurnStart('turn-visible-steering', [message('user', '开始')])
+    const inputId = randomUUID()
+    await journal.recordUserInputWithId(inputId, '交付后即崩溃的插话', false)
+    await journal.recordStep(
+      'turn-visible-steering',
+      [message('user', '交付后即崩溃的插话')],
+      undefined,
+      undefined,
+      undefined,
+      [inputId],
+    )
+    // 模拟 messages 已写稳、message-injected 尚未来得及写入，重启后又产生了更新事件。
+    await journal.recordViewEvents([{
+      type: 'core-event',
+      event: { type: 'text-delta', text: '后续稳定事件' },
+    }])
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialViewEvents, [
+      { type: 'user-message', text: '开始', startsTurn: true },
+      {
+        type: 'user-message',
+        inputId,
+        text: '交付后即崩溃的插话',
+        startsTurn: false,
+      },
+      { type: 'core-event', event: { type: 'text-delta', text: '后续稳定事件' } },
+    ])
+  })
+
+  it('停止时把 steering 原子退回草稿，重新提交只消费当前会话的恢复身份', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const queuedId = randomUUID()
+    await journal.recordUserInputWithId(queuedId, '原始草稿', false)
+    await journal.markUserInputsRestored([queuedId])
+
+    const restored = await store.open(journal.sessionId)
+    assert.equal(restored.pendingUserInputs[0]?.state, 'restored')
+    await assert.rejects(
+      restored.recordUserInputWithId(randomUUID(), '无效提交', true, [], [randomUUID()]),
+      /无法消费不属于当前会话/,
+    )
+    const replacementId = randomUUID()
+    await restored.recordUserInputWithId(
+      replacementId,
+      '编辑后的草稿',
+      true,
+      [],
+      [queuedId],
+    )
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.pendingUserInputs, [])
+    assert.deepEqual(reopened.undeliveredUserInputIds, [replacementId])
+  })
+
+  it('进程中断把尚未送达的 steering 恢复为草稿而不注入模型历史', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    await journal.recordUserInput('开始', true)
+    await journal.recordTurnStart('turn-crash-queue', [message('user', '开始')])
+    const inputId = randomUUID()
+    await journal.recordUserInputWithId(inputId, '崩溃前插话', false)
+
+    const interrupted = await store.open(journal.sessionId)
+    await interrupted.recoverInterruptedWork()
+    const recovered = await store.open(journal.sessionId)
+    assert.deepEqual(recovered.pendingUserInputs.map(({ id, text, state }) => ({ id, text, state })), [
+      { id: inputId, text: '崩溃前插话', state: 'restored' },
+    ])
+    assert.equal(recovered.initialMessages.some((entry) => modelText(entry) === '崩溃前插话'), false)
+  })
+
+  it('附件元数据冲突在 JSONL 追加前失败', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const attachmentId = randomUUID()
+    const attachment: ImageAttachment = {
+      id: attachmentId,
+      sessionId: journal.sessionId,
+      name: 'original.png',
+      storageName: `${attachmentId}.png`,
+      mediaType: 'image/png',
+      sha256: 'a'.repeat(64),
+      byteLength: 100,
+      width: 10,
+      height: 10,
+    }
+    await journal.recordUserInputWithId(randomUUID(), '第一条', false, [attachment])
+    const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
+    const before = await readFile(transcript, 'utf8')
+
+    await assert.rejects(
+      journal.recordUserInputWithId(
+        randomUUID(),
+        '冲突条目',
+        false,
+        [{ ...attachment, name: 'conflict.png' }],
+      ),
+      /附件元数据冲突/,
+    )
+    assert.equal(await readFile(transcript, 'utf8'), before)
   })
 
   it('持久化等待用户状态和问题卡', async () => {
@@ -1038,6 +1178,11 @@ async function waitingQuestionSession() {
 
 function message(role: 'user' | 'assistant', content: string): ModelMessage {
   return { role, content }
+}
+
+function modelText(value: ModelMessage): string {
+  if (typeof value.content === 'string') return value.content
+  return value.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('')
 }
 
 function countMessage(messages: readonly ModelMessage[], expected: ModelMessage): number {

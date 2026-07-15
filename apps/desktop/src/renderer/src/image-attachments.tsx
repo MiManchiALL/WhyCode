@@ -36,7 +36,7 @@ export function useImageDrafts(onError: (message: string) => void) {
   const remove = useCallback((id: string) => {
     const next = draftsRef.current.filter((draft) => {
       if (draft.id !== id) return true
-      URL.revokeObjectURL(draft.previewUrl)
+      releaseImageDraft(draft)
       return false
     })
     replace(next)
@@ -52,7 +52,7 @@ export function useImageDrafts(onError: (message: string) => void) {
     const current = draftsRef.current
     const known = new Set(current.map((draft) => draft.id))
     for (const duplicate of rejected.filter((draft) => known.has(draft.id))) {
-      URL.revokeObjectURL(duplicate.previewUrl)
+      releaseImageDraft(duplicate)
     }
     const candidates = rejected.filter((draft) => !known.has(draft.id))
     const restored = candidates.slice(0, Math.max(0, MAX_IMAGE_DRAFTS - current.length))
@@ -138,7 +138,7 @@ export function ImagePickerButton({
           enabled
             ? `添加、拖放或在输入框按 Ctrl+V 粘贴图片（最多 ${MAX_IMAGE_DRAFTS} 张）`
             : supportsImageInput
-              ? 'Agent 工作中；图片消息不能排队或立即插话'
+              ? '图片正在发送或当前操作暂时锁定附件'
               : '当前模型不支持识图；请切换到带“图片”标记的模型'
         }
         aria-label="添加图片"
@@ -181,8 +181,29 @@ export function UserImageGallery({ attachments }: { attachments?: readonly Image
   )
 }
 
+export function QueuedImageStrip({ attachments }: { attachments?: readonly ImageAttachment[] }) {
+  if (!attachments?.length) return null
+  return (
+    <div className="mt-1 flex gap-1">
+      {attachments.map((attachment) => (
+        <img
+          key={attachment.id}
+          src={`whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`}
+          alt={attachment.name}
+          title={`${attachment.name} · ${attachment.width}×${attachment.height}`}
+          className="h-10 w-10 rounded border border-neutral-200 bg-white object-cover"
+        />
+      ))}
+    </div>
+  )
+}
+
 export function releaseImageDrafts(drafts: readonly ImageDraft[]): void {
-  for (const draft of drafts) URL.revokeObjectURL(draft.previewUrl)
+  for (const draft of drafts) releaseImageDraft(draft)
+}
+
+function releaseImageDraft(draft: ImageDraft): void {
+  if (draft.kind !== 'stored') URL.revokeObjectURL(draft.previewUrl)
 }
 
 function normalizePath(path: string): string {

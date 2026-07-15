@@ -8,7 +8,7 @@
  */
 
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
-import type { ImageAttachment, ImageAttachmentInput } from './attachments/types.ts'
+import type { ImageAttachment, ImageMessageAttachmentInput } from './attachments/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -31,6 +31,13 @@ export interface UserQuestion {
   header: string
   question: string
   options: UserQuestionOption[]
+}
+
+/** 忙时输入始终把正文和图片作为一个有序单元传递、恢复和展示。 */
+export interface QueuedUserMessage {
+  id: string
+  text: string
+  attachments?: ImageAttachment[]
 }
 
 /** Agent 整体状态，宠物接口消费的核心事件 */
@@ -80,10 +87,16 @@ export type CoreEvent =
       attachments?: ImageAttachment[]
     }
   // --- steering（M2-a）：运行中插话 ---
-  | { type: 'message-queued'; id: string; text: string }
-  | { type: 'message-injected'; id: string; text: string; startsTurn?: boolean }
+  | { type: 'message-queued'; id: string; text: string; attachments?: ImageAttachment[] }
+  | {
+      type: 'message-injected'
+      id: string
+      text: string
+      startsTurn?: boolean
+      attachments?: ImageAttachment[]
+    }
   /** 中断后把排队文本还给输入框（不静默丢弃） */
-  | { type: 'queue-restored'; text: string }
+  | { type: 'queue-restored'; text: string; items?: QueuedUserMessage[] }
   // --- 检查点（M2-c）---
   /** 写类工具的 before/after 资源清单已持久化；hash 当前承载稳定 checkpointId。 */
   | {
@@ -182,7 +195,9 @@ export type CoreCommand =
       /** true = 立即插话：打断当前步骤马上注入（Claude Code 的 now 语义）；默认排队到步骤间 */
       urgent?: boolean
       /** 有序图片来源；剪贴板 Base64 在主进程落盘后不得持久化。 */
-      attachments?: ImageAttachmentInput[]
+      attachments?: ImageMessageAttachmentInput[]
+      /** 重新提交 queue-restored 草稿时原子消费的旧输入；只能引用当前会话事实源。 */
+      restoredInputIds?: string[]
     }
   | {
       type: 'approval-response'

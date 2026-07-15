@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import sharp from 'sharp'
-import { createImageUserMessage, messagesForModel } from './messages.ts'
+import {
+  createImageToolResultMessage,
+  createImageUserMessage,
+  messagesForModel,
+} from './messages.ts'
 import { prepareImageAttachmentForModel } from './renditions.ts'
 import { importImageAttachments, inspectImage } from './storage.ts'
 import {
@@ -126,6 +130,69 @@ describe('图片模型衍生图', () => {
       assert.equal(prepared.optimized, true)
       assert.deepEqual([prepared.width, prepared.height], [20, 40])
       assert.deepEqual(await readFile(join(attachmentDirectory, attachment.storageName)), source)
+    })
+  })
+
+  it('high、original 与 region 使用独立缓存并返回可逆像素映射', async () => {
+    await withTempDirectory(async (directory) => {
+      const sourcePath = join(directory, 'details.png')
+      const attachmentDirectory = join(directory, 'attachments')
+      const source = await sharp({
+        create: { width: 3_000, height: 1_400, channels: 3, background: '#16a34a' },
+      }).png().toBuffer()
+      await writeFile(sourcePath, source)
+      const [attachment] = await importImageAttachments(
+        [{ kind: 'path', path: sourcePath }],
+        attachmentDirectory,
+        SESSION_ID,
+      )
+      assert.ok(attachment)
+      const region = { x: 200, y: 100, width: 2_500, height: 1_000 }
+
+      const high = await prepareImageAttachmentForModel(
+        attachmentDirectory,
+        attachment,
+        undefined,
+        { detail: 'high', region },
+      )
+      const original = await prepareImageAttachmentForModel(
+        attachmentDirectory,
+        attachment,
+        undefined,
+        { detail: 'original', region },
+      )
+      assert.deepEqual([high.width, high.height], [2_048, 819])
+      assert.deepEqual([original.width, original.height], [2_500, 1_000])
+      assert.deepEqual(original.selectedRegion, region)
+      assert.equal(original.modelToSourceScaleX, 1)
+      assert.equal(original.modelToSourceScaleY, 1)
+      assert.equal(Number(high.modelToSourceScaleX.toFixed(6)), Number((2_500 / 2_048).toFixed(6)))
+
+      const cacheNames = await readdir(join(attachmentDirectory, '.model-renditions'))
+      assert.equal(cacheNames.filter((name) => name.endsWith('.v3')).length, 2)
+      const [request] = await messagesForModel(
+        [createImageToolResultMessage([attachment], { detail: 'original', region })],
+        true,
+        attachmentDirectory,
+        [attachment],
+      )
+      assert.ok(request && typeof request.content !== 'string')
+      const file = request.content.find((part) => part.type === 'file')
+      assert.ok(file && typeof file.data === 'string')
+      assert.deepEqual(
+        [inspectImage(Buffer.from(file.data, 'base64')).width, inspectImage(Buffer.from(file.data, 'base64')).height],
+        [2_500, 1_000],
+      )
+
+      await assert.rejects(
+        prepareImageAttachmentForModel(
+          attachmentDirectory,
+          attachment,
+          undefined,
+          { detail: 'high', region: { x: 2_900, y: 0, width: 200, height: 100 } },
+        ),
+        /超出.*源图边界/,
+      )
     })
   })
 })

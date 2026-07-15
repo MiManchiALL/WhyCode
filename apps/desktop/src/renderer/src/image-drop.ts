@@ -48,7 +48,7 @@ export function useImageDropTarget(options: ImageDropOptions) {
       return
     }
     if (interactionBusy) {
-      onError('Agent 工作中；图片只能在空闲时拖放，不能排队或立即插话')
+      onError('当前操作暂时锁定图片附件，请稍后重试')
       return
     }
     onFiles(files)

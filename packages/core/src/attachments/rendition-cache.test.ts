@@ -23,7 +23,7 @@ describe('图片衍生图缓存', () => {
         writeRenditionCache(directory, attachment, DIGEST, bytes)))
 
       const names = await readdir(join(directory, '.model-renditions'))
-      assert.equal(names.filter((name) => name.endsWith('.v2')).length, 1)
+      assert.equal(names.filter((name) => name.endsWith('.v3')).length, 1)
       assert.equal(names.some((name) => name.endsWith('.tmp')), false)
       const stored = await readFile(join(directory, '.model-renditions', names[0]!))
       assert.equal(candidates.some((candidate) => candidate.equals(stored)), true)

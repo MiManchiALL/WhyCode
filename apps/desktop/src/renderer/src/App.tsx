@@ -3,7 +3,12 @@ import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
-import type { AgentStatus, CoreEvent, UserQuestion } from '@whycode/core/events'
+import type {
+  AgentStatus,
+  CoreEvent,
+  QueuedUserMessage,
+  UserQuestion,
+} from '@whycode/core/events'
 import type { SessionListItem } from '../../shared/session.ts'
 import {
   applyCoreEvent,
@@ -25,11 +30,12 @@ import { TaskPlanCard } from './task-plan-card.tsx'
 import {
   ImageDraftStrip,
   ImagePickerButton,
+  QueuedImageStrip,
   releaseImageDrafts,
   useImageDrafts,
   UserImageGallery,
 } from './image-attachments.tsx'
-import { prepareImageDrafts } from './image-draft.ts'
+import { prepareImageDrafts, restoredImageDrafts } from './image-draft.ts'
 import { collectPastedImageFiles } from './image-paste.ts'
 import { useImageDropTarget } from './image-drop.ts'
 
@@ -59,7 +65,10 @@ export function App() {
   const [modelId, setModelId] = useState('')
   const [approval, setApproval] = useState<Approval | null>(null)
   const [projectDir, setProjectDir] = useState<string | null>(null)
-  const [queued, setQueued] = useState<{ id: string; text: string }[]>([])
+  const [queued, setQueued] = useState<QueuedUserMessage[]>([])
+  const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
+  const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
+  const [restoredSubmissionPending, setRestoredSubmissionPending] = useState(false)
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const [sessions, setSessions] = useState<SessionListItem[]>([])
@@ -88,6 +97,37 @@ export function App() {
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
   } = useImageDrafts(addError)
+
+  const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
+    if (items.length === 0) return
+    setRestoredQueue((previous) => {
+      const known = new Set(previous.map((item) => item.id))
+      return [...previous, ...items.filter((item) => !known.has(item.id))]
+    })
+  }, [])
+
+  // 恢复输入保持原消息边界：一条确认提交后才激活下一条，避免多条各 4 图被扁平截断。
+  useEffect(() => {
+    if (
+      restoredQueue.length === 0
+      || restoredInputIds.length > 0
+      || restoredSubmissionPending
+      || input.trim()
+      || imageDrafts.length > 0
+    ) return
+    const next = restoredQueue[0]!
+    setRestoredQueue((previous) => previous.filter((item) => item.id !== next.id))
+    setInput(next.text)
+    restoreImageDrafts(restoredImageDrafts([next]))
+    setRestoredInputIds([next.id])
+  }, [
+    imageDrafts.length,
+    input,
+    restoreImageDrafts,
+    restoredInputIds.length,
+    restoredQueue,
+    restoredSubmissionPending,
+  ])
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -120,14 +160,19 @@ export function App() {
         )
         break
       case 'message-queued':
-        setQueued((prev) => [...prev, { id: event.id, text: event.text }])
+        setQueued((prev) => [...prev, {
+          id: event.id,
+          text: event.text,
+          ...(event.attachments?.length ? { attachments: event.attachments } : {}),
+        }])
         break
       case 'message-injected':
         setQueued((prev) => prev.filter((q) => q.id !== event.id))
         break
       case 'queue-restored':
         setQueued([])
-        setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
+        if (event.items?.length) restoreQueuedDrafts(event.items)
+        else setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
         break
       case 'approval-request':
         setApproval({
@@ -156,7 +201,7 @@ export function App() {
       default:
         break
     }
-  }, [refreshSessions])
+  }, [refreshSessions, restoreQueuedDrafts])
 
   useEffect(() => {
     void window.whycode.listModels().then(setModels)
@@ -185,7 +230,8 @@ export function App() {
       setDeletingSessionId(snapshot.deletingSessionId)
       setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
       setStopping(false)
-      setQueued([])
+      setQueued(snapshot.queuedInputs)
+      restoreQueuedDrafts(snapshot.restoredInputs)
       setApproval(snapshot.approval)
       if (snapshot.modelId) setModelId(snapshot.modelId)
       hydrated = true
@@ -205,7 +251,7 @@ export function App() {
       disposed = true
       unsubscribe()
     }
-  }, [consumeEvent, refreshSessions])
+  }, [consumeEvent, refreshSessions, restoreQueuedDrafts])
 
   useEffect(() => {
     if (stickToBottom.current) {
@@ -232,6 +278,10 @@ export function App() {
     || imageSubmissionPending
     || deletingSessionId !== null
     || checkpointRestoreToolUseId !== null
+  const imageAttachmentLocked = stopping
+    || imageSubmissionPending
+    || deletingSessionId !== null
+    || checkpointRestoreToolUseId !== null
 
   const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
     setCheckpointRestoreToolUseId((current) =>
@@ -244,6 +294,12 @@ export function App() {
       if (dir) {
         setProjectDir(dir)
         setView(createConversationState())
+        setInput('')
+        setQueued([])
+        setRestoredInputIds([])
+        setRestoredQueue([])
+        setRestoredSubmissionPending(false)
+        setApproval(null)
         clearImageDrafts()
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
@@ -263,7 +319,11 @@ export function App() {
   const resetView = useCallback((notice?: string) => {
     const empty = createConversationState()
     setView(notice ? appendNotice(empty, notice) : empty)
+    setInput('')
     setQueued([])
+    setRestoredInputIds([])
+    setRestoredQueue([])
+    setRestoredSubmissionPending(false)
     setApproval(null)
     setStatus('idle')
     setStopping(false)
@@ -308,7 +368,13 @@ export function App() {
         ),
       )
       setQueued([])
+      setInput('')
       clearImageDrafts()
+      setRestoredInputIds([])
+      setRestoredQueue([])
+      setRestoredSubmissionPending(false)
+      setQueued(result.queuedInputs)
+      restoreQueuedDrafts(result.restoredInputs)
       setApproval(null)
       setStatus('idle')
       setStopping(false)
@@ -322,7 +388,7 @@ export function App() {
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
     })
-  }, [addError, clearImageDrafts, refreshSessions])
+  }, [addError, clearImageDrafts, refreshSessions, restoreQueuedDrafts])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (deletingSessionId) return
@@ -377,14 +443,13 @@ export function App() {
   }, [addError, imageDrafts.length, modelId, models])
 
   const send = useCallback((urgent = false) => {
-    if (deletingSessionId || checkpointRestoreToolUseId || imageSubmissionPending) return
-    if (imageDrafts.length > 0 && busy) {
-      addError('图片消息只能在 Agent 空闲时发送；文字消息仍可排队或立即插话')
-      return
-    }
+    if (stopping || deletingSessionId || checkpointRestoreToolUseId || imageSubmissionPending) return
     const text = input.trim() || (imageDrafts.length ? '请分析这些图片。' : '')
     if (!text) return
     const sentDrafts = detachImageDrafts()
+    const sentRestoredInputIds = restoredInputIds
+    setRestoredInputIds([])
+    if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(true)
     if (sentDrafts.length > 0) setImageSubmissionPending(true)
     setInput('')
     // 自己发消息 = 主动行为，恢复贴底跟随
@@ -393,6 +458,9 @@ export function App() {
     const restoreRejectedInput = () => {
       setInput((current) => current ? `${text}\n${current}` : text)
       restoreImageDrafts(sentDrafts)
+      setRestoredInputIds((current) => [
+        ...new Set([...sentRestoredInputIds, ...current]),
+      ])
     }
     void (async () => {
       try {
@@ -402,6 +470,9 @@ export function App() {
           text,
           urgent,
           ...(attachments.length ? { attachments } : {}),
+          ...(sentRestoredInputIds.length
+            ? { restoredInputIds: sentRestoredInputIds }
+            : {}),
         })
         if (result?.ok) {
           releaseImageDrafts(sentDrafts)
@@ -415,18 +486,20 @@ export function App() {
           : '消息发送失败，内容已恢复到输入框')
       } finally {
         if (sentDrafts.length > 0) setImageSubmissionPending(false)
+        if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(false)
       }
     })()
   }, [
     addError,
-    busy,
     checkpointRestoreToolUseId,
     deletingSessionId,
     detachImageDrafts,
     imageDrafts.length,
     imageSubmissionPending,
     input,
+    restoredInputIds,
     restoreImageDrafts,
+    stopping,
   ])
 
   const answerQuestion = useCallback((answer: string) => {
@@ -468,15 +541,15 @@ export function App() {
       addError('当前模型不支持粘贴图片；请切换到带“图片”标记的模型')
       return
     }
-    if (interactionBusy) {
-      addError('Agent 工作中；图片只能在空闲时粘贴，不能排队或立即插话')
+    if (imageAttachmentLocked) {
+      addError('当前操作暂时锁定图片附件，请稍后重试')
       return
     }
     addImageFiles(files)
-  }, [addError, addImageFiles, canAttachImages, interactionBusy])
+  }, [addError, addImageFiles, canAttachImages, imageAttachmentLocked])
   const imageDrop = useImageDropTarget({
     canAttachImages,
-    interactionBusy,
+    interactionBusy: imageAttachmentLocked,
     onFiles: addImageFiles,
     onError: addError,
   })
@@ -490,8 +563,8 @@ export function App() {
         <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-50/90 text-base font-medium text-violet-700 shadow-lg">
           {!canAttachImages
             ? '当前模型不支持图片'
-            : interactionBusy
-              ? 'Agent 工作中，暂不能添加图片'
+            : imageAttachmentLocked
+              ? '当前操作暂时锁定图片附件'
               : '松开以添加图片（PNG、JPEG、WebP，最多 4 张）'}
         </div>
       )}
@@ -589,17 +662,23 @@ export function App() {
         {queued.length > 0 && (
           <div className="mb-2 space-y-1">
             {queued.map((q) => (
-              <div key={q.id} className="truncate rounded bg-neutral-100 px-3 py-1 text-xs text-neutral-400">
-                ⏳ 已排队 · {q.text}
+              <div key={q.id} className="rounded bg-neutral-100 px-3 py-1 text-xs text-neutral-500">
+                <div className="truncate">⏳ 已排队 · {q.text}</div>
+                <QueuedImageStrip attachments={q.attachments} />
               </div>
             ))}
+          </div>
+        )}
+        {restoredQueue.length > 0 && (
+          <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
           </div>
         )}
         <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
         <div className="flex gap-2">
           <ImagePickerButton
             supportsImageInput={canAttachImages}
-            disabled={interactionBusy}
+            disabled={imageAttachmentLocked}
             onFiles={addImageFiles}
           />
           <input
@@ -642,7 +721,11 @@ export function App() {
             <button
               className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
               onClick={() => send(true)}
-              disabled={stopping || imageSubmissionPending || imageDrafts.length > 0 || !input.trim()}
+              disabled={
+                stopping
+                || imageSubmissionPending
+                || (!input.trim() && imageDrafts.length === 0)
+              }
               title="打断当前步骤，立即插话"
             >
               立即
@@ -656,7 +739,6 @@ export function App() {
               || imageSubmissionPending
               || deletingSessionId !== null
               || checkpointRestoreToolUseId !== null
-              || (busy && imageDrafts.length > 0)
               || (!input.trim() && imageDrafts.length === 0)
             }
           >
