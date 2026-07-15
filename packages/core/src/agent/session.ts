@@ -55,6 +55,7 @@ import {
 import {
   createTaskPlanTools,
   type TaskPlanEngagementAction,
+  UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import {
@@ -134,6 +135,8 @@ function queuedMessageForModel(message: QueuedMessage): ModelMessage {
 interface StepResult {
   committed: boolean
   hadToolCalls: boolean
+  /** 仅保存既有计划进度，不代表模型决定忽略最新 steering 继续实质执行。 */
+  hadOnlyTaskProgressUpdates: boolean
   toolEndReason: 'completed' | 'waiting-user' | null
   taskPlanChanged: boolean
   taskPlanEngagement: TaskPlanEngagementAction | null
@@ -609,7 +612,10 @@ export class AgentSession {
             && !this.protocolRound,
         )
         const steeringMayEndRun = steeringDecisionPending && !step.hadToolCalls
-        steeringDecisionPending = false
+        // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
+        // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
+        steeringDecisionPending = steeringDecisionPending
+          && step.hadOnlyTaskProgressUpdates
         if (step.interruptionBoundaryConsumed) interruptionBoundaryConsumed = true
         if (step.taskPlanChanged) {
           planExecutionEngaged = Boolean(this.taskPlan?.snapshot)
@@ -1064,6 +1070,7 @@ export class AgentSession {
       })
 
       let hadToolCalls = false
+      let hadNonProgressToolCalls = false
       let thinkingStartedAt: number | null = null
       let stepTotalTokens = 0
 
@@ -1091,6 +1098,7 @@ export class AgentSession {
             break
           case 'tool-call':
             hadToolCalls = true
+            if (part.toolName !== UPDATE_TASK_ITEM_TOOL_NAME) hadNonProgressToolCalls = true
             toolCallOrder.push(part.toolCallId)
             break
           case 'finish':
@@ -1187,6 +1195,7 @@ export class AgentSession {
       return {
         committed: true,
         hadToolCalls,
+        hadOnlyTaskProgressUpdates: hadToolCalls && !hadNonProgressToolCalls,
         toolEndReason: stepControl.toolEndReason,
         taskPlanChanged: taskPlanCommit !== undefined,
         taskPlanEngagement: stepControl.taskPlanEngagement,
@@ -1218,6 +1227,7 @@ export class AgentSession {
         return {
           committed: false,
           hadToolCalls: false,
+          hadOnlyTaskProgressUpdates: false,
           toolEndReason: null,
           taskPlanChanged: false,
           taskPlanEngagement: null,

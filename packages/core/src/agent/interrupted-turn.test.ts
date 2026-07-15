@@ -10,6 +10,7 @@ import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { isTurnAbortedMessage } from '../session/interruption.ts'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/ask-user-question/index.ts'
+import { LIST_DIR_TOOL_NAME } from '../tools/list-glob/index.ts'
 import {
   createUserQuestionMarker,
   findPendingUserQuestion,
@@ -716,6 +717,100 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureMessageSnapshot().some(isTurnAbortedMessage), false)
   })
 
+  it('运行中暂停回应可先记账计划进度，再由最终文本结束', async () => {
+    let requestCount = 0
+    let releaseCurrentStep!: () => void
+    const currentStepMayFinish = new Promise<void>((resolve) => {
+      releaseCurrentStep = resolve
+    })
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        requestCount++
+        if (requestCount === 1) {
+          return toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id })
+        }
+        if (requestCount === 2) {
+          await currentStepMayFinish
+          return finalStep('正在处理当前任务。')
+        }
+        if (requestCount === 3) {
+          return textAndToolStep('好的，我先停下来并保存进度。', UPDATE_TASK_ITEM_TOOL_NAME, {
+            item_id: 'T1',
+            status: 'completed',
+            evidence: ['暂停前的实现已经完成'],
+          })
+        }
+        if (requestCount === 4) return finalStep('进度已保存，随时说“继续”。')
+        throw new Error('暂停最终回复后不应再发起模型请求')
+      },
+    })
+    const session = createMemorySession(model)
+    session.restoreTaskStateSnapshot(activeState())
+
+    const running = session.handleUserMessage('继续刚才的任务')
+    await waitFor(() => model.doStreamCalls.length === 2)
+    session.handleUserMessage('先停一下，暂时不要继续')
+    releaseCurrentStep()
+
+    assert.equal(await running, 'completed')
+    assert.equal(model.doStreamCalls.length, 4)
+    assert.equal(
+      model.doStreamCalls.some((call) =>
+        JSON.stringify(call.prompt).includes('任务计划仍有未完成项')),
+      false,
+    )
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+  })
+
+  it('steering 后调用实际工具仍保留未完成计划保护', async () => {
+    const projectDir = await temporaryDirectory()
+    let requestCount = 0
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        requestCount++
+        if (requestCount === 1) {
+          return toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id })
+        }
+        if (requestCount === 2) return abortableStep(options.abortSignal)
+        if (requestCount === 3) {
+          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+            item_id: 'T1',
+            status: 'completed',
+            evidence: ['实现完成'],
+          })
+        }
+        if (requestCount === 4) {
+          return toolStep(LIST_DIR_TOOL_NAME, { path: projectDir })
+        }
+        if (requestCount === 5) return finalStep('检查结束。')
+        if (requestCount === 6) {
+          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+            item_id: 'T2',
+            status: 'completed',
+            evidence: ['验证完成'],
+          })
+        }
+        if (requestCount === 7) {
+          return toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
+            outcome: 'completed',
+            summary: '检查和验证完成',
+          })
+        }
+        return finalStep('任务完成。')
+      },
+    })
+    const session = createMemorySession(model, projectDir)
+    session.restoreTaskStateSnapshot(activeState())
+
+    const running = session.handleUserMessage('继续刚才的任务')
+    await waitFor(() => model.doStreamCalls.length === 2)
+    session.handleUserMessage('记录进度后继续检查项目文件', true)
+
+    assert.equal(await running, 'completed')
+    assert.match(JSON.stringify(model.doStreamCalls[5]?.prompt), /任务计划仍有未完成项/)
+  })
+
   it('终止型问题工具完成稳定回合后会消费中断边界', async () => {
     let firstRequest = true
     const remainingSteps = [questionStep(), finalStep('已开始新的任务。')]
@@ -880,6 +975,30 @@ function toolStep(toolName: string, input: unknown) {
   return {
     stream: simulateReadableStream({
       chunks: [
+        {
+          type: 'tool-call' as const,
+          toolCallId: crypto.randomUUID(),
+          toolName,
+          input: JSON.stringify(input),
+        },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function textAndToolStep(text: string, toolName: string, input: unknown) {
+  const textId = crypto.randomUUID()
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: 'text-start' as const, id: textId },
+        { type: 'text-delta' as const, id: textId, delta: text },
+        { type: 'text-end' as const, id: textId },
         {
           type: 'tool-call' as const,
           toolCallId: crypto.randomUUID(),
