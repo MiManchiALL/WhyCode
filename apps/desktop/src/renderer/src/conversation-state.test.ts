@@ -269,6 +269,39 @@ describe('会话界面时间线重建', () => {
       /仅由当前视觉模型处理|跳过协商/,
     )
   })
+
+  it('把 ViewImage 读取结果恢复到对应工具卡片', () => {
+    const attachment = {
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      name: 'project-screen.png',
+      storageName: '22222222-2222-4222-8222-222222222222.png',
+      mediaType: 'image/png' as const,
+      sha256: 'a'.repeat(64),
+      byteLength: 68,
+      width: 1,
+      height: 1,
+    }
+    const state = createConversationState([
+      core({
+        type: 'tool-start',
+        toolUseId: 'view-image-1',
+        toolName: 'ViewImage',
+        input: { path: 'project-screen.png' },
+      }),
+      core({ type: 'image-viewed', toolUseId: 'view-image-1', attachments: [attachment] }),
+      core({
+        type: 'tool-end',
+        toolUseId: 'view-image-1',
+        result: '图片已读取',
+        isError: false,
+      }),
+    ])
+
+    const block = state.blocks[0]
+    assert.equal(block?.kind, 'tool')
+    assert.deepEqual(block?.kind === 'tool' ? block.call.attachments : [], [attachment])
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {

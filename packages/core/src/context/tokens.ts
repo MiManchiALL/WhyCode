@@ -59,7 +59,11 @@ export function estimateContextTokens(
   return total
 }
 
-/** 自动压缩阈值：窗口 − 输出预留（摘要也要用）− buffer（小窗口 13k 起，大窗口 7%） */
+/**
+ * 自动压缩阈值：窗口 − 输出预留（摘要也要用）− buffer（小窗口 13k 起，大窗口 7%）。
+ * maxOutput 是厂商允许的单次输出硬上限，不是普通请求的固定占用；预留封顶 20k，
+ * 避免超长输出能力反而过早挤掉可用上下文，额外窗口 buffer 负责吸收估算误差。
+ */
 export function autoCompactThreshold(capabilities: ModelCapabilities): number {
   const reservedOutput = Math.min(capabilities.maxOutput, 20_000)
   const buffer = Math.max(13_000, Math.round(capabilities.contextWindow * 0.07))

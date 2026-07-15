@@ -23,7 +23,10 @@ import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createTurnAbortedMessage } from './interruption.ts'
 import { dehydrateImageMessages } from '../attachments/messages.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
-import { validateStoredImageAttachments } from '../attachments/storage.ts'
+import {
+  cleanupUnreferencedImageAttachments,
+  validateStoredImageAttachments,
+} from '../attachments/storage.ts'
 import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
@@ -44,6 +47,7 @@ import {
   type SessionCreateInput,
   type SessionEntry,
   type LoadedSession,
+  type PendingUserInput,
   type SessionMetadata,
   type SessionRecorder,
   type SessionSummary,
@@ -86,10 +90,12 @@ export class SessionStore {
       start.uuid,
       [],
       [],
+      [],
       new Map(),
       new Map(),
       null,
       null,
+      [],
       [],
       null,
       null,
@@ -143,11 +149,13 @@ export class SessionStore {
       loaded.leafUuid,
       loaded.messages,
       loaded.viewEvents,
+      loaded.imageAttachments,
       loaded.turnStartMessages,
       loaded.turnStartTaskStates,
       loaded.interruptedTurnId,
       loaded.interruptedTurnEngagedPlanId,
       loaded.undeliveredUserInputIds,
+      loaded.pendingUserInputs,
       loaded.interruptedConsensusTaskId,
       loaded.interruptedConsensusBaseMessages,
       loaded.interruptedConsensusBaseTaskState,
@@ -271,11 +279,13 @@ export class SessionJournal implements SessionRecorder {
   private leafUuid: string
   private messages: ModelMessage[]
   private viewEvents: ViewEvent[]
+  private imageAttachments: ImageAttachment[]
   private turnStartMessages: Map<string, ModelMessage[]>
   private turnStartTaskStates: Map<string, TaskPlanState>
   private activeTurnId: string | null
   private activeTurnEngagedPlanId: string | null
   private undeliveredUserInputIdSet: Set<string>
+  private pendingUserInputMap: Map<string, PendingUserInput>
   private activeConsensusTaskId: string | null
   private activeConsensusBaseMessages: ModelMessage[] | null
   private activeConsensusBaseTaskState: TaskPlanState | null
@@ -290,11 +300,13 @@ export class SessionJournal implements SessionRecorder {
     leafUuid: string,
     messages: ModelMessage[],
     viewEvents: ViewEvent[],
+    imageAttachments: ImageAttachment[],
     turnStartMessages: Map<string, ModelMessage[]>,
     turnStartTaskStates: Map<string, TaskPlanState>,
     interruptedTurnId: string | null,
     interruptedTurnEngagedPlanId: string | null,
     undeliveredUserInputIds: string[],
+    pendingUserInputs: PendingUserInput[],
     interruptedConsensusTaskId: string | null,
     interruptedConsensusBaseMessages: ModelMessage[] | null,
     interruptedConsensusBaseTaskState: TaskPlanState | null,
@@ -308,6 +320,7 @@ export class SessionJournal implements SessionRecorder {
     this.leafUuid = leafUuid
     this.messages = [...messages]
     this.viewEvents = [...viewEvents]
+    this.imageAttachments = [...imageAttachments]
     this.turnStartMessages = new Map(
       [...turnStartMessages].map(([turnId, messages]) => [turnId, structuredClone(messages)]),
     )
@@ -317,6 +330,9 @@ export class SessionJournal implements SessionRecorder {
     this.activeTurnId = interruptedTurnId
     this.activeTurnEngagedPlanId = interruptedTurnEngagedPlanId
     this.undeliveredUserInputIdSet = new Set(undeliveredUserInputIds)
+    this.pendingUserInputMap = new Map(
+      pendingUserInputs.map((input) => [input.id, structuredClone(input)]),
+    )
     this.activeConsensusTaskId = interruptedConsensusTaskId
     this.activeConsensusBaseMessages = interruptedConsensusBaseMessages
     this.activeConsensusBaseTaskState = interruptedConsensusBaseTaskState
@@ -364,12 +380,20 @@ export class SessionJournal implements SessionRecorder {
     return this.viewEvents
   }
 
+  get initialImageAttachments(): readonly ImageAttachment[] {
+    return this.imageAttachments
+  }
+
   get interruptedTurnId(): string | null {
     return this.activeTurnId
   }
 
   get undeliveredUserInputIds(): readonly string[] {
     return [...this.undeliveredUserInputIdSet]
+  }
+
+  get pendingUserInputs(): readonly PendingUserInput[] {
+    return [...this.pendingUserInputMap.values()].map((input) => structuredClone(input))
   }
 
   get interruptedConsensusTaskId(): string | null {
@@ -393,14 +417,33 @@ export class SessionJournal implements SessionRecorder {
     startsTurn: boolean,
     attachments: readonly ImageAttachment[] = [],
   ): Promise<void> {
+    return this.recordUserInputWithId(randomUUID(), text, startsTurn, attachments)
+  }
+
+  recordUserInputWithId(
+    inputId: string,
+    text: string,
+    startsTurn: boolean,
+    attachments: readonly ImageAttachment[] = [],
+    consumesInputIds: readonly string[] = [],
+  ): Promise<void> {
     return this.enqueue(async () => {
-      const input = this.entry({
-        type: 'user-input',
-        text,
-        startsTurn,
-        ...(attachments.length ? { attachments } : {}),
-      })
+      this.assertPendingInputs(consumesInputIds, 'restored', '消费')
+      this.assertImageAttachmentsCompatible(attachments)
+      const input = this.entry(
+        {
+          type: 'user-input',
+          text,
+          startsTurn,
+          ...(attachments.length ? { attachments } : {}),
+          ...(consumesInputIds.length ? { consumesInputIds } : {}),
+        },
+        this.leafUuid,
+        inputId,
+      )
       await this.appendEntries([input])
+      this.addImageAttachments(attachments)
+      for (const consumedId of consumesInputIds) this.pendingUserInputMap.delete(consumedId)
       if (input.type === 'user-input' && input.startsTurn) {
         this.undeliveredUserInputIdSet.add(input.uuid)
         this.viewEvents.push({
@@ -409,15 +452,22 @@ export class SessionJournal implements SessionRecorder {
           startsTurn: true,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         })
+      } else if (input.type === 'user-input') {
+        this.pendingUserInputMap.set(input.uuid, {
+          id: input.uuid,
+          text: input.text,
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          state: 'queued',
+        })
       }
       const clipped = clip(text)
       this.metadata.lastUserText = clipped
       if (!this.metadata.title) this.metadata.title = clipped
       this.metadata.updatedAt = input.timestamp
-      if (input.type === 'user-input' && input.startsTurn) {
+      if (input.type === 'user-input') {
         this.metadata.status = 'interrupted'
       }
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -435,8 +485,10 @@ export class SessionJournal implements SessionRecorder {
     turnId: string,
     messages: ModelMessage[],
     engagedPlanId?: string,
+    deliveredInputIds: readonly string[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
+      this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
       const parentUuid = this.leafUuid
       this.turnStartMessages.set(turnId, structuredClone(this.messages))
       this.turnStartTaskStates.set(turnId, cloneTaskPlanState(this.taskState))
@@ -451,17 +503,19 @@ export class SessionJournal implements SessionRecorder {
           turnId,
           messages: dehydrateImageMessages(messages),
           engagedPlanId: engagedPlanId ?? null,
+          ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
         },
         started.uuid,
       )
       await this.appendEntries([started, batch])
       this.undeliveredUserInputIdSet.delete(parentUuid)
+      this.deletePendingInputs(deliveredInputIds)
       this.messages.push(...messages)
       this.activeTurnId = turnId
       this.activeTurnEngagedPlanId = engagedPlanId ?? null
       this.metadata.updatedAt = started.timestamp
       this.metadata.status = 'running'
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -470,21 +524,29 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
     engagedPlanId?: string | null,
+    attachments: readonly ImageAttachment[] = [],
+    deliveredInputIds: readonly string[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
+      this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
+      this.assertImageAttachmentsCompatible(attachments)
       const batch = this.entry({
         type: 'messages',
         turnId,
         messages: dehydrateImageMessages(messages),
+        ...(attachments.length ? { attachments } : {}),
         ...(taskState !== undefined ? { taskState } : {}),
         ...(engagedPlanId !== undefined ? { engagedPlanId } : {}),
+        ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
       })
       await this.appendEntries([batch])
       this.messages.push(...messages)
+      this.addImageAttachments(attachments)
+      this.deletePendingInputs(deliveredInputIds)
       if (taskState !== undefined) this.taskState = cloneTaskPlanState(taskState)
       if (engagedPlanId !== undefined) this.activeTurnEngagedPlanId = engagedPlanId
       this.metadata.updatedAt = batch.timestamp
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -502,7 +564,7 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeConsensusTaskId
             ? 'running'
-            : this.undeliveredUserInputIdSet.size > 0
+            : this.hasRuntimePendingInput()
               ? 'interrupted'
               : stopReason === 'waiting-user'
                 ? 'waiting-user'
@@ -511,7 +573,7 @@ export class SessionJournal implements SessionRecorder {
                   : stopReason === 'max-turns'
                     ? 'max-turns'
                     : 'idle'
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -544,6 +606,7 @@ export class SessionJournal implements SessionRecorder {
           taskState: taskState === undefined ? this.taskState : taskState,
           modelId: this.metadata.modelId,
           messages: dehydrateImageMessages(messages),
+          pendingUserInputs: this.pendingUserInputs,
           turnStartMessages: runtimeTurnStarts.map((start) => ({
             ...start,
             messages: dehydrateImageMessages(start.messages),
@@ -554,7 +617,6 @@ export class SessionJournal implements SessionRecorder {
       await this.appendEntries([snapshot])
       this.messages = [...messages]
       if (snapshot.type === 'snapshot') this.taskState = cloneTaskPlanState(snapshot.taskState)
-      this.undeliveredUserInputIdSet.clear()
       this.activeConsensusBaseTurnIds = snapshot.type === 'snapshot'
         && snapshot.activeConsensusBaseTurnIds
         ? new Set(snapshot.activeConsensusBaseTurnIds)
@@ -575,11 +637,13 @@ export class SessionJournal implements SessionRecorder {
       if (reason === 'rollback') {
         this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
           ? 'running'
+          : this.hasRuntimePendingInput()
+            ? 'interrupted'
           : hasPendingUserQuestion(messages)
             ? 'waiting-user'
             : 'idle'
       }
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -587,8 +651,10 @@ export class SessionJournal implements SessionRecorder {
     taskId: string,
     state: ConsensusPersistedState,
     userText: string,
+    deliveredInputIds: readonly string[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
+      this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
       if (this.activeConsensusTaskId) {
         throw new Error(`共识任务 ${this.activeConsensusTaskId} 尚未结束`)
       }
@@ -601,10 +667,12 @@ export class SessionJournal implements SessionRecorder {
         baseTaskState: this.taskState,
         userText,
         baseTurnIds,
+        ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
       })
       if (started.type !== 'consensus-task-start') throw new Error('无法写入共识任务起点')
       await this.appendEntries([started])
       this.undeliveredUserInputIdSet.delete(parentUuid)
+      this.deletePendingInputs(deliveredInputIds)
       this.activeConsensusTaskId = taskId
       this.activeConsensusBaseMessages = [
         ...this.messages,
@@ -615,7 +683,27 @@ export class SessionJournal implements SessionRecorder {
       this.consensusState = started.state
       this.metadata.updatedAt = started.timestamp
       this.metadata.status = 'running'
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
+    })
+  }
+
+  markUserInputsRestored(inputIds: readonly string[]): Promise<void> {
+    if (inputIds.length === 0) return Promise.resolve()
+    return this.enqueue(async () => {
+      this.assertPendingInputs(inputIds, 'queued', '恢复')
+      const restored = this.entry({ type: 'user-input-restored', inputIds })
+      await this.appendEntries([restored])
+      for (const inputId of inputIds) {
+        const input = this.pendingUserInputMap.get(inputId)!
+        this.pendingUserInputMap.set(inputId, { ...input, state: 'restored' })
+      }
+      this.metadata.updatedAt = restored.timestamp
+      this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
+        ? 'running'
+        : hasPendingUserQuestion(this.messages)
+          ? 'waiting-user'
+          : 'idle'
+      await this.refreshMetadataCache()
     })
   }
 
@@ -670,14 +758,14 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeTurnId
             ? 'running'
-            : this.undeliveredUserInputIdSet.size > 0
+            : this.hasRuntimePendingInput()
               ? 'interrupted'
               : outcome === 'paused'
                 ? 'paused'
                 : outcome === 'max-turns'
                   ? 'max-turns'
                   : 'idle'
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -688,11 +776,17 @@ export class SessionJournal implements SessionRecorder {
         !this.activeTurnId
         && !this.activeConsensusTaskId
         && this.undeliveredUserInputIdSet.size === 0
+        && !this.hasRuntimePendingInput()
       ) return
-      const recoveredMessages = [
-        ...this.messages,
-        createTurnAbortedMessage('process-interruption'),
-      ]
+      const hadInterruptedWork = Boolean(
+        this.activeTurnId
+        || this.activeConsensusTaskId
+        || this.undeliveredUserInputIdSet.size > 0,
+      )
+      const recoveredMessages = [...this.messages]
+      if (hadInterruptedWork) {
+        recoveredMessages.push(createTurnAbortedMessage('process-interruption'))
+      }
       const activePlanId = this.taskState.activePlan?.id
       const interruptedExecutionWasEngaged = Boolean(
         activePlanId
@@ -701,7 +795,9 @@ export class SessionJournal implements SessionRecorder {
       const recoveredTaskState = interruptedExecutionWasEngaged
         ? interruptTaskPlanState(this.taskState, 'process-interruption')
         : cloneTaskPlanState(this.taskState)
-      const taskContext = createTaskContextMessage(recoveredTaskState)
+      const taskContext = hadInterruptedWork
+        ? createTaskContextMessage(recoveredTaskState)
+        : null
       if (taskContext) recoveredMessages.push(taskContext)
       const recoverableTurnIds = this.activeConsensusTaskId
         ? this.activeConsensusBaseTurnIds ?? new Set<string>()
@@ -721,6 +817,10 @@ export class SessionJournal implements SessionRecorder {
           taskState: recoveredTaskState,
           modelId: this.metadata.modelId,
           messages: dehydrateImageMessages(recoveredMessages),
+          pendingUserInputs: this.pendingUserInputs.map((input) => ({
+            ...input,
+            state: input.state === 'queued' ? 'restored' as const : input.state,
+          })),
           turnStartMessages: runtimeTurnStarts.map((start) => ({
             ...start,
             messages: dehydrateImageMessages(start.messages),
@@ -734,6 +834,11 @@ export class SessionJournal implements SessionRecorder {
       this.activeTurnId = null
       this.activeTurnEngagedPlanId = null
       this.undeliveredUserInputIdSet.clear()
+      for (const [inputId, input] of this.pendingUserInputMap) {
+        if (input.state === 'queued') {
+          this.pendingUserInputMap.set(inputId, { ...input, state: 'restored' })
+        }
+      }
       this.activeConsensusTaskId = null
       this.activeConsensusBaseMessages = null
       this.activeConsensusBaseTaskState = null
@@ -748,7 +853,7 @@ export class SessionJournal implements SessionRecorder {
         runtimeTurnStarts
           .map((start) => [start.turnId, cloneTaskPlanState(start.taskState)]),
       )
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
   }
 
@@ -759,18 +864,74 @@ export class SessionJournal implements SessionRecorder {
       await this.appendEntries([changed])
       this.metadata.modelId = modelId
       this.metadata.updatedAt = changed.timestamp
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await this.refreshMetadataCache()
     })
+  }
+
+  private hasRuntimePendingInput(): boolean {
+    if (this.undeliveredUserInputIdSet.size > 0) return true
+    return [...this.pendingUserInputMap.values()].some((input) => input.state === 'queued')
+  }
+
+  private assertPendingInputs(
+    inputIds: readonly string[],
+    expectedState: PendingUserInput['state'],
+    action: string,
+  ): void {
+    const unique = new Set(inputIds)
+    if (unique.size !== inputIds.length) throw new Error(`${action}的输入 ID 不能重复`)
+    for (const inputId of inputIds) {
+      const input = this.pendingUserInputMap.get(inputId)
+      if (!input || input.state !== expectedState) {
+        throw new Error(`无法${action}不属于当前会话或状态已变化的输入：${inputId}`)
+      }
+    }
+  }
+
+  private deletePendingInputs(inputIds: readonly string[]): void {
+    for (const inputId of inputIds) this.pendingUserInputMap.delete(inputId)
+  }
+
+  private addImageAttachments(attachments: readonly ImageAttachment[]): void {
+    for (const attachment of attachments) {
+      const previous = this.imageAttachments.find((candidate) =>
+        candidate.storageName === attachment.storageName)
+      if (!previous) this.imageAttachments.push(attachment)
+    }
+  }
+
+  /**
+   * transcript 是事实源；它已 flush 后，派生 metadata 刷新失败不能把整笔提交伪装成失败。
+   * 删除可能陈旧的缓存后，SessionStore.list/open 会按既有恢复路径从 JSONL 重建。
+   */
+  private async refreshMetadataCache(): Promise<void> {
+    try {
+      await writeMetadata(this.paths.metadata, this.metadata)
+    } catch {
+      await rm(this.paths.metadata, { force: true }).catch(() => {})
+    }
+  }
+
+  /** 冲突必须在 JSONL append 前失败，不能留下“已写入但调用方收到失败”的半事务。 */
+  private assertImageAttachmentsCompatible(attachments: readonly ImageAttachment[]): void {
+    for (const attachment of attachments) {
+      const previous = this.imageAttachments.find((candidate) =>
+        candidate.storageName === attachment.storageName)
+      if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+        throw new Error(`图片附件元数据冲突：${attachment.storageName}`)
+      }
+    }
   }
 
   private entry(
     value: Record<string, unknown>,
     parentUuid: string | null = this.leafUuid,
+    uuid: string = randomUUID(),
   ): SessionEntry {
     return sessionEntrySchema.parse({
       schemaVersion: SESSION_SCHEMA_VERSION,
       sessionId: this.sessionId,
-      uuid: randomUUID(),
+      uuid,
       parentUuid,
       timestamp: new Date().toISOString(),
       ...value,
@@ -858,11 +1019,14 @@ async function validateLoadedSessionAttachments(
   loaded: LoadedSession,
   attachmentDirectory: string,
 ): Promise<LoadedSession> {
+  await cleanupUnreferencedImageAttachments(
+    attachmentDirectory,
+    loaded.imageAttachments,
+  )
   await validateStoredImageAttachments(
     attachmentDirectory,
     loaded.metadata.sessionId,
-    loaded.viewEvents.flatMap((event) =>
-      event.type === 'user-message' ? event.attachments ?? [] : []),
+    loaded.imageAttachments,
   )
   return loaded
 }

@@ -6,6 +6,7 @@ import {
   SESSION_SCHEMA_VERSION,
   sessionEntrySchema,
   type LoadedSession,
+  type PendingUserInput,
   type SessionEntry,
 } from './types.ts'
 import type { ViewEvent } from './view-events.ts'
@@ -50,6 +51,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   validateEntrySemantics(entries)
 
   const chain = buildActiveChain(entries)
+  const pendingUserInputs = collectPendingUserInputs(chain)
   const undeliveredUserInputs = findUndeliveredUserInputs(chain)
   const undeliveredById = new Map(undeliveredUserInputs.map((input) => [input.id, input]))
   const work = findInterruptedWork(chain, undeliveredById)
@@ -62,6 +64,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     ? work.interruptedConsensusBaseTaskState ?? emptyTaskPlanState()
     : collectTaskState(chain)
   const viewEvents = collectViewEvents(entries)
+  const imageAttachments = collectImageAttachments(entries)
   reconcileTaskPlanView(viewEvents, taskState)
   const pendingUserQuestion = findPendingUserQuestion(messages)
   if (
@@ -92,6 +95,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     interruptedTurnId,
     interruptedConsensusTaskId,
     undeliveredUserInputs.length > 0,
+    pendingUserInputs.some((input) => input.state === 'queued'),
     pendingUserQuestion !== null,
   )
   const recordedInputs = entries.flatMap((entry) => (entry.type === 'user-input' ? [entry.text] : []))
@@ -101,12 +105,14 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     entries,
     messages,
     viewEvents,
+    imageAttachments,
     turnStartMessages: turnStarts.messages,
     turnStartTaskStates: turnStarts.taskStates,
     leafUuid: last.uuid,
     interruptedTurnId,
     interruptedTurnEngagedPlanId,
     undeliveredUserInputIds: undeliveredUserInputs.map((input) => input.id),
+    pendingUserInputs,
     interruptedConsensusTaskId,
     interruptedConsensusBaseMessages,
     interruptedConsensusBaseTaskState: work.interruptedConsensusBaseTaskState,
@@ -124,6 +130,106 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       updatedAt: last.timestamp,
       status,
     },
+  }
+}
+
+function collectImageAttachments(entries: SessionEntry[]): ImageAttachment[] {
+  const attachments = new Map<string, { serialized: string; value: ImageAttachment }>()
+  for (const entry of entries) {
+    const values = entry.type === 'user-input' || entry.type === 'messages'
+      ? entry.attachments ?? []
+      : entry.type === 'snapshot'
+        ? entry.pendingUserInputs.flatMap((input) => input.attachments ?? [])
+        : []
+    for (const value of values) {
+      const serialized = JSON.stringify(value)
+      const previous = attachments.get(value.storageName)
+      if (previous && previous.serialized !== serialized) {
+        throw new SessionCorruptError(`图片附件元数据冲突：${value.storageName}`)
+      }
+      if (!previous) attachments.set(value.storageName, { serialized, value })
+    }
+  }
+  return [...attachments.values()].map(({ value }) => value)
+}
+
+/**
+ * steering 身份随 JSONL 父链重放；送达确认与模型消息同条提交，崩溃只会落在
+ * “仍排队”一侧，不会出现模型已消费但事实源仍把它重复恢复的分裂状态。
+ */
+function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
+  const pending = new Map<string, PendingUserInput>()
+
+  for (const entry of chain) {
+    if (entry.type === 'snapshot') {
+      pending.clear()
+      for (const input of entry.pendingUserInputs) {
+        if (pending.has(input.id)) {
+          throw new SessionCorruptError(`snapshot 包含重复待处理输入：${input.id}`)
+        }
+        pending.set(input.id, structuredClone(input))
+      }
+      continue
+    }
+
+    if (entry.type === 'user-input') {
+      consumeRestoredInputs(pending, entry.consumesInputIds ?? [])
+      if (!entry.startsTurn) {
+        if (pending.has(entry.uuid)) {
+          throw new SessionCorruptError(`待处理输入 ID 重复：${entry.uuid}`)
+        }
+        pending.set(entry.uuid, {
+          id: entry.uuid,
+          text: entry.text,
+          ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+          state: 'queued',
+        })
+      }
+      continue
+    }
+
+    if (entry.type === 'user-input-restored') {
+      for (const inputId of entry.inputIds) {
+        const input = pending.get(inputId)
+        if (!input || input.state !== 'queued') {
+          throw new SessionCorruptError(`只能退回仍在排队的输入：${inputId}`)
+        }
+        pending.set(inputId, { ...input, state: 'restored' })
+      }
+      continue
+    }
+
+    if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
+      deliverQueuedInputs(pending, entry.deliveredInputIds ?? [])
+    }
+  }
+
+  return [...pending.values()].map((input) => structuredClone(input))
+}
+
+function consumeRestoredInputs(
+  pending: Map<string, PendingUserInput>,
+  inputIds: readonly string[],
+): void {
+  for (const inputId of inputIds) {
+    const input = pending.get(inputId)
+    if (!input || input.state !== 'restored') {
+      throw new SessionCorruptError(`只能消费已恢复到草稿的输入：${inputId}`)
+    }
+    pending.delete(inputId)
+  }
+}
+
+function deliverQueuedInputs(
+  pending: Map<string, PendingUserInput>,
+  inputIds: readonly string[],
+): void {
+  for (const inputId of inputIds) {
+    const input = pending.get(inputId)
+    if (!input || input.state !== 'queued') {
+      throw new SessionCorruptError(`只能确认送达仍在排队的输入：${inputId}`)
+    }
+    pending.delete(inputId)
   }
 }
 
@@ -202,18 +308,45 @@ function collectTurnStarts(
 
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
 function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
-  return entries.flatMap((entry): ViewEvent[] => {
-    if (entry.type === 'view-events') return entry.events
+  const events: ViewEvent[] = []
+  const inputs = new Map<string, Extract<SessionEntry, { type: 'user-input' }>>()
+  const visibleInputIds = new Set(entries.flatMap((entry) =>
+    entry.type === 'view-events'
+      ? entry.events.flatMap((event) =>
+          event.type === 'user-message' && event.inputId ? [event.inputId] : [])
+      : []))
+
+  for (const entry of entries) {
+    if (entry.type === 'view-events') {
+      events.push(...entry.events)
+      continue
+    }
+    if (entry.type === 'user-input') inputs.set(entry.uuid, entry)
     if (entry.type === 'user-input' && entry.startsTurn) {
-      return [{
+      events.push({
         type: 'user-message',
         text: entry.text,
         startsTurn: true,
         ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
-      }]
+      })
     }
-    return []
-  })
+    if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
+      for (const inputId of entry.deliveredInputIds ?? []) {
+        if (visibleInputIds.has(inputId)) continue
+        const input = inputs.get(inputId)
+        if (!input || input.startsTurn) continue
+        events.push({
+          type: 'user-message',
+          inputId,
+          text: input.text,
+          startsTurn: false,
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        })
+        visibleInputIds.add(inputId)
+      }
+    }
+  }
+  return events
 }
 
 interface UndeliveredUserInput {
@@ -563,9 +696,15 @@ function deriveStatus(
   interruptedTurnId: string | null,
   interruptedConsensusTaskId: string | null,
   hasUndeliveredUserInput: boolean,
+  hasQueuedUserInput: boolean,
   hasPendingUserQuestion: boolean,
 ): 'idle' | 'waiting-user' | 'paused' | 'max-turns' | 'interrupted' | 'error' {
-  if (interruptedTurnId || interruptedConsensusTaskId || hasUndeliveredUserInput) {
+  if (
+    interruptedTurnId
+    || interruptedConsensusTaskId
+    || hasUndeliveredUserInput
+    || hasQueuedUserInput
+  ) {
     return 'interrupted'
   }
   if (hasPendingUserQuestion) return 'waiting-user'

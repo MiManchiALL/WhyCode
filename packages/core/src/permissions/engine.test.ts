@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { z } from 'zod'
 import { buildTool } from '../tools/tool.ts'
-import { checkToolPermission } from './engine.ts'
+import { checkInitialToolApproval, checkToolPermission } from './engine.ts'
 import { createPermissionContext } from './types.ts'
 
 const controlTool = buildTool({
@@ -29,6 +29,49 @@ const editTool = buildTool({
   async execute() {
     return { data: 'ok', isError: false }
   },
+})
+
+const privacyReadTool = buildTool({
+  name: 'PrivacyReadProbe',
+  description: '隐私读权限探针',
+  prompt: '隐私读权限探针',
+  inputSchema: z.object({}),
+  isReadOnly: true,
+  kind: 'read',
+  initialApprovalReason: '会读取屏幕上的敏感内容',
+  async execute() {
+    return { data: 'ok', isError: false }
+  },
+})
+
+describe('工具首次隐私审批', () => {
+  it('只在全自动档跳过首次提示，其余权限档继续询问', () => {
+    const context = createPermissionContext('C:\\workspace')
+
+    for (const mode of ['readonly', 'default', 'acceptEdits'] as const) {
+      context.mode = mode
+      assert.deepEqual(checkInitialToolApproval(privacyReadTool, context), {
+        behavior: 'ask',
+        reason: '会读取屏幕上的敏感内容',
+        suggestion: { kind: 'allow-tool', toolName: 'PrivacyReadProbe' },
+      })
+    }
+
+    context.mode = 'auto'
+    assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
+    assert.equal(
+      checkToolPermission(editTool, { path: '.env' }, context).behavior,
+      'ask',
+      '跳过一次性隐私提示不能绕过敏感路径强制审批',
+    )
+  })
+
+  it('会话记住允许后不再重复首次提示', () => {
+    const context = createPermissionContext('C:\\workspace')
+    context.sessionAllowedTools.push(privacyReadTool.name)
+
+    assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
+  })
 })
 
 describe('控制面工具权限', () => {

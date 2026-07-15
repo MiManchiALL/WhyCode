@@ -1,5 +1,6 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
-import type { CoreEvent, CoreEventSink, StopReason } from '../events.ts'
+import type { CoreEvent, CoreEventSink, QueuedUserMessage, StopReason } from '../events.ts'
+import type { ImageAttachment } from '../attachments/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { createTurnAbortedMessage } from '../session/interruption.ts'
 import { PeerAgent } from './peer-agent.ts'
@@ -58,12 +59,22 @@ export interface ConsensusCoordinatorOptions {
     taskId: string,
     state: ConsensusPersistedState,
     userText: string,
+    deliveredInputIds?: readonly string[],
   ) => Promise<void>
   onTaskEnd?: (
     taskId: string,
     outcome: ConsensusTaskOutcome,
     state: ConsensusPersistedState,
   ) => Promise<void>
+  /** Coordinator 自持队列在停止时先持久化为 Renderer 草稿，再发送恢复事件。 */
+  onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
+}
+
+interface CoordinatorMessage {
+  id: string
+  persistedInputId?: string
+  text: string
+  attachments: ImageAttachment[]
 }
 
 /**
@@ -78,9 +89,9 @@ export class ConsensusCoordinator {
   private peers: PeerAgent[] = []
   private running = false
   /** B/C 工作期间（Main 空闲）用户插话暂存，注入执行阶段输入包 */
-  private pendingTexts: { id: string; text: string }[] = []
+  private pendingTexts: CoordinatorMessage[] = []
   /** Main 已结束、协调器仍在提交任务终点时到达的消息；任务提交后按新协商任务交接。 */
-  private deferredTaskTexts: { id: string; text: string }[] = []
+  private deferredTaskMessages: CoordinatorMessage[] = []
   private peerPhase = false
   private aborted = false
   /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
@@ -100,72 +111,106 @@ export class ConsensusCoordinator {
   }
 
   /** 用户消息入口：空闲开新协商任务；Main 探索中走会话自身 steering；B/C 工作中暂存 */
-  handleUserMessage(text: string, urgent = false): Promise<void> | void {
+  handleUserMessage(
+    text: string,
+    urgent = false,
+    attachments: readonly ImageAttachment[] = [],
+    persistedInputId?: string,
+  ): Promise<StopReason | void> | void {
+    const message = this.coordinatorMessage(text, attachments, persistedInputId)
+    if (attachments.length > 0) {
+      if (!this.running && !this.options.mainSession.isBusy) {
+        this.options.emit({ type: 'consensus-skipped', reason: 'image-input' })
+        return this.options.mainSession.handleUserMessage(
+          text,
+          urgent,
+          attachments,
+          persistedInputId,
+        )
+      }
+      // 协调器空闲但 Main 仍在处理上一条视觉任务时，图片仍是同一任务的 steering。
+      if (!this.running) {
+        return this.options.mainSession.handleUserMessage(
+          text,
+          urgent,
+          attachments,
+          persistedInputId,
+        )
+      }
+      if (this.peerPhase) {
+        if (urgent) {
+          this.deferredTaskMessages.push(message)
+          this.emitQueued(message)
+          this.interruptForDeferredInput()
+        } else {
+          // B/C 永远不接收图片；补充消息只在后续 Main 执行边界原样注入。
+          this.pendingTexts.push(message)
+          this.emitQueued(message)
+        }
+        return
+      }
+      if (this.options.mainSession.isRunning) {
+        return this.options.mainSession.handleUserMessage(
+          text,
+          urgent,
+          attachments,
+          persistedInputId,
+        )
+      }
+      this.deferredTaskMessages.push(message)
+      this.emitQueued(message)
+      if (urgent) this.interruptForDeferredInput()
+      return
+    }
     if (!this.running) {
-      if (this.options.mainSession.isBusy) return this.deferUntilMainIdle(text)
+      if (this.options.mainSession.isBusy) return this.deferUntilMainIdle(message)
       return this.runTask(text)
     }
     if (this.peerPhase) {
-      const id = `cq-${Date.now()}-${this.pendingTexts.length}`
-      this.pendingTexts.push({ id, text })
-      this.options.emit({ type: 'message-queued', id, text })
+      this.pendingTexts.push(message)
+      this.emitQueued(message)
       return
     }
     if (!this.options.mainSession.isRunning) {
-      const id = `cq-next-${Date.now()}-${this.deferredTaskTexts.length}`
-      this.deferredTaskTexts.push({ id, text })
-      this.options.emit({ type: 'message-queued', id, text })
+      this.deferredTaskMessages.push(message)
+      this.emitQueued(message)
       return
     }
-    this.options.mainSession.handleUserMessage(text, urgent)
+    this.options.mainSession.handleUserMessage(text, urgent, [], persistedInputId)
   }
 
-  private async deferUntilMainIdle(text: string): Promise<void> {
-    const id = `cq-wait-${Date.now()}-${this.deferredTaskTexts.length}`
-    this.deferredTaskTexts.push({ id, text })
+  private async deferUntilMainIdle(message: CoordinatorMessage): Promise<void> {
+    this.deferredTaskMessages.push(message)
     this.running = true
     this.aborted = false
-    this.options.emit({ type: 'message-queued', id, text })
+    this.emitQueued(message)
     await this.options.mainSession.waitUntilIdle()
     if (this.aborted) {
       this.running = false
       this.options.emit({ type: 'agent-status', status: 'idle' })
       return
     }
-    const next = this.deferredTaskTexts.shift()
+    const next = this.deferredTaskMessages.shift()
     this.running = false
     if (!next) return
-    this.options.emit({
-      type: 'message-injected',
-      id: next.id,
-      text: next.text,
-      startsTurn: true,
-    })
-    await this.runTask(next.text)
+    await this.deliverDeferredMessage(next)
   }
 
   /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
-  abort(): void {
+  async abort(): Promise<void> {
     this.aborted = true
     for (const peer of this.peers) peer.abort()
     this.options.mainSession.abort()
-    if (this.pendingTexts.length > 0) {
-      this.options.emit({
-        type: 'queue-restored',
-        text: this.pendingTexts.map((p) => p.text).join('\n'),
-      })
-      this.pendingTexts = []
-    }
-    if (this.deferredTaskTexts.length > 0) {
-      this.options.emit({
-        type: 'queue-restored',
-        text: this.deferredTaskTexts.map((message) => message.text).join('\n'),
-      })
-      this.deferredTaskTexts = []
-    }
+    const queued = [...this.pendingTexts, ...this.deferredTaskMessages]
+    this.pendingTexts = []
+    this.deferredTaskMessages = []
+    await this.restoreQueuedMessages(queued)
   }
 
-  private async runTask(userText: string): Promise<void> {
+  private async runTask(
+    userText: string,
+    deliveredInputIds: readonly string[] = [],
+  ): Promise<void> {
     const { mainSession, emit } = this.options
     this.running = true
     this.aborted = false
@@ -184,8 +229,16 @@ export class ConsensusCoordinator {
     let taskBoundaryStarted = false
     let taskPlanRolledBack = false
     try {
-      taskBoundaryStarted = await this.persistTaskStart(taskId, startState, userText)
+      taskBoundaryStarted = await this.persistTaskStart(
+        taskId,
+        startState,
+        userText,
+        deliveredInputIds,
+      )
       if (!taskBoundaryStarted) return
+      for (const inputId of deliveredInputIds) {
+        emit({ type: 'message-injected', id: inputId, text: userText, startsTurn: true })
+      }
       if (this.aborted) {
         outcome = 'aborted'
         return
@@ -288,9 +341,8 @@ export class ConsensusCoordinator {
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
-      const stopReason = await mainSession.handleExecutionMessage(
-        this.appendPendingTexts(packageText),
-      )
+      const execution = this.takePendingInputs(packageText)
+      const stopReason = await mainSession.handleExecutionMessage(execution.text, execution.inputs)
       outcome = this.executionOutcome(stopReason)
     } catch (error) {
       emit({
@@ -317,6 +369,10 @@ export class ConsensusCoordinator {
       if (taskPlanRolledBack) {
         emit({ type: 'task-plan-restored', plan: startTaskState?.activePlan ?? null })
       }
+      if (!keepsConsensusProgress(outcome) && this.pendingTexts.length > 0) {
+        const pending = this.pendingTexts.splice(0)
+        await this.restoreQueuedMessages(pending)
+      }
       this.restoreExecution()
       mainSession.setUserQuestionsEnabled(true)
       mainSession.setTerminalStatusManaged(false)
@@ -325,15 +381,9 @@ export class ConsensusCoordinator {
       this.running = false
       // 收尾兜底：此时无任何在跑的回合，状态归位（对 UI 幂等）
       emit({ type: 'agent-status', status: 'idle' })
-      const nextTask = this.deferredTaskTexts.shift()
+      const nextTask = this.deferredTaskMessages.shift()
       if (nextTask) {
-        emit({
-          type: 'message-injected',
-          id: nextTask.id,
-          text: nextTask.text,
-          startsTurn: true,
-        })
-        await this.runTask(nextTask.text)
+        await this.deliverDeferredMessage(nextTask)
       }
     }
   }
@@ -445,16 +495,104 @@ export class ConsensusCoordinator {
     return peer
   }
 
-  /** 把 B/C 工作期间暂存的用户插话拼进执行包 */
-  private appendPendingTexts(packageText: string): string {
-    if (this.pendingTexts.length === 0) return packageText
-    const lines = [packageText, '', '[用户在协商期间的补充]']
-    for (const p of this.pendingTexts) {
-      lines.push(p.text)
-      this.options.emit({ type: 'message-injected', id: p.id, text: p.text })
+  /** B/C 期间的补充保持独立消息顺序，图片只在 Main 执行边界解引用。 */
+  private takePendingInputs(
+    packageText: string,
+  ): { text: string; inputs: QueuedUserMessage[] } {
+    if (this.pendingTexts.length === 0) return { text: packageText, inputs: [] }
+    const pending = this.pendingTexts.splice(0)
+    return {
+      text: packageText,
+      inputs: pending.map((input) => ({
+        id: input.persistedInputId ?? input.id,
+        text: input.text,
+        ...(input.attachments.length ? { attachments: input.attachments } : {}),
+      })),
     }
-    this.pendingTexts = []
-    return lines.join('\n')
+  }
+
+  private coordinatorMessage(
+    text: string,
+    attachments: readonly ImageAttachment[],
+    persistedInputId: string | undefined,
+  ): CoordinatorMessage {
+    return {
+      id: persistedInputId ?? `cq-${Date.now()}-${this.pendingTexts.length + this.deferredTaskMessages.length}`,
+      ...(persistedInputId ? { persistedInputId } : {}),
+      text,
+      attachments: [...attachments],
+    }
+  }
+
+  private emitQueued(message: CoordinatorMessage): void {
+    this.options.emit({
+      type: 'message-queued',
+      id: message.id,
+      text: message.text,
+      ...(message.attachments.length ? { attachments: message.attachments } : {}),
+    })
+  }
+
+  private interruptForDeferredInput(): void {
+    this.aborted = true
+    for (const peer of this.peers) peer.abort()
+    this.options.mainSession.abort()
+  }
+
+  private async restoreQueuedMessages(messages: CoordinatorMessage[]): Promise<void> {
+    if (messages.length === 0) return
+    const persistedIds = messages.flatMap((message) =>
+      message.persistedInputId ? [message.persistedInputId] : [])
+    try {
+      await this.options.onInputsRestored?.(persistedIds)
+    } catch (error) {
+      this.reportPersistenceError('队列恢复', error)
+      // 事实源仍是 queued 时不能向 UI 宣称已恢复，否则下一次提交必然因身份状态不符失败。
+      return
+    }
+    this.options.emit({
+      type: 'queue-restored',
+      text: messages.map((message) => message.text).join('\n'),
+      items: messages.map((message) => ({
+        id: message.id,
+        text: message.text,
+        ...(message.attachments.length ? { attachments: message.attachments } : {}),
+      })),
+    })
+  }
+
+  private async deliverDeferredMessage(message: CoordinatorMessage): Promise<void> {
+    if (message.attachments.length > 0) {
+      this.options.emit({ type: 'consensus-skipped', reason: 'image-input' })
+      if (!message.persistedInputId) {
+        this.options.emit({
+          type: 'message-injected',
+          id: message.id,
+          text: message.text,
+          startsTurn: true,
+          attachments: message.attachments,
+        })
+      }
+      await this.options.mainSession.handleUserMessage(
+        message.text,
+        false,
+        message.attachments,
+        message.persistedInputId,
+      )
+      return
+    }
+    if (!message.persistedInputId) {
+      this.options.emit({
+        type: 'message-injected',
+        id: message.id,
+        text: message.text,
+        startsTurn: true,
+      })
+    }
+    await this.runTask(
+      message.text,
+      message.persistedInputId ? [message.persistedInputId] : [],
+    )
   }
 
   private restoreExecution(): void {
@@ -490,9 +628,10 @@ export class ConsensusCoordinator {
     taskId: string,
     state: ConsensusPersistedState,
     userText: string,
+    deliveredInputIds: readonly string[],
   ): Promise<boolean> {
     try {
-      await this.options.onTaskStart?.(taskId, state, userText)
+      await this.options.onTaskStart?.(taskId, state, userText, deliveredInputIds)
       return true
     } catch (error) {
       this.reportPersistenceError('起点', error)

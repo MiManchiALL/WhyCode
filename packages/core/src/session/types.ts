@@ -24,6 +24,13 @@ const entryIdSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const messagesSchema = z.array(modelMessageSchema)
 
+const pendingUserInputSchema = z.object({
+  id: entryIdSchema,
+  text: z.string().min(1),
+  attachments: imageAttachmentsSchema.optional(),
+  state: z.enum(['queued', 'restored']),
+})
+
 const chainedEntrySchema = z.object({
   schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
   sessionId: sessionIdSchema,
@@ -52,14 +59,9 @@ const userInputSchema = chainedEntrySchema.extend({
   startsTurn: z.boolean(),
   /** 图片字节位于会话 attachments/；这里只保存可恢复的元数据。 */
   attachments: imageAttachmentsSchema.optional(),
+  /** 重新提交恢复草稿时，与新输入在同一次 append 中原子消费旧输入。 */
+  consumesInputIds: z.array(entryIdSchema).min(1).optional(),
 }).superRefine((input, ctx) => {
-  if (input.attachments?.length && !input.startsTurn) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['attachments'],
-      message: '图片附件只能属于空闲根消息',
-    })
-  }
   input.attachments?.forEach((attachment, index) => {
     if (attachment.sessionId !== input.sessionId) {
       ctx.addIssue({
@@ -69,6 +71,11 @@ const userInputSchema = chainedEntrySchema.extend({
       })
     }
   })
+})
+
+const userInputRestoredSchema = chainedEntrySchema.extend({
+  type: z.literal('user-input-restored'),
+  inputIds: z.array(entryIdSchema).min(1),
 })
 
 const modelChangeSchema = chainedEntrySchema.extend({
@@ -85,10 +92,24 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   type: z.literal('messages'),
   turnId: z.string().min(1),
   messages: messagesSchema,
+  /** 本 step 由图片工具导入的会话附件；图片字节仍只位于 attachments/。 */
+  attachments: imageAttachmentsSchema.optional(),
   /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
   taskState: taskPlanStateSchema.optional(),
   /** 本批稳定提交后的 execution run：省略表示不变，null 表示解除接合。 */
   engagedPlanId: z.string().uuid().nullable().optional(),
+  /** 与本批模型消息同一原子记录确认送达的忙时输入。 */
+  deliveredInputIds: z.array(entryIdSchema).min(1).optional(),
+}).superRefine((entry, ctx) => {
+  entry.attachments?.forEach((attachment, index) => {
+    if (attachment.sessionId !== entry.sessionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['attachments', index, 'sessionId'],
+        message: '附件必须属于当前会话',
+      })
+    }
+  })
 })
 
 const turnEndSchema = chainedEntrySchema.extend({
@@ -106,6 +127,8 @@ const consensusTaskStartSchema = chainedEntrySchema.extend({
   userText: z.string().min(1),
   /** 共识任务开始前仍有效的对话回滚锚点；任务内锚点在回滚时必须丢弃。 */
   baseTurnIds: z.array(z.string().min(1)),
+  /** 作为本次协商根请求被消费的持久输入。 */
+  deliveredInputIds: z.array(entryIdSchema).min(1).optional(),
 })
 
 const consensusTaskEndSchema = chainedEntrySchema.extend({
@@ -132,6 +155,11 @@ const snapshotSchema = chainedEntrySchema.extend({
   taskState: taskPlanStateSchema,
   modelId: z.string().min(1),
   messages: messagesSchema,
+  /**
+   * 换根时携带忙时输入。早期 v4 根本没有持久队列，字段缺失只可能表示空队列，
+   * 因而这里的 default 是确定性兼容，不用于吞掉结构损坏或做部分恢复。
+   */
+  pendingUserInputs: z.array(pendingUserInputSchema).default([]),
   /** 回滚换根后仍保留新根内较早 turn 的边界；压缩快照写空数组。 */
   turnStartMessages: z.array(z.object({
     turnId: z.string().min(1),
@@ -148,11 +176,23 @@ const snapshotSchema = chainedEntrySchema.extend({
   ) {
     ctx.addIssue({ code: 'custom', message: 'engaged plan 必须匹配 snapshot 的 active plan' })
   }
+  snapshot.pendingUserInputs.forEach((input, inputIndex) => {
+    input.attachments?.forEach((attachment, attachmentIndex) => {
+      if (attachment.sessionId !== snapshot.sessionId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['pendingUserInputs', inputIndex, 'attachments', attachmentIndex, 'sessionId'],
+          message: '附件必须属于当前会话',
+        })
+      }
+    })
+  })
 })
 
 export const sessionEntrySchema = z.discriminatedUnion('type', [
   sessionStartSchema,
   userInputSchema,
+  userInputRestoredSchema,
   modelChangeSchema,
   viewEventsEntrySchema,
   turnStartSchema,
@@ -164,6 +204,7 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
 ])
 
 export type SessionEntry = z.infer<typeof sessionEntrySchema>
+export type PendingUserInput = z.infer<typeof pendingUserInputSchema>
 
 export const sessionMetadataSchema = z.object({
   schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -225,6 +266,8 @@ export interface LoadedSession {
   metadata: SessionMetadata
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
+  /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
+  imageAttachments: ImageAttachment[]
   turnStartMessages: Map<string, ModelMessage[]>
   turnStartTaskStates: Map<string, TaskPlanState>
   entries: SessionEntry[]
@@ -233,6 +276,8 @@ export interface LoadedSession {
   interruptedTurnEngagedPlanId: string | null
   /** 已展示但尚未进入完整 turn/messages 或共识起点的根用户输入。 */
   undeliveredUserInputIds: string[]
+  /** 尚未送达的 steering；restored 状态由 Renderer 持有为可恢复草稿。 */
+  pendingUserInputs: PendingUserInput[]
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null
   interruptedConsensusBaseTaskState: TaskPlanState | null
@@ -247,8 +292,10 @@ export interface SessionRecorder {
   readonly attachmentDirectory: string
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
+  readonly initialImageAttachments: readonly ImageAttachment[]
   readonly interruptedTurnId: string | null
   readonly undeliveredUserInputIds: readonly string[]
+  readonly pendingUserInputs: readonly PendingUserInput[]
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
   readonly initialTaskState: TaskPlanState
@@ -261,17 +308,28 @@ export interface SessionRecorder {
     startsTurn: boolean,
     attachments?: readonly ImageAttachment[],
   ): Promise<void>
+  /** Main 预先分配 ID，使落盘记录与运行时 steering 使用同一身份。 */
+  recordUserInputWithId(
+    inputId: string,
+    text: string,
+    startsTurn: boolean,
+    attachments?: readonly ImageAttachment[],
+    consumesInputIds?: readonly string[],
+  ): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(
     turnId: string,
     messages: ModelMessage[],
     engagedPlanId?: string,
+    deliveredInputIds?: readonly string[],
   ): Promise<void>
   recordStep(
     turnId: string,
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
     engagedPlanId?: string | null,
+    attachments?: readonly ImageAttachment[],
+    deliveredInputIds?: readonly string[],
   ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>
   recordSnapshot(
@@ -284,7 +342,9 @@ export interface SessionRecorder {
     taskId: string,
     state: ConsensusPersistedState,
     userText: string,
+    deliveredInputIds?: readonly string[],
   ): Promise<void>
+  markUserInputsRestored(inputIds: readonly string[]): Promise<void>
   recordConsensusTaskEnd(
     taskId: string,
     outcome: ConsensusTaskOutcome,

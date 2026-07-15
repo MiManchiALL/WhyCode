@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
+import { VIEW_IMAGE_TOOL_NAME } from '../view-image/prompt.ts'
 
 export const READ_FILE_TOOL_NAME = 'ReadFile'
 
@@ -32,7 +33,7 @@ export const readFileTool = buildTool({
   name: READ_FILE_TOOL_NAME,
   description: '按行流式读取文本文件',
   prompt:
-    '读取允许范围内的 UTF-8 文本文件，返回带行号的内容。默认最多返回 1000 行；用 offset/limit 分段读取大文件。读取会在获得所需行后立即停止，不会把整个大文件载入内存；超长单行会安全截断。二进制、图片和 PDF 请使用后续对应工具，不要当文本读取。',
+    `读取允许范围内的 UTF-8 文本文件，返回带行号的内容。默认最多返回 1000 行；用 offset/limit 分段读取大文件。读取会在获得所需行后立即停止，不会把整个大文件载入内存；超长单行会安全截断。图片使用 ${VIEW_IMAGE_TOOL_NAME}；其它二进制和 PDF 请使用对应工具，不要当文本读取。`,
   inputSchema: z.object({
     path: z.string().describe('文件路径（项目内或经用户授权的绝对路径）'),
     offset: z.number().int().min(1).optional().describe('起始行号，从 1 开始'),

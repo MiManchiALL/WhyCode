@@ -1,18 +1,26 @@
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { modelMessageSchema } from 'ai'
+import sharp from 'sharp'
 import {
   createImageUserMessage,
   dehydrateImageMessages,
   messagesForModel,
 } from './messages.ts'
-import { importImageAttachments, inspectImage } from './storage.ts'
+import {
+  cleanupUnreferencedImageAttachments,
+  importImageAttachments,
+  inspectImage,
+  prepareImageAttachmentImport,
+  validateStoredImageAttachments,
+} from './storage.ts'
 
 const ONE_PIXEL_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2Z3sAAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
   'base64',
 )
 const SESSION_ID = '11111111-1111-4111-8111-111111111111'
@@ -54,11 +62,97 @@ describe('图片附件', () => {
       assert.equal(attachment.mediaType, 'image/png')
       assert.equal(attachment.width, 1)
       assert.equal(attachment.height, 1)
+      assert.match(attachment.sha256 ?? '', /^[0-9a-f]{64}$/)
       assert.match(attachment.storageName, /\.png$/)
       assert.deepEqual(
         await readFile(join(attachments, attachment.storageName)),
         ONE_PIXEL_PNG,
       )
+    })
+  })
+
+  it('完整解码 PNG、JPEG 与 WebP，拒绝只有合法文件头的截断图片', async () => {
+    await withTempDirectory(async (directory) => {
+      for (const format of ['png', 'jpeg', 'webp'] as const) {
+        const valid = await noisyImage(format)
+        const truncated = valid.subarray(0, Math.floor(valid.byteLength / 2))
+        assert.doesNotThrow(() => inspectImage(truncated))
+        const target = join(directory, format)
+
+        await assert.rejects(
+          importImageAttachments([{
+            kind: 'inline',
+            name: `truncated.${format}`,
+            base64: truncated.toString('base64'),
+          }], target, SESSION_ID),
+          /无法完整解码/,
+        )
+        assert.deepEqual(await readdir(target), [])
+      }
+    })
+  })
+
+  it('恢复会话时用内容摘要识别尺寸与字节数相同的图片替换', async () => {
+    await withTempDirectory(async (directory) => {
+      const attachmentDirectory = join(directory, 'attachments')
+      const red = await solidPng('#ef4444')
+      const blue = await solidPng('#3b82f6')
+      assert.equal(red.byteLength, blue.byteLength)
+      const [attachment] = await importImageAttachments([{
+        kind: 'inline', name: 'solid.png', base64: red.toString('base64'),
+      }], attachmentDirectory, SESSION_ID)
+      assert.ok(attachment)
+
+      await writeFile(join(attachmentDirectory, attachment.storageName), blue)
+      await assert.rejects(
+        validateStoredImageAttachments(attachmentDirectory, SESSION_ID, [attachment]),
+        /元数据与磁盘文件不一致/,
+      )
+    })
+  })
+
+  it('图片处理已取消时不留下半成品', async () => {
+    await withTempDirectory(async (directory) => {
+      const attachmentDirectory = join(directory, 'attachments')
+      const controller = new AbortController()
+      controller.abort()
+
+      await assert.rejects(
+        importImageAttachments([{
+          kind: 'inline', name: 'cancelled.png', base64: ONE_PIXEL_PNG.toString('base64'),
+        }], attachmentDirectory, SESSION_ID, controller.signal),
+        /图片处理已取消/,
+      )
+      assert.deepEqual(await readdir(attachmentDirectory), [])
+    })
+  })
+
+  it('导入事务只在 commit 后公开原图，回滚与启动清理不留孤儿文件', async () => {
+    await withTempDirectory(async (directory) => {
+      const attachmentDirectory = join(directory, 'attachments')
+      const transaction = await prepareImageAttachmentImport([{
+        kind: 'bytes', name: 'capture.png', bytes: ONE_PIXEL_PNG,
+      }], attachmentDirectory, SESSION_ID)
+      const [attachment] = transaction.attachments
+      assert.ok(attachment)
+      assert.equal((await readdir(attachmentDirectory)).some((name) => name.startsWith('.image-import-')), true)
+      await transaction.rollback()
+      assert.deepEqual(await readdir(attachmentDirectory), [])
+
+      const committed = await prepareImageAttachmentImport([{
+        kind: 'bytes', name: 'capture.png', bytes: ONE_PIXEL_PNG,
+      }], attachmentDirectory, SESSION_ID)
+      await committed.commit()
+      assert.deepEqual(await readdir(attachmentDirectory), [committed.attachments[0]!.storageName])
+      await cleanupUnreferencedImageAttachments(attachmentDirectory, [])
+      assert.deepEqual(await readdir(attachmentDirectory), [])
+
+      const retained = await prepareImageAttachmentImport([{
+        kind: 'bytes', name: 'capture.png', bytes: ONE_PIXEL_PNG,
+      }], attachmentDirectory, SESSION_ID)
+      await retained.commit()
+      await cleanupUnreferencedImageAttachments(attachmentDirectory, retained.attachments)
+      assert.deepEqual(await readdir(attachmentDirectory), [retained.attachments[0]!.storageName])
     })
   })
 
@@ -206,4 +300,19 @@ async function withTempDirectory(run: (directory: string) => Promise<void>): Pro
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
+}
+
+async function noisyImage(format: 'png' | 'jpeg' | 'webp'): Promise<Buffer> {
+  const pipeline = sharp(randomBytes(64 * 64 * 3), {
+    raw: { width: 64, height: 64, channels: 3 },
+  })
+  if (format === 'png') return pipeline.png({ compressionLevel: 0 }).toBuffer()
+  if (format === 'jpeg') return pipeline.jpeg({ quality: 95 }).toBuffer()
+  return pipeline.webp({ quality: 90 }).toBuffer()
+}
+
+function solidPng(background: string): Promise<Buffer> {
+  return sharp({
+    create: { width: 32, height: 32, channels: 3, background },
+  }).png({ compressionLevel: 0, adaptiveFiltering: false }).toBuffer()
 }

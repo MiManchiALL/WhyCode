@@ -106,6 +106,37 @@ describe('ViewTimeline', () => {
     }]])
   })
 
+  it('ViewImage 图片只随成功提交的 step 进入可恢复时间线', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    const attachment = {
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      name: 'screen.png',
+      storageName: '22222222-2222-4222-8222-222222222222.png',
+      mediaType: 'image/png' as const,
+      sha256: 'a'.repeat(64),
+      byteLength: 68,
+      width: 1,
+      height: 1,
+    }
+
+    timeline.capture(writer, {
+      type: 'image-viewed', toolUseId: 'discarded', attachments: [attachment],
+    })
+    timeline.capture(writer, { type: 'step-discarded' })
+    timeline.capture(writer, {
+      type: 'image-viewed', toolUseId: 'committed', attachments: [attachment],
+    })
+    timeline.capture(writer, { type: 'step-committed' })
+    await Promise.resolve()
+
+    assert.equal(writer.batches.length, 1)
+    assert.match(JSON.stringify(writer.batches), /image-viewed/)
+    assert.match(JSON.stringify(writer.batches), /committed/)
+    assert.doesNotMatch(JSON.stringify(writer.batches), /discarded/)
+  })
+
   it('任务计划只在所属 step 稳定提交后写入历史', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))

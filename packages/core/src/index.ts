@@ -4,6 +4,7 @@ export type {
   CoreEventSink,
   UsageInfo,
   AgentStatus,
+  QueuedUserMessage,
   StopReason,
 } from './events.ts'
 export {
@@ -41,6 +42,14 @@ export {
   type CommandTaskSnapshot,
   type CommandTaskStatus,
 } from './tools/background-command/index.ts'
+export {
+  CAPTURE_SCREENSHOT_TOOL_NAME,
+  createCaptureScreenshotTool,
+  screenshotCaptureRequestSchema,
+  type ScreenshotCaptureHandler,
+  type ScreenshotCaptureRequest,
+  type ScreenshotCaptureResult,
+} from './tools/capture-screenshot/index.ts'
 export {
   PERMISSION_MODES,
   type PermissionMode,
@@ -88,22 +97,34 @@ export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
 export { validateSessionId } from './session/metadata.ts'
 export {
-  IMAGE_ATTACHMENT_MAX_BYTES,
   IMAGE_ATTACHMENT_MAX_COUNT,
   IMAGE_ATTACHMENT_MAX_DIMENSION,
   IMAGE_ATTACHMENT_MAX_PIXELS,
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+  IMAGE_MODEL_MAX_BYTES,
+  IMAGE_MODEL_MAX_DIMENSION,
   imageAttachmentSchema,
   imageAttachmentsSchema,
   imageAttachmentStorageNameSchema,
+  imageDetailSchema,
+  imageRegionSchema,
+  imageTransformSchema,
   type ImageAttachment,
+  type ImageDetail,
   type ImageAttachmentInput,
+  type ImageMessageAttachmentInput,
   type ImageMediaType,
+  type ImageRegion,
+  type ImageTransform,
 } from './attachments/types.ts'
 export {
+  cleanupUnreferencedImageAttachments,
   importImageAttachments,
+  prepareImageAttachmentImport,
   readStoredImage,
   validateStoredImageAttachments,
 } from './attachments/storage.ts'
+export type { ImageAttachmentImportTransaction } from './attachments/storage.ts'
 export {
   pushCoalescedViewEvent,
   toViewEvent,
