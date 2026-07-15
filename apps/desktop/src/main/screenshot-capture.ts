@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   BrowserWindow,
   desktopCapturer,
@@ -15,10 +16,12 @@ import {
   selectDisplaySource,
   selectWindowSource,
 } from './screenshot-selection.ts'
+import { captureWithHostExcluded } from './screenshot-host-exclusion.ts'
 
 const MAX_CAPTURE_DIMENSION = 7_680
 const MAX_CAPTURE_PIXELS = 20_000_000
 const MAX_CAPTURE_BYTES = 20_000_000
+const HOST_HIDE_SETTLE_MS = 100
 
 export async function captureDesktopScreenshot(
   request: ScreenshotCaptureRequest,
@@ -38,16 +41,24 @@ async function captureDisplay(
     width: Math.max(1, Math.round(display.bounds.width * display.scaleFactor)),
     height: Math.max(1, Math.round(display.bounds.height * display.scaleFactor)),
   }, MAX_CAPTURE_DIMENSION, MAX_CAPTURE_PIXELS)
-  const sources = await desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: physicalSize,
+  const capturedSource = await captureWithHostExcluded(currentWhyCodeWindow(), {
+    mode: process.platform === 'win32' ? 'content-protection' : 'hide-focused',
+    settleAfterHide: () => delay(HOST_HIDE_SETTLE_MS, undefined, { signal: abortSignal }),
+    capture: async () => {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: physicalSize,
+      })
+      throwIfAborted(abortSignal)
+      return selectDisplaySource(sources, String(display.id))
+    },
   })
-  throwIfAborted(abortSignal)
-  const source = selectDisplaySource(sources, String(display.id))
+  const source = capturedSource.result
   let image = source.thumbnail
   if (image.isEmpty()) throw new Error('系统没有返回屏幕画面；请检查操作系统的屏幕录制权限')
 
   let description = `已截取显示器 ${display.id}${display.label ? `（${display.label}）` : ''}`
+  if (capturedSource.hostExcluded) description += '；已自动排除 WhyCode 窗口'
   if (request.target === 'region') {
     const region = request.region!
     const crop = regionCrop(region, display.bounds, image.getSize())

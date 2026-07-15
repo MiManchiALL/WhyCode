@@ -30,6 +30,8 @@ describe('CaptureScreenshot Agent 链路', () => {
             tool.type === 'function' && tool.name === CAPTURE_SCREENSHOT_TOOL_NAME)
           assert.ok(screenshotTool?.type === 'function')
           assert.match(screenshotTool.description ?? '', /先截图建立基线.*修改.*再截图验证/)
+          assert.match(screenshotTool.description ?? '', /单个外部应用.*window_title/)
+          assert.match(screenshotTool.description ?? '', /screen\/region.*排除 WhyCode/)
           if (call === 1) return toolStep({ target: 'screen' })
           assert.equal(JSON.stringify(options.prompt).includes(ONE_PIXEL_PNG.toString('base64')), true)
           if (call === 2) {
