@@ -76,8 +76,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       reasoningExposure: 'field',
       structuredOutput: 'json-object',
       promptCaching: 'auto',
-      contextWindow: 128_000,
-      maxOutput: 32_000,
+      contextWindow: 1_000_000,
+      maxOutput: 384_000,
     },
     create: (config) =>
       createDeepSeek({ apiKey: config.apiKey, baseURL: config.baseURL })(
