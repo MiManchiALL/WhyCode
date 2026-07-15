@@ -11,7 +11,7 @@ import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
-import { checkToolPermission } from '../permissions/engine.ts'
+import { checkInitialToolApproval, checkToolPermission } from '../permissions/engine.ts'
 import { CheckpointManager } from '../checkpoints/manager.ts'
 import { autoCompactThreshold, estimateContextTokens, type TokenBaseline } from '../context/tokens.ts'
 import { microcompact } from '../context/microcompact.ts'
@@ -1345,16 +1345,10 @@ export class AgentSession {
         emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
 
         // 权限判定链（文档一 §3.2）
-        const decision = def.initialApprovalReason
-          && !this.permissions.sessionAllowedTools.includes(def.name)
-          ? ({
-              behavior: 'ask',
-              reason: def.initialApprovalReason,
-              suggestion: { kind: 'allow-tool', toolName: def.name },
-            } as const)
-          : !projectDir && def.availableWithoutProject
+        const decision = checkInitialToolApproval(def, this.permissions)
+          ?? (!projectDir && def.availableWithoutProject
             ? ({ behavior: 'allow' } as const)
-            : checkToolPermission(def, parsed.data, this.permissions)
+            : checkToolPermission(def, parsed.data, this.permissions))
         if (decision.behavior === 'deny') {
           const msg = `操作被拒绝：${decision.reason}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })

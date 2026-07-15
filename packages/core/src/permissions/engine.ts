@@ -8,6 +8,25 @@ import {
 } from './path-safety.ts'
 
 /**
+ * 返回工具首次隐私审批对本次调用的拦截决定；null 表示继续走常规权限链。
+ *
+ * 全自动是用户对当前会话的显式授权，因此可跳过一次性的读屏等隐私提示。
+ * 敏感路径和越界等逐次安全检查仍由 checkToolPermission 强制执行，不受此处影响。
+ */
+export function checkInitialToolApproval(
+  def: ToolDefinition,
+  ctx: PermissionContext,
+): PermissionDecision | null {
+  if (!def.initialApprovalReason) return null
+  if (ctx.sessionAllowedTools.includes(def.name) || ctx.mode === 'auto') return null
+  return {
+    behavior: 'ask',
+    reason: def.initialApprovalReason,
+    suggestion: { kind: 'allow-tool', toolName: def.name },
+  }
+}
+
+/**
  * 权限判定引擎（M2-b，M3 增讨论档）。判定链顺序不可交换（文档一 §3.2 / Claude Code 不变式）：
  * 可疑路径拒绝 → 敏感路径强制审批 → 越界审批（讨论档拒绝） → 讨论档规则 → 只读档拦写 → 会话 allow 规则 → 模式快速通道 → 默认策略。
  * deny 与敏感路径检查永远在任何 allow / 模式放行之前。

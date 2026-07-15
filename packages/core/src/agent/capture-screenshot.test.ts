@@ -77,6 +77,53 @@ describe('CaptureScreenshot Agent 链路', () => {
     }
   })
 
+  it('全自动档直接截图，不弹隐私审批或切走目标窗口', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-auto-'))
+    try {
+      const store = new SessionStore(root)
+      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      let call = 0
+      const model = new MockLanguageModelV4({
+        doStream: async () => {
+          call++
+          return call === 1
+            ? toolStep({ target: 'screen' })
+            : finalStep('已看到目标界面。')
+        },
+      })
+      const events: CoreEvent[] = []
+      let captures = 0
+      const session = new AgentSession({
+        model: modelEntry(model),
+        providerConfig: { apiKey: 'test' },
+        promptContext: { projectDir: null, osPlatform: 'win32' },
+        sessionRecorder: journal,
+        captureScreenshot: async () => {
+          captures++
+          return {
+            name: 'screen.png',
+            bytes: ONE_PIXEL_PNG,
+            description: '已截取目标界面',
+          }
+        },
+        emit: (event) => events.push(event),
+        requestApproval: async () => {
+          throw new Error('全自动档不应请求首次截图审批')
+        },
+      })
+      session.setPermissionMode('auto')
+
+      assert.equal(await session.handleUserMessage('直接截图查看当前界面'), 'completed')
+      assert.equal(captures, 1)
+      assert.equal(
+        events.some((event) => event.type === 'agent-status' && event.status === 'waiting-approval'),
+        false,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('文字模型和讨论角色都不获得桌面截图能力', async () => {
     for (const setup of [
       { vision: false, discussion: false },
