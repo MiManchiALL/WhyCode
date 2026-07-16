@@ -1,5 +1,6 @@
 import {
   SessionStore,
+  type PdfProcessor,
   type SessionJournal,
   type SessionSummary,
 } from '@whycode/core'
@@ -11,8 +12,8 @@ export class DesktopSessionRepository {
   private pendingCreate: Promise<SessionJournal> | null = null
   private generation = 0
 
-  constructor(storageRoot: string) {
-    this.store = new SessionStore(storageRoot)
+  constructor(storageRoot: string, pdfProcessor?: PdfProcessor) {
+    this.store = new SessionStore(storageRoot, { pdfProcessor })
   }
 
   get journal(): SessionJournal | null {

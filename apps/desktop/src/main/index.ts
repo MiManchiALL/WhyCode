@@ -1,15 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   AgentSession,
-  cleanupUnreferencedImageAttachments,
+  cleanupUnreferencedAttachments,
   cleanupConversationScratch,
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
   getModelEntry,
-  prepareImageAttachmentImport,
   MODEL_REGISTRY,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -18,10 +17,8 @@ import {
   type CoreEvent,
   type AgentStatus,
   type ImageAttachment,
-  type ImageAttachmentInput,
-  type ImageAttachmentImportTransaction,
+  type PdfAttachment,
   type SessionJournal,
-  IMAGE_ATTACHMENT_MAX_COUNT,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import {
@@ -35,6 +32,13 @@ import { DesktopSessionRepository } from './session-repository.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
+import { ElectronPdfProcessor } from './pdf/processor.ts'
+import { openPdfAttachment } from './pdf/open.ts'
+import {
+  prepareUserMessageAttachments as prepareAttachments,
+  type PreparedUserMessageAttachments,
+  userMessageNeedsAttachmentPreparation,
+} from './user-message-attachments.ts'
 import type {
   DeleteSessionResult,
   ResumeSessionResult,
@@ -118,8 +122,9 @@ let sessions: DesktopSessionRepository
 let commandSessions: CommandSessionManager
 /** 会话删除跨多个存储，必须在主进程内单飞并阻止新输入/切换。 */
 let sessionDeletionId: string | null = null
-/** 图片复制期间拒绝其它输入，避免附件落盘与根消息分类之间发生竞态。 */
-let imagePreparationInProgress = false
+/** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
+let attachmentPreparationInProgress = false
+const pdfProcessor = new ElectronPdfProcessor()
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
 const userMessageRoutingGate = new UserMessageRoutingGate()
 const viewTimeline = new ViewTimeline((error) => {
@@ -197,6 +202,7 @@ async function ensureSession(): Promise<string | null> {
             sessionRecorder: recorder,
             mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
             captureScreenshot: captureDesktopScreenshot,
+            pdfProcessor,
             emit: broadcastEvent,
             requestApproval,
           })
@@ -322,10 +328,10 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'compact': {
-      if (imagePreparationInProgress) {
+      if (attachmentPreparationInProgress) {
         broadcastEvent({
           type: 'error',
-          message: '图片消息准备中，请等待提交完成后再压缩',
+          message: '附件消息准备中，请等待提交完成后再压缩',
           recoverable: true,
         })
         return { ok: false }
@@ -338,10 +344,10 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'set-model': {
-      if (imagePreparationInProgress) {
+      if (attachmentPreparationInProgress) {
         broadcastEvent({
           type: 'error',
-          message: '图片消息准备中，请等待提交完成后再切换模型',
+          message: '附件消息准备中，请等待提交完成后再切换模型',
           recoverable: true,
         })
         return { ok: false }
@@ -371,78 +377,59 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
 
 type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
 
-interface PreparedUserMessageImages {
-  attachments: ImageAttachment[]
-  importTransaction: ImageAttachmentImportTransaction | null
-  restoredInputIds: string[]
-}
-
-async function prepareUserMessageImages(
+async function prepareUserMessage(
   command: UserMessageCommand,
-): Promise<PreparedUserMessageImages> {
-  const attachmentInputs = command.attachments ?? []
-  const restoredInputIds = command.restoredInputIds ?? []
-  if (attachmentInputs.length === 0 && restoredInputIds.length === 0) {
+): Promise<PreparedUserMessageAttachments> {
+  if (!userMessageNeedsAttachmentPreparation(command)) {
     const error = await ensureSession()
     if (error) throw new Error(error)
-    return { attachments: [], importTransaction: null, restoredInputIds }
+    return {
+      attachments: [],
+      pdfAttachments: [],
+      restoredInputIds: [],
+      importedFiles: false,
+    }
   }
 
   const modelId = resolveCurrentModelId()
   if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
   const model = getModelEntry(modelId)
-  if (attachmentInputs.length > 0 && !model.capabilities.supportsImageInput) {
-    throw new Error(`${model.displayName} 不支持识图；请切换到带“图片”标记的模型`)
-  }
-
-  imagePreparationInProgress = true
-  let importTransaction: ImageAttachmentImportTransaction | null = null
+  attachmentPreparationInProgress = true
   try {
     const error = await ensureSession()
     if (error) throw new Error(error)
     const journal = sessions.journal
-    if (!journal) throw new Error('会话记录尚未初始化，无法保存图片')
-    const restoredAttachments = resolveRestoredAttachments(
+    if (!journal) throw new Error('会话记录尚未初始化，无法保存附件')
+    return await prepareAttachments({
+      command,
       journal,
-      attachmentInputs.flatMap((input) =>
-        input.kind === 'stored' ? [input.attachmentId] : []),
-      restoredInputIds,
-    )
-    const freshInputs = attachmentInputs.filter(
-      (input): input is ImageAttachmentInput => input.kind !== 'stored',
-    )
-    importTransaction = await prepareImageAttachmentImport(
-      freshInputs,
-      journal.attachmentDirectory,
-      journal.sessionId,
-    )
-    const attachments = [...restoredAttachments, ...importTransaction.attachments]
-    validatePreparedAttachments(attachments)
-    await importTransaction.commit()
-    return { attachments, importTransaction, restoredInputIds }
+      pdfProcessor,
+      supportsImageInput: model.capabilities.supportsImageInput,
+      modelDisplayName: model.displayName,
+      abortSignal: new AbortController().signal,
+    })
   } catch (error) {
-    await importTransaction?.rollback().catch(() => {})
-    throw new Error(`图片添加失败：${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`附件添加失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
-    imagePreparationInProgress = false
+    attachmentPreparationInProgress = false
   }
 }
 
 async function handleUserMessageCommand(
   command: UserMessageCommand,
 ): Promise<{ ok: boolean }> {
-  if (imagePreparationInProgress) {
-    return rejectUserMessage('上一条图片消息仍在准备，请稍后重试')
+  if (attachmentPreparationInProgress) {
+    return rejectUserMessage('上一条附件消息仍在准备，请稍后重试')
   }
-  let prepared: PreparedUserMessageImages
+  let prepared: PreparedUserMessageAttachments
   try {
-    prepared = await prepareUserMessageImages(command)
+    prepared = await prepareUserMessage(command)
   } catch (error) {
     return rejectUserMessage(error instanceof Error ? error.message : String(error))
   }
 
   const userText = command.text.trim()
-    || (prepared.attachments.length ? '请分析这些图片。' : '')
+    || defaultAttachmentPrompt(prepared.attachments, prepared.pdfAttachments)
   if (!userText) return rejectUserMessage('消息不能为空')
   try {
     await routeUserMessage(userText, command.urgent ?? false, {
@@ -454,12 +441,14 @@ async function handleUserMessageCommand(
         startsTurn,
         prepared.attachments,
         prepared.restoredInputIds,
+        prepared.pdfAttachments,
       ),
       acceptRoot: (text) => broadcastEvent({
         type: 'user-message-accepted',
         text,
         startsTurn: true,
         ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
+        ...(prepared.pdfAttachments.length ? { pdfAttachments: prepared.pdfAttachments } : {}),
       }, false),
       deliver: (inputId, text, urgent, startsTurn) => deliverUserMessage(
         inputId,
@@ -467,16 +456,17 @@ async function handleUserMessageCommand(
         urgent,
         startsTurn,
         prepared.attachments,
+        prepared.pdfAttachments,
       ),
       onDeliveryError: reportUserMessageDeliveryError,
     })
   } catch (error) {
     const journal = sessions.journal
-    if (prepared.importTransaction && journal) {
-      await cleanupUnreferencedImageAttachments(
-        journal.attachmentDirectory,
-        journal.initialImageAttachments,
-      ).catch(() => {})
+    if (prepared.importedFiles && journal) {
+      await cleanupUnreferencedAttachments(journal.attachmentDirectory, {
+        imageAttachments: journal.initialImageAttachments,
+        pdfAttachments: journal.initialPdfAttachments,
+      }).catch(() => {})
     }
     return rejectUserMessage(
       `用户消息未能安全交付：${error instanceof Error ? error.message : String(error)}`,
@@ -491,12 +481,17 @@ function deliverUserMessage(
   urgent: boolean,
   startsTurn: boolean,
   attachments: readonly ImageAttachment[],
+  pdfAttachments: readonly PdfAttachment[],
 ): Promise<unknown> | void {
   const persistedInputId = startsTurn ? undefined : inputId
   if (consensusEnabled && coordinator) {
-    return coordinator.handleUserMessage(text, urgent, attachments, persistedInputId)
+    return coordinator.handleUserMessage(
+      text, urgent, attachments, persistedInputId, pdfAttachments,
+    )
   }
-  return session!.handleUserMessage(text, urgent, attachments, persistedInputId)
+  return session!.handleUserMessage(
+    text, urgent, attachments, persistedInputId, pdfAttachments,
+  )
 }
 
 function reportUserMessageDeliveryError(error: unknown): void {
@@ -510,57 +505,12 @@ function reportUserMessageDeliveryError(error: unknown): void {
 function runtimeBusy(): boolean {
   return Boolean(
     sessionDeletionId
-    || imagePreparationInProgress
+    || attachmentPreparationInProgress
     || userMessageRoutingGate.busy
     || sessionInitialization
     || session?.isBusy
     || coordinator?.busy,
   )
-}
-
-function resolveRestoredAttachments(
-  journal: SessionJournal,
-  attachmentIds: readonly string[],
-  restoredInputIds: readonly string[],
-): ImageAttachment[] {
-  if (new Set(restoredInputIds).size !== restoredInputIds.length) {
-    throw new Error('恢复输入 ID 不能重复')
-  }
-  if (new Set(attachmentIds).size !== attachmentIds.length) {
-    throw new Error('恢复图片不能重复添加')
-  }
-  const restoredById = new Map(
-    journal.pendingUserInputs
-      .filter((input) => input.state === 'restored')
-      .map((input) => [input.id, input]),
-  )
-  const selectedInputs = restoredInputIds.map((inputId) => {
-    const input = restoredById.get(inputId)
-    if (!input) throw new Error(`恢复输入已失效或不属于当前会话：${inputId}`)
-    return input
-  })
-  const allowedAttachments = new Map(
-    selectedInputs.flatMap((input) => input.attachments ?? []).map((attachment) => [
-      attachment.id,
-      attachment,
-    ]),
-  )
-  return attachmentIds.map((attachmentId) => {
-    const attachment = allowedAttachments.get(attachmentId)
-    if (!attachment) throw new Error(`恢复图片已失效或不属于所选输入：${attachmentId}`)
-    return attachment
-  })
-}
-
-function validatePreparedAttachments(attachments: readonly ImageAttachment[]): void {
-  if (attachments.length > IMAGE_ATTACHMENT_MAX_COUNT) {
-    throw new Error(`每条消息最多添加 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
-  }
-  const identities = attachments.map((attachment) =>
-    attachment.sha256 ?? attachment.storageName)
-  if (new Set(identities).size !== identities.length) {
-    throw new Error('同一张图片不能重复添加')
-  }
 }
 
 async function recordUserInput(
@@ -569,6 +519,7 @@ async function recordUserInput(
   startsTurn: boolean,
   attachments: readonly ImageAttachment[] = [],
   consumesInputIds: readonly string[] = [],
+  pdfAttachments: readonly PdfAttachment[] = [],
 ): Promise<void> {
   const journal = sessions.journal!
   await journal.recordUserInputWithId(
@@ -577,7 +528,18 @@ async function recordUserInput(
     startsTurn,
     attachments,
     consumesInputIds,
+    pdfAttachments,
   )
+}
+
+function defaultAttachmentPrompt(
+  images: readonly ImageAttachment[],
+  pdfs: readonly PdfAttachment[],
+): string {
+  if (images.length > 0 && pdfs.length > 0) return '请分析这些附件。'
+  if (images.length > 0) return '请分析这些图片。'
+  if (pdfs.length > 0) return '请分析这些 PDF。'
+  return ''
 }
 
 function rejectUserMessage(message: string): { ok: false } {
@@ -689,13 +651,21 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
 function pendingInputs(
   journal: SessionJournal,
   state: 'queued' | 'restored',
-): { id: string; text: string; attachments?: ImageAttachment[] }[] {
+): {
+  id: string
+  text: string
+  attachments?: ImageAttachment[]
+  pdfAttachments?: PdfAttachment[]
+}[] {
   return journal.pendingUserInputs
     .filter((input) => input.state === state)
     .map((input) => ({
       id: input.id,
       text: input.text,
       ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
+      ...(input.pdfAttachments?.length
+        ? { pdfAttachments: [...input.pdfAttachments] }
+        : {}),
     }))
 }
 
@@ -765,7 +735,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
     rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
     rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true }),
   ]).catch(() => {})
-  sessions = new DesktopSessionRepository(join(app.getPath('userData'), 'sessions'))
+  sessions = new DesktopSessionRepository(
+    join(app.getPath('userData'), 'sessions'),
+    pdfProcessor,
+  )
   registerAttachmentProtocol(() => sessions.journal)
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
@@ -796,6 +769,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.newSession, () => startNewSession())
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
+  ipcMain.handle(IPC.openPdfAttachment, async (_e, attachmentId: string) => {
+    return openPdfAttachment(sessions.journal, attachmentId, (path) => shell.openPath(path))
+  })
   ipcMain.handle(IPC.pickProjectDir, async () => {
     if (runtimeBusy()) {
       broadcastEvent({

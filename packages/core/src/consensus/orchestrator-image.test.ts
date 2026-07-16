@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, it } from 'node:test'
 import type { AgentSession } from '../agent/session.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
+import type { PdfAttachment } from '../pdf/types.ts'
 import type { CoreEvent, QueuedUserMessage } from '../events.ts'
 import { ConsensusCoordinator } from './orchestrator.ts'
 
@@ -10,10 +11,11 @@ interface MainCall {
   text: string
   urgent: boolean
   attachments: readonly ImageAttachment[]
+  pdfAttachments?: readonly PdfAttachment[]
   inputId?: string
 }
 
-describe('共识模式图片路由', () => {
+describe('共识模式附件路由', () => {
   it('协调器空闲时图片跳过 B/C；Main 忙时仍直接进入自身 steering', () => {
     const harness = createHarness()
     harness.coordinator.handleUserMessage('先看图片', false, [harness.attachment], 'input-1')
@@ -53,6 +55,38 @@ describe('共识模式图片路由', () => {
     }])
   })
 
+  it('PDF 始终只交给 Main，并用独立原因声明未让 B/C 读取', () => {
+    const harness = createHarness()
+    harness.coordinator.handleUserMessage(
+      '总结 PDF', false, [], 'input-pdf', [harness.pdfAttachment],
+    )
+    assert.deepEqual(harness.calls, [{
+      text: '总结 PDF',
+      urgent: false,
+      attachments: [],
+      inputId: 'input-pdf',
+      pdfAttachments: [harness.pdfAttachment],
+    }])
+    assert.equal(harness.events.some((event) =>
+      event.type === 'consensus-skipped' && event.reason === 'pdf-input'), true)
+
+    const internals = harness.coordinator as unknown as {
+      running: boolean
+      peerPhase: boolean
+      takePendingInputs(text: string): { inputs: QueuedUserMessage[] }
+    }
+    internals.running = true
+    internals.peerPhase = true
+    harness.coordinator.handleUserMessage(
+      '评审期间补充 PDF', false, [], 'input-pdf-peer', [harness.pdfAttachment],
+    )
+    assert.deepEqual(internals.takePendingInputs('execute').inputs, [{
+      id: 'input-pdf-peer',
+      text: '评审期间补充 PDF',
+      pdfAttachments: [harness.pdfAttachment],
+    }])
+  })
+
   it('B/C 评审时 urgent 图片中止半截共识，留到回滚后由 Main 处理', () => {
     const harness = createHarness()
     const internals = harness.coordinator as unknown as {
@@ -82,6 +116,7 @@ describe('共识模式图片路由', () => {
         persistedInputId: string
         text: string
         attachments: ImageAttachment[]
+        pdfAttachments: PdfAttachment[]
       }>): Promise<void>
     }
 
@@ -90,6 +125,7 @@ describe('共识模式图片路由', () => {
       persistedInputId: 'input-persisted',
       text: '保留这张图',
       attachments: [harness.attachment],
+      pdfAttachments: [],
     }])
 
     assert.equal(harness.events.some((event) => event.type === 'queue-restored'), false)
@@ -113,8 +149,15 @@ function createHarness(options: {
       urgent: boolean,
       attachments: readonly ImageAttachment[],
       inputId?: string,
+      pdfAttachments: readonly PdfAttachment[] = [],
     ) {
-      calls.push({ text, urgent, attachments: [...attachments], ...(inputId ? { inputId } : {}) })
+      calls.push({
+        text,
+        urgent,
+        attachments: [...attachments],
+        ...(inputId ? { inputId } : {}),
+        ...(pdfAttachments.length ? { pdfAttachments: [...pdfAttachments] } : {}),
+      })
     },
     abort() { aborts.value++ },
   } as unknown as AgentSession
@@ -142,5 +185,16 @@ function createHarness(options: {
     width: 10,
     height: 10,
   }
-  return { coordinator, calls, events, state, aborts, attachment }
+  const pdfId = randomUUID()
+  const pdfAttachment: PdfAttachment = {
+    id: pdfId,
+    sessionId,
+    name: 'guide.pdf',
+    storageName: `${pdfId}.pdf`,
+    mediaType: 'application/pdf',
+    sha256: 'b'.repeat(64),
+    byteLength: 200,
+    pageCount: 3,
+  }
+  return { coordinator, calls, events, state, aborts, attachment, pdfAttachment }
 }

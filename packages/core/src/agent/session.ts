@@ -45,6 +45,18 @@ import {
 } from '../tools/capture-screenshot/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import { resolveAllowed } from '../tools/fs-utils.ts'
+import {
+  compactPdfAttachmentContext,
+  referencedPdfAttachmentIds,
+  withPdfAttachmentReferences,
+} from '../pdf/messages.ts'
+import { pdfAttachmentPath } from '../pdf/storage.ts'
+import {
+  pdfAttachmentSchema,
+  type PdfAttachment,
+} from '../pdf/types.ts'
+import type { PdfProcessor } from '../pdf/processor.ts'
+import { createReadPdfTool } from '../tools/read-pdf/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import {
@@ -91,6 +103,8 @@ export interface AgentSessionOptions {
   mainTools?: ToolDefinition[]
   /** Electron 等宿主注入的桌面采集能力；Core 不依赖具体窗口系统。 */
   captureScreenshot?: ScreenshotCaptureHandler
+  /** 宿主注入的隔离 PDF 处理端口；未提供时物理移除 ReadPdf。 */
+  pdfProcessor?: PdfProcessor
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** 事件出口（宿主注入） */
@@ -122,14 +136,16 @@ interface QueuedMessage {
   id: string
   text: string
   attachments: ImageAttachment[]
+  pdfAttachments: PdfAttachment[]
   /** Desktop 预写了 user-input 时，送达/恢复必须携带同一稳定 ID。 */
   persisted: boolean
 }
 
 function queuedMessageForModel(message: QueuedMessage): ModelMessage {
+  const text = withPdfAttachmentReferences(message.text, message.pdfAttachments)
   return message.attachments.length
-    ? createImageUserMessage(message.text, message.attachments)
-    : { role: 'user', content: message.text }
+    ? createImageUserMessage(text, message.attachments)
+    : { role: 'user', content: text }
 }
 
 interface StepResult {
@@ -180,6 +196,10 @@ export class AgentSession {
   private recentReadFiles = new Map<string, number>()
   /** 用户输入与图片工具导入的权威附件元数据；长期消息只保存其稳定引用。 */
   private imageAttachments = new Map<string, ImageAttachment>()
+  /** 用户上传 PDF 的权威元数据；ReadPdf 只通过此表解析不透明 ID。 */
+  private pdfAttachments = new Map<string, PdfAttachment>()
+  /** 当前模型活动历史或待处理输入仍引用的 PDF；回滚后不得重新注入已离开分支的附件。 */
+  private activePdfAttachmentIds = new Set<string>()
   /** 持久化失败后本会话降级内存模式，避免每个 step 重复报错 */
   private persistenceFailed = false
   /** 正式协议回合只通过结构化事件展示结果，避免内部候选文本混入最终回答。 */
@@ -197,14 +217,17 @@ export class AgentSession {
     this.options = options
     this.messages = [...(options.sessionRecorder?.initialMessages ?? [])]
     this.addImageAttachments(options.sessionRecorder?.initialImageAttachments ?? [])
+    this.addPdfAttachments(options.sessionRecorder?.initialPdfAttachments ?? [])
     this.queue = (options.sessionRecorder?.pendingUserInputs ?? [])
       .filter((input) => input.state === 'queued')
       .map((input) => ({
         id: input.id,
         text: input.text,
         attachments: [...(input.attachments ?? [])],
+        pdfAttachments: [...(input.pdfAttachments ?? [])],
         persisted: true,
       }))
+    this.rebuildActivePdfAttachments()
     this.permissions = createPermissionContext(
       options.promptContext.projectDir,
       options.promptContext.discussion,
@@ -298,6 +321,7 @@ export class AgentSession {
   restoreMessageSnapshot(messages: ModelMessage[]): void {
     if (this.isBusy) throw new Error('Agent 工作中，不能恢复消息快照')
     this.messages = structuredClone(messages)
+    this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
   }
 
@@ -319,12 +343,19 @@ export class AgentSession {
     urgent = false,
     imageAttachments: readonly ImageAttachment[] = [],
     persistedInputId?: string,
+    pdfAttachments: readonly PdfAttachment[] = [],
   ): Promise<StopReason> | void {
     if (imageAttachments.length > 0) {
       if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
       this.addImageAttachments(imageAttachments)
     }
-    return this.handleMessage(text, urgent, imageAttachments, persistedInputId)
+    if (pdfAttachments.length > 0) {
+      if (!this.options.sessionRecorder) throw new Error('PDF 消息需要会话级附件存储')
+      this.addPdfAttachments(pdfAttachments)
+    }
+    return this.handleMessage(
+      text, urgent, imageAttachments, persistedInputId, pdfAttachments,
+    )
   }
 
   /** 协商执行包走同一模型意图路径，但不作为 urgent steering。 */
@@ -337,14 +368,20 @@ export class AgentSession {
       id: input.id,
       text: input.text,
       attachments: [...(input.attachments ?? [])],
+      pdfAttachments: [...(input.pdfAttachments ?? [])],
       persisted: this.options.sessionRecorder?.pendingUserInputs.some(
         (pending) => pending.id === input.id && pending.state === 'queued',
       ) ?? false,
     }))
     const attachments = delivered.flatMap((input) => input.attachments)
+    const pdfAttachments = delivered.flatMap((input) => input.pdfAttachments)
     if (attachments.length > 0) {
       if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
       this.addImageAttachments(attachments)
+    }
+    if (pdfAttachments.length > 0) {
+      if (!this.options.sessionRecorder) throw new Error('PDF 消息需要会话级附件存储')
+      this.addPdfAttachments(pdfAttachments)
     }
     return this.startTurn(
       [
@@ -360,12 +397,14 @@ export class AgentSession {
     urgent: boolean,
     imageAttachments: readonly ImageAttachment[] = [],
     persistedInputId?: string,
+    pdfAttachments: readonly PdfAttachment[] = [],
   ): Promise<StopReason> | void {
     if (this.isBusy) {
       const item: QueuedMessage = {
         id: persistedInputId ?? crypto.randomUUID(),
         text,
         attachments: [...imageAttachments],
+        pdfAttachments: [...pdfAttachments],
         persisted: persistedInputId !== undefined,
       }
       this.queue.push(item)
@@ -374,6 +413,7 @@ export class AgentSession {
         id: item.id,
         text,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
+        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
       })
       if (urgent && this.running) {
         // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
@@ -381,14 +421,16 @@ export class AgentSession {
       }
       return
     }
+    const content = withPdfAttachmentReferences(text, pdfAttachments)
     const message = imageAttachments.length
-      ? createImageUserMessage(text, imageAttachments)
-      : { role: 'user' as const, content: text }
+      ? createImageUserMessage(content, imageAttachments)
+      : { role: 'user' as const, content }
     const delivered = persistedInputId
       ? [{
           id: persistedInputId,
           text,
           attachments: [...imageAttachments],
+          pdfAttachments: [...pdfAttachments],
           persisted: true,
         }]
       : []
@@ -432,6 +474,7 @@ export class AgentSession {
     }
     const restoredIds = new Set(items.map((item) => item.id))
     this.queue = this.queue.filter((item) => !restoredIds.has(item.id))
+    this.rebuildActivePdfAttachments()
     this.options.emit({
       type: 'queue-restored',
       text: items.map((item) => item.text).join('\n'),
@@ -439,6 +482,7 @@ export class AgentSession {
         id: item.id,
         text: item.text,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
+        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
       })),
     })
   }
@@ -459,6 +503,7 @@ export class AgentSession {
         text: item.text,
         startsTurn: index === 0,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
+        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
       })
     })
   }
@@ -474,9 +519,7 @@ export class AgentSession {
     const drained = this.drainQueue()
     const injected: ModelMessage[] = []
     for (const item of drained) {
-      injected.push(item.attachments.length
-        ? createImageUserMessage(item.text, item.attachments)
-        : { role: 'user', content: item.text })
+      injected.push(queuedMessageForModel(item))
     }
     if (injected.length > 0 && this.activeTurn) {
       try {
@@ -501,6 +544,7 @@ export class AgentSession {
         id: item.id,
         text: item.text,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
+        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
       }))
     }
   }
@@ -861,10 +905,11 @@ export class AgentSession {
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
-        this.compactTaskContext(),
+        this.compactApplicationContext(),
         (messages) => this.messagesForCurrentModel(messages, signal),
       )
       this.messages = result.messages
+      this.rebuildActivePdfAttachments()
       await this.persist((recorder) =>
         recorder.recordSnapshot('compact', this.messages, undefined, this.taskPlan?.stateSnapshot),
       )
@@ -937,10 +982,11 @@ export class AgentSession {
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
-        this.compactTaskContext(planExecutionEngaged, turnId),
+        this.compactApplicationContext(planExecutionEngaged, turnId),
         (messages) => this.messagesForCurrentModel(messages, abortSignal),
       )
       this.messages = result.messages
+      this.rebuildActivePdfAttachments()
       await this.persist((recorder) =>
         recorder.recordSnapshot(
           'compact',
@@ -961,13 +1007,24 @@ export class AgentSession {
     }
   }
 
-  private compactTaskContext(planExecutionEngaged = false, turnId?: string): string | undefined {
+  private compactApplicationContext(
+    planExecutionEngaged = false,
+    turnId?: string,
+  ): string | undefined {
     const state = this.taskPlan?.stateSnapshot
-    if (!state || (!state.activePlan && state.historicalPlans.length === 0)) return undefined
-    const continuation = planExecutionEngaged && turnId && state.activePlan
-      ? { turnId, engagedPlanId: state.activePlan.id }
+    const taskContext = state && (state.activePlan || state.historicalPlans.length > 0)
+      ? taskContextBlock(
+          state,
+          planExecutionEngaged && turnId && state.activePlan
+            ? { turnId, engagedPlanId: state.activePlan.id }
+            : undefined,
+        )
       : undefined
-    return taskContextBlock(state, continuation)
+    const pdfContext = compactPdfAttachmentContext(this.sessionPdfAttachments())
+    const sections = [taskContext, pdfContext].filter(
+      (section): section is string => Boolean(section),
+    )
+    return sections.length > 0 ? sections.join('\n\n') : undefined
   }
 
   private messagesForCurrentModel(
@@ -985,6 +1042,19 @@ export class AgentSession {
 
   private sessionImageAttachments(): ImageAttachment[] {
     return [...this.imageAttachments.values()]
+  }
+
+  private sessionPdfAttachments(): PdfAttachment[] {
+    return [...this.pdfAttachments.values()].filter((attachment) =>
+      this.activePdfAttachmentIds.has(attachment.id))
+  }
+
+  private pdfAttachmentById(attachmentId: string): PdfAttachment | null {
+    if (!this.activePdfAttachmentIds.has(attachmentId)) return null
+    for (const attachment of this.pdfAttachments.values()) {
+      if (attachment.id === attachmentId) return attachment
+    }
+    return null
   }
 
   /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
@@ -1310,9 +1380,34 @@ export class AgentSession {
               : []),
           ]
         : []
+    const pdfTools: ToolDefinition[] =
+      this.options.pdfProcessor
+      && this.options.sessionRecorder
+      && !this.options.promptContext.discussion
+      && !this.protocolRound
+        ? [createReadPdfTool({
+            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+            sessionId: this.options.sessionRecorder.sessionId,
+            processor: this.options.pdfProcessor,
+            supportsVisual: this.options.model.capabilities.supportsImageInput,
+            supportsProjectPaths: Boolean(projectDir),
+            resolveAttachment: (attachmentId) => {
+              const attachment = this.pdfAttachmentById(attachmentId)
+              return attachment
+                ? {
+                    attachment,
+                    path: pdfAttachmentPath(
+                      this.options.sessionRecorder!.attachmentDirectory,
+                      attachment.storageName,
+                    ),
+                  }
+                : null
+            },
+          })]
+        : []
     const availableDefs: ToolDefinition[] = projectDir
-      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...imageTools, ...controlTools]
-      : [...imageTools, ...controlTools].filter((tool) => tool.availableWithoutProject)
+      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...imageTools, ...pdfTools, ...controlTools]
+      : [...imageTools, ...pdfTools, ...controlTools].filter((tool) => tool.availableWithoutProject)
     const defs = availableDefs
     const toolProjectDir =
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
@@ -1605,12 +1700,14 @@ export class AgentSession {
           commit: async () => {
             await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskState)
             this.messages = structuredClone(rollbackMessages)
+            this.rebuildActivePdfAttachments()
             this.taskPlan?.restore(rollbackTaskState!)
             this.tokenBaseline = null
           },
           compensate: async () => {
             await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskState)
             this.messages = structuredClone(originalMessages)
+            this.rebuildActivePdfAttachments()
             if (originalTaskState) this.taskPlan?.restore(originalTaskState)
             this.tokenBaseline = null
           },
@@ -1670,6 +1767,43 @@ export class AgentSession {
         throw new Error(`同一图片附件存在冲突元数据：${attachment.storageName}`)
       }
     }
+  }
+
+  private addPdfAttachments(values: readonly PdfAttachment[]): void {
+    this.assertPdfAttachmentsCompatible(values)
+    for (const value of values) {
+      const attachment = pdfAttachmentSchema.parse(value)
+      this.pdfAttachments.set(attachment.storageName, attachment)
+      this.activePdfAttachmentIds.add(attachment.id)
+    }
+  }
+
+  private assertPdfAttachmentsCompatible(values: readonly PdfAttachment[]): void {
+    for (const value of values) {
+      const attachment = pdfAttachmentSchema.parse(value)
+      if (
+        this.options.sessionRecorder
+        && attachment.sessionId !== this.options.sessionRecorder.sessionId
+      ) {
+        throw new Error('PDF 附件不属于当前会话')
+      }
+      const previous = this.pdfAttachments.get(attachment.storageName)
+      if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+        throw new Error(`同一 PDF 附件存在冲突元数据：${attachment.storageName}`)
+      }
+    }
+  }
+
+  private rebuildActivePdfAttachments(): void {
+    const referencedIds = referencedPdfAttachmentIds(this.messages)
+    const queuedIds = new Set(this.queue.flatMap((item) =>
+      item.pdfAttachments.map((attachment) => attachment.id)))
+    this.activePdfAttachmentIds = new Set(
+      [...this.pdfAttachments.values()].flatMap((attachment) =>
+        referencedIds.has(attachment.id) || queuedIds.has(attachment.id)
+          ? [attachment.id]
+          : []),
+    )
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */

@@ -8,6 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./events": "./src/events.ts",
+    "./pdf": "./src/pdf/index.ts",
+    "./pdf-limits": "./src/pdf/limits.ts",
     "./permissions": "./src/permissions/types.ts"
   },
   "scripts": {

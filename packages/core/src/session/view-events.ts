@@ -6,6 +6,7 @@ import {
   taskPlanSchema,
 } from '../tasks/types.ts'
 import { imageAttachmentsSchema } from '../attachments/types.ts'
+import { pdfAttachmentsSchema } from '../pdf/types.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -125,7 +126,10 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
       .optional(),
   }),
   z.object({ type: z.literal('execution-started'), taskId: z.string() }),
-  z.object({ type: z.literal('consensus-skipped'), reason: z.literal('image-input') }),
+  z.object({
+    type: z.literal('consensus-skipped'),
+    reason: z.enum(['image-input', 'pdf-input']),
+  }),
   z.object({ type: z.literal('task-plan-updated'), plan: taskPlanSchema }),
   z.object({
     type: z.literal('task-plan-replaced'),
@@ -142,6 +146,7 @@ const userMessageViewEventSchema = z.object({
   text: z.string().min(1),
   startsTurn: z.boolean(),
   attachments: imageAttachmentsSchema.optional(),
+  pdfAttachments: pdfAttachmentsSchema.optional(),
 })
 
 export const viewEventSchema = z.discriminatedUnion('type', [
@@ -161,6 +166,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
       text: event.text,
       startsTurn: event.startsTurn ?? false,
       ...(event.attachments?.length ? { attachments: event.attachments } : {}),
+      ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
     }
   }
   if (event.type === 'peer-event') {

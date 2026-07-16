@@ -1,6 +1,7 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
 import type { CoreEvent, CoreEventSink, QueuedUserMessage, StopReason } from '../events.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
+import type { PdfAttachment } from '../pdf/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { createTurnAbortedMessage } from '../session/interruption.ts'
 import { PeerAgent } from './peer-agent.ts'
@@ -75,6 +76,7 @@ interface CoordinatorMessage {
   persistedInputId?: string
   text: string
   attachments: ImageAttachment[]
+  pdfAttachments: PdfAttachment[]
 }
 
 /**
@@ -116,25 +118,33 @@ export class ConsensusCoordinator {
     urgent = false,
     attachments: readonly ImageAttachment[] = [],
     persistedInputId?: string,
+    pdfAttachments: readonly PdfAttachment[] = [],
   ): Promise<StopReason | void> | void {
-    const message = this.coordinatorMessage(text, attachments, persistedInputId)
-    if (attachments.length > 0) {
+    const message = this.coordinatorMessage(
+      text, attachments, persistedInputId, pdfAttachments,
+    )
+    if (attachments.length > 0 || pdfAttachments.length > 0) {
       if (!this.running && !this.options.mainSession.isBusy) {
-        this.options.emit({ type: 'consensus-skipped', reason: 'image-input' })
+        this.options.emit({
+          type: 'consensus-skipped',
+          reason: pdfAttachments.length > 0 ? 'pdf-input' : 'image-input',
+        })
         return this.options.mainSession.handleUserMessage(
           text,
           urgent,
           attachments,
           persistedInputId,
+          pdfAttachments,
         )
       }
-      // 协调器空闲但 Main 仍在处理上一条视觉任务时，图片仍是同一任务的 steering。
+      // 协调器空闲但 Main 仍在处理上一条附件任务时，附件仍是同一任务的 steering。
       if (!this.running) {
         return this.options.mainSession.handleUserMessage(
           text,
           urgent,
           attachments,
           persistedInputId,
+          pdfAttachments,
         )
       }
       if (this.peerPhase) {
@@ -143,7 +153,7 @@ export class ConsensusCoordinator {
           this.emitQueued(message)
           this.interruptForDeferredInput()
         } else {
-          // B/C 永远不接收图片；补充消息只在后续 Main 执行边界原样注入。
+          // B/C 永远不接收附件；补充消息只在后续 Main 执行边界原样注入。
           this.pendingTexts.push(message)
           this.emitQueued(message)
         }
@@ -155,6 +165,7 @@ export class ConsensusCoordinator {
           urgent,
           attachments,
           persistedInputId,
+          pdfAttachments,
         )
       }
       this.deferredTaskMessages.push(message)
@@ -495,7 +506,7 @@ export class ConsensusCoordinator {
     return peer
   }
 
-  /** B/C 期间的补充保持独立消息顺序，图片只在 Main 执行边界解引用。 */
+  /** B/C 期间的补充保持独立消息顺序，附件只在 Main 执行边界解引用。 */
   private takePendingInputs(
     packageText: string,
   ): { text: string; inputs: QueuedUserMessage[] } {
@@ -507,6 +518,7 @@ export class ConsensusCoordinator {
         id: input.persistedInputId ?? input.id,
         text: input.text,
         ...(input.attachments.length ? { attachments: input.attachments } : {}),
+        ...(input.pdfAttachments.length ? { pdfAttachments: input.pdfAttachments } : {}),
       })),
     }
   }
@@ -515,12 +527,14 @@ export class ConsensusCoordinator {
     text: string,
     attachments: readonly ImageAttachment[],
     persistedInputId: string | undefined,
+    pdfAttachments: readonly PdfAttachment[],
   ): CoordinatorMessage {
     return {
       id: persistedInputId ?? `cq-${Date.now()}-${this.pendingTexts.length + this.deferredTaskMessages.length}`,
       ...(persistedInputId ? { persistedInputId } : {}),
       text,
       attachments: [...attachments],
+      pdfAttachments: [...pdfAttachments],
     }
   }
 
@@ -530,6 +544,7 @@ export class ConsensusCoordinator {
       id: message.id,
       text: message.text,
       ...(message.attachments.length ? { attachments: message.attachments } : {}),
+      ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
     })
   }
 
@@ -557,13 +572,17 @@ export class ConsensusCoordinator {
         id: message.id,
         text: message.text,
         ...(message.attachments.length ? { attachments: message.attachments } : {}),
+        ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
       })),
     })
   }
 
   private async deliverDeferredMessage(message: CoordinatorMessage): Promise<void> {
-    if (message.attachments.length > 0) {
-      this.options.emit({ type: 'consensus-skipped', reason: 'image-input' })
+    if (message.attachments.length > 0 || message.pdfAttachments.length > 0) {
+      this.options.emit({
+        type: 'consensus-skipped',
+        reason: message.pdfAttachments.length > 0 ? 'pdf-input' : 'image-input',
+      })
       if (!message.persistedInputId) {
         this.options.emit({
           type: 'message-injected',
@@ -571,6 +590,9 @@ export class ConsensusCoordinator {
           text: message.text,
           startsTurn: true,
           attachments: message.attachments,
+          ...(message.pdfAttachments.length
+            ? { pdfAttachments: message.pdfAttachments }
+            : {}),
         })
       }
       await this.options.mainSession.handleUserMessage(
@@ -578,6 +600,7 @@ export class ConsensusCoordinator {
         false,
         message.attachments,
         message.persistedInputId,
+        message.pdfAttachments,
       )
       return
     }

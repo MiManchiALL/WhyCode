@@ -16,6 +16,7 @@ import {
   imageAttachmentsSchema,
   type ImageAttachment,
 } from '../attachments/types.ts'
+import { pdfAttachmentsSchema, type PdfAttachment } from '../pdf/types.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -28,6 +29,7 @@ const pendingUserInputSchema = z.object({
   id: entryIdSchema,
   text: z.string().min(1),
   attachments: imageAttachmentsSchema.optional(),
+  pdfAttachments: pdfAttachmentsSchema.optional(),
   state: z.enum(['queued', 'restored']),
 })
 
@@ -59,6 +61,8 @@ const userInputSchema = chainedEntrySchema.extend({
   startsTurn: z.boolean(),
   /** 图片字节位于会话 attachments/；这里只保存可恢复的元数据。 */
   attachments: imageAttachmentsSchema.optional(),
+  /** PDF 原文件位于会话 attachments/；这里只保存稳定引用元数据。 */
+  pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 重新提交恢复草稿时，与新输入在同一次 append 中原子消费旧输入。 */
   consumesInputIds: z.array(entryIdSchema).min(1).optional(),
 }).superRefine((input, ctx) => {
@@ -68,6 +72,15 @@ const userInputSchema = chainedEntrySchema.extend({
         code: 'custom',
         path: ['attachments', index, 'sessionId'],
         message: '附件必须属于当前会话',
+      })
+    }
+  })
+  input.pdfAttachments?.forEach((attachment, index) => {
+    if (attachment.sessionId !== input.sessionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pdfAttachments', index, 'sessionId'],
+        message: 'PDF 附件必须属于当前会话',
       })
     }
   })
@@ -186,6 +199,15 @@ const snapshotSchema = chainedEntrySchema.extend({
         })
       }
     })
+    input.pdfAttachments?.forEach((attachment, attachmentIndex) => {
+      if (attachment.sessionId !== snapshot.sessionId) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['pendingUserInputs', inputIndex, 'pdfAttachments', attachmentIndex, 'sessionId'],
+          message: 'PDF 附件必须属于当前会话',
+        })
+      }
+    })
   })
 })
 
@@ -268,6 +290,8 @@ export interface LoadedSession {
   viewEvents: ViewEvent[]
   /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
   imageAttachments: ImageAttachment[]
+  /** 用户输入在该会话中持久化的全部 PDF 元数据。 */
+  pdfAttachments: PdfAttachment[]
   turnStartMessages: Map<string, ModelMessage[]>
   turnStartTaskStates: Map<string, TaskPlanState>
   entries: SessionEntry[]
@@ -293,6 +317,7 @@ export interface SessionRecorder {
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
   readonly initialImageAttachments: readonly ImageAttachment[]
+  readonly initialPdfAttachments: readonly PdfAttachment[]
   readonly interruptedTurnId: string | null
   readonly undeliveredUserInputIds: readonly string[]
   readonly pendingUserInputs: readonly PendingUserInput[]
@@ -307,6 +332,7 @@ export interface SessionRecorder {
     text: string,
     startsTurn: boolean,
     attachments?: readonly ImageAttachment[],
+    pdfAttachments?: readonly PdfAttachment[],
   ): Promise<void>
   /** Main 预先分配 ID，使落盘记录与运行时 steering 使用同一身份。 */
   recordUserInputWithId(
@@ -315,6 +341,7 @@ export interface SessionRecorder {
     startsTurn: boolean,
     attachments?: readonly ImageAttachment[],
     consumesInputIds?: readonly string[],
+    pdfAttachments?: readonly PdfAttachment[],
   ): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(
