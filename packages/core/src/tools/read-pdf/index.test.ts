@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { z } from 'zod'
+import type { ImageAttachment } from '../../attachments/types.ts'
 import type { PdfAttachment } from '../../pdf/types.ts'
 import type { PdfProcessor } from '../../pdf/processor.ts'
 import { createReadPdfTool } from './index.ts'
@@ -84,7 +85,6 @@ describe('ReadPdf', () => {
     const input = tool.inputSchema.parse({
       sourceType: 'attachment',
       sourceValue: ATTACHMENT_ID,
-      mode: 'visual',
       startPage: 2,
       pageCount: 2,
     })
@@ -95,6 +95,59 @@ describe('ReadPdf', () => {
       'slides · 第 3 页.png',
     ])
     assert.equal(result.imageTransform?.detail, 'high')
+  })
+
+  it('视觉模型默认返回文字和页面图，显式 text 保留大段文字优化', async () => {
+    const root = await tempDirectory()
+    const attachment = pdfAttachment('document.pdf', 6)
+    const sourcePath = join(root, attachment.storageName)
+    await writeFile(sourcePath, '%PDF-test')
+    const renderFlags: boolean[] = []
+    const tool = createReadPdfTool({
+      attachmentDirectory: join(root, 'attachments'),
+      sessionId: SESSION_ID,
+      processor: renderingProcessor((render) => renderFlags.push(render)),
+      supportsVisual: true,
+      supportsProjectPaths: false,
+      resolveAttachment: () => ({ attachment, path: sourcePath }),
+    })
+    const automatic = tool.inputSchema.parse({
+      sourceType: 'attachment', sourceValue: ATTACHMENT_ID, pageCount: 1,
+    })
+    assert.equal((await tool.execute(automatic, context(root))).attachments?.length, 1)
+    const textOnly = tool.inputSchema.parse({
+      sourceType: 'attachment', sourceValue: ATTACHMENT_ID, mode: 'text', pageCount: 1,
+    })
+    assert.equal((await tool.execute(textOnly, context(root))).attachments, undefined)
+    assert.deepEqual(renderFlags, [true, false])
+  })
+
+  it('重复读取同一会话 PDF 页面时复用稳定衍生图', async () => {
+    const root = await tempDirectory()
+    const attachmentDirectory = join(root, 'attachments')
+    const attachment = pdfAttachment('repeat.pdf', 6)
+    const sourcePath = join(root, attachment.storageName)
+    await writeFile(sourcePath, '%PDF-test')
+    let existing: ImageAttachment | null = null
+    const tool = createReadPdfTool({
+      attachmentDirectory,
+      sessionId: SESSION_ID,
+      processor: renderingProcessor(),
+      supportsVisual: true,
+      supportsProjectPaths: false,
+      resolveAttachment: () => ({ attachment, path: sourcePath }),
+      resolvePageImage: (_attachmentId, pageNumber) =>
+        existing?.source?.pageNumber === pageNumber ? existing : null,
+    })
+    const input = tool.inputSchema.parse({
+      sourceType: 'attachment', sourceValue: ATTACHMENT_ID, pageCount: 1,
+    })
+    const first = await tool.execute(input, context(root))
+    existing = first.attachments?.[0] ?? null
+    const second = await tool.execute(input, context(root))
+    assert.ok(existing?.source?.kind === 'pdf-page')
+    assert.equal(second.attachments?.[0]?.id, existing.id)
+    assert.equal((await readdir(attachmentDirectory)).filter((name) => name.endsWith('.png')).length, 1)
   })
 
   it('非视觉模型的 schema 物理拒绝 visual，纯聊天也不暴露 path 来源', () => {
@@ -171,12 +224,20 @@ function fakeProcessor(
   }
 }
 
-function renderingProcessor(): PdfProcessor {
+function renderingProcessor(onRead?: (render: boolean) => void): PdfProcessor {
   return {
     async inspect() {
       return { pageCount: 6, byteLength: 1 }
     },
     async readPages(_path, options) {
+      onRead?.(options.render)
+      if (!options.render) {
+        return {
+          pageCount: 6,
+          pages: [{ pageNumber: options.startPage, text: `第 ${options.startPage} 页` }],
+          renderedPages: [],
+        }
+      }
       await mkdir(options.outputDirectory!, { recursive: true })
       const renderedPages = []
       const pages = []

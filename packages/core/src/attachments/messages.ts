@@ -25,15 +25,35 @@ export function createImageUserMessage(
 export function createImageToolResultMessage(
   attachments: readonly ImageAttachment[],
   transform: ImageTransform = DEFAULT_IMAGE_TRANSFORM,
+  sourceToolCallId?: string,
 ): ModelMessage {
   return buildImageUserMessage(
-    '以下图片由视觉工具读取或采集，仅作为刚才工具调用的视觉结果。',
+    [
+      sourceToolCallId ? imageToolResultMarker(sourceToolCallId) : '',
+      '以下图片由视觉工具读取或采集，仅作为刚才工具调用的视觉结果。',
+    ].filter(Boolean).join('\n'),
     attachments.map((attachment) => ({
       attachment,
       data: attachmentReference(attachment.storageName, transform),
     })),
     (attachment, index) => `[视觉工具结果 ${index + 1}：${attachment.name}]`,
   )
+}
+
+/** 微清理用稳定关联；只解析应用生成且位于内部 user 消息开头的标记。 */
+export function imageToolResultSourceId(message: ModelMessage): string | null {
+  if (message.role !== 'user') return null
+  const text = typeof message.content === 'string'
+    ? message.content
+    : message.content.find((part) => part.type === 'text')?.text
+  if (!text) return null
+  const match = /^<whycode-image-tool-result tool-call-id="([^"]+)"\s*\/>(?:\n|$)/.exec(text)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1]!)
+  } catch {
+    return null
+  }
 }
 
 export function dehydrateImageMessages(messages: readonly ModelMessage[]): ModelMessage[] {
@@ -211,6 +231,10 @@ function attachmentReference(
     ? `${transform.region.x},${transform.region.y},${transform.region.width},${transform.region.height}`
     : '-'
   return `${ATTACHMENT_REF_V2_PREFIX}${safeName}:${transform.detail}:${region}`
+}
+
+function imageToolResultMarker(toolCallId: string): string {
+  return `<whycode-image-tool-result tool-call-id="${encodeURIComponent(toolCallId)}" />`
 }
 
 function parseAttachmentReference(

@@ -1,26 +1,27 @@
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { getModelEntry, MODEL_REGISTRY } from '@whycode/core'
+import {
+  getModelEntry,
+  MODEL_REGISTRY,
+  type CustomApiProtocol,
+  type CustomConnectionProbe,
+} from '@whycode/core'
 
-/**
- * M1 阶段的配置读取：~/.whycode/config.json（不入库）。
- * settings UI 落地后迁移到 Electron safeStorage（文档一 [待规划]）。
- *
- * 格式：
- * {
- *   "providers": {
- *     "anthropic": { "apiKey": "sk-...", "baseURL": "可选" },
- *     "deepseek": { "apiKey": "sk-..." },
- *     "mimo": { "apiKey": "sk-...", "baseURL": "可选" }
- *   },
- *   "defaultModel": "anthropic:claude-sonnet-4-6",
- *   "consensusAgents": {                          // M3：协商评审员 B/C（Main 永远 = 顶栏当前模型）
- *     "B": { "model": "deepseek:deepseek-v4-flash", "apiKey": "sk-...", "baseURL": "可选" },
- *     "C": { ... }
- *   }
- * }
- */
+export interface ProviderConnectionConfig {
+  apiKey: string
+  baseURL?: string
+}
+
+export interface CustomConnectionConfig {
+  id: string
+  name: string
+  protocol: CustomApiProtocol
+  baseURL: string
+  apiKey: string
+  modelId: string
+  probe: CustomConnectionProbe
+  probeDetails?: Partial<Record<'text' | 'tools' | 'image', string>>
+  checkedAt: string
+}
+
 export interface ConsensusAgentConfig {
   model: string
   apiKey: string
@@ -28,28 +29,55 @@ export interface ConsensusAgentConfig {
 }
 
 export interface WhycodeConfig {
-  providers: Record<string, { apiKey: string; baseURL?: string }>
+  providers: Record<string, ProviderConnectionConfig>
   defaultModel?: string
+  customConnections?: CustomConnectionConfig[]
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
 }
 
-export function getConfigPath(): string {
-  return join(homedir(), '.whycode', 'config.json')
+export {
+  getConfigPath,
+  loadConfig,
+  migratePlaintextSecrets,
+  saveConfig,
+  type ConfigSecretCodec,
+} from './config-storage.ts'
+
+/** 配置指定的可用模型优先，否则按官方目录和自定义连接顺序回退。 */
+export function resolveDefaultModelId(config: WhycodeConfig | null): string | null {
+  if (config?.defaultModel && hasConfiguredKey(config, config.defaultModel)) {
+    return config.defaultModel
+  }
+  const builtIn = MODEL_REGISTRY.find((model) => hasConfiguredKey(config, model.id))?.id
+  if (builtIn) return builtIn
+  const custom = config?.customConnections?.find((connection) =>
+    customConnectionUsable(connection))
+  return custom ? customModelId(custom.id) : null
 }
 
-export function loadConfig(): WhycodeConfig | null {
-  try {
-    const raw = readFileSync(getConfigPath(), 'utf-8')
-    const parsed = JSON.parse(raw) as WhycodeConfig
-    if (!parsed.providers || typeof parsed.providers !== 'object') return null
-    return parsed
-  } catch {
-    return null
-  }
+export function customModelId(connectionId: string): string {
+  return `custom:${connectionId}`
+}
+
+export function customConnectionId(modelId: string): string | null {
+  return modelId.startsWith('custom:') && modelId.length > 'custom:'.length
+    ? modelId.slice('custom:'.length)
+    : null
+}
+
+export function consensusAgentsReady(config: WhycodeConfig | null): boolean {
+  const agents = config?.consensusAgents
+  if (!agents) return false
+  return (['B', 'C'] as const).every((id) => Boolean(agents[id]?.apiKey && agents[id]?.model))
 }
 
 function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolean {
   if (!config) return false
+  const customId = customConnectionId(modelId)
+  if (customId) {
+    return Boolean(config.customConnections?.some((item) =>
+      item.id === customId && customConnectionUsable(item)))
+  }
   try {
     return Boolean(config.providers[getModelEntry(modelId).provider]?.apiKey)
   } catch {
@@ -57,17 +85,10 @@ function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolea
   }
 }
 
-/** 配置指定的可用模型优先，否则按注册表顺序选择第一个已配置 key 的模型。 */
-export function resolveDefaultModelId(config: WhycodeConfig | null): string | null {
-  if (config?.defaultModel && hasConfiguredKey(config, config.defaultModel)) {
-    return config.defaultModel
-  }
-  return MODEL_REGISTRY.find((model) => hasConfiguredKey(config, model.id))?.id ?? null
-}
-
-/** M3：评审员 B/C 都配置了 model+key 才允许开启协商（Main 永远用当前会话模型，上下文天然连续） */
-export function consensusAgentsReady(config: WhycodeConfig | null): boolean {
-  const agents = config?.consensusAgents
-  if (!agents) return false
-  return (['B', 'C'] as const).every((id) => Boolean(agents[id]?.apiKey && agents[id]?.model))
+function customConnectionUsable(connection: CustomConnectionConfig): boolean {
+  return Boolean(
+    connection.apiKey
+    && connection.probe.text === 'supported'
+    && connection.probe.tools === 'supported',
+  )
 }

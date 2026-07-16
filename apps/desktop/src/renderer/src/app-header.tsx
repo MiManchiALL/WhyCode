@@ -1,11 +1,5 @@
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
-
-interface ModelOption {
-  id: string
-  displayName: string
-  hasKey: boolean
-  supportsImageInput: boolean
-}
+import type { ModelListItem } from '../../shared/settings.ts'
 
 interface ConsensusStatus {
   ready: boolean
@@ -19,7 +13,7 @@ interface AppHeaderProps {
   permissionLocked: boolean
   consensus: ConsensusStatus
   permMode: PermissionMode
-  models: ModelOption[]
+  models: ModelListItem[]
   modelId: string
   onPickProject: () => void
   onToggleConsensus: () => void
@@ -28,6 +22,7 @@ interface AppHeaderProps {
   onModelChange: (modelId: string) => void
   onOpenSessions: () => void
   onNewSession: () => void
+  onOpenModelSettings: () => void
 }
 
 export function AppHeader(props: AppHeaderProps) {
@@ -79,6 +74,14 @@ export function AppHeader(props: AppHeaderProps) {
             <option key={mode.id} value={mode.id}>{mode.label}</option>
           ))}
         </select>
+        <button
+          className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
+          onClick={props.onOpenModelSettings}
+          disabled={props.busy}
+          title="配置内置模型与自定义 API 连接"
+        >
+          ⚙ 模型
+        </button>
         <select
           className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
           value={props.modelId}
@@ -86,8 +89,8 @@ export function AppHeader(props: AppHeaderProps) {
           disabled={props.busy}
         >
           {props.models.map((model) => (
-            <option key={model.id} value={model.id} disabled={!model.hasKey}>
-              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}{model.hasKey ? '' : '（未配置 key）'}
+            <option key={model.id} value={model.id} disabled={!model.available}>
+              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}{model.available ? '' : `（${model.unavailableReason ?? '不可用'}）`}
             </option>
           ))}
         </select>

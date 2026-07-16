@@ -56,6 +56,7 @@ import {
   type PdfAttachment,
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
+import { inlineSmallPdfMessages } from '../pdf/inline-messages.ts'
 import { createReadPdfTool } from '../tools/read-pdf/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
@@ -1027,16 +1028,29 @@ export class AgentSession {
     return sections.length > 0 ? sections.join('\n\n') : undefined
   }
 
-  private messagesForCurrentModel(
+  private async messagesForCurrentModel(
     messages: ModelMessage[],
     abortSignal?: AbortSignal,
   ): Promise<ModelMessage[]> {
+    const supportsImages = this.options.model.capabilities.supportsImageInput
+    const signal = abortSignal ?? new AbortController().signal
+    const withPdfPages = supportsImages
+      && this.options.pdfProcessor
+      && this.options.sessionRecorder
+      ? await inlineSmallPdfMessages(
+          messages,
+          [...this.pdfAttachments.values()],
+          this.options.sessionRecorder.attachmentDirectory,
+          this.options.pdfProcessor,
+          signal,
+        )
+      : messages
     return messagesForModel(
-      messages,
-      this.options.model.capabilities.supportsImageInput,
+      withPdfPages,
+      supportsImages,
       this.options.sessionRecorder?.attachmentDirectory,
       this.sessionImageAttachments(),
-      abortSignal,
+      signal,
     )
   }
 
@@ -1053,6 +1067,20 @@ export class AgentSession {
     if (!this.activePdfAttachmentIds.has(attachmentId)) return null
     for (const attachment of this.pdfAttachments.values()) {
       if (attachment.id === attachmentId) return attachment
+    }
+    return null
+  }
+
+  private pdfPageImage(attachmentId: string, pageNumber: number): ImageAttachment | null {
+    const pdf = this.pdfAttachmentById(attachmentId)
+    if (!pdf) return null
+    for (const image of this.imageAttachments.values()) {
+      if (
+        image.source?.kind === 'pdf-page'
+        && image.source.pdfAttachmentId === attachmentId
+        && image.source.pdfSha256 === pdf.sha256
+        && image.source.pageNumber === pageNumber
+      ) return image
     }
     return null
   }
@@ -1120,7 +1148,8 @@ export class AgentSession {
             if (stepImageAttachmentCount + parsed.data.length > IMAGE_ATTACHMENT_MAX_COUNT) {
               await removeImageAttachmentFiles(
                 this.options.sessionRecorder!.attachmentDirectory,
-                parsed.data,
+                parsed.data.filter((attachment) =>
+                  !this.imageAttachments.has(attachment.storageName)),
               ).catch(() => {})
               return `单个模型步骤最多查看 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片，请下一步继续`
             }
@@ -1219,11 +1248,11 @@ export class AgentSession {
       }
       const orderedImageResults = toolCallOrder.flatMap((toolCallId) => {
         const result = stepImageAttachments.get(toolCallId)
-        return result ? [result] : []
+        return result ? [{ ...result, toolCallId }] : []
       })
       const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
       const toolImageMessages = orderedImageResults.map((result) =>
-        createImageToolResultMessage(result.attachments, result.transform))
+        createImageToolResultMessage(result.attachments, result.transform, result.toolCallId))
       const committedMessages = dehydrateImageMessages([
         ...response.messages,
         ...toolImageMessages,
@@ -1257,9 +1286,14 @@ export class AgentSession {
       }
       emit({ type: 'step-committed' })
       if (stepTotalTokens > 0) {
+        const responseCoveredCount = response.messages.findIndex((message) =>
+          message.role !== 'assistant')
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
-          coveredMessageCount: this.messages.length,
+          // usage 含本次 assistant 输出，不含宿主随后追加的 tool result、页面图和控制标记。
+          coveredMessageCount:
+            this.messages.length - committedMessages.length
+            + (responseCoveredCount < 0 ? response.messages.length : responseCoveredCount),
         }
       }
       return {
@@ -1275,7 +1309,9 @@ export class AgentSession {
       if (!attachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
         await removeImageAttachmentFiles(
           this.options.sessionRecorder.attachmentDirectory,
-          [...stepImageAttachments.values()].flatMap((result) => result.attachments),
+          [...stepImageAttachments.values()]
+            .flatMap((result) => result.attachments)
+            .filter((attachment) => !this.imageAttachments.has(attachment.storageName)),
         ).catch(() => {})
       }
       if (taskPlanFinalized && !attachmentsCommitted && taskStateBeforeStep) {
@@ -1403,6 +1439,8 @@ export class AgentSession {
                   }
                 : null
             },
+            resolvePageImage: (attachmentId, pageNumber) =>
+              this.pdfPageImage(attachmentId, pageNumber),
           })]
         : []
     const availableDefs: ToolDefinition[] = projectDir

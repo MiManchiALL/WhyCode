@@ -10,6 +10,7 @@ import type {
   UserQuestion,
 } from '@whycode/core/events'
 import type { SessionListItem } from '../../shared/session.ts'
+import type { ModelListItem, ModelSettingsSnapshot } from '../../shared/settings.ts'
 import {
   applyCoreEvent,
   appendNotice,
@@ -27,6 +28,7 @@ import {
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
 import { TaskPlanCard } from './task-plan-card.tsx'
+import { ModelSettingsPanel } from './model-settings-panel.tsx'
 import {
   ImageDraftStrip,
   ImagePickerButton,
@@ -64,13 +66,10 @@ export function App() {
   const [stopping, setStopping] = useState(false)
   const [questionSubmitting, setQuestionSubmitting] = useState(false)
   const [attachmentSubmissionPending, setAttachmentSubmissionPending] = useState(false)
-  const [models, setModels] = useState<{
-    id: string
-    displayName: string
-    hasKey: boolean
-    supportsImageInput: boolean
-  }[]>([])
+  const [models, setModels] = useState<ModelListItem[]>([])
   const [modelId, setModelId] = useState('')
+  const [showModelSettings, setShowModelSettings] = useState(false)
+  const [modelSettings, setModelSettings] = useState<ModelSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
@@ -158,6 +157,15 @@ export function App() {
         `会话历史读取失败：${error instanceof Error ? error.message : String(error)}`,
       )
     }
+  }, [])
+
+  const refreshModels = useCallback(async () => {
+    const [nextModels, snapshot] = await Promise.all([
+      window.whycode.listModels(),
+      window.whycode.runtimeSnapshot(),
+    ])
+    setModels(nextModels)
+    setModelId(snapshot.modelId ?? '')
   }, [])
 
   const consumeEvent = useCallback((event: CoreEvent) => {
@@ -454,6 +462,10 @@ export function App() {
 
   const changeModel = useCallback((next: string) => {
     const nextModel = models.find((model) => model.id === next)
+    if (!nextModel?.available) {
+      addError(nextModel?.unavailableReason ?? '该模型连接当前不可用')
+      return
+    }
     if (imageDrafts.length > 0 && !nextModel?.supportsImageInput) {
       addError('已添加图片；请先移除图片再切换到非视觉模型')
       return
@@ -465,6 +477,22 @@ export function App() {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
   }, [addError, imageDrafts.length, modelId, models])
+
+  const openModelSettings = useCallback(() => {
+    void window.whycode.modelSettings().then((snapshot) => {
+      setModelSettings(snapshot)
+      setShowModelSettings(true)
+    }).catch((error) => {
+      addError(`模型设置读取失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }, [addError])
+
+  const applyModelSettings = useCallback((snapshot: ModelSettingsSnapshot) => {
+    setModelSettings(snapshot)
+    void refreshModels().catch((error) => {
+      addError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }, [addError, refreshModels])
 
   const send = useCallback((urgent = false) => {
     if (
@@ -572,8 +600,8 @@ export function App() {
   }, [])
 
   const selectedModel = models.find((model) => model.id === modelId)
-  const canAttachImages = Boolean(selectedModel?.hasKey && selectedModel.supportsImageInput)
-  const canAttachPdfs = Boolean(selectedModel?.hasKey)
+  const canAttachImages = Boolean(selectedModel?.available && selectedModel.supportsImageInput)
+  const canAttachPdfs = Boolean(selectedModel?.available)
   const pasteAttachments = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
     const imageFiles = collectPastedImageFiles(event.clipboardData)
     const pdfFiles = collectPastedPdfFiles(event.clipboardData)
@@ -642,7 +670,16 @@ export function App() {
           void refreshSessions()
         }}
         onNewSession={startNewSession}
+        onOpenModelSettings={openModelSettings}
       />
+
+      {showModelSettings && modelSettings && (
+        <ModelSettingsPanel
+          snapshot={modelSettings}
+          onClose={() => setShowModelSettings(false)}
+          onChanged={applyModelSettings}
+        />
+      )}
 
       {showSessions && (
         <SessionPanel

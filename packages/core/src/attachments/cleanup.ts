@@ -2,6 +2,7 @@ import { readdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ImageAttachment } from './types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
+import { inlinePdfCacheStorageNames } from '../pdf/inline-cache.ts'
 
 export interface SessionAttachmentReferences {
   imageAttachments: readonly ImageAttachment[]
@@ -17,6 +18,7 @@ export async function cleanupUnreferencedAttachments(
   const allowed = new Set([
     ...references.imageAttachments.map((attachment) => attachment.storageName),
     ...references.pdfAttachments.map((attachment) => attachment.storageName),
+    ...references.pdfAttachments.flatMap(inlinePdfCacheStorageNames),
   ])
   const entries = await readdir(directory, { withFileTypes: true }).catch(
     (error: NodeJS.ErrnoException) => {
@@ -36,5 +38,7 @@ export async function cleanupUnreferencedAttachments(
 }
 
 function isAttachmentStagingDirectory(name: string): boolean {
-  return name.startsWith('.image-import-') || name.startsWith('.pdf-import-')
+  return name.startsWith('.image-import-')
+    || name.startsWith('.pdf-import-')
+    || name.startsWith('.pdf-inline-')
 }

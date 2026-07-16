@@ -9,18 +9,28 @@ import type {
   SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
+import type {
+  ModelListItem,
+  ModelSettingsSnapshot,
+  SaveCustomConnectionRequest,
+  SaveProviderSettingsRequest,
+  SettingsMutationResult,
+} from '../shared/settings.ts'
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
   sendCommand: (command: CoreCommand): Promise<{ ok: boolean } | void> =>
     ipcRenderer.invoke(IPC.command, command),
-  listModels: (): Promise<{
-    id: string
-    displayName: string
-    hasKey: boolean
-    supportsImageInput: boolean
-  }[]> =>
-    ipcRenderer.invoke(IPC.listModels),
+  listModels: (): Promise<ModelListItem[]> => ipcRenderer.invoke(IPC.listModels),
+  modelSettings: (): Promise<ModelSettingsSnapshot> => ipcRenderer.invoke(IPC.modelSettings),
+  saveProviderSettings: (
+    request: SaveProviderSettingsRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveProviderSettings, request),
+  saveCustomConnection: (
+    request: SaveCustomConnectionRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveCustomConnection, request),
+  deleteCustomConnection: (connectionId: string): Promise<SettingsMutationResult> =>
+    ipcRenderer.invoke(IPC.deleteCustomConnection, connectionId),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),

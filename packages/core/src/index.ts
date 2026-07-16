@@ -15,6 +15,35 @@ export {
   type ProviderConfig,
 } from './providers/registry.ts'
 export {
+  BUILTIN_PROVIDERS,
+  MODEL_CATALOG,
+  getBuiltInProvider,
+  getModelProfile,
+  matchModelProfile,
+  normalizeModelIdentity,
+  type BuiltInProviderId,
+  type BuiltInProviderProfile,
+  type ModelProfile,
+  type ModelProfileMatch,
+  type ModelProviderId,
+} from './providers/catalog.ts'
+export {
+  CUSTOM_API_PROTOCOLS,
+  createCustomModelEntry,
+  type CapabilityProbeState,
+  type CustomApiProtocolDescriptor,
+  type CustomApiProtocol,
+  type CustomConnectionProbe,
+  type CustomModelEntryOptions,
+} from './providers/custom.ts'
+export {
+  compactProbeReport,
+  probeCustomConnection,
+  type CapabilityProbeOutcome,
+  type CustomConnectionProbeOptions,
+  type CustomConnectionProbeReport,
+} from './providers/probe.ts'
+export {
   buildTool,
   type ToolDefinition,
   type ToolContext,
@@ -112,10 +141,12 @@ export {
   imageAttachmentSchema,
   imageAttachmentsSchema,
   imageAttachmentStorageNameSchema,
+  imageAttachmentSourceSchema,
   imageDetailSchema,
   imageRegionSchema,
   imageTransformSchema,
   type ImageAttachment,
+  type ImageAttachmentSource,
   type ImageDetail,
   type ImageAttachmentInput,
   type ImageMessageAttachmentInput,
@@ -140,6 +171,8 @@ export {
   PDF_ATTACHMENT_MAX_PAGES,
   PDF_ATTACHMENT_MAX_SOURCE_BYTES,
   PDF_ATTACHMENT_MAX_TOTAL_BYTES,
+  PDF_INLINE_VISUAL_MAX_BYTES,
+  PDF_INLINE_VISUAL_MAX_PAGES,
   PDF_TEXT_DEFAULT_PAGES,
   PDF_TEXT_MAX_CHARS,
   PDF_TEXT_MAX_PAGES,
@@ -151,6 +184,7 @@ export {
   type PdfAttachmentInput,
   type PdfMessageAttachmentInput,
 } from './pdf/types.ts'
+export { inlineSmallPdfMessages } from './pdf/inline-messages.ts'
 export {
   PdfProcessingError,
   type PdfDocumentInfo,

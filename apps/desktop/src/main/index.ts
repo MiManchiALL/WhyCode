@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -9,7 +9,6 @@ import {
   ConsensusCoordinator,
   createBackgroundCommandTools,
   getModelEntry,
-  MODEL_REGISTRY,
   type ApprovalRequest,
   type ApprovalResponse,
   type ConsensusAgentSetup,
@@ -23,10 +22,20 @@ import {
 import { IPC } from '../shared/ipc.ts'
 import {
   consensusAgentsReady,
+  type ConfigSecretCodec,
   getConfigPath,
   loadConfig,
+  migratePlaintextSecrets,
   resolveDefaultModelId,
+  saveConfig,
 } from './config.ts'
+import { listModelConnections, resolveModelConnection } from './model-connections.ts'
+import {
+  createModelSettingsSnapshot,
+  deleteCustomConnection,
+  testAndUpdateCustomConnection,
+  updateProviderSettings,
+} from './model-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
@@ -47,12 +56,27 @@ import type {
   SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
+import type {
+  SaveCustomConnectionRequest,
+  SaveProviderSettingsRequest,
+  SettingsMutationResult,
+} from '../shared/settings.ts'
 import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
 } from './image-protocol.ts'
 
 registerAttachmentScheme()
+
+const configSecretCodec: ConfigSecretCodec = {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (secret) => safeStorage.encryptString(secret).toString('base64'),
+  decrypt: (payload) => safeStorage.decryptString(Buffer.from(payload, 'base64')),
+}
+
+function loadAppConfig() {
+  return loadConfig(getConfigPath(), configSecretCodec)
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -124,6 +148,8 @@ let commandSessions: CommandSessionManager
 let sessionDeletionId: string | null = null
 /** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
 let attachmentPreparationInProgress = false
+/** 自定义连接探测期间阻止启动新 Agent 工作，避免模型配置在请求中途切换。 */
+let modelSettingsInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
 const userMessageRoutingGate = new UserMessageRoutingGate()
@@ -152,25 +178,17 @@ let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | nul
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
 function validateModel(modelId: string): string | null {
-  const config = loadConfig()
+  const config = loadAppConfig()
   if (!config) {
-    return `未找到配置文件 ${getConfigPath()}，请创建并填入 API key（格式见 apps/desktop/src/main/config.ts 注释）`
+    return '尚未配置模型，请打开“模型设置”填写 API key'
   }
-  let entry: ReturnType<typeof getModelEntry>
-  try {
-    entry = getModelEntry(modelId)
-  } catch {
-    return `模型 ID 未注册：${modelId}`
-  }
-  if (!config.providers[entry.provider]?.apiKey) {
-    return `尚未配置 ${entry.provider} 的 API key，无法使用 ${entry.displayName}`
-  }
-  return null
+  const resolution = resolveModelConnection(config, modelId)
+  return resolution.ok ? null : resolution.error
 }
 
 /** Main 持有模型选择事实；首次读取时按配置初始化，之后保留用户的会话内选择。 */
 function resolveCurrentModelId(): string | null {
-  currentModelId ??= resolveDefaultModelId(loadConfig())
+  currentModelId ??= resolveDefaultModelId(loadAppConfig())
   return currentModelId
 }
 
@@ -179,8 +197,9 @@ async function ensureSession(): Promise<string | null> {
   if (!modelId) return '没有任何已配置 key 的模型可用'
   const err = validateModel(modelId)
   if (err) return err
-  const entry = getModelEntry(modelId)
-  const providerConfig = loadConfig()!.providers[entry.provider]!
+  const resolved = resolveModelConnection(loadAppConfig(), modelId)
+  if (!resolved.ok) return resolved.error
+  const { entry, providerConfig } = resolved.value
   if (session) {
     session.setModel(entry, providerConfig)
   } else {
@@ -227,7 +246,7 @@ async function ensureSession(): Promise<string | null> {
 
 /** 协商可用性检查：B/C 评审员配置齐备且模型已注册；纯聊天也允许协商。 */
 function checkConsensusReady(): string | null {
-  const config = loadConfig()
+  const config = loadAppConfig()
   if (!consensusAgentsReady(config)) {
     return '协商需要在配置文件中为评审员 B/C 各配置 model 与 apiKey（consensusAgents 字段）'
   }
@@ -246,7 +265,7 @@ function buildCoordinator(): string | null {
   if (notReady) return notReady
   const journal = sessions.journal
   if (!journal) return '会话记录尚未初始化，无法启动协商'
-  const agents = loadConfig()!.consensusAgents!
+  const agents = loadAppConfig()!.consensusAgents!
   const setup = (id: 'B' | 'C'): ConsensusAgentSetup => ({
     model: getModelEntry(agents[id]!.model),
     providerConfig: { apiKey: agents[id]!.apiKey, baseURL: agents[id]!.baseURL },
@@ -344,6 +363,10 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'set-model': {
+      if (modelSettingsInProgress) {
+        broadcastEvent({ type: 'error', message: '模型连接检测中，请稍后再切换模型', recoverable: true })
+        return { ok: false }
+      }
       if (attachmentPreparationInProgress) {
         broadcastEvent({
           type: 'error',
@@ -359,8 +382,9 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       }
       currentModelId = command.modelId
       if (session) {
-        const entry = getModelEntry(command.modelId)
-        session.setModel(entry, loadConfig()!.providers[entry.provider]!)
+        const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
+        if (!resolved.ok) return { ok: false }
+        session.setModel(resolved.value.entry, resolved.value.providerConfig)
       }
       return { ok: true }
     }
@@ -393,7 +417,9 @@ async function prepareUserMessage(
 
   const modelId = resolveCurrentModelId()
   if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
-  const model = getModelEntry(modelId)
+  const resolved = resolveModelConnection(loadAppConfig(), modelId)
+  if (!resolved.ok) throw new Error(resolved.error)
+  const model = resolved.value.entry
   attachmentPreparationInProgress = true
   try {
     const error = await ensureSession()
@@ -418,6 +444,9 @@ async function prepareUserMessage(
 async function handleUserMessageCommand(
   command: UserMessageCommand,
 ): Promise<{ ok: boolean }> {
+  if (modelSettingsInProgress) {
+    return rejectUserMessage('模型连接检测中，请等待完成后再发送消息')
+  }
   if (attachmentPreparationInProgress) {
     return rejectUserMessage('上一条附件消息仍在准备，请稍后重试')
   }
@@ -506,11 +535,76 @@ function runtimeBusy(): boolean {
   return Boolean(
     sessionDeletionId
     || attachmentPreparationInProgress
+    || modelSettingsInProgress
     || userMessageRoutingGate.busy
     || sessionInitialization
     || session?.isBusy
     || coordinator?.busy,
   )
+}
+
+async function persistModelConfig(config: NonNullable<ReturnType<typeof loadAppConfig>>): Promise<void> {
+  await saveConfig(config, configSecretCodec, getConfigPath())
+  const current = currentModelId
+    ? resolveModelConnection(config, currentModelId)
+    : null
+  currentModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
+  if (!session || !currentModelId) return
+  const resolved = resolveModelConnection(config, currentModelId)
+  if (resolved.ok) session.setModel(resolved.value.entry, resolved.value.providerConfig)
+}
+
+async function saveProviderModelSettings(
+  request: SaveProviderSettingsRequest,
+): Promise<SettingsMutationResult> {
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
+  modelSettingsInProgress = true
+  try {
+    const next = updateProviderSettings(loadAppConfig(), request)
+    await persistModelConfig(next)
+    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    modelSettingsInProgress = false
+  }
+}
+
+async function saveCustomModelConnection(
+  request: SaveCustomConnectionRequest,
+): Promise<SettingsMutationResult> {
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再检测模型连接' }
+  modelSettingsInProgress = true
+  try {
+    const updated = await testAndUpdateCustomConnection(
+      loadAppConfig(),
+      request,
+      new AbortController().signal,
+    )
+    if (!updated.config) return { ok: false, error: updated.error ?? '连接检测未通过' }
+    await persistModelConfig(updated.config)
+    return { ok: true, snapshot: createModelSettingsSnapshot(updated.config) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    modelSettingsInProgress = false
+  }
+}
+
+async function removeCustomModelConnection(
+  connectionId: string,
+): Promise<SettingsMutationResult> {
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再删除模型连接' }
+  modelSettingsInProgress = true
+  try {
+    const next = deleteCustomConnection(loadAppConfig(), connectionId)
+    await persistModelConfig(next)
+    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    modelSettingsInProgress = false
+  }
 }
 
 async function recordUserInput(
@@ -628,7 +722,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     projectDir = metadata.projectDir
     currentModelId = !validateModel(metadata.modelId)
       ? metadata.modelId
-      : resolveDefaultModelId(loadConfig())
+      : resolveDefaultModelId(loadAppConfig())
     if (!currentModelId) throw new Error('没有任何已配置 key 的模型可用')
     if (currentModelId !== metadata.modelId) await journal.updateModel(currentModelId)
     conversationId = journal.sessionId
@@ -730,6 +824,8 @@ if (!primaryInstance) {
 }
 
 if (primaryInstance) void app.whenReady().then(async () => {
+  await migratePlaintextSecrets(configSecretCodec, getConfigPath())
+    .catch((error) => console.error('API key 安全迁移失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
   void Promise.all([
     rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
@@ -743,15 +839,14 @@ if (primaryInstance) void app.whenReady().then(async () => {
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
-  ipcMain.handle(IPC.listModels, () => {
-    const config = loadConfig()
-    return MODEL_REGISTRY.map((m) => ({
-      id: m.id,
-      displayName: m.displayName,
-      hasKey: Boolean(config?.providers[m.provider]?.apiKey),
-      supportsImageInput: m.capabilities.supportsImageInput,
-    }))
-  })
+  ipcMain.handle(IPC.listModels, () => listModelConnections(loadAppConfig()))
+  ipcMain.handle(IPC.modelSettings, () => createModelSettingsSnapshot(loadAppConfig()))
+  ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
+    saveProviderModelSettings(request))
+  ipcMain.handle(IPC.saveCustomConnection, (_e, request: SaveCustomConnectionRequest) =>
+    saveCustomModelConnection(request))
+  ipcMain.handle(IPC.deleteCustomConnection, (_e, connectionId: string) =>
+    removeCustomModelConnection(connectionId))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
   ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
   ipcMain.handle(IPC.consensusStatus, () => ({

@@ -11,3 +11,7 @@ export const PDF_TEXT_DEFAULT_PAGES = 5
 export const PDF_TEXT_MAX_PAGES = 20
 export const PDF_TEXT_MAX_CHARS = 60_000
 export const PDF_VISUAL_MAX_PAGES = 4
+/** 单次请求自动展开的小 PDF 页面总预算；超出后仍保留 ReadPdf 按需读取。 */
+export const PDF_INLINE_VISUAL_MAX_PAGES = PDF_VISUAL_MAX_PAGES
+/** 自动展开页面图的解码后字节总预算。 */
+export const PDF_INLINE_VISUAL_MAX_BYTES = 16_000_000
