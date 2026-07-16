@@ -17,7 +17,8 @@ import type { PdfWorkerRequest, PdfWorkerResponse, PdfWorkerResult } from './pro
 
 const PDF_INSPECT_TIMEOUT_MS = 30_000
 const PDF_READ_TIMEOUT_MS = 30_000
-const PDF_RENDER_TIMEOUT_MS = 60_000
+/** 对齐 Claude Code 的 pdftoppm 分页提取超时。 */
+const PDF_RENDER_TIMEOUT_MS = 120_000
 const STDERR_MAX_CHARS = 8_000
 const PDF_RENDER_MAX_DIMENSION_WITH_ROUNDING = 2_049
 const PDF_RENDER_MAX_PIXELS = 20_000_000
@@ -40,7 +41,7 @@ export class ElectronPdfProcessor implements PdfProcessor {
     const result = await runPdfJob(
       { id: randomUUID(), operation: 'read-pages', path, options },
       abortSignal,
-      options.render ? PDF_RENDER_TIMEOUT_MS : PDF_READ_TIMEOUT_MS,
+      options.mode === 'visual' ? PDF_RENDER_TIMEOUT_MS : PDF_READ_TIMEOUT_MS,
     )
     return result as PdfPageReadResult
   }
@@ -127,24 +128,25 @@ function isWorkerResult(
     return isPositiveInteger(value.byteLength)
       && value.byteLength <= PDF_ATTACHMENT_MAX_SOURCE_BYTES
   }
-  if (!Array.isArray(value.pages) || !Array.isArray(value.renderedPages)) return false
-
   const expectedCount = Math.min(
     request.options.pageCount,
     value.pageCount - request.options.startPage + 1,
   )
-  if (expectedCount < 1 || value.pages.length !== expectedCount) return false
-  const pagesValid = value.pages.every((page, index) =>
-    isRecord(page)
-    && page.pageNumber === request.options.startPage + index
-    && typeof page.text === 'string'
-    && page.text.length <= PDF_TEXT_MAX_CHARS)
-  if (!pagesValid) return false
-  if (!request.options.render) return value.renderedPages.length === 0
+  if (expectedCount < 1 || value.mode !== request.options.mode) return false
+  if (request.options.mode === 'text') {
+    if (!Array.isArray(value.pages) || 'renderedPages' in value) return false
+    return value.pages.length === expectedCount && value.pages.every((page, index) =>
+      isRecord(page)
+      && page.pageNumber === request.options.startPage + index
+      && typeof page.text === 'string'
+      && page.text.length <= PDF_TEXT_MAX_CHARS)
+  }
   if (
-    !request.options.outputDirectory
+    !Array.isArray(value.renderedPages)
+    || 'pages' in value
     || value.renderedPages.length !== expectedCount
   ) return false
+  const outputDirectory = request.options.outputDirectory
 
   return value.renderedPages.every((page, index) => {
     if (
@@ -157,8 +159,8 @@ function isWorkerResult(
       || page.width * page.height > PDF_RENDER_MAX_PIXELS
     ) return false
     const expectedPath = join(
-      resolve(request.options.outputDirectory!),
-      `page-${String(page.pageNumber).padStart(4, '0')}.png`,
+      resolve(outputDirectory),
+      `page-${String(page.pageNumber).padStart(4, '0')}.jpg`,
     )
     return normalizePath(page.path) === normalizePath(expectedPath)
   })

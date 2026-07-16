@@ -8,6 +8,7 @@ export {
   PDF_TEXT_DEFAULT_PAGES,
   PDF_TEXT_MAX_CHARS,
   PDF_TEXT_MAX_PAGES,
+  PDF_VISUAL_MAX_BYTES,
   PDF_VISUAL_MAX_PAGES,
   pdfAttachmentSchema,
   pdfAttachmentsSchema,

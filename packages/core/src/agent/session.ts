@@ -30,8 +30,8 @@ import {
 } from '../attachments/messages.ts'
 import {
   IMAGE_ATTACHMENT_MAX_COUNT,
+  createImageAttachmentsSchema,
   imageAttachmentSchema,
-  imageAttachmentsSchema,
   imageTransformSchema,
   type ImageAttachment,
   type ImageTransform,
@@ -52,12 +52,13 @@ import {
 } from '../pdf/messages.ts'
 import { pdfAttachmentPath } from '../pdf/storage.ts'
 import {
+  PDF_VISUAL_MAX_PAGES,
   pdfAttachmentSchema,
   type PdfAttachment,
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
 import { inlineSmallPdfMessages } from '../pdf/inline-messages.ts'
-import { createReadPdfTool } from '../tools/read-pdf/index.ts'
+import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import {
@@ -1119,6 +1120,8 @@ export class AgentSession {
       transform: ImageTransform
     }>()
     let stepImageAttachmentCount = 0
+    let stepImageAttachmentLimit = IMAGE_ATTACHMENT_MAX_COUNT
+    const stepImageAttachmentKeys = new Set<string>()
     let attachmentsCommitted = false
     const taskStateBeforeStep = this.taskPlan?.stateSnapshot
     let taskPlanFinalized = false
@@ -1134,8 +1137,8 @@ export class AgentSession {
           (action) => { stepControl.taskPlanEngagement = action },
           (question) => { userQuestion = question },
           (reason) => { stepControl.toolEndReason = reason },
-          async (toolCallId, attachments, transform) => {
-            const parsed = imageAttachmentsSchema.safeParse(attachments)
+          async (toolCallId, attachments, transform, attachmentLimit) => {
+            const parsed = createImageAttachmentsSchema(attachmentLimit).safeParse(attachments)
             const parsedTransform = imageTransformSchema.safeParse(transform ?? { detail: 'high' })
             if (
               !parsed.success
@@ -1145,15 +1148,29 @@ export class AgentSession {
             ) {
               return '图片工具返回了无效或不属于当前会话的附件'
             }
-            if (stepImageAttachmentCount + parsed.data.length > IMAGE_ATTACHMENT_MAX_COUNT) {
+            const attachmentKeys = parsed.data.map((attachment) =>
+              attachment.source?.kind === 'pdf-page'
+                ? `${attachment.source.pdfAttachmentId}:${attachment.source.pdfSha256}:${attachment.source.pageNumber}`
+                : attachment.id)
+            if (attachmentKeys.some((key) => stepImageAttachmentKeys.has(key))) {
               await removeImageAttachmentFiles(
                 this.options.sessionRecorder!.attachmentDirectory,
                 parsed.data.filter((attachment) =>
                   !this.imageAttachments.has(attachment.storageName)),
               ).catch(() => {})
-              return `单个模型步骤最多查看 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片，请下一步继续`
+              return '同一模型步骤不能重复查看同一张图片，请直接使用已经返回的视觉结果'
+            }
+            stepImageAttachmentLimit = Math.max(stepImageAttachmentLimit, attachmentLimit)
+            if (stepImageAttachmentCount + parsed.data.length > stepImageAttachmentLimit) {
+              await removeImageAttachmentFiles(
+                this.options.sessionRecorder!.attachmentDirectory,
+                parsed.data.filter((attachment) =>
+                  !this.imageAttachments.has(attachment.storageName)),
+              ).catch(() => {})
+              return `单个模型步骤最多查看 ${stepImageAttachmentLimit} 张图片，请下一步继续`
             }
             stepImageAttachmentCount += parsed.data.length
+            attachmentKeys.forEach((key) => stepImageAttachmentKeys.add(key))
             stepImageAttachments.set(toolCallId, {
               attachments: parsed.data,
               transform: parsedTransform.data,
@@ -1359,6 +1376,7 @@ export class AgentSession {
       toolCallId: string,
       attachments: readonly ImageAttachment[],
       transform: ImageTransform | undefined,
+      attachmentLimit: number,
     ) => Promise<string | null>,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
@@ -1606,6 +1624,9 @@ export class AgentSession {
               toolCallId,
               result.attachments,
               result.imageTransform,
+              def.name === READ_PDF_TOOL_NAME
+                ? PDF_VISUAL_MAX_PAGES
+                : IMAGE_ATTACHMENT_MAX_COUNT,
             )
             if (error) result = { data: error, isError: true }
             else if (!result.isError) viewedAttachments = result.attachments

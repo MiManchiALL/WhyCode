@@ -431,7 +431,7 @@ export function App() {
     void window.whycode.deleteSession(sessionId).then((result) => {
       if (result.deletedCurrent) {
         resetView()
-        setProjectDir(null)
+        void window.whycode.getProjectDir().then(setProjectDir)
         if (result.ok) setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
       }
@@ -699,7 +699,7 @@ export function App() {
           <p className="mt-24 text-center text-sm text-neutral-400">
             {projectDir
               ? '与 WhyCode 对话，它能读写文件、执行命令（写操作需你确认）'
-              : '纯聊天模式：可直接对话；选择项目目录后解锁文件与命令能力'}
+              : '正在准备默认工作文件夹…'}
           </p>
         )}
         {blocks.map((b) => (
@@ -804,7 +804,7 @@ export function App() {
                     ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话'
                     : projectDir
                       ? '输入消息…'
-                      : '纯聊天模式，输入消息…'
+                      : '正在准备工作文件夹…'
             }
           />
           {busy && deletingSessionId === null && (

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
-import { rm } from 'node:fs/promises'
+import { realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   AgentSession,
@@ -43,6 +43,7 @@ import { ViewTimeline } from './view-timeline.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import { ElectronPdfProcessor } from './pdf/processor.ts'
 import { openPdfAttachment } from './pdf/open.ts'
+import { ensureDefaultWorkspace } from './workspace.ts'
 import {
   prepareUserMessageAttachments as prepareAttachments,
   type PreparedUserMessageAttachments,
@@ -125,8 +126,9 @@ function broadcastEvent(event: CoreEvent, persistView = true): void {
 /** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
 let session: AgentSession | null = null
 let sessionInitialization: Promise<string | null> | null = null
-/** 当前项目目录；未选择时为 null，发消息前必须先选 */
+/** 当前工作文件夹；app ready 后始终有值，启动默认目录与用户选择目录共享同一工具语义。 */
 let projectDir: string | null = null
+let defaultWorkspaceDir: string | null = null
 /** 待用户审批的请求：requestId → resolve */
 const pendingApprovals = new Map<string, {
   request: ApprovalRequest
@@ -138,7 +140,7 @@ let runtimeEventSequence = 0
 // --- 多 Agent 协商（M3）---
 let consensusEnabled = false
 let coordinator: ConsensusCoordinator | null = null
-/** 会话级对话 ID（scratch 目录归属；换项目即换对话） */
+/** 会话级对话 ID（scratch 目录归属；换工作文件夹即换对话） */
 let conversationId = `conv-${Date.now()}`
 /** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
 let sessions: DesktopSessionRepository
@@ -209,7 +211,6 @@ async function ensureSession(): Promise<string | null> {
         const recorder = await sessions.ensure(projectDir, modelId)
         if (!session) {
           conversationId = recorder.sessionId
-          // projectDir 为 null = 纯聊天模式（无工具），core 侧按此适配
           session = new AgentSession({
             model: entry,
             providerConfig,
@@ -244,7 +245,7 @@ async function ensureSession(): Promise<string | null> {
   return null
 }
 
-/** 协商可用性检查：B/C 评审员配置齐备且模型已注册；纯聊天也允许协商。 */
+/** 协商可用性检查：B/C 评审员配置齐备且模型已注册。 */
 function checkConsensusReady(): string | null {
   const config = loadAppConfig()
   if (!consensusAgentsReady(config)) {
@@ -719,7 +720,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       || journal.pendingUserInputs.some((input) => input.state === 'queued'),
     )
     await journal.recoverInterruptedWork()
-    projectDir = metadata.projectDir
+    projectDir = metadata.projectDir ?? requireDefaultWorkspace()
     currentModelId = !validateModel(metadata.modelId)
       ? metadata.modelId
       : resolveDefaultModelId(loadAppConfig())
@@ -730,7 +731,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     if (error) throw new Error(error)
     return {
       ok: true,
-      session: journal.metadataSnapshot,
+      session: { ...journal.metadataSnapshot, projectDir },
       viewEvents: [...journal.initialViewEvents],
       queuedInputs: pendingInputs(journal, 'queued'),
       restoredInputs: pendingInputs(journal, 'restored'),
@@ -788,7 +789,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       onDeletionMarked: () => {
         if (!deletedCurrent) return
         resetRuntime()
-        projectDir = null
+        projectDir = requireDefaultWorkspace()
         detachedCurrent = true
       },
     })
@@ -831,6 +832,20 @@ if (primaryInstance) void app.whenReady().then(async () => {
     rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
     rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true }),
   ]).catch(() => {})
+  try {
+    defaultWorkspaceDir = await ensureDefaultWorkspace(
+      app.getPath('documents'),
+      app.getPath('userData'),
+    )
+    projectDir = defaultWorkspaceDir
+  } catch (error) {
+    dialog.showErrorBox(
+      'WhyCode 启动失败',
+      error instanceof Error ? error.message : '无法创建默认工作文件夹',
+    )
+    app.quit()
+    return
+  }
   sessions = new DesktopSessionRepository(
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
@@ -872,33 +887,46 @@ if (primaryInstance) void app.whenReady().then(async () => {
       broadcastEvent({
         type: 'error',
         message: sessionDeletionId
-          ? '会话数据删除中，请等待完成后再切换项目'
+          ? '会话数据删除中，请等待完成后再切换工作文件夹'
           : session?.checkpointRestoreToolUseId
-            ? '文件回滚中，请等待完成后再切换项目'
-            : 'Agent 工作中，请先停止并等待当前操作结束后再切换项目',
+            ? '文件回滚中，请等待完成后再切换工作文件夹'
+            : 'Agent 工作中，请先停止并等待当前操作结束后再切换工作文件夹',
         recoverable: true,
       })
       return null
     }
     const result = await dialog.showOpenDialog({
-      title: '选择项目目录',
+      title: '选择工作文件夹',
+      defaultPath: projectDir ?? undefined,
       properties: ['openDirectory'],
     })
-    const dir = result.filePaths[0]
-    if (!dir) return null
+    const selected = result.filePaths[0]
+    if (!selected) return null
+    let dir: string
+    try {
+      dir = await realpath(selected)
+    } catch {
+      broadcastEvent({
+        type: 'error',
+        message: '所选工作文件夹已不可用，请重新选择',
+        recoverable: true,
+      })
+      return null
+    }
     // 目录选择框打开期间也可能从其它入口启动任务；提交切换前必须再次权威检查。
     if (runtimeBusy()) {
       broadcastEvent({
         type: 'error',
         message: session?.checkpointRestoreToolUseId
-          ? '文件回滚已经开始，项目切换已取消；请等待完成后重试'
-          : '当前操作已经开始，项目切换已取消；请停止后重试',
+          ? '文件回滚已经开始，工作文件夹切换已取消；请等待完成后重试'
+          : '当前操作已经开始，工作文件夹切换已取消；请停止后重试',
         recoverable: true,
       })
       return null
     }
+    if (projectDir && samePath(dir, projectDir)) return null
     projectDir = dir
-    // 换项目 = 换会话（消息历史与旧项目强相关）；协商 scratch 随旧对话清理
+    // 换工作文件夹 = 换会话（消息历史与旧路径强相关）；协商 scratch 随旧对话清理
     resetRuntime()
     return dir
   })
@@ -909,6 +937,17 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+function requireDefaultWorkspace(): string {
+  if (!defaultWorkspaceDir) throw new Error('默认工作文件夹尚未初始化')
+  return defaultWorkspaceDir
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

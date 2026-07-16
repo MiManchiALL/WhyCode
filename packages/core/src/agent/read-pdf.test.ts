@@ -13,8 +13,8 @@ import { SessionStore } from '../session/store.ts'
 import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import { AgentSession } from './session.ts'
 
-const ONE_PIXEL_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+const SMALL_JPEG = Buffer.from(
+  '/9j/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AL+AD//Z',
   'base64',
 )
 
@@ -75,7 +75,7 @@ describe('ReadPdf Agent 链路', () => {
     }
   })
 
-  it('视觉模型在首个请求自动获得小 PDF 的逐页文字和页面图，无需先调用工具', async () => {
+  it('视觉模型在首个请求自动获得小 PDF 页面图且不混入提取正文', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-inline-pdf-'))
     try {
       const source = join(root, 'paper.pdf')
@@ -95,8 +95,9 @@ describe('ReadPdf Agent 链路', () => {
       const model = new MockLanguageModelV4({
         doStream: async (options) => {
           const prompt = JSON.stringify(options.prompt)
-          assert.match(prompt, /第 1 页正文/)
-          assert.equal(prompt.includes(ONE_PIXEL_PNG.toString('base64')), true)
+          assert.doesNotMatch(prompt, /第 1 页正文/)
+          assert.match(prompt, /第 1 页页面图/)
+          assert.equal(prompt.includes(SMALL_JPEG.toString('base64')), true)
           assert.equal(prompt.includes('private-inline-pdf-bytes'), false)
           return finalStep('已直接阅读。')
         },
@@ -115,13 +116,66 @@ describe('ReadPdf Agent 链路', () => {
         'completed',
       )
       const reopened = await store.open(journal.sessionId)
-      assert.equal(JSON.stringify(reopened.initialMessages).includes(ONE_PIXEL_PNG.toString('base64')), false)
+      assert.equal(JSON.stringify(reopened.initialMessages).includes(SMALL_JPEG.toString('base64')), false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('同一步超出图片配额时不会删除前一回合复用的 PDF 页面图', async () => {
+  it('视觉模型可在一次 ReadPdf 中接收并持久化二十页页面图', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-twenty-pages-'))
+    try {
+      const source = join(root, 'twenty-pages.pdf')
+      await writeFile(source, '%PDF-1.4\ntwenty-pages')
+      const processor = visualProcessor(20)
+      const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
+      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const transaction = await preparePdfAttachmentImport(
+        [{ kind: 'path', path: source }],
+        journal.attachmentDirectory,
+        journal.sessionId,
+        processor,
+        new AbortController().signal,
+      )
+      await transaction.commit()
+      const attachment = transaction.attachments[0]!
+      await journal.recordUserInput('阅读全部二十页', true, [], [attachment])
+      let call = 0
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          call++
+          if (call === 1) return readPdfStep(attachment.id, 'read-twenty-pages', 20)
+          assert.match(JSON.stringify(options.prompt), /第 20 页\.jpg/)
+          return finalStep('二十页已读完。')
+        },
+      })
+      const viewedCounts: number[] = []
+      const session = new AgentSession({
+        model: modelEntry(model, true),
+        providerConfig: { apiKey: 'test' },
+        promptContext: { projectDir: null, osPlatform: 'win32' },
+        sessionRecorder: journal,
+        pdfProcessor: processor,
+        emit: (event) => {
+          if (event.type === 'image-viewed') viewedCounts.push(event.attachments.length)
+        },
+        requestApproval: async () => ({ approved: false }),
+      })
+
+      assert.equal(
+        await session.handleUserMessage('阅读全部二十页', false, [], undefined, [attachment]),
+        'completed',
+      )
+      assert.equal(call, 2)
+      assert.deepEqual(viewedCounts, [20])
+      const reopened = await store.open(journal.sessionId)
+      assert.equal(reopened.initialImageAttachments.length, 20)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('同一步重复读取时不会删除前一回合复用的 PDF 页面图', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-reuse-'))
     try {
       const source = join(root, 'long.pdf')
@@ -247,9 +301,9 @@ function fakeProcessor(onRead?: () => void): PdfProcessor {
     async readPages(_path, options) {
       onRead?.()
       return {
+        mode: 'text',
         pageCount: 2,
         pages: [{ pageNumber: options.startPage, text: '第一页正文' }],
-        renderedPages: [],
       }
     },
   }
@@ -262,22 +316,28 @@ function visualProcessor(totalPages = 2): PdfProcessor {
     },
     async readPages(_path, options) {
       const count = Math.min(options.pageCount, totalPages - options.startPage + 1)
-      const pages = Array.from({ length: count }, (_, index) => ({
-        pageNumber: options.startPage + index,
-        text: `第 ${options.startPage + index} 页正文`,
-      }))
-      if (!options.render) return { pageCount: 2, pages, renderedPages: [] }
-      await mkdir(options.outputDirectory!, { recursive: true })
-      const renderedPages = []
-      for (const page of pages) {
-        const path = join(
-          options.outputDirectory!,
-          `page-${String(page.pageNumber).padStart(4, '0')}.png`,
-        )
-        await writeFile(path, ONE_PIXEL_PNG)
-        renderedPages.push({ pageNumber: page.pageNumber, path, width: 1, height: 1 })
+      if (options.mode === 'text') {
+        return {
+          mode: 'text',
+          pageCount: totalPages,
+          pages: Array.from({ length: count }, (_, index) => ({
+            pageNumber: options.startPage + index,
+            text: `第 ${options.startPage + index} 页正文`,
+          })),
+        }
       }
-      return { pageCount: totalPages, pages, renderedPages }
+      await mkdir(options.outputDirectory, { recursive: true })
+      const renderedPages = []
+      for (let index = 0; index < count; index++) {
+        const pageNumber = options.startPage + index
+        const path = join(
+          options.outputDirectory,
+          `page-${String(pageNumber).padStart(4, '0')}.jpg`,
+        )
+        await writeFile(path, SMALL_JPEG)
+        renderedPages.push({ pageNumber, path, width: 1, height: 1 })
+      }
+      return { mode: 'visual', pageCount: totalPages, renderedPages }
     },
   }
 }

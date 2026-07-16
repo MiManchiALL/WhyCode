@@ -63,18 +63,26 @@ export const imageAttachmentSchema = z.object({
   }
 })
 
-export const imageAttachmentsSchema = z
-  .array(imageAttachmentSchema)
-  .max(IMAGE_ATTACHMENT_MAX_COUNT)
-  .superRefine((attachments, ctx) => {
-    const seen = new Set<string>()
-    attachments.forEach((attachment, index) => {
-      if (seen.has(attachment.id)) {
-        ctx.addIssue({ code: 'custom', path: [index, 'id'], message: '图片附件不能重复' })
-      }
-      seen.add(attachment.id)
+export function createImageAttachmentsSchema(maxCount: number) {
+  if (!Number.isSafeInteger(maxCount) || maxCount < 1) {
+    throw new Error('图片附件数量上限必须是正整数')
+  }
+  return z
+    .array(imageAttachmentSchema)
+    .max(maxCount)
+    .superRefine((attachments, ctx) => {
+      const seen = new Set<string>()
+      attachments.forEach((attachment, index) => {
+        if (seen.has(attachment.id)) {
+          ctx.addIssue({ code: 'custom', path: [index, 'id'], message: '图片附件不能重复' })
+        }
+        seen.add(attachment.id)
+      })
     })
-  })
+}
+
+/** 用户消息与普通图片工具共享的四图边界；PDF 页面图使用会话层专用 schema。 */
+export const imageAttachmentsSchema = createImageAttachmentsSchema(IMAGE_ATTACHMENT_MAX_COUNT)
 
 export type ImageMediaType = z.infer<typeof imageMediaTypeSchema>
 export type ImageAttachmentSource = z.infer<typeof imageAttachmentSourceSchema>

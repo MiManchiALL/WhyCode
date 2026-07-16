@@ -138,6 +138,7 @@ export {
   IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
   IMAGE_MODEL_MAX_BYTES,
   IMAGE_MODEL_MAX_DIMENSION,
+  createImageAttachmentsSchema,
   imageAttachmentSchema,
   imageAttachmentsSchema,
   imageAttachmentStorageNameSchema,

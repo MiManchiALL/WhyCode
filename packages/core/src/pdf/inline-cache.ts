@@ -5,20 +5,17 @@ import { z } from 'zod'
 import {
   PDF_INLINE_VISUAL_MAX_BYTES,
   PDF_INLINE_VISUAL_MAX_PAGES,
-  PDF_TEXT_MAX_CHARS,
 } from './limits.ts'
 import type { PdfProcessor } from './processor.ts'
 import { pdfAttachmentPath } from './storage.ts'
 import { pdfAttachmentSchema, type PdfAttachment } from './types.ts'
 
-const CACHE_VERSION = 2
-const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+const CACHE_VERSION = 3
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff])
 
 const cachedPageSchema = z.object({
   pageNumber: z.number().int().positive(),
-  text: z.string().max(PDF_TEXT_MAX_CHARS),
-  textClipped: z.boolean(),
-  storageName: z.string().regex(/^[0-9a-f-]+\.pdf-page-\d{4}\.png$/i),
+  storageName: z.string().regex(/^[0-9a-f-]+\.pdf-page-\d{4}\.jpg$/i),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   byteLength: z.number().int().positive().max(PDF_INLINE_VISUAL_MAX_BYTES),
 })
@@ -35,8 +32,6 @@ type CacheManifest = z.infer<typeof cacheManifestSchema>
 
 export interface InlinePdfPage {
   pageNumber: number
-  text: string
-  textClipped: boolean
   storageName: string
   bytes: Buffer
 }
@@ -88,15 +83,15 @@ async function buildCache(
       {
         startPage: 1,
         pageCount: attachment.pageCount,
-        render: true,
+        mode: 'visual',
         expectedSha256: attachment.sha256,
         outputDirectory: staging,
       },
       abortSignal,
     )
     if (
-      result.pageCount !== attachment.pageCount
-      || result.pages.length !== attachment.pageCount
+      result.mode !== 'visual'
+      || result.pageCount !== attachment.pageCount
       || result.renderedPages.length !== attachment.pageCount
     ) throw new Error('PDF 自动展开结果与附件页数不一致')
 
@@ -104,21 +99,18 @@ async function buildCache(
     let totalBytes = 0
     for (let index = 0; index < attachment.pageCount; index++) {
       throwIfAborted(abortSignal)
-      const textPage = result.pages[index]!
       const rendered = result.renderedPages[index]!
-      if (textPage.pageNumber !== index + 1 || rendered.pageNumber !== index + 1) {
+      if (rendered.pageNumber !== index + 1) {
         throw new Error('PDF 自动展开页码不连续')
       }
       const bytes = await readFile(rendered.path)
-      assertPng(bytes)
+      assertJpeg(bytes)
       totalBytes += bytes.byteLength
       if (totalBytes > PDF_INLINE_VISUAL_MAX_BYTES) {
         throw new Error('PDF 页面图超过自动展开字节预算')
       }
       pages.push({
         pageNumber: index + 1,
-        text: textPage.text.slice(0, PDF_TEXT_MAX_CHARS),
-        textClipped: textPage.text.length > PDF_TEXT_MAX_CHARS,
         storageName: cachePageName(attachment.id, index + 1),
         sha256: digest(bytes),
         byteLength: bytes.byteLength,
@@ -177,7 +169,7 @@ async function readCache(
         return null
       }
       const bytes = await readFile(join(directory, page.storageName))
-      assertPng(bytes)
+      assertJpeg(bytes)
       totalBytes += bytes.byteLength
       if (
         bytes.byteLength !== page.byteLength
@@ -186,8 +178,6 @@ async function readCache(
       ) return null
       pages.push({
         pageNumber: page.pageNumber,
-        text: page.text,
-        textClipped: page.textClipped,
         storageName: page.storageName,
         bytes,
       })
@@ -209,12 +199,17 @@ function cacheManifestName(attachmentId: string): string {
 }
 
 function cachePageName(attachmentId: string, pageNumber: number): string {
-  return `${attachmentId}.pdf-page-${String(pageNumber).padStart(4, '0')}.png`
+  return `${attachmentId}.pdf-page-${String(pageNumber).padStart(4, '0')}.jpg`
 }
 
-function assertPng(bytes: Buffer): void {
-  if (bytes.byteLength < PNG_SIGNATURE.byteLength || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    throw new Error('PDF 页面渲染结果不是有效 PNG')
+function assertJpeg(bytes: Buffer): void {
+  if (
+    bytes.byteLength < 5
+    || !bytes.subarray(0, JPEG_SIGNATURE.byteLength).equals(JPEG_SIGNATURE)
+    || bytes.at(-2) !== 0xff
+    || bytes.at(-1) !== 0xd9
+  ) {
+    throw new Error('PDF 页面渲染结果不是有效 JPEG')
   }
 }
 

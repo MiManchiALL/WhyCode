@@ -34,9 +34,9 @@ export function AppHeader(props: AppHeaderProps) {
           className="max-w-96 truncate rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:border-neutral-500"
           onClick={props.onPickProject}
           disabled={props.busy}
-          title={props.projectDir ?? '选择要工作的项目目录'}
+          title={props.projectDir ? `当前工作文件夹：${props.projectDir}` : '正在准备默认工作文件夹'}
         >
-          {props.projectDir ?? '📁 选择项目目录'}
+          {props.projectDir ?? '📁 工作文件夹'}
         </button>
       </div>
       <div className="flex items-center gap-2">

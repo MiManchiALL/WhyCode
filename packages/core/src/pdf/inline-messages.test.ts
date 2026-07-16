@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -10,8 +10,8 @@ import type { PdfProcessor } from './processor.ts'
 import type { PdfAttachment } from './types.ts'
 
 const SESSION_ID = '11111111-1111-4111-8111-111111111111'
-const ONE_PIXEL_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+const SMALL_JPEG = Buffer.from(
+  '/9j/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AL+AD//Z',
   'base64',
 )
 const roots: string[] = []
@@ -20,8 +20,8 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
-describe('小 PDF 请求期双通道展开', () => {
-  it('在上传消息中附加逐页文字和页面图，持久消息不含 Base64，并复用校验缓存', async () => {
+describe('小 PDF 请求期页面图展开', () => {
+  it('在上传消息中只附加页面图，持久消息不含 Base64，并复用校验缓存', async () => {
     const root = await tempRoot()
     const attachment = pdfAttachment('22222222-2222-4222-8222-222222222222', 'paper.pdf', 2)
     await writeFile(join(root, attachment.storageName), '%PDF-test')
@@ -42,15 +42,15 @@ describe('小 PDF 请求期双通道展开', () => {
     assert.equal(reads, 1)
     assert.equal(imageParts(first).length, 2)
     assert.equal(imageParts(second).length, 2)
-    assert.match(JSON.stringify(first), /第 1 页正文/)
-    assert.match(JSON.stringify(first), /文字 \+ 对应页面图/)
-    assert.doesNotMatch(JSON.stringify(original), /iVBORw0/)
+    assert.match(JSON.stringify(first), /第 1 页页面图/)
+    assert.doesNotMatch(JSON.stringify(first), /第 1 页正文|文字 \+ 对应页面图/)
+    assert.equal(JSON.stringify(original).includes(SMALL_JPEG.toString('base64')), false)
   })
 
   it('只自动展开最近引用且受总页数预算约束的小 PDF', async () => {
     const root = await tempRoot()
-    const older = pdfAttachment('22222222-2222-4222-8222-222222222222', 'older.pdf', 3)
-    const newer = pdfAttachment('33333333-3333-4333-8333-333333333333', 'newer.pdf', 3)
+    const older = pdfAttachment('22222222-2222-4222-8222-222222222222', 'older.pdf', 6)
+    const newer = pdfAttachment('33333333-3333-4333-8333-333333333333', 'newer.pdf', 6)
     await Promise.all([
       writeFile(join(root, older.storageName), '%PDF-old'),
       writeFile(join(root, newer.storageName), '%PDF-new'),
@@ -69,7 +69,7 @@ describe('小 PDF 请求期双通道展开', () => {
       new AbortController().signal,
     )
     assert.equal(reads, 1)
-    assert.equal(imageParts(result).length, 3)
+    assert.equal(imageParts(result).length, 6)
     assert.equal(typeof result[0]?.content, 'string')
     assert.match(JSON.stringify(result[2]), /newer\.pdf.*whycode-pdf-inline/s)
   })
@@ -105,7 +105,7 @@ describe('小 PDF 请求期双通道展开', () => {
 
   it('大 PDF 只保留稳定引用，等待模型按页调用 ReadPdf', async () => {
     const root = await tempRoot()
-    const attachment = pdfAttachment('44444444-4444-4444-8444-444444444444', 'large.pdf', 5)
+    const attachment = pdfAttachment('44444444-4444-4444-8444-444444444444', 'large.pdf', 11)
     const messages: ModelMessage[] = [{
       role: 'user',
       content: withPdfAttachmentReferences('阅读大文档', [attachment]),
@@ -120,7 +120,7 @@ describe('小 PDF 请求期双通道展开', () => {
     assert.deepEqual(result, messages)
   })
 
-  it('文字异常密集的小 PDF 仍会自动展开，并明确标记截断', async () => {
+  it('页面图缓存不保存宿主提取正文', async () => {
     const root = await tempRoot()
     const attachment = pdfAttachment('55555555-5555-4555-8555-555555555555', 'dense.pdf', 1)
     await writeFile(join(root, attachment.storageName), '%PDF-dense')
@@ -132,31 +132,32 @@ describe('小 PDF 请求期双通道展开', () => {
       messages,
       [attachment],
       root,
-      renderingProcessor(() => {}, () => 'x'.repeat(70_000)),
+      renderingProcessor(() => {}),
       new AbortController().signal,
     )
     assert.equal(imageParts(result).length, 1)
-    assert.match(JSON.stringify(result), /本页文字已按自动展开上限截断/)
+    const manifest = await readFile(join(root, `${attachment.id}.pdf-inline.json`), 'utf-8')
+    assert.match(manifest, /"version":3/)
+    assert.doesNotMatch(manifest, /"text"|textClipped/)
   })
 })
 
-function renderingProcessor(onRead: () => void, textForPage?: (page: number) => string): PdfProcessor {
+function renderingProcessor(onRead: () => void): PdfProcessor {
   return {
     async inspect() {
       return { pageCount: 1, byteLength: 1 }
     },
     async readPages(_path, options) {
       onRead()
-      await mkdir(options.outputDirectory!, { recursive: true })
-      const pages = []
+      assert.equal(options.mode, 'visual')
+      await mkdir(options.outputDirectory, { recursive: true })
       const renderedPages = []
       for (let page = 1; page <= options.pageCount; page++) {
-        const path = join(options.outputDirectory!, `page-${String(page).padStart(4, '0')}.png`)
-        await writeFile(path, ONE_PIXEL_PNG)
-        pages.push({ pageNumber: page, text: textForPage?.(page) ?? `第 ${page} 页正文` })
+        const path = join(options.outputDirectory, `page-${String(page).padStart(4, '0')}.jpg`)
+        await writeFile(path, SMALL_JPEG)
         renderedPages.push({ pageNumber: page, path, width: 1, height: 1 })
       }
-      return { pageCount: options.pageCount, pages, renderedPages }
+      return { mode: 'visual', pageCount: options.pageCount, renderedPages }
     },
   }
 }
@@ -177,7 +178,7 @@ function pdfAttachment(id: string, name: string, pageCount: number): PdfAttachme
 function imageParts(messages: readonly ModelMessage[]) {
   return messages.flatMap((message) =>
     message.role === 'user' && typeof message.content !== 'string'
-      ? message.content.filter((part) => part.type === 'file' && part.mediaType === 'image/png')
+      ? message.content.filter((part) => part.type === 'file' && part.mediaType === 'image/jpeg')
       : [])
 }
 

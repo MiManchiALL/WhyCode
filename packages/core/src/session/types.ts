@@ -13,10 +13,15 @@ import {
 } from '../tasks/types.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import {
+  createImageAttachmentsSchema,
   imageAttachmentsSchema,
   type ImageAttachment,
 } from '../attachments/types.ts'
-import { pdfAttachmentsSchema, type PdfAttachment } from '../pdf/types.ts'
+import {
+  PDF_VISUAL_MAX_PAGES,
+  pdfAttachmentsSchema,
+  type PdfAttachment,
+} from '../pdf/types.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -24,6 +29,8 @@ const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const messagesSchema = z.array(modelMessageSchema)
+/** 工具步骤可持久化一批 PDF 页面图；用户输入仍严格使用四图 schema。 */
+const toolImageAttachmentsSchema = createImageAttachmentsSchema(PDF_VISUAL_MAX_PAGES)
 
 const pendingUserInputSchema = z.object({
   id: entryIdSchema,
@@ -106,7 +113,7 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   turnId: z.string().min(1),
   messages: messagesSchema,
   /** 本 step 由图片工具导入的会话附件；图片字节仍只位于 attachments/。 */
-  attachments: imageAttachmentsSchema.optional(),
+  attachments: toolImageAttachmentsSchema.optional(),
   /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
   taskState: taskPlanStateSchema.optional(),
   /** 本批稳定提交后的 execution run：省略表示不变，null 表示解除接合。 */

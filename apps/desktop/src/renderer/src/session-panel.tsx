@@ -91,7 +91,7 @@ function SessionRow({
           )}
         </div>
         <div className="mt-1 truncate text-xs text-neutral-400">
-          {session.projectDir === undefined ? '项目未知' : (session.projectDir ?? '纯聊天')}
+          {session.projectDir === undefined ? '工作文件夹未知' : (session.projectDir ?? '未记录工作文件夹')}
         </div>
         <div className="mt-1 flex justify-between text-xs text-neutral-400">
           <span className="min-w-0 truncate">

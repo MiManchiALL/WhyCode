@@ -11,8 +11,8 @@ import { createReadPdfTool } from './index.ts'
 
 const SESSION_ID = '11111111-1111-4111-8111-111111111111'
 const ATTACHMENT_ID = '22222222-2222-4222-8222-222222222222'
-const ONE_PIXEL_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+const SMALL_JPEG = Buffer.from(
+  '/9j/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AL+AD//Z',
   'base64',
 )
 const tempDirectories: string[] = []
@@ -32,12 +32,12 @@ describe('ReadPdf', () => {
       attachmentDirectory: root,
       sessionId: SESSION_ID,
       processor: fakeProcessor({
+        mode: 'text',
         pageCount: 12,
         pages: [
           { pageNumber: 3, text: '第三页' },
           { pageNumber: 4, text: 'x'.repeat(70_000) },
         ],
-        renderedPages: [],
       }, (options) => assert.equal(options.expectedSha256, attachment.sha256)),
       supportsVisual: false,
       supportsProjectPaths: false,
@@ -60,7 +60,7 @@ describe('ReadPdf', () => {
     assert.ok(result.data.length < 62_000)
   })
 
-  it('视觉模式将每页渲染图导入会话，并限制为最多四页', async () => {
+  it('视觉模式将每页 JPEG 导入会话，并限制为最多二十页', async () => {
     const root = await tempDirectory()
     const attachmentDirectory = join(root, 'attachments')
     const sourcePath = join(root, 'slides.pdf')
@@ -74,13 +74,16 @@ describe('ReadPdf', () => {
       supportsProjectPaths: false,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
     })
-    const tooMany = tool.inputSchema.parse({
+    assert.equal(tool.inputSchema.safeParse({
       sourceType: 'attachment',
       sourceValue: ATTACHMENT_ID,
-      mode: 'visual',
-      pageCount: 5,
-    })
-    assert.equal((await tool.execute(tooMany, context(root))).isError, true)
+      pageCount: 20,
+    }).success, true)
+    assert.equal(tool.inputSchema.safeParse({
+      sourceType: 'attachment',
+      sourceValue: ATTACHMENT_ID,
+      pageCount: 21,
+    }).success, false)
 
     const input = tool.inputSchema.parse({
       sourceType: 'attachment',
@@ -91,22 +94,23 @@ describe('ReadPdf', () => {
     const result = await tool.execute(input, context(root))
     assert.equal(result.isError, false)
     assert.deepEqual(result.attachments?.map((item) => item.name), [
-      'slides · 第 2 页.png',
-      'slides · 第 3 页.png',
+      'slides · 第 2 页.jpg',
+      'slides · 第 3 页.jpg',
     ])
     assert.equal(result.imageTransform?.detail, 'high')
+    assert.match(result.data, /请直接从图片读取文字、图表、图片和版面关系/)
   })
 
-  it('视觉模型默认返回文字和页面图，显式 text 保留大段文字优化', async () => {
+  it('视觉模型固定返回页面图，schema 不暴露文字模式', async () => {
     const root = await tempDirectory()
     const attachment = pdfAttachment('document.pdf', 6)
     const sourcePath = join(root, attachment.storageName)
     await writeFile(sourcePath, '%PDF-test')
-    const renderFlags: boolean[] = []
+    const readModes: Array<'text' | 'visual'> = []
     const tool = createReadPdfTool({
       attachmentDirectory: join(root, 'attachments'),
       sessionId: SESSION_ID,
-      processor: renderingProcessor((render) => renderFlags.push(render)),
+      processor: renderingProcessor((mode) => readModes.push(mode)),
       supportsVisual: true,
       supportsProjectPaths: false,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
@@ -114,12 +118,16 @@ describe('ReadPdf', () => {
     const automatic = tool.inputSchema.parse({
       sourceType: 'attachment', sourceValue: ATTACHMENT_ID, pageCount: 1,
     })
-    assert.equal((await tool.execute(automatic, context(root))).attachments?.length, 1)
-    const textOnly = tool.inputSchema.parse({
+    const automaticResult = await tool.execute(automatic, context(root))
+    assert.equal(automaticResult.attachments?.length, 1)
+    assert.doesNotMatch(automaticResult.data, /第 1 页正文/)
+    const attemptedText = tool.inputSchema.parse({
       sourceType: 'attachment', sourceValue: ATTACHMENT_ID, mode: 'text', pageCount: 1,
     })
-    assert.equal((await tool.execute(textOnly, context(root))).attachments, undefined)
-    assert.deepEqual(renderFlags, [true, false])
+    assert.equal((await tool.execute(attemptedText, context(root))).attachments?.length, 1)
+    assert.deepEqual(readModes, ['visual', 'visual'])
+    const schema = z.toJSONSchema(tool.inputSchema)
+    assert.equal(Object.hasOwn(schema.properties ?? {}, 'mode'), false)
   })
 
   it('重复读取同一会话 PDF 页面时复用稳定衍生图', async () => {
@@ -147,23 +155,20 @@ describe('ReadPdf', () => {
     const second = await tool.execute(input, context(root))
     assert.ok(existing?.source?.kind === 'pdf-page')
     assert.equal(second.attachments?.[0]?.id, existing.id)
-    assert.equal((await readdir(attachmentDirectory)).filter((name) => name.endsWith('.png')).length, 1)
+    assert.equal((await readdir(attachmentDirectory)).filter((name) => name.endsWith('.jpg')).length, 1)
   })
 
-  it('非视觉模型的 schema 物理拒绝 visual，纯聊天也不暴露 path 来源', () => {
+  it('非视觉模型固定走文字路径，纯聊天也不暴露 path 来源', () => {
     const tool = createReadPdfTool({
       attachmentDirectory: 'unused',
       sessionId: SESSION_ID,
-      processor: fakeProcessor({ pageCount: 1, pages: [], renderedPages: [] }),
+      processor: fakeProcessor({ mode: 'text', pageCount: 1, pages: [] }),
       supportsVisual: false,
       supportsProjectPaths: false,
       resolveAttachment: () => null,
     })
-    assert.equal(tool.inputSchema.safeParse({
-      sourceType: 'attachment',
-      sourceValue: ATTACHMENT_ID,
-      mode: 'visual',
-    }).success, false)
+    const schema = z.toJSONSchema(tool.inputSchema)
+    assert.equal(Object.hasOwn(schema.properties ?? {}, 'mode'), false)
     assert.equal(tool.inputSchema.safeParse({
       sourceType: 'path',
       sourceValue: 'secret.pdf',
@@ -178,7 +183,7 @@ describe('ReadPdf', () => {
     const tool = createReadPdfTool({
       attachmentDirectory: 'unused',
       sessionId: SESSION_ID,
-      processor: fakeProcessor({ pageCount: 1, pages: [], renderedPages: [] }),
+      processor: fakeProcessor({ mode: 'text', pageCount: 1, pages: [] }),
       supportsVisual: false,
       supportsProjectPaths: true,
       resolveAttachment: () => null,
@@ -224,30 +229,28 @@ function fakeProcessor(
   }
 }
 
-function renderingProcessor(onRead?: (render: boolean) => void): PdfProcessor {
+function renderingProcessor(onRead?: (mode: 'text' | 'visual') => void): PdfProcessor {
   return {
     async inspect() {
       return { pageCount: 6, byteLength: 1 }
     },
     async readPages(_path, options) {
-      onRead?.(options.render)
-      if (!options.render) {
+      onRead?.(options.mode)
+      if (options.mode === 'text') {
         return {
+          mode: 'text',
           pageCount: 6,
           pages: [{ pageNumber: options.startPage, text: `第 ${options.startPage} 页` }],
-          renderedPages: [],
         }
       }
-      await mkdir(options.outputDirectory!, { recursive: true })
+      await mkdir(options.outputDirectory, { recursive: true })
       const renderedPages = []
-      const pages = []
       for (let page = options.startPage; page < options.startPage + options.pageCount; page++) {
-        const path = join(options.outputDirectory!, `page-${page}.png`)
-        await writeFile(path, ONE_PIXEL_PNG)
+        const path = join(options.outputDirectory, `page-${page}.jpg`)
+        await writeFile(path, SMALL_JPEG)
         renderedPages.push({ pageNumber: page, path, width: 1, height: 1 })
-        pages.push({ pageNumber: page, text: `第 ${page} 页` })
       }
-      return { pageCount: 6, pages, renderedPages }
+      return { mode: 'visual', pageCount: 6, renderedPages }
     },
   }
 }

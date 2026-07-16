@@ -5,8 +5,13 @@ import {
   supersededTaskPlanSchema,
   taskPlanSchema,
 } from '../tasks/types.ts'
-import { imageAttachmentsSchema } from '../attachments/types.ts'
-import { pdfAttachmentsSchema } from '../pdf/types.ts'
+import {
+  createImageAttachmentsSchema,
+  imageAttachmentsSchema,
+} from '../attachments/types.ts'
+import { PDF_VISUAL_MAX_PAGES, pdfAttachmentsSchema } from '../pdf/types.ts'
+
+const toolImageAttachmentsSchema = createImageAttachmentsSchema(PDF_VISUAL_MAX_PAGES)
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -61,7 +66,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('image-viewed'),
     toolUseId: z.string(),
-    attachments: imageAttachmentsSchema.min(1),
+    attachments: toolImageAttachmentsSchema.min(1),
   }),
   z.object({
     type: z.literal('checkpoint-created'),

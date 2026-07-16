@@ -123,6 +123,44 @@ describe('用户可见事件契约', () => {
     )
   })
 
+  it('PDF 工具事件可携带二十张页图，但用户消息仍限制为四张普通图片', () => {
+    const attachments = Array.from({ length: 21 }, (_, index) => {
+      const id = `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
+      return {
+        id,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+        name: `第 ${index + 1} 页.jpg`,
+        storageName: `${id}.jpg`,
+        mediaType: 'image/jpeg' as const,
+        byteLength: 267,
+        width: 4,
+        height: 4,
+      }
+    })
+    assert.equal(viewEventSchema.safeParse({
+      type: 'core-event',
+      event: {
+        type: 'image-viewed',
+        toolUseId: 'read-pdf-20',
+        attachments: attachments.slice(0, 20),
+      },
+    }).success, true)
+    assert.equal(viewEventSchema.safeParse({
+      type: 'core-event',
+      event: {
+        type: 'image-viewed',
+        toolUseId: 'read-pdf-21',
+        attachments,
+      },
+    }).success, false)
+    assert.equal(viewEventSchema.safeParse({
+      type: 'user-message',
+      text: '普通图片仍受四图上限约束',
+      startsTurn: true,
+      attachments: attachments.slice(0, 5),
+    }).success, false)
+  })
+
   it('PDF 可见事件只保存稳定元数据，不接受字节或路径字段', () => {
     const event = {
       type: 'user-message' as const,

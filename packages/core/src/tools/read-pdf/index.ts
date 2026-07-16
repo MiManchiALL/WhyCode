@@ -9,11 +9,12 @@ import {
   PDF_TEXT_DEFAULT_PAGES,
   PDF_TEXT_MAX_CHARS,
   PDF_TEXT_MAX_PAGES,
+  PDF_VISUAL_MAX_BYTES,
   PDF_VISUAL_MAX_PAGES,
   type PdfAttachment,
 } from '../../pdf/types.ts'
 import type { PdfProcessor } from '../../pdf/processor.ts'
-import { formatPdfTextResult } from '../../pdf/content.ts'
+import { formatPdfTextResult, formatPdfVisualResult } from '../../pdf/content.ts'
 import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { READ_PDF_TOOL_NAME, readPdfPrompt } from './prompt.ts'
@@ -44,19 +45,14 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
   const sourceValueDescription = options.supportsProjectPaths
     ? 'sourceType=attachment 时填写消息中 PDF 卡片的附件 ID；sourceType=path 时填写项目内或已授权的本地 PDF 路径'
     : '消息中 PDF 卡片显示的附件 ID'
-  const modeSchema = options.supportsVisual
-    ? z.enum(['auto', 'text', 'visual']).default('auto')
-    : z.literal('text').default('text')
-  const modeDescription = options.supportsVisual
-    ? 'auto=文字+页面图（默认）；text=仅文字；visual 为 auto 的兼容别名'
-    : '当前模型只支持 text=仅文字'
+  const maxPages = options.supportsVisual ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_MAX_PAGES
+  const defaultPages = options.supportsVisual ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_DEFAULT_PAGES
   const inputSchema = z.object({
     sourceType: sourceTypeSchema.describe('PDF 来源类型'),
     sourceValue: z.string().min(1).describe(sourceValueDescription),
     startPage: z.number().int().positive().default(1).describe('起始页，从 1 开始'),
-    pageCount: z.number().int().min(1).max(PDF_TEXT_MAX_PAGES).optional()
-      .describe('本次读取页数；文字默认 5，视觉默认 4'),
-    mode: modeSchema.describe(modeDescription),
+    pageCount: z.number().int().min(1).max(maxPages).optional()
+      .describe(`本次读取页数，默认 ${defaultPages}，最多 ${maxPages}`),
   }).superRefine((input, ctx) => {
     if (
       input.sourceType === 'attachment'
@@ -73,7 +69,7 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
   return buildTool({
     name: READ_PDF_TOOL_NAME,
     description: options.supportsVisual
-      ? '按页读取 PDF，默认同时获得文字和页面图'
+      ? '按页把 PDF 页面图交给视觉模型阅读'
       : '按页读取 PDF 文字',
     prompt: readPdfPrompt(options.supportsVisual, options.supportsProjectPaths),
     inputSchema,
@@ -83,43 +79,59 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
     extractPaths: (input) => input.sourceType === 'path' ? [input.sourceValue] : [],
     async execute(input, ctx) {
       const source = resolvePdfSource(input.sourceType, input.sourceValue, options, ctx)
-      const render = input.mode !== 'text'
-      const pageCount = input.pageCount ?? (render ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_DEFAULT_PAGES)
-      if (render && pageCount > PDF_VISUAL_MAX_PAGES) {
-        return {
-          data: `视觉模式每次最多读取 ${PDF_VISUAL_MAX_PAGES} 页，请缩小 pageCount`,
-          isError: true,
-        }
-      }
+      const pageCount = input.pageCount ?? defaultPages
+      const visual = options.supportsVisual
 
-      const outputDirectory = render
+      const outputDirectory = visual
         ? await mkdtemp(join(tmpdir(), 'whycode-pdf-render-'))
         : undefined
       try {
-        const result = await options.processor.readPages(source.path, {
-          startPage: input.startPage,
-          pageCount,
-          render,
-          ...(source.expectedSha256 ? { expectedSha256: source.expectedSha256 } : {}),
-          ...(outputDirectory ? { outputDirectory } : {}),
-        }, ctx.abortSignal)
-        const data = formatPdfTextResult(
-          source.name,
-          result.pageCount,
-          result.pages,
-          input.startPage,
-          PDF_TEXT_MAX_CHARS,
+        const result = await options.processor.readPages(
+          source.path,
+          visual
+            ? {
+                startPage: input.startPage,
+                pageCount,
+                mode: 'visual',
+                outputDirectory: outputDirectory!,
+                ...(source.expectedSha256 ? { expectedSha256: source.expectedSha256 } : {}),
+              }
+            : {
+                startPage: input.startPage,
+                pageCount,
+                mode: 'text',
+                ...(source.expectedSha256 ? { expectedSha256: source.expectedSha256 } : {}),
+              },
+          ctx.abortSignal,
         )
-        if (!render) return { data, isError: false }
+        if (!visual) {
+          if (result.mode !== 'text') throw new Error('PDF 文字处理返回了错误结果类型')
+          return {
+            data: formatPdfTextResult(
+              source.name,
+              result.pageCount,
+              result.pages,
+              input.startPage,
+              PDF_TEXT_MAX_CHARS,
+            ),
+            isError: false,
+          }
+        }
+        if (result.mode !== 'visual') throw new Error('PDF 视觉处理返回了错误结果类型')
 
         const attachments: ImageAttachment[] = []
         const importedAttachments: ImageAttachment[] = []
+        let totalBytes = 0
         try {
           for (const page of result.renderedPages) {
             const existing = source.attachmentId
               ? options.resolvePageImage?.(source.attachmentId, page.pageNumber)
               : null
             if (existing) {
+              totalBytes += existing.byteLength
+              if (totalBytes > PDF_VISUAL_MAX_BYTES) {
+                throw new Error('PDF 页面图超过单次读取字节预算，请缩小页数后重试')
+              }
               attachments.push(existing)
               continue
             }
@@ -141,11 +153,21 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
                 },
               } : {}),
             }
+            totalBytes += namedAttachment.byteLength
+            if (totalBytes > PDF_VISUAL_MAX_BYTES) {
+              importedAttachments.push(namedAttachment)
+              throw new Error('PDF 页面图超过单次读取字节预算，请缩小页数后重试')
+            }
             attachments.push(namedAttachment)
             importedAttachments.push(namedAttachment)
           }
           return {
-            data,
+            data: formatPdfVisualResult(
+              source.name,
+              result.pageCount,
+              result.renderedPages,
+              input.startPage,
+            ),
             isError: false,
             attachments,
             imageTransform: { detail: 'high' as const },
@@ -191,5 +213,5 @@ function resolvePdfSource(
 
 function pageImageName(pdfName: string, pageNumber: number): string {
   const stem = pdfName.toLowerCase().endsWith('.pdf') ? pdfName.slice(0, -4) : pdfName
-  return `${stem} · 第 ${pageNumber} 页.png`.slice(0, 255)
+  return `${stem} · 第 ${pageNumber} 页.jpg`.slice(0, 255)
 }

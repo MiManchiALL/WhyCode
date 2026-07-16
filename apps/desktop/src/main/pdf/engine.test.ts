@@ -22,7 +22,7 @@ afterEach(async () => {
 })
 
 describe('桌面 PDF 引擎', () => {
-  it('解析页数与文字，并把页面渲染为真实 PNG', async () => {
+  it('分别提取文字和按 100 DPI 渲染真实 JPEG，视觉路径不混入文字结果', async () => {
     const root = await tempDirectory()
     const pdfPath = join(root, 'hello.pdf')
     const outputDirectory = join(root, 'rendered')
@@ -33,18 +33,29 @@ describe('桌面 PDF 引擎', () => {
       pageCount: 1,
       byteLength: bytes.byteLength,
     })
+    const textResult = await readPdfPages(pdfPath, {
+      startPage: 1,
+      pageCount: 1,
+      mode: 'text',
+    })
+    assert.equal(textResult.mode, 'text')
+    assert.match(textResult.pages[0]?.text ?? '', /Hello WhyCode PDF/)
+
     const result = await readPdfPages(pdfPath, {
       startPage: 1,
       pageCount: 1,
-      render: true,
+      mode: 'visual',
       outputDirectory,
     })
-    assert.match(result.pages[0]?.text ?? '', /Hello WhyCode PDF/)
+    assert.equal(result.mode, 'visual')
+    assert.equal('pages' in result, false)
     assert.equal(result.renderedPages.length, 1)
-    assert.ok((result.renderedPages[0]?.width ?? 0) > 1_000)
-    const png = await readFile(result.renderedPages[0]!.path)
-    assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
-    assert.ok(png.byteLength > 1_000)
+    assert.equal(result.renderedPages[0]?.width, 850)
+    assert.equal(result.renderedPages[0]?.height, 1_100)
+    const jpeg = await readFile(result.renderedPages[0]!.path)
+    assert.deepEqual([...jpeg.subarray(0, 3)], [0xff, 0xd8, 0xff])
+    assert.deepEqual([...jpeg.subarray(-2)], [0xff, 0xd9])
+    assert.ok(jpeg.byteLength > 1_000)
   })
 
   it('拒绝伪装文件和越界页码', async () => {
@@ -56,14 +67,14 @@ describe('桌面 PDF 引擎', () => {
     const validPath = join(root, 'valid.pdf')
     await writeFile(validPath, minimalPdf('one page'))
     await assert.rejects(
-      readPdfPages(validPath, { startPage: 2, pageCount: 1, render: false }),
+      readPdfPages(validPath, { startPage: 2, pageCount: 1, mode: 'text' }),
       /起始页 2 超出 PDF 总页数 1/,
     )
     await assert.rejects(
       readPdfPages(validPath, {
         startPage: 1,
         pageCount: 1,
-        render: false,
+        mode: 'text',
         expectedSha256: 'a'.repeat(64),
       }),
       /PDF 附件内容已发生变化/,
