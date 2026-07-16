@@ -34,6 +34,8 @@ const api = {
   newSession: (): Promise<SessionActionResult> => ipcRenderer.invoke(IPC.newSession),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),
+  openPdfAttachment: (attachmentId: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.openPdfAttachment, attachmentId),
   onEvent: (listener: (event: CoreEvent, sequence: number) => void): (() => void) => {
     const wrapped = (_: unknown, envelope: RuntimeEventEnvelope) => {
       listener(envelope.event, envelope.sequence)

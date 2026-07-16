@@ -31,6 +31,12 @@ export {
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
 export {
+  createReadPdfTool,
+  READ_PDF_TOOL_NAME,
+  type ReadPdfToolOptions,
+  type ResolvedPdfAttachment,
+} from './tools/read-pdf/index.ts'
+export {
   CommandSessionManager,
   createBackgroundCommandTools,
   START_COMMAND_TOOL_NAME,
@@ -125,6 +131,48 @@ export {
   validateStoredImageAttachments,
 } from './attachments/storage.ts'
 export type { ImageAttachmentImportTransaction } from './attachments/storage.ts'
+export {
+  cleanupUnreferencedAttachments,
+  type SessionAttachmentReferences,
+} from './attachments/cleanup.ts'
+export {
+  PDF_ATTACHMENT_MAX_COUNT,
+  PDF_ATTACHMENT_MAX_PAGES,
+  PDF_ATTACHMENT_MAX_SOURCE_BYTES,
+  PDF_ATTACHMENT_MAX_TOTAL_BYTES,
+  PDF_TEXT_DEFAULT_PAGES,
+  PDF_TEXT_MAX_CHARS,
+  PDF_TEXT_MAX_PAGES,
+  PDF_VISUAL_MAX_PAGES,
+  pdfAttachmentSchema,
+  pdfAttachmentsSchema,
+  pdfAttachmentStorageNameSchema,
+  type PdfAttachment,
+  type PdfAttachmentInput,
+  type PdfMessageAttachmentInput,
+} from './pdf/types.ts'
+export {
+  PdfProcessingError,
+  type PdfDocumentInfo,
+  type PdfPageReadOptions,
+  type PdfPageReadResult,
+  type PdfPageText,
+  type PdfProcessingErrorCode,
+  type PdfProcessor,
+  type PdfRenderedPage,
+} from './pdf/processor.ts'
+export {
+  pdfAttachmentPath,
+  preparePdfAttachmentImport,
+  validateStoredPdfAttachments,
+  type PdfAttachmentImportTransaction,
+} from './pdf/storage.ts'
+export {
+  compactPdfAttachmentContext,
+  pdfAttachmentReferenceBlock,
+  referencedPdfAttachmentIds,
+  withPdfAttachmentReferences,
+} from './pdf/messages.ts'
 export {
   pushCoalescedViewEvent,
   toViewEvent,

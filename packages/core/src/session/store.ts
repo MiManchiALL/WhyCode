@@ -24,9 +24,12 @@ import { createTurnAbortedMessage } from './interruption.ts'
 import { dehydrateImageMessages } from '../attachments/messages.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import {
-  cleanupUnreferencedImageAttachments,
   validateStoredImageAttachments,
 } from '../attachments/storage.ts'
+import { cleanupUnreferencedAttachments } from '../attachments/cleanup.ts'
+import type { PdfAttachment } from '../pdf/types.ts'
+import type { PdfProcessor } from '../pdf/processor.ts'
+import { validateStoredPdfAttachments } from '../pdf/storage.ts'
 import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
@@ -55,9 +58,11 @@ import {
 
 export class SessionStore {
   private readonly rootDir: string
+  private readonly pdfProcessor: PdfProcessor | undefined
 
-  constructor(rootDir: string) {
+  constructor(rootDir: string, options: { pdfProcessor?: PdfProcessor } = {}) {
     this.rootDir = resolve(rootDir)
+    this.pdfProcessor = options.pdfProcessor
   }
 
   async create(input: SessionCreateInput): Promise<SessionJournal> {
@@ -88,6 +93,7 @@ export class SessionStore {
       paths,
       metadata,
       start.uuid,
+      [],
       [],
       [],
       [],
@@ -139,6 +145,7 @@ export class SessionStore {
     const loaded = await validateLoadedSessionAttachments(
       buildLoadedSession(entries),
       paths.attachments,
+      this.pdfProcessor,
     )
     if (loaded.metadata.sessionId !== sessionId) throw new Error('会话 ID 与目录不匹配')
     const metadata = loaded.metadata
@@ -150,6 +157,7 @@ export class SessionStore {
       loaded.messages,
       loaded.viewEvents,
       loaded.imageAttachments,
+      loaded.pdfAttachments,
       loaded.turnStartMessages,
       loaded.turnStartTaskStates,
       loaded.interruptedTurnId,
@@ -280,6 +288,7 @@ export class SessionJournal implements SessionRecorder {
   private messages: ModelMessage[]
   private viewEvents: ViewEvent[]
   private imageAttachments: ImageAttachment[]
+  private pdfAttachments: PdfAttachment[]
   private turnStartMessages: Map<string, ModelMessage[]>
   private turnStartTaskStates: Map<string, TaskPlanState>
   private activeTurnId: string | null
@@ -301,6 +310,7 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     viewEvents: ViewEvent[],
     imageAttachments: ImageAttachment[],
+    pdfAttachments: PdfAttachment[],
     turnStartMessages: Map<string, ModelMessage[]>,
     turnStartTaskStates: Map<string, TaskPlanState>,
     interruptedTurnId: string | null,
@@ -321,6 +331,7 @@ export class SessionJournal implements SessionRecorder {
     this.messages = [...messages]
     this.viewEvents = [...viewEvents]
     this.imageAttachments = [...imageAttachments]
+    this.pdfAttachments = [...pdfAttachments]
     this.turnStartMessages = new Map(
       [...turnStartMessages].map(([turnId, messages]) => [turnId, structuredClone(messages)]),
     )
@@ -384,6 +395,10 @@ export class SessionJournal implements SessionRecorder {
     return this.imageAttachments
   }
 
+  get initialPdfAttachments(): readonly PdfAttachment[] {
+    return this.pdfAttachments
+  }
+
   get interruptedTurnId(): string | null {
     return this.activeTurnId
   }
@@ -416,8 +431,11 @@ export class SessionJournal implements SessionRecorder {
     text: string,
     startsTurn: boolean,
     attachments: readonly ImageAttachment[] = [],
+    pdfAttachments: readonly PdfAttachment[] = [],
   ): Promise<void> {
-    return this.recordUserInputWithId(randomUUID(), text, startsTurn, attachments)
+    return this.recordUserInputWithId(
+      randomUUID(), text, startsTurn, attachments, [], pdfAttachments,
+    )
   }
 
   recordUserInputWithId(
@@ -426,16 +444,19 @@ export class SessionJournal implements SessionRecorder {
     startsTurn: boolean,
     attachments: readonly ImageAttachment[] = [],
     consumesInputIds: readonly string[] = [],
+    pdfAttachments: readonly PdfAttachment[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
       this.assertPendingInputs(consumesInputIds, 'restored', '消费')
       this.assertImageAttachmentsCompatible(attachments)
+      this.assertPdfAttachmentsCompatible(pdfAttachments)
       const input = this.entry(
         {
           type: 'user-input',
           text,
           startsTurn,
           ...(attachments.length ? { attachments } : {}),
+          ...(pdfAttachments.length ? { pdfAttachments } : {}),
           ...(consumesInputIds.length ? { consumesInputIds } : {}),
         },
         this.leafUuid,
@@ -443,6 +464,7 @@ export class SessionJournal implements SessionRecorder {
       )
       await this.appendEntries([input])
       this.addImageAttachments(attachments)
+      this.addPdfAttachments(pdfAttachments)
       for (const consumedId of consumesInputIds) this.pendingUserInputMap.delete(consumedId)
       if (input.type === 'user-input' && input.startsTurn) {
         this.undeliveredUserInputIdSet.add(input.uuid)
@@ -451,12 +473,14 @@ export class SessionJournal implements SessionRecorder {
           text: input.text,
           startsTurn: true,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
         })
       } else if (input.type === 'user-input') {
         this.pendingUserInputMap.set(input.uuid, {
           id: input.uuid,
           text: input.text,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
           state: 'queued',
         })
       }
@@ -900,6 +924,14 @@ export class SessionJournal implements SessionRecorder {
     }
   }
 
+  private addPdfAttachments(attachments: readonly PdfAttachment[]): void {
+    for (const attachment of attachments) {
+      const previous = this.pdfAttachments.find((candidate) =>
+        candidate.storageName === attachment.storageName)
+      if (!previous) this.pdfAttachments.push(attachment)
+    }
+  }
+
   /**
    * transcript 是事实源；它已 flush 后，派生 metadata 刷新失败不能把整笔提交伪装成失败。
    * 删除可能陈旧的缓存后，SessionStore.list/open 会按既有恢复路径从 JSONL 重建。
@@ -919,6 +951,19 @@ export class SessionJournal implements SessionRecorder {
         candidate.storageName === attachment.storageName)
       if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
         throw new Error(`图片附件元数据冲突：${attachment.storageName}`)
+      }
+    }
+  }
+
+  private assertPdfAttachmentsCompatible(attachments: readonly PdfAttachment[]): void {
+    for (const attachment of attachments) {
+      if (attachment.sessionId !== this.sessionId) {
+        throw new Error('PDF 附件不属于当前会话')
+      }
+      const previous = this.pdfAttachments.find((candidate) =>
+        candidate.storageName === attachment.storageName)
+      if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+        throw new Error(`PDF 附件元数据冲突：${attachment.storageName}`)
       }
     }
   }
@@ -1018,15 +1063,26 @@ function validPrefixByteLengthBeforeTrailingPartialJson(text: string): number | 
 async function validateLoadedSessionAttachments(
   loaded: LoadedSession,
   attachmentDirectory: string,
+  pdfProcessor: PdfProcessor | undefined,
 ): Promise<LoadedSession> {
-  await cleanupUnreferencedImageAttachments(
-    attachmentDirectory,
-    loaded.imageAttachments,
-  )
+  await cleanupUnreferencedAttachments(attachmentDirectory, {
+    imageAttachments: loaded.imageAttachments,
+    pdfAttachments: loaded.pdfAttachments,
+  })
   await validateStoredImageAttachments(
     attachmentDirectory,
     loaded.metadata.sessionId,
     loaded.imageAttachments,
   )
+  if (loaded.pdfAttachments.length > 0) {
+    if (!pdfProcessor) throw new Error('当前宿主没有提供 PDF 处理器，无法恢复 PDF 会话')
+    await validateStoredPdfAttachments(
+      attachmentDirectory,
+      loaded.metadata.sessionId,
+      loaded.pdfAttachments,
+      pdfProcessor,
+      new AbortController().signal,
+    )
+  }
   return loaded
 }

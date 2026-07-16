@@ -12,6 +12,8 @@ import {
 import type { ViewEvent } from './view-events.ts'
 import { createImageUserMessage } from '../attachments/messages.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
+import { withPdfAttachmentReferences } from '../pdf/messages.ts'
+import type { PdfAttachment } from '../pdf/types.ts'
 
 export class SessionCorruptError extends Error {}
 
@@ -65,6 +67,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     : collectTaskState(chain)
   const viewEvents = collectViewEvents(entries)
   const imageAttachments = collectImageAttachments(entries)
+  const pdfAttachments = collectPdfAttachments(entries)
   reconcileTaskPlanView(viewEvents, taskState)
   const pendingUserQuestion = findPendingUserQuestion(messages)
   if (
@@ -106,6 +109,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     messages,
     viewEvents,
     imageAttachments,
+    pdfAttachments,
     turnStartMessages: turnStarts.messages,
     turnStartTaskStates: turnStarts.taskStates,
     leafUuid: last.uuid,
@@ -153,6 +157,26 @@ function collectImageAttachments(entries: SessionEntry[]): ImageAttachment[] {
   return [...attachments.values()].map(({ value }) => value)
 }
 
+function collectPdfAttachments(entries: SessionEntry[]): PdfAttachment[] {
+  const attachments = new Map<string, { serialized: string; value: PdfAttachment }>()
+  for (const entry of entries) {
+    const values = entry.type === 'user-input'
+      ? entry.pdfAttachments ?? []
+      : entry.type === 'snapshot'
+        ? entry.pendingUserInputs.flatMap((input) => input.pdfAttachments ?? [])
+        : []
+    for (const value of values) {
+      const serialized = JSON.stringify(value)
+      const previous = attachments.get(value.storageName)
+      if (previous && previous.serialized !== serialized) {
+        throw new SessionCorruptError(`PDF 附件元数据冲突：${value.storageName}`)
+      }
+      if (!previous) attachments.set(value.storageName, { serialized, value })
+    }
+  }
+  return [...attachments.values()].map(({ value }) => value)
+}
+
 /**
  * steering 身份随 JSONL 父链重放；送达确认与模型消息同条提交，崩溃只会落在
  * “仍排队”一侧，不会出现模型已消费但事实源仍把它重复恢复的分裂状态。
@@ -182,6 +206,7 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
           id: entry.uuid,
           text: entry.text,
           ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+          ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
           state: 'queued',
         })
       }
@@ -267,7 +292,7 @@ function collectTurnStarts(
       }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message = userInputMessage(entry.text, entry.attachments)
+      const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
       messages.push(message)
       activeConsensusBaseMessages?.push(message)
     }
@@ -328,6 +353,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
         text: entry.text,
         startsTurn: true,
         ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+        ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
       })
     }
     if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
@@ -341,6 +367,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
           text: input.text,
           startsTurn: false,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
         })
         visibleInputIds.add(inputId)
       }
@@ -353,6 +380,7 @@ interface UndeliveredUserInput {
   id: string
   text: string
   attachments: ImageAttachment[]
+  pdfAttachments: PdfAttachment[]
   partialTurnId: string | null
 }
 
@@ -374,6 +402,7 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
         id: entry.uuid,
         text: entry.text,
         attachments: entry.attachments ?? [],
+        pdfAttachments: entry.pdfAttachments ?? [],
         partialTurnId: delivery.turnId,
       }]
     }
@@ -381,6 +410,7 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
       id: entry.uuid,
       text: entry.text,
       attachments: entry.attachments ?? [],
+      pdfAttachments: entry.pdfAttachments ?? [],
       partialTurnId: null,
     }]
   })
@@ -480,7 +510,7 @@ function collectMessages(
         : null
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message = userInputMessage(entry.text, entry.attachments)
+      const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
       messages.push(message)
       activeConsensusBaseMessages?.push(message)
     }
@@ -618,7 +648,7 @@ function findInterruptedWork(
       interruptedConsensusBaseTurnIds = structuredClone(entry.activeConsensusBaseTurnIds)
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message = userInputMessage(entry.text, entry.attachments)
+      const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
       visibleMessages.push(message)
       interruptedConsensusBaseMessages?.push(message)
     }
@@ -671,10 +701,12 @@ function findInterruptedWork(
 function userInputMessage(
   text: string,
   attachments: readonly ImageAttachment[] | undefined,
+  pdfAttachments: readonly PdfAttachment[] | undefined,
 ): ModelMessage {
+  const content = withPdfAttachmentReferences(text, pdfAttachments ?? [])
   return attachments?.length
-    ? createImageUserMessage(text, attachments)
-    : { role: 'user', content: text }
+    ? createImageUserMessage(content, attachments)
+    : { role: 'user', content }
 }
 
 function consensusRollbackMessages(

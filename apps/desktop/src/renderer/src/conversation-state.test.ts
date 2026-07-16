@@ -270,6 +270,35 @@ describe('会话界面时间线重建', () => {
     )
   })
 
+  it('恢复 PDF 卡片元数据，并明确显示 Main-only 边界', () => {
+    const state = createConversationState([{
+      type: 'user-message',
+      text: '总结 PDF',
+      startsTurn: true,
+      pdfAttachments: [{
+        id: '22222222-2222-4222-8222-222222222222',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+        name: 'guide.pdf',
+        storageName: '22222222-2222-4222-8222-222222222222.pdf',
+        mediaType: 'application/pdf',
+        sha256: 'a'.repeat(64),
+        byteLength: 123,
+        pageCount: 7,
+      }],
+    }, core({ type: 'consensus-skipped', reason: 'pdf-input' })])
+
+    assert.equal(
+      state.blocks[0]?.kind === 'user'
+        ? state.blocks[0].pdfAttachments?.[0]?.name
+        : '',
+      'guide.pdf',
+    )
+    assert.match(
+      state.blocks[1]?.kind === 'notice' ? state.blocks[1].text : '',
+      /仅由 Main 读取|跳过协商/,
+    )
+  })
+
   it('把 ViewImage 读取结果恢复到对应工具卡片', () => {
     const attachment = {
       id: '22222222-2222-4222-8222-222222222222',

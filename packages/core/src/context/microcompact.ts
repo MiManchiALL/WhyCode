@@ -6,6 +6,7 @@ import { WRITE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '../tools/write-edit/i
 import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
 import { BATCH_EDIT_TOOL_NAME } from '../tools/batch-edit/index.ts'
 import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
+import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
@@ -22,6 +23,7 @@ import {
 /** 只清理可重现/可再获取的工具输出 */
 const COMPACTABLE_TOOLS = new Set([
   READ_FILE_TOOL_NAME,
+  READ_PDF_TOOL_NAME,
   LIST_DIR_TOOL_NAME,
   GLOB_TOOL_NAME,
   GREP_TOOL_NAME,

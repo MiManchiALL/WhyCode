@@ -1,4 +1,4 @@
-import type { ImageAttachment, TaskPlan, ViewEvent } from '@whycode/core'
+import type { ImageAttachment, PdfAttachment, TaskPlan, ViewEvent } from '@whycode/core'
 import type { CoreEvent, UserQuestion } from '@whycode/core/events'
 
 export interface ToolCall {
@@ -28,7 +28,13 @@ export type CandidateBlockData = Omit<
 >
 
 export type Block =
-  | { kind: 'user'; id: string; text: string; attachments?: ImageAttachment[] }
+  | {
+      kind: 'user'
+      id: string
+      text: string
+      attachments?: ImageAttachment[]
+      pdfAttachments?: PdfAttachment[]
+    }
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
   | { kind: 'tool'; id: string; call: ToolCall }
@@ -103,7 +109,13 @@ export function eventsAfterRuntimeSnapshot(
 
 export function applyViewEvent(state: ConversationState, event: ViewEvent): ConversationState {
   return event.type === 'user-message'
-    ? appendUserMessage(state, event.text, event.startsTurn, event.attachments)
+    ? appendUserMessage(
+        state,
+        event.text,
+        event.startsTurn,
+        event.attachments,
+        event.pdfAttachments,
+      )
     : applyCoreEvent(state, event.event)
 }
 
@@ -116,9 +128,21 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       return { ...state, pendingTurnStart: null, turnStartBlocks }
     }
     case 'message-injected':
-      return appendUserMessage(state, event.text, event.startsTurn ?? false)
+      return appendUserMessage(
+        state,
+        event.text,
+        event.startsTurn ?? false,
+        event.attachments,
+        event.pdfAttachments,
+      )
     case 'user-message-accepted':
-      return appendUserMessage(state, event.text, event.startsTurn, event.attachments)
+      return appendUserMessage(
+        state,
+        event.text,
+        event.startsTurn,
+        event.attachments,
+        event.pdfAttachments,
+      )
     case 'text-delta':
       return appendText(state, event.text)
     case 'thinking-delta':
@@ -210,7 +234,12 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
     case 'execution-started':
       return appendNotice(state, '▶ Main 进入执行阶段')
     case 'consensus-skipped':
-      return appendNotice(state, '🖼 本轮含图片，仅由当前视觉模型处理；B/C 未读取图片，已跳过协商。')
+      return appendNotice(
+        state,
+        event.reason === 'pdf-input'
+          ? '📄 本轮含 PDF，仅由 Main 读取；B/C 未读取原文，已跳过协商。'
+          : '🖼 本轮含图片，仅由当前视觉模型处理；B/C 未读取图片，已跳过协商。',
+      )
     case 'task-plan-updated':
       return { ...state, taskPlan: structuredClone(event.plan) }
     case 'task-plan-replaced': {
@@ -234,6 +263,7 @@ export function appendUserMessage(
   text: string,
   startsTurn: boolean,
   attachments: readonly ImageAttachment[] = [],
+  pdfAttachments: readonly PdfAttachment[] = [],
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
   return appendBlock({ ...state, pendingTurnStart, pendingQuestion: null }, {
@@ -241,6 +271,9 @@ export function appendUserMessage(
     id: nextBlockId(state),
     text,
     ...(attachments.length ? { attachments: attachments.map((item) => structuredClone(item)) } : {}),
+    ...(pdfAttachments.length
+      ? { pdfAttachments: pdfAttachments.map((item) => structuredClone(item)) }
+      : {}),
   })
 }
 

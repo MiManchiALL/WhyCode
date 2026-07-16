@@ -122,6 +122,34 @@ describe('用户可见事件契约', () => {
       viewed,
     )
   })
+
+  it('PDF 可见事件只保存稳定元数据，不接受字节或路径字段', () => {
+    const event = {
+      type: 'user-message' as const,
+      text: '分析 PDF',
+      startsTurn: true,
+      pdfAttachments: [{
+        id: '22222222-2222-4222-8222-222222222222',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+        name: 'guide.pdf',
+        storageName: '22222222-2222-4222-8222-222222222222.pdf',
+        mediaType: 'application/pdf' as const,
+        sha256: 'a'.repeat(64),
+        byteLength: 123,
+        pageCount: 7,
+      }],
+    }
+    assert.equal(viewEventSchema.safeParse(event).success, true)
+    const parsed = viewEventSchema.parse({
+      ...event,
+      pdfAttachments: [{
+        ...event.pdfAttachments[0],
+        path: 'E:\\secret.pdf',
+        base64: 'forbidden',
+      }],
+    })
+    assert.doesNotMatch(JSON.stringify(parsed), /secret|base64|forbidden/)
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {

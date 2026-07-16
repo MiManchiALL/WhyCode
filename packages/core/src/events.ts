@@ -9,6 +9,7 @@
 
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
 import type { ImageAttachment, ImageMessageAttachmentInput } from './attachments/types.ts'
+import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -33,11 +34,12 @@ export interface UserQuestion {
   options: UserQuestionOption[]
 }
 
-/** 忙时输入始终把正文和图片作为一个有序单元传递、恢复和展示。 */
+/** 忙时输入始终把正文和附件作为一个有序单元传递、恢复和展示。 */
 export interface QueuedUserMessage {
   id: string
   text: string
   attachments?: ImageAttachment[]
+  pdfAttachments?: PdfAttachment[]
 }
 
 /** Agent 整体状态，宠物接口消费的核心事件 */
@@ -85,15 +87,23 @@ export type CoreEvent =
       text: string
       startsTurn: true
       attachments?: ImageAttachment[]
+      pdfAttachments?: PdfAttachment[]
     }
   // --- steering（M2-a）：运行中插话 ---
-  | { type: 'message-queued'; id: string; text: string; attachments?: ImageAttachment[] }
+  | {
+      type: 'message-queued'
+      id: string
+      text: string
+      attachments?: ImageAttachment[]
+      pdfAttachments?: PdfAttachment[]
+    }
   | {
       type: 'message-injected'
       id: string
       text: string
       startsTurn?: boolean
       attachments?: ImageAttachment[]
+      pdfAttachments?: PdfAttachment[]
     }
   /** 中断后把排队文本还给输入框（不静默丢弃） */
   | { type: 'queue-restored'; text: string; items?: QueuedUserMessage[] }
@@ -164,8 +174,8 @@ export type CoreEvent =
       scores?: { Main: number; B: number; C: number }
     }
   | { type: 'execution-started'; taskId: string }
-  /** 图片轮次只交给当前视觉 Main；未读取图片的 B/C 不参与表决。 */
-  | { type: 'consensus-skipped'; reason: 'image-input' }
+  /** 图片/PDF 轮次只交给 Main；未读取附件的 B/C 不参与表决。 */
+  | { type: 'consensus-skipped'; reason: 'image-input' | 'pdf-input' }
   // --- Main 长任务控制 ---
   | { type: 'task-plan-updated'; plan: TaskPlan }
   /** 用户明确切换独立复杂任务；旧计划归档与新计划激活属于同一稳定 step。 */
@@ -196,6 +206,8 @@ export type CoreCommand =
       urgent?: boolean
       /** 有序图片来源；剪贴板 Base64 在主进程落盘后不得持久化。 */
       attachments?: ImageMessageAttachmentInput[]
+      /** PDF 只跨 IPC 传路径或已恢复的附件 ID，不允许 inline Base64。 */
+      pdfAttachments?: PdfMessageAttachmentInput[]
       /** 重新提交 queue-restored 草稿时原子消费的旧输入；只能引用当前会话事实源。 */
       restoredInputIds?: string[]
     }

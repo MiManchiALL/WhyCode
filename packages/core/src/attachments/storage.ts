@@ -131,7 +131,11 @@ export async function cleanupUnreferencedImageAttachments(
     if (entry.isDirectory() && entry.name.startsWith('.image-import-')) {
       return [rm(path, { recursive: true, force: true })]
     }
-    if (entry.isFile() && !allowed.has(entry.name)) return [rm(path, { force: true })]
+    if (
+      entry.isFile()
+      && imageAttachmentStorageNameSchema.safeParse(entry.name).success
+      && !allowed.has(entry.name)
+    ) return [rm(path, { force: true })]
     return []
   }))
 }

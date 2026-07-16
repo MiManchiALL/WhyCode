@@ -36,8 +36,16 @@ import {
   UserImageGallery,
 } from './image-attachments.tsx'
 import { prepareImageDrafts, restoredImageDrafts } from './image-draft.ts'
-import { collectPastedImageFiles } from './image-paste.ts'
-import { useImageDropTarget } from './image-drop.ts'
+import { collectPastedImageFiles, collectPastedPdfFiles } from './image-paste.ts'
+import { useAttachmentDropTarget } from './image-drop.ts'
+import {
+  PdfDraftStrip,
+  PdfPickerButton,
+  QueuedPdfStrip,
+  usePdfDrafts,
+  UserPdfGallery,
+} from './pdf-attachments.tsx'
+import { preparePdfDrafts, restoredPdfDrafts } from './pdf-draft.ts'
 
 interface Approval {
   requestId: string
@@ -55,7 +63,7 @@ export function App() {
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [stopping, setStopping] = useState(false)
   const [questionSubmitting, setQuestionSubmitting] = useState(false)
-  const [imageSubmissionPending, setImageSubmissionPending] = useState(false)
+  const [attachmentSubmissionPending, setAttachmentSubmissionPending] = useState(false)
   const [models, setModels] = useState<{
     id: string
     displayName: string
@@ -97,6 +105,14 @@ export function App() {
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
   } = useImageDrafts(addError)
+  const {
+    drafts: pdfDrafts,
+    addFiles: addPdfFiles,
+    remove: removePdfDraft,
+    clear: clearPdfDrafts,
+    detach: detachPdfDrafts,
+    restore: restorePdfDrafts,
+  } = usePdfDrafts(addError)
 
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
     if (items.length === 0) return
@@ -114,16 +130,20 @@ export function App() {
       || restoredSubmissionPending
       || input.trim()
       || imageDrafts.length > 0
+      || pdfDrafts.length > 0
     ) return
     const next = restoredQueue[0]!
     setRestoredQueue((previous) => previous.filter((item) => item.id !== next.id))
     setInput(next.text)
     restoreImageDrafts(restoredImageDrafts([next]))
+    restorePdfDrafts(restoredPdfDrafts([next]))
     setRestoredInputIds([next.id])
   }, [
     imageDrafts.length,
+    pdfDrafts.length,
     input,
     restoreImageDrafts,
+    restorePdfDrafts,
     restoredInputIds.length,
     restoredQueue,
     restoredSubmissionPending,
@@ -164,6 +184,7 @@ export function App() {
           id: event.id,
           text: event.text,
           ...(event.attachments?.length ? { attachments: event.attachments } : {}),
+          ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
         }])
         break
       case 'message-injected':
@@ -275,11 +296,11 @@ export function App() {
 
   const busy = status !== 'idle' && status !== 'error'
   const interactionBusy = busy
-    || imageSubmissionPending
+    || attachmentSubmissionPending
     || deletingSessionId !== null
     || checkpointRestoreToolUseId !== null
-  const imageAttachmentLocked = stopping
-    || imageSubmissionPending
+  const attachmentLocked = stopping
+    || attachmentSubmissionPending
     || deletingSessionId !== null
     || checkpointRestoreToolUseId !== null
 
@@ -301,11 +322,12 @@ export function App() {
         setRestoredSubmissionPending(false)
         setApproval(null)
         clearImageDrafts()
+        clearPdfDrafts()
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
       }
     })
-  }, [clearImageDrafts, refreshSessions])
+  }, [clearImageDrafts, clearPdfDrafts, refreshSessions])
 
   const toggleConsensus = useCallback(() => {
     const enabled = !consensus.enabled
@@ -327,13 +349,14 @@ export function App() {
     setApproval(null)
     setStatus('idle')
     setStopping(false)
-    setImageSubmissionPending(false)
+    setAttachmentSubmissionPending(false)
     setCheckpointRestoreToolUseId(null)
     setNegoStatus(null)
     clearImageDrafts()
+    clearPdfDrafts()
     stickToBottom.current = true
     setShowJumpBottom(false)
-  }, [clearImageDrafts])
+  }, [clearImageDrafts, clearPdfDrafts])
 
   const stop = useCallback(() => {
     if (stopping) return
@@ -370,6 +393,7 @@ export function App() {
       setQueued([])
       setInput('')
       clearImageDrafts()
+      clearPdfDrafts()
       setRestoredInputIds([])
       setRestoredQueue([])
       setRestoredSubmissionPending(false)
@@ -388,7 +412,7 @@ export function App() {
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
     })
-  }, [addError, clearImageDrafts, refreshSessions, restoreQueuedDrafts])
+  }, [addError, clearImageDrafts, clearPdfDrafts, refreshSessions, restoreQueuedDrafts])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (deletingSessionId) return
@@ -443,62 +467,78 @@ export function App() {
   }, [addError, imageDrafts.length, modelId, models])
 
   const send = useCallback((urgent = false) => {
-    if (stopping || deletingSessionId || checkpointRestoreToolUseId || imageSubmissionPending) return
-    const text = input.trim() || (imageDrafts.length ? '请分析这些图片。' : '')
+    if (
+      stopping
+      || deletingSessionId
+      || checkpointRestoreToolUseId
+      || attachmentSubmissionPending
+    ) return
+    const text = input.trim() || defaultDraftPrompt(imageDrafts.length, pdfDrafts.length)
     if (!text) return
-    const sentDrafts = detachImageDrafts()
+    const sentImageDrafts = detachImageDrafts()
+    const sentPdfDrafts = detachPdfDrafts()
     const sentRestoredInputIds = restoredInputIds
     setRestoredInputIds([])
     if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(true)
-    if (sentDrafts.length > 0) setImageSubmissionPending(true)
+    if (sentImageDrafts.length > 0 || sentPdfDrafts.length > 0) {
+      setAttachmentSubmissionPending(true)
+    }
     setInput('')
     // 自己发消息 = 主动行为，恢复贴底跟随
     stickToBottom.current = true
     setShowJumpBottom(false)
     const restoreRejectedInput = () => {
       setInput((current) => current ? `${text}\n${current}` : text)
-      restoreImageDrafts(sentDrafts)
+      restoreImageDrafts(sentImageDrafts)
+      restorePdfDrafts(sentPdfDrafts)
       setRestoredInputIds((current) => [
         ...new Set([...sentRestoredInputIds, ...current]),
       ])
     }
     void (async () => {
       try {
-        const attachments = await prepareImageDrafts(sentDrafts)
+        const attachments = await prepareImageDrafts(sentImageDrafts)
+        const pdfAttachments = preparePdfDrafts(sentPdfDrafts)
         const result = await window.whycode.sendCommand({
           type: 'user-message',
           text,
           urgent,
           ...(attachments.length ? { attachments } : {}),
+          ...(pdfAttachments.length ? { pdfAttachments } : {}),
           ...(sentRestoredInputIds.length
             ? { restoredInputIds: sentRestoredInputIds }
             : {}),
         })
         if (result?.ok) {
-          releaseImageDrafts(sentDrafts)
+          releaseImageDrafts(sentImageDrafts)
           return
         }
         restoreRejectedInput()
       } catch {
         restoreRejectedInput()
-        addError(sentDrafts.length
-          ? '图片读取或消息发送失败，内容已恢复到输入框'
+        addError(sentImageDrafts.length || sentPdfDrafts.length
+          ? '附件读取或消息发送失败，内容已恢复到输入框'
           : '消息发送失败，内容已恢复到输入框')
       } finally {
-        if (sentDrafts.length > 0) setImageSubmissionPending(false)
+        if (sentImageDrafts.length > 0 || sentPdfDrafts.length > 0) {
+          setAttachmentSubmissionPending(false)
+        }
         if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(false)
       }
     })()
   }, [
     addError,
+    attachmentSubmissionPending,
     checkpointRestoreToolUseId,
     deletingSessionId,
     detachImageDrafts,
+    detachPdfDrafts,
     imageDrafts.length,
-    imageSubmissionPending,
     input,
+    pdfDrafts.length,
     restoredInputIds,
     restoreImageDrafts,
+    restorePdfDrafts,
     stopping,
   ])
 
@@ -533,39 +573,55 @@ export function App() {
 
   const selectedModel = models.find((model) => model.id === modelId)
   const canAttachImages = Boolean(selectedModel?.hasKey && selectedModel.supportsImageInput)
-  const pasteImages = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
-    const files = collectPastedImageFiles(event.clipboardData)
-    if (files.length === 0) return
+  const canAttachPdfs = Boolean(selectedModel?.hasKey)
+  const pasteAttachments = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
+    const imageFiles = collectPastedImageFiles(event.clipboardData)
+    const pdfFiles = collectPastedPdfFiles(event.clipboardData)
+    if (imageFiles.length === 0 && pdfFiles.length === 0) return
     event.preventDefault()
-    if (!canAttachImages) {
-      addError('当前模型不支持粘贴图片；请切换到带“图片”标记的模型')
+    if (attachmentLocked) {
+      addError('当前操作暂时锁定附件，请稍后重试')
       return
     }
-    if (imageAttachmentLocked) {
-      addError('当前操作暂时锁定图片附件，请稍后重试')
-      return
+    if (imageFiles.length > 0) {
+      if (canAttachImages) addImageFiles(imageFiles)
+      else addError('当前模型不支持粘贴图片；PDF 仍可添加')
     }
-    addImageFiles(files)
-  }, [addError, addImageFiles, canAttachImages, imageAttachmentLocked])
-  const imageDrop = useImageDropTarget({
+    if (pdfFiles.length > 0) {
+      if (canAttachPdfs) addPdfFiles(pdfFiles)
+      else addError('当前没有可用模型，无法添加 PDF')
+    }
+  }, [
+    addError,
+    addImageFiles,
+    addPdfFiles,
+    attachmentLocked,
     canAttachImages,
-    interactionBusy: imageAttachmentLocked,
-    onFiles: addImageFiles,
+    canAttachPdfs,
+  ])
+  const attachmentDrop = useAttachmentDropTarget({
+    canAttachImages,
+    canAttachPdfs,
+    interactionBusy: attachmentLocked,
+    onImageFiles: addImageFiles,
+    onPdfFiles: addPdfFiles,
     onError: addError,
   })
 
   return (
     <div
       className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900"
-      {...imageDrop.handlers}
+      {...attachmentDrop.handlers}
     >
-      {imageDrop.active && (
+      {attachmentDrop.active && (
         <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-50/90 text-base font-medium text-violet-700 shadow-lg">
-          {!canAttachImages
-            ? '当前模型不支持图片'
-            : imageAttachmentLocked
-              ? '当前操作暂时锁定图片附件'
-              : '松开以添加图片（PNG、JPEG、WebP，最多 4 张）'}
+          {attachmentLocked
+            ? '当前操作暂时锁定附件'
+            : !canAttachPdfs
+              ? '当前没有可用模型'
+              : canAttachImages
+                ? '松开以添加图片或 PDF'
+                : '松开以添加 PDF；当前模型不支持图片'}
         </div>
       )}
       <AppHeader
@@ -665,6 +721,7 @@ export function App() {
               <div key={q.id} className="rounded bg-neutral-100 px-3 py-1 text-xs text-neutral-500">
                 <div className="truncate">⏳ 已排队 · {q.text}</div>
                 <QueuedImageStrip attachments={q.attachments} />
+                <QueuedPdfStrip attachments={q.pdfAttachments} />
               </div>
             ))}
           </div>
@@ -675,17 +732,22 @@ export function App() {
           </div>
         )}
         <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
+        <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
         <div className="flex gap-2">
           <ImagePickerButton
             supportsImageInput={canAttachImages}
-            disabled={imageAttachmentLocked}
+            disabled={attachmentLocked}
             onFiles={addImageFiles}
+          />
+          <PdfPickerButton
+            disabled={!canAttachPdfs || attachmentLocked}
+            onFiles={addPdfFiles}
           />
           <input
             className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onPaste={pasteImages}
+            onPaste={pasteAttachments}
             disabled={stopping || deletingSessionId !== null || checkpointRestoreToolUseId !== null}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
@@ -723,8 +785,8 @@ export function App() {
               onClick={() => send(true)}
               disabled={
                 stopping
-                || imageSubmissionPending
-                || (!input.trim() && imageDrafts.length === 0)
+                || attachmentSubmissionPending
+                || (!input.trim() && imageDrafts.length === 0 && pdfDrafts.length === 0)
               }
               title="打断当前步骤，立即插话"
             >
@@ -736,10 +798,10 @@ export function App() {
             onClick={() => send(false)}
             disabled={
               stopping
-              || imageSubmissionPending
+              || attachmentSubmissionPending
               || deletingSessionId !== null
               || checkpointRestoreToolUseId !== null
-              || (!input.trim() && imageDrafts.length === 0)
+              || (!input.trim() && imageDrafts.length === 0 && pdfDrafts.length === 0)
             }
           >
             {busy ? '排队' : '发送'}
@@ -823,6 +885,7 @@ function BlockView({
     return (
       <div className="mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">
         <UserImageGallery attachments={block.attachments} />
+        <UserPdfGallery attachments={block.pdfAttachments} />
         <div className="whitespace-pre-wrap">{block.text}</div>
       </div>
     )
@@ -926,6 +989,13 @@ function BlockView({
       )}
     </div>
   )
+}
+
+function defaultDraftPrompt(imageCount: number, pdfCount: number): string {
+  if (imageCount > 0 && pdfCount > 0) return '请分析这些附件。'
+  if (imageCount > 0) return '请分析这些图片。'
+  if (pdfCount > 0) return '请分析这些 PDF。'
+  return ''
 }
 
 /** 回滚按钮：点击展开两种范围选择 */

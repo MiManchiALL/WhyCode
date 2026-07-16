@@ -1,0 +1,248 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, it } from 'node:test'
+import { simulateReadableStream } from 'ai'
+import { MockLanguageModelV4 } from 'ai/test'
+import type { ModelEntry } from '../providers/registry.ts'
+import type { PdfProcessor } from '../pdf/processor.ts'
+import { withPdfAttachmentReferences } from '../pdf/messages.ts'
+import { preparePdfAttachmentImport } from '../pdf/storage.ts'
+import { SessionStore } from '../session/store.ts'
+import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
+import { AgentSession } from './session.ts'
+
+describe('ReadPdf Agent 链路', () => {
+  it('文字模型也能按稳定附件 ID 读取，且 PDF 字节不进入模型上下文', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-'))
+    try {
+      const source = join(root, 'guide.pdf')
+      await writeFile(source, '%PDF-1.4\nprivate-pdf-bytes')
+      const processor = fakeProcessor()
+      const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
+      const journal = await store.create({ projectDir: null, modelId: 'test:text' })
+      const transaction = await preparePdfAttachmentImport(
+        [{ kind: 'path', path: source }],
+        journal.attachmentDirectory,
+        journal.sessionId,
+        processor,
+        new AbortController().signal,
+      )
+      await transaction.commit()
+      const [attachment] = transaction.attachments
+      assert.ok(attachment)
+      await journal.recordUserInput('请读 PDF', true, [], transaction.attachments)
+
+      let call = 0
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          call++
+          assert.equal(toolNames(options).includes(READ_PDF_TOOL_NAME), true)
+          const prompt = JSON.stringify(options.prompt)
+          assert.match(prompt, new RegExp(attachment.id))
+          assert.equal(prompt.includes('private-pdf-bytes'), false)
+          if (call === 1) return readPdfStep(attachment.id)
+          assert.match(prompt, /第一页正文/)
+          return finalStep('文档已读取。')
+        },
+      })
+      const session = new AgentSession({
+        model: modelEntry(model),
+        providerConfig: { apiKey: 'test' },
+        promptContext: { projectDir: null, osPlatform: 'win32' },
+        sessionRecorder: journal,
+        pdfProcessor: processor,
+        emit: () => {},
+        requestApproval: async () => ({ approved: false }),
+      })
+      assert.equal(
+        await session.handleUserMessage('请读 PDF', false, [], undefined, transaction.attachments),
+        'completed',
+      )
+      assert.equal(call, 2)
+
+      const reopened = await store.open(journal.sessionId)
+      assert.equal(reopened.initialPdfAttachments.length, 1)
+      assert.match(JSON.stringify(reopened.initialMessages), new RegExp(attachment.id))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('讨论与协议回合物理移除 ReadPdf', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        assert.equal(toolNames(options).includes(READ_PDF_TOOL_NAME), false)
+        return finalStep('不读取 PDF。')
+      },
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: {
+        projectDir: null,
+        osPlatform: 'win32',
+        discussion: { agentId: 'B', scratchDir: process.cwd() },
+      },
+      pdfProcessor: fakeProcessor(),
+      emit: () => {},
+      requestApproval: async () => ({ approved: false }),
+    })
+    assert.equal(await session.handleUserMessage('讨论'), 'completed')
+  })
+
+  it('对话回滚后不因 assistant 工具参数或重启重新激活旧 PDF', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-rollback-'))
+    try {
+      const source = join(root, 'old.pdf')
+      await writeFile(source, '%PDF-1.4\nrolled-back')
+      let readCount = 0
+      const processor = fakeProcessor(() => { readCount++ })
+      const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
+      const journal = await store.create({ projectDir: null, modelId: 'test:text' })
+      const transaction = await preparePdfAttachmentImport(
+        [{ kind: 'path', path: source }],
+        journal.attachmentDirectory,
+        journal.sessionId,
+        processor,
+        new AbortController().signal,
+      )
+      await transaction.commit()
+      const [attachment] = transaction.attachments
+      assert.ok(attachment)
+      await journal.recordUserInput('原始 PDF', true, [], [attachment])
+      const originalTurnId = crypto.randomUUID()
+      await journal.recordTurnStart(originalTurnId, [{
+        role: 'user',
+        content: withPdfAttachmentReferences('原始 PDF', [attachment]),
+      }])
+      await journal.recordTurnEnd(originalTurnId, 'completed')
+      await journal.recordSnapshot('rollback', [])
+
+      const first = sessionThatProbesUnavailablePdf(journal, processor, attachment.id)
+      await journal.recordUserInput('尝试读取已回滚 PDF', true)
+      assert.equal(await first.handleUserMessage('尝试读取已回滚 PDF'), 'completed')
+
+      const reopened = await store.open(journal.sessionId)
+      const second = sessionThatProbesUnavailablePdf(reopened, processor, attachment.id)
+      await reopened.recordUserInput('重启后再次尝试', true)
+      assert.equal(await second.handleUserMessage('重启后再次尝试'), 'completed')
+      assert.equal(readCount, 0)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+function fakeProcessor(onRead?: () => void): PdfProcessor {
+  return {
+    async inspect(path) {
+      return { pageCount: 2, byteLength: (await stat(path)).size }
+    },
+    async readPages(_path, options) {
+      onRead?.()
+      return {
+        pageCount: 2,
+        pages: [{ pageNumber: options.startPage, text: '第一页正文' }],
+        renderedPages: [],
+      }
+    },
+  }
+}
+
+function sessionThatProbesUnavailablePdf(
+  journal: Awaited<ReturnType<SessionStore['open']>>,
+  processor: PdfProcessor,
+  attachmentId: string,
+): AgentSession {
+  let call = 0
+  const model = new MockLanguageModelV4({
+    doStream: async (options) => {
+      call++
+      if (call === 1) return readPdfStep(attachmentId, `read-pdf-${crypto.randomUUID()}`)
+      assert.match(JSON.stringify(options.prompt), /PDF 附件不存在或不属于当前会话/)
+      return finalStep('旧附件不可读取。')
+    },
+  })
+  return new AgentSession({
+    model: modelEntry(model),
+    providerConfig: { apiKey: 'test' },
+    promptContext: { projectDir: null, osPlatform: 'win32' },
+    sessionRecorder: journal,
+    pdfProcessor: processor,
+    emit: () => {},
+    requestApproval: async () => ({ approved: false }),
+  })
+}
+
+function modelEntry(model: MockLanguageModelV4): ModelEntry {
+  return {
+    id: 'test:text',
+    displayName: 'ReadPdf Mock',
+    provider: 'openai',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: false,
+      reasoningExposure: 'none',
+      structuredOutput: 'tool-based',
+      promptCaching: 'none',
+      contextWindow: 100_000,
+      maxOutput: 4_000,
+    },
+    create: () => model,
+  }
+}
+
+function readPdfStep(attachmentId: string, toolCallId = 'read-pdf-1') {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: 'tool-call' as const,
+          toolCallId,
+          toolName: READ_PDF_TOOL_NAME,
+          input: JSON.stringify({
+            sourceType: 'attachment',
+            sourceValue: attachmentId,
+            startPage: 1,
+            pageCount: 1,
+          }),
+        },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function finalStep(text: string) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: 'text-start' as const, id: 'text-1' },
+        { type: 'text-delta' as const, id: 'text-1', delta: text },
+        { type: 'text-end' as const, id: 'text-1' },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function usage() {
+  return {
+    inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 5, text: 5, reasoning: 0 },
+  }
+}
+
+function toolNames(options: { tools?: Array<{ name: string }> }): string[] {
+  return options.tools?.map((tool) => tool.name) ?? []
+}
