@@ -123,8 +123,8 @@ describe('用户可见事件契约', () => {
     )
   })
 
-  it('PDF 工具事件可携带二十张页图，但用户消息仍限制为四张普通图片', () => {
-    const attachments = Array.from({ length: 21 }, (_, index) => {
+  it('可见图片工具事件与用户消息都保持四图边界', () => {
+    const attachments = Array.from({ length: 5 }, (_, index) => {
       const id = `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
       return {
         id,
@@ -141,15 +141,15 @@ describe('用户可见事件契约', () => {
       type: 'core-event',
       event: {
         type: 'image-viewed',
-        toolUseId: 'read-pdf-20',
-        attachments: attachments.slice(0, 20),
+        toolUseId: 'view-image-4',
+        attachments: attachments.slice(0, 4),
       },
     }).success, true)
     assert.equal(viewEventSchema.safeParse({
       type: 'core-event',
       event: {
         type: 'image-viewed',
-        toolUseId: 'read-pdf-21',
+        toolUseId: 'view-image-5',
         attachments,
       },
     }).success, false)

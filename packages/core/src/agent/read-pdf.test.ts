@@ -122,7 +122,7 @@ describe('ReadPdf Agent 链路', () => {
     }
   })
 
-  it('视觉模型可在一次 ReadPdf 中接收并持久化二十页页面图', async () => {
+  it('视觉模型可在一次 ReadPdf 中接收并持久化二十页内部页面图而不展示', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-twenty-pages-'))
     try {
       const source = join(root, 'twenty-pages.pdf')
@@ -167,7 +167,7 @@ describe('ReadPdf Agent 链路', () => {
         'completed',
       )
       assert.equal(call, 2)
-      assert.deepEqual(viewedCounts, [20])
+      assert.deepEqual(viewedCounts, [])
       const reopened = await store.open(journal.sessionId)
       assert.equal(reopened.initialImageAttachments.length, 20)
     } finally {

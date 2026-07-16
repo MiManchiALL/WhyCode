@@ -1629,7 +1629,9 @@ export class AgentSession {
                 : IMAGE_ATTACHMENT_MAX_COUNT,
             )
             if (error) result = { data: error, isError: true }
-            else if (!result.isError) viewedAttachments = result.attachments
+            else if (!result.isError && def.name !== READ_PDF_TOOL_NAME) {
+              viewedAttachments = result.attachments
+            }
           }
           // 记录读过的文件（压缩后重注入，防失忆）
           if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
