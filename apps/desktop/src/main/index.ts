@@ -51,10 +51,10 @@ import {
 } from './user-message-attachments.ts'
 import type {
   DeleteSessionResult,
+  NewSessionResult,
   ResumeSessionResult,
   RuntimeSnapshot,
   RuntimeEventEnvelope,
-  SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
 import type {
@@ -683,7 +683,7 @@ function runtimeSnapshot(): RuntimeSnapshot {
   }
 }
 
-async function startNewSession(): Promise<SessionActionResult> {
+async function startNewSession(): Promise<NewSessionResult> {
   if (runtimeBusy()) {
     return {
       ok: false,
@@ -694,8 +694,10 @@ async function startNewSession(): Promise<SessionActionResult> {
           : 'Agent 工作中，请先停止再新建会话',
     }
   }
+  const defaultProjectDir = requireDefaultWorkspace()
   resetRuntime()
-  return { ok: true }
+  projectDir = defaultProjectDir
+  return { ok: true, projectDir: defaultProjectDir }
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {

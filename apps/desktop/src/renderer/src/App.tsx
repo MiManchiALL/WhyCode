@@ -380,6 +380,7 @@ export function App() {
     void window.whycode.newSession().then((result) => {
       if (!result.ok) return addError(result.error ?? '新建会话失败')
       resetView()
+      setProjectDir(result.projectDir)
       setShowSessions(false)
       void refreshSessions()
     })

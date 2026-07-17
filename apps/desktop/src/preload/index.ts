@@ -3,10 +3,10 @@ import type { CoreCommand, CoreEvent } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
+  NewSessionResult,
   ResumeSessionResult,
   RuntimeSnapshot,
   RuntimeEventEnvelope,
-  SessionActionResult,
   SessionListItem,
 } from '../shared/session.ts'
 import type {
@@ -41,7 +41,7 @@ const api = {
   listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
   resumeSession: (sessionId: string): Promise<ResumeSessionResult> =>
     ipcRenderer.invoke(IPC.resumeSession, sessionId),
-  newSession: (): Promise<SessionActionResult> => ipcRenderer.invoke(IPC.newSession),
+  newSession: (): Promise<NewSessionResult> => ipcRenderer.invoke(IPC.newSession),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),
   openPdfAttachment: (attachmentId: string): Promise<{ ok: boolean; error?: string }> =>

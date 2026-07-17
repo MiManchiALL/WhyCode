@@ -21,6 +21,19 @@ describe('默认工作文件夹', () => {
     assert.equal((await stat(path)).isDirectory(), true)
   })
 
+  it('重复初始化复用同一默认目录且不清空已有内容', async () => {
+    const root = await temporaryRoot()
+    const documents = join(root, 'Documents')
+    const userData = join(root, 'user-data')
+    const first = await ensureDefaultWorkspace(documents, userData)
+    const marker = join(first, '保留文件.txt')
+    await writeFile(marker, 'keep')
+
+    const second = await ensureDefaultWorkspace(documents, userData)
+    assert.equal(second, first)
+    assert.equal((await stat(marker)).isFile(), true)
+  })
+
   it('Documents 目标被普通文件占用时退回 userData 私有工作目录', async () => {
     const root = await temporaryRoot()
     const documents = join(root, 'Documents')
