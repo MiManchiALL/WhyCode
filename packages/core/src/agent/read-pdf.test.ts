@@ -372,6 +372,7 @@ function modelEntry(model: MockLanguageModelV4, supportsImageInput = false): Mod
     id: 'test:text',
     displayName: 'ReadPdf Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput,

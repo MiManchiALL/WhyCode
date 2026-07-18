@@ -36,7 +36,11 @@ export interface CustomConnectionSettingsItem {
   baseURL: string
   modelId: string
   hasKey: boolean
-  matchedProfile?: { id: string; displayName: string }
+  matchedProfile?: {
+    id: string
+    displayName: string
+    reasoningExposure: ModelCapabilities['reasoningExposure']
+  }
   probe: Record<'text' | 'tools' | 'image', CapabilityProbeState>
   probeDetails?: Partial<Record<'text' | 'tools' | 'image', string>>
   checkedAt: string

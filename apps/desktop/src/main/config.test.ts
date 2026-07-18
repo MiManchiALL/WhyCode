@@ -64,6 +64,21 @@ describe('默认模型选择', () => {
     )
   })
 
+  it('可解析已配置的 OpenAI 与 Google 模型', () => {
+    assert.equal(
+      resolveDefaultModelId(
+        config({ openai: { apiKey: 'openai-key' } }, 'openai:gpt-5.6-sol'),
+      ),
+      'openai:gpt-5.6-sol',
+    )
+    assert.equal(
+      resolveDefaultModelId(
+        config({ google: { apiKey: 'google-key' } }, 'google:gemini-3.5-flash'),
+      ),
+      'google:gemini-3.5-flash',
+    )
+  })
+
   it('支持通过检测的自定义连接作为默认模型', () => {
     const value = config({}, 'custom:local-mimo')
     value.customConnections = [{

@@ -23,11 +23,11 @@ import {
   findPendingTurnAbortedIndex,
 } from '../session/interruption.ts'
 import {
-  createImageToolResultMessage,
   createImageUserMessage,
   dehydrateImageMessages,
   messagesForModel,
 } from '../attachments/messages.ts'
+import { attachImagesToToolResults } from '../attachments/tool-results.ts'
 import {
   IMAGE_ATTACHMENT_MAX_COUNT,
   createImageAttachmentsSchema,
@@ -58,6 +58,7 @@ import {
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
 import { inlineSmallPdfMessages } from '../pdf/inline-messages.ts'
+import { adaptMessagesForProvider } from '../providers/message-adapter.ts'
 import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
@@ -1046,13 +1047,14 @@ export class AgentSession {
           signal,
         )
       : messages
-    return messagesForModel(
+    const withImages = await messagesForModel(
       withPdfPages,
       supportsImages,
       this.options.sessionRecorder?.attachmentDirectory,
       this.sessionImageAttachments(),
       signal,
     )
+    return adaptMessagesForProvider(withImages, this.options.model.protocol)
   }
 
   private sessionImageAttachments(): ImageAttachment[] {
@@ -1268,11 +1270,8 @@ export class AgentSession {
         return result ? [{ ...result, toolCallId }] : []
       })
       const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
-      const toolImageMessages = orderedImageResults.map((result) =>
-        createImageToolResultMessage(result.attachments, result.transform, result.toolCallId))
       const committedMessages = dehydrateImageMessages([
-        ...response.messages,
-        ...toolImageMessages,
+        ...attachImagesToToolResults(response.messages, orderedImageResults),
         ...internalMarkers,
       ])
       const engagementUpdate = taskPlanCommit

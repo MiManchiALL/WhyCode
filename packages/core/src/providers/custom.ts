@@ -1,14 +1,15 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import type { ModelCapabilities } from './catalog.ts'
-import { getBuiltInProvider, matchModelProfile } from './catalog.ts'
+import type { ModelCapabilities, ProviderProtocol } from './catalog.ts'
+import {
+  getBuiltInProvider,
+  matchCustomModelProfile,
+  parseCustomModelThinkingSuffix,
+} from './catalog.ts'
 import type { ModelEntry } from './registry.ts'
 
-export type CustomApiProtocol =
-  | 'anthropic-messages'
-  | 'openai-chat'
-  | 'openai-responses'
+export type CustomApiProtocol = ProviderProtocol
 
 export interface CustomApiProtocolDescriptor {
   id: CustomApiProtocol
@@ -65,22 +66,31 @@ const UNKNOWN_MODEL_CAPABILITIES: ModelCapabilities = {
  * 的可验证探测结果为准。未匹配型号不猜测上下文、thinking 或缓存能力。
  */
 export function createCustomModelEntry(options: CustomModelEntryOptions): ModelEntry {
-  const matched = matchModelProfile(options.modelId)
+  const matched = matchCustomModelProfile(options.modelId)
   const profile = matched.status === 'matched' ? matched.profile : null
   const base = profile?.capabilities ?? UNKNOWN_MODEL_CAPABILITIES
   const supportsNativeTools = options.probe.tools === 'supported'
   const supportsImageInput = options.probe.image === 'supported'
   const adapterName = profile?.provider ?? 'custom'
-  const providerOptions = profile
+  const inheritedProviderOptions = profile
     && getBuiltInProvider(profile.provider).protocol === options.protocol
     ? profile.providerOptions
     : undefined
+  const providerOptions = resolveCustomProviderOptions(
+    inheritedProviderOptions,
+    profile?.provider,
+    options.protocol,
+    options.modelId,
+  )
   const capabilities: ModelCapabilities = {
     ...base,
     supportsNativeTools,
     supportsImageInput,
     // 合成小图挑战不能证明自定义网关可稳定接收 20 MB 原图。
     supportsOriginalImageDetail: undefined,
+    reasoningExposure: isReasoningDisabled(options.modelId)
+      ? 'none'
+      : base.reasoningExposure,
     structuredOutput: profile?.capabilities.structuredOutput
       ?? (supportsNativeTools ? 'tool-based' : 'prompt'),
   }
@@ -89,6 +99,7 @@ export function createCustomModelEntry(options: CustomModelEntryOptions): ModelE
     id: options.id,
     displayName: options.connectionName,
     provider: profile?.provider ?? 'custom',
+    protocol: options.protocol,
     capabilities,
     ...(providerOptions ? { providerOptions } : {}),
     create: (config) => {
@@ -106,4 +117,32 @@ export function createCustomModelEntry(options: CustomModelEntryOptions): ModelE
       })(options.modelId)
     },
   }
+}
+
+function resolveCustomProviderOptions(
+  inherited: ModelEntry['providerOptions'],
+  provider: ModelEntry['provider'] | undefined,
+  protocol: CustomApiProtocol,
+  modelId: string,
+): ModelEntry['providerOptions'] {
+  if (!inherited || provider !== 'openai' || protocol !== 'openai-responses') {
+    return inherited
+  }
+  const suffix = parseCustomModelThinkingSuffix(modelId)
+  if (!suffix || !isOpenAIReasoningEffort(suffix.modifier)) return inherited
+  return {
+    ...inherited,
+    openai: {
+      ...inherited.openai,
+      reasoningEffort: suffix.modifier,
+    },
+  }
+}
+
+function isOpenAIReasoningEffort(value: string): boolean {
+  return ['minimal', 'low', 'medium', 'high', 'xhigh', 'auto', 'none'].includes(value)
+}
+
+function isReasoningDisabled(modelId: string): boolean {
+  return parseCustomModelThinkingSuffix(modelId)?.modifier === 'none'
 }

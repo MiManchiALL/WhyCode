@@ -31,6 +31,18 @@ export function estimateMessageTokens(message: ModelMessage): number {
       total += 3_000
       continue
     }
+    if (part.type === 'tool-result' && part.output.type === 'content') {
+      total += estimateTextTokens(JSON.stringify({
+        ...part,
+        output: { ...part.output, value: [] },
+      }))
+      for (const item of part.output.value) {
+        total += item.type === 'file' && item.mediaType.startsWith('image/')
+          ? 3_000
+          : estimateTextTokens(JSON.stringify(item))
+      }
+      continue
+    }
     // 统一按 stringify 估：文本部分即正文，工具部分包含参数/结果 JSON
     total += estimateTextTokens(JSON.stringify(part))
   }

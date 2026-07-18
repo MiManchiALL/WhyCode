@@ -137,6 +137,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:mock',
     displayName: 'Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: false,

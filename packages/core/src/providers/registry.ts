@@ -8,6 +8,7 @@ import {
   getModelProfile,
   type ModelCapabilities,
   type ModelProviderId,
+  type ProviderProtocol,
 } from './catalog.ts'
 
 export type { ModelCapabilities } from './catalog.ts'
@@ -17,6 +18,8 @@ export interface ModelEntry {
   id: string
   displayName: string
   provider: ModelProviderId
+  /** 决定工具图片在 provider 请求边界使用原生结果还是 Chat 兼容投影。 */
+  protocol: ProviderProtocol
   capabilities: ModelCapabilities
   /** 创建 AI SDK LanguageModel 实例 */
   create: (config: ProviderConfig) => LanguageModel
@@ -39,10 +42,27 @@ function registryEntry(
     id: profile.id,
     displayName: profile.displayName,
     provider: profile.provider,
+    protocol: getBuiltInProvider(profile.provider).protocol,
     capabilities: profile.capabilities,
     providerOptions: profile.providerOptions,
     create,
   }
+}
+
+function googleChat(modelId: string): ModelEntry['create'] {
+  return (config) => createOpenAICompatible({
+    name: 'google',
+    apiKey: config.apiKey,
+    baseURL: config.baseURL ?? getBuiltInProvider('google').defaultBaseURL,
+    supportsStructuredOutputs: true,
+  })(modelId)
+}
+
+function openAIResponses(modelId: string): ModelEntry['create'] {
+  return (config) => createOpenAI({
+    apiKey: config.apiKey,
+    baseURL: config.baseURL ?? getBuiltInProvider('openai').defaultBaseURL,
+  }).responses(modelId)
 }
 
 /** 内置模型的官方连接适配器；模型固有信息只维护在 catalog.ts。 */
@@ -66,6 +86,14 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       })(
         'deepseek-v4-flash',
       ),
+  ),
+  registryEntry(
+    'google:gemini-3.1-pro-preview',
+    googleChat('gemini-3.1-pro-preview'),
+  ),
+  registryEntry(
+    'google:gemini-3.5-flash',
+    googleChat('gemini-3.5-flash'),
   ),
   registryEntry(
     'mimo:mimo-v2.5',
@@ -95,12 +123,24 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       })('glm-4.7'),
   ),
   registryEntry(
+    'openai:gpt-5.6-sol',
+    openAIResponses('gpt-5.6-sol'),
+  ),
+  registryEntry(
+    'openai:gpt-5.6-terra',
+    openAIResponses('gpt-5.6-terra'),
+  ),
+  registryEntry(
+    'openai:gpt-5.6-luna',
+    openAIResponses('gpt-5.6-luna'),
+  ),
+  registryEntry(
+    'openai:gpt-5.5',
+    openAIResponses('gpt-5.5'),
+  ),
+  registryEntry(
     'openai:gpt-5.2',
-    (config) =>
-      createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseURL ?? getBuiltInProvider('openai').defaultBaseURL,
-      }).responses('gpt-5.2'),
+    openAIResponses('gpt-5.2'),
   ),
 ] as const
 

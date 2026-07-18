@@ -731,6 +731,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:task-plan',
     displayName: 'Task Plan Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: false,

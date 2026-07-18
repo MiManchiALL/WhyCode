@@ -26,7 +26,9 @@ export function createScreenshotCaptureRequestSchema(supportsOriginalDetail: boo
     detail: supportsOriginalDetail
       ? z.enum(['high', 'original']).default('high')
       : z.literal('high').default('high'),
-  }).superRefine(validateScreenshotRequest)
+  })
+    .superRefine(validateScreenshotRequest)
+    .overwrite(normalizeScreenshotRequest)
 }
 
 function validateScreenshotRequest(
@@ -41,15 +43,29 @@ function validateScreenshotRequest(
   if (input.target === 'region' && !input.region) {
     ctx.addIssue({ code: 'custom', path: ['region'], message: '区域截图必须提供 region' })
   }
-  if (input.target !== 'region' && input.region) {
-    ctx.addIssue({ code: 'custom', path: ['region'], message: 'region 只用于区域截图' })
+}
+
+function normalizeScreenshotRequest<T extends {
+  target: 'screen' | 'window' | 'region'
+  display_id?: string
+  region?: unknown
+  window_title?: string
+}>(input: T): T {
+  const normalized = { ...input }
+
+  // Some compatible providers materialize every optional schema property.
+  // The selected target is authoritative, so unrelated fields must not alter
+  // the requested capture scope or turn an otherwise valid call into a retry.
+  if (normalized.target === 'window') {
+    delete normalized.display_id
+  } else {
+    delete normalized.window_title
   }
-  if (input.target !== 'window' && input.window_title) {
-    ctx.addIssue({ code: 'custom', path: ['window_title'], message: 'window_title 只用于窗口截图' })
+  if (normalized.target !== 'region') {
+    delete normalized.region
   }
-  if (input.target === 'window' && input.display_id) {
-    ctx.addIssue({ code: 'custom', path: ['display_id'], message: 'display_id 只用于屏幕或区域截图' })
-  }
+
+  return normalized
 }
 
 export const screenshotCaptureRequestSchema = createScreenshotCaptureRequestSchema(true)

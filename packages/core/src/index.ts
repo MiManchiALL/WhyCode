@@ -19,6 +19,8 @@ export {
   MODEL_CATALOG,
   getBuiltInProvider,
   getModelProfile,
+  matchCustomModelProfile,
+  parseCustomModelThinkingSuffix,
   matchModelProfile,
   normalizeModelIdentity,
   type BuiltInProviderId,
@@ -26,6 +28,7 @@ export {
   type ModelProfile,
   type ModelProfileMatch,
   type ModelProviderId,
+  type ProviderProtocol,
 } from './providers/catalog.ts'
 export {
   CUSTOM_API_PROTOCOLS,

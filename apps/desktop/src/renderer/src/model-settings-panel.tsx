@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactElement } from 'react'
+import type { ModelCapabilities } from '@whycode/core'
 import type {
   CustomConnectionSettingsItem,
   ModelSettingsSnapshot,
@@ -188,7 +189,11 @@ function CustomConnectionRow(props: {
           <span className={`rounded px-1.5 py-0.5 text-[10px] ${fullAgent ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>{fullAgent ? 'Agent 可用' : '工具未通过'}</span>
         </div>
         <p className="truncate text-[11px] text-neutral-500">{props.connection.modelId} · {props.connection.baseURL}</p>
-        <p className="text-[11px] text-neutral-500">{props.connection.matchedProfile ? `已匹配 ${props.connection.matchedProfile.displayName}` : '未知型号：使用保守能力默认值'}</p>
+        <p className="text-[11px] text-neutral-500">
+          {props.connection.matchedProfile
+            ? `已匹配 ${props.connection.matchedProfile.displayName} · 画像${reasoningLabel(props.connection.matchedProfile.reasoningExposure)}`
+            : '未知型号：使用保守能力默认值'}
+        </p>
         <div className="mt-1 flex flex-wrap gap-1">
           <ProbeStatus label="文本" state={props.connection.probe.text} detail={props.connection.probeDetails?.text} />
           <ProbeStatus label="工具" state={props.connection.probe.tools} detail={props.connection.probeDetails?.tools} />
@@ -226,6 +231,12 @@ function ProbeStatus(props: {
 function formatTokenLimit(tokens: number): string {
   if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(2))}M`
   return `${Number((tokens / 1_000).toFixed(1))}K`
+}
+
+function reasoningLabel(exposure: ModelCapabilities['reasoningExposure']): string {
+  if (exposure === 'summary') return '支持思考摘要'
+  if (exposure === 'none') return '无思考透传'
+  return '支持思考内容'
 }
 
 function CustomConnectionEditor(props: {

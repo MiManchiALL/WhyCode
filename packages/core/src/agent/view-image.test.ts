@@ -53,6 +53,13 @@ describe('ViewImage Agent 链路', () => {
           assert.equal(toolNames(options).includes(VIEW_IMAGE_TOOL_NAME), true)
           if (call === 1) return viewImageStep('screen.png')
           assert.equal(JSON.stringify(options.prompt).includes(ONE_PIXEL_PNG.toString('base64')), true)
+          const toolMessage = options.prompt.find((message) => message.role === 'tool')
+          assert.equal(toolMessage?.role, 'tool')
+          const result = toolMessage?.role === 'tool'
+            ? toolMessage.content.find((part) => part.type === 'tool-result')
+            : undefined
+          assert.equal(result?.type === 'tool-result' ? result.output.type : '', 'content')
+          assert.equal(options.prompt.filter((message) => message.role === 'user').length, 1)
           return finalStep('图片已读取。')
         },
       })
@@ -106,6 +113,19 @@ describe('ViewImage Agent 链路', () => {
       assert.equal(
         await createSession(textModel, reopenedAgain, projectDir, false)
           .handleUserMessage('用文字模型继续'),
+        'completed',
+      )
+
+      const afterTextTurn = await store.open(journal.sessionId)
+      const visualAgain = new MockLanguageModelV4({
+        doStream: async (options) => {
+          assert.equal(JSON.stringify(options.prompt).includes(ONE_PIXEL_PNG.toString('base64')), true)
+          return finalStep('切回视觉模型后仍可见。')
+        },
+      })
+      assert.equal(
+        await createSession(visualAgain, afterTextTurn, projectDir, true)
+          .handleUserMessage('切回视觉模型继续看图'),
         'completed',
       )
     })
@@ -196,6 +216,7 @@ function modelEntry(model: MockLanguageModelV4, supportsImageInput: boolean): Mo
     id: supportsImageInput ? 'test:vision' : 'test:text',
     displayName: 'ViewImage Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput,

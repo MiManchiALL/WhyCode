@@ -12,6 +12,7 @@ describe('自定义连接有效能力', () => {
       probe: { text: 'supported', tools: 'supported', image: 'unsupported' },
     })
     assert.equal(entry.provider, 'mimo')
+    assert.equal(entry.protocol, 'openai-chat')
     assert.equal(entry.capabilities.contextWindow, 1_048_576)
     assert.equal(entry.capabilities.supportsNativeTools, true)
     assert.equal(entry.capabilities.supportsImageInput, false)
@@ -56,11 +57,71 @@ describe('自定义连接有效能力', () => {
       probe: { text: 'supported', tools: 'supported', image: 'supported' },
     })
     assert.equal(entry.provider, 'anthropic')
+    assert.equal(entry.protocol, 'anthropic-messages')
     assert.equal(entry.capabilities.contextWindow, 1_000_000)
     assert.equal(entry.capabilities.maxOutput, 64_000)
     assert.equal(entry.capabilities.supportsImageInput, true)
     assert.deepEqual(entry.providerOptions, {
       anthropic: { cacheControl: { type: 'ephemeral' } },
+    })
+  })
+
+  it('CLIProxyAPI 思考后缀继承画像但原样发送模型 ID', () => {
+    const modelId = 'gpt-5.6-sol(medium)'
+    const entry = createCustomModelEntry({
+      id: 'custom:cli-proxy',
+      connectionName: 'CLIProxyAPI',
+      protocol: 'openai-responses',
+      modelId,
+      probe: { text: 'supported', tools: 'supported', image: 'supported' },
+    })
+    assert.equal(entry.provider, 'openai')
+    assert.equal(entry.capabilities.contextWindow, 1_050_000)
+    assert.equal(entry.capabilities.maxOutput, 128_000)
+    assert.equal(entry.capabilities.supportsImageInput, true)
+    assert.deepEqual(entry.providerOptions, {
+      openai: {
+        reasoningEffort: 'medium',
+        reasoningSummary: 'auto',
+        store: false,
+      },
+    })
+
+    const model = entry.create({ apiKey: 'test', baseURL: 'http://localhost:8317/v1' })
+    assert.notEqual(typeof model, 'string')
+    if (typeof model !== 'string') assert.equal(model.modelId, modelId)
+  })
+
+  it('CLIProxyAPI 的 GPT 思考强度覆盖画像默认值，none 同时关闭展示声明', () => {
+    const high = createCustomModelEntry({
+      id: 'custom:high',
+      connectionName: 'CLIProxyAPI high',
+      protocol: 'openai-responses',
+      modelId: 'gpt-5.6-sol(high)',
+      probe: { text: 'supported', tools: 'supported', image: 'supported' },
+    })
+    assert.deepEqual(high.providerOptions, {
+      openai: {
+        reasoningEffort: 'high',
+        reasoningSummary: 'auto',
+        store: false,
+      },
+    })
+
+    const none = createCustomModelEntry({
+      id: 'custom:none',
+      connectionName: 'CLIProxyAPI none',
+      protocol: 'openai-responses',
+      modelId: 'gpt-5.6-sol(none)',
+      probe: { text: 'supported', tools: 'supported', image: 'supported' },
+    })
+    assert.equal(none.capabilities.reasoningExposure, 'none')
+    assert.deepEqual(none.providerOptions, {
+      openai: {
+        reasoningEffort: 'none',
+        reasoningSummary: 'auto',
+        store: false,
+      },
     })
   })
 

@@ -4,7 +4,7 @@ import {
   compactProbeReport,
   createCustomModelEntry,
   CUSTOM_API_PROTOCOLS,
-  matchModelProfile,
+  matchCustomModelProfile,
   MODEL_CATALOG,
   probeCustomConnection,
   type BuiltInProviderId,
@@ -143,7 +143,14 @@ export function deleteCustomConnection(
 }
 
 function customSettingsItem(connection: CustomConnectionConfig): CustomConnectionSettingsItem {
-  const match = matchModelProfile(connection.modelId)
+  const match = matchCustomModelProfile(connection.modelId)
+  const effectiveEntry = createCustomModelEntry({
+    id: customModelId(connection.id),
+    connectionName: connection.name,
+    protocol: connection.protocol,
+    modelId: connection.modelId,
+    probe: connection.probe,
+  })
   return {
     id: connection.id,
     name: connection.name,
@@ -152,7 +159,11 @@ function customSettingsItem(connection: CustomConnectionConfig): CustomConnectio
     modelId: connection.modelId,
     hasKey: Boolean(connection.apiKey),
     ...(match.status === 'matched' ? {
-      matchedProfile: { id: match.profile.id, displayName: match.profile.displayName },
+      matchedProfile: {
+        id: match.profile.id,
+        displayName: match.profile.displayName,
+        reasoningExposure: effectiveEntry.capabilities.reasoningExposure,
+      },
     } : {}),
     probe: connection.probe,
     ...(connection.probeDetails ? { probeDetails: connection.probeDetails } : {}),

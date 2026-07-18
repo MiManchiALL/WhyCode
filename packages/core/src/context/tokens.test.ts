@@ -23,9 +23,19 @@ describe('视觉上下文估算', () => {
         type: 'tool-result',
         toolCallId: 'pdf-1',
         toolName: 'ReadPdf',
-        output: { type: 'text', value: 'x'.repeat(4_000) },
+        output: {
+          type: 'content',
+          value: [
+            { type: 'text', text: 'x'.repeat(4_000) },
+            {
+              type: 'file',
+              data: { type: 'data', data: 'whycode-attachment-ref:v1:page.png' },
+              filename: 'page.png',
+              mediaType: 'image/png',
+            },
+          ],
+        },
       }] },
-      { role: 'user', content: [{ type: 'file', data: 'base64', mediaType: 'image/png' }] },
     ]
     const estimate = estimateContextTokens(messages, {
       usageTokens: 100,

@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
-import { createImageToolResultMessage } from '../attachments/messages.ts'
+import { attachImagesToToolResults } from '../attachments/tool-results.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import {
   CLEARED_MESSAGE,
-  CLEARED_PDF_IMAGE_MESSAGE,
   microcompact,
 } from './microcompact.ts'
 
@@ -15,18 +14,15 @@ describe('PDF 工具结果微清理', () => {
     const messages: ModelMessage[] = []
     for (let index = 0; index < 6; index++) {
       const toolCallId = `pdf-${index}`
-      messages.push(
-        toolResult(toolCallId),
-        createImageToolResultMessage([imageAttachment(index)], { detail: 'high' }, toolCallId),
-      )
+      messages.push(...attachImagesToToolResults([toolResult(toolCallId)], [{
+        toolCallId,
+        attachments: [imageAttachment(index)],
+        transform: { detail: 'high' },
+      }]))
     }
     const compacted = microcompact(messages)
     assert.ok(compacted)
     assert.match(JSON.stringify(compacted[0]), new RegExp(CLEARED_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-    assert.deepEqual(compacted[1], {
-      role: 'user',
-      content: [{ type: 'text', text: CLEARED_PDF_IMAGE_MESSAGE }],
-    })
     assert.match(JSON.stringify(compacted.at(-1)), /whycode-attachment-ref/)
   })
 })

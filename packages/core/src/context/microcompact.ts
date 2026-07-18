@@ -7,7 +7,6 @@ import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
 import { BATCH_EDIT_TOOL_NAME } from '../tools/batch-edit/index.ts'
 import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
 import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
-import { imageToolResultSourceId } from '../attachments/messages.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
@@ -42,7 +41,6 @@ const COMPACTABLE_TOOLS = new Set([
 ])
 
 export const CLEARED_MESSAGE = '[旧工具输出已清理以节省上下文，如需内容请重新调用工具]'
-export const CLEARED_PDF_IMAGE_MESSAGE = '[旧 PDF 页面图已随工具输出清理，如需内容请重新调用 ReadPdf]'
 
 /** 保留最近 N 个可清理结果不动 */
 const KEEP_RECENT = 5
@@ -56,8 +54,6 @@ export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
   const targets: {
     msgIdx: number
     partIdx: number
-    toolName: string
-    toolCallId: string
   }[] = []
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!
@@ -70,8 +66,6 @@ export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
       targets.push({
         msgIdx: i,
         partIdx: j,
-        toolName: part.toolName,
-        toolCallId: part.toolCallId,
       })
     }
   }
@@ -83,16 +77,7 @@ export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
     if (!clearSet.has(t.msgIdx)) clearSet.set(t.msgIdx, new Set())
     clearSet.get(t.msgIdx)!.add(t.partIdx)
   }
-  const clearedPdfCalls = new Set(
-    toClear.filter((target) => target.toolName === READ_PDF_TOOL_NAME)
-      .map((target) => target.toolCallId),
-  )
-
   return messages.map((msg, i) => {
-    const imageSourceId = imageToolResultSourceId(msg)
-    if (imageSourceId && clearedPdfCalls.has(imageSourceId) && msg.role === 'user') {
-      return { ...msg, content: [{ type: 'text', text: CLEARED_PDF_IMAGE_MESSAGE }] }
-    }
     const parts = clearSet.get(i)
     if (!parts || msg.role !== 'tool' || typeof msg.content === 'string') return msg
     return {

@@ -1,7 +1,14 @@
 import type { ProviderMetadata } from 'ai'
 
-export type BuiltInProviderId = 'anthropic' | 'deepseek' | 'mimo' | 'openai' | 'zhipu'
+export type BuiltInProviderId =
+  | 'anthropic'
+  | 'deepseek'
+  | 'google'
+  | 'mimo'
+  | 'openai'
+  | 'zhipu'
 export type ModelProviderId = BuiltInProviderId | 'custom'
+export type ProviderProtocol = 'anthropic-messages' | 'openai-chat' | 'openai-responses'
 
 export interface ModelCapabilities {
   /** 原生 function calling 是否可靠可用（false 时不能作为完整 Agent 使用）。 */
@@ -23,7 +30,7 @@ export interface ModelCapabilities {
 export interface BuiltInProviderProfile {
   id: BuiltInProviderId
   displayName: string
-  protocol: 'anthropic-messages' | 'openai-chat' | 'openai-responses'
+  protocol: ProviderProtocol
   defaultBaseURL: string
 }
 
@@ -54,6 +61,12 @@ export const BUILTIN_PROVIDERS: readonly BuiltInProviderProfile[] = [
     defaultBaseURL: 'https://api.deepseek.com/v1',
   },
   {
+    id: 'google',
+    displayName: 'Google Gemini',
+    protocol: 'openai-chat',
+    defaultBaseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  },
+  {
     id: 'mimo',
     displayName: '小米 MiMo',
     protocol: 'openai-chat',
@@ -72,6 +85,36 @@ export const BUILTIN_PROVIDERS: readonly BuiltInProviderProfile[] = [
     defaultBaseURL: 'https://open.bigmodel.cn/api/paas/v4',
   },
 ] as const
+
+const GOOGLE_THINKING_SUMMARY_OPTIONS = {
+  google: {
+    extra_body: {
+      google: {
+        thinking_config: { include_thoughts: true },
+      },
+    },
+  },
+} satisfies ProviderMetadata
+
+const OPENAI_REASONING_SUMMARY_OPTIONS = {
+  openai: {
+    reasoningEffort: 'medium',
+    reasoningSummary: 'auto',
+    // WhyCode owns durable history. Keep Responses stateless and replay encrypted
+    // reasoning locally instead of depending on provider-side item persistence.
+    store: false,
+  },
+} satisfies ProviderMetadata
+
+const GPT_5_6_CAPABILITIES = {
+  supportsNativeTools: true,
+  supportsImageInput: true,
+  reasoningExposure: 'summary',
+  structuredOutput: 'json-schema',
+  promptCaching: 'auto',
+  contextWindow: 1_050_000,
+  maxOutput: 128_000,
+} satisfies ModelCapabilities
 
 /**
  * 模型固有信息目录。自定义网关的文本、工具和图片传输能力以端点实测为准。
@@ -109,6 +152,40 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       contextWindow: 1_000_000,
       maxOutput: 384_000,
     },
+  },
+  {
+    id: 'google:gemini-3.1-pro-preview',
+    modelId: 'gemini-3.1-pro-preview',
+    displayName: 'Gemini 3.1 Pro Preview',
+    provider: 'google',
+    aliases: ['Gemini-3.1-Pro-Preview', 'Gemini 3.1 Pro Preview'],
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'summary',
+      structuredOutput: 'json-schema',
+      promptCaching: 'auto',
+      contextWindow: 1_048_576,
+      maxOutput: 65_536,
+    },
+    providerOptions: GOOGLE_THINKING_SUMMARY_OPTIONS,
+  },
+  {
+    id: 'google:gemini-3.5-flash',
+    modelId: 'gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
+    provider: 'google',
+    aliases: ['Gemini-3.5-Flash', 'Gemini 3.5 Flash', 'gemini-3-flash-agent'],
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'summary',
+      structuredOutput: 'json-schema',
+      promptCaching: 'auto',
+      contextWindow: 1_048_576,
+      maxOutput: 65_536,
+    },
+    providerOptions: GOOGLE_THINKING_SUMMARY_OPTIONS,
   },
   {
     id: 'mimo:mimo-v2.5',
@@ -165,6 +242,50 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     providerOptions: { zhipu: { thinking: { type: 'disabled' } } },
   },
   {
+    id: 'openai:gpt-5.6-sol',
+    modelId: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6 Sol',
+    provider: 'openai',
+    aliases: ['GPT 5.6', 'GPT-5.6', 'GPT 5.6 Sol'],
+    capabilities: GPT_5_6_CAPABILITIES,
+    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
+  },
+  {
+    id: 'openai:gpt-5.6-terra',
+    modelId: 'gpt-5.6-terra',
+    displayName: 'GPT-5.6 Terra',
+    provider: 'openai',
+    aliases: ['GPT 5.6 Terra', 'GPT-5.6-Terra'],
+    capabilities: GPT_5_6_CAPABILITIES,
+    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
+  },
+  {
+    id: 'openai:gpt-5.6-luna',
+    modelId: 'gpt-5.6-luna',
+    displayName: 'GPT-5.6 Luna',
+    provider: 'openai',
+    aliases: ['GPT 5.6 Luna', 'GPT-5.6-Luna'],
+    capabilities: GPT_5_6_CAPABILITIES,
+    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
+  },
+  {
+    id: 'openai:gpt-5.5',
+    modelId: 'gpt-5.5',
+    displayName: 'GPT-5.5',
+    provider: 'openai',
+    aliases: ['GPT 5.5', 'GPT-5.5'],
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'summary',
+      structuredOutput: 'json-schema',
+      promptCaching: 'auto',
+      contextWindow: 1_050_000,
+      maxOutput: 128_000,
+    },
+    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
+  },
+  {
     id: 'openai:gpt-5.2',
     modelId: 'gpt-5.2',
     displayName: 'GPT-5.2',
@@ -179,6 +300,7 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       contextWindow: 400_000,
       maxOutput: 128_000,
     },
+    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
   },
 ] as const
 
@@ -186,6 +308,27 @@ export type ModelProfileMatch =
   | { status: 'matched'; profile: ModelProfile }
   | { status: 'ambiguous'; profiles: readonly ModelProfile[] }
   | { status: 'none' }
+
+const CUSTOM_MODEL_THINKING_SUFFIX =
+  /\(\s*(minimal|low|medium|high|xhigh|auto|none|-?\d+)?\s*\)\s*$/iu
+
+export interface CustomModelThinkingSuffix {
+  baseModelId: string
+  modifier: string
+}
+
+/** 解析 CLIProxyAPI 的尾部思考修饰符；返回值不用于改写实际请求模型 ID。 */
+export function parseCustomModelThinkingSuffix(
+  value: string,
+): CustomModelThinkingSuffix | null {
+  const normalized = value.normalize('NFKC')
+  const match = CUSTOM_MODEL_THINKING_SUFFIX.exec(normalized)
+  if (!match || match.index === 0) return null
+  return {
+    baseModelId: normalized.slice(0, match.index).trimEnd(),
+    modifier: (match[1] ?? '').toLocaleLowerCase('en-US'),
+  }
+}
 
 /**
  * 只消除书写差异：Unicode 宽窄、大小写、空格和标点分隔符。
@@ -210,6 +353,20 @@ export function matchModelProfile(
   if (matches.length === 1) return { status: 'matched', profile: matches[0]! }
   if (matches.length > 1) return { status: 'ambiguous', profiles: matches }
   return { status: 'none' }
+}
+
+/**
+ * 自定义代理可在规范模型 ID 后追加受支持的思考修饰符。画像匹配只剥离
+ * CLIProxyAPI 明确定义的尾部括号语法；实际请求仍使用用户填写的原始 ID。
+ */
+export function matchCustomModelProfile(
+  value: string,
+  profiles: readonly ModelProfile[] = MODEL_CATALOG,
+): ModelProfileMatch {
+  const direct = matchModelProfile(value, profiles)
+  if (direct.status !== 'none') return direct
+  const suffix = parseCustomModelThinkingSuffix(value)
+  return suffix ? matchModelProfile(suffix.baseModelId, profiles) : direct
 }
 
 export function getModelProfile(profileId: string): ModelProfile {
