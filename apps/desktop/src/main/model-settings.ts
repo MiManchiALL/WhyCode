@@ -22,6 +22,7 @@ import {
   type CustomConnectionConfig,
   type WhycodeConfig,
 } from './config.ts'
+import { createWebSearchSettingsSnapshot } from './web-search-settings.ts'
 
 const MAX_PROBE_DETAIL_CHARS = 1_000
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
@@ -55,6 +56,7 @@ export function createModelSettingsSnapshot(
     })),
     customConnections: (config?.customConnections ?? []).map(customSettingsItem),
     protocols: CUSTOM_API_PROTOCOLS.map((protocol) => ({ ...protocol })),
+    webSearch: createWebSearchSettingsSnapshot(config),
   }
 }
 

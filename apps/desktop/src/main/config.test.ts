@@ -111,7 +111,7 @@ describe('默认模型选择', () => {
 })
 
 describe('配置密钥存储', () => {
-  it('保存时不落明文，读取时恢复官方、自定义和协商密钥', async () => {
+  it('保存时不落明文，读取时恢复官方、自定义、协商和搜索密钥', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-'))
     const path = join(root, 'config.json')
     const codec: ConfigSecretCodec = {
@@ -134,14 +134,16 @@ describe('配置密钥存储', () => {
       consensusAgents: {
         B: { model: 'mimo:mimo-v2.5', apiKey: 'peer-secret' },
       },
+      webSearch: { perplexity: { apiKey: 'search-secret' } },
     }
     try {
       await saveConfig(value, codec, path)
       const raw = await readFile(path, 'utf-8')
-      assert.doesNotMatch(raw, /official-secret|custom-secret|peer-secret/)
+      assert.doesNotMatch(raw, /official-secret|custom-secret|peer-secret|search-secret/)
       assert.equal(loadConfig(path, codec)?.providers.mimo?.apiKey, 'official-secret')
       assert.equal(loadConfig(path, codec)?.customConnections?.[0]?.apiKey, 'custom-secret')
       assert.equal(loadConfig(path, codec)?.consensusAgents?.B?.apiKey, 'peer-secret')
+      assert.equal(loadConfig(path, codec)?.webSearch?.perplexity?.apiKey, 'search-secret')
       value.providers.mimo = { apiKey: 'rotated-secret' }
       await saveConfig(value, codec, path)
       assert.equal(loadConfig(path, codec)?.providers.mimo?.apiKey, 'rotated-secret')
@@ -184,12 +186,14 @@ describe('配置密钥存储', () => {
         consensusAgents: {
           B: { model: 'mimo:mimo-v2.5', apiKey: 'legacy-peer-secret' },
         },
+        webSearch: { perplexity: { apiKey: 'legacy-search-secret' } },
       }))
       assert.equal(await migratePlaintextSecrets(codec, path), true)
       const raw = await readFile(path, 'utf-8')
-      assert.doesNotMatch(raw, /legacy-secret|legacy-peer-secret|"apiKey"/)
+      assert.doesNotMatch(raw, /legacy-secret|legacy-peer-secret|legacy-search-secret|"apiKey"/)
       assert.equal(loadConfig(path, codec)?.providers.mimo?.apiKey, 'legacy-secret')
       assert.equal(loadConfig(path, codec)?.consensusAgents?.B?.apiKey, 'legacy-peer-secret')
+      assert.equal(loadConfig(path, codec)?.webSearch?.perplexity?.apiKey, 'legacy-search-secret')
       assert.equal(await migratePlaintextSecrets(codec, path), false)
     } finally {
       await rm(root, { recursive: true, force: true })

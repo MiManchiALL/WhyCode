@@ -37,6 +37,9 @@ interface StoredConfig {
     encryptedApiKey?: string
     baseURL?: string
   }>>
+  webSearch?: {
+    perplexity?: StoredCredential
+  }
 }
 
 export function getConfigPath(): string {
@@ -63,11 +66,15 @@ export function loadConfig(
         })
       : undefined
     const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
+    const perplexity = isRecord(stored.webSearch)
+      ? parseCredential(stored.webSearch.perplexity, codec)
+      : null
     return {
       providers,
       ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
       ...(customConnections ? { customConnections } : {}),
       ...(consensusAgents ? { consensusAgents } : {}),
+      ...(perplexity ? { webSearch: { perplexity: { apiKey: perplexity.apiKey } } } : {}),
     }
   } catch {
     return null
@@ -81,7 +88,7 @@ export async function saveConfig(
 ): Promise<void> {
   if (!codec.isAvailable()) throw new Error('系统安全存储当前不可用，不能安全保存 API key')
   const stored: StoredConfig = {
-    version: 2,
+    version: 3,
     providers: Object.fromEntries(Object.entries(config.providers).map(([provider, value]) => [
       provider,
       storeCredential(value, codec),
@@ -102,6 +109,11 @@ export async function saveConfig(
           encryptedApiKey: codec.encrypt(agent.apiKey),
         }]),
       ),
+    } : {}),
+    ...(config.webSearch?.perplexity ? {
+      webSearch: {
+        perplexity: storeCredential(config.webSearch.perplexity, codec),
+      },
     } : {}),
   }
   const directory = dirname(path)

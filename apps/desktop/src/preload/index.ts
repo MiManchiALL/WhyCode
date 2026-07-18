@@ -14,6 +14,7 @@ import type {
   ModelSettingsSnapshot,
   SaveCustomConnectionRequest,
   SaveProviderSettingsRequest,
+  SaveWebSearchSettingsRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
 
@@ -31,6 +32,9 @@ const api = {
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveCustomConnection, request),
   deleteCustomConnection: (connectionId: string): Promise<SettingsMutationResult> =>
     ipcRenderer.invoke(IPC.deleteCustomConnection, connectionId),
+  saveWebSearchSettings: (
+    request: SaveWebSearchSettingsRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebSearchSettings, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),

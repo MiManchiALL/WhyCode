@@ -8,6 +8,7 @@ import {
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
+  createWebSearchTool,
   getModelEntry,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -63,8 +64,11 @@ import type {
 import type {
   SaveCustomConnectionRequest,
   SaveProviderSettingsRequest,
+  SaveWebSearchSettingsRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
+import { createPerplexitySearchHandler } from './web-search/perplexity.ts'
+import { updateWebSearchSettings } from './web-search-settings.ts'
 import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
@@ -81,6 +85,12 @@ const configSecretCodec: ConfigSecretCodec = {
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
 }
+
+const webSearchTool = createWebSearchTool({
+  search: createPerplexitySearchHandler({
+    getApiKey: () => loadAppConfig()?.webSearch?.perplexity?.apiKey,
+  }),
+})
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -155,8 +165,8 @@ let sessionDeletionId: string | null = null
 const sessionResumeLock = new SessionResumeLock()
 /** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
 let attachmentPreparationInProgress = false
-/** 自定义连接探测期间阻止启动新 Agent 工作，避免模型配置在请求中途切换。 */
-let modelSettingsInProgress = false
+/** 连接设置写入或探测期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
+let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
 const userMessageRoutingGate = new UserMessageRoutingGate()
@@ -250,7 +260,10 @@ function createMainAgentSession(
       homeDir: app.getPath('home'),
     },
     sessionRecorder: recorder,
-    mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
+    mainTools: [
+      ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
+      webSearchTool,
+    ],
     captureScreenshot: captureDesktopScreenshot,
     pdfProcessor,
     emit: broadcastEvent,
@@ -399,8 +412,8 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'set-model': {
-      if (modelSettingsInProgress) {
-        broadcastEvent({ type: 'error', message: '模型连接检测中，请稍后再切换模型', recoverable: true })
+      if (settingsMutationInProgress) {
+        broadcastEvent({ type: 'error', message: '连接设置处理中，请稍后再切换模型', recoverable: true })
         return { ok: false }
       }
       if (attachmentPreparationInProgress) {
@@ -480,8 +493,8 @@ async function prepareUserMessage(
 async function handleUserMessageCommand(
   command: UserMessageCommand,
 ): Promise<{ ok: boolean }> {
-  if (modelSettingsInProgress) {
-    return rejectUserMessage('模型连接检测中，请等待完成后再发送消息')
+  if (settingsMutationInProgress) {
+    return rejectUserMessage('连接设置处理中，请等待完成后再发送消息')
   }
   if (attachmentPreparationInProgress) {
     return rejectUserMessage('上一条附件消息仍在准备，请稍后重试')
@@ -572,7 +585,7 @@ function runtimeBusy(): boolean {
     sessionDeletionId
     || sessionResumeLock.sessionId
     || attachmentPreparationInProgress
-    || modelSettingsInProgress
+    || settingsMutationInProgress
     || userMessageRoutingGate.busy
     || sessionInitialization
     || session?.isBusy
@@ -584,7 +597,9 @@ function resumeInProgressMessage(action: string): string {
   return `正在验证附件并恢复会话，请等待完成后再${action}`
 }
 
-async function persistModelConfig(config: NonNullable<ReturnType<typeof loadAppConfig>>): Promise<void> {
+async function persistConnectionConfig(
+  config: NonNullable<ReturnType<typeof loadAppConfig>>,
+): Promise<void> {
   await saveConfig(config, configSecretCodec, getConfigPath())
   const current = currentModelId
     ? resolveModelConnection(config, currentModelId)
@@ -599,15 +614,15 @@ async function saveProviderModelSettings(
   request: SaveProviderSettingsRequest,
 ): Promise<SettingsMutationResult> {
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
-  modelSettingsInProgress = true
+  settingsMutationInProgress = true
   try {
     const next = updateProviderSettings(loadAppConfig(), request)
-    await persistModelConfig(next)
+    await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
-    modelSettingsInProgress = false
+    settingsMutationInProgress = false
   }
 }
 
@@ -615,7 +630,7 @@ async function saveCustomModelConnection(
   request: SaveCustomConnectionRequest,
 ): Promise<SettingsMutationResult> {
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再检测模型连接' }
-  modelSettingsInProgress = true
+  settingsMutationInProgress = true
   try {
     const updated = await testAndUpdateCustomConnection(
       loadAppConfig(),
@@ -623,12 +638,12 @@ async function saveCustomModelConnection(
       new AbortController().signal,
     )
     if (!updated.config) return { ok: false, error: updated.error ?? '连接检测未通过' }
-    await persistModelConfig(updated.config)
+    await persistConnectionConfig(updated.config)
     return { ok: true, snapshot: createModelSettingsSnapshot(updated.config) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
-    modelSettingsInProgress = false
+    settingsMutationInProgress = false
   }
 }
 
@@ -636,15 +651,31 @@ async function removeCustomModelConnection(
   connectionId: string,
 ): Promise<SettingsMutationResult> {
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再删除模型连接' }
-  modelSettingsInProgress = true
+  settingsMutationInProgress = true
   try {
     const next = deleteCustomConnection(loadAppConfig(), connectionId)
-    await persistModelConfig(next)
+    await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
-    modelSettingsInProgress = false
+    settingsMutationInProgress = false
+  }
+}
+
+async function saveWebSearchConnectionSettings(
+  request: SaveWebSearchSettingsRequest,
+): Promise<SettingsMutationResult> {
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改网页搜索设置' }
+  settingsMutationInProgress = true
+  try {
+    const next = updateWebSearchSettings(loadAppConfig(), request)
+    await persistConnectionConfig(next)
+    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    settingsMutationInProgress = false
   }
 }
 
@@ -1000,6 +1031,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     saveCustomModelConnection(request))
   ipcMain.handle(IPC.deleteCustomConnection, (_e, connectionId: string) =>
     removeCustomModelConnection(connectionId))
+  ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
+    saveWebSearchConnectionSettings(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
   ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
   ipcMain.handle(IPC.consensusStatus, () => ({

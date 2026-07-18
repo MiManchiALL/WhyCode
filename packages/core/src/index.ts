@@ -89,6 +89,23 @@ export {
   type ScreenshotCaptureResult,
 } from './tools/capture-screenshot/index.ts'
 export {
+  WEB_SEARCH_MAX_QUERY_CHARS,
+  WEB_SEARCH_MAX_RESULTS,
+  WEB_SEARCH_MAX_SNIPPET_CHARS,
+  WEB_SEARCH_MAX_TITLE_CHARS,
+  WEB_SEARCH_MAX_URL_CHARS,
+  WEB_SEARCH_TOOL_NAME,
+  WebSearchError,
+  createWebSearchTool,
+  webSearchRequestSchema,
+  type WebSearchHandler,
+  type WebSearchRecency,
+  type WebSearchRequest,
+  type WebSearchResponse,
+  type WebSearchResult,
+  type WebSearchToolInput,
+} from './tools/web-search/index.ts'
+export {
   PERMISSION_MODES,
   type PermissionMode,
   type ApprovalSuggestion,

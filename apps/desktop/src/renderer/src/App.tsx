@@ -550,7 +550,7 @@ export function App() {
       setModelSettings(snapshot)
       setShowModelSettings(true)
     }).catch((error) => {
-      addError(`模型设置读取失败：${error instanceof Error ? error.message : String(error)}`)
+      addError(`连接设置读取失败：${error instanceof Error ? error.message : String(error)}`)
     })
   }, [addError])
 
