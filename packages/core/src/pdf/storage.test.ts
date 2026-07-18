@@ -121,11 +121,51 @@ describe('PDF 附件存储', () => {
     const userEvent = reopened.initialViewEvents.find((event) => event.type === 'user-message')
     assert.equal(userEvent?.type === 'user-message' && userEvent.pdfAttachments?.length, 1)
 
+    const replacement = '%PDF-1.4\nsubstitute'
+    assert.equal(Buffer.byteLength(replacement), transaction.attachments[0]!.byteLength)
     await writeFile(
       join(reopened.attachmentDirectory, transaction.attachments[0]!.storageName),
-      '%PDF-1.4\ntampered',
+      replacement,
     )
     await assert.rejects(store.open(journal.sessionId), /元数据与磁盘文件不一致/)
+  })
+
+  it('会话列表的完整校验只供同一进程内未变化的正式恢复复用', async () => {
+    const root = await tempDirectory()
+    const source = join(root, 'cached.pdf')
+    const sessionsRoot = join(root, 'sessions')
+    await writeFile(source, '%PDF-1.4\nvalidation-cache')
+    let inspections = 0
+    const base = fakeProcessor(3)
+    const processor: PdfProcessor = {
+      async inspect(path, signal) {
+        inspections++
+        return base.inspect(path, signal)
+      },
+      readPages: base.readPages,
+    }
+    const store = new SessionStore(sessionsRoot, { pdfProcessor: processor })
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const transaction = await preparePdfAttachmentImport(
+      [{ kind: 'path', path: source }],
+      journal.attachmentDirectory,
+      journal.sessionId,
+      processor,
+      new AbortController().signal,
+    )
+    await transaction.commit()
+    await journal.recordUserInput('读取缓存测试', true, [], transaction.attachments)
+    const afterImport = inspections
+
+    await store.list()
+    assert.equal(inspections, afterImport + 1)
+
+    await store.open(journal.sessionId)
+    assert.equal(inspections, afterImport + 1)
+
+    const restartedStore = new SessionStore(sessionsRoot, { pdfProcessor: processor })
+    await restartedStore.open(journal.sessionId)
+    assert.equal(inspections, afterImport + 2)
   })
 })
 

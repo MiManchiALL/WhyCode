@@ -45,11 +45,15 @@ export class DesktopSessionRepository {
     return this.pendingCreate
   }
 
-  async resume(sessionId: string): Promise<SessionJournal> {
+  /** 完整打开候选会话，但在 Main 原子提交前不替换当前 journal。 */
+  prepareResume(sessionId: string): Promise<SessionJournal> {
+    return this.store.open(sessionId)
+  }
+
+  activate(journal: SessionJournal): void {
     this.generation++
     this.pendingCreate = null
-    this.current = await this.store.open(sessionId)
-    return this.current
+    this.current = journal
   }
 
   reset(): void {

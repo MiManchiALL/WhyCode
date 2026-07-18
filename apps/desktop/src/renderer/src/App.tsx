@@ -9,7 +9,7 @@ import type {
   QueuedUserMessage,
   UserQuestion,
 } from '@whycode/core/events'
-import type { SessionListItem } from '../../shared/session.ts'
+import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
 import type { ModelListItem, ModelSettingsSnapshot } from '../../shared/settings.ts'
 import {
   applyCoreEvent,
@@ -17,6 +17,7 @@ import {
   createConversationState,
   eventsAfterRuntimeSnapshot,
   restoreRuntimeConversation,
+  resumeTargetCommitted,
   toggleExpanded,
   voteLabel,
   type Block,
@@ -80,13 +81,17 @@ export function App() {
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [sessionListError, setSessionListError] = useState<string | null>(null)
+  const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [showSessions, setShowSessions] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
   const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
   const questionSubmittingRef = useRef(false)
+  const resumingSessionIdRef = useRef<string | null>(null)
+  const ownsResumeRequestRef = useRef(false)
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
@@ -112,6 +117,11 @@ export function App() {
     detach: detachPdfDrafts,
     restore: restorePdfDrafts,
   } = usePdfDrafts(addError)
+
+  const setResumingSessionId = useCallback((sessionId: string | null) => {
+    resumingSessionIdRef.current = sessionId
+    setResumingSessionIdState(sessionId)
+  }, [])
 
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
     if (items.length === 0) return
@@ -168,6 +178,56 @@ export function App() {
     setModelId(snapshot.modelId ?? '')
   }, [])
 
+  const applyRuntimeSnapshot = useCallback((
+    snapshot: RuntimeSnapshot,
+    notice?: string,
+  ) => {
+    const restored = restoreRuntimeConversation(
+      snapshot.viewEvents,
+      snapshot.busy
+        && !snapshot.checkpointRestoreToolUseId
+        && !snapshot.resumingSessionId,
+    )
+    setView(notice ? appendNotice(restored, notice) : restored)
+    setProjectDir(snapshot.projectDir)
+    setPermMode(snapshot.permissionMode)
+    setStatus(snapshot.status)
+    setDeletingSessionId(snapshot.deletingSessionId)
+    setResumingSessionId(snapshot.resumingSessionId)
+    setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
+    setStopping(false)
+    setQueued(snapshot.queuedInputs)
+    setRestoredInputIds([])
+    setRestoredQueue(snapshot.restoredInputs)
+    setRestoredSubmissionPending(false)
+    setApproval(snapshot.approval)
+    setModelId(snapshot.modelId ?? '')
+  }, [setResumingSessionId])
+
+  const synchronizeUnownedResume = useCallback(async () => {
+    const targetSessionId = resumingSessionIdRef.current
+    if (!targetSessionId || ownsResumeRequestRef.current) return
+    try {
+      const snapshot = await window.whycode.runtimeSnapshot()
+      if (resumeTargetCommitted(snapshot, targetSessionId)) {
+        applyRuntimeSnapshot(snapshot, '会话恢复已完成')
+        setShowSessions(false)
+        void window.whycode.consensusStatus().then(setConsensus)
+        void refreshSessions()
+        return
+      }
+      if (snapshot.resumingSessionId) return
+      setResumingSessionId(null)
+      setStatus(snapshot.status)
+      setSessionActionError('会话恢复失败，当前会话未更改')
+    } catch (error) {
+      setResumingSessionId(null)
+      const message = `恢复完成后的运行态同步失败：${error instanceof Error ? error.message : String(error)}`
+      setSessionActionError(message)
+      addError(message)
+    }
+  }, [addError, applyRuntimeSnapshot, refreshSessions, setResumingSessionId])
+
   const consumeEvent = useCallback((event: CoreEvent) => {
     setView((previous) => applyCoreEvent(previous, event))
     switch (event.type) {
@@ -178,6 +238,11 @@ export function App() {
           setDeletingSessionId(null)
         }
         if (event.status === 'idle') setNegoStatus(null)
+        if (
+          (event.status === 'idle' || event.status === 'error')
+          && resumingSessionIdRef.current
+          && !ownsResumeRequestRef.current
+        ) void synchronizeUnownedResume()
         break
       case 'turn-end':
         void refreshSessions()
@@ -230,7 +295,7 @@ export function App() {
       default:
         break
     }
-  }, [refreshSessions, restoreQueuedDrafts])
+  }, [refreshSessions, restoreQueuedDrafts, synchronizeUnownedResume])
 
   useEffect(() => {
     void window.whycode.listModels().then(setModels)
@@ -248,21 +313,7 @@ export function App() {
     })
     void window.whycode.runtimeSnapshot().then((snapshot) => {
       if (disposed) return
-      const restored = restoreRuntimeConversation(
-        snapshot.viewEvents,
-        snapshot.busy && !snapshot.checkpointRestoreToolUseId,
-      )
-      setView(restored)
-      setProjectDir(snapshot.projectDir)
-      setPermMode(snapshot.permissionMode)
-      setStatus(snapshot.status)
-      setDeletingSessionId(snapshot.deletingSessionId)
-      setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
-      setStopping(false)
-      setQueued(snapshot.queuedInputs)
-      restoreQueuedDrafts(snapshot.restoredInputs)
-      setApproval(snapshot.approval)
-      if (snapshot.modelId) setModelId(snapshot.modelId)
+      applyRuntimeSnapshot(snapshot)
       hydrated = true
       const pendingEvents = eventsAfterRuntimeSnapshot(
         buffered.splice(0),
@@ -280,7 +331,7 @@ export function App() {
       disposed = true
       unsubscribe()
     }
-  }, [consumeEvent, refreshSessions, restoreQueuedDrafts])
+  }, [applyRuntimeSnapshot, consumeEvent, refreshSessions])
 
   useEffect(() => {
     if (stickToBottom.current) {
@@ -306,10 +357,12 @@ export function App() {
   const interactionBusy = busy
     || attachmentSubmissionPending
     || deletingSessionId !== null
+    || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
   const attachmentLocked = stopping
     || attachmentSubmissionPending
     || deletingSessionId !== null
+    || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
 
   const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
@@ -358,13 +411,15 @@ export function App() {
     setStatus('idle')
     setStopping(false)
     setAttachmentSubmissionPending(false)
+    ownsResumeRequestRef.current = false
+    setResumingSessionId(null)
     setCheckpointRestoreToolUseId(null)
     setNegoStatus(null)
     clearImageDrafts()
     clearPdfDrafts()
     stickToBottom.current = true
     setShowJumpBottom(false)
-  }, [clearImageDrafts, clearPdfDrafts])
+  }, [clearImageDrafts, clearPdfDrafts, setResumingSessionId])
 
   const stop = useCallback(() => {
     if (stopping) return
@@ -387,27 +442,30 @@ export function App() {
   }, [addError, refreshSessions, resetView])
 
   const resumeSession = useCallback((sessionId: string) => {
+    if (resumingSessionIdRef.current) return
+    ownsResumeRequestRef.current = true
+    setSessionActionError(null)
+    setResumingSessionId(sessionId)
     void window.whycode.resumeSession(sessionId).then((result) => {
-      if (!result.ok) return addError(result.error)
+      // Main 的事件保留在对话中；面板同时显示结果，避免遮罩让失败提示不可见。
+      if (!result.ok) {
+        setSessionActionError(result.error)
+        return
+      }
       const interrupted = result.recoveredFromInterruption
         ? '；已回退到安全边界，未完成工具和半截协商不会自动重放'
         : ''
-      const restored = createConversationState(result.viewEvents)
-      setView(
-        appendNotice(
-          restored,
-          `已恢复「${result.session.title || '未命名会话'}」${interrupted}`,
-        ),
-      )
-      setQueued([])
+      setView(appendNotice(
+        createConversationState(result.viewEvents),
+        `已恢复「${result.session.title || '未命名会话'}」${interrupted}`,
+      ))
       setInput('')
       clearImageDrafts()
       clearPdfDrafts()
-      setRestoredInputIds([])
-      setRestoredQueue([])
-      setRestoredSubmissionPending(false)
       setQueued(result.queuedInputs)
-      restoreQueuedDrafts(result.restoredInputs)
+      setRestoredInputIds([])
+      setRestoredQueue(result.restoredInputs)
+      setRestoredSubmissionPending(false)
       setApproval(null)
       setStatus('idle')
       setStopping(false)
@@ -417,14 +475,22 @@ export function App() {
       setShowJumpBottom(false)
       setProjectDir(result.session.projectDir)
       setModelId(result.session.modelId)
+      setSessionActionError(null)
       setShowSessions(false)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
+    }).catch((error) => {
+      const message = `会话恢复请求失败：${error instanceof Error ? error.message : String(error)}`
+      setSessionActionError(message)
+      addError(message)
+    }).finally(() => {
+      ownsResumeRequestRef.current = false
+      if (resumingSessionIdRef.current === sessionId) setResumingSessionId(null)
     })
-  }, [addError, clearImageDrafts, clearPdfDrafts, refreshSessions, restoreQueuedDrafts])
+  }, [addError, clearImageDrafts, clearPdfDrafts, refreshSessions, setResumingSessionId])
 
   const deleteSession = useCallback((sessionId: string) => {
-    if (deletingSessionId) return
+    if (deletingSessionId || resumingSessionIdRef.current) return
     if (!window.confirm(
       '将永久删除这个会话的对话、任务状态、检查点、后台命令记录和临时数据；不会修改项目文件。确定继续？',
     )) return
@@ -499,6 +565,7 @@ export function App() {
     if (
       stopping
       || deletingSessionId
+      || resumingSessionId
       || checkpointRestoreToolUseId
       || attachmentSubmissionPending
     ) return
@@ -568,6 +635,7 @@ export function App() {
     restoredInputIds,
     restoreImageDrafts,
     restorePdfDrafts,
+    resumingSessionId,
     stopping,
   ])
 
@@ -656,7 +724,7 @@ export function App() {
       <AppHeader
         projectDir={projectDir}
         busy={interactionBusy}
-        permissionLocked={deletingSessionId !== null}
+        permissionLocked={deletingSessionId !== null || resumingSessionId !== null}
         consensus={consensus}
         permMode={permMode}
         models={models}
@@ -667,6 +735,7 @@ export function App() {
         onPermissionChange={changePermission}
         onModelChange={changeModel}
         onOpenSessions={() => {
+          setSessionActionError(null)
           setShowSessions(true)
           void refreshSessions()
         }}
@@ -686,7 +755,9 @@ export function App() {
         <SessionPanel
           sessions={sessions}
           error={sessionListError}
+          actionError={sessionActionError}
           busy={interactionBusy}
+          resumingSessionId={resumingSessionId}
           onClose={() => setShowSessions(false)}
           onResume={resumeSession}
           onDelete={deleteSession}
@@ -752,6 +823,16 @@ export function App() {
         </div>
       )}
 
+      {resumingSessionId && (
+        <div
+          className="border-t border-blue-100 bg-blue-50/70 px-6 py-1.5 text-xs text-blue-700"
+          role="status"
+          aria-live="polite"
+        >
+          正在验证附件并恢复会话…
+        </div>
+      )}
+
       <footer className="border-t border-neutral-200 p-4">
         {queued.length > 0 && (
           <div className="mb-2 space-y-1">
@@ -786,7 +867,12 @@ export function App() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onPaste={pasteAttachments}
-            disabled={stopping || deletingSessionId !== null || checkpointRestoreToolUseId !== null}
+            disabled={
+              stopping
+              || deletingSessionId !== null
+              || resumingSessionId !== null
+              || checkpointRestoreToolUseId !== null
+            }
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
@@ -797,6 +883,8 @@ export function App() {
                 ? '正在停止当前任务并清理子进程…'
                 : deletingSessionId
                   ? '正在删除会话及其关联数据…'
+                : resumingSessionId
+                  ? '正在验证附件并恢复会话…'
                 : checkpointRestoreToolUseId
                   ? '正在安全回滚文件，请等待完成…'
                 : status === 'waiting-approval'
@@ -808,7 +896,7 @@ export function App() {
                       : '正在准备工作文件夹…'
             }
           />
-          {busy && deletingSessionId === null && (
+          {busy && deletingSessionId === null && resumingSessionId === null && (
             <button
               className="rounded-md border border-neutral-300 px-4 py-2 text-sm disabled:opacity-40"
               onClick={stop}
@@ -817,7 +905,7 @@ export function App() {
               {stopping ? '停止中…' : '停止'}
             </button>
           )}
-          {busy && deletingSessionId === null && (
+          {busy && deletingSessionId === null && resumingSessionId === null && (
             <button
               className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
               onClick={() => send(true)}
@@ -838,6 +926,7 @@ export function App() {
               stopping
               || attachmentSubmissionPending
               || deletingSessionId !== null
+              || resumingSessionId !== null
               || checkpointRestoreToolUseId !== null
               || (!input.trim() && imageDrafts.length === 0 && pdfDrafts.length === 0)
             }

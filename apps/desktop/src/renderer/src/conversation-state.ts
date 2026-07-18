@@ -1,5 +1,6 @@
 import type { ImageAttachment, PdfAttachment, TaskPlan, ViewEvent } from '@whycode/core'
 import type { CoreEvent, UserQuestion } from '@whycode/core/events'
+import type { RuntimeSnapshot } from '../../shared/session.ts'
 
 export interface ToolCall {
   id: string
@@ -105,6 +106,13 @@ export function eventsAfterRuntimeSnapshot(
   return buffered
     .filter((entry) => entry.sequence > snapshotSequence)
     .map((entry) => entry.event)
+}
+
+export function resumeTargetCommitted(
+  snapshot: Pick<RuntimeSnapshot, 'resumingSessionId' | 'sessionId'>,
+  targetSessionId: string,
+): boolean {
+  return snapshot.resumingSessionId === null && snapshot.sessionId === targetSessionId
 }
 
 export function applyViewEvent(state: ConversationState, event: ViewEvent): ConversationState {
