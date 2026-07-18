@@ -1078,6 +1078,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:interruption',
     displayName: 'Interruption Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: false,

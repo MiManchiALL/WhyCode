@@ -32,6 +32,15 @@ export const imageAttachmentStorageNameSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:png|jpg|webp)$/i)
 
+export const imageAttachmentSourceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('pdf-page'),
+    pdfAttachmentId: z.string().uuid(),
+    pdfSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    pageNumber: z.number().int().positive(),
+  }),
+])
+
 export const imageAttachmentSchema = z.object({
   id: z.string().uuid(),
   sessionId: z.string().uuid(),
@@ -43,6 +52,8 @@ export const imageAttachmentSchema = z.object({
   byteLength: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES),
   width: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
   height: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
+  /** 可重现衍生图的稳定来源；用于复用同一 PDF 页面而不是重复落盘。 */
+  source: imageAttachmentSourceSchema.optional(),
 }).superRefine((attachment, ctx) => {
   if (!attachment.storageName.toLowerCase().startsWith(`${attachment.id.toLowerCase()}.`)) {
     ctx.addIssue({ code: 'custom', path: ['storageName'], message: '存储名必须匹配附件 ID' })
@@ -52,20 +63,29 @@ export const imageAttachmentSchema = z.object({
   }
 })
 
-export const imageAttachmentsSchema = z
-  .array(imageAttachmentSchema)
-  .max(IMAGE_ATTACHMENT_MAX_COUNT)
-  .superRefine((attachments, ctx) => {
-    const seen = new Set<string>()
-    attachments.forEach((attachment, index) => {
-      if (seen.has(attachment.id)) {
-        ctx.addIssue({ code: 'custom', path: [index, 'id'], message: '图片附件不能重复' })
-      }
-      seen.add(attachment.id)
+export function createImageAttachmentsSchema(maxCount: number) {
+  if (!Number.isSafeInteger(maxCount) || maxCount < 1) {
+    throw new Error('图片附件数量上限必须是正整数')
+  }
+  return z
+    .array(imageAttachmentSchema)
+    .max(maxCount)
+    .superRefine((attachments, ctx) => {
+      const seen = new Set<string>()
+      attachments.forEach((attachment, index) => {
+        if (seen.has(attachment.id)) {
+          ctx.addIssue({ code: 'custom', path: [index, 'id'], message: '图片附件不能重复' })
+        }
+        seen.add(attachment.id)
+      })
     })
-  })
+}
+
+/** 用户消息与普通图片工具共享的四图边界；PDF 页面图使用会话层专用 schema。 */
+export const imageAttachmentsSchema = createImageAttachmentsSchema(IMAGE_ATTACHMENT_MAX_COUNT)
 
 export type ImageMediaType = z.infer<typeof imageMediaTypeSchema>
+export type ImageAttachmentSource = z.infer<typeof imageAttachmentSourceSchema>
 
 export const imageDetailSchema = z.enum(['high', 'original'])
 export type ImageDetail = z.infer<typeof imageDetailSchema>

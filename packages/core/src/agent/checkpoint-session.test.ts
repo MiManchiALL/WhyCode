@@ -310,6 +310,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:checkpoint',
     displayName: 'Checkpoint Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: false,

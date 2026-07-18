@@ -9,6 +9,11 @@ export const IPC = {
   event: 'whycode:event',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
+  /** Renderer → Main：模型厂商与自定义连接设置。 */
+  modelSettings: 'whycode:model-settings',
+  saveProviderSettings: 'whycode:save-provider-settings',
+  saveCustomConnection: 'whycode:save-custom-connection',
+  deleteCustomConnection: 'whycode:delete-custom-connection',
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
   /** Renderer → Main：查询当前项目目录 */

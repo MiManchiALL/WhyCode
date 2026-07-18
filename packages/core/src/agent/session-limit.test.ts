@@ -138,6 +138,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:looping',
     displayName: 'Looping Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: false,

@@ -27,8 +27,20 @@ export function estimateMessageTokens(message: ModelMessage): number {
       part.type === 'image'
       || (part.type === 'file' && part.mediaType.startsWith('image/'))
     ) {
-      // Base64 长度不是视觉 token；固定保守估计也避免图片把自动压缩误判成超窗。
-      total += 2_000
+      // Base64 长度不是视觉 token；按 2048px PDF/截图的实测量级留更保守预算。
+      total += 3_000
+      continue
+    }
+    if (part.type === 'tool-result' && part.output.type === 'content') {
+      total += estimateTextTokens(JSON.stringify({
+        ...part,
+        output: { ...part.output, value: [] },
+      }))
+      for (const item of part.output.value) {
+        total += item.type === 'file' && item.mediaType.startsWith('image/')
+          ? 3_000
+          : estimateTextTokens(JSON.stringify(item))
+      }
       continue
     }
     // 统一按 stringify 估：文本部分即正文，工具部分包含参数/结果 JSON

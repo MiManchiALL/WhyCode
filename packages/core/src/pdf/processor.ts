@@ -15,21 +15,24 @@ export interface PdfRenderedPage {
   height: number
 }
 
-export interface PdfPageReadResult {
-  pageCount: number
-  pages: PdfPageText[]
-  renderedPages: PdfRenderedPage[]
-}
-
-export interface PdfPageReadOptions {
+interface PdfPageReadOptionsBase {
   startPage: number
   pageCount: number
-  render: boolean
   /** 会话附件读取时绑定导入摘要；项目路径读取不提供。 */
   expectedSha256?: string
-  /** render=true 时必填；处理器只会在该私有目录写入页图。 */
-  outputDirectory?: string
 }
+
+export type PdfPageReadOptions =
+  | (PdfPageReadOptionsBase & { mode: 'text' })
+  | (PdfPageReadOptionsBase & {
+      mode: 'visual'
+      /** 视觉模式只会在该私有目录写入页图。 */
+      outputDirectory: string
+    })
+
+export type PdfPageReadResult =
+  | { mode: 'text'; pageCount: number; pages: PdfPageText[] }
+  | { mode: 'visual'; pageCount: number; renderedPages: PdfRenderedPage[] }
 
 /** Core 只依赖此端口；Electron 用隔离 utility process 提供实现。 */
 export interface PdfProcessor {

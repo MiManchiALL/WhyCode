@@ -173,6 +173,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:serial-tool',
     displayName: 'Serial Tool Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: false,

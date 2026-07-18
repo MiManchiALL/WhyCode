@@ -8,6 +8,7 @@ import {
   PDF_ATTACHMENT_MAX_SOURCE_BYTES,
   PDF_TEXT_MAX_CHARS,
   PDF_TEXT_MAX_PAGES,
+  PDF_VISUAL_MAX_BYTES,
   PDF_VISUAL_MAX_PAGES,
   PdfProcessingError,
   type PdfDocumentInfo,
@@ -20,6 +21,10 @@ import type { PdfWorkerRequest, PdfWorkerResult } from './protocol.ts'
 const PDF_RENDER_MAX_DIMENSION = 2_048
 const PDF_RENDER_MAX_PIXELS = 20_000_000
 const PDF_RENDER_MAX_BYTES = 20_000_000
+/** Claude Code 的分页提取路径使用 pdftoppm -jpeg -r 100。 */
+const PDF_RENDER_DPI = 100
+/** pdftoppm/libjpeg 未显式指定质量时采用的通用默认值。 */
+const PDF_RENDER_JPEG_QUALITY = 75
 
 type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs')
 type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>
@@ -52,27 +57,47 @@ export async function readPdfPages(
       )
     }
     const lastPage = Math.min(document.numPages, options.startPage + options.pageCount - 1)
-    if (options.render) await mkdir(resolve(options.outputDirectory!), { recursive: true })
+    if (options.mode === 'visual') {
+      await mkdir(resolve(options.outputDirectory), { recursive: true })
+    }
 
-    const pages = []
+    if (options.mode === 'text') {
+      const pages = []
+      for (let pageNumber = options.startPage; pageNumber <= lastPage; pageNumber += 1) {
+        const page = await document.getPage(pageNumber)
+        try {
+          const textContent = await page.getTextContent()
+          pages.push({
+            pageNumber,
+            // IPC 前先按单页封顶；Core 随后再对整批页面公平分配 60k 输出预算。
+            text: normalizePageText(textContent.items).slice(0, PDF_TEXT_MAX_CHARS),
+          })
+        } finally {
+          page.cleanup()
+        }
+      }
+      return { mode: 'text', pageCount: document.numPages, pages }
+    }
+
     const renderedPages: PdfRenderedPage[] = []
+    let totalRenderedBytes = 0
     for (let pageNumber = options.startPage; pageNumber <= lastPage; pageNumber += 1) {
       const page = await document.getPage(pageNumber)
       try {
-        const textContent = await page.getTextContent()
-        pages.push({
-          pageNumber,
-          // IPC 前先按单页封顶；Core 随后再对整批页面公平分配 60k 输出预算。
-          text: normalizePageText(textContent.items).slice(0, PDF_TEXT_MAX_CHARS),
-        })
-        if (options.render) {
-          renderedPages.push(await renderPage(page, pageNumber, options.outputDirectory!))
+        const rendered = await renderPage(page, pageNumber, options.outputDirectory)
+        totalRenderedBytes += rendered.byteLength
+        if (totalRenderedBytes > PDF_VISUAL_MAX_BYTES) {
+          throw new PdfProcessingError(
+            'too-large',
+            'PDF 页面图超过单次读取字节预算，请缩小页数后重试',
+          )
         }
+        renderedPages.push(rendered.page)
       } finally {
         page.cleanup()
       }
     }
-    return { pageCount: document.numPages, pages, renderedPages }
+    return { mode: 'visual', pageCount: document.numPages, renderedPages }
   }, options.expectedSha256)
 }
 
@@ -147,15 +172,12 @@ function validateReadOptions(options: PdfPageReadOptions): void {
   if (!Number.isInteger(options.startPage) || options.startPage < 1) {
     throw new PdfProcessingError('invalid-page-range', 'PDF 起始页必须是正整数')
   }
-  const maxPages = options.render ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_MAX_PAGES
+  const maxPages = options.mode === 'visual' ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_MAX_PAGES
   if (!Number.isInteger(options.pageCount) || options.pageCount < 1 || options.pageCount > maxPages) {
     throw new PdfProcessingError(
       'invalid-page-range',
       `本次最多读取 ${maxPages} 页 PDF`,
     )
-  }
-  if (options.render && !options.outputDirectory) {
-    throw new PdfProcessingError('unknown', '视觉读取缺少私有输出目录')
   }
   if (options.expectedSha256 && !/^[0-9a-f]{64}$/.test(options.expectedSha256)) {
     throw new PdfProcessingError('unknown', 'PDF 内容摘要格式无效')
@@ -166,11 +188,19 @@ async function renderPage(
   page: Awaited<ReturnType<PdfDocument['getPage']>>,
   pageNumber: number,
   outputDirectory: string,
-): Promise<PdfRenderedPage> {
+): Promise<{ page: PdfRenderedPage; byteLength: number }> {
   const { createCanvas } = await import('@napi-rs/canvas')
   const original = page.getViewport({ scale: 1 })
   assertFinitePageSize(original.width, original.height)
-  const scale = Math.min(3, PDF_RENDER_MAX_DIMENSION / Math.max(original.width, original.height))
+  const originalPixels = original.width * original.height
+  const scale = Math.min(
+    PDF_RENDER_DPI / 72,
+    (PDF_RENDER_MAX_DIMENSION - 1) / Math.max(original.width, original.height),
+    Math.sqrt((PDF_RENDER_MAX_PIXELS - 2 * PDF_RENDER_MAX_DIMENSION) / originalPixels),
+  )
+  if (!Number.isFinite(scale) || scale <= 0) {
+    throw new PdfProcessingError('too-large', `PDF 第 ${pageNumber} 页尺寸超过渲染上限`)
+  }
   const viewport = page.getViewport({ scale })
   const width = Math.ceil(viewport.width)
   const height = Math.ceil(viewport.height)
@@ -184,13 +214,16 @@ async function renderPage(
   context.fillStyle = '#ffffff'
   context.fillRect(0, 0, width, height)
   await page.render({ canvas: canvas as never, canvasContext: context as never, viewport }).promise
-  const png = canvas.toBuffer('image/png')
-  if (png.byteLength > PDF_RENDER_MAX_BYTES) {
+  const jpeg = canvas.encodeSync('jpeg', PDF_RENDER_JPEG_QUALITY)
+  if (jpeg.byteLength > PDF_RENDER_MAX_BYTES) {
     throw new PdfProcessingError('too-large', `PDF 第 ${pageNumber} 页渲染结果超过上限`)
   }
-  const outputPath = join(resolve(outputDirectory), `page-${String(pageNumber).padStart(4, '0')}.png`)
-  await writeFile(outputPath, png, { flag: 'wx' })
-  return { pageNumber, path: outputPath, width, height }
+  const outputPath = join(resolve(outputDirectory), `page-${String(pageNumber).padStart(4, '0')}.jpg`)
+  await writeFile(outputPath, jpeg, { flag: 'wx' })
+  return {
+    page: { pageNumber, path: outputPath, width, height },
+    byteLength: jpeg.byteLength,
+  }
 }
 
 function normalizePageText(items: unknown[]): string {

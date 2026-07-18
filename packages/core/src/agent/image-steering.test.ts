@@ -250,6 +250,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
     id: 'test:vision',
     displayName: 'Image Steering Mock',
     provider: 'openai',
+    protocol: 'openai-responses',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: true,

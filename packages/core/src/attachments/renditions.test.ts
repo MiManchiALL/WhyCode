@@ -6,10 +6,10 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import sharp from 'sharp'
 import {
-  createImageToolResultMessage,
   createImageUserMessage,
   messagesForModel,
 } from './messages.ts'
+import { attachImagesToToolResults } from './tool-results.ts'
 import { prepareImageAttachmentForModel } from './renditions.ts'
 import { importImageAttachments, inspectImage } from './storage.ts'
 import {
@@ -171,16 +171,26 @@ describe('图片模型衍生图', () => {
       const cacheNames = await readdir(join(attachmentDirectory, '.model-renditions'))
       assert.equal(cacheNames.filter((name) => name.endsWith('.v3')).length, 2)
       const [request] = await messagesForModel(
-        [createImageToolResultMessage([attachment], { detail: 'original', region })],
+        attachImagesToToolResults([toolResultMessage()], [{
+          toolCallId: 'view-image-1',
+          attachments: [attachment],
+          transform: { detail: 'original', region },
+        }]),
         true,
         attachmentDirectory,
         [attachment],
       )
-      assert.ok(request && typeof request.content !== 'string')
-      const file = request.content.find((part) => part.type === 'file')
-      assert.ok(file && typeof file.data === 'string')
+      assert.ok(request?.role === 'tool')
+      const result = request.content.find((part) => part.type === 'tool-result')
+      assert.ok(result?.type === 'tool-result' && result.output.type === 'content')
+      const file = result.output.value.find((part) => part.type === 'file')
+      assert.ok(file?.type === 'file' && file.data.type === 'data')
+      assert.equal(typeof file.data.data, 'string')
       assert.deepEqual(
-        [inspectImage(Buffer.from(file.data, 'base64')).width, inspectImage(Buffer.from(file.data, 'base64')).height],
+        [
+          inspectImage(Buffer.from(file.data.data as string, 'base64')).width,
+          inspectImage(Buffer.from(file.data.data as string, 'base64')).height,
+        ],
         [2_500, 1_000],
       )
 
@@ -196,6 +206,18 @@ describe('图片模型衍生图', () => {
     })
   })
 })
+
+function toolResultMessage() {
+  return {
+    role: 'tool' as const,
+    content: [{
+      type: 'tool-result' as const,
+      toolCallId: 'view-image-1',
+      toolName: 'ViewImage',
+      output: { type: 'text' as const, value: '已读取图片。' },
+    }],
+  }
+}
 
 async function withTempDirectory(run: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'whycode-renditions-'))

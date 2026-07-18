@@ -51,7 +51,10 @@ const KEEP_RECENT = 5
  */
 export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
   // 收集所有可清理且未清理的 tool-result 位置（消息下标 + part 下标）
-  const targets: { msgIdx: number; partIdx: number }[] = []
+  const targets: {
+    msgIdx: number
+    partIdx: number
+  }[] = []
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!
     if (msg.role !== 'tool' || typeof msg.content === 'string') continue
@@ -60,7 +63,10 @@ export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
       if (part.type !== 'tool-result') continue
       if (!COMPACTABLE_TOOLS.has(part.toolName)) continue
       if (isCleared(part)) continue
-      targets.push({ msgIdx: i, partIdx: j })
+      targets.push({
+        msgIdx: i,
+        partIdx: j,
+      })
     }
   }
   const toClear = targets.slice(0, Math.max(0, targets.length - KEEP_RECENT))
@@ -71,7 +77,6 @@ export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
     if (!clearSet.has(t.msgIdx)) clearSet.set(t.msgIdx, new Set())
     clearSet.get(t.msgIdx)!.add(t.partIdx)
   }
-
   return messages.map((msg, i) => {
     const parts = clearSet.get(i)
     if (!parts || msg.role !== 'tool' || typeof msg.content === 'string') return msg

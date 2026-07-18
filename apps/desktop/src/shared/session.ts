@@ -46,10 +46,9 @@ export type ResumeSessionResult =
     }
   | { ok: false; error: string }
 
-export interface SessionActionResult {
-  ok: boolean
-  error?: string
-}
+export type NewSessionResult =
+  | { ok: true; projectDir: string }
+  | { ok: false; error: string }
 
 export type DeleteSessionResult =
   | { ok: true; deletedCurrent: boolean }
