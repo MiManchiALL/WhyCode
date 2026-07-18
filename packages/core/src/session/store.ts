@@ -21,6 +21,7 @@ import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createTurnAbortedMessage } from './interruption.ts'
+import { attachmentValidationSignature } from './attachment-validation-cache.ts'
 import { dehydrateImageMessages } from '../attachments/messages.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import {
@@ -59,6 +60,7 @@ import {
 export class SessionStore {
   private readonly rootDir: string
   private readonly pdfProcessor: PdfProcessor | undefined
+  private readonly attachmentValidationSignatures = new Map<string, string>()
 
   constructor(rootDir: string, options: { pdfProcessor?: PdfProcessor } = {}) {
     this.rootDir = resolve(rootDir)
@@ -142,11 +144,23 @@ export class SessionStore {
         await file.close()
       }
     }
-    const loaded = await validateLoadedSessionAttachments(
-      buildLoadedSession(entries),
-      paths.attachments,
-      this.pdfProcessor,
-    )
+    let loaded = buildLoadedSession(entries)
+    const diskSignature = await attachmentValidationSignature(paths, loaded).catch(() => null)
+    if (
+      diskSignature === null
+      || this.attachmentValidationSignatures.get(sessionId) !== diskSignature
+    ) {
+      this.attachmentValidationSignatures.delete(sessionId)
+      loaded = await validateLoadedSessionAttachments(
+        loaded,
+        paths.attachments,
+        this.pdfProcessor,
+      )
+      this.attachmentValidationSignatures.set(
+        sessionId,
+        await attachmentValidationSignature(paths, loaded),
+      )
+    }
     if (loaded.metadata.sessionId !== sessionId) throw new Error('会话 ID 与目录不匹配')
     const metadata = loaded.metadata
     await writeMetadata(paths.metadata, metadata)
@@ -202,6 +216,7 @@ export class SessionStore {
 
   async delete(sessionId: string): Promise<boolean> {
     validateSessionId(sessionId)
+    this.attachmentValidationSignatures.delete(sessionId)
     const paths = this.pathsFor(sessionId)
     const deletionMarked = await hasSessionDeletionMarker(paths)
     let sessionExisted = true
@@ -229,6 +244,7 @@ export class SessionStore {
 
   async markDeleting(sessionId: string): Promise<boolean> {
     validateSessionId(sessionId)
+    this.attachmentValidationSignatures.delete(sessionId)
     const paths = this.pathsFor(sessionId)
     if (await hasSessionDeletionMarker(paths)) return true
     try {

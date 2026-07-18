@@ -22,6 +22,10 @@ export interface RuntimeSnapshot {
   checkpointRestoreToolUseId: string | null
   /** Renderer 重载时恢复主进程中的会话删除锁。 */
   deletingSessionId: string | null
+  /** Renderer 重载时恢复 Main 持有的会话恢复锁。 */
+  resumingSessionId: string | null
+  /** 当前已经原子提交的会话；恢复中的候选会话不会提前出现在这里。 */
+  sessionId: string | null
   viewEvents: ViewEvent[]
   queuedInputs: QueuedUserMessage[]
   restoredInputs: QueuedUserMessage[]

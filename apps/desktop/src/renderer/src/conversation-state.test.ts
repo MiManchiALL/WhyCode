@@ -6,6 +6,7 @@ import {
   createConversationState,
   eventsAfterRuntimeSnapshot,
   restoreRuntimeConversation,
+  resumeTargetCommitted,
 } from './conversation-state.ts'
 
 describe('会话界面时间线重建', () => {
@@ -28,6 +29,21 @@ describe('会话界面时间线重建', () => {
     ], 10)
 
     assert.deepEqual(events, [{ type: 'text-delta', text: '快照之后的新内容' }])
+  })
+
+  it('Renderer 重载后只应用 Main 已原子提交的恢复目标', () => {
+    assert.equal(resumeTargetCommitted({
+      resumingSessionId: 'target',
+      sessionId: 'current',
+    }, 'target'), false)
+    assert.equal(resumeTargetCommitted({
+      resumingSessionId: null,
+      sessionId: 'target',
+    }, 'target'), true)
+    assert.equal(resumeTargetCommitted({
+      resumingSessionId: null,
+      sessionId: 'current',
+    }, 'target'), false)
   })
 
   it('按原顺序恢复用户、思考、工具、候选和 B/C 卡片', () => {

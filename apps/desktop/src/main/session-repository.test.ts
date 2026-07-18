@@ -11,7 +11,7 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
-describe('DesktopSessionRepository 删除语义', () => {
+describe('DesktopSessionRepository 生命周期', () => {
   it('并发确保首次会话时只创建一个 journal', async () => {
     const repository = await createRepository()
 
@@ -39,6 +39,29 @@ describe('DesktopSessionRepository 删除语义', () => {
     const current = await repository.ensure('C:\\work\\shared', 'test:model')
 
     assert.equal(await repository.delete(historical.sessionId), true)
+    assert.equal(repository.currentSessionId, current.sessionId)
+  })
+
+  it('候选会话只有显式 activate 后才替换当前会话', async () => {
+    const repository = await createRepository()
+    const first = await repository.ensure('C:\\work\\one', 'test:model')
+    repository.reset()
+    const second = await repository.ensure('C:\\work\\two', 'test:model')
+    repository.reset()
+    repository.activate(first)
+
+    const candidate = await repository.prepareResume(second.sessionId)
+    assert.equal(repository.currentSessionId, first.sessionId)
+
+    repository.activate(candidate)
+    assert.equal(repository.currentSessionId, second.sessionId)
+  })
+
+  it('候选会话打开失败时保留当前会话', async () => {
+    const repository = await createRepository()
+    const current = await repository.ensure('C:\\work\\one', 'test:model')
+
+    await assert.rejects(repository.prepareResume('not-a-session'), /无效会话 ID/)
     assert.equal(repository.currentSessionId, current.sessionId)
   })
 })
