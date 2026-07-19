@@ -6,18 +6,14 @@ import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
   it('打开项目时仍允许处理非编程问题', () => {
-    const before = new Date()
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
       homeDir: 'C:\\Users\\tester',
     })
-    const after = new Date()
 
     assert.match(prompt, /通用型桌面 AI Agent/)
-    const dateMatch = prompt.match(/# 当前日期\n- 本机本地日期：(\d{4}-\d{2}-\d{2})/u)
-    assert.ok(dateMatch)
-    assert.equal(new Set([localDate(before), localDate(after)]).has(dateMatch[1]!), true)
+    assert.doesNotMatch(prompt, /当前日期|当前本机时间/)
     assert.match(prompt, /尤其擅长代码编写、代码理解、调试及其他编程相关任务/)
     assert.doesNotMatch(prompt, /软件开发是你的核心专长/)
     assert.match(prompt, /非项目问题直接回答/)
@@ -29,6 +25,16 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /DeleteFile\/MoveFile/)
     assert.match(prompt, /开发服务器、watch、长测试.*StartCommand/)
     assert.doesNotMatch(prompt, /只讨论与用户项目和编程相关/)
+  })
+
+  it('系统提示词不含动态时间并保持稳定', () => {
+    const context = {
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32' as const,
+    }
+
+    assert.equal(buildSystemPrompt(context), buildSystemPrompt(context))
+    assert.doesNotMatch(buildSystemPrompt(context), /\d{4}-\d{2}-\d{2}/u)
   })
 
   it('协商讨论阶段不向模型宣传已物理移除的后台命令工具', () => {
@@ -112,11 +118,3 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /FastAPI 演示项目/)
   })
 })
-
-function localDate(date: Date): string {
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0'),
-  ].join('-')
-}

@@ -11,6 +11,10 @@ import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
+import {
+  createCurrentTimeReminder,
+  shouldRefreshCurrentTimeReminder,
+} from '../prompts/current-time.ts'
 import { checkInitialToolApproval, checkToolPermission } from '../permissions/engine.ts'
 import { CheckpointManager } from '../checkpoints/manager.ts'
 import { autoCompactThreshold, estimateContextTokens, type TokenBaseline } from '../context/tokens.ts'
@@ -689,6 +693,7 @@ export class AgentSession {
       let steeringDecisionPending = false
       let stepsSincePlanMutation = 0
       let stepsSincePlanReminder = 0
+      let currentTimeReminderAt: Date | null = null
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
       // 只有稳定提交 Create/Replace/Resume，或回答计划自身的问题卡，才启用未完成保护。
       while (maxSteps === null || steps < maxSteps) {
@@ -706,6 +711,11 @@ export class AgentSession {
           await this.injectStepLimitReminder()
         }
         await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
+        const currentTime = new Date()
+        const refreshCurrentTime = shouldRefreshCurrentTimeReminder(
+          currentTimeReminderAt,
+          currentTime,
+        )
         const step = await this.runOneStep(
           usage,
           abortSignal,
@@ -714,7 +724,9 @@ export class AgentSession {
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
             && !this.protocolRound,
+          refreshCurrentTime ? currentTime : null,
         )
+        if (refreshCurrentTime && step.committed) currentTimeReminderAt = currentTime
         const steeringMayEndRun = steeringDecisionPending && !step.hadToolCalls
         // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
         // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
@@ -761,6 +773,7 @@ export class AgentSession {
             break
           }
           await this.injectQueuedMidTurn()
+          currentTimeReminderAt = null
           steeringDecisionPending = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
@@ -1151,6 +1164,7 @@ export class AgentSession {
     turnAbortSignal: AbortSignal,
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
+    currentTime: Date | null,
   ): Promise<StepResult> {
     if (this.options.sessionRecorder && this.persistenceFailed) {
       throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
@@ -1186,10 +1200,17 @@ export class AgentSession {
     let taskPlanFinalized = false
     this.taskPlan?.beginStep()
     try {
+      const currentTimeReminder = currentTime
+        ? createCurrentTimeReminder(currentTime)
+        : null
+      const modelInputMessages = currentTimeReminder
+        ? [...this.messages, currentTimeReminder]
+        : this.messages
+      const modelInputMessageCount = modelInputMessages.length
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
-        messages: await this.messagesForCurrentModel(this.messages, stepAbort.signal),
+        messages: await this.messagesForCurrentModel(modelInputMessages, stepAbort.signal),
         tools: this.buildToolSet(
           stepAbort.signal,
           planExecutionEngaged,
@@ -1328,6 +1349,7 @@ export class AgentSession {
       })
       const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
       const committedMessages = dehydrateImageMessages([
+        ...(currentTimeReminder ? [currentTimeReminder] : []),
         ...attachImagesToToolResults(response.messages, orderedImageResults),
         ...internalMarkers,
       ])
@@ -1363,9 +1385,10 @@ export class AgentSession {
           message.role !== 'assistant')
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
-          // usage 含本次 assistant 输出，不含宿主随后追加的 tool result、页面图和控制标记。
+          // usage 覆盖模型输入（含本步时间提醒）和 assistant 输出，
+          // 不含宿主随后追加的 tool result、页面图和控制标记。
           coveredMessageCount:
-            this.messages.length - committedMessages.length
+            modelInputMessageCount
             + (responseCoveredCount < 0 ? response.messages.length : responseCoveredCount),
         }
       }
