@@ -11,8 +11,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
+    "@mozilla/readability": "0.6.0",
     "@napi-rs/canvas": "1.0.2",
     "@whycode/core": "workspace:*",
+    "ipaddr.js": "2.4.0",
+    "linkedom": "0.18.13",
+    "node-html-markdown": "2.0.0",
     "pdfjs-dist": "6.1.200",
     "streamdown": "^2.5.0"
   },

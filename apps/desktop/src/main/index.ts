@@ -8,6 +8,8 @@ import {
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
+  createWebFetchTool,
+  createWebFindTool,
   createWebSearchTool,
   getModelEntry,
   type ApprovalRequest,
@@ -71,6 +73,12 @@ import type {
 import { createPerplexitySearchHandler } from './web-search/perplexity.ts'
 import { updateWebSearchSettings } from './web-search-settings.ts'
 import {
+  createElectronWebHostResolver,
+  createElectronWebPageFetch,
+} from './web-page/electron-fetch.ts'
+import { createWebDocumentFetcher } from './web-page/network.ts'
+import { createWebPageReader } from './web-page/reader.ts'
+import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
 } from './image-protocol.ts'
@@ -94,6 +102,21 @@ const webSearchTool = createWebSearchTool({
     fetchImpl: (input, init) => net.fetch(input, init),
   }),
 })
+
+function createSessionWebPageTools() {
+  const fetchImpl = createElectronWebPageFetch((options) => net.request(options))
+  const fetchDocument = createWebDocumentFetcher({
+    fetchImpl,
+    // 预检与实际请求共用 Chromium 的解析缓存和网络栈；重定向仍逐跳重新校验。
+    resolveHost: createElectronWebHostResolver((hostname, options) =>
+      net.resolveHost(hostname, options)),
+  })
+  const reader = createWebPageReader({ fetchDocument })
+  return [
+    createWebFetchTool({ fetchPage: reader.fetchPage }),
+    createWebFindTool({ findInPage: reader.findInPage }),
+  ]
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -266,6 +289,7 @@ function createMainAgentSession(
     mainTools: [
       ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
       webSearchTool,
+      ...createSessionWebPageTools(),
     ],
     captureScreenshot: captureDesktopScreenshot,
     pdfProcessor,
