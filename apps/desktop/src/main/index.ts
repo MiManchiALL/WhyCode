@@ -40,6 +40,7 @@ import {
   updateProviderSettings,
 } from './model-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
+import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionResumeLock } from './session-resume-lock.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
@@ -159,8 +160,8 @@ let conversationId = `conv-${Date.now()}`
 let sessions: DesktopSessionRepository
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
-/** 会话删除跨多个存储，必须在主进程内单飞并阻止新输入/切换。 */
-let sessionDeletionId: string | null = null
+/** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
+const sessionDeletionLock = new SessionDeletionLock()
 /** 历史会话完整校验与候选运行时构造期间，只允许一个恢复事务。 */
 const sessionResumeLock = new SessionResumeLock()
 /** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
@@ -331,7 +332,7 @@ function createCoordinator(
 }
 
 async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
-  if (sessionDeletionId) {
+  if (sessionDeletionLock.blocksRuntime) {
     broadcastEvent({
       type: 'error',
       message: '会话数据删除中，请等待完成后再操作',
@@ -582,7 +583,7 @@ function reportUserMessageDeliveryError(error: unknown): void {
 
 function runtimeBusy(): boolean {
   return Boolean(
-    sessionDeletionId
+    sessionDeletionLock.blocksRuntime
     || sessionResumeLock.sessionId
     || attachmentPreparationInProgress
     || settingsMutationInProgress
@@ -738,14 +739,16 @@ function runtimeSnapshot(): RuntimeSnapshot {
     projectDir,
     modelId: resolveCurrentModelId(),
     permissionMode: pendingPermissionMode ?? 'default',
-    status: sessionDeletionId
+    status: sessionDeletionLock.blocksRuntime
       ? 'working'
       : busy && currentAgentStatus === 'idle' && !checkpointRestoreToolUseId
         ? 'working'
         : currentAgentStatus,
     busy,
     checkpointRestoreToolUseId,
-    deletingSessionId: sessionDeletionId,
+    deletingSessionId: sessionDeletionLock.blocksRuntime
+      ? sessionDeletionLock.sessionId
+      : null,
     resumingSessionId: sessionResumeLock.sessionId,
     sessionId: journal?.sessionId ?? null,
     viewEvents: journal ? [...journal.initialViewEvents] : [],
@@ -757,10 +760,10 @@ function runtimeSnapshot(): RuntimeSnapshot {
 }
 
 async function startNewSession(): Promise<NewSessionResult> {
-  if (runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || runtimeBusy()) {
     return {
       ok: false,
-      error: sessionDeletionId
+      error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再新建会话'
         : sessionResumeLock.sessionId
           ? resumeInProgressMessage('新建会话')
@@ -776,10 +779,10 @@ async function startNewSession(): Promise<NewSessionResult> {
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || runtimeBusy()) {
     const result: ResumeSessionResult = {
       ok: false,
-      error: sessionDeletionId
+      error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再恢复会话'
         : sessionResumeLock.sessionId
           ? resumeInProgressMessage('恢复其它会话')
@@ -932,10 +935,10 @@ function pendingInputs(
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-  if (runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || runtimeBusy()) {
     return {
       ok: false,
-      error: sessionDeletionId
+      error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
         : sessionResumeLock.sessionId
           ? resumeInProgressMessage('删除会话')
@@ -947,8 +950,9 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   const deletedCurrent = sessions.currentSessionId === sessionId
   const statusBeforeDeletion = currentAgentStatus
   let detachedCurrent = false
-  sessionDeletionId = sessionId
-  broadcastEvent({ type: 'agent-status', status: 'working' }, false)
+  const releaseDeletion = sessionDeletionLock.acquire(sessionId, deletedCurrent)
+  if (!releaseDeletion) return { ok: false, error: '已有会话正在删除，请等待完成' }
+  if (deletedCurrent) broadcastEvent({ type: 'agent-status', status: 'working' }, false)
   try {
     const deleted = await deleteSessionArtifacts({
       sessionId,
@@ -971,11 +975,13 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       deletedCurrent: detachedCurrent || undefined,
     }
   } finally {
-    sessionDeletionId = null
-    broadcastEvent({
-      type: 'agent-status',
-      status: detachedCurrent ? 'idle' : statusBeforeDeletion,
-    }, false)
+    releaseDeletion()
+    if (deletedCurrent) {
+      broadcastEvent({
+        type: 'agent-status',
+        status: detachedCurrent ? 'idle' : statusBeforeDeletion,
+      }, false)
+    }
   }
 }
 
@@ -1054,10 +1060,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
     return openPdfAttachment(sessions.journal, attachmentId, (path) => shell.openPath(path))
   })
   ipcMain.handle(IPC.pickProjectDir, async () => {
-    if (runtimeBusy()) {
+    if (sessionDeletionLock.sessionId || runtimeBusy()) {
       broadcastEvent({
         type: 'error',
-        message: sessionDeletionId
+        message: sessionDeletionLock.sessionId
           ? '会话数据删除中，请等待完成后再切换工作文件夹'
           : sessionResumeLock.sessionId
             ? resumeInProgressMessage('切换工作文件夹')
@@ -1087,14 +1093,16 @@ if (primaryInstance) void app.whenReady().then(async () => {
       return null
     }
     // 目录选择框打开期间也可能从其它入口启动任务；提交切换前必须再次权威检查。
-    if (runtimeBusy()) {
+    if (sessionDeletionLock.sessionId || runtimeBusy()) {
       broadcastEvent({
         type: 'error',
-        message: sessionResumeLock.sessionId
-          ? '会话恢复已经开始，工作文件夹切换已取消；请等待完成后重试'
-          : session?.checkpointRestoreToolUseId
-            ? '文件回滚已经开始，工作文件夹切换已取消；请等待完成后重试'
-            : '当前操作已经开始，工作文件夹切换已取消；请停止后重试',
+        message: sessionDeletionLock.sessionId
+          ? '会话删除已经开始，工作文件夹切换已取消；请等待完成后重试'
+          : sessionResumeLock.sessionId
+            ? '会话恢复已经开始，工作文件夹切换已取消；请等待完成后重试'
+            : session?.checkpointRestoreToolUseId
+              ? '文件回滚已经开始，工作文件夹切换已取消；请等待完成后重试'
+              : '当前操作已经开始，工作文件夹切换已取消；请停止后重试',
         recoverable: true,
       }, sessionResumeLock.sessionId === null)
       return null

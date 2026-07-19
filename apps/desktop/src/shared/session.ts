@@ -20,7 +20,7 @@ export interface RuntimeSnapshot {
   busy: boolean
   /** 正在回滚的工具调用；用于 Renderer 重载后恢复不可取消的回滚活动态。 */
   checkpointRestoreToolUseId: string | null
-  /** Renderer 重载时恢复主进程中的会话删除锁。 */
+  /** Renderer 重载时恢复会阻塞当前运行时的当前会话删除；历史删除不占用运行时。 */
   deletingSessionId: string | null
   /** Renderer 重载时恢复 Main 持有的会话恢复锁。 */
   resumingSessionId: string | null

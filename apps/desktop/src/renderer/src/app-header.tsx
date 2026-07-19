@@ -10,6 +10,7 @@ interface ConsensusStatus {
 interface AppHeaderProps {
   projectDir: string | null
   busy: boolean
+  sessionChangeLocked: boolean
   permissionLocked: boolean
   consensus: ConsensusStatus
   permMode: PermissionMode
@@ -33,7 +34,7 @@ export function AppHeader(props: AppHeaderProps) {
         <button
           className="max-w-96 truncate rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:border-neutral-500"
           onClick={props.onPickProject}
-          disabled={props.busy}
+          disabled={props.busy || props.sessionChangeLocked}
           title={props.projectDir ? `当前工作文件夹：${props.projectDir}` : '正在准备默认工作文件夹'}
         >
           {props.projectDir ?? '📁 工作文件夹'}
@@ -50,7 +51,7 @@ export function AppHeader(props: AppHeaderProps) {
         <button
           className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
           onClick={props.onNewSession}
-          disabled={props.busy}
+          disabled={props.busy || props.sessionChangeLocked}
         >
           ＋ 新会话
         </button>

@@ -28,6 +28,7 @@ import {
 } from './consensus-blocks.tsx'
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
+import { isCurrentSessionDeletion } from './session-deletion-state.ts'
 import { TaskPlanCard } from './task-plan-card.tsx'
 import { ModelSettingsPanel } from './model-settings-panel.tsx'
 import {
@@ -84,6 +85,7 @@ export function App() {
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [showSessions, setShowSessions] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
   const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
@@ -92,6 +94,7 @@ export function App() {
   const questionSubmittingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
   const ownsResumeRequestRef = useRef(false)
+  const deletionBlocksRuntimeRef = useRef(false)
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
@@ -121,6 +124,11 @@ export function App() {
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     resumingSessionIdRef.current = sessionId
     setResumingSessionIdState(sessionId)
+  }, [])
+
+  const setDeletionBlocksRuntime = useCallback((blocked: boolean) => {
+    deletionBlocksRuntimeRef.current = blocked
+    setDeletionBlocksRuntimeState(blocked)
   }, [])
 
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
@@ -193,6 +201,7 @@ export function App() {
     setPermMode(snapshot.permissionMode)
     setStatus(snapshot.status)
     setDeletingSessionId(snapshot.deletingSessionId)
+    setDeletionBlocksRuntime(Boolean(snapshot.deletingSessionId))
     setResumingSessionId(snapshot.resumingSessionId)
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
     setStopping(false)
@@ -202,7 +211,7 @@ export function App() {
     setRestoredSubmissionPending(false)
     setApproval(snapshot.approval)
     setModelId(snapshot.modelId ?? '')
-  }, [setResumingSessionId])
+  }, [setDeletionBlocksRuntime, setResumingSessionId])
 
   const synchronizeUnownedResume = useCallback(async () => {
     const targetSessionId = resumingSessionIdRef.current
@@ -235,7 +244,10 @@ export function App() {
         setStatus(event.status)
         if (event.status === 'idle' || event.status === 'error') {
           setStopping(false)
-          setDeletingSessionId(null)
+          if (deletionBlocksRuntimeRef.current) {
+            setDeletingSessionId(null)
+            setDeletionBlocksRuntime(false)
+          }
         }
         if (event.status === 'idle') setNegoStatus(null)
         if (
@@ -295,7 +307,7 @@ export function App() {
       default:
         break
     }
-  }, [refreshSessions, restoreQueuedDrafts, synchronizeUnownedResume])
+  }, [refreshSessions, restoreQueuedDrafts, setDeletionBlocksRuntime, synchronizeUnownedResume])
 
   useEffect(() => {
     void window.whycode.listModels().then(setModels)
@@ -356,14 +368,15 @@ export function App() {
   const busy = status !== 'idle' && status !== 'error'
   const interactionBusy = busy
     || attachmentSubmissionPending
-    || deletingSessionId !== null
+    || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
   const attachmentLocked = stopping
     || attachmentSubmissionPending
-    || deletingSessionId !== null
+    || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
+  const sessionChangeLocked = deletingSessionId !== null
 
   const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
     setCheckpointRestoreToolUseId((current) =>
@@ -409,6 +422,7 @@ export function App() {
     setRestoredSubmissionPending(false)
     setApproval(null)
     setStatus('idle')
+    setDeletionBlocksRuntime(false)
     setStopping(false)
     setAttachmentSubmissionPending(false)
     ownsResumeRequestRef.current = false
@@ -419,7 +433,7 @@ export function App() {
     clearPdfDrafts()
     stickToBottom.current = true
     setShowJumpBottom(false)
-  }, [clearImageDrafts, clearPdfDrafts, setResumingSessionId])
+  }, [clearImageDrafts, clearPdfDrafts, setDeletionBlocksRuntime, setResumingSessionId])
 
   const stop = useCallback(() => {
     if (stopping) return
@@ -494,7 +508,9 @@ export function App() {
     if (!window.confirm(
       '将永久删除这个会话的对话、任务状态、检查点、后台命令记录和临时数据；不会修改项目文件。确定继续？',
     )) return
+    const deletesCurrent = isCurrentSessionDeletion(sessions, sessionId)
     setDeletingSessionId(sessionId)
+    setDeletionBlocksRuntime(deletesCurrent)
     void window.whycode.deleteSession(sessionId).then((result) => {
       if (result.deletedCurrent) {
         resetView()
@@ -507,9 +523,17 @@ export function App() {
       addError('删除会话失败，请重试')
     }).finally(() => {
       setDeletingSessionId(null)
+      setDeletionBlocksRuntime(false)
       void refreshSessions()
     })
-  }, [addError, deletingSessionId, refreshSessions, resetView])
+  }, [
+    addError,
+    deletingSessionId,
+    refreshSessions,
+    resetView,
+    sessions,
+    setDeletionBlocksRuntime,
+  ])
 
   const compact = useCallback(() => {
     setView((previous) =>
@@ -564,7 +588,7 @@ export function App() {
   const send = useCallback((urgent = false) => {
     if (
       stopping
-      || deletingSessionId
+      || deletionBlocksRuntime
       || resumingSessionId
       || checkpointRestoreToolUseId
       || attachmentSubmissionPending
@@ -626,7 +650,7 @@ export function App() {
     addError,
     attachmentSubmissionPending,
     checkpointRestoreToolUseId,
-    deletingSessionId,
+    deletionBlocksRuntime,
     detachImageDrafts,
     detachPdfDrafts,
     imageDrafts.length,
@@ -724,7 +748,8 @@ export function App() {
       <AppHeader
         projectDir={projectDir}
         busy={interactionBusy}
-        permissionLocked={deletingSessionId !== null || resumingSessionId !== null}
+        sessionChangeLocked={sessionChangeLocked}
+        permissionLocked={deletionBlocksRuntime || resumingSessionId !== null}
         consensus={consensus}
         permMode={permMode}
         models={models}
@@ -756,7 +781,8 @@ export function App() {
           sessions={sessions}
           error={sessionListError}
           actionError={sessionActionError}
-          busy={interactionBusy}
+          busy={interactionBusy || deletingSessionId !== null}
+          deletingSessionId={deletingSessionId}
           resumingSessionId={resumingSessionId}
           onClose={() => setShowSessions(false)}
           onResume={resumeSession}
@@ -869,7 +895,7 @@ export function App() {
             onPaste={pasteAttachments}
             disabled={
               stopping
-              || deletingSessionId !== null
+              || deletionBlocksRuntime
               || resumingSessionId !== null
               || checkpointRestoreToolUseId !== null
             }
@@ -881,8 +907,8 @@ export function App() {
             placeholder={
               stopping
                 ? '正在停止当前任务并清理子进程…'
-                : deletingSessionId
-                  ? '正在删除会话及其关联数据…'
+                : deletionBlocksRuntime
+                  ? '正在删除当前会话及其关联数据…'
                 : resumingSessionId
                   ? '正在验证附件并恢复会话…'
                 : checkpointRestoreToolUseId
@@ -896,7 +922,7 @@ export function App() {
                       : '正在准备工作文件夹…'
             }
           />
-          {busy && deletingSessionId === null && resumingSessionId === null && (
+          {busy && !deletionBlocksRuntime && resumingSessionId === null && (
             <button
               className="rounded-md border border-neutral-300 px-4 py-2 text-sm disabled:opacity-40"
               onClick={stop}
@@ -905,7 +931,7 @@ export function App() {
               {stopping ? '停止中…' : '停止'}
             </button>
           )}
-          {busy && deletingSessionId === null && resumingSessionId === null && (
+          {busy && !deletionBlocksRuntime && resumingSessionId === null && (
             <button
               className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
               onClick={() => send(true)}
@@ -925,7 +951,7 @@ export function App() {
             disabled={
               stopping
               || attachmentSubmissionPending
-              || deletingSessionId !== null
+              || deletionBlocksRuntime
               || resumingSessionId !== null
               || checkpointRestoreToolUseId !== null
               || (!input.trim() && imageDrafts.length === 0 && pdfDrafts.length === 0)

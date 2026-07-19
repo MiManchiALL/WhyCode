@@ -6,6 +6,7 @@ interface SessionPanelProps {
   error: string | null
   actionError: string | null
   busy: boolean
+  deletingSessionId: string | null
   resumingSessionId: string | null
   onClose: () => void
   onResume: (sessionId: string) => void
@@ -51,6 +52,7 @@ export function SessionPanel(props: SessionPanelProps) {
                 key={session.sessionId}
                 session={session}
                 busy={props.busy}
+                deleting={session.sessionId === props.deletingSessionId}
                 restoring={session.sessionId === props.resumingSessionId}
                 onResume={props.onResume}
                 onDelete={props.onDelete}
@@ -66,12 +68,14 @@ export function SessionPanel(props: SessionPanelProps) {
 function SessionRow({
   session,
   busy,
+  deleting,
   restoring,
   onResume,
   onDelete,
 }: {
   session: SessionListItem
   busy: boolean
+  deleting: boolean
   restoring: boolean
   onResume: (sessionId: string) => void
   onDelete: (sessionId: string) => void
@@ -102,6 +106,11 @@ function SessionRow({
           {restoring && (
             <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-700">
               恢复中
+            </span>
+          )}
+          {deleting && (
+            <span className="shrink-0 rounded bg-red-50 px-1.5 py-0.5 text-[11px] text-red-600">
+              删除中
             </span>
           )}
           {!session.resumable && (
