@@ -107,8 +107,9 @@ describe('WebSearch Agent 链路', () => {
     assert.equal(modelCalls, 2)
     assert.deepEqual(
       events
-        .filter((event) => event.type === 'tool-end' && event.isError)
-        .map((event) => event.toolUseId)
+        .flatMap((event) => event.type === 'tool-end' && event.isError
+          ? [event.toolUseId]
+          : [])
         .sort(),
       ['search-parallel-1', 'search-parallel-2'],
     )

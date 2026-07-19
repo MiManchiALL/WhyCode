@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron'
 import { realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -90,6 +90,8 @@ function loadAppConfig() {
 const webSearchTool = createWebSearchTool({
   search: createPerplexitySearchHandler({
     getApiKey: () => loadAppConfig()?.webSearch?.perplexity?.apiKey,
+    // Chromium 网络栈继承系统代理；Node fetch 会绕过 Windows 代理设置。
+    fetchImpl: (input, init) => net.fetch(input, init),
   }),
 })
 

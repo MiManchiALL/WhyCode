@@ -12,7 +12,7 @@ const MAX_RESPONSE_BYTES = 2_000_000
 
 export interface PerplexitySearchOptions {
   getApiKey: () => string | undefined
-  fetchImpl?: typeof fetch
+  fetchImpl?: (input: string, init: RequestInit) => Promise<Response>
   timeoutMs?: number
 }
 
