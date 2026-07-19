@@ -6,6 +6,7 @@ import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import {
   WEB_SEARCH_TOOL_NAME,
+  WebSearchError,
   createWebSearchTool,
   type WebSearchRequest,
 } from '../tools/web-search/index.ts'
@@ -72,6 +73,44 @@ describe('WebSearch Agent 链路', () => {
       2,
     )
   })
+
+  it('同一步的并行搜索失败都会收尾，并暂停而不是换关键词重试', async () => {
+    const events: CoreEvent[] = []
+    let modelCalls = 0
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        modelCalls++
+        assert.equal(modelCalls, 1, '搜索错误后不应再次请求模型')
+        return parallelToolStep()
+      },
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: null, osPlatform: 'win32' },
+      mainTools: [createWebSearchTool({
+        search: async () => {
+          throw new WebSearchError('尚未配置网页搜索密钥')
+        },
+      })],
+      emit: (event) => events.push(event),
+      requestApproval: async () => ({ approved: true, remember: true }),
+    })
+
+    assert.equal(await session.handleUserMessage('搜索今天的热点'), 'paused')
+    assert.equal(modelCalls, 1)
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === 'tool-end')
+        .map((event) => event.toolUseId)
+        .sort(),
+      ['search-parallel-1', 'search-parallel-2'],
+    )
+    assert.equal(
+      events.findLast((event) => event.type === 'agent-status')?.status,
+      'idle',
+    )
+  })
 })
 
 function toolStep(query: string, toolCallId: string) {
@@ -83,6 +122,32 @@ function toolStep(query: string, toolCallId: string) {
           toolCallId,
           toolName: WEB_SEARCH_TOOL_NAME,
           input: JSON.stringify({ query, max_results: 5 }),
+        },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function parallelToolStep() {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: 'tool-call' as const,
+          toolCallId: 'search-parallel-1',
+          toolName: WEB_SEARCH_TOOL_NAME,
+          input: JSON.stringify({ query: '今日热点新闻', max_results: 8 }),
+        },
+        {
+          type: 'tool-call' as const,
+          toolCallId: 'search-parallel-2',
+          toolName: WEB_SEARCH_TOOL_NAME,
+          input: JSON.stringify({ query: '热搜榜 今天', max_results: 8 }),
         },
         {
           type: 'finish' as const,

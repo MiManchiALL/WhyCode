@@ -26,7 +26,7 @@ export function createPerplexitySearchHandler(
       const apiKey = options.getApiKey()?.trim()
       if (!apiKey) {
         throw new WebSearchError(
-          '尚未配置 Perplexity Search API key，请在“模型设置 → 网页搜索”中配置',
+          '尚未配置 Perplexity Search API key，请在“⚙ 连接 → 网页搜索”中配置',
         )
       }
       const response = await (options.fetchImpl ?? fetch)(PERPLEXITY_SEARCH_ENDPOINT, {

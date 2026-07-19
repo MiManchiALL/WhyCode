@@ -84,6 +84,7 @@ export function createWebSearchTool(options: { search: WebSearchHandler }) {
     isReadOnly: true,
     kind: 'read',
     availableWithoutProject: true,
+    endsTurnOnError: true,
     initialApprovalReason: '网页搜索会把本次搜索词发送给已配置的外部搜索服务',
     async execute(input, ctx) {
       try {

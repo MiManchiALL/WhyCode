@@ -105,6 +105,7 @@ describe('WebSearch 工具契约', () => {
     const tool = createWebSearchTool({ search: async () => ({ results: [] }) })
     assert.equal(tool.availableWithoutProject, true)
     assert.equal(tool.isReadOnly, true)
+    assert.equal(tool.endsTurnOnError, true)
     assert.match(tool.initialApprovalReason ?? '', /搜索词.*外部搜索服务/)
   })
 })

@@ -156,11 +156,15 @@ interface StepResult {
   hadToolCalls: boolean
   /** 仅保存既有计划进度，不代表模型决定忽略最新 steering 继续实质执行。 */
   hadOnlyTaskProgressUpdates: boolean
-  toolEndReason: 'completed' | 'waiting-user' | null
+  toolEndReason: 'completed' | 'waiting-user' | 'paused' | null
   taskPlanChanged: boolean
   taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
 }
+
+type ToolAuthorization =
+  | { approved: true; approvedPaths: string[] }
+  | { approved: false; message: string }
 
 /**
  * Agent 会话（M2-a：自持外层循环 + steering 消息队列）。
@@ -212,6 +216,8 @@ export class AgentSession {
   private loopHealth = new LoopHealthMonitor()
   /** 非只读工具的会话级串行尾链：审批、检查点与执行必须属于同一临界区。 */
   private serialToolTail: Promise<void> = Promise.resolve()
+  /** 审批判定串行重算，避免并行工具覆盖唯一的用户审批入口。 */
+  private toolApprovalTail: Promise<void> = Promise.resolve()
   /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
   private userQuestionsEnabled = true
   /** 完整共识任务期间由 Coordinator 持有最终 idle，避免 Main 与任务终点之间出现假空闲。 */
@@ -462,6 +468,57 @@ export class AgentSession {
       () => undefined,
     )
     return result
+  }
+
+  private enqueueToolApproval<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.toolApprovalTail.then(operation, operation)
+    this.toolApprovalTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  private authorizeTool(
+    def: ToolDefinition,
+    input: Record<string, unknown>,
+    toolCtx: ToolContext,
+    toolCallId: string,
+  ): Promise<ToolAuthorization> {
+    return this.enqueueToolApproval(async () => {
+      if (toolCtx.abortSignal.aborted) {
+        return { approved: false, message: '操作已取消' }
+      }
+      const projectDir = this.options.promptContext.projectDir
+      const decision = checkInitialToolApproval(def, this.permissions)
+        ?? (!projectDir && def.availableWithoutProject
+          ? ({ behavior: 'allow' } as const)
+          : checkToolPermission(def, input, this.permissions))
+      if (decision.behavior === 'deny') {
+        return { approved: false, message: `操作被拒绝：${decision.reason}` }
+      }
+      if (decision.behavior === 'allow') {
+        return { approved: true, approvedPaths: [] }
+      }
+
+      const { emit, requestApproval } = this.options
+      emit({ type: 'agent-status', status: 'waiting-approval' })
+      const diff = await def.renderDiff?.(input, toolCtx).catch(() => undefined)
+      const response = await requestApproval({
+        requestId: toolCallId,
+        toolName: def.name,
+        input,
+        reason: decision.reason,
+        diff,
+        suggestion: decision.suggestion,
+      })
+      emit({ type: 'agent-status', status: 'working' })
+      if (!response.approved) {
+        return { approved: false, message: `用户拒绝了此操作（${decision.reason}）` }
+      }
+      if (response.remember && decision.suggestion) this.applySuggestion(decision.suggestion)
+      return { approved: true, approvedPaths: def.extractPaths?.(input) ?? [] }
+    })
   }
 
   /** 不能安全自动接续时，排队消息弹回输入框，不静默丢弃。 */
@@ -1370,7 +1427,7 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     onTaskPlanEngagement: (action: TaskPlanEngagementAction) => void,
     onUserQuestion: (question: UserQuestion) => void,
-    onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
+    onTurnEndingTool: (reason: 'completed' | 'waiting-user' | 'paused') => void,
     onImageAttachments: (
       toolCallId: string,
       attachments: readonly ImageAttachment[],
@@ -1468,7 +1525,7 @@ export class AgentSession {
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
     if (defs.length === 0) return undefined
 
-    const { emit, requestApproval } = this.options
+    const { emit } = this.options
     const toolSet: ToolSet = {}
     let firstStepToolName: string | null = null
     let standaloneStepToolName: string | null = null
@@ -1504,50 +1561,24 @@ export class AgentSession {
         }
         emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
 
-        // 权限判定链（文档一 §3.2）
-        const decision = checkInitialToolApproval(def, this.permissions)
-          ?? (!projectDir && def.availableWithoutProject
-            ? ({ behavior: 'allow' } as const)
-            : checkToolPermission(def, parsed.data, this.permissions))
-        if (decision.behavior === 'deny') {
-          const msg = `操作被拒绝：${decision.reason}`
+        // 判定与交互必须共用一条队列；前一审批记住的授权会由后一调用重新读取。
+        const authorization = await this.authorizeTool(def, parsed.data, toolCtx, toolCallId)
+        if (!authorization.approved) {
+          const msg = authorization.message
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
           this.loopHealth.record(def.name, parsed.data, msg, true)
           return msg
         }
-        if (decision.behavior === 'ask') {
-          emit({ type: 'agent-status', status: 'waiting-approval' })
-          const diff = await def.renderDiff?.(parsed.data, toolCtx).catch(() => undefined)
-          const response = await requestApproval({
-            requestId: toolCallId,
-            toolName: def.name,
-            input: parsed.data,
-            reason: decision.reason,
-            diff,
-            suggestion: decision.suggestion,
-          })
-          emit({ type: 'agent-status', status: 'working' })
-          if (!response.approved) {
-            const msg = `用户拒绝了此操作（${decision.reason}）`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, parsed.data, msg, true)
-            return msg
-          }
-          const approvedPaths = def.extractPaths?.(parsed.data) ?? []
-          if (approvedPaths.length > 0) {
-            // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
-            toolCtx = {
-              ...toolCtx,
-              additionalDirs: [
-                ...toolCtx.additionalDirs,
-                ...approvedPaths.map((path) =>
-                  isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
-                ),
-              ],
-            }
-          }
-          if (response.remember && decision.suggestion) {
-            this.applySuggestion(decision.suggestion)
+        if (authorization.approvedPaths.length > 0) {
+          // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
+          toolCtx = {
+            ...toolCtx,
+            additionalDirs: [
+              ...toolCtx.additionalDirs,
+              ...authorization.approvedPaths.map((path) =>
+                isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
+              ),
+            ],
           }
         }
 
@@ -1655,6 +1686,9 @@ export class AgentSession {
             result: result.data,
             isError: result.isError,
           })
+          if (def.endsTurnOnError && result.isError) {
+            onTurnEndingTool('paused')
+          }
           if (def.endsTurnOnSuccess && !result.isError) {
             onTurnEndingTool(def.turnEndReasonOnSuccess)
           }
@@ -1664,6 +1698,7 @@ export class AgentSession {
           await finalizeCheckpoint()
           const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+          if (def.endsTurnOnError) onTurnEndingTool('paused')
           this.loopHealth.record(def.name, parsed.data, msg, true)
           return msg
         }
