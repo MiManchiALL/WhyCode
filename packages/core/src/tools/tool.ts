@@ -23,8 +23,6 @@ export interface ToolDefinition<Schema extends z.ZodObject = z.ZodObject> {
   requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
   endsTurnOnSuccess: boolean
-  /** 执行失败后安全暂停当前 turn，避免模型对不可恢复错误持续重试。 */
-  endsTurnOnError: boolean
   /** 隐私敏感读操作首次使用也需审批；会话记住或处于全自动档后按普通权限链判定。 */
   initialApprovalReason?: string
   /** 终止型工具成功后的语义；waiting-user 会保留计划并等待下一条用户消息。 */
@@ -72,7 +70,6 @@ const CONSERVATIVE_DEFAULTS = {
   availableWithoutProject: false,
   requiresStandaloneStep: false,
   endsTurnOnSuccess: false,
-  endsTurnOnError: false,
   turnEndReasonOnSuccess: 'completed' as const,
 }
 

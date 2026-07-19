@@ -156,7 +156,7 @@ interface StepResult {
   hadToolCalls: boolean
   /** 仅保存既有计划进度，不代表模型决定忽略最新 steering 继续实质执行。 */
   hadOnlyTaskProgressUpdates: boolean
-  toolEndReason: 'completed' | 'waiting-user' | 'paused' | null
+  toolEndReason: 'completed' | 'waiting-user' | null
   taskPlanChanged: boolean
   taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
@@ -1427,7 +1427,7 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     onTaskPlanEngagement: (action: TaskPlanEngagementAction) => void,
     onUserQuestion: (question: UserQuestion) => void,
-    onTurnEndingTool: (reason: 'completed' | 'waiting-user' | 'paused') => void,
+    onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
     onImageAttachments: (
       toolCallId: string,
       attachments: readonly ImageAttachment[],
@@ -1686,9 +1686,6 @@ export class AgentSession {
             result: result.data,
             isError: result.isError,
           })
-          if (def.endsTurnOnError && result.isError) {
-            onTurnEndingTool('paused')
-          }
           if (def.endsTurnOnSuccess && !result.isError) {
             onTurnEndingTool(def.turnEndReasonOnSuccess)
           }
@@ -1698,7 +1695,6 @@ export class AgentSession {
           await finalizeCheckpoint()
           const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-          if (def.endsTurnOnError) onTurnEndingTool('paused')
           this.loopHealth.record(def.name, parsed.data, msg, true)
           return msg
         }

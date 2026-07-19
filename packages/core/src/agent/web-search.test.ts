@@ -74,14 +74,20 @@ describe('WebSearch Agent 链路', () => {
     )
   })
 
-  it('同一步的并行搜索失败都会收尾，并暂停而不是换关键词重试', async () => {
+  it('同一步的并行搜索失败都会收尾，并把错误交给模型继续判断', async () => {
     const events: CoreEvent[] = []
     let modelCalls = 0
     const model = new MockLanguageModelV4({
-      doStream: async () => {
+      doStream: async (options) => {
         modelCalls++
-        assert.equal(modelCalls, 1, '搜索错误后不应再次请求模型')
-        return parallelToolStep()
+        if (modelCalls === 1) return parallelToolStep()
+        const prompt = JSON.stringify(options.prompt)
+        assert.equal(
+          prompt.match(/尚未配置网页搜索密钥/gu)?.length,
+          2,
+          '模型必须同时收到本步的两个错误结果',
+        )
+        return finalStep('网页搜索尚未配置，请先在连接设置中配置密钥。')
       },
     })
     const session = new AgentSession({
@@ -97,11 +103,11 @@ describe('WebSearch Agent 链路', () => {
       requestApproval: async () => ({ approved: true, remember: true }),
     })
 
-    assert.equal(await session.handleUserMessage('搜索今天的热点'), 'paused')
-    assert.equal(modelCalls, 1)
+    assert.equal(await session.handleUserMessage('搜索今天的热点'), 'completed')
+    assert.equal(modelCalls, 2)
     assert.deepEqual(
       events
-        .filter((event) => event.type === 'tool-end')
+        .filter((event) => event.type === 'tool-end' && event.isError)
         .map((event) => event.toolUseId)
         .sort(),
       ['search-parallel-1', 'search-parallel-2'],
