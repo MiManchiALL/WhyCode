@@ -16,7 +16,12 @@ import {
   type PdfPageReadResult,
   type PdfRenderedPage,
 } from '@whycode/core/pdf'
-import type { PdfWorkerRequest, PdfWorkerResult } from './protocol.ts'
+import {
+  PDF_WEB_DOCUMENT_MAX_TEXT_CHARS,
+  type PdfWebDocumentResult,
+  type PdfWorkerRequest,
+  type PdfWorkerResult,
+} from './protocol.ts'
 
 const PDF_RENDER_MAX_DIMENSION = 2_048
 const PDF_RENDER_MAX_PIXELS = 20_000_000
@@ -32,9 +37,9 @@ type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>
 let pdfJsPromise: Promise<PdfJs> | null = null
 
 export async function executePdfWorkerRequest(request: PdfWorkerRequest): Promise<PdfWorkerResult> {
-  return request.operation === 'inspect'
-    ? inspectPdf(request.path)
-    : readPdfPages(request.path, request.options)
+  if (request.operation === 'inspect') return inspectPdf(request.path)
+  if (request.operation === 'read-web-document') return readPdfForWeb(request.path)
+  return readPdfPages(request.path, request.options)
 }
 
 export async function inspectPdf(path: string): Promise<PdfDocumentInfo> {
@@ -99,6 +104,36 @@ export async function readPdfPages(
     }
     return { mode: 'visual', pageCount: document.numPages, renderedPages }
   }, options.expectedSha256)
+}
+
+export async function readPdfForWeb(path: string): Promise<PdfWebDocumentResult> {
+  return withPdf(path, async (document) => {
+    const pages = []
+    let textChars = 0
+    let sourceTruncated = false
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      try {
+        const textContent = await page.getTextContent()
+        const text = normalizePageText(textContent.items)
+        const remaining = PDF_WEB_DOCUMENT_MAX_TEXT_CHARS - textChars
+        if (text.length > remaining) {
+          pages.push({ pageNumber, text: text.slice(0, Math.max(0, remaining)) })
+          sourceTruncated = true
+          break
+        }
+        pages.push({ pageNumber, text })
+        textChars += text.length
+        if (textChars === PDF_WEB_DOCUMENT_MAX_TEXT_CHARS && pageNumber < document.numPages) {
+          sourceTruncated = true
+          break
+        }
+      } finally {
+        page.cleanup()
+      }
+    }
+    return { mode: 'web-text', pageCount: document.numPages, pages, sourceTruncated }
+  })
 }
 
 async function withPdf<T>(

@@ -46,7 +46,10 @@ export function createPerplexitySearchHandler(
         await response.body?.cancel().catch(() => {})
         throw statusError(response.status)
       }
-      return parseSearchResponse(await readBoundedResponse(response), request.maxResults)
+      return parseSearchResponse(
+        await readBoundedResponse(response),
+        request.maxResults * request.queries.length,
+      )
     } catch (error) {
       if (error instanceof WebSearchError) throw error
       if (abortSignal.aborted) throw new WebSearchError('网页搜索已取消')
@@ -58,7 +61,7 @@ export function createPerplexitySearchHandler(
 
 function perplexityRequestBody(request: WebSearchRequest): Record<string, unknown> {
   return {
-    query: request.query,
+    query: request.queries.length === 1 ? request.queries[0] : request.queries,
     max_results: request.maxResults,
     search_context_size: 'low',
     ...(request.recency ? { search_recency_filter: request.recency } : {}),
@@ -123,7 +126,7 @@ function parseSearchResponse(body: string, maxResults: number): WebSearchRespons
   if (!isRecord(value) || !Array.isArray(value.results)) {
     throw new WebSearchError('Perplexity 搜索响应格式不受支持')
   }
-  const candidateResults = value.results.slice(0, maxResults)
+  const candidateResults = normalizeResultList(value.results).slice(0, maxResults)
   const results = candidateResults.flatMap((item) => {
     const result = parseResult(item)
     return result ? [result] : []
@@ -132,6 +135,14 @@ function parseSearchResponse(body: string, maxResults: number): WebSearchRespons
     throw new WebSearchError('Perplexity 搜索结果格式不受支持')
   }
   return { results }
+}
+
+function normalizeResultList(value: unknown[]): unknown[] {
+  if (value.every((item) => Array.isArray(item))) return value.flat()
+  if (value.some((item) => Array.isArray(item))) {
+    throw new WebSearchError('Perplexity 搜索响应格式不受支持')
+  }
+  return value
 }
 
 function parseResult(value: unknown): WebSearchResult | null {

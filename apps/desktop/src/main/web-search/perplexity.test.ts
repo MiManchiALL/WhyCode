@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import { createPerplexitySearchHandler } from './perplexity.ts'
 
 const request = {
-  query: 'WhyCode web search',
+  queries: ['WhyCode web search'],
   maxResults: 4,
   recency: 'week' as const,
   domains: ['example.com'],
@@ -69,6 +69,34 @@ describe('Perplexity Search 适配器', () => {
       /尚未配置 Perplexity Search API key/,
     )
     assert.equal(calls, 0)
+  })
+
+  it('批量查询使用同一请求，并兼容按查询分组的结果', async () => {
+    let body: Record<string, unknown> | undefined
+    const handler = createPerplexitySearchHandler({
+      getApiKey: () => 'test-key',
+      fetchImpl: (async (_input, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return Response.json({
+          results: [
+            [{ title: 'First', url: 'https://example.com/1', snippet: 'one' }],
+            [{ title: 'Second', url: 'https://example.com/2', snippet: 'two' }],
+          ],
+        })
+      }) as typeof fetch,
+    })
+
+    const result = await handler({
+      queries: ['first query', 'second query'],
+      maxResults: 3,
+    }, activeSignal)
+
+    assert.deepEqual(body, {
+      query: ['first query', 'second query'],
+      max_results: 3,
+      search_context_size: 'low',
+    })
+    assert.deepEqual(result.results.map((item) => item.title), ['First', 'Second'])
   })
 
   it('HTTP 错误不回传响应正文或密钥', async () => {

@@ -6,13 +6,18 @@ import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
   it('打开项目时仍允许处理非编程问题', () => {
+    const before = new Date()
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
       homeDir: 'C:\\Users\\tester',
     })
+    const after = new Date()
 
     assert.match(prompt, /通用型桌面 AI Agent/)
+    const dateMatch = prompt.match(/# 当前日期\n- 本机本地日期：(\d{4}-\d{2}-\d{2})/u)
+    assert.ok(dateMatch)
+    assert.equal(new Set([localDate(before), localDate(after)]).has(dateMatch[1]!), true)
     assert.match(prompt, /尤其擅长代码编写、代码理解、调试及其他编程相关任务/)
     assert.doesNotMatch(prompt, /软件开发是你的核心专长/)
     assert.match(prompt, /非项目问题直接回答/)
@@ -107,3 +112,11 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /FastAPI 演示项目/)
   })
 })
+
+function localDate(date: Date): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-')
+}

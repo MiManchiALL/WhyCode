@@ -1,4 +1,4 @@
-import { WebPageError } from '@whycode/core'
+import { PDF_ATTACHMENT_MAX_SOURCE_BYTES, WebPageError } from '@whycode/core'
 import {
   assertPublicWebTarget,
   parseWebPageUrl,
@@ -6,6 +6,7 @@ import {
 } from './url-safety.ts'
 
 export const WEB_DOCUMENT_MAX_BYTES = 5_000_000
+export const WEB_PDF_MAX_BYTES = PDF_ATTACHMENT_MAX_SOURCE_BYTES
 export const WEB_DOCUMENT_MAX_REDIRECTS = 5
 export const WEB_DOCUMENT_TIMEOUT_MS = 20_000
 
@@ -15,12 +16,24 @@ export type WebPageFetch = (
   init: WebPageFetchInit,
 ) => Promise<Response>
 
-export interface WebDocument {
+interface WebDocumentBase {
   requestedUrl: string
   finalUrl: string
   contentType: string
+}
+
+export interface WebTextDocument extends WebDocumentBase {
+  kind: 'text'
   text: string
 }
+
+export interface WebPdfDocument extends WebDocumentBase {
+  kind: 'pdf'
+  contentType: 'application/pdf'
+  bytes: Uint8Array
+}
+
+export type WebDocument = WebTextDocument | WebPdfDocument
 
 export interface WebDocumentFetcherOptions {
   fetchImpl: WebPageFetch
@@ -30,7 +43,8 @@ export interface WebDocumentFetcherOptions {
 
 type FetchHopResult =
   | { redirectUrl: URL }
-  | { contentType: string; text: string }
+  | { kind: 'text'; contentType: string; text: string }
+  | { kind: 'pdf'; contentType: 'application/pdf'; bytes: Uint8Array }
 
 export function createWebDocumentFetcher(options: WebDocumentFetcherOptions) {
   return async (requestedUrl: string, abortSignal: AbortSignal): Promise<WebDocument> => {
@@ -80,7 +94,7 @@ async function fetchHop(
   const response = await options.fetchImpl(url.toString(), {
     method: 'GET',
     headers: {
-      accept: 'text/html,application/xhtml+xml,text/markdown,text/plain;q=0.9,*/*;q=0.1',
+      accept: 'text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.1',
     },
     cache: 'no-store',
     credentials: 'omit',
@@ -101,24 +115,30 @@ async function fetchHop(
   }
 
   const declaredType = parseContentType(response.headers.get('content-type'))
-  if (declaredType.mediaType && !isSupportedContentType(declaredType.mediaType)) {
+  const mayBePdf = declaredType.mediaType === 'application/pdf'
+    || (declaredType.mediaType === 'application/octet-stream' && url.pathname.toLowerCase().endsWith('.pdf'))
+  if (declaredType.mediaType && !isSupportedTextContentType(declaredType.mediaType) && !mayBePdf) {
     await response.body?.cancel().catch(() => {})
     throw new WebPageError(`暂不支持读取此网页类型（${declaredType.mediaType}）`)
   }
-  const bytes = await readBoundedBody(response)
+  const bytes = await readBoundedBody(response, mayBePdf ? WEB_PDF_MAX_BYTES : WEB_DOCUMENT_MAX_BYTES)
   const contentType = declaredType.mediaType ?? sniffContentType(bytes)
-  if (!isSupportedContentType(contentType)) {
+  if (isPdf(bytes)) {
+    return { kind: 'pdf', contentType: 'application/pdf', bytes }
+  }
+  if (!isSupportedTextContentType(contentType)) {
     throw new WebPageError(`暂不支持读取此网页类型（${contentType || '未知类型'}）`)
   }
   return {
+    kind: 'text',
     contentType,
     text: decodeWebDocument(bytes, declaredType.charset, contentType),
   }
 }
 
-async function readBoundedBody(response: Response): Promise<Uint8Array> {
+async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
   const declaredLength = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declaredLength) && declaredLength > WEB_DOCUMENT_MAX_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     await response.body?.cancel().catch(() => {})
     throw new WebPageError('目标网页超过安全大小限制')
   }
@@ -132,7 +152,7 @@ async function readBoundedBody(response: Response): Promise<Uint8Array> {
       const chunk = await reader.read()
       if (chunk.done) break
       totalBytes += chunk.value.byteLength
-      if (totalBytes > WEB_DOCUMENT_MAX_BYTES) {
+      if (totalBytes > maxBytes) {
         await reader.cancel()
         throw new WebPageError('目标网页超过安全大小限制')
       }
@@ -191,6 +211,7 @@ function parseContentType(value: string | null): { mediaType: string | null; cha
 }
 
 function sniffContentType(bytes: Uint8Array): string {
+  if (isPdf(bytes)) return 'application/pdf'
   if (bytes.subarray(0, 512).includes(0)) return 'application/octet-stream'
   const probe = new TextDecoder().decode(bytes.subarray(0, 512)).trimStart().toLowerCase()
   return /<!doctype\s+html|<(?:html|head|body|title|main)(?:\s|>)/u.test(probe)
@@ -198,7 +219,7 @@ function sniffContentType(bytes: Uint8Array): string {
     : 'text/plain'
 }
 
-function isSupportedContentType(value: string): boolean {
+function isSupportedTextContentType(value: string): boolean {
   return [
     'application/xhtml+xml',
     'text/html',
@@ -206,6 +227,10 @@ function isSupportedContentType(value: string): boolean {
     'text/plain',
     'text/x-markdown',
   ].includes(value)
+}
+
+function isPdf(bytes: Uint8Array): boolean {
+  return new TextDecoder('ascii').decode(bytes.subarray(0, 1_024)).includes('%PDF-')
 }
 
 export function isHtmlContentType(value: string): boolean {

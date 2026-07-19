@@ -1,19 +1,9 @@
 import { Readability } from '@mozilla/readability'
-import { WEB_PAGE_MAX_LINE_CHARS, WEB_PAGE_MAX_URL_CHARS } from '@whycode/core'
+import { WEB_PAGE_MAX_URL_CHARS } from '@whycode/core'
 import { parseHTML } from 'linkedom'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
-import { isHtmlContentType, type WebDocument } from './network.ts'
-
-export const WEB_PAGE_MAX_CONTENT_CHARS = 250_000
-
-export interface ExtractedWebPage {
-  requestedUrl: string
-  finalUrl: string
-  title?: string
-  contentType: string
-  lines: readonly string[]
-  sourceTruncated: boolean
-}
+import { createExtractedWebPage, type ExtractedWebPage } from './content.ts'
+import { isHtmlContentType, type WebTextDocument } from './network.ts'
 
 interface HtmlElement {
   innerHTML: string
@@ -61,19 +51,13 @@ const markdownConverter = new NodeHtmlMarkdown({
   useInlineLinks: true,
 })
 
-export function extractWebPage(document: WebDocument): ExtractedWebPage {
+export function extractWebPage(document: WebTextDocument): ExtractedWebPage {
   const extracted = isHtmlContentType(document.contentType)
     ? extractHtml(document.text, document.finalUrl)
     : { markdown: document.text }
-  const bounded = toBoundedLines(extracted.markdown)
-  return {
-    requestedUrl: document.requestedUrl,
-    finalUrl: document.finalUrl,
+  return createExtractedWebPage(document, extracted.markdown, {
     ...(extracted.title ? { title: extracted.title } : {}),
-    contentType: document.contentType,
-    lines: bounded.lines,
-    sourceTruncated: bounded.truncated,
-  }
+  })
 }
 
 function extractHtml(html: string, baseUrl: string): { title?: string; markdown: string } {
@@ -138,67 +122,11 @@ function fallbackContent(document: HtmlDocument): string {
   return candidate?.innerHTML?.trim() ?? ''
 }
 
-function toBoundedLines(markdown: string): { lines: string[]; truncated: boolean } {
-  const normalized = markdown
-    .replace(/\r\n?/gu, '\n')
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, '')
-    .trim()
-  if (!normalized) return { lines: [], truncated: false }
-
-  const lines: string[] = []
-  let totalChars = 0
-  let blankLines = 0
-  let truncated = false
-  outer: for (const rawLine of normalized.split('\n')) {
-    const line = rawLine.trimEnd()
-    if (!line) {
-      if (blankLines >= 1) continue
-      blankLines++
-    } else {
-      blankLines = 0
-    }
-    for (const part of splitLongLine(line)) {
-      const addedChars = part.length + (lines.length > 0 ? 1 : 0)
-      if (totalChars + addedChars > WEB_PAGE_MAX_CONTENT_CHARS) {
-        const available = WEB_PAGE_MAX_CONTENT_CHARS - totalChars - (lines.length > 0 ? 1 : 0)
-        if (available > 0) lines.push(safePrefix(part, available))
-        truncated = true
-        break outer
-      }
-      lines.push(part)
-      totalChars += addedChars
-    }
-  }
-  while (lines.at(-1) === '') lines.pop()
-  return { lines, truncated }
-}
-
-function splitLongLine(line: string): string[] {
-  if (line.length <= WEB_PAGE_MAX_LINE_CHARS) return [line]
-  const parts: string[] = []
-  let offset = 0
-  while (offset < line.length) {
-    const part = safePrefix(line.slice(offset), WEB_PAGE_MAX_LINE_CHARS)
-    parts.push(part)
-    offset += part.length
-  }
-  return parts
-}
-
-function safePrefix(value: string, maxCodeUnits: number): string {
-  let end = Math.min(value.length, maxCodeUnits)
-  if (
-    end > 0
-    && end < value.length
-    && /[\uD800-\uDBFF]/u.test(value[end - 1]!)
-    && /[\uDC00-\uDFFF]/u.test(value[end]!)
-  ) end--
-  return value.slice(0, end)
-}
-
 function cleanTitle(value: string | null | undefined): string {
   return value?.replace(/\s+/gu, ' ').trim().slice(0, 500) ?? ''
 }
+
+export type { ExtractedWebPage } from './content.ts'
 
 function textLength(element: HtmlElement | null): number {
   return element?.textContent?.trim().length ?? 0

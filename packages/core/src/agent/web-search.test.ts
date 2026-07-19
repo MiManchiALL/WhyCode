@@ -44,7 +44,7 @@ describe('WebSearch Agent 链路', () => {
           return {
             results: [{
               title: 'WhyCode source',
-              url: request.query.includes('current')
+              url: request.queries[0]?.includes('current')
                 ? 'https://example.com/current'
                 : 'https://example.com/docs',
               snippet: 'A cited search result',
@@ -62,9 +62,9 @@ describe('WebSearch Agent 链路', () => {
     })
 
     assert.equal(await session.handleUserMessage('研究 WhyCode 的当前资料'), 'completed')
-    assert.deepEqual(searches.map((search) => search.query), [
-      'WhyCode current release',
-      'WhyCode official docs',
+    assert.deepEqual(searches.map((search) => search.queries), [
+      ['WhyCode current release'],
+      ['WhyCode official docs'],
     ])
     assert.equal(approvals, 1)
     assert.equal(

@@ -17,7 +17,7 @@ import {
 export function createWebFetchTool(options: { fetchPage: WebFetchHandler }) {
   return buildTool({
     name: WEB_FETCH_TOOL_NAME,
-    description: '读取公开网页并返回有界、带行号的 Markdown 正文',
+    description: '读取公开网页或远程 PDF，并返回有界、带行号的 Markdown 正文',
     prompt: WEB_FETCH_TOOL_PROMPT,
     inputSchema: webFetchRequestSchema,
     isReadOnly: true,

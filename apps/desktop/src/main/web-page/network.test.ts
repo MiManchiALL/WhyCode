@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   WEB_DOCUMENT_MAX_BYTES,
+  WEB_PDF_MAX_BYTES,
   createWebDocumentFetcher,
   type WebPageFetchInit,
 } from './network.ts'
@@ -25,6 +26,7 @@ describe('网页抓取网络边界', () => {
     })
 
     assert.deepEqual(await fetchDocument('https://example.com/page#part', activeSignal), {
+      kind: 'text',
       requestedUrl: 'https://example.com/page',
       finalUrl: 'https://example.com/page',
       contentType: 'text/html',
@@ -119,10 +121,9 @@ describe('网页抓取网络边界', () => {
         headers: { 'content-type': 'text/plain; charset=windows-1252' },
       }),
     })
-    assert.equal(
-      (await encoded('https://example.com/text', activeSignal)).text,
-      'café',
-    )
+    const encodedDocument = await encoded('https://example.com/text', activeSignal)
+    assert.equal(encodedDocument.kind, 'text')
+    assert.equal(encodedDocument.kind === 'text' ? encodedDocument.text : null, 'café')
 
     const sniffedHtml = createWebDocumentFetcher({
       resolveHost: publicResolver,
@@ -156,6 +157,35 @@ describe('网页抓取网络边界', () => {
     await assert.rejects(
       fetchDocument('https://example.com/', activeSignal),
       /网页读取请求超时/,
+    )
+  })
+
+  it('识别并按 PDF 的既有 50 MB 边界返回原始字节', async () => {
+    const pdfBytes = new TextEncoder().encode('%PDF-1.7\nremote document')
+    const fetchDocument = createWebDocumentFetcher({
+      resolveHost: publicResolver,
+      fetchImpl: async () => new Response(pdfBytes, {
+        headers: { 'content-type': 'application/pdf' },
+      }),
+    })
+
+    const document = await fetchDocument('https://example.com/report.pdf', activeSignal)
+    assert.equal(document.kind, 'pdf')
+    assert.equal(document.contentType, 'application/pdf')
+    assert.deepEqual(document.kind === 'pdf' ? document.bytes : null, pdfBytes)
+
+    const oversizedPdf = createWebDocumentFetcher({
+      resolveHost: publicResolver,
+      fetchImpl: async () => new Response('%PDF-1.7', {
+        headers: {
+          'content-type': 'application/pdf',
+          'content-length': String(WEB_PDF_MAX_BYTES + 1),
+        },
+      }),
+    })
+    await assert.rejects(
+      oversizedPdf('https://example.com/oversized.pdf', activeSignal),
+      /超过安全大小限制/,
     )
   })
 })

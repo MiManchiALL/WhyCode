@@ -7,7 +7,7 @@ import {
   type WebFindHandler,
   type WebFindMatch,
 } from '@whycode/core'
-import { extractWebPage, type ExtractedWebPage } from './extract.ts'
+import type { ExtractedWebPage } from './content.ts'
 import { parseWebPageUrl } from './url-safety.ts'
 import type { WebDocument } from './network.ts'
 
@@ -21,6 +21,10 @@ export interface WebPageReader {
 
 export interface WebPageReaderOptions {
   fetchDocument: (url: string, abortSignal: AbortSignal) => Promise<WebDocument>
+  extractDocument: (
+    document: WebDocument,
+    abortSignal: AbortSignal,
+  ) => Promise<ExtractedWebPage>
   now?: () => number
   cacheTtlMs?: number
   maxEntries?: number
@@ -88,9 +92,9 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
   async function loadPage(url: string, abortSignal: AbortSignal): Promise<ExtractedWebPage> {
     const existing = inFlight.get(url)
     if (existing) return existing
-    const pending = options.fetchDocument(url, abortSignal).then((document) => {
+    const pending = options.fetchDocument(url, abortSignal).then(async (document) => {
       if (abortSignal.aborted) throw new WebPageError('网页读取已取消')
-      const page = extractWebPage(document)
+      const page = await options.extractDocument(document, abortSignal)
       putCachedPage(cache, url, page, now() + cacheTtlMs, maxEntries)
       return page
     })

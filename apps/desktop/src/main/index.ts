@@ -78,6 +78,8 @@ import {
 } from './web-page/electron-fetch.ts'
 import { createWebDocumentFetcher } from './web-page/network.ts'
 import { createWebPageReader } from './web-page/reader.ts'
+import { ElectronWebPageProcessor } from './web-page/processor.ts'
+import { installExternalWebLinkHandlers } from './external-link.ts'
 import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
@@ -111,7 +113,11 @@ function createSessionWebPageTools() {
     resolveHost: createElectronWebHostResolver((hostname, options) =>
       net.resolveHost(hostname, options)),
   })
-  const reader = createWebPageReader({ fetchDocument })
+  const reader = createWebPageReader({
+    fetchDocument,
+    extractDocument: (document, abortSignal) =>
+      webPageProcessor.extract(document, abortSignal),
+  })
   return [
     createWebFetchTool({ fetchPage: reader.fetchPage }),
     createWebFindTool({ findInPage: reader.findInPage }),
@@ -134,6 +140,14 @@ function createWindow(): BrowserWindow {
   })
 
   win.once('ready-to-show', () => win.show())
+
+  installExternalWebLinkHandlers(
+    win,
+    (url) => shell.openExternal(url),
+    (error) => console.error(
+      `[external-link] 无法打开来源链接：${error instanceof Error ? error.message : String(error)}`,
+    ),
+  )
 
   // 渲染端错误转发到终端：白屏类问题（历史上已 3 次）无 DevTools 也能在 pnpm dev 输出里定位
   win.webContents.on('console-message', (event) => {
@@ -194,6 +208,7 @@ let attachmentPreparationInProgress = false
 /** 连接设置写入或探测期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
+const webPageProcessor = new ElectronWebPageProcessor(pdfProcessor)
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
 const userMessageRoutingGate = new UserMessageRoutingGate()
 const viewTimeline = new ViewTimeline((error) => {

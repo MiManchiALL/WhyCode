@@ -19,7 +19,7 @@ const webPageUrlSchema = z.string()
   .overwrite((value) => normalizeWebPageUrl(value) ?? value)
 
 export const webFetchRequestSchema = z.object({
-  url: webPageUrlSchema.describe('要读取的公开网页 URL'),
+  url: webPageUrlSchema.describe('要读取的公开网页或远程 PDF URL'),
   offset: z.number()
     .int()
     .min(1)

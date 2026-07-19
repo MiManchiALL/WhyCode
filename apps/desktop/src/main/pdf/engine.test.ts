@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, before, describe, it } from 'node:test'
-import { inspectPdf, readPdfPages } from './engine.ts'
+import { inspectPdf, readPdfForWeb, readPdfPages } from './engine.ts'
 
 const tempDirectories: string[] = []
 
@@ -40,6 +40,12 @@ describe('桌面 PDF 引擎', () => {
     })
     assert.equal(textResult.mode, 'text')
     assert.match(textResult.pages[0]?.text ?? '', /Hello WhyCode PDF/)
+
+    const webResult = await readPdfForWeb(pdfPath)
+    assert.equal(webResult.mode, 'web-text')
+    assert.equal(webResult.pageCount, 1)
+    assert.equal(webResult.sourceTruncated, false)
+    assert.match(webResult.pages[0]?.text ?? '', /Hello WhyCode PDF/)
 
     const result = await readPdfPages(pdfPath, {
       startPage: 1,

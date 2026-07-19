@@ -114,6 +114,7 @@ describe('Electron net.request Fetch 适配器', () => {
     assert.equal(await response.text(), 'hello world')
     assert.equal(response.headers.get('content-type'), 'text/plain')
     assert.equal(request?.abortCalls, 0)
+    assert.doesNotThrow(() => request?.emit('error', new Error('late transport close')))
   })
 
   it('读取响应期间取消会中止底层 ClientRequest', async () => {

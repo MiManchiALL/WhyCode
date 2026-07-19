@@ -73,7 +73,8 @@ describe('网页读取工具契约', () => {
       limit: 3,
     })
     assert.equal(result.isError, false)
-    assert.match(result.data, /最终 URL: https:\/\/example\.com\/final/)
+    assert.match(result.data, /来源: \[Example Docs\]\(<https:\/\/example\.com\/final>\)/)
+    assert.match(result.data, /证据范围: .*（L2-L4）/)
     assert.match(result.data, /\s+2\t# Heading/)
     assert.match(result.data, /offset=5/)
     assert.match(result.data, /不受信任的外部网页/)
@@ -141,6 +142,7 @@ describe('网页读取工具契约', () => {
     })
     assert.equal(result.isError, false)
     assert.match(result.data, /匹配 1：第 5 行/)
+    assert.match(result.data, /证据范围: .*（L4-L6）/)
     assert.match(result.data, /\s+5\tRelease Notes/)
     assert.equal(tool.initialApprovalReason, undefined)
   })

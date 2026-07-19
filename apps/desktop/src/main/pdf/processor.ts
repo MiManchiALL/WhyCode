@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { utilityProcess } from 'electron'
+import { join, resolve } from 'node:path'
 import {
   PDF_ATTACHMENT_MAX_PAGES,
   PDF_ATTACHMENT_MAX_SOURCE_BYTES,
@@ -13,13 +11,23 @@ import {
   type PdfProcessingErrorCode,
   type PdfProcessor,
 } from '@whycode/core'
-import type { PdfWorkerRequest, PdfWorkerResponse, PdfWorkerResult } from './protocol.ts'
+import {
+  runUtilityProcessJob,
+  UtilityProcessJobError,
+} from '../utility-process-job.ts'
+import {
+  PDF_WEB_DOCUMENT_MAX_TEXT_CHARS,
+  type PdfWebDocumentResult,
+  type PdfWorkerRequest,
+  type PdfWorkerResponse,
+  type PdfWorkerResult,
+} from './protocol.ts'
 
 const PDF_INSPECT_TIMEOUT_MS = 30_000
 const PDF_READ_TIMEOUT_MS = 30_000
+const PDF_WEB_READ_TIMEOUT_MS = 60_000
 /** 对齐 Claude Code 的 pdftoppm 分页提取超时。 */
 const PDF_RENDER_TIMEOUT_MS = 120_000
-const STDERR_MAX_CHARS = 8_000
 const PDF_RENDER_MAX_DIMENSION_WITH_ROUNDING = 2_049
 const PDF_RENDER_MAX_PIXELS = 20_000_000
 
@@ -45,6 +53,18 @@ export class ElectronPdfProcessor implements PdfProcessor {
     )
     return result as PdfPageReadResult
   }
+
+  async readWebDocument(
+    path: string,
+    abortSignal: AbortSignal,
+  ): Promise<PdfWebDocumentResult> {
+    const result = await runPdfJob(
+      { id: randomUUID(), operation: 'read-web-document', path },
+      abortSignal,
+      PDF_WEB_READ_TIMEOUT_MS,
+    )
+    return result as PdfWebDocumentResult
+  }
 }
 
 async function runPdfJob(
@@ -52,58 +72,34 @@ async function runPdfJob(
   abortSignal: AbortSignal,
   timeoutMs: number,
 ): Promise<PdfWorkerResult> {
-  if (abortSignal.aborted) throw abortedError()
-  const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'pdf-worker.js')
-  let child: ReturnType<typeof utilityProcess.fork>
   try {
-    child = utilityProcess.fork(workerPath, [], {
+    const response = await runUtilityProcessJob({
+      workerName: 'pdf-worker.js',
       serviceName: 'WhyCode PDF Processor',
-      stdio: 'pipe',
-      execArgv: ['--max-old-space-size=384'],
-    })
-  } catch (error) {
-    throw new PdfProcessingError('unavailable', 'PDF 子进程启动失败', { cause: error })
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false
-    let stderr = ''
-    const finish = (error?: Error, value?: PdfWorkerResult) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      abortSignal.removeEventListener('abort', onAbort)
-      child.kill()
-      if (error) reject(error)
-      else resolve(value!)
-    }
-    const onAbort = () => finish(abortedError())
-    const timeout = setTimeout(
-      () => finish(new PdfProcessingError('timeout', 'PDF 处理超时，请缩小页数后重试')),
+      request,
+      abortSignal,
       timeoutMs,
-    )
-    abortSignal.addEventListener('abort', onAbort, { once: true })
-    child.stdout?.resume()
-    child.stderr?.on('data', (chunk) => {
-      stderr = `${stderr}${String(chunk)}`.slice(-STDERR_MAX_CHARS)
+      maxOldSpaceSizeMb: 384,
     })
-    child.once('spawn', () => child.postMessage(request))
-    child.once('message', (response) => {
-      if (!isWorkerResponse(response, request)) {
-        finish(new PdfProcessingError('unknown', 'PDF 子进程返回了无效响应'))
-        return
-      }
-      if (response.ok) finish(undefined, response.result)
-      else finish(new PdfProcessingError(response.error.code, response.error.message))
-    })
-    child.once('error', () => {
-      finish(new PdfProcessingError('unavailable', 'PDF 子进程启动失败'))
-    })
-    child.once('exit', (code) => {
-      if (settled) return
-      const suffix = stderr.trim() ? `：${stderr.trim()}` : ''
-      finish(new PdfProcessingError('unknown', `PDF 子进程异常退出（${code}）${suffix}`))
-    })
-  })
+    if (!isWorkerResponse(response, request)) {
+      throw new PdfProcessingError('unknown', 'PDF 子进程返回了无效响应')
+    }
+    if (response.ok) return response.result
+    throw new PdfProcessingError(response.error.code, response.error.message)
+  } catch (error) {
+    if (error instanceof PdfProcessingError) throw error
+    if (!(error instanceof UtilityProcessJobError)) {
+      throw new PdfProcessingError('unknown', 'PDF 子进程处理失败', { cause: error })
+    }
+    if (error.failure === 'aborted') throw abortedError()
+    if (error.failure === 'timeout') {
+      throw new PdfProcessingError('timeout', 'PDF 处理超时，请缩小页数后重试')
+    }
+    if (error.failure === 'unavailable') {
+      throw new PdfProcessingError('unavailable', 'PDF 子进程启动失败', { cause: error })
+    }
+    throw new PdfProcessingError('unknown', error.message, { cause: error })
+  }
 }
 
 function isWorkerResponse(value: unknown, request: PdfWorkerRequest): value is PdfWorkerResponse {
@@ -127,6 +123,26 @@ function isWorkerResult(
   if (request.operation === 'inspect') {
     return isPositiveInteger(value.byteLength)
       && value.byteLength <= PDF_ATTACHMENT_MAX_SOURCE_BYTES
+  }
+  if (request.operation === 'read-web-document') {
+    if (
+      value.mode !== 'web-text'
+      || !Array.isArray(value.pages)
+      || typeof value.sourceTruncated !== 'boolean'
+      || value.pages.length < 1
+      || value.pages.length > value.pageCount
+    ) return false
+    let textChars = 0
+    for (const [index, page] of value.pages.entries()) {
+      if (
+        !isRecord(page)
+        || page.pageNumber !== index + 1
+        || typeof page.text !== 'string'
+      ) return false
+      textChars += page.text.length
+      if (textChars > PDF_WEB_DOCUMENT_MAX_TEXT_CHARS) return false
+    }
+    return value.pages.length === value.pageCount || value.sourceTruncated
   }
   const expectedCount = Math.min(
     request.options.pageCount,

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { WEB_PAGE_MAX_LINE_CHARS } from '@whycode/core'
-import { WEB_PAGE_MAX_CONTENT_CHARS, extractWebPage } from './extract.ts'
+import { WEB_PAGE_MAX_CONTENT_CHARS } from './content.ts'
+import { extractWebPage } from './extract.ts'
 
 describe('网页正文确定性提取', () => {
   it('去除页面噪音与脚本，保留正文、绝对链接和 Markdown 表格', () => {
     const page = extractWebPage({
+      kind: 'text',
       requestedUrl: 'https://example.com/start',
       finalUrl: 'https://example.com/articles/guide',
       contentType: 'text/html',
@@ -34,6 +36,7 @@ describe('网页正文确定性提取', () => {
 
   it('纯文本和 Markdown 不经过 HTML 正文算法', () => {
     const page = extractWebPage({
+      kind: 'text',
       requestedUrl: 'https://example.com/readme.md',
       finalUrl: 'https://example.com/readme.md',
       contentType: 'text/markdown',
@@ -45,6 +48,7 @@ describe('网页正文确定性提取', () => {
 
   it('限制整页内容和单行长度，并显式记录源正文截断', () => {
     const page = extractWebPage({
+      kind: 'text',
       requestedUrl: 'https://example.com/large.txt',
       finalUrl: 'https://example.com/large.txt',
       contentType: 'text/plain',

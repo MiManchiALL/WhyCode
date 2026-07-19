@@ -62,8 +62,11 @@ export function createElectronWebPageFetch(
       cleanupAbort()
       reject(error)
     }
-    request.once('error', onError)
-    request.once('close', () => request.removeListener('error', onError))
+    // Electron may emit a late request error after response/end/close. Keep one
+    // request-lifetime listener so that such transport errors never become an
+    // uncaught main-process exception; the response-body listener still reports
+    // errors that happen while the body is being consumed.
+    request.on('error', onError)
     init.signal?.addEventListener('abort', onAbort, { once: true })
 
     request.once('redirect', (statusCode, _method, redirectUrl, responseHeaders) => {

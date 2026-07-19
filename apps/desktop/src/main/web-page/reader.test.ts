@@ -1,17 +1,32 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { WEB_FETCH_MAX_OUTPUT_CHARS } from '@whycode/core'
-import { createWebPageReader } from './reader.ts'
+import { extractWebPage } from './extract.ts'
+import {
+  createWebPageReader,
+  type WebPageReaderOptions,
+} from './reader.ts'
 
 const activeSignal = new AbortController().signal
+
+function createTestReader(options: Omit<WebPageReaderOptions, 'extractDocument'>) {
+  return createWebPageReader({
+    ...options,
+    extractDocument: async (document) => {
+      if (document.kind !== 'text') throw new Error('测试仅接受文本网页')
+      return extractWebPage(document)
+    },
+  })
+}
 
 describe('会话级网页正文读取器', () => {
   it('分页和查找复用同一份稳定正文，不重复联网', async () => {
     let fetches = 0
-    const reader = createWebPageReader({
+    const reader = createTestReader({
       fetchDocument: async (url) => {
         fetches++
         return {
+          kind: 'text',
           requestedUrl: url,
           finalUrl: 'https://example.com/final',
           contentType: 'text/plain',
@@ -52,10 +67,11 @@ describe('会话级网页正文读取器', () => {
 
   it('未读取或缓存过期时 WebFind 明确要求先调用 WebFetch', async () => {
     let currentTime = 1_000
-    const reader = createWebPageReader({
+    const reader = createTestReader({
       now: () => currentTime,
       cacheTtlMs: 100,
       fetchDocument: async (url) => ({
+        kind: 'text',
         requestedUrl: url,
         finalUrl: url,
         contentType: 'text/plain',
@@ -77,8 +93,9 @@ describe('会话级网页正文读取器', () => {
 
   it('每次分页结果受字符预算约束，并保留继续读取的真实行号', async () => {
     const longLine = 'A'.repeat(4_000)
-    const reader = createWebPageReader({
+    const reader = createTestReader({
       fetchDocument: async (url) => ({
+        kind: 'text',
         requestedUrl: url,
         finalUrl: url,
         contentType: 'text/plain',
@@ -101,11 +118,12 @@ describe('会话级网页正文读取器', () => {
     let fetches = 0
     let finishFetch: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { finishFetch = resolve })
-    const reader = createWebPageReader({
+    const reader = createTestReader({
       fetchDocument: async (url) => {
         fetches++
         await gate
         return {
+          kind: 'text',
           requestedUrl: url,
           finalUrl: url,
           contentType: 'text/plain',

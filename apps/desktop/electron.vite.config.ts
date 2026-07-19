@@ -11,6 +11,7 @@ export default defineConfig({
         input: {
           index: fileURLToPath(new URL('src/main/index.ts', import.meta.url)),
           'pdf-worker': fileURLToPath(new URL('src/main/pdf/worker.ts', import.meta.url)),
+          'web-page-worker': fileURLToPath(new URL('src/main/web-page/worker.ts', import.meta.url)),
         },
         output: { entryFileNames: '[name].js' },
       },

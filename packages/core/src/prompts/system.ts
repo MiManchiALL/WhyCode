@@ -1,6 +1,7 @@
 /**
  * 系统提示词拼装（文档三 §1）：每个 section 一个纯函数，buildSystemPrompt 统一拼接。
- * 静态段禁止时间戳/随机数（缓存卫生）；动态信息走 <system-reminder> 注入消息流，不进这里。
+ * 除“当前日期”每天只变化一次外，静态段禁止时间戳/随机数（缓存卫生）；
+ * 其他动态信息走 <system-reminder> 注入消息流，不进这里。
  */
 
 import {
@@ -47,6 +48,13 @@ function environmentSection(
   ]
   if (homeDir) lines.push(`- 用户主目录：${homeDir}`)
   return lines.join('\n')
+}
+
+function currentDateSection(now = new Date()): string {
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return ['# 当前日期', `- 本机本地日期：${year}-${month}-${day}`].join('\n')
 }
 
 function toolUsageSection(backgroundCommandsAvailable: boolean): string {
@@ -132,6 +140,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   }
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion, Boolean(ctx.projectDir)))
   if (!ctx.discussion) sections.push(taskPlanningSection())
-  sections.push(safetySection())
+  // 与 Claude Code 的会话日期上下文相同，放在稳定提示词尾部，跨日时只改变尾段。
+  sections.push(safetySection(), currentDateSection())
   return sections.join('\n\n')
 }

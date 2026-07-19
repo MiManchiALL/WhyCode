@@ -28,6 +28,12 @@ describe('WebSearch 工具契约', () => {
       query: 'test',
       domains: ['https://example.com/path'],
     }).success, false)
+    assert.deepEqual(webSearchRequestSchema.parse({
+      query: [' first\nquery ', ' second query '],
+    }).query, ['first query', 'second query'])
+    assert.equal(webSearchRequestSchema.safeParse({
+      query: ['same query', 'same query'],
+    }).success, false)
   })
 
   it('把厂商无关输入交给宿主并输出可引用的有界结果', async () => {
@@ -61,16 +67,36 @@ describe('WebSearch 工具契约', () => {
     }, toolContext)
 
     assert.deepEqual(request, {
-      query: 'WhyCode',
+      queries: ['WhyCode'],
       maxResults: 3,
       recency: 'week',
       domains: ['example.com'],
     })
     assert.equal(result.isError, false)
-    assert.match(result.data, /https:\/\/example\.com\/docs/)
+    assert.match(result.data, /\[官方 文档\]\(<https:\/\/example\.com\/docs>\)/)
     assert.match(result.data, /不受信任的外部网页/)
     assert.doesNotMatch(result.data, /file:\/\/|不能进入结果/)
     assert.equal(result.data.includes('A'.repeat(WEB_SEARCH_MAX_SNIPPET_CHARS + 1)), false)
+  })
+
+  it('批量查询共享筛选条件并限制单次总结果数', async () => {
+    let request: WebSearchRequest | null = null
+    const tool = createWebSearchTool({
+      search: async (value) => {
+        request = value
+        return { results: [] }
+      },
+    })
+
+    await tool.execute({
+      query: ['query one', 'query two', 'query three', 'query four'],
+      max_results: 10,
+    }, toolContext)
+
+    assert.deepEqual(request, {
+      queries: ['query one', 'query two', 'query three', 'query four'],
+      maxResults: 5,
+    })
   })
 
   it('只展示宿主显式标记为安全的错误', async () => {
