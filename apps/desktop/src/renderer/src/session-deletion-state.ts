@@ -1,8 +1,6 @@
-import type { SessionListItem } from '../../shared/session.ts'
-
 export function isCurrentSessionDeletion(
-  sessions: readonly Pick<SessionListItem, 'sessionId' | 'isCurrent'>[],
-  sessionId: string,
+  currentSessionId: string | null,
+  targetSessionId: string,
 ): boolean {
-  return sessions.some((session) => session.sessionId === sessionId && session.isCurrent)
+  return currentSessionId === targetSessionId
 }

@@ -508,10 +508,11 @@ export function App() {
     if (!window.confirm(
       '将永久删除这个会话的对话、任务状态、检查点、后台命令记录和临时数据；不会修改项目文件。确定继续？',
     )) return
-    const deletesCurrent = isCurrentSessionDeletion(sessions, sessionId)
     setDeletingSessionId(sessionId)
-    setDeletionBlocksRuntime(deletesCurrent)
-    void window.whycode.deleteSession(sessionId).then((result) => {
+    void window.whycode.runtimeSnapshot().then((snapshot) => {
+      setDeletionBlocksRuntime(isCurrentSessionDeletion(snapshot.sessionId, sessionId))
+      return window.whycode.deleteSession(sessionId)
+    }).then((result) => {
       if (result.deletedCurrent) {
         resetView()
         void window.whycode.getProjectDir().then(setProjectDir)
@@ -531,7 +532,6 @@ export function App() {
     deletingSessionId,
     refreshSessions,
     resetView,
-    sessions,
     setDeletionBlocksRuntime,
   ])
 
