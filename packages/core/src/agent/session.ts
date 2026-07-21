@@ -8,6 +8,11 @@ import type {
   UserQuestion,
 } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
+import type { ReasoningEffortSelection } from '../providers/catalog.ts'
+import {
+  explicitReasoningEffort,
+  providerOptionsWithReasoningEffort,
+} from '../providers/reasoning-effort.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
@@ -104,6 +109,7 @@ const MAX_COMPACT_FAILURES = 3
 export interface AgentSessionOptions {
   model: ModelEntry
   providerConfig: ProviderConfig
+  reasoningEffort?: ReasoningEffortSelection
   promptContext: PromptContext
   /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
   extraTools?: ToolDefinition[]
@@ -282,9 +288,29 @@ export class AgentSession {
     return this.permissions.mode
   }
 
-  setModel(model: ModelEntry, providerConfig: ProviderConfig): void {
-    this.options = { ...this.options, model, providerConfig }
-    void this.persist((recorder) => recorder.updateModel(model.id))
+  setModelSelection(
+    model: ModelEntry,
+    providerConfig: ProviderConfig,
+    reasoningEffort: ReasoningEffortSelection,
+  ): void {
+    this.options = { ...this.options, model, providerConfig, reasoningEffort }
+    void this.persist((recorder) =>
+      recorder.updateModelSelection(model.id, reasoningEffort),
+    )
+  }
+
+  private createLanguageModel() {
+    return this.options.model.create(
+      this.options.providerConfig,
+      explicitReasoningEffort(this.options.reasoningEffort ?? 'default'),
+    )
+  }
+
+  private requestProviderOptions() {
+    return providerOptionsWithReasoningEffort(
+      this.options.model,
+      this.options.reasoningEffort ?? 'default',
+    )
   }
 
   /** 替换注入的额外工具（M3：每轮协商换入该轮的协议输出工具） */
@@ -987,12 +1013,13 @@ export class AgentSession {
     emit({ type: 'agent-status', status: 'working' })
     try {
       const result = await compactMessages(
-        this.options.model.create(this.options.providerConfig),
+        this.createLanguageModel(),
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
         this.compactApplicationContext(),
         (messages) => this.messagesForCurrentModel(messages, signal),
+        this.requestProviderOptions(),
       )
       this.messages = result.messages
       this.rebuildActivePdfAttachments()
@@ -1064,12 +1091,13 @@ export class AgentSession {
     // 第二级：全量摘要压缩
     try {
       const result = await compactMessages(
-        this.options.model.create(this.options.providerConfig),
+        this.createLanguageModel(),
         this.messages,
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
         this.compactApplicationContext(planExecutionEngaged, turnId),
         (messages) => this.messagesForCurrentModel(messages, abortSignal),
+        this.requestProviderOptions(),
       )
       this.messages = result.messages
       this.rebuildActivePdfAttachments()
@@ -1253,7 +1281,7 @@ export class AgentSession {
         : this.messages
       const modelInputMessageCount = modelInputMessages.length
       const result = streamText({
-        model: this.options.model.create(this.options.providerConfig),
+        model: this.createLanguageModel(),
         system: buildSystemPrompt(this.options.promptContext),
         messages: await this.messagesForCurrentModel(modelInputMessages, stepAbort.signal),
         tools: this.buildToolSet(
@@ -1352,7 +1380,7 @@ export class AgentSession {
           },
         ),
         stopWhen: stepCountIs(1),
-        providerOptions: this.options.model.providerOptions,
+        providerOptions: this.requestProviderOptions(),
         abortSignal: stepAbort.signal,
         onToolExecutionStart: () => { inactivityWatchdog.toolStarted() },
         onToolExecutionEnd: () => { inactivityWatchdog.toolEnded() },

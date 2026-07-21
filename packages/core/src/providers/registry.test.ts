@@ -12,7 +12,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.deepEqual(visualModelIds, [
       'anthropic:claude-sonnet-4-6',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.5-flash',
+      'google:gemini-3.6-flash',
       'mimo:mimo-v2.5',
       'zhipu:glm-5v-turbo',
       'openai:gpt-5.6-sol',
@@ -28,6 +28,10 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.equal(claude.capabilities.supportsImageInput, true)
     assert.equal(claude.capabilities.contextWindow, 1_000_000)
     assert.equal(claude.capabilities.maxOutput, 64_000)
+    assert.deepEqual(claude.capabilities.reasoningEffort, {
+      supported: ['low', 'medium', 'high', 'max'],
+      default: 'high',
+    })
 
     const glm = getModelEntry('zhipu:glm-4.7')
     assert.equal(glm.capabilities.supportsImageInput, false)
@@ -58,7 +62,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
   it('Gemini 模型使用 Google OpenAI 兼容协议', () => {
     for (const modelId of [
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.5-flash',
+      'google:gemini-3.6-flash',
     ]) {
       const gemini = getModelEntry(modelId)
       assert.equal(gemini.provider, 'google')
@@ -68,6 +72,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
       assert.equal(gemini.capabilities.reasoningExposure, 'summary')
       assert.equal(gemini.capabilities.contextWindow, 1_048_576)
       assert.equal(gemini.capabilities.maxOutput, 65_536)
+      assert.ok(gemini.capabilities.reasoningEffort)
       const created = gemini.create({ apiKey: 'test', baseURL: 'http://localhost/v1' })
       assert.notEqual(typeof created, 'string')
       if (typeof created !== 'string') {
@@ -100,7 +105,6 @@ describe('MODEL_REGISTRY 能力边界', () => {
       assert.equal(gpt.capabilities.maxOutput, 128_000)
       assert.deepEqual(gpt.providerOptions, {
         openai: {
-          reasoningEffort: 'medium',
           reasoningSummary: 'auto',
           store: false,
         },
@@ -122,7 +126,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.equal(getModelEntry('openai:gpt-5.6-sol').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-terra').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-luna').protocol, 'openai-responses')
-    assert.equal(getModelEntry('google:gemini-3.5-flash').protocol, 'openai-chat')
+    assert.equal(getModelEntry('google:gemini-3.6-flash').protocol, 'openai-chat')
   })
 
   it('DeepSeek V4 Flash 使用官方上下文与输出边界', () => {

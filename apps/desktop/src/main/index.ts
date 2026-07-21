@@ -12,6 +12,7 @@ import {
   createWebFindTool,
   createWebSearchTool,
   getModelEntry,
+  normalizeReasoningEffortSelection,
   type ApprovalRequest,
   type ApprovalResponse,
   type ConsensusAgentSetup,
@@ -22,6 +23,7 @@ import {
   type ModelEntry,
   type PdfAttachment,
   type ProviderConfig,
+  type ReasoningEffortSelection,
   type SessionJournal,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
@@ -241,6 +243,8 @@ function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
 
 /** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
 let currentModelId: string | null = null
+/** 与当前模型一起持久化的会话级思考强度；default 表示不覆盖连接/厂商默认。 */
+let currentReasoningEffort: ReasoningEffortSelection = 'default'
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
 
@@ -268,16 +272,26 @@ async function ensureSession(): Promise<string | null> {
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) return resolved.error
   const { entry, providerConfig } = resolved.value
+  currentReasoningEffort = normalizeReasoningEffortSelection(
+    entry.capabilities,
+    currentReasoningEffort,
+  )
   if (session) {
-    session.setModel(entry, providerConfig)
+    session.setModelSelection(entry, providerConfig, currentReasoningEffort)
   } else {
     if (!sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const recorder = await sessions.ensure(projectDir, modelId)
+        const recorder = await sessions.ensure(projectDir, modelId, currentReasoningEffort)
         if (!session) {
           conversationId = recorder.sessionId
-          session = createMainAgentSession(recorder, projectDir, entry, providerConfig)
+          session = createMainAgentSession(
+            recorder,
+            projectDir,
+            entry,
+            providerConfig,
+            currentReasoningEffort,
+          )
           coordinator = null // 新会话必须换新协调器（session_score 等按对话重置）
         }
         if (consensusEnabled && !coordinator) return buildCoordinator()
@@ -301,10 +315,12 @@ function createMainAgentSession(
   targetProjectDir: string | null,
   model: ModelEntry,
   providerConfig: ProviderConfig,
+  reasoningEffort: ReasoningEffortSelection,
 ): AgentSession {
   const next = new AgentSession({
     model,
     providerConfig,
+    reasoningEffort,
     promptContext: {
       projectDir: targetProjectDir,
       osPlatform: process.platform,
@@ -481,11 +497,69 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'error', message: err, recoverable: true })
         return { ok: false }
       }
+      const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
+      if (!resolved.ok) {
+        broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
+        return { ok: false }
+      }
       currentModelId = command.modelId
+      currentReasoningEffort = 'default'
       if (session) {
-        const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
-        if (!resolved.ok) return { ok: false }
-        session.setModel(resolved.value.entry, resolved.value.providerConfig)
+        session.setModelSelection(
+          resolved.value.entry,
+          resolved.value.providerConfig,
+          currentReasoningEffort,
+        )
+      } else if (sessions.journal) {
+        await sessions.journal.updateModelSelection(command.modelId, currentReasoningEffort)
+        const initializationError = await ensureSession()
+        if (initializationError) {
+          broadcastEvent({ type: 'error', message: initializationError, recoverable: true })
+          return { ok: false }
+        }
+      }
+      return { ok: true }
+    }
+    case 'set-reasoning-effort': {
+      if (settingsMutationInProgress || attachmentPreparationInProgress) {
+        broadcastEvent({
+          type: 'error',
+          message: settingsMutationInProgress
+            ? '连接设置处理中，请稍后再调整思考强度'
+            : '附件消息准备中，请等待提交完成后再调整思考强度',
+          recoverable: true,
+        })
+        return { ok: false }
+      }
+      const modelId = resolveCurrentModelId()
+      if (!modelId) {
+        broadcastEvent({ type: 'error', message: '当前没有可用模型', recoverable: true })
+        return { ok: false }
+      }
+      const resolved = resolveModelConnection(loadAppConfig(), modelId)
+      if (!resolved.ok) {
+        broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
+        return { ok: false }
+      }
+      const normalized = normalizeReasoningEffortSelection(
+        resolved.value.entry.capabilities,
+        command.reasoningEffort,
+      )
+      if (normalized !== command.reasoningEffort) {
+        broadcastEvent({
+          type: 'error',
+          message: `${resolved.value.entry.displayName} 不支持思考强度 ${command.reasoningEffort}`,
+          recoverable: true,
+        })
+        return { ok: false }
+      }
+      currentReasoningEffort = normalized
+      if (session) {
+        session.setModelSelection(
+          resolved.value.entry,
+          resolved.value.providerConfig,
+          currentReasoningEffort,
+        )
       }
       return { ok: true }
     }
@@ -656,10 +730,22 @@ async function persistConnectionConfig(
   const current = currentModelId
     ? resolveModelConnection(config, currentModelId)
     : null
+  // 退役/已删除连接的历史会话没有可构造的 Agent；保存设置不能替用户改写其模型事实。
+  if (sessions.journal && !session && current && !current.ok) return
   currentModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
   if (!session || !currentModelId) return
   const resolved = resolveModelConnection(config, currentModelId)
-  if (resolved.ok) session.setModel(resolved.value.entry, resolved.value.providerConfig)
+  if (resolved.ok) {
+    currentReasoningEffort = normalizeReasoningEffortSelection(
+      resolved.value.entry.capabilities,
+      currentReasoningEffort,
+    )
+    session.setModelSelection(
+      resolved.value.entry,
+      resolved.value.providerConfig,
+      currentReasoningEffort,
+    )
+  }
 }
 
 async function saveProviderModelSettings(
@@ -789,6 +875,7 @@ function runtimeSnapshot(): RuntimeSnapshot {
   return {
     projectDir,
     modelId: resolveCurrentModelId(),
+    reasoningEffort: currentReasoningEffort,
     permissionMode: pendingPermissionMode ?? 'default',
     status: sessionDeletionLock.blocksRuntime
       ? 'working'
@@ -862,6 +949,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       session: {
         ...prepared.journal.metadataSnapshot,
         projectDir: prepared.targetProjectDir,
+        reasoningEffort: prepared.targetReasoningEffort,
       },
       viewEvents: [...prepared.journal.initialViewEvents],
       queuedInputs: pendingInputs(prepared.journal, 'queued'),
@@ -883,10 +971,11 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
 
 interface PreparedResumeRuntime {
   journal: SessionJournal
-  mainSession: AgentSession
+  mainSession: AgentSession | null
   nextCoordinator: ConsensusCoordinator | null
   targetProjectDir: string
   targetModelId: string
+  targetReasoningEffort: ReasoningEffortSelection
   recoveredFromInterruption: boolean
 }
 
@@ -901,48 +990,36 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
   )
   await journal.recoverInterruptedWork()
   const targetProjectDir = metadata.projectDir ?? requireDefaultWorkspace()
-  const model = resolveResumeModel(metadata.modelId)
-  const mainSession = createMainAgentSession(
-    journal,
-    targetProjectDir,
-    model.entry,
-    model.providerConfig,
-  )
+  const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
+  const targetReasoningEffort = resolved.ok
+    ? normalizeReasoningEffortSelection(
+        resolved.value.entry.capabilities,
+        metadata.reasoningEffort,
+      )
+    : metadata.reasoningEffort
+  const mainSession = resolved.ok
+    ? createMainAgentSession(
+        journal,
+        targetProjectDir,
+        resolved.value.entry,
+        resolved.value.providerConfig,
+        targetReasoningEffort,
+      )
+    : null
   let nextCoordinator: ConsensusCoordinator | null = null
-  if (consensusEnabled) {
+  if (consensusEnabled && mainSession) {
     const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
     if (!built.ok) throw new Error(built.error)
     nextCoordinator = built.value
   }
-  // 候选运行时已经完整构造；这是提交前唯一必要的持久化变更。
-  if (model.id !== metadata.modelId) await journal.updateModel(model.id)
   return {
     journal,
     mainSession,
     nextCoordinator,
     targetProjectDir,
-    targetModelId: model.id,
+    targetModelId: metadata.modelId,
+    targetReasoningEffort,
     recoveredFromInterruption,
-  }
-}
-
-function resolveResumeModel(historicalModelId: string): {
-  id: string
-  entry: ModelEntry
-  providerConfig: ProviderConfig
-} {
-  const config = loadAppConfig()
-  const historical = resolveModelConnection(config, historicalModelId)
-  const id = historical.ok ? historicalModelId : resolveDefaultModelId(config)
-  if (!id) throw new Error('没有任何已配置 key 的模型可用')
-  const resolved = id === historicalModelId
-    ? historical
-    : resolveModelConnection(config, id)
-  if (!resolved.ok) throw new Error(resolved.error)
-  return {
-    id,
-    entry: resolved.value.entry,
-    providerConfig: resolved.value.providerConfig,
   }
 }
 
@@ -955,6 +1032,7 @@ function commitResumedRuntime(input: PreparedResumeRuntime): void {
   coordinator = input.nextCoordinator
   projectDir = input.targetProjectDir
   currentModelId = input.targetModelId
+  currentReasoningEffort = input.targetReasoningEffort
   conversationId = input.journal.sessionId
   if (oldConversationId !== conversationId) {
     void cleanupConversationScratch(
@@ -1080,7 +1158,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
-  ipcMain.handle(IPC.listModels, () => listModelConnections(loadAppConfig()))
+  ipcMain.handle(IPC.listModels, () =>
+    listModelConnections(loadAppConfig(), resolveCurrentModelId()))
   ipcMain.handle(IPC.modelSettings, () => createModelSettingsSnapshot(loadAppConfig()))
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))

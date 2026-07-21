@@ -6,6 +6,7 @@ import {
   matchModelProfile,
   normalizeModelIdentity,
   parseCustomModelThinkingSuffix,
+  replaceCustomModelThinkingSuffix,
 } from './catalog.ts'
 
 describe('模型画像严格匹配', () => {
@@ -19,7 +20,7 @@ describe('模型画像严格匹配', () => {
       ['CLAUDE＿SONNET / 4．6', 'anthropic:claude-sonnet-4-6'],
       ['deepseek v4_flash', 'deepseek:deepseek-v4-flash'],
       ['Gemini / 3_1 Pro Preview', 'google:gemini-3.1-pro-preview'],
-      ['GEMINI-3.5_FLASH', 'google:gemini-3.5-flash'],
+      ['GEMINI-3.6_FLASH', 'google:gemini-3.6-flash'],
       ['MiMo / V2_5', 'mimo:mimo-v2.5'],
       ['glm 5v_turbo', 'zhipu:glm-5v-turbo'],
       ['GPT / 5_6', 'openai:gpt-5.6-sol'],
@@ -41,6 +42,7 @@ describe('模型画像严格匹配', () => {
   it('不使用子串或相近版本猜测未知型号', () => {
     assert.deepEqual(matchModelProfile('mimo-v2.6'), { status: 'none' })
     assert.deepEqual(matchModelProfile('gemini-3.1-pro'), { status: 'none' })
+    assert.deepEqual(matchModelProfile('gemini-3.5-flash'), { status: 'none' })
     assert.deepEqual(matchModelProfile('sonnet-4-6'), { status: 'none' })
   })
 
@@ -50,7 +52,7 @@ describe('模型画像严格匹配', () => {
       ['GPT-5.6-Terra（XHIGH）', 'openai:gpt-5.6-terra'],
       ['gpt-5.5(8192)', 'openai:gpt-5.5'],
       ['gpt-5.6-luna()', 'openai:gpt-5.6-luna'],
-      ['gemini-3-flash-agent(high)', 'google:gemini-3.5-flash'],
+      ['gemini-3.6-flash(high)', 'google:gemini-3.6-flash'],
     ] as const
     for (const [input, expectedProfileId] of cases) {
       const result = matchCustomModelProfile(input)
@@ -74,6 +76,14 @@ describe('模型画像严格匹配', () => {
       baseModelId: 'gemini-3-flash-agent',
       modifier: '',
     })
+    assert.deepEqual(parseCustomModelThinkingSuffix('custom-model(max)'), {
+      baseModelId: 'custom-model',
+      modifier: 'max',
+    })
+    assert.equal(
+      replaceCustomModelThinkingSuffix('antigravity-gemini-3.6-flash-agent(high)', 'low'),
+      'antigravity-gemini-3.6-flash-agent(low)',
+    )
     assert.equal(parseCustomModelThinkingSuffix('gpt-5.6-sol(turbo)'), null)
   })
 

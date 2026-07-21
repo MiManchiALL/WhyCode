@@ -10,6 +10,7 @@
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
 import type { ImageAttachment, ImageMessageAttachmentInput } from './attachments/types.ts'
 import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
+import type { ReasoningEffortSelection } from './providers/catalog.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -220,6 +221,7 @@ export type CoreCommand =
     }
   | { type: 'abort' }
   | { type: 'set-model'; modelId: string }
+  | { type: 'set-reasoning-effort'; reasoningEffort: ReasoningEffortSelection }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }

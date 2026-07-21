@@ -102,7 +102,7 @@ describe('模型设置数据边界', () => {
     )
     assert.deepEqual(google?.models.map((model) => model.id), [
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.5-flash',
+      'google:gemini-3.6-flash',
     ])
   })
 

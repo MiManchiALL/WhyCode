@@ -54,6 +54,48 @@ describe('模型连接解析', () => {
     assert.equal(item?.available, false)
     assert.match(item?.unavailableReason ?? '', /工具调用检测/)
   })
+
+  it('退役模型只作为当前历史占位展示，不自动解析为替代型号', () => {
+    const value = config({ google: { apiKey: 'key' } })
+    const retiredId = 'google:gemini-3.5-flash'
+    const resolution = resolveModelConnection(value, retiredId)
+    assert.equal(resolution.ok, false)
+    if (!resolution.ok) {
+      assert.match(resolution.error, /WhyCode 已不再支持模型/)
+      assert.match(resolution.error, /历史对话仍会保留/)
+    }
+
+    const item = listModelConnections(value, retiredId).at(-1)
+    assert.equal(item?.id, retiredId)
+    assert.equal(item?.available, false)
+    assert.match(item?.displayName ?? '', /已停止支持/)
+    assert.equal(
+      listModelConnections(value).some((candidate) => candidate.id === retiredId),
+      false,
+    )
+  })
+
+  it('未配置任何连接时仍优先识别已退役的内置模型', () => {
+    const retiredId = 'google:gemini-3.5-flash'
+    const resolution = resolveModelConnection(null, retiredId)
+
+    assert.equal(resolution.ok, false)
+    if (!resolution.ok) assert.match(resolution.error, /WhyCode 已不再支持模型/)
+    assert.match(
+      listModelConnections(null, retiredId).at(-1)?.unavailableReason ?? '',
+      /WhyCode 已不再支持模型/,
+    )
+  })
+
+  it('模型列表只暴露已验证的逐型号思考档位', () => {
+    const item = listModelConnections(
+      config({ google: { apiKey: 'key' } }),
+    ).find((candidate) => candidate.id === 'google:gemini-3.6-flash')
+    assert.deepEqual(item?.reasoningEffort, {
+      supported: ['minimal', 'low', 'medium', 'high'],
+      default: 'medium',
+    })
+  })
 })
 
 function config(providers: WhycodeConfig['providers']): WhycodeConfig {

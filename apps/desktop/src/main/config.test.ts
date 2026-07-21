@@ -73,9 +73,9 @@ describe('默认模型选择', () => {
     )
     assert.equal(
       resolveDefaultModelId(
-        config({ google: { apiKey: 'google-key' } }, 'google:gemini-3.5-flash'),
+        config({ google: { apiKey: 'google-key' } }, 'google:gemini-3.6-flash'),
       ),
-      'google:gemini-3.5-flash',
+      'google:gemini-3.6-flash',
     )
   })
 

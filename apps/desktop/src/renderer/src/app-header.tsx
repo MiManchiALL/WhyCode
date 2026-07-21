@@ -1,4 +1,5 @@
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
+import type { ReasoningEffort, ReasoningEffortSelection } from '@whycode/core'
 import type { ModelListItem } from '../../shared/settings.ts'
 
 interface ConsensusStatus {
@@ -16,17 +17,25 @@ interface AppHeaderProps {
   permMode: PermissionMode
   models: ModelListItem[]
   modelId: string
+  reasoningEffort: ReasoningEffortSelection
   onPickProject: () => void
   onToggleConsensus: () => void
   onCompact: () => void
   onPermissionChange: (mode: PermissionMode) => void
   onModelChange: (modelId: string) => void
+  onReasoningEffortChange: (reasoningEffort: ReasoningEffortSelection) => void
   onOpenSessions: () => void
   onNewSession: () => void
   onOpenModelSettings: () => void
 }
 
 export function AppHeader(props: AppHeaderProps) {
+  const selectedModel = props.models.find((model) => model.id === props.modelId)
+  const effort = selectedModel?.reasoningEffort
+  const selectedEffort = props.reasoningEffort === 'default'
+    || effort?.supported.includes(props.reasoningEffort)
+    ? props.reasoningEffort
+    : 'default'
   return (
     <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
       <div className="flex items-center gap-3">
@@ -85,6 +94,21 @@ export function AppHeader(props: AppHeaderProps) {
         </button>
         <select
           className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+          value={selectedEffort}
+          onChange={(event) =>
+            props.onReasoningEffortChange(event.target.value as ReasoningEffortSelection)}
+          disabled={props.busy || !effort}
+          title={effort ? '当前会话的思考强度' : '当前模型没有经过验证的思考强度选项'}
+        >
+          <option value="default">
+            思考：默认{effort?.default ? `（${reasoningEffortLabel(effort.default)}）` : ''}
+          </option>
+          {effort?.supported.map((level) => (
+            <option key={level} value={level}>思考：{reasoningEffortLabel(level)}</option>
+          ))}
+        </select>
+        <select
+          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
           value={props.modelId}
           onChange={(event) => props.onModelChange(event.target.value)}
           disabled={props.busy}
@@ -98,6 +122,18 @@ export function AppHeader(props: AppHeaderProps) {
       </div>
     </header>
   )
+}
+
+function reasoningEffortLabel(level: ReasoningEffort): string {
+  return {
+    none: '关闭',
+    minimal: '最少',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '极高',
+    max: '最大',
+  }[level]
 }
 
 function ConsensusButton(props: AppHeaderProps) {

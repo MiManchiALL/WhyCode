@@ -467,6 +467,20 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.status, 'idle')
   })
 
+  it('恢复新字段上线前的 v4 会话时只将缺失强度解释为 default', async () => {
+    const { store, journal, transcript } = await completedSession()
+    const legacyLines = (await readFile(transcript, 'utf8')).trimEnd().split('\n').map((line) => {
+      const entry = JSON.parse(line) as Record<string, unknown>
+      delete entry.reasoningEffort
+      return JSON.stringify(entry)
+    })
+    await writeFile(transcript, `${legacyLines.join('\n')}\n`, 'utf8')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.metadataSnapshot.reasoningEffort, 'default')
+    assert.deepEqual(reopened.initialMessages, journal.initialMessages)
+  })
+
   it('忽略崩溃留下的最后半行', async () => {
     const { store, journal, transcript } = await completedSession()
     await appendFile(transcript, '{"schemaVersion":1,"type":"messages"', 'utf8')
@@ -490,9 +504,10 @@ describe('SessionStore', () => {
 
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.initialMessages.at(-1), message('user', '修复后追加消息'))
-    await reopened.updateModel('test:after-repair')
+    await reopened.updateModelSelection('test:after-repair', 'high')
     const restartedAgain = await store.open(journal.sessionId)
     assert.equal(restartedAgain.metadataSnapshot.modelId, 'test:after-repair')
+    assert.equal(restartedAgain.metadataSnapshot.reasoningEffort, 'high')
     for (const line of (await readFile(transcript, 'utf8')).trimEnd().split('\n')) {
       assert.doesNotThrow(() => JSON.parse(line))
     }
@@ -987,7 +1002,7 @@ describe('SessionStore', () => {
 
   it('metadata 损坏时从 transcript 重建会话列表', async () => {
     const { store, journal, metadata } = await completedSession()
-    await journal.updateModel('test:other-model')
+    await journal.updateModelSelection('test:other-model', 'default')
     await writeFile(metadata, '{broken', 'utf8')
 
     const sessions = await store.list()

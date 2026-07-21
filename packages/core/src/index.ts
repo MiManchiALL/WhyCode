@@ -21,15 +21,26 @@ export {
   getModelProfile,
   matchCustomModelProfile,
   parseCustomModelThinkingSuffix,
+  replaceCustomModelThinkingSuffix,
+  isReasoningEffort,
   matchModelProfile,
   normalizeModelIdentity,
+  REASONING_EFFORT_LEVELS,
   type BuiltInProviderId,
   type BuiltInProviderProfile,
   type ModelProfile,
   type ModelProfileMatch,
   type ModelProviderId,
   type ProviderProtocol,
+  type ReasoningEffort,
+  type ReasoningEffortCapability,
+  type ReasoningEffortSelection,
 } from './providers/catalog.ts'
+export {
+  explicitReasoningEffort,
+  normalizeReasoningEffortSelection,
+  providerOptionsWithReasoningEffort,
+} from './providers/reasoning-effort.ts'
 export {
   CUSTOM_API_PROTOCOLS,
   createCustomModelEntry,

@@ -12,17 +12,21 @@ import {
 } from 'ai'
 import { z } from 'zod'
 import { createCustomModelEntry } from './custom.ts'
+import type { ReasoningEffortSelection } from './catalog.ts'
+import {
+  explicitReasoningEffort,
+  providerOptionsWithReasoningEffort,
+} from './reasoning-effort.ts'
 import type { ModelEntry } from './registry.ts'
 import { getModelEntry } from './registry.ts'
 
 describe('OpenAI Responses 思考摘要线格式', () => {
-  it('内置 GPT 显式请求默认思考强度和摘要', async () => {
+  it('内置 GPT 默认只请求摘要，不覆盖厂商默认思考强度', async () => {
     const captured = await captureRequest(getModelEntry('openai:gpt-5.6-sol'))
 
     assert.equal(captured.path, '/v1/responses')
     assert.equal(captured.body.model, 'gpt-5.6-sol')
     assert.deepEqual(captured.body.reasoning, {
-      effort: 'medium',
       summary: 'auto',
     })
     assert.equal(captured.body.store, false)
@@ -30,6 +34,18 @@ describe('OpenAI Responses 思考摘要线格式', () => {
       records(captured.body.include).includes('reasoning.encrypted_content'),
       true,
     )
+  })
+
+  it('内置 GPT 把会话显式选档写入 Responses reasoning.effort', async () => {
+    const captured = await captureRequest(
+      getModelEntry('openai:gpt-5.6-sol'),
+      undefined,
+      'max',
+    )
+    assert.deepEqual(captured.body.reasoning, {
+      effort: 'max',
+      summary: 'auto',
+    })
   })
 
   it('自定义 CLIProxyAPI 保留原始模型 ID 并同步尾部思考强度', async () => {
@@ -45,6 +61,13 @@ describe('OpenAI Responses 思考摘要线格式', () => {
     assert.equal(captured.body.model, 'gpt-5.6-sol(high)')
     assert.deepEqual(captured.body.reasoning, {
       effort: 'high',
+      summary: 'auto',
+    })
+
+    const overridden = await captureRequest(entry, undefined, 'low')
+    assert.equal(overridden.body.model, 'gpt-5.6-sol(low)')
+    assert.deepEqual(overridden.body.reasoning, {
+      effort: 'low',
       summary: 'auto',
     })
   })
@@ -137,7 +160,13 @@ async function captureRequest(
 ): Promise<{ path: string; body: Record<string, unknown> }>
 async function captureRequest(
   entry: ModelEntry,
+  invoke: RequestInvoker | undefined,
+  reasoningEffort: ReasoningEffortSelection,
+): Promise<{ path: string; body: Record<string, unknown> }>
+async function captureRequest(
+  entry: ModelEntry,
   invoke?: RequestInvoker,
+  reasoningEffort?: ReasoningEffortSelection,
 ): Promise<{ path: string; body: Record<string, unknown> }> {
   let path = ''
   let body: Record<string, unknown> | null = null
@@ -156,16 +185,21 @@ async function captureRequest(
 
   try {
     const address = server.address() as AddressInfo
-    const model = entry.create({
-      apiKey: 'test-key',
-      baseURL: `http://127.0.0.1:${address.port}/v1`,
-    })
+    const selection = reasoningEffort ?? 'default'
+    const model = entry.create(
+      {
+        apiKey: 'test-key',
+        baseURL: `http://127.0.0.1:${address.port}/v1`,
+      },
+      explicitReasoningEffort(selection),
+    )
+    const providerOptions = providerOptionsWithReasoningEffort(entry, selection)
     await assert.rejects(invoke
-      ? invoke(model, entry.providerOptions)
+      ? invoke(model, providerOptions)
       : generateText({
           model,
           prompt: 'Explain the tradeoff.',
-          providerOptions: entry.providerOptions,
+          providerOptions,
           maxRetries: 0,
         }))
     assert.ok(body)

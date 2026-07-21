@@ -9,9 +9,15 @@ import {
   type ModelCapabilities,
   type ModelProviderId,
   type ProviderProtocol,
+  type ReasoningEffort,
 } from './catalog.ts'
 
-export type { ModelCapabilities } from './catalog.ts'
+export type {
+  ModelCapabilities,
+  ReasoningEffort,
+  ReasoningEffortCapability,
+  ReasoningEffortSelection,
+} from './catalog.ts'
 
 export interface ModelEntry {
   /** WhyCode 内部模型 ID，格式 provider:model */
@@ -22,7 +28,7 @@ export interface ModelEntry {
   protocol: ProviderProtocol
   capabilities: ModelCapabilities
   /** 创建 AI SDK LanguageModel 实例 */
-  create: (config: ProviderConfig) => LanguageModel
+  create: (config: ProviderConfig, reasoningEffort?: ReasoningEffort) => LanguageModel
   /** 随每次请求透传给 AI SDK 的 providerOptions（厂商特殊参数逃生舱） */
   providerOptions?: ProviderMetadata
 }
@@ -92,8 +98,8 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     googleChat('gemini-3.1-pro-preview'),
   ),
   registryEntry(
-    'google:gemini-3.5-flash',
-    googleChat('gemini-3.5-flash'),
+    'google:gemini-3.6-flash',
+    googleChat('gemini-3.6-flash'),
   ),
   registryEntry(
     'mimo:mimo-v2.5',

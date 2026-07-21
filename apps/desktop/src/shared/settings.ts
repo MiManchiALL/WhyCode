@@ -3,6 +3,7 @@ import type {
   CapabilityProbeState,
   CustomApiProtocol,
   ModelCapabilities,
+  ReasoningEffortCapability,
 } from '@whycode/core'
 
 export interface ModelListItem {
@@ -12,6 +13,7 @@ export interface ModelListItem {
   available: boolean
   unavailableReason?: string
   supportsImageInput: boolean
+  reasoningEffort?: ReasoningEffortCapability
   custom: boolean
 }
 

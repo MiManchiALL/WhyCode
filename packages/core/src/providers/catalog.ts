@@ -10,6 +10,25 @@ export type BuiltInProviderId =
 export type ModelProviderId = BuiltInProviderId | 'custom'
 export type ProviderProtocol = 'anthropic-messages' | 'openai-chat' | 'openai-responses'
 
+export const REASONING_EFFORT_LEVELS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const
+export type ReasoningEffort = (typeof REASONING_EFFORT_LEVELS)[number]
+export type ReasoningEffortSelection = 'default' | ReasoningEffort
+
+export interface ReasoningEffortCapability {
+  /** 端点接受的显式档位；顺序同时是 UI 展示顺序。 */
+  supported: readonly ReasoningEffort[]
+  /** 省略表示默认行为由自定义连接或网关决定。 */
+  default?: ReasoningEffort
+}
+
 export interface ModelCapabilities {
   /** 原生 function calling 是否可靠可用（false 时不能作为完整 Agent 使用）。 */
   supportsNativeTools: boolean
@@ -19,6 +38,8 @@ export interface ModelCapabilities {
   supportsOriginalImageDetail?: boolean
   /** 厂商暴露推理过程的协议形态。 */
   reasoningExposure: 'block' | 'field' | 'summary' | 'none'
+  /** 可由 WhyCode 显式控制的推理强度；未声明时 UI 不猜测。 */
+  reasoningEffort?: ReasoningEffortCapability
   /** 结构化输出最高档位。 */
   structuredOutput: 'json-schema' | 'tool-based' | 'json-object' | 'prompt'
   /** 厂商 prompt cache 行为。 */
@@ -98,7 +119,6 @@ const GOOGLE_THINKING_SUMMARY_OPTIONS = {
 
 const OPENAI_REASONING_SUMMARY_OPTIONS = {
   openai: {
-    reasoningEffort: 'medium',
     reasoningSummary: 'auto',
     // WhyCode owns durable history. Keep Responses stateless and replay encrypted
     // reasoning locally instead of depending on provider-side item persistence.
@@ -110,6 +130,10 @@ const GPT_5_6_CAPABILITIES = {
   supportsNativeTools: true,
   supportsImageInput: true,
   reasoningExposure: 'summary',
+  reasoningEffort: {
+    supported: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    default: 'medium',
+  },
   structuredOutput: 'json-schema',
   promptCaching: 'auto',
   contextWindow: 1_050_000,
@@ -130,12 +154,21 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       supportsNativeTools: true,
       supportsImageInput: true,
       reasoningExposure: 'block',
+      reasoningEffort: {
+        supported: ['low', 'medium', 'high', 'max'],
+        default: 'high',
+      },
       structuredOutput: 'json-schema',
       promptCaching: 'explicit',
       contextWindow: 1_000_000,
       maxOutput: 64_000,
     },
-    providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    providerOptions: {
+      anthropic: {
+        cacheControl: { type: 'ephemeral' },
+        thinking: { type: 'adaptive' },
+      },
+    },
   },
   {
     id: 'deepseek:deepseek-v4-flash',
@@ -163,6 +196,10 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       supportsNativeTools: true,
       supportsImageInput: true,
       reasoningExposure: 'summary',
+      reasoningEffort: {
+        supported: ['low', 'medium', 'high'],
+        default: 'high',
+      },
       structuredOutput: 'json-schema',
       promptCaching: 'auto',
       contextWindow: 1_048_576,
@@ -171,15 +208,19 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     providerOptions: GOOGLE_THINKING_SUMMARY_OPTIONS,
   },
   {
-    id: 'google:gemini-3.5-flash',
-    modelId: 'gemini-3.5-flash',
-    displayName: 'Gemini 3.5 Flash',
+    id: 'google:gemini-3.6-flash',
+    modelId: 'gemini-3.6-flash',
+    displayName: 'Gemini 3.6 Flash',
     provider: 'google',
-    aliases: ['Gemini-3.5-Flash', 'Gemini 3.5 Flash', 'gemini-3-flash-agent'],
+    aliases: ['Gemini-3.6-Flash', 'Gemini 3.6 Flash'],
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: true,
       reasoningExposure: 'summary',
+      reasoningEffort: {
+        supported: ['minimal', 'low', 'medium', 'high'],
+        default: 'medium',
+      },
       structuredOutput: 'json-schema',
       promptCaching: 'auto',
       contextWindow: 1_048_576,
@@ -278,6 +319,10 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       supportsNativeTools: true,
       supportsImageInput: true,
       reasoningExposure: 'summary',
+      reasoningEffort: {
+        supported: ['none', 'low', 'medium', 'high', 'xhigh'],
+        default: 'medium',
+      },
       structuredOutput: 'json-schema',
       promptCaching: 'auto',
       contextWindow: 1_050_000,
@@ -295,6 +340,10 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       supportsNativeTools: true,
       supportsImageInput: true,
       reasoningExposure: 'summary',
+      reasoningEffort: {
+        supported: ['none', 'low', 'medium', 'high', 'xhigh'],
+        default: 'none',
+      },
       structuredOutput: 'json-schema',
       promptCaching: 'auto',
       contextWindow: 400_000,
@@ -310,11 +359,15 @@ export type ModelProfileMatch =
   | { status: 'none' }
 
 const CUSTOM_MODEL_THINKING_SUFFIX =
-  /\(\s*(minimal|low|medium|high|xhigh|auto|none|-?\d+)?\s*\)\s*$/iu
+  /\(\s*(minimal|low|medium|high|xhigh|max|auto|none|-?\d+)?\s*\)\s*$/iu
 
 export interface CustomModelThinkingSuffix {
   baseModelId: string
   modifier: string
+}
+
+export function isReasoningEffort(value: string): value is ReasoningEffort {
+  return (REASONING_EFFORT_LEVELS as readonly string[]).includes(value)
 }
 
 /** 解析 CLIProxyAPI 的尾部思考修饰符；返回值不用于改写实际请求模型 ID。 */
@@ -328,6 +381,15 @@ export function parseCustomModelThinkingSuffix(
     baseModelId: normalized.slice(0, match.index).trimEnd(),
     modifier: (match[1] ?? '').toLocaleLowerCase('en-US'),
   }
+}
+
+/** 显式 UI 选档时替换 CLIProxyAPI 既有后缀，避免其优先级覆盖请求体。 */
+export function replaceCustomModelThinkingSuffix(
+  value: string,
+  reasoningEffort: ReasoningEffort,
+): string {
+  const suffix = parseCustomModelThinkingSuffix(value)
+  return suffix ? `${suffix.baseModelId}(${reasoningEffort})` : value
 }
 
 /**

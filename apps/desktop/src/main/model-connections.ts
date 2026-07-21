@@ -5,6 +5,7 @@ import {
   MODEL_REGISTRY,
   type ModelEntry,
   type ProviderConfig,
+  type ReasoningEffortCapability,
 } from '@whycode/core'
 import {
   customConnectionId,
@@ -30,6 +31,7 @@ export interface ModelConnectionListItem {
   available: boolean
   unavailableReason?: string
   supportsImageInput: boolean
+  reasoningEffort?: ReasoningEffortCapability
   custom: boolean
 }
 
@@ -37,16 +39,22 @@ export function resolveModelConnection(
   config: WhycodeConfig | null,
   modelId: string,
 ): ModelConnectionResolution {
-  if (!config) return { ok: false, error: '尚未配置任何模型' }
   const connectionId = customConnectionId(modelId)
-  if (connectionId) return resolveCustomConnection(config, connectionId)
+  if (connectionId) {
+    if (!config) return { ok: false, error: '尚未配置任何模型' }
+    return resolveCustomConnection(config, connectionId)
+  }
 
   let entry: ModelEntry
   try {
     entry = getModelEntry(modelId)
   } catch {
-    return { ok: false, error: `模型 ID 未注册：${modelId}` }
+    return {
+      ok: false,
+      error: `WhyCode 已不再支持模型 ${modelId}；历史对话仍会保留，请先切换到当前可用模型再发送。`,
+    }
   }
+  if (!config) return { ok: false, error: '尚未配置任何模型' }
   const providerConfig = config.providers[entry.provider]
   if (!providerConfig?.apiKey) {
     return { ok: false, error: `尚未配置 ${entry.provider} 的 API key，无法使用 ${entry.displayName}` }
@@ -61,7 +69,10 @@ export function resolveModelConnection(
   }
 }
 
-export function listModelConnections(config: WhycodeConfig | null): ModelConnectionListItem[] {
+export function listModelConnections(
+  config: WhycodeConfig | null,
+  selectedModelId?: string | null,
+): ModelConnectionListItem[] {
   const builtIn = MODEL_REGISTRY.map((entry) => {
     const result = resolveModelConnection(config, entry.id)
     const effective = result.ok ? result.value.entry : entry
@@ -72,6 +83,9 @@ export function listModelConnections(config: WhycodeConfig | null): ModelConnect
       available: result.ok,
       ...(!result.ok ? { unavailableReason: result.error } : {}),
       supportsImageInput: effective.capabilities.supportsImageInput,
+      ...(effective.capabilities.reasoningEffort
+        ? { reasoningEffort: effective.capabilities.reasoningEffort }
+        : {}),
       custom: false,
     }
   })
@@ -85,10 +99,29 @@ export function listModelConnections(config: WhycodeConfig | null): ModelConnect
       available: result.ok,
       ...(!result.ok ? { unavailableReason: result.error } : {}),
       supportsImageInput: entry.capabilities.supportsImageInput,
+      ...(entry.capabilities.reasoningEffort
+        ? { reasoningEffort: entry.capabilities.reasoningEffort }
+        : {}),
       custom: true,
     }
   })
-  return [...builtIn, ...custom]
+  const available = [...builtIn, ...custom]
+  if (!selectedModelId || available.some((item) => item.id === selectedModelId)) return available
+  const resolution = resolveModelConnection(config, selectedModelId)
+  return [
+    ...available,
+    {
+      id: selectedModelId,
+      displayName: `${selectedModelId}（已停止支持）`,
+      hasKey: false,
+      available: false,
+      unavailableReason: resolution.ok
+        ? '当前模型未出现在连接列表中'
+        : resolution.error,
+      supportsImageInput: false,
+      custom: selectedModelId.startsWith('custom:'),
+    },
+  ]
 }
 
 function resolveCustomConnection(

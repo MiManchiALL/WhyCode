@@ -65,6 +65,7 @@ export function metadataFromStart(
     sessionId: entry.sessionId,
     projectDir: entry.projectDir,
     modelId: entry.modelId,
+    reasoningEffort: entry.reasoningEffort ?? 'default',
     title: '',
     lastUserText: '',
     createdAt: entry.timestamp,

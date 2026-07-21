@@ -1,11 +1,18 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import type { ModelCapabilities, ProviderProtocol } from './catalog.ts'
+import type {
+  ModelCapabilities,
+  ProviderProtocol,
+  ReasoningEffortCapability,
+} from './catalog.ts'
 import {
   getBuiltInProvider,
+  isReasoningEffort,
   matchCustomModelProfile,
   parseCustomModelThinkingSuffix,
+  REASONING_EFFORT_LEVELS,
+  replaceCustomModelThinkingSuffix,
 } from './catalog.ts'
 import type { ModelEntry } from './registry.ts'
 
@@ -91,6 +98,7 @@ export function createCustomModelEntry(options: CustomModelEntryOptions): ModelE
     reasoningExposure: isReasoningDisabled(options.modelId)
       ? 'none'
       : base.reasoningExposure,
+    reasoningEffort: customReasoningEffort(base.reasoningEffort, options.modelId),
     structuredOutput: profile?.capabilities.structuredOutput
       ?? (supportsNativeTools ? 'tool-based' : 'prompt'),
   }
@@ -102,20 +110,41 @@ export function createCustomModelEntry(options: CustomModelEntryOptions): ModelE
     protocol: options.protocol,
     capabilities,
     ...(providerOptions ? { providerOptions } : {}),
-    create: (config) => {
+    create: (config, reasoningEffort) => {
       if (!config.baseURL) throw new Error('自定义连接缺少 Base URL')
+      const requestModelId = reasoningEffort
+        ? replaceCustomModelThinkingSuffix(options.modelId, reasoningEffort)
+        : options.modelId
       if (options.protocol === 'anthropic-messages') {
-        return createAnthropic({ apiKey: config.apiKey, baseURL: config.baseURL })(options.modelId)
+        return createAnthropic({ apiKey: config.apiKey, baseURL: config.baseURL })(requestModelId)
       }
       if (options.protocol === 'openai-responses') {
-        return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL }).responses(options.modelId)
+        return createOpenAI({ apiKey: config.apiKey, baseURL: config.baseURL }).responses(requestModelId)
       }
       return createOpenAICompatible({
         name: adapterName,
         apiKey: config.apiKey,
         baseURL: config.baseURL,
-      })(options.modelId)
+      })(requestModelId)
     },
+  }
+}
+
+function customReasoningEffort(
+  inherited: ReasoningEffortCapability | undefined,
+  modelId: string,
+): ReasoningEffortCapability | undefined {
+  const suffix = parseCustomModelThinkingSuffix(modelId)
+  if (!suffix) return inherited
+  // 尾部语法是用户对 CLIProxyAPI 兼容行为的显式选择；未知型号的合法性由网关裁决。
+  const supported = inherited?.supported ?? REASONING_EFFORT_LEVELS
+  const configured = isReasoningEffort(suffix.modifier)
+    && supported.includes(suffix.modifier)
+    ? suffix.modifier
+    : undefined
+  return {
+    supported,
+    ...(configured ? { default: configured } : {}),
   }
 }
 
@@ -140,7 +169,7 @@ function resolveCustomProviderOptions(
 }
 
 function isOpenAIReasoningEffort(value: string): boolean {
-  return ['minimal', 'low', 'medium', 'high', 'xhigh', 'auto', 'none'].includes(value)
+  return isReasoningEffort(value) || value === 'auto'
 }
 
 function isReasoningDisabled(modelId: string): boolean {

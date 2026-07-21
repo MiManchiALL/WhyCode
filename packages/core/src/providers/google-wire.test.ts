@@ -5,13 +5,16 @@ import { describe, it } from 'node:test'
 import { generateText, Output, type ModelMessage } from 'ai'
 import { z } from 'zod'
 import { getModelEntry } from './registry.ts'
+import { providerOptionsWithReasoningEffort } from './reasoning-effort.ts'
+import type { ReasoningEffortSelection } from './catalog.ts'
 
 describe('Google OpenAI 兼容线格式', () => {
   it('保留思考参数、JSON Schema 与 Gemini thought signature', async () => {
     const captured = await captureGeminiRequest()
 
     assert.equal(captured.path, '/v1/chat/completions')
-    assert.equal(captured.body.model, 'gemini-3.5-flash')
+    assert.equal(captured.body.model, 'gemini-3.6-flash')
+    assert.equal(captured.body.reasoning_effort, undefined)
     assert.deepEqual(captured.body.extra_body, {
       google: { thinking_config: { include_thoughts: true } },
     })
@@ -23,9 +26,17 @@ describe('Google OpenAI 兼容线格式', () => {
     const google = record(record(toolCall?.extra_content)?.google)
     assert.equal(google?.thought_signature, 'thought-signature-1')
   })
+
+  it('把会话思考强度翻译为官方 OpenAI 兼容 reasoning_effort', async () => {
+    const captured = await captureGeminiRequest('high')
+    assert.equal(captured.body.model, 'gemini-3.6-flash')
+    assert.equal(captured.body.reasoning_effort, 'high')
+  })
 })
 
-async function captureGeminiRequest(): Promise<{
+async function captureGeminiRequest(
+  reasoningEffort: ReasoningEffortSelection = 'default',
+): Promise<{
   path: string
   body: Record<string, unknown>
 }> {
@@ -46,7 +57,7 @@ async function captureGeminiRequest(): Promise<{
 
   try {
     const address = server.address() as AddressInfo
-    const entry = getModelEntry('google:gemini-3.5-flash')
+    const entry = getModelEntry('google:gemini-3.6-flash')
     await assert.rejects(generateText({
       model: entry.create({
         apiKey: 'test-key',
@@ -54,7 +65,7 @@ async function captureGeminiRequest(): Promise<{
       }),
       messages: signedToolHistory(),
       output: Output.object({ schema: z.object({ ok: z.boolean() }) }),
-      providerOptions: entry.providerOptions,
+      providerOptions: providerOptionsWithReasoningEffort(entry, reasoningEffort),
       maxRetries: 0,
     }))
     assert.ok(body)

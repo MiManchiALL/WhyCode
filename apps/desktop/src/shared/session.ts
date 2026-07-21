@@ -6,6 +6,7 @@ import type {
   SessionMetadata,
   SessionSummary,
   ViewEvent,
+  ReasoningEffortSelection,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 
@@ -15,6 +16,7 @@ export type SessionListItem = SessionSummary & { isCurrent: boolean }
 export interface RuntimeSnapshot {
   projectDir: string | null
   modelId: string | null
+  reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
   status: AgentStatus
   busy: boolean
