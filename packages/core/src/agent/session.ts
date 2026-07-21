@@ -54,10 +54,11 @@ import {
   referencedPdfAttachmentIds,
   withPdfAttachmentReferences,
 } from '../pdf/messages.ts'
-import { pdfAttachmentPath } from '../pdf/storage.ts'
+import { pdfAttachmentPath, removePdfAttachmentFiles } from '../pdf/storage.ts'
 import {
   PDF_VISUAL_MAX_PAGES,
   pdfAttachmentSchema,
+  pdfAttachmentsSchema,
   type PdfAttachment,
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
@@ -593,8 +594,10 @@ export class AgentSession {
             injected,
             undefined,
             undefined,
-            drained.flatMap((item) => item.attachments),
-            drained.filter((item) => item.persisted).map((item) => item.id),
+            {
+              attachments: drained.flatMap((item) => item.attachments),
+              deliveredInputIds: drained.filter((item) => item.persisted).map((item) => item.id),
+            },
           ),
           '确认排队输入送达',
         )
@@ -1195,7 +1198,8 @@ export class AgentSession {
     let stepImageAttachmentCount = 0
     let stepImageAttachmentLimit = IMAGE_ATTACHMENT_MAX_COUNT
     const stepImageAttachmentKeys = new Set<string>()
-    let attachmentsCommitted = false
+    const stepPdfAttachments = new Map<string, PdfAttachment[]>()
+    let stepAttachmentsCommitted = false
     const taskStateBeforeStep = this.taskPlan?.stateSnapshot
     let taskPlanFinalized = false
     this.taskPlan?.beginStep()
@@ -1255,6 +1259,54 @@ export class AgentSession {
               attachments: parsed.data,
               transform: parsedTransform.data,
             })
+            return null
+          },
+          async (toolCallId, attachments) => {
+            if (!this.options.sessionRecorder) {
+              return 'PDF 工具附件需要会话附件存储'
+            }
+            const parsed = pdfAttachmentsSchema.safeParse(attachments)
+            const acceptedStorageNames = new Set(
+              [...stepPdfAttachments.values()]
+                .flatMap((values) => values)
+                .map((attachment) => attachment.storageName),
+            )
+            const individuallyValid = attachments.flatMap((attachment) => {
+              const value = pdfAttachmentSchema.safeParse(attachment)
+              return value.success ? [value.data] : []
+            })
+            const removeRejected = () => removePdfAttachmentFiles(
+              this.options.sessionRecorder!.attachmentDirectory,
+              individuallyValid.filter((attachment) =>
+                !this.pdfAttachments.has(attachment.storageName)
+                && !acceptedStorageNames.has(attachment.storageName)),
+            ).catch(() => {})
+            if (
+              !parsed.success
+              || parsed.data.some((attachment) =>
+                attachment.sessionId !== this.options.sessionRecorder?.sessionId)
+            ) {
+              await removeRejected()
+              return 'PDF 工具返回了无效或不属于当前会话的附件'
+            }
+            const unique = new Map<string, PdfAttachment>()
+            for (const values of stepPdfAttachments.values()) {
+              for (const attachment of values) unique.set(attachment.storageName, attachment)
+            }
+            for (const attachment of parsed.data) {
+              const previous = unique.get(attachment.storageName)
+                ?? this.pdfAttachments.get(attachment.storageName)
+              if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+                await removeRejected()
+                return `PDF 附件元数据冲突：${attachment.storageName}`
+              }
+              unique.set(attachment.storageName, attachment)
+            }
+            if (!pdfAttachmentsSchema.safeParse([...unique.values()]).success) {
+              await removeRejected()
+              return '单个模型步骤导入的 PDF 数量或总大小超过会话附件上限'
+            }
+            stepPdfAttachments.set(toolCallId, parsed.data)
             return null
           },
         ),
@@ -1348,28 +1400,48 @@ export class AgentSession {
         return result ? [{ ...result, toolCallId }] : []
       })
       const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
+      const orderedPdfAttachments = [...new Map(
+        toolCallOrder
+          .flatMap((toolCallId) => stepPdfAttachments.get(toolCallId) ?? [])
+          .map((attachment) => [attachment.storageName, attachment] as const),
+      ).values()]
+      const pdfReferenceMessages: ModelMessage[] = orderedPdfAttachments.length > 0
+        ? [{
+            role: 'user',
+            content: withPdfAttachmentReferences(
+              '[应用生成：前述工具结果已将 PDF 保存为当前会话附件；需要内容时调用 ReadPdf 按页读取。]',
+              orderedPdfAttachments,
+            ),
+          }]
+        : []
       const committedMessages = dehydrateImageMessages([
         ...(currentTimeReminder ? [currentTimeReminder] : []),
         ...attachImagesToToolResults(response.messages, orderedImageResults),
+        ...pdfReferenceMessages,
         ...internalMarkers,
       ])
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null
         : stepControl.taskPlanEngagement?.planId
       this.assertImageAttachmentsCompatible(orderedImageAttachments)
+      this.assertPdfAttachmentsCompatible(orderedPdfAttachments)
       await this.persistRequired(
         (recorder) => recorder.recordStep(
           this.activeTurn!.id,
           committedMessages,
           taskPlanCommit?.state,
           engagementUpdate,
-          orderedImageAttachments,
+          {
+            attachments: orderedImageAttachments,
+            pdfAttachments: orderedPdfAttachments,
+          },
         ),
         '提交模型步骤',
       )
-      attachmentsCommitted = true
+      stepAttachmentsCommitted = true
       this.messages.push(...committedMessages)
       this.addImageAttachments(orderedImageAttachments)
+      this.addPdfAttachments(orderedPdfAttachments)
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         emit({ type: 'user-question', question: userQuestion })
       }
@@ -1402,7 +1474,7 @@ export class AgentSession {
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
       }
     } catch (error) {
-      if (!attachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
+      if (!stepAttachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
         await removeImageAttachmentFiles(
           this.options.sessionRecorder.attachmentDirectory,
           [...stepImageAttachments.values()]
@@ -1410,7 +1482,18 @@ export class AgentSession {
             .filter((attachment) => !this.imageAttachments.has(attachment.storageName)),
         ).catch(() => {})
       }
-      if (taskPlanFinalized && !attachmentsCommitted && taskStateBeforeStep) {
+      if (!stepAttachmentsCommitted && stepPdfAttachments.size > 0 && this.options.sessionRecorder) {
+        await removePdfAttachmentFiles(
+          this.options.sessionRecorder.attachmentDirectory,
+          [...new Map(
+            [...stepPdfAttachments.values()]
+              .flat()
+              .filter((attachment) => !this.pdfAttachments.has(attachment.storageName))
+              .map((attachment) => [attachment.storageName, attachment] as const),
+          ).values()],
+        ).catch(() => {})
+      }
+      if (taskPlanFinalized && !stepAttachmentsCommitted && taskStateBeforeStep) {
         this.taskPlan?.restore(taskStateBeforeStep)
       } else {
         this.taskPlan?.discardStep()
@@ -1456,6 +1539,10 @@ export class AgentSession {
       attachments: readonly ImageAttachment[],
       transform: ImageTransform | undefined,
       attachmentLimit: number,
+    ) => Promise<string | null>,
+    onPdfAttachments: (
+      toolCallId: string,
+      attachments: readonly PdfAttachment[],
     ) => Promise<string | null>,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
@@ -1671,6 +1758,10 @@ export class AgentSession {
             onProgress: (output) =>
               emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
           })
+          if (result.pdfAttachments?.length) {
+            const error = await onPdfAttachments(toolCallId, result.pdfAttachments)
+            if (error) result = { data: error, isError: true }
+          }
           let viewedAttachments: readonly ImageAttachment[] = []
           if (result.attachments?.length) {
             const error = await onImageAttachments(

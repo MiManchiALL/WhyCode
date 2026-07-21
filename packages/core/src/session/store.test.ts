@@ -70,8 +70,7 @@ describe('SessionStore', () => {
       [message('user', '第一条插话'), message('user', '第二条插话')],
       undefined,
       undefined,
-      undefined,
-      [firstId, secondId],
+      { deliveredInputIds: [firstId, secondId] },
     )
 
     const delivered = await store.open(journal.sessionId)
@@ -91,8 +90,7 @@ describe('SessionStore', () => {
       [message('user', '交付后即崩溃的插话')],
       undefined,
       undefined,
-      undefined,
-      [inputId],
+      { deliveredInputIds: [inputId] },
     )
     // 模拟 messages 已写稳、message-injected 尚未来得及写入，重启后又产生了更新事件。
     await journal.recordViewEvents([{

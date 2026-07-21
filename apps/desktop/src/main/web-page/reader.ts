@@ -1,15 +1,18 @@
 import {
+  WEB_FETCH_MAX_LINES,
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FIND_MAX_OUTPUT_CHARS,
   WebPageError,
   type WebFetchHandler,
+  type WebFetchPdfResponse,
   type WebFetchResponse,
   type WebFindHandler,
   type WebFindMatch,
+  type PdfAttachment,
 } from '@whycode/core'
 import type { ExtractedWebPage } from './content.ts'
 import { parseWebPageUrl } from './url-safety.ts'
-import type { WebDocument } from './network.ts'
+import type { WebDocument, WebPdfDocument, WebTextDocument } from './network.ts'
 
 export const WEB_PAGE_CACHE_MAX_ENTRIES = 6
 export const WEB_PAGE_CACHE_TTL_MS = 15 * 60_000
@@ -22,9 +25,13 @@ export interface WebPageReader {
 export interface WebPageReaderOptions {
   fetchDocument: (url: string, abortSignal: AbortSignal) => Promise<WebDocument>
   extractDocument: (
-    document: WebDocument,
+    document: WebTextDocument,
     abortSignal: AbortSignal,
   ) => Promise<ExtractedWebPage>
+  importPdfDocument: (
+    document: WebPdfDocument,
+    abortSignal: AbortSignal,
+  ) => Promise<PdfAttachment>
   now?: () => number
   cacheTtlMs?: number
   maxEntries?: number
@@ -35,9 +42,13 @@ interface CacheEntry {
   expiresAt: number
 }
 
+type LoadedResource =
+  | { kind: 'page'; page: ExtractedWebPage }
+  | { kind: 'pdf'; response: WebFetchPdfResponse }
+
 export function createWebPageReader(options: WebPageReaderOptions): WebPageReader {
   const cache = new Map<string, CacheEntry>()
-  const inFlight = new Map<string, Promise<ExtractedWebPage>>()
+  const inFlight = new Map<string, Promise<LoadedResource>>()
   const now = options.now ?? Date.now
   const cacheTtlMs = options.cacheTtlMs ?? WEB_PAGE_CACHE_TTL_MS
   const maxEntries = options.maxEntries ?? WEB_PAGE_CACHE_MAX_ENTRIES
@@ -46,16 +57,22 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
     const requestedUrl = parseWebPageUrl(request.url).toString()
     let page = getCachedPage(cache, requestedUrl, now())
     if (!page) {
-      page = await loadPage(requestedUrl, abortSignal)
+      const loaded = await loadResource(requestedUrl, abortSignal)
+      if (loaded.kind === 'pdf') return loaded.response
+      page = loaded.page
     }
-    return pageSlice(page, request.offset, request.limit)
+    return pageSlice(
+      page,
+      request.offset ?? 1,
+      request.limit ?? WEB_FETCH_MAX_LINES,
+    )
   }
 
   const findInPage: WebFindHandler = async (request, abortSignal) => {
     const requestedUrl = parseWebPageUrl(request.url).toString()
     const page = getCachedPage(cache, requestedUrl, now())
     if (!page) {
-      throw new WebPageError('当前会话尚未读取这个网页，请先使用 WebFetch 读取同一 URL')
+      throw new WebPageError('当前会话没有这个文本网页的有效缓存；请先使用 WebFetch 读取同一 URL，若结果是 PDF 则改用 ReadPdf')
     }
     const pattern = request.pattern.toLowerCase()
     const matches: WebFindMatch[] = []
@@ -89,14 +106,27 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
     }
   }
 
-  async function loadPage(url: string, abortSignal: AbortSignal): Promise<ExtractedWebPage> {
+  async function loadResource(url: string, abortSignal: AbortSignal): Promise<LoadedResource> {
     const existing = inFlight.get(url)
     if (existing) return existing
     const pending = options.fetchDocument(url, abortSignal).then(async (document) => {
       if (abortSignal.aborted) throw new WebPageError('网页读取已取消')
+      if (document.kind === 'pdf') {
+        const attachment = await options.importPdfDocument(document, abortSignal)
+        return {
+          kind: 'pdf' as const,
+          response: {
+            kind: 'pdf' as const,
+            requestedUrl: document.requestedUrl,
+            finalUrl: document.finalUrl,
+            contentType: 'application/pdf' as const,
+            attachment,
+          },
+        }
+      }
       const page = await options.extractDocument(document, abortSignal)
       putCachedPage(cache, url, page, now() + cacheTtlMs, maxEntries)
-      return page
+      return { kind: 'page' as const, page }
     })
     inFlight.set(url, pending)
     try {
@@ -123,6 +153,7 @@ function pageSlice(
     outputChars += line.length
   }
   return {
+    kind: 'page',
     requestedUrl: page.requestedUrl,
     finalUrl: page.finalUrl,
     ...(page.title ? { title: page.title } : {}),

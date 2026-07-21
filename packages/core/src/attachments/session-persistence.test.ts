@@ -143,8 +143,7 @@ describe('图片会话持久化', () => {
         [createImageUserMessage('图片插话', attachments)],
         undefined,
         undefined,
-        attachments,
-        [inputId],
+        { attachments, deliveredInputIds: [inputId] },
       )
       const delivered = await store.open(journal.sessionId)
       assert.deepEqual(delivered.pendingUserInputs, [])

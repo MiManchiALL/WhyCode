@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { WEB_FETCH_MAX_OUTPUT_CHARS } from '@whycode/core'
+import {
+  WEB_FETCH_MAX_OUTPUT_CHARS,
+  type WebFetchPageResponse,
+  type WebFetchResponse,
+} from '@whycode/core'
 import { extractWebPage } from './extract.ts'
 import {
   createWebPageReader,
@@ -9,13 +13,13 @@ import {
 
 const activeSignal = new AbortController().signal
 
-function createTestReader(options: Omit<WebPageReaderOptions, 'extractDocument'>) {
+function createTestReader(
+  options: Omit<WebPageReaderOptions, 'extractDocument' | 'importPdfDocument'>,
+) {
   return createWebPageReader({
     ...options,
-    extractDocument: async (document) => {
-      if (document.kind !== 'text') throw new Error('测试仅接受文本网页')
-      return extractWebPage(document)
-    },
+    extractDocument: async (document) => extractWebPage(document),
+    importPdfDocument: async () => { throw new Error('测试未配置 PDF 导入') },
   })
 }
 
@@ -58,8 +62,8 @@ describe('会话级网页正文读取器', () => {
       maxResults: 10,
     }, activeSignal)
 
-    assert.deepEqual(first.lines, ['line one', 'line two'])
-    assert.deepEqual(second.lines, ['Release Notes', 'line four'])
+    assert.deepEqual(page(first).lines, ['line one', 'line two'])
+    assert.deepEqual(page(second).lines, ['Release Notes', 'line four'])
     assert.deepEqual(found.matches.map((match) => match.lineNumber), [3, 5])
     assert.deepEqual(found.matches[0]?.context.map((line) => line.lineNumber), [2, 3, 4])
     assert.equal(fetches, 1)
@@ -108,10 +112,11 @@ describe('会话级网页正文读取器', () => {
       offset: 1,
       limit: 100,
     }, activeSignal)
-    assert.equal(result.lines.length, 2)
-    assert.equal(result.lines.reduce((sum, line) => sum + line.length, 0)
+    const resultPage = page(result)
+    assert.equal(resultPage.lines.length, 2)
+    assert.equal(resultPage.lines.reduce((sum, line) => sum + line.length, 0)
       <= WEB_FETCH_MAX_OUTPUT_CHARS, true)
-    assert.equal(result.totalLines, 3)
+    assert.equal(resultPage.totalLines, 3)
   })
 
   it('同一 URL 的并行分页只抓取和提取一次', async () => {
@@ -139,8 +144,55 @@ describe('会话级网页正文读取器', () => {
     }, activeSignal)
     finishFetch?.()
 
-    assert.deepEqual((await first).lines, ['one', 'two'])
-    assert.deepEqual((await second).lines, ['three', 'four'])
+    assert.deepEqual(page(await first).lines, ['one', 'two'])
+    assert.deepEqual(page(await second).lines, ['three', 'four'])
     assert.equal(fetches, 1)
   })
+
+  it('远程 PDF 只导入会话附件，不进入正文缓存和行分页', async () => {
+    const attachment = {
+      id: '11111111-1111-4111-8111-111111111111',
+      sessionId: '22222222-2222-4222-8222-222222222222',
+      name: 'remote.pdf',
+      storageName: '11111111-1111-4111-8111-111111111111.pdf',
+      mediaType: 'application/pdf' as const,
+      origin: 'web' as const,
+      sha256: 'a'.repeat(64),
+      byteLength: 20,
+      pageCount: 3,
+    }
+    let imports = 0
+    const reader = createWebPageReader({
+      fetchDocument: async (url) => ({
+        kind: 'pdf',
+        requestedUrl: url,
+        finalUrl: 'https://cdn.example.com/remote.pdf',
+        contentType: 'application/pdf',
+        bytes: new TextEncoder().encode('%PDF-1.4'),
+      }),
+      extractDocument: async () => assert.fail('PDF 不应进入网页正文提取'),
+      importPdfDocument: async () => {
+        imports++
+        return attachment
+      },
+    })
+
+    const result = await reader.fetchPage({ url: 'https://example.com/download' }, activeSignal)
+
+    assert.equal(result.kind, 'pdf')
+    assert.equal(result.kind === 'pdf' ? result.attachment.id : null, attachment.id)
+    assert.equal(imports, 1)
+    await assert.rejects(reader.findInPage({
+      url: 'https://example.com/download',
+      pattern: 'anything',
+      context: 0,
+      maxResults: 1,
+    }, activeSignal), /ReadPdf/)
+  })
 })
+
+function page(result: WebFetchResponse): WebFetchPageResponse {
+  assert.equal(result.kind, 'page')
+  if (result.kind !== 'page') throw new Error('期望文本网页结果')
+  return result
+}

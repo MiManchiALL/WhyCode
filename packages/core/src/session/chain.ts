@@ -160,7 +160,7 @@ function collectImageAttachments(entries: SessionEntry[]): ImageAttachment[] {
 function collectPdfAttachments(entries: SessionEntry[]): PdfAttachment[] {
   const attachments = new Map<string, { serialized: string; value: PdfAttachment }>()
   for (const entry of entries) {
-    const values = entry.type === 'user-input'
+    const values = entry.type === 'user-input' || entry.type === 'messages'
       ? entry.pdfAttachments ?? []
       : entry.type === 'snapshot'
         ? entry.pendingUserInputs.flatMap((input) => input.pdfAttachments ?? [])

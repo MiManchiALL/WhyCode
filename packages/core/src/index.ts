@@ -122,6 +122,8 @@ export {
   webFetchRequestSchema,
   webFindRequestSchema,
   type WebFetchHandler,
+  type WebFetchPageResponse,
+  type WebFetchPdfResponse,
   type WebFetchRequest,
   type WebFetchResponse,
   type WebFetchToolInput,
@@ -246,7 +248,9 @@ export {
 export {
   pdfAttachmentPath,
   preparePdfAttachmentImport,
+  removePdfAttachmentFiles,
   validateStoredPdfAttachments,
+  type PdfAttachmentImportSource,
   type PdfAttachmentImportTransaction,
 } from './pdf/storage.ts'
 export {

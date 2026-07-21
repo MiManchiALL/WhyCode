@@ -78,7 +78,10 @@ import {
 } from './web-page/electron-fetch.ts'
 import { createWebDocumentFetcher } from './web-page/network.ts'
 import { createWebPageReader } from './web-page/reader.ts'
-import { ElectronWebPageProcessor } from './web-page/processor.ts'
+import {
+  extractWebTextDocument,
+} from './web-page/processor.ts'
+import { importWebPdfDocument } from './web-page/pdf-import.ts'
 import { installExternalWebLinkHandlers } from './external-link.ts'
 import {
   registerAttachmentProtocol,
@@ -105,7 +108,7 @@ const webSearchTool = createWebSearchTool({
   }),
 })
 
-function createSessionWebPageTools() {
+function createSessionWebPageTools(recorder: SessionJournal) {
   const fetchImpl = createElectronWebPageFetch((options) => net.request(options))
   const fetchDocument = createWebDocumentFetcher({
     fetchImpl,
@@ -115,8 +118,16 @@ function createSessionWebPageTools() {
   })
   const reader = createWebPageReader({
     fetchDocument,
-    extractDocument: (document, abortSignal) =>
-      webPageProcessor.extract(document, abortSignal),
+    extractDocument: extractWebTextDocument,
+    importPdfDocument: (document, abortSignal) => importWebPdfDocument(
+      document,
+      {
+        attachmentDirectory: recorder.attachmentDirectory,
+        sessionId: recorder.sessionId,
+        processor: pdfProcessor,
+      },
+      abortSignal,
+    ),
   })
   return [
     createWebFetchTool({ fetchPage: reader.fetchPage }),
@@ -208,7 +219,6 @@ let attachmentPreparationInProgress = false
 /** 连接设置写入或探测期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
-const webPageProcessor = new ElectronWebPageProcessor(pdfProcessor)
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
 const userMessageRoutingGate = new UserMessageRoutingGate()
 const viewTimeline = new ViewTimeline((error) => {
@@ -304,7 +314,7 @@ function createMainAgentSession(
     mainTools: [
       ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
       webSearchTool,
-      ...createSessionWebPageTools(),
+      ...createSessionWebPageTools(recorder),
     ],
     captureScreenshot: captureDesktopScreenshot,
     pdfProcessor,

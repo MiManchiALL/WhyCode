@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { PdfAttachment } from '../../pdf/types.ts'
 
 export const WEB_PAGE_MAX_URL_CHARS = 2_048
 export const WEB_PAGE_MAX_LINE_CHARS = 4_096
@@ -23,14 +24,14 @@ export const webFetchRequestSchema = z.object({
   offset: z.number()
     .int()
     .min(1)
-    .default(1)
-    .describe('起始行号，从 1 开始；继续读取时使用上次结果给出的 next offset'),
+    .optional()
+    .describe('仅文本网页有效：起始行号，从 1 开始；继续读取时使用上次结果给出的 next offset'),
   limit: z.number()
     .int()
     .min(1)
     .max(WEB_FETCH_MAX_LINES)
-    .default(WEB_FETCH_MAX_LINES)
-    .describe(`最多返回多少行，默认及最大均为 ${WEB_FETCH_MAX_LINES}`),
+    .optional()
+    .describe(`仅文本网页有效：最多返回多少行，默认及最大均为 ${WEB_FETCH_MAX_LINES}`),
 })
 
 export const webFindRequestSchema = z.object({
@@ -60,8 +61,8 @@ export type WebFindToolInput = z.infer<typeof webFindRequestSchema>
 
 export interface WebFetchRequest {
   url: string
-  offset: number
-  limit: number
+  offset?: number
+  limit?: number
 }
 
 export interface WebPageLine {
@@ -69,7 +70,8 @@ export interface WebPageLine {
   text: string
 }
 
-export interface WebFetchResponse {
+export interface WebFetchPageResponse {
+  kind: 'page'
   requestedUrl: string
   finalUrl: string
   title?: string
@@ -80,6 +82,16 @@ export interface WebFetchResponse {
   /** 确定性正文提取命中了宿主的整页内容上限。 */
   sourceTruncated: boolean
 }
+
+export interface WebFetchPdfResponse {
+  kind: 'pdf'
+  requestedUrl: string
+  finalUrl: string
+  contentType: 'application/pdf'
+  attachment: PdfAttachment
+}
+
+export type WebFetchResponse = WebFetchPageResponse | WebFetchPdfResponse
 
 export interface WebFindRequest {
   url: string

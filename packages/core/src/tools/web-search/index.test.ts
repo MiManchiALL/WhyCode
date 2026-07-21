@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
 import {
   WEB_SEARCH_MAX_SNIPPET_CHARS,
   WebSearchError,
@@ -75,6 +76,7 @@ describe('WebSearch 工具契约', () => {
     assert.equal(result.isError, false)
     assert.match(result.data, /\[官方 文档\]\(<https:\/\/example\.com\/docs>\)/)
     assert.match(result.data, /不受信任的外部网页/)
+    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
     assert.doesNotMatch(result.data, /file:\/\/|不能进入结果/)
     assert.equal(result.data.includes('A'.repeat(WEB_SEARCH_MAX_SNIPPET_CHARS + 1)), false)
   })

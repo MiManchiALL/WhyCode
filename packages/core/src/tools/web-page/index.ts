@@ -17,7 +17,7 @@ import {
 export function createWebFetchTool(options: { fetchPage: WebFetchHandler }) {
   return buildTool({
     name: WEB_FETCH_TOOL_NAME,
-    description: '读取公开网页或远程 PDF，并返回有界、带行号的 Markdown 正文',
+    description: '读取公开网页，或将远程 PDF 保存为可用 ReadPdf 读取的会话附件',
     prompt: WEB_FETCH_TOOL_PROMPT,
     inputSchema: webFetchRequestSchema,
     isReadOnly: true,
@@ -28,10 +28,14 @@ export function createWebFetchTool(options: { fetchPage: WebFetchHandler }) {
       try {
         const response = await options.fetchPage({
           url: input.url,
-          offset: input.offset,
-          limit: input.limit,
+          ...(input.offset !== undefined ? { offset: input.offset } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
         }, ctx.abortSignal)
-        return { data: formatFetchResponse(input, response), isError: false }
+        return {
+          data: formatFetchResponse(input, response),
+          isError: false,
+          ...(response.kind === 'pdf' ? { pdfAttachments: [response.attachment] } : {}),
+        }
       } catch (error) {
         return {
           data: ctx.abortSignal.aborted

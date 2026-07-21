@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
 import {
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FETCH_TOOL_NAME,
@@ -25,8 +26,6 @@ describe('网页读取工具契约', () => {
       url: ' https://Example.com/docs#part ',
     }), {
       url: 'https://example.com/docs',
-      offset: 1,
-      limit: 100,
     })
     assert.equal(webFetchRequestSchema.safeParse({ url: 'file:///C:/secret' }).success, false)
     assert.equal(webFetchRequestSchema.safeParse({
@@ -49,11 +48,12 @@ describe('网页读取工具契约', () => {
       fetchPage: async (value) => {
         request = value
         return {
+          kind: 'page',
           requestedUrl: value.url,
           finalUrl: 'https://example.com/final',
           title: 'Example Docs',
           contentType: 'text/html',
-          offset: value.offset,
+          offset: value.offset ?? 1,
           totalLines: 5,
           lines: ['# Heading', '', '正文内容'],
           sourceTruncated: false,
@@ -78,15 +78,17 @@ describe('网页读取工具契约', () => {
     assert.match(result.data, /\s+2\t# Heading/)
     assert.match(result.data, /offset=5/)
     assert.match(result.data, /不受信任的外部网页/)
+    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
   })
 
   it('拒绝超出输出预算或结构无效的宿主结果', async () => {
     const oversized = createWebFetchTool({
       fetchPage: async (request) => ({
+        kind: 'page',
         requestedUrl: request.url,
         finalUrl: request.url,
         contentType: 'text/plain',
-        offset: request.offset,
+        offset: request.offset ?? 1,
         totalLines: 3,
         lines: ['A'.repeat(4_000), 'B'.repeat(4_000), 'C'.repeat(1_100)],
         sourceTruncated: false,
@@ -103,6 +105,44 @@ describe('网页读取工具契约', () => {
       isError: true,
     })
     assert.equal(WEB_FETCH_MAX_OUTPUT_CHARS, 9_000)
+  })
+
+  it('远程 PDF 只返回会话附件引用，不伪造行分页', async () => {
+    const attachment = {
+      id: '11111111-1111-4111-8111-111111111111',
+      sessionId: '22222222-2222-4222-8222-222222222222',
+      name: 'report.pdf',
+      storageName: '11111111-1111-4111-8111-111111111111.pdf',
+      mediaType: 'application/pdf' as const,
+      origin: 'web' as const,
+      sha256: 'a'.repeat(64),
+      byteLength: 1_024,
+      pageCount: 12,
+    }
+    let request: WebFetchRequest | null = null
+    const tool = createWebFetchTool({
+      fetchPage: async (value) => {
+        request = value
+        return {
+          kind: 'pdf',
+          requestedUrl: value.url,
+          finalUrl: value.url,
+          contentType: 'application/pdf',
+          attachment,
+        }
+      },
+    })
+
+    const result = await tool.execute({ url: 'https://example.com/report.pdf' }, toolContext)
+
+    assert.deepEqual(request, { url: 'https://example.com/report.pdf' })
+    assert.equal(result.isError, false)
+    assert.deepEqual(result.pdfAttachments, [attachment])
+    assert.match(result.data, /PDF 已保存为当前会话附件/)
+    assert.match(result.data, new RegExp(attachment.id))
+    assert.match(result.data, /ReadPdf/)
+    assert.doesNotMatch(result.data, /行范围|L1-L/)
+    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
   })
 
   it('WebFind 不需要网络审批，并返回匹配上下文的稳定行号', async () => {
@@ -144,6 +184,7 @@ describe('网页读取工具契约', () => {
     assert.match(result.data, /匹配 1：第 5 行/)
     assert.match(result.data, /证据范围: .*（L4-L6）/)
     assert.match(result.data, /\s+5\tRelease Notes/)
+    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
     assert.equal(tool.initialApprovalReason, undefined)
   })
 

@@ -98,6 +98,7 @@ function selectInlineAttachments(
       const attachment = byId.get(id)
       if (
         !attachment
+        || attachment.origin === 'web'
         || attachment.pageCount > PDF_INLINE_VISUAL_MAX_PAGES
         || attachment.pageCount > remainingPages
       ) continue

@@ -16,8 +16,6 @@ import {
   UtilityProcessJobError,
 } from '../utility-process-job.ts'
 import {
-  PDF_WEB_DOCUMENT_MAX_TEXT_CHARS,
-  type PdfWebDocumentResult,
   type PdfWorkerRequest,
   type PdfWorkerResponse,
   type PdfWorkerResult,
@@ -25,7 +23,6 @@ import {
 
 const PDF_INSPECT_TIMEOUT_MS = 30_000
 const PDF_READ_TIMEOUT_MS = 30_000
-const PDF_WEB_READ_TIMEOUT_MS = 60_000
 /** 对齐 Claude Code 的 pdftoppm 分页提取超时。 */
 const PDF_RENDER_TIMEOUT_MS = 120_000
 const PDF_RENDER_MAX_DIMENSION_WITH_ROUNDING = 2_049
@@ -52,18 +49,6 @@ export class ElectronPdfProcessor implements PdfProcessor {
       options.mode === 'visual' ? PDF_RENDER_TIMEOUT_MS : PDF_READ_TIMEOUT_MS,
     )
     return result as PdfPageReadResult
-  }
-
-  async readWebDocument(
-    path: string,
-    abortSignal: AbortSignal,
-  ): Promise<PdfWebDocumentResult> {
-    const result = await runPdfJob(
-      { id: randomUUID(), operation: 'read-web-document', path },
-      abortSignal,
-      PDF_WEB_READ_TIMEOUT_MS,
-    )
-    return result as PdfWebDocumentResult
   }
 }
 
@@ -123,26 +108,6 @@ function isWorkerResult(
   if (request.operation === 'inspect') {
     return isPositiveInteger(value.byteLength)
       && value.byteLength <= PDF_ATTACHMENT_MAX_SOURCE_BYTES
-  }
-  if (request.operation === 'read-web-document') {
-    if (
-      value.mode !== 'web-text'
-      || !Array.isArray(value.pages)
-      || typeof value.sourceTruncated !== 'boolean'
-      || value.pages.length < 1
-      || value.pages.length > value.pageCount
-    ) return false
-    let textChars = 0
-    for (const [index, page] of value.pages.entries()) {
-      if (
-        !isRecord(page)
-        || page.pageNumber !== index + 1
-        || typeof page.text !== 'string'
-      ) return false
-      textChars += page.text.length
-      if (textChars > PDF_WEB_DOCUMENT_MAX_TEXT_CHARS) return false
-    }
-    return value.pages.length === value.pageCount || value.sourceTruncated
   }
   const expectedCount = Math.min(
     request.options.pageCount,

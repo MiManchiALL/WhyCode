@@ -564,17 +564,25 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
     engagedPlanId?: string | null,
-    attachments: readonly ImageAttachment[] = [],
-    deliveredInputIds: readonly string[] = [],
+    resources: {
+      attachments?: readonly ImageAttachment[]
+      pdfAttachments?: readonly PdfAttachment[]
+      deliveredInputIds?: readonly string[]
+    } = {},
   ): Promise<void> {
+    const attachments = resources.attachments ?? []
+    const pdfAttachments = resources.pdfAttachments ?? []
+    const deliveredInputIds = resources.deliveredInputIds ?? []
     return this.enqueue(async () => {
       this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
       this.assertImageAttachmentsCompatible(attachments)
+      this.assertPdfAttachmentsCompatible(pdfAttachments)
       const batch = this.entry({
         type: 'messages',
         turnId,
         messages: dehydrateImageMessages(messages),
         ...(attachments.length ? { attachments } : {}),
+        ...(pdfAttachments.length ? { pdfAttachments } : {}),
         ...(taskState !== undefined ? { taskState } : {}),
         ...(engagedPlanId !== undefined ? { engagedPlanId } : {}),
         ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
@@ -582,6 +590,7 @@ export class SessionJournal implements SessionRecorder {
       await this.appendEntries([batch])
       this.messages.push(...messages)
       this.addImageAttachments(attachments)
+      this.addPdfAttachments(pdfAttachments)
       this.deletePendingInputs(deliveredInputIds)
       if (taskState !== undefined) this.taskState = cloneTaskPlanState(taskState)
       if (engagedPlanId !== undefined) this.activeTurnEngagedPlanId = engagedPlanId
