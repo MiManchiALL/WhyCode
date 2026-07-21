@@ -114,6 +114,8 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   messages: messagesSchema,
   /** 本 step 由图片工具导入的会话附件；图片字节仍只位于 attachments/。 */
   attachments: toolImageAttachmentsSchema.optional(),
+  /** 本 step 由工具导入的 PDF；原文件仍只位于 attachments/。 */
+  pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 与本批消息同一崩溃原子提交的权威任务状态；省略表示未变化。 */
   taskState: taskPlanStateSchema.optional(),
   /** 本批稳定提交后的 execution run：省略表示不变，null 表示解除接合。 */
@@ -127,6 +129,15 @@ const messagesEntrySchema = chainedEntrySchema.extend({
         code: 'custom',
         path: ['attachments', index, 'sessionId'],
         message: '附件必须属于当前会话',
+      })
+    }
+  })
+  entry.pdfAttachments?.forEach((attachment, index) => {
+    if (attachment.sessionId !== entry.sessionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pdfAttachments', index, 'sessionId'],
+        message: 'PDF 附件必须属于当前会话',
       })
     }
   })
@@ -297,7 +308,7 @@ export interface LoadedSession {
   viewEvents: ViewEvent[]
   /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
   imageAttachments: ImageAttachment[]
-  /** 用户输入在该会话中持久化的全部 PDF 元数据。 */
+  /** 用户输入与工具在该会话中持久化的全部 PDF 元数据。 */
   pdfAttachments: PdfAttachment[]
   turnStartMessages: Map<string, ModelMessage[]>
   turnStartTaskStates: Map<string, TaskPlanState>
@@ -362,8 +373,11 @@ export interface SessionRecorder {
     messages: ModelMessage[],
     taskState?: TaskPlanStepUpdate,
     engagedPlanId?: string | null,
-    attachments?: readonly ImageAttachment[],
-    deliveredInputIds?: readonly string[],
+    resources?: {
+      attachments?: readonly ImageAttachment[]
+      pdfAttachments?: readonly PdfAttachment[]
+      deliveredInputIds?: readonly string[]
+    },
   ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>
   recordSnapshot(

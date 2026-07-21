@@ -1,5 +1,6 @@
 import type { z } from 'zod'
 import type { ImageAttachment, ImageTransform } from '../attachments/types.ts'
+import type { PdfAttachment } from '../pdf/types.ts'
 
 /**
  * WhyCode 工具接口。Zod schema 为单一事实源：类型推导 + 运行时校验 + JSON Schema 派生。
@@ -60,6 +61,8 @@ export interface ToolResult {
   isError: boolean
   /** 工具新导入的会话图片；由 AgentSession 在稳定 step 中注入并持久化。 */
   attachments?: readonly ImageAttachment[]
+  /** 工具新导入的会话 PDF；由 AgentSession 与当前稳定 step 一起登记。 */
+  pdfAttachments?: readonly PdfAttachment[]
   /** 模型读取这些附件时使用的像素策略；不影响持久化原图。 */
   imageTransform?: ImageTransform
 }

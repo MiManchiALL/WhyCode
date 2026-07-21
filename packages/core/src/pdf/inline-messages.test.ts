@@ -120,6 +120,28 @@ describe('小 PDF 请求期页面图展开', () => {
     assert.deepEqual(result, messages)
   })
 
+  it('远程 PDF 即使页数较少也统一等待 ReadPdf', async () => {
+    const root = await tempRoot()
+    const attachment: PdfAttachment = {
+      ...pdfAttachment('88888888-8888-4888-8888-888888888888', 'remote.pdf', 2),
+      origin: 'web',
+    }
+    const messages: ModelMessage[] = [{
+      role: 'user',
+      content: withPdfAttachmentReferences('远程 PDF 已下载', [attachment]),
+    }]
+
+    const result = await inlineSmallPdfMessages(
+      messages,
+      [attachment],
+      root,
+      renderingProcessor(() => assert.fail('远程 PDF 不应自动展开')),
+      new AbortController().signal,
+    )
+
+    assert.deepEqual(result, messages)
+  })
+
   it('页面图缓存不保存宿主提取正文', async () => {
     const root = await tempRoot()
     const attachment = pdfAttachment('55555555-5555-4555-8555-555555555555', 'dense.pdf', 1)

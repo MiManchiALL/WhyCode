@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron'
 import { realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -8,6 +8,9 @@ import {
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
+  createWebFetchTool,
+  createWebFindTool,
+  createWebSearchTool,
   getModelEntry,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -39,6 +42,7 @@ import {
   updateProviderSettings,
 } from './model-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
+import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionResumeLock } from './session-resume-lock.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
@@ -63,8 +67,22 @@ import type {
 import type {
   SaveCustomConnectionRequest,
   SaveProviderSettingsRequest,
+  SaveWebSearchSettingsRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
+import { createPerplexitySearchHandler } from './web-search/perplexity.ts'
+import { updateWebSearchSettings } from './web-search-settings.ts'
+import {
+  createElectronWebHostResolver,
+  createElectronWebPageFetch,
+} from './web-page/electron-fetch.ts'
+import { createWebDocumentFetcher } from './web-page/network.ts'
+import { createWebPageReader } from './web-page/reader.ts'
+import {
+  extractWebTextDocument,
+} from './web-page/processor.ts'
+import { importWebPdfDocument } from './web-page/pdf-import.ts'
+import { installExternalWebLinkHandlers } from './external-link.ts'
 import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
@@ -80,6 +98,41 @@ const configSecretCodec: ConfigSecretCodec = {
 
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
+}
+
+const webSearchTool = createWebSearchTool({
+  search: createPerplexitySearchHandler({
+    getApiKey: () => loadAppConfig()?.webSearch?.perplexity?.apiKey,
+    // Chromium 网络栈继承系统代理；Node fetch 会绕过 Windows 代理设置。
+    fetchImpl: (input, init) => net.fetch(input, init),
+  }),
+})
+
+function createSessionWebPageTools(recorder: SessionJournal) {
+  const fetchImpl = createElectronWebPageFetch((options) => net.request(options))
+  const fetchDocument = createWebDocumentFetcher({
+    fetchImpl,
+    // 预检与实际请求共用 Chromium 的解析缓存和网络栈；重定向仍逐跳重新校验。
+    resolveHost: createElectronWebHostResolver((hostname, options) =>
+      net.resolveHost(hostname, options)),
+  })
+  const reader = createWebPageReader({
+    fetchDocument,
+    extractDocument: extractWebTextDocument,
+    importPdfDocument: (document, abortSignal) => importWebPdfDocument(
+      document,
+      {
+        attachmentDirectory: recorder.attachmentDirectory,
+        sessionId: recorder.sessionId,
+        processor: pdfProcessor,
+      },
+      abortSignal,
+    ),
+  })
+  return [
+    createWebFetchTool({ fetchPage: reader.fetchPage }),
+    createWebFindTool({ findInPage: reader.findInPage }),
+  ]
 }
 
 function createWindow(): BrowserWindow {
@@ -98,6 +151,14 @@ function createWindow(): BrowserWindow {
   })
 
   win.once('ready-to-show', () => win.show())
+
+  installExternalWebLinkHandlers(
+    win,
+    (url) => shell.openExternal(url),
+    (error) => console.error(
+      `[external-link] 无法打开来源链接：${error instanceof Error ? error.message : String(error)}`,
+    ),
+  )
 
   // 渲染端错误转发到终端：白屏类问题（历史上已 3 次）无 DevTools 也能在 pnpm dev 输出里定位
   win.webContents.on('console-message', (event) => {
@@ -149,14 +210,14 @@ let conversationId = `conv-${Date.now()}`
 let sessions: DesktopSessionRepository
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
-/** 会话删除跨多个存储，必须在主进程内单飞并阻止新输入/切换。 */
-let sessionDeletionId: string | null = null
+/** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
+const sessionDeletionLock = new SessionDeletionLock()
 /** 历史会话完整校验与候选运行时构造期间，只允许一个恢复事务。 */
 const sessionResumeLock = new SessionResumeLock()
 /** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
 let attachmentPreparationInProgress = false
-/** 自定义连接探测期间阻止启动新 Agent 工作，避免模型配置在请求中途切换。 */
-let modelSettingsInProgress = false
+/** 连接设置写入或探测期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
+let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
 const userMessageRoutingGate = new UserMessageRoutingGate()
@@ -250,7 +311,11 @@ function createMainAgentSession(
       homeDir: app.getPath('home'),
     },
     sessionRecorder: recorder,
-    mainTools: createBackgroundCommandTools(commandSessions, recorder.sessionId),
+    mainTools: [
+      ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
+      webSearchTool,
+      ...createSessionWebPageTools(recorder),
+    ],
     captureScreenshot: captureDesktopScreenshot,
     pdfProcessor,
     emit: broadcastEvent,
@@ -318,7 +383,7 @@ function createCoordinator(
 }
 
 async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
-  if (sessionDeletionId) {
+  if (sessionDeletionLock.blocksRuntime) {
     broadcastEvent({
       type: 'error',
       message: '会话数据删除中，请等待完成后再操作',
@@ -399,8 +464,8 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       break
     }
     case 'set-model': {
-      if (modelSettingsInProgress) {
-        broadcastEvent({ type: 'error', message: '模型连接检测中，请稍后再切换模型', recoverable: true })
+      if (settingsMutationInProgress) {
+        broadcastEvent({ type: 'error', message: '连接设置处理中，请稍后再切换模型', recoverable: true })
         return { ok: false }
       }
       if (attachmentPreparationInProgress) {
@@ -480,8 +545,8 @@ async function prepareUserMessage(
 async function handleUserMessageCommand(
   command: UserMessageCommand,
 ): Promise<{ ok: boolean }> {
-  if (modelSettingsInProgress) {
-    return rejectUserMessage('模型连接检测中，请等待完成后再发送消息')
+  if (settingsMutationInProgress) {
+    return rejectUserMessage('连接设置处理中，请等待完成后再发送消息')
   }
   if (attachmentPreparationInProgress) {
     return rejectUserMessage('上一条附件消息仍在准备，请稍后重试')
@@ -569,10 +634,10 @@ function reportUserMessageDeliveryError(error: unknown): void {
 
 function runtimeBusy(): boolean {
   return Boolean(
-    sessionDeletionId
+    sessionDeletionLock.blocksRuntime
     || sessionResumeLock.sessionId
     || attachmentPreparationInProgress
-    || modelSettingsInProgress
+    || settingsMutationInProgress
     || userMessageRoutingGate.busy
     || sessionInitialization
     || session?.isBusy
@@ -584,7 +649,9 @@ function resumeInProgressMessage(action: string): string {
   return `正在验证附件并恢复会话，请等待完成后再${action}`
 }
 
-async function persistModelConfig(config: NonNullable<ReturnType<typeof loadAppConfig>>): Promise<void> {
+async function persistConnectionConfig(
+  config: NonNullable<ReturnType<typeof loadAppConfig>>,
+): Promise<void> {
   await saveConfig(config, configSecretCodec, getConfigPath())
   const current = currentModelId
     ? resolveModelConnection(config, currentModelId)
@@ -599,15 +666,15 @@ async function saveProviderModelSettings(
   request: SaveProviderSettingsRequest,
 ): Promise<SettingsMutationResult> {
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
-  modelSettingsInProgress = true
+  settingsMutationInProgress = true
   try {
     const next = updateProviderSettings(loadAppConfig(), request)
-    await persistModelConfig(next)
+    await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
-    modelSettingsInProgress = false
+    settingsMutationInProgress = false
   }
 }
 
@@ -615,7 +682,7 @@ async function saveCustomModelConnection(
   request: SaveCustomConnectionRequest,
 ): Promise<SettingsMutationResult> {
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再检测模型连接' }
-  modelSettingsInProgress = true
+  settingsMutationInProgress = true
   try {
     const updated = await testAndUpdateCustomConnection(
       loadAppConfig(),
@@ -623,12 +690,12 @@ async function saveCustomModelConnection(
       new AbortController().signal,
     )
     if (!updated.config) return { ok: false, error: updated.error ?? '连接检测未通过' }
-    await persistModelConfig(updated.config)
+    await persistConnectionConfig(updated.config)
     return { ok: true, snapshot: createModelSettingsSnapshot(updated.config) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
-    modelSettingsInProgress = false
+    settingsMutationInProgress = false
   }
 }
 
@@ -636,15 +703,31 @@ async function removeCustomModelConnection(
   connectionId: string,
 ): Promise<SettingsMutationResult> {
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再删除模型连接' }
-  modelSettingsInProgress = true
+  settingsMutationInProgress = true
   try {
     const next = deleteCustomConnection(loadAppConfig(), connectionId)
-    await persistModelConfig(next)
+    await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
-    modelSettingsInProgress = false
+    settingsMutationInProgress = false
+  }
+}
+
+async function saveWebSearchConnectionSettings(
+  request: SaveWebSearchSettingsRequest,
+): Promise<SettingsMutationResult> {
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改网页搜索设置' }
+  settingsMutationInProgress = true
+  try {
+    const next = updateWebSearchSettings(loadAppConfig(), request)
+    await persistConnectionConfig(next)
+    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    settingsMutationInProgress = false
   }
 }
 
@@ -707,14 +790,16 @@ function runtimeSnapshot(): RuntimeSnapshot {
     projectDir,
     modelId: resolveCurrentModelId(),
     permissionMode: pendingPermissionMode ?? 'default',
-    status: sessionDeletionId
+    status: sessionDeletionLock.blocksRuntime
       ? 'working'
       : busy && currentAgentStatus === 'idle' && !checkpointRestoreToolUseId
         ? 'working'
         : currentAgentStatus,
     busy,
     checkpointRestoreToolUseId,
-    deletingSessionId: sessionDeletionId,
+    deletingSessionId: sessionDeletionLock.blocksRuntime
+      ? sessionDeletionLock.sessionId
+      : null,
     resumingSessionId: sessionResumeLock.sessionId,
     sessionId: journal?.sessionId ?? null,
     viewEvents: journal ? [...journal.initialViewEvents] : [],
@@ -726,10 +811,10 @@ function runtimeSnapshot(): RuntimeSnapshot {
 }
 
 async function startNewSession(): Promise<NewSessionResult> {
-  if (runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || runtimeBusy()) {
     return {
       ok: false,
-      error: sessionDeletionId
+      error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再新建会话'
         : sessionResumeLock.sessionId
           ? resumeInProgressMessage('新建会话')
@@ -745,10 +830,10 @@ async function startNewSession(): Promise<NewSessionResult> {
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || runtimeBusy()) {
     const result: ResumeSessionResult = {
       ok: false,
-      error: sessionDeletionId
+      error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再恢复会话'
         : sessionResumeLock.sessionId
           ? resumeInProgressMessage('恢复其它会话')
@@ -901,10 +986,10 @@ function pendingInputs(
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-  if (runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || runtimeBusy()) {
     return {
       ok: false,
-      error: sessionDeletionId
+      error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
         : sessionResumeLock.sessionId
           ? resumeInProgressMessage('删除会话')
@@ -916,8 +1001,9 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   const deletedCurrent = sessions.currentSessionId === sessionId
   const statusBeforeDeletion = currentAgentStatus
   let detachedCurrent = false
-  sessionDeletionId = sessionId
-  broadcastEvent({ type: 'agent-status', status: 'working' }, false)
+  const releaseDeletion = sessionDeletionLock.acquire(sessionId, deletedCurrent)
+  if (!releaseDeletion) return { ok: false, error: '已有会话正在删除，请等待完成' }
+  if (deletedCurrent) broadcastEvent({ type: 'agent-status', status: 'working' }, false)
   try {
     const deleted = await deleteSessionArtifacts({
       sessionId,
@@ -940,11 +1026,13 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       deletedCurrent: detachedCurrent || undefined,
     }
   } finally {
-    sessionDeletionId = null
-    broadcastEvent({
-      type: 'agent-status',
-      status: detachedCurrent ? 'idle' : statusBeforeDeletion,
-    }, false)
+    releaseDeletion()
+    if (deletedCurrent) {
+      broadcastEvent({
+        type: 'agent-status',
+        status: detachedCurrent ? 'idle' : statusBeforeDeletion,
+      }, false)
+    }
   }
 }
 
@@ -1000,6 +1088,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     saveCustomModelConnection(request))
   ipcMain.handle(IPC.deleteCustomConnection, (_e, connectionId: string) =>
     removeCustomModelConnection(connectionId))
+  ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
+    saveWebSearchConnectionSettings(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
   ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
   ipcMain.handle(IPC.consensusStatus, () => ({
@@ -1021,10 +1111,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
     return openPdfAttachment(sessions.journal, attachmentId, (path) => shell.openPath(path))
   })
   ipcMain.handle(IPC.pickProjectDir, async () => {
-    if (runtimeBusy()) {
+    if (sessionDeletionLock.sessionId || runtimeBusy()) {
       broadcastEvent({
         type: 'error',
-        message: sessionDeletionId
+        message: sessionDeletionLock.sessionId
           ? '会话数据删除中，请等待完成后再切换工作文件夹'
           : sessionResumeLock.sessionId
             ? resumeInProgressMessage('切换工作文件夹')
@@ -1054,14 +1144,16 @@ if (primaryInstance) void app.whenReady().then(async () => {
       return null
     }
     // 目录选择框打开期间也可能从其它入口启动任务；提交切换前必须再次权威检查。
-    if (runtimeBusy()) {
+    if (sessionDeletionLock.sessionId || runtimeBusy()) {
       broadcastEvent({
         type: 'error',
-        message: sessionResumeLock.sessionId
-          ? '会话恢复已经开始，工作文件夹切换已取消；请等待完成后重试'
-          : session?.checkpointRestoreToolUseId
-            ? '文件回滚已经开始，工作文件夹切换已取消；请等待完成后重试'
-            : '当前操作已经开始，工作文件夹切换已取消；请停止后重试',
+        message: sessionDeletionLock.sessionId
+          ? '会话删除已经开始，工作文件夹切换已取消；请等待完成后重试'
+          : sessionResumeLock.sessionId
+            ? '会话恢复已经开始，工作文件夹切换已取消；请等待完成后重试'
+            : session?.checkpointRestoreToolUseId
+              ? '文件回滚已经开始，工作文件夹切换已取消；请等待完成后重试'
+              : '当前操作已经开始，工作文件夹切换已取消；请停止后重试',
         recoverable: true,
       }, sessionResumeLock.sessionId === null)
       return null

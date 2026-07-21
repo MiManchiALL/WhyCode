@@ -50,6 +50,13 @@ export interface ModelSettingsSnapshot {
   providers: ProviderSettingsItem[]
   customConnections: CustomConnectionSettingsItem[]
   protocols: Array<{ id: CustomApiProtocol; label: string; hint: string }>
+  webSearch: WebSearchSettingsItem
+}
+
+export interface WebSearchSettingsItem {
+  provider: 'perplexity'
+  displayName: string
+  hasKey: boolean
 }
 
 export interface SaveProviderSettingsRequest {
@@ -67,6 +74,12 @@ export interface SaveCustomConnectionRequest {
   baseURL: string
   apiKey?: string
   modelId: string
+}
+
+export interface SaveWebSearchSettingsRequest {
+  provider: 'perplexity'
+  apiKey?: string
+  clearApiKey?: boolean
 }
 
 export interface SettingsMutationResult {

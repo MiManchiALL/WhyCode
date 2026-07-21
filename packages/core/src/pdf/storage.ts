@@ -20,8 +20,13 @@ export interface PdfAttachmentImportTransaction {
   rollback(): Promise<void>
 }
 
+/** 字节来源只供 Main 内部已完成有界下载的 PDF 使用，不进入 Renderer IPC。 */
+export type PdfAttachmentImportSource =
+  | PdfAttachmentInput
+  | { kind: 'bytes'; bytes: Uint8Array; name: string }
+
 export async function preparePdfAttachmentImport(
-  sources: readonly PdfAttachmentInput[],
+  sources: readonly PdfAttachmentImportSource[],
   attachmentDirectory: string,
   sessionId: string,
   processor: PdfProcessor,
@@ -31,7 +36,8 @@ export async function preparePdfAttachmentImport(
   if (sources.length > PDF_ATTACHMENT_MAX_COUNT) {
     throw new Error(`每条消息最多添加 ${PDF_ATTACHMENT_MAX_COUNT} 个 PDF`)
   }
-  const normalizedPaths = sources.map((source) => normalizeLocalPath(source.path))
+  const normalizedPaths = sources.flatMap((source) =>
+    source.kind === 'path' ? [normalizeLocalPath(source.path)] : [])
   if (new Set(normalizedPaths).size !== normalizedPaths.length) {
     throw new Error('同一个 PDF 不能重复添加')
   }
@@ -50,7 +56,9 @@ export async function preparePdfAttachmentImport(
       const id = randomUUID()
       const storageName = `${id}.pdf`
       const stagedPath = join(stagingDirectory, storageName)
-      const copied = await copyPdfFile(source.path, stagedPath, abortSignal)
+      const copied = source.kind === 'path'
+        ? await copyPdfFile(source.path, stagedPath, abortSignal)
+        : await writePdfBytes(source.bytes, stagedPath, abortSignal)
       totalBytes += copied.byteLength
       if (totalBytes > PDF_ATTACHMENT_MAX_TOTAL_BYTES) {
         throw new Error('PDF 附件总大小超过 100 MB 上限')
@@ -60,12 +68,13 @@ export async function preparePdfAttachmentImport(
 
       const inspected = await processor.inspect(stagedPath, abortSignal)
       if (inspected.byteLength !== copied.byteLength) {
-        throw new Error(`PDF 检查结果与磁盘文件不一致：${basename(source.path)}`)
+        const displayName = safeDisplayName(source.kind === 'path' ? source.path : source.name)
+        throw new Error(`PDF 检查结果与磁盘文件不一致：${displayName}`)
       }
       attachments.push(pdfAttachmentSchema.parse({
         id,
         sessionId,
-        name: safeDisplayName(source.path),
+        name: safeDisplayName(source.kind === 'path' ? source.path : source.name),
         storageName,
         mediaType: 'application/pdf',
         sha256: copied.sha256,
@@ -119,6 +128,14 @@ export async function validateStoredPdfAttachments(
 export function pdfAttachmentPath(attachmentDirectory: string, storageName: string): string {
   const safeName = pdfAttachmentStorageNameSchema.parse(storageName)
   return join(resolve(attachmentDirectory), safeName)
+}
+
+export async function removePdfAttachmentFiles(
+  attachmentDirectory: string,
+  attachments: readonly PdfAttachment[],
+): Promise<void> {
+  await removePaths(attachments.map((attachment) =>
+    pdfAttachmentPath(attachmentDirectory, attachment.storageName)))
 }
 
 function createImportTransaction(
@@ -201,6 +218,34 @@ async function copyPdfFile(
     throw error
   } finally {
     await Promise.all([source.close(), target.close()])
+  }
+}
+
+async function writePdfBytes(
+  bytes: Uint8Array,
+  targetPath: string,
+  abortSignal: AbortSignal,
+): Promise<{ byteLength: number; sha256: string }> {
+  throwIfAborted(abortSignal)
+  if (bytes.byteLength === 0) throw new PdfProcessingError('empty', 'PDF 文件为空')
+  if (bytes.byteLength > PDF_ATTACHMENT_MAX_SOURCE_BYTES) {
+    throw new PdfProcessingError('too-large', 'PDF 文件超过 50 MB 上限')
+  }
+  const target = await open(targetPath, 'wx', 0o600)
+  try {
+    const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    await writeFully(target, buffer)
+    await target.sync()
+    throwIfAborted(abortSignal)
+    return {
+      byteLength: bytes.byteLength,
+      sha256: createHash('sha256').update(buffer).digest('hex'),
+    }
+  } catch (error) {
+    await rm(targetPath, { force: true }).catch(() => {})
+    throw error
+  } finally {
+    await target.close()
   }
 }
 

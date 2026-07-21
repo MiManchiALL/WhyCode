@@ -17,6 +17,27 @@ afterEach(async () => {
 })
 
 describe('PDF 附件存储', () => {
+  it('远程已下载字节与本地路径复用同一导入事务', async () => {
+    const root = await tempDirectory()
+    const attachments = join(root, 'attachments')
+    const bytes = new TextEncoder().encode('%PDF-1.4\nremote-bytes')
+    const transaction = await preparePdfAttachmentImport(
+      [{ kind: 'bytes', bytes, name: 'remote-report.pdf' }],
+      attachments,
+      SESSION_ID,
+      fakeProcessor(4),
+      new AbortController().signal,
+    )
+
+    assert.equal(transaction.attachments[0]?.name, 'remote-report.pdf')
+    assert.equal(transaction.attachments[0]?.pageCount, 4)
+    await transaction.commit()
+    assert.deepEqual(
+      new Uint8Array(await readFile(join(attachments, transaction.attachments[0]!.storageName))),
+      bytes,
+    )
+  })
+
   it('先在私有 staging 校验，commit 后才公开稳定文件', async () => {
     const root = await tempDirectory()
     const source = join(root, 'report.pdf')

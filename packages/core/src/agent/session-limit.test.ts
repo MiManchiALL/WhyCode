@@ -56,6 +56,59 @@ describe('Agent 长任务循环策略', () => {
       true,
     )
   })
+
+  it('工具后的空响应只重试模型，不重复执行已提交工具', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        ...toolStreams(1, false),
+        emptyStream('stop'),
+        textStream('已根据工具结果完成回答'),
+      ],
+    })
+    const { session, events } = createSession(model)
+
+    const stopReason = await session.handleUserMessage('先调用工具再回答')
+
+    assert.equal(stopReason, 'completed')
+    assert.equal(model.doStreamCalls.length, 3)
+    assert.deepEqual(model.doStreamCalls[2]?.prompt, model.doStreamCalls[1]?.prompt)
+    assert.equal(events.filter((event) => event.type === 'tool-end').length, 1)
+    assert.equal(events.filter((event) => event.type === 'step-committed').length, 2)
+    assert.equal(events.filter((event) => event.type === 'step-discarded').length, 1)
+    assert.equal(
+      events.some(
+        (event) => event.type === 'text-delta' && event.text === '已根据工具结果完成回答',
+      ),
+      true,
+    )
+    assert.equal(events.some((event) => event.type === 'error'), false)
+  })
+
+  it('连续两次空响应显式失败，不伪装成正常完成', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [emptyStream('stop'), emptyStream('content-filter')],
+    })
+    const { session, events } = createSession(model)
+
+    const stopReason = await session.handleUserMessage('请回答')
+
+    assert.equal(stopReason, 'error')
+    assert.equal(model.doStreamCalls.length, 2)
+    assert.equal(events.filter((event) => event.type === 'step-committed').length, 0)
+    assert.equal(events.filter((event) => event.type === 'step-discarded').length, 2)
+    assert.equal(
+      events.some(
+        (event) => event.type === 'error'
+          && event.message.includes('模型连续两次返回空响应')
+          && event.message.includes('content-filter'),
+      ),
+      true,
+    )
+    assert.equal(
+      events.some((event) => event.type === 'turn-end' && event.stopReason === 'completed'),
+      false,
+    )
+  })
 })
 
 const probeTool = buildTool({
@@ -91,20 +144,7 @@ function finiteModel(toolCount: number): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
       ...toolStreams(toolCount, false),
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'text-start' as const, id: 'final' },
-            { type: 'text-delta' as const, id: 'final', delta: '任务完成' },
-            { type: 'text-end' as const, id: 'final' },
-            {
-              type: 'finish' as const,
-              finishReason: { unified: 'stop' as const, raw: undefined },
-              usage: usage(),
-            },
-          ],
-        }),
-      },
+      textStream('任务完成'),
     ],
   })
 }
@@ -131,6 +171,35 @@ function toolStreams(count: number, identical: boolean) {
       ],
     }),
   }))
+}
+
+function emptyStream(finishReason: 'stop' | 'content-filter') {
+  return {
+    stream: simulateReadableStream({
+      chunks: [{
+        type: 'finish' as const,
+        finishReason: { unified: finishReason, raw: undefined },
+        usage: usage(),
+      }],
+    }),
+  }
+}
+
+function textStream(text: string) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: 'text-start' as const, id: 'final' },
+        { type: 'text-delta' as const, id: 'final', delta: text },
+        { type: 'text-end' as const, id: 'final' },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
 }
 
 function modelEntry(model: MockLanguageModelV4): ModelEntry {

@@ -80,6 +80,7 @@ function referenceLine(attachment: PdfAttachment): string {
     name: attachment.name,
     pageCount: attachment.pageCount,
     byteLength: attachment.byteLength,
+    ...(attachment.origin ? { origin: attachment.origin } : {}),
   })
 }
 

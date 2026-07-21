@@ -267,14 +267,24 @@ describe('CaptureScreenshot Agent 链路', () => {
 
       assert.equal(await session.handleUserMessage('查看屏幕'), 'completed')
       const snapshot = session.captureMessageSnapshot()
-      assert.equal(snapshot.filter((message) => message.role === 'user').length, 1)
+      assert.equal(
+        snapshot.some((message) =>
+          message.role === 'user'
+          && JSON.stringify(message).includes('whycode-attachment-ref:v1:')),
+        false,
+      )
       assert.match(JSON.stringify(snapshot), /whycode-attachment-ref:v1:/)
       const toolMessage = snapshot.find((message) => message.role === 'tool')
       assert.match(JSON.stringify(toolMessage), /"type":"content"/)
 
       assert.equal(await session.handleUserMessage('继续根据刚才的截图回答'), 'completed')
       const continued = session.captureMessageSnapshot()
-      assert.equal(continued.filter((message) => message.role === 'user').length, 2)
+      assert.equal(
+        continued.some((message) =>
+          message.role === 'user'
+          && JSON.stringify(message).includes('whycode-attachment-ref:v1:')),
+        false,
+      )
       assert.match(JSON.stringify(continued), /whycode-attachment-ref:v1:/)
     } finally {
       await rm(root, { recursive: true, force: true })

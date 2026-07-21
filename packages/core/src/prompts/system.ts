@@ -1,6 +1,6 @@
 /**
  * 系统提示词拼装（文档三 §1）：每个 section 一个纯函数，buildSystemPrompt 统一拼接。
- * 静态段禁止时间戳/随机数（缓存卫生）；动态信息走 <system-reminder> 注入消息流，不进这里。
+ * 静态段禁止时间戳/随机数（缓存卫生）；动态信息走 <system-reminder> 注入消息流。
  */
 
 import {

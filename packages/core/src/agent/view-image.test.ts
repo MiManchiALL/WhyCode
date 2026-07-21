@@ -59,7 +59,12 @@ describe('ViewImage Agent 链路', () => {
             ? toolMessage.content.find((part) => part.type === 'tool-result')
             : undefined
           assert.equal(result?.type === 'tool-result' ? result.output.type : '', 'content')
-          assert.equal(options.prompt.filter((message) => message.role === 'user').length, 1)
+          assert.equal(
+            options.prompt.some((message) =>
+              message.role === 'user'
+              && JSON.stringify(message).includes(ONE_PIXEL_PNG.toString('base64'))),
+            false,
+          )
           return finalStep('图片已读取。')
         },
       })

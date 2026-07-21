@@ -8,6 +8,7 @@ import type {
   SaveProviderSettingsRequest,
   SettingsMutationResult,
 } from '../../shared/settings.ts'
+import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 
 interface ModelSettingsPanelProps {
   snapshot: ModelSettingsSnapshot
@@ -45,8 +46,8 @@ export function ModelSettingsPanel(props: ModelSettingsPanelProps) {
       <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl">
         <header className="flex items-center justify-between border-b border-neutral-200 px-5 py-3">
           <div>
-            <h2 className="text-base font-semibold">模型设置</h2>
-            <p className="mt-0.5 text-xs text-neutral-500">官方模型只需 API key；自定义端点需检测实际传输能力。</p>
+            <h2 className="text-base font-semibold">模型与搜索设置</h2>
+            <p className="mt-0.5 text-xs text-neutral-500">配置模型连接与 Agent 使用的网页搜索服务。</p>
           </div>
           <button className="rounded px-2 py-1 text-sm text-neutral-500 hover:bg-neutral-100" onClick={props.onClose} disabled={pending}>关闭</button>
         </header>
@@ -67,6 +68,12 @@ export function ModelSettingsPanel(props: ModelSettingsPanelProps) {
               ))}
             </div>
           </section>
+
+          <WebSearchSettingsEditor
+            settings={props.snapshot.webSearch}
+            disabled={pending}
+            onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request))}
+          />
 
           <section>
             <div className="mb-2 flex items-center justify-between">

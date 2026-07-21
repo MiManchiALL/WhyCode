@@ -117,7 +117,7 @@ describe('忙时图片 steering', () => {
       await journal.recordUserInputWithId(inputId, '必须先落盘的补图', false, attachments)
       const recordStep = journal.recordStep.bind(journal)
       journal.recordStep = async (...args: Parameters<typeof recordStep>) => {
-        const deliveredInputIds = args[5] ?? []
+        const deliveredInputIds = args[4]?.deliveredInputIds ?? []
         if (deliveredInputIds.includes(inputId)) throw new Error('simulated fsync failure')
         await recordStep(...args)
       }

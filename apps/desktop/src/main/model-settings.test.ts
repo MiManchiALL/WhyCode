@@ -12,6 +12,7 @@ describe('模型设置数据边界', () => {
   it('设置快照不向 Renderer 返回 API key', () => {
     const config: WhycodeConfig = {
       providers: { mimo: { apiKey: 'secret-key' } },
+      webSearch: { perplexity: { apiKey: 'search-secret' } },
       customConnections: [{
         id: 'one',
         name: 'MiMo 网关',
@@ -25,8 +26,9 @@ describe('模型设置数据边界', () => {
     }
     const snapshot = createModelSettingsSnapshot(config)
     assert.equal(snapshot.providers.find((item) => item.id === 'mimo')?.hasKey, true)
+    assert.equal(snapshot.webSearch.hasKey, true)
     assert.equal(snapshot.customConnections[0]?.matchedProfile?.id, 'mimo:mimo-v2.5')
-    assert.doesNotMatch(JSON.stringify(snapshot), /secret-key|custom-secret/)
+    assert.doesNotMatch(JSON.stringify(snapshot), /secret-key|custom-secret|search-secret/)
   })
 
   it('官方设置支持保留、替换、清除 key 和恢复默认端点', () => {

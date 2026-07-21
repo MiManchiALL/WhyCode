@@ -32,9 +32,8 @@ type PdfDocument = Awaited<ReturnType<PdfJs['getDocument']>['promise']>
 let pdfJsPromise: Promise<PdfJs> | null = null
 
 export async function executePdfWorkerRequest(request: PdfWorkerRequest): Promise<PdfWorkerResult> {
-  return request.operation === 'inspect'
-    ? inspectPdf(request.path)
-    : readPdfPages(request.path, request.options)
+  if (request.operation === 'inspect') return inspectPdf(request.path)
+  return readPdfPages(request.path, request.options)
 }
 
 export async function inspectPdf(path: string): Promise<PdfDocumentInfo> {

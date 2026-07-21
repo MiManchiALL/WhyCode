@@ -28,11 +28,20 @@ export interface ConsensusAgentConfig {
   baseURL?: string
 }
 
+export interface PerplexitySearchConfig {
+  apiKey: string
+}
+
+export interface WebSearchConfig {
+  perplexity?: PerplexitySearchConfig
+}
+
 export interface WhycodeConfig {
   providers: Record<string, ProviderConnectionConfig>
   defaultModel?: string
   customConnections?: CustomConnectionConfig[]
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
+  webSearch?: WebSearchConfig
 }
 
 export {

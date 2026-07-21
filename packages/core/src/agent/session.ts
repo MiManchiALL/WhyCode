@@ -11,6 +11,10 @@ import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
+import {
+  createCurrentTimeReminder,
+  shouldRefreshCurrentTimeReminder,
+} from '../prompts/current-time.ts'
 import { checkInitialToolApproval, checkToolPermission } from '../permissions/engine.ts'
 import { CheckpointManager } from '../checkpoints/manager.ts'
 import { autoCompactThreshold, estimateContextTokens, type TokenBaseline } from '../context/tokens.ts'
@@ -50,10 +54,11 @@ import {
   referencedPdfAttachmentIds,
   withPdfAttachmentReferences,
 } from '../pdf/messages.ts'
-import { pdfAttachmentPath } from '../pdf/storage.ts'
+import { pdfAttachmentPath, removePdfAttachmentFiles } from '../pdf/storage.ts'
 import {
   PDF_VISUAL_MAX_PAGES,
   pdfAttachmentSchema,
+  pdfAttachmentsSchema,
   type PdfAttachment,
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
@@ -162,6 +167,20 @@ interface StepResult {
   interruptionBoundaryConsumed: boolean
 }
 
+class EmptyModelResponseError extends Error {
+  override readonly name = 'EmptyModelResponseError'
+  readonly finishReason: string | null
+
+  constructor(finishReason: string | null) {
+    super('模型返回了空响应')
+    this.finishReason = finishReason
+  }
+}
+
+type ToolAuthorization =
+  | { approved: true; approvedPaths: string[] }
+  | { approved: false; message: string }
+
 /**
  * Agent 会话（M2-a：自持外层循环 + steering 消息队列）。
  *
@@ -212,6 +231,8 @@ export class AgentSession {
   private loopHealth = new LoopHealthMonitor()
   /** 非只读工具的会话级串行尾链：审批、检查点与执行必须属于同一临界区。 */
   private serialToolTail: Promise<void> = Promise.resolve()
+  /** 审批判定串行重算，避免并行工具覆盖唯一的用户审批入口。 */
+  private toolApprovalTail: Promise<void> = Promise.resolve()
   /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
   private userQuestionsEnabled = true
   /** 完整共识任务期间由 Coordinator 持有最终 idle，避免 Main 与任务终点之间出现假空闲。 */
@@ -464,6 +485,57 @@ export class AgentSession {
     return result
   }
 
+  private enqueueToolApproval<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.toolApprovalTail.then(operation, operation)
+    this.toolApprovalTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  private authorizeTool(
+    def: ToolDefinition,
+    input: Record<string, unknown>,
+    toolCtx: ToolContext,
+    toolCallId: string,
+  ): Promise<ToolAuthorization> {
+    return this.enqueueToolApproval(async () => {
+      if (toolCtx.abortSignal.aborted) {
+        return { approved: false, message: '操作已取消' }
+      }
+      const projectDir = this.options.promptContext.projectDir
+      const decision = checkInitialToolApproval(def, this.permissions)
+        ?? (!projectDir && def.availableWithoutProject
+          ? ({ behavior: 'allow' } as const)
+          : checkToolPermission(def, input, this.permissions))
+      if (decision.behavior === 'deny') {
+        return { approved: false, message: `操作被拒绝：${decision.reason}` }
+      }
+      if (decision.behavior === 'allow') {
+        return { approved: true, approvedPaths: [] }
+      }
+
+      const { emit, requestApproval } = this.options
+      emit({ type: 'agent-status', status: 'waiting-approval' })
+      const diff = await def.renderDiff?.(input, toolCtx).catch(() => undefined)
+      const response = await requestApproval({
+        requestId: toolCallId,
+        toolName: def.name,
+        input,
+        reason: decision.reason,
+        diff,
+        suggestion: decision.suggestion,
+      })
+      emit({ type: 'agent-status', status: 'working' })
+      if (!response.approved) {
+        return { approved: false, message: `用户拒绝了此操作（${decision.reason}）` }
+      }
+      if (response.remember && decision.suggestion) this.applySuggestion(decision.suggestion)
+      return { approved: true, approvedPaths: def.extractPaths?.(input) ?? [] }
+    })
+  }
+
   /** 不能安全自动接续时，排队消息弹回输入框，不静默丢弃。 */
   private async restoreQueuedInput(): Promise<void> {
     const items = [...this.queue]
@@ -532,8 +604,10 @@ export class AgentSession {
             injected,
             undefined,
             undefined,
-            drained.flatMap((item) => item.attachments),
-            drained.filter((item) => item.persisted).map((item) => item.id),
+            {
+              attachments: drained.flatMap((item) => item.attachments),
+              deliveredInputIds: drained.filter((item) => item.persisted).map((item) => item.id),
+            },
           ),
           '确认排队输入送达',
         )
@@ -632,6 +706,7 @@ export class AgentSession {
       let steeringDecisionPending = false
       let stepsSincePlanMutation = 0
       let stepsSincePlanReminder = 0
+      let currentTimeReminderAt: Date | null = null
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
       // 只有稳定提交 Create/Replace/Resume，或回答计划自身的问题卡，才启用未完成保护。
       while (maxSteps === null || steps < maxSteps) {
@@ -649,6 +724,11 @@ export class AgentSession {
           await this.injectStepLimitReminder()
         }
         await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
+        const currentTime = new Date()
+        const refreshCurrentTime = shouldRefreshCurrentTimeReminder(
+          currentTimeReminderAt,
+          currentTime,
+        )
         const step = await this.runOneStep(
           usage,
           abortSignal,
@@ -657,7 +737,9 @@ export class AgentSession {
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
             && !this.protocolRound,
+          refreshCurrentTime ? currentTime : null,
         )
+        if (refreshCurrentTime && step.committed) currentTimeReminderAt = currentTime
         const steeringMayEndRun = steeringDecisionPending && !step.hadToolCalls
         // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
         // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
@@ -704,6 +786,7 @@ export class AgentSession {
             break
           }
           await this.injectQueuedMidTurn()
+          currentTimeReminderAt = null
           steeringDecisionPending = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
@@ -1088,12 +1171,44 @@ export class AgentSession {
     return null
   }
 
-  /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
+  /** 空响应没有可提交的模型事实，可安全复用同一上下文重试一次而不重放工具。 */
   private async runOneStep(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
+    currentTime: Date | null,
+  ): Promise<StepResult> {
+    const attempt = () => this.runOneStepAttempt(
+      usage,
+      turnAbortSignal,
+      planExecutionEngaged,
+      consumeInterruptionBoundary,
+      currentTime,
+    )
+    try {
+      return await attempt()
+    } catch (error) {
+      if (!(error instanceof EmptyModelResponseError)) throw error
+    }
+    try {
+      return await attempt()
+    } catch (error) {
+      if (!(error instanceof EmptyModelResponseError)) throw error
+      const reason = error.finishReason ? `（finish reason: ${error.finishReason}）` : ''
+      throw new Error(
+        `模型连续两次返回空响应${reason}，当前未提交步骤已安全丢弃；请重试或切换模型。`,
+      )
+    }
+  }
+
+  /** 单次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
+  private async runOneStepAttempt(
+    usage: UsageInfo,
+    turnAbortSignal: AbortSignal,
+    planExecutionEngaged: boolean,
+    consumeInterruptionBoundary: boolean,
+    currentTime: Date | null,
   ): Promise<StepResult> {
     if (this.options.sessionRecorder && this.persistenceFailed) {
       throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
@@ -1124,15 +1239,23 @@ export class AgentSession {
     let stepImageAttachmentCount = 0
     let stepImageAttachmentLimit = IMAGE_ATTACHMENT_MAX_COUNT
     const stepImageAttachmentKeys = new Set<string>()
-    let attachmentsCommitted = false
+    const stepPdfAttachments = new Map<string, PdfAttachment[]>()
+    let stepAttachmentsCommitted = false
     const taskStateBeforeStep = this.taskPlan?.stateSnapshot
     let taskPlanFinalized = false
     this.taskPlan?.beginStep()
     try {
+      const currentTimeReminder = currentTime
+        ? createCurrentTimeReminder(currentTime)
+        : null
+      const modelInputMessages = currentTimeReminder
+        ? [...this.messages, currentTimeReminder]
+        : this.messages
+      const modelInputMessageCount = modelInputMessages.length
       const result = streamText({
         model: this.options.model.create(this.options.providerConfig),
         system: buildSystemPrompt(this.options.promptContext),
-        messages: await this.messagesForCurrentModel(this.messages, stepAbort.signal),
+        messages: await this.messagesForCurrentModel(modelInputMessages, stepAbort.signal),
         tools: this.buildToolSet(
           stepAbort.signal,
           planExecutionEngaged,
@@ -1179,6 +1302,54 @@ export class AgentSession {
             })
             return null
           },
+          async (toolCallId, attachments) => {
+            if (!this.options.sessionRecorder) {
+              return 'PDF 工具附件需要会话附件存储'
+            }
+            const parsed = pdfAttachmentsSchema.safeParse(attachments)
+            const acceptedStorageNames = new Set(
+              [...stepPdfAttachments.values()]
+                .flatMap((values) => values)
+                .map((attachment) => attachment.storageName),
+            )
+            const individuallyValid = attachments.flatMap((attachment) => {
+              const value = pdfAttachmentSchema.safeParse(attachment)
+              return value.success ? [value.data] : []
+            })
+            const removeRejected = () => removePdfAttachmentFiles(
+              this.options.sessionRecorder!.attachmentDirectory,
+              individuallyValid.filter((attachment) =>
+                !this.pdfAttachments.has(attachment.storageName)
+                && !acceptedStorageNames.has(attachment.storageName)),
+            ).catch(() => {})
+            if (
+              !parsed.success
+              || parsed.data.some((attachment) =>
+                attachment.sessionId !== this.options.sessionRecorder?.sessionId)
+            ) {
+              await removeRejected()
+              return 'PDF 工具返回了无效或不属于当前会话的附件'
+            }
+            const unique = new Map<string, PdfAttachment>()
+            for (const values of stepPdfAttachments.values()) {
+              for (const attachment of values) unique.set(attachment.storageName, attachment)
+            }
+            for (const attachment of parsed.data) {
+              const previous = unique.get(attachment.storageName)
+                ?? this.pdfAttachments.get(attachment.storageName)
+              if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+                await removeRejected()
+                return `PDF 附件元数据冲突：${attachment.storageName}`
+              }
+              unique.set(attachment.storageName, attachment)
+            }
+            if (!pdfAttachmentsSchema.safeParse([...unique.values()]).success) {
+              await removeRejected()
+              return '单个模型步骤导入的 PDF 数量或总大小超过会话附件上限'
+            }
+            stepPdfAttachments.set(toolCallId, parsed.data)
+            return null
+          },
         ),
         stopWhen: stepCountIs(1),
         providerOptions: this.options.model.providerOptions,
@@ -1191,6 +1362,7 @@ export class AgentSession {
       let hadNonProgressToolCalls = false
       let thinkingStartedAt: number | null = null
       let stepTotalTokens = 0
+      let finishReason: string | null = null
 
       for await (const part of result.fullStream) {
         inactivityWatchdog.noteStreamActivity()
@@ -1220,6 +1392,7 @@ export class AgentSession {
             toolCallOrder.push(part.toolCallId)
             break
           case 'finish':
+            finishReason = part.finishReason
             usage.inputTokens += part.totalUsage.inputTokens ?? 0
             usage.outputTokens += part.totalUsage.outputTokens ?? 0
             usage.cachedInputTokens += part.totalUsage.inputTokenDetails.cacheReadTokens ?? 0
@@ -1242,6 +1415,12 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const response = await result.response
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
+      if (
+        !hadToolCalls
+        && !response.messages.some((message) => modelMessageText(message).trim().length > 0)
+      ) {
+        throw new EmptyModelResponseError(finishReason)
+      }
       const taskPlanCommit = this.taskPlan?.commitStep()
       taskPlanFinalized = Boolean(this.taskPlan)
       const planRemainsActive = Boolean(
@@ -1270,27 +1449,48 @@ export class AgentSession {
         return result ? [{ ...result, toolCallId }] : []
       })
       const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
+      const orderedPdfAttachments = [...new Map(
+        toolCallOrder
+          .flatMap((toolCallId) => stepPdfAttachments.get(toolCallId) ?? [])
+          .map((attachment) => [attachment.storageName, attachment] as const),
+      ).values()]
+      const pdfReferenceMessages: ModelMessage[] = orderedPdfAttachments.length > 0
+        ? [{
+            role: 'user',
+            content: withPdfAttachmentReferences(
+              '[应用生成：前述工具结果已将 PDF 保存为当前会话附件；需要内容时调用 ReadPdf 按页读取。]',
+              orderedPdfAttachments,
+            ),
+          }]
+        : []
       const committedMessages = dehydrateImageMessages([
+        ...(currentTimeReminder ? [currentTimeReminder] : []),
         ...attachImagesToToolResults(response.messages, orderedImageResults),
+        ...pdfReferenceMessages,
         ...internalMarkers,
       ])
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null
         : stepControl.taskPlanEngagement?.planId
       this.assertImageAttachmentsCompatible(orderedImageAttachments)
+      this.assertPdfAttachmentsCompatible(orderedPdfAttachments)
       await this.persistRequired(
         (recorder) => recorder.recordStep(
           this.activeTurn!.id,
           committedMessages,
           taskPlanCommit?.state,
           engagementUpdate,
-          orderedImageAttachments,
+          {
+            attachments: orderedImageAttachments,
+            pdfAttachments: orderedPdfAttachments,
+          },
         ),
         '提交模型步骤',
       )
-      attachmentsCommitted = true
+      stepAttachmentsCommitted = true
       this.messages.push(...committedMessages)
       this.addImageAttachments(orderedImageAttachments)
+      this.addPdfAttachments(orderedPdfAttachments)
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         emit({ type: 'user-question', question: userQuestion })
       }
@@ -1306,9 +1506,10 @@ export class AgentSession {
           message.role !== 'assistant')
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
-          // usage 含本次 assistant 输出，不含宿主随后追加的 tool result、页面图和控制标记。
+          // usage 覆盖模型输入（含本步时间提醒）和 assistant 输出，
+          // 不含宿主随后追加的 tool result、页面图和控制标记。
           coveredMessageCount:
-            this.messages.length - committedMessages.length
+            modelInputMessageCount
             + (responseCoveredCount < 0 ? response.messages.length : responseCoveredCount),
         }
       }
@@ -1322,7 +1523,7 @@ export class AgentSession {
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
       }
     } catch (error) {
-      if (!attachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
+      if (!stepAttachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
         await removeImageAttachmentFiles(
           this.options.sessionRecorder.attachmentDirectory,
           [...stepImageAttachments.values()]
@@ -1330,7 +1531,18 @@ export class AgentSession {
             .filter((attachment) => !this.imageAttachments.has(attachment.storageName)),
         ).catch(() => {})
       }
-      if (taskPlanFinalized && !attachmentsCommitted && taskStateBeforeStep) {
+      if (!stepAttachmentsCommitted && stepPdfAttachments.size > 0 && this.options.sessionRecorder) {
+        await removePdfAttachmentFiles(
+          this.options.sessionRecorder.attachmentDirectory,
+          [...new Map(
+            [...stepPdfAttachments.values()]
+              .flat()
+              .filter((attachment) => !this.pdfAttachments.has(attachment.storageName))
+              .map((attachment) => [attachment.storageName, attachment] as const),
+          ).values()],
+        ).catch(() => {})
+      }
+      if (taskPlanFinalized && !stepAttachmentsCommitted && taskStateBeforeStep) {
         this.taskPlan?.restore(taskStateBeforeStep)
       } else {
         this.taskPlan?.discardStep()
@@ -1376,6 +1588,10 @@ export class AgentSession {
       attachments: readonly ImageAttachment[],
       transform: ImageTransform | undefined,
       attachmentLimit: number,
+    ) => Promise<string | null>,
+    onPdfAttachments: (
+      toolCallId: string,
+      attachments: readonly PdfAttachment[],
     ) => Promise<string | null>,
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
@@ -1468,7 +1684,7 @@ export class AgentSession {
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
     if (defs.length === 0) return undefined
 
-    const { emit, requestApproval } = this.options
+    const { emit } = this.options
     const toolSet: ToolSet = {}
     let firstStepToolName: string | null = null
     let standaloneStepToolName: string | null = null
@@ -1504,50 +1720,24 @@ export class AgentSession {
         }
         emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
 
-        // 权限判定链（文档一 §3.2）
-        const decision = checkInitialToolApproval(def, this.permissions)
-          ?? (!projectDir && def.availableWithoutProject
-            ? ({ behavior: 'allow' } as const)
-            : checkToolPermission(def, parsed.data, this.permissions))
-        if (decision.behavior === 'deny') {
-          const msg = `操作被拒绝：${decision.reason}`
+        // 判定与交互必须共用一条队列；前一审批记住的授权会由后一调用重新读取。
+        const authorization = await this.authorizeTool(def, parsed.data, toolCtx, toolCallId)
+        if (!authorization.approved) {
+          const msg = authorization.message
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
           this.loopHealth.record(def.name, parsed.data, msg, true)
           return msg
         }
-        if (decision.behavior === 'ask') {
-          emit({ type: 'agent-status', status: 'waiting-approval' })
-          const diff = await def.renderDiff?.(parsed.data, toolCtx).catch(() => undefined)
-          const response = await requestApproval({
-            requestId: toolCallId,
-            toolName: def.name,
-            input: parsed.data,
-            reason: decision.reason,
-            diff,
-            suggestion: decision.suggestion,
-          })
-          emit({ type: 'agent-status', status: 'working' })
-          if (!response.approved) {
-            const msg = `用户拒绝了此操作（${decision.reason}）`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, parsed.data, msg, true)
-            return msg
-          }
-          const approvedPaths = def.extractPaths?.(parsed.data) ?? []
-          if (approvedPaths.length > 0) {
-            // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
-            toolCtx = {
-              ...toolCtx,
-              additionalDirs: [
-                ...toolCtx.additionalDirs,
-                ...approvedPaths.map((path) =>
-                  isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
-                ),
-              ],
-            }
-          }
-          if (response.remember && decision.suggestion) {
-            this.applySuggestion(decision.suggestion)
+        if (authorization.approvedPaths.length > 0) {
+          // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
+          toolCtx = {
+            ...toolCtx,
+            additionalDirs: [
+              ...toolCtx.additionalDirs,
+              ...authorization.approvedPaths.map((path) =>
+                isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
+              ),
+            ],
           }
         }
 
@@ -1617,6 +1807,10 @@ export class AgentSession {
             onProgress: (output) =>
               emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
           })
+          if (result.pdfAttachments?.length) {
+            const error = await onPdfAttachments(toolCallId, result.pdfAttachments)
+            if (error) result = { data: error, isError: true }
+          }
           let viewedAttachments: readonly ImageAttachment[] = []
           if (result.attachments?.length) {
             const error = await onImageAttachments(
