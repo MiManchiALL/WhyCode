@@ -167,6 +167,16 @@ interface StepResult {
   interruptionBoundaryConsumed: boolean
 }
 
+class EmptyModelResponseError extends Error {
+  override readonly name = 'EmptyModelResponseError'
+  readonly finishReason: string | null
+
+  constructor(finishReason: string | null) {
+    super('模型返回了空响应')
+    this.finishReason = finishReason
+  }
+}
+
 type ToolAuthorization =
   | { approved: true; approvedPaths: string[] }
   | { approved: false; message: string }
@@ -1161,8 +1171,39 @@ export class AgentSession {
     return null
   }
 
-  /** 单步：一次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
+  /** 空响应没有可提交的模型事实，可安全复用同一上下文重试一次而不重放工具。 */
   private async runOneStep(
+    usage: UsageInfo,
+    turnAbortSignal: AbortSignal,
+    planExecutionEngaged: boolean,
+    consumeInterruptionBoundary: boolean,
+    currentTime: Date | null,
+  ): Promise<StepResult> {
+    const attempt = () => this.runOneStepAttempt(
+      usage,
+      turnAbortSignal,
+      planExecutionEngaged,
+      consumeInterruptionBoundary,
+      currentTime,
+    )
+    try {
+      return await attempt()
+    } catch (error) {
+      if (!(error instanceof EmptyModelResponseError)) throw error
+    }
+    try {
+      return await attempt()
+    } catch (error) {
+      if (!(error instanceof EmptyModelResponseError)) throw error
+      const reason = error.finishReason ? `（finish reason: ${error.finishReason}）` : ''
+      throw new Error(
+        `模型连续两次返回空响应${reason}，当前未提交步骤已安全丢弃；请重试或切换模型。`,
+      )
+    }
+  }
+
+  /** 单次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
+  private async runOneStepAttempt(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
     planExecutionEngaged: boolean,
@@ -1321,6 +1362,7 @@ export class AgentSession {
       let hadNonProgressToolCalls = false
       let thinkingStartedAt: number | null = null
       let stepTotalTokens = 0
+      let finishReason: string | null = null
 
       for await (const part of result.fullStream) {
         inactivityWatchdog.noteStreamActivity()
@@ -1350,6 +1392,7 @@ export class AgentSession {
             toolCallOrder.push(part.toolCallId)
             break
           case 'finish':
+            finishReason = part.finishReason
             usage.inputTokens += part.totalUsage.inputTokens ?? 0
             usage.outputTokens += part.totalUsage.outputTokens ?? 0
             usage.cachedInputTokens += part.totalUsage.inputTokenDetails.cacheReadTokens ?? 0
@@ -1372,6 +1415,12 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const response = await result.response
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
+      if (
+        !hadToolCalls
+        && !response.messages.some((message) => modelMessageText(message).trim().length > 0)
+      ) {
+        throw new EmptyModelResponseError(finishReason)
+      }
       const taskPlanCommit = this.taskPlan?.commitStep()
       taskPlanFinalized = Boolean(this.taskPlan)
       const planRemainsActive = Boolean(

@@ -50,6 +50,7 @@ import {
   UserPdfGallery,
 } from './pdf-attachments.tsx'
 import { preparePdfDrafts, restoredPdfDrafts } from './pdf-draft.ts'
+import { composerKeyAction } from './composer-key.ts'
 
 interface Approval {
   requestId: string
@@ -695,7 +696,7 @@ export function App() {
   const selectedModel = models.find((model) => model.id === modelId)
   const canAttachImages = Boolean(selectedModel?.available && selectedModel.supportsImageInput)
   const canAttachPdfs = Boolean(selectedModel?.available)
-  const pasteAttachments = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
+  const pasteAttachments = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const imageFiles = collectPastedImageFiles(event.clipboardData)
     const pdfFiles = collectPastedPdfFiles(event.clipboardData)
     if (imageFiles.length === 0 && pdfFiles.length === 0) return
@@ -878,7 +879,7 @@ export function App() {
         )}
         <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
         <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
-        <div className="flex gap-2">
+        <div className="flex items-end gap-2">
           <ImagePickerButton
             supportsImageInput={canAttachImages}
             disabled={attachmentLocked}
@@ -888,8 +889,9 @@ export function App() {
             disabled={!canAttachPdfs || attachmentLocked}
             onFiles={addPdfFiles}
           />
-          <input
-            className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+          <textarea
+            rows={1}
+            className="max-h-40 min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none [field-sizing:content] focus:border-neutral-500"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onPaste={pasteAttachments}
@@ -900,9 +902,15 @@ export function App() {
               || checkpointRestoreToolUseId !== null
             }
             onKeyDown={(e) => {
-              if (e.key !== 'Enter') return
-              // Enter=排队（等当前步骤结束注入）；Ctrl+Enter=立即插话（打断当前步骤）
-              send(e.ctrlKey)
+              const action = composerKeyAction({
+                key: e.key,
+                shiftKey: e.shiftKey,
+                ctrlKey: e.ctrlKey,
+                isComposing: e.nativeEvent.isComposing,
+              })
+              if (action === 'ignore' || action === 'newline') return
+              e.preventDefault()
+              send(action === 'send-immediately')
             }}
             placeholder={
               stopping
@@ -916,9 +924,9 @@ export function App() {
                 : status === 'waiting-approval'
                   ? '⏸ Agent 在等你审批上方的请求…'
                   : busy
-                    ? '工作中——Enter 排队插话，Ctrl+Enter 立即插话'
+                    ? '工作中——Enter 排队，Ctrl+Enter 立即插话，Shift+Enter 换行'
                     : projectDir
-                      ? '输入消息…'
+                      ? '输入消息…（Shift+Enter 换行）'
                       : '正在准备工作文件夹…'
             }
           />
