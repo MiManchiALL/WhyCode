@@ -76,7 +76,7 @@ import type {
   SaveWebSearchSettingsRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
-import { createPerplexitySearchHandler } from './web-search/perplexity.ts'
+import { createConfiguredWebSearchHandler } from './web-search/configured.ts'
 import { updateWebSearchSettings } from './web-search-settings.ts'
 import {
   createElectronWebHostResolver,
@@ -107,8 +107,8 @@ function loadAppConfig() {
 }
 
 const webSearchTool = createWebSearchTool({
-  search: createPerplexitySearchHandler({
-    getApiKey: () => loadAppConfig()?.webSearch?.perplexity?.apiKey,
+  search: createConfiguredWebSearchHandler({
+    getConfig: loadAppConfig,
     // Chromium 网络栈继承系统代理；Node fetch 会绕过 Windows 代理设置。
     fetchImpl: (input, init) => net.fetch(input, init),
   }),

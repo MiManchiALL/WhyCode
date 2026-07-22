@@ -8,6 +8,7 @@ import {
   loadConfig,
   migrateLegacyConfig,
   resolveDefaultModelId,
+  resolveWebSearchProvider,
   saveConfig,
   type ConfigSecretCodec,
   type WhycodeConfig,
@@ -104,6 +105,34 @@ describe('默认模型选择', () => {
   })
 })
 
+describe('网页搜索后端选择', () => {
+  it('兼容旧 Perplexity 配置并优先使用显式可用后端', () => {
+    assert.equal(resolveWebSearchProvider({
+      providers: {},
+      webSearch: { perplexity: { apiKey: 'perplexity-key' } },
+    }), 'perplexity')
+    assert.equal(resolveWebSearchProvider({
+      providers: {},
+      webSearch: {
+        activeProvider: 'tavily',
+        perplexity: { apiKey: 'perplexity-key' },
+        tavily: { apiKey: 'tavily-key' },
+      },
+    }), 'tavily')
+  })
+
+  it('活动后端缺少密钥时回退到已配置后端', () => {
+    assert.equal(resolveWebSearchProvider({
+      providers: {},
+      webSearch: {
+        activeProvider: 'tavily',
+        perplexity: { apiKey: 'perplexity-key' },
+      },
+    }), 'perplexity')
+    assert.equal(resolveWebSearchProvider(null), 'perplexity')
+  })
+})
+
 describe('配置密钥存储', () => {
   it('保存时不落明文，读取时恢复内置、CLIProxyAPI、协商和搜索密钥', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-'))
@@ -120,12 +149,19 @@ describe('配置密钥存储', () => {
       consensusAgents: {
         B: { model: 'mimo:mimo-v2.5', apiKey: 'peer-secret' },
       },
-      webSearch: { perplexity: { apiKey: 'search-secret' } },
+      webSearch: {
+        activeProvider: 'tavily',
+        perplexity: { apiKey: 'perplexity-secret' },
+        tavily: { apiKey: 'tavily-secret' },
+      },
     }
     try {
       await saveConfig(value, codec, path)
       const raw = await readFile(path, 'utf-8')
-      assert.doesNotMatch(raw, /official-secret|proxy-secret|peer-secret|search-secret/)
+      assert.doesNotMatch(
+        raw,
+        /official-secret|proxy-secret|peer-secret|perplexity-secret|tavily-secret/,
+      )
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
       assert.equal(loaded?.cliProxyApi?.apiKey, 'proxy-secret')
@@ -135,7 +171,9 @@ describe('配置密钥存储', () => {
       })
       assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
       assert.equal(loaded?.consensusAgents?.B?.apiKey, 'peer-secret')
-      assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'search-secret')
+      assert.equal(loaded?.webSearch?.activeProvider, 'tavily')
+      assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
+      assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -239,6 +277,11 @@ describe('配置密钥存储', () => {
             'openai:gpt-5.6-sol': 'gpt-5.6-sol',
           },
         },
+        webSearch: {
+          activeProvider: 'unknown',
+          perplexity: { apiKey: 'legacy-search-key' },
+          tavily: { apiKey: '' },
+        },
       }))
       const loaded = loadConfig(path)
       assert.ok(loaded)
@@ -252,6 +295,9 @@ describe('配置密钥存储', () => {
       assert.deepEqual(loaded.cliProxyApi?.modelRoutes, {
         'openai:gpt-5.6-sol': 'gpt-5.6-sol',
       })
+      assert.equal(loaded.webSearch?.activeProvider, 'perplexity')
+      assert.equal(loaded.webSearch?.perplexity?.apiKey, 'legacy-search-key')
+      assert.equal(loaded.webSearch?.tavily, undefined)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

@@ -3,6 +3,7 @@ import {
   MODEL_REGISTRY,
   type BuiltInProviderId,
 } from '@whycode/core'
+import type { WebSearchProviderId } from '../shared/settings.ts'
 import { isCliProxyRoute } from './cli-proxy-models.ts'
 
 const CLI_PROXY_MODEL_PREFIX = 'cliproxyapi:'
@@ -18,12 +19,14 @@ export interface ConsensusAgentConfig {
   baseURL?: string
 }
 
-export interface PerplexitySearchConfig {
+export interface WebSearchProviderConfig {
   apiKey: string
 }
 
 export interface WebSearchConfig {
-  perplexity?: PerplexitySearchConfig
+  activeProvider?: WebSearchProviderId
+  perplexity?: WebSearchProviderConfig
+  tavily?: WebSearchProviderConfig
 }
 
 export interface CliProxyApiConfig {
@@ -78,6 +81,19 @@ export function consensusAgentsReady(config: WhycodeConfig | null): boolean {
   const agents = config?.consensusAgents
   if (!agents) return false
   return (['B', 'C'] as const).every((id) => Boolean(agents[id]?.apiKey && agents[id]?.model))
+}
+
+/** 旧配置默认保持 Perplexity；活动项不可用时只回退到已配置的后端。 */
+export function resolveWebSearchProvider(
+  config: WhycodeConfig | null,
+): WebSearchProviderId {
+  const webSearch = config?.webSearch
+  if (webSearch?.activeProvider && webSearch[webSearch.activeProvider]?.apiKey) {
+    return webSearch.activeProvider
+  }
+  if (webSearch?.perplexity?.apiKey) return 'perplexity'
+  if (webSearch?.tavily?.apiKey) return 'tavily'
+  return webSearch?.activeProvider ?? 'perplexity'
 }
 
 function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolean {

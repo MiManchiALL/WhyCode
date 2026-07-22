@@ -17,7 +17,11 @@ describe('模型设置数据边界', () => {
         modelIds: ['openai:gpt-5.6-sol'],
         modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
       },
-      webSearch: { perplexity: { apiKey: 'search-secret' } },
+      webSearch: {
+        activeProvider: 'tavily',
+        perplexity: { apiKey: 'perplexity-secret' },
+        tavily: { apiKey: 'tavily-secret' },
+      },
     }
     const snapshot = createModelSettingsSnapshot(config)
     assert.equal(snapshot.providers.find((item) => item.id === 'mimo')?.hasKey, true)
@@ -26,8 +30,15 @@ describe('模型设置数据边界', () => {
       snapshot.cliProxyApi.models.find((model) => model.id === 'openai:gpt-5.6-sol')?.enabled,
       true,
     )
-    assert.equal(snapshot.webSearch.hasKey, true)
-    assert.doesNotMatch(JSON.stringify(snapshot), /secret-key|proxy-secret|search-secret/)
+    assert.equal(snapshot.webSearch.activeProvider, 'tavily')
+    assert.equal(
+      snapshot.webSearch.providers.every((provider) => provider.hasKey),
+      true,
+    )
+    assert.doesNotMatch(
+      JSON.stringify(snapshot),
+      /secret-key|proxy-secret|perplexity-secret|tavily-secret/,
+    )
   })
 
   it('内置厂商设置支持保留、替换、清除 key 和恢复默认端点', () => {
