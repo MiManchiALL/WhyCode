@@ -105,6 +105,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
       assert.equal(gpt.capabilities.maxOutput, 128_000)
       assert.deepEqual(gpt.providerOptions, {
         openai: {
+          forceReasoning: true,
           reasoningSummary: 'auto',
           store: false,
         },
@@ -129,10 +130,33 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.equal(getModelEntry('google:gemini-3.6-flash').protocol, 'openai-chat')
   })
 
+  it('连接适配器可覆盖传输路由名而不改写 WhyCode 模型画像', () => {
+    for (const [profileId, routeModelId] of [
+      ['google:gemini-3.1-pro-preview', 'verified-gemini-route'],
+      ['openai:gpt-5.6-sol', 'verified-gpt-route'],
+    ] as const) {
+      const entry = getModelEntry(profileId)
+      const created = entry.create(
+        { apiKey: 'test', baseURL: 'http://localhost/v1' },
+        routeModelId,
+      )
+      assert.equal(entry.id, profileId)
+      assert.notEqual(typeof created, 'string')
+      if (typeof created !== 'string') assert.equal(created.modelId, routeModelId)
+    }
+  })
+
   it('DeepSeek V4 Flash 使用官方上下文与输出边界', () => {
     const deepseek = getModelEntry('deepseek:deepseek-v4-flash')
     assert.equal(deepseek.capabilities.contextWindow, 1_000_000)
     assert.equal(deepseek.capabilities.maxOutput, 384_000)
+    assert.deepEqual(deepseek.capabilities.reasoningEffort, {
+      supported: ['high', 'max'],
+      default: 'high',
+    })
+    assert.deepEqual(deepseek.providerOptions, {
+      deepseek: { thinking: { type: 'enabled' } },
+    })
     assert.equal(autoCompactThreshold(deepseek.capabilities), 910_000)
   })
 })

@@ -11,17 +11,13 @@ import {
   type ProviderMetadata,
 } from 'ai'
 import { z } from 'zod'
-import { createCustomModelEntry } from './custom.ts'
 import type { ReasoningEffortSelection } from './catalog.ts'
-import {
-  explicitReasoningEffort,
-  providerOptionsWithReasoningEffort,
-} from './reasoning-effort.ts'
+import { providerOptionsWithReasoningEffort } from './reasoning-effort.ts'
 import type { ModelEntry } from './registry.ts'
 import { getModelEntry } from './registry.ts'
 
-describe('OpenAI Responses 思考摘要线格式', () => {
-  it('内置 GPT 默认只请求摘要，不覆盖厂商默认思考强度', async () => {
+describe('OpenAI Responses 推理摘要线格式', () => {
+  it('内置 GPT 默认只请求摘要，不覆盖厂商默认推理强度', async () => {
     const captured = await captureRequest(getModelEntry('openai:gpt-5.6-sol'))
 
     assert.equal(captured.path, '/v1/responses')
@@ -44,30 +40,6 @@ describe('OpenAI Responses 思考摘要线格式', () => {
     )
     assert.deepEqual(captured.body.reasoning, {
       effort: 'max',
-      summary: 'auto',
-    })
-  })
-
-  it('自定义 CLIProxyAPI 保留原始模型 ID 并同步尾部思考强度', async () => {
-    const entry = createCustomModelEntry({
-      id: 'custom:cli-proxy-high',
-      connectionName: 'CLIProxyAPI high',
-      protocol: 'openai-responses',
-      modelId: 'gpt-5.6-sol(high)',
-      probe: { text: 'supported', tools: 'supported', image: 'supported' },
-    })
-    const captured = await captureRequest(entry)
-
-    assert.equal(captured.body.model, 'gpt-5.6-sol(high)')
-    assert.deepEqual(captured.body.reasoning, {
-      effort: 'high',
-      summary: 'auto',
-    })
-
-    const overridden = await captureRequest(entry, undefined, 'low')
-    assert.equal(overridden.body.model, 'gpt-5.6-sol(low)')
-    assert.deepEqual(overridden.body.reasoning, {
-      effort: 'low',
       summary: 'auto',
     })
   })
@@ -186,13 +158,10 @@ async function captureRequest(
   try {
     const address = server.address() as AddressInfo
     const selection = reasoningEffort ?? 'default'
-    const model = entry.create(
-      {
-        apiKey: 'test-key',
-        baseURL: `http://127.0.0.1:${address.port}/v1`,
-      },
-      explicitReasoningEffort(selection),
-    )
+    const model = entry.create({
+      apiKey: 'test-key',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+    })
     const providerOptions = providerOptionsWithReasoningEffort(entry, selection)
     await assert.rejects(invoke
       ? invoke(model, providerOptions)

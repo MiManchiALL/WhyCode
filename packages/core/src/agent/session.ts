@@ -9,10 +9,7 @@ import type {
 } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ReasoningEffortSelection } from '../providers/catalog.ts'
-import {
-  explicitReasoningEffort,
-  providerOptionsWithReasoningEffort,
-} from '../providers/reasoning-effort.ts'
+import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effort.ts'
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
@@ -300,10 +297,7 @@ export class AgentSession {
   }
 
   private createLanguageModel() {
-    return this.options.model.create(
-      this.options.providerConfig,
-      explicitReasoningEffort(this.options.reasoningEffort ?? 'default'),
-    )
+    return this.options.model.create(this.options.providerConfig)
   }
 
   private requestProviderOptions() {

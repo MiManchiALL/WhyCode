@@ -31,10 +31,14 @@ interface AppHeaderProps {
 
 export function AppHeader(props: AppHeaderProps) {
   const selectedModel = props.models.find((model) => model.id === props.modelId)
-  const effort = selectedModel?.reasoningEffort
-  const selectedEffort = props.reasoningEffort === 'default'
-    || effort?.supported.includes(props.reasoningEffort)
-    ? props.reasoningEffort
+  const retired = Boolean(selectedModel?.retired)
+  const effort = retired ? undefined : selectedModel?.reasoningEffort
+  const selectedEffort = effort
+    ? props.reasoningEffort === 'default'
+      ? effort.default
+      : effort.supported.includes(props.reasoningEffort)
+        ? props.reasoningEffort
+        : effort.default
     : 'default'
   return (
     <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
@@ -98,23 +102,29 @@ export function AppHeader(props: AppHeaderProps) {
           onChange={(event) =>
             props.onReasoningEffortChange(event.target.value as ReasoningEffortSelection)}
           disabled={props.busy || !effort}
-          title={effort ? '当前会话的思考强度' : '当前模型没有经过验证的思考强度选项'}
+          title={effort ? '当前会话的推理强度' : '当前模型没有官方可选的推理强度档位'}
         >
-          <option value="default">
-            思考：默认{effort?.default ? `（${reasoningEffortLabel(effort.default)}）` : ''}
-          </option>
-          {effort?.supported.map((level) => (
-            <option key={level} value={level}>思考：{reasoningEffortLabel(level)}</option>
-          ))}
+          {effort
+            ? effort.supported.map((level) => (
+                <option key={level} value={level}>推理：{reasoningEffortLabel(level)}</option>
+              ))
+            : <option value="default">推理：默认</option>}
         </select>
         <select
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-          value={props.modelId}
-          onChange={(event) => props.onModelChange(event.target.value)}
+          className={`rounded border bg-white px-2 py-1 text-xs ${retired ? 'border-red-300 text-red-600' : 'border-neutral-300'}`}
+          value={retired ? '' : props.modelId}
+          onChange={(event) => {
+            if (event.target.value) props.onModelChange(event.target.value)
+          }}
           disabled={props.busy}
         >
-          {props.models.map((model) => (
-            <option key={model.id} value={model.id} disabled={!model.available}>
+          {(!selectedModel || retired) && (
+            <option value="" disabled hidden>
+              {retired ? `${selectedModel?.displayName ?? props.modelId}（已停止支持）` : '请选择模型'}
+            </option>
+          )}
+          {props.models.filter((model) => !model.retired).map((model) => (
+            <option className="text-neutral-900" key={model.id} value={model.id} disabled={!model.available}>
               {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}{model.available ? '' : `（${model.unavailableReason ?? '不可用'}）`}
             </option>
           ))}
@@ -132,7 +142,7 @@ function reasoningEffortLabel(level: ReasoningEffort): string {
     medium: '中',
     high: '高',
     xhigh: '极高',
-    max: '最大',
+    max: '最高',
   }[level]
 }
 

@@ -9,7 +9,7 @@ import { providerOptionsWithReasoningEffort } from './reasoning-effort.ts'
 import type { ReasoningEffortSelection } from './catalog.ts'
 
 describe('Google OpenAI 兼容线格式', () => {
-  it('保留思考参数、JSON Schema 与 Gemini thought signature', async () => {
+  it('保留推理参数、JSON Schema 与 Gemini thought signature', async () => {
     const captured = await captureGeminiRequest()
 
     assert.equal(captured.path, '/v1/chat/completions')
@@ -27,7 +27,7 @@ describe('Google OpenAI 兼容线格式', () => {
     assert.equal(google?.thought_signature, 'thought-signature-1')
   })
 
-  it('把会话思考强度翻译为官方 OpenAI 兼容 reasoning_effort', async () => {
+  it('把会话推理强度翻译为官方 OpenAI 兼容 reasoning_effort', async () => {
     const captured = await captureGeminiRequest('high')
     assert.equal(captured.body.model, 'gemini-3.6-flash')
     assert.equal(captured.body.reasoning_effort, 'high')

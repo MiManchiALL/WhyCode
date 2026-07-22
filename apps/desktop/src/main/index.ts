@@ -32,15 +32,14 @@ import {
   type ConfigSecretCodec,
   getConfigPath,
   loadConfig,
-  migratePlaintextSecrets,
+  migrateLegacyConfig,
   resolveDefaultModelId,
   saveConfig,
 } from './config.ts'
 import { listModelConnections, resolveModelConnection } from './model-connections.ts'
 import {
   createModelSettingsSnapshot,
-  deleteCustomConnection,
-  testAndUpdateCustomConnection,
+  updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
@@ -67,7 +66,7 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
-  SaveCustomConnectionRequest,
+  SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveWebSearchSettingsRequest,
   SettingsMutationResult,
@@ -218,7 +217,7 @@ const sessionDeletionLock = new SessionDeletionLock()
 const sessionResumeLock = new SessionResumeLock()
 /** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
 let attachmentPreparationInProgress = false
-/** 连接设置写入或探测期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
+/** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
@@ -243,7 +242,7 @@ function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
 
 /** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
 let currentModelId: string | null = null
-/** 与当前模型一起持久化的会话级思考强度；default 表示不覆盖连接/厂商默认。 */
+/** 与当前模型一起持久化的会话级推理强度；default 表示不覆盖连接/厂商默认。 */
 let currentReasoningEffort: ReasoningEffortSelection = 'default'
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
@@ -525,8 +524,8 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({
           type: 'error',
           message: settingsMutationInProgress
-            ? '连接设置处理中，请稍后再调整思考强度'
-            : '附件消息准备中，请等待提交完成后再调整思考强度',
+            ? '连接设置处理中，请稍后再调整推理强度'
+            : '附件消息准备中，请等待提交完成后再调整推理强度',
           recoverable: true,
         })
         return { ok: false }
@@ -548,7 +547,7 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       if (normalized !== command.reasoningEffort) {
         broadcastEvent({
           type: 'error',
-          message: `${resolved.value.entry.displayName} 不支持思考强度 ${command.reasoningEffort}`,
+          message: `${resolved.value.entry.displayName} 不支持推理强度 ${command.reasoningEffort}`,
           recoverable: true,
         })
         return { ok: false }
@@ -764,34 +763,13 @@ async function saveProviderModelSettings(
   }
 }
 
-async function saveCustomModelConnection(
-  request: SaveCustomConnectionRequest,
+async function saveCliProxyApiConnectionSettings(
+  request: SaveCliProxyApiSettingsRequest,
 ): Promise<SettingsMutationResult> {
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再检测模型连接' }
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改 CLIProxyAPI 设置' }
   settingsMutationInProgress = true
   try {
-    const updated = await testAndUpdateCustomConnection(
-      loadAppConfig(),
-      request,
-      new AbortController().signal,
-    )
-    if (!updated.config) return { ok: false, error: updated.error ?? '连接检测未通过' }
-    await persistConnectionConfig(updated.config)
-    return { ok: true, snapshot: createModelSettingsSnapshot(updated.config) }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    settingsMutationInProgress = false
-  }
-}
-
-async function removeCustomModelConnection(
-  connectionId: string,
-): Promise<SettingsMutationResult> {
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再删除模型连接' }
-  settingsMutationInProgress = true
-  try {
-    const next = deleteCustomConnection(loadAppConfig(), connectionId)
+    const next = updateCliProxyApiSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
@@ -1129,8 +1107,8 @@ if (!primaryInstance) {
 }
 
 if (primaryInstance) void app.whenReady().then(async () => {
-  await migratePlaintextSecrets(configSecretCodec, getConfigPath())
-    .catch((error) => console.error('API key 安全迁移失败：', error))
+  await migrateLegacyConfig(configSecretCodec, getConfigPath())
+    .catch((error) => console.error('配置安全迁移失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
   void Promise.all([
     rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
@@ -1163,10 +1141,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.modelSettings, () => createModelSettingsSnapshot(loadAppConfig()))
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))
-  ipcMain.handle(IPC.saveCustomConnection, (_e, request: SaveCustomConnectionRequest) =>
-    saveCustomModelConnection(request))
-  ipcMain.handle(IPC.deleteCustomConnection, (_e, connectionId: string) =>
-    removeCustomModelConnection(connectionId))
+  ipcMain.handle(IPC.saveCliProxyApiSettings, (_e, request: SaveCliProxyApiSettingsRequest) =>
+    saveCliProxyApiConnectionSettings(request))
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)

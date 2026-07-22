@@ -4,8 +4,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
+  cliProxyModelId,
   loadConfig,
-  migratePlaintextSecrets,
+  migrateLegacyConfig,
   resolveDefaultModelId,
   saveConfig,
   type ConfigSecretCodec,
@@ -19,8 +20,14 @@ function config(
   return { providers, defaultModel }
 }
 
+const codec: ConfigSecretCodec = {
+  isAvailable: () => true,
+  encrypt: (secret) => Buffer.from(`safe:${secret}`).toString('base64'),
+  decrypt: (payload) => Buffer.from(payload, 'base64').toString().slice(5),
+}
+
 describe('默认模型选择', () => {
-  it('优先使用配置中指定且已有 key 的模型', () => {
+  it('优先使用配置中指定且已有 key 的内置模型', () => {
     assert.equal(
       resolveDefaultModelId(config(
         {
@@ -33,7 +40,7 @@ describe('默认模型选择', () => {
     )
   })
 
-  it('默认模型不可用时回退到注册表中第一个已有 key 的模型', () => {
+  it('默认模型不可用时回退到目录中第一个已有 key 的模型', () => {
     assert.equal(
       resolveDefaultModelId(config(
         { deepseek: { apiKey: 'deepseek-key' } },
@@ -50,87 +57,59 @@ describe('默认模型选择', () => {
     )
   })
 
+  it('已启用的 CLIProxyAPI 模型可作为显式默认连接', () => {
+    const modelId = cliProxyModelId('openai:gpt-5.6-sol')
+    const value = config({}, modelId)
+    value.cliProxyApi = {
+      apiKey: 'proxy-key',
+      baseURL: 'http://127.0.0.1:8317/v1',
+      modelIds: ['openai:gpt-5.6-sol'],
+    }
+    assert.equal(resolveDefaultModelId(value), modelId)
+  })
+
+  it('只配置 CLIProxyAPI 时回退到首个已启用的等价型号', () => {
+    const value = config({})
+    value.cliProxyApi = {
+      apiKey: 'proxy-key',
+      baseURL: 'http://127.0.0.1:8317/v1',
+      modelIds: ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
+    }
+    assert.equal(
+      resolveDefaultModelId(value),
+      cliProxyModelId('google:gemini-3.1-pro-preview'),
+    )
+  })
+
+  it('CLIProxyAPI 配置中的非等价旧路由不能恢复为默认模型', () => {
+    const modelId = cliProxyModelId('google:gemini-3.6-flash')
+    const value = config({}, modelId)
+    value.cliProxyApi = {
+      apiKey: 'proxy-key',
+      baseURL: 'http://127.0.0.1:8317/v1',
+      modelIds: ['google:gemini-3.6-flash'],
+    }
+    assert.equal(resolveDefaultModelId(value), null)
+  })
+
   it('没有任何可用模型时返回 null', () => {
     assert.equal(resolveDefaultModelId(config({})), null)
     assert.equal(resolveDefaultModelId(null), null)
   })
-
-  it('识别 providers.mimo 中配置的 MiMo V2.5 密钥', () => {
-    assert.equal(
-      resolveDefaultModelId(
-        config({ mimo: { apiKey: 'mimo-key' } }, 'mimo:mimo-v2.5'),
-      ),
-      'mimo:mimo-v2.5',
-    )
-  })
-
-  it('可解析已配置的 OpenAI 与 Google 模型', () => {
-    assert.equal(
-      resolveDefaultModelId(
-        config({ openai: { apiKey: 'openai-key' } }, 'openai:gpt-5.6-sol'),
-      ),
-      'openai:gpt-5.6-sol',
-    )
-    assert.equal(
-      resolveDefaultModelId(
-        config({ google: { apiKey: 'google-key' } }, 'google:gemini-3.6-flash'),
-      ),
-      'google:gemini-3.6-flash',
-    )
-  })
-
-  it('支持通过检测的自定义连接作为默认模型', () => {
-    const value = config({}, 'custom:local-mimo')
-    value.customConnections = [{
-      id: 'local-mimo',
-      name: '本地 MiMo',
-      protocol: 'openai-chat',
-      baseURL: 'http://localhost/v1',
-      apiKey: 'custom-key',
-      modelId: 'MiMo - V2.5',
-      probe: { text: 'supported', tools: 'supported', image: 'supported' },
-      checkedAt: '2026-07-16T00:00:00.000Z',
-    }]
-    assert.equal(resolveDefaultModelId(value), 'custom:local-mimo')
-  })
-
-  it('不会把仅文本可用、但工具未通过的连接选为 Agent 默认模型', () => {
-    const value = config({ mimo: { apiKey: 'fallback-key' } }, 'custom:chat-only')
-    value.customConnections = [{
-      id: 'chat-only',
-      name: '仅聊天端点',
-      protocol: 'openai-chat',
-      baseURL: 'http://localhost/v1',
-      apiKey: 'custom-key',
-      modelId: 'chat-only',
-      probe: { text: 'supported', tools: 'unknown', image: 'unknown' },
-      checkedAt: '2026-07-16T00:00:00.000Z',
-    }]
-    assert.equal(resolveDefaultModelId(value), 'mimo:mimo-v2.5')
-  })
 })
 
 describe('配置密钥存储', () => {
-  it('保存时不落明文，读取时恢复官方、自定义、协商和搜索密钥', async () => {
+  it('保存时不落明文，读取时恢复内置、CLIProxyAPI、协商和搜索密钥', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-'))
     const path = join(root, 'config.json')
-    const codec: ConfigSecretCodec = {
-      isAvailable: () => true,
-      encrypt: (secret) => Buffer.from(`safe:${secret}`).toString('base64'),
-      decrypt: (payload) => Buffer.from(payload, 'base64').toString().slice(5),
-    }
     const value: WhycodeConfig = {
       providers: { mimo: { apiKey: 'official-secret' } },
-      customConnections: [{
-        id: 'custom-one',
-        name: '自定义',
-        protocol: 'openai-chat',
-        baseURL: 'http://localhost/v1',
-        apiKey: 'custom-secret',
-        modelId: 'model-one',
-        probe: { text: 'supported', tools: 'supported', image: 'unknown' },
-        checkedAt: '2026-07-16T00:00:00.000Z',
-      }],
+      cliProxyApi: {
+        apiKey: 'proxy-secret',
+        baseURL: 'http://127.0.0.1:8317/v1',
+        modelIds: ['openai:gpt-5.6-sol'],
+      },
+      retiredModelLabels: { 'legacy:model': 'Legacy Model' },
       consensusAgents: {
         B: { model: 'mimo:mimo-v2.5', apiKey: 'peer-secret' },
       },
@@ -139,27 +118,22 @@ describe('配置密钥存储', () => {
     try {
       await saveConfig(value, codec, path)
       const raw = await readFile(path, 'utf-8')
-      assert.doesNotMatch(raw, /official-secret|custom-secret|peer-secret|search-secret/)
-      assert.equal(loadConfig(path, codec)?.providers.mimo?.apiKey, 'official-secret')
-      assert.equal(loadConfig(path, codec)?.customConnections?.[0]?.apiKey, 'custom-secret')
-      assert.equal(loadConfig(path, codec)?.consensusAgents?.B?.apiKey, 'peer-secret')
-      assert.equal(loadConfig(path, codec)?.webSearch?.perplexity?.apiKey, 'search-secret')
-      value.providers.mimo = { apiKey: 'rotated-secret' }
-      await saveConfig(value, codec, path)
-      assert.equal(loadConfig(path, codec)?.providers.mimo?.apiKey, 'rotated-secret')
+      assert.doesNotMatch(raw, /official-secret|proxy-secret|peer-secret|search-secret/)
+      const loaded = loadConfig(path, codec)
+      assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
+      assert.equal(loaded?.cliProxyApi?.apiKey, 'proxy-secret')
+      assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['openai:gpt-5.6-sol'])
+      assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
+      assert.equal(loaded?.consensusAgents?.B?.apiKey, 'peer-secret')
+      assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'search-secret')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('JSON 中显式填写的新 key 优先于旧加密字段，便于下一次安全迁移', async () => {
+  it('JSON 中显式填写的新 key 优先于旧加密字段', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-'))
     const path = join(root, 'config.json')
-    const codec: ConfigSecretCodec = {
-      isAvailable: () => true,
-      encrypt: (secret) => Buffer.from(secret).toString('base64'),
-      decrypt: (payload) => Buffer.from(payload, 'base64').toString(),
-    }
     try {
       await writeFile(path, JSON.stringify({
         providers: {
@@ -172,45 +146,68 @@ describe('配置密钥存储', () => {
     }
   })
 
-  it('启动迁移会原子移除旧配置中的明文 key，并保留可解密值', async () => {
+  it('启动迁移一次完成明文加密、旧自定义删除和历史型号留名', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-migration-'))
     const path = join(root, 'config.json')
-    const codec: ConfigSecretCodec = {
-      isAvailable: () => true,
-      encrypt: (secret) => Buffer.from(`safe:${secret}`).toString('base64'),
-      decrypt: (payload) => Buffer.from(payload, 'base64').toString().slice(5),
-    }
     try {
       await writeFile(path, JSON.stringify({
+        version: 3,
         providers: { mimo: { apiKey: 'legacy-secret' } },
+        defaultModel: 'custom:old-proxy',
+        customConnections: [{
+          id: 'old-proxy',
+          name: 'CLIProxyAPI',
+          modelId: 'gpt-5.6-sol(high)',
+          apiKey: 'removed-custom-secret',
+        }],
         consensusAgents: {
           B: { model: 'mimo:mimo-v2.5', apiKey: 'legacy-peer-secret' },
         },
-        webSearch: { perplexity: { apiKey: 'legacy-search-secret' } },
       }))
-      assert.equal(await migratePlaintextSecrets(codec, path), true)
+      assert.equal(await migrateLegacyConfig(codec, path), true)
       const raw = await readFile(path, 'utf-8')
-      assert.doesNotMatch(raw, /legacy-secret|legacy-peer-secret|legacy-search-secret|"apiKey"/)
-      assert.equal(loadConfig(path, codec)?.providers.mimo?.apiKey, 'legacy-secret')
-      assert.equal(loadConfig(path, codec)?.consensusAgents?.B?.apiKey, 'legacy-peer-secret')
-      assert.equal(loadConfig(path, codec)?.webSearch?.perplexity?.apiKey, 'legacy-search-secret')
-      assert.equal(await migratePlaintextSecrets(codec, path), false)
+      assert.doesNotMatch(raw, /legacy-secret|legacy-peer-secret|removed-custom-secret|customConnections|"apiKey"/)
+      const loaded = loadConfig(path, codec)
+      assert.equal(loaded?.providers.mimo?.apiKey, 'legacy-secret')
+      assert.equal(loaded?.consensusAgents?.B?.apiKey, 'legacy-peer-secret')
+      assert.equal(loaded?.defaultModel, undefined)
+      assert.equal(
+        loaded?.retiredModelLabels?.['custom:old-proxy'],
+        'gpt-5.6-sol(high)',
+      )
+      assert.equal(await migrateLegacyConfig(codec, path), false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it('配置解析拒绝数组伪装，并隔离特殊 provider 属性', async () => {
+  it('配置解析拒绝数组伪装，并只接受已注册厂商与型号', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-shape-'))
     const path = join(root, 'config.json')
     try {
       await writeFile(path, JSON.stringify({ providers: [] }))
       assert.equal(loadConfig(path), null)
-      await writeFile(path, '{"providers":{"__proto__":{"apiKey":"ignored"},"mimo":{"apiKey":"valid"}}}')
+      await writeFile(path, JSON.stringify({
+        providers: {
+          unknown: { apiKey: 'ignored' },
+          mimo: { apiKey: 'valid' },
+        },
+        cliProxyApi: {
+          apiKey: 'proxy',
+          baseURL: 'http://127.0.0.1:8317/v1',
+          modelIds: [
+            'unknown:model',
+            'google:gemini-3.6-flash',
+            'openai:gpt-5.6-sol',
+          ],
+        },
+      }))
       const loaded = loadConfig(path)
       assert.ok(loaded)
       assert.equal(Object.getPrototypeOf(loaded.providers), null)
+      assert.equal('unknown' in loaded.providers, false)
       assert.equal(loaded.providers.mimo?.apiKey, 'valid')
+      assert.deepEqual(loaded.cliProxyApi?.modelIds, ['openai:gpt-5.6-sol'])
     } finally {
       await rm(root, { recursive: true, force: true })
     }

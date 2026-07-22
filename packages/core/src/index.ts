@@ -19,44 +19,19 @@ export {
   MODEL_CATALOG,
   getBuiltInProvider,
   getModelProfile,
-  matchCustomModelProfile,
-  parseCustomModelThinkingSuffix,
-  replaceCustomModelThinkingSuffix,
-  isReasoningEffort,
-  matchModelProfile,
-  normalizeModelIdentity,
   REASONING_EFFORT_LEVELS,
   type BuiltInProviderId,
   type BuiltInProviderProfile,
   type ModelProfile,
-  type ModelProfileMatch,
-  type ModelProviderId,
   type ProviderProtocol,
   type ReasoningEffort,
   type ReasoningEffortCapability,
   type ReasoningEffortSelection,
 } from './providers/catalog.ts'
 export {
-  explicitReasoningEffort,
   normalizeReasoningEffortSelection,
   providerOptionsWithReasoningEffort,
 } from './providers/reasoning-effort.ts'
-export {
-  CUSTOM_API_PROTOCOLS,
-  createCustomModelEntry,
-  type CapabilityProbeState,
-  type CustomApiProtocolDescriptor,
-  type CustomApiProtocol,
-  type CustomConnectionProbe,
-  type CustomModelEntryOptions,
-} from './providers/custom.ts'
-export {
-  compactProbeReport,
-  probeCustomConnection,
-  type CapabilityProbeOutcome,
-  type CustomConnectionProbeOptions,
-  type CustomConnectionProbeReport,
-} from './providers/probe.ts'
 export {
   buildTool,
   type ToolDefinition,

@@ -1,9 +1,5 @@
 import type { ProviderMetadata } from 'ai'
-import type {
-  ModelCapabilities,
-  ReasoningEffort,
-  ReasoningEffortSelection,
-} from './catalog.ts'
+import type { ModelCapabilities, ReasoningEffortSelection } from './catalog.ts'
 import type { ModelEntry } from './registry.ts'
 
 export function normalizeReasoningEffortSelection(
@@ -16,21 +12,15 @@ export function normalizeReasoningEffortSelection(
     : 'default'
 }
 
-export function explicitReasoningEffort(
-  selection: ReasoningEffortSelection,
-): ReasoningEffort | undefined {
-  return selection === 'default' ? undefined : selection
-}
-
 /** 将会话选档翻译到当前实际客户端协议，目录中的其它 providerOptions 保持不变。 */
 export function providerOptionsWithReasoningEffort(
   model: ModelEntry,
   selection: ReasoningEffortSelection,
 ): ProviderMetadata | undefined {
-  const effort = explicitReasoningEffort(selection)
+  const effort = selection === 'default' ? undefined : selection
   if (!effort) return model.providerOptions
   if (!model.capabilities.reasoningEffort?.supported.includes(effort)) {
-    throw new Error(`${model.displayName} 不支持思考强度 ${effort}`)
+    throw new Error(`${model.displayName} 不支持推理强度 ${effort}`)
   }
 
   const providerKey = model.protocol === 'openai-responses'
