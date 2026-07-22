@@ -1,4 +1,5 @@
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
+import type { ReasoningEffort, ReasoningEffortSelection } from '@whycode/core'
 import type { ModelListItem } from '../../shared/settings.ts'
 
 interface ConsensusStatus {
@@ -16,17 +17,30 @@ interface AppHeaderProps {
   permMode: PermissionMode
   models: ModelListItem[]
   modelId: string
+  reasoningEffort: ReasoningEffortSelection
   onPickProject: () => void
   onToggleConsensus: () => void
   onCompact: () => void
   onPermissionChange: (mode: PermissionMode) => void
   onModelChange: (modelId: string) => void
+  onReasoningEffortChange: (reasoningEffort: ReasoningEffortSelection) => void
   onOpenSessions: () => void
   onNewSession: () => void
   onOpenModelSettings: () => void
 }
 
 export function AppHeader(props: AppHeaderProps) {
+  const selectedModel = props.models.find((model) => model.id === props.modelId)
+  const retired = Boolean(selectedModel?.retired)
+  const unavailable = Boolean(selectedModel && !selectedModel.available)
+  const effort = retired || unavailable ? undefined : selectedModel?.reasoningEffort
+  const selectedEffort = effort
+    ? props.reasoningEffort === 'default'
+      ? effort.default
+      : effort.supported.includes(props.reasoningEffort)
+        ? props.reasoningEffort
+        : effort.default
+    : 'default'
   return (
     <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-2">
       <div className="flex items-center gap-3">
@@ -65,7 +79,7 @@ export function AppHeader(props: AppHeaderProps) {
           🗜 压缩
         </button>
         <select
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400"
           value={props.permMode}
           onChange={(event) => props.onPermissionChange(event.target.value as PermissionMode)}
           disabled={props.permissionLocked}
@@ -84,20 +98,63 @@ export function AppHeader(props: AppHeaderProps) {
           ⚙ 连接
         </button>
         <select
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
-          value={props.modelId}
-          onChange={(event) => props.onModelChange(event.target.value)}
+          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400"
+          value={selectedEffort}
+          onChange={(event) =>
+            props.onReasoningEffortChange(event.target.value as ReasoningEffortSelection)}
+          disabled={props.busy || !effort}
+          title={effort ? '当前会话的推理强度' : '当前模型没有官方可选的推理强度档位'}
+        >
+          {effort
+            ? effort.supported.map((level) => (
+                <option key={level} value={level}>推理：{reasoningEffortLabel(level)}</option>
+              ))
+            : <option value="default">推理：默认</option>}
+        </select>
+        <select
+          className={`rounded border bg-white px-2 py-1 text-xs ${
+            retired
+              ? 'border-red-300 text-red-600'
+              : unavailable
+                ? 'border-amber-300 text-amber-700'
+                : 'border-neutral-300'
+          }`}
+          value={retired || unavailable ? '' : props.modelId}
+          onChange={(event) => {
+            if (event.target.value) props.onModelChange(event.target.value)
+          }}
           disabled={props.busy}
         >
-          {props.models.map((model) => (
-            <option key={model.id} value={model.id} disabled={!model.available}>
-              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}{model.available ? '' : `（${model.unavailableReason ?? '不可用'}）`}
+          {(!selectedModel || retired || unavailable) && (
+            <option value="" disabled hidden>
+              {retired
+                ? `${selectedModel?.displayName ?? props.modelId}（已停止支持）`
+                : unavailable
+                  ? `${selectedModel?.displayName ?? props.modelId}（当前未配置）`
+                  : '请选择模型'}
+            </option>
+          )}
+          {props.models.filter((model) => model.available && !model.retired).map((model) => (
+            <option className="text-neutral-900" key={model.id} value={model.id}>
+              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}
             </option>
           ))}
         </select>
       </div>
     </header>
   )
+}
+
+function reasoningEffortLabel(level: ReasoningEffort): string {
+  return {
+    none: '关闭',
+    minimal: '最少',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '极高',
+    max: '最高',
+  }[level]
 }
 
 function ConsensusButton(props: AppHeaderProps) {

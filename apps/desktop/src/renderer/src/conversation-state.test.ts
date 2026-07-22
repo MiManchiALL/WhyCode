@@ -46,7 +46,7 @@ describe('会话界面时间线重建', () => {
     }, 'target'), false)
   })
 
-  it('按原顺序恢复用户、思考、工具、候选和 B/C 卡片', () => {
+  it('按原顺序恢复用户、推理、工具、候选和 B/C 卡片', () => {
     const state = createConversationState([
       { type: 'user-message', text: '分析项目', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-1' }),

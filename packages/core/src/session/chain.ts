@@ -14,6 +14,7 @@ import { createImageUserMessage } from '../attachments/messages.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
+import type { ReasoningEffortSelection } from '../providers/catalog.ts'
 
 export class SessionCorruptError extends Error {}
 
@@ -84,7 +85,11 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       },
     })
   }
-  const modelId = collectModelId(chain, start.modelId)
+  const modelSelection = collectModelSelection(
+    chain,
+    start.modelId,
+    start.reasoningEffort ?? 'default',
+  )
   const {
     interruptedTurnId,
     interruptedTurnEngagedPlanId,
@@ -127,7 +132,8 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       schemaVersion: SESSION_SCHEMA_VERSION,
       sessionId: start.sessionId,
       projectDir: start.projectDir,
-      modelId,
+      modelId: modelSelection.modelId,
+      reasoningEffort: modelSelection.reasoningEffort,
       title: clip(userTexts[0] ?? ''),
       lastUserText: clip(userTexts.at(-1) ?? ''),
       createdAt: start.timestamp,
@@ -610,12 +616,20 @@ function latestVisibleTaskPlan(
   return null
 }
 
-function collectModelId(chain: SessionEntry[], initialModelId: string): string {
+function collectModelSelection(
+  chain: SessionEntry[],
+  initialModelId: string,
+  initialReasoningEffort: ReasoningEffortSelection,
+): { modelId: string; reasoningEffort: ReasoningEffortSelection } {
   let modelId = initialModelId
+  let reasoningEffort = initialReasoningEffort
   for (const entry of chain) {
-    if (entry.type === 'snapshot' || entry.type === 'model-change') modelId = entry.modelId
+    if (entry.type === 'snapshot' || entry.type === 'model-change') {
+      modelId = entry.modelId
+      reasoningEffort = entry.reasoningEffort ?? 'default'
+    }
   }
-  return modelId
+  return { modelId, reasoningEffort }
 }
 
 function findInterruptedWork(

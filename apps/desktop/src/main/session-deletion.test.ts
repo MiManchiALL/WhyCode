@@ -103,6 +103,21 @@ describe('会话关联数据删除', () => {
     assert.match(summary?.unavailableReason ?? '', /删除未完成.*重试删除/)
     assert.equal(sessions.currentSessionId, null)
   })
+
+  it('在删除会话事实源前完成引用型显示元数据收尾', async () => {
+    const calls: string[] = []
+    assert.equal(await deleteSessionArtifacts({
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      sessions: {
+        markDeleting: async () => { calls.push('mark'); return true },
+        delete: async () => { calls.push('session'); return true },
+      },
+      commandSessions: { removeSession: async () => { calls.push('command') } },
+      scratchRoot: await createRoot(),
+      onBeforeFactSourceDelete: async () => { calls.push('references') },
+    }), true)
+    assert.deepEqual(calls, ['mark', 'command', 'references', 'session'])
+  })
 })
 
 async function createRoot(): Promise<string> {

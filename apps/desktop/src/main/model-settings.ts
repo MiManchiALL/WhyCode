@@ -1,37 +1,24 @@
-import { randomUUID } from 'node:crypto'
 import {
   BUILTIN_PROVIDERS,
-  compactProbeReport,
-  createCustomModelEntry,
-  CUSTOM_API_PROTOCOLS,
-  matchCustomModelProfile,
   MODEL_CATALOG,
-  probeCustomConnection,
   type BuiltInProviderId,
-  type CustomApiProtocol,
-  type CustomConnectionProbeReport,
+  type ProviderProtocol,
 } from '@whycode/core'
 import type {
-  CustomConnectionSettingsItem,
   ModelSettingsSnapshot,
-  SaveCustomConnectionRequest,
+  SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
 } from '../shared/settings.ts'
+import type { WhycodeConfig } from './config.ts'
 import {
-  customModelId,
-  type CustomConnectionConfig,
-  type WhycodeConfig,
-} from './config.ts'
+  cliProxyModelEntries,
+  getCliProxyEffectiveCapabilities,
+  getDefaultCliProxyRoute,
+  isCliProxyRoute,
+} from './cli-proxy-models.ts'
 import { createWebSearchSettingsSnapshot } from './web-search-settings.ts'
 
-const MAX_PROBE_DETAIL_CHARS = 1_000
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
-
-export interface CustomConnectionUpdateResult {
-  config?: WhycodeConfig
-  report?: CustomConnectionProbeReport
-  error?: string
-}
 
 export function createModelSettingsSnapshot(
   config: WhycodeConfig | null,
@@ -54,8 +41,23 @@ export function createModelSettingsSnapshot(
           capabilities: model.capabilities,
         })),
     })),
-    customConnections: (config?.customConnections ?? []).map(customSettingsItem),
-    protocols: CUSTOM_API_PROTOCOLS.map((protocol) => ({ ...protocol })),
+    cliProxyApi: {
+      displayName: 'CLIProxyAPI',
+      ...(config?.cliProxyApi?.baseURL ? { baseURL: config.cliProxyApi.baseURL } : {}),
+      hasKey: Boolean(config?.cliProxyApi?.apiKey),
+      models: cliProxyModelEntries().map(({ entry }) => {
+        const configuredRoute = config?.cliProxyApi?.modelRoutes[entry.id]
+        const routeModelId = configuredRoute && isCliProxyRoute(entry.id, configuredRoute)
+          ? configuredRoute
+          : getDefaultCliProxyRoute(entry.id)!
+        return {
+          id: entry.id,
+          displayName: entry.displayName,
+          enabled: Boolean(config?.cliProxyApi?.modelIds.includes(entry.id)),
+          capabilities: getCliProxyEffectiveCapabilities(entry.id, routeModelId)!,
+        }
+      }),
+    },
     webSearch: createWebSearchSettingsSnapshot(config),
   }
 }
@@ -81,134 +83,36 @@ export function updateProviderSettings(
   return next
 }
 
-export async function testAndUpdateCustomConnection(
+export function updateCliProxyApiSettings(
   config: WhycodeConfig | null,
-  request: SaveCustomConnectionRequest,
-  abortSignal: AbortSignal,
-): Promise<CustomConnectionUpdateResult> {
-  let draft: ValidatedCustomDraft
-  try {
-    draft = validateCustomDraft(config, request)
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) }
-  }
-  const probeEntry = createCustomModelEntry({
-    id: customModelId(draft.id),
-    connectionName: draft.name,
-    protocol: draft.protocol,
-    modelId: draft.modelId,
-    probe: { text: 'unknown', tools: 'unknown', image: 'unknown' },
-  })
-  let report: CustomConnectionProbeReport
-  try {
-    report = await probeCustomConnection(
-      probeEntry.create({ apiKey: draft.apiKey, baseURL: draft.baseURL }),
-      { abortSignal, providerOptions: probeEntry.providerOptions },
-    )
-  } catch (error) {
-    return { error: safeError(error, draft.apiKey) }
-  }
-  report = redactReport(report, draft.apiKey)
-  if (report.text.state !== 'supported') {
-    return { report, error: `文本连接检测未通过：${report.text.detail}` }
-  }
-
-  const connection: CustomConnectionConfig = {
-    ...draft,
-    probe: compactProbeReport(report),
-    probeDetails: {
-      text: report.text.detail,
-      tools: report.tools.detail,
-      image: report.image.detail,
-    },
-    checkedAt: new Date().toISOString(),
-  }
-  const next = cloneConfig(config)
-  next.customConnections = [
-    ...(next.customConnections ?? []).filter((item) => item.id !== connection.id),
-    connection,
-  ]
-  return { config: next, report }
-}
-
-export function deleteCustomConnection(
-  config: WhycodeConfig | null,
-  connectionId: string,
+  request: SaveCliProxyApiSettingsRequest,
 ): WhycodeConfig {
+  const requestedIds = new Set(request.modelIds)
+  if (requestedIds.size === 0) throw new Error('请至少选择一个 CLIProxyAPI 模型')
+  if (requestedIds.size !== request.modelIds.length) throw new Error('CLIProxyAPI 模型不能重复')
+  const modelIds = cliProxyModelEntries()
+    .filter(({ entry }) => requestedIds.has(entry.id))
+    .map(({ entry }) => entry.id)
+  if (modelIds.length !== requestedIds.size) {
+    throw new Error('CLIProxyAPI 只能选择已确认存在等价路由的 WhyCode 模型')
+  }
+
   const next = cloneConfig(config)
-  if (!next.customConnections?.some((item) => item.id === connectionId)) {
-    throw new Error('自定义连接不存在')
-  }
-  next.customConnections = next.customConnections.filter((item) => item.id !== connectionId)
-  if (next.defaultModel === customModelId(connectionId)) delete next.defaultModel
-  return next
-}
-
-function customSettingsItem(connection: CustomConnectionConfig): CustomConnectionSettingsItem {
-  const match = matchCustomModelProfile(connection.modelId)
-  const effectiveEntry = createCustomModelEntry({
-    id: customModelId(connection.id),
-    connectionName: connection.name,
-    protocol: connection.protocol,
-    modelId: connection.modelId,
-    probe: connection.probe,
-  })
-  return {
-    id: connection.id,
-    name: connection.name,
-    protocol: connection.protocol,
-    baseURL: connection.baseURL,
-    modelId: connection.modelId,
-    hasKey: Boolean(connection.apiKey),
-    ...(match.status === 'matched' ? {
-      matchedProfile: {
-        id: match.profile.id,
-        displayName: match.profile.displayName,
-        reasoningExposure: effectiveEntry.capabilities.reasoningExposure,
-      },
-    } : {}),
-    probe: connection.probe,
-    ...(connection.probeDetails ? { probeDetails: connection.probeDetails } : {}),
-    checkedAt: connection.checkedAt,
-  }
-}
-
-interface ValidatedCustomDraft {
-  id: string
-  name: string
-  protocol: CustomApiProtocol
-  baseURL: string
-  apiKey: string
-  modelId: string
-}
-
-function validateCustomDraft(
-  config: WhycodeConfig | null,
-  request: SaveCustomConnectionRequest,
-): ValidatedCustomDraft {
-  const existing = request.id
-    ? config?.customConnections?.find((item) => item.id === request.id)
-    : undefined
-  if (request.id && !existing) throw new Error('要编辑的自定义连接不存在')
-  const name = request.name.trim()
-  const modelId = request.modelId.trim()
-  const apiKey = request.apiKey?.trim() || existing?.apiKey || ''
-  if (!name || name.length > 80) throw new Error('连接名称必须为 1–80 个字符')
-  if (!modelId || modelId.length > 200) throw new Error('模型 ID 必须为 1–200 个字符')
-  if (CONTROL_CHARACTER.test(name)) throw new Error('连接名称不能包含控制字符')
-  if (CONTROL_CHARACTER.test(modelId)) throw new Error('模型 ID 不能包含控制字符')
-  if (!apiKey) throw new Error('请填写 API key')
-  if (!CUSTOM_API_PROTOCOLS.some((item) => item.id === request.protocol)) {
-    throw new Error('API 协议不受支持')
-  }
-  return {
-    id: request.id ?? randomUUID(),
-    name,
-    protocol: request.protocol,
-    baseURL: normalizeRequiredBaseURL(request.baseURL),
+  const suppliedKey = request.apiKey?.trim()
+  const apiKey = request.clearApiKey
+    ? ''
+    : suppliedKey || next.cliProxyApi?.apiKey || ''
+  next.cliProxyApi = {
     apiKey,
-    modelId,
+    baseURL: normalizeRequiredBaseURL(request.baseURL),
+    modelIds,
+    // 精确路由只能来自当前实例鉴权后的 /models，不能在纯设置转换层猜测。
+    modelRoutes: {},
   }
+  if (request.clearApiKey && next.defaultModel?.startsWith('cliproxyapi:')) {
+    delete next.defaultModel
+  }
+  return next
 }
 
 function cloneConfig(config: WhycodeConfig | null): WhycodeConfig {
@@ -241,28 +145,8 @@ function normalizeRequiredBaseURL(value: string): string {
   return url.toString().replace(/\/$/, '')
 }
 
-function protocolLabel(protocol: CustomApiProtocol): string {
-  return CUSTOM_API_PROTOCOLS.find((item) => item.id === protocol)?.label ?? protocol
-}
-
-function redactReport(
-  report: CustomConnectionProbeReport,
-  apiKey: string,
-): CustomConnectionProbeReport {
-  return {
-    text: { ...report.text, detail: redact(report.text.detail, apiKey) },
-    tools: { ...report.tools, detail: redact(report.tools.detail, apiKey) },
-    image: { ...report.image, detail: redact(report.image.detail, apiKey) },
-  }
-}
-
-function safeError(error: unknown, apiKey: string): string {
-  return redact(error instanceof Error ? error.message : String(error), apiKey)
-}
-
-function redact(value: string, apiKey: string): string {
-  const redacted = apiKey ? value.replaceAll(apiKey, '[已隐藏 API key]') : value
-  return redacted.length > MAX_PROBE_DETAIL_CHARS
-    ? `${redacted.slice(0, MAX_PROBE_DETAIL_CHARS)}…`
-    : redacted
+function protocolLabel(protocol: ProviderProtocol): string {
+  if (protocol === 'anthropic-messages') return 'Anthropic Messages'
+  if (protocol === 'openai-responses') return 'OpenAI Responses'
+  return 'OpenAI Chat Completions'
 }

@@ -30,7 +30,7 @@ describe('ViewTimeline', () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
     timeline.capture(writer, { type: 'turn-start', turnId: 'turn-1' })
-    timeline.capture(writer, { type: 'thinking-delta', text: '未完成思考' })
+    timeline.capture(writer, { type: 'thinking-delta', text: '未完成推理' })
     timeline.capture(writer, { type: 'step-discarded' })
     await Promise.resolve()
 

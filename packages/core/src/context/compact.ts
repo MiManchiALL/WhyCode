@@ -1,4 +1,9 @@
-import { generateText, type LanguageModel, type ModelMessage } from 'ai'
+import {
+  generateText,
+  type LanguageModel,
+  type ModelMessage,
+  type ProviderMetadata,
+} from 'ai'
 import { readFile } from 'node:fs/promises'
 import { estimateMessageTokens, estimateTextTokens } from './tokens.ts'
 import {
@@ -65,12 +70,14 @@ export async function summarize(
   model: LanguageModel,
   messages: ModelMessage[],
   abortSignal: AbortSignal,
+  providerOptions?: ProviderMetadata,
 ): Promise<string> {
   const result = await generateText({
     model,
     system: '你是一个负责总结对话的助手。',
     messages: [...messages, { role: 'user', content: COMPACT_SUMMARY_PROMPT }],
     abortSignal,
+    providerOptions,
   })
   const text = result.text
   const summaryMatch = /<summary>([\s\S]*?)(<\/summary>|$)/.exec(text)
@@ -110,6 +117,7 @@ export async function compactMessages(
   prepareMessagesForModel?: (
     messages: ModelMessage[],
   ) => ModelMessage[] | Promise<ModelMessage[]>,
+  providerOptions?: ProviderMetadata,
 ): Promise<CompactResult> {
   // 尾部起点为 0 = 全部历史都在尾部预算内，此时「摘要+全量尾部」只会更大——退化为纯摘要替换
   const effectiveTailStart = pickSummaryEnd(messages)
@@ -119,7 +127,7 @@ export async function compactMessages(
   const preparedMessages = prepareMessagesForModel
     ? await prepareMessagesForModel(toSummarize)
     : toSummarize
-  const summaryText = await summarize(model, preparedMessages, abortSignal)
+  const summaryText = await summarize(model, preparedMessages, abortSignal, providerOptions)
 
   const rebuilt: ModelMessage[] = [
     {

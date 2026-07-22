@@ -11,6 +11,8 @@ interface SessionDeletionOptions {
   commandSessions: Pick<CommandSessionManager, 'removeSession'>
   scratchRoot: string
   onDeletionMarked?: (sessionExists: boolean) => void
+  /** 删除标记已生效、目标会话已不可恢复，但事实源尚在，供引用型元数据完成原子收尾。 */
+  onBeforeFactSourceDelete?: () => Promise<void>
 }
 
 /**
@@ -25,5 +27,6 @@ export async function deleteSessionArtifacts(
   options.onDeletionMarked?.(sessionExists)
   await options.commandSessions.removeSession(options.sessionId)
   await cleanupConversationScratch(options.scratchRoot, options.sessionId)
+  await options.onBeforeFactSourceDelete?.()
   return options.sessions.delete(options.sessionId)
 }

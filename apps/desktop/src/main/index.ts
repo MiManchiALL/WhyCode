@@ -12,6 +12,7 @@ import {
   createWebFindTool,
   createWebSearchTool,
   getModelEntry,
+  normalizeReasoningEffortSelection,
   type ApprovalRequest,
   type ApprovalResponse,
   type ConsensusAgentSetup,
@@ -22,6 +23,7 @@ import {
   type ModelEntry,
   type PdfAttachment,
   type ProviderConfig,
+  type ReasoningEffortSelection,
   type SessionJournal,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
@@ -30,21 +32,25 @@ import {
   type ConfigSecretCodec,
   getConfigPath,
   loadConfig,
-  migratePlaintextSecrets,
+  migrateLegacyConfig,
   resolveDefaultModelId,
   saveConfig,
 } from './config.ts'
 import { listModelConnections, resolveModelConnection } from './model-connections.ts'
 import {
+  discoverCliProxyRoutes,
+  unresolvedCliProxyProfiles,
+} from './cli-proxy-discovery.ts'
+import {
   createModelSettingsSnapshot,
-  deleteCustomConnection,
-  testAndUpdateCustomConnection,
+  updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionResumeLock } from './session-resume-lock.ts'
+import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
@@ -65,7 +71,7 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
-  SaveCustomConnectionRequest,
+  SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveWebSearchSettingsRequest,
   SettingsMutationResult,
@@ -216,7 +222,7 @@ const sessionDeletionLock = new SessionDeletionLock()
 const sessionResumeLock = new SessionResumeLock()
 /** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
 let attachmentPreparationInProgress = false
-/** 连接设置写入或探测期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
+/** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
 /** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
@@ -241,6 +247,8 @@ function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
 
 /** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
 let currentModelId: string | null = null
+/** 与当前模型一起持久化的会话级推理强度；default 表示不覆盖连接/厂商默认。 */
+let currentReasoningEffort: ReasoningEffortSelection = 'default'
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
 
@@ -268,16 +276,26 @@ async function ensureSession(): Promise<string | null> {
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) return resolved.error
   const { entry, providerConfig } = resolved.value
+  currentReasoningEffort = normalizeReasoningEffortSelection(
+    entry.capabilities,
+    currentReasoningEffort,
+  )
   if (session) {
-    session.setModel(entry, providerConfig)
+    await session.setModelSelection(entry, providerConfig, currentReasoningEffort)
   } else {
     if (!sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const recorder = await sessions.ensure(projectDir, modelId)
+        const recorder = await sessions.ensure(projectDir, modelId, currentReasoningEffort)
         if (!session) {
           conversationId = recorder.sessionId
-          session = createMainAgentSession(recorder, projectDir, entry, providerConfig)
+          session = createMainAgentSession(
+            recorder,
+            projectDir,
+            entry,
+            providerConfig,
+            currentReasoningEffort,
+          )
           coordinator = null // 新会话必须换新协调器（session_score 等按对话重置）
         }
         if (consensusEnabled && !coordinator) return buildCoordinator()
@@ -301,10 +319,12 @@ function createMainAgentSession(
   targetProjectDir: string | null,
   model: ModelEntry,
   providerConfig: ProviderConfig,
+  reasoningEffort: ReasoningEffortSelection,
 ): AgentSession {
   const next = new AgentSession({
     model,
     providerConfig,
+    reasoningEffort,
     promptContext: {
       projectDir: targetProjectDir,
       osPlatform: process.platform,
@@ -481,12 +501,73 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'error', message: err, recoverable: true })
         return { ok: false }
       }
-      currentModelId = command.modelId
-      if (session) {
-        const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
-        if (!resolved.ok) return { ok: false }
-        session.setModel(resolved.value.entry, resolved.value.providerConfig)
+      const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
+      if (!resolved.ok) {
+        broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
+        return { ok: false }
       }
+      const targetReasoningEffort = 'default'
+      if (session) {
+        await session.setModelSelection(
+          resolved.value.entry,
+          resolved.value.providerConfig,
+          targetReasoningEffort,
+        )
+      } else if (sessions.journal) {
+        await sessions.journal.updateModelSelection(command.modelId, targetReasoningEffort)
+      }
+      currentModelId = command.modelId
+      currentReasoningEffort = targetReasoningEffort
+      if (!session && sessions.journal) {
+        const initializationError = await ensureSession()
+        if (initializationError) {
+          broadcastEvent({ type: 'error', message: initializationError, recoverable: true })
+          return { ok: false }
+        }
+      }
+      return { ok: true }
+    }
+    case 'set-reasoning-effort': {
+      if (settingsMutationInProgress || attachmentPreparationInProgress) {
+        broadcastEvent({
+          type: 'error',
+          message: settingsMutationInProgress
+            ? '连接设置处理中，请稍后再调整推理强度'
+            : '附件消息准备中，请等待提交完成后再调整推理强度',
+          recoverable: true,
+        })
+        return { ok: false }
+      }
+      const modelId = resolveCurrentModelId()
+      if (!modelId) {
+        broadcastEvent({ type: 'error', message: '当前没有可用模型', recoverable: true })
+        return { ok: false }
+      }
+      const resolved = resolveModelConnection(loadAppConfig(), modelId)
+      if (!resolved.ok) {
+        broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
+        return { ok: false }
+      }
+      const normalized = normalizeReasoningEffortSelection(
+        resolved.value.entry.capabilities,
+        command.reasoningEffort,
+      )
+      if (normalized !== command.reasoningEffort) {
+        broadcastEvent({
+          type: 'error',
+          message: `${resolved.value.entry.displayName} 不支持推理强度 ${command.reasoningEffort}`,
+          recoverable: true,
+        })
+        return { ok: false }
+      }
+      if (session) {
+        await session.setModelSelection(
+          resolved.value.entry,
+          resolved.value.providerConfig,
+          normalized,
+        )
+      }
+      currentReasoningEffort = normalized
       return { ok: true }
     }
     case 'approval-response': {
@@ -656,15 +737,72 @@ async function persistConnectionConfig(
   const current = currentModelId
     ? resolveModelConnection(config, currentModelId)
     : null
-  currentModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
-  if (!session || !currentModelId) return
-  const resolved = resolveModelConnection(config, currentModelId)
-  if (resolved.ok) session.setModel(resolved.value.entry, resolved.value.providerConfig)
+  // 退役/已删除连接的历史会话没有可构造的 Agent；保存设置不能替用户改写其模型事实。
+  if (sessions.journal && !session && current && !current.ok) return
+  const targetModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
+  if (!session || !targetModelId) {
+    currentModelId = targetModelId
+    return
+  }
+  const resolved = resolveModelConnection(config, targetModelId)
+  if (resolved.ok) {
+    const targetReasoningEffort = normalizeReasoningEffortSelection(
+      resolved.value.entry.capabilities,
+      currentReasoningEffort,
+    )
+    await session.setModelSelection(
+      resolved.value.entry,
+      resolved.value.providerConfig,
+      targetReasoningEffort,
+    )
+    currentModelId = targetModelId
+    currentReasoningEffort = targetReasoningEffort
+  }
+}
+
+async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
+  const config = loadAppConfig()
+  const connection = config?.cliProxyApi
+  if (!config || !connection?.apiKey || connection.modelIds.length === 0) return
+  const modelRoutes = await discoverCliProxyRoutes(
+    connection,
+    (input, init) => net.fetch(input, init),
+  )
+  if (sameStringRecord(connection.modelRoutes, modelRoutes)) return
+  const next = structuredClone(config)
+  next.cliProxyApi!.modelRoutes = modelRoutes
+  await saveConfig(next, configSecretCodec, getConfigPath())
+}
+
+async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
+  const referencedModelIds = new Set(
+    (await sessions.list())
+      .filter((summary) => summary.sessionId !== excludedSessionId)
+      .map((summary) => summary.modelId)
+      .filter((modelId): modelId is string => Boolean(modelId)),
+  )
+  const config = loadAppConfig()
+  if (!config?.retiredModelLabels) return
+  const next = retainReferencedRetiredModelLabels(config, referencedModelIds)
+  if (next !== config) await saveConfig(next, configSecretCodec, getConfigPath())
+}
+
+function sameStringRecord(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const leftEntries = Object.entries(left)
+  const rightEntries = Object.entries(right)
+  return leftEntries.length === rightEntries.length
+    && leftEntries.every(([key, value]) => right[key] === value)
 }
 
 async function saveProviderModelSettings(
   request: SaveProviderSettingsRequest,
 ): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再保存模型设置' }
+  }
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
   settingsMutationInProgress = true
   try {
@@ -678,34 +816,28 @@ async function saveProviderModelSettings(
   }
 }
 
-async function saveCustomModelConnection(
-  request: SaveCustomConnectionRequest,
+async function saveCliProxyApiConnectionSettings(
+  request: SaveCliProxyApiSettingsRequest,
 ): Promise<SettingsMutationResult> {
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再检测模型连接' }
-  settingsMutationInProgress = true
-  try {
-    const updated = await testAndUpdateCustomConnection(
-      loadAppConfig(),
-      request,
-      new AbortController().signal,
-    )
-    if (!updated.config) return { ok: false, error: updated.error ?? '连接检测未通过' }
-    await persistConnectionConfig(updated.config)
-    return { ok: true, snapshot: createModelSettingsSnapshot(updated.config) }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    settingsMutationInProgress = false
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再保存 CLIProxyAPI 设置' }
   }
-}
-
-async function removeCustomModelConnection(
-  connectionId: string,
-): Promise<SettingsMutationResult> {
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再删除模型连接' }
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改 CLIProxyAPI 设置' }
   settingsMutationInProgress = true
   try {
-    const next = deleteCustomConnection(loadAppConfig(), connectionId)
+    const next = updateCliProxyApiSettings(loadAppConfig(), request)
+    if (next.cliProxyApi?.apiKey) {
+      const modelRoutes = await discoverCliProxyRoutes(
+        next.cliProxyApi,
+        (input, init) => net.fetch(input, init),
+      )
+      const unresolved = unresolvedCliProxyProfiles(next.cliProxyApi.modelIds, modelRoutes)
+      if (unresolved.length > 0) {
+        const names = unresolved.map((modelId) => getModelEntry(modelId).displayName)
+        throw new Error(`当前 CLIProxyAPI 实例没有公布以下等价路由：${names.join('、')}`)
+      }
+      next.cliProxyApi.modelRoutes = modelRoutes
+    }
     await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
@@ -718,6 +850,9 @@ async function removeCustomModelConnection(
 async function saveWebSearchConnectionSettings(
   request: SaveWebSearchSettingsRequest,
 ): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再保存网页搜索设置' }
+  }
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改网页搜索设置' }
   settingsMutationInProgress = true
   try {
@@ -789,6 +924,7 @@ function runtimeSnapshot(): RuntimeSnapshot {
   return {
     projectDir,
     modelId: resolveCurrentModelId(),
+    reasoningEffort: currentReasoningEffort,
     permissionMode: pendingPermissionMode ?? 'default',
     status: sessionDeletionLock.blocksRuntime
       ? 'working'
@@ -862,6 +998,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       session: {
         ...prepared.journal.metadataSnapshot,
         projectDir: prepared.targetProjectDir,
+        reasoningEffort: prepared.targetReasoningEffort,
       },
       viewEvents: [...prepared.journal.initialViewEvents],
       queuedInputs: pendingInputs(prepared.journal, 'queued'),
@@ -883,10 +1020,11 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
 
 interface PreparedResumeRuntime {
   journal: SessionJournal
-  mainSession: AgentSession
+  mainSession: AgentSession | null
   nextCoordinator: ConsensusCoordinator | null
   targetProjectDir: string
   targetModelId: string
+  targetReasoningEffort: ReasoningEffortSelection
   recoveredFromInterruption: boolean
 }
 
@@ -901,48 +1039,36 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
   )
   await journal.recoverInterruptedWork()
   const targetProjectDir = metadata.projectDir ?? requireDefaultWorkspace()
-  const model = resolveResumeModel(metadata.modelId)
-  const mainSession = createMainAgentSession(
-    journal,
-    targetProjectDir,
-    model.entry,
-    model.providerConfig,
-  )
+  const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
+  const targetReasoningEffort = resolved.ok
+    ? normalizeReasoningEffortSelection(
+        resolved.value.entry.capabilities,
+        metadata.reasoningEffort,
+      )
+    : metadata.reasoningEffort
+  const mainSession = resolved.ok
+    ? createMainAgentSession(
+        journal,
+        targetProjectDir,
+        resolved.value.entry,
+        resolved.value.providerConfig,
+        targetReasoningEffort,
+      )
+    : null
   let nextCoordinator: ConsensusCoordinator | null = null
-  if (consensusEnabled) {
+  if (consensusEnabled && mainSession) {
     const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
     if (!built.ok) throw new Error(built.error)
     nextCoordinator = built.value
   }
-  // 候选运行时已经完整构造；这是提交前唯一必要的持久化变更。
-  if (model.id !== metadata.modelId) await journal.updateModel(model.id)
   return {
     journal,
     mainSession,
     nextCoordinator,
     targetProjectDir,
-    targetModelId: model.id,
+    targetModelId: metadata.modelId,
+    targetReasoningEffort,
     recoveredFromInterruption,
-  }
-}
-
-function resolveResumeModel(historicalModelId: string): {
-  id: string
-  entry: ModelEntry
-  providerConfig: ProviderConfig
-} {
-  const config = loadAppConfig()
-  const historical = resolveModelConnection(config, historicalModelId)
-  const id = historical.ok ? historicalModelId : resolveDefaultModelId(config)
-  if (!id) throw new Error('没有任何已配置 key 的模型可用')
-  const resolved = id === historicalModelId
-    ? historical
-    : resolveModelConnection(config, id)
-  if (!resolved.ok) throw new Error(resolved.error)
-  return {
-    id,
-    entry: resolved.value.entry,
-    providerConfig: resolved.value.providerConfig,
   }
 }
 
@@ -955,6 +1081,7 @@ function commitResumedRuntime(input: PreparedResumeRuntime): void {
   coordinator = input.nextCoordinator
   projectDir = input.targetProjectDir
   currentModelId = input.targetModelId
+  currentReasoningEffort = input.targetReasoningEffort
   conversationId = input.journal.sessionId
   if (oldConversationId !== conversationId) {
     void cleanupConversationScratch(
@@ -1016,6 +1143,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         projectDir = requireDefaultWorkspace()
         detachedCurrent = true
       },
+      onBeforeFactSourceDelete: () => pruneRetiredModelLabels(sessionId),
     })
     if (!deleted) return { ok: false, error: '会话不存在', deletedCurrent: detachedCurrent }
     return { ok: true, deletedCurrent }
@@ -1051,8 +1179,10 @@ if (!primaryInstance) {
 }
 
 if (primaryInstance) void app.whenReady().then(async () => {
-  await migratePlaintextSecrets(configSecretCodec, getConfigPath())
-    .catch((error) => console.error('API key 安全迁移失败：', error))
+  await migrateLegacyConfig(configSecretCodec, getConfigPath())
+    .catch((error) => console.error('配置安全迁移失败：', error))
+  await synchronizeConfiguredCliProxyRoutes()
+    .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
   void Promise.all([
     rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
@@ -1076,18 +1206,19 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  await pruneRetiredModelLabels()
+    .catch((error) => console.warn('退役模型显示名清理失败：', error))
   registerAttachmentProtocol(() => sessions.journal)
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
-  ipcMain.handle(IPC.listModels, () => listModelConnections(loadAppConfig()))
+  ipcMain.handle(IPC.listModels, () =>
+    listModelConnections(loadAppConfig(), resolveCurrentModelId()))
   ipcMain.handle(IPC.modelSettings, () => createModelSettingsSnapshot(loadAppConfig()))
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))
-  ipcMain.handle(IPC.saveCustomConnection, (_e, request: SaveCustomConnectionRequest) =>
-    saveCustomModelConnection(request))
-  ipcMain.handle(IPC.deleteCustomConnection, (_e, connectionId: string) =>
-    removeCustomModelConnection(connectionId))
+  ipcMain.handle(IPC.saveCliProxyApiSettings, (_e, request: SaveCliProxyApiSettingsRequest) =>
+    saveCliProxyApiConnectionSettings(request))
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)

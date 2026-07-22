@@ -146,7 +146,7 @@ describe('MiMo thinking 工具历史', () => {
       }
       assert.equal(secondStreamReasoning, '工具结果有效。')
       assert.equal(finalText, 'MIMO_THINKING_TOOL_OK')
-      assert.equal(followupReasoning, '历史工具思考仍然完整。')
+      assert.equal(followupReasoning, '历史工具推理仍然完整。')
       assert.equal(followupText, 'MIMO_THINKING_FOLLOWUP_OK')
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -208,7 +208,7 @@ function sendFollowupAnswer(response: ServerResponse): void {
   sendChunk(response, {
     choices: [{
       index: 0,
-      delta: { reasoning_content: '历史工具思考仍然完整。' },
+      delta: { reasoning_content: '历史工具推理仍然完整。' },
       finish_reason: null,
     }],
   })

@@ -1,6 +1,7 @@
 import {
   SessionStore,
   type PdfProcessor,
+  type ReasoningEffortSelection,
   type SessionJournal,
   type SessionSummary,
 } from '@whycode/core'
@@ -24,11 +25,15 @@ export class DesktopSessionRepository {
     return this.current?.sessionId ?? null
   }
 
-  async ensure(projectDir: string | null, modelId: string): Promise<SessionJournal> {
+  async ensure(
+    projectDir: string | null,
+    modelId: string,
+    reasoningEffort: ReasoningEffortSelection = 'default',
+  ): Promise<SessionJournal> {
     if (this.current) return this.current
     if (!this.pendingCreate) {
       const generation = this.generation
-      const create = this.store.create({ projectDir, modelId }).then(async (journal) => {
+      const create = this.store.create({ projectDir, modelId, reasoningEffort }).then(async (journal) => {
         if (generation !== this.generation) {
           await this.store.delete(journal.sessionId).catch(() => false)
           throw new Error('会话初始化已失效')

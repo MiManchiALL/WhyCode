@@ -12,14 +12,13 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.deepEqual(visualModelIds, [
       'anthropic:claude-sonnet-4-6',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.5-flash',
+      'google:gemini-3.6-flash',
       'mimo:mimo-v2.5',
       'zhipu:glm-5v-turbo',
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
       'openai:gpt-5.5',
-      'openai:gpt-5.2',
     ])
   })
 
@@ -28,15 +27,19 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.equal(claude.capabilities.supportsImageInput, true)
     assert.equal(claude.capabilities.contextWindow, 1_000_000)
     assert.equal(claude.capabilities.maxOutput, 64_000)
+    assert.deepEqual(claude.capabilities.reasoningEffort, {
+      supported: ['low', 'medium', 'high', 'max'],
+      default: 'high',
+    })
 
     const glm = getModelEntry('zhipu:glm-4.7')
     assert.equal(glm.capabilities.supportsImageInput, false)
     assert.equal(glm.capabilities.contextWindow, 200_000)
     assert.equal(glm.capabilities.maxOutput, 128_000)
 
-    const gpt = getModelEntry('openai:gpt-5.2')
+    const gpt = getModelEntry('openai:gpt-5.5')
     assert.equal(gpt.capabilities.supportsImageInput, true)
-    assert.equal(gpt.capabilities.contextWindow, 400_000)
+    assert.equal(gpt.capabilities.contextWindow, 1_050_000)
     assert.equal(gpt.capabilities.maxOutput, 128_000)
   })
 
@@ -58,7 +61,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
   it('Gemini 模型使用 Google OpenAI 兼容协议', () => {
     for (const modelId of [
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.5-flash',
+      'google:gemini-3.6-flash',
     ]) {
       const gemini = getModelEntry(modelId)
       assert.equal(gemini.provider, 'google')
@@ -68,6 +71,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
       assert.equal(gemini.capabilities.reasoningExposure, 'summary')
       assert.equal(gemini.capabilities.contextWindow, 1_048_576)
       assert.equal(gemini.capabilities.maxOutput, 65_536)
+      assert.ok(gemini.capabilities.reasoningEffort)
       const created = gemini.create({ apiKey: 'test', baseURL: 'http://localhost/v1' })
       assert.notEqual(typeof created, 'string')
       if (typeof created !== 'string') {
@@ -100,7 +104,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
       assert.equal(gpt.capabilities.maxOutput, 128_000)
       assert.deepEqual(gpt.providerOptions, {
         openai: {
-          reasoningEffort: 'medium',
+          forceReasoning: true,
           reasoningSummary: 'auto',
           store: false,
         },
@@ -118,17 +122,39 @@ describe('MODEL_REGISTRY 能力边界', () => {
       getModelEntry('anthropic:claude-sonnet-4-6').protocol,
       'anthropic-messages',
     )
-    assert.equal(getModelEntry('openai:gpt-5.2').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-sol').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-terra').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-luna').protocol, 'openai-responses')
-    assert.equal(getModelEntry('google:gemini-3.5-flash').protocol, 'openai-chat')
+    assert.equal(getModelEntry('google:gemini-3.6-flash').protocol, 'openai-chat')
+  })
+
+  it('连接适配器可覆盖传输路由名而不改写 WhyCode 模型画像', () => {
+    for (const [profileId, routeModelId] of [
+      ['google:gemini-3.1-pro-preview', 'verified-gemini-route'],
+      ['openai:gpt-5.6-sol', 'verified-gpt-route'],
+    ] as const) {
+      const entry = getModelEntry(profileId)
+      const created = entry.create(
+        { apiKey: 'test', baseURL: 'http://localhost/v1' },
+        routeModelId,
+      )
+      assert.equal(entry.id, profileId)
+      assert.notEqual(typeof created, 'string')
+      if (typeof created !== 'string') assert.equal(created.modelId, routeModelId)
+    }
   })
 
   it('DeepSeek V4 Flash 使用官方上下文与输出边界', () => {
     const deepseek = getModelEntry('deepseek:deepseek-v4-flash')
     assert.equal(deepseek.capabilities.contextWindow, 1_000_000)
     assert.equal(deepseek.capabilities.maxOutput, 384_000)
+    assert.deepEqual(deepseek.capabilities.reasoningEffort, {
+      supported: ['high', 'max'],
+      default: 'high',
+    })
+    assert.deepEqual(deepseek.providerOptions, {
+      deepseek: { thinking: { type: 'enabled' } },
+    })
     assert.equal(autoCompactThreshold(deepseek.capabilities), 910_000)
   })
 })

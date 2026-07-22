@@ -3,11 +3,12 @@ import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type {
-  CustomConnectionConfig,
-  ProviderConnectionConfig,
-  WhycodeConfig,
-} from './config.ts'
+import { BUILTIN_PROVIDERS } from '@whycode/core'
+import {
+  getCliProxyModelCompatibility,
+  isCliProxyRoute,
+} from './cli-proxy-models.ts'
+import type { ProviderConnectionConfig, WhycodeConfig } from './config.ts'
 
 export interface ConfigSecretCodec {
   isAvailable(): boolean
@@ -21,16 +22,15 @@ interface StoredCredential {
   baseURL?: string
 }
 
-interface StoredCustomConnection extends Omit<CustomConnectionConfig, 'apiKey'> {
-  apiKey?: string
-  encryptedApiKey?: string
-}
-
 interface StoredConfig {
   version?: number
   providers?: Record<string, StoredCredential>
   defaultModel?: string
-  customConnections?: StoredCustomConnection[]
+  retiredModelLabels?: Record<string, string>
+  cliProxyApi?: StoredCredential & {
+    modelIds?: string[]
+    modelRoutes?: Record<string, string>
+  }
   consensusAgents?: Partial<Record<'B' | 'C', {
     model: string
     apiKey?: string
@@ -40,13 +40,18 @@ interface StoredConfig {
   webSearch?: {
     perplexity?: StoredCredential
   }
+  /** v3 兼容输入；只在启动迁移读取，永不进入运行时或再次保存。 */
+  customConnections?: unknown
 }
+
+const CONFIG_VERSION = 5
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 export function getConfigPath(): string {
   return join(homedir(), '.whycode', 'config.json')
 }
 
-/** 同步读取保留现有调用语义；损坏项 fail-closed，不把密钥或无效连接送入运行时。 */
+/** 同步读取保留现有调用语义；损坏项 fail-closed，不把密钥送入 Renderer。 */
 export function loadConfig(
   path = getConfigPath(),
   codec?: ConfigSecretCodec,
@@ -55,16 +60,12 @@ export function loadConfig(
     const stored = JSON.parse(readFileSync(path, 'utf-8')) as StoredConfig
     if (!isRecord(stored.providers)) return null
     const providers = Object.create(null) as WhycodeConfig['providers']
-    for (const [provider, value] of Object.entries(stored.providers)) {
-      const credential = parseCredential(value, codec)
-      if (credential) providers[provider] = credential
+    for (const provider of BUILTIN_PROVIDERS) {
+      const credential = parseCredential(stored.providers[provider.id], codec)
+      if (credential) providers[provider.id] = credential
     }
-    const customConnections = Array.isArray(stored.customConnections)
-      ? stored.customConnections.flatMap((value) => {
-          const connection = parseCustomConnection(value, codec)
-          return connection ? [connection] : []
-        })
-      : undefined
+    const retiredModelLabels = parseRetiredModelLabels(stored.retiredModelLabels)
+    const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
     const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
     const perplexity = isRecord(stored.webSearch)
       ? parseCredential(stored.webSearch.perplexity, codec)
@@ -72,7 +73,8 @@ export function loadConfig(
     return {
       providers,
       ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
-      ...(customConnections ? { customConnections } : {}),
+      ...(retiredModelLabels ? { retiredModelLabels } : {}),
+      ...(cliProxyApi ? { cliProxyApi } : {}),
       ...(consensusAgents ? { consensusAgents } : {}),
       ...(perplexity ? { webSearch: { perplexity: { apiKey: perplexity.apiKey } } } : {}),
     }
@@ -88,18 +90,21 @@ export async function saveConfig(
 ): Promise<void> {
   if (!codec.isAvailable()) throw new Error('系统安全存储当前不可用，不能安全保存 API key')
   const stored: StoredConfig = {
-    version: 3,
+    version: CONFIG_VERSION,
     providers: Object.fromEntries(Object.entries(config.providers).map(([provider, value]) => [
       provider,
       storeCredential(value, codec),
     ])),
     ...(config.defaultModel ? { defaultModel: config.defaultModel } : {}),
-    ...(config.customConnections ? {
-      customConnections: config.customConnections.map((connection) => ({
-        ...connection,
-        apiKey: undefined,
-        encryptedApiKey: codec.encrypt(connection.apiKey),
-      })),
+    ...(config.retiredModelLabels
+      ? { retiredModelLabels: config.retiredModelLabels }
+      : {}),
+    ...(config.cliProxyApi ? {
+      cliProxyApi: {
+        ...storeCredential(config.cliProxyApi, codec),
+        modelIds: config.cliProxyApi.modelIds,
+        modelRoutes: config.cliProxyApi.modelRoutes,
+      },
     } : {}),
     ...(config.consensusAgents ? {
       consensusAgents: Object.fromEntries(
@@ -116,37 +121,42 @@ export async function saveConfig(
       },
     } : {}),
   }
-  const directory = dirname(path)
-  const temporaryPath = join(directory, `.config-${randomUUID()}.tmp`)
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  try {
-    await writeFile(temporaryPath, `${JSON.stringify(stored, null, 2)}\n`, {
-      encoding: 'utf-8',
-      mode: 0o600,
-      flag: 'wx',
-      flush: true,
-    })
-    await rename(temporaryPath, path)
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => {})
-    throw error
-  }
+  await writeStoredConfig(stored, path)
 }
 
-export async function migratePlaintextSecrets(
+/**
+ * 一次性迁移旧版明文密钥、自定义连接和缺少实例路由的 CLIProxyAPI 配置。
+ * 旧连接只留下“历史模型 ID → 展示名”，不会再成为可解析的模型连接。
+ */
+export async function migrateLegacyConfig(
   codec: ConfigSecretCodec,
   path = getConfigPath(),
 ): Promise<boolean> {
   if (!codec.isAvailable()) return false
   let raw: string
+  let stored: StoredConfig
   try {
     raw = await readFile(path, 'utf-8')
+    stored = JSON.parse(raw) as StoredConfig
   } catch {
     return false
   }
-  if (!/"apiKey"\s*:\s*"[^"]+"/.test(raw)) return false
+  if (!isRecord(stored.providers)) return false
+  const hasLegacyConnections = Object.hasOwn(stored, 'customConnections')
+  const hasPlaintextSecret = /"apiKey"\s*:\s*"[^"]+"/.test(raw)
+  if (stored.version === CONFIG_VERSION && !hasLegacyConnections && !hasPlaintextSecret) {
+    return false
+  }
+
   const config = loadConfig(path, codec)
   if (!config) return false
+  const migratedLabels = mergeLabels(
+    legacyCustomModelLabels(stored.customConnections),
+    stored.version === CONFIG_VERSION ? undefined : { 'openai:gpt-5.2': 'GPT-5.2' },
+  )
+  const retiredModelLabels = mergeLabels(migratedLabels, config.retiredModelLabels)
+  if (retiredModelLabels) config.retiredModelLabels = retiredModelLabels
+  if (config.defaultModel?.startsWith('custom:')) delete config.defaultModel
   await saveConfig(config, codec, path)
   return true
 }
@@ -157,36 +167,6 @@ function parseCredential(value: unknown, codec?: ConfigSecretCodec): ProviderCon
   if (apiKey === null) return null
   const baseURL = optionalString(value.baseURL)
   return { apiKey, ...(baseURL ? { baseURL } : {}) }
-}
-
-function parseCustomConnection(
-  value: unknown,
-  codec?: ConfigSecretCodec,
-): CustomConnectionConfig | null {
-  if (!isRecord(value)) return null
-  const apiKey = readSecret(value, codec)
-  const protocol = value.protocol
-  if (
-    apiKey === null
-    || typeof value.id !== 'string'
-    || typeof value.name !== 'string'
-    || typeof value.baseURL !== 'string'
-    || typeof value.modelId !== 'string'
-    || !isCustomProtocol(protocol)
-    || !isProbe(value.probe)
-    || typeof value.checkedAt !== 'string'
-  ) return null
-  return {
-    id: value.id,
-    name: value.name,
-    protocol,
-    baseURL: value.baseURL,
-    apiKey,
-    modelId: value.modelId,
-    probe: value.probe,
-    ...(isStringRecord(value.probeDetails) ? { probeDetails: value.probeDetails } : {}),
-    checkedAt: value.checkedAt,
-  }
 }
 
 function parseConsensusAgents(
@@ -204,6 +184,75 @@ function parseConsensusAgents(
     parsed[id] = { model: candidate.model, apiKey, ...(baseURL ? { baseURL } : {}) }
   }
   return Object.keys(parsed).length > 0 ? parsed : undefined
+}
+
+function parseCliProxyApi(
+  value: unknown,
+  codec?: ConfigSecretCodec,
+): WhycodeConfig['cliProxyApi'] {
+  const credential = parseCredential(value, codec)
+  if (!credential?.baseURL || !isRecord(value) || !Array.isArray(value.modelIds)) {
+    return undefined
+  }
+  const modelIds = [...new Set(value.modelIds.filter(
+    (modelId): modelId is string => (
+      typeof modelId === 'string' && Boolean(getCliProxyModelCompatibility(modelId))
+    ),
+  ))]
+  const modelRoutes: Record<string, string> = {}
+  if (isRecord(value.modelRoutes)) {
+    for (const modelId of modelIds) {
+      const route = value.modelRoutes[modelId]
+      if (typeof route === 'string' && isCliProxyRoute(modelId, route)) {
+        modelRoutes[modelId] = route
+      }
+    }
+  }
+  return {
+    apiKey: credential.apiKey,
+    baseURL: credential.baseURL,
+    modelIds,
+    modelRoutes,
+  }
+}
+
+function parseRetiredModelLabels(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined
+  const labels = Object.create(null) as Record<string, string>
+  for (const [modelId, label] of Object.entries(value)) {
+    const normalizedId = safeLabel(modelId, 300)
+    const normalizedLabel = safeLabel(label, 200)
+    if (normalizedId && normalizedLabel) labels[normalizedId] = normalizedLabel
+  }
+  return Object.keys(labels).length > 0 ? labels : undefined
+}
+
+function legacyCustomModelLabels(value: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(value)) return undefined
+  const labels = Object.create(null) as Record<string, string>
+  for (const candidate of value) {
+    if (!isRecord(candidate)) continue
+    const id = safeLabel(candidate.id, 200)
+    const label = safeLabel(candidate.modelId, 200) ?? safeLabel(candidate.name, 200)
+    if (id && label) labels[`custom:${id}`] = label
+  }
+  return Object.keys(labels).length > 0 ? labels : undefined
+}
+
+function mergeLabels(
+  first: Record<string, string> | undefined,
+  second: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!first && !second) return undefined
+  return Object.assign(Object.create(null), first, second) as Record<string, string>
+}
+
+function safeLabel(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed && trimmed.length <= maxLength && !CONTROL_CHARACTER.test(trimmed)
+    ? trimmed
+    : undefined
 }
 
 function storeCredential(value: ProviderConnectionConfig, codec: ConfigSecretCodec): StoredCredential {
@@ -227,27 +276,26 @@ function readSecret(value: Record<string, unknown>, codec?: ConfigSecretCodec): 
   return typeof value.apiKey === 'string' ? '' : null
 }
 
+async function writeStoredConfig(stored: StoredConfig, path: string): Promise<void> {
+  const directory = dirname(path)
+  const temporaryPath = join(directory, `.config-${randomUUID()}.tmp`)
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(stored, null, 2)}\n`, {
+      encoding: 'utf-8',
+      mode: 0o600,
+      flag: 'wx',
+      flush: true,
+    })
+    await rename(temporaryPath, path)
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => {})
+    throw error
+  }
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function isCustomProtocol(value: unknown): value is CustomConnectionConfig['protocol'] {
-  return value === 'anthropic-messages' || value === 'openai-chat' || value === 'openai-responses'
-}
-
-function isProbe(value: unknown): value is CustomConnectionConfig['probe'] {
-  return isRecord(value)
-    && isProbeState(value.text)
-    && isProbeState(value.tools)
-    && isProbeState(value.image)
-}
-
-function isProbeState(value: unknown): boolean {
-  return value === 'supported' || value === 'unsupported' || value === 'unknown'
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -3,6 +3,7 @@ import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
+import type { ReasoningEffortSelection } from '@whycode/core'
 import type {
   AgentStatus,
   CoreEvent,
@@ -71,6 +72,7 @@ export function App() {
   const [attachmentSubmissionPending, setAttachmentSubmissionPending] = useState(false)
   const [models, setModels] = useState<ModelListItem[]>([])
   const [modelId, setModelId] = useState('')
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
   const [showModelSettings, setShowModelSettings] = useState(false)
   const [modelSettings, setModelSettings] = useState<ModelSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
@@ -185,6 +187,7 @@ export function App() {
     ])
     setModels(nextModels)
     setModelId(snapshot.modelId ?? '')
+    setReasoningEffort(snapshot.reasoningEffort)
   }, [])
 
   const applyRuntimeSnapshot = useCallback((
@@ -212,6 +215,7 @@ export function App() {
     setRestoredSubmissionPending(false)
     setApproval(snapshot.approval)
     setModelId(snapshot.modelId ?? '')
+    setReasoningEffort(snapshot.reasoningEffort)
   }, [setDeletionBlocksRuntime, setResumingSessionId])
 
   const synchronizeUnownedResume = useCallback(async () => {
@@ -224,6 +228,7 @@ export function App() {
         setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
+        void refreshModels()
         return
       }
       if (snapshot.resumingSessionId) return
@@ -236,7 +241,13 @@ export function App() {
       setSessionActionError(message)
       addError(message)
     }
-  }, [addError, applyRuntimeSnapshot, refreshSessions, setResumingSessionId])
+  }, [
+    addError,
+    applyRuntimeSnapshot,
+    refreshModels,
+    refreshSessions,
+    setResumingSessionId,
+  ])
 
   const consumeEvent = useCallback((event: CoreEvent) => {
     setView((previous) => applyCoreEvent(previous, event))
@@ -490,10 +501,12 @@ export function App() {
       setShowJumpBottom(false)
       setProjectDir(result.session.projectDir)
       setModelId(result.session.modelId)
+      setReasoningEffort(result.session.reasoningEffort)
       setSessionActionError(null)
       setShowSessions(false)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
+      void refreshModels()
     }).catch((error) => {
       const message = `会话恢复请求失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
@@ -502,7 +515,14 @@ export function App() {
       ownsResumeRequestRef.current = false
       if (resumingSessionIdRef.current === sessionId) setResumingSessionId(null)
     })
-  }, [addError, clearImageDrafts, clearPdfDrafts, refreshSessions, setResumingSessionId])
+  }, [
+    addError,
+    clearImageDrafts,
+    clearPdfDrafts,
+    refreshModels,
+    refreshSessions,
+    setResumingSessionId,
+  ])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (deletingSessionId || resumingSessionIdRef.current) return
@@ -563,12 +583,31 @@ export function App() {
       return
     }
     const previous = modelId
+    const previousReasoningEffort = reasoningEffort
     setModelId(next)
-    const rollback = () => setModelId((current) => current === next ? previous : current)
+    setReasoningEffort('default')
+    const rollback = () => {
+      setModelId((current) => current === next ? previous : current)
+      setReasoningEffort((current) =>
+        current === 'default' ? previousReasoningEffort : current,
+      )
+    }
     void window.whycode.sendCommand({ type: 'set-model', modelId: next }).then((result) => {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
-  }, [addError, imageDrafts.length, modelId, models])
+  }, [addError, imageDrafts.length, modelId, models, reasoningEffort])
+
+  const changeReasoningEffort = useCallback((next: ReasoningEffortSelection) => {
+    const previous = reasoningEffort
+    setReasoningEffort(next)
+    const rollback = () => setReasoningEffort((current) => current === next ? previous : current)
+    void window.whycode.sendCommand({
+      type: 'set-reasoning-effort',
+      reasoningEffort: next,
+    }).then((result) => {
+      if (!result || !result.ok) rollback()
+    }).catch(rollback)
+  }, [reasoningEffort])
 
   const openModelSettings = useCallback(() => {
     void window.whycode.modelSettings().then((snapshot) => {
@@ -755,11 +794,13 @@ export function App() {
         permMode={permMode}
         models={models}
         modelId={modelId}
+        reasoningEffort={reasoningEffort}
         onPickProject={pickProject}
         onToggleConsensus={toggleConsensus}
         onCompact={compact}
         onPermissionChange={changePermission}
         onModelChange={changeModel}
+        onReasoningEffortChange={changeReasoningEffort}
         onOpenSessions={() => {
           setSessionActionError(null)
           setShowSessions(true)

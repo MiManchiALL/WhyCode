@@ -1,8 +1,7 @@
 import type {
   BuiltInProviderId,
-  CapabilityProbeState,
-  CustomApiProtocol,
   ModelCapabilities,
+  ReasoningEffortCapability,
 } from '@whycode/core'
 
 export interface ModelListItem {
@@ -12,7 +11,8 @@ export interface ModelListItem {
   available: boolean
   unavailableReason?: string
   supportsImageInput: boolean
-  custom: boolean
+  reasoningEffort?: ReasoningEffortCapability
+  retired: boolean
 }
 
 export interface ProviderSettingsItem {
@@ -29,27 +29,21 @@ export interface ProviderSettingsItem {
   }>
 }
 
-export interface CustomConnectionSettingsItem {
-  id: string
-  name: string
-  protocol: CustomApiProtocol
-  baseURL: string
-  modelId: string
+export interface CliProxyApiSettingsItem {
+  displayName: 'CLIProxyAPI'
+  baseURL?: string
   hasKey: boolean
-  matchedProfile?: {
+  models: Array<{
     id: string
     displayName: string
-    reasoningExposure: ModelCapabilities['reasoningExposure']
-  }
-  probe: Record<'text' | 'tools' | 'image', CapabilityProbeState>
-  probeDetails?: Partial<Record<'text' | 'tools' | 'image', string>>
-  checkedAt: string
+    enabled: boolean
+    capabilities: ModelCapabilities
+  }>
 }
 
 export interface ModelSettingsSnapshot {
   providers: ProviderSettingsItem[]
-  customConnections: CustomConnectionSettingsItem[]
-  protocols: Array<{ id: CustomApiProtocol; label: string; hint: string }>
+  cliProxyApi: CliProxyApiSettingsItem
   webSearch: WebSearchSettingsItem
 }
 
@@ -67,13 +61,11 @@ export interface SaveProviderSettingsRequest {
   baseURL?: string
 }
 
-export interface SaveCustomConnectionRequest {
-  id?: string
-  name: string
-  protocol: CustomApiProtocol
+export interface SaveCliProxyApiSettingsRequest {
   baseURL: string
   apiKey?: string
-  modelId: string
+  clearApiKey?: boolean
+  modelIds: string[]
 }
 
 export interface SaveWebSearchSettingsRequest {

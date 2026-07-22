@@ -1,25 +1,15 @@
 import {
   getModelEntry,
   MODEL_REGISTRY,
-  type CustomApiProtocol,
-  type CustomConnectionProbe,
+  type BuiltInProviderId,
 } from '@whycode/core'
+import { isCliProxyRoute } from './cli-proxy-models.ts'
+
+const CLI_PROXY_MODEL_PREFIX = 'cliproxyapi:'
 
 export interface ProviderConnectionConfig {
   apiKey: string
   baseURL?: string
-}
-
-export interface CustomConnectionConfig {
-  id: string
-  name: string
-  protocol: CustomApiProtocol
-  baseURL: string
-  apiKey: string
-  modelId: string
-  probe: CustomConnectionProbe
-  probeDetails?: Partial<Record<'text' | 'tools' | 'image', string>>
-  checkedAt: string
 }
 
 export interface ConsensusAgentConfig {
@@ -36,10 +26,20 @@ export interface WebSearchConfig {
   perplexity?: PerplexitySearchConfig
 }
 
+export interface CliProxyApiConfig {
+  apiKey: string
+  baseURL: string
+  modelIds: string[]
+  /** 当前 CLIProxyAPI 实例实际公布并经兼容目录确认的路由。 */
+  modelRoutes: Record<string, string>
+}
+
 export interface WhycodeConfig {
-  providers: Record<string, ProviderConnectionConfig>
+  providers: Partial<Record<BuiltInProviderId, ProviderConnectionConfig>>
   defaultModel?: string
-  customConnections?: CustomConnectionConfig[]
+  /** 只用于给已退役会话显示其原型号；不参与模型解析。 */
+  retiredModelLabels?: Record<string, string>
+  cliProxyApi?: CliProxyApiConfig
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
   webSearch?: WebSearchConfig
 }
@@ -47,31 +47,31 @@ export interface WhycodeConfig {
 export {
   getConfigPath,
   loadConfig,
-  migratePlaintextSecrets,
+  migrateLegacyConfig,
   saveConfig,
   type ConfigSecretCodec,
 } from './config-storage.ts'
 
-/** 配置指定的可用模型优先，否则按官方目录和自定义连接顺序回退。 */
+/** 配置指定的可用模型优先，否则按内置目录顺序回退。 */
 export function resolveDefaultModelId(config: WhycodeConfig | null): string | null {
   if (config?.defaultModel && hasConfiguredKey(config, config.defaultModel)) {
     return config.defaultModel
   }
   const builtIn = MODEL_REGISTRY.find((model) => hasConfiguredKey(config, model.id))?.id
   if (builtIn) return builtIn
-  const custom = config?.customConnections?.find((connection) =>
-    customConnectionUsable(connection))
-  return custom ? customModelId(custom.id) : null
+  const cliProxyBaseId = config?.cliProxyApi?.modelIds.find((modelId) =>
+    hasConfiguredKey(config, cliProxyModelId(modelId)))
+  return cliProxyBaseId ? cliProxyModelId(cliProxyBaseId) : null
 }
 
-export function customModelId(connectionId: string): string {
-  return `custom:${connectionId}`
+export function cliProxyModelId(modelId: string): string {
+  return `${CLI_PROXY_MODEL_PREFIX}${modelId}`
 }
 
-export function customConnectionId(modelId: string): string | null {
-  return modelId.startsWith('custom:') && modelId.length > 'custom:'.length
-    ? modelId.slice('custom:'.length)
-    : null
+export function parseCliProxyModelId(modelId: string): string | null {
+  if (!modelId.startsWith(CLI_PROXY_MODEL_PREFIX)) return null
+  const baseModelId = modelId.slice(CLI_PROXY_MODEL_PREFIX.length)
+  return baseModelId ? baseModelId : null
 }
 
 export function consensusAgentsReady(config: WhycodeConfig | null): boolean {
@@ -82,22 +82,20 @@ export function consensusAgentsReady(config: WhycodeConfig | null): boolean {
 
 function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolean {
   if (!config) return false
-  const customId = customConnectionId(modelId)
-  if (customId) {
-    return Boolean(config.customConnections?.some((item) =>
-      item.id === customId && customConnectionUsable(item)))
+  const cliProxyBaseId = parseCliProxyModelId(modelId)
+  if (cliProxyBaseId) {
+    return Boolean(
+      config.cliProxyApi?.apiKey
+      && config.cliProxyApi.modelIds.includes(cliProxyBaseId)
+      && isCliProxyRoute(
+        cliProxyBaseId,
+        config.cliProxyApi.modelRoutes[cliProxyBaseId] ?? '',
+      )
+    )
   }
   try {
     return Boolean(config.providers[getModelEntry(modelId).provider]?.apiKey)
   } catch {
     return false
   }
-}
-
-function customConnectionUsable(connection: CustomConnectionConfig): boolean {
-  return Boolean(
-    connection.apiKey
-    && connection.probe.text === 'supported'
-    && connection.probe.tools === 'supported',
-  )
 }

@@ -22,6 +22,10 @@ import {
   pdfAttachmentsSchema,
   type PdfAttachment,
 } from '../pdf/types.ts'
+import {
+  REASONING_EFFORT_LEVELS,
+  type ReasoningEffortSelection,
+} from '../providers/catalog.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -29,6 +33,7 @@ const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const messagesSchema = z.array(modelMessageSchema)
+const reasoningEffortSelectionSchema = z.enum(['default', ...REASONING_EFFORT_LEVELS])
 /** 工具步骤可持久化一批 PDF 页面图；用户输入仍严格使用四图 schema。 */
 const toolImageAttachmentsSchema = createImageAttachmentsSchema(PDF_VISUAL_MAX_PAGES)
 
@@ -53,6 +58,7 @@ const sessionStartSchema = chainedEntrySchema.extend({
   parentUuid: z.null(),
   projectDir: z.string().nullable(),
   modelId: z.string().min(1),
+  reasoningEffort: reasoningEffortSelectionSchema.optional(),
 })
 
 const turnStartSchema = chainedEntrySchema.extend({
@@ -101,6 +107,7 @@ const userInputRestoredSchema = chainedEntrySchema.extend({
 const modelChangeSchema = chainedEntrySchema.extend({
   type: z.literal('model-change'),
   modelId: z.string().min(1),
+  reasoningEffort: reasoningEffortSelectionSchema.optional(),
 })
 
 const viewEventsEntrySchema = chainedEntrySchema.extend({
@@ -185,6 +192,7 @@ const snapshotSchema = chainedEntrySchema.extend({
   consensusState: consensusPersistedStateSchema.nullable(),
   taskState: taskPlanStateSchema,
   modelId: z.string().min(1),
+  reasoningEffort: reasoningEffortSelectionSchema.optional(),
   messages: messagesSchema,
   /**
    * 换根时携带忙时输入。早期 v4 根本没有持久队列，字段缺失只可能表示空队列，
@@ -251,6 +259,7 @@ export const sessionMetadataSchema = z.object({
   sessionId: sessionIdSchema,
   projectDir: z.string().nullable(),
   modelId: z.string().min(1),
+  reasoningEffort: reasoningEffortSelectionSchema,
   title: z.string(),
   lastUserText: z.string(),
   createdAt: timestampSchema,
@@ -285,6 +294,7 @@ export type SessionSummary =
       resumable: true
       projectDir: string | null
       modelId: string
+      reasoningEffort: ReasoningEffortSelection
       status: SessionStatus
       unavailableReason?: never
     }
@@ -300,6 +310,7 @@ export type SessionSummary =
 export interface SessionCreateInput {
   projectDir: string | null
   modelId: string
+  reasoningEffort?: ReasoningEffortSelection
 }
 
 export interface LoadedSession {
@@ -398,7 +409,10 @@ export interface SessionRecorder {
     outcome: ConsensusTaskOutcome,
     state: ConsensusPersistedState,
   ): Promise<void>
-  updateModel(modelId: string): Promise<void>
+  updateModelSelection(
+    modelId: string,
+    reasoningEffort: ReasoningEffortSelection,
+  ): Promise<void>
 }
 
 export type SessionStatus = SessionMetadata['status']

@@ -1,22 +1,25 @@
 import {
-  createCustomModelEntry,
-  getBuiltInProvider,
   getModelEntry,
   MODEL_REGISTRY,
   type ModelEntry,
   type ProviderConfig,
+  type ReasoningEffortCapability,
 } from '@whycode/core'
 import {
-  customConnectionId,
-  customModelId,
-  type CustomConnectionConfig,
+  cliProxyModelId,
+  parseCliProxyModelId,
   type WhycodeConfig,
 } from './config.ts'
+import {
+  getCliProxyEffectiveCapabilities,
+  getCliProxyModelCompatibility,
+  getDefaultCliProxyRoute,
+  isCliProxyRoute,
+} from './cli-proxy-models.ts'
 
 export interface ResolvedModelConnection {
   entry: ModelEntry
   providerConfig: ProviderConfig
-  custom: boolean
 }
 
 export type ModelConnectionResolution =
@@ -30,115 +33,203 @@ export interface ModelConnectionListItem {
   available: boolean
   unavailableReason?: string
   supportsImageInput: boolean
-  custom: boolean
+  reasoningEffort?: ReasoningEffortCapability
+  retired: boolean
 }
 
 export function resolveModelConnection(
   config: WhycodeConfig | null,
   modelId: string,
 ): ModelConnectionResolution {
-  if (!config) return { ok: false, error: '尚未配置任何模型' }
-  const connectionId = customConnectionId(modelId)
-  if (connectionId) return resolveCustomConnection(config, connectionId)
+  const cliProxyBaseId = parseCliProxyModelId(modelId)
+  if (cliProxyBaseId) return resolveCliProxyConnection(config, cliProxyBaseId)
 
   let entry: ModelEntry
   try {
     entry = getModelEntry(modelId)
   } catch {
-    return { ok: false, error: `模型 ID 未注册：${modelId}` }
+    return unsupportedModel(modelId)
   }
+  if (!config) return { ok: false, error: '尚未配置任何模型' }
   const providerConfig = config.providers[entry.provider]
   if (!providerConfig?.apiKey) {
     return { ok: false, error: `尚未配置 ${entry.provider} 的 API key，无法使用 ${entry.displayName}` }
   }
-  return {
-    ok: true,
-    value: {
-      entry: applyEndpointOverride(entry, providerConfig.baseURL),
-      providerConfig,
-      custom: false,
-    },
+  return { ok: true, value: { entry, providerConfig } }
+}
+
+export function listModelConnections(
+  config: WhycodeConfig | null,
+  selectedModelId?: string | null,
+): ModelConnectionListItem[] {
+  const builtIn = MODEL_REGISTRY.flatMap((entry) => {
+    if (!config?.providers[entry.provider]?.apiKey) return []
+    return [listItem(entry, resolveModelConnection(config, entry.id), true)]
+  })
+  const cliProxy = (config?.cliProxyApi?.modelIds ?? []).flatMap((baseModelId) => {
+    const routeModelId = configuredCliProxyRoute(config, baseModelId)
+    if (!config?.cliProxyApi?.apiKey || !routeModelId) return []
+    try {
+      const id = cliProxyModelId(baseModelId)
+      return [listItem(
+        cliProxyEntry(getModelEntry(baseModelId), routeModelId),
+        resolveModelConnection(config, id),
+        true,
+      )]
+    } catch {
+      return []
+    }
+  })
+  const current = [...builtIn, ...cliProxy]
+  if (!selectedModelId || current.some((item) => item.id === selectedModelId)) return current
+
+  const cliProxyBaseId = parseCliProxyModelId(selectedModelId)
+  if (cliProxyBaseId) {
+    const compatibility = getCliProxyModelCompatibility(cliProxyBaseId)
+    try {
+      const baseEntry = getModelEntry(cliProxyBaseId)
+      if (compatibility) {
+        const route = configuredCliProxyRoute(config, cliProxyBaseId)
+          ?? getDefaultCliProxyRoute(cliProxyBaseId)!
+        return [
+          ...current,
+          listItem(
+            cliProxyEntry(baseEntry, route),
+            resolveModelConnection(config, selectedModelId),
+            false,
+          ),
+        ]
+      }
+      return [
+        ...current,
+        retiredListItem(
+          selectedModelId,
+          `${baseEntry.displayName}（CLIProxyAPI）`,
+          `CLIProxyAPI 尚未适配 ${baseEntry.displayName}`,
+        ),
+      ]
+    } catch {
+      // 已退役的 CLIProxyAPI 型号继续走下方通用历史占位。
+    }
+  } else {
+    try {
+      const entry = getModelEntry(selectedModelId)
+      return [
+        ...current,
+        listItem(entry, resolveModelConnection(config, selectedModelId), false),
+      ]
+    } catch {
+      // 已退役的内置型号继续走下方通用历史占位。
+    }
   }
+
+  const resolution = resolveModelConnection(config, selectedModelId)
+  return [
+    ...current,
+    retiredListItem(
+      selectedModelId,
+      config?.retiredModelLabels?.[selectedModelId] ?? selectedModelId,
+      resolution.ok ? '当前模型未出现在连接列表中' : resolution.error,
+    ),
+  ]
 }
 
-export function listModelConnections(config: WhycodeConfig | null): ModelConnectionListItem[] {
-  const builtIn = MODEL_REGISTRY.map((entry) => {
-    const result = resolveModelConnection(config, entry.id)
-    const effective = result.ok ? result.value.entry : entry
-    return {
-      id: entry.id,
-      displayName: entry.displayName,
-      hasKey: Boolean(config?.providers[entry.provider]?.apiKey),
-      available: result.ok,
-      ...(!result.ok ? { unavailableReason: result.error } : {}),
-      supportsImageInput: effective.capabilities.supportsImageInput,
-      custom: false,
-    }
-  })
-  const custom = (config?.customConnections ?? []).map((connection) => {
-    const result = resolveCustomConnection(config!, connection.id)
-    const entry = customEntry(connection)
-    return {
-      id: customModelId(connection.id),
-      displayName: connection.name,
-      hasKey: Boolean(connection.apiKey),
-      available: result.ok,
-      ...(!result.ok ? { unavailableReason: result.error } : {}),
-      supportsImageInput: entry.capabilities.supportsImageInput,
-      custom: true,
-    }
-  })
-  return [...builtIn, ...custom]
-}
-
-function resolveCustomConnection(
-  config: WhycodeConfig,
-  connectionId: string,
+function resolveCliProxyConnection(
+  config: WhycodeConfig | null,
+  baseModelId: string,
 ): ModelConnectionResolution {
-  const connection = config.customConnections?.find((item) => item.id === connectionId)
-  if (!connection) return { ok: false, error: '自定义连接不存在' }
-  if (!connection.apiKey) return { ok: false, error: `${connection.name} 尚未配置 API key` }
-  if (connection.probe.text !== 'supported') {
-    return { ok: false, error: `${connection.name} 尚未通过文本连接检测` }
+  let entry: ModelEntry
+  try {
+    entry = getModelEntry(baseModelId)
+  } catch {
+    return unsupportedModel(cliProxyModelId(baseModelId))
   }
-  if (connection.probe.tools !== 'supported') {
-    return { ok: false, error: `${connection.name} 尚未通过工具调用检测，不能作为完整 Agent 使用` }
+  if (!getCliProxyModelCompatibility(baseModelId)) {
+    return { ok: false, error: `CLIProxyAPI 尚未适配 ${entry.displayName}` }
+  }
+  const connection = config?.cliProxyApi
+  if (!connection?.modelIds.includes(baseModelId)) {
+    return { ok: false, error: `CLIProxyAPI 尚未启用 ${entry.displayName}` }
+  }
+  if (!connection.apiKey) {
+    return { ok: false, error: 'CLIProxyAPI 尚未配置 API key' }
+  }
+  const routeModelId = configuredCliProxyRoute(config, baseModelId)
+  if (!routeModelId) {
+    return {
+      ok: false,
+      error: `当前 CLIProxyAPI 实例没有公布 ${entry.displayName} 的等价路由，请重新保存 CLIProxyAPI 设置`,
+    }
   }
   return {
     ok: true,
     value: {
-      entry: customEntry(connection),
+      entry: cliProxyEntry(entry, routeModelId),
       providerConfig: { apiKey: connection.apiKey, baseURL: connection.baseURL },
-      custom: true,
     },
   }
 }
 
-function customEntry(connection: CustomConnectionConfig): ModelEntry {
-  return createCustomModelEntry({
-    id: customModelId(connection.id),
-    connectionName: connection.name,
-    protocol: connection.protocol,
-    modelId: connection.modelId,
-    probe: connection.probe,
-  })
+function configuredCliProxyRoute(
+  config: WhycodeConfig | null,
+  profileId: string,
+): string | null {
+  const route = config?.cliProxyApi?.modelRoutes[profileId]
+  return route && isCliProxyRoute(profileId, route) ? route : null
 }
 
-/** 非官方端点没有探测记录时，不继承官方模型的图片传输能力。 */
-function applyEndpointOverride(entry: ModelEntry, baseURL?: string): ModelEntry {
-  if (!baseURL || entry.provider === 'custom') return entry
-  const official = getBuiltInProvider(entry.provider)
-  if (normalizeBaseURL(baseURL) === normalizeBaseURL(official.defaultBaseURL)) return entry
+function listItem(
+  entry: ModelEntry,
+  resolution: ModelConnectionResolution,
+  hasKey: boolean,
+): ModelConnectionListItem {
+  return {
+    id: entry.id,
+    displayName: entry.displayName,
+    hasKey,
+    available: resolution.ok,
+    ...(!resolution.ok ? { unavailableReason: resolution.error } : {}),
+    supportsImageInput: entry.capabilities.supportsImageInput,
+    ...(entry.capabilities.reasoningEffort
+      ? { reasoningEffort: entry.capabilities.reasoningEffort }
+      : {}),
+    retired: false,
+  }
+}
+
+function retiredListItem(
+  id: string,
+  displayName: string,
+  unavailableReason: string,
+): ModelConnectionListItem {
+  return {
+    id,
+    displayName,
+    hasKey: false,
+    available: false,
+    unavailableReason,
+    supportsImageInput: false,
+    retired: true,
+  }
+}
+
+function cliProxyEntry(entry: ModelEntry, routeModelId: string): ModelEntry {
+  const capabilities = getCliProxyEffectiveCapabilities(entry.id, routeModelId)
+  if (!capabilities) {
+    throw new Error(`CLIProxyAPI 路由未通过审核：${routeModelId}`)
+  }
   return {
     ...entry,
-    capabilities: {
-      ...entry.capabilities,
-      supportsImageInput: false,
-      supportsOriginalImageDetail: undefined,
-    },
+    id: cliProxyModelId(entry.id),
+    displayName: `${entry.displayName}（CLIProxyAPI）`,
+    capabilities,
+    create: (config) => entry.create(config, routeModelId),
   }
 }
 
-function normalizeBaseURL(value: string): string {
-  return value.trim().replace(/\/+$/, '').toLowerCase()
+function unsupportedModel(modelId: string): ModelConnectionResolution {
+  return {
+    ok: false,
+    error: `WhyCode 已不再支持模型 ${modelId}；历史对话仍会保留，请先切换到当前可用模型再发送。`,
+  }
 }

@@ -80,6 +80,7 @@ export class SessionStore {
       timestamp,
       projectDir: input.projectDir,
       modelId: input.modelId,
+      reasoningEffort: input.reasoningEffort ?? 'default',
     })
     if (parsedStart.type !== 'session-start') throw new Error('无法创建会话起始记录')
     const start = parsedStart
@@ -654,6 +655,7 @@ export class SessionJournal implements SessionRecorder {
           consensusState: this.consensusState,
           taskState: taskState === undefined ? this.taskState : taskState,
           modelId: this.metadata.modelId,
+          reasoningEffort: this.metadata.reasoningEffort,
           messages: dehydrateImageMessages(messages),
           pendingUserInputs: this.pendingUserInputs,
           turnStartMessages: runtimeTurnStarts.map((start) => ({
@@ -865,6 +867,7 @@ export class SessionJournal implements SessionRecorder {
           consensusState: this.consensusState,
           taskState: recoveredTaskState,
           modelId: this.metadata.modelId,
+          reasoningEffort: this.metadata.reasoningEffort,
           messages: dehydrateImageMessages(recoveredMessages),
           pendingUserInputs: this.pendingUserInputs.map((input) => ({
             ...input,
@@ -906,12 +909,19 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
-  updateModel(modelId: string): Promise<void> {
+  updateModelSelection(
+    modelId: string,
+    reasoningEffort: SessionMetadata['reasoningEffort'],
+  ): Promise<void> {
     return this.enqueue(async () => {
-      if (modelId === this.metadata.modelId) return
-      const changed = this.entry({ type: 'model-change', modelId })
+      if (
+        modelId === this.metadata.modelId
+        && reasoningEffort === this.metadata.reasoningEffort
+      ) return
+      const changed = this.entry({ type: 'model-change', modelId, reasoningEffort })
       await this.appendEntries([changed])
       this.metadata.modelId = modelId
+      this.metadata.reasoningEffort = reasoningEffort
       this.metadata.updatedAt = changed.timestamp
       await this.refreshMetadataCache()
     })

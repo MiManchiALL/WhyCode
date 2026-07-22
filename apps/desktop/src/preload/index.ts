@@ -12,7 +12,7 @@ import type {
 import type {
   ModelListItem,
   ModelSettingsSnapshot,
-  SaveCustomConnectionRequest,
+  SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveWebSearchSettingsRequest,
   SettingsMutationResult,
@@ -27,11 +27,9 @@ const api = {
   saveProviderSettings: (
     request: SaveProviderSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveProviderSettings, request),
-  saveCustomConnection: (
-    request: SaveCustomConnectionRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveCustomConnection, request),
-  deleteCustomConnection: (connectionId: string): Promise<SettingsMutationResult> =>
-    ipcRenderer.invoke(IPC.deleteCustomConnection, connectionId),
+  saveCliProxyApiSettings: (
+    request: SaveCliProxyApiSettingsRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveCliProxyApiSettings, request),
   saveWebSearchSettings: (
     request: SaveWebSearchSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebSearchSettings, request),
