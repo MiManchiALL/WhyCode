@@ -190,13 +190,16 @@ function CliProxyApiEditor(props: {
         <p className="mt-3 text-[11px] font-medium text-neutral-600">启用模型</p>
         <div className="mt-1 grid gap-1.5 md:grid-cols-2">
           {props.settings.models.map((model) => (
-            <label key={model.id} className={`flex items-start gap-2 rounded border px-2 py-1.5 text-xs ${model.available ? 'border-neutral-200' : 'border-neutral-100 bg-neutral-50'}`}>
-              <input type="checkbox" className="mt-0.5" checked={modelIds.has(model.id)} onChange={() => toggleModel(model.id)} disabled={props.disabled || !model.available} />
+            <label key={model.id} className="flex items-start gap-2 rounded border border-neutral-200 px-2 py-1.5 text-xs">
+              <input type="checkbox" className="mt-0.5" checked={modelIds.has(model.id)} onChange={() => toggleModel(model.id)} disabled={props.disabled} />
               <span>
-                <span className={`block ${model.available ? 'text-neutral-800' : 'text-neutral-400'}`}>{model.displayName}</span>
-                {model.available
-                  ? <span className="block text-[10px] text-neutral-500">{reasoningEffortSummary(model.reasoningEffort)}</span>
-                  : <span className="block text-[10px] text-amber-700">暂不可用：{model.unavailableReason}</span>}
+                <span className="block text-neutral-800">{model.displayName}</span>
+                <span className="block text-[10px] text-neutral-500">
+                  {model.capabilities.supportsImageInput ? '图片' : '仅文本'}
+                  {' · '}{formatTokenLimit(model.capabilities.contextWindow)} 上下文
+                  {' · '}{formatTokenLimit(model.capabilities.maxOutput)} 输出
+                  {' · '}{reasoningEffortSummary(model.capabilities.reasoningEffort)}
+                </span>
               </span>
             </label>
           ))}

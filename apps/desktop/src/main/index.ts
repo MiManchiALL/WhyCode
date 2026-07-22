@@ -38,6 +38,10 @@ import {
 } from './config.ts'
 import { listModelConnections, resolveModelConnection } from './model-connections.ts'
 import {
+  discoverCliProxyRoutes,
+  unresolvedCliProxyProfiles,
+} from './cli-proxy-discovery.ts'
+import {
   createModelSettingsSnapshot,
   updateCliProxyApiSettings,
   updateProviderSettings,
@@ -46,6 +50,7 @@ import { deleteSessionArtifacts } from './session-deletion.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionResumeLock } from './session-resume-lock.ts'
+import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
@@ -276,7 +281,7 @@ async function ensureSession(): Promise<string | null> {
     currentReasoningEffort,
   )
   if (session) {
-    session.setModelSelection(entry, providerConfig, currentReasoningEffort)
+    await session.setModelSelection(entry, providerConfig, currentReasoningEffort)
   } else {
     if (!sessionInitialization) {
       let pending: Promise<string | null>
@@ -501,16 +506,19 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
         return { ok: false }
       }
-      currentModelId = command.modelId
-      currentReasoningEffort = 'default'
+      const targetReasoningEffort = 'default'
       if (session) {
-        session.setModelSelection(
+        await session.setModelSelection(
           resolved.value.entry,
           resolved.value.providerConfig,
-          currentReasoningEffort,
+          targetReasoningEffort,
         )
       } else if (sessions.journal) {
-        await sessions.journal.updateModelSelection(command.modelId, currentReasoningEffort)
+        await sessions.journal.updateModelSelection(command.modelId, targetReasoningEffort)
+      }
+      currentModelId = command.modelId
+      currentReasoningEffort = targetReasoningEffort
+      if (!session && sessions.journal) {
         const initializationError = await ensureSession()
         if (initializationError) {
           broadcastEvent({ type: 'error', message: initializationError, recoverable: true })
@@ -552,14 +560,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         })
         return { ok: false }
       }
-      currentReasoningEffort = normalized
       if (session) {
-        session.setModelSelection(
+        await session.setModelSelection(
           resolved.value.entry,
           resolved.value.providerConfig,
-          currentReasoningEffort,
+          normalized,
         )
       }
+      currentReasoningEffort = normalized
       return { ok: true }
     }
     case 'approval-response': {
@@ -731,25 +739,70 @@ async function persistConnectionConfig(
     : null
   // 退役/已删除连接的历史会话没有可构造的 Agent；保存设置不能替用户改写其模型事实。
   if (sessions.journal && !session && current && !current.ok) return
-  currentModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
-  if (!session || !currentModelId) return
-  const resolved = resolveModelConnection(config, currentModelId)
+  const targetModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
+  if (!session || !targetModelId) {
+    currentModelId = targetModelId
+    return
+  }
+  const resolved = resolveModelConnection(config, targetModelId)
   if (resolved.ok) {
-    currentReasoningEffort = normalizeReasoningEffortSelection(
+    const targetReasoningEffort = normalizeReasoningEffortSelection(
       resolved.value.entry.capabilities,
       currentReasoningEffort,
     )
-    session.setModelSelection(
+    await session.setModelSelection(
       resolved.value.entry,
       resolved.value.providerConfig,
-      currentReasoningEffort,
+      targetReasoningEffort,
     )
+    currentModelId = targetModelId
+    currentReasoningEffort = targetReasoningEffort
   }
+}
+
+async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
+  const config = loadAppConfig()
+  const connection = config?.cliProxyApi
+  if (!config || !connection?.apiKey || connection.modelIds.length === 0) return
+  const modelRoutes = await discoverCliProxyRoutes(
+    connection,
+    (input, init) => net.fetch(input, init),
+  )
+  if (sameStringRecord(connection.modelRoutes, modelRoutes)) return
+  const next = structuredClone(config)
+  next.cliProxyApi!.modelRoutes = modelRoutes
+  await saveConfig(next, configSecretCodec, getConfigPath())
+}
+
+async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
+  const referencedModelIds = new Set(
+    (await sessions.list())
+      .filter((summary) => summary.sessionId !== excludedSessionId)
+      .map((summary) => summary.modelId)
+      .filter((modelId): modelId is string => Boolean(modelId)),
+  )
+  const config = loadAppConfig()
+  if (!config?.retiredModelLabels) return
+  const next = retainReferencedRetiredModelLabels(config, referencedModelIds)
+  if (next !== config) await saveConfig(next, configSecretCodec, getConfigPath())
+}
+
+function sameStringRecord(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const leftEntries = Object.entries(left)
+  const rightEntries = Object.entries(right)
+  return leftEntries.length === rightEntries.length
+    && leftEntries.every(([key, value]) => right[key] === value)
 }
 
 async function saveProviderModelSettings(
   request: SaveProviderSettingsRequest,
 ): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再保存模型设置' }
+  }
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
   settingsMutationInProgress = true
   try {
@@ -766,10 +819,25 @@ async function saveProviderModelSettings(
 async function saveCliProxyApiConnectionSettings(
   request: SaveCliProxyApiSettingsRequest,
 ): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再保存 CLIProxyAPI 设置' }
+  }
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改 CLIProxyAPI 设置' }
   settingsMutationInProgress = true
   try {
     const next = updateCliProxyApiSettings(loadAppConfig(), request)
+    if (next.cliProxyApi?.apiKey) {
+      const modelRoutes = await discoverCliProxyRoutes(
+        next.cliProxyApi,
+        (input, init) => net.fetch(input, init),
+      )
+      const unresolved = unresolvedCliProxyProfiles(next.cliProxyApi.modelIds, modelRoutes)
+      if (unresolved.length > 0) {
+        const names = unresolved.map((modelId) => getModelEntry(modelId).displayName)
+        throw new Error(`当前 CLIProxyAPI 实例没有公布以下等价路由：${names.join('、')}`)
+      }
+      next.cliProxyApi.modelRoutes = modelRoutes
+    }
     await persistConnectionConfig(next)
     return { ok: true, snapshot: createModelSettingsSnapshot(next) }
   } catch (error) {
@@ -782,6 +850,9 @@ async function saveCliProxyApiConnectionSettings(
 async function saveWebSearchConnectionSettings(
   request: SaveWebSearchSettingsRequest,
 ): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再保存网页搜索设置' }
+  }
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改网页搜索设置' }
   settingsMutationInProgress = true
   try {
@@ -1072,6 +1143,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         projectDir = requireDefaultWorkspace()
         detachedCurrent = true
       },
+      onBeforeFactSourceDelete: () => pruneRetiredModelLabels(sessionId),
     })
     if (!deleted) return { ok: false, error: '会话不存在', deletedCurrent: detachedCurrent }
     return { ok: true, deletedCurrent }
@@ -1109,6 +1181,8 @@ if (!primaryInstance) {
 if (primaryInstance) void app.whenReady().then(async () => {
   await migrateLegacyConfig(configSecretCodec, getConfigPath())
     .catch((error) => console.error('配置安全迁移失败：', error))
+  await synchronizeConfiguredCliProxyRoutes()
+    .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
   void Promise.all([
     rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
@@ -1132,6 +1206,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  await pruneRetiredModelLabels()
+    .catch((error) => console.warn('退役模型显示名清理失败：', error))
   registerAttachmentProtocol(() => sessions.journal)
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()

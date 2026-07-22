@@ -141,10 +141,6 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     'openai:gpt-5.5',
     openAIResponses,
   ),
-  registryEntry(
-    'openai:gpt-5.2',
-    openAIResponses,
-  ),
 ] as const
 
 export function getModelEntry(modelId: string): ModelEntry {

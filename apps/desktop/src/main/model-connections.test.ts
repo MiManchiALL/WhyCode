@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { providerOptionsWithReasoningEffort } from '@whycode/core'
 import { cliProxyModelId, type WhycodeConfig } from './config.ts'
+import { getDefaultCliProxyRoute } from './cli-proxy-models.ts'
 import { listModelConnections, resolveModelConnection } from './model-connections.ts'
 
 describe('模型连接解析', () => {
@@ -18,7 +19,7 @@ describe('模型连接解析', () => {
     assert.equal(relay.ok && relay.value.entry.capabilities.supportsImageInput, true)
   })
 
-  it('CLIProxyAPI 使用独立连接身份并严格继承所选注册型号画像', () => {
+  it('CLIProxyAPI 使用独立连接身份并按路由约束合成有效画像', () => {
     const value = withCliProxy(
       ['openai:gpt-5.6-sol'],
       { openai: { apiKey: 'official-key' } },
@@ -29,14 +30,20 @@ describe('模型连接解析', () => {
     if (result.ok) {
       assert.equal(result.value.entry.id, proxyId)
       assert.equal(result.value.entry.displayName, 'GPT-5.6 Sol（CLIProxyAPI）')
+      assert.equal(result.value.entry.capabilities.contextWindow, 372_000)
+      assert.equal(result.value.entry.capabilities.structuredOutput, 'tool-based')
       assert.deepEqual(result.value.entry.capabilities.reasoningEffort, {
-        supported: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-        default: 'medium',
+        supported: ['low', 'medium', 'high', 'xhigh', 'max'],
+        default: 'low',
       })
       assert.deepEqual(result.value.providerConfig, {
         apiKey: 'proxy-key',
         baseURL: 'http://127.0.0.1:8317/v1',
       })
+      assert.throws(
+        () => providerOptionsWithReasoningEffort(result.value.entry, 'none'),
+        /不支持推理强度 none/,
+      )
       const created = result.value.entry.create(result.value.providerConfig)
       assert.notEqual(typeof created, 'string')
       if (typeof created !== 'string') assert.equal(created.modelId, 'gpt-5.6-sol')
@@ -89,6 +96,11 @@ describe('模型连接解析', () => {
       listModelConnections(value).some((candidate) => candidate.id === retiredId),
       false,
     )
+    assert.equal(
+      listModelConnections(value, 'google:gemini-3.1-pro-preview')
+        .some((candidate) => candidate.id === retiredId),
+      false,
+    )
   })
 
   it('当前仍受支持但未启用的 CLIProxyAPI 历史不是退役型号', () => {
@@ -100,21 +112,27 @@ describe('模型连接解析', () => {
     assert.match(item?.unavailableReason ?? '', /尚未启用/)
   })
 
-  it('不会把 CLIProxyAPI 的 Gemini 3.5 路由伪装成 Gemini 3.6', () => {
+  it('CLIProxyAPI 使用官方远程目录登记的 Gemini 3.6 Antigravity 路由', () => {
     const modelId = cliProxyModelId('google:gemini-3.6-flash')
-    const resolution = resolveModelConnection(withCliProxy([
-      'google:gemini-3.6-flash',
-    ]), modelId)
-    assert.equal(resolution.ok, false)
-    if (!resolution.ok) {
-      assert.match(resolution.error, /没有 Gemini 3.6 等价路由/)
-      assert.match(resolution.error, /gemini-3-flash-agent 实际是 Gemini 3.5/)
+    const value = withCliProxy(
+      ['google:gemini-3.6-flash'],
+      {},
+      { 'google:gemini-3.6-flash': 'gemini-3.6-flash-high' },
+    )
+    const resolution = resolveModelConnection(value, modelId)
+    assert.equal(resolution.ok, true)
+    if (resolution.ok) {
+      const created = resolution.value.entry.create(resolution.value.providerConfig)
+      assert.notEqual(typeof created, 'string')
+      if (typeof created !== 'string') {
+        assert.equal(created.modelId, 'gemini-3.6-flash-high')
+      }
     }
 
-    const item = listModelConnections(config({}), modelId).at(-1)
+    const item = listModelConnections(value).find((model) => model.id === modelId)
     assert.equal(item?.displayName, 'Gemini 3.6 Flash（CLIProxyAPI）')
-    assert.equal(item?.available, false)
-    assert.equal(item?.retired, true)
+    assert.equal(item?.available, true)
+    assert.equal(item?.retired, false)
   })
 
   it('模型列表只暴露逐型号验证过的推理档位', () => {
@@ -131,6 +149,7 @@ describe('模型连接解析', () => {
     const cases = [
       ['anthropic:claude-sonnet-4-6', 'max', 'anthropic', 'effort'],
       ['google:gemini-3.1-pro-preview', 'high', 'google', 'reasoningEffort'],
+      ['google:gemini-3.6-flash', 'medium', 'google', 'reasoningEffort'],
       ['openai:gpt-5.6-sol', 'xhigh', 'openai', 'reasoningEffort'],
     ] as const
     const value = withCliProxy(cases.map(([modelId]) => modelId))
@@ -143,6 +162,15 @@ describe('模型连接解析', () => {
       assert.equal(options?.[providerKey]?.[optionKey], effort, baseModelId)
     }
   })
+
+  it('普通模型下拉列表只返回已经配置并可用的连接', () => {
+    const models = listModelConnections(config({ google: { apiKey: 'key' } }))
+    assert.deepEqual(new Set(models.map((model) => model.id)), new Set([
+      'google:gemini-3.1-pro-preview',
+      'google:gemini-3.6-flash',
+    ]))
+    assert.equal(models.every((model) => model.available), true)
+  })
 })
 
 function config(providers: WhycodeConfig['providers']): WhycodeConfig {
@@ -152,6 +180,12 @@ function config(providers: WhycodeConfig['providers']): WhycodeConfig {
 function withCliProxy(
   modelIds: string[],
   providers: WhycodeConfig['providers'] = {},
+  modelRoutes: Record<string, string> = Object.fromEntries(
+    modelIds.flatMap((modelId) => {
+      const route = getDefaultCliProxyRoute(modelId)
+      return route ? [[modelId, route]] : []
+    }),
+  ),
 ): WhycodeConfig {
   return {
     providers,
@@ -159,6 +193,7 @@ function withCliProxy(
       apiKey: 'proxy-key',
       baseURL: 'http://127.0.0.1:8317/v1',
       modelIds,
+      modelRoutes,
     },
   }
 }

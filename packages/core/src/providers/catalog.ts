@@ -323,26 +323,6 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     },
     providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
   },
-  {
-    id: 'openai:gpt-5.2',
-    modelId: 'gpt-5.2',
-    displayName: 'GPT-5.2',
-    provider: 'openai',
-    capabilities: {
-      supportsNativeTools: true,
-      supportsImageInput: true,
-      reasoningExposure: 'summary',
-      reasoningEffort: {
-        supported: ['none', 'low', 'medium', 'high', 'xhigh'],
-        default: 'none',
-      },
-      structuredOutput: 'json-schema',
-      promptCaching: 'auto',
-      contextWindow: 400_000,
-      maxOutput: 128_000,
-    },
-    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
-  },
 ] as const
 
 export function getModelProfile(profileId: string): ModelProfile {

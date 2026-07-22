@@ -36,10 +36,8 @@ export interface CliProxyApiSettingsItem {
   models: Array<{
     id: string
     displayName: string
-    available: boolean
-    unavailableReason?: string
     enabled: boolean
-    reasoningEffort?: ReasoningEffortCapability
+    capabilities: ModelCapabilities
   }>
 }
 

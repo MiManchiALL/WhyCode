@@ -32,7 +32,8 @@ interface AppHeaderProps {
 export function AppHeader(props: AppHeaderProps) {
   const selectedModel = props.models.find((model) => model.id === props.modelId)
   const retired = Boolean(selectedModel?.retired)
-  const effort = retired ? undefined : selectedModel?.reasoningEffort
+  const unavailable = Boolean(selectedModel && !selectedModel.available)
+  const effort = retired || unavailable ? undefined : selectedModel?.reasoningEffort
   const selectedEffort = effort
     ? props.reasoningEffort === 'default'
       ? effort.default
@@ -78,7 +79,7 @@ export function AppHeader(props: AppHeaderProps) {
           🗜 压缩
         </button>
         <select
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400"
           value={props.permMode}
           onChange={(event) => props.onPermissionChange(event.target.value as PermissionMode)}
           disabled={props.permissionLocked}
@@ -97,7 +98,7 @@ export function AppHeader(props: AppHeaderProps) {
           ⚙ 连接
         </button>
         <select
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+          className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400"
           value={selectedEffort}
           onChange={(event) =>
             props.onReasoningEffortChange(event.target.value as ReasoningEffortSelection)}
@@ -111,21 +112,31 @@ export function AppHeader(props: AppHeaderProps) {
             : <option value="default">推理：默认</option>}
         </select>
         <select
-          className={`rounded border bg-white px-2 py-1 text-xs ${retired ? 'border-red-300 text-red-600' : 'border-neutral-300'}`}
-          value={retired ? '' : props.modelId}
+          className={`rounded border bg-white px-2 py-1 text-xs ${
+            retired
+              ? 'border-red-300 text-red-600'
+              : unavailable
+                ? 'border-amber-300 text-amber-700'
+                : 'border-neutral-300'
+          }`}
+          value={retired || unavailable ? '' : props.modelId}
           onChange={(event) => {
             if (event.target.value) props.onModelChange(event.target.value)
           }}
           disabled={props.busy}
         >
-          {(!selectedModel || retired) && (
+          {(!selectedModel || retired || unavailable) && (
             <option value="" disabled hidden>
-              {retired ? `${selectedModel?.displayName ?? props.modelId}（已停止支持）` : '请选择模型'}
+              {retired
+                ? `${selectedModel?.displayName ?? props.modelId}（已停止支持）`
+                : unavailable
+                  ? `${selectedModel?.displayName ?? props.modelId}（当前未配置）`
+                  : '请选择模型'}
             </option>
           )}
-          {props.models.filter((model) => !model.retired).map((model) => (
-            <option className="text-neutral-900" key={model.id} value={model.id} disabled={!model.available}>
-              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}{model.available ? '' : `（${model.unavailableReason ?? '不可用'}）`}
+          {props.models.filter((model) => model.available && !model.retired).map((model) => (
+            <option className="text-neutral-900" key={model.id} value={model.id}>
+              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}
             </option>
           ))}
         </select>

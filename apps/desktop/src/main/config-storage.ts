@@ -4,7 +4,10 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { BUILTIN_PROVIDERS } from '@whycode/core'
-import { getCliProxyRoute } from './cli-proxy-models.ts'
+import {
+  getCliProxyModelCompatibility,
+  isCliProxyRoute,
+} from './cli-proxy-models.ts'
 import type { ProviderConnectionConfig, WhycodeConfig } from './config.ts'
 
 export interface ConfigSecretCodec {
@@ -24,7 +27,10 @@ interface StoredConfig {
   providers?: Record<string, StoredCredential>
   defaultModel?: string
   retiredModelLabels?: Record<string, string>
-  cliProxyApi?: StoredCredential & { modelIds?: string[] }
+  cliProxyApi?: StoredCredential & {
+    modelIds?: string[]
+    modelRoutes?: Record<string, string>
+  }
   consensusAgents?: Partial<Record<'B' | 'C', {
     model: string
     apiKey?: string
@@ -38,7 +44,7 @@ interface StoredConfig {
   customConnections?: unknown
 }
 
-const CONFIG_VERSION = 4
+const CONFIG_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 export function getConfigPath(): string {
@@ -97,6 +103,7 @@ export async function saveConfig(
       cliProxyApi: {
         ...storeCredential(config.cliProxyApi, codec),
         modelIds: config.cliProxyApi.modelIds,
+        modelRoutes: config.cliProxyApi.modelRoutes,
       },
     } : {}),
     ...(config.consensusAgents ? {
@@ -118,7 +125,7 @@ export async function saveConfig(
 }
 
 /**
- * 一次性把 v3 明文密钥和旧自定义连接收口到 v4。
+ * 一次性迁移旧版明文密钥、自定义连接和缺少实例路由的 CLIProxyAPI 配置。
  * 旧连接只留下“历史模型 ID → 展示名”，不会再成为可解析的模型连接。
  */
 export async function migrateLegacyConfig(
@@ -143,7 +150,10 @@ export async function migrateLegacyConfig(
 
   const config = loadConfig(path, codec)
   if (!config) return false
-  const migratedLabels = legacyCustomModelLabels(stored.customConnections)
+  const migratedLabels = mergeLabels(
+    legacyCustomModelLabels(stored.customConnections),
+    stored.version === CONFIG_VERSION ? undefined : { 'openai:gpt-5.2': 'GPT-5.2' },
+  )
   const retiredModelLabels = mergeLabels(migratedLabels, config.retiredModelLabels)
   if (retiredModelLabels) config.retiredModelLabels = retiredModelLabels
   if (config.defaultModel?.startsWith('custom:')) delete config.defaultModel
@@ -186,13 +196,23 @@ function parseCliProxyApi(
   }
   const modelIds = [...new Set(value.modelIds.filter(
     (modelId): modelId is string => (
-      typeof modelId === 'string' && Boolean(getCliProxyRoute(modelId))
+      typeof modelId === 'string' && Boolean(getCliProxyModelCompatibility(modelId))
     ),
   ))]
+  const modelRoutes: Record<string, string> = {}
+  if (isRecord(value.modelRoutes)) {
+    for (const modelId of modelIds) {
+      const route = value.modelRoutes[modelId]
+      if (typeof route === 'string' && isCliProxyRoute(modelId, route)) {
+        modelRoutes[modelId] = route
+      }
+    }
+  }
   return {
     apiKey: credential.apiKey,
     baseURL: credential.baseURL,
     modelIds,
+    modelRoutes,
   }
 }
 

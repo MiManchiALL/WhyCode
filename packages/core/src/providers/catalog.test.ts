@@ -28,10 +28,13 @@ describe('模型目录单一事实源', () => {
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
       'openai:gpt-5.5',
-      'openai:gpt-5.2',
     ])
     assert.throws(
       () => getModelProfile('google:gemini-3.5-flash'),
+      /未维护的模型画像/,
+    )
+    assert.throws(
+      () => getModelProfile('openai:gpt-5.2'),
       /未维护的模型画像/,
     )
   })

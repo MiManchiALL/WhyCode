@@ -1148,7 +1148,7 @@ function BlockView({
           className="text-xs text-neutral-400 hover:text-neutral-600"
           onClick={() => !streaming && onToggle()}
         >
-          {streaming ? '推理中…' : `推理了 ${(block.durationMs! / 1000).toFixed(1)}s ${open ? '▾' : '▸'}`}
+          {streaming ? '思考中…' : `思考了 ${(block.durationMs! / 1000).toFixed(1)}s ${open ? '▾' : '▸'}`}
         </button>
         {open && (
           <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 pl-3 text-xs text-neutral-400">

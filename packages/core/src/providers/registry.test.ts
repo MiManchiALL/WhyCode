@@ -19,7 +19,6 @@ describe('MODEL_REGISTRY 能力边界', () => {
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
       'openai:gpt-5.5',
-      'openai:gpt-5.2',
     ])
   })
 
@@ -38,9 +37,9 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.equal(glm.capabilities.contextWindow, 200_000)
     assert.equal(glm.capabilities.maxOutput, 128_000)
 
-    const gpt = getModelEntry('openai:gpt-5.2')
+    const gpt = getModelEntry('openai:gpt-5.5')
     assert.equal(gpt.capabilities.supportsImageInput, true)
-    assert.equal(gpt.capabilities.contextWindow, 400_000)
+    assert.equal(gpt.capabilities.contextWindow, 1_050_000)
     assert.equal(gpt.capabilities.maxOutput, 128_000)
   })
 
@@ -123,7 +122,6 @@ describe('MODEL_REGISTRY 能力边界', () => {
       getModelEntry('anthropic:claude-sonnet-4-6').protocol,
       'anthropic-messages',
     )
-    assert.equal(getModelEntry('openai:gpt-5.2').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-sol').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-terra').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-luna').protocol, 'openai-responses')

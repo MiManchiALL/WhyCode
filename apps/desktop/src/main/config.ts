@@ -3,7 +3,7 @@ import {
   MODEL_REGISTRY,
   type BuiltInProviderId,
 } from '@whycode/core'
-import { getCliProxyRoute } from './cli-proxy-models.ts'
+import { isCliProxyRoute } from './cli-proxy-models.ts'
 
 const CLI_PROXY_MODEL_PREFIX = 'cliproxyapi:'
 
@@ -30,6 +30,8 @@ export interface CliProxyApiConfig {
   apiKey: string
   baseURL: string
   modelIds: string[]
+  /** 当前 CLIProxyAPI 实例实际公布并经兼容目录确认的路由。 */
+  modelRoutes: Record<string, string>
 }
 
 export interface WhycodeConfig {
@@ -83,9 +85,12 @@ function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolea
   const cliProxyBaseId = parseCliProxyModelId(modelId)
   if (cliProxyBaseId) {
     return Boolean(
-      getCliProxyRoute(cliProxyBaseId)
-      && config.cliProxyApi?.apiKey
-      && config.cliProxyApi.modelIds.includes(cliProxyBaseId),
+      config.cliProxyApi?.apiKey
+      && config.cliProxyApi.modelIds.includes(cliProxyBaseId)
+      && isCliProxyRoute(
+        cliProxyBaseId,
+        config.cliProxyApi.modelRoutes[cliProxyBaseId] ?? '',
+      )
     )
   }
   try {

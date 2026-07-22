@@ -285,15 +285,15 @@ export class AgentSession {
     return this.permissions.mode
   }
 
-  setModelSelection(
+  async setModelSelection(
     model: ModelEntry,
     providerConfig: ProviderConfig,
     reasoningEffort: ReasoningEffortSelection,
-  ): void {
-    this.options = { ...this.options, model, providerConfig, reasoningEffort }
-    void this.persist((recorder) =>
+  ): Promise<void> {
+    await this.persist((recorder) =>
       recorder.updateModelSelection(model.id, reasoningEffort),
     )
+    this.options = { ...this.options, model, providerConfig, reasoningEffort }
   }
 
   private createLanguageModel() {

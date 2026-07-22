@@ -10,7 +10,12 @@ import type {
   SaveProviderSettingsRequest,
 } from '../shared/settings.ts'
 import type { WhycodeConfig } from './config.ts'
-import { cliProxyModelEntries } from './cli-proxy-models.ts'
+import {
+  cliProxyModelEntries,
+  getCliProxyEffectiveCapabilities,
+  getDefaultCliProxyRoute,
+  isCliProxyRoute,
+} from './cli-proxy-models.ts'
 import { createWebSearchSettingsSnapshot } from './web-search-settings.ts'
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
@@ -40,21 +45,18 @@ export function createModelSettingsSnapshot(
       displayName: 'CLIProxyAPI',
       ...(config?.cliProxyApi?.baseURL ? { baseURL: config.cliProxyApi.baseURL } : {}),
       hasKey: Boolean(config?.cliProxyApi?.apiKey),
-      models: cliProxyModelEntries().map(({ compatibility, entry }) => ({
-        id: entry.id,
-        displayName: entry.displayName,
-        available: Boolean(compatibility.routeModelId),
-        enabled: Boolean(
-          compatibility.routeModelId
-          && config?.cliProxyApi?.modelIds.includes(entry.id),
-        ),
-        ...(!compatibility.routeModelId
-          ? { unavailableReason: compatibility.unavailableReason }
-          : {}),
-        ...(entry.capabilities.reasoningEffort
-          ? { reasoningEffort: entry.capabilities.reasoningEffort }
-          : {}),
-      })),
+      models: cliProxyModelEntries().map(({ entry }) => {
+        const configuredRoute = config?.cliProxyApi?.modelRoutes[entry.id]
+        const routeModelId = configuredRoute && isCliProxyRoute(entry.id, configuredRoute)
+          ? configuredRoute
+          : getDefaultCliProxyRoute(entry.id)!
+        return {
+          id: entry.id,
+          displayName: entry.displayName,
+          enabled: Boolean(config?.cliProxyApi?.modelIds.includes(entry.id)),
+          capabilities: getCliProxyEffectiveCapabilities(entry.id, routeModelId)!,
+        }
+      }),
     },
     webSearch: createWebSearchSettingsSnapshot(config),
   }
@@ -89,9 +91,7 @@ export function updateCliProxyApiSettings(
   if (requestedIds.size === 0) throw new Error('请至少选择一个 CLIProxyAPI 模型')
   if (requestedIds.size !== request.modelIds.length) throw new Error('CLIProxyAPI 模型不能重复')
   const modelIds = cliProxyModelEntries()
-    .filter(({ compatibility, entry }) => (
-      Boolean(compatibility.routeModelId) && requestedIds.has(entry.id)
-    ))
+    .filter(({ entry }) => requestedIds.has(entry.id))
     .map(({ entry }) => entry.id)
   if (modelIds.length !== requestedIds.size) {
     throw new Error('CLIProxyAPI 只能选择已确认存在等价路由的 WhyCode 模型')
@@ -106,6 +106,8 @@ export function updateCliProxyApiSettings(
     apiKey,
     baseURL: normalizeRequiredBaseURL(request.baseURL),
     modelIds,
+    // 精确路由只能来自当前实例鉴权后的 /models，不能在纯设置转换层猜测。
+    modelRoutes: {},
   }
   if (request.clearApiKey && next.defaultModel?.startsWith('cliproxyapi:')) {
     delete next.defaultModel

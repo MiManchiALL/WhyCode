@@ -15,6 +15,7 @@ describe('模型设置数据边界', () => {
         apiKey: 'proxy-secret',
         baseURL: 'http://127.0.0.1:8317/v1',
         modelIds: ['openai:gpt-5.6-sol'],
+        modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
       },
       webSearch: { perplexity: { apiKey: 'search-secret' } },
     }
@@ -49,7 +50,7 @@ describe('模型设置数据边界', () => {
     assert.equal(cleared.defaultModel, undefined)
   })
 
-  it('CLIProxyAPI 只接受已确认等价路由并按独立兼容目录顺序保存', () => {
+  it('CLIProxyAPI 只接受兼容型号并按目录顺序保存，路由等待实例发现', () => {
     const next = updateCliProxyApiSettings(null, {
       baseURL: 'http://127.0.0.1:8317/v1/',
       apiKey: 'proxy-key',
@@ -59,6 +60,7 @@ describe('模型设置数据边界', () => {
       apiKey: 'proxy-key',
       baseURL: 'http://127.0.0.1:8317/v1',
       modelIds: ['anthropic:claude-sonnet-4-6', 'openai:gpt-5.6-sol'],
+      modelRoutes: {},
     })
     assert.throws(
       () => updateCliProxyApiSettings(next, {
@@ -67,12 +69,12 @@ describe('模型设置数据边界', () => {
       }),
       /只能选择已确认存在等价路由的 WhyCode 模型/,
     )
-    assert.throws(
-      () => updateCliProxyApiSettings(next, {
+    assert.deepEqual(
+      updateCliProxyApiSettings(next, {
         baseURL: 'http://127.0.0.1:8317/v1',
         modelIds: ['google:gemini-3.6-flash'],
-      }),
-      /只能选择已确认存在等价路由的 WhyCode 模型/,
+      }).cliProxyApi?.modelRoutes,
+      {},
     )
   })
 
@@ -84,6 +86,7 @@ describe('模型设置数据边界', () => {
         apiKey: 'proxy-key',
         baseURL: 'http://127.0.0.1:8317/v1',
         modelIds: ['openai:gpt-5.6-sol'],
+        modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
       },
     }
     const next = updateCliProxyApiSettings(initial, {
@@ -94,6 +97,7 @@ describe('模型设置数据边界', () => {
     assert.equal(next.cliProxyApi?.apiKey, '')
     assert.equal(next.cliProxyApi?.baseURL, 'http://127.0.0.1:8317/v1')
     assert.deepEqual(next.cliProxyApi?.modelIds, ['openai:gpt-5.6-sol'])
+    assert.deepEqual(next.cliProxyApi?.modelRoutes, {})
     assert.equal(next.defaultModel, undefined)
   })
 
@@ -107,23 +111,22 @@ describe('模型设置数据边界', () => {
     const gemini36Proxy = snapshot.cliProxyApi.models.find(
       (model) => model.id === 'google:gemini-3.6-flash',
     )
-
     assert.deepEqual(openai?.models.map((model) => model.id), [
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
       'openai:gpt-5.5',
-      'openai:gpt-5.2',
     ])
     assert.equal(google?.displayName, 'Google Gemini')
     assert.deepEqual(google?.models.map((model) => model.id), [
       'google:gemini-3.1-pro-preview',
       'google:gemini-3.6-flash',
     ])
-    assert.deepEqual(claudeProxy?.reasoningEffort, {
+    assert.deepEqual(claudeProxy?.capabilities.reasoningEffort, {
       supported: ['low', 'medium', 'high', 'max'],
       default: 'high',
     })
+    assert.equal(claudeProxy?.capabilities.contextWindow, 200_000)
     assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
       'anthropic:claude-sonnet-4-6',
       'google:gemini-3.1-pro-preview',
@@ -132,13 +135,36 @@ describe('模型设置数据边界', () => {
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
       'openai:gpt-5.5',
-      'openai:gpt-5.2',
     ])
-    assert.equal(gemini36Proxy?.available, false)
-    assert.match(gemini36Proxy?.unavailableReason ?? '', /实际是 Gemini 3.5/)
+    assert.equal(gemini36Proxy?.capabilities.reasoningEffort?.default, 'high')
     assert.equal(
       snapshot.cliProxyApi.models.some((model) => model.id.startsWith('deepseek:')),
       false,
     )
+  })
+
+  it('设置快照按当前实例的精确路由展示 CLIProxyAPI 有效画像', () => {
+    const snapshot = createModelSettingsSnapshot({
+      providers: {},
+      cliProxyApi: {
+        apiKey: 'proxy-key',
+        baseURL: 'http://127.0.0.1:8317/v1',
+        modelIds: ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
+        modelRoutes: {
+          'google:gemini-3.1-pro-preview': 'gemini-3.1-pro-low',
+          'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+        },
+      },
+    })
+    const gemini = snapshot.cliProxyApi.models.find(
+      (model) => model.id === 'google:gemini-3.1-pro-preview',
+    )
+    const gpt = snapshot.cliProxyApi.models.find(
+      (model) => model.id === 'openai:gpt-5.6-sol',
+    )
+    assert.equal(gemini?.capabilities.reasoningEffort?.default, 'low')
+    assert.equal(gemini?.capabilities.maxOutput, 65_535)
+    assert.equal(gpt?.capabilities.contextWindow, 372_000)
+    assert.equal(gpt?.capabilities.reasoningEffort?.supported.includes('none'), false)
   })
 })

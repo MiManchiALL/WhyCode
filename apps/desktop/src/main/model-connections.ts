@@ -11,8 +11,10 @@ import {
   type WhycodeConfig,
 } from './config.ts'
 import {
+  getCliProxyEffectiveCapabilities,
   getCliProxyModelCompatibility,
-  getCliProxyRoute,
+  getDefaultCliProxyRoute,
+  isCliProxyRoute,
 } from './cli-proxy-models.ts'
 
 export interface ResolvedModelConnection {
@@ -60,20 +62,19 @@ export function listModelConnections(
   config: WhycodeConfig | null,
   selectedModelId?: string | null,
 ): ModelConnectionListItem[] {
-  const builtIn = MODEL_REGISTRY.map((entry) => listItem(
-    entry,
-    resolveModelConnection(config, entry.id),
-    Boolean(config?.providers[entry.provider]?.apiKey),
-  ))
+  const builtIn = MODEL_REGISTRY.flatMap((entry) => {
+    if (!config?.providers[entry.provider]?.apiKey) return []
+    return [listItem(entry, resolveModelConnection(config, entry.id), true)]
+  })
   const cliProxy = (config?.cliProxyApi?.modelIds ?? []).flatMap((baseModelId) => {
-    const routeModelId = getCliProxyRoute(baseModelId)
-    if (!routeModelId) return []
+    const routeModelId = configuredCliProxyRoute(config, baseModelId)
+    if (!config?.cliProxyApi?.apiKey || !routeModelId) return []
     try {
       const id = cliProxyModelId(baseModelId)
       return [listItem(
         cliProxyEntry(getModelEntry(baseModelId), routeModelId),
         resolveModelConnection(config, id),
-        Boolean(config?.cliProxyApi?.apiKey),
+        true,
       )]
     } catch {
       return []
@@ -87,30 +88,41 @@ export function listModelConnections(
     const compatibility = getCliProxyModelCompatibility(cliProxyBaseId)
     try {
       const baseEntry = getModelEntry(cliProxyBaseId)
-      if (compatibility?.routeModelId) {
+      if (compatibility) {
+        const route = configuredCliProxyRoute(config, cliProxyBaseId)
+          ?? getDefaultCliProxyRoute(cliProxyBaseId)!
         return [
           ...current,
           listItem(
-            cliProxyEntry(baseEntry, compatibility.routeModelId),
+            cliProxyEntry(baseEntry, route),
             resolveModelConnection(config, selectedModelId),
             false,
           ),
         ]
       }
-      if (compatibility?.unavailableReason) {
-        return [
-          ...current,
-          retiredListItem(
-            selectedModelId,
-            `${baseEntry.displayName}（CLIProxyAPI）`,
-            compatibility.unavailableReason,
-          ),
-        ]
-      }
+      return [
+        ...current,
+        retiredListItem(
+          selectedModelId,
+          `${baseEntry.displayName}（CLIProxyAPI）`,
+          `CLIProxyAPI 尚未适配 ${baseEntry.displayName}`,
+        ),
+      ]
     } catch {
       // 已退役的 CLIProxyAPI 型号继续走下方通用历史占位。
     }
+  } else {
+    try {
+      const entry = getModelEntry(selectedModelId)
+      return [
+        ...current,
+        listItem(entry, resolveModelConnection(config, selectedModelId), false),
+      ]
+    } catch {
+      // 已退役的内置型号继续走下方通用历史占位。
+    }
   }
+
   const resolution = resolveModelConnection(config, selectedModelId)
   return [
     ...current,
@@ -132,13 +144,8 @@ function resolveCliProxyConnection(
   } catch {
     return unsupportedModel(cliProxyModelId(baseModelId))
   }
-  const compatibility = getCliProxyModelCompatibility(baseModelId)
-  if (!compatibility?.routeModelId) {
-    return {
-      ok: false,
-      error: compatibility?.unavailableReason
-        ?? `CLIProxyAPI 尚未适配 ${entry.displayName}`,
-    }
+  if (!getCliProxyModelCompatibility(baseModelId)) {
+    return { ok: false, error: `CLIProxyAPI 尚未适配 ${entry.displayName}` }
   }
   const connection = config?.cliProxyApi
   if (!connection?.modelIds.includes(baseModelId)) {
@@ -147,13 +154,28 @@ function resolveCliProxyConnection(
   if (!connection.apiKey) {
     return { ok: false, error: 'CLIProxyAPI 尚未配置 API key' }
   }
+  const routeModelId = configuredCliProxyRoute(config, baseModelId)
+  if (!routeModelId) {
+    return {
+      ok: false,
+      error: `当前 CLIProxyAPI 实例没有公布 ${entry.displayName} 的等价路由，请重新保存 CLIProxyAPI 设置`,
+    }
+  }
   return {
     ok: true,
     value: {
-      entry: cliProxyEntry(entry, compatibility.routeModelId),
+      entry: cliProxyEntry(entry, routeModelId),
       providerConfig: { apiKey: connection.apiKey, baseURL: connection.baseURL },
     },
   }
+}
+
+function configuredCliProxyRoute(
+  config: WhycodeConfig | null,
+  profileId: string,
+): string | null {
+  const route = config?.cliProxyApi?.modelRoutes[profileId]
+  return route && isCliProxyRoute(profileId, route) ? route : null
 }
 
 function listItem(
@@ -192,10 +214,15 @@ function retiredListItem(
 }
 
 function cliProxyEntry(entry: ModelEntry, routeModelId: string): ModelEntry {
+  const capabilities = getCliProxyEffectiveCapabilities(entry.id, routeModelId)
+  if (!capabilities) {
+    throw new Error(`CLIProxyAPI 路由未通过审核：${routeModelId}`)
+  }
   return {
     ...entry,
     id: cliProxyModelId(entry.id),
     displayName: `${entry.displayName}（CLIProxyAPI）`,
+    capabilities,
     create: (config) => entry.create(config, routeModelId),
   }
 }
