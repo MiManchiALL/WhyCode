@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { SessionMetadata } from '@whycode/core'
 import type { SessionListItem } from '../../shared/session.ts'
 
@@ -14,6 +15,9 @@ interface SessionPanelProps {
 }
 
 export function SessionPanel(props: SessionPanelProps) {
+  // Windows 上 Electron 原生 confirm 会破坏表单焦点；确认始终留在 Renderer DOM 内。
+  const [deleteConfirmationId, setDeleteConfirmationId] = useState<string | null>(null)
+
   return (
     <div className="absolute inset-0 z-20 flex bg-black/20" onClick={props.onClose}>
       <aside
@@ -54,8 +58,10 @@ export function SessionPanel(props: SessionPanelProps) {
                 busy={props.busy}
                 deleting={session.sessionId === props.deletingSessionId}
                 restoring={session.sessionId === props.resumingSessionId}
+                confirmingDelete={session.sessionId === deleteConfirmationId}
                 onResume={props.onResume}
                 onDelete={props.onDelete}
+                onDeleteConfirmationChange={setDeleteConfirmationId}
               />
             ))}
           </div>
@@ -70,15 +76,19 @@ function SessionRow({
   busy,
   deleting,
   restoring,
+  confirmingDelete,
   onResume,
   onDelete,
+  onDeleteConfirmationChange,
 }: {
   session: SessionListItem
   busy: boolean
   deleting: boolean
   restoring: boolean
+  confirmingDelete: boolean
   onResume: (sessionId: string) => void
   onDelete: (sessionId: string) => void
+  onDeleteConfirmationChange: (sessionId: string | null) => void
 }) {
   return (
     <div
@@ -133,13 +143,39 @@ function SessionRow({
           <time className="ml-2 shrink-0">{new Date(session.updatedAt).toLocaleString()}</time>
         </div>
       </button>
-      <button
-        className="mt-2 text-xs text-red-400 hover:text-red-600 disabled:opacity-40"
-        disabled={busy}
-        onClick={() => onDelete(session.sessionId)}
-      >
-        删除
-      </button>
+      {confirmingDelete ? (
+        <div className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700" role="alert">
+          <p>
+            将永久删除对话、任务状态、检查点、后台命令记录和临时数据；项目文件不受影响。
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              className="rounded bg-red-600 px-2 py-1 text-white disabled:opacity-40"
+              disabled={busy}
+              onClick={() => {
+                onDeleteConfirmationChange(null)
+                onDelete(session.sessionId)
+              }}
+            >
+              确认删除
+            </button>
+            <button
+              className="rounded border border-red-200 bg-white px-2 py-1 text-red-600"
+              onClick={() => onDeleteConfirmationChange(null)}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          className="mt-2 text-xs text-red-400 hover:text-red-600 disabled:opacity-40"
+          disabled={busy}
+          onClick={() => onDeleteConfirmationChange(session.sessionId)}
+        >
+          删除
+        </button>
+      )}
     </div>
   )
 }

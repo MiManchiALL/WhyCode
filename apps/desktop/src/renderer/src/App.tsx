@@ -526,9 +526,6 @@ export function App() {
 
   const deleteSession = useCallback((sessionId: string) => {
     if (deletingSessionId || resumingSessionIdRef.current) return
-    if (!window.confirm(
-      '将永久删除这个会话的对话、任务状态、检查点、后台命令记录和临时数据；不会修改项目文件。确定继续？',
-    )) return
     setDeletingSessionId(sessionId)
     void window.whycode.runtimeSnapshot().then((snapshot) => {
       setDeletionBlocksRuntime(isCurrentSessionDeletion(snapshot.sessionId, sessionId))
