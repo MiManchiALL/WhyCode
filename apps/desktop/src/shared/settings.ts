@@ -47,10 +47,17 @@ export interface ModelSettingsSnapshot {
   webSearch: WebSearchSettingsItem
 }
 
+export type WebSearchProviderId = 'perplexity' | 'tavily'
+export type TavilySearchDepth = 'basic' | 'advanced'
+
 export interface WebSearchSettingsItem {
-  provider: 'perplexity'
-  displayName: string
-  hasKey: boolean
+  activeProvider: WebSearchProviderId
+  providers: Array<{
+    id: WebSearchProviderId
+    displayName: string
+    hasKey: boolean
+    searchDepth?: TavilySearchDepth
+  }>
 }
 
 export interface SaveProviderSettingsRequest {
@@ -69,9 +76,11 @@ export interface SaveCliProxyApiSettingsRequest {
 }
 
 export interface SaveWebSearchSettingsRequest {
-  provider: 'perplexity'
+  provider: WebSearchProviderId
   apiKey?: string
   clearApiKey?: boolean
+  setActive?: boolean
+  searchDepth?: TavilySearchDepth
 }
 
 export interface SettingsMutationResult {

@@ -33,6 +33,7 @@ import {
   getConfigPath,
   loadConfig,
   migrateLegacyConfig,
+  parseCliProxyModelId,
   resolveDefaultModelId,
   saveConfig,
 } from './config.ts'
@@ -76,7 +77,7 @@ import type {
   SaveWebSearchSettingsRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
-import { createPerplexitySearchHandler } from './web-search/perplexity.ts'
+import { createConfiguredWebSearchHandler } from './web-search/configured.ts'
 import { updateWebSearchSettings } from './web-search-settings.ts'
 import {
   createElectronWebHostResolver,
@@ -107,8 +108,8 @@ function loadAppConfig() {
 }
 
 const webSearchTool = createWebSearchTool({
-  search: createPerplexitySearchHandler({
-    getApiKey: () => loadAppConfig()?.webSearch?.perplexity?.apiKey,
+  search: createConfiguredWebSearchHandler({
+    getConfig: loadAppConfig,
     // Chromium 网络栈继承系统代理；Node fetch 会绕过 Windows 代理设置。
     fetchImpl: (input, init) => net.fetch(input, init),
   }),
@@ -763,14 +764,25 @@ async function persistConnectionConfig(
 async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
   const config = loadAppConfig()
   const connection = config?.cliProxyApi
-  if (!config || !connection?.apiKey || connection.modelIds.length === 0) return
+  if (!config || !connection?.apiKey) return
   const modelRoutes = await discoverCliProxyRoutes(
     connection,
     (input, init) => net.fetch(input, init),
   )
-  if (sameStringRecord(connection.modelRoutes, modelRoutes)) return
+  const modelIds = connection.modelIds.filter((modelId) => Boolean(modelRoutes[modelId]))
+  if (
+    sameStringRecord(connection.modelRoutes, modelRoutes)
+    && sameStringArray(connection.modelIds, modelIds)
+  ) return
   const next = structuredClone(config)
   next.cliProxyApi!.modelRoutes = modelRoutes
+  next.cliProxyApi!.modelIds = modelIds
+  const defaultCliProxyModelId = next.defaultModel
+    ? parseCliProxyModelId(next.defaultModel)
+    : null
+  if (defaultCliProxyModelId && !modelIds.includes(defaultCliProxyModelId)) {
+    delete next.defaultModel
+  }
   await saveConfig(next, configSecretCodec, getConfigPath())
 }
 
@@ -795,6 +807,14 @@ function sameStringRecord(
   const rightEntries = Object.entries(right)
   return leftEntries.length === rightEntries.length
     && leftEntries.every(([key, value]) => right[key] === value)
+}
+
+function sameStringArray(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return left.length === right.length
+    && left.every((value, index) => value === right[index])
 }
 
 async function saveProviderModelSettings(
@@ -1214,7 +1234,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () =>
     listModelConnections(loadAppConfig(), resolveCurrentModelId()))
-  ipcMain.handle(IPC.modelSettings, () => createModelSettingsSnapshot(loadAppConfig()))
+  ipcMain.handle(IPC.modelSettings, async () => {
+    await synchronizeConfiguredCliProxyRoutes()
+      .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+    return createModelSettingsSnapshot(loadAppConfig())
+  })
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))
   ipcMain.handle(IPC.saveCliProxyApiSettings, (_e, request: SaveCliProxyApiSettingsRequest) =>

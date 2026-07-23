@@ -8,6 +8,10 @@ import {
   getCliProxyModelCompatibility,
   isCliProxyRoute,
 } from './cli-proxy-models.ts'
+import type {
+  TavilySearchDepth,
+  WebSearchProviderId,
+} from '../shared/settings.ts'
 import type { ProviderConnectionConfig, WhycodeConfig } from './config.ts'
 
 export interface ConfigSecretCodec {
@@ -38,7 +42,9 @@ interface StoredConfig {
     baseURL?: string
   }>>
   webSearch?: {
+    activeProvider?: string
     perplexity?: StoredCredential
+    tavily?: StoredCredential & { searchDepth?: string }
   }
   /** v3 兼容输入；只在启动迁移读取，永不进入运行时或再次保存。 */
   customConnections?: unknown
@@ -67,16 +73,14 @@ export function loadConfig(
     const retiredModelLabels = parseRetiredModelLabels(stored.retiredModelLabels)
     const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
     const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
-    const perplexity = isRecord(stored.webSearch)
-      ? parseCredential(stored.webSearch.perplexity, codec)
-      : null
+    const webSearch = parseWebSearch(stored.webSearch, codec)
     return {
       providers,
       ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
       ...(retiredModelLabels ? { retiredModelLabels } : {}),
       ...(cliProxyApi ? { cliProxyApi } : {}),
       ...(consensusAgents ? { consensusAgents } : {}),
-      ...(perplexity ? { webSearch: { perplexity: { apiKey: perplexity.apiKey } } } : {}),
+      ...(webSearch ? { webSearch } : {}),
     }
   } catch {
     return null
@@ -115,9 +119,22 @@ export async function saveConfig(
         }]),
       ),
     } : {}),
-    ...(config.webSearch?.perplexity ? {
+    ...(config.webSearch ? {
       webSearch: {
-        perplexity: storeCredential(config.webSearch.perplexity, codec),
+        ...(config.webSearch.activeProvider
+          ? { activeProvider: config.webSearch.activeProvider }
+          : {}),
+        ...(config.webSearch.perplexity
+          ? { perplexity: storeCredential(config.webSearch.perplexity, codec) }
+          : {}),
+        ...(config.webSearch.tavily
+          ? {
+              tavily: {
+                ...storeCredential(config.webSearch.tavily, codec),
+                searchDepth: config.webSearch.tavily.searchDepth ?? 'basic',
+              },
+            }
+          : {}),
       },
     } : {}),
   }
@@ -186,6 +203,40 @@ function parseConsensusAgents(
   return Object.keys(parsed).length > 0 ? parsed : undefined
 }
 
+function parseWebSearch(
+  value: unknown,
+  codec?: ConfigSecretCodec,
+): WhycodeConfig['webSearch'] {
+  if (!isRecord(value)) return undefined
+  const parsedPerplexity = parseCredential(value.perplexity, codec)
+  const parsedTavily = parseCredential(value.tavily, codec)
+  const perplexity = parsedPerplexity?.apiKey ? parsedPerplexity : null
+  const tavily = parsedTavily?.apiKey ? parsedTavily : null
+  if (!perplexity && !tavily) return undefined
+
+  const requested = webSearchProviderId(value.activeProvider)
+  const activeProvider = requested && (requested === 'perplexity' ? perplexity : tavily)
+    ? requested
+    : perplexity
+      ? 'perplexity'
+      : 'tavily'
+  return {
+    activeProvider,
+    ...(perplexity ? { perplexity: { apiKey: perplexity.apiKey } } : {}),
+    ...(tavily ? {
+      tavily: {
+        apiKey: tavily.apiKey,
+        searchDepth: parseTavilySearchDepth(value.tavily),
+      },
+    } : {}),
+  }
+}
+
+function parseTavilySearchDepth(value: unknown): TavilySearchDepth {
+  if (!isRecord(value)) return 'basic'
+  return value.searchDepth === 'advanced' ? 'advanced' : 'basic'
+}
+
 function parseCliProxyApi(
   value: unknown,
   codec?: ConfigSecretCodec,
@@ -201,8 +252,7 @@ function parseCliProxyApi(
   ))]
   const modelRoutes: Record<string, string> = {}
   if (isRecord(value.modelRoutes)) {
-    for (const modelId of modelIds) {
-      const route = value.modelRoutes[modelId]
+    for (const [modelId, route] of Object.entries(value.modelRoutes)) {
       if (typeof route === 'string' && isCliProxyRoute(modelId, route)) {
         modelRoutes[modelId] = route
       }
@@ -253,6 +303,10 @@ function safeLabel(value: unknown, maxLength: number): string | undefined {
   return trimmed && trimmed.length <= maxLength && !CONTROL_CHARACTER.test(trimmed)
     ? trimmed
     : undefined
+}
+
+function webSearchProviderId(value: unknown): WebSearchProviderId | undefined {
+  return value === 'perplexity' || value === 'tavily' ? value : undefined
 }
 
 function storeCredential(value: ProviderConnectionConfig, codec: ConfigSecretCodec): StoredCredential {

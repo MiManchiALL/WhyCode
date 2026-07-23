@@ -1,5 +1,8 @@
 import type { CliProxyApiConfig } from './config.ts'
-import { resolveCliProxyRoutes } from './cli-proxy-models.ts'
+import {
+  CLI_PROXY_MODEL_COMPATIBILITY,
+  resolveCliProxyRoutes,
+} from './cli-proxy-models.ts'
 
 type FetchImplementation = (
   input: string,
@@ -12,7 +15,7 @@ const MAX_MODEL_COUNT = 10_000
 const MAX_MODEL_ID_LENGTH = 300
 
 export async function discoverCliProxyRoutes(
-  connection: Pick<CliProxyApiConfig, 'apiKey' | 'baseURL' | 'modelIds'>,
+  connection: Pick<CliProxyApiConfig, 'apiKey' | 'baseURL'>,
   fetchImpl: FetchImplementation,
 ): Promise<Record<string, string>> {
   const response = await fetchImpl(modelsEndpoint(connection.baseURL), {
@@ -35,7 +38,10 @@ export async function discoverCliProxyRoutes(
     throw new Error('CLIProxyAPI /models 返回了无效 JSON')
   }
   const advertisedModelIds = parseModelIds(payload)
-  return resolveCliProxyRoutes(connection.modelIds, advertisedModelIds)
+  return resolveCliProxyRoutes(
+    CLI_PROXY_MODEL_COMPATIBILITY.map(({ profileId }) => profileId),
+    advertisedModelIds,
+  )
 }
 
 export function unresolvedCliProxyProfiles(

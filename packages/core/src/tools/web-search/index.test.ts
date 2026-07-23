@@ -55,6 +55,11 @@ describe('WebSearch 工具契约', () => {
               url: 'file:///C:/secret.txt',
               snippet: '不能进入结果',
             },
+            {
+              title: '重复来源',
+              url: 'https://example.com/docs#section',
+              snippet: '不应重复进入结果',
+            },
           ],
         }
       },
@@ -78,6 +83,7 @@ describe('WebSearch 工具契约', () => {
     assert.match(result.data, /不受信任的外部网页/)
     assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
     assert.doesNotMatch(result.data, /file:\/\/|不能进入结果/)
+    assert.doesNotMatch(result.data, /重复来源|不应重复进入结果/)
     assert.equal(result.data.includes('A'.repeat(WEB_SEARCH_MAX_SNIPPET_CHARS + 1)), false)
   })
 
@@ -99,6 +105,33 @@ describe('WebSearch 工具契约', () => {
       queries: ['query one', 'query two', 'query three', 'query four'],
       maxResults: 5,
     })
+  })
+
+  it('批量查询保留成功来源并明确展示部分失败', async () => {
+    const tool = createWebSearchTool({
+      search: async () => ({
+        results: [{
+          title: '成功来源',
+          url: 'https://example.com/result',
+          snippet: 'available result',
+        }],
+        failures: [{
+          query: 'failed query',
+          message: '搜索请求过于频繁',
+        }],
+      }),
+    })
+
+    const result = await tool.execute({
+      query: ['successful query', 'failed query'],
+      max_results: 3,
+    }, toolContext)
+
+    assert.equal(result.isError, false)
+    assert.match(result.data, /部分查询未完成（1\/2）/)
+    assert.match(result.data, /"failed query"：搜索请求过于频繁/)
+    assert.match(result.data, /\[成功来源\]\(<https:\/\/example\.com\/result>\)/)
+    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
   })
 
   it('只展示宿主显式标记为安全的错误', async () => {
@@ -134,5 +167,6 @@ describe('WebSearch 工具契约', () => {
     assert.equal(tool.availableWithoutProject, true)
     assert.equal(tool.isReadOnly, true)
     assert.match(tool.initialApprovalReason ?? '', /搜索词.*外部搜索服务/)
+    assert.match(tool.prompt, /互不重复、可独立作答/)
   })
 })

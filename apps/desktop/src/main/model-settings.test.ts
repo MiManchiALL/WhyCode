@@ -17,7 +17,11 @@ describe('模型设置数据边界', () => {
         modelIds: ['openai:gpt-5.6-sol'],
         modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
       },
-      webSearch: { perplexity: { apiKey: 'search-secret' } },
+      webSearch: {
+        activeProvider: 'tavily',
+        perplexity: { apiKey: 'perplexity-secret' },
+        tavily: { apiKey: 'tavily-secret' },
+      },
     }
     const snapshot = createModelSettingsSnapshot(config)
     assert.equal(snapshot.providers.find((item) => item.id === 'mimo')?.hasKey, true)
@@ -26,8 +30,15 @@ describe('模型设置数据边界', () => {
       snapshot.cliProxyApi.models.find((model) => model.id === 'openai:gpt-5.6-sol')?.enabled,
       true,
     )
-    assert.equal(snapshot.webSearch.hasKey, true)
-    assert.doesNotMatch(JSON.stringify(snapshot), /secret-key|proxy-secret|search-secret/)
+    assert.equal(snapshot.webSearch.activeProvider, 'tavily')
+    assert.equal(
+      snapshot.webSearch.providers.every((provider) => provider.hasKey),
+      true,
+    )
+    assert.doesNotMatch(
+      JSON.stringify(snapshot),
+      /secret-key|proxy-secret|perplexity-secret|tavily-secret/,
+    )
   })
 
   it('内置厂商设置支持保留、替换、清除 key 和恢复默认端点', () => {
@@ -149,10 +160,15 @@ describe('模型设置数据边界', () => {
       cliProxyApi: {
         apiKey: 'proxy-key',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
+        modelIds: [
+          'google:gemini-3.1-pro-preview',
+          'google:gemini-3.6-flash',
+          'openai:gpt-5.6-sol',
+        ],
         modelRoutes: {
           'google:gemini-3.1-pro-preview': 'gemini-3.1-pro-low',
           'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+          'openai:gpt-5.6-terra': 'gpt-5.6-terra',
         },
       },
     })
@@ -162,9 +178,18 @@ describe('模型设置数据边界', () => {
     const gpt = snapshot.cliProxyApi.models.find(
       (model) => model.id === 'openai:gpt-5.6-sol',
     )
+    const terra = snapshot.cliProxyApi.models.find(
+      (model) => model.id === 'openai:gpt-5.6-terra',
+    )
     assert.equal(gemini?.capabilities.reasoningEffort?.default, 'low')
     assert.equal(gemini?.capabilities.maxOutput, 65_535)
     assert.equal(gpt?.capabilities.contextWindow, 372_000)
     assert.equal(gpt?.capabilities.reasoningEffort?.supported.includes('none'), false)
+    assert.equal(terra?.enabled, false)
+    assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
+      'google:gemini-3.1-pro-preview',
+      'openai:gpt-5.6-sol',
+      'openai:gpt-5.6-terra',
+    ])
   })
 })

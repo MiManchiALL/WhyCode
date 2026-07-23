@@ -56,13 +56,27 @@ describe('模型连接解析', () => {
   })
 
   it('CLIProxyAPI 不接受未启用或未注册的模型', () => {
-    const value = withCliProxy(['openai:gpt-5.6-sol'])
+    const value = withCliProxy(
+      ['openai:gpt-5.6-sol'],
+      {},
+      {
+        'google:gemini-3.1-pro-preview': 'gemini-pro-agent',
+        'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+      },
+    )
     const disabled = resolveModelConnection(
       value,
       cliProxyModelId('google:gemini-3.1-pro-preview'),
     )
     assert.equal(disabled.ok, false)
     if (!disabled.ok) assert.match(disabled.error, /尚未启用 Gemini 3.1 Pro Preview/)
+
+    const unpublished = resolveModelConnection(
+      value,
+      cliProxyModelId('google:gemini-3.6-flash'),
+    )
+    assert.equal(unpublished.ok, false)
+    if (!unpublished.ok) assert.match(unpublished.error, /实例没有公布 Gemini 3.6 Flash/)
 
     const otherProvider = resolveModelConnection(
       value,
