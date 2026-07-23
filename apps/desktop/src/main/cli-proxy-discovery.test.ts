@@ -11,17 +11,13 @@ describe('CLIProxyAPI 实例模型目录', () => {
     const routes = await discoverCliProxyRoutes({
       apiKey: 'secret',
       baseURL: 'http://127.0.0.1:8317/v1/',
-      modelIds: [
-        'google:gemini-3.1-pro-preview',
-        'google:gemini-3.6-flash',
-        'openai:gpt-5.6-sol',
-      ],
     }, async (input, init) => {
       request = { input, init }
       return Response.json({ data: [
         { id: 'gemini-pro-agent' },
         { id: 'gemini-3.6-flash-high' },
         { id: 'gpt-5.6-sol' },
+        { id: 'gpt-5.6-terra' },
         { id: 'unreviewed-model' },
       ] })
     })
@@ -33,6 +29,7 @@ describe('CLIProxyAPI 实例模型目录', () => {
       'google:gemini-3.1-pro-preview': 'gemini-pro-agent',
       'google:gemini-3.6-flash': 'gemini-3.6-flash-high',
       'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+      'openai:gpt-5.6-terra': 'gpt-5.6-terra',
     })
   })
 
@@ -48,7 +45,6 @@ describe('CLIProxyAPI 实例模型目录', () => {
       discoverCliProxyRoutes({
         apiKey: 'secret',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'],
       }, async () => new Response('', { status: 401 })),
       /HTTP 401/,
     )
@@ -56,7 +52,6 @@ describe('CLIProxyAPI 实例模型目录', () => {
       discoverCliProxyRoutes({
         apiKey: 'secret',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'],
       }, async () => Response.json({ models: [] })),
       /返回格式不正确/,
     )
@@ -64,7 +59,6 @@ describe('CLIProxyAPI 实例模型目录', () => {
       discoverCliProxyRoutes({
         apiKey: 'secret',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'],
       }, async () => new Response('', { headers: { 'content-length': '2000001' } })),
       /超过安全大小限制/,
     )

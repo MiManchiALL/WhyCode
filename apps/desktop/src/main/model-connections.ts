@@ -148,7 +148,7 @@ function resolveCliProxyConnection(
     return { ok: false, error: `CLIProxyAPI 尚未适配 ${entry.displayName}` }
   }
   const connection = config?.cliProxyApi
-  if (!connection?.modelIds.includes(baseModelId)) {
+  if (!connection) {
     return { ok: false, error: `CLIProxyAPI 尚未启用 ${entry.displayName}` }
   }
   if (!connection.apiKey) {
@@ -158,8 +158,11 @@ function resolveCliProxyConnection(
   if (!routeModelId) {
     return {
       ok: false,
-      error: `当前 CLIProxyAPI 实例没有公布 ${entry.displayName} 的等价路由，请重新保存 CLIProxyAPI 设置`,
+      error: `当前 CLIProxyAPI 实例没有公布 ${entry.displayName} 的等价路由，请切换到当前可用模型，或检查 CLIProxyAPI 的账号与服务目录`,
     }
+  }
+  if (!connection.modelIds.includes(baseModelId)) {
+    return { ok: false, error: `CLIProxyAPI 尚未启用 ${entry.displayName}` }
   }
   return {
     ok: true,

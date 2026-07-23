@@ -3,7 +3,10 @@ import {
   MODEL_REGISTRY,
   type BuiltInProviderId,
 } from '@whycode/core'
-import type { WebSearchProviderId } from '../shared/settings.ts'
+import type {
+  TavilySearchDepth,
+  WebSearchProviderId,
+} from '../shared/settings.ts'
 import { isCliProxyRoute } from './cli-proxy-models.ts'
 
 const CLI_PROXY_MODEL_PREFIX = 'cliproxyapi:'
@@ -23,17 +26,22 @@ export interface WebSearchProviderConfig {
   apiKey: string
 }
 
+export interface TavilyWebSearchProviderConfig extends WebSearchProviderConfig {
+  searchDepth?: TavilySearchDepth
+}
+
 export interface WebSearchConfig {
   activeProvider?: WebSearchProviderId
   perplexity?: WebSearchProviderConfig
-  tavily?: WebSearchProviderConfig
+  tavily?: TavilyWebSearchProviderConfig
 }
 
 export interface CliProxyApiConfig {
   apiKey: string
   baseURL: string
+  /** 用户明确启用的 WhyCode 模型画像。 */
   modelIds: string[]
-  /** 当前 CLIProxyAPI 实例实际公布并经兼容目录确认的路由。 */
+  /** 当前实例公布且经兼容目录确认的全部路由，与用户是否启用无关。 */
   modelRoutes: Record<string, string>
 }
 

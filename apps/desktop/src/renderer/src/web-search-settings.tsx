@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type {
   SaveWebSearchSettingsRequest,
+  TavilySearchDepth,
   WebSearchProviderId,
   WebSearchSettingsItem,
 } from '../../shared/settings.ts'
@@ -12,6 +13,10 @@ interface WebSearchSettingsProps {
 }
 
 type SearchProvider = WebSearchSettingsItem['providers'][number]
+const TAVILY_DEPTH_OPTIONS = [
+  { value: 'basic', label: '标准（basic，1 credit，默认）' },
+  { value: 'advanced', label: '高质量（advanced，2 credits）' },
+] as const satisfies readonly { value: TavilySearchDepth; label: string }[]
 
 export function WebSearchSettingsEditor(props: WebSearchSettingsProps) {
   const configured = props.settings.providers.some((provider) => provider.hasKey)
@@ -67,6 +72,9 @@ function SearchProviderEditor(props: {
   onSave: (request: SaveWebSearchSettingsRequest) => Promise<boolean>
 }) {
   const [apiKey, setApiKey] = useState('')
+  const [searchDepth, setSearchDepth] = useState<TavilySearchDepth>(
+    props.provider.searchDepth ?? 'basic',
+  )
   const [saved, setSaved] = useState(false)
   const submit = async (clearApiKey = false) => {
     setSaved(false)
@@ -74,6 +82,7 @@ function SearchProviderEditor(props: {
       provider: props.provider.id,
       apiKey,
       clearApiKey,
+      ...(props.provider.id === 'tavily' ? { searchDepth } : {}),
     })
     if (ok) {
       setApiKey('')
@@ -113,6 +122,21 @@ function SearchProviderEditor(props: {
         autoComplete="new-password"
         placeholder={props.provider.id === 'tavily' ? 'tvly-…' : 'pplx-…'}
       />
+      {props.provider.id === 'tavily' && (
+        <label className="mt-2 block text-[11px] text-neutral-600">
+          搜索质量
+          <select
+            className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs"
+            value={searchDepth}
+            onChange={(event) => setSearchDepth(event.target.value as TavilySearchDepth)}
+            disabled={props.disabled}
+          >
+            {TAVILY_DEPTH_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="mt-2 flex items-center gap-2">
         <button
           className="rounded bg-neutral-900 px-2 py-1 text-xs text-white disabled:opacity-40"
@@ -138,7 +162,7 @@ function SearchProviderEditor(props: {
 
 function providerDescription(provider: WebSearchProviderId): string {
   if (provider === 'tavily') {
-    return '固定 basic 搜索；批量查询会并发请求，密钥只在主进程解密使用。'
+    return '自动选择 general/news/finance 主题；搜索深度由质量档位固定，批量查询允许部分成功。'
   }
   return '固定 low 搜索上下文；密钥只在主进程解密使用。'
 }

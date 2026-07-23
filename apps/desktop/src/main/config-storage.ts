@@ -8,7 +8,10 @@ import {
   getCliProxyModelCompatibility,
   isCliProxyRoute,
 } from './cli-proxy-models.ts'
-import type { WebSearchProviderId } from '../shared/settings.ts'
+import type {
+  TavilySearchDepth,
+  WebSearchProviderId,
+} from '../shared/settings.ts'
 import type { ProviderConnectionConfig, WhycodeConfig } from './config.ts'
 
 export interface ConfigSecretCodec {
@@ -41,7 +44,7 @@ interface StoredConfig {
   webSearch?: {
     activeProvider?: string
     perplexity?: StoredCredential
-    tavily?: StoredCredential
+    tavily?: StoredCredential & { searchDepth?: string }
   }
   /** v3 兼容输入；只在启动迁移读取，永不进入运行时或再次保存。 */
   customConnections?: unknown
@@ -125,7 +128,12 @@ export async function saveConfig(
           ? { perplexity: storeCredential(config.webSearch.perplexity, codec) }
           : {}),
         ...(config.webSearch.tavily
-          ? { tavily: storeCredential(config.webSearch.tavily, codec) }
+          ? {
+              tavily: {
+                ...storeCredential(config.webSearch.tavily, codec),
+                searchDepth: config.webSearch.tavily.searchDepth ?? 'basic',
+              },
+            }
           : {}),
       },
     } : {}),
@@ -215,8 +223,18 @@ function parseWebSearch(
   return {
     activeProvider,
     ...(perplexity ? { perplexity: { apiKey: perplexity.apiKey } } : {}),
-    ...(tavily ? { tavily: { apiKey: tavily.apiKey } } : {}),
+    ...(tavily ? {
+      tavily: {
+        apiKey: tavily.apiKey,
+        searchDepth: parseTavilySearchDepth(value.tavily),
+      },
+    } : {}),
   }
+}
+
+function parseTavilySearchDepth(value: unknown): TavilySearchDepth {
+  if (!isRecord(value)) return 'basic'
+  return value.searchDepth === 'advanced' ? 'advanced' : 'basic'
 }
 
 function parseCliProxyApi(
@@ -234,8 +252,7 @@ function parseCliProxyApi(
   ))]
   const modelRoutes: Record<string, string> = {}
   if (isRecord(value.modelRoutes)) {
-    for (const modelId of modelIds) {
-      const route = value.modelRoutes[modelId]
+    for (const [modelId, route] of Object.entries(value.modelRoutes)) {
       if (typeof route === 'string' && isCliProxyRoute(modelId, route)) {
         modelRoutes[modelId] = route
       }

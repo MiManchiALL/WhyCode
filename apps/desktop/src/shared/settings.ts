@@ -48,6 +48,7 @@ export interface ModelSettingsSnapshot {
 }
 
 export type WebSearchProviderId = 'perplexity' | 'tavily'
+export type TavilySearchDepth = 'basic' | 'advanced'
 
 export interface WebSearchSettingsItem {
   activeProvider: WebSearchProviderId
@@ -55,6 +56,7 @@ export interface WebSearchSettingsItem {
     id: WebSearchProviderId
     displayName: string
     hasKey: boolean
+    searchDepth?: TavilySearchDepth
   }>
 }
 
@@ -78,6 +80,7 @@ export interface SaveWebSearchSettingsRequest {
   apiKey?: string
   clearApiKey?: boolean
   setActive?: boolean
+  searchDepth?: TavilySearchDepth
 }
 
 export interface SettingsMutationResult {

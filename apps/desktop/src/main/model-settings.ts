@@ -9,7 +9,10 @@ import type {
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
 } from '../shared/settings.ts'
-import type { WhycodeConfig } from './config.ts'
+import {
+  parseCliProxyModelId,
+  type WhycodeConfig,
+} from './config.ts'
 import {
   cliProxyModelEntries,
   getCliProxyEffectiveCapabilities,
@@ -23,6 +26,22 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 export function createModelSettingsSnapshot(
   config: WhycodeConfig | null,
 ): ModelSettingsSnapshot {
+  const cliProxyConnection = config?.cliProxyApi
+  const cliProxyModels = cliProxyModelEntries().flatMap(({ entry }) => {
+    const configuredRoute = cliProxyConnection?.modelRoutes[entry.id]
+    const routeModelId = configuredRoute && isCliProxyRoute(entry.id, configuredRoute)
+      ? configuredRoute
+      : null
+    if (cliProxyConnection?.apiKey && !routeModelId) return []
+    const effectiveRouteModelId = routeModelId ?? getDefaultCliProxyRoute(entry.id)!
+    return [{
+      id: entry.id,
+      displayName: entry.displayName,
+      enabled: Boolean(cliProxyConnection?.modelIds.includes(entry.id)),
+      capabilities: getCliProxyEffectiveCapabilities(entry.id, effectiveRouteModelId)!,
+    }]
+  })
+
   return {
     providers: BUILTIN_PROVIDERS.map((provider) => ({
       id: provider.id,
@@ -45,18 +64,7 @@ export function createModelSettingsSnapshot(
       displayName: 'CLIProxyAPI',
       ...(config?.cliProxyApi?.baseURL ? { baseURL: config.cliProxyApi.baseURL } : {}),
       hasKey: Boolean(config?.cliProxyApi?.apiKey),
-      models: cliProxyModelEntries().map(({ entry }) => {
-        const configuredRoute = config?.cliProxyApi?.modelRoutes[entry.id]
-        const routeModelId = configuredRoute && isCliProxyRoute(entry.id, configuredRoute)
-          ? configuredRoute
-          : getDefaultCliProxyRoute(entry.id)!
-        return {
-          id: entry.id,
-          displayName: entry.displayName,
-          enabled: Boolean(config?.cliProxyApi?.modelIds.includes(entry.id)),
-          capabilities: getCliProxyEffectiveCapabilities(entry.id, routeModelId)!,
-        }
-      }),
+      models: cliProxyModels,
     },
     webSearch: createWebSearchSettingsSnapshot(config),
   }
@@ -109,7 +117,13 @@ export function updateCliProxyApiSettings(
     // 精确路由只能来自当前实例鉴权后的 /models，不能在纯设置转换层猜测。
     modelRoutes: {},
   }
-  if (request.clearApiKey && next.defaultModel?.startsWith('cliproxyapi:')) {
+  const defaultCliProxyModelId = next.defaultModel
+    ? parseCliProxyModelId(next.defaultModel)
+    : null
+  if (
+    defaultCliProxyModelId
+    && (request.clearApiKey || !modelIds.includes(defaultCliProxyModelId))
+  ) {
     delete next.defaultModel
   }
   return next

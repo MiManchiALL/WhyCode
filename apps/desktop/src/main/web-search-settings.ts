@@ -1,5 +1,6 @@
 import type {
   SaveWebSearchSettingsRequest,
+  TavilySearchDepth,
   WebSearchProviderId,
   WebSearchSettingsItem,
 } from '../shared/settings.ts'
@@ -10,6 +11,10 @@ import {
 
 const MAX_API_KEY_CHARS = 1_000
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
+const TAVILY_SEARCH_DEPTHS = [
+  'basic',
+  'advanced',
+] as const satisfies readonly TavilySearchDepth[]
 const WEB_SEARCH_PROVIDERS = [
   { id: 'perplexity', displayName: 'Perplexity Search API' },
   { id: 'tavily', displayName: 'Tavily Search API' },
@@ -26,6 +31,9 @@ export function createWebSearchSettingsSnapshot(
     providers: WEB_SEARCH_PROVIDERS.map((provider) => ({
       ...provider,
       hasKey: Boolean(config?.webSearch?.[provider.id]?.apiKey),
+      ...(provider.id === 'tavily'
+        ? { searchDepth: config?.webSearch?.tavily?.searchDepth ?? 'basic' }
+        : {}),
     })),
   }
 }
@@ -36,6 +44,13 @@ export function updateWebSearchSettings(
 ): WhycodeConfig {
   const provider = WEB_SEARCH_PROVIDERS.find((item) => item.id === request.provider)
   if (!provider) throw new Error('未知的网页搜索服务')
+  if (request.provider !== 'tavily' && request.searchDepth !== undefined) {
+    throw new Error('只有 Tavily 支持搜索质量档位')
+  }
+  if (
+    request.searchDepth !== undefined
+    && !TAVILY_SEARCH_DEPTHS.includes(request.searchDepth)
+  ) throw new Error('未知的 Tavily 搜索质量档位')
   const next: WhycodeConfig = config ? structuredClone(config) : { providers: {} }
   const previousActive = resolveWebSearchProvider(next)
   const suppliedKey = request.apiKey?.trim()
@@ -49,7 +64,16 @@ export function updateWebSearchSettings(
     : suppliedKey || next.webSearch?.[request.provider]?.apiKey || ''
   const webSearch = next.webSearch ?? {}
   if (apiKey) {
-    webSearch[request.provider] = { apiKey }
+    if (request.provider === 'tavily') {
+      webSearch.tavily = {
+        apiKey,
+        searchDepth: request.searchDepth
+          ?? webSearch.tavily?.searchDepth
+          ?? 'basic',
+      }
+    } else {
+      webSearch.perplexity = { apiKey }
+    }
   } else {
     delete webSearch[request.provider]
   }

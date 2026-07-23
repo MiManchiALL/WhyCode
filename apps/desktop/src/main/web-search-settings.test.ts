@@ -13,7 +13,10 @@ describe('网页搜索设置边界', () => {
       webSearch: {
         activeProvider: 'tavily',
         perplexity: { apiKey: 'private-perplexity-key' },
-        tavily: { apiKey: 'private-tavily-key' },
+        tavily: {
+          apiKey: 'private-tavily-key',
+          searchDepth: 'advanced',
+        },
       },
     })
 
@@ -21,7 +24,12 @@ describe('网页搜索设置边界', () => {
       activeProvider: 'tavily',
       providers: [
         { id: 'perplexity', displayName: 'Perplexity Search API', hasKey: true },
-        { id: 'tavily', displayName: 'Tavily Search API', hasKey: true },
+        {
+          id: 'tavily',
+          displayName: 'Tavily Search API',
+          hasKey: true,
+          searchDepth: 'advanced',
+        },
       ],
     })
     assert.doesNotMatch(JSON.stringify(snapshot), /private-perplexity-key|private-tavily-key/)
@@ -46,8 +54,10 @@ describe('网页搜索设置边界', () => {
     const withTavily = updateWebSearchSettings(replaced, {
       provider: 'tavily',
       apiKey: ' tavily-key ',
+      searchDepth: 'advanced',
     })
     assert.equal(withTavily.webSearch?.tavily?.apiKey, 'tavily-key')
+    assert.equal(withTavily.webSearch?.tavily?.searchDepth, 'advanced')
     assert.equal(withTavily.webSearch?.activeProvider, 'perplexity')
 
     const activated = updateWebSearchSettings(withTavily, {
@@ -56,6 +66,7 @@ describe('网页搜索设置边界', () => {
     })
     assert.equal(activated.webSearch?.activeProvider, 'tavily')
     assert.equal(activated.webSearch?.perplexity?.apiKey, 'second-key')
+    assert.equal(activated.webSearch?.tavily?.searchDepth, 'advanced')
 
     const cleared = updateWebSearchSettings(activated, {
       provider: 'tavily',
@@ -92,6 +103,22 @@ describe('网页搜索设置边界', () => {
         setActive: true,
       }),
       /请先配置 Tavily Search API key/,
+    )
+    assert.throws(
+      () => updateWebSearchSettings(null, {
+        provider: 'tavily',
+        apiKey: 'key',
+        searchDepth: 'unknown' as 'basic',
+      }),
+      /未知的 Tavily 搜索质量档位/,
+    )
+    assert.throws(
+      () => updateWebSearchSettings(null, {
+        provider: 'perplexity',
+        apiKey: 'key',
+        searchDepth: 'advanced',
+      }),
+      /只有 Tavily 支持搜索质量档位/,
     )
   })
 

@@ -143,7 +143,10 @@ describe('配置密钥存储', () => {
         apiKey: 'proxy-secret',
         baseURL: 'http://127.0.0.1:8317/v1',
         modelIds: ['openai:gpt-5.6-sol'],
-        modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
+        modelRoutes: {
+          'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+          'openai:gpt-5.6-terra': 'gpt-5.6-terra',
+        },
       },
       retiredModelLabels: { 'legacy:model': 'Legacy Model' },
       consensusAgents: {
@@ -152,7 +155,7 @@ describe('配置密钥存储', () => {
       webSearch: {
         activeProvider: 'tavily',
         perplexity: { apiKey: 'perplexity-secret' },
-        tavily: { apiKey: 'tavily-secret' },
+        tavily: { apiKey: 'tavily-secret', searchDepth: 'advanced' },
       },
     }
     try {
@@ -168,12 +171,14 @@ describe('配置密钥存储', () => {
       assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['openai:gpt-5.6-sol'])
       assert.deepEqual(loaded?.cliProxyApi?.modelRoutes, {
         'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+        'openai:gpt-5.6-terra': 'gpt-5.6-terra',
       })
       assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
       assert.equal(loaded?.consensusAgents?.B?.apiKey, 'peer-secret')
       assert.equal(loaded?.webSearch?.activeProvider, 'tavily')
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
       assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
+      assert.equal(loaded?.webSearch?.tavily?.searchDepth, 'advanced')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -275,6 +280,7 @@ describe('配置密钥存储', () => {
           modelRoutes: {
             'google:gemini-3.6-flash': 'gemini-3-flash-agent',
             'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+            'openai:gpt-5.6-terra': 'gpt-5.6-terra',
           },
         },
         webSearch: {
@@ -294,6 +300,7 @@ describe('配置密钥存储', () => {
       ])
       assert.deepEqual(loaded.cliProxyApi?.modelRoutes, {
         'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+        'openai:gpt-5.6-terra': 'gpt-5.6-terra',
       })
       assert.equal(loaded.webSearch?.activeProvider, 'perplexity')
       assert.equal(loaded.webSearch?.perplexity?.apiKey, 'legacy-search-key')

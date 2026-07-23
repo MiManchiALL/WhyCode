@@ -160,10 +160,15 @@ describe('模型设置数据边界', () => {
       cliProxyApi: {
         apiKey: 'proxy-key',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
+        modelIds: [
+          'google:gemini-3.1-pro-preview',
+          'google:gemini-3.6-flash',
+          'openai:gpt-5.6-sol',
+        ],
         modelRoutes: {
           'google:gemini-3.1-pro-preview': 'gemini-3.1-pro-low',
           'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+          'openai:gpt-5.6-terra': 'gpt-5.6-terra',
         },
       },
     })
@@ -173,9 +178,18 @@ describe('模型设置数据边界', () => {
     const gpt = snapshot.cliProxyApi.models.find(
       (model) => model.id === 'openai:gpt-5.6-sol',
     )
+    const terra = snapshot.cliProxyApi.models.find(
+      (model) => model.id === 'openai:gpt-5.6-terra',
+    )
     assert.equal(gemini?.capabilities.reasoningEffort?.default, 'low')
     assert.equal(gemini?.capabilities.maxOutput, 65_535)
     assert.equal(gpt?.capabilities.contextWindow, 372_000)
     assert.equal(gpt?.capabilities.reasoningEffort?.supported.includes('none'), false)
+    assert.equal(terra?.enabled, false)
+    assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
+      'google:gemini-3.1-pro-preview',
+      'openai:gpt-5.6-sol',
+      'openai:gpt-5.6-terra',
+    ])
   })
 })

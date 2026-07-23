@@ -19,7 +19,10 @@ export function createConfiguredWebSearchHandler(
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     }
     return provider === 'tavily'
-      ? createTavilySearchHandler(common)(request, abortSignal)
+      ? createTavilySearchHandler({
+          ...common,
+          searchDepth: config?.webSearch?.tavily?.searchDepth ?? 'basic',
+        })(request, abortSignal)
       : createPerplexitySearchHandler(common)(request, abortSignal)
   }
 }

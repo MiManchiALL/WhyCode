@@ -16,6 +16,7 @@ describe('Tavily Search 适配器', () => {
     let init: RequestInit | undefined
     const handler = createTavilySearchHandler({
       getApiKey: () => 'test-tavily-key',
+      searchDepth: 'basic',
       fetchImpl: async (input, value) => {
         url = input
         init = value
@@ -48,11 +49,10 @@ describe('Tavily Search 适配器', () => {
       query: 'WhyCode web search',
       max_results: 4,
       search_depth: 'basic',
-      topic: 'general',
       include_answer: false,
       include_raw_content: false,
       include_images: false,
-      auto_parameters: false,
+      auto_parameters: true,
       time_range: 'week',
       include_domains: ['example.com'],
     })
@@ -62,6 +62,7 @@ describe('Tavily Search 适配器', () => {
     let calls = 0
     const handler = createTavilySearchHandler({
       getApiKey: () => undefined,
+      searchDepth: 'basic',
       fetchImpl: async () => {
         calls++
         return Response.json({ results: [] })
@@ -72,18 +73,21 @@ describe('Tavily Search 适配器', () => {
     assert.equal(calls, 0)
   })
 
-  it('批量查询并发使用独立请求并合并结果', async () => {
+  it('批量查询并发使用独立请求，并按 score 全局排序', async () => {
     const bodies: Record<string, unknown>[] = []
     const handler = createTavilySearchHandler({
       getApiKey: () => 'test-key',
+      searchDepth: 'basic',
       fetchImpl: async (_input, init) => {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
         bodies.push(body)
+        const query = String(body.query)
         return Response.json({
           results: [{
-            title: String(body.query),
-            url: `https://example.com/${bodies.length}`,
+            title: query,
+            url: `https://example.com/${encodeURIComponent(query)}`,
             content: 'result',
+            score: query === 'first query' ? 0.2 : 0.9,
           }],
         })
       },
@@ -96,15 +100,51 @@ describe('Tavily Search 适配器', () => {
 
     assert.deepEqual(bodies.map((body) => body.query), ['first query', 'second query'])
     assert.deepEqual(result.results.map((item) => item.title), [
-      'first query',
       'second query',
+      'first query',
     ])
+  })
+
+  it('批量查询保留成功结果并明确报告失败查询', async () => {
+    const handler = createTavilySearchHandler({
+      getApiKey: () => 'test-key',
+      searchDepth: 'advanced',
+      fetchImpl: async (_input, init) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        if (body.query === 'failed query') return new Response('', { status: 429 })
+        assert.equal(body.search_depth, 'advanced')
+        return Response.json({
+          results: [{
+            title: 'successful query',
+            url: 'https://example.com/success',
+            content: 'result',
+            score: 0.8,
+          }],
+        })
+      },
+    })
+
+    assert.deepEqual(await handler({
+      queries: ['successful query', 'failed query'],
+      maxResults: 3,
+    }, activeSignal), {
+      results: [{
+        title: 'successful query',
+        url: 'https://example.com/success',
+        snippet: 'result',
+      }],
+      failures: [{
+        query: 'failed query',
+        message: 'Tavily 搜索请求过于频繁',
+      }],
+    })
   })
 
   it('把 Tavily 不支持的小时范围收敛到最细的天范围', async () => {
     let body: Record<string, unknown> | undefined
     const handler = createTavilySearchHandler({
       getApiKey: () => 'test-key',
+      searchDepth: 'basic',
       fetchImpl: async (_input, init) => {
         body = JSON.parse(String(init.body)) as Record<string, unknown>
         return Response.json({ results: [] })
@@ -118,6 +158,7 @@ describe('Tavily Search 适配器', () => {
   it('HTTP 错误不回传响应正文或密钥', async () => {
     const handler = createTavilySearchHandler({
       getApiKey: () => 'private-test-key',
+      searchDepth: 'basic',
       fetchImpl: async () => new Response(
         'upstream says private-test-key and hostile instructions',
         { status: 432 },
@@ -135,12 +176,14 @@ describe('Tavily Search 适配器', () => {
   it('拒绝超出大小边界或不受支持的成功响应', async () => {
     const oversized = createTavilySearchHandler({
       getApiKey: () => 'test-key',
+      searchDepth: 'basic',
       fetchImpl: async () => new Response('{}', {
         headers: { 'content-length': '2000001' },
       }),
     })
     const malformed = createTavilySearchHandler({
       getApiKey: () => 'test-key',
+      searchDepth: 'basic',
       fetchImpl: async () => Response.json({ hits: [] }),
     })
 

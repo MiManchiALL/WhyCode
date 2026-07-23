@@ -13,14 +13,16 @@ describe('网页搜索后端分派', () => {
       webSearch: {
         activeProvider: 'perplexity',
         perplexity: { apiKey: 'perplexity-key' },
-        tavily: { apiKey: 'tavily-key' },
+        tavily: { apiKey: 'tavily-key', searchDepth: 'advanced' },
       },
     }
     const calls: string[] = []
+    const bodies: Record<string, unknown>[] = []
     const handler = createConfiguredWebSearchHandler({
       getConfig: () => config,
-      fetchImpl: async (input) => {
+      fetchImpl: async (input, init) => {
         calls.push(input)
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return Response.json({ results: [] })
       },
     })
@@ -36,6 +38,8 @@ describe('网页搜索后端分派', () => {
       'https://api.perplexity.ai/search',
       'https://api.tavily.com/search',
     ])
+    assert.equal(bodies[1]?.search_depth, 'advanced')
+    assert.equal(bodies[1]?.auto_parameters, true)
   })
 
   it('损坏的活动选择不会越过已有密钥调用未配置后端', async () => {
