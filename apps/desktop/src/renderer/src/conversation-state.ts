@@ -1,5 +1,9 @@
 import type { ImageAttachment, PdfAttachment, TaskPlan, ViewEvent } from '@whycode/core'
-import type { CoreEvent, UserQuestion } from '@whycode/core/events'
+import {
+  isStepScopedCoreEvent,
+  type CoreEvent,
+  type UserQuestion,
+} from '@whycode/core/events'
 import type { RuntimeSnapshot } from '../../shared/session.ts'
 
 export interface ToolCall {
@@ -50,6 +54,13 @@ export type Block =
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
 
+interface PendingStepSnapshot {
+  blocks: Block[]
+  nextId: number
+  taskPlan: TaskPlan | null
+  pendingQuestion: UserQuestion | null
+}
+
 export interface ConversationState {
   blocks: Block[]
   expanded: Set<string>
@@ -60,6 +71,8 @@ export interface ConversationState {
   taskPlan: TaskPlan | null
   /** 最近一个尚未被用户消息回答的问题；由可见事件重放恢复。 */
   pendingQuestion: UserQuestion | null
+  /** 实时模型步骤开始前的稳定界面；提交时清除，丢弃时原样恢复。 */
+  pendingStep: PendingStepSnapshot | null
 }
 
 const VOTE_LABELS: Record<string, string> = {
@@ -81,6 +94,7 @@ export function createConversationState(events: readonly ViewEvent[] = []): Conv
     turnStartBlocks: new Map(),
     taskPlan: null,
     pendingQuestion: null,
+    pendingStep: null,
   }
   for (const event of events) state = applyViewEvent(state, event)
   return state
@@ -124,10 +138,25 @@ export function applyViewEvent(state: ConversationState, event: ViewEvent): Conv
         event.attachments,
         event.pdfAttachments,
       )
-    : applyCoreEvent(state, event.event)
+    : applyStableCoreEvent(state, event.event)
 }
 
 export function applyCoreEvent(state: ConversationState, event: CoreEvent): ConversationState {
+  if (event.type === 'step-committed') {
+    return state.pendingStep ? { ...state, pendingStep: null } : state
+  }
+  if (event.type === 'step-discarded') {
+    return state.pendingStep
+      ? { ...state, ...state.pendingStep, pendingStep: null }
+      : state
+  }
+  const current = isStepScopedCoreEvent(event) && !state.pendingStep
+    ? { ...state, pendingStep: snapshotConversation(state) }
+    : state
+  return applyStableCoreEvent(current, event)
+}
+
+function applyStableCoreEvent(state: ConversationState, event: CoreEvent): ConversationState {
   switch (event.type) {
     case 'turn-start': {
       if (state.pendingTurnStart === null) return state
@@ -263,6 +292,15 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
       return { ...state, taskPlan: structuredClone(event.plan) }
     default:
       return state
+  }
+}
+
+function snapshotConversation(state: ConversationState): PendingStepSnapshot {
+  return {
+    blocks: state.blocks,
+    nextId: state.nextId,
+    taskPlan: state.taskPlan,
+    pendingQuestion: state.pendingQuestion,
   }
 }
 

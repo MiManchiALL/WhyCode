@@ -1,4 +1,5 @@
 import {
+  isStepScopedCoreEvent,
   pushCoalescedViewEvent,
   toViewEvent,
   type CoreEvent,
@@ -15,21 +16,6 @@ interface PendingStep {
   writer: ViewEventWriter | null
   events: ViewEvent[]
 }
-
-const STEP_SCOPED_EVENTS = new Set<CoreEvent['type']>([
-  'text-delta',
-  'thinking-delta',
-  'thinking-end',
-  'tool-start',
-  'tool-progress',
-  'tool-end',
-  'image-viewed',
-  'checkpoint-created',
-  'checkpoint-disabled',
-  'task-plan-updated',
-  'task-plan-replaced',
-  'user-question',
-])
 
 /**
  * 把模型流分成 Main/B/C 三条 step 缓冲：只有 step-committed 才写入用户可见时间线，
@@ -65,7 +51,7 @@ export class ViewTimeline {
     }
     const viewEvent = toViewEvent(event)
     if (!viewEvent) return
-    if (STEP_SCOPED_EVENTS.has(event.type)) {
+    if (isStepScopedCoreEvent(event)) {
       this.buffer('Main', writer, viewEvent)
     } else {
       this.write(writer, [viewEvent])

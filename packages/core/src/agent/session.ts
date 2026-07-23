@@ -170,12 +170,12 @@ interface StepResult {
   interruptionBoundaryConsumed: boolean
 }
 
-class EmptyModelResponseError extends Error {
-  override readonly name = 'EmptyModelResponseError'
+class UndeliverableModelResponseError extends Error {
+  override readonly name = 'UndeliverableModelResponseError'
   readonly finishReason: string | null
 
   constructor(finishReason: string | null) {
-    super('模型返回了空响应')
+    super('模型没有返回可交付答复')
     this.finishReason = finishReason
   }
 }
@@ -1193,7 +1193,7 @@ export class AgentSession {
     return null
   }
 
-  /** 空响应没有可提交的模型事实，可安全复用同一上下文重试一次而不重放工具。 */
+  /** 不可交付响应没有可提交的模型事实，可安全复用同一上下文重试一次而不重放工具。 */
   private async runOneStep(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
@@ -1211,15 +1211,15 @@ export class AgentSession {
     try {
       return await attempt()
     } catch (error) {
-      if (!(error instanceof EmptyModelResponseError)) throw error
+      if (!(error instanceof UndeliverableModelResponseError)) throw error
     }
     try {
       return await attempt()
     } catch (error) {
-      if (!(error instanceof EmptyModelResponseError)) throw error
+      if (!(error instanceof UndeliverableModelResponseError)) throw error
       const reason = error.finishReason ? `（finish reason: ${error.finishReason}）` : ''
       throw new Error(
-        `模型连续两次返回空响应${reason}，当前未提交步骤已安全丢弃；请重试或切换模型。`,
+        `模型连续两次没有返回可交付答复${reason}，当前未提交步骤已安全丢弃；请重试或切换模型。`,
       )
     }
   }
@@ -1439,9 +1439,9 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       if (
         !hadToolCalls
-        && !response.messages.some((message) => modelMessageText(message).trim().length > 0)
+        && !hasDeliverableModelText(response.messages)
       ) {
-        throw new EmptyModelResponseError(finishReason)
+        throw new UndeliverableModelResponseError(finishReason)
       }
       const taskPlanCommit = this.taskPlan?.commitStep()
       taskPlanFinalized = Boolean(this.taskPlan)
@@ -2134,4 +2134,13 @@ export class AgentSession {
 function modelMessageText(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content
   return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
+}
+
+function hasDeliverableModelText(messages: ModelMessage[]): boolean {
+  const text = messages.map(modelMessageText).join('\n').trim()
+  if (!text) return false
+
+  // Antigravity 等工具协议偶尔会作为普通文本泄漏。整条响应只有协议封装时，
+  // 它既不是结构化工具调用，也不是面向用户的答复，不能作为自然完成提交。
+  return !/^out:default_api:[A-Za-z_][A-Za-z0-9_.-]*\s*\{[\s\S]*\}$/u.test(text)
 }
