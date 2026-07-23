@@ -52,6 +52,7 @@ export interface ConsensusCoordinatorOptions {
   conversationId: string
   agents: { B: ConsensusAgentSetup; C: ConsensusAgentSetup }
   osPlatform: NodeJS.Platform
+  homeDir?: string
   emit: CoreEventSink
   requestApproval: ApprovalHandler
   /** M4：只恢复上一任务已提交的稳定状态，不恢复 Peer 会话或半截协议。 */
@@ -494,6 +495,7 @@ export class ConsensusCoordinator {
       projectDir: this.options.projectDir,
       scratchDir,
       osPlatform: this.options.osPlatform,
+      homeDir: this.options.homeDir,
       emit: (event: CoreEvent) => emit({ type: 'peer-event', agentId, event }),
       requestApproval: (req) =>
         requestApproval({

@@ -391,6 +391,7 @@ function createCoordinator(
     conversationId: targetConversationId,
     agents: { B: setup('B'), C: setup('C') },
     osPlatform: process.platform,
+    homeDir: app.getPath('home'),
     emit: broadcastEvent,
     requestApproval,
     initialState: journal.initialConsensusState,

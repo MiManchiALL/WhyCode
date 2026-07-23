@@ -24,6 +24,13 @@ import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import {
+  applyProjectInstructions,
+  findProjectInstructionsMessage,
+  loadProjectInstructions,
+  projectInstructionsUpdate,
+  type ProjectInstructionsUpdate,
+} from '../instructions/project.ts'
+import {
   createTurnAbortedConsumedMessage,
   createTurnAbortedMessage,
   findPendingTurnAbortedIndex,
@@ -242,7 +249,11 @@ export class AgentSession {
   private terminalStatusManaged = false
   constructor(options: AgentSessionOptions) {
     this.options = options
-    this.messages = [...(options.sessionRecorder?.initialMessages ?? [])]
+    const initialMessages = options.sessionRecorder?.initialMessages ?? []
+    this.messages = applyProjectInstructions(
+      initialMessages,
+      findProjectInstructionsMessage(initialMessages),
+    )
     this.addImageAttachments(options.sessionRecorder?.initialImageAttachments ?? [])
     this.addPdfAttachments(options.sessionRecorder?.initialPdfAttachments ?? [])
     this.queue = (options.sessionRecorder?.pendingUserInputs ?? [])
@@ -364,7 +375,10 @@ export class AgentSession {
   /** 仅允许在回合结束后恢复，持久化回滚由共识任务终点统一提交。 */
   restoreMessageSnapshot(messages: ModelMessage[]): void {
     if (this.isBusy) throw new Error('Agent 工作中，不能恢复消息快照')
-    this.messages = structuredClone(messages)
+    this.messages = applyProjectInstructions(
+      structuredClone(messages),
+      findProjectInstructionsMessage(this.messages),
+    )
     this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
   }
@@ -487,6 +501,7 @@ export class AgentSession {
     deliveredInputs: readonly QueuedMessage[] = [],
   ): Promise<StopReason> {
     this.opAbort = new AbortController()
+    this.running = true
     return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs)
   }
 
@@ -653,9 +668,29 @@ export class AgentSession {
     deliveredInputs: readonly QueuedMessage[] = [],
   ): Promise<StopReason> {
     const { emit } = this.options
-    this.running = true
     this.abortRequestedDuringFinalization = false
     const turnId = crypto.randomUUID()
+    const previousProjectInstructions = findProjectInstructionsMessage(this.messages)
+    let projectInstructions: ProjectInstructionsUpdate | null = null
+    let initialMessageCount = this.messages.length
+    try {
+      const resolved = await this.resolveProjectInstructions()
+      projectInstructions = resolved.update
+      this.applyResolvedProjectInstructions(resolved.message)
+      initialMessageCount = this.messages.length
+    } catch (error) {
+      if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
+      this.opAbort = null
+      this.running = false
+      emit({
+        type: 'error',
+        message: `无法读取项目指令：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      })
+      if (!this.terminalStatusManaged) emit({ type: 'agent-status', status: 'error' })
+      this.resolveIdleWaiters()
+      return 'error'
+    }
     const pendingUserQuestion = findPendingUserQuestion(this.messages)
     const answersPendingUserQuestion = pendingUserQuestion !== null
       && initialMessages.some((message) =>
@@ -675,7 +710,6 @@ export class AgentSession {
         ]
       : initialMessages
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
-    const initialMessageCount = this.messages.length
     this.activeTurn = { id: turnId }
     this.messages.push(...initialContext)
     try {
@@ -685,11 +719,13 @@ export class AgentSession {
           initialContext,
           planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
           deliveredInputs.filter((input) => input.persisted).map((input) => input.id),
+          projectInstructions ?? undefined,
         ),
         '提交回合起点',
       )
     } catch (error) {
       this.messages.length = initialMessageCount
+      this.messages = applyProjectInstructions(this.messages, previousProjectInstructions)
       if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
       this.activeTurn = null
       this.opAbort = null
@@ -727,9 +763,12 @@ export class AgentSession {
       let stepsSincePlanMutation = 0
       let stepsSincePlanReminder = 0
       let currentTimeReminderAt: Date | null = null
+      let projectInstructionsFresh = true
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
       // 只有稳定提交 Create/Replace/Resume，或回答计划自身的问题卡，才启用未完成保护。
       while (maxSteps === null || steps < maxSteps) {
+        if (!projectInstructionsFresh) await this.refreshProjectInstructions()
+        projectInstructionsFresh = false
         if (
           planExecutionEngaged
           && this.taskPlan?.hasUnfinishedWork()
@@ -1006,6 +1045,7 @@ export class AgentSession {
     const preTokens = estimateContextTokens(this.messages, this.tokenBaseline)
     emit({ type: 'agent-status', status: 'working' })
     try {
+      await this.refreshProjectInstructions()
       const result = await compactMessages(
         this.createLanguageModel(),
         this.messages,
@@ -1016,6 +1056,7 @@ export class AgentSession {
         this.requestProviderOptions(),
       )
       this.messages = result.messages
+      await this.refreshProjectInstructions()
       this.rebuildActivePdfAttachments()
       await this.persist((recorder) =>
         recorder.recordSnapshot('compact', this.messages, undefined, this.taskPlan?.stateSnapshot),
@@ -1094,6 +1135,7 @@ export class AgentSession {
         this.requestProviderOptions(),
       )
       this.messages = result.messages
+      await this.refreshProjectInstructions()
       this.rebuildActivePdfAttachments()
       await this.persist((recorder) =>
         recorder.recordSnapshot(
@@ -1213,6 +1255,7 @@ export class AgentSession {
     } catch (error) {
       if (!(error instanceof UndeliverableModelResponseError)) throw error
     }
+    await this.refreshProjectInstructions()
     try {
       return await attempt()
     } catch (error) {
@@ -2080,6 +2123,44 @@ export class AgentSession {
           ? [attachment.id]
           : []),
     )
+  }
+
+  private async resolveProjectInstructions(): Promise<{
+    update: ProjectInstructionsUpdate | null
+    message: ModelMessage | null
+  }> {
+    const snapshot = await loadProjectInstructions({
+      homeDir: this.options.promptContext.homeDir,
+      projectDir: this.options.promptContext.projectDir,
+    })
+    const update = projectInstructionsUpdate(this.messages, snapshot)
+    return {
+      update,
+      message: update
+        ? update.message
+        : findProjectInstructionsMessage(this.messages),
+    }
+  }
+
+  private applyResolvedProjectInstructions(message: ModelMessage | null): void {
+    const next = applyProjectInstructions(this.messages, message)
+    const changed = next.length !== this.messages.length
+      || next.some((entry, index) => entry !== this.messages[index])
+    if (!changed) return
+    this.messages = next
+    this.rebuildActivePdfAttachments()
+    this.tokenBaseline = null
+  }
+
+  private async refreshProjectInstructions(): Promise<void> {
+    const resolved = await this.resolveProjectInstructions()
+    if (resolved.update) {
+      await this.persistRequired(
+        (recorder) => recorder.recordProjectInstructions(resolved.update!),
+        '提交项目指令',
+      )
+    }
+    this.applyResolvedProjectInstructions(resolved.message)
   }
 
   /** 采纳审批建议（本会话内生效，不落盘） */

@@ -21,6 +21,10 @@ import { createTurnAbortedMessage, isTurnAbortedMessage } from './interruption.t
 import { getSessionPaths } from './metadata.ts'
 import { SessionStore } from './store.ts'
 import { SESSION_SCHEMA_VERSION, sessionEntrySchema } from './types.ts'
+import {
+  isProjectInstructionsMessage,
+  loadProjectInstructions,
+} from '../instructions/project.ts'
 
 const tempRoots: string[] = []
 const storeRoots = new WeakMap<SessionStore, string>()
@@ -30,6 +34,96 @@ afterEach(async () => {
 })
 
 describe('SessionStore', () => {
+  it('项目指令版本以审计事件追加，活动消息和 turn 锚点只保留最新版本', async () => {
+    const store = await createStore()
+    const project = join(storeRoots.get(store)!, 'project')
+    await mkdir(project, { recursive: true })
+    await writeFile(join(project, 'AGENTS.md'), '第一版规则', 'utf8')
+    const first = await loadProjectInstructions({ projectDir: project })
+    assert.ok(first)
+    const journal = await store.create({ projectDir: project, modelId: 'test:model' })
+    await journal.recordUserInput('开始任务', true)
+    await journal.recordTurnStart(
+      'turn-project-instructions',
+      [message('user', '开始任务')],
+      undefined,
+      [],
+      { version: first.version, message: first.message },
+    )
+    await journal.recordStep(
+      'turn-project-instructions',
+      [message('assistant', '处理中')],
+    )
+
+    await writeFile(join(project, 'AGENTS.md'), '第二版规则', 'utf8')
+    const second = await loadProjectInstructions({ projectDir: project })
+    assert.ok(second)
+    await journal.recordProjectInstructions({
+      version: second.version,
+      message: second.message,
+    })
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.undeliveredUserInputIds.length, 0)
+    assert.equal(reopened.initialMessages.filter(isProjectInstructionsMessage).length, 1)
+    assert.equal(reopened.initialMessages[0] && modelText(reopened.initialMessages[0]), modelText(second.message))
+    assert.deepEqual(
+      reopened.messagesBeforeTurn('turn-project-instructions')?.map(modelText),
+      [modelText(second.message)],
+    )
+    const transcript = join(
+      storeRoots.get(store)!,
+      journal.sessionId,
+      'transcript.jsonl',
+    )
+    const instructionEvents = parseTranscript(await readFile(transcript, 'utf8'))
+      .filter((entry) => entry.type === 'project-instructions')
+    assert.deepEqual(instructionEvents.map((entry) => entry.version), [
+      first.version,
+      second.version,
+    ])
+
+    await reopened.recordProjectInstructions({ version: null, message: null })
+    const removed = await store.open(journal.sessionId)
+    assert.equal(removed.initialMessages.some(isProjectInstructionsMessage), false)
+    assert.deepEqual(
+      removed.messagesBeforeTurn('turn-project-instructions'),
+      [],
+    )
+  })
+
+  it('项目指令变化会同步替换活动共识的回滚基线', async () => {
+    const store = await createStore()
+    const project = join(storeRoots.get(store)!, 'consensus-project')
+    await mkdir(project, { recursive: true })
+    const instructionPath = join(project, 'AGENTS.md')
+    await writeFile(instructionPath, '共识规则一', 'utf8')
+    const first = await loadProjectInstructions({ projectDir: project })
+    assert.ok(first)
+    const journal = await store.create({ projectDir: project, modelId: 'test:model' })
+    await journal.recordProjectInstructions({
+      version: first.version,
+      message: first.message,
+    })
+    const state = consensusState(1)
+    await journal.recordConsensusTaskStart('instruction-consensus', state, '讨论当前方案')
+
+    await writeFile(instructionPath, '共识规则二', 'utf8')
+    const second = await loadProjectInstructions({ projectDir: project })
+    assert.ok(second)
+    await journal.recordProjectInstructions({
+      version: second.version,
+      message: second.message,
+    })
+    await journal.recordConsensusTaskEnd('instruction-consensus', 'aborted', state)
+
+    const reopened = await store.open(journal.sessionId)
+    const active = JSON.stringify(reopened.initialMessages)
+    assert.equal(reopened.initialMessages.filter(isProjectInstructionsMessage).length, 1)
+    assert.match(active, /共识规则二/)
+    assert.doesNotMatch(active, /共识规则一/)
+  })
+
   it('按稳定 turn 边界持久化并恢复消息', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: 'C:\\work\\demo', modelId: 'test:model' })

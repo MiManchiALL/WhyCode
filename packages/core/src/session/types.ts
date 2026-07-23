@@ -26,6 +26,7 @@ import {
   REASONING_EFFORT_LEVELS,
   type ReasoningEffortSelection,
 } from '../providers/catalog.ts'
+import type { ProjectInstructionsUpdate } from '../instructions/project.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -108,6 +109,12 @@ const modelChangeSchema = chainedEntrySchema.extend({
   type: z.literal('model-change'),
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
+})
+
+const projectInstructionsSchema = chainedEntrySchema.extend({
+  type: z.literal('project-instructions'),
+  version: z.string().regex(/^sha256:[a-f0-9]{64}$/).nullable(),
+  message: modelMessageSchema.nullable(),
 })
 
 const viewEventsEntrySchema = chainedEntrySchema.extend({
@@ -242,6 +249,7 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   userInputSchema,
   userInputRestoredSchema,
   modelChangeSchema,
+  projectInstructionsSchema,
   viewEventsEntrySchema,
   turnStartSchema,
   messagesEntrySchema,
@@ -378,7 +386,9 @@ export interface SessionRecorder {
     messages: ModelMessage[],
     engagedPlanId?: string,
     deliveredInputIds?: readonly string[],
+    projectInstructions?: ProjectInstructionsUpdate,
   ): Promise<void>
+  recordProjectInstructions(update: ProjectInstructionsUpdate): Promise<void>
   recordStep(
     turnId: string,
     messages: ModelMessage[],

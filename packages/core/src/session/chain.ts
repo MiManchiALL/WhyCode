@@ -15,6 +15,11 @@ import type { ImageAttachment } from '../attachments/types.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ReasoningEffortSelection } from '../providers/catalog.ts'
+import {
+  applyProjectInstructions,
+  isProjectInstructionsMessage,
+  validateProjectInstructionsUpdate,
+} from '../instructions/project.ts'
 
 export class SessionCorruptError extends Error {}
 
@@ -297,6 +302,18 @@ function collectTurnStarts(
         taskStates.set(start.turnId, cloneTaskPlanState(start.taskState))
       }
     }
+    if (entry.type === 'project-instructions') {
+      messages = applyProjectInstructions(messages, entry.message)
+      if (activeConsensusBaseMessages) {
+        activeConsensusBaseMessages = applyProjectInstructions(
+          activeConsensusBaseMessages,
+          entry.message,
+        )
+      }
+      for (const [turnId, start] of starts) {
+        starts.set(turnId, applyProjectInstructions(start, entry.message))
+      }
+    }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
       messages.push(message)
@@ -399,10 +416,10 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
 
   return chain.flatMap((entry): UndeliveredUserInput[] => {
     if (entry.type !== 'user-input' || !entry.startsTurn) return []
-    const delivery = childByParent.get(entry.uuid)
+    const delivery = nextSemanticChild(entry.uuid, childByParent)
     if (delivery?.type === 'consensus-task-start') return []
     if (delivery?.type === 'turn-start') {
-      const batch = childByParent.get(delivery.uuid)
+      const batch = nextSemanticChild(delivery.uuid, childByParent)
       if (batch?.type === 'messages' && batch.turnId === delivery.turnId) return []
       return [{
         id: entry.uuid,
@@ -477,6 +494,15 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
         throw new SessionCorruptError('共识任务终点的回滚语义无效')
       }
     }
+    if (
+      entry.type === 'project-instructions'
+      && !validateProjectInstructionsUpdate({
+        version: entry.version,
+        message: entry.message,
+      })
+    ) {
+      throw new SessionCorruptError('项目指令版本与消息内容不匹配')
+    }
   }
 }
 
@@ -514,6 +540,15 @@ function collectMessages(
       activeConsensusBaseMessages = entry.activeConsensusBaseMessages
         ? [...entry.activeConsensusBaseMessages]
         : null
+    }
+    if (entry.type === 'project-instructions') {
+      messages = applyProjectInstructions(messages, entry.message)
+      if (activeConsensusBaseMessages) {
+        activeConsensusBaseMessages = applyProjectInstructions(
+          activeConsensusBaseMessages,
+          entry.message,
+        )
+      }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
@@ -661,6 +696,15 @@ function findInterruptedWork(
       interruptedConsensusBaseTaskState = structuredClone(entry.activeConsensusBaseTaskState)
       interruptedConsensusBaseTurnIds = structuredClone(entry.activeConsensusBaseTurnIds)
     }
+    if (entry.type === 'project-instructions') {
+      visibleMessages = applyProjectInstructions(visibleMessages, entry.message)
+      if (interruptedConsensusBaseMessages) {
+        interruptedConsensusBaseMessages = applyProjectInstructions(
+          interruptedConsensusBaseMessages,
+          entry.message,
+        )
+      }
+    }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
       visibleMessages.push(message)
@@ -772,9 +816,20 @@ function deriveStatus(
 }
 
 function userText(message: ModelMessage): string[] {
-  if (message.role !== 'user') return []
+  if (message.role !== 'user' || isProjectInstructionsMessage(message)) return []
   if (typeof message.content === 'string') return [message.content]
   return message.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))
+}
+
+function nextSemanticChild(
+  parentUuid: string,
+  childByParent: ReadonlyMap<string, SessionEntry>,
+): SessionEntry | undefined {
+  let child = childByParent.get(parentUuid)
+  while (child?.type === 'project-instructions') {
+    child = childByParent.get(child.uuid)
+  }
+  return child
 }
 
 function clip(text: string): string {
