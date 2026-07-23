@@ -7,6 +7,7 @@ export type {
   QueuedUserMessage,
   StopReason,
 } from './events.ts'
+export { isStepScopedCoreEvent } from './events.ts'
 export {
   MODEL_REGISTRY,
   getModelEntry,

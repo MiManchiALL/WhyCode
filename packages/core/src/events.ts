@@ -190,6 +190,26 @@ export type CoreEvent =
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
   | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }
 
+const STEP_SCOPED_CORE_EVENT_TYPES = new Set<CoreEvent['type']>([
+  'text-delta',
+  'thinking-delta',
+  'thinking-end',
+  'tool-start',
+  'tool-progress',
+  'tool-end',
+  'image-viewed',
+  'checkpoint-created',
+  'checkpoint-disabled',
+  'task-plan-updated',
+  'task-plan-replaced',
+  'user-question',
+])
+
+/** 这些事件只有在所属模型步骤提交后才能成为稳定可见事实。 */
+export function isStepScopedCoreEvent(event: CoreEvent): boolean {
+  return STEP_SCOPED_CORE_EVENT_TYPES.has(event.type)
+}
+
 export type StopReason =
   | 'completed'
   | 'waiting-user'

@@ -7,9 +7,56 @@ import {
   eventsAfterRuntimeSnapshot,
   restoreRuntimeConversation,
   resumeTargetCommitted,
+  toggleExpanded,
 } from './conversation-state.ts'
 
 describe('会话界面时间线重建', () => {
+  it('实时步骤丢弃时撤销协议文本，重试答复提交后只保留稳定内容', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '统计代码行数', startsTurn: true },
+      core({
+        type: 'tool-start',
+        toolUseId: 'run-1',
+        toolName: 'RunCommand',
+        input: { command: 'count' },
+      }),
+      core({
+        type: 'tool-end',
+        toolUseId: 'run-1',
+        result: '48242',
+        isError: false,
+      }),
+    ])
+    const stableBlocks = state.blocks
+
+    state = applyCoreEvent(state, {
+      type: 'text-delta',
+      text: 'out:default_api:RunCommand{result:"Total: 48242\\n"}',
+    })
+    assert.equal(state.blocks.length, stableBlocks.length + 1)
+    const stableToolId = stableBlocks.find((block) => block.kind === 'tool')!.id
+    state = toggleExpanded(state, stableToolId)
+
+    state = applyCoreEvent(state, { type: 'step-discarded' })
+    assert.deepEqual(state.blocks, stableBlocks)
+    assert.equal(state.expanded.has(stableToolId), true)
+
+    state = applyCoreEvent(state, {
+      type: 'text-delta',
+      text: '当前受版本控制的代码共 48,242 行。',
+    })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+
+    assert.equal(state.pendingStep, null)
+    const finalBlock = state.blocks.at(-1)
+    assert.equal(finalBlock?.kind, 'text')
+    assert.equal(
+      finalBlock?.kind === 'text' ? finalBlock.text : null,
+      '当前受版本控制的代码共 48,242 行。',
+    )
+    assert.doesNotMatch(JSON.stringify(state.blocks), /out:default_api/)
+  })
+
   it('Renderer 重载时恢复稳定对话，并保留停止当前任务的入口提示', () => {
     const state = restoreRuntimeConversation([
       { type: 'user-message', text: '读取桌面 PDF', startsTurn: true },

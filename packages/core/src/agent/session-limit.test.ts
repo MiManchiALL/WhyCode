@@ -84,7 +84,49 @@ describe('Agent 长任务循环策略', () => {
     assert.equal(events.some((event) => event.type === 'error'), false)
   })
 
-  it('连续两次空响应显式失败，不伪装成正常完成', async () => {
+  it('工具后的内部协议文本只重试模型，不把协议泄漏误判为最终答复', async () => {
+    const leakedProtocol = 'out:default_api:RunCommand{result:"Total: 48242\\n"}'
+    const model = new MockLanguageModelV4({
+      doStream: [
+        ...toolStreams(1, false),
+        textStream(leakedProtocol),
+        textStream('当前受版本控制的代码共 48,242 行。'),
+      ],
+    })
+    const { session, events } = createSession(model)
+
+    const stopReason = await session.handleUserMessage('统计代码行数')
+
+    assert.equal(stopReason, 'completed')
+    assert.equal(model.doStreamCalls.length, 3)
+    assert.deepEqual(model.doStreamCalls[2]?.prompt, model.doStreamCalls[1]?.prompt)
+    assert.equal(events.filter((event) => event.type === 'tool-end').length, 1)
+    assert.equal(events.filter((event) => event.type === 'step-committed').length, 2)
+    assert.equal(events.filter((event) => event.type === 'step-discarded').length, 1)
+    assert.equal(
+      events.some(
+        (event) => event.type === 'text-delta'
+          && event.text === '当前受版本控制的代码共 48,242 行。',
+      ),
+      true,
+    )
+    assert.equal(events.some((event) => event.type === 'error'), false)
+  })
+
+  it('正文中引用内部协议示例时仍作为正常答复提交', async () => {
+    const answer = '模型返回的原始片段是 `out:default_api:RunCommand{result:"ok"}`。'
+    const model = new MockLanguageModelV4({ doStream: [textStream(answer)] })
+    const { session, events } = createSession(model)
+
+    const stopReason = await session.handleUserMessage('解释这段协议文本')
+
+    assert.equal(stopReason, 'completed')
+    assert.equal(model.doStreamCalls.length, 1)
+    assert.equal(events.filter((event) => event.type === 'step-committed').length, 1)
+    assert.equal(events.some((event) => event.type === 'step-discarded'), false)
+  })
+
+  it('连续两次不可交付响应显式失败，不伪装成正常完成', async () => {
     const model = new MockLanguageModelV4({
       doStream: [emptyStream('stop'), emptyStream('content-filter')],
     })
@@ -99,7 +141,7 @@ describe('Agent 长任务循环策略', () => {
     assert.equal(
       events.some(
         (event) => event.type === 'error'
-          && event.message.includes('模型连续两次返回空响应')
+          && event.message.includes('模型连续两次没有返回可交付答复')
           && event.message.includes('content-filter'),
       ),
       true,
