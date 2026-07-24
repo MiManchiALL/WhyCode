@@ -21,6 +21,7 @@
     "@ai-sdk/deepseek": "^3.0.5",
     "@ai-sdk/openai": "^4.0.7",
     "@ai-sdk/openai-compatible": "^3.0.5",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "ai": "^7.0.14",
     "sharp": "0.35.3",
     "zod": "^4.4.3"

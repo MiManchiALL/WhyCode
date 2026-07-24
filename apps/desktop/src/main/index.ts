@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron'
 import { realpath, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   AgentSession,
   cleanupUnreferencedAttachments,
@@ -11,7 +11,10 @@ import {
   createWebFetchTool,
   createWebFindTool,
   createWebSearchTool,
+  ensureMcpConfigTemplate,
   getModelEntry,
+  loadMcpConfiguration,
+  McpSessionRuntime,
   normalizeReasoningEffortSelection,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -109,6 +112,7 @@ const configSecretCodec: ConfigSecretCodec = {
 }
 
 const customSystemPromptConfigPath = getCustomSystemPromptConfigPath(getConfigPath())
+const mcpGlobalConfigPath = join(dirname(getConfigPath()), 'mcp.json')
 
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
@@ -259,6 +263,15 @@ let currentModelId: string | null = null
 let currentReasoningEffort: ReasoningEffortSelection = 'default'
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
+/** reset/恢复是同步切换事实源；异步资源释放在此串行，退出时统一等待。 */
+let sessionDisposalTail: Promise<void> = Promise.resolve()
+
+function disposeSession(target: AgentSession | null): void {
+  if (!target) return
+  sessionDisposalTail = sessionDisposalTail
+    .then(() => target.dispose())
+    .catch((error) => console.error('MCP 会话清理失败：', error))
+}
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
 function validateModel(modelId: string): string | null {
@@ -305,7 +318,7 @@ async function ensureSession(): Promise<string | null> {
         )
         if (!session) {
           conversationId = recorder.sessionId
-          session = createMainAgentSession(
+          session = await createMainAgentSession(
             recorder,
             projectDir,
             entry,
@@ -330,36 +343,56 @@ async function ensureSession(): Promise<string | null> {
   return null
 }
 
-function createMainAgentSession(
+async function createMainAgentSession(
   recorder: SessionJournal,
   targetProjectDir: string | null,
   model: ModelEntry,
   providerConfig: ProviderConfig,
   reasoningEffort: ReasoningEffortSelection,
-): AgentSession {
-  const next = new AgentSession({
-    model,
-    providerConfig,
-    reasoningEffort,
-    promptContext: {
+): Promise<AgentSession> {
+  const mcpRuntime = new McpSessionRuntime({
+    configuration: await loadMcpConfiguration({
+      globalConfigPath: mcpGlobalConfigPath,
       projectDir: targetProjectDir,
-      osPlatform: process.platform,
-      homeDir: app.getPath('home'),
+    }),
+    fetchImpl: (input, init) => net.fetch(
+      input instanceof URL ? input.toString() : input,
+      init,
+    ),
+    attachments: {
+      attachmentDirectory: recorder.attachmentDirectory,
+      sessionId: recorder.sessionId,
     },
-    customSystemPrompt: recorder.customSystemPrompt,
-    sessionRecorder: recorder,
-    mainTools: [
-      ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
-      webSearchTool,
-      ...createSessionWebPageTools(recorder),
-    ],
-    captureScreenshot: captureDesktopScreenshot,
-    pdfProcessor,
-    emit: broadcastEvent,
-    requestApproval,
   })
-  if (pendingPermissionMode) next.setPermissionMode(pendingPermissionMode)
-  return next
+  try {
+    const next = new AgentSession({
+      model,
+      providerConfig,
+      reasoningEffort,
+      promptContext: {
+        projectDir: targetProjectDir,
+        osPlatform: process.platform,
+        homeDir: app.getPath('home'),
+      },
+      customSystemPrompt: recorder.customSystemPrompt,
+      sessionRecorder: recorder,
+      mcpRuntime,
+      mainTools: [
+        ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
+        webSearchTool,
+        ...createSessionWebPageTools(recorder),
+      ],
+      captureScreenshot: captureDesktopScreenshot,
+      pdfProcessor,
+      emit: broadcastEvent,
+      requestApproval,
+    })
+    if (pendingPermissionMode) next.setPermissionMode(pendingPermissionMode)
+    return next
+  } catch (error) {
+    await mcpRuntime.close().catch(() => {})
+    throw error
+  }
 }
 
 /** 协商可用性检查：B/C 评审员配置齐备且模型已注册。 */
@@ -940,6 +973,7 @@ function rejectUserMessage(message: string): { ok: false } {
 
 function resetRuntime(keepJournal = false): void {
   const oldConversationId = conversationId
+  const previousSession = session
   session = null
   sessionInitialization = null
   coordinator = null
@@ -947,6 +981,7 @@ function resetRuntime(keepJournal = false): void {
   viewTimeline.discardAll()
   if (!keepJournal) sessions.reset()
   conversationId = `conv-${Date.now()}`
+  disposeSession(previousSession)
   // 普通运行态切换仍可尽力清临时目录；显式删除会在移除事实源前严格等待清理完成。
   void cleanupConversationScratch(
     join(app.getPath('userData'), 'scratch'),
@@ -1025,9 +1060,10 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
   }
   const statusBeforeResume = currentAgentStatus
   let succeeded = false
+  let prepared: PreparedResumeRuntime | null = null
   broadcastEvent({ type: 'agent-status', status: 'working' }, false)
   try {
-    const prepared = await prepareResumedRuntime(sessionId)
+    prepared = await prepareResumedRuntime(sessionId)
     commitResumedRuntime(prepared)
     succeeded = true
     return {
@@ -1043,6 +1079,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       recoveredFromInterruption: prepared.recoveredFromInterruption,
     }
   } catch (error) {
+    await prepared?.mainSession?.dispose().catch(() => {})
     const message = `会话恢复失败：${error instanceof Error ? error.message : String(error)}`
     broadcastEvent({ type: 'error', message, recoverable: true }, false)
     return { ok: false, error: message }
@@ -1084,7 +1121,7 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
       )
     : metadata.reasoningEffort
   const mainSession = resolved.ok
-    ? createMainAgentSession(
+    ? await createMainAgentSession(
         journal,
         targetProjectDir,
         resolved.value.entry,
@@ -1093,10 +1130,15 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
       )
     : null
   let nextCoordinator: ConsensusCoordinator | null = null
-  if (consensusEnabled && mainSession) {
-    const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
-    if (!built.ok) throw new Error(built.error)
-    nextCoordinator = built.value
+  try {
+    if (consensusEnabled && mainSession) {
+      const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
+      if (!built.ok) throw new Error(built.error)
+      nextCoordinator = built.value
+    }
+  } catch (error) {
+    await mainSession?.dispose().catch(() => {})
+    throw error
   }
   return {
     journal,
@@ -1111,10 +1153,12 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
 
 function commitResumedRuntime(input: PreparedResumeRuntime): void {
   const oldConversationId = conversationId
+  const previousSession = session
   sessionInitialization = null
   viewTimeline.discardAll()
   sessions.activate(input.journal)
   session = input.mainSession
+  disposeSession(previousSession)
   coordinator = input.nextCoordinator
   projectDir = input.targetProjectDir
   currentModelId = input.targetModelId
@@ -1174,11 +1218,12 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       sessions,
       commandSessions,
       scratchRoot: join(app.getPath('userData'), 'scratch'),
-      onDeletionMarked: () => {
+      onDeletionMarked: async () => {
         if (!deletedCurrent) return
         resetRuntime()
         projectDir = requireDefaultWorkspace()
         detachedCurrent = true
+        await sessionDisposalTail
       },
       onBeforeFactSourceDelete: () => pruneRetiredModelLabels(sessionId),
     })
@@ -1220,6 +1265,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.error('配置安全迁移失败：', error))
   await ensureCustomSystemPromptTemplate(customSystemPromptConfigPath)
     .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
+  await ensureMcpConfigTemplate(mcpGlobalConfigPath)
+    .catch((error) => console.warn('MCP 配置模板初始化失败：', error))
   await synchronizeConfiguredCliProxyRoutes()
     .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
@@ -1366,8 +1413,12 @@ app.on('before-quit', (event) => {
   if (shutdownStarted || !commandSessions) return
   event.preventDefault()
   shutdownStarted = true
-  void commandSessions
-    .shutdown()
-    .catch((error) => console.error('后台命令退出清理失败：', error))
+  void Promise.all([
+    commandSessions.shutdown()
+      .catch((error) => console.error('后台命令退出清理失败：', error)),
+    sessionDisposalTail,
+    session?.dispose()
+      .catch((error) => console.error('当前 MCP 会话退出清理失败：', error)),
+  ])
     .finally(() => app.quit())
 })

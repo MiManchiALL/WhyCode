@@ -41,6 +41,24 @@ export {
   type ToolResult,
 } from './tools/tool.ts'
 export {
+  MCP_CONFIG_VERSION,
+  MCP_GLOBAL_CONFIG_TEMPLATE,
+  ensureMcpConfigTemplate,
+  getProjectMcpConfigPath,
+  loadMcpConfiguration,
+  type McpConfiguration,
+  type McpConfigDiagnostic,
+  type McpConfigScope,
+  type McpHttpServerConfig,
+  type McpServerConfig,
+  type McpStdioServerConfig,
+} from './mcp/config.ts'
+export {
+  MCP_TOOL_SEARCH_NAME,
+  McpSessionRuntime,
+  type McpSessionRuntimeOptions,
+} from './mcp/runtime.ts'
+export {
   AgentSession,
   type AgentSessionOptions,
   type ApprovalHandler,
