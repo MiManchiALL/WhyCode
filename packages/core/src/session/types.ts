@@ -27,6 +27,10 @@ import {
   type ReasoningEffortSelection,
 } from '../providers/catalog.ts'
 import type { ProjectInstructionsUpdate } from '../instructions/project.ts'
+import {
+  customSystemPromptSnapshotSchema,
+  type CustomSystemPromptSnapshot,
+} from '../prompts/custom-system.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -60,6 +64,7 @@ const sessionStartSchema = chainedEntrySchema.extend({
   projectDir: z.string().nullable(),
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
+  customSystemPrompt: customSystemPromptSnapshotSchema.optional(),
 })
 
 const turnStartSchema = chainedEntrySchema.extend({
@@ -319,10 +324,12 @@ export interface SessionCreateInput {
   projectDir: string | null
   modelId: string
   reasoningEffort?: ReasoningEffortSelection
+  customSystemPrompt?: CustomSystemPromptSnapshot
 }
 
 export interface LoadedSession {
   metadata: SessionMetadata
+  customSystemPrompt: CustomSystemPromptSnapshot | undefined
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
   /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
@@ -349,6 +356,7 @@ export interface LoadedSession {
 
 export interface SessionRecorder {
   readonly sessionId: string
+  readonly customSystemPrompt: CustomSystemPromptSnapshot | undefined
   readonly checkpointDirectory: string
   readonly attachmentDirectory: string
   readonly initialMessages: readonly ModelMessage[]

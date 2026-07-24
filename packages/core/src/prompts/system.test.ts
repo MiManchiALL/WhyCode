@@ -37,6 +37,23 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(buildSystemPrompt(context), /\d{4}-\d{2}-\d{2}/u)
   })
 
+  it('自定义 System 可以稳定追加或完整替换内置提示词', () => {
+    const context = {
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32' as const,
+    }
+    const builtIn = buildSystemPrompt(context)
+
+    assert.equal(
+      buildSystemPrompt(context, { mode: 'append', content: '用户追加规则' }),
+      `${builtIn}\n\n用户追加规则`,
+    )
+    assert.equal(
+      buildSystemPrompt(context, { mode: 'replace', content: '完全自定义 System' }),
+      '完全自定义 System',
+    )
+  })
+
   it('协商讨论阶段不向模型宣传已物理移除的后台命令工具', () => {
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',

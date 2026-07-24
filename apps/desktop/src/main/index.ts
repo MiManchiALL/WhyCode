@@ -51,6 +51,11 @@ import { deleteSessionArtifacts } from './session-deletion.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionResumeLock } from './session-resume-lock.ts'
+import {
+  ensureCustomSystemPromptTemplate,
+  getCustomSystemPromptConfigPath,
+  loadCustomSystemPromptSnapshot,
+} from './custom-system-prompt.ts'
 import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
@@ -102,6 +107,8 @@ const configSecretCodec: ConfigSecretCodec = {
   encrypt: (secret) => safeStorage.encryptString(secret).toString('base64'),
   decrypt: (payload) => safeStorage.decryptString(Buffer.from(payload, 'base64')),
 }
+
+const customSystemPromptConfigPath = getCustomSystemPromptConfigPath(getConfigPath())
 
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
@@ -287,7 +294,15 @@ async function ensureSession(): Promise<string | null> {
     if (!sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const recorder = await sessions.ensure(projectDir, modelId, currentReasoningEffort)
+        const customSystemPrompt = sessions.journal
+          ? undefined
+          : await loadCustomSystemPromptSnapshot(customSystemPromptConfigPath)
+        const recorder = await sessions.ensure(
+          projectDir,
+          modelId,
+          currentReasoningEffort,
+          customSystemPrompt,
+        )
         if (!session) {
           conversationId = recorder.sessionId
           session = createMainAgentSession(
@@ -331,6 +346,7 @@ function createMainAgentSession(
       osPlatform: process.platform,
       homeDir: app.getPath('home'),
     },
+    customSystemPrompt: recorder.customSystemPrompt,
     sessionRecorder: recorder,
     mainTools: [
       ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
@@ -1202,6 +1218,8 @@ if (!primaryInstance) {
 if (primaryInstance) void app.whenReady().then(async () => {
   await migrateLegacyConfig(configSecretCodec, getConfigPath())
     .catch((error) => console.error('配置安全迁移失败：', error))
+  await ensureCustomSystemPromptTemplate(customSystemPromptConfigPath)
+    .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
   await synchronizeConfiguredCliProxyRoutes()
     .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。

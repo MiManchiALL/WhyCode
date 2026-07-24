@@ -34,6 +34,41 @@ afterEach(async () => {
 })
 
 describe('SessionStore', () => {
+  it('自定义 System 只在会话起点固化，并跨压缩恢复同一快照', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      projectDir: 'C:\\work\\demo',
+      modelId: 'test:model',
+      customSystemPrompt: {
+        mode: 'append',
+        content: '始终先验证再回答。\r\n',
+      },
+    })
+    await journal.recordSnapshot('compact', [])
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.customSystemPrompt, {
+      mode: 'append',
+      content: '始终先验证再回答。\r\n',
+    })
+
+    const transcript = join(
+      storeRoots.get(store)!,
+      journal.sessionId,
+      'transcript.jsonl',
+    )
+    const entries = parseTranscript(await readFile(transcript, 'utf8'))
+    assert.deepEqual(
+      entries.find((entry) => entry.type === 'session-start')?.customSystemPrompt,
+      reopened.customSystemPrompt,
+    )
+    assert.equal(
+      entries.some((entry) =>
+        entry.type === 'snapshot' && Object.hasOwn(entry, 'customSystemPrompt')),
+      false,
+    )
+  })
+
   it('项目指令版本以审计事件追加，活动消息和 turn 锚点只保留最新版本', async () => {
     const store = await createStore()
     const project = join(storeRoots.get(store)!, 'project')

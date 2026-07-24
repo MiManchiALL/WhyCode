@@ -13,6 +13,7 @@ import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effor
 import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
+import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
 import {
   createCurrentTimeReminder,
   shouldRefreshCurrentTimeReminder,
@@ -115,6 +116,8 @@ export interface AgentSessionOptions {
   providerConfig: ProviderConfig
   reasoningEffort?: ReasoningEffortSelection
   promptContext: PromptContext
+  /** Main 会话创建时固化的用户 System；B/C 不传入，避免越过独立 Agent 边界。 */
+  customSystemPrompt?: CustomSystemPromptSnapshot
   /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
   extraTools?: ToolDefinition[]
   /** 宿主为普通 Main 注入的会话工具；讨论/协议回合物理移除（如后台命令）。 */
@@ -1319,7 +1322,10 @@ export class AgentSession {
       const modelInputMessageCount = modelInputMessages.length
       const result = streamText({
         model: this.createLanguageModel(),
-        system: buildSystemPrompt(this.options.promptContext),
+        system: buildSystemPrompt(
+          this.options.promptContext,
+          this.options.customSystemPrompt,
+        ),
         messages: await this.messagesForCurrentModel(modelInputMessages, stepAbort.signal),
         tools: this.buildToolSet(
           stepAbort.signal,

@@ -37,6 +37,7 @@ import {
   validateProjectInstructionsUpdate,
   type ProjectInstructionsUpdate,
 } from '../instructions/project.ts'
+import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
 import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
@@ -87,6 +88,7 @@ export class SessionStore {
       projectDir: input.projectDir,
       modelId: input.modelId,
       reasoningEffort: input.reasoningEffort ?? 'default',
+      ...(input.customSystemPrompt ? { customSystemPrompt: input.customSystemPrompt } : {}),
     })
     if (parsedStart.type !== 'session-start') throw new Error('无法创建会话起始记录')
     const start = parsedStart
@@ -101,6 +103,7 @@ export class SessionStore {
     return new SessionJournal(
       paths,
       metadata,
+      start.customSystemPrompt,
       start.uuid,
       [],
       [],
@@ -174,6 +177,7 @@ export class SessionStore {
     return new SessionJournal(
       paths,
       metadata,
+      loaded.customSystemPrompt,
       loaded.leafUuid,
       loaded.messages,
       loaded.viewEvents,
@@ -306,6 +310,7 @@ export class SessionStore {
 export class SessionJournal implements SessionRecorder {
   readonly sessionId: string
   private readonly paths: SessionPaths
+  private readonly customSystemPromptSnapshot: CustomSystemPromptSnapshot | undefined
   private metadata: SessionMetadata
   private leafUuid: string
   private messages: ModelMessage[]
@@ -329,6 +334,7 @@ export class SessionJournal implements SessionRecorder {
   constructor(
     paths: SessionPaths,
     metadata: SessionMetadata,
+    customSystemPrompt: CustomSystemPromptSnapshot | undefined,
     leafUuid: string,
     messages: ModelMessage[],
     viewEvents: ViewEvent[],
@@ -350,6 +356,9 @@ export class SessionJournal implements SessionRecorder {
     this.paths = paths
     this.metadata = metadata
     this.sessionId = metadata.sessionId
+    this.customSystemPromptSnapshot = customSystemPrompt
+      ? structuredClone(customSystemPrompt)
+      : undefined
     this.leafUuid = leafUuid
     const projectInstructions = findProjectInstructionsMessage(messages)
     this.messages = applyProjectInstructions(messages, projectInstructions)
@@ -385,6 +394,12 @@ export class SessionJournal implements SessionRecorder {
 
   get initialMessages(): readonly ModelMessage[] {
     return this.messages
+  }
+
+  get customSystemPrompt(): CustomSystemPromptSnapshot | undefined {
+    return this.customSystemPromptSnapshot
+      ? structuredClone(this.customSystemPromptSnapshot)
+      : undefined
   }
 
   get checkpointDirectory(): string {

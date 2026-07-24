@@ -116,6 +116,9 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
 
   return {
     entries,
+    customSystemPrompt: start.customSystemPrompt
+      ? structuredClone(start.customSystemPrompt)
+      : undefined,
     messages,
     viewEvents,
     imageAttachments,

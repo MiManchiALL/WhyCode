@@ -24,6 +24,26 @@ describe('DesktopSessionRepository 生命周期', () => {
     assert.equal((await repository.list()).length, 1)
   })
 
+  it('每个新会话分别固化创建时传入的自定义 System', async () => {
+    const repository = await createRepository()
+    const first = await repository.ensure(
+      'C:\\work\\demo',
+      'test:model',
+      'default',
+      { mode: 'append', content: '第一版' },
+    )
+    repository.reset()
+    const second = await repository.ensure(
+      'C:\\work\\demo',
+      'test:model',
+      'default',
+      { mode: 'replace', content: '第二版' },
+    )
+
+    assert.deepEqual(first.customSystemPrompt, { mode: 'append', content: '第一版' })
+    assert.deepEqual(second.customSystemPrompt, { mode: 'replace', content: '第二版' })
+  })
+
   it('删除当前会话后解除当前 journal', async () => {
     const repository = await createRepository()
     const journal = await repository.ensure('C:\\work\\demo', 'test:model')
