@@ -17,6 +17,7 @@ import {
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from '../tools/background-command/constants.ts'
 import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
+import type { CustomSystemPromptSnapshot } from './custom-system.ts'
 
 export interface PromptContext {
   /** 项目根目录；null = 纯聊天模式（无文件与命令工具） */
@@ -120,7 +121,10 @@ function discussionSection(
   ].join('\n')
 }
 
-export function buildSystemPrompt(ctx: PromptContext): string {
+export function buildSystemPrompt(
+  ctx: PromptContext,
+  customSystemPrompt?: CustomSystemPromptSnapshot,
+): string {
   const sections = [identitySection()]
   if (ctx.projectDir) {
     sections.push(
@@ -133,5 +137,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion, Boolean(ctx.projectDir)))
   if (!ctx.discussion) sections.push(taskPlanningSection())
   sections.push(safetySection())
-  return sections.join('\n\n')
+  const builtInPrompt = sections.join('\n\n')
+  if (!customSystemPrompt) return builtInPrompt
+  return customSystemPrompt.mode === 'replace'
+    ? customSystemPrompt.content
+    : `${builtInPrompt}\n\n${customSystemPrompt.content}`
 }

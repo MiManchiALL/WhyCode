@@ -26,6 +26,11 @@ import {
   REASONING_EFFORT_LEVELS,
   type ReasoningEffortSelection,
 } from '../providers/catalog.ts'
+import type { ProjectInstructionsUpdate } from '../instructions/project.ts'
+import {
+  customSystemPromptSnapshotSchema,
+  type CustomSystemPromptSnapshot,
+} from '../prompts/custom-system.ts'
 
 export const SESSION_SCHEMA_VERSION = 4
 
@@ -59,6 +64,7 @@ const sessionStartSchema = chainedEntrySchema.extend({
   projectDir: z.string().nullable(),
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
+  customSystemPrompt: customSystemPromptSnapshotSchema.optional(),
 })
 
 const turnStartSchema = chainedEntrySchema.extend({
@@ -108,6 +114,12 @@ const modelChangeSchema = chainedEntrySchema.extend({
   type: z.literal('model-change'),
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
+})
+
+const projectInstructionsSchema = chainedEntrySchema.extend({
+  type: z.literal('project-instructions'),
+  version: z.string().regex(/^sha256:[a-f0-9]{64}$/).nullable(),
+  message: modelMessageSchema.nullable(),
 })
 
 const viewEventsEntrySchema = chainedEntrySchema.extend({
@@ -242,6 +254,7 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   userInputSchema,
   userInputRestoredSchema,
   modelChangeSchema,
+  projectInstructionsSchema,
   viewEventsEntrySchema,
   turnStartSchema,
   messagesEntrySchema,
@@ -311,10 +324,12 @@ export interface SessionCreateInput {
   projectDir: string | null
   modelId: string
   reasoningEffort?: ReasoningEffortSelection
+  customSystemPrompt?: CustomSystemPromptSnapshot
 }
 
 export interface LoadedSession {
   metadata: SessionMetadata
+  customSystemPrompt: CustomSystemPromptSnapshot | undefined
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
   /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
@@ -341,6 +356,7 @@ export interface LoadedSession {
 
 export interface SessionRecorder {
   readonly sessionId: string
+  readonly customSystemPrompt: CustomSystemPromptSnapshot | undefined
   readonly checkpointDirectory: string
   readonly attachmentDirectory: string
   readonly initialMessages: readonly ModelMessage[]
@@ -378,7 +394,9 @@ export interface SessionRecorder {
     messages: ModelMessage[],
     engagedPlanId?: string,
     deliveredInputIds?: readonly string[],
+    projectInstructions?: ProjectInstructionsUpdate,
   ): Promise<void>
+  recordProjectInstructions(update: ProjectInstructionsUpdate): Promise<void>
   recordStep(
     turnId: string,
     messages: ModelMessage[],

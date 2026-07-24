@@ -13,6 +13,10 @@ import {
 } from '../prompts/compact.ts'
 import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
 import { findPendingUserQuestionIndex } from '../tasks/answer-resume.ts'
+import {
+  applyProjectInstructions,
+  findProjectInstructionsMessage,
+} from '../instructions/project.ts'
 
 /**
  * 全量摘要压缩（M2-d 第二级）。重建顺序：摘要 → 保留尾部 → 重注入最近读过的文件。
@@ -119,14 +123,24 @@ export async function compactMessages(
   ) => ModelMessage[] | Promise<ModelMessage[]>,
   providerOptions?: ProviderMetadata,
 ): Promise<CompactResult> {
+  const projectInstructions = findProjectInstructionsMessage(messages)
+  const conversationMessages = applyProjectInstructions(messages, null)
   // 尾部起点为 0 = 全部历史都在尾部预算内，此时「摘要+全量尾部」只会更大——退化为纯摘要替换
-  const effectiveTailStart = pickSummaryEnd(messages)
-  if (effectiveTailStart === 0) return { messages: [...messages], summaryText: '' }
-  const toSummarize = messages.slice(0, effectiveTailStart)
-  const tail = messages.slice(effectiveTailStart)
-  const preparedMessages = prepareMessagesForModel
-    ? await prepareMessagesForModel(toSummarize)
+  const effectiveTailStart = pickSummaryEnd(conversationMessages)
+  if (effectiveTailStart === 0) {
+    return {
+      messages: applyProjectInstructions(conversationMessages, projectInstructions),
+      summaryText: '',
+    }
+  }
+  const toSummarize = conversationMessages.slice(0, effectiveTailStart)
+  const tail = conversationMessages.slice(effectiveTailStart)
+  const summaryInput = projectInstructions
+    ? [projectInstructions, ...toSummarize]
     : toSummarize
+  const preparedMessages = prepareMessagesForModel
+    ? await prepareMessagesForModel(summaryInput)
+    : summaryInput
   const summaryText = await summarize(model, preparedMessages, abortSignal, providerOptions)
 
   const rebuilt: ModelMessage[] = [
@@ -149,7 +163,10 @@ export async function compactMessages(
     while (insertAt > 0 && isRealUserMessage(rebuilt[insertAt - 1]!)) insertAt--
     rebuilt.splice(insertAt, 0, internalMessage)
   }
-  return { messages: rebuilt, summaryText }
+  return {
+    messages: applyProjectInstructions(rebuilt, projectInstructions),
+    summaryText,
+  }
 }
 
 function isConversationTextMessage(message: ModelMessage): boolean {

@@ -12,6 +12,7 @@ export interface PeerAgentOptions {
   projectDir: string | null
   scratchDir: string
   osPlatform: NodeJS.Platform
+  homeDir?: string
   /** 事件出口；Orchestrator 负责按 agentId 包装区分 */
   emit: (event: CoreEvent) => void
   requestApproval: ApprovalHandler
@@ -33,6 +34,7 @@ export class PeerAgent {
       promptContext: {
         projectDir: options.projectDir,
         osPlatform: options.osPlatform,
+        homeDir: options.homeDir,
         discussion: { agentId: options.agentId, scratchDir: options.scratchDir },
       },
       emit: options.emit,

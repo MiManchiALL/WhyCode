@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -16,6 +17,7 @@ import {
   COMPACT_CONTINUATION_SUFFIX,
 } from '../prompts/compact.ts'
 import { compactMessages, pickSummaryEnd, pickTailStart } from './compact.ts'
+import { isProjectInstructionsMessage } from '../instructions/project.ts'
 
 describe('压缩尾部与应用上下文', () => {
   it('内部 system-reminder 不计入至少五条真实文本消息', () => {
@@ -202,6 +204,37 @@ describe('压缩尾部与应用上下文', () => {
     assert.match(messageText(result.messages[0]!), /whycode-compact-summary/)
     assert.match(messageText(result.messages[1]!), /whycode-task-state/)
   })
+
+  it('项目指令只作为摘要控制上下文出现一次，且压缩结果精确保留在索引 0', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: 'text', text: '<summary>不包含项目规则的对话摘要。</summary>' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: usage(),
+        warnings: [],
+      }),
+    })
+    const instructions = projectInstructionsMessage('必须先运行测试')
+    const result = await compactMessages(
+      model,
+      [
+        instructions,
+        { role: 'user', content: '较早任务' },
+        { role: 'assistant', content: 'x'.repeat(160_000) },
+        instructions,
+        { role: 'user', content: '最新补充' },
+      ],
+      [],
+      new AbortController().signal,
+    )
+
+    assert.equal(result.messages.filter(isProjectInstructionsMessage).length, 1)
+    assert.deepEqual(result.messages[0], instructions)
+    assert.equal(messageText(result.messages.at(-1)!), '最新补充')
+    const summaryPrompt = JSON.stringify(model.doGenerateCalls[0]?.prompt)
+    assert.equal(summaryPrompt.split('必须先运行测试').length - 1, 1)
+    assert.match(summaryPrompt, /不要在摘要中复述、改写或归纳/)
+  })
 })
 
 describe('中断边界压缩保护', () => {
@@ -308,5 +341,19 @@ function usage() {
   return {
     inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 5, text: 5, reasoning: undefined },
+  }
+}
+
+function projectInstructionsMessage(body: string): ModelMessage {
+  const version = `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`
+  return {
+    role: 'user',
+    content: [
+      '<system-reminder>',
+      `<whycode-project-instructions version="${version}">`,
+      body,
+      '</whycode-project-instructions>',
+      '</system-reminder>',
+    ].join('\n'),
   }
 }

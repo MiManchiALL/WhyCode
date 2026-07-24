@@ -32,6 +32,13 @@ import type { PdfAttachment } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
 import { validateStoredPdfAttachments } from '../pdf/storage.ts'
 import {
+  applyProjectInstructions,
+  findProjectInstructionsMessage,
+  validateProjectInstructionsUpdate,
+  type ProjectInstructionsUpdate,
+} from '../instructions/project.ts'
+import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
+import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
   hasSessionDeletionMarker,
@@ -81,6 +88,7 @@ export class SessionStore {
       projectDir: input.projectDir,
       modelId: input.modelId,
       reasoningEffort: input.reasoningEffort ?? 'default',
+      ...(input.customSystemPrompt ? { customSystemPrompt: input.customSystemPrompt } : {}),
     })
     if (parsedStart.type !== 'session-start') throw new Error('无法创建会话起始记录')
     const start = parsedStart
@@ -95,6 +103,7 @@ export class SessionStore {
     return new SessionJournal(
       paths,
       metadata,
+      start.customSystemPrompt,
       start.uuid,
       [],
       [],
@@ -168,6 +177,7 @@ export class SessionStore {
     return new SessionJournal(
       paths,
       metadata,
+      loaded.customSystemPrompt,
       loaded.leafUuid,
       loaded.messages,
       loaded.viewEvents,
@@ -300,6 +310,7 @@ export class SessionStore {
 export class SessionJournal implements SessionRecorder {
   readonly sessionId: string
   private readonly paths: SessionPaths
+  private readonly customSystemPromptSnapshot: CustomSystemPromptSnapshot | undefined
   private metadata: SessionMetadata
   private leafUuid: string
   private messages: ModelMessage[]
@@ -323,6 +334,7 @@ export class SessionJournal implements SessionRecorder {
   constructor(
     paths: SessionPaths,
     metadata: SessionMetadata,
+    customSystemPrompt: CustomSystemPromptSnapshot | undefined,
     leafUuid: string,
     messages: ModelMessage[],
     viewEvents: ViewEvent[],
@@ -344,13 +356,20 @@ export class SessionJournal implements SessionRecorder {
     this.paths = paths
     this.metadata = metadata
     this.sessionId = metadata.sessionId
+    this.customSystemPromptSnapshot = customSystemPrompt
+      ? structuredClone(customSystemPrompt)
+      : undefined
     this.leafUuid = leafUuid
-    this.messages = [...messages]
+    const projectInstructions = findProjectInstructionsMessage(messages)
+    this.messages = applyProjectInstructions(messages, projectInstructions)
     this.viewEvents = [...viewEvents]
     this.imageAttachments = [...imageAttachments]
     this.pdfAttachments = [...pdfAttachments]
     this.turnStartMessages = new Map(
-      [...turnStartMessages].map(([turnId, messages]) => [turnId, structuredClone(messages)]),
+      [...turnStartMessages].map(([turnId, messages]) => [
+        turnId,
+        applyProjectInstructions(messages, projectInstructions),
+      ]),
     )
     this.turnStartTaskStates = new Map(
       [...turnStartTaskStates].map(([turnId, state]) => [turnId, cloneTaskPlanState(state)]),
@@ -363,6 +382,8 @@ export class SessionJournal implements SessionRecorder {
     )
     this.activeConsensusTaskId = interruptedConsensusTaskId
     this.activeConsensusBaseMessages = interruptedConsensusBaseMessages
+      ? applyProjectInstructions(interruptedConsensusBaseMessages, projectInstructions)
+      : null
     this.activeConsensusBaseTaskState = interruptedConsensusBaseTaskState
     this.activeConsensusBaseTurnIds = interruptedConsensusBaseTurnIds
       ? new Set(interruptedConsensusBaseTurnIds)
@@ -373,6 +394,12 @@ export class SessionJournal implements SessionRecorder {
 
   get initialMessages(): readonly ModelMessage[] {
     return this.messages
+  }
+
+  get customSystemPrompt(): CustomSystemPromptSnapshot | undefined {
+    return this.customSystemPromptSnapshot
+      ? structuredClone(this.customSystemPromptSnapshot)
+      : undefined
   }
 
   get checkpointDirectory(): string {
@@ -527,9 +554,13 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     engagedPlanId?: string,
     deliveredInputIds: readonly string[] = [],
+    projectInstructions?: ProjectInstructionsUpdate,
   ): Promise<void> {
     return this.enqueue(async () => {
       this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
+      if (projectInstructions && !validateProjectInstructionsUpdate(projectInstructions)) {
+        throw new Error('项目指令更新无效')
+      }
       const parentUuid = this.leafUuid
       this.turnStartMessages.set(turnId, structuredClone(this.messages))
       this.turnStartTaskStates.set(turnId, cloneTaskPlanState(this.taskState))
@@ -548,14 +579,42 @@ export class SessionJournal implements SessionRecorder {
         },
         started.uuid,
       )
-      await this.appendEntries([started, batch])
+      const instructionEntry = projectInstructions
+        ? this.entry(
+            {
+              type: 'project-instructions',
+              version: projectInstructions.version,
+              message: projectInstructions.message,
+            },
+            batch.uuid,
+          )
+        : null
+      await this.appendEntries(instructionEntry ? [started, batch, instructionEntry] : [started, batch])
       this.undeliveredUserInputIdSet.delete(parentUuid)
       this.deletePendingInputs(deliveredInputIds)
       this.messages.push(...messages)
+      if (projectInstructions) this.applyProjectInstructionsUpdate(projectInstructions)
       this.activeTurnId = turnId
       this.activeTurnEngagedPlanId = engagedPlanId ?? null
-      this.metadata.updatedAt = started.timestamp
+      this.metadata.updatedAt = instructionEntry?.timestamp ?? started.timestamp
       this.metadata.status = 'running'
+      await this.refreshMetadataCache()
+    })
+  }
+
+  recordProjectInstructions(update: ProjectInstructionsUpdate): Promise<void> {
+    if (!validateProjectInstructionsUpdate(update)) {
+      return Promise.reject(new Error('项目指令更新无效'))
+    }
+    return this.enqueue(async () => {
+      const entry = this.entry({
+        type: 'project-instructions',
+        version: update.version,
+        message: update.message,
+      })
+      await this.appendEntries([entry])
+      this.applyProjectInstructionsUpdate(update)
+      this.metadata.updatedAt = entry.timestamp
       await this.refreshMetadataCache()
     })
   }
@@ -637,7 +696,13 @@ export class SessionJournal implements SessionRecorder {
       if (this.undeliveredUserInputIdSet.size > 0) {
         throw new Error('存在尚未交付给模型的用户输入，不能建立会话快照')
       }
-      const runtimeTurnStarts = reason === 'rollback' ? this.turnStartsWithin(messages) : []
+      const normalizedMessages = applyProjectInstructions(
+        messages,
+        findProjectInstructionsMessage(this.messages),
+      )
+      const runtimeTurnStarts = reason === 'rollback'
+        ? this.turnStartsWithin(normalizedMessages)
+        : []
       const snapshot = this.entry(
         {
           type: 'snapshot',
@@ -656,7 +721,7 @@ export class SessionJournal implements SessionRecorder {
           taskState: taskState === undefined ? this.taskState : taskState,
           modelId: this.metadata.modelId,
           reasoningEffort: this.metadata.reasoningEffort,
-          messages: dehydrateImageMessages(messages),
+          messages: dehydrateImageMessages(normalizedMessages),
           pendingUserInputs: this.pendingUserInputs,
           turnStartMessages: runtimeTurnStarts.map((start) => ({
             ...start,
@@ -666,7 +731,7 @@ export class SessionJournal implements SessionRecorder {
         null,
       )
       await this.appendEntries([snapshot])
-      this.messages = [...messages]
+      this.messages = normalizedMessages
       if (snapshot.type === 'snapshot') this.taskState = cloneTaskPlanState(snapshot.taskState)
       this.activeConsensusBaseTurnIds = snapshot.type === 'snapshot'
         && snapshot.activeConsensusBaseTurnIds
@@ -1042,6 +1107,22 @@ export class SessionJournal implements SessionRecorder {
     this.turnStartTaskStates = new Map(
       [...this.turnStartTaskStates].filter(([turnId]) => turnIds.has(turnId)),
     )
+  }
+
+  private applyProjectInstructionsUpdate(update: ProjectInstructionsUpdate): void {
+    this.messages = applyProjectInstructions(this.messages, update.message)
+    this.turnStartMessages = new Map(
+      [...this.turnStartMessages].map(([turnId, messages]) => [
+        turnId,
+        applyProjectInstructions(messages, update.message),
+      ]),
+    )
+    if (this.activeConsensusBaseMessages) {
+      this.activeConsensusBaseMessages = applyProjectInstructions(
+        this.activeConsensusBaseMessages,
+        update.message,
+      )
+    }
   }
 
   private async appendEntries(entries: SessionEntry[]): Promise<void> {

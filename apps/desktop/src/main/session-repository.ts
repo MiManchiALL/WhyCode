@@ -1,6 +1,7 @@
 import {
   SessionStore,
   type PdfProcessor,
+  type CustomSystemPromptSnapshot,
   type ReasoningEffortSelection,
   type SessionJournal,
   type SessionSummary,
@@ -29,11 +30,17 @@ export class DesktopSessionRepository {
     projectDir: string | null,
     modelId: string,
     reasoningEffort: ReasoningEffortSelection = 'default',
+    customSystemPrompt?: CustomSystemPromptSnapshot,
   ): Promise<SessionJournal> {
     if (this.current) return this.current
     if (!this.pendingCreate) {
       const generation = this.generation
-      const create = this.store.create({ projectDir, modelId, reasoningEffort }).then(async (journal) => {
+      const create = this.store.create({
+        projectDir,
+        modelId,
+        reasoningEffort,
+        customSystemPrompt,
+      }).then(async (journal) => {
         if (generation !== this.generation) {
           await this.store.delete(journal.sessionId).catch(() => false)
           throw new Error('会话初始化已失效')

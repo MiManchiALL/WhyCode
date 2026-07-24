@@ -48,6 +48,11 @@ export {
   type ApprovalResponse,
 } from './agent/session.ts'
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
+export {
+  CUSTOM_SYSTEM_PROMPT_MAX_BYTES,
+  customSystemPromptSnapshotSchema,
+  type CustomSystemPromptSnapshot,
+} from './prompts/custom-system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
 export {
   createReadPdfTool,
