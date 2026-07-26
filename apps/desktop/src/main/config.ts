@@ -2,6 +2,7 @@ import {
   getModelEntry,
   MODEL_REGISTRY,
   type BuiltInProviderId,
+  type McpSecretHeader,
 } from '@whycode/core'
 import type {
   TavilySearchDepth,
@@ -53,6 +54,8 @@ export interface WhycodeConfig {
   cliProxyApi?: CliProxyApiConfig
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
   webSearch?: WebSearchConfig
+  /** MCP 结构仍在 mcp.json；这里只保存经 safeStorage 加密的全局 HTTP header 密钥。 */
+  mcpSecretHeaders?: McpSecretHeader[]
 }
 
 export {

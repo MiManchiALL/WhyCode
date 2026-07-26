@@ -3,7 +3,11 @@ import { readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { BUILTIN_PROVIDERS } from '@whycode/core'
+import {
+  BUILTIN_PROVIDERS,
+  parseMcpSecretHeader,
+  type McpSecretHeader,
+} from '@whycode/core'
 import {
   getCliProxyModelCompatibility,
   isCliProxyRoute,
@@ -46,11 +50,18 @@ interface StoredConfig {
     perplexity?: StoredCredential
     tavily?: StoredCredential & { searchDepth?: string }
   }
+  mcpSecretHeaders?: Array<{
+    serverName?: unknown
+    connectionFingerprint?: unknown
+    headerName?: unknown
+    encryptedValue?: unknown
+  }>
   /** v3 兼容输入；只在启动迁移读取，永不进入运行时或再次保存。 */
   customConnections?: unknown
 }
 
-const CONFIG_VERSION = 5
+const CONFIG_VERSION = 6
+const RETIRED_MODEL_MIGRATION_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 export function getConfigPath(): string {
@@ -74,6 +85,7 @@ export function loadConfig(
     const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
     const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
     const webSearch = parseWebSearch(stored.webSearch, codec)
+    const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
     return {
       providers,
       ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
@@ -81,6 +93,7 @@ export function loadConfig(
       ...(cliProxyApi ? { cliProxyApi } : {}),
       ...(consensusAgents ? { consensusAgents } : {}),
       ...(webSearch ? { webSearch } : {}),
+      ...(mcpSecretHeaders ? { mcpSecretHeaders } : {}),
     }
   } catch {
     return null
@@ -137,6 +150,9 @@ export async function saveConfig(
           : {}),
       },
     } : {}),
+    ...(config.mcpSecretHeaders?.length ? {
+      mcpSecretHeaders: storeMcpSecretHeaders(config.mcpSecretHeaders, codec),
+    } : {}),
   }
   await writeStoredConfig(stored, path)
 }
@@ -169,7 +185,9 @@ export async function migrateLegacyConfig(
   if (!config) return false
   const migratedLabels = mergeLabels(
     legacyCustomModelLabels(stored.customConnections),
-    stored.version === CONFIG_VERSION ? undefined : { 'openai:gpt-5.2': 'GPT-5.2' },
+    stored.version === undefined || stored.version < RETIRED_MODEL_MIGRATION_VERSION
+      ? { 'openai:gpt-5.2': 'GPT-5.2' }
+      : undefined,
   )
   const retiredModelLabels = mergeLabels(migratedLabels, config.retiredModelLabels)
   if (retiredModelLabels) config.retiredModelLabels = retiredModelLabels
@@ -230,6 +248,65 @@ function parseWebSearch(
       },
     } : {}),
   }
+}
+
+function parseStoredMcpSecretHeaders(
+  value: unknown,
+  codec?: ConfigSecretCodec,
+): McpSecretHeader[] | undefined {
+  if (!Array.isArray(value) || !codec) return undefined
+  const parsed = new Map<string, McpSecretHeader>()
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate)
+      || typeof candidate.serverName !== 'string'
+      || typeof candidate.connectionFingerprint !== 'string'
+      || typeof candidate.headerName !== 'string'
+      || typeof candidate.encryptedValue !== 'string'
+    ) continue
+    try {
+      const entry = parseMcpSecretHeader({
+        serverName: candidate.serverName,
+        connectionFingerprint: candidate.connectionFingerprint,
+        headerName: candidate.headerName,
+        value: codec.decrypt(candidate.encryptedValue),
+      })
+      parsed.set(mcpSecretHeaderKey(entry), entry)
+    } catch {
+      // 单个损坏密钥 fail-closed；不能拖垮其它模型和连接配置。
+    }
+  }
+  return parsed.size > 0 ? [...parsed.values()] : undefined
+}
+
+function storeMcpSecretHeaders(
+  values: readonly McpSecretHeader[],
+  codec: ConfigSecretCodec,
+): NonNullable<StoredConfig['mcpSecretHeaders']> {
+  const parsed = new Map<string, McpSecretHeader>()
+  for (const value of values) {
+    const entry = parseMcpSecretHeader(value)
+    parsed.set(mcpSecretHeaderKey(entry), entry)
+  }
+  return [...parsed.values()]
+    .sort((left, right) =>
+      left.serverName.localeCompare(right.serverName)
+      || left.connectionFingerprint.localeCompare(right.connectionFingerprint)
+      || left.headerName.localeCompare(right.headerName))
+    .map((entry) => ({
+      serverName: entry.serverName,
+      connectionFingerprint: entry.connectionFingerprint,
+      headerName: entry.headerName,
+      encryptedValue: codec.encrypt(entry.value),
+    }))
+}
+
+function mcpSecretHeaderKey(entry: McpSecretHeader): string {
+  return [
+    entry.serverName,
+    entry.connectionFingerprint,
+    entry.headerName.toLowerCase(),
+  ].join('\u0000')
 }
 
 function parseTavilySearchDepth(value: unknown): TavilySearchDepth {

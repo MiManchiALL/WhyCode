@@ -56,9 +56,11 @@ export {
   type McpConfigScope,
   type McpConfiguredServer,
   type McpHttpServerConfig,
+  type McpSecretHeader,
   type McpServerConfig,
   type McpStdioServerConfig,
 } from './mcp/config.ts'
+export { parseMcpSecretHeader } from './mcp/config-schema.ts'
 export {
   MCP_TOOL_SEARCH_NAME,
   McpSessionRuntime,

@@ -10,12 +10,14 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
+  AddMcpServerRequest,
   ConnectionSettingsSnapshot,
   EnableMcpPresetRequest,
   ModelListItem,
   OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
+  SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
@@ -43,6 +45,12 @@ const api = {
   enableMcpPreset: (
     request: EnableMcpPresetRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.enableMcpPreset, request),
+  addMcpServer: (
+    request: AddMcpServerRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.addMcpServer, request),
+  saveMcpSecretHeader: (
+    request: SaveMcpSecretHeaderRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveMcpSecretHeader, request),
   openMcpConfig: (
     request: OpenMcpConfigRequest,
   ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),

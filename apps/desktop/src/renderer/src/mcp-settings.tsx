@@ -1,15 +1,21 @@
 import type {
+  AddMcpServerRequest,
   EnableMcpPresetRequest,
   McpSettingsItem,
   OpenMcpConfigRequest,
+  SaveMcpSecretHeaderRequest,
   SetMcpServerEnabledRequest,
 } from '../../shared/settings.ts'
+import { McpAddServer } from './mcp-add-server.tsx'
+import { McpSecretHeaderEditor } from './mcp-secret-header.tsx'
 
 interface McpSettingsEditorProps {
   settings: McpSettingsItem
   disabled: boolean
   onSetEnabled: (request: SetMcpServerEnabledRequest) => Promise<boolean>
   onEnablePreset: (request: EnableMcpPresetRequest) => Promise<boolean>
+  onAddServer: (request: AddMcpServerRequest) => Promise<boolean>
+  onSaveSecretHeader: (request: SaveMcpSecretHeaderRequest) => Promise<boolean>
   onOpenConfig: (request: OpenMcpConfigRequest) => Promise<void>
   onRefresh: () => Promise<void>
 }
@@ -61,6 +67,9 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
             <div>
               <p className="text-xs font-medium text-emerald-900">推荐预设 · {context7.displayName}</p>
               <p className="mt-1 text-[11px] text-emerald-800">{context7.description}</p>
+              <p className="mt-1 text-[10px] text-emerald-700">
+                无需登录即可使用；可选 API Key 只用于提高官方限额，可在下方 context7 服务中直接填写。
+              </p>
             </div>
             {context7.status === 'available' ? (
               <button
@@ -82,6 +91,12 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
           </div>
         </div>
       )}
+
+      <McpAddServer
+        hasProject={Boolean(props.settings.projectConfigPath)}
+        disabled={props.disabled}
+        onAdd={props.onAddServer}
+      />
 
       {props.settings.diagnostics.length > 0 && (
         <div className="mb-3 space-y-1 rounded-lg border border-red-200 bg-red-50 p-3">
@@ -139,6 +154,11 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
             {server.currentSessionDiagnostics.map((diagnostic, index) => (
               <p key={index} className="mt-1 text-[11px] text-amber-700">目录诊断：{diagnostic}</p>
             ))}
+            <McpSecretHeaderEditor
+              server={server}
+              disabled={props.disabled}
+              onSave={props.onSaveSecretHeader}
+            />
           </div>
         ))}
       </div>

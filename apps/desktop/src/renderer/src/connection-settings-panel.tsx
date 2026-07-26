@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import type {
+  AddMcpServerRequest,
   CliProxyApiSettingsItem,
   ConnectionSettingsSnapshot,
   EnableMcpPresetRequest,
@@ -8,6 +9,7 @@ import type {
   ProviderSettingsItem,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
+  SaveMcpSecretHeaderRequest,
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../../shared/settings.ts'
@@ -112,6 +114,10 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
               mutate(() => window.whycode.setMcpServerEnabled(request))}
             onEnablePreset={(request: EnableMcpPresetRequest) =>
               mutate(() => window.whycode.enableMcpPreset(request))}
+            onAddServer={(request: AddMcpServerRequest) =>
+              mutate(() => window.whycode.addMcpServer(request))}
+            onSaveSecretHeader={(request: SaveMcpSecretHeaderRequest) =>
+              mutate(() => window.whycode.saveMcpSecretHeader(request))}
             onOpenConfig={openMcpConfig}
             onRefresh={refresh}
           />

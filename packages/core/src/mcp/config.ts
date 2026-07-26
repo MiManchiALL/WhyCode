@@ -4,6 +4,8 @@ import {
   MCP_CONFIG_VERSION,
   formatMcpConfigError,
   parseMcpConfig,
+  parseMcpSecretHeader,
+  type McpSecretHeader,
   type ParsedMcpConfig,
   type ParsedMcpServer,
 } from './config-schema.ts'
@@ -14,6 +16,7 @@ import {
 } from './config-storage.ts'
 
 export { MCP_CONFIG_VERSION } from './config-schema.ts'
+export type { McpSecretHeader } from './config-schema.ts'
 export { addMcpServer, setMcpServerEnabled } from './config-mutations.ts'
 export const MCP_CONTEXT7_PRESET = {
   id: 'context7',
@@ -21,8 +24,9 @@ export const MCP_CONTEXT7_PRESET = {
   server: {
     transport: 'http',
     url: 'https://mcp.context7.com/mcp',
-    enabled: false,
+    enabled: true,
   },
+  secretHeaderName: 'CONTEXT7_API_KEY',
 } as const
 export const MCP_GLOBAL_CONFIG_TEMPLATE = `${JSON.stringify({
   version: MCP_CONFIG_VERSION,
@@ -75,6 +79,8 @@ export interface McpConfiguredServer {
   scope: McpConfigScope
   transport: 'stdio' | 'http'
   enabled: boolean
+  /** 只绑定传输目标，不包含密钥；Main 用于防止 URL 改变后向新端点发送旧凭据。 */
+  connectionFingerprint?: string
   /** 项目同名条目会完整覆盖全局条目，包括禁用和无效配置。 */
   effective: boolean
   presetId?: typeof MCP_CONTEXT7_PRESET.id
@@ -104,16 +110,19 @@ export async function loadMcpConfiguration(options: {
   globalConfigPath: string
   projectDir?: string | null
   env?: NodeJS.ProcessEnv
+  /** 由宿主安全存储解密；只叠加到全局 HTTP 服务器，不进入配置摘要。 */
+  globalSecretHeaders?: readonly McpSecretHeader[]
 }): Promise<McpConfiguration> {
   const env = options.env ?? process.env
+  const globalSecretHeaders = groupSecretHeaders(options.globalSecretHeaders ?? [])
   const global = await readConfigFile('global', options.globalConfigPath, dirname(
     options.globalConfigPath,
-  ), env)
+  ), env, globalSecretHeaders)
   const projectPath = options.projectDir
     ? getProjectMcpConfigPath(options.projectDir)
     : null
   const project = projectPath
-    ? await readConfigFile('project', projectPath, options.projectDir!, env)
+    ? await readConfigFile('project', projectPath, options.projectDir!, env, EMPTY_HEADERS)
     : emptyReadResult()
   const effective = new Map<string, McpServerConfig>()
   for (const server of global.servers) effective.set(server.name, server)
@@ -158,6 +167,7 @@ async function readConfigFile(
   path: string,
   baseDir: string,
   env: NodeJS.ProcessEnv,
+  secretHeaders: ReadonlyMap<string, Readonly<Record<string, string>>>,
 ): Promise<ConfigReadResult> {
   let bytes: Buffer
   try {
@@ -203,16 +213,29 @@ async function readConfigFile(
   const configuredServers: Omit<McpConfiguredServer, 'effective'>[] = []
   const diagnostics: McpConfigDiagnostic[] = []
   for (const [name, value] of Object.entries(parsed.servers)) {
+    const fingerprint = value.transport === 'http'
+      ? connectionFingerprint(value)
+      : undefined
     configuredServers.push({
       name,
       scope,
       transport: value.transport,
       enabled: value.enabled,
+      ...(fingerprint ? { connectionFingerprint: fingerprint } : {}),
       ...(isContext7Preset(name, value) ? { presetId: MCP_CONTEXT7_PRESET.id } : {}),
     })
     if (!value.enabled) continue
     try {
-      servers.push(resolveServer(name, scope, baseDir, value, env))
+      servers.push(resolveServer(
+        name,
+        scope,
+        baseDir,
+        value,
+        env,
+        fingerprint
+          ? secretHeaders.get(secretHeaderTargetKey(name, fingerprint))
+          : undefined,
+      ))
     } catch (error) {
       diagnostics.push({ scope, server: name, message: safeError(error) })
     }
@@ -232,6 +255,7 @@ function resolveServer(
   baseDir: string,
   value: ParsedMcpServer,
   env: NodeJS.ProcessEnv,
+  secretHeaders?: Readonly<Record<string, string>>,
 ): McpServerConfig {
   const sourceFingerprint = sha256(JSON.stringify(value))
   if (value.transport === 'stdio') {
@@ -256,7 +280,7 @@ function resolveServer(
     sourceFingerprint,
     transport: 'http',
     url: value.url,
-    headers: resolveRecord(value.headers ?? {}, env),
+    headers: mergeHeaders(resolveRecord(value.headers ?? {}, env), secretHeaders),
     startupTimeoutMs: value.startupTimeoutMs,
     toolTimeoutMs: value.toolTimeoutMs,
   }
@@ -279,6 +303,51 @@ function resolveRecord(
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message.replace(/[\r\n]+/gu, ' ').slice(0, 500)
+}
+
+const EMPTY_HEADERS = new Map<string, Readonly<Record<string, string>>>()
+
+function groupSecretHeaders(
+  values: readonly McpSecretHeader[],
+): Map<string, Readonly<Record<string, string>>> {
+  const grouped = new Map<string, Record<string, string>>()
+  for (const value of values) {
+    const parsed = parseMcpSecretHeader(value)
+    const targetKey = secretHeaderTargetKey(
+      parsed.serverName,
+      parsed.connectionFingerprint,
+    )
+    const headers = grouped.get(targetKey) ?? Object.create(null) as Record<string, string>
+    const duplicate = Object.keys(headers).find((name) =>
+      name.toLowerCase() === parsed.headerName.toLowerCase())
+    if (duplicate) delete headers[duplicate]
+    headers[parsed.headerName] = parsed.value
+    grouped.set(targetKey, headers)
+  }
+  return grouped
+}
+
+function mergeHeaders(
+  configured: Record<string, string>,
+  secrets?: Readonly<Record<string, string>>,
+): Record<string, string> {
+  if (!secrets) return configured
+  const merged = { ...configured }
+  for (const [name, value] of Object.entries(secrets)) {
+    const duplicate = Object.keys(merged).find((existing) =>
+      existing.toLowerCase() === name.toLowerCase())
+    if (duplicate) delete merged[duplicate]
+    merged[name] = value
+  }
+  return merged
+}
+
+function connectionFingerprint(server: Extract<ParsedMcpServer, { transport: 'http' }>): string {
+  return sha256(JSON.stringify({ transport: server.transport, url: server.url }))
+}
+
+function secretHeaderTargetKey(serverName: string, fingerprint: string): string {
+  return `${serverName}\u0000${fingerprint}`
 }
 
 function isContext7Preset(name: string, server: ParsedMcpServer): boolean {

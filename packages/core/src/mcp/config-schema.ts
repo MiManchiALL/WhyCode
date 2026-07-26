@@ -7,6 +7,11 @@ const MCP_DEFAULT_TOOL_TIMEOUT_MS = 60_000
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u
 const HEADER_VALUE_CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f]/u
+const serverNameSchema = boundedText(128)
+  .refine((value) => !CONTROL_CHARACTER.test(value), '名称包含控制字符')
+const headerNameSchema = z.string().min(1).max(256).regex(HEADER_NAME, 'HTTP header 名称无效')
+const headerValueSchema = boundedText(32_768, false)
+  .refine((value) => !HEADER_VALUE_CONTROL.test(value), 'HTTP header 值包含控制字符')
 
 const commonServerSchema = {
   enabled: z.boolean().default(true),
@@ -32,9 +37,8 @@ const httpServerSchema = z.strictObject({
   transport: z.literal('http'),
   url: boundedText(2_048).refine(isHttpUrl, '必须是无账号密码的 HTTP(S) URL'),
   headers: z.record(
-    z.string().min(1).max(256).regex(HEADER_NAME, 'HTTP header 名称无效'),
-    boundedText(32_768, false)
-      .refine((value) => !HEADER_VALUE_CONTROL.test(value), 'HTTP header 值包含控制字符'),
+    headerNameSchema,
+    headerValueSchema,
   ).optional(),
   ...commonServerSchema,
 })
@@ -46,18 +50,27 @@ const serverSchema = z.discriminatedUnion('transport', [
 
 const configSchema = z.strictObject({
   version: z.literal(MCP_CONFIG_VERSION),
-  servers: z.record(
-    boundedText(128).refine((value) => !CONTROL_CHARACTER.test(value), '名称包含控制字符'),
-    serverSchema,
-  ),
+  servers: z.record(serverNameSchema, serverSchema),
+})
+
+const secretHeaderSchema = z.strictObject({
+  serverName: serverNameSchema,
+  connectionFingerprint: z.string().regex(/^[a-f0-9]{64}$/u, 'MCP 连接指纹无效'),
+  headerName: headerNameSchema,
+  value: headerValueSchema,
 })
 
 export type ParsedMcpConfig = z.infer<typeof configSchema>
 export type ParsedMcpServer = ParsedMcpConfig['servers'][string]
 export type McpServerConfigInput = z.input<typeof serverSchema>
+export type McpSecretHeader = z.infer<typeof secretHeaderSchema>
 
 export function parseMcpConfig(value: unknown): ParsedMcpConfig {
   return configSchema.parse(value)
+}
+
+export function parseMcpSecretHeader(value: unknown): McpSecretHeader {
+  return secretHeaderSchema.parse(value)
 }
 
 export function formatMcpConfigError(error: unknown): string {

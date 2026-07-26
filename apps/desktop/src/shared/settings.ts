@@ -97,6 +97,8 @@ export interface McpSettingsItem {
     enabled: boolean
     effective: boolean
     presetId?: 'context7'
+    secretHeaderNames: string[]
+    suggestedSecretHeaderName?: string
     currentSessionState?: McpServerStatus['state']
     currentSessionToolCount?: number
     currentSessionError?: string
@@ -123,6 +125,28 @@ export interface SetMcpServerEnabledRequest {
 
 export interface EnableMcpPresetRequest {
   presetId: 'context7'
+}
+
+export type AddMcpServerRequest = {
+  scope: McpConfigScope
+  name: string
+  server: {
+    transport: 'http'
+    url: string
+  } | {
+    transport: 'stdio'
+    command: string
+    args: string[]
+    cwd?: string
+  }
+}
+
+export interface SaveMcpSecretHeaderRequest {
+  scope: McpConfigScope
+  serverName: string
+  headerName: string
+  secret?: string
+  clearSecret?: boolean
 }
 
 export interface OpenMcpConfigRequest {

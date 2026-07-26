@@ -157,13 +157,19 @@ describe('配置密钥存储', () => {
         perplexity: { apiKey: 'perplexity-secret' },
         tavily: { apiKey: 'tavily-secret', searchDepth: 'advanced' },
       },
+      mcpSecretHeaders: [{
+        serverName: 'context7',
+        connectionFingerprint: 'a'.repeat(64),
+        headerName: 'CONTEXT7_API_KEY',
+        value: 'context7-secret',
+      }],
     }
     try {
       await saveConfig(value, codec, path)
       const raw = await readFile(path, 'utf-8')
       assert.doesNotMatch(
         raw,
-        /official-secret|proxy-secret|peer-secret|perplexity-secret|tavily-secret/,
+        /official-secret|proxy-secret|peer-secret|perplexity-secret|tavily-secret|context7-secret/,
       )
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
@@ -179,6 +185,12 @@ describe('配置密钥存储', () => {
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
       assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
       assert.equal(loaded?.webSearch?.tavily?.searchDepth, 'advanced')
+      assert.deepEqual(loaded?.mcpSecretHeaders, [{
+        serverName: 'context7',
+        connectionFingerprint: 'a'.repeat(64),
+        headerName: 'CONTEXT7_API_KEY',
+        value: 'context7-secret',
+      }])
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -252,6 +264,23 @@ describe('配置密钥存储', () => {
       const loaded = loadConfig(path, codec)
       assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['google:gemini-3.1-pro-preview'])
       assert.deepEqual(loaded?.cliProxyApi?.modelRoutes, {})
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('v5 配置升级安全存储结构时不重复执行旧模型目录迁移', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-config-v5-'))
+    const path = join(root, 'config.json')
+    try {
+      await writeFile(path, JSON.stringify({
+        version: 5,
+        providers: {},
+      }))
+      assert.equal(await migrateLegacyConfig(codec, path), true)
+      const loaded = loadConfig(path, codec)
+      assert.equal(loaded?.retiredModelLabels?.['openai:gpt-5.2'], undefined)
+      assert.equal(await migrateLegacyConfig(codec, path), false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

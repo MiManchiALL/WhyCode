@@ -52,9 +52,11 @@ import {
   updateProviderSettings,
 } from './model-settings.ts'
 import {
+  addMcpConfiguredServer,
   createMcpSettingsSnapshot,
   enableMcpPreset,
   resolveMcpConfigPath,
+  updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
@@ -87,11 +89,13 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
+  AddMcpServerRequest,
   ConnectionSettingsSnapshot,
   EnableMcpPresetRequest,
   OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
+  SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
@@ -365,6 +369,7 @@ async function createMainAgentSession(
     configuration: await loadMcpConfiguration({
       globalConfigPath: mcpGlobalConfigPath,
       projectDir: targetProjectDir,
+      globalSecretHeaders: loadAppConfig()?.mcpSecretHeaders,
     }),
     fetchImpl: (input, init) => net.fetch(
       input instanceof URL ? input.toString() : input,
@@ -930,6 +935,26 @@ async function addMcpRecommendedPreset(
   return mutateConnectionSettings(() => enableMcpPreset(mcpGlobalConfigPath, request))
 }
 
+async function addMcpConnection(
+  request: AddMcpServerRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(() =>
+    addMcpConfiguredServer({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
+}
+
+async function saveMcpSecretHeaderConnection(
+  request: SaveMcpSecretHeaderRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const next = await updateMcpSecretHeader(
+      { globalConfigPath: mcpGlobalConfigPath, projectDir },
+      loadAppConfig(),
+      request,
+    )
+    await persistConnectionConfig(next)
+  })
+}
+
 async function mutateConnectionSettings(
   mutation: () => Promise<void>,
 ): Promise<SettingsMutationResult> {
@@ -949,12 +974,14 @@ async function mutateConnectionSettings(
 }
 
 async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSnapshot> {
+  const config = loadAppConfig()
   const mcp = await createMcpSettingsSnapshot({
     globalConfigPath: mcpGlobalConfigPath,
     projectDir,
     currentSessionSnapshot: session?.mcpSnapshot ?? null,
+    mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
   })
-  return createConnectionSettingsSnapshot(loadAppConfig(), mcp)
+  return createConnectionSettingsSnapshot(config, mcp)
 }
 
 async function openMcpConfigFile(
@@ -1353,6 +1380,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
     setMcpServerConnectionState(request))
   ipcMain.handle(IPC.enableMcpPreset, (_e, request: EnableMcpPresetRequest) =>
     addMcpRecommendedPreset(request))
+  ipcMain.handle(IPC.addMcpServer, (_e, request: AddMcpServerRequest) =>
+    addMcpConnection(request))
+  ipcMain.handle(IPC.saveMcpSecretHeader, (_e, request: SaveMcpSecretHeaderRequest) =>
+    saveMcpSecretHeaderConnection(request))
   ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
     openMcpConfigFile(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)

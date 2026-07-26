@@ -15,7 +15,7 @@ import {
 } from './config.ts'
 
 describe('MCP 配置', () => {
-  it('只在文件缺失时创建关闭状态模板，不覆盖已有内容', async () => {
+  it('只在文件缺失时创建默认启用 Context7 的模板，不覆盖已有内容', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-config-'))
     const path = join(root, '.whycode', 'mcp.json')
     const projectPath = join(root, 'project', '.whycode', 'mcp.json')
@@ -28,7 +28,7 @@ describe('MCP 配置', () => {
           context7: {
             transport: 'http',
             url: MCP_CONTEXT7_PRESET.server.url,
-            enabled: false,
+            enabled: true,
           },
         },
       })
@@ -89,7 +89,11 @@ describe('MCP 配置', () => {
         projectDir,
       })
       assert.deepEqual(disabled.servers, [])
-      assert.deepEqual(disabled.configuredServers, [
+      const configuredWithoutFingerprints = disabled.configuredServers.map((server) => {
+        const { connectionFingerprint: _fingerprint, ...visible } = server
+        return visible
+      })
+      assert.deepEqual(configuredWithoutFingerprints, [
         {
           name: 'shared',
           scope: 'global',
@@ -105,6 +109,10 @@ describe('MCP 配置', () => {
           effective: true,
         },
       ])
+      assert.match(
+        disabled.configuredServers[1]?.connectionFingerprint ?? '',
+        /^[a-f0-9]{64}$/u,
+      )
 
       await writeConfig(projectPath, {
         version: 1,
@@ -171,6 +179,68 @@ describe('MCP 配置', () => {
     }
   })
 
+  it('安全存储中的 HTTP header 只绑定当前全局服务器 URL，并覆盖同名文件值', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-secret-header-'))
+    const globalPath = join(root, 'global.json')
+    try {
+      await writeConfig(globalPath, {
+        version: 1,
+        servers: {
+          context7: {
+            transport: 'http',
+            url: MCP_CONTEXT7_PRESET.server.url,
+            headers: { context7_api_key: 'stale-file-value' },
+          },
+        },
+      })
+      const discovered = await loadMcpConfiguration({ globalConfigPath: globalPath })
+      const fingerprint = discovered.configuredServers[0]?.connectionFingerprint
+      assert.ok(fingerprint)
+
+      const loaded = await loadMcpConfiguration({
+        globalConfigPath: globalPath,
+        globalSecretHeaders: [{
+          serverName: 'context7',
+          connectionFingerprint: fingerprint,
+          headerName: MCP_CONTEXT7_PRESET.secretHeaderName,
+          value: 'safe-secret',
+        }],
+      })
+      const server = loaded.servers[0]
+      assert.equal(server?.transport, 'http')
+      if (server?.transport !== 'http') assert.fail('应解析为 HTTP MCP')
+      assert.deepEqual(server.headers, {
+        [MCP_CONTEXT7_PRESET.secretHeaderName]: 'safe-secret',
+      })
+      assert.equal(server.sourceFingerprint, discovered.servers[0]?.sourceFingerprint)
+
+      await writeConfig(globalPath, {
+        version: 1,
+        servers: {
+          context7: {
+            transport: 'http',
+            url: 'https://changed.example/mcp',
+          },
+        },
+      })
+      const changed = await loadMcpConfiguration({
+        globalConfigPath: globalPath,
+        globalSecretHeaders: [{
+          serverName: 'context7',
+          connectionFingerprint: fingerprint,
+          headerName: MCP_CONTEXT7_PRESET.secretHeaderName,
+          value: 'safe-secret',
+        }],
+      })
+      const changedServer = changed.servers[0]
+      assert.equal(changedServer?.transport, 'http')
+      if (changedServer?.transport !== 'http') assert.fail('应解析为 HTTP MCP')
+      assert.deepEqual(changedServer.headers, {})
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('启停只修改目标条目，推荐预设只在名称空闲时原子加入', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-mutation-'))
     const globalPath = join(root, 'mcp.json')
@@ -186,10 +256,11 @@ describe('MCP 配置', () => {
         },
       })
       await setMcpServerEnabled(globalPath, 'custom', false)
-      await addMcpServer(globalPath, MCP_CONTEXT7_PRESET.name, {
-        ...MCP_CONTEXT7_PRESET.server,
-        enabled: true,
-      })
+      await addMcpServer(
+        globalPath,
+        MCP_CONTEXT7_PRESET.name,
+        MCP_CONTEXT7_PRESET.server,
+      )
       const stored = JSON.parse(await readFile(globalPath, 'utf8'))
       assert.deepEqual(stored, {
         version: 1,

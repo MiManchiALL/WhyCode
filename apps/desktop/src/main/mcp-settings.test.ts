@@ -3,10 +3,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
-import type { McpManagerSnapshot } from '@whycode/core'
 import {
+  loadMcpConfiguration,
+  type McpManagerSnapshot,
+} from '@whycode/core'
+import {
+  addMcpConfiguredServer,
   createMcpSettingsSnapshot,
   enableMcpPreset,
+  updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
 
@@ -52,6 +57,7 @@ describe('MCP 连接设置', () => {
         globalConfigPath,
         projectDir,
         currentSessionSnapshot,
+        mcpSecretHeaders: [],
       })
       assert.equal(snapshot.currentSessionUsesSnapshot, true)
       assert.deepEqual(snapshot.servers, [
@@ -61,6 +67,7 @@ describe('MCP 连接设置', () => {
           transport: 'http',
           enabled: true,
           effective: false,
+          secretHeaderNames: [],
           currentSessionState: 'ready',
           currentSessionToolCount: 3,
           currentSessionDiagnostics: [],
@@ -71,6 +78,7 @@ describe('MCP 连接设置', () => {
           transport: 'stdio',
           enabled: false,
           effective: true,
+          secretHeaderNames: [],
           currentSessionDiagnostics: [],
         },
       ])
@@ -88,6 +96,7 @@ describe('MCP 连接设置', () => {
         globalConfigPath,
         projectDir: null,
         currentSessionSnapshot: null,
+        mcpSecretHeaders: [],
       })
       assert.equal(before.recommendedPresets[0]?.status, 'available')
 
@@ -96,6 +105,7 @@ describe('MCP 连接设置', () => {
         globalConfigPath,
         projectDir: null,
         currentSessionSnapshot: null,
+        mcpSecretHeaders: [],
       })
       assert.equal(snapshot.recommendedPresets[0]?.status, 'installed')
       assert.equal(snapshot.servers[0]?.enabled, true)
@@ -108,6 +118,7 @@ describe('MCP 连接设置', () => {
         globalConfigPath,
         projectDir: null,
         currentSessionSnapshot: null,
+        mcpSecretHeaders: [],
       })
       assert.equal(snapshot.servers[0]?.enabled, false)
       const stored = JSON.parse(await readFile(globalConfigPath, 'utf8'))
@@ -134,6 +145,7 @@ describe('MCP 连接设置', () => {
         globalConfigPath,
         projectDir: null,
         currentSessionSnapshot: null,
+        mcpSecretHeaders: [],
       })
       assert.equal(snapshot.recommendedPresets[0]?.status, 'name-conflict')
       await assert.rejects(
@@ -142,6 +154,112 @@ describe('MCP 连接设置', () => {
       )
       const stored = JSON.parse(await readFile(globalConfigPath, 'utf8'))
       assert.equal(stored.servers.context7.url, 'https://custom.example/mcp')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('简化表单复用通用配置写入，并只向 Renderer 暴露安全密钥状态', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-editor-'))
+    const globalConfigPath = join(root, 'mcp.json')
+    try {
+      await addMcpConfiguredServer(
+        { globalConfigPath, projectDir: null },
+        {
+          scope: 'global',
+          name: 'docs',
+          server: { transport: 'http', url: 'https://docs.example/mcp' },
+        },
+      )
+      const discovered = await loadMcpConfiguration({ globalConfigPath })
+      const fingerprint = discovered.configuredServers[0]?.connectionFingerprint
+      assert.ok(fingerprint)
+
+      const config = await updateMcpSecretHeader(
+        { globalConfigPath, projectDir: null },
+        { providers: {} },
+        {
+          scope: 'global',
+          serverName: 'docs',
+          headerName: 'X-API-Key',
+          secret: 'safe-secret',
+        },
+      )
+      assert.deepEqual(config.mcpSecretHeaders, [{
+        serverName: 'docs',
+        connectionFingerprint: fingerprint,
+        headerName: 'X-API-Key',
+        value: 'safe-secret',
+      }])
+
+      const snapshot = await createMcpSettingsSnapshot({
+        globalConfigPath,
+        projectDir: null,
+        currentSessionSnapshot: null,
+        mcpSecretHeaders: config.mcpSecretHeaders ?? [],
+      })
+      assert.deepEqual(snapshot.servers[0]?.secretHeaderNames, ['X-API-Key'])
+      assert.doesNotMatch(
+        JSON.stringify(snapshot),
+        /safe-secret|docs\.example|connectionFingerprint/u,
+      )
+
+      const effective = await loadMcpConfiguration({
+        globalConfigPath,
+        globalSecretHeaders: config.mcpSecretHeaders,
+      })
+      const server = effective.servers[0]
+      assert.equal(server?.transport, 'http')
+      if (server?.transport !== 'http') assert.fail('应解析为 HTTP MCP')
+      assert.equal(server.headers['X-API-Key'], 'safe-secret')
+
+      await addMcpConfiguredServer(
+        { globalConfigPath, projectDir: null },
+        {
+          scope: 'global',
+          name: 'local',
+          server: {
+            transport: 'stdio',
+            command: ' node ',
+            args: [' -y ', ' ', '@example/mcp'],
+            cwd: ' tools ',
+          },
+        },
+      )
+      const stored = JSON.parse(await readFile(globalConfigPath, 'utf8'))
+      assert.deepEqual(stored.servers.local, {
+        transport: 'stdio',
+        command: 'node',
+        args: ['-y', '@example/mcp'],
+        cwd: 'tools',
+        enabled: true,
+      })
+
+      const cleared = await updateMcpSecretHeader(
+        { globalConfigPath, projectDir: null },
+        config,
+        {
+          scope: 'global',
+          serverName: 'docs',
+          headerName: 'x-api-key',
+          clearSecret: true,
+        },
+      )
+      assert.equal(cleared.mcpSecretHeaders, undefined)
+
+      await assert.rejects(
+        updateMcpSecretHeader(
+          { globalConfigPath, projectDir: root },
+          config,
+          {
+            scope: 'project',
+            serverName: 'docs',
+            headerName: 'X-API-Key',
+            secret: 'project-secret',
+          },
+        ),
+        /项目 MCP/,
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }

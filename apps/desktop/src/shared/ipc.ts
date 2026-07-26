@@ -16,6 +16,8 @@ export const IPC = {
   saveWebSearchSettings: 'whycode:save-web-search-settings',
   setMcpServerEnabled: 'whycode:set-mcp-server-enabled',
   enableMcpPreset: 'whycode:enable-mcp-preset',
+  addMcpServer: 'whycode:add-mcp-server',
+  saveMcpSecretHeader: 'whycode:save-mcp-secret-header',
   openMcpConfig: 'whycode:open-mcp-config',
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
