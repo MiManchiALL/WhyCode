@@ -26,7 +26,7 @@ interface AppHeaderProps {
   onReasoningEffortChange: (reasoningEffort: ReasoningEffortSelection) => void
   onOpenSessions: () => void
   onNewSession: () => void
-  onOpenModelSettings: () => void
+  onOpenConnectionSettings: () => void
 }
 
 export function AppHeader(props: AppHeaderProps) {
@@ -91,9 +91,9 @@ export function AppHeader(props: AppHeaderProps) {
         </select>
         <button
           className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-500 hover:border-neutral-500 disabled:opacity-40"
-          onClick={props.onOpenModelSettings}
+          onClick={props.onOpenConnectionSettings}
           disabled={props.busy}
-          title="配置模型与网页搜索连接"
+          title="配置模型、网页搜索与 MCP 连接"
         >
           ⚙ 连接
         </button>

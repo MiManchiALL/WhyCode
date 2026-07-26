@@ -116,6 +116,7 @@ function testConfiguration(): McpConfiguration {
       startupTimeoutMs: 10_000,
       toolTimeoutMs: 10_000,
     }],
+    configuredServers: [],
     diagnostics: [],
     projectConfigDigest: null,
     projectServerCount: 0,

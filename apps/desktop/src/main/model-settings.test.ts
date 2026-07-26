@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  createModelSettingsSnapshot,
+  createConnectionSettingsSnapshot,
   updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
 import type { WhycodeConfig } from './config.ts'
+import type { McpSettingsItem } from '../shared/settings.ts'
+
+const emptyMcpSettings: McpSettingsItem = {
+  globalConfigPath: 'C:\\Users\\test\\.whycode\\mcp.json',
+  currentSessionUsesSnapshot: false,
+  servers: [],
+  diagnostics: [],
+  recommendedPresets: [],
+}
+
+function createSettingsSnapshot(config: WhycodeConfig | null) {
+  return createConnectionSettingsSnapshot(config, emptyMcpSettings)
+}
 
 describe('模型设置数据边界', () => {
   it('设置快照不向 Renderer 返回任何 API key', () => {
@@ -23,7 +36,7 @@ describe('模型设置数据边界', () => {
         tavily: { apiKey: 'tavily-secret' },
       },
     }
-    const snapshot = createModelSettingsSnapshot(config)
+    const snapshot = createSettingsSnapshot(config)
     assert.equal(snapshot.providers.find((item) => item.id === 'mimo')?.hasKey, true)
     assert.equal(snapshot.cliProxyApi.hasKey, true)
     assert.equal(
@@ -113,7 +126,7 @@ describe('模型设置数据边界', () => {
   })
 
   it('设置快照展示最新目录及精确推理档位', () => {
-    const snapshot = createModelSettingsSnapshot({ providers: {} })
+    const snapshot = createSettingsSnapshot({ providers: {} })
     const openai = snapshot.providers.find((item) => item.id === 'openai')
     const google = snapshot.providers.find((item) => item.id === 'google')
     const claudeProxy = snapshot.cliProxyApi.models.find(
@@ -155,7 +168,7 @@ describe('模型设置数据边界', () => {
   })
 
   it('设置快照按当前实例的精确路由展示 CLIProxyAPI 有效画像', () => {
-    const snapshot = createModelSettingsSnapshot({
+    const snapshot = createSettingsSnapshot({
       providers: {},
       cliProxyApi: {
         apiKey: 'proxy-key',

@@ -12,6 +12,7 @@ import {
   createWebFindTool,
   createWebSearchTool,
   ensureMcpConfigTemplate,
+  ensureProjectMcpConfigTemplate,
   getModelEntry,
   loadMcpConfiguration,
   McpSessionRuntime,
@@ -46,10 +47,16 @@ import {
   unresolvedCliProxyProfiles,
 } from './cli-proxy-discovery.ts'
 import {
-  createModelSettingsSnapshot,
+  createConnectionSettingsSnapshot,
   updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
+import {
+  createMcpSettingsSnapshot,
+  enableMcpPreset,
+  resolveMcpConfigPath,
+  updateMcpServerState,
+} from './mcp-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
@@ -80,9 +87,13 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
+  ConnectionSettingsSnapshot,
+  EnableMcpPresetRequest,
+  OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveWebSearchSettingsRequest,
+  SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
 import { createConfiguredWebSearchHandler } from './web-search/configured.ts'
@@ -870,31 +881,16 @@ function sameStringArray(
 async function saveProviderModelSettings(
   request: SaveProviderSettingsRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
-    return { ok: false, error: '会话数据删除中，请等待完成后再保存模型设置' }
-  }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
-  settingsMutationInProgress = true
-  try {
+  return mutateConnectionSettings(async () => {
     const next = updateProviderSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
-    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    settingsMutationInProgress = false
-  }
+  })
 }
 
 async function saveCliProxyApiConnectionSettings(
   request: SaveCliProxyApiSettingsRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
-    return { ok: false, error: '会话数据删除中，请等待完成后再保存 CLIProxyAPI 设置' }
-  }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改 CLIProxyAPI 设置' }
-  settingsMutationInProgress = true
-  try {
+  return mutateConnectionSettings(async () => {
     const next = updateCliProxyApiSettings(loadAppConfig(), request)
     if (next.cliProxyApi?.apiKey) {
       const modelRoutes = await discoverCliProxyRoutes(
@@ -909,7 +905,42 @@ async function saveCliProxyApiConnectionSettings(
       next.cliProxyApi.modelRoutes = modelRoutes
     }
     await persistConnectionConfig(next)
-    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+  })
+}
+
+async function saveWebSearchConnectionSettings(
+  request: SaveWebSearchSettingsRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const next = updateWebSearchSettings(loadAppConfig(), request)
+    await persistConnectionConfig(next)
+  })
+}
+
+async function setMcpServerConnectionState(
+  request: SetMcpServerEnabledRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(() =>
+    updateMcpServerState({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
+}
+
+async function addMcpRecommendedPreset(
+  request: EnableMcpPresetRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(() => enableMcpPreset(mcpGlobalConfigPath, request))
+}
+
+async function mutateConnectionSettings(
+  mutation: () => Promise<void>,
+): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
+  }
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改连接设置' }
+  settingsMutationInProgress = true
+  try {
+    await mutation()
+    return { ok: true, snapshot: await currentConnectionSettingsSnapshot() }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
@@ -917,22 +948,29 @@ async function saveCliProxyApiConnectionSettings(
   }
 }
 
-async function saveWebSearchConnectionSettings(
-  request: SaveWebSearchSettingsRequest,
-): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
-    return { ok: false, error: '会话数据删除中，请等待完成后再保存网页搜索设置' }
-  }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改网页搜索设置' }
-  settingsMutationInProgress = true
+async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSnapshot> {
+  const mcp = await createMcpSettingsSnapshot({
+    globalConfigPath: mcpGlobalConfigPath,
+    projectDir,
+    currentSessionSnapshot: session?.mcpSnapshot ?? null,
+  })
+  return createConnectionSettingsSnapshot(loadAppConfig(), mcp)
+}
+
+async function openMcpConfigFile(
+  request: OpenMcpConfigRequest,
+): Promise<{ ok: boolean; error?: string }> {
   try {
-    const next = updateWebSearchSettings(loadAppConfig(), request)
-    await persistConnectionConfig(next)
-    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+    const path = resolveMcpConfigPath(
+      { globalConfigPath: mcpGlobalConfigPath, projectDir },
+      request.scope,
+    )
+    if (request.scope === 'global') await ensureMcpConfigTemplate(path)
+    else await ensureProjectMcpConfigTemplate(path)
+    const error = await shell.openPath(path)
+    return error ? { ok: false, error } : { ok: true }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    settingsMutationInProgress = false
   }
 }
 
@@ -1300,10 +1338,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () =>
     listModelConnections(loadAppConfig(), resolveCurrentModelId()))
-  ipcMain.handle(IPC.modelSettings, async () => {
+  ipcMain.handle(IPC.connectionSettings, async () => {
     await synchronizeConfiguredCliProxyRoutes()
       .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
-    return createModelSettingsSnapshot(loadAppConfig())
+    return currentConnectionSettingsSnapshot()
   })
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))
@@ -1311,6 +1349,12 @@ if (primaryInstance) void app.whenReady().then(async () => {
     saveCliProxyApiConnectionSettings(request))
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))
+  ipcMain.handle(IPC.setMcpServerEnabled, (_e, request: SetMcpServerEnabledRequest) =>
+    setMcpServerConnectionState(request))
+  ipcMain.handle(IPC.enableMcpPreset, (_e, request: EnableMcpPresetRequest) =>
+    addMcpRecommendedPreset(request))
+  ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
+    openMcpConfigFile(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
   ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
   ipcMain.handle(IPC.consensusStatus, () => ({

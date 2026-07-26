@@ -109,6 +109,7 @@ import {
   type PermissionMode,
 } from '../permissions/types.ts'
 import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
+import type { McpManagerSnapshot } from '../mcp/manager.ts'
 import { withoutMcpToolState } from '../mcp/state.ts'
 
 const BOUNDED_MAX_STEPS = 40
@@ -371,6 +372,10 @@ export class AgentSession {
 
   get checkpointRestoreToolUseId(): string | null {
     return this.restoringCheckpointToolUseId
+  }
+
+  get mcpSnapshot(): McpManagerSnapshot | null {
+    return this.options.mcpRuntime?.connectionManager().snapshot(true) ?? null
   }
 
   waitUntilIdle(): Promise<void> {

@@ -10,11 +10,14 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
+  ConnectionSettingsSnapshot,
+  EnableMcpPresetRequest,
   ModelListItem,
-  ModelSettingsSnapshot,
+  OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveWebSearchSettingsRequest,
+  SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
 
@@ -23,7 +26,8 @@ const api = {
   sendCommand: (command: CoreCommand): Promise<{ ok: boolean } | void> =>
     ipcRenderer.invoke(IPC.command, command),
   listModels: (): Promise<ModelListItem[]> => ipcRenderer.invoke(IPC.listModels),
-  modelSettings: (): Promise<ModelSettingsSnapshot> => ipcRenderer.invoke(IPC.modelSettings),
+  connectionSettings: (): Promise<ConnectionSettingsSnapshot> =>
+    ipcRenderer.invoke(IPC.connectionSettings),
   saveProviderSettings: (
     request: SaveProviderSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveProviderSettings, request),
@@ -33,6 +37,15 @@ const api = {
   saveWebSearchSettings: (
     request: SaveWebSearchSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebSearchSettings, request),
+  setMcpServerEnabled: (
+    request: SetMcpServerEnabledRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.setMcpServerEnabled, request),
+  enableMcpPreset: (
+    request: EnableMcpPresetRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.enableMcpPreset, request),
+  openMcpConfig: (
+    request: OpenMcpConfigRequest,
+  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),

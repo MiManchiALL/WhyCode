@@ -1,8 +1,10 @@
 import type {
   BuiltInProviderId,
+  McpConfigScope,
   ModelCapabilities,
   ReasoningEffortCapability,
 } from '@whycode/core'
+import type { McpServerStatus } from '@whycode/core'
 
 export interface ModelListItem {
   id: string
@@ -41,10 +43,11 @@ export interface CliProxyApiSettingsItem {
   }>
 }
 
-export interface ModelSettingsSnapshot {
+export interface ConnectionSettingsSnapshot {
   providers: ProviderSettingsItem[]
   cliProxyApi: CliProxyApiSettingsItem
   webSearch: WebSearchSettingsItem
+  mcp: McpSettingsItem
 }
 
 export type WebSearchProviderId = 'perplexity' | 'tavily'
@@ -83,8 +86,51 @@ export interface SaveWebSearchSettingsRequest {
   searchDepth?: TavilySearchDepth
 }
 
+export interface McpSettingsItem {
+  globalConfigPath: string
+  projectConfigPath?: string
+  currentSessionUsesSnapshot: boolean
+  servers: Array<{
+    name: string
+    scope: McpConfigScope
+    transport: 'stdio' | 'http'
+    enabled: boolean
+    effective: boolean
+    presetId?: 'context7'
+    currentSessionState?: McpServerStatus['state']
+    currentSessionToolCount?: number
+    currentSessionError?: string
+    currentSessionDiagnostics: string[]
+  }>
+  diagnostics: Array<{
+    scope: McpConfigScope
+    server?: string
+    message: string
+  }>
+  recommendedPresets: Array<{
+    id: 'context7'
+    displayName: string
+    description: string
+    status: 'available' | 'installed' | 'name-conflict'
+  }>
+}
+
+export interface SetMcpServerEnabledRequest {
+  scope: McpConfigScope
+  name: string
+  enabled: boolean
+}
+
+export interface EnableMcpPresetRequest {
+  presetId: 'context7'
+}
+
+export interface OpenMcpConfigRequest {
+  scope: McpConfigScope
+}
+
 export interface SettingsMutationResult {
   ok: boolean
   error?: string
-  snapshot?: ModelSettingsSnapshot
+  snapshot?: ConnectionSettingsSnapshot
 }

@@ -39,16 +39,22 @@ const httpServerSchema = z.strictObject({
   ...commonServerSchema,
 })
 
+const serverSchema = z.discriminatedUnion('transport', [
+  stdioServerSchema,
+  httpServerSchema,
+])
+
 const configSchema = z.strictObject({
   version: z.literal(MCP_CONFIG_VERSION),
   servers: z.record(
     boundedText(128).refine((value) => !CONTROL_CHARACTER.test(value), '名称包含控制字符'),
-    z.discriminatedUnion('transport', [stdioServerSchema, httpServerSchema]),
+    serverSchema,
   ),
 })
 
 export type ParsedMcpConfig = z.infer<typeof configSchema>
 export type ParsedMcpServer = ParsedMcpConfig['servers'][string]
+export type McpServerConfigInput = z.input<typeof serverSchema>
 
 export function parseMcpConfig(value: unknown): ParsedMcpConfig {
   return configSchema.parse(value)

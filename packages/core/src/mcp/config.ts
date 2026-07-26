@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
-import { access, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { TextDecoder } from 'node:util'
 import {
   MCP_CONFIG_VERSION,
   formatMcpConfigError,
@@ -10,29 +7,34 @@ import {
   type ParsedMcpConfig,
   type ParsedMcpServer,
 } from './config-schema.ts'
+import {
+  decodeMcpConfig,
+  ensureMcpFile,
+  readMcpConfigBytes,
+} from './config-storage.ts'
 
 export { MCP_CONFIG_VERSION } from './config-schema.ts'
+export { addMcpServer, setMcpServerEnabled } from './config-mutations.ts'
+export const MCP_CONTEXT7_PRESET = {
+  id: 'context7',
+  name: 'context7',
+  server: {
+    transport: 'http',
+    url: 'https://mcp.context7.com/mcp',
+    enabled: false,
+  },
+} as const
 export const MCP_GLOBAL_CONFIG_TEMPLATE = `${JSON.stringify({
   version: MCP_CONFIG_VERSION,
   servers: {
-    'example-local': {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@example/mcp-server'],
-      enabled: false,
-    },
-    'example-remote': {
-      transport: 'http',
-      url: 'https://example.com/mcp',
-      headers: {
-        Authorization: 'Bearer ${MCP_EXAMPLE_TOKEN}',
-      },
-      enabled: false,
-    },
+    [MCP_CONTEXT7_PRESET.name]: MCP_CONTEXT7_PRESET.server,
   },
 }, null, 2)}\n`
+export const MCP_PROJECT_CONFIG_TEMPLATE = `${JSON.stringify({
+  version: MCP_CONFIG_VERSION,
+  servers: {},
+}, null, 2)}\n`
 
-const MCP_CONFIG_MAX_BYTES = 256 * 1024
 const MCP_MAX_SERVERS = 32
 const ENV_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g
 
@@ -68,8 +70,19 @@ export interface McpConfigDiagnostic {
   message: string
 }
 
+export interface McpConfiguredServer {
+  name: string
+  scope: McpConfigScope
+  transport: 'stdio' | 'http'
+  enabled: boolean
+  /** 项目同名条目会完整覆盖全局条目，包括禁用和无效配置。 */
+  effective: boolean
+  presetId?: typeof MCP_CONTEXT7_PRESET.id
+}
+
 export interface McpConfiguration {
   servers: McpServerConfig[]
+  configuredServers: McpConfiguredServer[]
   diagnostics: McpConfigDiagnostic[]
   projectConfigDigest: string | null
   projectServerCount: number
@@ -80,24 +93,11 @@ export function getProjectMcpConfigPath(projectDir: string): string {
 }
 
 export async function ensureMcpConfigTemplate(path: string): Promise<void> {
-  try {
-    await access(path, constants.F_OK)
-    return
-  } catch {
-    // 缺失时创建；已有但暂时不可读的文件不能被覆盖。
-  }
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const handle = await open(path, 'wx', 0o600).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'EEXIST') return null
-    throw error
-  })
-  if (!handle) return
-  try {
-    await handle.writeFile(MCP_GLOBAL_CONFIG_TEMPLATE, 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
+  await ensureMcpFile(path, MCP_GLOBAL_CONFIG_TEMPLATE)
+}
+
+export async function ensureProjectMcpConfigTemplate(path: string): Promise<void> {
+  await ensureMcpFile(path, MCP_PROJECT_CONFIG_TEMPLATE)
 }
 
 export async function loadMcpConfiguration(options: {
@@ -117,9 +117,17 @@ export async function loadMcpConfiguration(options: {
     : emptyReadResult()
   const effective = new Map<string, McpServerConfig>()
   for (const server of global.servers) effective.set(server.name, server)
-  for (const name of project.declaredServerNames) effective.delete(name)
+  const projectNames = new Set(project.declaredServerNames)
+  for (const name of projectNames) effective.delete(name)
   for (const server of project.servers) effective.set(server.name, server)
   const servers = [...effective.values()]
+  const configuredServers = [
+    ...global.configuredServers.map((server) => ({
+      ...server,
+      effective: !projectNames.has(server.name),
+    })),
+    ...project.configuredServers.map((server) => ({ ...server, effective: true })),
+  ]
   const diagnostics = [...global.diagnostics, ...project.diagnostics]
   if (servers.length > MCP_MAX_SERVERS) {
     diagnostics.push({
@@ -130,6 +138,7 @@ export async function loadMcpConfiguration(options: {
   }
   return {
     servers,
+    configuredServers,
     diagnostics,
     projectConfigDigest: project.digest,
     projectServerCount: servers.filter((server) => server.scope === 'project').length,
@@ -138,6 +147,7 @@ export async function loadMcpConfiguration(options: {
 
 interface ConfigReadResult {
   servers: McpServerConfig[]
+  configuredServers: Omit<McpConfiguredServer, 'effective'>[]
   declaredServerNames: string[]
   diagnostics: McpConfigDiagnostic[]
   digest: string | null
@@ -151,19 +161,12 @@ async function readConfigFile(
 ): Promise<ConfigReadResult> {
   let bytes: Buffer
   try {
-    const info = await stat(path)
-    if (!info.isFile() || info.size > MCP_CONFIG_MAX_BYTES) {
-      throw new Error(
-        info.size > MCP_CONFIG_MAX_BYTES
-          ? `配置超过 ${MCP_CONFIG_MAX_BYTES / 1024} KiB`
-          : '配置不是普通文件',
-      )
-    }
-    bytes = await readFile(path)
+    bytes = await readMcpConfigBytes(path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyReadResult()
     return {
       servers: [],
+      configuredServers: [],
       declaredServerNames: [],
       diagnostics: [{ scope, message: safeError(error) }],
       digest: null,
@@ -171,28 +174,17 @@ async function readConfigFile(
   }
 
   const digest = sha256(bytes)
-  let text: string
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  } catch {
+  const decoded = decodeMcpConfig(bytes)
+  if (!decoded.ok) {
     return {
       servers: [],
+      configuredServers: [],
       declaredServerNames: [],
-      diagnostics: [{ scope, message: '配置必须是有效的 UTF-8 文本' }],
+      diagnostics: [{ scope, message: decoded.error }],
       digest,
     }
   }
-  let raw: unknown
-  try {
-    raw = JSON.parse(text)
-  } catch {
-    return {
-      servers: [],
-      declaredServerNames: [],
-      diagnostics: [{ scope, message: '配置不是合法 JSON' }],
-      digest,
-    }
-  }
+  const raw = decoded.value
   const declaredServerNames = findDeclaredServerNames(raw)
   let parsed: ParsedMcpConfig
   try {
@@ -200,6 +192,7 @@ async function readConfigFile(
   } catch (error) {
     return {
       servers: [],
+      configuredServers: [],
       declaredServerNames,
       diagnostics: [{ scope, message: formatMcpConfigError(error) }],
       digest,
@@ -207,8 +200,16 @@ async function readConfigFile(
   }
 
   const servers: McpServerConfig[] = []
+  const configuredServers: Omit<McpConfiguredServer, 'effective'>[] = []
   const diagnostics: McpConfigDiagnostic[] = []
   for (const [name, value] of Object.entries(parsed.servers)) {
+    configuredServers.push({
+      name,
+      scope,
+      transport: value.transport,
+      enabled: value.enabled,
+      ...(isContext7Preset(name, value) ? { presetId: MCP_CONTEXT7_PRESET.id } : {}),
+    })
     if (!value.enabled) continue
     try {
       servers.push(resolveServer(name, scope, baseDir, value, env))
@@ -218,6 +219,7 @@ async function readConfigFile(
   }
   return {
     servers,
+    configuredServers,
     declaredServerNames,
     diagnostics,
     digest,
@@ -279,12 +281,26 @@ function safeError(error: unknown): string {
   return message.replace(/[\r\n]+/gu, ' ').slice(0, 500)
 }
 
+function isContext7Preset(name: string, server: ParsedMcpServer): boolean {
+  return (
+    name === MCP_CONTEXT7_PRESET.name
+    && server.transport === 'http'
+    && server.url === MCP_CONTEXT7_PRESET.server.url
+  )
+}
+
 function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
 function emptyReadResult(): ConfigReadResult {
-  return { servers: [], declaredServerNames: [], diagnostics: [], digest: null }
+  return {
+    servers: [],
+    configuredServers: [],
+    declaredServerNames: [],
+    diagnostics: [],
+    digest: null,
+  }
 }
 
 function findDeclaredServerNames(value: unknown): string[] {

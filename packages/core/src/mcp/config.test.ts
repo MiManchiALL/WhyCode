@@ -5,17 +5,39 @@ import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
   MCP_GLOBAL_CONFIG_TEMPLATE,
+  MCP_PROJECT_CONFIG_TEMPLATE,
+  MCP_CONTEXT7_PRESET,
+  addMcpServer,
   ensureMcpConfigTemplate,
+  ensureProjectMcpConfigTemplate,
   loadMcpConfiguration,
+  setMcpServerEnabled,
 } from './config.ts'
 
 describe('MCP 配置', () => {
   it('只在文件缺失时创建关闭状态模板，不覆盖已有内容', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-config-'))
     const path = join(root, '.whycode', 'mcp.json')
+    const projectPath = join(root, 'project', '.whycode', 'mcp.json')
     try {
       await ensureMcpConfigTemplate(path)
       assert.equal(await readFile(path, 'utf8'), MCP_GLOBAL_CONFIG_TEMPLATE)
+      assert.deepEqual(JSON.parse(MCP_GLOBAL_CONFIG_TEMPLATE), {
+        version: 1,
+        servers: {
+          context7: {
+            transport: 'http',
+            url: MCP_CONTEXT7_PRESET.server.url,
+            enabled: false,
+          },
+        },
+      })
+      await ensureProjectMcpConfigTemplate(projectPath)
+      assert.equal(await readFile(projectPath, 'utf8'), MCP_PROJECT_CONFIG_TEMPLATE)
+      assert.deepEqual(JSON.parse(MCP_PROJECT_CONFIG_TEMPLATE), {
+        version: 1,
+        servers: {},
+      })
       await writeFile(path, '{"owned":true}\n', 'utf8')
       await ensureMcpConfigTemplate(path)
       assert.equal(await readFile(path, 'utf8'), '{"owned":true}\n')
@@ -67,6 +89,22 @@ describe('MCP 配置', () => {
         projectDir,
       })
       assert.deepEqual(disabled.servers, [])
+      assert.deepEqual(disabled.configuredServers, [
+        {
+          name: 'shared',
+          scope: 'global',
+          transport: 'stdio',
+          enabled: true,
+          effective: false,
+        },
+        {
+          name: 'shared',
+          scope: 'project',
+          transport: 'http',
+          enabled: false,
+          effective: true,
+        },
+      ])
 
       await writeConfig(projectPath, {
         version: 1,
@@ -128,6 +166,51 @@ describe('MCP 配置', () => {
       assert.deepEqual(loaded.servers, [])
       assert.equal(loaded.diagnostics[0]?.message, '配置不是合法 JSON')
       assert.doesNotMatch(JSON.stringify(loaded.diagnostics), /must-not-leak/u)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('启停只修改目标条目，推荐预设只在名称空闲时原子加入', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-mutation-'))
+    const globalPath = join(root, 'mcp.json')
+    try {
+      await writeConfig(globalPath, {
+        version: 1,
+        servers: {
+          custom: {
+            transport: 'http',
+            url: 'https://example.com/mcp',
+            headers: { Authorization: 'Bearer ${CUSTOM_TOKEN}' },
+          },
+        },
+      })
+      await setMcpServerEnabled(globalPath, 'custom', false)
+      await addMcpServer(globalPath, MCP_CONTEXT7_PRESET.name, {
+        ...MCP_CONTEXT7_PRESET.server,
+        enabled: true,
+      })
+      const stored = JSON.parse(await readFile(globalPath, 'utf8'))
+      assert.deepEqual(stored, {
+        version: 1,
+        servers: {
+          custom: {
+            transport: 'http',
+            url: 'https://example.com/mcp',
+            headers: { Authorization: 'Bearer ${CUSTOM_TOKEN}' },
+            enabled: false,
+          },
+          context7: {
+            transport: 'http',
+            url: MCP_CONTEXT7_PRESET.server.url,
+            enabled: true,
+          },
+        },
+      })
+      await assert.rejects(
+        addMcpServer(globalPath, MCP_CONTEXT7_PRESET.name, MCP_CONTEXT7_PRESET.server),
+        /名称已存在/,
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }

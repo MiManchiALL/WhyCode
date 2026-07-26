@@ -11,7 +11,7 @@ import type {
   UserQuestion,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
-import type { ModelListItem, ModelSettingsSnapshot } from '../../shared/settings.ts'
+import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
 import {
   applyCoreEvent,
   appendNotice,
@@ -31,7 +31,7 @@ import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
 import { isCurrentSessionDeletion } from './session-deletion-state.ts'
 import { TaskPlanCard } from './task-plan-card.tsx'
-import { ModelSettingsPanel } from './model-settings-panel.tsx'
+import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
   ImagePickerButton,
@@ -73,8 +73,9 @@ export function App() {
   const [models, setModels] = useState<ModelListItem[]>([])
   const [modelId, setModelId] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
-  const [showModelSettings, setShowModelSettings] = useState(false)
-  const [modelSettings, setModelSettings] = useState<ModelSettingsSnapshot | null>(null)
+  const [showConnectionSettings, setShowConnectionSettings] = useState(false)
+  const [connectionSettings, setConnectionSettings] =
+    useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
@@ -606,17 +607,17 @@ export function App() {
     }).catch(rollback)
   }, [reasoningEffort])
 
-  const openModelSettings = useCallback(() => {
-    void window.whycode.modelSettings().then((snapshot) => {
-      setModelSettings(snapshot)
-      setShowModelSettings(true)
+  const openConnectionSettings = useCallback(() => {
+    void window.whycode.connectionSettings().then((snapshot) => {
+      setConnectionSettings(snapshot)
+      setShowConnectionSettings(true)
     }).catch((error) => {
       addError(`连接设置读取失败：${error instanceof Error ? error.message : String(error)}`)
     })
   }, [addError])
 
-  const applyModelSettings = useCallback((snapshot: ModelSettingsSnapshot) => {
-    setModelSettings(snapshot)
+  const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
+    setConnectionSettings(snapshot)
     void refreshModels().catch((error) => {
       addError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
     })
@@ -804,14 +805,14 @@ export function App() {
           void refreshSessions()
         }}
         onNewSession={startNewSession}
-        onOpenModelSettings={openModelSettings}
+        onOpenConnectionSettings={openConnectionSettings}
       />
 
-      {showModelSettings && modelSettings && (
-        <ModelSettingsPanel
-          snapshot={modelSettings}
-          onClose={() => setShowModelSettings(false)}
-          onChanged={applyModelSettings}
+      {showConnectionSettings && connectionSettings && (
+        <ConnectionSettingsPanel
+          snapshot={connectionSettings}
+          onClose={() => setShowConnectionSettings(false)}
+          onChanged={applyConnectionSettings}
         />
       )}
 
