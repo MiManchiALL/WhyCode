@@ -1,5 +1,6 @@
 import {
-  MCP_CONTEXT7_PRESET,
+  MCP_CONTEXT7_BUILTIN,
+  MCP_GITHUB_BUILTIN,
   addMcpServer,
   getProjectMcpConfigPath,
   loadMcpConfiguration,
@@ -11,18 +12,19 @@ import {
 } from '@whycode/core'
 import type {
   AddMcpServerRequest,
-  EnableMcpPresetRequest,
   McpSettingsItem,
   SaveMcpSecretHeaderRequest,
   SetMcpServerEnabledRequest,
 } from '../shared/settings.ts'
 import type { WhycodeConfig } from './config.ts'
+import type { McpOAuthController } from './mcp-oauth.ts'
 
 interface McpSettingsContext {
   globalConfigPath: string
   projectDir: string | null
   currentSessionSnapshot: McpManagerSnapshot | null
   mcpSecretHeaders: readonly McpSecretHeader[]
+  mcpOAuthController?: McpOAuthController
 }
 
 export async function createMcpSettingsSnapshot(
@@ -39,9 +41,6 @@ export async function createMcpSettingsSnapshot(
       server,
     ]),
   )
-  const globalContext7 = configuration.configuredServers.find((server) =>
-    server.scope === 'global' && server.name === MCP_CONTEXT7_PRESET.name)
-
   return {
     globalConfigPath: context.globalConfigPath,
     ...(context.projectDir
@@ -59,17 +58,35 @@ export async function createMcpSettingsSnapshot(
             .map((entry) => entry.headerName)
             .sort((left, right) => left.localeCompare(right))
           : []
+        const resolved = configuration.servers.find((candidate) =>
+          candidate.scope === server.scope && candidate.name === server.name)
+        const oauth = resolved?.transport === 'http'
+          && server.scope === 'global'
+          && server.builtinId !== MCP_CONTEXT7_BUILTIN.id
+          && context.mcpOAuthController
+          && !hasAuthorizationHeader(resolved.headers)
+          ? context.mcpOAuthController.availability(resolved)
+          : undefined
         return {
           name: server.name,
           scope: server.scope,
           transport: server.transport,
           enabled: server.enabled,
           effective: server.effective,
-          ...(server.presetId ? { presetId: server.presetId } : {}),
+          ...(server.builtinId ? { builtinId: server.builtinId } : {}),
           secretHeaderNames,
-          ...(server.presetId === MCP_CONTEXT7_PRESET.id
-            ? { suggestedSecretHeaderName: MCP_CONTEXT7_PRESET.secretHeaderName }
+          ...(server.builtinId === MCP_CONTEXT7_BUILTIN.id
+            ? {
+                suggestedSecretHeaderName: MCP_CONTEXT7_BUILTIN.secretHeaderName,
+                suggestedSecretKind: 'api-key' as const,
+              }
+            : server.builtinId === MCP_GITHUB_BUILTIN.id
+              ? {
+                  suggestedSecretHeaderName: MCP_GITHUB_BUILTIN.secretHeaderName,
+                  suggestedSecretKind: 'github-pat' as const,
+                }
             : {}),
+          ...(oauth ? { oauth } : {}),
           ...(current ? {
             currentSessionState: current.state,
             currentSessionToolCount: current.toolCount,
@@ -80,16 +97,6 @@ export async function createMcpSettingsSnapshot(
       })
       .sort(compareServers),
     diagnostics: configuration.diagnostics,
-    recommendedPresets: [{
-      id: MCP_CONTEXT7_PRESET.id,
-      displayName: 'Context7',
-      description: '按库和版本检索最新开发文档；使用官方远程 MCP，无需本地运行 Node 服务。',
-      status: globalContext7?.presetId === MCP_CONTEXT7_PRESET.id
-        ? 'installed'
-        : globalContext7
-          ? 'name-conflict'
-          : 'available',
-    }],
   }
 }
 
@@ -98,20 +105,6 @@ export async function updateMcpServerState(
   request: SetMcpServerEnabledRequest,
 ): Promise<void> {
   await setMcpServerEnabled(configPath(context, request.scope), request.name, request.enabled)
-}
-
-export async function enableMcpPreset(
-  globalConfigPath: string,
-  request: EnableMcpPresetRequest,
-): Promise<void> {
-  if (request.presetId !== MCP_CONTEXT7_PRESET.id) {
-    throw new Error('未知的 MCP 推荐预设')
-  }
-  await addMcpServer(
-    globalConfigPath,
-    MCP_CONTEXT7_PRESET.name,
-    MCP_CONTEXT7_PRESET.server,
-  )
 }
 
 export async function addMcpConfiguredServer(
@@ -161,7 +154,12 @@ export async function updateMcpSecretHeader(
     ))
   const next: WhycodeConfig = config ? structuredClone(config) : { providers: {} }
   if (!request.clearSecret) {
-    const secret = request.secret?.trim() ?? ''
+    const rawSecret = request.secret?.trim() ?? ''
+    if (!rawSecret) throw new Error('MCP 认证值不能为空')
+    const secret = server.builtinId === MCP_GITHUB_BUILTIN.id
+      && headerName.toLowerCase() === MCP_GITHUB_BUILTIN.secretHeaderName.toLowerCase()
+      ? githubBearerValue(rawSecret)
+      : rawSecret
     retained.push(parseMcpSecretHeader({
       serverName: server.name,
       connectionFingerprint: server.connectionFingerprint,
@@ -172,6 +170,16 @@ export async function updateMcpSecretHeader(
   if (retained.length > 0) next.mcpSecretHeaders = retained
   else delete next.mcpSecretHeaders
   return next
+}
+
+function githubBearerValue(value: string): string {
+  const token = value.replace(/^Bearer(?:\s+|$)/iu, '').trim()
+  if (!token) throw new Error('GitHub PAT 不能为空')
+  return `Bearer ${token}`
+}
+
+function hasAuthorizationHeader(headers: Readonly<Record<string, string>>): boolean {
+  return Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')
 }
 
 export function resolveMcpConfigPath(

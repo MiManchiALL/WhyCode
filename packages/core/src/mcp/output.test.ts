@@ -28,6 +28,45 @@ describe('MCP 工具结果适配', () => {
     assert.doesNotMatch(result.data, /hidden-a|hidden-b/)
   })
 
+  it('在统一输出边界隐藏文本、结构化结果和资源 URI 中的 URL 凭据', async () => {
+    const result = await formatMcpToolResult({
+      content: [
+        {
+          type: 'text',
+          text: [
+            'download=https://raw.example.test/private?ref=main&token=text-token',
+            'public=https://example.test/docs?language=zh&version=1',
+          ].join('\n'),
+        },
+        {
+          type: 'resource',
+          resource: {
+            uri: 'repo://private/file?access_token=resource-token',
+            text: 'mirror=https://user:password@example.test/file',
+          },
+        },
+        {
+          type: 'resource_link',
+          name: 'private resource',
+          uri: 'https://bucket.example.test/file?X-Amz-Signature=resource-signature',
+        },
+      ],
+      structuredContent: {
+        download_url: 'https://raw.example.test/file?token=structured-token',
+        callback: 'https://auth.example.test/callback#access_token=fragment-token',
+      },
+    }, undefined, new AbortController().signal)
+
+    assert.doesNotMatch(
+      result.data,
+      /text-token|resource-token|password|resource-signature|structured-token|fragment-token/u,
+    )
+    assert.match(result.data, /token=REDACTED/u)
+    assert.match(result.data, /access_token=REDACTED/u)
+    assert.match(result.data, /X-Amz-Signature=REDACTED/u)
+    assert.match(result.data, /https:\/\/example\.test\/docs\?language=zh&version=1/u)
+  })
+
   it('把受支持图片导入现有附件存储，并按固定字节上限截断文本', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-output-'))
     try {

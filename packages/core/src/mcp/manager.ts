@@ -7,6 +7,7 @@ import {
   MCP_CONNECTION_CONCURRENCY,
   mapWithConcurrency,
   type McpFetch,
+  type McpOAuthTransportFactory,
 } from './connection-utils.ts'
 import type {
   McpBoundTool,
@@ -26,10 +27,14 @@ export class McpConnectionManager {
   constructor(
     configuration: McpConfiguration,
     fetchImpl: McpFetch = globalThis.fetch,
+    oauthTransportFactory?: McpOAuthTransportFactory,
   ) {
     this.configuration = configuration
     for (const config of configuration.servers) {
-      this.connections.set(config.name, new McpServerConnection(config, fetchImpl))
+      this.connections.set(
+        config.name,
+        new McpServerConnection(config, fetchImpl, oauthTransportFactory),
+      )
     }
   }
 
@@ -48,12 +53,12 @@ export class McpConnectionManager {
     }
   }
 
-  async refreshAll(signal: AbortSignal, includeProject: boolean): Promise<McpManagerSnapshot> {
+  async prepareAll(signal: AbortSignal, includeProject: boolean): Promise<McpManagerSnapshot> {
     this.assertOpen()
     const connections = [...this.connections.values()]
       .filter((connection) => includeProject || connection.config.scope !== 'project')
     await mapWithConcurrency(connections, MCP_CONNECTION_CONCURRENCY, async (connection) => {
-      await connection.refresh(signal)
+      await connection.prepare(signal)
     })
     return this.snapshot(includeProject)
   }

@@ -18,9 +18,12 @@ import {
 export { MCP_CONFIG_VERSION } from './config-schema.ts'
 export type { McpSecretHeader } from './config-schema.ts'
 export { addMcpServer, setMcpServerEnabled } from './config-mutations.ts'
-export const MCP_CONTEXT7_PRESET = {
+import { ensureMcpServers } from './config-mutations.ts'
+
+export const MCP_CONTEXT7_BUILTIN = {
   id: 'context7',
   name: 'context7',
+  capabilitySummary: '查询最新的第三方库与框架文档、API 和示例；适合需要核对当前版本用法的技术问题。',
   server: {
     transport: 'http',
     url: 'https://mcp.context7.com/mcp',
@@ -28,11 +31,39 @@ export const MCP_CONTEXT7_PRESET = {
   },
   secretHeaderName: 'CONTEXT7_API_KEY',
 } as const
+export const MCP_GITHUB_BUILTIN = {
+  id: 'github',
+  name: 'github',
+  capabilitySummary: '读取 GitHub 仓库、文件、提交、Issue 和 Pull Request 等结构化数据；配置认证后可访问凭据有权读取的私有资源。',
+  server: {
+    transport: 'http',
+    url: 'https://api.githubcopilot.com/mcp/readonly',
+    headers: {
+      'X-MCP-Readonly': 'true',
+    },
+    enabled: true,
+  },
+  secretHeaderName: 'Authorization',
+} as const
+export type McpBuiltinServerId =
+  | typeof MCP_CONTEXT7_BUILTIN.id
+  | typeof MCP_GITHUB_BUILTIN.id
+
+export function getMcpBuiltinCapabilitySummary(
+  id: McpBuiltinServerId | undefined,
+): string | undefined {
+  if (id === MCP_CONTEXT7_BUILTIN.id) return MCP_CONTEXT7_BUILTIN.capabilitySummary
+  if (id === MCP_GITHUB_BUILTIN.id) return MCP_GITHUB_BUILTIN.capabilitySummary
+  return undefined
+}
+
+const MCP_GLOBAL_DEFAULT_SERVERS = {
+  [MCP_CONTEXT7_BUILTIN.name]: MCP_CONTEXT7_BUILTIN.server,
+  [MCP_GITHUB_BUILTIN.name]: MCP_GITHUB_BUILTIN.server,
+} as const
 export const MCP_GLOBAL_CONFIG_TEMPLATE = `${JSON.stringify({
   version: MCP_CONFIG_VERSION,
-  servers: {
-    [MCP_CONTEXT7_PRESET.name]: MCP_CONTEXT7_PRESET.server,
-  },
+  servers: MCP_GLOBAL_DEFAULT_SERVERS,
 }, null, 2)}\n`
 export const MCP_PROJECT_CONFIG_TEMPLATE = `${JSON.stringify({
   version: MCP_CONFIG_VERSION,
@@ -64,6 +95,8 @@ export interface McpHttpServerConfig extends McpServerConfigBase {
   transport: 'http'
   url: string
   headers: Record<string, string>
+  connectionFingerprint: string
+  builtinId?: McpBuiltinServerId
 }
 
 export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig
@@ -83,7 +116,7 @@ export interface McpConfiguredServer {
   connectionFingerprint?: string
   /** 项目同名条目会完整覆盖全局条目，包括禁用和无效配置。 */
   effective: boolean
-  presetId?: typeof MCP_CONTEXT7_PRESET.id
+  builtinId?: McpBuiltinServerId
 }
 
 export interface McpConfiguration {
@@ -100,6 +133,7 @@ export function getProjectMcpConfigPath(projectDir: string): string {
 
 export async function ensureMcpConfigTemplate(path: string): Promise<void> {
   await ensureMcpFile(path, MCP_GLOBAL_CONFIG_TEMPLATE)
+  await ensureMcpServers(path, MCP_GLOBAL_DEFAULT_SERVERS)
 }
 
 export async function ensureProjectMcpConfigTemplate(path: string): Promise<void> {
@@ -222,7 +256,7 @@ async function readConfigFile(
       transport: value.transport,
       enabled: value.enabled,
       ...(fingerprint ? { connectionFingerprint: fingerprint } : {}),
-      ...(isContext7Preset(name, value) ? { presetId: MCP_CONTEXT7_PRESET.id } : {}),
+      ...configuredBuiltin(name, value),
     })
     if (!value.enabled) continue
     try {
@@ -281,6 +315,8 @@ function resolveServer(
     transport: 'http',
     url: value.url,
     headers: mergeHeaders(resolveRecord(value.headers ?? {}, env), secretHeaders),
+    connectionFingerprint: connectionFingerprint(value),
+    ...configuredBuiltin(name, value),
     startupTimeoutMs: value.startupTimeoutMs,
     toolTimeoutMs: value.toolTimeoutMs,
   }
@@ -350,12 +386,20 @@ function secretHeaderTargetKey(serverName: string, fingerprint: string): string 
   return `${serverName}\u0000${fingerprint}`
 }
 
-function isContext7Preset(name: string, server: ParsedMcpServer): boolean {
-  return (
-    name === MCP_CONTEXT7_PRESET.name
-    && server.transport === 'http'
-    && server.url === MCP_CONTEXT7_PRESET.server.url
-  )
+function configuredBuiltin(
+  name: string,
+  server: ParsedMcpServer,
+): { builtinId?: McpBuiltinServerId } {
+  if (server.transport !== 'http') return {}
+  if (
+    name === MCP_CONTEXT7_BUILTIN.name
+    && server.url === MCP_CONTEXT7_BUILTIN.server.url
+  ) return { builtinId: MCP_CONTEXT7_BUILTIN.id }
+  if (
+    name === MCP_GITHUB_BUILTIN.name
+    && server.url === MCP_GITHUB_BUILTIN.server.url
+  ) return { builtinId: MCP_GITHUB_BUILTIN.id }
+  return {}
 }
 
 function sha256(value: string | Uint8Array): string {

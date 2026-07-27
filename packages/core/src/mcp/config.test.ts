@@ -6,7 +6,8 @@ import { describe, it } from 'node:test'
 import {
   MCP_GLOBAL_CONFIG_TEMPLATE,
   MCP_PROJECT_CONFIG_TEMPLATE,
-  MCP_CONTEXT7_PRESET,
+  MCP_CONTEXT7_BUILTIN,
+  MCP_GITHUB_BUILTIN,
   addMcpServer,
   ensureMcpConfigTemplate,
   ensureProjectMcpConfigTemplate,
@@ -15,7 +16,7 @@ import {
 } from './config.ts'
 
 describe('MCP 配置', () => {
-  it('只在文件缺失时创建默认启用 Context7 的模板，不覆盖已有内容', async () => {
+  it('原子补齐默认启用的 Context7 与只读 GitHub，不覆盖已有同名条目', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-config-'))
     const path = join(root, '.whycode', 'mcp.json')
     const projectPath = join(root, 'project', '.whycode', 'mcp.json')
@@ -27,7 +28,13 @@ describe('MCP 配置', () => {
         servers: {
           context7: {
             transport: 'http',
-            url: MCP_CONTEXT7_PRESET.server.url,
+            url: MCP_CONTEXT7_BUILTIN.server.url,
+            enabled: true,
+          },
+          github: {
+            transport: 'http',
+            url: MCP_GITHUB_BUILTIN.server.url,
+            headers: { 'X-MCP-Readonly': 'true' },
             enabled: true,
           },
         },
@@ -39,7 +46,7 @@ describe('MCP 配置', () => {
         servers: {},
       })
       await writeFile(path, '{"owned":true}\n', 'utf8')
-      await ensureMcpConfigTemplate(path)
+      await assert.rejects(ensureMcpConfigTemplate(path), /配置格式无效/)
       assert.equal(await readFile(path, 'utf8'), '{"owned":true}\n')
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -188,7 +195,7 @@ describe('MCP 配置', () => {
         servers: {
           context7: {
             transport: 'http',
-            url: MCP_CONTEXT7_PRESET.server.url,
+            url: MCP_CONTEXT7_BUILTIN.server.url,
             headers: { context7_api_key: 'stale-file-value' },
           },
         },
@@ -202,7 +209,7 @@ describe('MCP 配置', () => {
         globalSecretHeaders: [{
           serverName: 'context7',
           connectionFingerprint: fingerprint,
-          headerName: MCP_CONTEXT7_PRESET.secretHeaderName,
+          headerName: MCP_CONTEXT7_BUILTIN.secretHeaderName,
           value: 'safe-secret',
         }],
       })
@@ -210,7 +217,7 @@ describe('MCP 配置', () => {
       assert.equal(server?.transport, 'http')
       if (server?.transport !== 'http') assert.fail('应解析为 HTTP MCP')
       assert.deepEqual(server.headers, {
-        [MCP_CONTEXT7_PRESET.secretHeaderName]: 'safe-secret',
+        [MCP_CONTEXT7_BUILTIN.secretHeaderName]: 'safe-secret',
       })
       assert.equal(server.sourceFingerprint, discovered.servers[0]?.sourceFingerprint)
 
@@ -228,7 +235,7 @@ describe('MCP 配置', () => {
         globalSecretHeaders: [{
           serverName: 'context7',
           connectionFingerprint: fingerprint,
-          headerName: MCP_CONTEXT7_PRESET.secretHeaderName,
+          headerName: MCP_CONTEXT7_BUILTIN.secretHeaderName,
           value: 'safe-secret',
         }],
       })
@@ -241,7 +248,7 @@ describe('MCP 配置', () => {
     }
   })
 
-  it('启停只修改目标条目，推荐预设只在名称空闲时原子加入', async () => {
+  it('启停与新增只修改目标条目', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-mutation-'))
     const globalPath = join(root, 'mcp.json')
     try {
@@ -258,8 +265,8 @@ describe('MCP 配置', () => {
       await setMcpServerEnabled(globalPath, 'custom', false)
       await addMcpServer(
         globalPath,
-        MCP_CONTEXT7_PRESET.name,
-        MCP_CONTEXT7_PRESET.server,
+        MCP_CONTEXT7_BUILTIN.name,
+        MCP_CONTEXT7_BUILTIN.server,
       )
       const stored = JSON.parse(await readFile(globalPath, 'utf8'))
       assert.deepEqual(stored, {
@@ -273,13 +280,13 @@ describe('MCP 配置', () => {
           },
           context7: {
             transport: 'http',
-            url: MCP_CONTEXT7_PRESET.server.url,
+            url: MCP_CONTEXT7_BUILTIN.server.url,
             enabled: true,
           },
         },
       })
       await assert.rejects(
-        addMcpServer(globalPath, MCP_CONTEXT7_PRESET.name, MCP_CONTEXT7_PRESET.server),
+        addMcpServer(globalPath, MCP_CONTEXT7_BUILTIN.name, MCP_CONTEXT7_BUILTIN.server),
         /名称已存在/,
       )
     } finally {

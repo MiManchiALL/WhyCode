@@ -1,3 +1,4 @@
+import { MCP_TOOL_SEARCH_NAME } from '../../mcp/search.ts'
 import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
 
 export const WEB_FETCH_TOOL_NAME = 'WebFetch'
@@ -7,7 +8,8 @@ export const WEB_FETCH_TOOL_PROMPT = [
   '读取一个公开 HTTP/HTTPS URL。HTML、Markdown 或纯文本返回确定性提取的 Markdown 正文和稳定行号；首次读取通常只传 url。',
   '检测到远程 PDF 时不返回行文本，而是保存为当前会话附件并返回附件 ID；随后必须使用 ReadPdf 的 startPage/pageCount 按页读取。',
   '加密、损坏、超过 50 MB 或 1000 页的 PDF 会被拒绝；视觉模型由 ReadPdf 获得页面图，非视觉模型由 ReadPdf 提取指定页文字。',
-  '适合在 WebSearch 找到来源后读取完整页面；不会执行网页脚本、登录账号或携带浏览器 Cookie。',
+  `只用于无需登录或服务身份即可公开访问的网页。若目标属于已配置外部服务，且任务要读取该服务对象或可能需要授权、登录态或私有数据，应先使用 ${MCP_TOOL_SEARCH_NAME} 查找对应 MCP 工具；不要用 WebFetch 探测其公开可见性。`,
+  '适合在 WebSearch 找到公开来源后读取完整页面；不会执行网页脚本、登录账号或携带浏览器 Cookie。',
   'offset/limit 是可选的文本网页行分页参数，默认从第 1 行返回最多 100 行；PDF 不应使用这两个参数继续读取。',
   `需要定位关键词时，先读取页面，再使用 ${WEB_FIND_TOOL_NAME}；不要靠反复抓取同一 URL 查找。`,
   WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT,

@@ -40,6 +40,7 @@ import {
   parseCliProxyModelId,
   resolveDefaultModelId,
   saveConfig,
+  type WhycodeConfig,
 } from './config.ts'
 import { listModelConnections, resolveModelConnection } from './model-connections.ts'
 import {
@@ -54,7 +55,6 @@ import {
 import {
   addMcpConfiguredServer,
   createMcpSettingsSnapshot,
-  enableMcpPreset,
   resolveMcpConfigPath,
   updateMcpSecretHeader,
   updateMcpServerState,
@@ -91,7 +91,7 @@ import type {
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
-  EnableMcpPresetRequest,
+  McpOAuthRequest,
   OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
@@ -100,6 +100,10 @@ import type {
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
+import {
+  McpOAuthController,
+  type McpRegisteredOAuthClient,
+} from './mcp-oauth.ts'
 import { createConfiguredWebSearchHandler } from './web-search/configured.ts'
 import { updateWebSearchSettings } from './web-search-settings.ts'
 import {
@@ -132,6 +136,19 @@ const mcpGlobalConfigPath = join(dirname(getConfigPath()), 'mcp.json')
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
 }
+
+const mcpOAuthController = new McpOAuthController({
+  fetchImpl: (input, init) => net.fetch(
+    input instanceof URL ? input.toString() : input,
+    init,
+  ),
+  openExternal: (url) => shell.openExternal(url),
+  readSessions: () => loadAppConfig()?.mcpOAuthSessions ?? [],
+  writeSessions: persistMcpOAuthSessions,
+  registeredClients: {
+    ...githubOAuthClientFromEnvironment(),
+  },
+})
 
 const webSearchTool = createWebSearchTool({
   search: createConfiguredWebSearchHandler({
@@ -366,15 +383,18 @@ async function createMainAgentSession(
   reasoningEffort: ReasoningEffortSelection,
 ): Promise<AgentSession> {
   const mcpRuntime = new McpSessionRuntime({
-    configuration: await loadMcpConfiguration({
-      globalConfigPath: mcpGlobalConfigPath,
-      projectDir: targetProjectDir,
-      globalSecretHeaders: loadAppConfig()?.mcpSecretHeaders,
-    }),
+    configuration: mcpOAuthController.runtimeConfiguration(
+      await loadMcpConfiguration({
+        globalConfigPath: mcpGlobalConfigPath,
+        projectDir: targetProjectDir,
+        globalSecretHeaders: loadAppConfig()?.mcpSecretHeaders,
+      }),
+    ),
     fetchImpl: (input, init) => net.fetch(
       input instanceof URL ? input.toString() : input,
       init,
     ),
+    oauthTransportFactory: (config) => mcpOAuthController.runtimeTransport(config),
     attachments: {
       attachmentDirectory: recorder.attachmentDirectory,
       sessionId: recorder.sessionId,
@@ -797,6 +817,10 @@ function resumeInProgressMessage(action: string): string {
   return `正在验证附件并恢复会话，请等待完成后再${action}`
 }
 
+function mcpOAuthInProgressMessage(action: string): string {
+  return `MCP OAuth 登录进行中，请完成后再${action}`
+}
+
 async function persistConnectionConfig(
   config: NonNullable<ReturnType<typeof loadAppConfig>>,
 ): Promise<void> {
@@ -929,12 +953,6 @@ async function setMcpServerConnectionState(
     updateMcpServerState({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
 }
 
-async function addMcpRecommendedPreset(
-  request: EnableMcpPresetRequest,
-): Promise<SettingsMutationResult> {
-  return mutateConnectionSettings(() => enableMcpPreset(mcpGlobalConfigPath, request))
-}
-
 async function addMcpConnection(
   request: AddMcpServerRequest,
 ): Promise<SettingsMutationResult> {
@@ -942,10 +960,48 @@ async function addMcpConnection(
     addMcpConfiguredServer({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
 }
 
+async function authorizeMcpOAuthConnection(
+  request: McpOAuthRequest,
+): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+    return {
+      ok: false,
+      error: sessionDeletionLock.sessionId
+        ? '会话数据删除中，请等待完成后再开始 MCP OAuth 登录'
+        : resumeInProgressMessage('开始 MCP OAuth 登录'),
+    }
+  }
+  if (settingsMutationInProgress) {
+    return { ok: false, error: '连接设置正在保存，请完成后再开始 MCP OAuth 登录' }
+  }
+  try {
+    const server = await resolveGlobalMcpHttpServer(request)
+    await mcpOAuthController.authorize(server)
+    return { ok: true, snapshot: await currentConnectionSettingsSnapshot() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function disconnectMcpOAuthConnection(
+  request: McpOAuthRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const server = await resolveGlobalMcpHttpServer(request)
+    await mcpOAuthController.disconnect(server)
+  })
+}
+
 async function saveMcpSecretHeaderConnection(
   request: SaveMcpSecretHeaderRequest,
 ): Promise<SettingsMutationResult> {
   return mutateConnectionSettings(async () => {
+    if (!request.clearSecret && request.headerName.trim().toLowerCase() === 'authorization') {
+      const server = await resolveGlobalMcpHttpServer(request)
+      if (mcpOAuthController.currentSession(server)?.tokens) {
+        throw new Error('当前 MCP 服务器已通过 OAuth 登录；请先退出登录，再改用 Authorization Header')
+      }
+    }
     const next = await updateMcpSecretHeader(
       { globalConfigPath: mcpGlobalConfigPath, projectDir },
       loadAppConfig(),
@@ -962,6 +1018,9 @@ async function mutateConnectionSettings(
     return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
   }
   if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改连接设置' }
+  if (mcpOAuthController.isAuthorizing()) {
+    return { ok: false, error: 'MCP OAuth 登录进行中，请完成后再修改连接设置' }
+  }
   settingsMutationInProgress = true
   try {
     await mutation()
@@ -980,8 +1039,52 @@ async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSn
     projectDir,
     currentSessionSnapshot: session?.mcpSnapshot ?? null,
     mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
+    mcpOAuthController,
   })
   return createConnectionSettingsSnapshot(config, mcp)
+}
+
+async function resolveGlobalMcpHttpServer(request: McpOAuthRequest) {
+  if (request.scope !== 'global') {
+    throw new Error('项目 MCP 请使用项目环境变量认证，不能写入本机全局 OAuth 令牌库')
+  }
+  const appConfig = loadAppConfig()
+  const configuration = await loadMcpConfiguration({
+    globalConfigPath: mcpGlobalConfigPath,
+    projectDir,
+    globalSecretHeaders: appConfig?.mcpSecretHeaders,
+  })
+  const server = configuration.servers.find((candidate) =>
+    candidate.scope === 'global' && candidate.name === request.serverName)
+  if (!server || server.transport !== 'http') {
+    throw new Error(`已启用的全局 Streamable HTTP MCP 服务器不存在：${request.serverName}`)
+  }
+  return server
+}
+
+async function persistMcpOAuthSessions(
+  oauthSessions: readonly NonNullable<WhycodeConfig['mcpOAuthSessions']>[number][],
+): Promise<void> {
+  const current = loadAppConfig() ?? { providers: {} }
+  const next = structuredClone(current)
+  if (oauthSessions.length > 0) next.mcpOAuthSessions = [...oauthSessions]
+  else delete next.mcpOAuthSessions
+  await saveConfig(next, configSecretCodec, getConfigPath())
+}
+
+function githubOAuthClientFromEnvironment(): {
+  github?: McpRegisteredOAuthClient
+} {
+  const clientId = process.env.WHYCODE_GITHUB_OAUTH_CLIENT_ID?.trim()
+  const clientSecret = process.env.WHYCODE_GITHUB_OAUTH_CLIENT_SECRET?.trim()
+  if (!clientId || !clientSecret) return {}
+  return {
+    github: {
+      clientId,
+      clientSecret,
+      tokenEndpointAuthMethod: 'client_secret_post',
+    },
+  }
 }
 
 async function openMcpConfigFile(
@@ -1259,16 +1362,18 @@ function pendingInputs(
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-  if (sessionDeletionLock.sessionId || runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || mcpOAuthController.isAuthorizing() || runtimeBusy()) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
-        : sessionResumeLock.sessionId
-          ? resumeInProgressMessage('删除会话')
-          : session?.checkpointRestoreToolUseId
-            ? '文件回滚中，请等待完成后再删除会话'
-            : 'Agent 工作中，请先停止再删除会话',
+        : mcpOAuthController.isAuthorizing()
+          ? mcpOAuthInProgressMessage('删除会话')
+          : sessionResumeLock.sessionId
+            ? resumeInProgressMessage('删除会话')
+            : session?.checkpointRestoreToolUseId
+              ? '文件回滚中，请等待完成后再删除会话'
+              : 'Agent 工作中，请先停止再删除会话',
     }
   }
   const deletedCurrent = sessions.currentSessionId === sessionId
@@ -1366,8 +1471,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.listModels, () =>
     listModelConnections(loadAppConfig(), resolveCurrentModelId()))
   ipcMain.handle(IPC.connectionSettings, async () => {
-    await synchronizeConfiguredCliProxyRoutes()
-      .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+    if (!mcpOAuthController.isAuthorizing()) {
+      await synchronizeConfiguredCliProxyRoutes()
+        .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+    }
     return currentConnectionSettingsSnapshot()
   })
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
@@ -1378,12 +1485,14 @@ if (primaryInstance) void app.whenReady().then(async () => {
     saveWebSearchConnectionSettings(request))
   ipcMain.handle(IPC.setMcpServerEnabled, (_e, request: SetMcpServerEnabledRequest) =>
     setMcpServerConnectionState(request))
-  ipcMain.handle(IPC.enableMcpPreset, (_e, request: EnableMcpPresetRequest) =>
-    addMcpRecommendedPreset(request))
   ipcMain.handle(IPC.addMcpServer, (_e, request: AddMcpServerRequest) =>
     addMcpConnection(request))
   ipcMain.handle(IPC.saveMcpSecretHeader, (_e, request: SaveMcpSecretHeaderRequest) =>
     saveMcpSecretHeaderConnection(request))
+  ipcMain.handle(IPC.authorizeMcpOAuth, (_e, request: McpOAuthRequest) =>
+    authorizeMcpOAuthConnection(request))
+  ipcMain.handle(IPC.disconnectMcpOAuth, (_e, request: McpOAuthRequest) =>
+    disconnectMcpOAuthConnection(request))
   ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
     openMcpConfigFile(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
@@ -1494,6 +1603,8 @@ app.on('before-quit', (event) => {
     sessionDisposalTail,
     session?.dispose()
       .catch((error) => console.error('当前 MCP 会话退出清理失败：', error)),
+    mcpOAuthController.close()
+      .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
   ])
     .finally(() => app.quit())
 })

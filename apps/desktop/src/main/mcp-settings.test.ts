@@ -4,13 +4,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
+  MCP_CONTEXT7_BUILTIN,
+  MCP_GITHUB_BUILTIN,
+  ensureMcpConfigTemplate,
   loadMcpConfiguration,
   type McpManagerSnapshot,
 } from '@whycode/core'
 import {
   addMcpConfiguredServer,
   createMcpSettingsSnapshot,
-  enableMcpPreset,
   updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
@@ -88,27 +90,51 @@ describe('MCP 连接设置', () => {
     }
   })
 
-  it('推荐 Context7 写入全局单一事实源，已有条目由通用开关管理', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-preset-'))
+  it('内置 Context7 与 GitHub 写入全局单一事实源，并由通用开关管理', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-defaults-'))
     const globalConfigPath = join(root, 'mcp.json')
     try {
-      const before = await createMcpSettingsSnapshot({
-        globalConfigPath,
-        projectDir: null,
-        currentSessionSnapshot: null,
-        mcpSecretHeaders: [],
-      })
-      assert.equal(before.recommendedPresets[0]?.status, 'available')
-
-      await enableMcpPreset(globalConfigPath, { presetId: 'context7' })
+      await ensureMcpConfigTemplate(globalConfigPath)
       let snapshot = await createMcpSettingsSnapshot({
         globalConfigPath,
         projectDir: null,
         currentSessionSnapshot: null,
         mcpSecretHeaders: [],
       })
-      assert.equal(snapshot.recommendedPresets[0]?.status, 'installed')
-      assert.equal(snapshot.servers[0]?.enabled, true)
+      assert.deepEqual(
+        snapshot.servers.map((server) => [server.name, server.builtinId, server.enabled]),
+        [
+          ['context7', MCP_CONTEXT7_BUILTIN.id, true],
+          ['github', MCP_GITHUB_BUILTIN.id, true],
+        ],
+      )
+      const github = snapshot.servers.find((server) => server.name === 'github')
+      assert.equal(github?.suggestedSecretHeaderName, 'Authorization')
+      assert.equal(github?.suggestedSecretKind, 'github-pat')
+      const githubConfig = await updateMcpSecretHeader(
+        { globalConfigPath, projectDir: null },
+        { providers: {} },
+        {
+          scope: 'global',
+          serverName: 'github',
+          headerName: 'Authorization',
+          secret: 'github-pat',
+        },
+      )
+      assert.equal(githubConfig.mcpSecretHeaders?.[0]?.value, 'Bearer github-pat')
+      await assert.rejects(
+        updateMcpSecretHeader(
+          { globalConfigPath, projectDir: null },
+          { providers: {} },
+          {
+            scope: 'global',
+            serverName: 'github',
+            headerName: 'Authorization',
+            secret: 'Bearer   ',
+          },
+        ),
+        /PAT 不能为空/,
+      )
 
       await updateMcpServerState(
         { globalConfigPath, projectDir: null },
@@ -128,8 +154,8 @@ describe('MCP 连接设置', () => {
     }
   })
 
-  it('不把同名自定义服务器冒充或覆盖为 Context7 预置', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-preset-conflict-'))
+  it('补齐默认项时不把同名自定义服务器冒充或覆盖为内置服务', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-default-conflict-'))
     const globalConfigPath = join(root, 'mcp.json')
     try {
       await writeConfig(globalConfigPath, {
@@ -141,19 +167,18 @@ describe('MCP 连接设置', () => {
           },
         },
       })
+      await ensureMcpConfigTemplate(globalConfigPath)
       const snapshot = await createMcpSettingsSnapshot({
         globalConfigPath,
         projectDir: null,
         currentSessionSnapshot: null,
         mcpSecretHeaders: [],
       })
-      assert.equal(snapshot.recommendedPresets[0]?.status, 'name-conflict')
-      await assert.rejects(
-        enableMcpPreset(globalConfigPath, { presetId: 'context7' }),
-        /名称已存在/,
-      )
+      assert.equal(snapshot.servers.find((server) => server.name === 'context7')?.builtinId, undefined)
+      assert.equal(snapshot.servers.find((server) => server.name === 'github')?.builtinId, 'github')
       const stored = JSON.parse(await readFile(globalConfigPath, 'utf8'))
       assert.equal(stored.servers.context7.url, 'https://custom.example/mcp')
+      assert.equal(stored.servers.github.url, MCP_GITHUB_BUILTIN.server.url)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

@@ -42,7 +42,8 @@ export {
 } from './tools/tool.ts'
 export {
   MCP_CONFIG_VERSION,
-  MCP_CONTEXT7_PRESET,
+  MCP_CONTEXT7_BUILTIN,
+  MCP_GITHUB_BUILTIN,
   MCP_GLOBAL_CONFIG_TEMPLATE,
   MCP_PROJECT_CONFIG_TEMPLATE,
   addMcpServer,
@@ -54,6 +55,7 @@ export {
   type McpConfiguration,
   type McpConfigDiagnostic,
   type McpConfigScope,
+  type McpBuiltinServerId,
   type McpConfiguredServer,
   type McpHttpServerConfig,
   type McpSecretHeader,
@@ -67,6 +69,10 @@ export {
   type McpSessionRuntimeOptions,
 } from './mcp/runtime.ts'
 export type { McpManagerSnapshot, McpServerStatus } from './mcp/manager.ts'
+export type {
+  McpOAuthTransport,
+  McpOAuthTransportFactory,
+} from './mcp/connection-utils.ts'
 export {
   AgentSession,
   type AgentSessionOptions,

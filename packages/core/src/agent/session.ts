@@ -1539,7 +1539,7 @@ export class AgentSession {
           questionResumesTaskPlan,
         ))
       }
-      const mcpStateMessage = mcpStep?.stateMessageOnCommit() ?? null
+      const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
       const orderedImageResults = toolCallOrder.flatMap((toolCallId) => {
         const result = stepImageAttachments.get(toolCallId)
         return result ? [{ ...result, toolCallId }] : []
@@ -1564,7 +1564,7 @@ export class AgentSession {
         ...attachImagesToToolResults(response.messages, orderedImageResults),
         ...pdfReferenceMessages,
         ...internalMarkers,
-        ...(mcpStateMessage ? [mcpStateMessage] : []),
+        ...mcpCommitMessages,
       ])
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null

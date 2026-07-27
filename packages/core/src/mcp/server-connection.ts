@@ -1,6 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { McpServerConfig } from './config.ts'
+import {
+  getMcpBuiltinCapabilitySummary,
+  type McpServerConfig,
+} from './config.ts'
 import {
   buildServerCatalog,
   sameMcpCatalog,
@@ -14,29 +17,40 @@ import {
   safeMcpConnectionError,
   waitForMcpOperation,
   type McpFetch,
+  type McpOAuthTransportFactory,
 } from './connection-utils.ts'
 import type { McpBoundTool, McpServerStatus } from './manager-types.ts'
 
 export class McpServerConnection {
   readonly config: McpServerConfig
   private readonly fetchImpl: McpFetch
+  private readonly oauthTransportFactory?: McpOAuthTransportFactory
   private readonly lifetimeAbort = new AbortController()
   private state: McpServerStatus['state'] = 'idle'
   private revision = 0
   private tools: McpCatalogTool[] = []
   private diagnostics: string[] = []
   private error?: string
+  private serverInstructions?: string
   private client?: Client
   private transport?: Transport
   private operation?: Promise<void>
   private closed = false
 
-  constructor(config: McpServerConfig, fetchImpl: McpFetch) {
+  constructor(
+    config: McpServerConfig,
+    fetchImpl: McpFetch,
+    oauthTransportFactory?: McpOAuthTransportFactory,
+  ) {
     this.config = config
     this.fetchImpl = fetchImpl
+    this.oauthTransportFactory = oauthTransportFactory
   }
 
   status(): McpServerStatus {
+    const capabilitySummary = this.config.transport === 'http'
+      ? getMcpBuiltinCapabilitySummary(this.config.builtinId)
+      : undefined
     return {
       name: this.config.name,
       scope: this.config.scope,
@@ -44,6 +58,8 @@ export class McpServerConnection {
       ...(this.error ? { error: this.error } : {}),
       toolCount: this.tools.length,
       diagnostics: this.diagnostics,
+      ...(capabilitySummary ? { capabilitySummary } : {}),
+      ...(this.serverInstructions ? { serverInstructions: this.serverInstructions } : {}),
     }
   }
 
@@ -135,6 +151,7 @@ export class McpServerConnection {
     const client = this.client
     this.client = undefined
     this.transport = undefined
+    this.serverInstructions = undefined
     this.state = 'disconnected'
     this.revision++
     await client?.close().catch(() => {})
@@ -168,6 +185,7 @@ export class McpServerConnection {
     const previous = this.client
     this.client = undefined
     this.transport = undefined
+    this.serverInstructions = undefined
     this.state = 'connecting'
     this.revision++
     await previous?.close().catch(() => {})
@@ -189,13 +207,18 @@ export class McpServerConnection {
         },
       },
     )
-    const transport = createMcpTransport(this.config, this.fetchImpl)
+    const transport = createMcpTransport(
+      this.config,
+      this.fetchImpl,
+      this.oauthTransportFactory,
+    )
     this.client = client
     this.transport = transport
     client.onclose = () => {
       if (this.closed || this.client !== client) return
       this.client = undefined
       this.transport = undefined
+      this.serverInstructions = undefined
       this.state = 'disconnected'
       this.error = '连接已关闭'
       this.revision++
@@ -211,6 +234,7 @@ export class McpServerConnection {
         timeout: this.config.startupTimeoutMs,
         maxTotalTimeout: this.config.startupTimeoutMs,
       })
+      this.serverInstructions = safeMcpServerInstructions(client.getInstructions())
       const startingRevision = this.revision
       const advertised = await listAllMcpTools(
         client,
@@ -225,6 +249,7 @@ export class McpServerConnection {
       if (this.client === client) {
         this.client = undefined
         this.transport = undefined
+        this.serverInstructions = undefined
         this.state = 'failed'
         this.revision++
       }
@@ -261,4 +286,29 @@ function abortError(): Error {
   const error = new Error('操作已取消')
   error.name = 'AbortError'
   return error
+}
+
+const MCP_SERVER_INSTRUCTIONS_MAX_BYTES = 2 * 1024
+const MCP_SERVER_INSTRUCTIONS_TRUNCATED = '\n[服务器初始化说明已截断]'
+const UNSAFE_INSTRUCTION_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
+
+function safeMcpServerInstructions(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/\r\n?/gu, '\n').trim()
+  if (!normalized) return undefined
+
+  const characterCapped = normalized.slice(0, MCP_SERVER_INSTRUCTIONS_MAX_BYTES)
+  if (UNSAFE_INSTRUCTION_CONTROL.test(characterCapped)) return undefined
+  const bytes = Buffer.from(characterCapped, 'utf8')
+  if (
+    characterCapped.length === normalized.length
+    && bytes.length <= MCP_SERVER_INSTRUCTIONS_MAX_BYTES
+  ) return characterCapped
+
+  const room = MCP_SERVER_INSTRUCTIONS_MAX_BYTES
+    - Buffer.byteLength(MCP_SERVER_INSTRUCTIONS_TRUNCATED)
+  const content = bytes.subarray(0, room)
+    .toString('utf8')
+    .replace(/\uFFFD$/u, '')
+    .trimEnd()
+  return `${content}${MCP_SERVER_INSTRUCTIONS_TRUNCATED}`
 }

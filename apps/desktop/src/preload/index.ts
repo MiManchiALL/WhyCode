@@ -12,7 +12,7 @@ import type {
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
-  EnableMcpPresetRequest,
+  McpOAuthRequest,
   ModelListItem,
   OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
@@ -42,15 +42,18 @@ const api = {
   setMcpServerEnabled: (
     request: SetMcpServerEnabledRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.setMcpServerEnabled, request),
-  enableMcpPreset: (
-    request: EnableMcpPresetRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.enableMcpPreset, request),
   addMcpServer: (
     request: AddMcpServerRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.addMcpServer, request),
   saveMcpSecretHeader: (
     request: SaveMcpSecretHeaderRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveMcpSecretHeader, request),
+  authorizeMcpOAuth: (
+    request: McpOAuthRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.authorizeMcpOAuth, request),
+  disconnectMcpOAuth: (
+    request: McpOAuthRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.disconnectMcpOAuth, request),
   openMcpConfig: (
     request: OpenMcpConfigRequest,
   ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),

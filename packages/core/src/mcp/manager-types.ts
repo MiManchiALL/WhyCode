@@ -8,6 +8,10 @@ export interface McpServerStatus {
   error?: string
   toolCount: number
   diagnostics: readonly string[]
+  /** WhyCode 维护的可信内置来源画像，只用于能力路由。 */
+  capabilitySummary?: string
+  /** MCP initialize.instructions；已限长，仍属于不可信外部元数据。 */
+  serverInstructions?: string
 }
 
 export interface McpManagerSnapshot {

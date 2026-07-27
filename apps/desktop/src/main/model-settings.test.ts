@@ -13,7 +13,6 @@ const emptyMcpSettings: McpSettingsItem = {
   currentSessionUsesSnapshot: false,
   servers: [],
   diagnostics: [],
-  recommendedPresets: [],
 }
 
 function createSettingsSnapshot(config: WhycodeConfig | null) {

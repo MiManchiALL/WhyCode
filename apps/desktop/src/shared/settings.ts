@@ -96,9 +96,14 @@ export interface McpSettingsItem {
     transport: 'stdio' | 'http'
     enabled: boolean
     effective: boolean
-    presetId?: 'context7'
+    builtinId?: 'context7' | 'github'
     secretHeaderNames: string[]
     suggestedSecretHeaderName?: string
+    suggestedSecretKind?: 'api-key' | 'github-pat'
+    oauth?: {
+      status: 'connected' | 'available' | 'client-registration-required' | 'unavailable'
+      message?: string
+    }
     currentSessionState?: McpServerStatus['state']
     currentSessionToolCount?: number
     currentSessionError?: string
@@ -109,22 +114,12 @@ export interface McpSettingsItem {
     server?: string
     message: string
   }>
-  recommendedPresets: Array<{
-    id: 'context7'
-    displayName: string
-    description: string
-    status: 'available' | 'installed' | 'name-conflict'
-  }>
 }
 
 export interface SetMcpServerEnabledRequest {
   scope: McpConfigScope
   name: string
   enabled: boolean
-}
-
-export interface EnableMcpPresetRequest {
-  presetId: 'context7'
 }
 
 export type AddMcpServerRequest = {
@@ -147,6 +142,11 @@ export interface SaveMcpSecretHeaderRequest {
   headerName: string
   secret?: string
   clearSecret?: boolean
+}
+
+export interface McpOAuthRequest {
+  scope: McpConfigScope
+  serverName: string
 }
 
 export interface OpenMcpConfigRequest {

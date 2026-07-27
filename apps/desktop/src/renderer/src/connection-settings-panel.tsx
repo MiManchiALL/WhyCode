@@ -4,7 +4,7 @@ import type {
   AddMcpServerRequest,
   CliProxyApiSettingsItem,
   ConnectionSettingsSnapshot,
-  EnableMcpPresetRequest,
+  McpOAuthRequest,
   OpenMcpConfigRequest,
   ProviderSettingsItem,
   SaveCliProxyApiSettingsRequest,
@@ -25,6 +25,7 @@ interface ConnectionSettingsPanelProps {
 export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [oauthPending, setOauthPending] = useState(false)
 
   const mutate = async (operation: () => Promise<SettingsMutationResult>) => {
     setPending(true)
@@ -42,6 +43,25 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
       return false
     } finally {
       setPending(false)
+    }
+  }
+
+  const mutateOAuth = async (operation: () => Promise<SettingsMutationResult>) => {
+    setOauthPending(true)
+    setError(null)
+    try {
+      const result = await operation()
+      if (!result.ok || !result.snapshot) {
+        setError(result.error ?? 'OAuth 登录失败')
+        return false
+      }
+      props.onChanged(result.snapshot)
+      return true
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      return false
+    } finally {
+      setOauthPending(false)
     }
   }
 
@@ -88,7 +108,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 <ProviderEditor
                   key={provider.id}
                   provider={provider}
-                  disabled={pending}
+                  disabled={pending || oauthPending}
                   onSave={(request) => mutate(() => window.whycode.saveProviderSettings(request))}
                 />
               ))}
@@ -97,27 +117,29 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
 
           <CliProxyApiEditor
             settings={props.snapshot.cliProxyApi}
-            disabled={pending}
+            disabled={pending || oauthPending}
             onSave={(request) => mutate(() => window.whycode.saveCliProxyApiSettings(request))}
           />
 
           <WebSearchSettingsEditor
             settings={props.snapshot.webSearch}
-            disabled={pending}
+            disabled={pending || oauthPending}
             onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request))}
           />
 
           <McpSettingsEditor
             settings={props.snapshot.mcp}
-            disabled={pending}
+            disabled={pending || oauthPending}
             onSetEnabled={(request: SetMcpServerEnabledRequest) =>
               mutate(() => window.whycode.setMcpServerEnabled(request))}
-            onEnablePreset={(request: EnableMcpPresetRequest) =>
-              mutate(() => window.whycode.enableMcpPreset(request))}
             onAddServer={(request: AddMcpServerRequest) =>
               mutate(() => window.whycode.addMcpServer(request))}
             onSaveSecretHeader={(request: SaveMcpSecretHeaderRequest) =>
               mutate(() => window.whycode.saveMcpSecretHeader(request))}
+            onAuthorizeOAuth={(request: McpOAuthRequest) =>
+              mutateOAuth(() => window.whycode.authorizeMcpOAuth(request))}
+            onDisconnectOAuth={(request: McpOAuthRequest) =>
+              mutate(() => window.whycode.disconnectMcpOAuth(request))}
             onOpenConfig={openMcpConfig}
             onRefresh={refresh}
           />

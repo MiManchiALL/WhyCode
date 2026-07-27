@@ -4,8 +4,9 @@ import {
   getDefaultEnvironment,
 } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { McpServerConfig } from './config.ts'
+import type { McpHttpServerConfig, McpServerConfig } from './config.ts'
 import {
   MCP_MAX_TOOLS_PER_SERVER,
   type McpAdvertisedTool,
@@ -15,13 +16,21 @@ const MCP_LIST_MAX_PAGES = 100
 export const MCP_CONNECTION_CONCURRENCY = 4
 
 export type McpFetch = (
-  input: string | URL,
+  input: string | URL | Request,
   init?: RequestInit,
 ) => Promise<Response>
+export interface McpOAuthTransport {
+  authProvider: OAuthClientProvider
+  fetchImpl: McpFetch
+}
+export type McpOAuthTransportFactory = (
+  config: McpHttpServerConfig,
+) => McpOAuthTransport | undefined
 
 export function createMcpTransport(
   config: McpServerConfig,
   fetchImpl: McpFetch,
+  oauthTransportFactory?: McpOAuthTransportFactory,
 ): Transport {
   if (config.transport === 'stdio') {
     const transport = new StdioClientTransport({
@@ -35,8 +44,10 @@ export function createMcpTransport(
     transport.stderr?.on('error', () => {})
     return transport
   }
+  const oauth = oauthTransportFactory?.(config)
   return new StreamableHTTPClientTransport(new URL(config.url), {
-    fetch: fetchImpl,
+    fetch: oauth?.fetchImpl ?? fetchImpl,
+    authProvider: oauth?.authProvider,
     requestInit: {
       headers: config.headers,
       credentials: 'omit',
@@ -79,6 +90,12 @@ export function safeMcpConnectionError(
   config: McpServerConfig,
 ): string {
   if (error instanceof Error && error.name === 'AbortError') return '连接已取消'
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 401
+  ) return '服务器要求登录，请在“连接 → MCP 服务”中完成认证'
   let message = error instanceof Error ? error.message : String(error)
   const redactions = config.transport === 'stdio'
     ? [config.command, config.cwd, ...config.args, ...Object.values(config.env)]

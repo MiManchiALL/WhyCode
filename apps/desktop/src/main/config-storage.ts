@@ -17,6 +17,11 @@ import type {
   WebSearchProviderId,
 } from '../shared/settings.ts'
 import type { ProviderConnectionConfig, WhycodeConfig } from './config.ts'
+import {
+  mcpOAuthSessionKey,
+  parseMcpOAuthSession,
+  type McpOAuthSession,
+} from './mcp-oauth-state.ts'
 
 export interface ConfigSecretCodec {
   isAvailable(): boolean
@@ -56,11 +61,16 @@ interface StoredConfig {
     headerName?: unknown
     encryptedValue?: unknown
   }>
+  mcpOAuthSessions?: Array<{
+    serverName?: unknown
+    connectionFingerprint?: unknown
+    encryptedPayload?: unknown
+  }>
   /** v3 兼容输入；只在启动迁移读取，永不进入运行时或再次保存。 */
   customConnections?: unknown
 }
 
-const CONFIG_VERSION = 6
+const CONFIG_VERSION = 7
 const RETIRED_MODEL_MIGRATION_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
@@ -86,6 +96,7 @@ export function loadConfig(
     const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
     const webSearch = parseWebSearch(stored.webSearch, codec)
     const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
+    const mcpOAuthSessions = parseStoredMcpOAuthSessions(stored.mcpOAuthSessions, codec)
     return {
       providers,
       ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
@@ -94,6 +105,7 @@ export function loadConfig(
       ...(consensusAgents ? { consensusAgents } : {}),
       ...(webSearch ? { webSearch } : {}),
       ...(mcpSecretHeaders ? { mcpSecretHeaders } : {}),
+      ...(mcpOAuthSessions ? { mcpOAuthSessions } : {}),
     }
   } catch {
     return null
@@ -152,6 +164,9 @@ export async function saveConfig(
     } : {}),
     ...(config.mcpSecretHeaders?.length ? {
       mcpSecretHeaders: storeMcpSecretHeaders(config.mcpSecretHeaders, codec),
+    } : {}),
+    ...(config.mcpOAuthSessions?.length ? {
+      mcpOAuthSessions: storeMcpOAuthSessions(config.mcpOAuthSessions, codec),
     } : {}),
   }
   await writeStoredConfig(stored, path)
@@ -298,6 +313,57 @@ function storeMcpSecretHeaders(
       connectionFingerprint: entry.connectionFingerprint,
       headerName: entry.headerName,
       encryptedValue: codec.encrypt(entry.value),
+    }))
+}
+
+function parseStoredMcpOAuthSessions(
+  value: unknown,
+  codec?: ConfigSecretCodec,
+): McpOAuthSession[] | undefined {
+  if (!Array.isArray(value) || !codec) return undefined
+  const parsed = new Map<string, McpOAuthSession>()
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate)
+      || typeof candidate.serverName !== 'string'
+      || typeof candidate.connectionFingerprint !== 'string'
+      || typeof candidate.encryptedPayload !== 'string'
+    ) continue
+    try {
+      const payload = JSON.parse(codec.decrypt(candidate.encryptedPayload)) as unknown
+      const entry = parseMcpOAuthSession({
+        serverName: candidate.serverName,
+        connectionFingerprint: candidate.connectionFingerprint,
+        ...(isRecord(payload) ? payload : {}),
+      })
+      parsed.set(mcpOAuthSessionKey(entry), entry)
+    } catch {
+      // 单个损坏 OAuth 状态 fail-closed；其它连接仍可继续使用。
+    }
+  }
+  return parsed.size > 0 ? [...parsed.values()] : undefined
+}
+
+function storeMcpOAuthSessions(
+  values: readonly McpOAuthSession[],
+  codec: ConfigSecretCodec,
+): NonNullable<StoredConfig['mcpOAuthSessions']> {
+  const parsed = new Map<string, McpOAuthSession>()
+  for (const value of values) {
+    const entry = parseMcpOAuthSession(value)
+    parsed.set(mcpOAuthSessionKey(entry), entry)
+  }
+  return [...parsed.values()]
+    .sort((left, right) =>
+      left.serverName.localeCompare(right.serverName)
+      || left.connectionFingerprint.localeCompare(right.connectionFingerprint))
+    .map(({ serverName, connectionFingerprint, clientInformation, tokens }) => ({
+      serverName,
+      connectionFingerprint,
+      encryptedPayload: codec.encrypt(JSON.stringify({
+        ...(clientInformation ? { clientInformation } : {}),
+        ...(tokens ? { tokens } : {}),
+      })),
     }))
 }
 

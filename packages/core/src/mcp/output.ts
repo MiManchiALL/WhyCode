@@ -1,6 +1,7 @@
 import { IMAGE_ATTACHMENT_MAX_COUNT, IMAGE_ATTACHMENT_MAX_SOURCE_BYTES } from '../attachments/types.ts'
 import { importImageAttachments } from '../attachments/storage.ts'
 import type { ToolResult } from '../tools/tool.ts'
+import { redactUrlCredentials } from './url-credentials.ts'
 
 export const MCP_TOOL_OUTPUT_MAX_BYTES = 64 * 1024
 
@@ -45,7 +46,11 @@ export async function formatMcpToolResult(
     }
     switch (item.type) {
       case 'text':
-        output.add(typeof item.text === 'string' ? item.text : '[MCP 文本内容无效]')
+        if (typeof item.text === 'string') {
+          output.addExternal(item.text)
+        } else {
+          output.add('[MCP 文本内容无效]')
+        }
         break
       case 'image': {
         if (imageSources.length >= IMAGE_ATTACHMENT_MAX_COUNT) {
@@ -121,7 +126,9 @@ function formatEmbeddedResource(value: unknown): string {
   if (!isRecord(value)) return '[MCP 内嵌资源无效]'
   const uri = typeof value.uri === 'string' ? safeInline(value.uri) : '未知 URI'
   if (typeof value.text === 'string') {
-    return `资源 ${uri}：\n${utf8Prefix(value.text, MCP_TOOL_OUTPUT_MAX_BYTES)}`
+    return `资源 ${uri}：\n${redactUrlCredentials(
+      utf8Prefix(value.text, MCP_TOOL_OUTPUT_MAX_BYTES),
+    )}`
   }
   if (typeof value.blob === 'string') {
     return `资源 ${uri} 返回了二进制内容；当前版本未直接注入。`
@@ -186,9 +193,9 @@ function safeJson(value: unknown): string {
 }
 
 function safeInline(value: string): string {
-  return value.slice(0, 2_000)
+  return redactUrlCredentials(value.slice(0, 2_000)
     .replace(/[\r\n\u0000-\u001f\u007f]+/gu, ' ')
-    .trim()
+    .trim())
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -216,6 +223,12 @@ class BoundedOutput {
     this.parts.push(part)
     this.bytes += separatorBytes + Buffer.byteLength(part, 'utf8')
     if (part.length !== value.length) this.truncated = true
+  }
+
+  addExternal(value: string): void {
+    const bounded = utf8Prefix(value, MCP_TOOL_OUTPUT_MAX_BYTES)
+    if (bounded.length !== value.length) this.truncated = true
+    this.add(redactUrlCredentials(bounded))
   }
 
   markTruncated(): void {
@@ -247,7 +260,7 @@ function projectJsonValue(
   if (typeof value === 'string') {
     const bounded = utf8Prefix(value, MCP_JSON_MAX_STRING_BYTES)
     if (bounded.length !== value.length) budget.truncated = true
-    return bounded
+    return redactUrlCredentials(bounded)
   }
   if (typeof value !== 'object') {
     return utf8Prefix(String(value), MCP_JSON_MAX_STRING_BYTES)
@@ -279,7 +292,7 @@ function projectJsonValue(
         projected.__whycode_truncated__ = '更多字段已截断'
         break
       }
-      projected[key.slice(0, 256)] = projectJsonValue(
+      projected[redactUrlCredentials(key.slice(0, 256))] = projectJsonValue(
         record[key],
         depth + 1,
         budget,

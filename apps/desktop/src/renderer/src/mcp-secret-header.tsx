@@ -12,12 +12,17 @@ interface McpSecretHeaderEditorProps {
 
 export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
   const suggestedHeaderName = props.server.suggestedSecretHeaderName
+  const secretKind = props.server.suggestedSecretKind
   const [open, setOpen] = useState(false)
   const [headerName, setHeaderName] = useState(
     suggestedHeaderName ?? '',
   )
   const [secret, setSecret] = useState('')
-  if (props.server.scope !== 'global' || props.server.transport !== 'http') return null
+  if (
+    props.server.scope !== 'global'
+    || props.server.transport !== 'http'
+    || props.server.oauth?.status === 'connected'
+  ) return null
 
   const save = async () => {
     const saved = await props.onSave({
@@ -47,8 +52,10 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
           disabled={props.disabled}
         >
           {open
-            ? `收起${suggestedHeaderName ? ' API Key' : '认证'}设置`
-            : suggestedHeaderName ? 'API Key（可选）' : '认证设置'}
+            ? `收起${secretKind === 'github-pat' ? ' PAT' : suggestedHeaderName ? ' API Key' : '认证'}设置`
+            : secretKind === 'github-pat'
+              ? '使用 GitHub PAT'
+              : suggestedHeaderName ? 'API Key（可选）' : '认证设置'}
         </button>
         {props.server.secretHeaderNames.map((name) => (
           <span key={name} className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-700">
@@ -72,8 +79,10 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
               </label>
             )}
             <label className="block text-[10px] text-neutral-600">
-              {suggestedHeaderName
-                ? 'API Key（官方推荐，留空也可使用）'
+              {secretKind === 'github-pat'
+                ? 'GitHub Personal Access Token'
+                : suggestedHeaderName
+                  ? 'API Key（官方推荐，留空也可使用）'
                 : '完整 Header 值（例如 Bearer <token>）'}
               <input
                 className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -86,7 +95,9 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
             </label>
           </div>
           <p className="mt-1.5 text-[10px] text-neutral-500">
-            {suggestedHeaderName && <>按服务预设通过 {suggestedHeaderName} 发送。 </>}
+            {secretKind === 'github-pat'
+              ? <>WhyCode 会以 Bearer Header 发送 PAT；建议使用只授权所需仓库读取权限的 fine-grained PAT。GitHub 官方 MCP 不支持匿名访问。 </>
+              : suggestedHeaderName && <>按内置服务约定通过 {suggestedHeaderName} 发送。 </>}
             密钥通过系统安全存储加密，不写入 mcp.json，也不会返回 Renderer；只有服务器 URL 未变化时才会随新会话发送。
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -95,7 +106,9 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
               onClick={() => void save()}
               disabled={props.disabled || !headerName.trim() || !secret.trim()}
             >
-              {suggestedHeaderName ? '保存 API Key' : '保存认证值'}
+              {secretKind === 'github-pat'
+                ? '保存 PAT'
+                : suggestedHeaderName ? '保存 API Key' : '保存认证值'}
             </button>
             {props.server.secretHeaderNames.map((name) => (
               <button

@@ -39,6 +39,21 @@ export async function addMcpServer(
   await writeMcpConfig(path, next)
 }
 
+export async function ensureMcpServers(
+  path: string,
+  defaults: Readonly<Record<string, McpServerConfigInput>>,
+): Promise<void> {
+  const raw = await readMutableMcpConfig(path, false)
+  const servers = recordField(raw, 'servers')
+  const missing = Object.entries(defaults).filter(([name]) => !Object.hasOwn(servers, name))
+  if (missing.length === 0) return
+  const next = structuredClone(raw)
+  const nextServers = recordField(next, 'servers')
+  for (const [name, server] of missing) nextServers[name] = server
+  validateMcpConfig(next)
+  await writeMcpConfig(path, next)
+}
+
 async function readMutableMcpConfig(
   path: string,
   allowMissing: boolean,

@@ -37,7 +37,6 @@ export interface McpCatalogTool {
   description: string
   inputSchema: Record<string, unknown> & { type: 'object' }
   inputSummary: string
-  searchText: string
   advertisedReadOnly: boolean
 }
 
@@ -177,13 +176,6 @@ function normalizeTool(
     description,
     inputSchema: advertised.inputSchema,
     inputSummary,
-    searchText: collectSearchText({
-      serverName: server.name,
-      rawName,
-      title,
-      description,
-      schema: advertised.inputSchema,
-    }),
     advertisedReadOnly: advertised.annotations?.readOnlyHint === true,
   }
 }
@@ -223,39 +215,6 @@ function describeInputSchema(schema: Record<string, unknown>): string {
   return Object.keys(properties).length > names.length ? `${summary}, …` : summary
 }
 
-function collectSearchText(input: {
-  serverName: string
-  rawName: string
-  title: string
-  description: string
-  schema: Record<string, unknown>
-}): string {
-  const fragments = [input.serverName, input.rawName, input.title, input.description]
-  collectSchemaText(input.schema, fragments, 0)
-  return fragments.join('\n').slice(0, 32_000)
-}
-
-function collectSchemaText(
-  value: unknown,
-  fragments: string[],
-  depth: number,
-): void {
-  if (depth > 6 || fragments.length > 200) return
-  if (typeof value === 'string') {
-    fragments.push(value.slice(0, 1_000))
-    return
-  }
-  if (Array.isArray(value)) {
-    for (const item of value.slice(0, 30)) collectSchemaText(item, fragments, depth + 1)
-    return
-  }
-  if (!isRecord(value)) return
-  for (const [key, item] of Object.entries(value).slice(0, 60)) {
-    fragments.push(key)
-    collectSchemaText(item, fragments, depth + 1)
-  }
-}
-
 function isObjectSchema(
   value: unknown,
 ): value is Record<string, unknown> & { type: 'object' } {
@@ -287,7 +246,7 @@ function catalogToolBytes(tool: McpCatalogTool): number {
     + Buffer.byteLength(
       `${tool.exposedName}\n${tool.serverName}\n${tool.rawName}\n${tool.title}\n${
         tool.description
-      }\n${tool.inputSummary}\n${tool.searchText}`,
+      }\n${tool.inputSummary}`,
       'utf8',
     )
 }
