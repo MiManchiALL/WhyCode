@@ -5,7 +5,8 @@ import {
   type ProviderProtocol,
 } from '@whycode/core'
 import type {
-  ModelSettingsSnapshot,
+  ConnectionSettingsSnapshot,
+  McpSettingsItem,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
 } from '../shared/settings.ts'
@@ -23,9 +24,10 @@ import { createWebSearchSettingsSnapshot } from './web-search-settings.ts'
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
-export function createModelSettingsSnapshot(
+export function createConnectionSettingsSnapshot(
   config: WhycodeConfig | null,
-): ModelSettingsSnapshot {
+  mcp: McpSettingsItem,
+): ConnectionSettingsSnapshot {
   const cliProxyConnection = config?.cliProxyApi
   const cliProxyModels = cliProxyModelEntries().flatMap(({ entry }) => {
     const configuredRoute = cliProxyConnection?.modelRoutes[entry.id]
@@ -67,6 +69,7 @@ export function createModelSettingsSnapshot(
       models: cliProxyModels,
     },
     webSearch: createWebSearchSettingsSnapshot(config),
+    mcp,
   }
 }
 

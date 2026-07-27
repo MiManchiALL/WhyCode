@@ -157,13 +157,32 @@ describe('配置密钥存储', () => {
         perplexity: { apiKey: 'perplexity-secret' },
         tavily: { apiKey: 'tavily-secret', searchDepth: 'advanced' },
       },
+      mcpSecretHeaders: [{
+        serverName: 'context7',
+        connectionFingerprint: 'a'.repeat(64),
+        headerName: 'CONTEXT7_API_KEY',
+        value: 'context7-secret',
+      }],
+      mcpOAuthSessions: [{
+        serverName: 'github',
+        connectionFingerprint: 'b'.repeat(64),
+        clientInformation: {
+          client_id: 'github-client-id',
+          client_secret: 'github-client-secret',
+        },
+        tokens: {
+          access_token: 'github-oauth-token',
+          refresh_token: 'github-refresh-token',
+          token_type: 'bearer',
+        },
+      }],
     }
     try {
       await saveConfig(value, codec, path)
       const raw = await readFile(path, 'utf-8')
       assert.doesNotMatch(
         raw,
-        /official-secret|proxy-secret|peer-secret|perplexity-secret|tavily-secret/,
+        /official-secret|proxy-secret|peer-secret|perplexity-secret|tavily-secret|context7-secret|github-client-secret|github-oauth-token|github-refresh-token/,
       )
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
@@ -179,6 +198,61 @@ describe('配置密钥存储', () => {
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
       assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
       assert.equal(loaded?.webSearch?.tavily?.searchDepth, 'advanced')
+      assert.deepEqual(loaded?.mcpSecretHeaders, [{
+        serverName: 'context7',
+        connectionFingerprint: 'a'.repeat(64),
+        headerName: 'CONTEXT7_API_KEY',
+        value: 'context7-secret',
+      }])
+      assert.deepEqual(loaded?.mcpOAuthSessions, [{
+        serverName: 'github',
+        connectionFingerprint: 'b'.repeat(64),
+        clientInformation: {
+          client_id: 'github-client-id',
+          client_secret: 'github-client-secret',
+        },
+        tokens: {
+          access_token: 'github-oauth-token',
+          refresh_token: 'github-refresh-token',
+          token_type: 'bearer',
+        },
+      }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('单个损坏的 MCP OAuth 状态 fail-closed，不影响其它有效连接', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-config-oauth-'))
+    const path = join(root, 'config.json')
+    const validPayload = {
+      tokens: {
+        access_token: 'valid-access-token',
+        token_type: 'bearer',
+      },
+    }
+    try {
+      await writeFile(path, JSON.stringify({
+        version: 7,
+        providers: {},
+        mcpOAuthSessions: [
+          {
+            serverName: 'github',
+            connectionFingerprint: 'a'.repeat(64),
+            encryptedPayload: codec.encrypt(JSON.stringify(validPayload)),
+          },
+          {
+            serverName: 'damaged',
+            connectionFingerprint: 'b'.repeat(64),
+            encryptedPayload: codec.encrypt('not-json'),
+          },
+        ],
+      }))
+      assert.deepEqual(loadConfig(path, codec)?.mcpOAuthSessions, [{
+        serverName: 'github',
+        connectionFingerprint: 'a'.repeat(64),
+        ...validPayload,
+      }])
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -252,6 +326,23 @@ describe('配置密钥存储', () => {
       const loaded = loadConfig(path, codec)
       assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['google:gemini-3.1-pro-preview'])
       assert.deepEqual(loaded?.cliProxyApi?.modelRoutes, {})
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('v5 配置升级安全存储结构时不重复执行旧模型目录迁移', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-config-v5-'))
+    const path = join(root, 'config.json')
+    try {
+      await writeFile(path, JSON.stringify({
+        version: 5,
+        providers: {},
+      }))
+      assert.equal(await migrateLegacyConfig(codec, path), true)
+      const loaded = loadConfig(path, codec)
+      assert.equal(loaded?.retiredModelLabels?.['openai:gpt-5.2'], undefined)
+      assert.equal(await migrateLegacyConfig(codec, path), false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

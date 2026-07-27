@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron'
 import { realpath, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   AgentSession,
   cleanupUnreferencedAttachments,
@@ -11,7 +11,11 @@ import {
   createWebFetchTool,
   createWebFindTool,
   createWebSearchTool,
+  ensureMcpConfigTemplate,
+  ensureProjectMcpConfigTemplate,
   getModelEntry,
+  loadMcpConfiguration,
+  McpSessionRuntime,
   normalizeReasoningEffortSelection,
   type ApprovalRequest,
   type ApprovalResponse,
@@ -36,6 +40,7 @@ import {
   parseCliProxyModelId,
   resolveDefaultModelId,
   saveConfig,
+  type WhycodeConfig,
 } from './config.ts'
 import { listModelConnections, resolveModelConnection } from './model-connections.ts'
 import {
@@ -43,10 +48,17 @@ import {
   unresolvedCliProxyProfiles,
 } from './cli-proxy-discovery.ts'
 import {
-  createModelSettingsSnapshot,
+  createConnectionSettingsSnapshot,
   updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
+import {
+  addMcpConfiguredServer,
+  createMcpSettingsSnapshot,
+  resolveMcpConfigPath,
+  updateMcpSecretHeader,
+  updateMcpServerState,
+} from './mcp-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
@@ -77,11 +89,21 @@ import type {
   SessionListItem,
 } from '../shared/session.ts'
 import type {
+  AddMcpServerRequest,
+  ConnectionSettingsSnapshot,
+  McpOAuthRequest,
+  OpenMcpConfigRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
+  SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
+  SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
+import {
+  McpOAuthController,
+  type McpRegisteredOAuthClient,
+} from './mcp-oauth.ts'
 import { createConfiguredWebSearchHandler } from './web-search/configured.ts'
 import { updateWebSearchSettings } from './web-search-settings.ts'
 import {
@@ -109,10 +131,24 @@ const configSecretCodec: ConfigSecretCodec = {
 }
 
 const customSystemPromptConfigPath = getCustomSystemPromptConfigPath(getConfigPath())
+const mcpGlobalConfigPath = join(dirname(getConfigPath()), 'mcp.json')
 
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
 }
+
+const mcpOAuthController = new McpOAuthController({
+  fetchImpl: (input, init) => net.fetch(
+    input instanceof URL ? input.toString() : input,
+    init,
+  ),
+  openExternal: (url) => shell.openExternal(url),
+  readSessions: () => loadAppConfig()?.mcpOAuthSessions ?? [],
+  writeSessions: persistMcpOAuthSessions,
+  registeredClients: {
+    ...githubOAuthClientFromEnvironment(),
+  },
+})
 
 const webSearchTool = createWebSearchTool({
   search: createConfiguredWebSearchHandler({
@@ -259,6 +295,15 @@ let currentModelId: string | null = null
 let currentReasoningEffort: ReasoningEffortSelection = 'default'
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
+/** reset/恢复是同步切换事实源；异步资源释放在此串行，退出时统一等待。 */
+let sessionDisposalTail: Promise<void> = Promise.resolve()
+
+function disposeSession(target: AgentSession | null): void {
+  if (!target) return
+  sessionDisposalTail = sessionDisposalTail
+    .then(() => target.dispose())
+    .catch((error) => console.error('MCP 会话清理失败：', error))
+}
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
 function validateModel(modelId: string): string | null {
@@ -305,7 +350,7 @@ async function ensureSession(): Promise<string | null> {
         )
         if (!session) {
           conversationId = recorder.sessionId
-          session = createMainAgentSession(
+          session = await createMainAgentSession(
             recorder,
             projectDir,
             entry,
@@ -330,36 +375,60 @@ async function ensureSession(): Promise<string | null> {
   return null
 }
 
-function createMainAgentSession(
+async function createMainAgentSession(
   recorder: SessionJournal,
   targetProjectDir: string | null,
   model: ModelEntry,
   providerConfig: ProviderConfig,
   reasoningEffort: ReasoningEffortSelection,
-): AgentSession {
-  const next = new AgentSession({
-    model,
-    providerConfig,
-    reasoningEffort,
-    promptContext: {
-      projectDir: targetProjectDir,
-      osPlatform: process.platform,
-      homeDir: app.getPath('home'),
+): Promise<AgentSession> {
+  const mcpRuntime = new McpSessionRuntime({
+    configuration: mcpOAuthController.runtimeConfiguration(
+      await loadMcpConfiguration({
+        globalConfigPath: mcpGlobalConfigPath,
+        projectDir: targetProjectDir,
+        globalSecretHeaders: loadAppConfig()?.mcpSecretHeaders,
+      }),
+    ),
+    fetchImpl: (input, init) => net.fetch(
+      input instanceof URL ? input.toString() : input,
+      init,
+    ),
+    oauthTransportFactory: (config) => mcpOAuthController.runtimeTransport(config),
+    attachments: {
+      attachmentDirectory: recorder.attachmentDirectory,
+      sessionId: recorder.sessionId,
     },
-    customSystemPrompt: recorder.customSystemPrompt,
-    sessionRecorder: recorder,
-    mainTools: [
-      ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
-      webSearchTool,
-      ...createSessionWebPageTools(recorder),
-    ],
-    captureScreenshot: captureDesktopScreenshot,
-    pdfProcessor,
-    emit: broadcastEvent,
-    requestApproval,
   })
-  if (pendingPermissionMode) next.setPermissionMode(pendingPermissionMode)
-  return next
+  try {
+    const next = new AgentSession({
+      model,
+      providerConfig,
+      reasoningEffort,
+      promptContext: {
+        projectDir: targetProjectDir,
+        osPlatform: process.platform,
+        homeDir: app.getPath('home'),
+      },
+      customSystemPrompt: recorder.customSystemPrompt,
+      sessionRecorder: recorder,
+      mcpRuntime,
+      mainTools: [
+        ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
+        webSearchTool,
+        ...createSessionWebPageTools(recorder),
+      ],
+      captureScreenshot: captureDesktopScreenshot,
+      pdfProcessor,
+      emit: broadcastEvent,
+      requestApproval,
+    })
+    if (pendingPermissionMode) next.setPermissionMode(pendingPermissionMode)
+    return next
+  } catch (error) {
+    await mcpRuntime.close().catch(() => {})
+    throw error
+  }
 }
 
 /** 协商可用性检查：B/C 评审员配置齐备且模型已注册。 */
@@ -748,6 +817,10 @@ function resumeInProgressMessage(action: string): string {
   return `正在验证附件并恢复会话，请等待完成后再${action}`
 }
 
+function mcpOAuthInProgressMessage(action: string): string {
+  return `MCP OAuth 登录进行中，请完成后再${action}`
+}
+
 async function persistConnectionConfig(
   config: NonNullable<ReturnType<typeof loadAppConfig>>,
 ): Promise<void> {
@@ -837,31 +910,16 @@ function sameStringArray(
 async function saveProviderModelSettings(
   request: SaveProviderSettingsRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
-    return { ok: false, error: '会话数据删除中，请等待完成后再保存模型设置' }
-  }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改模型设置' }
-  settingsMutationInProgress = true
-  try {
+  return mutateConnectionSettings(async () => {
     const next = updateProviderSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
-    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    settingsMutationInProgress = false
-  }
+  })
 }
 
 async function saveCliProxyApiConnectionSettings(
   request: SaveCliProxyApiSettingsRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
-    return { ok: false, error: '会话数据删除中，请等待完成后再保存 CLIProxyAPI 设置' }
-  }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改 CLIProxyAPI 设置' }
-  settingsMutationInProgress = true
-  try {
+  return mutateConnectionSettings(async () => {
     const next = updateCliProxyApiSettings(loadAppConfig(), request)
     if (next.cliProxyApi?.apiKey) {
       const modelRoutes = await discoverCliProxyRoutes(
@@ -876,7 +934,97 @@ async function saveCliProxyApiConnectionSettings(
       next.cliProxyApi.modelRoutes = modelRoutes
     }
     await persistConnectionConfig(next)
-    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+  })
+}
+
+async function saveWebSearchConnectionSettings(
+  request: SaveWebSearchSettingsRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const next = updateWebSearchSettings(loadAppConfig(), request)
+    await persistConnectionConfig(next)
+  })
+}
+
+async function setMcpServerConnectionState(
+  request: SetMcpServerEnabledRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(() =>
+    updateMcpServerState({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
+}
+
+async function addMcpConnection(
+  request: AddMcpServerRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(() =>
+    addMcpConfiguredServer({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
+}
+
+async function authorizeMcpOAuthConnection(
+  request: McpOAuthRequest,
+): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+    return {
+      ok: false,
+      error: sessionDeletionLock.sessionId
+        ? '会话数据删除中，请等待完成后再开始 MCP OAuth 登录'
+        : resumeInProgressMessage('开始 MCP OAuth 登录'),
+    }
+  }
+  if (settingsMutationInProgress) {
+    return { ok: false, error: '连接设置正在保存，请完成后再开始 MCP OAuth 登录' }
+  }
+  try {
+    const server = await resolveGlobalMcpHttpServer(request)
+    await mcpOAuthController.authorize(server)
+    return { ok: true, snapshot: await currentConnectionSettingsSnapshot() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function disconnectMcpOAuthConnection(
+  request: McpOAuthRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const server = await resolveGlobalMcpHttpServer(request)
+    await mcpOAuthController.disconnect(server)
+  })
+}
+
+async function saveMcpSecretHeaderConnection(
+  request: SaveMcpSecretHeaderRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    if (!request.clearSecret && request.headerName.trim().toLowerCase() === 'authorization') {
+      const server = await resolveGlobalMcpHttpServer(request)
+      if (mcpOAuthController.currentSession(server)?.tokens) {
+        throw new Error('当前 MCP 服务器已通过 OAuth 登录；请先退出登录，再改用 Authorization Header')
+      }
+    }
+    const next = await updateMcpSecretHeader(
+      { globalConfigPath: mcpGlobalConfigPath, projectDir },
+      loadAppConfig(),
+      request,
+    )
+    await persistConnectionConfig(next)
+  })
+}
+
+async function mutateConnectionSettings(
+  mutation: () => Promise<void>,
+): Promise<SettingsMutationResult> {
+  if (sessionDeletionLock.sessionId) {
+    return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
+  }
+  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改连接设置' }
+  if (mcpOAuthController.isAuthorizing()) {
+    return { ok: false, error: 'MCP OAuth 登录进行中，请完成后再修改连接设置' }
+  }
+  settingsMutationInProgress = true
+  try {
+    await mutation()
+    return { ok: true, snapshot: await currentConnectionSettingsSnapshot() }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
@@ -884,22 +1032,75 @@ async function saveCliProxyApiConnectionSettings(
   }
 }
 
-async function saveWebSearchConnectionSettings(
-  request: SaveWebSearchSettingsRequest,
-): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
-    return { ok: false, error: '会话数据删除中，请等待完成后再保存网页搜索设置' }
+async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSnapshot> {
+  const config = loadAppConfig()
+  const mcp = await createMcpSettingsSnapshot({
+    globalConfigPath: mcpGlobalConfigPath,
+    projectDir,
+    currentSessionSnapshot: session?.mcpSnapshot ?? null,
+    mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
+    mcpOAuthController,
+  })
+  return createConnectionSettingsSnapshot(config, mcp)
+}
+
+async function resolveGlobalMcpHttpServer(request: McpOAuthRequest) {
+  if (request.scope !== 'global') {
+    throw new Error('项目 MCP 请使用项目环境变量认证，不能写入本机全局 OAuth 令牌库')
   }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改网页搜索设置' }
-  settingsMutationInProgress = true
+  const appConfig = loadAppConfig()
+  const configuration = await loadMcpConfiguration({
+    globalConfigPath: mcpGlobalConfigPath,
+    projectDir,
+    globalSecretHeaders: appConfig?.mcpSecretHeaders,
+  })
+  const server = configuration.servers.find((candidate) =>
+    candidate.scope === 'global' && candidate.name === request.serverName)
+  if (!server || server.transport !== 'http') {
+    throw new Error(`已启用的全局 Streamable HTTP MCP 服务器不存在：${request.serverName}`)
+  }
+  return server
+}
+
+async function persistMcpOAuthSessions(
+  oauthSessions: readonly NonNullable<WhycodeConfig['mcpOAuthSessions']>[number][],
+): Promise<void> {
+  const current = loadAppConfig() ?? { providers: {} }
+  const next = structuredClone(current)
+  if (oauthSessions.length > 0) next.mcpOAuthSessions = [...oauthSessions]
+  else delete next.mcpOAuthSessions
+  await saveConfig(next, configSecretCodec, getConfigPath())
+}
+
+function githubOAuthClientFromEnvironment(): {
+  github?: McpRegisteredOAuthClient
+} {
+  const clientId = process.env.WHYCODE_GITHUB_OAUTH_CLIENT_ID?.trim()
+  const clientSecret = process.env.WHYCODE_GITHUB_OAUTH_CLIENT_SECRET?.trim()
+  if (!clientId || !clientSecret) return {}
+  return {
+    github: {
+      clientId,
+      clientSecret,
+      tokenEndpointAuthMethod: 'client_secret_post',
+    },
+  }
+}
+
+async function openMcpConfigFile(
+  request: OpenMcpConfigRequest,
+): Promise<{ ok: boolean; error?: string }> {
   try {
-    const next = updateWebSearchSettings(loadAppConfig(), request)
-    await persistConnectionConfig(next)
-    return { ok: true, snapshot: createModelSettingsSnapshot(next) }
+    const path = resolveMcpConfigPath(
+      { globalConfigPath: mcpGlobalConfigPath, projectDir },
+      request.scope,
+    )
+    if (request.scope === 'global') await ensureMcpConfigTemplate(path)
+    else await ensureProjectMcpConfigTemplate(path)
+    const error = await shell.openPath(path)
+    return error ? { ok: false, error } : { ok: true }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  } finally {
-    settingsMutationInProgress = false
   }
 }
 
@@ -940,6 +1141,7 @@ function rejectUserMessage(message: string): { ok: false } {
 
 function resetRuntime(keepJournal = false): void {
   const oldConversationId = conversationId
+  const previousSession = session
   session = null
   sessionInitialization = null
   coordinator = null
@@ -947,6 +1149,7 @@ function resetRuntime(keepJournal = false): void {
   viewTimeline.discardAll()
   if (!keepJournal) sessions.reset()
   conversationId = `conv-${Date.now()}`
+  disposeSession(previousSession)
   // 普通运行态切换仍可尽力清临时目录；显式删除会在移除事实源前严格等待清理完成。
   void cleanupConversationScratch(
     join(app.getPath('userData'), 'scratch'),
@@ -1025,9 +1228,10 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
   }
   const statusBeforeResume = currentAgentStatus
   let succeeded = false
+  let prepared: PreparedResumeRuntime | null = null
   broadcastEvent({ type: 'agent-status', status: 'working' }, false)
   try {
-    const prepared = await prepareResumedRuntime(sessionId)
+    prepared = await prepareResumedRuntime(sessionId)
     commitResumedRuntime(prepared)
     succeeded = true
     return {
@@ -1043,6 +1247,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
       recoveredFromInterruption: prepared.recoveredFromInterruption,
     }
   } catch (error) {
+    await prepared?.mainSession?.dispose().catch(() => {})
     const message = `会话恢复失败：${error instanceof Error ? error.message : String(error)}`
     broadcastEvent({ type: 'error', message, recoverable: true }, false)
     return { ok: false, error: message }
@@ -1084,7 +1289,7 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
       )
     : metadata.reasoningEffort
   const mainSession = resolved.ok
-    ? createMainAgentSession(
+    ? await createMainAgentSession(
         journal,
         targetProjectDir,
         resolved.value.entry,
@@ -1093,10 +1298,15 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
       )
     : null
   let nextCoordinator: ConsensusCoordinator | null = null
-  if (consensusEnabled && mainSession) {
-    const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
-    if (!built.ok) throw new Error(built.error)
-    nextCoordinator = built.value
+  try {
+    if (consensusEnabled && mainSession) {
+      const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
+      if (!built.ok) throw new Error(built.error)
+      nextCoordinator = built.value
+    }
+  } catch (error) {
+    await mainSession?.dispose().catch(() => {})
+    throw error
   }
   return {
     journal,
@@ -1111,10 +1321,12 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
 
 function commitResumedRuntime(input: PreparedResumeRuntime): void {
   const oldConversationId = conversationId
+  const previousSession = session
   sessionInitialization = null
   viewTimeline.discardAll()
   sessions.activate(input.journal)
   session = input.mainSession
+  disposeSession(previousSession)
   coordinator = input.nextCoordinator
   projectDir = input.targetProjectDir
   currentModelId = input.targetModelId
@@ -1150,16 +1362,18 @@ function pendingInputs(
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-  if (sessionDeletionLock.sessionId || runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || mcpOAuthController.isAuthorizing() || runtimeBusy()) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
-        : sessionResumeLock.sessionId
-          ? resumeInProgressMessage('删除会话')
-          : session?.checkpointRestoreToolUseId
-            ? '文件回滚中，请等待完成后再删除会话'
-            : 'Agent 工作中，请先停止再删除会话',
+        : mcpOAuthController.isAuthorizing()
+          ? mcpOAuthInProgressMessage('删除会话')
+          : sessionResumeLock.sessionId
+            ? resumeInProgressMessage('删除会话')
+            : session?.checkpointRestoreToolUseId
+              ? '文件回滚中，请等待完成后再删除会话'
+              : 'Agent 工作中，请先停止再删除会话',
     }
   }
   const deletedCurrent = sessions.currentSessionId === sessionId
@@ -1174,11 +1388,12 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       sessions,
       commandSessions,
       scratchRoot: join(app.getPath('userData'), 'scratch'),
-      onDeletionMarked: () => {
+      onDeletionMarked: async () => {
         if (!deletedCurrent) return
         resetRuntime()
         projectDir = requireDefaultWorkspace()
         detachedCurrent = true
+        await sessionDisposalTail
       },
       onBeforeFactSourceDelete: () => pruneRetiredModelLabels(sessionId),
     })
@@ -1220,6 +1435,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.error('配置安全迁移失败：', error))
   await ensureCustomSystemPromptTemplate(customSystemPromptConfigPath)
     .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
+  await ensureMcpConfigTemplate(mcpGlobalConfigPath)
+    .catch((error) => console.warn('MCP 配置模板初始化失败：', error))
   await synchronizeConfiguredCliProxyRoutes()
     .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
@@ -1253,10 +1470,12 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
   ipcMain.handle(IPC.listModels, () =>
     listModelConnections(loadAppConfig(), resolveCurrentModelId()))
-  ipcMain.handle(IPC.modelSettings, async () => {
-    await synchronizeConfiguredCliProxyRoutes()
-      .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
-    return createModelSettingsSnapshot(loadAppConfig())
+  ipcMain.handle(IPC.connectionSettings, async () => {
+    if (!mcpOAuthController.isAuthorizing()) {
+      await synchronizeConfiguredCliProxyRoutes()
+        .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+    }
+    return currentConnectionSettingsSnapshot()
   })
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))
@@ -1264,6 +1483,18 @@ if (primaryInstance) void app.whenReady().then(async () => {
     saveCliProxyApiConnectionSettings(request))
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))
+  ipcMain.handle(IPC.setMcpServerEnabled, (_e, request: SetMcpServerEnabledRequest) =>
+    setMcpServerConnectionState(request))
+  ipcMain.handle(IPC.addMcpServer, (_e, request: AddMcpServerRequest) =>
+    addMcpConnection(request))
+  ipcMain.handle(IPC.saveMcpSecretHeader, (_e, request: SaveMcpSecretHeaderRequest) =>
+    saveMcpSecretHeaderConnection(request))
+  ipcMain.handle(IPC.authorizeMcpOAuth, (_e, request: McpOAuthRequest) =>
+    authorizeMcpOAuthConnection(request))
+  ipcMain.handle(IPC.disconnectMcpOAuth, (_e, request: McpOAuthRequest) =>
+    disconnectMcpOAuthConnection(request))
+  ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
+    openMcpConfigFile(request))
   ipcMain.handle(IPC.getProjectDir, () => projectDir)
   ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
   ipcMain.handle(IPC.consensusStatus, () => ({
@@ -1366,8 +1597,14 @@ app.on('before-quit', (event) => {
   if (shutdownStarted || !commandSessions) return
   event.preventDefault()
   shutdownStarted = true
-  void commandSessions
-    .shutdown()
-    .catch((error) => console.error('后台命令退出清理失败：', error))
+  void Promise.all([
+    commandSessions.shutdown()
+      .catch((error) => console.error('后台命令退出清理失败：', error)),
+    sessionDisposalTail,
+    session?.dispose()
+      .catch((error) => console.error('当前 MCP 会话退出清理失败：', error)),
+    mcpOAuthController.close()
+      .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
+  ])
     .finally(() => app.quit())
 })

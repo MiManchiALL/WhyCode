@@ -17,6 +17,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /尤其擅长代码编写、代码理解、调试及其他编程相关任务/)
     assert.doesNotMatch(prompt, /软件开发是你的核心专长/)
     assert.match(prompt, /非项目问题直接回答/)
+    assert.doesNotMatch(prompt, /不因当前打开了代码项目而拒绝生活、写作、规划或其他非编程问题/)
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
     assert.match(prompt, /项目外文件同样使用专用文件工具/)
     assert.match(prompt, /不要改用 RunCommand 绕过路径边界/)

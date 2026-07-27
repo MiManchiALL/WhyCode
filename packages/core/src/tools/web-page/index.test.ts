@@ -219,6 +219,8 @@ describe('网页读取工具契约', () => {
     assert.equal(fetchTool.availableWithoutProject, true)
     assert.equal(findTool.availableWithoutProject, true)
     assert.match(fetchTool.initialApprovalReason ?? '', /公网 IP/)
+    assert.match(fetchTool.prompt, /先使用 ToolSearch 查找对应 MCP 工具/)
+    assert.match(fetchTool.prompt, /不要用 WebFetch 探测其公开可见性/)
     assert.equal(findTool.initialApprovalReason, undefined)
   })
 })

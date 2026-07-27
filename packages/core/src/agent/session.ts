@@ -10,7 +10,11 @@ import type {
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ReasoningEffortSelection } from '../providers/catalog.ts'
 import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effort.ts'
-import type { ToolContext, ToolDefinition } from '../tools/tool.ts'
+import {
+  validateToolInput,
+  type ToolContext,
+  type ToolDefinition,
+} from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
@@ -104,6 +108,9 @@ import {
   type PermissionContext,
   type PermissionMode,
 } from '../permissions/types.ts'
+import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
+import type { McpManagerSnapshot } from '../mcp/manager.ts'
+import { withoutMcpToolState } from '../mcp/state.ts'
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
@@ -128,6 +135,8 @@ export interface AgentSessionOptions {
   pdfProcessor?: PdfProcessor
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
+  /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
+  mcpRuntime?: McpSessionRuntime
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
   /** 审批回调（宿主注入）：返回用户的决定 */
@@ -365,9 +374,17 @@ export class AgentSession {
     return this.restoringCheckpointToolUseId
   }
 
+  get mcpSnapshot(): McpManagerSnapshot | null {
+    return this.options.mcpRuntime?.connectionManager().snapshot(true) ?? null
+  }
+
   waitUntilIdle(): Promise<void> {
     if (!this.isBusy) return Promise.resolve()
     return new Promise((resolve) => this.idleWaiters.add(resolve))
+  }
+
+  async dispose(): Promise<void> {
+    await this.options.mcpRuntime?.close()
   }
 
   /** 协商事务锚点：返回隔离副本，失败/取消时由 Orchestrator 恢复。 */
@@ -1051,7 +1068,7 @@ export class AgentSession {
       await this.refreshProjectInstructions()
       const result = await compactMessages(
         this.createLanguageModel(),
-        this.messages,
+        withoutMcpToolState(this.messages),
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
         this.compactApplicationContext(),
@@ -1130,7 +1147,7 @@ export class AgentSession {
     try {
       const result = await compactMessages(
         this.createLanguageModel(),
-        this.messages,
+        withoutMcpToolState(this.messages),
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
         this.compactApplicationContext(planExecutionEngaged, turnId),
@@ -1186,17 +1203,18 @@ export class AgentSession {
   ): Promise<ModelMessage[]> {
     const supportsImages = this.options.model.capabilities.supportsImageInput
     const signal = abortSignal ?? new AbortController().signal
+    const modelMessages = withoutMcpToolState(messages)
     const withPdfPages = supportsImages
       && this.options.pdfProcessor
       && this.options.sessionRecorder
       ? await inlineSmallPdfMessages(
-          messages,
+          modelMessages,
           [...this.pdfAttachments.values()],
           this.options.sessionRecorder.attachmentDirectory,
           this.options.pdfProcessor,
           signal,
         )
-      : messages
+      : modelMessages
     const withImages = await messagesForModel(
       withPdfPages,
       supportsImages,
@@ -1311,8 +1329,13 @@ export class AgentSession {
     let stepAttachmentsCommitted = false
     const taskStateBeforeStep = this.taskPlan?.stateSnapshot
     let taskPlanFinalized = false
+    let mcpStep: McpStepBinding | null = null
     this.taskPlan?.beginStep()
     try {
+      mcpStep = await this.options.mcpRuntime?.beginStep(
+        this.messages,
+        stepAbort.signal,
+      ) ?? null
       const currentTimeReminder = currentTime
         ? createCurrentTimeReminder(currentTime)
         : null
@@ -1421,6 +1444,7 @@ export class AgentSession {
             stepPdfAttachments.set(toolCallId, parsed.data)
             return null
           },
+          mcpStep?.toolDefinitions() ?? [],
         ),
         stopWhen: stepCountIs(1),
         providerOptions: this.requestProviderOptions(),
@@ -1515,6 +1539,7 @@ export class AgentSession {
           questionResumesTaskPlan,
         ))
       }
+      const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
       const orderedImageResults = toolCallOrder.flatMap((toolCallId) => {
         const result = stepImageAttachments.get(toolCallId)
         return result ? [{ ...result, toolCallId }] : []
@@ -1539,6 +1564,7 @@ export class AgentSession {
         ...attachImagesToToolResults(response.messages, orderedImageResults),
         ...pdfReferenceMessages,
         ...internalMarkers,
+        ...mcpCommitMessages,
       ])
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null
@@ -1594,6 +1620,7 @@ export class AgentSession {
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
       }
     } catch (error) {
+      mcpStep?.discard()
       if (!stepAttachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
         await removeImageAttachmentFiles(
           this.options.sessionRecorder.attachmentDirectory,
@@ -1664,6 +1691,7 @@ export class AgentSession {
       toolCallId: string,
       attachments: readonly PdfAttachment[],
     ) => Promise<string | null>,
+    mcpTools: readonly ToolDefinition[],
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
     const extraTools = this.options.extraTools ?? []
@@ -1687,7 +1715,7 @@ export class AgentSession {
         : []
     const mainTools = !this.options.promptContext.discussion
       && !this.protocolRound
-      ? (this.options.mainTools ?? [])
+      ? [...(this.options.mainTools ?? []), ...mcpTools]
       : []
     const controlTools: ToolDefinition[] = [
       ...extraTools,
@@ -1782,21 +1810,21 @@ export class AgentSession {
           additionalDirs: this.permissions.additionalDirs,
           abortSignal,
         }
-        const parsed = def.inputSchema.safeParse(input)
+        const parsed = await validateToolInput(def, input)
         if (!parsed.success) {
           const msg = `参数校验失败：${parsed.error.message}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
           this.loopHealth.record(def.name, input, msg, true)
           return msg
         }
-        emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.data })
+        emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.value })
 
         // 判定与交互必须共用一条队列；前一审批记住的授权会由后一调用重新读取。
-        const authorization = await this.authorizeTool(def, parsed.data, toolCtx, toolCallId)
+        const authorization = await this.authorizeTool(def, parsed.value, toolCtx, toolCallId)
         if (!authorization.approved) {
           const msg = authorization.message
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-          this.loopHealth.record(def.name, parsed.data, msg, true)
+          this.loopHealth.record(def.name, parsed.value, msg, true)
           return msg
         }
         if (authorization.approvedPaths.length > 0) {
@@ -1827,7 +1855,7 @@ export class AgentSession {
               .catch(() => {})
           } else {
             try {
-              const checkpointScope = await def.checkpointScope(parsed.data, toolCtx)
+              const checkpointScope = await def.checkpointScope(parsed.value, toolCtx)
               preparedCheckpoint = await this.checkpoints.prepare(
                 toolCallId,
                 turnId,
@@ -1873,7 +1901,7 @@ export class AgentSession {
         }
 
         try {
-          let result = await def.execute(parsed.data, {
+          let result = await def.execute(parsed.value, {
             ...toolCtx,
             onProgress: (output) =>
               emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
@@ -1900,7 +1928,7 @@ export class AgentSession {
           // 记录读过的文件（压缩后重注入，防失忆）
           if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
             try {
-              const abs = resolveAllowed(toolCtx, (parsed.data as { path: string }).path)
+              const abs = resolveAllowed(toolCtx, (parsed.value as { path: string }).path)
               this.recentReadFiles.set(abs, Date.now())
             } catch {
               /* 越界读取已被权限层处理，这里忽略 */
@@ -1923,13 +1951,13 @@ export class AgentSession {
           if (def.endsTurnOnSuccess && !result.isError) {
             onTurnEndingTool(def.turnEndReasonOnSuccess)
           }
-          this.loopHealth.record(def.name, parsed.data, result.data, result.isError)
+          this.loopHealth.record(def.name, parsed.value, result.data, result.isError)
           return result.data
         } catch (error) {
           await finalizeCheckpoint()
           const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-          this.loopHealth.record(def.name, parsed.data, msg, true)
+          this.loopHealth.record(def.name, parsed.value, msg, true)
           return msg
         }
       }

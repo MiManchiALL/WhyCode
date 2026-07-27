@@ -1,24 +1,31 @@
 import { useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import type {
+  AddMcpServerRequest,
   CliProxyApiSettingsItem,
-  ModelSettingsSnapshot,
+  ConnectionSettingsSnapshot,
+  McpOAuthRequest,
+  OpenMcpConfigRequest,
   ProviderSettingsItem,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
+  SaveMcpSecretHeaderRequest,
+  SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../../shared/settings.ts'
+import { McpSettingsEditor } from './mcp-settings.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 
-interface ModelSettingsPanelProps {
-  snapshot: ModelSettingsSnapshot
+interface ConnectionSettingsPanelProps {
+  snapshot: ConnectionSettingsSnapshot
   onClose: () => void
-  onChanged: (snapshot: ModelSettingsSnapshot) => void
+  onChanged: (snapshot: ConnectionSettingsSnapshot) => void
 }
 
-export function ModelSettingsPanel(props: ModelSettingsPanelProps) {
+export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [oauthPending, setOauthPending] = useState(false)
 
   const mutate = async (operation: () => Promise<SettingsMutationResult>) => {
     setPending(true)
@@ -39,13 +46,54 @@ export function ModelSettingsPanel(props: ModelSettingsPanelProps) {
     }
   }
 
+  const mutateOAuth = async (operation: () => Promise<SettingsMutationResult>) => {
+    setOauthPending(true)
+    setError(null)
+    try {
+      const result = await operation()
+      if (!result.ok || !result.snapshot) {
+        setError(result.error ?? 'OAuth 登录失败')
+        return false
+      }
+      props.onChanged(result.snapshot)
+      return true
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      return false
+    } finally {
+      setOauthPending(false)
+    }
+  }
+
+  const refresh = async () => {
+    setPending(true)
+    setError(null)
+    try {
+      props.onChanged(await window.whycode.connectionSettings())
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const openMcpConfig = async (request: OpenMcpConfigRequest) => {
+    setError(null)
+    try {
+      const result = await window.whycode.openMcpConfig(request)
+      if (!result.ok) setError(result.error ?? '无法打开 MCP 配置文件')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6">
       <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl">
         <header className="flex items-center justify-between border-b border-neutral-200 px-5 py-3">
           <div>
-            <h2 className="text-base font-semibold">模型与搜索设置</h2>
-            <p className="mt-0.5 text-xs text-neutral-500">配置内置厂商、CLIProxyAPI 与网页搜索服务。</p>
+            <h2 className="text-base font-semibold">连接设置</h2>
+            <p className="mt-0.5 text-xs text-neutral-500">配置模型、网页搜索与 MCP 外部工具连接。</p>
           </div>
           <button className="rounded px-2 py-1 text-sm text-neutral-500 hover:bg-neutral-100" onClick={props.onClose} disabled={pending}>关闭</button>
         </header>
@@ -60,7 +108,7 @@ export function ModelSettingsPanel(props: ModelSettingsPanelProps) {
                 <ProviderEditor
                   key={provider.id}
                   provider={provider}
-                  disabled={pending}
+                  disabled={pending || oauthPending}
                   onSave={(request) => mutate(() => window.whycode.saveProviderSettings(request))}
                 />
               ))}
@@ -69,14 +117,31 @@ export function ModelSettingsPanel(props: ModelSettingsPanelProps) {
 
           <CliProxyApiEditor
             settings={props.snapshot.cliProxyApi}
-            disabled={pending}
+            disabled={pending || oauthPending}
             onSave={(request) => mutate(() => window.whycode.saveCliProxyApiSettings(request))}
           />
 
           <WebSearchSettingsEditor
             settings={props.snapshot.webSearch}
-            disabled={pending}
+            disabled={pending || oauthPending}
             onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request))}
+          />
+
+          <McpSettingsEditor
+            settings={props.snapshot.mcp}
+            disabled={pending || oauthPending}
+            onSetEnabled={(request: SetMcpServerEnabledRequest) =>
+              mutate(() => window.whycode.setMcpServerEnabled(request))}
+            onAddServer={(request: AddMcpServerRequest) =>
+              mutate(() => window.whycode.addMcpServer(request))}
+            onSaveSecretHeader={(request: SaveMcpSecretHeaderRequest) =>
+              mutate(() => window.whycode.saveMcpSecretHeader(request))}
+            onAuthorizeOAuth={(request: McpOAuthRequest) =>
+              mutateOAuth(() => window.whycode.authorizeMcpOAuth(request))}
+            onDisconnectOAuth={(request: McpOAuthRequest) =>
+              mutate(() => window.whycode.disconnectMcpOAuth(request))}
+            onOpenConfig={openMcpConfig}
+            onRefresh={refresh}
           />
         </div>
       </section>

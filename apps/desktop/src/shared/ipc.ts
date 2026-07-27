@@ -9,11 +9,17 @@ export const IPC = {
   event: 'whycode:event',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
-  /** Renderer → Main：内置厂商、CLIProxyAPI 与网页搜索设置。 */
-  modelSettings: 'whycode:model-settings',
+  /** Renderer → Main：模型、CLIProxyAPI、网页搜索与 MCP 连接设置。 */
+  connectionSettings: 'whycode:connection-settings',
   saveProviderSettings: 'whycode:save-provider-settings',
   saveCliProxyApiSettings: 'whycode:save-cliproxyapi-settings',
   saveWebSearchSettings: 'whycode:save-web-search-settings',
+  setMcpServerEnabled: 'whycode:set-mcp-server-enabled',
+  addMcpServer: 'whycode:add-mcp-server',
+  saveMcpSecretHeader: 'whycode:save-mcp-secret-header',
+  authorizeMcpOAuth: 'whycode:authorize-mcp-oauth',
+  disconnectMcpOAuth: 'whycode:disconnect-mcp-oauth',
+  openMcpConfig: 'whycode:open-mcp-config',
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
   /** Renderer → Main：查询当前项目目录 */

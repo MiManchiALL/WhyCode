@@ -3,6 +3,9 @@ packages:
   - apps/*
 storeDir: .pnpm-store
 cacheDir: .pnpm-cache
+overrides:
+  '@modelcontextprotocol/sdk>@hono/node-server': 2.0.11
+  dompurify: 3.4.12
 allowBuilds:
   esbuild: true
   electron: true

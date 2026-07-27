@@ -18,7 +18,10 @@ export function checkInitialToolApproval(
   ctx: PermissionContext,
 ): PermissionDecision | null {
   if (!def.initialApprovalReason) return null
-  if (ctx.sessionAllowedTools.includes(def.name) || ctx.mode === 'auto') return null
+  if (
+    ctx.sessionAllowedTools.includes(def.name)
+    || (ctx.mode === 'auto' && !def.requiresExplicitInitialApproval)
+  ) return null
   return {
     behavior: 'ask',
     reason: def.initialApprovalReason,

@@ -1,8 +1,10 @@
 import type {
   BuiltInProviderId,
+  McpConfigScope,
   ModelCapabilities,
   ReasoningEffortCapability,
 } from '@whycode/core'
+import type { McpServerStatus } from '@whycode/core'
 
 export interface ModelListItem {
   id: string
@@ -41,10 +43,11 @@ export interface CliProxyApiSettingsItem {
   }>
 }
 
-export interface ModelSettingsSnapshot {
+export interface ConnectionSettingsSnapshot {
   providers: ProviderSettingsItem[]
   cliProxyApi: CliProxyApiSettingsItem
   webSearch: WebSearchSettingsItem
+  mcp: McpSettingsItem
 }
 
 export type WebSearchProviderId = 'perplexity' | 'tavily'
@@ -83,8 +86,75 @@ export interface SaveWebSearchSettingsRequest {
   searchDepth?: TavilySearchDepth
 }
 
+export interface McpSettingsItem {
+  globalConfigPath: string
+  projectConfigPath?: string
+  currentSessionUsesSnapshot: boolean
+  servers: Array<{
+    name: string
+    scope: McpConfigScope
+    transport: 'stdio' | 'http'
+    enabled: boolean
+    effective: boolean
+    builtinId?: 'context7' | 'github'
+    secretHeaderNames: string[]
+    suggestedSecretHeaderName?: string
+    suggestedSecretKind?: 'api-key' | 'github-pat'
+    oauth?: {
+      status: 'connected' | 'available' | 'client-registration-required' | 'unavailable'
+      message?: string
+    }
+    currentSessionState?: McpServerStatus['state']
+    currentSessionToolCount?: number
+    currentSessionError?: string
+    currentSessionDiagnostics: string[]
+  }>
+  diagnostics: Array<{
+    scope: McpConfigScope
+    server?: string
+    message: string
+  }>
+}
+
+export interface SetMcpServerEnabledRequest {
+  scope: McpConfigScope
+  name: string
+  enabled: boolean
+}
+
+export type AddMcpServerRequest = {
+  scope: McpConfigScope
+  name: string
+  server: {
+    transport: 'http'
+    url: string
+  } | {
+    transport: 'stdio'
+    command: string
+    args: string[]
+    cwd?: string
+  }
+}
+
+export interface SaveMcpSecretHeaderRequest {
+  scope: McpConfigScope
+  serverName: string
+  headerName: string
+  secret?: string
+  clearSecret?: boolean
+}
+
+export interface McpOAuthRequest {
+  scope: McpConfigScope
+  serverName: string
+}
+
+export interface OpenMcpConfigRequest {
+  scope: McpConfigScope
+}
+
 export interface SettingsMutationResult {
   ok: boolean
   error?: string
-  snapshot?: ModelSettingsSnapshot
+  snapshot?: ConnectionSettingsSnapshot
 }

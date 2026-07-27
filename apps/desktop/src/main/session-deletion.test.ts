@@ -114,9 +114,17 @@ describe('会话关联数据删除', () => {
       },
       commandSessions: { removeSession: async () => { calls.push('command') } },
       scratchRoot: await createRoot(),
+      onDeletionMarked: async () => {
+        calls.push('detach')
+        await new Promise((resolve) => setImmediate(resolve))
+        calls.push('resources-closed')
+      },
       onBeforeFactSourceDelete: async () => { calls.push('references') },
     }), true)
-    assert.deepEqual(calls, ['mark', 'command', 'references', 'session'])
+    assert.deepEqual(
+      calls,
+      ['mark', 'detach', 'resources-closed', 'command', 'references', 'session'],
+    )
   })
 })
 

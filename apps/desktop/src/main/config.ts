@@ -2,12 +2,14 @@ import {
   getModelEntry,
   MODEL_REGISTRY,
   type BuiltInProviderId,
+  type McpSecretHeader,
 } from '@whycode/core'
 import type {
   TavilySearchDepth,
   WebSearchProviderId,
 } from '../shared/settings.ts'
 import { isCliProxyRoute } from './cli-proxy-models.ts'
+import type { McpOAuthSession } from './mcp-oauth-state.ts'
 
 const CLI_PROXY_MODEL_PREFIX = 'cliproxyapi:'
 
@@ -53,6 +55,10 @@ export interface WhycodeConfig {
   cliProxyApi?: CliProxyApiConfig
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
   webSearch?: WebSearchConfig
+  /** MCP 结构仍在 mcp.json；这里只保存经 safeStorage 加密的全局 HTTP header 密钥。 */
+  mcpSecretHeaders?: McpSecretHeader[]
+  /** OAuth 客户端注册信息与令牌整体加密，并按服务器名称和 URL 指纹绑定。 */
+  mcpOAuthSessions?: McpOAuthSession[]
 }
 
 export {

@@ -44,6 +44,20 @@ const privacyReadTool = buildTool({
   },
 })
 
+const projectProcessTool = buildTool({
+  name: 'ProjectProcessProbe',
+  description: '项目进程权限探针',
+  prompt: '项目进程权限探针',
+  inputSchema: z.object({}),
+  isReadOnly: false,
+  kind: 'execute',
+  initialApprovalReason: '项目配置会启动外部进程',
+  requiresExplicitInitialApproval: true,
+  async execute() {
+    return { data: 'ok', isError: false }
+  },
+})
+
 describe('工具首次隐私审批', () => {
   it('只在全自动档跳过首次提示，其余权限档继续询问', () => {
     const context = createPermissionContext('C:\\workspace')
@@ -71,6 +85,20 @@ describe('工具首次隐私审批', () => {
     context.sessionAllowedTools.push(privacyReadTool.name)
 
     assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
+  })
+
+  it('显式信任边界在全自动档也不能跳过，记住允许后才放行', () => {
+    const context = createPermissionContext('C:\\workspace')
+    context.mode = 'auto'
+
+    assert.deepEqual(checkInitialToolApproval(projectProcessTool, context), {
+      behavior: 'ask',
+      reason: '项目配置会启动外部进程',
+      suggestion: { kind: 'allow-tool', toolName: 'ProjectProcessProbe' },
+    })
+
+    context.sessionAllowedTools.push(projectProcessTool.name)
+    assert.equal(checkInitialToolApproval(projectProcessTool, context), null)
   })
 })
 
