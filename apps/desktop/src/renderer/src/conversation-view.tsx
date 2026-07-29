@@ -4,7 +4,7 @@ import {
   conversationSections,
   type ConversationSection,
 } from './conversation-sections.ts'
-import { formatProcessingTime } from './processing-time.ts'
+import { formatProcessingTime, ProcessingTime } from './processing-time.ts'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -12,24 +12,34 @@ interface ConversationViewProps {
   expandedIds: ReadonlySet<string>
   editableBlockId: string | null
   busy: boolean
+  workStartedAt: number | null
   checkpointRestoreToolUseId: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: (id: string) => void
 }
 
+type WorkSectionData = Extract<
+  ConversationSection,
+  { kind: 'active-work' | 'completed-work' }
+>
+
+type WorkTiming =
+  | { kind: 'active'; startedAt: number }
+  | { kind: 'completed'; durationMs: number }
+
 export function ConversationView(props: ConversationViewProps) {
-  return conversationSections(props.blocks).map((section) =>
+  return conversationSections(props.blocks, props.workStartedAt).map((section) =>
     section.kind === 'block'
       ? <ConversationBlock key={section.id} {...props} block={section.block} />
-      : <CompletedWorkSection key={section.id} {...props} section={section} />)
+      : <WorkSection key={section.id} {...props} section={section} />)
 }
 
-function CompletedWorkSection({
+function WorkSection({
   section,
   ...props
 }: ConversationViewProps & {
-  section: Extract<ConversationSection, { kind: 'completed-work' }>
+  section: WorkSectionData
 }) {
   const expanded = section.activityBlocks.length > 0
     && props.expandedIds.has(section.id)
@@ -41,7 +51,9 @@ function CompletedWorkSection({
       ))}
       <WorkSummary
         activityId={activityId}
-        durationMs={section.duration.durationMs}
+        timing={section.kind === 'active-work'
+          ? { kind: 'active', startedAt: section.startedAt }
+          : { kind: 'completed', durationMs: section.duration.durationMs }}
         expandable={section.activityBlocks.length > 0}
         expanded={expanded}
         onToggle={() => props.onToggle(section.id)}
@@ -88,18 +100,20 @@ function ConversationBlock({
 
 function WorkSummary({
   activityId,
-  durationMs,
+  timing,
   expandable,
   expanded,
   onToggle,
 }: {
   activityId: string
-  durationMs: number
+  timing: WorkTiming
   expandable: boolean
   expanded: boolean
   onToggle: () => void
 }) {
-  const label = formatProcessingTime(durationMs)
+  const label = timing.kind === 'active'
+    ? <ProcessingTime startedAt={timing.startedAt} />
+    : formatProcessingTime(timing.durationMs)
   return (
     <div className="mb-2 px-3 text-xs text-neutral-400">
       {expandable ? (

@@ -1030,6 +1030,7 @@ export function App() {
           expandedIds={view.expanded}
           editableBlockId={editableBlockId}
           busy={interactionBusy}
+          workStartedAt={workStartedAt}
           checkpointRestoreToolUseId={checkpointRestoreToolUseId}
           onCheckpointRestoreChange={changeCheckpointRestore}
           onEdit={editUserMessage}

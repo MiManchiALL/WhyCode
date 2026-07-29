@@ -21,7 +21,7 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(completed.userBlocks), ['user-1'])
     assert.deepEqual(ids(completed.activityBlocks), ['commentary', 'thinking-1', 'tool-1'])
     assert.deepEqual(ids(completed.finalBlocks), ['answer'])
-    assert.equal(completed.id, 'duration-1')
+    assert.equal(completed.id, 'work-user-1')
     assert.equal(completed.duration.durationMs, 61_000)
   })
 
@@ -79,16 +79,61 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(completed.finalBlocks), ['answer'])
   })
 
-  it('运行中的尾部任务保持原始逐块展示，直到 work-finished 到达', () => {
+  it('运行中的尾部尚无最终正文时保持原始逐块展示', () => {
     const blocks = [
       user('user-1', 'turn-1'),
       thinking('thinking-1'),
       tool('tool-1'),
     ]
-    const sections = conversationSections(blocks)
+    const sections = conversationSections(blocks, 1_000)
 
     assert.deepEqual(sections.map((section) => section.kind), ['block', 'block', 'block'])
     assert.deepEqual(sections.map((section) => section.id), ids(blocks))
+  })
+
+  it('最终正文首段到达时先把运行中的处理过程投影为折叠区', () => {
+    const sections = conversationSections([
+      user('user-1', 'turn-1'),
+      thinking('thinking-1'),
+      tool('tool-1'),
+      text('answer', '正在流式输出最终回答'),
+    ], 1_000)
+
+    const active = asActive(sections[0])
+    assert.equal(active.id, 'work-user-1')
+    assert.equal(active.startedAt, 1_000)
+    assert.deepEqual(ids(active.userBlocks), ['user-1'])
+    assert.deepEqual(ids(active.activityBlocks), ['thinking-1', 'tool-1'])
+    assert.deepEqual(ids(active.finalBlocks), ['answer'])
+  })
+
+  it('正文后继续调用工具时恢复运行中逐块展示', () => {
+    const blocks = [
+      user('user-1', 'turn-1'),
+      text('commentary', '再检查一个文件'),
+      tool('tool-1'),
+    ]
+    const sections = conversationSections(blocks, 1_000)
+
+    assert.deepEqual(sections.map((section) => section.kind), ['block', 'block', 'block'])
+    assert.deepEqual(sections.map((section) => section.id), ids(blocks))
+  })
+
+  it('work-finished 到达后沿用同一任务折叠身份并冻结时长', () => {
+    const active = asActive(conversationSections([
+      user('user-1', 'turn-1'),
+      tool('tool-1'),
+      text('answer', '最终回答'),
+    ], 1_000)[0])
+    const completed = asCompleted(conversationSections([
+      user('user-1', 'turn-1'),
+      tool('tool-1'),
+      text('answer', '最终回答'),
+      duration('duration-1'),
+    ])[0])
+
+    assert.equal(active.id, completed.id)
+    assert.equal(completed.duration.durationMs, 61_000)
   })
 
   it('按工作时长边界逐个投影多个已完成任务', () => {
@@ -106,8 +151,8 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(
       sections.map((section) => [section.kind, section.id]),
       [
-        ['completed-work', 'duration-1'],
-        ['completed-work', 'duration-2'],
+        ['completed-work', 'work-user-1'],
+        ['completed-work', 'work-user-2'],
         ['block', 'user-3'],
         ['block', 'tool-3'],
       ],
@@ -134,6 +179,13 @@ function asCompleted(
 ): Extract<ConversationSection, { kind: 'completed-work' }> {
   assert.equal(section?.kind, 'completed-work')
   return section as Extract<ConversationSection, { kind: 'completed-work' }>
+}
+
+function asActive(
+  section: ConversationSection | undefined,
+): Extract<ConversationSection, { kind: 'active-work' }> {
+  assert.equal(section?.kind, 'active-work')
+  return section as Extract<ConversationSection, { kind: 'active-work' }>
 }
 
 function ids(blocks: readonly Block[]): string[] {
