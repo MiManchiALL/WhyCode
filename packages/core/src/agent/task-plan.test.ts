@@ -452,12 +452,14 @@ describe('Main 长任务端到端控制', () => {
     const question = '是否放弃当前任务并改做 CSGO？'
     const model = modelWithSteps([
       toolStep('AskUserQuestion', {
-        header: '替换任务',
-        question,
-        options: [
-          { label: '确认切换', description: '归档当前计划并建立 CSGO 计划' },
-          { label: '保留旧任务', description: '不覆盖当前活动计划' },
-        ],
+        questions: [{
+          header: '替换任务',
+          question,
+          options: [
+            { label: '确认切换', description: '归档当前计划并建立 CSGO 计划' },
+            { label: '保留旧任务', description: '不覆盖当前活动计划' },
+          ],
+        }],
       }),
       toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
         expected_active_plan_id: activePlan().id,

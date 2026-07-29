@@ -114,6 +114,26 @@ describe('ViewTimeline', () => {
     ]])
   })
 
+  it('用户停止时只写稳已经展示的正文，仍丢弃推理和工具状态', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'thinking-delta', text: '未完成推理' })
+    timeline.capture(writer, {
+      type: 'tool-start',
+      toolUseId: 'tool-1',
+      toolName: 'RunCommand',
+      input: { command: 'slow' },
+    })
+    timeline.capture(writer, { type: 'text-delta', text: '已经输出的正文' })
+    timeline.capture(writer, { type: 'step-output-retained' })
+    timeline.capture(writer, { type: 'step-discarded' })
+    await timeline.flush()
+
+    assert.deepEqual(writer.batches, [[
+      { type: 'core-event', event: { type: 'text-delta', text: '已经输出的正文' } },
+    ]])
+  })
+
   it('丢弃未提交 step，B/C 并发缓冲互不干扰', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))

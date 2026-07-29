@@ -134,6 +134,19 @@ describe('网页搜索后端选择', () => {
 })
 
 describe('配置密钥存储', () => {
+  it('四档权限偏好均可跨配置重载恢复', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-permission-mode-'))
+    const path = join(root, 'config.json')
+    try {
+      for (const permissionMode of ['readonly', 'default', 'acceptEdits', 'auto'] as const) {
+        await saveConfig({ providers: {}, permissionMode }, codec, path)
+        assert.equal(loadConfig(path, codec)?.permissionMode, permissionMode)
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('保存时不落明文，读取时恢复内置、CLIProxyAPI、协商和搜索密钥', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-'))
     const path = join(root, 'config.json')
@@ -157,6 +170,7 @@ describe('配置密钥存储', () => {
         perplexity: { apiKey: 'perplexity-secret' },
         tavily: { apiKey: 'tavily-secret', searchDepth: 'advanced' },
       },
+      permissionMode: 'auto',
       mcpSecretHeaders: [{
         serverName: 'context7',
         connectionFingerprint: 'a'.repeat(64),
@@ -198,6 +212,7 @@ describe('配置密钥存储', () => {
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
       assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
       assert.equal(loaded?.webSearch?.tavily?.searchDepth, 'advanced')
+      assert.equal(loaded?.permissionMode, 'auto')
       assert.deepEqual(loaded?.mcpSecretHeaders, [{
         serverName: 'context7',
         connectionFingerprint: 'a'.repeat(64),
@@ -379,6 +394,7 @@ describe('配置密钥存储', () => {
           perplexity: { apiKey: 'legacy-search-key' },
           tavily: { apiKey: '' },
         },
+        permissionMode: 'untrusted-mode',
       }))
       const loaded = loadConfig(path)
       assert.ok(loaded)
@@ -396,6 +412,7 @@ describe('配置密钥存储', () => {
       assert.equal(loaded.webSearch?.activeProvider, 'perplexity')
       assert.equal(loaded.webSearch?.perplexity?.apiKey, 'legacy-search-key')
       assert.equal(loaded.webSearch?.tavily, undefined)
+      assert.equal(loaded.permissionMode, undefined)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

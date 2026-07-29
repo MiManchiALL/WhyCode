@@ -27,12 +27,50 @@ export interface UserQuestionOption {
   description: string
 }
 
-/** Main 需要用户决策时展示的可恢复问题卡。 */
-export interface UserQuestion {
-  id: string
+export const MAX_USER_QUESTIONS = 6
+
+export interface UserQuestionItem {
   header: string
   question: string
   options: UserQuestionOption[]
+}
+
+/** Main 需要用户决策时展示的可恢复问题卡。 */
+export interface UserQuestion extends UserQuestionItem {
+  id: string
+  /** 新版问题批次；旧会话省略时按顶层的单个问题恢复。 */
+  questions?: UserQuestionItem[]
+}
+
+export function userQuestionItems(question: UserQuestion): readonly UserQuestionItem[] {
+  return question.questions?.length ? question.questions : [question]
+}
+
+export function formatUserQuestionAnswer(
+  question: UserQuestion,
+  answers: readonly string[],
+): string {
+  const items = userQuestionItems(question)
+  if (answers.length !== items.length || answers.some((answer) => !answer.trim())) {
+    throw new Error('每个问题都需要非空回答')
+  }
+  return items
+    .map((item, index) =>
+      `${userQuestionAnswerPrefix(item, index, items.length)}${normalizeInlineText(answers[index]!)}`)
+    .join('\n')
+}
+
+export function userQuestionAnswerPrefix(
+  item: UserQuestionItem,
+  index: number,
+  total: number,
+): string {
+  const label = normalizeInlineText(item.question)
+  return total === 1 ? `回答「${label}」：` : `${index + 1}. 回答「${label}」：`
+}
+
+function normalizeInlineText(text: string): string {
+  return text.replaceAll(/\s+/g, ' ').trim()
 }
 
 /** 忙时输入始终把正文和附件作为一个有序单元传递、恢复和展示。 */
@@ -58,6 +96,8 @@ export type CoreEvent =
   | { type: 'step-committed' }
   /** 当前 step 未进入模型历史（取消/urgent/异常）；宿主必须丢弃对应未提交可见事件。 */
   | { type: 'step-discarded' }
+  /** 用户主动停止时仅提交已展示的正文；工具、推理、问题和计划仍由随后 discard 撤销。 */
+  | { type: 'step-output-retained' }
   | { type: 'text-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'thinking-end'; durationMs: number }
@@ -79,16 +119,33 @@ export type CoreEvent =
       suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
     }
   | { type: 'turn-end'; turnId: string; usage: UsageInfo; stopReason: StopReason }
+  /** Main runtime 接受根输入后的权威起点；仅用于当前运行中的计时显示。 */
+  | { type: 'work-started'; startedAt: number }
+  /** 整次连续工作结束后的固定时长；进入可见时间线以供重启恢复。 */
+  | { type: 'work-finished'; durationMs: number }
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
   /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
   | {
       type: 'user-message-accepted'
+      /** 新宿主提供的稳定根输入身份；旧宿主事件允许省略。 */
+      inputId?: string
       text: string
       startsTurn: true
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
+    }
+  /**
+   * 用户把一个尚无稳定模型输出的已中止回合原位改写。该事件只负责实时投影；
+   * 重放由 JSONL user-input.replacesTurnId 派生同一事件，避免维护第二份界面状态。
+   */
+  | {
+      type: 'user-message-edited'
+      previousTurnId: string
+      inputId: string
+      text: string
+      taskPlan: ActiveTaskPlan | null
     }
   // --- steering（M2-a）：运行中插话 ---
   | {
@@ -243,6 +300,8 @@ export type CoreCommand =
   | { type: 'set-model'; modelId: string }
   | { type: 'set-reasoning-effort'; reasoningEffort: ReasoningEffortSelection }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
+  /** 原位改写一个尚无稳定模型输出的已中止回合，并从该位置重新执行。 */
+  | { type: 'edit-user-message'; turnId: string; text: string }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 手动触发上下文压缩（仅空闲时） */

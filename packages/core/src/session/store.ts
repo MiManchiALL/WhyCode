@@ -64,6 +64,19 @@ import {
   type SessionSummary,
 } from './types.ts'
 
+interface TurnStartSnapshot {
+  turnId: string
+  messages: ModelMessage[]
+  taskState: TaskPlanState
+}
+
+interface TurnEditTransaction {
+  snapshot: Extract<SessionEntry, { type: 'snapshot' }>
+  input: Extract<SessionEntry, { type: 'user-input' }>
+  messages: ModelMessage[]
+  turnStarts: TurnStartSnapshot[]
+}
+
 export class SessionStore {
   private readonly rootDir: string
   private readonly pdfProcessor: PdfProcessor | undefined
@@ -514,6 +527,7 @@ export class SessionJournal implements SessionRecorder {
         this.undeliveredUserInputIdSet.add(input.uuid)
         this.viewEvents.push({
           type: 'user-message',
+          inputId: input.uuid,
           text: input.text,
           startsTurn: true,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
@@ -539,6 +553,36 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
+  recordTurnEditInput(
+    previousTurnId: string,
+    inputId: string,
+    text: string,
+    rollbackMessages: ModelMessage[],
+    rollbackTaskState: TaskPlanState,
+    attachments: readonly ImageAttachment[] = [],
+    pdfAttachments: readonly PdfAttachment[] = [],
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      this.assertTurnEditCurrent(
+        previousTurnId, rollbackMessages, rollbackTaskState,
+      )
+      this.assertImageAttachmentsCompatible(attachments)
+      this.assertPdfAttachmentsCompatible(pdfAttachments)
+      const transaction = this.createTurnEditTransaction(
+        previousTurnId,
+        inputId,
+        text,
+        rollbackMessages,
+        rollbackTaskState,
+        attachments,
+        pdfAttachments,
+      )
+      await this.appendEntries([transaction.snapshot, transaction.input])
+      this.applyTurnEditTransaction(transaction, rollbackTaskState, attachments, pdfAttachments)
+      await this.refreshMetadataCache()
+    })
+  }
+
   recordViewEvents(events: ViewEvent[]): Promise<void> {
     if (events.length === 0) return Promise.resolve()
     const parsed = events.map((event) => viewEventSchema.parse(event))
@@ -555,9 +599,13 @@ export class SessionJournal implements SessionRecorder {
     engagedPlanId?: string,
     deliveredInputIds: readonly string[] = [],
     projectInstructions?: ProjectInstructionsUpdate,
+    rootInputId?: string,
   ): Promise<void> {
     return this.enqueue(async () => {
       this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
+      if (rootInputId && !this.undeliveredUserInputIdSet.has(rootInputId)) {
+        throw new Error(`无法确认不属于当前活动根输入的消息：${rootInputId}`)
+      }
       if (projectInstructions && !validateProjectInstructionsUpdate(projectInstructions)) {
         throw new Error('项目指令更新无效')
       }
@@ -568,6 +616,7 @@ export class SessionJournal implements SessionRecorder {
         type: 'turn-start',
         turnId,
         engagedPlanId: engagedPlanId ?? null,
+        ...(rootInputId ? { rootInputId } : {}),
       })
       const batch = this.entry(
         {
@@ -590,7 +639,7 @@ export class SessionJournal implements SessionRecorder {
           )
         : null
       await this.appendEntries(instructionEntry ? [started, batch, instructionEntry] : [started, batch])
-      this.undeliveredUserInputIdSet.delete(parentUuid)
+      this.undeliveredUserInputIdSet.delete(rootInputId ?? parentUuid)
       this.deletePendingInputs(deliveredInputIds)
       this.messages.push(...messages)
       if (projectInstructions) this.applyProjectInstructionsUpdate(projectInstructions)
@@ -992,6 +1041,111 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
+  private assertTurnEditCurrent(
+    previousTurnId: string,
+    rollbackMessages: ModelMessage[],
+    rollbackTaskState: TaskPlanState,
+  ): void {
+    if (this.activeTurnId || this.activeConsensusTaskId) {
+      throw new Error('仍有活动回合，不能编辑已中止消息')
+    }
+    if (this.undeliveredUserInputIdSet.size > 0 || this.pendingUserInputMap.size > 0) {
+      throw new Error('存在尚未处理的用户输入，不能编辑已中止消息')
+    }
+    const expectedMessages = this.messagesBeforeTurn(previousTurnId)
+    const expectedTaskState = this.taskStateBeforeTurn(previousTurnId)
+    if (
+      expectedMessages === null
+      || expectedTaskState === undefined
+      || !sameMessages(expectedMessages, rollbackMessages)
+      || JSON.stringify(expectedTaskState) !== JSON.stringify(rollbackTaskState)
+    ) {
+      throw new Error('目标回合已不在当前活动历史中')
+    }
+  }
+
+  private createTurnEditTransaction(
+    previousTurnId: string,
+    inputId: string,
+    text: string,
+    rollbackMessages: ModelMessage[],
+    rollbackTaskState: TaskPlanState,
+    attachments: readonly ImageAttachment[],
+    pdfAttachments: readonly PdfAttachment[],
+  ): TurnEditTransaction {
+    const messages = applyProjectInstructions(
+      rollbackMessages,
+      findProjectInstructionsMessage(this.messages),
+    )
+    const turnStarts = this.turnStartsWithin(messages)
+    const snapshot = this.entry({
+      type: 'snapshot',
+      reason: 'rollback',
+      activeTurnId: null,
+      activeTurnEngagedPlanId: null,
+      activeConsensusTaskId: null,
+      activeConsensusBaseMessages: null,
+      activeConsensusBaseTaskState: null,
+      activeConsensusBaseTurnIds: null,
+      consensusState: this.consensusState,
+      taskState: rollbackTaskState,
+      modelId: this.metadata.modelId,
+      reasoningEffort: this.metadata.reasoningEffort,
+      messages: dehydrateImageMessages(messages),
+      pendingUserInputs: [],
+      turnStartMessages: turnStarts.map((start) => ({
+        ...start,
+        messages: dehydrateImageMessages(start.messages),
+      })),
+    }, null)
+    const input = this.entry({
+      type: 'user-input',
+      text,
+      startsTurn: true,
+      replacesTurnId: previousTurnId,
+      ...(attachments.length ? { attachments } : {}),
+      ...(pdfAttachments.length ? { pdfAttachments } : {}),
+    }, snapshot.uuid, inputId)
+    if (snapshot.type !== 'snapshot' || input.type !== 'user-input') {
+      throw new Error('编辑事务记录类型无效')
+    }
+    return { snapshot, input, messages, turnStarts }
+  }
+
+  private applyTurnEditTransaction(
+    transaction: TurnEditTransaction,
+    taskState: TaskPlanState,
+    attachments: readonly ImageAttachment[],
+    pdfAttachments: readonly PdfAttachment[],
+  ): void {
+    this.messages = transaction.messages
+    this.taskState = cloneTaskPlanState(taskState)
+    this.turnStartMessages = new Map(transaction.turnStarts.map((start) => [
+      start.turnId, structuredClone(start.messages),
+    ]))
+    this.turnStartTaskStates = new Map(transaction.turnStarts.map((start) => [
+      start.turnId, cloneTaskPlanState(start.taskState),
+    ]))
+    this.activeTurnId = null
+    this.activeTurnEngagedPlanId = null
+    this.activeConsensusTaskId = null
+    this.activeConsensusBaseMessages = null
+    this.activeConsensusBaseTaskState = null
+    this.activeConsensusBaseTurnIds = null
+    this.undeliveredUserInputIdSet.add(transaction.input.uuid)
+    this.addImageAttachments(attachments)
+    this.addPdfAttachments(pdfAttachments)
+    this.viewEvents.push(
+      userMessageViewEvent(transaction.input),
+      turnEditViewEvent(transaction.input, taskState),
+    )
+    const clipped = clip(transaction.input.text)
+    this.metadata.lastUserText = clipped
+    if (!this.metadata.title) this.metadata.title = clipped
+    this.metadata.updatedAt = transaction.input.timestamp
+    this.metadata.status = 'interrupted'
+  }
+
   private hasRuntimePendingInput(): boolean {
     if (this.undeliveredUserInputIdSet.size > 0) return true
     return [...this.pendingUserInputMap.values()].some((input) => input.state === 'queued')
@@ -1143,6 +1297,40 @@ function isMessagePrefix(prefix: ModelMessage[], messages: ModelMessage[]): bool
   return prefix.every((message, index) =>
     JSON.stringify(message) === JSON.stringify(messages[index]),
   )
+}
+
+function sameMessages(left: ModelMessage[], right: ModelMessage[]): boolean {
+  return left.length === right.length && isMessagePrefix(left, right)
+}
+
+function userMessageViewEvent(
+  input: Extract<SessionEntry, { type: 'user-input' }>,
+): ViewEvent {
+  return {
+    type: 'user-message',
+    inputId: input.uuid,
+    text: input.text,
+    startsTurn: true,
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
+  }
+}
+
+function turnEditViewEvent(
+  input: Extract<SessionEntry, { type: 'user-input' }>,
+  taskState: TaskPlanState,
+): ViewEvent {
+  if (!input.replacesTurnId) throw new Error('编辑输入缺少旧回合身份')
+  return {
+    type: 'core-event',
+    event: {
+      type: 'user-message-edited',
+      previousTurnId: input.replacesTurnId,
+      inputId: input.uuid,
+      text: input.text,
+      taskPlan: structuredClone(taskState.activePlan),
+    },
+  }
 }
 
 function clip(text: string): string {

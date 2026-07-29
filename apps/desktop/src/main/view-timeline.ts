@@ -41,12 +41,14 @@ export class ViewTimeline {
     if (event.type === 'peer-event') {
       const channel = event.agentId
       if (event.event.type === 'step-committed') return this.commit(channel)
+      if (event.event.type === 'step-output-retained') return this.retainOutput(channel)
       if (event.event.type === 'step-discarded') return this.discard(channel)
       const viewEvent = toViewEvent(event)
       if (viewEvent) this.buffer(channel, writer, viewEvent)
       return
     }
     if (event.type === 'step-committed') return this.commit('Main')
+    if (event.type === 'step-output-retained') return this.retainOutput('Main')
     if (event.type === 'step-discarded') return this.discard('Main')
     if (event.type === 'agent-status' && event.status === 'idle') {
       this.discardAll()
@@ -127,6 +129,18 @@ export class ViewTimeline {
     }
     pending.writer = null
     pending.order = []
+  }
+
+  private retainOutput(channel: Channel): void {
+    const pending = this.pending[channel]
+    const output = pending.events.filter((event) =>
+      event.type === 'core-event'
+      && (
+        event.event.type === 'text-delta'
+        || (event.event.type === 'peer-event' && event.event.event.type === 'text-delta')
+      ))
+    if (pending.writer && output.length > 0) this.write(pending.writer, output)
+    this.discard(channel)
   }
 
   private discard(channel: Channel): void {

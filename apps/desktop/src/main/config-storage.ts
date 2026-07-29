@@ -8,6 +8,7 @@ import {
   parseMcpSecretHeader,
   type McpSecretHeader,
 } from '@whycode/core'
+import type { PermissionMode } from '@whycode/core/permissions'
 import {
   getCliProxyModelCompatibility,
   isCliProxyRoute,
@@ -39,6 +40,7 @@ interface StoredConfig {
   version?: number
   providers?: Record<string, StoredCredential>
   defaultModel?: string
+  permissionMode?: unknown
   retiredModelLabels?: Record<string, string>
   cliProxyApi?: StoredCredential & {
     modelIds?: string[]
@@ -97,9 +99,11 @@ export function loadConfig(
     const webSearch = parseWebSearch(stored.webSearch, codec)
     const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
     const mcpOAuthSessions = parseStoredMcpOAuthSessions(stored.mcpOAuthSessions, codec)
+    const permissionMode = parsePermissionMode(stored.permissionMode)
     return {
       providers,
       ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
+      ...(permissionMode ? { permissionMode } : {}),
       ...(retiredModelLabels ? { retiredModelLabels } : {}),
       ...(cliProxyApi ? { cliProxyApi } : {}),
       ...(consensusAgents ? { consensusAgents } : {}),
@@ -125,6 +129,7 @@ export async function saveConfig(
       storeCredential(value, codec),
     ])),
     ...(config.defaultModel ? { defaultModel: config.defaultModel } : {}),
+    ...(config.permissionMode ? { permissionMode: config.permissionMode } : {}),
     ...(config.retiredModelLabels
       ? { retiredModelLabels: config.retiredModelLabels }
       : {}),
@@ -170,6 +175,15 @@ export async function saveConfig(
     } : {}),
   }
   await writeStoredConfig(stored, path)
+}
+
+function parsePermissionMode(value: unknown): PermissionMode | undefined {
+  return value === 'readonly'
+    || value === 'default'
+    || value === 'acceptEdits'
+    || value === 'auto'
+    ? value
+    : undefined
 }
 
 /**

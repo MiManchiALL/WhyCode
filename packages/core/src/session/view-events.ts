@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import type { CoreEvent } from '../events.ts'
+import {
+  MAX_USER_QUESTIONS,
+  type CoreEvent,
+} from '../events.ts'
 import {
   activeTaskPlanSchema,
   supersededTaskPlanSchema,
@@ -40,8 +43,7 @@ const candidateDetailsSchema = z.object({
   knownRisks: z.array(z.string()).optional(),
 })
 
-const userQuestionSchema = z.object({
-  id: z.string().min(1),
+const userQuestionItemSchema = z.object({
   header: z.string().min(1),
   question: z.string().min(1),
   options: z
@@ -50,8 +52,21 @@ const userQuestionSchema = z.object({
     .max(4),
 })
 
+const userQuestionSchema = userQuestionItemSchema.extend({
+  id: z.string().min(1),
+  questions: z.array(userQuestionItemSchema).min(1).max(MAX_USER_QUESTIONS).optional(),
+})
+
 export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('turn-start'), turnId: z.string() }),
+  z.object({
+    type: z.literal('user-message-edited'),
+    previousTurnId: z.string().min(1),
+    inputId: z.string().min(1),
+    text: z.string().min(1),
+    taskPlan: activeTaskPlanSchema.nullable(),
+  }),
+  z.object({ type: z.literal('work-finished'), durationMs: z.number().nonnegative() }),
   z.object({ type: z.literal('text-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-end'), durationMs: z.number().nonnegative() }),
@@ -173,8 +188,11 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     if (!['text-delta', 'tool-start', 'tool-end'].includes(event.event.type)) return null
     return viewEventSchema.parse({ type: 'core-event', event })
   }
+  // 编辑关系已经与新根 user-input 原子落盘；重放从该事实派生，不能再写一份副本。
+  if (event.type === 'user-message-edited') return null
   switch (event.type) {
     case 'turn-start':
+    case 'work-finished':
     case 'text-delta':
     case 'thinking-delta':
     case 'thinking-end':

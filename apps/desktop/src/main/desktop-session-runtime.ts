@@ -45,6 +45,7 @@ export class DesktopSessionRuntime {
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
+  workStartedAt: number | null = null
   attachmentPreparationInProgress = false
   lastSelectedAt = Date.now()
   private readonly emitToHost: DesktopSessionRuntimeOptions['emit']
@@ -107,9 +108,32 @@ export class DesktopSessionRuntime {
   emit(event: CoreEvent, persistView = true): void {
     if (this.disposed) return
     if (event.type === 'agent-status') this.status = event.status
+    if (
+      event.type === 'agent-status'
+      && (event.status === 'idle' || event.status === 'error')
+    ) {
+      this.finishWork()
+    }
+    this.publish(event, persistView)
+    this.notifyStateChanged()
+  }
+
+  beginWork(): void {
+    if (this.disposed || this.workStartedAt !== null) return
+    this.workStartedAt = Date.now()
+    this.publish({ type: 'work-started', startedAt: this.workStartedAt }, false)
+  }
+
+  finishWork(): void {
+    if (this.disposed || this.workStartedAt === null) return
+    const durationMs = Math.max(0, Date.now() - this.workStartedAt)
+    this.workStartedAt = null
+    this.publish({ type: 'work-finished', durationMs }, true)
+  }
+
+  private publish(event: CoreEvent, persistView: boolean): void {
     if (persistView) this.timeline.capture(this.journal, event)
     this.emitToHost(this, event)
-    this.notifyStateChanged()
   }
 
   beginAttachmentPreparation(): AbortSignal {

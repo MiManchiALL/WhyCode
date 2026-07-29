@@ -36,12 +36,15 @@ export type Block =
   | {
       kind: 'user'
       id: string
+      inputId?: string
+      turnId?: string
       text: string
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
     }
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
+  | { kind: 'work-duration'; id: string; durationMs: number }
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'notice'; id: string; text: string }
   | {
@@ -124,6 +127,7 @@ export function applyViewEvent(state: ConversationState, event: ViewEvent): Conv
         event.startsTurn,
         event.attachments,
         event.pdfAttachments,
+        event.inputId,
       )
     : applyStableCoreEvent(state, event.event)
 }
@@ -132,6 +136,7 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
   if (event.type === 'step-committed') {
     return state.pendingStep ? { ...state, pendingStep: null } : state
   }
+  if (event.type === 'step-output-retained') return retainStepOutput(state)
   if (event.type === 'step-discarded') {
     return state.pendingStep
       ? { ...state, ...state.pendingStep, pendingStep: null }
@@ -149,8 +154,13 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
       if (state.pendingTurnStart === null) return state
       const turnStartBlocks = new Map(state.turnStartBlocks)
       turnStartBlocks.set(event.turnId, state.pendingTurnStart)
-      return { ...state, pendingTurnStart: null, turnStartBlocks }
+      const blocks = [...state.blocks]
+      const root = blocks[state.pendingTurnStart]
+      if (root?.kind === 'user') blocks[state.pendingTurnStart] = { ...root, turnId: event.turnId }
+      return { ...state, blocks, pendingTurnStart: null, turnStartBlocks }
     }
+    case 'user-message-edited':
+      return applyUserMessageEdited(state, event)
     case 'message-injected':
       return appendUserMessage(
         state,
@@ -158,6 +168,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         event.startsTurn ?? false,
         event.attachments,
         event.pdfAttachments,
+        event.id,
       )
     case 'user-message-accepted':
       return appendUserMessage(
@@ -166,6 +177,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         event.startsTurn,
         event.attachments,
         event.pdfAttachments,
+        event.inputId,
       )
     case 'text-delta':
       return appendText(state, event.text)
@@ -173,6 +185,12 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
       return appendThinking(state, event.text)
     case 'thinking-end':
       return endThinking(state, event.durationMs)
+    case 'work-finished':
+      return appendBlock(state, {
+        kind: 'work-duration',
+        id: nextBlockId(state),
+        durationMs: event.durationMs,
+      })
     case 'tool-start':
       return appendBlock(state, {
         kind: 'tool',
@@ -291,23 +309,91 @@ function snapshotConversation(state: ConversationState): PendingStepSnapshot {
   }
 }
 
+function retainStepOutput(state: ConversationState): ConversationState {
+  const snapshot = state.pendingStep
+  if (!snapshot) return state
+  const stableById = new Map(snapshot.blocks.map((block) => [block.id, block]))
+  let retained: ConversationState = { ...state, ...snapshot, pendingStep: null }
+  for (const block of state.blocks) {
+    if (block.kind !== 'text') continue
+    const stable = stableById.get(block.id)
+    const text = stable?.kind === 'text'
+      ? block.text.slice(stable.text.length)
+      : block.text
+    if (text) retained = appendText(retained, text)
+  }
+  return retained
+}
+
 export function appendUserMessage(
   state: ConversationState,
   text: string,
   startsTurn: boolean,
   attachments: readonly ImageAttachment[] = [],
   pdfAttachments: readonly PdfAttachment[] = [],
+  inputId?: string,
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
   return appendBlock({ ...state, pendingTurnStart, pendingQuestion: null }, {
     kind: 'user',
     id: nextBlockId(state),
+    ...(inputId ? { inputId } : {}),
     text,
     ...(attachments.length ? { attachments: attachments.map((item) => structuredClone(item)) } : {}),
     ...(pdfAttachments.length
       ? { pdfAttachments: pdfAttachments.map((item) => structuredClone(item)) }
       : {}),
   })
+}
+
+export function editableUserBlockId(blocks: readonly Block[]): string | null {
+  let index = blocks.length - 1
+  let terminalWorkRecorded = false
+  while (index >= 0 && blocks[index]?.kind === 'work-duration') {
+    terminalWorkRecorded = true
+    index--
+  }
+  const candidate = blocks[index]
+  return terminalWorkRecorded && candidate?.kind === 'user' && candidate.turnId
+    ? candidate.id
+    : null
+}
+
+function applyUserMessageEdited(
+  state: ConversationState,
+  event: Extract<CoreEvent, { type: 'user-message-edited' }>,
+): ConversationState {
+  const previousIndex = state.blocks.findIndex((block) =>
+    block.kind === 'user' && block.turnId === event.previousTurnId)
+  if (previousIndex < 0) return state
+  const previous = state.blocks[previousIndex] as Extract<Block, { kind: 'user' }>
+  const replayInput = state.blocks.find((block) =>
+    block.kind === 'user' && block.inputId === event.inputId)
+  const replacement = replayInput?.kind === 'user' ? replayInput : previous
+  const { turnId: _discardedTurnId, ...replacementWithoutTurn } = replacement
+  const blocks: Block[] = [
+    ...state.blocks.slice(0, previousIndex),
+    {
+      ...replacementWithoutTurn,
+      id: previous.id,
+      inputId: event.inputId,
+      text: event.text,
+    },
+  ]
+  const retainedIds = new Set(blocks.map((block) => block.id))
+  const turnStartBlocks = new Map(
+    [...state.turnStartBlocks].filter(([, index]) => index < previousIndex),
+  )
+  return {
+    ...state,
+    blocks,
+    expanded: new Set([...state.expanded].filter((id) => retainedIds.has(id))),
+    pendingTurnStart: previousIndex,
+    turnStartBlocks,
+    taskPlan: structuredClone(event.taskPlan),
+    pendingQuestion: null,
+    pendingStep: null,
+  }
 }
 
 export function appendNotice(state: ConversationState, text: string): ConversationState {

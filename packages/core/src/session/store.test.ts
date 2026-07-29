@@ -181,8 +181,16 @@ describe('SessionStore', () => {
   it('steering 队列跨快照保留，并以模型消息批次原子确认送达', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
-    await journal.recordUserInput('开始', true)
-    await journal.recordTurnStart('turn-queue', [message('user', '开始')])
+    const rootInputId = randomUUID()
+    await journal.recordUserInputWithId(rootInputId, '开始', true)
+    await journal.recordTurnStart(
+      'turn-queue',
+      [message('user', '开始')],
+      undefined,
+      [],
+      undefined,
+      rootInputId,
+    )
     const firstId = randomUUID()
     const secondId = randomUUID()
     await journal.recordUserInputWithId(firstId, '第一条插话', false)
@@ -210,7 +218,8 @@ describe('SessionStore', () => {
   it('送达确认后崩溃缺失即时事件时，在原交付位置补回 steering 时间线', async () => {
     const store = await createStore()
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
-    await journal.recordUserInput('开始', true)
+    const rootInputId = randomUUID()
+    await journal.recordUserInputWithId(rootInputId, '开始', true)
     await journal.recordTurnStart('turn-visible-steering', [message('user', '开始')])
     const inputId = randomUUID()
     await journal.recordUserInputWithId(inputId, '交付后即崩溃的插话', false)
@@ -229,7 +238,7 @@ describe('SessionStore', () => {
 
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.initialViewEvents, [
-      { type: 'user-message', text: '开始', startsTurn: true },
+      { type: 'user-message', inputId: rootInputId, text: '开始', startsTurn: true },
       {
         type: 'user-message',
         inputId,
@@ -388,7 +397,12 @@ describe('SessionStore', () => {
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
     assert.deepEqual(interrupted.initialViewEvents, [
       questionEvent,
-      { type: 'user-message', text: answer, startsTurn: true },
+      {
+        type: 'user-message',
+        inputId: interrupted.undeliveredUserInputIds[0],
+        text: answer,
+        startsTurn: true,
+      },
     ])
 
     await interrupted.recoverInterruptedWork()
@@ -485,6 +499,7 @@ describe('SessionStore', () => {
   it('完整回答 messages 落盘后只保留一份回答，旧问题卡保持关闭', async () => {
     const { store, journal, questionEvent, answer } = await waitingQuestionSession()
     await journal.recordUserInput(answer, true)
+    const answerInputId = journal.undeliveredUserInputIds[0]!
     await journal.recordTurnStart('answer-complete-turn', [message('user', answer)])
 
     const interrupted = await store.open(journal.sessionId)
@@ -494,7 +509,7 @@ describe('SessionStore', () => {
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
     assert.deepEqual(interrupted.initialViewEvents, [
       questionEvent,
-      { type: 'user-message', text: answer, startsTurn: true },
+      { type: 'user-message', inputId: answerInputId, text: answer, startsTurn: true },
     ])
 
     await interrupted.recoverInterruptedWork()
@@ -770,6 +785,74 @@ describe('SessionStore', () => {
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.messagesBeforeTurn('turn-1'), [])
     assert.equal(reopened.messagesBeforeTurn('turn-2'), null)
+  })
+
+  it('编辑已中止根消息时原子换根，重放保留原位关系且模型只续接新输入', async () => {
+    const store = await createStore()
+    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const oldInputId = randomUUID()
+    await journal.recordUserInputWithId(oldInputId, '旧问题', true)
+    await journal.recordTurnStart(
+      'turn-old',
+      [message('user', '旧问题')],
+      undefined,
+      [],
+      undefined,
+      oldInputId,
+    )
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-old' } },
+    ])
+    await journal.recordStep('turn-old', [createTurnAbortedMessage()])
+    await journal.recordTurnEnd('turn-old', 'aborted')
+
+    const rollbackMessages = journal.messagesBeforeTurn('turn-old')
+    const rollbackTaskState = journal.taskStateBeforeTurn('turn-old')
+    assert.notEqual(rollbackMessages, null)
+    assert.notEqual(rollbackTaskState, undefined)
+    const editedInputId = randomUUID()
+    await journal.recordTurnEditInput(
+      'turn-old',
+      editedInputId,
+      '编辑后的问题',
+      rollbackMessages!,
+      rollbackTaskState!,
+    )
+
+    const pending = await store.open(journal.sessionId)
+    assert.deepEqual(pending.undeliveredUserInputIds, [editedInputId])
+    assert.deepEqual(pending.initialMessages, [message('user', '编辑后的问题')])
+    assert.equal(
+      pending.initialViewEvents.some((entry) =>
+        entry.type === 'core-event'
+        && entry.event.type === 'user-message-edited'
+        && entry.event.previousTurnId === 'turn-old'
+        && entry.event.inputId === editedInputId),
+      true,
+    )
+
+    await journal.recordTurnStart(
+      'turn-edited',
+      [message('user', '编辑后的问题')],
+      undefined,
+      [],
+      undefined,
+      editedInputId,
+    )
+    await journal.recordStep('turn-edited', [message('assistant', '新答案')])
+    await journal.recordTurnEnd('turn-edited', 'completed')
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialMessages, [
+      message('user', '编辑后的问题'),
+      message('assistant', '新答案'),
+    ])
+    assert.equal(reopened.undeliveredUserInputIds.length, 0)
+    const transcript = await readFile(
+      join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl'),
+      'utf8',
+    )
+    assert.match(transcript, /旧问题/)
+    assert.match(transcript, /编辑后的问题/)
   })
 
   it('模型压缩换根后仍完整保留用户可见时间线', async () => {

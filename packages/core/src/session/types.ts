@@ -71,6 +71,8 @@ const turnStartSchema = chainedEntrySchema.extend({
   type: z.literal('turn-start'),
   turnId: z.string().min(1),
   engagedPlanId: z.string().uuid().nullable(),
+  /** 根输入不再是直接父节点时，仍以稳定 ID 原子确认其已经送达。 */
+  rootInputId: entryIdSchema.optional(),
 })
 
 const userInputSchema = chainedEntrySchema.extend({
@@ -84,7 +86,12 @@ const userInputSchema = chainedEntrySchema.extend({
   pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 重新提交恢复草稿时，与新输入在同一次 append 中原子消费旧输入。 */
   consumesInputIds: z.array(entryIdSchema).min(1).optional(),
+  /** 该根输入原位替换的旧回合；只由“中止后编辑”事务写入。 */
+  replacesTurnId: z.string().min(1).optional(),
 }).superRefine((input, ctx) => {
+  if (input.replacesTurnId && !input.startsTurn) {
+    ctx.addIssue({ code: 'custom', message: '替换旧回合的输入必须开启新回合' })
+  }
   input.attachments?.forEach((attachment, index) => {
     if (attachment.sessionId !== input.sessionId) {
       ctx.addIssue({
@@ -388,6 +395,19 @@ export interface SessionRecorder {
     consumesInputIds?: readonly string[],
     pdfAttachments?: readonly PdfAttachment[],
   ): Promise<void>
+  /**
+   * 把回滚换根与编辑后的新根输入作为一次 flush 提交；旧 JSONL 分支保留审计，
+   * 活动模型历史从 rollbackMessages 继续。
+   */
+  recordTurnEditInput(
+    previousTurnId: string,
+    inputId: string,
+    text: string,
+    rollbackMessages: ModelMessage[],
+    rollbackTaskState: TaskPlanState,
+    attachments?: readonly ImageAttachment[],
+    pdfAttachments?: readonly PdfAttachment[],
+  ): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(
     turnId: string,
@@ -395,6 +415,7 @@ export interface SessionRecorder {
     engagedPlanId?: string,
     deliveredInputIds?: readonly string[],
     projectInstructions?: ProjectInstructionsUpdate,
+    rootInputId?: string,
   ): Promise<void>
   recordProjectInstructions(update: ProjectInstructionsUpdate): Promise<void>
   recordStep(

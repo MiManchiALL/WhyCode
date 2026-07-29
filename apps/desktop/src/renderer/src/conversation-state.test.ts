@@ -4,6 +4,7 @@ import type { ViewEvent } from '@whycode/core'
 import {
   applyCoreEvent,
   createConversationState,
+  editableUserBlockId,
   eventsAfterRuntimeSnapshot,
   resumeTargetCommitted,
   toggleExpanded,
@@ -56,6 +57,28 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /out:default_api/)
   })
 
+  it('用户停止时保留当前步骤正文，但撤销同一步的推理和工具', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '解释这段代码', startsTurn: true },
+    ])
+    state = applyCoreEvent(state, { type: 'thinking-delta', text: '分析中' })
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'tool-1',
+      toolName: 'ReadFile',
+      input: { path: 'sample.ts' },
+    })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '已经输出的部分' })
+
+    state = applyCoreEvent(state, { type: 'step-output-retained' })
+    state = applyCoreEvent(state, { type: 'step-discarded' })
+
+    assert.deepEqual(state.blocks.map((block) => block.kind), ['user', 'text'])
+    const output = state.blocks.at(-1)
+    assert.equal(output?.kind === 'text' ? output.text : '', '已经输出的部分')
+    assert.equal(state.pendingStep, null)
+  })
+
   it('Renderer 初始化只接续快照边界之后的实时事件', () => {
     const events = eventsAfterRuntimeSnapshot([
       { sequence: 10, event: { type: 'text-delta', text: '已包含在快照中' } },
@@ -76,6 +99,18 @@ describe('会话界面时间线重建', () => {
       JSON.stringify(state.blocks),
       /已恢复|界面已重新连接当前任务|会话恢复已完成/,
     )
+  })
+
+  it('完成后的工作时长作为可见事实随历史恢复', () => {
+    const state = createConversationState([
+      core({ type: 'work-finished', durationMs: 61_000 }),
+    ])
+
+    assert.deepEqual(state.blocks, [{
+      kind: 'work-duration',
+      id: 'b0',
+      durationMs: 61_000,
+    }])
   })
 
   it('Renderer 重载后只应用 Main 已原子提交的恢复目标', () => {
@@ -167,6 +202,7 @@ describe('会话界面时间线重建', () => {
     ])
     state = applyCoreEvent(state, {
       type: 'user-message-accepted',
+      inputId: 'root-new',
       text: '新的根消息',
       startsTurn: true,
     })
@@ -192,6 +228,65 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(serialized, /新的根消息/)
     assert.doesNotMatch(serialized, /运行中的补充要求/)
     assert.doesNotMatch(serialized, /新回答/)
+  })
+
+  it('实时编辑把已中止根消息留在原位置，并让新 turn 复用该锚点', () => {
+    let state = createConversationState([
+      { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-old' }),
+      core({ type: 'work-finished', durationMs: 1_500 }),
+    ])
+
+    state = applyCoreEvent(state, {
+      type: 'user-message-edited',
+      previousTurnId: 'turn-old',
+      inputId: 'edited-input',
+      text: '编辑后的问题',
+      taskPlan: null,
+    })
+    assert.deepEqual(state.blocks.map((block) => block.kind), ['user'])
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].text, '编辑后的问题')
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].turnId, undefined)
+
+    state = applyCoreEvent(state, { type: 'turn-start', turnId: 'turn-edited' })
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].turnId, 'turn-edited')
+  })
+
+  it('只有已正常收尾且没有可见输出的最后根消息才展示编辑入口', () => {
+    let state = applyCoreEvent(
+      applyCoreEvent(
+        createConversationState(),
+        { type: 'user-message-accepted', inputId: 'input-1', text: '旧消息', startsTurn: true },
+      ),
+      { type: 'turn-start', turnId: 'turn-1' },
+    )
+
+    assert.equal(editableUserBlockId(state.blocks), null)
+    state = applyCoreEvent(state, { type: 'work-finished', durationMs: 1000 })
+    assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
+    state = applyCoreEvent(state, { type: 'text-delta', text: '已有输出' })
+    assert.equal(editableUserBlockId(state.blocks), null)
+  })
+
+  it('重放中的编辑输入副本与实时编辑事件走同一 reducer 且不重复显示', () => {
+    const state = createConversationState([
+      { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-old' }),
+      core({ type: 'work-finished', durationMs: 800 }),
+      { type: 'user-message', inputId: 'edited-input', text: '编辑后的问题', startsTurn: true },
+      core({
+        type: 'user-message-edited',
+        previousTurnId: 'turn-old',
+        inputId: 'edited-input',
+        text: '编辑后的问题',
+        taskPlan: null,
+      }),
+      core({ type: 'turn-start', turnId: 'turn-edited' }),
+    ])
+
+    assert.equal(state.blocks.length, 1)
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].text, '编辑后的问题')
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].turnId, 'turn-edited')
   })
 
   it('重启重放时忽略旧命令快照，并在恢复后清除精确检查点按钮', () => {

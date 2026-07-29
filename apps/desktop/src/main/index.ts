@@ -26,6 +26,7 @@ import {
   type ReasoningEffortSelection,
   type SessionJournal,
 } from '@whycode/core'
+import type { PermissionMode } from '@whycode/core/permissions'
 import { IPC } from '../shared/ipc.ts'
 import {
   consensusAgentsReady,
@@ -66,6 +67,7 @@ import {
 } from './custom-system-prompt.ts'
 import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
+import { startEditedUserMessage } from './user-message-edit.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { SessionRuntimeRegistry } from './session-runtime-registry.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
@@ -134,6 +136,18 @@ const mcpGlobalConfigPath = join(dirname(getConfigPath()), 'mcp.json')
 
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
+}
+
+let permissionModeWriteTail: Promise<void> = Promise.resolve()
+
+function persistPermissionMode(mode: PermissionMode): Promise<void> {
+  // 多窗口快速切换必须按 IPC 到达顺序读改写配置，不能让较慢的旧选择最后覆盖新值。
+  const write = permissionModeWriteTail.then(async () => {
+    const config = loadAppConfig() ?? { providers: {} }
+    await saveConfig({ ...config, permissionMode: mode }, configSecretCodec, getConfigPath())
+  })
+  permissionModeWriteTail = write.catch(() => {})
+  return write
 }
 
 const mcpOAuthController = new McpOAuthController({
@@ -266,7 +280,7 @@ const hostOperations = new HostOperationScheduler()
 
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let preferredModelId: string | null = null
-let preferredPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' = 'default'
+let preferredPermissionMode: PermissionMode = 'default'
 let preferredConsensusEnabled = false
 
 function selectedRuntime(): DesktopSessionRuntime {
@@ -516,6 +530,8 @@ async function handleCommand(
   switch (command.type) {
     case 'user-message':
       return handleUserMessageCommand(runtime, command)
+    case 'edit-user-message':
+      return handleEditUserMessageCommand(runtime, command)
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
       await runtime.abort()
@@ -541,6 +557,16 @@ async function handleCommand(
       return { ok: true }
     }
     case 'set-permission-mode': {
+      try {
+        await persistPermissionMode(command.mode)
+      } catch (error) {
+        runtime.emit({
+          type: 'error',
+          message: `权限设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+          recoverable: true,
+        })
+        return { ok: false }
+      }
       runtime.session?.setPermissionMode(command.mode)
       runtime.permissionMode = command.mode
       preferredPermissionMode = command.mode
@@ -676,6 +702,28 @@ async function handleCommand(
 }
 
 type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
+type EditUserMessageCommand = Extract<CoreCommand, { type: 'edit-user-message' }>
+
+async function handleEditUserMessageCommand(
+  runtime: DesktopSessionRuntime,
+  command: EditUserMessageCommand,
+): Promise<{ ok: boolean }> {
+  if (settingsMutationInProgress) {
+    return { ok: false }
+  }
+  const reservation = runtimeRegistry.reserveWorkStart(runtime)
+  if (!reservation) {
+    return { ok: false }
+  }
+  const result = await startEditedUserMessage(
+    runtime,
+    reservation,
+    command.turnId,
+    command.text,
+    (error) => reportUserMessageDeliveryError(runtime, error),
+  )
+  return { ok: result.ok }
+}
 
 async function prepareUserMessage(
   runtime: DesktopSessionRuntime,
@@ -756,13 +804,17 @@ async function handleUserMessageCommand(
           prepared.restoredInputIds,
           prepared.pdfAttachments,
         ),
-        acceptRoot: (text) => runtime.emit({
-          type: 'user-message-accepted',
-          text,
-          startsTurn: true,
-          ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
-          ...(prepared.pdfAttachments.length ? { pdfAttachments: prepared.pdfAttachments } : {}),
-        }, false),
+        acceptRoot: (inputId, text) => {
+          runtime.beginWork()
+          runtime.emit({
+            type: 'user-message-accepted',
+            inputId,
+            text,
+            startsTurn: true,
+            ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
+            ...(prepared.pdfAttachments.length ? { pdfAttachments: prepared.pdfAttachments } : {}),
+          }, false)
+        },
         deliver: (inputId, text, urgent, startsTurn) => deliverUserMessage(
           runtime,
           inputId,
@@ -810,7 +862,7 @@ function deliverUserMessage(
     )
   }
   return runtime.session!.handleUserMessage(
-    text, urgent, attachments, persistedInputId, pdfAttachments,
+    text, urgent, attachments, inputId, pdfAttachments,
   )
 }
 
@@ -823,6 +875,7 @@ function reportUserMessageDeliveryError(
     message: `Agent 接收消息后异常退出：${error instanceof Error ? error.message : String(error)}`,
     recoverable: true,
   })
+  runtime.emit({ type: 'agent-status', status: 'error' }, false)
 }
 
 function runtimeBusy(runtime: DesktopSessionRuntime): boolean {
@@ -1221,6 +1274,7 @@ async function runtimeSnapshot(
     modelId: resolveCurrentModelId(runtime),
     reasoningEffort: runtime.reasoningEffort,
     permissionMode: runtime.permissionMode,
+    workStartedAt: runtime.workStartedAt,
     status: deletingThisSession
       ? 'working'
       : busy && runtime.status === 'idle' && !checkpointRestoreToolUseId
@@ -1508,6 +1562,7 @@ if (!primaryInstance) {
 if (primaryInstance) void app.whenReady().then(async () => {
   await migrateLegacyConfig(configSecretCodec, getConfigPath())
     .catch((error) => console.error('配置安全迁移失败：', error))
+  preferredPermissionMode = loadAppConfig()?.permissionMode ?? 'default'
   await ensureCustomSystemPromptTemplate(customSystemPromptConfigPath)
     .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
   await ensureMcpConfigTemplate(mcpGlobalConfigPath)

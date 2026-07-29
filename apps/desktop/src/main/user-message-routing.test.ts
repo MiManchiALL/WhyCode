@@ -8,7 +8,7 @@ describe('桌面输入权威路由', () => {
     const gate = new UserMessageRoutingGate()
     let releaseFirstRecord: (() => void) | null = null
     const records: { inputId: string; text: string; startsTurn: boolean }[] = []
-    const accepted: string[] = []
+    const accepted: { inputId: string; text: string }[] = []
     const delivered: string[] = []
     const route = {
       isBusy: () => busy,
@@ -17,7 +17,7 @@ describe('桌面输入权威路由', () => {
         records.push({ inputId, text, startsTurn })
         if (text === 'A') await new Promise<void>((resolve) => { releaseFirstRecord = resolve })
       },
-      acceptRoot: (text: string) => accepted.push(text),
+      acceptRoot: (inputId: string, text: string) => accepted.push({ inputId, text }),
       deliver: (_inputId: string, text: string) => {
         delivered.push(text)
         busy = true
@@ -35,7 +35,7 @@ describe('桌面输入权威路由', () => {
       { text: 'B', startsTurn: false },
     ])
     assert.notEqual(records[0]?.inputId, records[1]?.inputId)
-    assert.deepEqual(accepted, ['A'])
+    assert.deepEqual(accepted, [{ inputId: records[0]!.inputId, text: 'A' }])
     assert.deepEqual(delivered, ['A', 'B'])
     assert.equal(gate.busy, false)
   })
@@ -48,7 +48,7 @@ describe('桌面输入权威路由', () => {
       isBusy: () => true,
       reserve: () => ({ ready: Promise.resolve(), release: () => {} }),
       record: async (_inputId, _text, root) => { recordedStartsTurn = root },
-      acceptRoot: (text) => accepted.push(text),
+      acceptRoot: (_inputId, text) => accepted.push(text),
       deliver: () => {},
     })
 

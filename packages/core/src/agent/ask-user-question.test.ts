@@ -2,12 +2,14 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
+import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   createAskUserQuestionTool,
 } from '../tools/ask-user-question/index.ts'
+import { validateToolInput } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('Main 主动提问', () => {
@@ -20,6 +22,26 @@ describe('Main 主动提问', () => {
     assert.match(prompt, /当前请求已经可以完整交付，不得调用本工具/)
     assert.match(prompt, /不得用本工具询问用户是否满意、是否还需要帮助/)
     assert.match(prompt, /已经明确的恢复意图再次确认/)
+    assert.match(prompt, /1~6/)
+  })
+
+  it('工具参数接受 1~6 问并拒绝空批次或第 7 问', async () => {
+    const tool = createAskUserQuestionTool(() => {})
+    const item = {
+      header: '范围',
+      question: '需要确认什么？',
+      options: [
+        { label: '甲', description: '选择甲' },
+        { label: '乙', description: '选择乙' },
+      ],
+    }
+
+    assert.equal((await validateToolInput(tool, { questions: [item] })).success, true)
+    assert.equal((await validateToolInput(tool, { questions: Array(6).fill(item) })).success, true)
+    assert.equal((await validateToolInput(tool, item)).success, true)
+    assert.equal((await validateToolInput(tool, { questions: [] })).success, false)
+    assert.equal((await validateToolInput(tool, { questions: Array(7).fill(item) })).success, false)
+    assert.equal(z.toJSONSchema(tool.inputSchema).type, 'object')
   })
 
   it('提交问题后结束 turn 并等待用户回答', async () => {
@@ -36,6 +58,10 @@ describe('Main 主动提问', () => {
     assert.equal(
       questions[0]?.type === 'user-question' ? questions[0].question.question : '',
       '你更看重哪一点？',
+    )
+    assert.equal(
+      questions[0]?.type === 'user-question' ? questions[0].question.questions?.length : 0,
+      2,
     )
     assert.equal(
       events.some(
@@ -112,11 +138,23 @@ function questionStep() {
           toolCallId: 'ask-1',
           toolName: ASK_USER_QUESTION_TOOL_NAME,
           input: JSON.stringify({
-            header: '实现偏好',
-            question: '你更看重哪一点？',
-            options: [
-              { label: '简单可靠', description: '优先减少复杂度' },
-              { label: '功能完整', description: '接受更高实现成本' },
+            questions: [
+              {
+                header: '实现偏好',
+                question: '你更看重哪一点？',
+                options: [
+                  { label: '简单可靠', description: '优先减少复杂度' },
+                  { label: '功能完整', description: '接受更高实现成本' },
+                ],
+              },
+              {
+                header: '交付方式',
+                question: '你希望怎样交付？',
+                options: [
+                  { label: '一次完成', description: '完成后统一交付' },
+                  { label: '逐步确认', description: '分阶段查看结果' },
+                ],
+              },
             ],
           }),
         },
@@ -125,12 +163,14 @@ function questionStep() {
           toolCallId: 'ask-2',
           toolName: ASK_USER_QUESTION_TOOL_NAME,
           input: JSON.stringify({
-            header: '重复问题',
-            question: '是否重复提问？',
-            options: [
-              { label: '不要', description: '只保留第一个问题' },
-              { label: '仍然不要', description: '避免多个等待卡片' },
-            ],
+            questions: [{
+              header: '重复问题',
+              question: '是否重复提问？',
+              options: [
+                { label: '不要', description: '只保留第一个问题' },
+                { label: '仍然不要', description: '避免多个等待卡片' },
+              ],
+            }],
           }),
         },
         {

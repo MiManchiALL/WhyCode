@@ -4,11 +4,11 @@ import { Streamdown } from 'streamdown'
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
 import type { CoreCommand, ReasoningEffortSelection } from '@whycode/core'
-import type {
-  AgentStatus,
-  CoreEvent,
-  QueuedUserMessage,
-  UserQuestion,
+import {
+  formatUserQuestionAnswer,
+  type AgentStatus,
+  type CoreEvent,
+  type QueuedUserMessage,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
 import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
@@ -16,6 +16,7 @@ import {
   applyCoreEvent,
   appendNotice,
   createConversationState,
+  editableUserBlockId,
   eventsAfterRuntimeSnapshot,
   resumeTargetCommitted,
   toggleExpanded,
@@ -30,6 +31,9 @@ import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
 import { isCurrentSessionDeletion } from './session-deletion-state.ts'
 import { TaskPlanCard } from './task-plan-card.tsx'
+import { QuestionCard } from './question-card.tsx'
+import { formatProcessingTime, ProcessingTime } from './processing-time.ts'
+import { UserMessageCard } from './user-message-card.tsx'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
@@ -51,7 +55,6 @@ import {
   PdfPickerButton,
   QueuedPdfStrip,
   usePdfDrafts,
-  UserPdfGallery,
 } from './pdf-attachments.tsx'
 import {
   preparePdfDrafts,
@@ -75,6 +78,7 @@ export function App() {
   const [view, setView] = useState(() => createConversationState())
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<AgentStatus>('idle')
+  const [workStartedAt, setWorkStartedAt] = useState<number | null>(null)
   const [stopping, setStopping] = useState(false)
   const [sessionTransitionPending, setSessionTransitionPending] = useState(false)
   const [questionSubmitting, setQuestionSubmitting] = useState(false)
@@ -288,6 +292,7 @@ export function App() {
     setView(createConversationState(snapshot.viewEvents))
     setProjectDir(snapshot.projectDir)
     setPermMode(snapshot.permissionMode)
+    setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
     setDeletingSessionId(snapshot.deletingSessionId)
     setDeletionBlocksRuntime(Boolean(snapshot.deletingSessionId))
@@ -343,6 +348,12 @@ export function App() {
   const consumeEvent = useCallback((event: CoreEvent) => {
     setView((previous) => applyCoreEvent(previous, event))
     switch (event.type) {
+      case 'work-started':
+        setWorkStartedAt(event.startedAt)
+        break
+      case 'work-finished':
+        setWorkStartedAt(null)
+        break
       case 'agent-status':
         setStatus(event.status)
         if (event.status === 'idle' || event.status === 'error') {
@@ -553,6 +564,9 @@ export function App() {
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
+  const editableBlockId = !interactionBusy && !stopping && !consensus.enabled
+    ? editableUserBlockId(blocks)
+    : null
   const attachmentLocked = stopping
     || sessionTransitionPending
     || attachmentSubmissionPending
@@ -862,10 +876,10 @@ export function App() {
     stopping,
   ])
 
-  const answerQuestion = useCallback((answer: string) => {
+  const answerQuestion = useCallback((answers: string[]) => {
     const question = view.pendingQuestion
     if (!question || interactionBusy || stopping || questionSubmittingRef.current) return
-    const text = `回答「${question.question}」：${answer}`
+    const text = formatUserQuestionAnswer(question, answers)
     questionSubmittingRef.current = true
     setQuestionSubmitting(true)
     stickToBottom.current = true
@@ -875,6 +889,18 @@ export function App() {
       setQuestionSubmitting(false)
     })
   }, [interactionBusy, sendRuntimeCommand, stopping, view.pendingQuestion])
+
+  const editUserMessage = useCallback(async (turnId: string, text: string) => {
+    if (interactionBusy || stopping || consensus.enabled) return false
+    stickToBottom.current = true
+    setShowJumpBottom(false)
+    try {
+      const result = await sendRuntimeCommand({ type: 'edit-user-message', turnId, text })
+      return Boolean(result?.ok)
+    } catch {
+      return false
+    }
+  }, [consensus.enabled, interactionBusy, sendRuntimeCommand, stopping])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
@@ -1010,14 +1036,22 @@ export function App() {
             key={b.id}
             runtimeId={runtimeId}
             block={b}
+            editable={b.id === editableBlockId}
             expanded={view.expanded.has(b.id)}
             busy={interactionBusy}
             checkpointRestoreToolUseId={checkpointRestoreToolUseId}
             onCheckpointRestoreChange={changeCheckpointRestore}
+            onEdit={editUserMessage}
             onToggle={() => toggle(b.id)}
           />
         ))}
       </main>
+
+      {workStartedAt !== null && (
+        <div className="border-t border-neutral-100 px-6 py-1.5 text-xs text-neutral-400">
+          <ProcessingTime startedAt={workStartedAt} />
+        </div>
+      )}
 
       {showJumpBottom && (
         <div className="relative">
@@ -1181,84 +1215,36 @@ export function App() {
   )
 }
 
-function QuestionCard({
-  question,
-  disabled,
-  onAnswer,
-}: {
-  question: UserQuestion
-  disabled: boolean
-  onAnswer: (answer: string) => void
-}) {
-  const [customAnswer, setCustomAnswer] = useState('')
-  const submitCustom = () => {
-    const answer = customAnswer.trim()
-    if (answer && !disabled) onAnswer(answer)
-  }
-  return (
-    <div className="mb-2 rounded border border-violet-300 bg-violet-50 p-3 text-sm">
-      <div className="mb-1 text-xs font-medium text-violet-600">{question.header}</div>
-      <div className="mb-3 font-medium text-violet-950">{question.question}</div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-2">
-        {question.options.map((option) => (
-          <button
-            key={option.label}
-            className="rounded border border-violet-200 bg-white p-2 text-left hover:border-violet-400 disabled:opacity-40"
-            disabled={disabled}
-            onClick={() => onAnswer(option.label)}
-          >
-            <div className="font-medium text-violet-900">{option.label}</div>
-            <div className="mt-0.5 text-xs text-violet-600">{option.description}</div>
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          className="min-w-0 flex-1 rounded border border-violet-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-violet-400"
-          value={customAnswer}
-          disabled={disabled}
-          placeholder="或者直接输入你的回答"
-          onChange={(event) => setCustomAnswer(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') submitCustom()
-          }}
-        />
-        <button
-          className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-40"
-          disabled={disabled || !customAnswer.trim()}
-          onClick={submitCustom}
-        >
-          回答
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function BlockView({
   runtimeId,
   block,
+  editable,
   expanded,
   busy,
   checkpointRestoreToolUseId,
   onCheckpointRestoreChange,
+  onEdit,
   onToggle,
 }: {
   runtimeId: string
   block: Block
+  editable: boolean
   expanded: boolean
   busy: boolean
   checkpointRestoreToolUseId: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
+  onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: () => void
 }) {
   if (block.kind === 'user') {
     return (
-      <div className="mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">
-        <UserImageGallery attachments={block.attachments} />
-        <UserPdfGallery runtimeId={runtimeId} attachments={block.pdfAttachments} />
-        <div className="whitespace-pre-wrap">{block.text}</div>
-      </div>
+      <UserMessageCard
+        runtimeId={runtimeId}
+        block={block}
+        editable={editable}
+        disabled={busy}
+        onEdit={onEdit}
+      />
     )
   }
   if (block.kind === 'text') {
@@ -1324,6 +1310,13 @@ function BlockView({
             {block.text}
           </div>
         )}
+      </div>
+    )
+  }
+  if (block.kind === 'work-duration') {
+    return (
+      <div className="mb-2 px-3 text-xs text-neutral-400">
+        {formatProcessingTime(block.durationMs)}
       </div>
     )
   }

@@ -4,6 +4,7 @@ import {
   type BuiltInProviderId,
   type McpSecretHeader,
 } from '@whycode/core'
+import type { PermissionMode } from '@whycode/core/permissions'
 import type {
   TavilySearchDepth,
   WebSearchProviderId,
@@ -50,6 +51,8 @@ export interface CliProxyApiConfig {
 export interface WhycodeConfig {
   providers: Partial<Record<BuiltInProviderId, ProviderConnectionConfig>>
   defaultModel?: string
+  /** 新建与恢复会话使用的权限档位；具体工具和路径审批仍只在会话内存中。 */
+  permissionMode?: PermissionMode
   /** 只用于给已退役会话显示其原型号；不参与模型解析。 */
   retiredModelLabels?: Record<string, string>
   cliProxyApi?: CliProxyApiConfig

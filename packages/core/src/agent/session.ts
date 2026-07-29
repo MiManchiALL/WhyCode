@@ -111,6 +111,7 @@ import {
 import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
 import type { McpManagerSnapshot } from '../mcp/manager.ts'
 import { carryMcpToolState, withoutMcpToolState } from '../mcp/state.ts'
+import { stoppedTurnEditResources } from './turn-edit.ts'
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
@@ -452,6 +453,97 @@ export class AgentSession {
     )
   }
 
+  /**
+   * 先把旧回合换根为编辑后的持久输入，再返回一次性启动器。宿主可在持有输入
+   * 路由 reservation 时完成准备并同步启动，避免编辑与普通新消息并发分类。
+   */
+  async prepareAbortedTurnEdit(
+    turnId: string,
+    text: string,
+  ): Promise<() => Promise<StopReason>> {
+    const nextText = text.trim()
+    const recorder = this.turnEditRecorder(nextText)
+    const rollbackMessages = recorder.messagesBeforeTurn(turnId)
+    const rollbackTaskState = recorder.taskStateBeforeTurn(turnId)
+    if (rollbackMessages === null || rollbackTaskState === undefined) {
+      throw new Error('目标回合已不在当前活动历史中')
+    }
+    const resources = stoppedTurnEditResources(
+      this.messages,
+      recorder.initialViewEvents,
+      turnId,
+      rollbackMessages.length,
+    )
+    const inputId = crypto.randomUUID()
+    await recorder.recordTurnEditInput(
+      turnId,
+      inputId,
+      nextText,
+      rollbackMessages,
+      rollbackTaskState,
+      resources.attachments,
+      resources.pdfAttachments,
+    )
+    this.messages = structuredClone([...recorder.initialMessages])
+    this.taskPlan?.restore(recorder.initialTaskState)
+    this.rebuildActivePdfAttachments()
+    // 原消息的附件不在回滚前缀中；按普通根输入的同一路径重新登记，尤其要让
+    // ReadPdf 在编辑后的首个模型步骤仍能读取原附件。
+    this.addImageAttachments(resources.attachments)
+    this.addPdfAttachments(resources.pdfAttachments)
+    this.tokenBaseline = null
+    const message = queuedMessageForModel(
+      { id: inputId, text: nextText, ...resources, persisted: true },
+    )
+    return this.editedTurnStarter(turnId, inputId, nextText, message)
+  }
+
+  private turnEditRecorder(text: string): SessionRecorder {
+    const recorder = this.options.sessionRecorder
+    if (!text) throw new Error('编辑后的消息不能为空')
+    if (!recorder) throw new Error('当前会话没有可回滚的持久记录')
+    if (this.isBusy || this.activeTurn || this.queue.length > 0) {
+      throw new Error('Agent 尚未空闲，不能编辑已中止消息')
+    }
+    if (
+      this.options.promptContext.discussion
+      || this.protocolRound
+      || this.terminalStatusManaged
+      || recorder.interruptedConsensusTaskId
+    ) {
+      throw new Error('协商或评审回合不能使用单回合编辑')
+    }
+    if (
+      this.persistenceFailed
+      || recorder.undeliveredUserInputIds.length > 0
+      || recorder.pendingUserInputs.length > 0
+    ) {
+      throw new Error('会话仍有待处理输入，不能编辑已中止消息')
+    }
+    return recorder
+  }
+
+  private editedTurnStarter(
+    previousTurnId: string,
+    inputId: string,
+    text: string,
+    message: ModelMessage,
+  ): () => Promise<StopReason> {
+    let started = false
+    return () => {
+      if (started) throw new Error('编辑后的回合已经启动')
+      started = true
+      this.options.emit({
+        type: 'user-message-edited',
+        previousTurnId,
+        inputId,
+        text,
+        taskPlan: this.taskPlan?.snapshot ?? null,
+      })
+      return this.startTurn([message], [], inputId)
+    }
+  }
+
   /** 协商执行包走同一模型意图路径，但不作为 urgent steering。 */
   handleExecutionMessage(
     text: string,
@@ -519,7 +611,11 @@ export class AgentSession {
     const message = imageAttachments.length
       ? createImageUserMessage(content, imageAttachments)
       : { role: 'user' as const, content }
-    const delivered = persistedInputId
+    const rootInputId = persistedInputId
+      && this.options.sessionRecorder?.undeliveredUserInputIds.includes(persistedInputId)
+      ? persistedInputId
+      : undefined
+    const delivered = persistedInputId && !rootInputId
       ? [{
           id: persistedInputId,
           text,
@@ -528,17 +624,18 @@ export class AgentSession {
           persisted: true,
         }]
       : []
-    return this.startTurn([message], delivered)
+    return this.startTurn([message], delivered, rootInputId)
   }
 
   /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
   private startTurn(
     initialMessages: ModelMessage[],
     deliveredInputs: readonly QueuedMessage[] = [],
+    rootInputId?: string,
   ): Promise<StopReason> {
     this.opAbort = new AbortController()
     this.running = true
-    return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs)
+    return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs, rootInputId)
   }
 
   /** 用户点「停止」：中止当前 turn 或压缩 */
@@ -702,6 +799,7 @@ export class AgentSession {
     initialMessages: ModelMessage[],
     abortSignal: AbortSignal,
     deliveredInputs: readonly QueuedMessage[] = [],
+    rootInputId?: string,
   ): Promise<StopReason> {
     const { emit } = this.options
     this.abortRequestedDuringFinalization = false
@@ -756,6 +854,7 @@ export class AgentSession {
           planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
           deliveredInputs.filter((input) => input.persisted).map((input) => input.id),
           projectInstructions ?? undefined,
+          rootInputId,
         ),
         '提交回合起点',
       )
@@ -1660,6 +1759,9 @@ export class AgentSession {
         this.taskPlan?.restore(taskStateBeforeStep)
       } else {
         this.taskPlan?.discardStep()
+      }
+      if (stepAbort.signal.aborted && stepAbort.signal.reason === 'user-cancel') {
+        emit({ type: 'step-output-retained' })
       }
       emit({ type: 'step-discarded' })
       if (

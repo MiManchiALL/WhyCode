@@ -39,7 +39,7 @@ export interface UserMessageRoute {
   /** 在首次 await 前同步占位，避免并发输入同时被判为新根消息。 */
   reserve: () => UserMessageReservation
   record: (inputId: string, text: string, startsTurn: boolean) => Promise<void>
-  acceptRoot: (text: string) => void
+  acceptRoot: (inputId: string, text: string) => void
   deliver: (
     inputId: string,
     text: string,
@@ -69,7 +69,7 @@ export async function routeUserMessage(
     // 若前一条已交给 Agent，真实执行态会让它按运行中输入持久化。
     const startsTurn = !route.isBusy()
     await route.record(inputId, text, startsTurn)
-    if (startsTurn) route.acceptRoot(text)
+    if (startsTurn) route.acceptRoot(inputId, text)
     let handling: Promise<unknown> | void
     try {
       handling = route.deliver(inputId, text, urgent, startsTurn)

@@ -39,6 +39,67 @@ afterEach(async () => {
 })
 
 describe('用户中断后的新回合', () => {
+  it('用户停止流式正文时先发保留事件，再丢弃其余未提交步骤', async () => {
+    const events: CoreEvent[] = []
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => abortableTextStep(options.abortSignal, '已经展示的部分'),
+    })
+    const session = createMemorySession(model, null, (event) => events.push(event))
+
+    const running = session.handleUserMessage('开始回答')
+    await waitFor(() => events.some((event) => event.type === 'text-delta'))
+    session.abort()
+
+    assert.equal(await running, 'aborted')
+    const retained = events.findIndex((event) => event.type === 'step-output-retained')
+    const discarded = events.findIndex((event) => event.type === 'step-discarded')
+    assert.ok(retained >= 0 && retained < discarded)
+  })
+
+  it('首个模型输出前停止后可原位编辑，活动模型历史回滚并只执行新文本', async () => {
+    const root = await temporaryDirectory()
+    const store = new SessionStore(root)
+    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const events: CoreEvent[] = []
+    let firstRequest = true
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        if (firstRequest) {
+          firstRequest = false
+          return abortableStep(options.abortSignal)
+        }
+        return finalStep('按编辑后的问题回答。')
+      },
+    })
+    const session = createSession(model, journal, (event) => events.push(event))
+    const inputId = crypto.randomUUID()
+    await journal.recordUserInputWithId(inputId, '旧问题', true)
+
+    const interrupted = session.handleUserMessage('旧问题', false, [], inputId)
+    await waitFor(() => model.doStreamCalls.length === 1)
+    session.abort()
+    assert.equal(await interrupted, 'aborted')
+    const oldTurnId = events.find((event) => event.type === 'turn-start')?.turnId
+    assert.ok(oldTurnId)
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: oldTurnId } },
+    ])
+
+    const start = await session.prepareAbortedTurnEdit(oldTurnId, '编辑后的问题')
+    assert.equal(await start(), 'completed')
+    const secondPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    assert.match(secondPrompt, /编辑后的问题/)
+    assert.doesNotMatch(secondPrompt, /旧问题/)
+    const editEventIndex = events.findIndex((event) => event.type === 'user-message-edited')
+    const newTurnIndex = events.findIndex((event, index) =>
+      index > editEventIndex && event.type === 'turn-start')
+    assert.ok(editEventIndex >= 0 && newTurnIndex > editEventIndex)
+
+    const reopened = await store.open(journal.sessionId)
+    assert.match(JSON.stringify(reopened.initialMessages), /编辑后的问题/)
+    assert.doesNotMatch(JSON.stringify(reopened.initialMessages), /旧问题/)
+  })
+
   it('持久化模型可见中断边界，普通问题不能继续或改写旧计划', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
@@ -959,6 +1020,21 @@ function abortableStep(signal?: AbortSignal) {
   return {
     stream: new ReadableStream({
       start(controller) {
+        const abort = () => controller.error(new Error('aborted'))
+        if (signal?.aborted) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+      },
+    }),
+  }
+}
+
+function abortableTextStep(signal: AbortSignal | undefined, text: string) {
+  const id = crypto.randomUUID()
+  return {
+    stream: new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'text-start' as const, id })
+        controller.enqueue({ type: 'text-delta' as const, id, delta: text })
         const abort = () => controller.error(new Error('aborted'))
         if (signal?.aborted) abort()
         else signal?.addEventListener('abort', abort, { once: true })

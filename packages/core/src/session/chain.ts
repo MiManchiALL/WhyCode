@@ -360,6 +360,7 @@ function collectTurnStarts(
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
 function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
   const events: ViewEvent[] = []
+  const entriesById = new Map(entries.map((entry) => [entry.uuid, entry]))
   const inputs = new Map<string, Extract<SessionEntry, { type: 'user-input' }>>()
   const visibleInputIds = new Set(entries.flatMap((entry) =>
     entry.type === 'view-events'
@@ -376,11 +377,28 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
     if (entry.type === 'user-input' && entry.startsTurn) {
       events.push({
         type: 'user-message',
+        inputId: entry.uuid,
         text: entry.text,
         startsTurn: true,
         ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
         ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
       })
+      if (entry.replacesTurnId) {
+        const parent = entry.parentUuid ? entriesById.get(entry.parentUuid) : undefined
+        if (parent?.type !== 'snapshot' || parent.reason !== 'rollback') {
+          throw new SessionCorruptError('编辑输入必须直接跟随回滚快照')
+        }
+        events.push({
+          type: 'core-event',
+          event: {
+            type: 'user-message-edited',
+            previousTurnId: entry.replacesTurnId,
+            inputId: entry.uuid,
+            text: entry.text,
+            taskPlan: structuredClone(parent.taskState.activePlan),
+          },
+        })
+      }
     }
     if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
       for (const inputId of entry.deliveredInputIds ?? []) {
@@ -413,12 +431,15 @@ interface UndeliveredUserInput {
 /** 根用户输入只有进入完整 messages 批次或共识起点后才算已交付给模型。 */
 function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[] {
   const childByParent = new Map<string, SessionEntry>()
+  const deliveredRootInputIds = new Set(chain.flatMap((entry) =>
+    entry.type === 'turn-start' && entry.rootInputId ? [entry.rootInputId] : []))
   for (const entry of chain) {
     if (entry.parentUuid) childByParent.set(entry.parentUuid, entry)
   }
 
   return chain.flatMap((entry): UndeliveredUserInput[] => {
     if (entry.type !== 'user-input' || !entry.startsTurn) return []
+    if (deliveredRootInputIds.has(entry.uuid)) return []
     const delivery = nextSemanticChild(entry.uuid, childByParent)
     if (delivery?.type === 'consensus-task-start') return []
     if (delivery?.type === 'turn-start') {
@@ -478,6 +499,10 @@ function validateUniqueIds(entries: SessionEntry[]): void {
 }
 
 function validateEntrySemantics(entries: SessionEntry[]): void {
+  const entriesById = new Map(entries.map((entry) => [entry.uuid, entry]))
+  const entryIndexes = new Map(entries.map((entry, index) => [entry.uuid, index]))
+  const turnIndexes = new Map(entries.flatMap((entry, index) =>
+    entry.type === 'turn-start' ? [[entry.turnId, index] as const] : []))
   for (const entry of entries) {
     if (entry.type === 'snapshot') {
       const hasTask = entry.activeConsensusTaskId !== null
@@ -506,7 +531,72 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
     ) {
       throw new SessionCorruptError('项目指令版本与消息内容不匹配')
     }
+    if (entry.type === 'user-input' && entry.replacesTurnId) {
+      validateEditInputReference(
+        entry,
+        entry.replacesTurnId,
+        entriesById,
+        entryIndexes,
+        turnIndexes,
+      )
+    }
+    if (entry.type === 'turn-start' && entry.rootInputId) {
+      validateTurnRootReference(entry, entry.rootInputId, entriesById, entryIndexes)
+    }
   }
+}
+
+function validateEditInputReference(
+  entry: Extract<SessionEntry, { type: 'user-input' }>,
+  replacesTurnId: string,
+  entriesById: ReadonlyMap<string, SessionEntry>,
+  entryIndexes: ReadonlyMap<string, number>,
+  turnIndexes: ReadonlyMap<string, number>,
+): void {
+  const parent = entry.parentUuid ? entriesById.get(entry.parentUuid) : undefined
+  if (parent?.type !== 'snapshot' || parent.reason !== 'rollback') {
+    throw new SessionCorruptError('编辑输入必须直接跟随回滚快照')
+  }
+  if (
+    (turnIndexes.get(replacesTurnId) ?? Number.MAX_SAFE_INTEGER)
+    >= (entryIndexes.get(entry.uuid) ?? -1)
+  ) {
+    throw new SessionCorruptError('编辑输入引用了无效的旧回合')
+  }
+}
+
+function validateTurnRootReference(
+  entry: Extract<SessionEntry, { type: 'turn-start' }>,
+  rootInputId: string,
+  entriesById: ReadonlyMap<string, SessionEntry>,
+  entryIndexes: ReadonlyMap<string, number>,
+): void {
+  const rootInput = entriesById.get(rootInputId)
+  if (
+    rootInput?.type !== 'user-input'
+    || !rootInput.startsTurn
+    || (entryIndexes.get(rootInput.uuid) ?? Number.MAX_SAFE_INTEGER)
+      >= (entryIndexes.get(entry.uuid) ?? -1)
+    || !entryHasAncestor(entry, rootInput.uuid, entriesById)
+  ) {
+    throw new SessionCorruptError('turn-start 引用了无效的根输入')
+  }
+}
+
+function entryHasAncestor(
+  entry: SessionEntry,
+  ancestorId: string,
+  entriesById: ReadonlyMap<string, SessionEntry>,
+): boolean {
+  let parentId = entry.parentUuid
+  const seen = new Set<string>()
+  while (parentId) {
+    if (parentId === ancestorId) return true
+    if (seen.has(parentId)) return false
+    seen.add(parentId)
+    parentId = entriesById.get(parentId)?.parentUuid ?? null
+  }
+  return false
 }
 
 function buildActiveChain(entries: SessionEntry[]): SessionEntry[] {

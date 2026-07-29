@@ -28,6 +28,8 @@ export interface RuntimeSnapshot {
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
+  /** 当前连续工作的权威起点；结束后由持久化 work-finished 事件替代。 */
+  workStartedAt: number | null
   status: AgentStatus
   busy: boolean
   /** 正在回滚的工具调用；用于 Renderer 重载后恢复不可取消的回滚活动态。 */
