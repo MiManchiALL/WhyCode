@@ -34,6 +34,7 @@ export class UserMessageRoutingGate {
 }
 
 export interface UserMessageRoute {
+  /** 不含本路由闸门自身，只报告 Agent/初始化/附件等真实执行态。 */
   isBusy: () => boolean
   /** 在首次 await 前同步占位，避免并发输入同时被判为新根消息。 */
   reserve: () => UserMessageReservation
@@ -49,20 +50,24 @@ export interface UserMessageRoute {
 }
 
 /**
- * 用户输入先在同步临界段完成 busy 分类与占位，再等 JSONL 写稳后交给运行时。
- * 这样快速 A/B 不会同时成为新根消息，持久化失败时模型也绝不会提前看到输入。
+ * 用户输入先同步占住 FIFO；排到队首后再按真实 Agent 状态分类，随后等 JSONL
+ * 写稳才交给运行时。这样快速 A/B 不会同时成为新根消息，前一条准备失败时后一条
+ * 又能自然成为根消息，模型也绝不会提前看到尚未持久化的输入。
  */
 export async function routeUserMessage(
   text: string,
   urgent: boolean,
   route: UserMessageRoute,
+  existingReservation?: UserMessageReservation,
 ): Promise<boolean> {
-  const startsTurn = !route.isBusy()
   const inputId = randomUUID()
-  const reservation = route.reserve()
+  const reservation = existingReservation ?? route.reserve()
   let released = false
   try {
     await reservation.ready
+    // 排到 FIFO 队首后再判断：若前一条在准备阶段失败，这一条应自然成为根消息；
+    // 若前一条已交给 Agent，真实执行态会让它按运行中输入持久化。
+    const startsTurn = !route.isBusy()
     await route.record(inputId, text, startsTurn)
     if (startsTurn) route.acceptRoot(text)
     let handling: Promise<unknown> | void

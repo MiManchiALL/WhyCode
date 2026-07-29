@@ -79,6 +79,12 @@ interface McpServerConfigBase {
   name: string
   scope: McpConfigScope
   sourceFingerprint: string
+  /**
+   * 有效连接路由的不可逆摘要；只包含传输目标、参数及环境变量/header 名称，
+   * 不包含环境变量、header 或安全存储中的值。
+   * 只持久化摘要，用于判定恢复的工具说明是否仍属于同一连接身份。
+   */
+  runtimeFingerprint: string
   startupTimeoutMs: number
   toolTimeoutMs: number
 }
@@ -293,10 +299,9 @@ function resolveServer(
 ): McpServerConfig {
   const sourceFingerprint = sha256(JSON.stringify(value))
   if (value.transport === 'stdio') {
-    return {
+    const resolved = {
       name,
       scope,
-      sourceFingerprint,
       transport: 'stdio',
       command: value.command,
       args: value.args,
@@ -306,12 +311,19 @@ function resolveServer(
       env: resolveRecord(value.env ?? {}, env),
       startupTimeoutMs: value.startupTimeoutMs,
       toolTimeoutMs: value.toolTimeoutMs,
+    } as const
+    return {
+      ...resolved,
+      sourceFingerprint,
+      runtimeFingerprint: effectiveRuntimeFingerprint({
+        ...resolved,
+        env: Object.keys(resolved.env).sort(),
+      }),
     }
   }
-  return {
+  const resolved = {
     name,
     scope,
-    sourceFingerprint,
     transport: 'http',
     url: value.url,
     headers: mergeHeaders(resolveRecord(value.headers ?? {}, env), secretHeaders),
@@ -319,6 +331,16 @@ function resolveServer(
     ...configuredBuiltin(name, value),
     startupTimeoutMs: value.startupTimeoutMs,
     toolTimeoutMs: value.toolTimeoutMs,
+  } as const
+  return {
+    ...resolved,
+    sourceFingerprint,
+    runtimeFingerprint: effectiveRuntimeFingerprint({
+      ...resolved,
+      headers: Object.keys(resolved.headers)
+        .map((header) => header.toLowerCase())
+        .sort(),
+    }),
   }
 }
 
@@ -404,6 +426,20 @@ function configuredBuiltin(
 
 function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function effectiveRuntimeFingerprint(value: unknown): string {
+  return sha256(JSON.stringify(canonicalize(value)))
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (typeof value !== 'object' || value === null) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, canonicalize(child)]),
+  )
 }
 
 function emptyReadResult(): ConfigReadResult {

@@ -101,7 +101,7 @@ describe('网页读取工具契约', () => {
     }, toolContext)
 
     assert.deepEqual(result, {
-      data: '网页读取后端返回了无效结果',
+      data: '网页读取后端返回了无效结果\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
       isError: true,
     })
     assert.equal(WEB_FETCH_MAX_OUTPUT_CHARS, 9_000)
@@ -195,14 +195,26 @@ describe('网页读取工具契约', () => {
     const unsafe = createWebFetchTool({
       fetchPage: async () => { throw new Error('private upstream detail') },
     })
+    const cancelled = createWebFetchTool({
+      fetchPage: async () => { throw new WebPageError('网页读取已取消') },
+    })
     const input = { url: 'https://example.com/', offset: 1, limit: 10 }
 
     assert.deepEqual(await safe.execute(input, toolContext), {
-      data: '目标网页不存在（HTTP 404）',
+      data: '目标网页不存在（HTTP 404）\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
       isError: true,
     })
     assert.deepEqual(await unsafe.execute(input, toolContext), {
-      data: '网页读取暂时不可用',
+      data: '网页读取暂时不可用\n若已配置对应的 MCP 服务，可尝试 ToolSearch。',
+      isError: true,
+    })
+    const controller = new AbortController()
+    controller.abort()
+    assert.deepEqual(await cancelled.execute(input, {
+      ...toolContext,
+      abortSignal: controller.signal,
+    }), {
+      data: '网页读取已取消',
       isError: true,
     })
   })
@@ -219,8 +231,9 @@ describe('网页读取工具契约', () => {
     assert.equal(fetchTool.availableWithoutProject, true)
     assert.equal(findTool.availableWithoutProject, true)
     assert.match(fetchTool.initialApprovalReason ?? '', /公网 IP/)
-    assert.match(fetchTool.prompt, /先使用 ToolSearch 查找对应 MCP 工具/)
-    assert.match(fetchTool.prompt, /不要用 WebFetch 探测其公开可见性/)
+    assert.match(fetchTool.prompt, /普通 HTTP\/HTTPS URL/)
+    assert.match(fetchTool.prompt, /先用本工具尝试公开读取/)
+    assert.match(fetchTool.prompt, /公开读取失败.*再使用 ToolSearch/)
     assert.equal(findTool.initialApprovalReason, undefined)
   })
 })

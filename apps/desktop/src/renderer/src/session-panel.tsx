@@ -113,6 +113,16 @@ function SessionRow({
               当前
             </span>
           )}
+          {session.running && !session.isCurrent && (
+            <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700">
+              后台运行
+            </span>
+          )}
+          {session.needsAttention && (
+            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700">
+              等待操作
+            </span>
+          )}
           {restoring && (
             <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-700">
               恢复中
@@ -136,9 +146,11 @@ function SessionRow({
           <span className="min-w-0 truncate">
             {session.isCurrent
               ? '当前对话'
-              : session.resumable
-                ? statusLabel(session.status)
-                : session.unavailableReason}
+              : session.running
+                ? runtimeStatusLabel(session.runtimeStatus)
+                : session.resumable
+                  ? statusLabel(session.status)
+                  : session.unavailableReason}
           </span>
           <time className="ml-2 shrink-0">{new Date(session.updatedAt).toLocaleString()}</time>
         </div>
@@ -151,7 +163,7 @@ function SessionRow({
           <div className="mt-2 flex gap-2">
             <button
               className="rounded bg-red-600 px-2 py-1 text-white disabled:opacity-40"
-              disabled={busy}
+              disabled={busy || session.running}
               onClick={() => {
                 onDeleteConfirmationChange(null)
                 onDelete(session.sessionId)
@@ -170,7 +182,7 @@ function SessionRow({
       ) : (
         <button
           className="mt-2 text-xs text-red-400 hover:text-red-600 disabled:opacity-40"
-          disabled={busy}
+          disabled={busy || session.running}
           onClick={() => onDeleteConfirmationChange(session.sessionId)}
         >
           删除
@@ -180,9 +192,16 @@ function SessionRow({
   )
 }
 
+function runtimeStatusLabel(status: SessionListItem['runtimeStatus']): string {
+  if (status === 'waiting-approval') return '等待你的审批'
+  if (status === 'thinking') return '后台思考中'
+  if (status === 'working') return '后台执行中'
+  if (status === 'error') return '后台任务出错'
+  return '后台任务运行中'
+}
+
 function statusLabel(status: SessionMetadata['status']): string {
   if (status === 'interrupted') return '上次意外中断'
-  if (status === 'error') return '上次出错'
   if (status === 'waiting-user') return '等待你的回答'
   if (status === 'paused') return '已安全暂停，可继续'
   if (status === 'max-turns') return '达到循环上限，可继续'

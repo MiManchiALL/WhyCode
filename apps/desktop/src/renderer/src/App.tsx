@@ -3,7 +3,7 @@ import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
-import type { ReasoningEffortSelection } from '@whycode/core'
+import type { CoreCommand, ReasoningEffortSelection } from '@whycode/core'
 import type {
   AgentStatus,
   CoreEvent,
@@ -17,7 +17,6 @@ import {
   appendNotice,
   createConversationState,
   eventsAfterRuntimeSnapshot,
-  restoreRuntimeConversation,
   resumeTargetCommitted,
   toggleExpanded,
   voteLabel,
@@ -40,7 +39,11 @@ import {
   useImageDrafts,
   UserImageGallery,
 } from './image-attachments.tsx'
-import { prepareImageDrafts, restoredImageDrafts } from './image-draft.ts'
+import {
+  prepareImageDrafts,
+  restoredImageDrafts,
+  type ImageDraft,
+} from './image-draft.ts'
 import { collectPastedImageFiles, collectPastedPdfFiles } from './image-paste.ts'
 import { useAttachmentDropTarget } from './image-drop.ts'
 import {
@@ -50,7 +53,11 @@ import {
   usePdfDrafts,
   UserPdfGallery,
 } from './pdf-attachments.tsx'
-import { preparePdfDrafts, restoredPdfDrafts } from './pdf-draft.ts'
+import {
+  preparePdfDrafts,
+  restoredPdfDrafts,
+  type PdfDraft,
+} from './pdf-draft.ts'
 import { composerKeyAction } from './composer-key.ts'
 
 interface Approval {
@@ -64,10 +71,12 @@ interface Approval {
 
 /** M1-c 主界面：文本 + thinking + 工具卡片 + 审批。正式组件化（Streamdown/shadcn）在 M1 收尾时做。 */
 export function App() {
+  const [runtimeId, setRuntimeId] = useState('')
   const [view, setView] = useState(() => createConversationState())
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [stopping, setStopping] = useState(false)
+  const [sessionTransitionPending, setSessionTransitionPending] = useState(false)
   const [questionSubmitting, setQuestionSubmitting] = useState(false)
   const [attachmentSubmissionPending, setAttachmentSubmissionPending] = useState(false)
   const [models, setModels] = useState<ModelListItem[]>([])
@@ -96,12 +105,28 @@ export function App() {
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
   const questionSubmittingRef = useRef(false)
+  const sessionTransitionPendingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
   const ownsResumeRequestRef = useRef(false)
   const deletionBlocksRuntimeRef = useRef(false)
+  const runtimeIdRef = useRef('')
+  const sessionIdRef = useRef<string | null>(null)
+  const activeSnapshotSequenceRef = useRef(0)
+  const hydratingRuntimeIdRef = useRef<string | null>(null)
+  const backgroundEventsRef = useRef(new Map<string, {
+    event: CoreEvent
+    sequence: number
+    sessionId: string | null
+  }[]>())
+  const composerDraftsRef = useRef(new Map<string, {
+    text: string
+    images: ImageDraft[]
+    pdfs: PdfDraft[]
+  }>())
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
+  const inputRef = useRef('')
   const blocks = view.blocks
   const addError = useCallback((text: string) => {
     setView((previous) =>
@@ -125,6 +150,37 @@ export function App() {
     restore: restorePdfDrafts,
   } = usePdfDrafts(addError)
 
+  useEffect(() => {
+    inputRef.current = input
+  }, [input])
+
+  useEffect(() => () => {
+    for (const draft of composerDraftsRef.current.values()) {
+      releaseImageDrafts(draft.images)
+    }
+    composerDraftsRef.current.clear()
+  }, [])
+
+  const stashActiveComposer = useCallback(() => {
+    const currentRuntimeId = runtimeIdRef.current
+    if (!currentRuntimeId) return
+    const currentSessionId = sessionIdRef.current
+    const images = detachImageDrafts()
+    const pdfs = detachPdfDrafts()
+    const text = inputRef.current
+    // 尚未产生 JSONL 的空白页没有历史入口，切走后不能再导航回来。
+    if (!currentSessionId) {
+      releaseImageDrafts(images)
+      return
+    }
+    const key = composerKey(currentRuntimeId, currentSessionId)
+    if (text || images.length > 0 || pdfs.length > 0) {
+      composerDraftsRef.current.set(key, { text, images, pdfs })
+    } else {
+      composerDraftsRef.current.delete(key)
+    }
+  }, [detachImageDrafts, detachPdfDrafts])
+
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     resumingSessionIdRef.current = sessionId
     setResumingSessionIdState(sessionId)
@@ -133,6 +189,24 @@ export function App() {
   const setDeletionBlocksRuntime = useCallback((blocked: boolean) => {
     deletionBlocksRuntimeRef.current = blocked
     setDeletionBlocksRuntimeState(blocked)
+  }, [])
+
+  const beginSessionTransition = useCallback(() => {
+    if (sessionTransitionPendingRef.current) return false
+    sessionTransitionPendingRef.current = true
+    setSessionTransitionPending(true)
+    return true
+  }, [])
+
+  const endSessionTransition = useCallback(() => {
+    sessionTransitionPendingRef.current = false
+    setSessionTransitionPending(false)
+  }, [])
+
+  const sendRuntimeCommand = useCallback((command: CoreCommand) => {
+    const targetRuntimeId = runtimeIdRef.current
+    if (!targetRuntimeId) return Promise.resolve({ ok: false })
+    return window.whycode.sendCommand(targetRuntimeId, command)
   }, [])
 
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
@@ -182,26 +256,36 @@ export function App() {
   }, [])
 
   const refreshModels = useCallback(async () => {
+    const targetRuntimeId = runtimeIdRef.current || undefined
     const [nextModels, snapshot] = await Promise.all([
-      window.whycode.listModels(),
-      window.whycode.runtimeSnapshot(),
+      window.whycode.listModels(targetRuntimeId),
+      window.whycode.runtimeSnapshot(targetRuntimeId),
     ])
+    if (runtimeIdRef.current && runtimeIdRef.current !== snapshot.runtimeId) return
     setModels(nextModels)
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
   }, [])
 
-  const applyRuntimeSnapshot = useCallback((
-    snapshot: RuntimeSnapshot,
-    notice?: string,
-  ) => {
-    const restored = restoreRuntimeConversation(
-      snapshot.viewEvents,
-      snapshot.busy
-        && !snapshot.checkpointRestoreToolUseId
-        && !snapshot.resumingSessionId,
-    )
-    setView(notice ? appendNotice(restored, notice) : restored)
+  const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
+    const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
+    if (changingRuntime) stashActiveComposer()
+    if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
+    runtimeIdRef.current = snapshot.runtimeId
+    sessionIdRef.current = snapshot.sessionId
+    activeSnapshotSequenceRef.current = snapshot.eventSequence
+    setRuntimeId(snapshot.runtimeId)
+    if (changingRuntime) {
+      const key = composerKey(snapshot.runtimeId, snapshot.sessionId)
+      const draft = composerDraftsRef.current.get(key)
+      composerDraftsRef.current.delete(key)
+      setInput(draft?.text ?? '')
+      if (draft) {
+        restoreImageDrafts(draft.images)
+        restorePdfDrafts(draft.pdfs)
+      }
+    }
+    setView(createConversationState(snapshot.viewEvents))
     setProjectDir(snapshot.projectDir)
     setPermMode(snapshot.permissionMode)
     setStatus(snapshot.status)
@@ -217,7 +301,13 @@ export function App() {
     setApproval(snapshot.approval)
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
-  }, [setDeletionBlocksRuntime, setResumingSessionId])
+  }, [
+    restoreImageDrafts,
+    restorePdfDrafts,
+    setDeletionBlocksRuntime,
+    setResumingSessionId,
+    stashActiveComposer,
+  ])
 
   const synchronizeUnownedResume = useCallback(async () => {
     const targetSessionId = resumingSessionIdRef.current
@@ -225,7 +315,7 @@ export function App() {
     try {
       const snapshot = await window.whycode.runtimeSnapshot()
       if (resumeTargetCommitted(snapshot, targetSessionId)) {
-        applyRuntimeSnapshot(snapshot, '会话恢复已完成')
+        applyRuntimeSnapshot(snapshot)
         setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
@@ -323,6 +413,21 @@ export function App() {
   }, [refreshSessions, restoreQueuedDrafts, setDeletionBlocksRuntime, synchronizeUnownedResume])
 
   useEffect(() => {
+    if (!runtimeId) return
+    const buffered = (backgroundEventsRef.current.get(runtimeId) ?? [])
+      .sort((left, right) => left.sequence - right.sequence)
+    backgroundEventsRef.current.delete(runtimeId)
+    for (const entry of buffered) {
+      if (entry.sequence <= activeSnapshotSequenceRef.current) continue
+      sessionIdRef.current = entry.sessionId
+      consumeEvent(entry.event)
+    }
+    if (hydratingRuntimeIdRef.current === runtimeId) {
+      hydratingRuntimeIdRef.current = null
+    }
+  }, [consumeEvent, runtimeId])
+
+  useEffect(() => {
     void window.whycode.listModels().then(setModels)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
@@ -331,17 +436,71 @@ export function App() {
   useEffect(() => {
     let disposed = false
     let hydrated = false
-    const buffered: { event: CoreEvent; sequence: number }[] = []
-    const unsubscribe = window.whycode.onEvent((event, sequence) => {
-      if (hydrated) consumeEvent(event)
-      else buffered.push({ event, sequence })
+    const buffered: {
+      event: CoreEvent
+      sequence: number
+      runtimeId: string
+      sessionId: string | null
+    }[] = []
+    const unsubscribe = window.whycode.onEvent((
+      event,
+      sequence,
+      eventRuntimeId,
+      eventSessionId,
+    ) => {
+      if (!hydrated) {
+        buffered.push({
+          event,
+          sequence,
+          runtimeId: eventRuntimeId,
+          sessionId: eventSessionId,
+        })
+        return
+      }
+      if (
+        eventRuntimeId === runtimeIdRef.current
+        && hydratingRuntimeIdRef.current !== eventRuntimeId
+      ) {
+        sessionIdRef.current = eventSessionId
+        consumeEvent(event)
+      } else if (
+        event.type === 'agent-status'
+        || event.type === 'turn-end'
+        || event.type === 'approval-request'
+      ) {
+        void refreshSessions()
+      }
+      if (
+        eventRuntimeId !== runtimeIdRef.current
+        || hydratingRuntimeIdRef.current === eventRuntimeId
+      ) {
+        if (
+          !backgroundEventsRef.current.has(eventRuntimeId)
+          && backgroundEventsRef.current.size >= 8
+        ) {
+          const oldestRuntimeId = backgroundEventsRef.current.keys().next().value
+          if (oldestRuntimeId) backgroundEventsRef.current.delete(oldestRuntimeId)
+        }
+        const pending = backgroundEventsRef.current.get(eventRuntimeId) ?? []
+        pending.push({ event, sequence, sessionId: eventSessionId })
+        if (pending.length > 512) pending.splice(0, pending.length - 512)
+        backgroundEventsRef.current.set(eventRuntimeId, pending)
+      }
+      if (
+        event.type === 'agent-status'
+        && (event.status === 'idle' || event.status === 'error')
+        && resumingSessionIdRef.current
+        && !ownsResumeRequestRef.current
+      ) {
+        void synchronizeUnownedResume()
+      }
     })
     void window.whycode.runtimeSnapshot().then((snapshot) => {
       if (disposed) return
       applyRuntimeSnapshot(snapshot)
       hydrated = true
       const pendingEvents = eventsAfterRuntimeSnapshot(
-        buffered.splice(0),
+        buffered.splice(0).filter((entry) => entry.runtimeId === snapshot.runtimeId),
         snapshot.eventSequence,
       )
       for (const event of pendingEvents) consumeEvent(event)
@@ -349,14 +508,23 @@ export function App() {
     }).catch(() => {
       if (disposed) return
       hydrated = true
-      for (const bufferedEvent of buffered.splice(0)) consumeEvent(bufferedEvent.event)
+      for (const bufferedEvent of buffered.splice(0)) {
+        if (bufferedEvent.runtimeId === runtimeIdRef.current) {
+          consumeEvent(bufferedEvent.event)
+        }
+      }
       void window.whycode.getProjectDir().then(setProjectDir)
     })
     return () => {
       disposed = true
       unsubscribe()
     }
-  }, [applyRuntimeSnapshot, consumeEvent, refreshSessions])
+  }, [
+    applyRuntimeSnapshot,
+    consumeEvent,
+    refreshSessions,
+    synchronizeUnownedResume,
+  ])
 
   useEffect(() => {
     if (stickToBottom.current) {
@@ -380,16 +548,22 @@ export function App() {
 
   const busy = status !== 'idle' && status !== 'error'
   const interactionBusy = busy
+    || sessionTransitionPending
     || attachmentSubmissionPending
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
   const attachmentLocked = stopping
+    || sessionTransitionPending
     || attachmentSubmissionPending
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
   const sessionChangeLocked = deletingSessionId !== null
+    || resumingSessionId !== null
+    || sessionTransitionPending
+    || attachmentSubmissionPending
+    || restoredSubmissionPending
 
   const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
     setCheckpointRestoreToolUseId((current) =>
@@ -398,111 +572,79 @@ export function App() {
   }, [])
 
   const pickProject = useCallback(() => {
-    void window.whycode.pickProjectDir().then((dir) => {
-      if (dir) {
-        setProjectDir(dir)
-        setView(createConversationState())
-        setInput('')
-        setQueued([])
-        setRestoredInputIds([])
-        setRestoredQueue([])
-        setRestoredSubmissionPending(false)
-        setApproval(null)
-        clearImageDrafts()
-        clearPdfDrafts()
-        void window.whycode.consensusStatus().then(setConsensus)
-        void refreshSessions()
-      }
-    })
-  }, [clearImageDrafts, clearPdfDrafts, refreshSessions])
+    if (!beginSessionTransition()) return
+    void window.whycode.pickProjectDir().then(async (result) => {
+      if (!result?.ok) return
+      applyRuntimeSnapshot(result.snapshot)
+      setShowSessions(false)
+      void window.whycode.consensusStatus().then(setConsensus)
+      void refreshSessions()
+      void refreshModels()
+    }).catch((error) => {
+      addError(`工作文件夹切换失败：${error instanceof Error ? error.message : String(error)}`)
+    }).finally(endSessionTransition)
+  }, [
+    addError,
+    applyRuntimeSnapshot,
+    beginSessionTransition,
+    endSessionTransition,
+    refreshModels,
+    refreshSessions,
+  ])
 
   const toggleConsensus = useCallback(() => {
     const enabled = !consensus.enabled
-    void window.whycode
-      .sendCommand({ type: 'set-consensus', enabled })
+    void sendRuntimeCommand({ type: 'set-consensus', enabled })
       .then((r) => {
         if (r && r.ok) setConsensus((prev) => ({ ...prev, enabled }))
       })
-  }, [consensus.enabled])
-
-  const resetView = useCallback((notice?: string) => {
-    const empty = createConversationState()
-    setView(notice ? appendNotice(empty, notice) : empty)
-    setInput('')
-    setQueued([])
-    setRestoredInputIds([])
-    setRestoredQueue([])
-    setRestoredSubmissionPending(false)
-    setApproval(null)
-    setStatus('idle')
-    setDeletionBlocksRuntime(false)
-    setStopping(false)
-    setAttachmentSubmissionPending(false)
-    ownsResumeRequestRef.current = false
-    setResumingSessionId(null)
-    setCheckpointRestoreToolUseId(null)
-    setNegoStatus(null)
-    clearImageDrafts()
-    clearPdfDrafts()
-    stickToBottom.current = true
-    setShowJumpBottom(false)
-  }, [clearImageDrafts, clearPdfDrafts, setDeletionBlocksRuntime, setResumingSessionId])
+  }, [consensus.enabled, sendRuntimeCommand])
 
   const stop = useCallback(() => {
     if (stopping) return
     setStopping(true)
     setApproval(null)
-    void window.whycode.sendCommand({ type: 'abort' }).catch(() => {
+    void sendRuntimeCommand({ type: 'abort' }).catch(() => {
       setStopping(false)
       addError('停止请求发送失败，请重试')
     })
-  }, [addError, stopping])
+  }, [addError, sendRuntimeCommand, stopping])
 
   const startNewSession = useCallback(() => {
+    if (!beginSessionTransition()) return
     void window.whycode.newSession().then((result) => {
       if (!result.ok) return addError(result.error ?? '新建会话失败')
-      resetView()
-      setProjectDir(result.projectDir)
+      applyRuntimeSnapshot(result.snapshot)
       setShowSessions(false)
+      void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
-    })
-  }, [addError, refreshSessions, resetView])
+      void refreshModels()
+    }).catch((error) => {
+      addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
+    }).finally(endSessionTransition)
+  }, [
+    addError,
+    applyRuntimeSnapshot,
+    beginSessionTransition,
+    endSessionTransition,
+    refreshModels,
+    refreshSessions,
+  ])
 
   const resumeSession = useCallback((sessionId: string) => {
-    if (resumingSessionIdRef.current) return
+    if (resumingSessionIdRef.current || sessionTransitionPendingRef.current) return
     ownsResumeRequestRef.current = true
     setSessionActionError(null)
     setResumingSessionId(sessionId)
-    void window.whycode.resumeSession(sessionId).then((result) => {
+    void window.whycode.resumeSession(sessionId).then(async (result) => {
       // Main 的事件保留在对话中；面板同时显示结果，避免遮罩让失败提示不可见。
       if (!result.ok) {
         setSessionActionError(result.error)
         return
       }
-      const interrupted = result.recoveredFromInterruption
-        ? '；已回退到安全边界，未完成工具和半截协商不会自动重放'
-        : ''
-      setView(appendNotice(
-        createConversationState(result.viewEvents),
-        `已恢复「${result.session.title || '未命名会话'}」${interrupted}`,
-      ))
-      setInput('')
-      clearImageDrafts()
-      clearPdfDrafts()
-      setQueued(result.queuedInputs)
-      setRestoredInputIds([])
-      setRestoredQueue(result.restoredInputs)
-      setRestoredSubmissionPending(false)
-      setApproval(null)
-      setStatus('idle')
-      setStopping(false)
-      setCheckpointRestoreToolUseId(null)
-      setNegoStatus(null)
+      applyRuntimeSnapshot(result.snapshot)
       stickToBottom.current = true
       setShowJumpBottom(false)
-      setProjectDir(result.session.projectDir)
-      setModelId(result.session.modelId)
-      setReasoningEffort(result.session.reasoningEffort)
       setSessionActionError(null)
       setShowSessions(false)
       void window.whycode.consensusStatus().then(setConsensus)
@@ -518,23 +660,39 @@ export function App() {
     })
   }, [
     addError,
-    clearImageDrafts,
-    clearPdfDrafts,
+    applyRuntimeSnapshot,
     refreshModels,
     refreshSessions,
     setResumingSessionId,
   ])
 
   const deleteSession = useCallback((sessionId: string) => {
-    if (deletingSessionId || resumingSessionIdRef.current) return
+    if (
+      deletingSessionId
+      || resumingSessionIdRef.current
+      || sessionTransitionPendingRef.current
+    ) return
     setDeletingSessionId(sessionId)
-    void window.whycode.runtimeSnapshot().then((snapshot) => {
+    void window.whycode.runtimeSnapshot(runtimeIdRef.current || undefined).then((snapshot) => {
       setDeletionBlocksRuntime(isCurrentSessionDeletion(snapshot.sessionId, sessionId))
       return window.whycode.deleteSession(sessionId)
-    }).then((result) => {
+    }).then(async (result) => {
+      if (result.ok || result.deletedCurrent) {
+        const detachedDraft = composerDraftsRef.current.get(sessionId)
+        if (detachedDraft) releaseImageDrafts(detachedDraft.images)
+        composerDraftsRef.current.delete(sessionId)
+        for (const [eventRuntimeId, events] of backgroundEventsRef.current) {
+          if (events.some((entry) => entry.sessionId === sessionId)) {
+            backgroundEventsRef.current.delete(eventRuntimeId)
+          }
+        }
+      }
       if (result.deletedCurrent) {
-        resetView()
-        void window.whycode.getProjectDir().then(setProjectDir)
+        inputRef.current = ''
+        setInput('')
+        clearImageDrafts()
+        clearPdfDrafts()
+        if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
         if (result.ok) setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
       }
@@ -548,9 +706,11 @@ export function App() {
     })
   }, [
     addError,
+    applyRuntimeSnapshot,
+    clearImageDrafts,
+    clearPdfDrafts,
     deletingSessionId,
     refreshSessions,
-    resetView,
     setDeletionBlocksRuntime,
   ])
 
@@ -558,17 +718,17 @@ export function App() {
     setView((previous) =>
       appendNotice(previous, '正在压缩上下文（生成摘要中，可点停止取消）…'),
     )
-    void window.whycode.sendCommand({ type: 'compact' })
-  }, [])
+    void sendRuntimeCommand({ type: 'compact' })
+  }, [sendRuntimeCommand])
 
   const changePermission = useCallback((mode: PermissionMode) => {
     const previous = permMode
     setPermMode(mode)
     const rollback = () => setPermMode((current) => current === mode ? previous : current)
-    void window.whycode.sendCommand({ type: 'set-permission-mode', mode }).then((result) => {
+    void sendRuntimeCommand({ type: 'set-permission-mode', mode }).then((result) => {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
-  }, [permMode])
+  }, [permMode, sendRuntimeCommand])
 
   const changeModel = useCallback((next: string) => {
     const nextModel = models.find((model) => model.id === next)
@@ -590,22 +750,22 @@ export function App() {
         current === 'default' ? previousReasoningEffort : current,
       )
     }
-    void window.whycode.sendCommand({ type: 'set-model', modelId: next }).then((result) => {
+    void sendRuntimeCommand({ type: 'set-model', modelId: next }).then((result) => {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
-  }, [addError, imageDrafts.length, modelId, models, reasoningEffort])
+  }, [addError, imageDrafts.length, modelId, models, reasoningEffort, sendRuntimeCommand])
 
   const changeReasoningEffort = useCallback((next: ReasoningEffortSelection) => {
     const previous = reasoningEffort
     setReasoningEffort(next)
     const rollback = () => setReasoningEffort((current) => current === next ? previous : current)
-    void window.whycode.sendCommand({
+    void sendRuntimeCommand({
       type: 'set-reasoning-effort',
       reasoningEffort: next,
     }).then((result) => {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
-  }, [reasoningEffort])
+  }, [reasoningEffort, sendRuntimeCommand])
 
   const openConnectionSettings = useCallback(() => {
     void window.whycode.connectionSettings().then((snapshot) => {
@@ -626,11 +786,14 @@ export function App() {
   const send = useCallback((urgent = false) => {
     if (
       stopping
+      || sessionTransitionPending
       || deletionBlocksRuntime
       || resumingSessionId
       || checkpointRestoreToolUseId
       || attachmentSubmissionPending
     ) return
+    const targetRuntimeId = runtimeIdRef.current
+    if (!targetRuntimeId) return
     const text = input.trim() || defaultDraftPrompt(imageDrafts.length, pdfDrafts.length)
     if (!text) return
     const sentImageDrafts = detachImageDrafts()
@@ -638,9 +801,8 @@ export function App() {
     const sentRestoredInputIds = restoredInputIds
     setRestoredInputIds([])
     if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(true)
-    if (sentImageDrafts.length > 0 || sentPdfDrafts.length > 0) {
-      setAttachmentSubmissionPending(true)
-    }
+    // IPC 确认持久化并交给目标 Agent 前，暂不允许切换；否则失败恢复可能落入另一对话。
+    setAttachmentSubmissionPending(true)
     setInput('')
     // 自己发消息 = 主动行为，恢复贴底跟随
     stickToBottom.current = true
@@ -657,7 +819,7 @@ export function App() {
       try {
         const attachments = await prepareImageDrafts(sentImageDrafts)
         const pdfAttachments = preparePdfDrafts(sentPdfDrafts)
-        const result = await window.whycode.sendCommand({
+        const result = await window.whycode.sendCommand(targetRuntimeId, {
           type: 'user-message',
           text,
           urgent,
@@ -678,9 +840,7 @@ export function App() {
           ? '附件读取或消息发送失败，内容已恢复到输入框'
           : '消息发送失败，内容已恢复到输入框')
       } finally {
-        if (sentImageDrafts.length > 0 || sentPdfDrafts.length > 0) {
-          setAttachmentSubmissionPending(false)
-        }
+        setAttachmentSubmissionPending(false)
         if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(false)
       }
     })()
@@ -698,6 +858,7 @@ export function App() {
     restoreImageDrafts,
     restorePdfDrafts,
     resumingSessionId,
+    sessionTransitionPending,
     stopping,
   ])
 
@@ -709,22 +870,22 @@ export function App() {
     setQuestionSubmitting(true)
     stickToBottom.current = true
     setShowJumpBottom(false)
-    void window.whycode.sendCommand({ type: 'user-message', text }).finally(() => {
+    void sendRuntimeCommand({ type: 'user-message', text }).finally(() => {
       questionSubmittingRef.current = false
       setQuestionSubmitting(false)
     })
-  }, [interactionBusy, stopping, view.pendingQuestion])
+  }, [interactionBusy, sendRuntimeCommand, stopping, view.pendingQuestion])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
-    void window.whycode.sendCommand({
+    void sendRuntimeCommand({
       type: 'approval-response',
       requestId: approval.requestId,
       approved,
       remember,
     })
     setApproval(null)
-  }, [approval])
+  }, [approval, sendRuntimeCommand])
 
   const toggle = useCallback((id: string) => {
     setView((previous) => toggleExpanded(previous, id))
@@ -787,7 +948,11 @@ export function App() {
         projectDir={projectDir}
         busy={interactionBusy}
         sessionChangeLocked={sessionChangeLocked}
-        permissionLocked={deletionBlocksRuntime || resumingSessionId !== null}
+        permissionLocked={
+          sessionTransitionPending
+          || deletionBlocksRuntime
+          || resumingSessionId !== null
+        }
         consensus={consensus}
         permMode={permMode}
         models={models}
@@ -821,7 +986,7 @@ export function App() {
           sessions={sessions}
           error={sessionListError}
           actionError={sessionActionError}
-          busy={interactionBusy || deletingSessionId !== null}
+          busy={sessionChangeLocked}
           deletingSessionId={deletingSessionId}
           resumingSessionId={resumingSessionId}
           onClose={() => setShowSessions(false)}
@@ -843,6 +1008,7 @@ export function App() {
         {blocks.map((b) => (
           <BlockView
             key={b.id}
+            runtimeId={runtimeId}
             block={b}
             expanded={view.expanded.has(b.id)}
             busy={interactionBusy}
@@ -936,6 +1102,7 @@ export function App() {
             onPaste={pasteAttachments}
             disabled={
               stopping
+              || sessionTransitionPending
               || deletionBlocksRuntime
               || resumingSessionId !== null
               || checkpointRestoreToolUseId !== null
@@ -954,6 +1121,8 @@ export function App() {
             placeholder={
               stopping
                 ? '正在停止当前任务并清理子进程…'
+                : sessionTransitionPending
+                  ? '正在切换会话…'
                 : deletionBlocksRuntime
                   ? '正在删除当前会话及其关联数据…'
                 : resumingSessionId
@@ -1067,6 +1236,7 @@ function QuestionCard({
 }
 
 function BlockView({
+  runtimeId,
   block,
   expanded,
   busy,
@@ -1074,6 +1244,7 @@ function BlockView({
   onCheckpointRestoreChange,
   onToggle,
 }: {
+  runtimeId: string
   block: Block
   expanded: boolean
   busy: boolean
@@ -1085,7 +1256,7 @@ function BlockView({
     return (
       <div className="mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">
         <UserImageGallery attachments={block.attachments} />
-        <UserPdfGallery attachments={block.pdfAttachments} />
+        <UserPdfGallery runtimeId={runtimeId} attachments={block.pdfAttachments} />
         <div className="whitespace-pre-wrap">{block.text}</div>
       </div>
     )
@@ -1170,6 +1341,7 @@ function BlockView({
         </button>
         {call.hasCheckpoint && call.status !== 'running' && (
           <RestoreButton
+            runtimeId={runtimeId}
             toolUseId={call.id}
             busy={busy}
             pending={checkpointRestoreToolUseId === call.id}
@@ -1198,13 +1370,19 @@ function defaultDraftPrompt(imageCount: number, pdfCount: number): string {
   return ''
 }
 
+function composerKey(runtimeId: string, sessionId: string | null): string {
+  return sessionId ?? `runtime:${runtimeId}`
+}
+
 /** 回滚按钮：点击展开两种范围选择 */
 function RestoreButton({
+  runtimeId,
   toolUseId,
   busy,
   pending,
   onPendingChange,
 }: {
+  runtimeId: string
   toolUseId: string
   busy: boolean
   pending: boolean
@@ -1218,7 +1396,10 @@ function RestoreButton({
     onPendingChange(toolUseId, true)
     setOpen(false)
     try {
-      await window.whycode.sendCommand({ type: 'restore-checkpoint', toolUseId, scope })
+      await window.whycode.sendCommand(
+        runtimeId,
+        { type: 'restore-checkpoint', toolUseId, scope },
+      )
     } finally {
       pendingRef.current = false
       onPendingChange(toolUseId, false)

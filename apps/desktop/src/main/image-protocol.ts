@@ -11,9 +11,9 @@ export function registerAttachmentScheme(): void {
   }])
 }
 
-/** 只向 Renderer 暴露当前会话的严格附件名，不提供任意本地文件读取。 */
+/** 只向 Renderer 暴露仍有运行时的会话附件，不提供任意本地文件读取。 */
 export function registerAttachmentProtocol(
-  currentJournal: () => SessionJournal | null,
+  journalForSession: (sessionId: string) => SessionJournal | null,
 ): void {
   protocol.handle(ATTACHMENT_SCHEME, async (request) => {
     if (request.method !== 'GET') return new Response(null, { status: 405 })
@@ -21,8 +21,8 @@ export function registerAttachmentProtocol(
       const url = new URL(request.url)
       const sessionId = url.hostname
       const storageName = decodeURIComponent(url.pathname.slice(1))
-      const journal = currentJournal()
-      if (!journal || journal.sessionId !== sessionId || storageName.includes('/')) {
+      const journal = journalForSession(sessionId)
+      if (!journal || storageName.includes('/')) {
         return new Response(null, { status: 404 })
       }
       const stored = await readStoredImage(journal.attachmentDirectory, storageName)

@@ -107,7 +107,13 @@ export function PdfDraftStrip({
   )
 }
 
-export function UserPdfGallery({ attachments }: { attachments?: readonly PdfAttachment[] }) {
+export function UserPdfGallery({
+  runtimeId,
+  attachments,
+}: {
+  runtimeId: string
+  attachments?: readonly PdfAttachment[]
+}) {
   const [error, setError] = useState<string | null>(null)
   if (!attachments?.length) return null
   return (
@@ -121,7 +127,7 @@ export function UserPdfGallery({ attachments }: { attachments?: readonly PdfAtta
             title={`用系统默认阅读器打开 ${attachment.name}`}
             onClick={() => {
               setError(null)
-              void window.whycode.openPdfAttachment(attachment.id).then((result) => {
+              void window.whycode.openPdfAttachment(runtimeId, attachment.id).then((result) => {
                 if (!result.ok) setError(result.error ?? '无法打开 PDF')
               }).catch(() => setError('无法打开 PDF'))
             }}

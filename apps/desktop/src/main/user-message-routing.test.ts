@@ -11,7 +11,7 @@ describe('桌面输入权威路由', () => {
     const accepted: string[] = []
     const delivered: string[] = []
     const route = {
-      isBusy: () => busy || gate.busy,
+      isBusy: () => busy,
       reserve: () => gate.reserve(),
       record: async (inputId: string, text: string, startsTurn: boolean) => {
         records.push({ inputId, text, startsTurn })
@@ -63,7 +63,7 @@ describe('桌面输入权威路由', () => {
     let delivered = false
     await assert.rejects(
       routeUserMessage('不能提前交付', false, {
-        isBusy: () => gate.busy,
+        isBusy: () => false,
         reserve: () => gate.reserve(),
         record: async () => { throw new Error('disk full') },
         acceptRoot: () => { accepted = true },
@@ -76,6 +76,29 @@ describe('桌面输入权威路由', () => {
     assert.equal(gate.busy, false)
   })
 
+  it('前一条在交付前失败时，已排队的后一条会重新判断并成为根消息', async () => {
+    const gate = new UserMessageRoutingGate()
+    const firstReservation = gate.reserve()
+    const secondReservation = gate.reserve()
+    const delivered: string[] = []
+    const route = {
+      isBusy: () => false,
+      reserve: () => gate.reserve(),
+      record: async (_inputId: string, text: string) => {
+        if (text === '失败') throw new Error('prepare failed')
+      },
+      acceptRoot: () => {},
+      deliver: (_inputId: string, text: string) => { delivered.push(text) },
+    }
+
+    const first = routeUserMessage('失败', false, route, firstReservation)
+    const second = routeUserMessage('继续', false, route, secondReservation)
+    await assert.rejects(first, /prepare failed/)
+    assert.equal(await second, true)
+    assert.deepEqual(delivered, ['继续'])
+    assert.equal(gate.busy, false)
+  })
+
   it('交给 Agent 后立即确认，不等待完整模型回合', async () => {
     const gate = new UserMessageRoutingGate()
     let finishTurn!: () => void
@@ -84,7 +107,7 @@ describe('桌面输入权威路由', () => {
     turn.then(() => { completed = true }).catch(() => {})
 
     assert.equal(await routeUserMessage('开始长任务', false, {
-      isBusy: () => gate.busy,
+      isBusy: () => false,
       reserve: () => gate.reserve(),
       record: async () => {},
       acceptRoot: () => {},
@@ -100,7 +123,7 @@ describe('桌面输入权威路由', () => {
     const gate = new UserMessageRoutingGate()
     const reported: unknown[] = []
     await routeUserMessage('触发异常', false, {
-      isBusy: () => gate.busy,
+      isBusy: () => false,
       reserve: () => gate.reserve(),
       record: async () => {},
       acceptRoot: () => {},
@@ -117,7 +140,7 @@ describe('桌面输入权威路由', () => {
     let recorded = false
 
     assert.equal(await routeUserMessage('已经持久化', false, {
-      isBusy: () => gate.busy,
+      isBusy: () => false,
       reserve: () => gate.reserve(),
       record: async () => { recorded = true },
       acceptRoot: () => {},

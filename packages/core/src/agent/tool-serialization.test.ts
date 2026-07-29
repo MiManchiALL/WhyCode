@@ -146,6 +146,55 @@ describe('工具副作用串行', () => {
     assert.equal(approvals, 1)
     assert.equal(maxActiveApprovals, 1)
   })
+
+  it('把 edit/execute 的完整临界区交给宿主调度，control 不越权进入', async () => {
+    const scheduled: string[] = []
+    const edited = buildTool({
+      name: 'HostScheduledEdit',
+      description: '宿主调度写操作',
+      prompt: '执行宿主调度写操作',
+      inputSchema: z.object({ value: z.number().default(1) }),
+      isReadOnly: false,
+      kind: 'edit',
+      availableWithoutProject: true,
+      async execute({ value }) {
+        return { data: `edit-${value}`, isError: false }
+      },
+    })
+    const controlled = buildTool({
+      name: 'LocalControl',
+      description: '本地控制操作',
+      prompt: '执行本地控制操作',
+      inputSchema: z.object({ value: z.number().default(1) }),
+      isReadOnly: false,
+      kind: 'control',
+      availableWithoutProject: true,
+      async execute({ value }) {
+        return { data: `control-${value}`, isError: false }
+      },
+    })
+    const model = new MockLanguageModelV4({
+      doStream: [
+        namedToolStep(['HostScheduledEdit', 'LocalControl']),
+        finalStep(),
+      ],
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: null, osPlatform: 'win32' },
+      emit: () => {},
+      requestApproval: async () => ({ approved: true }),
+      scheduleProjectMutation: async (mutation, _signal, operation) => {
+        if (mutation.type === 'tool') scheduled.push(mutation.name)
+        return operation()
+      },
+    })
+    session.setExtraTools([edited, controlled])
+
+    assert.equal(await session.handleUserMessage('运行宿主调度探针'), 'completed')
+    assert.deepEqual(scheduled, ['HostScheduledEdit'])
+  })
 })
 
 function parallelToolStep(toolName = 'SerialProbe') {

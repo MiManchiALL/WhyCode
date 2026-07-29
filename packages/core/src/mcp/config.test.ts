@@ -163,6 +163,14 @@ describe('MCP 配置', () => {
       if (server.transport !== 'stdio') assert.fail('应解析为 stdio')
       assert.equal(server.cwd, join(root, 'server'))
       assert.equal(server.env.API_TOKEN, 'secret')
+      const rotated = await loadMcpConfiguration({
+        globalConfigPath: globalPath,
+        env: { TEST_MCP_TOKEN: 'rotated-secret' },
+      })
+      assert.equal(
+        rotated.servers[0]?.runtimeFingerprint,
+        server.runtimeFingerprint,
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -220,6 +228,24 @@ describe('MCP 配置', () => {
         [MCP_CONTEXT7_BUILTIN.secretHeaderName]: 'safe-secret',
       })
       assert.equal(server.sourceFingerprint, discovered.servers[0]?.sourceFingerprint)
+      assert.equal(
+        server.runtimeFingerprint,
+        discovered.servers[0]?.runtimeFingerprint,
+      )
+
+      const changedSecret = await loadMcpConfiguration({
+        globalConfigPath: globalPath,
+        globalSecretHeaders: [{
+          serverName: 'context7',
+          connectionFingerprint: fingerprint,
+          headerName: MCP_CONTEXT7_BUILTIN.secretHeaderName,
+          value: 'different-safe-secret',
+        }],
+      })
+      assert.equal(
+        changedSecret.servers[0]?.runtimeFingerprint,
+        server.runtimeFingerprint,
+      )
 
       await writeConfig(globalPath, {
         version: 1,
@@ -243,6 +269,7 @@ describe('MCP 配置', () => {
       assert.equal(changedServer?.transport, 'http')
       if (changedServer?.transport !== 'http') assert.fail('应解析为 HTTP MCP')
       assert.deepEqual(changedServer.headers, {})
+      assert.notEqual(changedServer.runtimeFingerprint, server.runtimeFingerprint)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

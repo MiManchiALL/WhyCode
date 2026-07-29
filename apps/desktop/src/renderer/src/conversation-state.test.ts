@@ -5,7 +5,6 @@ import {
   applyCoreEvent,
   createConversationState,
   eventsAfterRuntimeSnapshot,
-  restoreRuntimeConversation,
   resumeTargetCommitted,
   toggleExpanded,
 } from './conversation-state.ts'
@@ -57,18 +56,6 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /out:default_api/)
   })
 
-  it('Renderer 重载时恢复稳定对话，并保留停止当前任务的入口提示', () => {
-    const state = restoreRuntimeConversation([
-      { type: 'user-message', text: '读取桌面 PDF', startsTurn: true },
-      core({ type: 'turn-start', turnId: 'pdf-turn' }),
-      core({ type: 'text-delta', text: '我先找到文件。' }),
-    ], true)
-
-    assert.deepEqual(state.blocks.map((block) => block.kind), ['user', 'text', 'notice'])
-    const last = state.blocks.at(-1)
-    assert.match(last?.kind === 'notice' ? last.text : '', /重新连接当前任务|使用“停止”/)
-  })
-
   it('Renderer 初始化只接续快照边界之后的实时事件', () => {
     const events = eventsAfterRuntimeSnapshot([
       { sequence: 10, event: { type: 'text-delta', text: '已包含在快照中' } },
@@ -76,6 +63,19 @@ describe('会话界面时间线重建', () => {
     ], 10)
 
     assert.deepEqual(events, [{ type: 'text-delta', text: '快照之后的新内容' }])
+  })
+
+  it('切换或重连会话时只重建真实时间线，不合成恢复提示', () => {
+    const state = createConversationState([
+      { type: 'user-message', text: '继续之前的问题', startsTurn: true },
+      core({ type: 'text-delta', text: '这是已经提交的回答。' }),
+    ])
+
+    assert.deepEqual(state.blocks.map((block) => block.kind), ['user', 'text'])
+    assert.doesNotMatch(
+      JSON.stringify(state.blocks),
+      /已恢复|界面已重新连接当前任务|会话恢复已完成/,
+    )
   })
 
   it('Renderer 重载后只应用 Main 已原子提交的恢复目标', () => {

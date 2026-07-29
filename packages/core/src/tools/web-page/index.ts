@@ -8,6 +8,7 @@ import {
 } from './contract.ts'
 import { formatFetchResponse, formatFindResponse } from './format.ts'
 import {
+  WEB_FETCH_MCP_FALLBACK_HINT,
   WEB_FETCH_TOOL_NAME,
   WEB_FETCH_TOOL_PROMPT,
   WEB_FIND_TOOL_NAME,
@@ -37,12 +38,14 @@ export function createWebFetchTool(options: { fetchPage: WebFetchHandler }) {
           ...(response.kind === 'pdf' ? { pdfAttachments: [response.attachment] } : {}),
         }
       } catch (error) {
+        if (ctx.abortSignal.aborted) {
+          return { data: '网页读取已取消', isError: true }
+        }
+        const message = error instanceof WebPageError
+          ? error.message
+          : '网页读取暂时不可用'
         return {
-          data: ctx.abortSignal.aborted
-            ? '网页读取已取消'
-            : error instanceof WebPageError
-              ? error.message
-              : '网页读取暂时不可用',
+          data: `${message}\n${WEB_FETCH_MCP_FALLBACK_HINT}`,
           isError: true,
         }
       }

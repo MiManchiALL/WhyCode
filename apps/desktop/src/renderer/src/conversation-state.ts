@@ -100,19 +100,6 @@ export function createConversationState(events: readonly ViewEvent[] = []): Conv
   return state
 }
 
-export function restoreRuntimeConversation(
-  events: readonly ViewEvent[],
-  busy: boolean,
-): ConversationState {
-  const restored = createConversationState(events)
-  return busy
-    ? appendNotice(
-        restored,
-        '界面已重新连接当前任务；未稳定提交的步骤不会伪造到历史中，可使用“停止”结束当前请求。',
-      )
-    : restored
-}
-
 export function eventsAfterRuntimeSnapshot(
   buffered: readonly { sequence: number; event: CoreEvent }[],
   snapshotSequence: number,

@@ -8,6 +8,7 @@ const server: McpStdioServerConfig = {
   name: '中文 服务',
   scope: 'global',
   sourceFingerprint: 'a'.repeat(64),
+  runtimeFingerprint: 'b'.repeat(64),
   transport: 'stdio',
   command: 'node',
   args: [],
@@ -18,7 +19,7 @@ const server: McpStdioServerConfig = {
 }
 
 describe('MCP 工具目录规范化', () => {
-  it('生成跨 Provider 安全名称，并让 schema/config 变化改变描述符', () => {
+  it('生成跨 Provider 安全名称，并只让 schema/有效路由变化改变描述符', () => {
     const first = buildServerCatalog(server, [{
       name: '查询 天气',
       description: '查询城市天气',
@@ -44,7 +45,7 @@ describe('MCP 工具目录规范化', () => {
     assert.notEqual(first.descriptorHash, second.descriptorHash)
     assert.notEqual(first.exposedName, second.exposedName)
 
-    const differentConnectionSecret = buildServerCatalog({
+    const sameRouteWithRotatedSecret = buildServerCatalog({
       ...server,
       sourceFingerprint: 'b'.repeat(64),
     }, [{
@@ -57,8 +58,24 @@ describe('MCP 工具目录规范化', () => {
       },
       annotations: { readOnlyHint: true },
     }]).tools[0]!
-    assert.notEqual(first.descriptorHash, differentConnectionSecret.descriptorHash)
-    assert.equal(first.exposedName, differentConnectionSecret.exposedName)
+    assert.equal(first.descriptorHash, sameRouteWithRotatedSecret.descriptorHash)
+    assert.equal(first.exposedName, sameRouteWithRotatedSecret.exposedName)
+
+    const differentRoute = buildServerCatalog({
+      ...server,
+      runtimeFingerprint: 'c'.repeat(64),
+    }, [{
+      name: '查询 天气',
+      description: '查询城市天气',
+      inputSchema: {
+        type: 'object',
+        properties: { city: { type: 'string', description: '城市' } },
+        required: ['city'],
+      },
+      annotations: { readOnlyHint: true },
+    }]).tools[0]!
+    assert.notEqual(first.descriptorHash, differentRoute.descriptorHash)
+    assert.equal(first.exposedName, differentRoute.exposedName)
 
     const largeTools = buildServerCatalog(server, ['first', 'second', 'third'].map((name) => ({
       name,

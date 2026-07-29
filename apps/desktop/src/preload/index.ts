@@ -7,6 +7,7 @@ import type {
   ResumeSessionResult,
   RuntimeSnapshot,
   RuntimeEventEnvelope,
+  RuntimeCommandEnvelope,
   SessionListItem,
 } from '../shared/session.ts'
 import type {
@@ -25,9 +26,16 @@ import type {
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
-  sendCommand: (command: CoreCommand): Promise<{ ok: boolean } | void> =>
-    ipcRenderer.invoke(IPC.command, command),
-  listModels: (): Promise<ModelListItem[]> => ipcRenderer.invoke(IPC.listModels),
+  sendCommand: (
+    runtimeId: string,
+    command: CoreCommand,
+  ): Promise<{ ok: boolean } | void> =>
+    ipcRenderer.invoke(IPC.command, {
+      runtimeId,
+      command,
+    } satisfies RuntimeCommandEnvelope),
+  listModels: (runtimeId?: string): Promise<ModelListItem[]> =>
+    ipcRenderer.invoke(IPC.listModels, runtimeId),
   connectionSettings: (): Promise<ConnectionSettingsSnapshot> =>
     ipcRenderer.invoke(IPC.connectionSettings),
   saveProviderSettings: (
@@ -59,9 +67,12 @@ const api = {
   ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
-  getProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.getProjectDir),
-  runtimeSnapshot: (): Promise<RuntimeSnapshot> => ipcRenderer.invoke(IPC.runtimeSnapshot),
-  pickProjectDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickProjectDir),
+  getProjectDir: (runtimeId?: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.getProjectDir, runtimeId),
+  runtimeSnapshot: (runtimeId?: string): Promise<RuntimeSnapshot> =>
+    ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
+  pickProjectDir: (): Promise<NewSessionResult | null> =>
+    ipcRenderer.invoke(IPC.pickProjectDir),
   consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
     ipcRenderer.invoke(IPC.consensusStatus),
   listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
@@ -70,11 +81,26 @@ const api = {
   newSession: (): Promise<NewSessionResult> => ipcRenderer.invoke(IPC.newSession),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),
-  openPdfAttachment: (attachmentId: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.openPdfAttachment, attachmentId),
-  onEvent: (listener: (event: CoreEvent, sequence: number) => void): (() => void) => {
+  openPdfAttachment: (
+    runtimeId: string,
+    attachmentId: string,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.openPdfAttachment, runtimeId, attachmentId),
+  onEvent: (
+    listener: (
+      event: CoreEvent,
+      sequence: number,
+      runtimeId: string,
+      sessionId: string | null,
+    ) => void,
+  ): (() => void) => {
     const wrapped = (_: unknown, envelope: RuntimeEventEnvelope) => {
-      listener(envelope.event, envelope.sequence)
+      listener(
+        envelope.event,
+        envelope.sequence,
+        envelope.runtimeId,
+        envelope.sessionId,
+      )
     }
     ipcRenderer.on(IPC.event, wrapped)
     return () => ipcRenderer.off(IPC.event, wrapped)

@@ -11,7 +11,11 @@ import {
 } from './config.ts'
 import type { McpFetch } from './manager.ts'
 import { MCP_TOOL_SEARCH_NAME, McpSessionRuntime } from './runtime.ts'
-import { findMcpToolState, withoutMcpToolState } from './state.ts'
+import {
+  createMcpToolStateMessage,
+  findMcpToolState,
+  withoutMcpToolState,
+} from './state.ts'
 
 const fixture = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -57,7 +61,7 @@ describe('MCP 延迟工具检索', () => {
 
       const messages: ModelMessage[] = first.messagesOnCommit()
       assert.equal(messages.length, 2)
-      assert.equal(findMcpToolState(messages).length, 1)
+      assert.equal(findMcpToolState(messages).tools.length, 1)
       const modelMessages = withoutMcpToolState(messages)
       assert.equal(modelMessages.length, 1)
       assert.match(String(modelMessages[0]?.content), /^<system-reminder>/u)
@@ -107,7 +111,7 @@ describe('MCP 延迟工具检索', () => {
     }
   })
 
-  it('项目服务器让 ToolSearch 在全自动模式下也声明显式首次信任', async () => {
+  it('项目服务器首次显式信任后按会话恢复；路由身份变化时重新审批', async () => {
     const configuration = testConfiguration()
     configuration.servers[0] = {
       ...configuration.servers[0]!,
@@ -116,18 +120,65 @@ describe('MCP 延迟工具检索', () => {
     configuration.projectConfigDigest = 'a'.repeat(64)
     configuration.projectServerCount = 1
     const runtime = new McpSessionRuntime({ configuration })
+    const signal = new AbortController().signal
+    const context: ToolContext = {
+      projectDir: process.cwd(),
+      additionalDirs: [],
+      abortSignal: signal,
+    }
     try {
-      const step = await runtime.beginStep([], new AbortController().signal)
+      const step = await runtime.beginStep([], signal)
       const search = step.toolDefinitions()[0]!
       assert.equal(search.requiresExplicitInitialApproval, true)
       assert.match(search.initialApprovalReason ?? '', /显式信任/)
-      step.discard()
+      await search.execute({ query: 'echo text', max_results: 5 }, context)
+      const committed = step.messagesOnCommit()
+      const state = findMcpToolState(committed)
+      assert.match(
+        state.trustedProjectConfigurationFingerprint ?? '',
+        /^[0-9a-f]{64}$/u,
+      )
+
+      const resumed = new McpSessionRuntime({ configuration })
+      try {
+        const resumedStep = await resumed.beginStep(committed, signal)
+        const resumedSearch = resumedStep.toolDefinitions()[0]!
+        assert.equal(resumedSearch.requiresExplicitInitialApproval, false)
+        assert.equal(resumedSearch.initialApprovalReason, undefined)
+        assert.equal(
+          resumedStep.toolDefinitions().some((tool) =>
+            tool.name.includes('__echo_text__')),
+          true,
+        )
+        resumedStep.discard()
+      } finally {
+        await resumed.close()
+      }
+
+      const changed = structuredClone(configuration)
+      changed.servers[0]!.runtimeFingerprint = 'f'.repeat(64)
+      const changedRuntime = new McpSessionRuntime({ configuration: changed })
+      try {
+        const changedStep = await changedRuntime.beginStep(committed, signal)
+        const changedSearch = changedStep.toolDefinitions()[0]!
+        assert.equal(changedSearch.requiresExplicitInitialApproval, true)
+        assert.equal(
+          changedStep.toolDefinitions().some((tool) =>
+            tool.name.includes('__echo_text__')),
+          false,
+        )
+        const cleared = findMcpToolState(changedStep.messagesOnCommit())
+        assert.equal(cleared.trustedProjectConfigurationFingerprint, null)
+        assert.deepEqual(cleared.tools, [])
+      } finally {
+        await changedRuntime.close()
+      }
     } finally {
       await runtime.close()
     }
   })
 
-  it('连接前就向模型说明内置来源能力，并把授权数据路由到 ToolSearch', async () => {
+  it('连接前说明内置来源能力，并在公开读取失败或明确授权需求后路由到 ToolSearch', async () => {
     const runtime = new McpSessionRuntime({
       configuration: githubConfiguration(),
     })
@@ -136,12 +187,175 @@ describe('MCP 延迟工具检索', () => {
       const search = step.toolDefinitions()[0]!
       assert.match(search.prompt, /读取 GitHub 仓库、文件、提交、Issue 和 Pull Request/)
       assert.match(search.prompt, /私有资源/)
-      assert.match(search.prompt, /登录身份、授权或私有数据/)
-      assert.match(search.prompt, /不要先用 WebSearch 或 WebFetch 探测其公开可见性/)
+      assert.match(search.prompt, /登录身份、授权能力或私有数据/)
+      assert.match(search.prompt, /WebSearch\/WebFetch 已不能取得所需公开内容/)
+      assert.match(search.prompt, /普通 HTTP\/HTTPS URL.*先用 WebFetch 尝试公开读取/)
       assert.match(search.prompt, /top-N 候选，不是完整目录/)
       assert.match(search.prompt, /英文动作、对象或参数关键词/)
       assert.match(search.prompt, /可以和本步骤的 WebSearch、WebFetch/)
       step.discard()
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it('首次检索持久化所有已连接服务器说明，但只加载命中的工具', async () => {
+    const listCalls = new Map<string, number>()
+    const fetchImpl: McpFetch = async (input, init) => {
+      const serverName = new URL(String(input)).hostname.split('.')[0]!
+      if (init?.method === 'GET') return new Response(null, { status: 405 })
+      const request = JSON.parse(String(init?.body)) as {
+        id?: string | number
+        method: string
+        params?: { protocolVersion?: string }
+      }
+      if (request.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 })
+      }
+      if (request.method === 'initialize') {
+        return jsonRpcResponse(request.id, {
+          protocolVersion: request.params?.protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: serverName, version: '1.0.0' },
+          instructions: `${serverName}-server-instructions`,
+        })
+      }
+      if (request.method === 'tools/list') {
+        listCalls.set(serverName, (listCalls.get(serverName) ?? 0) + 1)
+        return jsonRpcResponse(request.id, {
+          tools: [{
+            name: serverName === 'alpha' ? 'get_file_contents' : 'schedule_event',
+            description: serverName === 'alpha'
+              ? 'Read repository source file contents'
+              : 'Schedule a calendar appointment',
+            inputSchema: { type: 'object', properties: {} },
+          }],
+        })
+      }
+      throw new Error(`未处理的 MCP HTTP 方法：${request.method}`)
+    }
+    const runtime = new McpSessionRuntime({
+      configuration: {
+        servers: ['alpha', 'beta'].map((name, index) => ({
+          name,
+          scope: 'global' as const,
+          sourceFingerprint: String(index + 1).repeat(64),
+          runtimeFingerprint: String(index + 3).repeat(64),
+          connectionFingerprint: String(index + 5).repeat(64),
+          transport: 'http' as const,
+          url: `https://${name}.example.test/`,
+          headers: {},
+          startupTimeoutMs: 10_000,
+          toolTimeoutMs: 10_000,
+        })),
+        configuredServers: [],
+        diagnostics: [],
+        projectConfigDigest: null,
+        projectServerCount: 0,
+      },
+      fetchImpl,
+    })
+    const signal = new AbortController().signal
+    const context: ToolContext = {
+      projectDir: process.cwd(),
+      additionalDirs: [],
+      abortSignal: signal,
+    }
+    try {
+      const first = await runtime.beginStep([], signal)
+      await first.toolDefinitions()[0]!.execute(
+        { query: 'repository file contents read', max_results: 1 },
+        context,
+      )
+      const committed = first.messagesOnCommit()
+      const state = findMcpToolState(committed)
+      assert.deepEqual(
+        state.serverInstructions.map((snapshot) => snapshot.serverName),
+        ['alpha', 'beta'],
+      )
+      assert.equal(state.tools.length, 1)
+      assert.equal(state.tools[0]?.serverName, 'alpha')
+
+      const second = await runtime.beginStep(committed, signal)
+      const definitions = second.toolDefinitions()
+      assert.equal(
+        definitions.some((definition) => definition.name.includes('__get_file_contents__')),
+        true,
+      )
+      assert.equal(
+        definitions.some((definition) => definition.name.includes('__schedule_event__')),
+        false,
+      )
+      assert.match(definitions[0]?.prompt ?? '', /alpha-server-instructions/)
+      assert.match(definitions[0]?.prompt ?? '', /beta-server-instructions/)
+      assert.doesNotMatch(definitions[0]?.prompt ?? '', /idle|ready|全局|项目级/u)
+      await definitions[0]!.execute(
+        { query: 'repository file contents read', max_results: 1 },
+        context,
+      )
+      const repeatedMessages = [...committed, ...second.messagesOnCommit()]
+      assert.deepEqual(Object.fromEntries(listCalls), { alpha: 1, beta: 1 })
+
+      listCalls.clear()
+      const resumedRuntime = new McpSessionRuntime({
+        configuration: runtime.connectionManager().configuration,
+        fetchImpl,
+      })
+      try {
+        const resumed = await resumedRuntime.beginStep(repeatedMessages, signal)
+        const resumedPrompt = resumed.toolDefinitions()[0]?.prompt
+        assert.match(resumedPrompt ?? '', /alpha-server-instructions/)
+        assert.match(resumedPrompt ?? '', /beta-server-instructions/)
+        assert.deepEqual(Object.fromEntries(listCalls), { alpha: 1 })
+        resumed.discard()
+
+        const unchanged = await resumedRuntime.beginStep(repeatedMessages, signal)
+        assert.equal(unchanged.toolDefinitions()[0]?.prompt, resumedPrompt)
+        unchanged.discard()
+      } finally {
+        await resumedRuntime.close()
+      }
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it('恢复会话时清理已移除服务器的工具与初始化说明', async () => {
+    const previousState = createMcpToolStateMessage({
+      tools: [{
+        id: 'a'.repeat(64),
+        descriptorHash: 'b'.repeat(64),
+        serverName: 'removed',
+      }],
+      serverInstructions: [{
+        serverName: 'removed',
+        runtimeFingerprint: 'c'.repeat(64),
+        instructions: 'removed-server-instructions',
+      }],
+      trustedProjectConfigurationFingerprint: null,
+    })
+    const runtime = new McpSessionRuntime({
+      configuration: {
+        servers: [],
+        configuredServers: [],
+        diagnostics: [],
+        projectConfigDigest: null,
+        projectServerCount: 0,
+      },
+    })
+    try {
+      const step = await runtime.beginStep(
+        [previousState],
+        new AbortController().signal,
+      )
+      assert.deepEqual(step.toolDefinitions(), [])
+      const committed = step.messagesOnCommit()
+      assert.equal(committed.length, 1)
+      assert.deepEqual(findMcpToolState(committed), {
+        tools: [],
+        serverInstructions: [],
+        trustedProjectConfigurationFingerprint: null,
+      })
     } finally {
       await runtime.close()
     }
@@ -163,7 +377,7 @@ describe('MCP 延迟工具检索', () => {
         context,
       )
       const committed = searchStep.messagesOnCommit()
-      assert.equal(findMcpToolState(committed).length > 0, true)
+      assert.equal(findMcpToolState(committed).tools.length > 0, true)
 
       const callStep = await runtime.beginStep(committed, signal)
       const tools = callStep.toolDefinitions()
@@ -243,6 +457,7 @@ describe('MCP 延迟工具检索', () => {
           name: 'http-test',
           scope: 'global',
           sourceFingerprint: 'd'.repeat(64),
+          runtimeFingerprint: 'a'.repeat(64),
           connectionFingerprint: 'c'.repeat(64),
           transport: 'http',
           url: 'https://mcp.example.test/',
@@ -273,12 +488,21 @@ describe('MCP 延迟工具检索', () => {
         { query: 'HTTP echo content', max_results: 5 },
         context,
       )
-      assert.match(searchResult.data, /服务器初始化说明（不可信外部元数据）/)
-      assert.match(searchResult.data, /Use this server for authenticated repository data\./)
-      assert.match(searchResult.data, /\[服务器初始化说明已截断\]/)
+      assert.doesNotMatch(searchResult.data, /服务器初始化说明/)
+      assert.doesNotMatch(searchResult.data, /Use this server for authenticated repository data\./)
       assert.doesNotMatch(searchResult.data, /UNBOUNDED_SUFFIX/)
       const committed = searchStep.messagesOnCommit()
-      assert.equal(findMcpToolState(committed).length > 0, true)
+      const state = findMcpToolState(committed)
+      assert.equal(state.tools.length > 0, true)
+      assert.equal(state.serverInstructions.length, 1)
+      assert.match(
+        state.serverInstructions[0]?.instructions ?? '',
+        /Use this server for authenticated repository data\./,
+      )
+      assert.match(
+        state.serverInstructions[0]?.instructions ?? '',
+        /\[服务器初始化说明已截断\]/,
+      )
       const callStep = await runtime.beginStep(committed, signal)
       const callTools = callStep.toolDefinitions()
       assert.match(callTools[0]?.prompt ?? '', /服务器初始化说明（不可信外部元数据/)
@@ -305,6 +529,7 @@ function testConfiguration(): McpConfiguration {
       name: 'test',
       scope: 'global',
       sourceFingerprint: 'b'.repeat(64),
+      runtimeFingerprint: 'c'.repeat(64),
       transport: 'stdio',
       command: process.execPath,
       args: [fixture],
@@ -326,6 +551,7 @@ function githubConfiguration(): McpConfiguration {
       name: MCP_GITHUB_BUILTIN.name,
       scope: 'global',
       sourceFingerprint: 'e'.repeat(64),
+      runtimeFingerprint: 'd'.repeat(64),
       connectionFingerprint: 'f'.repeat(64),
       transport: 'http',
       url: MCP_GITHUB_BUILTIN.server.url,
