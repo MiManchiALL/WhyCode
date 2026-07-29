@@ -38,24 +38,15 @@ function appendCompletedWork(
   segment: readonly Block[],
   duration: WorkDurationBlock,
 ): void {
-  const rootIndex = segment.findIndex((block) => block.kind === 'user' && block.turnId)
-  if (rootIndex < 0) {
-    appendBlocks(sections, segment)
-    sections.push({ kind: 'block', id: duration.id, block: duration })
-    return
-  }
-
-  appendBlocks(sections, segment.slice(0, rootIndex))
-  const turnBlocks = segment.slice(rootIndex)
-  const finalIndexes = terminalResponseIndexes(turnBlocks)
+  const finalIndexes = terminalResponseIndexes(segment)
   sections.push({
     kind: 'completed-work',
     id: duration.id,
     duration,
-    userBlocks: turnBlocks.filter((block) => block.kind === 'user'),
-    activityBlocks: turnBlocks.filter((block, index) =>
+    userBlocks: segment.filter((block) => block.kind === 'user'),
+    activityBlocks: segment.filter((block, index) =>
       block.kind !== 'user' && !finalIndexes.has(index)),
-    finalBlocks: turnBlocks.filter((_block, index) => finalIndexes.has(index)),
+    finalBlocks: segment.filter((_block, index) => finalIndexes.has(index)),
   })
 }
 

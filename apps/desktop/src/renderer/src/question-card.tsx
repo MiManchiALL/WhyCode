@@ -1,6 +1,5 @@
 import { useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
-  userQuestionItems,
   type UserQuestion,
   type UserQuestionItem,
 } from '@whycode/core/events'
@@ -26,7 +25,7 @@ interface QuestionProgress {
 }
 
 export function QuestionCard({ question, disabled, onAnswer }: QuestionCardProps) {
-  const items = userQuestionItems(question)
+  const items = question.questions
   const progress = useQuestionProgress(items, disabled, onAnswer)
   return (
     <form

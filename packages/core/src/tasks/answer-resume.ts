@@ -2,13 +2,11 @@ import type { ModelMessage } from 'ai'
 import {
   MAX_USER_QUESTIONS,
   userQuestionAnswerPrefix,
-  userQuestionItems,
   type UserQuestion,
   type UserQuestionItem,
 } from '../events.ts'
 
-const USER_QUESTION_MARKER_OPEN_V1 = '<whycode-user-question version="1">'
-const USER_QUESTION_MARKER_OPEN_V2 = '<whycode-user-question version="2">'
+const USER_QUESTION_MARKER_OPEN = '<whycode-user-question version="2">'
 const USER_QUESTION_MARKER_CLOSE = '</whycode-user-question>'
 
 export interface UserQuestionBinding {
@@ -29,7 +27,7 @@ export function createUserQuestionMarker(
     role: 'user',
     content: [
       '<system-reminder>',
-      USER_QUESTION_MARKER_OPEN_V2,
+      USER_QUESTION_MARKER_OPEN,
       JSON.stringify(binding),
       resumesTaskPlan
         ? '上一回合的问题是继续当前活动计划所必需的等待点。只有通过问题卡提交、且明确引用原问题的回答才恢复原计划；其它新消息优先处理，旧计划保持休眠。'
@@ -69,7 +67,7 @@ export function isUserQuestionAnswer(
   text: string,
 ): boolean {
   const normalized = text.trim()
-  const items = userQuestionItems(binding.question)
+  const items = binding.question.questions
   if (items.length === 1) {
     const prefix = userQuestionAnswerPrefix(items[0]!, 0, 1)
     return normalized.startsWith(prefix) && normalized.slice(prefix.length).trim().length > 0
@@ -86,9 +84,7 @@ export function isUserQuestionAnswer(
 function isUserQuestionMarker(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
   const content = messageText(message).trim()
-  const markerOpen = questionMarkerOpen(content)
-  return markerOpen !== null
-    && content.startsWith(`<system-reminder>\n${markerOpen}\n`)
+  return content.startsWith(`<system-reminder>\n${USER_QUESTION_MARKER_OPEN}\n`)
     && content.endsWith(`${USER_QUESTION_MARKER_CLOSE}\n</system-reminder>`)
 }
 
@@ -104,11 +100,9 @@ function messageText(message: ModelMessage): string {
 
 function parseBinding(message: ModelMessage): UserQuestionBinding | null {
   const content = messageText(message)
-  const markerOpen = questionMarkerOpen(content)
-  if (!markerOpen) return null
-  const start = content.indexOf(markerOpen)
+  const start = content.indexOf(USER_QUESTION_MARKER_OPEN)
   if (start < 0) return null
-  const body = content.slice(start + markerOpen.length).trimStart()
+  const body = content.slice(start + USER_QUESTION_MARKER_OPEN.length).trimStart()
   const line = body.split('\n', 1)[0]
   if (!line) return null
   try {
@@ -126,19 +120,13 @@ function parseBinding(message: ModelMessage): UserQuestionBinding | null {
 
 function isUserQuestion(value: unknown): value is UserQuestion {
   if (!value || typeof value !== 'object') return false
+  if (Object.keys(value).some((key) => key !== 'id' && key !== 'questions')) return false
   const question = value as Partial<UserQuestion>
-  const questions: unknown = question.questions
   return typeof question.id === 'string'
-    && isUserQuestionItem(question)
-    && (
-      questions === undefined
-      || (
-        Array.isArray(questions)
-        && questions.length >= 1
-        && questions.length <= MAX_USER_QUESTIONS
-        && questions.every(isUserQuestionItem)
-      )
-    )
+    && Array.isArray(question.questions)
+    && question.questions.length >= 1
+    && question.questions.length <= MAX_USER_QUESTIONS
+    && question.questions.every(isUserQuestionItem)
 }
 
 function isUserQuestionItem(value: unknown): value is UserQuestionItem {
@@ -158,10 +146,4 @@ function isUserQuestionItem(value: unknown): value is UserQuestionItem {
         && 'description' in option
         && typeof option.description === 'string',
       ))
-}
-
-function questionMarkerOpen(content: string): string | null {
-  if (content.includes(USER_QUESTION_MARKER_OPEN_V2)) return USER_QUESTION_MARKER_OPEN_V2
-  if (content.includes(USER_QUESTION_MARKER_OPEN_V1)) return USER_QUESTION_MARKER_OPEN_V1
-  return null
 }

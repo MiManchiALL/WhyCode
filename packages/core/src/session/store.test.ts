@@ -333,12 +333,14 @@ describe('SessionStore', () => {
         type: 'user-question' as const,
         question: {
           id: 'question-1',
-          header: '实现偏好',
-          question: '你更看重哪一点？',
-          options: [
-            { label: '简单可靠', description: '减少复杂度' },
-            { label: '功能完整', description: '覆盖更多场景' },
-          ],
+          questions: [{
+            header: '实现偏好',
+            question: '你更看重哪一点？',
+            options: [
+              { label: '简单可靠', description: '减少复杂度' },
+              { label: '功能完整', description: '覆盖更多场景' },
+            ],
+          }],
         },
       },
     }
@@ -356,12 +358,14 @@ describe('SessionStore', () => {
     const journal = await store.create({ projectDir: null, modelId: 'test:model' })
     const question = {
       id: 'question-before-turn-end',
-      header: '运行系统',
-      question: '你使用哪个系统？',
-      options: [
-        { label: 'Windows', description: '按 Windows 环境处理' },
-        { label: 'macOS', description: '按 macOS 环境处理' },
-      ],
+      questions: [{
+        header: '运行系统',
+        question: '你使用哪个系统？',
+        options: [
+          { label: 'Windows', description: '按 Windows 环境处理' },
+          { label: 'macOS', description: '按 macOS 环境处理' },
+        ],
+      }],
     }
     await journal.recordTurnStart('turn-question-crash', [message('user', '继续配置')])
     await journal.recordStep(
@@ -1382,12 +1386,14 @@ async function waitingQuestionSession() {
   const journal = await store.create({ projectDir: null, modelId: 'test:model' })
   const question = {
     id: 'question-crash-window',
-    header: '运行系统',
-    question: '你使用哪个系统？',
-    options: [
-      { label: 'Windows', description: '按 Windows 环境处理' },
-      { label: 'macOS', description: '按 macOS 环境处理' },
-    ],
+    questions: [{
+      header: '运行系统',
+      question: '你使用哪个系统？',
+      options: [
+        { label: 'Windows', description: '按 Windows 环境处理' },
+        { label: 'macOS', description: '按 macOS 环境处理' },
+      ],
+    }],
   }
   const questionEvent = {
     type: 'core-event' as const,

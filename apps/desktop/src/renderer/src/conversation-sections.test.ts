@@ -91,25 +91,25 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(sections.map((section) => section.id), ids(blocks))
   })
 
-  it('逐个投影多个已完成任务，并兼容没有根 turn 锚点的旧时长块', () => {
+  it('按工作时长边界逐个投影多个已完成任务', () => {
     const sections = conversationSections([
-      text('legacy-text', '旧记录'),
-      duration('legacy-duration'),
       user('user-1', 'turn-1'),
       text('answer-1', '第一轮'),
       duration('duration-1'),
       user('user-2', 'turn-2'),
-      tool('tool-2'),
+      text('answer-2', '第二轮'),
+      duration('duration-2'),
+      user('user-3', 'turn-3'),
+      tool('tool-3'),
     ])
 
     assert.deepEqual(
       sections.map((section) => [section.kind, section.id]),
       [
-        ['block', 'legacy-text'],
-        ['block', 'legacy-duration'],
         ['completed-work', 'duration-1'],
-        ['block', 'user-2'],
-        ['block', 'tool-2'],
+        ['completed-work', 'duration-2'],
+        ['block', 'user-3'],
+        ['block', 'tool-3'],
       ],
     )
   })

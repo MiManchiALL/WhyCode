@@ -88,6 +88,32 @@ describe('用户可见事件契约', () => {
       viewEventSchema.safeParse({ type: 'core-event', event: { type: 'tool-end' } }).success,
       false,
     )
+    assert.equal(
+      viewEventSchema.safeParse({
+        type: 'core-event',
+        event: {
+          type: 'user-question',
+          question: {
+            id: 'old-question',
+            header: '旧格式',
+            question: '旧单题字段是否应继续读取？',
+            options: [
+              { label: '是', description: '继续读取旧结构' },
+              { label: '否', description: '只接受当前结构' },
+            ],
+            questions: [{
+              header: '旧格式',
+              question: '旧单题字段是否应继续读取？',
+              options: [
+                { label: '是', description: '继续读取旧结构' },
+                { label: '否', description: '只接受当前结构' },
+              ],
+            }],
+          },
+        },
+      }).success,
+      false,
+    )
   })
 
   it('只持久化工作终值，不持久化运行中的墙钟起点', () => {

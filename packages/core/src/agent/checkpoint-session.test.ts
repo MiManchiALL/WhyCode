@@ -98,11 +98,15 @@ describe('Agent 资源检查点联动', () => {
     })
     const question = {
       id: 'question-before-checkpoint',
-      header: '实现偏好',
-      question: '采用哪种实现？',
-      options: [
-        { label: '简单实现', description: '优先减少复杂度' },
-        { label: '完整实现', description: '优先覆盖更多场景' },
+      questions: [
+        {
+          header: '实现偏好',
+          question: '采用哪种实现？',
+          options: [
+            { label: '简单实现', description: '优先减少复杂度' },
+            { label: '完整实现', description: '优先覆盖更多场景' },
+          ],
+        },
       ],
     }
     await recorder.recordTurnStart('question-turn', [{ role: 'user', content: '继续任务' }])

@@ -38,7 +38,8 @@ describe('Main 主动提问', () => {
 
     assert.equal((await validateToolInput(tool, { questions: [item] })).success, true)
     assert.equal((await validateToolInput(tool, { questions: Array(6).fill(item) })).success, true)
-    assert.equal((await validateToolInput(tool, item)).success, true)
+    assert.equal((await validateToolInput(tool, item)).success, false)
+    assert.equal((await validateToolInput(tool, { ...item, questions: [item] })).success, false)
     assert.equal((await validateToolInput(tool, { questions: [] })).success, false)
     assert.equal((await validateToolInput(tool, { questions: Array(7).fill(item) })).success, false)
     assert.equal(z.toJSONSchema(tool.inputSchema).type, 'object')
@@ -56,11 +57,13 @@ describe('Main 主动提问', () => {
     const questions = events.filter((event) => event.type === 'user-question')
     assert.equal(questions.length, 1)
     assert.equal(
-      questions[0]?.type === 'user-question' ? questions[0].question.question : '',
+      questions[0]?.type === 'user-question'
+        ? questions[0].question.questions[0]?.question
+        : '',
       '你更看重哪一点？',
     )
     assert.equal(
-      questions[0]?.type === 'user-question' ? questions[0].question.questions?.length : 0,
+      questions[0]?.type === 'user-question' ? questions[0].question.questions.length : 0,
       2,
     )
     assert.equal(

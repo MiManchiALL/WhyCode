@@ -278,11 +278,15 @@ describe('用户中断后的新回合', () => {
         { role: 'assistant', content: '需要确认运行系统。' },
         createUserQuestionMarker({
           id: 'question-after-crash',
-          header: '运行系统',
-          question: '你使用哪个系统？',
-          options: [
-            { label: 'Windows', description: '按 Windows 环境处理' },
-            { label: 'macOS', description: '按 macOS 环境处理' },
+          questions: [
+            {
+              header: '运行系统',
+              question: '你使用哪个系统？',
+              options: [
+                { label: 'Windows', description: '按 Windows 环境处理' },
+                { label: 'macOS', description: '按 macOS 环境处理' },
+              ],
+            },
           ],
         }, true),
       ],
@@ -384,7 +388,7 @@ describe('用户中断后的新回合', () => {
 
     const binding = findPendingUserQuestion(session.captureMessageSnapshot())
     assert.equal(binding?.resumesTaskPlan, false)
-    assert.equal(binding?.question.question, '预算大约是多少？')
+    assert.equal(binding?.question.questions[0]?.question, '预算大约是多少？')
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.metadataSnapshot.status, 'waiting-user')
     assert.equal(findPendingUserQuestion([...reopened.initialMessages])?.resumesTaskPlan, false)
@@ -394,7 +398,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(
       restoredQuestions[0]?.type === 'core-event'
       && restoredQuestions[0].event.type === 'user-question'
-        ? restoredQuestions[0].event.question.question
+        ? restoredQuestions[0].event.question.questions[0]?.question
         : '',
       '预算大约是多少？',
     )
@@ -968,11 +972,15 @@ async function seedActivePlan(
   if (stopReason === 'waiting-user') {
     await journal.recordStep('seed-plan', [createUserQuestionMarker({
       id: 'question-plan-system',
-      header: '运行系统',
-      question: '你使用哪个系统？',
-      options: [
-        { label: 'Windows', description: '按 Windows 环境处理' },
-        { label: 'macOS', description: '按 macOS 环境处理' },
+      questions: [
+        {
+          header: '运行系统',
+          question: '你使用哪个系统？',
+          options: [
+            { label: 'Windows', description: '按 Windows 环境处理' },
+            { label: 'macOS', description: '按 macOS 环境处理' },
+          ],
+        },
       ],
     }, true)])
   }
@@ -1093,12 +1101,14 @@ function textAndToolStep(text: string, toolName: string, input: unknown) {
 
 function questionStep() {
   return toolStep(ASK_USER_QUESTION_TOOL_NAME, {
-    header: '礼物预算',
-    question: '预算大约是多少？',
-    options: [
-      { label: '100 元内', description: '选择实用小礼物' },
-      { label: '300 元内', description: '选择更有纪念性的礼物' },
-    ],
+    questions: [{
+      header: '礼物预算',
+      question: '预算大约是多少？',
+      options: [
+        { label: '100 元内', description: '选择实用小礼物' },
+        { label: '300 元内', description: '选择更有纪念性的礼物' },
+      ],
+    }],
   })
 }
 

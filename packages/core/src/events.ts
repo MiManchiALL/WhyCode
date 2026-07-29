@@ -36,21 +36,16 @@ export interface UserQuestionItem {
 }
 
 /** Main 需要用户决策时展示的可恢复问题卡。 */
-export interface UserQuestion extends UserQuestionItem {
+export interface UserQuestion {
   id: string
-  /** 新版问题批次；旧会话省略时按顶层的单个问题恢复。 */
-  questions?: UserQuestionItem[]
-}
-
-export function userQuestionItems(question: UserQuestion): readonly UserQuestionItem[] {
-  return question.questions?.length ? question.questions : [question]
+  questions: UserQuestionItem[]
 }
 
 export function formatUserQuestionAnswer(
   question: UserQuestion,
   answers: readonly string[],
 ): string {
-  const items = userQuestionItems(question)
+  const items = question.questions
   if (answers.length !== items.length || answers.some((answer) => !answer.trim())) {
     throw new Error('每个问题都需要非空回答')
   }

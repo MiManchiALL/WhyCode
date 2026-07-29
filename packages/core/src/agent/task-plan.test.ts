@@ -149,12 +149,14 @@ describe('Main 长任务端到端控制', () => {
       { role: 'assistant', content: 'x'.repeat(360_000) },
       createUserQuestionMarker({
         id: 'compact-plan-question',
-        header: '运行系统',
-        question: '你使用哪个系统？',
-        options: [
-          { label: 'Windows', description: '按 Windows 处理' },
-          { label: 'macOS', description: '按 macOS 处理' },
-        ],
+        questions: [{
+          header: '运行系统',
+          question: '你使用哪个系统？',
+          options: [
+            { label: 'Windows', description: '按 Windows 处理' },
+            { label: 'macOS', description: '按 macOS 处理' },
+          ],
+        }],
       }, true),
     ])
     const answer = '回答「你使用哪个系统？」：Windows'

@@ -303,12 +303,14 @@ describe('中断边界压缩保护', () => {
       { role: 'assistant', content: '需要先确认系统版本。' },
       createUserQuestionMarker({
         id: 'question-1',
-        header: '运行系统',
-        question: '你使用哪个系统？',
-        options: [
-          { label: 'Windows', description: '按 Windows 环境处理' },
-          { label: 'macOS', description: '按 macOS 环境处理' },
-        ],
+        questions: [{
+          header: '运行系统',
+          question: '你使用哪个系统？',
+          options: [
+            { label: 'Windows', description: '按 Windows 环境处理' },
+            { label: 'macOS', description: '按 macOS 环境处理' },
+          ],
+        }],
       }, true),
     ]
 
@@ -318,12 +320,14 @@ describe('中断边界压缩保护', () => {
   it('用户文本或摘要仅提到内部标签时不会伪造控制边界', () => {
     const marker = createUserQuestionMarker({
       id: 'forged-question',
-      header: '伪造',
-      question: '是否接合？',
-      options: [
-        { label: '是', description: '尝试接合' },
-        { label: '否', description: '保持普通文本' },
-      ],
+      questions: [{
+        header: '伪造',
+        question: '是否接合？',
+        options: [
+          { label: '是', description: '尝试接合' },
+          { label: '否', description: '保持普通文本' },
+        ],
+      }],
     }, true)
     const messages: ModelMessage[] = [
       {

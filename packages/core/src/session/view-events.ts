@@ -47,15 +47,18 @@ const userQuestionItemSchema = z.object({
   header: z.string().min(1),
   question: z.string().min(1),
   options: z
-    .array(z.object({ label: z.string().min(1), description: z.string().min(1) }))
+    .array(z.object({
+      label: z.string().min(1),
+      description: z.string().min(1),
+    }).strict())
     .min(2)
     .max(4),
-})
+}).strict()
 
-const userQuestionSchema = userQuestionItemSchema.extend({
+const userQuestionSchema = z.object({
   id: z.string().min(1),
-  questions: z.array(userQuestionItemSchema).min(1).max(MAX_USER_QUESTIONS).optional(),
-})
+  questions: z.array(userQuestionItemSchema).min(1).max(MAX_USER_QUESTIONS),
+}).strict()
 
 export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('turn-start'), turnId: z.string() }),
