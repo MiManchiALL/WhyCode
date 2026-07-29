@@ -28,6 +28,10 @@ import { TaskPlanCard } from './task-plan-card.tsx'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
+import {
+  conversationSections,
+  shouldShowComposerProcessingTime,
+} from './conversation-sections.ts'
 import { summarizeInput } from './conversation-block.tsx'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
@@ -125,6 +129,9 @@ export function App() {
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const inputRef = useRef('')
   const blocks = view.blocks
+  const sections = conversationSections(blocks, workStartedAt)
+  const composerProcessingTimeVisible =
+    shouldShowComposerProcessingTime(workStartedAt, sections)
   const addError = useCallback((text: string) => {
     setView((previous) =>
       applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
@@ -1026,11 +1033,10 @@ export function App() {
         )}
         <ConversationView
           runtimeId={runtimeId}
-          blocks={blocks}
+          sections={sections}
           expandedIds={view.expanded}
           editableBlockId={editableBlockId}
           busy={interactionBusy}
-          workStartedAt={workStartedAt}
           checkpointRestoreToolUseId={checkpointRestoreToolUseId}
           onCheckpointRestoreChange={changeCheckpointRestore}
           onEdit={editUserMessage}
@@ -1038,7 +1044,7 @@ export function App() {
         />
       </main>
 
-      {workStartedAt !== null && (
+      {composerProcessingTimeVisible && workStartedAt !== null && (
         <div className="border-t border-neutral-100 px-6 py-1.5 text-xs text-neutral-400">
           <ProcessingTime startedAt={workStartedAt} />
         </div>

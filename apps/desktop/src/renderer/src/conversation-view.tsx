@@ -1,18 +1,14 @@
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
-import {
-  conversationSections,
-  type ConversationSection,
-} from './conversation-sections.ts'
+import type { ConversationSection } from './conversation-sections.ts'
 import { formatProcessingTime, ProcessingTime } from './processing-time.ts'
 
 interface ConversationViewProps {
   runtimeId: string
-  blocks: readonly Block[]
+  sections: readonly ConversationSection[]
   expandedIds: ReadonlySet<string>
   editableBlockId: string | null
   busy: boolean
-  workStartedAt: number | null
   checkpointRestoreToolUseId: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
@@ -29,7 +25,7 @@ type WorkTiming =
   | { kind: 'completed'; durationMs: number }
 
 export function ConversationView(props: ConversationViewProps) {
-  return conversationSections(props.blocks, props.workStartedAt).map((section) =>
+  return props.sections.map((section) =>
     section.kind === 'block'
       ? <ConversationBlock key={section.id} {...props} block={section.block} />
       : <WorkSection key={section.id} {...props} section={section} />)

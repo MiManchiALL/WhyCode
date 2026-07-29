@@ -47,6 +47,18 @@ export function conversationSections(
   return sections
 }
 
+/**
+ * 输入区计时只在处理过程仍逐块展开时显示；活动任务摘要已经自带同一计时，
+ * 两处不能同时出现。
+ */
+export function shouldShowComposerProcessingTime(
+  workStartedAt: number | null,
+  sections: readonly ConversationSection[],
+): boolean {
+  return workStartedAt !== null
+    && !sections.some((section) => section.kind === 'active-work')
+}
+
 function appendActiveWork(
   sections: ConversationSection[],
   segment: readonly Block[],

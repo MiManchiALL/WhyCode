@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import type { Block } from './conversation-state.ts'
 import {
   conversationSections,
+  shouldShowComposerProcessingTime,
   type ConversationSection,
 } from './conversation-sections.ts'
 
@@ -105,6 +106,22 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(active.userBlocks), ['user-1'])
     assert.deepEqual(ids(active.activityBlocks), ['thinking-1', 'tool-1'])
     assert.deepEqual(ids(active.finalBlocks), ['answer'])
+  })
+
+  it('活动任务摘要出现后只保留摘要内计时，不再显示输入区计时', () => {
+    const runningSections = conversationSections([
+      user('user-1', 'turn-1'),
+      tool('tool-1'),
+    ], 1_000)
+    const activeSections = conversationSections([
+      user('user-1', 'turn-1'),
+      tool('tool-1'),
+      text('answer', '正在流式输出最终回答'),
+    ], 1_000)
+
+    assert.equal(shouldShowComposerProcessingTime(null, runningSections), false)
+    assert.equal(shouldShowComposerProcessingTime(1_000, runningSections), true)
+    assert.equal(shouldShowComposerProcessingTime(1_000, activeSections), false)
   })
 
   it('正文后继续调用工具时恢复运行中逐块展示', () => {
