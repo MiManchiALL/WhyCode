@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react'
-import { Streamdown } from 'streamdown'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -21,19 +20,15 @@ import {
   resumeTargetCommitted,
   toggleExpanded,
   voteLabel,
-  type Block,
 } from './conversation-state.ts'
-import {
-  CandidateCard,
-  PeerCard,
-} from './consensus-blocks.tsx'
 import { AppHeader } from './app-header.tsx'
 import { SessionPanel } from './session-panel.tsx'
 import { isCurrentSessionDeletion } from './session-deletion-state.ts'
 import { TaskPlanCard } from './task-plan-card.tsx'
 import { QuestionCard } from './question-card.tsx'
-import { formatProcessingTime, ProcessingTime } from './processing-time.ts'
-import { UserMessageCard } from './user-message-card.tsx'
+import { ProcessingTime } from './processing-time.ts'
+import { ConversationView } from './conversation-view.tsx'
+import { summarizeInput } from './conversation-block.tsx'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
@@ -41,7 +36,6 @@ import {
   QueuedImageStrip,
   releaseImageDrafts,
   useImageDrafts,
-  UserImageGallery,
 } from './image-attachments.tsx'
 import {
   prepareImageDrafts,
@@ -72,7 +66,6 @@ interface Approval {
   suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
 }
 
-/** M1-c 主界面：文本 + thinking + 工具卡片 + 审批。正式组件化（Streamdown/shadcn）在 M1 收尾时做。 */
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
   const [view, setView] = useState(() => createConversationState())
@@ -1031,20 +1024,17 @@ export function App() {
               : '正在准备默认工作文件夹…'}
           </p>
         )}
-        {blocks.map((b) => (
-          <BlockView
-            key={b.id}
-            runtimeId={runtimeId}
-            block={b}
-            editable={b.id === editableBlockId}
-            expanded={view.expanded.has(b.id)}
-            busy={interactionBusy}
-            checkpointRestoreToolUseId={checkpointRestoreToolUseId}
-            onCheckpointRestoreChange={changeCheckpointRestore}
-            onEdit={editUserMessage}
-            onToggle={() => toggle(b.id)}
-          />
-        ))}
+        <ConversationView
+          runtimeId={runtimeId}
+          blocks={blocks}
+          expandedIds={view.expanded}
+          editableBlockId={editableBlockId}
+          busy={interactionBusy}
+          checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+          onCheckpointRestoreChange={changeCheckpointRestore}
+          onEdit={editUserMessage}
+          onToggle={toggle}
+        />
       </main>
 
       {workStartedAt !== null && (
@@ -1215,147 +1205,6 @@ export function App() {
   )
 }
 
-function BlockView({
-  runtimeId,
-  block,
-  editable,
-  expanded,
-  busy,
-  checkpointRestoreToolUseId,
-  onCheckpointRestoreChange,
-  onEdit,
-  onToggle,
-}: {
-  runtimeId: string
-  block: Block
-  editable: boolean
-  expanded: boolean
-  busy: boolean
-  checkpointRestoreToolUseId: string | null
-  onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
-  onEdit: (turnId: string, text: string) => Promise<boolean>
-  onToggle: () => void
-}) {
-  if (block.kind === 'user') {
-    return (
-      <UserMessageCard
-        runtimeId={runtimeId}
-        block={block}
-        editable={editable}
-        disabled={busy}
-        onEdit={onEdit}
-      />
-    )
-  }
-  if (block.kind === 'text') {
-    return (
-      <div className="prose prose-sm prose-neutral mb-2 max-w-none px-3 py-2">
-        <Streamdown>{block.text}</Streamdown>
-      </div>
-    )
-  }
-  if (block.kind === 'error') {
-    return <div className="mb-2 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{block.text}</div>
-  }
-  if (block.kind === 'notice') {
-    return <div className="mb-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">{block.text}</div>
-  }
-  if (block.kind === 'plan-replaced') {
-    const completed = block.previous.items.filter((item) => item.status === 'completed').length
-    return (
-      <div className="mb-2 rounded border border-slate-200 bg-slate-50 text-xs text-slate-600">
-        <button
-          className="flex w-full items-center gap-2 px-3 py-2 text-left"
-          onClick={onToggle}
-        >
-          <span>↪</span>
-          <span className="min-w-0 flex-1 truncate">
-            已归档未完成计划“{block.previous.goal}”（{completed}/{block.previous.items.length}）
-          </span>
-          <span className="text-slate-400">{expanded ? '▾' : '▸'}</span>
-        </button>
-        {expanded && (
-          <div className="space-y-1 border-t border-slate-200 px-3 py-2">
-            <div>替换原因：{block.previous.summary}</div>
-            <div>当前计划：{block.nextGoal}</div>
-            {block.previous.items.map((item) => (
-              <div key={item.id} className="text-slate-400">
-                {item.id} [{item.status}] {item.title}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  }
-  if (block.kind === 'peer') {
-    return <PeerCard peer={block.peer} expanded={expanded} onToggle={onToggle} />
-  }
-  if (block.kind === 'candidate') {
-    return <CandidateCard candidate={block.candidate} expanded={expanded} onToggle={onToggle} />
-  }
-  if (block.kind === 'thinking') {
-    const streaming = block.durationMs === null
-    const open = streaming || expanded
-    return (
-      <div className="mb-2">
-        <button
-          className="text-xs text-neutral-400 hover:text-neutral-600"
-          onClick={() => !streaming && onToggle()}
-        >
-          {streaming ? '思考中…' : `思考了 ${(block.durationMs! / 1000).toFixed(1)}s ${open ? '▾' : '▸'}`}
-        </button>
-        {open && (
-          <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 pl-3 text-xs text-neutral-400">
-            {block.text}
-          </div>
-        )}
-      </div>
-    )
-  }
-  if (block.kind === 'work-duration') {
-    return (
-      <div className="mb-2 px-3 text-xs text-neutral-400">
-        {formatProcessingTime(block.durationMs)}
-      </div>
-    )
-  }
-  // tool
-  const { call } = block
-  const icon = call.status === 'running' ? '○' : call.status === 'error' ? '✗' : '✓'
-  const summary = summarizeInput(call.input)
-  return (
-    <div className="mb-2 rounded border border-neutral-200 bg-white text-sm">
-      <div className="flex w-full items-center gap-2 px-3 py-2">
-        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>
-          <span className={call.status === 'error' ? 'text-red-500' : 'text-neutral-500'}>{icon}</span>
-          <span className="font-medium">{call.name}</span>
-          <span className="truncate text-xs text-neutral-400">{summary}</span>
-        </button>
-        {call.hasCheckpoint && call.status !== 'running' && (
-          <RestoreButton
-            runtimeId={runtimeId}
-            toolUseId={call.id}
-            busy={busy}
-            pending={checkpointRestoreToolUseId === call.id}
-            onPendingChange={onCheckpointRestoreChange}
-          />
-        )}
-      </div>
-      {call.attachments?.length ? (
-        <div className="border-t border-neutral-100 px-3 pt-2">
-          <UserImageGallery attachments={call.attachments} />
-        </div>
-      ) : null}
-      {expanded && (call.result || call.progress) && (
-        <pre className="max-h-64 overflow-auto border-t border-neutral-100 px-3 py-2 text-xs text-neutral-600">
-          {call.result || call.progress}
-        </pre>
-      )}
-    </div>
-  )
-}
-
 function defaultDraftPrompt(imageCount: number, pdfCount: number): string {
   if (imageCount > 0 && pdfCount > 0) return '请分析这些附件。'
   if (imageCount > 0) return '请分析这些图片。'
@@ -1365,83 +1214,6 @@ function defaultDraftPrompt(imageCount: number, pdfCount: number): string {
 
 function composerKey(runtimeId: string, sessionId: string | null): string {
   return sessionId ?? `runtime:${runtimeId}`
-}
-
-/** 回滚按钮：点击展开两种范围选择 */
-function RestoreButton({
-  runtimeId,
-  toolUseId,
-  busy,
-  pending,
-  onPendingChange,
-}: {
-  runtimeId: string
-  toolUseId: string
-  busy: boolean
-  pending: boolean
-  onPendingChange: (toolUseId: string, pending: boolean) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const pendingRef = useRef(false)
-  const restore = async (scope: 'files' | 'files-and-chat') => {
-    if (pendingRef.current || busy) return
-    pendingRef.current = true
-    onPendingChange(toolUseId, true)
-    setOpen(false)
-    try {
-      await window.whycode.sendCommand(
-        runtimeId,
-        { type: 'restore-checkpoint', toolUseId, scope },
-      )
-    } finally {
-      pendingRef.current = false
-      onPendingChange(toolUseId, false)
-    }
-  }
-  if (pending) {
-    return (
-      <button
-        className="shrink-0 cursor-wait text-xs text-neutral-400"
-        disabled
-        aria-busy="true"
-      >
-        ○ 回滚中…
-      </button>
-    )
-  }
-  if (!open) {
-    return (
-      <button
-        className="shrink-0 text-xs text-neutral-400 hover:text-neutral-700"
-        disabled={busy}
-        title="回滚到此操作执行前"
-        onClick={() => setOpen(true)}
-      >
-        ⟲ 回滚
-      </button>
-    )
-  }
-  return (
-    <span className="flex shrink-0 gap-1 text-xs">
-      <button
-        className="rounded border border-neutral-300 px-2 py-0.5"
-        disabled={busy}
-        onClick={() => void restore('files')}
-      >
-        仅文件
-      </button>
-      <button
-        className="rounded border border-neutral-300 px-2 py-0.5"
-        disabled={busy}
-        onClick={() => void restore('files-and-chat')}
-      >
-        文件+对话
-      </button>
-      <button className="px-1 text-neutral-400" onClick={() => setOpen(false)}>
-        ✕
-      </button>
-    </span>
-  )
 }
 
 function ApprovalCard({
@@ -1509,14 +1281,4 @@ function ApprovalCard({
       </div>
     </div>
   )
-}
-
-function summarizeInput(input: unknown): string {
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    if (typeof obj.path === 'string') return obj.path
-    if (typeof obj.pattern === 'string') return obj.pattern
-    if (typeof obj.command === 'string') return obj.command
-  }
-  return JSON.stringify(input)
 }
