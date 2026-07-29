@@ -156,7 +156,9 @@ function normalizeTool(
   }
   const descriptorHash = stableHash({
     ...modelDescriptor,
-    sourceFingerprint: server.sourceFingerprint,
+    // 工具身份只绑定有效路由，不绑定配置中的凭据值。认证轮换不应让
+    // JSONL 留下凭据派生校验值，也不应使未变化的工具定义失效。
+    runtimeFingerprint: server.runtimeFingerprint,
   })
   const exposedName = uniqueExposedName(
     server.name,

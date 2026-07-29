@@ -25,9 +25,8 @@ describe('会话关联数据删除', () => {
     await writeFile(projectFile, 'user data')
 
     const sessions = new DesktopSessionRepository(sessionsRoot)
-    const deletedJournal = await sessions.ensure(project, 'test:model')
-    sessions.reset()
-    const currentJournal = await sessions.ensure(project, 'test:model')
+    const deletedJournal = await sessions.create(project, 'test:model')
+    const currentJournal = await sessions.create(project, 'test:model')
     const commandSessions = new CommandSessionManager(commandsRoot)
     await commandSessions.initialize()
     await mkdir(join(commandsRoot, deletedJournal.sessionId), { recursive: true })
@@ -63,7 +62,6 @@ describe('会话关联数据删除', () => {
     assert.equal(await readFile(currentCommandFile, 'utf8'), 'other command')
     assert.equal(await readFile(currentScratchFile, 'utf8'), 'other scratch')
     assert.equal(await readFile(currentCheckpointFile, 'utf8'), 'other checkpoint')
-    assert.equal(sessions.currentSessionId, currentJournal.sessionId)
     assert.equal(await readFile(projectFile, 'utf8'), 'user data')
   })
 
@@ -87,7 +85,7 @@ describe('会话关联数据删除', () => {
   it('前置清理失败时持久标成仅可重试删除', async () => {
     const root = await createRoot()
     const sessions = new DesktopSessionRepository(join(root, 'sessions'))
-    const journal = await sessions.ensure(null, 'test:model')
+    const journal = await sessions.create(null, 'test:model')
     await assert.rejects(
       deleteSessionArtifacts({
         sessionId: journal.sessionId,
@@ -101,7 +99,6 @@ describe('会话关联数据删除', () => {
     assert.equal(summary?.sessionId, journal.sessionId)
     assert.equal(summary?.resumable, false)
     assert.match(summary?.unavailableReason ?? '', /删除未完成.*重试删除/)
-    assert.equal(sessions.currentSessionId, null)
   })
 
   it('在删除会话事实源前完成引用型显示元数据收尾', async () => {

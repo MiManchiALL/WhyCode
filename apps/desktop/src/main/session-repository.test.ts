@@ -12,28 +12,15 @@ afterEach(async () => {
 })
 
 describe('DesktopSessionRepository 生命周期', () => {
-  it('并发确保首次会话时只创建一个 journal', async () => {
-    const repository = await createRepository()
-
-    const [first, second] = await Promise.all([
-      repository.ensure('C:\\work\\demo', 'test:model'),
-      repository.ensure('C:\\work\\demo', 'test:model'),
-    ])
-
-    assert.equal(first, second)
-    assert.equal((await repository.list()).length, 1)
-  })
-
   it('每个新会话分别固化创建时传入的自定义 System', async () => {
     const repository = await createRepository()
-    const first = await repository.ensure(
+    const first = await repository.create(
       'C:\\work\\demo',
       'test:model',
       'default',
       { mode: 'append', content: '第一版' },
     )
-    repository.reset()
-    const second = await repository.ensure(
+    const second = await repository.create(
       'C:\\work\\demo',
       'test:model',
       'default',
@@ -44,45 +31,51 @@ describe('DesktopSessionRepository 生命周期', () => {
     assert.deepEqual(second.customSystemPrompt, { mode: 'replace', content: '第二版' })
   })
 
-  it('删除当前会话后解除当前 journal', async () => {
+  it('删除会话后不再从磁盘列表返回', async () => {
     const repository = await createRepository()
-    const journal = await repository.ensure('C:\\work\\demo', 'test:model')
+    const journal = await repository.create('C:\\work\\demo', 'test:model')
 
     assert.equal(await repository.delete(journal.sessionId), true)
-    assert.equal(repository.currentSessionId, null)
+    assert.equal((await repository.list()).length, 0)
   })
 
-  it('删除同一项目的历史会话不影响当前会话', async () => {
+  it('删除同一项目的一个会话不影响另一个会话', async () => {
     const repository = await createRepository()
-    const historical = await repository.ensure('C:\\work\\shared', 'test:model')
-    repository.reset()
-    const current = await repository.ensure('C:\\work\\shared', 'test:model')
+    const historical = await repository.create('C:\\work\\shared', 'test:model')
+    const current = await repository.create('C:\\work\\shared', 'test:model')
 
     assert.equal(await repository.delete(historical.sessionId), true)
-    assert.equal(repository.currentSessionId, current.sessionId)
+    assert.deepEqual(
+      (await repository.list()).map((session) => session.sessionId),
+      [current.sessionId],
+    )
   })
 
-  it('候选会话只有显式 activate 后才替换当前会话', async () => {
+  it('候选会话打开失败时不影响已打开的会话', async () => {
     const repository = await createRepository()
-    const first = await repository.ensure('C:\\work\\one', 'test:model')
-    repository.reset()
-    const second = await repository.ensure('C:\\work\\two', 'test:model')
-    repository.reset()
-    repository.activate(first)
-
-    const candidate = await repository.prepareResume(second.sessionId)
-    assert.equal(repository.currentSessionId, first.sessionId)
-
-    repository.activate(candidate)
-    assert.equal(repository.currentSessionId, second.sessionId)
-  })
-
-  it('候选会话打开失败时保留当前会话', async () => {
-    const repository = await createRepository()
-    const current = await repository.ensure('C:\\work\\one', 'test:model')
+    const current = await repository.create('C:\\work\\one', 'test:model')
 
     await assert.rejects(repository.prepareResume('not-a-session'), /无效会话 ID/)
-    assert.equal(repository.currentSessionId, current.sessionId)
+    assert.equal((await repository.list())[0]?.sessionId, current.sessionId)
+  })
+
+  it('同一历史会话只打开一个 Journal 实例，供运行时恢复与附件协议共用', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-session-repository-opened-'))
+    const repository = new DesktopSessionRepository(root)
+    try {
+      const journal = await repository.create('C:\\project', 'model:test')
+      const [first, second] = await Promise.all([
+        repository.prepareResume(journal.sessionId),
+        repository.prepareResume(journal.sessionId),
+      ])
+      assert.equal(first, second)
+
+      repository.release(first)
+      const reopened = await repository.prepareResume(journal.sessionId)
+      assert.notEqual(reopened, first)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

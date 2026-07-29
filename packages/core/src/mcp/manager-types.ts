@@ -20,6 +20,12 @@ export interface McpManagerSnapshot {
   configDiagnostics: McpConfiguration['diagnostics']
 }
 
+export interface McpServerInstructionsSnapshot {
+  serverName: string
+  runtimeFingerprint: string
+  instructions: string
+}
+
 export interface McpBoundTool {
   tool: McpCatalogTool
   serverRevision: number

@@ -17,7 +17,12 @@ import type {
 import { McpServerConnection } from './server-connection.ts'
 
 export type { McpFetch } from './connection-utils.ts'
-export type { McpBoundTool, McpManagerSnapshot, McpServerStatus } from './manager-types.ts'
+export type {
+  McpBoundTool,
+  McpManagerSnapshot,
+  McpServerInstructionsSnapshot,
+  McpServerStatus,
+} from './manager-types.ts'
 
 export class McpConnectionManager {
   private readonly connections = new Map<string, McpServerConnection>()

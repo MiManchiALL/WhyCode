@@ -48,6 +48,7 @@ describe('Agent 资源检查点联动', () => {
       modelId: 'test:checkpoint',
     })
     const events: CoreEvent[] = []
+    const scheduledMutations: string[] = []
     let approvals = 0
     const session = new AgentSession({
       model: modelEntry(modelWriting(target)),
@@ -59,11 +60,16 @@ describe('Agent 资源检查点联动', () => {
         approvals++
         return { approved: true, remember: false }
       },
+      scheduleProjectMutation: async (mutation, _signal, operation) => {
+        scheduledMutations.push(mutation.type)
+        return operation()
+      },
     })
 
     assert.equal(await session.handleUserMessage('在外部目录创建文件'), 'completed')
     assert.equal(approvals, 1)
     assert.equal(await readFile(target, 'utf8'), 'hello')
+    assert.deepEqual(scheduledMutations, ['tool'])
     const checkpoint = events.find((event) => event.type === 'checkpoint-created')
     assert.ok(checkpoint?.type === 'checkpoint-created')
     assert.equal(checkpoint.coverage, 'complete')
@@ -77,6 +83,7 @@ describe('Agent 资源检查点联动', () => {
     const restored = events.filter((event) => event.type === 'checkpoint-restored')
     assert.equal(restored.length, 1)
     assert.equal(restored[0]?.type === 'checkpoint-restored' && restored[0].ok, true)
+    assert.deepEqual(scheduledMutations, ['tool', 'checkpoint-restore'])
   })
 
   it('文件和对话回滚到 Ask 等待点时原子恢复问题卡', async () => {

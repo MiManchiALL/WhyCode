@@ -110,7 +110,7 @@ import {
 } from '../permissions/types.ts'
 import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
 import type { McpManagerSnapshot } from '../mcp/manager.ts'
-import { withoutMcpToolState } from '../mcp/state.ts'
+import { carryMcpToolState, withoutMcpToolState } from '../mcp/state.ts'
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
@@ -137,6 +137,17 @@ export interface AgentSessionOptions {
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
   mcpRuntime?: McpSessionRuntime
+  /**
+   * 宿主级项目副作用调度边界。单个 Agent 内仍由 serialToolTail 保序；桌面宿主
+   * 可在此进一步串行同一项目中来自不同会话的 edit/execute 与检查点回滚。
+   */
+  scheduleProjectMutation?: <T>(
+    mutation:
+      | { type: 'tool'; name: string; kind: 'edit' | 'execute' }
+      | { type: 'checkpoint-restore'; toolUseId: string },
+    abortSignal: AbortSignal,
+    operation: () => Promise<T>,
+  ) => Promise<T>
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
   /** 审批回调（宿主注入）：返回用户的决定 */
@@ -313,9 +324,14 @@ export class AgentSession {
     providerConfig: ProviderConfig,
     reasoningEffort: ReasoningEffortSelection,
   ): Promise<void> {
-    await this.persist((recorder) =>
-      recorder.updateModelSelection(model.id, reasoningEffort),
-    )
+    if (
+      this.options.model.id !== model.id
+      || this.options.reasoningEffort !== reasoningEffort
+    ) {
+      await this.persist((recorder) =>
+        recorder.updateModelSelection(model.id, reasoningEffort),
+      )
+    }
     this.options = { ...this.options, model, providerConfig, reasoningEffort }
   }
 
@@ -1075,7 +1091,7 @@ export class AgentSession {
         (messages) => this.messagesForCurrentModel(messages, signal),
         this.requestProviderOptions(),
       )
-      this.messages = result.messages
+      this.messages = carryMcpToolState(this.messages, result.messages)
       await this.refreshProjectInstructions()
       this.rebuildActivePdfAttachments()
       await this.persist((recorder) =>
@@ -1154,7 +1170,7 @@ export class AgentSession {
         (messages) => this.messagesForCurrentModel(messages, abortSignal),
         this.requestProviderOptions(),
       )
-      this.messages = result.messages
+      this.messages = carryMcpToolState(this.messages, result.messages)
       await this.refreshProjectInstructions()
       this.rebuildActivePdfAttachments()
       await this.persist((recorder) =>
@@ -1978,7 +1994,19 @@ export class AgentSession {
         }
         return def.isReadOnly
           ? executeTool(input, context)
-          : this.enqueueSerialTool(() => executeTool(input, context))
+          : this.enqueueSerialTool(() => {
+              const operation = () => executeTool(input, context)
+              return (
+                (def.kind === 'edit' || def.kind === 'execute')
+                && this.options.scheduleProjectMutation
+              )
+                ? this.options.scheduleProjectMutation(
+                    { type: 'tool', name: def.name, kind: def.kind },
+                    abortSignal,
+                    operation,
+                  )
+                : operation()
+            })
       }
       toolSet[def.name] = aiTool({
         description: def.prompt,
@@ -2012,72 +2040,16 @@ export class AgentSession {
     if (this.restoringCheckpointToolUseId) return
     this.restoringCheckpointToolUseId = toolUseId
     try {
-      const record = await this.checkpoints.getReady(toolUseId)
-      if (!record) {
-        this.emitCheckpointRestored({
-          type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false,
-          error: '该操作没有可用快照',
-        })
-        return
+      const operation = () => this.restoreCheckpointUnshared(toolUseId, scope)
+      if (this.options.scheduleProjectMutation) {
+        await this.options.scheduleProjectMutation(
+          { type: 'checkpoint-restore', toolUseId },
+          new AbortController().signal,
+          operation,
+        )
+      } else {
+        await operation()
       }
-      const recorder = this.options.sessionRecorder
-      const rollbackMessages = scope === 'files-and-chat'
-        ? recorder?.messagesBeforeTurn(record.turnId) ?? null
-        : null
-      const rollbackTaskState = scope === 'files-and-chat'
-        ? recorder?.taskStateBeforeTurn(record.turnId)
-        : undefined
-      if (
-        scope === 'files-and-chat' &&
-        (rollbackMessages === null || rollbackTaskState === undefined)
-      ) {
-        this.emitCheckpointRestored({
-          type: 'checkpoint-restored',
-          toolUseId,
-          turnId: record.turnId,
-          scope,
-          ok: false,
-          error: '该轮早于上下文压缩或当前活动历史，只能回滚文件（选「仅文件」）',
-        })
-        return
-      }
-      const originalMessages = structuredClone(this.messages)
-      const originalTaskState = this.taskPlan?.stateSnapshot
-      const rollbackQuestion = rollbackMessages === null
-        ? undefined
-        : findPendingUserQuestion(rollbackMessages)?.question ?? null
-      const result = await this.checkpoints.restore(
-        toolUseId,
-        scope,
-        rollbackMessages !== null && recorder ? {
-          commit: async () => {
-            await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskState)
-            this.messages = structuredClone(rollbackMessages)
-            this.rebuildActivePdfAttachments()
-            this.taskPlan?.restore(rollbackTaskState!)
-            this.tokenBaseline = null
-          },
-          compensate: async () => {
-            await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskState)
-            this.messages = structuredClone(originalMessages)
-            this.rebuildActivePdfAttachments()
-            if (originalTaskState) this.taskPlan?.restore(originalTaskState)
-            this.tokenBaseline = null
-          },
-        } : undefined,
-      )
-      this.emitCheckpointRestored({
-        type: 'checkpoint-restored',
-        toolUseId,
-        turnId: result.turnId ?? record.turnId,
-        scope,
-        ok: result.ok,
-        error: result.error,
-        invalidatedToolUseIds: result.invalidatedToolUseIds,
-        ...(result.ok && scope === 'files-and-chat'
-          ? { taskPlan: rollbackTaskState?.activePlan ?? null, question: rollbackQuestion ?? null }
-          : {}),
-      })
     } finally {
       this.restoringCheckpointToolUseId = null
       if (this.queue.length > 0) {
@@ -2089,6 +2061,78 @@ export class AgentSession {
       }
       this.resolveIdleWaiters()
     }
+  }
+
+  private async restoreCheckpointUnshared(
+    toolUseId: string,
+    scope: 'files' | 'files-and-chat',
+  ): Promise<void> {
+    const record = await this.checkpoints!.getReady(toolUseId)
+    if (!record) {
+      this.emitCheckpointRestored({
+        type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false,
+        error: '该操作没有可用快照',
+      })
+      return
+    }
+    const recorder = this.options.sessionRecorder
+    const rollbackMessages = scope === 'files-and-chat'
+      ? recorder?.messagesBeforeTurn(record.turnId) ?? null
+      : null
+    const rollbackTaskState = scope === 'files-and-chat'
+      ? recorder?.taskStateBeforeTurn(record.turnId)
+      : undefined
+    if (
+      scope === 'files-and-chat'
+      && (rollbackMessages === null || rollbackTaskState === undefined)
+    ) {
+      this.emitCheckpointRestored({
+        type: 'checkpoint-restored',
+        toolUseId,
+        turnId: record.turnId,
+        scope,
+        ok: false,
+        error: '该轮早于上下文压缩或当前活动历史，只能回滚文件（选「仅文件」）',
+      })
+      return
+    }
+    const originalMessages = structuredClone(this.messages)
+    const originalTaskState = this.taskPlan?.stateSnapshot
+    const rollbackQuestion = rollbackMessages === null
+      ? undefined
+      : findPendingUserQuestion(rollbackMessages)?.question ?? null
+    const result = await this.checkpoints!.restore(
+      toolUseId,
+      scope,
+      rollbackMessages !== null && recorder ? {
+        commit: async () => {
+          await recorder.recordSnapshot('rollback', rollbackMessages, undefined, rollbackTaskState)
+          this.messages = structuredClone(rollbackMessages)
+          this.rebuildActivePdfAttachments()
+          this.taskPlan?.restore(rollbackTaskState!)
+          this.tokenBaseline = null
+        },
+        compensate: async () => {
+          await recorder.recordSnapshot('rollback', originalMessages, undefined, originalTaskState)
+          this.messages = structuredClone(originalMessages)
+          this.rebuildActivePdfAttachments()
+          if (originalTaskState) this.taskPlan?.restore(originalTaskState)
+          this.tokenBaseline = null
+        },
+      } : undefined,
+    )
+    this.emitCheckpointRestored({
+      type: 'checkpoint-restored',
+      toolUseId,
+      turnId: result.turnId ?? record.turnId,
+      scope,
+      ok: result.ok,
+      error: result.error,
+      invalidatedToolUseIds: result.invalidatedToolUseIds,
+      ...(result.ok && scope === 'files-and-chat'
+        ? { taskPlan: rollbackTaskState?.activePlan ?? null, question: rollbackQuestion ?? null }
+        : {}),
+    })
   }
 
   private emitCheckpointRestored(

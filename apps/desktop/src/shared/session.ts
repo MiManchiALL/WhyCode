@@ -1,6 +1,7 @@
 import type {
   AgentStatus,
   ApprovalRequest,
+  CoreCommand,
   CoreEvent,
   QueuedUserMessage,
   SessionMetadata,
@@ -10,10 +11,19 @@ import type {
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 
-export type SessionListItem = SessionSummary & { isCurrent: boolean }
+export type SessionListItem = SessionSummary & {
+  isCurrent: boolean
+  /** 仅当该对话当前仍有内存运行时时存在。 */
+  runtimeStatus?: AgentStatus
+  running: boolean
+  /** 只表示仍有审批或问题等待用户处理；普通错误结束不属于待操作。 */
+  needsAttention: boolean
+}
 
 /** Renderer 可随时丢失；主进程用该快照恢复稳定界面和仍在运行的控制状态。 */
 export interface RuntimeSnapshot {
+  /** 对话运行时的稳定路由 ID；草稿尚未建立 JSONL 时也存在。 */
+  runtimeId: string
   projectDir: string | null
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
@@ -37,25 +47,28 @@ export interface RuntimeSnapshot {
 }
 
 export interface RuntimeEventEnvelope {
+  runtimeId: string
+  sessionId: string | null
   sequence: number
   event: CoreEvent
+}
+
+export interface RuntimeCommandEnvelope {
+  runtimeId: string
+  command: CoreCommand
 }
 
 export type ResumeSessionResult =
   | {
       ok: true
-      session: SessionMetadata
-      viewEvents: ViewEvent[]
-      queuedInputs: QueuedUserMessage[]
-      restoredInputs: QueuedUserMessage[]
-      recoveredFromInterruption: boolean
+      snapshot: RuntimeSnapshot
     }
   | { ok: false; error: string }
 
 export type NewSessionResult =
-  | { ok: true; projectDir: string }
+  | { ok: true; snapshot: RuntimeSnapshot }
   | { ok: false; error: string }
 
 export type DeleteSessionResult =
-  | { ok: true; deletedCurrent: boolean }
-  | { ok: false; error: string; deletedCurrent?: boolean }
+  | { ok: true; deletedCurrent: boolean; snapshot?: RuntimeSnapshot }
+  | { ok: false; error: string; deletedCurrent?: boolean; snapshot?: RuntimeSnapshot }

@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path'
 import {
   AgentSession,
   cleanupUnreferencedAttachments,
-  cleanupConversationScratch,
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
@@ -17,12 +16,9 @@ import {
   loadMcpConfiguration,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
-  type ApprovalRequest,
-  type ApprovalResponse,
   type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
-  type AgentStatus,
   type ImageAttachment,
   type ModelEntry,
   type PdfAttachment,
@@ -69,8 +65,10 @@ import {
   loadCustomSystemPromptSnapshot,
 } from './custom-system-prompt.ts'
 import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
-import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
-import { ViewTimeline } from './view-timeline.ts'
+import { routeUserMessage } from './user-message-routing.ts'
+import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
+import { SessionRuntimeRegistry } from './session-runtime-registry.ts'
+import { HostOperationScheduler } from './host-operation-scheduler.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import { ElectronPdfProcessor } from './pdf/processor.ts'
 import { openPdfAttachment } from './pdf/open.ts'
@@ -86,6 +84,7 @@ import type {
   ResumeSessionResult,
   RuntimeSnapshot,
   RuntimeEventEnvelope,
+  RuntimeCommandEnvelope,
   SessionListItem,
 } from '../shared/session.ts'
 import type {
@@ -228,81 +227,71 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-function broadcastEvent(event: CoreEvent, persistView = true): void {
-  if (event.type === 'agent-status') currentAgentStatus = event.status
-  if (persistView) viewTimeline.capture(sessions?.journal ?? null, event)
-  const envelope: RuntimeEventEnvelope = { sequence: ++runtimeEventSequence, event }
+function broadcastRuntimeEvent(runtime: DesktopSessionRuntime, event: CoreEvent): void {
+  const envelope: RuntimeEventEnvelope = {
+    runtimeId: runtime.runtimeId,
+    sessionId: runtime.sessionId,
+    sequence: ++runtimeEventSequence,
+    event,
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(IPC.event, envelope)
   }
+  if (
+    event.type === 'agent-status'
+    && (event.status === 'idle' || event.status === 'error')
+  ) {
+    runtimeRegistry.runtimeBecameIdle(runtime)
+  }
 }
 
-/** M1 单窗口单会话：一个全局 session。多会话管理属后续模块。 */
-let session: AgentSession | null = null
-let sessionInitialization: Promise<string | null> | null = null
 /** 当前工作文件夹；app ready 后始终有值，启动默认目录与用户选择目录共享同一工具语义。 */
-let projectDir: string | null = null
 let defaultWorkspaceDir: string | null = null
-/** 待用户审批的请求：requestId → resolve */
-const pendingApprovals = new Map<string, {
-  request: ApprovalRequest
-  resolve: (response: ApprovalResponse) => void
-}>()
 /** Renderer 可以重载，权威运行态必须保留在不会随页面消失的主进程。 */
-let currentAgentStatus: AgentStatus = 'idle'
 let runtimeEventSequence = 0
 // --- 多 Agent 协商（M3）---
-let consensusEnabled = false
-let coordinator: ConsensusCoordinator | null = null
-/** 会话级对话 ID（scratch 目录归属；换工作文件夹即换对话） */
-let conversationId = `conv-${Date.now()}`
 /** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
 let sessions: DesktopSessionRepository
+let runtimeRegistry!: SessionRuntimeRegistry
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
 /** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
 const sessionDeletionLock = new SessionDeletionLock()
 /** 历史会话完整校验与候选运行时构造期间，只允许一个恢复事务。 */
 const sessionResumeLock = new SessionResumeLock()
-/** 附件复制期间拒绝其它输入，避免落盘与根消息分类之间发生竞态。 */
-let attachmentPreparationInProgress = false
 /** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
-/** JSONL 落盘与 Agent 接收之间的 FIFO 闸门。 */
-const userMessageRoutingGate = new UserMessageRoutingGate()
-const viewTimeline = new ViewTimeline((error) => {
-  broadcastEvent(
-    {
-      type: 'error',
-      message: `界面历史未能写入会话记录：${error instanceof Error ? error.message : String(error)}`,
-      recoverable: true,
-    },
-    false,
-  )
-})
+const hostOperations = new HostOperationScheduler()
 
-function requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
-  return new Promise((resolve) => {
-    pendingApprovals.set(request.requestId, { request: structuredClone(request), resolve })
-    broadcastEvent({ type: 'approval-request', ...request })
-  })
+/** 会话创建前用户已选的权限档位（创建时应用） */
+let preferredModelId: string | null = null
+let preferredPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' = 'default'
+let preferredConsensusEnabled = false
+
+function selectedRuntime(): DesktopSessionRuntime {
+  const runtime = runtimeRegistry.selected
+  if (!runtime) throw new Error('当前会话运行时尚未初始化')
+  return runtime
 }
 
-/** 当前选中的模型（与会话解耦：选目录前也可以切模型） */
-let currentModelId: string | null = null
-/** 与当前模型一起持久化的会话级推理强度；default 表示不覆盖连接/厂商默认。 */
-let currentReasoningEffort: ReasoningEffortSelection = 'default'
-/** 会话创建前用户已选的权限档位（创建时应用） */
-let pendingPermissionMode: 'readonly' | 'default' | 'acceptEdits' | 'auto' | null = null
-/** reset/恢复是同步切换事实源；异步资源释放在此串行，退出时统一等待。 */
-let sessionDisposalTail: Promise<void> = Promise.resolve()
+function runtimeForId(runtimeId?: string): DesktopSessionRuntime {
+  if (!runtimeId) return selectedRuntime()
+  const runtime = runtimeRegistry.get(runtimeId)
+  if (!runtime) throw new Error('目标会话运行时已卸载，请从历史记录重新打开')
+  return runtime
+}
 
-function disposeSession(target: AgentSession | null): void {
-  if (!target) return
-  sessionDisposalTail = sessionDisposalTail
-    .then(() => target.dispose())
-    .catch((error) => console.error('MCP 会话清理失败：', error))
+function createDraftRuntime(projectDir: string): DesktopSessionRuntime {
+  const runtime = new DesktopSessionRuntime({
+    projectDir,
+    modelId: preferredModelId ?? resolveDefaultModelId(loadAppConfig()),
+    permissionMode: preferredPermissionMode,
+    emit: broadcastRuntimeEvent,
+  })
+  runtime.consensusEnabled = preferredConsensusEnabled
+  runtimeRegistry.add(runtime)
+  return runtime
 }
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
@@ -316,66 +305,73 @@ function validateModel(modelId: string): string | null {
 }
 
 /** Main 持有模型选择事实；首次读取时按配置初始化，之后保留用户的会话内选择。 */
-function resolveCurrentModelId(): string | null {
-  currentModelId ??= resolveDefaultModelId(loadAppConfig())
-  return currentModelId
+function resolveCurrentModelId(runtime: DesktopSessionRuntime): string | null {
+  runtime.modelId ??= preferredModelId ?? resolveDefaultModelId(loadAppConfig())
+  return runtime.modelId
 }
 
-async function ensureSession(): Promise<string | null> {
-  const modelId = resolveCurrentModelId()
+async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | null> {
+  const modelId = resolveCurrentModelId(runtime)
   if (!modelId) return '没有任何已配置 key 的模型可用'
   const err = validateModel(modelId)
   if (err) return err
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) return resolved.error
   const { entry, providerConfig } = resolved.value
-  currentReasoningEffort = normalizeReasoningEffortSelection(
+  runtime.reasoningEffort = normalizeReasoningEffortSelection(
     entry.capabilities,
-    currentReasoningEffort,
+    runtime.reasoningEffort,
   )
-  if (session) {
-    await session.setModelSelection(entry, providerConfig, currentReasoningEffort)
+  if (runtime.session) {
+    await runtime.session.setModelSelection(entry, providerConfig, runtime.reasoningEffort)
   } else {
-    if (!sessionInitialization) {
+    if (!runtime.sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const customSystemPrompt = sessions.journal
+        const customSystemPrompt = runtime.journal
           ? undefined
           : await loadCustomSystemPromptSnapshot(customSystemPromptConfigPath)
-        const recorder = await sessions.ensure(
-          projectDir,
+        const recorder = runtime.journal ?? await sessions.create(
+          runtime.projectDir,
           modelId,
-          currentReasoningEffort,
+          runtime.reasoningEffort,
           customSystemPrompt,
         )
-        if (!session) {
-          conversationId = recorder.sessionId
-          session = await createMainAgentSession(
+        runtime.journal = recorder
+        if (!runtime.session) {
+          runtime.session = await createMainAgentSession(
+            runtime,
             recorder,
-            projectDir,
+            runtime.projectDir,
             entry,
             providerConfig,
-            currentReasoningEffort,
+            runtime.reasoningEffort,
           )
-          coordinator = null // 新会话必须换新协调器（session_score 等按对话重置）
+          runtime.coordinator = null
         }
-        if (consensusEnabled && !coordinator) return buildCoordinator()
+        if (runtime.consensusEnabled && !runtime.coordinator) {
+          return buildCoordinator(runtime)
+        }
         return null
       })().finally(() => {
-        if (sessionInitialization === pending) sessionInitialization = null
+        if (runtime.sessionInitialization === pending) {
+          runtime.sessionInitialization = null
+          runtime.notifyStateChanged()
+        }
       })
-      sessionInitialization = pending
+      runtime.sessionInitialization = pending
     }
-    return sessionInitialization
+    return runtime.sessionInitialization
   }
-  if (consensusEnabled && !coordinator) {
-    const err2 = buildCoordinator()
+  if (runtime.consensusEnabled && !runtime.coordinator) {
+    const err2 = buildCoordinator(runtime)
     if (err2) return err2
   }
   return null
 }
 
 async function createMainAgentSession(
+  runtime: DesktopSessionRuntime,
   recorder: SessionJournal,
   targetProjectDir: string | null,
   model: ModelEntry,
@@ -418,12 +414,18 @@ async function createMainAgentSession(
         webSearchTool,
         ...createSessionWebPageTools(recorder),
       ],
-      captureScreenshot: captureDesktopScreenshot,
+      captureScreenshot: (request, abortSignal) =>
+        hostOperations.runScreenshot(
+          abortSignal,
+          () => captureDesktopScreenshot(request, abortSignal),
+        ),
       pdfProcessor,
-      emit: broadcastEvent,
-      requestApproval,
+      scheduleProjectMutation: (_mutation, abortSignal, operation) =>
+        hostOperations.runProjectWrite(runtime.projectDir, abortSignal, operation),
+      emit: (event) => runtime.emit(event),
+      requestApproval: (request) => runtime.requestApproval(request),
     })
-    if (pendingPermissionMode) next.setPermissionMode(pendingPermissionMode)
+    next.setPermissionMode(runtime.permissionMode)
     return next
   } catch (error) {
     await mcpRuntime.close().catch(() => {})
@@ -447,16 +449,23 @@ function checkConsensusReady(): string | null {
   return null
 }
 
-function buildCoordinator(): string | null {
-  const journal = sessions.journal
+function buildCoordinator(runtime: DesktopSessionRuntime): string | null {
+  const journal = runtime.journal
   if (!journal) return '会话记录尚未初始化，无法启动协商'
-  const result = createCoordinator(session!, journal, projectDir, conversationId)
+  const result = createCoordinator(
+    runtime,
+    runtime.session!,
+    journal,
+    runtime.projectDir,
+    journal.sessionId,
+  )
   if (!result.ok) return result.error
-  coordinator = result.value
+  runtime.coordinator = result.value
   return null
 }
 
 function createCoordinator(
+  runtime: DesktopSessionRuntime,
   mainSession: AgentSession,
   journal: SessionJournal,
   targetProjectDir: string | null,
@@ -477,8 +486,8 @@ function createCoordinator(
     agents: { B: setup('B'), C: setup('C') },
     osPlatform: process.platform,
     homeDir: app.getPath('home'),
-    emit: broadcastEvent,
-    requestApproval,
+    emit: (event) => runtime.emit(event),
+    requestApproval: (request) => runtime.requestApproval(request),
     initialState: journal.initialConsensusState,
     onTaskStart: (taskId, state, userText, deliveredInputIds) =>
       journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds),
@@ -489,59 +498,57 @@ function createCoordinator(
   return { ok: true, value }
 }
 
-async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | void> {
-  if (sessionDeletionLock.blocksRuntime) {
-    broadcastEvent({
+async function handleCommand(
+  runtime: DesktopSessionRuntime,
+  command: CoreCommand,
+): Promise<{ ok: boolean } | void> {
+  if (
+    sessionDeletionLock.blocksRuntime
+    && sessionDeletionLock.sessionId === runtime.sessionId
+  ) {
+    runtime.emit({
       type: 'error',
       message: '会话数据删除中，请等待完成后再操作',
       recoverable: true,
     })
     return { ok: false }
   }
-  if (sessionResumeLock.sessionId) {
-    broadcastEvent({
-      type: 'error',
-      message: resumeInProgressMessage('操作'),
-      recoverable: true,
-    }, false)
-    return { ok: false }
-  }
   switch (command.type) {
     case 'user-message':
-      return handleUserMessageCommand(command)
+      return handleUserMessageCommand(runtime, command)
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
-      for (const pending of pendingApprovals.values()) pending.resolve({ approved: false })
-      pendingApprovals.clear()
-      if (coordinator) await coordinator.abort()
-      else session?.abort()
+      await runtime.abort()
       break
     }
     case 'set-consensus': {
       if (!command.enabled) {
-        if (coordinator?.busy) {
-          broadcastEvent({ type: 'error', message: '协商进行中，请先停止再关闭', recoverable: true })
+        if (runtime.coordinator?.busy) {
+          runtime.emit({ type: 'error', message: '协商进行中，请先停止再关闭', recoverable: true })
           return { ok: false }
         }
-        consensusEnabled = false
+        runtime.consensusEnabled = false
+        preferredConsensusEnabled = false
         return { ok: true }
       }
       const notReady = checkConsensusReady()
       if (notReady) {
-        broadcastEvent({ type: 'error', message: notReady, recoverable: true })
+        runtime.emit({ type: 'error', message: notReady, recoverable: true })
         return { ok: false }
       }
-      consensusEnabled = true
+      runtime.consensusEnabled = true
+      preferredConsensusEnabled = true
       return { ok: true }
     }
     case 'set-permission-mode': {
-      session?.setPermissionMode(command.mode)
-      pendingPermissionMode = command.mode
+      runtime.session?.setPermissionMode(command.mode)
+      runtime.permissionMode = command.mode
+      preferredPermissionMode = command.mode
       return { ok: true }
     }
     case 'restore-checkpoint': {
-      if (runtimeBusy()) {
-        broadcastEvent({
+      if (runtimeBusy(runtime)) {
+        runtime.emit({
           type: 'checkpoint-restored',
           toolUseId: command.toolUseId,
           turnId: '',
@@ -551,32 +558,32 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         }, false)
         break
       }
-      await session?.restoreCheckpoint(command.toolUseId, command.scope)
+      await runtime.session?.restoreCheckpoint(command.toolUseId, command.scope)
       break
     }
     case 'compact': {
-      if (attachmentPreparationInProgress) {
-        broadcastEvent({
+      if (runtime.attachmentPreparationInProgress) {
+        runtime.emit({
           type: 'error',
           message: '附件消息准备中，请等待提交完成后再压缩',
           recoverable: true,
         })
         return { ok: false }
       }
-      if (!session) {
-        broadcastEvent({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
+      if (!runtime.session) {
+        runtime.emit({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
         break
       }
-      await session.compactNow()
+      await runtime.session.compactNow()
       break
     }
     case 'set-model': {
       if (settingsMutationInProgress) {
-        broadcastEvent({ type: 'error', message: '连接设置处理中，请稍后再切换模型', recoverable: true })
+        runtime.emit({ type: 'error', message: '连接设置处理中，请稍后再切换模型', recoverable: true })
         return { ok: false }
       }
-      if (attachmentPreparationInProgress) {
-        broadcastEvent({
+      if (runtime.attachmentPreparationInProgress) {
+        runtime.emit({
           type: 'error',
           message: '附件消息准备中，请等待提交完成后再切换模型',
           recoverable: true,
@@ -585,38 +592,39 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
       }
       const err = validateModel(command.modelId)
       if (err) {
-        broadcastEvent({ type: 'error', message: err, recoverable: true })
+        runtime.emit({ type: 'error', message: err, recoverable: true })
         return { ok: false }
       }
       const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
       if (!resolved.ok) {
-        broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
+        runtime.emit({ type: 'error', message: resolved.error, recoverable: true })
         return { ok: false }
       }
       const targetReasoningEffort = 'default'
-      if (session) {
-        await session.setModelSelection(
+      if (runtime.session) {
+        await runtime.session.setModelSelection(
           resolved.value.entry,
           resolved.value.providerConfig,
           targetReasoningEffort,
         )
-      } else if (sessions.journal) {
-        await sessions.journal.updateModelSelection(command.modelId, targetReasoningEffort)
+      } else if (runtime.journal) {
+        await runtime.journal.updateModelSelection(command.modelId, targetReasoningEffort)
       }
-      currentModelId = command.modelId
-      currentReasoningEffort = targetReasoningEffort
-      if (!session && sessions.journal) {
-        const initializationError = await ensureSession()
+      runtime.modelId = command.modelId
+      runtime.reasoningEffort = targetReasoningEffort
+      preferredModelId = command.modelId
+      if (!runtime.session && runtime.journal) {
+        const initializationError = await ensureSession(runtime)
         if (initializationError) {
-          broadcastEvent({ type: 'error', message: initializationError, recoverable: true })
+          runtime.emit({ type: 'error', message: initializationError, recoverable: true })
           return { ok: false }
         }
       }
       return { ok: true }
     }
     case 'set-reasoning-effort': {
-      if (settingsMutationInProgress || attachmentPreparationInProgress) {
-        broadcastEvent({
+      if (settingsMutationInProgress || runtime.attachmentPreparationInProgress) {
+        runtime.emit({
           type: 'error',
           message: settingsMutationInProgress
             ? '连接设置处理中，请稍后再调整推理强度'
@@ -625,14 +633,14 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         })
         return { ok: false }
       }
-      const modelId = resolveCurrentModelId()
+      const modelId = resolveCurrentModelId(runtime)
       if (!modelId) {
-        broadcastEvent({ type: 'error', message: '当前没有可用模型', recoverable: true })
+        runtime.emit({ type: 'error', message: '当前没有可用模型', recoverable: true })
         return { ok: false }
       }
       const resolved = resolveModelConnection(loadAppConfig(), modelId)
       if (!resolved.ok) {
-        broadcastEvent({ type: 'error', message: resolved.error, recoverable: true })
+        runtime.emit({ type: 'error', message: resolved.error, recoverable: true })
         return { ok: false }
       }
       const normalized = normalizeReasoningEffortSelection(
@@ -640,29 +648,28 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
         command.reasoningEffort,
       )
       if (normalized !== command.reasoningEffort) {
-        broadcastEvent({
+        runtime.emit({
           type: 'error',
           message: `${resolved.value.entry.displayName} 不支持推理强度 ${command.reasoningEffort}`,
           recoverable: true,
         })
         return { ok: false }
       }
-      if (session) {
-        await session.setModelSelection(
+      if (runtime.session) {
+        await runtime.session.setModelSelection(
           resolved.value.entry,
           resolved.value.providerConfig,
           normalized,
         )
       }
-      currentReasoningEffort = normalized
+      runtime.reasoningEffort = normalized
       return { ok: true }
     }
     case 'approval-response': {
-      const resolve = pendingApprovals.get(command.requestId)
-      if (resolve) {
-        pendingApprovals.delete(command.requestId)
-        resolve.resolve({ approved: command.approved, remember: command.remember })
-      }
+      runtime.respondApproval(command.requestId, {
+        approved: command.approved,
+        remember: command.remember,
+      })
       break
     }
   }
@@ -671,10 +678,11 @@ async function handleCommand(command: CoreCommand): Promise<{ ok: boolean } | vo
 type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
 
 async function prepareUserMessage(
+  runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
 ): Promise<PreparedUserMessageAttachments> {
   if (!userMessageNeedsAttachmentPreparation(command)) {
-    const error = await ensureSession()
+    const error = await ensureSession(runtime)
     if (error) throw new Error(error)
     return {
       attachments: [],
@@ -684,16 +692,16 @@ async function prepareUserMessage(
     }
   }
 
-  const modelId = resolveCurrentModelId()
+  const modelId = resolveCurrentModelId(runtime)
   if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) throw new Error(resolved.error)
   const model = resolved.value.entry
-  attachmentPreparationInProgress = true
+  const attachmentAbortSignal = runtime.beginAttachmentPreparation()
   try {
-    const error = await ensureSession()
+    const error = await ensureSession(runtime)
     if (error) throw new Error(error)
-    const journal = sessions.journal
+    const journal = runtime.journal
     if (!journal) throw new Error('会话记录尚未初始化，无法保存附件')
     return await prepareAttachments({
       command,
@@ -701,79 +709,93 @@ async function prepareUserMessage(
       pdfProcessor,
       supportsImageInput: model.capabilities.supportsImageInput,
       modelDisplayName: model.displayName,
-      abortSignal: new AbortController().signal,
+      abortSignal: attachmentAbortSignal,
     })
   } catch (error) {
     throw new Error(`附件添加失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
-    attachmentPreparationInProgress = false
+    runtime.endAttachmentPreparation()
   }
 }
 
 async function handleUserMessageCommand(
+  runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
 ): Promise<{ ok: boolean }> {
   if (settingsMutationInProgress) {
-    return rejectUserMessage('连接设置处理中，请等待完成后再发送消息')
+    return rejectUserMessage(runtime, '连接设置处理中，请等待完成后再发送消息')
   }
-  if (attachmentPreparationInProgress) {
-    return rejectUserMessage('上一条附件消息仍在准备，请稍后重试')
+  if (runtime.attachmentPreparationInProgress) {
+    return rejectUserMessage(runtime, '上一条附件消息仍在准备，请稍后重试')
   }
-  let prepared: PreparedUserMessageAttachments
+  const workStart = runtimeRegistry.reserveWorkStart(runtime)
+  if (!workStart) {
+    return rejectUserMessage(runtime, '同时运行的对话已达到上限（4 个），请等待其中一个结束')
+  }
   try {
-    prepared = await prepareUserMessage(command)
-  } catch (error) {
-    return rejectUserMessage(error instanceof Error ? error.message : String(error))
-  }
-
-  const userText = command.text.trim()
-    || defaultAttachmentPrompt(prepared.attachments, prepared.pdfAttachments)
-  if (!userText) return rejectUserMessage('消息不能为空')
-  try {
-    await routeUserMessage(userText, command.urgent ?? false, {
-      isBusy: runtimeBusy,
-      reserve: () => userMessageRoutingGate.reserve(),
-      record: (inputId, text, startsTurn) => recordUserInput(
-        inputId,
-        text,
-        startsTurn,
-        prepared.attachments,
-        prepared.restoredInputIds,
-        prepared.pdfAttachments,
-      ),
-      acceptRoot: (text) => broadcastEvent({
-        type: 'user-message-accepted',
-        text,
-        startsTurn: true,
-        ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
-        ...(prepared.pdfAttachments.length ? { pdfAttachments: prepared.pdfAttachments } : {}),
-      }, false),
-      deliver: (inputId, text, urgent, startsTurn) => deliverUserMessage(
-        inputId,
-        text,
-        urgent,
-        startsTurn,
-        prepared.attachments,
-        prepared.pdfAttachments,
-      ),
-      onDeliveryError: reportUserMessageDeliveryError,
-    })
-  } catch (error) {
-    const journal = sessions.journal
-    if (prepared.importedFiles && journal) {
-      await cleanupUnreferencedAttachments(journal.attachmentDirectory, {
-        imageAttachments: journal.initialImageAttachments,
-        pdfAttachments: journal.initialPdfAttachments,
-      }).catch(() => {})
+    let prepared: PreparedUserMessageAttachments
+    try {
+      prepared = await prepareUserMessage(runtime, command)
+    } catch (error) {
+      return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))
     }
-    return rejectUserMessage(
-      `用户消息未能安全交付：${error instanceof Error ? error.message : String(error)}`,
-    )
+
+    const userText = command.text.trim()
+      || defaultAttachmentPrompt(prepared.attachments, prepared.pdfAttachments)
+    if (!userText) return rejectUserMessage(runtime, '消息不能为空')
+    try {
+      await routeUserMessage(userText, command.urgent ?? false, {
+        isBusy: () => runtimeExecutionBusy(runtime),
+        reserve: () => runtime.routingGate.reserve(),
+        record: (inputId, text, startsTurn) => recordUserInput(
+          runtime,
+          inputId,
+          text,
+          startsTurn,
+          prepared.attachments,
+          prepared.restoredInputIds,
+          prepared.pdfAttachments,
+        ),
+        acceptRoot: (text) => runtime.emit({
+          type: 'user-message-accepted',
+          text,
+          startsTurn: true,
+          ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
+          ...(prepared.pdfAttachments.length ? { pdfAttachments: prepared.pdfAttachments } : {}),
+        }, false),
+        deliver: (inputId, text, urgent, startsTurn) => deliverUserMessage(
+          runtime,
+          inputId,
+          text,
+          urgent,
+          startsTurn,
+          prepared.attachments,
+          prepared.pdfAttachments,
+        ),
+        onDeliveryError: (error) => reportUserMessageDeliveryError(runtime, error),
+      }, workStart)
+    } catch (error) {
+      const journal = runtime.journal
+      if (prepared.importedFiles && journal) {
+        await cleanupUnreferencedAttachments(journal.attachmentDirectory, {
+          imageAttachments: journal.initialImageAttachments,
+          pdfAttachments: journal.initialPdfAttachments,
+        }).catch(() => {})
+      }
+      return rejectUserMessage(
+        runtime,
+        `用户消息未能安全交付：${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    return { ok: true }
+  } finally {
+    // routeUserMessage 正常路径已释放；准备阶段失败时由这里释放。release 幂等。
+    workStart.release()
   }
-  return { ok: true }
 }
 
 function deliverUserMessage(
+  runtime: DesktopSessionRuntime,
   inputId: string,
   text: string,
   urgent: boolean,
@@ -782,35 +804,49 @@ function deliverUserMessage(
   pdfAttachments: readonly PdfAttachment[],
 ): Promise<unknown> | void {
   const persistedInputId = startsTurn ? undefined : inputId
-  if (consensusEnabled && coordinator) {
-    return coordinator.handleUserMessage(
+  if (runtime.consensusEnabled && runtime.coordinator) {
+    return runtime.coordinator.handleUserMessage(
       text, urgent, attachments, persistedInputId, pdfAttachments,
     )
   }
-  return session!.handleUserMessage(
+  return runtime.session!.handleUserMessage(
     text, urgent, attachments, persistedInputId, pdfAttachments,
   )
 }
 
-function reportUserMessageDeliveryError(error: unknown): void {
-  broadcastEvent({
+function reportUserMessageDeliveryError(
+  runtime: DesktopSessionRuntime,
+  error: unknown,
+): void {
+  runtime.emit({
     type: 'error',
     message: `Agent 接收消息后异常退出：${error instanceof Error ? error.message : String(error)}`,
     recoverable: true,
   })
 }
 
-function runtimeBusy(): boolean {
+function runtimeBusy(runtime: DesktopSessionRuntime): boolean {
   return Boolean(
-    sessionDeletionLock.blocksRuntime
-    || sessionResumeLock.sessionId
-    || attachmentPreparationInProgress
-    || settingsMutationInProgress
-    || userMessageRoutingGate.busy
-    || sessionInitialization
-    || session?.isBusy
-    || coordinator?.busy,
+    (
+      sessionDeletionLock.blocksRuntime
+      && sessionDeletionLock.sessionId === runtime.sessionId
+    )
+    || runtime.busy,
   )
+}
+
+function runtimeExecutionBusy(runtime: DesktopSessionRuntime): boolean {
+  return Boolean(
+    (
+      sessionDeletionLock.blocksRuntime
+      && sessionDeletionLock.sessionId === runtime.sessionId
+    )
+    || runtime.executionBusy,
+  )
+}
+
+function anyRuntimeBusy(): boolean {
+  return settingsMutationInProgress || runtimeRegistry.anyBusy()
 }
 
 function resumeInProgressMessage(action: string): string {
@@ -825,29 +861,34 @@ async function persistConnectionConfig(
   config: NonNullable<ReturnType<typeof loadAppConfig>>,
 ): Promise<void> {
   await saveConfig(config, configSecretCodec, getConfigPath())
-  const current = currentModelId
-    ? resolveModelConnection(config, currentModelId)
-    : null
-  // 退役/已删除连接的历史会话没有可构造的 Agent；保存设置不能替用户改写其模型事实。
-  if (sessions.journal && !session && current && !current.ok) return
-  const targetModelId = current?.ok ? currentModelId : resolveDefaultModelId(config)
-  if (!session || !targetModelId) {
-    currentModelId = targetModelId
-    return
-  }
-  const resolved = resolveModelConnection(config, targetModelId)
-  if (resolved.ok) {
+  preferredModelId = preferredModelId
+    && resolveModelConnection(config, preferredModelId).ok
+    ? preferredModelId
+    : resolveDefaultModelId(config)
+  for (const runtime of runtimeRegistry.all()) {
+    const current = runtime.modelId
+      ? resolveModelConnection(config, runtime.modelId)
+      : null
+    // 退役/已删除连接的历史会话没有可构造的 Agent；保存设置不能替用户改写其模型事实。
+    if (runtime.journal && !runtime.session && current && !current.ok) continue
+    const targetModelId = current?.ok ? runtime.modelId : preferredModelId
+    if (!runtime.session || !targetModelId) {
+      runtime.modelId = targetModelId
+      continue
+    }
+    const resolved = resolveModelConnection(config, targetModelId)
+    if (!resolved.ok) continue
     const targetReasoningEffort = normalizeReasoningEffortSelection(
       resolved.value.entry.capabilities,
-      currentReasoningEffort,
+      runtime.reasoningEffort,
     )
-    await session.setModelSelection(
+    await runtime.session.setModelSelection(
       resolved.value.entry,
       resolved.value.providerConfig,
       targetReasoningEffort,
     )
-    currentModelId = targetModelId
-    currentReasoningEffort = targetReasoningEffort
+    runtime.modelId = targetModelId
+    runtime.reasoningEffort = targetReasoningEffort
   }
 }
 
@@ -878,7 +919,7 @@ async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
 
 async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
   const referencedModelIds = new Set(
-    (await sessions.list())
+    (await sessions.list(undefined, runtimeRegistry.selected?.journal))
       .filter((summary) => summary.sessionId !== excludedSessionId)
       .map((summary) => summary.modelId)
       .filter((modelId): modelId is string => Boolean(modelId)),
@@ -950,14 +991,20 @@ async function setMcpServerConnectionState(
   request: SetMcpServerEnabledRequest,
 ): Promise<SettingsMutationResult> {
   return mutateConnectionSettings(() =>
-    updateMcpServerState({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
+    updateMcpServerState({
+      globalConfigPath: mcpGlobalConfigPath,
+      projectDir: selectedRuntime().projectDir,
+    }, request))
 }
 
 async function addMcpConnection(
   request: AddMcpServerRequest,
 ): Promise<SettingsMutationResult> {
   return mutateConnectionSettings(() =>
-    addMcpConfiguredServer({ globalConfigPath: mcpGlobalConfigPath, projectDir }, request))
+    addMcpConfiguredServer({
+      globalConfigPath: mcpGlobalConfigPath,
+      projectDir: selectedRuntime().projectDir,
+    }, request))
 }
 
 async function authorizeMcpOAuthConnection(
@@ -1003,7 +1050,10 @@ async function saveMcpSecretHeaderConnection(
       }
     }
     const next = await updateMcpSecretHeader(
-      { globalConfigPath: mcpGlobalConfigPath, projectDir },
+      {
+        globalConfigPath: mcpGlobalConfigPath,
+        projectDir: selectedRuntime().projectDir,
+      },
       loadAppConfig(),
       request,
     )
@@ -1017,7 +1067,9 @@ async function mutateConnectionSettings(
   if (sessionDeletionLock.sessionId) {
     return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
   }
-  if (runtimeBusy()) return { ok: false, error: '当前有操作进行中，请结束后再修改连接设置' }
+  if (anyRuntimeBusy()) {
+    return { ok: false, error: '当前有对话或其它操作进行中，请结束后再修改连接设置' }
+  }
   if (mcpOAuthController.isAuthorizing()) {
     return { ok: false, error: 'MCP OAuth 登录进行中，请完成后再修改连接设置' }
   }
@@ -1034,10 +1086,11 @@ async function mutateConnectionSettings(
 
 async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSnapshot> {
   const config = loadAppConfig()
+  const runtime = selectedRuntime()
   const mcp = await createMcpSettingsSnapshot({
     globalConfigPath: mcpGlobalConfigPath,
-    projectDir,
-    currentSessionSnapshot: session?.mcpSnapshot ?? null,
+    projectDir: runtime.projectDir,
+    currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
     mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
     mcpOAuthController,
   })
@@ -1051,7 +1104,7 @@ async function resolveGlobalMcpHttpServer(request: McpOAuthRequest) {
   const appConfig = loadAppConfig()
   const configuration = await loadMcpConfiguration({
     globalConfigPath: mcpGlobalConfigPath,
-    projectDir,
+    projectDir: selectedRuntime().projectDir,
     globalSecretHeaders: appConfig?.mcpSecretHeaders,
   })
   const server = configuration.servers.find((candidate) =>
@@ -1092,7 +1145,10 @@ async function openMcpConfigFile(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const path = resolveMcpConfigPath(
-      { globalConfigPath: mcpGlobalConfigPath, projectDir },
+      {
+        globalConfigPath: mcpGlobalConfigPath,
+        projectDir: selectedRuntime().projectDir,
+      },
       request.scope,
     )
     if (request.scope === 'global') await ensureMcpConfigTemplate(path)
@@ -1105,6 +1161,7 @@ async function openMcpConfigFile(
 }
 
 async function recordUserInput(
+  runtime: DesktopSessionRuntime,
   inputId: string,
   text: string,
   startsTurn: boolean,
@@ -1112,7 +1169,8 @@ async function recordUserInput(
   consumesInputIds: readonly string[] = [],
   pdfAttachments: readonly PdfAttachment[] = [],
 ): Promise<void> {
-  const journal = sessions.journal!
+  const journal = runtime.journal
+  if (!journal) throw new Error('会话记录尚未初始化，无法保存用户消息')
   await journal.recordUserInputWithId(
     inputId,
     text,
@@ -1133,152 +1191,162 @@ function defaultAttachmentPrompt(
   return ''
 }
 
-function rejectUserMessage(message: string): { ok: false } {
-  broadcastEvent({ type: 'error', message, recoverable: true })
-  if (!runtimeBusy()) broadcastEvent({ type: 'agent-status', status: 'idle' })
+function rejectUserMessage(
+  runtime: DesktopSessionRuntime,
+  message: string,
+): { ok: false } {
+  runtime.emit({ type: 'error', message, recoverable: true })
+  if (!runtimeBusy(runtime)) {
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+  }
   return { ok: false }
 }
 
-function resetRuntime(keepJournal = false): void {
-  const oldConversationId = conversationId
-  const previousSession = session
-  session = null
-  sessionInitialization = null
-  coordinator = null
-  currentAgentStatus = 'idle'
-  viewTimeline.discardAll()
-  if (!keepJournal) sessions.reset()
-  conversationId = `conv-${Date.now()}`
-  disposeSession(previousSession)
-  // 普通运行态切换仍可尽力清临时目录；显式删除会在移除事实源前严格等待清理完成。
-  void cleanupConversationScratch(
-    join(app.getPath('userData'), 'scratch'),
-    oldConversationId,
-  ).catch(() => {})
-}
-
-function runtimeSnapshot(): RuntimeSnapshot {
-  const journal = sessions?.journal ?? null
-  const busy = runtimeBusy()
-  const checkpointRestoreToolUseId = session?.checkpointRestoreToolUseId ?? null
+async function runtimeSnapshot(
+  runtime: DesktopSessionRuntime = selectedRuntime(),
+): Promise<RuntimeSnapshot> {
+  const journal = runtime.journal
+  const timeline = journal
+    ? await runtime.timeline.snapshotAt(journal, () => runtimeEventSequence)
+    : { events: [], boundary: runtimeEventSequence }
+  const busy = runtimeBusy(runtime)
+  const checkpointRestoreToolUseId = runtime.checkpointRestoreToolUseId
+  const deletingThisSession = Boolean(
+    sessionDeletionLock.blocksRuntime
+    && sessionDeletionLock.sessionId === runtime.sessionId,
+  )
   return {
-    projectDir,
-    modelId: resolveCurrentModelId(),
-    reasoningEffort: currentReasoningEffort,
-    permissionMode: pendingPermissionMode ?? 'default',
-    status: sessionDeletionLock.blocksRuntime
+    runtimeId: runtime.runtimeId,
+    projectDir: runtime.projectDir,
+    modelId: resolveCurrentModelId(runtime),
+    reasoningEffort: runtime.reasoningEffort,
+    permissionMode: runtime.permissionMode,
+    status: deletingThisSession
       ? 'working'
-      : busy && currentAgentStatus === 'idle' && !checkpointRestoreToolUseId
+      : busy && runtime.status === 'idle' && !checkpointRestoreToolUseId
         ? 'working'
-        : currentAgentStatus,
+        : runtime.status,
     busy,
     checkpointRestoreToolUseId,
-    deletingSessionId: sessionDeletionLock.blocksRuntime
+    deletingSessionId: deletingThisSession
       ? sessionDeletionLock.sessionId
       : null,
     resumingSessionId: sessionResumeLock.sessionId,
     sessionId: journal?.sessionId ?? null,
-    viewEvents: journal ? [...journal.initialViewEvents] : [],
+    viewEvents: timeline.events,
     queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
-    approval: [...pendingApprovals.values()].at(-1)?.request ?? null,
-    eventSequence: runtimeEventSequence,
+    approval: runtime.approval,
+    eventSequence: timeline.boundary,
+  }
+}
+
+/**
+ * 会话选择只有在对应快照也成功生成后才算提交。失败时恢复原选择；新构造的
+ * 候选运行时同时从 Registry 与 Journal 内存索引释放，不能留下半切换状态。
+ */
+async function selectRuntimeWithSnapshot(
+  runtime: DesktopSessionRuntime,
+  removeOnFailure: boolean,
+): Promise<RuntimeSnapshot> {
+  const previous = runtimeRegistry.selected
+  try {
+    runtimeRegistry.select(runtime)
+    return await runtimeSnapshot(runtime)
+  } catch (error) {
+    if (previous && previous !== runtime && !previous.isDisposed) {
+      runtimeRegistry.select(previous)
+    }
+    if (removeOnFailure) {
+      if (runtimeRegistry.get(runtime.runtimeId) === runtime) {
+        await runtimeRegistry.remove(runtime)
+      } else if (runtime.journal) {
+        sessions.release(runtime.journal)
+      }
+    }
+    throw error
   }
 }
 
 async function startNewSession(): Promise<NewSessionResult> {
-  if (sessionDeletionLock.sessionId || runtimeBusy()) {
+  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再新建会话'
-        : sessionResumeLock.sessionId
-          ? resumeInProgressMessage('新建会话')
-          : session?.checkpointRestoreToolUseId
-            ? '文件回滚中，请等待完成后再新建会话'
-            : 'Agent 工作中，请先停止再新建会话',
+        : resumeInProgressMessage('新建会话'),
     }
   }
   const defaultProjectDir = requireDefaultWorkspace()
-  resetRuntime()
-  projectDir = defaultProjectDir
-  return { ok: true, projectDir: defaultProjectDir }
+  const runtime = createDraftRuntime(defaultProjectDir)
+  try {
+    return {
+      ok: true,
+      snapshot: await selectRuntimeWithSnapshot(runtime, true),
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: `新建会话失败：${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (sessionDeletionLock.sessionId || runtimeBusy()) {
-    const result: ResumeSessionResult = {
+  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+    return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再恢复会话'
-        : sessionResumeLock.sessionId
-          ? resumeInProgressMessage('恢复其它会话')
-          : session?.checkpointRestoreToolUseId
-            ? '文件回滚中，请等待完成后再恢复会话'
-            : 'Agent 工作中，请先停止再恢复会话',
+        : resumeInProgressMessage('恢复其它会话'),
     }
-    broadcastEvent({ type: 'error', message: result.error, recoverable: true }, false)
-    return result
   }
+  const existing = runtimeRegistry.findBySessionId(sessionId)
+  if (existing) {
+    try {
+      const snapshot = await selectRuntimeWithSnapshot(existing, false)
+      return { ok: true, snapshot }
+    } catch (error) {
+      return {
+        ok: false,
+        error: `会话恢复失败：${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+  }
+
   const release = sessionResumeLock.acquire(sessionId)
   if (!release) {
-    const error = resumeInProgressMessage('恢复其它会话')
-    broadcastEvent({ type: 'error', message: error, recoverable: true }, false)
-    return { ok: false, error }
+    return { ok: false, error: resumeInProgressMessage('恢复其它会话') }
   }
-  const statusBeforeResume = currentAgentStatus
-  let succeeded = false
-  let prepared: PreparedResumeRuntime | null = null
-  broadcastEvent({ type: 'agent-status', status: 'working' }, false)
+  let prepared: DesktopSessionRuntime | null = null
   try {
     prepared = await prepareResumedRuntime(sessionId)
-    commitResumedRuntime(prepared)
-    succeeded = true
-    return {
-      ok: true,
-      session: {
-        ...prepared.journal.metadataSnapshot,
-        projectDir: prepared.targetProjectDir,
-        reasoningEffort: prepared.targetReasoningEffort,
-      },
-      viewEvents: [...prepared.journal.initialViewEvents],
-      queuedInputs: pendingInputs(prepared.journal, 'queued'),
-      restoredInputs: pendingInputs(prepared.journal, 'restored'),
-      recoveredFromInterruption: prepared.recoveredFromInterruption,
-    }
+    const snapshot = await selectRuntimeWithSnapshot(prepared, true)
+    const resumedRuntime = prepared
+    setTimeout(() => {
+      if (!resumedRuntime.isDisposed) {
+        resumedRuntime.emit({ type: 'agent-status', status: 'idle' }, false)
+      }
+    }, 0)
+    return { ok: true, snapshot }
   } catch (error) {
-    await prepared?.mainSession?.dispose().catch(() => {})
+    if (
+      prepared
+      && runtimeRegistry.get(prepared.runtimeId) === prepared
+      && !prepared.isDisposed
+    ) {
+      await runtimeRegistry.remove(prepared).catch(() => {})
+    }
     const message = `会话恢复失败：${error instanceof Error ? error.message : String(error)}`
-    broadcastEvent({ type: 'error', message, recoverable: true }, false)
     return { ok: false, error: message }
   } finally {
     release()
-    broadcastEvent({
-      type: 'agent-status',
-      status: succeeded ? 'idle' : statusBeforeResume,
-    }, false)
   }
 }
 
-interface PreparedResumeRuntime {
-  journal: SessionJournal
-  mainSession: AgentSession | null
-  nextCoordinator: ConsensusCoordinator | null
-  targetProjectDir: string
-  targetModelId: string
-  targetReasoningEffort: ReasoningEffortSelection
-  recoveredFromInterruption: boolean
-}
-
-async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeRuntime> {
+async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionRuntime> {
   const journal = await sessions.prepareResume(sessionId)
   const metadata = journal.metadataSnapshot
-  const recoveredFromInterruption = Boolean(
-    journal.interruptedTurnId
-    || journal.undeliveredUserInputIds.length > 0
-    || journal.interruptedConsensusTaskId
-    || journal.pendingUserInputs.some((input) => input.state === 'queued'),
-  )
   await journal.recoverInterruptedWork()
   const targetProjectDir = metadata.projectDir ?? requireDefaultWorkspace()
   const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
@@ -1288,56 +1356,43 @@ async function prepareResumedRuntime(sessionId: string): Promise<PreparedResumeR
         metadata.reasoningEffort,
       )
     : metadata.reasoningEffort
-  const mainSession = resolved.ok
-    ? await createMainAgentSession(
+  const runtime = new DesktopSessionRuntime({
+    projectDir: targetProjectDir,
+    modelId: metadata.modelId,
+    reasoningEffort: targetReasoningEffort,
+    permissionMode: preferredPermissionMode,
+    emit: broadcastRuntimeEvent,
+  })
+  runtime.consensusEnabled = preferredConsensusEnabled
+  runtime.journal = journal
+  try {
+    if (resolved.ok) {
+      runtime.session = await createMainAgentSession(
+        runtime,
         journal,
         targetProjectDir,
         resolved.value.entry,
         resolved.value.providerConfig,
         targetReasoningEffort,
       )
-    : null
-  let nextCoordinator: ConsensusCoordinator | null = null
-  try {
-    if (consensusEnabled && mainSession) {
-      const built = createCoordinator(mainSession, journal, targetProjectDir, journal.sessionId)
+    }
+    if (runtime.consensusEnabled && runtime.session) {
+      const built = createCoordinator(
+        runtime,
+        runtime.session,
+        journal,
+        targetProjectDir,
+        journal.sessionId,
+      )
       if (!built.ok) throw new Error(built.error)
-      nextCoordinator = built.value
+      runtime.coordinator = built.value
     }
   } catch (error) {
-    await mainSession?.dispose().catch(() => {})
+    await runtime.dispose().catch(() => {})
+    sessions.release(journal)
     throw error
   }
-  return {
-    journal,
-    mainSession,
-    nextCoordinator,
-    targetProjectDir,
-    targetModelId: metadata.modelId,
-    targetReasoningEffort,
-    recoveredFromInterruption,
-  }
-}
-
-function commitResumedRuntime(input: PreparedResumeRuntime): void {
-  const oldConversationId = conversationId
-  const previousSession = session
-  sessionInitialization = null
-  viewTimeline.discardAll()
-  sessions.activate(input.journal)
-  session = input.mainSession
-  disposeSession(previousSession)
-  coordinator = input.nextCoordinator
-  projectDir = input.targetProjectDir
-  currentModelId = input.targetModelId
-  currentReasoningEffort = input.targetReasoningEffort
-  conversationId = input.journal.sessionId
-  if (oldConversationId !== conversationId) {
-    void cleanupConversationScratch(
-      join(app.getPath('userData'), 'scratch'),
-      oldConversationId,
-    ).catch(() => {})
-  }
+  return runtime
 }
 
 function pendingInputs(
@@ -1362,57 +1417,77 @@ function pendingInputs(
 }
 
 async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-  if (sessionDeletionLock.sessionId || mcpOAuthController.isAuthorizing() || runtimeBusy()) {
+  const targetRuntime = runtimeRegistry.findBySessionId(sessionId)
+  if (
+    sessionDeletionLock.sessionId
+    || sessionResumeLock.sessionId
+    || mcpOAuthController.isAuthorizing()
+    || targetRuntime?.busy
+  ) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
+        : sessionResumeLock.sessionId
+          ? resumeInProgressMessage('删除会话')
         : mcpOAuthController.isAuthorizing()
           ? mcpOAuthInProgressMessage('删除会话')
-          : sessionResumeLock.sessionId
-            ? resumeInProgressMessage('删除会话')
-            : session?.checkpointRestoreToolUseId
-              ? '文件回滚中，请等待完成后再删除会话'
-              : 'Agent 工作中，请先停止再删除会话',
+          : targetRuntime?.checkpointRestoreToolUseId
+            ? '文件回滚中，请等待完成后再删除会话'
+            : '目标会话仍在工作，请先停止再删除',
     }
   }
-  const deletedCurrent = sessions.currentSessionId === sessionId
-  const statusBeforeDeletion = currentAgentStatus
+  const deletedCurrent = runtimeRegistry.selected?.sessionId === sessionId
   let detachedCurrent = false
+  let replacementRuntime: DesktopSessionRuntime | null = null
   const releaseDeletion = sessionDeletionLock.acquire(sessionId, deletedCurrent)
   if (!releaseDeletion) return { ok: false, error: '已有会话正在删除，请等待完成' }
-  if (deletedCurrent) broadcastEvent({ type: 'agent-status', status: 'working' }, false)
   try {
     const deleted = await deleteSessionArtifacts({
       sessionId,
       sessions,
       commandSessions,
       scratchRoot: join(app.getPath('userData'), 'scratch'),
-      onDeletionMarked: async () => {
-        if (!deletedCurrent) return
-        resetRuntime()
-        projectDir = requireDefaultWorkspace()
-        detachedCurrent = true
-        await sessionDisposalTail
+      onDeletionMarked: async (sessionExists) => {
+        if (!sessionExists) return
+        if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
+        if (deletedCurrent) {
+          const replacement = createDraftRuntime(requireDefaultWorkspace())
+          runtimeRegistry.select(replacement)
+          replacementRuntime = replacement
+          detachedCurrent = true
+        }
       },
       onBeforeFactSourceDelete: () => pruneRetiredModelLabels(sessionId),
     })
-    if (!deleted) return { ok: false, error: '会话不存在', deletedCurrent: detachedCurrent }
-    return { ok: true, deletedCurrent }
+    if (!deleted) {
+      return {
+        ok: false,
+        error: '会话不存在',
+        deletedCurrent: detachedCurrent,
+        ...(replacementRuntime
+          ? { snapshot: await runtimeSnapshot(replacementRuntime) }
+          : {}),
+      }
+    }
+    return {
+      ok: true,
+      deletedCurrent,
+      ...(replacementRuntime
+        ? { snapshot: await runtimeSnapshot(replacementRuntime) }
+        : {}),
+    }
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
       deletedCurrent: detachedCurrent || undefined,
+      ...(replacementRuntime
+        ? { snapshot: await runtimeSnapshot(replacementRuntime) }
+        : {}),
     }
   } finally {
     releaseDeletion()
-    if (deletedCurrent) {
-      broadcastEvent({
-        type: 'agent-status',
-        status: detachedCurrent ? 'idle' : statusBeforeDeletion,
-      }, false)
-    }
   }
 }
 
@@ -1449,7 +1524,6 @@ if (primaryInstance) void app.whenReady().then(async () => {
       app.getPath('documents'),
       app.getPath('userData'),
     )
-    projectDir = defaultWorkspaceDir
   } catch (error) {
     dialog.showErrorBox(
       'WhyCode 启动失败',
@@ -1462,14 +1536,34 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  runtimeRegistry = new SessionRuntimeRegistry({
+    onDisposeError: (error) => console.error('会话运行时清理失败：', error),
+    onRemoved: (runtime) => {
+      if (runtime.journal) sessions.release(runtime.journal)
+    },
+  })
+  const initialRuntime = createDraftRuntime(defaultWorkspaceDir)
+  runtimeRegistry.select(initialRuntime)
   await pruneRetiredModelLabels()
     .catch((error) => console.warn('退役模型显示名清理失败：', error))
-  registerAttachmentProtocol(() => sessions.journal)
+  registerAttachmentProtocol((sessionId) =>
+    runtimeRegistry.findBySessionId(sessionId)?.journal ?? null)
   commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
   await commandSessions.initialize()
-  ipcMain.handle(IPC.command, (_e, command: CoreCommand) => handleCommand(command))
-  ipcMain.handle(IPC.listModels, () =>
-    listModelConnections(loadAppConfig(), resolveCurrentModelId()))
+  ipcMain.handle(IPC.command, (_e, envelope: RuntimeCommandEnvelope) => {
+    if (
+      !envelope
+      || typeof envelope.runtimeId !== 'string'
+      || !envelope.command
+    ) return { ok: false }
+    const runtime = runtimeRegistry.get(envelope.runtimeId)
+    if (!runtime) return { ok: false }
+    return handleCommand(runtime, envelope.command)
+  })
+  ipcMain.handle(IPC.listModels, (_e, runtimeId?: string) => {
+    const runtime = runtimeForId(runtimeId)
+    return listModelConnections(loadAppConfig(), resolveCurrentModelId(runtime))
+  })
   ipcMain.handle(IPC.connectionSettings, async () => {
     if (!mcpOAuthController.isAuthorizing()) {
       await synchronizeConfiguredCliProxyRoutes()
@@ -1495,44 +1589,50 @@ if (primaryInstance) void app.whenReady().then(async () => {
     disconnectMcpOAuthConnection(request))
   ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
     openMcpConfigFile(request))
-  ipcMain.handle(IPC.getProjectDir, () => projectDir)
-  ipcMain.handle(IPC.runtimeSnapshot, () => runtimeSnapshot())
+  ipcMain.handle(IPC.getProjectDir, (_e, runtimeId?: string) =>
+    runtimeForId(runtimeId).projectDir)
+  ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string) =>
+    runtimeSnapshot(runtimeForId(runtimeId)))
   ipcMain.handle(IPC.consensusStatus, () => ({
     ready: checkConsensusReady() === null,
     reason: checkConsensusReady(),
-    enabled: consensusEnabled,
+    enabled: selectedRuntime().consensusEnabled,
   }))
   ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
-    const currentSessionId = sessions.currentSessionId
-    return (await sessions.list()).map((item) => ({
+    const currentSessionId = runtimeRegistry.selected?.sessionId ?? null
+    return (await sessions.list(undefined, runtimeRegistry.selected?.journal)).map((item) => ({
       ...item,
       isCurrent: item.sessionId === currentSessionId,
+      runtimeStatus: runtimeRegistry.findBySessionId(item.sessionId)?.status,
+      running: runtimeRegistry.findBySessionId(item.sessionId)?.busy ?? false,
+      needsAttention: Boolean(
+        runtimeRegistry.findBySessionId(item.sessionId)?.approval
+        || item.status === 'waiting-user',
+      ),
     }))
   })
   ipcMain.handle(IPC.newSession, () => startNewSession())
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
-  ipcMain.handle(IPC.openPdfAttachment, async (_e, attachmentId: string) => {
-    return openPdfAttachment(sessions.journal, attachmentId, (path) => shell.openPath(path))
+  ipcMain.handle(IPC.openPdfAttachment, async (
+    _e,
+    runtimeId: string,
+    attachmentId: string,
+  ) => {
+    return openPdfAttachment(
+      runtimeForId(runtimeId).journal,
+      attachmentId,
+      (path) => shell.openPath(path),
+    )
   })
   ipcMain.handle(IPC.pickProjectDir, async () => {
-    if (sessionDeletionLock.sessionId || runtimeBusy()) {
-      broadcastEvent({
-        type: 'error',
-        message: sessionDeletionLock.sessionId
-          ? '会话数据删除中，请等待完成后再切换工作文件夹'
-          : sessionResumeLock.sessionId
-            ? resumeInProgressMessage('切换工作文件夹')
-            : session?.checkpointRestoreToolUseId
-              ? '文件回滚中，请等待完成后再切换工作文件夹'
-              : 'Agent 工作中，请先停止并等待当前操作结束后再切换工作文件夹',
-        recoverable: true,
-      }, sessionResumeLock.sessionId === null)
+    if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
       return null
     }
+    const selectionAtOpen = selectedRuntime()
     const result = await dialog.showOpenDialog({
       title: '选择工作文件夹',
-      defaultPath: projectDir ?? undefined,
+      defaultPath: selectionAtOpen.projectDir,
       properties: ['openDirectory'],
     })
     const selected = result.filePaths[0]
@@ -1541,33 +1641,38 @@ if (primaryInstance) void app.whenReady().then(async () => {
     try {
       dir = await realpath(selected)
     } catch {
-      broadcastEvent({
+      selectionAtOpen.emit({
         type: 'error',
         message: '所选工作文件夹已不可用，请重新选择',
         recoverable: true,
       })
       return null
     }
-    // 目录选择框打开期间也可能从其它入口启动任务；提交切换前必须再次权威检查。
-    if (sessionDeletionLock.sessionId || runtimeBusy()) {
-      broadcastEvent({
-        type: 'error',
-        message: sessionDeletionLock.sessionId
-          ? '会话删除已经开始，工作文件夹切换已取消；请等待完成后重试'
-          : sessionResumeLock.sessionId
-            ? '会话恢复已经开始，工作文件夹切换已取消；请等待完成后重试'
-            : session?.checkpointRestoreToolUseId
-              ? '文件回滚已经开始，工作文件夹切换已取消；请等待完成后重试'
-              : '当前操作已经开始，工作文件夹切换已取消；请停止后重试',
-        recoverable: true,
-      }, sessionResumeLock.sessionId === null)
+    // 原生对话框期间允许其它入口切换会话；旧选择不能覆盖后来发生的用户操作。
+    if (
+      runtimeRegistry.selected !== selectionAtOpen
+      || sessionDeletionLock.sessionId
+      || sessionResumeLock.sessionId
+    ) {
       return null
     }
-    if (projectDir && samePath(dir, projectDir)) return null
-    projectDir = dir
-    // 换工作文件夹 = 换会话（消息历史与旧路径强相关）；协商 scratch 随旧对话清理
-    resetRuntime()
-    return dir
+    if (samePath(dir, selectionAtOpen.projectDir)) return null
+    const runtime = createDraftRuntime(dir)
+    try {
+      return {
+        ok: true,
+        snapshot: await selectRuntimeWithSnapshot(runtime, true),
+      } satisfies NewSessionResult
+    } catch (error) {
+      selectionAtOpen.emit({
+        type: 'error',
+        message: `工作文件夹切换失败：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        recoverable: true,
+      })
+      return null
+    }
   })
 
   createWindow()
@@ -1600,9 +1705,8 @@ app.on('before-quit', (event) => {
   void Promise.all([
     commandSessions.shutdown()
       .catch((error) => console.error('后台命令退出清理失败：', error)),
-    sessionDisposalTail,
-    session?.dispose()
-      .catch((error) => console.error('当前 MCP 会话退出清理失败：', error)),
+    runtimeRegistry.closeAll()
+      .catch((error) => console.error('会话运行时退出清理失败：', error)),
     mcpOAuthController.close()
       .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
   ])

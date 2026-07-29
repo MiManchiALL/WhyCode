@@ -6,12 +6,87 @@ import { ViewTimeline, type ViewEventWriter } from './view-timeline.ts'
 class Writer implements ViewEventWriter {
   batches: ViewEvent[][] = []
 
+  get initialViewEvents(): readonly ViewEvent[] {
+    return this.batches.flat()
+  }
+
   async recordViewEvents(events: ViewEvent[]): Promise<void> {
     this.batches.push(structuredClone(events))
   }
 }
 
 describe('ViewTimeline', () => {
+  it('快照等待期间新增的稳定写入也进入同一无缺口边界', async () => {
+    const committed: ViewEvent[] = []
+    const releases: (() => void)[] = []
+    const writer = {
+      get initialViewEvents() {
+        return committed
+      },
+      async recordViewEvents(events: ViewEvent[]) {
+        await new Promise<void>((resolve) => releases.push(resolve))
+        committed.push(...structuredClone(events))
+      },
+    }
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-1' })
+    const snapshot = timeline.snapshot(writer)
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-2' })
+
+    releases.shift()?.()
+    await Promise.resolve()
+    let settled = false
+    void snapshot.then(() => { settled = true })
+    await Promise.resolve()
+    assert.equal(settled, false)
+
+    releases.shift()?.()
+    assert.deepEqual(await snapshot, [
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-1' } },
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-2' } },
+    ])
+  })
+
+  it('切回运行中会话时同时返回已写稳事实与未提交瞬时时间线', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-1' })
+    timeline.capture(writer, { type: 'thinking-delta', text: '分析中' })
+    timeline.capture(writer, {
+      type: 'peer-event',
+      agentId: 'B',
+      event: { type: 'text-delta', text: 'B 正在评审' },
+    })
+
+    const snapshot = await timeline.snapshot(writer)
+
+    assert.deepEqual(snapshot, [
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-1' } },
+      { type: 'core-event', event: { type: 'thinking-delta', text: '分析中' } },
+      {
+        type: 'core-event',
+        event: {
+          type: 'peer-event',
+          agentId: 'B',
+          event: { type: 'text-delta', text: 'B 正在评审' },
+        },
+      },
+    ])
+  })
+
+  it('在时间线副本完成后读取事件游标，形成同一快照边界', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-1' })
+
+    const snapshot = await timeline.snapshotAt(writer, () => 42)
+
+    assert.equal(snapshot.boundary, 42)
+    assert.deepEqual(snapshot.events, [
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-1' } },
+    ])
+  })
+
   it('只在 step 提交后写入并合并流式文本', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))

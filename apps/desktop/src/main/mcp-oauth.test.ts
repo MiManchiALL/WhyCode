@@ -324,6 +324,7 @@ function httpConfig(
     name: 'remote',
     scope: 'global',
     sourceFingerprint: 'f'.repeat(64),
+    runtimeFingerprint: 'e'.repeat(64),
     connectionFingerprint: 'a'.repeat(64),
     transport: 'http',
     url,

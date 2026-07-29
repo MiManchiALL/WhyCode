@@ -15,6 +15,7 @@ type Channel = 'Main' | 'B' | 'C'
 interface PendingStep {
   writer: ViewEventWriter | null
   events: ViewEvent[]
+  order: number[]
 }
 
 /**
@@ -23,10 +24,12 @@ interface PendingStep {
  */
 export class ViewTimeline {
   private readonly onWriteError: (error: unknown) => void
+  private captureSequence = 0
+  private readonly pendingWrites = new Set<Promise<void>>()
   private pending: Record<Channel, PendingStep> = {
-    Main: { writer: null, events: [] },
-    B: { writer: null, events: [] },
-    C: { writer: null, events: [] },
+    Main: { writer: null, events: [], order: [] },
+    B: { writer: null, events: [], order: [] },
+    C: { writer: null, events: [], order: [] },
   }
 
   constructor(onWriteError: (error: unknown) => void) {
@@ -62,11 +65,59 @@ export class ViewTimeline {
     for (const channel of ['Main', 'B', 'C'] as const) this.discard(channel)
   }
 
+  /** 等待已提交的可见事件写稳；运行中的 step 仍只作为瞬时快照返回。 */
+  async snapshot(writer: ViewEventWriter & { initialViewEvents: readonly ViewEvent[] }):
+  Promise<ViewEvent[]> {
+    return (await this.snapshotAt(writer, () => undefined)).events
+  }
+
+  async flush(): Promise<void> {
+    while (this.pendingWrites.size > 0) {
+      await Promise.all([...this.pendingWrites])
+    }
+  }
+
+  /**
+   * 在同一同步边界取得时间线与宿主事件游标。游标必须在事件副本完成后读取，
+   * 否则两者之间到达的事件可能既不在快照中，又被 Renderer 当成旧事件丢弃。
+   */
+  async snapshotAt<T>(
+    writer: ViewEventWriter & { initialViewEvents: readonly ViewEvent[] },
+    readBoundary: () => T,
+  ): Promise<{ events: ViewEvent[]; boundary: T }> {
+    // 等待期间可能又提交新的稳定事件；必须排空到同一同步边界，事件序号才能
+    // 与快照形成无缺口的接续点。
+    await this.flush()
+    const pending = (['Main', 'B', 'C'] as const)
+      .flatMap((channel) => {
+        const step = this.pending[channel]
+        if (step.writer !== writer) return []
+        return step.events.map((event, index) => ({
+          event,
+          order: step.order[index] ?? Number.MAX_SAFE_INTEGER,
+        }))
+      })
+      .sort((left, right) => left.order - right.order)
+      .map(({ event }) => structuredClone(event))
+    const events = [
+      ...writer.initialViewEvents.map((event) => structuredClone(event)),
+      ...pending,
+    ]
+    return { events, boundary: readBoundary() }
+  }
+
   private buffer(channel: Channel, writer: ViewEventWriter, event: ViewEvent): void {
     const pending = this.pending[channel]
-    if (pending.writer && pending.writer !== writer) pending.events = []
+    if (pending.writer && pending.writer !== writer) {
+      pending.events = []
+      pending.order = []
+    }
     pending.writer = writer
+    const previousLength = pending.events.length
     pushCoalescedViewEvent(pending.events, event)
+    if (pending.events.length > previousLength) {
+      pending.order.push(++this.captureSequence)
+    }
   }
 
   private commit(channel: Channel): void {
@@ -75,13 +126,18 @@ export class ViewTimeline {
       this.write(pending.writer, pending.events.splice(0))
     }
     pending.writer = null
+    pending.order = []
   }
 
   private discard(channel: Channel): void {
-    this.pending[channel] = { writer: null, events: [] }
+    this.pending[channel] = { writer: null, events: [], order: [] }
   }
 
   private write(writer: ViewEventWriter, events: ViewEvent[]): void {
-    void writer.recordViewEvents(events).catch(this.onWriteError)
+    let pending: Promise<void>
+    pending = writer.recordViewEvents(events)
+      .catch((error) => this.onWriteError(error))
+      .finally(() => this.pendingWrites.delete(pending))
+    this.pendingWrites.add(pending)
   }
 }

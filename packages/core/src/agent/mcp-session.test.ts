@@ -194,6 +194,7 @@ function testConfiguration(): McpConfiguration {
       name: 'test',
       scope: 'global',
       sourceFingerprint: 'c'.repeat(64),
+      runtimeFingerprint: 'd'.repeat(64),
       transport: 'stdio',
       command: process.execPath,
       args: [fixture],

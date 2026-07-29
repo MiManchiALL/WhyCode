@@ -7,87 +7,75 @@ import {
   type SessionSummary,
 } from '@whycode/core'
 
-/** Electron 宿主的会话仓库：只管理当前 journal 与磁盘列表，不持有 Agent 运行态。 */
+/** Electron 宿主的会话仓库：只管理磁盘 Journal，不持有选择或 Agent 运行态。 */
 export class DesktopSessionRepository {
   private readonly store: SessionStore
-  private current: SessionJournal | null = null
-  private pendingCreate: Promise<SessionJournal> | null = null
-  private generation = 0
+  private readonly opened = new Map<string, SessionJournal>()
+  private readonly pendingOpen = new Map<string, Promise<SessionJournal>>()
 
   constructor(storageRoot: string, pdfProcessor?: PdfProcessor) {
     this.store = new SessionStore(storageRoot, { pdfProcessor })
   }
 
-  get journal(): SessionJournal | null {
-    return this.current
-  }
-
-  get currentSessionId(): string | null {
-    return this.current?.sessionId ?? null
-  }
-
-  async ensure(
+  async create(
     projectDir: string | null,
     modelId: string,
     reasoningEffort: ReasoningEffortSelection = 'default',
     customSystemPrompt?: CustomSystemPromptSnapshot,
   ): Promise<SessionJournal> {
-    if (this.current) return this.current
-    if (!this.pendingCreate) {
-      const generation = this.generation
-      const create = this.store.create({
-        projectDir,
-        modelId,
-        reasoningEffort,
-        customSystemPrompt,
-      }).then(async (journal) => {
-        if (generation !== this.generation) {
-          await this.store.delete(journal.sessionId).catch(() => false)
-          throw new Error('会话初始化已失效')
-        }
-        this.current ??= journal
-        return this.current
-      })
-      let pending: Promise<SessionJournal>
-      pending = create.finally(() => {
-        if (this.pendingCreate === pending) this.pendingCreate = null
-      })
-      this.pendingCreate = pending
-    }
-    return this.pendingCreate
+    const journal = await this.store.create({
+      projectDir,
+      modelId,
+      reasoningEffort,
+      customSystemPrompt,
+    })
+    this.opened.set(journal.sessionId, journal)
+    return journal
   }
 
-  /** 完整打开候选会话，但在 Main 原子提交前不替换当前 journal。 */
+  /** 完整打开候选会话；并发请求复用同一个 Journal 实例。 */
   prepareResume(sessionId: string): Promise<SessionJournal> {
-    return this.store.open(sessionId)
+    const opened = this.opened.get(sessionId)
+    if (opened) return Promise.resolve(opened)
+    const pending = this.pendingOpen.get(sessionId)
+    if (pending) return pending
+    let opening: Promise<SessionJournal>
+    opening = this.store.open(sessionId)
+      .then((journal) => {
+        this.opened.set(sessionId, journal)
+        return journal
+      })
+      .finally(() => {
+        if (this.pendingOpen.get(sessionId) === opening) {
+          this.pendingOpen.delete(sessionId)
+        }
+      })
+    this.pendingOpen.set(sessionId, opening)
+    return opening
   }
 
-  activate(journal: SessionJournal): void {
-    this.generation++
-    this.pendingCreate = null
-    this.current = journal
+  release(journal: SessionJournal): void {
+    if (this.opened.get(journal.sessionId) === journal) {
+      this.opened.delete(journal.sessionId)
+    }
   }
 
-  reset(): void {
-    this.generation++
-    this.pendingCreate = null
-    this.current = null
-  }
-
-  list(projectDir?: string | null): Promise<SessionSummary[]> {
-    return this.store.list(projectDir, this.current?.metadataSnapshot)
+  list(
+    projectDir?: string | null,
+    selectedSession?: SessionJournal | null,
+  ): Promise<SessionSummary[]> {
+    return this.store.list(projectDir, selectedSession?.metadataSnapshot)
   }
 
   async markDeleting(sessionId: string): Promise<boolean> {
     const marked = await this.store.markDeleting(sessionId)
-    if (marked && this.current?.sessionId === sessionId) this.current = null
+    if (marked) this.opened.delete(sessionId)
     return marked
   }
 
   async delete(sessionId: string): Promise<boolean> {
-    const deletingCurrent = this.current?.sessionId === sessionId
     const deleted = await this.store.delete(sessionId)
-    if (deleted && deletingCurrent) this.current = null
+    if (deleted) this.opened.delete(sessionId)
     return deleted
   }
 }
