@@ -29,6 +29,7 @@ import {
   type TaskPlanState,
 } from '../tasks/types.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -59,7 +60,7 @@ describe('用户中断后的新回合', () => {
   it('首个模型输出前停止后可原位编辑，活动模型历史回滚并只执行新文本', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     const events: CoreEvent[] = []
     let firstRequest = true
     const model = new MockLanguageModelV4({
@@ -103,7 +104,7 @@ describe('用户中断后的新回合', () => {
   it('持久化模型可见中断边界，普通问题不能继续或改写旧计划', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await seedActivePlan(journal)
 
     let firstRequest = true
@@ -247,7 +248,7 @@ describe('用户中断后的新回合', () => {
   it('重启后主动提问的回答仍能重新接合活动计划', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await seedActivePlan(journal, 'waiting-user')
     const reopened = await store.open(journal.sessionId)
     const model = new MockLanguageModelV4({
@@ -270,7 +271,7 @@ describe('用户中断后的新回合', () => {
   it('计划问题卡在进程中断后仍服从 blocked 闸门', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await journal.recordTurnStart('crashed-question', [{ role: 'user', content: '继续任务' }])
     await journal.recordStep(
       'crashed-question',
@@ -314,7 +315,7 @@ describe('用户中断后的新回合', () => {
   it('活动计划问题卡未回答时，普通输入不会被误当成答案并强制续跑', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await seedActivePlan(journal, 'waiting-user')
     const reopened = await store.open(journal.sessionId)
     const model = new MockLanguageModelV4({
@@ -332,7 +333,7 @@ describe('用户中断后的新回合', () => {
   it('问题卡与计划回答绑定在同一稳定 step 落盘，提交窗口停止不拆散状态', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await seedActivePlan(journal)
     const stepPersisted = createDeferred<void>()
     const releaseStep = createDeferred<void>()
@@ -379,7 +380,7 @@ describe('用户中断后的新回合', () => {
   it('没有活动计划的问题卡也会完整落盘，并在重启后恢复等待状态', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     const events: CoreEvent[] = []
     const model = new MockLanguageModelV4({ doStream: [questionStep()] })
     const session = createSession(model, journal, (event) => events.push(event))
@@ -408,7 +409,7 @@ describe('用户中断后的新回合', () => {
   it('问题工具执行后若 step 尚未稳定提交就被停止，不显示或恢复幽灵问题卡', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     const events: CoreEvent[] = []
     const model = new MockLanguageModelV4({ doStream: [questionStep()] })
     let session!: AgentSession
@@ -466,7 +467,7 @@ describe('用户中断后的新回合', () => {
   it('完整文本 step 的持久化窗口停止不会把已交付回答改判为中断', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     const stepPersisted = createDeferred<void>()
     const releaseStep = createDeferred<void>()
     const originalRecordStep = journal.recordStep.bind(journal)
@@ -938,7 +939,7 @@ describe('用户中断后的新回合', () => {
   it('休眠旧计划之外的提问卡回答，不会在当前会话或重启后唤醒旧计划', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:interruption' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await seedActivePlan(journal)
     const model = new MockLanguageModelV4({
       doStream: [questionStep(), finalStep('预算收到，我按 100 元推荐礼物。')],

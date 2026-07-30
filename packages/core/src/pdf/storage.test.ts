@@ -7,6 +7,7 @@ import { SessionStore } from '../session/store.ts'
 import { cleanupUnreferencedAttachments } from '../attachments/cleanup.ts'
 import { preparePdfAttachmentImport, validateStoredPdfAttachments } from './storage.ts'
 import type { PdfProcessor } from './processor.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const SESSION_ID = '11111111-1111-4111-8111-111111111111'
 const tempDirectories: string[] = []
@@ -125,7 +126,7 @@ describe('PDF 附件存储', () => {
     await writeFile(source, '%PDF-1.4\npersistent')
     const processor = fakeProcessor(8)
     const store = new SessionStore(sessionsRoot, { pdfProcessor: processor })
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const transaction = await preparePdfAttachmentImport(
       [{ kind: 'path', path: source }],
       journal.attachmentDirectory,
@@ -166,7 +167,7 @@ describe('PDF 附件存储', () => {
       readPages: base.readPages,
     }
     const store = new SessionStore(sessionsRoot, { pdfProcessor: processor })
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const transaction = await preparePdfAttachmentImport(
       [{ kind: 'path', path: source }],
       journal.attachmentDirectory,

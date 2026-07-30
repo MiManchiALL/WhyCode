@@ -16,6 +16,7 @@ import {
   createWebFetchTool,
 } from '../tools/web-page/index.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 describe('WebFetch Agent 链路', () => {
   it('宿主读取失败作为普通工具结果交还主模型继续判断', async () => {
@@ -63,7 +64,7 @@ describe('WebFetch Agent 链路', () => {
       await writeFile(source, '%PDF-1.4\nremote-pdf-bytes')
       const processor = pdfProcessor()
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:web-fetch' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:web-fetch' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
@@ -125,7 +126,7 @@ describe('WebFetch Agent 链路', () => {
       await writeFile(source, '%PDF-1.4\nabort-remote-pdf')
       const processor = pdfProcessor()
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:web-fetch' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:web-fetch' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,

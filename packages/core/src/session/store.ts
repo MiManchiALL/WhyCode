@@ -98,7 +98,7 @@ export class SessionStore {
       uuid: randomUUID(),
       parentUuid: null,
       timestamp,
-      projectDir: input.projectDir,
+      workspace: input.workspace,
       modelId: input.modelId,
       reasoningEffort: input.reasoningEffort ?? 'default',
       ...(input.customSystemPrompt ? { customSystemPrompt: input.customSystemPrompt } : {}),
@@ -234,7 +234,7 @@ export class SessionStore {
       .filter((item): item is SessionSummary => Boolean(item))
       .filter((item) =>
         projectDir === undefined
-        || (item.projectDir !== undefined && sameProject(item.projectDir, projectDir)))
+        || (item.workspace !== undefined && sameProject(item.workspace, projectDir)))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 

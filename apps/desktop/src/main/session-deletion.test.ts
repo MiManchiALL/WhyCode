@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { CommandSessionManager } from '@whycode/core'
+import { CommandSessionManager, localWorkspace } from '@whycode/core'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 
@@ -25,8 +25,8 @@ describe('会话关联数据删除', () => {
     await writeFile(projectFile, 'user data')
 
     const sessions = new DesktopSessionRepository(sessionsRoot)
-    const deletedJournal = await sessions.create(project, 'test:model')
-    const currentJournal = await sessions.create(project, 'test:model')
+    const deletedJournal = await sessions.create(localWorkspace(project), 'test:model')
+    const currentJournal = await sessions.create(localWorkspace(project), 'test:model')
     const commandSessions = new CommandSessionManager(commandsRoot)
     await commandSessions.initialize()
     await mkdir(join(commandsRoot, deletedJournal.sessionId), { recursive: true })
@@ -85,7 +85,7 @@ describe('会话关联数据删除', () => {
   it('前置清理失败时持久标成仅可重试删除', async () => {
     const root = await createRoot()
     const sessions = new DesktopSessionRepository(join(root, 'sessions'))
-    const journal = await sessions.create(null, 'test:model')
+    const journal = await sessions.create(localWorkspace(null), 'test:model')
     await assert.rejects(
       deleteSessionArtifacts({
         sessionId: journal.sessionId,

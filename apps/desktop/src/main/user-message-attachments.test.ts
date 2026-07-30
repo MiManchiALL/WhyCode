@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { SessionStore, type PdfProcessor } from '@whycode/core'
+import { localWorkspace, SessionStore, type PdfProcessor } from '@whycode/core'
 import {
   prepareUserMessageAttachments,
   userMessageNeedsAttachmentPreparation,
@@ -47,7 +47,7 @@ describe('桌面混合附件准备', () => {
       writeFile(pdfPath, '%PDF-1.4\nguide'),
     ])
     const journal = await new SessionStore(join(root, 'sessions')).create({
-      projectDir: root,
+      workspace: localWorkspace(root),
       modelId: 'test:vision',
     })
     const prepared = await prepareUserMessageAttachments({
@@ -82,7 +82,7 @@ describe('桌面混合附件准备', () => {
       writeFile(pdfPath, '%PDF-1.4\nbroken'),
     ])
     const journal = await new SessionStore(join(root, 'sessions')).create({
-      projectDir: root,
+      workspace: localWorkspace(root),
       modelId: 'test:vision',
     })
     const processor: PdfProcessor = {
@@ -113,7 +113,7 @@ describe('桌面混合附件准备', () => {
     const pdfPath = join(root, 'text.pdf')
     await writeFile(pdfPath, '%PDF-1.4\ntext')
     const journal = await new SessionStore(join(root, 'sessions')).create({
-      projectDir: null,
+      workspace: localWorkspace(null),
       modelId: 'test:text',
     })
     const common = {

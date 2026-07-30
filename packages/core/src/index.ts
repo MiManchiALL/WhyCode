@@ -205,6 +205,7 @@ export type {
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
 export { validateSessionId } from './session/metadata.ts'
+export { terminateProcessTree } from './tools/run-command/process-termination.ts'
 export {
   IMAGE_ATTACHMENT_MAX_COUNT,
   IMAGE_ATTACHMENT_MAX_DIMENSION,
@@ -298,6 +299,16 @@ export type {
   SessionRecorder,
   SessionSummary,
 } from './session/types.ts'
+export {
+  localWorkspace,
+  workspaceBindingSchema,
+  worktreeWorkspaceBindingSchema,
+  workspaceWorkingDirectory,
+} from './workspace/types.ts'
+export type {
+  WorkspaceBinding,
+  WorktreeWorkspaceBinding,
+} from './workspace/types.ts'
 export {
   activeTaskPlanSchema,
   supersededTaskPlanSchema,

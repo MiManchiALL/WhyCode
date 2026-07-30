@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'r
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
-import type { CoreCommand, ReasoningEffortSelection } from '@whycode/core'
+import type {
+  CoreCommand,
+  ReasoningEffortSelection,
+  WorkspaceBinding,
+} from '@whycode/core'
 import {
   formatUserQuestionAnswer,
   type AgentStatus,
@@ -11,6 +15,10 @@ import {
 } from '@whycode/core/events'
 import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
 import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
+import {
+  workspaceDisplayDirectory,
+  type WorkspaceCandidate,
+} from '../../shared/workspace.ts'
 import {
   applyCoreEvent,
   appendNotice,
@@ -60,6 +68,8 @@ import {
   type PdfDraft,
 } from './pdf-draft.ts'
 import { composerKeyAction } from './composer-key.ts'
+import { WorkspaceStartDialog } from './workspace-start-dialog.tsx'
+import { WorktreePanel } from './worktree-panel.tsx'
 
 interface Approval {
   requestId: string
@@ -87,7 +97,7 @@ export function App() {
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
-  const [projectDir, setProjectDir] = useState<string | null>(null)
+  const [workspace, setWorkspace] = useState<WorkspaceBinding>({ mode: 'none' })
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
   const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
   const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
@@ -98,6 +108,8 @@ export function App() {
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [showSessions, setShowSessions] = useState(false)
+  const [workspaceCandidate, setWorkspaceCandidate] = useState<WorkspaceCandidate | null>(null)
+  const [showWorktreePanel, setShowWorktreePanel] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
@@ -129,6 +141,7 @@ export function App() {
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const inputRef = useRef('')
   const blocks = view.blocks
+  const projectDir = workspaceDisplayDirectory(workspace)
   const sections = conversationSections(blocks, workStartedAt)
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
@@ -184,6 +197,20 @@ export function App() {
       composerDraftsRef.current.delete(key)
     }
   }, [detachImageDrafts, detachPdfDrafts])
+
+  const resetActiveComposer = useCallback(() => {
+    const currentRuntimeId = runtimeIdRef.current
+    const currentSessionId = sessionIdRef.current
+    const key = composerKey(currentRuntimeId, currentSessionId)
+    const detachedDraft = composerDraftsRef.current.get(key)
+    if (detachedDraft) releaseImageDrafts(detachedDraft.images)
+    composerDraftsRef.current.delete(key)
+    backgroundEventsRef.current.delete(currentRuntimeId)
+    inputRef.current = ''
+    setInput('')
+    clearImageDrafts()
+    clearPdfDrafts()
+  }, [clearImageDrafts, clearPdfDrafts])
 
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     resumingSessionIdRef.current = sessionId
@@ -274,6 +301,7 @@ export function App() {
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
     if (changingRuntime) stashActiveComposer()
+    if (changingRuntime) setShowWorktreePanel(false)
     if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
     runtimeIdRef.current = snapshot.runtimeId
     sessionIdRef.current = snapshot.sessionId
@@ -290,7 +318,7 @@ export function App() {
       }
     }
     setView(createConversationState(snapshot.viewEvents))
-    setProjectDir(snapshot.projectDir)
+    setWorkspace(snapshot.workspace)
     setPermMode(snapshot.permissionMode)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
@@ -524,7 +552,6 @@ export function App() {
           consumeEvent(bufferedEvent.event)
         }
       }
-      void window.whycode.getProjectDir().then(setProjectDir)
     })
     return () => {
       disposed = true
@@ -587,23 +614,15 @@ export function App() {
 
   const pickProject = useCallback(() => {
     if (!beginSessionTransition()) return
-    void window.whycode.pickProjectDir().then(async (result) => {
-      if (!result?.ok) return
-      applyRuntimeSnapshot(result.snapshot)
-      setShowSessions(false)
-      void window.whycode.consensusStatus().then(setConsensus)
-      void refreshSessions()
-      void refreshModels()
+    void window.whycode.pickProjectDir().then((candidate) => {
+      if (candidate) setWorkspaceCandidate(candidate)
     }).catch((error) => {
-      addError(`工作文件夹切换失败：${error instanceof Error ? error.message : String(error)}`)
+      addError(`工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
     addError,
-    applyRuntimeSnapshot,
     beginSessionTransition,
     endSessionTransition,
-    refreshModels,
-    refreshSessions,
   ])
 
   const toggleConsensus = useCallback(() => {
@@ -626,14 +645,47 @@ export function App() {
 
   const startNewSession = useCallback(() => {
     if (!beginSessionTransition()) return
-    void window.whycode.newSession().then((result) => {
-      if (!result.ok) return addError(result.error ?? '新建会话失败')
+    void window.whycode.inspectCurrentWorkspace(runtimeIdRef.current || undefined)
+      .then(setWorkspaceCandidate)
+      .catch((error) => {
+        addError(`工作区检查失败：${error instanceof Error ? error.message : String(error)}`)
+      })
+      .finally(endSessionTransition)
+  }, [addError, beginSessionTransition, endSessionTransition])
+
+  const startWorkspaceSession = useCallback((mode: 'local' | 'worktree') => {
+    const candidate = workspaceCandidate
+    if (!candidate || !beginSessionTransition()) return
+    const workspaceRequest = mode === 'local'
+      ? {
+          mode: 'local' as const,
+          selectedDirectory: candidate.selectedDirectory,
+        }
+      : candidate.baseCommit
+        ? {
+            mode: 'worktree' as const,
+            selectedDirectory: candidate.selectedDirectory,
+            expectedBaseCommit: candidate.baseCommit,
+            acknowledgeUncommittedChangesExcluded: candidate.dirty,
+          }
+        : null
+    if (!workspaceRequest) {
+      endSessionTransition()
+      return addError(candidate.worktreeUnavailableReason ?? '当前目录不能创建 Worktree')
+    }
+    void window.whycode.newSession({ workspace: workspaceRequest }).then((result) => {
+      if (!result.ok) {
+        setWorkspaceCandidate(null)
+        return addError(result.error ?? '新建会话失败')
+      }
       applyRuntimeSnapshot(result.snapshot)
+      setWorkspaceCandidate(null)
       setShowSessions(false)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
       void refreshModels()
     }).catch((error) => {
+      setWorkspaceCandidate(null)
       addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
@@ -643,6 +695,7 @@ export function App() {
     endSessionTransition,
     refreshModels,
     refreshSessions,
+    workspaceCandidate,
   ])
 
   const resumeSession = useCallback((sessionId: string) => {
@@ -702,10 +755,7 @@ export function App() {
         }
       }
       if (result.deletedCurrent) {
-        inputRef.current = ''
-        setInput('')
-        clearImageDrafts()
-        clearPdfDrafts()
+        resetActiveComposer()
         if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
         if (result.ok) setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
@@ -721,11 +771,39 @@ export function App() {
   }, [
     addError,
     applyRuntimeSnapshot,
-    clearImageDrafts,
-    clearPdfDrafts,
     deletingSessionId,
     refreshSessions,
+    resetActiveComposer,
     setDeletionBlocksRuntime,
+  ])
+
+  const discardWorktree = useCallback(() => {
+    const targetRuntimeId = runtimeIdRef.current
+    if (!targetRuntimeId || !beginSessionTransition()) return
+    void window.whycode.discardWorktree(targetRuntimeId).then((result) => {
+      if (result.deletedCurrent) {
+        resetActiveComposer()
+        if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
+      }
+      if (!result.ok) {
+        addError(result.error ?? 'Worktree 丢弃失败')
+        return
+      }
+      setShowWorktreePanel(false)
+      void refreshSessions()
+      void refreshModels()
+      void window.whycode.consensusStatus().then(setConsensus)
+    }).catch((error) => {
+      addError(`Worktree 丢弃失败：${error instanceof Error ? error.message : String(error)}`)
+    }).finally(endSessionTransition)
+  }, [
+    addError,
+    applyRuntimeSnapshot,
+    beginSessionTransition,
+    endSessionTransition,
+    refreshModels,
+    refreshSessions,
+    resetActiveComposer,
   ])
 
   const compact = useCallback(() => {
@@ -972,6 +1050,7 @@ export function App() {
       )}
       <AppHeader
         projectDir={projectDir}
+        workspaceMode={workspace.mode}
         busy={interactionBusy}
         sessionChangeLocked={sessionChangeLocked}
         permissionLocked={
@@ -985,6 +1064,7 @@ export function App() {
         modelId={modelId}
         reasoningEffort={reasoningEffort}
         onPickProject={pickProject}
+        onOpenWorkspaceDetails={() => setShowWorktreePanel(true)}
         onToggleConsensus={toggleConsensus}
         onCompact={compact}
         onPermissionChange={changePermission}
@@ -998,6 +1078,34 @@ export function App() {
         onNewSession={startNewSession}
         onOpenConnectionSettings={openConnectionSettings}
       />
+
+      {workspaceCandidate && (
+        <WorkspaceStartDialog
+          candidate={workspaceCandidate}
+          busy={sessionTransitionPending}
+          onStart={startWorkspaceSession}
+          onPickOther={() => {
+            if (sessionTransitionPending) return
+            setWorkspaceCandidate(null)
+            pickProject()
+          }}
+          onClose={() => {
+            if (!sessionTransitionPending) setWorkspaceCandidate(null)
+          }}
+        />
+      )}
+
+      {showWorktreePanel && workspace.mode === 'worktree' && (
+        <WorktreePanel
+          runtimeId={runtimeId}
+          binding={workspace}
+          busy={interactionBusy}
+          onClose={() => {
+            if (!sessionTransitionPending) setShowWorktreePanel(false)
+          }}
+          onDiscard={discardWorktree}
+        />
+      )}
 
       {showConnectionSettings && connectionSettings && (
         <ConnectionSettingsPanel

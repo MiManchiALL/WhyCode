@@ -139,7 +139,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     metadata: {
       schemaVersion: SESSION_SCHEMA_VERSION,
       sessionId: start.sessionId,
-      projectDir: start.projectDir,
+      workspace: start.workspace,
       modelId: modelSelection.modelId,
       reasoningEffort: modelSelection.reasoningEffort,
       title: clip(userTexts[0] ?? ''),

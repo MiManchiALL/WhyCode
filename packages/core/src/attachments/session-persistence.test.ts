@@ -7,6 +7,7 @@ import { describe, it } from 'node:test'
 import { SessionStore } from '../session/store.ts'
 import { createImageUserMessage, messagesForModel } from './messages.ts'
 import { importImageAttachments } from './storage.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
@@ -18,7 +19,7 @@ describe('图片会话持久化', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-session-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'zhipu:glm-5v-turbo' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'zhipu:glm-5v-turbo' })
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
@@ -66,7 +67,7 @@ describe('图片会话持久化', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-recovery-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'zhipu:glm-5v-turbo' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'zhipu:glm-5v-turbo' })
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
@@ -90,7 +91,7 @@ describe('图片会话持久化', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-history-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'zhipu:glm-5v-turbo' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'zhipu:glm-5v-turbo' })
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(
@@ -116,7 +117,7 @@ describe('图片会话持久化', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-steering-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'zhipu:glm-5v-turbo' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'zhipu:glm-5v-turbo' })
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)
       const attachments = await importImageAttachments(

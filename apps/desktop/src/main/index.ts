@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron'
-import { realpath, rm } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
   AgentSession,
@@ -14,6 +15,7 @@ import {
   ensureProjectMcpConfigTemplate,
   getModelEntry,
   loadMcpConfiguration,
+  localWorkspace,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
   type ConsensusAgentSetup,
@@ -25,6 +27,9 @@ import {
   type ProviderConfig,
   type ReasoningEffortSelection,
   type SessionJournal,
+  type WorkspaceBinding,
+  type WorktreeWorkspaceBinding,
+  workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { IPC } from '../shared/ipc.ts'
@@ -82,6 +87,7 @@ import {
 } from './user-message-attachments.ts'
 import type {
   DeleteSessionResult,
+  NewSessionRequest,
   NewSessionResult,
   ResumeSessionResult,
   RuntimeSnapshot,
@@ -89,6 +95,11 @@ import type {
   RuntimeCommandEnvelope,
   SessionListItem,
 } from '../shared/session.ts'
+import type {
+  WorkspaceActionResult,
+  WorkspaceCandidate,
+  WorktreeStatus,
+} from '../shared/workspace.ts'
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
@@ -118,6 +129,7 @@ import {
 } from './web-page/processor.ts'
 import { importWebPdfDocument } from './web-page/pdf-import.ts'
 import { installExternalWebLinkHandlers } from './external-link.ts'
+import { WorktreeManager } from './worktree-manager.ts'
 import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
@@ -269,6 +281,8 @@ let sessions: DesktopSessionRepository
 let runtimeRegistry!: SessionRuntimeRegistry
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
+/** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
+let worktrees: WorktreeManager
 /** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
 const sessionDeletionLock = new SessionDeletionLock()
 /** 历史会话完整校验与候选运行时构造期间，只允许一个恢复事务。 */
@@ -296,9 +310,138 @@ function runtimeForId(runtimeId?: string): DesktopSessionRuntime {
   return runtime
 }
 
-function createDraftRuntime(projectDir: string): DesktopSessionRuntime {
+function worktreeBinding(
+  workspace: WorkspaceBinding | undefined,
+): WorktreeWorkspaceBinding | null {
+  return workspace?.mode === 'worktree' ? workspace : null
+}
+
+function sourceWorkspaceDirectory(workspace: WorkspaceBinding): string {
+  if (workspace.mode === 'worktree') {
+    return workspace.relativeWorkingDirectory === '.'
+      ? workspace.repositoryDirectory
+      : join(
+          workspace.repositoryDirectory,
+          ...workspace.relativeWorkingDirectory.split('/'),
+        )
+  }
+  return workspaceWorkingDirectory(workspace) ?? requireDefaultWorkspace()
+}
+
+async function inspectCurrentWorkspace(runtimeId?: string): Promise<WorkspaceCandidate> {
+  return worktrees.inspect(sourceWorkspaceDirectory(runtimeForId(runtimeId).workspace))
+}
+
+async function currentWorktreeStatus(
+  runtimeId: string,
+): Promise<WorkspaceActionResult<WorktreeStatus>> {
+  try {
+    const binding = worktreeBinding(runtimeForId(runtimeId).workspace)
+    if (!binding) throw new Error('当前会话使用本地工作区，没有受管 Worktree')
+    return { ok: true, value: await worktrees.status(binding) }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function createCurrentWorktreeBranch(
+  runtimeId: string,
+  branchName: string,
+): Promise<WorkspaceActionResult> {
+  let reservation: ReturnType<DesktopSessionRuntime['routingGate']['reserve']> | null = null
+  try {
+    const runtime = runtimeForId(runtimeId)
+    const binding = worktreeBinding(runtime.workspace)
+    if (!binding) throw new Error('当前会话使用本地工作区，没有受管 Worktree')
+    if (
+      runtime.sessionId
+      && sessionDeletionLock.sessionId === runtime.sessionId
+    ) {
+      throw new Error('当前会话删除中，请等待完成')
+    }
+    reservation = runtime.routingGate.reserve()
+    await reservation.ready
+    if (runtime.executionBusy) throw new Error('Agent 工作中，请等待任务结束后再创建分支')
+    if (runtime.sessionId) {
+      const backgroundRunning = (await commandSessions.list(runtime.sessionId))
+        .some((task) => task.status === 'running')
+      if (backgroundRunning) throw new Error('仍有后台命令运行，请先停止后再创建分支')
+    }
+    const signal = new AbortController().signal
+    await hostOperations.runProjectWrite(
+      requireRuntimeProjectDir(runtime),
+      signal,
+      () => worktrees.createBranch(binding, branchName),
+    )
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    reservation?.release()
+  }
+}
+
+async function openCurrentWorkspaceFolder(
+  runtimeId: string,
+): Promise<WorkspaceActionResult> {
+  try {
+    const path = requireRuntimeProjectDir(runtimeForId(runtimeId))
+    const error = await shell.openPath(path)
+    if (error) throw new Error(error)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionResult> {
+  let replacementRuntime: DesktopSessionRuntime | null = null
+  let detachedCurrent = false
+  try {
+    const runtime = runtimeForId(runtimeId)
+    const binding = worktreeBinding(runtime.workspace)
+    if (!binding) throw new Error('当前会话使用本地工作区，没有可丢弃的受管 Worktree')
+    if (runtime.sessionId) return deleteSession(runtime.sessionId)
+    if (runtime.busy) throw new Error('Agent 工作中，请先停止再丢弃 Worktree')
+
+    const wasSelected = runtimeRegistry.selected === runtime
+    await runtimeRegistry.remove(runtime)
+    detachedCurrent = wasSelected
+    await worktrees.remove(binding, true)
+    if (wasSelected) {
+      replacementRuntime = createDraftRuntime(localWorkspace(requireDefaultWorkspace()))
+      runtimeRegistry.select(replacementRuntime)
+    }
+    return {
+      ok: true,
+      deletedCurrent: wasSelected,
+      ...(replacementRuntime
+        ? { snapshot: await runtimeSnapshot(replacementRuntime) }
+        : {}),
+    }
+  } catch (error) {
+    if (detachedCurrent && !replacementRuntime) {
+      replacementRuntime = createDraftRuntime(localWorkspace(requireDefaultWorkspace()))
+      runtimeRegistry.select(replacementRuntime)
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      deletedCurrent: detachedCurrent || undefined,
+      ...(replacementRuntime
+        ? { snapshot: await runtimeSnapshot(replacementRuntime) }
+        : {}),
+    }
+  }
+}
+
+function createDraftRuntime(
+  workspace: WorkspaceBinding,
+  runtimeId?: string,
+): DesktopSessionRuntime {
   const runtime = new DesktopSessionRuntime({
-    projectDir,
+    runtimeId,
+    workspace,
     modelId: preferredModelId ?? resolveDefaultModelId(loadAppConfig()),
     permissionMode: preferredPermissionMode,
     emit: broadcastRuntimeEvent,
@@ -342,14 +485,10 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     if (!runtime.sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const customSystemPrompt = runtime.journal
-          ? undefined
-          : await loadCustomSystemPromptSnapshot(customSystemPromptConfigPath)
-        const recorder = runtime.journal ?? await sessions.create(
-          runtime.projectDir,
+        const recorder = runtime.journal ?? await createRuntimeJournal(
+          runtime,
           modelId,
           runtime.reasoningEffort,
-          customSystemPrompt,
         )
         runtime.journal = recorder
         if (!runtime.session) {
@@ -382,6 +521,32 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     if (err2) return err2
   }
   return null
+}
+
+async function createRuntimeJournal(
+  runtime: DesktopSessionRuntime,
+  modelId: string,
+  reasoningEffort: ReasoningEffortSelection,
+): Promise<SessionJournal> {
+  const customSystemPrompt = await loadCustomSystemPromptSnapshot(
+    customSystemPromptConfigPath,
+  )
+  const recorder = await sessions.create(
+    runtime.workspace,
+    modelId,
+    reasoningEffort,
+    customSystemPrompt,
+  )
+  if (runtime.workspace.mode !== 'worktree') return recorder
+  try {
+    await worktrees.attachSession(runtime.workspace, recorder.sessionId)
+    return recorder
+  } catch (error) {
+    sessions.release(recorder)
+    await sessions.markDeleting(recorder.sessionId).catch(() => false)
+    await sessions.delete(recorder.sessionId).catch(() => false)
+    throw error
+  }
 }
 
 async function createMainAgentSession(
@@ -435,7 +600,7 @@ async function createMainAgentSession(
         ),
       pdfProcessor,
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
-        hostOperations.runProjectWrite(runtime.projectDir, abortSignal, operation),
+        hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),
       requestApproval: (request) => runtime.requestApproval(request),
     })
@@ -1270,7 +1435,7 @@ async function runtimeSnapshot(
   )
   return {
     runtimeId: runtime.runtimeId,
-    projectDir: runtime.projectDir,
+    workspace: runtime.workspace,
     modelId: resolveCurrentModelId(runtime),
     reasoningEffort: runtime.reasoningEffort,
     permissionMode: runtime.permissionMode,
@@ -1322,7 +1487,7 @@ async function selectRuntimeWithSnapshot(
   }
 }
 
-async function startNewSession(): Promise<NewSessionResult> {
+async function startNewSession(request: NewSessionRequest): Promise<NewSessionResult> {
   if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
     return {
       ok: false,
@@ -1331,9 +1496,10 @@ async function startNewSession(): Promise<NewSessionResult> {
         : resumeInProgressMessage('新建会话'),
     }
   }
-  const defaultProjectDir = requireDefaultWorkspace()
-  const runtime = createDraftRuntime(defaultProjectDir)
   try {
+    const runtimeId = randomUUID()
+    const workspace = await createRequestedWorkspace(request, runtimeId)
+    const runtime = createDraftRuntime(workspace, runtimeId)
     return {
       ok: true,
       snapshot: await selectRuntimeWithSnapshot(runtime, true),
@@ -1344,6 +1510,32 @@ async function startNewSession(): Promise<NewSessionResult> {
       error: `新建会话失败：${error instanceof Error ? error.message : String(error)}`,
     }
   }
+}
+
+async function createRequestedWorkspace(
+  request: NewSessionRequest,
+  runtimeId: string,
+): Promise<WorkspaceBinding> {
+  const target = request?.workspace
+  if (
+    !target
+    || typeof target !== 'object'
+    || typeof target.selectedDirectory !== 'string'
+  ) {
+    throw new Error('新会话工作区请求无效')
+  }
+  if (target.mode === 'local') {
+    const candidate = await worktrees.inspect(target.selectedDirectory)
+    return localWorkspace(candidate.selectedDirectory)
+  }
+  if (
+    target.mode !== 'worktree'
+    || typeof target.expectedBaseCommit !== 'string'
+    || typeof target.acknowledgeUncommittedChangesExcluded !== 'boolean'
+  ) {
+    throw new Error('新会话 Worktree 请求无效')
+  }
+  return worktrees.create(target, runtimeId, runtimeId)
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
@@ -1402,7 +1594,7 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
   const journal = await sessions.prepareResume(sessionId)
   const metadata = journal.metadataSnapshot
   await journal.recoverInterruptedWork()
-  const targetProjectDir = metadata.projectDir ?? requireDefaultWorkspace()
+  const targetProjectDir = workspaceWorkingDirectory(metadata.workspace)
   const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
   const targetReasoningEffort = resolved.ok
     ? normalizeReasoningEffortSelection(
@@ -1411,7 +1603,7 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
       )
     : metadata.reasoningEffort
   const runtime = new DesktopSessionRuntime({
-    projectDir: targetProjectDir,
+    workspace: metadata.workspace,
     modelId: metadata.modelId,
     reasoningEffort: targetReasoningEffort,
     permissionMode: preferredPermissionMode,
@@ -1420,6 +1612,13 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
   runtime.consensusEnabled = preferredConsensusEnabled
   runtime.journal = journal
   try {
+    if (metadata.workspace.mode === 'worktree') {
+      await worktrees.assertUsable(
+        metadata.workspace,
+        journal.sessionId,
+        runtime.runtimeId,
+      )
+    }
     if (resolved.ok) {
       runtime.session = await createMainAgentSession(
         runtime,
@@ -1443,6 +1642,9 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
     }
   } catch (error) {
     await runtime.dispose().catch(() => {})
+    if (metadata.workspace.mode === 'worktree') {
+      worktrees.release(metadata.workspace, runtime.runtimeId)
+    }
     sessions.release(journal)
     throw error
   }
@@ -1497,6 +1699,12 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   const releaseDeletion = sessionDeletionLock.acquire(sessionId, deletedCurrent)
   if (!releaseDeletion) return { ok: false, error: '已有会话正在删除，请等待完成' }
   try {
+    const summary = targetRuntime
+      ? null
+      : (await sessions.list()).find((item) => item.sessionId === sessionId)
+    const targetWorktree = worktreeBinding(
+      targetRuntime?.workspace ?? summary?.workspace,
+    )
     const deleted = await deleteSessionArtifacts({
       sessionId,
       sessions,
@@ -1506,13 +1714,16 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         if (!sessionExists) return
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
         if (deletedCurrent) {
-          const replacement = createDraftRuntime(requireDefaultWorkspace())
+          const replacement = createDraftRuntime(localWorkspace(requireDefaultWorkspace()))
           runtimeRegistry.select(replacement)
           replacementRuntime = replacement
           detachedCurrent = true
         }
       },
-      onBeforeFactSourceDelete: () => pruneRetiredModelLabels(sessionId),
+      onBeforeFactSourceDelete: async () => {
+        if (targetWorktree) await worktrees.remove(targetWorktree, true)
+        await pruneRetiredModelLabels(sessionId)
+      },
     })
     if (!deleted) {
       return {
@@ -1591,13 +1802,20 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
   runtimeRegistry = new SessionRuntimeRegistry({
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
-    onRemoved: (runtime) => {
+    onRemoved: async (runtime) => {
       if (runtime.journal) sessions.release(runtime.journal)
+      if (runtime.workspace.mode !== 'worktree') return
+      if (runtime.journal) {
+        worktrees.release(runtime.workspace, runtime.runtimeId)
+      } else {
+        await worktrees.cleanupDraft(runtime.workspace, runtime.runtimeId)
+      }
     },
   })
-  const initialRuntime = createDraftRuntime(defaultWorkspaceDir)
+  const initialRuntime = createDraftRuntime(localWorkspace(defaultWorkspaceDir))
   runtimeRegistry.select(initialRuntime)
   await pruneRetiredModelLabels()
     .catch((error) => console.warn('退役模型显示名清理失败：', error))
@@ -1644,8 +1862,6 @@ if (primaryInstance) void app.whenReady().then(async () => {
     disconnectMcpOAuthConnection(request))
   ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
     openMcpConfigFile(request))
-  ipcMain.handle(IPC.getProjectDir, (_e, runtimeId?: string) =>
-    runtimeForId(runtimeId).projectDir)
   ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string) =>
     runtimeSnapshot(runtimeForId(runtimeId)))
   ipcMain.handle(IPC.consensusStatus, () => ({
@@ -1666,9 +1882,20 @@ if (primaryInstance) void app.whenReady().then(async () => {
       ),
     }))
   })
-  ipcMain.handle(IPC.newSession, () => startNewSession())
+  ipcMain.handle(IPC.newSession, (_e, request: NewSessionRequest) =>
+    startNewSession(request))
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
+  ipcMain.handle(IPC.inspectCurrentWorkspace, (_e, runtimeId?: string) =>
+    inspectCurrentWorkspace(runtimeId))
+  ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>
+    currentWorktreeStatus(runtimeId))
+  ipcMain.handle(IPC.createWorktreeBranch, (_e, runtimeId: string, branchName: string) =>
+    createCurrentWorktreeBranch(runtimeId, branchName))
+  ipcMain.handle(IPC.openWorkspaceFolder, (_e, runtimeId: string) =>
+    openCurrentWorkspaceFolder(runtimeId))
+  ipcMain.handle(IPC.discardWorktree, (_e, runtimeId: string) =>
+    discardCurrentWorktree(runtimeId))
   ipcMain.handle(IPC.openPdfAttachment, async (
     _e,
     runtimeId: string,
@@ -1680,48 +1907,33 @@ if (primaryInstance) void app.whenReady().then(async () => {
       (path) => shell.openPath(path),
     )
   })
-  ipcMain.handle(IPC.pickProjectDir, async () => {
+  ipcMain.handle(IPC.pickProjectDir, async (): Promise<WorkspaceCandidate | null> => {
     if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
       return null
     }
     const selectionAtOpen = selectedRuntime()
     const result = await dialog.showOpenDialog({
       title: '选择工作文件夹',
-      defaultPath: selectionAtOpen.projectDir,
+      defaultPath: requireRuntimeProjectDir(selectionAtOpen),
       properties: ['openDirectory'],
     })
     const selected = result.filePaths[0]
     if (!selected) return null
-    let dir: string
     try {
-      dir = await realpath(selected)
-    } catch {
-      selectionAtOpen.emit({
-        type: 'error',
-        message: '所选工作文件夹已不可用，请重新选择',
-        recoverable: true,
-      })
-      return null
-    }
-    // 原生对话框期间允许其它入口切换会话；旧选择不能覆盖后来发生的用户操作。
-    if (
-      runtimeRegistry.selected !== selectionAtOpen
-      || sessionDeletionLock.sessionId
-      || sessionResumeLock.sessionId
-    ) {
-      return null
-    }
-    if (samePath(dir, selectionAtOpen.projectDir)) return null
-    const runtime = createDraftRuntime(dir)
-    try {
-      return {
-        ok: true,
-        snapshot: await selectRuntimeWithSnapshot(runtime, true),
-      } satisfies NewSessionResult
+      const candidate = await worktrees.inspect(selected)
+      // 原生对话框期间允许其它入口切换会话；旧选择不能覆盖后来发生的用户操作。
+      if (
+        runtimeRegistry.selected !== selectionAtOpen
+        || sessionDeletionLock.sessionId
+        || sessionResumeLock.sessionId
+      ) {
+        return null
+      }
+      return candidate
     } catch (error) {
       selectionAtOpen.emit({
         type: 'error',
-        message: `工作文件夹切换失败：${
+        message: `工作文件夹检查失败：${
           error instanceof Error ? error.message : String(error)
         }`,
         recoverable: true,
@@ -1742,10 +1954,10 @@ function requireDefaultWorkspace(): string {
   return defaultWorkspaceDir
 }
 
-function samePath(left: string, right: string): boolean {
-  return process.platform === 'win32'
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right
+function requireRuntimeProjectDir(runtime: DesktopSessionRuntime): string {
+  const projectDir = runtime.projectDir
+  if (!projectDir) throw new Error('当前会话没有可用的工作文件夹')
+  return projectDir
 }
 
 app.on('window-all-closed', () => {

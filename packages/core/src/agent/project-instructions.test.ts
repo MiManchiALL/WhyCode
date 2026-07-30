@@ -12,6 +12,7 @@ import { parseTranscript } from '../session/chain.ts'
 import { SessionStore } from '../session/store.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -32,7 +33,7 @@ describe('Agent 项目指令生命周期', () => {
     await writeFile(join(home, '.whycode', 'AGENTS.md'), '全局规则', 'utf8')
     await writeFile(join(project, 'AGENTS.md'), '项目规则一', 'utf8')
     const store = new SessionStore(sessions)
-    const journal = await store.create({ projectDir: project, modelId: 'test:instructions' })
+    const journal = await store.create({ workspace: localWorkspace(project), modelId: 'test:instructions' })
     let calls = 0
     const model = new MockLanguageModelV4({
       doStream: async () => {
@@ -83,7 +84,7 @@ describe('Agent 项目指令生命周期', () => {
     await mkdir(project, { recursive: true })
     await writeFile(join(project, 'AGENTS.md'), '压缩前规则', 'utf8')
     const store = new SessionStore(sessions)
-    const journal = await store.create({ projectDir: project, modelId: 'test:instructions' })
+    const journal = await store.create({ workspace: localWorkspace(project), modelId: 'test:instructions' })
     const model = new MockLanguageModelV4({
       doGenerate: async () => {
         await writeFile(join(project, 'AGENTS.md'), '压缩后规则', 'utf8')

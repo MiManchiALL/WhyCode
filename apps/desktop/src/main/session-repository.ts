@@ -5,6 +5,7 @@ import {
   type ReasoningEffortSelection,
   type SessionJournal,
   type SessionSummary,
+  type WorkspaceBinding,
 } from '@whycode/core'
 
 /** Electron 宿主的会话仓库：只管理磁盘 Journal，不持有选择或 Agent 运行态。 */
@@ -18,13 +19,13 @@ export class DesktopSessionRepository {
   }
 
   async create(
-    projectDir: string | null,
+    workspace: WorkspaceBinding,
     modelId: string,
     reasoningEffort: ReasoningEffortSelection = 'default',
     customSystemPrompt?: CustomSystemPromptSnapshot,
   ): Promise<SessionJournal> {
     const journal = await this.store.create({
-      projectDir,
+      workspace,
       modelId,
       reasoningEffort,
       customSystemPrompt,

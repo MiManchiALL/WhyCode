@@ -10,6 +10,7 @@ import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const CURRENT_TIME_TEXT = '当前本机时间：'
 const temporaryDirectories: string[] = []
@@ -24,7 +25,7 @@ describe('Agent 当前时间上下文', () => {
   it('首步注入一次，短 turn 的工具续步复用同一条提醒并完整持久化', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:current-time' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:current-time' })
     const model = new MockLanguageModelV4({ doStream: [toolStep(), finalStep()] })
     const session = createSession(model, journal)
     session.setExtraTools([timeProbe()])
@@ -80,7 +81,7 @@ describe('Agent 当前时间上下文', () => {
   it('中止的模型步骤不会留下孤立时间提醒', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:current-time' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:current-time' })
     const modelCallStarted = createDeferred<void>()
     const model = new MockLanguageModelV4({
       doStream: async (options) => {

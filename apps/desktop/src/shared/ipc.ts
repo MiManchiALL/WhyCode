@@ -22,8 +22,11 @@ export const IPC = {
   openMcpConfig: 'whycode:open-mcp-config',
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
-  /** Renderer → Main：查询当前项目目录 */
-  getProjectDir: 'whycode:get-project-dir',
+  inspectCurrentWorkspace: 'whycode:inspect-current-workspace',
+  worktreeStatus: 'whycode:worktree-status',
+  createWorktreeBranch: 'whycode:create-worktree-branch',
+  openWorkspaceFolder: 'whycode:open-workspace-folder',
+  discardWorktree: 'whycode:discard-worktree',
   /** Renderer 重载/崩溃恢复：重新取得当前会话、稳定时间线与主进程运行态。 */
   runtimeSnapshot: 'whycode:runtime-snapshot',
   /** Renderer → Main：查询协商可用状态（M3） */

@@ -7,7 +7,7 @@ export interface SessionRuntimeRegistryOptions {
   maxConcurrentRuns?: number
   idleUnloadMs?: number
   onDisposeError?: (error: unknown) => void
-  onRemoved?: (runtime: DesktopSessionRuntime) => void
+  onRemoved?: (runtime: DesktopSessionRuntime) => void | Promise<void>
 }
 
 /**
@@ -21,7 +21,7 @@ export class SessionRuntimeRegistry {
   private readonly maxConcurrentRuns: number
   private readonly idleUnloadMs: number
   private readonly onDisposeError: (error: unknown) => void
-  private readonly onRemoved: (runtime: DesktopSessionRuntime) => void
+  private readonly onRemoved: (runtime: DesktopSessionRuntime) => void | Promise<void>
   private selectedRuntimeId: string | null = null
 
   constructor(options: SessionRuntimeRegistryOptions = {}) {
@@ -98,7 +98,7 @@ export class SessionRuntimeRegistry {
     }
     if (this.selectedRuntimeId === runtime.runtimeId) this.selectedRuntimeId = null
     await runtime.dispose().catch((error) => this.reportDisposeError(error))
-    this.reportRemoved(runtime)
+    await this.reportRemoved(runtime)
   }
 
   async closeAll(): Promise<void> {
@@ -111,7 +111,7 @@ export class SessionRuntimeRegistry {
         await runtime.waitUntilIdle().catch((error) => this.reportDisposeError(error))
       }
       await runtime.dispose().catch((error) => this.reportDisposeError(error))
-      this.reportRemoved(runtime)
+      await this.reportRemoved(runtime)
     }))
     this.runtimes.clear()
     this.selectedRuntimeId = null
@@ -141,9 +141,11 @@ export class SessionRuntimeRegistry {
     } catch {}
   }
 
-  private reportRemoved(runtime: DesktopSessionRuntime): void {
+  private async reportRemoved(runtime: DesktopSessionRuntime): Promise<void> {
     try {
-      this.onRemoved(runtime)
-    } catch {}
+      await this.onRemoved(runtime)
+    } catch (error) {
+      this.reportDisposeError(error)
+    }
   }
 }

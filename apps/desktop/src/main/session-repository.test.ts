@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
+import { localWorkspace } from '@whycode/core'
 import { DesktopSessionRepository } from './session-repository.ts'
 
 const tempRoots: string[] = []
@@ -15,13 +16,13 @@ describe('DesktopSessionRepository 生命周期', () => {
   it('每个新会话分别固化创建时传入的自定义 System', async () => {
     const repository = await createRepository()
     const first = await repository.create(
-      'C:\\work\\demo',
+      localWorkspace('C:\\work\\demo'),
       'test:model',
       'default',
       { mode: 'append', content: '第一版' },
     )
     const second = await repository.create(
-      'C:\\work\\demo',
+      localWorkspace('C:\\work\\demo'),
       'test:model',
       'default',
       { mode: 'replace', content: '第二版' },
@@ -33,7 +34,7 @@ describe('DesktopSessionRepository 生命周期', () => {
 
   it('删除会话后不再从磁盘列表返回', async () => {
     const repository = await createRepository()
-    const journal = await repository.create('C:\\work\\demo', 'test:model')
+    const journal = await repository.create(localWorkspace('C:\\work\\demo'), 'test:model')
 
     assert.equal(await repository.delete(journal.sessionId), true)
     assert.equal((await repository.list()).length, 0)
@@ -41,8 +42,8 @@ describe('DesktopSessionRepository 生命周期', () => {
 
   it('删除同一项目的一个会话不影响另一个会话', async () => {
     const repository = await createRepository()
-    const historical = await repository.create('C:\\work\\shared', 'test:model')
-    const current = await repository.create('C:\\work\\shared', 'test:model')
+    const historical = await repository.create(localWorkspace('C:\\work\\shared'), 'test:model')
+    const current = await repository.create(localWorkspace('C:\\work\\shared'), 'test:model')
 
     assert.equal(await repository.delete(historical.sessionId), true)
     assert.deepEqual(
@@ -53,7 +54,7 @@ describe('DesktopSessionRepository 生命周期', () => {
 
   it('候选会话打开失败时不影响已打开的会话', async () => {
     const repository = await createRepository()
-    const current = await repository.create('C:\\work\\one', 'test:model')
+    const current = await repository.create(localWorkspace('C:\\work\\one'), 'test:model')
 
     await assert.rejects(repository.prepareResume('not-a-session'), /无效会话 ID/)
     assert.equal((await repository.list())[0]?.sessionId, current.sessionId)
@@ -63,7 +64,7 @@ describe('DesktopSessionRepository 生命周期', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-session-repository-opened-'))
     const repository = new DesktopSessionRepository(root)
     try {
-      const journal = await repository.create('C:\\project', 'model:test')
+      const journal = await repository.create(localWorkspace('C:\\project'), 'model:test')
       const [first, second] = await Promise.all([
         repository.prepareResume(journal.sessionId),
         repository.prepareResume(journal.sessionId),

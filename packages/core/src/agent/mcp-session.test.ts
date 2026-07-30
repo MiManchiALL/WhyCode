@@ -16,6 +16,7 @@ import {
   createWebSearchTool,
 } from '../tools/web-search/index.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const fixture = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -30,7 +31,7 @@ describe('AgentSession MCP 生命周期', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-session-'))
     const store = new SessionStore(root)
     const recorder = await store.create({
-      projectDir: process.cwd(),
+      workspace: localWorkspace(process.cwd()),
       modelId: 'test:mcp-session',
     })
     let call = 0

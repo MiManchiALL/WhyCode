@@ -27,6 +27,7 @@ import {
   type TaskPlanState,
 } from '../tasks/types.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const roots: string[] = []
 
@@ -44,7 +45,7 @@ describe('Agent 资源检查点联动', () => {
     const target = join(external, '.env.local')
     await Promise.all([mkdir(project), mkdir(external)])
     const recorder = await new SessionStore(join(root, 'sessions')).create({
-      projectDir: project,
+      workspace: localWorkspace(project),
       modelId: 'test:checkpoint',
     })
     const events: CoreEvent[] = []
@@ -93,7 +94,7 @@ describe('Agent 资源检查点联动', () => {
     await mkdir(project)
     const target = join(project, 'answer.txt')
     const recorder = await new SessionStore(join(root, 'sessions')).create({
-      projectDir: project,
+      workspace: localWorkspace(project),
       modelId: 'test:checkpoint',
     })
     const question = {
@@ -144,7 +145,7 @@ describe('Agent 资源检查点联动', () => {
     await mkdir(project)
     const store = new SessionStore(join(root, 'sessions'))
     const recorder = await store.create({
-      projectDir: project,
+      workspace: localWorkspace(project),
       modelId: 'test:checkpoint',
     })
     const oldPlan = activeTaskPlanSchema.parse({
@@ -219,7 +220,7 @@ describe('Agent 资源检查点联动', () => {
     await writeFile(oversized, '')
     await truncate(oversized, 65 * 1024 * 1024)
     const recorder = await new SessionStore(join(root, 'sessions')).create({
-      projectDir: project,
+      workspace: localWorkspace(project),
       modelId: 'test:checkpoint',
     })
     const events: CoreEvent[] = []

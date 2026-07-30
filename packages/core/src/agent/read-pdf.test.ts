@@ -12,6 +12,7 @@ import { preparePdfAttachmentImport } from '../pdf/storage.ts'
 import { SessionStore } from '../session/store.ts'
 import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const SMALL_JPEG = Buffer.from(
   '/9j/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AL+AD//Z',
@@ -26,7 +27,7 @@ describe('ReadPdf Agent 链路', () => {
       await writeFile(source, '%PDF-1.4\nprivate-pdf-bytes')
       const processor = fakeProcessor()
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:text' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:text' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
@@ -82,7 +83,7 @@ describe('ReadPdf Agent 链路', () => {
       await writeFile(source, '%PDF-1.4\nprivate-inline-pdf-bytes')
       const processor = visualProcessor()
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
@@ -129,7 +130,7 @@ describe('ReadPdf Agent 链路', () => {
       await writeFile(source, '%PDF-1.4\ntwenty-pages')
       const processor = visualProcessor(20)
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
@@ -182,7 +183,7 @@ describe('ReadPdf Agent 链路', () => {
       await writeFile(source, '%PDF-1.4\nlong-pdf')
       const processor = visualProcessor(6)
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,
@@ -258,7 +259,7 @@ describe('ReadPdf Agent 链路', () => {
       let readCount = 0
       const processor = fakeProcessor(() => { readCount++ })
       const store = new SessionStore(join(root, 'sessions'), { pdfProcessor: processor })
-      const journal = await store.create({ projectDir: null, modelId: 'test:text' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:text' })
       const transaction = await preparePdfAttachmentImport(
         [{ kind: 'path', path: source }],
         journal.attachmentDirectory,

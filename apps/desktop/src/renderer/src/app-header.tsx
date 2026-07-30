@@ -1,5 +1,9 @@
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
-import type { ReasoningEffort, ReasoningEffortSelection } from '@whycode/core'
+import type {
+  ReasoningEffort,
+  ReasoningEffortSelection,
+  WorkspaceBinding,
+} from '@whycode/core'
 import type { ModelListItem } from '../../shared/settings.ts'
 
 interface ConsensusStatus {
@@ -10,6 +14,7 @@ interface ConsensusStatus {
 
 interface AppHeaderProps {
   projectDir: string | null
+  workspaceMode: WorkspaceBinding['mode']
   busy: boolean
   sessionChangeLocked: boolean
   permissionLocked: boolean
@@ -19,6 +24,7 @@ interface AppHeaderProps {
   modelId: string
   reasoningEffort: ReasoningEffortSelection
   onPickProject: () => void
+  onOpenWorkspaceDetails: () => void
   onToggleConsensus: () => void
   onCompact: () => void
   onPermissionChange: (mode: PermissionMode) => void
@@ -53,6 +59,22 @@ export function AppHeader(props: AppHeaderProps) {
         >
           {props.projectDir ?? '📁 工作文件夹'}
         </button>
+        {props.workspaceMode === 'worktree' ? (
+          <button
+            className="rounded bg-violet-100 px-2 py-1 text-[11px] font-medium text-violet-700 hover:bg-violet-200"
+            onClick={props.onOpenWorkspaceDetails}
+            title="查看 Worktree 状态、差异与交付操作"
+          >
+            Worktree
+          </button>
+        ) : props.workspaceMode === 'local' ? (
+          <span
+            className="rounded bg-neutral-100 px-2 py-1 text-[11px] text-neutral-500"
+            title="当前会话直接使用本地工作文件夹"
+          >
+            本地
+          </span>
+        ) : null}
       </div>
       <div className="flex items-center gap-2">
         <button

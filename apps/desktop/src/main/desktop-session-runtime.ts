@@ -8,6 +8,8 @@ import {
   type CoreEvent,
   type ReasoningEffortSelection,
   type SessionJournal,
+  type WorkspaceBinding,
+  workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { UserMessageRoutingGate } from './user-message-routing.ts'
@@ -15,7 +17,7 @@ import { ViewTimeline } from './view-timeline.ts'
 
 export interface DesktopSessionRuntimeOptions {
   runtimeId?: string
-  projectDir: string
+  workspace: WorkspaceBinding
   modelId: string | null
   reasoningEffort?: ReasoningEffortSelection
   permissionMode?: PermissionMode
@@ -35,7 +37,7 @@ export class DesktopSessionRuntime {
   readonly runtimeId: string
   readonly routingGate = new UserMessageRoutingGate()
   readonly timeline: ViewTimeline
-  projectDir: string
+  readonly workspace: WorkspaceBinding
   journal: SessionJournal | null = null
   session: AgentSession | null = null
   sessionInitialization: Promise<string | null> | null = null
@@ -56,7 +58,7 @@ export class DesktopSessionRuntime {
 
   constructor(options: DesktopSessionRuntimeOptions) {
     this.runtimeId = options.runtimeId ?? randomUUID()
-    this.projectDir = options.projectDir
+    this.workspace = options.workspace
     this.modelId = options.modelId
     this.reasoningEffort = options.reasoningEffort ?? 'default'
     this.permissionMode = options.permissionMode ?? 'default'
@@ -74,6 +76,10 @@ export class DesktopSessionRuntime {
 
   get sessionId(): string | null {
     return this.journal?.sessionId ?? null
+  }
+
+  get projectDir(): string | null {
+    return workspaceWorkingDirectory(this.workspace)
   }
 
   get checkpointRestoreToolUseId(): string | null {

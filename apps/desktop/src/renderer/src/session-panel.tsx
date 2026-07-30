@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { SessionMetadata } from '@whycode/core'
 import type { SessionListItem } from '../../shared/session.ts'
+import { workspaceDisplayDirectory } from '../../shared/workspace.ts'
 
 interface SessionPanelProps {
   sessions: SessionListItem[]
@@ -123,6 +124,11 @@ function SessionRow({
               等待操作
             </span>
           )}
+          {session.workspace?.mode === 'worktree' && (
+            <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[11px] text-violet-700">
+              Worktree
+            </span>
+          )}
           {restoring && (
             <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-700">
               恢复中
@@ -140,7 +146,9 @@ function SessionRow({
           )}
         </div>
         <div className="mt-1 truncate text-xs text-neutral-400">
-          {session.projectDir === undefined ? '工作文件夹未知' : (session.projectDir ?? '未记录工作文件夹')}
+          {session.workspace
+            ? (workspaceDisplayDirectory(session.workspace) ?? '未记录工作文件夹')
+            : '工作文件夹未知'}
         </div>
         <div className="mt-1 flex justify-between text-xs text-neutral-400">
           <span className="min-w-0 truncate">
@@ -158,7 +166,9 @@ function SessionRow({
       {confirmingDelete ? (
         <div className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700" role="alert">
           <p>
-            将永久删除对话、任务状态、检查点、后台命令记录和临时数据；项目文件不受影响。
+            {session.workspace?.mode === 'worktree'
+              ? '将永久删除对话及其关联数据，并丢弃受管 Worktree 中尚未提交的文件变化；未创建分支的 detached 提交也会失去 Worktree 引用，已创建分支及其提交仍保留。'
+              : '将永久删除对话、任务状态、检查点、后台命令记录和临时数据；本地工作文件夹不受影响。'}
           </p>
           <div className="mt-2 flex gap-2">
             <button

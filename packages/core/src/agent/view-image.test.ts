@@ -8,6 +8,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
+import { localWorkspace } from '../workspace/types.ts'
 import { createViewImageTool, VIEW_IMAGE_TOOL_NAME } from '../tools/view-image/index.ts'
 import { AgentSession } from './session.ts'
 
@@ -44,7 +45,10 @@ describe('ViewImage Agent 链路', () => {
       const sessionRoot = join(directory, 'sessions')
       await writeFile(await ensureProjectImage(projectDir), ONE_PIXEL_PNG)
       const store = new SessionStore(sessionRoot)
-      const journal = await store.create({ projectDir, modelId: 'test:vision' })
+      const journal = await store.create({
+        workspace: localWorkspace(projectDir),
+        modelId: 'test:vision',
+      })
 
       let call = 0
       const visualModel = new MockLanguageModelV4({
@@ -142,7 +146,10 @@ describe('ViewImage Agent 链路', () => {
       const sessionRoot = join(directory, 'sessions')
       await writeFile(await ensureProjectImage(projectDir), ONE_PIXEL_PNG)
       const store = new SessionStore(sessionRoot)
-      const journal = await store.create({ projectDir, modelId: 'test:vision' })
+      const journal = await store.create({
+        workspace: localWorkspace(projectDir),
+        modelId: 'test:vision',
+      })
       const model = new MockLanguageModelV4({ doStream: [viewImageStep('screen.png')] })
       let session!: AgentSession
       session = new AgentSession({
@@ -174,7 +181,10 @@ describe('ViewImage Agent 链路', () => {
       const store = new SessionStore(join(directory, 'sessions'))
       await mkdir(projectDir, { recursive: true })
 
-      const discussionJournal = await store.create({ projectDir, modelId: 'test:vision' })
+      const discussionJournal = await store.create({
+        workspace: localWorkspace(projectDir),
+        modelId: 'test:vision',
+      })
       const discussionModel = modelWithoutViewImage()
       const discussion = new AgentSession({
         model: modelEntry(discussionModel, true),
@@ -190,7 +200,10 @@ describe('ViewImage Agent 链路', () => {
       })
       assert.equal(await discussion.handleUserMessage('讨论图片'), 'completed')
 
-      const protocolJournal = await store.create({ projectDir, modelId: 'test:vision' })
+      const protocolJournal = await store.create({
+        workspace: localWorkspace(projectDir),
+        modelId: 'test:vision',
+      })
       const protocolModel = modelWithoutViewImage()
       const protocol = createSession(protocolModel, protocolJournal, projectDir, true)
       protocol.setProtocolRound(true)

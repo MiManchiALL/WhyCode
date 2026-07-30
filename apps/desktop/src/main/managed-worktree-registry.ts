@@ -1,0 +1,268 @@
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { isAbsolute, relative, resolve } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import {
+  validateSessionId,
+  workspaceWorkingDirectory,
+  worktreeWorkspaceBindingSchema,
+  type WorktreeWorkspaceBinding,
+} from '@whycode/core'
+
+interface WorktreeManifest {
+  schemaVersion: 1
+  binding: WorktreeWorkspaceBinding
+  sessionId: string | null
+}
+
+export class ManagedWorktreeRegistry {
+  private readonly configuredRoot: string
+  private preparedRoot: Promise<string> | null = null
+
+  constructor(rootDirectory: string) {
+    this.configuredRoot = resolve(rootDirectory)
+  }
+
+  async expectedDirectory(repositoryDirectory: string, id: string): Promise<string> {
+    const validatedId = worktreeWorkspaceBindingSchema.shape.id.parse(id)
+    const fingerprint = createHash('sha256')
+      .update(pathKey(repositoryDirectory))
+      .digest('hex')
+      .slice(0, 16)
+    return resolve(await this.rootDirectory(), fingerprint, validatedId)
+  }
+
+  async validateBinding(binding: WorktreeWorkspaceBinding): Promise<void> {
+    const expected = await this.expectedDirectory(binding.repositoryDirectory, binding.id)
+    if (!samePath(expected, binding.worktreeDirectory)) {
+      throw new Error('Worktree 路径不属于 WhyCode 受管目录')
+    }
+  }
+
+  async create(binding: WorktreeWorkspaceBinding): Promise<void> {
+    await this.validateBinding(binding)
+    await this.write({ schemaVersion: 1, binding, sessionId: null })
+  }
+
+  async attachSession(
+    binding: WorktreeWorkspaceBinding,
+    sessionId: string,
+  ): Promise<void> {
+    validateSessionId(sessionId)
+    const manifest = await this.read(binding)
+    if (manifest.sessionId && manifest.sessionId !== sessionId) {
+      throw new Error('Worktree 已属于其它会话')
+    }
+    if (manifest.sessionId === sessionId) return
+    await this.write({ ...manifest, sessionId })
+  }
+
+  async assertOwned(binding: WorktreeWorkspaceBinding): Promise<void> {
+    await this.read(binding)
+  }
+
+  async assertManagedDirectory(binding: WorktreeWorkspaceBinding): Promise<void> {
+    await this.validateBinding(binding)
+    if (!await this.existingManagedDirectory(binding.worktreeDirectory)) {
+      throw new Error('受管 Worktree 目录不存在')
+    }
+  }
+
+  async sessionId(binding: WorktreeWorkspaceBinding): Promise<string | null> {
+    return (await this.read(binding)).sessionId
+  }
+
+  async removeManifest(binding: WorktreeWorkspaceBinding): Promise<void> {
+    await this.validateBinding(binding)
+    await rm(await this.manifestPath(binding.id), { force: true })
+  }
+
+  async removeDirectory(binding: WorktreeWorkspaceBinding): Promise<void> {
+    await this.validateBinding(binding)
+    await this.removeValidatedDirectory(binding.worktreeDirectory)
+  }
+
+  async removeExpectedDirectory(
+    repositoryDirectory: string,
+    id: string,
+    targetDirectory: string,
+  ): Promise<void> {
+    if (!samePath(
+      await this.expectedDirectory(repositoryDirectory, id),
+      targetDirectory,
+    )) {
+      throw new Error('拒绝删除受管 Worktree 根之外的目录')
+    }
+    await this.removeValidatedDirectory(targetDirectory)
+  }
+
+  private async read(binding: WorktreeWorkspaceBinding): Promise<WorktreeManifest> {
+    await this.validateBinding(binding)
+    const text = await readFile(await this.manifestPath(binding.id), 'utf8')
+    let value: unknown
+    try {
+      value = JSON.parse(text)
+    } catch {
+      throw new Error('Worktree 所有权记录已损坏')
+    }
+    const manifest = parseManifest(value)
+    if (!manifest || !isDeepStrictEqual(manifest.binding, binding)) {
+      throw new Error('Worktree 所有权记录缺失或与会话不一致')
+    }
+    return manifest
+  }
+
+  private async write(manifest: WorktreeManifest): Promise<void> {
+    const parsed = parseManifest(manifest)
+    if (!parsed) throw new Error('Worktree 所有权记录无效')
+    const registryRoot = resolve(await this.rootDirectory(), '.registry')
+    await mkdir(registryRoot, { recursive: true, mode: 0o700 })
+    const target = resolve(registryRoot, `${parsed.binding.id}.json`)
+    const temporary = `${target}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, {
+        encoding: 'utf8',
+        flag: 'wx',
+        flush: true,
+        mode: 0o600,
+      })
+      await rename(temporary, target)
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {})
+      throw error
+    }
+  }
+
+  private async manifestPath(id: string): Promise<string> {
+    const validatedId = worktreeWorkspaceBindingSchema.shape.id.parse(id)
+    return resolve(await this.rootDirectory(), '.registry', `${validatedId}.json`)
+  }
+
+  private async removeValidatedDirectory(targetDirectory: string): Promise<void> {
+    const target = await this.existingManagedDirectory(targetDirectory)
+    if (!target) return
+    await rm(target, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    })
+  }
+
+  private async existingManagedDirectory(targetDirectory: string): Promise<string | null> {
+    const root = await this.rootDirectory()
+    const target = resolve(targetDirectory)
+    assertDescendant(root, target)
+    const info = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (!info) return null
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error('受管 Worktree 路径不是普通目录')
+    }
+    const canonical = await realpath(target)
+    assertDescendant(root, canonical)
+    if (!samePath(canonical, target)) {
+      throw new Error('受管 Worktree 路径穿过符号链接或目录联接')
+    }
+    return canonical
+  }
+
+  private rootDirectory(): Promise<string> {
+    this.preparedRoot ??= prepareRoot(this.configuredRoot)
+    return this.preparedRoot
+  }
+}
+
+export async function canonicalDirectory(path: string): Promise<string> {
+  const canonical = await realpath(resolve(path))
+  if (!(await stat(canonical)).isDirectory()) throw new Error(`路径不是文件夹：${path}`)
+  return canonical
+}
+
+export async function assertWorktreeExecutionDirectory(
+  binding: WorktreeWorkspaceBinding,
+): Promise<void> {
+  const executionDirectory = workspaceWorkingDirectory(binding)!
+  let canonical: string
+  try {
+    canonical = await canonicalDirectory(executionDirectory)
+  } catch (error) {
+    if (isNotFound(error)) {
+      throw new Error('所选子目录不存在于 Worktree 基线或附加文件中')
+    }
+    throw error
+  }
+  const relativePath = relative(binding.worktreeDirectory, canonical)
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error('Worktree 执行目录越过受管工作树')
+  }
+}
+
+export async function pathExists(path: string): Promise<boolean> {
+  return lstat(path).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return false
+    throw error
+  })
+}
+
+export function pathKey(path: string): string {
+  const absolute = resolve(path)
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+}
+
+export function samePath(left: string, right: string): boolean {
+  return pathKey(left) === pathKey(right)
+}
+
+function parseManifest(value: unknown): WorktreeManifest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const binding = worktreeWorkspaceBindingSchema.safeParse(record.binding)
+  if (record.schemaVersion !== 1 || !binding.success) return null
+  const sessionId = record.sessionId
+  if (sessionId !== null && typeof sessionId !== 'string') return null
+  if (typeof sessionId === 'string') {
+    try {
+      validateSessionId(sessionId)
+    } catch {
+      return null
+    }
+  }
+  return { schemaVersion: 1, binding: binding.data, sessionId }
+}
+
+async function prepareRoot(root: string): Promise<string> {
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  return realpath(root)
+}
+
+function isNotFound(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && error.code === 'ENOENT',
+  )
+}
+
+function assertDescendant(root: string, target: string): void {
+  const relativeTarget = relative(root, target)
+  if (
+    !relativeTarget
+    || relativeTarget.startsWith('..')
+    || isAbsolute(relativeTarget)
+  ) {
+    throw new Error('拒绝删除受管 Worktree 根之外的目录')
+  }
+}

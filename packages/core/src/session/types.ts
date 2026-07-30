@@ -31,8 +31,12 @@ import {
   customSystemPromptSnapshotSchema,
   type CustomSystemPromptSnapshot,
 } from '../prompts/custom-system.ts'
+import {
+  workspaceBindingSchema,
+  type WorkspaceBinding,
+} from '../workspace/types.ts'
 
-export const SESSION_SCHEMA_VERSION = 4
+export const SESSION_SCHEMA_VERSION = 5
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -61,7 +65,7 @@ const chainedEntrySchema = z.object({
 const sessionStartSchema = chainedEntrySchema.extend({
   type: z.literal('session-start'),
   parentUuid: z.null(),
-  projectDir: z.string().nullable(),
+  workspace: workspaceBindingSchema,
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
   customSystemPrompt: customSystemPromptSnapshotSchema.optional(),
@@ -277,7 +281,7 @@ export type PendingUserInput = z.infer<typeof pendingUserInputSchema>
 export const sessionMetadataSchema = z.object({
   schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
   sessionId: sessionIdSchema,
-  projectDir: z.string().nullable(),
+  workspace: workspaceBindingSchema,
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema,
   title: z.string(),
@@ -312,7 +316,7 @@ interface SessionSummaryBase {
 export type SessionSummary =
   | SessionSummaryBase & {
       resumable: true
-      projectDir: string | null
+      workspace: WorkspaceBinding
       modelId: string
       reasoningEffort: ReasoningEffortSelection
       status: SessionStatus
@@ -320,15 +324,15 @@ export type SessionSummary =
     }
   | SessionSummaryBase & {
       resumable: false
-      /** 旧 metadata 无法可信读取时保持 unknown，不能误标成纯聊天。 */
-      projectDir?: string | null
+      /** metadata 无法可信读取时保持 unknown，不能误标成无工作区。 */
+      workspace?: WorkspaceBinding
       modelId: string | null
       status: 'unavailable'
       unavailableReason: string
     }
 
 export interface SessionCreateInput {
-  projectDir: string | null
+  workspace: WorkspaceBinding
   modelId: string
   reasoningEffort?: ReasoningEffortSelection
   customSystemPrompt?: CustomSystemPromptSnapshot

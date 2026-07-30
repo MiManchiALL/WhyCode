@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { describe, it } from 'node:test'
 import { emptyTaskPlanState } from '../tasks/types.ts'
+import { localWorkspace } from '../workspace/types.ts'
 import { buildLoadedSession, SessionCorruptError } from './chain.ts'
 import { SESSION_SCHEMA_VERSION, sessionEntrySchema, type SessionEntry } from './types.ts'
 
@@ -85,7 +86,7 @@ function createFixture(): {
   return {
     start: entry({
       type: 'session-start',
-      projectDir: 'C:\\WhyCode',
+      workspace: localWorkspace('C:\\WhyCode'),
       modelId: 'test:model',
     }),
     entry,

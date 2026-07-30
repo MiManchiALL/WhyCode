@@ -3,6 +3,7 @@ import type { CoreCommand, CoreEvent } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
+  NewSessionRequest,
   NewSessionResult,
   ResumeSessionResult,
   RuntimeSnapshot,
@@ -10,6 +11,11 @@ import type {
   RuntimeCommandEnvelope,
   SessionListItem,
 } from '../shared/session.ts'
+import type {
+  WorkspaceActionResult,
+  WorkspaceCandidate,
+  WorktreeStatus,
+} from '../shared/workspace.ts'
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
@@ -67,18 +73,32 @@ const api = {
   ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
-  getProjectDir: (runtimeId?: string): Promise<string | null> =>
-    ipcRenderer.invoke(IPC.getProjectDir, runtimeId),
   runtimeSnapshot: (runtimeId?: string): Promise<RuntimeSnapshot> =>
     ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
-  pickProjectDir: (): Promise<NewSessionResult | null> =>
+  pickProjectDir: (): Promise<WorkspaceCandidate | null> =>
     ipcRenderer.invoke(IPC.pickProjectDir),
+  inspectCurrentWorkspace: (runtimeId?: string): Promise<WorkspaceCandidate> =>
+    ipcRenderer.invoke(IPC.inspectCurrentWorkspace, runtimeId),
+  worktreeStatus: (
+    runtimeId: string,
+  ): Promise<WorkspaceActionResult<WorktreeStatus>> =>
+    ipcRenderer.invoke(IPC.worktreeStatus, runtimeId),
+  createWorktreeBranch: (
+    runtimeId: string,
+    branchName: string,
+  ): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.createWorktreeBranch, runtimeId, branchName),
+  openWorkspaceFolder: (runtimeId: string): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.openWorkspaceFolder, runtimeId),
+  discardWorktree: (runtimeId: string): Promise<DeleteSessionResult> =>
+    ipcRenderer.invoke(IPC.discardWorktree, runtimeId),
   consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
     ipcRenderer.invoke(IPC.consensusStatus),
   listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
   resumeSession: (sessionId: string): Promise<ResumeSessionResult> =>
     ipcRenderer.invoke(IPC.resumeSession, sessionId),
-  newSession: (): Promise<NewSessionResult> => ipcRenderer.invoke(IPC.newSession),
+  newSession: (request: NewSessionRequest): Promise<NewSessionResult> =>
+    ipcRenderer.invoke(IPC.newSession, request),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),
   openPdfAttachment: (

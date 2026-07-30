@@ -13,6 +13,7 @@ import {
   createScreenshotCaptureRequestSchema,
 } from '../tools/capture-screenshot/index.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
@@ -65,7 +66,7 @@ describe('CaptureScreenshot Agent 链路', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
       let call = 0
       const model = new MockLanguageModelV4({
         doStream: async (options) => {
@@ -127,7 +128,7 @@ describe('CaptureScreenshot Agent 链路', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-auto-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
       let call = 0
       const model = new MockLanguageModelV4({
         doStream: async () => {
@@ -174,7 +175,7 @@ describe('CaptureScreenshot Agent 链路', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-normalize-'))
     try {
       const store = new SessionStore(root)
-      const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
       let call = 0
       const model = new MockLanguageModelV4({
         doStream: async () => {
@@ -228,7 +229,7 @@ describe('CaptureScreenshot Agent 链路', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-chat-'))
     try {
       const journal = await new SessionStore(root).create({
-        projectDir: null,
+        workspace: localWorkspace(null),
         modelId: 'test:chat-vision',
       })
       let call = 0

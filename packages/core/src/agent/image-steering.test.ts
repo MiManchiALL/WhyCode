@@ -11,6 +11,7 @@ import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { AgentSession } from './session.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
@@ -216,7 +217,7 @@ async function withImageSession(run: (context: {
   const root = await mkdtemp(join(tmpdir(), 'whycode-image-steering-'))
   try {
     const store = new SessionStore(root)
-    const journal = await store.create({ projectDir: null, modelId: 'test:vision' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
     const source = join(root, 'source.png')
     await writeFile(source, ONE_PIXEL_PNG)
     const attachments = await importImageAttachments(

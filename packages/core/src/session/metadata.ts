@@ -9,6 +9,7 @@ import {
   type SessionMetadata,
   type SessionSummary,
 } from './types.ts'
+import { workspaceBindingSchema, workspaceWorkingDirectory } from '../workspace/types.ts'
 
 const TRANSCRIPT_FILE = 'transcript.jsonl'
 const METADATA_FILE = 'metadata.json'
@@ -20,7 +21,7 @@ const DELETION_MARKERS_DIR = '.deleting'
 
 const looseSessionMetadataSchema = z.object({
   sessionId: z.string().uuid(),
-  projectDir: z.string().nullable().optional(),
+  workspace: workspaceBindingSchema.optional(),
   modelId: z.string().min(1).optional(),
   title: z.string().optional(),
   lastUserText: z.string().optional(),
@@ -63,7 +64,7 @@ export function metadataFromStart(
   return {
     schemaVersion: SESSION_SCHEMA_VERSION,
     sessionId: entry.sessionId,
-    projectDir: entry.projectDir,
+    workspace: entry.workspace,
     modelId: entry.modelId,
     reasoningEffort: entry.reasoningEffort ?? 'default',
     title: '',
@@ -111,7 +112,7 @@ export async function unavailableSessionSummary(
 
   return {
     sessionId,
-    ...(loose?.projectDir !== undefined ? { projectDir: loose.projectDir } : {}),
+    ...(loose?.workspace ? { workspace: loose.workspace } : {}),
     modelId: loose?.modelId ?? null,
     title: loose?.title?.trim() || '无法恢复的会话',
     lastUserText: loose?.lastUserText ?? '',
@@ -144,9 +145,13 @@ export function isSessionId(value: string): boolean {
   return sessionMetadataSchema.shape.sessionId.safeParse(value).success
 }
 
-export function sameProject(left: string | null, right: string | null): boolean {
-  if (left === null || right === null) return left === right
-  return normalizePath(left) === normalizePath(right)
+export function sameProject(
+  workspace: SessionMetadata['workspace'],
+  projectDir: string | null,
+): boolean {
+  const workingDirectory = workspaceWorkingDirectory(workspace)
+  if (workingDirectory === null || projectDir === null) return workingDirectory === projectDir
+  return normalizePath(workingDirectory) === normalizePath(projectDir)
 }
 
 async function readLooseMetadata(

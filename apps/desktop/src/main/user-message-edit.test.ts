@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { AgentSession, CoreEvent } from '@whycode/core'
+import { localWorkspace, type AgentSession, type CoreEvent } from '@whycode/core'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { startEditedUserMessage } from './user-message-edit.ts'
 
@@ -10,7 +10,7 @@ describe('编辑消息交付边界', () => {
     const errors: unknown[] = []
     let releases = 0
     const runtime = new DesktopSessionRuntime({
-      projectDir: 'C:\\WhyCode',
+      workspace: localWorkspace('C:\\WhyCode'),
       modelId: 'test:model',
       emit: (_runtime, event) => events.push(event),
     })

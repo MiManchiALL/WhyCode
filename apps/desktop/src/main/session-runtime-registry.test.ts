@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { localWorkspace } from '@whycode/core'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import {
   SESSION_RUNTIME_IDLE_UNLOAD_MS,
@@ -113,12 +114,35 @@ describe('SessionRuntimeRegistry', () => {
     await closing
     assert.equal(registry.get(target.runtimeId), null)
   })
+
+  it('移除运行时会等待异步资源释放完成', async () => {
+    let finishCleanup!: () => void
+    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve })
+    let removed = false
+    const registry = new SessionRuntimeRegistry({
+      idleUnloadMs: -1,
+      onRemoved: async () => {
+        await cleanup
+        removed = true
+      },
+    })
+    const target = runtime('async-cleanup')
+    registry.add(target)
+
+    const removing = registry.remove(target)
+    await Promise.resolve()
+    assert.equal(removed, false)
+
+    finishCleanup()
+    await removing
+    assert.equal(removed, true)
+  })
 })
 
 function runtime(runtimeId: string): DesktopSessionRuntime {
   return new DesktopSessionRuntime({
     runtimeId,
-    projectDir: process.cwd(),
+    workspace: localWorkspace(process.cwd()),
     modelId: null,
     emit: () => {},
   })

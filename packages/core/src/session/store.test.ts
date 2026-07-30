@@ -25,6 +25,7 @@ import {
   isProjectInstructionsMessage,
   loadProjectInstructions,
 } from '../instructions/project.ts'
+import { localWorkspace } from '../workspace/types.ts'
 
 const tempRoots: string[] = []
 const storeRoots = new WeakMap<SessionStore, string>()
@@ -37,7 +38,7 @@ describe('SessionStore', () => {
   it('自定义 System 只在会话起点固化，并跨压缩恢复同一快照', async () => {
     const store = await createStore()
     const journal = await store.create({
-      projectDir: 'C:\\work\\demo',
+      workspace: localWorkspace('C:\\work\\demo'),
       modelId: 'test:model',
       customSystemPrompt: {
         mode: 'append',
@@ -76,7 +77,7 @@ describe('SessionStore', () => {
     await writeFile(join(project, 'AGENTS.md'), '第一版规则', 'utf8')
     const first = await loadProjectInstructions({ projectDir: project })
     assert.ok(first)
-    const journal = await store.create({ projectDir: project, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(project), modelId: 'test:model' })
     await journal.recordUserInput('开始任务', true)
     await journal.recordTurnStart(
       'turn-project-instructions',
@@ -135,7 +136,7 @@ describe('SessionStore', () => {
     await writeFile(instructionPath, '共识规则一', 'utf8')
     const first = await loadProjectInstructions({ projectDir: project })
     assert.ok(first)
-    const journal = await store.create({ projectDir: project, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(project), modelId: 'test:model' })
     await journal.recordProjectInstructions({
       version: first.version,
       message: first.message,
@@ -161,7 +162,7 @@ describe('SessionStore', () => {
 
   it('按稳定 turn 边界持久化并恢复消息', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: 'C:\\work\\demo', modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace('C:\\work\\demo'), modelId: 'test:model' })
     const user = message('user', '修复登录问题')
     const assistant = message('assistant', '已经完成')
 
@@ -180,7 +181,7 @@ describe('SessionStore', () => {
 
   it('steering 队列跨快照保留，并以模型消息批次原子确认送达', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const rootInputId = randomUUID()
     await journal.recordUserInputWithId(rootInputId, '开始', true)
     await journal.recordTurnStart(
@@ -217,7 +218,7 @@ describe('SessionStore', () => {
 
   it('送达确认后崩溃缺失即时事件时，在原交付位置补回 steering 时间线', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const rootInputId = randomUUID()
     await journal.recordUserInputWithId(rootInputId, '开始', true)
     await journal.recordTurnStart('turn-visible-steering', [message('user', '开始')])
@@ -251,7 +252,7 @@ describe('SessionStore', () => {
 
   it('停止时把 steering 原子退回草稿，重新提交只消费当前会话的恢复身份', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const queuedId = randomUUID()
     await journal.recordUserInputWithId(queuedId, '原始草稿', false)
     await journal.markUserInputsRestored([queuedId])
@@ -278,7 +279,7 @@ describe('SessionStore', () => {
 
   it('进程中断把尚未送达的 steering 恢复为草稿而不注入模型历史', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordUserInput('开始', true)
     await journal.recordTurnStart('turn-crash-queue', [message('user', '开始')])
     const inputId = randomUUID()
@@ -295,7 +296,7 @@ describe('SessionStore', () => {
 
   it('附件元数据冲突在 JSONL 追加前失败', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const attachmentId = randomUUID()
     const attachment: ImageAttachment = {
       id: attachmentId,
@@ -326,7 +327,7 @@ describe('SessionStore', () => {
 
   it('持久化等待用户状态和问题卡', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const question = {
       type: 'core-event' as const,
       event: {
@@ -355,7 +356,7 @@ describe('SessionStore', () => {
 
   it('问题 step 已提交但 turn-end 前崩溃时，恢复后仍保持 waiting-user', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const question = {
       id: 'question-before-turn-end',
       questions: [{
@@ -461,7 +462,7 @@ describe('SessionStore', () => {
 
   it('稳定 step 的消息、engagement 与 TaskPlanState 只以单条记录原子恢复', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const initialState = state(taskPlan(1))
     await journal.recordTurnStart('seed-plan', [message('user', '建立计划')])
     await journal.recordStep('seed-plan', [message('assistant', '计划已建立')], initialState)
@@ -524,7 +525,7 @@ describe('SessionStore', () => {
 
   it('连续根输入混合已交付与未交付状态时保持原始顺序', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordUserInput('第一条未交付消息', true)
     await journal.recordUserInput('第二条已交付消息', true)
     await journal.recordTurnStart('second-turn', [message('user', '第二条已交付消息')])
@@ -542,7 +543,7 @@ describe('SessionStore', () => {
     ])
     assert.equal(reopened.undeliveredUserInputIds.length, 1)
 
-    const consensusJournal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const consensusJournal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await consensusJournal.recordUserInput('共识前未交付消息', true)
     await consensusJournal.recordUserInput('正式共识请求', true)
     await consensusJournal.recordConsensusTaskStart(
@@ -557,7 +558,7 @@ describe('SessionStore', () => {
     ])
     assert.equal(consensusReopened.undeliveredUserInputIds.length, 1)
 
-    const lateJournal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const lateJournal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await lateJournal.recordUserInput('原始共识请求', true)
     await lateJournal.recordConsensusTaskStart(
       'task-late-input',
@@ -605,7 +606,7 @@ describe('SessionStore', () => {
 
   it('对话回滚离开提问点后清除 waiting-user 状态', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordTurnStart('turn-question', [message('user', '帮我选择')])
     await journal.recordTurnEnd('turn-question', 'waiting-user')
 
@@ -615,7 +616,7 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.status, 'idle')
   })
 
-  it('恢复新字段上线前的 v4 会话时只将缺失强度解释为 default', async () => {
+  it('恢复当前 schema 中缺失强度的会话时只将其解释为 default', async () => {
     const { store, journal, transcript } = await completedSession()
     const legacyLines = (await readFile(transcript, 'utf8')).trimEnd().split('\n').map((line) => {
       const entry = JSON.parse(line) as Record<string, unknown>
@@ -680,7 +681,7 @@ describe('SessionStore', () => {
 
   it('把没有 turn-end 的会话标记为中断且不生成工具重放', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordTurnStart('turn-crashed', [message('user', '继续执行')])
     const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
     await appendFile(transcript, '{"schemaVersion":3,"type":"messages"', 'utf8')
@@ -702,7 +703,7 @@ describe('SessionStore', () => {
 
   it('进程恢复只阻塞被中断的 engaged 计划，不误伤 dormant 计划', async () => {
     const dormantStore = await createStore()
-    const dormantJournal = await dormantStore.create({ projectDir: null, modelId: 'test:model' })
+    const dormantJournal = await dormantStore.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
     const savedState = state(plan)
     await dormantJournal.recordTurnStart('seed-dormant', [message('user', '建立计划')])
@@ -716,7 +717,7 @@ describe('SessionStore', () => {
     assert.deepEqual(dormantRecovered.initialTaskState, savedState)
 
     const engagedStore = await createStore()
-    const engagedJournal = await engagedStore.create({ projectDir: null, modelId: 'test:model' })
+    const engagedJournal = await engagedStore.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await engagedJournal.recordTurnStart('seed-engaged', [message('user', '建立计划')])
     await engagedJournal.recordStep('seed-engaged', [message('assistant', '计划已建立')], savedState)
     await engagedJournal.recordTurnEnd('seed-engaged', 'paused')
@@ -735,7 +736,7 @@ describe('SessionStore', () => {
 
   it('连续中断恢复时总是在最新半截回合之后建立新边界', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordTurnStart('turn-aborted', [message('user', '第一次任务')])
     await journal.recordStep('turn-aborted', [createTurnAbortedMessage()])
     await journal.recordTurnEnd('turn-aborted', 'aborted')
@@ -753,7 +754,7 @@ describe('SessionStore', () => {
 
   it('快照建立新根并丢弃旧活动链', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordTurnStart('turn-1', [message('user', '旧问题')])
     await journal.recordStep('turn-1', [message('assistant', '旧答案')])
     await journal.recordTurnEnd('turn-1', 'completed')
@@ -776,7 +777,7 @@ describe('SessionStore', () => {
 
   it('对话回滚换根后仍保留新根内更早 turn 的回滚边界', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const first = [message('user', '第一问'), message('assistant', '第一答')]
     await journal.recordTurnStart('turn-1', [first[0]!])
     await journal.recordStep('turn-1', [first[1]!])
@@ -793,7 +794,7 @@ describe('SessionStore', () => {
 
   it('编辑已中止根消息时原子换根，重放保留原位关系且模型只续接新输入', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const oldInputId = randomUUID()
     await journal.recordUserInputWithId(oldInputId, '旧问题', true)
     await journal.recordTurnStart(
@@ -861,7 +862,7 @@ describe('SessionStore', () => {
 
   it('模型压缩换根后仍完整保留用户可见时间线', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const visible = [
       { type: 'user-message' as const, text: '旧问题', startsTurn: true },
       { type: 'core-event' as const, event: { type: 'text-delta' as const, text: '旧回答' } },
@@ -882,7 +883,7 @@ describe('SessionStore', () => {
 
   it('自动压缩快照保留正在运行的 turn 标记', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const messages = [message('user', '需要压缩的请求')]
     await journal.recordTurnStart('turn-active', messages)
     await journal.recordSnapshot('compact', messages, 'turn-active')
@@ -893,7 +894,7 @@ describe('SessionStore', () => {
 
   it('Main 回合已结束但共识未结束时仍标记为中断', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const baseMessages = [message('user', '既有请求'), message('assistant', '既有回答')]
     await journal.recordTurnStart('base', [baseMessages[0]!])
     await journal.recordStep('base', [baseMessages[1]!])
@@ -930,7 +931,7 @@ describe('SessionStore', () => {
 
   it('共识任务终点原子提交稳定状态', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordConsensusTaskStart('task-1', consensusState(1), '提交共识任务')
     const committed = consensusState(1, '最终方案')
     await journal.recordConsensusTaskEnd('task-1', 'completed', committed)
@@ -943,7 +944,7 @@ describe('SessionStore', () => {
 
   it('达到工具循环上限时保留执行进度供用户继续', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordConsensusTaskStart('task-1', consensusState(1), '继续长任务')
     const user = message('user', '继续长任务')
     const assistant = message('assistant', '已完成部分工作')
@@ -961,7 +962,7 @@ describe('SessionStore', () => {
 
   it('任务计划随稳定 step 持久化，并记录每个 turn 的计划起点', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
     const currentState = state(plan)
     await journal.recordTurnStart('turn-1', [message('user', '开始长任务')])
@@ -979,7 +980,7 @@ describe('SessionStore', () => {
 
   it('重启时用权威 TaskPlanState 修复计划卡的窄崩溃窗口', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
     const activeState = state(plan)
     await journal.recordTurnStart('create-plan', [message('user', '建立计划')])
@@ -1031,7 +1032,7 @@ describe('SessionStore', () => {
 
   it('重启后恢复替换后的活动计划，并保留被替代计划的完整历史事件', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const previous = taskPlan(1)
     const previousState = state(previous)
     await journal.recordTurnStart('old-task', [message('user', '开发蔚蓝')])
@@ -1082,7 +1083,7 @@ describe('SessionStore', () => {
 
   it('压缩和对话回滚跨重启保留完整任务状态', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
     const savedState = state(plan, 7, {
       historicalPlans: [{
@@ -1121,7 +1122,7 @@ describe('SessionStore', () => {
 
   it('半截共识恢复和取消都会回到任务起点的计划状态', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const base = taskPlan(1)
     const baseState = state(base)
     await journal.recordTurnStart('base', [message('user', '已有任务')])
@@ -1143,7 +1144,7 @@ describe('SessionStore', () => {
 
   it('快照保留活动共识边界和最后稳定状态', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const state = consensusState(1)
     await journal.recordUserInput('压缩中的共识请求', true)
     await journal.recordConsensusTaskStart('task-1', state, '压缩中的共识请求')
@@ -1158,7 +1159,7 @@ describe('SessionStore', () => {
 
   it('活动共识快照后的未交付根输入在取消恢复时只出现一次，且重放不修改记录', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const state = consensusState(1)
     await journal.recordUserInput('原始共识请求', true)
     await journal.recordConsensusTaskStart('task-snapshot-root', state, '原始共识请求')
@@ -1189,7 +1190,7 @@ describe('SessionStore', () => {
 
   it('共识取消时回滚任务内模型消息', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const baseMessages = [message('user', '稳定上下文'), message('assistant', '稳定回答')]
     await journal.recordTurnStart('base', [baseMessages[0]!])
     await journal.recordStep('base', [baseMessages[1]!])
@@ -1261,12 +1262,12 @@ describe('SessionStore', () => {
     const [summary] = await store.list()
     assert.equal(summary?.sessionId, sessionId)
     assert.equal(summary?.title, '旧版会话')
-    assert.equal(summary?.projectDir, 'C:\\work\\legacy')
+    assert.equal(summary?.workspace, undefined)
     assert.equal(summary?.modelId, 'test:legacy')
     assert.equal(summary?.status, 'unavailable')
     assert.equal(summary?.resumable, false)
     assert.match(summary?.unavailableReason ?? '', /无法恢复/)
-    assert.equal((await store.list('C:\\work\\legacy')).length, 1)
+    assert.equal((await store.list('C:\\work\\legacy')).length, 0)
   })
 
   it('损坏的 UUID 会话目录返回最小摘要，非 UUID 目录仍忽略', async () => {
@@ -1288,7 +1289,7 @@ describe('SessionStore', () => {
     assert.equal(sessions.length, 1)
     assert.equal(sessions[0]!.sessionId, sessionId)
     assert.equal(sessions[0]!.title, '无法恢复的会话')
-    assert.equal(sessions[0]!.projectDir, undefined)
+    assert.equal(sessions[0]!.workspace, undefined)
     assert.equal(sessions[0]!.resumable, false)
     assert.equal(sessions[0]!.status, 'unavailable')
     assert.doesNotThrow(() => new Date(sessions[0]!.updatedAt).toISOString())
@@ -1297,7 +1298,7 @@ describe('SessionStore', () => {
 
   it('持久删除标记优先于 live metadata，且只允许重试删除', async () => {
     const store = await createStore()
-    const journal = await store.create({ projectDir: 'C:\\work\\delete', modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace('C:\\work\\delete'), modelId: 'test:model' })
     await journal.recordUserInput('待删除会话', true)
 
     assert.equal(await store.markDeleting(journal.sessionId), true)
@@ -1317,7 +1318,7 @@ describe('SessionStore', () => {
   it('会话目录已消失时，外置删除标记仍保留重试入口', async () => {
     const store = await createStore()
     const root = storeRoots.get(store)!
-    const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const paths = getSessionPaths(root, journal.sessionId)
     assert.equal(await store.markDeleting(journal.sessionId), true)
 
@@ -1341,8 +1342,8 @@ describe('SessionStore', () => {
 
   it('按项目过滤并安全删除会话', async () => {
     const store = await createStore()
-    const first = await store.create({ projectDir: 'C:\\work\\one', modelId: 'test:model' })
-    await store.create({ projectDir: 'C:\\work\\two', modelId: 'test:model' })
+    const first = await store.create({ workspace: localWorkspace('C:\\work\\one'), modelId: 'test:model' })
+    await store.create({ workspace: localWorkspace('C:\\work\\two'), modelId: 'test:model' })
     const firstDir = join(storeRoots.get(store)!, first.sessionId)
     await mkdir(join(firstDir, 'checkpoints', 'manifests'), { recursive: true })
     await writeFile(join(firstDir, 'metadata.json.leftover.tmp'), 'temporary', 'utf8')
@@ -1367,7 +1368,7 @@ async function createStore(): Promise<SessionStore> {
 
 async function completedSession() {
   const store = await createStore()
-  const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+  const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
   await journal.recordUserInput('hello', true)
   await journal.recordTurnStart('turn-1', [message('user', 'hello')])
   await journal.recordStep('turn-1', [message('assistant', 'world')])
@@ -1383,7 +1384,7 @@ async function completedSession() {
 
 async function waitingQuestionSession() {
   const store = await createStore()
-  const journal = await store.create({ projectDir: null, modelId: 'test:model' })
+  const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
   const question = {
     id: 'question-crash-window',
     questions: [{

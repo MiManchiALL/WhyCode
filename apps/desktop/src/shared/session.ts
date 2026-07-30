@@ -8,8 +8,10 @@ import type {
   SessionSummary,
   ViewEvent,
   ReasoningEffortSelection,
+  WorkspaceBinding,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
+import type { StartWorkspaceRequest } from './workspace.ts'
 
 export type SessionListItem = SessionSummary & {
   isCurrent: boolean
@@ -24,7 +26,7 @@ export type SessionListItem = SessionSummary & {
 export interface RuntimeSnapshot {
   /** 对话运行时的稳定路由 ID；草稿尚未建立 JSONL 时也存在。 */
   runtimeId: string
-  projectDir: string | null
+  workspace: WorkspaceBinding
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
@@ -70,6 +72,10 @@ export type ResumeSessionResult =
 export type NewSessionResult =
   | { ok: true; snapshot: RuntimeSnapshot }
   | { ok: false; error: string }
+
+export interface NewSessionRequest {
+  workspace: StartWorkspaceRequest
+}
 
 export type DeleteSessionResult =
   | { ok: true; deletedCurrent: boolean; snapshot?: RuntimeSnapshot }
