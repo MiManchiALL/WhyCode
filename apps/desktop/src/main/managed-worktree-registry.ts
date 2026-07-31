@@ -6,11 +6,12 @@ import {
   readFile,
   realpath,
   rename,
+  rmdir,
   rm,
   stat,
   writeFile,
 } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import {
   validateSessionId,
@@ -124,6 +125,7 @@ export class ManagedWorktreeRegistry {
   async removeDirectory(binding: WorktreeWorkspaceBinding): Promise<void> {
     await this.validateBinding(binding)
     await this.removeValidatedDirectory(binding.worktreeDirectory)
+    await this.pruneEmptyRepositoryDirectory(binding)
   }
 
   async removeExpectedDirectory(
@@ -138,6 +140,27 @@ export class ManagedWorktreeRegistry {
       throw new Error('拒绝删除受管 Worktree 根之外的目录')
     }
     await this.removeValidatedDirectory(targetDirectory)
+    await this.pruneEmptyDirectory(dirname(targetDirectory))
+  }
+
+  async pruneEmptyRepositoryDirectory(
+    binding: WorktreeWorkspaceBinding,
+  ): Promise<void> {
+    await this.validateBinding(binding)
+    await this.pruneEmptyDirectory(dirname(binding.worktreeDirectory))
+  }
+
+  async pruneEmptyRepositoryDirectories(): Promise<string[]> {
+    const root = await this.rootDirectory()
+    const entries = await readdir(root, { withFileTypes: true })
+    const removed: string[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^[0-9a-f]{16}$/u.test(entry.name)) continue
+      if (await this.pruneEmptyDirectory(resolve(root, entry.name))) {
+        removed.push(entry.name)
+      }
+    }
+    return removed
   }
 
   private async read(binding: WorktreeWorkspaceBinding): Promise<WorktreeManifest> {
@@ -191,6 +214,18 @@ export class ManagedWorktreeRegistry {
       maxRetries: 5,
       retryDelay: 100,
     })
+  }
+
+  private async pruneEmptyDirectory(targetDirectory: string): Promise<boolean> {
+    const target = await this.existingManagedDirectory(targetDirectory)
+    if (!target) return false
+    try {
+      await rmdir(target)
+      return true
+    } catch (error) {
+      if (isNotFound(error) || isDirectoryNotEmpty(error)) return false
+      throw error
+    }
   }
 
   private async existingManagedDirectory(targetDirectory: string): Promise<string | null> {
@@ -288,6 +323,15 @@ function isNotFound(error: unknown): boolean {
     && typeof error === 'object'
     && 'code' in error
     && error.code === 'ENOENT',
+  )
+}
+
+function isDirectoryNotEmpty(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error.code === 'ENOTEMPTY' || error.code === 'EEXIST'),
   )
 }
 

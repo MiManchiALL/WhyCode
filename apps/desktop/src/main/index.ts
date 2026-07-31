@@ -1803,6 +1803,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     pdfProcessor,
   )
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
+  await worktrees.pruneEmptyRepositoryDirectories()
+    .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
   void sessions.list().then((summaries) => worktrees.cleanupAbandonedDrafts(
     new Set(summaries.flatMap((summary) =>
       summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],

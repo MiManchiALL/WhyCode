@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { workspaceWorkingDirectory } from '@whycode/core'
 import { requireGitSuccess, runGit } from './git-process.ts'
@@ -118,8 +118,10 @@ describe('受管 Worktree 生命周期', () => {
     const request = await worktreeRequest(manager, fixture.repository)
 
     const clean = await manager.create(request, randomUUID(), 'runtime-clean')
+    const repositoryContainer = dirname(clean.worktreeDirectory)
     await manager.cleanupDraft(clean, 'runtime-clean')
     await assert.rejects(access(clean.worktreeDirectory))
+    await assert.rejects(access(repositoryContainer))
 
     const dirty = await manager.create(request, randomUUID(), 'runtime-dirty')
     await writeFile(join(dirty.worktreeDirectory, 'scratch.txt'), 'keep me\n', 'utf8')
@@ -129,6 +131,7 @@ describe('受管 Worktree 生命周期', () => {
 
     await manager.remove(dirty, true)
     await assert.rejects(access(dirty.worktreeDirectory))
+    await assert.rejects(access(repositoryContainer))
   })
 
   it('启动时回收无会话的干净草稿，同时保留真正含改动的草稿', async () => {
@@ -148,6 +151,16 @@ describe('受管 Worktree 生命周期', () => {
     manager.release(protectedBySessionStart, 'runtime-session-start-crash')
 
     const restarted = new WorktreeManager(fixture.managerRoot)
+    const staleEmptyContainer = join(fixture.managerRoot, '0123456789abcdef')
+    const unrelatedEmptyDirectory = join(fixture.managerRoot, 'keep-empty')
+    await mkdir(staleEmptyContainer)
+    await mkdir(unrelatedEmptyDirectory)
+    assert.deepEqual(
+      await restarted.pruneEmptyRepositoryDirectories(),
+      ['0123456789abcdef'],
+    )
+    await assert.rejects(access(staleEmptyContainer))
+    await access(unrelatedEmptyDirectory)
     const cleanup = await restarted.cleanupAbandonedDrafts(
       new Set([protectedBySessionStart.id]),
     )
@@ -163,6 +176,7 @@ describe('受管 Worktree 生命周期', () => {
 
     await restarted.remove(dirty, true)
     await restarted.remove(protectedBySessionStart, true)
+    await assert.rejects(access(dirname(protectedBySessionStart.worktreeDirectory)))
   })
 
   it('Windows 下忽略 core.filemode=true 产生的纯执行位假改动并回收草稿', {

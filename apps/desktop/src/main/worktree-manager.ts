@@ -60,23 +60,12 @@ export class WorktreeManager {
       worktreeId,
     )
     const worktreeParent = dirname(worktreeDirectory)
-    await mkdir(worktreeParent, { recursive: true, mode: 0o700 })
-    if (!samePath(await canonicalDirectory(worktreeParent), worktreeParent)) {
-      throw new Error('Worktree 受管父目录穿过符号链接或目录联接')
-    }
     let binding: WorktreeWorkspaceBinding | null = null
     let reservedDirectory = false
     let gitCreationRan = false
     try {
-      try {
-        await mkdir(worktreeDirectory, { mode: 0o700 })
-        reservedDirectory = true
-      } catch (error) {
-        if (isAlreadyExists(error)) {
-          throw new Error(`Worktree 目标目录已存在：${worktreeDirectory}`)
-        }
-        throw error
-      }
+      await reserveWorktreeDirectory(worktreeParent, worktreeDirectory)
+      reservedDirectory = true
       const creation = await runGit(repositoryDirectory, [
         'worktree',
         'add',
@@ -201,6 +190,10 @@ export class WorktreeManager {
     return result
   }
 
+  pruneEmptyRepositoryDirectories(): Promise<string[]> {
+    return this.registry.pruneEmptyRepositoryDirectories()
+  }
+
   async status(binding: WorktreeWorkspaceBinding): Promise<WorktreeStatus> {
     await this.assertGitWorktree(binding)
     return readWorktreeStatus(binding)
@@ -260,6 +253,7 @@ export class WorktreeManager {
       }
       await this.ensureDirectoryRemoved(binding, discardChanges)
     }
+    await this.registry.pruneEmptyRepositoryDirectory(binding)
 
     requireGitSuccess(
       await runGit(binding.repositoryDirectory, ['worktree', 'prune']),
@@ -323,6 +317,7 @@ export class WorktreeManager {
       throw new Error('原 Git 仓库不可用，无法确认 Worktree 是否干净，已保留')
     }
     if (worktreeExists) await this.registry.removeDirectory(binding)
+    await this.registry.pruneEmptyRepositoryDirectory(binding)
     await this.registry.removeManifest(binding)
   }
 
@@ -336,13 +331,11 @@ export class WorktreeManager {
       ['worktree', 'remove', '--force', worktreeDirectory],
       { timeoutMs: 60_000 },
     ).catch(() => null)
-    if (await pathExists(worktreeDirectory)) {
-      await this.registry.removeExpectedDirectory(
-        repositoryDirectory,
-        worktreeId,
-        worktreeDirectory,
-      )
-    }
+    await this.registry.removeExpectedDirectory(
+      repositoryDirectory,
+      worktreeId,
+      worktreeDirectory,
+    )
     if (await pathExists(worktreeDirectory)) {
       throw new Error('受管 Worktree 目录回滚后仍然存在')
     }
@@ -354,6 +347,30 @@ export class WorktreeManager {
       throw new Error('回滚后 Git 仍保留该 Worktree 登记')
     }
   }
+}
+
+async function reserveWorktreeDirectory(
+  parentDirectory: string,
+  worktreeDirectory: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await mkdir(parentDirectory, { recursive: true, mode: 0o700 })
+    if (!samePath(await canonicalDirectory(parentDirectory), parentDirectory)) {
+      throw new Error('Worktree 受管父目录穿过符号链接或目录联接')
+    }
+    try {
+      await mkdir(worktreeDirectory, { mode: 0o700 })
+      return
+    } catch (error) {
+      if (isAlreadyExists(error)) {
+        throw new Error(`Worktree 目标目录已存在：${worktreeDirectory}`)
+      }
+      // 另一清理任务可能刚移除了空的仓库指纹目录；重建并重新校验一次。
+      if (attempt === 0 && isNotFound(error)) continue
+      throw error
+    }
+  }
+  throw new Error('Worktree 目标目录预留失败')
 }
 
 function assertCandidateCanCreate(
