@@ -1,17 +1,36 @@
-import type { WorkspaceCandidate } from '../../shared/workspace.ts'
+import { useEffect, useState } from 'react'
+import type {
+  WorkspaceCandidate,
+  WorktreeBase,
+} from '../../shared/workspace.ts'
+
+export type WorkspaceStartChoice =
+  | { mode: 'local' }
+  | { mode: 'worktree'; base: WorktreeBase }
 
 interface WorkspaceStartDialogProps {
   candidate: WorkspaceCandidate
   busy: boolean
-  onStart: (mode: 'local' | 'worktree') => void
+  onStart: (choice: WorkspaceStartChoice) => void
   onPickOther: () => void
   onClose: () => void
 }
 
 export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
+  const defaultBase = props.candidate.worktreeBases[0] ?? null
+  const [selectedBaseRef, setSelectedBaseRef] = useState<string | null>(
+    defaultBase?.ref ?? null,
+  )
+  useEffect(() => {
+    setSelectedBaseRef(defaultBase?.ref ?? null)
+  }, [props.candidate])
+
+  const selectedBase = props.candidate.worktreeBases.find(
+    (base) => base.ref === selectedBaseRef,
+  ) ?? null
   const worktreeAvailable = Boolean(
     props.candidate.repositoryDirectory
-    && props.candidate.baseCommit
+    && props.candidate.worktreeBases.length > 0
     && !props.candidate.worktreeUnavailableReason,
   )
   return (
@@ -34,6 +53,7 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
             </p>
           </div>
           <button
+            type="button"
             className="text-sm text-neutral-400 hover:text-neutral-700"
             onClick={props.onClose}
             disabled={props.busy}
@@ -44,8 +64,9 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <button
+            type="button"
             className="rounded-lg border border-neutral-300 p-4 text-left hover:border-neutral-500 disabled:opacity-40"
-            onClick={() => props.onStart('local')}
+            onClick={() => props.onStart({ mode: 'local' })}
             disabled={props.busy}
           >
             <div className="flex items-center gap-2">
@@ -59,10 +80,8 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
             </p>
           </button>
 
-          <button
-            className="rounded-lg border border-violet-300 bg-violet-50/40 p-4 text-left hover:border-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => props.onStart('worktree')}
-            disabled={props.busy || !worktreeAvailable}
+          <section
+            className="rounded-lg border border-violet-300 bg-violet-50/40 p-4"
             title={props.candidate.worktreeUnavailableReason ?? undefined}
           >
             <div className="flex items-center gap-2">
@@ -72,20 +91,51 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
               <strong className="text-sm">创建隔离工作区</strong>
             </div>
             <p className="mt-2 text-xs leading-5 text-neutral-500">
-              从当前提交创建受管的 detached Worktree；文件、命令、项目指令、MCP
+              选择一个本地分支的精确提交，创建受管的 detached Worktree；文件、命令、项目指令、MCP
               与检查点全部跟随隔离目录。
             </p>
             {worktreeAvailable ? (
-              <p className="mt-2 text-[11px] text-violet-700">
-                基线 {props.candidate.baseRef ?? 'detached HEAD'} ·{' '}
-                {props.candidate.baseCommit!.slice(0, 10)}
-              </p>
+              <>
+                <label className="mt-3 block text-[11px] font-medium text-violet-800">
+                  起始分支
+                  <select
+                    className="mt-1 w-full rounded border border-violet-200 bg-white px-2 py-1.5 text-xs text-neutral-800 outline-none focus:border-violet-500"
+                    value={selectedBaseRef ?? ''}
+                    onChange={(event) => {
+                      setSelectedBaseRef(event.currentTarget.value || null)
+                    }}
+                    disabled={props.busy}
+                  >
+                    {props.candidate.worktreeBases.map((base) => (
+                      <option
+                        key={base.ref ?? `detached:${base.commit}`}
+                        value={base.ref ?? ''}
+                      >
+                        {base.ref ?? 'detached HEAD'} · {base.commit.slice(0, 10)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="mt-2 text-[11px] leading-4 text-violet-700">
+                  只检出所选提交，仍保持 detached HEAD，不占用该分支。
+                </p>
+                <button
+                  type="button"
+                  className="mt-3 w-full rounded bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => {
+                    if (selectedBase) props.onStart({ mode: 'worktree', base: selectedBase })
+                  }}
+                  disabled={props.busy || !selectedBase}
+                >
+                  创建 Worktree
+                </button>
+              </>
             ) : (
               <p className="mt-2 text-[11px] text-amber-700">
                 {props.candidate.worktreeUnavailableReason}
               </p>
             )}
-          </button>
+          </section>
         </div>
 
         {props.candidate.dirty && worktreeAvailable && (
@@ -94,7 +144,7 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
             {props.candidate.changedFileCount
               ? `（已列出至少 ${props.candidate.changedFileCount} 项）`
               : ''}。
-            隔离 Worktree 只从上面的提交创建，不会静默带入这些改动。
+            隔离 Worktree 只从所选提交创建，不会静默带入这些改动。
           </p>
         )}
         {worktreeAvailable && (
@@ -106,6 +156,7 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
 
         <div className="mt-5 flex items-center justify-between">
           <button
+            type="button"
             className="text-xs text-neutral-500 hover:text-neutral-800 disabled:opacity-40"
             onClick={props.onPickOther}
             disabled={props.busy}

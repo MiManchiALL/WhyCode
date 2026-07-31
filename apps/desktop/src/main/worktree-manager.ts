@@ -4,6 +4,7 @@ import type { WorktreeWorkspaceBinding } from '@whycode/core'
 import type {
   StartWorkspaceRequest,
   WorkspaceCandidate,
+  WorktreeBase,
   WorktreeStatus,
 } from '../shared/workspace.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
@@ -51,10 +52,10 @@ export class WorktreeManager {
     ownerRuntimeId: string,
   ): Promise<WorktreeWorkspaceBinding> {
     const candidate = await this.inspect(request.selectedDirectory)
-    assertCandidateCanCreate(candidate, request)
+    const selectedBase = validatedBaseForCreate(candidate, request)
 
     const repositoryDirectory = candidate.repositoryDirectory!
-    const baseCommit = candidate.baseCommit!
+    const baseCommit = selectedBase.commit
     const worktreeDirectory = await this.registry.expectedDirectory(
       repositoryDirectory,
       worktreeId,
@@ -83,7 +84,7 @@ export class WorktreeManager {
         worktreeDirectory: canonicalWorktree,
         relativeWorkingDirectory: candidate.relativeWorkingDirectory,
         baseCommit,
-        baseRef: candidate.baseRef,
+        baseRef: selectedBase.ref,
         createdAt: new Date().toISOString(),
       }
       await this.registry.validateBinding(binding)
@@ -373,23 +374,31 @@ async function reserveWorktreeDirectory(
   throw new Error('Worktree 目标目录预留失败')
 }
 
-function assertCandidateCanCreate(
+function validatedBaseForCreate(
   candidate: WorkspaceCandidate,
   request: Extract<StartWorkspaceRequest, { mode: 'worktree' }>,
-): void {
+): WorktreeBase {
   if (
     candidate.worktreeUnavailableReason
     || !candidate.repositoryDirectory
-    || !candidate.baseCommit
+    || candidate.worktreeBases.length === 0
   ) {
     throw new Error(candidate.worktreeUnavailableReason ?? '当前目录不能创建 Worktree')
   }
-  if (candidate.baseCommit !== request.expectedBaseCommit) {
-    throw new Error('仓库 HEAD 已变化，请重新确认 Worktree 的基线')
+  const selectedBase = candidate.worktreeBases.find(
+    (base) => base.ref === request.baseRef,
+  )
+  const baseLabel = request.baseRef ?? 'detached HEAD'
+  if (!selectedBase) {
+    throw new Error(`所选基线 ${baseLabel} 已不存在，请重新选择`)
+  }
+  if (selectedBase.commit !== request.expectedBaseCommit) {
+    throw new Error(`所选基线 ${baseLabel} 已变化，请重新确认 Worktree 基线`)
   }
   if (candidate.dirty && !request.acknowledgeUncommittedChangesExcluded) {
     throw new Error('本地仓库有未提交更改；需明确确认它们不会进入隔离 Worktree')
   }
+  return selectedBase
 }
 
 function isNotFound(error: unknown): boolean {

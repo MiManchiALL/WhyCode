@@ -6,6 +6,7 @@ import type {
   WorktreeStatusEntry,
 } from '../shared/workspace.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
+import { readWorktreeBases } from './worktree-bases.ts'
 import {
   canonicalDirectory,
   samePath,
@@ -30,8 +31,6 @@ export async function inspectGitWorkspace(
   const selected = await canonicalDirectory(selectedDirectory)
   let repositoryDirectory: string | null = null
   let relativeWorkingDirectory = '.'
-  let baseCommit: string | null = null
-  let baseRef: string | null = null
   try {
     const topLevelResult = await runGit(
       selected,
@@ -66,10 +65,10 @@ export async function inspectGitWorkspace(
         relativeWorkingDirectory,
       }
     }
-    baseCommit = head.stdout.trim()
+    const headCommit = head.stdout.trim()
 
-    const [branch, statusResult] = await Promise.all([
-      runGit(selected, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { readOnly: true }),
+    const [worktreeBases, statusResult] = await Promise.all([
+      readWorktreeBases(repositoryDirectory, headCommit),
       runGit(
         selected,
         managedWorktreeStateArgs([
@@ -82,14 +81,12 @@ export async function inspectGitWorkspace(
       ),
     ])
     requireGitSuccess(statusResult, '读取 Git 工作区状态')
-    baseRef = branch.code === 0 ? branch.stdout.trim() : null
     const statusEntries = parsePorcelainStatus(statusResult.stdout)
     return {
       selectedDirectory: selected,
       repositoryDirectory,
       relativeWorkingDirectory,
-      baseCommit,
-      baseRef,
+      worktreeBases,
       dirty: statusEntries.length > 0 || statusResult.outputTruncated,
       changedFileCount: statusEntries.length,
       worktreeUnavailableReason: null,
@@ -102,8 +99,6 @@ export async function inspectGitWorkspace(
       ),
       repositoryDirectory,
       relativeWorkingDirectory,
-      baseCommit,
-      baseRef,
     }
   }
 }
@@ -241,8 +236,7 @@ function unavailableCandidate(
     selectedDirectory,
     repositoryDirectory: null,
     relativeWorkingDirectory: '.',
-    baseCommit: null,
-    baseRef: null,
+    worktreeBases: [],
     dirty: false,
     changedFileCount: 0,
     worktreeUnavailableReason: reason,

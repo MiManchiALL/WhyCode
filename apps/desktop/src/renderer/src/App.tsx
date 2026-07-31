@@ -68,7 +68,10 @@ import {
   type PdfDraft,
 } from './pdf-draft.ts'
 import { composerKeyAction } from './composer-key.ts'
-import { WorkspaceStartDialog } from './workspace-start-dialog.tsx'
+import {
+  WorkspaceStartDialog,
+  type WorkspaceStartChoice,
+} from './workspace-start-dialog.tsx'
 import { WorktreePanel } from './worktree-panel.tsx'
 
 interface Approval {
@@ -653,26 +656,21 @@ export function App() {
       .finally(endSessionTransition)
   }, [addError, beginSessionTransition, endSessionTransition])
 
-  const startWorkspaceSession = useCallback((mode: 'local' | 'worktree') => {
+  const startWorkspaceSession = useCallback((choice: WorkspaceStartChoice) => {
     const candidate = workspaceCandidate
     if (!candidate || !beginSessionTransition()) return
-    const workspaceRequest = mode === 'local'
+    const workspaceRequest = choice.mode === 'local'
       ? {
           mode: 'local' as const,
           selectedDirectory: candidate.selectedDirectory,
         }
-      : candidate.baseCommit
-        ? {
-            mode: 'worktree' as const,
-            selectedDirectory: candidate.selectedDirectory,
-            expectedBaseCommit: candidate.baseCommit,
-            acknowledgeUncommittedChangesExcluded: candidate.dirty,
-          }
-        : null
-    if (!workspaceRequest) {
-      endSessionTransition()
-      return addError(candidate.worktreeUnavailableReason ?? '当前目录不能创建 Worktree')
-    }
+      : {
+          mode: 'worktree' as const,
+          selectedDirectory: candidate.selectedDirectory,
+          baseRef: choice.base.ref,
+          expectedBaseCommit: choice.base.commit,
+          acknowledgeUncommittedChangesExcluded: candidate.dirty,
+        }
     void window.whycode.newSession({ workspace: workspaceRequest }).then((result) => {
       if (!result.ok) {
         setWorkspaceCandidate(null)

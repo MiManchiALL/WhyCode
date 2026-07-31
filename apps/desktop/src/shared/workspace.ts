@@ -1,11 +1,15 @@
 import type { WorkspaceBinding } from '@whycode/core'
 
+export interface WorktreeBase {
+  ref: string | null
+  commit: string
+}
+
 export interface WorkspaceCandidate {
   selectedDirectory: string
   repositoryDirectory: string | null
   relativeWorkingDirectory: string
-  baseCommit: string | null
-  baseRef: string | null
+  worktreeBases: WorktreeBase[]
   dirty: boolean
   changedFileCount: number
   worktreeUnavailableReason: string | null
@@ -19,6 +23,7 @@ export type StartWorkspaceRequest =
   | {
       mode: 'worktree'
       selectedDirectory: string
+      baseRef: string | null
       expectedBaseCommit: string
       acknowledgeUncommittedChangesExcluded: boolean
     }

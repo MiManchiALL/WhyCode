@@ -1530,6 +1530,10 @@ async function createRequestedWorkspace(
   }
   if (
     target.mode !== 'worktree'
+    || (target.baseRef !== null && (
+      typeof target.baseRef !== 'string'
+      || target.baseRef.length === 0
+    ))
     || typeof target.expectedBaseCommit !== 'string'
     || typeof target.acknowledgeUncommittedChangesExcluded !== 'boolean'
   ) {

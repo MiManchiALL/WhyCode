@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { workspaceWorkingDirectory } from '@whycode/core'
+import type { WorkspaceCandidate, WorktreeBase } from '../shared/workspace.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 
@@ -38,14 +39,17 @@ describe('受管 Worktree 生命周期', () => {
     const manager = new WorktreeManager(fixture.managerRoot)
     const candidate = await manager.inspect(join(fixture.repository, 'src'))
     assert.equal(candidate.relativeWorkingDirectory, 'src')
-    assert.equal(candidate.baseCommit, fixture.baseCommit)
-    assert.equal(candidate.baseRef, 'main')
+    assert.deepEqual(candidate.worktreeBases, [{
+      ref: 'main',
+      commit: fixture.baseCommit,
+    }])
     assert.equal(candidate.dirty, true)
     assert.equal(candidate.changedFileCount, 2)
 
     const request = {
       mode: 'worktree' as const,
       selectedDirectory: join(fixture.repository, 'src'),
+      baseRef: 'main',
       expectedBaseCommit: fixture.baseCommit,
       acknowledgeUncommittedChangesExcluded: false,
     }
@@ -60,6 +64,7 @@ describe('受管 Worktree 生命周期', () => {
       'runtime-one',
     )
     assert.equal(binding.baseCommit, fixture.baseCommit)
+    assert.equal(binding.baseRef, 'main')
     assert.equal(binding.relativeWorkingDirectory, 'src')
     assert.equal(await git(binding.worktreeDirectory, ['rev-parse', 'HEAD']), fixture.baseCommit)
     assert.equal(
@@ -109,6 +114,98 @@ describe('受管 Worktree 生命周期', () => {
     assert.equal(
       await git(fixture.repository, ['rev-parse', `refs/heads/${branchName}`]),
       fixture.baseCommit,
+    )
+  })
+
+  it('可选择非当前本地分支作为基线，当前分支变化不影响 detached 创建', async () => {
+    const fixture = await createRepository()
+    await git(fixture.repository, ['branch', 'feature/baseline', fixture.baseCommit])
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const candidate = await manager.inspect(fixture.repository)
+    assert.deepEqual(candidate.worktreeBases, [
+      { ref: 'main', commit: fixture.baseCommit },
+      { ref: 'feature/baseline', commit: fixture.baseCommit },
+    ])
+    const selected = candidate.worktreeBases[1]
+    assert.ok(selected)
+
+    await writeFile(join(fixture.repository, 'tracked.txt'), 'main advanced\n', 'utf8')
+    await git(fixture.repository, ['add', 'tracked.txt'])
+    await git(fixture.repository, ['commit', '-m', 'advance main'])
+    const advancedMain = await git(fixture.repository, ['rev-parse', 'HEAD'])
+
+    const binding = await manager.create({
+      mode: 'worktree',
+      selectedDirectory: fixture.repository,
+      baseRef: selected.ref,
+      expectedBaseCommit: selected.commit,
+      acknowledgeUncommittedChangesExcluded: false,
+    }, randomUUID(), 'runtime-selected-base')
+    assert.equal(binding.baseRef, 'feature/baseline')
+    assert.equal(binding.baseCommit, fixture.baseCommit)
+    assert.equal(await git(binding.worktreeDirectory, ['rev-parse', 'HEAD']), fixture.baseCommit)
+    assert.equal(
+      await git(binding.worktreeDirectory, ['symbolic-ref', '--quiet', '--short', 'HEAD'], true),
+      '',
+    )
+    assert.equal(
+      await git(fixture.repository, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+      'main',
+    )
+    assert.equal(await git(fixture.repository, ['rev-parse', 'HEAD']), advancedMain)
+
+    manager.release(binding, 'runtime-selected-base')
+    await manager.remove(binding, false)
+  })
+
+  it('本地仓库处于 detached HEAD 时保留其提交作为默认基线', async () => {
+    const fixture = await createRepository()
+    await git(fixture.repository, ['switch', '--detach', fixture.baseCommit])
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const candidate = await manager.inspect(fixture.repository)
+    assert.deepEqual(candidate.worktreeBases, [
+      { ref: null, commit: fixture.baseCommit },
+      { ref: 'main', commit: fixture.baseCommit },
+    ])
+
+    const binding = await manager.create({
+      mode: 'worktree',
+      selectedDirectory: fixture.repository,
+      baseRef: null,
+      expectedBaseCommit: fixture.baseCommit,
+      acknowledgeUncommittedChangesExcluded: false,
+    }, randomUUID(), 'runtime-detached-base')
+    assert.equal(binding.baseRef, null)
+    assert.equal(binding.baseCommit, fixture.baseCommit)
+    assert.equal(
+      await git(binding.worktreeDirectory, ['symbolic-ref', '--quiet', '--short', 'HEAD'], true),
+      '',
+    )
+
+    manager.release(binding, 'runtime-detached-base')
+    await manager.remove(binding, false)
+  })
+
+  it('所选本地分支删除后拒绝使用过期基线', async () => {
+    const fixture = await createRepository()
+    await git(fixture.repository, ['branch', 'feature/deleted', fixture.baseCommit])
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const candidate = await manager.inspect(fixture.repository)
+    const selected = candidate.worktreeBases.find((base) => base.ref === 'feature/deleted')
+    assert.ok(selected)
+    await git(fixture.repository, ['branch', '-D', 'feature/deleted'])
+    const id = randomUUID()
+
+    await assert.rejects(manager.create({
+      mode: 'worktree',
+      selectedDirectory: fixture.repository,
+      baseRef: selected.ref,
+      expectedBaseCommit: selected.commit,
+      acknowledgeUncommittedChangesExcluded: false,
+    }, id, 'runtime-deleted-base'), /所选基线 feature\/deleted 已不存在/)
+    assert.doesNotMatch(
+      await git(fixture.repository, ['worktree', 'list', '--porcelain']),
+      new RegExp(id, 'u'),
     )
   })
 
@@ -192,10 +289,12 @@ describe('受管 Worktree 生命周期', () => {
     const candidate = await manager.inspect(fixture.repository)
     assert.equal(candidate.dirty, false)
     assert.equal(candidate.changedFileCount, 0)
+    const base = defaultWorktreeBase(candidate)
     const binding = await manager.create({
       mode: 'worktree',
       selectedDirectory: fixture.repository,
-      expectedBaseCommit: candidate.baseCommit!,
+      baseRef: base.ref,
+      expectedBaseCommit: base.commit,
       acknowledgeUncommittedChangesExcluded: false,
     }, randomUUID(), 'runtime-filemode')
     assert.match(await git(binding.worktreeDirectory, ['status', '--short']), /M tracked\.txt/u)
@@ -298,13 +397,15 @@ describe('受管 Worktree 生命周期', () => {
     await writeFile(join(localOnlyDirectory, 'draft.txt'), 'draft\n', 'utf8')
     const manager = new WorktreeManager(fixture.managerRoot)
     const candidate = await manager.inspect(localOnlyDirectory)
+    const base = defaultWorktreeBase(candidate)
     const id = randomUUID()
 
     await assert.rejects(
       manager.create({
         mode: 'worktree',
         selectedDirectory: localOnlyDirectory,
-        expectedBaseCommit: candidate.baseCommit!,
+        baseRef: base.ref,
+        expectedBaseCommit: base.commit,
         acknowledgeUncommittedChangesExcluded: true,
       }, id, 'runtime-local-only'),
       /所选子目录不存在于 Worktree 基线/,
@@ -315,10 +416,11 @@ describe('受管 Worktree 生命周期', () => {
     )
   })
 
-  it('创建前重新读取 HEAD，基线已变化时不创建到错误提交', async () => {
+  it('创建前重新读取所选分支，基线已变化时不创建到错误提交', async () => {
     const fixture = await createRepository()
     const manager = new WorktreeManager(fixture.managerRoot)
     const candidate = await manager.inspect(fixture.repository)
+    const base = defaultWorktreeBase(candidate)
     await writeFile(join(fixture.repository, 'tracked.txt'), 'second commit\n', 'utf8')
     await git(fixture.repository, ['add', 'tracked.txt'])
     await git(fixture.repository, ['commit', '-m', 'second'])
@@ -328,10 +430,11 @@ describe('受管 Worktree 生命周期', () => {
       manager.create({
         mode: 'worktree',
         selectedDirectory: fixture.repository,
-        expectedBaseCommit: candidate.baseCommit!,
+        baseRef: base.ref,
+        expectedBaseCommit: base.commit,
         acknowledgeUncommittedChangesExcluded: false,
       }, id, 'runtime-stale-base'),
-      /HEAD 已变化/,
+      /所选基线 main 已变化/,
     )
     assert.doesNotMatch(
       await git(fixture.repository, ['worktree', 'list', '--porcelain']),
@@ -461,12 +564,20 @@ async function worktreeRequest(
   repository: string,
 ) {
   const candidate = await manager.inspect(repository)
+  const base = defaultWorktreeBase(candidate)
   return {
     mode: 'worktree' as const,
     selectedDirectory: repository,
-    expectedBaseCommit: candidate.baseCommit!,
+    baseRef: base.ref,
+    expectedBaseCommit: base.commit,
     acknowledgeUncommittedChangesExcluded: false,
   }
+}
+
+function defaultWorktreeBase(candidate: WorkspaceCandidate): WorktreeBase {
+  const base = candidate.worktreeBases[0]
+  assert.ok(base, candidate.worktreeUnavailableReason ?? '缺少 Worktree 基线')
+  return base
 }
 
 async function createTempRoot(): Promise<string> {
