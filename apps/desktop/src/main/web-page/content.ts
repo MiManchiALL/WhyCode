@@ -1,4 +1,4 @@
-import { WEB_PAGE_MAX_LINE_CHARS } from '@whycode/core'
+import { unicodeSafePrefix, WEB_PAGE_MAX_LINE_CHARS } from '@whycode/core'
 
 export const WEB_PAGE_MAX_CONTENT_CHARS = 250_000
 
@@ -57,7 +57,7 @@ function toBoundedLines(markdown: string): { lines: string[]; truncated: boolean
       const addedChars = part.length + separatorChars
       if (totalChars + addedChars > WEB_PAGE_MAX_CONTENT_CHARS) {
         const available = WEB_PAGE_MAX_CONTENT_CHARS - totalChars - separatorChars
-        if (available > 0) lines.push(safePrefix(part, available))
+        if (available > 0) lines.push(unicodeSafePrefix(part, available))
         truncated = true
         break outer
       }
@@ -74,20 +74,9 @@ function splitLongLine(line: string): string[] {
   const parts: string[] = []
   let offset = 0
   while (offset < line.length) {
-    const part = safePrefix(line.slice(offset), WEB_PAGE_MAX_LINE_CHARS)
+    const part = unicodeSafePrefix(line.slice(offset), WEB_PAGE_MAX_LINE_CHARS)
     parts.push(part)
     offset += part.length
   }
   return parts
-}
-
-function safePrefix(value: string, maxCodeUnits: number): string {
-  let end = Math.min(value.length, maxCodeUnits)
-  if (
-    end > 0
-    && end < value.length
-    && /[\uD800-\uDBFF]/u.test(value[end - 1]!)
-    && /[\uDC00-\uDFFF]/u.test(value[end]!)
-  ) end--
-  return value.slice(0, end)
 }

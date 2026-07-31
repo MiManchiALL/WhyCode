@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { z } from 'zod'
+import { unicodeSafePrefix } from '../../text.ts'
 import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { VIEW_IMAGE_TOOL_NAME } from '../view-image/prompt.ts'
@@ -68,7 +69,7 @@ export const readFileTool = buildTool({
         }
         const shown =
           line.length > MAX_LINE_CHARS
-            ? `${line.slice(0, MAX_LINE_CHARS)}…[本行超过 ${MAX_LINE_CHARS} 字符，已截断]`
+            ? `${unicodeSafePrefix(line, MAX_LINE_CHARS)}…[本行超过 ${MAX_LINE_CHARS} 字符，已截断]`
             : line
         output.push(`${String(lineNumber).padStart(5)}\t${shown}`)
       }

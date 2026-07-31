@@ -48,4 +48,12 @@ describe('ReadFile 流式读取', () => {
     assert.equal(binaryResult.isError, true)
     assert.match(binaryResult.data, /二进制文件/)
   })
+
+  it('截断超长单行时保留完整 Unicode 码点', async () => {
+    const { ctx } = await fixture(`${'x'.repeat(1_999)}😀tail`)
+    const result = await readFileTool.execute({ path: 'fixture.txt' }, ctx)
+
+    assert.match(result.data, /本行超过 2000 字符/)
+    assert.doesNotMatch(result.data, /[\uD800-\uDFFF]/u)
+  })
 })

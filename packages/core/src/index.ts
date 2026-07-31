@@ -8,6 +8,7 @@ export type {
   StopReason,
 } from './events.ts'
 export { isStepScopedCoreEvent } from './events.ts'
+export { unicodeSafePrefix } from './text.ts'
 export {
   MODEL_REGISTRY,
   getModelEntry,
