@@ -28,6 +28,22 @@ export type StartWorkspaceRequest =
       acknowledgeUncommittedChangesExcluded: boolean
     }
 
+export type WorktreeStartRequest = Extract<StartWorkspaceRequest, { mode: 'worktree' }>
+
+/**
+ * 尚未提交首条消息的 Worktree 选择。它只存在于 Main/Renderer 的运行时快照中，
+ * 不属于会话持久化事实，也不代表磁盘上已经存在 Git Worktree。
+ */
+export interface PendingWorktreeWorkspace {
+  mode: 'pending-worktree'
+  selectedDirectory: string
+  baseRef: string | null
+  expectedBaseCommit: string
+  acknowledgeUncommittedChangesExcluded: boolean
+}
+
+export type RuntimeWorkspace = WorkspaceBinding | PendingWorktreeWorkspace
+
 export interface WorktreeStatusEntry {
   code: string
   path: string
@@ -47,7 +63,32 @@ export type WorkspaceActionResult<T = undefined> =
   | (T extends undefined ? { ok: true } : { ok: true; value: T })
   | { ok: false; error: string }
 
-export function workspaceDisplayDirectory(binding: WorkspaceBinding): string | null {
+export function pendingWorktreeWorkspace(
+  request: WorktreeStartRequest,
+): PendingWorktreeWorkspace {
+  return {
+    mode: 'pending-worktree',
+    selectedDirectory: request.selectedDirectory,
+    baseRef: request.baseRef,
+    expectedBaseCommit: request.expectedBaseCommit,
+    acknowledgeUncommittedChangesExcluded: request.acknowledgeUncommittedChangesExcluded,
+  }
+}
+
+export function pendingWorktreeRequest(
+  workspace: PendingWorktreeWorkspace,
+): WorktreeStartRequest {
+  return {
+    mode: 'worktree',
+    selectedDirectory: workspace.selectedDirectory,
+    baseRef: workspace.baseRef,
+    expectedBaseCommit: workspace.expectedBaseCommit,
+    acknowledgeUncommittedChangesExcluded: workspace.acknowledgeUncommittedChangesExcluded,
+  }
+}
+
+export function workspaceDisplayDirectory(binding: RuntimeWorkspace): string | null {
+  if (binding.mode === 'pending-worktree') return binding.selectedDirectory
   if (binding.mode === 'none') return null
   if (binding.mode === 'local') return binding.workingDirectory
   if (binding.relativeWorkingDirectory === '.') return binding.worktreeDirectory

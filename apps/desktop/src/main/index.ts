@@ -93,13 +93,19 @@ import type {
   RuntimeSnapshot,
   RuntimeEventEnvelope,
   RuntimeCommandEnvelope,
+  RuntimeCommandResult,
   SessionListItem,
 } from '../shared/session.ts'
 import type {
+  RuntimeWorkspace,
   WorkspaceActionResult,
   WorkspaceCandidate,
   WorktreeStatus,
 } from '../shared/workspace.ts'
+import {
+  materializeRuntimeWorkspace,
+  prepareRuntimeWorkspace,
+} from './runtime-workspace.ts'
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
@@ -311,12 +317,13 @@ function runtimeForId(runtimeId?: string): DesktopSessionRuntime {
 }
 
 function worktreeBinding(
-  workspace: WorkspaceBinding | undefined,
+  workspace: RuntimeWorkspace | undefined,
 ): WorktreeWorkspaceBinding | null {
   return workspace?.mode === 'worktree' ? workspace : null
 }
 
-function sourceWorkspaceDirectory(workspace: WorkspaceBinding): string {
+function sourceWorkspaceDirectory(workspace: RuntimeWorkspace): string {
+  if (workspace.mode === 'pending-worktree') return workspace.selectedDirectory
   if (workspace.mode === 'worktree') {
     return workspace.relativeWorkingDirectory === '.'
       ? workspace.repositoryDirectory
@@ -436,7 +443,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
 }
 
 function createDraftRuntime(
-  workspace: WorkspaceBinding,
+  workspace: RuntimeWorkspace,
   runtimeId?: string,
 ): DesktopSessionRuntime {
   const runtime = new DesktopSessionRuntime({
@@ -485,8 +492,10 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     if (!runtime.sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
+        const workspace = await materializeRuntimeWorkspace(runtime, worktrees)
         const recorder = runtime.journal ?? await createRuntimeJournal(
           runtime,
+          workspace,
           modelId,
           runtime.reasoningEffort,
         )
@@ -525,6 +534,7 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
 
 async function createRuntimeJournal(
   runtime: DesktopSessionRuntime,
+  workspace: WorkspaceBinding,
   modelId: string,
   reasoningEffort: ReasoningEffortSelection,
 ): Promise<SessionJournal> {
@@ -532,14 +542,14 @@ async function createRuntimeJournal(
     customSystemPromptConfigPath,
   )
   const recorder = await sessions.create(
-    runtime.workspace,
+    workspace,
     modelId,
     reasoningEffort,
     customSystemPrompt,
   )
-  if (runtime.workspace.mode !== 'worktree') return recorder
+  if (workspace.mode !== 'worktree') return recorder
   try {
-    await worktrees.attachSession(runtime.workspace, recorder.sessionId)
+    await worktrees.attachSession(workspace, recorder.sessionId)
     return recorder
   } catch (error) {
     sessions.release(recorder)
@@ -680,7 +690,7 @@ function createCoordinator(
 async function handleCommand(
   runtime: DesktopSessionRuntime,
   command: CoreCommand,
-): Promise<{ ok: boolean } | void> {
+): Promise<RuntimeCommandResult | void> {
   if (
     sessionDeletionLock.blocksRuntime
     && sessionDeletionLock.sessionId === runtime.sessionId
@@ -934,7 +944,7 @@ async function prepareUserMessage(
 async function handleUserMessageCommand(
   runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
-): Promise<{ ok: boolean }> {
+): Promise<RuntimeCommandResult> {
   if (settingsMutationInProgress) {
     return rejectUserMessage(runtime, '连接设置处理中，请等待完成后再发送消息')
   }
@@ -1004,7 +1014,7 @@ async function handleUserMessageCommand(
         `用户消息未能安全交付：${error instanceof Error ? error.message : String(error)}`,
       )
     }
-    return { ok: true }
+    return { ok: true, workspace: runtime.workspace }
   } finally {
     // routeUserMessage 正常路径已释放；准备阶段失败时由这里释放。release 幂等。
     workStart.release()
@@ -1412,12 +1422,12 @@ function defaultAttachmentPrompt(
 function rejectUserMessage(
   runtime: DesktopSessionRuntime,
   message: string,
-): { ok: false } {
+): RuntimeCommandResult {
   runtime.emit({ type: 'error', message, recoverable: true })
   if (!runtimeBusy(runtime)) {
     runtime.emit({ type: 'agent-status', status: 'idle' }, false)
   }
-  return { ok: false }
+  return { ok: false, workspace: runtime.workspace }
 }
 
 async function runtimeSnapshot(
@@ -1469,9 +1479,10 @@ async function selectRuntimeWithSnapshot(
   removeOnFailure: boolean,
 ): Promise<RuntimeSnapshot> {
   const previous = runtimeRegistry.selected
+  let snapshot: RuntimeSnapshot
   try {
     runtimeRegistry.select(runtime)
-    return await runtimeSnapshot(runtime)
+    snapshot = await runtimeSnapshot(runtime)
   } catch (error) {
     if (previous && previous !== runtime && !previous.isDisposed) {
       runtimeRegistry.select(previous)
@@ -1485,6 +1496,10 @@ async function selectRuntimeWithSnapshot(
     }
     throw error
   }
+  if (previous && previous !== runtime) {
+    await runtimeRegistry.removeUnselectedDraft(previous)
+  }
+  return snapshot
 }
 
 async function startNewSession(request: NewSessionRequest): Promise<NewSessionResult> {
@@ -1498,7 +1513,7 @@ async function startNewSession(request: NewSessionRequest): Promise<NewSessionRe
   }
   try {
     const runtimeId = randomUUID()
-    const workspace = await createRequestedWorkspace(request, runtimeId)
+    const workspace = await prepareRuntimeWorkspace(request?.workspace, worktrees)
     const runtime = createDraftRuntime(workspace, runtimeId)
     return {
       ok: true,
@@ -1510,36 +1525,6 @@ async function startNewSession(request: NewSessionRequest): Promise<NewSessionRe
       error: `新建会话失败：${error instanceof Error ? error.message : String(error)}`,
     }
   }
-}
-
-async function createRequestedWorkspace(
-  request: NewSessionRequest,
-  runtimeId: string,
-): Promise<WorkspaceBinding> {
-  const target = request?.workspace
-  if (
-    !target
-    || typeof target !== 'object'
-    || typeof target.selectedDirectory !== 'string'
-  ) {
-    throw new Error('新会话工作区请求无效')
-  }
-  if (target.mode === 'local') {
-    const candidate = await worktrees.inspect(target.selectedDirectory)
-    return localWorkspace(candidate.selectedDirectory)
-  }
-  if (
-    target.mode !== 'worktree'
-    || (target.baseRef !== null && (
-      typeof target.baseRef !== 'string'
-      || target.baseRef.length === 0
-    ))
-    || typeof target.expectedBaseCommit !== 'string'
-    || typeof target.acknowledgeUncommittedChangesExcluded !== 'boolean'
-  ) {
-    throw new Error('新会话 Worktree 请求无效')
-  }
-  return worktrees.create(target, runtimeId, runtimeId)
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
@@ -1828,11 +1813,12 @@ if (primaryInstance) void app.whenReady().then(async () => {
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
     onRemoved: async (runtime) => {
       if (runtime.journal) sessions.release(runtime.journal)
-      if (runtime.workspace.mode !== 'worktree') return
+      const workspace = runtime.workspaceBinding
+      if (workspace?.mode !== 'worktree') return
       if (runtime.journal) {
-        worktrees.release(runtime.workspace, runtime.runtimeId)
+        worktrees.release(workspace, runtime.runtimeId)
       } else {
-        await worktrees.cleanupDraft(runtime.workspace, runtime.runtimeId)
+        await worktrees.cleanupDraft(workspace, runtime.runtimeId)
       }
     },
   })

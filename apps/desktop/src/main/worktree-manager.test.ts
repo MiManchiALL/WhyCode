@@ -14,7 +14,12 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { workspaceWorkingDirectory } from '@whycode/core'
 import type { WorkspaceCandidate, WorktreeBase } from '../shared/workspace.ts'
+import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
+import {
+  materializeRuntimeWorkspace,
+  prepareRuntimeWorkspace,
+} from './runtime-workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 
 const tempRoots: string[] = []
@@ -31,6 +36,40 @@ afterEach(async () => {
 })
 
 describe('受管 Worktree 生命周期', () => {
+  it('选择基线时不创建目录，首条消息初始化才物化精确 Worktree', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const request = await worktreeRequest(manager, fixture.repository)
+    const runtimeId = randomUUID()
+    const selection = await prepareRuntimeWorkspace(request, manager)
+
+    assert.equal(selection.mode, 'pending-worktree')
+    assert.doesNotMatch(
+      await git(fixture.repository, ['worktree', 'list', '--porcelain']),
+      new RegExp(runtimeId, 'u'),
+    )
+
+    const runtime = new DesktopSessionRuntime({
+      runtimeId,
+      workspace: selection,
+      modelId: null,
+      emit: () => {},
+    })
+    const binding = await materializeRuntimeWorkspace(runtime, manager)
+
+    assert.ok(binding.mode === 'worktree')
+    assert.equal(runtime.workspace, binding)
+    assert.match(
+      await git(fixture.repository, ['worktree', 'list', '--porcelain']),
+      new RegExp(runtimeId, 'u'),
+    )
+    await manager.cleanupDraft(binding, runtimeId)
+    assert.doesNotMatch(
+      await git(fixture.repository, ['worktree', 'list', '--porcelain']),
+      new RegExp(runtimeId, 'u'),
+    )
+  })
+
   it('从精确提交隔离本地脏改动，复制显式 ignored 附件并跨重启交付分支', async () => {
     const fixture = await createRepository({ includeEntry: 'ignored' })
     await writeFile(join(fixture.repository, 'tracked.txt'), 'local dirty\n', 'utf8')

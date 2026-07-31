@@ -2,9 +2,9 @@ import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { WorktreeWorkspaceBinding } from '@whycode/core'
 import type {
-  StartWorkspaceRequest,
   WorkspaceCandidate,
   WorktreeBase,
+  WorktreeStartRequest,
   WorktreeStatus,
 } from '../shared/workspace.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
@@ -46,8 +46,14 @@ export class WorktreeManager {
     return inspectGitWorkspace(selectedDirectory)
   }
 
+  async validateStartRequest(request: WorktreeStartRequest): Promise<WorktreeStartRequest> {
+    const candidate = await this.inspect(request.selectedDirectory)
+    validatedBaseForCreate(candidate, request)
+    return { ...request, selectedDirectory: candidate.selectedDirectory }
+  }
+
   async create(
-    request: Extract<StartWorkspaceRequest, { mode: 'worktree' }>,
+    request: WorktreeStartRequest,
     worktreeId: string,
     ownerRuntimeId: string,
   ): Promise<WorktreeWorkspaceBinding> {
@@ -376,7 +382,7 @@ async function reserveWorktreeDirectory(
 
 function validatedBaseForCreate(
   candidate: WorkspaceCandidate,
-  request: Extract<StartWorkspaceRequest, { mode: 'worktree' }>,
+  request: WorktreeStartRequest,
 ): WorktreeBase {
   if (
     candidate.worktreeUnavailableReason

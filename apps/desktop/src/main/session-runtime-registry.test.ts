@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { localWorkspace } from '@whycode/core'
+import { localWorkspace, type SessionJournal } from '@whycode/core'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import {
   SESSION_RUNTIME_IDLE_UNLOAD_MS,
@@ -28,8 +28,8 @@ describe('SessionRuntimeRegistry', () => {
 
   it('非选中空闲运行时延迟卸载，重新选中会取消卸载', async () => {
     const registry = new SessionRuntimeRegistry({ idleUnloadMs: 20 })
-    const first = runtime('first')
-    const second = runtime('second')
+    const first = persistedRuntime('first')
+    const second = persistedRuntime('second')
     registry.select(first)
     registry.select(second)
     registry.select(first)
@@ -40,8 +40,8 @@ describe('SessionRuntimeRegistry', () => {
 
   it('后台运行的会话在结束后才开始计算空闲卸载时间', async () => {
     const registry = new SessionRuntimeRegistry({ idleUnloadMs: 20 })
-    const background = runtime('background')
-    const selected = runtime('selected')
+    const background = persistedRuntime('background')
+    const selected = persistedRuntime('selected')
     background.sessionInitialization = new Promise(() => {})
     registry.select(background)
     registry.select(selected)
@@ -55,6 +55,33 @@ describe('SessionRuntimeRegistry', () => {
     await delay(30)
 
     assert.equal(registry.get(background.runtimeId), null)
+  })
+
+  it('已提交新选择后立即释放没有历史入口的空白草稿', async () => {
+    const registry = new SessionRuntimeRegistry({ idleUnloadMs: 60_000 })
+    const draft = runtime('draft')
+    const selected = persistedRuntime('selected')
+    registry.select(draft)
+    registry.select(selected)
+
+    assert.equal(await registry.removeUnselectedDraft(draft), true)
+    assert.equal(registry.get(draft.runtimeId), null)
+    assert.equal(await registry.removeUnselectedDraft(selected), false)
+  })
+
+  it('后台空白草稿结束后不进入三十分钟会话缓存', async () => {
+    const registry = new SessionRuntimeRegistry({ idleUnloadMs: 60_000 })
+    const draft = runtime('draft')
+    draft.sessionInitialization = new Promise(() => {})
+    registry.select(draft)
+    registry.select(persistedRuntime('selected'))
+
+    draft.sessionInitialization = null
+    draft.notifyStateChanged()
+    registry.runtimeBecameIdle(draft)
+    await delay(0)
+
+    assert.equal(registry.get(draft.runtimeId), null)
   })
 
   it('限制同时启动的对话数，但不阻止已忙对话继续接收 steering', () => {
@@ -146,6 +173,12 @@ function runtime(runtimeId: string): DesktopSessionRuntime {
     modelId: null,
     emit: () => {},
   })
+}
+
+function persistedRuntime(runtimeId: string): DesktopSessionRuntime {
+  const value = runtime(runtimeId)
+  value.journal = { sessionId: `session-${runtimeId}` } as SessionJournal
+  return value
 }
 
 function delay(ms: number): Promise<void> {

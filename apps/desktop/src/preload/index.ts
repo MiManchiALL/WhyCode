@@ -9,6 +9,7 @@ import type {
   RuntimeSnapshot,
   RuntimeEventEnvelope,
   RuntimeCommandEnvelope,
+  RuntimeCommandResult,
   SessionListItem,
 } from '../shared/session.ts'
 import type {
@@ -35,7 +36,7 @@ const api = {
   sendCommand: (
     runtimeId: string,
     command: CoreCommand,
-  ): Promise<{ ok: boolean } | void> =>
+  ): Promise<RuntimeCommandResult | void> =>
     ipcRenderer.invoke(IPC.command, {
       runtimeId,
       command,

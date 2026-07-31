@@ -2,9 +2,9 @@ import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions
 import type {
   ReasoningEffort,
   ReasoningEffortSelection,
-  WorkspaceBinding,
 } from '@whycode/core'
 import type { ModelListItem } from '../../shared/settings.ts'
+import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 
 interface ConsensusStatus {
   ready: boolean
@@ -14,7 +14,7 @@ interface ConsensusStatus {
 
 interface AppHeaderProps {
   projectDir: string | null
-  workspaceMode: WorkspaceBinding['mode']
+  workspaceMode: RuntimeWorkspace['mode']
   busy: boolean
   sessionChangeLocked: boolean
   permissionLocked: boolean
@@ -67,6 +67,13 @@ export function AppHeader(props: AppHeaderProps) {
           >
             Worktree
           </button>
+        ) : props.workspaceMode === 'pending-worktree' ? (
+          <span
+            className="rounded bg-violet-100 px-2 py-1 text-[11px] font-medium text-violet-700"
+            title="发送第一条消息时创建隔离 Worktree"
+          >
+            Worktree · 待创建
+          </span>
         ) : props.workspaceMode === 'local' ? (
           <span
             className="rounded bg-neutral-100 px-2 py-1 text-[11px] text-neutral-500"

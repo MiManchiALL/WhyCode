@@ -8,10 +8,12 @@ import type {
   SessionSummary,
   ViewEvent,
   ReasoningEffortSelection,
-  WorkspaceBinding,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
-import type { StartWorkspaceRequest } from './workspace.ts'
+import type {
+  RuntimeWorkspace,
+  StartWorkspaceRequest,
+} from './workspace.ts'
 
 export type SessionListItem = SessionSummary & {
   isCurrent: boolean
@@ -26,7 +28,7 @@ export type SessionListItem = SessionSummary & {
 export interface RuntimeSnapshot {
   /** 对话运行时的稳定路由 ID；草稿尚未建立 JSONL 时也存在。 */
   runtimeId: string
-  workspace: WorkspaceBinding
+  workspace: RuntimeWorkspace
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
@@ -60,6 +62,12 @@ export interface RuntimeEventEnvelope {
 export interface RuntimeCommandEnvelope {
   runtimeId: string
   command: CoreCommand
+}
+
+export interface RuntimeCommandResult {
+  ok: boolean
+  /** 首条消息可能把待创建选择转换成真实 Worktree，Renderer 据此原子更新路径。 */
+  workspace?: RuntimeWorkspace
 }
 
 export type ResumeSessionResult =

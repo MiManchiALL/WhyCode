@@ -9,15 +9,20 @@ import {
   type ReasoningEffortSelection,
   type SessionJournal,
   type WorkspaceBinding,
+  type WorktreeWorkspaceBinding,
   workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
+import type {
+  PendingWorktreeWorkspace,
+  RuntimeWorkspace,
+} from '../shared/workspace.ts'
 import { UserMessageRoutingGate } from './user-message-routing.ts'
 import { ViewTimeline } from './view-timeline.ts'
 
 export interface DesktopSessionRuntimeOptions {
   runtimeId?: string
-  workspace: WorkspaceBinding
+  workspace: RuntimeWorkspace
   modelId: string | null
   reasoningEffort?: ReasoningEffortSelection
   permissionMode?: PermissionMode
@@ -37,7 +42,7 @@ export class DesktopSessionRuntime {
   readonly runtimeId: string
   readonly routingGate = new UserMessageRoutingGate()
   readonly timeline: ViewTimeline
-  readonly workspace: WorkspaceBinding
+  private currentWorkspace: RuntimeWorkspace
   journal: SessionJournal | null = null
   session: AgentSession | null = null
   sessionInitialization: Promise<string | null> | null = null
@@ -58,7 +63,7 @@ export class DesktopSessionRuntime {
 
   constructor(options: DesktopSessionRuntimeOptions) {
     this.runtimeId = options.runtimeId ?? randomUUID()
-    this.workspace = options.workspace
+    this.currentWorkspace = options.workspace
     this.modelId = options.modelId
     this.reasoningEffort = options.reasoningEffort ?? 'default'
     this.permissionMode = options.permissionMode ?? 'default'
@@ -78,8 +83,38 @@ export class DesktopSessionRuntime {
     return this.journal?.sessionId ?? null
   }
 
+  get workspace(): RuntimeWorkspace {
+    return this.currentWorkspace
+  }
+
+  get workspaceBinding(): WorkspaceBinding | null {
+    return this.currentWorkspace.mode === 'pending-worktree'
+      ? null
+      : this.currentWorkspace
+  }
+
+  get pendingWorktree(): PendingWorktreeWorkspace | null {
+    return this.currentWorkspace.mode === 'pending-worktree'
+      ? this.currentWorkspace
+      : null
+  }
+
   get projectDir(): string | null {
-    return workspaceWorkingDirectory(this.workspace)
+    const binding = this.workspaceBinding
+    return binding ? workspaceWorkingDirectory(binding) : null
+  }
+
+  bindPendingWorktree(binding: WorktreeWorkspaceBinding): void {
+    const pending = this.pendingWorktree
+    if (!pending) throw new Error('当前运行时没有待创建的 Worktree')
+    if (
+      binding.id !== this.runtimeId
+      || binding.baseRef !== pending.baseRef
+      || binding.baseCommit !== pending.expectedBaseCommit
+    ) {
+      throw new Error('创建结果与待创建 Worktree 选择不一致')
+    }
+    this.currentWorkspace = binding
   }
 
   get checkpointRestoreToolUseId(): string | null {

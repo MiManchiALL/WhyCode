@@ -12,8 +12,9 @@ export interface SessionRuntimeRegistryOptions {
 
 /**
  * 对话选择与对话执行解耦：切换只改变 selected，运行中的其它 runtime 继续存活。
- * 非选中且空闲的 runtime 保留一段空闲期，避免短时间切换时反复重建 AgentSession
- * 和 MCP 连接；运行中的 runtime 则从任务结束时开始计算。重新选中会取消卸载。
+ * 已建立会话且非选中、空闲的 runtime 保留一段空闲期，避免短时间切换时反复重建
+ * AgentSession 和 MCP 连接；运行中的 runtime 则从任务结束时开始计算。没有历史入口的
+ * 草稿由选择快照提交边界立即释放，重新选中已建立会话则取消卸载。
  */
 export class SessionRuntimeRegistry {
   private readonly runtimes = new Map<string, DesktopSessionRuntime>()
@@ -87,7 +88,20 @@ export class SessionRuntimeRegistry {
   }
 
   runtimeBecameIdle(runtime: DesktopSessionRuntime): void {
-    if (runtime !== this.selected) this.scheduleIdleUnload(runtime)
+    if (runtime === this.selected) return
+    if (!runtime.sessionId) {
+      void this.removeUnselectedDraft(runtime)
+        .catch((error) => this.reportDisposeError(error))
+      return
+    }
+    this.scheduleIdleUnload(runtime)
+  }
+
+  /** 快照提交后释放没有历史入口的旧草稿；选择事务失败时调用方不会进入这里。 */
+  async removeUnselectedDraft(runtime: DesktopSessionRuntime): Promise<boolean> {
+    if (runtime === this.selected || runtime.sessionId || runtime.busy) return false
+    await this.remove(runtime)
+    return true
   }
 
   async remove(runtime: DesktopSessionRuntime): Promise<void> {

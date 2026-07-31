@@ -5,7 +5,6 @@ import type { PermissionMode } from '@whycode/core/permissions'
 import type {
   CoreCommand,
   ReasoningEffortSelection,
-  WorkspaceBinding,
 } from '@whycode/core'
 import {
   formatUserQuestionAnswer,
@@ -17,6 +16,7 @@ import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
 import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
 import {
   workspaceDisplayDirectory,
+  type RuntimeWorkspace,
   type WorkspaceCandidate,
 } from '../../shared/workspace.ts'
 import {
@@ -100,7 +100,7 @@ export function App() {
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
-  const [workspace, setWorkspace] = useState<WorkspaceBinding>({ mode: 'none' })
+  const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
   const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
   const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
@@ -919,6 +919,9 @@ export function App() {
             ? { restoredInputIds: sentRestoredInputIds }
             : {}),
         })
+        if (result?.workspace && runtimeIdRef.current === targetRuntimeId) {
+          setWorkspace(result.workspace)
+        }
         if (result?.ok) {
           releaseImageDrafts(sentImageDrafts)
           return
