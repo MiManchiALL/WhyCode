@@ -14,6 +14,16 @@ import {
 const STATUS_ENTRY_LIMIT = 200
 const DIFF_OUTPUT_LIMIT = 256 * 1024
 
+// Windows cannot faithfully check out Git's executable bit. Repositories copied
+// from Unix sometimes keep core.filemode=true, which otherwise makes a brand-new
+// Worktree look dirty even though every file byte still matches HEAD. Keep the
+// override process-local so WhyCode never rewrites the user's repository config.
+export function managedWorktreeStateArgs(args: readonly string[]): string[] {
+  return process.platform === 'win32'
+    ? ['-c', 'core.fileMode=false', ...args]
+    : [...args]
+}
+
 export async function inspectGitWorkspace(
   selectedDirectory: string,
 ): Promise<WorkspaceCandidate> {
@@ -62,7 +72,12 @@ export async function inspectGitWorkspace(
       runGit(selected, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { readOnly: true }),
       runGit(
         selected,
-        ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+        managedWorktreeStateArgs([
+          'status',
+          '--porcelain=v1',
+          '-z',
+          '--untracked-files=all',
+        ]),
         { readOnly: true, outputLimit: 4 * 1024 * 1024 },
       ),
     ])
@@ -123,12 +138,23 @@ export async function readWorktreeStatus(
     ),
     runGit(
       binding.worktreeDirectory,
-      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+      managedWorktreeStateArgs([
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+      ]),
       { readOnly: true, outputLimit: 4 * 1024 * 1024 },
     ),
     runGit(
       binding.worktreeDirectory,
-      ['diff', '--no-ext-diff', '--unified=3', 'HEAD', '--'],
+      managedWorktreeStateArgs([
+        'diff',
+        '--no-ext-diff',
+        '--unified=3',
+        'HEAD',
+        '--',
+      ]),
       { readOnly: true, outputLimit: DIFF_OUTPUT_LIMIT },
     ),
   ])

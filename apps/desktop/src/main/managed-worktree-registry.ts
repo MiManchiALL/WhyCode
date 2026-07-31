@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   lstat,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -22,6 +23,11 @@ interface WorktreeManifest {
   schemaVersion: 1
   binding: WorktreeWorkspaceBinding
   sessionId: string | null
+}
+
+export interface UnclaimedWorktreeScan {
+  bindings: WorktreeWorkspaceBinding[]
+  warnings: string[]
 }
 
 export class ManagedWorktreeRegistry {
@@ -79,6 +85,35 @@ export class ManagedWorktreeRegistry {
 
   async sessionId(binding: WorktreeWorkspaceBinding): Promise<string | null> {
     return (await this.read(binding)).sessionId
+  }
+
+  async unclaimedBindings(): Promise<UnclaimedWorktreeScan> {
+    const registryRoot = resolve(await this.rootDirectory(), '.registry')
+    const entries = await readdir(registryRoot, { withFileTypes: true }).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      },
+    )
+    const bindings: WorktreeWorkspaceBinding[] = []
+    const warnings: string[] = []
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+      const manifestPath = resolve(registryRoot, entry.name)
+      try {
+        const manifest = parseManifest(JSON.parse(
+          await readFile(manifestPath, 'utf8'),
+        ))
+        if (!manifest || `${manifest.binding.id}.json` !== entry.name) {
+          throw new Error('所有权记录无效或文件名不匹配')
+        }
+        await this.validateBinding(manifest.binding)
+        if (manifest.sessionId === null) bindings.push(manifest.binding)
+      } catch (error) {
+        warnings.push(`${entry.name}: ${errorMessage(error)}`)
+      }
+    }
+    return { bindings, warnings }
   }
 
   async removeManifest(binding: WorktreeWorkspaceBinding): Promise<void> {
@@ -265,4 +300,8 @@ function assertDescendant(root: string, target: string): void {
   ) {
     throw new Error('拒绝删除受管 Worktree 根之外的目录')
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

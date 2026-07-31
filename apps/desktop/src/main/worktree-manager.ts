@@ -23,8 +23,15 @@ import {
   isGitRepositoryDirectory,
   isWorktreePathRegistered,
   isWorktreeRegistered,
+  managedWorktreeStateArgs,
   readWorktreeStatus,
 } from './worktree-git.ts'
+
+export interface AbandonedDraftCleanupResult {
+  removed: string[]
+  retained: string[]
+  warnings: string[]
+}
 
 export class WorktreeManager {
   private readonly registry: ManagedWorktreeRegistry
@@ -164,13 +171,34 @@ export class WorktreeManager {
     ownerRuntimeId: string,
   ): Promise<void> {
     this.release(binding, ownerRuntimeId)
-    if (await this.registry.sessionId(binding)) return
-    const status = await this.status(binding)
-    if (
-      status.dirty
-      || (!status.branch && status.headCommit !== binding.baseCommit)
-    ) return
-    await this.remove(binding, false)
+    await this.cleanupUnclaimed(binding)
+  }
+
+  async cleanupAbandonedDrafts(
+    knownSessionWorktreeIds: ReadonlySet<string>,
+  ): Promise<AbandonedDraftCleanupResult> {
+    const scan = await this.registry.unclaimedBindings()
+    const result: AbandonedDraftCleanupResult = {
+      removed: [],
+      retained: [],
+      warnings: [...scan.warnings],
+    }
+    for (const binding of scan.bindings) {
+      // session-start 与清单关联之间存在窄崩溃窗口；只要当前事实源仍引用
+      // 该 Worktree，就留给恢复流程补认领，启动清理不得抢先删除。
+      if (knownSessionWorktreeIds.has(binding.id)) {
+        result.retained.push(binding.id)
+        continue
+      }
+      try {
+        const removed = await this.cleanupUnclaimed(binding)
+        result[removed ? 'removed' : 'retained'].push(binding.id)
+      } catch (error) {
+        result.retained.push(binding.id)
+        result.warnings.push(`${binding.id}: ${errorMessage(error)}`)
+      }
+    }
+    return result
   }
 
   async status(binding: WorktreeWorkspaceBinding): Promise<WorktreeStatus> {
@@ -217,12 +245,16 @@ export class WorktreeManager {
     }
 
     if (worktreeExists) {
-      const removed = await runGit(binding.repositoryDirectory, [
-        'worktree',
-        'remove',
-        ...(discardChanges ? ['--force'] : []),
-        binding.worktreeDirectory,
-      ], { timeoutMs: 60_000, outputLimit: 4 * 1024 * 1024 })
+      const removed = await runGit(
+        binding.repositoryDirectory,
+        managedWorktreeStateArgs([
+          'worktree',
+          'remove',
+          ...(discardChanges ? ['--force'] : []),
+          binding.worktreeDirectory,
+        ]),
+        { timeoutMs: 60_000, outputLimit: 4 * 1024 * 1024 },
+      )
       if (removed.code !== 0 && await isWorktreeRegistered(binding)) {
         requireGitSuccess(removed, '移除 Worktree')
       }
@@ -244,6 +276,19 @@ export class WorktreeManager {
     const owner = this.leases.get(key)
     if (owner && owner !== ownerRuntimeId) throw new Error('Worktree 已被其它活动会话占用')
     this.leases.set(key, ownerRuntimeId)
+  }
+
+  private async cleanupUnclaimed(
+    binding: WorktreeWorkspaceBinding,
+  ): Promise<boolean> {
+    if (await this.registry.sessionId(binding)) return false
+    const status = await this.status(binding)
+    if (
+      status.dirty
+      || (!status.branch && status.headCommit !== binding.baseCommit)
+    ) return false
+    await this.remove(binding, false)
+    return true
   }
 
   private async assertGitWorktree(binding: WorktreeWorkspaceBinding): Promise<void> {

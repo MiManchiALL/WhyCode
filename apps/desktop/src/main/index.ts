@@ -1803,6 +1803,21 @@ if (primaryInstance) void app.whenReady().then(async () => {
     pdfProcessor,
   )
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
+  void sessions.list().then((summaries) => worktrees.cleanupAbandonedDrafts(
+    new Set(summaries.flatMap((summary) =>
+      summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
+    )),
+  )).then((result) => {
+    if (result.removed.length) {
+      console.info(`已清理 ${result.removed.length} 个无会话的干净 Worktree 草稿`)
+    }
+    if (result.retained.length) {
+      console.warn(`已保留 ${result.retained.length} 个含成果或状态不可确认的 Worktree 草稿`)
+    }
+    for (const warning of result.warnings) {
+      console.warn(`Worktree 草稿清理跳过：${warning}`)
+    }
+  }).catch((error) => console.warn('Worktree 草稿清理失败：', error))
   runtimeRegistry = new SessionRuntimeRegistry({
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
     onRemoved: async (runtime) => {

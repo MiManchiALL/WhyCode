@@ -131,6 +131,71 @@ describe('受管 Worktree 生命周期', () => {
     await assert.rejects(access(dirty.worktreeDirectory))
   })
 
+  it('启动时回收无会话的干净草稿，同时保留真正含改动的草稿', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const request = await worktreeRequest(manager, fixture.repository)
+    const clean = await manager.create(request, randomUUID(), 'runtime-clean-crash')
+    manager.release(clean, 'runtime-clean-crash')
+    const dirty = await manager.create(request, randomUUID(), 'runtime-dirty-crash')
+    await writeFile(join(dirty.worktreeDirectory, 'scratch.txt'), 'keep me\n', 'utf8')
+    manager.release(dirty, 'runtime-dirty-crash')
+    const protectedBySessionStart = await manager.create(
+      request,
+      randomUUID(),
+      'runtime-session-start-crash',
+    )
+    manager.release(protectedBySessionStart, 'runtime-session-start-crash')
+
+    const restarted = new WorktreeManager(fixture.managerRoot)
+    const cleanup = await restarted.cleanupAbandonedDrafts(
+      new Set([protectedBySessionStart.id]),
+    )
+    assert.deepEqual(new Set(cleanup.removed), new Set([clean.id]))
+    assert.deepEqual(
+      new Set(cleanup.retained),
+      new Set([dirty.id, protectedBySessionStart.id]),
+    )
+    assert.deepEqual(cleanup.warnings, [])
+    await assert.rejects(access(clean.worktreeDirectory))
+    await access(dirty.worktreeDirectory)
+    await access(protectedBySessionStart.worktreeDirectory)
+
+    await restarted.remove(dirty, true)
+    await restarted.remove(protectedBySessionStart, true)
+  })
+
+  it('Windows 下忽略 core.filemode=true 产生的纯执行位假改动并回收草稿', {
+    skip: process.platform !== 'win32',
+  }, async () => {
+    const fixture = await createRepository()
+    await git(fixture.repository, ['config', 'core.filemode', 'true'])
+    await git(fixture.repository, ['update-index', '--chmod=+x', 'tracked.txt'])
+    await git(fixture.repository, ['commit', '-m', 'executable bit'])
+    assert.match(await git(fixture.repository, ['status', '--short']), /M tracked\.txt/u)
+
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const candidate = await manager.inspect(fixture.repository)
+    assert.equal(candidate.dirty, false)
+    assert.equal(candidate.changedFileCount, 0)
+    const binding = await manager.create({
+      mode: 'worktree',
+      selectedDirectory: fixture.repository,
+      expectedBaseCommit: candidate.baseCommit!,
+      acknowledgeUncommittedChangesExcluded: false,
+    }, randomUUID(), 'runtime-filemode')
+    assert.match(await git(binding.worktreeDirectory, ['status', '--short']), /M tracked\.txt/u)
+    assert.equal((await manager.status(binding)).dirty, false)
+    manager.release(binding, 'runtime-filemode')
+
+    const restarted = new WorktreeManager(fixture.managerRoot)
+    const cleanup = await restarted.cleanupAbandonedDrafts(new Set())
+    assert.deepEqual(cleanup.removed, [binding.id])
+    assert.deepEqual(cleanup.retained, [])
+    assert.deepEqual(cleanup.warnings, [])
+    await assert.rejects(access(binding.worktreeDirectory))
+  })
+
   it('未绑定分支的 detached 提交不会被干净草稿清理', async () => {
     const fixture = await createRepository()
     const manager = new WorktreeManager(fixture.managerRoot)
