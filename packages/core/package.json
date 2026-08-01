@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./events": "./src/events.ts",
+    "./skills": "./src/skills/types.ts",
     "./pdf": "./src/pdf/index.ts",
     "./pdf-limits": "./src/pdf/limits.ts",
     "./permissions": "./src/permissions/types.ts"
@@ -25,6 +26,7 @@
     "ai": "^7.0.14",
     "sharp": "0.35.3",
     "stemmer": "2.0.1",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

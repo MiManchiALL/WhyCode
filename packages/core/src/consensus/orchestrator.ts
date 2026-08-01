@@ -4,6 +4,7 @@ import type { ImageAttachment } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { createTurnAbortedMessage } from '../session/interruption.ts'
+import { skillSummary, type ActivatedSkill } from '../skills/types.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
@@ -78,6 +79,8 @@ interface CoordinatorMessage {
   text: string
   attachments: ImageAttachment[]
   pdfAttachments: PdfAttachment[]
+  /** 输入被接受时冻结的完整快照；讨论/协议阶段只保管，不向模型暴露。 */
+  skills: ActivatedSkill[]
 }
 
 /**
@@ -96,6 +99,8 @@ export class ConsensusCoordinator {
   /** Main 已结束、协调器仍在提交任务终点时到达的消息；任务提交后按新协商任务交接。 */
   private deferredTaskMessages: CoordinatorMessage[] = []
   private peerPhase = false
+  /** 区分 Main 的 M1 讨论与最终执行，保证 Skill 只进入普通执行工具面。 */
+  private executionPhase = false
   private aborted = false
   /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
   private sessionScore: Record<ConsensusAgentId, number> = { Main: 0, B: 0, C: 0 }
@@ -120,9 +125,10 @@ export class ConsensusCoordinator {
     attachments: readonly ImageAttachment[] = [],
     persistedInputId?: string,
     pdfAttachments: readonly PdfAttachment[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason | void> | void {
     const message = this.coordinatorMessage(
-      text, attachments, persistedInputId, pdfAttachments,
+      text, attachments, persistedInputId, pdfAttachments, skills,
     )
     if (attachments.length > 0 || pdfAttachments.length > 0) {
       if (!this.running && !this.options.mainSession.isBusy) {
@@ -136,6 +142,7 @@ export class ConsensusCoordinator {
           attachments,
           persistedInputId,
           pdfAttachments,
+          skills,
         )
       }
       // 协调器空闲但 Main 仍在处理上一条附件任务时，附件仍是同一任务的 steering。
@@ -146,6 +153,7 @@ export class ConsensusCoordinator {
           attachments,
           persistedInputId,
           pdfAttachments,
+          skills,
         )
       }
       if (this.peerPhase) {
@@ -161,12 +169,16 @@ export class ConsensusCoordinator {
         return
       }
       if (this.options.mainSession.isRunning) {
+        if (!this.executionPhase && message.skills.length > 0) {
+          return this.queueUntilExecution(message, urgent)
+        }
         return this.options.mainSession.handleUserMessage(
           text,
           urgent,
           attachments,
           persistedInputId,
           pdfAttachments,
+          skills,
         )
       }
       this.deferredTaskMessages.push(message)
@@ -176,7 +188,7 @@ export class ConsensusCoordinator {
     }
     if (!this.running) {
       if (this.options.mainSession.isBusy) return this.deferUntilMainIdle(message)
-      return this.runTask(text)
+      return this.runTask(text, [], skills)
     }
     if (this.peerPhase) {
       this.pendingTexts.push(message)
@@ -188,7 +200,21 @@ export class ConsensusCoordinator {
       this.emitQueued(message)
       return
     }
-    this.options.mainSession.handleUserMessage(text, urgent, [], persistedInputId)
+    if (!this.executionPhase && message.skills.length > 0) {
+      return this.queueUntilExecution(message, urgent)
+    }
+    this.options.mainSession.handleUserMessage(text, urgent, [], persistedInputId, [], skills)
+  }
+
+  private queueUntilExecution(message: CoordinatorMessage, urgent: boolean): void {
+    if (urgent) {
+      this.deferredTaskMessages.push(message)
+      this.emitQueued(message)
+      this.interruptForDeferredInput()
+      return
+    }
+    this.pendingTexts.push(message)
+    this.emitQueued(message)
   }
 
   private async deferUntilMainIdle(message: CoordinatorMessage): Promise<void> {
@@ -222,6 +248,7 @@ export class ConsensusCoordinator {
   private async runTask(
     userText: string,
     deliveredInputIds: readonly string[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
     const { mainSession, emit } = this.options
     this.running = true
@@ -249,7 +276,13 @@ export class ConsensusCoordinator {
       )
       if (!taskBoundaryStarted) return
       for (const inputId of deliveredInputIds) {
-        emit({ type: 'message-injected', id: inputId, text: userText, startsTurn: true })
+        emit({
+          type: 'message-injected',
+          id: inputId,
+          text: userText,
+          startsTurn: true,
+          ...(skills.length ? { skills: skills.map(skillSummary) } : {}),
+        })
       }
       if (this.aborted) {
         outcome = 'aborted'
@@ -314,8 +347,15 @@ export class ConsensusCoordinator {
       if (mode === 'main_only') {
         this.restoreExecution()
         emit({ type: 'execution-started', taskId })
-        const stopReason = await mainSession.handleExecutionMessage(
+        this.executionPhase = true
+        const execution = this.takePendingInputs(
           buildMainOnlyExecutionPrompt(userText, m1.candidate),
+          skills,
+        )
+        const stopReason = await mainSession.handleExecutionMessage(
+          execution.text,
+          execution.inputs,
+          execution.skills,
         )
         outcome = this.executionOutcome(stopReason)
         return
@@ -353,8 +393,13 @@ export class ConsensusCoordinator {
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
-      const execution = this.takePendingInputs(packageText)
-      const stopReason = await mainSession.handleExecutionMessage(execution.text, execution.inputs)
+      this.executionPhase = true
+      const execution = this.takePendingInputs(packageText, skills)
+      const stopReason = await mainSession.handleExecutionMessage(
+        execution.text,
+        execution.inputs,
+        execution.skills,
+      )
       outcome = this.executionOutcome(stopReason)
     } catch (error) {
       emit({
@@ -390,6 +435,7 @@ export class ConsensusCoordinator {
       mainSession.setTerminalStatusManaged(false)
       this.peers = []
       this.peerPhase = false
+      this.executionPhase = false
       this.running = false
       // 收尾兜底：此时无任何在跑的回合，状态归位（对 UI 幂等）
       emit({ type: 'agent-status', status: 'idle' })
@@ -511,8 +557,11 @@ export class ConsensusCoordinator {
   /** B/C 期间的补充保持独立消息顺序，附件只在 Main 执行边界解引用。 */
   private takePendingInputs(
     packageText: string,
-  ): { text: string; inputs: QueuedUserMessage[] } {
-    if (this.pendingTexts.length === 0) return { text: packageText, inputs: [] }
+    rootSkills: readonly ActivatedSkill[] = [],
+  ): { text: string; inputs: QueuedUserMessage[]; skills: ActivatedSkill[] } {
+    if (this.pendingTexts.length === 0) {
+      return { text: packageText, inputs: [], skills: cloneUniqueSkills(rootSkills) }
+    }
     const pending = this.pendingTexts.splice(0)
     return {
       text: packageText,
@@ -521,7 +570,12 @@ export class ConsensusCoordinator {
         text: input.text,
         ...(input.attachments.length ? { attachments: input.attachments } : {}),
         ...(input.pdfAttachments.length ? { pdfAttachments: input.pdfAttachments } : {}),
+        ...(input.skills.length ? { skills: input.skills.map(skillSummary) } : {}),
       })),
+      skills: cloneUniqueSkills([
+        ...rootSkills,
+        ...pending.flatMap((input) => input.skills),
+      ]),
     }
   }
 
@@ -530,6 +584,7 @@ export class ConsensusCoordinator {
     attachments: readonly ImageAttachment[],
     persistedInputId: string | undefined,
     pdfAttachments: readonly PdfAttachment[],
+    skills: readonly ActivatedSkill[],
   ): CoordinatorMessage {
     return {
       id: persistedInputId ?? `cq-${Date.now()}-${this.pendingTexts.length + this.deferredTaskMessages.length}`,
@@ -537,6 +592,7 @@ export class ConsensusCoordinator {
       text,
       attachments: [...attachments],
       pdfAttachments: [...pdfAttachments],
+      skills: skills.map((skill) => structuredClone(skill)),
     }
   }
 
@@ -547,6 +603,7 @@ export class ConsensusCoordinator {
       text: message.text,
       ...(message.attachments.length ? { attachments: message.attachments } : {}),
       ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
+      ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
     })
   }
 
@@ -575,6 +632,7 @@ export class ConsensusCoordinator {
         text: message.text,
         ...(message.attachments.length ? { attachments: message.attachments } : {}),
         ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
+        ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
       })),
     })
   }
@@ -595,6 +653,7 @@ export class ConsensusCoordinator {
           ...(message.pdfAttachments.length
             ? { pdfAttachments: message.pdfAttachments }
             : {}),
+          ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
         })
       }
       await this.options.mainSession.handleUserMessage(
@@ -603,6 +662,7 @@ export class ConsensusCoordinator {
         message.attachments,
         message.persistedInputId,
         message.pdfAttachments,
+        message.skills,
       )
       return
     }
@@ -617,6 +677,7 @@ export class ConsensusCoordinator {
     await this.runTask(
       message.text,
       message.persistedInputId ? [message.persistedInputId] : [],
+      message.skills,
     )
   }
 
@@ -683,4 +744,10 @@ export class ConsensusCoordinator {
       recoverable: true,
     })
   }
+}
+
+function cloneUniqueSkills(skills: readonly ActivatedSkill[]): ActivatedSkill[] {
+  const unique = new Map<string, ActivatedSkill>()
+  for (const skill of skills) unique.set(skill.id, structuredClone(skill))
+  return [...unique.values()]
 }

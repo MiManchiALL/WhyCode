@@ -35,8 +35,13 @@ import {
   workspaceBindingSchema,
   type WorkspaceBinding,
 } from '../workspace/types.ts'
+import {
+  activatedSkillSchema,
+  SKILL_MAX_SELECTIONS_PER_MESSAGE,
+  type ActivatedSkill,
+} from '../skills/types.ts'
 
-export const SESSION_SCHEMA_VERSION = 5
+export const SESSION_SCHEMA_VERSION = 6
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -51,6 +56,7 @@ const pendingUserInputSchema = z.object({
   text: z.string().min(1),
   attachments: imageAttachmentsSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
+  skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
   state: z.enum(['queued', 'restored']),
 })
 
@@ -88,6 +94,8 @@ const userInputSchema = chainedEntrySchema.extend({
   attachments: imageAttachmentsSchema.optional(),
   /** PDF 原文件位于会话 attachments/；这里只保存稳定引用元数据。 */
   pdfAttachments: pdfAttachmentsSchema.optional(),
+  /** 输入被接受时解析出的完整 Skill 快照；后续磁盘变化不能改写已排队消息语义。 */
+  skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
   /** 重新提交恢复草稿时，与新输入在同一次 append 中原子消费旧输入。 */
   consumesInputIds: z.array(entryIdSchema).min(1).optional(),
   /** 该根输入原位替换的旧回合；只由“中止后编辑”事务写入。 */
@@ -217,11 +225,8 @@ const snapshotSchema = chainedEntrySchema.extend({
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
   messages: messagesSchema,
-  /**
-   * 换根时携带忙时输入。早期 v4 根本没有持久队列，字段缺失只可能表示空队列，
-   * 因而这里的 default 是确定性兼容，不用于吞掉结构损坏或做部分恢复。
-   */
-  pendingUserInputs: z.array(pendingUserInputSchema).default([]),
+  /** 换根时携带忙时输入；当前 schema 不为开发期旧会话补兼容默认值。 */
+  pendingUserInputs: z.array(pendingUserInputSchema),
   /** 回滚换根后仍保留新根内较早 turn 的边界；压缩快照写空数组。 */
   turnStartMessages: z.array(z.object({
     turnId: z.string().min(1),
@@ -349,6 +354,8 @@ export interface LoadedSession {
   pdfAttachments: PdfAttachment[]
   turnStartMessages: Map<string, ModelMessage[]>
   turnStartTaskStates: Map<string, TaskPlanState>
+  /** 活动 turn 对应根输入的完整 Skill 快照；供中止后原位编辑精确复用。 */
+  turnStartSkills: Map<string, ActivatedSkill[]>
   entries: SessionEntry[]
   leafUuid: string
   interruptedTurnId: string | null
@@ -384,11 +391,14 @@ export interface SessionRecorder {
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
   taskStateBeforeTurn(turnId: string): TaskPlanState | undefined
+  /** null = turn 已不在活动父链；空数组 = 根输入没有选择 Skill。 */
+  skillsForTurn(turnId: string): ActivatedSkill[] | null
   recordUserInput(
     text: string,
     startsTurn: boolean,
     attachments?: readonly ImageAttachment[],
     pdfAttachments?: readonly PdfAttachment[],
+    skills?: readonly ActivatedSkill[],
   ): Promise<void>
   /** Main 预先分配 ID，使落盘记录与运行时 steering 使用同一身份。 */
   recordUserInputWithId(
@@ -398,6 +408,7 @@ export interface SessionRecorder {
     attachments?: readonly ImageAttachment[],
     consumesInputIds?: readonly string[],
     pdfAttachments?: readonly PdfAttachment[],
+    skills?: readonly ActivatedSkill[],
   ): Promise<void>
   /**
    * 把回滚换根与编辑后的新根输入作为一次 flush 提交；旧 JSONL 分支保留审计，
@@ -411,6 +422,7 @@ export interface SessionRecorder {
     rollbackTaskState: TaskPlanState,
     attachments?: readonly ImageAttachment[],
     pdfAttachments?: readonly PdfAttachment[],
+    skills?: readonly ActivatedSkill[],
   ): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(
@@ -420,6 +432,7 @@ export interface SessionRecorder {
     deliveredInputIds?: readonly string[],
     projectInstructions?: ProjectInstructionsUpdate,
     rootInputId?: string,
+    skills?: readonly ActivatedSkill[],
   ): Promise<void>
   recordProjectInstructions(update: ProjectInstructionsUpdate): Promise<void>
   recordStep(

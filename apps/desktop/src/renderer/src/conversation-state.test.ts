@@ -113,6 +113,35 @@ describe('会话界面时间线重建', () => {
     }])
   })
 
+  it('显式 Skill 摘要随根消息和插话进入可见时间线', () => {
+    const skill = {
+      id: `skill:${'a'.repeat(64)}`,
+      path: 'C:/project/.agents/skills/verify/SKILL.md',
+      rootPath: 'C:/project/.agents/skills/verify',
+      name: 'verify',
+      description: '验证结果',
+      scope: 'project' as const,
+    }
+    let state = createConversationState([{
+      type: 'user-message',
+      inputId: 'root-skill',
+      text: '执行验证',
+      startsTurn: true,
+      skills: [skill],
+    }])
+    state = applyCoreEvent(state, {
+      type: 'message-injected',
+      id: 'steering-skill',
+      text: '补充核对',
+      skills: [{ ...skill, scope: 'user' }],
+    })
+
+    const users = state.blocks.filter((block) => block.kind === 'user')
+    assert.deepEqual(users.map((block) => block.skills?.[0]?.name), ['verify', 'verify'])
+    assert.equal(users[0]?.kind === 'user' ? users[0].skills?.[0]?.scope : null, 'project')
+    assert.equal(users[1]?.kind === 'user' ? users[1].skills?.[0]?.scope : null, 'user')
+  })
+
   it('Renderer 重载后只应用 Main 已原子提交的恢复目标', () => {
     assert.equal(resumeTargetCommitted({
       resumingSessionId: 'target',

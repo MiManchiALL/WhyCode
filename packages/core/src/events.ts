@@ -11,6 +11,7 @@ import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types
 import type { ImageAttachment, ImageMessageAttachmentInput } from './attachments/types.ts'
 import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 import type { ReasoningEffortSelection } from './providers/catalog.ts'
+import type { SkillLocator, SkillSummary } from './skills/types.ts'
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -74,6 +75,7 @@ export interface QueuedUserMessage {
   text: string
   attachments?: ImageAttachment[]
   pdfAttachments?: PdfAttachment[]
+  skills?: SkillSummary[]
 }
 
 /** Agent 整体状态，宠物接口消费的核心事件 */
@@ -130,6 +132,7 @@ export type CoreEvent =
       startsTurn: true
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
+      skills?: SkillSummary[]
     }
   /**
    * 用户把一个尚无稳定模型输出的已中止回合原位改写。该事件只负责实时投影；
@@ -149,6 +152,7 @@ export type CoreEvent =
       text: string
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
+      skills?: SkillSummary[]
     }
   | {
       type: 'message-injected'
@@ -157,6 +161,7 @@ export type CoreEvent =
       startsTurn?: boolean
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
+      skills?: SkillSummary[]
     }
   /** 中断后把排队文本还给输入框（不静默丢弃） */
   | { type: 'queue-restored'; text: string; items?: QueuedUserMessage[] }
@@ -283,6 +288,8 @@ export type CoreCommand =
       pdfAttachments?: PdfMessageAttachmentInput[]
       /** 重新提交 queue-restored 草稿时原子消费的旧输入；只能引用当前会话事实源。 */
       restoredInputIds?: string[]
+      /** Renderer 只提交目录中的精确 locator；主进程在落盘前解析为不可变 Skill 快照。 */
+      skills?: SkillLocator[]
     }
   | {
       type: 'approval-response'

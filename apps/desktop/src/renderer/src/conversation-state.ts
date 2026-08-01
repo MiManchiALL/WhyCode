@@ -1,4 +1,10 @@
-import type { ImageAttachment, PdfAttachment, TaskPlan, ViewEvent } from '@whycode/core'
+import type {
+  ImageAttachment,
+  PdfAttachment,
+  SkillSummary,
+  TaskPlan,
+  ViewEvent,
+} from '@whycode/core'
 import {
   isStepScopedCoreEvent,
   type CoreEvent,
@@ -41,6 +47,7 @@ export type Block =
       text: string
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
+      skills?: SkillSummary[]
     }
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
@@ -127,6 +134,7 @@ export function applyViewEvent(state: ConversationState, event: ViewEvent): Conv
         event.startsTurn,
         event.attachments,
         event.pdfAttachments,
+        event.skills,
         event.inputId,
       )
     : applyStableCoreEvent(state, event.event)
@@ -168,6 +176,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         event.startsTurn ?? false,
         event.attachments,
         event.pdfAttachments,
+        event.skills,
         event.id,
       )
     case 'user-message-accepted':
@@ -177,6 +186,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         event.startsTurn,
         event.attachments,
         event.pdfAttachments,
+        event.skills,
         event.inputId,
       )
     case 'text-delta':
@@ -331,6 +341,7 @@ export function appendUserMessage(
   startsTurn: boolean,
   attachments: readonly ImageAttachment[] = [],
   pdfAttachments: readonly PdfAttachment[] = [],
+  skills: readonly SkillSummary[] = [],
   inputId?: string,
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
@@ -343,6 +354,7 @@ export function appendUserMessage(
     ...(pdfAttachments.length
       ? { pdfAttachments: pdfAttachments.map((item) => structuredClone(item)) }
       : {}),
+    ...(skills.length ? { skills: skills.map((item) => structuredClone(item)) } : {}),
   })
 }
 

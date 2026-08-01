@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'r
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
+import type { SkillSummary } from '@whycode/core/skills'
 import type {
   CoreCommand,
   ReasoningEffortSelection,
@@ -73,6 +74,8 @@ import {
   type WorkspaceStartChoice,
 } from './workspace-start-dialog.tsx'
 import { WorktreePanel } from './worktree-panel.tsx'
+import { SkillBadges, SkillChips, SkillPicker } from './skill-picker.tsx'
+import { useSkillComposer } from './use-skill-composer.ts'
 
 interface Approval {
   requestId: string
@@ -138,6 +141,7 @@ export function App() {
     text: string
     images: ImageDraft[]
     pdfs: PdfDraft[]
+    skills: SkillSummary[]
   }>())
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
@@ -145,6 +149,36 @@ export function App() {
   const inputRef = useRef('')
   const blocks = view.blocks
   const projectDir = workspaceDisplayDirectory(workspace)
+  const {
+    catalog: skillCatalog,
+    selected: selectedSkills,
+    trigger: skillTrigger,
+    matches: skillMatches,
+    selectedIds: selectedSkillIds,
+    activeIndex: skillActiveIndex,
+    limitReached: skillLimitReached,
+    textareaRef: composerTextareaRef,
+    capture: captureSkills,
+    clear: clearSkills,
+    replace: replaceSkills,
+    mergeRestored: mergeRestoredSkills,
+    remove: removeSelectedSkill,
+    select: selectSkill,
+    resetCatalog: resetSkillCatalog,
+    updateMenu: updateSkillMenu,
+    closeMenu: closeSkillMenu,
+    setActiveIndex: setSkillActiveIndex,
+    handlePickerKeyDown,
+  } = useSkillComposer({
+    input,
+    setInput,
+    inputRef,
+    runtimeId,
+    runtimeIdRef,
+    modelId,
+    projectDir,
+    workspaceMode: workspace.mode,
+  })
   const sections = conversationSections(blocks, workStartedAt)
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
@@ -188,18 +222,19 @@ export function App() {
     const images = detachImageDrafts()
     const pdfs = detachPdfDrafts()
     const text = inputRef.current
+    const skills = captureSkills()
     // 尚未产生 JSONL 的空白页没有历史入口，切走后不能再导航回来。
     if (!currentSessionId) {
       releaseImageDrafts(images)
       return
     }
     const key = composerKey(currentRuntimeId, currentSessionId)
-    if (text || images.length > 0 || pdfs.length > 0) {
-      composerDraftsRef.current.set(key, { text, images, pdfs })
+    if (text || images.length > 0 || pdfs.length > 0 || skills.length > 0) {
+      composerDraftsRef.current.set(key, { text, images, pdfs, skills })
     } else {
       composerDraftsRef.current.delete(key)
     }
-  }, [detachImageDrafts, detachPdfDrafts])
+  }, [captureSkills, detachImageDrafts, detachPdfDrafts])
 
   const resetActiveComposer = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
@@ -211,9 +246,10 @@ export function App() {
     backgroundEventsRef.current.delete(currentRuntimeId)
     inputRef.current = ''
     setInput('')
+    clearSkills()
     clearImageDrafts()
     clearPdfDrafts()
-  }, [clearImageDrafts, clearPdfDrafts])
+  }, [clearImageDrafts, clearPdfDrafts, clearSkills])
 
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     resumingSessionIdRef.current = sessionId
@@ -260,12 +296,14 @@ export function App() {
       || input.trim()
       || imageDrafts.length > 0
       || pdfDrafts.length > 0
+      || selectedSkills.length > 0
     ) return
     const next = restoredQueue[0]!
     setRestoredQueue((previous) => previous.filter((item) => item.id !== next.id))
     setInput(next.text)
     restoreImageDrafts(restoredImageDrafts([next]))
     restorePdfDrafts(restoredPdfDrafts([next]))
+    replaceSkills(next.skills ?? [])
     setRestoredInputIds([next.id])
   }, [
     imageDrafts.length,
@@ -273,9 +311,11 @@ export function App() {
     input,
     restoreImageDrafts,
     restorePdfDrafts,
+    replaceSkills,
     restoredInputIds.length,
     restoredQueue,
     restoredSubmissionPending,
+    selectedSkills.length,
   ])
 
   const refreshSessions = useCallback(async () => {
@@ -311,10 +351,12 @@ export function App() {
     activeSnapshotSequenceRef.current = snapshot.eventSequence
     setRuntimeId(snapshot.runtimeId)
     if (changingRuntime) {
+      resetSkillCatalog()
       const key = composerKey(snapshot.runtimeId, snapshot.sessionId)
       const draft = composerDraftsRef.current.get(key)
       composerDraftsRef.current.delete(key)
       setInput(draft?.text ?? '')
+      replaceSkills(draft?.skills ?? [])
       if (draft) {
         restoreImageDrafts(draft.images)
         restorePdfDrafts(draft.pdfs)
@@ -340,6 +382,8 @@ export function App() {
   }, [
     restoreImageDrafts,
     restorePdfDrafts,
+    replaceSkills,
+    resetSkillCatalog,
     setDeletionBlocksRuntime,
     setResumingSessionId,
     stashActiveComposer,
@@ -415,6 +459,7 @@ export function App() {
           text: event.text,
           ...(event.attachments?.length ? { attachments: event.attachments } : {}),
           ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
+          ...(event.skills?.length ? { skills: event.skills } : {}),
         }])
         break
       case 'message-injected':
@@ -884,7 +929,10 @@ export function App() {
     ) return
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId) return
-    const text = input.trim() || defaultDraftPrompt(imageDrafts.length, pdfDrafts.length)
+    const sentSkills = captureSkills()
+    const text = input.trim()
+      || defaultDraftPrompt(imageDrafts.length, pdfDrafts.length)
+      || (sentSkills.length ? '请按所选 Skill 执行。' : '')
     if (!text) return
     const sentImageDrafts = detachImageDrafts()
     const sentPdfDrafts = detachPdfDrafts()
@@ -894,13 +942,20 @@ export function App() {
     // IPC 确认持久化并交给目标 Agent 前，暂不允许切换；否则失败恢复可能落入另一对话。
     setAttachmentSubmissionPending(true)
     setInput('')
+    inputRef.current = ''
+    clearSkills()
     // 自己发消息 = 主动行为，恢复贴底跟随
     stickToBottom.current = true
     setShowJumpBottom(false)
     const restoreRejectedInput = () => {
-      setInput((current) => current ? `${text}\n${current}` : text)
+      setInput((current) => {
+        const restored = current ? `${text}\n${current}` : text
+        inputRef.current = restored
+        return restored
+      })
       restoreImageDrafts(sentImageDrafts)
       restorePdfDrafts(sentPdfDrafts)
+      mergeRestoredSkills(sentSkills)
       setRestoredInputIds((current) => [
         ...new Set([...sentRestoredInputIds, ...current]),
       ])
@@ -915,6 +970,9 @@ export function App() {
           urgent,
           ...(attachments.length ? { attachments } : {}),
           ...(pdfAttachments.length ? { pdfAttachments } : {}),
+          ...(sentSkills.length
+            ? { skills: sentSkills.map(({ id, path }) => ({ id, path })) }
+            : {}),
           ...(sentRestoredInputIds.length
             ? { restoredInputIds: sentRestoredInputIds }
             : {}),
@@ -940,12 +998,15 @@ export function App() {
   }, [
     addError,
     attachmentSubmissionPending,
+    captureSkills,
     checkpointRestoreToolUseId,
+    clearSkills,
     deletionBlocksRuntime,
     detachImageDrafts,
     detachPdfDrafts,
     imageDrafts.length,
     input,
+    mergeRestoredSkills,
     pdfDrafts.length,
     restoredInputIds,
     restoreImageDrafts,
@@ -1205,12 +1266,24 @@ export function App() {
         </div>
       )}
 
-      <footer className="border-t border-neutral-200 p-4">
+      <footer className="relative border-t border-neutral-200 p-4">
+        {skillTrigger && !attachmentLocked && (
+          <SkillPicker
+            skills={skillMatches}
+            selectedIds={selectedSkillIds}
+            activeIndex={Math.min(skillActiveIndex, Math.max(0, skillMatches.length - 1))}
+            diagnostics={skillCatalog.diagnostics}
+            limitReached={skillLimitReached}
+            onSelect={selectSkill}
+            onActivate={setSkillActiveIndex}
+          />
+        )}
         {queued.length > 0 && (
           <div className="mb-2 space-y-1">
             {queued.map((q) => (
               <div key={q.id} className="rounded bg-neutral-100 px-3 py-1 text-xs text-neutral-500">
                 <div className="truncate">⏳ 已排队 · {q.text}</div>
+                <SkillBadges skills={q.skills} />
                 <QueuedImageStrip attachments={q.attachments} />
                 <QueuedPdfStrip attachments={q.pdfAttachments} />
               </div>
@@ -1224,6 +1297,11 @@ export function App() {
         )}
         <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
         <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
+        <SkillChips
+          skills={selectedSkills}
+          disabled={attachmentLocked}
+          onRemove={removeSelectedSkill}
+        />
         <div className="flex items-end gap-2">
           <ImagePickerButton
             supportsImageInput={canAttachImages}
@@ -1235,10 +1313,18 @@ export function App() {
             onFiles={addPdfFiles}
           />
           <textarea
+            ref={composerTextareaRef}
             rows={1}
             className="max-h-40 min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none [field-sizing:content] focus:border-neutral-500"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(event) => {
+              const text = event.target.value
+              inputRef.current = text
+              setInput(text)
+              updateSkillMenu(text, event.target.selectionStart)
+            }}
+            onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
+            onBlur={closeSkillMenu}
             onPaste={pasteAttachments}
             disabled={
               stopping
@@ -1248,6 +1334,7 @@ export function App() {
               || checkpointRestoreToolUseId !== null
             }
             onKeyDown={(e) => {
+              if (handlePickerKeyDown(e)) return
               const action = composerKeyAction({
                 key: e.key,
                 shiftKey: e.shiftKey,
@@ -1272,9 +1359,9 @@ export function App() {
                 : status === 'waiting-approval'
                   ? '⏸ Agent 在等你审批上方的请求…'
                   : busy
-                    ? '工作中——Enter 排队，Ctrl+Enter 立即插话，Shift+Enter 换行'
+                    ? '工作中——Enter 排队，Ctrl+Enter 立即插话，$ 选择 Skill，Shift+Enter 换行'
                     : projectDir
-                      ? '输入消息…（Shift+Enter 换行）'
+                      ? '输入消息…（$ 选择 Skill，Shift+Enter 换行）'
                       : '正在准备工作文件夹…'
             }
           />
@@ -1294,7 +1381,12 @@ export function App() {
               disabled={
                 stopping
                 || attachmentSubmissionPending
-                || (!input.trim() && imageDrafts.length === 0 && pdfDrafts.length === 0)
+                || (
+                  !input.trim()
+                  && imageDrafts.length === 0
+                  && pdfDrafts.length === 0
+                  && selectedSkills.length === 0
+                )
               }
               title="打断当前步骤，立即插话"
             >
@@ -1310,7 +1402,12 @@ export function App() {
               || deletionBlocksRuntime
               || resumingSessionId !== null
               || checkpointRestoreToolUseId !== null
-              || (!input.trim() && imageDrafts.length === 0 && pdfDrafts.length === 0)
+              || (
+                !input.trim()
+                && imageDrafts.length === 0
+                && pdfDrafts.length === 0
+                && selectedSkills.length === 0
+              )
             }
           >
             {busy ? '排队' : '发送'}

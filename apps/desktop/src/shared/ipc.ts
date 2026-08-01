@@ -9,6 +9,8 @@ export const IPC = {
   event: 'whycode:event',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
+  /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */
+  listSkills: 'whycode:list-skills',
   /** Renderer → Main：模型、CLIProxyAPI、网页搜索与 MCP 连接设置。 */
   connectionSettings: 'whycode:connection-settings',
   saveProviderSettings: 'whycode:save-provider-settings',

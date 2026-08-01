@@ -5,6 +5,7 @@ import type { AgentSession } from '../agent/session.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { CoreEvent, QueuedUserMessage } from '../events.ts'
+import type { ActivatedSkill } from '../skills/types.ts'
 import { ConsensusCoordinator } from './orchestrator.ts'
 
 interface MainCall {
@@ -12,6 +13,7 @@ interface MainCall {
   urgent: boolean
   attachments: readonly ImageAttachment[]
   pdfAttachments?: readonly PdfAttachment[]
+  skills?: readonly ActivatedSkill[]
   inputId?: string
 }
 
@@ -117,6 +119,7 @@ describe('共识模式附件路由', () => {
         text: string
         attachments: ImageAttachment[]
         pdfAttachments: PdfAttachment[]
+        skills: ActivatedSkill[]
       }>): Promise<void>
     }
 
@@ -126,11 +129,61 @@ describe('共识模式附件路由', () => {
       text: '保留这张图',
       attachments: [harness.attachment],
       pdfAttachments: [],
+      skills: [],
     }])
 
     assert.equal(harness.events.some((event) => event.type === 'queue-restored'), false)
     assert.equal(harness.events.some((event) =>
       event.type === 'error' && event.message.includes('队列恢复')), true)
+  })
+
+  it('M1 讨论期间保管 Skill，最终 Main 执行边界才交付完整快照', () => {
+    const harness = createHarness()
+    const internals = harness.coordinator as unknown as {
+      running: boolean
+      peerPhase: boolean
+      executionPhase: boolean
+      takePendingInputs(
+        text: string,
+        rootSkills?: readonly ActivatedSkill[],
+      ): { inputs: QueuedUserMessage[]; skills: ActivatedSkill[] }
+    }
+    internals.running = true
+    internals.peerPhase = false
+    internals.executionPhase = false
+    harness.state.running = true
+
+    harness.coordinator.handleUserMessage(
+      '按 Skill 继续', false, [], 'input-skill', [], [harness.skill],
+    )
+    assert.deepEqual(harness.calls, [])
+    const queued = harness.events.find((event) => event.type === 'message-queued')
+    assert.deepEqual(
+      queued?.type === 'message-queued' ? queued.skills?.map((skill) => skill.id) : [],
+      [harness.skill.id],
+    )
+
+    const execution = internals.takePendingInputs('execution')
+    assert.deepEqual(execution.skills, [harness.skill])
+    assert.deepEqual(execution.inputs[0]?.skills?.map((skill) => skill.id), [harness.skill.id])
+  })
+
+  it('Main 已进入执行阶段时，Skill steering 直接进入当前根任务', () => {
+    const harness = createHarness()
+    const internals = harness.coordinator as unknown as {
+      running: boolean
+      peerPhase: boolean
+      executionPhase: boolean
+    }
+    internals.running = true
+    internals.peerPhase = false
+    internals.executionPhase = true
+    harness.state.running = true
+
+    harness.coordinator.handleUserMessage(
+      '立即补充流程', true, [], 'input-execution-skill', [], [harness.skill],
+    )
+    assert.deepEqual(harness.calls[0]?.skills, [harness.skill])
   })
 })
 
@@ -150,6 +203,7 @@ function createHarness(options: {
       attachments: readonly ImageAttachment[],
       inputId?: string,
       pdfAttachments: readonly PdfAttachment[] = [],
+      skills: readonly ActivatedSkill[] = [],
     ) {
       calls.push({
         text,
@@ -157,6 +211,7 @@ function createHarness(options: {
         attachments: [...attachments],
         ...(inputId ? { inputId } : {}),
         ...(pdfAttachments.length ? { pdfAttachments: [...pdfAttachments] } : {}),
+        ...(skills.length ? { skills: skills.map((skill) => structuredClone(skill)) } : {}),
       })
     },
     abort() { aborts.value++ },
@@ -196,5 +251,15 @@ function createHarness(options: {
     byteLength: 200,
     pageCount: 3,
   }
-  return { coordinator, calls, events, state, aborts, attachment, pdfAttachment }
+  const skill: ActivatedSkill = {
+    id: `skill:${'c'.repeat(64)}`,
+    path: 'C:\\project\\.agents\\skills\\verify\\SKILL.md',
+    rootPath: 'C:\\project\\.agents\\skills\\verify',
+    name: 'verify',
+    description: '验证结果',
+    scope: 'project',
+    digest: `sha256:${'d'.repeat(64)}`,
+    content: '---\nname: verify\ndescription: 验证结果\n---\nVERIFY',
+  }
+  return { coordinator, calls, events, state, aborts, attachment, pdfAttachment, skill }
 }

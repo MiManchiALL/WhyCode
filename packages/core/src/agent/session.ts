@@ -112,6 +112,14 @@ import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
 import type { McpManagerSnapshot } from '../mcp/manager.ts'
 import { carryMcpToolState, withoutMcpToolState } from '../mcp/state.ts'
 import { stoppedTurnEditResources } from './turn-edit.ts'
+import {
+  activatedSkillSchema,
+  skillSummary,
+  type ActivatedSkill,
+} from '../skills/types.ts'
+import type { SkillCatalogService } from '../skills/catalog.ts'
+import { SkillTurnContext } from '../skills/turn.ts'
+import { createSkillTool, SKILL_TOOL_NAME } from '../tools/skill/index.ts'
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
@@ -138,6 +146,8 @@ export interface AgentSessionOptions {
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
   mcpRuntime?: McpSessionRuntime
+  /** 普通 Main 的 Skill 磁盘事实源；讨论/协议回合即使复用 Session 也不会装配。 */
+  skillCatalog?: SkillCatalogService
   /**
    * 宿主级项目副作用调度边界。单个 Agent 内仍由 serialToolTail 保序；桌面宿主
    * 可在此进一步串行同一项目中来自不同会话的 edit/execute 与检查点回滚。
@@ -179,6 +189,7 @@ interface QueuedMessage {
   text: string
   attachments: ImageAttachment[]
   pdfAttachments: PdfAttachment[]
+  skills: ActivatedSkill[]
   /** Desktop 预写了 user-input 时，送达/恢复必须携带同一稳定 ID。 */
   persisted: boolean
 }
@@ -246,6 +257,8 @@ export class AgentSession {
   private compacting = false
   /** token 计量基线（最后一次 API usage）；改写历史后置 null 全量重估 */
   private tokenBaseline: TokenBaseline | null = null
+  /** API usage 所含 Skill 请求投影相对长期消息的差值。 */
+  private tokenBaselineSkillProjectionDelta = 0
   /** 压缩熔断：连续失败 3 次后本会话停止尝试，成功清零 */
   private compactFailures = 0
   /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
@@ -263,6 +276,7 @@ export class AgentSession {
   /** 仅 Main 正常执行拥有任务控制；B/C 创建时已经处于 discussion，因此不会获得。 */
   private taskPlan: TaskPlanController | null = null
   private loopHealth = new LoopHealthMonitor()
+  private readonly skillTurn: SkillTurnContext
   /** 非只读工具的会话级串行尾链：审批、检查点与执行必须属于同一临界区。 */
   private serialToolTail: Promise<void> = Promise.resolve()
   /** 审批判定串行重算，避免并行工具覆盖唯一的用户审批入口。 */
@@ -273,6 +287,7 @@ export class AgentSession {
   private terminalStatusManaged = false
   constructor(options: AgentSessionOptions) {
     this.options = options
+    this.skillTurn = new SkillTurnContext(options.skillCatalog)
     const initialMessages = options.sessionRecorder?.initialMessages ?? []
     this.messages = applyProjectInstructions(
       initialMessages,
@@ -287,6 +302,7 @@ export class AgentSession {
         text: input.text,
         attachments: [...(input.attachments ?? [])],
         pdfAttachments: [...(input.pdfAttachments ?? [])],
+        skills: [...(input.skills ?? [])].map((skill) => structuredClone(skill)),
         persisted: true,
       }))
     this.rebuildActivePdfAttachments()
@@ -439,6 +455,7 @@ export class AgentSession {
     imageAttachments: readonly ImageAttachment[] = [],
     persistedInputId?: string,
     pdfAttachments: readonly PdfAttachment[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason> | void {
     if (imageAttachments.length > 0) {
       if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
@@ -449,7 +466,7 @@ export class AgentSession {
       this.addPdfAttachments(pdfAttachments)
     }
     return this.handleMessage(
-      text, urgent, imageAttachments, persistedInputId, pdfAttachments,
+      text, urgent, imageAttachments, persistedInputId, pdfAttachments, skills,
     )
   }
 
@@ -465,7 +482,8 @@ export class AgentSession {
     const recorder = this.turnEditRecorder(nextText)
     const rollbackMessages = recorder.messagesBeforeTurn(turnId)
     const rollbackTaskState = recorder.taskStateBeforeTurn(turnId)
-    if (rollbackMessages === null || rollbackTaskState === undefined) {
+    const skills = recorder.skillsForTurn(turnId)
+    if (rollbackMessages === null || rollbackTaskState === undefined || skills === null) {
       throw new Error('目标回合已不在当前活动历史中')
     }
     const resources = stoppedTurnEditResources(
@@ -483,6 +501,7 @@ export class AgentSession {
       rollbackTaskState,
       resources.attachments,
       resources.pdfAttachments,
+      skills,
     )
     this.messages = structuredClone([...recorder.initialMessages])
     this.taskPlan?.restore(recorder.initialTaskState)
@@ -493,9 +512,9 @@ export class AgentSession {
     this.addPdfAttachments(resources.pdfAttachments)
     this.tokenBaseline = null
     const message = queuedMessageForModel(
-      { id: inputId, text: nextText, ...resources, persisted: true },
+      { id: inputId, text: nextText, ...resources, skills, persisted: true },
     )
-    return this.editedTurnStarter(turnId, inputId, nextText, message)
+    return this.editedTurnStarter(turnId, inputId, nextText, message, skills)
   }
 
   private turnEditRecorder(text: string): SessionRecorder {
@@ -528,6 +547,7 @@ export class AgentSession {
     inputId: string,
     text: string,
     message: ModelMessage,
+    skills: readonly ActivatedSkill[],
   ): () => Promise<StopReason> {
     let started = false
     return () => {
@@ -540,7 +560,7 @@ export class AgentSession {
         text,
         taskPlan: this.taskPlan?.snapshot ?? null,
       })
-      return this.startTurn([message], [], inputId)
+      return this.startTurn([message], [], inputId, skills)
     }
   }
 
@@ -548,6 +568,7 @@ export class AgentSession {
   handleExecutionMessage(
     text: string,
     steeringInputs: readonly QueuedUserMessage[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason> | void {
     if (this.isBusy) throw new Error('Main 尚未空闲，不能启动协商执行阶段')
     const delivered = steeringInputs.map((input) => ({
@@ -555,6 +576,7 @@ export class AgentSession {
       text: input.text,
       attachments: [...(input.attachments ?? [])],
       pdfAttachments: [...(input.pdfAttachments ?? [])],
+      skills: [],
       persisted: this.options.sessionRecorder?.pendingUserInputs.some(
         (pending) => pending.id === input.id && pending.state === 'queued',
       ) ?? false,
@@ -575,6 +597,8 @@ export class AgentSession {
         ...delivered.map(queuedMessageForModel),
       ],
       delivered,
+      undefined,
+      skills,
     )
   }
 
@@ -584,13 +608,19 @@ export class AgentSession {
     imageAttachments: readonly ImageAttachment[] = [],
     persistedInputId?: string,
     pdfAttachments: readonly PdfAttachment[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason> | void {
+    const parsedSkills = skills.map((skill) => activatedSkillSchema.parse(skill))
+    if (parsedSkills.length > 0 && (this.options.promptContext.discussion || this.protocolRound)) {
+      throw new Error('Skill 只在 Main 执行阶段可用')
+    }
     if (this.isBusy) {
       const item: QueuedMessage = {
         id: persistedInputId ?? crypto.randomUUID(),
         text,
         attachments: [...imageAttachments],
         pdfAttachments: [...pdfAttachments],
+        skills: parsedSkills.map((skill) => structuredClone(skill)),
         persisted: persistedInputId !== undefined,
       }
       this.queue.push(item)
@@ -600,6 +630,7 @@ export class AgentSession {
         text,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
         ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
+        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
       })
       if (urgent && this.running) {
         // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
@@ -621,10 +652,11 @@ export class AgentSession {
           text,
           attachments: [...imageAttachments],
           pdfAttachments: [...pdfAttachments],
+          skills: parsedSkills.map((skill) => structuredClone(skill)),
           persisted: true,
         }]
       : []
-    return this.startTurn([message], delivered, rootInputId)
+    return this.startTurn([message], delivered, rootInputId, parsedSkills)
   }
 
   /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
@@ -632,10 +664,25 @@ export class AgentSession {
     initialMessages: ModelMessage[],
     deliveredInputs: readonly QueuedMessage[] = [],
     rootInputId?: string,
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason> {
     this.opAbort = new AbortController()
     this.running = true
-    return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs, rootInputId)
+    return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs, rootInputId, skills)
+  }
+
+  private async prepareSkillTurn(skills: readonly ActivatedSkill[]): Promise<void> {
+    await this.skillTurn.start({
+      skills,
+      projectDir: this.options.promptContext.projectDir,
+      contextWindow: this.options.model.capabilities.contextWindow,
+      enabled: !this.options.promptContext.discussion && !this.protocolRound,
+      onCatalogError: (error) => this.options.emit({
+        type: 'error',
+        message: `Skill 目录刷新失败：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      }),
+    })
   }
 
   /** 用户点「停止」：中止当前 turn 或压缩 */
@@ -726,6 +773,7 @@ export class AgentSession {
         text: item.text,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
         ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
+        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
       })),
     })
   }
@@ -747,6 +795,7 @@ export class AgentSession {
         startsTurn: index === 0,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
         ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
+        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
       })
     })
   }
@@ -784,12 +833,14 @@ export class AgentSession {
         throw error
       }
       this.messages.push(...injected)
+      this.skillTurn.add(drained.flatMap((item) => item.skills))
       drained.forEach((item) => this.options.emit({
         type: 'message-injected',
         id: item.id,
         text: item.text,
         ...(item.attachments.length ? { attachments: item.attachments } : {}),
         ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
+        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
       }))
     }
   }
@@ -800,6 +851,7 @@ export class AgentSession {
     abortSignal: AbortSignal,
     deliveredInputs: readonly QueuedMessage[] = [],
     rootInputId?: string,
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason> {
     const { emit } = this.options
     this.abortRequestedDuringFinalization = false
@@ -807,6 +859,7 @@ export class AgentSession {
     const previousProjectInstructions = findProjectInstructionsMessage(this.messages)
     let projectInstructions: ProjectInstructionsUpdate | null = null
     let initialMessageCount = this.messages.length
+    await this.prepareSkillTurn(skills)
     try {
       const resolved = await this.resolveProjectInstructions()
       projectInstructions = resolved.update
@@ -816,6 +869,7 @@ export class AgentSession {
       if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
       this.opAbort = null
       this.running = false
+      this.skillTurn.clear()
       emit({
         type: 'error',
         message: `无法读取项目指令：${error instanceof Error ? error.message : String(error)}`,
@@ -855,6 +909,7 @@ export class AgentSession {
           deliveredInputs.filter((input) => input.persisted).map((input) => input.id),
           projectInstructions ?? undefined,
           rootInputId,
+          skills,
         ),
         '提交回合起点',
       )
@@ -865,6 +920,7 @@ export class AgentSession {
       this.activeTurn = null
       this.opAbort = null
       this.running = false
+      this.skillTurn.clear()
       this.abortRequestedDuringFinalization = false
       emit({
         type: 'error',
@@ -1087,12 +1143,16 @@ export class AgentSession {
       && !this.persistenceFailed
     ) {
       const drained = this.drainQueue()
+      this.skillTurn.clear()
       return this.startTurn(
         drained.map(queuedMessageForModel),
         drained,
+        undefined,
+        drained.flatMap((item) => item.skills),
       )
     }
 
+    this.skillTurn.clear()
     this.running = false
     this.abortRequestedDuringFinalization = false
     if (this.queue.length > 0 && !this.persistenceFailed) {
@@ -1177,7 +1237,7 @@ export class AgentSession {
     this.compacting = true
     this.opAbort = new AbortController()
     const signal = this.opAbort.signal
-    const preTokens = estimateContextTokens(this.messages, this.tokenBaseline)
+    const preTokens = this.estimateCurrentContextTokens()
     emit({ type: 'agent-status', status: 'working' })
     try {
       await this.refreshProjectInstructions()
@@ -1187,7 +1247,7 @@ export class AgentSession {
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         signal,
         this.compactApplicationContext(),
-        (messages) => this.messagesForCurrentModel(messages, signal),
+        (messages) => this.messagesForCurrentModel(messages, signal, false),
         this.requestProviderOptions(),
       )
       this.messages = carryMcpToolState(this.messages, result.messages)
@@ -1202,7 +1262,7 @@ export class AgentSession {
         type: 'context-compacted',
         level: 'full',
         preTokens,
-        postTokens: estimateContextTokens(this.messages, null),
+        postTokens: this.estimateCurrentContextTokens(),
       })
     } catch (error) {
       emit({
@@ -1224,6 +1284,8 @@ export class AgentSession {
       await this.startTurn(
         drained.map(queuedMessageForModel),
         drained,
+        undefined,
+        drained.flatMap((item) => item.skills),
       )
       return
     }
@@ -1242,7 +1304,13 @@ export class AgentSession {
   ): Promise<void> {
     const { emit } = this.options
     const threshold = autoCompactThreshold(this.options.model.capabilities)
-    let estimate = estimateContextTokens(this.messages, this.tokenBaseline)
+    const skillTokens = this.skillTurn.injectedContextTokenEstimate()
+    if (skillTokens >= threshold) {
+      throw new Error(
+        `当前选择的 Skill 内容约 ${skillTokens} tokens，超过该模型单次任务的上下文预算；请减少选择或缩短 SKILL.md`,
+      )
+    }
+    let estimate = this.estimateCurrentContextTokens()
     if (estimate < threshold || this.compactFailures >= MAX_COMPACT_FAILURES) return
 
     const preTokens = estimate
@@ -1251,7 +1319,7 @@ export class AgentSession {
     if (cleaned) {
       this.messages = cleaned
       this.tokenBaseline = null
-      estimate = estimateContextTokens(this.messages, null)
+      estimate = this.estimateCurrentContextTokens()
       if (estimate < threshold) {
         emit({ type: 'context-compacted', level: 'micro', preTokens, postTokens: estimate })
         return
@@ -1266,7 +1334,7 @@ export class AgentSession {
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
         this.compactApplicationContext(planExecutionEngaged, turnId),
-        (messages) => this.messagesForCurrentModel(messages, abortSignal),
+        (messages) => this.messagesForCurrentModel(messages, abortSignal, false),
         this.requestProviderOptions(),
       )
       this.messages = carryMcpToolState(this.messages, result.messages)
@@ -1283,7 +1351,7 @@ export class AgentSession {
       this.tokenBaseline = null
       this.compactFailures = 0
       // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用）
-      const postTokens = estimateContextTokens(this.messages, null)
+      const postTokens = this.estimateCurrentContextTokens()
       emit({ type: 'context-compacted', level: 'full', preTokens, postTokens })
     } catch (error) {
       if (abortSignal.aborted) throw error
@@ -1312,13 +1380,26 @@ export class AgentSession {
     return sections.length > 0 ? sections.join('\n\n') : undefined
   }
 
+  private estimateCurrentContextTokens(messages: ModelMessage[] = this.messages): number {
+    const rawEstimate = estimateContextTokens(messages, this.tokenBaseline)
+    const currentSkillDelta = this.skillTurn.estimatedProjectionTokenDelta(messages)
+    const baselineDelta = this.tokenBaseline
+      ? this.tokenBaselineSkillProjectionDelta
+      : 0
+    return Math.max(0, rawEstimate + currentSkillDelta - baselineDelta)
+  }
+
   private async messagesForCurrentModel(
     messages: ModelMessage[],
     abortSignal?: AbortSignal,
+    includeActiveSkillContext = true,
   ): Promise<ModelMessage[]> {
     const supportsImages = this.options.model.capabilities.supportsImageInput
     const signal = abortSignal ?? new AbortController().signal
-    const modelMessages = withoutMcpToolState(messages)
+    const modelMessages = this.skillTurn.project(
+      withoutMcpToolState(messages),
+      includeActiveSkillContext,
+    )
     const withPdfPages = supportsImages
       && this.options.pdfProcessor
       && this.options.sessionRecorder
@@ -1458,6 +1539,8 @@ export class AgentSession {
         ? [...this.messages, currentTimeReminder]
         : this.messages
       const modelInputMessageCount = modelInputMessages.length
+      const requestSkillProjectionDelta =
+        this.skillTurn.estimatedProjectionTokenDelta(modelInputMessages)
       const result = streamText({
         model: this.createLanguageModel(),
         system: buildSystemPrompt(
@@ -1724,6 +1807,7 @@ export class AgentSession {
             modelInputMessageCount
             + (responseCoveredCount < 0 ? response.messages.length : responseCoveredCount),
         }
+        this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
       }
       return {
         committed: true,
@@ -1835,10 +1919,18 @@ export class AgentSession {
       && !this.protocolRound
       ? [...(this.options.mainTools ?? []), ...mcpTools]
       : []
+    const skillCatalog = this.skillTurn.catalogSnapshot
+    const skillTools: ToolDefinition[] = skillCatalog
+      && skillCatalog.entries.length > 0
+      && !this.options.promptContext.discussion
+      && !this.protocolRound
+      ? [createSkillTool(skillCatalog)]
+      : []
     const controlTools: ToolDefinition[] = [
       ...extraTools,
       ...taskTools,
       ...questionTools,
+      ...skillTools,
       ...mainTools,
     ]
     const imageTools: ToolDefinition[] =
@@ -2066,6 +2158,9 @@ export class AgentSession {
             result: result.data,
             isError: result.isError,
           })
+          if (def.name === SKILL_TOOL_NAME) {
+            this.skillTurn.recordToolResult(toolCallId, parsed.value, !result.isError)
+          }
           if (def.endsTurnOnSuccess && !result.isError) {
             onTurnEndingTool(def.turnEndReasonOnSuccess)
           }
@@ -2075,6 +2170,9 @@ export class AgentSession {
           await finalizeCheckpoint()
           const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+          if (def.name === SKILL_TOOL_NAME) {
+            this.skillTurn.recordToolResult(toolCallId, parsed.value, false)
+          }
           this.loopHealth.record(def.name, parsed.value, msg, true)
           return msg
         }

@@ -14,6 +14,7 @@ import {
   ensureMcpConfigTemplate,
   ensureProjectMcpConfigTemplate,
   getModelEntry,
+  installSystemSkills,
   loadMcpConfiguration,
   localWorkspace,
   McpSessionRuntime,
@@ -27,6 +28,9 @@ import {
   type ProviderConfig,
   type ReasoningEffortSelection,
   type SessionJournal,
+  SkillCatalogService,
+  skillSummary,
+  type ActivatedSkill,
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
   workspaceWorkingDirectory,
@@ -73,6 +77,7 @@ import {
 import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
 import { startEditedUserMessage } from './user-message-edit.ts'
+import { prepareMessageSkills } from './skill-message.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { SessionRuntimeRegistry } from './session-runtime-registry.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
@@ -289,6 +294,8 @@ let runtimeRegistry!: SessionRuntimeRegistry
 let commandSessions: CommandSessionManager
 /** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
 let worktrees: WorktreeManager
+/** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
+let skills: SkillCatalogService
 /** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
 const sessionDeletionLock = new SessionDeletionLock()
 /** 历史会话完整校验与候选运行时构造期间，只允许一个恢复事务。 */
@@ -598,6 +605,7 @@ async function createMainAgentSession(
       customSystemPrompt: recorder.customSystemPrompt,
       sessionRecorder: recorder,
       mcpRuntime,
+      skillCatalog: skills,
       mainTools: [
         ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
         webSearchTool,
@@ -878,6 +886,7 @@ async function handleCommand(
 
 type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
 type EditUserMessageCommand = Extract<CoreCommand, { type: 'edit-user-message' }>
+type PreparedUserMessage = PreparedUserMessageAttachments & { skills: ActivatedSkill[] }
 
 async function handleEditUserMessageCommand(
   runtime: DesktopSessionRuntime,
@@ -903,8 +912,11 @@ async function handleEditUserMessageCommand(
 async function prepareUserMessage(
   runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
-): Promise<PreparedUserMessageAttachments> {
+): Promise<PreparedUserMessage> {
   if (!userMessageNeedsAttachmentPreparation(command)) {
+    const skillsBeforeSession = runtime.projectDir === null
+      ? await prepareUserMessageSkills(runtime, command)
+      : null
     const error = await ensureSession(runtime)
     if (error) throw new Error(error)
     return {
@@ -912,6 +924,7 @@ async function prepareUserMessage(
       pdfAttachments: [],
       restoredInputIds: [],
       importedFiles: false,
+      skills: skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command),
     }
   }
 
@@ -920,13 +933,17 @@ async function prepareUserMessage(
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) throw new Error(resolved.error)
   const model = resolved.value.entry
+  const skillsBeforeSession = runtime.projectDir === null
+    ? await prepareUserMessageSkills(runtime, command)
+    : null
   const attachmentAbortSignal = runtime.beginAttachmentPreparation()
   try {
     const error = await ensureSession(runtime)
     if (error) throw new Error(error)
+    const preparedSkills = skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command)
     const journal = runtime.journal
     if (!journal) throw new Error('会话记录尚未初始化，无法保存附件')
-    return await prepareAttachments({
+    const prepared = await prepareAttachments({
       command,
       journal,
       pdfProcessor,
@@ -934,11 +951,34 @@ async function prepareUserMessage(
       modelDisplayName: model.displayName,
       abortSignal: attachmentAbortSignal,
     })
+    return {
+      ...prepared,
+      skills: preparedSkills,
+    }
   } catch (error) {
-    throw new Error(`附件添加失败：${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`消息准备失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     runtime.endAttachmentPreparation()
   }
+}
+
+async function prepareUserMessageSkills(
+  runtime: DesktopSessionRuntime,
+  command: UserMessageCommand,
+): Promise<ActivatedSkill[]> {
+  if (command.skills === undefined) return []
+  const modelId = resolveCurrentModelId(runtime)
+  if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
+  const resolved = resolveModelConnection(loadAppConfig(), modelId)
+  if (!resolved.ok) throw new Error(resolved.error)
+  return prepareMessageSkills({
+    catalog: skills,
+    locators: command.skills,
+    projectDir: runtime.projectDir,
+    contextWindow: resolved.value.entry.capabilities.contextWindow,
+    restoredInputIds: command.restoredInputIds,
+    pendingInputs: runtime.journal?.pendingUserInputs,
+  })
 }
 
 async function handleUserMessageCommand(
@@ -956,7 +996,7 @@ async function handleUserMessageCommand(
     return rejectUserMessage(runtime, '同时运行的对话已达到上限（4 个），请等待其中一个结束')
   }
   try {
-    let prepared: PreparedUserMessageAttachments
+    let prepared: PreparedUserMessage
     try {
       prepared = await prepareUserMessage(runtime, command)
     } catch (error) {
@@ -978,6 +1018,7 @@ async function handleUserMessageCommand(
           prepared.attachments,
           prepared.restoredInputIds,
           prepared.pdfAttachments,
+          prepared.skills,
         ),
         acceptRoot: (inputId, text) => {
           runtime.beginWork()
@@ -988,6 +1029,7 @@ async function handleUserMessageCommand(
             startsTurn: true,
             ...(prepared.attachments.length ? { attachments: prepared.attachments } : {}),
             ...(prepared.pdfAttachments.length ? { pdfAttachments: prepared.pdfAttachments } : {}),
+            ...(prepared.skills.length ? { skills: prepared.skills.map(skillSummary) } : {}),
           }, false)
         },
         deliver: (inputId, text, urgent, startsTurn) => deliverUserMessage(
@@ -998,6 +1040,7 @@ async function handleUserMessageCommand(
           startsTurn,
           prepared.attachments,
           prepared.pdfAttachments,
+          prepared.skills,
         ),
         onDeliveryError: (error) => reportUserMessageDeliveryError(runtime, error),
       }, workStart)
@@ -1029,15 +1072,16 @@ function deliverUserMessage(
   startsTurn: boolean,
   attachments: readonly ImageAttachment[],
   pdfAttachments: readonly PdfAttachment[],
+  skills: readonly ActivatedSkill[],
 ): Promise<unknown> | void {
   const persistedInputId = startsTurn ? undefined : inputId
   if (runtime.consensusEnabled && runtime.coordinator) {
     return runtime.coordinator.handleUserMessage(
-      text, urgent, attachments, persistedInputId, pdfAttachments,
+      text, urgent, attachments, persistedInputId, pdfAttachments, skills,
     )
   }
   return runtime.session!.handleUserMessage(
-    text, urgent, attachments, inputId, pdfAttachments,
+    text, urgent, attachments, inputId, pdfAttachments, skills,
   )
 }
 
@@ -1396,6 +1440,7 @@ async function recordUserInput(
   attachments: readonly ImageAttachment[] = [],
   consumesInputIds: readonly string[] = [],
   pdfAttachments: readonly PdfAttachment[] = [],
+  skills: readonly ActivatedSkill[] = [],
 ): Promise<void> {
   const journal = runtime.journal
   if (!journal) throw new Error('会话记录尚未初始化，无法保存用户消息')
@@ -1406,6 +1451,7 @@ async function recordUserInput(
     attachments,
     consumesInputIds,
     pdfAttachments,
+    skills,
   )
 }
 
@@ -1648,6 +1694,7 @@ function pendingInputs(
   text: string
   attachments?: ImageAttachment[]
   pdfAttachments?: PdfAttachment[]
+  skills?: ReturnType<typeof skillSummary>[]
 }[] {
   return journal.pendingUserInputs
     .filter((input) => input.state === state)
@@ -1658,6 +1705,7 @@ function pendingInputs(
       ...(input.pdfAttachments?.length
         ? { pdfAttachments: [...input.pdfAttachments] }
         : {}),
+      ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
     }))
 }
 
@@ -1767,6 +1815,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
   await ensureMcpConfigTemplate(mcpGlobalConfigPath)
     .catch((error) => console.warn('MCP 配置模板初始化失败：', error))
+  await installSystemSkills(app.getPath('home'))
+    .catch((error) => console.warn('内置 Skill 初始化失败：', error))
   await synchronizeConfiguredCliProxyRoutes()
     .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
   // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
@@ -1791,6 +1841,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  skills = new SkillCatalogService({ homeDir: app.getPath('home') })
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
   await worktrees.pruneEmptyRepositoryDirectories()
     .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
@@ -1843,6 +1894,19 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.listModels, (_e, runtimeId?: string) => {
     const runtime = runtimeForId(runtimeId)
     return listModelConnections(loadAppConfig(), resolveCurrentModelId(runtime))
+  })
+  ipcMain.handle(IPC.listSkills, async (_e, runtimeId?: string) => {
+    const runtime = runtimeForId(runtimeId)
+    const modelId = resolveCurrentModelId(runtime)
+    const resolved = modelId
+      ? resolveModelConnection(loadAppConfig(), modelId)
+      : null
+    const contextWindow = resolved?.ok
+      ? resolved.value.entry.capabilities.contextWindow
+      : undefined
+    // pending-worktree 尚未创建真实目录；此时目录只展示用户级与内置 Skill，避免签发
+    // 指向源仓库、却要在首条消息创建后的 Worktree 中校验的失效 locator。
+    return skills.list(runtime.projectDir, contextWindow)
   })
   ipcMain.handle(IPC.connectionSettings, async () => {
     if (!mcpOAuthController.isAuthorizing()) {

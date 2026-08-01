@@ -8,7 +8,7 @@ export type {
   StopReason,
 } from './events.ts'
 export { isStepScopedCoreEvent } from './events.ts'
-export { unicodeSafePrefix } from './text.ts'
+export { isWellFormedUnicode, unicodeSafePrefix } from './text.ts'
 export {
   MODEL_REGISTRY,
   getModelEntry,
@@ -88,6 +88,31 @@ export {
   type CustomSystemPromptSnapshot,
 } from './prompts/custom-system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
+export {
+  SkillCatalogService,
+  SKILL_FILE_NAME,
+  SKILL_MAX_DESCRIPTION_CHARS,
+  SKILL_MAX_DOCUMENT_BYTES,
+  SKILL_MAX_NAME_CHARS,
+  SKILL_MAX_RESOURCE_BYTES,
+  SKILL_MAX_SELECTIONS_PER_MESSAGE,
+  SKILL_NAME_PATTERN,
+  installSystemSkills,
+  activatedSkillSchema,
+  skillLocatorSchema,
+  skillScopeSchema,
+  skillSummary,
+  skillSummarySchema,
+  type ActivatedSkill,
+  type SkillCatalogOptions,
+  type SkillCatalogSnapshot,
+  type SkillDiagnostic,
+  type SkillLocator,
+  type SkillScope,
+  type SkillSummary,
+  type SkillTurnSnapshot,
+} from './skills/index.ts'
+export { createSkillTool, SKILL_TOOL_NAME } from './tools/skill/index.ts'
 export {
   createReadPdfTool,
   READ_PDF_TOOL_NAME,
@@ -295,6 +320,7 @@ export {
 export type { ViewEvent, VisibleCoreEvent } from './session/view-events.ts'
 export type {
   LoadedSession,
+  PendingUserInput,
   SessionCreateInput,
   SessionMetadata,
   SessionRecorder,

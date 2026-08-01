@@ -26,6 +26,8 @@ import {
   loadProjectInstructions,
 } from '../instructions/project.ts'
 import { localWorkspace } from '../workspace/types.ts'
+import type { ActivatedSkill } from '../skills/types.ts'
+import { skillContentDigest, skillId } from '../skills/parser.ts'
 
 const tempRoots: string[] = []
 const storeRoots = new WeakMap<SessionStore, string>()
@@ -35,6 +37,196 @@ afterEach(async () => {
 })
 
 describe('SessionStore', () => {
+  it('中止回合编辑从根输入恢复完整 Skill 快照', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\skill-edit'),
+      modelId: 'test:model',
+    })
+    const skill = activatedSkillFixture()
+    const inputId = randomUUID()
+    const turnId = randomUUID()
+    await journal.recordUserInputWithId(inputId, '原问题', true, [], [], [], [skill])
+    await journal.recordTurnStart(
+      turnId,
+      [{ role: 'user', content: '原问题' }],
+      undefined,
+      [],
+      undefined,
+      inputId,
+      [skill],
+    )
+    await journal.recordTurnEnd(turnId, 'aborted')
+
+    const reopened = await store.open(journal.sessionId)
+    const recoveredSkills = reopened.skillsForTurn(turnId)
+    const rollbackMessages = reopened.messagesBeforeTurn(turnId)
+    const rollbackTaskState = reopened.taskStateBeforeTurn(turnId)
+    assert.deepEqual(recoveredSkills, [skill])
+    assert.notEqual(rollbackMessages, null)
+    assert.notEqual(rollbackTaskState, undefined)
+
+    const editedInputId = randomUUID()
+    await reopened.recordTurnEditInput(
+      turnId,
+      editedInputId,
+      '编辑后的问题',
+      rollbackMessages!,
+      rollbackTaskState!,
+      [],
+      [],
+      recoveredSkills!,
+    )
+    const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
+    const entries = parseTranscript(await readFile(transcript, 'utf8'))
+    const editedInput = entries.find((entry) =>
+      entry.type === 'user-input' && entry.uuid === editedInputId)
+    assert.equal(editedInput?.type, 'user-input')
+    if (editedInput?.type !== 'user-input') throw new Error('编辑输入未落盘')
+    assert.deepEqual(editedInput.skills, [skill])
+
+    const original = await readFile(transcript, 'utf8')
+    await writeFile(transcript, original.replaceAll('VERIFY_BODY', 'TAMPERED_BODY'), 'utf8')
+    await assert.rejects(store.open(journal.sessionId), /Skill 快照正文摘要不匹配/)
+  })
+
+  it('完整 Skill 快照随排队、恢复、重提和重启保持同一语义', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\skill-project'),
+      modelId: 'test:model',
+    })
+    const queuedId = randomUUID()
+    const skill = activatedSkillFixture()
+    await journal.recordUserInputWithId(queuedId, '按流程检查', false, [], [], [], [skill])
+
+    const queued = await store.open(journal.sessionId)
+    assert.deepEqual(queued.pendingUserInputs, [{
+      id: queuedId,
+      text: '按流程检查',
+      skills: [skill],
+      state: 'queued',
+    }])
+
+    await queued.markUserInputsRestored([queuedId])
+    const restored = await store.open(journal.sessionId)
+    assert.deepEqual(restored.pendingUserInputs[0]?.skills, [skill])
+    assert.equal(restored.pendingUserInputs[0]?.state, 'restored')
+
+    const replacementId = randomUUID()
+    await restored.recordUserInputWithId(
+      replacementId,
+      '按流程检查',
+      true,
+      [],
+      [queuedId],
+      [],
+      [skill],
+    )
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.pendingUserInputs, [])
+    assert.deepEqual(
+      reopened.initialViewEvents.find((event) =>
+        event.type === 'user-message' && event.inputId === replacementId),
+      {
+        type: 'user-message',
+        inputId: replacementId,
+        text: '按流程检查',
+        startsTurn: true,
+        skills: [{
+          id: skill.id,
+          path: skill.path,
+          rootPath: skill.rootPath,
+          name: skill.name,
+          description: skill.description,
+          scope: skill.scope,
+        }],
+      },
+    )
+  })
+
+  it('排队根和共识最终执行在重启后恢复起点聚合的 Skill 快照', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\skill-consensus'),
+      modelId: 'test:model',
+    })
+    const rootSkill = activatedSkillFixture()
+    const steeringContent = '---\nname: second\ndescription: 第二项\n---\nSECOND_BODY'
+    const steeringPath = 'C:\\work\\skill-project\\.agents\\skills\\second\\SKILL.md'
+    const steeringSkill: ActivatedSkill = {
+      ...activatedSkillFixture(),
+      id: skillId(steeringPath),
+      path: steeringPath,
+      rootPath: 'C:\\work\\skill-project\\.agents\\skills\\second',
+      name: 'second',
+      description: '第二项',
+      digest: skillContentDigest(steeringContent),
+      content: steeringContent,
+    }
+    const rootInputId = randomUUID()
+    await journal.recordUserInputWithId(
+      rootInputId,
+      '共识根任务',
+      true,
+      [],
+      [],
+      [],
+      [rootSkill],
+    )
+    await journal.recordConsensusTaskStart('task-skills', consensusState(1), '共识根任务')
+    const steeringInputId = randomUUID()
+    await journal.recordUserInputWithId(
+      steeringInputId,
+      '补充第二流程',
+      false,
+      [],
+      [],
+      [],
+      [steeringSkill],
+    )
+    const turnId = randomUUID()
+    await journal.recordTurnStart(
+      turnId,
+      [message('user', '执行共识结果')],
+      undefined,
+      [steeringInputId],
+      undefined,
+      undefined,
+      [rootSkill, steeringSkill],
+    )
+    await journal.recordTurnEnd(turnId, 'completed')
+    await journal.recordConsensusTaskEnd(
+      'task-skills',
+      'completed',
+      consensusState(1),
+    )
+    const queuedInputId = randomUUID()
+    await journal.recordUserInputWithId(
+      queuedInputId,
+      '下一排队根',
+      false,
+      [],
+      [],
+      [],
+      [steeringSkill],
+    )
+    const queuedTurnId = randomUUID()
+    await journal.recordTurnStart(
+      queuedTurnId,
+      [message('user', '下一排队根')],
+      undefined,
+      [queuedInputId],
+      undefined,
+      undefined,
+      [steeringSkill],
+    )
+    await journal.recordTurnEnd(queuedTurnId, 'aborted')
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.skillsForTurn(turnId), [rootSkill, steeringSkill])
+    assert.deepEqual(reopened.skillsForTurn(queuedTurnId), [steeringSkill])
+  })
   it('自定义 System 只在会话起点固化，并跨压缩恢复同一快照', async () => {
     const store = await createStore()
     const journal = await store.create({
@@ -1428,6 +1620,21 @@ function consensusState(taskCounter: number, summary?: string): ConsensusPersist
     sessionScore: { Main: summary ? 1 : 0, B: 0, C: 0 },
     memories: { B: [], C: [] },
     taskLog: summary ? [{ taskId: `task-${taskCounter}`, userText: '请求', m1Summary: summary }] : [],
+  }
+}
+
+function activatedSkillFixture(): ActivatedSkill {
+  const content = '---\nname: verify-build\ndescription: 执行构建并核对字面结果\n---\nVERIFY_BODY'
+  const path = 'C:\\work\\skill-project\\.agents\\skills\\verify-build\\SKILL.md'
+  return {
+    id: skillId(path),
+    path,
+    rootPath: 'C:\\work\\skill-project\\.agents\\skills\\verify-build',
+    name: 'verify-build',
+    description: '执行构建并核对字面结果',
+    scope: 'project',
+    digest: skillContentDigest(content),
+    content,
   }
 }
 

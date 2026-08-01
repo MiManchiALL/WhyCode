@@ -10,6 +10,10 @@ import {
 } from '../tasks/types.ts'
 import { imageAttachmentsSchema } from '../attachments/types.ts'
 import { pdfAttachmentsSchema } from '../pdf/types.ts'
+import {
+  SKILL_MAX_SELECTIONS_PER_MESSAGE,
+  skillSummarySchema,
+} from '../skills/types.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -165,6 +169,10 @@ const userMessageViewEventSchema = z.object({
   startsTurn: z.boolean(),
   attachments: imageAttachmentsSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
+  skills: z.array(skillSummarySchema)
+    .min(1)
+    .max(SKILL_MAX_SELECTIONS_PER_MESSAGE)
+    .optional(),
 })
 
 export const viewEventSchema = z.discriminatedUnion('type', [
@@ -185,6 +193,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
       startsTurn: event.startsTurn ?? false,
       ...(event.attachments?.length ? { attachments: event.attachments } : {}),
       ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
+      ...(event.skills?.length ? { skills: event.skills } : {}),
     }
   }
   if (event.type === 'peer-event') {

@@ -15,6 +15,8 @@ import type { ImageAttachment } from '../attachments/types.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ReasoningEffortSelection } from '../providers/catalog.ts'
+import { skillSummary, type ActivatedSkill } from '../skills/types.ts'
+import { parseSkillDocument, skillContentDigest } from '../skills/parser.ts'
 import {
   applyProjectInstructions,
   isProjectInstructionsMessage,
@@ -68,6 +70,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     : collectMessages(chain, undeliveredById)
   const consensusState = collectConsensusState(chain)
   const turnStarts = collectTurnStarts(chain, undeliveredById)
+  const turnStartSkills = collectTurnStartSkills(entries, turnStarts.messages.keys())
   const taskState = work.interruptedConsensusTaskId
     ? work.interruptedConsensusBaseTaskState ?? emptyTaskPlanState()
     : collectTaskState(chain)
@@ -125,6 +128,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     pdfAttachments,
     turnStartMessages: turnStarts.messages,
     turnStartTaskStates: turnStarts.taskStates,
+    turnStartSkills,
     leafUuid: last.uuid,
     interruptedTurnId,
     interruptedTurnEngagedPlanId,
@@ -221,6 +225,7 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
           text: entry.text,
           ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
           ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
+          ...(entry.skills?.length ? { skills: entry.skills } : {}),
           state: 'queued',
         })
       }
@@ -357,6 +362,84 @@ function collectTurnStarts(
   return { messages: starts, taskStates }
 }
 
+/**
+ * 回滚快照会成为新的活动根，但被保留 turn 的原始 user-input/turn-start 仍在
+ * JSONL 审计记录中；因此从完整记录解析精确快照，再只暴露当前活动 turn。
+ */
+function collectTurnStartSkills(
+  entries: readonly SessionEntry[],
+  activeTurnIds: Iterable<string>,
+): Map<string, ActivatedSkill[]> {
+  const active = new Set(activeTurnIds)
+  const entriesById = new Map(entries.map((entry) => [entry.uuid, entry]))
+  const inputs = new Map(entries.flatMap((entry) =>
+    entry.type === 'user-input' ? [[entry.uuid, entry] as const] : []))
+  const initialBatches = new Map(entries.flatMap((entry) =>
+    entry.type === 'messages' && entry.parentUuid
+      ? [[entry.parentUuid, entry] as const]
+      : []))
+  const skills = new Map<string, ActivatedSkill[]>()
+  for (const entry of entries) {
+    if (entry.type !== 'turn-start' || !active.has(entry.turnId)) continue
+    const inputIds: string[] = []
+    const rootInputId = entry.rootInputId
+      ?? consensusRootInputId(entry.parentUuid, entriesById)
+    if (rootInputId) inputIds.push(rootInputId)
+    const initialBatch = initialBatches.get(entry.uuid)
+    if (initialBatch?.turnId === entry.turnId) {
+      inputIds.push(...(initialBatch.deliveredInputIds ?? []))
+    }
+    const snapshots = new Map<string, ActivatedSkill>()
+    for (const inputId of inputIds) {
+      for (const skill of inputs.get(inputId)?.skills ?? []) {
+        snapshots.set(skill.id, structuredClone(skill))
+      }
+    }
+    skills.set(entry.turnId, [...snapshots.values()])
+  }
+  for (const turnId of active) {
+    if (!skills.has(turnId)) skills.set(turnId, [])
+  }
+  return skills
+}
+
+/** 最终 Main turn 位于共识事务内部时，从事务起点追溯原始根输入。 */
+function consensusRootInputId(
+  parentUuid: string | null,
+  entriesById: ReadonlyMap<string, SessionEntry>,
+): string | undefined {
+  let cursor = parentUuid
+  const visited = new Set<string>()
+  while (cursor && !visited.has(cursor)) {
+    visited.add(cursor)
+    const entry = entriesById.get(cursor)
+    if (!entry) return undefined
+    if (entry.type === 'consensus-task-end') return undefined
+    if (entry.type === 'consensus-task-start') {
+      const delivered = entry.deliveredInputIds?.[0]
+      return delivered ?? nearestRootUserInput(entry.parentUuid, entriesById)
+    }
+    cursor = entry.parentUuid
+  }
+  return undefined
+}
+
+function nearestRootUserInput(
+  parentUuid: string | null,
+  entriesById: ReadonlyMap<string, SessionEntry>,
+): string | undefined {
+  let cursor = parentUuid
+  const visited = new Set<string>()
+  while (cursor && !visited.has(cursor)) {
+    visited.add(cursor)
+    const entry = entriesById.get(cursor)
+    if (!entry) return undefined
+    if (entry.type === 'user-input' && entry.startsTurn) return entry.uuid
+    cursor = entry.parentUuid
+  }
+  return undefined
+}
+
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
 function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
   const events: ViewEvent[] = []
@@ -382,6 +465,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
         startsTurn: true,
         ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
         ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
+        ...(entry.skills?.length ? { skills: entry.skills.map(skillSummary) } : {}),
       })
       if (entry.replacesTurnId) {
         const parent = entry.parentUuid ? entriesById.get(entry.parentUuid) : undefined
@@ -412,6 +496,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
           startsTurn: false,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
+          ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
         })
         visibleInputIds.add(inputId)
       }
@@ -503,6 +588,7 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
   const entryIndexes = new Map(entries.map((entry, index) => [entry.uuid, index]))
   const turnIndexes = new Map(entries.flatMap((entry, index) =>
     entry.type === 'turn-start' ? [[entry.turnId, index] as const] : []))
+  const validatedSkills = new Set<string>()
   for (const entry of entries) {
     if (entry.type === 'snapshot') {
       const hasTask = entry.activeConsensusTaskId !== null
@@ -540,9 +626,59 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
         turnIndexes,
       )
     }
+    if (entry.type === 'user-input') {
+      validateSkillSnapshots(entry.skills ?? [], validatedSkills)
+    }
+    if (entry.type === 'snapshot') {
+      for (const input of entry.pendingUserInputs) {
+        validateSkillSnapshots(input.skills ?? [], validatedSkills)
+      }
+    }
     if (entry.type === 'turn-start' && entry.rootInputId) {
       validateTurnRootReference(entry, entry.rootInputId, entriesById, entryIndexes)
     }
+  }
+}
+
+function validateSkillSnapshots(
+  skills: readonly ActivatedSkill[],
+  validated: Set<string>,
+): void {
+  for (const skill of skills) {
+    if (skillContentDigest(skill.content) !== skill.digest) {
+      throw new SessionCorruptError('Skill 快照正文摘要不匹配')
+    }
+    const key = [
+      skill.id,
+      skill.scope,
+      skill.digest,
+      skill.path,
+      skill.rootPath,
+      skill.name,
+      skill.description,
+    ].join('\0')
+    if (validated.has(key)) continue
+    let parsed: ActivatedSkill
+    try {
+      parsed = parseSkillDocument({
+        path: skill.path,
+        scope: skill.scope,
+        content: skill.content,
+      })
+    } catch {
+      throw new SessionCorruptError('Skill 快照正文或元数据无效')
+    }
+    if (
+      parsed.id !== skill.id
+      || parsed.path !== skill.path
+      || parsed.rootPath !== skill.rootPath
+      || parsed.name !== skill.name
+      || parsed.description !== skill.description
+      || parsed.digest !== skill.digest
+    ) {
+      throw new SessionCorruptError('Skill 快照身份与正文不一致')
+    }
+    validated.add(key)
   }
 }
 

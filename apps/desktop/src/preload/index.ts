@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { CoreCommand, CoreEvent } from '@whycode/core'
+import type { CoreCommand, CoreEvent, SkillCatalogSnapshot } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
@@ -43,6 +43,8 @@ const api = {
     } satisfies RuntimeCommandEnvelope),
   listModels: (runtimeId?: string): Promise<ModelListItem[]> =>
     ipcRenderer.invoke(IPC.listModels, runtimeId),
+  listSkills: (runtimeId?: string): Promise<SkillCatalogSnapshot> =>
+    ipcRenderer.invoke(IPC.listSkills, runtimeId),
   connectionSettings: (): Promise<ConnectionSettingsSnapshot> =>
     ipcRenderer.invoke(IPC.connectionSettings),
   saveProviderSettings: (

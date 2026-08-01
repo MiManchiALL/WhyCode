@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import type { Block } from './conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
 import { UserPdfGallery } from './pdf-attachments.tsx'
+import { SkillBadges } from './skill-picker.tsx'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 
@@ -19,6 +20,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
     <div className="group relative mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">
       <UserImageGallery attachments={props.block.attachments} />
       <UserPdfGallery runtimeId={props.runtimeId} attachments={props.block.pdfAttachments} />
+      <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
           <MessageEditor

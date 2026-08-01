@@ -38,6 +38,8 @@ import {
   type ProjectInstructionsUpdate,
 } from '../instructions/project.ts'
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
+import type { ActivatedSkill } from '../skills/types.ts'
+import { skillSummary } from '../skills/types.ts'
 import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
@@ -124,6 +126,7 @@ export class SessionStore {
       [],
       new Map(),
       new Map(),
+      new Map(),
       null,
       null,
       [],
@@ -198,6 +201,7 @@ export class SessionStore {
       loaded.pdfAttachments,
       loaded.turnStartMessages,
       loaded.turnStartTaskStates,
+      loaded.turnStartSkills,
       loaded.interruptedTurnId,
       loaded.interruptedTurnEngagedPlanId,
       loaded.undeliveredUserInputIds,
@@ -332,6 +336,7 @@ export class SessionJournal implements SessionRecorder {
   private pdfAttachments: PdfAttachment[]
   private turnStartMessages: Map<string, ModelMessage[]>
   private turnStartTaskStates: Map<string, TaskPlanState>
+  private turnStartSkills: Map<string, ActivatedSkill[]>
   private activeTurnId: string | null
   private activeTurnEngagedPlanId: string | null
   private undeliveredUserInputIdSet: Set<string>
@@ -355,6 +360,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: PdfAttachment[],
     turnStartMessages: Map<string, ModelMessage[]>,
     turnStartTaskStates: Map<string, TaskPlanState>,
+    turnStartSkills: Map<string, ActivatedSkill[]>,
     interruptedTurnId: string | null,
     interruptedTurnEngagedPlanId: string | null,
     undeliveredUserInputIds: string[],
@@ -386,6 +392,9 @@ export class SessionJournal implements SessionRecorder {
     )
     this.turnStartTaskStates = new Map(
       [...turnStartTaskStates].map(([turnId, state]) => [turnId, cloneTaskPlanState(state)]),
+    )
+    this.turnStartSkills = new Map(
+      [...turnStartSkills].map(([turnId, skills]) => [turnId, structuredClone(skills)]),
     )
     this.activeTurnId = interruptedTurnId
     this.activeTurnEngagedPlanId = interruptedTurnEngagedPlanId
@@ -444,6 +453,11 @@ export class SessionJournal implements SessionRecorder {
     return cloneTaskPlanState(this.turnStartTaskStates.get(turnId)!)
   }
 
+  skillsForTurn(turnId: string): ActivatedSkill[] | null {
+    if (!this.turnStartMessages.has(turnId)) return null
+    return structuredClone(this.turnStartSkills.get(turnId) ?? [])
+  }
+
   get initialViewEvents(): readonly ViewEvent[] {
     return this.viewEvents
   }
@@ -489,9 +503,10 @@ export class SessionJournal implements SessionRecorder {
     startsTurn: boolean,
     attachments: readonly ImageAttachment[] = [],
     pdfAttachments: readonly PdfAttachment[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
     return this.recordUserInputWithId(
-      randomUUID(), text, startsTurn, attachments, [], pdfAttachments,
+      randomUUID(), text, startsTurn, attachments, [], pdfAttachments, skills,
     )
   }
 
@@ -502,6 +517,7 @@ export class SessionJournal implements SessionRecorder {
     attachments: readonly ImageAttachment[] = [],
     consumesInputIds: readonly string[] = [],
     pdfAttachments: readonly PdfAttachment[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
       this.assertPendingInputs(consumesInputIds, 'restored', '消费')
@@ -514,6 +530,7 @@ export class SessionJournal implements SessionRecorder {
           startsTurn,
           ...(attachments.length ? { attachments } : {}),
           ...(pdfAttachments.length ? { pdfAttachments } : {}),
+          ...(skills.length ? { skills } : {}),
           ...(consumesInputIds.length ? { consumesInputIds } : {}),
         },
         this.leafUuid,
@@ -532,6 +549,7 @@ export class SessionJournal implements SessionRecorder {
           startsTurn: true,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
+          ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
         })
       } else if (input.type === 'user-input') {
         this.pendingUserInputMap.set(input.uuid, {
@@ -539,6 +557,7 @@ export class SessionJournal implements SessionRecorder {
           text: input.text,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
+          ...(input.skills?.length ? { skills: input.skills } : {}),
           state: 'queued',
         })
       }
@@ -561,6 +580,7 @@ export class SessionJournal implements SessionRecorder {
     rollbackTaskState: TaskPlanState,
     attachments: readonly ImageAttachment[] = [],
     pdfAttachments: readonly PdfAttachment[] = [],
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
       this.assertTurnEditCurrent(
@@ -576,6 +596,7 @@ export class SessionJournal implements SessionRecorder {
         rollbackTaskState,
         attachments,
         pdfAttachments,
+        skills,
       )
       await this.appendEntries([transaction.snapshot, transaction.input])
       this.applyTurnEditTransaction(transaction, rollbackTaskState, attachments, pdfAttachments)
@@ -600,6 +621,7 @@ export class SessionJournal implements SessionRecorder {
     deliveredInputIds: readonly string[] = [],
     projectInstructions?: ProjectInstructionsUpdate,
     rootInputId?: string,
+    skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
     return this.enqueue(async () => {
       this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
@@ -610,8 +632,8 @@ export class SessionJournal implements SessionRecorder {
         throw new Error('项目指令更新无效')
       }
       const parentUuid = this.leafUuid
-      this.turnStartMessages.set(turnId, structuredClone(this.messages))
-      this.turnStartTaskStates.set(turnId, cloneTaskPlanState(this.taskState))
+      const messagesBeforeTurn = structuredClone(this.messages)
+      const taskStateBeforeTurn = cloneTaskPlanState(this.taskState)
       const started = this.entry({
         type: 'turn-start',
         turnId,
@@ -639,6 +661,9 @@ export class SessionJournal implements SessionRecorder {
           )
         : null
       await this.appendEntries(instructionEntry ? [started, batch, instructionEntry] : [started, batch])
+      this.turnStartMessages.set(turnId, messagesBeforeTurn)
+      this.turnStartTaskStates.set(turnId, taskStateBeforeTurn)
+      this.turnStartSkills.set(turnId, structuredClone([...skills]))
       this.undeliveredUserInputIdSet.delete(rootInputId ?? parentUuid)
       this.deletePendingInputs(deliveredInputIds)
       this.messages.push(...messages)
@@ -794,6 +819,7 @@ export class SessionJournal implements SessionRecorder {
         runtimeTurnStarts
           .map((start) => [start.turnId, cloneTaskPlanState(start.taskState)]),
       )
+      this.retainTurnStartSkills(new Set(runtimeTurnStarts.map((start) => start.turnId)))
       this.activeTurnId = activeTurnId ?? null
       this.activeTurnEngagedPlanId = snapshot.type === 'snapshot'
         ? snapshot.activeTurnEngagedPlanId
@@ -1019,6 +1045,7 @@ export class SessionJournal implements SessionRecorder {
         runtimeTurnStarts
           .map((start) => [start.turnId, cloneTaskPlanState(start.taskState)]),
       )
+      this.retainTurnStartSkills(new Set(runtimeTurnStarts.map((start) => start.turnId)))
       await this.refreshMetadataCache()
     })
   }
@@ -1072,6 +1099,7 @@ export class SessionJournal implements SessionRecorder {
     rollbackTaskState: TaskPlanState,
     attachments: readonly ImageAttachment[],
     pdfAttachments: readonly PdfAttachment[],
+    skills: readonly ActivatedSkill[],
   ): TurnEditTransaction {
     const messages = applyProjectInstructions(
       rollbackMessages,
@@ -1105,6 +1133,7 @@ export class SessionJournal implements SessionRecorder {
       replacesTurnId: previousTurnId,
       ...(attachments.length ? { attachments } : {}),
       ...(pdfAttachments.length ? { pdfAttachments } : {}),
+      ...(skills.length ? { skills } : {}),
     }, snapshot.uuid, inputId)
     if (snapshot.type !== 'snapshot' || input.type !== 'user-input') {
       throw new Error('编辑事务记录类型无效')
@@ -1126,6 +1155,7 @@ export class SessionJournal implements SessionRecorder {
     this.turnStartTaskStates = new Map(transaction.turnStarts.map((start) => [
       start.turnId, cloneTaskPlanState(start.taskState),
     ]))
+    this.retainTurnStartSkills(new Set(transaction.turnStarts.map((start) => start.turnId)))
     this.activeTurnId = null
     this.activeTurnEngagedPlanId = null
     this.activeConsensusTaskId = null
@@ -1261,6 +1291,13 @@ export class SessionJournal implements SessionRecorder {
     this.turnStartTaskStates = new Map(
       [...this.turnStartTaskStates].filter(([turnId]) => turnIds.has(turnId)),
     )
+    this.retainTurnStartSkills(turnIds)
+  }
+
+  private retainTurnStartSkills(turnIds: ReadonlySet<string>): void {
+    this.turnStartSkills = new Map(
+      [...this.turnStartSkills].filter(([turnId]) => turnIds.has(turnId)),
+    )
   }
 
   private applyProjectInstructionsUpdate(update: ProjectInstructionsUpdate): void {
@@ -1313,6 +1350,7 @@ function userMessageViewEvent(
     startsTurn: true,
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
+    ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
   }
 }
 
