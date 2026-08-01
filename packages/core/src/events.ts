@@ -101,7 +101,7 @@ export type CoreEvent =
   | { type: 'tool-start'; toolUseId: string; toolName: string; input: unknown }
   | { type: 'tool-progress'; toolUseId: string; output: string }
   | { type: 'tool-end'; toolUseId: string; result: unknown; isError: boolean }
-  /** ViewImage 已把图片安全复制进当前会话；元数据随所属稳定 step 可恢复。 */
+  /** 视觉工具已把图片安全复制进当前会话；元数据随所属稳定 step 可恢复。 */
   | { type: 'image-viewed'; toolUseId: string; attachments: ImageAttachment[] }
   | {
       type: 'approval-request'

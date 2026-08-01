@@ -14,8 +14,11 @@ import {
 const EXPECTED_SYSTEM_SKILLS = [
   'code-review',
   'debug',
+  'documents',
+  'presentations',
   'simplify',
   'skill-creator',
+  'spreadsheets',
   'verify',
 ]
 
@@ -41,6 +44,20 @@ describe('内置 Skill 安装与发现', () => {
       })
       assert.equal(reference.isError, false)
       assert.match(reference.data, /WhyCode Skill 检查清单/)
+
+      for (const skillName of ['documents', 'presentations', 'spreadsheets']) {
+        const skill = snapshot.entries.find((entry) => entry.name === skillName)!
+        const officeReference = await createSkillTool(snapshot).execute({
+          skillId: skill.id,
+          resourcePath: 'references/builder-api.md',
+        }, {
+          projectDir: home,
+          additionalDirs: [],
+          abortSignal: new AbortController().signal,
+        })
+        assert.equal(officeReference.isError, false)
+        assert.match(officeReference.data, /构建接口/)
+      }
 
       const repeated = await installSystemSkills(home)
       assert.equal(repeated.changed, false)

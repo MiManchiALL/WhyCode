@@ -8,6 +8,8 @@ import {
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
+  createBuildOfficeArtifactTool,
+  createInspectOfficeTool,
   createWebFetchTool,
   createWebFindTool,
   createWebSearchTool,
@@ -83,6 +85,8 @@ import { SessionRuntimeRegistry } from './session-runtime-registry.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import { ElectronPdfProcessor } from './pdf/processor.ts'
+import { ElectronOfficeArtifactRunner } from './office/builder.ts'
+import { ElectronOfficeProcessor } from './office/processor.ts'
 import { openPdfAttachment } from './pdf/open.ts'
 import { ensureDefaultWorkspace } from './workspace.ts'
 import {
@@ -303,6 +307,8 @@ const sessionResumeLock = new SessionResumeLock()
 /** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
+const officeProcessor = new ElectronOfficeProcessor(pdfProcessor)
+const officeArtifactRunner = new ElectronOfficeArtifactRunner()
 const hostOperations = new HostOperationScheduler()
 
 /** 会话创建前用户已选的权限档位（创建时应用） */
@@ -607,6 +613,8 @@ async function createMainAgentSession(
       mcpRuntime,
       skillCatalog: skills,
       mainTools: [
+        createBuildOfficeArtifactTool(officeArtifactRunner),
+        createInspectOfficeTool(officeProcessor),
         ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
         webSearchTool,
         ...createSessionWebPageTools(recorder),
@@ -617,6 +625,7 @@ async function createMainAgentSession(
           () => captureDesktopScreenshot(request, abortSignal),
         ),
       pdfProcessor,
+      officeProcessor,
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),

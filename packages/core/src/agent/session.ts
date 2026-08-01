@@ -79,6 +79,8 @@ import type { PdfProcessor } from '../pdf/processor.ts'
 import { inlineSmallPdfMessages } from '../pdf/inline-messages.ts'
 import { adaptMessagesForProvider } from '../providers/message-adapter.ts'
 import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
+import type { OfficeProcessor } from '../office/types.ts'
+import { createRenderOfficeTool } from '../tools/render-office/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import {
@@ -142,6 +144,8 @@ export interface AgentSessionOptions {
   captureScreenshot?: ScreenshotCaptureHandler
   /** 宿主注入的隔离 PDF 处理端口；未提供时物理移除 ReadPdf。 */
   pdfProcessor?: PdfProcessor
+  /** Office 结构检查与后台渲染端口；视觉渲染只对图片模型开放。 */
+  officeProcessor?: OfficeProcessor
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
@@ -1985,8 +1989,27 @@ export class AgentSession {
               this.pdfPageImage(attachmentId, pageNumber),
           })]
         : []
+    const officeVisualTools: ToolDefinition[] =
+      projectDir
+      && this.options.officeProcessor
+      && this.options.model.capabilities.supportsImageInput
+      && this.options.sessionRecorder
+      && !this.options.promptContext.discussion
+      && !this.protocolRound
+        ? [createRenderOfficeTool({
+            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+            sessionId: this.options.sessionRecorder.sessionId,
+            processor: this.options.officeProcessor,
+          })]
+        : []
     const availableDefs: ToolDefinition[] = projectDir
-      ? [...(BUILTIN_TOOLS as ToolDefinition[]), ...imageTools, ...pdfTools, ...controlTools]
+      ? [
+          ...(BUILTIN_TOOLS as ToolDefinition[]),
+          ...imageTools,
+          ...pdfTools,
+          ...officeVisualTools,
+          ...controlTools,
+        ]
       : [...imageTools, ...pdfTools, ...controlTools].filter((tool) => tool.availableWithoutProject)
     const defs = availableDefs
     const toolProjectDir =

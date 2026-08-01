@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./events": "./src/events.ts",
+    "./office": "./src/office/index.ts",
     "./skills": "./src/skills/types.ts",
     "./pdf": "./src/pdf/index.ts",
     "./pdf-limits": "./src/pdf/limits.ts",

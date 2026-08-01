@@ -1,3 +1,5 @@
+import { OFFICE_SYSTEM_SKILL_FILES } from './system-office-assets.ts'
+
 export interface EmbeddedSystemSkillFile {
   relativePath: string
   content: string
@@ -149,6 +151,7 @@ export const EMBEDDED_SYSTEM_SKILL_FILES: readonly EmbeddedSystemSkillFile[] = [
       '按“行为 / 方法 / 结果 / 证据”给出验收表，再总结已通过、未通过和未执行项。只把实际观察到的结果写成结论。',
     ),
   },
+  ...OFFICE_SYSTEM_SKILL_FILES,
 ]
 
 function document(...lines: string[]): string {

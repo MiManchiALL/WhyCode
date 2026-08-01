@@ -1,0 +1,3 @@
+export const BUILD_OFFICE_ARTIFACT_TOOL_NAME = 'BuildOfficeArtifact'
+
+export const BUILD_OFFICE_ARTIFACT_PROMPT = `${BUILD_OFFICE_ARTIFACT_TOOL_NAME} 在一次性专用子进程中执行 JavaScript 构建函数，并原子生成 DOCX、PPTX 或 XLSX。先用 WriteFile 创建 .js 构建脚本；脚本内容必须是一个函数表达式，形如 async ({ docx, PptxGenJS, ExcelJS, JSZip, fastXml, assets, report }) => artifact。不要 import、require、访问文件系统、启动进程或自行写输出；依赖和已声明资源由工具注入。DOCX 返回 docx.Document 或 OOXML Buffer，PPTX 返回 PptxGenJS 实例或 OOXML Buffer，XLSX 返回 ExcelJS.Workbook 或 OOXML Buffer。assets 通过 key 访问，包含 name、extension、bytes、base64 和 dataUri；修改已有 DOCX/PPTX 时可用 JSZip 读取模板 OOXML，fastXml 只用于有界 XML 解析/校验。工具只把验证通过的单一 OOXML 文件发布到 outputPath，并为该文件建立完整检查点。生成后必须用 InspectOffice 做结构/内容复核；视觉模型还必须用 RenderOffice 分页复核版面。`

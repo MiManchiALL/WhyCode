@@ -120,6 +120,19 @@ export {
   type ResolvedPdfAttachment,
 } from './tools/read-pdf/index.ts'
 export {
+  BUILD_OFFICE_ARTIFACT_TOOL_NAME,
+  createBuildOfficeArtifactTool,
+} from './tools/build-office-artifact/index.ts'
+export {
+  INSPECT_OFFICE_TOOL_NAME,
+  createInspectOfficeTool,
+  formatInspection as formatOfficeInspection,
+} from './tools/inspect-office/index.ts'
+export {
+  RENDER_OFFICE_TOOL_NAME,
+  createRenderOfficeTool,
+} from './tools/render-office/index.ts'
+export {
   CommandSessionManager,
   createBackgroundCommandTools,
   START_COMMAND_TOOL_NAME,
@@ -286,6 +299,37 @@ export {
   type PdfAttachmentInput,
   type PdfMessageAttachmentInput,
 } from './pdf/types.ts'
+export {
+  OFFICE_ARTIFACT_MAX_ASSET_BYTES,
+  OFFICE_ARTIFACT_MAX_ASSETS,
+  OFFICE_ARTIFACT_MAX_SOURCE_BYTES,
+  OFFICE_ARTIFACT_MAX_TOTAL_ASSET_BYTES,
+  OFFICE_BUILDER_MAX_SCRIPT_BYTES,
+  OFFICE_INSPECT_DEFAULT_UNITS,
+  OFFICE_INSPECT_MAX_TEXT_CHARS,
+  OFFICE_INSPECT_MAX_UNITS,
+  OFFICE_RENDER_MAX_PAGES,
+  OfficeProcessingError,
+  officeExtension,
+  officeFormatSchema,
+  officeInspectionSchema,
+  officeInspectionUnitSchema,
+  officeUnitKindSchema,
+  type OfficeArtifactAsset,
+  type OfficeArtifactBuildRequest,
+  type OfficeArtifactBuildResult,
+  type OfficeArtifactRunner,
+  type OfficeFormat,
+  type OfficeInspection,
+  type OfficeInspectionUnit,
+  type OfficeInspectOptions,
+  type OfficeProcessingErrorCode,
+  type OfficeProcessor,
+  type OfficeRenderedPage,
+  type OfficeRenderOptions,
+  type OfficeRenderResult,
+  type OfficeUnitKind,
+} from './office/types.ts'
 export { inlineSmallPdfMessages } from './pdf/inline-messages.ts'
 export {
   PdfProcessingError,

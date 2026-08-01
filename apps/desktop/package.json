@@ -15,10 +15,15 @@
     "@mozilla/readability": "0.6.0",
     "@napi-rs/canvas": "1.0.2",
     "@whycode/core": "workspace:*",
+    "docx": "9.7.1",
+    "exceljs": "4.4.0",
+    "fast-xml-parser": "5.10.1",
     "ipaddr.js": "2.4.0",
+    "jszip": "3.10.1",
     "linkedom": "0.18.13",
     "node-html-markdown": "2.0.0",
     "pdfjs-dist": "6.1.200",
+    "pptxgenjs": "4.0.1",
     "streamdown": "^2.5.0"
   },
   "devDependencies": {
