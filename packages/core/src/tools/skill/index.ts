@@ -78,6 +78,9 @@ async function readSkillResource(rootPath: string, resourcePath: string): Promis
 }
 
 function normalizeResourcePath(resourcePath: string): string {
+  if (/[\u0000-\u001F\u007F]/u.test(resourcePath)) {
+    throw new Error('resourcePath 不能包含控制字符')
+  }
   const normalized = resourcePath.replaceAll('\\', '/')
   if (isAbsolute(resourcePath) || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
     throw new Error('resourcePath 必须是 Skill 包内相对路径')

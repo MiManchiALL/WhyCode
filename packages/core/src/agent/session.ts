@@ -2234,6 +2234,9 @@ export class AgentSession {
       toolSet[def.name] = aiTool({
         description: def.prompt,
         inputSchema: def.inputSchema,
+        // Responses 函数工具的 strict 默认值为 true；WhyCode 的运行时 Schema
+        // 保留真实可选字段，因此必须在该协议边界显式关闭，不能让上游补造参数。
+        ...(this.options.model.protocol === 'openai-responses' ? { strict: false } : {}),
         execute: executeWithStepGate,
       })
     }

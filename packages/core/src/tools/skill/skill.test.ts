@@ -51,6 +51,13 @@ describe('Skill 工具资源边界', () => {
         resourcePath: 'C:secret.txt',
       }, context)
       assert.equal(driveRelative.isError, true)
+      const nullByte = await tool.execute({
+        skillId: ID,
+        resourcePath: '.\0',
+      }, context)
+      assert.equal(nullByte.isError, true)
+      assert.equal(nullByte.data, 'resourcePath 不能包含控制字符')
+      assert.doesNotMatch(nullByte.data, /\.whycode|skills/i)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
