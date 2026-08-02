@@ -47,16 +47,33 @@ describe('内置 Skill 安装与发现', () => {
 
       for (const skillName of ['documents', 'presentations', 'spreadsheets']) {
         const skill = snapshot.entries.find((entry) => entry.name === skillName)!
-        const officeReference = await createSkillTool(snapshot).execute({
-          skillId: skill.id,
-          resourcePath: 'references/builder-api.md',
-        }, {
-          projectDir: home,
-          additionalDirs: [],
-          abortSignal: new AbortController().signal,
-        })
-        assert.equal(officeReference.isError, false)
-        assert.match(officeReference.data, /构建接口/)
+        assert.match(skill.description, /读取、分析、创建、修改或验收/)
+        const main = await readFile(join(installed.rootPath, skillName, 'SKILL.md'), 'utf8')
+        assert.match(main, /只读问答/)
+        assert.match(main, /quality-checklist\.md/)
+        assert.match(main, /旧检查失效/)
+
+        for (const [resourcePath, expected] of [
+          ['references/builder-api.md', /构建接口/],
+          ['references/quality-checklist.md', /交付质量清单/],
+        ] as const) {
+          const officeReference = await createSkillTool(snapshot).execute({
+            skillId: skill.id,
+            resourcePath,
+          }, {
+            projectDir: home,
+            additionalDirs: [],
+            abortSignal: new AbortController().signal,
+          })
+          assert.equal(officeReference.isError, false)
+          assert.match(officeReference.data, expected)
+          if (resourcePath === 'references/quality-checklist.md') {
+            assert.match(
+              officeReference.data,
+              skillName === 'spreadsheets' ? /不能证明公式引擎已重算/ : /逐页检查/,
+            )
+          }
+        }
       }
 
       const repeated = await installSystemSkills(home)
