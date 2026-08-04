@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   OFFICE_RENDER_MAX_PAGES,
+  OFFICE_RENDER_OVERVIEW_MAX_PAGES,
   OfficeProcessingError,
   type OfficeInspection,
   type OfficeInspectOptions,
@@ -11,7 +12,7 @@ import {
   type OfficeRenderOptions,
   type OfficeRenderResult,
 } from '@whycode/core/office'
-import type { PdfProcessor } from '@whycode/core/pdf'
+import { PDF_VISUAL_MAX_PAGES, type PdfProcessor } from '@whycode/core/pdf'
 import { convertOfficeToPdf } from './converter.ts'
 import { runOfficeWorker } from './worker-client.ts'
 
@@ -45,7 +46,7 @@ export class ElectronOfficeProcessor implements OfficeProcessor {
     validateRenderOptions(options)
     const inspection = await this.inspect(
       path,
-      { startUnit: 1, unitCount: 1 },
+      { startUnit: 1, unitCount: 1, view: 'content' },
       abortSignal,
     )
     const conversionDirectory = await mkdtemp(join(tmpdir(), 'whycode-office-pdf-'))
@@ -65,20 +66,18 @@ export class ElectronOfficeProcessor implements OfficeProcessor {
           `起始页 ${options.startPage} 超出总页数 ${pdf.pageCount}`,
         )
       }
-      const result = await this.pdfProcessor.readPages(pdfPath, {
-        mode: 'visual',
-        startPage: options.startPage,
-        pageCount: Math.min(options.pageCount, pdf.pageCount - options.startPage + 1),
-        outputDirectory: options.outputDirectory,
-      }, abortSignal)
-      if (result.mode !== 'visual') {
-        throw new OfficeProcessingError('unknown', 'Office PDF 渲染返回了非视觉结果')
-      }
+      const renderedPages = await readRenderedPages(
+        this.pdfProcessor,
+        pdfPath,
+        options,
+        Math.min(options.pageCount, pdf.pageCount - options.startPage + 1),
+        abortSignal,
+      )
       return {
         format: inspection.format,
-        pageCount: result.pageCount,
+        pageCount: pdf.pageCount,
         renderer,
-        renderedPages: result.renderedPages,
+        renderedPages,
       }
     } finally {
       await rm(conversionDirectory, { recursive: true, force: true }).catch(() => {})
@@ -90,14 +89,40 @@ function validateRenderOptions(options: OfficeRenderOptions): void {
   if (!Number.isSafeInteger(options.startPage) || options.startPage < 1) {
     throw new OfficeProcessingError('invalid-range', 'Office 渲染起始页必须是正整数')
   }
+  const maxPages = options.view === 'overview'
+    ? OFFICE_RENDER_OVERVIEW_MAX_PAGES
+    : OFFICE_RENDER_MAX_PAGES
   if (
     !Number.isSafeInteger(options.pageCount)
     || options.pageCount < 1
-    || options.pageCount > OFFICE_RENDER_MAX_PAGES
+    || options.pageCount > maxPages
   ) {
     throw new OfficeProcessingError(
       'invalid-range',
-      `Office 每次最多渲染 ${OFFICE_RENDER_MAX_PAGES} 页`,
+      `Office ${options.view === 'overview' ? '总览' : '逐页'}每次最多渲染 ${maxPages} 页`,
     )
   }
+}
+
+async function readRenderedPages(
+  processor: PdfProcessor,
+  pdfPath: string,
+  options: OfficeRenderOptions,
+  pageCount: number,
+  abortSignal: AbortSignal,
+): Promise<OfficeRenderResult['renderedPages']> {
+  const pages: OfficeRenderResult['renderedPages'] = []
+  for (let offset = 0; offset < pageCount; offset += PDF_VISUAL_MAX_PAGES) {
+    const result = await processor.readPages(pdfPath, {
+      mode: 'visual',
+      startPage: options.startPage + offset,
+      pageCount: Math.min(PDF_VISUAL_MAX_PAGES, pageCount - offset),
+      outputDirectory: options.outputDirectory,
+    }, abortSignal)
+    if (result.mode !== 'visual') {
+      throw new OfficeProcessingError('unknown', 'Office PDF 渲染返回了非视觉结果')
+    }
+    pages.push(...result.renderedPages)
+  }
+  return pages
 }

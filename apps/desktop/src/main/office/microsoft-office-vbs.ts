@@ -1,3 +1,60 @@
+const MICROSOFT_OFFICE_VBS_HELPERS = String.raw`Sub CaptureFailure(stepName)
+  If failure = "" And Err.Number <> 0 Then
+    failure = stepName & " failed (0x" & Hex(Err.Number) & ")"
+  End If
+  Err.Clear
+End Sub
+
+Function ProcessIds(name)
+  Dim ids, service, processes, item
+  Set ids = CreateObject("Scripting.Dictionary")
+  On Error Resume Next
+  Set service = GetObject("winmgmts:\\.\root\cimv2")
+  Set processes = service.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name='" & name & "'")
+  For Each item In processes
+    ids(CStr(item.ProcessId)) = True
+  Next
+  Err.Clear
+  Set ProcessIds = ids
+End Function
+
+Function SaveNewProcessId(name, oldIds, targetPath)
+  Dim currentIds, key, fileSystem, stream, attempt
+  SaveNewProcessId = False
+  For attempt = 1 To 40
+    Set currentIds = AutomationProcessIds(name)
+    For Each key In currentIds.Keys
+      If Not oldIds.Exists(key) Then
+        Set fileSystem = CreateObject("Scripting.FileSystemObject")
+        Set stream = fileSystem.CreateTextFile(targetPath, True, False)
+        stream.Write key
+        stream.Close
+        SaveNewProcessId = True
+        Exit Function
+      End If
+    Next
+    WScript.Sleep 50
+  Next
+End Function
+
+Function AutomationProcessIds(name)
+  Dim ids, service, processes, item, commandLine
+  Set ids = CreateObject("Scripting.Dictionary")
+  On Error Resume Next
+  Set service = GetObject("winmgmts:\\.\root\cimv2")
+  Set processes = service.ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='" & name & "'")
+  For Each item In processes
+    commandLine = ""
+    If Not IsNull(item.CommandLine) Then commandLine = LCase(CStr(item.CommandLine))
+    If InStr(commandLine, "automation") > 0 Or InStr(commandLine, "embedding") > 0 Then
+      ids(CStr(item.ProcessId)) = True
+    End If
+  Next
+  Err.Clear
+  Set AutomationProcessIds = ids
+End Function
+`
+
 export const MICROSOFT_OFFICE_PDF_VBS = String.raw`
 Option Explicit
 Dim source, output, format, pidFile, processName
@@ -101,59 +158,72 @@ If failure <> "" Then
 End If
 WScript.Quit 0
 
-Sub CaptureFailure(stepName)
-  If failure = "" And Err.Number <> 0 Then
-    failure = stepName & " failed (0x" & Hex(Err.Number) & ")"
-  End If
-  Err.Clear
-End Sub
+` + MICROSOFT_OFFICE_VBS_HELPERS
 
-Function ProcessIds(name)
-  Dim ids, service, processes, item
-  Set ids = CreateObject("Scripting.Dictionary")
-  On Error Resume Next
-  Set service = GetObject("winmgmts:\\.\root\cimv2")
-  Set processes = service.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE Name='" & name & "'")
-  For Each item In processes
-    ids(CStr(item.ProcessId)) = True
-  Next
-  Err.Clear
-  Set ProcessIds = ids
-End Function
+export const MICROSOFT_EXCEL_RECALCULATE_VBS = String.raw`
+Option Explicit
+Dim source, output, pidFile
+Dim application, workbook, failure, beforePids, ownsApplication, calculationAttempt
 
-Function SaveNewProcessId(name, oldIds, targetPath)
-  Dim currentIds, key, fileSystem, stream, attempt
-  SaveNewProcessId = False
-  For attempt = 1 To 40
-    Set currentIds = AutomationProcessIds(name)
-    For Each key In currentIds.Keys
-      If Not oldIds.Exists(key) Then
-        Set fileSystem = CreateObject("Scripting.FileSystemObject")
-        Set stream = fileSystem.CreateTextFile(targetPath, True, False)
-        stream.Write key
-        stream.Close
-        SaveNewProcessId = True
-        Exit Function
-      End If
-    Next
-    WScript.Sleep 50
-  Next
-End Function
+source = WScript.Arguments(0)
+output = WScript.Arguments(1)
+pidFile = WScript.Arguments(2)
+failure = ""
+ownsApplication = False
+Set application = Nothing
+Set workbook = Nothing
+Set beforePids = ProcessIds("EXCEL.EXE")
+On Error Resume Next
 
-Function AutomationProcessIds(name)
-  Dim ids, service, processes, item, commandLine
-  Set ids = CreateObject("Scripting.Dictionary")
-  On Error Resume Next
-  Set service = GetObject("winmgmts:\\.\root\cimv2")
-  Set processes = service.ExecQuery("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='" & name & "'")
-  For Each item In processes
-    commandLine = ""
-    If Not IsNull(item.CommandLine) Then commandLine = LCase(CStr(item.CommandLine))
-    If InStr(commandLine, "automation") > 0 Or InStr(commandLine, "embedding") > 0 Then
-      ids(CStr(item.ProcessId)) = True
-    End If
+Set application = CreateObject("Excel.Application")
+CaptureFailure "create Excel"
+If failure = "" Then ownsApplication = SaveNewProcessId("EXCEL.EXE", beforePids, pidFile)
+If failure = "" And Not ownsApplication Then failure = "dedicated Excel process was not created"
+If failure = "" Then application.Visible = False
+CaptureFailure "hide Excel"
+If failure = "" Then application.DisplayAlerts = False
+CaptureFailure "disable Excel alerts"
+If failure = "" Then application.AskToUpdateLinks = False
+CaptureFailure "disable Excel link prompts"
+If failure = "" Then application.EnableEvents = False
+CaptureFailure "disable Excel events"
+If failure = "" Then application.AutomationSecurity = 3
+CaptureFailure "disable Excel macros"
+If failure = "" Then Set workbook = application.Workbooks.Open(source, 0, False)
+CaptureFailure "open XLSX"
+If failure = "" Then application.Calculation = -4105
+CaptureFailure "enable automatic calculation"
+If failure = "" Then application.CalculateFullRebuild
+CaptureFailure "recalculate XLSX"
+If failure = "" Then
+  For calculationAttempt = 1 To 1200
+    If application.CalculationState = 0 Then Exit For
+    WScript.Sleep 100
   Next
+  If application.CalculationState <> 0 Then failure = "calculation did not finish"
+End If
+If failure = "" Then workbook.ForceFullCalculation = False
+CaptureFailure "clear full calculation flag"
+If failure = "" Then workbook.CheckCompatibility = False
+CaptureFailure "disable compatibility prompt"
+If failure = "" Then workbook.SaveAs output, 51
+CaptureFailure "save recalculated XLSX"
+
+If Not workbook Is Nothing Then
   Err.Clear
-  Set AutomationProcessIds = ids
-End Function
-`
+  workbook.Close False
+End If
+If Not application Is Nothing And ownsApplication Then
+  Err.Clear
+  application.Quit
+End If
+Set workbook = Nothing
+Set application = Nothing
+
+If failure <> "" Then
+  WScript.StdErr.WriteLine failure
+  WScript.Quit 1
+End If
+WScript.Quit 0
+
+` + MICROSOFT_OFFICE_VBS_HELPERS

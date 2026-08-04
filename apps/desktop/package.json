@@ -24,6 +24,7 @@
     "node-html-markdown": "2.0.0",
     "pdfjs-dist": "6.1.200",
     "pptxgenjs": "4.0.1",
+    "ses": "2.2.0",
     "streamdown": "^2.5.0"
   },
   "devDependencies": {

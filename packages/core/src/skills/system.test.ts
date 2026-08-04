@@ -51,7 +51,11 @@ describe('内置 Skill 安装与发现', () => {
         const main = await readFile(join(installed.rootPath, skillName, 'SKILL.md'), 'utf8')
         assert.match(main, /只读问答/)
         assert.match(main, /quality-checklist\.md/)
+        if (skillName !== 'spreadsheets') {
+          assert.match(main, /开始任何创建或修改前，必须读取 `references\/builder-api\.md`/)
+        }
         assert.match(main, /旧检查失效/)
+        assert.match(main, /同一个.*builder/)
 
         for (const [resourcePath, expected] of [
           ['references/builder-api.md', /构建接口/],
@@ -67,14 +71,36 @@ describe('内置 Skill 安装与发现', () => {
           })
           assert.equal(officeReference.isError, false)
           assert.match(officeReference.data, expected)
+          if (resourcePath === 'references/builder-api.md') {
+            assert.match(officeReference.data, /mode: "template"/)
+            if (skillName !== 'spreadsheets') {
+              assert.match(officeReference.data, /OfficeTemplate\.(?:docx|pptx)/)
+              assert.match(officeReference.data, /直接返回 bytes/)
+            }
+          }
           if (resourcePath === 'references/quality-checklist.md') {
             assert.match(
               officeReference.data,
-              skillName === 'spreadsheets' ? /不能证明公式引擎已重算/ : /逐页检查/,
+              skillName === 'spreadsheets' ? /重算引擎证据证明最终文件经过实际重算/ : /逐页检查/,
             )
           }
         }
       }
+
+      const presentations = snapshot.entries.find((entry) => entry.name === 'presentations')!
+      const templateFollowing = await createSkillTool(snapshot).execute({
+        skillId: presentations.id,
+        resourcePath: 'references/template-following.md',
+      }, {
+        projectDir: home,
+        additionalDirs: [],
+        abortSignal: new AbortController().signal,
+      })
+      assert.equal(templateFollowing.isError, false)
+      assert.match(templateFollowing.data, /叙事角色.*构图轮廓.*视觉密度/u)
+      assert.match(templateFollowing.data, /不能因为留白多就把结束页当封面/u)
+      assert.match(templateFollowing.data, /不得反复选少数纯文字源页来绕过媒体准备/u)
+      assert.match(templateFollowing.data, /“模板继承”只证明共享部件与源页结构血缘/u)
 
       const repeated = await installSystemSkills(home)
       assert.equal(repeated.changed, false)

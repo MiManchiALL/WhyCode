@@ -49,7 +49,7 @@ export function relationshipTarget(
 
 export async function countExternalRelationships(archive: OfficeArchive): Promise<number> {
   let count = 0
-  for (const entry of sortedEntries(archive.zip, /(?:^|\/)_[Rr]els\/[^/]+\.rels$/)) {
+  for (const entry of sortedEntries(archive.zip, /(?:^|\/)_[Rr]els\/[^/]*\.rels$/)) {
     const relationships = await readRelationships(archive, entry.name)
     count += relationships.filter((relationship) => relationship.external).length
   }

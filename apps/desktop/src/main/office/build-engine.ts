@@ -1,10 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import * as docx from 'docx'
-import ExcelJS from 'exceljs'
-import * as fastXml from 'fast-xml-parser'
-import JSZip from 'jszip'
-import PptxGenJS from 'pptxgenjs'
 import {
   OFFICE_ARTIFACT_MAX_ASSET_BYTES,
   OFFICE_ARTIFACT_MAX_ASSETS,
@@ -18,14 +14,7 @@ import {
   type OfficeInspection,
 } from '@whycode/core/office'
 import { inspectOfficeFile } from './inspect.ts'
-
-interface BuildAsset {
-  name: string
-  extension: string
-  bytes: Buffer
-  base64: string
-  dataUri: string
-}
+import { runOfficeBuilder, type OfficeBuildAsset } from './builder-sandbox.ts'
 
 export async function buildOfficeFile(options: {
   format: OfficeFormat
@@ -47,14 +36,9 @@ export async function buildOfficeFile(options: {
     const text = String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
     if (text) progress.push(text.slice(0, 1_000))
   }
-  const builder = compileBuilder(source)
-  const artifact = await builder({
+  const artifact = await runOfficeBuilder({
+    source,
     format: options.format,
-    docx,
-    PptxGenJS,
-    ExcelJS,
-    fastXml,
-    JSZip,
     assets,
     report,
   })
@@ -65,7 +49,7 @@ export async function buildOfficeFile(options: {
   await writeFile(options.outputPath, bytes, { flag: 'wx', mode: 0o600, flush: true })
   const inspection = await inspectOfficeFile(
     options.outputPath,
-    { startUnit: 1, unitCount: 20 },
+    { startUnit: 1, unitCount: 20, view: 'content' },
     options.format,
   )
   return { inspection, progress }
@@ -88,8 +72,8 @@ async function readUtf8Script(path: string): Promise<string> {
 
 async function readAssets(
   entries: readonly OfficeArtifactAsset[],
-): Promise<Readonly<Record<string, BuildAsset>>> {
-  const assets: Record<string, BuildAsset> = Object.create(null)
+): Promise<Readonly<Record<string, OfficeBuildAsset>>> {
+  const assets: Record<string, OfficeBuildAsset> = Object.create(null)
   let totalBytes = 0
   for (const entry of entries) {
     if (Object.hasOwn(assets, entry.key)) throw new OfficeProcessingError('corrupted', '构建资源 key 重复')
@@ -106,41 +90,12 @@ async function readAssets(
     assets[entry.key] = Object.freeze({
       name: entry.path.split(/[\\/]/).at(-1) ?? entry.key,
       extension,
-      bytes,
+      bytes: new Uint8Array(bytes),
       base64,
       dataUri: `data:${assetMediaType(extension)};base64,${base64}`,
     })
   }
   return Object.freeze(assets)
-}
-
-function compileBuilder(source: string): (
-  context: Record<string, unknown>,
-) => unknown | Promise<unknown> {
-  let value: unknown
-  try {
-    // 构建函数必须与注入库处于同一 JS Realm；ExcelJS 等成熟库会用 instanceof
-    // 识别数组。隔离由一次性 Utility Process 提供，常见 Node 全局在闭包中置空。
-    const factory = new Function(
-      'process', 'require', 'module', 'exports', 'global', 'globalThis', 'Buffer',
-      `"use strict"; return (${source}\n)`,
-    )
-    value = factory(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      Object.freeze(Object.create(null)),
-      undefined,
-    )
-  } catch (error) {
-    throw new OfficeProcessingError('corrupted', `Office 构建脚本编译失败：${message(error)}`)
-  }
-  if (typeof value !== 'function') {
-    throw new OfficeProcessingError('corrupted', 'Office 构建脚本必须是一个函数表达式')
-  }
-  return value as (context: Record<string, unknown>) => unknown | Promise<unknown>
 }
 
 async function serializeArtifact(format: OfficeFormat, artifact: unknown): Promise<Buffer> {

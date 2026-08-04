@@ -19,7 +19,7 @@ export function runHiddenProcess(options: {
   onForcedTermination?: () => Promise<void>
 }): Promise<HiddenProcessResult> {
   if (options.abortSignal.aborted) {
-    return Promise.reject(new OfficeProcessingError('aborted', 'Office 渲染已取消'))
+    return Promise.reject(new OfficeProcessingError('aborted', 'Office 后台处理已取消'))
   }
   const child = spawn(options.command, options.args, {
     cwd: options.workingDirectory,
@@ -70,7 +70,7 @@ export function runHiddenProcess(options: {
       options.abortSignal.removeEventListener('abort', onAbort)
       void (async () => {
         await forcedCleanup
-        reject(new Error(`后台转换进程启动失败：${error.message}`, { cause: error }))
+        reject(new Error(`Office 后台进程启动失败：${error.message}`, { cause: error }))
       })()
     })
     child.once('close', (code) => {
@@ -81,11 +81,11 @@ export function runHiddenProcess(options: {
       void (async () => {
         await forcedCleanup
         if (forced === 'aborted') {
-          reject(new OfficeProcessingError('aborted', 'Office 渲染已取消'))
+          reject(new OfficeProcessingError('aborted', 'Office 后台处理已取消'))
           return
         }
         if (forced === 'timeout') {
-          reject(new OfficeProcessingError('timeout', 'Office 后台转换超时'))
+          reject(new OfficeProcessingError('timeout', 'Office 后台处理超时'))
           return
         }
         const result = {
@@ -94,7 +94,7 @@ export function runHiddenProcess(options: {
         }
         if (code !== 0) {
           const detail = result.stderr.trim() || result.stdout.trim() || `退出码 ${code ?? '未知'}`
-          reject(new Error(`后台转换进程失败：${detail}`))
+          reject(new Error(`Office 后台进程失败：${detail}`))
           return
         }
         resolve(result)

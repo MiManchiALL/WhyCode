@@ -1422,6 +1422,32 @@ describe('SessionStore', () => {
     assert.equal(sessions[0]!.modelId, 'test:other-model')
   })
 
+  it('多个活动 Journal 同时以实时 metadata 进入列表，不从写入中的 transcript 重开', async () => {
+    const store = await createStore()
+    const first = await store.create({
+      workspace: localWorkspace('C:\\work\\first-live'),
+      modelId: 'test:first',
+    })
+    const second = await store.create({
+      workspace: localWorkspace('C:\\work\\second-live'),
+      modelId: 'test:second',
+    })
+    const root = storeRoots.get(store)!
+    await writeFile(join(root, first.sessionId, 'transcript.jsonl'), '{active write')
+    await writeFile(join(root, second.sessionId, 'transcript.jsonl'), '{active write')
+
+    const summaries = await store.list(undefined, [
+      first.metadataSnapshot,
+      second.metadataSnapshot,
+    ])
+
+    assert.deepEqual(
+      new Set(summaries.map((summary) => summary.sessionId)),
+      new Set([first.sessionId, second.sessionId]),
+    )
+    assert.equal(summaries.every((summary) => summary.resumable), true)
+  })
+
   it('旧 schema 会话仍在列表中可见但不可恢复', async () => {
     const store = await createStore()
     const root = storeRoots.get(store)!
@@ -1496,7 +1522,7 @@ describe('SessionStore', () => {
     assert.equal(await store.markDeleting(journal.sessionId), true)
     assert.equal(await store.markDeleting(journal.sessionId), true)
 
-    const [summary] = await store.list(undefined, journal.metadataSnapshot)
+    const [summary] = await store.list(undefined, [journal.metadataSnapshot])
     assert.equal(summary?.sessionId, journal.sessionId)
     assert.equal(summary?.resumable, false)
     assert.equal(summary?.status, 'unavailable')
@@ -1517,7 +1543,7 @@ describe('SessionStore', () => {
     // 模拟递归删除完成后、清除 tombstone 前进程退出。
     await rm(paths.sessionDir, { recursive: true, force: true })
     await access(paths.deletionMarker)
-    const [summary] = await store.list(undefined, journal.metadataSnapshot)
+    const [summary] = await store.list(undefined, [journal.metadataSnapshot])
     assert.equal(summary?.sessionId, journal.sessionId)
     assert.equal(summary?.resumable, false)
     assert.match(summary?.unavailableReason ?? '', /重试删除/)

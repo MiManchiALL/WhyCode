@@ -61,11 +61,14 @@ export class DesktopSessionRepository {
     }
   }
 
+  /** 已打开 Journal 仍拥有写入与附件事务；列表必须直接使用它们，不能并发重开。 */
   list(
     projectDir?: string | null,
-    selectedSession?: SessionJournal | null,
   ): Promise<SessionSummary[]> {
-    return this.store.list(projectDir, selectedSession?.metadataSnapshot)
+    return this.store.list(
+      projectDir,
+      [...this.opened.values()].map((journal) => journal.metadataSnapshot),
+    )
   }
 
   async markDeleting(sessionId: string): Promise<boolean> {

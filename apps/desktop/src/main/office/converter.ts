@@ -1,17 +1,12 @@
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 import {
-  access,
   copyFile,
   mkdir,
   open,
-  readFile,
   rename,
   rm,
-  writeFile,
 } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { delimiter, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   OfficeProcessingError,
@@ -20,6 +15,8 @@ import {
   type OfficeRenderResult,
 } from '@whycode/core/office'
 import { runHiddenProcess } from './hidden-process.ts'
+import { findLibreOffice } from './libreoffice.ts'
+import { runMicrosoftOfficeVbs } from './microsoft-office-automation.ts'
 import { MICROSOFT_OFFICE_PDF_VBS } from './microsoft-office-vbs.ts'
 
 const CONVERSION_TIMEOUT_MS = 120_000
@@ -100,35 +97,17 @@ async function convertWithMicrosoftOffice(
   options: Parameters<typeof convertOfficeToPdf>[0],
 ): Promise<void> {
   const stagedSource = join(options.workingDirectory, `microsoft-source${officeExtension(options.format)}`)
-  const pidFile = join(options.workingDirectory, 'microsoft-office.pid')
-  const scriptPath = join(options.workingDirectory, 'microsoft-office-render.vbs')
   await copyFile(options.sourcePath, stagedSource, constants.COPYFILE_EXCL)
-  await writeFile(scriptPath, MICROSOFT_OFFICE_PDF_VBS, { encoding: 'ascii', mode: 0o600 })
-  const cscript = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cscript.exe')
-  let operationFailed = false
-  try {
-    await runHiddenProcess({
-      command: cscript,
-      args: ['//B', '//NoLogo', scriptPath, stagedSource, options.pdfPath, options.format, pidFile],
-      workingDirectory: options.workingDirectory,
-      abortSignal: options.abortSignal,
-      timeoutMs: CONVERSION_TIMEOUT_MS,
-      onForcedTermination: () => terminateRecordedOfficeProcess(pidFile, options.format),
-    })
-    await requirePdf(options.pdfPath)
-  } catch (error) {
-    operationFailed = true
-    throw error
-  } finally {
-    let cleanupError: unknown
-    try {
-      await terminateRecordedOfficeProcess(pidFile, options.format)
-    } catch (error) {
-      cleanupError = error
-    }
-    await rm(pidFile, { force: true }).catch(() => {})
-    if (cleanupError && !operationFailed) throw cleanupError
-  }
+  await runMicrosoftOfficeVbs({
+    script: MICROSOFT_OFFICE_PDF_VBS,
+    scriptName: 'microsoft-office-render',
+    arguments: [stagedSource, options.pdfPath, options.format],
+    format: options.format,
+    workingDirectory: options.workingDirectory,
+    abortSignal: options.abortSignal,
+    timeoutMs: CONVERSION_TIMEOUT_MS,
+  })
+  await requirePdf(options.pdfPath)
 }
 
 async function requirePdf(path: string): Promise<void> {
@@ -145,81 +124,6 @@ async function requirePdf(path: string): Promise<void> {
     }
   } finally {
     await file.close()
-  }
-}
-
-async function findLibreOffice(): Promise<string | null> {
-  for (const candidate of libreOfficeCandidates(process.env, process.platform)) {
-    try {
-      await access(candidate, constants.X_OK)
-      return candidate
-    } catch {}
-  }
-  return null
-}
-
-export function libreOfficeCandidates(
-  environment: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): string[] {
-  const executableNames = platform === 'win32'
-    ? ['soffice.exe', 'libreoffice.exe']
-    : ['libreoffice', 'soffice']
-  const fromPath = (environment.PATH ?? '').split(delimiter)
-    .filter(Boolean)
-    .flatMap((directory) => executableNames.map((name) => resolve(directory, name)))
-  const common = platform === 'win32'
-    ? [environment.ProgramFiles, environment['ProgramFiles(x86)']]
-      .filter((value): value is string => Boolean(value))
-      .map((directory) => join(directory, 'LibreOffice', 'program', 'soffice.exe'))
-    : platform === 'darwin'
-      ? ['/Applications/LibreOffice.app/Contents/MacOS/soffice']
-      : ['/usr/bin/libreoffice', '/usr/bin/soffice', '/snap/bin/libreoffice']
-  return [...new Set([...fromPath, ...common])]
-}
-
-async function terminateRecordedOfficeProcess(pidFile: string, format: OfficeFormat): Promise<void> {
-  const value = await readFile(pidFile, 'ascii').catch(() => '')
-  const pid = Number(value.trim())
-  if (!Number.isSafeInteger(pid) || pid <= 0) return
-  const expectedName = { docx: 'WINWORD.EXE', pptx: 'POWERPNT.EXE', xlsx: 'EXCEL.EXE' }[format]
-  const powershell = join(
-    process.env.SystemRoot ?? 'C:\\Windows',
-    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
-  )
-  const script = [
-    `$p=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue`,
-    'if(-not $p) { exit 0 }',
-    `$cmd=[string]$p.CommandLine`,
-    `if($p.Name -ne '${expectedName}' -or $cmd -notmatch '(?i)(/automation|-embedding)') { exit 2 }`,
-    `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`,
-    `for($i=0;$i -lt 30;$i++) { if(-not (Get-Process -Id ${pid} -ErrorAction SilentlyContinue)) { exit 0 }; Start-Sleep -Milliseconds 100 }`,
-    'exit 3',
-  ].join(';')
-  const child = spawn(powershell, [
-    '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script,
-  ], { stdio: 'ignore', windowsHide: true })
-  const outcome = await Promise.race([
-    once(child, 'close').then(([code]) => ({ kind: 'close' as const, code })),
-    once(child, 'error').then(([error]) => ({ kind: 'error' as const, error })),
-    new Promise<{ kind: 'timeout' }>((resolveDelay) =>
-      setTimeout(() => resolveDelay({ kind: 'timeout' }), 5_000)),
-  ])
-  if (outcome.kind === 'error') {
-    throw new Error(`Office 后台进程清理启动失败：${outcome.error.message}`, {
-      cause: outcome.error,
-    })
-  }
-  if (outcome.kind === 'timeout') {
-    child.kill()
-    throw new Error('Office 后台进程清理超时')
-  }
-  if (outcome.code !== 0) {
-    throw new Error(
-      outcome.code === 2
-        ? 'Office 后台进程身份校验失败，未执行终止'
-        : 'Office 后台进程在转换完成后仍未退出',
-    )
   }
 }
 

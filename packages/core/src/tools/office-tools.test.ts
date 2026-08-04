@@ -32,36 +32,76 @@ describe('Office tools', () => {
     const runner: OfficeArtifactRunner = {
       async build(request) {
         captured = request
-        return { outputPath: request.outputPath, inspection: inspection('docx') }
+        return {
+          outputPath: request.outputPath,
+          inspection: inspection('docx'),
+          template: {
+            templateSha256: 'b'.repeat(64),
+            templatePartCount: 10,
+            outputPartCount: 11,
+            addedPartCount: 1,
+            removedPartCount: 0,
+            protectedPartCount: 4,
+            modifiedProtectedParts: [],
+          },
+        }
       },
     }
     const tool = createBuildOfficeArtifactTool(runner)
     const input = tool.inputSchema.parse({
       format: 'docx',
+      mode: 'template',
       scriptPath: 'builders/report.js',
       outputPath: 'artifacts/report.docx',
-      assets: [{ key: 'logo', path: 'assets/logo.png' }],
+      assets: [
+        { key: 'logo', path: 'assets/logo.png' },
+        { key: 'template', path: 'assets/template.docx' },
+      ],
+      templateAssetKey: 'template',
     })
     const ctx = context(root)
     const result = await tool.execute(input, ctx)
 
     assert.equal(tool.kind, 'execute')
+    assert.match(tool.prompt, /OfficeTemplate\.pptx\(\{ template: assets\.template\.bytes, slides \}\)/)
+    assert.match(tool.prompt, /不要用相同参数盲目重试/)
     assert.deepEqual(tool.extractPaths?.(input), [
-      'builders/report.js', 'artifacts/report.docx', 'assets/logo.png',
+      'builders/report.js', 'artifacts/report.docx', 'assets/logo.png', 'assets/template.docx',
     ])
     assert.deepEqual(await tool.checkpointScope?.(input, ctx), {
       kind: 'exact-files', paths: [join(root, 'artifacts', 'report.docx')],
     })
     assert.deepEqual(captured, {
       format: 'docx',
+      mode: 'template',
       scriptPath: join(root, 'builders', 'report.js'),
       outputPath: join(root, 'artifacts', 'report.docx'),
-      assets: [{ key: 'logo', path: join(root, 'assets', 'logo.png') }],
+      assets: [
+        { key: 'logo', path: join(root, 'assets', 'logo.png') },
+        { key: 'template', path: join(root, 'assets', 'template.docx') },
+      ],
+      templateAssetKey: 'template',
     })
     assert.match(result.data, /通过 OOXML 结构校验/)
     assert.match(result.data, /SHA-256 a{64}/)
+    assert.match(result.data, /模板继承/)
     assert.equal(tool.inputSchema.safeParse({
-      format: 'docx', scriptPath: 'x.js', outputPath: 'x.pptx',
+      format: 'docx', mode: 'create', scriptPath: 'x.js', outputPath: 'x.pptx',
+    }).success, false)
+    assert.equal(tool.inputSchema.safeParse({
+      format: 'docx', mode: 'template', scriptPath: 'x.js', outputPath: 'x.docx',
+      templateAssetKey: 'missing',
+    }).success, false)
+    assert.equal(tool.inputSchema.safeParse({
+      format: 'docx', mode: 'template', scriptPath: 'x.js', outputPath: 'x.docx',
+    }).success, false)
+    assert.equal(tool.inputSchema.safeParse({
+      format: 'docx', mode: 'create', scriptPath: 'x.js', outputPath: 'x.docx',
+      assets: [{ key: 'template', path: 'template.docx' }], templateAssetKey: 'template',
+    }).success, false)
+    assert.equal(tool.inputSchema.safeParse({
+      format: 'docx', mode: 'template', scriptPath: 'x.js', outputPath: 'x.docx',
+      assets: [{ key: 'template', path: 'template.docx' }], baselineAssetKey: 'template',
     }).success, false)
   })
 
@@ -71,13 +111,33 @@ describe('Office tools', () => {
     const processor = processorStub()
     processor.inspect = async (path, options) => {
       capturedPath = path
-      assert.deepEqual(options, { startUnit: 3, unitCount: 2, sheetName: '数据' })
+      assert.deepEqual(options, {
+        startUnit: 3,
+        unitCount: 2,
+        view: 'content',
+        sheetName: '数据',
+      })
       return {
         ...inspection('xlsx'),
         unitKind: 'row',
         unitCount: 5,
-        units: [{ index: 3, label: '第 3 行', text: 'A3=结果' }],
+        units: [{
+          index: 3,
+          label: '第 3 行',
+          kind: 'row',
+          locator: '数据!3:3',
+          text: 'A3=结果',
+        }],
         nextUnit: 4,
+        validation: {
+          ...inspection('xlsx').validation,
+          issues: Array.from({ length: 6 }, (_, index) => ({
+            code: `warning-${index + 1}`,
+            severity: 'warning' as const,
+            location: `part.xml#${index + 1}`,
+            message: `issue-${index + 1}`,
+          })),
+        },
       }
     }
     const tool = createInspectOfficeTool(processor)
@@ -87,9 +147,11 @@ describe('Office tools', () => {
     const result = await tool.execute(input, context(root))
 
     assert.equal(capturedPath, join(root, 'artifacts', 'data.xlsx'))
-    assert.match(result.data, /--- 第 3 行 ---/)
+    assert.match(result.data, /--- 第 3 行 \[row\] ---/)
     assert.match(result.data, /startUnit=4/)
     assert.match(result.data, /不可信资料/)
+    assert.match(result.data, /其余 1 个校验问题请用 view=validation/)
+    assert.doesNotMatch(result.data, /issue-6/)
   })
 
   it('RenderOffice 后台渲染并把页面图直接导入当前会话', async () => {
@@ -113,6 +175,7 @@ describe('Office tools', () => {
     const result = await tool.execute(input, context(root))
 
     assert.equal(tool.requiresStandaloneStep, true)
+    assert.equal(input.view, 'pages')
     assert.equal(result.attachments?.length, 2)
     assert.deepEqual(result.attachments?.map((attachment) => attachment.name), [
       'slides.pptx · 渲染第 2 页.jpg',
@@ -122,6 +185,41 @@ describe('Office tools', () => {
     assert.match(result.data, /Microsoft Office 隐藏实例/)
     assert.match(result.data, /startPage=4/)
     assert.equal(tool.inputSchema.safeParse({ path: 'slides.pptx', pageCount: 5 }).success, false)
+    assert.equal(tool.inputSchema.safeParse({
+      path: 'slides.pptx', view: 'overview', pageCount: 5,
+    }).success, true)
+  })
+
+  it('RenderOffice 把多页合成单张整套构图总览', async () => {
+    const root = await tempDirectory()
+    const tool = createRenderOfficeTool({
+      attachmentDirectory: join(root, 'attachments'),
+      sessionId: SESSION_ID,
+      processor: processorStub(async (_path, options) => {
+        assert.equal(options.view, 'overview')
+        await mkdir(options.outputDirectory, { recursive: true })
+        const renderedPages = []
+        for (let page = options.startPage; page < options.startPage + options.pageCount; page++) {
+          const path = join(options.outputDirectory, `page-${page}.jpg`)
+          await writeFile(path, SMALL_JPEG)
+          renderedPages.push({ pageNumber: page, path, width: 4, height: 4 })
+        }
+        return { format: 'pptx', pageCount: 8, renderer: 'microsoft-office', renderedPages }
+      }),
+    })
+    const input = tool.inputSchema.parse({
+      path: 'slides.pptx', view: 'overview', startPage: 1, pageCount: 5,
+    })
+    const result = await tool.execute(input, context(root))
+
+    assert.equal(result.attachments?.length, 1)
+    assert.equal(result.attachments?.[0]?.name, 'slides.pptx · 总览第 1-5 页.jpg')
+    assert.ok((result.attachments?.[0]?.width ?? 0) > 1_000)
+    assert.match(result.data, /整套构图总览/)
+    assert.match(result.data, /文字适配.*pages 逐页检查/)
+    assert.equal(tool.inputSchema.safeParse({
+      path: 'slides.pptx', view: 'overview', pageCount: 51,
+    }).success, false)
   })
 })
 
@@ -145,11 +243,24 @@ function inspection(format: 'docx' | 'pptx' | 'xlsx'): OfficeInspection {
     sha256: 'a'.repeat(64),
     unitKind: format === 'pptx' ? 'slide' : format === 'xlsx' ? 'sheet' : 'block',
     unitCount: 1,
-    units: [{ index: 1, label: '单元 1', text: '内容' }],
+    units: [{
+      index: 1,
+      label: '单元 1',
+      kind: format === 'pptx' ? 'slide' : format === 'xlsx' ? 'worksheet' : 'paragraph',
+      locator: 'part.xml#1',
+      text: '内容',
+    }],
     nextUnit: null,
     metadata: ['外部关系 0'],
+    validation: {
+      checkedPartCount: 4,
+      relationshipCount: 3,
+      internalRelationshipCount: 3,
+      issues: [],
+    },
     formulaCount: 0,
     formulaErrorCount: 0,
+    formulaUncalculatedCount: 0,
   }
 }
 

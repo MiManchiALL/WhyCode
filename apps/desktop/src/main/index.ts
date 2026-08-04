@@ -1200,7 +1200,7 @@ async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
 
 async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
   const referencedModelIds = new Set(
-    (await sessions.list(undefined, runtimeRegistry.selected?.journal))
+    (await sessions.list())
       .filter((summary) => summary.sessionId !== excludedSessionId)
       .map((summary) => summary.modelId)
       .filter((modelId): modelId is string => Boolean(modelId)),
@@ -1951,7 +1951,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   }))
   ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
     const currentSessionId = runtimeRegistry.selected?.sessionId ?? null
-    return (await sessions.list(undefined, runtimeRegistry.selected?.journal)).map((item) => ({
+    return (await sessions.list()).map((item) => ({
       ...item,
       isCurrent: item.sessionId === currentSessionId,
       runtimeStatus: runtimeRegistry.findBySessionId(item.sessionId)?.status,

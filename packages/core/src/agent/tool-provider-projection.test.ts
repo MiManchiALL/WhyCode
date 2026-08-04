@@ -48,6 +48,43 @@ describe('工具 Provider 投影', () => {
       assert.equal(await session.handleUserMessage('检查参数协议'), 'completed')
     }
   })
+
+  it('供应商擅自执行未声明工具时不提交孤立结果，后续本地工具继续运行', async () => {
+    const probe = buildTool({
+      name: 'ProviderBoundaryProbe',
+      description: 'Provider 边界探针',
+      prompt: '执行本地探针',
+      inputSchema: z.object({ value: z.string() }),
+      isReadOnly: true,
+      kind: 'read',
+      availableWithoutProject: true,
+      async execute(input) {
+        return { data: `local:${input.value}`, isError: false }
+      },
+    })
+    let call = 0
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        if (call++ === 0) return providerExecutedAndLocalStep(probe.name)
+        const prompt = JSON.stringify(options.prompt)
+        assert.doesNotMatch(prompt, /ig_fixture|image_generation|PROVIDER_IMAGE_BYTES|NoSuchTool/)
+        assert.match(prompt, /call-local|local:ok/)
+        return finalStep()
+      },
+    })
+    const session = new AgentSession({
+      model: modelEntry(model, 'openai-responses'),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: null, osPlatform: 'win32' },
+      emit: () => {},
+      requestApproval: async () => ({ approved: false }),
+    })
+    session.setExtraTools([probe])
+    session.setPermissionMode('auto')
+
+    assert.equal(await session.handleUserMessage('执行边界回归'), 'completed')
+    assert.equal(model.doStreamCalls.length, 2)
+  })
 })
 
 function modelEntry(
@@ -87,6 +124,42 @@ function finalStep() {
           usage: {
             inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
             outputTokens: { total: 1, text: 1, reasoning: 0 },
+          },
+        },
+      ],
+    }),
+  }
+}
+
+function providerExecutedAndLocalStep(localToolName: string) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: 'tool-call' as const,
+          toolCallId: 'ig_fixture',
+          toolName: 'image_generation',
+          input: '{}',
+          providerExecuted: true,
+        },
+        {
+          type: 'tool-result' as const,
+          toolCallId: 'ig_fixture',
+          toolName: 'image_generation',
+          result: { result: 'PROVIDER_IMAGE_BYTES' },
+        },
+        {
+          type: 'tool-call' as const,
+          toolCallId: 'call-local',
+          toolName: localToolName,
+          input: '{"value":"ok"}',
+        },
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 0, reasoning: 1 },
           },
         },
       ],

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -74,6 +74,35 @@ describe('DesktopSessionRepository 生命周期', () => {
       repository.release(first)
       const reopened = await repository.prepareResume(journal.sessionId)
       assert.notEqual(reopened, first)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('列出会话时不重开已在内存中的后台 Journal 或清理其附件事务', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-session-repository-live-list-'))
+    const repository = new DesktopSessionRepository(join(root, 'sessions'))
+    try {
+      const foreground = await repository.create(localWorkspace('C:\\foreground'), 'model:first')
+      const background = await repository.create(localWorkspace('C:\\background'), 'model:second')
+      const activeAttachmentTransaction = join(
+        root,
+        'sessions',
+        background.sessionId,
+        'attachments',
+        '.image-import-active',
+      )
+      await mkdir(activeAttachmentTransaction, { recursive: true })
+      await writeFile(join(activeAttachmentTransaction, 'page.jpg'), 'still being prepared')
+
+      const summaries = await repository.list()
+
+      assert.deepEqual(
+        new Set(summaries.map((summary) => summary.sessionId)),
+        new Set([foreground.sessionId, background.sessionId]),
+      )
+      assert.equal(summaries.every((summary) => summary.resumable), true)
+      await access(activeAttachmentTransaction)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

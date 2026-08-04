@@ -1,22 +1,16 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, it } from 'node:test'
+import { describe, it } from 'node:test'
 import JSZip from 'jszip'
 import { buildOfficeFile } from './build-engine.ts'
+import { compareOfficeTemplate } from './compare-template.ts'
 import { publishVerifiedFile } from './publisher.ts'
 import { inspectOfficeFile } from './inspect.ts'
 import { runHiddenProcess } from './hidden-process.ts'
 import { boundedText, decodeXmlText } from './xml.ts'
-
-const tempDirectories: string[] = []
-
-afterEach(async () => {
-  await Promise.all(tempDirectories.splice(0).map((path) =>
-    rm(path, { recursive: true, force: true })))
-})
+import { buildOfficeFixture as build, officeTempDirectory as tempDirectory } from './office-test-helpers.ts'
 
 describe('Office OOXML engine', () => {
   it('生成并检查 DOCX 正文结构', async () => {
@@ -61,6 +55,41 @@ describe('Office OOXML engine', () => {
       assets: [{ key: 'template', path: template }],
     })
     assert.match(result.inspection.units[0]?.text ?? '', /Updated value/)
+    const templateComparison = await compareOfficeTemplate({
+      templatePath: template,
+      outputPath,
+      format: 'docx',
+    })
+    assert.equal(templateComparison.removedPartCount, 0)
+    assert.equal(templateComparison.modifiedProtectedParts.length, 0)
+  })
+
+  it('对象、样式、关系和校验视图返回稳定定位', async () => {
+    const root = await tempDirectory()
+    const docxPath = join(root, 'views.docx')
+    await build(root, docxPath, 'docx', `({ docx }) => new docx.Document({
+      styles: { paragraphStyles: [{ id: 'CustomHeading', name: 'Custom Heading',
+        basedOn: 'Normal', next: 'Normal', quickFormat: true }] },
+      sections: [{ children: [new docx.Paragraph({ text: 'Object view', style: 'CustomHeading' })] }],
+    })`)
+    const objects = await inspectOfficeFile(docxPath, {
+      startUnit: 1, unitCount: 50, view: 'objects',
+    })
+    assert.ok(objects.units.some((unit) => unit.kind === 'paragraph'
+      && unit.locator === 'word/document.xml#paragraph[1]'))
+    assert.ok(objects.units.some((unit) => unit.kind === 'section'))
+    const styles = await inspectOfficeFile(docxPath, {
+      startUnit: 1, unitCount: 50, view: 'styles',
+    })
+    assert.ok(styles.units.some((unit) => /CustomHeading/.test(unit.locator)))
+    const relationships = await inspectOfficeFile(docxPath, {
+      startUnit: 1, unitCount: 50, view: 'relationships',
+    })
+    assert.ok(relationships.units.every((unit) => unit.kind === 'relationship'))
+    const validation = await inspectOfficeFile(docxPath, {
+      startUnit: 1, unitCount: 50, view: 'validation',
+    })
+    assert.ok(validation.units.length >= 1)
   })
 
   it('生成 PPTX，并按演示文稿关系顺序检查幻灯片', async () => {
@@ -77,6 +106,15 @@ describe('Office OOXML engine', () => {
     assert.equal(result.inspection.format, 'pptx')
     assert.equal(result.inspection.unitCount, 2)
     assert.deepEqual(result.inspection.units.map((unit) => unit.text), ['封面', '结论'])
+    const objects = await inspectOfficeFile(output, {
+      startUnit: 1,
+      unitCount: 50,
+      view: 'objects',
+      slideNumber: 1,
+    })
+    assert.ok(objects.units.some((unit) => unit.kind === 'shape'
+      && /封面/.test(unit.text)
+      && /slide1\.xml#shape/.test(unit.locator)))
   })
 
   it('生成 XLSX，并检查工作表、公式和按行分页', async () => {
@@ -97,58 +135,29 @@ describe('Office OOXML engine', () => {
     const rows = await inspectOfficeFile(output, {
       startUnit: 2,
       unitCount: 2,
+      view: 'content',
       sheetName: '预算',
     })
     assert.equal(rows.unitKind, 'row')
     assert.equal(rows.units.length, 2)
     assert.match(rows.units[1]?.text ?? '', /FORMULA\(B2\*2\).*6/)
     assert.equal(rows.nextUnit, null)
-  })
-
-  it('拒绝路径穿越 ZIP、宏载荷和格式伪装', async () => {
-    const root = await tempDirectory()
-    const valid = join(root, 'valid.docx')
-    await build(root, valid, 'docx', `({ docx }) => new docx.Document({
-      sections: [{ children: [new docx.Paragraph('ok')] }],
-    })`)
-
-    const macro = await JSZip.loadAsync(await import('node:fs/promises').then((fs) => fs.readFile(valid)))
-    macro.file('word/vbaProject.bin', 'macro')
-    const macroPath = join(root, 'macro.docx')
-    await writeFile(macroPath, await macro.generateAsync({ type: 'nodebuffer' }))
-    await assert.rejects(() => inspectOfficeFile(macroPath, { startUnit: 1, unitCount: 1 }), /宏/)
-
-    const traversal = new JSZip()
-    traversal.file('[Content_Types].xml', '<Types/>')
-    traversal.file('word/document.xml', '<w:document/>')
-    traversal.file('../outside', 'bad')
-    const traversalPath = join(root, 'traversal.docx')
-    await writeFile(traversalPath, await traversal.generateAsync({ type: 'nodebuffer' }))
-    await assert.rejects(
-      () => inspectOfficeFile(traversalPath, { startUnit: 1, unitCount: 1 }),
-      /不安全的部件路径/,
-    )
-
-    const disguised = join(root, 'disguised.pptx')
-    await writeFile(disguised, await import('node:fs/promises').then((fs) => fs.readFile(valid)))
-    await assert.rejects(
-      () => inspectOfficeFile(disguised, { startUnit: 1, unitCount: 1 }),
-      /扩展名必须是 \.docx/,
-    )
-  })
-
-  it('拒绝不是函数表达式或没有返回对应产物的构建脚本', async () => {
-    const root = await tempDirectory()
-    const source = join(root, 'builder.js')
-    await writeFile(source, 'const value = 1', 'utf8')
-    await assert.rejects(() => buildOfficeFile({
-      format: 'docx', scriptPath: source, outputPath: join(root, 'invalid.docx'), assets: [],
-    }), /编译失败/)
-
-    await writeFile(source, 'async () => ({})', 'utf8')
-    await assert.rejects(() => buildOfficeFile({
-      format: 'xlsx', scriptPath: source, outputPath: join(root, 'invalid.xlsx'), assets: [],
-    }), /没有返回可序列化/)
+    const objects = await inspectOfficeFile(output, {
+      startUnit: 1,
+      unitCount: 50,
+      view: 'objects',
+      sheetName: '预算',
+      range: 'B2:B3',
+    })
+    assert.ok(objects.units.some((unit) => unit.locator.endsWith('#cell[B3]')))
+    const trace = await inspectOfficeFile(output, {
+      startUnit: 1,
+      unitCount: 50,
+      view: 'formula-trace',
+      sheetName: '预算',
+      range: 'B3',
+    })
+    assert.match(trace.units[0]?.text ?? '', /B2/)
   })
 
   it('发布前后校验哈希，并原子覆盖已有普通文件', async () => {
@@ -213,20 +222,3 @@ describe('Office 文本边界', () => {
     assert.equal(decodeXmlText('&#xD800;'), '\uFFFD')
   })
 })
-
-async function build(
-  root: string,
-  outputPath: string,
-  format: 'docx' | 'pptx' | 'xlsx',
-  source: string,
-) {
-  const scriptPath = join(root, `${format}-builder.js`)
-  await writeFile(scriptPath, source, 'utf8')
-  return buildOfficeFile({ format, scriptPath, outputPath, assets: [] })
-}
-
-async function tempDirectory(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), 'whycode-office-engine-'))
-  tempDirectories.push(path)
-  return path
-}

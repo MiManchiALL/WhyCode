@@ -77,7 +77,10 @@ import {
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
 import { inlineSmallPdfMessages } from '../pdf/inline-messages.ts'
-import { adaptMessagesForProvider } from '../providers/message-adapter.ts'
+import {
+  adaptMessagesForProvider,
+  normalizeResponseMessagesForProvider,
+} from '../providers/message-adapter.ts'
 import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import type { OfficeProcessor } from '../office/types.ts'
 import { createRenderOfficeTool } from '../tools/render-office/index.ts'
@@ -1684,6 +1687,7 @@ export class AgentSession {
             if (!this.protocolRound) emit({ type: 'text-delta', text: part.text })
             break
           case 'tool-call':
+            if (part.providerExecuted === true) break
             hadToolCalls = true
             if (part.toolName !== UPDATE_TASK_ITEM_TOOL_NAME) hadNonProgressToolCalls = true
             toolCallOrder.push(part.toolCallId)
@@ -1712,9 +1716,13 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const response = await result.response
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
+      const canonicalResponseMessages = normalizeResponseMessagesForProvider(
+        response.messages,
+        this.options.model.protocol,
+      )
       if (
         !hadToolCalls
-        && !hasDeliverableModelText(response.messages)
+        && !hasDeliverableModelText(canonicalResponseMessages)
       ) {
         throw new UndeliverableModelResponseError(finishReason)
       }
@@ -1763,7 +1771,7 @@ export class AgentSession {
         : []
       const committedMessages = dehydrateImageMessages([
         ...(currentTimeReminder ? [currentTimeReminder] : []),
-        ...attachImagesToToolResults(response.messages, orderedImageResults),
+        ...attachImagesToToolResults(canonicalResponseMessages, orderedImageResults),
         ...pdfReferenceMessages,
         ...internalMarkers,
         ...mcpCommitMessages,
@@ -1801,7 +1809,7 @@ export class AgentSession {
       }
       emit({ type: 'step-committed' })
       if (stepTotalTokens > 0) {
-        const responseCoveredCount = response.messages.findIndex((message) =>
+        const responseCoveredCount = canonicalResponseMessages.findIndex((message) =>
           message.role !== 'assistant')
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
@@ -1809,7 +1817,9 @@ export class AgentSession {
           // 不含宿主随后追加的 tool result、页面图和控制标记。
           coveredMessageCount:
             modelInputMessageCount
-            + (responseCoveredCount < 0 ? response.messages.length : responseCoveredCount),
+            + (responseCoveredCount < 0
+              ? canonicalResponseMessages.length
+              : responseCoveredCount),
         }
         this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
       }

@@ -16,6 +16,9 @@ export function adaptMessagesForProvider(
   messages: readonly ModelMessage[],
   protocol: ProviderProtocol,
 ): ModelMessage[] {
+  if (protocol === 'openai-responses') {
+    return normalizeResponseMessagesForProvider(messages, protocol)
+  }
   if (protocol !== 'openai-chat') return [...messages]
   const adapted: ModelMessage[] = []
   let index = 0
@@ -38,6 +41,53 @@ export function adaptMessagesForProvider(
     if (imageGroups.length > 0) adapted.push(createChatImageMessage(imageGroups))
   }
   return adapted
+}
+
+/**
+ * Responses 使用 WhyCode 自己的无状态规范历史。少数兼容网关会擅自注入未声明的
+ * OpenAI 服务端工具；AI SDK 会同时产生 providerExecuted 调用/结果和一条伪本地
+ * NoSuchTool 结果。后者回放时会变成没有配对 function_call 的 output，导致整段
+ * 会话永久报 call_id 错误。供应商执行项不属于 WhyCode 工具事实源，因此整组移除。
+ */
+export function normalizeResponseMessagesForProvider(
+  messages: readonly ModelMessage[],
+  protocol: ProviderProtocol,
+): ModelMessage[] {
+  if (protocol !== 'openai-responses') return [...messages]
+  const providerCallIds = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
+    for (const part of message.content) {
+      if (part.type === 'tool-call' && part.providerExecuted === true) {
+        providerCallIds.add(part.toolCallId)
+      }
+    }
+  }
+  if (providerCallIds.size === 0) return [...messages]
+
+  const normalized: ModelMessage[] = []
+  for (const message of messages) {
+    if (message.role === 'assistant' && Array.isArray(message.content)) {
+      const content = message.content.filter((part) =>
+        !referencesToolCall(part, providerCallIds))
+      if (content.length > 0) normalized.push({ ...message, content })
+      continue
+    }
+    if (message.role === 'tool') {
+      const content = message.content.filter((part) =>
+        !referencesToolCall(part, providerCallIds))
+      if (content.length > 0) normalized.push({ ...message, content })
+      continue
+    }
+    normalized.push(message)
+  }
+  return normalized
+}
+
+function referencesToolCall(part: object, callIds: ReadonlySet<string>): boolean {
+  if (!('toolCallId' in part)) return false
+  const toolCallId = part.toolCallId
+  return typeof toolCallId === 'string' && callIds.has(toolCallId)
 }
 
 function projectToolMessage(

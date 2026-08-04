@@ -1,5 +1,6 @@
 import {
   OfficeProcessingError,
+  officeTemplateComparisonSchema,
   officeInspectionSchema,
   type OfficeProcessingErrorCode,
 } from '@whycode/core/office'
@@ -60,6 +61,9 @@ function isOfficeWorkerResponse(
   if (!isRecord(value) || value.id !== request.id || typeof value.ok !== 'boolean') return false
   if (value.ok === false) return isWorkerError(value.error)
   if (!isRecord(value.result) || value.result.operation !== request.operation) return false
+  if (request.operation === 'compare-template') {
+    return officeTemplateComparisonSchema.safeParse(value.result.template).success
+  }
   const inspection = officeInspectionSchema.safeParse(value.result.inspection)
   if (!inspection.success) return false
   if (request.operation === 'inspect') return !('progress' in value.result)

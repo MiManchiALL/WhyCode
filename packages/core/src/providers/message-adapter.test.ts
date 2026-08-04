@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { modelMessageSchema, type ModelMessage } from 'ai'
-import { adaptMessagesForProvider } from './message-adapter.ts'
+import {
+  adaptMessagesForProvider,
+  normalizeResponseMessagesForProvider,
+} from './message-adapter.ts'
 
 describe('多模态工具结果协议适配', () => {
   it('Anthropic Messages 与 OpenAI Responses 保留原生 tool_call_id 图片结果', () => {
@@ -33,7 +36,70 @@ describe('多模态工具结果协议适配', () => {
     assert.equal(toolImageCount(canonical), 2)
     assert.equal(canonical.some((message) => message.role === 'user'), false)
   })
+
+  it('OpenAI Responses 移除供应商执行工具及其伪本地孤立结果', () => {
+    const canonical = providerExecutedHistory()
+    for (const normalized of [
+      normalizeResponseMessagesForProvider(canonical, 'openai-responses'),
+      adaptMessagesForProvider(canonical, 'openai-responses'),
+    ]) {
+      const serialized = JSON.stringify(normalized)
+      assert.doesNotMatch(serialized, /ig_fixture|image_generation|PROVIDER_IMAGE_BYTES/)
+      assert.match(serialized, /call-local|WriteFile|已写入/)
+      assert.doesNotThrow(() => normalized.forEach((message) =>
+        modelMessageSchema.parse(message)))
+    }
+
+    // 规范化只产生请求/提交副本，不反向修改调用方持有的原始响应。
+    assert.match(JSON.stringify(canonical), /PROVIDER_IMAGE_BYTES/)
+  })
 })
+
+function providerExecutedHistory(): ModelMessage[] {
+  return [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'ig_fixture',
+          toolName: 'image_generation',
+          input: {},
+          providerExecuted: true,
+        },
+        {
+          type: 'tool-result',
+          toolCallId: 'ig_fixture',
+          toolName: 'image_generation',
+          output: { type: 'json', value: { result: 'PROVIDER_IMAGE_BYTES' } },
+        },
+        {
+          type: 'tool-call',
+          toolCallId: 'call-local',
+          toolName: 'WriteFile',
+          input: { path: 'builder.js' },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'ig_fixture',
+          toolName: 'image_generation',
+          output: { type: 'error-text', value: 'AI_NoSuchToolError' },
+        },
+        {
+          type: 'tool-result',
+          toolCallId: 'call-local',
+          toolName: 'WriteFile',
+          output: { type: 'text', value: '已写入' },
+        },
+      ],
+    },
+  ]
+}
 
 function history(): ModelMessage[] {
   return [

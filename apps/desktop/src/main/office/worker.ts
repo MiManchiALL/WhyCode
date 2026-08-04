@@ -1,6 +1,7 @@
 import type { OfficeProcessingErrorCode } from '@whycode/core/office'
 import { buildOfficeFile } from './build-engine.ts'
 import { inspectOfficeFile } from './inspect.ts'
+import { compareOfficeTemplate } from './compare-template.ts'
 import type { OfficeWorkerRequest, OfficeWorkerResponse } from './protocol.ts'
 
 const parentPort = process.parentPort
@@ -15,9 +16,14 @@ parentPort.once('message', async (event) => {
           operation: 'inspect' as const,
           inspection: await inspectOfficeFile(request.path, request.options),
         }
-      : {
+      : request.operation === 'build'
+        ? {
           operation: 'build' as const,
           ...await buildOfficeFile(request),
+        }
+        : {
+          operation: 'compare-template' as const,
+          template: await compareOfficeTemplate(request),
         }
     response = { id: request.id, ok: true, result }
   } catch (error) {
