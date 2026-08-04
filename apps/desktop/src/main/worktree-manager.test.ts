@@ -20,6 +20,7 @@ import {
   materializeRuntimeWorkspace,
   prepareRuntimeWorkspace,
 } from './runtime-workspace.ts'
+import { ManagedWorkspaceManager } from './workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 
 const tempRoots: string[] = []
@@ -55,7 +56,14 @@ describe('受管 Worktree 生命周期', () => {
       modelId: null,
       emit: () => {},
     })
-    const binding = await materializeRuntimeWorkspace(runtime, manager)
+    const binding = await materializeRuntimeWorkspace(
+      runtime,
+      manager,
+      new ManagedWorkspaceManager(
+        join(dirname(fixture.repository), 'default-workspaces'),
+        join(dirname(fixture.repository), 'default-manifests'),
+      ),
+    )
 
     assert.ok(binding.mode === 'worktree')
     assert.equal(runtime.workspace, binding)

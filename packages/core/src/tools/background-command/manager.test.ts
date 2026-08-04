@@ -160,6 +160,31 @@ describe('后台命令会话', () => {
     }
   })
 
+  it('等待中的有限命令随当前 turn 取消并终止进程树', async () => {
+    const fixture = await createFixture(
+      `process.stdout.write('ready\\n'); setInterval(() => {}, 1000)`,
+    )
+    const manager = new CommandSessionManager(fixture.storage)
+    try {
+      const started = await manager.start({
+        sessionId: SESSION_A,
+        command: fixture.command,
+        cwd: fixture.cwd,
+      })
+      const controller = new AbortController()
+      await assert.rejects(
+        manager.waitForTerminal(SESSION_A, started.id, controller.signal, () => {
+          controller.abort()
+        }),
+        /操作已取消/,
+      )
+      assert.equal((await manager.list(SESSION_A))[0]?.status, 'stopped')
+    } finally {
+      await manager.shutdown()
+      await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  })
+
   it('只给普通 Main 暴露五个职责清晰的会话工具', () => {
     const manager = new CommandSessionManager('unused')
     const tools = createBackgroundCommandTools(manager, SESSION_A)
@@ -168,5 +193,63 @@ describe('后台命令会话', () => {
     assert.ok(start)
     assert.equal(start.kind, 'execute')
     assert.equal(start.checkpointScope, undefined)
+  })
+
+  it('有限命令等待终态并回传进度，只有显式 detach 的持久进程立即返回', async () => {
+    const finite = await createFixture(
+      `process.stdout.write('installing\\n'); setTimeout(() => process.stdout.write('ready\\n'), 50)`,
+    )
+    const manager = new CommandSessionManager(finite.storage)
+    try {
+      const start = createBackgroundCommandTools(manager, SESSION_A)
+        .find((tool) => tool.name === START_COMMAND_TOOL_NAME)
+      assert.ok(start)
+      let progress = ''
+      const result = await start.execute({
+        command: finite.command,
+        cwd: finite.cwd,
+      }, {
+        projectDir: finite.cwd,
+        additionalDirs: [],
+        abortSignal: new AbortController().signal,
+        onProgress: (output) => { progress += output },
+      })
+      assert.equal(result.isError, false)
+      assert.match(result.data, /状态：completed/)
+      assert.match(result.data, /ready/)
+      assert.match(progress, /installing/)
+      assert.match(progress, /ready/)
+
+      const persistentFixture = await createFixture(
+        `process.stdout.write('server ready\\n'); setInterval(() => {}, 1000)`,
+      )
+      try {
+        const detached = await start.execute({
+          command: persistentFixture.command,
+          cwd: persistentFixture.cwd,
+          detach: true,
+        }, {
+          projectDir: persistentFixture.cwd,
+          additionalDirs: [],
+          abortSignal: new AbortController().signal,
+        })
+        assert.match(detached.data, /状态：running/)
+        const running = (await manager.list(SESSION_A)).find((item) => item.status === 'running')
+        assert.ok(running)
+        const ready = await manager.readOutput(SESSION_A, running.id, 0, 32_768, 5_000)
+        assert.match(ready.output, /server ready/)
+        await manager.stop(SESSION_A, running.id)
+      } finally {
+        await rm(persistentFixture.root, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        })
+      }
+    } finally {
+      await manager.shutdown()
+      await rm(finite.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
   })
 })

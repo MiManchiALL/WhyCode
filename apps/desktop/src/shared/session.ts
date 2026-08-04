@@ -66,7 +66,7 @@ export interface RuntimeCommandEnvelope {
 
 export interface RuntimeCommandResult {
   ok: boolean
-  /** 首条消息可能把待创建选择转换成真实 Worktree，Renderer 据此原子更新路径。 */
+  /** 首条消息可能物化待创建的默认目录或 Worktree，Renderer 据此原子更新路径。 */
   workspace?: RuntimeWorkspace
 }
 

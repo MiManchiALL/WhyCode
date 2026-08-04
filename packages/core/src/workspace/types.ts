@@ -32,6 +32,13 @@ export const localWorkspaceBindingSchema = z.object({
   workingDirectory: z.string().min(1),
 })
 
+export const managedWorkspaceBindingSchema = z.object({
+  mode: z.literal('managed'),
+  id: z.string().uuid(),
+  workingDirectory: z.string().min(1),
+  createdAt: z.string().datetime(),
+})
+
 export const worktreeWorkspaceBindingSchema = z.object({
   mode: z.literal('worktree'),
   id: z.string().uuid(),
@@ -46,10 +53,12 @@ export const worktreeWorkspaceBindingSchema = z.object({
 export const workspaceBindingSchema = z.discriminatedUnion('mode', [
   noWorkspaceBindingSchema,
   localWorkspaceBindingSchema,
+  managedWorkspaceBindingSchema,
   worktreeWorkspaceBindingSchema,
 ])
 
 export type WorkspaceBinding = z.infer<typeof workspaceBindingSchema>
+export type ManagedWorkspaceBinding = Extract<WorkspaceBinding, { mode: 'managed' }>
 export type WorktreeWorkspaceBinding = Extract<WorkspaceBinding, { mode: 'worktree' }>
 
 export function localWorkspace(workingDirectory: string | null): WorkspaceBinding {
@@ -60,7 +69,9 @@ export function localWorkspace(workingDirectory: string | null): WorkspaceBindin
 
 export function workspaceWorkingDirectory(binding: WorkspaceBinding): string | null {
   if (binding.mode === 'none') return null
-  if (binding.mode === 'local') return binding.workingDirectory
+  if (binding.mode === 'local' || binding.mode === 'managed') {
+    return binding.workingDirectory
+  }
   if (binding.relativeWorkingDirectory === '.') return binding.worktreeDirectory
   return join(
     binding.worktreeDirectory,

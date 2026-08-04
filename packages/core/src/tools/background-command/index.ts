@@ -36,16 +36,17 @@ export function createBackgroundCommandTools(
   return [
     buildTool({
       name: START_COMMAND_TOOL_NAME,
-      description: '启动可跨回合运行的后台命令',
+      description: '启动长命令；默认等待终态，持久服务才显式脱离',
       prompt:
-        `启动确实需要长时间运行、等待输入或持续观察的后台命令（如开发服务器、watch、长测试）。普通短命令继续使用 ${BASH_TOOL_NAME}。` +
-        `返回任务 ID 后，用 ${GET_COMMAND_OUTPUT_TOOL_NAME} 增量读取直到终态；需要输入时用 ${WRITE_COMMAND_INPUT_TOOL_NAME}，结束时用 ${STOP_COMMAND_TOOL_NAME}。` +
-        '后台命令在切换对话后继续运行，应用退出时终止；重启只保留日志和终态，不重连进程。它的延迟文件副作用不能自动回滚。' +
+        `启动确实需要长时间运行的命令。安装、构建、测试和其它有限任务保持 detach=false（默认），工具会等待终态、流式返回输出，然后当前任务自动继续；模型不得用文字承诺稍后回来。普通短命令继续使用 ${BASH_TOOL_NAME}。` +
+        `只有开发服务器、watch 或明确需要跨回合 stdin 的持久进程才设 detach=true；此时返回任务 ID 后，用 ${GET_COMMAND_OUTPUT_TOOL_NAME} 增量读取，需要输入时用 ${WRITE_COMMAND_INPUT_TOOL_NAME}，结束时用 ${STOP_COMMAND_TOOL_NAME}。` +
+        '显式脱离的命令在切换对话后继续运行，应用退出时终止；重启只保留日志和终态，不重连进程。命令的延迟文件副作用不能自动回滚。' +
         '这是管道而非完整 TTY，不适合 vim 等全屏交互程序。',
       inputSchema: z.object({
         command: z.string().min(1).describe('要执行的命令'),
         cwd: z.string().optional().describe('工作目录（绝对路径），默认项目目录'),
         timeoutMs: z.number().int().min(1000).max(86_400_000).optional().describe('可选超时毫秒数；省略则运行到自行结束、停止或应用退出'),
+        detach: z.boolean().optional().describe('仅持久服务/watch 设 true；有限任务省略或设 false并等待终态'),
       }),
       isReadOnly: false,
       kind: 'execute',
@@ -60,10 +61,24 @@ export function createBackgroundCommandTools(
           cwd: resolve(ctx.projectDir, input.cwd ?? '.'),
           timeoutMs: input.timeoutMs,
         })
+        if (!input.detach) {
+          const completed = await manager.waitForTerminal(
+            sessionId,
+            task.id,
+            ctx.abortSignal,
+            ctx.onProgress,
+          )
+          return {
+            data:
+              `${taskSummary(completed.task)}\n\n` +
+              `命令输出（最多保留末尾 ${64 * 1024} 字符）：\n${completed.output || '（无输出）'}`,
+            isError: completed.task.status !== 'completed',
+          }
+        }
         return {
           data:
             `${taskSummary(task)}\n\n` +
-            '后台命令不会建立可回滚文件检查点。请使用 GetCommandOutput 读取输出并确认终态。',
+            '该持久进程已显式脱离当前工具调用，不会在对话结束后自动唤醒模型。请使用 GetCommandOutput 读取输出并确认状态。',
           isError: task.status === 'failed',
         }
       },

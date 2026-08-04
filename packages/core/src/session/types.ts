@@ -41,7 +41,7 @@ import {
   type ActivatedSkill,
 } from '../skills/types.ts'
 
-export const SESSION_SCHEMA_VERSION = 6
+export const SESSION_SCHEMA_VERSION = 7
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()

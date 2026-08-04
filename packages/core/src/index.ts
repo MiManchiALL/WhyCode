@@ -8,7 +8,7 @@ export type {
   StopReason,
 } from './events.ts'
 export { isStepScopedCoreEvent } from './events.ts'
-export { isWellFormedUnicode, unicodeSafePrefix } from './text.ts'
+export { isWellFormedUnicode, unicodeSafePrefix, unicodeSafeSuffix } from './text.ts'
 export {
   MODEL_REGISTRY,
   getModelEntry,
@@ -377,11 +377,13 @@ export type {
 } from './session/types.ts'
 export {
   localWorkspace,
+  managedWorkspaceBindingSchema,
   workspaceBindingSchema,
   worktreeWorkspaceBindingSchema,
   workspaceWorkingDirectory,
 } from './workspace/types.ts'
 export type {
+  ManagedWorkspaceBinding,
   WorkspaceBinding,
   WorktreeWorkspaceBinding,
 } from './workspace/types.ts'

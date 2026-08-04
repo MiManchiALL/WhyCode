@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { localWorkspace, type CoreEvent } from '@whycode/core'
-import { pendingWorktreeWorkspace } from '../shared/workspace.ts'
+import { pendingManagedWorkspace, pendingWorktreeWorkspace } from '../shared/workspace.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 
 describe('会话工作计时', () => {
@@ -23,6 +23,7 @@ describe('会话工作计时', () => {
     assert.equal(events.filter((event) => event.type === 'work-started').length, 1)
     const finished = events.find((event) => event.type === 'work-finished')
     assert.ok(finished?.type === 'work-finished' && finished.durationMs >= 0)
+    assert.equal(finished?.type === 'work-finished' && finished.outcome, 'completed')
     assert.ok(
       events.findIndex((event) => event.type === 'work-finished')
       < events.findIndex((event) => event.type === 'agent-status' && event.status === 'idle'),
@@ -45,9 +46,79 @@ describe('会话工作计时', () => {
     assert.equal(events.filter((event) => event.type === 'work-finished').length, 1)
     assert.equal(runtime.workStartedAt, null)
   })
+
+  it('用户停止与宿主关闭使用不同的工作终态', async () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    runtime.beginWork()
+    await runtime.abort('user')
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+    const stopped = events.find((event) => event.type === 'work-finished')
+    assert.equal(stopped?.type === 'work-finished' && stopped.outcome, 'stopped')
+
+    runtime.beginWork()
+    await runtime.abort('shutdown')
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+    const finished = events.filter((event) => event.type === 'work-finished').at(-1)
+    assert.equal(finished?.type === 'work-finished' && finished.outcome, 'completed')
+  })
+})
+
+describe('会话授权入口', () => {
+  const request = {
+    requestId: '11111111-1111-4111-8111-111111111111',
+    toolName: 'RunCommand',
+    input: { command: 'pnpm test' },
+    reason: '需要确认',
+  }
+
+  it('全自动档不产生授权事件，并自动通过任何残留中的请求', async () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    const pending = runtime.requestApproval(request)
+    assert.equal(runtime.approval?.requestId, request.requestId)
+    runtime.setPermissionMode('auto')
+
+    assert.deepEqual(await pending, { approved: true })
+    assert.equal(runtime.approval, null)
+    assert.deepEqual(await runtime.requestApproval({ ...request, requestId: 'next' }), {
+      approved: true,
+    })
+    assert.equal(events.filter((event) => event.type === 'approval-request').length, 1)
+  })
 })
 
 describe('运行时 Worktree 状态转换', () => {
+  it('默认草稿在首条消息前只展示计划路径，绑定后才成为可执行目录', () => {
+    const runtimeId = '11111111-1111-4111-8111-111111111111'
+    const directory = `C:\\WhyCode Workspace\\${runtimeId}`
+    const runtime = new DesktopSessionRuntime({
+      runtimeId,
+      workspace: pendingManagedWorkspace(runtimeId, directory),
+      modelId: null,
+      emit: () => {},
+    })
+
+    assert.equal(runtime.projectDir, null)
+    runtime.bindPendingManaged({
+      mode: 'managed',
+      id: runtimeId,
+      workingDirectory: directory,
+      createdAt: '2026-08-05T00:00:00.000Z',
+    })
+    assert.equal(runtime.projectDir, directory)
+  })
+
   it('首条消息前没有执行目录，绑定精确创建结果后才暴露 Worktree', () => {
     const runtimeId = '11111111-1111-4111-8111-111111111111'
     const baseCommit = '1'.repeat(40)

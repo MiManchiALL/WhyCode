@@ -73,7 +73,11 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     text: z.string().min(1),
     taskPlan: activeTaskPlanSchema.nullable(),
   }),
-  z.object({ type: z.literal('work-finished'), durationMs: z.number().nonnegative() }),
+  z.object({
+    type: z.literal('work-finished'),
+    durationMs: z.number().nonnegative(),
+    outcome: z.enum(['completed', 'stopped']),
+  }),
   z.object({ type: z.literal('text-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-end'), durationMs: z.number().nonnegative() }),

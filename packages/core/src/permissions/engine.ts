@@ -10,18 +10,14 @@ import {
 /**
  * 返回工具首次隐私审批对本次调用的拦截决定；null 表示继续走常规权限链。
  *
- * 全自动是用户对当前会话的显式授权，因此可跳过一次性的读屏等隐私提示。
- * 敏感路径和越界等逐次安全检查仍由 checkToolPermission 强制执行，不受此处影响。
+ * 全自动是用户对当前会话的显式授权，不产生任何首次授权请求。
  */
 export function checkInitialToolApproval(
   def: ToolDefinition,
   ctx: PermissionContext,
 ): PermissionDecision | null {
-  if (!def.initialApprovalReason) return null
-  if (
-    ctx.sessionAllowedTools.includes(def.name)
-    || (ctx.mode === 'auto' && !def.requiresExplicitInitialApproval)
-  ) return null
+  if (!def.initialApprovalReason || ctx.mode === 'auto') return null
+  if (ctx.sessionAllowedTools.includes(def.name)) return null
   return {
     behavior: 'ask',
     reason: def.initialApprovalReason,
@@ -30,9 +26,9 @@ export function checkInitialToolApproval(
 }
 
 /**
- * 权限判定引擎（M2-b，M3 增讨论档）。判定链顺序不可交换（文档一 §3.2 / Claude Code 不变式）：
- * 可疑路径拒绝 → 敏感路径强制审批 → 越界审批（讨论档拒绝） → 讨论档规则 → 只读档拦写 → 会话 allow 规则 → 模式快速通道 → 默认策略。
- * deny 与敏感路径检查永远在任何 allow / 模式放行之前。
+ * 权限判定引擎（M2-b，M3 增讨论档）。判定链顺序不可交换（文档一 §3.2）：
+ * 可疑路径拒绝 → Main 全自动放行 → 敏感路径审批 → 越界审批（讨论档拒绝） → 讨论档规则 → 只读档拦写 → 会话 allow 规则 → 默认策略。
+ * 可疑 Windows 路径永远拒绝；讨论 Agent 的 scratch 边界也不受 Main 全自动档放宽。
  */
 export function checkToolPermission(
   def: ToolDefinition,
@@ -51,6 +47,10 @@ export function checkToolPermission(
       return { behavior: 'deny', reason: `路径包含可疑模式（${pattern}）：${p}` }
     }
   }
+
+  // 全自动的契约是零授权弹窗；保留不可审批的可疑路径拒绝，但其余操作直接放行。
+  // 讨论 Agent 仍使用独立的 scratch 边界，不能借 Main 的档位获得项目写权限。
+  if (ctx.mode === 'auto' && !ctx.discussion) return { behavior: 'allow' }
 
   // 2. 敏感路径 + 写操作：强制审批（bypass 免疫，不提供「记住允许」建议）
   if (def.kind === 'edit' || def.kind === 'execute') {
@@ -96,13 +96,16 @@ export function checkToolPermission(
           }
         : { behavior: 'allow' }
     }
-    // execute：全部路径都在 scratch 内 → 自动放行；涉及外部路径或未显式指定 scratch cwd → 审批（不提供记住建议）
+    // execute：全部路径都在 scratch 内 → 自动放行；其它档位请求审批，全自动档直接拒绝，
+    // 从而同时满足“零审批弹窗”和讨论 Agent 不得越过 scratch 的边界。
     if (rawPaths.length > 0 && !outsideScratch) return { behavior: 'allow' }
+    const reason = outsideScratch
+      ? `讨论阶段命令涉及临时工作区之外的路径：${outsideScratch}`
+      : '讨论阶段命令未限定在临时工作区内（请显式传 cwd 为你的 scratch 目录）'
+    if (ctx.mode === 'auto') return { behavior: 'deny', reason }
     return {
       behavior: 'ask',
-      reason: outsideScratch
-        ? `讨论阶段命令涉及临时工作区之外的路径：${outsideScratch}`
-        : '讨论阶段命令未限定在临时工作区内（请显式传 cwd 为你的 scratch 目录）',
+      reason,
     }
   }
 

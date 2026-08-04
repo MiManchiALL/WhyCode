@@ -119,8 +119,11 @@ describe('用户可见事件契约', () => {
   it('只持久化工作终值，不持久化运行中的墙钟起点', () => {
     assert.equal(toViewEvent({ type: 'work-started', startedAt: 100 }), null)
     assert.deepEqual(
-      toViewEvent({ type: 'work-finished', durationMs: 61_000 }),
-      { type: 'core-event', event: { type: 'work-finished', durationMs: 61_000 } },
+      toViewEvent({ type: 'work-finished', durationMs: 61_000, outcome: 'stopped' }),
+      {
+        type: 'core-event',
+        event: { type: 'work-finished', durationMs: 61_000, outcome: 'stopped' },
+      },
     )
   })
 

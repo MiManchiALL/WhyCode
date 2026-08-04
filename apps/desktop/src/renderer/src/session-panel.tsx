@@ -129,6 +129,11 @@ function SessionRow({
               Worktree
             </span>
           )}
+          {session.workspace?.mode === 'managed' && (
+            <span className="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-600">
+              默认
+            </span>
+          )}
           {restoring && (
             <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-700">
               恢复中
@@ -168,7 +173,9 @@ function SessionRow({
           <p>
             {session.workspace?.mode === 'worktree'
               ? '将永久删除对话及其关联数据，并丢弃受管 Worktree 中尚未提交的文件变化；未创建分支的 detached 提交也会失去 Worktree 引用，已创建分支及其提交仍保留。'
-              : '将永久删除对话、任务状态、检查点、后台命令记录和临时数据；本地工作文件夹不受影响。'}
+              : session.workspace?.mode === 'managed'
+                ? '将永久删除对话、任务状态、检查点、后台命令记录，以及这个对话专属默认工作目录中的全部文件。'
+                : '将永久删除对话、任务状态、检查点、后台命令记录和临时数据；本地工作文件夹不受影响。'}
           </p>
           <div className="mt-2 flex gap-2">
             <button

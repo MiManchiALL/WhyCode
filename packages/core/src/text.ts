@@ -9,6 +9,17 @@ export function unicodeSafePrefix(value: string, maxCodeUnits: number): string {
   return value.slice(0, end)
 }
 
+export function unicodeSafeSuffix(value: string, maxCodeUnits: number): string {
+  let start = Math.max(0, value.length - Math.max(0, maxCodeUnits))
+  if (
+    start > 0
+    && start < value.length
+    && /[\uD800-\uDBFF]/u.test(value[start - 1]!)
+    && /[\uDC00-\uDFFF]/u.test(value[start]!)
+  ) start++
+  return value.slice(start)
+}
+
 /** Provider JSON 边界要求合法 Unicode scalar sequence，拒绝任何孤立代理项。 */
 export function isWellFormedUnicode(value: string): boolean {
   for (let index = 0; index < value.length; index++) {

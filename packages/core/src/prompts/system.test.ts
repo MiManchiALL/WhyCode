@@ -24,7 +24,8 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /命令副作用不提供回滚/)
     assert.match(prompt, /多处相关精确替换用 BatchEdit/)
     assert.match(prompt, /DeleteFile\/MoveFile/)
-    assert.match(prompt, /开发服务器、watch、长测试.*StartCommand/)
+    assert.match(prompt, /长安装、构建和测试使用 StartCommand 的默认等待模式/)
+    assert.match(prompt, /开发服务器、watch.*detach=true/)
     assert.doesNotMatch(prompt, /只讨论与用户项目和编程相关/)
   })
 

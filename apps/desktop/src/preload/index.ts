@@ -80,8 +80,6 @@ const api = {
     ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
   pickProjectDir: (): Promise<WorkspaceCandidate | null> =>
     ipcRenderer.invoke(IPC.pickProjectDir),
-  inspectCurrentWorkspace: (runtimeId?: string): Promise<WorkspaceCandidate> =>
-    ipcRenderer.invoke(IPC.inspectCurrentWorkspace, runtimeId),
   worktreeStatus: (
     runtimeId: string,
   ): Promise<WorkspaceActionResult<WorktreeStatus>> =>
@@ -100,7 +98,7 @@ const api = {
   listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
   resumeSession: (sessionId: string): Promise<ResumeSessionResult> =>
     ipcRenderer.invoke(IPC.resumeSession, sessionId),
-  newSession: (request: NewSessionRequest): Promise<NewSessionResult> =>
+  newSession: (request?: NewSessionRequest): Promise<NewSessionResult> =>
     ipcRenderer.invoke(IPC.newSession, request),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),

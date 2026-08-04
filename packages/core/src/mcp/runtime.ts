@@ -366,7 +366,6 @@ export class McpStepBinding {
             this.runtime.projectServerNames().join('、')
           }）；使用前需要显式信任当前配置`
         : undefined,
-      requiresExplicitInitialApproval: projectTrustRequired,
       execute: async (input, ctx) => {
         if (runtime.hasProjectServers()) runtime.trustProjectConfiguration()
         const snapshot = await runtime.connectionManager().prepareAll(

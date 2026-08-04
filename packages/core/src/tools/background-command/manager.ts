@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
 import { resolve } from 'node:path'
+import { unicodeSafeSuffix } from '../../text.ts'
 import { terminateProcessTree } from '../run-command/process-termination.ts'
 import {
   type CommandOutputChunk,
@@ -14,6 +15,7 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const MAX_RUNNING_COMMANDS = 16
 const MAX_RETAINED_TERMINAL_TASKS = 16
 const DEFAULT_READ_BYTES = 32 * 1024
+const MAX_WAIT_RESULT_CHARS = 64 * 1024
 const PROCESS_CLOSE_GRACE_MS = 2_000
 
 interface LiveCommandTask extends PersistedCommandTask {
@@ -182,6 +184,49 @@ export class CommandSessionManager {
     }
   }
 
+  /**
+   * 有限命令属于当前工具调用：持续等待、流式回传日志，并在进程终态后才把控制权
+   * 交还模型。用户停止 turn 时同步终止进程树，避免留下“稍后继续”的孤儿承诺。
+   */
+  async waitForTerminal(
+    sessionId: string,
+    taskId: string,
+    abortSignal: AbortSignal,
+    onOutput?: (output: string) => void,
+  ): Promise<CommandOutputChunk> {
+    const task = await this.getOwnedTask(sessionId, taskId)
+    let offset = 0
+    let retainedOutput = ''
+    while (true) {
+      if (abortSignal.aborted && task.status === 'running') {
+        await this.stopTask(task, 'user')
+        throw new Error('操作已取消')
+      }
+      if (task.status === 'running' && offset >= task.outputBytes) {
+        await this.waitForChange(task, 30_000, abortSignal)
+        continue
+      }
+      await task.writeTail
+      const chunk = await this.storage.readOutput(task, offset, DEFAULT_READ_BYTES)
+      offset = chunk.nextOffset
+      if (chunk.output) {
+        onOutput?.(chunk.output)
+        retainedOutput = unicodeSafeSuffix(
+          `${retainedOutput}${chunk.output}`,
+          MAX_WAIT_RESULT_CHARS,
+        )
+      }
+      if (task.status !== 'running' && offset >= task.outputBytes) {
+        return {
+          task: this.snapshot(task),
+          output: retainedOutput,
+          offset: 0,
+          nextOffset: offset,
+        }
+      }
+    }
+  }
+
   async writeInput(
     sessionId: string,
     taskId: string,
@@ -345,15 +390,22 @@ export class CommandSessionManager {
     this.notify(task)
   }
 
-  private waitForChange(task: LiveCommandTask, waitMs: number): Promise<void> {
+  private waitForChange(
+    task: LiveCommandTask,
+    waitMs: number,
+    abortSignal?: AbortSignal,
+  ): Promise<void> {
     return new Promise((done) => {
       const complete = () => {
         clearTimeout(timeout)
         task.waiters.delete(complete)
+        abortSignal?.removeEventListener('abort', complete)
         done()
       }
       const timeout = setTimeout(complete, waitMs)
       task.waiters.add(complete)
+      abortSignal?.addEventListener('abort', complete, { once: true })
+      if (abortSignal?.aborted) complete()
     })
   }
 

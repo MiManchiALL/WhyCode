@@ -42,7 +42,17 @@ export interface PendingWorktreeWorkspace {
   acknowledgeUncommittedChangesExcluded: boolean
 }
 
-export type RuntimeWorkspace = WorkspaceBinding | PendingWorktreeWorkspace
+/** 新会话尚未发送首条消息时的受管默认目录计划；路径只展示，不代表目录已创建。 */
+export interface PendingManagedWorkspace {
+  mode: 'pending-managed'
+  id: string
+  workingDirectory: string
+}
+
+export type RuntimeWorkspace =
+  | WorkspaceBinding
+  | PendingManagedWorkspace
+  | PendingWorktreeWorkspace
 
 export interface WorktreeStatusEntry {
   code: string
@@ -87,10 +97,20 @@ export function pendingWorktreeRequest(
   }
 }
 
+export function pendingManagedWorkspace(
+  id: string,
+  workingDirectory: string,
+): PendingManagedWorkspace {
+  return { mode: 'pending-managed', id, workingDirectory }
+}
+
 export function workspaceDisplayDirectory(binding: RuntimeWorkspace): string | null {
   if (binding.mode === 'pending-worktree') return binding.selectedDirectory
+  if (binding.mode === 'pending-managed') return binding.workingDirectory
   if (binding.mode === 'none') return null
-  if (binding.mode === 'local') return binding.workingDirectory
+  if (binding.mode === 'local' || binding.mode === 'managed') {
+    return binding.workingDirectory
+  }
   if (binding.relativeWorkingDirectory === '.') return binding.worktreeDirectory
   const separator = binding.worktreeDirectory.includes('\\') ? '\\' : '/'
   return `${binding.worktreeDirectory}${separator}${

@@ -18,13 +18,13 @@ import {
   getModelEntry,
   installSystemSkills,
   loadMcpConfiguration,
-  localWorkspace,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
   type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
   type ImageAttachment,
+  type ManagedWorkspaceBinding,
   type ModelEntry,
   type PdfAttachment,
   type ProviderConfig,
@@ -88,7 +88,7 @@ import { ElectronPdfProcessor } from './pdf/processor.ts'
 import { ElectronOfficeArtifactRunner } from './office/builder.ts'
 import { ElectronOfficeProcessor } from './office/processor.ts'
 import { openPdfAttachment } from './pdf/open.ts'
-import { ensureDefaultWorkspace } from './workspace.ts'
+import { ensureDefaultWorkspace, ManagedWorkspaceManager } from './workspace.ts'
 import {
   prepareUserMessageAttachments as prepareAttachments,
   type PreparedUserMessageAttachments,
@@ -113,6 +113,7 @@ import type {
 } from '../shared/workspace.ts'
 import {
   materializeRuntimeWorkspace,
+  prepareDefaultRuntimeWorkspace,
   prepareRuntimeWorkspace,
 } from './runtime-workspace.ts'
 import type {
@@ -298,6 +299,8 @@ let runtimeRegistry!: SessionRuntimeRegistry
 let commandSessions: CommandSessionManager
 /** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
 let worktrees: WorktreeManager
+/** 每个默认会话独占一个受管子目录；外置 manifest 负责删除重试与所有权校验。 */
+let managedWorkspaces: ManagedWorkspaceManager
 /** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
 let skills: SkillCatalogService
 /** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
@@ -335,8 +338,15 @@ function worktreeBinding(
   return workspace?.mode === 'worktree' ? workspace : null
 }
 
+function managedWorkspaceBinding(
+  workspace: RuntimeWorkspace | undefined,
+): ManagedWorkspaceBinding | null {
+  return workspace?.mode === 'managed' ? workspace : null
+}
+
 function sourceWorkspaceDirectory(workspace: RuntimeWorkspace): string {
   if (workspace.mode === 'pending-worktree') return workspace.selectedDirectory
+  if (workspace.mode === 'pending-managed') return requireDefaultWorkspace()
   if (workspace.mode === 'worktree') {
     return workspace.relativeWorkingDirectory === '.'
       ? workspace.repositoryDirectory
@@ -346,10 +356,6 @@ function sourceWorkspaceDirectory(workspace: RuntimeWorkspace): string {
         )
   }
   return workspaceWorkingDirectory(workspace) ?? requireDefaultWorkspace()
-}
-
-async function inspectCurrentWorkspace(runtimeId?: string): Promise<WorkspaceCandidate> {
-  return worktrees.inspect(sourceWorkspaceDirectory(runtimeForId(runtimeId).workspace))
 }
 
 async function currentWorktreeStatus(
@@ -429,7 +435,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     detachedCurrent = wasSelected
     await worktrees.remove(binding, true)
     if (wasSelected) {
-      replacementRuntime = createDraftRuntime(localWorkspace(requireDefaultWorkspace()))
+      replacementRuntime = createDefaultDraftRuntime()
       runtimeRegistry.select(replacementRuntime)
     }
     return {
@@ -441,7 +447,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     }
   } catch (error) {
     if (detachedCurrent && !replacementRuntime) {
-      replacementRuntime = createDraftRuntime(localWorkspace(requireDefaultWorkspace()))
+      replacementRuntime = createDefaultDraftRuntime()
       runtimeRegistry.select(replacementRuntime)
     }
     return {
@@ -469,6 +475,13 @@ function createDraftRuntime(
   runtime.consensusEnabled = preferredConsensusEnabled
   runtimeRegistry.add(runtime)
   return runtime
+}
+
+function createDefaultDraftRuntime(runtimeId = randomUUID()): DesktopSessionRuntime {
+  return createDraftRuntime(
+    prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces),
+    runtimeId,
+  )
 }
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
@@ -505,7 +518,11 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     if (!runtime.sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const workspace = await materializeRuntimeWorkspace(runtime, worktrees)
+        const workspace = await materializeRuntimeWorkspace(
+          runtime,
+          worktrees,
+          managedWorkspaces,
+        )
         const recorder = runtime.journal ?? await createRuntimeJournal(
           runtime,
           workspace,
@@ -560,9 +577,12 @@ async function createRuntimeJournal(
     reasoningEffort,
     customSystemPrompt,
   )
-  if (workspace.mode !== 'worktree') return recorder
   try {
-    await worktrees.attachSession(workspace, recorder.sessionId)
+    if (workspace.mode === 'worktree') {
+      await worktrees.attachSession(workspace, recorder.sessionId)
+    } else if (workspace.mode === 'managed') {
+      await managedWorkspaces.attachSession(workspace, recorder.sessionId)
+    }
     return recorder
   } catch (error) {
     sessions.release(recorder)
@@ -759,8 +779,7 @@ async function handleCommand(
         })
         return { ok: false }
       }
-      runtime.session?.setPermissionMode(command.mode)
-      runtime.permissionMode = command.mode
+      runtime.setPermissionMode(command.mode)
       preferredPermissionMode = command.mode
       return { ok: true }
     }
@@ -1557,7 +1576,7 @@ async function selectRuntimeWithSnapshot(
   return snapshot
 }
 
-async function startNewSession(request: NewSessionRequest): Promise<NewSessionResult> {
+async function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
   if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
     return {
       ok: false,
@@ -1568,7 +1587,9 @@ async function startNewSession(request: NewSessionRequest): Promise<NewSessionRe
   }
   try {
     const runtimeId = randomUUID()
-    const workspace = await prepareRuntimeWorkspace(request?.workspace, worktrees)
+    const workspace = request?.workspace
+      ? await prepareRuntimeWorkspace(request.workspace, worktrees)
+      : prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces)
     const runtime = createDraftRuntime(workspace, runtimeId)
     return {
       ok: true,
@@ -1662,6 +1683,8 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
         journal.sessionId,
         runtime.runtimeId,
       )
+    } else if (metadata.workspace.mode === 'managed') {
+      await managedWorkspaces.assertUsable(metadata.workspace, journal.sessionId)
     }
     if (resolved.ok) {
       runtime.session = await createMainAgentSession(
@@ -1751,6 +1774,9 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
     const targetWorktree = worktreeBinding(
       targetRuntime?.workspace ?? summary?.workspace,
     )
+    const targetManagedWorkspace = managedWorkspaceBinding(
+      targetRuntime?.workspace ?? summary?.workspace,
+    )
     const deleted = await deleteSessionArtifacts({
       sessionId,
       sessions,
@@ -1760,7 +1786,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         if (!sessionExists) return
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
         if (deletedCurrent) {
-          const replacement = createDraftRuntime(localWorkspace(requireDefaultWorkspace()))
+          const replacement = createDefaultDraftRuntime()
           runtimeRegistry.select(replacement)
           replacementRuntime = replacement
           detachedCurrent = true
@@ -1768,6 +1794,11 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       },
       onBeforeFactSourceDelete: async () => {
         if (targetWorktree) await worktrees.remove(targetWorktree, true)
+        if (targetManagedWorkspace) {
+          await managedWorkspaces.remove(targetManagedWorkspace)
+        } else {
+          await managedWorkspaces.removeSession(sessionId)
+        }
         await pruneRetiredModelLabels(sessionId)
       },
     })
@@ -1852,37 +1883,57 @@ if (primaryInstance) void app.whenReady().then(async () => {
   )
   skills = new SkillCatalogService({ homeDir: app.getPath('home') })
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
+  managedWorkspaces = new ManagedWorkspaceManager(
+    requireDefaultWorkspace(),
+    join(dirname(getConfigPath()), 'managed-workspaces'),
+  )
   await worktrees.pruneEmptyRepositoryDirectories()
     .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
-  void sessions.list().then((summaries) => worktrees.cleanupAbandonedDrafts(
-    new Set(summaries.flatMap((summary) =>
-      summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
-    )),
-  )).then((result) => {
-    if (result.removed.length) {
-      console.info(`已清理 ${result.removed.length} 个无会话的干净 Worktree 草稿`)
+  try {
+    const summaries = await sessions.list()
+    const worktreeCleanup = await worktrees.cleanupAbandonedDrafts(
+      new Set(summaries.flatMap((summary) =>
+        summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
+      )),
+    )
+    const managedCleanup = await managedWorkspaces.cleanupAbandoned(
+      new Set(summaries.flatMap((summary) =>
+        summary.workspace?.mode === 'managed' ? [summary.workspace.id] : [],
+      )),
+    )
+    if (worktreeCleanup.removed.length) {
+      console.info(`已清理 ${worktreeCleanup.removed.length} 个无会话的干净 Worktree 草稿`)
     }
-    if (result.retained.length) {
-      console.warn(`已保留 ${result.retained.length} 个含成果或状态不可确认的 Worktree 草稿`)
+    if (worktreeCleanup.retained.length) {
+      console.warn(`已保留 ${worktreeCleanup.retained.length} 个含成果或状态不可确认的 Worktree 草稿`)
     }
-    for (const warning of result.warnings) {
+    for (const warning of worktreeCleanup.warnings) {
       console.warn(`Worktree 草稿清理跳过：${warning}`)
     }
-  }).catch((error) => console.warn('Worktree 草稿清理失败：', error))
+    if (managedCleanup.removed.length) {
+      console.info(`已清理 ${managedCleanup.removed.length} 个无会话的默认工作区`)
+    }
+    for (const warning of managedCleanup.warnings) {
+      console.warn(`默认工作区清理跳过：${warning}`)
+    }
+  } catch (error) {
+    console.warn('受管工作区启动清理失败：', error)
+  }
   runtimeRegistry = new SessionRuntimeRegistry({
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
     onRemoved: async (runtime) => {
       if (runtime.journal) sessions.release(runtime.journal)
       const workspace = runtime.workspaceBinding
-      if (workspace?.mode !== 'worktree') return
-      if (runtime.journal) {
+      if (workspace?.mode === 'worktree' && runtime.journal) {
         worktrees.release(workspace, runtime.runtimeId)
-      } else {
+      } else if (workspace?.mode === 'worktree') {
         await worktrees.cleanupDraft(workspace, runtime.runtimeId)
+      } else if (workspace?.mode === 'managed' && !runtime.journal) {
+        await managedWorkspaces.remove(workspace)
       }
     },
   })
-  const initialRuntime = createDraftRuntime(localWorkspace(defaultWorkspaceDir))
+  const initialRuntime = createDefaultDraftRuntime()
   runtimeRegistry.select(initialRuntime)
   await pruneRetiredModelLabels()
     .catch((error) => console.warn('退役模型显示名清理失败：', error))
@@ -1962,12 +2013,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
       ),
     }))
   })
-  ipcMain.handle(IPC.newSession, (_e, request: NewSessionRequest) =>
+  ipcMain.handle(IPC.newSession, (_e, request?: NewSessionRequest) =>
     startNewSession(request))
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
-  ipcMain.handle(IPC.inspectCurrentWorkspace, (_e, runtimeId?: string) =>
-    inspectCurrentWorkspace(runtimeId))
   ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>
     currentWorktreeStatus(runtimeId))
   ipcMain.handle(IPC.createWorktreeBranch, (_e, runtimeId: string, branchName: string) =>
@@ -1994,7 +2043,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     const selectionAtOpen = selectedRuntime()
     const result = await dialog.showOpenDialog({
       title: '选择工作文件夹',
-      defaultPath: requireRuntimeProjectDir(selectionAtOpen),
+      defaultPath: sourceWorkspaceDirectory(selectionAtOpen.workspace),
       properties: ['openDirectory'],
     })
     const selected = result.filePaths[0]

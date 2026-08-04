@@ -32,8 +32,6 @@ export interface ToolDefinition<
   endsTurnOnSuccess: boolean
   /** 隐私敏感读操作首次使用也需审批；会话记住或处于全自动档后按普通权限链判定。 */
   initialApprovalReason?: string
-  /** 即使处于全自动档也必须完成首次审批；用于项目配置启动外部进程等信任边界。 */
-  requiresExplicitInitialApproval: boolean
   /** 终止型工具成功后的语义；waiting-user 会保留计划并等待下一条用户消息。 */
   turnEndReasonOnSuccess: 'completed' | 'waiting-user'
   /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
@@ -81,7 +79,6 @@ const CONSERVATIVE_DEFAULTS = {
   availableWithoutProject: false,
   requiresStandaloneStep: false,
   endsTurnOnSuccess: false,
-  requiresExplicitInitialApproval: false,
   turnEndReasonOnSuccess: 'completed' as const,
 }
 

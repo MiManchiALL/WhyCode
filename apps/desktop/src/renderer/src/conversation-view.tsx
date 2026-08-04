@@ -1,7 +1,7 @@
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
 import type { ConversationSection } from './conversation-sections.ts'
-import { formatProcessingTime, ProcessingTime } from './processing-time.ts'
+import { formatFinishedWorkTime, ProcessingTime } from './processing-time.ts'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -22,7 +22,11 @@ type WorkSectionData = Extract<
 
 type WorkTiming =
   | { kind: 'active'; startedAt: number }
-  | { kind: 'completed'; durationMs: number }
+  | {
+      kind: 'completed'
+      durationMs: number
+      outcome: 'completed' | 'stopped'
+    }
 
 export function ConversationView(props: ConversationViewProps) {
   return props.sections.map((section) =>
@@ -49,7 +53,11 @@ function WorkSection({
         activityId={activityId}
         timing={section.kind === 'active-work'
           ? { kind: 'active', startedAt: section.startedAt }
-          : { kind: 'completed', durationMs: section.duration.durationMs }}
+          : {
+              kind: 'completed',
+              durationMs: section.duration.durationMs,
+              outcome: section.duration.outcome,
+            }}
         expandable={section.activityBlocks.length > 0}
         expanded={expanded}
         onToggle={() => props.onToggle(section.id)}
@@ -109,7 +117,7 @@ function WorkSummary({
 }) {
   const label = timing.kind === 'active'
     ? <ProcessingTime startedAt={timing.startedAt} />
-    : formatProcessingTime(timing.durationMs)
+    : formatFinishedWorkTime(timing.durationMs, timing.outcome)
   return (
     <div className="mb-2 px-3 text-xs text-neutral-400">
       {expandable ? (

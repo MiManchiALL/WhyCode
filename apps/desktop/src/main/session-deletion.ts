@@ -17,7 +17,8 @@ interface SessionDeletionOptions {
 
 /**
  * 先持久标成 delete-only，再把会话事实源放在最后删除；中途失败仍可见且只能重试。
- * 用户项目文件不属于会话存储，绝不在此生命周期内处理。
+ * Local 用户目录始终不处理；Worktree、默认会话目录等 app-owned 资源由收尾回调
+ * 在事实源删除前按各自所有权记录清理。
  */
 export async function deleteSessionArtifacts(
   options: SessionDeletionOptions,

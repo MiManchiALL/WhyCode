@@ -8,12 +8,14 @@ import {
   type CoreEvent,
   type ReasoningEffortSelection,
   type SessionJournal,
+  type ManagedWorkspaceBinding,
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
   workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import type {
+  PendingManagedWorkspace,
   PendingWorktreeWorkspace,
   RuntimeWorkspace,
 } from '../shared/workspace.ts'
@@ -53,6 +55,7 @@ export class DesktopSessionRuntime {
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
   workStartedAt: number | null = null
+  private workOutcome: 'completed' | 'stopped' = 'completed'
   attachmentPreparationInProgress = false
   lastSelectedAt = Date.now()
   private readonly emitToHost: DesktopSessionRuntimeOptions['emit']
@@ -89,8 +92,15 @@ export class DesktopSessionRuntime {
 
   get workspaceBinding(): WorkspaceBinding | null {
     return this.currentWorkspace.mode === 'pending-worktree'
+      || this.currentWorkspace.mode === 'pending-managed'
       ? null
       : this.currentWorkspace
+  }
+
+  get pendingManaged(): PendingManagedWorkspace | null {
+    return this.currentWorkspace.mode === 'pending-managed'
+      ? this.currentWorkspace
+      : null
   }
 
   get pendingWorktree(): PendingWorktreeWorkspace | null {
@@ -113,6 +123,19 @@ export class DesktopSessionRuntime {
       || binding.baseCommit !== pending.expectedBaseCommit
     ) {
       throw new Error('创建结果与待创建 Worktree 选择不一致')
+    }
+    this.currentWorkspace = binding
+  }
+
+  bindPendingManaged(binding: ManagedWorkspaceBinding): void {
+    const pending = this.pendingManaged
+    if (!pending) throw new Error('当前运行时没有待创建的默认工作区')
+    if (
+      binding.id !== this.runtimeId
+      || binding.id !== pending.id
+      || binding.workingDirectory !== pending.workingDirectory
+    ) {
+      throw new Error('创建结果与待创建默认工作区不一致')
     }
     this.currentWorkspace = binding
   }
@@ -161,6 +184,7 @@ export class DesktopSessionRuntime {
 
   beginWork(): void {
     if (this.disposed || this.workStartedAt !== null) return
+    this.workOutcome = 'completed'
     this.workStartedAt = Date.now()
     this.publish({ type: 'work-started', startedAt: this.workStartedAt }, false)
   }
@@ -169,7 +193,9 @@ export class DesktopSessionRuntime {
     if (this.disposed || this.workStartedAt === null) return
     const durationMs = Math.max(0, Date.now() - this.workStartedAt)
     this.workStartedAt = null
-    this.publish({ type: 'work-finished', durationMs }, true)
+    const outcome = this.workOutcome
+    this.workOutcome = 'completed'
+    this.publish({ type: 'work-finished', durationMs, outcome }, true)
   }
 
   private publish(event: CoreEvent, persistView: boolean): void {
@@ -205,6 +231,7 @@ export class DesktopSessionRuntime {
 
   requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
     if (this.disposed) return Promise.resolve({ approved: false })
+    if (this.permissionMode === 'auto') return Promise.resolve({ approved: true })
     return new Promise((resolve) => {
       this.pendingApprovals.set(request.requestId, {
         request: structuredClone(request),
@@ -232,7 +259,18 @@ export class DesktopSessionRuntime {
     this.pendingApprovals.clear()
   }
 
-  async abort(): Promise<void> {
+  setPermissionMode(mode: PermissionMode): void {
+    this.session?.setPermissionMode(mode)
+    this.permissionMode = mode
+    if (mode !== 'auto') return
+    for (const pending of this.pendingApprovals.values()) {
+      pending.resolve({ approved: true })
+    }
+    this.pendingApprovals.clear()
+  }
+
+  async abort(source: 'user' | 'shutdown' = 'user'): Promise<void> {
+    if (source === 'user' && this.workStartedAt !== null) this.workOutcome = 'stopped'
     this.attachmentAbort?.abort('user-cancel')
     this.rejectApprovals()
     if (this.coordinator) await this.coordinator.abort()

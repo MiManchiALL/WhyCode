@@ -103,13 +103,14 @@ describe('会话界面时间线重建', () => {
 
   it('完成后的工作时长作为可见事实随历史恢复', () => {
     const state = createConversationState([
-      core({ type: 'work-finished', durationMs: 61_000 }),
+      core({ type: 'work-finished', durationMs: 61_000, outcome: 'completed' }),
     ])
 
     assert.deepEqual(state.blocks, [{
       kind: 'work-duration',
       id: 'b0',
       durationMs: 61_000,
+      outcome: 'completed',
     }])
   })
 
@@ -263,7 +264,7 @@ describe('会话界面时间线重建', () => {
     let state = createConversationState([
       { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-old' }),
-      core({ type: 'work-finished', durationMs: 1_500 }),
+      core({ type: 'work-finished', durationMs: 1_500, outcome: 'stopped' }),
     ])
 
     state = applyCoreEvent(state, {
@@ -291,7 +292,11 @@ describe('会话界面时间线重建', () => {
     )
 
     assert.equal(editableUserBlockId(state.blocks), null)
-    state = applyCoreEvent(state, { type: 'work-finished', durationMs: 1000 })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 1000,
+      outcome: 'completed',
+    })
     assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
     state = applyCoreEvent(state, { type: 'text-delta', text: '已有输出' })
     assert.equal(editableUserBlockId(state.blocks), null)
@@ -301,7 +306,7 @@ describe('会话界面时间线重建', () => {
     const state = createConversationState([
       { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-old' }),
-      core({ type: 'work-finished', durationMs: 800 }),
+      core({ type: 'work-finished', durationMs: 800, outcome: 'stopped' }),
       { type: 'user-message', inputId: 'edited-input', text: '编辑后的问题', startsTurn: true },
       core({
         type: 'user-message-edited',

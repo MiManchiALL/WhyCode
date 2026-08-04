@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  pendingManagedWorkspace,
   pendingWorktreeRequest,
   pendingWorktreeWorkspace,
   workspaceDisplayDirectory,
@@ -13,6 +14,16 @@ describe('工作区展示目录', () => {
       mode: 'local',
       workingDirectory: 'C:\\work\\local',
     }), 'C:\\work\\local')
+    assert.equal(workspaceDisplayDirectory({
+      mode: 'managed',
+      id: '11111111-1111-4111-8111-111111111111',
+      workingDirectory: 'C:\\managed\\default',
+      createdAt: '2026-08-05T01:02:03.000Z',
+    }), 'C:\\managed\\default')
+    assert.equal(workspaceDisplayDirectory(pendingManagedWorkspace(
+      '22222222-2222-4222-8222-222222222222',
+      'C:\\managed\\planned',
+    )), 'C:\\managed\\planned')
     assert.equal(workspaceDisplayDirectory({
       mode: 'worktree',
       id: '11111111-1111-4111-8111-111111111111',

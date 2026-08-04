@@ -129,7 +129,6 @@ describe('MCP 延迟工具检索', () => {
     try {
       const step = await runtime.beginStep([], signal)
       const search = step.toolDefinitions()[0]!
-      assert.equal(search.requiresExplicitInitialApproval, true)
       assert.match(search.initialApprovalReason ?? '', /显式信任/)
       await search.execute({ query: 'echo text', max_results: 5 }, context)
       const committed = step.messagesOnCommit()
@@ -143,7 +142,6 @@ describe('MCP 延迟工具检索', () => {
       try {
         const resumedStep = await resumed.beginStep(committed, signal)
         const resumedSearch = resumedStep.toolDefinitions()[0]!
-        assert.equal(resumedSearch.requiresExplicitInitialApproval, false)
         assert.equal(resumedSearch.initialApprovalReason, undefined)
         assert.equal(
           resumedStep.toolDefinitions().some((tool) =>
@@ -161,7 +159,7 @@ describe('MCP 延迟工具检索', () => {
       try {
         const changedStep = await changedRuntime.beginStep(committed, signal)
         const changedSearch = changedStep.toolDefinitions()[0]!
-        assert.equal(changedSearch.requiresExplicitInitialApproval, true)
+        assert.match(changedSearch.initialApprovalReason ?? '', /显式信任/)
         assert.equal(
           changedStep.toolDefinitions().some((tool) =>
             tool.name.includes('__echo_text__')),

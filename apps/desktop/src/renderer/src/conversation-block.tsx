@@ -3,7 +3,7 @@ import { Streamdown } from 'streamdown'
 import type { Block } from './conversation-state.ts'
 import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
 import { UserImageGallery } from './image-attachments.tsx'
-import { formatProcessingTime } from './processing-time.ts'
+import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 
 export function BlockView({
@@ -107,7 +107,7 @@ export function BlockView({
   if (block.kind === 'work-duration') {
     return (
       <div className="mb-2 px-3 text-xs text-neutral-400">
-        {formatProcessingTime(block.durationMs)}
+        {formatFinishedWorkTime(block.durationMs, block.outcome)}
       </div>
     )
   }

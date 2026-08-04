@@ -118,8 +118,12 @@ export type CoreEvent =
   | { type: 'turn-end'; turnId: string; usage: UsageInfo; stopReason: StopReason }
   /** Main runtime 接受根输入后的权威起点；仅用于当前运行中的计时显示。 */
   | { type: 'work-started'; startedAt: number }
-  /** 整次连续工作结束后的固定时长；进入可见时间线以供重启恢复。 */
-  | { type: 'work-finished'; durationMs: number }
+  /** 整次连续工作结束后的固定时长与终止来源；进入可见时间线以供重启恢复。 */
+  | {
+      type: 'work-finished'
+      durationMs: number
+      outcome: 'completed' | 'stopped'
+    }
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }

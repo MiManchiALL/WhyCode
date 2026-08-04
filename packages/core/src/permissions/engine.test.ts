@@ -52,7 +52,6 @@ const projectProcessTool = buildTool({
   isReadOnly: false,
   kind: 'execute',
   initialApprovalReason: '项目配置会启动外部进程',
-  requiresExplicitInitialApproval: true,
   async execute() {
     return { data: 'ok', isError: false }
   },
@@ -73,10 +72,10 @@ describe('工具首次隐私审批', () => {
 
     context.mode = 'auto'
     assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
+    assert.equal(checkToolPermission(editTool, { path: '.env' }, context).behavior, 'allow')
     assert.equal(
-      checkToolPermission(editTool, { path: '.env' }, context).behavior,
-      'ask',
-      '跳过一次性隐私提示不能绕过敏感路径强制审批',
+      checkToolPermission(editTool, { path: 'D:\\outside\\result.txt' }, context).behavior,
+      'allow',
     )
   })
 
@@ -87,17 +86,10 @@ describe('工具首次隐私审批', () => {
     assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
   })
 
-  it('显式信任边界在全自动档也不能跳过，记住允许后才放行', () => {
+  it('全自动档也跳过项目进程等显式信任提示', () => {
     const context = createPermissionContext('C:\\workspace')
     context.mode = 'auto'
 
-    assert.deepEqual(checkInitialToolApproval(projectProcessTool, context), {
-      behavior: 'ask',
-      reason: '项目配置会启动外部进程',
-      suggestion: { kind: 'allow-tool', toolName: 'ProjectProcessProbe' },
-    })
-
-    context.sessionAllowedTools.push(projectProcessTool.name)
     assert.equal(checkInitialToolApproval(projectProcessTool, context), null)
   })
 })
@@ -124,5 +116,11 @@ describe('控制面工具权限', () => {
       checkToolPermission(editTool, { path: 'src\\index.ts' }, context).behavior,
       'deny',
     )
+
+    context.mode = 'auto'
+    assert.deepEqual(checkToolPermission(projectProcessTool, {}, context), {
+      behavior: 'deny',
+      reason: '讨论阶段命令未限定在临时工作区内（请显式传 cwd 为你的 scratch 目录）',
+    })
   })
 })

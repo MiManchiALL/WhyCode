@@ -8,12 +8,19 @@ import {
 } from './types.ts'
 
 describe('WorkspaceBinding', () => {
-  it('从唯一绑定事实推导 Local、无目录与 Worktree 执行目录', () => {
+  it('从唯一绑定事实推导 Local、受管默认目录、无目录与 Worktree 执行目录', () => {
     assert.equal(workspaceWorkingDirectory(localWorkspace(null)), null)
     assert.equal(
       workspaceWorkingDirectory(localWorkspace('C:\\work\\local')),
       'C:\\work\\local',
     )
+    const managed = workspaceBindingSchema.parse({
+      mode: 'managed',
+      id: '11111111-1111-4111-8111-111111111111',
+      workingDirectory: 'C:\\work\\managed',
+      createdAt: '2026-08-05T01:02:03.000Z',
+    })
+    assert.equal(workspaceWorkingDirectory(managed), 'C:\\work\\managed')
 
     const worktree = workspaceBindingSchema.parse({
       mode: 'worktree',

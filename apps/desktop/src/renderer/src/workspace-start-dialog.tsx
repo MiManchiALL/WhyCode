@@ -44,7 +44,7 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold">选择新会话的工作方式</h2>
+            <h2 className="text-base font-semibold">这个文件夹是 Git 项目</h2>
             <p
               className="mt-1 max-w-xl truncate text-xs text-neutral-500"
               title={props.candidate.selectedDirectory}
@@ -71,13 +71,18 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
           >
             <div className="flex items-center gap-2">
               <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium">
-                本地
+                本地分支
               </span>
-              <strong className="text-sm">直接使用当前目录</strong>
+              <strong className="text-sm">在当前分支继续</strong>
             </div>
             <p className="mt-2 text-xs leading-5 text-neutral-500">
-              与其它会话共享同一批文件和长驻进程；同目录写操作仍由宿主串行。
+              直接使用现有文件夹，能看到其中尚未提交的修改；同目录写操作仍由宿主串行。
             </p>
+            {defaultBase && (
+              <p className="mt-3 rounded bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-600">
+                当前检出：{defaultBase.ref ?? 'detached HEAD'} · {defaultBase.commit.slice(0, 10)}
+              </p>
+            )}
           </button>
 
           <section
@@ -88,7 +93,7 @@ export function WorkspaceStartDialog(props: WorkspaceStartDialogProps) {
               <span className="rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
                 Worktree
               </span>
-              <strong className="text-sm">创建隔离工作区</strong>
+              <strong className="text-sm">新建隔离工作区</strong>
             </div>
             <p className="mt-2 text-xs leading-5 text-neutral-500">
               选择一个本地分支的精确提交，创建受管的 detached Worktree；文件、命令、项目指令、MCP

@@ -1,12 +1,21 @@
 import { localWorkspace, type WorkspaceBinding } from '@whycode/core'
 import {
+  pendingManagedWorkspace,
   pendingWorktreeRequest,
   pendingWorktreeWorkspace,
   type RuntimeWorkspace,
   type WorktreeStartRequest,
 } from '../shared/workspace.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
+import { ManagedWorkspaceManager } from './workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
+
+export function prepareDefaultRuntimeWorkspace(
+  runtimeId: string,
+  manager: ManagedWorkspaceManager,
+): RuntimeWorkspace {
+  return pendingManagedWorkspace(runtimeId, manager.plannedDirectory(runtimeId))
+}
 
 /** 校验新会话选择；Worktree 只保留瞬时意图，不在此阶段创建磁盘目录。 */
 export async function prepareRuntimeWorkspace(
@@ -31,9 +40,21 @@ export async function prepareRuntimeWorkspace(
 export async function materializeRuntimeWorkspace(
   runtime: DesktopSessionRuntime,
   worktrees: WorktreeManager,
+  managedWorkspaces: ManagedWorkspaceManager,
 ): Promise<WorkspaceBinding> {
   const existing = runtime.workspaceBinding
   if (existing) return existing
+
+  if (runtime.pendingManaged) {
+    const binding = await managedWorkspaces.create(runtime.runtimeId)
+    try {
+      runtime.bindPendingManaged(binding)
+      return binding
+    } catch (error) {
+      await managedWorkspaces.remove(binding).catch(() => undefined)
+      throw error
+    }
+  }
 
   const pending = runtime.pendingWorktree
   if (!pending) throw new Error('当前运行时没有可用的工作区')

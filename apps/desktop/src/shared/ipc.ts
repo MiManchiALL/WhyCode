@@ -24,7 +24,6 @@ export const IPC = {
   openMcpConfig: 'whycode:open-mcp-config',
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
-  inspectCurrentWorkspace: 'whycode:inspect-current-workspace',
   worktreeStatus: 'whycode:worktree-status',
   createWorktreeBranch: 'whycode:create-worktree-branch',
   openWorkspaceFolder: 'whycode:open-workspace-folder',

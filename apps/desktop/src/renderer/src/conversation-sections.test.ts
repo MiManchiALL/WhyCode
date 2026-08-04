@@ -241,5 +241,5 @@ function error(id: string): Block {
 }
 
 function duration(id: string): Block {
-  return { kind: 'work-duration', id, durationMs: 61_000 }
+  return { kind: 'work-duration', id, durationMs: 61_000, outcome: 'completed' }
 }

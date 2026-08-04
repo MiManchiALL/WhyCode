@@ -17,6 +17,7 @@ interface AppHeaderProps {
   workspaceMode: RuntimeWorkspace['mode']
   busy: boolean
   sessionChangeLocked: boolean
+  workspaceSelectionLocked: boolean
   permissionLocked: boolean
   consensus: ConsensusStatus
   permMode: PermissionMode
@@ -24,6 +25,7 @@ interface AppHeaderProps {
   modelId: string
   reasoningEffort: ReasoningEffortSelection
   onPickProject: () => void
+  onOpenWorkspaceFolder: () => void
   onOpenWorkspaceDetails: () => void
   onToggleConsensus: () => void
   onCompact: () => void
@@ -53,9 +55,13 @@ export function AppHeader(props: AppHeaderProps) {
         <span className="text-sm font-medium">WhyCode</span>
         <button
           className="max-w-96 truncate rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:border-neutral-500"
-          onClick={props.onPickProject}
+          onClick={props.workspaceSelectionLocked
+            ? props.onOpenWorkspaceFolder
+            : props.onPickProject}
           disabled={props.sessionChangeLocked}
-          title={props.projectDir ? `当前工作文件夹：${props.projectDir}` : '正在准备默认工作文件夹'}
+          title={props.workspaceSelectionLocked
+            ? `打开当前会话的工作文件夹：${props.projectDir ?? ''}`
+            : `发送第一条消息前可选择其它工作文件夹：${props.projectDir ?? ''}`}
         >
           {props.projectDir ?? '📁 工作文件夹'}
         </button>
@@ -73,6 +79,20 @@ export function AppHeader(props: AppHeaderProps) {
             title="发送第一条消息时创建隔离 Worktree"
           >
             Worktree · 待创建
+          </span>
+        ) : props.workspaceMode === 'pending-managed' ? (
+          <span
+            className="rounded bg-blue-50 px-2 py-1 text-[11px] text-blue-600"
+            title="发送第一条消息时创建这个会话专属的默认子目录"
+          >
+            默认 · 待创建
+          </span>
+        ) : props.workspaceMode === 'managed' ? (
+          <span
+            className="rounded bg-blue-50 px-2 py-1 text-[11px] text-blue-600"
+            title="当前会话独占的 WhyCode 默认工作目录"
+          >
+            默认
           </span>
         ) : props.workspaceMode === 'local' ? (
           <span

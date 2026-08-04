@@ -121,7 +121,7 @@ export class SessionRuntimeRegistry {
     const runtimes = this.all()
     await Promise.all(runtimes.map(async (runtime) => {
       if (runtime.busy) {
-        await runtime.abort().catch((error) => this.reportDisposeError(error))
+        await runtime.abort('shutdown').catch((error) => this.reportDisposeError(error))
         await runtime.waitUntilIdle().catch((error) => this.reportDisposeError(error))
       }
       await runtime.dispose().catch((error) => this.reportDisposeError(error))

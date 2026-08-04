@@ -51,7 +51,12 @@ export type Block =
     }
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
-  | { kind: 'work-duration'; id: string; durationMs: number }
+  | {
+      kind: 'work-duration'
+      id: string
+      durationMs: number
+      outcome: 'completed' | 'stopped'
+    }
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'notice'; id: string; text: string }
   | {
@@ -200,6 +205,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         kind: 'work-duration',
         id: nextBlockId(state),
         durationMs: event.durationMs,
+        outcome: event.outcome,
       })
     case 'tool-start':
       return appendBlock(state, {

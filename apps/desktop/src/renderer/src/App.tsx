@@ -18,6 +18,7 @@ import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/set
 import {
   workspaceDisplayDirectory,
   type RuntimeWorkspace,
+  type StartWorkspaceRequest,
   type WorkspaceCandidate,
 } from '../../shared/workspace.ts'
 import {
@@ -660,14 +661,42 @@ export function App() {
     )
   }, [])
 
+  const activateNewSession = useCallback(async (
+    workspaceRequest?: StartWorkspaceRequest,
+  ): Promise<void> => {
+    const result = await window.whycode.newSession(
+      workspaceRequest ? { workspace: workspaceRequest } : undefined,
+    )
+    if (!result.ok) {
+      setWorkspaceCandidate(null)
+      addError(result.error ?? '新建会话失败')
+      return
+    }
+    applyRuntimeSnapshot(result.snapshot)
+    setWorkspaceCandidate(null)
+    setShowSessions(false)
+    void window.whycode.consensusStatus().then(setConsensus)
+    void refreshSessions()
+    void refreshModels()
+  }, [addError, applyRuntimeSnapshot, refreshModels, refreshSessions])
+
   const pickProject = useCallback(() => {
     if (!beginSessionTransition()) return
-    void window.whycode.pickProjectDir().then((candidate) => {
-      if (candidate) setWorkspaceCandidate(candidate)
+    void window.whycode.pickProjectDir().then(async (candidate) => {
+      if (!candidate) return
+      if (candidate.repositoryDirectory) {
+        setWorkspaceCandidate(candidate)
+        return
+      }
+      await activateNewSession({
+        mode: 'local',
+        selectedDirectory: candidate.selectedDirectory,
+      })
     }).catch((error) => {
       addError(`工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
+    activateNewSession,
     addError,
     beginSessionTransition,
     endSessionTransition,
@@ -693,13 +722,12 @@ export function App() {
 
   const startNewSession = useCallback(() => {
     if (!beginSessionTransition()) return
-    void window.whycode.inspectCurrentWorkspace(runtimeIdRef.current || undefined)
-      .then(setWorkspaceCandidate)
+    void activateNewSession()
       .catch((error) => {
-        addError(`工作区检查失败：${error instanceof Error ? error.message : String(error)}`)
+        addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
       })
       .finally(endSessionTransition)
-  }, [addError, beginSessionTransition, endSessionTransition])
+  }, [activateNewSession, addError, beginSessionTransition, endSessionTransition])
 
   const startWorkspaceSession = useCallback((choice: WorkspaceStartChoice) => {
     const candidate = workspaceCandidate
@@ -716,28 +744,15 @@ export function App() {
           expectedBaseCommit: choice.base.commit,
           acknowledgeUncommittedChangesExcluded: candidate.dirty,
         }
-    void window.whycode.newSession({ workspace: workspaceRequest }).then((result) => {
-      if (!result.ok) {
-        setWorkspaceCandidate(null)
-        return addError(result.error ?? '新建会话失败')
-      }
-      applyRuntimeSnapshot(result.snapshot)
-      setWorkspaceCandidate(null)
-      setShowSessions(false)
-      void window.whycode.consensusStatus().then(setConsensus)
-      void refreshSessions()
-      void refreshModels()
-    }).catch((error) => {
+    void activateNewSession(workspaceRequest).catch((error) => {
       setWorkspaceCandidate(null)
       addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
     addError,
-    applyRuntimeSnapshot,
+    activateNewSession,
     beginSessionTransition,
     endSessionTransition,
-    refreshModels,
-    refreshSessions,
     workspaceCandidate,
   ])
 
@@ -1115,6 +1130,7 @@ export function App() {
         workspaceMode={workspace.mode}
         busy={interactionBusy}
         sessionChangeLocked={sessionChangeLocked}
+        workspaceSelectionLocked={sessionChangeLocked || blocks.length > 0}
         permissionLocked={
           sessionTransitionPending
           || deletionBlocksRuntime
@@ -1126,6 +1142,14 @@ export function App() {
         modelId={modelId}
         reasoningEffort={reasoningEffort}
         onPickProject={pickProject}
+        onOpenWorkspaceFolder={() => {
+          if (!runtimeIdRef.current) return
+          void window.whycode.openWorkspaceFolder(runtimeIdRef.current).then((result) => {
+            if (!result.ok) addError(result.error)
+          }).catch((error) => {
+            addError(`打开工作文件夹失败：${error instanceof Error ? error.message : String(error)}`)
+          })
+        }}
         onOpenWorkspaceDetails={() => setShowWorktreePanel(true)}
         onToggleConsensus={toggleConsensus}
         onCompact={compact}
