@@ -7,6 +7,7 @@ import {
 import type {
   ConnectionSettingsSnapshot,
   McpSettingsItem,
+  SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
 } from '../shared/settings.ts'
@@ -21,6 +22,7 @@ import {
   isCliProxyRoute,
 } from './cli-proxy-models.ts'
 import { createWebSearchSettingsSnapshot } from './web-search-settings.ts'
+import { listAuxiliaryVisionModelCandidates } from './model-connections.ts'
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
@@ -43,6 +45,11 @@ export function createConnectionSettingsSnapshot(
       capabilities: getCliProxyEffectiveCapabilities(entry.id, effectiveRouteModelId)!,
     }]
   })
+  const auxiliaryVisionModels = listAuxiliaryVisionModelCandidates(config)
+  const configuredAuxiliaryVisionModelId = config?.auxiliaryModels?.visionModelId
+  const auxiliaryVisionModelId = auxiliaryVisionModels.some(
+    (candidate) => candidate.id === configuredAuxiliaryVisionModelId,
+  ) ? configuredAuxiliaryVisionModelId! : null
 
   return {
     providers: BUILTIN_PROVIDERS.map((provider) => ({
@@ -68,9 +75,31 @@ export function createConnectionSettingsSnapshot(
       hasKey: Boolean(config?.cliProxyApi?.apiKey),
       models: cliProxyModels,
     },
+    auxiliaryModels: {
+      visionModelId: auxiliaryVisionModelId,
+      visionModels: auxiliaryVisionModels,
+    },
     webSearch: createWebSearchSettingsSnapshot(config),
     mcp,
   }
+}
+
+export function updateAuxiliaryModelSettings(
+  config: WhycodeConfig | null,
+  request: SaveAuxiliaryModelSettingsRequest,
+): WhycodeConfig {
+  const next = cloneConfig(config)
+  if (request.visionModelId === null) {
+    delete next.auxiliaryModels
+    return next
+  }
+  const modelId = request.visionModelId.trim()
+  if (!modelId) throw new Error('辅助识图模型 ID 不能为空')
+  if (!listAuxiliaryVisionModelCandidates(next).some((candidate) => candidate.id === modelId)) {
+    throw new Error('辅助识图模型必须是当前已配置且可用的多模态模型')
+  }
+  next.auxiliaryModels = { visionModelId: modelId }
+  return next
 }
 
 export function updateProviderSettings(

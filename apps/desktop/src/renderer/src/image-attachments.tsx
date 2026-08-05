@@ -109,16 +109,16 @@ export function ImageDraftStrip({
 }
 
 export function ImagePickerButton({
-  supportsImageInput,
+  canAttachImages,
   disabled,
   onFiles,
 }: {
-  supportsImageInput: boolean
+  canAttachImages: boolean
   disabled: boolean
   onFiles: (files: FileList | null) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const enabled = supportsImageInput && !disabled
+  const enabled = canAttachImages && !disabled
   return (
     <>
       <input
@@ -140,9 +140,9 @@ export function ImagePickerButton({
         title={
           enabled
             ? `添加、拖放或在输入框按 Ctrl+V 粘贴图片（最多 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张）`
-            : supportsImageInput
+            : canAttachImages
               ? '图片正在发送或当前操作暂时锁定附件'
-              : '当前模型不支持识图；请切换到带“图片”标记的模型'
+              : '当前模型没有原生识图能力，且未配置辅助识图模型'
         }
         aria-label="添加图片"
       >

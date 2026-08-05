@@ -1,6 +1,6 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
 import type { CoreEvent, CoreEventSink, QueuedUserMessage, StopReason } from '../events.ts'
-import type { ImageAttachment } from '../attachments/types.ts'
+import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { createTurnAbortedMessage } from '../session/interruption.ts'
@@ -78,6 +78,7 @@ interface CoordinatorMessage {
   persistedInputId?: string
   text: string
   attachments: ImageAttachment[]
+  imageDelivery?: ImageDeliveryMode
   pdfAttachments: PdfAttachment[]
   /** 输入被接受时冻结的完整快照；讨论/协议阶段只保管，不向模型暴露。 */
   skills: ActivatedSkill[]
@@ -126,9 +127,10 @@ export class ConsensusCoordinator {
     persistedInputId?: string,
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<StopReason | void> | void {
     const message = this.coordinatorMessage(
-      text, attachments, persistedInputId, pdfAttachments, skills,
+      text, attachments, persistedInputId, pdfAttachments, skills, imageDelivery,
     )
     if (attachments.length > 0 || pdfAttachments.length > 0) {
       if (!this.running && !this.options.mainSession.isBusy) {
@@ -143,6 +145,7 @@ export class ConsensusCoordinator {
           persistedInputId,
           pdfAttachments,
           skills,
+          imageDelivery,
         )
       }
       // 协调器空闲但 Main 仍在处理上一条附件任务时，附件仍是同一任务的 steering。
@@ -154,6 +157,7 @@ export class ConsensusCoordinator {
           persistedInputId,
           pdfAttachments,
           skills,
+          imageDelivery,
         )
       }
       if (this.peerPhase) {
@@ -179,6 +183,7 @@ export class ConsensusCoordinator {
           persistedInputId,
           pdfAttachments,
           skills,
+          imageDelivery,
         )
       }
       this.deferredTaskMessages.push(message)
@@ -569,6 +574,7 @@ export class ConsensusCoordinator {
         id: input.persistedInputId ?? input.id,
         text: input.text,
         ...(input.attachments.length ? { attachments: input.attachments } : {}),
+        ...(input.attachments.length ? { imageDelivery: input.imageDelivery } : {}),
         ...(input.pdfAttachments.length ? { pdfAttachments: input.pdfAttachments } : {}),
         ...(input.skills.length ? { skills: input.skills.map(skillSummary) } : {}),
       })),
@@ -585,12 +591,14 @@ export class ConsensusCoordinator {
     persistedInputId: string | undefined,
     pdfAttachments: readonly PdfAttachment[],
     skills: readonly ActivatedSkill[],
+    imageDelivery?: ImageDeliveryMode,
   ): CoordinatorMessage {
     return {
       id: persistedInputId ?? `cq-${Date.now()}-${this.pendingTexts.length + this.deferredTaskMessages.length}`,
       ...(persistedInputId ? { persistedInputId } : {}),
       text,
       attachments: [...attachments],
+      ...(attachments.length ? { imageDelivery: imageDelivery ?? 'native' } : {}),
       pdfAttachments: [...pdfAttachments],
       skills: skills.map((skill) => structuredClone(skill)),
     }
@@ -663,6 +671,7 @@ export class ConsensusCoordinator {
         message.persistedInputId,
         message.pdfAttachments,
         message.skills,
+        message.imageDelivery,
       )
       return
     }

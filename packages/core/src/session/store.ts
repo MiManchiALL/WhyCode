@@ -23,7 +23,7 @@ import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createTurnAbortedMessage } from './interruption.ts'
 import { attachmentValidationSignature } from './attachment-validation-cache.ts'
 import { dehydrateImageMessages } from '../attachments/messages.ts'
-import type { ImageAttachment } from '../attachments/types.ts'
+import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import {
   validateStoredImageAttachments,
 } from '../attachments/storage.ts'
@@ -508,9 +508,10 @@ export class SessionJournal implements SessionRecorder {
     attachments: readonly ImageAttachment[] = [],
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<void> {
     return this.recordUserInputWithId(
-      randomUUID(), text, startsTurn, attachments, [], pdfAttachments, skills,
+      randomUUID(), text, startsTurn, attachments, [], pdfAttachments, skills, imageDelivery,
     )
   }
 
@@ -522,8 +523,12 @@ export class SessionJournal implements SessionRecorder {
     consumesInputIds: readonly string[] = [],
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<void> {
     return this.enqueue(async () => {
+      const resolvedImageDelivery = attachments.length
+        ? imageDelivery ?? 'native'
+        : undefined
       this.assertPendingInputs(consumesInputIds, 'restored', '消费')
       this.assertImageAttachmentsCompatible(attachments)
       this.assertPdfAttachmentsCompatible(pdfAttachments)
@@ -533,6 +538,7 @@ export class SessionJournal implements SessionRecorder {
           text,
           startsTurn,
           ...(attachments.length ? { attachments } : {}),
+          ...(resolvedImageDelivery ? { imageDelivery: resolvedImageDelivery } : {}),
           ...(pdfAttachments.length ? { pdfAttachments } : {}),
           ...(skills.length ? { skills } : {}),
           ...(consumesInputIds.length ? { consumesInputIds } : {}),
@@ -560,6 +566,7 @@ export class SessionJournal implements SessionRecorder {
           id: input.uuid,
           text: input.text,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.attachments?.length ? { imageDelivery: input.imageDelivery } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
           ...(input.skills?.length ? { skills: input.skills } : {}),
           state: 'queued',
@@ -585,8 +592,12 @@ export class SessionJournal implements SessionRecorder {
     attachments: readonly ImageAttachment[] = [],
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<void> {
     return this.enqueue(async () => {
+      const resolvedImageDelivery = attachments.length
+        ? imageDelivery ?? 'native'
+        : undefined
       this.assertTurnEditCurrent(
         previousTurnId, rollbackMessages, rollbackTaskState,
       )
@@ -601,6 +612,7 @@ export class SessionJournal implements SessionRecorder {
         attachments,
         pdfAttachments,
         skills,
+        resolvedImageDelivery,
       )
       await this.appendEntries([transaction.snapshot, transaction.input])
       this.applyTurnEditTransaction(transaction, rollbackTaskState, attachments, pdfAttachments)
@@ -1104,6 +1116,7 @@ export class SessionJournal implements SessionRecorder {
     attachments: readonly ImageAttachment[],
     pdfAttachments: readonly PdfAttachment[],
     skills: readonly ActivatedSkill[],
+    imageDelivery?: ImageDeliveryMode,
   ): TurnEditTransaction {
     const messages = applyProjectInstructions(
       rollbackMessages,
@@ -1136,6 +1149,7 @@ export class SessionJournal implements SessionRecorder {
       startsTurn: true,
       replacesTurnId: previousTurnId,
       ...(attachments.length ? { attachments } : {}),
+      ...(attachments.length ? { imageDelivery: imageDelivery ?? 'native' } : {}),
       ...(pdfAttachments.length ? { pdfAttachments } : {}),
       ...(skills.length ? { skills } : {}),
     }, snapshot.uuid, inputId)

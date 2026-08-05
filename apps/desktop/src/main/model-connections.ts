@@ -3,7 +3,6 @@ import {
   MODEL_REGISTRY,
   type ModelEntry,
   type ProviderConfig,
-  type ReasoningEffortCapability,
 } from '@whycode/core'
 import {
   cliProxyModelId,
@@ -16,6 +15,7 @@ import {
   getDefaultCliProxyRoute,
   isCliProxyRoute,
 } from './cli-proxy-models.ts'
+import type { ImageInputMode, ModelListItem } from '../shared/settings.ts'
 
 export interface ResolvedModelConnection {
   entry: ModelEntry
@@ -26,16 +26,7 @@ export type ModelConnectionResolution =
   | { ok: true; value: ResolvedModelConnection }
   | { ok: false; error: string }
 
-export interface ModelConnectionListItem {
-  id: string
-  displayName: string
-  hasKey: boolean
-  available: boolean
-  unavailableReason?: string
-  supportsImageInput: boolean
-  reasoningEffort?: ReasoningEffortCapability
-  retired: boolean
-}
+export type ModelConnectionListItem = ModelListItem
 
 export function resolveModelConnection(
   config: WhycodeConfig | null,
@@ -62,9 +53,15 @@ export function listModelConnections(
   config: WhycodeConfig | null,
   selectedModelId?: string | null,
 ): ModelConnectionListItem[] {
+  const auxiliaryVisionAvailable = resolveAuxiliaryVisionModel(config) !== null
   const builtIn = MODEL_REGISTRY.flatMap((entry) => {
     if (!config?.providers[entry.provider]?.apiKey) return []
-    return [listItem(entry, resolveModelConnection(config, entry.id), true)]
+    return [listItem(
+      entry,
+      resolveModelConnection(config, entry.id),
+      true,
+      auxiliaryVisionAvailable,
+    )]
   })
   const cliProxy = (config?.cliProxyApi?.modelIds ?? []).flatMap((baseModelId) => {
     const routeModelId = configuredCliProxyRoute(config, baseModelId)
@@ -75,6 +72,7 @@ export function listModelConnections(
         cliProxyEntry(getModelEntry(baseModelId), routeModelId),
         resolveModelConnection(config, id),
         true,
+        auxiliaryVisionAvailable,
       )]
     } catch {
       return []
@@ -97,6 +95,7 @@ export function listModelConnections(
             cliProxyEntry(baseEntry, route),
             resolveModelConnection(config, selectedModelId),
             false,
+            auxiliaryVisionAvailable,
           ),
         ]
       }
@@ -116,7 +115,12 @@ export function listModelConnections(
       const entry = getModelEntry(selectedModelId)
       return [
         ...current,
-        listItem(entry, resolveModelConnection(config, selectedModelId), false),
+        listItem(
+          entry,
+          resolveModelConnection(config, selectedModelId),
+          false,
+          auxiliaryVisionAvailable,
+        ),
       ]
     } catch {
       // 已退役的内置型号继续走下方通用历史占位。
@@ -132,6 +136,14 @@ export function listModelConnections(
       resolution.ok ? '当前模型未出现在连接列表中' : resolution.error,
     ),
   ]
+}
+
+export function imageInputModeForModel(
+  config: WhycodeConfig | null,
+  model: ModelEntry,
+): ImageInputMode {
+  if (model.capabilities.supportsImageInput) return 'native'
+  return resolveAuxiliaryVisionModel(config) ? 'auxiliary' : 'none'
 }
 
 function resolveCliProxyConnection(
@@ -185,6 +197,7 @@ function listItem(
   entry: ModelEntry,
   resolution: ModelConnectionResolution,
   hasKey: boolean,
+  auxiliaryVisionAvailable: boolean,
 ): ModelConnectionListItem {
   return {
     id: entry.id,
@@ -193,6 +206,11 @@ function listItem(
     available: resolution.ok,
     ...(!resolution.ok ? { unavailableReason: resolution.error } : {}),
     supportsImageInput: entry.capabilities.supportsImageInput,
+    imageInputMode: resolution.ok
+      ? entry.capabilities.supportsImageInput
+        ? 'native'
+        : auxiliaryVisionAvailable ? 'auxiliary' : 'none'
+      : 'none',
     ...(entry.capabilities.reasoningEffort
       ? { reasoningEffort: entry.capabilities.reasoningEffort }
       : {}),
@@ -212,8 +230,53 @@ function retiredListItem(
     available: false,
     unavailableReason,
     supportsImageInput: false,
+    imageInputMode: 'none',
     retired: true,
   }
+}
+
+export interface AuxiliaryVisionModelCandidate {
+  id: string
+  displayName: string
+}
+
+/** 只列出当前确实可解析、且声明原生图片输入能力的已配置模型。 */
+export function listAuxiliaryVisionModelCandidates(
+  config: WhycodeConfig | null,
+): AuxiliaryVisionModelCandidate[] {
+  if (!config) return []
+  const ids = [
+    ...MODEL_REGISTRY.flatMap((entry) =>
+      config.providers[entry.provider]?.apiKey ? [entry.id] : []),
+    ...(config.cliProxyApi?.modelIds ?? []).map(cliProxyModelId),
+  ]
+  const seen = new Set<string>()
+  return ids.flatMap((id) => {
+    if (seen.has(id)) return []
+    seen.add(id)
+    const resolution = resolveModelConnection(config, id)
+    if (!resolution.ok || !resolution.value.entry.capabilities.supportsImageInput) return []
+    return [{ id, displayName: resolution.value.entry.displayName }]
+  })
+}
+
+export function resolveAuxiliaryVisionModel(
+  config: WhycodeConfig | null,
+): ResolvedModelConnection | null {
+  const modelId = config?.auxiliaryModels?.visionModelId
+  if (!modelId) return null
+  const resolution = resolveModelConnection(config, modelId)
+  return resolution.ok && resolution.value.entry.capabilities.supportsImageInput
+    ? resolution.value
+    : null
+}
+
+/** 连接变更后辅助选择必须继续精确可用；失效时清空，绝不猜测替补模型。 */
+export function pruneInvalidAuxiliaryModel(config: WhycodeConfig): WhycodeConfig {
+  if (!config.auxiliaryModels || resolveAuxiliaryVisionModel(config)) return config
+  const next = structuredClone(config)
+  delete next.auxiliaryModels
+  return next
 }
 
 function cliProxyEntry(entry: ModelEntry, routeModelId: string): ModelEntry {

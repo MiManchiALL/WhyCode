@@ -13,9 +13,13 @@ export interface ModelListItem {
   available: boolean
   unavailableReason?: string
   supportsImageInput: boolean
+  /** native=主模型直接看图；auxiliary=通过已配置辅助模型；none=当前不可发送图片。 */
+  imageInputMode: ImageInputMode
   reasoningEffort?: ReasoningEffortCapability
   retired: boolean
 }
+
+export type ImageInputMode = 'native' | 'auxiliary' | 'none'
 
 export interface ProviderSettingsItem {
   id: BuiltInProviderId
@@ -46,8 +50,21 @@ export interface CliProxyApiSettingsItem {
 export interface ConnectionSettingsSnapshot {
   providers: ProviderSettingsItem[]
   cliProxyApi: CliProxyApiSettingsItem
+  auxiliaryModels: AuxiliaryModelsSettingsItem
   webSearch: WebSearchSettingsItem
   mcp: McpSettingsItem
+}
+
+export interface AuxiliaryModelsSettingsItem {
+  visionModelId: string | null
+  visionModels: Array<{
+    id: string
+    displayName: string
+  }>
+}
+
+export interface SaveAuxiliaryModelSettingsRequest {
+  visionModelId: string | null
 }
 
 export type WebSearchProviderId = 'perplexity' | 'tavily'

@@ -44,6 +44,7 @@ import {
   createImageUserMessage,
   dehydrateImageMessages,
   messagesForModel,
+  referencedImageAttachmentIds,
 } from '../attachments/messages.ts'
 import { attachImagesToToolResults } from '../attachments/tool-results.ts'
 import {
@@ -52,11 +53,14 @@ import {
   imageAttachmentSchema,
   imageTransformSchema,
   type ImageAttachment,
+  type ImageDeliveryMode,
   type ImageTransform,
 } from '../attachments/types.ts'
 import { removeImageAttachmentFiles } from '../attachments/renditions.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { createViewImageTool } from '../tools/view-image/index.ts'
+import { createAnalyzeImageTool } from '../tools/analyze-image/index.ts'
+import type { AuxiliaryImageAnalyzer } from '../auxiliary/image-analysis.ts'
 import {
   createCaptureScreenshotTool,
   type ScreenshotCaptureHandler,
@@ -151,6 +155,8 @@ export interface AgentSessionOptions {
   pdfProcessor?: PdfProcessor
   /** Office 结构检查与后台渲染端口；视觉渲染只对图片模型开放。 */
   officeProcessor?: OfficeProcessor
+  /** 非视觉 Main 可按需调用的独立识图模型；视觉 Main 不装配对应工具。 */
+  auxiliaryImageAnalyzer?: AuxiliaryImageAnalyzer
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
@@ -197,6 +203,7 @@ interface QueuedMessage {
   id: string
   text: string
   attachments: ImageAttachment[]
+  imageDelivery: ImageDeliveryMode
   pdfAttachments: PdfAttachment[]
   skills: ActivatedSkill[]
   /** Desktop 预写了 user-input 时，送达/恢复必须携带同一稳定 ID。 */
@@ -211,7 +218,7 @@ interface QueuedTaskNotification {
 function queuedMessageForModel(message: QueuedMessage): ModelMessage {
   const text = withPdfAttachmentReferences(message.text, message.pdfAttachments)
   return message.attachments.length
-    ? createImageUserMessage(text, message.attachments)
+    ? createImageUserMessage(text, message.attachments, message.imageDelivery)
     : { role: 'user', content: text }
 }
 
@@ -316,6 +323,7 @@ export class AgentSession {
         id: input.id,
         text: input.text,
         attachments: [...(input.attachments ?? [])],
+        imageDelivery: input.attachments?.length ? input.imageDelivery! : 'native',
         pdfAttachments: [...(input.pdfAttachments ?? [])],
         skills: [...(input.skills ?? [])].map((skill) => structuredClone(skill)),
         persisted: true,
@@ -365,6 +373,11 @@ export class AgentSession {
       )
     }
     this.options = { ...this.options, model, providerConfig, reasoningEffort }
+  }
+
+  setAuxiliaryImageAnalyzer(analyzer: AuxiliaryImageAnalyzer | undefined): void {
+    if (this.isBusy) throw new Error('Agent 工作中，不能切换辅助识图模型')
+    this.options = { ...this.options, auxiliaryImageAnalyzer: analyzer }
   }
 
   private createLanguageModel() {
@@ -476,6 +489,7 @@ export class AgentSession {
     persistedInputId?: string,
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
+    imageDelivery: ImageDeliveryMode = 'native',
   ): Promise<StopReason> | void {
     if (imageAttachments.length > 0) {
       if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
@@ -486,7 +500,7 @@ export class AgentSession {
       this.addPdfAttachments(pdfAttachments)
     }
     return this.handleMessage(
-      text, urgent, imageAttachments, persistedInputId, pdfAttachments, skills,
+      text, urgent, imageAttachments, persistedInputId, pdfAttachments, skills, imageDelivery,
     )
   }
 
@@ -540,6 +554,7 @@ export class AgentSession {
       resources.attachments,
       resources.pdfAttachments,
       skills,
+      resources.imageDelivery,
     )
     this.messages = structuredClone([...recorder.initialMessages])
     this.taskPlan?.restore(recorder.initialTaskState)
@@ -549,9 +564,15 @@ export class AgentSession {
     this.addImageAttachments(resources.attachments)
     this.addPdfAttachments(resources.pdfAttachments)
     this.tokenBaseline = null
-    const message = queuedMessageForModel(
-      { id: inputId, text: nextText, ...resources, skills, persisted: true },
-    )
+    const message = queuedMessageForModel({
+      id: inputId,
+      text: nextText,
+      attachments: resources.attachments,
+      imageDelivery: resources.imageDelivery ?? 'native',
+      pdfAttachments: resources.pdfAttachments,
+      skills,
+      persisted: true,
+    })
     return this.editedTurnStarter(turnId, inputId, nextText, message, skills)
   }
 
@@ -616,16 +637,22 @@ export class AgentSession {
     skills: readonly ActivatedSkill[] = [],
   ): Promise<StopReason> | void {
     if (this.isBusy) throw new Error('Main 尚未空闲，不能启动协商执行阶段')
-    const delivered = steeringInputs.map((input) => ({
-      id: input.id,
-      text: input.text,
-      attachments: [...(input.attachments ?? [])],
-      pdfAttachments: [...(input.pdfAttachments ?? [])],
-      skills: [],
-      persisted: this.options.sessionRecorder?.pendingUserInputs.some(
-        (pending) => pending.id === input.id && pending.state === 'queued',
-      ) ?? false,
-    }))
+    const delivered = steeringInputs.map((input) => {
+      if (input.attachments?.length && !input.imageDelivery) {
+        throw new Error('协商执行输入缺少图片交付方式')
+      }
+      return {
+        id: input.id,
+        text: input.text,
+        attachments: [...(input.attachments ?? [])],
+        imageDelivery: input.imageDelivery ?? 'native',
+        pdfAttachments: [...(input.pdfAttachments ?? [])],
+        skills: [],
+        persisted: this.options.sessionRecorder?.pendingUserInputs.some(
+          (pending) => pending.id === input.id && pending.state === 'queued',
+        ) ?? false,
+      }
+    })
     const attachments = delivered.flatMap((input) => input.attachments)
     const pdfAttachments = delivered.flatMap((input) => input.pdfAttachments)
     if (attachments.length > 0) {
@@ -657,6 +684,7 @@ export class AgentSession {
     persistedInputId?: string,
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
+    imageDelivery: ImageDeliveryMode = 'native',
   ): Promise<StopReason> | void {
     const parsedSkills = skills.map((skill) => activatedSkillSchema.parse(skill))
     if (parsedSkills.length > 0 && (this.options.promptContext.discussion || this.protocolRound)) {
@@ -667,6 +695,7 @@ export class AgentSession {
         id: persistedInputId ?? crypto.randomUUID(),
         text,
         attachments: [...imageAttachments],
+        imageDelivery,
         pdfAttachments: [...pdfAttachments],
         skills: parsedSkills.map((skill) => structuredClone(skill)),
         persisted: persistedInputId !== undefined,
@@ -688,7 +717,7 @@ export class AgentSession {
     }
     const content = withPdfAttachmentReferences(text, pdfAttachments)
     const message = imageAttachments.length
-      ? createImageUserMessage(content, imageAttachments)
+      ? createImageUserMessage(content, imageAttachments, imageDelivery)
       : { role: 'user' as const, content }
     const rootInputId = persistedInputId
       && this.options.sessionRecorder?.undeliveredUserInputIds.includes(persistedInputId)
@@ -699,6 +728,7 @@ export class AgentSession {
           id: persistedInputId,
           text,
           attachments: [...imageAttachments],
+          imageDelivery,
           pdfAttachments: [...pdfAttachments],
           skills: parsedSkills.map((skill) => structuredClone(skill)),
           persisted: true,
@@ -1529,6 +1559,7 @@ export class AgentSession {
       this.options.sessionRecorder?.attachmentDirectory,
       this.sessionImageAttachments(),
       signal,
+      Boolean(this.options.auxiliaryImageAnalyzer),
     )
     return adaptMessagesForProvider(withImages, this.options.model.protocol)
   }
@@ -2077,6 +2108,7 @@ export class AgentSession {
               : []),
           ]
         : []
+    const auxiliaryImageTools = this.buildAuxiliaryImageTools()
     const pdfTools: ToolDefinition[] =
       this.options.pdfProcessor
       && this.options.sessionRecorder
@@ -2121,11 +2153,13 @@ export class AgentSession {
       ? [
           ...(BUILTIN_TOOLS as ToolDefinition[]),
           ...imageTools,
+          ...auxiliaryImageTools,
           ...pdfTools,
           ...officeVisualTools,
           ...controlTools,
         ]
-      : [...imageTools, ...pdfTools, ...controlTools].filter((tool) => tool.availableWithoutProject)
+      : [...imageTools, ...auxiliaryImageTools, ...pdfTools, ...controlTools]
+          .filter((tool) => tool.availableWithoutProject)
     const defs = availableDefs
     const toolProjectDir =
       projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
@@ -2359,6 +2393,32 @@ export class AgentSession {
       })
     }
     return toolSet
+  }
+
+  private buildAuxiliaryImageTools(): ToolDefinition[] {
+    const analyzer = this.options.auxiliaryImageAnalyzer
+    const recorder = this.options.sessionRecorder
+    if (
+      this.options.model.capabilities.supportsImageInput
+      || !analyzer
+      || !recorder
+      || this.options.promptContext.discussion
+      || this.protocolRound
+    ) return []
+
+    const attachments = this.sessionImageAttachments()
+    const activeIds = referencedImageAttachmentIds(this.messages, attachments)
+    const activeAttachments = new Map(
+      attachments
+        .filter((attachment) => activeIds.has(attachment.id.toLowerCase()))
+        .map((attachment) => [attachment.id.toLowerCase(), attachment]),
+    )
+    return [createAnalyzeImageTool({
+      analyzer,
+      attachmentDirectory: recorder.attachmentDirectory,
+      resolveAttachment: (attachmentId) =>
+        activeAttachments.get(attachmentId.toLowerCase()) ?? null,
+    })]
   }
 
   /** 回滚到某写操作执行前（仅空闲时）；files-and-chat = 整个 turn「从没发生过」 */

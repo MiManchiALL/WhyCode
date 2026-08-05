@@ -14,8 +14,10 @@ import {
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import {
   createImageAttachmentsSchema,
+  imageDeliveryModeSchema,
   userImageAttachmentsSchema,
   type ImageAttachment,
+  type ImageDeliveryMode,
 } from '../attachments/types.ts'
 import {
   PDF_VISUAL_MAX_PAGES,
@@ -41,7 +43,7 @@ import {
   type ActivatedSkill,
 } from '../skills/types.ts'
 
-export const SESSION_SCHEMA_VERSION = 7
+export const SESSION_SCHEMA_VERSION = 8
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -51,14 +53,47 @@ const reasoningEffortSelectionSchema = z.enum(['default', ...REASONING_EFFORT_LE
 /** 工具步骤可持久化一批 PDF 页面图；用户输入使用独立上传数量边界。 */
 const toolImageAttachmentsSchema = createImageAttachmentsSchema(PDF_VISUAL_MAX_PAGES)
 
+function validateUserInputContent(
+  input: {
+    text: string
+    attachments?: readonly ImageAttachment[]
+    imageDelivery?: ImageDeliveryMode
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const hasAttachments = Boolean(input.attachments?.length)
+  if (input.text.length === 0 && !hasAttachments) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['text'],
+      message: '空正文输入必须包含图片',
+    })
+  }
+  if (hasAttachments && !input.imageDelivery) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['imageDelivery'],
+      message: '包含图片的输入必须记录图片交付方式',
+    })
+  }
+  if (!hasAttachments && input.imageDelivery) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['imageDelivery'],
+      message: '没有图片的输入不能记录图片交付方式',
+    })
+  }
+}
+
 const pendingUserInputSchema = z.object({
   id: entryIdSchema,
-  text: z.string().min(1),
+  text: z.string(),
   attachments: userImageAttachmentsSchema.optional(),
+  imageDelivery: imageDeliveryModeSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
   skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
   state: z.enum(['queued', 'restored']),
-})
+}).superRefine(validateUserInputContent)
 
 const chainedEntrySchema = z.object({
   schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
@@ -87,11 +122,12 @@ const turnStartSchema = chainedEntrySchema.extend({
 
 const userInputSchema = chainedEntrySchema.extend({
   type: z.literal('user-input'),
-  text: z.string().min(1),
+  text: z.string(),
   /** true 时该输入同时是可见时间线中的新回合消息。 */
   startsTurn: z.boolean(),
   /** 图片字节位于会话 attachments/；这里只保存可恢复的元数据。 */
   attachments: userImageAttachmentsSchema.optional(),
+  imageDelivery: imageDeliveryModeSchema.optional(),
   /** PDF 原文件位于会话 attachments/；这里只保存稳定引用元数据。 */
   pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 输入被接受时解析出的完整 Skill 快照；后续磁盘变化不能改写已排队消息语义。 */
@@ -101,6 +137,7 @@ const userInputSchema = chainedEntrySchema.extend({
   /** 该根输入原位替换的旧回合；只由“中止后编辑”事务写入。 */
   replacesTurnId: z.string().min(1).optional(),
 }).superRefine((input, ctx) => {
+  validateUserInputContent(input, ctx)
   if (input.replacesTurnId && !input.startsTurn) {
     ctx.addIssue({ code: 'custom', message: '替换旧回合的输入必须开启新回合' })
   }
@@ -399,6 +436,7 @@ export interface SessionRecorder {
     attachments?: readonly ImageAttachment[],
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<void>
   /** Main 预先分配 ID，使落盘记录与运行时 steering 使用同一身份。 */
   recordUserInputWithId(
@@ -409,6 +447,7 @@ export interface SessionRecorder {
     consumesInputIds?: readonly string[],
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<void>
   /**
    * 把回滚换根与编辑后的新根输入作为一次 flush 提交；旧 JSONL 分支保留审计，
@@ -423,6 +462,7 @@ export interface SessionRecorder {
     attachments?: readonly ImageAttachment[],
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
+    imageDelivery?: ImageDeliveryMode,
   ): Promise<void>
   recordViewEvents(events: ViewEvent[]): Promise<void>
   recordTurnStart(

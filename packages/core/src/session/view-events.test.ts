@@ -148,6 +148,12 @@ describe('用户可见事件契约', () => {
       }],
     }
     assert.equal(viewEventSchema.safeParse(event).success, true)
+    assert.equal(viewEventSchema.safeParse({ ...event, text: '' }).success, true)
+    assert.equal(viewEventSchema.safeParse({
+      type: 'user-message',
+      text: '',
+      startsTurn: true,
+    }).success, false)
     const parsed = viewEventSchema.parse({
       ...event,
       attachments: [{ ...event.attachments[0], base64: 'x' }],

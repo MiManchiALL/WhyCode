@@ -48,6 +48,11 @@ export interface CliProxyApiConfig {
   modelRoutes: Record<string, string>
 }
 
+export interface AuxiliaryModelsConfig {
+  /** 仅供不具备原生图片输入能力的主模型调用。 */
+  visionModelId: string
+}
+
 export interface WhycodeConfig {
   providers: Partial<Record<BuiltInProviderId, ProviderConnectionConfig>>
   defaultModel?: string
@@ -56,6 +61,7 @@ export interface WhycodeConfig {
   /** 只用于给已退役会话显示其原型号；不参与模型解析。 */
   retiredModelLabels?: Record<string, string>
   cliProxyApi?: CliProxyApiConfig
+  auxiliaryModels?: AuxiliaryModelsConfig
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
   webSearch?: WebSearchConfig
   /** MCP 结构仍在 mcp.json；这里只保存经 safeStorage 加密的全局 HTTP header 密钥。 */

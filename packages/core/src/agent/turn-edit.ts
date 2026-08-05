@@ -1,11 +1,13 @@
 import type { ModelMessage } from 'ai'
-import type { ImageAttachment } from '../attachments/types.ts'
+import { imageDeliveryModeFromMessage } from '../attachments/messages.ts'
+import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
 import type { ViewEvent } from '../session/view-events.ts'
 
 export interface StoppedTurnEditResources {
   attachments: ImageAttachment[]
+  imageDelivery?: ImageDeliveryMode
   pdfAttachments: PdfAttachment[]
 }
 
@@ -47,8 +49,18 @@ export function stoppedTurnEditResources(
   if (!rootInput || rootInput.type !== 'user-message') {
     throw new Error('找不到目标回合的根用户消息')
   }
+  const attachments = (rootInput.attachments ?? []).map((item) => structuredClone(item))
+  const sourceMessage = messages.slice(rollbackMessageCount, markerIndex)
+    .find((message) => message.role === 'user')
+  const imageDelivery = attachments.length && sourceMessage
+    ? imageDeliveryModeFromMessage(sourceMessage)
+    : null
+  if (attachments.length && !imageDelivery) {
+    throw new Error('目标回合缺少图片交付方式')
+  }
   return {
-    attachments: (rootInput.attachments ?? []).map((item) => structuredClone(item)),
+    attachments,
+    ...(imageDelivery ? { imageDelivery } : {}),
     pdfAttachments: (rootInput.pdfAttachments ?? []).map((item) => structuredClone(item)),
   }
 }

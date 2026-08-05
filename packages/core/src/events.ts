@@ -8,7 +8,11 @@
  */
 
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
-import type { ImageAttachment, ImageMessageAttachmentInput } from './attachments/types.ts'
+import type {
+  ImageAttachment,
+  ImageDeliveryMode,
+  ImageMessageAttachmentInput,
+} from './attachments/types.ts'
 import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 import type { ReasoningEffortSelection } from './providers/catalog.ts'
 import type { SkillLocator, SkillSummary } from './skills/types.ts'
@@ -74,6 +78,7 @@ export interface QueuedUserMessage {
   id: string
   text: string
   attachments?: ImageAttachment[]
+  imageDelivery?: ImageDeliveryMode
   pdfAttachments?: PdfAttachment[]
   skills?: SkillSummary[]
 }

@@ -192,7 +192,7 @@ function MessageDisplay({
 }) {
   return (
     <>
-      <div className="whitespace-pre-wrap pr-10">{block.text}</div>
+      {block.text && <div className="whitespace-pre-wrap pr-10">{block.text}</div>}
       {editable && (
         <button
           type="button"

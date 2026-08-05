@@ -7,16 +7,19 @@ import {
   type CoreCommand,
   type ImageAttachment,
   type ImageAttachmentInput,
+  type ImageDeliveryMode,
   type PdfAttachment,
   type PdfAttachmentInput,
   type PdfProcessor,
   type SessionJournal,
 } from '@whycode/core'
+import type { ImageInputMode } from '../shared/settings.ts'
 
 type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
 
 export interface PreparedUserMessageAttachments {
   attachments: ImageAttachment[]
+  imageDelivery?: ImageDeliveryMode
   pdfAttachments: PdfAttachment[]
   restoredInputIds: string[]
   importedFiles: boolean
@@ -35,7 +38,7 @@ export async function prepareUserMessageAttachments(options: {
   command: UserMessageCommand
   journal: SessionJournal
   pdfProcessor: PdfProcessor
-  supportsImageInput: boolean
+  imageInputMode: ImageInputMode
   modelDisplayName: string
   abortSignal: AbortSignal
 }): Promise<PreparedUserMessageAttachments> {
@@ -48,8 +51,10 @@ export async function prepareUserMessageAttachments(options: {
   if (imageInputs.length > USER_IMAGE_ATTACHMENT_MAX_COUNT) {
     throw new Error(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
   }
-  if (imageInputs.length > 0 && !options.supportsImageInput) {
-    throw new Error(`${options.modelDisplayName} 不支持识图；请切换到带“图片”标记的模型`)
+  if (imageInputs.length > 0 && options.imageInputMode === 'none') {
+    throw new Error(
+      `${options.modelDisplayName} 不支持原生识图，且尚未配置辅助识图模型`,
+    )
   }
 
   const imageImport = await prepareImageAttachmentImport(
@@ -84,6 +89,9 @@ export async function prepareUserMessageAttachments(options: {
     await pdfImport.commit()
     return {
       attachments,
+      ...(attachments.length ? {
+        imageDelivery: options.imageInputMode === 'native' ? 'native' : 'auxiliary',
+      } : {}),
       pdfAttachments,
       restoredInputIds,
       importedFiles: newImages.length > 0 || newPdfs.length > 0,

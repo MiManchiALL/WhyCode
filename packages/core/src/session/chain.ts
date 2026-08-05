@@ -11,7 +11,7 @@ import {
 } from './types.ts'
 import type { ViewEvent } from './view-events.ts'
 import { createImageUserMessage } from '../attachments/messages.ts'
-import type { ImageAttachment } from '../attachments/types.ts'
+import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ReasoningEffortSelection } from '../providers/catalog.ts'
@@ -224,6 +224,7 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
           id: entry.uuid,
           text: entry.text,
           ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+          ...(entry.attachments?.length ? { imageDelivery: entry.imageDelivery } : {}),
           ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
           ...(entry.skills?.length ? { skills: entry.skills } : {}),
           state: 'queued',
@@ -323,7 +324,9 @@ function collectTurnStarts(
       }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
+      const message = userInputMessage(
+        entry.text, entry.attachments, entry.imageDelivery, entry.pdfAttachments,
+      )
       messages.push(message)
       activeConsensusBaseMessages?.push(message)
     }
@@ -509,6 +512,7 @@ interface UndeliveredUserInput {
   id: string
   text: string
   attachments: ImageAttachment[]
+  imageDelivery?: ImageDeliveryMode
   pdfAttachments: PdfAttachment[]
   partialTurnId: string | null
 }
@@ -534,6 +538,7 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
         id: entry.uuid,
         text: entry.text,
         attachments: entry.attachments ?? [],
+        ...(entry.attachments?.length ? { imageDelivery: entry.imageDelivery } : {}),
         pdfAttachments: entry.pdfAttachments ?? [],
         partialTurnId: delivery.turnId,
       }]
@@ -542,6 +547,7 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
       id: entry.uuid,
       text: entry.text,
       attachments: entry.attachments ?? [],
+      ...(entry.attachments?.length ? { imageDelivery: entry.imageDelivery } : {}),
       pdfAttachments: entry.pdfAttachments ?? [],
       partialTurnId: null,
     }]
@@ -780,7 +786,9 @@ function collectMessages(
       }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
+      const message = userInputMessage(
+        entry.text, entry.attachments, entry.imageDelivery, entry.pdfAttachments,
+      )
       messages.push(message)
       activeConsensusBaseMessages?.push(message)
     }
@@ -935,7 +943,9 @@ function findInterruptedWork(
       }
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
-      const message = userInputMessage(entry.text, entry.attachments, entry.pdfAttachments)
+      const message = userInputMessage(
+        entry.text, entry.attachments, entry.imageDelivery, entry.pdfAttachments,
+      )
       visibleMessages.push(message)
       interruptedConsensusBaseMessages?.push(message)
     }
@@ -988,11 +998,12 @@ function findInterruptedWork(
 function userInputMessage(
   text: string,
   attachments: readonly ImageAttachment[] | undefined,
+  imageDelivery: ImageDeliveryMode | undefined,
   pdfAttachments: readonly PdfAttachment[] | undefined,
 ): ModelMessage {
   const content = withPdfAttachmentReferences(text, pdfAttachments ?? [])
   return attachments?.length
-    ? createImageUserMessage(content, attachments)
+    ? createImageUserMessage(content, attachments, imageDelivery!)
     : { role: 'user', content }
 }
 

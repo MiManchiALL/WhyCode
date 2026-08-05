@@ -440,7 +440,7 @@ describe('会话界面时间线重建', () => {
     const state = createConversationState([
       {
         type: 'user-message',
-        text: '分析截图',
+        text: '',
         startsTurn: true,
         attachments: [{
           id: '22222222-2222-4222-8222-222222222222',
@@ -457,6 +457,7 @@ describe('会话界面时间线重建', () => {
     ])
 
     assert.equal(state.blocks[0]?.kind, 'user')
+    assert.equal(state.blocks[0]?.kind === 'user' ? state.blocks[0].text : null, '')
     assert.equal(state.blocks[0]?.kind === 'user' ? state.blocks[0].attachments?.[0]?.name : '', 'screen.png')
     assert.match(
       state.blocks[1]?.kind === 'notice' ? state.blocks[1].text : '',

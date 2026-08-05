@@ -185,7 +185,11 @@ export function AppHeader(props: AppHeaderProps) {
           )}
           {props.models.filter((model) => model.available && !model.retired).map((model) => (
             <option className="text-neutral-900" key={model.id} value={model.id}>
-              {model.displayName}{model.supportsImageInput ? ' · 图片' : ''}
+              {model.displayName}{
+                model.imageInputMode === 'native'
+                  ? ' · 图片'
+                  : model.imageInputMode === 'auxiliary' ? ' · 辅助识图' : ''
+              }
             </option>
           ))}
         </select>

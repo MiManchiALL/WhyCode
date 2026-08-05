@@ -1,13 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import type {
   AddMcpServerRequest,
+  AuxiliaryModelsSettingsItem,
   CliProxyApiSettingsItem,
   ConnectionSettingsSnapshot,
   McpOAuthRequest,
   OpenMcpConfigRequest,
   ProviderSettingsItem,
   SaveCliProxyApiSettingsRequest,
+  SaveAuxiliaryModelSettingsRequest,
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
   SetMcpServerEnabledRequest,
@@ -121,6 +123,13 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
             onSave={(request) => mutate(() => window.whycode.saveCliProxyApiSettings(request))}
           />
 
+          <AuxiliaryModelsEditor
+            settings={props.snapshot.auxiliaryModels}
+            disabled={pending || oauthPending}
+            onSave={(request) => mutate(() =>
+              window.whycode.saveAuxiliaryModelSettings(request))}
+          />
+
           <WebSearchSettingsEditor
             settings={props.snapshot.webSearch}
             disabled={pending || oauthPending}
@@ -146,6 +155,65 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
         </div>
       </section>
     </div>
+  )
+}
+
+function AuxiliaryModelsEditor(props: {
+  settings: AuxiliaryModelsSettingsItem
+  disabled: boolean
+  onSave: (request: SaveAuxiliaryModelSettingsRequest) => Promise<boolean>
+}) {
+  const [visionModelId, setVisionModelId] = useState(props.settings.visionModelId ?? '')
+  const [saved, setSaved] = useState(false)
+  useEffect(() => {
+    setVisionModelId(props.settings.visionModelId ?? '')
+  }, [props.settings.visionModelId])
+
+  const submit = async () => {
+    setSaved(false)
+    if (await props.onSave({ visionModelId: visionModelId || null })) setSaved(true)
+  }
+
+  return (
+    <section>
+      <div className="mb-2">
+        <h3 className="text-sm font-medium">辅助模型</h3>
+        <p className="text-xs text-neutral-500">
+          非视觉主模型收到图片时，可按需调用辅助识图模型；视觉主模型仍直接读取图片。
+        </p>
+      </div>
+      <div className="rounded-lg border border-neutral-200 p-3">
+        <label className="block text-[11px] text-neutral-600">
+          辅助识图模型
+          <select
+            className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-xs"
+            value={visionModelId}
+            onChange={(event) => { setVisionModelId(event.target.value); setSaved(false) }}
+            disabled={props.disabled}
+          >
+            <option value="">不启用</option>
+            {props.settings.visionModels.map((model) => (
+              <option key={model.id} value={model.id}>{model.displayName}</option>
+            ))}
+          </select>
+        </label>
+        {props.settings.visionModels.length === 0 && (
+          <p className="mt-2 text-[11px] text-amber-700">
+            请先配置至少一个带“图片”能力的模型连接。
+          </p>
+        )}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            className="rounded bg-neutral-900 px-3 py-1 text-xs text-white disabled:opacity-40"
+            onClick={() => void submit()}
+            disabled={props.disabled}
+          >
+            保存
+          </button>
+          {saved && <span className="text-[11px] text-green-700">已保存</span>}
+        </div>
+      </div>
+    </section>
   )
 }
 

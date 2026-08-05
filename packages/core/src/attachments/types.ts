@@ -26,6 +26,9 @@ export type ImageMessageAttachmentInput =
   | ImageAttachmentInput
   | { kind: 'stored'; attachmentId: string }
 
+export const imageDeliveryModeSchema = z.enum(['native', 'auxiliary'])
+export type ImageDeliveryMode = z.infer<typeof imageDeliveryModeSchema>
+
 export const imageMediaTypeSchema = z.enum([
   'image/png',
   'image/jpeg',

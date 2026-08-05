@@ -162,6 +162,7 @@ describe('配置密钥存储', () => {
         },
       },
       retiredModelLabels: { 'legacy:model': 'Legacy Model' },
+      auxiliaryModels: { visionModelId: 'mimo:mimo-v2.5' },
       consensusAgents: {
         B: { model: 'mimo:mimo-v2.5', apiKey: 'peer-secret' },
       },
@@ -207,6 +208,7 @@ describe('配置密钥存储', () => {
         'openai:gpt-5.6-terra': 'gpt-5.6-terra',
       })
       assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
+      assert.deepEqual(loaded?.auxiliaryModels, { visionModelId: 'mimo:mimo-v2.5' })
       assert.equal(loaded?.consensusAgents?.B?.apiKey, 'peer-secret')
       assert.equal(loaded?.webSearch?.activeProvider, 'tavily')
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')

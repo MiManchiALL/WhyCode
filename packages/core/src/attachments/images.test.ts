@@ -267,6 +267,29 @@ describe('图片附件', () => {
     assert.doesNotMatch(JSON.stringify(adapted), /iVBORw0KGgo/)
   })
 
+  it('纯图片消息不生成空文本段，原生与辅助路由都不注入用户分析指令', () => {
+    const attachment = {
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: SESSION_ID,
+      name: 'screen.png',
+      storageName: '22222222-2222-4222-8222-222222222222.png',
+      mediaType: 'image/png' as const,
+      byteLength: ONE_PIXEL_PNG.byteLength,
+      width: 1,
+      height: 1,
+    }
+
+    for (const mode of ['native', 'auxiliary'] as const) {
+      const message = createImageUserMessage('', [attachment], mode)
+      assert.ok(typeof message.content !== 'string')
+      assert.equal(
+        message.content.some((part) => part.type === 'text' && part.text.length === 0),
+        false,
+      )
+      assert.doesNotMatch(JSON.stringify(message), /请分析这些图片/)
+    }
+  })
+
   it('拒绝伪装格式和超大像素图片', async () => {
     await withTempDirectory(async (directory) => {
       const fake = join(directory, 'fake.png')

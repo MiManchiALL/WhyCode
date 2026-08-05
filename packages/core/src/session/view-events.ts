@@ -172,7 +172,7 @@ const userMessageViewEventSchema = z.object({
   type: z.literal('user-message'),
   /** steering 的稳定身份；旧会话与根消息允许省略。 */
   inputId: z.string().min(1).optional(),
-  text: z.string().min(1),
+  text: z.string(),
   startsTurn: z.boolean(),
   attachments: userImageAttachmentsSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
@@ -180,6 +180,14 @@ const userMessageViewEventSchema = z.object({
     .min(1)
     .max(SKILL_MAX_SELECTIONS_PER_MESSAGE)
     .optional(),
+}).superRefine((event, ctx) => {
+  if (event.text.length === 0 && !event.attachments?.length) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['text'],
+      message: '空正文用户消息必须包含图片',
+    })
+  }
 })
 
 export const viewEventSchema = z.discriminatedUnion('type', [

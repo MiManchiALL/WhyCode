@@ -64,7 +64,7 @@ describe('桌面混合附件准备', () => {
       },
       journal,
       pdfProcessor: fakeProcessor(),
-      supportsImageInput: true,
+      imageInputMode: 'native',
       modelDisplayName: 'Vision',
       abortSignal: new AbortController().signal,
     })
@@ -76,6 +76,30 @@ describe('桌面混合附件准备', () => {
       prepared.attachments[0]!.storageName,
       prepared.pdfAttachments[0]!.storageName,
     ].sort())
+  })
+
+  it('非视觉模型配置辅助识图后接受图片，并把交付方式冻结为 auxiliary', async () => {
+    const root = await tempDirectory()
+    const imagePath = join(root, 'screen.png')
+    await writeFile(imagePath, ONE_PIXEL_PNG)
+    const journal = await new SessionStore(join(root, 'sessions')).create({
+      workspace: localWorkspace(root),
+      modelId: 'test:text',
+    })
+    const prepared = await prepareUserMessageAttachments({
+      command: {
+        type: 'user-message',
+        text: '分析图片',
+        attachments: [{ kind: 'path', path: imagePath }],
+      },
+      journal,
+      pdfProcessor: fakeProcessor(),
+      imageInputMode: 'auxiliary',
+      modelDisplayName: 'Text Model',
+      abortSignal: new AbortController().signal,
+    })
+    assert.equal(prepared.attachments.length, 1)
+    assert.equal(prepared.imageDelivery, 'auxiliary')
   })
 
   it('PDF 校验失败会回收同批已准备图片，不留下半事务', async () => {
@@ -104,7 +128,7 @@ describe('桌面混合附件准备', () => {
         },
         journal,
         pdfProcessor: processor,
-        supportsImageInput: true,
+        imageInputMode: 'native',
         modelDisplayName: 'Vision',
         abortSignal: new AbortController().signal,
       }),
@@ -124,7 +148,7 @@ describe('桌面混合附件准备', () => {
     const common = {
       journal,
       pdfProcessor: fakeProcessor(),
-      supportsImageInput: false,
+      imageInputMode: 'none' as const,
       modelDisplayName: 'Text Model',
       abortSignal: new AbortController().signal,
     }
@@ -147,7 +171,7 @@ describe('桌面混合附件准备', () => {
           attachments: [{ kind: 'path', path: join(root, 'missing.png') }],
         },
       }),
-      /Text Model 不支持识图/,
+      /Text Model 不支持原生识图/,
     )
   })
 
@@ -172,7 +196,7 @@ describe('桌面混合附件准备', () => {
         },
         journal,
         pdfProcessor: fakeProcessor(),
-        supportsImageInput: true,
+        imageInputMode: 'native',
         modelDisplayName: 'Vision',
         abortSignal: new AbortController().signal,
       }),

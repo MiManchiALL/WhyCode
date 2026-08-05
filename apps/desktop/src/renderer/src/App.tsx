@@ -15,6 +15,7 @@ import {
 } from '@whycode/core/events'
 import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
 import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
+import { attachmentFallbackText } from '../../shared/user-message.ts'
 import {
   workspaceDisplayDirectory,
   type RuntimeWorkspace,
@@ -886,8 +887,8 @@ export function App() {
       addError(nextModel?.unavailableReason ?? '该模型连接当前不可用')
       return
     }
-    if (imageDrafts.length > 0 && !nextModel?.supportsImageInput) {
-      addError('已添加图片；请先移除图片再切换到非视觉模型')
+    if (imageDrafts.length > 0 && nextModel.imageInputMode === 'none') {
+      addError('已添加图片；目标模型既不支持原生识图，也没有可用的辅助识图模型')
       return
     }
     const previous = modelId
@@ -946,9 +947,9 @@ export function App() {
     if (!targetRuntimeId) return
     const sentSkills = captureSkills()
     const text = input.trim()
-      || defaultDraftPrompt(imageDrafts.length, pdfDrafts.length)
-      || (sentSkills.length ? '请按所选 Skill 执行。' : '')
-    if (!text) return
+      || attachmentFallbackText(imageDrafts.length, pdfDrafts.length)
+      || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
+    if (!text && imageDrafts.length === 0) return
     const sentImageDrafts = detachImageDrafts()
     const sentPdfDrafts = detachPdfDrafts()
     const sentRestoredInputIds = restoredInputIds
@@ -964,7 +965,7 @@ export function App() {
     setShowJumpBottom(false)
     const restoreRejectedInput = () => {
       setInput((current) => {
-        const restored = current ? `${text}\n${current}` : text
+        const restored = text && current ? `${text}\n${current}` : text || current
         inputRef.current = restored
         return restored
       })
@@ -1073,7 +1074,9 @@ export function App() {
   }, [])
 
   const selectedModel = models.find((model) => model.id === modelId)
-  const canAttachImages = Boolean(selectedModel?.available && selectedModel.supportsImageInput)
+  const canAttachImages = Boolean(
+    selectedModel?.available && selectedModel.imageInputMode !== 'none',
+  )
   const canAttachPdfs = Boolean(selectedModel?.available)
   const pasteAttachments = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const imageFiles = collectPastedImageFiles(event.clipboardData)
@@ -1086,7 +1089,7 @@ export function App() {
     }
     if (imageFiles.length > 0) {
       if (canAttachImages) addImageFiles(imageFiles)
-      else addError('当前模型不支持粘贴图片；PDF 仍可添加')
+      else addError('当前模型没有可用的原生或辅助识图能力；PDF 仍可添加')
     }
     if (pdfFiles.length > 0) {
       if (canAttachPdfs) addPdfFiles(pdfFiles)
@@ -1122,7 +1125,7 @@ export function App() {
               ? '当前没有可用模型'
               : canAttachImages
                 ? '松开以添加图片或 PDF'
-                : '松开以添加 PDF；当前模型不支持图片'}
+                : '松开以添加 PDF；当前模型没有可用识图能力'}
         </div>
       )}
       <AppHeader
@@ -1328,7 +1331,7 @@ export function App() {
         />
         <div className="flex items-end gap-2">
           <ImagePickerButton
-            supportsImageInput={canAttachImages}
+            canAttachImages={canAttachImages}
             disabled={attachmentLocked}
             onFiles={addImageFiles}
           />
@@ -1440,13 +1443,6 @@ export function App() {
       </footer>
     </div>
   )
-}
-
-function defaultDraftPrompt(imageCount: number, pdfCount: number): string {
-  if (imageCount > 0 && pdfCount > 0) return '请分析这些附件。'
-  if (imageCount > 0) return '请分析这些图片。'
-  if (pdfCount > 0) return '请分析这些 PDF。'
-  return ''
 }
 
 function composerKey(runtimeId: string, sessionId: string | null): string {

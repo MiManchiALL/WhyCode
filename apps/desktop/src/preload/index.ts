@@ -23,6 +23,7 @@ import type {
   McpOAuthRequest,
   ModelListItem,
   OpenMcpConfigRequest,
+  SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
@@ -53,6 +54,12 @@ const api = {
   saveCliProxyApiSettings: (
     request: SaveCliProxyApiSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveCliProxyApiSettings, request),
+  saveAuxiliaryModelSettings: (
+    request: SaveAuxiliaryModelSettingsRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(
+    IPC.saveAuxiliaryModelSettings,
+    request,
+  ),
   saveWebSearchSettings: (
     request: SaveWebSearchSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebSearchSettings, request),

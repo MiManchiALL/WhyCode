@@ -54,6 +54,7 @@ describe('共识模式附件路由', () => {
       id: 'input-peer',
       text: '按这张图调整',
       attachments: [harness.attachment],
+      imageDelivery: 'native',
     }])
   })
 

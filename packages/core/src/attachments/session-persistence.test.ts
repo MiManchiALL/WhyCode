@@ -15,6 +15,59 @@ const ONE_PIXEL_PNG = Buffer.from(
 )
 
 describe('图片会话持久化', () => {
+  it('纯图片输入跨重启保持空正文，模型消息不注入分析指令或空文本段', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-image-only-session-'))
+    try {
+      const store = new SessionStore(root)
+      const journal = await store.create({
+        workspace: localWorkspace(null),
+        modelId: 'zhipu:glm-5v-turbo',
+      })
+      const source = join(root, 'source.png')
+      await writeFile(source, ONE_PIXEL_PNG)
+      const attachments = await importImageAttachments(
+        [{ kind: 'path', path: source }],
+        journal.attachmentDirectory,
+        journal.sessionId,
+      )
+
+      await assert.rejects(
+        journal.recordUserInput('', true),
+        /空正文输入必须包含图片/,
+      )
+      await journal.recordUserInput('', true, attachments)
+      await journal.recordTurnStart(
+        'turn-image-only',
+        [createImageUserMessage('', attachments)],
+      )
+      await journal.recordTurnEnd('turn-image-only', 'completed')
+
+      const transcript = await readFile(
+        join(root, journal.sessionId, 'transcript.jsonl'),
+        'utf8',
+      )
+      assert.match(transcript, /"text":""/)
+      assert.doesNotMatch(transcript, /请分析这些图片/)
+
+      const reopened = await store.open(journal.sessionId)
+      const visible = reopened.initialViewEvents[0]
+      assert.ok(visible?.type === 'user-message')
+      assert.equal(visible.text, '')
+      assert.deepEqual(visible.attachments, attachments)
+
+      const message = reopened.initialMessages[0]
+      assert.ok(message?.role === 'user' && typeof message.content !== 'string')
+      assert.equal(
+        message.content.some((part) => part.type === 'text' && part.text.length === 0),
+        false,
+      )
+      assert.equal(message.content.some((part) => part.type === 'file'), true)
+      assert.doesNotMatch(JSON.stringify(message), /请分析这些图片/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('重启后恢复图片消息，但 transcript 不包含图片 Base64', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-session-'))
     try {
@@ -87,6 +140,61 @@ describe('图片会话持久化', () => {
     }
   })
 
+  it('辅助识图输入跨重启保持文字路由，切到视觉模型也不自动水合旧像素', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-aux-image-session-'))
+    try {
+      const store = new SessionStore(root)
+      const journal = await store.create({
+        workspace: localWorkspace(null),
+        modelId: 'deepseek:deepseek-v4-flash',
+      })
+      const source = join(root, 'source.png')
+      await writeFile(source, ONE_PIXEL_PNG)
+      const attachments = await importImageAttachments(
+        [{ kind: 'path', path: source }],
+        journal.attachmentDirectory,
+        journal.sessionId,
+      )
+      await journal.recordUserInput('分析图片', true, attachments, [], [], 'auxiliary')
+      await journal.recordTurnStart(
+        'turn-aux-image',
+        [createImageUserMessage('分析图片', attachments, 'auxiliary')],
+      )
+      await journal.recordTurnEnd('turn-aux-image', 'completed')
+
+      const transcript = await readFile(
+        join(root, journal.sessionId, 'transcript.jsonl'),
+        'utf8',
+      )
+      assert.match(transcript, /"imageDelivery":"auxiliary"/)
+      assert.match(transcript, /WHYCODE_IMAGE_ATTACHMENT/)
+      assert.doesNotMatch(transcript, /whycode-attachment-ref|iVBORw0KGgo/)
+
+      const reopened = await store.open(journal.sessionId)
+      const message = reopened.initialMessages[0]
+      assert.ok(message?.role === 'user' && typeof message.content !== 'string')
+      assert.equal(message.content.some((part) => part.type === 'file'), false)
+      assert.match(JSON.stringify(message), new RegExp(attachments[0]!.id))
+
+      const visualProjection = await messagesForModel(
+        reopened.initialMessages,
+        true,
+        reopened.attachmentDirectory,
+        attachments,
+      )
+      assert.doesNotMatch(JSON.stringify(visualProjection), /iVBORw0KGgo/)
+      assert.equal(
+        visualProjection.some((entry) =>
+          entry.role === 'user'
+          && typeof entry.content !== 'string'
+          && entry.content.some((part) => part.type === 'file')),
+        false,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('图片已退出模型活动上下文后仍校验历史缩略图文件', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-history-'))
     try {
@@ -113,7 +221,7 @@ describe('图片会话持久化', () => {
     }
   })
 
-  it('图片插话在送达确认前可恢复，确认后只进入模型历史一次', async () => {
+  it('纯图片插话在送达确认前可恢复，确认后只进入模型历史一次', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-image-steering-'))
     try {
       const store = new SessionStore(root)
@@ -129,19 +237,20 @@ describe('图片会话持久化', () => {
       await journal.recordUserInput('开始任务', true)
       await journal.recordTurnStart('turn-steering', [{ role: 'user', content: '开始任务' }])
       const inputId = randomUUID()
-      await journal.recordUserInputWithId(inputId, '图片插话', false, attachments)
+      await journal.recordUserInputWithId(inputId, '', false, attachments)
 
       const queued = await store.open(journal.sessionId)
       assert.deepEqual(queued.pendingUserInputs, [{
         id: inputId,
-        text: '图片插话',
+        text: '',
         attachments,
+        imageDelivery: 'native',
         state: 'queued',
       }])
 
       await queued.recordStep(
         'turn-steering',
-        [createImageUserMessage('图片插话', attachments)],
+        [createImageUserMessage('', attachments)],
         undefined,
         undefined,
         { attachments, deliveredInputIds: [inputId] },

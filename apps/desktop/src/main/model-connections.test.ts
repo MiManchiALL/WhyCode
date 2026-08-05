@@ -3,7 +3,13 @@ import { describe, it } from 'node:test'
 import { providerOptionsWithReasoningEffort } from '@whycode/core'
 import { cliProxyModelId, type WhycodeConfig } from './config.ts'
 import { getDefaultCliProxyRoute } from './cli-proxy-models.ts'
-import { listModelConnections, resolveModelConnection } from './model-connections.ts'
+import {
+  listAuxiliaryVisionModelCandidates,
+  listModelConnections,
+  pruneInvalidAuxiliaryModel,
+  resolveAuxiliaryVisionModel,
+  resolveModelConnection,
+} from './model-connections.ts'
 
 describe('模型连接解析', () => {
   it('内置厂商的官方端点与协议兼容中转共用注册模型能力', () => {
@@ -184,6 +190,38 @@ describe('模型连接解析', () => {
       'google:gemini-3.6-flash',
     ]))
     assert.equal(models.every((model) => model.available), true)
+  })
+
+  it('辅助识图让文字模型获得独立图片路由，视觉模型仍保持原生路由', () => {
+    const value: WhycodeConfig = {
+      providers: {
+        deepseek: { apiKey: 'text-key' },
+        google: { apiKey: 'vision-key' },
+      },
+      auxiliaryModels: { visionModelId: 'google:gemini-3.6-flash' },
+    }
+    assert.deepEqual(listAuxiliaryVisionModelCandidates(value).map((model) => model.id), [
+      'google:gemini-3.1-pro-preview',
+      'google:gemini-3.6-flash',
+    ])
+    assert.equal(resolveAuxiliaryVisionModel(value)?.entry.id, 'google:gemini-3.6-flash')
+    const models = listModelConnections(value)
+    assert.equal(
+      models.find((model) => model.id === 'deepseek:deepseek-v4-flash')?.imageInputMode,
+      'auxiliary',
+    )
+    assert.equal(
+      models.find((model) => model.id === 'google:gemini-3.6-flash')?.imageInputMode,
+      'native',
+    )
+
+    delete value.providers.google
+    assert.equal(resolveAuxiliaryVisionModel(value), null)
+    assert.equal(pruneInvalidAuxiliaryModel(value).auxiliaryModels, undefined)
+    assert.equal(
+      listModelConnections(value)[0]?.imageInputMode,
+      'none',
+    )
   })
 })
 

@@ -46,6 +46,9 @@ interface StoredConfig {
     modelIds?: string[]
     modelRoutes?: Record<string, string>
   }
+  auxiliaryModels?: {
+    visionModelId?: unknown
+  }
   consensusAgents?: Partial<Record<'B' | 'C', {
     model: string
     apiKey?: string
@@ -72,7 +75,7 @@ interface StoredConfig {
   customConnections?: unknown
 }
 
-const CONFIG_VERSION = 7
+const CONFIG_VERSION = 8
 const RETIRED_MODEL_MIGRATION_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
@@ -95,6 +98,7 @@ export function loadConfig(
     }
     const retiredModelLabels = parseRetiredModelLabels(stored.retiredModelLabels)
     const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
+    const auxiliaryModels = parseAuxiliaryModels(stored.auxiliaryModels)
     const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
     const webSearch = parseWebSearch(stored.webSearch, codec)
     const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
@@ -106,6 +110,7 @@ export function loadConfig(
       ...(permissionMode ? { permissionMode } : {}),
       ...(retiredModelLabels ? { retiredModelLabels } : {}),
       ...(cliProxyApi ? { cliProxyApi } : {}),
+      ...(auxiliaryModels ? { auxiliaryModels } : {}),
       ...(consensusAgents ? { consensusAgents } : {}),
       ...(webSearch ? { webSearch } : {}),
       ...(mcpSecretHeaders ? { mcpSecretHeaders } : {}),
@@ -139,6 +144,9 @@ export async function saveConfig(
         modelIds: config.cliProxyApi.modelIds,
         modelRoutes: config.cliProxyApi.modelRoutes,
       },
+    } : {}),
+    ...(config.auxiliaryModels ? {
+      auxiliaryModels: { visionModelId: config.auxiliaryModels.visionModelId },
     } : {}),
     ...(config.consensusAgents ? {
       consensusAgents: Object.fromEntries(
@@ -175,6 +183,12 @@ export async function saveConfig(
     } : {}),
   }
   await writeStoredConfig(stored, path)
+}
+
+function parseAuxiliaryModels(value: unknown): WhycodeConfig['auxiliaryModels'] {
+  if (!isRecord(value)) return undefined
+  const visionModelId = safeLabel(value.visionModelId, 300)
+  return visionModelId ? { visionModelId } : undefined
 }
 
 function parsePermissionMode(value: unknown): PermissionMode | undefined {

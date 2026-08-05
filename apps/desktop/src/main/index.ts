@@ -8,6 +8,7 @@ import {
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
+  createAuxiliaryImageAnalyzer,
   createBuildOfficeArtifactTool,
   createInspectOfficeTool,
   createWebFetchTool,
@@ -24,6 +25,7 @@ import {
   type CoreCommand,
   type CoreEvent,
   type ImageAttachment,
+  type ImageDeliveryMode,
   type ManagedWorkspaceBinding,
   type ModelEntry,
   type PdfAttachment,
@@ -39,6 +41,7 @@ import {
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { IPC } from '../shared/ipc.ts'
+import { attachmentFallbackText } from '../shared/user-message.ts'
 import {
   consensusAgentsReady,
   type ConfigSecretCodec,
@@ -50,13 +53,20 @@ import {
   saveConfig,
   type WhycodeConfig,
 } from './config.ts'
-import { listModelConnections, resolveModelConnection } from './model-connections.ts'
+import {
+  imageInputModeForModel,
+  listModelConnections,
+  pruneInvalidAuxiliaryModel,
+  resolveAuxiliaryVisionModel,
+  resolveModelConnection,
+} from './model-connections.ts'
 import {
   discoverCliProxyRoutes,
   unresolvedCliProxyProfiles,
 } from './cli-proxy-discovery.ts'
 import {
   createConnectionSettingsSnapshot,
+  updateAuxiliaryModelSettings,
   updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
@@ -128,6 +138,7 @@ import type {
   ConnectionSettingsSnapshot,
   McpOAuthRequest,
   OpenMcpConfigRequest,
+  SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
@@ -656,6 +667,7 @@ async function createMainAgentSession(
         ),
       pdfProcessor,
       officeProcessor,
+      auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),
@@ -667,6 +679,25 @@ async function createMainAgentSession(
     await mcpRuntime.close().catch(() => {})
     throw error
   }
+}
+
+function configuredAuxiliaryImageAnalyzer(config: WhycodeConfig | null = loadAppConfig()) {
+  const resolved = resolveAuxiliaryVisionModel(config)
+  return resolved
+    ? createAuxiliaryImageAnalyzer({
+        model: resolved.entry,
+        providerConfig: resolved.providerConfig,
+      })
+    : undefined
+}
+
+/** 根输入开始前按当前全局配置刷新；运行中的 turn 保持其已开始的模型边界。 */
+function synchronizeRuntimeAuxiliaryImageAnalyzer(
+  runtime: DesktopSessionRuntime,
+  config: WhycodeConfig | null,
+): void {
+  if (!runtime.session || runtime.session.isBusy) return
+  runtime.session.setAuxiliaryImageAnalyzer(configuredAuxiliaryImageAnalyzer(config))
 }
 
 /** 协商可用性检查：B/C 评审员配置齐备且模型已注册。 */
@@ -937,6 +968,7 @@ async function handleEditUserMessageCommand(
   if (!reservation) {
     return { ok: false }
   }
+  synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
   const result = await startEditedUserMessage(
     runtime,
     reservation,
@@ -951,12 +983,14 @@ async function prepareUserMessage(
   runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
 ): Promise<PreparedUserMessage> {
+  const config = loadAppConfig()
   if (!userMessageNeedsAttachmentPreparation(command)) {
     const skillsBeforeSession = runtime.projectDir === null
       ? await prepareUserMessageSkills(runtime, command)
       : null
     const error = await ensureSession(runtime)
     if (error) throw new Error(error)
+    synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
     return {
       attachments: [],
       pdfAttachments: [],
@@ -968,7 +1002,7 @@ async function prepareUserMessage(
 
   const modelId = resolveCurrentModelId(runtime)
   if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
-  const resolved = resolveModelConnection(loadAppConfig(), modelId)
+  const resolved = resolveModelConnection(config, modelId)
   if (!resolved.ok) throw new Error(resolved.error)
   const model = resolved.value.entry
   const skillsBeforeSession = runtime.projectDir === null
@@ -978,6 +1012,7 @@ async function prepareUserMessage(
   try {
     const error = await ensureSession(runtime)
     if (error) throw new Error(error)
+    synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
     const preparedSkills = skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command)
     const journal = runtime.journal
     if (!journal) throw new Error('会话记录尚未初始化，无法保存附件')
@@ -985,7 +1020,7 @@ async function prepareUserMessage(
       command,
       journal,
       pdfProcessor,
-      supportsImageInput: model.capabilities.supportsImageInput,
+      imageInputMode: imageInputModeForModel(config, model),
       modelDisplayName: model.displayName,
       abortSignal: attachmentAbortSignal,
     })
@@ -1045,8 +1080,13 @@ async function handleUserMessageCommand(
     }
 
     const userText = command.text.trim()
-      || defaultAttachmentPrompt(prepared.attachments, prepared.pdfAttachments)
-    if (!userText) return rejectUserMessage(runtime, '消息不能为空')
+      || attachmentFallbackText(
+        prepared.attachments.length,
+        prepared.pdfAttachments.length,
+      )
+    if (!userText && prepared.attachments.length === 0) {
+      return rejectUserMessage(runtime, '消息不能为空')
+    }
     try {
       await routeUserMessage(userText, command.urgent ?? false, {
         isBusy: () => runtimeExecutionBusy(runtime),
@@ -1057,6 +1097,7 @@ async function handleUserMessageCommand(
           text,
           startsTurn,
           prepared.attachments,
+          prepared.imageDelivery,
           prepared.restoredInputIds,
           prepared.pdfAttachments,
           prepared.skills,
@@ -1080,6 +1121,7 @@ async function handleUserMessageCommand(
           urgent,
           startsTurn,
           prepared.attachments,
+          prepared.imageDelivery,
           prepared.pdfAttachments,
           prepared.skills,
         ),
@@ -1115,6 +1157,7 @@ function deliverUserMessage(
   urgent: boolean,
   startsTurn: boolean,
   attachments: readonly ImageAttachment[],
+  imageDelivery: ImageDeliveryMode | undefined,
   pdfAttachments: readonly PdfAttachment[],
   skills: readonly ActivatedSkill[],
 ): Promise<unknown> | void {
@@ -1122,10 +1165,11 @@ function deliverUserMessage(
   if (runtime.consensusEnabled && runtime.coordinator) {
     return runtime.coordinator.handleUserMessage(
       text, urgent, attachments, persistedInputId, pdfAttachments, skills,
+      imageDelivery,
     )
   }
   return runtime.session!.handleUserMessage(
-    text, urgent, attachments, inputId, pdfAttachments, skills,
+    text, urgent, attachments, inputId, pdfAttachments, skills, imageDelivery,
   )
 }
 
@@ -1176,6 +1220,7 @@ function mcpOAuthInProgressMessage(action: string): string {
 async function persistConnectionConfig(
   config: NonNullable<ReturnType<typeof loadAppConfig>>,
 ): Promise<void> {
+  config = pruneInvalidAuxiliaryModel(config)
   await saveConfig(config, configSecretCodec, getConfigPath())
   preferredModelId = preferredModelId
     && resolveModelConnection(config, preferredModelId).ok
@@ -1203,15 +1248,21 @@ async function persistConnectionConfig(
       resolved.value.providerConfig,
       targetReasoningEffort,
     )
+    runtime.session.setAuxiliaryImageAnalyzer(configuredAuxiliaryImageAnalyzer(config))
     runtime.modelId = targetModelId
     runtime.reasoningEffort = targetReasoningEffort
   }
 }
 
 async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
-  const config = loadAppConfig()
-  const connection = config?.cliProxyApi
-  if (!config || !connection?.apiKey) return
+  const loaded = loadAppConfig()
+  if (!loaded) return
+  const config = pruneInvalidAuxiliaryModel(loaded)
+  if (config !== loaded) {
+    await saveConfig(config, configSecretCodec, getConfigPath())
+  }
+  const connection = config.cliProxyApi
+  if (!connection?.apiKey) return
   const modelRoutes = await discoverCliProxyRoutes(
     connection,
     (input, init) => net.fetch(input, init),
@@ -1230,7 +1281,7 @@ async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
   if (defaultCliProxyModelId && !modelIds.includes(defaultCliProxyModelId)) {
     delete next.defaultModel
   }
-  await saveConfig(next, configSecretCodec, getConfigPath())
+  await saveConfig(pruneInvalidAuxiliaryModel(next), configSecretCodec, getConfigPath())
 }
 
 async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
@@ -1290,6 +1341,15 @@ async function saveCliProxyApiConnectionSettings(
       }
       next.cliProxyApi.modelRoutes = modelRoutes
     }
+    await persistConnectionConfig(next)
+  })
+}
+
+async function saveAuxiliaryModelConnectionSettings(
+  request: SaveAuxiliaryModelSettingsRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const next = updateAuxiliaryModelSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
   })
 }
@@ -1483,6 +1543,7 @@ async function recordUserInput(
   text: string,
   startsTurn: boolean,
   attachments: readonly ImageAttachment[] = [],
+  imageDelivery: ImageDeliveryMode | undefined = undefined,
   consumesInputIds: readonly string[] = [],
   pdfAttachments: readonly PdfAttachment[] = [],
   skills: readonly ActivatedSkill[] = [],
@@ -1497,17 +1558,8 @@ async function recordUserInput(
     consumesInputIds,
     pdfAttachments,
     skills,
+    imageDelivery,
   )
-}
-
-function defaultAttachmentPrompt(
-  images: readonly ImageAttachment[],
-  pdfs: readonly PdfAttachment[],
-): string {
-  if (images.length > 0 && pdfs.length > 0) return '请分析这些附件。'
-  if (images.length > 0) return '请分析这些图片。'
-  if (pdfs.length > 0) return '请分析这些 PDF。'
-  return ''
 }
 
 function rejectUserMessage(
@@ -1777,6 +1829,7 @@ function deliverBackgroundTaskNotification(
 ): void {
   const session = runtime.session
   if (!session) throw new Error('后台任务所属会话尚未建立 Agent')
+  synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
   let handling: ReturnType<AgentSession['handleTaskNotification']>
   try {
     handling = session.handleTaskNotification(notification)
@@ -2085,6 +2138,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
     saveProviderModelSettings(request))
   ipcMain.handle(IPC.saveCliProxyApiSettings, (_e, request: SaveCliProxyApiSettingsRequest) =>
     saveCliProxyApiConnectionSettings(request))
+  ipcMain.handle(
+    IPC.saveAuxiliaryModelSettings,
+    (_e, request: SaveAuxiliaryModelSettingsRequest) =>
+      saveAuxiliaryModelConnectionSettings(request),
+  )
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))
   ipcMain.handle(IPC.setMcpServerEnabled, (_e, request: SetMcpServerEnabledRequest) =>

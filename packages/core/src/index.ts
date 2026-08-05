@@ -114,6 +114,16 @@ export {
 } from './skills/index.ts'
 export { createSkillTool, SKILL_TOOL_NAME } from './tools/skill/index.ts'
 export {
+  createAuxiliaryImageAnalyzer,
+  type AuxiliaryImageAnalysisRequest,
+  type AuxiliaryImageAnalyzer,
+} from './auxiliary/image-analysis.ts'
+export {
+  ANALYZE_IMAGE_TOOL_NAME,
+  createAnalyzeImageTool,
+  type AnalyzeImageToolOptions,
+} from './tools/analyze-image/index.ts'
+export {
   createReadPdfTool,
   READ_PDF_TOOL_NAME,
   type ReadPdfToolOptions,
@@ -260,6 +270,7 @@ export {
   imageAttachmentSchema,
   imageAttachmentStorageNameSchema,
   imageAttachmentSourceSchema,
+  imageDeliveryModeSchema,
   imageDetailSchema,
   imageRegionSchema,
   imageTransformSchema,
@@ -268,12 +279,17 @@ export {
   type ImageAttachment,
   type ImageAttachmentSource,
   type ImageDetail,
+  type ImageDeliveryMode,
   type ImageAttachmentInput,
   type ImageMessageAttachmentInput,
   type ImageMediaType,
   type ImageRegion,
   type ImageTransform,
 } from './attachments/types.ts'
+export {
+  imageDeliveryModeFromMessage,
+  referencedImageAttachmentIds,
+} from './attachments/messages.ts'
 export {
   cleanupUnreferencedImageAttachments,
   importImageAttachments,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   createConnectionSettingsSnapshot,
+  updateAuxiliaryModelSettings,
   updateCliProxyApiSettings,
   updateProviderSettings,
 } from './model-settings.ts'
@@ -50,6 +51,44 @@ describe('模型设置数据边界', () => {
     assert.doesNotMatch(
       JSON.stringify(snapshot),
       /secret-key|proxy-secret|perplexity-secret|tavily-secret/,
+    )
+  })
+
+  it('辅助识图只列出已配置的多模态模型，并以精确 ID 保存或关闭', () => {
+    const initial: WhycodeConfig = {
+      providers: {
+        deepseek: { apiKey: 'text-key' },
+        google: { apiKey: 'vision-key' },
+      },
+    }
+    const snapshot = createSettingsSnapshot(initial)
+    assert.deepEqual(snapshot.auxiliaryModels, {
+      visionModelId: null,
+      visionModels: [
+        { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
+        { id: 'google:gemini-3.6-flash', displayName: 'Gemini 3.6 Flash' },
+      ],
+    })
+
+    const enabled = updateAuxiliaryModelSettings(initial, {
+      visionModelId: 'google:gemini-3.6-flash',
+    })
+    assert.deepEqual(enabled.auxiliaryModels, {
+      visionModelId: 'google:gemini-3.6-flash',
+    })
+    assert.equal(
+      createSettingsSnapshot(enabled).auxiliaryModels.visionModelId,
+      'google:gemini-3.6-flash',
+    )
+    assert.throws(
+      () => updateAuxiliaryModelSettings(initial, {
+        visionModelId: 'deepseek:deepseek-v4-flash',
+      }),
+      /必须是当前已配置且可用的多模态模型/,
+    )
+    assert.equal(
+      updateAuxiliaryModelSettings(enabled, { visionModelId: null }).auxiliaryModels,
+      undefined,
     )
   })
 

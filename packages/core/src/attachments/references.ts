@@ -2,6 +2,8 @@ import { imageAttachmentStorageNameSchema, type ImageTransform } from './types.t
 
 const ATTACHMENT_REF_V1_PREFIX = 'whycode-attachment-ref:v1:'
 const ATTACHMENT_REF_V2_PREFIX = 'whycode-attachment-ref:v2:'
+const ATTACHMENT_ID_REF_PREFIX = 'WHYCODE_IMAGE_ATTACHMENT:'
+const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 export const DEFAULT_IMAGE_TRANSFORM: ImageTransform = { detail: 'high' }
 
 export function createImageAttachmentReference(
@@ -49,6 +51,19 @@ export function parseImageAttachmentReference(
 export function isImageAttachmentReference(value: string): boolean {
   return value.startsWith(ATTACHMENT_REF_V1_PREFIX)
     || value.startsWith(ATTACHMENT_REF_V2_PREFIX)
+}
+
+/** 供文字模型在活动对话中引用图片身份；它不包含路径或图片字节。 */
+export function createImageAttachmentIdReference(attachmentId: string): string {
+  if (!new RegExp(`^${UUID_PATTERN}$`, 'i').test(attachmentId)) {
+    throw new Error('图片附件 ID 引用无效')
+  }
+  return `[${ATTACHMENT_ID_REF_PREFIX}${attachmentId.toLowerCase()}]`
+}
+
+export function findImageAttachmentIdReferences(text: string): string[] {
+  return [...text.matchAll(new RegExp(`\\[${ATTACHMENT_ID_REF_PREFIX}(${UUID_PATTERN})\\]`, 'gi'))]
+    .map((match) => match[1]!.toLowerCase())
 }
 
 function parseRegion(value: string): NonNullable<ImageTransform['region']> {

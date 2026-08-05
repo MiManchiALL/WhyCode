@@ -60,7 +60,7 @@ function withImages(part: ToolResultPart, result: ImageToolResult): ToolResultPa
         ...result.attachments.flatMap((attachment, index) => [
           {
             type: 'text' as const,
-            text: `[视觉工具结果 ${index + 1}：${attachment.name}]`,
+            text: `[视觉工具结果 ${index + 1}：${attachment.name}；附件 ID：${attachment.id}]`,
           },
           {
             type: 'file' as const,

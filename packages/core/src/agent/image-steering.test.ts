@@ -40,6 +40,7 @@ describe('忙时图片 steering', () => {
         id: inputId,
         text: '协商期间补充图片',
         attachments,
+        imageDelivery: 'native',
       }])
       assert.equal(await result, 'completed')
       assert.equal(call, 1)
