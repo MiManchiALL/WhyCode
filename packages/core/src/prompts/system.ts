@@ -59,7 +59,7 @@ function toolUsageSection(backgroundCommandsAvailable: boolean): string {
     `- 删除、移动或重命名明确文件必须使用 DeleteFile/MoveFile。用户授权的项目外文件同样使用专用文件工具；授权由工具流程处理，不要改用 ${BASH_TOOL_NAME} 绕过路径边界或回滚机制；命令副作用不提供回滚。`,
     ...(backgroundCommandsAvailable
       ? [
-          `- 普通短命令使用 ${BASH_TOOL_NAME}。长安装、构建和测试使用 ${START_COMMAND_TOOL_NAME} 的默认等待模式，命令终态后当前任务会自动继续，不能先用文字承诺“后台完成后再验证”便结束。只有开发服务器、watch 或跨回合 stdin 的持久进程才设 detach=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理。不要用命令代替明确文件工具。`,
+          `- 普通短命令使用 ${BASH_TOOL_NAME}。长安装、构建和测试使用 ${START_COMMAND_TOOL_NAME} 的默认等待模式，命令终态后当前任务会自动继续，不能先用文字承诺“后台完成后再验证”便结束。只有开发服务器、watch 或跨回合 stdin 的持久进程才设 detach=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理；脱离任务进入 completed/failed 后，应用会用 <task-notification> 自动续轮，不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
         ]
       : []),
     '- 编辑前先 ReadFile 确认现有内容。',

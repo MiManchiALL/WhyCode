@@ -5,8 +5,10 @@ import { unicodeSafeSuffix } from '../../text.ts'
 import { terminateProcessTree } from '../run-command/process-termination.ts'
 import {
   type CommandOutputChunk,
+  type CommandTaskNotificationHandoff,
   type CommandTaskSnapshot,
   type CommandTaskStatus,
+  type CommandTaskTerminalNotification,
   type PersistedCommandTask,
 } from './types.ts'
 import { CommandTaskStorage } from './storage.ts'
@@ -29,6 +31,8 @@ interface LiveCommandTask extends PersistedCommandTask {
   finishPromise?: Promise<void>
   stopPromise?: Promise<void>
   waiters: Set<() => void>
+  terminalNotification?: { engagedPlanId?: string }
+  terminalNotificationSent?: boolean
 }
 
 export interface StartCommandInput {
@@ -36,6 +40,10 @@ export interface StartCommandInput {
   command: string
   cwd: string
   timeoutMs?: number
+}
+
+export interface CommandSessionManagerOptions {
+  onDetachedTaskTerminal?: (notification: CommandTaskTerminalNotification) => void
 }
 
 /**
@@ -47,9 +55,11 @@ export class CommandSessionManager {
   private readonly storage: CommandTaskStorage
   private initialized = false
   private initialization: Promise<void> | null = null
+  private readonly onDetachedTaskTerminal?: CommandSessionManagerOptions['onDetachedTaskTerminal']
 
-  constructor(storageRoot: string) {
+  constructor(storageRoot: string, options: CommandSessionManagerOptions = {}) {
     this.storage = new CommandTaskStorage(storageRoot)
+    this.onDetachedTaskTerminal = options.onDetachedTaskTerminal
   }
 
   async initialize(): Promise<void> {
@@ -227,6 +237,22 @@ export class CommandSessionManager {
     }
   }
 
+  /**
+   * StartCommand 即将把仍在运行的进程交还给模型时才武装通知。若进程已经结束，
+   * 调用方仍在当前工具结果中读取终态，避免同一结果同时走工具返回和后台续轮。
+   */
+  async armTerminalNotification(
+    sessionId: string,
+    taskId: string,
+    engagedPlanId?: string,
+  ): Promise<CommandTaskNotificationHandoff> {
+    const task = await this.getOwnedTask(sessionId, taskId)
+    const snapshot = this.snapshot(task)
+    if (task.status !== 'running') return { task: snapshot, armed: false }
+    task.terminalNotification = engagedPlanId ? { engagedPlanId } : {}
+    return { task: snapshot, armed: true }
+  }
+
   async writeInput(
     sessionId: string,
     taskId: string,
@@ -388,6 +414,25 @@ export class CommandSessionManager {
     task.terminalPersisted = true
     await this.pruneTerminalTasks(task.sessionId)
     this.notify(task)
+    this.emitTerminalNotification(task)
+  }
+
+  private emitTerminalNotification(task: LiveCommandTask): void {
+    if (
+      task.terminalNotificationSent
+      || !task.terminalNotification
+      || !this.onDetachedTaskTerminal
+      || (task.status !== 'completed' && task.status !== 'failed')
+      || task.stopReason === 'user'
+      || task.stopReason === 'shutdown'
+    ) return
+    task.terminalNotificationSent = true
+    this.onDetachedTaskTerminal({
+      task: this.snapshot(task),
+      ...(task.terminalNotification.engagedPlanId
+        ? { engagedPlanId: task.terminalNotification.engagedPlanId }
+        : {}),
+    })
   }
 
   private waitForChange(

@@ -20,7 +20,7 @@ import { compactMessages, pickSummaryEnd, pickTailStart } from './compact.ts'
 import { isProjectInstructionsMessage } from '../instructions/project.ts'
 
 describe('压缩尾部与应用上下文', () => {
-  it('内部 system-reminder 不计入至少五条真实文本消息', () => {
+  it('内部 system-reminder 与 task-notification 不计入至少五条真实文本消息', () => {
     const messages: ModelMessage[] = [
       { role: 'user', content: '第一轮问题' },
       { role: 'assistant', content: '第一轮回答' },
@@ -29,6 +29,15 @@ describe('压缩尾部与应用上下文', () => {
       {
         role: 'user',
         content: '<system-reminder>\n这不是人类或 Assistant 的对话文本。\n</system-reminder>',
+      },
+      {
+        role: 'user',
+        content: [
+          '<task-notification source="background-command" version="1">',
+          '{"task_id":"22222222-2222-4222-8222-222222222222","status":"completed"}',
+          '这是应用生成的后台任务终态，不是用户输入。',
+          '</task-notification>',
+        ].join('\n'),
       },
       { role: 'user', content: '第三轮问题' },
       { role: 'assistant', content: 'x'.repeat(40_000) },
@@ -53,6 +62,25 @@ describe('压缩尾部与应用上下文', () => {
     ]
 
     assert.equal(pickTailStart(messages), 0)
+  })
+
+  it('尚未交给模型的 task-notification 与同批真实输入跨压缩逐字保留', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: '较早请求' },
+      { role: 'assistant', content: 'x'.repeat(200_000) },
+      { role: 'user', content: '当前补充要求' },
+      {
+        role: 'user',
+        content: [
+          '<task-notification source="background-command" version="1">',
+          '{"task_id":"22222222-2222-4222-8222-222222222222","status":"completed"}',
+          '这是应用生成的后台任务终态，不是用户输入。',
+          '</task-notification>',
+        ].join('\n'),
+      },
+    ]
+
+    assert.equal(pickSummaryEnd(messages), 2)
   })
 
   it('40k 软上限先扩展到五条真实文本和完整 turn', () => {

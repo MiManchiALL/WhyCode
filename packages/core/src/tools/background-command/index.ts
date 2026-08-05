@@ -28,6 +28,17 @@ function taskSummary(task: CommandTaskSnapshot): string {
   return details.join('\n')
 }
 
+function terminalTaskResult(
+  completed: Awaited<ReturnType<CommandSessionManager['waitForTerminal']>>,
+) {
+  return {
+    data:
+      `${taskSummary(completed.task)}\n\n` +
+      `命令输出（最多保留末尾 ${64 * 1024} 字符）：\n${completed.output || '（无输出）'}`,
+    isError: completed.task.status !== 'completed',
+  }
+}
+
 /** 为当前 Main 会话绑定后台命令工具；任务 ID 不能跨会话访问。 */
 export function createBackgroundCommandTools(
   manager: CommandSessionManager,
@@ -40,7 +51,7 @@ export function createBackgroundCommandTools(
       prompt:
         `启动确实需要长时间运行的命令。安装、构建、测试和其它有限任务保持 detach=false（默认），工具会等待终态、流式返回输出，然后当前任务自动继续；模型不得用文字承诺稍后回来。普通短命令继续使用 ${BASH_TOOL_NAME}。` +
         `只有开发服务器、watch 或明确需要跨回合 stdin 的持久进程才设 detach=true；此时返回任务 ID 后，用 ${GET_COMMAND_OUTPUT_TOOL_NAME} 增量读取，需要输入时用 ${WRITE_COMMAND_INPUT_TOOL_NAME}，结束时用 ${STOP_COMMAND_TOOL_NAME}。` +
-        '显式脱离的命令在切换对话后继续运行，应用退出时终止；重启只保留日志和终态，不重连进程。命令的延迟文件副作用不能自动回滚。' +
+        '显式脱离的命令在切换对话后继续运行；进入 completed/failed 终态时，应用会把内部任务通知送回所属 Main 并自动续轮。不要用 Sleep 或高频轮询等待完成；只有需要查看中间进度时才读取输出。应用退出时终止，重启只保留日志和终态，不重连进程。命令的延迟文件副作用不能自动回滚。' +
         '这是管道而非完整 TTY，不适合 vim 等全屏交互程序。',
       inputSchema: z.object({
         command: z.string().min(1).describe('要执行的命令'),
@@ -68,18 +79,26 @@ export function createBackgroundCommandTools(
             ctx.abortSignal,
             ctx.onProgress,
           )
-          return {
-            data:
-              `${taskSummary(completed.task)}\n\n` +
-              `命令输出（最多保留末尾 ${64 * 1024} 字符）：\n${completed.output || '（无输出）'}`,
-            isError: completed.task.status !== 'completed',
-          }
+          return terminalTaskResult(completed)
+        }
+        const handoff = await manager.armTerminalNotification(
+          sessionId,
+          task.id,
+          ctx.engagedPlanId,
+        )
+        if (!handoff.armed) {
+          return terminalTaskResult(await manager.waitForTerminal(
+            sessionId,
+            task.id,
+            ctx.abortSignal,
+            ctx.onProgress,
+          ))
         }
         return {
           data:
-            `${taskSummary(task)}\n\n` +
-            '该持久进程已显式脱离当前工具调用，不会在对话结束后自动唤醒模型。请使用 GetCommandOutput 读取输出并确认状态。',
-          isError: task.status === 'failed',
+            `${taskSummary(handoff.task)}\n\n` +
+            '该持久进程已脱离当前工具调用。进入 completed/failed 终态后，应用会自动通知并唤醒所属 Main；需要中间进度或交互时再使用 GetCommandOutput/WriteCommandInput。',
+          isError: false,
         }
       },
     }),
@@ -173,4 +192,9 @@ export {
   STOP_COMMAND_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from './constants.ts'
-export type { CommandOutputChunk, CommandTaskSnapshot, CommandTaskStatus } from './types.ts'
+export type {
+  CommandOutputChunk,
+  CommandTaskSnapshot,
+  CommandTaskStatus,
+  CommandTaskTerminalNotification,
+} from './types.ts'

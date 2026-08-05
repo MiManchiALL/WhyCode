@@ -5,7 +5,11 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { createBackgroundCommandTools, START_COMMAND_TOOL_NAME } from './index.ts'
 import { CommandSessionManager } from './manager.ts'
-import type { CommandOutputChunk, CommandTaskSnapshot } from './types.ts'
+import type {
+  CommandOutputChunk,
+  CommandTaskSnapshot,
+  CommandTaskTerminalNotification,
+} from './types.ts'
 
 const SESSION_A = '11111111-1111-4111-8111-111111111111'
 const SESSION_B = '22222222-2222-4222-8222-222222222222'
@@ -250,6 +254,69 @@ describe('后台命令会话', () => {
     } finally {
       await manager.shutdown()
       await rm(finite.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  })
+
+  it('显式脱离任务自然结束后只通知一次，用户停止不产生续轮通知', async () => {
+    const fixture = await createFixture(
+      `process.stdout.write('started\\n'); setTimeout(() => process.stdout.write('done\\n'), 100)`,
+    )
+    const notifications: CommandTaskTerminalNotification[] = []
+    const manager = new CommandSessionManager(fixture.storage, {
+      onDetachedTaskTerminal: (notification) => notifications.push(notification),
+    })
+    try {
+      const start = createBackgroundCommandTools(manager, SESSION_A)
+        .find((tool) => tool.name === START_COMMAND_TOOL_NAME)
+      assert.ok(start)
+      const detached = await start.execute({
+        command: fixture.command,
+        cwd: fixture.cwd,
+        detach: true,
+      }, {
+        projectDir: fixture.cwd,
+        additionalDirs: [],
+        abortSignal: new AbortController().signal,
+        engagedPlanId: '33333333-3333-4333-8333-333333333333',
+      })
+      assert.match(detached.data, /自动通知并唤醒所属 Main/)
+      const running = (await manager.list(SESSION_A)).find((task) => task.status === 'running')
+      assert.ok(running)
+      const completed = await waitForTerminal(manager, running.id)
+      assert.equal(completed.task.status, 'completed')
+      assert.equal(notifications.length, 1)
+      assert.equal(notifications[0]?.task.id, running.id)
+      assert.equal(notifications[0]?.engagedPlanId, '33333333-3333-4333-8333-333333333333')
+
+      // 用一个足够长但最终会自行退出的进程验证“用户停止”分支，避免测试失败时留下孤儿进程。
+      const persistent = await createFixture(`setTimeout(() => {}, 2_000)`)
+      try {
+        const stoppedStart = await start.execute({
+          command: persistent.command,
+          cwd: persistent.cwd,
+          detach: true,
+        }, {
+          projectDir: persistent.cwd,
+          additionalDirs: [],
+          abortSignal: new AbortController().signal,
+        })
+        assert.match(stoppedStart.data, /状态：running/)
+        const stoppedTask = (await manager.list(SESSION_A)).find((task) =>
+          task.status === 'running' && task.id !== running.id)
+        assert.ok(stoppedTask)
+        await manager.stop(SESSION_A, stoppedTask.id)
+        assert.equal(notifications.length, 1)
+      } finally {
+        await rm(persistent.root, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        })
+      }
+    } finally {
+      await manager.shutdown()
+      await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   })
 })

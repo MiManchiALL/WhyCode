@@ -17,6 +17,7 @@ import {
   applyProjectInstructions,
   findProjectInstructionsMessage,
 } from '../instructions/project.ts'
+import { isCommandTaskNotificationText } from '../tools/background-command/notification.ts'
 
 /**
  * 全量摘要压缩（M2-d 第二级）。重建顺序：摘要 → 保留尾部 → 重注入最近读过的文件。
@@ -64,7 +65,7 @@ export function pickSummaryEnd(messages: ModelMessage[]): number {
   const protectedIndexes = [
     findPendingTurnAbortedIndex(messages),
     findPendingUserQuestionIndex(messages),
-    trailingUserBatchStart(messages),
+    trailingTurnInputBatchStart(messages),
   ].filter((index): index is number => index !== null)
   return protectedIndexes.length === 0 ? defaultEnd : Math.min(defaultEnd, ...protectedIndexes)
 }
@@ -175,11 +176,16 @@ function isConversationTextMessage(message: ModelMessage): boolean {
   return modelMessageText(message).trim().length > 0
 }
 
-function trailingUserBatchStart(messages: ModelMessage[]): number | null {
-  if (messages.length === 0 || !isRealUserMessage(messages.at(-1)!)) return null
+function trailingTurnInputBatchStart(messages: ModelMessage[]): number | null {
+  if (messages.length === 0 || !isPendingTurnInput(messages.at(-1)!)) return null
   let start = messages.length - 1
-  while (start > 0 && isRealUserMessage(messages[start - 1]!)) start--
+  while (start > 0 && isPendingTurnInput(messages[start - 1]!)) start--
   return start
+}
+
+function isPendingTurnInput(message: ModelMessage): boolean {
+  if (isRealUserMessage(message)) return true
+  return message.role === 'user' && isCommandTaskNotificationText(modelMessageText(message))
 }
 
 function isRealUserMessage(message: ModelMessage): boolean {
@@ -189,7 +195,7 @@ function isRealUserMessage(message: ModelMessage): boolean {
 function isInternalMessage(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
   const text = modelMessageText(message).trimStart()
-  return text.startsWith('<system-reminder>')
+  return text.startsWith('<system-reminder>') || isCommandTaskNotificationText(text)
 }
 
 function modelMessageText(message: ModelMessage): string {

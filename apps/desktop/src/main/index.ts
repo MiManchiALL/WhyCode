@@ -82,6 +82,10 @@ import { startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { SessionRuntimeRegistry } from './session-runtime-registry.ts'
+import {
+  BackgroundTaskWakeQueue,
+  type BackgroundTaskRuntimeResolution,
+} from './background-task-wakeup.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import { ElectronPdfProcessor } from './pdf/processor.ts'
@@ -284,6 +288,7 @@ function broadcastRuntimeEvent(runtime: DesktopSessionRuntime, event: CoreEvent)
     && (event.status === 'idle' || event.status === 'error')
   ) {
     runtimeRegistry.runtimeBecameIdle(runtime)
+    void backgroundTaskWakeups?.nudge()
   }
 }
 
@@ -297,6 +302,8 @@ let sessions: DesktopSessionRepository
 let runtimeRegistry!: SessionRuntimeRegistry
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
+/** detached 命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
+let backgroundTaskWakeups: BackgroundTaskWakeQueue | null = null
 /** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
 let worktrees: WorktreeManager
 /** 每个默认会话独占一个受管子目录；外置 manifest 负责删除重试与所有权校验。 */
@@ -1089,6 +1096,9 @@ async function handleUserMessageCommand(
   } finally {
     // routeUserMessage 正常路径已释放；准备阶段失败时由这里释放。release 幂等。
     workStart.release()
+    // 若后台终态正因 AskUserQuestion 等待真实回答，此时用户输入已优先完成路由，
+    // 可在下一稳定步骤边界把通知交给同一 Agent，而不占用第二套轮询或计时器。
+    void backgroundTaskWakeups?.nudge()
   }
 }
 
@@ -1381,6 +1391,7 @@ async function mutateConnectionSettings(
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
     settingsMutationInProgress = false
+    void backgroundTaskWakeups?.nudge()
   }
 }
 
@@ -1652,6 +1663,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     return { ok: false, error: message }
   } finally {
     release()
+    void backgroundTaskWakeups?.nudge()
   }
 }
 
@@ -1716,6 +1728,71 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
     throw error
   }
   return runtime
+}
+
+async function resolveBackgroundTaskRuntime(
+  sessionId: string,
+): Promise<BackgroundTaskRuntimeResolution> {
+  if (sessionDeletionLock.sessionId === sessionId) return { kind: 'drop' }
+  if (settingsMutationInProgress || sessionResumeLock.sessionId) return { kind: 'defer' }
+
+  const existing = runtimeRegistry.findBySessionId(sessionId)
+  if (existing) {
+    if (!existing.session) {
+      const error = await ensureSession(existing)
+      if (error) return { kind: 'defer' }
+    }
+    return existing.session
+      ? { kind: 'ready', runtime: existing }
+      : { kind: 'defer' }
+  }
+
+  const summary = (await sessions.list()).find((item) => item.sessionId === sessionId)
+  if (!summary || !summary.resumable) return { kind: 'drop' }
+  const release = sessionResumeLock.acquire(sessionId)
+  if (!release) return { kind: 'defer' }
+  try {
+    const runtime = await prepareResumedRuntime(sessionId)
+    runtimeRegistry.add(runtime)
+    return { kind: 'ready', runtime }
+  } catch (error) {
+    console.warn(
+      `后台任务已结束，但所属会话暂未恢复：${error instanceof Error ? error.message : String(error)}`,
+    )
+    return { kind: 'defer' }
+  } finally {
+    release()
+  }
+}
+
+function deliverBackgroundTaskNotification(
+  runtime: DesktopSessionRuntime,
+  notification: Parameters<AgentSession['handleTaskNotification']>[0],
+): void {
+  const session = runtime.session
+  if (!session) throw new Error('后台任务所属会话尚未建立 Agent')
+  let handling: ReturnType<AgentSession['handleTaskNotification']>
+  try {
+    handling = session.handleTaskNotification(notification)
+  } catch (error) {
+    reportBackgroundTaskDeliveryError(runtime, error)
+    return
+  }
+  if (handling) runtime.beginWork()
+  void Promise.resolve(handling).catch((error) =>
+    reportBackgroundTaskDeliveryError(runtime, error))
+}
+
+function reportBackgroundTaskDeliveryError(
+  runtime: DesktopSessionRuntime,
+  error: unknown,
+): void {
+  runtime.emit({
+    type: 'error',
+    message: `后台任务完成通知未能交给 Agent：${error instanceof Error ? error.message : String(error)}`,
+    recoverable: true,
+  })
+  runtime.emit({ type: 'agent-status', status: 'error' }, false)
 }
 
 function pendingInputs(
@@ -1784,6 +1861,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       scratchRoot: join(app.getPath('userData'), 'scratch'),
       onDeletionMarked: async (sessionExists) => {
         if (!sessionExists) return
+        backgroundTaskWakeups?.discardSession(sessionId)
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
         if (deletedCurrent) {
           const replacement = createDefaultDraftRuntime()
@@ -1939,7 +2017,29 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.warn('退役模型显示名清理失败：', error))
   registerAttachmentProtocol((sessionId) =>
     runtimeRegistry.findBySessionId(sessionId)?.journal ?? null)
-  commandSessions = new CommandSessionManager(join(app.getPath('userData'), 'command-tasks'))
+  backgroundTaskWakeups = new BackgroundTaskWakeQueue({
+    resolveRuntime: resolveBackgroundTaskRuntime,
+    reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),
+    deliveryBlocked: (runtime) => Boolean(
+      runtime.isDisposed
+      || !runtime.session
+      || runtime.session.waitingForUserInput
+      || runtime.coordinator?.busy
+      || (
+        sessionDeletionLock.blocksRuntime
+        && sessionDeletionLock.sessionId === runtime.sessionId
+      ),
+    ),
+    deliver: deliverBackgroundTaskNotification,
+    onError: (error) => console.error('后台任务完成通知调度失败：', error),
+  })
+  commandSessions = new CommandSessionManager(
+    join(app.getPath('userData'), 'command-tasks'),
+    {
+      onDetachedTaskTerminal: (notification) =>
+        backgroundTaskWakeups?.enqueue(notification),
+    },
+  )
   await commandSessions.initialize()
   ipcMain.handle(IPC.command, (_e, envelope: RuntimeCommandEnvelope) => {
     if (
@@ -2098,13 +2198,18 @@ app.on('before-quit', (event) => {
   if (shutdownStarted || !commandSessions) return
   event.preventDefault()
   shutdownStarted = true
-  void Promise.all([
-    commandSessions.shutdown()
-      .catch((error) => console.error('后台命令退出清理失败：', error)),
-    runtimeRegistry.closeAll()
-      .catch((error) => console.error('会话运行时退出清理失败：', error)),
-    mcpOAuthController.close()
-      .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
-  ])
+  const closeBackgroundTaskWakeups = backgroundTaskWakeups
+    ? backgroundTaskWakeups.close()
+    : Promise.resolve()
+  void closeBackgroundTaskWakeups
+    .catch((error) => console.error('后台任务通知队列退出清理失败：', error))
+    .then(() => Promise.all([
+      commandSessions.shutdown()
+        .catch((error) => console.error('后台命令退出清理失败：', error)),
+      runtimeRegistry.closeAll()
+        .catch((error) => console.error('会话运行时退出清理失败：', error)),
+      mcpOAuthController.close()
+        .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
+    ]))
     .finally(() => app.quit())
 })

@@ -125,6 +125,8 @@ import {
 import type { SkillCatalogService } from '../skills/catalog.ts'
 import { SkillTurnContext } from '../skills/turn.ts'
 import { createSkillTool, SKILL_TOOL_NAME } from '../tools/skill/index.ts'
+import { createCommandTaskNotificationMessage } from '../tools/background-command/notification.ts'
+import type { CommandTaskTerminalNotification } from '../tools/background-command/types.ts'
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
@@ -201,6 +203,11 @@ interface QueuedMessage {
   persisted: boolean
 }
 
+interface QueuedTaskNotification {
+  notification: CommandTaskTerminalNotification
+  message: ModelMessage
+}
+
 function queuedMessageForModel(message: QueuedMessage): ModelMessage {
   const text = withPdfAttachmentReferences(message.text, message.pdfAttachments)
   return message.attachments.length
@@ -243,6 +250,7 @@ type ToolAuthorization =
 export class AgentSession {
   private messages: ModelMessage[] = []
   private queue: QueuedMessage[] = []
+  private taskNotifications: QueuedTaskNotification[] = []
   private running = false
   /** 当前步骤的中止器：turn 级取消与 urgent 插话都经由它，用 reason 区分意图 */
   private currentStepAbort: AbortController | null = null
@@ -410,6 +418,11 @@ export class AgentSession {
     return this.running || this.compacting || this.restoringCheckpointToolUseId !== null
   }
 
+  /** 空闲但仍在等待 AskUserQuestion 的真实回答；宿主应让用户输入先进入路由。 */
+  get waitingForUserInput(): boolean {
+    return !this.isBusy && findPendingUserQuestion(this.messages) !== null
+  }
+
   get checkpointRestoreToolUseId(): string | null {
     return this.restoringCheckpointToolUseId
   }
@@ -475,6 +488,24 @@ export class AgentSession {
     return this.handleMessage(
       text, urgent, imageAttachments, persistedInputId, pdfAttachments, skills,
     )
+  }
+
+  /** 宿主生成的后台任务终态：运行中在稳定步骤边界注入，空闲时开启隐藏续轮。 */
+  handleTaskNotification(
+    notification: CommandTaskTerminalNotification,
+  ): Promise<StopReason> | void {
+    if (this.options.promptContext.discussion || this.protocolRound) {
+      throw new Error('后台任务通知只在 Main 执行阶段可用')
+    }
+    const item: QueuedTaskNotification = {
+      notification: structuredClone(notification),
+      message: createCommandTaskNotificationMessage(notification),
+    }
+    if (this.isBusy || this.queue.length > 0 || findPendingUserQuestion(this.messages)) {
+      this.taskNotifications.push(item)
+      return
+    }
+    return this.startTurn([item.message], [], undefined, [], [item], true)
   }
 
   /**
@@ -567,7 +598,14 @@ export class AgentSession {
         text,
         taskPlan: this.taskPlan?.snapshot ?? null,
       })
-      return this.startTurn([message], [], inputId, skills)
+      const notifications = this.drainTaskNotifications()
+      return this.startTurn(
+        [message, ...notifications.map((item) => item.message)],
+        [],
+        inputId,
+        skills,
+        notifications,
+      )
     }
   }
 
@@ -598,14 +636,17 @@ export class AgentSession {
       if (!this.options.sessionRecorder) throw new Error('PDF 消息需要会话级附件存储')
       this.addPdfAttachments(pdfAttachments)
     }
+    const notifications = this.drainTaskNotifications()
     return this.startTurn(
       [
         { role: 'user', content: text },
         ...delivered.map(queuedMessageForModel),
+        ...notifications.map((item) => item.message),
       ],
       delivered,
       undefined,
       skills,
+      notifications,
     )
   }
 
@@ -663,7 +704,14 @@ export class AgentSession {
           persisted: true,
         }]
       : []
-    return this.startTurn([message], delivered, rootInputId, parsedSkills)
+    const notifications = this.drainTaskNotifications()
+    return this.startTurn(
+      [message, ...notifications.map((item) => item.message)],
+      delivered,
+      rootInputId,
+      parsedSkills,
+      notifications,
+    )
   }
 
   /** 开启新 turn：中止控制器由 session 自管（含续跑/压缩后接续场景） */
@@ -672,10 +720,20 @@ export class AgentSession {
     deliveredInputs: readonly QueuedMessage[] = [],
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
+    taskNotifications: readonly QueuedTaskNotification[] = [],
+    resumeTaskPlanFromNotification = false,
   ): Promise<StopReason> {
     this.opAbort = new AbortController()
     this.running = true
-    return this.runLoop(initialMessages, this.opAbort.signal, deliveredInputs, rootInputId, skills)
+    return this.runLoop(
+      initialMessages,
+      this.opAbort.signal,
+      deliveredInputs,
+      rootInputId,
+      skills,
+      taskNotifications,
+      resumeTaskPlanFromNotification,
+    )
   }
 
   private async prepareSkillTurn(skills: readonly ActivatedSkill[]): Promise<void> {
@@ -792,6 +850,32 @@ export class AgentSession {
     return drained
   }
 
+  private drainTaskNotifications(): QueuedTaskNotification[] {
+    const drained = this.taskNotifications
+    this.taskNotifications = []
+    return drained
+  }
+
+  private hasPendingMessages(): boolean {
+    return this.queue.length > 0 || this.taskNotifications.length > 0
+  }
+
+  private startPendingTurn(): Promise<StopReason> {
+    const users = this.drainQueue()
+    const notifications = this.drainTaskNotifications()
+    return this.startTurn(
+      [
+        ...users.map(queuedMessageForModel),
+        ...notifications.map((item) => item.message),
+      ],
+      users,
+      undefined,
+      users.flatMap((item) => item.skills),
+      notifications,
+      users.length === 0,
+    )
+  }
+
   /** 一批跨边界消息形成一个新 turn：只有第一条建立可见回滚锚点。 */
   private emitDrainedMessages(messages: QueuedMessage[]): void {
     messages.forEach((item, index) => {
@@ -814,12 +898,13 @@ export class AgentSession {
   }
 
   /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
-  private async injectQueuedMidTurn(): Promise<void> {
+  private async injectQueuedMidTurn(): Promise<boolean> {
     const drained = this.drainQueue()
-    const injected: ModelMessage[] = []
-    for (const item of drained) {
-      injected.push(queuedMessageForModel(item))
-    }
+    const notifications = this.drainTaskNotifications()
+    const injected: ModelMessage[] = [
+      ...drained.map(queuedMessageForModel),
+      ...notifications.map((item) => item.message),
+    ]
     if (injected.length > 0 && this.activeTurn) {
       try {
         await this.persistRequired(
@@ -837,6 +922,7 @@ export class AgentSession {
         )
       } catch (error) {
         this.queue = [...drained, ...this.queue]
+        this.taskNotifications = [...notifications, ...this.taskNotifications]
         throw error
       }
       this.messages.push(...injected)
@@ -850,6 +936,7 @@ export class AgentSession {
         ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
       }))
     }
+    return drained.length > 0
   }
 
   /** 外层循环：turn（含 steering 续跑）→ step → 工具，直到无工具调用且队列为空 */
@@ -859,6 +946,8 @@ export class AgentSession {
     deliveredInputs: readonly QueuedMessage[] = [],
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
+    initialTaskNotifications: readonly QueuedTaskNotification[] = [],
+    resumeTaskPlanFromNotification = false,
   ): Promise<StopReason> {
     const { emit } = this.options
     this.abortRequestedDuringFinalization = false
@@ -874,6 +963,9 @@ export class AgentSession {
       initialMessageCount = this.messages.length
     } catch (error) {
       if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
+      if (initialTaskNotifications.length > 0) {
+        this.taskNotifications = [...initialTaskNotifications, ...this.taskNotifications]
+      }
       this.opAbort = null
       this.running = false
       this.skillTurn.clear()
@@ -893,16 +985,34 @@ export class AgentSession {
         && isUserQuestionAnswer(pendingUserQuestion, modelMessageText(message)))
     const resumesUserQuestion = answersPendingUserQuestion
       && pendingUserQuestion.resumesTaskPlan
-    let planExecutionEngaged = resumesUserQuestion
+    const notificationContinuationPlanId = resumeTaskPlanFromNotification
+      ? initialTaskNotifications
+          .map((item) => item.notification.engagedPlanId)
+          .find((planId) => planId === this.taskPlan?.snapshot?.id)
+      : undefined
+    const resumesTaskNotification = Boolean(
+      notificationContinuationPlanId
+      && !this.taskPlan?.stateSnapshot.resumeRequired,
+    )
+    let planExecutionEngaged = (resumesUserQuestion || resumesTaskNotification)
       && Boolean(this.taskPlan?.snapshot)
       && !this.taskPlan?.stateSnapshot.resumeRequired
-    const initialContext = this.taskPlan?.snapshot && !planExecutionEngaged
-      ? [
-          createTaskExecutionBoundaryMessage(
-            this.taskPlan.stateSnapshot.resumeRequired ? 'blocked' : 'dormant',
-          ),
-          ...initialMessages,
-        ]
+    const notificationContinuation = resumesTaskNotification
+      && notificationContinuationPlanId
+      ? createTaskContextMessage(this.taskPlan!.stateSnapshot, {
+          turnId,
+          engagedPlanId: notificationContinuationPlanId,
+        })
+      : null
+    const initialContext = this.taskPlan?.snapshot
+      ? planExecutionEngaged
+        ? [...(notificationContinuation ? [notificationContinuation] : []), ...initialMessages]
+        : [
+            createTaskExecutionBoundaryMessage(
+              this.taskPlan.stateSnapshot.resumeRequired ? 'blocked' : 'dormant',
+            ),
+            ...initialMessages,
+          ]
       : initialMessages
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
     this.activeTurn = { id: turnId }
@@ -924,6 +1034,9 @@ export class AgentSession {
       this.messages.length = initialMessageCount
       this.messages = applyProjectInstructions(this.messages, previousProjectInstructions)
       if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
+      if (initialTaskNotifications.length > 0) {
+        this.taskNotifications = [...initialTaskNotifications, ...this.taskNotifications]
+      }
       this.activeTurn = null
       this.opAbort = null
       this.running = false
@@ -1031,7 +1144,7 @@ export class AgentSession {
           break
         }
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
-        if (this.queue.length > 0) {
+        if (this.hasPendingMessages()) {
           if (abortSignal.aborted) {
             if (naturalDecision && naturalDecision.kind !== 'continue') {
               this.abortRequestedDuringFinalization = true
@@ -1042,9 +1155,9 @@ export class AgentSession {
             }
             break
           }
-          await this.injectQueuedMidTurn()
+          const injectedUserMessage = await this.injectQueuedMidTurn()
           currentTimeReminderAt = null
-          steeringDecisionPending = true
+          if (injectedUserMessage) steeringDecisionPending = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
         if (abortSignal.aborted && step.hadToolCalls) {
@@ -1143,20 +1256,15 @@ export class AgentSession {
 
     // 收尾持久化窗口进入的消息也必须有确定归宿；普通 Main 作为新 turn 接续。
     if (
-      this.queue.length > 0
+      this.hasPendingMessages()
       && stopReason !== 'aborted'
       && !this.protocolRound
       && !this.abortRequestedDuringFinalization
       && !this.persistenceFailed
+      && (this.queue.length > 0 || stopReason !== 'waiting-user')
     ) {
-      const drained = this.drainQueue()
       this.skillTurn.clear()
-      return this.startTurn(
-        drained.map(queuedMessageForModel),
-        drained,
-        undefined,
-        drained.flatMap((item) => item.skills),
-      )
+      return this.startPendingTurn()
     }
 
     this.skillTurn.clear()
@@ -1286,14 +1394,11 @@ export class AgentSession {
     // 压缩期间排队的消息：取消则弹回输入框；正常结束则在新上下文上接续为新 turn
     if (signal.aborted) {
       await this.restoreQueuedInput()
-    } else if (this.queue.length > 0) {
-      const drained = this.drainQueue()
-      await this.startTurn(
-        drained.map(queuedMessageForModel),
-        drained,
-        undefined,
-        drained.flatMap((item) => item.skills),
-      )
+    } else if (
+      this.hasPendingMessages()
+      && (this.queue.length > 0 || !findPendingUserQuestion(this.messages))
+    ) {
+      await this.startPendingTurn()
       return
     }
     emit({ type: 'agent-status', status: 'idle' })
@@ -2052,6 +2157,9 @@ export class AgentSession {
           projectDir: toolProjectDir,
           additionalDirs: this.permissions.additionalDirs,
           abortSignal,
+          ...(planExecutionEngaged && this.taskPlan?.snapshot
+            ? { engagedPlanId: this.taskPlan.snapshot.id }
+            : {}),
         }
         const parsed = await validateToolInput(def, input)
         if (!parsed.success) {
@@ -2288,12 +2396,11 @@ export class AgentSession {
       }
     } finally {
       this.restoringCheckpointToolUseId = null
-      if (this.queue.length > 0) {
-        const drained = this.drainQueue()
-        await this.startTurn(
-          drained.map(queuedMessageForModel),
-          drained,
-        )
+      if (
+        this.hasPendingMessages()
+        && (this.queue.length > 0 || !findPendingUserQuestion(this.messages))
+      ) {
+        await this.startPendingTurn()
       }
       this.resolveIdleWaiters()
     }

@@ -36,3 +36,14 @@ export interface CommandOutputChunk {
   offset: number
   nextOffset: number
 }
+
+export interface CommandTaskTerminalNotification {
+  task: CommandTaskSnapshot
+  /** 任务启动时确实处于 engaged 的计划；仅供同一计划的内部续轮恢复执行权。 */
+  engagedPlanId?: string
+}
+
+export interface CommandTaskNotificationHandoff {
+  task: CommandTaskSnapshot
+  armed: boolean
+}

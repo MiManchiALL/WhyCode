@@ -57,6 +57,8 @@ export interface ToolContext {
   /** 本会话内额外授权的目录（与权限上下文同步） */
   additionalDirs: readonly string[]
   abortSignal: AbortSignal
+  /** 当前工具步骤确实接合的计划；后台任务终态只可据此恢复同一计划。 */
+  engagedPlanId?: string
   /** 长时工具的增量输出回调（终端输出等） */
   onProgress?: (output: string) => void
 }

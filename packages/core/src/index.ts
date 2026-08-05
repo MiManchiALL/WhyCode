@@ -143,6 +143,7 @@ export {
   type CommandOutputChunk,
   type CommandTaskSnapshot,
   type CommandTaskStatus,
+  type CommandTaskTerminalNotification,
 } from './tools/background-command/index.ts'
 export {
   CAPTURE_SCREENSHOT_TOOL_NAME,
