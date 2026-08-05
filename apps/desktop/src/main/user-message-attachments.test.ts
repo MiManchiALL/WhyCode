@@ -3,7 +3,12 @@ import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { localWorkspace, SessionStore, type PdfProcessor } from '@whycode/core'
+import {
+  localWorkspace,
+  SessionStore,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+  type PdfProcessor,
+} from '@whycode/core'
 import {
   prepareUserMessageAttachments,
   userMessageNeedsAttachmentPreparation,
@@ -144,6 +149,36 @@ describe('桌面混合附件准备', () => {
       }),
       /Text Model 不支持识图/,
     )
+  })
+
+  it('在读取文件前拒绝单条消息的第十一张图片', async () => {
+    const root = await tempDirectory()
+    const journal = await new SessionStore(join(root, 'sessions')).create({
+      workspace: localWorkspace(root),
+      modelId: 'test:vision',
+    })
+
+    await assert.rejects(
+      prepareUserMessageAttachments({
+        command: {
+          type: 'user-message',
+          text: '分析多张图片',
+          attachments: Array.from({
+            length: USER_IMAGE_ATTACHMENT_MAX_COUNT + 1,
+          }, (_, index) => ({
+            kind: 'path' as const,
+            path: join(root, `missing-${index}.png`),
+          })),
+        },
+        journal,
+        pdfProcessor: fakeProcessor(),
+        supportsImageInput: true,
+        modelDisplayName: 'Vision',
+        abortSignal: new AbortController().signal,
+      }),
+      new RegExp(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`),
+    )
+    await assert.rejects(readdir(journal.attachmentDirectory), { code: 'ENOENT' })
   })
 })
 

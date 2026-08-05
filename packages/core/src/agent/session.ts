@@ -47,7 +47,7 @@ import {
 } from '../attachments/messages.ts'
 import { attachImagesToToolResults } from '../attachments/tool-results.ts'
 import {
-  IMAGE_ATTACHMENT_MAX_COUNT,
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
   createImageAttachmentsSchema,
   imageAttachmentSchema,
   imageTransformSchema,
@@ -1631,7 +1631,7 @@ export class AgentSession {
       transform: ImageTransform
     }>()
     let stepImageAttachmentCount = 0
-    let stepImageAttachmentLimit = IMAGE_ATTACHMENT_MAX_COUNT
+    let stepImageAttachmentLimit = TOOL_IMAGE_ATTACHMENT_MAX_COUNT
     const stepImageAttachmentKeys = new Set<string>()
     const stepPdfAttachments = new Map<string, PdfAttachment[]>()
     let stepAttachmentsCommitted = false
@@ -2269,7 +2269,7 @@ export class AgentSession {
               result.imageTransform,
               def.name === READ_PDF_TOOL_NAME
                 ? PDF_VISUAL_MAX_PAGES
-                : IMAGE_ATTACHMENT_MAX_COUNT,
+                : TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
             )
             if (error) result = { data: error, isError: true }
             else if (!result.isError && def.name !== READ_PDF_TOOL_NAME) {

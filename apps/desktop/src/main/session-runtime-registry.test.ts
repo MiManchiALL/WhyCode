@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import { localWorkspace, type SessionJournal } from '@whycode/core'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import {
+  MAX_CONCURRENT_AGENT_RUNS,
   SESSION_RUNTIME_IDLE_UNLOAD_MS,
   SessionRuntimeRegistry,
 } from './session-runtime-registry.ts'
@@ -10,6 +11,24 @@ import {
 describe('SessionRuntimeRegistry', () => {
   it('默认保留非选中空闲运行时三十分钟', () => {
     assert.equal(SESSION_RUNTIME_IDLE_UNLOAD_MS, 30 * 60 * 1000)
+  })
+
+  it('默认允许八个 Agent 同时运行，第九个根任务等待容量', () => {
+    assert.equal(MAX_CONCURRENT_AGENT_RUNS, 8)
+    const registry = new SessionRuntimeRegistry({ idleUnloadMs: -1 })
+    const runtimes = Array.from(
+      { length: MAX_CONCURRENT_AGENT_RUNS + 1 },
+      (_, index) => runtime(`capacity-${index}`),
+    )
+    runtimes.forEach((candidate) => registry.add(candidate))
+    const reservations = runtimes.slice(0, MAX_CONCURRENT_AGENT_RUNS).map((candidate) => {
+      const reservation = registry.reserveWorkStart(candidate)
+      assert.notEqual(reservation, null)
+      return reservation!
+    })
+
+    assert.equal(registry.reserveWorkStart(runtimes[MAX_CONCURRENT_AGENT_RUNS]!), null)
+    reservations.forEach((reservation) => reservation.release())
   })
 
   it('切换只改变选中项，忙碌对话继续保留', async () => {

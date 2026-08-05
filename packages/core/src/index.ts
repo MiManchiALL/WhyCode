@@ -247,20 +247,24 @@ export { SessionStore, SessionJournal } from './session/store.ts'
 export { validateSessionId } from './session/metadata.ts'
 export { terminateProcessTree } from './tools/run-command/process-termination.ts'
 export {
-  IMAGE_ATTACHMENT_MAX_COUNT,
   IMAGE_ATTACHMENT_MAX_DIMENSION,
   IMAGE_ATTACHMENT_MAX_PIXELS,
   IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
   IMAGE_MODEL_MAX_BYTES,
   IMAGE_MODEL_MAX_DIMENSION,
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+} from './attachments/limits.ts'
+export {
   createImageAttachmentsSchema,
   imageAttachmentSchema,
-  imageAttachmentsSchema,
   imageAttachmentStorageNameSchema,
   imageAttachmentSourceSchema,
   imageDetailSchema,
   imageRegionSchema,
   imageTransformSchema,
+  toolImageAttachmentsSchema,
+  userImageAttachmentsSchema,
   type ImageAttachment,
   type ImageAttachmentSource,
   type ImageDetail,
@@ -277,7 +281,10 @@ export {
   readStoredImage,
   validateStoredImageAttachments,
 } from './attachments/storage.ts'
-export type { ImageAttachmentImportTransaction } from './attachments/storage.ts'
+export type {
+  ImageAttachmentImportOptions,
+  ImageAttachmentImportTransaction,
+} from './attachments/storage.ts'
 export {
   cleanupUnreferencedAttachments,
   type SessionAttachmentReferences,

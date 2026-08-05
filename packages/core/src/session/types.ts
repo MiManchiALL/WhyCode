@@ -14,7 +14,7 @@ import {
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import {
   createImageAttachmentsSchema,
-  imageAttachmentsSchema,
+  userImageAttachmentsSchema,
   type ImageAttachment,
 } from '../attachments/types.ts'
 import {
@@ -48,13 +48,13 @@ const entryIdSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const messagesSchema = z.array(modelMessageSchema)
 const reasoningEffortSelectionSchema = z.enum(['default', ...REASONING_EFFORT_LEVELS])
-/** 工具步骤可持久化一批 PDF 页面图；用户输入仍严格使用四图 schema。 */
+/** 工具步骤可持久化一批 PDF 页面图；用户输入使用独立上传数量边界。 */
 const toolImageAttachmentsSchema = createImageAttachmentsSchema(PDF_VISUAL_MAX_PAGES)
 
 const pendingUserInputSchema = z.object({
   id: entryIdSchema,
   text: z.string().min(1),
-  attachments: imageAttachmentsSchema.optional(),
+  attachments: userImageAttachmentsSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
   skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
   state: z.enum(['queued', 'restored']),
@@ -91,7 +91,7 @@ const userInputSchema = chainedEntrySchema.extend({
   /** true 时该输入同时是可见时间线中的新回合消息。 */
   startsTurn: z.boolean(),
   /** 图片字节位于会话 attachments/；这里只保存可恢复的元数据。 */
-  attachments: imageAttachmentsSchema.optional(),
+  attachments: userImageAttachmentsSchema.optional(),
   /** PDF 原文件位于会话 attachments/；这里只保存稳定引用元数据。 */
   pdfAttachments: pdfAttachmentsSchema.optional(),
   /** 输入被接受时解析出的完整 Skill 快照；后续磁盘变化不能改写已排队消息语义。 */

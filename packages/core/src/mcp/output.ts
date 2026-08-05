@@ -1,4 +1,7 @@
-import { IMAGE_ATTACHMENT_MAX_COUNT, IMAGE_ATTACHMENT_MAX_SOURCE_BYTES } from '../attachments/types.ts'
+import {
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+} from '../attachments/types.ts'
 import { importImageAttachments } from '../attachments/storage.ts'
 import type { ToolResult } from '../tools/tool.ts'
 import { redactUrlCredentials } from './url-credentials.ts'
@@ -53,8 +56,8 @@ export async function formatMcpToolResult(
         }
         break
       case 'image': {
-        if (imageSources.length >= IMAGE_ATTACHMENT_MAX_COUNT) {
-          output.add(`[MCP 图片超过单步骤 ${IMAGE_ATTACHMENT_MAX_COUNT} 张上限，其余已忽略]`)
+        if (imageSources.length >= TOOL_IMAGE_ATTACHMENT_MAX_COUNT) {
+          output.add(`[MCP 图片超过单步骤 ${TOOL_IMAGE_ATTACHMENT_MAX_COUNT} 张上限，其余已忽略]`)
           break
         }
         const decoded = decodeImage(item.data, item.mimeType)

@@ -7,6 +7,10 @@ import { describe, it } from 'node:test'
 import { modelMessageSchema } from 'ai'
 import sharp from 'sharp'
 import {
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+} from './limits.ts'
+import {
   createImageUserMessage,
   dehydrateImageMessages,
   messagesForModel,
@@ -184,6 +188,36 @@ describe('图片附件', () => {
         /不能重复添加/,
       )
       assert.deepEqual(await readdir(duplicateBatch), [])
+    })
+  })
+
+  it('用户导入可显式接收十张图片，普通工具批次仍限制为四张', async () => {
+    await withTempDirectory(async (directory) => {
+      const sources = await Promise.all(Array.from({
+        length: USER_IMAGE_ATTACHMENT_MAX_COUNT,
+      }, async (_, index) => ({
+        kind: 'bytes' as const,
+        name: `image-${index}.png`,
+        bytes: await solidPng(`#${(index + 1).toString(16).padStart(6, '0')}`),
+      })))
+      await assert.rejects(
+        importImageAttachments(
+          sources.slice(0, TOOL_IMAGE_ATTACHMENT_MAX_COUNT + 1),
+          join(directory, 'tool-attachments'),
+          SESSION_ID,
+        ),
+        new RegExp(`本批最多添加 ${TOOL_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`),
+      )
+
+      const transaction = await prepareImageAttachmentImport(
+        sources,
+        join(directory, 'user-attachments'),
+        SESSION_ID,
+        { maxCount: USER_IMAGE_ATTACHMENT_MAX_COUNT },
+      )
+      assert.equal(transaction.attachments.length, USER_IMAGE_ATTACHMENT_MAX_COUNT)
+      await transaction.rollback()
+      assert.deepEqual(await readdir(join(directory, 'user-attachments')), [])
     })
   })
 

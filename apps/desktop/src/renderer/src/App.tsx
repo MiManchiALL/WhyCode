@@ -48,11 +48,11 @@ import {
   ImageDraftStrip,
   ImagePickerButton,
   QueuedImageStrip,
-  releaseImageDrafts,
   useImageDrafts,
 } from './image-attachments.tsx'
 import {
   prepareImageDrafts,
+  releaseImageDrafts,
   restoredImageDrafts,
   type ImageDraft,
 } from './image-draft.ts'

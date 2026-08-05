@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import {
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+} from '../attachments/limits.ts'
 import { pushCoalescedViewEvent, toViewEvent, viewEventSchema, type ViewEvent } from './view-events.ts'
 
 describe('用户可见事件契约', () => {
@@ -171,8 +175,10 @@ describe('用户可见事件契约', () => {
     )
   })
 
-  it('可见图片工具事件与用户消息都保持四图边界', () => {
-    const attachments = Array.from({ length: 5 }, (_, index) => {
+  it('用户消息允许十图，普通图片工具仍保持四图边界', () => {
+    const attachments = Array.from({
+      length: USER_IMAGE_ATTACHMENT_MAX_COUNT + 1,
+    }, (_, index) => {
       const id = `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
       return {
         id,
@@ -190,7 +196,7 @@ describe('用户可见事件契约', () => {
       event: {
         type: 'image-viewed',
         toolUseId: 'view-image-4',
-        attachments: attachments.slice(0, 4),
+        attachments: attachments.slice(0, TOOL_IMAGE_ATTACHMENT_MAX_COUNT),
       },
     }).success, true)
     assert.equal(viewEventSchema.safeParse({
@@ -198,14 +204,20 @@ describe('用户可见事件契约', () => {
       event: {
         type: 'image-viewed',
         toolUseId: 'view-image-5',
-        attachments,
+        attachments: attachments.slice(0, TOOL_IMAGE_ATTACHMENT_MAX_COUNT + 1),
       },
     }).success, false)
     assert.equal(viewEventSchema.safeParse({
       type: 'user-message',
-      text: '普通图片仍受四图上限约束',
+      text: '十张用户图片可以作为同一条消息提交',
       startsTurn: true,
-      attachments: attachments.slice(0, 5),
+      attachments: attachments.slice(0, USER_IMAGE_ATTACHMENT_MAX_COUNT),
+    }).success, true)
+    assert.equal(viewEventSchema.safeParse({
+      type: 'user-message',
+      text: '第十一张超过用户上传边界',
+      startsTurn: true,
+      attachments,
     }).success, false)
   })
 

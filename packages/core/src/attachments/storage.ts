@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import {
-  IMAGE_ATTACHMENT_MAX_COUNT,
   IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
   imageAttachmentSchema,
   imageAttachmentStorageNameSchema,
   type ImageAttachment,
@@ -19,6 +19,11 @@ export interface ImageAttachmentImportTransaction {
   readonly attachments: readonly ImageAttachment[]
   commit(): Promise<void>
   rollback(): Promise<void>
+}
+
+export interface ImageAttachmentImportOptions {
+  abortSignal?: AbortSignal
+  maxCount?: number
 }
 
 export type ImageImportSource = ImageAttachmentInput | {
@@ -37,7 +42,7 @@ export async function importImageAttachments(
     sources,
     attachmentDirectory,
     sessionId,
-    abortSignal,
+    { abortSignal },
   )
   await transaction.commit()
   return [...transaction.attachments]
@@ -47,8 +52,12 @@ export async function prepareImageAttachmentImport(
   sources: readonly ImageImportSource[],
   attachmentDirectory: string,
   sessionId: string,
-  abortSignal?: AbortSignal,
+  options: ImageAttachmentImportOptions = {},
 ): Promise<ImageAttachmentImportTransaction> {
+  const maxCount = options.maxCount ?? TOOL_IMAGE_ATTACHMENT_MAX_COUNT
+  if (!Number.isSafeInteger(maxCount) || maxCount < 1) {
+    throw new Error('图片附件数量上限必须是正整数')
+  }
   if (sources.length === 0) {
     return {
       attachments: [],
@@ -56,8 +65,8 @@ export async function prepareImageAttachmentImport(
       rollback: async () => {},
     }
   }
-  if (sources.length > IMAGE_ATTACHMENT_MAX_COUNT) {
-    throw new Error(`每条消息最多添加 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
+  if (sources.length > maxCount) {
+    throw new Error(`本批最多添加 ${maxCount} 张图片`)
   }
   const sourcePaths = sources.flatMap((source) => source.kind === 'path' ? [source.path] : [])
   if (new Set(sourcePaths.map(normalizeLocalPath)).size !== sourcePaths.length) {
@@ -72,7 +81,7 @@ export async function prepareImageAttachmentImport(
   const seenDigests = new Set<string>()
   try {
     for (const source of sources) {
-      throwIfImageImportAborted(abortSignal)
+      throwIfImageImportAborted(options.abortSignal)
       const bytes = source.kind === 'path'
         ? await readBoundedImageFile(source.path)
         : source.kind === 'inline'
@@ -84,8 +93,8 @@ export async function prepareImageAttachmentImport(
       }
       seenDigests.add(digest)
       const info = inspectImage(bytes)
-      await validateImageDecodes(bytes, info, abortSignal)
-      throwIfImageImportAborted(abortSignal)
+      await validateImageDecodes(bytes, info, options.abortSignal)
+      throwIfImageImportAborted(options.abortSignal)
       const id = randomUUID()
       const storageName = `${id}.${info.extension}`
       await writeFile(join(stagingDirectory, storageName), bytes, {

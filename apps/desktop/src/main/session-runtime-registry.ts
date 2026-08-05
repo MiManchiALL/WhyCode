@@ -2,6 +2,7 @@ import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import type { UserMessageReservation } from './user-message-routing.ts'
 
 export const SESSION_RUNTIME_IDLE_UNLOAD_MS = 30 * 60 * 1000
+export const MAX_CONCURRENT_AGENT_RUNS = 8
 
 export interface SessionRuntimeRegistryOptions {
   maxConcurrentRuns?: number
@@ -26,7 +27,7 @@ export class SessionRuntimeRegistry {
   private selectedRuntimeId: string | null = null
 
   constructor(options: SessionRuntimeRegistryOptions = {}) {
-    this.maxConcurrentRuns = options.maxConcurrentRuns ?? 4
+    this.maxConcurrentRuns = options.maxConcurrentRuns ?? MAX_CONCURRENT_AGENT_RUNS
     this.idleUnloadMs = options.idleUnloadMs ?? SESSION_RUNTIME_IDLE_UNLOAD_MS
     this.onDisposeError = options.onDisposeError ?? (() => {})
     this.onRemoved = options.onRemoved ?? (() => {})

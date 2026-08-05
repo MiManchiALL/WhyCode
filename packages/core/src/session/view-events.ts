@@ -8,7 +8,10 @@ import {
   supersededTaskPlanSchema,
   taskPlanSchema,
 } from '../tasks/types.ts'
-import { imageAttachmentsSchema } from '../attachments/types.ts'
+import {
+  toolImageAttachmentsSchema,
+  userImageAttachmentsSchema,
+} from '../attachments/types.ts'
 import { pdfAttachmentsSchema } from '../pdf/types.ts'
 import {
   SKILL_MAX_SELECTIONS_PER_MESSAGE,
@@ -87,7 +90,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('image-viewed'),
     toolUseId: z.string(),
-    attachments: imageAttachmentsSchema.min(1),
+    attachments: toolImageAttachmentsSchema.min(1),
   }),
   z.object({
     type: z.literal('checkpoint-created'),
@@ -171,7 +174,7 @@ const userMessageViewEventSchema = z.object({
   inputId: z.string().min(1).optional(),
   text: z.string().min(1),
   startsTurn: z.boolean(),
-  attachments: imageAttachmentsSchema.optional(),
+  attachments: userImageAttachmentsSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
   skills: z.array(skillSummarySchema)
     .min(1)

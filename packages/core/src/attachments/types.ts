@@ -1,16 +1,20 @@
 import { z } from 'zod'
-
-/** 单条消息最多携带的图片数；与桌面选择器和持久化 schema 共用。 */
-export const IMAGE_ATTACHMENT_MAX_COUNT = 4
-/** 会话允许保存的原图上限；模型请求使用更小的衍生图边界。 */
-export const IMAGE_ATTACHMENT_MAX_SOURCE_BYTES = 20_000_000
-/** 避免 Base64 膨胀后把单张模型输入推到常见 5 MB 上限之外。 */
-export const IMAGE_MODEL_MAX_BYTES = 3_750_000
-/** 原图解码安全边界，用于拒绝像素炸弹。 */
-export const IMAGE_ATTACHMENT_MAX_DIMENSION = 8_192
-export const IMAGE_ATTACHMENT_MAX_PIXELS = 20_000_000
-/** 当前已验通视觉 Provider 共用的请求级最长边。 */
-export const IMAGE_MODEL_MAX_DIMENSION = 2_048
+import {
+  IMAGE_ATTACHMENT_MAX_DIMENSION,
+  IMAGE_ATTACHMENT_MAX_PIXELS,
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+} from './limits.ts'
+export {
+  IMAGE_ATTACHMENT_MAX_DIMENSION,
+  IMAGE_ATTACHMENT_MAX_PIXELS,
+  IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
+  IMAGE_MODEL_MAX_BYTES,
+  IMAGE_MODEL_MAX_DIMENSION,
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+} from './limits.ts'
 
 /** 宿主交付的有序图片来源；inline Base64 只允许在落盘边界短暂存在。 */
 export type ImageAttachmentInput =
@@ -81,8 +85,12 @@ export function createImageAttachmentsSchema(maxCount: number) {
     })
 }
 
-/** 用户消息与普通图片工具共享的四图边界；PDF 页面图使用会话层专用 schema。 */
-export const imageAttachmentsSchema = createImageAttachmentsSchema(IMAGE_ATTACHMENT_MAX_COUNT)
+export const userImageAttachmentsSchema = createImageAttachmentsSchema(
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
+)
+export const toolImageAttachmentsSchema = createImageAttachmentsSchema(
+  TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+)
 
 export type ImageMediaType = z.infer<typeof imageMediaTypeSchema>
 export type ImageAttachmentSource = z.infer<typeof imageAttachmentSourceSchema>

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  appendImageDrafts,
   prepareImageDrafts,
+  releaseImageDrafts,
   restoredImageDrafts,
   type ImageDraft,
 } from './image-draft.ts'
+import { USER_IMAGE_ATTACHMENT_MAX_COUNT } from '@whycode/core/image-limits'
 
 describe('图片草稿传输', () => {
   it('混合本地文件与剪贴板图片时保留原始顺序', async () => {
@@ -55,5 +58,19 @@ describe('图片草稿传输', () => {
       kind: 'stored',
       attachmentId: attachment.id,
     }])
+  })
+
+  it('选择、粘贴与拖放共用十张上限', () => {
+    const files = Array.from(
+      { length: USER_IMAGE_ATTACHMENT_MAX_COUNT + 1 },
+      (_, index) => new File([`image-${index}`], `image-${index}.png`, { type: 'image/png' }),
+    )
+    const result = appendImageDrafts([], files)
+    try {
+      assert.equal(result.drafts.length, USER_IMAGE_ATTACHMENT_MAX_COUNT)
+      assert.equal(result.duplicateOrLimit, 1)
+    } finally {
+      releaseImageDrafts(result.drafts)
+    }
   })
 })

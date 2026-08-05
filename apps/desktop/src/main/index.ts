@@ -81,7 +81,10 @@ import { routeUserMessage } from './user-message-routing.ts'
 import { startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
-import { SessionRuntimeRegistry } from './session-runtime-registry.ts'
+import {
+  MAX_CONCURRENT_AGENT_RUNS,
+  SessionRuntimeRegistry,
+} from './session-runtime-registry.ts'
 import {
   BackgroundTaskWakeQueue,
   type BackgroundTaskRuntimeResolution,
@@ -1028,7 +1031,10 @@ async function handleUserMessageCommand(
   }
   const workStart = runtimeRegistry.reserveWorkStart(runtime)
   if (!workStart) {
-    return rejectUserMessage(runtime, '同时运行的对话已达到上限（4 个），请等待其中一个结束')
+    return rejectUserMessage(
+      runtime,
+      `同时运行的对话已达到上限（${MAX_CONCURRENT_AGENT_RUNS} 个），请等待其中一个结束`,
+    )
   }
   try {
     let prepared: PreparedUserMessage

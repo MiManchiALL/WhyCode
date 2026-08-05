@@ -1,7 +1,7 @@
 import {
-  IMAGE_ATTACHMENT_MAX_COUNT,
   PDF_ATTACHMENT_MAX_COUNT,
   PDF_ATTACHMENT_MAX_TOTAL_BYTES,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
   prepareImageAttachmentImport,
   preparePdfAttachmentImport,
   type CoreCommand,
@@ -45,6 +45,9 @@ export async function prepareUserMessageAttachments(options: {
   const newImages = freshImages(imageInputs)
   const newPdfs = freshPdfs(pdfInputs)
   const restoredInputIds = command.restoredInputIds ?? []
+  if (imageInputs.length > USER_IMAGE_ATTACHMENT_MAX_COUNT) {
+    throw new Error(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
+  }
   if (imageInputs.length > 0 && !options.supportsImageInput) {
     throw new Error(`${options.modelDisplayName} 不支持识图；请切换到带“图片”标记的模型`)
   }
@@ -53,7 +56,10 @@ export async function prepareUserMessageAttachments(options: {
     newImages,
     journal.attachmentDirectory,
     journal.sessionId,
-    options.abortSignal,
+    {
+      abortSignal: options.abortSignal,
+      maxCount: USER_IMAGE_ATTACHMENT_MAX_COUNT,
+    },
   )
   let pdfImport: Awaited<ReturnType<typeof preparePdfAttachmentImport>> | null = null
   try {
@@ -152,8 +158,8 @@ function validatePreparedAttachments(
   attachments: readonly ImageAttachment[],
   pdfAttachments: readonly PdfAttachment[],
 ): void {
-  if (attachments.length > IMAGE_ATTACHMENT_MAX_COUNT) {
-    throw new Error(`每条消息最多添加 ${IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
+  if (attachments.length > USER_IMAGE_ATTACHMENT_MAX_COUNT) {
+    throw new Error(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
   }
   const imageIdentities = attachments.map((attachment) =>
     attachment.sha256 ?? attachment.storageName)
