@@ -14,7 +14,7 @@ export const PERMISSION_MODES: { id: PermissionMode; label: string }[] = [
 
 export interface PermissionContext {
   mode: PermissionMode
-  /** null = 纯聊天模式（无工具，不会走到判定） */
+  /** null = 无工作文件夹；仅显式声明 availableWithoutProject 的无路径工具可继续判定。 */
   projectDir: string | null
   /** 用户本会话内授权的额外目录（绝对路径） */
   additionalDirs: string[]

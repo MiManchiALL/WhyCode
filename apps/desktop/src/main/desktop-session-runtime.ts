@@ -262,11 +262,16 @@ export class DesktopSessionRuntime {
   setPermissionMode(mode: PermissionMode): void {
     this.session?.setPermissionMode(mode)
     this.permissionMode = mode
-    if (mode !== 'auto') return
-    for (const pending of this.pendingApprovals.values()) {
-      pending.resolve({ approved: true })
+    if (mode === 'readonly') {
+      this.rejectApprovals()
+      return
     }
-    this.pendingApprovals.clear()
+    if (mode === 'auto') {
+      for (const pending of this.pendingApprovals.values()) {
+        pending.resolve({ approved: true })
+      }
+      this.pendingApprovals.clear()
+    }
   }
 
   async abort(source: 'user' | 'shutdown' = 'user'): Promise<void> {

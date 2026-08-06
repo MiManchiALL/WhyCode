@@ -105,7 +105,7 @@ describe('工具副作用串行', () => {
     }
   })
 
-  it('同一步的首次隐私审批会串行判定并复用记住的授权', async () => {
+  it('同一步的首次隐私审批会合并判定并复用记住的授权', async () => {
     let activeApprovals = 0
     let maxActiveApprovals = 0
     let approvals = 0
@@ -145,6 +145,169 @@ describe('工具副作用串行', () => {
     assert.equal(await session.handleUserMessage('运行两个隐私探针'), 'completed')
     assert.equal(approvals, 1)
     assert.equal(maxActiveApprovals, 1)
+  })
+
+  it('同一步多个独立需审批工具合并成一张精确调用清单', async () => {
+    const executions: string[] = []
+    let approvals = 0
+    const first = approvalProbe('BatchApprovalFirst', executions)
+    const second = approvalProbe('BatchApprovalSecond', executions)
+    const model = new MockLanguageModelV4({
+      doStream: [namedToolStep([first.name, second.name]), finalStep()],
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: 'C:\\workspace', osPlatform: 'win32' },
+      emit: () => {},
+      requestApproval: async (request) => {
+        approvals++
+        assert.equal(request.toolName, '批量工具操作（2 项）')
+        assert.deepEqual(
+          request.items?.map((item) => item.toolName),
+          [first.name, second.name],
+        )
+        assert.deepEqual(request.input, [
+          { toolName: first.name, input: {} },
+          { toolName: second.name, input: {} },
+        ])
+        assert.equal(request.suggestion, undefined)
+        return { approved: true }
+      },
+    })
+    session.setExtraTools([first, second])
+
+    assert.equal(await session.handleUserMessage('同一步运行两个需审批工具'), 'completed')
+    assert.equal(approvals, 1)
+    assert.deepEqual(executions, [first.name, second.name])
+  })
+
+  it('审批等待期间切入只读后会再次按最新档位拒绝，不进入工具执行区', async () => {
+    let executions = 0
+    let approvals = 0
+    const events: CoreEvent[] = []
+    const probe = buildTool({
+      name: 'PermissionRaceProbe',
+      description: '权限切档竞态探针',
+      prompt: '执行权限切档竞态探针',
+      inputSchema: z.object({}),
+      isReadOnly: false,
+      kind: 'execute',
+      initialApprovalReason: '该工具会启动外部进程',
+      async execute() {
+        executions++
+        return { data: 'executed', isError: false }
+      },
+    })
+    const model = new MockLanguageModelV4({
+      doStream: [namedToolStep([probe.name]), finalStep()],
+    })
+    let session!: AgentSession
+    session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: 'C:\\workspace', osPlatform: 'win32' },
+      emit: (event) => events.push(event),
+      requestApproval: async () => {
+        approvals++
+        session.setPermissionMode('readonly')
+        return { approved: true }
+      },
+    })
+    session.setExtraTools([probe])
+
+    assert.equal(await session.handleUserMessage('运行权限切档探针'), 'completed')
+    assert.equal(approvals, 1)
+    assert.equal(executions, 0)
+    assert.equal(
+      events.some((event) =>
+        event.type === 'tool-end'
+        && event.isError
+        && String(event.result).includes('当前为只读模式')),
+      true,
+    )
+  })
+
+  it('默认档的项目外写入由一张路径审批同时覆盖写权限与本次路径', async () => {
+    let executions = 0
+    let approvals = 0
+    const probe = buildTool({
+      name: 'OutsideEditProbe',
+      description: '项目外写入审批探针',
+      prompt: '执行项目外写入审批探针',
+      inputSchema: z.object({ path: z.string() }),
+      isReadOnly: false,
+      kind: 'edit',
+      extractPaths: ({ path }) => [path],
+      async execute() {
+        executions++
+        return { data: 'edited', isError: false }
+      },
+    })
+    const model = new MockLanguageModelV4({
+      doStream: [
+        singleToolStep(probe.name, { path: 'D:\\outside\\result.txt' }),
+        finalStep(),
+      ],
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: 'C:\\workspace', osPlatform: 'win32' },
+      emit: () => {},
+      requestApproval: async (request) => {
+        approvals++
+        assert.match(request.reason, /路径超出项目目录/)
+        assert.deepEqual(request.suggestion, {
+          kind: 'add-dir',
+          dir: 'D:\\outside\\result.txt',
+        })
+        return { approved: true }
+      },
+    })
+    session.setExtraTools([probe])
+
+    assert.equal(await session.handleUserMessage('写入项目外文件'), 'completed')
+    assert.equal(approvals, 1)
+    assert.equal(executions, 1)
+  })
+
+  it('全自动档的项目外精确路径会传入工具执行边界且不弹审批', async () => {
+    const outsidePath = 'D:\\outside\\auto-result.txt'
+    let visiblePaths: readonly string[] = []
+    let approvals = 0
+    const probe = buildTool({
+      name: 'AutoOutsideEditProbe',
+      description: '全自动项目外路径探针',
+      prompt: '全自动项目外路径探针',
+      inputSchema: z.object({ path: z.string() }),
+      isReadOnly: false,
+      kind: 'edit',
+      extractPaths: ({ path }) => [path],
+      async execute(_input, context) {
+        visiblePaths = context.additionalDirs
+        return { data: 'edited', isError: false }
+      },
+    })
+    const model = new MockLanguageModelV4({
+      doStream: [singleToolStep(probe.name, { path: outsidePath }), finalStep()],
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: 'C:\\workspace', osPlatform: 'win32' },
+      emit: () => {},
+      requestApproval: async () => {
+        approvals++
+        return { approved: false }
+      },
+    })
+    session.setExtraTools([probe])
+    session.setPermissionMode('auto')
+
+    assert.equal(await session.handleUserMessage('全自动写入项目外文件'), 'completed')
+    assert.equal(approvals, 0)
+    assert.deepEqual(visiblePaths, [outsidePath])
   })
 
   it('把 edit/execute 的完整临界区交给宿主调度，control 不越权进入', async () => {
@@ -213,6 +376,21 @@ function parallelToolStep(toolName = 'SerialProbe') {
   }
 }
 
+function approvalProbe(name: string, executions: string[]) {
+  return buildTool({
+    name,
+    description: `${name} 审批探针`,
+    prompt: `${name} 审批探针`,
+    inputSchema: z.object({}),
+    isReadOnly: false,
+    kind: 'execute',
+    async execute() {
+      executions.push(name)
+      return { data: `${name}-ok`, isError: false }
+    },
+  })
+}
+
 function namedToolStep(toolNames: string[]) {
   return {
     stream: simulateReadableStream({
@@ -223,6 +401,26 @@ function namedToolStep(toolNames: string[]) {
           toolName,
           input: '{}',
         })),
+        {
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: usage(),
+        },
+      ],
+    }),
+  }
+}
+
+function singleToolStep(toolName: string, input: Record<string, unknown>) {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: 'tool-call' as const,
+          toolCallId: 'single-tool',
+          toolName,
+          input: JSON.stringify(input),
+        },
         {
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },

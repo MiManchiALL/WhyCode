@@ -12,6 +12,7 @@ export function BlockView({
   editable,
   expanded,
   busy,
+  showCheckpointRestore,
   checkpointRestoreToolUseId,
   onCheckpointRestoreChange,
   onEdit,
@@ -22,6 +23,7 @@ export function BlockView({
   editable: boolean
   expanded: boolean
   busy: boolean
+  showCheckpointRestore: boolean
   checkpointRestoreToolUseId: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
@@ -123,7 +125,7 @@ export function BlockView({
           <span className="font-medium">{call.name}</span>
           <span className="truncate text-xs text-neutral-400">{summary}</span>
         </button>
-        {call.hasCheckpoint && call.status !== 'running' && (
+        {showCheckpointRestore && call.status !== 'running' && (
           <RestoreButton
             runtimeId={runtimeId}
             toolUseId={call.id}
@@ -184,7 +186,7 @@ function RestoreButton({
         disabled
         aria-busy="true"
       >
-        ○ 回滚中…
+        ○ 本轮回滚中…
       </button>
     )
   }
@@ -193,10 +195,10 @@ function RestoreButton({
       <button
         className="shrink-0 text-xs text-neutral-400 hover:text-neutral-700"
         disabled={busy}
-        title="回滚到此操作执行前"
+        title="从本轮首个文件改动开始回滚"
         onClick={() => setOpen(true)}
       >
-        ⟲ 回滚
+        ⟲ 回滚本轮
       </button>
     )
   }

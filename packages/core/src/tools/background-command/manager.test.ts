@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { createBackgroundCommandTools, START_COMMAND_TOOL_NAME } from './index.ts'
+import {
+  createBackgroundCommandTools,
+  START_COMMAND_TOOL_NAME,
+  STOP_COMMAND_TOOL_NAME,
+  WRITE_COMMAND_INPUT_TOOL_NAME,
+} from './index.ts'
 import { CommandSessionManager } from './manager.ts'
 import type {
   CommandOutputChunk,
@@ -194,8 +199,14 @@ describe('后台命令会话', () => {
     const tools = createBackgroundCommandTools(manager, SESSION_A)
     assert.equal(new Set(tools.map((tool) => tool.name)).size, 5)
     const start = tools.find((tool) => tool.name === START_COMMAND_TOOL_NAME)
+    const writeInput = tools.find((tool) => tool.name === WRITE_COMMAND_INPUT_TOOL_NAME)
+    const stop = tools.find((tool) => tool.name === STOP_COMMAND_TOOL_NAME)
     assert.ok(start)
+    assert.ok(writeInput)
+    assert.ok(stop)
     assert.equal(start.kind, 'execute')
+    assert.equal(writeInput.kind, 'execute')
+    assert.equal(stop.kind, 'control')
     assert.equal(start.checkpointScope, undefined)
   })
 

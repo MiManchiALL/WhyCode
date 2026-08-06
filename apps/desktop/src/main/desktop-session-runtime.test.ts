@@ -96,6 +96,37 @@ describe('会话授权入口', () => {
     })
     assert.equal(events.filter((event) => event.type === 'approval-request').length, 1)
   })
+
+  it('切入只读档会拒绝并清空旧档位下仍在等待的授权', async () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    const pending = runtime.requestApproval(request)
+    assert.equal(runtime.approval?.requestId, request.requestId)
+    runtime.setPermissionMode('readonly')
+
+    assert.deepEqual(await pending, { approved: false })
+    assert.equal(runtime.approval, null)
+    assert.equal(events.filter((event) => event.type === 'approval-request').length, 1)
+  })
+
+  it('默认与自动编辑档不会替用户处理仍在等待的授权', async () => {
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: () => {},
+    })
+
+    const pending = runtime.requestApproval(request)
+    runtime.setPermissionMode('acceptEdits')
+    assert.equal(runtime.approval?.requestId, request.requestId)
+    assert.equal(runtime.respondApproval(request.requestId, { approved: false }), true)
+    assert.deepEqual(await pending, { approved: false })
+  })
 })
 
 describe('运行时 Worktree 状态转换', () => {

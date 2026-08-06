@@ -156,7 +156,8 @@ export function createBackgroundCommandTools(
         closeAfterWrite: z.boolean().optional().describe('写入后是否关闭 stdin（发送 EOF），默认 false'),
       }),
       isReadOnly: false,
-      kind: 'control',
+      // stdin 可让既有进程产生文件或外部副作用，不属于只改变会话内部状态的 control。
+      kind: 'execute',
       async execute(input) {
         const task = await manager.writeInput(
           sessionId,

@@ -2,7 +2,7 @@ import { basename, dirname, isAbsolute, parse, resolve, sep } from 'node:path'
 import { realpathSync } from 'node:fs'
 
 /**
- * 路径安全（M2-b）：敏感路径强制审批（任何权限档位不可绕过）+ Windows 可疑模式拒绝。
+ * 路径安全（M2-b）：敏感路径识别（由权限引擎按档位处理）+ Windows 可疑模式拒绝。
  * 清单参考 Claude Code 的 safetyCheck 与 hasSuspiciousWindowsPathPattern。
  */
 
@@ -23,7 +23,7 @@ const SENSITIVE_DIRS = new Set(['.git', '.whycode', '.vscode', '.idea'])
 /** Windows 设备名（任何扩展名下都保留设备语义） */
 const DOS_DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
 
-/** 写类操作命中敏感路径 → 强制审批（allow 规则与全自动档均不可跳过） */
+/** 写类操作命中敏感路径；非全自动 Main 由权限引擎强制审批。 */
 export function isSensitivePath(absPath: string): boolean {
   const name = basename(absPath).toLowerCase()
   if (SENSITIVE_FILES.has(name) || name.startsWith('.env')) return true

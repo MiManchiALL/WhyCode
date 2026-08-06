@@ -810,18 +810,19 @@ async function handleCommand(
       return { ok: true }
     }
     case 'set-permission-mode': {
+      // 权限是当前运行时的执行边界，必须在任何磁盘等待之前生效；否则界面已显示只读时，
+      // 旧审批仍可能在配置写入窗口内按原档位执行。持久化只负责下次会话偏好。
+      runtime.setPermissionMode(command.mode)
+      preferredPermissionMode = command.mode
       try {
         await persistPermissionMode(command.mode)
       } catch (error) {
         runtime.emit({
           type: 'error',
-          message: `权限设置保存失败：${error instanceof Error ? error.message : String(error)}`,
+          message: `权限档位已在当前会话生效，但偏好保存失败；重启后可能恢复旧档位：${error instanceof Error ? error.message : String(error)}`,
           recoverable: true,
         })
-        return { ok: false }
       }
-      runtime.setPermissionMode(command.mode)
-      preferredPermissionMode = command.mode
       return { ok: true }
     }
     case 'restore-checkpoint': {

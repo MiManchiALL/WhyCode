@@ -22,7 +22,7 @@ export interface ToolDefinition<
   inputSchema: InputSchema
   /** 只读工具可与其它只读工具并行执行 */
   isReadOnly: boolean
-  /** 权限档位判定用的操作类别：read 免审批 / edit 受 acceptEdits 档控制 / execute 最严 */
+  /** 权限类别：read 读取；control 只限内部/保护性控制；edit/execute 受相应档位约束。 */
   kind: 'read' | 'edit' | 'execute' | 'control'
   /** 控制面工具可在无项目的讨论会话中使用；默认 false，避免意外暴露文件/命令工具。 */
   availableWithoutProject: boolean
@@ -30,7 +30,7 @@ export interface ToolDefinition<
   requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
   endsTurnOnSuccess: boolean
-  /** 隐私敏感读操作首次使用也需审批；会话记住或处于全自动档后按普通权限链判定。 */
+  /** 隐私或信任边界首次使用也需审批；会话记住或全自动档仍服从常规硬拒绝。 */
   initialApprovalReason?: string
   /** 终止型工具成功后的语义；waiting-user 会保留计划并等待下一条用户消息。 */
   turnEndReasonOnSuccess: 'completed' | 'waiting-user'

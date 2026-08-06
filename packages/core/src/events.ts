@@ -117,6 +117,14 @@ export type CoreEvent =
       reason: string
       /** 写文件类工具附带的变更预览（unified diff 文本） */
       diff?: string
+      /** 同一模型步骤内共同审批的精确工具调用；单项审批省略。 */
+      items?: readonly {
+        toolCallId: string
+        toolName: string
+        input: unknown
+        reason: string
+        diff?: string
+      }[]
       /** 批准时可选择「本会话记住」的建议（无则只能单次批准） */
       suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
     }

@@ -3,6 +3,8 @@ import { describe, it } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
 import {
   applyCoreEvent,
+  applyViewEvent,
+  checkpointRestoreAnchorIds,
   createConversationState,
   editableUserBlockId,
   eventsAfterRuntimeSnapshot,
@@ -323,7 +325,7 @@ describe('会话界面时间线重建', () => {
     assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].turnId, 'turn-edited')
   })
 
-  it('重启重放时忽略旧命令快照，并在恢复后清除精确检查点按钮', () => {
+  it('重放时忽略 partial 覆盖，并在恢复后清除精确检查点按钮', () => {
     const state = createConversationState([
       core({ type: 'tool-start', toolUseId: 'tool-1', toolName: 'RunCommand', input: {} }),
       core({
@@ -356,6 +358,53 @@ describe('会话界面时间线重建', () => {
     assert.equal(tools[0]?.kind === 'tool' ? tools[0].call.hasCheckpoint : null, undefined)
     assert.equal(tools[1]?.kind === 'tool' ? tools[1].call.hasCheckpoint : null, false)
     assert.match(JSON.stringify(state.blocks), /已回滚检查点覆盖的文件/)
+  })
+
+  it('同一轮多个文件检查点只把首个工具投影为回滚入口', () => {
+    const state = createConversationState([
+      { type: 'user-message', text: '新建 A、B、C', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-files' }),
+      ...checkpointEvents('tool-a', 'A'),
+      ...checkpointEvents('tool-b', 'B'),
+      ...checkpointEvents('tool-c', 'C'),
+    ])
+
+    assert.deepEqual([...checkpointRestoreAnchorIds(state)], ['tool-a'])
+    const tools = state.blocks.filter((block) => block.kind === 'tool')
+    assert.equal(tools.every((block) => block.call.hasCheckpoint), true)
+  })
+
+  it('每轮各自保留一个回滚入口，检查点失效后实时与重放投影一致', () => {
+    const events: ViewEvent[] = [
+      { type: 'user-message', text: '第一轮', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-1' }),
+      ...checkpointEvents('tool-a', 'A'),
+      ...checkpointEvents('tool-b', 'B'),
+      { type: 'user-message', text: '第二轮', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-2' }),
+      ...checkpointEvents('tool-c', 'C'),
+      core({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-c',
+        turnId: 'turn-2',
+        scope: 'files',
+        ok: true,
+        invalidatedToolUseIds: ['tool-c'],
+      }),
+    ]
+    const replayed = createConversationState(events)
+    let live = createConversationState()
+    for (const event of events) {
+      live = event.type === 'core-event'
+        ? applyCoreEvent(live, event.event)
+        : applyViewEvent(live, event)
+    }
+
+    assert.deepEqual([...checkpointRestoreAnchorIds(replayed)], ['tool-a'])
+    assert.deepEqual(
+      [...checkpointRestoreAnchorIds(live)],
+      [...checkpointRestoreAnchorIds(replayed)],
+    )
   })
 
   it('恢复结构化任务计划，并在文件和对话回滚时同步恢复计划状态', () => {
@@ -530,6 +579,19 @@ describe('会话界面时间线重建', () => {
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {
   return { type: 'core-event', event }
+}
+
+function checkpointEvents(toolUseId: string, path: string): ViewEvent[] {
+  return [
+    core({ type: 'tool-start', toolUseId, toolName: 'WriteFile', input: { path } }),
+    core({ type: 'tool-end', toolUseId, result: 'ok', isError: false }),
+    core({
+      type: 'checkpoint-created',
+      toolUseId,
+      hash: `checkpoint-${toolUseId}`,
+      coverage: 'complete',
+    }),
+  ]
 }
 
 function taskPlan(revision: number) {

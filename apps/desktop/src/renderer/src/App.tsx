@@ -25,6 +25,7 @@ import {
 import {
   applyCoreEvent,
   appendNotice,
+  checkpointRestoreAnchorIds,
   createConversationState,
   editableUserBlockId,
   eventsAfterRuntimeSnapshot,
@@ -85,6 +86,13 @@ interface Approval {
   input: unknown
   reason: string
   diff?: string
+  items?: readonly {
+    toolCallId: string
+    toolName: string
+    input: unknown
+    reason: string
+    diff?: string
+  }[]
   suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
 }
 
@@ -182,6 +190,7 @@ export function App() {
     workspaceMode: workspace.mode,
   })
   const sections = conversationSections(blocks, workStartedAt)
+  const checkpointRestoreAnchors = checkpointRestoreAnchorIds(view)
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
   const addError = useCallback((text: string) => {
@@ -433,6 +442,7 @@ export function App() {
         break
       case 'agent-status':
         setStatus(event.status)
+        if (event.status !== 'waiting-approval') setApproval(null)
         if (event.status === 'idle' || event.status === 'error') {
           setStopping(false)
           if (deletionBlocksRuntimeRef.current) {
@@ -1234,6 +1244,7 @@ export function App() {
           expandedIds={view.expanded}
           editableBlockId={editableBlockId}
           busy={interactionBusy}
+          checkpointRestoreAnchorIds={checkpointRestoreAnchors}
           checkpointRestoreToolUseId={checkpointRestoreToolUseId}
           onCheckpointRestoreChange={changeCheckpointRestore}
           onEdit={editUserMessage}
@@ -1458,37 +1469,32 @@ function ApprovalCard({
 }) {
   const rememberLabel =
     approval.suggestion?.kind === 'add-dir'
-      ? '允许并记住此目录（本会话）'
+      ? '允许并记住此路径范围（本会话）'
       : approval.suggestion?.kind === 'allow-tool'
         ? `允许且本会话不再询问 ${approval.suggestion.toolName}`
         : null
   return (
     <div className="mb-2 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
       <div className="mb-1 font-medium text-amber-800">
-        请求执行：{approval.toolName}
+        {approval.items
+          ? `请求执行：同一步的 ${approval.items.length} 项操作`
+          : `请求执行：${approval.toolName}`}
       </div>
       <div className="mb-2 text-xs text-amber-700">{approval.reason}</div>
-      {approval.diff ? (
-        <pre className="mb-2 max-h-64 overflow-auto rounded bg-white p-2 text-xs">
-          {approval.diff.split('\n').map((line, i) => (
-            <div
-              key={i}
-              className={
-                line.startsWith('+') && !line.startsWith('+++')
-                  ? 'text-green-700'
-                  : line.startsWith('-') && !line.startsWith('---')
-                    ? 'text-red-700'
-                    : 'text-neutral-500'
-              }
-            >
-              {line}
+      {approval.items ? (
+        <div className="mb-2 max-h-80 space-y-2 overflow-auto">
+          {approval.items.map((item, index) => (
+            <div key={item.toolCallId} className="rounded border border-amber-200 bg-white p-2">
+              <div className="mb-1 text-xs font-medium text-neutral-800">
+                {index + 1}. {item.toolName}
+              </div>
+              <div className="mb-1 text-xs text-amber-700">{item.reason}</div>
+              <ApprovalInputPreview input={item.input} diff={item.diff} />
             </div>
           ))}
-        </pre>
+        </div>
       ) : (
-        <pre className="mb-2 max-h-40 overflow-auto rounded bg-white p-2 text-xs text-neutral-600">
-          {summarizeInput(approval.input)}
-        </pre>
+        <ApprovalInputPreview input={approval.input} diff={approval.diff} />
       )}
       <div className="flex flex-wrap gap-2">
         <button
@@ -1513,5 +1519,33 @@ function ApprovalCard({
         </button>
       </div>
     </div>
+  )
+}
+
+function ApprovalInputPreview({ input, diff }: { input: unknown; diff?: string }) {
+  if (!diff) {
+    return (
+      <pre className="max-h-40 overflow-auto rounded bg-neutral-50 p-2 text-xs text-neutral-600">
+        {summarizeInput(input)}
+      </pre>
+    )
+  }
+  return (
+    <pre className="max-h-64 overflow-auto rounded bg-neutral-50 p-2 text-xs">
+      {diff.split('\n').map((line, index) => (
+        <div
+          key={index}
+          className={
+            line.startsWith('+') && !line.startsWith('+++')
+              ? 'text-green-700'
+              : line.startsWith('-') && !line.startsWith('---')
+                ? 'text-red-700'
+                : 'text-neutral-500'
+          }
+        >
+          {line}
+        </div>
+      ))}
+    </pre>
   )
 }

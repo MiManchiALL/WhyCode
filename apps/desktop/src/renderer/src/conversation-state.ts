@@ -115,6 +115,28 @@ export function createConversationState(events: readonly ViewEvent[] = []): Conv
   return state
 }
 
+/**
+ * 回滚的事务边界是整轮对话；每个工具检查点仍保留为恢复引擎的精确事实，
+ * 但界面只把该轮最早的有效检查点投影为入口，避免让用户误以为按钮只影响单个工具。
+ */
+export function checkpointRestoreAnchorIds(
+  state: Pick<ConversationState, 'blocks' | 'turnStartBlocks'>,
+): ReadonlySet<string> {
+  const anchors = new Set<string>()
+  const starts = [...new Set(state.turnStartBlocks.values())].sort((left, right) => left - right)
+  for (let turnIndex = 0; turnIndex < starts.length; turnIndex++) {
+    const start = starts[turnIndex]!
+    const end = starts[turnIndex + 1] ?? state.blocks.length
+    for (let blockIndex = start; blockIndex < end; blockIndex++) {
+      const block = state.blocks[blockIndex]
+      if (block?.kind !== 'tool' || !block.call.hasCheckpoint) continue
+      anchors.add(block.call.id)
+      break
+    }
+  }
+  return anchors
+}
+
 export function eventsAfterRuntimeSnapshot(
   buffered: readonly { sequence: number; event: CoreEvent }[],
   snapshotSequence: number,
@@ -236,7 +258,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         attachments: event.attachments.map((attachment) => structuredClone(attachment)),
       }))
     case 'checkpoint-created':
-      // 旧会话中的 partial 事件来自已移除的命令树快照，不再展示失效回滚入口。
+      // 只有完整精确覆盖才能兑现恢复承诺；partial 不具备可展示的回滚语义。
       if (event.coverage !== 'complete') return state
       return updateTool(state, event.toolUseId, (call) => ({
         ...call,

@@ -9,6 +9,7 @@ interface ConversationViewProps {
   expandedIds: ReadonlySet<string>
   editableBlockId: string | null
   busy: boolean
+  checkpointRestoreAnchorIds: ReadonlySet<string>
   checkpointRestoreToolUseId: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
@@ -82,6 +83,7 @@ function ConversationBlock({
   expandedIds,
   editableBlockId,
   busy,
+  checkpointRestoreAnchorIds,
   checkpointRestoreToolUseId,
   onCheckpointRestoreChange,
   onEdit,
@@ -94,6 +96,9 @@ function ConversationBlock({
       editable={block.id === editableBlockId}
       expanded={expandedIds.has(block.id)}
       busy={busy}
+      showCheckpointRestore={
+        block.kind === 'tool' && checkpointRestoreAnchorIds.has(block.call.id)
+      }
       checkpointRestoreToolUseId={checkpointRestoreToolUseId}
       onCheckpointRestoreChange={onCheckpointRestoreChange}
       onEdit={onEdit}

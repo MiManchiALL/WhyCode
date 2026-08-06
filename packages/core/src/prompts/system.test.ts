@@ -65,6 +65,7 @@ describe('通用 Agent 提示约束', () => {
 
     assert.doesNotMatch(prompt, /StartCommand/)
     assert.doesNotMatch(prompt, /GetCommandOutput/)
+    assert.match(prompt, /未限定在临时工作区内的命令会被工具层拒绝/)
   })
 
   it('无项目讨论阶段保留协议能力但不声称拥有文件工具', () => {
