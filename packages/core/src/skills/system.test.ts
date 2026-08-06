@@ -22,6 +22,14 @@ const EXPECTED_SYSTEM_SKILLS = [
   'verify',
 ]
 
+const GENERAL_SKILL_CONTRACTS = new Map<string, readonly RegExp[]>([
+  ['code-review', [/git merge-base HEAD <comparison-ref>/, /作者得知后大概率会修复/, /`P0`：普遍发生的发布阻断/]],
+  ['debug', [/可证伪假设/, /首个错误状态/, /不凭猜测改代码/]],
+  ['simplify', [/本次任务已编辑或用户明确指定/, /相同值或引用仍触发/, /不为单次使用新增抽象/]],
+  ['skill-creator', [/只询问会阻断设计/, /不复制其它宿主扩展字段/, /默认只写指令/]],
+  ['verify', [/测试通过只是辅助证据/, /反例或对抗性检查/, /PASS、FAIL 或 PARTIAL/]],
+])
+
 describe('内置 Skill 安装与发现', () => {
   it('物化固定内置集合，并以 system 作用域进入统一目录快照', async () => {
     const home = await mkdtemp(join(tmpdir(), 'whycode-system-skills-'))
@@ -33,6 +41,18 @@ describe('内置 Skill 安装与发现', () => {
       const snapshot = await new SkillCatalogService({ homeDir: home }).snapshot(null)
       assert.deepEqual(snapshot.skills.map((skill) => skill.name), EXPECTED_SYSTEM_SKILLS)
       assert.ok(snapshot.skills.every((skill) => skill.scope === 'system'))
+
+      for (const [skillName, expectations] of GENERAL_SKILL_CONTRACTS) {
+        const skill = snapshot.entries.find((entry) => entry.name === skillName)!
+        const frontmatter = /^---\n([\s\S]*?)\n---/.exec(skill.content)
+        assert.ok(frontmatter)
+        assert.deepEqual(
+          frontmatter[1]!.split('\n').map((line) => line.slice(0, line.indexOf(':'))),
+          ['name', 'description'],
+        )
+        for (const expectation of expectations) assert.match(skill.content, expectation)
+      }
+
       const creator = snapshot.entries.find((skill) => skill.name === 'skill-creator')!
       const reference = await createSkillTool(snapshot).execute({
         skillId: creator.id,
