@@ -20,12 +20,15 @@ release/
 .agent_scratch/
 .whycode/
 
+# --- 本地私有开发文档 ---
+/docs/
+
 # --- 系统与编辑器 ---
 .DS_Store
 Thumbs.db
 *.log
 
 # --- 严禁提交的外部源码 ---
-# Claude Code 源码位于仓库外（E:\workspace\Claude Code），若被误拷入仓库也一律忽略
+# 外部参考源码必须位于仓库外；若被误拷入也一律忽略
 Claude Code/
 claude-code/

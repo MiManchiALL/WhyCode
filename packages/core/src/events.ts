@@ -4,7 +4,7 @@
  * 硬性约束：
  * - 所有类型必须 JSON-safe（可 structuredClone / JSON.stringify），未来跨进程传输不改协议。
  * - 新增事件只允许追加 type，不允许修改已有字段语义（宠物侧会依赖子集）。
- * - 与 docs/02-技术栈与架构.md §6 保持同步，改这里必须改文档。
+ * - 新增事件必须同步更新宿主适配、可见事件契约、恢复投影与对应测试。
  */
 
 import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'

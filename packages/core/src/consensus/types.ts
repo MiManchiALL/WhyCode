@@ -1,5 +1,5 @@
 /**
- * 多 Agent 协商协议数据结构（M3，协议依据 E:\workspace\multi-agent-decision-protocol.md §5/§7）。
+ * 多 Agent 协商协议数据结构（M3；字段语义由编排器与契约测试共同维护）。
  * agent_id / round / candidate_id 由 Orchestrator 分配记录，不由模型自报（减少格式错误面）。
  */
 
