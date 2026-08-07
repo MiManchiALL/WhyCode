@@ -222,13 +222,19 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
       return appendThinking(state, event.text)
     case 'thinking-end':
       return endThinking(state, event.durationMs)
-    case 'work-finished':
-      return appendBlock(state, {
+    case 'work-finished': {
+      const durationId = nextBlockId(state)
+      const next = appendBlock(state, {
         kind: 'work-duration',
-        id: nextBlockId(state),
+        id: durationId,
         durationMs: event.durationMs,
         outcome: event.outcome,
       })
+      if (event.outcome !== 'stopped') return next
+      const expanded = new Set(next.expanded)
+      expanded.add(currentWorkSectionId(state.blocks, durationId))
+      return { ...next, expanded }
+    }
     case 'tool-start':
       return appendBlock(state, {
         kind: 'tool',
@@ -444,6 +450,21 @@ export function toggleExpanded(state: ConversationState, id: string): Conversati
   const expanded = new Set(state.expanded)
   expanded.has(id) ? expanded.delete(id) : expanded.add(id)
   return { ...state, expanded }
+}
+
+/** 与会话投影使用同一工作区身份：上一条时长之后，从本轮首条用户消息开始。 */
+function currentWorkSectionId(blocks: readonly Block[], boundaryId: string): string {
+  let segmentStart = 0
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    if (blocks[index]?.kind === 'work-duration') {
+      segmentStart = index + 1
+      break
+    }
+  }
+  const segment = blocks.slice(segmentStart)
+  const userIndex = segment.findIndex((block) => block.kind === 'user')
+  const firstWorkBlock = segment[userIndex >= 0 ? userIndex : 0]
+  return `work-${firstWorkBlock?.id ?? boundaryId}`
 }
 
 export function createPeerBlock(agentId: 'B' | 'C'): PeerBlockData {

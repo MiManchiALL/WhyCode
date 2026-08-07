@@ -25,6 +25,7 @@ import type {
   OpenMcpConfigRequest,
   SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
+  SaveConsensusModelSettingsRequest,
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
@@ -58,6 +59,12 @@ const api = {
     request: SaveAuxiliaryModelSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(
     IPC.saveAuxiliaryModelSettings,
+    request,
+  ),
+  saveConsensusModelSettings: (
+    request: SaveConsensusModelSettingsRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(
+    IPC.saveConsensusModelSettings,
     request,
   ),
   saveWebSearchSettings: (

@@ -211,6 +211,25 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(completed.activityBlocks), ['thinking-1'])
     assert.deepEqual(ids(completed.finalBlocks), ['answer'])
   })
+
+  it('用户停止任务后仍生成可折叠工作区，并保留工具、模型输出和停止终态', () => {
+    const blocks = [
+      user('user-1', 'turn-1'),
+      thinking('thinking-1'),
+      tool('tool-1'),
+      text('partial-answer', '尚未完成的阶段输出'),
+      duration('duration-1', 'stopped'),
+    ]
+
+    const sections = conversationSections(blocks)
+
+    const stopped = asCompleted(sections[0])
+    assert.equal(stopped.id, 'work-user-1')
+    assert.equal(stopped.duration.outcome, 'stopped')
+    assert.deepEqual(ids(stopped.userBlocks), ['user-1'])
+    assert.deepEqual(ids(stopped.activityBlocks), ['thinking-1', 'tool-1'])
+    assert.deepEqual(ids(stopped.finalBlocks), ['partial-answer'])
+  })
 })
 
 function asCompleted(
@@ -266,6 +285,9 @@ function notice(id: string, text: string): Block {
   return { kind: 'notice', id, text }
 }
 
-function duration(id: string): Block {
-  return { kind: 'work-duration', id, durationMs: 61_000, outcome: 'completed' }
+function duration(
+  id: string,
+  outcome: Extract<Block, { kind: 'work-duration' }>['outcome'] = 'completed',
+): Block {
+  return { kind: 'work-duration', id, durationMs: 61_000, outcome }
 }

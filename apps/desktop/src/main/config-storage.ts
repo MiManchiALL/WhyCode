@@ -50,10 +50,7 @@ interface StoredConfig {
     visionModelId?: unknown
   }
   consensusAgents?: Partial<Record<'B' | 'C', {
-    model: string
-    apiKey?: string
-    encryptedApiKey?: string
-    baseURL?: string
+    modelId?: unknown
   }>>
   webSearch?: {
     activeProvider?: string
@@ -75,7 +72,7 @@ interface StoredConfig {
   customConnections?: unknown
 }
 
-const CONFIG_VERSION = 8
+const CONFIG_VERSION = 9
 const RETIRED_MODEL_MIGRATION_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
@@ -99,7 +96,7 @@ export function loadConfig(
     const retiredModelLabels = parseRetiredModelLabels(stored.retiredModelLabels)
     const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
     const auxiliaryModels = parseAuxiliaryModels(stored.auxiliaryModels)
-    const consensusAgents = parseConsensusAgents(stored.consensusAgents, codec)
+    const consensusAgents = parseConsensusAgents(stored.consensusAgents)
     const webSearch = parseWebSearch(stored.webSearch, codec)
     const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
     const mcpOAuthSessions = parseStoredMcpOAuthSessions(stored.mcpOAuthSessions, codec)
@@ -151,9 +148,7 @@ export async function saveConfig(
     ...(config.consensusAgents ? {
       consensusAgents: Object.fromEntries(
         Object.entries(config.consensusAgents).map(([id, agent]) => [id, agent && {
-          ...agent,
-          apiKey: undefined,
-          encryptedApiKey: codec.encrypt(agent.apiKey),
+          modelId: agent.modelId,
         }]),
       ),
     } : {}),
@@ -249,17 +244,14 @@ function parseCredential(value: unknown, codec?: ConfigSecretCodec): ProviderCon
 
 function parseConsensusAgents(
   value: unknown,
-  codec?: ConfigSecretCodec,
 ): WhycodeConfig['consensusAgents'] {
   if (!isRecord(value)) return undefined
   const parsed: WhycodeConfig['consensusAgents'] = {}
   for (const id of ['B', 'C'] as const) {
     const candidate = value[id]
-    if (!isRecord(candidate) || typeof candidate.model !== 'string') continue
-    const apiKey = readSecret(candidate, codec)
-    if (apiKey === null) continue
-    const baseURL = optionalString(candidate.baseURL)
-    parsed[id] = { model: candidate.model, apiKey, ...(baseURL ? { baseURL } : {}) }
+    if (!isRecord(candidate)) continue
+    const modelId = safeLabel(candidate.modelId, 300)
+    if (modelId) parsed[id] = { modelId }
   }
   return Object.keys(parsed).length > 0 ? parsed : undefined
 }

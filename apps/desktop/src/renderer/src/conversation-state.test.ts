@@ -116,6 +116,24 @@ describe('会话界面时间线重建', () => {
     }])
   })
 
+  it('用户停止默认展开工作区，并允许沿用同一展开状态手动收起', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '检查项目', startsTurn: true },
+      core({
+        type: 'tool-start',
+        toolUseId: 'tool-1',
+        toolName: 'ReadFile',
+        input: { path: 'README.md' },
+      }),
+      core({ type: 'tool-end', toolUseId: 'tool-1', result: 'ok', isError: false }),
+      core({ type: 'work-finished', durationMs: 1_500, outcome: 'stopped' }),
+    ])
+
+    assert.equal(state.expanded.has('work-b0'), true)
+    state = toggleExpanded(state, 'work-b0')
+    assert.equal(state.expanded.has('work-b0'), false)
+  })
+
   it('显式 Skill 摘要随根消息和插话进入可见时间线', () => {
     const skill = {
       id: `skill:${'a'.repeat(64)}`,

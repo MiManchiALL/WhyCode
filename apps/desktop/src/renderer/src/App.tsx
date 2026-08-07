@@ -143,6 +143,7 @@ export function App() {
   const blocks = view.blocks
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
+  const conversationStarted = blocks.some((block) => block.kind === 'user')
   const {
     catalog: skillCatalog,
     selected: selectedSkills,
@@ -171,12 +172,12 @@ export function App() {
     modelId,
     projectDir,
     workspaceMode: workspace.mode,
+    compactAvailable: conversationStarted,
     compactDisabled: status !== 'idle'
       && status !== 'error',
     onCommand: (command) => slashCommandRef.current(command),
   })
   const sections = conversationSections(blocks, workStartedAt)
-  const conversationStarted = blocks.some((block) => block.kind === 'user')
   const checkpointRestoreAnchors = checkpointRestoreAnchorIds(view)
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
@@ -921,6 +922,7 @@ export function App() {
 
   const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
     setConnectionSettings(snapshot)
+    void window.whycode.consensusStatus().then(setConsensus)
     void refreshModels().catch((error) => {
       addError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
     })

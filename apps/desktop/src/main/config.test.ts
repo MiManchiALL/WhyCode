@@ -147,7 +147,7 @@ describe('配置密钥存储', () => {
     }
   })
 
-  it('保存时不落明文，读取时恢复内置、CLIProxyAPI、协商和搜索密钥', async () => {
+  it('保存时不落明文，读取时恢复连接密钥与协商模型引用', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-'))
     const path = join(root, 'config.json')
     const value: WhycodeConfig = {
@@ -164,7 +164,7 @@ describe('配置密钥存储', () => {
       retiredModelLabels: { 'legacy:model': 'Legacy Model' },
       auxiliaryModels: { visionModelId: 'mimo:mimo-v2.5' },
       consensusAgents: {
-        B: { model: 'mimo:mimo-v2.5', apiKey: 'peer-secret' },
+        B: { modelId: 'mimo:mimo-v2.5' },
       },
       webSearch: {
         activeProvider: 'tavily',
@@ -197,7 +197,7 @@ describe('配置密钥存储', () => {
       const raw = await readFile(path, 'utf-8')
       assert.doesNotMatch(
         raw,
-        /official-secret|proxy-secret|peer-secret|perplexity-secret|tavily-secret|context7-secret|github-client-secret|github-oauth-token|github-refresh-token/,
+        /official-secret|proxy-secret|perplexity-secret|tavily-secret|context7-secret|github-client-secret|github-oauth-token|github-refresh-token/,
       )
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
@@ -209,7 +209,7 @@ describe('配置密钥存储', () => {
       })
       assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
       assert.deepEqual(loaded?.auxiliaryModels, { visionModelId: 'mimo:mimo-v2.5' })
-      assert.equal(loaded?.consensusAgents?.B?.apiKey, 'peer-secret')
+      assert.deepEqual(loaded?.consensusAgents?.B, { modelId: 'mimo:mimo-v2.5' })
       assert.equal(loaded?.webSearch?.activeProvider, 'tavily')
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
       assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
@@ -290,7 +290,7 @@ describe('配置密钥存储', () => {
     }
   })
 
-  it('启动迁移一次完成明文加密、旧自定义删除和历史型号留名', async () => {
+  it('启动迁移一次完成明文加密、旧自定义与旧协商连接删除和历史型号留名', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-migration-'))
     const path = join(root, 'config.json')
     try {
@@ -313,7 +313,7 @@ describe('配置密钥存储', () => {
       assert.doesNotMatch(raw, /legacy-secret|legacy-peer-secret|removed-custom-secret|customConnections|"apiKey"/)
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'legacy-secret')
-      assert.equal(loaded?.consensusAgents?.B?.apiKey, 'legacy-peer-secret')
+      assert.equal(loaded?.consensusAgents, undefined)
       assert.equal(loaded?.defaultModel, undefined)
       assert.equal(
         loaded?.retiredModelLabels?.['custom:old-proxy'],
@@ -321,6 +321,40 @@ describe('配置密钥存储', () => {
       )
       assert.equal(loaded?.retiredModelLabels?.['openai:gpt-5.2'], 'GPT-5.2')
       assert.equal(await migrateLegacyConfig(codec, path), false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('v8 升级时直接删除 B/C 的独立端点与密钥，不生成备份字段', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-config-v8-consensus-'))
+    const path = join(root, 'config.json')
+    try {
+      const bEncrypted = codec.encrypt('old-b-secret')
+      const cEncrypted = codec.encrypt('old-c-secret')
+      await writeFile(path, JSON.stringify({
+        version: 8,
+        providers: {},
+        consensusAgents: {
+          B: {
+            model: 'deepseek:deepseek-v4-flash',
+            baseURL: 'https://old-b.example/v1',
+            encryptedApiKey: bEncrypted,
+          },
+          C: {
+            model: 'google:gemini-3.6-flash',
+            baseURL: 'https://old-c.example/v1',
+            encryptedApiKey: cEncrypted,
+          },
+        },
+      }))
+
+      assert.equal(await migrateLegacyConfig(codec, path), true)
+      const raw = await readFile(path, 'utf-8')
+      assert.doesNotMatch(raw, /old-b\.example|old-c\.example|old-b-secret|old-c-secret|encryptedApiKey/)
+      assert.equal(raw.includes(bEncrypted), false)
+      assert.equal(raw.includes(cEncrypted), false)
+      assert.equal(loadConfig(path, codec)?.consensusAgents, undefined)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

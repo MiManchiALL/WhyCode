@@ -9,6 +9,7 @@ import type {
   McpSettingsItem,
   SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
+  SaveConsensusModelSettingsRequest,
   SaveProviderSettingsRequest,
 } from '../shared/settings.ts'
 import {
@@ -22,7 +23,10 @@ import {
   isCliProxyRoute,
 } from './cli-proxy-models.ts'
 import { createWebSearchSettingsSnapshot } from './web-search-settings.ts'
-import { listAuxiliaryVisionModelCandidates } from './model-connections.ts'
+import {
+  listAuxiliaryVisionModelCandidates,
+  listConfiguredModelCandidates,
+} from './model-connections.ts'
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
@@ -50,6 +54,9 @@ export function createConnectionSettingsSnapshot(
   const auxiliaryVisionModelId = auxiliaryVisionModels.some(
     (candidate) => candidate.id === configuredAuxiliaryVisionModelId,
   ) ? configuredAuxiliaryVisionModelId! : null
+  const consensusModels = listConfiguredModelCandidates(config)
+  const configuredAgentBModelId = config?.consensusAgents?.B?.modelId
+  const configuredAgentCModelId = config?.consensusAgents?.C?.modelId
 
   return {
     providers: BUILTIN_PROVIDERS.map((provider) => ({
@@ -79,9 +86,34 @@ export function createConnectionSettingsSnapshot(
       visionModelId: auxiliaryVisionModelId,
       visionModels: auxiliaryVisionModels,
     },
+    consensusModels: {
+      agentBModelId: configuredModelId(consensusModels, configuredAgentBModelId),
+      agentCModelId: configuredModelId(consensusModels, configuredAgentCModelId),
+      models: consensusModels,
+    },
     webSearch: createWebSearchSettingsSnapshot(config),
     mcp,
   }
+}
+
+export function updateConsensusModelSettings(
+  config: WhycodeConfig | null,
+  request: SaveConsensusModelSettingsRequest,
+): WhycodeConfig {
+  const next = cloneConfig(config)
+  const candidates = listConfiguredModelCandidates(next)
+  const selections = {
+    B: normalizeConfiguredModelSelection(candidates, request.agentBModelId),
+    C: normalizeConfiguredModelSelection(candidates, request.agentCModelId),
+  } as const
+  const agents: WhycodeConfig['consensusAgents'] = {}
+  for (const id of ['B', 'C'] as const) {
+    const modelId = selections[id]
+    if (modelId) agents[id] = { modelId }
+  }
+  if (Object.keys(agents).length > 0) next.consensusAgents = agents
+  else delete next.consensusAgents
+  return next
 }
 
 export function updateAuxiliaryModelSettings(
@@ -163,6 +195,26 @@ export function updateCliProxyApiSettings(
 
 function cloneConfig(config: WhycodeConfig | null): WhycodeConfig {
   return config ? structuredClone(config) : { providers: {} }
+}
+
+function configuredModelId(
+  models: readonly { id: string }[],
+  modelId: string | undefined,
+): string | null {
+  return modelId && models.some((model) => model.id === modelId) ? modelId : null
+}
+
+function normalizeConfiguredModelSelection(
+  models: readonly { id: string }[],
+  value: string | null,
+): string | null {
+  if (value === null) return null
+  const modelId = value.trim()
+  if (!modelId) return null
+  if (!models.some((model) => model.id === modelId)) {
+    throw new Error('协商评审模型必须来自当前已配置且可用的模型连接')
+  }
+  return modelId
 }
 
 function requireBuiltInProvider(providerId: BuiltInProviderId): void {

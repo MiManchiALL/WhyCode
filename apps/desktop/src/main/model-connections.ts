@@ -240,23 +240,26 @@ export interface AuxiliaryVisionModelCandidate {
   displayName: string
 }
 
+export type ConfiguredModelCandidate = AuxiliaryVisionModelCandidate
+
+/** 只返回当前确实可解析的统一模型连接；设置页和运行时共用同一组精确 ID。 */
+export function listConfiguredModelCandidates(
+  config: WhycodeConfig | null,
+): ConfiguredModelCandidate[] {
+  return listModelConnections(config).flatMap((model) =>
+    model.available && !model.retired
+      ? [{ id: model.id, displayName: model.displayName }]
+      : [])
+}
+
 /** 只列出当前确实可解析、且声明原生图片输入能力的已配置模型。 */
 export function listAuxiliaryVisionModelCandidates(
   config: WhycodeConfig | null,
 ): AuxiliaryVisionModelCandidate[] {
-  if (!config) return []
-  const ids = [
-    ...MODEL_REGISTRY.flatMap((entry) =>
-      config.providers[entry.provider]?.apiKey ? [entry.id] : []),
-    ...(config.cliProxyApi?.modelIds ?? []).map(cliProxyModelId),
-  ]
-  const seen = new Set<string>()
-  return ids.flatMap((id) => {
-    if (seen.has(id)) return []
-    seen.add(id)
-    const resolution = resolveModelConnection(config, id)
+  return listConfiguredModelCandidates(config).flatMap((candidate) => {
+    const resolution = resolveModelConnection(config, candidate.id)
     if (!resolution.ok || !resolution.value.entry.capabilities.supportsImageInput) return []
-    return [{ id, displayName: resolution.value.entry.displayName }]
+    return [candidate]
   })
 }
 
@@ -276,6 +279,22 @@ export function pruneInvalidAuxiliaryModel(config: WhycodeConfig): WhycodeConfig
   if (!config.auxiliaryModels || resolveAuxiliaryVisionModel(config)) return config
   const next = structuredClone(config)
   delete next.auxiliaryModels
+  return next
+}
+
+/** 模型连接被删除后同步清理 B/C 的失效选择，不保留第二套连接或隐式回退。 */
+export function pruneInvalidConsensusAgents(config: WhycodeConfig): WhycodeConfig {
+  const current = config.consensusAgents
+  if (!current) return config
+  const retained: NonNullable<WhycodeConfig['consensusAgents']> = {}
+  for (const id of ['B', 'C'] as const) {
+    const agent = current[id]
+    if (agent && resolveModelConnection(config, agent.modelId).ok) retained[id] = agent
+  }
+  if (Object.keys(retained).length === Object.keys(current).length) return config
+  const next = structuredClone(config)
+  if (Object.keys(retained).length > 0) next.consensusAgents = retained
+  else delete next.consensusAgents
   return next
 }
 

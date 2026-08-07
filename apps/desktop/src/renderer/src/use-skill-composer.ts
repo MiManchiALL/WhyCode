@@ -42,6 +42,7 @@ interface UseSkillComposerOptions {
   modelId: string
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
+  compactAvailable: boolean
   compactDisabled: boolean
   onCommand: (command: ComposerCommandId) => void
 }
@@ -64,13 +65,10 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     () => new Set(selected.map((skill) => skill.id)),
     [selected],
   )
-  const commands = useMemo<ComposerCommand[]>(() => [{
-    id: 'compact',
-    name: '压缩',
-    description: '压缩当前会话上下文，释放上下文空间',
-    keywords: ['compact', 'context'],
-    disabled: options.compactDisabled,
-  }], [options.compactDisabled])
+  const commands = useMemo(
+    () => createComposerCommands(options.compactAvailable, options.compactDisabled),
+    [options.compactAvailable, options.compactDisabled],
+  )
   const matches = useMemo(
     () => filterComposerItems(
       commands,
@@ -257,6 +255,21 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     setActiveIndex,
     handlePickerKeyDown,
   }
+}
+
+export function createComposerCommands(
+  compactAvailable: boolean,
+  compactDisabled: boolean,
+): ComposerCommand[] {
+  return compactAvailable
+    ? [{
+        id: 'compact',
+        name: '压缩',
+        description: '压缩当前会话上下文，释放上下文空间',
+        keywords: ['compact', 'context'],
+        disabled: compactDisabled,
+      }]
+    : []
 }
 
 function menuItemDisabled(item: ComposerMenuItem, limitReached: boolean): boolean {

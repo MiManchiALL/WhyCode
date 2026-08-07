@@ -21,7 +21,6 @@ import {
   loadMcpConfiguration,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
-  type ConsensusAgentSetup,
   type CoreCommand,
   type CoreEvent,
   type ImageAttachment,
@@ -43,7 +42,6 @@ import type { PermissionMode } from '@whycode/core/permissions'
 import { IPC } from '../shared/ipc.ts'
 import { attachmentFallbackText } from '../shared/user-message.ts'
 import {
-  consensusAgentsReady,
   type ConfigSecretCodec,
   getConfigPath,
   loadConfig,
@@ -57,9 +55,11 @@ import {
   imageInputModeForModel,
   listModelConnections,
   pruneInvalidAuxiliaryModel,
+  pruneInvalidConsensusAgents,
   resolveAuxiliaryVisionModel,
   resolveModelConnection,
 } from './model-connections.ts'
+import { resolveConsensusAgentSetups } from './consensus-models.ts'
 import {
   discoverCliProxyRoutes,
   unresolvedCliProxyProfiles,
@@ -68,6 +68,7 @@ import {
   createConnectionSettingsSnapshot,
   updateAuxiliaryModelSettings,
   updateCliProxyApiSettings,
+  updateConsensusModelSettings,
   updateProviderSettings,
 } from './model-settings.ts'
 import {
@@ -140,6 +141,7 @@ import type {
   OpenMcpConfigRequest,
   SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
+  SaveConsensusModelSettingsRequest,
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
@@ -700,20 +702,10 @@ function synchronizeRuntimeAuxiliaryImageAnalyzer(
   runtime.session.setAuxiliaryImageAnalyzer(configuredAuxiliaryImageAnalyzer(config))
 }
 
-/** 协商可用性检查：B/C 评审员配置齐备且模型已注册。 */
+/** 协商可用性检查：B/C 评审员只引用统一模型连接，不持有独立凭据。 */
 function checkConsensusReady(): string | null {
-  const config = loadAppConfig()
-  if (!consensusAgentsReady(config)) {
-    return '协商需要在配置文件中为评审员 B/C 各配置 model 与 apiKey（consensusAgents 字段）'
-  }
-  for (const id of ['B', 'C'] as const) {
-    try {
-      getModelEntry(config!.consensusAgents![id]!.model)
-    } catch {
-      return `consensusAgents.${id} 的模型 ID 未注册：${config!.consensusAgents![id]!.model}`
-    }
-  }
-  return null
+  const resolved = resolveConsensusAgentSetups(loadAppConfig())
+  return resolved.ok ? null : resolved.error
 }
 
 function buildCoordinator(runtime: DesktopSessionRuntime): string | null {
@@ -738,19 +730,14 @@ function createCoordinator(
   targetProjectDir: string | null,
   targetConversationId: string,
 ): { ok: true; value: ConsensusCoordinator } | { ok: false; error: string } {
-  const notReady = checkConsensusReady()
-  if (notReady) return { ok: false, error: notReady }
-  const agents = loadAppConfig()!.consensusAgents!
-  const setup = (id: 'B' | 'C'): ConsensusAgentSetup => ({
-    model: getModelEntry(agents[id]!.model),
-    providerConfig: { apiKey: agents[id]!.apiKey, baseURL: agents[id]!.baseURL },
-  })
+  const agents = resolveConsensusAgentSetups(loadAppConfig())
+  if (!agents.ok) return agents
   const value = new ConsensusCoordinator({
     mainSession,
     projectDir: targetProjectDir,
     scratchRoot: join(app.getPath('userData'), 'scratch'),
     conversationId: targetConversationId,
-    agents: { B: setup('B'), C: setup('C') },
+    agents: agents.value,
     osPlatform: process.platform,
     homeDir: app.getPath('home'),
     emit: (event) => runtime.emit(event),
@@ -1220,9 +1207,18 @@ function mcpOAuthInProgressMessage(action: string): string {
 
 async function persistConnectionConfig(
   config: NonNullable<ReturnType<typeof loadAppConfig>>,
+  invalidateConsensus = false,
 ): Promise<void> {
-  config = pruneInvalidAuxiliaryModel(config)
+  config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModel(config))
   await saveConfig(config, configSecretCodec, getConfigPath())
+  if (invalidateConsensus) {
+    const consensusReady = resolveConsensusAgentSetups(config).ok
+    if (!consensusReady) preferredConsensusEnabled = false
+    for (const runtime of runtimeRegistry.all()) {
+      runtime.coordinator = null
+      if (!consensusReady) runtime.consensusEnabled = false
+    }
+  }
   preferredModelId = preferredModelId
     && resolveModelConnection(config, preferredModelId).ok
     ? preferredModelId
@@ -1255,12 +1251,15 @@ async function persistConnectionConfig(
   }
 }
 
-async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
+async function synchronizeConfiguredCliProxyRoutes(
+  invalidateRuntimeConnections = false,
+): Promise<void> {
   const loaded = loadAppConfig()
   if (!loaded) return
-  const config = pruneInvalidAuxiliaryModel(loaded)
+  const config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModel(loaded))
   if (config !== loaded) {
-    await saveConfig(config, configSecretCodec, getConfigPath())
+    if (invalidateRuntimeConnections) await persistConnectionConfig(config, true)
+    else await saveConfig(config, configSecretCodec, getConfigPath())
   }
   const connection = config.cliProxyApi
   if (!connection?.apiKey) return
@@ -1282,7 +1281,9 @@ async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
   if (defaultCliProxyModelId && !modelIds.includes(defaultCliProxyModelId)) {
     delete next.defaultModel
   }
-  await saveConfig(pruneInvalidAuxiliaryModel(next), configSecretCodec, getConfigPath())
+  const synchronized = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModel(next))
+  if (invalidateRuntimeConnections) await persistConnectionConfig(synchronized, true)
+  else await saveConfig(synchronized, configSecretCodec, getConfigPath())
 }
 
 async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
@@ -1321,7 +1322,7 @@ async function saveProviderModelSettings(
 ): Promise<SettingsMutationResult> {
   return mutateConnectionSettings(async () => {
     const next = updateProviderSettings(loadAppConfig(), request)
-    await persistConnectionConfig(next)
+    await persistConnectionConfig(next, true)
   })
 }
 
@@ -1342,7 +1343,7 @@ async function saveCliProxyApiConnectionSettings(
       }
       next.cliProxyApi.modelRoutes = modelRoutes
     }
-    await persistConnectionConfig(next)
+    await persistConnectionConfig(next, true)
   })
 }
 
@@ -1352,6 +1353,15 @@ async function saveAuxiliaryModelConnectionSettings(
   return mutateConnectionSettings(async () => {
     const next = updateAuxiliaryModelSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
+  })
+}
+
+async function saveConsensusModelConnectionSettings(
+  request: SaveConsensusModelSettingsRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    const next = updateConsensusModelSettings(loadAppConfig(), request)
+    await persistConnectionConfig(next, true)
   })
 }
 
@@ -2130,7 +2140,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.connectionSettings, async () => {
     if (!mcpOAuthController.isAuthorizing()) {
-      await synchronizeConfiguredCliProxyRoutes()
+      await synchronizeConfiguredCliProxyRoutes(true)
         .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
     }
     return currentConnectionSettingsSnapshot()
@@ -2143,6 +2153,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
     IPC.saveAuxiliaryModelSettings,
     (_e, request: SaveAuxiliaryModelSettingsRequest) =>
       saveAuxiliaryModelConnectionSettings(request),
+  )
+  ipcMain.handle(
+    IPC.saveConsensusModelSettings,
+    (_e, request: SaveConsensusModelSettingsRequest) =>
+      saveConsensusModelConnectionSettings(request),
   )
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))

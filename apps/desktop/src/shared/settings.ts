@@ -51,6 +51,7 @@ export interface ConnectionSettingsSnapshot {
   providers: ProviderSettingsItem[]
   cliProxyApi: CliProxyApiSettingsItem
   auxiliaryModels: AuxiliaryModelsSettingsItem
+  consensusModels: ConsensusModelsSettingsItem
   webSearch: WebSearchSettingsItem
   mcp: McpSettingsItem
 }
@@ -65,6 +66,20 @@ export interface AuxiliaryModelsSettingsItem {
 
 export interface SaveAuxiliaryModelSettingsRequest {
   visionModelId: string | null
+}
+
+export interface ConsensusModelsSettingsItem {
+  agentBModelId: string | null
+  agentCModelId: string | null
+  models: Array<{
+    id: string
+    displayName: string
+  }>
+}
+
+export interface SaveConsensusModelSettingsRequest {
+  agentBModelId: string | null
+  agentCModelId: string | null
 }
 
 export type WebSearchProviderId = 'perplexity' | 'tavily'

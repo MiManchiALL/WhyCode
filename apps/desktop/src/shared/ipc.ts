@@ -16,6 +16,7 @@ export const IPC = {
   saveProviderSettings: 'whycode:save-provider-settings',
   saveCliProxyApiSettings: 'whycode:save-cliproxyapi-settings',
   saveAuxiliaryModelSettings: 'whycode:save-auxiliary-model-settings',
+  saveConsensusModelSettings: 'whycode:save-consensus-model-settings',
   saveWebSearchSettings: 'whycode:save-web-search-settings',
   setMcpServerEnabled: 'whycode:set-mcp-server-enabled',
   addMcpServer: 'whycode:add-mcp-server',

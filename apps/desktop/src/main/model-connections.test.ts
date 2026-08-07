@@ -5,13 +5,32 @@ import { cliProxyModelId, type WhycodeConfig } from './config.ts'
 import { getDefaultCliProxyRoute } from './cli-proxy-models.ts'
 import {
   listAuxiliaryVisionModelCandidates,
+  listConfiguredModelCandidates,
   listModelConnections,
   pruneInvalidAuxiliaryModel,
+  pruneInvalidConsensusAgents,
   resolveAuxiliaryVisionModel,
   resolveModelConnection,
 } from './model-connections.ts'
 
 describe('模型连接解析', () => {
+  it('统一候选只包含当前可解析连接，并清理协商中的失效引用', () => {
+    const value: WhycodeConfig = {
+      providers: { deepseek: { apiKey: 'key' } },
+      consensusAgents: {
+        B: { modelId: 'deepseek:deepseek-v4-flash' },
+        C: { modelId: 'google:gemini-3.6-flash' },
+      },
+    }
+
+    assert.deepEqual(listConfiguredModelCandidates(value), [
+      { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
+    ])
+    assert.deepEqual(pruneInvalidConsensusAgents(value).consensusAgents, {
+      B: { modelId: 'deepseek:deepseek-v4-flash' },
+    })
+  })
+
   it('内置厂商的官方端点与协议兼容中转共用注册模型能力', () => {
     const official = resolveModelConnection(
       config({ anthropic: { apiKey: 'key' } }),

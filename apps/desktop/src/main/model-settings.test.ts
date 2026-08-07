@@ -4,6 +4,7 @@ import {
   createConnectionSettingsSnapshot,
   updateAuxiliaryModelSettings,
   updateCliProxyApiSettings,
+  updateConsensusModelSettings,
   updateProviderSettings,
 } from './model-settings.ts'
 import type { WhycodeConfig } from './config.ts'
@@ -89,6 +90,46 @@ describe('模型设置数据边界', () => {
     assert.equal(
       updateAuxiliaryModelSettings(enabled, { visionModelId: null }).auxiliaryModels,
       undefined,
+    )
+  })
+
+  it('协商 B/C 只保存统一模型连接 ID，不接收独立端点或密钥', () => {
+    const initial: WhycodeConfig = {
+      providers: {
+        deepseek: { apiKey: 'deepseek-key' },
+        google: { apiKey: 'google-key' },
+      },
+    }
+    const snapshot = createSettingsSnapshot(initial)
+    assert.deepEqual(snapshot.consensusModels, {
+      agentBModelId: null,
+      agentCModelId: null,
+      models: [
+        { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
+        { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
+        { id: 'google:gemini-3.6-flash', displayName: 'Gemini 3.6 Flash' },
+      ],
+    })
+
+    const configured = updateConsensusModelSettings(initial, {
+      agentBModelId: 'deepseek:deepseek-v4-flash',
+      agentCModelId: 'google:gemini-3.6-flash',
+    })
+    assert.deepEqual(configured.consensusAgents, {
+      B: { modelId: 'deepseek:deepseek-v4-flash' },
+      C: { modelId: 'google:gemini-3.6-flash' },
+    })
+    assert.deepEqual(createSettingsSnapshot(configured).consensusModels, {
+      agentBModelId: 'deepseek:deepseek-v4-flash',
+      agentCModelId: 'google:gemini-3.6-flash',
+      models: snapshot.consensusModels.models,
+    })
+    assert.throws(
+      () => updateConsensusModelSettings(initial, {
+        agentBModelId: 'openai:gpt-5.6-sol',
+        agentCModelId: null,
+      }),
+      /必须来自当前已配置且可用的模型连接/,
     )
   })
 

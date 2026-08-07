@@ -9,26 +9,28 @@ import {
   Plug,
   RefreshCw,
   Settings,
+  UsersRound,
 } from 'lucide-react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type {
   AddMcpServerRequest,
-  AuxiliaryModelsSettingsItem,
   CliProxyApiSettingsItem,
   ConnectionSettingsSnapshot,
   McpOAuthRequest,
   OpenMcpConfigRequest,
   ProviderSettingsItem,
   SaveCliProxyApiSettingsRequest,
-  SaveAuxiliaryModelSettingsRequest,
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../../shared/settings.ts'
+import {
+  AuxiliaryModelsEditor,
+  ConsensusModelsEditor,
+} from './agent-model-settings.tsx'
 import { McpSettingsEditor } from './mcp-settings.tsx'
 import { PaperFrame } from './paper-frame.tsx'
-import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 
 interface ConnectionSettingsPanelProps {
@@ -150,6 +152,12 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 onClick={() => setSection('auxiliary')}
               />
               <SettingsNavItem
+                active={section === 'consensus'}
+                icon={<UsersRound size={16} />}
+                label="协商模型"
+                onClick={() => setSection('consensus')}
+              />
+              <SettingsNavItem
                 active={section === 'search'}
                 icon={<Globe2 size={16} />}
                 label="网页搜索"
@@ -230,6 +238,15 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     />
                   )}
 
+                  {section === 'consensus' && (
+                    <ConsensusModelsEditor
+                      settings={props.snapshot.consensusModels}
+                      disabled={pending || oauthPending}
+                      onSave={(request) => mutate(() =>
+                        window.whycode.saveConsensusModelSettings(request))}
+                    />
+                  )}
+
                   {section === 'search' && (
                     <WebSearchSettingsEditor
                       settings={props.snapshot.webSearch}
@@ -266,7 +283,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   )
 }
 
-type SettingsSection = 'models' | 'auxiliary' | 'search' | 'mcp'
+type SettingsSection = 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp'
 
 const SETTINGS_META: Record<SettingsSection, { title: string; description: string }> = {
   models: {
@@ -276,6 +293,10 @@ const SETTINGS_META: Record<SettingsSection, { title: string; description: strin
   auxiliary: {
     title: '辅助模型',
     description: '为非视觉主模型选择按需调用的辅助识图模型。',
+  },
+  consensus: {
+    title: '协商模型',
+    description: '从统一模型连接中选择协商评审员 B 和 C 使用的模型。',
   },
   search: {
     title: '网页搜索',
@@ -307,70 +328,6 @@ function SettingsNavItem(props: {
       <span className="flex-1">{props.label}</span>
       {props.active && <Check size={14} className="text-[var(--wc-sage-ink)]" />}
     </button>
-  )
-}
-
-function AuxiliaryModelsEditor(props: {
-  settings: AuxiliaryModelsSettingsItem
-  disabled: boolean
-  onSave: (request: SaveAuxiliaryModelSettingsRequest) => Promise<boolean>
-}) {
-  const [visionModelId, setVisionModelId] = useState(props.settings.visionModelId ?? '')
-  const [saved, setSaved] = useState(false)
-  useEffect(() => {
-    setVisionModelId(props.settings.visionModelId ?? '')
-  }, [props.settings.visionModelId])
-
-  const submit = async () => {
-    setSaved(false)
-    if (await props.onSave({ visionModelId: visionModelId || null })) setSaved(true)
-  }
-
-  return (
-    <section className="wc-paper-section">
-      <div>
-        <h3 className="text-sm font-medium">辅助模型</h3>
-        <p className="text-xs text-neutral-500">
-          非视觉主模型收到图片时，可按需调用辅助识图模型；视觉主模型仍直接读取图片。
-        </p>
-      </div>
-      <PaperFrame className="wc-paper-frame-soft">
-        <div className="wc-paper-card wc-paper-sand wc-paper-shape-b wc-paper-angle-soft-right wc-paper-pad">
-          <div className="text-[11px] text-neutral-600">
-            <span className="mb-1 block">辅助识图模型</span>
-            <SelectMenu
-              value={visionModelId}
-              options={[
-                { value: '', label: '不启用' },
-                ...props.settings.visionModels.map((model) => ({
-                  value: model.id,
-                  label: model.displayName,
-                })),
-              ]}
-              onValueChange={(value) => { setVisionModelId(value); setSaved(false) }}
-              ariaLabel="辅助识图模型"
-              disabled={props.disabled}
-              className="w-full"
-            />
-          </div>
-          {props.settings.visionModels.length === 0 && (
-            <p className="mt-2 text-[11px] text-amber-700">
-              请先配置至少一个带“图片”能力的模型连接。
-            </p>
-          )}
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-3 py-1.5 text-xs text-white disabled:opacity-40"
-              onClick={() => void submit()}
-              disabled={props.disabled}
-            >
-              保存
-            </button>
-            {saved && <span className="text-[11px] text-[var(--wc-sage-ink)]">已保存</span>}
-          </div>
-        </div>
-      </PaperFrame>
-    </section>
   )
 }
 

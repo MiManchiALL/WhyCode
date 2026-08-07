@@ -20,9 +20,7 @@ export interface ProviderConnectionConfig {
 }
 
 export interface ConsensusAgentConfig {
-  model: string
-  apiKey: string
-  baseURL?: string
+  modelId: string
 }
 
 export interface WebSearchProviderConfig {
@@ -98,12 +96,6 @@ export function parseCliProxyModelId(modelId: string): string | null {
   if (!modelId.startsWith(CLI_PROXY_MODEL_PREFIX)) return null
   const baseModelId = modelId.slice(CLI_PROXY_MODEL_PREFIX.length)
   return baseModelId ? baseModelId : null
-}
-
-export function consensusAgentsReady(config: WhycodeConfig | null): boolean {
-  const agents = config?.consensusAgents
-  if (!agents) return false
-  return (['B', 'C'] as const).every((id) => Boolean(agents[id]?.apiKey && agents[id]?.model))
 }
 
 /** 旧配置默认保持 Perplexity；活动项不可用时只回退到已配置的后端。 */
