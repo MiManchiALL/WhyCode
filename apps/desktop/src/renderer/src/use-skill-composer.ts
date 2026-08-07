@@ -15,10 +15,13 @@ import {
   type SkillSummary,
 } from '@whycode/core/skills'
 import {
-  filterSkills,
-  findSkillTrigger,
-  removeSkillTrigger,
-  type SkillTrigger,
+  filterComposerItems,
+  findSlashTrigger,
+  removeSlashTrigger,
+  type ComposerCommand,
+  type ComposerCommandId,
+  type ComposerMenuItem,
+  type SlashTrigger,
 } from './skill-trigger.ts'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 
@@ -39,13 +42,15 @@ interface UseSkillComposerOptions {
   modelId: string
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
+  compactDisabled: boolean
+  onCommand: (command: ComposerCommandId) => void
 }
 
 /** Skill 目录和输入触发状态独立于附件草稿，App 只负责消息事务编排。 */
 export function useSkillComposer(options: UseSkillComposerOptions) {
   const [catalog, setCatalog] = useState<SkillCatalogSnapshot>(EMPTY_CATALOG)
   const [selected, setSelected] = useState<SkillSummary[]>([])
-  const [trigger, setTrigger] = useState<SkillTrigger | null>(null)
+  const [trigger, setTrigger] = useState<SlashTrigger | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
   const selectedRef = useRef<SkillSummary[]>([])
   const refreshSequenceRef = useRef(0)
@@ -59,11 +64,34 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     () => new Set(selected.map((skill) => skill.id)),
     [selected],
   )
+  const commands = useMemo<ComposerCommand[]>(() => [{
+    id: 'compact',
+    name: '压缩',
+    description: '压缩当前会话上下文，释放上下文空间',
+    keywords: ['compact', 'context'],
+    disabled: options.compactDisabled,
+  }], [options.compactDisabled])
   const matches = useMemo(
-    () => filterSkills(catalog.skills, trigger?.query ?? '')
-      .filter((skill) => !selectedIds.has(skill.id)),
-    [catalog.skills, selectedIds, trigger?.query],
+    () => filterComposerItems(
+      commands,
+      catalog.skills,
+      selectedIds,
+      trigger?.query ?? '',
+    ),
+    [catalog.skills, commands, selectedIds, trigger?.query],
   )
+  const limitReached = selected.length >= SKILL_MAX_SELECTIONS_PER_MESSAGE
+
+  useEffect(() => {
+    if (!trigger || matches.length === 0) return
+    setActiveIndex((current) => {
+      if (current < matches.length && !menuItemDisabled(matches[current]!, limitReached)) {
+        return current
+      }
+      const firstSelectable = matches.findIndex((item) => !menuItemDisabled(item, limitReached))
+      return firstSelectable >= 0 ? firstSelectable : 0
+    })
+  }, [limitReached, matches, trigger])
 
   const refresh = useCallback(async () => {
     const targetRuntimeId = options.runtimeIdRef.current
@@ -106,7 +134,7 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
   }, [menuOpen, refresh])
 
   const updateMenu = useCallback((text: string, cursor: number | null) => {
-    setTrigger(findSkillTrigger(text, cursor))
+    setTrigger(findSlashTrigger(text, cursor))
     setActiveIndex(0)
   }, [])
 
@@ -123,15 +151,24 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     [],
   )
 
-  const select = useCallback((skill: SkillSummary) => {
-    if (!trigger || selectedRef.current.some((item) => item.id === skill.id)) return
-    if (selectedRef.current.length >= SKILL_MAX_SELECTIONS_PER_MESSAGE) return
-    const replacement = removeSkillTrigger(options.input, trigger)
-    const next = [...selectedRef.current, structuredClone(skill)]
+  const select = useCallback((item: ComposerMenuItem) => {
+    if (!trigger) return
+    if (item.kind === 'command' && item.command.disabled) return
+    if (
+      item.kind === 'skill'
+      && (
+        selectedRef.current.some((selectedSkill) => selectedSkill.id === item.skill.id)
+        || selectedRef.current.length >= SKILL_MAX_SELECTIONS_PER_MESSAGE
+      )
+    ) return
+    const replacement = removeSlashTrigger(options.input, trigger)
     options.inputRef.current = replacement.text
-    selectedRef.current = next
     options.setInput(replacement.text)
-    setSelected(next)
+    if (item.kind === 'skill') {
+      const next = [...selectedRef.current, structuredClone(item.skill)]
+      selectedRef.current = next
+      setSelected(next)
+    }
     setTrigger(null)
     requestAnimationFrame(() => {
       const textarea = textareaRef.current
@@ -139,7 +176,8 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
       textarea.focus()
       textarea.setSelectionRange(replacement.cursor, replacement.cursor)
     })
-  }, [options.input, options.inputRef, options.setInput, trigger])
+    if (item.kind === 'command') options.onCommand(item.command.id)
+  }, [options.input, options.inputRef, options.onCommand, options.setInput, trigger])
 
   const remove = useCallback((id: string) => {
     setSelected((current) => {
@@ -168,19 +206,29 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
       setTrigger(null)
       return true
     }
-    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && matches.length > 0) {
+    const selectableIndexes = matches
+      .map((item, index) => menuItemDisabled(item, limitReached) ? -1 : index)
+      .filter((index) => index >= 0)
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && selectableIndexes.length > 0) {
       event.preventDefault()
       const delta = event.key === 'ArrowDown' ? 1 : -1
-      setActiveIndex((current) => (current + delta + matches.length) % matches.length)
+      setActiveIndex((current) => {
+        const currentPosition = selectableIndexes.indexOf(current)
+        const origin = currentPosition >= 0 ? currentPosition : (delta > 0 ? -1 : 0)
+        return selectableIndexes[(origin + delta + selectableIndexes.length) % selectableIndexes.length]!
+      })
       return true
     }
-    if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && matches.length > 0) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && selectableIndexes.length > 0) {
       event.preventDefault()
-      select(matches[Math.min(activeIndex, matches.length - 1)]!)
+      const selectedIndex = selectableIndexes.includes(activeIndex)
+        ? activeIndex
+        : selectableIndexes[0]!
+      select(matches[selectedIndex]!)
       return true
     }
     return false
-  }, [activeIndex, matches, select, trigger])
+  }, [activeIndex, limitReached, matches, select, trigger])
 
   const resetCatalog = useCallback(() => {
     refreshSequenceRef.current++
@@ -195,7 +243,7 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     matches,
     selectedIds,
     activeIndex,
-    limitReached: selected.length >= SKILL_MAX_SELECTIONS_PER_MESSAGE,
+    limitReached,
     textareaRef,
     capture,
     clear,
@@ -209,4 +257,8 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     setActiveIndex,
     handlePickerKeyDown,
   }
+}
+
+function menuItemDisabled(item: ComposerMenuItem, limitReached: boolean): boolean {
+  return item.kind === 'command' ? item.command.disabled : limitReached
 }

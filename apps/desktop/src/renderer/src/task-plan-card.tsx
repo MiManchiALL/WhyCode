@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import type { TaskPlan } from '@whycode/core'
+import { Check, Circle, ListChecks, Minus } from 'lucide-react'
 
 const STATUS_LABEL = {
   pending: '待处理',
@@ -8,10 +8,16 @@ const STATUS_LABEL = {
   blocked: '受阻',
 } as const
 
-export function TaskPlanCard({ plan }: { plan: TaskPlan }) {
-  const [expanded, setExpanded] = useState(plan.status === 'active')
+interface TaskPlanCardProps {
+  plan: TaskPlan
+  compact: boolean
+}
+
+export function TaskPlanCard({ plan, compact }: TaskPlanCardProps) {
   const completed = plan.items.filter((item) => item.status === 'completed').length
-  const percent = Math.round((completed / plan.items.length) * 100)
+  const percent = plan.items.length === 0
+    ? 0
+    : Math.round((completed / plan.items.length) * 100)
   const stateLabel = plan.status === 'active'
     ? `${completed}/${plan.items.length}`
     : plan.status === 'completed'
@@ -21,62 +27,67 @@ export function TaskPlanCard({ plan }: { plan: TaskPlan }) {
         : '已放弃'
 
   return (
-    <section className="border-b border-blue-100 bg-blue-50/50 px-6 py-2.5">
-      <button
-        className="flex w-full items-center gap-3 text-left"
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <span className="text-sm">▣</span>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-blue-950">
-          {plan.goal}
+    <section className="wc-paper-card wc-paper-blue wc-paper-shape-b w-full">
+      <div className="wc-paper-compact-pad flex w-full items-start gap-2.5 text-left">
+        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--wc-blue)] text-[var(--wc-blue-ink)]">
+          <ListChecks size={15} />
         </span>
-        <span className="text-xs text-blue-700">{stateLabel}</span>
-        <span className="text-xs text-blue-500">{expanded ? '▾' : '▸'}</span>
-      </button>
-      <div className="mt-2 h-1 overflow-hidden rounded bg-blue-100">
-        <div className="h-full rounded bg-blue-500 transition-all" style={{ width: `${percent}%` }} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-[11px] font-medium text-[var(--wc-faint)]">任务计划</span>
+          <span className="mt-0.5 block text-sm font-medium leading-5 text-[var(--wc-ink)]">
+            {plan.goal}
+          </span>
+        </span>
+        <span className="mt-1 shrink-0 text-[10px] text-[var(--wc-muted)]">{stateLabel}</span>
       </div>
-      {expanded && (
-        <div className="mt-2 space-y-1.5">
-          {plan.items.map((item) => (
-            <div key={item.id} className="flex items-start gap-2 text-xs">
-              <span className={statusColor(item.status)}>{statusIcon(item.status)}</span>
-              <div className="min-w-0 flex-1">
-                <div className="text-neutral-700">
-                  <span className="mr-1 text-neutral-400">{item.id}</span>
-                  {item.title}
-                  {item.kind === 'verification' && (
-                    <span className="ml-1 rounded bg-violet-100 px-1 text-[10px] text-violet-700">
-                      验证
-                    </span>
-                  )}
-                </div>
-                <div className="text-[11px] text-neutral-400">
+      <div className="mx-[var(--wc-paper-compact-padding)] h-1 overflow-hidden rounded-full bg-black/[0.055]">
+        <div
+          className="h-full rounded-full bg-[#7d9080] transition-[width] duration-200"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className={`${compact ? 'space-y-1.5' : 'space-y-2'} p-[var(--wc-paper-compact-padding)] pt-3`}>
+        {plan.items.map((item) => (
+          <div key={item.id} className="flex items-start gap-2 text-xs">
+            <PlanStatusIcon status={item.status} />
+            <div className="min-w-0 flex-1">
+              <div className="leading-5 text-[var(--wc-ink)]">
+                <span className="mr-1 text-[var(--wc-faint)]">{item.id}</span>
+                {item.title}
+                {item.kind === 'verification' && (
+                  <span className="ml-1 rounded-md bg-[var(--wc-sage)] px-1 py-0.5 text-[9px] text-[var(--wc-sage-ink)]">
+                    验证
+                  </span>
+                )}
+              </div>
+              {!compact && (
+                <div className="text-[10px] leading-4 text-[var(--wc-faint)]">
                   {STATUS_LABEL[item.status]} · {item.acceptance}
                   {item.blockedReason ? ` · ${item.blockedReason}` : ''}
                 </div>
-              </div>
+              )}
             </div>
-          ))}
-          {'summary' in plan && (
-            <div className="pt-1 text-xs text-neutral-500">{plan.summary}</div>
-          )}
-        </div>
-      )}
+          </div>
+        ))}
+        {!compact && 'summary' in plan && plan.summary && (
+          <div className="border-t border-dashed border-[var(--wc-line)] pt-2 text-[11px] leading-5 text-[var(--wc-muted)]">
+            {plan.summary}
+          </div>
+        )}
+      </div>
     </section>
   )
 }
 
-function statusIcon(status: TaskPlan['items'][number]['status']): string {
-  if (status === 'completed') return '✓'
-  if (status === 'in_progress') return '●'
-  if (status === 'blocked') return '!'
-  return '○'
-}
-
-function statusColor(status: TaskPlan['items'][number]['status']): string {
-  if (status === 'completed') return 'text-green-600'
-  if (status === 'in_progress') return 'text-blue-600'
-  if (status === 'blocked') return 'text-amber-600'
-  return 'text-neutral-300'
+function PlanStatusIcon({ status }: { status: TaskPlan['items'][number]['status'] }) {
+  if (status === 'completed') {
+    return <Check size={14} className="mt-0.5 shrink-0 text-[#66806d]" />
+  }
+  if (status === 'in_progress') {
+    return <span className="wc-plan-active-dot mt-1.5 shrink-0" role="img" aria-label="进行中" />
+  }
+  if (status === 'blocked') {
+    return <Minus size={14} className="mt-0.5 shrink-0 text-[#a36f57]" />
+  }
+  return <Circle size={11} className="mt-1 shrink-0 text-[#bfc0bb]" />
 }

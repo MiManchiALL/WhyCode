@@ -189,6 +189,28 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(completed.activityBlocks), ['tool-1'])
     assert.deepEqual(ids(completed.finalBlocks), ['answer', 'error-1'])
   })
+
+  it('把下一轮开始前的回滚通知留在用户消息上方', () => {
+    const sections = conversationSections([
+      notice('rollback', '已回滚：该轮对话与文件改动均已撤销'),
+      user('user-1', 'turn-1'),
+      thinking('thinking-1'),
+      text('answer', '你好'),
+      duration('duration-1'),
+    ])
+
+    assert.deepEqual(
+      sections.map((section) => [section.kind, section.id]),
+      [
+        ['block', 'rollback'],
+        ['completed-work', 'work-user-1'],
+      ],
+    )
+    const completed = asCompleted(sections[1])
+    assert.deepEqual(ids(completed.userBlocks), ['user-1'])
+    assert.deepEqual(ids(completed.activityBlocks), ['thinking-1'])
+    assert.deepEqual(ids(completed.finalBlocks), ['answer'])
+  })
 })
 
 function asCompleted(
@@ -238,6 +260,10 @@ function tool(id: string): Block {
 
 function error(id: string): Block {
   return { kind: 'error', id, text: '失败' }
+}
+
+function notice(id: string, text: string): Block {
+  return { kind: 'notice', id, text }
 }
 
 function duration(id: string): Block {

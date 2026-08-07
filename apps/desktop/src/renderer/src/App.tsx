@@ -33,10 +33,7 @@ import {
   toggleExpanded,
   voteLabel,
 } from './conversation-state.ts'
-import { AppHeader } from './app-header.tsx'
-import { SessionPanel } from './session-panel.tsx'
 import { isCurrentSessionDeletion } from './session-deletion-state.ts'
-import { TaskPlanCard } from './task-plan-card.tsx'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
@@ -44,11 +41,9 @@ import {
   conversationSections,
   shouldShowComposerProcessingTime,
 } from './conversation-sections.ts'
-import { summarizeInput } from './conversation-block.tsx'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
-  ImagePickerButton,
   QueuedImageStrip,
   useImageDrafts,
 } from './image-attachments.tsx'
@@ -62,7 +57,6 @@ import { collectPastedImageFiles, collectPastedPdfFiles } from './image-paste.ts
 import { useAttachmentDropTarget } from './image-drop.ts'
 import {
   PdfDraftStrip,
-  PdfPickerButton,
   QueuedPdfStrip,
   usePdfDrafts,
 } from './pdf-attachments.tsx'
@@ -72,29 +66,18 @@ import {
   type PdfDraft,
 } from './pdf-draft.ts'
 import { composerKeyAction } from './composer-key.ts'
-import {
-  WorkspaceStartDialog,
-  type WorkspaceStartChoice,
-} from './workspace-start-dialog.tsx'
-import { WorktreePanel } from './worktree-panel.tsx'
-import { SkillBadges, SkillChips, SkillPicker } from './skill-picker.tsx'
+import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
+import { WorkspaceContextBar } from './workspace-context-bar.tsx'
+import { SkillBadges, SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useSkillComposer } from './use-skill-composer.ts'
-
-interface Approval {
-  requestId: string
-  toolName: string
-  input: unknown
-  reason: string
-  diff?: string
-  items?: readonly {
-    toolCallId: string
-    toolName: string
-    input: unknown
-    reason: string
-    diff?: string
-  }[]
-  suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
-}
+import type { ComposerCommandId } from './skill-trigger.ts'
+import { AppSidebar } from './app-sidebar.tsx'
+import { TaskHeader } from './task-header.tsx'
+import { ComposerToolbar } from './composer-toolbar.tsx'
+import { TaskInspector } from './task-inspector.tsx'
+import { ApprovalCard, type Approval } from './approval-card.tsx'
+import { PaperFrame } from './paper-frame.tsx'
+import { installPaperHoverTracking } from './paper-hover-tracking.ts'
 
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
@@ -123,9 +106,8 @@ export function App() {
   const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
-  const [showSessions, setShowSessions] = useState(false)
   const [workspaceCandidate, setWorkspaceCandidate] = useState<WorkspaceCandidate | null>(null)
-  const [showWorktreePanel, setShowWorktreePanel] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
@@ -157,14 +139,15 @@ export function App() {
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const inputRef = useRef('')
+  const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
   const blocks = view.blocks
   const projectDir = workspaceDisplayDirectory(workspace)
+  const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const {
     catalog: skillCatalog,
     selected: selectedSkills,
     trigger: skillTrigger,
-    matches: skillMatches,
-    selectedIds: selectedSkillIds,
+    matches: composerMenuItems,
     activeIndex: skillActiveIndex,
     limitReached: skillLimitReached,
     textareaRef: composerTextareaRef,
@@ -173,7 +156,7 @@ export function App() {
     replace: replaceSkills,
     mergeRestored: mergeRestoredSkills,
     remove: removeSelectedSkill,
-    select: selectSkill,
+    select: selectComposerMenuItem,
     resetCatalog: resetSkillCatalog,
     updateMenu: updateSkillMenu,
     closeMenu: closeSkillMenu,
@@ -188,8 +171,12 @@ export function App() {
     modelId,
     projectDir,
     workspaceMode: workspace.mode,
+    compactDisabled: status !== 'idle'
+      && status !== 'error',
+    onCommand: (command) => slashCommandRef.current(command),
   })
   const sections = conversationSections(blocks, workStartedAt)
+  const conversationStarted = blocks.some((block) => block.kind === 'user')
   const checkpointRestoreAnchors = checkpointRestoreAnchorIds(view)
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
@@ -214,6 +201,8 @@ export function App() {
     detach: detachPdfDrafts,
     restore: restorePdfDrafts,
   } = usePdfDrafts(addError)
+
+  useEffect(() => installPaperHoverTracking(document), [])
 
   useEffect(() => {
     inputRef.current = input
@@ -355,7 +344,6 @@ export function App() {
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
     if (changingRuntime) stashActiveComposer()
-    if (changingRuntime) setShowWorktreePanel(false)
     if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
     runtimeIdRef.current = snapshot.runtimeId
     sessionIdRef.current = snapshot.sessionId
@@ -407,7 +395,6 @@ export function App() {
       const snapshot = await window.whycode.runtimeSnapshot()
       if (resumeTargetCommitted(snapshot, targetSessionId)) {
         applyRuntimeSnapshot(snapshot)
-        setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
         void refreshModels()
@@ -674,35 +661,32 @@ export function App() {
 
   const activateNewSession = useCallback(async (
     workspaceRequest?: StartWorkspaceRequest,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const result = await window.whycode.newSession(
       workspaceRequest ? { workspace: workspaceRequest } : undefined,
     )
     if (!result.ok) {
       setWorkspaceCandidate(null)
       addError(result.error ?? '新建会话失败')
-      return
+      return false
     }
     applyRuntimeSnapshot(result.snapshot)
     setWorkspaceCandidate(null)
-    setShowSessions(false)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
     void refreshModels()
+    return true
   }, [addError, applyRuntimeSnapshot, refreshModels, refreshSessions])
 
   const pickProject = useCallback(() => {
     if (!beginSessionTransition()) return
     void window.whycode.pickProjectDir().then(async (candidate) => {
       if (!candidate) return
-      if (candidate.repositoryDirectory) {
-        setWorkspaceCandidate(candidate)
-        return
-      }
-      await activateNewSession({
+      const activated = await activateNewSession({
         mode: 'local',
         selectedDirectory: candidate.selectedDirectory,
       })
+      if (activated && candidate.repositoryDirectory) setWorkspaceCandidate(candidate)
     }).catch((error) => {
       addError(`工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
@@ -733,6 +717,7 @@ export function App() {
 
   const startNewSession = useCallback(() => {
     if (!beginSessionTransition()) return
+    setWorkspaceCandidate(null)
     void activateNewSession()
       .catch((error) => {
         addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
@@ -755,8 +740,10 @@ export function App() {
           expectedBaseCommit: choice.base.commit,
           acknowledgeUncommittedChangesExcluded: candidate.dirty,
         }
-    void activateNewSession(workspaceRequest).catch((error) => {
-      setWorkspaceCandidate(null)
+    void activateNewSession(workspaceRequest).then(() => {
+      setWorkspaceCandidate(candidate)
+    }).catch((error) => {
+      setWorkspaceCandidate(candidate)
       addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
@@ -782,7 +769,6 @@ export function App() {
       stickToBottom.current = true
       setShowJumpBottom(false)
       setSessionActionError(null)
-      setShowSessions(false)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
       void refreshModels()
@@ -826,7 +812,6 @@ export function App() {
       if (result.deletedCurrent) {
         resetActiveComposer()
         if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
-        if (result.ok) setShowSessions(false)
         void window.whycode.consensusStatus().then(setConsensus)
       }
       if (!result.ok) addError(result.error ?? '删除会话失败')
@@ -846,41 +831,16 @@ export function App() {
     setDeletionBlocksRuntime,
   ])
 
-  const discardWorktree = useCallback(() => {
-    const targetRuntimeId = runtimeIdRef.current
-    if (!targetRuntimeId || !beginSessionTransition()) return
-    void window.whycode.discardWorktree(targetRuntimeId).then((result) => {
-      if (result.deletedCurrent) {
-        resetActiveComposer()
-        if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
-      }
-      if (!result.ok) {
-        addError(result.error ?? 'Worktree 丢弃失败')
-        return
-      }
-      setShowWorktreePanel(false)
-      void refreshSessions()
-      void refreshModels()
-      void window.whycode.consensusStatus().then(setConsensus)
-    }).catch((error) => {
-      addError(`Worktree 丢弃失败：${error instanceof Error ? error.message : String(error)}`)
-    }).finally(endSessionTransition)
-  }, [
-    addError,
-    applyRuntimeSnapshot,
-    beginSessionTransition,
-    endSessionTransition,
-    refreshModels,
-    refreshSessions,
-    resetActiveComposer,
-  ])
-
   const compact = useCallback(() => {
+    if (status !== 'idle' && status !== 'error') return
     setView((previous) =>
       appendNotice(previous, '正在压缩上下文（生成摘要中，可点停止取消）…'),
     )
     void sendRuntimeCommand({ type: 'compact' })
-  }, [sendRuntimeCommand])
+  }, [sendRuntimeCommand, status])
+  slashCommandRef.current = (command) => {
+    if (command === 'compact') compact()
+  }
 
   const changePermission = useCallback((mode: PermissionMode) => {
     const previous = permMode
@@ -936,6 +896,28 @@ export function App() {
       addError(`连接设置读取失败：${error instanceof Error ? error.message : String(error)}`)
     })
   }, [addError])
+
+  const openCurrentWorkspaceFolder = useCallback(() => {
+    const targetRuntimeId = runtimeIdRef.current
+    if (!targetRuntimeId) return
+    void window.whycode.openWorkspaceFolder(targetRuntimeId).then((result) => {
+      if (!result.ok) addError(result.error)
+    }).catch((error) => {
+      addError(`打开工作文件夹失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }, [addError])
+
+  const prepareCommitPrompt = useCallback(() => {
+    const prompt = '请检查当前 Worktree 的改动，先总结将要提交的内容，再创建合适的提交；如果已经配置远程且适合推送，再推送当前分支。'
+    setInput((current) => {
+      const next = current.trim() ? `${current.trimEnd()}\n\n${prompt}` : prompt
+      inputRef.current = next
+      return next
+    })
+    requestAnimationFrame(() => {
+      composerTextareaRef.current?.focus()
+    })
+  }, [composerTextareaRef])
 
   const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
     setConnectionSettings(snapshot)
@@ -1121,14 +1103,34 @@ export function App() {
     onPdfFiles: addPdfFiles,
     onError: addError,
   })
+  const currentSession = sessions.find((session) => session.isCurrent)
+  const taskTitle = currentSession?.title
+    || (blocks.length > 0 ? '当前会话' : '新会话')
+  const composerDisabled = stopping
+    || sessionTransitionPending
+    || deletionBlocksRuntime
+    || resumingSessionId !== null
+    || checkpointRestoreToolUseId !== null
+  const messageEmpty = !input.trim()
+    && imageDrafts.length === 0
+    && pdfDrafts.length === 0
+    && selectedSkills.length === 0
+  const sendDisabled = composerDisabled
+    || attachmentSubmissionPending
+    || messageEmpty
+  const contextBaseRef = workspace.mode === 'pending-worktree'
+    ? workspace.baseRef
+    : workspace.mode === 'worktree'
+      ? workspace.baseRef
+      : null
 
   return (
     <div
-      className="relative flex h-screen flex-col bg-neutral-50 text-neutral-900"
+      className="relative flex h-screen gap-1 overflow-hidden bg-[var(--wc-canvas)] p-1 text-[var(--wc-ink)]"
       {...attachmentDrop.handlers}
     >
       {attachmentDrop.active && (
-        <div className="pointer-events-none fixed inset-3 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-50/90 text-base font-medium text-violet-700 shadow-lg">
+        <div className="pointer-events-none fixed inset-3 z-[70] flex items-center justify-center rounded-[24px_20px_25px_21px] border-2 border-dashed border-[#8d9a8f] bg-[var(--wc-sage)]/90 text-sm font-medium text-[var(--wc-sage-ink)] shadow-lg backdrop-blur-sm">
           {attachmentLocked
             ? '当前操作暂时锁定附件'
             : !canAttachPdfs
@@ -1138,73 +1140,254 @@ export function App() {
                 : '松开以添加 PDF；当前模型没有可用识图能力'}
         </div>
       )}
-      <AppHeader
-        projectDir={projectDir}
-        workspaceMode={workspace.mode}
-        busy={interactionBusy}
-        sessionChangeLocked={sessionChangeLocked}
-        workspaceSelectionLocked={sessionChangeLocked || blocks.length > 0}
-        permissionLocked={
-          sessionTransitionPending
-          || deletionBlocksRuntime
-          || resumingSessionId !== null
-        }
-        consensus={consensus}
-        permMode={permMode}
-        models={models}
-        modelId={modelId}
-        reasoningEffort={reasoningEffort}
-        onPickProject={pickProject}
-        onOpenWorkspaceFolder={() => {
-          if (!runtimeIdRef.current) return
-          void window.whycode.openWorkspaceFolder(runtimeIdRef.current).then((result) => {
-            if (!result.ok) addError(result.error)
-          }).catch((error) => {
-            addError(`打开工作文件夹失败：${error instanceof Error ? error.message : String(error)}`)
-          })
-        }}
-        onOpenWorkspaceDetails={() => setShowWorktreePanel(true)}
-        onToggleConsensus={toggleConsensus}
-        onCompact={compact}
-        onPermissionChange={changePermission}
-        onModelChange={changeModel}
-        onReasoningEffortChange={changeReasoningEffort}
-        onOpenSessions={() => {
-          setSessionActionError(null)
-          setShowSessions(true)
-          void refreshSessions()
-        }}
+
+      <AppSidebar
+        collapsed={sidebarCollapsed}
+        sessions={sessions}
+        error={sessionListError}
+        actionError={sessionActionError}
+        busy={sessionChangeLocked}
+        deletingSessionId={deletingSessionId}
+        onCollapsedChange={setSidebarCollapsed}
         onNewSession={startNewSession}
-        onOpenConnectionSettings={openConnectionSettings}
+        onResume={resumeSession}
+        onDelete={deleteSession}
+        onOpenSettings={openConnectionSettings}
       />
 
-      {workspaceCandidate && (
-        <WorkspaceStartDialog
-          candidate={workspaceCandidate}
-          busy={sessionTransitionPending}
-          onStart={startWorkspaceSession}
-          onPickOther={() => {
-            if (sessionTransitionPending) return
-            setWorkspaceCandidate(null)
-            pickProject()
-          }}
-          onClose={() => {
-            if (!sessionTransitionPending) setWorkspaceCandidate(null)
-          }}
+      <section className="wc-shell-panel flex min-w-0 flex-1 flex-col bg-[var(--wc-surface)]">
+        <TaskHeader
+          title={taskTitle}
+          projectDir={workspace.mode === 'pending-managed' ? null : projectDir}
+          workspaceMode={workspace.mode}
+          onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
         />
-      )}
 
-      {showWorktreePanel && workspace.mode === 'worktree' && (
-        <WorktreePanel
-          runtimeId={runtimeId}
-          binding={workspace}
-          busy={interactionBusy}
-          onClose={() => {
-            if (!sessionTransitionPending) setShowWorktreePanel(false)
-          }}
-          onDiscard={discardWorktree}
-        />
-      )}
+        <div className="relative flex min-h-0 flex-1">
+          <section className="flex min-w-0 flex-1 flex-col">
+            <main
+              ref={scrollRef}
+              onScroll={onScroll}
+              className="wc-scrollbar relative min-h-0 flex-1 overflow-y-auto px-5 py-5"
+            >
+              <div className="mx-auto w-full max-w-4xl">
+                {!conversationStarted && (
+                  <div className="mx-auto mt-[18vh] max-w-md text-center">
+                    <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
+                    <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
+                      {explicitProjectSelected
+                        ? '描述目标，WhyCode 会在当前工作区中读取、修改和验证。'
+                        : '先选择一个项目，或直接在默认工作区中开始。'}
+                    </p>
+                  </div>
+                )}
+                <ConversationView
+                  runtimeId={runtimeId}
+                  sections={sections}
+                  expandedIds={view.expanded}
+                  editableBlockId={editableBlockId}
+                  busy={interactionBusy}
+                  checkpointRestoreAnchorIds={checkpointRestoreAnchors}
+                  checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+                  onCheckpointRestoreChange={changeCheckpointRestore}
+                  onEdit={editUserMessage}
+                  onToggle={toggle}
+                />
+              </div>
+            </main>
+
+            <div className="relative shrink-0 px-4 pb-4 pt-1">
+              <div className="mx-auto w-full max-w-4xl">
+                {composerProcessingTimeVisible && workStartedAt !== null && (
+                  <div className="mb-1.5 px-2 text-xs text-[var(--wc-faint)]">
+                    <ProcessingTime startedAt={workStartedAt} />
+                  </div>
+                )}
+
+                {showJumpBottom && (
+                  <button
+                    type="button"
+                    className="wc-focus-ring absolute -top-9 left-1/2 -translate-x-1/2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-1.5 text-xs text-[var(--wc-muted)] shadow-sm hover:border-[var(--wc-line-strong)]"
+                    onClick={jumpToBottom}
+                    title="回到底部并恢复自动跟随"
+                  >
+                    ↓ 回到底部
+                  </button>
+                )}
+
+                {view.pendingQuestion && (
+                  <div className="mb-2">
+                    <PaperFrame>
+                      <QuestionCard
+                        key={view.pendingQuestion.id}
+                        question={view.pendingQuestion}
+                        disabled={interactionBusy || stopping || questionSubmitting}
+                        onAnswer={answerQuestion}
+                      />
+                    </PaperFrame>
+                  </div>
+                )}
+
+                {approval && (
+                  <div className="mb-2">
+                    <PaperFrame>
+                      <ApprovalCard approval={approval} onRespond={respondApproval} />
+                    </PaperFrame>
+                  </div>
+                )}
+
+                {negoStatus && (
+                  <div className="mb-2 rounded-xl bg-[var(--wc-sage)] px-3 py-2 text-xs text-[var(--wc-sage-ink)]">
+                    {negoStatus}
+                  </div>
+                )}
+
+                {queued.length > 0 && (
+                  <div className="mb-2 space-y-1">
+                    {queued.map((queuedMessage) => (
+                      <div key={queuedMessage.id} className="rounded-xl bg-black/[0.04] px-3 py-1.5 text-xs text-[var(--wc-muted)]">
+                        <div className="truncate">已排队 · {queuedMessage.text}</div>
+                        <SkillBadges skills={queuedMessage.skills} />
+                        <QueuedImageStrip attachments={queuedMessage.attachments} />
+                        <QueuedPdfStrip attachments={queuedMessage.pdfAttachments} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {restoredQueue.length > 0 && (
+                  <div className="mb-2 rounded-xl bg-[var(--wc-sand)] px-3 py-2 text-xs text-[var(--wc-sand-ink)]">
+                    另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
+                  </div>
+                )}
+
+                <footer className="wc-composer relative p-2.5">
+                  {skillTrigger && !attachmentLocked && (
+                    <ComposerSlashMenu
+                      items={composerMenuItems}
+                      activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
+                      diagnostics={skillCatalog.diagnostics}
+                      limitReached={skillLimitReached}
+                      onSelect={selectComposerMenuItem}
+                      onActivate={setSkillActiveIndex}
+                    />
+                  )}
+
+                  {!conversationStarted && (
+                    <WorkspaceContextBar
+                      workspace={workspace}
+                      candidate={workspaceCandidate}
+                      projectDir={projectDir}
+                      baseRef={contextBaseRef}
+                      busy={sessionChangeLocked}
+                      onPickProject={pickProject}
+                      onClearProject={startNewSession}
+                      onStart={startWorkspaceSession}
+                    />
+                  )}
+
+                  <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
+                  <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
+                  <SkillChips
+                    skills={selectedSkills}
+                    disabled={attachmentLocked}
+                    onRemove={removeSelectedSkill}
+                  />
+
+                  <textarea
+                    ref={composerTextareaRef}
+                    rows={2}
+                    className="wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-sm leading-6 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
+                    value={input}
+                    onChange={(event) => {
+                      const text = event.target.value
+                      inputRef.current = text
+                      setInput(text)
+                      updateSkillMenu(text, event.target.selectionStart)
+                    }}
+                    onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
+                    onBlur={closeSkillMenu}
+                    onPaste={pasteAttachments}
+                    disabled={composerDisabled}
+                    onKeyDown={(event) => {
+                      if (handlePickerKeyDown(event)) return
+                      const action = composerKeyAction({
+                        key: event.key,
+                        shiftKey: event.shiftKey,
+                        ctrlKey: event.ctrlKey,
+                        isComposing: event.nativeEvent.isComposing,
+                      })
+                      if (action === 'ignore' || action === 'newline') return
+                      event.preventDefault()
+                      send(action === 'send-immediately')
+                    }}
+                    placeholder={
+                      stopping
+                        ? '正在停止当前任务并清理子进程…'
+                        : sessionTransitionPending
+                          ? '正在切换会话…'
+                          : deletionBlocksRuntime
+                            ? '正在删除当前会话及其关联数据…'
+                            : resumingSessionId
+                              ? '输入消息…'
+                              : checkpointRestoreToolUseId
+                                ? '正在安全回滚文件，请等待完成…'
+                                : status === 'waiting-approval'
+                                  ? 'Agent 在等你审批上方的请求…'
+                                  : busy
+                                    ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
+                                    : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
+                    }
+                  />
+
+                  <ComposerToolbar
+                    canAttachImages={canAttachImages}
+                    canAttachPdfs={canAttachPdfs}
+                    attachmentLocked={attachmentLocked}
+                    configurationLocked={attachmentLocked}
+                    permissionLocked={
+                      sessionTransitionPending
+                      || deletionBlocksRuntime
+                      || resumingSessionId !== null
+                    }
+                    permMode={permMode}
+                    consensus={consensus}
+                    models={models}
+                    modelId={modelId}
+                    reasoningEffort={reasoningEffort}
+                    busy={busy}
+                    stopping={stopping}
+                    stopDisabled={
+                      stopping
+                      || sessionTransitionPending
+                      || deletionBlocksRuntime
+                      || resumingSessionId !== null
+                      || checkpointRestoreToolUseId !== null
+                    }
+                    sendDisabled={sendDisabled}
+                    onImageFiles={addImageFiles}
+                    onPdfFiles={addPdfFiles}
+                    onPermissionChange={changePermission}
+                    onToggleConsensus={toggleConsensus}
+                    onModelChange={changeModel}
+                    onReasoningEffortChange={changeReasoningEffort}
+                    onSend={() => send(false)}
+                    onStop={stop}
+                  />
+                </footer>
+              </div>
+            </div>
+          </section>
+
+          <TaskInspector
+            runtimeId={runtimeId}
+            workspace={workspace}
+            plan={view.taskPlan}
+            busy={interactionBusy}
+            onPrepareCommitPrompt={prepareCommitPrompt}
+          />
+        </div>
+      </section>
 
       {showConnectionSettings && connectionSettings && (
         <ConnectionSettingsPanel
@@ -1213,339 +1396,10 @@ export function App() {
           onChanged={applyConnectionSettings}
         />
       )}
-
-      {showSessions && (
-        <SessionPanel
-          sessions={sessions}
-          error={sessionListError}
-          actionError={sessionActionError}
-          busy={sessionChangeLocked}
-          deletingSessionId={deletingSessionId}
-          resumingSessionId={resumingSessionId}
-          onClose={() => setShowSessions(false)}
-          onResume={resumeSession}
-          onDelete={deleteSession}
-        />
-      )}
-
-      {view.taskPlan && <TaskPlanCard key={view.taskPlan.id} plan={view.taskPlan} />}
-
-      <main ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto px-6 py-4">
-        {blocks.length === 0 && (
-          <p className="mt-24 text-center text-sm text-neutral-400">
-            {projectDir
-              ? '与 WhyCode 对话，它能读写文件、执行命令（写操作需你确认）'
-              : '正在准备默认工作文件夹…'}
-          </p>
-        )}
-        <ConversationView
-          runtimeId={runtimeId}
-          sections={sections}
-          expandedIds={view.expanded}
-          editableBlockId={editableBlockId}
-          busy={interactionBusy}
-          checkpointRestoreAnchorIds={checkpointRestoreAnchors}
-          checkpointRestoreToolUseId={checkpointRestoreToolUseId}
-          onCheckpointRestoreChange={changeCheckpointRestore}
-          onEdit={editUserMessage}
-          onToggle={toggle}
-        />
-      </main>
-
-      {composerProcessingTimeVisible && workStartedAt !== null && (
-        <div className="border-t border-neutral-100 px-6 py-1.5 text-xs text-neutral-400">
-          <ProcessingTime startedAt={workStartedAt} />
-        </div>
-      )}
-
-      {showJumpBottom && (
-        <div className="relative">
-          <button
-            className="absolute -top-10 left-1/2 -translate-x-1/2 rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs text-neutral-600 shadow hover:border-neutral-500"
-            onClick={jumpToBottom}
-            title="回到底部并恢复自动跟随"
-          >
-            ↓ 回到底部
-          </button>
-        </div>
-      )}
-
-      {view.pendingQuestion && (
-        <div className="border-t border-violet-200 px-6 pt-3">
-          <QuestionCard
-            key={view.pendingQuestion.id}
-            question={view.pendingQuestion}
-            disabled={interactionBusy || stopping || questionSubmitting}
-            onAnswer={answerQuestion}
-          />
-        </div>
-      )}
-
-      {/* 审批卡常驻输入框上方：Agent 在等答复，绝不能被滚动藏住 */}
-      {approval && (
-        <div className="border-t border-amber-200 px-6 pt-3">
-          <ApprovalCard approval={approval} onRespond={respondApproval} />
-        </div>
-      )}
-
-      {negoStatus && (
-        <div className="border-t border-violet-100 bg-violet-50/60 px-6 py-1.5 text-xs text-violet-700">
-          🤝 {negoStatus}
-        </div>
-      )}
-
-      {resumingSessionId && (
-        <div
-          className="border-t border-blue-100 bg-blue-50/70 px-6 py-1.5 text-xs text-blue-700"
-          role="status"
-          aria-live="polite"
-        >
-          正在验证附件并恢复会话…
-        </div>
-      )}
-
-      <footer className="relative border-t border-neutral-200 p-4">
-        {skillTrigger && !attachmentLocked && (
-          <SkillPicker
-            skills={skillMatches}
-            selectedIds={selectedSkillIds}
-            activeIndex={Math.min(skillActiveIndex, Math.max(0, skillMatches.length - 1))}
-            diagnostics={skillCatalog.diagnostics}
-            limitReached={skillLimitReached}
-            onSelect={selectSkill}
-            onActivate={setSkillActiveIndex}
-          />
-        )}
-        {queued.length > 0 && (
-          <div className="mb-2 space-y-1">
-            {queued.map((q) => (
-              <div key={q.id} className="rounded bg-neutral-100 px-3 py-1 text-xs text-neutral-500">
-                <div className="truncate">⏳ 已排队 · {q.text}</div>
-                <SkillBadges skills={q.skills} />
-                <QueuedImageStrip attachments={q.attachments} />
-                <QueuedPdfStrip attachments={q.pdfAttachments} />
-              </div>
-            ))}
-          </div>
-        )}
-        {restoredQueue.length > 0 && (
-          <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
-          </div>
-        )}
-        <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
-        <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
-        <SkillChips
-          skills={selectedSkills}
-          disabled={attachmentLocked}
-          onRemove={removeSelectedSkill}
-        />
-        <div className="flex items-end gap-2">
-          <ImagePickerButton
-            canAttachImages={canAttachImages}
-            disabled={attachmentLocked}
-            onFiles={addImageFiles}
-          />
-          <PdfPickerButton
-            disabled={!canAttachPdfs || attachmentLocked}
-            onFiles={addPdfFiles}
-          />
-          <textarea
-            ref={composerTextareaRef}
-            rows={1}
-            className="max-h-40 min-h-10 flex-1 resize-none overflow-y-auto rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none [field-sizing:content] focus:border-neutral-500"
-            value={input}
-            onChange={(event) => {
-              const text = event.target.value
-              inputRef.current = text
-              setInput(text)
-              updateSkillMenu(text, event.target.selectionStart)
-            }}
-            onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
-            onBlur={closeSkillMenu}
-            onPaste={pasteAttachments}
-            disabled={
-              stopping
-              || sessionTransitionPending
-              || deletionBlocksRuntime
-              || resumingSessionId !== null
-              || checkpointRestoreToolUseId !== null
-            }
-            onKeyDown={(e) => {
-              if (handlePickerKeyDown(e)) return
-              const action = composerKeyAction({
-                key: e.key,
-                shiftKey: e.shiftKey,
-                ctrlKey: e.ctrlKey,
-                isComposing: e.nativeEvent.isComposing,
-              })
-              if (action === 'ignore' || action === 'newline') return
-              e.preventDefault()
-              send(action === 'send-immediately')
-            }}
-            placeholder={
-              stopping
-                ? '正在停止当前任务并清理子进程…'
-                : sessionTransitionPending
-                  ? '正在切换会话…'
-                : deletionBlocksRuntime
-                  ? '正在删除当前会话及其关联数据…'
-                : resumingSessionId
-                  ? '正在验证附件并恢复会话…'
-                : checkpointRestoreToolUseId
-                  ? '正在安全回滚文件，请等待完成…'
-                : status === 'waiting-approval'
-                  ? '⏸ Agent 在等你审批上方的请求…'
-                  : busy
-                    ? '工作中——Enter 排队，Ctrl+Enter 立即插话，$ 选择 Skill，Shift+Enter 换行'
-                    : projectDir
-                      ? '输入消息…（$ 选择 Skill，Shift+Enter 换行）'
-                      : '正在准备工作文件夹…'
-            }
-          />
-          {busy && !deletionBlocksRuntime && resumingSessionId === null && (
-            <button
-              className="rounded-md border border-neutral-300 px-4 py-2 text-sm disabled:opacity-40"
-              onClick={stop}
-              disabled={stopping}
-            >
-              {stopping ? '停止中…' : '停止'}
-            </button>
-          )}
-          {busy && !deletionBlocksRuntime && resumingSessionId === null && (
-            <button
-              className="rounded-md border border-amber-400 px-3 py-2 text-sm text-amber-700 disabled:opacity-40"
-              onClick={() => send(true)}
-              disabled={
-                stopping
-                || attachmentSubmissionPending
-                || (
-                  !input.trim()
-                  && imageDrafts.length === 0
-                  && pdfDrafts.length === 0
-                  && selectedSkills.length === 0
-                )
-              }
-              title="打断当前步骤，立即插话"
-            >
-              立即
-            </button>
-          )}
-          <button
-            className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
-            onClick={() => send(false)}
-            disabled={
-              stopping
-              || attachmentSubmissionPending
-              || deletionBlocksRuntime
-              || resumingSessionId !== null
-              || checkpointRestoreToolUseId !== null
-              || (
-                !input.trim()
-                && imageDrafts.length === 0
-                && pdfDrafts.length === 0
-                && selectedSkills.length === 0
-              )
-            }
-          >
-            {busy ? '排队' : '发送'}
-          </button>
-        </div>
-      </footer>
     </div>
   )
 }
 
 function composerKey(runtimeId: string, sessionId: string | null): string {
   return sessionId ?? `runtime:${runtimeId}`
-}
-
-function ApprovalCard({
-  approval,
-  onRespond,
-}: {
-  approval: Approval
-  onRespond: (approved: boolean, remember?: boolean) => void
-}) {
-  const rememberLabel =
-    approval.suggestion?.kind === 'add-dir'
-      ? '允许并记住此路径范围（本会话）'
-      : approval.suggestion?.kind === 'allow-tool'
-        ? `允许且本会话不再询问 ${approval.suggestion.toolName}`
-        : null
-  return (
-    <div className="mb-2 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
-      <div className="mb-1 font-medium text-amber-800">
-        {approval.items
-          ? `请求执行：同一步的 ${approval.items.length} 项操作`
-          : `请求执行：${approval.toolName}`}
-      </div>
-      <div className="mb-2 text-xs text-amber-700">{approval.reason}</div>
-      {approval.items ? (
-        <div className="mb-2 max-h-80 space-y-2 overflow-auto">
-          {approval.items.map((item, index) => (
-            <div key={item.toolCallId} className="rounded border border-amber-200 bg-white p-2">
-              <div className="mb-1 text-xs font-medium text-neutral-800">
-                {index + 1}. {item.toolName}
-              </div>
-              <div className="mb-1 text-xs text-amber-700">{item.reason}</div>
-              <ApprovalInputPreview input={item.input} diff={item.diff} />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <ApprovalInputPreview input={approval.input} diff={approval.diff} />
-      )}
-      <div className="flex flex-wrap gap-2">
-        <button
-          className="rounded bg-neutral-900 px-3 py-1 text-xs text-white"
-          onClick={() => onRespond(true, false)}
-        >
-          批准（仅本次）
-        </button>
-        {rememberLabel && (
-          <button
-            className="rounded border border-neutral-400 bg-white px-3 py-1 text-xs"
-            onClick={() => onRespond(true, true)}
-          >
-            {rememberLabel}
-          </button>
-        )}
-        <button
-          className="rounded border border-neutral-300 px-3 py-1 text-xs"
-          onClick={() => onRespond(false)}
-        >
-          拒绝
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ApprovalInputPreview({ input, diff }: { input: unknown; diff?: string }) {
-  if (!diff) {
-    return (
-      <pre className="max-h-40 overflow-auto rounded bg-neutral-50 p-2 text-xs text-neutral-600">
-        {summarizeInput(input)}
-      </pre>
-    )
-  }
-  return (
-    <pre className="max-h-64 overflow-auto rounded bg-neutral-50 p-2 text-xs">
-      {diff.split('\n').map((line, index) => (
-        <div
-          key={index}
-          className={
-            line.startsWith('+') && !line.startsWith('+++')
-              ? 'text-green-700'
-              : line.startsWith('-') && !line.startsWith('---')
-                ? 'text-red-700'
-                : 'text-neutral-500'
-          }
-        >
-          {line}
-        </div>
-      ))}
-    </pre>
-  )
 }

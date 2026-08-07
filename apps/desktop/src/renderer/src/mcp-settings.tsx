@@ -9,6 +9,7 @@ import type {
 import { McpAddServer } from './mcp-add-server.tsx'
 import { McpOAuthEditor } from './mcp-oauth.tsx'
 import { McpSecretHeaderEditor } from './mcp-secret-header.tsx'
+import { PaperFrame } from './paper-frame.tsx'
 
 interface McpSettingsEditorProps {
   settings: McpSettingsItem
@@ -24,9 +25,9 @@ interface McpSettingsEditorProps {
 
 export function McpSettingsEditor(props: McpSettingsEditorProps) {
   return (
-    <section>
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-        <div>
+    <section className="wc-paper-section">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
           <h3 className="text-sm font-medium">MCP 服务</h3>
           <p className="text-xs text-neutral-500">
             外部工具按需连接并通过 ToolSearch 延迟加载；启停写入原 MCP 配置，新会话生效。
@@ -34,14 +35,14 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
         </div>
         <div className="flex flex-wrap gap-1.5">
           <button
-            className="rounded border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 disabled:opacity-40"
+            className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--wc-muted)] disabled:opacity-40"
             onClick={() => void props.onRefresh()}
             disabled={props.disabled}
           >
             刷新状态
           </button>
           <button
-            className="rounded border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 disabled:opacity-40"
+            className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--wc-muted)] disabled:opacity-40"
             onClick={() => void props.onOpenConfig({ scope: 'global' })}
             disabled={props.disabled}
             title={props.settings.globalConfigPath}
@@ -50,7 +51,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
           </button>
           {props.settings.projectConfigPath && (
             <button
-              className="rounded border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 disabled:opacity-40"
+              className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--wc-muted)] disabled:opacity-40"
               onClick={() => void props.onOpenConfig({ scope: 'project' })}
               disabled={props.disabled}
               title={props.settings.projectConfigPath}
@@ -68,7 +69,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
       />
 
       {props.settings.diagnostics.length > 0 && (
-        <div className="mb-3 space-y-1 rounded-lg border border-red-200 bg-red-50 p-3">
+        <div className="min-w-0 space-y-1 rounded-xl border border-[#dec8bf] bg-[#f3e8e3] p-3 [overflow-wrap:anywhere]">
           {props.settings.diagnostics.map((diagnostic, index) => (
             <p key={`${diagnostic.scope}:${diagnostic.server ?? ''}:${index}`} className="text-[11px] text-red-700">
               {scopeLabel(diagnostic.scope)}
@@ -79,72 +80,86 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
         </div>
       )}
 
-      <div className="space-y-2">
+      <div className="wc-paper-stack">
         {props.settings.servers.length === 0 && (
           <p className="rounded-lg border border-dashed border-neutral-300 px-3 py-4 text-center text-xs text-neutral-500">
             尚未配置 MCP 服务。可使用上方表单新增，或编辑全局/项目配置文件。
           </p>
         )}
-        {props.settings.servers.map((server) => (
-          <div key={`${server.scope}:${server.name}`} className="rounded-lg border border-neutral-200 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <p className="truncate text-xs font-medium text-neutral-900">{server.name}</p>
-                  <Badge text={scopeLabel(server.scope)} />
-                  <Badge text={server.transport === 'http' ? 'Streamable HTTP' : 'stdio'} />
-                  {server.builtinId && <Badge text="内置默认" />}
-                  {!server.effective && <Badge text="被项目同名配置覆盖" warning />}
+        {props.settings.servers.map((server, index) => (
+          <PaperFrame
+            key={`${server.scope}:${server.name}`}
+            className="wc-paper-frame-soft"
+          >
+            <div className={`${MCP_CARD_STYLES[index % MCP_CARD_STYLES.length]} wc-paper-pad min-w-0 [overflow-wrap:anywhere]`}>
+              <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="min-w-0 break-all text-xs font-medium text-neutral-900">{server.name}</p>
+                    <Badge text={scopeLabel(server.scope)} />
+                    <Badge text={server.transport === 'http' ? 'Streamable HTTP' : 'stdio'} />
+                    {server.builtinId && <Badge text="内置默认" />}
+                    {!server.effective && <Badge text="被项目同名配置覆盖" warning />}
+                  </div>
+                  <p className="mt-1 text-[11px] text-neutral-500">
+                    {currentSessionLabel(
+                      props.settings.currentSessionUsesSnapshot,
+                      server.currentSessionState,
+                      server.currentSessionToolCount,
+                    )}
+                  </p>
                 </div>
-                <p className="mt-1 text-[11px] text-neutral-500">
-                  {currentSessionLabel(
-                    props.settings.currentSessionUsesSnapshot,
-                    server.currentSessionState,
-                    server.currentSessionToolCount,
-                  )}
-                </p>
+                <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-600">
+                  <input
+                    type="checkbox"
+                    checked={server.enabled}
+                    onChange={(event) => void props.onSetEnabled({
+                      scope: server.scope,
+                      name: server.name,
+                      enabled: event.target.checked,
+                    })}
+                    disabled={props.disabled}
+                  />
+                  {server.enabled ? '已启用' : '已关闭'}
+                </label>
               </div>
-              <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-600">
-                <input
-                  type="checkbox"
-                  checked={server.enabled}
-                  onChange={(event) => void props.onSetEnabled({
-                    scope: server.scope,
-                    name: server.name,
-                    enabled: event.target.checked,
-                  })}
-                  disabled={props.disabled}
-                />
-                {server.enabled ? '已启用' : '已关闭'}
-              </label>
+              {server.currentSessionError && (
+                <p className="mt-2 break-words text-[11px] text-red-700">连接错误：{server.currentSessionError}</p>
+              )}
+              {server.currentSessionDiagnostics.map((diagnostic, index) => (
+                <p key={index} className="mt-1 break-words text-[11px] text-amber-700">目录诊断：{diagnostic}</p>
+              ))}
+              <McpSecretHeaderEditor
+                server={server}
+                disabled={props.disabled}
+                onSave={props.onSaveSecretHeader}
+              />
+              <McpOAuthEditor
+                server={server}
+                disabled={props.disabled}
+                onAuthorize={props.onAuthorizeOAuth}
+                onDisconnect={props.onDisconnectOAuth}
+              />
             </div>
-            {server.currentSessionError && (
-              <p className="mt-2 text-[11px] text-red-700">连接错误：{server.currentSessionError}</p>
-            )}
-            {server.currentSessionDiagnostics.map((diagnostic, index) => (
-              <p key={index} className="mt-1 text-[11px] text-amber-700">目录诊断：{diagnostic}</p>
-            ))}
-            <McpSecretHeaderEditor
-              server={server}
-              disabled={props.disabled}
-              onSave={props.onSaveSecretHeader}
-            />
-            <McpOAuthEditor
-              server={server}
-              disabled={props.disabled}
-              onAuthorize={props.onAuthorizeOAuth}
-              onDisconnect={props.onDisconnectOAuth}
-            />
-          </div>
+          </PaperFrame>
         ))}
       </div>
 
-      <p className="mt-2 text-[11px] text-neutral-500">
+      <p className="text-[11px] text-neutral-500">
         当前会话不会热替换 MCP 服务器；新建会话后采用最新配置。项目配置首次使用时仍会要求显式信任。
       </p>
     </section>
   )
 }
+
+const MCP_CARD_STYLES = [
+  'wc-paper-card wc-paper-blue wc-paper-shape-d wc-paper-angle-soft-left',
+  'wc-paper-card wc-paper-sand wc-paper-shape-b wc-paper-angle-soft-right',
+  'wc-paper-card wc-paper-sage wc-paper-shape-d wc-paper-angle-soft-left',
+  'wc-paper-card wc-paper-rose wc-paper-shape-b wc-paper-angle-soft-right',
+  'wc-paper-card wc-paper-blue wc-paper-shape-d wc-paper-angle-soft-left',
+  'wc-paper-card wc-paper-sand wc-paper-shape-b wc-paper-angle-soft-right',
+] as const
 
 function Badge(props: { text: string; warning?: boolean }) {
   return (

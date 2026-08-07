@@ -56,7 +56,7 @@ export interface AuxiliaryModelsConfig {
 export interface WhycodeConfig {
   providers: Partial<Record<BuiltInProviderId, ProviderConnectionConfig>>
   defaultModel?: string
-  /** 新建与恢复会话使用的权限档位；具体工具和路径审批仍只在会话内存中。 */
+  /** 全部已加载、新建与恢复会话共享的权限档位；具体审批结果仍只在各会话内存中。 */
   permissionMode?: PermissionMode
   /** 只用于给已退役会话显示其原型号；不参与模型解析。 */
   retiredModelLabels?: Record<string, string>

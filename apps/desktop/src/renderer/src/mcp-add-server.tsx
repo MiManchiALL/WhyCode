@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { AddMcpServerRequest } from '../../shared/settings.ts'
+import { PaperFrame } from './paper-frame.tsx'
+import { SelectMenu } from './select-menu.tsx'
 
 interface McpAddServerProps {
   hasProject: boolean
@@ -48,31 +50,33 @@ export function McpAddServer(props: McpAddServerProps) {
     )
   }
 
-  return (
-    <div className="mb-3 rounded-lg border border-neutral-200 bg-neutral-50/50 p-3">
+  const editor = (
+    <div className="wc-paper-card wc-paper-white wc-paper-shape-d wc-paper-angle-soft-left wc-paper-pad min-w-0">
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="block text-[11px] text-neutral-600">
+        <label className="block min-w-0 text-[11px] text-neutral-600">
           名称
           <input
-            className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+            className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="例如 github"
             disabled={props.disabled}
           />
         </label>
-        <label className="block text-[11px] text-neutral-600">
-          作用域
-          <select
-            className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+        <div className="min-w-0 text-[11px] text-neutral-600">
+          <span className="mb-1 block">作用域</span>
+          <SelectMenu
             value={scope}
-            onChange={(event) => setScope(event.target.value as 'global' | 'project')}
+            options={[
+              { value: 'global', label: '全局' },
+              ...(props.hasProject ? [{ value: 'project', label: '当前项目' }] : []),
+            ]}
+            onValueChange={(value) => setScope(value as 'global' | 'project')}
+            ariaLabel="MCP 服务作用域"
             disabled={props.disabled}
-          >
-            <option value="global">全局</option>
-            {props.hasProject && <option value="project">当前项目</option>}
-          </select>
-        </label>
+            className="w-full"
+          />
+        </div>
       </div>
 
       <div className="mt-3 flex gap-1.5">
@@ -93,10 +97,10 @@ export function McpAddServer(props: McpAddServerProps) {
       </div>
 
       {transport === 'http' ? (
-        <label className="mt-3 block text-[11px] text-neutral-600">
+        <label className="mt-3 block min-w-0 text-[11px] text-neutral-600">
           URL
           <input
-            className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+            className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             placeholder="https://example.com/mcp"
@@ -105,29 +109,29 @@ export function McpAddServer(props: McpAddServerProps) {
         </label>
       ) : (
         <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <label className="block text-[11px] text-neutral-600">
+          <label className="block min-w-0 text-[11px] text-neutral-600">
             启动命令
             <input
-              className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+              className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
               value={command}
               onChange={(event) => setCommand(event.target.value)}
               placeholder="node"
               disabled={props.disabled}
             />
           </label>
-          <label className="block text-[11px] text-neutral-600">
+          <label className="block min-w-0 text-[11px] text-neutral-600">
             工作目录（可选）
             <input
-              className="mt-1 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+              className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
               value={cwd}
               onChange={(event) => setCwd(event.target.value)}
               disabled={props.disabled}
             />
           </label>
-          <label className="block text-[11px] text-neutral-600 md:col-span-2">
+          <label className="block min-w-0 text-[11px] text-neutral-600 md:col-span-2">
             参数（每行一个，空格不会被当作分隔符）
             <textarea
-              className="mt-1 min-h-20 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+              className="mt-1 min-h-20 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
               value={args}
               onChange={(event) => setArgs(event.target.value)}
               placeholder={'-y\n@example/mcp-server'}
@@ -160,4 +164,5 @@ export function McpAddServer(props: McpAddServerProps) {
       </div>
     </div>
   )
+  return <PaperFrame className="wc-paper-frame-soft">{editor}</PaperFrame>
 }

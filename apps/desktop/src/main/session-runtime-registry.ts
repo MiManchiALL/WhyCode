@@ -1,3 +1,5 @@
+import type { PermissionMode } from '@whycode/core/permissions'
+
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import type { UserMessageReservation } from './user-message-routing.ts'
 
@@ -86,6 +88,11 @@ export class SessionRuntimeRegistry {
 
   anyBusy(): boolean {
     return this.all().some((runtime) => runtime.busy)
+  }
+
+  /** 权限档位是应用级偏好；已加载与后台运行的会话必须在同一同步边界更新。 */
+  setPermissionModeForAll(mode: PermissionMode): void {
+    for (const runtime of this.runtimes.values()) runtime.setPermissionMode(mode)
   }
 
   runtimeBecameIdle(runtime: DesktopSessionRuntime): void {

@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { SkillDiagnostic, SkillSummary } from '@whycode/core/skills'
+import { Archive, Puzzle, X } from 'lucide-react'
+import type { ComposerMenuItem } from './skill-trigger.ts'
 
 const SKILL_SCOPE_LABEL = {
   project: '项目',
@@ -14,10 +16,10 @@ export function SkillBadges({ skills }: { skills?: readonly SkillSummary[] }) {
       {skills.map((skill) => (
         <span
           key={skill.id}
-          className="max-w-full truncate rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700"
+          className="max-w-full truncate rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 text-[10px] text-[var(--wc-blue-ink)]"
           title={skill.path}
         >
-          ✦ {skill.name} · {SKILL_SCOPE_LABEL[skill.scope]}
+          {skill.name} · {SKILL_SCOPE_LABEL[skill.scope]}
         </span>
       ))}
     </div>
@@ -39,19 +41,19 @@ export function SkillChips({
       {skills.map((skill) => (
         <span
           key={skill.id}
-          className="inline-flex max-w-full items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-xs text-violet-700"
+          className="inline-flex max-w-full items-center gap-1.5 rounded-xl border border-[var(--wc-line)] bg-[var(--wc-blue)] px-2 py-1 text-xs text-[var(--wc-blue-ink)]"
           title={skill.path}
         >
-          <span aria-hidden="true">✦</span>
+          <Puzzle size={12} aria-hidden="true" />
           <span className="truncate">{skill.name}</span>
           <button
             type="button"
-            className="rounded px-0.5 text-violet-400 hover:bg-violet-100 hover:text-violet-700 disabled:opacity-40"
+            className="wc-focus-ring rounded-md p-0.5 text-[var(--wc-faint)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] disabled:opacity-40"
             aria-label={`移除 Skill ${skill.name}`}
             disabled={disabled}
             onClick={() => onRemove(skill.id)}
           >
-            ×
+            <X size={12} />
           </button>
         </span>
       ))}
@@ -59,88 +61,130 @@ export function SkillChips({
   )
 }
 
-export function SkillPicker({
-  skills,
-  selectedIds,
+export function ComposerSlashMenu({
+  items,
   activeIndex,
   diagnostics,
   limitReached,
   onSelect,
   onActivate,
 }: {
-  skills: readonly SkillSummary[]
-  selectedIds: ReadonlySet<string>
+  items: readonly ComposerMenuItem[]
   activeIndex: number
   diagnostics: readonly SkillDiagnostic[]
   limitReached: boolean
-  onSelect: (skill: SkillSummary) => void
+  onSelect: (item: ComposerMenuItem) => void
   onActivate: (index: number) => void
 }) {
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     listRef.current
-      ?.querySelector<HTMLElement>(`[data-skill-index="${activeIndex}"]`)
+      ?.querySelector<HTMLElement>(`[data-menu-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
+  const indexedItems = items.map((item, index) => ({ item, index }))
+  const commandItems = indexedItems.filter(({ item }) => item.kind === 'command')
+  const skillItems = indexedItems.filter(({ item }) => item.kind === 'skill')
 
   return (
     <div
-      className="absolute bottom-full left-20 z-30 mb-2 w-[min(42rem,calc(100%-5rem))] overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-xl"
+      className="wc-menu-content absolute bottom-full left-0 z-30 mb-2 w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
       role="listbox"
-      aria-label="可用 Skill"
+      aria-label="功能与 Skill"
     >
-      <div className="border-b border-neutral-100 px-3 py-2 text-xs font-medium text-neutral-500">
-        Skill · 输入名称筛选，Enter 选择
+      <div className="border-b border-[var(--wc-line)] px-3 py-2 text-[11px] font-medium text-[var(--wc-faint)]">
+        输入筛选，Enter 选择
       </div>
-      <div ref={listRef} className="max-h-72 overflow-y-auto p-1">
-        {skills.length === 0
-          ? (
-            <div className="px-3 py-5 text-center text-xs text-neutral-400">
-              没有匹配的 Skill
-            </div>
-          )
-          : skills.map((skill, index) => {
-            const selected = selectedIds.has(skill.id)
-            const disabled = selected || limitReached
-            return (
-              <button
-                key={skill.id}
-                data-skill-index={index}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                disabled={disabled}
-                className={`block w-full rounded px-3 py-2 text-left disabled:opacity-50 ${
-                  index === activeIndex ? 'bg-violet-50' : 'hover:bg-neutral-50'
-                }`}
-                onMouseEnter={() => onActivate(index)}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => onSelect(skill)}
-              >
-                <span className="flex items-center gap-2">
-                  <span className="font-medium text-neutral-800">{skill.name}</span>
-                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
-                    {SKILL_SCOPE_LABEL[skill.scope]}
-                  </span>
-                  {selected && <span className="text-[10px] text-violet-500">已选择</span>}
-                </span>
-                <span className="mt-0.5 block line-clamp-2 text-xs text-neutral-500">
-                  {skill.description}
-                </span>
-                <span className="mt-1 block truncate text-[10px] text-neutral-400">
-                  {skill.path}
-                </span>
-              </button>
-            )
-          })}
+      <div ref={listRef} className="wc-scrollbar max-h-72 overflow-y-auto p-1.5">
+        {items.length === 0 ? (
+          <div className="px-3 py-5 text-center text-xs text-[var(--wc-faint)]">
+            没有匹配的功能或 Skill
+          </div>
+        ) : (
+          <>
+            <ComposerMenuGroup
+              label="功能"
+              entries={commandItems}
+              activeIndex={activeIndex}
+              limitReached={limitReached}
+              onSelect={onSelect}
+              onActivate={onActivate}
+            />
+            <ComposerMenuGroup
+              label="Skills"
+              entries={skillItems}
+              activeIndex={activeIndex}
+              limitReached={limitReached}
+              onSelect={onSelect}
+              onActivate={onActivate}
+            />
+          </>
+        )}
       </div>
       {(diagnostics.length > 0 || limitReached) && (
-        <div className="border-t border-neutral-100 px-3 py-1.5 text-[10px] text-amber-700">
+        <div className="border-t border-[var(--wc-line)] px-3 py-1.5 text-[10px] text-[var(--wc-sand-ink)]">
           {limitReached
             ? '本条消息已达到 8 个 Skill 上限'
             : `${diagnostics.length} 个 Skill 目录项校验未通过`}
         </div>
       )}
     </div>
+  )
+}
+
+function ComposerMenuGroup(props: {
+  label: string
+  entries: readonly { item: ComposerMenuItem; index: number }[]
+  activeIndex: number
+  limitReached: boolean
+  onSelect: (item: ComposerMenuItem) => void
+  onActivate: (index: number) => void
+}) {
+  if (props.entries.length === 0) return null
+  return (
+    <section aria-label={props.label}>
+      <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--wc-faint)]">
+        {props.label}
+      </div>
+      {props.entries.map(({ item, index }) => {
+        const isCommand = item.kind === 'command'
+        const disabled = isCommand ? item.command.disabled : props.limitReached
+        const name = isCommand ? item.command.name : item.skill.name
+        const description = isCommand ? item.command.description : item.skill.description
+        return (
+          <button
+            key={isCommand ? `command:${item.command.id}` : item.skill.id}
+            data-menu-index={index}
+            type="button"
+            role="option"
+            aria-selected={index === props.activeIndex}
+            disabled={disabled}
+            className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors disabled:opacity-40 ${
+              index === props.activeIndex ? 'bg-[var(--wc-blue)]' : 'hover:bg-black/[0.035]'
+            }`}
+            onMouseEnter={() => props.onActivate(index)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => props.onSelect(item)}
+          >
+            <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border border-[var(--wc-line)] bg-white text-[var(--wc-muted)]">
+              {isCommand ? <Archive size={14} /> : <Puzzle size={14} />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2 text-sm font-medium text-[var(--wc-ink)]">
+                {isCommand ? `/${name}` : name}
+                {!isCommand && (
+                  <span className="rounded-md bg-black/[0.045] px-1.5 py-0.5 text-[9px] font-normal text-[var(--wc-faint)]">
+                    {SKILL_SCOPE_LABEL[item.skill.scope]}
+                  </span>
+                )}
+              </span>
+              <span className="mt-0.5 block line-clamp-2 text-[11px] leading-4 text-[var(--wc-muted)]">
+                {description}
+              </span>
+            </span>
+          </button>
+        )
+      })}
+    </section>
   )
 }

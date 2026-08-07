@@ -29,7 +29,7 @@ export function QuestionCard({ question, disabled, onAnswer }: QuestionCardProps
   const progress = useQuestionProgress(items, disabled, onAnswer)
   return (
     <form
-      className="mb-2 rounded border border-violet-300 bg-violet-50 p-3 text-sm"
+      className="wc-paper-card wc-paper-blue wc-paper-shape-a wc-paper-compact-pad text-sm"
       onSubmit={(event) => submitQuestion(event, progress.advance)}
     >
       <QuestionHeading
@@ -99,11 +99,11 @@ function QuestionHeading({
 }) {
   return (
     <>
-      <div className="mb-1 flex items-center justify-between gap-3 text-xs font-medium text-violet-600">
+      <div className="mb-1 flex items-center justify-between gap-3 text-xs font-medium text-[var(--wc-blue-ink)]">
         <span>{item.header}</span>
         {total > 1 && <span>{currentIndex + 1} / {total}</span>}
       </div>
-      <div className="mb-3 font-medium text-violet-950">{item.question}</div>
+      <div className="mb-3 font-medium text-[var(--wc-ink)]">{item.question}</div>
     </>
   )
 }
@@ -127,10 +127,10 @@ function QuestionOptions({
         <button
           key={`${index}-${option.label}`}
           type="button"
-          className={`rounded border bg-white p-2 text-left disabled:opacity-40 ${
+          className={`wc-focus-ring rounded-xl border bg-white/85 p-2.5 text-left disabled:opacity-40 ${
             answer === option.label
-              ? 'border-violet-500 ring-1 ring-violet-300'
-              : 'border-violet-200 hover:border-violet-400'
+              ? 'border-[#81939c] ring-1 ring-[#81939c]/30'
+              : 'border-[var(--wc-line)] hover:border-[var(--wc-line-strong)]'
           }`}
           disabled={disabled}
           aria-pressed={answer === option.label}
@@ -141,8 +141,8 @@ function QuestionOptions({
             onAdvance(option.label)
           }}
         >
-          <div className="font-medium text-violet-900">{option.label}</div>
-          <div className="mt-0.5 text-xs text-violet-600">{option.description}</div>
+          <div className="font-medium text-[var(--wc-ink)]">{option.label}</div>
+          <div className="mt-0.5 text-xs text-[var(--wc-muted)]">{option.description}</div>
         </button>
       ))}
     </div>
@@ -164,7 +164,7 @@ function QuestionControls({
       {progress.currentIndex > 0 && (
         <button
           type="button"
-          className="rounded border border-violet-200 bg-white px-3 py-1.5 text-violet-700 disabled:opacity-40"
+          className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-3 py-1.5 text-[var(--wc-muted)] disabled:opacity-40"
           disabled={disabled}
           onClick={progress.previous}
         >
@@ -173,7 +173,7 @@ function QuestionControls({
       )}
       <input
         key={progress.currentIndex}
-        className="min-w-0 flex-1 rounded border border-violet-200 bg-white px-2 py-1.5 text-sm outline-none focus:border-violet-400"
+        className="wc-focus-ring min-w-0 flex-1 rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-sm outline-none"
         value={progress.currentAnswer}
         disabled={disabled}
         autoFocus={progress.currentIndex > 0}
@@ -184,7 +184,7 @@ function QuestionControls({
       />
       <button
         type="submit"
-        className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-40"
+        className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-3 py-1.5 text-white disabled:opacity-40"
         disabled={disabled || !progress.currentAnswer.trim()}
       >
         {progress.isLast ? '回答' : '下一个'}

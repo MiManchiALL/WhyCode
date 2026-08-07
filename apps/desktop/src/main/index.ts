@@ -810,16 +810,16 @@ async function handleCommand(
       return { ok: true }
     }
     case 'set-permission-mode': {
-      // 权限是当前运行时的执行边界，必须在任何磁盘等待之前生效；否则界面已显示只读时，
-      // 旧审批仍可能在配置写入窗口内按原档位执行。持久化只负责下次会话偏好。
-      runtime.setPermissionMode(command.mode)
+      // 权限是应用级执行边界，必须在任何磁盘等待之前同步到全部已加载会话；否则界面
+      // 已显示新档位时，后台会话仍可能按旧档位执行。持久化只负责重启后的偏好。
       preferredPermissionMode = command.mode
+      runtimeRegistry.setPermissionModeForAll(command.mode)
       try {
         await persistPermissionMode(command.mode)
       } catch (error) {
         runtime.emit({
           type: 'error',
-          message: `权限档位已在当前会话生效，但偏好保存失败；重启后可能恢复旧档位：${error instanceof Error ? error.message : String(error)}`,
+          message: `权限档位已在全部会话生效，但偏好保存失败；重启后可能恢复旧档位：${error instanceof Error ? error.message : String(error)}`,
           recoverable: true,
         })
       }
@@ -2201,21 +2201,26 @@ if (primaryInstance) void app.whenReady().then(async () => {
       (path) => shell.openPath(path),
     )
   })
-  ipcMain.handle(IPC.pickProjectDir, async (): Promise<WorkspaceCandidate | null> => {
+  ipcMain.handle(IPC.pickProjectDir, async (event): Promise<WorkspaceCandidate | null> => {
     if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
       return null
     }
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender)
+    if (!ownerWindow || ownerWindow.isDestroyed()) return null
     const selectionAtOpen = selectedRuntime()
-    const result = await dialog.showOpenDialog({
-      title: '选择工作文件夹',
-      defaultPath: sourceWorkspaceDirectory(selectionAtOpen.workspace),
-      properties: ['openDirectory'],
-    })
+    const result = await dialog.showOpenDialog(
+      ownerWindow,
+      {
+        title: '选择工作文件夹',
+        defaultPath: sourceWorkspaceDirectory(selectionAtOpen.workspace),
+        properties: ['openDirectory'],
+      },
+    )
     const selected = result.filePaths[0]
     if (!selected) return null
     try {
       const candidate = await worktrees.inspect(selected)
-      // 原生对话框期间允许其它入口切换会话；旧选择不能覆盖后来发生的用户操作。
+      // 父窗口模态约束用户交互；这里仍防御窗口销毁和其它宿主生命周期竞态。
       if (
         runtimeRegistry.selected !== selectionAtOpen
         || sessionDeletionLock.sessionId

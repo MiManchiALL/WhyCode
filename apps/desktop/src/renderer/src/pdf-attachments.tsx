@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { PdfAttachment } from '@whycode/core'
+import { FileText } from 'lucide-react'
 import {
   MAX_PDF_DRAFT_BYTES,
   MAX_PDF_DRAFT_TOTAL_BYTES,
@@ -35,42 +36,6 @@ export function usePdfDrafts(onError: (message: string) => void) {
     if (result.errors.length > 0) onError(`部分 PDF 未添加（${result.errors.join('；')}）`)
   }, [onError, replace])
   return { drafts, addFiles, remove, clear, detach, restore }
-}
-
-export function PdfPickerButton({
-  disabled,
-  onFiles,
-}: {
-  disabled: boolean
-  onFiles: (files: FileList | null) => void
-}) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="application/pdf,.pdf"
-        multiple
-        disabled={disabled}
-        className="hidden"
-        onChange={(event) => {
-          onFiles(event.currentTarget.files)
-          event.currentTarget.value = ''
-        }}
-      />
-      <button
-        type="button"
-        className="rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
-        disabled={disabled}
-        onClick={() => inputRef.current?.click()}
-        title={`添加或拖放 PDF（最多 ${MAX_PDF_DRAFTS} 个，单个 50 MB）`}
-        aria-label="添加 PDF"
-      >
-        PDF
-      </button>
-    </>
-  )
 }
 
 export function PdfDraftStrip({
@@ -117,14 +82,14 @@ export function UserPdfGallery({
   const [error, setError] = useState<string | null>(null)
   if (!attachments?.length) return null
   return (
-    <div className="mb-2">
-      <div className="flex flex-wrap gap-2">
+    <div className="max-w-full">
+      <div className="flex flex-wrap justify-end gap-2">
         {attachments.map((attachment) => (
           <button
             key={attachment.id}
             type="button"
-            className="flex max-w-sm items-center gap-2 rounded border border-red-200 bg-white px-3 py-2 text-left text-xs hover:border-red-400"
-            title={`用系统默认阅读器打开 ${attachment.name}`}
+            className="flex max-w-sm items-center gap-2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-2 text-left text-xs shadow-[1px_2px_0_rgb(43_46_41_/_4%)] transition-colors hover:border-[var(--wc-line-strong)]"
+            title={`${attachment.name} · ${attachment.pageCount} 页 · ${formatBytes(attachment.byteLength)} · 点击打开`}
             onClick={() => {
               setError(null)
               void window.whycode.openPdfAttachment(runtimeId, attachment.id).then((result) => {
@@ -132,13 +97,10 @@ export function UserPdfGallery({
               }).catch(() => setError('无法打开 PDF'))
             }}
           >
-            <span className="rounded bg-red-600 px-1.5 py-1 font-semibold text-white">PDF</span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">{attachment.name}</span>
-              <span className="text-neutral-400">
-                {attachment.pageCount} 页 · {formatBytes(attachment.byteLength)}
-              </span>
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[#d85858] text-white">
+              <FileText size={11} />
             </span>
+            <span className="min-w-0 flex-1 truncate font-medium">{attachment.name}</span>
           </button>
         ))}
       </div>

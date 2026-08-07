@@ -207,6 +207,12 @@ interface QueuedTaskNotification {
   message: ModelMessage
 }
 
+interface TurnModelSelection {
+  model: ModelEntry
+  providerConfig: ProviderConfig
+  reasoningEffort: ReasoningEffortSelection
+}
+
 function queuedMessageForModel(message: QueuedMessage): ModelMessage {
   const text = withPdfAttachmentReferences(message.text, message.pdfAttachments)
   return message.attachments.length
@@ -250,6 +256,8 @@ export class AgentSession {
   /** 当前步骤的中止器：turn 级取消与 urgent 插话都经由它，用 reason 区分意图 */
   private currentStepAbort: AbortController | null = null
   private options: AgentSessionOptions
+  /** 当前 turn 固化的模型配置；运行中切换只影响下一 turn。 */
+  private activeModelSelection: TurnModelSelection | null = null
   /** 权限上下文（mode / 额外授权目录 / 会话内记住的工具） */
   private permissions: PermissionContext
   private checkpoints: CheckpointManager | null = null
@@ -367,14 +375,24 @@ export class AgentSession {
   }
 
   private createLanguageModel() {
-    return this.options.model.create(this.options.providerConfig)
+    const selection = this.currentModelSelection()
+    return selection.model.create(selection.providerConfig)
   }
 
   private requestProviderOptions() {
+    const selection = this.currentModelSelection()
     return providerOptionsWithReasoningEffort(
-      this.options.model,
-      this.options.reasoningEffort ?? 'default',
+      selection.model,
+      selection.reasoningEffort,
     )
+  }
+
+  private currentModelSelection(): TurnModelSelection {
+    return this.activeModelSelection ?? {
+      model: this.options.model,
+      providerConfig: this.options.providerConfig,
+      reasoningEffort: this.options.reasoningEffort ?? 'default',
+    }
   }
 
   /** 替换注入的额外工具（M3：每轮协商换入该轮的协议输出工具） */
@@ -739,6 +757,12 @@ export class AgentSession {
     taskNotifications: readonly QueuedTaskNotification[] = [],
     resumeTaskPlanFromNotification = false,
   ): Promise<StopReason> {
+    const turnModelSelection: TurnModelSelection = {
+      model: this.options.model,
+      providerConfig: this.options.providerConfig,
+      reasoningEffort: this.options.reasoningEffort ?? 'default',
+    }
+    this.activeModelSelection = turnModelSelection
     this.opAbort = new AbortController()
     this.running = true
     return this.runLoop(
@@ -749,14 +773,19 @@ export class AgentSession {
       skills,
       taskNotifications,
       resumeTaskPlanFromNotification,
-    )
+    ).finally(() => {
+      if (this.activeModelSelection === turnModelSelection) {
+        this.activeModelSelection = null
+      }
+    })
   }
 
   private async prepareSkillTurn(skills: readonly ActivatedSkill[]): Promise<void> {
+    const selection = this.currentModelSelection()
     await this.skillTurn.start({
       skills,
       projectDir: this.options.promptContext.projectDir,
-      contextWindow: this.options.model.capabilities.contextWindow,
+      contextWindow: selection.model.capabilities.contextWindow,
       enabled: !this.options.promptContext.discussion && !this.protocolRound,
       onCatalogError: (error) => this.options.emit({
         type: 'error',
@@ -1380,7 +1409,8 @@ export class AgentSession {
     turnId: string,
   ): Promise<void> {
     const { emit } = this.options
-    const threshold = autoCompactThreshold(this.options.model.capabilities)
+    const model = this.currentModelSelection().model
+    const threshold = autoCompactThreshold(model.capabilities)
     const skillTokens = this.skillTurn.injectedContextTokenEstimate()
     if (skillTokens >= threshold) {
       throw new Error(
@@ -1471,7 +1501,8 @@ export class AgentSession {
     abortSignal?: AbortSignal,
     includeActiveSkillContext = true,
   ): Promise<ModelMessage[]> {
-    const supportsImages = this.options.model.capabilities.supportsImageInput
+    const model = this.currentModelSelection().model
+    const supportsImages = model.capabilities.supportsImageInput
     const signal = abortSignal ?? new AbortController().signal
     const modelMessages = this.skillTurn.project(
       withoutMcpToolState(messages),
@@ -1496,7 +1527,7 @@ export class AgentSession {
       signal,
       Boolean(this.options.auxiliaryImageAnalyzer),
     )
-    return adaptMessagesForProvider(withImages, this.options.model.protocol)
+    return adaptMessagesForProvider(withImages, model.protocol)
   }
 
   private sessionImageAttachments(): ImageAttachment[] {
@@ -1789,7 +1820,7 @@ export class AgentSession {
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const canonicalResponseMessages = normalizeResponseMessagesForProvider(
         response.messages,
-        this.options.model.protocol,
+        this.currentModelSelection().model.protocol,
       )
       if (
         !hadToolCalls
@@ -1981,6 +2012,7 @@ export class AgentSession {
     mcpTools: readonly ToolDefinition[],
   ): ToolSet | undefined {
     const projectDir = this.options.promptContext.projectDir
+    const model = this.currentModelSelection().model
     const extraTools = this.options.extraTools ?? []
     const taskTools = this.taskPlan
       && !this.options.promptContext.discussion
@@ -2019,7 +2051,7 @@ export class AgentSession {
       ...mainTools,
     ]
     const imageTools: ToolDefinition[] =
-      this.options.model.capabilities.supportsImageInput
+      model.capabilities.supportsImageInput
       && this.options.sessionRecorder
       && !this.options.promptContext.discussion
       && !this.protocolRound
@@ -2029,7 +2061,7 @@ export class AgentSession {
                   attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
                   sessionId: this.options.sessionRecorder.sessionId,
                   supportsOriginalDetail:
-                    this.options.model.capabilities.supportsOriginalImageDetail === true,
+                    model.capabilities.supportsOriginalImageDetail === true,
                 })]
               : []),
             ...(this.options.captureScreenshot
@@ -2038,7 +2070,7 @@ export class AgentSession {
                   sessionId: this.options.sessionRecorder.sessionId,
                   capture: this.options.captureScreenshot,
                   supportsOriginalDetail:
-                    this.options.model.capabilities.supportsOriginalImageDetail === true,
+                    model.capabilities.supportsOriginalImageDetail === true,
                 })]
               : []),
           ]
@@ -2053,7 +2085,7 @@ export class AgentSession {
             attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
             sessionId: this.options.sessionRecorder.sessionId,
             processor: this.options.pdfProcessor,
-            supportsVisual: this.options.model.capabilities.supportsImageInput,
+            supportsVisual: model.capabilities.supportsImageInput,
             supportsProjectPaths: Boolean(projectDir),
             resolveAttachment: (attachmentId) => {
               const attachment = this.pdfAttachmentById(attachmentId)
@@ -2074,7 +2106,7 @@ export class AgentSession {
     const officeVisualTools: ToolDefinition[] =
       projectDir
       && this.options.officeProcessor
-      && this.options.model.capabilities.supportsImageInput
+      && model.capabilities.supportsImageInput
       && this.options.sessionRecorder
       && !this.options.promptContext.discussion
       && !this.protocolRound
@@ -2352,7 +2384,7 @@ export class AgentSession {
         inputSchema: def.inputSchema,
         // Responses 函数工具的 strict 默认值为 true；WhyCode 的运行时 Schema
         // 保留真实可选字段，因此必须在该协议边界显式关闭，不能让上游补造参数。
-        ...(this.options.model.protocol === 'openai-responses' ? { strict: false } : {}),
+        ...(model.protocol === 'openai-responses' ? { strict: false } : {}),
         execute: executeWithStepGate,
       })
     }
@@ -2362,8 +2394,9 @@ export class AgentSession {
   private buildAuxiliaryImageTools(): ToolDefinition[] {
     const analyzer = this.options.auxiliaryImageAnalyzer
     const recorder = this.options.sessionRecorder
+    const model = this.currentModelSelection().model
     if (
-      this.options.model.capabilities.supportsImageInput
+      model.capabilities.supportsImageInput
       || !analyzer
       || !recorder
       || this.options.promptContext.discussion

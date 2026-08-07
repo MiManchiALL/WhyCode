@@ -124,11 +124,11 @@ function WorkSummary({
     ? <ProcessingTime startedAt={timing.startedAt} />
     : formatFinishedWorkTime(timing.durationMs, timing.outcome)
   return (
-    <div className="mb-2 px-3 text-xs text-neutral-400">
+    <div className="mb-3 px-1 text-xs text-[var(--wc-faint)]">
       {expandable ? (
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded border border-transparent hover:text-neutral-600 focus-visible:border-neutral-300 focus-visible:outline-none"
+          className="wc-focus-ring inline-flex items-center gap-1 rounded-lg px-1 py-0.5 hover:text-[var(--wc-muted)]"
           aria-controls={activityId}
           aria-expanded={expanded}
           title={expanded ? '收起处理过程' : '展开处理过程'}
@@ -145,7 +145,7 @@ function WorkSummary({
       ) : (
         <span>{label}</span>
       )}
-      <div className="mt-1 w-full border-t border-neutral-200" />
+      <div className="mt-1.5 w-full border-t border-[var(--wc-line)]" />
     </div>
   )
 }

@@ -17,25 +17,29 @@ interface UserMessageCardProps {
 export function UserMessageCard(props: UserMessageCardProps) {
   const editor = useMessageEditor(props.block, props.onEdit)
   return (
-    <div className="group relative mb-2 rounded bg-neutral-200/60 px-3 py-2 text-sm">
+    <div className="group relative mb-4 ml-auto flex max-w-[84%] flex-col items-end gap-2 text-sm leading-6">
       <UserImageGallery attachments={props.block.attachments} />
       <UserPdfGallery runtimeId={props.runtimeId} attachments={props.block.pdfAttachments} />
       <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
-          <MessageEditor
-            editable={props.editable}
-            disabled={props.disabled}
-            editor={editor}
-          />
+          <div className="wc-sticker-soft w-[min(36rem,78vw)] px-3.5 py-2.5">
+            <MessageEditor
+              editable={props.editable}
+              disabled={props.disabled}
+              editor={editor}
+            />
+          </div>
         )
-        : (
-          <MessageDisplay
-            block={props.block}
-            editable={props.editable}
-            disabled={props.disabled}
-            begin={editor.begin}
-          />
+        : props.block.text && (
+          <div className="wc-user-message-bubble relative flex min-h-11 w-fit max-w-full items-center px-3.5 py-2.5">
+            <MessageDisplay
+              block={props.block}
+              editable={props.editable}
+              disabled={props.disabled}
+              begin={editor.begin}
+            />
+          </div>
         )}
     </div>
   )
@@ -114,14 +118,14 @@ function MessageEditor({
       <textarea
         ref={textareaRef}
         rows={2}
-        className="max-h-48 min-h-16 w-full resize-y rounded border border-neutral-400 bg-white px-2 py-1.5 outline-none focus:border-neutral-700"
+        className="wc-focus-ring max-h-48 min-h-16 w-full resize-y rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-2 outline-none"
         value={editor.draft}
         disabled={disabled || editor.submitting}
         onChange={(event) => editor.setDraft(event.target.value)}
         onKeyDown={(event) => handleEditorKeyDown(event, editor.cancel, submit)}
         aria-label="编辑用户消息"
       />
-      {editor.error && <div className="text-xs text-red-600">{editor.error}</div>}
+      {editor.error && <div className="text-xs text-[var(--wc-danger)]">{editor.error}</div>}
       <EditorActions
         draft={editor.draft}
         disabled={!allowed}
@@ -162,7 +166,7 @@ function EditorActions({
     <div className="flex justify-end gap-2 text-xs">
       <button
         type="button"
-        className="rounded border border-neutral-300 bg-white px-2 py-1"
+        className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1"
         disabled={submitting}
         onClick={onCancel}
       >
@@ -170,7 +174,7 @@ function EditorActions({
       </button>
       <button
         type="submit"
-        className="rounded bg-neutral-900 px-2 py-1 text-white disabled:opacity-40"
+        className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-2.5 py-1 text-white disabled:opacity-40"
         disabled={disabled || submitting || !draft.trim()}
       >
         {submitting ? '重跑中…' : '保存并重新运行'}
@@ -192,11 +196,11 @@ function MessageDisplay({
 }) {
   return (
     <>
-      {block.text && <div className="whitespace-pre-wrap pr-10">{block.text}</div>}
+      {block.text && <div className="whitespace-pre-wrap">{block.text}</div>}
       {editable && (
         <button
           type="button"
-          className="absolute right-2 top-2 rounded bg-white/90 px-2 py-0.5 text-xs text-neutral-500 opacity-0 shadow-sm transition-opacity hover:text-neutral-900 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+          className="wc-focus-ring absolute right-full top-1/2 mr-1 -translate-y-1/2 rounded-lg bg-white/90 px-1.5 py-0.5 text-[10px] text-[var(--wc-muted)] opacity-0 shadow-sm transition-opacity hover:text-[var(--wc-ink)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
           disabled={disabled}
           onClick={begin}
         >

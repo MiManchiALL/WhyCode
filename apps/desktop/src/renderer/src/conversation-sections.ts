@@ -64,13 +64,15 @@ function appendActiveWork(
   segment: readonly Block[],
   startedAt: number,
 ): boolean {
-  const finalIndexes = terminalResponseIndexes(segment)
+  const { leading, work } = splitLeadingBlocks(segment)
+  const finalIndexes = terminalResponseIndexes(work)
   if (finalIndexes.size === 0) return false
+  appendBlocks(sections, leading)
   sections.push({
     kind: 'active-work',
-    id: workSectionId(segment, `active-${startedAt}`),
+    id: workSectionId(work, `active-${startedAt}`),
     startedAt,
-    ...sectionBlocks(segment, finalIndexes),
+    ...sectionBlocks(work, finalIndexes),
   })
   return true
 }
@@ -80,13 +82,29 @@ function appendCompletedWork(
   segment: readonly Block[],
   duration: WorkDurationBlock,
 ): void {
-  const finalIndexes = terminalResponseIndexes(segment)
+  const { leading, work } = splitLeadingBlocks(segment)
+  appendBlocks(sections, leading)
+  const finalIndexes = terminalResponseIndexes(work)
   sections.push({
     kind: 'completed-work',
-    id: workSectionId(segment, duration.id),
+    id: workSectionId(work, duration.id),
     duration,
-    ...sectionBlocks(segment, finalIndexes),
+    ...sectionBlocks(work, finalIndexes),
   })
+}
+
+/**
+ * 回滚、压缩等独立通知可能先于下一条用户消息出现。它们不属于随后任务的处理过程，
+ * 必须保持在用户消息上方，不能因为工作区投影把时间顺序翻转。
+ */
+function splitLeadingBlocks(segment: readonly Block[]): {
+  leading: readonly Block[]
+  work: readonly Block[]
+} {
+  const userIndex = segment.findIndex((block) => block.kind === 'user')
+  return userIndex > 0
+    ? { leading: segment.slice(0, userIndex), work: segment.slice(userIndex) }
+    : { leading: [], work: segment }
 }
 
 function sectionBlocks(

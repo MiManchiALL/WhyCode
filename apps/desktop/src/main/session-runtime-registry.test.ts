@@ -123,6 +123,19 @@ describe('SessionRuntimeRegistry', () => {
     existing?.release()
   })
 
+  it('把全局权限档位同步到全部已加载会话', () => {
+    const registry = new SessionRuntimeRegistry({ idleUnloadMs: -1 })
+    const first = runtime('permission-first')
+    const second = runtime('permission-second')
+    registry.add(first)
+    registry.add(second)
+
+    registry.setPermissionModeForAll('auto')
+
+    assert.equal(first.permissionMode, 'auto')
+    assert.equal(second.permissionMode, 'auto')
+  })
+
   it('并发启动容量检查会同步占位，不允许多个 idle IPC 一起越过上限', () => {
     const registry = new SessionRuntimeRegistry({
       maxConcurrentRuns: 1,

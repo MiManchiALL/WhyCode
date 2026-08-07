@@ -108,56 +108,20 @@ export function ImageDraftStrip({
   )
 }
 
-export function ImagePickerButton({
-  canAttachImages,
-  disabled,
-  onFiles,
+export function UserImageGallery({
+  attachments,
+  variant = 'message',
 }: {
-  canAttachImages: boolean
-  disabled: boolean
-  onFiles: (files: FileList | null) => void
+  attachments?: readonly ImageAttachment[]
+  variant?: 'message' | 'tool'
 }) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  const enabled = canAttachImages && !disabled
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        disabled={!enabled}
-        accept="image/png,image/jpeg,image/webp"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          onFiles(event.currentTarget.files)
-          event.currentTarget.value = ''
-        }}
-      />
-      <button
-        className="rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40"
-        onClick={() => inputRef.current?.click()}
-        disabled={!enabled}
-        title={
-          enabled
-            ? `添加、拖放或在输入框按 Ctrl+V 粘贴图片（最多 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张）`
-            : canAttachImages
-              ? '图片正在发送或当前操作暂时锁定附件'
-              : '当前模型没有原生识图能力，且未配置辅助识图模型'
-        }
-        aria-label="添加图片"
-      >
-        🖼
-      </button>
-    </>
-  )
-}
-
-export function UserImageGallery({ attachments }: { attachments?: readonly ImageAttachment[] }) {
   const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
   if (!attachments?.length) return null
   return (
     <>
-      <div className="mb-2 flex flex-wrap gap-2">
+      <div className={variant === 'message'
+        ? 'flex max-w-full flex-wrap justify-end gap-2'
+        : 'mb-2 flex flex-wrap gap-2'}>
         {attachments.map((attachment) => {
           const src = `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`
           const details = `${attachment.width}×${attachment.height} · ${formatBytes(attachment.byteLength)}`
@@ -165,7 +129,9 @@ export function UserImageGallery({ attachments }: { attachments?: readonly Image
             <button
               key={attachment.id}
               type="button"
-              className="cursor-zoom-in rounded border border-neutral-300 bg-white p-0.5"
+              className={variant === 'message'
+                ? 'cursor-zoom-in overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-transform hover:-translate-y-0.5'
+                : 'cursor-zoom-in rounded border border-neutral-300 bg-white p-0.5'}
               onClick={() => setPreview({ src, name: attachment.name, details })}
               title={`${attachment.name} · ${details} · 点击查看原图`}
             >
@@ -173,7 +139,9 @@ export function UserImageGallery({ attachments }: { attachments?: readonly Image
                 src={src}
                 alt={attachment.name}
                 loading="lazy"
-                className="max-h-56 max-w-72 object-contain"
+                className={variant === 'message'
+                  ? 'h-24 w-24 object-cover'
+                  : 'max-h-56 max-w-72 object-contain'}
               />
             </button>
           )
