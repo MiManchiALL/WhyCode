@@ -2,6 +2,7 @@ import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
 import type { ConversationSection } from './conversation-sections.ts'
 import { formatFinishedWorkTime, ProcessingTime } from './processing-time.ts'
+import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -11,6 +12,7 @@ interface ConversationViewProps {
   busy: boolean
   checkpointRestoreAnchorIds: ReadonlySet<string>
   checkpointRestoreToolUseId: string | null
+  showThinkingGap: boolean
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: (id: string) => void
@@ -30,10 +32,15 @@ type WorkTiming =
     }
 
 export function ConversationView(props: ConversationViewProps) {
-  return props.sections.map((section) =>
-    section.kind === 'block'
-      ? <ConversationBlock key={section.id} {...props} block={section.block} />
-      : <WorkSection key={section.id} {...props} section={section} />)
+  return (
+    <>
+      {props.sections.map((section) =>
+        section.kind === 'block'
+          ? <ConversationBlock key={section.id} {...props} block={section.block} />
+          : <WorkSection key={section.id} {...props} section={section} />)}
+      {props.showThinkingGap && <ThinkingGapIndicator />}
+    </>
+  )
 }
 
 function WorkSection({

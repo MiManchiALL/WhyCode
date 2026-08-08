@@ -41,6 +41,7 @@ import {
   conversationSections,
   shouldShowComposerProcessingTime,
 } from './conversation-sections.ts'
+import { shouldShowThinkingGap } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
@@ -181,6 +182,12 @@ export function App() {
   const checkpointRestoreAnchors = checkpointRestoreAnchorIds(view)
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
+  const thinkingGapVisible = shouldShowThinkingGap({
+    blocks,
+    status,
+    stopping,
+    workStartedAt,
+  })
   const addError = useCallback((text: string) => {
     setView((previous) =>
       applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
@@ -616,7 +623,7 @@ export function App() {
     if (stickToBottom.current) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
     }
-  }, [blocks, approval])
+  }, [blocks, approval, thinkingGapVisible])
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
@@ -1191,6 +1198,7 @@ export function App() {
                   busy={interactionBusy}
                   checkpointRestoreAnchorIds={checkpointRestoreAnchors}
                   checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+                  showThinkingGap={thinkingGapVisible}
                   onCheckpointRestoreChange={changeCheckpointRestore}
                   onEdit={editUserMessage}
                   onToggle={toggle}

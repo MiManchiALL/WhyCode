@@ -1,4 +1,4 @@
-import type { Block } from './conversation-state.ts'
+import { isTerminalResponseBlock, type Block } from './conversation-state.ts'
 
 type WorkDurationBlock = Extract<Block, { kind: 'work-duration' }>
 
@@ -129,13 +129,13 @@ function workSectionId(segment: readonly Block[], boundaryId: string): string {
 function terminalResponseIndexes(blocks: readonly Block[]): ReadonlySet<number> {
   const lastIndex = blocks.length - 1
   const lastBlock = blocks[lastIndex]
-  if (lastBlock?.kind !== 'text' && lastBlock?.kind !== 'error') return new Set()
+  if (!isTerminalResponseBlock(lastBlock)) return new Set()
 
   const indexes = new Set<number>()
   for (let index = lastIndex; index >= 0; index--) {
     const block = blocks[index]
     if (block?.kind === 'user') break
-    if (block?.kind !== 'text' && block?.kind !== 'error') break
+    if (!isTerminalResponseBlock(block)) break
     indexes.add(index)
   }
   return indexes

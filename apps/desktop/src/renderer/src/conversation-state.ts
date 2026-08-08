@@ -231,6 +231,8 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         outcome: event.outcome,
       })
       if (event.outcome !== 'stopped') return next
+      // 停止只冻结当时的展示：末尾正文已让处理过程收起时不反向展开。
+      if (isTerminalResponseBlock(state.blocks.at(-1))) return next
       const expanded = new Set(next.expanded)
       expanded.add(currentWorkSectionId(state.blocks, durationId))
       return { ...next, expanded }
@@ -450,6 +452,12 @@ export function toggleExpanded(state: ConversationState, id: string): Conversati
   const expanded = new Set(state.expanded)
   expanded.has(id) ? expanded.delete(id) : expanded.add(id)
   return { ...state, expanded }
+}
+
+export function isTerminalResponseBlock(
+  block: Block | undefined,
+): block is Extract<Block, { kind: 'text' | 'error' }> {
+  return block?.kind === 'text' || block?.kind === 'error'
 }
 
 /** 与会话投影使用同一工作区身份：上一条时长之后，从本轮首条用户消息开始。 */

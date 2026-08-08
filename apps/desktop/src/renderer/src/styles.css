@@ -161,6 +161,43 @@ button:not(:disabled),
   transform-origin: center;
 }
 
+.wc-thinking-heart {
+  display: block;
+  width: 2.15rem;
+  height: 1.2rem;
+  flex: none;
+  overflow: visible;
+  color: var(--wc-ink);
+}
+
+.wc-thinking-heart-base {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3.9;
+  stroke: currentColor;
+  opacity: 0.14;
+}
+
+.wc-thinking-heart-flow {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dashoffset: 0;
+  opacity: 0.78;
+  animation-name: wc-thinking-heart-flow;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.wc-thinking-heart-pulse {
+  transform-box: view-box;
+  transform-origin: 50% 18%;
+  animation: wc-thinking-heart-pulse 5.6s ease-in-out infinite;
+}
+
 .wc-paper-shape-a {
   --wc-paper-radius: 240px 18px 210px 15px / 15px 215px 18px 240px;
   --wc-paper-angle: -1.5deg;
@@ -497,6 +534,17 @@ button:not(:disabled),
   }
 }
 
+@keyframes wc-thinking-heart-pulse {
+  0%, 100% { transform: scaleY(1.0073); }
+  16.2% { transform: scaleY(1.014); }
+  41.2%, 91.2% { transform: scaleY(1); }
+  66.2% { transform: scaleY(0.986); }
+}
+
+@keyframes wc-thinking-heart-flow {
+  to { stroke-dashoffset: -100; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -510,4 +558,5 @@ button:not(:disabled),
   .wc-sidebar-label {
     transition-delay: 0ms !important;
   }
+
 }

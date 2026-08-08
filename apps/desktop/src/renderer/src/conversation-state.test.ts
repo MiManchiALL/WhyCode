@@ -5,6 +5,7 @@ import {
   applyCoreEvent,
   applyViewEvent,
   checkpointRestoreAnchorIds,
+  type ConversationState,
   createConversationState,
   editableUserBlockId,
   eventsAfterRuntimeSnapshot,
@@ -116,7 +117,7 @@ describe('会话界面时间线重建', () => {
     }])
   })
 
-  it('用户停止默认展开工作区，并允许沿用同一展开状态手动收起', () => {
+  it('用户停止时沿用停止瞬间的工作区展开状态', () => {
     let state = createConversationState([
       { type: 'user-message', text: '检查项目', startsTurn: true },
       core({
@@ -132,6 +133,32 @@ describe('会话界面时间线重建', () => {
     assert.equal(state.expanded.has('work-b0'), true)
     state = toggleExpanded(state, 'work-b0')
     assert.equal(state.expanded.has('work-b0'), false)
+
+    const startStreamingFinal = () => {
+      let current = createConversationState([
+        { type: 'user-message', text: '检查项目', startsTurn: true },
+      ])
+      current = applyCoreEvent(current, { type: 'thinking-delta', text: '分析' })
+      current = applyCoreEvent(current, { type: 'thinking-end', durationMs: 500 })
+      return applyCoreEvent(current, { type: 'text-delta', text: '正在输出最终回答' })
+    }
+    const stop = (current: ConversationState) => {
+      current = applyCoreEvent(current, { type: 'step-output-retained' })
+      current = applyCoreEvent(current, { type: 'step-discarded' })
+      return applyCoreEvent(current, {
+        type: 'work-finished',
+        durationMs: 1_500,
+        outcome: 'stopped',
+      })
+    }
+
+    const streamingFinal = stop(startStreamingFinal())
+    assert.equal(streamingFinal.expanded.has('work-b0'), false)
+
+    let manuallyExpanded = startStreamingFinal()
+    manuallyExpanded = toggleExpanded(manuallyExpanded, 'work-b0')
+    manuallyExpanded = stop(manuallyExpanded)
+    assert.equal(manuallyExpanded.expanded.has('work-b0'), true)
   })
 
   it('显式 Skill 摘要随根消息和插话进入可见时间线', () => {
