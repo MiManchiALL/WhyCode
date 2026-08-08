@@ -37,7 +37,7 @@ afterEach(async () => {
 })
 
 describe('SessionStore', () => {
-  it('中止回合编辑从根输入恢复完整 Skill 快照', async () => {
+  it('最新根消息编辑从根输入恢复完整 Skill 快照', async () => {
     const store = await createStore()
     const journal = await store.create({
       workspace: localWorkspace('C:\\work\\skill-edit'),
@@ -56,6 +56,9 @@ describe('SessionStore', () => {
       inputId,
       [skill],
     )
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId } },
+    ])
     await journal.recordTurnEnd(turnId, 'aborted')
 
     const reopened = await store.open(journal.sessionId)
@@ -174,7 +177,20 @@ describe('SessionStore', () => {
       [],
       [rootSkill],
     )
-    await journal.recordConsensusTaskStart('task-skills', consensusState(1), '共识根任务')
+    await journal.recordConsensusTaskStart(
+      'task-skills',
+      consensusState(1),
+      '共识根任务',
+      [],
+      [rootSkill],
+    )
+    const discussionTurnId = randomUUID()
+    await journal.recordTurnStart(
+      discussionTurnId,
+      [message('user', '生成 M1')],
+    )
+    assert.deepEqual(journal.skillsForTurn(discussionTurnId), [rootSkill])
+    await journal.recordTurnEnd(discussionTurnId, 'completed')
     const steeringInputId = randomUUID()
     await journal.recordUserInputWithId(
       steeringInputId,
@@ -224,6 +240,7 @@ describe('SessionStore', () => {
     await journal.recordTurnEnd(queuedTurnId, 'aborted')
 
     const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.skillsForTurn(discussionTurnId), [rootSkill])
     assert.deepEqual(reopened.skillsForTurn(turnId), [rootSkill, steeringSkill])
     assert.deepEqual(reopened.skillsForTurn(queuedTurnId), [steeringSkill])
   })
@@ -440,6 +457,10 @@ describe('SessionStore', () => {
       },
       { type: 'core-event', event: { type: 'text-delta', text: '后续稳定事件' } },
     ])
+    assert.equal(reopened.initialViewEventTimestamps.length, reopened.initialViewEvents.length)
+    for (const timestamp of reopened.initialViewEventTimestamps) {
+      assert.equal(Number.isNaN(Date.parse(timestamp)), false)
+    }
   })
 
   it('停止时把 steering 原子退回草稿，重新提交只消费当前会话的恢复身份', async () => {
@@ -984,7 +1005,7 @@ describe('SessionStore', () => {
     assert.equal(reopened.messagesBeforeTurn('turn-2'), null)
   })
 
-  it('编辑已中止根消息时原子换根，重放保留原位关系且模型只续接新输入', async () => {
+  it('编辑最新根消息时原子换根，重放保留原位关系且模型只续接新输入', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const oldInputId = randomUUID()
@@ -1050,6 +1071,99 @@ describe('SessionStore', () => {
     )
     assert.match(transcript, /旧问题/)
     assert.match(transcript, /编辑后的问题/)
+  })
+
+  it('协商内部后续 turn 不遮蔽根消息，编辑时恢复任务开始前的累计状态', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const rootInputId = randomUUID()
+    const beforeTask = consensusState(2, '旧任务摘要')
+    const afterTask = consensusState(3, '本任务摘要')
+    await journal.recordUserInputWithId(rootInputId, '协商请求', true)
+    await journal.recordConsensusTaskStart('task-3', beforeTask, '协商请求')
+
+    await journal.recordTurnStart('turn-m1', [message('user', '生成 M1')])
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-m1' } },
+    ])
+    await journal.recordStep('turn-m1', [message('assistant', 'M1')])
+    await journal.recordTurnEnd('turn-m1', 'completed')
+    await journal.recordTurnStart('turn-execute', [message('user', '执行最终方案')])
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-execute' } },
+    ])
+    await journal.recordStep('turn-execute', [message('assistant', '旧答案')])
+    await journal.recordTurnEnd('turn-execute', 'completed')
+    await journal.recordConsensusTaskEnd('task-3', 'completed', afterTask)
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.consensusStateBeforeTurn('turn-m1'), beforeTask)
+    const rollbackMessages = reopened.messagesBeforeTurn('turn-m1')
+    const rollbackTaskState = reopened.taskStateBeforeTurn('turn-m1')
+    assert.notEqual(rollbackMessages, null)
+    assert.notEqual(rollbackTaskState, undefined)
+    await reopened.recordTurnEditInput(
+      'turn-m1',
+      randomUUID(),
+      '编辑后的协商请求',
+      rollbackMessages!,
+      rollbackTaskState!,
+    )
+
+    assert.deepEqual(reopened.initialConsensusState, beforeTask)
+    const edited = await store.open(journal.sessionId)
+    assert.deepEqual(edited.initialConsensusState, beforeTask)
+    assert.deepEqual(edited.initialMessages, [message('user', '编辑后的协商请求')])
+  })
+
+  it('持久化边界拒绝编辑已有更新回合的旧根消息', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const firstInputId = randomUUID()
+    await journal.recordUserInputWithId(firstInputId, '第一问', true)
+    await journal.recordTurnStart(
+      'turn-1',
+      [message('user', '第一问')],
+      undefined,
+      [],
+      undefined,
+      firstInputId,
+    )
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-1' } },
+    ])
+    await journal.recordStep('turn-1', [message('assistant', '第一答')])
+    await journal.recordTurnEnd('turn-1', 'completed')
+    const secondInputId = randomUUID()
+    await journal.recordUserInputWithId(secondInputId, '第二问', true)
+    await journal.recordTurnStart(
+      'turn-2',
+      [message('user', '第二问')],
+      undefined,
+      [],
+      undefined,
+      secondInputId,
+    )
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-2' } },
+    ])
+    await journal.recordStep('turn-2', [message('assistant', '第二答')])
+    await journal.recordTurnEnd('turn-2', 'completed')
+
+    const rollbackMessages = journal.messagesBeforeTurn('turn-1')
+    const rollbackTaskState = journal.taskStateBeforeTurn('turn-1')
+    assert.notEqual(rollbackMessages, null)
+    assert.notEqual(rollbackTaskState, undefined)
+    await assert.rejects(
+      journal.recordTurnEditInput(
+        'turn-1',
+        randomUUID(),
+        '改写第一问',
+        rollbackMessages!,
+        rollbackTaskState!,
+      ),
+      /只能编辑最新一条用户消息/,
+    )
   })
 
   it('模型压缩换根后仍完整保留用户可见时间线', async () => {

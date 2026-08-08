@@ -86,8 +86,8 @@ describe('用户中断后的新回合', () => {
       { type: 'core-event', event: { type: 'turn-start', turnId: oldTurnId } },
     ])
 
-    const start = await session.prepareAbortedTurnEdit(oldTurnId, '编辑后的问题')
-    assert.equal(await start(), 'completed')
+    const prepared = await session.prepareLatestTurnEdit(oldTurnId, '编辑后的问题')
+    assert.equal(await prepared.startMain(), 'completed')
     const secondPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
     assert.match(secondPrompt, /编辑后的问题/)
     assert.doesNotMatch(secondPrompt, /旧问题/)
@@ -99,6 +99,42 @@ describe('用户中断后的新回合', () => {
     const reopened = await store.open(journal.sessionId)
     assert.match(JSON.stringify(reopened.initialMessages), /编辑后的问题/)
     assert.doesNotMatch(JSON.stringify(reopened.initialMessages), /旧问题/)
+  })
+
+  it('完整回答后编辑最新消息会换根重跑，旧回答不再进入活动模型历史', async () => {
+    const root = await temporaryDirectory()
+    const store = new SessionStore(root)
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
+    const events: CoreEvent[] = []
+    const model = new MockLanguageModelV4({
+      doStream: [
+        finalStep('这是旧回答。'),
+        finalStep('这是编辑后的新回答。'),
+      ],
+    })
+    const session = createSession(model, journal, (event) => events.push(event))
+    const inputId = crypto.randomUUID()
+    await journal.recordUserInputWithId(inputId, '旧问题', true)
+
+    assert.equal(await session.handleUserMessage('旧问题', false, [], inputId), 'completed')
+    const oldTurnId = events.find((event) => event.type === 'turn-start')?.turnId
+    assert.ok(oldTurnId)
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'turn-start', turnId: oldTurnId } },
+      { type: 'core-event', event: { type: 'text-delta', text: '这是旧回答。' } },
+      { type: 'core-event', event: { type: 'work-finished', durationMs: 500, outcome: 'completed' } },
+    ])
+
+    const prepared = await session.prepareLatestTurnEdit(oldTurnId, '编辑后的问题')
+    assert.equal(await prepared.startMain(), 'completed')
+    const secondPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    assert.match(secondPrompt, /编辑后的问题/)
+    assert.doesNotMatch(secondPrompt, /旧问题|这是旧回答/)
+
+    const reopened = await store.open(journal.sessionId)
+    const activeHistory = JSON.stringify(reopened.initialMessages)
+    assert.match(activeHistory, /编辑后的问题|这是编辑后的新回答/)
+    assert.doesNotMatch(activeHistory, /旧问题|这是旧回答。/)
   })
 
   it('持久化模型可见中断边界，普通问题不能继续或改写旧计划', async () => {

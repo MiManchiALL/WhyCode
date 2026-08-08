@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import { keepsConsensusProgress } from '../consensus/types.ts'
+import { keepsConsensusProgress, type ConsensusPersistedState } from '../consensus/types.ts'
 import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
 import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
 import {
@@ -70,14 +70,22 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     : collectMessages(chain, undeliveredById)
   const consensusState = collectConsensusState(chain)
   const turnStarts = collectTurnStarts(chain, undeliveredById)
+  const turnStartConsensusStates = collectTurnStartConsensusStates(
+    entries,
+    turnStarts.messages.keys(),
+  )
   const turnStartSkills = collectTurnStartSkills(entries, turnStarts.messages.keys())
   const taskState = work.interruptedConsensusTaskId
     ? work.interruptedConsensusBaseTaskState ?? emptyTaskPlanState()
     : collectTaskState(chain)
-  const viewEvents = collectViewEvents(entries)
+  const viewTimeline = collectViewEvents(entries)
+  const viewEvents = viewTimeline.events
+  const viewEventTimestamps = viewTimeline.timestamps
   const imageAttachments = collectImageAttachments(entries)
   const pdfAttachments = collectPdfAttachments(entries)
+  const planEventCount = viewEvents.length
   reconcileTaskPlanView(viewEvents, taskState)
+  if (viewEvents.length > planEventCount) viewEventTimestamps.push(chain.at(-1)!.timestamp)
   const pendingUserQuestion = findPendingUserQuestion(messages)
   if (
     pendingUserQuestion
@@ -92,6 +100,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
         question: structuredClone(pendingUserQuestion.question),
       },
     })
+    viewEventTimestamps.push(chain.at(-1)!.timestamp)
   }
   const modelSelection = collectModelSelection(
     chain,
@@ -124,10 +133,12 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       : undefined,
     messages,
     viewEvents,
+    viewEventTimestamps,
     imageAttachments,
     pdfAttachments,
     turnStartMessages: turnStarts.messages,
     turnStartTaskStates: turnStarts.taskStates,
+    turnStartConsensusStates,
     turnStartSkills,
     leafUuid: last.uuid,
     interruptedTurnId,
@@ -153,6 +164,27 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       status,
     },
   }
+}
+
+/**
+ * turn 边界的协商累计状态来自既有 snapshot / consensus task 记录。使用完整审计记录
+ * 而不是只看活动链，保证回滚快照保留的 turn 仍能恢复其原始起点状态。
+ */
+function collectTurnStartConsensusStates(
+  entries: readonly SessionEntry[],
+  activeTurnIds: Iterable<string>,
+): Map<string, ConsensusPersistedState | null> {
+  const active = new Set(activeTurnIds)
+  const all = new Map<string, ConsensusPersistedState | null>()
+  let state: ConsensusPersistedState | null = null
+  for (const entry of entries) {
+    if (entry.type === 'snapshot') state = structuredClone(entry.consensusState)
+    if (entry.type === 'consensus-task-start' || entry.type === 'consensus-task-end') {
+      state = structuredClone(entry.state)
+    }
+    if (entry.type === 'turn-start') all.set(entry.turnId, structuredClone(state))
+  }
+  return new Map([...all].filter(([turnId]) => active.has(turnId)))
 }
 
 function collectImageAttachments(entries: SessionEntry[]): ImageAttachment[] {
@@ -444,8 +476,16 @@ function nearestRootUserInput(
 }
 
 /** 可见时间线不随模型压缩换根；对话回滚由时间线中的 checkpoint-restored 事件重放。 */
-function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
+function collectViewEvents(entries: SessionEntry[]): {
+  events: ViewEvent[]
+  timestamps: string[]
+} {
   const events: ViewEvent[] = []
+  const timestamps: string[] = []
+  const push = (event: ViewEvent, timestamp: string): void => {
+    events.push(event)
+    timestamps.push(timestamp)
+  }
   const entriesById = new Map(entries.map((entry) => [entry.uuid, entry]))
   const inputs = new Map<string, Extract<SessionEntry, { type: 'user-input' }>>()
   const visibleInputIds = new Set(entries.flatMap((entry) =>
@@ -456,12 +496,12 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
 
   for (const entry of entries) {
     if (entry.type === 'view-events') {
-      events.push(...entry.events)
+      for (const event of entry.events) push(event, entry.timestamp)
       continue
     }
     if (entry.type === 'user-input') inputs.set(entry.uuid, entry)
     if (entry.type === 'user-input' && entry.startsTurn) {
-      events.push({
+      push({
         type: 'user-message',
         inputId: entry.uuid,
         text: entry.text,
@@ -469,13 +509,13 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
         ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
         ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
         ...(entry.skills?.length ? { skills: entry.skills.map(skillSummary) } : {}),
-      })
+      }, entry.timestamp)
       if (entry.replacesTurnId) {
         const parent = entry.parentUuid ? entriesById.get(entry.parentUuid) : undefined
         if (parent?.type !== 'snapshot' || parent.reason !== 'rollback') {
           throw new SessionCorruptError('编辑输入必须直接跟随回滚快照')
         }
-        events.push({
+        push({
           type: 'core-event',
           event: {
             type: 'user-message-edited',
@@ -484,7 +524,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
             text: entry.text,
             taskPlan: structuredClone(parent.taskState.activePlan),
           },
-        })
+        }, entry.timestamp)
       }
     }
     if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
@@ -492,7 +532,7 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
         if (visibleInputIds.has(inputId)) continue
         const input = inputs.get(inputId)
         if (!input || input.startsTurn) continue
-        events.push({
+        push({
           type: 'user-message',
           inputId,
           text: input.text,
@@ -500,12 +540,12 @@ function collectViewEvents(entries: SessionEntry[]): ViewEvent[] {
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
           ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
-        })
+        }, input.timestamp)
         visibleInputIds.add(inputId)
       }
     }
   }
-  return events
+  return { events, timestamps }
 }
 
 interface UndeliveredUserInput {

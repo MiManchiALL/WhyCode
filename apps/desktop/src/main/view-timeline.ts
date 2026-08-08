@@ -7,6 +7,8 @@ import {
 } from '@whycode/core'
 
 export interface ViewEventWriter {
+  readonly initialViewEvents: readonly ViewEvent[]
+  readonly initialViewEventTimestamps?: readonly string[]
   recordViewEvents(events: ViewEvent[]): Promise<void>
 }
 
@@ -15,6 +17,7 @@ type Channel = 'Main' | 'B' | 'C'
 interface PendingStep {
   writer: ViewEventWriter | null
   events: ViewEvent[]
+  timestamps: string[]
   order: number[]
 }
 
@@ -27,16 +30,20 @@ export class ViewTimeline {
   private captureSequence = 0
   private readonly pendingWrites = new Set<Promise<void>>()
   private pending: Record<Channel, PendingStep> = {
-    Main: { writer: null, events: [], order: [] },
-    B: { writer: null, events: [], order: [] },
-    C: { writer: null, events: [], order: [] },
+    Main: { writer: null, events: [], timestamps: [], order: [] },
+    B: { writer: null, events: [], timestamps: [], order: [] },
+    C: { writer: null, events: [], timestamps: [], order: [] },
   }
 
   constructor(onWriteError: (error: unknown) => void) {
     this.onWriteError = onWriteError
   }
 
-  capture(writer: ViewEventWriter | null, event: CoreEvent): void {
+  capture(
+    writer: ViewEventWriter | null,
+    event: CoreEvent,
+    occurredAt = new Date().toISOString(),
+  ): void {
     if (!writer) return
     if (event.type === 'peer-event') {
       const channel = event.agentId
@@ -44,7 +51,7 @@ export class ViewTimeline {
       if (event.event.type === 'step-output-retained') return this.retainOutput(channel)
       if (event.event.type === 'step-discarded') return this.discard(channel)
       const viewEvent = toViewEvent(event)
-      if (viewEvent) this.buffer(channel, writer, viewEvent)
+      if (viewEvent) this.buffer(channel, writer, viewEvent, occurredAt)
       return
     }
     if (event.type === 'step-committed') return this.commit('Main')
@@ -57,7 +64,7 @@ export class ViewTimeline {
     const viewEvent = toViewEvent(event)
     if (!viewEvent) return
     if (isStepScopedCoreEvent(event)) {
-      this.buffer('Main', writer, viewEvent)
+      this.buffer('Main', writer, viewEvent, occurredAt)
     } else {
       this.write(writer, [viewEvent])
     }
@@ -68,7 +75,7 @@ export class ViewTimeline {
   }
 
   /** 等待已提交的可见事件写稳；运行中的 step 仍只作为瞬时快照返回。 */
-  async snapshot(writer: ViewEventWriter & { initialViewEvents: readonly ViewEvent[] }):
+  async snapshot(writer: ViewEventWriter):
   Promise<ViewEvent[]> {
     return (await this.snapshotAt(writer, () => undefined)).events
   }
@@ -84,9 +91,9 @@ export class ViewTimeline {
    * 否则两者之间到达的事件可能既不在快照中，又被 Renderer 当成旧事件丢弃。
    */
   async snapshotAt<T>(
-    writer: ViewEventWriter & { initialViewEvents: readonly ViewEvent[] },
+    writer: ViewEventWriter,
     readBoundary: () => T,
-  ): Promise<{ events: ViewEvent[]; boundary: T }> {
+  ): Promise<{ events: ViewEvent[]; eventTimestamps: string[]; boundary: T }> {
     // 等待期间可能又提交新的稳定事件；必须排空到同一同步边界，事件序号才能
     // 与快照形成无缺口的接续点。
     await this.flush()
@@ -96,29 +103,45 @@ export class ViewTimeline {
         if (step.writer !== writer) return []
         return step.events.map((event, index) => ({
           event,
+          timestamp: step.timestamps[index] ?? '',
           order: step.order[index] ?? Number.MAX_SAFE_INTEGER,
         }))
       })
       .sort((left, right) => left.order - right.order)
-      .map(({ event }) => structuredClone(event))
+    const pendingEvents = pending.map(({ event }) => structuredClone(event))
+    const pendingTimestamps = pending.map(({ timestamp }) => timestamp)
     const events = [
       ...writer.initialViewEvents.map((event) => structuredClone(event)),
-      ...pending,
+      ...pendingEvents,
     ]
-    return { events, boundary: readBoundary() }
+    const eventTimestamps = [
+      ...(writer.initialViewEventTimestamps
+        ?? writer.initialViewEvents.map(() => '')),
+      ...pendingTimestamps,
+    ]
+    return { events, eventTimestamps, boundary: readBoundary() }
   }
 
-  private buffer(channel: Channel, writer: ViewEventWriter, event: ViewEvent): void {
+  private buffer(
+    channel: Channel,
+    writer: ViewEventWriter,
+    event: ViewEvent,
+    occurredAt: string,
+  ): void {
     const pending = this.pending[channel]
     if (pending.writer && pending.writer !== writer) {
       pending.events = []
+      pending.timestamps = []
       pending.order = []
     }
     pending.writer = writer
     const previousLength = pending.events.length
     pushCoalescedViewEvent(pending.events, event)
     if (pending.events.length > previousLength) {
+      pending.timestamps.push(occurredAt)
       pending.order.push(++this.captureSequence)
+    } else if (pending.timestamps.length > 0) {
+      pending.timestamps[pending.timestamps.length - 1] = occurredAt
     }
   }
 
@@ -128,6 +151,7 @@ export class ViewTimeline {
       this.write(pending.writer, pending.events.splice(0))
     }
     pending.writer = null
+    pending.timestamps = []
     pending.order = []
   }
 
@@ -144,7 +168,7 @@ export class ViewTimeline {
   }
 
   private discard(channel: Channel): void {
-    this.pending[channel] = { writer: null, events: [], order: [] }
+    this.pending[channel] = { writer: null, events: [], timestamps: [], order: [] }
   }
 
   private write(writer: ViewEventWriter, events: ViewEvent[]): void {

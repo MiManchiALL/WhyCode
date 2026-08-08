@@ -78,7 +78,15 @@ function WorkSection({
         </div>
       )}
       {section.finalBlocks.map((block) => (
-        <ConversationBlock key={block.id} {...props} block={block} />
+        <ConversationBlock
+          key={block.id}
+          {...props}
+          block={block}
+          showAssistantActions={
+            section.kind === 'completed-work'
+            && section.duration.outcome === 'completed'
+          }
+        />
       ))}
     </>
   )
@@ -95,7 +103,8 @@ function ConversationBlock({
   onCheckpointRestoreChange,
   onEdit,
   onToggle,
-}: ConversationViewProps & { block: Block }) {
+  showAssistantActions = false,
+}: ConversationViewProps & { block: Block; showAssistantActions?: boolean }) {
   return (
     <BlockView
       runtimeId={runtimeId}
@@ -110,6 +119,7 @@ function ConversationBlock({
       onCheckpointRestoreChange={onCheckpointRestoreChange}
       onEdit={onEdit}
       onToggle={() => onToggle(block.id)}
+      showAssistantActions={showAssistantActions}
     />
   )
 }

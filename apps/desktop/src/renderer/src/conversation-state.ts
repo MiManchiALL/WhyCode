@@ -44,12 +44,13 @@ export type Block =
       id: string
       inputId?: string
       turnId?: string
+      timestamp?: string
       text: string
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
       skills?: SkillSummary[]
     }
-  | { kind: 'text'; id: string; text: string }
+  | { kind: 'text'; id: string; text: string; timestamp?: string }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
   | {
       kind: 'work-duration'
@@ -100,7 +101,10 @@ export function voteLabel(vote: string): string {
   return VOTE_LABELS[vote] ?? vote
 }
 
-export function createConversationState(events: readonly ViewEvent[] = []): ConversationState {
+export function createConversationState(
+  events: readonly ViewEvent[] = [],
+  timestamps: readonly string[] = [],
+): ConversationState {
   let state: ConversationState = {
     blocks: [],
     expanded: new Set(),
@@ -111,7 +115,9 @@ export function createConversationState(events: readonly ViewEvent[] = []): Conv
     pendingQuestion: null,
     pendingStep: null,
   }
-  for (const event of events) state = applyViewEvent(state, event)
+  for (const [index, event] of events.entries()) {
+    state = applyViewEvent(state, event, timestamps[index])
+  }
   return state
 }
 
@@ -137,13 +143,11 @@ export function checkpointRestoreAnchorIds(
   return anchors
 }
 
-export function eventsAfterRuntimeSnapshot(
-  buffered: readonly { sequence: number; event: CoreEvent }[],
+export function runtimeEventsAfterSnapshot<T extends { sequence: number; event: CoreEvent }>(
+  buffered: readonly T[],
   snapshotSequence: number,
-): CoreEvent[] {
-  return buffered
-    .filter((entry) => entry.sequence > snapshotSequence)
-    .map((entry) => entry.event)
+): T[] {
+  return buffered.filter((entry) => entry.sequence > snapshotSequence)
 }
 
 export function resumeTargetCommitted(
@@ -153,7 +157,11 @@ export function resumeTargetCommitted(
   return snapshot.resumingSessionId === null && snapshot.sessionId === targetSessionId
 }
 
-export function applyViewEvent(state: ConversationState, event: ViewEvent): ConversationState {
+export function applyViewEvent(
+  state: ConversationState,
+  event: ViewEvent,
+  timestamp?: string,
+): ConversationState {
   return event.type === 'user-message'
     ? appendUserMessage(
         state,
@@ -163,11 +171,16 @@ export function applyViewEvent(state: ConversationState, event: ViewEvent): Conv
         event.pdfAttachments,
         event.skills,
         event.inputId,
+        timestamp,
       )
-    : applyStableCoreEvent(state, event.event)
+    : applyStableCoreEvent(state, event.event, timestamp)
 }
 
-export function applyCoreEvent(state: ConversationState, event: CoreEvent): ConversationState {
+export function applyCoreEvent(
+  state: ConversationState,
+  event: CoreEvent,
+  timestamp?: string,
+): ConversationState {
   if (event.type === 'step-committed') {
     return state.pendingStep ? { ...state, pendingStep: null } : state
   }
@@ -180,10 +193,14 @@ export function applyCoreEvent(state: ConversationState, event: CoreEvent): Conv
   const current = isStepScopedCoreEvent(event) && !state.pendingStep
     ? { ...state, pendingStep: snapshotConversation(state) }
     : state
-  return applyStableCoreEvent(current, event)
+  return applyStableCoreEvent(current, event, timestamp)
 }
 
-function applyStableCoreEvent(state: ConversationState, event: CoreEvent): ConversationState {
+function applyStableCoreEvent(
+  state: ConversationState,
+  event: CoreEvent,
+  timestamp?: string,
+): ConversationState {
   switch (event.type) {
     case 'turn-start': {
       if (state.pendingTurnStart === null) return state
@@ -195,7 +212,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
       return { ...state, blocks, pendingTurnStart: null, turnStartBlocks }
     }
     case 'user-message-edited':
-      return applyUserMessageEdited(state, event)
+      return applyUserMessageEdited(state, event, timestamp)
     case 'message-injected':
       return appendUserMessage(
         state,
@@ -205,6 +222,7 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         event.pdfAttachments,
         event.skills,
         event.id,
+        timestamp,
       )
     case 'user-message-accepted':
       return appendUserMessage(
@@ -215,16 +233,18 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
         event.pdfAttachments,
         event.skills,
         event.inputId,
+        timestamp,
       )
     case 'text-delta':
-      return appendText(state, event.text)
+      return appendText(state, event.text, timestamp)
     case 'thinking-delta':
       return appendThinking(state, event.text)
     case 'thinking-end':
       return endThinking(state, event.durationMs)
     case 'work-finished': {
+      const completedState = completeTerminalResponse(state, timestamp)
       const durationId = nextBlockId(state)
-      const next = appendBlock(state, {
+      const next = appendBlock(completedState, {
         kind: 'work-duration',
         id: durationId,
         durationMs: event.durationMs,
@@ -232,9 +252,9 @@ function applyStableCoreEvent(state: ConversationState, event: CoreEvent): Conve
       })
       if (event.outcome !== 'stopped') return next
       // 停止只冻结当时的展示：末尾正文已让处理过程收起时不反向展开。
-      if (isTerminalResponseBlock(state.blocks.at(-1))) return next
+      if (isTerminalResponseBlock(completedState.blocks.at(-1))) return next
       const expanded = new Set(next.expanded)
-      expanded.add(currentWorkSectionId(state.blocks, durationId))
+      expanded.add(currentWorkSectionId(completedState.blocks, durationId))
       return { ...next, expanded }
     }
     case 'tool-start':
@@ -366,7 +386,7 @@ function retainStepOutput(state: ConversationState): ConversationState {
     const text = stable?.kind === 'text'
       ? block.text.slice(stable.text.length)
       : block.text
-    if (text) retained = appendText(retained, text)
+    if (text) retained = appendText(retained, text, block.timestamp)
   }
   return retained
 }
@@ -379,12 +399,14 @@ export function appendUserMessage(
   pdfAttachments: readonly PdfAttachment[] = [],
   skills: readonly SkillSummary[] = [],
   inputId?: string,
+  timestamp?: string,
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
   return appendBlock({ ...state, pendingTurnStart, pendingQuestion: null }, {
     kind: 'user',
     id: nextBlockId(state),
     ...(inputId ? { inputId } : {}),
+    ...(timestamp ? { timestamp } : {}),
     text,
     ...(attachments.length ? { attachments: attachments.map((item) => structuredClone(item)) } : {}),
     ...(pdfAttachments.length
@@ -395,14 +417,8 @@ export function appendUserMessage(
 }
 
 export function editableUserBlockId(blocks: readonly Block[]): string | null {
-  let index = blocks.length - 1
-  let terminalWorkRecorded = false
-  while (index >= 0 && blocks[index]?.kind === 'work-duration') {
-    terminalWorkRecorded = true
-    index--
-  }
-  const candidate = blocks[index]
-  return terminalWorkRecorded && candidate?.kind === 'user' && candidate.turnId
+  const candidate = blocks.findLast((block) => block.kind === 'user')
+  return candidate?.kind === 'user' && candidate.turnId
     ? candidate.id
     : null
 }
@@ -410,6 +426,7 @@ export function editableUserBlockId(blocks: readonly Block[]): string | null {
 function applyUserMessageEdited(
   state: ConversationState,
   event: Extract<CoreEvent, { type: 'user-message-edited' }>,
+  timestamp?: string,
 ): ConversationState {
   const previousIndex = state.blocks.findIndex((block) =>
     block.kind === 'user' && block.turnId === event.previousTurnId)
@@ -426,6 +443,9 @@ function applyUserMessageEdited(
       id: previous.id,
       inputId: event.inputId,
       text: event.text,
+      timestamp: replayInput?.kind === 'user'
+        ? replayInput.timestamp ?? timestamp
+        : timestamp ?? previous.timestamp,
     },
   ]
   const retainedIds = new Set(blocks.map((block) => block.id))
@@ -612,15 +632,37 @@ function applyCheckpointRestored(
   )
 }
 
-function appendText(state: ConversationState, text: string): ConversationState {
+function appendText(state: ConversationState, text: string, timestamp?: string): ConversationState {
   const last = state.blocks.at(-1)
   if (last?.kind === 'text') {
     return {
       ...state,
-      blocks: [...state.blocks.slice(0, -1), { ...last, text: last.text + text }],
+      blocks: [...state.blocks.slice(0, -1), {
+        ...last,
+        text: last.text + text,
+        ...(timestamp ? { timestamp } : {}),
+      }],
     }
   }
-  return appendBlock(state, { kind: 'text', id: nextBlockId(state), text })
+  return appendBlock(state, {
+    kind: 'text',
+    id: nextBlockId(state),
+    text,
+    ...(timestamp ? { timestamp } : {}),
+  })
+}
+
+function completeTerminalResponse(
+  state: ConversationState,
+  timestamp?: string,
+): ConversationState {
+  if (!timestamp) return state
+  const last = state.blocks.at(-1)
+  if (last?.kind !== 'text') return state
+  return {
+    ...state,
+    blocks: [...state.blocks.slice(0, -1), { ...last, timestamp }],
+  }
 }
 
 function appendThinking(state: ConversationState, text: string): ConversationState {

@@ -28,7 +28,7 @@ export interface DesktopSessionRuntimeOptions {
   modelId: string | null
   reasoningEffort?: ReasoningEffortSelection
   permissionMode?: PermissionMode
-  emit: (runtime: DesktopSessionRuntime, event: CoreEvent) => void
+  emit: (runtime: DesktopSessionRuntime, event: CoreEvent, occurredAt: string) => void
 }
 
 interface PendingApproval {
@@ -199,8 +199,9 @@ export class DesktopSessionRuntime {
   }
 
   private publish(event: CoreEvent, persistView: boolean): void {
-    if (persistView) this.timeline.capture(this.journal, event)
-    this.emitToHost(this, event)
+    const occurredAt = new Date().toISOString()
+    if (persistView) this.timeline.capture(this.journal, event, occurredAt)
+    this.emitToHost(this, event, occurredAt)
   }
 
   beginAttachmentPreparation(): AbortSignal {

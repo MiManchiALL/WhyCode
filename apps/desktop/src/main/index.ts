@@ -89,7 +89,7 @@ import {
 } from './custom-system-prompt.ts'
 import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
-import { startEditedUserMessage } from './user-message-edit.ts'
+import { deliverEditedUserMessage, startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import {
@@ -289,11 +289,16 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-function broadcastRuntimeEvent(runtime: DesktopSessionRuntime, event: CoreEvent): void {
+function broadcastRuntimeEvent(
+  runtime: DesktopSessionRuntime,
+  event: CoreEvent,
+  occurredAt: string,
+): void {
   const envelope: RuntimeEventEnvelope = {
     runtimeId: runtime.runtimeId,
     sessionId: runtime.sessionId,
     sequence: ++runtimeEventSequence,
+    occurredAt,
     event,
   }
   for (const win of BrowserWindow.getAllWindows()) {
@@ -743,8 +748,8 @@ function createCoordinator(
     emit: (event) => runtime.emit(event),
     requestApproval: (request) => runtime.requestApproval(request),
     initialState: journal.initialConsensusState,
-    onTaskStart: (taskId, state, userText, deliveredInputIds) =>
-      journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds),
+    onTaskStart: (taskId, state, userText, deliveredInputIds, skills) =>
+      journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds, skills),
     onTaskEnd: (taskId, outcome, state) =>
       journal.recordConsensusTaskEnd(taskId, outcome, state),
     onInputsRestored: (inputIds) => journal.markUserInputsRestored(inputIds),
@@ -956,12 +961,21 @@ async function handleEditUserMessageCommand(
   if (!reservation) {
     return { ok: false }
   }
+  if (runtime.consensusEnabled && !runtime.coordinator) {
+    const error = buildCoordinator(runtime)
+    if (error) {
+      reservation.release()
+      runtime.emit({ type: 'error', message: error, recoverable: true })
+      return { ok: false }
+    }
+  }
   synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
   const result = await startEditedUserMessage(
     runtime,
     reservation,
     command.turnId,
     command.text,
+    (prepared) => deliverEditedUserMessage(runtime, prepared),
     (error) => reportUserMessageDeliveryError(runtime, error),
   )
   return { ok: result.ok }
@@ -1590,7 +1604,7 @@ async function runtimeSnapshot(
   const journal = runtime.journal
   const timeline = journal
     ? await runtime.timeline.snapshotAt(journal, () => runtimeEventSequence)
-    : { events: [], boundary: runtimeEventSequence }
+    : { events: [], eventTimestamps: [], boundary: runtimeEventSequence }
   const busy = runtimeBusy(runtime)
   const checkpointRestoreToolUseId = runtime.checkpointRestoreToolUseId
   const deletingThisSession = Boolean(
@@ -1617,6 +1631,7 @@ async function runtimeSnapshot(
     resumingSessionId: sessionResumeLock.sessionId,
     sessionId: journal?.sessionId ?? null,
     viewEvents: timeline.events,
+    viewEventTimestamps: timeline.eventTimestamps,
     queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: runtime.approval,

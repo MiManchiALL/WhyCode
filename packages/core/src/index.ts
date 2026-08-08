@@ -77,6 +77,7 @@ export type {
 export {
   AgentSession,
   type AgentSessionOptions,
+  type PreparedLatestTurnEdit,
   type ApprovalHandler,
   type ApprovalRequest,
   type ApprovalResponse,

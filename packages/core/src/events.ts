@@ -152,7 +152,7 @@ export type CoreEvent =
       skills?: SkillSummary[]
     }
   /**
-   * 用户把一个尚无稳定模型输出的已中止回合原位改写。该事件只负责实时投影；
+   * 用户把最新一条根消息原位改写。该事件只负责实时投影；
    * 重放由 JSONL user-input.replacesTurnId 派生同一事件，避免维护第二份界面状态。
    */
   | {
@@ -319,7 +319,7 @@ export type CoreCommand =
   | { type: 'set-model'; modelId: string }
   | { type: 'set-reasoning-effort'; reasoningEffort: ReasoningEffortSelection }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
-  /** 原位改写一个尚无稳定模型输出的已中止回合，并从该位置重新执行。 */
+  /** 原位改写最新一条根消息，丢弃其原回答并从该位置重新执行。 */
   | { type: 'edit-user-message'; turnId: string; text: string }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }

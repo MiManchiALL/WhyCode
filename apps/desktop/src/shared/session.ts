@@ -45,6 +45,8 @@ export interface RuntimeSnapshot {
   /** 当前已经原子提交的会话；恢复中的候选会话不会提前出现在这里。 */
   sessionId: string | null
   viewEvents: ViewEvent[]
+  /** 与 viewEvents 同序；只做宿主/Renderer 投影，不写入 ViewEvent schema。 */
+  viewEventTimestamps: string[]
   queuedInputs: QueuedUserMessage[]
   restoredInputs: QueuedUserMessage[]
   approval: ApprovalRequest | null
@@ -56,6 +58,7 @@ export interface RuntimeEventEnvelope {
   runtimeId: string
   sessionId: string | null
   sequence: number
+  occurredAt: string
   event: CoreEvent
 }
 

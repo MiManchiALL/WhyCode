@@ -28,7 +28,7 @@ import {
   checkpointRestoreAnchorIds,
   createConversationState,
   editableUserBlockId,
-  eventsAfterRuntimeSnapshot,
+  runtimeEventsAfterSnapshot,
   resumeTargetCommitted,
   toggleExpanded,
   voteLabel,
@@ -129,6 +129,7 @@ export function App() {
     event: CoreEvent
     sequence: number
     sessionId: string | null
+    occurredAt: string
   }[]>())
   const composerDraftsRef = useRef(new Map<string, {
     text: string
@@ -369,7 +370,7 @@ export function App() {
         restorePdfDrafts(draft.pdfs)
       }
     }
-    setView(createConversationState(snapshot.viewEvents))
+    setView(createConversationState(snapshot.viewEvents, snapshot.viewEventTimestamps))
     setWorkspace(snapshot.workspace)
     setPermMode(snapshot.permissionMode)
     setWorkStartedAt(snapshot.workStartedAt)
@@ -426,8 +427,8 @@ export function App() {
     setResumingSessionId,
   ])
 
-  const consumeEvent = useCallback((event: CoreEvent) => {
-    setView((previous) => applyCoreEvent(previous, event))
+  const consumeEvent = useCallback((event: CoreEvent, occurredAt?: string) => {
+    setView((previous) => applyCoreEvent(previous, event, occurredAt))
     switch (event.type) {
       case 'work-started':
         setWorkStartedAt(event.startedAt)
@@ -514,7 +515,7 @@ export function App() {
     for (const entry of buffered) {
       if (entry.sequence <= activeSnapshotSequenceRef.current) continue
       sessionIdRef.current = entry.sessionId
-      consumeEvent(entry.event)
+      consumeEvent(entry.event, entry.occurredAt)
     }
     if (hydratingRuntimeIdRef.current === runtimeId) {
       hydratingRuntimeIdRef.current = null
@@ -535,12 +536,14 @@ export function App() {
       sequence: number
       runtimeId: string
       sessionId: string | null
+      occurredAt: string
     }[] = []
     const unsubscribe = window.whycode.onEvent((
       event,
       sequence,
       eventRuntimeId,
       eventSessionId,
+      occurredAt,
     ) => {
       if (!hydrated) {
         buffered.push({
@@ -548,6 +551,7 @@ export function App() {
           sequence,
           runtimeId: eventRuntimeId,
           sessionId: eventSessionId,
+          occurredAt,
         })
         return
       }
@@ -556,7 +560,7 @@ export function App() {
         && hydratingRuntimeIdRef.current !== eventRuntimeId
       ) {
         sessionIdRef.current = eventSessionId
-        consumeEvent(event)
+        consumeEvent(event, occurredAt)
       } else if (
         event.type === 'agent-status'
         || event.type === 'turn-end'
@@ -576,7 +580,7 @@ export function App() {
           if (oldestRuntimeId) backgroundEventsRef.current.delete(oldestRuntimeId)
         }
         const pending = backgroundEventsRef.current.get(eventRuntimeId) ?? []
-        pending.push({ event, sequence, sessionId: eventSessionId })
+        pending.push({ event, sequence, sessionId: eventSessionId, occurredAt })
         if (pending.length > 512) pending.splice(0, pending.length - 512)
         backgroundEventsRef.current.set(eventRuntimeId, pending)
       }
@@ -593,18 +597,18 @@ export function App() {
       if (disposed) return
       applyRuntimeSnapshot(snapshot)
       hydrated = true
-      const pendingEvents = eventsAfterRuntimeSnapshot(
+      const pendingEvents = runtimeEventsAfterSnapshot(
         buffered.splice(0).filter((entry) => entry.runtimeId === snapshot.runtimeId),
         snapshot.eventSequence,
       )
-      for (const event of pendingEvents) consumeEvent(event)
+      for (const entry of pendingEvents) consumeEvent(entry.event, entry.occurredAt)
       void refreshSessions()
     }).catch(() => {
       if (disposed) return
       hydrated = true
       for (const bufferedEvent of buffered.splice(0)) {
         if (bufferedEvent.runtimeId === runtimeIdRef.current) {
-          consumeEvent(bufferedEvent.event)
+          consumeEvent(bufferedEvent.event, bufferedEvent.occurredAt)
         }
       }
     })
@@ -646,7 +650,7 @@ export function App() {
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
-  const editableBlockId = !interactionBusy && !stopping && !consensus.enabled
+  const editableBlockId = !interactionBusy && !stopping
     ? editableUserBlockId(blocks)
     : null
   const attachmentLocked = stopping
@@ -1048,7 +1052,7 @@ export function App() {
   }, [interactionBusy, sendRuntimeCommand, stopping, view.pendingQuestion])
 
   const editUserMessage = useCallback(async (turnId: string, text: string) => {
-    if (interactionBusy || stopping || consensus.enabled) return false
+    if (interactionBusy || stopping) return false
     stickToBottom.current = true
     setShowJumpBottom(false)
     try {
@@ -1057,7 +1061,7 @@ export function App() {
     } catch {
       return false
     }
-  }, [consensus.enabled, interactionBusy, sendRuntimeCommand, stopping])
+  }, [interactionBusy, sendRuntimeCommand, stopping])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return

@@ -3,6 +3,7 @@ import type { Block } from './conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
 import { UserPdfGallery } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
+import { MessageActions } from './message-actions.tsx'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 
@@ -17,13 +18,13 @@ interface UserMessageCardProps {
 export function UserMessageCard(props: UserMessageCardProps) {
   const editor = useMessageEditor(props.block, props.onEdit)
   return (
-    <div className="group relative mb-4 ml-auto flex max-w-[84%] flex-col items-end gap-2 text-sm leading-6">
+    <div className="group relative mb-8 ml-auto flex max-w-[84%] flex-col items-end gap-2 text-sm leading-6">
       <UserImageGallery attachments={props.block.attachments} />
       <UserPdfGallery runtimeId={props.runtimeId} attachments={props.block.pdfAttachments} />
       <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
-          <div className="wc-sticker-soft w-[min(36rem,78vw)] px-3.5 py-2.5">
+          <div className="w-[min(36rem,78vw)] rounded-[var(--wc-menu-radius)] border border-[var(--wc-line)] bg-[#eeeeeb] px-3.5 py-2.5 shadow-sm">
             <MessageEditor
               editable={props.editable}
               disabled={props.disabled}
@@ -33,14 +34,18 @@ export function UserMessageCard(props: UserMessageCardProps) {
         )
         : props.block.text && (
           <div className="wc-user-message-bubble relative flex min-h-11 w-fit max-w-full items-center px-3.5 py-2.5">
-            <MessageDisplay
-              block={props.block}
-              editable={props.editable}
-              disabled={props.disabled}
-              begin={editor.begin}
-            />
+            <div className="whitespace-pre-wrap">{props.block.text}</div>
           </div>
         )}
+      {!editor.editing ? (
+        <MessageActions
+          timestamp={props.block.timestamp}
+          text={props.block.text}
+          editable={props.editable && !props.disabled}
+          onEdit={editor.begin}
+          className="absolute right-0 top-full pt-1"
+        />
+      ) : null}
     </div>
   )
 }
@@ -85,9 +90,9 @@ function useMessageEditor(
     setError(null)
     try {
       if (await onEdit(block.turnId, text)) setEditing(false)
-      else setError('编辑重跑失败，请重试')
+      else setError('重新发送失败，请重试')
     } catch {
-      setError('编辑重跑失败，请重试')
+      setError('重新发送失败，请重试')
     } finally {
       setSubmitting(false)
     }
@@ -177,36 +182,8 @@ function EditorActions({
         className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-2.5 py-1 text-white disabled:opacity-40"
         disabled={disabled || submitting || !draft.trim()}
       >
-        {submitting ? '重跑中…' : '保存并重新运行'}
+        {submitting ? '发送中…' : '发送'}
       </button>
     </div>
-  )
-}
-
-function MessageDisplay({
-  block,
-  editable,
-  disabled,
-  begin,
-}: {
-  block: UserBlock
-  editable: boolean
-  disabled: boolean
-  begin: () => void
-}) {
-  return (
-    <>
-      {block.text && <div className="whitespace-pre-wrap">{block.text}</div>}
-      {editable && (
-        <button
-          type="button"
-          className="wc-focus-ring absolute right-full top-1/2 mr-1 -translate-y-1/2 rounded-lg bg-white/90 px-1.5 py-0.5 text-[10px] text-[var(--wc-muted)] opacity-0 shadow-sm transition-opacity hover:text-[var(--wc-ink)] focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-          disabled={disabled}
-          onClick={begin}
-        >
-          编辑
-        </button>
-      )}
-    </>
   )
 }

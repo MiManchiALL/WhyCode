@@ -8,7 +8,7 @@ import {
   type ConversationState,
   createConversationState,
   editableUserBlockId,
-  eventsAfterRuntimeSnapshot,
+  runtimeEventsAfterSnapshot,
   resumeTargetCommitted,
   toggleExpanded,
 } from './conversation-state.ts'
@@ -83,12 +83,15 @@ describe('会话界面时间线重建', () => {
   })
 
   it('Renderer 初始化只接续快照边界之后的实时事件', () => {
-    const events = eventsAfterRuntimeSnapshot([
+    const events = runtimeEventsAfterSnapshot([
       { sequence: 10, event: { type: 'text-delta', text: '已包含在快照中' } },
       { sequence: 11, event: { type: 'text-delta', text: '快照之后的新内容' } },
     ], 10)
 
-    assert.deepEqual(events, [{ type: 'text-delta', text: '快照之后的新内容' }])
+    assert.deepEqual(events, [{
+      sequence: 11,
+      event: { type: 'text-delta', text: '快照之后的新内容' },
+    }])
   })
 
   it('切换或重连会话时只重建真实时间线，不合成恢复提示', () => {
@@ -307,7 +310,7 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(serialized, /新回答/)
   })
 
-  it('实时编辑把已中止根消息留在原位置，并让新 turn 复用该锚点', () => {
+  it('实时编辑把最新根消息留在原位置，并让新 turn 复用该锚点', () => {
     let state = createConversationState([
       { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-old' }),
@@ -329,7 +332,34 @@ describe('会话界面时间线重建', () => {
     assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].turnId, 'turn-edited')
   })
 
-  it('只有已正常收尾且没有可见输出的最后根消息才展示编辑入口', () => {
+  it('根消息显示发送时间，完整回答显示工作完成时间，编辑后改用新发送时间', () => {
+    const inputAt = '2026-08-08T10:00:00.000Z'
+    const turnAt = '2026-08-08T10:00:01.000Z'
+    const textAt = '2026-08-08T10:00:02.000Z'
+    const finishedAt = '2026-08-08T10:00:03.000Z'
+    const editedAt = '2026-08-08T10:05:00.000Z'
+    let state = createConversationState([
+      { type: 'user-message', inputId: 'input-1', text: '旧问题', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-1' }),
+      core({ type: 'text-delta', text: '完整回答' }),
+      core({ type: 'work-finished', durationMs: 2_000, outcome: 'completed' }),
+    ], [inputAt, turnAt, textAt, finishedAt])
+
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].timestamp, inputAt)
+    assert.equal(state.blocks[1]?.kind === 'text' && state.blocks[1].timestamp, finishedAt)
+
+    state = applyCoreEvent(state, {
+      type: 'user-message-edited',
+      previousTurnId: 'turn-1',
+      inputId: 'input-2',
+      text: '编辑后的问题',
+      taskPlan: null,
+    }, editedAt)
+    assert.deepEqual(state.blocks.map((block) => block.kind), ['user'])
+    assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].timestamp, editedAt)
+  })
+
+  it('最新根消息在有完整回答或停止输出后仍保持编辑资格', () => {
     let state = applyCoreEvent(
       applyCoreEvent(
         createConversationState(),
@@ -338,7 +368,7 @@ describe('会话界面时间线重建', () => {
       { type: 'turn-start', turnId: 'turn-1' },
     )
 
-    assert.equal(editableUserBlockId(state.blocks), null)
+    assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
     state = applyCoreEvent(state, {
       type: 'work-finished',
       durationMs: 1000,
@@ -346,6 +376,14 @@ describe('会话界面时间线重建', () => {
     })
     assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
     state = applyCoreEvent(state, { type: 'text-delta', text: '已有输出' })
+    assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
+
+    state = applyCoreEvent(state, {
+      type: 'message-injected',
+      id: 'steering-2',
+      text: '后续用户消息',
+      startsTurn: false,
+    })
     assert.equal(editableUserBlockId(state.blocks), null)
   })
 

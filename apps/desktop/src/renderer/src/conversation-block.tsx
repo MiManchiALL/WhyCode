@@ -6,6 +6,7 @@ import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
 import { UserImageGallery } from './image-attachments.tsx'
 import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
+import { MessageActions } from './message-actions.tsx'
 
 export function BlockView({
   runtimeId,
@@ -18,6 +19,7 @@ export function BlockView({
   onCheckpointRestoreChange,
   onEdit,
   onToggle,
+  showAssistantActions,
 }: {
   runtimeId: string
   block: Block
@@ -29,6 +31,7 @@ export function BlockView({
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: () => void
+  showAssistantActions: boolean
 }) {
   if (block.kind === 'user') {
     return (
@@ -43,8 +46,17 @@ export function BlockView({
   }
   if (block.kind === 'text') {
     return (
-      <div className="prose prose-sm prose-neutral mb-4 max-w-none px-1 py-1 leading-7">
-        <Streamdown>{block.text}</Streamdown>
+      <div className={`group relative max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-8' : 'mb-4'}`}>
+        <div className="prose prose-sm prose-neutral max-w-none">
+          <Streamdown controls={{ table: { fullscreen: false } }}>{block.text}</Streamdown>
+        </div>
+        {showAssistantActions ? (
+          <MessageActions
+            timestamp={block.timestamp}
+            text={block.text}
+            className="absolute left-1 top-full pt-1"
+          />
+        ) : null}
       </div>
     )
   }

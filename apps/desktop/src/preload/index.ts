@@ -127,6 +127,7 @@ const api = {
       sequence: number,
       runtimeId: string,
       sessionId: string | null,
+      occurredAt: string,
     ) => void,
   ): (() => void) => {
     const wrapped = (_: unknown, envelope: RuntimeEventEnvelope) => {
@@ -135,6 +136,7 @@ const api = {
         envelope.sequence,
         envelope.runtimeId,
         envelope.sessionId,
+        envelope.occurredAt,
       )
     }
     ipcRenderer.on(IPC.event, wrapped)

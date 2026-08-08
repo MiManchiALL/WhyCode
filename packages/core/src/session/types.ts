@@ -385,13 +385,17 @@ export interface LoadedSession {
   customSystemPrompt: CustomSystemPromptSnapshot | undefined
   messages: ModelMessage[]
   viewEvents: ViewEvent[]
+  /** 与 viewEvents 严格同序；由已有 JSONL entry 时间派生，不增加会话 schema 字段。 */
+  viewEventTimestamps: string[]
   /** 用户输入与图片工具在该会话中持久化的全部附件元数据。 */
   imageAttachments: ImageAttachment[]
   /** 用户输入与工具在该会话中持久化的全部 PDF 元数据。 */
   pdfAttachments: PdfAttachment[]
   turnStartMessages: Map<string, ModelMessage[]>
   turnStartTaskStates: Map<string, TaskPlanState>
-  /** 活动 turn 对应根输入的完整 Skill 快照；供中止后原位编辑精确复用。 */
+  /** 每个活动 turn 开始前的协商累计状态；由既有 JSONL 边界派生。 */
+  turnStartConsensusStates: Map<string, ConsensusPersistedState | null>
+  /** 活动 turn 对应根输入的完整 Skill 快照；供最新根消息编辑时精确复用。 */
   turnStartSkills: Map<string, ActivatedSkill[]>
   entries: SessionEntry[]
   leafUuid: string
@@ -416,6 +420,7 @@ export interface SessionRecorder {
   readonly attachmentDirectory: string
   readonly initialMessages: readonly ModelMessage[]
   readonly initialViewEvents: readonly ViewEvent[]
+  readonly initialViewEventTimestamps: readonly string[]
   readonly initialImageAttachments: readonly ImageAttachment[]
   readonly initialPdfAttachments: readonly PdfAttachment[]
   readonly interruptedTurnId: string | null
@@ -428,6 +433,8 @@ export interface SessionRecorder {
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
   taskStateBeforeTurn(turnId: string): TaskPlanState | undefined
+  /** undefined = turn 已不在活动父链；null = turn 前尚无协商累计状态。 */
+  consensusStateBeforeTurn(turnId: string): ConsensusPersistedState | null | undefined
   /** null = turn 已不在活动父链；空数组 = 根输入没有选择 Skill。 */
   skillsForTurn(turnId: string): ActivatedSkill[] | null
   recordUserInput(
@@ -498,6 +505,7 @@ export interface SessionRecorder {
     state: ConsensusPersistedState,
     userText: string,
     deliveredInputIds?: readonly string[],
+    skills?: readonly ActivatedSkill[],
   ): Promise<void>
   markUserInputsRestored(inputIds: readonly string[]): Promise<void>
   recordConsensusTaskEnd(

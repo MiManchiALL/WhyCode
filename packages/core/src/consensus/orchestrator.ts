@@ -63,6 +63,7 @@ export interface ConsensusCoordinatorOptions {
     state: ConsensusPersistedState,
     userText: string,
     deliveredInputIds?: readonly string[],
+    skills?: readonly ActivatedSkill[],
   ) => Promise<void>
   onTaskEnd?: (
     taskId: string,
@@ -117,6 +118,24 @@ export class ConsensusCoordinator {
 
   get busy(): boolean {
     return this.running
+  }
+
+  /** 最新根消息换根后，让同一个空闲协调器回到该消息之前的累计协商状态。 */
+  resetPersistedState(state: ConsensusPersistedState | null): void {
+    if (this.running || this.options.mainSession.isBusy) {
+      throw new Error('协商仍在运行，不能恢复历史状态')
+    }
+    this.taskCounter = 0
+    this.sessionScore = { Main: 0, B: 0, C: 0 }
+    this.memories = { B: [], C: [] }
+    this.taskLog = []
+    this.pendingTexts = []
+    this.deferredTaskMessages = []
+    this.peers = []
+    this.peerPhase = false
+    this.executionPhase = false
+    this.aborted = false
+    if (state) this.restoreState(state)
   }
 
   /** 用户消息入口：空闲开新协商任务；Main 探索中走会话自身 steering；B/C 工作中暂存 */
@@ -278,6 +297,7 @@ export class ConsensusCoordinator {
         startState,
         userText,
         deliveredInputIds,
+        skills,
       )
       if (!taskBoundaryStarted) return
       for (const inputId of deliveredInputIds) {
@@ -724,9 +744,10 @@ export class ConsensusCoordinator {
     state: ConsensusPersistedState,
     userText: string,
     deliveredInputIds: readonly string[],
+    skills: readonly ActivatedSkill[],
   ): Promise<boolean> {
     try {
-      await this.options.onTaskStart?.(taskId, state, userText, deliveredInputIds)
+      await this.options.onTaskStart?.(taskId, state, userText, deliveredInputIds, skills)
       return true
     } catch (error) {
       this.reportPersistenceError('起点', error)

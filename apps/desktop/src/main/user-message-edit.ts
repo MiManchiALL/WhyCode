@@ -1,10 +1,35 @@
-import type { StopReason } from '@whycode/core'
+import type { PreparedLatestTurnEdit } from '@whycode/core'
 import type { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import type { UserMessageReservation } from './user-message-routing.ts'
 
 export type EditedMessageStartResult =
   | { ok: true }
   | { ok: false; error: string }
+
+/**
+ * 编辑后的输入已经是新的持久根。直接模式复用 Core 准备好的 Main 启动器；
+ * 协商模式必须把同一个 inputId 交给协调器，不能再创建第二条根输入。
+ */
+export function deliverEditedUserMessage(
+  runtime: DesktopSessionRuntime,
+  prepared: PreparedLatestTurnEdit,
+): Promise<unknown> | void {
+  runtime.coordinator?.resetPersistedState(runtime.journal?.initialConsensusState ?? null)
+  if (!runtime.consensusEnabled) return prepared.startMain()
+
+  const coordinator = runtime.coordinator
+  if (!coordinator) throw new Error('协商协调器尚未初始化')
+  prepared.accept()
+  return coordinator.handleUserMessage(
+    prepared.text,
+    false,
+    prepared.attachments,
+    prepared.inputId,
+    prepared.pdfAttachments,
+    prepared.skills,
+    prepared.imageDelivery,
+  )
+}
 
 /**
  * 与普通输入共用 routing reservation：准备期间不允许另一条消息改变活动父链；
@@ -15,27 +40,25 @@ export async function startEditedUserMessage(
   reservation: UserMessageReservation,
   turnId: string,
   text: string,
+  deliver: (prepared: PreparedLatestTurnEdit) => Promise<unknown> | void,
   onDeliveryError: (error: unknown) => void,
 ): Promise<EditedMessageStartResult> {
   let released = false
   try {
     await reservation.ready
     if (runtime.executionBusy) {
-      return { ok: false, error: 'Agent 尚未空闲，不能编辑已中止消息' }
-    }
-    if (runtime.consensusEnabled || runtime.coordinator) {
-      return { ok: false, error: '协商模式中的消息不能使用单回合编辑' }
+      return { ok: false, error: 'Agent 尚未空闲，不能编辑最新消息' }
     }
     const session = runtime.session
     if (!session) return { ok: false, error: '当前没有可编辑的会话' }
 
-    // Core 的可见历史校验必须看到停止收尾前已经排队的稳定 ViewEvent。
+    // Core 的最新消息校验必须看到此前已经排队的全部稳定 ViewEvent。
     await runtime.timeline.flush()
-    const start = await session.prepareAbortedTurnEdit(turnId, text)
+    const prepared = await session.prepareLatestTurnEdit(turnId, text)
     runtime.beginWork()
-    let running: Promise<StopReason>
+    let running: Promise<unknown>
     try {
-      running = start()
+      running = Promise.resolve(deliver(prepared))
     } catch (error) {
       // 编辑事实已经写稳且实时投影已经发出；和普通根输入一样，此后只能报告
       // Agent 交付异常，不能向 Renderer 伪报“编辑未发生”并诱导重复提交。

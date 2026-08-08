@@ -10,6 +10,10 @@ class Writer implements ViewEventWriter {
     return this.batches.flat()
   }
 
+  get initialViewEventTimestamps(): readonly string[] {
+    return this.initialViewEvents.map(() => 'persisted-at')
+  }
+
   async recordViewEvents(events: ViewEvent[]): Promise<void> {
     this.batches.push(structuredClone(events))
   }
@@ -84,6 +88,26 @@ describe('ViewTimeline', () => {
     assert.equal(snapshot.boundary, 42)
     assert.deepEqual(snapshot.events, [
       { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-1' } },
+    ])
+    assert.deepEqual(snapshot.eventTimestamps, ['persisted-at'])
+  })
+
+  it('运行中快照保持事件时间同序，合并流式文本采用最新片段时间', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-1' }, '2026-08-08T10:00:00.000Z')
+    timeline.capture(writer, { type: 'text-delta', text: '你' }, '2026-08-08T10:00:01.000Z')
+    timeline.capture(writer, { type: 'text-delta', text: '好' }, '2026-08-08T10:00:02.000Z')
+
+    const snapshot = await timeline.snapshotAt(writer, () => 7)
+
+    assert.deepEqual(snapshot.events, [
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'turn-1' } },
+      { type: 'core-event', event: { type: 'text-delta', text: '你好' } },
+    ])
+    assert.deepEqual(snapshot.eventTimestamps, [
+      'persisted-at',
+      '2026-08-08T10:00:02.000Z',
     ])
   })
 

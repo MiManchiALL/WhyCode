@@ -120,7 +120,7 @@ import {
 import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
 import type { McpManagerSnapshot } from '../mcp/manager.ts'
 import { carryMcpToolState, withoutMcpToolState } from '../mcp/state.ts'
-import { stoppedTurnEditResources } from './turn-edit.ts'
+import { latestTurnEditResources } from './turn-edit.ts'
 import {
   activatedSkillSchema,
   skillSummary,
@@ -189,6 +189,21 @@ export interface AgentSessionOptions {
   emit: (event: CoreEvent) => void
   /** 审批回调（宿主注入）：返回用户的决定 */
   requestApproval: ApprovalHandler
+}
+
+/**
+ * 编辑事务已经持久化后的单次交付句柄。宿主可按当前模式选择直接交给 Main，
+ * 或先 accept 后交给协商协调器；两条路径共享同一个新根输入身份。
+ */
+export interface PreparedLatestTurnEdit {
+  readonly inputId: string
+  readonly text: string
+  readonly attachments: readonly ImageAttachment[]
+  readonly imageDelivery: ImageDeliveryMode
+  readonly pdfAttachments: readonly PdfAttachment[]
+  readonly skills: readonly ActivatedSkill[]
+  accept(): void
+  startMain(): Promise<StopReason>
 }
 
 interface QueuedMessage {
@@ -530,10 +545,10 @@ export class AgentSession {
    * 先把旧回合换根为编辑后的持久输入，再返回一次性启动器。宿主可在持有输入
    * 路由 reservation 时完成准备并同步启动，避免编辑与普通新消息并发分类。
    */
-  async prepareAbortedTurnEdit(
+  async prepareLatestTurnEdit(
     turnId: string,
     text: string,
-  ): Promise<() => Promise<StopReason>> {
+  ): Promise<PreparedLatestTurnEdit> {
     const nextText = text.trim()
     const recorder = this.turnEditRecorder(nextText)
     const rollbackMessages = recorder.messagesBeforeTurn(turnId)
@@ -542,7 +557,7 @@ export class AgentSession {
     if (rollbackMessages === null || rollbackTaskState === undefined || skills === null) {
       throw new Error('目标回合已不在当前活动历史中')
     }
-    const resources = stoppedTurnEditResources(
+    const resources = latestTurnEditResources(
       this.messages,
       recorder.initialViewEvents,
       turnId,
@@ -577,7 +592,16 @@ export class AgentSession {
       skills,
       persisted: true,
     })
-    return this.editedTurnStarter(turnId, inputId, nextText, message, skills)
+    return this.preparedEditedTurn(
+      turnId,
+      inputId,
+      nextText,
+      message,
+      resources.attachments,
+      resources.imageDelivery ?? 'native',
+      resources.pdfAttachments,
+      skills,
+    )
   }
 
   private turnEditRecorder(text: string): SessionRecorder {
@@ -585,7 +609,7 @@ export class AgentSession {
     if (!text) throw new Error('编辑后的消息不能为空')
     if (!recorder) throw new Error('当前会话没有可回滚的持久记录')
     if (this.isBusy || this.activeTurn || this.queue.length > 0) {
-      throw new Error('Agent 尚未空闲，不能编辑已中止消息')
+      throw new Error('Agent 尚未空闲，不能编辑最新消息')
     }
     if (
       this.options.promptContext.discussion
@@ -600,22 +624,26 @@ export class AgentSession {
       || recorder.undeliveredUserInputIds.length > 0
       || recorder.pendingUserInputs.length > 0
     ) {
-      throw new Error('会话仍有待处理输入，不能编辑已中止消息')
+      throw new Error('会话仍有待处理输入，不能编辑最新消息')
     }
     return recorder
   }
 
-  private editedTurnStarter(
+  private preparedEditedTurn(
     previousTurnId: string,
     inputId: string,
     text: string,
     message: ModelMessage,
+    attachments: readonly ImageAttachment[],
+    imageDelivery: ImageDeliveryMode,
+    pdfAttachments: readonly PdfAttachment[],
     skills: readonly ActivatedSkill[],
-  ): () => Promise<StopReason> {
-    let started = false
-    return () => {
-      if (started) throw new Error('编辑后的回合已经启动')
-      started = true
+  ): PreparedLatestTurnEdit {
+    let accepted = false
+    let startedMain = false
+    const accept = (): void => {
+      if (accepted) return
+      accepted = true
       this.options.emit({
         type: 'user-message-edited',
         previousTurnId,
@@ -623,14 +651,28 @@ export class AgentSession {
         text,
         taskPlan: this.taskPlan?.snapshot ?? null,
       })
-      const notifications = this.drainTaskNotifications()
-      return this.startTurn(
-        [message, ...notifications.map((item) => item.message)],
-        [],
-        inputId,
-        skills,
-        notifications,
-      )
+    }
+    return {
+      inputId,
+      text,
+      attachments: structuredClone([...attachments]),
+      imageDelivery,
+      pdfAttachments: structuredClone([...pdfAttachments]),
+      skills: structuredClone([...skills]),
+      accept,
+      startMain: () => {
+        if (startedMain) throw new Error('编辑后的回合已经启动')
+        startedMain = true
+        accept()
+        const notifications = this.drainTaskNotifications()
+        return this.startTurn(
+          [message, ...notifications.map((item) => item.message)],
+          [],
+          inputId,
+          skills,
+          notifications,
+        )
+      },
     }
   }
 
