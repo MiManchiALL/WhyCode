@@ -219,7 +219,7 @@ function createHarness(options: {
   } as unknown as AgentSession
   const coordinator = new ConsensusCoordinator({
     mainSession: main,
-    projectDir: null,
+    projectDir: process.cwd(),
     scratchRoot: '',
     conversationId: 'test-conversation',
     agents: { B: {} as never, C: {} as never },

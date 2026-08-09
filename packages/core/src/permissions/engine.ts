@@ -61,7 +61,7 @@ export function checkToolAuthorization(
 
 /**
  * 权限判定引擎（M2-b，M3 增讨论档）。判定链顺序不可交换（文档一 §3.2）：
- * 可疑路径拒绝 → 无项目能力边界 → Main 全自动放行 → Main 只读硬拒绝 →
+ * 可疑路径拒绝 → Main 全自动放行 → Main 只读硬拒绝 →
  * 讨论档硬边界 → 敏感/越界约束聚合 → 角色/会话/档位策略。
  * 可疑 Windows 路径永远拒绝；讨论 Agent 的 scratch 边界也不受 Main 全自动档放宽。
  */
@@ -81,16 +81,6 @@ export function checkToolPermission(
     }
   }
 
-  // 无项目时只允许工具显式声明的能力进入后续判定，权限档位不能扩大工具装配边界。
-  if (!projectDir && !def.availableWithoutProject) {
-    return { behavior: 'deny', reason: '当前工具需要工作文件夹' }
-  }
-
-  // 没有工作文件夹就没有可供用户扩张的本地路径边界；全自动也不能凭空建立边界。
-  if (!projectDir && rawPaths.length > 0) {
-    return { behavior: 'deny', reason: '当前没有工作文件夹，不能访问本地路径' }
-  }
-
   // 全自动的契约是零授权弹窗；保留不可审批的可疑路径拒绝，但其余操作直接放行。
   // 讨论 Agent 仍使用独立的 scratch 边界，不能借 Main 的档位获得项目写权限。
   if (ctx.mode === 'auto' && !ctx.discussion) return { behavior: 'allow' }
@@ -103,10 +93,6 @@ export function checkToolPermission(
     && def.kind !== 'control'
   ) {
     return { behavior: 'deny', reason: '当前为只读模式，不允许修改或执行' }
-  }
-
-  if (!projectDir) {
-    return checkProjectlessToolPermission(def, ctx)
   }
 
   const outsidePaths = uniquePaths(rawPaths.flatMap((path) => {
@@ -188,20 +174,6 @@ export function checkToolPermission(
   if (ctx.mode === 'acceptEdits' && def.kind === 'edit') return { behavior: 'allow' }
 
   // 8. 默认：写/执行类询问，批准可选择本会话记住该工具
-  return {
-    behavior: 'ask',
-    reason: `${def.name} 需要你的确认`,
-    suggestion: { kind: 'allow-tool', toolName: def.name },
-  }
-}
-
-function checkProjectlessToolPermission(
-  def: ToolDefinition,
-  ctx: PermissionContext,
-): PermissionDecision {
-  if (def.kind === 'read' || def.kind === 'control') return { behavior: 'allow' }
-  if (ctx.sessionAllowedTools.includes(def.name)) return { behavior: 'allow' }
-  if (ctx.mode === 'acceptEdits' && def.kind === 'edit') return { behavior: 'allow' }
   return {
     behavior: 'ask',
     reason: `${def.name} 需要你的确认`,

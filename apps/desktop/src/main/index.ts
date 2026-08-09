@@ -576,7 +576,7 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
           runtime.session = await createMainAgentSession(
             runtime,
             recorder,
-            runtime.projectDir,
+            requireRuntimeProjectDir(runtime),
             entry,
             providerConfig,
             runtime.reasoningEffort,
@@ -637,7 +637,7 @@ async function createRuntimeJournal(
 async function createMainAgentSession(
   runtime: DesktopSessionRuntime,
   recorder: SessionJournal,
-  targetProjectDir: string | null,
+  targetProjectDir: string,
   model: ModelEntry,
   providerConfig: ProviderConfig,
   reasoningEffort: ReasoningEffortSelection,
@@ -734,7 +734,7 @@ function buildCoordinator(runtime: DesktopSessionRuntime): string | null {
     runtime,
     runtime.session!,
     journal,
-    runtime.projectDir,
+    requireRuntimeProjectDir(runtime),
     journal.sessionId,
   )
   if (!result.ok) return result.error
@@ -746,7 +746,7 @@ function createCoordinator(
   runtime: DesktopSessionRuntime,
   mainSession: AgentSession,
   journal: SessionJournal,
-  targetProjectDir: string | null,
+  targetProjectDir: string,
   targetConversationId: string,
 ): { ok: true; value: ConsensusCoordinator } | { ok: false; error: string } {
   const agents = resolveConsensusAgentSetups(loadAppConfig())
@@ -1769,7 +1769,6 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
   const journal = await sessions.prepareResume(sessionId)
   const metadata = journal.metadataSnapshot
   await journal.recoverInterruptedWork()
-  const targetProjectDir = workspaceWorkingDirectory(metadata.workspace)
   const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
   const targetReasoningEffort = resolved.ok
     ? normalizeReasoningEffortSelection(
@@ -1784,6 +1783,7 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
     permissionMode: preferredPermissionMode,
     emit: broadcastRuntimeEvent,
   })
+  const targetProjectDir = requireRuntimeProjectDir(runtime)
   runtime.consensusEnabled = preferredConsensusEnabled
   runtime.journal = journal
   try {

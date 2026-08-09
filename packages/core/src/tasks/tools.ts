@@ -61,7 +61,6 @@ export function createTaskPlanTools(
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       requiresStandaloneStep: true,
       async execute(input) {
         return toolResult(
@@ -82,7 +81,6 @@ export function createTaskPlanTools(
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       requiresStandaloneStep: true,
       async execute(input) {
         const result = controller.resume(input.plan_id)
@@ -104,7 +102,6 @@ export function createTaskPlanTools(
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       requiresStandaloneStep: true,
       async execute(input) {
         const result = controller.replace(
@@ -127,7 +124,6 @@ export function createTaskPlanTools(
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       async execute(input) {
         if (!callbacks.isEngaged()) {
           return toolResult(
@@ -162,7 +158,6 @@ export function createTaskPlanTools(
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       async execute(input) {
         const result = controller.updateItem(
           input.item_id,
@@ -184,7 +179,6 @@ export function createTaskPlanTools(
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       async execute(input) {
         return toolResult(
           controller,

@@ -24,7 +24,7 @@ import {
 import { AgentSession } from './session.ts'
 
 describe('Main 长任务端到端控制', () => {
-  it('任务工具在纯聊天 Main 中可用，计划状态随每步注入并由证据关闭', async () => {
+  it('任务工具在受管默认工作区中可用，计划状态随每步注入并由证据关闭', async () => {
     const model = modelWithSteps([
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '交付可靠功能',
@@ -615,7 +615,7 @@ function activeState(): TaskPlanState {
   }
 }
 
-function createSession(model: MockLanguageModelV4, projectDir: string | null = null) {
+function createSession(model: MockLanguageModelV4, projectDir: string = process.cwd()) {
   const events: CoreEvent[] = []
   return {
     session: new AgentSession({

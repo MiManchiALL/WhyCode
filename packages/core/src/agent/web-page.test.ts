@@ -39,7 +39,7 @@ describe('WebFetch Agent 链路', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mainTools: [createWebFetchTool({
         fetchPage: async () => { throw new WebPageError('目标网页需要登录或拒绝访问') },
       })],
@@ -93,7 +93,7 @@ describe('WebFetch Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         mainTools: [createWebFetchTool({
@@ -140,7 +140,7 @@ describe('WebFetch Agent 链路', () => {
       session = new AgentSession({
         model: modelEntry(new MockLanguageModelV4({ doStream: [toolStep()] })),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         mainTools: [createWebFetchTool({

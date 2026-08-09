@@ -23,7 +23,6 @@ export function createWebFetchTool(options: { fetchPage: WebFetchHandler }) {
     inputSchema: webFetchRequestSchema,
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     initialApprovalReason: '网页读取会向目标网站发送请求并暴露你的公网 IP 地址',
     async execute(input, ctx) {
       try {
@@ -61,7 +60,6 @@ export function createWebFindTool(options: { findInPage: WebFindHandler }) {
     inputSchema: webFindRequestSchema,
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     async execute(input, ctx) {
       try {
         const response = await options.findInPage({

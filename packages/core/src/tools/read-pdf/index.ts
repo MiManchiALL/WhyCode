@@ -31,7 +31,6 @@ export interface ReadPdfToolOptions {
   sessionId: string
   processor: PdfProcessor
   supportsVisual: boolean
-  supportsProjectPaths: boolean
   resolveAttachment(attachmentId: string): ResolvedPdfAttachment | null
   resolvePageImage?(attachmentId: string, pageNumber: number): ImageAttachment | null
 }
@@ -39,17 +38,13 @@ export interface ReadPdfToolOptions {
 const attachmentIdSchema = z.string().uuid()
 
 export function createReadPdfTool(options: ReadPdfToolOptions) {
-  const sourceTypeSchema = options.supportsProjectPaths
-    ? z.enum(['attachment', 'path'])
-    : z.literal('attachment')
-  const sourceValueDescription = options.supportsProjectPaths
-    ? 'sourceType=attachment 时填写消息中 PDF 卡片的附件 ID；sourceType=path 时填写项目内或已授权的本地 PDF 路径'
-    : '消息中 PDF 卡片显示的附件 ID'
   const maxPages = options.supportsVisual ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_MAX_PAGES
   const defaultPages = options.supportsVisual ? PDF_VISUAL_MAX_PAGES : PDF_TEXT_DEFAULT_PAGES
   const inputSchema = z.object({
-    sourceType: sourceTypeSchema.describe('PDF 来源类型'),
-    sourceValue: z.string().min(1).describe(sourceValueDescription),
+    sourceType: z.enum(['attachment', 'path']).describe('PDF 来源类型'),
+    sourceValue: z.string().min(1).describe(
+      'sourceType=attachment 时填写消息中 PDF 卡片的附件 ID；sourceType=path 时填写项目内或已授权的本地 PDF 路径',
+    ),
     startPage: z.number().int().positive().default(1).describe('起始页，从 1 开始'),
     pageCount: z.number().int().min(1).max(maxPages).optional()
       .describe(`本次读取页数，默认 ${defaultPages}，最多 ${maxPages}`),
@@ -71,11 +66,10 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
     description: options.supportsVisual
       ? '按页把 PDF 页面图交给视觉模型阅读'
       : '按页读取 PDF 文字',
-    prompt: readPdfPrompt(options.supportsVisual, options.supportsProjectPaths),
+    prompt: readPdfPrompt(options.supportsVisual),
     inputSchema,
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     extractPaths: (input) => input.sourceType === 'path' ? [input.sourceValue] : [],
     async execute(input, ctx) {
       const source = resolvePdfSource(input.sourceType, input.sourceValue, options, ctx)
@@ -195,7 +189,6 @@ function resolvePdfSource(
   ctx: ToolContext,
 ): { name: string; path: string; expectedSha256?: string; attachmentId?: string } {
   if (sourceType === 'path') {
-    if (!options.supportsProjectPaths) throw new Error('当前会话不允许读取本地 PDF 路径')
     const path = resolveAllowed(ctx, sourceValue)
     return { name: basename(path), path }
   }

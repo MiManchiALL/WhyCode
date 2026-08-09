@@ -99,7 +99,6 @@ export function createCaptureScreenshotTool(options: {
     inputSchema,
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     requiresStandaloneStep: true,
     initialApprovalReason: '截图会读取屏幕上其它应用可能包含的敏感内容',
     async execute(input, ctx) {

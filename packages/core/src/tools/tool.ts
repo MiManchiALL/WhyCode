@@ -24,8 +24,6 @@ export interface ToolDefinition<
   isReadOnly: boolean
   /** 权限类别：read 读取；control 只限内部/保护性控制；edit/execute 受相应档位约束。 */
   kind: 'read' | 'edit' | 'execute' | 'control'
-  /** 控制面工具可在无项目的讨论会话中使用；默认 false，避免意外暴露文件/命令工具。 */
-  availableWithoutProject: boolean
   /** 该工具建立计划身份或执行权边界，必须独占一次模型 step。 */
   requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
@@ -78,7 +76,6 @@ export interface ToolResult {
 const CONSERVATIVE_DEFAULTS = {
   isReadOnly: false,
   kind: 'execute' as const,
-  availableWithoutProject: false,
   requiresStandaloneStep: false,
   endsTurnOnSuccess: false,
   turnEndReasonOnSuccess: 'completed' as const,

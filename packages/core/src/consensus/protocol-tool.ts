@@ -101,7 +101,6 @@ export function createProtocolOutputTool(
     // 提交会改变本协议回合的内部状态，必须与其它控制工具串行。
     isReadOnly: false,
     kind: 'control',
-    availableWithoutProject: true,
     endsTurnOnSuccess: true,
     async execute(input) {
       if (submitted) {

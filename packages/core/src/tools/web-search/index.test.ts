@@ -162,9 +162,8 @@ describe('WebSearch 工具契约', () => {
     })
   })
 
-  it('无项目可用，但首次使用必须告知搜索词会发往外部服务', () => {
+  it('首次使用必须告知搜索词会发往外部服务', () => {
     const tool = createWebSearchTool({ search: async () => ({ results: [] }) })
-    assert.equal(tool.availableWithoutProject, true)
     assert.equal(tool.isReadOnly, true)
     assert.match(tool.initialApprovalReason ?? '', /搜索词.*外部搜索服务/)
     assert.match(tool.prompt, /互不重复、可独立作答/)

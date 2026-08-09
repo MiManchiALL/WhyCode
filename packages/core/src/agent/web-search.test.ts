@@ -13,7 +13,7 @@ import {
 import { AgentSession } from './session.ts'
 
 describe('WebSearch Agent 链路', () => {
-  it('普通无项目 Main 可搜索，会话记住后不重复隐私审批', async () => {
+  it('受管默认工作区的普通 Main 可搜索，会话记住后不重复隐私审批', async () => {
     let modelCall = 0
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
@@ -37,7 +37,7 @@ describe('WebSearch Agent 链路', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mainTools: [createWebSearchTool({
         search: async (request) => {
           searches.push(request)
@@ -93,7 +93,7 @@ describe('WebSearch Agent 链路', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mainTools: [createWebSearchTool({
         search: async () => {
           throw new WebSearchError('尚未配置网页搜索密钥')
