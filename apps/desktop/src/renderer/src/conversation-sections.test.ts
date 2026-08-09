@@ -92,7 +92,7 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(sections.map((section) => section.id), ids(blocks))
   })
 
-  it('最终正文首段到达时先把运行中的处理过程投影为折叠区', () => {
+  it('纯文本 step 确认提交后把运行中的处理过程投影为折叠区', () => {
     const sections = conversationSections([
       user('user-1', 'turn-1'),
       thinking('thinking-1'),
@@ -106,6 +106,18 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(active.userBlocks), ['user-1'])
     assert.deepEqual(ids(active.activityBlocks), ['thinking-1', 'tool-1'])
     assert.deepEqual(ids(active.finalBlocks), ['answer'])
+  })
+
+  it('尚未提交的正文不猜测为最终回答，继续保持运行过程展开', () => {
+    const blocks = [
+      user('user-1', 'turn-1'),
+      thinking('thinking-1'),
+      pendingText('pending-answer', '可能仍会继续调用工具'),
+    ]
+    const sections = conversationSections(blocks, 1_000)
+
+    assert.deepEqual(sections.map((section) => section.kind), ['block', 'block', 'block'])
+    assert.deepEqual(sections.map((section) => section.id), ids(blocks))
   })
 
   it('活动任务摘要出现后只保留摘要内计时，不再显示输入区计时', () => {
@@ -255,7 +267,11 @@ function user(id: string, turnId?: string): Block {
 }
 
 function text(id: string, value: string): Block {
-  return { kind: 'text', id, text: value }
+  return { kind: 'text', id, text: value, phase: 'final' }
+}
+
+function pendingText(id: string, value: string): Block {
+  return { kind: 'text', id, text: value, phase: 'pending' }
 }
 
 function thinking(id: string): Block {

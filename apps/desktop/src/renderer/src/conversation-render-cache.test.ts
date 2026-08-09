@@ -29,7 +29,7 @@ function props(block: Block): ConversationBlockRenderProps {
 
 describe('对话块脏尾部渲染边界', () => {
   it('保留未变化历史块的渲染结果', () => {
-    const block: Block = { kind: 'text', id: 'answer', text: '完成' }
+    const block: Block = { kind: 'text', id: 'answer', text: '完成', phase: 'final' }
     const previous = props(block)
     const next = { ...previous, onEdit: async () => false }
 
@@ -37,7 +37,7 @@ describe('对话块脏尾部渲染边界', () => {
   })
 
   it('块身份、展开状态和正文流式状态变化时重新渲染', () => {
-    const block: Block = { kind: 'text', id: 'answer', text: '完成' }
+    const block: Block = { kind: 'text', id: 'answer', text: '完成', phase: 'final' }
     const previous = props(block)
 
     assert.equal(sameConversationBlockRenderProps(previous, {
