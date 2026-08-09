@@ -59,7 +59,7 @@ describe('辅助识图 Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(mainModel, false),
         providerConfig: { apiKey: 'main' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         auxiliaryImageAnalyzer: analyzer,
         emit: (event) => events.push(event),

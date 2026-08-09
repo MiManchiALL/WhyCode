@@ -40,7 +40,6 @@ describe('ReadPdf', () => {
         ],
       }, (options) => assert.equal(options.expectedSha256, attachment.sha256)),
       supportsVisual: false,
-      supportsProjectPaths: false,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
     })
     const input = tool.inputSchema.parse({
@@ -71,7 +70,6 @@ describe('ReadPdf', () => {
       sessionId: SESSION_ID,
       processor: renderingProcessor(),
       supportsVisual: true,
-      supportsProjectPaths: false,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
     })
     assert.equal(tool.inputSchema.safeParse({
@@ -112,7 +110,6 @@ describe('ReadPdf', () => {
       sessionId: SESSION_ID,
       processor: renderingProcessor((mode) => readModes.push(mode)),
       supportsVisual: true,
-      supportsProjectPaths: false,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
     })
     const automatic = tool.inputSchema.parse({
@@ -142,7 +139,6 @@ describe('ReadPdf', () => {
       sessionId: SESSION_ID,
       processor: renderingProcessor(),
       supportsVisual: true,
-      supportsProjectPaths: false,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
       resolvePageImage: (_attachmentId, pageNumber) =>
         existing?.source?.pageNumber === pageNumber ? existing : null,
@@ -158,34 +154,12 @@ describe('ReadPdf', () => {
     assert.equal((await readdir(attachmentDirectory)).filter((name) => name.endsWith('.jpg')).length, 1)
   })
 
-  it('非视觉模型固定走文字路径，纯聊天也不暴露 path 来源', () => {
-    const tool = createReadPdfTool({
-      attachmentDirectory: 'unused',
-      sessionId: SESSION_ID,
-      processor: fakeProcessor({ mode: 'text', pageCount: 1, pages: [] }),
-      supportsVisual: false,
-      supportsProjectPaths: false,
-      resolveAttachment: () => null,
-    })
-    const schema = z.toJSONSchema(tool.inputSchema)
-    assert.equal(Object.hasOwn(schema.properties ?? {}, 'mode'), false)
-    assert.equal(tool.inputSchema.safeParse({
-      sourceType: 'path',
-      sourceValue: 'secret.pdf',
-    }).success, false)
-    assert.equal(tool.inputSchema.safeParse({
-      sourceType: 'attachment',
-      sourceValue: 'not-an-attachment-id',
-    }).success, false)
-  })
-
   it('所有模型共享扁平来源契约，项目路径仍进入权限提取', () => {
     const tool = createReadPdfTool({
       attachmentDirectory: 'unused',
       sessionId: SESSION_ID,
       processor: fakeProcessor({ mode: 'text', pageCount: 1, pages: [] }),
       supportsVisual: false,
-      supportsProjectPaths: true,
       resolveAttachment: () => null,
     })
     const input = tool.inputSchema.parse({

@@ -126,7 +126,7 @@ function createSession(model: MockLanguageModelV4, events: CoreEvent[]): AgentSe
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
   })

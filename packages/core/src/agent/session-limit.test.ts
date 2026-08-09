@@ -160,7 +160,6 @@ const probeTool = buildTool({
   inputSchema: z.object({ value: z.number() }),
   isReadOnly: true,
   kind: 'read',
-  availableWithoutProject: true,
   async execute(input) {
     return { data: `ok-${input.value}`, isError: false }
   },
@@ -174,7 +173,7 @@ function createSession(model: MockLanguageModelV4): {
   const session = new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
   })

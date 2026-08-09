@@ -62,7 +62,7 @@ describe('CaptureScreenshot Agent 链路', () => {
     assert.throws(() => schema.parse({ target: 'region', detail: 'high' }), /region/)
   })
 
-  it('纯聊天视觉 Main 可截图，首次隐私审批记住后形成截图—再截图闭环', async () => {
+  it('受管默认工作区的视觉 Main 可截图，首次隐私审批记住后形成截图—再截图闭环', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-'))
     try {
       const store = new SessionStore(root)
@@ -94,7 +94,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         captureScreenshot: async (request) => {
           capturedTargets.push(request.target)
@@ -143,7 +143,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         captureScreenshot: async () => {
           captures++
@@ -195,7 +195,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         captureScreenshot: async (request) => {
           captures++
@@ -254,7 +254,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model, true, 'openai-chat'),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         captureScreenshot: async () => ({
           name: 'screen.png',
@@ -307,7 +307,7 @@ describe('CaptureScreenshot Agent 链路', () => {
         model: modelEntry(model, setup.vision),
         providerConfig: { apiKey: 'test' },
         promptContext: {
-          projectDir: null,
+          projectDir: process.cwd(),
           osPlatform: 'win32',
           ...(setup.discussion
             ? { discussion: { agentId: 'B' as const, scratchDir: process.cwd() } }

@@ -348,11 +348,7 @@ export class AgentSession {
       )
     }
     // 讨论阶段的会话不做检查点（不写项目，无需快照）
-    if (
-      options.promptContext.projectDir &&
-      options.sessionRecorder &&
-      !options.promptContext.discussion
-    ) {
+    if (options.sessionRecorder && !options.promptContext.discussion) {
       this.checkpoints = new CheckpointManager({
         sessionDir: options.sessionRecorder.checkpointDirectory,
         sessionId: options.sessionRecorder.sessionId,
@@ -2034,7 +2030,7 @@ export class AgentSession {
     }
   }
 
-  /** 包装工具集；无项目时只开放显式声明的控制面工具。 */
+  /** 包装当前角色可用的完整工具集；权限档位只在调用边界判定，不改变模型工具目录。 */
   private buildToolSet(
     abortSignal: AbortSignal,
     planExecutionEngaged: boolean,
@@ -2098,14 +2094,12 @@ export class AgentSession {
       && !this.options.promptContext.discussion
       && !this.protocolRound
         ? [
-            ...(projectDir
-              ? [createViewImageTool({
-                  attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
-                  sessionId: this.options.sessionRecorder.sessionId,
-                  supportsOriginalDetail:
-                    model.capabilities.supportsOriginalImageDetail === true,
-                })]
-              : []),
+            createViewImageTool({
+              attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+              sessionId: this.options.sessionRecorder.sessionId,
+              supportsOriginalDetail:
+                model.capabilities.supportsOriginalImageDetail === true,
+            }),
             ...(this.options.captureScreenshot
               ? [createCaptureScreenshotTool({
                   attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
@@ -2128,7 +2122,6 @@ export class AgentSession {
             sessionId: this.options.sessionRecorder.sessionId,
             processor: this.options.pdfProcessor,
             supportsVisual: model.capabilities.supportsImageInput,
-            supportsProjectPaths: Boolean(projectDir),
             resolveAttachment: (attachmentId) => {
               const attachment = this.pdfAttachmentById(attachmentId)
               return attachment
@@ -2146,8 +2139,7 @@ export class AgentSession {
           })]
         : []
     const officeVisualTools: ToolDefinition[] =
-      projectDir
-      && this.options.officeProcessor
+      this.options.officeProcessor
       && model.capabilities.supportsImageInput
       && this.options.sessionRecorder
       && !this.options.promptContext.discussion
@@ -2158,20 +2150,15 @@ export class AgentSession {
             processor: this.options.officeProcessor,
           })]
         : []
-    const availableDefs: ToolDefinition[] = projectDir
-      ? [
-          ...(BUILTIN_TOOLS as ToolDefinition[]),
-          ...imageTools,
-          ...auxiliaryImageTools,
-          ...pdfTools,
-          ...officeVisualTools,
-          ...controlTools,
-        ]
-      : [...imageTools, ...auxiliaryImageTools, ...pdfTools, ...controlTools]
-          .filter((tool) => tool.availableWithoutProject)
-    const defs = availableDefs
-    const toolProjectDir =
-      projectDir ?? this.options.promptContext.discussion?.scratchDir ?? process.cwd()
+    const defs: ToolDefinition[] = [
+      ...(BUILTIN_TOOLS as ToolDefinition[]),
+      ...imageTools,
+      ...auxiliaryImageTools,
+      ...pdfTools,
+      ...officeVisualTools,
+      ...controlTools,
+    ]
+    const toolProjectDir = projectDir
     if (defs.length === 0) return undefined
 
     const { emit } = this.options

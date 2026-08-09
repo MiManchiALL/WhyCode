@@ -16,7 +16,6 @@ const controlTool = buildTool({
   inputSchema: z.object({}),
   isReadOnly: false,
   kind: 'control',
-  availableWithoutProject: true,
   async execute() {
     return { data: 'ok', isError: false }
   },
@@ -107,7 +106,6 @@ const projectProcessTool = buildTool({
   inputSchema: z.object({}),
   isReadOnly: false,
   kind: 'execute',
-  availableWithoutProject: true,
   initialApprovalReason: '项目配置会启动外部进程',
   async execute() {
     return { data: 'ok', isError: false }
@@ -132,36 +130,6 @@ describe('统一权限决策', () => {
         reason: '当前为只读模式，不允许修改或执行',
       })
     }
-  })
-
-  it('无项目工具仍经过档位判定，首次审批不能覆盖只读硬拒绝', () => {
-    const context = createPermissionContext(null)
-    context.mode = 'readonly'
-    assert.deepEqual(checkToolAuthorization(projectProcessTool, {}, context), {
-      behavior: 'deny',
-      reason: '当前为只读模式，不允许修改或执行',
-    })
-
-    context.mode = 'default'
-    assert.deepEqual(checkToolAuthorization(projectProcessTool, {}, context), {
-      behavior: 'ask',
-      reason: '项目配置会启动外部进程',
-      suggestion: { kind: 'allow-tool', toolName: projectProcessTool.name },
-    })
-
-    context.mode = 'auto'
-    assert.deepEqual(checkToolAuthorization(projectProcessTool, {}, context), {
-      behavior: 'allow',
-    })
-
-    assert.deepEqual(
-      checkToolAuthorization(
-        { ...privacyPathReadTool, availableWithoutProject: true },
-        { path: 'D:\\outside\\screen.png' },
-        context,
-      ),
-      { behavior: 'deny', reason: '当前没有工作文件夹，不能访问本地路径' },
-    )
   })
 
   it('默认与自动编辑档的项目外副作用只生成一项路径审批', () => {

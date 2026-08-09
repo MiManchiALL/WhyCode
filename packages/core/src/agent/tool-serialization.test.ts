@@ -20,7 +20,6 @@ describe('工具副作用串行', () => {
       inputSchema: z.object({ value: z.number() }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       async execute({ value }) {
         active++
         maxActive = Math.max(maxActive, active)
@@ -35,7 +34,7 @@ describe('工具副作用串行', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: () => {},
       requestApproval: async () => ({ approved: false }),
     })
@@ -61,7 +60,6 @@ describe('工具副作用串行', () => {
         inputSchema: z.object({}),
         isReadOnly: false,
         kind: 'control',
-        availableWithoutProject: true,
         requiresStandaloneStep: true,
         async execute() {
           runs.push('standalone')
@@ -75,7 +73,6 @@ describe('工具副作用串行', () => {
         inputSchema: z.object({}),
         isReadOnly: false,
         kind: 'control',
-        availableWithoutProject: true,
         async execute() {
           runs.push('normal')
           return { data: 'normal-ok', isError: false }
@@ -87,7 +84,7 @@ describe('工具副作用串行', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         emit: (event) => events.push(event),
         requestApproval: async () => ({ approved: false }),
       })
@@ -116,7 +113,6 @@ describe('工具副作用串行', () => {
       inputSchema: z.object({ value: z.number() }),
       isReadOnly: true,
       kind: 'read',
-      availableWithoutProject: true,
       initialApprovalReason: '需要首次隐私审批',
       async execute({ value }) {
         return { data: `ok-${value}`, isError: false }
@@ -129,7 +125,7 @@ describe('工具副作用串行', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: () => {},
       requestApproval: async () => {
         approvals++
@@ -319,7 +315,6 @@ describe('工具副作用串行', () => {
       inputSchema: z.object({ value: z.number().default(1) }),
       isReadOnly: false,
       kind: 'edit',
-      availableWithoutProject: true,
       async execute({ value }) {
         return { data: `edit-${value}`, isError: false }
       },
@@ -331,7 +326,6 @@ describe('工具副作用串行', () => {
       inputSchema: z.object({ value: z.number().default(1) }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       async execute({ value }) {
         return { data: `control-${value}`, isError: false }
       },
@@ -345,7 +339,7 @@ describe('工具副作用串行', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: () => {},
       requestApproval: async () => ({ approved: true }),
       scheduleProjectMutation: async (mutation, _signal, operation) => {

@@ -128,7 +128,6 @@ function timeProbe(endsTurnOnSuccess = false) {
     inputSchema: z.object({}),
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     endsTurnOnSuccess,
     async execute() {
       return { data: 'probe-ok', isError: false }
@@ -143,7 +142,7 @@ function createSession(
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     sessionRecorder: recorder,
     emit: () => {},
     requestApproval: async () => ({ approved: false }),
@@ -154,7 +153,7 @@ function createMemorySession(model: MockLanguageModelV4): AgentSession {
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit: () => {},
     requestApproval: async () => ({ approved: false }),
   })

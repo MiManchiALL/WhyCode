@@ -56,7 +56,7 @@ describe('ReadPdf Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         emit: () => {},
@@ -106,7 +106,7 @@ describe('ReadPdf Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model, true),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         emit: () => {},
@@ -154,7 +154,7 @@ describe('ReadPdf Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model, true),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         emit: (event) => {
@@ -205,7 +205,7 @@ describe('ReadPdf Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model, true),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         emit: () => {},
@@ -240,7 +240,7 @@ describe('ReadPdf Agent 链路', () => {
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
       promptContext: {
-        projectDir: null,
+        projectDir: process.cwd(),
         osPlatform: 'win32',
         discussion: { agentId: 'B', scratchDir: process.cwd() },
       },
@@ -360,7 +360,7 @@ function sessionThatProbesUnavailablePdf(
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     sessionRecorder: journal,
     pdfProcessor: processor,
     emit: () => {},

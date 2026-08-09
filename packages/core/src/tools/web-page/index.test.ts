@@ -219,7 +219,7 @@ describe('网页读取工具契约', () => {
     })
   })
 
-  it('两个工具都可在无项目主会话使用，只有联网读取首次提示隐私风险', () => {
+  it('两个工具都可在受管默认工作区使用，只有联网读取首次提示隐私风险', () => {
     const fetchTool = createWebFetchTool({ fetchPage: async () => {
       throw new WebPageError('unused')
     } })
@@ -228,8 +228,6 @@ describe('网页读取工具契约', () => {
     } })
     assert.equal(fetchTool.name, WEB_FETCH_TOOL_NAME)
     assert.equal(findTool.name, WEB_FIND_TOOL_NAME)
-    assert.equal(fetchTool.availableWithoutProject, true)
-    assert.equal(findTool.availableWithoutProject, true)
     assert.match(fetchTool.initialApprovalReason ?? '', /公网 IP/)
     assert.match(fetchTool.prompt, /普通 HTTP\/HTTPS URL/)
     assert.match(fetchTool.prompt, /先用本工具尝试公开读取/)

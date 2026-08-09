@@ -36,9 +36,13 @@ describe('协议回合终止语义', () => {
       true,
     )
     const tools = model.doStreamCalls[0]!.tools ?? []
-    assert.equal(tools.length, 1)
-    assert.equal(tools[0]!.type, 'function')
-    if (tools[0]!.type === 'function') assert.equal(tools[0]!.name, 'SubmitProtocolOutput')
+    const toolNames = tools.flatMap((tool) => tool.type === 'function' ? [tool.name] : [])
+    assert.equal(toolNames.includes('ReadFile'), true)
+    assert.equal(toolNames.includes('MainOnlyProbe'), false)
+    assert.equal(
+      toolNames.filter((name) => name === 'SubmitProtocolOutput').length,
+      1,
+    )
   })
 
   it('协议校验失败时继续调用模型修正', async () => {
@@ -110,7 +114,7 @@ function createSession(model: MockLanguageModelV4): {
   const session = new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     mainTools: [
       buildTool({
         name: 'MainOnlyProbe',
@@ -119,7 +123,6 @@ function createSession(model: MockLanguageModelV4): {
         inputSchema: z.object({}),
         isReadOnly: true,
         kind: 'read',
-        availableWithoutProject: true,
         async execute() {
           return { data: '不应执行', isError: false }
         },

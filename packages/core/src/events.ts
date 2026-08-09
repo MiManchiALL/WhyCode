@@ -325,7 +325,7 @@ export type CoreCommand =
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 手动触发上下文压缩（仅空闲时） */
   | { type: 'compact' }
-  /** 开关多 Agent 协商（B/C 必须已选择可用的统一模型连接；纯聊天也可使用） */
+  /** 开关多 Agent 协商（B/C 必须已选择可用的统一模型连接）。 */
   | { type: 'set-consensus'; enabled: boolean }
 
 /** 事件回调签名：宿主注入给 core 的事件出口 */

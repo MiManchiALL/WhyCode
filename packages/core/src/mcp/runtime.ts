@@ -360,7 +360,6 @@ export class McpStepBinding {
       }),
       isReadOnly: false,
       kind: 'control',
-      availableWithoutProject: true,
       initialApprovalReason: projectTrustRequired
         ? `项目中的 .whycode/mcp.json 将启动或连接外部服务（${
             this.runtime.projectServerNames().join('、')
@@ -410,7 +409,6 @@ export class McpStepBinding {
       inputSchema,
       isReadOnly: false,
       kind: 'execute',
-      availableWithoutProject: true,
       initialApprovalReason: `外部 MCP 工具 ${binding.tool.title} 将在服务器“${binding.tool.serverName}”上执行操作`,
       execute: async (input, ctx) => {
         const result = await runtime.connectionManager().callTool(

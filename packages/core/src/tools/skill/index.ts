@@ -29,7 +29,6 @@ export function createSkillTool(snapshot: SkillTurnSnapshot) {
     inputSchema: skillInputSchema,
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     async execute(input) {
       const skill = snapshot.entries.find((entry) => entry.id === input.skillId)
       if (!skill) return { data: 'Skill 不在当前根任务的目录快照中', isError: true }

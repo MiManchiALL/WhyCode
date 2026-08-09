@@ -9,7 +9,7 @@ export interface PeerAgentOptions {
   agentId: ConsensusAgentId
   model: ModelEntry
   providerConfig: ProviderConfig
-  projectDir: string | null
+  projectDir: string
   scratchDir: string
   osPlatform: NodeJS.Platform
   homeDir?: string

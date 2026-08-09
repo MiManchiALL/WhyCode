@@ -47,7 +47,7 @@ export function requiresFullConsensus(userText: string): boolean {
 export interface ConsensusCoordinatorOptions {
   /** Main = 用户对话的既有会话（最终执行者，保留完整上下文） */
   mainSession: AgentSession
-  projectDir: string | null
+  projectDir: string
   /** scratch 存储根（宿主注入，如 userData/scratch） */
   scratchRoot: string
   conversationId: string

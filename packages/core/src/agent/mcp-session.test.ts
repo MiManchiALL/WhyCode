@@ -61,7 +61,7 @@ describe('AgentSession MCP 生命周期', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mcpRuntime: runtime,
       sessionRecorder: recorder,
       emit: () => {},
@@ -160,7 +160,7 @@ describe('AgentSession MCP 生命周期', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mainTools: [createWebSearchTool({
         search: async () => ({
           results: [{

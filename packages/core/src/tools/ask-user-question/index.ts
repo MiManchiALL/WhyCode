@@ -35,7 +35,6 @@ export function createAskUserQuestionTool(
     inputSchema,
     isReadOnly: false,
     kind: 'control',
-    availableWithoutProject: true,
     endsTurnOnSuccess: true,
     turnEndReasonOnSuccess: 'waiting-user',
     async execute(input) {

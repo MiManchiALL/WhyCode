@@ -4,10 +4,34 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import type { ModelEntry } from '../providers/registry.ts'
+import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
 import { buildTool } from '../tools/tool.ts'
+import { WRITE_FILE_TOOL_NAME } from '../tools/write-edit/index.ts'
 import { AgentSession } from './session.ts'
 
 describe('工具 Provider 投影', () => {
+  it('只读档仍向模型提供完整内置工具目录，由调用边界拒绝副作用', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        const names = new Set((options.tools ?? []).flatMap((tool) =>
+          tool.type === 'function' ? [tool.name] : []))
+        assert.equal(names.has(WRITE_FILE_TOOL_NAME), true)
+        assert.equal(names.has(BASH_TOOL_NAME), true)
+        return finalStep()
+      },
+    })
+    const session = new AgentSession({
+      model: modelEntry(model, 'openai-responses'),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+      emit: () => {},
+      requestApproval: async () => ({ approved: false }),
+    })
+    session.setPermissionMode('readonly')
+
+    assert.equal(await session.handleUserMessage('检查只读工具目录'), 'completed')
+  })
+
   it('仅在 OpenAI Responses 边界显式关闭函数工具 strict 默认值', async () => {
     const probe = buildTool({
       name: 'OptionalInputProbe',
@@ -16,7 +40,6 @@ describe('工具 Provider 投影', () => {
       inputSchema: z.object({ required: z.string(), optional: z.string().optional() }),
       isReadOnly: true,
       kind: 'read',
-      availableWithoutProject: true,
       async execute() {
         return { data: 'ok', isError: false }
       },
@@ -39,7 +62,7 @@ describe('工具 Provider 投影', () => {
       const session = new AgentSession({
         model: modelEntry(model, protocol),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: null, osPlatform: 'win32' },
+        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         emit: () => {},
         requestApproval: async () => ({ approved: false }),
       })
@@ -57,7 +80,6 @@ describe('工具 Provider 投影', () => {
       inputSchema: z.object({ value: z.string() }),
       isReadOnly: true,
       kind: 'read',
-      availableWithoutProject: true,
       async execute(input) {
         return { data: `local:${input.value}`, isError: false }
       },
@@ -75,7 +97,7 @@ describe('工具 Provider 投影', () => {
     const session = new AgentSession({
       model: modelEntry(model, 'openai-responses'),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: () => {},
       requestApproval: async () => ({ approved: false }),
     })

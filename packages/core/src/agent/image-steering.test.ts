@@ -240,7 +240,7 @@ function createSession(
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     sessionRecorder: journal,
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),

@@ -21,7 +21,6 @@ describe('运行中模型选择', () => {
       inputSchema: z.object({}),
       isReadOnly: true,
       kind: 'control',
-      availableWithoutProject: true,
       async execute() {
         await session.setModelSelection(nextEntry, { apiKey: 'next' }, 'default')
         return { data: 'switched', isError: false }
@@ -33,7 +32,7 @@ describe('运行中模型选择', () => {
     session = new AgentSession({
       model: modelEntry('test:current-model', currentModel),
       providerConfig: { apiKey: 'current' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: () => {},
       requestApproval: async () => ({ approved: false }),
     })

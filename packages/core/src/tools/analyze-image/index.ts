@@ -33,7 +33,6 @@ export function createAnalyzeImageTool(options: AnalyzeImageToolOptions) {
     }),
     isReadOnly: true,
     kind: 'read',
-    availableWithoutProject: true,
     async execute(input, ctx) {
       const attachments: ImageAttachment[] = []
       for (const attachmentId of input.attachmentIds) {

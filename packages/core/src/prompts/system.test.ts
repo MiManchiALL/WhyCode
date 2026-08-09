@@ -5,7 +5,7 @@ import { requiresFullConsensus } from '../consensus/orchestrator.ts'
 import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
-  it('打开项目时仍允许处理非编程问题', () => {
+  it('普通执行提示词保持主动协作、精确工具路由和最小改动约束', () => {
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
@@ -13,20 +13,30 @@ describe('通用 Agent 提示约束', () => {
     })
 
     assert.match(prompt, /通用型桌面 AI Agent/)
+    assert.match(prompt, /持续推进任务，直到用户目标完成/)
+    assert.match(
+      prompt,
+      /当用户与你交谈时，他们应该感觉到自己在与另一个主体性接触，这正是与你交谈感觉真实而独特的原因。/,
+    )
     assert.doesNotMatch(prompt, /当前日期|当前本机时间/)
-    assert.match(prompt, /尤其擅长代码编写、代码理解、调试及其他编程相关任务/)
-    assert.doesNotMatch(prompt, /软件开发是你的核心专长/)
-    assert.match(prompt, /非项目问题直接回答/)
-    assert.doesNotMatch(prompt, /不因当前打开了代码项目而拒绝生活、写作、规划或其他非编程问题/)
+    assert.doesNotMatch(prompt, /非项目问题直接回答|无故读取项目/)
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
-    assert.match(prompt, /项目外文件同样使用专用文件工具/)
-    assert.match(prompt, /不要改用 RunCommand 绕过路径边界/)
-    assert.match(prompt, /命令副作用不提供回滚/)
-    assert.match(prompt, /多处相关精确替换用 BatchEdit/)
+    assert.match(prompt, /修改或评价代码前先读取相关文件和调用点/)
+    assert.match(
+      prompt,
+      /相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟/,
+    )
+    assert.match(prompt, /一次调用可提交一处或多处精确替换/)
+    assert.doesNotMatch(prompt, /BatchEdit/)
     assert.match(prompt, /DeleteFile\/MoveFile/)
+    assert.match(prompt, /文件副作用没有精确检查点/)
     assert.match(prompt, /长安装、构建和测试使用 StartCommand 的默认等待模式/)
     assert.match(prompt, /开发服务器、watch.*detach=true/)
-    assert.doesNotMatch(prompt, /只讨论与用户项目和编程相关/)
+    assert.match(prompt, /用户只要求分析、解释、审查或诊断时，只给出分析/)
+    assert.match(prompt, /不要原样重试，也不要因一次失败放弃仍可行的方案/)
+    assert.match(prompt, /不要额外扩展功能、顺手重构或添加配置/)
+    assert.match(prompt, /发现陌生文件、分支、锁或配置时先调查来源/)
+    assert.match(prompt, /区分已观察事实、推断和准备执行的动作/)
   })
 
   it('系统提示词不含动态时间并保持稳定', () => {
@@ -68,29 +78,34 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /未限定在临时工作区内的命令会被工具层拒绝/)
   })
 
-  it('无项目讨论阶段保留协议能力但不声称拥有文件工具', () => {
+  it('讨论阶段始终获得项目只读边界与独立临时工作区', () => {
     const prompt = buildSystemPrompt({
-      projectDir: null,
+      projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
       discussion: { agentId: 'B', scratchDir: 'C:\\scratch' },
     })
 
-    assert.match(prompt, /可以正常处理通用任务/)
     assert.match(prompt, /必须调用 SubmitProtocolOutput/)
-    assert.match(prompt, /不提供文件或命令工具/)
-    assert.doesNotMatch(prompt, /原项目目录\*\*只读/)
+    assert.match(prompt, /原项目目录\*\*只读/)
+    assert.match(prompt, /C:\\scratch/)
     assert.doesNotMatch(prompt, /CreateTaskPlan/)
   })
 
   it('只有 Main 正常执行阶段获得长任务计划规则', () => {
-    const prompt = buildSystemPrompt({ projectDir: null, osPlatform: 'win32' })
+    const prompt = buildSystemPrompt({ projectDir: 'C:\\work\\demo', osPlatform: 'win32' })
 
+    assert.match(prompt, /# 环境/)
+    assert.match(prompt, /# 工具使用/)
+    assert.match(prompt, /# 任务计划/)
+    assert.doesNotMatch(prompt, /纯对话模式|当前未打开项目目录/)
     assert.match(prompt, /CreateTaskPlan/)
     assert.match(prompt, /ResumeTaskPlan/)
     assert.match(prompt, /ReplaceTaskPlan/)
     assert.match(prompt, /UpdateTaskItem/)
     assert.match(prompt, /最终验证通过/)
     assert.match(prompt, /始终优先理解最新真实用户消息/)
+    assert.match(prompt, /以最新摘要、TaskState 和最近消息作为连续上下文/)
+    assert.match(prompt, /不要重做已经完成的工作/)
     assert.match(prompt, /none.*blocked.*engaged.*dormant/)
     assert.match(prompt, /steering/)
     assert.match(prompt, /暂缓时自然结束 run/)

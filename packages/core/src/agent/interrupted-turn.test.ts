@@ -45,7 +45,7 @@ describe('用户中断后的新回合', () => {
     const model = new MockLanguageModelV4({
       doStream: async (options) => abortableTextStep(options.abortSignal, '已经展示的部分'),
     })
-    const session = createMemorySession(model, null, (event) => events.push(event))
+    const session = createMemorySession(model, undefined, (event) => events.push(event))
 
     const running = session.handleUserMessage('开始回答')
     await waitFor(() => events.some((event) => event.type === 'text-delta'))
@@ -478,7 +478,7 @@ describe('用户中断后的新回合', () => {
     const events: CoreEvent[] = []
     let abortOnToolEnd = true
     let session!: AgentSession
-    session = createMemorySession(model, null, (event) => {
+    session = createMemorySession(model, undefined, (event) => {
       events.push(event)
       if (event.type === 'tool-end' && abortOnToolEnd) {
         abortOnToolEnd = false
@@ -552,7 +552,7 @@ describe('用户中断后的新回合', () => {
     const session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: false }),
     })
@@ -950,7 +950,7 @@ describe('用户中断后的新回合', () => {
     session = new AgentSession({
       model: modelEntry(model),
       providerConfig: { apiKey: 'test' },
-      promptContext: { projectDir: null, osPlatform: 'win32' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: (event) => {
         events.push(event)
         if (event.type === 'user-question') session.handleUserMessage('TTL是什么意思')
@@ -1175,7 +1175,7 @@ function createSession(
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
-    promptContext: { projectDir: null, osPlatform: 'win32' },
+    promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     sessionRecorder: recorder,
     emit,
     requestApproval: async () => ({ approved: false }),
@@ -1184,7 +1184,7 @@ function createSession(
 
 function createMemorySession(
   model: MockLanguageModelV4,
-  projectDir: string | null = null,
+  projectDir: string = process.cwd(),
   emit: (event: CoreEvent) => void = () => {},
 ): AgentSession {
   return new AgentSession({
