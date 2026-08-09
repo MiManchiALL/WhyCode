@@ -30,6 +30,8 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(prompt, /BatchEdit/)
     assert.match(prompt, /DeleteFile\/MoveFile/)
     assert.match(prompt, /文件副作用没有精确检查点/)
+    assert.match(prompt, /全部工具结束后再交付完整、自包含的最终回答/)
+    assert.match(prompt, /不用“见上文”或前序步骤中的正文代替最终结果/)
     assert.match(prompt, /长安装、构建和测试使用 StartCommand 的默认等待模式/)
     assert.match(prompt, /开发服务器、watch.*detach=true/)
     assert.match(prompt, /用户只要求分析、解释、审查或诊断时，只给出分析/)

@@ -50,7 +50,17 @@ export type Block =
       pdfAttachments?: PdfAttachment[]
       skills?: SkillSummary[]
     }
-  | { kind: 'text'; id: string; text: string; timestamp?: string }
+  | {
+      kind: 'text'
+      id: string
+      text: string
+      /**
+       * pending：当前模型 step 尚未提交；activity：该 step 还调用了工具；
+       * final：已确认该 step 只交付正文，可作为整轮最终回答展示。
+       */
+      phase: 'pending' | 'activity' | 'final'
+      timestamp?: string
+    }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
   | {
       kind: 'work-duration'
@@ -182,7 +192,7 @@ export function applyCoreEvent(
   timestamp?: string,
 ): ConversationState {
   if (event.type === 'step-committed') {
-    return state.pendingStep ? { ...state, pendingStep: null } : state
+    return commitPendingStep(state)
   }
   if (event.type === 'step-output-retained') return retainStepOutput(state)
   if (event.type === 'step-discarded') {
@@ -191,7 +201,7 @@ export function applyCoreEvent(
       : state
   }
   const current = isStepScopedCoreEvent(event) && !state.pendingStep
-    ? { ...state, pendingStep: snapshotConversation(state) }
+    ? beginPendingStep(state)
     : state
   return applyStableCoreEvent(current, event, timestamp)
 }
@@ -242,7 +252,7 @@ function applyStableCoreEvent(
     case 'thinking-end':
       return endThinking(state, event.durationMs)
     case 'work-finished': {
-      const completedState = completeTerminalResponse(state, timestamp)
+      const completedState = completeTerminalResponse(state, event.outcome, timestamp)
       const durationId = nextBlockId(state)
       const next = appendBlock(completedState, {
         kind: 'work-duration',
@@ -375,9 +385,41 @@ function snapshotConversation(state: ConversationState): PendingStepSnapshot {
   }
 }
 
+/**
+ * 一个已提交的纯文本 step 才能成为最终回答。只要同一步出现工具，正文就是
+ * 工作过程的一部分；不能根据“当前最后一块恰好是文本”提前猜测模型已经结束。
+ */
+function commitPendingStep(state: ConversationState): ConversationState {
+  const snapshot = state.pendingStep
+  if (!snapshot) return state
+  const stepBlocks = state.blocks.slice(snapshot.blocks.length)
+  const phase = stepBlocks.some((block) => block.kind === 'tool')
+    ? 'activity'
+    : 'final'
+  return {
+    ...state,
+    blocks: classifyPendingText(state.blocks, phase, snapshot.blocks.length),
+    pendingStep: null,
+  }
+}
+
+/** 后续 step 到达说明上一段纯文本并非整轮终点，恢复为工作过程。 */
+function beginPendingStep(state: ConversationState): ConversationState {
+  const current = {
+    ...state,
+    blocks: demoteUnfinishedFinalText(state.blocks),
+  }
+  return { ...current, pendingStep: snapshotConversation(current) }
+}
+
 function retainStepOutput(state: ConversationState): ConversationState {
   const snapshot = state.pendingStep
   if (!snapshot) return state
+  const retainedPhase = state.blocks
+    .slice(snapshot.blocks.length)
+    .some((block) => block.kind === 'tool')
+    ? 'activity'
+    : 'final'
   const stableById = new Map(snapshot.blocks.map((block) => [block.id, block]))
   let retained: ConversationState = { ...state, ...snapshot, pendingStep: null }
   for (const block of state.blocks) {
@@ -386,7 +428,7 @@ function retainStepOutput(state: ConversationState): ConversationState {
     const text = stable?.kind === 'text'
       ? block.text.slice(stable.text.length)
       : block.text
-    if (text) retained = appendText(retained, text, block.timestamp)
+    if (text) retained = appendText(retained, text, block.timestamp, retainedPhase)
   }
   return retained
 }
@@ -477,7 +519,7 @@ export function toggleExpanded(state: ConversationState, id: string): Conversati
 export function isTerminalResponseBlock(
   block: Block | undefined,
 ): block is Extract<Block, { kind: 'text' | 'error' }> {
-  return block?.kind === 'text' || block?.kind === 'error'
+  return (block?.kind === 'text' && block.phase === 'final') || block?.kind === 'error'
 }
 
 /** 与会话投影使用同一工作区身份：上一条时长之后，从本轮首条用户消息开始。 */
@@ -632,9 +674,14 @@ function applyCheckpointRestored(
   )
 }
 
-function appendText(state: ConversationState, text: string, timestamp?: string): ConversationState {
+function appendText(
+  state: ConversationState,
+  text: string,
+  timestamp?: string,
+  phase: Extract<Block, { kind: 'text' }>['phase'] = 'pending',
+): ConversationState {
   const last = state.blocks.at(-1)
-  if (last?.kind === 'text') {
+  if (last?.kind === 'text' && last.phase === phase) {
     return {
       ...state,
       blocks: [...state.blocks.slice(0, -1), {
@@ -648,21 +695,78 @@ function appendText(state: ConversationState, text: string, timestamp?: string):
     kind: 'text',
     id: nextBlockId(state),
     text,
+    phase,
     ...(timestamp ? { timestamp } : {}),
   })
 }
 
 function completeTerminalResponse(
   state: ConversationState,
+  outcome: Extract<Block, { kind: 'work-duration' }>['outcome'],
   timestamp?: string,
 ): ConversationState {
-  if (!timestamp) return state
-  const last = state.blocks.at(-1)
-  if (last?.kind !== 'text') return state
-  return {
-    ...state,
-    blocks: [...state.blocks.slice(0, -1), { ...last, timestamp }],
+  const workStart = state.blocks.findLastIndex((block) => block.kind === 'work-duration') + 1
+  const blocks = outcome === 'completed'
+    ? classifyCompletedWorkText(state.blocks)
+    : classifyPendingText(state.blocks, 'activity', workStart)
+  if (!timestamp) return { ...state, blocks }
+  return { ...state, blocks: timestampFinalResponse(blocks, timestamp, workStart) }
+}
+
+function classifyPendingText(
+  blocks: readonly Block[],
+  phase: Extract<Block, { kind: 'text' }>['phase'],
+  fromIndex = 0,
+): Block[] {
+  return blocks.map((block, index) =>
+    index >= fromIndex && block.kind === 'text' && block.phase === 'pending'
+      ? { ...block, phase }
+      : block)
+}
+
+/**
+ * 重放时间线没有瞬时 step-committed 事件，因此在 work-finished 的稳定边界，
+ * 只把末尾连续正文（以及相邻错误）确认为最终回答，其余 pending 正文归入过程。
+ */
+function classifyCompletedWorkText(blocks: readonly Block[]): Block[] {
+  const workStart = blocks.findLastIndex((block) => block.kind === 'work-duration') + 1
+  let terminalStart = blocks.length
+  for (let index = blocks.length - 1; index >= workStart; index--) {
+    const block = blocks[index]
+    if (block?.kind === 'error' || block?.kind === 'text') {
+      terminalStart = index
+      continue
+    }
+    break
   }
+  return blocks.map((block, index) => {
+    if (index < workStart || block.kind !== 'text' || block.phase !== 'pending') return block
+    return { ...block, phase: index >= terminalStart ? 'final' : 'activity' }
+  })
+}
+
+function timestampFinalResponse(
+  blocks: readonly Block[],
+  timestamp: string,
+  workStart: number,
+): Block[] {
+  let terminalStart = blocks.length
+  for (let index = blocks.length - 1; index >= workStart; index--) {
+    if (!isTerminalResponseBlock(blocks[index])) break
+    terminalStart = index
+  }
+  return blocks.map((block, index) =>
+    index >= terminalStart && block.kind === 'text' && block.phase === 'final'
+      ? { ...block, timestamp }
+      : block)
+}
+
+function demoteUnfinishedFinalText(blocks: readonly Block[]): Block[] {
+  const boundary = blocks.findLastIndex((block) => block.kind === 'work-duration')
+  return blocks.map((block, index) =>
+    index > boundary && block.kind === 'text' && block.phase === 'final'
+      ? { ...block, phase: 'activity' }
+      : block)
 }
 
 function appendThinking(state: ConversationState, text: string): ConversationState {

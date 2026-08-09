@@ -12,6 +12,7 @@ import {
   resumeTargetCommitted,
   toggleExpanded,
 } from './conversation-state.ts'
+import { conversationSections } from './conversation-sections.ts'
 
 describe('会话界面时间线重建', () => {
   it('实时步骤丢弃时撤销协议文本，重试答复提交后只保留稳定内容', () => {
@@ -57,7 +58,107 @@ describe('会话界面时间线重建', () => {
       finalBlock?.kind === 'text' ? finalBlock.text : null,
       '当前受版本控制的代码共 48,242 行。',
     )
+    assert.equal(finalBlock?.kind === 'text' ? finalBlock.phase : null, 'final')
     assert.doesNotMatch(JSON.stringify(state.blocks), /out:default_api/)
+  })
+
+  it('中途正文与同一步工具始终属于展开过程，纯文本 step 提交后才收起最终回答', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '汇总四个项目', startsTurn: true },
+    ])
+    state = applyCoreEvent(state, { type: 'thinking-delta', text: '读取源码' })
+    state = applyCoreEvent(state, { type: 'thinking-end', durationMs: 500 })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '以下是完整汇总。' })
+
+    const pendingText = state.blocks.at(-1)
+    assert.equal(pendingText?.kind === 'text' ? pendingText.phase : null, 'pending')
+    assert.equal(conversationSections(state.blocks, 1_000).some((section) =>
+      section.kind === 'active-work'), false)
+
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'close-plan',
+      toolName: 'CloseTaskPlan',
+      input: { outcome: 'completed' },
+    })
+    state = applyCoreEvent(state, {
+      type: 'tool-end',
+      toolUseId: 'close-plan',
+      result: 'ok',
+      isError: false,
+    })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+
+    const interimText = state.blocks.find((block) => block.kind === 'text')
+    assert.equal(interimText?.kind === 'text' ? interimText.phase : null, 'activity')
+    assert.equal(conversationSections(state.blocks, 1_000).some((section) =>
+      section.kind === 'active-work'), false)
+
+    state = applyCoreEvent(state, { type: 'text-delta', text: '核心结论如下。' })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+
+    const sections = conversationSections(state.blocks, 1_000)
+    assert.equal(sections.length, 1)
+    const active = sections[0]
+    assert.equal(active?.kind, 'active-work')
+    assert.deepEqual(
+      active?.kind === 'active-work'
+        ? active.activityBlocks.filter((block) => block.kind === 'text').map((block) => block.text)
+        : [],
+      ['以下是完整汇总。'],
+    )
+    assert.deepEqual(
+      active?.kind === 'active-work'
+        ? active.finalBlocks.filter((block) => block.kind === 'text').map((block) => block.text)
+        : [],
+      ['核心结论如下。'],
+    )
+  })
+
+  it('历史重放在 work-finished 边界得到与实时 step 分类相同的最终回答', () => {
+    const state = createConversationState([
+      { type: 'user-message', text: '检查并汇总', startsTurn: true },
+      core({ type: 'text-delta', text: '先给阶段汇总。' }),
+      core({
+        type: 'tool-start',
+        toolUseId: 'verify',
+        toolName: 'ReadFile',
+        input: { path: 'README.md' },
+      }),
+      core({ type: 'tool-end', toolUseId: 'verify', result: 'ok', isError: false }),
+      core({ type: 'text-delta', text: '最终结论。' }),
+      core({ type: 'work-finished', durationMs: 1_500, outcome: 'completed' }),
+    ])
+
+    const texts = state.blocks.filter((block) => block.kind === 'text')
+    assert.deepEqual(texts.map((block) => [block.text, block.phase]), [
+      ['先给阶段汇总。', 'activity'],
+      ['最终结论。', 'final'],
+    ])
+  })
+
+  it('后续任务完成时不覆盖上一轮最终回答的完成时间', () => {
+    const state = createConversationState([
+      { type: 'user-message', text: '第一问', startsTurn: true },
+      core({ type: 'text-delta', text: '第一答' }),
+      core({ type: 'work-finished', durationMs: 500, outcome: 'completed' }),
+      { type: 'user-message', text: '第二问', startsTurn: true },
+      core({ type: 'text-delta', text: '第二答' }),
+      core({ type: 'work-finished', durationMs: 700, outcome: 'completed' }),
+    ], [
+      '2026-08-09T01:00:00.000Z',
+      '2026-08-09T01:00:01.000Z',
+      '2026-08-09T01:00:02.000Z',
+      '2026-08-09T02:00:00.000Z',
+      '2026-08-09T02:00:01.000Z',
+      '2026-08-09T02:00:02.000Z',
+    ])
+
+    const answers = state.blocks.filter((block) => block.kind === 'text')
+    assert.deepEqual(answers.map((block) => [block.text, block.timestamp]), [
+      ['第一答', '2026-08-09T01:00:02.000Z'],
+      ['第二答', '2026-08-09T02:00:02.000Z'],
+    ])
   })
 
   it('用户停止时保留当前步骤正文，但撤销同一步的推理和工具', () => {
@@ -79,6 +180,7 @@ describe('会话界面时间线重建', () => {
     assert.deepEqual(state.blocks.map((block) => block.kind), ['user', 'text'])
     const output = state.blocks.at(-1)
     assert.equal(output?.kind === 'text' ? output.text : '', '已经输出的部分')
+    assert.equal(output?.kind === 'text' ? output.phase : null, 'activity')
     assert.equal(state.pendingStep, null)
   })
 
@@ -157,6 +259,10 @@ describe('会话界面时间线重建', () => {
 
     const streamingFinal = stop(startStreamingFinal())
     assert.equal(streamingFinal.expanded.has('work-b0'), false)
+    assert.equal(
+      streamingFinal.blocks.find((block) => block.kind === 'text')?.phase,
+      'final',
+    )
 
     let manuallyExpanded = startStreamingFinal()
     manuallyExpanded = toggleExpanded(manuallyExpanded, 'work-b0')

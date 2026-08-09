@@ -56,7 +56,10 @@ describe('模型空窗反馈', () => {
       user,
       { kind: 'thinking', id: 'thinking-1', text: '分析', durationMs: null },
     ]), false)
-    assert.equal(visible([user, { kind: 'text', id: 'text-1', text: '正在输出' }]), false)
+    assert.equal(visible([
+      user,
+      { kind: 'text', id: 'text-1', text: '正在输出', phase: 'pending' },
+    ]), false)
   })
 
   it('任一并行工具仍在运行时不与工具转圈重复', () => {
