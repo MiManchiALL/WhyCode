@@ -1,6 +1,11 @@
+import { memo } from 'react'
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
 import type { ConversationSection } from './conversation-sections.ts'
+import {
+  sameConversationBlockRenderProps,
+  type ConversationBlockRenderProps,
+} from './conversation-render-cache.ts'
 import { formatFinishedWorkTime, ProcessingTime } from './processing-time.ts'
 import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 
@@ -31,17 +36,22 @@ type WorkTiming =
       outcome: 'completed' | 'stopped'
     }
 
-export function ConversationView(props: ConversationViewProps) {
+export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
   return (
     <>
       {props.sections.map((section) =>
         section.kind === 'block'
-          ? <ConversationBlock key={section.id} {...props} block={section.block} />
+          ? (
+              <ConversationBlock
+                key={section.id}
+                {...conversationBlockProps(props, section.block)}
+              />
+            )
           : <WorkSection key={section.id} {...props} section={section} />)}
       {props.showThinkingGap && <ThinkingGapIndicator />}
     </>
   )
-}
+})
 
 function WorkSection({
   section,
@@ -53,9 +63,12 @@ function WorkSection({
     && props.expandedIds.has(section.id)
   const activityId = `work-activity-${section.id}`
   return (
-    <>
+    <section className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}>
       {section.userBlocks.map((block) => (
-        <ConversationBlock key={block.id} {...props} block={block} />
+        <ConversationBlock
+          key={block.id}
+          {...conversationBlockProps(props, block)}
+        />
       ))}
       <WorkSummary
         activityId={activityId}
@@ -73,55 +86,82 @@ function WorkSection({
       {expanded && (
         <div id={activityId}>
           {section.activityBlocks.map((block) => (
-            <ConversationBlock key={block.id} {...props} block={block} />
+            <ConversationBlock
+              key={block.id}
+              {...conversationBlockProps(props, block)}
+            />
           ))}
         </div>
       )}
       {section.finalBlocks.map((block) => (
         <ConversationBlock
           key={block.id}
-          {...props}
-          block={block}
+          {...conversationBlockProps(props, block)}
+          streamingAssistantText={section.kind === 'active-work'}
           showAssistantActions={
             section.kind === 'completed-work'
             && section.duration.outcome === 'completed'
           }
         />
       ))}
-    </>
+    </section>
   )
 }
 
-function ConversationBlock({
+const ConversationBlock = memo(function ConversationBlock({
   block,
   runtimeId,
-  expandedIds,
-  editableBlockId,
+  editable,
+  expanded,
   busy,
-  checkpointRestoreAnchorIds,
-  checkpointRestoreToolUseId,
+  showCheckpointRestore,
+  checkpointRestorePending,
+  streamingAssistantText,
   onCheckpointRestoreChange,
   onEdit,
   onToggle,
-  showAssistantActions = false,
-}: ConversationViewProps & { block: Block; showAssistantActions?: boolean }) {
+  showAssistantActions,
+}: ConversationBlockRenderProps) {
   return (
     <BlockView
       runtimeId={runtimeId}
       block={block}
-      editable={block.id === editableBlockId}
-      expanded={expandedIds.has(block.id)}
+      editable={editable}
+      expanded={expanded}
       busy={busy}
-      showCheckpointRestore={
-        block.kind === 'tool' && checkpointRestoreAnchorIds.has(block.call.id)
-      }
-      checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+      showCheckpointRestore={showCheckpointRestore}
+      checkpointRestorePending={checkpointRestorePending}
+      streamingAssistantText={streamingAssistantText}
       onCheckpointRestoreChange={onCheckpointRestoreChange}
       onEdit={onEdit}
       onToggle={() => onToggle(block.id)}
       showAssistantActions={showAssistantActions}
     />
   )
+}, sameConversationBlockRenderProps)
+
+function conversationBlockProps(
+  props: ConversationViewProps,
+  block: Block,
+): ConversationBlockRenderProps {
+  const editable = block.id === props.editableBlockId
+  const showCheckpointRestore = block.kind === 'tool'
+    && props.checkpointRestoreAnchorIds.has(block.call.id)
+  return {
+    runtimeId: props.runtimeId,
+    block,
+    editable,
+    expanded: props.expandedIds.has(block.id),
+    busy: editable || showCheckpointRestore ? props.busy : false,
+    showCheckpointRestore,
+    checkpointRestorePending: block.kind === 'tool'
+      && props.checkpointRestoreToolUseId === block.call.id,
+    streamingAssistantText: false,
+    showAssistantActions: false,
+    onCheckpointRestoreChange: props.onCheckpointRestoreChange,
+    onEdit: props.onEdit,
+    onToggle: props.onToggle,
+  }
 }
 
 function WorkSummary({

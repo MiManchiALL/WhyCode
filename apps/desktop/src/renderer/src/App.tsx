@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -179,8 +179,14 @@ export function App() {
       && status !== 'error',
     onCommand: (command) => slashCommandRef.current(command),
   })
-  const sections = conversationSections(blocks, workStartedAt)
-  const checkpointRestoreAnchors = checkpointRestoreAnchorIds(view)
+  const sections = useMemo(
+    () => conversationSections(blocks, workStartedAt),
+    [blocks, workStartedAt],
+  )
+  const checkpointRestoreAnchors = useMemo(
+    () => checkpointRestoreAnchorIds(view),
+    [view.blocks, view.turnStartBlocks],
+  )
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
   const thinkingGapVisible = shouldShowThinkingGap({

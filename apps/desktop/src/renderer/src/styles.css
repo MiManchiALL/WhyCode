@@ -78,6 +78,12 @@ button:not(:disabled),
   box-shadow: 1px 2px 0 rgb(43 46 41 / 4%);
 }
 
+/* Chromium remembers the measured height and skips off-screen completed turns. */
+.wc-completed-work-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+
 .wc-shell-panel {
   overflow: hidden;
   border: 1px solid var(--wc-line);

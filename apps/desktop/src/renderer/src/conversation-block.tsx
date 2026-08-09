@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { Check, LoaderCircle, RotateCcw, X } from 'lucide-react'
 import type { Block } from './conversation-state.ts'
@@ -8,6 +8,25 @@ import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
 
+const MARKDOWN_CONTROLS = { table: { fullscreen: false } } as const
+
+const MarkdownContent = memo(function MarkdownContent({
+  text,
+  streaming,
+}: {
+  text: string
+  streaming: boolean
+}) {
+  return (
+    <Streamdown
+      mode={streaming ? 'streaming' : 'static'}
+      controls={MARKDOWN_CONTROLS}
+    >
+      {text}
+    </Streamdown>
+  )
+})
+
 export function BlockView({
   runtimeId,
   block,
@@ -15,7 +34,8 @@ export function BlockView({
   expanded,
   busy,
   showCheckpointRestore,
-  checkpointRestoreToolUseId,
+  checkpointRestorePending,
+  streamingAssistantText,
   onCheckpointRestoreChange,
   onEdit,
   onToggle,
@@ -27,7 +47,8 @@ export function BlockView({
   expanded: boolean
   busy: boolean
   showCheckpointRestore: boolean
-  checkpointRestoreToolUseId: string | null
+  checkpointRestorePending: boolean
+  streamingAssistantText: boolean
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: () => void
@@ -48,7 +69,7 @@ export function BlockView({
     return (
       <div className={`group relative max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-8' : 'mb-4'}`}>
         <div className="prose prose-sm prose-neutral max-w-none">
-          <Streamdown controls={{ table: { fullscreen: false } }}>{block.text}</Streamdown>
+          <MarkdownContent text={block.text} streaming={streamingAssistantText} />
         </div>
         {showAssistantActions ? (
           <MessageActions
@@ -147,7 +168,7 @@ export function BlockView({
             runtimeId={runtimeId}
             toolUseId={call.id}
             busy={busy}
-            pending={checkpointRestoreToolUseId === call.id}
+            pending={checkpointRestorePending}
             onPendingChange={onCheckpointRestoreChange}
           />
         )}

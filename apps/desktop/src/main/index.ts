@@ -165,6 +165,7 @@ import {
 } from './web-page/processor.ts'
 import { importWebPdfDocument } from './web-page/pdf-import.ts'
 import { installExternalWebLinkHandlers } from './external-link.ts'
+import { createRendererCrashRecoveryController } from './renderer-crash-recovery.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import {
   registerAttachmentProtocol,
@@ -279,6 +280,19 @@ function createWindow(): BrowserWindow {
   })
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error(`[renderer] 页面加载失败：${code} ${desc} ${url}`)
+  })
+  const rendererRecovery = createRendererCrashRecoveryController({
+    isShuttingDown: () => shutdownStarted,
+    isUnavailable: () => win.isDestroyed() || win.webContents.isDestroyed(),
+    reload: () => win.webContents.reload(),
+  })
+  win.webContents.on('did-finish-load', () => rendererRecovery.rendererLoaded())
+  win.webContents.on('render-process-gone', (_event, details) => {
+    const recoveryScheduled = rendererRecovery.rendererGone(details)
+    console.error(
+      `[renderer] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}; `
+      + (recoveryScheduled ? '已安排从运行时快照恢复' : '未安排恢复'),
+    )
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
