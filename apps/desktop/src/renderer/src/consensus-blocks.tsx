@@ -1,10 +1,10 @@
-import { Streamdown } from 'streamdown'
 import { Circle, ClipboardList } from 'lucide-react'
 import {
   voteLabel,
   type CandidateBlockData,
   type PeerBlockData,
 } from './conversation-state.ts'
+import { MarkdownContent } from './markdown-content.tsx'
 
 /**
  * 协商 UI（M3-b MVP）：B/C 的讨论过程折叠在卡片里，主线只显示关键节点（候选/投票/决策）。
@@ -44,7 +44,7 @@ export function CandidateCard({
       {expanded && candidate.details && (
         <div className="border-t border-[var(--wc-line)] bg-white/45 px-3 py-2 text-[var(--wc-ink)]">
           <div className="prose prose-sm max-w-none">
-            <Streamdown>{candidate.details.finalAnswerOrPlan}</Streamdown>
+            <MarkdownContent text={candidate.details.finalAnswerOrPlan} />
           </div>
           {candidate.details.evidenceRefs?.length ? (
             <div className="mt-2 text-xs text-[var(--wc-blue-ink)]">
@@ -113,7 +113,7 @@ export function PeerCard({
           ))}
           {peer.text && (
             <div className="prose prose-sm mt-1 max-w-none text-xs text-[var(--wc-ink)]">
-              <Streamdown>{peer.text}</Streamdown>
+              <MarkdownContent text={peer.text} />
             </div>
           )}
         </div>

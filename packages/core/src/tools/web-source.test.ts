@@ -25,6 +25,11 @@ describe('网页 Markdown 来源', () => {
       appendWebSourceFinalResponseReminder('网页内容\n'),
       `网页内容\n\n${WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT}`,
     )
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /来源：.*\[标题\]\(URL\)/)
+    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /最终交付物是调研/)
+    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /中间查证，不输出正文引用和来源列表/)
+    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /\[来源\]\(实际URL\)/)
+    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /每个.*URL.*来源列表中原样出现一次/)
+    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /### 来源/)
+    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /不要使用裸 URL.*编号占位引用/)
   })
 })

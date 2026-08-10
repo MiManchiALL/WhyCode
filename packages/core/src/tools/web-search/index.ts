@@ -237,7 +237,7 @@ function formatResult(result: WebSearchResult, index: number): string {
     result.lastUpdated ? `更新：${result.lastUpdated}` : '',
   ].filter(Boolean).join('；')
   return [
-    `[S${index + 1}] ${markdownWebSource(result.title, result.url)}`,
+    `结果 ${index + 1}：${markdownWebSource(result.title, result.url)}`,
     ...(dates ? [dates] : []),
     `摘要：${result.snippet || '无摘要'}`,
   ].join('\n')

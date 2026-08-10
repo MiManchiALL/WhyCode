@@ -79,6 +79,8 @@ describe('WebSearch 工具契约', () => {
       domains: ['example.com'],
     })
     assert.equal(result.isError, false)
+    assert.match(result.data, /结果 1：\[官方 文档\]/)
+    assert.doesNotMatch(result.data, /\[S1\]/)
     assert.match(result.data, /\[官方 文档\]\(<https:\/\/example\.com\/docs>\)/)
     assert.match(result.data, /不受信任的外部网页/)
     assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)

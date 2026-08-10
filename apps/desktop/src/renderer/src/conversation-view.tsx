@@ -63,7 +63,10 @@ function WorkSection({
     && props.expandedIds.has(section.id)
   const activityId = `work-activity-${section.id}`
   return (
-    <section className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}>
+    <section
+      className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}
+      data-source-scope=""
+    >
       {section.userBlocks.map((block) => (
         <ConversationBlock
           key={block.id}

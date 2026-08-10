@@ -1,5 +1,4 @@
-import { memo, useRef, useState } from 'react'
-import { Streamdown } from 'streamdown'
+import { useRef, useState } from 'react'
 import { Check, LoaderCircle, RotateCcw, X } from 'lucide-react'
 import type { Block } from './conversation-state.ts'
 import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
@@ -7,25 +6,7 @@ import { UserImageGallery } from './image-attachments.tsx'
 import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
-
-const MARKDOWN_CONTROLS = { table: { fullscreen: false } } as const
-
-const MarkdownContent = memo(function MarkdownContent({
-  text,
-  streaming,
-}: {
-  text: string
-  streaming: boolean
-}) {
-  return (
-    <Streamdown
-      mode={streaming ? 'streaming' : 'static'}
-      controls={MARKDOWN_CONTROLS}
-    >
-      {text}
-    </Streamdown>
-  )
-})
+import { MarkdownContent } from './markdown-content.tsx'
 
 export function BlockView({
   runtimeId,
