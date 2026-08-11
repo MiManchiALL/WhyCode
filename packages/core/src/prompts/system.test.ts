@@ -22,6 +22,11 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(prompt, /非项目问题直接回答|无故读取项目/)
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
     assert.match(prompt, /修改或评价代码前先读取相关文件和调用点/)
+    assert.match(prompt, /在形成结论或采取行动前，识别对结果有决定作用的事实/)
+    assert.match(prompt, /当前状态、近期变化、是否仍然有效、实际覆盖范围或可追溯出处/)
+    assert.match(prompt, /模型记忆不能替代这类核实/)
+    assert.match(prompt, /已有直接证据足以支撑结论，则无需调用工具/)
+    assert.doesNotMatch(prompt, /评估当前依据是否充分|存在实质不确定性/)
     assert.match(
       prompt,
       /相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟/,
