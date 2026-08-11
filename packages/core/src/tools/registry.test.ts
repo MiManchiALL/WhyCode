@@ -39,5 +39,7 @@ describe('内置工具注册表', () => {
     assert.equal(tool.isReadOnly, false)
     assert.equal(tool.kind, 'execute')
     assert.equal(tool.checkpointScope, undefined)
+    assert.match(tool.prompt, /不要塞进 python -c 或 node -e/)
+    assert.match(tool.prompt, /导入第三方包前先检查环境是否已有/)
   })
 })

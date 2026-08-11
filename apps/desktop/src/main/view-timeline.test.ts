@@ -271,30 +271,29 @@ describe('ViewTimeline', () => {
     assert.match(JSON.stringify(writer.batches), /完成长任务/)
   })
 
-  it('计划替换的旧快照与新活动计划在同一稳定 step 写入', async () => {
+  it('旧计划终态与新活动计划分别随各自稳定 step 写入', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
-    const next = taskPlan()
-    const event = {
-      type: 'task-plan-replaced' as const,
-      previous: {
-        ...taskPlan(),
-        status: 'superseded' as const,
-        summary: '用户切换到新任务',
-        replacedByPlanId: next.id,
-      },
-      plan: next,
+    const previous = taskPlan()
+    const closed = {
+      type: 'task-plan-updated' as const,
+      plan: { ...previous, status: 'abandoned' as const, revision: 2 },
+    }
+    const next = {
+      type: 'task-plan-updated' as const,
+      plan: { ...taskPlan(), id: '22222222-2222-4222-8222-222222222222', goal: '完成新任务' },
     }
 
-    timeline.capture(writer, event)
-    timeline.capture(writer, { type: 'step-discarded' })
-    timeline.capture(writer, event)
+    timeline.capture(writer, closed)
+    timeline.capture(writer, { type: 'step-committed' })
+    timeline.capture(writer, next)
     timeline.capture(writer, { type: 'step-committed' })
     await Promise.resolve()
 
-    assert.equal(writer.batches.length, 1)
-    assert.match(JSON.stringify(writer.batches), /task-plan-replaced/)
-    assert.match(JSON.stringify(writer.batches), /用户切换到新任务/)
+    assert.equal(writer.batches.length, 2)
+    assert.match(JSON.stringify(writer.batches), /abandoned/)
+    assert.match(JSON.stringify(writer.batches), /完成新任务/)
+    assert.doesNotMatch(JSON.stringify(writer.batches), /task-plan-replaced/)
   })
 
   it('待回答问题只在所属 step 提交后写入历史', async () => {
@@ -336,16 +335,21 @@ function taskPlan() {
       {
         id: 'T1',
         kind: 'work' as const,
-        title: '实现',
-        acceptance: '代码完成',
+        outcome: '核心能力已经实现',
         status: 'in_progress' as const,
         evidence: [],
       },
       {
         id: 'T2',
+        kind: 'work' as const,
+        outcome: '相关调用已经统一',
+        status: 'pending' as const,
+        evidence: [],
+      },
+      {
+        id: 'T3',
         kind: 'verification' as const,
-        title: '验证',
-        acceptance: '测试通过',
+        outcome: '整体结果通过验证',
         status: 'pending' as const,
         evidence: [],
       },

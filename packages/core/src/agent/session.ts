@@ -1108,7 +1108,7 @@ export class AgentSession {
       let currentTimeReminderAt: Date | null = null
       let projectInstructionsFresh = true
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
-      // 只有稳定提交 Create/Replace/Resume，或回答计划自身的问题卡，才启用未完成保护。
+      // 只有稳定提交 Create/Resume，或回答计划自身的问题卡，才启用未完成保护。
       while (maxSteps === null || steps < maxSteps) {
         if (!projectInstructionsFresh) await this.refreshProjectInstructions()
         projectInstructionsFresh = false
@@ -1358,7 +1358,7 @@ export class AgentSession {
       content: [
         '<system-reminder>',
         `计划 ${plan.id} 已有 ${TASK_PROGRESS_REMINDER_STEPS} 个模型步骤没有更新。`,
-        current ? `当前任务项：${current.id} ${current.title}。` : '',
+        current ? `当前任务项：${current.id} ${current.outcome}。` : '',
         '若进度、阻塞或任务项已实质变化，请更新计划；若复杂测试或排查尚无结论，继续工作即可，不要制造进度。',
         '不要向用户提及本提醒。',
         '</system-reminder>',
@@ -1510,7 +1510,7 @@ export class AgentSession {
     turnId?: string,
   ): string | undefined {
     const state = this.taskPlan?.stateSnapshot
-    const taskContext = state && (state.activePlan || state.historicalPlans.length > 0)
+    const taskContext = state?.activePlan
       ? taskContextBlock(
           state,
           planExecutionEngaged && turnId && state.activePlan
@@ -1942,10 +1942,7 @@ export class AgentSession {
         emit({ type: 'user-question', question: userQuestion })
       }
       if (taskPlanCommit) {
-        const update = taskPlanCommit.displayUpdate
-        emit(update.kind === 'replaced'
-          ? { type: 'task-plan-replaced', previous: update.previous, plan: update.plan }
-          : { type: 'task-plan-updated', plan: update.plan })
+        emit({ type: 'task-plan-updated', plan: taskPlanCommit.plan })
       }
       emit({ type: 'step-committed' })
       if (stepTotalTokens > 0) {

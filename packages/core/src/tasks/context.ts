@@ -9,7 +9,6 @@ export function taskStateJson(state: TaskPlanState): string {
     active_plan: state.activePlan,
     resume_required: state.resumeRequired,
     interruption_reason: state.interruptionReason,
-    historical_plans: state.historicalPlans,
   })
 }
 
@@ -44,7 +43,7 @@ export function createTaskContextMessage(
   state: TaskPlanState,
   continuation?: { turnId: string; engagedPlanId: string },
 ): ModelMessage | null {
-  if (!state.activePlan && state.historicalPlans.length === 0) return null
+  if (!state.activePlan) return null
   return {
     role: 'user',
     content: [

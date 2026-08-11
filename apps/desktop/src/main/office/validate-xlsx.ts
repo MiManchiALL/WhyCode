@@ -1,13 +1,24 @@
 import { readXml, sortedEntries } from './archive.ts'
 import type { ValidationState } from './validation-state.ts'
 import { validationIssue } from './validation-state.ts'
-import { attributeValue } from './xml.ts'
+import { attributeValue, directXmlChildren } from './xml.ts'
 import {
   loadSharedStrings,
   loadWorkbookSheets,
   parseWorksheet,
   type WorksheetCell,
 } from './xlsx-package.ts'
+
+const WORKSHEET_CHILD_ORDER = [
+  'sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData',
+  'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios', 'autoFilter',
+  'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells', 'phoneticPr',
+  'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions',
+  'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks',
+  'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing',
+  'legacyDrawing', 'legacyDrawingHF', 'picture', 'oleObjects', 'controls',
+  'webPublishItems', 'tableParts', 'extLst',
+] as const
 
 export async function validateXlsxPackage(state: ValidationState): Promise<void> {
   const workbook = await readXml(state.archive, 'xl/workbook.xml')
@@ -27,12 +38,38 @@ export async function validateXlsxPackage(state: ValidationState): Promise<void>
   const sharedStrings = await loadSharedStrings(state.archive)
   for (const sheet of await loadWorkbookSheets(state.archive)) {
     const xml = await readXml(state.archive, sheet.path)
+    validateWorksheetElementOrder(state, xml, sheet.path)
     validateCells(state, xml, sheet.path, styleInfo.count)
     validateWorksheetRanges(state, xml, sheet.path)
     validateCellClipping(state, xml, sheet.path, sharedStrings, styleInfo.wrapped)
   }
   await validateTables(state)
   await validateDrawingAnchors(state)
+}
+
+function validateWorksheetElementOrder(
+  state: ValidationState,
+  xml: string,
+  location: string,
+): void {
+  let previousOrder = -1
+  let previousName = ''
+  for (const child of directXmlChildren(xml, 'worksheet')) {
+    const order = WORKSHEET_CHILD_ORDER.findIndex((name) => name === child.name)
+    if (order < 0) continue
+    if (order < previousOrder) {
+      validationIssue(
+        state,
+        'worksheet-element-order',
+        'error',
+        location,
+        `工作表子元素顺序无效：${child.name} 不能位于 ${previousName} 之后`,
+      )
+      return
+    }
+    previousOrder = order
+    previousName = child.name
+  }
 }
 
 function validateWorksheetNames(state: ValidationState, workbook: string): void {
@@ -165,11 +202,11 @@ async function validateDrawingAnchors(state: ValidationState): Promise<void> {
 async function loadStyleInfo(state: ValidationState): Promise<{ count: number; wrapped: Set<number> }> {
   if (!state.archive.zip.file('xl/styles.xml')) return { count: 1, wrapped: new Set() }
   const xml = await readXml(state.archive, 'xl/styles.xml')
-  const body = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/i.exec(xml)?.[1] ?? ''
-  const styles = [...body.matchAll(/<xf\b([^>]*)(?:\/>|>([\s\S]*?)<\/xf>)/gi)]
+  const styles = directXmlChildren(xml, 'cellXfs', true)
+    .filter((child) => child.name === 'xf')
   const wrapped = new Set<number>()
-  styles.forEach((match, index) => {
-    const alignment = /<alignment\b([^>]*)\/?\s*>/i.exec(match[2] ?? '')?.[1] ?? ''
+  styles.forEach((style, index) => {
+    const alignment = /<alignment\b([^>]*)\/?\s*>/i.exec(style.source)?.[1] ?? ''
     if (attributeValue(alignment, 'wrapText') === '1') wrapped.add(index)
   })
   return { count: Math.max(1, styles.length), wrapped }

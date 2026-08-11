@@ -65,6 +65,10 @@ describe('Office tools', () => {
     assert.equal(tool.kind, 'execute')
     assert.match(tool.prompt, /OfficeTemplate\.pptx\(\{ template: assets\.template\.bytes, slides \}\)/)
     assert.match(tool.prompt, /不要用相同参数盲目重试/)
+    assert.match(tool.prompt, /不要依赖 Date\/Intl/)
+    assert.match(tool.prompt, /JSON\.parse\(assets\.data\.text\)/)
+    assert.match(tool.prompt, /不要用 bytes\.toString\(\) 解码/)
+    assert.match(tool.prompt, /不要改用 RunCommand\/WriteFile 手写、打包或覆盖最终 OOXML/)
     assert.deepEqual(tool.extractPaths?.(input), [
       'builders/report.js', 'artifacts/report.docx', 'assets/logo.png', 'assets/template.docx',
     ])
@@ -146,6 +150,8 @@ describe('Office tools', () => {
     })
     const result = await tool.execute(input, context(root))
 
+    assert.match(tool.prompt, /startUnit 是结构单元序号，不是 XLSX 行号/)
+    assert.match(tool.prompt, /sheetName\/range 只用于 content、objects 或 formula-trace/)
     assert.equal(capturedPath, join(root, 'artifacts', 'data.xlsx'))
     assert.match(result.data, /--- 第 3 行 \[row\] ---/)
     assert.match(result.data, /startUnit=4/)

@@ -7,7 +7,7 @@
  * - 新增事件必须同步更新宿主适配、可见事件契约、恢复投影与对应测试。
  */
 
-import type { ActiveTaskPlan, SupersededTaskPlan, TaskPlan } from './tasks/types.ts'
+import type { ActiveTaskPlan, TaskPlan } from './tasks/types.ts'
 import type {
   ImageAttachment,
   ImageDeliveryMode,
@@ -253,12 +253,6 @@ export type CoreEvent =
   | { type: 'consensus-skipped'; reason: 'image-input' | 'pdf-input' }
   // --- Main 长任务控制 ---
   | { type: 'task-plan-updated'; plan: TaskPlan }
-  /** 用户明确切换独立复杂任务；旧计划归档与新计划激活属于同一稳定 step。 */
-  | {
-      type: 'task-plan-replaced'
-      previous: SupersededTaskPlan
-      plan: ActiveTaskPlan
-    }
   /** 共识事务取消/异常时，把任务卡恢复到协商开始前。 */
   | { type: 'task-plan-restored'; plan: TaskPlan | null }
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
@@ -275,7 +269,6 @@ const STEP_SCOPED_CORE_EVENT_TYPES = new Set<CoreEvent['type']>([
   'checkpoint-created',
   'checkpoint-disabled',
   'task-plan-updated',
-  'task-plan-replaced',
   'user-question',
 ])
 

@@ -1311,17 +1311,7 @@ describe('SessionStore', () => {
     await recoveredCreate.recordStep(
       'close-plan',
       [message('assistant', '计划已放弃')],
-      state(null, 2, {
-        historicalPlans: [{
-          id: plan.id,
-          goal: plan.goal,
-          status: 'abandoned',
-          summary: '用户明确放弃',
-          completedItems: 0,
-          totalItems: plan.items.length,
-          revision: 2,
-        }],
-      }),
+      state(null, 2),
     )
     await recoveredCreate.recordTurnEnd('close-plan', 'completed')
 
@@ -1336,7 +1326,41 @@ describe('SessionStore', () => {
     )
   })
 
-  it('重启后恢复替换后的活动计划，并保留被替代计划的完整历史事件', async () => {
+  it('终态计划卡作为最新展示在重启后保留', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const plan = taskPlan(1)
+    const terminalPlan = {
+      ...plan,
+      status: 'abandoned' as const,
+      revision: plan.revision + 1,
+    }
+    await journal.recordTurnStart('close-plan', [message('user', '放弃计划')])
+    await journal.recordViewEvents([{ type: 'core-event', event: {
+      type: 'task-plan-updated',
+      plan: terminalPlan,
+    } }])
+    await journal.recordStep(
+      'close-plan',
+      [message('assistant', '计划已放弃')],
+      state(null, 2),
+    )
+    await journal.recordTurnEnd('close-plan', 'completed')
+
+    const reopened = await store.open(journal.sessionId)
+    const latestPlanEvent = reopened.initialViewEvents.findLast((entry) =>
+      entry.type === 'core-event'
+      && (entry.event.type === 'task-plan-updated'
+        || entry.event.type === 'task-plan-restored'))
+    assert.equal(
+      latestPlanEvent?.type === 'core-event'
+      && latestPlanEvent.event.type === 'task-plan-updated'
+      && latestPlanEvent.event.plan.status,
+      'abandoned',
+    )
+  })
+
+  it('结束旧计划并创建新计划后，重启只恢复当前活动计划', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const previous = taskPlan(1)
@@ -1350,41 +1374,31 @@ describe('SessionStore', () => {
       id: '22222222-2222-4222-8222-222222222222',
       goal: '开发 CSGO',
     })
-    const nextState = state(next, 2, {
-      historicalPlans: [{
-        id: previous.id,
-        goal: previous.goal,
-        status: 'superseded',
-        summary: '用户明确切换游戏',
-        completedItems: 0,
-        totalItems: previous.items.length,
-        revision: previous.revision + 1,
-      }],
-    })
-    await journal.recordTurnStart('replacement', [message('user', '改做 CSGO')])
-    await journal.recordViewEvents([{ type: 'core-event', event: {
-      type: 'task-plan-replaced',
-      previous: {
-        ...previous,
-        status: 'superseded',
-        summary: '用户明确切换游戏',
-        replacedByPlanId: next.id,
-      },
-      plan: next,
-    } }])
-    await journal.recordStep('replacement', [message('assistant', '已替换计划')], nextState)
-    await journal.recordTurnEnd('replacement', 'paused')
+    const nextState = state(next, 3)
+    await journal.recordTurnStart('switch-plan', [message('user', '改做 CSGO')])
+    await journal.recordViewEvents([
+      { type: 'core-event', event: {
+        type: 'task-plan-updated',
+        plan: {
+          ...previous,
+          status: 'abandoned',
+          revision: previous.revision + 1,
+        },
+      } },
+      { type: 'core-event', event: { type: 'task-plan-updated', plan: next } },
+    ])
+    await journal.recordStep('switch-plan', [message('assistant', '已建立新计划')], nextState)
+    await journal.recordTurnEnd('switch-plan', 'paused')
 
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.initialTaskState, nextState)
-    const replacement = reopened.initialViewEvents.find((entry) =>
-      entry.type === 'core-event' && entry.event.type === 'task-plan-replaced')
-    assert.equal(
-      replacement?.type === 'core-event'
-      && replacement.event.type === 'task-plan-replaced'
-      && replacement.event.previous.goal,
-      '完成长任务',
-    )
+    const planEvents = reopened.initialViewEvents.filter((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-updated')
+    assert.deepEqual(planEvents.map((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'task-plan-updated'
+        ? entry.event.plan.status
+        : null), ['abandoned', 'active'])
+    assert.equal('historicalPlans' in reopened.initialTaskState, false)
   })
 
   it('压缩和对话回滚跨重启保留完整任务状态', async () => {
@@ -1392,15 +1406,6 @@ describe('SessionStore', () => {
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const plan = taskPlan(1)
     const savedState = state(plan, 7, {
-      historicalPlans: [{
-        id: '33333333-3333-4333-8333-333333333333',
-        goal: '已完成的历史任务',
-        status: 'completed',
-        summary: '历史任务已验证交付',
-        completedItems: 2,
-        totalItems: 2,
-        revision: 3,
-      }],
       resumeRequired: true,
       interruptionReason: 'user-cancel',
     })
@@ -1413,9 +1418,7 @@ describe('SessionStore', () => {
     assert.deepEqual(reopened.initialTaskState, savedState)
 
     await reopened.recordTurnStart('turn-2', [message('user', '新一轮')])
-    const changedState = state(taskPlan(2), 8, {
-      historicalPlans: savedState.historicalPlans,
-    })
+    const changedState = state(taskPlan(2), 8)
     await reopened.recordStep('turn-2', [message('assistant', '推进')], changedState)
     await reopened.recordTurnEnd('turn-2', 'completed')
     const beforeTurn = reopened.taskStateBeforeTurn('turn-2')
@@ -1788,17 +1791,22 @@ function taskPlan(revision: number): ActiveTaskPlan {
       {
         id: 'T1',
         kind: 'work',
-        title: '实现',
-        acceptance: '实现完成',
+        outcome: '核心实现已经完成',
         status: revision > 1 ? 'completed' : 'in_progress',
         evidence: revision > 1 ? ['代码完成'] : [],
       },
       {
         id: 'T2',
-        kind: 'verification',
-        title: '验证',
-        acceptance: '测试通过',
+        kind: 'work',
+        outcome: '相关调用已经统一',
         status: revision > 1 ? 'in_progress' : 'pending',
+        evidence: [],
+      },
+      {
+        id: 'T3',
+        kind: 'verification',
+        outcome: '整体任务通过验证',
+        status: 'pending',
         evidence: [],
       },
     ],
@@ -1810,13 +1818,12 @@ function state(
   version = activePlan?.revision ?? 0,
   overrides: Partial<Pick<
     TaskPlanState,
-    'historicalPlans' | 'resumeRequired' | 'interruptionReason'
+    'resumeRequired' | 'interruptionReason'
   >> = {},
 ): TaskPlanState {
   return {
     version,
     activePlan,
-    historicalPlans: [],
     resumeRequired: false,
     interruptionReason: null,
     ...overrides,

@@ -13,12 +13,12 @@ import { validateToolInput } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('Main 主动提问', () => {
-  it('工具说明只在必要决策和替换冲突时提问，不重复确认明确意图', () => {
+  it('工具说明只在必要决策和目标切换不明确时提问，不重复确认明确意图', () => {
     const prompt = createAskUserQuestionTool(() => {}).prompt
 
     assert.match(prompt, /实质改变下一步行动/)
-    assert.match(prompt, /保留旧计划还是原子替换/)
-    assert.match(prompt, /明确授权替换时不要重复确认/)
+    assert.match(prompt, /保留当前计划，还是先结束它再处理新目标/)
+    assert.match(prompt, /明确放弃或切换时不要重复确认/)
     assert.match(prompt, /当前请求已经可以完整交付，不得调用本工具/)
     assert.match(prompt, /不得用本工具询问用户是否满意、是否还需要帮助/)
     assert.match(prompt, /已经明确的恢复意图再次确认/)

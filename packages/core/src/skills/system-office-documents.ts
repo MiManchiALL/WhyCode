@@ -39,7 +39,7 @@ export const DOCUMENT_OFFICE_SKILL_FILES: readonly EmbeddedOfficeSkillFile[] = [
     content: officeSkillDocument(
       '# DOCX 构建接口',
       '',
-      '构建脚本必须是函数表达式：',
+      '构建脚本的求值结果必须是函数：',
       '',
       '```js',
       'async ({ docx, assets, report }) => {',
@@ -58,6 +58,7 @@ export const DOCUMENT_OFFICE_SKILL_FILES: readonly EmbeddedOfficeSkillFile[] = [
       '- 返回 `docx.Document`；工具统一调用 Packer。',
       '- 从零创建先把版式契约落实为明确数值：页宽/页高与四边距、默认正文和各级标题的字体/字号/颜色/粗细、段前后距/行距、列表缩进、页眉页脚距离。不要把未声明的 Word 默认样式当成设计系统。',
       '- 图片用 `assets.logo.bytes` 作为 `ImageRun.data`，并显式设置图片类型、宽高与 altText；保持原始比例。',
+      '- JSON、CSV、TXT 等 UTF-8 输入使用 `assets.data.text`，JSON 用 `JSON.parse(assets.data.text)`；`bytes` 只用于 Office/OOXML 等二进制接口，不要用 `bytes.toString()` 解码文本。',
       '- 页面尺寸、页边距、页眉页脚、分页和表格宽度必须显式设置。表格同时设置 table columnWidths 与每个 cell 的 DXA 宽度，列宽总和与可用页宽一致；需要跨页时重复表头。',
       '- 使用 HeadingLevel 和 numbering 定义真实标题与列表；不要写字面量项目符号、空格对齐或 `\\n`。PageBreak 必须放在 Paragraph 中。',
       '- 构建脚本中没有 import、require、process、Buffer 或文件系统；不要自行写输出。复杂内容先定义小型数据数组，再映射为 Paragraph/TableRow。',

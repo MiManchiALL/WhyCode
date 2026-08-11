@@ -19,7 +19,6 @@ import {
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
-  REPLACE_TASK_PLAN_TOOL_NAME,
   RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
@@ -156,7 +155,6 @@ describe('用户中断后的新回合', () => {
       }),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
         outcome: 'abandoned',
-        summary: '测试结束',
       }),
       finalStep('已按要求恢复。'),
     ]
@@ -214,7 +212,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(resumeRequestTools.includes(RESUME_TASK_PLAN_TOOL_NAME), true)
     assert.equal(resumeRequestTools.includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
     assert.equal(toolNames(model.doStreamCalls[3]).includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
-    assert.match(JSON.stringify(model.doStreamCalls[3]), /实现功能|验证功能/)
+    assert.match(JSON.stringify(model.doStreamCalls[3]), /核心功能已经实现|完整功能通过验证/)
   })
 
   it('UI 停止 engaged run 后持久化恢复闸门，临时问题不会清除', async () => {
@@ -275,7 +273,6 @@ describe('用户中断后的新回合', () => {
     assert.equal(names.includes('WriteFile'), true)
     assert.equal(names.includes('RunCommand'), true)
     assert.equal(names.includes(RESUME_TASK_PLAN_TOOL_NAME), true)
-    assert.equal(names.includes(REPLACE_TASK_PLAN_TOOL_NAME), true)
     assert.equal(names.includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
     assert.equal(names.includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
     assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, activePlan())
@@ -291,7 +288,6 @@ describe('用户中断后的新回合', () => {
       doStream: [
         toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
           outcome: 'abandoned',
-          summary: '用户回答已收到，测试结束',
         }),
         finalStep('收到，按 Windows 11 处理。'),
       ],
@@ -643,13 +639,13 @@ describe('用户中断后的新回合', () => {
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '完成恢复后的任务',
         items: [
-          { kind: 'work', title: '执行工作', acceptance: '工作完成' },
-          { kind: 'verification', title: '验证结果', acceptance: '验证通过' },
+          { kind: 'work', outcome: '主要工作已经完成' },
+          { kind: 'work', outcome: '相关调用已经收口' },
+          { kind: 'verification', outcome: '整体结果通过验证' },
         ],
       }),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
         outcome: 'abandoned',
-        summary: '测试结束',
       }),
       finalStep('已经开始处理。'),
     ]
@@ -723,12 +719,14 @@ describe('用户中断后的新回合', () => {
     let requestCount = 0
     const remainingSteps = [
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
-        status: 'in_progress',
+        changes: [{
+          action: 'edit',
+          item_id: 'T1',
+          outcome: '按纠正后的技术方向完成当前工作',
+        }],
       }),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
         outcome: 'abandoned',
-        summary: 'urgent steering 测试结束',
       }),
       finalStep('已按纠正后的技术方向继续。'),
     ]
@@ -862,7 +860,7 @@ describe('用户中断后的新回合', () => {
       false,
     )
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'pending')
   })
 
   it('steering 后调用实际工具仍保留未完成计划保护', async () => {
@@ -889,14 +887,32 @@ describe('用户中断后的新回合', () => {
         if (requestCount === 6) {
           return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
             item_id: 'T2',
-            status: 'completed',
-            evidence: ['验证完成'],
+            status: 'in_progress',
           })
         }
         if (requestCount === 7) {
+          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+            item_id: 'T2',
+            status: 'completed',
+            evidence: ['调用检查完成'],
+          })
+        }
+        if (requestCount === 8) {
+          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+            item_id: 'T3',
+            status: 'in_progress',
+          })
+        }
+        if (requestCount === 9) {
+          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
+            item_id: 'T3',
+            status: 'completed',
+            evidence: ['整体验证完成'],
+          })
+        }
+        if (requestCount === 10) {
           return toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
             outcome: 'completed',
-            summary: '检查和验证完成',
           })
         }
         return finalStep('任务完成。')
@@ -910,7 +926,7 @@ describe('用户中断后的新回合', () => {
     session.handleUserMessage('记录进度后继续检查项目文件', true)
 
     assert.equal(await running, 'completed')
-    assert.match(JSON.stringify(model.doStreamCalls[5]?.prompt), /任务计划仍有未完成项/)
+    assert.match(JSON.stringify(model.doStreamCalls[5]?.prompt), /计划仍有待开始项/)
   })
 
   it('终止型问题工具完成稳定回合后会消费中断边界', async () => {
@@ -1034,16 +1050,21 @@ function activePlan(): ActiveTaskPlan {
       {
         id: 'T1',
         kind: 'work',
-        title: '实现功能',
-        acceptance: '实现完成',
+        outcome: '核心功能已经实现',
         status: 'in_progress',
         evidence: [],
       },
       {
         id: 'T2',
+        kind: 'work',
+        outcome: '相关调用路径已经收口',
+        status: 'pending',
+        evidence: [],
+      },
+      {
+        id: 'T3',
         kind: 'verification',
-        title: '验证功能',
-        acceptance: '测试通过',
+        outcome: '完整功能通过验证',
         status: 'pending',
         evidence: [],
       },
@@ -1055,7 +1076,6 @@ function activeState(): TaskPlanState {
   return {
     version: activePlan().revision,
     activePlan: activePlan(),
-    historicalPlans: [],
     resumeRequired: false,
     interruptionReason: null,
   }

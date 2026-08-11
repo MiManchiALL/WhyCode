@@ -1,216 +1,351 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { TaskPlanController } from './controller.ts'
+import { emptyTaskPlanState, taskPlanStateSchema } from './types.ts'
 
 const drafts = [
-  { kind: 'work' as const, title: '实现能力', acceptance: '代码完成' },
-  { kind: 'verification' as const, title: '运行验证', acceptance: '测试通过' },
+  { kind: 'work' as const, outcome: '核心能力已经可用' },
+  { kind: 'work' as const, outcome: '相关调用方已经统一' },
+  { kind: 'verification' as const, outcome: '整体行为通过验证' },
 ]
 
 describe('Main 长任务计划控制器', () => {
-  it('建立计划后只启动第一项，并要求最终验证步骤', () => {
-    const { controller } = createController()
+  it('严格拒绝旧版历史计划字段，不保留兼容结构', () => {
+    const legacyState = { ...emptyTaskPlanState(), historicalPlans: [] }
+
+    assert.equal(taskPlanStateSchema.safeParse(legacyState).success, false)
+  })
+
+  it('只接受 3～7 个宏观里程碑，创建后显式启动第一项', () => {
+    const controller = new TaskPlanController()
     controller.beginStep()
 
     assert.equal(controller.create('交付功能', drafts).ok, true)
     assert.deepEqual(controller.snapshot?.items.map((item) => item.status), [
+      'pending',
+      'pending',
+      'pending',
+    ])
+    const commit = controller.commitStep()
+    assert.equal(commit?.plan.items.at(-1)?.kind, 'verification')
+    assert.equal(commit?.plan.items[0]?.outcome, '核心能力已经可用')
+
+    controller.beginStep()
+    assert.equal(controller.update([], { itemId: 'T1', status: 'in_progress' }).ok, true)
+    assert.equal(controller.snapshot?.items[0]?.status, 'in_progress')
+    controller.commitStep()
+
+    const invalid = new TaskPlanController()
+    invalid.beginStep()
+    const result = invalid.create('无效计划', drafts.slice(0, 2))
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? null : result.error, 'invalid_plan')
+  })
+
+  it('用一次原子更新修订路线并完成当前里程碑', () => {
+    const controller = activeController()
+    controller.beginStep()
+
+    const result = controller.update(
+      [
+        { action: 'edit', itemId: 'T2', outcome: '所有调用方使用统一协议' },
+        { action: 'add', outcome: '迁移后的数据流已经收口', afterItemId: 'T2' },
+      ],
+      { itemId: 'T1', status: 'completed', evidence: ['核心测试通过'] },
+    )
+
+    assert.equal(result.ok, true)
+    assert.deepEqual(controller.snapshot?.items.map((item) => [item.id, item.status]), [
+      ['T1', 'completed'],
+      ['T2', 'pending'],
+      ['T4', 'pending'],
+      ['T3', 'pending'],
+    ])
+    assert.equal(controller.commitStep()?.state.version, 3)
+  })
+
+  it('结构变化全部校验通过后才提交', () => {
+    const controller = activeController()
+    const before = controller.stateSnapshot
+    controller.beginStep()
+
+    const result = controller.update([
+      { action: 'edit', itemId: 'T2', outcome: '这项不应泄漏' },
+      { action: 'delete', itemId: 'T3' },
+    ])
+
+    assert.equal(result.ok, false)
+    assert.equal(result.ok ? null : result.error, 'invalid_plan')
+    assert.deepEqual(controller.stateSnapshot, before)
+    assert.equal(controller.commitStep(), undefined)
+  })
+
+  it('已完成项不可修改，删除待办项不会隐式推进其它项', () => {
+    const controller = activeController()
+    controller.beginStep()
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'completed',
+      evidence: ['实现证据'],
+    }).ok, true)
+    controller.commitStep()
+
+    controller.beginStep()
+    const immutable = controller.update([
+      { action: 'edit', itemId: 'T1', outcome: '试图改写已确认结果' },
+    ])
+    assert.equal(immutable.ok, false)
+    assert.equal(immutable.ok ? null : immutable.error, 'invalid_transition')
+    controller.discardStep()
+
+    controller.beginStep()
+    assert.equal(controller.update([{ action: 'delete', itemId: 'T2' }]).ok, true)
+    assert.equal(controller.snapshot?.items.find((item) => item.id === 'T3')?.status, 'pending')
+  })
+
+  it('完成和阻塞都要求先进入 in_progress，并由模型显式推进下一项', () => {
+    const controller = activeController()
+    controller.beginStep()
+
+    const premature = controller.update([], {
+      itemId: 'T2',
+      status: 'completed',
+      evidence: ['无效证据'],
+    })
+    assert.equal(premature.ok, false)
+    assert.equal(premature.ok ? null : premature.error, 'invalid_transition')
+
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'blocked',
+      blockedReason: '等待外部服务',
+      evidence: ['连接日志'],
+    }).ok, true)
+    assert.deepEqual(controller.snapshot?.items.map((item) => item.status), [
+      'blocked',
+      'pending',
+      'pending',
+    ])
+
+    controller.commitStep()
+    controller.beginStep()
+    assert.equal(controller.update([], { itemId: 'T2', status: 'in_progress' }).ok, true)
+    assert.deepEqual(controller.snapshot?.items.map((item) => item.status), [
+      'blocked',
       'in_progress',
       'pending',
     ])
-    const update = controller.commitStep()?.displayUpdate
-    assert.equal(update?.kind === 'updated' && update.plan.items.at(-1)?.kind, 'verification')
   })
 
-  it('空白目标、任务项和证据返回结构化校验错误而不是抛异常', () => {
-    const { controller } = createController()
-    controller.beginStep()
-    const blankGoal = controller.create('   ', drafts)
-    assert.equal(blankGoal.ok, false)
-    assert.equal(blankGoal.ok ? null : blankGoal.error, 'invalid_plan')
-
-    const invalidDraft = controller.create('有效目标', [
-      { kind: 'work', title: '   ', acceptance: '完成' },
-      drafts[1]!,
-    ])
-    assert.equal(invalidDraft.ok, false)
-    assert.equal(invalidDraft.ok ? null : invalidDraft.error, 'invalid_plan')
-
-    const active = activeController().controller
-    active.beginStep()
-    const blankEvidence = active.updateItem('T1', 'completed', ['   '])
-    assert.equal(blankEvidence.ok, false)
-    assert.equal(blankEvidence.ok ? null : blankEvidence.error, 'evidence_required')
-  })
-
-  it('完成项必须有证据，并自动推进到下一项', () => {
-    const { controller } = activeController()
+  it('状态设置幂等且不产生空提交，真实结构变化仍会提交', () => {
+    const controller = activeController()
     controller.beginStep()
 
-    assert.equal(controller.updateItem('T1', 'completed', []).ok, false)
-    assert.equal(controller.updateItem('T1', 'completed', ['packages/core 测试通过']).ok, true)
-    assert.deepEqual(controller.snapshot?.items.map((item) => item.status), [
-      'completed',
-      'in_progress',
-    ])
-  })
-
-  it('重复状态不会制造 revision、状态版本或进度提醒重置', () => {
-    const { controller } = activeController()
-    const initialState = controller.stateSnapshot
-    controller.beginStep()
-
-    assert.equal(controller.updateItem('T1', 'in_progress', []).ok, false)
-    assert.equal(controller.commitStep(), undefined)
-    assert.deepEqual(controller.stateSnapshot, initialState)
-
-    controller.beginStep()
-    assert.equal(controller.updateItem('T1', 'blocked', ['日志'], '等待服务').ok, true)
+    const changed = controller.update(
+      [{ action: 'add', outcome: '新增路线已经完成' }],
+      { itemId: 'T1', status: 'in_progress' },
+    )
+    assert.equal(changed.ok, true)
+    assert.ok(controller.snapshot?.items.some((item) => item.outcome === '新增路线已经完成'))
     controller.commitStep()
-    const blockedState = controller.stateSnapshot
 
     controller.beginStep()
-    assert.equal(controller.updateItem('T1', 'blocked', ['日志'], '等待服务').ok, false)
+    const before = controller.stateSnapshot
+    const duplicate = controller.update([], { itemId: 'T1', status: 'in_progress' })
+    assert.equal(duplicate.ok, true)
+    assert.deepEqual(controller.stateSnapshot, before)
     assert.equal(controller.commitStep(), undefined)
-    assert.deepEqual(controller.stateSnapshot, blockedState)
+
+    controller.beginStep()
+    const unchangedStructure = controller.update([
+      { action: 'edit', itemId: 'T2', outcome: '相关调用方已经统一' },
+    ])
+    assert.equal(unchangedStructure.ok, false)
+    assert.equal(unchangedStructure.ok ? null : unchangedStructure.error, 'no_state_change')
+    assert.equal(controller.commitStep(), undefined)
   })
 
-  it('未提交的 step 被丢弃时恢复原计划', () => {
-    const { controller } = activeController()
+  it('已完成状态只接受相同证据的幂等重放', () => {
+    const controller = activeController()
+    controller.beginStep()
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'completed',
+      evidence: ['实现已验证'],
+    }).ok, true)
+    controller.commitStep()
+
+    controller.beginStep()
+    const before = controller.stateSnapshot
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'completed',
+      evidence: ['实现已验证'],
+    }).ok, true)
+    assert.deepEqual(controller.stateSnapshot, before)
+    assert.equal(controller.commitStep(), undefined)
+
+    controller.beginStep()
+    const rewrite = controller.update([], {
+      itemId: 'T1',
+      status: 'completed',
+      evidence: ['试图改写证据'],
+    })
+    assert.equal(rewrite.ok, false)
+    assert.equal(rewrite.ok ? null : rewrite.error, 'invalid_transition')
+  })
+
+  it('阻塞状态的精确重放幂等，诊断变化仍会提交', () => {
+    const controller = activeController()
+    controller.beginStep()
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'blocked',
+      blockedReason: '等待外部服务',
+      evidence: ['连接失败'],
+    }).ok, true)
+    controller.commitStep()
+
+    controller.beginStep()
+    const before = controller.stateSnapshot
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'blocked',
+      blockedReason: '等待外部服务',
+      evidence: ['连接失败'],
+    }).ok, true)
+    assert.deepEqual(controller.stateSnapshot, before)
+    assert.equal(controller.commitStep(), undefined)
+
+    controller.beginStep()
+    assert.equal(controller.update([], {
+      itemId: 'T1',
+      status: 'blocked',
+      blockedReason: '服务已恢复，仍缺少凭据',
+      evidence: ['认证失败'],
+    }).ok, true)
+    assert.equal(controller.snapshot?.items[0]?.blockedReason, '服务已恢复，仍缺少凭据')
+    assert.ok(controller.commitStep())
+  })
+
+  it('未提交的模型步骤会恢复完整计划', () => {
+    const controller = activeController()
     const before = controller.snapshot
     controller.beginStep()
-    controller.updateItem('T1', 'blocked', [], '等待用户提供环境')
+    controller.update(
+      [{ action: 'add', outcome: '临时路线' }],
+      { itemId: 'T1', status: 'blocked', blockedReason: '临时阻塞', evidence: [] },
+    )
     controller.discardStep()
 
     assert.deepEqual(controller.snapshot, before)
   })
 
-  it('新复杂任务原子归档旧计划，丢弃半步时恢复原状态', () => {
-    const { controller } = activeController()
-    const before = controller.snapshot
-    const activeId = controller.snapshot!.id
+  it('全部里程碑完成后才能关闭为 completed，终态不保存总结', () => {
+    const controller = activeController()
     controller.beginStep()
-    assert.equal(
-      controller.replace(activeId, true, '交付新游戏', drafts, '用户明确切换游戏').ok,
-      true,
-    )
-    assert.equal(controller.snapshot?.goal, '交付新游戏')
+    assert.equal(controller.close('completed').ok, false)
     controller.discardStep()
-    assert.deepEqual(controller.snapshot, before)
 
+    completeCurrent(controller, 'T1')
+    completeCurrent(controller, 'T2')
+    completeCurrent(controller, 'T3')
     controller.beginStep()
-    assert.equal(
-      controller.replace(activeId, true, '交付新游戏', drafts, '用户明确切换游戏').ok,
-      true,
-    )
-    const committed = controller.commitStep()
-    assert.equal(committed?.displayUpdate.kind, 'replaced')
-    if (committed?.displayUpdate.kind !== 'replaced') return
-    assert.equal(committed.displayUpdate.previous.status, 'superseded')
-    assert.equal(committed.displayUpdate.previous.replacedByPlanId, committed.displayUpdate.plan.id)
-    assert.equal(committed.state.activePlan?.goal, '交付新游戏')
-    assert.equal(committed.state.historicalPlans[0]?.goal, '交付功能')
-  })
+    assert.equal(controller.close('completed').ok, true)
+    const commit = controller.commitStep()
 
-  it('计划身份切换必须独占计划变更，替换事件不会被后续更新覆盖', () => {
-    const { controller } = activeController()
-    const activeId = controller.snapshot!.id
-    controller.beginStep()
-
-    assert.equal(
-      controller.replace(activeId, true, '交付新游戏', drafts, '用户明确切换游戏').ok,
-      true,
-    )
-    assert.equal(
-      controller.updateItem('T1', 'completed', ['旧上下文证据']).ok,
-      false,
-    )
-    const committed = controller.commitStep()
-    assert.equal(committed?.displayUpdate.kind, 'replaced')
-    assert.equal(committed?.state.activePlan?.items[0]?.status, 'in_progress')
-
-    controller.beginStep()
-    assert.equal(controller.updateItem('T1', 'completed', ['新计划证据']).ok, true)
-    assert.equal(controller.replace(activeId, true, '不应覆盖', drafts, '同一步二次切换').ok, false)
-    assert.equal(controller.commitStep()?.displayUpdate.kind, 'updated')
-  })
-
-  it('所有任务和验证完成前拒绝关闭计划', () => {
-    const { controller } = activeController()
-    controller.beginStep()
-
-    assert.equal(controller.close('completed', '完成').ok, false)
-    controller.updateItem('T1', 'completed', ['实现证据'])
-    controller.updateItem('T2', 'completed', ['测试证据'])
-    assert.equal(controller.close('completed', '全部验证通过').ok, true)
     assert.equal(controller.snapshot, null)
+    assert.equal(commit?.plan.status, 'completed')
+    assert.equal('summary' in (commit?.plan ?? {}), false)
   })
 
-  it('有未完成项时阻止自然收尾，全部受阻时以可继续状态暂停', () => {
-    const { controller } = activeController()
+  it('全项阻塞时安全暂停，未完成时阻止自然收尾', () => {
+    const controller = activeController()
     assert.equal(controller.naturalStopDecision().kind, 'continue')
 
-    controller.beginStep()
-    controller.updateItem('T1', 'blocked', [], '缺少服务')
-    controller.updateItem('T2', 'blocked', [], '依赖同一服务')
+    blockCurrent(controller, 'T1')
+    blockCurrent(controller, 'T2')
+    blockCurrent(controller, 'T3')
     assert.equal(controller.naturalStopDecision().kind, 'pause')
   })
 
-  it('硬中断要求 Resume，恢复后才能更新计划', () => {
-    const { controller } = activeController()
+  it('硬中断后必须 Resume，恢复不会重写计划内容', () => {
+    const controller = activeController()
     const planId = controller.snapshot!.id
     assert.equal(controller.interrupt('user-cancel')?.resumeRequired, true)
 
     controller.beginStep()
-    assert.equal(controller.updateItem('T1', 'in_progress', []).ok, false)
+    const blocked = controller.update([], { itemId: 'T1', status: 'in_progress' })
+    assert.equal(blocked.ok, false)
+    assert.equal(blocked.ok ? null : blocked.error, 'resume_required')
     assert.equal(controller.resume(planId).ok, true)
-    const committed = controller.commitStep()
-    assert.equal(committed?.state.resumeRequired, false)
-    assert.equal(committed?.state.interruptionReason, null)
+    const commit = controller.commitStep()
+    assert.equal(commit?.state.resumeRequired, false)
+    assert.equal(commit?.state.interruptionReason, null)
   })
 
-  it('Replace 没有明确覆盖授权时返回冲突且不改变状态', () => {
-    const { controller } = activeController()
-    const before = controller.stateSnapshot
+  it('结束旧计划与创建新计划必须跨稳定步骤', () => {
+    const controller = activeController()
     controller.beginStep()
-    const result = controller.replace(
-      controller.snapshot!.id,
-      false,
-      '新任务',
-      drafts,
-      '用户只提出新目标',
-    )
-    assert.equal(result.ok, false)
-    assert.equal(result.ok ? null : result.error, 'active_plan_conflict')
-    assert.deepEqual(controller.stateSnapshot, before)
+    assert.equal(controller.close('abandoned').ok, true)
+    const sameStep = controller.create('新目标', drafts)
+    assert.equal(sameStep.ok, false)
+    assert.equal(sameStep.ok ? null : sameStep.error, 'step_conflict')
+    controller.commitStep()
+
+    controller.beginStep()
+    assert.equal(controller.create('新目标', drafts).ok, true)
+    assert.equal(controller.snapshot?.goal, '新目标')
   })
 
-  it('已有计划时 Create 引导原子替换而不是先放弃', () => {
-    const { controller } = activeController()
+  it('已有活动计划时 Create 明确要求先处理当前计划', () => {
+    const controller = activeController()
     controller.beginStep()
-
     const result = controller.create('另一个复杂任务', drafts)
 
     assert.equal(result.ok, false)
     assert.equal(result.ok ? null : result.error, 'active_plan_exists')
-    assert.match(result.ok ? '' : result.message, /ReplaceTaskPlan/)
-    assert.match(
-      result.ok ? '' : result.message,
-      /禁止用 CloseTaskPlan\(abandoned\)\+CreateTaskPlan/,
-    )
-    assert.deepEqual(controller.snapshot?.goal, '交付功能')
+    assert.match(result.ok ? '' : result.message, /CloseTaskPlan\(abandoned\)/)
   })
 })
 
-function createController() {
-  return {
-    controller: new TaskPlanController(),
-  }
+function activeController(): TaskPlanController {
+  const controller = new TaskPlanController()
+  controller.beginStep()
+  controller.create('交付功能', drafts)
+  controller.commitStep()
+  controller.beginStep()
+  controller.update([], { itemId: 'T1', status: 'in_progress' })
+  controller.commitStep()
+  return controller
 }
 
-function activeController() {
-  const created = createController()
-  created.controller.beginStep()
-  created.controller.create('交付功能', drafts)
-  created.controller.commitStep()
-  return created
+function completeCurrent(controller: TaskPlanController, itemId: string): void {
+  startItem(controller, itemId)
+  controller.beginStep()
+  assert.equal(controller.update([], {
+    itemId,
+    status: 'completed',
+    evidence: [`${itemId} 验证通过`],
+  }).ok, true)
+  controller.commitStep()
+}
+
+function blockCurrent(controller: TaskPlanController, itemId: string): void {
+  startItem(controller, itemId)
+  controller.beginStep()
+  assert.equal(controller.update([], {
+    itemId,
+    status: 'blocked',
+    blockedReason: `${itemId} 缺少依赖`,
+    evidence: [],
+  }).ok, true)
+  controller.commitStep()
+}
+
+function startItem(controller: TaskPlanController, itemId: string): void {
+  if (controller.snapshot?.items.find((item) => item.id === itemId)?.status === 'in_progress') return
+  controller.beginStep()
+  assert.equal(controller.update([], { itemId, status: 'in_progress' }).ok, true)
+  controller.commitStep()
 }

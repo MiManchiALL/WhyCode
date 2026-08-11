@@ -30,6 +30,60 @@ describe('Office OOXML engine', () => {
     assert.deepEqual(result.progress, ['正在生成报告'])
   })
 
+  it('接受求值为构建函数且以分号结尾的普通脚本文件', async () => {
+    const root = await tempDirectory()
+    const output = join(root, 'trailing-semicolon.docx')
+    const result = await build(root, output, 'docx', `async ({ docx }) => new docx.Document({
+      sections: [{ children: [new docx.Paragraph('合法的脚本完成值')] }],
+    });`)
+
+    assert.match(result.inspection.units[0]?.text ?? '', /合法的脚本完成值/)
+  })
+
+  it('为 UTF-8 文本资源提供严格解码的 text 视图', async () => {
+    const root = await tempDirectory()
+    const dataPath = join(root, 'data.json')
+    const scriptPath = join(root, 'json-builder.js')
+    const outputPath = join(root, 'from-json.docx')
+    await writeFile(dataPath, JSON.stringify({ title: '结构化数据已读取' }), 'utf8')
+    await writeFile(scriptPath, `async ({ docx, assets }) => {
+      const data = JSON.parse(assets.data.text)
+      return new docx.Document({
+        sections: [{ children: [new docx.Paragraph(data.title)] }],
+      })
+    };`, 'utf8')
+
+    const result = await buildOfficeFile({
+      format: 'docx',
+      scriptPath,
+      outputPath,
+      assets: [{ key: 'data', path: dataPath }],
+    })
+
+    assert.match(result.inspection.units[0]?.text ?? '', /结构化数据已读取/)
+  })
+
+  it('拒绝把无效 UTF-8 二进制资源伪装成文本', async () => {
+    const root = await tempDirectory()
+    const dataPath = join(root, 'invalid.txt')
+    const scriptPath = join(root, 'invalid-text-builder.js')
+    await writeFile(dataPath, Uint8Array.from([0xFF, 0xFE, 0xFD]))
+    await writeFile(scriptPath, `async ({ docx, assets }) => {
+      assets.data.text
+      return new docx.Document({ sections: [{ children: [] }] })
+    }`, 'utf8')
+
+    await assert.rejects(
+      buildOfficeFile({
+        format: 'docx',
+        scriptPath,
+        outputPath: join(root, 'invalid-text.docx'),
+        assets: [{ key: 'data', path: dataPath }],
+      }),
+      /构建资源不是有效 UTF-8 文本：data/,
+    )
+  })
+
   it('通过显式模板资源修改现有 OOXML，而不开放文件系统', async () => {
     const root = await tempDirectory()
     const template = join(root, 'template.docx')
@@ -62,6 +116,33 @@ describe('Office OOXML engine', () => {
     })
     assert.equal(templateComparison.removedPartCount, 0)
     assert.equal(templateComparison.modifiedProtectedParts.length, 0)
+  })
+
+  it('ExcelJS 可以直接加载模板资源的 Uint8Array', async () => {
+    const root = await tempDirectory()
+    const template = join(root, 'template.xlsx')
+    await build(root, template, 'xlsx', `async ({ ExcelJS }) => {
+      const workbook = new ExcelJS.Workbook()
+      workbook.addWorksheet('Data').getCell('A1').value = 'Original value'
+      return workbook
+    }`)
+    const scriptPath = join(root, 'modify.js')
+    const outputPath = join(root, 'modified.xlsx')
+    await writeFile(scriptPath, `async ({ ExcelJS, assets }) => {
+      const workbook = new ExcelJS.Workbook()
+      await workbook.xlsx.load(assets.template.bytes)
+      workbook.getWorksheet('Data').getCell('A1').value = 'Updated value'
+      return workbook
+    }`, 'utf8')
+
+    const result = await buildOfficeFile({
+      format: 'xlsx',
+      scriptPath,
+      outputPath,
+      assets: [{ key: 'template', path: template }],
+    })
+
+    assert.match(result.inspection.units[0]?.text ?? '', /Updated value/)
   })
 
   it('对象、样式、关系和校验视图返回稳定定位', async () => {

@@ -13,6 +13,7 @@ export interface OfficeBuildAsset {
   bytes: Uint8Array
   base64: string
   dataUri: string
+  text: string
 }
 
 type Builder = (context: Readonly<Record<string, unknown>>) => unknown | Promise<unknown>
@@ -51,7 +52,7 @@ export async function runOfficeBuilder(options: {
   const compartment = new Compartment({ globals, __options__: true })
   let value: unknown
   try {
-    value = compartment.evaluate(`(${options.source}\n)`)
+    value = compartment.evaluate(options.source)
   } catch (error) {
     throw new OfficeProcessingError(
       'corrupted',
@@ -60,7 +61,7 @@ export async function runOfficeBuilder(options: {
     )
   }
   if (typeof value !== 'function') {
-    throw new OfficeProcessingError('corrupted', 'Office 构建脚本必须是一个函数表达式')
+    throw new OfficeProcessingError('corrupted', 'Office 构建脚本的求值结果必须是构建函数')
   }
   try {
     return membrane.unwrap(await (value as Builder)(globals))
@@ -84,6 +85,7 @@ function createOfficeMembrane(): {
   const unwrapDeep = (value: unknown): unknown => {
     const direct = unwrap(value)
     if (direct !== value) return direct
+    if (value instanceof Uint8Array) return value
     if (Array.isArray(value)) return value.map(unwrapDeep)
     if (!isRecord(value) || !isPlainData(value)) return value
     return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, unwrapDeep(entry)]))

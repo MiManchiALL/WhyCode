@@ -1,13 +1,6 @@
 import type { TaskPlan } from '@whycode/core'
 import { Check, Circle, ListChecks, Minus } from 'lucide-react'
 
-const STATUS_LABEL = {
-  pending: '待处理',
-  in_progress: '进行中',
-  completed: '已完成',
-  blocked: '受阻',
-} as const
-
 interface TaskPlanCardProps {
   plan: TaskPlan
   compact: boolean
@@ -22,9 +15,7 @@ export function TaskPlanCard({ plan, compact }: TaskPlanCardProps) {
     ? `${completed}/${plan.items.length}`
     : plan.status === 'completed'
       ? '已完成'
-      : plan.status === 'superseded'
-        ? '已替换'
-        : '已放弃'
+      : '已结束'
 
   return (
     <section className="wc-paper-card wc-paper-blue wc-paper-shape-b w-full">
@@ -32,11 +23,8 @@ export function TaskPlanCard({ plan, compact }: TaskPlanCardProps) {
         <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--wc-blue)] text-[var(--wc-blue-ink)]">
           <ListChecks size={15} />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[11px] font-medium text-[var(--wc-faint)]">任务计划</span>
-          <span className="mt-0.5 block text-sm font-medium leading-5 text-[var(--wc-ink)]">
-            {plan.goal}
-          </span>
+        <span className="mt-1 min-w-0 flex-1 text-[11px] font-medium text-[var(--wc-faint)]">
+          任务计划
         </span>
         <span className="mt-1 shrink-0 text-[10px] text-[var(--wc-muted)]">{stateLabel}</span>
       </div>
@@ -53,27 +41,19 @@ export function TaskPlanCard({ plan, compact }: TaskPlanCardProps) {
             <div className="min-w-0 flex-1">
               <div className="leading-5 text-[var(--wc-ink)]">
                 <span className="mr-1 text-[var(--wc-faint)]">{item.id}</span>
-                {item.title}
+                {item.outcome}
                 {item.kind === 'verification' && (
                   <span className="ml-1 rounded-md bg-[var(--wc-sage)] px-1 py-0.5 text-[9px] text-[var(--wc-sage-ink)]">
                     验证
                   </span>
                 )}
               </div>
-              {!compact && (
-                <div className="text-[10px] leading-4 text-[var(--wc-faint)]">
-                  {STATUS_LABEL[item.status]} · {item.acceptance}
-                  {item.blockedReason ? ` · ${item.blockedReason}` : ''}
-                </div>
-              )}
+              {item.status === 'blocked' && item.blockedReason ? (
+                <div className="text-[10px] leading-4 text-[#946852]">{item.blockedReason}</div>
+              ) : null}
             </div>
           </div>
         ))}
-        {!compact && 'summary' in plan && plan.summary && (
-          <div className="border-t border-dashed border-[var(--wc-line)] pt-2 text-[11px] leading-5 text-[var(--wc-muted)]">
-            {plan.summary}
-          </div>
-        )}
       </div>
     </section>
   )

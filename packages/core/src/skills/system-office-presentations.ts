@@ -90,6 +90,7 @@ export const PRESENTATION_OFFICE_SKILL_FILES: readonly EmbeddedOfficeSkillFile[]
       '- 返回 PptxGenJS 实例；不要调用 `writeFile`。在添加任何幻灯片之前设置 layout；每个输出使用一个新实例。',
       '- 从零创建先固定一份视觉 token：画幅、左右/上下安全边距、字体层级、背景/正文/强调色、线宽和常用间距；所有页共用这些 token，但相邻页应选择不同信息轮廓。',
       '- 图片不暴露原路径，使用 `data: assets.hero.dataUri`；按目标框裁切并保持比例。',
+      '- JSON、CSV、TXT 等 UTF-8 输入使用 `assets.data.text`，JSON 用 `JSON.parse(assets.data.text)`；`bytes` 只用于 Office/OOXML 等二进制接口，不要用 `bytes.toString()` 解码文本。',
       '- 所有 `x/y/w/h` 都按英寸显式给出；颜色使用不带 `#` 的六位十六进制。文本框留出余量，内容过多时先精简或拆页，不把字号缩到不可读。',
       '- 列表使用 PptxGenJS bullet/paragraph 结构而非字面量 `•`；备注使用 `slide.addNotes()`。不要复用会被 PptxGenJS 原地改变的 options 对象。',
       '- 数据尽量使用原生 chart/table/shape，保持可编辑；图表明确单位、图例和来源。重复布局抽成本地函数，但相邻页面不要重复同一轮廓。',

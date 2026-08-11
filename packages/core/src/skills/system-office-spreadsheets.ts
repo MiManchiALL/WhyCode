@@ -58,6 +58,7 @@ export const SPREADSHEET_OFFICE_SKILL_FILES: readonly EmbeddedOfficeSkillFile[] 
       '- ExcelJS 本身不计算公式；BuildOfficeArtifact 会在隔离构建后调用 Microsoft Excel 或 LibreOffice `CalculateFullRebuild`/打开另存，随后重新执行深层检查。含公式文件只有在公式数保持一致、未保存计算值为 0、公式错误值为 0 时才会发布，并在工具结果中给出实际引擎证据。',
       '- 后台重算会禁用外部工作簿链接更新；含公式文件若保留 external workbook link 会停止发布。把必要来源值与来源说明固化在当前工作簿中，再使用可追踪的本地公式。',
       '- 设置表头样式、列宽、数字/日期格式、冻结窗格、筛选、打印方向和重复标题行；图片使用 `workbook.addImage({ base64: assets.logo.base64, extension: assets.logo.extension })`。',
+      '- JSON、CSV、TXT 等 UTF-8 输入使用 `assets.data.text`，JSON 用 `JSON.parse(assets.data.text)`；`bytes` 只用于 ExcelJS、OOXML 等二进制接口，不要用 `bytes.toString()` 解码文本。',
       '- 构建脚本中没有 import、require、process、Buffer 或文件系统。',
       '- 整个任务复用同一个构建脚本；视觉或公式检查发现问题时定点修改并重跑，不把脚本、预览或重算中间文件当成用户交付物。',
       '- 修改已有 XLSX 时把原件作为 `template` asset，BuildOfficeArtifact 使用 `mode: "template"` 与 `templateAssetKey: "template"`，先 `await workbook.xlsx.load(assets.template.bytes)`，再按 InspectOffice 的 cell/object/style locator 和相邻模式做局部修改；不要全表 autofit、重排或重写未涉及公式。',

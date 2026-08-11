@@ -87,15 +87,34 @@ async function readAssets(
     }
     const extension = extname(entry.path).slice(1).toLowerCase()
     const base64 = bytes.toString('base64')
+    const assetBytes = new Uint8Array(bytes)
+    const assetKey = entry.key
+    let decodedText: string | undefined
     assets[entry.key] = Object.freeze({
       name: entry.path.split(/[\\/]/).at(-1) ?? entry.key,
       extension,
-      bytes: new Uint8Array(bytes),
+      bytes: assetBytes,
       base64,
       dataUri: `data:${assetMediaType(extension)};base64,${base64}`,
+      get text() {
+        decodedText ??= decodeUtf8Asset(assetBytes, assetKey)
+        return decodedText
+      },
     })
   }
   return Object.freeze(assets)
+}
+
+function decodeUtf8Asset(bytes: Uint8Array, key: string): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch (error) {
+    throw new OfficeProcessingError(
+      'corrupted',
+      `构建资源不是有效 UTF-8 文本：${key}`,
+      { cause: error },
+    )
+  }
 }
 
 async function serializeArtifact(format: OfficeFormat, artifact: unknown): Promise<Buffer> {

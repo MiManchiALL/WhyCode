@@ -887,12 +887,7 @@ function reconcileTaskPlanView(
     return
   }
   if (!visible || visible.kind === 'none') return
-  const latestHistory = taskState.historicalPlans.at(-1)
-  if (
-    visible.kind === 'terminal'
-    && visible.id === latestHistory?.id
-    && visible.revision === latestHistory.revision
-  ) return
+  if (visible.kind === 'terminal') return
   viewEvents.push({
     type: 'core-event',
     event: { type: 'task-plan-restored', plan: null },
@@ -906,9 +901,6 @@ function latestVisibleTaskPlan(
     const entry = viewEvents[index]
     if (entry?.type !== 'core-event') continue
     const event = entry.event
-    if (event.type === 'task-plan-replaced') {
-      return { kind: 'active', id: event.plan.id, revision: event.plan.revision }
-    }
     if (event.type === 'task-plan-updated') {
       return {
         kind: event.plan.status === 'active' ? 'active' : 'terminal',

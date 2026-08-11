@@ -20,7 +20,7 @@ import { SessionStore } from '../session/store.ts'
 import { createUserQuestionMarker } from '../tasks/answer-resume.ts'
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
-  REPLACE_TASK_PLAN_TOOL_NAME,
+  CREATE_TASK_PLAN_TOOL_NAME,
 } from '../tasks/tools.ts'
 import {
   activeTaskPlanSchema,
@@ -137,8 +137,8 @@ describe('Agent 资源检查点联动', () => {
     await assert.rejects(access(target))
   })
 
-  it('替换计划后的文件和对话回滚会恢复旧活动计划并移除新文件', async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-plan-replacement-'))
+  it('结束旧计划并创建新计划后，文件和对话回滚会恢复原活动计划', async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-plan-switch-'))
     roots.push(root)
     const project = join(root, 'project')
     const target = join(project, 'csgo.html')
@@ -155,11 +155,15 @@ describe('Agent 资源检查点联动', () => {
       revision: 2,
       items: [
         {
-          id: 'T1', kind: 'work', title: '实现游戏', acceptance: '可以运行',
+          id: 'T1', kind: 'work', outcome: '游戏核心已经可运行',
           status: 'in_progress', evidence: [],
         },
         {
-          id: 'T2', kind: 'verification', title: '验证游戏', acceptance: '运行无误',
+          id: 'T2', kind: 'work', outcome: '关卡与交互已经完整',
+          status: 'pending', evidence: [],
+        },
+        {
+          id: 'T3', kind: 'verification', outcome: '游戏整体运行无误',
           status: 'pending', evidence: [],
         },
       ],
@@ -167,15 +171,6 @@ describe('Agent 资源检查点联动', () => {
     const oldState: TaskPlanState = {
       version: 7,
       activePlan: oldPlan,
-      historicalPlans: [{
-        id: '33333333-3333-4333-8333-333333333333',
-        goal: '完成 Minecraft 游戏',
-        status: 'completed',
-        summary: '功能和验证均已完成',
-        completedItems: 2,
-        totalItems: 2,
-        revision: 4,
-      }],
       resumeRequired: true,
       interruptionReason: 'user-cancel',
     }
@@ -184,7 +179,7 @@ describe('Agent 资源检查点联动', () => {
     await recorder.recordTurnEnd('old-plan', 'paused')
     const events: CoreEvent[] = []
     const session = new AgentSession({
-      model: modelEntry(modelReplacingAndWriting(target)),
+      model: modelEntry(modelSwitchingAndWriting(target)),
       providerConfig: { apiKey: 'test' },
       promptContext: { projectDir: project, osPlatform: process.platform },
       sessionRecorder: recorder,
@@ -248,25 +243,26 @@ function modelRunningCommand(): MockLanguageModelV4 {
   })
 }
 
-function modelReplacingAndWriting(path: string): MockLanguageModelV4 {
+function modelSwitchingAndWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
-      toolStep(REPLACE_TASK_PLAN_TOOL_NAME, {
-        expected_active_plan_id: '11111111-1111-4111-8111-111111111111',
-        replacement_authorized: true,
+      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
+        outcome: 'abandoned',
+      }, 'close-old-plan'),
+      toolStep('ListDir', { path: '.', limit: 20 }, 'scan-project'),
+      toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '开发 CSGO 游戏',
-        reason: '用户明确切换到新的独立游戏任务',
         items: [
-          { kind: 'work', title: '实现 CSGO', acceptance: '游戏可以运行' },
-          { kind: 'verification', title: '验证 CSGO', acceptance: '运行无错误' },
+          { kind: 'work', outcome: 'CSGO 核心玩法已经可运行' },
+          { kind: 'work', outcome: '界面与交互已经完整' },
+          { kind: 'verification', outcome: 'CSGO 游戏整体运行无错误' },
         ],
-      }, 'replace-plan'),
+      }, 'create-new-plan'),
       toolStep('WriteFile', { path, content: 'csgo' }, 'write-csgo'),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
         outcome: 'abandoned',
-        summary: '测试结束',
       }, 'close-plan'),
-      textStep('替换完成', 'replacement-final'),
+      textStep('切换完成', 'switch-final'),
     ],
   })
 }

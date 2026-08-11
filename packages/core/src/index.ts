@@ -413,18 +413,16 @@ export type {
   WorktreeWorkspaceBinding,
 } from './workspace/types.ts'
 export {
+  abandonedTaskPlanSchema,
   activeTaskPlanSchema,
-  supersededTaskPlanSchema,
+  completedTaskPlanSchema,
   taskPlanStateSchema,
-  historicalTaskPlanSummarySchema,
   taskItemSchema,
   taskItemStatusSchema,
   taskPlanSchema,
 } from './tasks/types.ts'
 export type {
   ActiveTaskPlan,
-  HistoricalTaskPlanSummary,
-  SupersededTaskPlan,
   TaskItem,
   TaskItemStatus,
   TaskPlan,

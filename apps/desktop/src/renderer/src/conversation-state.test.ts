@@ -618,24 +618,23 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /推进计划/)
   })
 
-  it('恢复计划替换历史块，同时只把新计划置于顶部活动状态', () => {
+  it('恢复结束旧计划和创建新计划时只投影最新计划，不生成历史块', () => {
     const previousActive = taskPlan(1)
     const next = { ...taskPlan(1), id: '22222222-2222-4222-8222-222222222222', goal: '开发 CSGO' }
-    const state = createConversationState([core({
-      type: 'task-plan-replaced',
-      previous: {
+    const state = createConversationState([
+      core({
+        type: 'task-plan-updated',
+        plan: {
         ...previousActive,
-        status: 'superseded',
-        summary: '用户明确切换游戏',
-        replacedByPlanId: next.id,
-      },
-      plan: next,
-    })])
+          status: 'abandoned',
+          revision: previousActive.revision + 1,
+        },
+      }),
+      core({ type: 'task-plan-updated', plan: next }),
+    ])
 
     assert.deepEqual(state.taskPlan, next)
-    const archived = state.blocks.find((block) => block.kind === 'plan-replaced')
-    assert.equal(archived?.kind === 'plan-replaced' && archived.previous.status, 'superseded')
-    assert.equal(archived?.kind === 'plan-replaced' && archived.nextGoal, '开发 CSGO')
+    assert.doesNotMatch(JSON.stringify(state.blocks), /plan-replaced|用户明确切换游戏/)
   })
 
   it('恢复待回答问题，并在下一条用户消息出现后清除等待卡', () => {
@@ -793,17 +792,22 @@ function taskPlan(revision: number) {
       {
         id: 'T1',
         kind: 'work' as const,
-        title: '实现',
-        acceptance: '代码完成',
+        outcome: '核心能力已经实现',
         status: revision > 1 ? 'completed' as const : 'in_progress' as const,
         evidence: revision > 1 ? ['完成'] : [],
       },
       {
         id: 'T2',
-        kind: 'verification' as const,
-        title: '验证',
-        acceptance: '测试通过',
+        kind: 'work' as const,
+        outcome: '相关调用已经统一',
         status: revision > 1 ? 'in_progress' as const : 'pending' as const,
+        evidence: [],
+      },
+      {
+        id: 'T3',
+        kind: 'verification' as const,
+        outcome: '整体结果通过验证',
+        status: 'pending' as const,
         evidence: [],
       },
     ],

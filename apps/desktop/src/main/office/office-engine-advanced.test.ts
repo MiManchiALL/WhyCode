@@ -233,13 +233,13 @@ describe('Office OOXML engine advanced', () => {
     )
   })
 
-  it('拒绝不是函数表达式或没有返回对应产物的构建脚本', async () => {
+  it('拒绝求值结果不是函数或没有返回对应产物的构建脚本', async () => {
     const root = await tempDirectory()
     const source = join(root, 'builder.js')
     await writeFile(source, 'const value = 1', 'utf8')
     await assert.rejects(() => buildOfficeFile({
       format: 'docx', scriptPath: source, outputPath: join(root, 'invalid.docx'), assets: [],
-    }), /编译失败/)
+    }), /求值结果必须是构建函数/)
 
     await writeFile(source, 'async () => ({})', 'utf8')
     await assert.rejects(() => buildOfficeFile({

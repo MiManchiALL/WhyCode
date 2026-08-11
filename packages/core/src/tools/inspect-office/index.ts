@@ -19,7 +19,8 @@ export function createInspectOfficeTool(processor: OfficeProcessor) {
     prompt: INSPECT_OFFICE_PROMPT,
     inputSchema: z.object({
       path: z.string().min(1).describe('项目内或已授权的 DOCX/PPTX/XLSX 路径'),
-      startUnit: z.number().int().positive().default(1).describe('起始结构单元，从 1 开始'),
+      startUnit: z.number().int().positive().default(1)
+        .describe('起始结构单元；首次为 1，续页使用上一结果的 nextUnit，不是 XLSX 行号'),
       unitCount: z.number().int().min(1).max(OFFICE_INSPECT_MAX_UNITS)
         .default(OFFICE_INSPECT_DEFAULT_UNITS).describe('本次读取的结构单元数'),
       view: officeInspectViewSchema.default('content')
