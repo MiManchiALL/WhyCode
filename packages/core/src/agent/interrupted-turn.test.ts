@@ -542,7 +542,10 @@ describe('用户中断后的新回合', () => {
           warnings: [],
         }
       },
-      doStream: [finalStep('第一轮完成。'), finalStep('压缩后的新问题已回答。')],
+      doStream: [
+        finalStep(`第一轮完成。${'x'.repeat(100_000)}`),
+        finalStep('压缩后的新问题已回答。'),
+      ],
     })
     const events: CoreEvent[] = []
     const session = new AgentSession({
@@ -576,6 +579,25 @@ describe('用户中断后的新回合', () => {
     )
     assert.equal(session.isBusy, false)
     assert.equal(idleResolved, true)
+  })
+
+  it('手动压缩与自动压缩共用微清理入口，短上下文只持久化微清理结果', async () => {
+    const model = new MockLanguageModelV4({})
+    const events: CoreEvent[] = []
+    const session = createMemorySession(model, undefined, (event) => events.push(event))
+    session.restoreMessageSnapshot(microcompactableHistory())
+
+    await session.compactNow()
+
+    assert.equal(model.doGenerateCalls.length, 0)
+    assert.equal(
+      events.some((event) => event.type === 'context-compacted' && event.level === 'micro'),
+      true,
+    )
+    assert.equal(
+      JSON.stringify(session.captureMessageSnapshot()).includes('旧工具输出已清理以节省上下文'),
+      true,
+    )
   })
 
   it('被中止任务尚未创建计划时不靠隐藏 Create 阻止误续跑', async () => {
@@ -1185,6 +1207,34 @@ function finalChunks(text: string) {
 
 function toolNames(call: MockLanguageModelV4['doStreamCalls'][number] | undefined): string[] {
   return (call?.tools ?? []).flatMap((tool) => tool.type === 'function' ? [tool.name] : [])
+}
+
+function microcompactableHistory() {
+  const messages: Parameters<AgentSession['restoreMessageSnapshot']>[0] = [
+    { role: 'user', content: '读取几个文件' },
+  ]
+  for (let index = 0; index < 6; index++) {
+    const toolCallId = `read-${index}`
+    messages.push({
+      role: 'assistant',
+      content: [{
+        type: 'tool-call',
+        toolCallId,
+        toolName: 'ReadFile',
+        input: { path: `${index}.txt` },
+      }],
+    })
+    messages.push({
+      role: 'tool',
+      content: [{
+        type: 'tool-result',
+        toolCallId,
+        toolName: 'ReadFile',
+        output: { type: 'text', value: `内容 ${index}` },
+      }],
+    })
+  }
+  return messages
 }
 
 function createSession(

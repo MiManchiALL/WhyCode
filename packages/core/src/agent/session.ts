@@ -1370,7 +1370,7 @@ export class AgentSession {
     }
   }
 
-  /** 手动压缩（用户主动触发，不看阈值）：直接走全量摘要；期间用户消息排队，完成后接续 */
+  /** 手动压缩（用户主动触发，不看阈值）：统一先微清理，再尝试完整压缩。 */
   async compactNow(): Promise<void> {
     const { emit } = this.options
     if (this.isBusy) {
@@ -1388,6 +1388,7 @@ export class AgentSession {
     emit({ type: 'agent-status', status: 'working' })
     try {
       await this.refreshProjectInstructions()
+      const microcompacted = this.microcompactCurrentMessages()
       const result = await compactMessages(
         this.createLanguageModel(),
         withoutMcpToolState(this.messages),
@@ -1397,20 +1398,24 @@ export class AgentSession {
         (messages) => this.messagesForCurrentModel(messages, signal, false),
         this.requestProviderOptions(),
       )
-      this.messages = carryMcpToolState(this.messages, result.messages)
-      await this.refreshProjectInstructions()
-      this.rebuildActivePdfAttachments()
-      await this.persist((recorder) =>
-        recorder.recordSnapshot('compact', this.messages, undefined, this.taskPlan?.stateSnapshot),
-      )
-      this.tokenBaseline = null
-      this.compactFailures = 0
-      emit({
-        type: 'context-compacted',
-        level: 'full',
-        preTokens,
-        postTokens: this.estimateCurrentContextTokens(),
-      })
+      if (result.summaryText || microcompacted) {
+        this.messages = carryMcpToolState(this.messages, result.messages)
+        await this.refreshProjectInstructions()
+        this.rebuildActivePdfAttachments()
+        await this.persist((recorder) =>
+          recorder.recordSnapshot('compact', this.messages, undefined, this.taskPlan?.stateSnapshot),
+        )
+        this.tokenBaseline = null
+        this.compactFailures = 0
+        emit({
+          type: 'context-compacted',
+          level: result.summaryText ? 'full' : 'micro',
+          preTokens,
+          postTokens: this.estimateCurrentContextTokens(),
+        })
+      } else {
+        emit({ type: 'error', message: '当前上下文已在精确保留预算内，无需压缩', recoverable: true })
+      }
     } catch (error) {
       emit({
         type: 'error',
@@ -1460,10 +1465,8 @@ export class AgentSession {
 
     const preTokens = estimate
     // 第一级：微清理旧工具输出（改写历史后基线失效，全量重估）
-    const cleaned = microcompact(this.messages)
-    if (cleaned) {
-      this.messages = cleaned
-      this.tokenBaseline = null
+    const microcompacted = this.microcompactCurrentMessages()
+    if (microcompacted) {
       estimate = this.estimateCurrentContextTokens()
       if (estimate < threshold) {
         emit({ type: 'context-compacted', level: 'micro', preTokens, postTokens: estimate })
@@ -1482,6 +1485,18 @@ export class AgentSession {
         (messages) => this.messagesForCurrentModel(messages, abortSignal, false),
         this.requestProviderOptions(),
       )
+      if (!result.summaryText) {
+        this.compactFailures++
+        if (microcompacted) {
+          emit({
+            type: 'context-compacted',
+            level: 'micro',
+            preTokens,
+            postTokens: this.estimateCurrentContextTokens(),
+          })
+        }
+        return
+      }
       this.messages = carryMcpToolState(this.messages, result.messages)
       await this.refreshProjectInstructions()
       this.rebuildActivePdfAttachments()
@@ -1503,6 +1518,15 @@ export class AgentSession {
       this.compactFailures++
       // 失败不阻塞：请求可能仍能成功（估算偏保守），连续 3 次后停止尝试
     }
+  }
+
+  /** 自动与手动压缩共用的唯一微清理入口。 */
+  private microcompactCurrentMessages(): boolean {
+    const cleaned = microcompact(this.messages)
+    if (!cleaned) return false
+    this.messages = cleaned
+    this.tokenBaseline = null
+    return true
   }
 
   private compactApplicationContext(

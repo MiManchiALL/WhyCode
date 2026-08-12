@@ -5,27 +5,24 @@ import {
   type ProviderMetadata,
 } from 'ai'
 import { readFile } from 'node:fs/promises'
-import { estimateMessageTokens, estimateTextTokens } from './tokens.ts'
 import {
-  COMPACT_CONTINUATION_PREFIX,
-  COMPACT_CONTINUATION_SUFFIX,
-  COMPACT_SUMMARY_PROMPT,
+  COMPACT_HISTORY_SUMMARY_PROMPT,
+  COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
+  compactSummaryReference,
+  createCompactApplicationContextMessage,
+  createCompactSummaryMessage,
 } from '../prompts/compact.ts'
-import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
-import { findPendingUserQuestionIndex } from '../tasks/answer-resume.ts'
 import {
   applyProjectInstructions,
   findProjectInstructionsMessage,
 } from '../instructions/project.ts'
-import { isCommandTaskNotificationText } from '../tools/background-command/notification.ts'
+import {
+  findTrailingTurnInputBatchStart,
+  prepareCompaction,
+  type SummarySource,
+} from './compact-boundary.ts'
+import { estimateTextTokens } from './tokens.ts'
 
-/**
- * 全量摘要压缩（M2-d 第二级）。重建顺序：摘要 → 保留尾部 → 重注入最近读过的文件。
- */
-
-const KEEP_TAIL_MIN_TOKENS = 10_000
-const KEEP_TAIL_MAX_TOKENS = 40_000
-const KEEP_TAIL_MIN_TEXT_MESSAGES = 5
 const REINJECT_MAX_FILES = 5
 const REINJECT_TOKEN_BUDGET = 50_000
 const REINJECT_MAX_TOKENS_PER_FILE = 5_000
@@ -35,84 +32,60 @@ export interface CompactResult {
   summaryText: string
 }
 
-/**
- * 选择保留的尾部起点：从末尾向前累积到 ≥10k tokens 且 ≥5 条真实文本消息（40k 软上限），
- * 再回退到最近的 user 消息边界（保证不切断 assistant tool-call 与 tool result 配对）。
- */
-export function pickTailStart(messages: ModelMessage[]): number {
-  let tokens = 0
-  let textMessages = 0
-  let start = messages.length
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const t = estimateMessageTokens(messages[i]!)
-    if (tokens + t > KEEP_TAIL_MAX_TOKENS && textMessages >= KEEP_TAIL_MIN_TEXT_MESSAGES) break
-    tokens += t
-    if (isConversationTextMessage(messages[i]!)) textMessages++
-    start = i
-    if (tokens >= KEEP_TAIL_MIN_TOKENS && textMessages >= KEEP_TAIL_MIN_TEXT_MESSAGES) break
-  }
-  // 回退到包含当前起点的真实 user turn，避免切断 assistant tool-call/result。
-  for (let i = Math.min(start, messages.length - 1); i >= 0; i--) {
-    if (isRealUserMessage(messages[i]!)) return i
-  }
-  return 0
-}
+type SummaryKind = 'history' | 'turn-prefix'
 
-/** 摘要前缀终点；尚未消费的中断边界及其后新消息必须逐字保留。 */
-export function pickSummaryEnd(messages: ModelMessage[]): number {
-  const tailStart = pickTailStart(messages)
-  const defaultEnd = tailStart === 0 ? messages.length : tailStart
-  const protectedIndexes = [
-    findPendingTurnAbortedIndex(messages),
-    findPendingUserQuestionIndex(messages),
-    trailingTurnInputBatchStart(messages),
-  ].filter((index): index is number => index !== null)
-  return protectedIndexes.length === 0 ? defaultEnd : Math.min(defaultEnd, ...protectedIndexes)
-}
-
-/** 调用当前模型生成摘要（关工具），剥掉 <analysis> 草稿 */
-export async function summarize(
+/** 调用当前模型生成一种摘要（关工具），剥掉可选的 analysis 草稿。 */
+async function summarize(
   model: LanguageModel,
   messages: ModelMessage[],
+  kind: SummaryKind,
   abortSignal: AbortSignal,
   providerOptions?: ProviderMetadata,
 ): Promise<string> {
+  const prompt = kind === 'history'
+    ? COMPACT_HISTORY_SUMMARY_PROMPT
+    : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
   const result = await generateText({
     model,
-    system: '你是一个负责总结对话的助手。',
-    messages: [...messages, { role: 'user', content: COMPACT_SUMMARY_PROMPT }],
+    system: '你是对话压缩助手。忠实总结给定范围，不延续任务，不调用工具。',
+    messages: [...messages, { role: 'user', content: prompt }],
     abortSignal,
     providerOptions,
   })
-  const text = result.text
-  const summaryMatch = /<summary>([\s\S]*?)(<\/summary>|$)/.exec(text)
-  return (summaryMatch ? summaryMatch[1]! : text.replace(/<analysis>[\s\S]*?<\/analysis>/, '')).trim()
+  const match = /<summary>([\s\S]*?)(<\/summary>|$)/u.exec(result.text)
+  const summary = (match
+    ? match[1]!
+    : result.text.replace(/<analysis>[\s\S]*?<\/analysis>/u, '')
+  ).trim()
+  if (!summary) throw new Error(`${kind === 'history' ? '历史' : 'turn 前缀'}摘要为空`)
+  return summary
 }
 
-/** 重注入最近读过的文件（新鲜内容重读，防「压缩后失忆」） */
+/** 重注入最近读过的文件（新鲜内容重读，防压缩后失忆）。 */
 async function buildFileReinjection(
   recentReadFiles: { path: string; readAt: number }[],
 ): Promise<string | null> {
   const sorted = [...recentReadFiles].sort((a, b) => b.readAt - a.readAt).slice(0, REINJECT_MAX_FILES)
   let budget = REINJECT_TOKEN_BUDGET
   const sections: string[] = []
-  for (const f of sorted) {
-    const content = await readFile(f.path, 'utf-8').catch(() => null)
+  for (const file of sorted) {
+    const content = await readFile(file.path, 'utf-8').catch(() => null)
     if (content === null) continue
     let text = content
     while (estimateTextTokens(text) > REINJECT_MAX_TOKENS_PER_FILE) {
-      text = text.slice(0, Math.floor(text.length * 0.8)) + '\n[已截断]'
+      text = `${text.slice(0, Math.floor(text.length * 0.8))}\n[已截断]`
     }
     const cost = estimateTextTokens(text)
     if (cost > budget) continue
     budget -= cost
-    sections.push(`### ${f.path}\n${text}`)
+    sections.push(`### ${file.path}\n${text}`)
   }
-  if (sections.length === 0) return null
-  return `压缩前最近读过的文件（当前最新内容）：\n\n${sections.join('\n\n')}`
+  return sections.length > 0
+    ? `压缩前最近读过的文件（当前最新内容）：\n\n${sections.join('\n\n')}`
+    : null
 }
 
-/** 执行完整压缩：摘要 + 尾部保留 + 文件重注入，返回重建后的消息数组 */
+/** 执行完整压缩并重建当前模型消息链。 */
 export async function compactMessages(
   model: LanguageModel,
   messages: ModelMessage[],
@@ -126,79 +99,107 @@ export async function compactMessages(
 ): Promise<CompactResult> {
   const projectInstructions = findProjectInstructionsMessage(messages)
   const conversationMessages = applyProjectInstructions(messages, null)
-  // 尾部起点为 0 = 全部历史都在尾部预算内，此时「摘要+全量尾部」只会更大——退化为纯摘要替换
-  const effectiveTailStart = pickSummaryEnd(conversationMessages)
-  if (effectiveTailStart === 0) {
+  const preparation = prepareCompaction(conversationMessages)
+  if (!preparation) {
     return {
       messages: applyProjectInstructions(conversationMessages, projectInstructions),
       summaryText: '',
     }
   }
-  const toSummarize = conversationMessages.slice(0, effectiveTailStart)
-  const tail = conversationMessages.slice(effectiveTailStart)
-  const summaryInput = projectInstructions
-    ? [projectInstructions, ...toSummarize]
-    : toSummarize
-  const preparedMessages = prepareMessagesForModel
-    ? await prepareMessagesForModel(summaryInput)
-    : summaryInput
-  const summaryText = await summarize(model, preparedMessages, abortSignal, providerOptions)
 
+  let historySummary = preparation.carriedHistorySummary
+  if (preparation.historySource) {
+    historySummary = await summarizeSource(
+      model,
+      preparation.historySource,
+      'history',
+      projectInstructions,
+      abortSignal,
+      prepareMessagesForModel,
+      providerOptions,
+    )
+  }
+  const turnPrefixSummary = preparation.turnPrefixSource
+    ? await summarizeSource(
+        model,
+        preparation.turnPrefixSource,
+        'turn-prefix',
+        projectInstructions,
+        abortSignal,
+        prepareMessagesForModel,
+        providerOptions,
+      )
+    : null
+
+  if (!historySummary && !turnPrefixSummary) {
+    return {
+      messages: applyProjectInstructions(conversationMessages, projectInstructions),
+      summaryText: '',
+    }
+  }
   const rebuilt: ModelMessage[] = [
-    {
-      role: 'user',
-      content: COMPACT_CONTINUATION_PREFIX + summaryText + COMPACT_CONTINUATION_SUFFIX,
-    },
-    ...tail,
+    createCompactSummaryMessage({ historySummary, turnPrefixSummary }),
+    ...preparation.tail,
   ]
-  const internalSections = [
+  await injectApplicationContext(rebuilt, recentReadFiles, applicationContext)
+  return {
+    messages: applyProjectInstructions(rebuilt, projectInstructions),
+    summaryText: [historySummary, turnPrefixSummary].filter(Boolean).join('\n\n---\n\n'),
+  }
+}
+
+async function summarizeSource(
+  model: LanguageModel,
+  source: SummarySource,
+  kind: SummaryKind,
+  projectInstructions: ModelMessage | null,
+  abortSignal: AbortSignal,
+  prepareMessagesForModel?: (
+    messages: ModelMessage[],
+  ) => ModelMessage[] | Promise<ModelMessage[]>,
+  providerOptions?: ProviderMetadata,
+): Promise<string> {
+  const summaryContext = summaryContextMessages(source, kind)
+  const input = projectInstructions
+    ? [projectInstructions, ...summaryContext]
+    : summaryContext
+  const prepared = prepareMessagesForModel
+    ? await prepareMessagesForModel(input)
+    : input
+  return summarize(model, prepared, kind, abortSignal, providerOptions)
+}
+
+function summaryContextMessages(
+  source: SummarySource,
+  kind: SummaryKind,
+): ModelMessage[] {
+  const messages: ModelMessage[] = []
+  if (source.previousSummary) {
+    const tag = kind === 'history'
+      ? 'whycode-previous-history-summary'
+      : 'whycode-previous-turn-prefix-summary'
+    messages.push(compactSummaryReference(tag, source.previousSummary))
+  }
+  if (source.completedTurnPrefixSummary) {
+    messages.push(compactSummaryReference(
+      'whycode-completed-turn-prefix-summary',
+      source.completedTurnPrefixSummary,
+    ))
+  }
+  return [...messages, ...source.messages]
+}
+
+async function injectApplicationContext(
+  messages: ModelMessage[],
+  recentReadFiles: { path: string; readAt: number }[],
+  applicationContext?: string,
+): Promise<void> {
+  const sections = [
     await buildFileReinjection(recentReadFiles),
     applicationContext,
   ].filter((section): section is string => Boolean(section))
-  if (internalSections.length > 0) {
-    const internalMessage: ModelMessage = {
-      role: 'user',
-      content: ['<system-reminder>', ...internalSections, '</system-reminder>'].join('\n\n'),
-    }
-    let insertAt = rebuilt.length
-    while (insertAt > 0 && isRealUserMessage(rebuilt[insertAt - 1]!)) insertAt--
-    rebuilt.splice(insertAt, 0, internalMessage)
-  }
-  return {
-    messages: applyProjectInstructions(rebuilt, projectInstructions),
-    summaryText,
-  }
-}
-
-function isConversationTextMessage(message: ModelMessage): boolean {
-  if (message.role === 'tool') return false
-  if (isInternalMessage(message)) return false
-  return modelMessageText(message).trim().length > 0
-}
-
-function trailingTurnInputBatchStart(messages: ModelMessage[]): number | null {
-  if (messages.length === 0 || !isPendingTurnInput(messages.at(-1)!)) return null
-  let start = messages.length - 1
-  while (start > 0 && isPendingTurnInput(messages[start - 1]!)) start--
-  return start
-}
-
-function isPendingTurnInput(message: ModelMessage): boolean {
-  if (isRealUserMessage(message)) return true
-  return message.role === 'user' && isCommandTaskNotificationText(modelMessageText(message))
-}
-
-function isRealUserMessage(message: ModelMessage): boolean {
-  return message.role === 'user' && !isInternalMessage(message)
-}
-
-function isInternalMessage(message: ModelMessage): boolean {
-  if (message.role !== 'user') return false
-  const text = modelMessageText(message).trimStart()
-  return text.startsWith('<system-reminder>') || isCommandTaskNotificationText(text)
-}
-
-function modelMessageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
+  if (sections.length === 0) return
+  const internalMessage = createCompactApplicationContextMessage(sections)
+  const insertAt = findTrailingTurnInputBatchStart(messages) ?? messages.length
+  messages.splice(insertAt, 0, internalMessage)
 }

@@ -265,7 +265,7 @@ describe('Main 长任务端到端控制', () => {
     session.restoreTaskStateSnapshot(activeState())
     session.restoreMessageSnapshot([
       { role: 'user', content: '手动压缩此前对话' },
-      { role: 'assistant', content: '此前回答' },
+      { role: 'assistant', content: '此前回答'.repeat(20_000) },
     ])
     await session.compactNow()
     const manualContext = JSON.stringify(session.captureMessageSnapshot())

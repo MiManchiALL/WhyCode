@@ -59,7 +59,8 @@ function toolUsageSection(backgroundCommandsAvailable: boolean): string {
     '- 相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟；存在数据依赖、写入顺序或前一步结果尚未确定时，按顺序调用。',
     '- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。',
     `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${BASH_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`,
-    '- 只要当前步骤还要调用工具，文字只作简短进度说明；全部工具结束后再交付完整、自包含的最终回答，不用“见上文”或前序步骤中的正文代替最终结果。',
+    '- 需要调用工具时，首次调用前简短说明立即要做什么；长任务包含多次工具调用或多个阶段时，在有新进展的合理间隔用 1～2 句话概括已确认进度和接下来方向，不重复未变化的状态；进度文字后在同一步继续调用工具。',
+    '- 这些文字只是阶段性进度；全部工具结束后再交付完整、自包含的最终回答，不用“见上文”或前序进度代替最终结果。',
     ...(backgroundCommandsAvailable
       ? [
           `- 普通短命令使用 ${BASH_TOOL_NAME}。长安装、构建和测试使用 ${START_COMMAND_TOOL_NAME} 的默认等待模式，命令终态后当前任务会自动继续，不能先用文字承诺“后台完成后再验证”便结束。只有开发服务器、watch 或跨回合 stdin 的持久进程才设 detach=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理；脱离任务进入 completed/failed 后，应用会用 <task-notification> 自动续轮，不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
