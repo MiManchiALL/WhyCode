@@ -21,6 +21,9 @@ export function BlockView({
   onEdit,
   onToggle,
   showAssistantActions,
+  forkTurnId,
+  forkPending,
+  onFork,
 }: {
   runtimeId: string
   block: Block
@@ -34,6 +37,9 @@ export function BlockView({
   onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: () => void
   showAssistantActions: boolean
+  forkTurnId: string | null
+  forkPending: boolean
+  onFork: (turnId: string) => void
 }) {
   if (block.kind === 'user') {
     return (
@@ -57,6 +63,8 @@ export function BlockView({
             timestamp={block.timestamp}
             text={block.text}
             className="absolute left-1 top-full pt-1"
+            onFork={forkTurnId && !busy ? () => onFork(forkTurnId) : undefined}
+            forkPending={forkPending}
           />
         ) : null}
       </div>

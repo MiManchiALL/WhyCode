@@ -21,9 +21,9 @@ import {
 } from '@whycode/core'
 
 interface WorktreeManifest {
-  schemaVersion: 1
+  schemaVersion: 2
   binding: WorktreeWorkspaceBinding
-  sessionId: string | null
+  sessionIds: string[]
 }
 
 export interface UnclaimedWorktreeScan {
@@ -57,7 +57,7 @@ export class ManagedWorktreeRegistry {
 
   async create(binding: WorktreeWorkspaceBinding): Promise<void> {
     await this.validateBinding(binding)
-    await this.write({ schemaVersion: 1, binding, sessionId: null })
+    await this.write({ schemaVersion: 2, binding, sessionIds: [] })
   }
 
   async attachSession(
@@ -66,11 +66,25 @@ export class ManagedWorktreeRegistry {
   ): Promise<void> {
     validateSessionId(sessionId)
     const manifest = await this.read(binding)
-    if (manifest.sessionId && manifest.sessionId !== sessionId) {
+    if (manifest.sessionIds.includes(sessionId)) return
+    await this.write({ ...manifest, sessionIds: [...manifest.sessionIds, sessionId] })
+  }
+
+  /**
+   * 仅修复创建 session-start 与首次认领清单之间的窄崩溃窗口。
+   * 共享引用只能由显式 Fork 添加，恢复任意会话不得借此加入。
+   */
+  async claimSessionForResume(
+    binding: WorktreeWorkspaceBinding,
+    sessionId: string,
+  ): Promise<void> {
+    validateSessionId(sessionId)
+    const manifest = await this.read(binding)
+    if (manifest.sessionIds.includes(sessionId)) return
+    if (manifest.sessionIds.length > 0) {
       throw new Error('Worktree 已属于其它会话')
     }
-    if (manifest.sessionId === sessionId) return
-    await this.write({ ...manifest, sessionId })
+    await this.write({ ...manifest, sessionIds: [sessionId] })
   }
 
   async assertOwned(binding: WorktreeWorkspaceBinding): Promise<void> {
@@ -84,8 +98,21 @@ export class ManagedWorktreeRegistry {
     }
   }
 
-  async sessionId(binding: WorktreeWorkspaceBinding): Promise<string | null> {
-    return (await this.read(binding)).sessionId
+  async sessionIds(binding: WorktreeWorkspaceBinding): Promise<string[]> {
+    return [...(await this.read(binding)).sessionIds]
+  }
+
+  async detachSession(
+    binding: WorktreeWorkspaceBinding,
+    sessionId: string,
+  ): Promise<number> {
+    validateSessionId(sessionId)
+    const manifest = await this.read(binding)
+    const remaining = manifest.sessionIds.filter((value) => value !== sessionId)
+    if (remaining.length !== manifest.sessionIds.length) {
+      await this.write({ ...manifest, sessionIds: remaining })
+    }
+    return remaining.length
   }
 
   async unclaimedBindings(): Promise<UnclaimedWorktreeScan> {
@@ -109,7 +136,7 @@ export class ManagedWorktreeRegistry {
           throw new Error('所有权记录无效或文件名不匹配')
         }
         await this.validateBinding(manifest.binding)
-        if (manifest.sessionId === null) bindings.push(manifest.binding)
+        if (manifest.sessionIds.length === 0) bindings.push(manifest.binding)
       } catch (error) {
         warnings.push(`${entry.name}: ${errorMessage(error)}`)
       }
@@ -299,17 +326,18 @@ function parseManifest(value: unknown): WorktreeManifest | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const binding = worktreeWorkspaceBindingSchema.safeParse(record.binding)
-  if (record.schemaVersion !== 1 || !binding.success) return null
-  const sessionId = record.sessionId
-  if (sessionId !== null && typeof sessionId !== 'string') return null
-  if (typeof sessionId === 'string') {
+  if (record.schemaVersion !== 2 || !binding.success || !Array.isArray(record.sessionIds)) return null
+  if (!record.sessionIds.every((sessionId) => typeof sessionId === 'string')) return null
+  for (const sessionId of record.sessionIds as string[]) {
     try {
       validateSessionId(sessionId)
     } catch {
       return null
     }
   }
-  return { schemaVersion: 1, binding: binding.data, sessionId }
+  const sessionIds = record.sessionIds as string[]
+  if (new Set(sessionIds).size !== sessionIds.length) return null
+  return { schemaVersion: 2, binding: binding.data, sessionIds }
 }
 
 async function prepareRoot(root: string): Promise<string> {

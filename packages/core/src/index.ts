@@ -396,6 +396,7 @@ export type {
   LoadedSession,
   PendingUserInput,
   SessionCreateInput,
+  SessionForkOrigin,
   SessionMetadata,
   SessionRecorder,
   SessionSummary,

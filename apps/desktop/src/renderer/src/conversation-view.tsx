@@ -1,3 +1,4 @@
+import { GitFork } from 'lucide-react'
 import { memo } from 'react'
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
@@ -18,8 +19,11 @@ interface ConversationViewProps {
   checkpointRestoreAnchorIds: ReadonlySet<string>
   checkpointRestoreToolUseId: string | null
   showThinkingGap: boolean
+  forkSourceTurnId: string | null
+  forkPendingTurnId: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
+  onFork: (turnId: string) => void
   onToggle: (id: string) => void
 }
 
@@ -47,7 +51,15 @@ export const ConversationView = memo(function ConversationView(props: Conversati
                 {...conversationBlockProps(props, section.block)}
               />
             )
-          : <WorkSection key={section.id} {...props} section={section} />)}
+          : (
+              <div key={section.id}>
+                <WorkSection {...props} section={section} />
+                {section.kind === 'completed-work'
+                  && section.forkTurnId === props.forkSourceTurnId
+                  ? <ForkBoundary />
+                  : null}
+              </div>
+            ))}
       {props.showThinkingGap && <ThinkingGapIndicator />}
     </>
   )
@@ -96,7 +108,7 @@ function WorkSection({
           ))}
         </div>
       )}
-      {section.finalBlocks.map((block) => (
+      {section.finalBlocks.map((block, index) => (
         <ConversationBlock
           key={block.id}
           {...conversationBlockProps(props, block)}
@@ -105,6 +117,12 @@ function WorkSection({
             section.kind === 'completed-work'
             && section.duration.outcome === 'completed'
           }
+          forkTurnId={section.kind === 'completed-work'
+            && index === section.finalBlocks.length - 1
+            ? section.forkTurnId
+            : null}
+          forkPending={section.kind === 'completed-work'
+            && section.forkTurnId === props.forkPendingTurnId}
         />
       ))}
     </section>
@@ -124,6 +142,9 @@ const ConversationBlock = memo(function ConversationBlock({
   onEdit,
   onToggle,
   showAssistantActions,
+  forkTurnId,
+  forkPending,
+  onFork,
 }: ConversationBlockRenderProps) {
   return (
     <BlockView
@@ -139,6 +160,9 @@ const ConversationBlock = memo(function ConversationBlock({
       onEdit={onEdit}
       onToggle={() => onToggle(block.id)}
       showAssistantActions={showAssistantActions}
+      forkTurnId={forkTurnId}
+      forkPending={forkPending}
+      onFork={onFork}
     />
   )
 }, sameConversationBlockRenderProps)
@@ -161,10 +185,25 @@ function conversationBlockProps(
       && props.checkpointRestoreToolUseId === block.call.id,
     streamingAssistantText: false,
     showAssistantActions: false,
+    forkTurnId: null,
+    forkPending: false,
     onCheckpointRestoreChange: props.onCheckpointRestoreChange,
     onEdit: props.onEdit,
+    onFork: props.onFork,
     onToggle: props.onToggle,
   }
+}
+
+function ForkBoundary() {
+  return (
+    <div className="mb-4 flex items-center gap-3 px-1 text-xs text-[var(--wc-faint)]">
+      <span className="h-px flex-1 bg-[var(--wc-line)]" />
+      <span className="flex items-center gap-1 text-[var(--wc-blue-ink)]">
+        <GitFork size={13} /> 从聊天中继续
+      </span>
+      <span className="h-px flex-1 bg-[var(--wc-line)]" />
+    </div>
+  )
 }
 
 function WorkSummary({

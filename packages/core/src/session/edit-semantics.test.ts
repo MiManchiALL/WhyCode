@@ -88,6 +88,8 @@ function createFixture(): {
       type: 'session-start',
       workspace: localWorkspace('C:\\WhyCode'),
       modelId: 'test:model',
+      title: null,
+      forkOrigin: null,
     }),
     entry,
   }

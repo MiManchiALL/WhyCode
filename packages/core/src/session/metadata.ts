@@ -67,11 +67,12 @@ export function metadataFromStart(
     workspace: entry.workspace,
     modelId: entry.modelId,
     reasoningEffort: entry.reasoningEffort ?? 'default',
-    title: '',
+    title: entry.title ?? '',
     lastUserText: '',
-    createdAt: entry.timestamp,
-    updatedAt: entry.timestamp,
+    createdAt: entry.forkOrigin?.createdAt ?? entry.timestamp,
+    updatedAt: entry.forkOrigin?.createdAt ?? entry.timestamp,
     status: 'idle',
+    forkOrigin: entry.forkOrigin,
   }
 }
 

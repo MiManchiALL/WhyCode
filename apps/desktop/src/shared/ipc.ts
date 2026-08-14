@@ -37,6 +37,7 @@ export const IPC = {
   /** Renderer → Main：会话列表与生命周期（M4） */
   listSessions: 'whycode:list-sessions',
   resumeSession: 'whycode:resume-session',
+  forkSession: 'whycode:fork-session',
   newSession: 'whycode:new-session',
   deleteSession: 'whycode:delete-session',
   /** Renderer → Main：按当前会话内的 PDF 附件 ID 交给系统默认阅读器打开。 */

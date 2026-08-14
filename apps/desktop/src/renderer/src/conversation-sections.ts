@@ -15,6 +15,7 @@ export type ConversationSection =
   | {
       kind: 'completed-work'
       id: string
+      forkTurnId: string | null
       duration: WorkDurationBlock
       userBlocks: Block[]
       activityBlocks: Block[]
@@ -45,6 +46,23 @@ export function conversationSections(
     appendBlocks(sections, tail)
   }
   return sections
+}
+
+/** 只把已交付最终正文的完整工作暴露给快捷 Fork 入口。 */
+export function findLatestForkTurnId(
+  sections: readonly ConversationSection[],
+): string | null {
+  for (let index = sections.length - 1; index >= 0; index--) {
+    const section = sections[index]
+    if (
+      section?.kind === 'completed-work'
+      && section.duration.outcome === 'completed'
+      && section.finalBlocks.length > 0
+    ) {
+      return section.forkTurnId
+    }
+  }
+  return null
 }
 
 /**
@@ -88,6 +106,7 @@ function appendCompletedWork(
   sections.push({
     kind: 'completed-work',
     id: workSectionId(work, duration.id),
+    forkTurnId: duration.forkTurnId,
     duration,
     ...sectionBlocks(work, finalIndexes),
   })

@@ -5,6 +5,7 @@ import type {
   CoreEvent,
   QueuedUserMessage,
   SessionMetadata,
+  SessionForkOrigin,
   SessionSummary,
   ViewEvent,
   ReasoningEffortSelection,
@@ -52,6 +53,8 @@ export interface RuntimeSnapshot {
   approval: ApprovalRequest | null
   /** 只重放快照之后到达 Renderer 的实时事件，避免恢复时间线与缓冲事件重复。 */
   eventSequence: number
+  /** 来源证明与分支提示；不授予源会话运行时、任务或权限的所有权。 */
+  forkOrigin: SessionForkOrigin | null
 }
 
 export interface RuntimeEventEnvelope {
@@ -79,6 +82,13 @@ export type ResumeSessionResult =
       snapshot: RuntimeSnapshot
     }
   | { ok: false; error: string }
+
+export interface ForkSessionRequest {
+  sourceSessionId: string
+  sourceTurnId: string
+}
+
+export type ForkSessionResult = ResumeSessionResult
 
 export type NewSessionResult =
   | { ok: true; snapshot: RuntimeSnapshot }

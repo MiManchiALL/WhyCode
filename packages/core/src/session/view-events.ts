@@ -76,6 +76,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     type: z.literal('work-finished'),
     durationMs: z.number().nonnegative(),
     outcome: z.enum(['completed', 'stopped']),
+    forkTurnId: z.string().min(1).nullable(),
   }),
   z.object({ type: z.literal('text-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-delta'), text: z.string() }),

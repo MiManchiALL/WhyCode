@@ -56,6 +56,7 @@ export class DesktopSessionRuntime {
   permissionMode: PermissionMode
   workStartedAt: number | null = null
   private workOutcome: 'completed' | 'stopped' = 'completed'
+  private forkTurnId: string | null = null
   attachmentPreparationInProgress = false
   lastSelectedAt = Date.now()
   private readonly emitToHost: DesktopSessionRuntimeOptions['emit']
@@ -171,7 +172,14 @@ export class DesktopSessionRuntime {
 
   emit(event: CoreEvent, persistView = true): void {
     if (this.disposed) return
-    if (event.type === 'agent-status') this.status = event.status
+    if (event.type === 'turn-end') {
+      this.forkTurnId = event.stopReason === 'completed' ? event.turnId : null
+    }
+    if (event.type === 'error') this.forkTurnId = null
+    if (event.type === 'agent-status') {
+      this.status = event.status
+      if (event.status === 'error') this.forkTurnId = null
+    }
     if (
       event.type === 'agent-status'
       && (event.status === 'idle' || event.status === 'error')
@@ -185,6 +193,7 @@ export class DesktopSessionRuntime {
   beginWork(): void {
     if (this.disposed || this.workStartedAt !== null) return
     this.workOutcome = 'completed'
+    this.forkTurnId = null
     this.workStartedAt = Date.now()
     this.publish({ type: 'work-started', startedAt: this.workStartedAt }, false)
   }
@@ -194,8 +203,10 @@ export class DesktopSessionRuntime {
     const durationMs = Math.max(0, Date.now() - this.workStartedAt)
     this.workStartedAt = null
     const outcome = this.workOutcome
+    const forkTurnId = outcome === 'completed' ? this.forkTurnId : null
     this.workOutcome = 'completed'
-    this.publish({ type: 'work-finished', durationMs, outcome }, true)
+    this.forkTurnId = null
+    this.publish({ type: 'work-finished', durationMs, outcome, forkTurnId }, true)
   }
 
   private publish(event: CoreEvent, persistView: boolean): void {

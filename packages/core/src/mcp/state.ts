@@ -101,6 +101,19 @@ export function carryMcpToolState(
     : next
 }
 
+/** Fork 保留已发现的工具与服务器说明，但新会话必须重新确认项目 MCP 配置。 */
+export function clearMcpProjectTrust(
+  messages: readonly ModelMessage[],
+): ModelMessage[] {
+  const state = findMcpToolState(messages)
+  if (state.trustedProjectConfigurationFingerprint === null) return [...messages]
+  const next = withoutMcpToolState(messages)
+  return [...next, createMcpToolStateMessage({
+    ...state,
+    trustedProjectConfigurationFingerprint: null,
+  })]
+}
+
 export function sameMcpToolState(
   left: McpToolState,
   right: McpToolState,

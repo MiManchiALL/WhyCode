@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, Pencil } from 'lucide-react'
+import { Check, Copy, GitFork, LoaderCircle, Pencil } from 'lucide-react'
 
 const MESSAGE_TIME = new Intl.DateTimeFormat(undefined, {
   hour: '2-digit',
@@ -12,12 +12,16 @@ export function MessageActions({
   text,
   editable = false,
   onEdit,
+  onFork,
+  forkPending = false,
   className = '',
 }: {
   timestamp?: string
   text: string
   editable?: boolean
   onEdit?: () => void
+  onFork?: () => void
+  forkPending?: boolean
   className?: string
 }) {
   const [copied, setCopied] = useState(false)
@@ -60,6 +64,18 @@ export function MessageActions({
           onClick={onEdit}
         >
           <Pencil size={14} />
+        </button>
+      ) : null}
+      {onFork ? (
+        <button
+          type="button"
+          className="wc-focus-ring rounded-md p-0.5 hover:text-[var(--wc-ink)] disabled:opacity-40"
+          disabled={forkPending}
+          title="在新对话中继续"
+          aria-label="在新对话中继续"
+          onClick={onFork}
+        >
+          {forkPending ? <LoaderCircle size={14} className="animate-spin" /> : <GitFork size={14} />}
         </button>
       ) : null}
     </div>

@@ -10,8 +10,11 @@ export interface ConversationBlockRenderProps {
   checkpointRestorePending: boolean
   streamingAssistantText: boolean
   showAssistantActions: boolean
+  forkTurnId: string | null
+  forkPending: boolean
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
+  onFork: (turnId: string) => void
   onToggle: (id: string) => void
 }
 
@@ -28,6 +31,9 @@ export function sameConversationBlockRenderProps(
     || previous.expanded !== next.expanded
     || previous.streamingAssistantText !== next.streamingAssistantText
     || previous.showAssistantActions !== next.showAssistantActions
+    || previous.forkTurnId !== next.forkTurnId
+    || previous.forkPending !== next.forkPending
+    || previous.onFork !== next.onFork
     || previous.onToggle !== next.onToggle
   ) {
     return false

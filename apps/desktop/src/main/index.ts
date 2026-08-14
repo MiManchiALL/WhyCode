@@ -36,6 +36,7 @@ import {
   type ActivatedSkill,
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
+  validateSessionId,
   workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -81,7 +82,7 @@ import {
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
-import { SessionResumeLock } from './session-resume-lock.ts'
+import { SessionPreparationLock } from './session-preparation-lock.ts'
 import {
   ensureCustomSystemPromptTemplate,
   getCustomSystemPromptConfigPath,
@@ -114,6 +115,8 @@ import {
 } from './user-message-attachments.ts'
 import type {
   DeleteSessionResult,
+  ForkSessionRequest,
+  ForkSessionResult,
   NewSessionRequest,
   NewSessionResult,
   ResumeSessionResult,
@@ -341,14 +344,14 @@ let commandSessions: CommandSessionManager
 let backgroundTaskWakeups: BackgroundTaskWakeQueue | null = null
 /** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
 let worktrees: WorktreeManager
-/** 每个默认会话独占一个受管子目录；外置 manifest 负责删除重试与所有权校验。 */
+/** 每个默认会话独占一个受管子目录；Fork 从来源目录创建一次性快照。 */
 let managedWorkspaces: ManagedWorkspaceManager
 /** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
 let skills: SkillCatalogService
 /** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
 const sessionDeletionLock = new SessionDeletionLock()
-/** 历史会话完整校验与候选运行时构造期间，只允许一个恢复事务。 */
-const sessionResumeLock = new SessionResumeLock()
+/** 恢复或 Fork 完整校验与候选运行时构造期间，只允许一个物化事务。 */
+const sessionPreparationLock = new SessionPreparationLock()
 /** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
@@ -1225,8 +1228,11 @@ function anyRuntimeBusy(): boolean {
   return settingsMutationInProgress || runtimeRegistry.anyBusy()
 }
 
-function resumeInProgressMessage(action: string): string {
-  return `正在验证附件并恢复会话，请等待完成后再${action}`
+function sessionPreparationInProgressMessage(action: string): string {
+  const operation = sessionPreparationLock.kind === 'fork'
+    ? '正在创建会话分支'
+    : '正在验证附件并恢复会话'
+  return `${operation}，请等待完成后再${action}`
 }
 
 function mcpOAuthInProgressMessage(action: string): string {
@@ -1425,12 +1431,12 @@ async function addMcpConnection(
 async function authorizeMcpOAuthConnection(
   request: McpOAuthRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再开始 MCP OAuth 登录'
-        : resumeInProgressMessage('开始 MCP OAuth 登录'),
+        : sessionPreparationInProgressMessage('开始 MCP OAuth 登录'),
     }
   }
   if (settingsMutationInProgress) {
@@ -1642,7 +1648,7 @@ async function runtimeSnapshot(
     deletingSessionId: deletingThisSession
       ? sessionDeletionLock.sessionId
       : null,
-    resumingSessionId: sessionResumeLock.sessionId,
+    resumingSessionId: sessionPreparationLock.visibleResumeSessionId,
     sessionId: journal?.sessionId ?? null,
     viewEvents: timeline.events,
     viewEventTimestamps: timeline.eventTimestamps,
@@ -1650,6 +1656,7 @@ async function runtimeSnapshot(
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: runtime.approval,
     eventSequence: timeline.boundary,
+    forkOrigin: journal?.metadataSnapshot.forkOrigin ?? null,
   }
 }
 
@@ -1686,12 +1693,12 @@ async function selectRuntimeWithSnapshot(
 }
 
 async function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
-  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再新建会话'
-        : resumeInProgressMessage('新建会话'),
+        : sessionPreparationInProgressMessage('新建会话'),
     }
   }
   try {
@@ -1713,12 +1720,12 @@ async function startNewSession(request?: NewSessionRequest): Promise<NewSessionR
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '会话数据删除中，请等待完成后再恢复会话'
-        : resumeInProgressMessage('恢复其它会话'),
+        : sessionPreparationInProgressMessage('恢复其它会话'),
     }
   }
   const existing = runtimeRegistry.findBySessionId(sessionId)
@@ -1734,9 +1741,9 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     }
   }
 
-  const release = sessionResumeLock.acquire(sessionId)
+  const release = sessionPreparationLock.acquire(sessionId)
   if (!release) {
-    return { ok: false, error: resumeInProgressMessage('恢复其它会话') }
+    return { ok: false, error: sessionPreparationInProgressMessage('恢复其它会话') }
   }
   let prepared: DesktopSessionRuntime | null = null
   try {
@@ -1765,10 +1772,121 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
   }
 }
 
+async function forkSession(value: unknown): Promise<ForkSessionResult> {
+  let request: ForkSessionRequest
+  try {
+    request = parseForkSessionRequest(value)
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
+    return {
+      ok: false,
+      error: sessionDeletionLock.sessionId
+        ? '会话数据删除中，请等待完成后再创建分支'
+        : sessionPreparationInProgressMessage('创建会话分支'),
+    }
+  }
+  const sourceRuntime = runtimeRegistry.findBySessionId(request.sourceSessionId)
+  const release = sessionPreparationLock.acquire(request.sourceSessionId, 'fork')
+  if (!release) {
+    return { ok: false, error: sessionPreparationInProgressMessage('创建会话分支') }
+  }
+  let sourceJournal: SessionJournal | null = null
+  let forkedJournal: SessionJournal | null = null
+  let managedSnapshot: ManagedWorkspaceBinding | null = null
+  let runtime: DesktopSessionRuntime | null = null
+  try {
+    if (sourceRuntime) await sourceRuntime.timeline.flush()
+    sourceJournal = sourceRuntime?.journal
+      ?? await sessions.prepareResume(request.sourceSessionId)
+    const sourceWorkspace = sourceJournal.metadataSnapshot.workspace
+    const targetWorkspace: WorkspaceBinding = sourceWorkspace.mode === 'managed'
+      ? await managedWorkspaces.snapshot(
+          sourceWorkspace,
+          sourceJournal.sessionId,
+          randomUUID(),
+        )
+      : sourceWorkspace
+    if (targetWorkspace.mode === 'managed') managedSnapshot = targetWorkspace
+    forkedJournal = await sessions.fork(
+      sourceJournal,
+      request.sourceTurnId,
+      targetWorkspace,
+    )
+    await attachSessionWorkspace(forkedJournal)
+    runtime = await prepareRuntimeFromJournal(forkedJournal)
+    return { ok: true, snapshot: await selectRuntimeWithSnapshot(runtime, true) }
+  } catch (error) {
+    const rollbackErrors: unknown[] = []
+    if (runtime && runtimeRegistry.get(runtime.runtimeId) === runtime && !runtime.isDisposed) {
+      await runtimeRegistry.remove(runtime).catch(() => {})
+    }
+    if (forkedJournal) {
+      await removeForkSessionWorkspace(forkedJournal)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError))
+      await sessions.markDeleting(forkedJournal.sessionId)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError))
+      await sessions.delete(forkedJournal.sessionId)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError))
+    } else if (managedSnapshot) {
+      await managedWorkspaces.remove(managedSnapshot)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError))
+    }
+    if (rollbackErrors.length > 0) {
+      return {
+        ok: false,
+        error: `创建会话分支失败且自动回滚未完成：${
+          rollbackErrors.map((rollbackError) =>
+            rollbackError instanceof Error ? rollbackError.message : String(rollbackError))
+            .join('；')
+        }`,
+      }
+    }
+    return {
+      ok: false,
+      error: `创建会话分支失败：${error instanceof Error ? error.message : String(error)}`,
+    }
+  } finally {
+    if (!sourceRuntime && sourceJournal) sessions.release(sourceJournal)
+    release()
+    void backgroundTaskWakeups?.nudge()
+  }
+}
+
+function parseForkSessionRequest(value: unknown): ForkSessionRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('创建会话分支的请求格式无效')
+  }
+  const request = value as Record<string, unknown>
+  if (
+    Object.keys(request).length !== 2
+    || typeof request.sourceSessionId !== 'string'
+    || typeof request.sourceTurnId !== 'string'
+    || request.sourceTurnId.length === 0
+  ) {
+    throw new Error('创建会话分支的请求格式无效')
+  }
+  validateSessionId(request.sourceSessionId)
+  return {
+    sourceSessionId: request.sourceSessionId,
+    sourceTurnId: request.sourceTurnId,
+  }
+}
+
 async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionRuntime> {
   const journal = await sessions.prepareResume(sessionId)
-  const metadata = journal.metadataSnapshot
   await journal.recoverInterruptedWork()
+  return prepareRuntimeFromJournal(journal)
+}
+
+async function prepareRuntimeFromJournal(
+  journal: SessionJournal,
+): Promise<DesktopSessionRuntime> {
+  const metadata = journal.metadataSnapshot
   const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
   const targetReasoningEffort = resolved.ok
     ? normalizeReasoningEffortSelection(
@@ -1828,11 +1946,27 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
   return runtime
 }
 
+async function attachSessionWorkspace(journal: SessionJournal): Promise<void> {
+  const workspace = journal.metadataSnapshot.workspace
+  if (workspace.mode === 'worktree') await worktrees.attachSession(workspace, journal.sessionId)
+  if (workspace.mode === 'managed') await managedWorkspaces.attachSession(workspace, journal.sessionId)
+}
+
+async function removeForkSessionWorkspace(journal: SessionJournal): Promise<void> {
+  const workspace = journal.metadataSnapshot.workspace
+  if (workspace.mode === 'worktree') {
+    await worktrees.detachSession(workspace, journal.sessionId, true)
+  }
+  if (workspace.mode === 'managed') {
+    await managedWorkspaces.remove(workspace)
+  }
+}
+
 async function resolveBackgroundTaskRuntime(
   sessionId: string,
 ): Promise<BackgroundTaskRuntimeResolution> {
   if (sessionDeletionLock.sessionId === sessionId) return { kind: 'drop' }
-  if (settingsMutationInProgress || sessionResumeLock.sessionId) return { kind: 'defer' }
+  if (settingsMutationInProgress || sessionPreparationLock.sessionId) return { kind: 'defer' }
 
   const existing = runtimeRegistry.findBySessionId(sessionId)
   if (existing) {
@@ -1847,7 +1981,7 @@ async function resolveBackgroundTaskRuntime(
 
   const summary = (await sessions.list()).find((item) => item.sessionId === sessionId)
   if (!summary || !summary.resumable) return { kind: 'drop' }
-  const release = sessionResumeLock.acquire(sessionId)
+  const release = sessionPreparationLock.acquire(sessionId)
   if (!release) return { kind: 'defer' }
   try {
     const runtime = await prepareResumedRuntime(sessionId)
@@ -1921,7 +2055,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   const targetRuntime = runtimeRegistry.findBySessionId(sessionId)
   if (
     sessionDeletionLock.sessionId
-    || sessionResumeLock.sessionId
+    || sessionPreparationLock.sessionId
     || mcpOAuthController.isAuthorizing()
     || targetRuntime?.busy
   ) {
@@ -1929,8 +2063,8 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
-        : sessionResumeLock.sessionId
-          ? resumeInProgressMessage('删除会话')
+        : sessionPreparationLock.sessionId
+          ? sessionPreparationInProgressMessage('删除会话')
         : mcpOAuthController.isAuthorizing()
           ? mcpOAuthInProgressMessage('删除会话')
           : targetRuntime?.checkpointRestoreToolUseId
@@ -1970,7 +2104,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         }
       },
       onBeforeFactSourceDelete: async () => {
-        if (targetWorktree) await worktrees.remove(targetWorktree, true)
+        if (targetWorktree) await worktrees.detachSession(targetWorktree, sessionId, true)
         if (targetManagedWorkspace) {
           await managedWorkspaces.remove(targetManagedWorkspace)
         } else {
@@ -2225,6 +2359,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.newSession, (_e, request?: NewSessionRequest) =>
     startNewSession(request))
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
+  ipcMain.handle(IPC.forkSession, (_e, request: unknown) => forkSession(request))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
   ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>
     currentWorktreeStatus(runtimeId))
@@ -2246,7 +2381,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     )
   })
   ipcMain.handle(IPC.pickProjectDir, async (event): Promise<WorkspaceCandidate | null> => {
-    if (sessionDeletionLock.sessionId || sessionResumeLock.sessionId) {
+    if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
       return null
     }
     const ownerWindow = BrowserWindow.fromWebContents(event.sender)
@@ -2268,7 +2403,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       if (
         runtimeRegistry.selected !== selectionAtOpen
         || sessionDeletionLock.sessionId
-        || sessionResumeLock.sessionId
+        || sessionPreparationLock.sessionId
       ) {
         return null
       }

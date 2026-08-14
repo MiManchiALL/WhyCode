@@ -125,6 +125,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   )
   const recordedInputs = entries.flatMap((entry) => (entry.type === 'user-input' ? [entry.text] : []))
   const userTexts = recordedInputs.length > 0 ? recordedInputs : messages.flatMap(userText)
+  const createdAt = start.forkOrigin?.createdAt ?? start.timestamp
 
   return {
     entries,
@@ -157,11 +158,12 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       workspace: start.workspace,
       modelId: modelSelection.modelId,
       reasoningEffort: modelSelection.reasoningEffort,
-      title: clip(userTexts[0] ?? ''),
+      title: start.title ?? clip(userTexts[0] ?? ''),
       lastUserText: clip(userTexts.at(-1) ?? ''),
-      createdAt: start.timestamp,
-      updatedAt: last.timestamp,
+      createdAt,
+      updatedAt: last.timestamp > createdAt ? last.timestamp : createdAt,
       status,
+      forkOrigin: start.forkOrigin,
     },
   }
 }

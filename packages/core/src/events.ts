@@ -136,6 +136,8 @@ export type CoreEvent =
       type: 'work-finished'
       durationMs: number
       outcome: 'completed' | 'stopped'
+      /** 整段工作最后一个完整结束的模型回复；null 表示没有可 Fork 边界。 */
+      forkTurnId: string | null
     }
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }

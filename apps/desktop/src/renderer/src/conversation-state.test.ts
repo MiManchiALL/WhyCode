@@ -127,7 +127,9 @@ describe('会话界面时间线重建', () => {
       }),
       core({ type: 'tool-end', toolUseId: 'verify', result: 'ok', isError: false }),
       core({ type: 'text-delta', text: '最终结论。' }),
-      core({ type: 'work-finished', durationMs: 1_500, outcome: 'completed' }),
+      core({
+        type: 'work-finished', durationMs: 1_500, outcome: 'completed', forkTurnId: null,
+      }),
     ])
 
     const texts = state.blocks.filter((block) => block.kind === 'text')
@@ -141,10 +143,10 @@ describe('会话界面时间线重建', () => {
     const state = createConversationState([
       { type: 'user-message', text: '第一问', startsTurn: true },
       core({ type: 'text-delta', text: '第一答' }),
-      core({ type: 'work-finished', durationMs: 500, outcome: 'completed' }),
+      core({ type: 'work-finished', durationMs: 500, outcome: 'completed', forkTurnId: null }),
       { type: 'user-message', text: '第二问', startsTurn: true },
       core({ type: 'text-delta', text: '第二答' }),
-      core({ type: 'work-finished', durationMs: 700, outcome: 'completed' }),
+      core({ type: 'work-finished', durationMs: 700, outcome: 'completed', forkTurnId: null }),
     ], [
       '2026-08-09T01:00:00.000Z',
       '2026-08-09T01:00:01.000Z',
@@ -211,15 +213,37 @@ describe('会话界面时间线重建', () => {
 
   it('完成后的工作时长作为可见事实随历史恢复', () => {
     const state = createConversationState([
-      core({ type: 'work-finished', durationMs: 61_000, outcome: 'completed' }),
+      core({
+        type: 'work-finished', durationMs: 61_000, outcome: 'completed', forkTurnId: null,
+      }),
     ])
 
     assert.deepEqual(state.blocks, [{
       kind: 'work-duration',
       id: 'b0',
+      forkTurnId: null,
       durationMs: 61_000,
       outcome: 'completed',
     }])
+  })
+
+  it('完成边界直接提供 Core 验证过的 Fork turn', () => {
+    const state = createConversationState([
+      { type: 'user-message', text: '执行任务', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-main' }),
+      core({ type: 'text-delta', text: '阶段进展' }),
+      core({ type: 'turn-start', turnId: 'turn-final' }),
+      core({ type: 'text-delta', text: '最终结果' }),
+      core({
+        type: 'work-finished',
+        durationMs: 2_000,
+        outcome: 'completed',
+        forkTurnId: 'turn-final',
+      }),
+    ])
+
+    const duration = state.blocks.find((block) => block.kind === 'work-duration')
+    assert.equal(duration?.kind === 'work-duration' ? duration.forkTurnId : null, 'turn-final')
   })
 
   it('用户停止时沿用停止瞬间的工作区展开状态', () => {
@@ -232,7 +256,9 @@ describe('会话界面时间线重建', () => {
         input: { path: 'README.md' },
       }),
       core({ type: 'tool-end', toolUseId: 'tool-1', result: 'ok', isError: false }),
-      core({ type: 'work-finished', durationMs: 1_500, outcome: 'stopped' }),
+      core({
+        type: 'work-finished', durationMs: 1_500, outcome: 'stopped', forkTurnId: null,
+      }),
     ])
 
     assert.equal(state.expanded.has('work-b0'), true)
@@ -254,6 +280,7 @@ describe('会话界面时间线重建', () => {
         type: 'work-finished',
         durationMs: 1_500,
         outcome: 'stopped',
+        forkTurnId: null,
       })
     }
 
@@ -420,7 +447,9 @@ describe('会话界面时间线重建', () => {
     let state = createConversationState([
       { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-old' }),
-      core({ type: 'work-finished', durationMs: 1_500, outcome: 'stopped' }),
+      core({
+        type: 'work-finished', durationMs: 1_500, outcome: 'stopped', forkTurnId: null,
+      }),
     ])
 
     state = applyCoreEvent(state, {
@@ -448,7 +477,9 @@ describe('会话界面时间线重建', () => {
       { type: 'user-message', inputId: 'input-1', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-1' }),
       core({ type: 'text-delta', text: '完整回答' }),
-      core({ type: 'work-finished', durationMs: 2_000, outcome: 'completed' }),
+      core({
+        type: 'work-finished', durationMs: 2_000, outcome: 'completed', forkTurnId: 'turn-1',
+      }),
     ], [inputAt, turnAt, textAt, finishedAt])
 
     assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].timestamp, inputAt)
@@ -479,6 +510,7 @@ describe('会话界面时间线重建', () => {
       type: 'work-finished',
       durationMs: 1000,
       outcome: 'completed',
+      forkTurnId: 'turn-1',
     })
     assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
     state = applyCoreEvent(state, { type: 'text-delta', text: '已有输出' })
@@ -497,7 +529,7 @@ describe('会话界面时间线重建', () => {
     const state = createConversationState([
       { type: 'user-message', inputId: 'old-input', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-old' }),
-      core({ type: 'work-finished', durationMs: 800, outcome: 'stopped' }),
+      core({ type: 'work-finished', durationMs: 800, outcome: 'stopped', forkTurnId: null }),
       { type: 'user-message', inputId: 'edited-input', text: '编辑后的问题', startsTurn: true },
       core({
         type: 'user-message-edited',

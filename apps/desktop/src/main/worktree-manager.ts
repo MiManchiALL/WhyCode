@@ -36,7 +36,7 @@ export interface AbandonedDraftCleanupResult {
 
 export class WorktreeManager {
   private readonly registry: ManagedWorktreeRegistry
-  private readonly leases = new Map<string, string>()
+  private readonly leases = new Map<string, Set<string>>()
 
   constructor(rootDirectory: string) {
     this.registry = new ManagedWorktreeRegistry(rootDirectory)
@@ -149,17 +149,28 @@ export class WorktreeManager {
     sessionId: string,
     ownerRuntimeId: string,
   ): Promise<void> {
-    // session-start 与外置所有权清单无法跨文件原子提交；恢复时只补齐同一
-    // 未认领清单，已属于其它会话时仍然 fail-closed。
+    // session-start 与外置引用清单无法跨文件原子提交；恢复只修复
+    // 完全未认领的窄窗口。多会话共享必须由 Fork 通过 attachSession 显式建立。
     await this.assertGitWorktree(binding)
     await assertWorktreeExecutionDirectory(binding)
-    await this.registry.attachSession(binding, sessionId)
+    await this.registry.claimSessionForResume(binding, sessionId)
     this.acquire(binding, ownerRuntimeId)
   }
 
   release(binding: WorktreeWorkspaceBinding, ownerRuntimeId: string): void {
     const key = pathKey(binding.worktreeDirectory)
-    if (this.leases.get(key) === ownerRuntimeId) this.leases.delete(key)
+    const owners = this.leases.get(key)
+    owners?.delete(ownerRuntimeId)
+    if (owners?.size === 0) this.leases.delete(key)
+  }
+
+  async detachSession(
+    binding: WorktreeWorkspaceBinding,
+    sessionId: string,
+    discardChanges: boolean,
+  ): Promise<void> {
+    const remaining = await this.registry.detachSession(binding, sessionId)
+    if (remaining === 0) await this.remove(binding, discardChanges)
   }
 
   async cleanupDraft(
@@ -274,15 +285,15 @@ export class WorktreeManager {
 
   private acquire(binding: WorktreeWorkspaceBinding, ownerRuntimeId: string): void {
     const key = pathKey(binding.worktreeDirectory)
-    const owner = this.leases.get(key)
-    if (owner && owner !== ownerRuntimeId) throw new Error('Worktree 已被其它活动会话占用')
-    this.leases.set(key, ownerRuntimeId)
+    const owners = this.leases.get(key) ?? new Set<string>()
+    owners.add(ownerRuntimeId)
+    this.leases.set(key, owners)
   }
 
   private async cleanupUnclaimed(
     binding: WorktreeWorkspaceBinding,
   ): Promise<boolean> {
-    if (await this.registry.sessionId(binding)) return false
+    if ((await this.registry.sessionIds(binding)).length > 0) return false
     const status = await this.status(binding)
     if (
       status.dirty

@@ -44,6 +44,8 @@ interface UseSkillComposerOptions {
   workspaceMode: RuntimeWorkspace['mode']
   compactAvailable: boolean
   compactDisabled: boolean
+  forkAvailable: boolean
+  forkDisabled: boolean
   onCommand: (command: ComposerCommandId) => void
 }
 
@@ -66,8 +68,18 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     [selected],
   )
   const commands = useMemo(
-    () => createComposerCommands(options.compactAvailable, options.compactDisabled),
-    [options.compactAvailable, options.compactDisabled],
+    () => createComposerCommands({
+      compactAvailable: options.compactAvailable,
+      compactDisabled: options.compactDisabled,
+      forkAvailable: options.forkAvailable,
+      forkDisabled: options.forkDisabled,
+    }),
+    [
+      options.compactAvailable,
+      options.compactDisabled,
+      options.forkAvailable,
+      options.forkDisabled,
+    ],
   )
   const matches = useMemo(
     () => filterComposerItems(
@@ -258,18 +270,33 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
 }
 
 export function createComposerCommands(
-  compactAvailable: boolean,
-  compactDisabled: boolean,
+  options: {
+    compactAvailable: boolean
+    compactDisabled: boolean
+    forkAvailable: boolean
+    forkDisabled: boolean
+  },
 ): ComposerCommand[] {
-  return compactAvailable
-    ? [{
+  const commands: ComposerCommand[] = []
+  if (options.forkAvailable) {
+    commands.push({
+      id: 'fork',
+      name: '在新对话中继续',
+      description: '从最近一次完整模型回复创建独立对话',
+      keywords: ['fork', 'branch', '分支'],
+      disabled: options.forkDisabled,
+    })
+  }
+  if (options.compactAvailable) {
+    commands.push({
         id: 'compact',
         name: '压缩',
         description: '压缩当前会话上下文，释放上下文空间',
         keywords: ['compact', 'context'],
-        disabled: compactDisabled,
-      }]
-    : []
+        disabled: options.compactDisabled,
+      })
+  }
+  return commands
 }
 
 function menuItemDisabled(item: ComposerMenuItem, limitReached: boolean): boolean {

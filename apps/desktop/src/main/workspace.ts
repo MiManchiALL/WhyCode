@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ManagedWorkspaceBinding } from '@whycode/core'
+import { copyManagedWorkspaceSnapshot } from './managed-workspace-snapshot.ts'
 
 export const DEFAULT_WORKSPACE_NAME = 'WhyCode Workspace'
 
@@ -132,6 +133,29 @@ export class ManagedWorkspaceManager {
     const manifest = await this.readOwnedManifest(binding.id)
     assertSameBinding(manifest, binding)
     await this.removeManifestWorkspace(manifest)
+  }
+
+  async snapshot(
+    source: ManagedWorkspaceBinding,
+    sourceSessionId: string,
+    targetId: string,
+  ): Promise<ManagedWorkspaceBinding> {
+    await this.assertUsable(source, sourceSessionId)
+    const target = await this.create(targetId)
+    try {
+      await copyManagedWorkspaceSnapshot(source.workingDirectory, target.workingDirectory)
+      return target
+    } catch (error) {
+      try {
+        await this.remove(target)
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          '创建受管工作区快照失败且未能完整清理目标目录',
+        )
+      }
+      throw error
+    }
   }
 
   async removeSession(sessionId: string): Promise<void> {

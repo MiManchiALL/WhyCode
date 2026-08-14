@@ -43,13 +43,21 @@ import {
   type ActivatedSkill,
 } from '../skills/types.ts'
 
-export const SESSION_SCHEMA_VERSION = 9
+export const SESSION_SCHEMA_VERSION = 10
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const messagesSchema = z.array(modelMessageSchema)
 const reasoningEffortSelectionSchema = z.enum(['default', ...REASONING_EFFORT_LEVELS])
+export const sessionForkOriginSchema = z.object({
+  familyId: sessionIdSchema,
+  sourceSessionId: sessionIdSchema,
+  sourceTurnId: z.string().min(1),
+  ordinal: z.number().int().min(2),
+  baseTitle: z.string().min(1),
+  createdAt: timestampSchema,
+})
 /** 工具步骤可持久化一批 PDF 页面图；用户输入使用独立上传数量边界。 */
 const toolImageAttachmentsSchema = createImageAttachmentsSchema(PDF_VISUAL_MAX_PAGES)
 
@@ -110,6 +118,10 @@ const sessionStartSchema = chainedEntrySchema.extend({
   modelId: z.string().min(1),
   reasoningEffort: reasoningEffortSelectionSchema.optional(),
   customSystemPrompt: customSystemPromptSnapshotSchema.optional(),
+  /** null 表示标题仍由首条用户输入派生；Fork 在创建时固定同族编号标题。 */
+  title: z.string().nullable(),
+  /** 仅记录来源，不参与运行时所有权；Fork 会话始终是独立事实源。 */
+  forkOrigin: sessionForkOriginSchema.nullable(),
 })
 
 const turnStartSchema = chainedEntrySchema.extend({
@@ -339,9 +351,11 @@ export const sessionMetadataSchema = z.object({
     'interrupted',
     'error',
   ]),
+  forkOrigin: sessionForkOriginSchema.nullable(),
 })
 
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>
+export type SessionForkOrigin = z.infer<typeof sessionForkOriginSchema>
 
 interface SessionSummaryBase {
   sessionId: string

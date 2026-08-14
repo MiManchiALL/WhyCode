@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   carryMcpToolState,
+  clearMcpProjectTrust,
   createMcpToolStateMessage,
   findMcpToolState,
 } from './state.ts'
@@ -73,5 +74,30 @@ describe('MCP 会话状态', () => {
       findMcpToolState(compacted).trustedProjectConfigurationFingerprint,
       'c'.repeat(64),
     )
+  })
+
+  it('Fork 只清除项目配置信任，不丢失已发现工具和服务器说明', () => {
+    const stateMessage = createMcpToolStateMessage({
+      tools: [{
+        id: 'a'.repeat(64),
+        descriptorHash: 'b'.repeat(64),
+        serverName: 'project-server',
+      }],
+      trustedProjectConfigurationFingerprint: 'c'.repeat(64),
+      serverInstructions: [{
+        serverName: 'project-server',
+        runtimeFingerprint: 'd'.repeat(64),
+        instructions: '服务器说明',
+      }],
+    })
+
+    const forked = clearMcpProjectTrust([
+      { role: 'user', content: '继续处理' },
+      stateMessage,
+    ])
+    const state = findMcpToolState(forked)
+    assert.equal(state.trustedProjectConfigurationFingerprint, null)
+    assert.equal(state.tools[0]?.serverName, 'project-server')
+    assert.equal(state.serverInstructions[0]?.instructions, '服务器说明')
   })
 })

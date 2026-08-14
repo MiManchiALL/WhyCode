@@ -8,6 +8,7 @@ import {
 
 const onCheckpointRestoreChange = () => {}
 const onEdit = async () => true
+const onFork = () => {}
 const onToggle = () => {}
 
 function props(block: Block): ConversationBlockRenderProps {
@@ -21,8 +22,11 @@ function props(block: Block): ConversationBlockRenderProps {
     checkpointRestorePending: false,
     streamingAssistantText: false,
     showAssistantActions: false,
+    forkTurnId: null,
+    forkPending: false,
     onCheckpointRestoreChange,
     onEdit,
+    onFork,
     onToggle,
   }
 }

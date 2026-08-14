@@ -6,6 +6,7 @@ import type { SkillSummary } from '@whycode/core/skills'
 import type {
   CoreCommand,
   ReasoningEffortSelection,
+  SessionForkOrigin,
 } from '@whycode/core'
 import {
   formatUserQuestionAnswer,
@@ -39,6 +40,7 @@ import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
 import {
   conversationSections,
+  findLatestForkTurnId,
   shouldShowComposerProcessingTime,
 } from './conversation-sections.ts'
 import { shouldShowThinkingGap } from './thinking-gap.ts'
@@ -113,6 +115,8 @@ export function App() {
   const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
   const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
+  const [forkOrigin, setForkOrigin] = useState<SessionForkOrigin | null>(null)
+  const [forkPendingTurnId, setForkPendingTurnId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
@@ -146,6 +150,11 @@ export function App() {
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const conversationStarted = blocks.some((block) => block.kind === 'user')
+  const sections = useMemo(
+    () => conversationSections(blocks, workStartedAt),
+    [blocks, workStartedAt],
+  )
+  const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const {
     catalog: skillCatalog,
     selected: selectedSkills,
@@ -177,12 +186,11 @@ export function App() {
     compactAvailable: conversationStarted,
     compactDisabled: status !== 'idle'
       && status !== 'error',
+    forkAvailable: latestForkTurnId !== null
+      && (status === 'idle' || status === 'error'),
+    forkDisabled: sessionTransitionPending || forkPendingTurnId !== null,
     onCommand: (command) => slashCommandRef.current(command),
   })
-  const sections = useMemo(
-    () => conversationSections(blocks, workStartedAt),
-    [blocks, workStartedAt],
-  )
   const checkpointRestoreAnchors = useMemo(
     () => checkpointRestoreAnchorIds(view),
     [view.blocks, view.turnStartBlocks],
@@ -354,6 +362,8 @@ export function App() {
     setModels(nextModels)
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
+    setForkOrigin(snapshot.forkOrigin)
+    setForkPendingTurnId(null)
   }, [])
 
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
@@ -393,6 +403,8 @@ export function App() {
     setApproval(snapshot.approval)
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
+    setForkOrigin(snapshot.forkOrigin)
+    setForkPendingTurnId(null)
   }, [
     restoreImageDrafts,
     restorePdfDrafts,
@@ -856,8 +868,43 @@ export function App() {
     )
     void sendRuntimeCommand({ type: 'compact' })
   }, [sendRuntimeCommand, status])
+  const forkConversation = useCallback((sourceTurnId: string) => {
+    if (status !== 'idle' && status !== 'error') return
+    const sourceSessionId = sessionIdRef.current
+    if (!sourceSessionId || !beginSessionTransition()) return
+    setForkPendingTurnId(sourceTurnId)
+    setSessionActionError(null)
+    void window.whycode.forkSession({ sourceSessionId, sourceTurnId }).then((result) => {
+      if (!result.ok) {
+        setSessionActionError(result.error)
+        return
+      }
+      applyRuntimeSnapshot(result.snapshot)
+      stickToBottom.current = true
+      setShowJumpBottom(false)
+      void window.whycode.consensusStatus().then(setConsensus)
+      void refreshSessions()
+      void refreshModels()
+    }).catch((error) => {
+      const message = `创建会话分支失败：${error instanceof Error ? error.message : String(error)}`
+      setSessionActionError(message)
+      addError(message)
+    }).finally(() => {
+      setForkPendingTurnId(null)
+      endSessionTransition()
+    })
+  }, [
+    addError,
+    applyRuntimeSnapshot,
+    beginSessionTransition,
+    endSessionTransition,
+    refreshModels,
+    refreshSessions,
+    status,
+  ])
   slashCommandRef.current = (command) => {
     if (command === 'compact') compact()
+    if (command === 'fork' && latestForkTurnId) forkConversation(latestForkTurnId)
   }
 
   const changePermission = useCallback((mode: PermissionMode) => {
@@ -1209,8 +1256,11 @@ export function App() {
                   checkpointRestoreAnchorIds={checkpointRestoreAnchors}
                   checkpointRestoreToolUseId={checkpointRestoreToolUseId}
                   showThinkingGap={thinkingGapVisible}
+                  forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
+                  forkPendingTurnId={forkPendingTurnId}
                   onCheckpointRestoreChange={changeCheckpointRestore}
                   onEdit={editUserMessage}
+                  onFork={forkConversation}
                   onToggle={toggle}
                 />
               </div>

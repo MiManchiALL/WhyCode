@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import type { Block } from './conversation-state.ts'
 import {
   conversationSections,
+  findLatestForkTurnId,
   shouldShowComposerProcessingTime,
   type ConversationSection,
 } from './conversation-sections.ts'
@@ -24,6 +25,29 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(completed.finalBlocks), ['answer'])
     assert.equal(completed.id, 'work-user-1')
     assert.equal(completed.duration.durationMs, 61_000)
+  })
+
+  it('把完成边界记录的最后 turn 暴露为 Fork 锚点', () => {
+    const blocks = [
+      user('user-1', 'turn-root'),
+      text('answer', '已完成'),
+      { ...duration('duration-1'), forkTurnId: 'turn-final' } as Block,
+    ]
+
+    assert.equal(asCompleted(conversationSections(blocks)[0]).forkTurnId, 'turn-final')
+  })
+
+  it('快捷 Fork 只选择具有最终正文的最新完整工作', () => {
+    const sections = conversationSections([
+      user('user-1', 'turn-1'),
+      text('answer-1', '可分支回答'),
+      { ...duration('duration-1'), forkTurnId: 'turn-1' } as Block,
+      user('user-2', 'turn-2'),
+      tool('tool-2'),
+      { ...duration('duration-2'), forkTurnId: 'turn-2' } as Block,
+    ])
+
+    assert.equal(findLatestForkTurnId(sections), 'turn-1')
   })
 
   it('直接回答仍把固定时长放到最终回答前，但没有伪造可展开内容', () => {
@@ -305,5 +329,5 @@ function duration(
   id: string,
   outcome: Extract<Block, { kind: 'work-duration' }>['outcome'] = 'completed',
 ): Block {
-  return { kind: 'work-duration', id, durationMs: 61_000, outcome }
+  return { kind: 'work-duration', id, forkTurnId: null, durationMs: 61_000, outcome }
 }

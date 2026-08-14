@@ -65,6 +65,7 @@ export type Block =
   | {
       kind: 'work-duration'
       id: string
+      forkTurnId: string | null
       durationMs: number
       outcome: 'completed' | 'stopped'
     }
@@ -213,7 +214,12 @@ function applyStableCoreEvent(
       const blocks = [...state.blocks]
       const root = blocks[state.pendingTurnStart]
       if (root?.kind === 'user') blocks[state.pendingTurnStart] = { ...root, turnId: event.turnId }
-      return { ...state, blocks, pendingTurnStart: null, turnStartBlocks }
+      return {
+        ...state,
+        blocks,
+        pendingTurnStart: null,
+        turnStartBlocks,
+      }
     }
     case 'user-message-edited':
       return applyUserMessageEdited(state, event, timestamp)
@@ -251,6 +257,7 @@ function applyStableCoreEvent(
       const next = appendBlock(completedState, {
         kind: 'work-duration',
         id: durationId,
+        forkTurnId: event.forkTurnId,
         durationMs: event.durationMs,
         outcome: event.outcome,
       })
@@ -429,7 +436,11 @@ export function appendUserMessage(
   timestamp?: string,
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
-  return appendBlock({ ...state, pendingTurnStart, pendingQuestion: null }, {
+  return appendBlock({
+    ...state,
+    pendingTurnStart,
+    pendingQuestion: null,
+  }, {
     kind: 'user',
     id: nextBlockId(state),
     ...(inputId ? { inputId } : {}),

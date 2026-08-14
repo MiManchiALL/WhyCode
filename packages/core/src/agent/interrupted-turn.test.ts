@@ -121,7 +121,15 @@ describe('用户中断后的新回合', () => {
     await journal.recordViewEvents([
       { type: 'core-event', event: { type: 'turn-start', turnId: oldTurnId } },
       { type: 'core-event', event: { type: 'text-delta', text: '这是旧回答。' } },
-      { type: 'core-event', event: { type: 'work-finished', durationMs: 500, outcome: 'completed' } },
+      {
+        type: 'core-event',
+        event: {
+          type: 'work-finished',
+          durationMs: 500,
+          outcome: 'completed',
+          forkTurnId: oldTurnId,
+        },
+      },
     ])
 
     const prepared = await session.prepareLatestTurnEdit(oldTurnId, '编辑后的问题')

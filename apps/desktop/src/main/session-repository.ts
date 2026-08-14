@@ -55,6 +55,16 @@ export class DesktopSessionRepository {
     return opening
   }
 
+  async fork(
+    source: SessionJournal,
+    sourceTurnId: string,
+    targetWorkspace: WorkspaceBinding,
+  ): Promise<SessionJournal> {
+    const journal = await this.store.fork(source, sourceTurnId, targetWorkspace)
+    this.opened.set(journal.sessionId, journal)
+    return journal
+  }
+
   release(journal: SessionJournal): void {
     if (this.opened.get(journal.sessionId) === journal) {
       this.opened.delete(journal.sessionId)

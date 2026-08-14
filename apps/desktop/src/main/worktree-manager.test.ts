@@ -393,12 +393,18 @@ describe('受管 Worktree 生命周期', () => {
     const restarted = new WorktreeManager(fixture.managerRoot)
     const sessionId = randomUUID()
     await restarted.assertUsable(binding, sessionId, 'runtime-after-crash')
+    const forkSessionId = randomUUID()
     await assert.rejects(
-      restarted.attachSession(binding, randomUUID()),
-      /属于其它会话/,
+      restarted.assertUsable(binding, forkSessionId, 'runtime-unrelated'),
+      /已属于其它会话/,
     )
+    await restarted.attachSession(binding, forkSessionId)
+    await restarted.assertUsable(binding, forkSessionId, 'runtime-fork')
     restarted.release(binding, 'runtime-after-crash')
-    await restarted.remove(binding, true)
+    restarted.release(binding, 'runtime-fork')
+    await restarted.detachSession(binding, sessionId, true)
+    assert.equal((await restarted.status(binding)).dirty, false)
+    await restarted.detachSession(binding, forkSessionId, true)
   })
 
   it('附加清单引用非 ignored 路径时回滚 Git 登记与受管目录', async () => {

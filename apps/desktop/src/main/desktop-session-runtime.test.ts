@@ -17,6 +17,12 @@ describe('会话工作计时', () => {
     const startedAt = runtime.workStartedAt
     runtime.beginWork()
     runtime.emit({ type: 'agent-status', status: 'working' }, false)
+    runtime.emit({
+      type: 'turn-end',
+      turnId: 'turn-completed',
+      usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0 },
+      stopReason: 'completed',
+    }, false)
     runtime.emit({ type: 'agent-status', status: 'idle' }, false)
 
     assert.equal(typeof startedAt, 'number')
@@ -24,6 +30,7 @@ describe('会话工作计时', () => {
     const finished = events.find((event) => event.type === 'work-finished')
     assert.ok(finished?.type === 'work-finished' && finished.durationMs >= 0)
     assert.equal(finished?.type === 'work-finished' && finished.outcome, 'completed')
+    assert.equal(finished?.type === 'work-finished' && finished.forkTurnId, 'turn-completed')
     assert.ok(
       events.findIndex((event) => event.type === 'work-finished')
       < events.findIndex((event) => event.type === 'agent-status' && event.status === 'idle'),
@@ -60,12 +67,77 @@ describe('会话工作计时', () => {
     runtime.emit({ type: 'agent-status', status: 'idle' }, false)
     const stopped = events.find((event) => event.type === 'work-finished')
     assert.equal(stopped?.type === 'work-finished' && stopped.outcome, 'stopped')
+    assert.equal(stopped?.type === 'work-finished' && stopped.forkTurnId, null)
 
     runtime.beginWork()
     await runtime.abort('shutdown')
     runtime.emit({ type: 'agent-status', status: 'idle' }, false)
     const finished = events.filter((event) => event.type === 'work-finished').at(-1)
     assert.equal(finished?.type === 'work-finished' && finished.outcome, 'completed')
+  })
+
+  it('暂停或等待用户的模型回复不成为 Fork 边界', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    runtime.beginWork()
+    runtime.emit({
+      type: 'turn-end',
+      turnId: 'turn-waiting',
+      usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0 },
+      stopReason: 'waiting-user',
+    }, false)
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+
+    const finished = events.find((event) => event.type === 'work-finished')
+    assert.equal(finished?.type === 'work-finished' && finished.forkTurnId, null)
+  })
+
+  it('后续执行异常会清除先前的完整回复边界', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    runtime.beginWork()
+    runtime.emit({
+      type: 'turn-end',
+      turnId: 'turn-before-error',
+      usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0 },
+      stopReason: 'completed',
+    }, false)
+    runtime.emit({ type: 'agent-status', status: 'error' }, false)
+
+    const finished = events.find((event) => event.type === 'work-finished')
+    assert.equal(finished?.type === 'work-finished' && finished.forkTurnId, null)
+  })
+
+  it('协作或宿主错误事件同样会废弃先前的 Fork 边界', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    runtime.beginWork()
+    runtime.emit({
+      type: 'turn-end',
+      turnId: 'turn-before-core-error',
+      usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0 },
+      stopReason: 'completed',
+    }, false)
+    runtime.emit({ type: 'error', message: '后续协作失败', recoverable: true }, false)
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+
+    const finished = events.find((event) => event.type === 'work-finished')
+    assert.equal(finished?.type === 'work-finished' && finished.forkTurnId, null)
   })
 })
 

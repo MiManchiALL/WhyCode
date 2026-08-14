@@ -90,7 +90,13 @@ describe('模型空窗反馈', () => {
     assert.equal(visible([
       { kind: 'user', id: 'old-user', text: '旧任务' },
       oldRunningTool,
-      { kind: 'work-duration', id: 'duration-1', durationMs: 10, outcome: 'stopped' },
+      {
+        kind: 'work-duration',
+        id: 'duration-1',
+        forkTurnId: null,
+        durationMs: 10,
+        outcome: 'stopped',
+      },
       user,
     ]), true)
   })

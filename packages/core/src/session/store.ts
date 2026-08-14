@@ -20,6 +20,8 @@ import { createTaskContextMessage } from '../tasks/context.ts'
 import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
 import { viewEventSchema, type ViewEvent } from './view-events.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
+import { createSessionFork } from './fork.ts'
+import { readSessionStartOrigin } from './fork-origin.ts'
 import { createTurnAbortedMessage } from './interruption.ts'
 import { attachmentValidationSignature } from './attachment-validation-cache.ts'
 import { dehydrateImageMessages } from '../attachments/messages.ts'
@@ -40,6 +42,7 @@ import {
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
 import type { ActivatedSkill } from '../skills/types.ts'
 import { skillSummary } from '../skills/types.ts'
+import type { WorkspaceBinding } from '../workspace/types.ts'
 import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
@@ -85,6 +88,7 @@ export class SessionStore {
   private readonly rootDir: string
   private readonly pdfProcessor: PdfProcessor | undefined
   private readonly attachmentValidationSignatures = new Map<string, string>()
+  private forkQueue: Promise<void> = Promise.resolve()
 
   constructor(rootDir: string, options: { pdfProcessor?: PdfProcessor } = {}) {
     this.rootDir = resolve(rootDir)
@@ -106,6 +110,8 @@ export class SessionStore {
       modelId: input.modelId,
       reasoningEffort: input.reasoningEffort ?? 'default',
       ...(input.customSystemPrompt ? { customSystemPrompt: input.customSystemPrompt } : {}),
+      title: null,
+      forkOrigin: null,
     })
     if (parsedStart.type !== 'session-start') throw new Error('无法创建会话起始记录')
     const start = parsedStart
@@ -221,6 +227,54 @@ export class SessionStore {
     )
   }
 
+  fork(
+    source: SessionJournal,
+    sourceTurnId: string,
+    targetWorkspace: WorkspaceBinding,
+  ): Promise<SessionJournal> {
+    const next = this.forkQueue.then(async () => {
+      const sourcePaths = this.pathsFor(source.sessionId)
+      const sourceEntries = await source.readEntriesSnapshot()
+      const sourceLoaded = buildLoadedSession(sourceEntries)
+      const sourceOrigin = sourceLoaded.metadata.forkOrigin
+      const familyId = sourceOrigin?.familyId ?? source.sessionId
+      const baseTitle = sourceOrigin?.baseTitle ?? sourceLoaded.metadata.title
+      if (!baseTitle) throw new Error('没有完整用户对话的会话不能创建分支')
+
+      const ordinal = await this.nextForkOrdinal(familyId)
+      const targetSessionId = randomUUID()
+      const origin = {
+        familyId,
+        sourceSessionId: source.sessionId,
+        sourceTurnId,
+        ordinal,
+        baseTitle,
+        createdAt: new Date().toISOString(),
+      }
+      try {
+        await createSessionFork({
+          rootDir: this.rootDir,
+          sourcePaths,
+          sourceEntries,
+          sourceTurnId,
+          targetSessionId,
+          title: `${baseTitle}（${ordinal}）`,
+          origin,
+          targetWorkspace,
+        })
+        return await this.open(targetSessionId)
+      } catch (error) {
+        await rm(this.pathsFor(targetSessionId).sessionDir, {
+          recursive: true,
+          force: true,
+        }).catch(() => {})
+        throw error
+      }
+    })
+    this.forkQueue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
   async list(
     projectDir?: string | null,
     liveSessions: readonly SessionMetadata[] = [],
@@ -331,6 +385,15 @@ export class SessionStore {
 
   private pathsFor(sessionId: string): SessionPaths {
     return getSessionPaths(this.rootDir, sessionId)
+  }
+
+  private async nextForkOrdinal(familyId: string): Promise<number> {
+    const entries = await readdir(this.rootDir, { withFileTypes: true })
+    const origins = await Promise.all(entries
+      .filter((entry) => entry.isDirectory() && isSessionId(entry.name))
+      .map((entry) => readSessionStartOrigin(this.rootDir, entry.name).catch(() => null)))
+    return Math.max(1, ...origins.flatMap((origin) =>
+      origin?.familyId === familyId ? [origin.ordinal] : [])) + 1
   }
 }
 
@@ -534,6 +597,15 @@ export class SessionJournal implements SessionRecorder {
 
   get metadataSnapshot(): SessionMetadata {
     return { ...this.metadata }
+  }
+
+  readEntriesSnapshot(): Promise<SessionEntry[]> {
+    let snapshot: SessionEntry[] | null = null
+    const operation = this.writeQueue.then(async () => {
+      snapshot = parseTranscript(await readFile(this.paths.transcript, 'utf8'))
+    })
+    this.writeQueue = operation.catch(() => {})
+    return operation.then(() => snapshot!)
   }
 
   recordUserInput(

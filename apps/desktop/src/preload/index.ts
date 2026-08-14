@@ -3,6 +3,8 @@ import type { CoreCommand, CoreEvent, SkillCatalogSnapshot } from '@whycode/core
 import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
+  ForkSessionRequest,
+  ForkSessionResult,
   NewSessionRequest,
   NewSessionResult,
   ResumeSessionResult,
@@ -112,6 +114,8 @@ const api = {
   listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
   resumeSession: (sessionId: string): Promise<ResumeSessionResult> =>
     ipcRenderer.invoke(IPC.resumeSession, sessionId),
+  forkSession: (request: ForkSessionRequest): Promise<ForkSessionResult> =>
+    ipcRenderer.invoke(IPC.forkSession, request),
   newSession: (request?: NewSessionRequest): Promise<NewSessionResult> =>
     ipcRenderer.invoke(IPC.newSession, request),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
