@@ -18,7 +18,11 @@ interface UserMessageCardProps {
 export function UserMessageCard(props: UserMessageCardProps) {
   const editor = useMessageEditor(props.block, props.onEdit)
   return (
-    <div className="group relative mb-8 ml-auto flex max-w-[84%] flex-col items-end gap-2 text-sm leading-6">
+    <div
+      className={`group ml-auto flex max-w-[84%] flex-col items-end gap-2 text-sm leading-6 ${
+        editor.editing ? 'mb-8' : 'mb-2'
+      }`}
+    >
       <UserImageGallery attachments={props.block.attachments} />
       <UserPdfGallery runtimeId={props.runtimeId} attachments={props.block.pdfAttachments} />
       <SkillBadges skills={props.block.skills} />
@@ -43,7 +47,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
           text={props.block.text}
           editable={props.editable && !props.disabled}
           onEdit={editor.begin}
-          className="absolute right-0 top-full pt-1"
+          className="-mt-1"
         />
       ) : null}
     </div>

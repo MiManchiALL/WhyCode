@@ -54,7 +54,7 @@ export function BlockView({
   }
   if (block.kind === 'text') {
     return (
-      <div className={`group relative max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-8' : 'mb-4'}`}>
+      <div className={`group max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}>
         <div className="prose prose-sm prose-neutral max-w-none">
           <MarkdownContent text={block.text} streaming={streamingAssistantText} />
         </div>
@@ -62,7 +62,7 @@ export function BlockView({
           <MessageActions
             timestamp={block.timestamp}
             text={block.text}
-            className="absolute left-1 top-full pt-1"
+            className="mt-1"
             onFork={forkTurnId && !busy ? () => onFork(forkTurnId) : undefined}
             forkPending={forkPending}
           />
