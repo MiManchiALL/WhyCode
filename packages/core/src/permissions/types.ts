@@ -1,6 +1,6 @@
 /**
  * 权限系统类型（M2-b，设计依据文档一 §3.2）。
- * 两轴：审批策略档位（mode）× 工作区边界（projectDir + additionalDirs）。
+ * 两轴：审批策略档位（mode）× 工作区边界（projectDir + 会话 scratch + 授权目录）。
  */
 
 export type PermissionMode = 'readonly' | 'default' | 'acceptEdits' | 'auto'
@@ -16,7 +16,7 @@ export interface PermissionContext {
   mode: PermissionMode
   /** 当前会话的真实工作目录。 */
   projectDir: string
-  /** 用户本会话内授权的额外目录（绝对路径） */
+  /** 会话固定 scratch 与用户本会话内授权的额外目录（绝对路径） */
   additionalDirs: string[]
   /** 本会话「记住允许」的整工具名规则 */
   sessionAllowedTools: string[]
@@ -30,11 +30,14 @@ export interface PermissionContext {
 export function createPermissionContext(
   projectDir: string,
   discussion?: { scratchDir: string },
+  sessionScratchDir?: string,
 ): PermissionContext {
+  const additionalDirs = [sessionScratchDir, discussion?.scratchDir]
+    .filter((path): path is string => Boolean(path))
   return {
     mode: 'default',
     projectDir,
-    additionalDirs: discussion ? [discussion.scratchDir] : [],
+    additionalDirs: [...new Set(additionalDirs)],
     sessionAllowedTools: [],
     discussion,
   }

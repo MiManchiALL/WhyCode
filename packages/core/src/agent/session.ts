@@ -341,6 +341,7 @@ export class AgentSession {
     this.permissions = createPermissionContext(
       options.promptContext.projectDir,
       options.promptContext.discussion,
+      options.promptContext.scratch?.rootDir,
     )
     if (!options.promptContext.discussion) {
       this.taskPlan = new TaskPlanController(

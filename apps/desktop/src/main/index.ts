@@ -80,6 +80,7 @@ import {
   updateMcpServerState,
 } from './mcp-settings.ts'
 import { deleteSessionArtifacts } from './session-deletion.ts'
+import { SessionScratchManager } from './session-scratch.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionPreparationLock } from './session-preparation-lock.ts'
@@ -346,6 +347,8 @@ let backgroundTaskWakeups: BackgroundTaskWakeQueue | null = null
 let worktrees: WorktreeManager
 /** 每个默认会话独占一个受管子目录；Fork 从来源目录创建一次性快照。 */
 let managedWorkspaces: ManagedWorkspaceManager
+/** 普通 Main 与协商任务共用的会话级临时工作区所有权入口。 */
+let sessionScratch: SessionScratchManager
 /** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
 let skills: SkillCatalogService
 /** 删除跨多个存储始终单飞；历史删除不占用当前会话的运行时。 */
@@ -623,6 +626,7 @@ async function createRuntimeJournal(
     customSystemPrompt,
   )
   try {
+    await sessionScratch.ensure(recorder.sessionId)
     if (workspace.mode === 'worktree') {
       await worktrees.attachSession(workspace, recorder.sessionId)
     } else if (workspace.mode === 'managed') {
@@ -631,8 +635,19 @@ async function createRuntimeJournal(
     return recorder
   } catch (error) {
     sessions.release(recorder)
-    await sessions.markDeleting(recorder.sessionId).catch(() => false)
-    await sessions.delete(recorder.sessionId).catch(() => false)
+    const rollbackErrors: unknown[] = []
+    await sessionScratch.remove(recorder.sessionId)
+      .catch((rollbackError) => rollbackErrors.push(rollbackError))
+    await sessions.markDeleting(recorder.sessionId)
+      .catch((rollbackError) => rollbackErrors.push(rollbackError))
+    await sessions.delete(recorder.sessionId)
+      .catch((rollbackError) => rollbackErrors.push(rollbackError))
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        '初始化会话资源失败且自动回滚未完成',
+      )
+    }
     throw error
   }
 }
@@ -645,6 +660,10 @@ async function createMainAgentSession(
   providerConfig: ProviderConfig,
   reasoningEffort: ReasoningEffortSelection,
 ): Promise<AgentSession> {
+  const scratch = sessionScratch.paths(recorder.sessionId)
+  const forkSourceScratch = recorder.metadataSnapshot.forkOrigin
+    ? sessionScratch.paths(recorder.metadataSnapshot.forkOrigin.sourceSessionId)
+    : null
   const mcpRuntime = new McpSessionRuntime({
     configuration: mcpOAuthController.runtimeConfiguration(
       await loadMcpConfiguration({
@@ -672,6 +691,13 @@ async function createMainAgentSession(
         projectDir: targetProjectDir,
         osPlatform: process.platform,
         homeDir: app.getPath('home'),
+        scratch: {
+          rootDir: scratch.rootDirectory,
+          workingDir: scratch.mainDirectory,
+          ...(forkSourceScratch
+            ? { forkSourceRootDir: forkSourceScratch.rootDirectory }
+            : {}),
+        },
       },
       customSystemPrompt: recorder.customSystemPrompt,
       sessionRecorder: recorder,
@@ -738,7 +764,7 @@ function buildCoordinator(runtime: DesktopSessionRuntime): string | null {
     runtime.session!,
     journal,
     requireRuntimeProjectDir(runtime),
-    journal.sessionId,
+    sessionScratch.paths(journal.sessionId).rootDirectory,
   )
   if (!result.ok) return result.error
   runtime.coordinator = result.value
@@ -750,15 +776,14 @@ function createCoordinator(
   mainSession: AgentSession,
   journal: SessionJournal,
   targetProjectDir: string,
-  targetConversationId: string,
+  targetSessionScratchDir: string,
 ): { ok: true; value: ConsensusCoordinator } | { ok: false; error: string } {
   const agents = resolveConsensusAgentSetups(loadAppConfig())
   if (!agents.ok) return agents
   const value = new ConsensusCoordinator({
     mainSession,
     projectDir: targetProjectDir,
-    scratchRoot: join(app.getPath('userData'), 'scratch'),
-    conversationId: targetConversationId,
+    sessionScratchDir: targetSessionScratchDir,
     agents: agents.value,
     osPlatform: process.platform,
     homeDir: app.getPath('home'),
@@ -1817,6 +1842,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       request.sourceTurnId,
       targetWorkspace,
     )
+    await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
     await attachSessionWorkspace(forkedJournal)
     runtime = await prepareRuntimeFromJournal(forkedJournal)
     return { ok: true, snapshot: await selectRuntimeWithSnapshot(runtime, true) }
@@ -1826,6 +1852,8 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       await runtimeRegistry.remove(runtime).catch(() => {})
     }
     if (forkedJournal) {
+      await sessionScratch.remove(forkedJournal.sessionId)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await removeForkSessionWorkspace(forkedJournal)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await sessions.markDeleting(forkedJournal.sessionId)
@@ -1914,6 +1942,7 @@ async function prepareRuntimeFromJournal(
     } else if (metadata.workspace.mode === 'managed') {
       await managedWorkspaces.assertUsable(metadata.workspace, journal.sessionId)
     }
+    await sessionScratch.ensure(journal.sessionId)
     if (resolved.ok) {
       runtime.session = await createMainAgentSession(
         runtime,
@@ -1930,7 +1959,7 @@ async function prepareRuntimeFromJournal(
         runtime.session,
         journal,
         targetProjectDir,
-        journal.sessionId,
+        sessionScratch.paths(journal.sessionId).rootDirectory,
       )
       if (!built.ok) throw new Error(built.error)
       runtime.coordinator = built.value
@@ -2091,7 +2120,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       sessionId,
       sessions,
       commandSessions,
-      scratchRoot: join(app.getPath('userData'), 'scratch'),
+      scratch: sessionScratch,
       onDeletionMarked: async (sessionExists) => {
         if (!sessionExists) return
         backgroundTaskWakeups?.discardSession(sessionId)
@@ -2170,11 +2199,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.warn('内置 Skill 初始化失败：', error))
   await synchronizeConfiguredCliProxyRoutes()
     .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
-  // scratch 只服务当次协商；旧命令快照已退出事实源，两者均可在启动时安全清理。
-  void Promise.all([
-    rm(join(app.getPath('userData'), 'scratch'), { recursive: true, force: true }),
-    rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true }),
-  ]).catch(() => {})
+  // 旧命令快照已退出事实源，可以在启动时安全清理；会话 scratch 由下方按事实源定向回收。
+  void rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true })
+    .catch(() => {})
   try {
     defaultWorkspaceDir = await ensureDefaultWorkspace(
       app.getPath('documents'),
@@ -2192,6 +2219,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  sessionScratch = new SessionScratchManager(join(app.getPath('userData'), 'scratch'))
   skills = new SkillCatalogService({ homeDir: app.getPath('home') })
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
   managedWorkspaces = new ManagedWorkspaceManager(
@@ -2212,6 +2240,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
         summary.workspace?.mode === 'managed' ? [summary.workspace.id] : [],
       )),
     )
+    const scratchCleanup = await sessionScratch.cleanupAbandoned(
+      new Set(summaries.map((summary) => summary.sessionId)),
+    )
     if (worktreeCleanup.removed.length) {
       console.info(`已清理 ${worktreeCleanup.removed.length} 个无会话的干净 Worktree 草稿`)
     }
@@ -2227,8 +2258,14 @@ if (primaryInstance) void app.whenReady().then(async () => {
     for (const warning of managedCleanup.warnings) {
       console.warn(`默认工作区清理跳过：${warning}`)
     }
+    if (scratchCleanup.removed.length) {
+      console.info(`已清理 ${scratchCleanup.removed.length} 个无会话的临时工作区`)
+    }
+    for (const warning of scratchCleanup.warnings) {
+      console.warn(`会话临时工作区清理跳过：${warning}`)
+    }
   } catch (error) {
-    console.warn('受管工作区启动清理失败：', error)
+    console.warn('受管资源启动清理失败：', error)
   }
   runtimeRegistry = new SessionRuntimeRegistry({
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),

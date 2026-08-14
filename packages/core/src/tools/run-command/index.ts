@@ -88,7 +88,7 @@ export const runCommandTool = buildTool({
   prompt:
     '在项目目录下执行 shell 命令（Windows 上为 PowerShell 5.1：不支持 && 链接符，多条命令用 ; 分隔或分多次调用）。' +
     '本工具以非交互方式执行且不接受 stdin，不要用于需要确认输入或交互式终端的程序。' +
-    '多行或包含复杂引号的脚本先用 WriteFile 保存，再执行脚本文件；不要塞进 python -c 或 node -e。导入第三方包前先检查环境是否已有。' +
+    '多行或包含复杂引号的非交付脚本先用 WriteFile 保存到环境提供的临时工作区，再执行脚本文件；需要交付的项目脚本写入项目目录。不要塞进 python -c 或 node -e。导入第三方包前先检查环境是否已有。' +
     '可用 cwd 指定工作目录（绝对路径）。创建、修改、删除或移动明确文件应使用 WriteFile/EditFile/DeleteFile/MoveFile，不要用命令绕过其路径授权。' +
     '命令产生的文件及外部副作用不建立检查点，无法回滚。' +
     '返回 stdout+stderr（超长截断尾部保留）。默认超时 120 秒。',

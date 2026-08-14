@@ -220,8 +220,7 @@ function createHarness(options: {
   const coordinator = new ConsensusCoordinator({
     mainSession: main,
     projectDir: process.cwd(),
-    scratchRoot: '',
-    conversationId: 'test-conversation',
+    sessionScratchDir: '',
     agents: { B: {} as never, C: {} as never },
     osPlatform: 'win32',
     emit: (event) => events.push(event),

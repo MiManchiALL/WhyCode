@@ -24,6 +24,13 @@ export interface PromptContext {
   osPlatform: NodeJS.Platform
   /** 用户主目录；桌面、文档等项目外路径需要明确绝对化时供模型参考。 */
   homeDir?: string
+  /** 宿主提供的会话临时工作区；rootDir 同时是工具权限边界。 */
+  scratch?: {
+    rootDir: string
+    workingDir: string
+    /** Fork 后来源 scratch 已按相对路径复制到当前 rootDir。 */
+    forkSourceRootDir?: string
+  }
   /** 协商讨论阶段（M3）：当前 Agent 身份与临时工作区 */
   discussion?: { agentId: 'Main' | 'B' | 'C'; scratchDir: string }
 }
@@ -41,6 +48,7 @@ function environmentSection(
   projectDir: string,
   osPlatform: NodeJS.Platform,
   homeDir?: string,
+  scratch?: PromptContext['scratch'],
 ): string {
   const lines = [
     '# 环境',
@@ -48,10 +56,21 @@ function environmentSection(
     `- 操作系统：${osPlatform === 'win32' ? 'Windows' : osPlatform}`,
   ]
   if (homeDir) lines.push(`- 用户主目录：${homeDir}`)
+  if (scratch) {
+    lines.push(`- 临时工作区：${scratch.workingDir}`)
+    if (scratch.forkSourceRootDir) {
+      lines.push(
+        `- Fork 临时路径映射：${scratch.forkSourceRootDir} → ${scratch.rootDir}（来源内容已按相对路径复制；历史中的其它会话 scratch 路径也按其根下相对路径映射到当前根，后续只使用当前路径）`,
+      )
+    }
+  }
   return lines.join('\n')
 }
 
-function toolUsageSection(backgroundCommandsAvailable: boolean): string {
+function toolUsageSection(
+  backgroundCommandsAvailable: boolean,
+  scratchAvailable: boolean,
+): string {
   return [
     '# 工具使用',
     '- 修改或评价代码前先读取相关文件和调用点，基于现有实现判断，不凭猜测。',
@@ -59,6 +78,9 @@ function toolUsageSection(backgroundCommandsAvailable: boolean): string {
     '- 相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟；存在数据依赖、写入顺序或前一步结果尚未确定时，按顺序调用。',
     '- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。',
     `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${BASH_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`,
+    ...(scratchAvailable
+      ? ['- 项目交付物保存在项目目录；非交付脚本、日志、下载或转换中间物及其它临时产物放在临时工作区，不要用临时文件污染项目。']
+      : []),
     '- 需要调用工具时，首次调用前简短说明立即要做什么；长任务包含多次工具调用或多个阶段时，在有新进展的合理间隔用 1～2 句话概括已确认进度和接下来方向，不重复未变化的状态；进度文字后在同一步继续调用工具。',
     '- 这些文字只是阶段性进度；全部工具结束后再交付完整、自包含的最终回答，不用“见上文”或前序进度代替最终结果。',
     ...(backgroundCommandsAvailable
@@ -111,7 +133,7 @@ function discussionSection(
     role,
     '- 用户问题可以是编程任务，也可以是生活、写作、规划或其他通用问题；只按问题本身需要分析，不要强行关联代码。',
     '- 原项目目录**只读**：禁止修改、删除、移动其中任何文件。',
-    `- 实验文件、测试脚本、复制来的文件副本一律放进你的临时工作区：${ctx.scratchDir}`,
+    '- 实验文件、测试脚本、复制来的文件副本一律放进环境列出的临时工作区。',
     '- 运行命令时必须显式把 cwd 设为你的临时工作区；未限定在临时工作区内的命令会被工具层拒绝。命令里不要引用工作区外的路径，读项目文件请用 ReadFile。',
     '- 当前轮次要求正式协议输出时，必须调用 SubmitProtocolOutput；若输入明确说明是“独立初判”，则按要求仅输出普通文本。',
     '- 结论若依赖实验产物（脚本/日志/复现 demo），把路径列进 scratch_artifacts。',
@@ -122,10 +144,13 @@ export function buildSystemPrompt(
   ctx: PromptContext,
   customSystemPrompt?: CustomSystemPromptSnapshot,
 ): string {
+  const activeScratch = ctx.discussion
+    ? { rootDir: ctx.discussion.scratchDir, workingDir: ctx.discussion.scratchDir }
+    : ctx.scratch
   const sections = [
     identitySection(),
-    environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir),
-    toolUsageSection(!ctx.discussion),
+    environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir, activeScratch),
+    toolUsageSection(!ctx.discussion, Boolean(activeScratch)),
   ]
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
   if (!ctx.discussion) sections.push(taskPlanningSection())

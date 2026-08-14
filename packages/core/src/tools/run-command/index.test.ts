@@ -70,6 +70,13 @@ describe('RunCommand 路径扫描', () => {
   })
 })
 
+describe('RunCommand 模型契约', () => {
+  it('把非交付复杂脚本定向到会话临时工作区', () => {
+    assert.match(runCommandTool.prompt, /非交付脚本.*临时工作区/)
+    assert.match(runCommandTool.prompt, /需要交付的项目脚本写入项目目录/)
+  })
+})
+
 describe('RunCommand 中止', () => {
   it('停止时终止命令进程树并及时返回', async () => {
     const abortController = new AbortController()

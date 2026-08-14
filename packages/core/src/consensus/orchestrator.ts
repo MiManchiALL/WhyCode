@@ -15,7 +15,7 @@ import {
   buildMainOnlyExecutionPrompt,
   buildQuickReviewPrompt,
 } from './prompts.ts'
-import { createTaskScratch } from './scratch.ts'
+import { createConsensusTaskScratch } from './scratch.ts'
 import {
   consensusPersistedStateSchema,
   keepsConsensusProgress,
@@ -48,9 +48,8 @@ export interface ConsensusCoordinatorOptions {
   /** Main = 用户对话的既有会话（最终执行者，保留完整上下文） */
   mainSession: AgentSession
   projectDir: string
-  /** scratch 存储根（宿主注入，如 userData/scratch） */
-  scratchRoot: string
-  conversationId: string
+  /** 当前会话的 scratch 根；协商任务只在其 consensus 子树中创建目录。 */
+  sessionScratchDir: string
   agents: { B: ConsensusAgentSetup; C: ConsensusAgentSetup }
   osPlatform: NodeJS.Platform
   homeDir?: string
@@ -313,9 +312,8 @@ export class ConsensusCoordinator {
         outcome = 'aborted'
         return
       }
-      const scratch = await createTaskScratch(
-        this.options.scratchRoot,
-        this.options.conversationId,
+      const scratch = await createConsensusTaskScratch(
+        this.options.sessionScratchDir,
         taskId,
       )
       if (this.aborted) {

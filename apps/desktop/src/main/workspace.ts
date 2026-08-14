@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ManagedWorkspaceBinding } from '@whycode/core'
-import { copyManagedWorkspaceSnapshot } from './managed-workspace-snapshot.ts'
+import { copyDirectorySnapshot } from './directory-snapshot.ts'
 
 export const DEFAULT_WORKSPACE_NAME = 'WhyCode Workspace'
 
@@ -143,7 +143,7 @@ export class ManagedWorkspaceManager {
     await this.assertUsable(source, sourceSessionId)
     const target = await this.create(targetId)
     try {
-      await copyManagedWorkspaceSnapshot(source.workingDirectory, target.workingDirectory)
+      await copyDirectorySnapshot(source.workingDirectory, target.workingDirectory)
       return target
     } catch (error) {
       try {

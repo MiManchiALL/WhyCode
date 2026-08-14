@@ -35,6 +35,10 @@ export class PeerAgent {
         projectDir: options.projectDir,
         osPlatform: options.osPlatform,
         homeDir: options.homeDir,
+        scratch: {
+          rootDir: options.scratchDir,
+          workingDir: options.scratchDir,
+        },
         discussion: { agentId: options.agentId, scratchDir: options.scratchDir },
       },
       emit: options.emit,
