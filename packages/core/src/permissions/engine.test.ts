@@ -113,6 +113,28 @@ const projectProcessTool = buildTool({
 })
 
 describe('统一权限决策', () => {
+  it('普通会话把自身 scratch 作为稳定路径边界而不是临时越界授权', () => {
+    const context = createPermissionContext(
+      'C:\\workspace',
+      undefined,
+      'C:\\scratch\\session',
+    )
+
+    assert.deepEqual(context.additionalDirs, ['C:\\scratch\\session'])
+    assert.deepEqual(
+      checkToolPermission(
+        editTool,
+        { path: 'C:\\scratch\\session\\Main\\inspect.js' },
+        context,
+      ),
+      {
+        behavior: 'ask',
+        reason: 'EditProbe 需要你的确认',
+        suggestion: { kind: 'allow-tool', toolName: 'EditProbe' },
+      },
+    )
+  })
+
   it('只读模式在项目内外均直接拒绝写和命令，不产生可批准入口', () => {
     const context = createPermissionContext('C:\\workspace')
     context.mode = 'readonly'

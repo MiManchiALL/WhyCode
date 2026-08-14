@@ -10,6 +10,10 @@ describe('通用 Agent 提示约束', () => {
       projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
       homeDir: 'C:\\Users\\tester',
+      scratch: {
+        rootDir: 'C:\\scratch\\session',
+        workingDir: 'C:\\scratch\\session\\Main',
+      },
     })
 
     assert.match(prompt, /通用型桌面 AI Agent/)
@@ -21,6 +25,8 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(prompt, /当前日期|当前本机时间/)
     assert.doesNotMatch(prompt, /非项目问题直接回答|无故读取项目/)
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
+    assert.match(prompt, /临时工作区：C:\\scratch\\session\\Main/)
+    assert.match(prompt, /非交付脚本、日志、下载或转换中间物及其它临时产物放在临时工作区/)
     assert.match(prompt, /修改或评价代码前先读取相关文件和调用点/)
     assert.match(prompt, /在形成结论或采取行动前，识别对结果有决定作用的事实/)
     assert.match(prompt, /当前状态、近期变化、是否仍然有效、实际覆盖范围或可追溯出处/)
@@ -49,6 +55,23 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /不要额外扩展功能、顺手重构或添加配置/)
     assert.match(prompt, /发现陌生文件、分支、锁或配置时先调查来源/)
     assert.match(prompt, /区分已观察事实、推断和准备执行的动作/)
+  })
+
+  it('Fork 后明确把历史临时路径映射到新会话副本', () => {
+    const prompt = buildSystemPrompt({
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32',
+      scratch: {
+        rootDir: 'C:\\scratch\\target',
+        workingDir: 'C:\\scratch\\target\\Main',
+        forkSourceRootDir: 'C:\\scratch\\source',
+      },
+    })
+
+    assert.match(
+      prompt,
+      /Fork 临时路径映射：C:\\scratch\\source → C:\\scratch\\target（来源内容已按相对路径复制；历史中的其它会话 scratch 路径也按其根下相对路径映射到当前根，后续只使用当前路径）/,
+    )
   })
 
   it('系统提示词不含动态时间并保持稳定', () => {
@@ -100,6 +123,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /必须调用 SubmitProtocolOutput/)
     assert.match(prompt, /原项目目录\*\*只读/)
     assert.match(prompt, /C:\\scratch/)
+    assert.equal(prompt.match(/C:\\scratch/gu)?.length, 1)
     assert.doesNotMatch(prompt, /CreateTaskPlan/)
   })
 

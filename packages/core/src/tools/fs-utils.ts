@@ -3,7 +3,7 @@ import { findOutsideBoundary } from '../permissions/path-safety.ts'
 import type { ToolContext } from './tool.ts'
 
 /**
- * 工具侧的路径解析：限制在项目目录 + 会话内已授权目录内。
+ * 工具侧的路径解析：限制在项目目录 + 会话 scratch + 已授权目录内。
  * 权限引擎在执行前已做过边界审批，这里是执行时的最后防线（越界抛错）。
  */
 export function resolveAllowed(ctx: ToolContext, inputPath: string): string {

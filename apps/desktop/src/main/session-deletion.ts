@@ -1,15 +1,15 @@
 import {
-  cleanupConversationScratch,
   validateSessionId,
   type CommandSessionManager,
 } from '@whycode/core'
 import type { DesktopSessionRepository } from './session-repository.ts'
+import type { SessionScratchManager } from './session-scratch.ts'
 
 interface SessionDeletionOptions {
   sessionId: string
   sessions: Pick<DesktopSessionRepository, 'markDeleting' | 'delete'>
   commandSessions: Pick<CommandSessionManager, 'removeSession'>
-  scratchRoot: string
+  scratch: Pick<SessionScratchManager, 'remove'>
   onDeletionMarked?: (sessionExists: boolean) => void | Promise<void>
   /** 删除标记已生效、目标会话已不可恢复，但事实源尚在，供引用型元数据完成原子收尾。 */
   onBeforeFactSourceDelete?: () => Promise<void>
@@ -27,7 +27,7 @@ export async function deleteSessionArtifacts(
   const sessionExists = await options.sessions.markDeleting(options.sessionId)
   await options.onDeletionMarked?.(sessionExists)
   await options.commandSessions.removeSession(options.sessionId)
-  await cleanupConversationScratch(options.scratchRoot, options.sessionId)
+  await options.scratch.remove(options.sessionId)
   await options.onBeforeFactSourceDelete?.()
   return options.sessions.delete(options.sessionId)
 }

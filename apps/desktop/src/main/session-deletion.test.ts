@@ -6,6 +6,7 @@ import { afterEach, describe, it } from 'node:test'
 import { CommandSessionManager, localWorkspace } from '@whycode/core'
 import { deleteSessionArtifacts } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
+import { SessionScratchManager } from './session-scratch.ts'
 
 const tempRoots: string[] = []
 
@@ -28,22 +29,23 @@ describe('会话关联数据删除', () => {
     const deletedJournal = await sessions.create(localWorkspace(project), 'test:model')
     const currentJournal = await sessions.create(localWorkspace(project), 'test:model')
     const commandSessions = new CommandSessionManager(commandsRoot)
+    const scratch = new SessionScratchManager(scratchRoot)
     await commandSessions.initialize()
     await mkdir(join(commandsRoot, deletedJournal.sessionId), { recursive: true })
     await writeFile(join(commandsRoot, deletedJournal.sessionId, 'old.log'), 'command output')
-    await mkdir(join(scratchRoot, deletedJournal.sessionId, 'task', 'Main'), { recursive: true })
+    await mkdir(join(scratchRoot, deletedJournal.sessionId, 'consensus', 'task', 'Main'), { recursive: true })
     await writeFile(
-      join(scratchRoot, deletedJournal.sessionId, 'task', 'Main', 'probe.txt'),
+      join(scratchRoot, deletedJournal.sessionId, 'consensus', 'task', 'Main', 'probe.txt'),
       'scratch',
     )
     await mkdir(join(deletedJournal.checkpointDirectory, 'blobs'), { recursive: true })
     await writeFile(join(deletedJournal.checkpointDirectory, 'blobs', 'local'), 'checkpoint')
     const currentCommandFile = join(commandsRoot, currentJournal.sessionId, 'keep.log')
-    const currentScratchFile = join(scratchRoot, currentJournal.sessionId, 'task', 'keep.txt')
+    const currentScratchFile = join(scratchRoot, currentJournal.sessionId, 'Main', 'keep.txt')
     const currentCheckpointFile = join(currentJournal.checkpointDirectory, 'blobs', 'keep')
     await mkdir(join(commandsRoot, currentJournal.sessionId), { recursive: true })
     await writeFile(currentCommandFile, 'other command')
-    await mkdir(join(scratchRoot, currentJournal.sessionId, 'task'), { recursive: true })
+    await mkdir(join(scratchRoot, currentJournal.sessionId, 'Main'), { recursive: true })
     await writeFile(currentScratchFile, 'other scratch')
     await mkdir(join(currentJournal.checkpointDirectory, 'blobs'), { recursive: true })
     await writeFile(currentCheckpointFile, 'other checkpoint')
@@ -52,7 +54,7 @@ describe('会话关联数据删除', () => {
       sessionId: deletedJournal.sessionId,
       sessions,
       commandSessions,
-      scratchRoot,
+      scratch,
     }), true)
 
     await assert.rejects(access(join(sessionsRoot, deletedJournal.sessionId)))
@@ -75,7 +77,7 @@ describe('会话关联数据删除', () => {
           delete: async () => { calls.push('session'); return true },
         },
         commandSessions: { removeSession: async () => { calls.push('command') } },
-        scratchRoot: await createRoot(),
+        scratch: { remove: async () => { calls.push('scratch') } },
       }),
       /无效会话 ID/,
     )
@@ -86,12 +88,13 @@ describe('会话关联数据删除', () => {
     const root = await createRoot()
     const sessions = new DesktopSessionRepository(join(root, 'sessions'))
     const journal = await sessions.create(localWorkspace(null), 'test:model')
+    const scratch = new SessionScratchManager(join(root, 'scratch'))
     await assert.rejects(
       deleteSessionArtifacts({
         sessionId: journal.sessionId,
         sessions,
         commandSessions: { removeSession: async () => { throw new Error('日志被占用') } },
-        scratchRoot: join(root, 'scratch'),
+        scratch,
       }),
       /日志被占用/,
     )
@@ -110,7 +113,7 @@ describe('会话关联数据删除', () => {
         delete: async () => { calls.push('session'); return true },
       },
       commandSessions: { removeSession: async () => { calls.push('command') } },
-      scratchRoot: await createRoot(),
+      scratch: { remove: async () => { calls.push('scratch') } },
       onDeletionMarked: async () => {
         calls.push('detach')
         await new Promise((resolve) => setImmediate(resolve))
@@ -120,7 +123,7 @@ describe('会话关联数据删除', () => {
     }), true)
     assert.deepEqual(
       calls,
-      ['mark', 'detach', 'resources-closed', 'command', 'references', 'session'],
+      ['mark', 'detach', 'resources-closed', 'command', 'scratch', 'references', 'session'],
     )
   })
 })

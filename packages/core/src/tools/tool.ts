@@ -52,7 +52,7 @@ export type ToolCheckpointScope = { kind: 'exact-files'; paths: string[] }
 export interface ToolContext {
   /** 项目根目录（所有相对路径的基准） */
   projectDir: string
-  /** 本会话内额外授权的目录（与权限上下文同步） */
+  /** 本会话固定 scratch 与额外授权目录（与权限上下文同步） */
   additionalDirs: readonly string[]
   abortSignal: AbortSignal
   /** 当前工具步骤确实接合的计划；后台任务终态只可据此恢复同一计划。 */

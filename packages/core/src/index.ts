@@ -237,9 +237,8 @@ export {
   type ProtocolToolSpec,
 } from './consensus/protocol-tool.ts'
 export {
-  createTaskScratch,
-  cleanupConversationScratch,
-  type TaskScratch,
+  createConsensusTaskScratch,
+  type ConsensusTaskScratch,
 } from './consensus/scratch.ts'
 export type {
   ConsensusAgentId,
