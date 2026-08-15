@@ -4,6 +4,7 @@ import type { Block } from './conversation-state.ts'
 import {
   conversationSections,
   findLatestForkTurnId,
+  isForkBoundarySection,
   shouldShowComposerProcessingTime,
   type ConversationSection,
 } from './conversation-sections.ts'
@@ -35,6 +36,23 @@ describe('已完成任务的会话展示投影', () => {
     ]
 
     assert.equal(asCompleted(conversationSections(blocks)[0]).forkTurnId, 'turn-final')
+  })
+
+  it('只有真实存在且匹配的 Fork 来源才标记继承边界', () => {
+    const ordinary = asCompleted(conversationSections([
+      user('user-ordinary', 'turn-ordinary'),
+      duration('duration-ordinary'),
+    ])[0])
+    const forkSource = asCompleted(conversationSections([
+      user('user-source', 'turn-source'),
+      text('answer-source', '完整回答'),
+      { ...duration('duration-source'), forkTurnId: 'turn-source' } as Block,
+    ])[0])
+
+    assert.equal(isForkBoundarySection(ordinary, null), false)
+    assert.equal(isForkBoundarySection(forkSource, null), false)
+    assert.equal(isForkBoundarySection(forkSource, 'turn-other'), false)
+    assert.equal(isForkBoundarySection(forkSource, 'turn-source'), true)
   })
 
   it('快捷 Fork 只选择具有最终正文的最新完整工作', () => {

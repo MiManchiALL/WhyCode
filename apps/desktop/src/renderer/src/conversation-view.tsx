@@ -2,7 +2,10 @@ import { GitFork } from 'lucide-react'
 import { memo } from 'react'
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
-import type { ConversationSection } from './conversation-sections.ts'
+import {
+  isForkBoundarySection,
+  type ConversationSection,
+} from './conversation-sections.ts'
 import {
   sameConversationBlockRenderProps,
   type ConversationBlockRenderProps,
@@ -54,8 +57,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
           : (
               <div key={section.id}>
                 <WorkSection {...props} section={section} />
-                {section.kind === 'completed-work'
-                  && section.forkTurnId === props.forkSourceTurnId
+                {isForkBoundarySection(section, props.forkSourceTurnId)
                   ? <ForkBoundary />
                   : null}
               </div>
