@@ -114,6 +114,24 @@ const GOOGLE_THINKING_SUMMARY_OPTIONS = {
   },
 } satisfies ProviderMetadata
 
+const DEEPSEEK_V4_CAPABILITIES = {
+  supportsNativeTools: true,
+  supportsImageInput: false,
+  reasoningExposure: 'field',
+  reasoningEffort: {
+    supported: ['high', 'max'],
+    default: 'high',
+  },
+  structuredOutput: 'json-object',
+  promptCaching: 'auto',
+  contextWindow: 1_000_000,
+  maxOutput: 384_000,
+} satisfies ModelCapabilities
+
+const DEEPSEEK_THINKING_OPTIONS = {
+  deepseek: { thinking: { type: 'enabled' } },
+} satisfies ProviderMetadata
+
 const OPENAI_REASONING_SUMMARY_OPTIONS = {
   openai: {
     // 路由别名不一定以 gpt-5 开头；画像已经确认其为推理模型，不能让 SDK 再按名字猜。
@@ -173,20 +191,16 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     modelId: 'deepseek-v4-flash',
     displayName: 'DeepSeek V4 Flash',
     provider: 'deepseek',
-    capabilities: {
-      supportsNativeTools: true,
-      supportsImageInput: false,
-      reasoningExposure: 'field',
-      reasoningEffort: {
-        supported: ['high', 'max'],
-        default: 'high',
-      },
-      structuredOutput: 'json-object',
-      promptCaching: 'auto',
-      contextWindow: 1_000_000,
-      maxOutput: 384_000,
-    },
-    providerOptions: { deepseek: { thinking: { type: 'enabled' } } },
+    capabilities: DEEPSEEK_V4_CAPABILITIES,
+    providerOptions: DEEPSEEK_THINKING_OPTIONS,
+  },
+  {
+    id: 'deepseek:deepseek-v4-pro',
+    modelId: 'deepseek-v4-pro',
+    displayName: 'DeepSeek V4 Pro',
+    provider: 'deepseek',
+    capabilities: DEEPSEEK_V4_CAPABILITIES,
+    providerOptions: DEEPSEEK_THINKING_OPTIONS,
   },
   {
     id: 'google:gemini-3.1-pro-preview',
@@ -209,16 +223,16 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     providerOptions: GOOGLE_THINKING_SUMMARY_OPTIONS,
   },
   {
-    id: 'google:gemini-3.6-flash',
-    modelId: 'gemini-3.6-flash',
-    displayName: 'Gemini 3.6 Flash',
+    id: 'google:gemini-3.7-flash',
+    modelId: 'gemini-3.7-flash',
+    displayName: 'Gemini 3.7 Flash',
     provider: 'google',
     capabilities: {
       supportsNativeTools: true,
       supportsImageInput: true,
       reasoningExposure: 'summary',
       reasoningEffort: {
-        supported: ['minimal', 'low', 'medium', 'high'],
+        supported: ['low', 'medium', 'high'],
         default: 'medium',
       },
       structuredOutput: 'json-schema',

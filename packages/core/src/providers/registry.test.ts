@@ -12,7 +12,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.deepEqual(visualModelIds, [
       'anthropic:claude-sonnet-4-6',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.6-flash',
+      'google:gemini-3.7-flash',
       'mimo:mimo-v2.5',
       'zhipu:glm-5v-turbo',
       'openai:gpt-5.6-sol',
@@ -61,7 +61,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
   it('Gemini 模型使用 Google OpenAI 兼容协议', () => {
     for (const modelId of [
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.6-flash',
+      'google:gemini-3.7-flash',
     ]) {
       const gemini = getModelEntry(modelId)
       assert.equal(gemini.provider, 'google')
@@ -125,7 +125,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
     assert.equal(getModelEntry('openai:gpt-5.6-sol').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-terra').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-luna').protocol, 'openai-responses')
-    assert.equal(getModelEntry('google:gemini-3.6-flash').protocol, 'openai-chat')
+    assert.equal(getModelEntry('google:gemini-3.7-flash').protocol, 'openai-chat')
   })
 
   it('连接适配器可覆盖传输路由名而不改写 WhyCode 模型画像', () => {
@@ -144,17 +144,29 @@ describe('MODEL_REGISTRY 能力边界', () => {
     }
   })
 
-  it('DeepSeek V4 Flash 使用官方上下文与输出边界', () => {
-    const deepseek = getModelEntry('deepseek:deepseek-v4-flash')
-    assert.equal(deepseek.capabilities.contextWindow, 1_000_000)
-    assert.equal(deepseek.capabilities.maxOutput, 384_000)
-    assert.deepEqual(deepseek.capabilities.reasoningEffort, {
-      supported: ['high', 'max'],
-      default: 'high',
-    })
-    assert.deepEqual(deepseek.providerOptions, {
-      deepseek: { thinking: { type: 'enabled' } },
-    })
-    assert.equal(autoCompactThreshold(deepseek.capabilities), 910_000)
+  it('DeepSeek V4 Flash 与 Pro 使用相同的官方能力边界', () => {
+    for (const modelId of [
+      'deepseek:deepseek-v4-flash',
+      'deepseek:deepseek-v4-pro',
+    ]) {
+      const deepseek = getModelEntry(modelId)
+      assert.equal(deepseek.capabilities.supportsNativeTools, true)
+      assert.equal(deepseek.capabilities.supportsImageInput, false)
+      assert.equal(deepseek.capabilities.contextWindow, 1_000_000)
+      assert.equal(deepseek.capabilities.maxOutput, 384_000)
+      assert.deepEqual(deepseek.capabilities.reasoningEffort, {
+        supported: ['high', 'max'],
+        default: 'high',
+      })
+      assert.deepEqual(deepseek.providerOptions, {
+        deepseek: { thinking: { type: 'enabled' } },
+      })
+      assert.equal(autoCompactThreshold(deepseek.capabilities), 910_000)
+      const created = deepseek.create({ apiKey: 'test', baseURL: 'http://localhost/v1' })
+      assert.notEqual(typeof created, 'string')
+      if (typeof created !== 'string') {
+        assert.equal(created.modelId, modelId.slice('deepseek:'.length))
+      }
+    }
   })
 })

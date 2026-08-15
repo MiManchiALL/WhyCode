@@ -32,7 +32,7 @@ describe('推理强度协议适配', () => {
   })
 
   it('OpenAI Chat 兼容厂商使用各自 provider key 的 reasoning_effort', () => {
-    const gemini = getModelEntry('google:gemini-3.6-flash')
+    const gemini = getModelEntry('google:gemini-3.7-flash')
     assert.deepEqual(providerOptionsWithReasoningEffort(gemini, 'low'), {
       google: {
         extra_body: {
@@ -42,7 +42,7 @@ describe('推理强度协议适配', () => {
       },
     })
 
-    const deepseek = getModelEntry('deepseek:deepseek-v4-flash')
+    const deepseek = getModelEntry('deepseek:deepseek-v4-pro')
     assert.deepEqual(providerOptionsWithReasoningEffort(deepseek, 'max'), {
       deepseek: {
         thinking: { type: 'enabled' },
@@ -52,7 +52,7 @@ describe('推理强度协议适配', () => {
   })
 
   it('不支持的档位回到默认，绕过 UI 强传时仍 fail-closed', () => {
-    const gemini = getModelEntry('google:gemini-3.6-flash')
+    const gemini = getModelEntry('google:gemini-3.7-flash')
     assert.equal(normalizeReasoningEffortSelection(gemini.capabilities, 'max'), 'default')
     assert.throws(
       () => providerOptionsWithReasoningEffort(gemini, 'max'),

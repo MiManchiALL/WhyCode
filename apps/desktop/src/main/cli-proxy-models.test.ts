@@ -52,7 +52,7 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
     }
   })
 
-  it('保留规范路由并明确登记 Antigravity 的等价 Gemini 路由', () => {
+  it('保留规范路由并明确登记已审核的 Gemini Antigravity 路由', () => {
     assert.equal(
       getDefaultCliProxyRoute('anthropic:claude-sonnet-4-6'),
       'claude-sonnet-4-6',
@@ -66,8 +66,8 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
       true,
     )
     assert.equal(
-      getDefaultCliProxyRoute('google:gemini-3.6-flash'),
-      'gemini-3.6-flash-high',
+      getDefaultCliProxyRoute('google:gemini-3.7-flash'),
+      'gemini-3.7-flash-high',
     )
   })
 
@@ -126,24 +126,21 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
       )?.reasoningEffort?.default,
       'low',
     )
-    assert.equal(
+    assert.deepEqual(
       getCliProxyEffectiveCapabilities(
-        'google:gemini-3.6-flash',
-        'gemini-3.6-flash-high',
-      )?.reasoningEffort?.default,
-      'high',
+        'google:gemini-3.7-flash',
+        'gemini-3.7-flash-high',
+      )?.reasoningEffort,
+      { supported: ['low', 'medium', 'high'], default: 'high' },
     )
   })
 
-  it('不接受 GPT-5.2、旧 Gemini 或其它厂商近似名称', () => {
+  it('不接受未审核厂商或近似路由名称', () => {
     assert.equal(getDefaultCliProxyRoute('openai:gpt-5.2'), null)
     assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-flash'), null)
+    assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-pro'), null)
     assert.equal(
-      isCliProxyRoute('google:gemini-3.6-flash', 'gemini-3.6-flash'),
-      false,
-    )
-    assert.equal(
-      isCliProxyRoute('google:gemini-3.6-flash', 'gemini-3-flash-agent'),
+      isCliProxyRoute('google:gemini-3.7-flash', 'gemini-3.7-flash'),
       false,
     )
     assert.equal(

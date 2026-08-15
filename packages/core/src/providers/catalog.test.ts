@@ -19,8 +19,9 @@ describe('模型目录单一事实源', () => {
     assert.deepEqual(MODEL_CATALOG.map((model) => model.id), [
       'anthropic:claude-sonnet-4-6',
       'deepseek:deepseek-v4-flash',
+      'deepseek:deepseek-v4-pro',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.6-flash',
+      'google:gemini-3.7-flash',
       'mimo:mimo-v2.5',
       'zhipu:glm-5v-turbo',
       'zhipu:glm-4.7',

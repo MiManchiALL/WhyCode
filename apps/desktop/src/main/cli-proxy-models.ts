@@ -53,8 +53,9 @@ const GPT_5_6_ROUTE_CONSTRAINTS = {
  *
  * 连接保存时必须再与该实例的 `/models` 结果求交集；静态候选只证明型号等价，
  * 不能证明某个用户的 CLIProxyAPI 账号已经开放该路由。能力约束核对自
- * CLIProxyAPI v7.2.78（768b4c49）的 Codex 客户端目录，以及官方远程模型目录
- * 8b32755e（2026-07-21）；标准 `/models` 只用于确认可用 ID，不生成能力画像。
+ * CLIProxyAPI v7.2.78（768b4c49）的 Codex 客户端目录、官方远程模型目录
+ * 8b32755e（2026-07-21），以及 v7.2.132（7ea9c67）的 Gemini 3.7 定义；
+ * 标准 `/models` 只用于确认可用 ID，不生成能力画像。
  */
 export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[] = [
   {
@@ -104,14 +105,14 @@ export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[
     ],
   },
   {
-    profileId: 'google:gemini-3.6-flash',
+    profileId: 'google:gemini-3.7-flash',
     routes: [{
-      modelId: 'gemini-3.6-flash-high',
+      modelId: 'gemini-3.7-flash-high',
       constraints: {
         maxContextWindow: 1_048_576,
         maxOutputTokens: 65_536,
         reasoningEffort: {
-          supported: ['minimal', 'low', 'medium', 'high'],
+          supported: ['low', 'medium', 'high'],
           default: 'high',
         },
       },

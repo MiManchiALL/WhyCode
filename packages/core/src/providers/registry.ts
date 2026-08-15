@@ -106,11 +106,15 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     deepSeekChat,
   ),
   registryEntry(
+    'deepseek:deepseek-v4-pro',
+    deepSeekChat,
+  ),
+  registryEntry(
     'google:gemini-3.1-pro-preview',
     googleChat,
   ),
   registryEntry(
-    'google:gemini-3.6-flash',
+    'google:gemini-3.7-flash',
     googleChat,
   ),
   registryEntry(

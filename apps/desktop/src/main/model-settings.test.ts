@@ -67,19 +67,19 @@ describe('模型设置数据边界', () => {
       visionModelId: null,
       visionModels: [
         { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
-        { id: 'google:gemini-3.6-flash', displayName: 'Gemini 3.6 Flash' },
+        { id: 'google:gemini-3.7-flash', displayName: 'Gemini 3.7 Flash' },
       ],
     })
 
     const enabled = updateAuxiliaryModelSettings(initial, {
-      visionModelId: 'google:gemini-3.6-flash',
+      visionModelId: 'google:gemini-3.7-flash',
     })
     assert.deepEqual(enabled.auxiliaryModels, {
-      visionModelId: 'google:gemini-3.6-flash',
+      visionModelId: 'google:gemini-3.7-flash',
     })
     assert.equal(
       createSettingsSnapshot(enabled).auxiliaryModels.visionModelId,
-      'google:gemini-3.6-flash',
+      'google:gemini-3.7-flash',
     )
     assert.throws(
       () => updateAuxiliaryModelSettings(initial, {
@@ -106,22 +106,23 @@ describe('模型设置数据边界', () => {
       agentCModelId: null,
       models: [
         { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
+        { id: 'deepseek:deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
         { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
-        { id: 'google:gemini-3.6-flash', displayName: 'Gemini 3.6 Flash' },
+        { id: 'google:gemini-3.7-flash', displayName: 'Gemini 3.7 Flash' },
       ],
     })
 
     const configured = updateConsensusModelSettings(initial, {
       agentBModelId: 'deepseek:deepseek-v4-flash',
-      agentCModelId: 'google:gemini-3.6-flash',
+      agentCModelId: 'google:gemini-3.7-flash',
     })
     assert.deepEqual(configured.consensusAgents, {
       B: { modelId: 'deepseek:deepseek-v4-flash' },
-      C: { modelId: 'google:gemini-3.6-flash' },
+      C: { modelId: 'google:gemini-3.7-flash' },
     })
     assert.deepEqual(createSettingsSnapshot(configured).consensusModels, {
       agentBModelId: 'deepseek:deepseek-v4-flash',
-      agentCModelId: 'google:gemini-3.6-flash',
+      agentCModelId: 'google:gemini-3.7-flash',
       models: snapshot.consensusModels.models,
     })
     assert.throws(
@@ -172,13 +173,12 @@ describe('模型设置数据边界', () => {
       }),
       /只能选择已确认存在等价路由的 WhyCode 模型/,
     )
-    assert.deepEqual(
-      updateCliProxyApiSettings(next, {
-        baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['google:gemini-3.6-flash'],
-      }).cliProxyApi?.modelRoutes,
-      {},
-    )
+    const gemini = updateCliProxyApiSettings(next, {
+      baseURL: 'http://127.0.0.1:8317/v1',
+      modelIds: ['google:gemini-3.7-flash'],
+    })
+    assert.deepEqual(gemini.cliProxyApi?.modelIds, ['google:gemini-3.7-flash'])
+    assert.deepEqual(gemini.cliProxyApi?.modelRoutes, {})
   })
 
   it('CLIProxyAPI 清除密钥时保留地址和型号，但移除失效默认连接', () => {
@@ -211,8 +211,8 @@ describe('模型设置数据边界', () => {
     const claudeProxy = snapshot.cliProxyApi.models.find(
       (model) => model.id === 'anthropic:claude-sonnet-4-6',
     )
-    const gemini36Proxy = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'google:gemini-3.6-flash',
+    const gemini37Proxy = snapshot.cliProxyApi.models.find(
+      (model) => model.id === 'google:gemini-3.7-flash',
     )
     assert.deepEqual(openai?.models.map((model) => model.id), [
       'openai:gpt-5.6-sol',
@@ -223,7 +223,7 @@ describe('模型设置数据边界', () => {
     assert.equal(google?.displayName, 'Google Gemini')
     assert.deepEqual(google?.models.map((model) => model.id), [
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.6-flash',
+      'google:gemini-3.7-flash',
     ])
     assert.deepEqual(claudeProxy?.capabilities.reasoningEffort, {
       supported: ['low', 'medium', 'high', 'max'],
@@ -233,13 +233,16 @@ describe('模型设置数据边界', () => {
     assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
       'anthropic:claude-sonnet-4-6',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.6-flash',
+      'google:gemini-3.7-flash',
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
       'openai:gpt-5.5',
     ])
-    assert.equal(gemini36Proxy?.capabilities.reasoningEffort?.default, 'high')
+    assert.deepEqual(gemini37Proxy?.capabilities.reasoningEffort, {
+      supported: ['low', 'medium', 'high'],
+      default: 'high',
+    })
     assert.equal(
       snapshot.cliProxyApi.models.some((model) => model.id.startsWith('deepseek:')),
       false,
@@ -254,11 +257,12 @@ describe('模型设置数据边界', () => {
         baseURL: 'http://127.0.0.1:8317/v1',
         modelIds: [
           'google:gemini-3.1-pro-preview',
-          'google:gemini-3.6-flash',
+          'google:gemini-3.7-flash',
           'openai:gpt-5.6-sol',
         ],
         modelRoutes: {
           'google:gemini-3.1-pro-preview': 'gemini-3.1-pro-low',
+          'google:gemini-3.7-flash': 'gemini-3.7-flash-high',
           'openai:gpt-5.6-sol': 'gpt-5.6-sol',
           'openai:gpt-5.6-terra': 'gpt-5.6-terra',
         },
@@ -266,6 +270,9 @@ describe('模型设置数据边界', () => {
     })
     const gemini = snapshot.cliProxyApi.models.find(
       (model) => model.id === 'google:gemini-3.1-pro-preview',
+    )
+    const gemini37 = snapshot.cliProxyApi.models.find(
+      (model) => model.id === 'google:gemini-3.7-flash',
     )
     const gpt = snapshot.cliProxyApi.models.find(
       (model) => model.id === 'openai:gpt-5.6-sol',
@@ -275,11 +282,14 @@ describe('模型设置数据边界', () => {
     )
     assert.equal(gemini?.capabilities.reasoningEffort?.default, 'low')
     assert.equal(gemini?.capabilities.maxOutput, 65_535)
+    assert.equal(gemini37?.capabilities.reasoningEffort?.default, 'high')
+    assert.equal(gemini37?.capabilities.maxOutput, 65_536)
     assert.equal(gpt?.capabilities.contextWindow, 372_000)
     assert.equal(gpt?.capabilities.reasoningEffort?.supported.includes('none'), false)
     assert.equal(terra?.enabled, false)
     assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
       'google:gemini-3.1-pro-preview',
+      'google:gemini-3.7-flash',
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
     ])

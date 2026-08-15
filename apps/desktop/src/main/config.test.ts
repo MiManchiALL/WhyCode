@@ -342,7 +342,7 @@ describe('配置密钥存储', () => {
             encryptedApiKey: bEncrypted,
           },
           C: {
-            model: 'google:gemini-3.6-flash',
+            model: 'google:gemini-3.7-flash',
             baseURL: 'https://old-c.example/v1',
             encryptedApiKey: cEncrypted,
           },
@@ -416,11 +416,11 @@ describe('配置密钥存储', () => {
           baseURL: 'http://127.0.0.1:8317/v1',
           modelIds: [
             'unknown:model',
-            'google:gemini-3.6-flash',
+            'google:gemini-3.7-flash',
             'openai:gpt-5.6-sol',
           ],
           modelRoutes: {
-            'google:gemini-3.6-flash': 'gemini-3-flash-agent',
+            'google:gemini-3.7-flash': 'gemini-3.7-flash-high',
             'openai:gpt-5.6-sol': 'gpt-5.6-sol',
             'openai:gpt-5.6-terra': 'gpt-5.6-terra',
           },
@@ -438,10 +438,11 @@ describe('配置密钥存储', () => {
       assert.equal('unknown' in loaded.providers, false)
       assert.equal(loaded.providers.mimo?.apiKey, 'valid')
       assert.deepEqual(loaded.cliProxyApi?.modelIds, [
-        'google:gemini-3.6-flash',
+        'google:gemini-3.7-flash',
         'openai:gpt-5.6-sol',
       ])
       assert.deepEqual(loaded.cliProxyApi?.modelRoutes, {
+        'google:gemini-3.7-flash': 'gemini-3.7-flash-high',
         'openai:gpt-5.6-sol': 'gpt-5.6-sol',
         'openai:gpt-5.6-terra': 'gpt-5.6-terra',
       })

@@ -13,7 +13,7 @@ describe('Google OpenAI 兼容线格式', () => {
     const captured = await captureGeminiRequest()
 
     assert.equal(captured.path, '/v1/chat/completions')
-    assert.equal(captured.body.model, 'gemini-3.6-flash')
+    assert.equal(captured.body.model, 'gemini-3.7-flash')
     assert.equal(captured.body.reasoning_effort, undefined)
     assert.deepEqual(captured.body.extra_body, {
       google: { thinking_config: { include_thoughts: true } },
@@ -29,7 +29,7 @@ describe('Google OpenAI 兼容线格式', () => {
 
   it('把会话推理强度翻译为官方 OpenAI 兼容 reasoning_effort', async () => {
     const captured = await captureGeminiRequest('high')
-    assert.equal(captured.body.model, 'gemini-3.6-flash')
+    assert.equal(captured.body.model, 'gemini-3.7-flash')
     assert.equal(captured.body.reasoning_effort, 'high')
   })
 })
@@ -57,7 +57,7 @@ async function captureGeminiRequest(
 
   try {
     const address = server.address() as AddressInfo
-    const entry = getModelEntry('google:gemini-3.6-flash')
+    const entry = getModelEntry('google:gemini-3.7-flash')
     await assert.rejects(generateText({
       model: entry.create({
         apiKey: 'test-key',

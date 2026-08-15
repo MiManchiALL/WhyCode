@@ -9,20 +9,27 @@ import { getModelEntry } from './registry.ts'
 
 describe('DeepSeek 推理强度线格式', () => {
   it('默认启用推理且不覆盖官方默认强度', async () => {
-    const body = await captureRequest('default')
-    assert.equal(body.model, 'deepseek-v4-flash')
-    assert.deepEqual(body.thinking, { type: 'enabled' })
-    assert.equal(body.reasoning_effort, undefined)
+    for (const [profileId, wireModelId] of [
+      ['deepseek:deepseek-v4-flash', 'deepseek-v4-flash'],
+      ['deepseek:deepseek-v4-pro', 'deepseek-v4-pro'],
+    ] as const) {
+      const body = await captureRequest(profileId, 'default')
+      assert.equal(body.model, wireModelId)
+      assert.deepEqual(body.thinking, { type: 'enabled' })
+      assert.equal(body.reasoning_effort, undefined)
+    }
   })
 
   it('显式档位使用官方 reasoning_effort 字段', async () => {
-    const body = await captureRequest('max')
+    const body = await captureRequest('deepseek:deepseek-v4-pro', 'max')
+    assert.equal(body.model, 'deepseek-v4-pro')
     assert.deepEqual(body.thinking, { type: 'enabled' })
     assert.equal(body.reasoning_effort, 'max')
   })
 })
 
 async function captureRequest(
+  profileId: string,
   reasoningEffort: ReasoningEffortSelection,
 ): Promise<Record<string, unknown>> {
   let body: Record<string, unknown> | null = null
@@ -40,7 +47,7 @@ async function captureRequest(
 
   try {
     const address = server.address() as AddressInfo
-    const entry = getModelEntry('deepseek:deepseek-v4-flash')
+    const entry = getModelEntry(profileId)
     await assert.rejects(generateText({
       model: entry.create({
         apiKey: 'test-key',
