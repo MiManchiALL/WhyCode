@@ -65,6 +65,16 @@ export function findLatestForkTurnId(
   return null
 }
 
+/** Fork 分隔线只标记子会话的真实来源；两个缺失的 ID 不构成匹配。 */
+export function isForkBoundarySection(
+  section: ConversationSection,
+  forkSourceTurnId: string | null,
+): boolean {
+  return forkSourceTurnId !== null
+    && section.kind === 'completed-work'
+    && section.forkTurnId === forkSourceTurnId
+}
+
 /**
  * 输入区计时只在处理过程仍逐块展开时显示；活动任务摘要已经自带同一计时，
  * 两处不能同时出现。
