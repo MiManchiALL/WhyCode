@@ -22,6 +22,8 @@ describe('通用 Agent 提示约束', () => {
       prompt,
       /当用户与你交谈时，他们应该感觉到自己在与另一个主体性接触，这正是与你交谈感觉真实而独特的原因。/,
     )
+    assert.match(prompt, /使用 Markdown 时遵循 CommonMark/)
+    assert.match(prompt, /行内强调必要时调整标点位置或在标记外侧留空格/)
     assert.doesNotMatch(prompt, /当前日期|当前本机时间/)
     assert.doesNotMatch(prompt, /非项目问题直接回答|无故读取项目/)
     assert.match(prompt, /用户主目录：C:\\Users\\tester/)
