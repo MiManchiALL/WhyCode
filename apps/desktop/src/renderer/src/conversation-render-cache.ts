@@ -9,6 +9,7 @@ export interface ConversationBlockRenderProps {
   showCheckpointRestore: boolean
   checkpointRestorePending: boolean
   streamingAssistantText: boolean
+  renderMath: boolean
   showAssistantActions: boolean
   forkTurnId: string | null
   forkPending: boolean
@@ -30,6 +31,7 @@ export function sameConversationBlockRenderProps(
     previous.block !== next.block
     || previous.expanded !== next.expanded
     || previous.streamingAssistantText !== next.streamingAssistantText
+    || previous.renderMath !== next.renderMath
     || previous.showAssistantActions !== next.showAssistantActions
     || previous.forkTurnId !== next.forkTurnId
     || previous.forkPending !== next.forkPending

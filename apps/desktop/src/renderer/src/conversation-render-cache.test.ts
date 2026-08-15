@@ -21,6 +21,7 @@ function props(block: Block): ConversationBlockRenderProps {
     showCheckpointRestore: false,
     checkpointRestorePending: false,
     streamingAssistantText: false,
+    renderMath: true,
     showAssistantActions: false,
     forkTurnId: null,
     forkPending: false,
@@ -55,6 +56,10 @@ describe('对话块脏尾部渲染边界', () => {
     assert.equal(sameConversationBlockRenderProps(previous, {
       ...previous,
       streamingAssistantText: true,
+    }), false)
+    assert.equal(sameConversationBlockRenderProps(previous, {
+      ...previous,
+      renderMath: false,
     }), false)
   })
 

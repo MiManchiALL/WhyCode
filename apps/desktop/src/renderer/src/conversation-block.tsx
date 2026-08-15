@@ -17,6 +17,7 @@ export function BlockView({
   showCheckpointRestore,
   checkpointRestorePending,
   streamingAssistantText,
+  renderMath,
   onCheckpointRestoreChange,
   onEdit,
   onToggle,
@@ -33,6 +34,7 @@ export function BlockView({
   showCheckpointRestore: boolean
   checkpointRestorePending: boolean
   streamingAssistantText: boolean
+  renderMath: boolean
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (turnId: string, text: string) => Promise<boolean>
   onToggle: () => void
@@ -56,7 +58,11 @@ export function BlockView({
     return (
       <div className={`group max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}>
         <div className="prose prose-sm prose-neutral max-w-none">
-          <MarkdownContent text={block.text} streaming={streamingAssistantText} />
+          <MarkdownContent
+            text={block.text}
+            streaming={streamingAssistantText}
+            renderMath={renderMath}
+          />
         </div>
         {showAssistantActions ? (
           <MessageActions

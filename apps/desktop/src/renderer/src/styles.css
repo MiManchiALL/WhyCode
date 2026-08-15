@@ -1,6 +1,8 @@
 @import 'tailwindcss';
+@import 'katex/dist/katex.min.css';
 /* Streamdown 组件内部类名需要纳入 Tailwind 扫描 */
 @source '../../../node_modules/streamdown/dist/*.js';
+@source '../../../node_modules/@streamdown/math/dist/*.js';
 
 :root {
   color-scheme: light;
@@ -502,6 +504,15 @@ button:not(:disabled),
   width: 0.82rem;
   height: 0.82rem;
   flex: none;
+}
+
+.wc-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* KaTeX 的数学盒不包含中文回退字形超出的少量墨迹。 */
+  margin-block: 0.8em;
+  padding-block: 0.2em;
 }
 
 .wc-markdown .wc-inline-source {
