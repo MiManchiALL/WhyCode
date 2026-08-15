@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { PERMISSION_MODES, type PermissionMode } from '@whycode/core/permissions'
 import type {
+  ContextUsageInfo,
   ReasoningEffort,
   ReasoningEffortSelection,
 } from '@whycode/core'
@@ -22,6 +23,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { USER_IMAGE_ATTACHMENT_MAX_COUNT } from '@whycode/core/image-limits'
 import type { ModelListItem } from '../../shared/settings.ts'
 import { MAX_PDF_DRAFTS } from './pdf-draft.ts'
+import { ContextUsageMeter } from './context-usage-meter.tsx'
 
 interface ConsensusControl {
   ready: boolean
@@ -40,6 +42,7 @@ interface ComposerToolbarProps {
   models: readonly ModelListItem[]
   modelId: string
   reasoningEffort: ReasoningEffortSelection
+  contextUsage: ContextUsageInfo | null
   busy: boolean
   stopping: boolean
   stopDisabled: boolean
@@ -79,6 +82,7 @@ export function ComposerToolbar(props: ComposerToolbarProps) {
       </div>
       <div className="flex min-w-0 items-center gap-1.5">
         <ModelMenu {...props} />
+        <ContextUsageMeter usage={props.contextUsage} />
         <button
           type="button"
           className="wc-focus-ring flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--wc-ink)] text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:cursor-default disabled:bg-[#a9aaa5] disabled:hover:translate-y-0"

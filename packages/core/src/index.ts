@@ -5,6 +5,7 @@ export type {
   UsageInfo,
   AgentStatus,
   QueuedUserMessage,
+  ContextUsageInfo,
   StopReason,
 } from './events.ts'
 export { isStepScopedCoreEvent } from './events.ts'

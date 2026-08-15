@@ -1,6 +1,7 @@
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
 import { isAbsolute, resolve } from 'node:path'
 import type {
+  ContextUsageInfo,
   CoreEvent,
   QueuedUserMessage,
   StopReason,
@@ -24,7 +25,13 @@ import {
 } from '../prompts/current-time.ts'
 import { checkToolPermission } from '../permissions/engine.ts'
 import { CheckpointManager } from '../checkpoints/manager.ts'
-import { autoCompactThreshold, estimateContextTokens, type TokenBaseline } from '../context/tokens.ts'
+import {
+  autoCompactThreshold,
+  estimateContextTokens,
+  estimateMessagesTokens,
+  estimateRequestContextBreakdown,
+  type TokenBaseline,
+} from '../context/tokens.ts'
 import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
 import type { SessionRecorder } from '../session/types.ts'
@@ -292,6 +299,11 @@ export class AgentSession {
   private tokenBaseline: TokenBaseline | null = null
   /** API usage 所含 Skill 请求投影相对长期消息的差值。 */
   private tokenBaselineSkillProjectionDelta = 0
+  /** 最近一次真实请求（或空闲态重建）的 System / 工具目录估算。 */
+  private contextOverhead: Pick<
+    ContextUsageInfo['breakdown'],
+    'systemPromptTokens' | 'toolTokens'
+  > | null = null
   /** 压缩熔断：连续失败 3 次后本会话停止尝试，成功清零 */
   private compactFailures = 0
   /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
@@ -370,8 +382,9 @@ export class AgentSession {
     providerConfig: ProviderConfig,
     reasoningEffort: ReasoningEffortSelection,
   ): Promise<void> {
+    const modelChanged = this.options.model.id !== model.id
     if (
-      this.options.model.id !== model.id
+      modelChanged
       || this.options.reasoningEffort !== reasoningEffort
     ) {
       await this.persist((recorder) =>
@@ -379,6 +392,49 @@ export class AgentSession {
       )
     }
     this.options = { ...this.options, model, providerConfig, reasoningEffort }
+    if (modelChanged) {
+      this.tokenBaseline = null
+      this.contextOverhead = null
+      this.options.emit({ type: 'context-usage', usage: null })
+    }
+    if (!this.activeModelSelection && (modelChanged || !this.contextOverhead)) {
+      await this.initializeContextUsage()
+    }
+  }
+
+  /** Main 初始化/模型切换时建立可展示估算；计量失败不应影响会话可用性。 */
+  async initializeContextUsage(): Promise<void> {
+    try {
+      const abortSignal = new AbortController().signal
+      const systemPrompt = buildSystemPrompt(
+        this.options.promptContext,
+        this.options.customSystemPrompt,
+      )
+      const messages = this.skillTurn.project(
+        withoutMcpToolState(this.messages),
+        true,
+      )
+      const tools = this.buildToolSet(
+        abortSignal,
+        false,
+        () => {},
+        () => {},
+        () => {},
+        async () => null,
+        async () => null,
+        [],
+      )
+      const breakdown = await estimateRequestContextBreakdown(
+        systemPrompt,
+        messages,
+        tools,
+      )
+      this.contextOverhead = breakdown
+      this.emitContextUsage(breakdown.messageTokens)
+    } catch {
+      this.contextOverhead = null
+      this.options.emit({ type: 'context-usage', usage: null })
+    }
   }
 
   setAuxiliaryImageAnalyzer(analyzer: AuxiliaryImageAnalyzer | undefined): void {
@@ -483,6 +539,7 @@ export class AgentSession {
     )
     this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
+    this.emitContextUsage()
   }
 
   captureTaskStateSnapshot(): TaskPlanState | null {
@@ -580,6 +637,7 @@ export class AgentSession {
     this.addImageAttachments(resources.attachments)
     this.addPdfAttachments(resources.pdfAttachments)
     this.tokenBaseline = null
+    this.emitContextUsage()
     const message = queuedMessageForModel({
       id: inputId,
       text: nextText,
@@ -1285,6 +1343,7 @@ export class AgentSession {
     this.activeTurn = null
     this.opAbort = null
 
+    this.emitContextUsage()
     emit({ type: 'turn-end', turnId, usage, stopReason })
 
     // 收尾持久化窗口进入的消息也必须有确定归宿；普通 Main 作为新 turn 接续。
@@ -1301,6 +1360,13 @@ export class AgentSession {
     }
 
     this.skillTurn.clear()
+    if (
+      this.activeModelSelection
+      && this.options.model.id !== this.activeModelSelection.model.id
+    ) {
+      this.activeModelSelection = null
+      await this.initializeContextUsage()
+    }
     this.running = false
     this.abortRequestedDuringFinalization = false
     if (this.queue.length > 0 && !this.persistenceFailed) {
@@ -1414,6 +1480,7 @@ export class AgentSession {
           preTokens,
           postTokens: this.estimateCurrentContextTokens(),
         })
+        this.emitContextUsage()
       } else {
         emit({ type: 'error', message: '当前上下文已在精确保留预算内，无需压缩', recoverable: true })
       }
@@ -1471,6 +1538,7 @@ export class AgentSession {
       estimate = this.estimateCurrentContextTokens()
       if (estimate < threshold) {
         emit({ type: 'context-compacted', level: 'micro', preTokens, postTokens: estimate })
+        this.emitContextUsage()
         return
       }
     }
@@ -1495,6 +1563,7 @@ export class AgentSession {
             preTokens,
             postTokens: this.estimateCurrentContextTokens(),
           })
+          this.emitContextUsage()
         }
         return
       }
@@ -1514,6 +1583,7 @@ export class AgentSession {
       // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用）
       const postTokens = this.estimateCurrentContextTokens()
       emit({ type: 'context-compacted', level: 'full', preTokens, postTokens })
+      this.emitContextUsage()
     } catch (error) {
       if (abortSignal.aborted) throw error
       this.compactFailures++
@@ -1557,6 +1627,43 @@ export class AgentSession {
       ? this.tokenBaselineSkillProjectionDelta
       : 0
     return Math.max(0, rawEstimate + currentSkillDelta - baselineDelta)
+  }
+
+  private emitContextUsage(messageTokenFloor = 0, contextWindow?: number): void {
+    if (
+      this.activeModelSelection
+      && this.options.model.id !== this.activeModelSelection.model.id
+    ) {
+      this.options.emit({ type: 'context-usage', usage: null })
+      return
+    }
+    if (!this.contextOverhead) {
+      this.options.emit({ type: 'context-usage', usage: null })
+      return
+    }
+    const projectedMessages = this.skillTurn.project(
+      withoutMcpToolState(this.messages),
+      true,
+    )
+    const breakdown: ContextUsageInfo['breakdown'] = {
+      ...this.contextOverhead,
+      messageTokens: Math.max(
+        messageTokenFloor,
+        estimateMessagesTokens(projectedMessages),
+      ),
+    }
+    const partsEstimate = breakdown.systemPromptTokens
+      + breakdown.toolTokens
+      + breakdown.messageTokens
+    this.options.emit({
+      type: 'context-usage',
+      usage: {
+        usedTokens: Math.max(partsEstimate, this.estimateCurrentContextTokens()),
+        contextWindow:
+          contextWindow ?? this.currentModelSelection().model.capabilities.contextWindow,
+        breakdown,
+      },
+    })
   }
 
   private async messagesForCurrentModel(
@@ -1713,14 +1820,15 @@ export class AgentSession {
       const modelInputMessageCount = modelInputMessages.length
       const requestSkillProjectionDelta =
         this.skillTurn.estimatedProjectionTokenDelta(modelInputMessages)
-      const result = streamText({
-        model: this.createLanguageModel(),
-        system: buildSystemPrompt(
-          this.options.promptContext,
-          this.options.customSystemPrompt,
-        ),
-        messages: await this.messagesForCurrentModel(modelInputMessages, stepAbort.signal),
-        tools: this.buildToolSet(
+      const requestSystemPrompt = buildSystemPrompt(
+        this.options.promptContext,
+        this.options.customSystemPrompt,
+      )
+      const requestMessages = await this.messagesForCurrentModel(
+        modelInputMessages,
+        stepAbort.signal,
+      )
+      const requestTools = this.buildToolSet(
           stepAbort.signal,
           planExecutionEngaged,
           (action) => { stepControl.taskPlanEngagement = action },
@@ -1815,7 +1923,18 @@ export class AgentSession {
             return null
           },
           mcpStep?.toolDefinitions() ?? [],
-        ),
+        )
+      const requestBreakdown = await estimateRequestContextBreakdown(
+        requestSystemPrompt,
+        requestMessages,
+        requestTools,
+      )
+      const requestContextWindow = this.currentModelSelection().model.capabilities.contextWindow
+      const result = streamText({
+        model: this.createLanguageModel(),
+        system: requestSystemPrompt,
+        messages: requestMessages,
+        tools: requestTools,
         stopWhen: stepCountIs(1),
         providerOptions: this.requestProviderOptions(),
         abortSignal: stepAbort.signal,
@@ -1969,7 +2088,6 @@ export class AgentSession {
       if (taskPlanCommit) {
         emit({ type: 'task-plan-updated', plan: taskPlanCommit.plan })
       }
-      emit({ type: 'step-committed' })
       if (stepTotalTokens > 0) {
         const responseCoveredCount = canonicalResponseMessages.findIndex((message) =>
           message.role !== 'assistant')
@@ -1985,6 +2103,9 @@ export class AgentSession {
         }
         this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
       }
+      this.contextOverhead = requestBreakdown
+      emit({ type: 'step-committed' })
+      this.emitContextUsage(requestBreakdown.messageTokens, requestContextWindow)
       return {
         committed: true,
         hadToolCalls,
@@ -2584,6 +2705,7 @@ export class AgentSession {
         ? { taskPlan: rollbackTaskState?.activePlan ?? null, question: rollbackQuestion ?? null }
         : {}),
     })
+    if (result.ok && scope === 'files-and-chat') this.emitContextUsage()
   }
 
   private emitCheckpointRestored(
@@ -2679,6 +2801,7 @@ export class AgentSession {
     this.messages = next
     this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
+    this.emitContextUsage()
   }
 
   private async refreshProjectInstructions(): Promise<void> {

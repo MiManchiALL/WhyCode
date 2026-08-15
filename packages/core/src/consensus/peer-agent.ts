@@ -41,7 +41,10 @@ export class PeerAgent {
         },
         discussion: { agentId: options.agentId, scratchDir: options.scratchDir },
       },
-      emit: options.emit,
+      // 顶层上下文圆环只描述 Main；讨论 Agent 的独立窗口不混入宿主运行态。
+      emit: (event) => {
+        if (event.type !== 'context-usage') options.emit(event)
+      },
       requestApproval: options.requestApproval,
     })
   }

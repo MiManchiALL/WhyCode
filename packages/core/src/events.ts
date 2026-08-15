@@ -27,6 +27,17 @@ export interface UsageInfo {
   costUsd: number
 }
 
+/** 当前模型请求上下文的统一估算；分项用于解释占用，total 优先采用 Provider usage 基线。 */
+export interface ContextUsageInfo {
+  usedTokens: number
+  contextWindow: number
+  breakdown: {
+    systemPromptTokens: number
+    toolTokens: number
+    messageTokens: number
+  }
+}
+
 export interface UserQuestionOption {
   label: string
   description: string
@@ -218,6 +229,8 @@ export type CoreEvent =
       preTokens: number
       postTokens: number
     }
+  /** 仅供宿主运行态展示，不进入会话时间线；null 表示模型切换后等待重新估算。 */
+  | { type: 'context-usage'; usage: ContextUsageInfo | null }
   // --- 多 Agent 协商（M3）---
   /** 协议模式锁定为需评审的模式，B/C 开始工作（main_only 不发） */
   | { type: 'negotiation-started'; taskId: string; mode: 'quick_review' | 'full_consensus' }

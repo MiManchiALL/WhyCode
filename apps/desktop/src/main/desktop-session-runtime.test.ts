@@ -201,6 +201,30 @@ describe('会话授权入口', () => {
   })
 })
 
+describe('上下文用量运行态', () => {
+  it('保存最新 Core 估算并允许模型切换时清空', () => {
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: () => {},
+    })
+    const usage = {
+      usedTokens: 12_000,
+      contextWindow: 100_000,
+      breakdown: {
+        systemPromptTokens: 1_000,
+        toolTokens: 2_000,
+        messageTokens: 9_000,
+      },
+    }
+
+    runtime.emit({ type: 'context-usage', usage })
+    assert.deepEqual(runtime.contextUsage, usage)
+    runtime.emit({ type: 'context-usage', usage: null })
+    assert.equal(runtime.contextUsage, null)
+  })
+})
+
 describe('运行时 Worktree 状态转换', () => {
   it('默认草稿在首条消息前只展示计划路径，绑定后才成为可执行目录', () => {
     const runtimeId = '11111111-1111-4111-8111-111111111111'

@@ -191,16 +191,27 @@ function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
 }
 
-let permissionModeWriteTail: Promise<void> = Promise.resolve()
+let runtimePreferenceWriteTail: Promise<void> = Promise.resolve()
+
+function persistRuntimePreferences(
+  patch: Partial<Pick<WhycodeConfig, 'defaultModel' | 'permissionMode'>>,
+): Promise<void> {
+  // 多窗口快速切换必须按 IPC 到达顺序读改写配置；模型和权限共用一条写链，
+  // 避免并发读取同一旧配置后由较慢写入覆盖另一项新偏好。
+  const write = runtimePreferenceWriteTail.then(async () => {
+    const config = loadAppConfig() ?? { providers: {} }
+    await saveConfig({ ...config, ...patch }, configSecretCodec, getConfigPath())
+  })
+  runtimePreferenceWriteTail = write.catch(() => {})
+  return write
+}
 
 function persistPermissionMode(mode: PermissionMode): Promise<void> {
-  // 多窗口快速切换必须按 IPC 到达顺序读改写配置，不能让较慢的旧选择最后覆盖新值。
-  const write = permissionModeWriteTail.then(async () => {
-    const config = loadAppConfig() ?? { providers: {} }
-    await saveConfig({ ...config, permissionMode: mode }, configSecretCodec, getConfigPath())
-  })
-  permissionModeWriteTail = write.catch(() => {})
-  return write
+  return persistRuntimePreferences({ permissionMode: mode })
+}
+
+function persistPreferredModel(modelId: string): Promise<void> {
+  return persistRuntimePreferences({ defaultModel: modelId })
 }
 
 const mcpOAuthController = new McpOAuthController({
@@ -724,6 +735,7 @@ async function createMainAgentSession(
       requestApproval: (request) => runtime.requestApproval(request),
     })
     next.setPermissionMode(runtime.permissionMode)
+    await next.initializeContextUsage()
     return next
   } catch (error) {
     await mcpRuntime.close().catch(() => {})
@@ -932,6 +944,15 @@ async function handleCommand(
           runtime.emit({ type: 'error', message: initializationError, recoverable: true })
           return { ok: false }
         }
+      }
+      try {
+        await persistPreferredModel(command.modelId)
+      } catch (error) {
+        runtime.emit({
+          type: 'error',
+          message: `模型已在当前会话生效，但偏好保存失败；重启后可能恢复旧模型：${error instanceof Error ? error.message : String(error)}`,
+          recoverable: true,
+        })
       }
       return { ok: true }
     }
@@ -1662,6 +1683,7 @@ async function runtimeSnapshot(
     modelId: resolveCurrentModelId(runtime),
     reasoningEffort: runtime.reasoningEffort,
     permissionMode: runtime.permissionMode,
+    contextUsage: runtime.contextUsage ? structuredClone(runtime.contextUsage) : null,
     workStartedAt: runtime.workStartedAt,
     status: deletingThisSession
       ? 'working'

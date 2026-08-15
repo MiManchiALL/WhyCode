@@ -3,16 +3,18 @@ import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
+import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('运行中模型选择', () => {
   it('当前 turn 固化原模型，运行中选择的新模型从下一 turn 生效', async () => {
+    const events: CoreEvent[] = []
     const nextModel = new MockLanguageModelV4({
       doStream: [textStep('下一回合')],
     })
-    const nextEntry = modelEntry('test:next-model', nextModel)
+    const nextEntry = modelEntry('test:next-model', nextModel, 200_000)
     let session!: AgentSession
     const switchModel = buildTool({
       name: 'SwitchModelProbe',
@@ -33,7 +35,7 @@ describe('运行中模型选择', () => {
       model: modelEntry('test:current-model', currentModel),
       providerConfig: { apiKey: 'current' },
       promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
-      emit: () => {},
+      emit: (event) => events.push(event),
       requestApproval: async () => ({ approved: false }),
     })
     session.setExtraTools([switchModel])
@@ -41,6 +43,11 @@ describe('运行中模型选择', () => {
     assert.equal(await session.handleUserMessage('开始'), 'completed')
     assert.equal(currentModel.doStreamCalls.length, 2)
     assert.equal(nextModel.doStreamCalls.length, 0)
+    const switchedUsage = events.filter((event) => event.type === 'context-usage').at(-1)
+    assert.equal(
+      switchedUsage?.type === 'context-usage' && switchedUsage.usage?.contextWindow,
+      200_000,
+    )
 
     assert.equal(await session.handleUserMessage('继续'), 'completed')
     assert.equal(currentModel.doStreamCalls.length, 2)
@@ -85,7 +92,11 @@ function textStep(text: string) {
   }
 }
 
-function modelEntry(id: string, model: MockLanguageModelV4): ModelEntry {
+function modelEntry(
+  id: string,
+  model: MockLanguageModelV4,
+  contextWindow = 100_000,
+): ModelEntry {
   return {
     id,
     displayName: id,
@@ -97,7 +108,7 @@ function modelEntry(id: string, model: MockLanguageModelV4): ModelEntry {
       reasoningExposure: 'none',
       structuredOutput: 'tool-based',
       promptCaching: 'none',
-      contextWindow: 100_000,
+      contextWindow,
       maxOutput: 4_000,
     },
     create: () => model,

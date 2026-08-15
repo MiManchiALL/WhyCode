@@ -134,6 +134,20 @@ describe('网页搜索后端选择', () => {
 })
 
 describe('配置密钥存储', () => {
+  it('最后选择的模型可跨配置重载恢复', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-default-model-'))
+    const path = join(root, 'config.json')
+    try {
+      await saveConfig({
+        providers: { deepseek: { apiKey: 'deepseek-key' } },
+        defaultModel: 'deepseek:deepseek-v4-pro',
+      }, codec, path)
+      assert.equal(loadConfig(path, codec)?.defaultModel, 'deepseek:deepseek-v4-pro')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('四档权限偏好均可跨配置重载恢复', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-permission-mode-'))
     const path = join(root, 'config.json')

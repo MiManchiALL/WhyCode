@@ -9,6 +9,7 @@ import { pushCoalescedViewEvent, toViewEvent, viewEventSchema, type ViewEvent } 
 describe('用户可见事件契约', () => {
   it('只接收可恢复内容，排除审批和运行状态，并保留持久化检查点', () => {
     assert.equal(toViewEvent({ type: 'agent-status', status: 'working' }), null)
+    assert.equal(toViewEvent({ type: 'context-usage', usage: null }), null)
     assert.equal(
       toViewEvent({
         type: 'user-message-accepted',

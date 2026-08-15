@@ -11,6 +11,7 @@ import type {
 import {
   formatUserQuestionAnswer,
   type AgentStatus,
+  type ContextUsageInfo,
   type CoreEvent,
   type QueuedUserMessage,
 } from '@whycode/core/events'
@@ -95,6 +96,7 @@ export function App() {
   const [models, setModels] = useState<ModelListItem[]>([])
   const [modelId, setModelId] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
+  const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null)
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
@@ -362,6 +364,7 @@ export function App() {
     setModels(nextModels)
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
+    setContextUsage(snapshot.contextUsage)
     setForkOrigin(snapshot.forkOrigin)
     setForkPendingTurnId(null)
   }, [])
@@ -389,6 +392,7 @@ export function App() {
     setView(createConversationState(snapshot.viewEvents, snapshot.viewEventTimestamps))
     setWorkspace(snapshot.workspace)
     setPermMode(snapshot.permissionMode)
+    setContextUsage(snapshot.contextUsage)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
     setDeletingSessionId(snapshot.deletingSessionId)
@@ -473,6 +477,9 @@ export function App() {
         break
       case 'turn-end':
         void refreshSessions()
+        break
+      case 'context-usage':
+        setContextUsage(event.usage)
         break
       case 'checkpoint-restored':
         setCheckpointRestoreToolUseId((current) =>
@@ -1425,6 +1432,7 @@ export function App() {
                     models={models}
                     modelId={modelId}
                     reasoningEffort={reasoningEffort}
+                    contextUsage={contextUsage}
                     busy={busy}
                     stopping={stopping}
                     stopDisabled={

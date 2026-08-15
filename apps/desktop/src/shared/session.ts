@@ -3,6 +3,7 @@ import type {
   ApprovalRequest,
   CoreCommand,
   CoreEvent,
+  ContextUsageInfo,
   QueuedUserMessage,
   SessionMetadata,
   SessionForkOrigin,
@@ -33,6 +34,8 @@ export interface RuntimeSnapshot {
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
+  /** Core 在当前模型请求边界给出的统一上下文估算。 */
+  contextUsage: ContextUsageInfo | null
   /** 当前连续工作的权威起点；结束后由持久化 work-finished 事件替代。 */
   workStartedAt: number | null
   status: AgentStatus

@@ -6,6 +6,7 @@ import {
   type ApprovalResponse,
   type ConsensusCoordinator,
   type CoreEvent,
+  type ContextUsageInfo,
   type ReasoningEffortSelection,
   type SessionJournal,
   type ManagedWorkspaceBinding,
@@ -54,6 +55,7 @@ export class DesktopSessionRuntime {
   modelId: string | null
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
+  contextUsage: ContextUsageInfo | null = null
   workStartedAt: number | null = null
   private workOutcome: 'completed' | 'stopped' = 'completed'
   private forkTurnId: string | null = null
@@ -172,6 +174,9 @@ export class DesktopSessionRuntime {
 
   emit(event: CoreEvent, persistView = true): void {
     if (this.disposed) return
+    if (event.type === 'context-usage') {
+      this.contextUsage = event.usage ? structuredClone(event.usage) : null
+    }
     if (event.type === 'turn-end') {
       this.forkTurnId = event.stopReason === 'completed' ? event.turnId : null
     }

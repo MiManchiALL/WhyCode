@@ -53,6 +53,7 @@ export interface AuxiliaryModelsConfig {
 
 export interface WhycodeConfig {
   providers: Partial<Record<BuiltInProviderId, ProviderConnectionConfig>>
+  /** 最近一次用户选择且当前仍可用的 Main 模型，作为新会话与重启后的首选项。 */
   defaultModel?: string
   /** 全部已加载、新建与恢复会话共享的权限档位；具体审批结果仍只在各会话内存中。 */
   permissionMode?: PermissionMode

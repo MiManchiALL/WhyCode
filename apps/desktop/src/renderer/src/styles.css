@@ -322,6 +322,163 @@ button:not(:disabled),
   font-size: var(--wc-composer-control-font-size);
 }
 
+.wc-context-meter {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.wc-context-meter-trigger {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wc-muted);
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.wc-context-meter-trigger:hover,
+.wc-context-meter[data-open='true'] .wc-context-meter-trigger {
+  background: rgb(46 49 44 / 6%);
+  color: var(--wc-ink);
+}
+
+.wc-context-meter-track,
+.wc-context-meter-fill {
+  fill: none;
+  stroke-width: 2;
+}
+
+.wc-context-meter-track {
+  stroke: rgb(48 50 45 / 14%);
+}
+
+.wc-context-meter-fill {
+  stroke: currentColor;
+  stroke-linecap: round;
+}
+
+.wc-context-meter-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.4rem);
+  z-index: 90;
+  width: max-content;
+  pointer-events: none;
+  border-radius: 0.45rem;
+  background: var(--wc-ink);
+  padding: 0.28rem 0.5rem;
+  color: white;
+  font-size: 0.6875rem;
+  line-height: 1.15rem;
+  opacity: 0;
+  transform: translateY(0.2rem);
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.wc-context-meter:hover:not([data-open='true']) .wc-context-meter-tooltip,
+.wc-context-meter:not([data-open='true']) .wc-context-meter-trigger:focus-visible + .wc-context-meter-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.wc-context-meter-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 90;
+  width: 16.5rem;
+  border: 1px solid var(--wc-line-strong);
+  border-radius: 0.9rem;
+  background: rgb(255 255 253 / 96%);
+  padding: 0.75rem;
+  color: var(--wc-muted);
+  box-shadow: var(--wc-menu-shadow);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  backdrop-filter: blur(12px);
+  animation: wc-pop-in 140ms ease-out;
+}
+
+.wc-context-meter-header,
+.wc-context-meter-row {
+  display: flex;
+  align-items: center;
+}
+
+.wc-context-meter-header {
+  gap: 0.35rem;
+}
+
+.wc-context-meter-header strong,
+.wc-context-meter-total,
+.wc-context-meter-row dd {
+  color: var(--wc-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.wc-context-meter-total {
+  margin-left: auto;
+  font-weight: 500;
+}
+
+.wc-context-meter-bar {
+  display: flex;
+  height: 0.25rem;
+  margin: 0.65rem 0 0.6rem;
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(48 50 45 / 8%);
+}
+
+.wc-context-meter-segment {
+  min-width: 2px;
+  height: 100%;
+  flex: none;
+}
+
+.wc-context-meter-system {
+  background: #adb4b7;
+}
+
+.wc-context-meter-tools {
+  background: #a78bfa;
+}
+
+.wc-context-meter-messages {
+  background: #528df2;
+}
+
+.wc-context-meter-rows {
+  margin: 0;
+}
+
+.wc-context-meter-row {
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.125rem 0;
+}
+
+.wc-context-meter-row dt {
+  display: flex;
+  align-items: center;
+}
+
+.wc-context-meter-row dd {
+  margin: 0;
+}
+
+.wc-context-meter-swatch {
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.4rem;
+  border-radius: 0.15rem;
+}
+
 .wc-sidebar-label {
   position: absolute;
   top: 50%;
