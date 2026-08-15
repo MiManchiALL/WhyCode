@@ -104,6 +104,10 @@ function WorkSection({
             <ConversationBlock
               key={block.id}
               {...conversationBlockProps(props, block)}
+              renderMath={
+                section.kind === 'active-work'
+                || section.duration.outcome === 'completed'
+              }
             />
           ))}
         </div>
@@ -113,6 +117,10 @@ function WorkSection({
           key={block.id}
           {...conversationBlockProps(props, block)}
           streamingAssistantText={section.kind === 'active-work'}
+          renderMath={
+            section.kind === 'completed-work'
+            && section.duration.outcome === 'completed'
+          }
           showAssistantActions={
             section.kind === 'completed-work'
             && section.duration.outcome === 'completed'
@@ -138,6 +146,7 @@ const ConversationBlock = memo(function ConversationBlock({
   showCheckpointRestore,
   checkpointRestorePending,
   streamingAssistantText,
+  renderMath,
   onCheckpointRestoreChange,
   onEdit,
   onToggle,
@@ -156,6 +165,7 @@ const ConversationBlock = memo(function ConversationBlock({
       showCheckpointRestore={showCheckpointRestore}
       checkpointRestorePending={checkpointRestorePending}
       streamingAssistantText={streamingAssistantText}
+      renderMath={renderMath}
       onCheckpointRestoreChange={onCheckpointRestoreChange}
       onEdit={onEdit}
       onToggle={() => onToggle(block.id)}
@@ -184,6 +194,7 @@ function conversationBlockProps(
     checkpointRestorePending: block.kind === 'tool'
       && props.checkpointRestoreToolUseId === block.call.id,
     streamingAssistantText: false,
+    renderMath: true,
     showAssistantActions: false,
     forkTurnId: null,
     forkPending: false,

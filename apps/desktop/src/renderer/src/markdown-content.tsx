@@ -11,6 +11,10 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Copy, ExternalLink, FileText, GitBranch, Globe2 } from 'lucide-react'
 import { Streamdown, type Components } from 'streamdown'
 import {
+  markdownPluginsFor,
+  normalizeDisplayMathFences,
+} from './markdown-rendering.ts'
+import {
   externalSourcesFromList,
   findSourceCapsule,
   isInlineSourceLabel,
@@ -26,13 +30,20 @@ const LINK_SAFETY = { enabled: false } as const
 export const MarkdownContent = memo(function MarkdownContent({
   text,
   streaming = false,
+  renderMath,
 }: {
   text: string
   streaming?: boolean
+  renderMath?: boolean
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mathEnabled = renderMath ?? !streaming
+  const renderedText = useMemo(
+    () => mathEnabled ? normalizeDisplayMathFences(text) : text,
+    [mathEnabled, text],
+  )
 
   const clearHighlight = useCallback(() => {
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
@@ -110,8 +121,9 @@ export const MarkdownContent = memo(function MarkdownContent({
         controls={MARKDOWN_CONTROLS}
         components={components}
         linkSafety={LINK_SAFETY}
+        plugins={markdownPluginsFor(mathEnabled)}
       >
-        {text}
+        {renderedText}
       </Streamdown>
     </div>
   )
