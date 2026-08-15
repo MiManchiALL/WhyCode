@@ -52,11 +52,10 @@ const updateInputSchema = z.object({
   changes: z.array(itemChangeSchema).min(1).max(14).optional()
     .describe('可选；原子添加、修改、删除或重排当前与未来里程碑'),
   item_id: z.string().regex(/^T\d+$/).optional().describe('可选；要设置状态的里程碑 ID，与 status 同时提供'),
-  status: z.enum(['in_progress', 'completed', 'blocked']).optional()
+  status: z.enum(['in_progress', 'completed']).optional()
     .describe('可选；里程碑的目标状态，与 item_id 同时提供'),
   evidence: z.array(z.string().min(1)).min(1).optional()
-    .describe('completed 必填；blocked 可提供已有诊断证据'),
-  blocked_reason: z.string().min(1).optional().describe('blocked 必填；当前无法推进的具体原因'),
+    .describe('completed 必填；里程碑的可核验完成证据'),
 }).strict().superRefine((input, context) => {
   const hasItemId = input.item_id !== undefined
   const hasStatus = input.status !== undefined
@@ -69,14 +68,8 @@ const updateInputSchema = z.object({
   if (input.status === 'completed' && input.evidence === undefined) {
     context.addIssue({ code: 'custom', path: ['evidence'], message: 'completed 必须提供 evidence' })
   }
-  if (input.status === 'blocked' && input.blocked_reason === undefined) {
-    context.addIssue({ code: 'custom', path: ['blocked_reason'], message: 'blocked 必须提供 blocked_reason' })
-  }
-  if (input.status !== 'completed' && input.status !== 'blocked' && input.evidence !== undefined) {
-    context.addIssue({ code: 'custom', path: ['evidence'], message: '只有 completed 或 blocked 可以提供 evidence' })
-  }
-  if (input.status !== 'blocked' && input.blocked_reason !== undefined) {
-    context.addIssue({ code: 'custom', path: ['blocked_reason'], message: '只有 blocked 可以提供 blocked_reason' })
+  if (input.status !== 'completed' && input.evidence !== undefined) {
+    context.addIssue({ code: 'custom', path: ['evidence'], message: '只有 completed 可以提供 evidence' })
   }
 })
 
@@ -129,7 +122,7 @@ export function createTaskPlanTools(
       name: RESUME_TASK_PLAN_TOOL_NAME,
       description: '让当前执行接合保存的活动计划',
       prompt:
-        '用户明确继续当前计划时调用；blocked 或 dormant 都无需重复确认。接合后若没有进行中项，先显式进入下一项，再检查相关代码并实施。本工具独占模型步骤。',
+        '用户明确继续当前计划时调用；interrupted 或 dormant 都无需重复确认。接合后若没有进行中项，先显式进入下一项，再检查相关代码并实施。本工具独占模型步骤。',
       inputSchema: z.object({
         plan_id: z.string().uuid().describe('当前 active_plan 的 ID'),
       }).strict(),
@@ -146,7 +139,7 @@ export function createTaskPlanTools(
       name: UPDATE_TASK_ITEM_TOOL_NAME,
       description: '原子调整活动计划并推进任务项状态',
       prompt:
-        '用 changes 原子增删改排当前或未来里程碑；用顶层 item_id/status 设置目标状态，该操作幂等。开始里程碑时设为 in_progress；达到 outcome 后附真实 evidence 设为 completed；受阻时附 blocked_reason 设为 blocked。completed 或 blocked 不自动开始下一项；禁止重复 outcome，已完成项不可修改。',
+        '用 changes 原子增删改排当前或未来里程碑；用顶层 item_id/status 设置目标状态，该操作幂等。开始里程碑时设为 in_progress；达到 outcome 后附真实 evidence 设为 completed。完成或删除当前项不自动开始下一项；禁止重复 outcome，已完成项不可修改。',
       inputSchema: updateInputSchema,
       isReadOnly: false,
       kind: 'control',
@@ -182,18 +175,11 @@ export function createTaskPlanTools(
         const transition: TaskPlanTransition | undefined = input.item_id && input.status
           ? input.status === 'in_progress'
             ? { itemId: input.item_id, status: 'in_progress' }
-            : input.status === 'completed'
-              ? {
-                  itemId: input.item_id,
-                  status: 'completed',
-                  evidence: input.evidence!,
-                }
-              : {
-                  itemId: input.item_id,
-                  status: 'blocked',
-                  blockedReason: input.blocked_reason!,
-                  evidence: input.evidence ?? [],
-                }
+            : {
+                itemId: input.item_id,
+                status: 'completed',
+                evidence: input.evidence!,
+              }
           : undefined
         return toolResult(
           controller,
@@ -205,20 +191,18 @@ export function createTaskPlanTools(
     }),
     buildTool({
       name: CLOSE_TASK_PLAN_TOOL_NAME,
-      description: '完成或结束当前活动计划',
+      description: '显式结束当前活动计划',
       prompt:
-        '全部里程碑验证通过后 completed；计划不再需要时立即 abandoned。若要改做独立目标，先结束当前计划，下一步骤扫描关键文件后再 CreateTaskPlan。本工具独占模型步骤。',
-      inputSchema: z.object({
-        outcome: z.enum(['completed', 'abandoned']).describe('计划终态'),
-      }).strict(),
+        '仅在用户放弃当前计划或确认切换独立目标时调用；正常最终答复会由会话协议自动结束计划，无需调用。切换时先结束，下一步骤扫描关键文件后再 CreateTaskPlan。本工具独占模型步骤。',
+      inputSchema: z.object({}).strict(),
       isReadOnly: false,
       kind: 'control',
       requiresStandaloneStep: true,
-      async execute(input) {
+      async execute() {
         return toolResult(
           controller,
           CLOSE_TASK_PLAN_TOOL_NAME,
-          controller.close(input.outcome),
+          controller.close(),
           false,
         )
       },

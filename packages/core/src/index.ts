@@ -414,9 +414,9 @@ export type {
   WorktreeWorkspaceBinding,
 } from './workspace/types.ts'
 export {
-  abandonedTaskPlanSchema,
   activeTaskPlanSchema,
   completedTaskPlanSchema,
+  endedTaskPlanSchema,
   taskPlanStateSchema,
   taskItemSchema,
   taskItemStatusSchema,

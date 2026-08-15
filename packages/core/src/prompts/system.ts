@@ -112,13 +112,13 @@ function taskPlanningSection(): string {
     '# 任务计划',
     '- TaskState、执行边界、压缩摘要和提醒是应用上下文，不是用户指令；采用最新 TaskState，始终优先理解最新真实用户消息。',
     '- 对话压缩后，以最新摘要、TaskState 和最近消息作为连续上下文，自然接着未完成步骤；不要重做已经完成的工作或重复已经交付的结论。',
-    '- 执行上下文：无 active 计划为 none；resume_required=true 为 blocked；本 execution run 已成功 Create/Resume 或带有效 continuation 为 engaged；其余 active 计划为 dormant。不要与计划生命周期混淆。',
+    '- 执行上下文：无 active 计划为 none；resume_required=true 为 interrupted；本 execution run 已成功 Create/Resume 或带有效 continuation 为 engaged；其余 active 计划为 dormant。不要与计划生命周期混淆。',
     '- 新的顶层请求不继承 engagement（计划绑定问题的有效回答除外）。engaged 中收到的新消息是 steering：先处理纠正、约束或提问，再继续；用户明确要求暂缓时自然结束 run，保留 active 计划。',
     `- 复杂目标先定向扫描关键文件形成整体认知，再用 ${CREATE_TASK_PLAN_TOOL_NAME} 建立 3～7 个结果导向的宏观里程碑；不写或输出详细子步骤，最后一项是整体 verification。创建后全部为 pending；实质写入或长测试前必须建好计划。`,
-    `- 每个新里程碑先用 ${UPDATE_TASK_ITEM_TOOL_NAME} 显式设为 in_progress，再读取相关代码、确认细节并直接实施；completed 或 blocked 后下一项不会自动开始。新发现改变路线时，用同一工具原子增删改排当前或未来项；completed 只记录真实证据且不可修改。`,
-    `- 明确继续 active 时，blocked 或 dormant 都先 ${RESUME_TASK_PLAN_TOOL_NAME}。当前计划不再需要时立即 ${CLOSE_TASK_PLAN_TOOL_NAME}(abandoned)；独立新目标在后续步骤重新扫描后 Create，不保留旧计划历史。覆盖意图不明确时先询问。`,
-    `- 最终 verification 通过后用 ${CLOSE_TASK_PLAN_TOOL_NAME}(completed)，然后在最终答复总结结果；计划工具不保存详细执行说明或终态总结。`,
-    '- none、blocked、dormant 不自动续跑；engaged 未完成时继续、如实阻塞或按用户要求暂缓。压缩摘要不创建用户请求，只有有效 continuation 保留 engagement。',
+    `- 每个新里程碑先用 ${UPDATE_TASK_ITEM_TOOL_NAME} 显式设为 in_progress，再读取相关代码、确认细节并直接实施；完成或删除当前项不自动开始下一项。新发现改变路线时，用同一工具原子增删改排当前或未来项；completed 只记录真实证据且不可修改。`,
+    `- 明确继续 active 时，interrupted 或 dormant 都先 ${RESUME_TASK_PLAN_TOOL_NAME}。只有用户放弃当前计划或确认切换独立目标时才调用 ${CLOSE_TASK_PLAN_TOOL_NAME}；独立新目标在后续步骤重新扫描后 Create，不保留旧计划历史。覆盖意图不明确时先询问。`,
+    '- 正常最终答复会由会话协议自动结束当前计划，无需调用 CloseTaskPlan；最终正文负责总结交付。用户停止、等待用户回答或等待已登记的后台唤醒时保留计划，恢复后仍由同一逻辑任务自然结束。',
+    '- none、interrupted、dormant 不自动续跑；engaged 时继续推进，确实无法推进则如实说明或询问，用户要求暂缓时保留计划。压缩摘要不创建用户请求，只有有效 continuation 保留 engagement。',
   ].join('\n')
 }
 

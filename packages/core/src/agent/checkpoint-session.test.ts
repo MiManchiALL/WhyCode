@@ -246,9 +246,7 @@ function modelRunningCommand(): MockLanguageModelV4 {
 function modelSwitchingAndWriting(path: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: [
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-        outcome: 'abandoned',
-      }, 'close-old-plan'),
+      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}, 'close-old-plan'),
       toolStep('ListDir', { path: '.', limit: 20 }, 'scan-project'),
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '开发 CSGO 游戏',
@@ -259,9 +257,6 @@ function modelSwitchingAndWriting(path: string): MockLanguageModelV4 {
         ],
       }, 'create-new-plan'),
       toolStep('WriteFile', { path, content: 'csgo' }, 'write-csgo'),
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-        outcome: 'abandoned',
-      }, 'close-plan'),
       textStep('切换完成', 'switch-final'),
     ],
   })

@@ -1332,7 +1332,7 @@ describe('SessionStore', () => {
     const plan = taskPlan(1)
     const terminalPlan = {
       ...plan,
-      status: 'abandoned' as const,
+      status: 'ended' as const,
       revision: plan.revision + 1,
     }
     await journal.recordTurnStart('close-plan', [message('user', '放弃计划')])
@@ -1356,7 +1356,7 @@ describe('SessionStore', () => {
       latestPlanEvent?.type === 'core-event'
       && latestPlanEvent.event.type === 'task-plan-updated'
       && latestPlanEvent.event.plan.status,
-      'abandoned',
+      'ended',
     )
   })
 
@@ -1381,7 +1381,7 @@ describe('SessionStore', () => {
         type: 'task-plan-updated',
         plan: {
           ...previous,
-          status: 'abandoned',
+          status: 'ended',
           revision: previous.revision + 1,
         },
       } },
@@ -1397,7 +1397,7 @@ describe('SessionStore', () => {
     assert.deepEqual(planEvents.map((entry) =>
       entry.type === 'core-event' && entry.event.type === 'task-plan-updated'
         ? entry.event.plan.status
-        : null), ['abandoned', 'active'])
+        : null), ['ended', 'active'])
     assert.equal('historicalPlans' in reopened.initialTaskState, false)
   })
 

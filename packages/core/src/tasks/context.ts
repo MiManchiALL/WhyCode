@@ -67,7 +67,7 @@ export function taskContextBlock(
 }
 
 export function createTaskExecutionBoundaryMessage(
-  mode: 'blocked' | 'dormant',
+  mode: 'interrupted' | 'dormant',
 ): ModelMessage {
   return {
     role: 'user',

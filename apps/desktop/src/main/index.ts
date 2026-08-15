@@ -729,6 +729,8 @@ async function createMainAgentSession(
       pdfProcessor,
       officeProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
+      hasPendingTaskPlanContinuation: (planId) =>
+        commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),

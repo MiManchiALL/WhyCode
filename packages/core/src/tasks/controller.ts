@@ -24,7 +24,6 @@ export type TaskPlanItemChange =
 export type TaskPlanTransition =
   | { itemId: string; status: 'in_progress' }
   | { itemId: string; status: 'completed'; evidence: string[] }
-  | { itemId: string; status: 'blocked'; blockedReason: string; evidence: string[] }
 
 export type TaskMutationError =
   | 'step_conflict'
@@ -37,9 +36,7 @@ export type TaskMutationError =
   | 'item_not_found'
   | 'invalid_transition'
   | 'evidence_required'
-  | 'blocked_reason_required'
   | 'no_state_change'
-  | 'incomplete_plan'
 
 export type TaskMutationResult =
   | { ok: true; message: string }
@@ -51,11 +48,6 @@ function mutationFailure(
 ): TaskMutationResult {
   return { ok: false, error, message }
 }
-
-export type NaturalStopDecision =
-  | { kind: 'allow' }
-  | { kind: 'pause' }
-  | { kind: 'continue'; reminder: string }
 
 export interface TaskPlanCommit {
   state: TaskPlanState
@@ -119,7 +111,7 @@ export class TaskPlanController {
     if (this.state.activePlan) {
       return mutationFailure(
         'active_plan_exists',
-        '当前已有活动计划；继续时先 ResumeTaskPlan，不再执行时先 CloseTaskPlan(abandoned)。',
+        '当前已有活动计划；继续时先 ResumeTaskPlan，不再执行时先 CloseTaskPlan。',
       )
     }
     const next = this.buildPlan(goal, drafts)
@@ -178,31 +170,30 @@ export class TaskPlanController {
     return { ok: true, message: this.progressMessage(parsed.data) }
   }
 
-  close(outcome: 'completed' | 'abandoned'): TaskMutationResult {
+  close(): TaskMutationResult {
     if (this.stepDirty) {
       return mutationFailure('step_conflict', 'CloseTaskPlan 必须作为本步骤唯一的计划变更。')
     }
     const plan = this.state.activePlan
     if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
-    if (outcome === 'completed' && plan.items.some((item) => item.status !== 'completed')) {
-      return mutationFailure(
-        'incomplete_plan',
-        '仍有未完成或阻塞的任务项，不能把整个计划标记为完成。',
-      )
+    this.finish(plan, 'ended')
+    return { ok: true, message: '任务计划已结束。' }
+  }
+
+  /** 模型正文自然结束时，由会话协议在同一步事务内确定计划终态。 */
+  finishNaturalRun(): TaskMutationResult {
+    if (this.stepDirty) {
+      return mutationFailure('step_conflict', '当前模型步骤已有计划变更，不能同时自然结束计划。')
     }
-    const closed = taskPlanSchema.parse({
-      ...plan,
-      status: outcome,
-      revision: plan.revision + 1,
-    })
-    this.state.activePlan = null
-    this.state.resumeRequired = false
-    this.state.interruptionReason = null
-    this.stepBoundary = 'close'
-    this.publish(closed)
+    const plan = this.state.activePlan
+    if (!plan) return mutationFailure('no_active_plan', '当前没有活动任务计划。')
+    const status = plan.items.every((item) => item.status === 'completed')
+      ? 'completed'
+      : 'ended'
+    this.finish(plan, status)
     return {
       ok: true,
-      message: outcome === 'completed' ? '任务计划已核验完成。' : '任务计划已结束。',
+      message: status === 'completed' ? '任务计划已核验完成。' : '任务计划已随本次执行结束。',
     }
   }
 
@@ -231,28 +222,6 @@ export class TaskPlanController {
 
   hasUnfinishedWork(): boolean {
     return Boolean(this.state.activePlan?.items.some((item) => item.status !== 'completed'))
-  }
-
-  naturalStopDecision(): NaturalStopDecision {
-    const plan = this.state.activePlan
-    if (!plan) return { kind: 'allow' }
-    if (plan.items.every((item) => item.status === 'completed')) {
-      return {
-        kind: 'continue',
-        reminder: '所有里程碑已经完成，请调用 CloseTaskPlan 后给出最终答复。',
-      }
-    }
-    const unfinished = plan.items.filter((item) =>
-      item.status === 'pending' || item.status === 'in_progress',
-    )
-    if (unfinished.length === 0) return { kind: 'pause' }
-    const current = unfinished.find((item) => item.status === 'in_progress')
-    return {
-      kind: 'continue',
-      reminder: current
-        ? `计划仍有未完成项：${unfinished.map((item) => item.id).join('、')}。请继续推进；无法推进时标记 blocked，不能直接宣称完成。`
-        : `计划仍有待开始项：${unfinished.map((item) => item.id).join('、')}。请先将下一里程碑设为 in_progress，再检查并实施。`,
-    }
   }
 
   private applyItemChange(
@@ -360,7 +329,6 @@ export class TaskPlanController {
       }
       item.status = 'in_progress'
       item.evidence = []
-      item.blockedReason = undefined
       return null
     }
 
@@ -378,24 +346,22 @@ export class TaskPlanController {
       }
       item.status = 'completed'
       item.evidence = evidence
-      item.blockedReason = undefined
       return null
     }
-
-    if (item.status === 'completed') {
-      return mutationFailure('invalid_transition', `${item.id} 已完成，不能重新打开。`)
-    }
-    if (item.status !== 'in_progress' && item.status !== 'blocked') {
-      return mutationFailure('invalid_transition', `${item.id} 必须先进入 in_progress 才能标记阻塞。`)
-    }
-    const blockedReason = transition.blockedReason.trim()
-    if (!blockedReason) {
-      return mutationFailure('blocked_reason_required', `阻塞 ${item.id} 必须说明原因。`)
-    }
-    item.status = 'blocked'
-    item.blockedReason = blockedReason
-    item.evidence = transition.evidence.map((entry) => entry.trim()).filter(Boolean)
     return null
+  }
+
+  private finish(plan: ActiveTaskPlan, status: 'completed' | 'ended'): void {
+    const closed = taskPlanSchema.parse({
+      ...plan,
+      status,
+      revision: plan.revision + 1,
+    })
+    this.state.activePlan = null
+    this.state.resumeRequired = false
+    this.state.interruptionReason = null
+    this.stepBoundary = 'close'
+    this.publish(closed)
   }
 
   private publish(plan: TaskPlan): void {
@@ -414,7 +380,7 @@ export class TaskPlanController {
   private resumeRequiredError(): TaskMutationResult {
     return mutationFailure(
       'resume_required',
-      '任务执行已被中断；继续时先调用 ResumeTaskPlan，不再执行时调用 CloseTaskPlan(abandoned)。',
+      '任务执行已被中断；继续时先调用 ResumeTaskPlan，不再执行时调用 CloseTaskPlan。',
     )
   }
 

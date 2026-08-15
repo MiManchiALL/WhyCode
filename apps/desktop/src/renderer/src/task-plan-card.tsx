@@ -1,5 +1,5 @@
 import type { TaskPlan } from '@whycode/core'
-import { Check, Circle, ListChecks, Minus } from 'lucide-react'
+import { Check, Circle, ListChecks } from 'lucide-react'
 
 interface TaskPlanCardProps {
   plan: TaskPlan
@@ -48,9 +48,6 @@ export function TaskPlanCard({ plan, compact }: TaskPlanCardProps) {
                   </span>
                 )}
               </div>
-              {item.status === 'blocked' && item.blockedReason ? (
-                <div className="text-[10px] leading-4 text-[#946852]">{item.blockedReason}</div>
-              ) : null}
             </div>
           </div>
         ))}
@@ -65,9 +62,6 @@ function PlanStatusIcon({ status }: { status: TaskPlan['items'][number]['status'
   }
   if (status === 'in_progress') {
     return <span className="wc-plan-active-dot mt-1.5 shrink-0" role="img" aria-label="进行中" />
-  }
-  if (status === 'blocked') {
-    return <Minus size={14} className="mt-0.5 shrink-0 text-[#a36f57]" />
   }
   return <Circle size={11} className="mt-1 shrink-0 text-[#bfc0bb]" />
 }

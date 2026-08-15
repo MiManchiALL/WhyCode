@@ -293,8 +293,22 @@ describe('后台命令会话', () => {
       assert.match(detached.data, /自动通知并唤醒所属 Main/)
       const running = (await manager.list(SESSION_A)).find((task) => task.status === 'running')
       assert.ok(running)
+      assert.equal(
+        manager.hasPendingPlanContinuation(
+          SESSION_A,
+          '33333333-3333-4333-8333-333333333333',
+        ),
+        true,
+      )
       const completed = await waitForTerminal(manager, running.id)
       assert.equal(completed.task.status, 'completed')
+      assert.equal(
+        manager.hasPendingPlanContinuation(
+          SESSION_A,
+          '33333333-3333-4333-8333-333333333333',
+        ),
+        false,
+      )
       assert.equal(notifications.length, 1)
       assert.equal(notifications[0]?.task.id, running.id)
       assert.equal(notifications[0]?.engagedPlanId, '33333333-3333-4333-8333-333333333333')

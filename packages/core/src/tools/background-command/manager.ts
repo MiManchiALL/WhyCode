@@ -253,6 +253,15 @@ export class CommandSessionManager {
     return { task: snapshot, armed: true }
   }
 
+  hasPendingPlanContinuation(sessionId: string, planId: string): boolean {
+    return [...this.tasks.values()].some((task) =>
+      task.sessionId === sessionId
+      && (task.status === 'running' || task.status === 'completed' || task.status === 'failed')
+      && task.terminalNotification?.engagedPlanId === planId
+      && task.terminalNotificationSent !== true,
+    )
+  }
+
   async writeInput(
     sessionId: string,
     taskId: string,

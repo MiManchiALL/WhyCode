@@ -302,7 +302,7 @@ describe('SessionStore Fork', () => {
           type: 'tool-call',
           toolCallId: 'finish-tool',
           toolName: 'CloseTaskPlan',
-          input: { outcome: 'completed' },
+          input: {},
         },
       ],
     }])

@@ -4,7 +4,6 @@ export const taskItemStatusSchema = z.enum([
   'pending',
   'in_progress',
   'completed',
-  'blocked',
 ])
 
 export const taskItemSchema = z.object({
@@ -13,16 +12,9 @@ export const taskItemSchema = z.object({
   outcome: z.string().min(1),
   status: taskItemStatusSchema,
   evidence: z.array(z.string().min(1)),
-  blockedReason: z.string().min(1).optional(),
 }).strict().superRefine((item, ctx) => {
   if (item.status === 'completed' && item.evidence.length === 0) {
     ctx.addIssue({ code: 'custom', message: 'completed 任务项必须包含完成证据' })
-  }
-  if (item.status === 'blocked' && !item.blockedReason) {
-    ctx.addIssue({ code: 'custom', message: 'blocked 任务项必须包含阻塞原因' })
-  }
-  if (item.status !== 'blocked' && item.blockedReason) {
-    ctx.addIssue({ code: 'custom', message: '只有 blocked 任务项可以包含阻塞原因' })
   }
   if ((item.status === 'pending' || item.status === 'in_progress') && item.evidence.length > 0) {
     ctx.addIssue({ code: 'custom', message: '未完成任务项不能包含完成证据' })
@@ -65,14 +57,14 @@ export const completedTaskPlanSchema = taskPlanBaseSchema.extend({
   }
 })
 
-export const abandonedTaskPlanSchema = taskPlanBaseSchema.extend({
-  status: z.literal('abandoned'),
+export const endedTaskPlanSchema = taskPlanBaseSchema.extend({
+  status: z.literal('ended'),
 })
 
 export const taskPlanSchema = z.discriminatedUnion('status', [
   activeTaskPlanSchema,
   completedTaskPlanSchema,
-  abandonedTaskPlanSchema,
+  endedTaskPlanSchema,
 ])
 
 export type TaskItemStatus = z.infer<typeof taskItemStatusSchema>

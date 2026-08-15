@@ -161,9 +161,6 @@ describe('用户中断后的新回合', () => {
         status: 'completed',
         evidence: ['恢复后完成'],
       }),
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-        outcome: 'abandoned',
-      }),
       finalStep('已按要求恢复。'),
     ]
     const model = new MockLanguageModelV4({
@@ -294,9 +291,6 @@ describe('用户中断后的新回合', () => {
     const reopened = await store.open(journal.sessionId)
     const model = new MockLanguageModelV4({
       doStream: [
-        toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-          outcome: 'abandoned',
-        }),
         finalStep('收到，按 Windows 11 处理。'),
       ],
     })
@@ -306,9 +300,10 @@ describe('用户中断后的新回合', () => {
 
     assert.equal(result, 'completed')
     assert.equal(toolNames(model.doStreamCalls[0]).includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
-  it('计划问题卡在进程中断后仍服从 blocked 闸门', async () => {
+  it('计划问题卡在进程中断后仍服从 interrupted 闸门', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
@@ -349,7 +344,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
     const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
     assert.match(request, /whycode-task-execution-boundary/)
-    assert.match(request, /blocked/)
+    assert.match(request, /interrupted/)
   })
 
   it('活动计划问题卡未回答时，普通输入不会被误当成答案并强制续跑', async () => {
@@ -674,9 +669,6 @@ describe('用户中断后的新回合', () => {
           { kind: 'verification', outcome: '整体结果通过验证' },
         ],
       }),
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-        outcome: 'abandoned',
-      }),
       finalStep('已经开始处理。'),
     ]
     const model = new MockLanguageModelV4({
@@ -707,15 +699,13 @@ describe('用户中断后的新回合', () => {
     assert.equal(toolNames(model.doStreamCalls[1]).includes(CREATE_TASK_PLAN_TOOL_NAME), true)
   })
 
-  it('已有计划中止后简短确认开工，会重新接合未完成保护', async () => {
+  it('已有计划中止后简短确认开工，会重新接合并由最终正文自然结束', async () => {
     let firstRequest = true
     const remainingSteps = [
       toolStep(RESUME_TASK_PLAN_TOOL_NAME, {
         plan_id: activePlan().id,
       }),
       finalStep('过早结束一'),
-      finalStep('过早结束二'),
-      finalStep('过早结束三'),
     ]
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
@@ -738,11 +728,11 @@ describe('用户中断后的新回合', () => {
 
     const result = await session.handleUserMessage('可以，开始做吧')
 
-    assert.equal(result, 'paused')
-    assert.equal(model.doStreamCalls.length, 5)
+    assert.equal(result, 'completed')
+    assert.equal(model.doStreamCalls.length, 3)
     assert.equal(toolNames(model.doStreamCalls[1]).includes(RESUME_TASK_PLAN_TOOL_NAME), true)
     assert.equal(toolNames(model.doStreamCalls[1]).includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
-    assert.equal(toolNames(model.doStreamCalls[2]).includes(UPDATE_TASK_ITEM_TOOL_NAME), true)
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
   it('运行中 urgent steering 仍属于当前回合，不生成停止边界或休眠计划', async () => {
@@ -754,9 +744,6 @@ describe('用户中断后的新回合', () => {
           item_id: 'T1',
           outcome: '按纠正后的技术方向完成当前工作',
         }],
-      }),
-      toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-        outcome: 'abandoned',
       }),
       finalStep('已按纠正后的技术方向继续。'),
     ]
@@ -822,7 +809,7 @@ describe('用户中断后的新回合', () => {
     )
   })
 
-  it('运行中明确自然语言暂停时允许模型结束，不触发未完成保护', async () => {
+  it('运行中明确自然语言暂停时允许模型结束并保留活动计划', async () => {
     let requestCount = 0
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
@@ -893,7 +880,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'pending')
   })
 
-  it('steering 后调用实际工具仍保留未完成计划保护', async () => {
+  it('steering 后继续调用实际工具，最终正文自然结束当前计划', async () => {
     const projectDir = await temporaryDirectory()
     let requestCount = 0
     const model = new MockLanguageModelV4({
@@ -914,38 +901,7 @@ describe('用户中断后的新回合', () => {
           return toolStep(LIST_DIR_TOOL_NAME, { path: projectDir })
         }
         if (requestCount === 5) return finalStep('检查结束。')
-        if (requestCount === 6) {
-          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-            item_id: 'T2',
-            status: 'in_progress',
-          })
-        }
-        if (requestCount === 7) {
-          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-            item_id: 'T2',
-            status: 'completed',
-            evidence: ['调用检查完成'],
-          })
-        }
-        if (requestCount === 8) {
-          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-            item_id: 'T3',
-            status: 'in_progress',
-          })
-        }
-        if (requestCount === 9) {
-          return toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-            item_id: 'T3',
-            status: 'completed',
-            evidence: ['整体验证完成'],
-          })
-        }
-        if (requestCount === 10) {
-          return toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {
-            outcome: 'completed',
-          })
-        }
-        return finalStep('任务完成。')
+        throw new Error('最终正文后不应继续请求模型')
       },
     })
     const session = createMemorySession(model, projectDir)
@@ -956,7 +912,8 @@ describe('用户中断后的新回合', () => {
     session.handleUserMessage('记录进度后继续检查项目文件', true)
 
     assert.equal(await running, 'completed')
-    assert.match(JSON.stringify(model.doStreamCalls[5]?.prompt), /计划仍有待开始项/)
+    assert.equal(model.doStreamCalls.length, 5)
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
   it('终止型问题工具完成稳定回合后会消费中断边界', async () => {

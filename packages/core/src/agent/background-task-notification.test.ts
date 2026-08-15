@@ -115,7 +115,7 @@ describe('后台任务终态续轮', () => {
     assert.equal(model.doStreamCalls.length, 1)
   })
 
-  it('仅同一未阻塞计划的后台结果恢复 engaged 执行语义', async () => {
+  it('仅同一未中断计划的后台结果恢复 engaged 执行语义', async () => {
     for (const [engagedPlanId, expectsContinuation] of [
       [PLAN_ID, true],
       ['44444444-4444-4444-8444-444444444444', false],
@@ -125,28 +125,62 @@ describe('后台任务终态续轮', () => {
       session.restoreTaskStateSnapshot(completedActivePlanState())
 
       const outcome = await session.handleTaskNotification(notification(engagedPlanId))
-      assert.equal(outcome, expectsContinuation ? 'paused' : 'completed')
+      assert.equal(outcome, 'completed')
       const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt)
       assert.match(prompt, /task-notification/)
       assert.equal(prompt.includes('whycode-task-continuation'), expectsContinuation)
+      assert.equal(
+        session.captureTaskStateSnapshot()?.activePlan === null,
+        expectsContinuation,
+      )
     }
 
-    const blockedModel = new MockLanguageModelV4({ doStream: async () => finalStep('保持等待。') })
-    const blockedSession = createSession(blockedModel, [])
-    blockedSession.restoreTaskStateSnapshot({
+    const interruptedModel = new MockLanguageModelV4({ doStream: async () => finalStep('保持等待。') })
+    const interruptedSession = createSession(interruptedModel, [])
+    interruptedSession.restoreTaskStateSnapshot({
       ...completedActivePlanState(),
       version: 2,
       resumeRequired: true,
       interruptionReason: 'user-cancel',
     })
     assert.equal(
-      await blockedSession.handleTaskNotification(notification(PLAN_ID)),
+      await interruptedSession.handleTaskNotification(notification(PLAN_ID)),
       'completed',
     )
     assert.doesNotMatch(
-      JSON.stringify(blockedModel.doStreamCalls[0]?.prompt),
+      JSON.stringify(interruptedModel.doStreamCalls[0]?.prompt),
       /whycode-task-continuation/,
     )
+  })
+
+  it('等待已登记后台唤醒时保留计划，终态续轮自然结束同一计划', async () => {
+    let pending = true
+    const model = new MockLanguageModelV4({
+      doStream: [
+        finalStep('后台构建仍在运行，等待完成后继续。'),
+        finalStep('后台构建完成，已检查结果。'),
+      ],
+    })
+    const session = createSession(model, [], () => pending)
+    session.restoreTaskStateSnapshot(incompleteActivePlanState())
+
+    assert.equal(await session.handleTaskNotification(notification(PLAN_ID)), 'paused')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.id, PLAN_ID)
+
+    pending = false
+    assert.equal(await session.handleTaskNotification(notification(PLAN_ID)), 'completed')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
+  })
+
+  it('长期后台服务不拖住已全部完成的计划', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => finalStep('计划工作已经全部交付，服务继续运行。'),
+    })
+    const session = createSession(model, [], () => true)
+    session.restoreTaskStateSnapshot(completedActivePlanState())
+
+    assert.equal(await session.handleTaskNotification(notification(PLAN_ID)), 'completed')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 })
 
@@ -207,11 +241,31 @@ function completedActivePlanState(): TaskPlanState {
   }
 }
 
-function createSession(model: MockLanguageModelV4, events: CoreEvent[]): AgentSession {
+function incompleteActivePlanState(): TaskPlanState {
+  const state = completedActivePlanState()
+  state.activePlan!.items[1] = {
+    ...state.activePlan!.items[1]!,
+    status: 'in_progress',
+    evidence: [],
+  }
+  state.activePlan!.items[2] = {
+    ...state.activePlan!.items[2]!,
+    status: 'pending',
+    evidence: [],
+  }
+  return state
+}
+
+function createSession(
+  model: MockLanguageModelV4,
+  events: CoreEvent[],
+  hasPendingTaskPlanContinuation?: (planId: string) => boolean,
+): AgentSession {
   return new AgentSession({
     model: modelEntry(model),
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+    hasPendingTaskPlanContinuation,
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
   })

@@ -277,7 +277,7 @@ describe('ViewTimeline', () => {
     const previous = taskPlan()
     const closed = {
       type: 'task-plan-updated' as const,
-      plan: { ...previous, status: 'abandoned' as const, revision: 2 },
+      plan: { ...previous, status: 'ended' as const, revision: 2 },
     }
     const next = {
       type: 'task-plan-updated' as const,
@@ -291,7 +291,7 @@ describe('ViewTimeline', () => {
     await Promise.resolve()
 
     assert.equal(writer.batches.length, 2)
-    assert.match(JSON.stringify(writer.batches), /abandoned/)
+    assert.match(JSON.stringify(writer.batches), /ended/)
     assert.match(JSON.stringify(writer.batches), /完成新任务/)
     assert.doesNotMatch(JSON.stringify(writer.batches), /task-plan-replaced/)
   })

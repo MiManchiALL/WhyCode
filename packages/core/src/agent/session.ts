@@ -152,7 +152,6 @@ export type {
 
 const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
-const TASK_STOP_REMINDER_LIMIT = 2
 const TASK_PROGRESS_REMINDER_STEPS = 10
 const MAX_COMPACT_FAILURES = 3
 
@@ -175,6 +174,8 @@ export interface AgentSessionOptions {
   officeProcessor?: OfficeProcessor
   /** 非视觉 Main 可按需调用的独立识图模型；视觉 Main 不装配对应工具。 */
   auxiliaryImageAnalyzer?: AuxiliaryImageAnalyzer
+  /** 宿主判断当前计划是否仍有已登记、将自动唤醒同一会话的后台任务。 */
+  hasPendingTaskPlanContinuation?: (planId: string) => boolean
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
@@ -251,6 +252,7 @@ interface StepResult {
   taskPlanChanged: boolean
   taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
+  awaitingTaskPlanContinuation: boolean
 }
 
 class UndeliverableModelResponseError extends Error {
@@ -1100,7 +1102,7 @@ export class AgentSession {
         ? [...(notificationContinuation ? [notificationContinuation] : []), ...initialMessages]
         : [
             createTaskExecutionBoundaryMessage(
-              this.taskPlan.stateSnapshot.resumeRequired ? 'blocked' : 'dormant',
+              this.taskPlan.stateSnapshot.resumeRequired ? 'interrupted' : 'dormant',
             ),
             ...initialMessages,
           ]
@@ -1159,7 +1161,6 @@ export class AgentSession {
     try {
       let steps = 0
       let finishedNaturally = false
-      let taskStopReminders = 0
       let interruptionBoundaryConsumed = false
       let steeringDecisionPending = false
       let stepsSincePlanMutation = 0
@@ -1167,7 +1168,7 @@ export class AgentSession {
       let currentTimeReminderAt: Date | null = null
       let projectInstructionsFresh = true
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
-      // 只有稳定提交 Create/Resume，或回答计划自身的问题卡，才启用未完成保护。
+      // 只有稳定提交 Create/Resume，或回答计划自身的问题卡，才接合计划执行生命周期。
       while (maxSteps === null || steps < maxSteps) {
         if (!projectInstructionsFresh) await this.refreshProjectInstructions()
         projectInstructionsFresh = false
@@ -1199,9 +1200,9 @@ export class AgentSession {
             && !this.options.promptContext.discussion
             && !this.protocolRound,
           refreshCurrentTime ? currentTime : null,
+          steeringDecisionPending,
         )
         if (refreshCurrentTime && step.committed) currentTimeReminderAt = currentTime
-        const steeringMayEndRun = steeringDecisionPending && !step.hadToolCalls
         // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
         // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
         steeringDecisionPending = steeringDecisionPending
@@ -1209,7 +1210,6 @@ export class AgentSession {
         if (step.interruptionBoundaryConsumed) interruptionBoundaryConsumed = true
         if (step.taskPlanChanged) {
           planExecutionEngaged = Boolean(this.taskPlan?.snapshot)
-          taskStopReminders = 0
           stepsSincePlanMutation = 0
           stepsSincePlanReminder = 0
         } else if (step.committed && planExecutionEngaged) {
@@ -1219,15 +1219,9 @@ export class AgentSession {
         const engagement = step.taskPlanEngagement
         if (engagement && engagement.planId === this.taskPlan?.snapshot?.id) {
           planExecutionEngaged = true
-          taskStopReminders = 0
           stepsSincePlanMutation = 0
           stepsSincePlanReminder = 0
         }
-        const naturalDecision = !step.hadToolCalls
-          ? planExecutionEngaged && !steeringMayEndRun
-            ? this.taskPlan?.naturalStopDecision() ?? { kind: 'allow' as const }
-            : { kind: 'allow' as const }
-          : null
         if (step.toolEndReason) {
           if (abortSignal.aborted) this.abortRequestedDuringFinalization = true
           endedByTool = true
@@ -1237,9 +1231,9 @@ export class AgentSession {
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
         if (this.hasPendingMessages()) {
           if (abortSignal.aborted) {
-            if (naturalDecision && naturalDecision.kind !== 'continue') {
+            if (!step.hadToolCalls && !planExecutionEngaged) {
               this.abortRequestedDuringFinalization = true
-              stopReason = naturalDecision.kind === 'pause' ? 'paused' : 'completed'
+              stopReason = 'completed'
               finishedNaturally = true
             } else {
               stopReason = 'aborted'
@@ -1267,31 +1261,15 @@ export class AgentSession {
           break
         }
         if (!step.hadToolCalls) {
-          const decision = naturalDecision!
-          if (decision.kind === 'continue' && abortSignal.aborted) {
+          if (abortSignal.aborted) {
             stopReason = 'aborted'
             break
           }
-          if (decision.kind === 'pause') {
-            if (abortSignal.aborted) this.abortRequestedDuringFinalization = true
+          if (step.awaitingTaskPlanContinuation) {
             stopReason = 'paused'
             finishedNaturally = true
             break
           }
-          if (decision.kind === 'continue' && taskStopReminders < TASK_STOP_REMINDER_LIMIT) {
-            taskStopReminders++
-            await this.injectTaskStopReminder(decision.reminder)
-            continue
-          }
-          if (decision.kind === 'continue') {
-            stopReason = 'paused'
-            emit({
-              type: 'error',
-              message: `长任务仍有未完成计划，模型连续 ${TASK_STOP_REMINDER_LIMIT} 次尝试提前结束，已保留进度并安全暂停。`,
-              recoverable: true,
-            })
-          }
-          if (abortSignal.aborted) this.abortRequestedDuringFinalization = true
           finishedNaturally = true
           break
         }
@@ -1405,17 +1383,6 @@ export class AgentSession {
     }
   }
 
-  private async injectTaskStopReminder(text: string): Promise<void> {
-    const reminder: ModelMessage = {
-      role: 'user',
-      content: ['<system-reminder>', text, '</system-reminder>'].join('\n'),
-    }
-    this.messages.push(reminder)
-    if (this.activeTurn) {
-      await this.persist((recorder) => recorder.recordStep(this.activeTurn!.id, [reminder]))
-    }
-  }
-
   private async injectTaskProgressReminder(): Promise<void> {
     const plan = this.taskPlan?.snapshot
     if (!plan) return
@@ -1426,7 +1393,7 @@ export class AgentSession {
         '<system-reminder>',
         `计划 ${plan.id} 已有 ${TASK_PROGRESS_REMINDER_STEPS} 个模型步骤没有更新。`,
         current ? `当前任务项：${current.id} ${current.outcome}。` : '',
-        '若进度、阻塞或任务项已实质变化，请更新计划；若复杂测试或排查尚无结论，继续工作即可，不要制造进度。',
+        '若进度或任务项已实质变化，请更新计划；若复杂测试或排查尚无结论，继续工作即可，不要制造进度。',
         '不要向用户提及本提醒。',
         '</system-reminder>',
       ].filter(Boolean).join('\n'),
@@ -1738,6 +1705,7 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
     currentTime: Date | null,
+    preserveTaskPlanOnFinalText: boolean,
   ): Promise<StepResult> {
     const attempt = () => this.runOneStepAttempt(
       usage,
@@ -1745,6 +1713,7 @@ export class AgentSession {
       planExecutionEngaged,
       consumeInterruptionBoundary,
       currentTime,
+      preserveTaskPlanOnFinalText,
     )
     try {
       return await attempt()
@@ -1770,6 +1739,7 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
     currentTime: Date | null,
+    preserveTaskPlanOnFinalText: boolean,
   ): Promise<StepResult> {
     if (this.options.sessionRecorder && this.persistenceFailed) {
       throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
@@ -2010,6 +1980,23 @@ export class AgentSession {
       ) {
         throw new UndeliverableModelResponseError(finishReason)
       }
+      let awaitingTaskPlanContinuation = false
+      if (
+        !hadToolCalls
+        && planExecutionEngaged
+        && !preserveTaskPlanOnFinalText
+        && !this.hasPendingMessages()
+      ) {
+        const activePlan = this.taskPlan?.snapshot
+        if (activePlan) {
+          awaitingTaskPlanContinuation = this.taskPlan!.hasUnfinishedWork()
+            && Boolean(this.options.hasPendingTaskPlanContinuation?.(activePlan.id))
+          if (!awaitingTaskPlanContinuation) {
+            const finalized = this.taskPlan!.finishNaturalRun()
+            if (!finalized.ok) throw new Error(finalized.message)
+          }
+        }
+      }
       const taskPlanCommit = this.taskPlan?.commitStep()
       taskPlanFinalized = Boolean(this.taskPlan)
       const planRemainsActive = Boolean(
@@ -2114,6 +2101,7 @@ export class AgentSession {
         taskPlanChanged: taskPlanCommit !== undefined,
         taskPlanEngagement: stepControl.taskPlanEngagement,
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
+        awaitingTaskPlanContinuation,
       }
     } catch (error) {
       mcpStep?.discard()
@@ -2163,6 +2151,7 @@ export class AgentSession {
           taskPlanChanged: false,
           taskPlanEngagement: null,
           interruptionBoundaryConsumed: false,
+          awaitingTaskPlanContinuation: false,
         }
       }
       throw error

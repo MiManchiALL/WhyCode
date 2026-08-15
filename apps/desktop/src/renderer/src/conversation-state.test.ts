@@ -79,7 +79,7 @@ describe('会话界面时间线重建', () => {
       type: 'tool-start',
       toolUseId: 'close-plan',
       toolName: 'CloseTaskPlan',
-      input: { outcome: 'completed' },
+      input: {},
     })
     state = applyCoreEvent(state, {
       type: 'tool-end',
@@ -658,7 +658,7 @@ describe('会话界面时间线重建', () => {
         type: 'task-plan-updated',
         plan: {
         ...previousActive,
-          status: 'abandoned',
+          status: 'ended',
           revision: previousActive.revision + 1,
         },
       }),
