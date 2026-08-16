@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
+import { CLEARED_MESSAGE } from '../context/microcompact.ts'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
@@ -598,9 +599,32 @@ describe('用户中断后的新回合', () => {
       true,
     )
     assert.equal(
-      JSON.stringify(session.captureMessageSnapshot()).includes('旧工具输出已清理以节省上下文'),
+      JSON.stringify(session.captureMessageSnapshot()).includes(CLEARED_MESSAGE),
       true,
     )
+  })
+
+  it('自动微压缩降回阈值后持久化实际请求历史', async () => {
+    const root = await temporaryDirectory()
+    const store = new SessionStore(root)
+    const journal = await store.create({
+      workspace: localWorkspace(null),
+      modelId: 'test:interruption',
+    })
+    const events: CoreEvent[] = []
+    const model = new MockLanguageModelV4({ doStream: [finalStep('继续完成')] })
+    const session = createSession(model, journal, (event) => events.push(event))
+    session.restoreMessageSnapshot(microcompactableHistory('x'.repeat(340_000)))
+
+    assert.equal(await session.handleUserMessage('继续'), 'completed')
+    assert.equal(model.doGenerateCalls.length, 0)
+    assert.equal(
+      events.some((event) => event.type === 'context-compacted' && event.level === 'micro'),
+      true,
+    )
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(JSON.stringify(reopened.initialMessages).includes(CLEARED_MESSAGE), true)
   })
 
   it('被中止任务尚未创建计划时不靠隐藏 Create 阻止误续跑', async () => {
@@ -1174,7 +1198,7 @@ function toolNames(call: MockLanguageModelV4['doStreamCalls'][number] | undefine
   return (call?.tools ?? []).flatMap((tool) => tool.type === 'function' ? [tool.name] : [])
 }
 
-function microcompactableHistory() {
+function microcompactableHistory(firstOutput = '内容 0') {
   const messages: Parameters<AgentSession['restoreMessageSnapshot']>[0] = [
     { role: 'user', content: '读取几个文件' },
   ]
@@ -1195,7 +1219,7 @@ function microcompactableHistory() {
         type: 'tool-result',
         toolCallId,
         toolName: 'ReadFile',
-        output: { type: 'text', value: `内容 ${index}` },
+        output: { type: 'text', value: index === 0 ? firstOutput : `内容 ${index}` },
       }],
     })
   }

@@ -37,7 +37,9 @@ export function ContextUsageMeter({ usage }: { usage: ContextUsageInfo | null })
   }, [open, presentation])
 
   if (!usage || !presentation) return null
-  const label = `上下文已用 ${presentation.percent}%`
+  const label = presentation.autoCompactPending
+    ? `上下文已用 ${presentation.percent}%，将在下次模型请求前自动压缩`
+    : `上下文已用 ${presentation.percent}%`
 
   return (
     <span
@@ -95,6 +97,15 @@ export function ContextUsageMeter({ usage }: { usage: ContextUsageInfo | null })
               </div>
             ))}
           </dl>
+          <div
+            className="wc-context-meter-threshold"
+            data-pending={presentation.autoCompactPending ? 'true' : 'false'}
+          >
+            <span>
+              {presentation.autoCompactPending ? '下次模型请求前自动压缩' : '自动压缩阈值'}
+            </span>
+            <strong>~{formatContextTokens(presentation.autoCompactThreshold)}</strong>
+          </div>
         </div>
       )}
     </span>

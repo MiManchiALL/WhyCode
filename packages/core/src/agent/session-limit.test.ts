@@ -84,6 +84,38 @@ describe('Agent 长任务循环策略', () => {
     assert.equal(events.some((event) => event.type === 'error'), false)
   })
 
+  it('自动压缩连续失败会显式熔断，但不阻断仍可容纳的模型请求', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        ...toolStreams(3, false, 85_000),
+        textStream('已在保守缓冲内完成任务'),
+      ],
+    })
+    const events: CoreEvent[] = []
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+      emit: (event) => events.push(event),
+      requestApproval: async () => ({ approved: false }),
+    })
+    session.setExtraTools([probeTool])
+    session.restoreMessageSnapshot([{
+      role: 'user',
+      content: '无法从中间切开的长用户输入'.repeat(11_000),
+    }])
+
+    const stopReason = await session.handleUserMessage('继续执行')
+
+    assert.equal(stopReason, 'completed')
+    assert.equal(model.doStreamCalls.length, 4)
+    assert.equal(
+      events.filter((event) =>
+        event.type === 'error' && event.message.includes('自动压缩连续失败')).length,
+      1,
+    )
+  })
+
   it('工具后的内部协议文本只重试模型，不把协议泄漏误判为最终答复', async () => {
     const leakedProtocol = 'out:default_api:RunCommand{result:"Total: 48242\\n"}'
     const model = new MockLanguageModelV4({
@@ -194,7 +226,7 @@ function loopingModel(count: number, identical: boolean): MockLanguageModelV4 {
   return new MockLanguageModelV4({ doStream: toolStreams(count, identical) })
 }
 
-function toolStreams(count: number, identical: boolean) {
+function toolStreams(count: number, identical: boolean, inputTokens = 10) {
   return Array.from({ length: count }, (_, index) => ({
     stream: simulateReadableStream({
       chunks: [
@@ -207,7 +239,7 @@ function toolStreams(count: number, identical: boolean) {
         {
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },
-          usage: usage(),
+          usage: usage(inputTokens),
         },
       ],
     }),
@@ -262,9 +294,14 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
   }
 }
 
-function usage() {
+function usage(inputTokens = 10) {
   return {
-    inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+    inputTokens: {
+      total: inputTokens,
+      noCache: inputTokens,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
     outputTokens: { total: 5, text: 5, reasoning: undefined },
   }
 }

@@ -7,6 +7,7 @@ describe('上下文圆环投影', () => {
     const presentation = contextUsagePresentation({
       usedTokens: 29_400,
       contextWindow: 100_000,
+      autoCompactThreshold: 80_000,
       breakdown: {
         systemPromptTokens: 2_000,
         toolTokens: 8_000,
@@ -15,6 +16,7 @@ describe('上下文圆环投影', () => {
     })
 
     assert.equal(presentation?.percent, 29)
+    assert.equal(presentation?.autoCompactPending, false)
     assert.equal(
       Math.round(presentation?.segments.reduce((sum, segment) => sum + segment.width, 0) ?? 0),
       29,
@@ -30,13 +32,21 @@ describe('上下文圆环投影', () => {
     assert.equal(contextUsagePresentation({
       usedTokens: 1,
       contextWindow: 0,
+      autoCompactThreshold: 0,
       breakdown: { systemPromptTokens: 0, toolTokens: 0, messageTokens: 1 },
     }), null)
     assert.equal(contextUsagePresentation({
       usedTokens: 150_000,
       contextWindow: 100_000,
+      autoCompactThreshold: 80_000,
       breakdown: { systemPromptTokens: 0, toolTokens: 0, messageTokens: 150_000 },
     })?.percent, 100)
+    assert.equal(contextUsagePresentation({
+      usedTokens: 85_000,
+      contextWindow: 100_000,
+      autoCompactThreshold: 80_000,
+      breakdown: { systemPromptTokens: 5_000, toolTokens: 10_000, messageTokens: 70_000 },
+    })?.autoCompactPending, true)
     assert.equal(formatContextTokens(75_300), '75.3K')
     assert.equal(formatContextTokens(262_000), '262K')
     assert.equal(formatContextTokens(1_000_000), '1M')

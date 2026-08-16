@@ -29,7 +29,7 @@ import {
   autoCompactThreshold,
   estimateContextTokens,
   estimateMessagesTokens,
-  estimateRequestContextBreakdown,
+  estimateRequestContextOverhead,
   type TokenBaseline,
 } from '../context/tokens.ts'
 import { microcompact } from '../context/microcompact.ts'
@@ -412,10 +412,6 @@ export class AgentSession {
         this.options.promptContext,
         this.options.customSystemPrompt,
       )
-      const messages = this.skillTurn.project(
-        withoutMcpToolState(this.messages),
-        true,
-      )
       const tools = this.buildToolSet(
         abortSignal,
         false,
@@ -426,13 +422,12 @@ export class AgentSession {
         async () => null,
         [],
       )
-      const breakdown = await estimateRequestContextBreakdown(
+      const overhead = await estimateRequestContextOverhead(
         systemPrompt,
-        messages,
         tools,
       )
-      this.contextOverhead = breakdown
-      this.emitContextUsage(breakdown.messageTokens)
+      this.contextOverhead = overhead
+      this.emitContextUsage()
     } catch {
       this.contextOverhead = null
       this.options.emit({ type: 'context-usage', usage: null })
@@ -1504,8 +1499,8 @@ export class AgentSession {
     if (microcompacted) {
       estimate = this.estimateCurrentContextTokens()
       if (estimate < threshold) {
-        emit({ type: 'context-compacted', level: 'micro', preTokens, postTokens: estimate })
-        this.emitContextUsage()
+        this.compactFailures = 0
+        await this.commitAutoMicrocompaction(preTokens, turnId)
         return
       }
     }
@@ -1522,15 +1517,9 @@ export class AgentSession {
         this.requestProviderOptions(),
       )
       if (!result.summaryText) {
-        this.compactFailures++
+        this.recordAutoCompactFailure()
         if (microcompacted) {
-          emit({
-            type: 'context-compacted',
-            level: 'micro',
-            preTokens,
-            postTokens: this.estimateCurrentContextTokens(),
-          })
-          this.emitContextUsage()
+          await this.commitAutoMicrocompaction(preTokens, turnId)
         }
         return
       }
@@ -1553,9 +1542,33 @@ export class AgentSession {
       this.emitContextUsage()
     } catch (error) {
       if (abortSignal.aborted) throw error
-      this.compactFailures++
-      // 失败不阻塞：请求可能仍能成功（估算偏保守），连续 3 次后停止尝试
+      this.recordAutoCompactFailure()
+      if (microcompacted) await this.commitAutoMicrocompaction(preTokens, turnId)
+      // 失败不阻塞：请求可能仍能成功（估算偏保守）。
     }
+  }
+
+  private async commitAutoMicrocompaction(preTokens: number, turnId: string): Promise<void> {
+    await this.persist((recorder) =>
+      recorder.recordSnapshot('compact', this.messages, turnId, this.taskPlan?.stateSnapshot),
+    )
+    this.options.emit({
+      type: 'context-compacted',
+      level: 'micro',
+      preTokens,
+      postTokens: this.estimateCurrentContextTokens(),
+    })
+    this.emitContextUsage()
+  }
+
+  private recordAutoCompactFailure(): void {
+    this.compactFailures++
+    if (this.compactFailures !== MAX_COMPACT_FAILURES) return
+    this.options.emit({
+      type: 'error',
+      message: '自动压缩连续失败，已暂停自动重试；请手动压缩查看具体错误，或切换模型。',
+      recoverable: true,
+    })
   }
 
   /** 自动与手动压缩共用的唯一微清理入口。 */
@@ -1588,7 +1601,14 @@ export class AgentSession {
   }
 
   private estimateCurrentContextTokens(messages: ModelMessage[] = this.messages): number {
-    const rawEstimate = estimateContextTokens(messages, this.tokenBaseline)
+    const fallbackOverheadTokens = this.contextOverhead
+      ? this.contextOverhead.systemPromptTokens + this.contextOverhead.toolTokens
+      : 0
+    const rawEstimate = estimateContextTokens(
+      messages,
+      this.tokenBaseline,
+      fallbackOverheadTokens,
+    )
     const currentSkillDelta = this.skillTurn.estimatedProjectionTokenDelta(messages)
     const baselineDelta = this.tokenBaseline
       ? this.tokenBaselineSkillProjectionDelta
@@ -1596,7 +1616,7 @@ export class AgentSession {
     return Math.max(0, rawEstimate + currentSkillDelta - baselineDelta)
   }
 
-  private emitContextUsage(messageTokenFloor = 0, contextWindow?: number): void {
+  private emitContextUsage(): void {
     if (
       this.activeModelSelection
       && this.options.model.id !== this.activeModelSelection.model.id
@@ -1614,20 +1634,15 @@ export class AgentSession {
     )
     const breakdown: ContextUsageInfo['breakdown'] = {
       ...this.contextOverhead,
-      messageTokens: Math.max(
-        messageTokenFloor,
-        estimateMessagesTokens(projectedMessages),
-      ),
+      messageTokens: estimateMessagesTokens(projectedMessages),
     }
-    const partsEstimate = breakdown.systemPromptTokens
-      + breakdown.toolTokens
-      + breakdown.messageTokens
+    const capabilities = this.currentModelSelection().model.capabilities
     this.options.emit({
       type: 'context-usage',
       usage: {
-        usedTokens: Math.max(partsEstimate, this.estimateCurrentContextTokens()),
-        contextWindow:
-          contextWindow ?? this.currentModelSelection().model.capabilities.contextWindow,
+        usedTokens: this.estimateCurrentContextTokens(),
+        contextWindow: capabilities.contextWindow,
+        autoCompactThreshold: autoCompactThreshold(capabilities),
         breakdown,
       },
     })
@@ -1894,12 +1909,10 @@ export class AgentSession {
           },
           mcpStep?.toolDefinitions() ?? [],
         )
-      const requestBreakdown = await estimateRequestContextBreakdown(
+      const requestOverhead = await estimateRequestContextOverhead(
         requestSystemPrompt,
-        requestMessages,
         requestTools,
       )
-      const requestContextWindow = this.currentModelSelection().model.capabilities.contextWindow
       const result = streamText({
         model: this.createLanguageModel(),
         system: requestSystemPrompt,
@@ -2090,9 +2103,9 @@ export class AgentSession {
         }
         this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
       }
-      this.contextOverhead = requestBreakdown
+      this.contextOverhead = requestOverhead
       emit({ type: 'step-committed' })
-      this.emitContextUsage(requestBreakdown.messageTokens, requestContextWindow)
+      this.emitContextUsage()
       return {
         committed: true,
         hadToolCalls,

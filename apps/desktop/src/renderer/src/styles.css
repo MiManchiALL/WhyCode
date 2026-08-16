@@ -479,6 +479,24 @@ button:not(:disabled),
   border-radius: 0.15rem;
 }
 
+.wc-context-meter-threshold {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.45rem;
+  border-top: 1px solid var(--wc-line);
+  padding-top: 0.45rem;
+}
+
+.wc-context-meter-threshold strong {
+  color: var(--wc-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.wc-context-meter-threshold[data-pending='true'] span {
+  color: var(--wc-danger);
+}
+
 .wc-sidebar-label {
   position: absolute;
   top: 50%;

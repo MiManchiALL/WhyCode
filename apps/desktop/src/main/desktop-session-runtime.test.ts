@@ -211,6 +211,7 @@ describe('上下文用量运行态', () => {
     const usage = {
       usedTokens: 12_000,
       contextWindow: 100_000,
+      autoCompactThreshold: 80_000,
       breakdown: {
         systemPromptTokens: 1_000,
         toolTokens: 2_000,

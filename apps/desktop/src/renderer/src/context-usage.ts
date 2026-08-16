@@ -4,6 +4,8 @@ export interface ContextUsagePresentation {
   percent: number
   usedTokens: number
   contextWindow: number
+  autoCompactThreshold: number
+  autoCompactPending: boolean
   segments: Array<{
     key: 'system' | 'tools' | 'messages'
     width: number
@@ -22,6 +24,10 @@ export function contextUsagePresentation(
   if (!Number.isFinite(usage.contextWindow) || usage.contextWindow <= 0) return null
   const usedTokens = nonNegative(usage.usedTokens)
   const contextWindow = Math.max(1, Math.round(usage.contextWindow))
+  const autoCompactThreshold = Math.min(
+    contextWindow,
+    nonNegative(usage.autoCompactThreshold),
+  )
   const percent = Math.min(100, Math.round(usedTokens / contextWindow * 100))
   const parts = SEGMENT_KEYS.map(([key, field]) => ({
     key,
@@ -36,7 +42,14 @@ export function contextUsagePresentation(
           width: percent * part.tokens / partTotal,
         }))
         .filter((part) => part.width > 0)
-  return { percent, usedTokens, contextWindow, segments }
+  return {
+    percent,
+    usedTokens,
+    contextWindow,
+    autoCompactThreshold,
+    autoCompactPending: autoCompactThreshold > 0 && usedTokens >= autoCompactThreshold,
+    segments,
+  }
 }
 
 export function formatContextTokens(tokens: number): string {

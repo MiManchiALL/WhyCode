@@ -5,7 +5,7 @@ import { z } from 'zod'
 import {
   estimateContextTokens,
   estimateMessageTokens,
-  estimateRequestContextBreakdown,
+  estimateRequestContextOverhead,
 } from './tokens.ts'
 
 describe('视觉上下文估算', () => {
@@ -49,10 +49,75 @@ describe('视觉上下文估算', () => {
     assert.ok(estimate > 4_000)
   })
 
-  it('按真实 System、工具 schema 与消息生成可解释分项', async () => {
-    const breakdown = await estimateRequestContextBreakdown(
+  it('协议元数据不按提示词正文计费，但工具参数中的同名业务字段仍保留', () => {
+    const plainReasoning = {
+      role: 'assistant',
+      content: [{ type: 'reasoning', text: '可见推理' }],
+    } as ModelMessage
+    const reasoningWithMetadata = {
+      role: 'assistant',
+      content: [{
+        type: 'reasoning',
+        text: '可见推理',
+        providerOptions: {
+          openai: { reasoningEncryptedContent: 'x'.repeat(200_000) },
+        },
+      }],
+    } as ModelMessage
+    const toolArgument = {
+      role: 'assistant',
+      content: [{
+        type: 'tool-call',
+        toolCallId: 'call-1',
+        toolName: 'Probe',
+        input: { providerOptions: 'x'.repeat(4_000) },
+      }],
+    } as ModelMessage
+    const toolResult = {
+      role: 'tool',
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'call-1',
+        toolName: 'Probe',
+        output: {
+          type: 'text',
+          value: 'ok',
+          providerOptions: { provider: { signature: 'x'.repeat(200_000) } },
+        },
+      }],
+    } as ModelMessage
+    const plainToolResult = {
+      role: 'tool',
+      content: [{
+        type: 'tool-result',
+        toolCallId: 'call-1',
+        toolName: 'Probe',
+        output: { type: 'text', value: 'ok' },
+      }],
+    } as ModelMessage
+
+    assert.equal(
+      estimateMessageTokens(reasoningWithMetadata),
+      estimateMessageTokens(plainReasoning),
+    )
+    assert.equal(estimateMessageTokens(toolResult), estimateMessageTokens(plainToolResult))
+    assert.ok(estimateMessageTokens(toolArgument) > 1_000)
+  })
+
+  it('无 Provider usage 时计入固定请求开销，有基线时不重复计算', () => {
+    const messages: ModelMessage[] = [{ role: 'user', content: 'hello' }]
+    const messageTokens = estimateContextTokens(messages, null)
+
+    assert.equal(estimateContextTokens(messages, null, 1_000), messageTokens + 1_000)
+    assert.equal(estimateContextTokens(messages, {
+      usageTokens: 800,
+      coveredMessageCount: messages.length,
+    }, 1_000), 800)
+  })
+
+  it('按真实 System 与工具 schema 生成固定请求开销', async () => {
+    const overhead = await estimateRequestContextOverhead(
       '你是 WhyCode。',
-      [{ role: 'user', content: '检查这个项目' }],
       {
         ReadFile: tool({
           description: '读取文件',
@@ -61,8 +126,7 @@ describe('视觉上下文估算', () => {
       },
     )
 
-    assert.ok(breakdown.systemPromptTokens > 0)
-    assert.ok(breakdown.toolTokens > 0)
-    assert.ok(breakdown.messageTokens > 0)
+    assert.ok(overhead.systemPromptTokens > 0)
+    assert.ok(overhead.toolTokens > 0)
   })
 })

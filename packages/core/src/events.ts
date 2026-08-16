@@ -31,6 +31,8 @@ export interface UsageInfo {
 export interface ContextUsageInfo {
   usedTokens: number
   contextWindow: number
+  /** 达到该压力后，在下一次模型请求前自动压缩。 */
+  autoCompactThreshold: number
   breakdown: {
     systemPromptTokens: number
     toolTokens: number
