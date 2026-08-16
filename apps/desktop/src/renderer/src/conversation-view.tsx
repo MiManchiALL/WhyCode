@@ -7,6 +7,7 @@ import {
   type ConversationSection,
 } from './conversation-sections.ts'
 import {
+  assistantTextRenderState,
   sameConversationBlockRenderProps,
   type ConversationBlockRenderProps,
 } from './conversation-render-cache.ts'
@@ -183,6 +184,7 @@ function conversationBlockProps(
   props: ConversationViewProps,
   block: Block,
 ): ConversationBlockRenderProps {
+  const textRendering = assistantTextRenderState(block)
   const editable = block.id === props.editableBlockId
   const showCheckpointRestore = block.kind === 'tool'
     && props.checkpointRestoreAnchorIds.has(block.call.id)
@@ -195,8 +197,7 @@ function conversationBlockProps(
     showCheckpointRestore,
     checkpointRestorePending: block.kind === 'tool'
       && props.checkpointRestoreToolUseId === block.call.id,
-    streamingAssistantText: false,
-    renderMath: true,
+    ...textRendering,
     showAssistantActions: false,
     forkTurnId: null,
     forkPending: false,

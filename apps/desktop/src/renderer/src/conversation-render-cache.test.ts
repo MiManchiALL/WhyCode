@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { Block } from './conversation-state.ts'
 import {
+  assistantTextRenderState,
   sameConversationBlockRenderProps,
   type ConversationBlockRenderProps,
 } from './conversation-render-cache.ts'
@@ -33,6 +34,22 @@ function props(block: Block): ConversationBlockRenderProps {
 }
 
 describe('对话块脏尾部渲染边界', () => {
+  it('活动中的 pending 正文使用流式解析并延后完整数学排版', () => {
+    const pending: Block = {
+      kind: 'text', id: 'pending', text: String.raw`$$x^2$$`, phase: 'pending',
+    }
+    const final: Block = { ...pending, phase: 'final' }
+
+    assert.deepEqual(assistantTextRenderState(pending), {
+      streamingAssistantText: true,
+      renderMath: false,
+    })
+    assert.deepEqual(assistantTextRenderState(final), {
+      streamingAssistantText: false,
+      renderMath: true,
+    })
+  })
+
   it('保留未变化历史块的渲染结果', () => {
     const block: Block = { kind: 'text', id: 'answer', text: '完成', phase: 'final' }
     const previous = props(block)
