@@ -44,6 +44,13 @@ export function createTaskContextMessage(
   continuation?: { turnId: string; engagedPlanId: string },
 ): ModelMessage | null {
   if (!state.activePlan) return null
+  return createTaskStateMessage(state, continuation)
+}
+
+export function createTaskStateMessage(
+  state: TaskPlanState,
+  continuation?: { turnId: string; engagedPlanId: string },
+): ModelMessage {
   return {
     role: 'user',
     content: [

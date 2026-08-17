@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { simulateReadableStream } from 'ai'
+import { simulateReadableStream, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
@@ -115,7 +115,7 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(updates.at(-1)?.type === 'task-plan-updated' && updates.at(-1)?.plan.status, 'completed')
   })
 
-  it('模型自然给出最终正文时结束未完成计划，不追加提醒或残留 active 状态', async () => {
+  it('模型自然给出最终正文时结束未完成计划，只发布一次零状态边界', async () => {
     const model = modelWithSteps([
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '不能半途结束',
@@ -126,6 +126,8 @@ describe('Main 长任务端到端控制', () => {
         ],
       }),
       finalStep('已经完成'),
+      finalStep('普通回答一'),
+      finalStep('普通回答二'),
     ])
     const { session, events } = createSession(model)
 
@@ -135,8 +137,14 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(model.doStreamCalls.length, 2)
     assert.equal(events.some((event) => event.type === 'error'), false)
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
+    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 1)
     const updates = events.filter((event) => event.type === 'task-plan-updated')
     assert.equal(updates.at(-1)?.type === 'task-plan-updated' && updates.at(-1)?.plan.status, 'ended')
+
+    assert.equal(await session.handleUserMessage('后续普通问题一'), 'completed')
+    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 1)
+    assert.equal(await session.handleUserMessage('后续普通问题二'), 'completed')
+    assert.equal(countClosedTaskStateReminders(session.captureMessageSnapshot()), 1)
   })
 
   it('engaged 计划连续十个模型步骤未更新时注入轻提醒', async () => {
@@ -257,6 +265,42 @@ describe('Main 长任务端到端控制', () => {
     const manualContext = JSON.stringify(session.captureMessageSnapshot())
     assert.match(manualContext, /whycode-task-state/)
     assert.doesNotMatch(manualContext, /whycode-task-continuation/)
+  })
+
+  it('完整压缩只重建曾产生过的当前 TaskState', async () => {
+    const closedModel = compactingModel([])
+    const { session: closedSession } = createSession(closedModel)
+    closedSession.restoreTaskStateSnapshot({
+      version: 4,
+      activePlan: null,
+      resumeRequired: false,
+      interruptionReason: null,
+    })
+    closedSession.restoreMessageSnapshot([
+      { role: 'user', content: '手动压缩已结束任务的长对话' },
+      { role: 'assistant', content: '此前回答'.repeat(20_000) },
+    ])
+
+    await closedSession.compactNow()
+
+    const closedContext = JSON.stringify(closedSession.captureMessageSnapshot())
+    assert.match(closedContext, /whycode-task-state/)
+    assert.match(closedContext, /active_plan\\?\":null/)
+    assert.doesNotMatch(closedContext, /whycode-task-continuation/)
+
+    const untouchedModel = compactingModel([])
+    const { session: untouchedSession } = createSession(untouchedModel)
+    untouchedSession.restoreMessageSnapshot([
+      { role: 'user', content: '手动压缩从未建立计划的长对话' },
+      { role: 'assistant', content: '此前回答'.repeat(20_000) },
+    ])
+
+    await untouchedSession.compactNow()
+
+    assert.doesNotMatch(
+      JSON.stringify(untouchedSession.captureMessageSnapshot()),
+      /whycode-task-state/,
+    )
   })
 
   it('自然语言暂停不需要计划工具，活动计划保持保存', async () => {
@@ -606,6 +650,14 @@ function createSession(model: MockLanguageModelV4, projectDir: string = process.
     }),
     events,
   }
+}
+
+function countClosedTaskStateReminders(messages: ModelMessage[]): number {
+  return messages.filter((message) =>
+    typeof message.content === 'string'
+    && message.content.includes('<whycode-task-state')
+    && message.content.includes('"active_plan":null'),
+  ).length
 }
 
 function assertStableTaskPlanTools(names: string[]): void {

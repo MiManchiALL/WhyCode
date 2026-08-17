@@ -759,6 +759,50 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
+  it('自然结束的零状态随会话重启和 Fork 保留', async () => {
+    const root = await temporaryDirectory()
+    const store = new SessionStore(root)
+    const journal = await store.create({
+      workspace: localWorkspace(null),
+      modelId: 'test:interruption',
+    })
+    const events: CoreEvent[] = []
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id }),
+        finalStep('任务已经完成。'),
+      ],
+    })
+    const session = createSession(model, journal, (event) => events.push(event))
+    session.restoreTaskStateSnapshot(activeState())
+    const inputId = crypto.randomUUID()
+    await journal.recordUserInputWithId(inputId, '继续完成旧任务', true)
+
+    assert.equal(
+      await session.handleUserMessage('继续完成旧任务', false, [], inputId),
+      'completed',
+    )
+    const turnId = events.find((event) => event.type === 'turn-start')?.turnId
+    assert.ok(turnId)
+    await journal.recordViewEvents([{
+      type: 'core-event',
+      event: {
+        type: 'work-finished',
+        durationMs: 10,
+        outcome: 'completed',
+        forkTurnId: turnId,
+      },
+    }])
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.initialTaskState.activePlan, null)
+    assert.equal(reopened.initialMessages.filter(isClosedTaskStateReminder).length, 1)
+
+    const forked = await store.fork(reopened, turnId, reopened.metadataSnapshot.workspace)
+    assert.equal(forked.initialTaskState.activePlan, null)
+    assert.equal(forked.initialMessages.filter(isClosedTaskStateReminder).length, 1)
+  })
+
   it('运行中 urgent steering 仍属于当前回合，不生成停止边界或休眠计划', async () => {
     let requestCount = 0
     const remainingSteps = [
@@ -1090,6 +1134,12 @@ function activeState(): TaskPlanState {
     resumeRequired: false,
     interruptionReason: null,
   }
+}
+
+function isClosedTaskStateReminder(message: { content: unknown }): boolean {
+  return typeof message.content === 'string'
+    && message.content.includes('<whycode-task-state')
+    && message.content.includes('"active_plan":null')
 }
 
 function abortableStep(signal?: AbortSignal) {

@@ -111,6 +111,7 @@ import type { TaskPlanState } from '../tasks/types.ts'
 import {
   createTaskContextMessage,
   createTaskExecutionBoundaryMessage,
+  createTaskStateMessage,
   taskContextBlock,
 } from '../tasks/context.ts'
 import {
@@ -1585,7 +1586,7 @@ export class AgentSession {
     turnId?: string,
   ): string | undefined {
     const state = this.taskPlan?.stateSnapshot
-    const taskContext = state?.activePlan
+    const taskContext = state && state.version > 0
       ? taskContextBlock(
           state,
           planExecutionEngaged && turnId && state.activePlan
@@ -1994,6 +1995,7 @@ export class AgentSession {
         throw new UndeliverableModelResponseError(finishReason)
       }
       let awaitingTaskPlanContinuation = false
+      let taskPlanClosedNaturally = false
       if (
         !hadToolCalls
         && planExecutionEngaged
@@ -2007,10 +2009,17 @@ export class AgentSession {
           if (!awaitingTaskPlanContinuation) {
             const finalized = this.taskPlan!.finishNaturalRun()
             if (!finalized.ok) throw new Error(finalized.message)
+            taskPlanClosedNaturally = true
           }
         }
       }
       const taskPlanCommit = this.taskPlan?.commitStep()
+      const naturallyClosedTaskState = taskPlanClosedNaturally
+        ? taskPlanCommit?.state
+        : undefined
+      if (taskPlanClosedNaturally && !naturallyClosedTaskState) {
+        throw new Error('自然结束任务计划后未生成状态提交')
+      }
       taskPlanFinalized = Boolean(this.taskPlan)
       const planRemainsActive = Boolean(
         taskPlanCommit ? taskPlanCommit.state.activePlan : this.taskPlan?.snapshot,
@@ -2024,6 +2033,9 @@ export class AgentSession {
           || taskPlanCommit !== undefined
         )
       const internalMarkers: ModelMessage[] = []
+      if (naturallyClosedTaskState) {
+        internalMarkers.push(createTaskStateMessage(naturallyClosedTaskState))
+      }
       if (consumeInterruptionBoundary) {
         internalMarkers.push(createTurnAbortedConsumedMessage())
       }
