@@ -29,7 +29,7 @@ export function QuestionCard({ question, disabled, onAnswer }: QuestionCardProps
   const progress = useQuestionProgress(items, disabled, onAnswer)
   return (
     <form
-      className="wc-paper-card wc-paper-blue wc-paper-shape-a wc-paper-compact-pad text-sm"
+      className="wc-question-composer text-sm"
       onSubmit={(event) => submitQuestion(event, progress.advance)}
     >
       <QuestionHeading
@@ -99,11 +99,11 @@ function QuestionHeading({
 }) {
   return (
     <>
-      <div className="mb-1 flex items-center justify-between gap-3 text-xs font-medium text-[var(--wc-blue-ink)]">
+      <div className="mb-0.5 flex items-center justify-between gap-3 text-xs font-medium text-[var(--wc-blue-ink)]">
         <span>{item.header}</span>
         {total > 1 && <span>{currentIndex + 1} / {total}</span>}
       </div>
-      <div className="mb-3 font-medium text-[var(--wc-ink)]">{item.question}</div>
+      <div className="mb-2 font-medium leading-5 text-[var(--wc-ink)]">{item.question}</div>
     </>
   )
 }
@@ -122,16 +122,12 @@ function QuestionOptions({
   onAdvance: (answer: string) => void
 }) {
   return (
-    <div className="mb-3 grid gap-2 sm:grid-cols-2">
+    <div className="wc-question-options mb-2 grid gap-1">
       {item.options.map((option, index) => (
         <button
           key={`${index}-${option.label}`}
           type="button"
-          className={`wc-focus-ring rounded-xl border bg-white/85 p-2.5 text-left disabled:opacity-40 ${
-            answer === option.label
-              ? 'border-[#81939c] ring-1 ring-[#81939c]/30'
-              : 'border-[var(--wc-line)] hover:border-[var(--wc-line-strong)]'
-          }`}
+          className="wc-menu-item wc-question-option wc-focus-ring disabled:opacity-40"
           disabled={disabled}
           aria-pressed={answer === option.label}
           onClick={() => onSelect(option.label)}
@@ -141,8 +137,11 @@ function QuestionOptions({
             onAdvance(option.label)
           }}
         >
-          <div className="font-medium text-[var(--wc-ink)]">{option.label}</div>
-          <div className="mt-0.5 text-xs text-[var(--wc-muted)]">{option.description}</div>
+          <span className="wc-question-option-index" aria-hidden="true">{index + 1}</span>
+          <span className="min-w-0">
+            <span className="block font-medium text-[var(--wc-ink)]">{option.label}</span>
+            <span className="block text-[0.7rem] leading-4 text-[var(--wc-muted)]">{option.description}</span>
+          </span>
         </button>
       ))}
     </div>
@@ -164,7 +163,7 @@ function QuestionControls({
       {progress.currentIndex > 0 && (
         <button
           type="button"
-          className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-3 py-1.5 text-[var(--wc-muted)] disabled:opacity-40"
+          className="wc-focus-ring rounded-lg border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-xs text-[var(--wc-muted)] disabled:opacity-40"
           disabled={disabled}
           onClick={progress.previous}
         >
@@ -173,10 +172,10 @@ function QuestionControls({
       )}
       <input
         key={progress.currentIndex}
-        className="wc-focus-ring min-w-0 flex-1 rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-sm outline-none"
+        className="wc-focus-ring min-w-0 flex-1 rounded-lg border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-xs outline-none"
         value={progress.currentAnswer}
         disabled={disabled}
-        autoFocus={progress.currentIndex > 0}
+        autoFocus
         aria-label="当前问题的回答"
         placeholder="选择一个答案，或者直接输入"
         onChange={(event) => progress.updateCurrent(event.target.value)}
@@ -184,7 +183,7 @@ function QuestionControls({
       />
       <button
         type="submit"
-        className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-3 py-1.5 text-white disabled:opacity-40"
+        className="wc-focus-ring rounded-lg bg-[var(--wc-ink)] px-2.5 py-1.5 text-xs text-white disabled:opacity-40"
         disabled={disabled || !progress.currentAnswer.trim()}
       >
         {progress.isLast ? '回答' : '下一个'}

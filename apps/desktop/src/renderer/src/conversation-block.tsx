@@ -56,7 +56,10 @@ export function BlockView({
   }
   if (block.kind === 'text') {
     return (
-      <div className={`group max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}>
+      <div
+        className={`group max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}
+        data-conversation-scroll-block={block.id}
+      >
         <div className="prose prose-sm prose-neutral max-w-none">
           <MarkdownContent
             text={block.text}

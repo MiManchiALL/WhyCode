@@ -261,9 +261,9 @@ function applyStableCoreEvent(
         durationMs: event.durationMs,
         outcome: event.outcome,
       })
-      if (event.outcome !== 'stopped') return next
-      // 停止只冻结当时的展示：末尾正文已让处理过程收起时不反向展开。
-      if (isTerminalResponseBlock(completedState.blocks.at(-1))) return next
+      // 只有已提交的最终正文才能收起处理过程；工具等待、错误和停止都保持展开。
+      // 用户已在最终正文阶段手动展开时，既有 expanded 身份会原样保留。
+      if (hasCurrentWorkFinalText(completedState.blocks)) return next
       const expanded = new Set(next.expanded)
       expanded.add(currentWorkSectionId(completedState.blocks, durationId))
       return { ...next, expanded }
@@ -516,6 +516,12 @@ export function isTerminalResponseBlock(
   block: Block | undefined,
 ): block is Extract<Block, { kind: 'text' | 'error' }> {
   return (block?.kind === 'text' && block.phase === 'final') || block?.kind === 'error'
+}
+
+function hasCurrentWorkFinalText(blocks: readonly Block[]): boolean {
+  const workStart = blocks.findLastIndex((block) => block.kind === 'work-duration') + 1
+  return blocks.slice(workStart).some((block) =>
+    block.kind === 'text' && block.phase === 'final')
 }
 
 /** 与会话投影使用同一工作区身份：上一条时长之后，从本轮首条用户消息开始。 */

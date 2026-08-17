@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+} from 'react'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -82,6 +90,15 @@ import { TaskInspector } from './task-inspector.tsx'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import { PaperFrame } from './paper-frame.tsx'
 import { installPaperHoverTracking } from './paper-hover-tracking.ts'
+import {
+  applyExpandedOverrides,
+  ConversationPresentationCache,
+  type ConversationScrollPosition,
+} from './conversation-presentation.ts'
+import {
+  captureConversationScrollPosition,
+  restoreConversationScrollPosition,
+} from './conversation-scroll.ts'
 
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
@@ -122,6 +139,7 @@ export function App() {
   /** 协商进行中的状态条文案（null = 无协商） */
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
+  const conversationContentRef = useRef<HTMLDivElement>(null)
   const questionSubmittingRef = useRef(false)
   const sessionTransitionPendingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
@@ -143,6 +161,10 @@ export function App() {
     pdfs: PdfDraft[]
     skills: SkillSummary[]
   }>())
+  const conversationPresentationsRef = useRef(new ConversationPresentationCache())
+  const pendingScrollRestoreRef = useRef<ConversationScrollPosition | null>(null)
+  const expandedIdsRef = useRef(view.expanded)
+  expandedIdsRef.current = view.expanded
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
@@ -261,6 +283,17 @@ export function App() {
     }
   }, [captureSkills, detachImageDrafts, detachPdfDrafts])
 
+  const stashActivePresentation = useCallback(() => {
+    const currentRuntimeId = runtimeIdRef.current
+    const scrollElement = scrollRef.current
+    if (!currentRuntimeId || !scrollElement) return
+    const key = composerKey(currentRuntimeId, sessionIdRef.current)
+    conversationPresentationsRef.current.saveScroll(
+      key,
+      captureConversationScrollPosition(scrollElement),
+    )
+  }, [])
+
   const resetActiveComposer = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
     const currentSessionId = sessionIdRef.current
@@ -371,7 +404,10 @@ export function App() {
 
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
-    if (changingRuntime) stashActiveComposer()
+    if (changingRuntime) {
+      stashActiveComposer()
+      stashActivePresentation()
+    }
     if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
     runtimeIdRef.current = snapshot.runtimeId
     sessionIdRef.current = snapshot.sessionId
@@ -389,7 +425,26 @@ export function App() {
         restorePdfDrafts(draft.pdfs)
       }
     }
-    setView(createConversationState(snapshot.viewEvents, snapshot.viewEventTimestamps))
+    const presentation = conversationPresentationsRef.current.get(
+      composerKey(snapshot.runtimeId, snapshot.sessionId),
+    )
+    const replayedView = createConversationState(
+      snapshot.viewEvents,
+      snapshot.viewEventTimestamps,
+    )
+    setView({
+      ...replayedView,
+      expanded: applyExpandedOverrides(
+        replayedView.expanded,
+        presentation?.expandedOverrides,
+      ),
+    })
+    if (changingRuntime) {
+      const scroll = presentation?.scroll ?? { atBottom: true, scrollTop: 0 }
+      pendingScrollRestoreRef.current = scroll
+      stickToBottom.current = scroll.atBottom
+      setShowJumpBottom(!scroll.atBottom)
+    }
     setWorkspace(snapshot.workspace)
     setPermMode(snapshot.permissionMode)
     setContextUsage(snapshot.contextUsage)
@@ -417,6 +472,7 @@ export function App() {
     setDeletionBlocksRuntime,
     setResumingSessionId,
     stashActiveComposer,
+    stashActivePresentation,
   ])
 
   const synchronizeUnownedResume = useCallback(async () => {
@@ -648,6 +704,30 @@ export function App() {
     synchronizeUnownedResume,
   ])
 
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoreRef.current
+    const scrollElement = scrollRef.current
+    if (!pending || !scrollElement) return
+    pendingScrollRestoreRef.current = null
+    const restored = restoreConversationScrollPosition(pending, scrollElement)
+    stickToBottom.current = restored.atBottom
+    setShowJumpBottom(!restored.atBottom)
+  }, [runtimeId])
+
+  useEffect(() => {
+    const scrollElement = scrollRef.current
+    const contentElement = conversationContentRef.current
+    if (!scrollElement || !contentElement) return
+    // Markdown/公式与离屏段变为真实高度后，贴底语义仍应指向新的真实底部。
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottom.current) return
+      scrollElement.scrollTop = scrollElement.scrollHeight
+      setShowJumpBottom(false)
+    })
+    observer.observe(contentElement)
+    return () => observer.disconnect()
+  }, [])
+
   useEffect(() => {
     if (stickToBottom.current) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -803,8 +883,6 @@ export function App() {
         return
       }
       applyRuntimeSnapshot(result.snapshot)
-      stickToBottom.current = true
-      setShowJumpBottom(false)
       setSessionActionError(null)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
@@ -840,6 +918,7 @@ export function App() {
         const detachedDraft = composerDraftsRef.current.get(sessionId)
         if (detachedDraft) releaseImageDrafts(detachedDraft.images)
         composerDraftsRef.current.delete(sessionId)
+        conversationPresentationsRef.current.delete(sessionId)
         for (const [eventRuntimeId, events] of backgroundEventsRef.current) {
           if (events.some((entry) => entry.sessionId === sessionId)) {
             backgroundEventsRef.current.delete(eventRuntimeId)
@@ -849,6 +928,7 @@ export function App() {
       if (result.deletedCurrent) {
         resetActiveComposer()
         if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
+        conversationPresentationsRef.current.delete(sessionId)
         void window.whycode.consensusStatus().then(setConsensus)
       }
       if (!result.ok) addError(result.error ?? '删除会话失败')
@@ -887,8 +967,6 @@ export function App() {
         return
       }
       applyRuntimeSnapshot(result.snapshot)
-      stickToBottom.current = true
-      setShowJumpBottom(false)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
       void refreshModels()
@@ -1135,7 +1213,15 @@ export function App() {
   }, [approval, sendRuntimeCommand])
 
   const toggle = useCallback((id: string) => {
-    setView((previous) => toggleExpanded(previous, id))
+    const shouldExpand = !expandedIdsRef.current.has(id)
+    const nextExpanded = new Set(expandedIdsRef.current)
+    shouldExpand ? nextExpanded.add(id) : nextExpanded.delete(id)
+    expandedIdsRef.current = nextExpanded
+    const key = composerKey(runtimeIdRef.current, sessionIdRef.current)
+    conversationPresentationsRef.current.setExpanded(key, id, shouldExpand)
+    setView((current) => current.expanded.has(id) === shouldExpand
+      ? current
+      : toggleExpanded(current, id))
   }, [])
 
   const selectedModel = models.find((model) => model.id === modelId)
@@ -1243,7 +1329,7 @@ export function App() {
               onScroll={onScroll}
               className="wc-scrollbar relative min-h-0 flex-1 overflow-y-auto px-5 py-5"
             >
-              <div className="mx-auto w-full max-w-4xl">
+              <div ref={conversationContentRef} className="mx-auto w-full max-w-4xl">
                 {!conversationStarted && (
                   <div className="mx-auto mt-[18vh] max-w-md text-center">
                     <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
@@ -1292,19 +1378,6 @@ export function App() {
                   </button>
                 )}
 
-                {view.pendingQuestion && (
-                  <div className="mb-2">
-                    <PaperFrame>
-                      <QuestionCard
-                        key={view.pendingQuestion.id}
-                        question={view.pendingQuestion}
-                        disabled={interactionBusy || stopping || questionSubmitting}
-                        onAnswer={answerQuestion}
-                      />
-                    </PaperFrame>
-                  </div>
-                )}
-
                 {approval && (
                   <div className="mb-2">
                     <PaperFrame>
@@ -1339,119 +1412,130 @@ export function App() {
                 )}
 
                 <footer className="wc-composer relative p-2.5">
-                  {skillTrigger && !attachmentLocked && (
-                    <ComposerSlashMenu
-                      items={composerMenuItems}
-                      activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
-                      diagnostics={skillCatalog.diagnostics}
-                      limitReached={skillLimitReached}
-                      onSelect={selectComposerMenuItem}
-                      onActivate={setSkillActiveIndex}
+                  {view.pendingQuestion ? (
+                    <QuestionCard
+                      key={view.pendingQuestion.id}
+                      question={view.pendingQuestion}
+                      disabled={interactionBusy || stopping || questionSubmitting}
+                      onAnswer={answerQuestion}
                     />
+                  ) : (
+                    <>
+                      {skillTrigger && !attachmentLocked && (
+                        <ComposerSlashMenu
+                          items={composerMenuItems}
+                          activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
+                          diagnostics={skillCatalog.diagnostics}
+                          limitReached={skillLimitReached}
+                          onSelect={selectComposerMenuItem}
+                          onActivate={setSkillActiveIndex}
+                        />
+                      )}
+
+                      {!conversationStarted && (
+                        <WorkspaceContextBar
+                          workspace={workspace}
+                          candidate={workspaceCandidate}
+                          projectDir={projectDir}
+                          baseRef={contextBaseRef}
+                          busy={sessionChangeLocked}
+                          onPickProject={pickProject}
+                          onClearProject={startNewSession}
+                          onStart={startWorkspaceSession}
+                        />
+                      )}
+
+                      <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
+                      <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
+                      <SkillChips
+                        skills={selectedSkills}
+                        disabled={attachmentLocked}
+                        onRemove={removeSelectedSkill}
+                      />
+
+                      <textarea
+                        ref={composerTextareaRef}
+                        rows={2}
+                        className="wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-sm leading-6 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
+                        value={input}
+                        onChange={(event) => {
+                          const text = event.target.value
+                          inputRef.current = text
+                          setInput(text)
+                          updateSkillMenu(text, event.target.selectionStart)
+                        }}
+                        onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
+                        onBlur={closeSkillMenu}
+                        onPaste={pasteAttachments}
+                        disabled={composerDisabled}
+                        onKeyDown={(event) => {
+                          if (handlePickerKeyDown(event)) return
+                          const action = composerKeyAction({
+                            key: event.key,
+                            shiftKey: event.shiftKey,
+                            ctrlKey: event.ctrlKey,
+                            isComposing: event.nativeEvent.isComposing,
+                          })
+                          if (action === 'ignore' || action === 'newline') return
+                          event.preventDefault()
+                          send(action === 'send-immediately')
+                        }}
+                        placeholder={
+                          stopping
+                            ? '正在停止当前任务并清理子进程…'
+                            : sessionTransitionPending
+                              ? '正在切换会话…'
+                              : deletionBlocksRuntime
+                                ? '正在删除当前会话及其关联数据…'
+                                : resumingSessionId
+                                  ? '输入消息…'
+                                  : checkpointRestoreToolUseId
+                                    ? '正在安全回滚文件，请等待完成…'
+                                    : status === 'waiting-approval'
+                                      ? 'Agent 在等你审批上方的请求…'
+                                      : busy
+                                        ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
+                                        : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
+                        }
+                      />
+
+                      <ComposerToolbar
+                        canAttachImages={canAttachImages}
+                        canAttachPdfs={canAttachPdfs}
+                        attachmentLocked={attachmentLocked}
+                        configurationLocked={attachmentLocked}
+                        permissionLocked={
+                          sessionTransitionPending
+                          || deletionBlocksRuntime
+                          || resumingSessionId !== null
+                        }
+                        permMode={permMode}
+                        consensus={consensus}
+                        models={models}
+                        modelId={modelId}
+                        reasoningEffort={reasoningEffort}
+                        contextUsage={contextUsage}
+                        busy={busy}
+                        stopping={stopping}
+                        stopDisabled={
+                          stopping
+                          || sessionTransitionPending
+                          || deletionBlocksRuntime
+                          || resumingSessionId !== null
+                          || checkpointRestoreToolUseId !== null
+                        }
+                        sendDisabled={sendDisabled}
+                        onImageFiles={addImageFiles}
+                        onPdfFiles={addPdfFiles}
+                        onPermissionChange={changePermission}
+                        onToggleConsensus={toggleConsensus}
+                        onModelChange={changeModel}
+                        onReasoningEffortChange={changeReasoningEffort}
+                        onSend={() => send(false)}
+                        onStop={stop}
+                      />
+                    </>
                   )}
-
-                  {!conversationStarted && (
-                    <WorkspaceContextBar
-                      workspace={workspace}
-                      candidate={workspaceCandidate}
-                      projectDir={projectDir}
-                      baseRef={contextBaseRef}
-                      busy={sessionChangeLocked}
-                      onPickProject={pickProject}
-                      onClearProject={startNewSession}
-                      onStart={startWorkspaceSession}
-                    />
-                  )}
-
-                  <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
-                  <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
-                  <SkillChips
-                    skills={selectedSkills}
-                    disabled={attachmentLocked}
-                    onRemove={removeSelectedSkill}
-                  />
-
-                  <textarea
-                    ref={composerTextareaRef}
-                    rows={2}
-                    className="wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-sm leading-6 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
-                    value={input}
-                    onChange={(event) => {
-                      const text = event.target.value
-                      inputRef.current = text
-                      setInput(text)
-                      updateSkillMenu(text, event.target.selectionStart)
-                    }}
-                    onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
-                    onBlur={closeSkillMenu}
-                    onPaste={pasteAttachments}
-                    disabled={composerDisabled}
-                    onKeyDown={(event) => {
-                      if (handlePickerKeyDown(event)) return
-                      const action = composerKeyAction({
-                        key: event.key,
-                        shiftKey: event.shiftKey,
-                        ctrlKey: event.ctrlKey,
-                        isComposing: event.nativeEvent.isComposing,
-                      })
-                      if (action === 'ignore' || action === 'newline') return
-                      event.preventDefault()
-                      send(action === 'send-immediately')
-                    }}
-                    placeholder={
-                      stopping
-                        ? '正在停止当前任务并清理子进程…'
-                        : sessionTransitionPending
-                          ? '正在切换会话…'
-                          : deletionBlocksRuntime
-                            ? '正在删除当前会话及其关联数据…'
-                            : resumingSessionId
-                              ? '输入消息…'
-                              : checkpointRestoreToolUseId
-                                ? '正在安全回滚文件，请等待完成…'
-                                : status === 'waiting-approval'
-                                  ? 'Agent 在等你审批上方的请求…'
-                                  : busy
-                                    ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
-                                    : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
-                    }
-                  />
-
-                  <ComposerToolbar
-                    canAttachImages={canAttachImages}
-                    canAttachPdfs={canAttachPdfs}
-                    attachmentLocked={attachmentLocked}
-                    configurationLocked={attachmentLocked}
-                    permissionLocked={
-                      sessionTransitionPending
-                      || deletionBlocksRuntime
-                      || resumingSessionId !== null
-                    }
-                    permMode={permMode}
-                    consensus={consensus}
-                    models={models}
-                    modelId={modelId}
-                    reasoningEffort={reasoningEffort}
-                    contextUsage={contextUsage}
-                    busy={busy}
-                    stopping={stopping}
-                    stopDisabled={
-                      stopping
-                      || sessionTransitionPending
-                      || deletionBlocksRuntime
-                      || resumingSessionId !== null
-                      || checkpointRestoreToolUseId !== null
-                    }
-                    sendDisabled={sendDisabled}
-                    onImageFiles={addImageFiles}
-                    onPdfFiles={addPdfFiles}
-                    onPermissionChange={changePermission}
-                    onToggleConsensus={toggleConsensus}
-                    onModelChange={changeModel}
-                    onReasoningEffortChange={changeReasoningEffort}
-                    onSend={() => send(false)}
-                    onStop={stop}
-                  />
                 </footer>
               </div>
             </div>

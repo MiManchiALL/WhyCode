@@ -80,6 +80,7 @@ function WorkSection({
   return (
     <section
       className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}
+      data-conversation-scroll-section={section.id}
       data-source-scope=""
     >
       {section.userBlocks.map((block) => (

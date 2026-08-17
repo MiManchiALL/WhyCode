@@ -297,6 +297,56 @@ describe('会话界面时间线重建', () => {
     assert.equal(manuallyExpanded.expanded.has('work-b0'), true)
   })
 
+  it('提问工具结束当前 turn 时保持处理过程展开', () => {
+    const question = {
+      id: 'question-waiting',
+      questions: [{
+        header: '实现偏好',
+        question: '你更看重哪一点？',
+        options: [
+          { label: '简单可靠', description: '减少复杂度' },
+          { label: '功能完整', description: '覆盖更多场景' },
+        ],
+      }],
+    }
+    let state = createConversationState([{
+      type: 'user-message',
+      text: '完成这个任务',
+      startsTurn: true,
+    }])
+    state = applyCoreEvent(state, { type: 'thinking-delta', text: '先检查现状' })
+    state = applyCoreEvent(state, { type: 'thinking-end', durationMs: 500 })
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'ask-1',
+      toolName: 'AskUserQuestion',
+      input: { questions: question.questions },
+    })
+    state = applyCoreEvent(state, {
+      type: 'tool-end',
+      toolUseId: 'ask-1',
+      result: '等待用户回答',
+      isError: false,
+    })
+    state = applyCoreEvent(state, { type: 'user-question', question })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 1_500,
+      outcome: 'completed',
+      forkTurnId: null,
+    })
+
+    const completed = conversationSections(state.blocks)[0]
+    assert.equal(completed?.kind, 'completed-work')
+    assert.equal(state.expanded.has('work-b0'), true)
+    assert.equal(
+      completed?.kind === 'completed-work' ? completed.finalBlocks.length : -1,
+      0,
+    )
+    assert.deepEqual(state.pendingQuestion, question)
+  })
+
   it('显式 Skill 摘要随根消息和插话进入可见时间线', () => {
     const skill = {
       id: `skill:${'a'.repeat(64)}`,

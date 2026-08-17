@@ -618,6 +618,56 @@ button:not(:disabled),
   opacity: 0.6;
 }
 
+.wc-question-composer {
+  width: 100%;
+  padding: 0.15rem 0.1rem;
+}
+
+.wc-question-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.wc-question-option {
+  height: auto;
+  align-items: flex-start;
+  gap: 0.5rem;
+  text-align: left;
+  white-space: normal;
+}
+
+.wc-question-option-index {
+  display: grid;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.4rem;
+  background: rgb(82 99 108 / 9%);
+  color: var(--wc-blue-ink);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.wc-question-option:hover:not(:disabled) {
+  background: rgb(52 56 50 / 5%);
+}
+
+.wc-question-option[aria-pressed='true'] {
+  background: rgb(82 99 108 / 9%);
+  box-shadow: inset 0 0 0 1px rgb(82 99 108 / 18%);
+}
+
+.wc-question-option[aria-pressed='true'] .wc-question-option-index {
+  background: var(--wc-blue-ink);
+  color: white;
+}
+
+@container (max-width: 34rem) {
+  .wc-question-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .wc-menu-content[data-state='open'],
 .wc-popover-content[data-state='open'] {
   animation: wc-pop-in 140ms ease-out;
