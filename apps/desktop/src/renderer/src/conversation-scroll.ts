@@ -15,6 +15,11 @@ interface MaterializedSection {
   contain: string
 }
 
+interface ConversationScrollRestoration {
+  position: ConversationScrollPosition
+  release: () => void
+}
+
 export function captureConversationScrollPosition(
   scroller: HTMLElement,
 ): ConversationScrollPosition {
@@ -27,31 +32,35 @@ export function captureConversationScrollPosition(
 export function restoreConversationScrollPosition(
   position: ConversationScrollPosition,
   scroller: HTMLElement,
-): ConversationScrollPosition {
+): ConversationScrollRestoration {
   const savedAnchor = position.atBottom ? undefined : position.anchor
   const section = savedAnchor
     ? findByDataValue(scroller, SECTION_SELECTOR, 'conversationScrollSection', savedAnchor.sectionId)
     : null
   if (!savedAnchor || !section) {
     scroller.scrollTop = restoredScrollTop(position, scroller)
-    return captureScrollPosition(scroller)
+    return { position: captureScrollPosition(scroller), release: noop }
   }
 
   const materialized = materializeSectionsThrough(scroller, section)
-  try {
-    const anchor = resolveScrollAnchor(section, savedAnchor)
-    const anchorTop = elementTopWithinScroller(scroller, anchor)
-    const desiredScrollTop = Math.max(0, anchorTop + savedAnchor.offset)
-    materializeTailUntilScrollable(scroller, section, desiredScrollTop, materialized)
-    scroller.scrollTop = restoredAnchorScrollTop(
-      anchorTop,
-      savedAnchor.offset,
-      scroller,
-    )
-  } finally {
-    finalizeMaterializedSections(materialized)
+  const anchor = resolveScrollAnchor(section, savedAnchor)
+  const anchorTop = elementTopWithinScroller(scroller, anchor)
+  const desiredScrollTop = Math.max(0, anchorTop + savedAnchor.offset)
+  materializeTailUntilScrollable(scroller, section, desiredScrollTop, materialized)
+  scroller.scrollTop = restoredAnchorScrollTop(
+    anchorTop,
+    savedAnchor.offset,
+    scroller,
+  )
+
+  const retained = materialized.find(({ element }) => element === section)
+  releaseMaterializedSections(materialized.filter((entry) => entry !== retained))
+  return {
+    position: captureScrollPosition(scroller),
+    release: retained
+      ? retainVisibleSection(scroller, retained)
+      : noop,
   }
-  return captureScrollPosition(scroller)
 }
 
 function captureConversationScrollAnchor(
@@ -173,7 +182,7 @@ function materializeSection(
   section.style.setProperty('contain', 'layout style paint')
 }
 
-function finalizeMaterializedSections(materialized: MaterializedSection[]): void {
+function releaseMaterializedSections(materialized: MaterializedSection[]): void {
   const measuredHeights = materialized.map(({ element }) => (
     element.getBoundingClientRect().height
   ))
@@ -196,6 +205,30 @@ function finalizeMaterializedSections(materialized: MaterializedSection[]): void
   }
 }
 
+function retainVisibleSection(
+  scroller: HTMLElement,
+  retained: MaterializedSection,
+): () => void {
+  let released = false
+  let hasIntersected = false
+  const observer = typeof IntersectionObserver === 'undefined'
+    ? null
+    : new IntersectionObserver(([entry]) => {
+        if (entry?.isIntersecting) hasIntersected = true
+        else if (hasIntersected) release()
+      }, { root: scroller })
+  observer?.observe(retained.element)
+
+  function release(): void {
+    if (released) return
+    released = true
+    observer?.disconnect()
+    releaseMaterializedSections([retained])
+  }
+
+  return release
+}
+
 function elementTopWithinScroller(scroller: HTMLElement, element: HTMLElement): number {
   return scroller.scrollTop
     + element.getBoundingClientRect().top
@@ -205,3 +238,5 @@ function elementTopWithinScroller(scroller: HTMLElement, element: HTMLElement): 
 function maximumScrollTop(scroller: HTMLElement): number {
   return Math.max(0, scroller.scrollHeight - scroller.clientHeight)
 }
+
+function noop(): void {}

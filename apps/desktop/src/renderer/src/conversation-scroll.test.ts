@@ -37,7 +37,7 @@ describe('会话滚动锚定', () => {
     })
   })
 
-  it('以实测固有高度防止恢复后截断，并只校准维持目标视口所需的尾段', () => {
+  it('以实测固有高度防止截断，并让锚点段保持可见直到恢复事务释放', () => {
     const { document } = parseHTML(`
       <main id="scroll">
         <section class="wc-completed-work-section" data-conversation-scroll-section="work-1"></section>
@@ -71,7 +71,7 @@ describe('会话滚动锚定', () => {
       return rectangle(800 - currentScrollTop())
     }
 
-    const restored = restoreConversationScrollPosition({
+    const restoration = restoreConversationScrollPosition({
       atBottom: false,
       scrollTop: 300,
       anchor: {
@@ -82,8 +82,22 @@ describe('会话滚动锚定', () => {
       },
     }, scroller)
 
-    assert.equal(restored.scrollTop, 920)
+    assert.equal(restoration.position.scrollTop, 920)
     assert.equal(currentScrollTop(), 920)
+    assert.deepEqual(
+      sections.map((section) => section.style.getPropertyValue('content-visibility')),
+      ['', 'visible', '', ''],
+    )
+    assert.deepEqual(
+      sections.map((section) => section.style.getPropertyValue('contain')),
+      ['', 'layout style paint', '', ''],
+    )
+    assert.deepEqual(
+      sections.map((section) => section.style.getPropertyValue('contain-intrinsic-block-size')),
+      ['auto 500px', '', 'auto 600px', ''],
+    )
+
+    restoration.release()
     assert.deepEqual(
       sections.map((section) => section.style.getPropertyValue('content-visibility')),
       ['', '', '', ''],
@@ -92,9 +106,9 @@ describe('会话滚动锚定', () => {
       sections.map((section) => section.style.getPropertyValue('contain')),
       ['', '', '', ''],
     )
-    assert.deepEqual(
-      sections.map((section) => section.style.getPropertyValue('contain-intrinsic-block-size')),
-      ['auto 500px', 'auto 800px', 'auto 600px', ''],
+    assert.equal(
+      sections[1]!.style.getPropertyValue('contain-intrinsic-block-size'),
+      'auto 800px',
     )
   })
 })

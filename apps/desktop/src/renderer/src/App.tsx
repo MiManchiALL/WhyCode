@@ -758,9 +758,10 @@ export function App() {
     const scrollElement = scrollRef.current
     if (!pending || !scrollElement) return
     pendingScrollRestoreRef.current = null
-    const restored = restoreConversationScrollPosition(pending, scrollElement)
-    stickToBottom.current = restored.atBottom
-    setShowJumpBottom(!restored.atBottom)
+    const restoration = restoreConversationScrollPosition(pending, scrollElement)
+    stickToBottom.current = restoration.position.atBottom
+    setShowJumpBottom(!restoration.position.atBottom)
+    return restoration.release
   }, [runtimeId])
 
   useEffect(() => {
