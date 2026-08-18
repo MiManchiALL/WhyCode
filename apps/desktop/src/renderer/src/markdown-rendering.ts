@@ -1,13 +1,17 @@
+import { cjk } from '@streamdown/cjk'
 import { createMathPlugin } from '@streamdown/math'
 
+const BASE_MARKDOWN_PLUGINS = { cjk } as const
+
 const SETTLED_MARKDOWN_PLUGINS = {
+  ...BASE_MARKDOWN_PLUGINS,
   math: createMathPlugin({ singleDollarTextMath: true }),
 } as const
 
 const ATTACHED_DISPLAY_MATH = /^( {0,3})(\${2,})(?![ \t]*(?:\r?$))([\s\S]*?)\2[ \t]*(?=\r?$)/gmu
 
-export function markdownPluginsFor(enabled: boolean) {
-  return enabled ? SETTLED_MARKDOWN_PLUGINS : undefined
+export function markdownPluginsFor(renderMath: boolean) {
+  return renderMath ? SETTLED_MARKDOWN_PLUGINS : BASE_MARKDOWN_PLUGINS
 }
 
 export function normalizeDisplayMathFences(markdown: string): string {
