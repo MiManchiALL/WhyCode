@@ -9,10 +9,57 @@ import {
   normalizeDisplayMathFences,
 } from './markdown-rendering.ts'
 
-describe('Markdown 数学渲染', () => {
-  it('只在回复定稿后启用引用稳定的数学插件', () => {
-    assert.equal(markdownPluginsFor(false), undefined)
+describe('Markdown 渲染', () => {
+  it('流式与定稿阶段复用各自稳定的插件配置', () => {
+    assert.equal(markdownPluginsFor(false), markdownPluginsFor(false))
     assert.equal(markdownPluginsFor(true), markdownPluginsFor(true))
+    assert.notEqual(markdownPluginsFor(false), markdownPluginsFor(true))
+  })
+
+  it('流式与定稿阶段都按 CJK 边界渲染强调语法', () => {
+    const source = 'GitHub Actions 是**“按需触发”**的，每个 YAML 文件都是一个**完全独立的工作流**。'
+
+    for (const streaming of [true, false]) {
+      const document = renderedDocument(source, streaming)
+      const emphasized = [...document.querySelectorAll('[data-streamdown="strong"]')]
+        .map((node) => node.textContent)
+
+      assert.deepEqual(emphasized, ['“按需触发”', '完全独立的工作流'])
+      assert.equal(
+        document.body.textContent,
+        'GitHub Actions 是“按需触发”的，每个 YAML 文件都是一个完全独立的工作流。',
+      )
+    }
+  })
+
+  it('正确处理中文引号、括号和全角标点相邻的多个强调片段', () => {
+    const source = [
+      '一个**“工具箱”**：里面',
+      '单元测试（Unit Test）中的**“单元（Unit）”**，指的是软件中**最小的可测试部件**。',
+      '单元测试最大的特点是**“孤立测试”**（把被测对象从外部环境中剥离出来）。',
+    ].join('\n\n')
+    const document = renderedDocument(source, false)
+
+    assert.deepEqual(
+      [...document.querySelectorAll('[data-streamdown="strong"]')]
+        .map((node) => node.textContent),
+      ['“工具箱”', '“单元（Unit）”', '最小的可测试部件', '“孤立测试”'],
+    )
+    assert.doesNotMatch(document.body.textContent, /\*\*/u)
+  })
+
+  it('代码中的强调标记保持原文', () => {
+    const document = renderedDocument(
+      '代码：`一个**“工具箱”**：里面`；正文：一个**“工具箱”**：里面。',
+      false,
+    )
+
+    assert.equal(document.querySelector('code')?.textContent, '一个**“工具箱”**：里面')
+    assert.deepEqual(
+      [...document.querySelectorAll('[data-streamdown="strong"]')]
+        .map((node) => node.textContent),
+      ['“工具箱”'],
+    )
   })
 
   it('定稿后渲染行内公式和模型常见的同一行矩阵公式', () => {
