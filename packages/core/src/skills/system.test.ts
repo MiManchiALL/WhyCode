@@ -9,6 +9,7 @@ import {
   installSystemSkills,
   systemSkillsRoot,
   SYSTEM_SKILLS_MARKER_FILE,
+  userSkillsRoot,
 } from './system.ts'
 
 const EXPECTED_SYSTEM_SKILLS = [
@@ -26,7 +27,7 @@ const GENERAL_SKILL_CONTRACTS = new Map<string, readonly RegExp[]>([
   ['code-review', [/git merge-base HEAD <comparison-ref>/, /作者得知后大概率会修复/, /`P0`：普遍发生的发布阻断/]],
   ['debug', [/可证伪假设/, /首个错误状态/, /不凭猜测改代码/]],
   ['simplify', [/本次任务已编辑或用户明确指定/, /相同值或引用仍触发/, /不为单次使用新增抽象/]],
-  ['skill-creator', [/只询问会阻断设计/, /不复制其它宿主扩展字段/, /默认只写指令/]],
+  ['skill-creator', [/只询问会阻断设计/, /\.whycode\/skills\/<name>/, /默认只写指令/]],
   ['verify', [/测试通过只是辅助证据/, /反例或对抗性检查/, /PASS、FAIL 或 PARTIAL/]],
 ])
 
@@ -37,6 +38,7 @@ describe('内置 Skill 安装与发现', () => {
       const installed = await installSystemSkills(home)
       assert.equal(installed.changed, true)
       assert.equal(installed.rootPath, systemSkillsRoot(home))
+      assert.equal(dirname(installed.rootPath), userSkillsRoot(home))
 
       const snapshot = await new SkillCatalogService({ homeDir: home }).snapshot(null)
       assert.deepEqual(snapshot.skills.map((skill) => skill.name), EXPECTED_SYSTEM_SKILLS)
@@ -165,7 +167,7 @@ describe('内置 Skill 安装与发现', () => {
     const home = await mkdtemp(join(tmpdir(), 'whycode-system-skills-'))
     try {
       await installSystemSkills(home)
-      const userSkill = join(home, '.agents', 'skills', 'verify', 'SKILL.md')
+      const userSkill = join(userSkillsRoot(home), 'verify', 'SKILL.md')
       await mkdir(dirname(userSkill), { recursive: true })
       await writeFile(
         userSkill,

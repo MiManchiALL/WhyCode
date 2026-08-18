@@ -14,13 +14,17 @@ export interface SystemSkillsInstallResult {
   changed: boolean
 }
 
+export function userSkillsRoot(homeDir: string): string {
+  return join(resolve(homeDir), '.whycode', 'skills')
+}
+
 export function systemSkillsRoot(homeDir: string): string {
-  return join(resolve(homeDir), '.whycode', 'skills', SYSTEM_SKILLS_DIRECTORY)
+  return join(userSkillsRoot(homeDir), SYSTEM_SKILLS_DIRECTORY)
 }
 
 /**
  * 把随应用发布的 Skill 物化为可由统一磁盘读取链路消费的托管缓存。
- * `.system` 只存应用资产；指纹变化时整目录替换，用户 Skill 始终留在 `.agents`。
+ * `.system` 只存应用资产；指纹变化时整目录替换，同级用户 Skill 不受影响。
  */
 export async function installSystemSkills(homeDir: string): Promise<SystemSkillsInstallResult> {
   const home = resolve(homeDir)

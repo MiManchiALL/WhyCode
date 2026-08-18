@@ -3,7 +3,7 @@ import type { Dirent } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import type { SkillDiagnostic, SkillScope } from './types.ts'
 import { SKILL_FILE_NAME } from './types.ts'
-import { systemSkillsRoot } from './system.ts'
+import { systemSkillsRoot, userSkillsRoot } from './system.ts'
 
 const MAX_SCAN_DEPTH = 6
 const MAX_DIRECTORIES_PER_ROOT = 2_000
@@ -29,7 +29,7 @@ export async function discoveryRoots(
     })))
   }
   if (homeDir) {
-    roots.push({ path: join(homeDir, '.agents', 'skills'), scope: 'user' })
+    roots.push({ path: userSkillsRoot(homeDir), scope: 'user' })
     roots.push({ path: systemSkillsRoot(homeDir), scope: 'system' })
   }
   return roots

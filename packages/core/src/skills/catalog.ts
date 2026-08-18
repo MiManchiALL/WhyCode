@@ -27,7 +27,6 @@ interface CachedSkill {
   signature: string
   value: ActivatedSkill | null
   diagnostic?: string
-  scope: SkillScope
   costBytes: number
 }
 
@@ -178,7 +177,7 @@ export class SkillCatalogService {
     }
     const key = skillPathKey(path)
     const cached = this.parsedFiles.get(key)
-    if (cached?.signature === signature && cached.scope === scope) {
+    if (cached?.signature === signature) {
       this.parsedFiles.delete(key)
       this.parsedFiles.set(key, cached)
       if (cached.diagnostic) diagnostics.push({ path, message: cached.diagnostic })
@@ -199,7 +198,6 @@ export class SkillCatalogService {
       this.cacheFile(key, {
         signature,
         value,
-        scope,
         costBytes: cachedSkillCost(value),
       })
       return structuredClone(value)
@@ -209,7 +207,6 @@ export class SkillCatalogService {
         signature,
         value: null,
         diagnostic: message,
-        scope,
         costBytes: Buffer.byteLength(`${path}\n${message}`, 'utf8') + 128,
       })
       diagnostics.push({

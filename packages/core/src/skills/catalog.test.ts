@@ -7,17 +7,20 @@ import { SkillCatalogService } from './catalog.ts'
 import { discoverSkillFiles } from './discovery.ts'
 import { estimateTextTokens } from '../context/tokens.ts'
 import { renderSkillCatalog } from './catalog-context.ts'
+import { userSkillsRoot } from './system.ts'
 
 describe('Skill 发现、优先级与缓存失效', () => {
-  it('按当前目录到仓库根再到用户目录发现，保留同名 Skill 的精确身份', async () => {
+  it('按当前目录到仓库根再到 WhyCode 用户目录发现，不再扫描旧全局目录', async () => {
     const fixture = await createFixture()
     try {
       const projectSkill = join(fixture.repo, '.agents', 'skills', 'review', 'SKILL.md')
       const nestedSkill = join(fixture.cwd, '.agents', 'skills', 'nested', 'review', 'SKILL.md')
-      const userSkill = join(fixture.home, '.agents', 'skills', 'review', 'SKILL.md')
+      const userSkill = join(userSkillsRoot(fixture.home), 'review', 'SKILL.md')
+      const oldUserSkill = join(fixture.home, '.agents', 'skills', 'review', 'SKILL.md')
       await skill(projectSkill, 'review', '仓库评审')
       await skill(nestedSkill, 'review', '当前目录评审')
       await skill(userSkill, 'review', '用户评审')
+      await skill(oldUserSkill, 'review', '旧全局目录评审')
 
       const service = new SkillCatalogService({ homeDir: fixture.home })
       const snapshot = await service.snapshot(fixture.cwd, 100_000)
@@ -183,25 +186,6 @@ describe('Skill 发现、优先级与缓存失效', () => {
     assert.match(rendered!, /a&amp;b/)
   })
 
-  it('同一路径的 project/user 作用域变化会改变目录 revision', async () => {
-    const fixture = await createFixture()
-    try {
-      await skill(
-        join(fixture.repo, '.agents', 'skills', 'verify', 'SKILL.md'),
-        'verify',
-        '验证',
-      )
-      const service = new SkillCatalogService({ homeDir: fixture.repo })
-      const project = await service.snapshot(fixture.repo)
-      const user = await service.snapshot(null)
-
-      assert.equal(project.skills[0]?.scope, 'project')
-      assert.equal(user.skills[0]?.scope, 'user')
-      assert.notEqual(project.revision, user.revision)
-    } finally {
-      await rm(fixture.root, { recursive: true, force: true })
-    }
-  })
 })
 
 async function createFixture() {
