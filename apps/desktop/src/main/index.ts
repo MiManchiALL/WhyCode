@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
   AgentSession,
+  type BackgroundTaskState,
   cleanupUnreferencedAttachments,
   CommandSessionManager,
   ConsensusCoordinator,
@@ -339,6 +340,17 @@ function broadcastRuntimeEvent(
   ) {
     runtimeRegistry.runtimeBecameIdle(runtime)
     void backgroundTaskWakeups?.nudge()
+  }
+}
+
+function broadcastBackgroundTasks(state: BackgroundTaskState): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    try {
+      win.webContents.send(IPC.backgroundTasks, state)
+    } catch (error) {
+      console.warn('后台任务状态推送失败：', error)
+    }
   }
 }
 
@@ -1679,6 +1691,9 @@ async function runtimeSnapshot(
     sessionDeletionLock.blocksRuntime
     && sessionDeletionLock.sessionId === runtime.sessionId,
   )
+  const backgroundTasks = journal
+    ? await commandSessions.backgroundTasks(journal.sessionId)
+    : null
   return {
     runtimeId: runtime.runtimeId,
     workspace: runtime.workspace,
@@ -1706,6 +1721,7 @@ async function runtimeSnapshot(
     approval: runtime.approval,
     eventSequence: timeline.boundary,
     forkOrigin: journal?.metadataSnapshot.forkOrigin ?? null,
+    backgroundTasks,
   }
 }
 
@@ -2332,6 +2348,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     {
       onDetachedTaskTerminal: (notification) =>
         backgroundTaskWakeups?.enqueue(notification),
+      onBackgroundTasksChanged: broadcastBackgroundTasks,
     },
   )
   await commandSessions.initialize()

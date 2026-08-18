@@ -1,9 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
 import { resolve } from 'node:path'
-import { unicodeSafeSuffix } from '../../text.ts'
+import { unicodeSafePrefix, unicodeSafeSuffix } from '../../text.ts'
 import { terminateProcessTree } from '../run-command/process-termination.ts'
 import {
+  type BackgroundTaskState,
+  type BackgroundTaskSummary,
   type CommandOutputChunk,
   type CommandTaskNotificationHandoff,
   type CommandTaskSnapshot,
@@ -19,6 +21,8 @@ const MAX_RETAINED_TERMINAL_TASKS = 16
 const DEFAULT_READ_BYTES = 32 * 1024
 const MAX_WAIT_RESULT_CHARS = 64 * 1024
 const PROCESS_CLOSE_GRACE_MS = 2_000
+const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
+const MAX_BACKGROUND_TASK_DETAIL_CHARS = 240
 
 interface LiveCommandTask extends PersistedCommandTask {
   child?: ChildProcessWithoutNullStreams
@@ -44,6 +48,7 @@ export interface StartCommandInput {
 
 export interface CommandSessionManagerOptions {
   onDetachedTaskTerminal?: (notification: CommandTaskTerminalNotification) => void
+  onBackgroundTasksChanged?: (state: BackgroundTaskState) => void
 }
 
 /**
@@ -56,10 +61,13 @@ export class CommandSessionManager {
   private initialized = false
   private initialization: Promise<void> | null = null
   private readonly onDetachedTaskTerminal?: CommandSessionManagerOptions['onDetachedTaskTerminal']
+  private readonly onBackgroundTasksChanged?: CommandSessionManagerOptions['onBackgroundTasksChanged']
+  private backgroundTaskRevision = 0
 
   constructor(storageRoot: string, options: CommandSessionManagerOptions = {}) {
     this.storage = new CommandTaskStorage(storageRoot)
     this.onDetachedTaskTerminal = options.onDetachedTaskTerminal
+    this.onBackgroundTasksChanged = options.onBackgroundTasksChanged
   }
 
   async initialize(): Promise<void> {
@@ -97,7 +105,9 @@ export class CommandSessionManager {
     if (this.runningTasks().length >= MAX_RUNNING_COMMANDS) {
       throw new Error(`后台命令已达到全局上限 ${MAX_RUNNING_COMMANDS}，请先停止不再需要的任务`)
     }
-    await this.pruneTerminalTasks(input.sessionId)
+    if (await this.pruneTerminalTasks(input.sessionId)) {
+      this.publishBackgroundTasks(input.sessionId)
+    }
 
     const id = crypto.randomUUID()
     const cwd = resolve(input.cwd)
@@ -164,6 +174,8 @@ export class CommandSessionManager {
       await this.storage.removeTask(task).catch(() => undefined)
       throw error
     }
+
+    if (task.status === 'running') this.publishBackgroundTasks(task.sessionId)
 
     if (input.timeoutMs && task.status === 'running') {
       task.timeout = setTimeout(
@@ -247,9 +259,16 @@ export class CommandSessionManager {
     engagedPlanId?: string,
   ): Promise<CommandTaskNotificationHandoff> {
     const task = await this.getOwnedTask(sessionId, taskId)
-    const snapshot = this.snapshot(task)
-    if (task.status !== 'running') return { task: snapshot, armed: false }
+    if (task.status !== 'running') return { task: this.snapshot(task), armed: false }
     task.terminalNotification = engagedPlanId ? { engagedPlanId } : {}
+    const snapshot = this.snapshot(task)
+    try {
+      await this.persist(task)
+    } catch (error) {
+      task.terminalNotification = undefined
+      throw error
+    }
+    this.publishBackgroundTasks(sessionId)
     return { task: snapshot, armed: true }
   }
 
@@ -294,6 +313,11 @@ export class CommandSessionManager {
       .map((task) => this.snapshot(task))
   }
 
+  async backgroundTasks(sessionId: string): Promise<BackgroundTaskState> {
+    await this.initialize()
+    return this.backgroundTaskState(sessionId)
+  }
+
   async stopSession(sessionId: string): Promise<void> {
     await this.initialize()
     const owned = [...this.tasks.values()].filter((task) => task.sessionId === sessionId)
@@ -307,10 +331,12 @@ export class CommandSessionManager {
 
   async removeSession(sessionId: string): Promise<void> {
     await this.stopSession(sessionId)
+    const hadTasks = [...this.tasks.values()].some((task) => task.sessionId === sessionId)
     for (const task of [...this.tasks.values()]) {
       if (task.sessionId === sessionId) this.tasks.delete(this.key(sessionId, task.id))
     }
     await this.storage.removeSession(sessionId)
+    if (hadTasks) this.publishBackgroundTasks(sessionId)
   }
 
   async shutdown(): Promise<void> {
@@ -423,6 +449,7 @@ export class CommandSessionManager {
     task.terminalPersisted = true
     await this.pruneTerminalTasks(task.sessionId)
     this.notify(task)
+    this.publishBackgroundTasks(task.sessionId)
     this.emitTerminalNotification(task)
   }
 
@@ -521,17 +548,63 @@ export class CommandSessionManager {
     await write
   }
 
-  private async pruneTerminalTasks(sessionId: string): Promise<void> {
+  private async pruneTerminalTasks(sessionId: string): Promise<boolean> {
     const terminal = [...this.tasks.values()]
       .filter((task) => task.sessionId === sessionId && task.terminalPersisted)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    let removedTask = false
     for (const task of terminal.slice(MAX_RETAINED_TERMINAL_TASKS)) {
+      removedTask = true
       this.tasks.delete(this.key(sessionId, task.id))
       await this.storage.removeTask(task)
     }
+    return removedTask
+  }
+
+  private backgroundTaskState(sessionId: string): BackgroundTaskState {
+    const tasks = [...this.tasks.values()]
+      .filter((task) => task.sessionId === sessionId)
+      .sort(compareBackgroundTasks)
+      .map((task): BackgroundTaskSummary => ({
+        id: task.id,
+        sessionId: task.sessionId,
+        kind: 'command',
+        label: compactBackgroundTaskText(task.command, MAX_BACKGROUND_TASK_LABEL_CHARS),
+        status: task.status,
+        startedAt: task.startedAt,
+        ...(task.endedAt ? { endedAt: task.endedAt } : {}),
+        ...(task.failureReason
+          ? { detail: compactBackgroundTaskText(task.failureReason, MAX_BACKGROUND_TASK_DETAIL_CHARS) }
+          : {}),
+        wakeOnCompletion:
+          task.status === 'running'
+          && Boolean(task.terminalNotification)
+          && task.terminalNotificationSent !== true,
+      }))
+    return { sessionId, revision: this.backgroundTaskRevision, tasks }
+  }
+
+  private publishBackgroundTasks(sessionId: string): void {
+    if (!this.onBackgroundTasksChanged) return
+    this.backgroundTaskRevision += 1
+    this.onBackgroundTasksChanged(this.backgroundTaskState(sessionId))
   }
 
   private key(sessionId: string, taskId: string): string {
     return `${sessionId}:${taskId}`
   }
+}
+
+function compareBackgroundTasks(left: LiveCommandTask, right: LiveCommandTask): number {
+  const leftRunning = left.status === 'running'
+  const rightRunning = right.status === 'running'
+  if (leftRunning !== rightRunning) return leftRunning ? -1 : 1
+  if (leftRunning) return left.startedAt.localeCompare(right.startedAt)
+  return (right.endedAt ?? right.startedAt).localeCompare(left.endedAt ?? left.startedAt)
+}
+
+function compactBackgroundTaskText(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxChars) return normalized
+  return `${unicodeSafePrefix(normalized, maxChars - 1)}…`
 }

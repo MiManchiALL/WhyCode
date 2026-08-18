@@ -194,6 +194,8 @@ export {
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from './constants.ts'
 export type {
+  BackgroundTaskState,
+  BackgroundTaskSummary,
   CommandOutputChunk,
   CommandTaskSnapshot,
   CommandTaskStatus,

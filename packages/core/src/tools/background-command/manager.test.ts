@@ -11,6 +11,7 @@ import {
 } from './index.ts'
 import { CommandSessionManager } from './manager.ts'
 import type {
+  BackgroundTaskState,
   CommandOutputChunk,
   CommandTaskSnapshot,
   CommandTaskTerminalNotification,
@@ -339,6 +340,102 @@ describe('后台命令会话', () => {
           retryDelay: 100,
         })
       }
+    } finally {
+      await manager.shutdown()
+      await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  })
+
+  it('投影全部长命令，并独立标记终态续轮能力', async () => {
+    const fixture = await createFixture(`setTimeout(() => {}, 2_000)`)
+    const states: BackgroundTaskState[] = []
+    const manager = new CommandSessionManager(fixture.storage, {
+      onBackgroundTasksChanged: (state) => states.push(state),
+    })
+    let reopened: CommandSessionManager | null = null
+    try {
+      const foreground = await manager.start({
+        sessionId: SESSION_A,
+        command: fixture.command,
+        cwd: fixture.cwd,
+      })
+      const foregroundRunning = await manager.backgroundTasks(SESSION_A)
+      assert.equal(foregroundRunning.tasks.length, 1)
+      assert.equal(foregroundRunning.tasks[0]?.id, foreground.id)
+      assert.equal(foregroundRunning.tasks[0]?.status, 'running')
+      assert.equal(foregroundRunning.tasks[0]?.wakeOnCompletion, false)
+      await manager.stop(SESSION_A, foreground.id)
+      const foregroundStopped = await manager.backgroundTasks(SESSION_A)
+      assert.equal(foregroundStopped.tasks[0]?.status, 'stopped')
+      assert.equal(foregroundStopped.tasks[0]?.wakeOnCompletion, false)
+
+      const detached = await manager.start({
+        sessionId: SESSION_A,
+        command: fixture.command,
+        cwd: fixture.cwd,
+      })
+      const beforeHandoff = await manager.backgroundTasks(SESSION_A)
+      assert.equal(beforeHandoff.tasks.find((task) => task.id === detached.id)?.wakeOnCompletion, false)
+      const handoff = await manager.armTerminalNotification(SESSION_A, detached.id)
+      assert.equal(handoff.armed, true)
+      const running = await manager.backgroundTasks(SESSION_A)
+      const detachedRunning = running.tasks.find((task) => task.id === detached.id)
+      assert.equal(running.tasks.length, 2)
+      assert.equal(detachedRunning?.kind, 'command')
+      assert.equal(detachedRunning?.status, 'running')
+      assert.equal(detachedRunning?.wakeOnCompletion, true)
+
+      await manager.stop(SESSION_A, detached.id)
+      const stopped = await manager.backgroundTasks(SESSION_A)
+      const detachedStopped = stopped.tasks.find((task) => task.id === detached.id)
+      assert.equal(detachedStopped?.status, 'stopped')
+      assert.equal(detachedStopped?.wakeOnCompletion, false)
+      assert.ok(states.length >= 5)
+      assert.ok(states.at(-1)!.revision > states[0]!.revision)
+
+      await manager.shutdown()
+      reopened = new CommandSessionManager(fixture.storage)
+      const restored = await reopened.backgroundTasks(SESSION_A)
+      assert.equal(restored.tasks.length, 2)
+      assert.equal(restored.tasks.find((task) => task.id === foreground.id)?.status, 'stopped')
+      assert.equal(restored.tasks.find((task) => task.id === detached.id)?.status, 'stopped')
+    } finally {
+      await reopened?.shutdown()
+      await manager.shutdown()
+      await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  })
+
+  it('运行任务按最早启动置顶，终态按最新结束下沉', async () => {
+    const fixture = await createFixture(`setTimeout(() => {}, 400)`)
+    const manager = new CommandSessionManager(fixture.storage)
+    try {
+      const first = await manager.start({
+        sessionId: SESSION_A,
+        command: fixture.command,
+        cwd: fixture.cwd,
+      })
+      await manager.armTerminalNotification(SESSION_A, first.id)
+      await new Promise((done) => setTimeout(done, 30))
+      const second = await manager.start({
+        sessionId: SESSION_A,
+        command: fixture.command,
+        cwd: fixture.cwd,
+      })
+      await manager.armTerminalNotification(SESSION_A, second.id)
+      assert.deepEqual(
+        (await manager.backgroundTasks(SESSION_A)).tasks.map((task) => task.id),
+        [first.id, second.id],
+      )
+
+      await Promise.all([
+        waitForTerminal(manager, first.id),
+        waitForTerminal(manager, second.id),
+      ])
+      assert.deepEqual(
+        (await manager.backgroundTasks(SESSION_A)).tasks.map((task) => task.id),
+        [second.id, first.id],
+      )
     } finally {
       await manager.shutdown()
       await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })

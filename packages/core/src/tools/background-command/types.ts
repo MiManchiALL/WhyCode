@@ -47,3 +47,24 @@ export interface CommandTaskNotificationHandoff {
   task: CommandTaskSnapshot
   armed: boolean
 }
+
+/** Renderer 使用的只读摘要；不携带日志、stdin 能力或计划内部状态。 */
+export interface BackgroundTaskSummary {
+  id: string
+  sessionId: string
+  kind: 'command'
+  label: string
+  status: CommandTaskStatus
+  startedAt: string
+  endedAt?: string
+  detail?: string
+  /** 只表示任务终态会触发所属 Main 续轮，不改变任务类型。 */
+  wakeOnCompletion: boolean
+}
+
+/** 整表快照使用单调修订号，避免 Renderer 恢复与实时推送交错后回退。 */
+export interface BackgroundTaskState {
+  sessionId: string
+  revision: number
+  tasks: BackgroundTaskSummary[]
+}

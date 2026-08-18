@@ -12,6 +12,8 @@ import {
 import type { PermissionMode } from '@whycode/core/permissions'
 import type { SkillSummary } from '@whycode/core/skills'
 import type {
+  BackgroundTaskState,
+  BackgroundTaskSummary,
   CoreCommand,
   ReasoningEffortSelection,
   SessionForkOrigin,
@@ -114,6 +116,7 @@ export function App() {
   const [modelId, setModelId] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null)
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary[]>([])
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
@@ -148,6 +151,8 @@ export function App() {
   const runtimeIdRef = useRef('')
   const sessionIdRef = useRef<string | null>(null)
   const activeSnapshotSequenceRef = useRef(0)
+  const backgroundTaskRevisionRef = useRef(-1)
+  const backgroundTaskStatesRef = useRef(new Map<string, BackgroundTaskState>())
   const hydratingRuntimeIdRef = useRef<string | null>(null)
   const backgroundEventsRef = useRef(new Map<string, {
     event: CoreEvent
@@ -402,8 +407,18 @@ export function App() {
     setForkPendingTurnId(null)
   }, [])
 
+  const applyBackgroundTaskState = useCallback((state: BackgroundTaskState) => {
+    if (
+      state.sessionId !== sessionIdRef.current
+      || state.revision <= backgroundTaskRevisionRef.current
+    ) return
+    backgroundTaskRevisionRef.current = state.revision
+    setBackgroundTasks(state.tasks)
+  }, [])
+
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
+    const changingSession = sessionIdRef.current !== snapshot.sessionId
     if (changingRuntime) {
       stashActiveComposer()
       stashActivePresentation()
@@ -411,6 +426,18 @@ export function App() {
     if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
     runtimeIdRef.current = snapshot.runtimeId
     sessionIdRef.current = snapshot.sessionId
+    if (changingSession) {
+      backgroundTaskRevisionRef.current = -1
+      setBackgroundTasks([])
+    }
+    if (snapshot.backgroundTasks) {
+      applyBackgroundTaskState(snapshot.backgroundTasks)
+      const buffered = backgroundTaskStatesRef.current.get(snapshot.backgroundTasks.sessionId)
+      if (buffered) {
+        applyBackgroundTaskState(buffered)
+        backgroundTaskStatesRef.current.delete(buffered.sessionId)
+      }
+    }
     activeSnapshotSequenceRef.current = snapshot.eventSequence
     setRuntimeId(snapshot.runtimeId)
     if (changingRuntime) {
@@ -465,6 +492,7 @@ export function App() {
     setForkOrigin(snapshot.forkOrigin)
     setForkPendingTurnId(null)
   }, [
+    applyBackgroundTaskState,
     restoreImageDrafts,
     restorePdfDrafts,
     replaceSkills,
@@ -602,6 +630,27 @@ export function App() {
       hydratingRuntimeIdRef.current = null
     }
   }, [consumeEvent, runtimeId])
+
+  useEffect(() => {
+    return window.whycode.onBackgroundTasks((state) => {
+      if (
+        state.sessionId === sessionIdRef.current
+        && hydratingRuntimeIdRef.current === null
+      ) {
+        applyBackgroundTaskState(state)
+        return
+      }
+      const states = backgroundTaskStatesRef.current
+      const previous = states.get(state.sessionId)
+      if (previous && previous.revision >= state.revision) return
+      states.delete(state.sessionId)
+      states.set(state.sessionId, state)
+      if (states.size > 8) {
+        const oldestSessionId = states.keys().next().value
+        if (oldestSessionId) states.delete(oldestSessionId)
+      }
+    })
+  }, [applyBackgroundTaskState])
 
   useEffect(() => {
     void window.whycode.listModels().then(setModels)
@@ -1319,6 +1368,7 @@ export function App() {
           title={taskTitle}
           projectDir={workspace.mode === 'pending-managed' ? null : projectDir}
           workspaceMode={workspace.mode}
+          backgroundTasks={backgroundTasks}
           onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
         />
 

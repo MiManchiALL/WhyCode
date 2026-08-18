@@ -1,10 +1,13 @@
 import { FolderOpen } from 'lucide-react'
+import type { BackgroundTaskSummary } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
+import { BackgroundTaskMenu } from './background-task-menu.tsx'
 
 interface TaskHeaderProps {
   title: string
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
+  backgroundTasks: readonly BackgroundTaskSummary[]
   onOpenWorkspaceFolder: () => void
 }
 
@@ -14,8 +17,8 @@ export function TaskHeader(props: TaskHeaderProps) {
     || props.workspaceMode === 'worktree'
     || props.workspaceMode === 'pending-worktree'
   return (
-    <header className="flex h-14 shrink-0 items-center border-b border-[var(--wc-line)] bg-[var(--wc-surface)] px-4">
-      <div className="flex min-w-0 items-center gap-2.5">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--wc-line)] bg-[var(--wc-surface)] px-4">
+      <div className="flex min-w-0 items-center gap-2.5 overflow-hidden">
         <h1 className="max-w-64 truncate text-sm font-semibold tracking-tight" title={props.title}>
           {props.title}
         </h1>
@@ -34,6 +37,7 @@ export function TaskHeader(props: TaskHeaderProps) {
         </button>
         <WorkspaceBadge mode={props.workspaceMode} />
       </div>
+      <BackgroundTaskMenu tasks={props.backgroundTasks} />
     </header>
   )
 }

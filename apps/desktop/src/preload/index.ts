@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { CoreCommand, CoreEvent, SkillCatalogSnapshot } from '@whycode/core'
+import type {
+  BackgroundTaskState,
+  CoreCommand,
+  CoreEvent,
+  SkillCatalogSnapshot,
+} from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
   DeleteSessionResult,
@@ -145,6 +150,13 @@ const api = {
     }
     ipcRenderer.on(IPC.event, wrapped)
     return () => ipcRenderer.off(IPC.event, wrapped)
+  },
+  onBackgroundTasks: (
+    listener: (state: BackgroundTaskState) => void,
+  ): (() => void) => {
+    const wrapped = (_: unknown, state: BackgroundTaskState) => listener(state)
+    ipcRenderer.on(IPC.backgroundTasks, wrapped)
+    return () => ipcRenderer.off(IPC.backgroundTasks, wrapped)
   },
 }
 

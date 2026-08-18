@@ -1,6 +1,7 @@
 import type {
   AgentStatus,
   ApprovalRequest,
+  BackgroundTaskState,
   CoreCommand,
   CoreEvent,
   ContextUsageInfo,
@@ -58,6 +59,8 @@ export interface RuntimeSnapshot {
   eventSequence: number
   /** 来源证明与分支提示；不授予源会话运行时、任务或权限的所有权。 */
   forkOrigin: SessionForkOrigin | null
+  /** 当前会话由 StartCommand 管理的长耗时任务；日志仍留在宿主，不进入 Renderer。 */
+  backgroundTasks: BackgroundTaskState | null
 }
 
 export interface RuntimeEventEnvelope {

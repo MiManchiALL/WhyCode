@@ -7,6 +7,8 @@ export const IPC = {
   command: 'whycode:command',
   /** Main → Renderer：CoreEvent 事件流 */
   event: 'whycode:event',
+  /** Main → Renderer：当前进程内后台任务整表快照。 */
+  backgroundTasks: 'whycode:background-tasks',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
   /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */

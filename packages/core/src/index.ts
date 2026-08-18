@@ -152,6 +152,8 @@ export {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
   STOP_COMMAND_TOOL_NAME,
+  type BackgroundTaskState,
+  type BackgroundTaskSummary,
   type CommandOutputChunk,
   type CommandTaskSnapshot,
   type CommandTaskStatus,

@@ -80,7 +80,7 @@ export function AppSidebar(props: AppSidebarProps) {
           >
             <MessageSquare size={17} />
             {props.sessions.some((session) => session.needsAttention) && (
-              <span className="absolute right-1 top-1 size-2 rounded-full bg-[#b37b62]" />
+              <span className="absolute right-1 top-1 size-2 rounded-full bg-[var(--wc-status-failed)]" />
             )}
           </button>
         </div>
@@ -235,11 +235,11 @@ function SessionItem({
 
 function StatusDot({ session }: { session: SessionListItem }) {
   const className = session.needsAttention
-    ? 'bg-[#b37b62]'
+    ? 'bg-[var(--wc-status-failed)]'
     : session.running
-      ? 'bg-[#738b76]'
+      ? 'bg-[var(--wc-status-running)]'
       : session.isCurrent
-        ? 'bg-[#7b8790]'
+        ? 'bg-[var(--wc-status-running)]'
         : 'bg-[#c5c6c0]'
   return <span className={`size-2 shrink-0 rounded-full ${className}`} aria-hidden="true" />
 }
