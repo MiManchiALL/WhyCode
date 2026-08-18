@@ -275,6 +275,50 @@ export type CoreEvent =
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
   | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }
 
+type CoalescibleCoreEvent =
+  | Extract<CoreEvent, { type: 'text-delta' | 'thinking-delta' | 'tool-progress' }>
+  | {
+      type: 'peer-event'
+      agentId: 'B' | 'C'
+      event: Extract<CoreEvent, { type: 'text-delta' }>
+    }
+
+/**
+ * 合并严格相邻、语义等价的流式事件。调用方负责保留事件边界与顺序；
+ * 返回 null 表示两项不能合并。该规则同时服务持久化与实时界面，避免两套投影漂移。
+ */
+export function coalesceAdjacentCoreEvent(
+  previous: CoreEvent,
+  next: CoreEvent,
+): CoalescibleCoreEvent | null {
+  if (previous.type === 'text-delta' && next.type === 'text-delta') {
+    return { ...previous, text: previous.text + next.text }
+  }
+  if (previous.type === 'thinking-delta' && next.type === 'thinking-delta') {
+    return { ...previous, text: previous.text + next.text }
+  }
+  if (
+    previous.type === 'tool-progress'
+    && next.type === 'tool-progress'
+    && previous.toolUseId === next.toolUseId
+  ) {
+    return { ...previous, output: previous.output + next.output }
+  }
+  if (
+    previous.type === 'peer-event'
+    && next.type === 'peer-event'
+    && previous.agentId === next.agentId
+    && previous.event.type === 'text-delta'
+    && next.event.type === 'text-delta'
+  ) {
+    return {
+      ...previous,
+      event: { ...previous.event, text: previous.event.text + next.event.text },
+    }
+  }
+  return null
+}
+
 const STEP_SCOPED_CORE_EVENT_TYPES = new Set<CoreEvent['type']>([
   'text-delta',
   'thinking-delta',

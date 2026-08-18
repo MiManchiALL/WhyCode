@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  coalesceAdjacentCoreEvent,
   MAX_USER_QUESTIONS,
   type CoreEvent,
 } from '../events.ts'
@@ -247,30 +248,9 @@ export function pushCoalescedViewEvent(events: ViewEvent[], next: ViewEvent): vo
     events.push(next)
     return
   }
-  if (previous.event.type === 'text-delta' && next.event.type === 'text-delta') {
-    previous.event.text += next.event.text
-    return
-  }
-  if (previous.event.type === 'thinking-delta' && next.event.type === 'thinking-delta') {
-    previous.event.text += next.event.text
-    return
-  }
-  if (
-    previous.event.type === 'tool-progress' &&
-    next.event.type === 'tool-progress' &&
-    previous.event.toolUseId === next.event.toolUseId
-  ) {
-    previous.event.output += next.event.output
-    return
-  }
-  if (
-    previous.event.type === 'peer-event' &&
-    next.event.type === 'peer-event' &&
-    previous.event.agentId === next.event.agentId &&
-    previous.event.event.type === 'text-delta' &&
-    next.event.event.type === 'text-delta'
-  ) {
-    previous.event.event.text += next.event.event.text
+  const event = coalesceAdjacentCoreEvent(previous.event, next.event)
+  if (event) {
+    events[events.length - 1] = { type: 'core-event', event }
     return
   }
   events.push(next)

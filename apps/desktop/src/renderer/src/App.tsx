@@ -101,6 +101,7 @@ import {
   captureConversationScrollPosition,
   restoreConversationScrollPosition,
 } from './conversation-scroll.ts'
+import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
@@ -175,6 +176,22 @@ export function App() {
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const inputRef = useRef('')
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
+  const conversationEventBufferRef = useRef<ConversationEventBuffer | null>(null)
+  if (!conversationEventBufferRef.current) {
+    conversationEventBufferRef.current = new ConversationEventBuffer({
+      flush: (events) => {
+        setView((previous) => events.reduce(
+          (current, { event, occurredAt }) => applyCoreEvent(current, event, occurredAt),
+          previous,
+        ))
+      },
+      requestFrame: (callback) => window.requestAnimationFrame(callback),
+      cancelFrame: (id) => window.cancelAnimationFrame(id),
+    })
+  }
+  const applyConversationEvent = useCallback((event: CoreEvent, occurredAt?: string) => {
+    conversationEventBufferRef.current!.push(event, occurredAt)
+  }, [])
   const blocks = view.blocks
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
@@ -233,10 +250,8 @@ export function App() {
     workStartedAt,
   })
   const addError = useCallback((text: string) => {
-    setView((previous) =>
-      applyCoreEvent(previous, { type: 'error', message: text, recoverable: true }),
-    )
-  }, [])
+    applyConversationEvent({ type: 'error', message: text, recoverable: true })
+  }, [applyConversationEvent])
   const {
     drafts: imageDrafts,
     addFiles: addImageFiles,
@@ -261,6 +276,7 @@ export function App() {
   }, [input])
 
   useEffect(() => () => {
+    conversationEventBufferRef.current?.clear()
     for (const draft of composerDraftsRef.current.values()) {
       releaseImageDrafts(draft.images)
     }
@@ -459,6 +475,7 @@ export function App() {
       snapshot.viewEvents,
       snapshot.viewEventTimestamps,
     )
+    conversationEventBufferRef.current?.clear()
     setView({
       ...replayedView,
       expanded: applyExpandedOverrides(
@@ -534,7 +551,7 @@ export function App() {
   ])
 
   const consumeEvent = useCallback((event: CoreEvent, occurredAt?: string) => {
-    setView((previous) => applyCoreEvent(previous, event, occurredAt))
+    applyConversationEvent(event, occurredAt)
     switch (event.type) {
       case 'work-started':
         setWorkStartedAt(event.startedAt)
@@ -614,7 +631,13 @@ export function App() {
       default:
         break
     }
-  }, [refreshSessions, restoreQueuedDrafts, setDeletionBlocksRuntime, synchronizeUnownedResume])
+  }, [
+    applyConversationEvent,
+    refreshSessions,
+    restoreQueuedDrafts,
+    setDeletionBlocksRuntime,
+    synchronizeUnownedResume,
+  ])
 
   useEffect(() => {
     if (!runtimeId) return
