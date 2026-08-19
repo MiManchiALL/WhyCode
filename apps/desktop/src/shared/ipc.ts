@@ -41,6 +41,7 @@ export const IPC = {
   resumeSession: 'whycode:resume-session',
   forkSession: 'whycode:fork-session',
   newSession: 'whycode:new-session',
+  setSessionPinned: 'whycode:set-session-pinned',
   deleteSession: 'whycode:delete-session',
   /** Renderer → Main：按当前会话内的 PDF 附件 ID 交给系统默认阅读器打开。 */
   openPdfAttachment: 'whycode:open-pdf-attachment',

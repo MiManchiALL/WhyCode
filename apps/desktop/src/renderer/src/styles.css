@@ -612,6 +612,17 @@ button:not(:disabled),
   background: var(--wc-status-warning);
 }
 
+.wc-session-running-indicator {
+  flex: none;
+  color: var(--wc-status-running);
+}
+
+.wc-session-running-cell {
+  fill: currentColor;
+  opacity: 0.15;
+  animation: wc-session-running-chase 1s infinite;
+}
+
 .wc-background-task-kind-icon {
   color: var(--wc-muted);
 }
@@ -1088,6 +1099,13 @@ button:not(:disabled),
 @keyframes wc-background-task-pulse {
   0% { box-shadow: 0 0 0 0 var(--wc-status-running-ring); }
   70%, 100% { box-shadow: 0 0 0 0.28rem var(--wc-status-running-ring-clear); }
+}
+
+@keyframes wc-session-running-chase {
+  0%, 12.4% { opacity: 1; }
+  12.5%, 24.9% { opacity: 0.6; }
+  25%, 37.4% { opacity: 0.35; }
+  37.5%, 100% { opacity: 0.15; }
 }
 
 @keyframes wc-thinking-heart-pulse {

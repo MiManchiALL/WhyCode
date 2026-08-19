@@ -20,12 +20,20 @@ import type {
 
 export type SessionListItem = SessionSummary & {
   isCurrent: boolean
-  /** 仅当该对话当前仍有内存运行时时存在。 */
-  runtimeStatus?: AgentStatus
   running: boolean
-  /** 只表示仍有审批或问题等待用户处理；普通错误结束不属于待操作。 */
-  needsAttention: boolean
+  pinned: boolean
+  /** 非当前对话已结束一段工作，且用户尚未重新打开它。 */
+  hasUnreadCompletion: boolean
 }
+
+export interface SetSessionPinnedRequest {
+  sessionId: string
+  pinned: boolean
+}
+
+export type SetSessionPinnedResult =
+  | { ok: true }
+  | { ok: false; error: string }
 
 /** Renderer 可随时丢失；主进程用该快照恢复稳定界面和仍在运行的控制状态。 */
 export interface RuntimeSnapshot {

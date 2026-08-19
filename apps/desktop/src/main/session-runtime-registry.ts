@@ -26,6 +26,7 @@ export class SessionRuntimeRegistry {
   private readonly idleUnloadMs: number
   private readonly onDisposeError: (error: unknown) => void
   private readonly onRemoved: (runtime: DesktopSessionRuntime) => void | Promise<void>
+  private readonly unreadCompletionSessionIds = new Set<string>()
   private selectedRuntimeId: string | null = null
 
   constructor(options: SessionRuntimeRegistryOptions = {}) {
@@ -70,8 +71,22 @@ export class SessionRuntimeRegistry {
     this.clearUnload(runtime.runtimeId)
     runtime.lastSelectedAt = Date.now()
     this.selectedRuntimeId = runtime.runtimeId
+    if (runtime.sessionId) this.unreadCompletionSessionIds.delete(runtime.sessionId)
     if (previous && previous !== runtime) this.scheduleIdleUnload(previous)
     return previous
+  }
+
+  markWorkFinished(runtime: DesktopSessionRuntime): void {
+    if (runtime === this.selected || !runtime.sessionId) return
+    this.unreadCompletionSessionIds.add(runtime.sessionId)
+  }
+
+  hasUnreadCompletion(sessionId: string): boolean {
+    return this.unreadCompletionSessionIds.has(sessionId)
+  }
+
+  forgetSession(sessionId: string): void {
+    this.unreadCompletionSessionIds.delete(sessionId)
   }
 
   /**
@@ -136,6 +151,7 @@ export class SessionRuntimeRegistry {
       await this.reportRemoved(runtime)
     }))
     this.runtimes.clear()
+    this.unreadCompletionSessionIds.clear()
     this.selectedRuntimeId = null
   }
 

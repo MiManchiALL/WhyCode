@@ -152,6 +152,7 @@ export function App() {
   const runtimeIdRef = useRef('')
   const sessionIdRef = useRef<string | null>(null)
   const activeSnapshotSequenceRef = useRef(0)
+  const sessionListRefreshSequenceRef = useRef(0)
   const backgroundTaskRevisionRef = useRef(-1)
   const backgroundTaskStatesRef = useRef(new Map<string, BackgroundTaskState>())
   const hydratingRuntimeIdRef = useRef<string | null>(null)
@@ -398,10 +399,14 @@ export function App() {
   ])
 
   const refreshSessions = useCallback(async () => {
+    const sequence = ++sessionListRefreshSequenceRef.current
     try {
-      setSessions(await window.whycode.listSessions())
+      const next = await window.whycode.listSessions()
+      if (sequence !== sessionListRefreshSequenceRef.current) return
+      setSessions(next)
       setSessionListError(null)
     } catch (error) {
+      if (sequence !== sessionListRefreshSequenceRef.current) return
       setSessionListError(
         `会话历史读取失败：${error instanceof Error ? error.message : String(error)}`,
       )
@@ -555,9 +560,15 @@ export function App() {
     switch (event.type) {
       case 'work-started':
         setWorkStartedAt(event.startedAt)
+        void refreshSessions()
+        break
+      case 'turn-start':
+        // 后台唤醒先进入 work，再在回合起点写稳会话活动时间；这里确认最近顺序。
+        void refreshSessions()
         break
       case 'work-finished':
         setWorkStartedAt(null)
+        void refreshSessions()
         break
       case 'agent-status':
         setStatus(event.status)
@@ -588,6 +599,8 @@ export function App() {
         )
         break
       case 'message-queued':
+        // 运行中插话不会重复发 work-started，但已是新的用户活动。
+        void refreshSessions()
         setQueued((prev) => [...prev, {
           id: event.id,
           text: event.text,
@@ -715,9 +728,10 @@ export function App() {
         sessionIdRef.current = eventSessionId
         consumeEvent(event, occurredAt)
       } else if (
-        event.type === 'agent-status'
+        event.type === 'work-started'
+        || event.type === 'turn-start'
+        || event.type === 'work-finished'
         || event.type === 'turn-end'
-        || event.type === 'approval-request'
       ) {
         void refreshSessions()
       }
@@ -1020,6 +1034,21 @@ export function App() {
     resetActiveComposer,
     setDeletionBlocksRuntime,
   ])
+
+  const setSessionPinned = useCallback((sessionId: string, pinned: boolean) => {
+    setSessionActionError(null)
+    void window.whycode.setSessionPinned({ sessionId, pinned }).then((result) => {
+      if (!result.ok) {
+        setSessionActionError(result.error)
+        return
+      }
+      void refreshSessions()
+    }).catch((error) => {
+      setSessionActionError(
+        `更新会话置顶状态失败：${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+  }, [refreshSessions])
 
   const compact = useCallback(() => {
     if (status !== 'idle' && status !== 'error') return
@@ -1383,6 +1412,7 @@ export function App() {
         onCollapsedChange={setSidebarCollapsed}
         onNewSession={startNewSession}
         onResume={resumeSession}
+        onPinnedChange={setSessionPinned}
         onDelete={deleteSession}
         onOpenSettings={openConnectionSettings}
       />

@@ -2,10 +2,14 @@ import { useMemo, useState } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   Folder,
   MessageSquare,
   MoreHorizontal,
+  Pin,
+  PinOff,
   Plus,
   Settings,
   Trash2,
@@ -25,14 +29,24 @@ interface AppSidebarProps {
   onCollapsedChange: (collapsed: boolean) => void
   onNewSession: () => void
   onResume: (sessionId: string) => void
+  onPinnedChange: (sessionId: string, pinned: boolean) => void
   onDelete: (sessionId: string) => void
   onOpenSettings: () => void
 }
 
 export function AppSidebar(props: AppSidebarProps) {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
   const deleteTarget = props.sessions.find((session) => session.sessionId === deleteTargetId)
-  const sections = useMemo(() => sessionSections(props.sessions), [props.sessions])
+  const pinnedSessions = useMemo(
+    () => props.sessions.filter((session) => session.pinned),
+    [props.sessions],
+  )
+  const recentSessions = useMemo(
+    () => props.sessions.filter((session) => !session.pinned),
+    [props.sessions],
+  )
+  const hasUnreadCompletion = props.sessions.some((session) => session.hasUnreadCompletion)
 
   return (
     <aside
@@ -74,13 +88,13 @@ export function AppSidebar(props: AppSidebarProps) {
           <button
             type="button"
             className="wc-icon-button relative"
-            aria-label="展开并查看会话"
+            aria-label={hasUnreadCompletion ? '展开并查看有新结果的会话' : '展开并查看会话'}
             title="会话"
             onClick={() => props.onCollapsedChange(false)}
           >
             <MessageSquare size={17} />
-            {props.sessions.some((session) => session.needsAttention) && (
-              <span className="absolute right-1 top-1 size-2 rounded-full bg-[var(--wc-status-failed)]" />
+            {hasUnreadCompletion && (
+              <span className="absolute right-1 top-1 size-2 rounded-full bg-[var(--wc-status-running)]" />
             )}
           </button>
         </div>
@@ -93,25 +107,51 @@ export function AppSidebar(props: AppSidebarProps) {
               新会话会显示在这里
             </div>
           ) : (
-            sections.map((section) => (
-              <section key={section.label} className="mb-4">
-                <h2 className="mb-1 px-2 text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
-                  {section.label}
-                </h2>
-                <div className="space-y-0.5">
-                  {section.sessions.map((session) => (
-                    <SessionItem
-                      key={session.sessionId}
-                      session={session}
+            <>
+              {pinnedSessions.length > 0 && (
+                <section className="mb-4">
+                  <div className="group mb-1 flex h-5 items-center px-2">
+                    <h2 className="min-w-0 flex-1 text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
+                      置顶
+                    </h2>
+                    <button
+                      type="button"
+                      className="wc-focus-ring flex size-5 items-center justify-center rounded-md text-[var(--wc-faint)] opacity-0 transition-opacity hover:bg-black/[0.045] hover:text-[var(--wc-muted)] focus:opacity-100 group-hover:opacity-100"
+                      aria-label={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
+                      title={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
+                      onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
+                    >
+                      {pinnedCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                    </button>
+                  </div>
+                  {!pinnedCollapsed && (
+                    <SessionItems
+                      sessions={pinnedSessions}
                       busy={props.busy}
-                      deleting={session.sessionId === props.deletingSessionId}
+                      deletingSessionId={props.deletingSessionId}
                       onResume={props.onResume}
+                      onPinnedChange={props.onPinnedChange}
                       onRequestDelete={setDeleteTargetId}
                     />
-                  ))}
-                </div>
-              </section>
-            ))
+                  )}
+                </section>
+              )}
+              {recentSessions.length > 0 && (
+                <section className="mb-4">
+                  <h2 className="mb-1 px-2 text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
+                    最近
+                  </h2>
+                  <SessionItems
+                    sessions={recentSessions}
+                    busy={props.busy}
+                    deletingSessionId={props.deletingSessionId}
+                    onResume={props.onResume}
+                    onPinnedChange={props.onPinnedChange}
+                    onRequestDelete={setDeleteTargetId}
+                  />
+                </section>
+              )}
+            </>
           )}
         </div>
       )}
@@ -165,17 +205,51 @@ export function AppSidebar(props: AppSidebarProps) {
   )
 }
 
+function SessionItems({
+  sessions,
+  busy,
+  deletingSessionId,
+  onResume,
+  onPinnedChange,
+  onRequestDelete,
+}: {
+  sessions: readonly SessionListItem[]
+  busy: boolean
+  deletingSessionId: string | null
+  onResume: (sessionId: string) => void
+  onPinnedChange: (sessionId: string, pinned: boolean) => void
+  onRequestDelete: (sessionId: string) => void
+}) {
+  return (
+    <div className="space-y-0.5">
+      {sessions.map((session) => (
+        <SessionItem
+          key={session.sessionId}
+          session={session}
+          busy={busy}
+          deleting={session.sessionId === deletingSessionId}
+          onResume={onResume}
+          onPinnedChange={onPinnedChange}
+          onRequestDelete={onRequestDelete}
+        />
+      ))}
+    </div>
+  )
+}
+
 function SessionItem({
   session,
   busy,
   deleting,
   onResume,
+  onPinnedChange,
   onRequestDelete,
 }: {
   session: SessionListItem
   busy: boolean
   deleting: boolean
   onResume: (sessionId: string) => void
+  onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRequestDelete: (sessionId: string) => void
 }) {
   const directory = session.workspace ? workspaceDisplayDirectory(session.workspace) : null
@@ -192,18 +266,27 @@ function SessionItem({
         disabled={!selectable}
         onClick={() => onResume(session.sessionId)}
         title={session.resumable ? directory ?? undefined : session.unavailableReason}
+        aria-label={`${session.isCurrent ? '当前' : '打开'}会话 ${session.title || '未命名会话'}${
+          session.running ? '，运行中' : session.hasUnreadCompletion ? '，有已完成结果待查看' : ''
+        }`}
       >
-        <div className="flex items-center gap-2">
-          <StatusDot session={session} />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-            {session.title || '未命名会话'}
-          </span>
-          {deleting && <span className="text-[10px] text-[var(--wc-danger)]">删除中</span>}
-        </div>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-4 text-[10px] text-[var(--wc-faint)]">
-          {directory && <Folder size={11} className="shrink-0" />}
-          <span className="min-w-0 flex-1 truncate">{directory ? lastPathSegment(directory) : statusLabel(session.status)}</span>
-          <time className="shrink-0">{relativeTime(session.updatedAt)}</time>
+        <div className="flex min-w-0 items-center gap-2">
+          <SessionMarker session={session} />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                {session.title || '未命名会话'}
+              </span>
+              {deleting && <span className="text-[10px] text-[var(--wc-danger)]">删除中</span>}
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-[var(--wc-faint)]">
+              {directory && <Folder size={11} className="shrink-0" />}
+              <span className="min-w-0 flex-1 truncate">
+                {directory ? lastPathSegment(directory) : statusLabel(session)}
+              </span>
+              <time className="shrink-0">{relativeTime(session.updatedAt)}</time>
+            </div>
+          </div>
         </div>
       </button>
       <DropdownMenu.Root>
@@ -211,7 +294,7 @@ function SessionItem({
           <button
             type="button"
             className="wc-icon-button size-7 opacity-0 group-hover:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
-            disabled={busy || session.running}
+            disabled={busy}
             aria-label={`管理会话 ${session.title || '未命名会话'}`}
           >
             <MoreHorizontal size={15} />
@@ -220,7 +303,15 @@ function SessionItem({
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="wc-menu-content" sideOffset={5} align="end">
             <DropdownMenu.Item
+              className="wc-menu-item"
+              onSelect={() => onPinnedChange(session.sessionId, !session.pinned)}
+            >
+              {session.pinned ? <PinOff size={15} /> : <Pin size={15} />}
+              {session.pinned ? '取消置顶' : '置顶对话'}
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
               className="wc-menu-item text-[var(--wc-danger)]"
+              disabled={session.running}
               onSelect={() => onRequestDelete(session.sessionId)}
             >
               <Trash2 size={15} />
@@ -233,15 +324,38 @@ function SessionItem({
   )
 }
 
-function StatusDot({ session }: { session: SessionListItem }) {
-  const className = session.needsAttention
-    ? 'bg-[var(--wc-status-failed)]'
-    : session.running
-      ? 'bg-[var(--wc-status-running)]'
-      : session.isCurrent
-        ? 'bg-[var(--wc-status-running)]'
-        : 'bg-[#c5c6c0]'
-  return <span className={`size-2 shrink-0 rounded-full ${className}`} aria-hidden="true" />
+const SESSION_ACTIVITY_CELLS: readonly (readonly [number, number])[] = [
+  [0, 0], [4, 0], [8, 0], [8, 4], [8, 8], [4, 8], [0, 8], [0, 4],
+]
+
+function SessionMarker({ session }: { session: SessionListItem }) {
+  return (
+    <span className="flex size-2.5 shrink-0 items-center justify-center" aria-hidden="true">
+      {session.running ? (
+        <svg
+          className="wc-session-running-indicator"
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          shapeRendering="crispEdges"
+        >
+          {SESSION_ACTIVITY_CELLS.map(([x, y], index) => (
+            <rect
+              key={`${x}-${y}`}
+              className="wc-session-running-cell"
+              x={x}
+              y={y}
+              width="2"
+              height="2"
+              style={{ animationDelay: `${(index - SESSION_ACTIVITY_CELLS.length) * 125}ms` }}
+            />
+          ))}
+        </svg>
+      ) : session.hasUnreadCompletion ? (
+        <span className="size-2 rounded-full bg-[var(--wc-status-running)]" />
+      ) : null}
+    </span>
+  )
 }
 
 function SidebarError({ text }: { text: string }) {
@@ -250,16 +364,6 @@ function SidebarError({ text }: { text: string }) {
       {text}
     </p>
   )
-}
-
-function sessionSections(sessions: readonly SessionListItem[]) {
-  const active = sessions.filter((session) => session.running || session.needsAttention)
-  const activeIds = new Set(active.map((session) => session.sessionId))
-  const recent = sessions.filter((session) => !activeIds.has(session.sessionId))
-  return [
-    ...(active.length > 0 ? [{ label: '进行中', sessions: active }] : []),
-    ...(recent.length > 0 ? [{ label: '最近', sessions: recent }] : []),
-  ]
 }
 
 function deleteDescription(session: SessionListItem): string {
@@ -286,7 +390,9 @@ function relativeTime(value: string): string {
   return new Date(value).toLocaleDateString()
 }
 
-function statusLabel(status: SessionListItem['status']): string {
+function statusLabel(session: SessionListItem): string {
+  if (session.running) return '运行中'
+  const { status } = session
   if (status === 'unavailable') return '当前不可恢复'
   if (status === 'interrupted') return '上次意外中断'
   if (status === 'waiting-user') return '等待你的回答'

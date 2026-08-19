@@ -127,6 +127,8 @@ import type {
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
   SessionListItem,
+  SetSessionPinnedRequest,
+  SetSessionPinnedResult,
 } from '../shared/session.ts'
 import type {
   RuntimeWorkspace,
@@ -172,6 +174,8 @@ import { importWebPdfDocument } from './web-page/pdf-import.ts'
 import { installExternalWebLinkHandlers } from './external-link.ts'
 import { createRendererCrashRecoveryController } from './renderer-crash-recovery.ts'
 import { WorktreeManager } from './worktree-manager.ts'
+import { projectSessionListItems } from './session-list.ts'
+import { SessionSidebarStateStore } from './session-sidebar-state.ts'
 import {
   registerAttachmentProtocol,
   registerAttachmentScheme,
@@ -324,6 +328,7 @@ function broadcastRuntimeEvent(
   event: CoreEvent,
   occurredAt: string,
 ): void {
+  if (event.type === 'work-finished') runtimeRegistry.markWorkFinished(runtime)
   const envelope: RuntimeEventEnvelope = {
     runtimeId: runtime.runtimeId,
     sessionId: runtime.sessionId,
@@ -362,6 +367,7 @@ let runtimeEventSequence = 0
 /** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
 let sessions: DesktopSessionRepository
 let runtimeRegistry!: SessionRuntimeRegistry
+let sessionSidebarState: SessionSidebarStateStore
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
 /** detached 命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
@@ -2192,6 +2198,9 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
           : {}),
       }
     }
+    runtimeRegistry.forgetSession(sessionId)
+    await sessionSidebarState.setPinned(sessionId, false)
+      .catch((error) => console.warn('会话已删除，但置顶状态清理失败：', error))
     return {
       ok: true,
       deletedCurrent,
@@ -2259,6 +2268,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
     pdfProcessor,
   )
+  sessionSidebarState = new SessionSidebarStateStore(
+    join(app.getPath('userData'), 'session-sidebar.json'),
+  )
   sessionScratch = new SessionScratchManager(join(app.getPath('userData'), 'scratch'))
   skills = new SkillCatalogService({ homeDir: app.getPath('home') })
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
@@ -2270,6 +2282,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
   try {
     const summaries = await sessions.list()
+    await sessionSidebarState.initialize(new Set(summaries.map((summary) => summary.sessionId)))
     const worktreeCleanup = await worktrees.cleanupAbandonedDrafts(
       new Set(summaries.flatMap((summary) =>
         summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
@@ -2423,19 +2436,39 @@ if (primaryInstance) void app.whenReady().then(async () => {
   }))
   ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
     const currentSessionId = runtimeRegistry.selected?.sessionId ?? null
-    return (await sessions.list()).map((item) => ({
-      ...item,
-      isCurrent: item.sessionId === currentSessionId,
-      runtimeStatus: runtimeRegistry.findBySessionId(item.sessionId)?.status,
-      running: runtimeRegistry.findBySessionId(item.sessionId)?.busy ?? false,
-      needsAttention: Boolean(
-        runtimeRegistry.findBySessionId(item.sessionId)?.approval
-        || item.status === 'waiting-user',
-      ),
-    }))
+    return projectSessionListItems(
+      await sessions.list(),
+      runtimeRegistry.all(),
+      currentSessionId,
+      sessionSidebarState.orderedPinnedSessionIds(),
+      (sessionId) => runtimeRegistry.hasUnreadCompletion(sessionId),
+    )
   })
   ipcMain.handle(IPC.newSession, (_e, request?: NewSessionRequest) =>
     startNewSession(request))
+  ipcMain.handle(IPC.setSessionPinned, async (
+    _e,
+    request: SetSessionPinnedRequest,
+  ): Promise<SetSessionPinnedResult> => {
+    if (
+      !request
+      || typeof request.sessionId !== 'string'
+      || typeof request.pinned !== 'boolean'
+    ) return { ok: false, error: '置顶请求无效' }
+    try {
+      validateSessionId(request.sessionId)
+      const exists = (await sessions.list())
+        .some((summary) => summary.sessionId === request.sessionId)
+      if (!exists) return { ok: false, error: '会话不存在' }
+      await sessionSidebarState.setPinned(request.sessionId, request.pinned)
+      return { ok: true }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  })
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
   ipcMain.handle(IPC.forkSession, (_e, request: unknown) => forkSession(request))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))

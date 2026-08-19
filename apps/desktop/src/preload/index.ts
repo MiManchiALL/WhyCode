@@ -18,6 +18,8 @@ import type {
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
   SessionListItem,
+  SetSessionPinnedRequest,
+  SetSessionPinnedResult,
 } from '../shared/session.ts'
 import type {
   WorkspaceActionResult,
@@ -123,6 +125,8 @@ const api = {
     ipcRenderer.invoke(IPC.forkSession, request),
   newSession: (request?: NewSessionRequest): Promise<NewSessionResult> =>
     ipcRenderer.invoke(IPC.newSession, request),
+  setSessionPinned: (request: SetSessionPinnedRequest): Promise<SetSessionPinnedResult> =>
+    ipcRenderer.invoke(IPC.setSessionPinned, request),
   deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId),
   openPdfAttachment: (

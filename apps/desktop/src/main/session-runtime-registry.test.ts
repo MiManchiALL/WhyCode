@@ -45,6 +45,37 @@ describe('SessionRuntimeRegistry', () => {
     assert.equal(first.busy, true)
   })
 
+  it('只标记非当前对话的工作结果，打开后立即确认', () => {
+    const registry = new SessionRuntimeRegistry({ idleUnloadMs: -1 })
+    const background = persistedRuntime('background-result')
+    const selected = persistedRuntime('selected-result')
+    registry.select(background)
+    registry.select(selected)
+
+    registry.markWorkFinished(background)
+    registry.markWorkFinished(selected)
+
+    assert.equal(registry.hasUnreadCompletion(background.journal!.sessionId), true)
+    assert.equal(registry.hasUnreadCompletion(selected.journal!.sessionId), false)
+    registry.select(background)
+    assert.equal(registry.hasUnreadCompletion(background.journal!.sessionId), false)
+  })
+
+  it('卸载运行时不会丢失未查看结果，删除会话时才清理', async () => {
+    const registry = new SessionRuntimeRegistry({ idleUnloadMs: -1 })
+    const background = persistedRuntime('retained-result')
+    const selected = persistedRuntime('retained-selected')
+    registry.select(background)
+    registry.select(selected)
+    registry.markWorkFinished(background)
+    const sessionId = background.journal!.sessionId
+
+    await registry.remove(background)
+    assert.equal(registry.hasUnreadCompletion(sessionId), true)
+    registry.forgetSession(sessionId)
+    assert.equal(registry.hasUnreadCompletion(sessionId), false)
+  })
+
   it('非选中空闲运行时延迟卸载，重新选中会取消卸载', async () => {
     const registry = new SessionRuntimeRegistry({ idleUnloadMs: 20 })
     const first = persistedRuntime('first')
