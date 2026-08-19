@@ -883,6 +883,18 @@ button:not(:disabled),
   flex: none;
 }
 
+.wc-markdown .wc-markdown-list {
+  list-style-type: disc;
+}
+
+.wc-markdown .wc-markdown-list .wc-markdown-list {
+  list-style-type: circle;
+}
+
+.wc-markdown .wc-markdown-list .wc-markdown-list .wc-markdown-list {
+  list-style-type: square;
+}
+
 .wc-markdown .katex-display {
   max-width: 100%;
   overflow-x: auto;

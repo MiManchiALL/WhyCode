@@ -6,6 +6,7 @@ import { Streamdown } from 'streamdown'
 import { parseHTML } from 'linkedom'
 import {
   markdownPluginsFor,
+  markdownRemarkPlugins,
   normalizeDisplayMathFences,
 } from './markdown-rendering.ts'
 
@@ -14,6 +15,58 @@ describe('Markdown 渲染', () => {
     assert.equal(markdownPluginsFor(false), markdownPluginsFor(false))
     assert.equal(markdownPluginsFor(true), markdownPluginsFor(true))
     assert.notEqual(markdownPluginsFor(false), markdownPluginsFor(true))
+    assert.equal(markdownRemarkPlugins(), markdownRemarkPlugins())
+  })
+
+  it('定稿后按标准 Markdown 扩展识别并隐藏 YAML frontmatter', () => {
+    const source = [
+      '---',
+      'name: explain-code-from-evidence',
+      'description: 用中文解释代码',
+      '---',
+      '',
+      '# 基于证据解释代码',
+    ].join('\n')
+
+    const document = renderedDocument(source, false)
+
+    assert.equal(document.querySelectorAll('h1').length, 1)
+    assert.equal(document.querySelector('h1')?.textContent, '基于证据解释代码')
+    assert.equal(document.querySelector('h2'), null)
+    assert.doesNotMatch(document.body.textContent, /name:|description:/u)
+  })
+
+  it('定稿扩展保留 Streamdown 默认的 GFM 表格能力', () => {
+    const source = [
+      '| 运行精度 | 权重占用 | 推荐显存 | 推荐方案 |',
+      '| :--- | :--- | :--- | :--- |',
+      '| **Q4 量化**<br>*家用推荐* | 16 GB | **24 GB** | 单卡<br>或双卡 |',
+    ].join('\n')
+
+    const document = renderedDocument(source, false)
+
+    assert.equal(document.querySelectorAll('table').length, 1)
+    assert.equal(document.querySelectorAll('th').length, 4)
+    assert.equal(document.querySelectorAll('tbody tr').length, 1)
+    assert.equal(document.querySelectorAll('tbody br').length, 2)
+    assert.doesNotMatch(document.body.textContent, /\|\s*:---/u)
+  })
+
+  it('流式阶段不加载 frontmatter 扩展', () => {
+    const source = '---\nname: demo\n---\n\n# 正文'
+    const document = renderedDocument(source, true)
+
+    assert.match(document.body.textContent, /name: demo/u)
+  })
+
+  it('正文中的分隔线仍按普通 Markdown 渲染', () => {
+    const document = renderedDocument('前文\n\n---\n\n后文', false)
+
+    assert.equal(document.querySelectorAll('hr').length, 1)
+    assert.deepEqual(
+      [...document.querySelectorAll('p')].map((paragraph) => paragraph.textContent),
+      ['前文', '后文'],
+    )
   })
 
   it('流式与定稿阶段都按 CJK 边界渲染强调语法', () => {
@@ -179,6 +232,7 @@ function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
     {
       mode: streaming ? 'streaming' : 'static',
       plugins: markdownPluginsFor(renderMath),
+      remarkPlugins: streaming ? undefined : markdownRemarkPlugins(),
     },
     renderedSource,
   ))

@@ -10,8 +10,10 @@ import {
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Copy, ExternalLink, FileText, GitBranch, Globe2 } from 'lucide-react'
 import { Streamdown, type Components } from 'streamdown'
+import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import {
   markdownPluginsFor,
+  markdownRemarkPlugins,
   normalizeDisplayMathFences,
 } from './markdown-rendering.ts'
 import {
@@ -71,7 +73,13 @@ export const MarkdownContent = memo(function MarkdownContent({
   const components = useMemo<Components>(() => ({
     ul: ({ node, className, children, ...props }) => {
       const sources = externalSourcesFromList(node)
-      if (!sources) return <ul {...props} className={className}>{children}</ul>
+      if (!sources) {
+        return (
+          <MarkdownUnorderedList {...props} node={node} className={className}>
+            {children}
+          </MarkdownUnorderedList>
+        )
+      }
       return (
         <div className="wc-source-list" role="list" aria-label="来源">
           {sources.map((source, index) => (
@@ -93,10 +101,12 @@ export const MarkdownContent = memo(function MarkdownContent({
         revealSource(sourceUrl)
       }
       return (
-        <a
+        <MarkdownAnchor
           {...props}
+          node={_node}
           href={href}
-          className={joinClasses(className, inlineSource && 'wc-inline-source')}
+          className={className}
+          inlineSource={inlineSource}
           {...(sourceUrl
             ? {
                 'data-source-url': sourceUrl,
@@ -109,7 +119,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         >
           {sourceUrl ? <SourceIcon kind={sourceKindForUrl(sourceUrl)} /> : null}
           <span className={inlineSource ? 'sr-only' : 'wc-source-label'}>{children}</span>
-        </a>
+        </MarkdownAnchor>
       )
     },
   }), [revealSource])
@@ -122,6 +132,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         components={components}
         linkSafety={LINK_SAFETY}
         plugins={markdownPluginsFor(mathEnabled)}
+        remarkPlugins={streaming ? undefined : markdownRemarkPlugins()}
       >
         {renderedText}
       </Streamdown>
@@ -189,9 +200,4 @@ function textFromChildren(children: ReactNode): string {
   if (typeof children === 'string' || typeof children === 'number') return String(children)
   if (!Array.isArray(children)) return ''
   return children.map(textFromChildren).join('')
-}
-
-function joinClasses(...values: Array<string | false | undefined>): string | undefined {
-  const value = values.filter(Boolean).join(' ')
-  return value || undefined
 }

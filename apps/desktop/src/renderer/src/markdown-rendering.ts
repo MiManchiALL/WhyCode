@@ -1,7 +1,13 @@
 import { cjk } from '@streamdown/cjk'
 import { createMathPlugin } from '@streamdown/math'
+import remarkFrontmatter from 'remark-frontmatter'
+import { defaultRemarkPlugins } from 'streamdown'
 
 const BASE_MARKDOWN_PLUGINS = { cjk } as const
+const MARKDOWN_REMARK_PLUGINS = [
+  ...Object.values(defaultRemarkPlugins),
+  remarkFrontmatter,
+]
 
 const SETTLED_MARKDOWN_PLUGINS = {
   ...BASE_MARKDOWN_PLUGINS,
@@ -12,6 +18,10 @@ const ATTACHED_DISPLAY_MATH = /^( {0,3})(\${2,})(?![ \t]*(?:\r?$))([\s\S]*?)\2[ 
 
 export function markdownPluginsFor(renderMath: boolean) {
   return renderMath ? SETTLED_MARKDOWN_PLUGINS : BASE_MARKDOWN_PLUGINS
+}
+
+export function markdownRemarkPlugins() {
+  return MARKDOWN_REMARK_PLUGINS
 }
 
 export function normalizeDisplayMathFences(markdown: string): string {
