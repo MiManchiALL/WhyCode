@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { Block } from './conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
 import { UserPdfGallery } from './pdf-attachments.tsx'
@@ -6,6 +6,9 @@ import { SkillBadges } from './skill-picker.tsx'
 import { MessageActions } from './message-actions.tsx'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
+
+const MESSAGE_EDITOR_BASE_HEIGHT_PX = 64
+const MESSAGE_EDITOR_MAX_HEIGHT_PX = MESSAGE_EDITOR_BASE_HEIGHT_PX * 2.5
 
 interface UserMessageCardProps {
   runtimeId: string
@@ -28,7 +31,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
       <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
-          <div className="w-[min(36rem,78vw)] rounded-[var(--wc-menu-radius)] border border-[var(--wc-line)] bg-[#eeeeeb] px-3.5 py-2.5 shadow-sm">
+          <div className="wc-user-message-bubble wc-user-message-editor w-[min(36rem,78vw)] px-3.5 py-2.5">
             <MessageEditor
               editable={props.editable}
               disabled={props.disabled}
@@ -114,6 +117,11 @@ function MessageEditor({
   editor: MessageEditorState
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    resizeMessageEditor(textarea)
+  }, [editor.draft])
   useEffect(() => {
     textareaRef.current?.focus()
   }, [])
@@ -127,7 +135,11 @@ function MessageEditor({
       <textarea
         ref={textareaRef}
         rows={2}
-        className="wc-focus-ring max-h-48 min-h-16 w-full resize-y rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-2 outline-none"
+        className="block w-full resize-none overflow-y-hidden border-0 bg-transparent p-0 outline-none"
+        style={{
+          minHeight: MESSAGE_EDITOR_BASE_HEIGHT_PX,
+          maxHeight: MESSAGE_EDITOR_MAX_HEIGHT_PX,
+        }}
         value={editor.draft}
         disabled={disabled || editor.submitting}
         onChange={(event) => editor.setDraft(event.target.value)}
@@ -143,6 +155,18 @@ function MessageEditor({
       />
     </form>
   )
+}
+
+function resizeMessageEditor(textarea: HTMLTextAreaElement): void {
+  textarea.style.overflowY = 'hidden'
+  textarea.style.height = '0px'
+  const contentHeight = textarea.scrollHeight
+  const height = Math.min(
+    Math.max(contentHeight, MESSAGE_EDITOR_BASE_HEIGHT_PX),
+    MESSAGE_EDITOR_MAX_HEIGHT_PX,
+  )
+  textarea.style.height = `${height}px`
+  textarea.style.overflowY = contentHeight > MESSAGE_EDITOR_MAX_HEIGHT_PX ? 'auto' : 'hidden'
 }
 
 function handleEditorKeyDown(
