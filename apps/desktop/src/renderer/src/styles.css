@@ -38,6 +38,8 @@
   --wc-menu-radius: 0.95rem;
   --wc-menu-shadow: 0 2px 7px rgb(33 35 31 / 6%), 0 14px 34px rgb(33 35 31 / 9%);
   --wc-composer-control-font-size: 0.8125rem;
+  --wc-conversation-navigator-gutter: 4.75rem;
+  --wc-conversation-content-right-inset: 2.75rem;
 }
 
 html,
@@ -1050,6 +1052,118 @@ button:not(:disabled),
   height: 1px;
   margin: 0.25rem 0.35rem;
   background: var(--wc-line);
+}
+
+.wc-conversation-navigator {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  width: var(--wc-conversation-navigator-gutter);
+  min-width: var(--wc-conversation-navigator-gutter);
+  align-self: stretch;
+  flex: none;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: visible;
+  padding-block: 1.5rem;
+}
+
+.wc-conversation-navigator-rail {
+  position: relative;
+  width: 2.75rem;
+  height: min(44rem, 100%);
+  min-height: min(12rem, 100%);
+  touch-action: none;
+  user-select: none;
+}
+
+.wc-conversation-navigator-track {
+  position: absolute;
+  inset: 0;
+}
+
+.wc-conversation-navigator-marker {
+  position: absolute;
+  top: 0;
+  left: 0.35rem;
+  display: flex;
+  width: 2.35rem;
+  height: 0.75rem;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: opacity 80ms ease-out, transform 70ms linear;
+}
+
+.wc-conversation-navigator-marker > span {
+  display: block;
+  min-width: 0.25rem;
+  border-radius: 999px;
+  background: rgb(48 50 45 / 32%);
+  transform-origin: left center;
+  transition:
+    width 75ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 80ms ease-out;
+}
+
+.wc-conversation-navigator-marker[data-hovered='true'] > span,
+.wc-conversation-navigator-marker[aria-current='location'] > span {
+  background: #161814;
+}
+
+.wc-conversation-navigator-preview {
+  position: absolute;
+  left: 2.85rem;
+  z-index: 30;
+  width: min(20rem, calc(100vw - 8rem));
+  pointer-events: none;
+  border: 1px solid var(--wc-line-strong);
+  border-radius: 0.9rem;
+  background: rgb(255 255 253 / 96%);
+  padding: 0.7rem 0.8rem;
+  box-shadow: var(--wc-menu-shadow);
+  color: var(--wc-ink);
+  transform: translateY(-50%);
+  backdrop-filter: blur(10px);
+}
+
+.wc-conversation-navigator-preview-title,
+.wc-conversation-navigator-preview-text {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+}
+
+.wc-conversation-navigator-preview-title {
+  -webkit-line-clamp: 2;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2rem;
+}
+
+.wc-conversation-navigator-preview-text {
+  margin-top: 0.22rem;
+  color: var(--wc-faint);
+  font-size: 0.72rem;
+  line-height: 1.12rem;
+  -webkit-line-clamp: 2;
+}
+
+@media (min-width: 1281px) {
+  .wc-conversation-balanced-content {
+    width: calc(min(100%, 56rem) - var(--wc-conversation-content-right-inset));
+    max-width: none;
+    margin-left: max(0px, calc((100% - 56rem) / 2));
+    margin-right: auto;
+  }
+}
+
+@media (max-width: 1280px) {
+  .wc-conversation-navigator {
+    display: none;
+  }
 }
 
 @keyframes wc-pop-in {

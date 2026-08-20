@@ -111,7 +111,7 @@ export function AppSidebar(props: AppSidebarProps) {
               {pinnedSessions.length > 0 && (
                 <section className="mb-4">
                   <div className="group mb-1 flex h-5 items-center px-2">
-                    <h2 className="min-w-0 flex-1 text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
+                    <h2 className="min-w-0 flex-1 whitespace-nowrap text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
                       置顶
                     </h2>
                     <button
@@ -138,7 +138,7 @@ export function AppSidebar(props: AppSidebarProps) {
               )}
               {recentSessions.length > 0 && (
                 <section className="mb-4">
-                  <h2 className="mb-1 px-2 text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
+                  <h2 className="mb-1 whitespace-nowrap px-2 text-[11px] font-medium tracking-wide text-[var(--wc-faint)]">
                     最近
                   </h2>
                   <SessionItems

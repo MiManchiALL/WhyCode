@@ -74,6 +74,7 @@ function WorkSection({
 }: ConversationViewProps & {
   section: WorkSectionData
 }) {
+  const navigationEntryId = section.userBlocks.find((block) => block.kind === 'user')?.id
   const expanded = section.activityBlocks.length > 0
     && props.expandedIds.has(section.id)
   const activityId = `work-activity-${section.id}`
@@ -81,6 +82,7 @@ function WorkSection({
     <section
       className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}
       data-conversation-scroll-section={section.id}
+      data-conversation-navigator-section={navigationEntryId}
       data-source-scope=""
     >
       {section.userBlocks.map((block) => (

@@ -4,6 +4,7 @@ import { parseHTML } from 'linkedom'
 import {
   captureConversationScrollPosition,
   restoreConversationScrollPosition,
+  scrollConversationToTarget,
 } from './conversation-scroll.ts'
 
 describe('会话滚动锚定', () => {
@@ -37,7 +38,7 @@ describe('会话滚动锚定', () => {
     })
   })
 
-  it('以实测固有高度防止截断，并让锚点段保持可见直到恢复事务释放', () => {
+  it('固化前方工作段后按最终几何恢复锚点，并保留目标段直到事务释放', () => {
     const { document } = parseHTML(`
       <main id="scroll">
         <section class="wc-completed-work-section" data-conversation-scroll-section="work-1"></section>
@@ -63,12 +64,22 @@ describe('会话滚动锚定', () => {
     defineRectangle(sections[2]!, 1_300, 600)
     defineRectangle(sections[3]!, 1_900, 400)
     target.getBoundingClientRect = () => {
-      assert.equal(sections[0]!.style.getPropertyValue('content-visibility'), 'visible')
       assert.equal(sections[1]!.style.getPropertyValue('content-visibility'), 'visible')
-      assert.equal(sections[0]!.style.getPropertyValue('contain'), 'layout style paint')
       assert.equal(sections[1]!.style.getPropertyValue('contain'), 'layout style paint')
-      assert.equal(sections[2]!.style.getPropertyValue('content-visibility'), '')
-      return rectangle(800 - currentScrollTop())
+      const preparing = sections[0]!.style.getPropertyValue('content-visibility') === 'visible'
+      if (preparing) {
+        assert.equal(sections[0]!.style.getPropertyValue('contain'), 'layout style paint')
+        return rectangle(800 - currentScrollTop())
+      }
+      assert.equal(
+        sections[0]!.style.getPropertyValue('contain-intrinsic-block-size'),
+        'auto 500px',
+      )
+      assert.equal(
+        sections[2]!.style.getPropertyValue('contain-intrinsic-block-size'),
+        'auto 600px',
+      )
+      return rectangle(1_138 - currentScrollTop())
     }
 
     const restoration = restoreConversationScrollPosition({
@@ -82,8 +93,8 @@ describe('会话滚动锚定', () => {
       },
     }, scroller)
 
-    assert.equal(restoration.position.scrollTop, 920)
-    assert.equal(currentScrollTop(), 920)
+    assert.equal(restoration.position.scrollTop, 1_258)
+    assert.equal(currentScrollTop(), 1_258)
     assert.deepEqual(
       sections.map((section) => section.style.getPropertyValue('content-visibility')),
       ['', 'visible', '', ''],
@@ -111,6 +122,62 @@ describe('会话滚动锚定', () => {
       'auto 800px',
     )
   })
+
+  it('定位用户输入时先固化前方工作段，再按释放后的最终坐标跳转', () => {
+    const { document } = parseHTML(`
+      <main id="scroll">
+        <section class="wc-completed-work-section" data-conversation-scroll-section="work-1"></section>
+        <section class="wc-completed-work-section" data-conversation-scroll-section="work-2">
+          <div data-conversation-navigator-target="user-2"></div>
+        </section>
+        <section class="wc-completed-work-section" data-conversation-scroll-section="work-3"></section>
+      </main>
+    `)
+    const scroller = document.querySelector<HTMLElement>('#scroll')!
+    const sections = [...document.querySelectorAll<HTMLElement>('section')]
+    const target = document.querySelector<HTMLElement>('[data-conversation-navigator-target]')!
+    const currentScrollTop = defineScrollerMetrics(scroller, 100, 2_000, 400)
+    defineTop(scroller, 0)
+    defineRectangle(sections[0]!, 0, 500)
+    defineRectangle(sections[1]!, 500, 800)
+    defineRectangle(sections[2]!, 1_300, 700)
+    target.getBoundingClientRect = () => {
+      assert.equal(sections[1]!.style.getPropertyValue('content-visibility'), 'visible')
+      const preparing = sections[0]!.style.getPropertyValue('content-visibility') === 'visible'
+      if (preparing) return rectangle(720 - currentScrollTop())
+      assert.equal(
+        sections[0]!.style.getPropertyValue('contain-intrinsic-block-size'),
+        'auto 500px',
+      )
+      return rectangle(1_058 - currentScrollTop())
+    }
+    const navigation = scrollConversationToTarget(scroller, 'user-2')
+    assert.ok(navigation)
+    assert.equal(currentScrollTop(), 1_046)
+    assert.equal(
+      target.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+      12,
+    )
+    assert.deepEqual(
+      sections.map((section) => section.style.getPropertyValue('content-visibility')),
+      ['', 'visible', ''],
+    )
+    assert.deepEqual(
+      sections.map((section) => section.style.getPropertyValue('contain-intrinsic-block-size')),
+      ['auto 500px', '', ''],
+    )
+
+    navigation.release()
+    assert.deepEqual(
+      sections.map((section) => section.style.getPropertyValue('content-visibility')),
+      ['', '', ''],
+    )
+    assert.equal(
+      sections[1]!.style.getPropertyValue('contain-intrinsic-block-size'),
+      'auto 800px',
+    )
+  })
+
 })
 
 function hasStableBlockSize(section: HTMLElement): boolean {

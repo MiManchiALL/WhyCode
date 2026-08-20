@@ -8,6 +8,7 @@ import {
 
 const SECTION_SELECTOR = '[data-conversation-scroll-section]'
 const BLOCK_SELECTOR = '[data-conversation-scroll-block]'
+const NAVIGATION_TARGET_SELECTOR = '[data-conversation-navigator-target]'
 
 interface MaterializedSection {
   element: HTMLElement
@@ -15,9 +16,12 @@ interface MaterializedSection {
   contain: string
 }
 
-interface ConversationScrollRestoration {
-  position: ConversationScrollPosition
+interface ConversationScrollRetention {
   release: () => void
+}
+
+interface ConversationScrollRestoration extends ConversationScrollRetention {
+  position: ConversationScrollPosition
 }
 
 export function captureConversationScrollPosition(
@@ -44,23 +48,68 @@ export function restoreConversationScrollPosition(
 
   const materialized = materializeSectionsThrough(scroller, section)
   const anchor = resolveScrollAnchor(section, savedAnchor)
+  const preliminaryAnchorTop = elementTopWithinScroller(scroller, anchor)
+  materializeTailUntilScrollable(
+    scroller,
+    section,
+    Math.max(0, preliminaryAnchorTop + savedAnchor.offset),
+    materialized,
+  )
+  const release = stabilizeMaterializedTarget(scroller, section, materialized)
   const anchorTop = elementTopWithinScroller(scroller, anchor)
-  const desiredScrollTop = Math.max(0, anchorTop + savedAnchor.offset)
-  materializeTailUntilScrollable(scroller, section, desiredScrollTop, materialized)
   scroller.scrollTop = restoredAnchorScrollTop(
     anchorTop,
     savedAnchor.offset,
     scroller,
   )
 
-  const retained = materialized.find(({ element }) => element === section)
-  releaseMaterializedSections(materialized.filter((entry) => entry !== retained))
-  return {
-    position: captureScrollPosition(scroller),
-    release: retained
-      ? retainVisibleSection(scroller, retained)
-      : noop,
+  return { position: captureScrollPosition(scroller), release }
+}
+
+/**
+ * 定位历史用户输入前先物化其前方折叠工作段，再把实测高度写回固有尺寸。
+ * 目标段保留真实布局直到离开视口，因此直接定位和会话恢复使用同一套稳定几何。
+ */
+export function scrollConversationToTarget(
+  scroller: HTMLElement,
+  targetId: string,
+): ConversationScrollRetention | null {
+  const target = findByDataValue(
+    scroller,
+    NAVIGATION_TARGET_SELECTOR,
+    'conversationNavigatorTarget',
+    targetId,
+  )
+  if (!target) return null
+
+  const section = target.closest<HTMLElement>(SECTION_SELECTOR)
+  const materialized = materializeSectionsBeforeTarget(scroller, target)
+  const preliminaryScrollTop = Math.max(
+    0,
+    elementTopWithinScroller(scroller, target) - 12,
+  )
+  if (section) {
+    materializeTailUntilScrollable(scroller, section, preliminaryScrollTop, materialized)
   }
+  const release = stabilizeMaterializedTarget(scroller, section, materialized)
+  const desiredScrollTop = Math.max(0, elementTopWithinScroller(scroller, target) - 12)
+  const scrollTop = Math.min(desiredScrollTop, maximumScrollTop(scroller))
+  scroller.scrollTop = scrollTop
+  return { release }
+}
+
+function materializeSectionsBeforeTarget(
+  scroller: HTMLElement,
+  target: HTMLElement,
+): MaterializedSection[] {
+  const materialized: MaterializedSection[] = []
+  for (const element of scroller.querySelectorAll<HTMLElement>(
+    `${SECTION_SELECTOR}, ${NAVIGATION_TARGET_SELECTOR}`,
+  )) {
+    if (element.matches(SECTION_SELECTOR)) materializeSection(element, materialized)
+    if (element === target) break
+  }
+  return materialized
 }
 
 function captureConversationScrollAnchor(
@@ -129,7 +178,10 @@ function elementAtViewport(
 function findByDataValue(
   root: HTMLElement,
   selector: string,
-  key: 'conversationScrollSection' | 'conversationScrollBlock',
+  key:
+    | 'conversationScrollSection'
+    | 'conversationScrollBlock'
+    | 'conversationNavigatorTarget',
   value: string,
 ): HTMLElement | null {
   for (const element of root.querySelectorAll<HTMLElement>(selector)) {
@@ -203,6 +255,19 @@ function releaseMaterializedSections(materialized: MaterializedSection[]): void 
       element.style.removeProperty('content-visibility')
     }
   }
+}
+
+/** 固化非目标段的实测高度后再读取最终坐标；目标段继续保留真实布局。 */
+function stabilizeMaterializedTarget(
+  scroller: HTMLElement,
+  target: HTMLElement | null,
+  materialized: MaterializedSection[],
+): () => void {
+  const retained = target
+    ? materialized.find(({ element }) => element === target)
+    : undefined
+  releaseMaterializedSections(materialized.filter((entry) => entry !== retained))
+  return retained ? retainVisibleSection(scroller, retained) : noop
 }
 
 function retainVisibleSection(

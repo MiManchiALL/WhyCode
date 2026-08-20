@@ -49,6 +49,7 @@ import { isCurrentSessionDeletion } from './session-deletion-state.ts'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
+import { ConversationNavigator } from './conversation-navigator.tsx'
 import {
   conversationSections,
   findLatestForkTurnId,
@@ -100,6 +101,7 @@ import {
 import {
   captureConversationScrollPosition,
   restoreConversationScrollPosition,
+  scrollConversationToTarget,
 } from './conversation-scroll.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 
@@ -170,6 +172,7 @@ export function App() {
   }>())
   const conversationPresentationsRef = useRef(new ConversationPresentationCache())
   const pendingScrollRestoreRef = useRef<ConversationScrollPosition | null>(null)
+  const conversationScrollReleaseRef = useRef<(() => void) | null>(null)
   const expandedIdsRef = useRef(view.expanded)
   expandedIdsRef.current = view.expanded
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
@@ -201,6 +204,21 @@ export function App() {
     () => conversationSections(blocks, workStartedAt),
     [blocks, workStartedAt],
   )
+  const releaseConversationScroll = useCallback(() => {
+    const release = conversationScrollReleaseRef.current
+    conversationScrollReleaseRef.current = null
+    release?.()
+  }, [])
+  const navigateConversation = useCallback((targetId: string) => {
+    const scroller = scrollRef.current
+    if (!scroller) return
+    releaseConversationScroll()
+    const navigation = scrollConversationToTarget(scroller, targetId)
+    if (!navigation) return
+    conversationScrollReleaseRef.current = navigation.release
+    stickToBottom.current = false
+    setShowJumpBottom(true)
+  }, [releaseConversationScroll])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const {
     catalog: skillCatalog,
@@ -793,13 +811,15 @@ export function App() {
   useLayoutEffect(() => {
     const pending = pendingScrollRestoreRef.current
     const scrollElement = scrollRef.current
-    if (!pending || !scrollElement) return
+    if (!pending || !scrollElement) return releaseConversationScroll
     pendingScrollRestoreRef.current = null
+    releaseConversationScroll()
     const restoration = restoreConversationScrollPosition(pending, scrollElement)
+    conversationScrollReleaseRef.current = restoration.release
     stickToBottom.current = restoration.position.atBottom
     setShowJumpBottom(!restoration.position.atBottom)
-    return restoration.release
-  }, [runtimeId])
+    return releaseConversationScroll
+  }, [releaseConversationScroll, runtimeId])
 
   useEffect(() => {
     const scrollElement = scrollRef.current
@@ -1427,13 +1447,22 @@ export function App() {
         />
 
         <div className="relative flex min-h-0 flex-1">
+          <ConversationNavigator
+            key={runtimeId}
+            sections={sections}
+            scrollRef={scrollRef}
+            onNavigate={navigateConversation}
+          />
           <section className="flex min-w-0 flex-1 flex-col">
             <main
               ref={scrollRef}
               onScroll={onScroll}
               className="wc-scrollbar relative min-h-0 flex-1 overflow-y-auto px-5 py-5"
             >
-              <div ref={conversationContentRef} className="mx-auto w-full max-w-4xl">
+              <div
+                ref={conversationContentRef}
+                className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
+              >
                 {!conversationStarted && (
                   <div className="mx-auto mt-[18vh] max-w-md text-center">
                     <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
@@ -1464,7 +1493,7 @@ export function App() {
             </main>
 
             <div className="relative shrink-0 px-4 pb-4 pt-1">
-              <div className="mx-auto w-full max-w-4xl">
+              <div className="wc-conversation-balanced-content mx-auto w-full max-w-4xl">
                 {composerProcessingTimeVisible && workStartedAt !== null && (
                   <div className="mb-1.5 px-2 text-xs text-[var(--wc-faint)]">
                     <ProcessingTime startedAt={workStartedAt} />
