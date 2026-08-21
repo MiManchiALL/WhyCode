@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, it } from 'node:test'
-import { providerOptionsWithReasoningEffort } from '@whycode/core'
+import {
+  providerOptionsWithReasoningEffort,
+  type ModelEntry,
+  type ProviderConfig,
+} from '@whycode/core'
 import { cliProxyModelId, type WhycodeConfig } from './config.ts'
 import { getDefaultCliProxyRoute } from './cli-proxy-models.ts'
 import {
@@ -79,6 +85,45 @@ describe('模型连接解析', () => {
       .filter((item) => item.id.endsWith('openai:gpt-5.6-sol'))
       .map((item) => item.displayName)
     assert.deepEqual(names, ['GPT-5.6 Sol', 'GPT-5.6 Sol（CLIProxyAPI）'])
+  })
+
+  it('CLIProxyAPI 的三种协议统一映射 AgentSession 身份，官方连接不透传', async () => {
+    const transportSessionId = '11111111-1111-4111-8111-111111111111'
+    const cases = [
+      ['anthropic:claude-sonnet-4-6', { anthropic: { apiKey: 'official-key' } }],
+      ['google:gemini-3.7-flash', { google: { apiKey: 'official-key' } }],
+      ['openai:gpt-5.6-sol', { openai: { apiKey: 'official-key' } }],
+    ] as const
+
+    for (const [profileId, providers] of cases) {
+      const proxy = resolveModelConnection(
+        withCliProxy([profileId]),
+        cliProxyModelId(profileId),
+      )
+      const official = resolveModelConnection(config(providers), profileId)
+      assert.equal(proxy.ok, true, profileId)
+      assert.equal(official.ok, true, profileId)
+      if (!proxy.ok || !official.ok) continue
+
+      assert.equal(
+        await captureTransportSessionHeader(
+          proxy.value.entry,
+          proxy.value.providerConfig,
+          transportSessionId,
+        ),
+        transportSessionId,
+        profileId,
+      )
+      assert.equal(
+        await captureTransportSessionHeader(
+          official.value.entry,
+          official.value.providerConfig,
+          transportSessionId,
+        ),
+        undefined,
+        profileId,
+      )
+    }
   })
 
   it('CLIProxyAPI 不接受未启用或未注册的模型', () => {
@@ -269,5 +314,47 @@ function withCliProxy(
       modelIds,
       modelRoutes,
     },
+  }
+}
+
+async function captureTransportSessionHeader(
+  entry: ModelEntry,
+  providerConfig: ProviderConfig,
+  transportSessionId: string,
+): Promise<string | undefined> {
+  let header: string | undefined
+  const server = createServer(async (request, response) => {
+    const value = request.headers['x-session-id']
+    header = Array.isArray(value) ? value[0] : value
+    for await (const _chunk of request) {
+      // Drain the request before replying so every provider observes a normal HTTP exchange.
+    }
+    response.writeHead(400, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: { message: 'request captured', type: 'test' } }))
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  try {
+    const address = server.address() as AddressInfo
+    const model = entry.create({
+      ...providerConfig,
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+    }, { transportSessionId })
+    assert.notEqual(typeof model, 'string')
+    if (typeof model !== 'string') {
+      await assert.rejects(async () => model.doGenerate({
+        prompt: [{
+          role: 'user',
+          content: [{ type: 'text', text: 'hello' }],
+        }],
+      }))
+    }
+    return header
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
   }
 }

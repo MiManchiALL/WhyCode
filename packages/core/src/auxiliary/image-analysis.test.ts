@@ -33,8 +33,9 @@ describe('辅助识图模型边界', () => {
           warnings: [],
         }),
       })
+      let transportSessionId = ''
       const analyzer = createAuxiliaryImageAnalyzer({
-        model: modelEntry(model, true),
+        model: modelEntry(model, true, (id) => { transportSessionId = id ?? '' }),
         providerConfig: { apiKey: 'helper-secret' },
       })
       assert.equal(await analyzer.analyze({
@@ -44,6 +45,7 @@ describe('辅助识图模型边界', () => {
       }, new AbortController().signal), '观察结果')
 
       assert.equal(model.doGenerateCalls.length, 1)
+      assert.match(transportSessionId, /^[0-9a-f-]{36}$/)
       const call = model.doGenerateCalls[0]!
       assert.equal(call.tools?.length ?? 0, 0)
       const prompt = JSON.stringify(call.prompt)
@@ -69,7 +71,11 @@ describe('辅助识图模型边界', () => {
   })
 })
 
-function modelEntry(model: MockLanguageModelV4, vision: boolean): ModelEntry {
+function modelEntry(
+  model: MockLanguageModelV4,
+  vision: boolean,
+  onCreate?: (transportSessionId: string | undefined) => void,
+): ModelEntry {
   return {
     id: vision ? 'test:helper' : 'test:text',
     displayName: vision ? 'Helper' : 'Text',
@@ -84,7 +90,10 @@ function modelEntry(model: MockLanguageModelV4, vision: boolean): ModelEntry {
       contextWindow: 100_000,
       maxOutput: 4_000,
     },
-    create: () => model,
+    create: (_config, options) => {
+      onCreate?.(options?.transportSessionId)
+      return model
+    },
   }
 }
 

@@ -308,7 +308,15 @@ function cliProxyEntry(entry: ModelEntry, routeModelId: string): ModelEntry {
     id: cliProxyModelId(entry.id),
     displayName: `${entry.displayName}（CLIProxyAPI）`,
     capabilities,
-    create: (config) => entry.create(config, routeModelId),
+    create: (config, options) => entry.create({
+      ...config,
+      requestHeaders: options?.transportSessionId
+        ? {
+            ...config.requestHeaders,
+            'X-Session-ID': options.transportSessionId,
+          }
+        : config.requestHeaders,
+    }, { wireModelId: routeModelId }),
   }
 }
 

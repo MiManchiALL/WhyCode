@@ -1,4 +1,5 @@
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
+import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import type {
   ContextUsageInfo,
@@ -355,8 +356,11 @@ export class AgentSession {
   private lastTurnAssistantText = ''
   /** 完整共识任务期间由 Coordinator 持有最终 idle，避免 Main 与任务终点之间出现假空闲。 */
   private terminalStatusManaged = false
+  /** 独立模型会话的传输身份；恢复沿用会话 ID，内存代理按实例分配。 */
+  private readonly transportSessionId: string
   constructor(options: AgentSessionOptions) {
     this.options = options
+    this.transportSessionId = options.sessionRecorder?.sessionId ?? randomUUID()
     this.userQuestionsEnabled = options.userQuestionsEnabled ?? true
     this.skillTurn = new SkillTurnContext(options.skillCatalog)
     const initialMessages = options.sessionRecorder?.initialMessages ?? []
@@ -506,7 +510,9 @@ export class AgentSession {
 
   private createLanguageModel() {
     const selection = this.currentModelSelection()
-    return selection.model.create(selection.providerConfig)
+    return selection.model.create(selection.providerConfig, {
+      transportSessionId: this.transportSessionId,
+    })
   }
 
   private requestProviderOptions() {

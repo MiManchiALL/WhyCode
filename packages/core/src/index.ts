@@ -14,6 +14,7 @@ export {
   MODEL_REGISTRY,
   getModelEntry,
   type ModelEntry,
+  type ModelCreateOptions,
   type ModelCapabilities,
   type ProviderConfig,
 } from './providers/registry.ts'

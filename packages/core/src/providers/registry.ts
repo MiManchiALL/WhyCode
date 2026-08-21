@@ -25,11 +25,8 @@ export interface ModelEntry {
   /** 决定工具图片在 provider 请求边界使用原生结果还是 Chat 兼容投影。 */
   protocol: ProviderProtocol
   capabilities: ModelCapabilities
-  /**
-   * 创建 AI SDK LanguageModel 实例。wireModelId 只供已审核的连接映射覆盖；
-   * 省略时始终使用目录中的官方 API ID。
-   */
-  create: (config: ProviderConfig, wireModelId?: string) => LanguageModel
+  /** 创建 AI SDK LanguageModel；连接适配器负责把传输身份映射到具体协议。 */
+  create: (config: ProviderConfig, options?: ModelCreateOptions) => LanguageModel
   /** 随每次请求透传给 AI SDK 的 providerOptions（厂商特殊参数逃生舱） */
   providerOptions?: ProviderMetadata
 }
@@ -38,6 +35,15 @@ export interface ProviderConfig {
   apiKey: string
   /** 同协议端点（透明中转/代理场景） */
   baseURL?: string
+  /** 只由连接适配器生成，不来自用户配置。 */
+  requestHeaders?: Readonly<Record<string, string>>
+}
+
+export interface ModelCreateOptions {
+  /** 只供已审核的连接映射覆盖；省略时使用目录中的官方 API ID。 */
+  wireModelId?: string
+  /** 独立模型会话的稳定身份；是否透传及如何编码由连接适配器决定。 */
+  transportSessionId?: string
 }
 
 type ModelFactory = (config: ProviderConfig, wireModelId: string) => LanguageModel
@@ -51,7 +57,7 @@ function registryEntry(profileId: string, factory: ModelFactory): ModelEntry {
     protocol: getBuiltInProvider(profile.provider).protocol,
     capabilities: profile.capabilities,
     providerOptions: profile.providerOptions,
-    create: (config, wireModelId = profile.modelId) => factory(config, wireModelId),
+    create: (config, options) => factory(config, options?.wireModelId ?? profile.modelId),
   }
 }
 
@@ -59,12 +65,14 @@ const anthropicMessages: ModelFactory = (config, wireModelId) =>
   createAnthropic({
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('anthropic').defaultBaseURL,
+    headers: copyRequestHeaders(config),
   })(wireModelId)
 
 const deepSeekChat: ModelFactory = (config, wireModelId) =>
   createDeepSeek({
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('deepseek').defaultBaseURL,
+    headers: copyRequestHeaders(config),
   })(wireModelId)
 
 const googleChat: ModelFactory = (config, wireModelId) =>
@@ -72,6 +80,7 @@ const googleChat: ModelFactory = (config, wireModelId) =>
     name: 'google',
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('google').defaultBaseURL,
+    headers: copyRequestHeaders(config),
     supportsStructuredOutputs: true,
   })(wireModelId)
 
@@ -80,6 +89,7 @@ const mimoChat: ModelFactory = (config, wireModelId) =>
     name: 'mimo',
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('mimo').defaultBaseURL,
+    headers: copyRequestHeaders(config),
   })(wireModelId)
 
 const zhipuChat: ModelFactory = (config, wireModelId) =>
@@ -87,13 +97,19 @@ const zhipuChat: ModelFactory = (config, wireModelId) =>
     name: 'zhipu',
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('zhipu').defaultBaseURL,
+    headers: copyRequestHeaders(config),
   })(wireModelId)
 
 const openAIResponses: ModelFactory = (config, wireModelId) =>
   createOpenAI({
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('openai').defaultBaseURL,
+    headers: copyRequestHeaders(config),
   }).responses(wireModelId)
+
+function copyRequestHeaders(config: ProviderConfig): Record<string, string> | undefined {
+  return config.requestHeaders ? { ...config.requestHeaders } : undefined
+}
 
 /** 内置模型的官方连接适配器；模型固有信息只维护在 catalog.ts。 */
 export const MODEL_REGISTRY: readonly ModelEntry[] = [

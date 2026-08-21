@@ -76,7 +76,7 @@ async function captureRequest(
           apiKey: 'test-key',
           baseURL: `http://127.0.0.1:${address.port}/v1`,
         },
-        routeModelId,
+        { wireModelId: routeModelId },
       ),
       prompt: 'hello',
       providerOptions: providerOptionsWithReasoningEffort(entry, reasoningEffort),

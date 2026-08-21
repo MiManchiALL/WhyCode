@@ -1,4 +1,5 @@
 import { generateText, type UserContent } from 'ai'
+import { randomUUID } from 'node:crypto'
 import { prepareImageAttachmentForModel } from '../attachments/renditions.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effort.ts'
@@ -63,7 +64,9 @@ export function createAuxiliaryImageAnalyzer(options: {
         })
       }
       const result = await generateText({
-        model: options.model.create(options.providerConfig),
+        model: options.model.create(options.providerConfig, {
+          transportSessionId: randomUUID(),
+        }),
         system: AUXILIARY_VISION_SYSTEM_PROMPT,
         messages: [{ role: 'user', content }],
         abortSignal,

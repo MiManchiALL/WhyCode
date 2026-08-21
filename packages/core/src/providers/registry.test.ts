@@ -136,7 +136,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
       const entry = getModelEntry(profileId)
       const created = entry.create(
         { apiKey: 'test', baseURL: 'http://localhost/v1' },
-        routeModelId,
+        { wireModelId: routeModelId },
       )
       assert.equal(entry.id, profileId)
       assert.notEqual(typeof created, 'string')
