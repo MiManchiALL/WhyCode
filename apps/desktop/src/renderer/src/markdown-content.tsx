@@ -1,9 +1,11 @@
 import {
   memo,
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type MouseEvent,
   type ReactNode,
 } from 'react'
@@ -41,7 +43,9 @@ export const MarkdownContent = memo(function MarkdownContent({
   const rootRef = useRef<HTMLDivElement>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const mathEnabled = renderMath ?? !streaming
+  const staticReady = useDeferredStaticMarkdown(streaming)
+  const effectiveStreaming = streaming || !staticReady
+  const mathEnabled = !effectiveStreaming && (renderMath ?? true)
   const renderedText = useMemo(
     () => mathEnabled ? normalizeDisplayMathFences(text) : text,
     [mathEnabled, text],
@@ -127,18 +131,42 @@ export const MarkdownContent = memo(function MarkdownContent({
   return (
     <div ref={rootRef} className="wc-markdown">
       <Streamdown
-        mode={streaming ? 'streaming' : 'static'}
+        className="wc-markdown-content"
+        mode={effectiveStreaming ? 'streaming' : 'static'}
         controls={MARKDOWN_CONTROLS}
         components={components}
         linkSafety={LINK_SAFETY}
         plugins={markdownPluginsFor(mathEnabled)}
-        remarkPlugins={streaming ? undefined : markdownRemarkPlugins()}
+        remarkPlugins={effectiveStreaming ? undefined : markdownRemarkPlugins()}
       >
         {renderedText}
       </Streamdown>
     </div>
   )
 })
+
+/**
+ * 最终事件先提交轻量的运行态收尾；完整 Markdown/TeX 在浏览器空闲阶段升级。
+ * 历史静态正文首次打开仍直接渲染，不引入二次闪烁。
+ */
+function useDeferredStaticMarkdown(streaming: boolean): boolean {
+  const [ready, setReady] = useState(!streaming)
+  useEffect(() => {
+    if (streaming) {
+      setReady(false)
+      return
+    }
+    if (ready) return
+    const commit = () => startTransition(() => setReady(true))
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(commit, { timeout: 250 })
+      return () => window.cancelIdleCallback(id)
+    }
+    const id = window.setTimeout(commit, 0)
+    return () => window.clearTimeout(id)
+  }, [ready, streaming])
+  return ready
+}
 
 function SourceIcon({ kind }: { kind: SourceKind }) {
   const Icon = kind === 'git' ? GitBranch : kind === 'document' ? FileText : Globe2

@@ -18,7 +18,7 @@ import {
 } from '../tasks/types.ts'
 import { buildLoadedSession, parseTranscript, SessionCorruptError } from './chain.ts'
 import { createTurnAbortedMessage, isTurnAbortedMessage } from './interruption.ts'
-import { getSessionPaths } from './metadata.ts'
+import { getSessionPaths, readMetadataCache } from './metadata.ts'
 import { SessionStore } from './store.ts'
 import { SESSION_SCHEMA_VERSION, sessionEntrySchema } from './types.ts'
 import {
@@ -1537,6 +1537,25 @@ describe('SessionStore', () => {
     assert.equal(sessions[0]!.resumable, true)
     assert.equal(sessions[0]!.title, 'hello')
     assert.equal(sessions[0]!.modelId, 'test:other-model')
+  })
+
+  it('列表缓存只复用精确 transcript 边界，并可在运行时卸载前重新封存', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace(null),
+      modelId: 'test:model',
+    })
+    const paths = getSessionPaths(storeRoots.get(store)!, journal.sessionId)
+
+    assert.equal((await readMetadataCache(paths, journal.sessionId))?.sessionId, journal.sessionId)
+    await journal.recordViewEvents([{
+      type: 'core-event',
+      event: { type: 'turn-start', turnId: randomUUID() },
+    }])
+    assert.equal(await readMetadataCache(paths, journal.sessionId), null)
+
+    await journal.sealMetadataCache()
+    assert.equal((await readMetadataCache(paths, journal.sessionId))?.sessionId, journal.sessionId)
   })
 
   it('多个活动 Journal 同时以实时 metadata 进入列表，不从写入中的 transcript 重开', async () => {

@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  MAX_VISIBLE_TOOL_OUTPUT_CHARS,
+  isWellFormedUnicode,
+} from '../index.ts'
+import {
   TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
   USER_IMAGE_ATTACHMENT_MAX_COUNT,
 } from '../attachments/limits.ts'
-import { pushCoalescedViewEvent, toViewEvent, viewEventSchema, type ViewEvent } from './view-events.ts'
+import {
+  compactViewEvent,
+  pushCoalescedViewEvent,
+  toViewEvent,
+  viewEventSchema,
+  type ViewEvent,
+} from './view-events.ts'
 
 describe('用户可见事件契约', () => {
   it('只接收可恢复内容，排除审批和运行状态，并保留持久化检查点', () => {
@@ -86,6 +96,44 @@ describe('用户可见事件契约', () => {
 
     assert.equal(events.length, 2)
     assert.deepEqual(events[0], core({ type: 'text-delta', text: '前半后半' }))
+  })
+
+  it('工具进度的可见投影有界并保留 Unicode 安全的最新尾部', () => {
+    const events: ViewEvent[] = []
+    pushCoalescedViewEvent(events, core({
+      type: 'tool-progress',
+      toolUseId: 'tool-1',
+      output: `早期${'a'.repeat(MAX_VISIBLE_TOOL_OUTPUT_CHARS)}\uD83D\uDE00`,
+    }))
+    pushCoalescedViewEvent(events, core({
+      type: 'tool-progress',
+      toolUseId: 'tool-1',
+      output: '最新结果',
+    }))
+
+    const event = events[0]?.type === 'core-event' ? events[0].event : null
+    assert.equal(event?.type, 'tool-progress')
+    const output = event?.type === 'tool-progress' ? event.output : ''
+    assert.ok(output.length <= MAX_VISIBLE_TOOL_OUTPUT_CHARS)
+    assert.match(output, /^\[较早的工具输出已省略\]/u)
+    assert.match(output, /😀最新结果$/u)
+    assert.equal(isWellFormedUnicode(output), true)
+  })
+
+  it('单条工具终值压缩为有界的可读展示文本', () => {
+    const event = compactViewEvent(core({
+      type: 'tool-end',
+      toolUseId: 'tool-1',
+      result: { output: 'x'.repeat(MAX_VISIBLE_TOOL_OUTPUT_CHARS + 1), ok: true },
+      isError: false,
+    }))
+    const result = event.type === 'core-event' && event.event.type === 'tool-end'
+      ? event.event.result
+      : null
+
+    assert.equal(typeof result, 'string')
+    assert.ok((result as string).length <= MAX_VISIBLE_TOOL_OUTPUT_CHARS)
+    assert.match(result as string, /^\[较早的工具输出已省略\]/u)
   })
 
   it('拒绝结构不完整的持久化事件', () => {

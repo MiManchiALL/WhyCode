@@ -6,7 +6,9 @@ import type {
   ViewEvent,
 } from '@whycode/core'
 import {
+  appendVisibleToolOutput,
   isStepScopedCoreEvent,
+  visibleToolResult,
   type CoreEvent,
   type UserQuestion,
 } from '@whycode/core/events'
@@ -283,13 +285,13 @@ function applyStableCoreEvent(
     case 'tool-progress':
       return updateTool(state, event.toolUseId, (call) => ({
         ...call,
-        progress: call.progress + event.output,
+        progress: appendVisibleToolOutput(call.progress, event.output),
       }))
     case 'tool-end':
       return updateTool(state, event.toolUseId, (call) => ({
         ...call,
         status: event.isError ? 'error' : 'done',
-        result: String(event.result),
+        result: visibleToolResult(event.result),
       }))
     case 'image-viewed':
       return updateTool(state, event.toolUseId, (call) => ({

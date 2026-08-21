@@ -8,7 +8,14 @@ export type {
   ContextUsageInfo,
   StopReason,
 } from './events.ts'
-export { isStepScopedCoreEvent } from './events.ts'
+export {
+  appendVisibleToolOutput,
+  compactVisibleCoreEvent,
+  isStepScopedCoreEvent,
+  MAX_VISIBLE_TOOL_OUTPUT_CHARS,
+  truncateVisibleToolOutput,
+  visibleToolResult,
+} from './events.ts'
 export { isWellFormedUnicode, unicodeSafePrefix, unicodeSafeSuffix } from './text.ts'
 export {
   MODEL_REGISTRY,

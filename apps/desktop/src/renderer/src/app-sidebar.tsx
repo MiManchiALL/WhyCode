@@ -253,7 +253,7 @@ function SessionItem({
   onRequestDelete: (sessionId: string) => void
 }) {
   const directory = session.workspace ? workspaceDisplayDirectory(session.workspace) : null
-  const selectable = !busy && !session.isCurrent && session.resumable
+  const selectable = !busy && !deleting && !session.isCurrent && session.resumable
   return (
     <div
       className={`group flex min-w-0 items-center rounded-xl pr-1 transition-colors ${
@@ -294,7 +294,7 @@ function SessionItem({
           <button
             type="button"
             className="wc-icon-button size-7 opacity-0 group-hover:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
-            disabled={busy}
+            disabled={busy || deleting}
             aria-label={`管理会话 ${session.title || '未命名会话'}`}
           >
             <MoreHorizontal size={15} />
@@ -311,7 +311,7 @@ function SessionItem({
             </DropdownMenu.Item>
             <DropdownMenu.Item
               className="wc-menu-item text-[var(--wc-danger)]"
-              disabled={session.running}
+              disabled={session.running || deleting}
               onSelect={() => onRequestDelete(session.sessionId)}
             >
               <Trash2 size={15} />

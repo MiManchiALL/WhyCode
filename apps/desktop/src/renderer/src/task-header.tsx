@@ -46,8 +46,8 @@ export function TaskHeader(props: TaskHeaderProps) {
           className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.subagentPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}
           onClick={props.onToggleSubagentPanel}
           aria-pressed={props.subagentPanelOpen}
-          aria-label={props.subagentPanelOpen ? '收起子代理面板' : '展开子代理面板'}
-          title={props.subagentPanelOpen ? '收起子代理面板' : '展开子代理面板'}
+          aria-label={props.subagentPanelOpen ? '收起侧边栏' : '展开侧边栏'}
+          title={props.subagentPanelOpen ? '收起侧边栏' : '展开侧边栏'}
         >
           <PanelRight size={16} />
         </button>

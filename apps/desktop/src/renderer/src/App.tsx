@@ -47,7 +47,10 @@ import {
   toggleExpanded,
   voteLabel,
 } from './conversation-state.ts'
-import { isCurrentSessionDeletion } from './session-deletion-state.ts'
+import {
+  isCurrentSessionDeletion,
+  preserveDeletionTarget,
+} from './session-deletion-state.ts'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
@@ -93,6 +96,7 @@ import { TaskHeader } from './task-header.tsx'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
 import { SubagentPanel } from './subagent-panel.tsx'
+import { WorktreePreparation } from './worktree-preparation.tsx'
 import type { SubagentPanelPage } from './subagent-presentation.ts'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import { PaperFrame } from './paper-frame.tsx'
@@ -124,6 +128,7 @@ export function App() {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null)
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary[]>([])
+  const [worktreeStatusRevision, setWorktreeStatusRevision] = useState(0)
   const [subagents, setSubagents] = useState<SubagentSummary[]>([])
   const [subagentPanelOpen, setSubagentPanelOpen] = useState(false)
   const [subagentPanelRetained, setSubagentPanelRetained] = useState(false)
@@ -133,6 +138,10 @@ export function App() {
     useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
   const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
+  const [worktreePreparation, setWorktreePreparation] = useState<{
+    message: string
+    baseRef: string | null
+  } | null>(null)
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
   const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
   const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
@@ -158,11 +167,13 @@ export function App() {
   const sessionTransitionPendingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
   const ownsResumeRequestRef = useRef(false)
+  const deletingSessionIdRef = useRef<string | null>(null)
   const deletionBlocksRuntimeRef = useRef(false)
   const runtimeIdRef = useRef('')
   const sessionIdRef = useRef<string | null>(null)
   const activeSnapshotSequenceRef = useRef(0)
-  const sessionListRefreshSequenceRef = useRef(0)
+  const sessionListRefreshInFlightRef = useRef<Promise<void> | null>(null)
+  const sessionListRefreshRequestedRef = useRef(false)
   const backgroundTaskRevisionRef = useRef(-1)
   const backgroundTaskStatesRef = useRef(new Map<string, BackgroundTaskState>())
   const subagentRevisionRef = useRef(-1)
@@ -369,6 +380,11 @@ export function App() {
     setDeletionBlocksRuntimeState(blocked)
   }, [])
 
+  const setDeletingSession = useCallback((sessionId: string | null) => {
+    deletingSessionIdRef.current = sessionId
+    setDeletingSessionId(sessionId)
+  }, [])
+
   const beginSessionTransition = useCallback(() => {
     if (sessionTransitionPendingRef.current) return false
     sessionTransitionPendingRef.current = true
@@ -427,33 +443,38 @@ export function App() {
   ])
 
   const refreshSessions = useCallback(async () => {
-    const sequence = ++sessionListRefreshSequenceRef.current
-    try {
-      const next = await window.whycode.listSessions()
-      if (sequence !== sessionListRefreshSequenceRef.current) return
-      setSessions(next)
-      setSessionListError(null)
-    } catch (error) {
-      if (sequence !== sessionListRefreshSequenceRef.current) return
-      setSessionListError(
-        `会话历史读取失败：${error instanceof Error ? error.message : String(error)}`,
-      )
+    sessionListRefreshRequestedRef.current = true
+    if (sessionListRefreshInFlightRef.current) {
+      return sessionListRefreshInFlightRef.current
     }
+    const refresh = async () => {
+      do {
+        sessionListRefreshRequestedRef.current = false
+        try {
+          const next = await window.whycode.listSessions()
+          setSessions((current) => sameSessionList(current, next) ? current : next)
+          setSessionListError(null)
+        } catch (error) {
+          setSessionListError(
+            `会话历史读取失败：${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+      } while (sessionListRefreshRequestedRef.current)
+    }
+    const inFlight = refresh().finally(() => {
+      if (sessionListRefreshInFlightRef.current === inFlight) {
+        sessionListRefreshInFlightRef.current = null
+      }
+    })
+    sessionListRefreshInFlightRef.current = inFlight
+    return inFlight
   }, [])
 
-  const refreshModels = useCallback(async () => {
-    const targetRuntimeId = runtimeIdRef.current || undefined
-    const [nextModels, snapshot] = await Promise.all([
-      window.whycode.listModels(targetRuntimeId),
-      window.whycode.runtimeSnapshot(targetRuntimeId),
-    ])
-    if (runtimeIdRef.current && runtimeIdRef.current !== snapshot.runtimeId) return
+  const refreshModelCatalog = useCallback(async () => {
+    const targetRuntimeId = runtimeIdRef.current
+    const nextModels = await window.whycode.listModels(targetRuntimeId || undefined)
+    if (runtimeIdRef.current !== targetRuntimeId) return
     setModels(nextModels)
-    setModelId(snapshot.modelId ?? '')
-    setReasoningEffort(snapshot.reasoningEffort)
-    setContextUsage(snapshot.contextUsage)
-    setForkOrigin(snapshot.forkOrigin)
-    setForkPendingTurnId(null)
   }, [])
 
   const applyBackgroundTaskState = useCallback((state: BackgroundTaskState) => {
@@ -463,6 +484,7 @@ export function App() {
     ) return
     backgroundTaskRevisionRef.current = state.revision
     setBackgroundTasks(state.tasks)
+    setWorktreeStatusRevision((revision) => revision + 1)
   }, [])
 
   const applySubagentState = useCallback((state: SubagentState) => {
@@ -472,6 +494,7 @@ export function App() {
     ) return
     subagentRevisionRef.current = state.revision
     setSubagents(state.subagents)
+    setWorktreeStatusRevision((revision) => revision + 1)
   }, [])
 
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
@@ -543,11 +566,16 @@ export function App() {
       setShowJumpBottom(!scroll.atBottom)
     }
     setWorkspace(snapshot.workspace)
+    if (changingRuntime) setWorktreePreparation(null)
     setPermMode(snapshot.permissionMode)
     setContextUsage(snapshot.contextUsage)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
-    setDeletingSessionId(snapshot.deletingSessionId)
+    setDeletingSessionId((current) => {
+      const next = preserveDeletionTarget(current, snapshot.deletingSessionId)
+      deletingSessionIdRef.current = next
+      return next
+    })
     setDeletionBlocksRuntime(Boolean(snapshot.deletingSessionId))
     setResumingSessionId(snapshot.resumingSessionId)
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
@@ -583,7 +611,7 @@ export function App() {
         applyRuntimeSnapshot(snapshot)
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
-        void refreshModels()
+        void refreshModelCatalog()
         return
       }
       if (snapshot.resumingSessionId) return
@@ -599,7 +627,7 @@ export function App() {
   }, [
     addError,
     applyRuntimeSnapshot,
-    refreshModels,
+    refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
   ])
@@ -617,17 +645,20 @@ export function App() {
         break
       case 'work-finished':
         setWorkStartedAt(null)
+        setWorktreeStatusRevision((revision) => revision + 1)
         void refreshSessions()
+        break
+      case 'tool-end':
+        setWorktreeStatusRevision((revision) => revision + 1)
         break
       case 'agent-status':
         setStatus(event.status)
         if (event.status !== 'waiting-approval') setApproval(null)
         if (event.status === 'idle' || event.status === 'error') {
           setStopping(false)
-          if (deletionBlocksRuntimeRef.current) {
-            setDeletingSessionId(null)
-            setDeletionBlocksRuntime(false)
-          }
+          // work-finished 在 Main 中先于权威终态发布；再读一次列表，避免首次快照
+          // 恰好仍观察到 busy 而让侧栏运行标记滞留。
+          void refreshSessions()
         }
         if (event.status === 'idle') setNegoStatus(null)
         if (
@@ -737,6 +768,17 @@ export function App() {
     })
   }, [applyBackgroundTaskState])
 
+  useEffect(() => window.whycode.onSessionDeletion((state) => {
+    if (deletingSessionIdRef.current === state.sessionId) {
+      setDeletingSession(null)
+      setDeletionBlocksRuntime(false)
+    }
+    if (state.status === 'failed') {
+      setSessionActionError(`会话删除未完成：${state.error}`)
+    }
+    void refreshSessions()
+  }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime])
+
   useEffect(() => {
     if (subagentPanelOpen) setSubagentPanelRetained(true)
   }, [subagentPanelOpen])
@@ -806,6 +848,10 @@ export function App() {
         || event.type === 'turn-start'
         || event.type === 'work-finished'
         || event.type === 'turn-end'
+        || (
+          event.type === 'agent-status'
+          && (event.status === 'idle' || event.status === 'error')
+        )
       ) {
         void refreshSessions()
       }
@@ -927,7 +973,7 @@ export function App() {
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
-  const sessionChangeLocked = deletingSessionId !== null
+  const sessionChangeLocked = deletionBlocksRuntime
     || resumingSessionId !== null
     || sessionTransitionPending
     || attachmentSubmissionPending
@@ -954,9 +1000,9 @@ export function App() {
     setWorkspaceCandidate(null)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
-    void refreshModels()
+    void refreshModelCatalog()
     return true
-  }, [addError, applyRuntimeSnapshot, refreshModels, refreshSessions])
+  }, [addError, applyRuntimeSnapshot, refreshModelCatalog, refreshSessions])
 
   const pickProject = useCallback(() => {
     if (!beginSessionTransition()) return
@@ -1049,7 +1095,7 @@ export function App() {
       setSessionActionError(null)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
-      void refreshModels()
+      void refreshModelCatalog()
     }).catch((error) => {
       const message = `会话恢复请求失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
@@ -1061,22 +1107,24 @@ export function App() {
   }, [
     addError,
     applyRuntimeSnapshot,
-    refreshModels,
+    refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
   ])
 
   const deleteSession = useCallback((sessionId: string) => {
     if (
-      deletingSessionId
+      deletingSessionIdRef.current
       || resumingSessionIdRef.current
       || sessionTransitionPendingRef.current
     ) return
-    setDeletingSessionId(sessionId)
-    void window.whycode.runtimeSnapshot(runtimeIdRef.current || undefined).then((snapshot) => {
-      setDeletionBlocksRuntime(isCurrentSessionDeletion(snapshot.sessionId, sessionId))
-      return window.whycode.deleteSession(sessionId)
-    }).then(async (result) => {
+    setSessionActionError(null)
+    setDeletingSession(sessionId)
+    // 同步关闭删除当前会话与切换之间的点击竞态；Main 接管后立即切到替代会话。
+    setDeletionBlocksRuntime(isCurrentSessionDeletion(sessionIdRef.current, sessionId))
+    let cleanupPending = false
+    void window.whycode.deleteSession(sessionId).then(async (result) => {
+      cleanupPending = result.ok && result.cleanupPending
       if (result.ok || result.deletedCurrent) {
         const detachedDraft = composerDraftsRef.current.get(sessionId)
         if (detachedDraft) releaseImageDrafts(detachedDraft.images)
@@ -1094,21 +1142,22 @@ export function App() {
         conversationPresentationsRef.current.delete(sessionId)
         void window.whycode.consensusStatus().then(setConsensus)
       }
-      if (!result.ok) addError(result.error ?? '删除会话失败')
+      if (!result.ok) setSessionActionError(result.error ?? '删除会话失败')
     }).catch(() => {
-      addError('删除会话失败，请重试')
+      setSessionActionError('删除会话失败，请重试')
     }).finally(() => {
-      setDeletingSessionId(null)
-      setDeletionBlocksRuntime(false)
+      if (!cleanupPending) {
+        setDeletingSession(null)
+        setDeletionBlocksRuntime(false)
+      }
       void refreshSessions()
     })
   }, [
-    addError,
     applyRuntimeSnapshot,
-    deletingSessionId,
     refreshSessions,
     resetActiveComposer,
     setDeletionBlocksRuntime,
+    setDeletingSession,
   ])
 
   const setSessionPinned = useCallback((sessionId: string, pinned: boolean) => {
@@ -1147,7 +1196,7 @@ export function App() {
       applyRuntimeSnapshot(result.snapshot)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
-      void refreshModels()
+      void refreshModelCatalog()
     }).catch((error) => {
       const message = `创建会话分支失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
@@ -1161,7 +1210,7 @@ export function App() {
     applyRuntimeSnapshot,
     beginSessionTransition,
     endSessionTransition,
-    refreshModels,
+    refreshModelCatalog,
     refreshSessions,
     status,
   ])
@@ -1250,10 +1299,10 @@ export function App() {
   const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
     setConnectionSettings(snapshot)
     void window.whycode.consensusStatus().then(setConsensus)
-    void refreshModels().catch((error) => {
+    void refreshModelCatalog().catch((error) => {
       addError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
     })
-  }, [addError, refreshModels])
+  }, [addError, refreshModelCatalog])
 
   const send = useCallback((urgent = false) => {
     if (
@@ -1271,6 +1320,10 @@ export function App() {
       || attachmentFallbackText(imageDrafts.length, pdfDrafts.length)
       || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
     if (!text && imageDrafts.length === 0) return
+    const preparingWorktree = !conversationStarted && workspace.mode === 'pending-worktree'
+    if (preparingWorktree) {
+      setWorktreePreparation({ message: text, baseRef: workspace.baseRef })
+    }
     const sentImageDrafts = detachImageDrafts()
     const sentPdfDrafts = detachPdfDrafts()
     const sentRestoredInputIds = restoredInputIds
@@ -1328,6 +1381,9 @@ export function App() {
           ? '附件读取或消息发送失败，内容已恢复到输入框'
           : '消息发送失败，内容已恢复到输入框')
       } finally {
+        if (preparingWorktree && runtimeIdRef.current === targetRuntimeId) {
+          setWorktreePreparation(null)
+        }
         setAttachmentSubmissionPending(false)
         if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(false)
       }
@@ -1338,6 +1394,7 @@ export function App() {
     captureSkills,
     checkpointRestoreToolUseId,
     clearSkills,
+    conversationStarted,
     deletionBlocksRuntime,
     detachImageDrafts,
     detachPdfDrafts,
@@ -1351,6 +1408,7 @@ export function App() {
     resumingSessionId,
     sessionTransitionPending,
     stopping,
+    workspace,
   ])
 
   const answerQuestion = useCallback((answers: string[]) => {
@@ -1521,7 +1579,13 @@ export function App() {
                 ref={conversationContentRef}
                 className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
               >
-                {!conversationStarted && (
+                {!conversationStarted && worktreePreparation && (
+                  <WorktreePreparation
+                    message={worktreePreparation.message}
+                    baseRef={worktreePreparation.baseRef}
+                  />
+                )}
+                {!conversationStarted && !worktreePreparation && (
                   <div className="mx-auto mt-[18vh] max-w-md text-center">
                     <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
                     <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
@@ -1623,7 +1687,7 @@ export function App() {
                         />
                       )}
 
-                      {!conversationStarted && (
+                      {!conversationStarted && !worktreePreparation && (
                         <WorkspaceContextBar
                           workspace={workspace}
                           candidate={workspaceCandidate}
@@ -1674,6 +1738,8 @@ export function App() {
                         placeholder={
                           stopping
                             ? '正在停止当前任务并清理子进程…'
+                            : worktreePreparation
+                              ? '正在创建 Worktree 并检出文件…'
                             : sessionTransitionPending
                               ? '正在切换会话…'
                               : deletionBlocksRuntime
@@ -1754,6 +1820,7 @@ export function App() {
                 plan={view.taskPlan}
                 subagents={subagents}
                 busy={interactionBusy}
+                worktreeStatusRevision={worktreeStatusRevision}
                 onPrepareCommitPrompt={prepareCommitPrompt}
                 onOpenSubagents={() => {
                   setSubagentPanelPage({ kind: 'overview' })
@@ -1808,4 +1875,12 @@ export function App() {
 
 function composerKey(runtimeId: string, sessionId: string | null): string {
   return sessionId ?? `runtime:${runtimeId}`
+}
+
+function sameSessionList(
+  current: readonly SessionListItem[],
+  next: readonly SessionListItem[],
+): boolean {
+  if (current.length !== next.length) return false
+  return current.every((item, index) => JSON.stringify(item) === JSON.stringify(next[index]))
 }

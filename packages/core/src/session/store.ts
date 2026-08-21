@@ -18,7 +18,7 @@ import {
 } from '../tasks/types.ts'
 import { createTaskContextMessage } from '../tasks/context.ts'
 import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
-import { viewEventSchema, type ViewEvent } from './view-events.ts'
+import { compactViewEvent, viewEventSchema, type ViewEvent } from './view-events.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createSessionFork } from './fork.ts'
 import { readSessionStartOrigin } from './fork-origin.ts'
@@ -49,6 +49,7 @@ import {
   hasSessionDeletionMarker,
   isSessionId,
   metadataFromStart,
+  readMetadataCache,
   resumableSessionSummary,
   sameProject,
   SESSION_DELETION_PENDING_REASON,
@@ -373,6 +374,8 @@ export class SessionStore {
     }
     if (deletionMarked === null) return unavailableSessionSummary(paths, sessionId)
     if (liveSession?.sessionId === sessionId) return resumableSessionSummary(liveSession)
+    const cached = await readMetadataCache(paths, sessionId)
+    if (cached) return resumableSessionSummary(cached)
     try {
       return resumableSessionSummary((await this.open(sessionId)).metadataSnapshot)
     } catch {
@@ -459,7 +462,7 @@ export class SessionJournal implements SessionRecorder {
     this.leafUuid = leafUuid
     const projectInstructions = findProjectInstructionsMessage(messages)
     this.messages = applyProjectInstructions(messages, projectInstructions)
-    this.viewEvents = [...viewEvents]
+    this.viewEvents = viewEvents.map(compactViewEvent)
     if (viewEvents.length !== viewEventTimestamps.length) {
       throw new Error('会话可见事件与时间轴不一致')
     }
@@ -599,6 +602,11 @@ export class SessionJournal implements SessionRecorder {
     return { ...this.metadata }
   }
 
+  /** 所有可见事件写稳后，把派生列表缓存封存在同一 transcript 边界。 */
+  sealMetadataCache(): Promise<void> {
+    return this.enqueue(() => this.refreshMetadataCache())
+  }
+
   readEntriesSnapshot(): Promise<SessionEntry[]> {
     let snapshot: SessionEntry[] | null = null
     const operation = this.writeQueue.then(async () => {
@@ -729,7 +737,7 @@ export class SessionJournal implements SessionRecorder {
 
   recordViewEvents(events: ViewEvent[]): Promise<void> {
     if (events.length === 0) return Promise.resolve()
-    const parsed = events.map((event) => viewEventSchema.parse(event))
+    const parsed = events.map((event) => viewEventSchema.parse(compactViewEvent(event)))
     return this.enqueue(async () => {
       const entry = this.entry({ type: 'view-events', events: parsed })
       await this.appendEntries([entry])

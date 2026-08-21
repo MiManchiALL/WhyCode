@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorktreeWorkspaceBinding } from '@whycode/core'
 import {
   ArrowUpRight,
@@ -7,30 +7,33 @@ import {
   ChevronRight,
   FileDiff,
   GitCommitHorizontal,
-  GitBranch,
-  RefreshCw,
 } from 'lucide-react'
 import type { WorktreeStatus } from '../../shared/workspace.ts'
 
-interface WorktreeEnvironmentCardProps {
+interface WorktreeEnvironmentMenuProps {
   runtimeId: string
   binding: WorktreeWorkspaceBinding
   busy: boolean
+  statusRevision: number
   onPrepareCommitPrompt: () => void
 }
 
-export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
+export function WorktreeEnvironmentMenu(props: WorktreeEnvironmentMenuProps) {
   const [status, setStatus] = useState<WorktreeStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionPending, setActionPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [branchName, setBranchName] = useState('')
   const [changesExpanded, setChangesExpanded] = useState(false)
+  const refreshSequence = useRef(0)
+  const loaded = useRef(false)
 
   const refresh = useCallback(async () => {
-    setLoading(true)
+    const sequence = ++refreshSequence.current
+    if (!loaded.current) setLoading(true)
     try {
       const result = await window.whycode.worktreeStatus(props.runtimeId)
+      if (sequence !== refreshSequence.current) return
       if (result.ok) {
         setStatus(result.value)
         setError(null)
@@ -38,14 +41,26 @@ export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
         setError(result.error)
       }
     } catch (cause) {
+      if (sequence !== refreshSequence.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setLoading(false)
+      if (sequence === refreshSequence.current) {
+        loaded.current = true
+        setLoading(false)
+      }
     }
   }, [props.runtimeId])
 
   useEffect(() => {
-    void refresh()
+    // 一次模型步骤可能连续提交多个状态事件；短暂合并，只执行一次 Git 状态读取。
+    const timer = window.setTimeout(() => void refresh(), loaded.current ? 120 : 0)
+    return () => window.clearTimeout(timer)
+  }, [props.statusRevision, refresh])
+
+  useEffect(() => {
+    const refreshOnFocus = () => void refresh()
+    window.addEventListener('focus', refreshOnFocus)
+    return () => window.removeEventListener('focus', refreshOnFocus)
   }, [refresh])
 
   const createBranch = useCallback(async () => {
@@ -77,30 +92,14 @@ export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
   const detached = status ? !status.branch : false
 
   return (
-    <section className="wc-paper-card wc-paper-sage wc-paper-shape-a wc-paper-pad w-full">
-      <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-white/75 text-[var(--wc-sage-ink)]">
-          <GitBranch size={15} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium text-[var(--wc-sage-ink)]/70">环境信息</div>
-          <div className="mt-0.5 truncate text-sm font-medium text-[var(--wc-ink)]">
-            {status?.branch ?? 'detached HEAD'}
-          </div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-[var(--wc-muted)]" title={props.binding.worktreeDirectory}>
-            {props.binding.worktreeDirectory}
-          </div>
+    <div className="px-2 pb-1">
+      <div className="min-w-0">
+        <div className="truncate text-xs font-medium text-[var(--wc-ink)]">
+          {status?.branch ?? 'detached HEAD'}
         </div>
-        <button
-          type="button"
-          className="wc-icon-button size-7 bg-white/50"
-          onClick={() => void refresh()}
-          disabled={loading}
-          title="刷新 Worktree 状态"
-          aria-label="刷新 Worktree 状态"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-        </button>
+        <div className="mt-0.5 truncate font-mono text-[10px] text-[var(--wc-muted)]" title={props.binding.worktreeDirectory}>
+          {props.binding.worktreeDirectory}
+        </div>
       </div>
 
       {error && (
@@ -109,7 +108,7 @@ export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
         </p>
       )}
 
-      <div className="mt-3 border-t border-black/[0.075]">
+      <div className="mt-2 border-t border-[var(--wc-line)]">
         <button
           type="button"
           className="wc-focus-ring flex w-full items-center gap-2 py-2.5 text-left text-xs"
@@ -149,7 +148,7 @@ export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
       </div>
 
       {detached && (
-        <div className="border-t border-black/[0.075] py-3">
+        <div className="border-t border-[var(--wc-line)] py-3">
           <label className="text-[11px] font-medium text-[var(--wc-muted)]" htmlFor="worktree-branch-name">
             创建分支
           </label>
@@ -185,7 +184,7 @@ export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
 
       <button
         type="button"
-        className="wc-focus-ring flex w-full items-center gap-2 border-t border-black/[0.075] py-2.5 text-left text-xs transition-colors hover:text-[var(--wc-sage-ink)] disabled:opacity-40"
+        className="wc-focus-ring flex w-full items-center gap-2 border-t border-[var(--wc-line)] py-2.5 text-left text-xs transition-colors hover:text-[var(--wc-sage-ink)] disabled:opacity-40"
         onClick={props.onPrepareCommitPrompt}
         disabled={locked || detached || !status}
         title={!status
@@ -198,6 +197,6 @@ export function WorktreeEnvironmentCard(props: WorktreeEnvironmentCardProps) {
         <span className="flex-1">提交或推送</span>
         <ArrowUpRight size={13} />
       </button>
-    </section>
+    </div>
   )
 }

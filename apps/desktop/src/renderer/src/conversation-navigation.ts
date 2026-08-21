@@ -21,6 +21,13 @@ export interface ConversationNavigationMarker {
   edgeOpacity: number
 }
 
+interface ConversationNavigationWindow {
+  normalizedOffset: number
+  origin: number
+  first: number
+  last: number
+}
+
 /** 每个用户输入只投影一条有界纯文本预览，不复制整段时间线或 Markdown 树。 */
 export function conversationNavigationEntries(
   sections: readonly ConversationSection[],
@@ -90,18 +97,41 @@ export function reconcileConversationNavigationOffset(
     : centeredConversationNavigationOffset(currentIndex, entryCount, height)
 }
 
+/** 轨道滚轮只在指针真实命中可见锚点且确有隐藏条目时接管。 */
+export function conversationNavigationWheelEnabled(
+  pointerInside: boolean,
+  pointerY: number | null,
+  entryCount: number,
+  height: number,
+): boolean {
+  return pointerInside
+    && pointerY !== null
+    && conversationNavigationMaxOffset(entryCount, height) > 0
+}
+
 export function conversationNavigationIndexAtY(
   y: number,
   offset: number,
   entryCount: number,
   height: number,
-): number {
-  return Math.round(conversationNavigationWaveIndexAtY(
-    y,
-    offset,
-    entryCount,
-    height,
-  ))
+): number | null {
+  if (!Number.isFinite(y) || entryCount <= 0 || height <= 0 || y < 0 || y > height) {
+    return null
+  }
+  const navigationWindow = conversationNavigationWindow(entryCount, height, offset)
+  if (!navigationWindow) return null
+  const index = Math.round(
+    navigationWindow.normalizedOffset
+      + (y - navigationWindow.origin) / CONVERSATION_NAVIGATION_SLOT_PX,
+  )
+  if (index < navigationWindow.first || index > navigationWindow.last) return null
+  const markerY = navigationWindow.origin
+    + (index - navigationWindow.normalizedOffset) * CONVERSATION_NAVIGATION_SLOT_PX
+  return markerY >= 0
+    && markerY <= height
+    && Math.abs(y - markerY) <= CONVERSATION_NAVIGATION_SLOT_PX / 2
+    ? index
+    : null
 }
 
 export function conversationNavigationWaveIndexAtY(
@@ -126,16 +156,9 @@ export function visibleConversationNavigationMarkers(
   height: number,
   offset: number,
 ): ConversationNavigationMarker[] {
-  if (entryCount <= 0 || height <= 0) return []
-  const capacity = conversationNavigationCapacity(height)
-  const normalizedOffset = clampConversationNavigationOffset(offset, entryCount, height)
-  const origin = navigationOriginY(entryCount, height)
-  const firstVisible = Math.ceil(normalizedOffset)
-  const first = Math.max(0, firstVisible - CONVERSATION_NAVIGATION_OVERSCAN)
-  const last = Math.min(
-    entryCount - 1,
-    firstVisible + capacity - 1 + CONVERSATION_NAVIGATION_OVERSCAN,
-  )
+  const navigationWindow = conversationNavigationWindow(entryCount, height, offset)
+  if (!navigationWindow) return []
+  const { first, last, normalizedOffset, origin } = navigationWindow
   const hasHiddenBefore = first > 0
   const hasHiddenAfter = last < entryCount - 1
   const markers: ConversationNavigationMarker[] = []
@@ -213,6 +236,26 @@ function navigationOriginY(entryCount: number, height: number): number {
   const visible = Math.min(entryCount, conversationNavigationCapacity(height))
   const span = Math.max(0, visible - 1) * CONVERSATION_NAVIGATION_SLOT_PX
   return Math.max(0, (height - span) / 2)
+}
+
+function conversationNavigationWindow(
+  entryCount: number,
+  height: number,
+  offset: number,
+): ConversationNavigationWindow | null {
+  if (entryCount <= 0 || height <= 0) return null
+  const capacity = conversationNavigationCapacity(height)
+  const normalizedOffset = clampConversationNavigationOffset(offset, entryCount, height)
+  const firstVisible = Math.ceil(normalizedOffset)
+  return {
+    normalizedOffset,
+    origin: navigationOriginY(entryCount, height),
+    first: Math.max(0, firstVisible - CONVERSATION_NAVIGATION_OVERSCAN),
+    last: Math.min(
+      entryCount - 1,
+      firstVisible + capacity - 1 + CONVERSATION_NAVIGATION_OVERSCAN,
+    ),
+  }
 }
 
 function entryForUser(

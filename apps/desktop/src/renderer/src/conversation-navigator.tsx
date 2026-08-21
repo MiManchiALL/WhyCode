@@ -77,7 +77,7 @@ export const ConversationNavigator = memo(
               />
             ))}
           </div>
-          {navigation.pointerInside && preview && (
+          {navigation.pointerInside && navigation.waveIndex !== null && preview && (
             <ConversationNavigationPreview entry={preview} top={tooltipTop} />
           )}
         </div>

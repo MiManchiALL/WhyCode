@@ -9,24 +9,37 @@ describe('SessionDeletionLock', () => {
 
     assert.equal(lock.sessionId, 'historical-session')
     assert.equal(lock.blocksRuntime, false)
+    assert.equal(lock.blocksSession(), false)
+    assert.equal(lock.blocksSession('other-session'), false)
+    assert.equal(lock.blocksSession('historical-session'), true)
     assert.equal(lock.acquire('another-session', false), null)
 
-    release?.()
+    release?.release()
     assert.equal(lock.sessionId, null)
   })
 
   it('当前会话删除阻塞运行时，旧 lease 不能释放后续删除', () => {
     const lock = new SessionDeletionLock()
-    const releaseCurrent = lock.acquire('current-session', true)!
+    const current = lock.acquire('current-session', true)!
 
     assert.equal(lock.blocksRuntime, true)
-    releaseCurrent()
-    const releaseNext = lock.acquire('current-session', false)!
-    releaseCurrent()
+    assert.equal(lock.blocksSession(), true)
+    assert.equal(lock.blocksSession('other-session'), true)
+    current.allowRuntimeChanges()
+
+    assert.equal(lock.blocksRuntime, false)
+    assert.equal(lock.blocksSession(), false)
+    assert.equal(lock.blocksSession('other-session'), false)
+    assert.equal(lock.blocksSession('current-session'), true)
+    assert.equal(lock.acquire('another-session', false), null)
+
+    current.release()
+    const next = lock.acquire('current-session', false)!
+    current.release()
 
     assert.equal(lock.sessionId, 'current-session')
     assert.equal(lock.blocksRuntime, false)
-    releaseNext()
+    next.release()
     assert.equal(lock.sessionId, null)
   })
 })

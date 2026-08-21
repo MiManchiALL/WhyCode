@@ -6,6 +6,7 @@ import {
   AgentSession,
   type BackgroundTaskState,
   cleanupUnreferencedAttachments,
+  compactVisibleCoreEvent,
   CommandSessionManager,
   ConsensusCoordinator,
   createBackgroundCommandTools,
@@ -84,7 +85,7 @@ import {
   updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
-import { deleteSessionArtifacts } from './session-deletion.ts'
+import { stageSessionDeletion } from './session-deletion.ts'
 import { SessionScratchManager } from './session-scratch.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
@@ -132,6 +133,7 @@ import type {
   RuntimeEventEnvelope,
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
+  SessionDeletionState,
   SessionListItem,
   SetSessionPinnedRequest,
   SetSessionPinnedResult,
@@ -340,7 +342,7 @@ function broadcastRuntimeEvent(
     sessionId: runtime.sessionId,
     sequence: ++runtimeEventSequence,
     occurredAt,
-    event,
+    event: compactVisibleCoreEvent(event),
   }
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(IPC.event, envelope)
@@ -361,6 +363,17 @@ function broadcastBackgroundTasks(state: BackgroundTaskState): void {
       win.webContents.send(IPC.backgroundTasks, state)
     } catch (error) {
       console.warn('后台任务状态推送失败：', error)
+    }
+  }
+}
+
+function broadcastSessionDeletion(state: SessionDeletionState): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    try {
+      win.webContents.send(IPC.sessionDeletion, state)
+    } catch (error) {
+      console.warn('会话删除状态推送失败：', error)
     }
   }
 }
@@ -556,6 +569,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     return {
       ok: true,
       deletedCurrent: wasSelected,
+      cleanupPending: false,
       ...(replacementRuntime
         ? { snapshot: await runtimeSnapshot(replacementRuntime) }
         : {}),
@@ -877,8 +891,8 @@ async function handleCommand(
   command: CoreCommand,
 ): Promise<RuntimeCommandResult | void> {
   if (
-    sessionDeletionLock.blocksRuntime
-    && sessionDeletionLock.sessionId === runtime.sessionId
+    runtime.sessionId
+    && sessionDeletionLock.blocksSession(runtime.sessionId)
   ) {
     runtime.emit({
       type: 'error',
@@ -1813,10 +1827,10 @@ async function selectRuntimeWithSnapshot(
 }
 
 async function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
-  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
+  if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId) {
     return {
       ok: false,
-      error: sessionDeletionLock.sessionId
+      error: sessionDeletionLock.blocksSession()
         ? '会话数据删除中，请等待完成后再新建会话'
         : sessionPreparationInProgressMessage('新建会话'),
     }
@@ -1840,10 +1854,10 @@ async function startNewSession(request?: NewSessionRequest): Promise<NewSessionR
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
+  if (sessionDeletionLock.blocksSession(sessionId) || sessionPreparationLock.sessionId) {
     return {
       ok: false,
-      error: sessionDeletionLock.sessionId
+      error: sessionDeletionLock.blocksSession(sessionId)
         ? '会话数据删除中，请等待完成后再恢复会话'
         : sessionPreparationInProgressMessage('恢复其它会话'),
     }
@@ -2127,10 +2141,7 @@ function internalNotificationDeliveryBlocked(runtime: DesktopSessionRuntime): bo
     || !runtime.session
     || runtime.session.waitingForUserInput
     || runtime.coordinator?.busy
-    || (
-      sessionDeletionLock.blocksRuntime
-      && sessionDeletionLock.sessionId === runtime.sessionId
-    )
+    || (runtime.sessionId && sessionDeletionLock.blocksSession(runtime.sessionId))
   )
 }
 
@@ -2245,8 +2256,9 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   const deletedCurrent = runtimeRegistry.selected?.sessionId === sessionId
   let detachedCurrent = false
   let replacementRuntime: DesktopSessionRuntime | null = null
-  const releaseDeletion = sessionDeletionLock.acquire(sessionId, deletedCurrent)
-  if (!releaseDeletion) return { ok: false, error: '已有会话正在删除，请等待完成' }
+  const deletionLease = sessionDeletionLock.acquire(sessionId, deletedCurrent)
+  if (!deletionLease) return { ok: false, error: '已有会话正在删除，请等待完成' }
+  let cleanupStarted = false
   try {
     const summary = targetRuntime
       ? null
@@ -2257,23 +2269,14 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
     const targetManagedWorkspace = managedWorkspaceBinding(
       targetRuntime?.workspace ?? summary?.workspace,
     )
-    const deleted = await deleteSessionArtifacts({
+    const deletion = await stageSessionDeletion({
       sessionId,
       sessions,
       commandSessions,
       scratch: sessionScratch,
-      onDeletionMarked: async (sessionExists) => {
-        if (!sessionExists) return
-        backgroundTaskWakeups?.discardSession(sessionId)
-        subagentWakeups?.discardSession(sessionId)
+      onBeforeArtifactsDelete: async () => {
         await subagents.forgetParent(sessionId)
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
-        if (deletedCurrent) {
-          const replacement = createDefaultDraftRuntime()
-          runtimeRegistry.select(replacement)
-          replacementRuntime = replacement
-          detachedCurrent = true
-        }
       },
       onBeforeFactSourceDelete: async () => {
         if (targetWorktree) await worktrees.detachSession(targetWorktree, sessionId, true)
@@ -2285,22 +2288,37 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         await pruneRetiredModelLabels(sessionId)
       },
     })
-    if (!deleted) {
-      return {
-        ok: false,
-        error: '会话不存在',
-        deletedCurrent: detachedCurrent,
-        ...(replacementRuntime
-          ? { snapshot: await runtimeSnapshot(replacementRuntime) }
-          : {}),
-      }
+    if (!deletion.sessionExists) {
+      return { ok: false, error: '会话不存在' }
     }
-    runtimeRegistry.forgetSession(sessionId)
-    await sessionSidebarState.setPinned(sessionId, false)
-      .catch((error) => console.warn('会话已删除，但置顶状态清理失败：', error))
+    backgroundTaskWakeups?.discardSession(sessionId)
+    subagentWakeups?.discardSession(sessionId)
+    if (deletedCurrent) {
+      replacementRuntime = createDefaultDraftRuntime()
+      runtimeRegistry.select(replacementRuntime)
+      detachedCurrent = true
+      deletionLease.allowRuntimeChanges()
+    }
+
+    cleanupStarted = true
+    void deletion.finish().then(async (deleted) => {
+      if (!deleted) throw new Error('会话删除状态已丢失')
+      runtimeRegistry.forgetSession(sessionId)
+      await sessionSidebarState.setPinned(sessionId, false)
+        .catch((error) => console.warn('会话已删除，但置顶状态清理失败：', error))
+      broadcastSessionDeletion({ sessionId, status: 'completed' })
+    }).catch((error) => {
+      broadcastSessionDeletion({
+        sessionId,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }).finally(() => deletionLease.release())
+
     return {
       ok: true,
-      deletedCurrent,
+      deletedCurrent: detachedCurrent,
+      cleanupPending: true,
       ...(replacementRuntime
         ? { snapshot: await runtimeSnapshot(replacementRuntime) }
         : {}),
@@ -2315,7 +2333,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         : {}),
     }
   } finally {
-    releaseDeletion()
+    if (!cleanupStarted) deletionLease.release()
   }
 }
 
@@ -2617,7 +2635,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     )
   })
   ipcMain.handle(IPC.pickProjectDir, async (event): Promise<WorkspaceCandidate | null> => {
-    if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
+    if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId) {
       return null
     }
     const ownerWindow = BrowserWindow.fromWebContents(event.sender)
@@ -2638,7 +2656,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       // 父窗口模态约束用户交互；这里仍防御窗口销毁和其它宿主生命周期竞态。
       if (
         runtimeRegistry.selected !== selectionAtOpen
-        || sessionDeletionLock.sessionId
+        || sessionDeletionLock.blocksSession()
         || sessionPreparationLock.sessionId
       ) {
         return null

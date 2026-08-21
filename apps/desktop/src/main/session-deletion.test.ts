@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { CommandSessionManager, localWorkspace } from '@whycode/core'
-import { deleteSessionArtifacts } from './session-deletion.ts'
+import { stageSessionDeletion } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionScratchManager } from './session-scratch.ts'
 
@@ -50,12 +50,14 @@ describe('会话关联数据删除', () => {
     await mkdir(join(currentJournal.checkpointDirectory, 'blobs'), { recursive: true })
     await writeFile(currentCheckpointFile, 'other checkpoint')
 
-    assert.equal(await deleteSessionArtifacts({
+    const deletion = await stageSessionDeletion({
       sessionId: deletedJournal.sessionId,
       sessions,
       commandSessions,
       scratch,
-    }), true)
+    })
+    assert.equal(deletion.sessionExists, true)
+    assert.equal(await deletion.finish(), true)
 
     await assert.rejects(access(join(sessionsRoot, deletedJournal.sessionId)))
     await assert.rejects(access(join(commandsRoot, deletedJournal.sessionId)))
@@ -70,7 +72,7 @@ describe('会话关联数据删除', () => {
   it('先校验会话 ID，非法输入不会触发任何清理', async () => {
     const calls: string[] = []
     await assert.rejects(
-      deleteSessionArtifacts({
+      stageSessionDeletion({
         sessionId: '../outside',
         sessions: {
           markDeleting: async () => { calls.push('mark'); return true },
@@ -89,13 +91,14 @@ describe('会话关联数据删除', () => {
     const sessions = new DesktopSessionRepository(join(root, 'sessions'))
     const journal = await sessions.create(localWorkspace(null), 'test:model')
     const scratch = new SessionScratchManager(join(root, 'scratch'))
+    const deletion = await stageSessionDeletion({
+      sessionId: journal.sessionId,
+      sessions,
+      commandSessions: { removeSession: async () => { throw new Error('日志被占用') } },
+      scratch,
+    })
     await assert.rejects(
-      deleteSessionArtifacts({
-        sessionId: journal.sessionId,
-        sessions,
-        commandSessions: { removeSession: async () => { throw new Error('日志被占用') } },
-        scratch,
-      }),
+      deletion.finish(),
       /日志被占用/,
     )
     const [summary] = await sessions.list()
@@ -106,7 +109,7 @@ describe('会话关联数据删除', () => {
 
   it('在删除会话事实源前完成引用型显示元数据收尾', async () => {
     const calls: string[] = []
-    assert.equal(await deleteSessionArtifacts({
+    const deletion = await stageSessionDeletion({
       sessionId: '11111111-1111-4111-8111-111111111111',
       sessions: {
         markDeleting: async () => { calls.push('mark'); return true },
@@ -114,13 +117,15 @@ describe('会话关联数据删除', () => {
       },
       commandSessions: { removeSession: async () => { calls.push('command') } },
       scratch: { remove: async () => { calls.push('scratch') } },
-      onDeletionMarked: async () => {
+      onBeforeArtifactsDelete: async () => {
         calls.push('detach')
         await new Promise((resolve) => setImmediate(resolve))
         calls.push('resources-closed')
       },
       onBeforeFactSourceDelete: async () => { calls.push('references') },
-    }), true)
+    })
+    assert.deepEqual(calls, ['mark'])
+    assert.equal(await deletion.finish(), true)
     assert.deepEqual(
       calls,
       ['mark', 'detach', 'resources-closed', 'command', 'scratch', 'references', 'session'],

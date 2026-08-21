@@ -325,6 +325,7 @@ export class DesktopSessionRuntime {
     this.idleWaiters.clear()
     this.timeline.discardAll()
     await this.timeline.flush()
+    await this.journal?.sealMetadataCache()
     const target = this.session
     this.session = null
     this.coordinator = null

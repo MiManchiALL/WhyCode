@@ -20,6 +20,7 @@ import type {
   RuntimeEventEnvelope,
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
+  SessionDeletionState,
   SessionListItem,
   SetSessionPinnedRequest,
   SetSessionPinnedResult,
@@ -169,6 +170,13 @@ const api = {
     const wrapped = (_: unknown, state: BackgroundTaskState) => listener(state)
     ipcRenderer.on(IPC.backgroundTasks, wrapped)
     return () => ipcRenderer.off(IPC.backgroundTasks, wrapped)
+  },
+  onSessionDeletion: (
+    listener: (state: SessionDeletionState) => void,
+  ): (() => void) => {
+    const wrapped = (_: unknown, state: SessionDeletionState) => listener(state)
+    ipcRenderer.on(IPC.sessionDeletion, wrapped)
+    return () => ipcRenderer.off(IPC.sessionDeletion, wrapped)
   },
   onSubagents: (
     listener: (state: SubagentState) => void,

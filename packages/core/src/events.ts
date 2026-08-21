@@ -16,6 +16,46 @@ import type {
 import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 import type { ReasoningEffortSelection } from './providers/catalog.ts'
 import type { SkillLocator, SkillSummary } from './skills/types.ts'
+import { unicodeSafeSuffix } from './text.ts'
+
+/** 工具完整输出由工具日志和模型消息持有；可见时间线只保留有界尾部。 */
+export const MAX_VISIBLE_TOOL_OUTPUT_CHARS = 64 * 1024
+const OMITTED_TOOL_OUTPUT_PREFIX = '[较早的工具输出已省略]\n'
+
+export function truncateVisibleToolOutput(output: string): string {
+  if (output.length <= MAX_VISIBLE_TOOL_OUTPUT_CHARS) return output
+  return OMITTED_TOOL_OUTPUT_PREFIX + unicodeSafeSuffix(
+    output,
+    MAX_VISIBLE_TOOL_OUTPUT_CHARS - OMITTED_TOOL_OUTPUT_PREFIX.length,
+  )
+}
+
+/** 追加工具进度时避免先构造无界中间字符串。 */
+export function appendVisibleToolOutput(previous: string, next: string): string {
+  const bodyLimit = MAX_VISIBLE_TOOL_OUTPUT_CHARS - OMITTED_TOOL_OUTPUT_PREFIX.length
+  if (next.length >= bodyLimit) {
+    return OMITTED_TOOL_OUTPUT_PREFIX + unicodeSafeSuffix(next, bodyLimit)
+  }
+  const previousBody = previous.startsWith(OMITTED_TOOL_OUTPUT_PREFIX)
+    ? previous.slice(OMITTED_TOOL_OUTPUT_PREFIX.length)
+    : previous
+  if (
+    !previous.startsWith(OMITTED_TOOL_OUTPUT_PREFIX)
+    && previousBody.length + next.length <= MAX_VISIBLE_TOOL_OUTPUT_CHARS
+  ) return previousBody + next
+  return OMITTED_TOOL_OUTPUT_PREFIX
+    + unicodeSafeSuffix(previousBody, bodyLimit - next.length)
+    + next
+}
+
+export function visibleToolResult(result: unknown): string {
+  if (typeof result === 'string') return truncateVisibleToolOutput(result)
+  try {
+    return truncateVisibleToolOutput(JSON.stringify(result) ?? String(result))
+  } catch {
+    return truncateVisibleToolOutput(String(result))
+  }
+}
 
 /** 单轮对话的 token 用量与成本统计 */
 export interface UsageInfo {
@@ -275,6 +315,23 @@ export type CoreEvent =
   /** B/C 讨论过程流的包装（UI 按 agentId 归集到折叠卡片） */
   | { type: 'peer-event'; agentId: 'B' | 'C'; event: CoreEvent }
 
+/** Main → Renderer 与持久化时间线共用的有界工具展示投影。 */
+export function compactVisibleCoreEvent(event: CoreEvent): CoreEvent {
+  if (event.type === 'tool-progress') {
+    return { ...event, output: truncateVisibleToolOutput(event.output) }
+  }
+  if (event.type === 'tool-end') {
+    return { ...event, result: visibleToolResult(event.result) }
+  }
+  if (event.type === 'peer-event' && event.event.type === 'tool-end') {
+    return {
+      ...event,
+      event: { ...event.event, result: visibleToolResult(event.event.result) },
+    }
+  }
+  return event
+}
+
 type CoalescibleCoreEvent =
   | Extract<CoreEvent, { type: 'text-delta' | 'thinking-delta' | 'tool-progress' }>
   | {
@@ -302,7 +359,7 @@ export function coalesceAdjacentCoreEvent(
     && next.type === 'tool-progress'
     && previous.toolUseId === next.toolUseId
   ) {
-    return { ...previous, output: previous.output + next.output }
+    return { ...previous, output: appendVisibleToolOutput(previous.output, next.output) }
   }
   if (
     previous.type === 'peer-event'

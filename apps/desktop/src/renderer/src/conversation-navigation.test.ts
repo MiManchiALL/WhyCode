@@ -5,8 +5,10 @@ import {
   centeredConversationNavigationOffset,
   conversationNavigationCapacity,
   conversationNavigationEntries,
+  conversationNavigationEntryY,
   conversationNavigationIndexAtY,
   conversationNavigationMarkerWidth,
+  conversationNavigationWheelEnabled,
   reconcileConversationNavigationOffset,
   sameConversationNavigationTimeline,
   visibleConversationNavigationMarkers,
@@ -95,6 +97,39 @@ describe('会话定位固定窗口几何', () => {
     assert.equal(conversationNavigationMarkerWidth(11, null), 7)
   })
 
+  it('只有纵向落在锚点范围内时才命中，单个锚点不会占满整条轨道', () => {
+    assert.equal(conversationNavigationIndexAtY(360, 0, 1, 720), 0)
+    assert.equal(conversationNavigationIndexAtY(350, 0, 1, 720), null)
+    assert.equal(conversationNavigationIndexAtY(540, 0, 1, 720), null)
+  })
+
+  it('轨道留白中的未渲染锚点不响应悬浮', () => {
+    const height = 720
+    const offset = 80
+    const entryCount = 200
+    const markers = visibleConversationNavigationMarkers(entryCount, height, offset)
+    const first = markers[0]!
+    const last = markers.at(-1)!
+    const hiddenBeforeY = conversationNavigationEntryY(
+      first.entryIndex - 1,
+      entryCount,
+      height,
+      offset,
+    )
+    const hiddenAfterY = conversationNavigationEntryY(
+      last.entryIndex + 1,
+      entryCount,
+      height,
+      offset,
+    )
+
+    assert.ok(hiddenBeforeY > 0 && hiddenAfterY < height)
+    assert.equal(conversationNavigationIndexAtY(first.y, offset, entryCount, height), first.entryIndex)
+    assert.equal(conversationNavigationIndexAtY(last.y, offset, entryCount, height), last.entryIndex)
+    assert.equal(conversationNavigationIndexAtY(hiddenBeforeY, offset, entryCount, height), null)
+    assert.equal(conversationNavigationIndexAtY(hiddenAfterY, offset, entryCount, height), null)
+  })
+
   it('保留手动浏览位置，离开或缩放时只裁剪越界部分', () => {
     assert.equal(
       reconcileConversationNavigationOffset(20, 99, 100, 360, true),
@@ -115,6 +150,13 @@ describe('会话定位固定窗口几何', () => {
       reconcileConversationNavigationOffset(20, 0, 100, 360, false),
       0,
     )
+  })
+
+  it('只有指针命中轨道锚点时才接管可滚动的定位窗口', () => {
+    assert.equal(conversationNavigationWheelEnabled(true, 120, 100, 360), true)
+    assert.equal(conversationNavigationWheelEnabled(false, 120, 100, 360), false)
+    assert.equal(conversationNavigationWheelEnabled(true, null, 100, 360), false)
+    assert.equal(conversationNavigationWheelEnabled(true, 120, 10, 360), false)
   })
 })
 

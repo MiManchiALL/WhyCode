@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
+import { MAX_VISIBLE_TOOL_OUTPUT_CHARS } from '@whycode/core/events'
 import {
   applyCoreEvent,
   applyViewEvent,
@@ -15,6 +16,33 @@ import {
 import { conversationSections } from './conversation-sections.ts'
 
 describe('会话界面时间线重建', () => {
+  it('实时工具进度始终保持有界，不把长命令输出带入切换快照', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '运行长命令', startsTurn: true },
+      core({
+        type: 'tool-start',
+        toolUseId: 'run-1',
+        toolName: 'RunCommand',
+        input: {},
+      }),
+    ])
+    state = applyCoreEvent(state, {
+      type: 'tool-progress',
+      toolUseId: 'run-1',
+      output: 'x'.repeat(MAX_VISIBLE_TOOL_OUTPUT_CHARS + 10),
+    })
+    state = applyCoreEvent(state, {
+      type: 'tool-progress',
+      toolUseId: 'run-1',
+      output: '最新尾部',
+    })
+
+    const tool = state.blocks.find((block) => block.kind === 'tool')
+    assert.ok(tool?.kind === 'tool')
+    assert.ok(tool.call.progress.length <= MAX_VISIBLE_TOOL_OUTPUT_CHARS)
+    assert.match(tool.call.progress, /最新尾部$/u)
+  })
+
   it('实时步骤丢弃时撤销协议文本，重试答复提交后只保留稳定内容', () => {
     let state = createConversationState([
       { type: 'user-message', text: '统计代码行数', startsTurn: true },

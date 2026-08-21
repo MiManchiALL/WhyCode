@@ -9,9 +9,8 @@ import {
 } from 'react'
 import {
   clampConversationNavigationOffset,
-  conversationNavigationCapacity,
   conversationNavigationIndexAtY,
-  conversationNavigationMaxOffset,
+  conversationNavigationWheelEnabled,
   conversationNavigationWaveIndexAtY,
   reconcileConversationNavigationOffset,
   type ConversationNavigationEntry,
@@ -32,7 +31,6 @@ export function useConversationNavigator(
   const previewIndexRef = useRef<number | null>(null)
   const pointerInsideRef = useRef(false)
   const manualOffsetRef = useRef(false)
-  const trackedCurrentIndexRef = useRef<number | null>(null)
   const pointerYRef = useRef<number | null>(null)
   const pendingPointerClientYRef = useRef<number | null>(null)
   const scrollingRef = useRef(false)
@@ -80,13 +78,6 @@ export function useConversationNavigator(
   useLayoutEffect(() => {
     const maximumIndex = Math.max(0, entries.length - 1)
     const nextCurrent = Math.min(currentIndex, maximumIndex)
-    if (
-      trackedCurrentIndexRef.current !== null
-      && trackedCurrentIndexRef.current !== nextCurrent
-    ) {
-      manualOffsetRef.current = false
-    }
-    trackedCurrentIndexRef.current = nextCurrent
     if (previewIndexRef.current !== null && previewIndexRef.current > maximumIndex) {
       commitPreviewIndex(entries.length > 0 ? maximumIndex : null)
     }
@@ -112,6 +103,7 @@ export function useConversationNavigator(
     if (activatedMarkerTimerRef.current !== null) {
       window.clearTimeout(activatedMarkerTimerRef.current)
     }
+    manualOffsetRef.current = true
     setActivatedEntryId(entryId)
     activatedMarkerTimerRef.current = window.setTimeout(() => {
       activatedMarkerTimerRef.current = null
@@ -129,15 +121,22 @@ export function useConversationNavigator(
       if (!rail || nextClientY === null || entries.length === 0) return
       const rectangle = rail.getBoundingClientRect()
       const y = Math.min(rectangle.height, Math.max(0, nextClientY - rectangle.top))
+      const hitIndex = conversationNavigationIndexAtY(
+        y,
+        offsetRef.current,
+        entries.length,
+        heightRef.current,
+      )
+      if (hitIndex === null) {
+        pointerYRef.current = null
+        setPointerY(null)
+        if (updatePreview && !scrollingRef.current) commitPreviewIndex(null)
+        return
+      }
       pointerYRef.current = y
       setPointerY(y)
       if (updatePreview && !scrollingRef.current) {
-        commitPreviewIndex(conversationNavigationIndexAtY(
-          y,
-          offsetRef.current,
-          entries.length,
-          heightRef.current,
-        ))
+        commitPreviewIndex(hitIndex)
       }
     })
   }, [commitPreviewIndex, entries.length])
@@ -186,28 +185,36 @@ export function useConversationNavigator(
   }, [commitOffset, commitPreviewIndex, currentIndex, entries.length])
 
   const handleWheel = useCallback((event: WheelEvent) => {
-    if (
-      entries.length <= conversationNavigationCapacity(heightRef.current)
-      || conversationNavigationMaxOffset(entries.length, heightRef.current) === 0
-    ) return
+    if (!conversationNavigationWheelEnabled(
+      pointerInsideRef.current,
+      pointerYRef.current,
+      entries.length,
+      heightRef.current,
+    )) return
     event.preventDefault()
     event.stopPropagation()
     manualOffsetRef.current = true
-    const rectangle = railRef.current?.getBoundingClientRect()
-    const y = pointerYRef.current ?? (rectangle
-      ? clamp(event.clientY - rectangle.top, 0, rectangle.height)
-      : heightRef.current / 2)
+    const y = pointerYRef.current!
     if (!scrollingRef.current) {
-      const frozenIndex = conversationNavigationWaveIndexAtY(
+      const hitIndex = conversationNavigationIndexAtY(
         y,
         offsetRef.current,
         entries.length,
         heightRef.current,
       )
       scrollingRef.current = true
-      frozenWaveIndexRef.current = frozenIndex
+      frozenWaveIndexRef.current = hitIndex === null
+        ? null
+        : conversationNavigationWaveIndexAtY(
+            y,
+            offsetRef.current,
+            entries.length,
+            heightRef.current,
+          )
       setScrolling(true)
-      if (previewIndexRef.current === null) commitPreviewIndex(Math.round(frozenIndex))
+      if (previewIndexRef.current === null && hitIndex !== null) {
+        commitPreviewIndex(hitIndex)
+      }
     }
     pendingWheelEntriesRef.current += normalizedWheelPixels(event, heightRef.current)
       / WHEEL_PIXELS_PER_ENTRY
@@ -270,8 +277,4 @@ function cancelFrame(frame: { current: number | null }): void {
   if (frame.current === null) return
   window.cancelAnimationFrame(frame.current)
   frame.current = null
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value))
 }

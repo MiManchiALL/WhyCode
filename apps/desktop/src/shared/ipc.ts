@@ -44,6 +44,8 @@ export const IPC = {
   consensusStatus: 'whycode:consensus-status',
   /** Renderer → Main：会话列表与生命周期（M4） */
   listSessions: 'whycode:list-sessions',
+  /** Main → Renderer：异步会话物理清理终态。 */
+  sessionDeletion: 'whycode:session-deletion',
   resumeSession: 'whycode:resume-session',
   forkSession: 'whycode:fork-session',
   newSession: 'whycode:new-session',

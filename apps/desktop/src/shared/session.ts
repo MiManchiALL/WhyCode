@@ -116,5 +116,14 @@ export interface NewSessionRequest {
 }
 
 export type DeleteSessionResult =
-  | { ok: true; deletedCurrent: boolean; snapshot?: RuntimeSnapshot }
+  | {
+      ok: true
+      deletedCurrent: boolean
+      cleanupPending: boolean
+      snapshot?: RuntimeSnapshot
+    }
   | { ok: false; error: string; deletedCurrent?: boolean; snapshot?: RuntimeSnapshot }
+
+export type SessionDeletionState =
+  | { sessionId: string; status: 'completed' }
+  | { sessionId: string; status: 'failed'; error: string }

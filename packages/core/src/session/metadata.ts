@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   SESSION_SCHEMA_VERSION,
@@ -18,6 +18,10 @@ const ATTACHMENTS_DIR = 'attachments'
 const UNAVAILABLE_SESSION_REASON = '会话版本不兼容或数据损坏，无法恢复；可以安全删除'
 export const SESSION_DELETION_PENDING_REASON = '会话删除未完成，仅可重试删除'
 const DELETION_MARKERS_DIR = '.deleting'
+
+const sessionMetadataCacheSchema = sessionMetadataSchema.extend({
+  transcriptIdentity: z.string().min(1),
+})
 
 const looseSessionMetadataSchema = z.object({
   sessionId: z.string().uuid(),
@@ -81,13 +85,34 @@ export async function writeMetadata(
   metadata: SessionMetadata,
 ): Promise<void> {
   const parsed = sessionMetadataSchema.parse(metadata)
+  const transcriptIdentity = await fileIdentity(join(dirname(path), TRANSCRIPT_FILE))
   const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, {
+  await writeFile(tempPath, `${JSON.stringify({ ...parsed, transcriptIdentity }, null, 2)}\n`, {
     encoding: 'utf8',
     mode: 0o600,
     flush: true,
   })
   await rename(tempPath, path)
+}
+
+/** metadata 只是派生列表缓存；只在它精确对应当前 transcript 时采用。 */
+export async function readMetadataCache(
+  paths: SessionPaths,
+  expectedSessionId: string,
+): Promise<SessionMetadata | null> {
+  try {
+    const parsed = sessionMetadataCacheSchema.safeParse(
+      JSON.parse(await readFile(paths.metadata, 'utf8')),
+    )
+    if (
+      !parsed.success
+      || parsed.data.sessionId !== expectedSessionId
+      || parsed.data.transcriptIdentity !== await fileIdentity(paths.transcript)
+    ) return null
+    return sessionMetadataSchema.parse(parsed.data)
+  } catch {
+    return null
+  }
 }
 
 export function resumableSessionSummary(metadata: SessionMetadata): SessionSummary {
@@ -170,6 +195,11 @@ async function readLooseMetadata(
 function normalizePath(path: string): string {
   const normalized = resolve(path)
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+async function fileIdentity(path: string): Promise<string> {
+  const value = await stat(path, { bigint: true })
+  return [value.dev, value.ino, value.size, value.mtimeNs, value.ctimeNs].join(':')
 }
 
 function isNotFound(error: unknown): boolean {

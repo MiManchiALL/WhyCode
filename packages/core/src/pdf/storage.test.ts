@@ -152,7 +152,7 @@ describe('PDF 附件存储', () => {
     await assert.rejects(store.open(journal.sessionId), /元数据与磁盘文件不一致/)
   })
 
-  it('会话列表的完整校验只供同一进程内未变化的正式恢复复用', async () => {
+  it('会话列表只读派生缓存，正式恢复才完整校验且同进程复用', async () => {
     const root = await tempDirectory()
     const source = join(root, 'cached.pdf')
     const sessionsRoot = join(root, 'sessions')
@@ -180,7 +180,7 @@ describe('PDF 附件存储', () => {
     const afterImport = inspections
 
     await store.list()
-    assert.equal(inspections, afterImport + 1)
+    assert.equal(inspections, afterImport)
 
     await store.open(journal.sessionId)
     assert.equal(inspections, afterImport + 1)

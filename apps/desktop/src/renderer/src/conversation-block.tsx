@@ -57,10 +57,10 @@ export function BlockView({
   if (block.kind === 'text') {
     return (
       <div
-        className={`group max-w-none px-1 py-1 leading-7 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}
+        className={`group max-w-none px-1 py-1 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}
         data-conversation-scroll-block={block.id}
       >
-        <div className="prose prose-sm prose-neutral max-w-none">
+        <div className="wc-conversation-copy max-w-none">
           <MarkdownContent
             text={block.text}
             streaming={streamingAssistantText}
@@ -80,7 +80,7 @@ export function BlockView({
     )
   }
   if (block.kind === 'error') {
-    return <div className="wc-sticker-soft mb-3 bg-[#f3e8e3] px-3 py-2 text-sm text-[var(--wc-danger)]">{block.text}</div>
+    return <div className="wc-sticker-soft mb-3 bg-[#f3e8e3] px-3 py-2 text-[13px] text-[var(--wc-danger)]">{block.text}</div>
   }
   if (block.kind === 'notice') {
     return <div className="mb-3 rounded-xl bg-[var(--wc-blue)] px-3 py-2 text-xs text-[var(--wc-blue-ink)]">{block.text}</div>
@@ -126,7 +126,7 @@ export function BlockView({
       : <Check size={14} />
   const summary = summarizeInput(call.input)
   return (
-    <div className="wc-sticker-soft mb-3 overflow-hidden text-sm">
+    <div className="wc-sticker-soft mb-3 overflow-hidden text-[13px]">
       <div className="flex w-full items-center gap-2 px-3 py-2">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>

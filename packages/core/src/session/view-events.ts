@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  compactVisibleCoreEvent,
   coalesceAdjacentCoreEvent,
   MAX_USER_QUESTIONS,
   type CoreEvent,
@@ -191,6 +192,13 @@ export const viewEventSchema = z.discriminatedUnion('type', [
 export type VisibleCoreEvent = z.infer<typeof visibleCoreEventSchema>
 export type ViewEvent = z.infer<typeof viewEventSchema>
 
+/** 对话卡片只承载展示摘要；完整工具结果仍由模型消息与工具日志持有。 */
+export function compactViewEvent(event: ViewEvent): ViewEvent {
+  if (event.type !== 'core-event') return event
+  const compacted = compactVisibleCoreEvent(event.event) as VisibleCoreEvent
+  return compacted === event.event ? event : { type: 'core-event', event: compacted }
+}
+
 /** CoreEvent → 可持久化的用户可见事件；运行态、审批和已失效检查点不会进入时间线。 */
 export function toViewEvent(event: CoreEvent): ViewEvent | null {
   if (event.type === 'message-injected') {
@@ -206,7 +214,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
   }
   if (event.type === 'peer-event') {
     if (!['text-delta', 'tool-start', 'tool-end'].includes(event.event.type)) return null
-    return viewEventSchema.parse({ type: 'core-event', event })
+    return compactViewEvent(viewEventSchema.parse({ type: 'core-event', event }))
   }
   // 编辑关系已经与新根 user-input 原子落盘；重放从该事实派生，不能再写一份副本。
   if (event.type === 'user-message-edited') return null
@@ -235,7 +243,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     case 'consensus-skipped':
     case 'task-plan-updated':
     case 'task-plan-restored':
-      return viewEventSchema.parse({ type: 'core-event', event })
+      return viewEventSchema.parse(compactViewEvent({ type: 'core-event', event }))
     default:
       return null
   }
@@ -243,6 +251,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
 
 /** 合并高频流式片段，避免一个 token 对应一条内存事件。 */
 export function pushCoalescedViewEvent(events: ViewEvent[], next: ViewEvent): void {
+  next = compactViewEvent(next)
   const previous = events.at(-1)
   if (!previous || previous.type !== 'core-event' || next.type !== 'core-event') {
     events.push(next)
