@@ -25,6 +25,21 @@ describe('会话临时工作区', () => {
     await access(first.mainDirectory)
   })
 
+  it('为子代理建立父会话内的独立临时目录', async () => {
+    const manager = await createManager()
+    const sessionId = randomUUID()
+    const subagentId = randomUUID()
+
+    const paths = await manager.ensureSubagent(sessionId, subagentId)
+
+    assert.equal(
+      paths.subagentDirectory,
+      join(paths.rootDirectory, 'subagents', subagentId),
+    )
+    await access(paths.mainDirectory)
+    await access(paths.subagentDirectory)
+  })
+
   it('Fork 复制完整 scratch 树且之后互不影响', async () => {
     const manager = await createManager()
     const sourceSessionId = randomUUID()

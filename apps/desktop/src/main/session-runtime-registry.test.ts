@@ -31,6 +31,22 @@ describe('SessionRuntimeRegistry', () => {
     reservations.forEach((reservation) => reservation.release())
   })
 
+  it('子代理外部工作保持父运行体存活，但不消耗用户对话并发名额', () => {
+    const registry = new SessionRuntimeRegistry({ maxConcurrentRuns: 1, idleUnloadMs: -1 })
+    const parent = runtime('subagent-parent')
+    const other = runtime('user-conversation')
+    registry.add(parent)
+    registry.add(other)
+    parent.beginExternalWork()
+
+    assert.equal(parent.busy, true)
+    assert.equal(parent.userRunBusy, false)
+    const reservation = registry.reserveWorkStart(other)
+    assert.notEqual(reservation, null)
+    reservation?.release()
+    parent.endExternalWork()
+  })
+
   it('切换只改变选中项，忙碌对话继续保留', async () => {
     const registry = new SessionRuntimeRegistry({ idleUnloadMs: -1 })
     const first = runtime('first')

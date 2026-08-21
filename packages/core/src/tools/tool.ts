@@ -57,6 +57,9 @@ export interface ToolContext {
   abortSignal: AbortSignal
   /** 当前工具步骤确实接合的计划；后台任务终态只可据此恢复同一计划。 */
   engagedPlanId?: string
+  /** 当前父回合与工具调用的稳定身份；异步宿主任务用它建立可追溯所有权。 */
+  turnId?: string
+  toolCallId?: string
   /** 长时工具的增量输出回调（终端输出等） */
   onProgress?: (output: string) => void
 }

@@ -1,4 +1,4 @@
-import { FolderOpen } from 'lucide-react'
+import { FolderOpen, PanelRight } from 'lucide-react'
 import type { BackgroundTaskSummary } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { BackgroundTaskMenu } from './background-task-menu.tsx'
@@ -8,7 +8,9 @@ interface TaskHeaderProps {
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
   backgroundTasks: readonly BackgroundTaskSummary[]
+  subagentPanelOpen: boolean
   onOpenWorkspaceFolder: () => void
+  onToggleSubagentPanel: () => void
 }
 
 export function TaskHeader(props: TaskHeaderProps) {
@@ -37,7 +39,19 @@ export function TaskHeader(props: TaskHeaderProps) {
         </button>
         <WorkspaceBadge mode={props.workspaceMode} />
       </div>
-      <BackgroundTaskMenu tasks={props.backgroundTasks} />
+      <div className="flex shrink-0 items-center gap-1">
+        <BackgroundTaskMenu tasks={props.backgroundTasks} />
+        <button
+          type="button"
+          className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.subagentPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}
+          onClick={props.onToggleSubagentPanel}
+          aria-pressed={props.subagentPanelOpen}
+          aria-label={props.subagentPanelOpen ? '收起子代理面板' : '展开子代理面板'}
+          title={props.subagentPanelOpen ? '收起子代理面板' : '展开子代理面板'}
+        >
+          <PanelRight size={16} />
+        </button>
+      </div>
     </header>
   )
 }

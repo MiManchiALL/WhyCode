@@ -17,6 +17,8 @@ import type {
   CoreCommand,
   ReasoningEffortSelection,
   SessionForkOrigin,
+  SubagentState,
+  SubagentSummary,
 } from '@whycode/core'
 import {
   formatUserQuestionAnswer,
@@ -90,6 +92,8 @@ import { AppSidebar } from './app-sidebar.tsx'
 import { TaskHeader } from './task-header.tsx'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
+import { SubagentPanel } from './subagent-panel.tsx'
+import type { SubagentPanelPage } from './subagent-presentation.ts'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import { PaperFrame } from './paper-frame.tsx'
 import { installPaperHoverTracking } from './paper-hover-tracking.ts'
@@ -120,6 +124,10 @@ export function App() {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null)
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary[]>([])
+  const [subagents, setSubagents] = useState<SubagentSummary[]>([])
+  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false)
+  const [subagentPanelRetained, setSubagentPanelRetained] = useState(false)
+  const [subagentPanelPage, setSubagentPanelPage] = useState<SubagentPanelPage | null>(null)
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
@@ -157,6 +165,8 @@ export function App() {
   const sessionListRefreshSequenceRef = useRef(0)
   const backgroundTaskRevisionRef = useRef(-1)
   const backgroundTaskStatesRef = useRef(new Map<string, BackgroundTaskState>())
+  const subagentRevisionRef = useRef(-1)
+  const subagentStatesRef = useRef(new Map<string, SubagentState>())
   const hydratingRuntimeIdRef = useRef<string | null>(null)
   const backgroundEventsRef = useRef(new Map<string, {
     event: CoreEvent
@@ -455,6 +465,15 @@ export function App() {
     setBackgroundTasks(state.tasks)
   }, [])
 
+  const applySubagentState = useCallback((state: SubagentState) => {
+    if (
+      state.parentSessionId !== sessionIdRef.current
+      || state.revision <= subagentRevisionRef.current
+    ) return
+    subagentRevisionRef.current = state.revision
+    setSubagents(state.subagents)
+  }, [])
+
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
     const changingSession = sessionIdRef.current !== snapshot.sessionId
@@ -468,6 +487,9 @@ export function App() {
     if (changingSession) {
       backgroundTaskRevisionRef.current = -1
       setBackgroundTasks([])
+      subagentRevisionRef.current = -1
+      setSubagents([])
+      setSubagentPanelPage(null)
     }
     if (snapshot.backgroundTasks) {
       applyBackgroundTaskState(snapshot.backgroundTasks)
@@ -475,6 +497,14 @@ export function App() {
       if (buffered) {
         applyBackgroundTaskState(buffered)
         backgroundTaskStatesRef.current.delete(buffered.sessionId)
+      }
+    }
+    if (snapshot.subagents) {
+      applySubagentState(snapshot.subagents)
+      const buffered = subagentStatesRef.current.get(snapshot.subagents.parentSessionId)
+      if (buffered) {
+        applySubagentState(buffered)
+        subagentStatesRef.current.delete(buffered.parentSessionId)
       }
     }
     activeSnapshotSequenceRef.current = snapshot.eventSequence
@@ -533,6 +563,7 @@ export function App() {
     setForkPendingTurnId(null)
   }, [
     applyBackgroundTaskState,
+    applySubagentState,
     restoreImageDrafts,
     restorePdfDrafts,
     replaceSkills,
@@ -705,6 +736,31 @@ export function App() {
       }
     })
   }, [applyBackgroundTaskState])
+
+  useEffect(() => {
+    if (subagentPanelOpen) setSubagentPanelRetained(true)
+  }, [subagentPanelOpen])
+
+  useEffect(() => {
+    return window.whycode.onSubagents((state) => {
+      if (
+        state.parentSessionId === sessionIdRef.current
+        && hydratingRuntimeIdRef.current === null
+      ) {
+        applySubagentState(state)
+        return
+      }
+      const states = subagentStatesRef.current
+      const previous = states.get(state.parentSessionId)
+      if (previous && previous.revision >= state.revision) return
+      states.delete(state.parentSessionId)
+      states.set(state.parentSessionId, state)
+      if (states.size > 8) {
+        const oldestSessionId = states.keys().next().value
+        if (oldestSessionId) states.delete(oldestSessionId)
+      }
+    })
+  }, [applySubagentState])
 
   useEffect(() => {
     void window.whycode.listModels().then(setModels)
@@ -1443,7 +1499,9 @@ export function App() {
           projectDir={workspace.mode === 'pending-managed' ? null : projectDir}
           workspaceMode={workspace.mode}
           backgroundTasks={backgroundTasks}
+          subagentPanelOpen={subagentPanelOpen}
           onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
+          onToggleSubagentPanel={() => setSubagentPanelOpen((open) => !open)}
         />
 
         <div className="relative flex min-h-0 flex-1">
@@ -1674,13 +1732,66 @@ export function App() {
             </div>
           </section>
 
-          <TaskInspector
-            runtimeId={runtimeId}
-            workspace={workspace}
-            plan={view.taskPlan}
-            busy={interactionBusy}
-            onPrepareCommitPrompt={prepareCommitPrompt}
-          />
+          <div
+            className={`relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out max-[1180px]:absolute max-[1180px]:inset-y-0 max-[1180px]:right-0 max-[1180px]:z-30 max-[1180px]:shadow-xl ${
+              subagentPanelOpen
+                ? 'ml-0 w-[560px] max-[600px]:w-full'
+                : 'ml-3 w-[348px] max-[1180px]:ml-0 max-[1180px]:w-0 max-[1180px]:pointer-events-none'
+            }`}
+          >
+            <div
+              className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-200 ease-out ${
+                subagentPanelOpen
+                  ? 'pointer-events-none -translate-x-3 opacity-0'
+                  : 'translate-x-0 opacity-100 max-[1180px]:opacity-0'
+              }`}
+              aria-hidden={subagentPanelOpen}
+              inert={subagentPanelOpen}
+            >
+              <TaskInspector
+                runtimeId={runtimeId}
+                workspace={workspace}
+                plan={view.taskPlan}
+                subagents={subagents}
+                busy={interactionBusy}
+                onPrepareCommitPrompt={prepareCommitPrompt}
+                onOpenSubagents={() => {
+                  setSubagentPanelPage({ kind: 'overview' })
+                  setSubagentPanelOpen(true)
+                }}
+              />
+            </div>
+            <div
+              className={`absolute inset-y-0 right-0 w-[560px] transition-[opacity,transform] duration-200 ease-out max-[600px]:w-full ${
+                subagentPanelOpen
+                  ? 'translate-x-0 opacity-100'
+                  : 'pointer-events-none translate-x-8 opacity-0'
+              }`}
+              aria-hidden={!subagentPanelOpen}
+              inert={!subagentPanelOpen}
+              onTransitionEnd={(event) => {
+                if (
+                  event.target === event.currentTarget
+                  && event.propertyName === 'opacity'
+                  && !subagentPanelOpen
+                ) setSubagentPanelRetained(false)
+              }}
+            >
+              <SubagentPanel
+                active={subagentPanelOpen || subagentPanelRetained}
+                runtimeId={runtimeId}
+                parentSessionId={sessionIdRef.current}
+                subagents={subagents}
+                page={subagentPanelPage}
+                onSelect={(subagentId) => setSubagentPanelPage({
+                  kind: 'transcript',
+                  subagentId,
+                })}
+                onBack={() => setSubagentPanelPage({ kind: 'overview' })}
+                onClearPage={() => setSubagentPanelPage(null)}
+              />
+            </div>
+          </div>
         </div>
       </section>
 

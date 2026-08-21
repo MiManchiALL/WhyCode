@@ -33,8 +33,12 @@ import {
   type ReasoningEffortSelection,
   type SessionJournal,
   SkillCatalogService,
+  SubagentDefinitionCatalogService,
   skillSummary,
   type ActivatedSkill,
+  type SubagentEventEnvelope,
+  type SubagentSettlementNotification,
+  type SubagentState,
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
   validateSessionId,
@@ -103,6 +107,8 @@ import {
   BackgroundTaskWakeQueue,
   type BackgroundTaskRuntimeResolution,
 } from './background-task-wakeup.ts'
+import { SessionNotificationWakeQueue } from './session-notification-wakeup.ts'
+import { SubagentService } from './subagent-service.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import { ElectronPdfProcessor } from './pdf/processor.ts'
@@ -344,7 +350,7 @@ function broadcastRuntimeEvent(
     && (event.status === 'idle' || event.status === 'error')
   ) {
     runtimeRegistry.runtimeBecameIdle(runtime)
-    void backgroundTaskWakeups?.nudge()
+    nudgeNotificationQueues()
   }
 }
 
@@ -357,6 +363,33 @@ function broadcastBackgroundTasks(state: BackgroundTaskState): void {
       console.warn('后台任务状态推送失败：', error)
     }
   }
+}
+
+function broadcastSubagents(state: SubagentState): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    try {
+      win.webContents.send(IPC.subagents, state)
+    } catch (error) {
+      console.warn('子代理状态推送失败：', error)
+    }
+  }
+}
+
+function broadcastSubagentEvent(envelope: SubagentEventEnvelope): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    try {
+      win.webContents.send(IPC.subagentEvent, envelope)
+    } catch (error) {
+      console.warn('子代理事件推送失败：', error)
+    }
+  }
+}
+
+function nudgeNotificationQueues(): void {
+  void backgroundTaskWakeups?.nudge()
+  void subagentWakeups?.nudge()
 }
 
 /** 当前工作文件夹；app ready 后始终有值，启动默认目录与用户选择目录共享同一工具语义。 */
@@ -372,6 +405,11 @@ let sessionSidebarState: SessionSidebarStateStore
 let commandSessions: CommandSessionManager
 /** detached 命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
 let backgroundTaskWakeups: BackgroundTaskWakeQueue | null = null
+/** 子代理终态的持久化唤醒队列；完整结果由子会话保存，队列只持有有界通知。 */
+let subagentWakeups: SessionNotificationWakeQueue<SubagentSettlementNotification> | null = null
+/** 子代理定义目录与运行时服务均由主进程单例持有。 */
+let subagentDefinitions: SubagentDefinitionCatalogService
+let subagents: SubagentService
 /** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
 let worktrees: WorktreeManager
 /** 每个默认会话独占一个受管子目录；Fork 从来源目录创建一次性快照。 */
@@ -732,10 +770,12 @@ async function createMainAgentSession(
       sessionRecorder: recorder,
       mcpRuntime,
       skillCatalog: skills,
+      subagentCatalog: subagentDefinitions,
       mainTools: [
         createBuildOfficeArtifactTool(officeArtifactRunner),
         createInspectOfficeTool(officeProcessor),
         ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
+        ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
         ...createSessionWebPageTools(recorder),
       ],
@@ -748,7 +788,8 @@ async function createMainAgentSession(
       officeProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
       hasPendingTaskPlanContinuation: (planId) =>
-        commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId),
+        commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
+        || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),
@@ -853,7 +894,10 @@ async function handleCommand(
       return handleEditUserMessageCommand(runtime, command)
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
-      await runtime.abort()
+      await Promise.all([
+        runtime.abort(),
+        runtime.sessionId ? subagents.abortParent(runtime.sessionId) : Promise.resolve(),
+      ])
       break
     }
     case 'set-consensus': {
@@ -880,6 +924,7 @@ async function handleCommand(
       // 已显示新档位时，后台会话仍可能按旧档位执行。持久化只负责重启后的偏好。
       preferredPermissionMode = command.mode
       runtimeRegistry.setPermissionModeForAll(command.mode)
+      subagents.setPermissionModeForAll(command.mode)
       try {
         await persistPermissionMode(command.mode)
       } catch (error) {
@@ -1231,7 +1276,7 @@ async function handleUserMessageCommand(
     workStart.release()
     // 若后台终态正因 AskUserQuestion 等待真实回答，此时用户输入已优先完成路由，
     // 可在下一稳定步骤边界把通知交给同一 Agent，而不占用第二套轮询或计时器。
-    void backgroundTaskWakeups?.nudge()
+    nudgeNotificationQueues()
   }
 }
 
@@ -1568,7 +1613,7 @@ async function mutateConnectionSettings(
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
     settingsMutationInProgress = false
-    void backgroundTaskWakeups?.nudge()
+    nudgeNotificationQueues()
   }
 }
 
@@ -1700,6 +1745,9 @@ async function runtimeSnapshot(
   const backgroundTasks = journal
     ? await commandSessions.backgroundTasks(journal.sessionId)
     : null
+  const subagentState = journal
+    ? await subagents.state(journal.sessionId)
+    : null
   return {
     runtimeId: runtime.runtimeId,
     workspace: runtime.workspace,
@@ -1728,6 +1776,7 @@ async function runtimeSnapshot(
     eventSequence: timeline.boundary,
     forkOrigin: journal?.metadataSnapshot.forkOrigin ?? null,
     backgroundTasks,
+    subagents: subagentState,
   }
 }
 
@@ -1839,7 +1888,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
     return { ok: false, error: message }
   } finally {
     release()
-    void backgroundTaskWakeups?.nudge()
+    nudgeNotificationQueues()
   }
 }
 
@@ -1927,7 +1976,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
   } finally {
     if (!sourceRuntime && sourceJournal) sessions.release(sourceJournal)
     release()
-    void backgroundTaskWakeups?.nudge()
+    nudgeNotificationQueues()
   }
 }
 
@@ -2072,6 +2121,19 @@ async function resolveBackgroundTaskRuntime(
   }
 }
 
+function internalNotificationDeliveryBlocked(runtime: DesktopSessionRuntime): boolean {
+  return Boolean(
+    runtime.isDisposed
+    || !runtime.session
+    || runtime.session.waitingForUserInput
+    || runtime.coordinator?.busy
+    || (
+      sessionDeletionLock.blocksRuntime
+      && sessionDeletionLock.sessionId === runtime.sessionId
+    )
+  )
+}
+
 function deliverBackgroundTaskNotification(
   runtime: DesktopSessionRuntime,
   notification: Parameters<AgentSession['handleTaskNotification']>[0],
@@ -2098,6 +2160,39 @@ function reportBackgroundTaskDeliveryError(
   runtime.emit({
     type: 'error',
     message: `后台任务完成通知未能交给 Agent：${error instanceof Error ? error.message : String(error)}`,
+    recoverable: true,
+  })
+  runtime.emit({ type: 'agent-status', status: 'error' }, false)
+}
+
+function deliverSubagentSettlement(
+  runtime: DesktopSessionRuntime,
+  notification: SubagentSettlementNotification,
+): void {
+  const session = runtime.session
+  if (!session) throw new Error('子代理所属父会话尚未建立 Agent')
+  synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
+  let handling: ReturnType<AgentSession['handleSubagentSettlement']>
+  try {
+    handling = session.handleSubagentSettlement(
+      notification,
+      () => subagents.markSettlementDelivered(notification),
+    )
+  } catch (error) {
+    reportSubagentDeliveryError(runtime, error)
+    return
+  }
+  if (handling) runtime.beginWork()
+  void Promise.resolve(handling).catch((error) => reportSubagentDeliveryError(runtime, error))
+}
+
+function reportSubagentDeliveryError(
+  runtime: DesktopSessionRuntime,
+  error: unknown,
+): void {
+  runtime.emit({
+    type: 'error',
+    message: `子代理终态未能交给父 Agent：${error instanceof Error ? error.message : String(error)}`,
     recoverable: true,
   })
   runtime.emit({ type: 'agent-status', status: 'error' }, false)
@@ -2170,6 +2265,8 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       onDeletionMarked: async (sessionExists) => {
         if (!sessionExists) return
         backgroundTaskWakeups?.discardSession(sessionId)
+        subagentWakeups?.discardSession(sessionId)
+        await subagents.forgetParent(sessionId)
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
         if (deletedCurrent) {
           const replacement = createDefaultDraftRuntime()
@@ -2264,15 +2361,14 @@ if (primaryInstance) void app.whenReady().then(async () => {
     app.quit()
     return
   }
-  sessions = new DesktopSessionRepository(
-    join(app.getPath('userData'), 'sessions'),
-    pdfProcessor,
-  )
+  const sessionsRoot = join(app.getPath('userData'), 'sessions')
+  sessions = new DesktopSessionRepository(sessionsRoot, pdfProcessor)
   sessionSidebarState = new SessionSidebarStateStore(
     join(app.getPath('userData'), 'session-sidebar.json'),
   )
   sessionScratch = new SessionScratchManager(join(app.getPath('userData'), 'scratch'))
   skills = new SkillCatalogService({ homeDir: app.getPath('home') })
+  subagentDefinitions = new SubagentDefinitionCatalogService({ homeDir: app.getPath('home') })
   worktrees = new WorktreeManager(join(dirname(getConfigPath()), 'worktrees'))
   managedWorkspaces = new ManagedWorkspaceManager(
     requireDefaultWorkspace(),
@@ -2343,18 +2439,41 @@ if (primaryInstance) void app.whenReady().then(async () => {
   backgroundTaskWakeups = new BackgroundTaskWakeQueue({
     resolveRuntime: resolveBackgroundTaskRuntime,
     reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),
-    deliveryBlocked: (runtime) => Boolean(
-      runtime.isDisposed
-      || !runtime.session
-      || runtime.session.waitingForUserInput
-      || runtime.coordinator?.busy
-      || (
-        sessionDeletionLock.blocksRuntime
-        && sessionDeletionLock.sessionId === runtime.sessionId
-      ),
-    ),
+    deliveryBlocked: internalNotificationDeliveryBlocked,
     deliver: deliverBackgroundTaskNotification,
     onError: (error) => console.error('后台任务完成通知调度失败：', error),
+  })
+  subagents = new SubagentService({
+    sessionsRoot,
+    scratch: sessionScratch,
+    definitions: subagentDefinitions,
+    skills,
+    webSearchTool,
+    createWebPageTools: createSessionWebPageTools,
+    resolveModel: (modelId) => {
+      const resolved = resolveModelConnection(loadAppConfig(), modelId)
+      return resolved.ok ? resolved.value : null
+    },
+    auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer,
+    hostOperations,
+    onState: broadcastSubagents,
+    onEvent: broadcastSubagentEvent,
+    onSettlement: (notification) => subagentWakeups?.enqueue(notification),
+    onParentIdle: (runtime) => {
+      runtimeRegistry.runtimeBecameIdle(runtime)
+      nudgeNotificationQueues()
+    },
+    onError: (error) => console.error('子代理运行失败：', error),
+  })
+  subagentWakeups = new SessionNotificationWakeQueue({
+    key: (notification) => `${notification.parentSessionId}:${notification.activationId}`,
+    sessionId: (notification) => notification.parentSessionId,
+    resolveRuntime: resolveBackgroundTaskRuntime,
+    reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),
+    deliveryBlocked: internalNotificationDeliveryBlocked,
+    deliver: deliverSubagentSettlement,
+    onDrop: (notification) => subagents.markSettlementDelivered(notification),
+    onError: (error) => console.error('子代理终态通知调度失败：', error),
   })
   commandSessions = new CommandSessionManager(
     join(app.getPath('userData'), 'command-tasks'),
@@ -2365,6 +2484,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     },
   )
   await commandSessions.initialize()
+  await subagents.initialize()
   ipcMain.handle(IPC.command, (_e, envelope: RuntimeCommandEnvelope) => {
     if (
       !envelope
@@ -2429,6 +2549,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
     openMcpConfigFile(request))
   ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string) =>
     runtimeSnapshot(runtimeForId(runtimeId)))
+  ipcMain.handle(IPC.subagentTranscript, (
+    _e,
+    parentSessionId: string,
+    subagentId: string,
+  ) => subagents.transcript(parentSessionId, subagentId))
   ipcMain.handle(IPC.consensusStatus, () => ({
     ready: checkConsensusReady() === null,
     reason: checkConsensusReady(),
@@ -2558,12 +2683,15 @@ app.on('before-quit', (event) => {
   if (shutdownStarted || !commandSessions) return
   event.preventDefault()
   shutdownStarted = true
-  const closeBackgroundTaskWakeups = backgroundTaskWakeups
-    ? backgroundTaskWakeups.close()
-    : Promise.resolve()
-  void closeBackgroundTaskWakeups
-    .catch((error) => console.error('后台任务通知队列退出清理失败：', error))
+  const closeWakeups = Promise.all([
+    backgroundTaskWakeups?.close() ?? Promise.resolve(),
+    subagentWakeups?.close() ?? Promise.resolve(),
+  ])
+  void closeWakeups
+    .catch((error) => console.error('内部通知队列退出清理失败：', error))
     .then(() => Promise.all([
+      subagents.close()
+        .catch((error) => console.error('子代理退出清理失败：', error)),
       commandSessions.shutdown()
         .catch((error) => console.error('后台命令退出清理失败：', error)),
       runtimeRegistry.closeAll()

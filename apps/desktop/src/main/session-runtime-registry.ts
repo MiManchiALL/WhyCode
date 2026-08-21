@@ -94,8 +94,8 @@ export class SessionRuntimeRegistry {
    * 都可能先通过检查，再一起越过并发上限。
    */
   reserveWorkStart(runtime: DesktopSessionRuntime): UserMessageReservation | null {
-    if (!runtime.busy) {
-      const active = this.all().filter((candidate) => candidate.busy).length
+    if (!runtime.userRunBusy) {
+      const active = this.all().filter((candidate) => candidate.userRunBusy).length
       if (active >= this.maxConcurrentRuns) return null
     }
     return runtime.routingGate.reserve()

@@ -139,6 +139,12 @@ import { SkillTurnContext } from '../skills/turn.ts'
 import { createSkillTool, SKILL_TOOL_NAME } from '../tools/skill/index.ts'
 import { createCommandTaskNotificationMessage } from '../tools/background-command/notification.ts'
 import type { CommandTaskTerminalNotification } from '../tools/background-command/types.ts'
+import type { SubagentDefinitionCatalogService } from '../subagents/catalog.ts'
+import { createSubagentSettlementMessage } from '../subagents/notification.ts'
+import type {
+  SubagentPermissionSnapshot,
+  SubagentSettlementNotification,
+} from '../subagents/types.ts'
 import {
   StepToolApprovalBatcher,
   type ApprovalHandler,
@@ -165,6 +171,8 @@ export interface AgentSessionOptions {
   customSystemPrompt?: CustomSystemPromptSnapshot
   /** 额外注入的工具（M3：SubmitProtocolOutput 等协商工具） */
   extraTools?: ToolDefinition[]
+  /** 角色能力白名单；省略时使用完整内置文件工具集。 */
+  baseTools?: readonly ToolDefinition[]
   /** 宿主为普通 Main 注入的会话工具；讨论/协议回合物理移除（如后台命令）。 */
   mainTools?: ToolDefinition[]
   /** Electron 等宿主注入的桌面采集能力；Core 不依赖具体窗口系统。 */
@@ -183,6 +191,14 @@ export interface AgentSessionOptions {
   mcpRuntime?: McpSessionRuntime
   /** 普通 Main 的 Skill 磁盘事实源；讨论/协议回合即使复用 Session 也不会装配。 */
   skillCatalog?: SkillCatalogService
+  /** 普通 Main 每个根任务重新扫描的子代理定义目录；子代理自身不传入。 */
+  subagentCatalog?: SubagentDefinitionCatalogService
+  /** 子代理冷恢复时继承的父权限与已批准规则；角色工具白名单仍可继续收窄。 */
+  initialPermission?: SubagentPermissionSnapshot
+  /** 默认开启；子代理和协议运行体在构造时物理关闭。 */
+  userQuestionsEnabled?: boolean
+  /** 省略时 Main 不限步、讨论/协议限 40；用于子代理单次激活的硬上限。 */
+  maxSteps?: number
   /**
    * 宿主级项目副作用调度边界。单个 Agent 内仍由 serialToolTail 保序；桌面宿主
    * 可在此进一步串行同一项目中来自不同会话的 edit/execute 与检查点回滚。
@@ -226,9 +242,13 @@ interface QueuedMessage {
   persisted: boolean
 }
 
+type ContinuationNotification = CommandTaskTerminalNotification | SubagentSettlementNotification
+
 interface QueuedTaskNotification {
-  notification: CommandTaskTerminalNotification
+  notification: ContinuationNotification
   message: ModelMessage
+  /** 父 transcript 已稳定记录通知后确认交接；崩溃重放据此保持至少一次。 */
+  onDelivered?: () => void | Promise<void>
 }
 
 interface TurnModelSelection {
@@ -328,11 +348,16 @@ export class AgentSession {
   /** 非只读工具的会话级串行尾链：授权在步内聚合，检查点与实际执行属于同一临界区。 */
   private serialToolTail: Promise<void> = Promise.resolve()
   /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
-  private userQuestionsEnabled = true
+  private userQuestionsEnabled: boolean
+  /** 最近一个稳定模型步骤的结束原因，供一次性子代理激活映射可靠终态。 */
+  private lastFinishReason: string | null = null
+  /** 当前 turn 最近一个已提交的 assistant 正文；新 turn 清空，不能回落到历史回复。 */
+  private lastTurnAssistantText = ''
   /** 完整共识任务期间由 Coordinator 持有最终 idle，避免 Main 与任务终点之间出现假空闲。 */
   private terminalStatusManaged = false
   constructor(options: AgentSessionOptions) {
     this.options = options
+    this.userQuestionsEnabled = options.userQuestionsEnabled ?? true
     this.skillTurn = new SkillTurnContext(options.skillCatalog)
     const initialMessages = options.sessionRecorder?.initialMessages ?? []
     this.messages = applyProjectInstructions(
@@ -358,6 +383,16 @@ export class AgentSession {
       options.promptContext.discussion,
       options.promptContext.scratch?.rootDir,
     )
+    if (options.initialPermission) {
+      this.permissions.mode = options.initialPermission.mode
+      this.permissions.additionalDirs = [...new Set([
+        ...this.permissions.additionalDirs,
+        ...options.initialPermission.additionalDirs.map((path) => resolve(path)),
+      ])]
+      this.permissions.sessionAllowedTools = [...new Set(
+        options.initialPermission.sessionAllowedTools,
+      )]
+    }
     if (!options.promptContext.discussion) {
       this.taskPlan = new TaskPlanController(
         options.sessionRecorder?.initialTaskState,
@@ -378,6 +413,34 @@ export class AgentSession {
 
   get permissionMode(): PermissionMode {
     return this.permissions.mode
+  }
+
+  get permissionSnapshot(): SubagentPermissionSnapshot {
+    return {
+      mode: this.permissions.mode,
+      additionalDirs: [...this.permissions.additionalDirs],
+      sessionAllowedTools: [...this.permissions.sessionAllowedTools],
+    }
+  }
+
+  get modelFinishReason(): string | null {
+    return this.lastFinishReason
+  }
+
+  get latestTurnAssistantText(): string {
+    return this.lastTurnAssistantText
+  }
+
+  private updateLastTurnAssistantText(messages: readonly ModelMessage[]): void {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]!
+      if (message.role !== 'assistant') continue
+      const text = modelMessageText(message).trim()
+      if (text) {
+        this.lastTurnAssistantText = text
+        return
+      }
+    }
   }
 
   async setModelSelection(
@@ -408,6 +471,7 @@ export class AgentSession {
   /** Main 初始化/模型切换时建立可展示估算；计量失败不应影响会话可用性。 */
   async initializeContextUsage(): Promise<void> {
     try {
+      await this.refreshSubagentCatalog()
       const abortSignal = new AbortController().signal
       const systemPrompt = buildSystemPrompt(
         this.options.promptContext,
@@ -585,6 +649,26 @@ export class AgentSession {
     const item: QueuedTaskNotification = {
       notification: structuredClone(notification),
       message: createCommandTaskNotificationMessage(notification),
+    }
+    if (this.isBusy || this.queue.length > 0 || findPendingUserQuestion(this.messages)) {
+      this.taskNotifications.push(item)
+      return
+    }
+    return this.startTurn([item.message], [], undefined, [], [item], true)
+  }
+
+  /** 子代理终态与后台命令共用稳定步骤注入语义，但保留独立协议和交接确认。 */
+  handleSubagentSettlement(
+    notification: SubagentSettlementNotification,
+    onDelivered?: () => void | Promise<void>,
+  ): Promise<StopReason> | void {
+    if (this.options.promptContext.discussion || this.protocolRound || this.options.promptContext.subagent) {
+      throw new Error('子代理终态只在父 Main 执行阶段可用')
+    }
+    const item: QueuedTaskNotification = {
+      notification: structuredClone(notification),
+      message: createSubagentSettlementMessage(notification),
+      onDelivered,
     }
     if (this.isBusy || this.queue.length > 0 || findPendingUserQuestion(this.messages)) {
       this.taskNotifications.push(item)
@@ -860,6 +944,8 @@ export class AgentSession {
     this.activeModelSelection = turnModelSelection
     this.opAbort = new AbortController()
     this.running = true
+    this.lastFinishReason = null
+    this.lastTurnAssistantText = ''
     return this.runLoop(
       initialMessages,
       this.opAbort.signal,
@@ -888,6 +974,27 @@ export class AgentSession {
         recoverable: true,
       }),
     })
+    await this.refreshSubagentCatalog()
+  }
+
+  private async refreshSubagentCatalog(): Promise<void> {
+    const catalog = this.options.subagentCatalog
+    if (!catalog || this.options.promptContext.discussion || this.options.promptContext.subagent) {
+      return
+    }
+    try {
+      const snapshot = await catalog.snapshot(this.options.promptContext.projectDir)
+      this.options = {
+        ...this.options,
+        promptContext: { ...this.options.promptContext, subagents: snapshot },
+      }
+    } catch (error) {
+      this.options.emit({
+        type: 'error',
+        message: `子代理定义目录刷新失败：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      })
+    }
   }
 
   /** 用户点「停止」：中止当前 turn 或压缩 */
@@ -1015,6 +1122,7 @@ export class AgentSession {
         throw error
       }
       this.messages.push(...injected)
+      await this.confirmNotificationsDelivered(notifications)
       this.skillTurn.add(drained.flatMap((item) => item.skills))
       drained.forEach((item) => this.options.emit({
         type: 'message-injected',
@@ -1140,6 +1248,7 @@ export class AgentSession {
       this.resolveIdleWaiters()
       return 'error'
     }
+    await this.confirmNotificationsDelivered(initialTaskNotifications)
     if (deliveredInputs.length > 0) this.emitDrainedMessages([...deliveredInputs])
 
     emit({ type: 'turn-start', turnId })
@@ -1147,9 +1256,8 @@ export class AgentSession {
 
     let stopReason: StopReason = 'completed'
     let endedByTool = false
-    const maxSteps = this.options.promptContext.discussion || this.protocolRound
-      ? BOUNDED_MAX_STEPS
-      : null
+    const maxSteps = this.options.maxSteps
+      ?? (this.options.promptContext.discussion || this.protocolRound ? BOUNDED_MAX_STEPS : null)
     this.loopHealth = new LoopHealthMonitor()
     const usage: UsageInfo = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }
     const interruptedBoundaryPending = findPendingTurnAbortedIndex(this.messages) !== null
@@ -1278,9 +1386,12 @@ export class AgentSession {
         !finishedNaturally
       ) {
         stopReason = 'max-turns'
+        const subject = this.options.maxSteps === undefined
+          ? '当前协商回合'
+          : '当前运行'
         emit({
           type: 'error',
-          message: `当前协商回合已达到 ${maxSteps} 步安全上限，可能尚未完成。`,
+          message: `${subject}已达到 ${maxSteps} 步安全上限，可能尚未完成。`,
           recoverable: true,
         })
       }
@@ -1360,6 +1471,22 @@ export class AgentSession {
     }
     this.resolveIdleWaiters()
     return stopReason
+  }
+
+  private async confirmNotificationsDelivered(
+    notifications: readonly QueuedTaskNotification[],
+  ): Promise<void> {
+    for (const notification of notifications) {
+      try {
+        await notification.onDelivered?.()
+      } catch (error) {
+        this.options.emit({
+          type: 'error',
+          message: `内部任务终态交接确认失败：${error instanceof Error ? error.message : String(error)}`,
+          recoverable: true,
+        })
+      }
+    }
   }
 
   /** 给模型预留收尾窗口，避免一直扩展探索直到安全上限才突然停止。 */
@@ -2116,7 +2243,9 @@ export class AgentSession {
         this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
       }
       this.contextOverhead = requestOverhead
+      this.updateLastTurnAssistantText(canonicalResponseMessages)
       emit({ type: 'step-committed' })
+      this.lastFinishReason = finishReason
       this.emitContextUsage()
       return {
         committed: true,
@@ -2308,7 +2437,7 @@ export class AgentSession {
           })]
         : []
     const defs: ToolDefinition[] = [
-      ...(BUILTIN_TOOLS as ToolDefinition[]),
+      ...((this.options.baseTools ?? BUILTIN_TOOLS) as ToolDefinition[]),
       ...imageTools,
       ...auxiliaryImageTools,
       ...pdfTools,
@@ -2350,6 +2479,8 @@ export class AgentSession {
           projectDir: toolProjectDir,
           additionalDirs: this.permissions.additionalDirs,
           abortSignal,
+          ...(this.activeTurn ? { turnId: this.activeTurn.id } : {}),
+          toolCallId,
           ...(planExecutionEngaged && this.taskPlan?.snapshot
             ? { engagedPlanId: this.taskPlan.snapshot.id }
             : {}),

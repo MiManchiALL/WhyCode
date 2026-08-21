@@ -1,16 +1,19 @@
-import type { TaskPlan, WorktreeWorkspaceBinding } from '@whycode/core'
+import type { SubagentSummary, TaskPlan, WorktreeWorkspaceBinding } from '@whycode/core'
 import { GitBranch, ListChecks } from 'lucide-react'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { PaperFrame } from './paper-frame.tsx'
 import { TaskPlanCard } from './task-plan-card.tsx'
+import { SubagentCard } from './subagent-card.tsx'
 import { WorktreeEnvironmentCard } from './worktree-panel.tsx'
 
 interface TaskInspectorProps {
   runtimeId: string
   workspace: RuntimeWorkspace
   plan: TaskPlan | null | undefined
+  subagents: readonly SubagentSummary[]
   busy: boolean
   onPrepareCommitPrompt: () => void
+  onOpenSubagents: () => void
 }
 
 export function TaskInspector(props: TaskInspectorProps) {
@@ -19,7 +22,7 @@ export function TaskInspector(props: TaskInspectorProps) {
 
   return (
     <aside
-      className="wc-scrollbar ml-3 w-[348px] shrink-0 overflow-y-auto px-4 py-4 max-[1180px]:hidden"
+      className="wc-scrollbar h-full w-full overflow-y-auto px-4 py-4"
       aria-label="任务信息"
     >
       <div className="wc-paper-stack">
@@ -60,6 +63,7 @@ export function TaskInspector(props: TaskInspectorProps) {
             />
           </PaperFrame>
         ) : <EmptyPlanCard />}
+        <SubagentCard subagents={props.subagents} onOpen={props.onOpenSubagents} />
       </div>
     </aside>
   )

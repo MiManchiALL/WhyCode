@@ -65,6 +65,8 @@ export class DesktopSessionRuntime {
   private readonly pendingApprovals = new Map<string, PendingApproval>()
   private readonly idleWaiters = new Set<() => void>()
   private attachmentAbort: AbortController | null = null
+  /** 子代理等宿主拥有的异步工作；阻止卸载/删除，但不占用户会话并发名额。 */
+  private externalWorkCount = 0
   private disposed = false
 
   constructor(options: DesktopSessionRuntimeOptions) {
@@ -152,6 +154,10 @@ export class DesktopSessionRuntime {
   }
 
   get busy(): boolean {
+    return this.userRunBusy || this.externalWorkCount > 0
+  }
+
+  get userRunBusy(): boolean {
     return this.executionBusy || this.routingGate.busy
   }
 
@@ -244,6 +250,18 @@ export class DesktopSessionRuntime {
     if (this.busy) return
     for (const resolve of this.idleWaiters) resolve()
     this.idleWaiters.clear()
+  }
+
+  beginExternalWork(): void {
+    if (this.disposed) throw new Error('已释放的会话不能启动子代理工作')
+    this.externalWorkCount++
+    this.notifyStateChanged()
+  }
+
+  endExternalWork(): void {
+    if (this.externalWorkCount <= 0) throw new Error('会话异步工作计数不平衡')
+    this.externalWorkCount--
+    this.notifyStateChanged()
   }
 
   requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {

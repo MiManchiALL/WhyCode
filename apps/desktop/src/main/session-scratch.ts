@@ -7,6 +7,11 @@ import { copyDirectorySnapshot } from './directory-snapshot.ts'
 export interface SessionScratchPaths {
   rootDirectory: string
   mainDirectory: string
+  subagentsDirectory: string
+}
+
+export interface SubagentScratchPaths extends SessionScratchPaths {
+  subagentDirectory: string
 }
 
 export interface SessionScratchCleanupResult {
@@ -28,6 +33,16 @@ export class SessionScratchManager {
     return {
       rootDirectory,
       mainDirectory: join(rootDirectory, 'Main'),
+      subagentsDirectory: join(rootDirectory, 'subagents'),
+    }
+  }
+
+  subagentPaths(sessionId: string, subagentId: string): SubagentScratchPaths {
+    validateSessionId(subagentId)
+    const paths = this.paths(sessionId)
+    return {
+      ...paths,
+      subagentDirectory: join(paths.subagentsDirectory, subagentId),
     }
   }
 
@@ -38,6 +53,16 @@ export class SessionScratchManager {
     await assertOrdinaryDirectory(paths.rootDirectory)
     await mkdir(paths.mainDirectory, { recursive: true, mode: 0o700 })
     await assertOrdinaryDirectory(paths.mainDirectory)
+    return paths
+  }
+
+  async ensureSubagent(sessionId: string, subagentId: string): Promise<SubagentScratchPaths> {
+    const paths = this.subagentPaths(sessionId, subagentId)
+    await this.ensure(sessionId)
+    await mkdir(paths.subagentsDirectory, { recursive: true, mode: 0o700 })
+    await assertOrdinaryDirectory(paths.subagentsDirectory)
+    await mkdir(paths.subagentDirectory, { recursive: true, mode: 0o700 })
+    await assertOrdinaryDirectory(paths.subagentDirectory)
     return paths
   }
 

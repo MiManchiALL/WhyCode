@@ -17,6 +17,7 @@ import {
 } from '../tools/background-command/constants.ts'
 import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
+import type { SubagentDefinitionCatalogSnapshot } from '../subagents/types.ts'
 
 export interface PromptContext {
   /** 当前会话的真实工作目录；默认会话在首条消息前物化受管目录。 */
@@ -33,6 +34,16 @@ export interface PromptContext {
   }
   /** 协商讨论阶段（M3）：当前 Agent 身份与临时工作区 */
   discussion?: { agentId: 'Main' | 'B' | 'C'; scratchDir: string }
+  /** 普通 Main 当前可委派的定义目录；每个根任务重新扫描。 */
+  subagents?: SubagentDefinitionCatalogSnapshot
+  /** 子代理的稳定身份与定义快照；不携带父会话普通消息。 */
+  subagent?: {
+    id: string
+    name: string
+    description: string
+    instructions: string
+    toolNames: string[]
+  }
 }
 
 function identitySection(): string {
@@ -70,14 +81,25 @@ function environmentSection(
 function toolUsageSection(
   backgroundCommandsAvailable: boolean,
   scratchAvailable: boolean,
+  availableTools?: readonly string[],
 ): string {
+  const hasTool = (name: string) => availableTools === undefined || availableTools.includes(name)
+  const hasWriteTools = ['WriteFile', 'EditFile'].some(hasTool)
+  const hasLifecycleTools = ['DeleteFile', 'MoveFile'].some(hasTool)
+  const hasRunCommand = hasTool(BASH_TOOL_NAME)
   return [
     '# 工具使用',
     '- 修改或评价代码前先读取相关文件和调用点，基于现有实现判断，不凭猜测。',
     '- 在形成结论或采取行动前，识别对结果有决定作用的事实。若结论依赖事实的当前状态、近期变化、是否仍然有效、实际覆盖范围或可追溯出处，而当前上下文没有来自用户材料、已读取资源或工具结果的直接证据，必须先使用可用的只读工具核实；模型记忆不能替代这类核实。若结论不依赖这些条件，或已有直接证据足以支撑结论，则无需调用工具。',
     '- 相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟；存在数据依赖、写入顺序或前一步结果尚未确定时，按顺序调用。',
-    '- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。',
-    `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${BASH_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`,
+    ...(hasWriteTools
+      ? ['- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。']
+      : []),
+    ...(hasLifecycleTools
+      ? [hasRunCommand
+          ? `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${BASH_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`
+          : '- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile。']
+      : []),
     ...(scratchAvailable
       ? ['- 项目交付物保存在项目目录；非交付脚本、日志、下载或转换中间物及其它临时产物放在临时工作区，不要用临时文件污染项目。']
       : []),
@@ -88,7 +110,9 @@ function toolUsageSection(
           `- 普通短命令使用 ${BASH_TOOL_NAME}。长安装、构建和测试使用 ${START_COMMAND_TOOL_NAME} 的默认等待模式，命令终态后当前任务会自动继续，不能先用文字承诺“后台完成后再验证”便结束。只有开发服务器、watch 或跨回合 stdin 的持久进程才设 detach=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理；脱离任务进入 completed/failed 后，应用会用 <task-notification> 自动续轮，不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
         ]
       : []),
-    '- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。',
+    ...(hasWriteTools || hasLifecycleTools || hasRunCommand
+      ? ['- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。']
+      : []),
   ].join('\n')
 }
 
@@ -140,6 +164,26 @@ function discussionSection(
   ].join('\n')
 }
 
+function subagentSection(subagent: NonNullable<PromptContext['subagent']>): string {
+  return [
+    `# 子代理身份：${subagent.name}（${subagent.id}）`,
+    subagent.description,
+    subagent.instructions,
+    '- 只完成父代理委派的当前任务。不能向用户提问、创建或控制其它子代理，也不能 Fork 或控制父会话。',
+    '- 需要计划时可使用你自己的任务计划；它与父会话完全隔离。',
+    '- 完成后输出完整、自包含的结果；WhyCode 会自动把你的终态交给父代理，不需要调用汇报工具。',
+  ].filter(Boolean).join('\n')
+}
+
+function parentSubagentSection(catalog: SubagentDefinitionCatalogSnapshot): string {
+  return [
+    '# 子代理',
+    '- 边界明确、可独立并行或适合专门调查的工作可以委派；简单任务直接完成。每个子代理只接收委派提示词与自己的独立历史，不会看到父会话其它消息。',
+    '- Subagent/SendSubagentMessage 返回后不要轮询或虚构结果；WhyCode 会在终态自动续轮。需要补充时使用稳定 subagent_id 继续同一子代理。',
+    catalog.modelContext,
+  ].join('\n')
+}
+
 export function buildSystemPrompt(
   ctx: PromptContext,
   customSystemPrompt?: CustomSystemPromptSnapshot,
@@ -150,9 +194,17 @@ export function buildSystemPrompt(
   const sections = [
     identitySection(),
     environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir, activeScratch),
-    toolUsageSection(!ctx.discussion, Boolean(activeScratch)),
+    toolUsageSection(
+      !ctx.discussion && !ctx.subagent,
+      Boolean(activeScratch),
+      ctx.subagent?.toolNames,
+    ),
   ]
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
+  if (ctx.subagent) sections.push(subagentSection(ctx.subagent))
+  if (ctx.subagents && !ctx.discussion && !ctx.subagent) {
+    sections.push(parentSubagentSection(ctx.subagents))
+  }
   if (!ctx.discussion) sections.push(taskPlanningSection())
   sections.push(safetySection())
   const builtInPrompt = sections.join('\n\n')

@@ -9,6 +9,12 @@ export const IPC = {
   event: 'whycode:event',
   /** Main → Renderer：当前进程内后台任务整表快照。 */
   backgroundTasks: 'whycode:background-tasks',
+  /** Main → Renderer：当前父会话的子代理有界摘要。 */
+  subagents: 'whycode:subagents',
+  /** Main → Renderer：子代理独立 transcript 的实时事件。 */
+  subagentEvent: 'whycode:subagent-event',
+  /** Renderer → Main：按父会话所有权读取一个子代理的只读 transcript。 */
+  subagentTranscript: 'whycode:subagent-transcript',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
   /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */

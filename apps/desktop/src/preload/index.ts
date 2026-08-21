@@ -4,6 +4,9 @@ import type {
   CoreCommand,
   CoreEvent,
   SkillCatalogSnapshot,
+  SubagentEventEnvelope,
+  SubagentState,
+  SubagentTranscriptSnapshot,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
@@ -101,6 +104,11 @@ const api = {
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   runtimeSnapshot: (runtimeId?: string): Promise<RuntimeSnapshot> =>
     ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
+  subagentTranscript: (
+    parentSessionId: string,
+    subagentId: string,
+  ): Promise<SubagentTranscriptSnapshot> =>
+    ipcRenderer.invoke(IPC.subagentTranscript, parentSessionId, subagentId),
   pickProjectDir: (): Promise<WorkspaceCandidate | null> =>
     ipcRenderer.invoke(IPC.pickProjectDir),
   worktreeStatus: (
@@ -161,6 +169,20 @@ const api = {
     const wrapped = (_: unknown, state: BackgroundTaskState) => listener(state)
     ipcRenderer.on(IPC.backgroundTasks, wrapped)
     return () => ipcRenderer.off(IPC.backgroundTasks, wrapped)
+  },
+  onSubagents: (
+    listener: (state: SubagentState) => void,
+  ): (() => void) => {
+    const wrapped = (_: unknown, state: SubagentState) => listener(state)
+    ipcRenderer.on(IPC.subagents, wrapped)
+    return () => ipcRenderer.off(IPC.subagents, wrapped)
+  },
+  onSubagentEvent: (
+    listener: (event: SubagentEventEnvelope) => void,
+  ): (() => void) => {
+    const wrapped = (_: unknown, event: SubagentEventEnvelope) => listener(event)
+    ipcRenderer.on(IPC.subagentEvent, wrapped)
+    return () => ipcRenderer.off(IPC.subagentEvent, wrapped)
   },
 }
 

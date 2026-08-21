@@ -90,6 +90,7 @@ export {
   type CustomSystemPromptSnapshot,
 } from './prompts/custom-system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
+export * from './subagents/index.ts'
 export {
   SkillCatalogService,
   SKILL_FILE_NAME,

@@ -161,6 +161,32 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(prompt, /PauseTaskPlan/)
   })
 
+  it('子代理只看到自己的身份、独立计划与固定工具档位', () => {
+    const prompt = buildSystemPrompt({
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32',
+      scratch: {
+        rootDir: 'C:\\scratch\\parent\\subagents\\child',
+        workingDir: 'C:\\scratch\\parent\\subagents\\child',
+      },
+      subagent: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: '探索代理',
+        description: '只读调查',
+        instructions: '核对证据后给出结论。',
+        toolNames: ['ReadFile', 'Grep', 'WebSearch'],
+      },
+    })
+
+    assert.match(prompt, /# 子代理身份：探索代理/)
+    assert.match(prompt, /需要计划时可使用你自己的任务计划/)
+    assert.match(prompt, /自动把你的终态交给父代理/)
+    assert.match(prompt, /CreateTaskPlan/)
+    assert.doesNotMatch(prompt, /<available_subagents>/)
+    assert.doesNotMatch(prompt, /AskUserQuestion|SendSubagentMessage|StartCommand/)
+    assert.doesNotMatch(prompt, /EditFile|WriteFile|DeleteFile|MoveFile|RunCommand/)
+  })
+
   it('M1 模式选择不再把所有任务强制解释为代码问题', () => {
     const prompt = buildM1Prompt('协商一下今天吃什么')
 
