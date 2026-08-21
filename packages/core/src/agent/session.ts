@@ -198,8 +198,6 @@ export interface AgentSessionOptions {
   initialPermission?: SubagentPermissionSnapshot
   /** 默认开启；子代理和协议运行体在构造时物理关闭。 */
   userQuestionsEnabled?: boolean
-  /** 省略时 Main 不限步、讨论/协议限 40；用于子代理单次激活的硬上限。 */
-  maxSteps?: number
   /**
    * 宿主级项目副作用调度边界。单个 Agent 内仍由 serialToolTail 保序；桌面宿主
    * 可在此进一步串行同一项目中来自不同会话的 edit/execute 与检查点回滚。
@@ -1262,8 +1260,9 @@ export class AgentSession {
 
     let stopReason: StopReason = 'completed'
     let endedByTool = false
-    const maxSteps = this.options.maxSteps
-      ?? (this.options.promptContext.discussion || this.protocolRound ? BOUNDED_MAX_STEPS : null)
+    const maxSteps = this.options.promptContext.discussion || this.protocolRound
+      ? BOUNDED_MAX_STEPS
+      : null
     this.loopHealth = new LoopHealthMonitor()
     const usage: UsageInfo = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }
     const interruptedBoundaryPending = findPendingTurnAbortedIndex(this.messages) !== null
@@ -1392,12 +1391,9 @@ export class AgentSession {
         !finishedNaturally
       ) {
         stopReason = 'max-turns'
-        const subject = this.options.maxSteps === undefined
-          ? '当前协商回合'
-          : '当前运行'
         emit({
           type: 'error',
-          message: `${subject}已达到 ${maxSteps} 步安全上限，可能尚未完成。`,
+          message: `当前协商回合已达到 ${maxSteps} 步安全上限，可能尚未完成。`,
           recoverable: true,
         })
       }

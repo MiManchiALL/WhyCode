@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   unicodeSafePrefix,
+  type StopReason,
   type SubagentActivation,
   type SubagentContinueRequest,
   type SubagentLaunchRequest,
@@ -86,15 +87,18 @@ export function subagentSummary(manifest: SubagentManifest): SubagentSummary {
 }
 
 export function subagentOutcome(
-  stopReason: string,
+  stopReason: StopReason,
   finishReason: string | null,
 ): SubagentOutcome {
   if (stopReason === 'aborted') return 'aborted'
   if (stopReason === 'error') return 'error'
-  if (stopReason === 'max-turns' || stopReason === 'paused' || finishReason === 'length') {
+  if (stopReason === 'paused' || finishReason === 'length') {
     return 'limit'
   }
   if (finishReason === 'content-filter') return 'refusal'
+  if (stopReason !== 'completed') {
+    throw new Error(`子代理返回了不适用的停止原因：${stopReason}`)
+  }
   return 'completed'
 }
 
@@ -102,7 +106,7 @@ export function subagentFallbackResult(outcome: SubagentOutcome): string {
   switch (outcome) {
     case 'completed': return '子代理已完成，但没有返回可交付正文。'
     case 'aborted': return '子代理已取消。'
-    case 'limit': return '子代理达到本次激活的安全上限，尚未形成完整结论。'
+    case 'limit': return '子代理触发循环保护或模型输出上限，尚未形成完整结论。'
     case 'refusal': return '子代理请求被模型安全策略拒绝。'
     case 'error': return '子代理运行失败，且没有返回更多错误信息。'
   }

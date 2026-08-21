@@ -14,8 +14,6 @@ import type { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import type { HostOperationScheduler } from './host-operation-scheduler.ts'
 import type { SessionScratchManager } from './session-scratch.ts'
 
-const SUBAGENT_MAX_STEPS = 80
-
 export interface ResolvedSubagentModel {
   entry: ModelEntry
   providerConfig: ProviderConfig
@@ -94,7 +92,6 @@ export async function createSubagentAgentSession(
       ])],
     },
     userQuestionsEnabled: false,
-    maxSteps: SUBAGENT_MAX_STEPS,
     scheduleProjectMutation: (_mutation, abortSignal, operation) =>
       options.hostOperations.runProjectWrite(options.projectDir, abortSignal, operation),
     emit: options.emit,

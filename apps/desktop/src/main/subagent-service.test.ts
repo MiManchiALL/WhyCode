@@ -120,9 +120,34 @@ describe('子代理激活生命周期', () => {
     assert.equal(fixture.runtime.busy, false)
     await fixture.service.close()
   })
+
+  it('单次激活超过八十个模型步骤后仍由模型自然结束', async () => {
+    const fixture = await createFixture([], (index) =>
+      index < 81 ? listDirStream(index) : finalStream('长任务自然完成。'))
+    const tools = fixture.service.createTools(
+      fixture.runtime,
+      fixture.parentJournal,
+      fixture.projectDir,
+    )
+
+    const launched = await tools[0]!.execute(
+      { agent_id: 'explore', prompt: '持续检查直到证据充分' },
+      toolContext('turn-long', 'tool-long'),
+    )
+
+    assert.equal(launched.isError, false)
+    await waitFor(() => fixture.settlements.length === 1, 15_000)
+    assert.equal(fixture.modelCalls.length, 82)
+    assert.equal(fixture.settlements[0]?.outcome, 'completed')
+    assert.equal(fixture.settlements[0]?.resultText, '长任务自然完成。')
+    await fixture.service.close()
+  })
 })
 
-async function createFixture(responses: string[]) {
+async function createFixture(
+  responses: string[],
+  responseForCall?: (index: number) => Promise<unknown>,
+) {
   const root = await mkdtemp(join(tmpdir(), 'whycode-subagent-service-'))
   roots.push(root)
   const sessionsRoot = join(root, 'sessions')
@@ -139,7 +164,8 @@ async function createFixture(responses: string[]) {
   let responseIndex = 0
   const model = languageModel(async (options) => {
     modelCalls.push(options)
-    return finalStream(responses[responseIndex++] ?? '完成。')
+    const index = responseIndex++
+    return responseForCall?.(index) ?? finalStream(responses[index] ?? '完成。')
   })
   const entry = modelEntry(model)
   const runtime = new DesktopSessionRuntime({
@@ -241,6 +267,30 @@ function finalStream(text: string) {
   })
 }
 
+function listDirStream(index: number) {
+  return Promise.resolve({
+    stream: new ReadableStream({
+      start(controller) {
+        controller.enqueue({
+          type: 'tool-call' as const,
+          toolCallId: `list-${index}`,
+          toolName: 'ListDir',
+          input: JSON.stringify({ path: '.', limit: 1, offset: index }),
+        })
+        controller.enqueue({
+          type: 'finish' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: {
+            inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 5, text: 5, reasoning: undefined },
+          },
+        })
+        controller.close()
+      },
+    }),
+  })
+}
+
 function toolContext(turnId: string, toolCallId: string) {
   return {
     projectDir: 'C:\workspace',
@@ -251,8 +301,8 @@ function toolContext(turnId: string, toolCallId: string) {
   }
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('等待子代理终态超时')
     await new Promise((resolve) => setTimeout(resolve, 10))
