@@ -110,7 +110,7 @@ function SubagentList({
     <div className="wc-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
       {groups.map((group) => (
         <section key={group.id} className="mb-4 last:mb-0">
-          <h2 className="mb-1.5 px-1 text-[11px] font-medium text-[var(--wc-faint)]">
+          <h2 className="mb-1.5 px-1 wc-type-caption font-medium text-[var(--wc-faint)]">
             {group.label} · {group.items.length}
           </h2>
           <div className="space-y-1">
@@ -127,11 +127,11 @@ function SubagentList({
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center justify-between gap-2 text-xs font-medium">
                     <span className="truncate">{subagent.name}</span>
-                    <span className="shrink-0 text-[10px] font-normal text-[var(--wc-faint)]">
+                    <span className="shrink-0 wc-type-tiny font-normal text-[var(--wc-faint)]">
                       {subagentStatusLabel(subagent.status)}
                     </span>
                   </span>
-                  <span className="mt-0.5 block truncate text-[11px] text-[var(--wc-muted)]">
+                  <span className="mt-0.5 block truncate wc-type-caption text-[var(--wc-muted)]">
                     {subagent.currentPrompt}
                   </span>
                 </span>
@@ -257,7 +257,7 @@ function SubagentTranscript({
           </span>
           <span className="truncate">{subagentProfileLabel(subagent.profile)}</span>
         </span>
-        <span className="ml-auto shrink-0 text-[11px] text-[var(--wc-muted)]">
+        <span className="ml-auto shrink-0 wc-type-caption text-[var(--wc-muted)]">
           {subagentStatusLabel(subagent.status)}
         </span>
       </div>

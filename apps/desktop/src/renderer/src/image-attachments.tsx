@@ -97,7 +97,7 @@ export function ImageDraftStrip({
             >
               ×
             </button>
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 wc-type-tiny text-white">
               {draft.name}
             </div>
           </div>

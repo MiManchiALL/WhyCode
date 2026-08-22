@@ -58,19 +58,19 @@ export function TaskHeader(props: TaskHeaderProps) {
 
 function WorkspaceBadge({ mode }: { mode: RuntimeWorkspace['mode'] }) {
   if (mode === 'worktree') {
-    return <span className="shrink-0 rounded-lg bg-[var(--wc-sage)] px-2 py-1 text-[10px] font-medium text-[var(--wc-sage-ink)]">Worktree</span>
+    return <span className="shrink-0 rounded-lg bg-[var(--wc-sage)] px-2 py-1 wc-type-tiny font-medium text-[var(--wc-sage-ink)]">Worktree</span>
   }
   if (mode === 'pending-worktree') {
-    return <span className="shrink-0 rounded-lg bg-[var(--wc-sage)] px-2 py-1 text-[10px] text-[var(--wc-sage-ink)]">Worktree · 待创建</span>
+    return <span className="shrink-0 rounded-lg bg-[var(--wc-sage)] px-2 py-1 wc-type-tiny text-[var(--wc-sage-ink)]">Worktree · 待创建</span>
   }
   if (mode === 'local') {
-    return <span className="shrink-0 rounded-lg bg-black/[0.045] px-2 py-1 text-[10px] text-[var(--wc-muted)]">本地</span>
+    return <span className="shrink-0 rounded-lg bg-black/[0.045] px-2 py-1 wc-type-tiny text-[var(--wc-muted)]">本地</span>
   }
   if (mode === 'managed') {
-    return <span className="shrink-0 rounded-lg bg-[var(--wc-blue)] px-2 py-1 text-[10px] text-[var(--wc-blue-ink)]">默认</span>
+    return <span className="shrink-0 rounded-lg bg-[var(--wc-blue)] px-2 py-1 wc-type-tiny text-[var(--wc-blue-ink)]">默认</span>
   }
   if (mode === 'pending-managed') {
-    return <span className="shrink-0 rounded-lg bg-black/[0.045] px-2 py-1 text-[10px] text-[var(--wc-muted)]">未选择</span>
+    return <span className="shrink-0 rounded-lg bg-black/[0.045] px-2 py-1 wc-type-tiny text-[var(--wc-muted)]">未选择</span>
   }
   return null
 }

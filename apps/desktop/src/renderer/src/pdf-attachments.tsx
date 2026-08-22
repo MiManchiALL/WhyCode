@@ -116,7 +116,7 @@ export function QueuedPdfStrip({ attachments }: { attachments?: readonly PdfAtta
       {attachments.map((attachment) => (
         <span
           key={attachment.id}
-          className="max-w-56 truncate rounded border border-red-200 bg-white px-1.5 py-1 text-[10px] text-red-700"
+          className="max-w-56 truncate rounded border border-red-200 bg-white px-1.5 py-1 wc-type-tiny text-red-700"
           title={attachment.name}
         >
           PDF · {attachment.name}

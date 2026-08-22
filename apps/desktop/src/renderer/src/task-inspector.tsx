@@ -47,7 +47,7 @@ export function TaskInspector(props: TaskInspectorProps) {
               <div className="text-xs font-medium text-[var(--wc-ink)]">
                 Worktree 待创建
               </div>
-              <div className="mt-1 truncate font-mono text-[10px] text-[var(--wc-muted)]">
+              <div className="mt-1 truncate font-mono wc-type-tiny text-[var(--wc-muted)]">
                 {props.workspace.baseRef ?? 'detached HEAD'}
               </div>
             </div>
@@ -110,7 +110,7 @@ function SubagentMenu({
       onClick={onOpen}
     >
       <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--wc-muted)]">
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 wc-type-caption text-[var(--wc-muted)]">
           {running > 0 && (
             <span className="inline-flex items-center gap-1">
               <LoaderCircle size={11} className="animate-spin" /> {running} 个运行中

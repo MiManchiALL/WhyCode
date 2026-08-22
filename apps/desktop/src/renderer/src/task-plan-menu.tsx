@@ -21,7 +21,7 @@ export function TaskPlanMenu({ plan }: { plan: TaskPlan }) {
             style={{ width: `${percent}%` }}
           />
         </div>
-        <span className="shrink-0 text-[10px] text-[var(--wc-muted)]">{stateLabel}</span>
+        <span className="shrink-0 wc-type-tiny text-[var(--wc-muted)]">{stateLabel}</span>
       </div>
       <div className="mt-2 space-y-1.5">
         {plan.items.map((item) => (
@@ -31,7 +31,7 @@ export function TaskPlanMenu({ plan }: { plan: TaskPlan }) {
               <span className="mr-1 text-[var(--wc-faint)]">{item.id}</span>
               {item.outcome}
               {item.kind === 'verification' && (
-                <span className="ml-1 rounded-md bg-[var(--wc-sage)] px-1 py-0.5 text-[9px] text-[var(--wc-sage-ink)]">
+                <span className="ml-1 rounded-md bg-[var(--wc-sage)] px-1 py-0.5 wc-type-tiny text-[var(--wc-sage-ink)]">
                   验证
                 </span>
               )}

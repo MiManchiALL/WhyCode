@@ -35,14 +35,14 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
         </div>
         <div className="flex flex-wrap gap-1.5">
           <button
-            className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--wc-muted)] disabled:opacity-40"
+            className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 wc-type-caption text-[var(--wc-muted)] disabled:opacity-40"
             onClick={() => void props.onRefresh()}
             disabled={props.disabled}
           >
             刷新状态
           </button>
           <button
-            className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--wc-muted)] disabled:opacity-40"
+            className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 wc-type-caption text-[var(--wc-muted)] disabled:opacity-40"
             onClick={() => void props.onOpenConfig({ scope: 'global' })}
             disabled={props.disabled}
             title={props.settings.globalConfigPath}
@@ -51,7 +51,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
           </button>
           {props.settings.projectConfigPath && (
             <button
-              className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--wc-muted)] disabled:opacity-40"
+              className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1.5 wc-type-caption text-[var(--wc-muted)] disabled:opacity-40"
               onClick={() => void props.onOpenConfig({ scope: 'project' })}
               disabled={props.disabled}
               title={props.settings.projectConfigPath}
@@ -71,7 +71,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
       {props.settings.diagnostics.length > 0 && (
         <div className="min-w-0 space-y-1 rounded-xl border border-[#dec8bf] bg-[#f3e8e3] p-3 [overflow-wrap:anywhere]">
           {props.settings.diagnostics.map((diagnostic, index) => (
-            <p key={`${diagnostic.scope}:${diagnostic.server ?? ''}:${index}`} className="text-[11px] text-red-700">
+            <p key={`${diagnostic.scope}:${diagnostic.server ?? ''}:${index}`} className="wc-type-caption text-red-700">
               {scopeLabel(diagnostic.scope)}
               {diagnostic.server ? ` · ${diagnostic.server}` : ''}
               ：{diagnostic.message}
@@ -101,7 +101,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
                     {server.builtinId && <Badge text="内置默认" />}
                     {!server.effective && <Badge text="被项目同名配置覆盖" warning />}
                   </div>
-                  <p className="mt-1 text-[11px] text-neutral-500">
+                  <p className="mt-1 wc-type-caption text-neutral-500">
                     {currentSessionLabel(
                       props.settings.currentSessionUsesSnapshot,
                       server.currentSessionState,
@@ -109,7 +109,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
                     )}
                   </p>
                 </div>
-                <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-600">
+                <label className="flex shrink-0 items-center gap-1.5 wc-type-caption text-neutral-600">
                   <input
                     type="checkbox"
                     checked={server.enabled}
@@ -124,10 +124,10 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
                 </label>
               </div>
               {server.currentSessionError && (
-                <p className="mt-2 break-words text-[11px] text-red-700">连接错误：{server.currentSessionError}</p>
+                <p className="mt-2 break-words wc-type-caption text-red-700">连接错误：{server.currentSessionError}</p>
               )}
               {server.currentSessionDiagnostics.map((diagnostic, index) => (
-                <p key={index} className="mt-1 break-words text-[11px] text-amber-700">目录诊断：{diagnostic}</p>
+                <p key={index} className="mt-1 break-words wc-type-caption text-amber-700">目录诊断：{diagnostic}</p>
               ))}
               <McpSecretHeaderEditor
                 server={server}
@@ -145,7 +145,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
         ))}
       </div>
 
-      <p className="text-[11px] text-neutral-500">
+      <p className="wc-type-caption text-neutral-500">
         当前会话不会热替换 MCP 服务器；新建会话后采用最新配置。项目配置首次使用时仍会要求显式信任。
       </p>
     </section>
@@ -163,7 +163,7 @@ const MCP_CARD_STYLES = [
 
 function Badge(props: { text: string; warning?: boolean }) {
   return (
-    <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+    <span className={`rounded px-1.5 py-0.5 wc-type-tiny ${
       props.warning ? 'bg-amber-50 text-amber-700' : 'bg-neutral-100 text-neutral-600'
     }`}>
       {props.text}

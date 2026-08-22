@@ -47,7 +47,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
     <div className="mt-2 min-w-0 border-t border-neutral-100 pt-2">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <button
-          className="text-[11px] text-neutral-600 underline decoration-neutral-300 underline-offset-2 disabled:opacity-40"
+          className="wc-type-caption text-neutral-600 underline decoration-neutral-300 underline-offset-2 disabled:opacity-40"
           onClick={() => setOpen((value) => !value)}
           disabled={props.disabled}
         >
@@ -58,7 +58,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
               : suggestedHeaderName ? 'API Key（可选）' : '认证设置'}
         </button>
         {props.server.secretHeaderNames.map((name) => (
-          <span key={name} className="max-w-full break-all rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-700">
+          <span key={name} className="max-w-full break-all rounded bg-green-50 px-1.5 py-0.5 wc-type-tiny text-green-700">
             {name} 已安全保存
           </span>
         ))}
@@ -67,7 +67,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
         <div className="mt-2 min-w-0 rounded-xl border border-neutral-200 bg-neutral-50/60 p-3 [overflow-wrap:anywhere]">
           <div className={`grid gap-2 ${suggestedHeaderName ? '' : 'md:grid-cols-2'}`}>
             {!suggestedHeaderName && (
-              <label className="block min-w-0 text-[10px] text-neutral-600">
+              <label className="block min-w-0 wc-type-tiny text-neutral-600">
                 认证 Header 名称
                 <input
                   className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -78,7 +78,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
                 />
               </label>
             )}
-            <label className="block min-w-0 text-[10px] text-neutral-600">
+            <label className="block min-w-0 wc-type-tiny text-neutral-600">
               {secretKind === 'github-pat'
                 ? 'GitHub Personal Access Token'
                 : suggestedHeaderName
@@ -94,7 +94,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
               />
             </label>
           </div>
-          <p className="mt-1.5 break-words text-[10px] text-neutral-500">
+          <p className="mt-1.5 break-words wc-type-tiny text-neutral-500">
             {secretKind === 'github-pat'
               ? <>WhyCode 会以 Bearer Header 发送 PAT；建议使用只授权所需仓库读取权限的 fine-grained PAT。GitHub 官方 MCP 不支持匿名访问。 </>
               : suggestedHeaderName && <>按内置服务约定通过 {suggestedHeaderName} 发送。 </>}
@@ -102,7 +102,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
-              className="rounded bg-neutral-900 px-2 py-1 text-[11px] text-white disabled:opacity-40"
+              className="rounded bg-neutral-900 px-2 py-1 wc-type-caption text-white disabled:opacity-40"
               onClick={() => void save()}
               disabled={props.disabled || !headerName.trim() || !secret.trim()}
             >
@@ -113,7 +113,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
             {props.server.secretHeaderNames.map((name) => (
               <button
                 key={name}
-                className="text-[10px] text-red-600 disabled:opacity-40"
+                className="wc-type-tiny text-red-600 disabled:opacity-40"
                 onClick={() => void clear(name)}
                 disabled={props.disabled}
               >

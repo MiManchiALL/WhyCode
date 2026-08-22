@@ -36,7 +36,7 @@ export function WebSearchSettingsEditor(props: WebSearchSettingsProps) {
             Agent 始终使用统一 WebSearch 工具；这里选择实际提供搜索结果的后端。
           </p>
         </div>
-        <div className="min-w-44 text-[11px] text-neutral-600">
+        <div className="min-w-44 wc-type-caption text-neutral-600">
           <span className="mb-1 block">当前后端</span>
           <SelectMenu
             value={props.settings.activeProvider}
@@ -101,22 +101,22 @@ function SearchProviderEditor(props: {
         <div className="mb-2 flex items-start justify-between gap-2">
           <div>
             <p className="text-sm font-medium">{props.provider.displayName}</p>
-            <p className="text-[11px] text-neutral-500">
+            <p className="wc-type-caption text-neutral-500">
               {providerDescription(props.provider.id)}
             </p>
           </div>
           <div className="flex items-center gap-1">
             {props.active && props.provider.hasKey && (
-              <span className="rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 text-[10px] text-[var(--wc-blue-ink)]">
+              <span className="rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 wc-type-tiny text-[var(--wc-blue-ink)]">
                 当前
               </span>
             )}
-            <span className={`rounded-lg px-1.5 py-0.5 text-[10px] ${props.provider.hasKey ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-black/[0.045] text-[var(--wc-muted)]'}`}>
+            <span className={`rounded-lg px-1.5 py-0.5 wc-type-tiny ${props.provider.hasKey ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-black/[0.045] text-[var(--wc-muted)]'}`}>
               {props.provider.hasKey ? '已配置' : '未配置'}
             </span>
           </div>
         </div>
-        <label className="block text-[11px] text-neutral-600">
+        <label className="block wc-type-caption text-neutral-600">
           API Key（留空保留现有密钥）
         </label>
         <input
@@ -129,7 +129,7 @@ function SearchProviderEditor(props: {
           placeholder={props.provider.id === 'tavily' ? 'tvly-…' : 'pplx-…'}
         />
         {props.provider.id === 'tavily' && (
-          <div className="mt-2 text-[11px] text-neutral-600">
+          <div className="mt-2 wc-type-caption text-neutral-600">
             <span className="mb-1 block">搜索质量</span>
             <SelectMenu
               value={searchDepth}
@@ -158,7 +158,7 @@ function SearchProviderEditor(props: {
               清除密钥
             </button>
           )}
-          {saved && <span className="text-[11px] text-[var(--wc-sage-ink)]">已保存</span>}
+          {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
         </div>
       </div>
     </PaperFrame>

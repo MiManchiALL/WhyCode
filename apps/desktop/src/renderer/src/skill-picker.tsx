@@ -16,7 +16,7 @@ export function SkillBadges({ skills }: { skills?: readonly SkillSummary[] }) {
       {skills.map((skill) => (
         <span
           key={skill.id}
-          className="max-w-full truncate rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 text-[10px] text-[var(--wc-blue-ink)]"
+          className="max-w-full truncate rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 wc-type-tiny text-[var(--wc-blue-ink)]"
           title={skill.path}
         >
           {skill.name} · {SKILL_SCOPE_LABEL[skill.scope]}
@@ -92,7 +92,7 @@ export function ComposerSlashMenu({
       role="listbox"
       aria-label="功能与 Skill"
     >
-      <div className="border-b border-[var(--wc-line)] px-3 py-2 text-[11px] font-medium text-[var(--wc-faint)]">
+      <div className="border-b border-[var(--wc-line)] px-3 py-2 wc-type-caption font-medium text-[var(--wc-faint)]">
         输入筛选，Enter 选择
       </div>
       <div ref={listRef} className="wc-scrollbar max-h-72 overflow-y-auto p-1.5">
@@ -122,7 +122,7 @@ export function ComposerSlashMenu({
         )}
       </div>
       {(diagnostics.length > 0 || limitReached) && (
-        <div className="border-t border-[var(--wc-line)] px-3 py-1.5 text-[10px] text-[var(--wc-sand-ink)]">
+        <div className="border-t border-[var(--wc-line)] px-3 py-1.5 wc-type-tiny text-[var(--wc-sand-ink)]">
           {limitReached
             ? '本条消息已达到 8 个 Skill 上限'
             : `${diagnostics.length} 个 Skill 目录项校验未通过`}
@@ -143,7 +143,7 @@ function ComposerMenuGroup(props: {
   if (props.entries.length === 0) return null
   return (
     <section aria-label={props.label}>
-      <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--wc-faint)]">
+      <div className="px-2.5 pb-1 pt-1.5 wc-type-tiny font-medium uppercase tracking-[0.08em] text-[var(--wc-faint)]">
         {props.label}
       </div>
       {props.entries.map(({ item, index }) => {
@@ -173,12 +173,12 @@ function ComposerMenuGroup(props: {
               <span className="flex items-center gap-2 text-sm font-medium text-[var(--wc-ink)]">
                 {isCommand ? `/${name}` : name}
                 {!isCommand && (
-                  <span className="rounded-md bg-black/[0.045] px-1.5 py-0.5 text-[9px] font-normal text-[var(--wc-faint)]">
+                  <span className="rounded-md bg-black/[0.045] px-1.5 py-0.5 wc-type-tiny font-normal text-[var(--wc-faint)]">
                     {SKILL_SCOPE_LABEL[item.skill.scope]}
                   </span>
                 )}
               </span>
-              <span className="mt-0.5 block line-clamp-2 text-[11px] leading-4 text-[var(--wc-muted)]">
+              <span className="mt-0.5 block line-clamp-2 wc-type-caption text-[var(--wc-muted)]">
                 {description}
               </span>
             </span>

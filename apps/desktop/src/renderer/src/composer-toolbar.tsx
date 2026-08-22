@@ -149,7 +149,7 @@ function AttachmentMenu(props: ComposerToolbarProps) {
               <Image size={15} />
               <div>
                 <div>添加图片</div>
-                <div className="text-[10px] text-[var(--wc-faint)]">最多 {USER_IMAGE_ATTACHMENT_MAX_COUNT} 张，也支持粘贴和拖放</div>
+                <div className="wc-type-tiny text-[var(--wc-faint)]">最多 {USER_IMAGE_ATTACHMENT_MAX_COUNT} 张，也支持粘贴和拖放</div>
               </div>
             </DropdownMenu.Item>
             <DropdownMenu.Item
@@ -160,7 +160,7 @@ function AttachmentMenu(props: ComposerToolbarProps) {
               <FileText size={15} />
               <div>
                 <div>添加 PDF</div>
-                <div className="text-[10px] text-[var(--wc-faint)]">最多 {MAX_PDF_DRAFTS} 个</div>
+                <div className="wc-type-tiny text-[var(--wc-faint)]">最多 {MAX_PDF_DRAFTS} 个</div>
               </div>
             </DropdownMenu.Item>
           </DropdownMenu.Content>
@@ -188,7 +188,7 @@ function PermissionMenu(props: ComposerToolbarProps) {
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="wc-menu-content" align="start" side="top" sideOffset={8}>
-          <DropdownMenu.Label className="px-2 py-1 text-[10px] font-medium text-[var(--wc-faint)]">权限档位</DropdownMenu.Label>
+          <DropdownMenu.Label className="px-2 py-1 wc-type-tiny font-medium text-[var(--wc-faint)]">权限档位</DropdownMenu.Label>
           <DropdownMenu.RadioGroup value={props.permMode} onValueChange={(value) => props.onPermissionChange(value as PermissionMode)}>
             {PERMISSION_MODES.map((mode) => (
               <DropdownMenu.RadioItem key={mode.id} value={mode.id} className="wc-menu-item">
@@ -197,7 +197,7 @@ function PermissionMenu(props: ComposerToolbarProps) {
                 </span>
                 <div>
                   <div>{mode.label}</div>
-                  <div className="text-[10px] text-[var(--wc-faint)]">{permissionDescription(mode.id)}</div>
+                  <div className="wc-type-tiny text-[var(--wc-faint)]">{permissionDescription(mode.id)}</div>
                 </div>
               </DropdownMenu.RadioItem>
             ))}
@@ -255,7 +255,7 @@ function ModelMenu(props: ComposerToolbarProps) {
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate">{model.displayName}</div>
-                        <div className="text-[10px] text-[var(--wc-faint)]">
+                        <div className="wc-type-tiny text-[var(--wc-faint)]">
                           {model.imageInputMode === 'native' ? '原生图片' : model.imageInputMode === 'auxiliary' ? '辅助识图' : '文本'}
                         </div>
                       </div>

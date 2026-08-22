@@ -24,7 +24,7 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
   return (
     <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl bg-black/[0.035] px-2 py-1.5">
       {projectSelected && props.projectDir ? (
-        <div className="group/project flex min-w-0 max-w-[22rem] items-center rounded-lg text-[10px] text-[var(--wc-muted)] transition-colors hover:bg-white/70 hover:text-[var(--wc-ink)]">
+        <div className="group/project flex min-w-0 max-w-[22rem] items-center rounded-lg wc-type-tiny text-[var(--wc-muted)] transition-colors hover:bg-white/70 hover:text-[var(--wc-ink)]">
           <button
             type="button"
             className="wc-focus-ring flex size-6 shrink-0 items-center justify-center rounded-full"
@@ -51,7 +51,7 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
       ) : (
         <button
           type="button"
-          className="wc-focus-ring flex min-w-0 max-w-[22rem] items-center gap-1.5 rounded-lg px-1.5 py-1 text-[10px] text-[var(--wc-muted)] hover:bg-white/70 hover:text-[var(--wc-ink)] disabled:cursor-default disabled:opacity-60"
+          className="wc-focus-ring flex min-w-0 max-w-[22rem] items-center gap-1.5 rounded-lg px-1.5 py-1 wc-type-tiny text-[var(--wc-muted)] hover:bg-white/70 hover:text-[var(--wc-ink)] disabled:cursor-default disabled:opacity-60"
           disabled={props.busy}
           onClick={props.onPickProject}
           title="选择项目；Git 仓库可继续选择 Local 或 Worktree"

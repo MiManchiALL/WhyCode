@@ -41,7 +41,7 @@ export function McpAddServer(props: McpAddServerProps) {
   if (!open) {
     return (
       <button
-        className="mb-3 rounded border border-neutral-300 px-2 py-1 text-[11px] text-neutral-700 disabled:opacity-40"
+        className="mb-3 rounded border border-neutral-300 px-2 py-1 wc-type-caption text-neutral-700 disabled:opacity-40"
         onClick={() => setOpen(true)}
         disabled={props.disabled}
       >
@@ -53,7 +53,7 @@ export function McpAddServer(props: McpAddServerProps) {
   const editor = (
     <div className="wc-paper-card wc-paper-white wc-paper-shape-d wc-paper-angle-soft-left wc-paper-pad min-w-0">
       <div className="grid gap-3 md:grid-cols-2">
-        <label className="block min-w-0 text-[11px] text-neutral-600">
+        <label className="block min-w-0 wc-type-caption text-neutral-600">
           名称
           <input
             className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -63,7 +63,7 @@ export function McpAddServer(props: McpAddServerProps) {
             disabled={props.disabled}
           />
         </label>
-        <div className="min-w-0 text-[11px] text-neutral-600">
+        <div className="min-w-0 wc-type-caption text-neutral-600">
           <span className="mb-1 block">作用域</span>
           <SelectMenu
             value={scope}
@@ -83,7 +83,7 @@ export function McpAddServer(props: McpAddServerProps) {
         {(['http', 'stdio'] as const).map((value) => (
           <button
             key={value}
-            className={`rounded px-2 py-1 text-[11px] ${
+            className={`rounded px-2 py-1 wc-type-caption ${
               transport === value
                 ? 'bg-neutral-900 text-white'
                 : 'border border-neutral-300 bg-white text-neutral-600'
@@ -97,7 +97,7 @@ export function McpAddServer(props: McpAddServerProps) {
       </div>
 
       {transport === 'http' ? (
-        <label className="mt-3 block min-w-0 text-[11px] text-neutral-600">
+        <label className="mt-3 block min-w-0 wc-type-caption text-neutral-600">
           URL
           <input
             className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -109,7 +109,7 @@ export function McpAddServer(props: McpAddServerProps) {
         </label>
       ) : (
         <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <label className="block min-w-0 text-[11px] text-neutral-600">
+          <label className="block min-w-0 wc-type-caption text-neutral-600">
             启动命令
             <input
               className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -119,7 +119,7 @@ export function McpAddServer(props: McpAddServerProps) {
               disabled={props.disabled}
             />
           </label>
-          <label className="block min-w-0 text-[11px] text-neutral-600">
+          <label className="block min-w-0 wc-type-caption text-neutral-600">
             工作目录（可选）
             <input
               className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -128,7 +128,7 @@ export function McpAddServer(props: McpAddServerProps) {
               disabled={props.disabled}
             />
           </label>
-          <label className="block min-w-0 text-[11px] text-neutral-600 md:col-span-2">
+          <label className="block min-w-0 wc-type-caption text-neutral-600 md:col-span-2">
             参数（每行一个，空格不会被当作分隔符）
             <textarea
               className="mt-1 min-h-20 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
@@ -141,7 +141,7 @@ export function McpAddServer(props: McpAddServerProps) {
         </div>
       )}
 
-      <p className="mt-2 text-[10px] text-neutral-500">
+      <p className="mt-2 wc-type-tiny text-neutral-500">
         环境变量、额外 Header 和超时等低频选项继续使用高级配置文件，避免普通设置表单承载全部协议细节。
       </p>
       <div className="mt-3 flex gap-2">

@@ -34,7 +34,7 @@ export function AuxiliaryModelsEditor(props: {
       </div>
       <PaperFrame className="wc-paper-frame-soft">
         <div className="wc-paper-card wc-paper-sand wc-paper-shape-b wc-paper-angle-soft-right wc-paper-pad">
-          <div className="text-[11px] text-neutral-600">
+          <div className="wc-type-caption text-neutral-600">
             <span className="mb-1 block">辅助识图模型</span>
             <SelectMenu
               value={visionModelId}
@@ -52,7 +52,7 @@ export function AuxiliaryModelsEditor(props: {
             />
           </div>
           {props.settings.visionModels.length === 0 && (
-            <p className="mt-2 text-[11px] text-amber-700">
+            <p className="mt-2 wc-type-caption text-amber-700">
               请先配置至少一个带“图片”能力的模型连接。
             </p>
           )}
@@ -115,7 +115,7 @@ export function ConsensusModelsEditor(props: {
             />
           </div>
           {props.settings.models.length === 0 && (
-            <p className="mt-2 text-[11px] text-amber-700">
+            <p className="mt-2 wc-type-caption text-amber-700">
               请先在“模型连接”中配置至少一个可用模型。
             </p>
           )}
@@ -139,7 +139,7 @@ function ModelSelector(props: {
   onValueChange: (value: string) => void
 }) {
   return (
-    <div className="text-[11px] text-neutral-600">
+    <div className="wc-type-caption text-neutral-600">
       <span className="mb-1 block">{props.label}</span>
       <SelectMenu
         value={props.value}
@@ -167,7 +167,7 @@ function SaveRow(props: {
       >
         保存
       </button>
-      {props.saved && <span className="text-[11px] text-[var(--wc-sage-ink)]">已保存</span>}
+      {props.saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
     </div>
   )
 }

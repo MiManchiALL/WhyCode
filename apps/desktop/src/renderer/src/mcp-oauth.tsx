@@ -21,11 +21,11 @@ export function McpOAuthEditor(props: McpOAuthEditorProps) {
     <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-neutral-100 pt-2 [overflow-wrap:anywhere]">
       {oauth.status === 'connected' ? (
         <>
-          <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-700">
+          <span className="rounded bg-green-50 px-1.5 py-0.5 wc-type-tiny text-green-700">
             OAuth 已登录
           </span>
           <button
-            className="text-[10px] text-red-600 disabled:opacity-40"
+            className="wc-type-tiny text-red-600 disabled:opacity-40"
             onClick={() => void props.onDisconnect(request)}
             disabled={props.disabled}
           >
@@ -34,7 +34,7 @@ export function McpOAuthEditor(props: McpOAuthEditorProps) {
         </>
       ) : (
         <button
-          className="rounded border border-neutral-300 px-2 py-1 text-[11px] text-neutral-700 disabled:opacity-40"
+          className="rounded border border-neutral-300 px-2 py-1 wc-type-caption text-neutral-700 disabled:opacity-40"
           onClick={() => void props.onAuthorize(request)}
           disabled={props.disabled || oauth.status !== 'available'}
         >
@@ -42,9 +42,9 @@ export function McpOAuthEditor(props: McpOAuthEditorProps) {
         </button>
       )}
       {oauth.message && (
-        <p className="min-w-0 basis-full break-words text-[10px] text-amber-700">{oauth.message}</p>
+        <p className="min-w-0 basis-full break-words wc-type-tiny text-amber-700">{oauth.message}</p>
       )}
-      <p className="min-w-0 basis-full break-words text-[10px] text-neutral-500">
+      <p className="min-w-0 basis-full break-words wc-type-tiny text-neutral-500">
         使用标准 MCP OAuth 发现、PKCE 和安全令牌存储；当前会话不会热替换连接，新建会话后按需生效。
       </p>
     </div>

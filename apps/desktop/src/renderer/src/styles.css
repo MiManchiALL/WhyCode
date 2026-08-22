@@ -5,9 +5,31 @@
 @source '../../../node_modules/@streamdown/cjk/dist/*.js';
 @source '../../../node_modules/@streamdown/math/dist/*.js';
 
+@theme inline {
+  --font-sans: var(--wc-font-family);
+  --font-mono: var(--wc-font-family-code);
+  --text-xs: 12px;
+  --text-xs--line-height: 18px;
+  --text-sm: 14px;
+  --text-sm--line-height: 22px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 20px;
+  --text-lg--line-height: 28px;
+  --text-xl: 24px;
+  --text-xl--line-height: 32px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+}
+
 :root {
   color-scheme: light;
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --wc-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  /* 不保留裸 monospace 兜底：Windows 中文会因此回退到宋体。 */
+  --wc-font-family-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
+    'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
+  font-family: var(--wc-font-family);
   --wc-canvas: #f7f7f4;
   --wc-sidebar: #f0f0ec;
   --wc-surface: #fdfdfb;
@@ -37,7 +59,6 @@
   --wc-paper-gap: 1.25rem;
   --wc-menu-radius: 0.95rem;
   --wc-menu-shadow: 0 2px 7px rgb(33 35 31 / 6%), 0 14px 34px rgb(33 35 31 / 9%);
-  --wc-composer-control-font-size: 0.8125rem;
   --wc-conversation-navigator-gutter: 4.75rem;
   --wc-conversation-content-right-inset: 2.75rem;
 }
@@ -50,6 +71,13 @@ body,
   overflow: hidden;
   background: var(--wc-canvas);
   color: var(--wc-ink);
+}
+
+body {
+  font-size: 14px;
+  line-height: 22px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -333,7 +361,23 @@ button:not(:disabled),
 }
 
 .wc-composer-control {
-  font-size: var(--wc-composer-control-font-size);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.wc-type-control {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.wc-type-caption {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.wc-type-tiny {
+  font-size: 11px;
+  line-height: 14px;
 }
 
 .wc-context-meter {
@@ -386,8 +430,8 @@ button:not(:disabled),
   background: var(--wc-ink);
   padding: 0.28rem 0.5rem;
   color: white;
-  font-size: 0.6875rem;
-  line-height: 1.15rem;
+  font-size: 11px;
+  line-height: 14px;
   opacity: 0;
   transform: translateY(0.2rem);
   transition: opacity 100ms ease, transform 100ms ease;
@@ -411,8 +455,8 @@ button:not(:disabled),
   padding: 0.75rem;
   color: var(--wc-muted);
   box-shadow: var(--wc-menu-shadow);
-  font-size: 0.75rem;
-  line-height: 1.25rem;
+  font-size: 12px;
+  line-height: 18px;
   backdrop-filter: blur(12px);
   animation: wc-pop-in 140ms ease-out;
 }
@@ -526,7 +570,8 @@ button:not(:disabled),
   background: rgb(255 255 253 / 82%);
   padding: 0 0.58rem;
   color: var(--wc-muted);
-  font-size: 0.72rem;
+  font-size: 12px;
+  line-height: 18px;
   white-space: nowrap;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
@@ -578,7 +623,8 @@ button:not(:disabled),
   border-radius: 0.55rem;
   padding: 0.38rem 0.48rem;
   color: var(--wc-muted);
-  font-size: 0.72rem;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .wc-background-task-row + .wc-background-task-row {
@@ -638,7 +684,7 @@ button:not(:disabled),
 .wc-background-task-label {
   overflow: hidden;
   color: var(--wc-ink);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--wc-font-family-code);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -743,9 +789,9 @@ button:not(:disabled),
   align-items: center;
   gap: 0.35rem;
   color: var(--wc-faint);
-  font-size: 0.6875rem;
+  font-size: 12px;
   font-weight: 500;
-  line-height: 1rem;
+  line-height: 18px;
 }
 
 .wc-session-context-heading svg {
@@ -786,7 +832,8 @@ button:not(:disabled),
   align-items: center;
   gap: 0.3rem;
   padding: 0 0.55rem;
-  font-size: 0.625rem;
+  font-size: 11px;
+  line-height: 14px;
 }
 
 .wc-context-trigger:disabled,
@@ -808,7 +855,8 @@ button:not(:disabled),
   gap: 0.6rem;
   border-radius: 0.65rem;
   padding: 0.45rem 0.6rem;
-  font-size: 0.78rem;
+  font-size: 13px;
+  line-height: 20px;
   outline: none;
   user-select: none;
 }
@@ -825,6 +873,18 @@ button:not(:disabled),
 .wc-question-composer {
   width: 100%;
   padding: 0.15rem 0.1rem;
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.wc-question-eyebrow {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.wc-question-title {
+  font-size: 16px;
+  line-height: 22px;
 }
 
 .wc-question-options {
@@ -835,6 +895,8 @@ button:not(:disabled),
   height: auto;
   align-items: flex-start;
   gap: 0.5rem;
+  font-size: 14px;
+  line-height: 24px;
   text-align: left;
   white-space: normal;
 }
@@ -848,8 +910,14 @@ button:not(:disabled),
   border-radius: 0.4rem;
   background: rgb(82 99 108 / 9%);
   color: var(--wc-blue-ink);
-  font-size: 0.7rem;
+  font-size: 12px;
+  line-height: 18px;
   font-weight: 600;
+}
+
+.wc-question-control {
+  font-size: 14px;
+  line-height: 24px;
 }
 
 .wc-question-option:hover:not(:disabled) {
@@ -1003,8 +1071,8 @@ button:not(:disabled),
   background: rgb(255 255 253 / 92%);
   padding: 0.34rem 0.68rem;
   color: var(--wc-muted);
-  font-size: 0.78rem;
-  line-height: 1.1rem;
+  font-size: 13px;
+  line-height: 20px;
   text-decoration: none;
   cursor: pointer;
   box-shadow: 0 1px 2px rgb(33 35 31 / 5%);
@@ -1068,17 +1136,17 @@ button:not(:disabled),
 
 .wc-source-menu-title {
   color: var(--wc-ink);
-  font-size: 0.8rem;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 1.18rem;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 
 .wc-source-menu-domain {
   min-width: 0;
   color: var(--wc-faint);
-  font-size: 0.7rem;
-  line-height: 1rem;
+  font-size: 11px;
+  line-height: 14px;
   overflow-wrap: anywhere;
 }
 
@@ -1172,35 +1240,32 @@ button:not(:disabled),
 
 .wc-conversation-navigator-preview-title {
   -webkit-line-clamp: 2;
-  font-size: 0.78rem;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 1.2rem;
+  line-height: 20px;
 }
 
 .wc-conversation-navigator-preview-text {
   margin-top: 0.22rem;
   color: var(--wc-faint);
-  font-size: 0.72rem;
-  line-height: 1.12rem;
+  font-size: 12px;
+  line-height: 18px;
   -webkit-line-clamp: 2;
 }
 
-.wc-user-message-copy,
-.wc-conversation-copy {
-  font-size: 13.5px;
-}
-
 .wc-user-message-copy {
-  line-height: 1.6;
+  font-size: 16px;
+  line-height: 24px;
 }
 
 .wc-conversation-copy {
-  line-height: 1.7;
+  font-size: 16px;
+  line-height: 28px;
 }
 
 .wc-conversation-copy .wc-markdown-content > :not(:last-child) {
   margin-block-start: 0;
-  margin-block-end: 0.8rem;
+  margin-block-end: 16px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='list-item'] {
@@ -1211,43 +1276,45 @@ button:not(:disabled),
   .wc-markdown
   [data-streamdown='list-item']
   + [data-streamdown='list-item'] {
-  margin-block-start: 0.375rem;
+  margin-block-start: 6px;
 }
 
 .wc-conversation-copy
   .wc-markdown
   [data-streamdown='list-item']
   > :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
-  margin-block-start: 0.25rem;
+  margin-block-start: 4px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] {
-  margin-block: 1.5rem 0.75rem;
   font-weight: 700;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-1'] {
-  font-size: 1.25rem;
-  line-height: 1.45;
+  margin-block: 32px 16px;
+  font-size: 24px;
+  line-height: 34px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-2'] {
-  font-size: 1.15625rem;
-  line-height: 1.46;
+  margin-block: 32px 16px;
+  font-size: 22px;
+  line-height: 32px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-3'] {
-  font-size: 1.0625rem;
-  line-height: 1.5;
+  margin-block: 32px 16px;
+  font-size: 20px;
+  line-height: 30px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-4'],
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-5'],
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-6'] {
-  margin-block: 1rem 0.5rem;
-  font-size: 13.5px;
+  margin-block: 16px;
+  font-size: 16px;
   font-weight: 600;
-  line-height: 1.7;
+  line-height: 28px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] strong {
@@ -1255,8 +1322,9 @@ button:not(:disabled),
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='inline-code'] {
+  font-family: var(--wc-font-family-code);
   font-size: 0.875em;
-  line-height: 1.55;
+  line-height: 22px;
 }
 
 .wc-conversation-copy
@@ -1270,8 +1338,8 @@ button:not(:disabled),
 .wc-conversation-copy
   .wc-markdown
   :is([data-streamdown='table-header-cell'], [data-streamdown='table-cell']) {
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 25px;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='table-header-cell'] {
@@ -1279,8 +1347,9 @@ button:not(:disabled),
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='code-block-body'] {
-  font-size: 12px;
-  line-height: 1.65;
+  font-family: var(--wc-font-family-code);
+  font-size: 13px;
+  line-height: 22px;
 }
 
 .wc-conversation-copy
@@ -1291,7 +1360,7 @@ button:not(:disabled),
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='horizontal-rule'] {
-  margin-block: 1.5rem;
+  margin-block: 32px;
 }
 
 .wc-conversation-copy .wc-markdown-content > :first-child {

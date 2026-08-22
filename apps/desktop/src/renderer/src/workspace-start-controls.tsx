@@ -86,7 +86,7 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
             side="top"
             sideOffset={7}
           >
-            <DropdownMenu.Label className="px-2 py-1.5 text-[10px] font-medium text-[var(--wc-faint)]">
+            <DropdownMenu.Label className="px-2 py-1.5 wc-type-tiny font-medium text-[var(--wc-faint)]">
               启动模式
             </DropdownMenu.Label>
             <DropdownMenu.RadioGroup
@@ -97,7 +97,7 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
                 <Laptop size={15} />
                 <div className="min-w-0 flex-1">
                   <div>在本地处理</div>
-                  <div className="text-[10px] text-[var(--wc-faint)]">包含当前目录的未提交修改</div>
+                  <div className="wc-type-tiny text-[var(--wc-faint)]">包含当前目录的未提交修改</div>
                 </div>
                 <MenuCheck />
               </DropdownMenu.RadioItem>
@@ -110,7 +110,7 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
                 <GitBranch size={15} />
                 <div className="min-w-0 flex-1">
                   <div>新工作树</div>
-                  <div className="text-[10px] text-[var(--wc-faint)]">
+                  <div className="wc-type-tiny text-[var(--wc-faint)]">
                     {props.candidate.worktreeUnavailableReason
                       ?? (props.candidate.dirty ? '从所选提交创建，不带入未提交修改' : '从所选提交创建隔离目录')}
                   </div>
@@ -143,7 +143,7 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
             side="top"
             sideOffset={7}
           >
-            <DropdownMenu.Label className="px-2 py-1.5 text-[10px] font-medium text-[var(--wc-faint)]">
+            <DropdownMenu.Label className="px-2 py-1.5 wc-type-tiny font-medium text-[var(--wc-faint)]">
               基线分支
             </DropdownMenu.Label>
             <DropdownMenu.RadioGroup value={selectedBaseKey} onValueChange={changeBase}>
@@ -157,7 +157,7 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
                   <GitBranch size={14} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate">{baseRefLabel(base)}</div>
-                    <div className="font-mono text-[10px] text-[var(--wc-faint)]">
+                    <div className="font-mono wc-type-tiny text-[var(--wc-faint)]">
                       {base.commit.slice(0, 10)}
                     </div>
                   </div>

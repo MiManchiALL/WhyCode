@@ -97,13 +97,13 @@ export function WorktreeEnvironmentMenu(props: WorktreeEnvironmentMenuProps) {
         <div className="truncate text-xs font-medium text-[var(--wc-ink)]">
           {status?.branch ?? 'detached HEAD'}
         </div>
-        <div className="mt-0.5 truncate font-mono text-[10px] text-[var(--wc-muted)]" title={props.binding.worktreeDirectory}>
+        <div className="mt-0.5 truncate font-mono wc-type-tiny text-[var(--wc-muted)]" title={props.binding.worktreeDirectory}>
           {props.binding.worktreeDirectory}
         </div>
       </div>
 
       {error && (
-        <p className="mt-3 rounded-xl bg-[#eee2dc] px-2.5 py-2 text-[11px] text-[var(--wc-danger)]" role="alert">
+        <p className="mt-3 rounded-xl bg-[#eee2dc] px-2.5 py-2 wc-type-caption text-[var(--wc-danger)]" role="alert">
           {error}
         </p>
       )}
@@ -117,13 +117,13 @@ export function WorktreeEnvironmentMenu(props: WorktreeEnvironmentMenuProps) {
         >
           <FileDiff size={14} />
           <span className="flex-1">变更</span>
-          <span className="text-[10px] text-[var(--wc-muted)]">{changesLabel}</span>
+          <span className="wc-type-tiny text-[var(--wc-muted)]">{changesLabel}</span>
           {changesExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
         {changesExpanded && (
           <div className="border-t border-dashed border-[var(--wc-line)] py-3">
             {status?.entries.length ? (
-              <ul className="wc-scrollbar max-h-40 space-y-1 overflow-y-auto font-mono text-[10px]">
+              <ul className="wc-scrollbar max-h-40 space-y-1 overflow-y-auto font-mono wc-type-tiny">
                 {status.entries.map((entry, index) => (
                   <li key={`${entry.code}:${entry.path}:${index}`} className="flex gap-2">
                     <span className="w-5 shrink-0 text-[var(--wc-sand-ink)]">{entry.code}</span>
@@ -133,13 +133,13 @@ export function WorktreeEnvironmentMenu(props: WorktreeEnvironmentMenuProps) {
                 {status.entriesTruncated && <li className="text-[var(--wc-faint)]">其余项目已省略…</li>}
               </ul>
             ) : (
-              <div className="flex items-center gap-1.5 text-[11px] text-[var(--wc-muted)]">
+              <div className="flex items-center gap-1.5 wc-type-caption text-[var(--wc-muted)]">
                 <Check size={13} className="text-[#66806d]" />
                 {loading ? '正在读取变化' : '没有未提交变化'}
               </div>
             )}
             {status?.diff && (
-              <pre className="wc-scrollbar mt-2 max-h-52 overflow-auto rounded-xl bg-[#30322f] p-2.5 text-[10px] leading-4 text-[#eeeeea]">
+              <pre className="wc-scrollbar mt-2 max-h-52 overflow-auto rounded-xl bg-[#30322f] p-2.5 wc-type-tiny text-[#eeeeea]">
                 {status.diff}{status.diffTruncated ? '\n\n[差异输出已截断]' : ''}
               </pre>
             )}
@@ -149,7 +149,7 @@ export function WorktreeEnvironmentMenu(props: WorktreeEnvironmentMenuProps) {
 
       {detached && (
         <div className="border-t border-[var(--wc-line)] py-3">
-          <label className="text-[11px] font-medium text-[var(--wc-muted)]" htmlFor="worktree-branch-name">
+          <label className="wc-type-caption font-medium text-[var(--wc-muted)]" htmlFor="worktree-branch-name">
             创建分支
           </label>
           <div className="mt-1.5 flex gap-1.5">
@@ -176,7 +176,7 @@ export function WorktreeEnvironmentMenu(props: WorktreeEnvironmentMenuProps) {
               创建
             </button>
           </div>
-          <p className="mt-1.5 text-[10px] leading-4 text-[var(--wc-faint)]">
+          <p className="mt-1.5 wc-type-tiny text-[var(--wc-faint)]">
             创建分支不会自动提交；后续提交可在原仓库中合并。
           </p>
         </div>
