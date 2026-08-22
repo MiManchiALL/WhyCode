@@ -161,6 +161,25 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(prompt, /PauseTaskPlan/)
   })
 
+  it('父代理并行委派后继续不重叠工作，并保留最终综合责任', () => {
+    const prompt = buildSystemPrompt({
+      projectDir: 'C:\\work\\demo',
+      osPlatform: 'win32',
+      subagents: {
+        definitions: [],
+        diagnostics: [],
+        modelContext: '<available_subagents>\n</available_subagents>',
+      },
+    })
+
+    assert.match(prompt, /不要与子代理重复同一工作/)
+    assert.match(prompt, /多个互不依赖的委派在同一模型步骤并行启动/)
+    assert.match(prompt, /优先继续用户目标中不依赖且不重叠的工作/)
+    assert.match(prompt, /没有这类工作时才等待终态/)
+    assert.match(prompt, /在终态到达前不得猜测、抢跑或宣布完成/)
+    assert.match(prompt, /父代理负责综合、必要核验和最终用户答复/)
+  })
+
   it('子代理只看到自己的身份、独立计划与固定工具档位', () => {
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',
@@ -179,8 +198,11 @@ describe('通用 Agent 提示约束', () => {
     })
 
     assert.match(prompt, /# 子代理身份：探索代理/)
+    assert.match(prompt, /不得假定未提供的父会话背景/)
+    assert.match(prompt, /直接推进到可交付结论/)
     assert.match(prompt, /需要计划时可使用你自己的任务计划/)
-    assert.match(prompt, /自动把你的终态交给父代理/)
+    assert.match(prompt, /区分观察与推断/)
+    assert.match(prompt, /自动交付终态/)
     assert.match(prompt, /CreateTaskPlan/)
     assert.doesNotMatch(prompt, /<available_subagents>/)
     assert.doesNotMatch(prompt, /AskUserQuestion|SendSubagentMessage|StartCommand/)

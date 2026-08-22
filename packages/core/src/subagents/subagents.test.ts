@@ -35,6 +35,9 @@ describe('子代理定义与父工具协议', () => {
     assert.equal(reviewer.toolNames.includes('RunCommand'), true)
     assert.equal(reviewer.toolNames.includes('WriteFile'), false)
     assert.equal(general.toolNames.includes('WriteFile'), true)
+    assert.match(explore.instructions, /从宽到窄搜索/)
+    assert.match(reviewer.instructions, /严重度、位置、证据和影响/)
+    assert.match(general.instructions, /不留半成品，也不额外扩展/)
     assert.match(snapshot.modelContext, /<available_subagents>/)
   })
 
@@ -90,6 +93,9 @@ describe('子代理定义与父工具协议', () => {
       },
       continue: async (request) => ({ ok: true, subagentId: request.subagentId }),
     })
+    assert.match(tools[0]!.prompt, /目标及原因、已知事实和已排除方向/)
+    assert.match(tools[0]!.prompt, /预期行为和验收标准/)
+    assert.match(tools[0]!.prompt, /不要把尚未完成的理解和方案选择整体交给子代理/)
     const result = await tools[0]!.execute(
       { agent_id: 'explore', prompt: '检查实现边界' },
       {
