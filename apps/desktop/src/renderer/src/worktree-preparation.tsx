@@ -10,7 +10,7 @@ export function WorktreePreparation(props: WorktreePreparationProps) {
   return (
     <div className="pt-2">
       {props.message && (
-        <div className="wc-user-message-bubble ml-auto w-fit max-w-[84%] px-3.5 py-2.5 text-[13px] leading-[1.65]">
+        <div className="wc-user-message-copy wc-user-message-bubble ml-auto w-fit max-w-[84%] px-3.5 py-2.5">
           <div className="whitespace-pre-wrap">{props.message}</div>
         </div>
       )}

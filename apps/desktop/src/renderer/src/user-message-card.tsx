@@ -23,7 +23,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
   return (
     <div
       data-conversation-navigator-target={props.block.id}
-      className={`group ml-auto flex max-w-[84%] flex-col items-end gap-2 text-[13px] leading-[1.65] ${
+      className={`wc-user-message-copy group ml-auto flex max-w-[84%] flex-col items-end gap-2 ${
         editor.editing ? 'mb-8' : 'mb-2'
       }`}
     >
