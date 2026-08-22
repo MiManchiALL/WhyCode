@@ -65,7 +65,29 @@ function isInside(pathNorm: string, dirNorm: string): boolean {
 }
 
 /**
- * 工作区边界检查：原路径 + realpath（若存在）双查，均须落在任一允许目录内。
+ * 解析路径中最深的现存祖先，再接回尚不存在的后代。
+ * 这既覆盖新建深层路径，也不会因中间目录联接而漏掉真实路径逃逸。
+ */
+function canonicalizePath(inputPath: string): string | null {
+  const suffix: string[] = []
+  let current = resolve(inputPath)
+
+  while (true) {
+    try {
+      return resolve(realpathSync(current), ...[...suffix].reverse())
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null
+      const parent = dirname(current)
+      if (parent === current) return null
+      suffix.push(basename(current))
+      current = parent
+    }
+  }
+}
+
+/**
+ * 工作区边界检查：词法路径须落在显式允许根内，真实路径须落在对应允许根的真实边界内。
  * 返回 null = 通过；否则返回越界的绝对路径（供生成 add-dir 建议）。
  */
 export function findOutsideBoundary(
@@ -74,21 +96,17 @@ export function findOutsideBoundary(
   allowedDirs: string[],
 ): string | null {
   const abs = isAbsolute(inputPath) ? resolve(inputPath) : resolve(baseDir, inputPath)
-  const dirs = [baseDir, ...allowedDirs].map(normalizeForCompare)
-  const candidates = [abs]
-  try {
-    // 文件不存在时对父目录做 realpath（新建文件场景），防 symlink 逃逸
-    candidates.push(realpathSync(abs))
-  } catch {
-    try {
-      candidates.push(resolve(realpathSync(dirname(abs)), basename(abs)))
-    } catch {
-      /* 父目录也不存在：仅词法检查 */
-    }
-  }
-  for (const candidate of candidates) {
-    const norm = normalizeForCompare(candidate)
-    if (!dirs.some((d) => isInside(norm, d))) return abs
-  }
-  return null
+  const roots = [baseDir, ...allowedDirs]
+  const lexicalRoots = roots.map(normalizeForCompare)
+  const lexicalCandidate = normalizeForCompare(abs)
+  if (!lexicalRoots.some((root) => isInside(lexicalCandidate, root))) return abs
+
+  const canonicalRoots = roots.flatMap((root) => {
+    const canonical = canonicalizePath(root)
+    return canonical ? [normalizeForCompare(canonical)] : []
+  })
+  const canonical = canonicalizePath(abs)
+  if (!canonical) return abs
+  const canonicalCandidate = normalizeForCompare(canonical)
+  return canonicalRoots.some((root) => isInside(canonicalCandidate, root)) ? null : abs
 }
