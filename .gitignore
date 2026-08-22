@@ -20,9 +20,6 @@ release/
 .agent_scratch/
 .whycode/
 
-# --- 本地私有开发文档 ---
-/docs/
-
 # --- 系统与编辑器 ---
 .DS_Store
 Thumbs.db
