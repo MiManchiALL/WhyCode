@@ -14,23 +14,19 @@ import {
 
 const EXPECTED_SYSTEM_SKILLS = [
   'code-review',
-  'debug',
   'documents',
   'find-simplifications',
   'presentations',
   'simplify',
   'skill-creator',
   'spreadsheets',
-  'verify',
 ]
 
 const GENERAL_SKILL_CONTRACTS = new Map<string, readonly RegExp[]>([
   ['code-review', [/实际 base 和 head/, /不是充分证据/, /作者得知后大概率会修复/]],
-  ['debug', [/可证伪假设/, /首个错误状态/, /不凭猜测改代码/]],
   ['find-simplifications', [/只有请求明确指向整个项目/, /仅有测试与文档引用/, /只在多个机制表达同一事实时建议合并/]],
   ['simplify', [/已选定的简化候选/, /记录修改过程或已经失效的注释/, /只合并表达同一事实的机制/, /不为单次使用新增抽象/]],
   ['skill-creator', [/只询问会阻断设计/, /\.whycode\/skills\/<name>/, /默认只写指令/]],
-  ['verify', [/测试通过只是辅助证据/, /反例或对抗性检查/, /PASS、FAIL 或 PARTIAL/]],
 ])
 
 describe('内置 Skill 安装与发现', () => {
@@ -145,7 +141,7 @@ describe('内置 Skill 安装与发现', () => {
 
       assert.equal((await installSystemSkills(home)).changed, true)
       await assert.rejects(access(stale))
-      assert.match(await readFile(join(root, 'verify', 'SKILL.md'), 'utf8'), /name: verify/)
+      assert.match(await readFile(join(root, 'simplify', 'SKILL.md'), 'utf8'), /name: simplify/)
     } finally {
       await rm(home, { recursive: true, force: true })
     }
@@ -169,18 +165,18 @@ describe('内置 Skill 安装与发现', () => {
     const home = await mkdtemp(join(tmpdir(), 'whycode-system-skills-'))
     try {
       await installSystemSkills(home)
-      const userSkill = join(userSkillsRoot(home), 'verify', 'SKILL.md')
+      const userSkill = join(userSkillsRoot(home), 'simplify', 'SKILL.md')
       await mkdir(dirname(userSkill), { recursive: true })
       await writeFile(
         userSkill,
-        '---\nname: verify\ndescription: 我的验证流程\n---\n# Verify\n',
+        '---\nname: simplify\ndescription: 我的简化流程\n---\n# Simplify\n',
         'utf8',
       )
 
       const snapshot = await new SkillCatalogService({ homeDir: home }).snapshot(null)
-      const verifySkills = snapshot.skills.filter((skill) => skill.name === 'verify')
-      assert.deepEqual(verifySkills.map((skill) => skill.scope), ['user', 'system'])
-      assert.equal(new Set(verifySkills.map((skill) => skill.id)).size, 2)
+      const simplifySkills = snapshot.skills.filter((skill) => skill.name === 'simplify')
+      assert.deepEqual(simplifySkills.map((skill) => skill.scope), ['user', 'system'])
+      assert.equal(new Set(simplifySkills.map((skill) => skill.id)).size, 2)
     } finally {
       await rm(home, { recursive: true, force: true })
     }
