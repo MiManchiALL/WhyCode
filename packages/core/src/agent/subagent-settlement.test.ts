@@ -94,6 +94,7 @@ describe('子代理终态续轮', () => {
           return finalStep('第一个子代理已完成，我继续等待另一个。')
         }
         assert.match(prompt, /第二个结果/)
+        assert.match(prompt, /只表示子代理等待条件已满足/)
         assert.match(prompt, /\\"remaining\\":0/)
         return finalStep('两个子代理均已完成，这是综合结论。')
       },
