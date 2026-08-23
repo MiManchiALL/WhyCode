@@ -175,9 +175,11 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /不要与子代理重复同一工作/)
     assert.match(prompt, /多个互不依赖的委派在同一模型步骤并行启动/)
     assert.match(prompt, /优先继续用户目标中不依赖且不重叠的工作/)
-    assert.match(prompt, /没有这类工作时才等待终态/)
-    assert.match(prompt, /在终态到达前不得猜测、抢跑或宣布完成/)
-    assert.match(prompt, /父代理负责综合、必要核验和最终用户答复/)
+    assert.match(prompt, /每个终态到达时把结果作为阶段进展/)
+    assert.match(prompt, /当前 turn 仍有未交付激活时，不得猜测、抢跑或给出最终结论/)
+    assert.match(prompt, /没有其它工作就等待/)
+    assert.match(prompt, /WhyCode 会保持本 turn 并允许用户插话/)
+    assert.match(prompt, /全部终态交付后，父代理再综合、必要核验并最终答复/)
   })
 
   it('子代理只看到自己的身份、独立计划与固定工具档位', () => {

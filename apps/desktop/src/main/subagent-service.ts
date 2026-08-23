@@ -18,6 +18,7 @@ import {
   type SubagentSettlementNotification,
   type SubagentState,
   type SubagentTranscriptSnapshot,
+  type SubagentTurnState,
   type ToolDefinition,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -49,6 +50,7 @@ interface ActiveActivation {
   timeline: ViewTimeline
   session: AgentSession | null
   cancelRequested: boolean
+  suppressSettlement: boolean
   done: Promise<void>
 }
 
@@ -149,6 +151,27 @@ export class SubagentService {
     }
   }
 
+  /** 当前父 turn 的轻量事实投影；manifest 仍是唯一持久事实源。 */
+  async turnState(parentSessionId: string, parentTurnId: string): Promise<SubagentTurnState> {
+    const activations = (await this.storage.listManifests(parentSessionId))
+      .flatMap((manifest) => manifest.activations
+        .filter((activation) => activation.parentTurnId === parentTurnId)
+        .map((activation) => ({
+          startedAt: activation.startedAt,
+          value: {
+            subagentId: manifest.id,
+            activationId: activation.id,
+            name: manifest.definition.name,
+            sequence: activation.sequence,
+            ...(activation.outcome ? { outcome: activation.outcome } : {}),
+            ...(activation.settlement ? { settlement: activation.settlement } : {}),
+          },
+        })))
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+      .map((item) => item.value)
+    return { parentTurnId, activations }
+  }
+
   async transcript(
     parentSessionId: string,
     subagentId: string,
@@ -201,6 +224,7 @@ export class SubagentService {
     if (targets.length > 0) targets[0]!.parentRuntime.rejectApprovals()
     for (const activation of targets) {
       activation.cancelRequested = true
+      activation.suppressSettlement = true
       activation.session?.abort()
     }
     await Promise.all([
@@ -393,6 +417,7 @@ export class SubagentService {
       timeline,
       session: null,
       cancelRequested: false,
+      suppressSettlement: false,
       done,
     }
     this.active.set(manifest.id, active)
@@ -453,6 +478,7 @@ export class SubagentService {
         outcome,
         resultText,
         session?.permissionSnapshot,
+        active.suppressSettlement,
       ).catch((error) => {
         this.report(error)
         return null
@@ -470,10 +496,14 @@ export class SubagentService {
       await this.publishState(active.parentSessionId)
       if (manifest) {
         const activation = manifest.activations.find((item) => item.id === active.activationId)!
-        try {
-          this.options.onSettlement(subagentSettlement(manifest, activation))
-        } catch (error) {
-          this.report(error)
+        if (active.suppressSettlement) {
+          this.removeContinuation(manifest.parentSessionId, activation.engagedPlanId)
+        } else {
+          try {
+            this.options.onSettlement(subagentSettlement(manifest, activation))
+          } catch (error) {
+            this.report(error)
+          }
         }
       }
     }
@@ -486,9 +516,19 @@ export class SubagentService {
     outcome: SubagentOutcome,
     resultText: string,
     permission: AgentSession['permissionSnapshot'] | undefined,
+    suppressSettlement: boolean,
   ): Promise<SubagentManifest> {
     const manifest = await this.storage.readManifest(parentSessionId, subagentId)
-    const terminal = completeSubagentManifest(manifest, activationId, outcome, resultText)
+    let terminal = completeSubagentManifest(manifest, activationId, outcome, resultText)
+    if (suppressSettlement) {
+      terminal = {
+        ...terminal,
+        activations: terminal.activations.map((activation) =>
+          activation.id === activationId
+            ? { ...activation, settlement: 'delivered' as const }
+            : activation),
+      }
+    }
     const next = permission ? { ...terminal, permission } : terminal
     await this.storage.writeManifest(next)
     return next

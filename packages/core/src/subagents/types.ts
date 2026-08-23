@@ -35,6 +35,23 @@ const idSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const toolNameSchema = z.string().regex(/^[A-Z][A-Za-z0-9]*$/)
 
+export const subagentTurnActivationSchema = z.object({
+  subagentId: idSchema,
+  activationId: idSchema,
+  name: z.string().min(1).max(64),
+  sequence: z.number().int().positive(),
+  outcome: subagentOutcomeSchema.optional(),
+  settlement: subagentSettlementStateSchema.optional(),
+}).strict().superRefine((activation, ctx) => {
+  if ((activation.outcome === undefined) !== (activation.settlement === undefined)) {
+    ctx.addIssue({ code: 'custom', message: '子代理 turn 激活的终态与交接状态必须同时存在' })
+  }
+})
+export const subagentTurnStateSchema = z.object({
+  parentTurnId: z.string().min(1),
+  activations: z.array(subagentTurnActivationSchema),
+}).strict()
+
 export const subagentDefinitionSnapshotSchema = z.object({
   id: z.string().min(1).max(160),
   name: z.string().min(1).max(64),
@@ -98,6 +115,8 @@ export type SubagentStatus = z.infer<typeof subagentStatusSchema>
 export type SubagentDefinitionSnapshot = z.infer<typeof subagentDefinitionSnapshotSchema>
 export type SubagentActivation = z.infer<typeof subagentActivationSchema>
 export type SubagentManifest = z.infer<typeof subagentManifestSchema>
+export type SubagentTurnActivation = z.infer<typeof subagentTurnActivationSchema>
+export type SubagentTurnState = z.infer<typeof subagentTurnStateSchema>
 
 export interface SubagentDefinitionDiagnostic {
   path: string
@@ -178,6 +197,7 @@ export interface SubagentLaunchResult {
 
 export interface SubagentSettlementNotification {
   parentSessionId: string
+  parentTurnId: string
   subagentId: string
   activationId: string
   name: string

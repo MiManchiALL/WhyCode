@@ -804,6 +804,7 @@ async function createMainAgentSession(
       hasPendingTaskPlanContinuation: (planId) =>
         commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
         || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
+      getSubagentTurnState: (turnId) => subagents.turnState(recorder.sessionId, turnId),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),

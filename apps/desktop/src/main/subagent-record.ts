@@ -59,6 +59,7 @@ export function subagentSettlement(
   }
   return {
     parentSessionId: manifest.parentSessionId,
+    parentTurnId: activation.parentTurnId,
     subagentId: manifest.id,
     activationId: activation.id,
     name: manifest.definition.name,

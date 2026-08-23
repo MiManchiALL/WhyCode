@@ -10,6 +10,7 @@ export function createSubagentSettlementMessage(
   notification: SubagentSettlementNotification,
 ): ModelMessage {
   const payload = {
+    parent_turn_id: notification.parentTurnId,
     subagent_id: notification.subagentId,
     activation_id: notification.activationId,
     name: notification.name,

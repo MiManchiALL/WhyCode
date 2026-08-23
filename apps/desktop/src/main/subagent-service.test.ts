@@ -44,7 +44,20 @@ describe('子代理激活生命周期', () => {
 
     assert.equal(fixture.runtime.busy, false)
     assert.equal(fixture.settlements[0]?.outcome, 'completed')
+    assert.equal(fixture.settlements[0]?.parentTurnId, 'turn-1')
     assert.equal(fixture.settlements[0]?.resultText, '第一次调查完成。')
+    const pendingTurnState = await fixture.service.turnState(
+      fixture.parentJournal.sessionId,
+      'turn-1',
+    )
+    assert.equal(pendingTurnState.activations[0]?.outcome, 'completed')
+    assert.equal(pendingTurnState.activations[0]?.settlement, 'pending')
+    await fixture.service.markSettlementDelivered(fixture.settlements[0]!)
+    const deliveredTurnState = await fixture.service.turnState(
+      fixture.parentJournal.sessionId,
+      'turn-1',
+    )
+    assert.equal(deliveredTurnState.activations[0]?.settlement, 'delivered')
     const firstState = await fixture.service.state(fixture.parentJournal.sessionId)
     assert.equal(firstState.subagents[0]?.id, subagentId)
     assert.equal(firstState.subagents[0]?.activationCount, 1)
@@ -140,6 +153,40 @@ describe('子代理激活生命周期', () => {
     assert.equal(fixture.modelCalls.length, 82)
     assert.equal(fixture.settlements[0]?.outcome, 'completed')
     assert.equal(fixture.settlements[0]?.resultText, '长任务自然完成。')
+    await fixture.service.close()
+  })
+
+  it('父会话停止会取消激活并确认终态，但不再触发自动续轮', async () => {
+    const started = deferred<void>()
+    const release = deferred<void>()
+    const fixture = await createFixture([], async () => {
+      started.resolve()
+      await release.promise
+      return finalStream('不应交付的取消后结果。')
+    })
+    const tools = fixture.service.createTools(
+      fixture.runtime,
+      fixture.parentJournal,
+      fixture.projectDir,
+    )
+    const launched = await tools[0]!.execute(
+      { agent_id: 'explore', prompt: '等待父会话停止' },
+      toolContext('turn-stop', 'tool-stop'),
+    )
+    assert.equal(launched.isError, false)
+    await started.promise
+
+    const aborting = fixture.service.abortParent(fixture.parentJournal.sessionId)
+    release.resolve()
+    await aborting
+
+    assert.equal(fixture.settlements.length, 0)
+    const state = await fixture.service.turnState(
+      fixture.parentJournal.sessionId,
+      'turn-stop',
+    )
+    assert.equal(state.activations[0]?.outcome, 'aborted')
+    assert.equal(state.activations[0]?.settlement, 'delivered')
     await fixture.service.close()
   })
 })
@@ -307,4 +354,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (Date.now() >= deadline) throw new Error('等待子代理终态超时')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((next) => { resolve = next })
+  return { promise, resolve }
 }

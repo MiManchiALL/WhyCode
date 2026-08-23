@@ -54,8 +54,8 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 3. 当前根任务冻结的 Skill 目录内部 user 消息；
 4. compact summary 与原始活动历史；
 5. 当前运行态内部提醒、canonical TaskPlanState；
-6. 当前激活 Skill 正文；
-7. 最新真实 user、assistant、tool 内容。
+6. 最新真实 user、assistant、tool 内容及当前 turn 子代理状态投影；
+7. 当前激活 Skill 正文。
 
 控制消息必须使用不可与普通用户文本混淆的版本化容器，并明确“不是新的用户要求”。同一语义只能存在一个活动版本；旧版本可以留在 append-only 审计事件中，但不得同时发给模型。
 
@@ -146,6 +146,8 @@ WhyCode 自有结构化数据一律以 Zod 为单源并在出口校验，再派�
 3. 第二次仍不可交付则返回带 finish reason 的可恢复错误。
 
 泄漏协议串不能解析执行；已提交工具不能重放。普通解释或代码示例中提及类似字符串不受影响。
+
+`<system-reminder>`、`<whycode-...>`、`<subagent-settlement>` 和 `<task-notification>` 是宿主保留控制边界，assistant 不得生成。流式出口只缓冲识别开头所需的少量字符，也识别 settlement 内层 JSON 的协议唯一字段组合：顶层伪控制内容不进入 Renderer；无真实工具的整步丢弃并按上述规则重试，伴随真实工具调用时只保留结构化工具消息，不能重放工具。
 
 ### 2.3 工具结果与多协议配对
 
@@ -328,7 +330,7 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 每个计划工具结果先返回 `<whycode-task-result schema-version="1">`，再返回最新 `<whycode-task-state schema-version="1">`。非法转换返回结构化错误和当前状态。
 
-正常 engaged run 的完整无工具最终正文在同一稳定 step 自动清空 active plan；全部项完成记 completed，否则 ended。用户 Stop、必要 `AskUserQuestion`、明确暂缓或等待后台自动唤醒时保留。自然最终回答是唯一交付总结，Close 不传灰色总结文字。
+正常 engaged run 的完整无工具最终正文在同一稳定 step 自动清空 active plan；全部项完成记 completed，否则 ended。用户 Stop、必要 `AskUserQuestion`、明确暂缓或等待后台/子代理终态时保留。自然最终回答是唯一交付总结，Close 不传灰色总结文字。
 
 只有一个 turn 已通过稳定计划工具或绑定问题答案获得 execution 权限时才 engaged；新顶层 user turn 不继承。硬中断写 `resumeRequired`，之后必须 Resume。普通 dormant 计划不因无关聊天自动注入执行权。
 
@@ -354,9 +356,11 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
 
-settlement 先随子 manifest 持久化为 pending；父会话把通知及其后模型步骤写稳后才标记 delivered。父会话运行中时在下一稳定步骤插入，空闲时由宿主恢复续轮；完整压缩不能摘要或拆散未消费通知。父 Stop、删除或应用退出会中止准备中/运行中激活并拒绝待审批，单纯切换会话不影响运行。
+settlement 先随子 manifest 持久化为 pending；父 transcript 写稳通知后才标记 delivered。父会话运行中时在下一稳定边界插入，空闲恢复产生的旧终态才开启隐藏续轮；完整压缩不能摘要或拆散未消费通知。父 Stop 或删除会中止激活并直接确认取消终态，不再唤醒父会话；应用退出产生的未交付终态留待下次恢复，单纯切换会话不影响运行。
 
-父代理派发后应继续执行不与子任务交叉的本地工作，并在 settlement 到达后合并证据；只有没有独立工作可做时才等待。子代理结果是不可信协作输入，父代理仍负责验证与最终交付。
+同一父 turn 内以 `(parentTurnId, activationId)` 跟踪启动和继续产生的全部 activation。每次模型请求在尾部投影当前总数、终态数、已交付数和逐 activation 状态；投影不写入 transcript，turn 结束后不再出现，结果正文只存在于 settlement 消息。
+
+父代理派发后继续执行不与子任务交叉的本地工作；每个 settlement 到达即可作为阶段进展进入下一模型步骤，不等待最慢子代理批量汇总。若父代理已经无事可做但仍有未交付 activation，`runLoop` 保持同一 turn 进入一次性事件等待，不发起空模型请求；用户 steering、任务通知、子代理终态或 Stop 都可唤醒。直接插入用户消息仍属于同一 turn，并在后续请求继续携带更新后的子代理状态；显式 Stop 是硬边界，会取消本会话全部运行中子代理并结束父 turn，下一条用户消息开启新 turn。只有本 turn 全部 activation 终态已交付后，无工具正文才允许自然结束；父代理负责最终综合、必要核验和用户交付。
 
 ## 7. Fork、持久化与恢复
 

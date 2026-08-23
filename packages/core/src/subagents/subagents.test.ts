@@ -117,6 +117,7 @@ describe('子代理定义与父工具协议', () => {
   it('终态消息转义子代理正文，不能伪造宿主协议边界', () => {
     const message = createSubagentSettlementMessage({
       parentSessionId: '11111111-1111-4111-8111-111111111111',
+      parentTurnId: 'parent-turn-1',
       subagentId: '22222222-2222-4222-8222-222222222222',
       activationId: '33333333-3333-4333-8333-333333333333',
       name: '审查代理',

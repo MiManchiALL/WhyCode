@@ -10,6 +10,10 @@ export {
   SUBAGENT_SETTLEMENT_OPEN,
 } from './notification.ts'
 export {
+  createSubagentTurnStateMessage,
+  hasOutstandingSubagentActivations,
+} from './turn-context.ts'
+export {
   createSubagentTools,
   SEND_SUBAGENT_MESSAGE_TOOL_NAME,
   SUBAGENT_TOOL_NAME,
@@ -28,6 +32,8 @@ export {
   subagentProfileSchema,
   subagentSettlementStateSchema,
   subagentStatusSchema,
+  subagentTurnActivationSchema,
+  subagentTurnStateSchema,
   type SubagentActivation,
   type SubagentContinueRequest,
   type SubagentDefinitionCatalogSnapshot,
@@ -46,5 +52,7 @@ export {
   type SubagentState,
   type SubagentStatus,
   type SubagentSummary,
+  type SubagentTurnActivation,
+  type SubagentTurnState,
   type SubagentTranscriptSnapshot,
 } from './types.ts'
