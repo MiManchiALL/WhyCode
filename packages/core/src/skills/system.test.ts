@@ -16,6 +16,7 @@ const EXPECTED_SYSTEM_SKILLS = [
   'code-review',
   'debug',
   'documents',
+  'find-simplifications',
   'presentations',
   'simplify',
   'skill-creator',
@@ -24,9 +25,10 @@ const EXPECTED_SYSTEM_SKILLS = [
 ]
 
 const GENERAL_SKILL_CONTRACTS = new Map<string, readonly RegExp[]>([
-  ['code-review', [/git merge-base HEAD <comparison-ref>/, /作者得知后大概率会修复/, /`P0`：普遍发生的发布阻断/]],
+  ['code-review', [/实际 base 和 head/, /不是充分证据/, /作者得知后大概率会修复/]],
   ['debug', [/可证伪假设/, /首个错误状态/, /不凭猜测改代码/]],
-  ['simplify', [/本次任务已编辑或用户明确指定/, /相同值或引用仍触发/, /不为单次使用新增抽象/]],
+  ['find-simplifications', [/只有请求明确指向整个项目/, /这是只读调查与提案任务/, /静态搜索没有结果不能单独证明/]],
+  ['simplify', [/已选定的简化候选/, /只合并表达同一事实的机制/, /不为单次使用新增抽象/]],
   ['skill-creator', [/只询问会阻断设计/, /\.whycode\/skills\/<name>/, /默认只写指令/]],
   ['verify', [/测试通过只是辅助证据/, /反例或对抗性检查/, /PASS、FAIL 或 PARTIAL/]],
 ])
