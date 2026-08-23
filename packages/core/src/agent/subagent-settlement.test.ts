@@ -80,6 +80,7 @@ describe('子代理终态续轮', () => {
         calls[index]?.resolve()
         if (index === 0) {
           assert.match(prompt, /whycode-subagent-turn-state/)
+          assert.match(prompt, /用一次简短说明结束当前响应并等待，不要重复播报/)
           assert.match(prompt, /\\"remaining\\":2/)
           return finalStep('本地检查已经完成，继续等待子代理。')
         }

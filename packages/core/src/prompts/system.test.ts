@@ -177,7 +177,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /优先继续用户目标中不依赖且不重叠的工作/)
     assert.match(prompt, /每个终态到达时把结果作为阶段进展/)
     assert.match(prompt, /当前 turn 仍有未交付激活时，不得猜测、抢跑或给出最终结论/)
-    assert.match(prompt, /没有其它工作就等待/)
+    assert.match(prompt, /用一次简短说明结束当前响应并等待，不要重复播报/)
     assert.match(prompt, /WhyCode 会保持本 turn 并允许用户插话/)
     assert.match(prompt, /全部终态交付只是允许最终答复的必要条件/)
     assert.match(prompt, /只有任务本身完成时才综合并最终答复/)
