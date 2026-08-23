@@ -377,7 +377,7 @@ Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 Op
 - default 表示请求不覆盖连接默认，不等于某个固定强度；
 - Renderer 只显示当前有效画像允许的档位，Main 再校验，Provider 翻译为实际协议字段。
 
-模型和强度在 turn 起点冻结。退役 modelId 的历史可读但没有可发送 AgentSession；用户必须主动选择受支持型号，系统不得静默替换。模型目录更新流程见 `04-START-HERE.md` §6。
+模型和强度在 turn 起点冻结。退役 modelId 的历史可读但没有可发送 AgentSession；用户必须主动选择受支持型号，系统不得静默替换。模型目录更新流程见 `.agents/skills/whycode-model-catalog/SKILL.md`。
 
 ## 9. 修改契约的检查清单
 

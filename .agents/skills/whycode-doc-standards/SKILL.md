@@ -18,8 +18,10 @@ The current ownership boundaries are:
 - `01-需求与MVP.md`: product goals, current scope, non-goals, user-facing acceptance results, and trigger-based future directions.
 - `02-技术栈与架构.md`: current architecture, module ownership, implementation mechanisms, lifecycles, data flow, Renderer baseline, and engineering constraints.
 - `03-Agent与协议契约.md`: model-visible prompts and messages, context, tool schemas, structured output, persistence, planning, multi-agent, and recovery contracts.
-- `04-START-HERE.md`: the single entry point, standing development rules, quality redlines, high-level current focus, and model-catalog maintenance policy.
+- `04-START-HERE.md`: the single entry point, standing development rules, quality redlines, high-level current focus, and links to trigger-specific project skills.
 - `05-暂存区便签.md`: only current unfinished work, pending verification, blockers, and immediate next actions.
+
+Trigger-specific workflows that do not belong in the core document map live in project skills. `.agents/skills/whycode-model-catalog/SKILL.md` is the sole detailed owner of model catalog and CLIProxyAPI maintenance; `04` keeps only the mandatory trigger link.
 
 When a transient fact becomes stable, move its durable conclusion to the owning document and remove the stale copy from `05`. Delete completed handoff entries; Git owns completion history.
 
