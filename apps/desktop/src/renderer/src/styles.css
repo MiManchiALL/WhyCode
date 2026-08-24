@@ -764,7 +764,7 @@ button:not(:disabled),
   overflow: auto;
   border: 1px solid rgb(48 50 45 / 15%);
   border-radius: var(--wc-menu-radius);
-  background: rgb(255 255 253 / 80%);
+  background: rgb(255 255 253 / 92%);
   padding: 0.35rem;
   color: var(--wc-ink);
   transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-popover-content-transform-origin));

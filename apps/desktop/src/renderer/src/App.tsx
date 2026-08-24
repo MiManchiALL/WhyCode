@@ -85,7 +85,7 @@ import {
   restoredPdfDrafts,
   type PdfDraft,
 } from './pdf-draft.ts'
-import { composerKeyAction } from './composer-key.ts'
+import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { SkillBadges, SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
@@ -1513,6 +1513,7 @@ export function App() {
   const sendDisabled = composerDisabled
     || attachmentSubmissionPending
     || messageEmpty
+  const primaryAction = composerPrimaryAction({ busy, hasDraft: !messageEmpty })
   const contextBaseRef = workspace.mode === 'pending-worktree'
     ? workspace.baseRef
     : workspace.mode === 'worktree'
@@ -1772,7 +1773,7 @@ export function App() {
                         modelId={modelId}
                         reasoningEffort={reasoningEffort}
                         contextUsage={contextUsage}
-                        busy={busy}
+                        primaryAction={primaryAction}
                         stopping={stopping}
                         stopDisabled={
                           stopping

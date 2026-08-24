@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { composerKeyAction } from './composer-key.ts'
+import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
+
+describe('主输入框按钮行为', () => {
+  it('运行中有草稿时发送，清空后恢复停止', () => {
+    assert.equal(composerPrimaryAction({ busy: true, hasDraft: true }), 'send')
+    assert.equal(composerPrimaryAction({ busy: true, hasDraft: false }), 'stop')
+    assert.equal(composerPrimaryAction({ busy: false, hasDraft: false }), 'send')
+  })
+})
 
 describe('主输入框键盘行为', () => {
   it('Enter 发送，Ctrl+Enter 立即插话', () => {

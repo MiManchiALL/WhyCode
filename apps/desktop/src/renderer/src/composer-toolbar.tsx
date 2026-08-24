@@ -24,6 +24,7 @@ import { USER_IMAGE_ATTACHMENT_MAX_COUNT } from '@whycode/core/image-limits'
 import type { ModelListItem } from '../../shared/settings.ts'
 import { MAX_PDF_DRAFTS } from './pdf-draft.ts'
 import { ContextUsageMeter } from './context-usage-meter.tsx'
+import type { ComposerPrimaryAction } from './composer-key.ts'
 
 interface ConsensusControl {
   ready: boolean
@@ -43,7 +44,7 @@ interface ComposerToolbarProps {
   modelId: string
   reasoningEffort: ReasoningEffortSelection
   contextUsage: ContextUsageInfo | null
-  busy: boolean
+  primaryAction: ComposerPrimaryAction
   stopping: boolean
   stopDisabled: boolean
   sendDisabled: boolean
@@ -58,6 +59,7 @@ interface ComposerToolbarProps {
 }
 
 export function ComposerToolbar(props: ComposerToolbarProps) {
+  const isStopAction = props.primaryAction === 'stop'
   return (
     <div className="flex min-h-10 items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-1">
@@ -86,12 +88,12 @@ export function ComposerToolbar(props: ComposerToolbarProps) {
         <button
           type="button"
           className="wc-focus-ring flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--wc-ink)] text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:cursor-default disabled:bg-[#a9aaa5] disabled:hover:translate-y-0"
-          disabled={props.busy ? props.stopDisabled : props.sendDisabled}
-          onClick={props.busy ? props.onStop : props.onSend}
-          title={props.busy ? (props.stopping ? '停止中' : '停止') : '发送'}
-          aria-label={props.busy ? (props.stopping ? '停止中' : '停止') : '发送'}
+          disabled={isStopAction ? props.stopDisabled : props.sendDisabled}
+          onClick={isStopAction ? props.onStop : props.onSend}
+          title={isStopAction ? (props.stopping ? '停止中' : '停止') : '发送'}
+          aria-label={isStopAction ? (props.stopping ? '停止中' : '停止') : '发送'}
         >
-          {props.busy ? <Square size={13} fill="currentColor" /> : <ArrowUp size={17} />}
+          {isStopAction ? <Square size={13} fill="currentColor" /> : <ArrowUp size={17} />}
         </button>
       </div>
     </div>
