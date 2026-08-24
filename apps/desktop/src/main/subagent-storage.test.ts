@@ -43,11 +43,12 @@ describe('子代理独立持久化', () => {
 function fixture(parentSessionId: string, subagentId: string): SubagentManifest {
   const now = '2026-08-21T08:00:00.000Z'
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: subagentId,
     parentSessionId,
     createdByTurnId: 'turn-1',
     createdByToolCallId: 'tool-1',
+    taskDescription: '调查调用链',
     definition: {
       id: 'explore',
       name: '探索代理',

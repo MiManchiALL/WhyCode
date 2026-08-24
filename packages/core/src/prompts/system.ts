@@ -185,6 +185,7 @@ function parentSubagentSection(catalog: SubagentDefinitionCatalogSnapshot): stri
     '- 多个互不依赖的委派在同一模型步骤并行启动。启动后优先继续用户目标中不依赖且不重叠的工作；每个终态到达时把结果作为阶段进展，必要时核验后继续。',
     '- 当前 turn 仍有未交付激活时，不得猜测、抢跑或给出最终结论；没有其它工作时，用一次简短说明结束当前响应并等待，不要重复播报，WhyCode 会保持本 turn 并允许用户插话。全部终态交付只是允许最终答复的必要条件；交付完成后重新评估父任务，仍有价值的非重复工作或核验就继续，只有任务本身完成时才综合并最终答复。',
     '- 每个子代理只接收委派提示词与自己的独立历史，不会看到父会话其它消息。Subagent/SendSubagentMessage 返回后不要轮询；WhyCode 会在终态自动续轮。需要补充时使用稳定 subagent_id 继续同一子代理。',
+    '- 再次委派时，若已有空闲子代理的职责和独立历史适合当前子任务，优先用稳定 subagent_id 继续；不确定时先用 ListSubagents 查看。职责或上下文不匹配时新建子代理。',
     catalog.modelContext,
   ].join('\n')
 }

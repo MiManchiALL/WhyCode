@@ -9,6 +9,7 @@ import {
   type ContextUsageInfo,
   type ReasoningEffortSelection,
   type SessionJournal,
+  type TurnInterruptionContext,
   type ManagedWorkspaceBinding,
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
@@ -309,12 +310,15 @@ export class DesktopSessionRuntime {
     }
   }
 
-  async abort(source: 'user' | 'shutdown' = 'user'): Promise<void> {
+  async abort(
+    source: 'user' | 'shutdown' = 'user',
+    interruption?: TurnInterruptionContext,
+  ): Promise<void> {
     if (source === 'user' && this.workStartedAt !== null) this.workOutcome = 'stopped'
     this.attachmentAbort?.abort('user-cancel')
     this.rejectApprovals()
-    if (this.coordinator) await this.coordinator.abort()
-    else this.session?.abort()
+    if (this.coordinator) await this.coordinator.abort(interruption)
+    else this.session?.abort(interruption)
   }
 
   async dispose(): Promise<void> {

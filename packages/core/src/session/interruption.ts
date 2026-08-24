@@ -5,12 +5,22 @@ export type TurnInterruptionReason =
   | 'process-interruption'
   | 'consensus-failure'
 
-const TURN_ABORTED_MARKER_PREFIX = '<whycode-turn-aborted version="1" reason="'
-const TURN_ABORTED_CONSUMED_MARKER = '<whycode-turn-aborted-consumed version="1">'
+export interface TurnInterruptedSubagent {
+  subagentId: string
+  description: string
+}
+
+export interface TurnInterruptionContext {
+  interruptedSubagents: readonly TurnInterruptedSubagent[]
+}
+
+const TURN_ABORTED_MARKER_PREFIX = '<whycode-turn-aborted version="2" reason="'
+const TURN_ABORTED_CONSUMED_MARKER = '<whycode-turn-aborted-consumed version="2">'
 
 /** 仅进入模型上下文，不进入用户可见时间线。 */
 export function createTurnAbortedMessage(
   reason: TurnInterruptionReason = 'user-cancel',
+  context?: TurnInterruptionContext,
 ): ModelMessage {
   const cause = reason === 'user-cancel'
     ? '上一回合已被用户主动停止。'
@@ -26,10 +36,37 @@ export function createTurnAbortedMessage(
       '不要自动继续旧任务，也不要根据旧消息修改任务计划；只处理此标记之后最新的真实用户消息。',
       '只有最新消息明确要求继续、调整或取消旧任务时，才重新处理原计划。',
       '已中止的工具可能只执行了一部分；若之后恢复相关工作，先检查实际状态。',
+      ...interruptedSubagentBlock(context?.interruptedSubagents ?? []),
       '</whycode-turn-aborted>',
       '</system-reminder>',
     ].join('\n'),
   }
+}
+
+function interruptedSubagentBlock(
+  subagents: readonly TurnInterruptedSubagent[],
+): string[] {
+  if (subagents.length === 0) return []
+  const payload = {
+    count: subagents.length,
+    subagents: subagents.map((subagent) => ({
+      subagent_id: subagent.subagentId,
+      description: subagent.description,
+    })),
+  }
+  return [
+    '<cancelled-subagents>',
+    serializePayload(payload),
+    '这些子代理已随父回合停止，不再后台运行，也不会自动唤醒。后续职责适合时可按稳定 subagent_id 继续，或另建子代理。',
+    '</cancelled-subagents>',
+  ]
+}
+
+function serializePayload(payload: object): string {
+  return JSON.stringify(payload)
+    .replaceAll('&', '\\u0026')
+    .replaceAll('<', '\\u003c')
+    .replaceAll('>', '\\u003e')
 }
 
 export function isTurnAbortedMessage(message: ModelMessage): boolean {

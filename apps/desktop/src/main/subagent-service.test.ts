@@ -34,7 +34,7 @@ describe('子代理激活生命周期', () => {
     )
 
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', prompt: '检查调用链并给出证据' },
+      { agent_id: 'explore', description: '核对调用链', prompt: '检查调用链并给出证据' },
       toolContext('turn-1', 'tool-1'),
     )
     assert.equal(launched.isError, false)
@@ -62,6 +62,15 @@ describe('子代理激活生命周期', () => {
     assert.equal(firstState.subagents[0]?.id, subagentId)
     assert.equal(firstState.subagents[0]?.activationCount, 1)
     assert.equal(firstState.subagents[0]?.status, 'completed')
+    assert.equal(firstState.subagents[0]?.description, '核对调用链')
+    const listed = await tools[2]!.execute({}, toolContext('turn-list', 'tool-list'))
+    assert.equal(listed.isError, false)
+    assert.deepEqual(JSON.parse(listed.data).subagents, [{
+      agent_id: 'explore',
+      subagent_id: subagentId,
+      description: '核对调用链',
+      status: 'completed',
+    }])
 
     const continuations = await Promise.all([
       tools[1]!.execute(
@@ -121,7 +130,7 @@ describe('子代理激活生命周期', () => {
     )
     const results = await Promise.all(Array.from({ length: 9 }, (_, index) =>
       tools[0]!.execute(
-        { agent_id: 'explore', prompt: `并行调查 ${index + 1}` },
+        { agent_id: 'explore', description: `并行调查 ${index + 1}`, prompt: `并行调查 ${index + 1}` },
         toolContext(`turn-${index}`, `tool-${index}`),
       )))
 
@@ -144,7 +153,7 @@ describe('子代理激活生命周期', () => {
     )
 
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', prompt: '持续检查直到证据充分' },
+      { agent_id: 'explore', description: '持续检查证据', prompt: '持续检查直到证据充分' },
       toolContext('turn-long', 'tool-long'),
     )
 
@@ -170,15 +179,19 @@ describe('子代理激活生命周期', () => {
       fixture.projectDir,
     )
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', prompt: '等待父会话停止' },
+      { agent_id: 'explore', description: '等待停止验证', prompt: '等待父会话停止' },
       toolContext('turn-stop', 'tool-stop'),
     )
     assert.equal(launched.isError, false)
     await started.promise
 
-    const aborting = fixture.service.abortParent(fixture.parentJournal.sessionId)
+    const aborting = fixture.service.beginParentAbort(fixture.parentJournal.sessionId)
+    assert.deepEqual(aborting.interruptedSubagents, [{
+      subagentId: launched.data.match(/[0-9a-f-]{36}/u)?.[0],
+      description: '等待停止验证',
+    }])
     release.resolve()
-    await aborting
+    await aborting.done
 
     assert.equal(fixture.settlements.length, 0)
     const state = await fixture.service.turnState(

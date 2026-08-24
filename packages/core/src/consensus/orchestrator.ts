@@ -3,7 +3,10 @@ import type { CoreEvent, CoreEventSink, QueuedUserMessage, StopReason } from '..
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
-import { createTurnAbortedMessage } from '../session/interruption.ts'
+import {
+  createTurnAbortedMessage,
+  type TurnInterruptionContext,
+} from '../session/interruption.ts'
 import { skillSummary, type ActivatedSkill } from '../skills/types.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
@@ -258,10 +261,10 @@ export class ConsensusCoordinator {
   }
 
   /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
-  async abort(): Promise<void> {
+  async abort(context?: TurnInterruptionContext): Promise<void> {
     this.aborted = true
     for (const peer of this.peers) peer.abort()
-    this.options.mainSession.abort()
+    this.options.mainSession.abort(context)
     const queued = [...this.pendingTexts, ...this.deferredTaskMessages]
     this.pendingTexts = []
     this.deferredTaskMessages = []

@@ -177,6 +177,7 @@ function notification(): SubagentSettlementNotification {
     subagentId: '22222222-2222-4222-8222-222222222222',
     activationId: '33333333-3333-4333-8333-333333333333',
     name: '探索代理',
+    description: '核对调用链',
     outcome: 'completed',
     resultText: '已确认两个调用点。',
   }
@@ -195,6 +196,7 @@ function notificationFor(
       : SECOND_SUBAGENT_ID,
     activationId,
     name: '探索代理',
+    description: '核对调用链',
     outcome: 'completed',
     resultText,
   }
@@ -220,6 +222,7 @@ function turnActivation(
     subagentId,
     activationId,
     name: '探索代理',
+    description: '核对调用链',
     sequence,
     ...(delivered.has(activationId)
       ? { outcome: 'completed' as const, settlement: 'delivered' as const }

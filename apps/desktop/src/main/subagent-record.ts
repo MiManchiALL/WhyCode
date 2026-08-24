@@ -4,6 +4,7 @@ import {
   type StopReason,
   type SubagentActivation,
   type SubagentContinueRequest,
+  type SubagentListEntry,
   type SubagentLaunchRequest,
   type SubagentManifest,
   type SubagentOutcome,
@@ -50,6 +51,18 @@ export function completeSubagentManifest(
   return { ...manifest, updatedAt: endedAt, activations }
 }
 
+export function markSubagentSettlementDelivered(
+  manifest: SubagentManifest,
+  activationId: string,
+): SubagentManifest {
+  const index = manifest.activations.findIndex((item) => item.id === activationId)
+  const activation = manifest.activations[index]
+  if (!activation || activation.settlement === 'delivered') return manifest
+  const activations = [...manifest.activations]
+  activations[index] = { ...activation, settlement: 'delivered' }
+  return { ...manifest, activations }
+}
+
 export function subagentSettlement(
   manifest: SubagentManifest,
   activation: SubagentActivation,
@@ -63,6 +76,7 @@ export function subagentSettlement(
     subagentId: manifest.id,
     activationId: activation.id,
     name: manifest.definition.name,
+    description: manifest.taskDescription,
     outcome: activation.outcome,
     resultText: activation.resultText,
     ...(activation.engagedPlanId ? { engagedPlanId: activation.engagedPlanId } : {}),
@@ -75,15 +89,24 @@ export function subagentSummary(manifest: SubagentManifest): SubagentSummary {
     id: manifest.id,
     parentSessionId: manifest.parentSessionId,
     name: manifest.definition.name,
-    description: manifest.definition.description,
+    description: manifest.taskDescription,
     profile: manifest.definition.profile,
     status: activation.outcome ?? 'running',
     activationCount: manifest.activations.length,
-    currentPrompt: activation.promptPreview,
     createdAt: manifest.createdAt,
     updatedAt: manifest.updatedAt,
     startedAt: activation.startedAt,
     ...(activation.endedAt ? { endedAt: activation.endedAt } : {}),
+  }
+}
+
+export function subagentListEntry(manifest: SubagentManifest): SubagentListEntry {
+  const activation = manifest.activations.at(-1)!
+  return {
+    subagentId: manifest.id,
+    agentId: manifest.definition.id,
+    description: manifest.taskDescription,
+    status: activation.outcome ?? 'running',
   }
 }
 

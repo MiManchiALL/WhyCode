@@ -9,7 +9,10 @@ import { CLEARED_MESSAGE } from '../context/microcompact.ts'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
-import { isTurnAbortedMessage } from '../session/interruption.ts'
+import {
+  createTurnAbortedMessage,
+  isTurnAbortedMessage,
+} from '../session/interruption.ts'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/ask-user-question/index.ts'
 import { LIST_DIR_TOOL_NAME } from '../tools/list-glob/index.ts'
 import {
@@ -55,6 +58,39 @@ describe('用户中断后的新回合', () => {
     const retained = events.findIndex((event) => event.type === 'step-output-retained')
     const discarded = events.findIndex((event) => event.type === 'step-discarded')
     assert.ok(retained >= 0 && retained < discarded)
+  })
+
+  it('只在停止实际取消未完成子代理时持久保留精简摘要', async () => {
+    const events: CoreEvent[] = []
+    let call = 0
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => call++ === 0
+        ? abortableTextStep(options.abortSignal, '正在等待子代理')
+        : finalStep('处理新的用户消息。'),
+    })
+    const session = createMemorySession(model, undefined, (event) => events.push(event))
+
+    const running = session.handleUserMessage('启动两个子代理')
+    await waitFor(() => events.some((event) => event.type === 'text-delta'))
+    session.abort({
+      interruptedSubagents: [{
+        subagentId: '22222222-2222-4222-8222-222222222222',
+        description: '核对 Core 实现',
+      }],
+    })
+    assert.equal(await running, 'aborted')
+    assert.equal(await session.handleUserMessage('改做新的任务'), 'completed')
+
+    const prompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    assert.match(prompt, /whycode-turn-aborted version=\\?"2/)
+    assert.match(prompt, /cancelled-subagents/)
+    assert.match(prompt, /22222222-2222-4222-8222-222222222222/)
+    assert.match(prompt, /核对 Core 实现/)
+    assert.match(prompt, /不再后台运行，也不会自动唤醒/)
+  })
+
+  it('普通用户停止不生成子代理摘要块', () => {
+    assert.doesNotMatch(JSON.stringify(createTurnAbortedMessage()), /cancelled-subagents/)
   })
 
   it('首个模型输出前停止后可原位编辑，活动模型历史回滚并只执行新文本', async () => {

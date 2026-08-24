@@ -7,8 +7,9 @@ import {
 } from '../providers/catalog.ts'
 import type { ViewEvent } from '../session/view-events.ts'
 
-export const SUBAGENT_SCHEMA_VERSION = 1
+export const SUBAGENT_SCHEMA_VERSION = 2
 export const MAX_CONCURRENT_SUBAGENTS_PER_PARENT = 8
+export const MAX_SUBAGENT_DESCRIPTION_CHARS = 120
 export const MAX_SUBAGENT_PROMPT_CHARS = 64_000
 export const MAX_SUBAGENT_PROMPT_PREVIEW_CHARS = 2_000
 
@@ -34,11 +35,16 @@ export const subagentSettlementStateSchema = z.enum(['pending', 'delivered'])
 const idSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
 const toolNameSchema = z.string().regex(/^[A-Z][A-Za-z0-9]*$/)
+export const subagentTaskDescriptionSchema = z.string()
+  .trim()
+  .min(1)
+  .max(MAX_SUBAGENT_DESCRIPTION_CHARS)
 
 export const subagentTurnActivationSchema = z.object({
   subagentId: idSchema,
   activationId: idSchema,
   name: z.string().min(1).max(64),
+  description: subagentTaskDescriptionSchema,
   sequence: z.number().int().positive(),
   outcome: subagentOutcomeSchema.optional(),
   settlement: subagentSettlementStateSchema.optional(),
@@ -95,6 +101,7 @@ export const subagentManifestSchema = z.object({
   parentSessionId: idSchema,
   createdByTurnId: z.string().min(1),
   createdByToolCallId: z.string().min(1),
+  taskDescription: subagentTaskDescriptionSchema,
   definition: subagentDefinitionSnapshotSchema,
   modelId: z.string().min(1),
   reasoningEffort: z.enum(['default', ...REASONING_EFFORT_LEVELS]),
@@ -138,7 +145,6 @@ export interface SubagentSummary {
   profile: SubagentProfile
   status: SubagentStatus
   activationCount: number
-  currentPrompt: string
   createdAt: string
   updatedAt: string
   startedAt: string
@@ -174,6 +180,7 @@ export interface SubagentPermissionSnapshot {
 
 export interface SubagentLaunchRequest {
   definition: SubagentDefinitionSnapshot
+  taskDescription: string
   prompt: string
   parentTurnId: string
   parentToolCallId: string
@@ -192,7 +199,16 @@ export interface SubagentLaunchResult {
   ok: boolean
   subagentId?: string
   name?: string
+  description?: string
   error?: string
+}
+
+/** 提供给父模型的最小发现投影；不暴露 prompt、结果或 transcript。 */
+export interface SubagentListEntry {
+  subagentId: string
+  agentId: string
+  description: string
+  status: SubagentStatus
 }
 
 export interface SubagentSettlementNotification {
@@ -201,6 +217,7 @@ export interface SubagentSettlementNotification {
   subagentId: string
   activationId: string
   name: string
+  description: string
   outcome: SubagentOutcome
   resultText: string
   engagedPlanId?: string

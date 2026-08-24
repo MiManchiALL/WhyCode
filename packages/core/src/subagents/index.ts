@@ -15,12 +15,14 @@ export {
 } from './turn-context.ts'
 export {
   createSubagentTools,
+  LIST_SUBAGENTS_TOOL_NAME,
   SEND_SUBAGENT_MESSAGE_TOOL_NAME,
   SUBAGENT_TOOL_NAME,
   type SubagentToolHost,
 } from './tools.ts'
 export {
   MAX_CONCURRENT_SUBAGENTS_PER_PARENT,
+  MAX_SUBAGENT_DESCRIPTION_CHARS,
   MAX_SUBAGENT_PROMPT_CHARS,
   MAX_SUBAGENT_PROMPT_PREVIEW_CHARS,
   SUBAGENT_SCHEMA_VERSION,
@@ -32,6 +34,7 @@ export {
   subagentProfileSchema,
   subagentSettlementStateSchema,
   subagentStatusSchema,
+  subagentTaskDescriptionSchema,
   subagentTurnActivationSchema,
   subagentTurnStateSchema,
   type SubagentActivation,
@@ -43,6 +46,7 @@ export {
   type SubagentEventEnvelope,
   type SubagentLaunchRequest,
   type SubagentLaunchResult,
+  type SubagentListEntry,
   type SubagentManifest,
   type SubagentModelSnapshot,
   type SubagentOutcome,

@@ -47,6 +47,7 @@ import {
   createTurnAbortedConsumedMessage,
   createTurnAbortedMessage,
   findPendingTurnAbortedIndex,
+  type TurnInterruptionContext,
 } from '../session/interruption.ts'
 import {
   createImageUserMessage,
@@ -326,6 +327,7 @@ export class AgentSession {
   private opAbort: AbortController | null = null
   /** 稳定 step 已结束后的持久化窗口不回滚结果，但停止请求会阻止队列自动接续。 */
   private abortRequestedDuringFinalization = false
+  private turnInterruptionContext: TurnInterruptionContext | null = null
   /** 手动压缩进行中（此间用户消息排队，压缩后接续） */
   private compacting = false
   /** token 计量基线（最后一次 API usage）；改写历史后置 null 全量重估 */
@@ -1033,7 +1035,12 @@ export class AgentSession {
   }
 
   /** 用户点「停止」：中止当前 turn 或压缩 */
-  abort(): void {
+  abort(context?: TurnInterruptionContext): void {
+    if (context?.interruptedSubagents.length && (this.running || this.activeTurn)) {
+      this.turnInterruptionContext = {
+        interruptedSubagents: context.interruptedSubagents.map((subagent) => ({ ...subagent })),
+      }
+    }
     if (this.opAbort) this.opAbort.abort('user-cancel')
     else if (this.running) this.abortRequestedDuringFinalization = true
     this.discardCurrentTurnSubagentNotifications()
@@ -1256,6 +1263,7 @@ export class AgentSession {
   ): Promise<StopReason> {
     const { emit } = this.options
     this.abortRequestedDuringFinalization = false
+    this.turnInterruptionContext = null
     this.activeSubagentTurnState = null
     this.deliveredSubagentActivations.clear()
     const turnId = crypto.randomUUID()
@@ -1276,6 +1284,7 @@ export class AgentSession {
       this.opAbort = null
       this.running = false
       this.activeSubagentTurnState = null
+      this.turnInterruptionContext = null
       this.skillTurn.clear()
       emit({
         type: 'error',
@@ -1351,6 +1360,7 @@ export class AgentSession {
       this.activeSubagentTurnState = null
       this.skillTurn.clear()
       this.abortRequestedDuringFinalization = false
+      this.turnInterruptionContext = null
       emit({
         type: 'error',
         message: error instanceof Error ? error.message : String(error),
@@ -1548,7 +1558,9 @@ export class AgentSession {
       const interruptedState = planExecutionEngaged
         ? this.taskPlan?.interrupt('user-cancel') ?? null
         : null
-      const markers: ModelMessage[] = [createTurnAbortedMessage()]
+      const markers: ModelMessage[] = [
+        createTurnAbortedMessage('user-cancel', this.turnInterruptionContext ?? undefined),
+      ]
       if (interruptedState) {
         const taskContext = createTaskContextMessage(interruptedState)
         if (taskContext) markers.push(taskContext)
@@ -1562,6 +1574,7 @@ export class AgentSession {
     this.activeTurn = null
     this.opAbort = null
     this.activeSubagentTurnState = null
+    this.turnInterruptionContext = null
     this.deliveredSubagentActivations.clear()
 
     this.emitContextUsage()

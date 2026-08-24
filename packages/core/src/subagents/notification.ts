@@ -3,7 +3,7 @@ import { unicodeSafePrefix } from '../text.ts'
 import type { SubagentSettlementNotification } from './types.ts'
 
 const MAX_RESULT_CHARS = 48_000
-export const SUBAGENT_SETTLEMENT_OPEN = '<subagent-settlement version="1">'
+export const SUBAGENT_SETTLEMENT_OPEN = '<subagent-settlement version="2">'
 export const SUBAGENT_SETTLEMENT_CLOSE = '</subagent-settlement>'
 
 export function createSubagentSettlementMessage(
@@ -14,6 +14,7 @@ export function createSubagentSettlementMessage(
     subagent_id: notification.subagentId,
     activation_id: notification.activationId,
     name: notification.name,
+    description: notification.description,
     outcome: notification.outcome,
     result: unicodeSafePrefix(notification.resultText, MAX_RESULT_CHARS),
     result_truncated: notification.resultText.length > MAX_RESULT_CHARS,

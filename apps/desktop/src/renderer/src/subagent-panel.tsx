@@ -132,7 +132,7 @@ function SubagentList({
                     </span>
                   </span>
                   <span className="mt-0.5 block truncate wc-type-caption text-[var(--wc-muted)]">
-                    {subagent.currentPrompt}
+                    {subagent.description}
                   </span>
                 </span>
               </button>

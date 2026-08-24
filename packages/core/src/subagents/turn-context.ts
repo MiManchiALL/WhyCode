@@ -17,6 +17,7 @@ export function createSubagentTurnStateMessage(state: SubagentTurnState): ModelM
       subagent_id: activation.subagentId,
       activation_id: activation.activationId,
       name: activation.name,
+      description: activation.description,
       sequence: activation.sequence,
       status: activation.outcome ?? 'running',
       ...(activation.settlement ? { settlement: activation.settlement } : {}),
@@ -26,7 +27,7 @@ export function createSubagentTurnStateMessage(state: SubagentTurnState): ModelM
     role: 'user',
     content: [
       '<system-reminder>',
-      '<whycode-subagent-turn-state version="1">',
+      '<whycode-subagent-turn-state version="2">',
       serializePayload(payload),
       '这是 WhyCode 生成的当前父 turn 状态，不是用户输入。终态结果由独立 settlement 消息交付。remaining 大于 0 时，把已到结果作为阶段进展，继续不重叠工作；若无事可做，用一次简短说明结束当前响应并等待，不要重复播报或给出最终结论。remaining 为 0 只表示子代理等待条件已满足；重新评估父任务，仍需工作或核验时继续，任务本身完成后再综合结果并最终答复。',
       '</whycode-subagent-turn-state>',

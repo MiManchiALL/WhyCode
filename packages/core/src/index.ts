@@ -266,6 +266,11 @@ export type {
 } from './consensus/types.ts'
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
+export type {
+  TurnInterruptedSubagent,
+  TurnInterruptionContext,
+  TurnInterruptionReason,
+} from './session/interruption.ts'
 export { validateSessionId } from './session/metadata.ts'
 export { terminateProcessTree } from './tools/run-command/process-termination.ts'
 export {

@@ -909,9 +909,17 @@ async function handleCommand(
       return handleEditUserMessageCommand(runtime, command)
     case 'abort': {
       // 中断时把所有挂起的审批一并拒绝，避免 run 永久卡在 await 上
+      const subagentAbort = runtime.sessionId
+        ? subagents.beginParentAbort(runtime.sessionId)
+        : null
       await Promise.all([
-        runtime.abort(),
-        runtime.sessionId ? subagents.abortParent(runtime.sessionId) : Promise.resolve(),
+        runtime.abort(
+          'user',
+          subagentAbort?.interruptedSubagents.length
+            ? { interruptedSubagents: subagentAbort.interruptedSubagents }
+            : undefined,
+        ),
+        subagentAbort?.done ?? Promise.resolve(),
       ])
       break
     }
