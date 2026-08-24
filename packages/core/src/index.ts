@@ -98,6 +98,10 @@ export {
   type CustomSystemPromptSnapshot,
 } from './prompts/custom-system.ts'
 export { BUILTIN_TOOLS } from './tools/registry.ts'
+export {
+  createRunCommandTool,
+  RUN_COMMAND_TOOL_NAME,
+} from './tools/run-command/index.ts'
 export * from './subagents/index.ts'
 export {
   SkillCatalogService,
@@ -155,8 +159,7 @@ export {
 } from './tools/render-office/index.ts'
 export {
   CommandSessionManager,
-  createBackgroundCommandTools,
-  START_COMMAND_TOOL_NAME,
+  createCommandTools,
   LIST_COMMANDS_TOOL_NAME,
   GET_COMMAND_OUTPUT_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,

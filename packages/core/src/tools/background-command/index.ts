@@ -1,13 +1,15 @@
 import { resolve } from 'node:path'
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tool.ts'
-import { BASH_TOOL_NAME, scanCommandPaths } from '../run-command/index.ts'
+import {
+  createRunCommandTool,
+  RUN_COMMAND_TOOL_NAME,
+} from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
-import type { CommandTaskSnapshot } from './types.ts'
+import type { CommandOutputChunk, CommandTaskSnapshot } from './types.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
-  START_COMMAND_TOOL_NAME,
   STOP_COMMAND_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from './constants.ts'
@@ -29,79 +31,75 @@ function taskSummary(task: CommandTaskSnapshot): string {
 }
 
 function terminalTaskResult(
-  completed: Awaited<ReturnType<CommandSessionManager['waitForTerminal']>>,
+  completed: CommandOutputChunk,
 ) {
   return {
     data:
       `${taskSummary(completed.task)}\n\n` +
-      `命令输出（最多保留末尾 ${64 * 1024} 字符）：\n${completed.output || '（无输出）'}`,
+      `命令输出（最多保留末尾 ${64 * 1024} 字节）：\n${completed.output || '（无输出）'}`,
     isError: completed.task.status !== 'completed',
   }
 }
 
-/** 为当前 Main 会话绑定后台命令工具；任务 ID 不能跨会话访问。 */
-export function createBackgroundCommandTools(
+export interface CommandTools {
+  runCommand: ToolDefinition
+  taskTools: ToolDefinition[]
+}
+
+/** 为普通会话装配统一命令入口与会话隔离的后台任务控制工具。 */
+export function createCommandTools(
   manager: CommandSessionManager,
   sessionId: string,
-): ToolDefinition[] {
-  return [
-    buildTool({
-      name: START_COMMAND_TOOL_NAME,
-      description: '启动长命令；默认等待终态，持久服务才显式脱离',
-      prompt:
-        `启动确实需要长时间运行的命令。安装、构建、测试和其它有限任务保持 detach=false（默认），工具会等待终态、流式返回输出，然后当前任务自动继续；模型不得用文字承诺稍后回来。普通短命令继续使用 ${BASH_TOOL_NAME}。` +
-        `只有开发服务器、watch 或明确需要跨回合 stdin 的持久进程才设 detach=true；此时返回任务 ID 后，用 ${GET_COMMAND_OUTPUT_TOOL_NAME} 增量读取，需要输入时用 ${WRITE_COMMAND_INPUT_TOOL_NAME}，结束时用 ${STOP_COMMAND_TOOL_NAME}。` +
-        '显式脱离的命令在切换对话后继续运行；进入 completed/failed 终态时，应用会把内部任务通知送回所属 Main 并自动续轮。不要用 Sleep 或高频轮询等待完成；只有需要查看中间进度时才读取输出。应用退出时终止，重启只保留日志和终态，不重连进程。命令的延迟文件副作用不能自动回滚。' +
-        '这是管道而非完整 TTY，不适合 vim 等全屏交互程序。',
-      inputSchema: z.object({
-        command: z.string().min(1).describe('要执行的命令'),
-        cwd: z.string().optional().describe('工作目录（绝对路径），默认项目目录'),
-        timeoutMs: z.number().int().min(1000).max(86_400_000).optional().describe('可选超时毫秒数；省略则运行到自行结束、停止或应用退出'),
-        detach: z.boolean().optional().describe('仅持久服务/watch 设 true；有限任务省略或设 false并等待终态'),
-      }),
-      isReadOnly: false,
-      kind: 'execute',
-      extractPaths: (input) => [
-        ...(input.cwd ? [input.cwd] : []),
-        ...scanCommandPaths(input.command),
-      ],
-      async execute(input, ctx) {
-        const task = await manager.start({
-          sessionId,
-          command: input.command,
-          cwd: resolve(ctx.projectDir, input.cwd ?? '.'),
-          timeoutMs: input.timeoutMs,
-        })
-        if (!input.detach) {
-          const completed = await manager.waitForTerminal(
-            sessionId,
-            task.id,
-            ctx.abortSignal,
-            ctx.onProgress,
-          )
-          return terminalTaskResult(completed)
-        }
-        const handoff = await manager.armTerminalNotification(
+): CommandTools {
+  const runCommand = createRunCommandTool({
+    async startInBackground(input, ctx) {
+      const { wakeOnCompletion, ...command } = input
+      const task = await manager.start({
+        sessionId,
+        command: command.command,
+        cwd: resolve(ctx.projectDir, command.cwd ?? '.'),
+        timeoutMs: command.timeoutMs,
+      })
+      if (task.status !== 'running') {
+        const offset = Math.max(0, task.outputBytes - 64 * 1024)
+        return terminalTaskResult(await manager.readOutput(
           sessionId,
           task.id,
-          ctx.engagedPlanId,
-        )
-        if (!handoff.armed) {
-          return terminalTaskResult(await manager.waitForTerminal(
-            sessionId,
-            task.id,
-            ctx.abortSignal,
-            ctx.onProgress,
-          ))
-        }
+          offset,
+          64 * 1024,
+        ))
+      }
+      if (wakeOnCompletion !== true) {
         return {
           data:
-            `${taskSummary(handoff.task)}\n\n` +
-            '该持久进程已脱离当前工具调用。进入 completed/failed 终态后，应用会自动通知并唤醒所属 Main；需要中间进度或交互时再使用 GetCommandOutput/WriteCommandInput。',
+            `${taskSummary(task)}\n\n` +
+            `该命令已转入后台，不会在终态自动通知你；需要查看进度或交互时使用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}。`,
           isError: false,
         }
-      },
-    }),
+      }
+      const handoff = await manager.armTerminalNotification(
+        sessionId,
+        task.id,
+        ctx.engagedPlanId,
+      )
+      if (!handoff.armed) {
+        const offset = Math.max(0, handoff.task.outputBytes - 64 * 1024)
+        return terminalTaskResult(await manager.readOutput(
+          sessionId,
+          task.id,
+          offset,
+          64 * 1024,
+        ))
+      }
+      return {
+        data:
+          `${taskSummary(handoff.task)}\n\n` +
+          `该命令已由 ${RUN_COMMAND_TOOL_NAME} 转入后台。自然进入 completed/failed 终态后，应用会通知你并自动继续；需要中间进度或交互时再使用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}。`,
+        isError: false,
+      }
+    },
+  })
+  const taskTools: ToolDefinition[] = [
     buildTool({
       name: LIST_COMMANDS_TOOL_NAME,
       description: '列出当前会话的后台命令',
@@ -126,7 +124,7 @@ export function createBackgroundCommandTools(
       prompt:
         '按字节偏移增量读取后台命令日志，并返回最新状态、nextOffset 与是否还有更多。运行中暂无新输出时可用 waitMs 等待，避免高频轮询。',
       inputSchema: z.object({
-        taskId: z.string().uuid().describe(`${START_COMMAND_TOOL_NAME} 返回的任务 ID`),
+        taskId: z.string().uuid().describe(`${RUN_COMMAND_TOOL_NAME} 后台模式返回的任务 ID`),
         offset: z.number().int().nonnegative().optional().describe('从该字节偏移开始，首次省略或传 0；后续使用上次 nextOffset'),
         maxBytes: z.number().int().min(1024).max(65_536).optional().describe('本次最多读取字节数，默认 32768'),
         waitMs: z.number().int().min(0).max(30_000).optional().describe('没有新输出且仍在运行时最多等待多久，默认不等待'),
@@ -183,13 +181,13 @@ export function createBackgroundCommandTools(
       },
     }),
   ]
+  return { runCommand, taskTools }
 }
 
 export { CommandSessionManager } from './manager.ts'
 export {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
-  START_COMMAND_TOOL_NAME,
   STOP_COMMAND_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from './constants.ts'

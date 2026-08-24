@@ -5,11 +5,12 @@ import { dirname, join } from 'node:path'
 import {
   AgentSession,
   type BackgroundTaskState,
+  BUILTIN_TOOLS,
   cleanupUnreferencedAttachments,
   compactVisibleCoreEvent,
   CommandSessionManager,
   ConsensusCoordinator,
-  createBackgroundCommandTools,
+  createCommandTools,
   createAuxiliaryImageAnalyzer,
   createBuildOfficeArtifactTool,
   createInspectOfficeTool,
@@ -32,6 +33,7 @@ import {
   type PdfAttachment,
   type ProviderConfig,
   type ReasoningEffortSelection,
+  RUN_COMMAND_TOOL_NAME,
   type SessionJournal,
   SkillCatalogService,
   SubagentDefinitionCatalogService,
@@ -416,7 +418,7 @@ let runtimeRegistry!: SessionRuntimeRegistry
 let sessionSidebarState: SessionSidebarStateStore
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
-/** detached 命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
+/** 后台命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
 let backgroundTaskWakeups: BackgroundTaskWakeQueue | null = null
 /** 子代理终态的持久化唤醒队列；完整结果由子会话保存，队列只持有有界通知。 */
 let subagentWakeups: SessionNotificationWakeQueue<SubagentSettlementNotification> | null = null
@@ -764,6 +766,10 @@ async function createMainAgentSession(
     },
   })
   try {
+    const commandTools = createCommandTools(commandSessions, recorder.sessionId)
+    const baseTools = BUILTIN_TOOLS.map((tool) =>
+      tool.name === RUN_COMMAND_TOOL_NAME ? commandTools.runCommand : tool,
+    )
     const next = new AgentSession({
       model,
       providerConfig,
@@ -781,6 +787,7 @@ async function createMainAgentSession(
         },
       },
       customSystemPrompt: recorder.customSystemPrompt,
+      baseTools,
       sessionRecorder: recorder,
       mcpRuntime,
       skillCatalog: skills,
@@ -788,7 +795,7 @@ async function createMainAgentSession(
       mainTools: [
         createBuildOfficeArtifactTool(officeArtifactRunner),
         createInspectOfficeTool(officeProcessor),
-        ...createBackgroundCommandTools(commandSessions, recorder.sessionId),
+        ...commandTools.taskTools,
         ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
         ...createSessionWebPageTools(recorder),
@@ -2505,7 +2512,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   commandSessions = new CommandSessionManager(
     join(app.getPath('userData'), 'command-tasks'),
     {
-      onDetachedTaskTerminal: (notification) =>
+      onBackgroundTaskTerminal: (notification) =>
         backgroundTaskWakeups?.enqueue(notification),
       onBackgroundTasksChanged: broadcastBackgroundTasks,
     },

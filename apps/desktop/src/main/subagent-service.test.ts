@@ -131,7 +131,6 @@ describe('子代理激活生命周期', () => {
     assert.match(request, /ReadFile/)
     assert.doesNotMatch(request, /AskUserQuestion/)
     assert.doesNotMatch(request, /RunCommand/)
-    assert.doesNotMatch(request, /StartCommand/)
     assert.doesNotMatch(request, /SendSubagentMessage/)
     await fixture.service.close()
   })

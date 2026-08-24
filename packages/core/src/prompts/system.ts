@@ -11,11 +11,10 @@ import {
 } from '../tasks/tools.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
-  START_COMMAND_TOOL_NAME,
   STOP_COMMAND_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from '../tools/background-command/constants.ts'
-import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
+import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
 import type { SubagentDefinitionCatalogSnapshot } from '../subagents/types.ts'
 
@@ -86,7 +85,7 @@ function toolUsageSection(
   const hasTool = (name: string) => availableTools === undefined || availableTools.includes(name)
   const hasWriteTools = ['WriteFile', 'EditFile'].some(hasTool)
   const hasLifecycleTools = ['DeleteFile', 'MoveFile'].some(hasTool)
-  const hasRunCommand = hasTool(BASH_TOOL_NAME)
+  const hasRunCommand = hasTool(RUN_COMMAND_TOOL_NAME)
   return [
     '# 工具使用',
     '- 修改或评价代码前先读取相关文件和调用点，基于现有实现判断，不凭猜测。',
@@ -97,7 +96,7 @@ function toolUsageSection(
       : []),
     ...(hasLifecycleTools
       ? [hasRunCommand
-          ? `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${BASH_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`
+          ? `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${RUN_COMMAND_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`
           : '- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile。']
       : []),
     ...(scratchAvailable
@@ -107,7 +106,7 @@ function toolUsageSection(
     '- 这些文字只是阶段性进度；全部工具结束后再交付完整、自包含的最终回答，不用“见上文”或前序进度代替最终结果。',
     ...(backgroundCommandsAvailable
       ? [
-          `- 普通短命令使用 ${BASH_TOOL_NAME}。长安装、构建和测试使用 ${START_COMMAND_TOOL_NAME} 的默认等待模式，命令终态后当前任务会自动继续，不能先用文字承诺“后台完成后再验证”便结束。只有开发服务器、watch 或跨回合 stdin 的持久进程才设 detach=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理；脱离任务进入 completed/failed 后，应用会用 <task-notification> 自动续轮，不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
+          `- 终端命令统一使用 ${RUN_COMMAND_TOOL_NAME}。普通命令以及长安装、构建和测试保持前台等待，长任务设置足够的 timeoutMs，终态后当前任务会自动继续；不能先用文字承诺“后台完成后再验证”便结束。只有必须脱离当前工具步骤、跨回合继续运行的进程才设 runInBackground=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理。若你需要在任务自然完成或失败后收到通知并自动继续，再设 wakeOnCompletion=true；否则后台任务不会主动唤醒你。已登记续轮的任务不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
         ]
       : []),
     ...(hasWriteTools || hasLifecycleTools || hasRunCommand

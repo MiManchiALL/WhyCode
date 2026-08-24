@@ -68,7 +68,7 @@ export interface RuntimeSnapshot {
   eventSequence: number
   /** 来源证明与分支提示；不授予源会话运行时、任务或权限的所有权。 */
   forkOrigin: SessionForkOrigin | null
-  /** 当前会话由 StartCommand 管理的长耗时任务；日志仍留在宿主，不进入 Renderer。 */
+  /** 当前会话由 RunCommand 转入后台的任务；日志仍留在宿主，不进入 Renderer。 */
   backgroundTasks: BackgroundTaskState | null
   /** 当前父会话拥有的子代理摘要；完整 transcript 通过独立 IPC 按需读取。 */
   subagents: SubagentState | null

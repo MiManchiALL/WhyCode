@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { resolve } from 'node:path'
 import { describe, it } from 'node:test'
-import { runCommandTool, scanCommandPaths } from './index.ts'
+import { validateToolInput } from '../tool.ts'
+import { createRunCommandTool, runCommandTool, scanCommandPaths } from './index.ts'
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
 
@@ -74,6 +75,42 @@ describe('RunCommand 模型契约', () => {
   it('把非交付复杂脚本定向到会话临时工作区', () => {
     assert.match(runCommandTool.prompt, /非交付脚本.*临时工作区/)
     assert.match(runCommandTool.prompt, /需要交付的项目脚本写入项目目录/)
+  })
+
+  it('只在普通会话的统一入口暴露后台参数', async () => {
+    const foreground = await validateToolInput(runCommandTool, {
+      command: 'echo ok',
+      runInBackground: true,
+      wakeOnCompletion: true,
+    })
+    assert.equal(foreground.success, true)
+    if (foreground.success) {
+      assert.equal('runInBackground' in foreground.value, false)
+      assert.equal('wakeOnCompletion' in foreground.value, false)
+    }
+
+    const mainTool = createRunCommandTool({
+      async startInBackground() {
+        return { data: 'started', isError: false }
+      },
+    })
+    const main = await validateToolInput(mainTool, {
+      command: 'echo ok',
+      runInBackground: true,
+      wakeOnCompletion: true,
+    })
+    assert.equal(main.success, true)
+    if (main.success) {
+      assert.equal(main.value.runInBackground, true)
+      assert.equal(main.value.wakeOnCompletion, true)
+    }
+
+    const invalid = await validateToolInput(mainTool, {
+      command: 'echo ok',
+      wakeOnCompletion: true,
+    })
+    assert.equal(invalid.success, false)
+    if (!invalid.success) assert.match(invalid.error.message, /runInBackground=true/)
   })
 })
 

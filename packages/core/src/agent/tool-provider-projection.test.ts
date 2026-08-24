@@ -4,7 +4,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import type { ModelEntry } from '../providers/registry.ts'
-import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
+import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import { buildTool } from '../tools/tool.ts'
 import { WRITE_FILE_TOOL_NAME } from '../tools/write-edit/index.ts'
 import { AgentSession } from './session.ts'
@@ -16,7 +16,7 @@ describe('工具 Provider 投影', () => {
         const names = new Set((options.tools ?? []).flatMap((tool) =>
           tool.type === 'function' ? [tool.name] : []))
         assert.equal(names.has(WRITE_FILE_TOOL_NAME), true)
-        assert.equal(names.has(BASH_TOOL_NAME), true)
+        assert.equal(names.has(RUN_COMMAND_TOOL_NAME), true)
         return finalStep()
       },
     })

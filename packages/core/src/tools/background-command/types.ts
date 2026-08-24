@@ -58,7 +58,7 @@ export interface BackgroundTaskSummary {
   startedAt: string
   endedAt?: string
   detail?: string
-  /** 只表示任务终态会触发所属 Main 续轮，不改变任务类型。 */
+  /** 只表示任务终态会触发所属模型会话续轮，不改变任务类型。 */
   wakeOnCompletion: boolean
 }
 

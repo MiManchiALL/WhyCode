@@ -48,8 +48,12 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /进度文字后在同一步继续调用工具/)
     assert.match(prompt, /全部工具结束后再交付完整、自包含的最终回答/)
     assert.match(prompt, /不用“见上文”或前序进度代替最终结果/)
-    assert.match(prompt, /长安装、构建和测试使用 StartCommand 的默认等待模式/)
-    assert.match(prompt, /开发服务器、watch.*detach=true/)
+    assert.match(prompt, /终端命令统一使用 RunCommand/)
+    assert.match(prompt, /长安装、构建和测试保持前台等待.*timeoutMs/)
+    assert.match(prompt, /必须脱离当前工具步骤、跨回合继续运行.*runInBackground=true/)
+    assert.match(prompt, /若你需要在任务自然完成或失败后收到通知并自动继续.*wakeOnCompletion=true/)
+    assert.match(prompt, /否则后台任务不会主动唤醒你/)
+    assert.doesNotMatch(prompt, /detach=true/)
     assert.match(prompt, /用户只要求分析、解释、审查或诊断时，只给出分析/)
     assert.match(prompt, /不要原样重试，也不要因一次失败放弃仍可行的方案/)
     assert.match(prompt, /不要额外扩展功能、顺手重构或添加配置/)
@@ -108,7 +112,8 @@ describe('通用 Agent 提示约束', () => {
       discussion: { agentId: 'B', scratchDir: 'C:\\scratch' },
     })
 
-    assert.doesNotMatch(prompt, /StartCommand/)
+    assert.doesNotMatch(prompt, /runInBackground/)
+    assert.doesNotMatch(prompt, /wakeOnCompletion/)
     assert.doesNotMatch(prompt, /GetCommandOutput/)
     assert.match(prompt, /未限定在临时工作区内的命令会被工具层拒绝/)
   })
@@ -210,7 +215,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /自动交付终态/)
     assert.match(prompt, /CreateTaskPlan/)
     assert.doesNotMatch(prompt, /<available_subagents>/)
-    assert.doesNotMatch(prompt, /AskUserQuestion|SendSubagentMessage|StartCommand/)
+    assert.doesNotMatch(prompt, /AskUserQuestion|SendSubagentMessage/)
     assert.doesNotMatch(prompt, /EditFile|WriteFile|DeleteFile|MoveFile|RunCommand/)
   })
 

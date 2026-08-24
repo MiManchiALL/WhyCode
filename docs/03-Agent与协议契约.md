@@ -179,8 +179,7 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
 | `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元 |
 | `MoveFile` | 单个普通文件源/目标；目标必须不存在，不递归目录、不静默覆盖 |
-| `RunCommand` | 非交互短命令，无 stdin，不扫描工作区、不建文件检查点 |
-| `StartCommand` | 长构建/测试或显式 detach 的 server/watch；默认等待终态并流式返回 |
+| `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与命令任务工具管理，只有显式 `wakeOnCompletion=true` 才登记终态续轮；不扫描工作区、不建文件检查点 |
 | `ListCommands` | 列出当前会话可见命令任务 |
 | `GetCommandOutput` | 增量读取命令输出 |
 | `WriteCommandInput` | 给仍存活命令写 stdin；按 execute 权限处理 |
@@ -197,7 +196,7 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 
 ### 3.3 后台任务通知
 
-只有显式 detach 的命令在离开当前工具步骤后继续。自然终态由宿主向所属 Main 注入：
+只有 `RunCommand(runInBackground=true)` 在离开当前工具步骤后继续，任务状态由宿主投影到 Header 后台任务菜单。`wakeOnCompletion` 默认 `false`，且设为 `true` 时必须同时启用后台模式；只有这类已登记任务在自然进入 `completed` 或 `failed` 后，才向所属模型会话注入：
 
 ```text
 <task-notification source="background-command" version="1">

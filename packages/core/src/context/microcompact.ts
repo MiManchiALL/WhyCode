@@ -3,13 +3,12 @@ import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME } from '../tools/list-glob/index.ts'
 import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
 import { WRITE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '../tools/write-edit/index.ts'
-import { BASH_TOOL_NAME } from '../tools/run-command/index.ts'
+import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
 import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
-  START_COMMAND_TOOL_NAME,
   STOP_COMMAND_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from '../tools/background-command/constants.ts'
@@ -30,8 +29,7 @@ const COMPACTABLE_TOOLS = new Set([
   EDIT_FILE_TOOL_NAME,
   DELETE_FILE_TOOL_NAME,
   MOVE_FILE_TOOL_NAME,
-  BASH_TOOL_NAME,
-  START_COMMAND_TOOL_NAME,
+  RUN_COMMAND_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
   GET_COMMAND_OUTPUT_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,

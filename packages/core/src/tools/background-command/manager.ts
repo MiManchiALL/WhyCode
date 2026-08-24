@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
 import { resolve } from 'node:path'
-import { unicodeSafePrefix, unicodeSafeSuffix } from '../../text.ts'
+import { unicodeSafePrefix } from '../../text.ts'
 import { terminateProcessTree } from '../run-command/process-termination.ts'
 import {
   type BackgroundTaskState,
@@ -19,7 +19,6 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const MAX_RUNNING_COMMANDS = 16
 const MAX_RETAINED_TERMINAL_TASKS = 16
 const DEFAULT_READ_BYTES = 32 * 1024
-const MAX_WAIT_RESULT_CHARS = 64 * 1024
 const PROCESS_CLOSE_GRACE_MS = 2_000
 const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
 const MAX_BACKGROUND_TASK_DETAIL_CHARS = 240
@@ -39,7 +38,7 @@ interface LiveCommandTask extends PersistedCommandTask {
   terminalNotificationSent?: boolean
 }
 
-export interface StartCommandInput {
+export interface CommandStartInput {
   sessionId: string
   command: string
   cwd: string
@@ -47,7 +46,7 @@ export interface StartCommandInput {
 }
 
 export interface CommandSessionManagerOptions {
-  onDetachedTaskTerminal?: (notification: CommandTaskTerminalNotification) => void
+  onBackgroundTaskTerminal?: (notification: CommandTaskTerminalNotification) => void
   onBackgroundTasksChanged?: (state: BackgroundTaskState) => void
 }
 
@@ -60,13 +59,13 @@ export class CommandSessionManager {
   private readonly storage: CommandTaskStorage
   private initialized = false
   private initialization: Promise<void> | null = null
-  private readonly onDetachedTaskTerminal?: CommandSessionManagerOptions['onDetachedTaskTerminal']
+  private readonly onBackgroundTaskTerminal?: CommandSessionManagerOptions['onBackgroundTaskTerminal']
   private readonly onBackgroundTasksChanged?: CommandSessionManagerOptions['onBackgroundTasksChanged']
   private backgroundTaskRevision = 0
 
   constructor(storageRoot: string, options: CommandSessionManagerOptions = {}) {
     this.storage = new CommandTaskStorage(storageRoot)
-    this.onDetachedTaskTerminal = options.onDetachedTaskTerminal
+    this.onBackgroundTaskTerminal = options.onBackgroundTaskTerminal
     this.onBackgroundTasksChanged = options.onBackgroundTasksChanged
   }
 
@@ -100,7 +99,7 @@ export class CommandSessionManager {
     for (const sessionId of sessionIds) await this.pruneTerminalTasks(sessionId)
   }
 
-  async start(input: StartCommandInput): Promise<CommandTaskSnapshot> {
+  async start(input: CommandStartInput): Promise<CommandTaskSnapshot> {
     await this.initialize()
     if (this.runningTasks().length >= MAX_RUNNING_COMMANDS) {
       throw new Error(`后台命令已达到全局上限 ${MAX_RUNNING_COMMANDS}，请先停止不再需要的任务`)
@@ -207,50 +206,7 @@ export class CommandSessionManager {
   }
 
   /**
-   * 有限命令属于当前工具调用：持续等待、流式回传日志，并在进程终态后才把控制权
-   * 交还模型。用户停止 turn 时同步终止进程树，避免留下“稍后继续”的孤儿承诺。
-   */
-  async waitForTerminal(
-    sessionId: string,
-    taskId: string,
-    abortSignal: AbortSignal,
-    onOutput?: (output: string) => void,
-  ): Promise<CommandOutputChunk> {
-    const task = await this.getOwnedTask(sessionId, taskId)
-    let offset = 0
-    let retainedOutput = ''
-    while (true) {
-      if (abortSignal.aborted && task.status === 'running') {
-        await this.stopTask(task, 'user')
-        throw new Error('操作已取消')
-      }
-      if (task.status === 'running' && offset >= task.outputBytes) {
-        await this.waitForChange(task, 30_000, abortSignal)
-        continue
-      }
-      await task.writeTail
-      const chunk = await this.storage.readOutput(task, offset, DEFAULT_READ_BYTES)
-      offset = chunk.nextOffset
-      if (chunk.output) {
-        onOutput?.(chunk.output)
-        retainedOutput = unicodeSafeSuffix(
-          `${retainedOutput}${chunk.output}`,
-          MAX_WAIT_RESULT_CHARS,
-        )
-      }
-      if (task.status !== 'running' && offset >= task.outputBytes) {
-        return {
-          task: this.snapshot(task),
-          output: retainedOutput,
-          offset: 0,
-          nextOffset: offset,
-        }
-      }
-    }
-  }
-
-  /**
-   * StartCommand 即将把仍在运行的进程交还给模型时才武装通知。若进程已经结束，
+   * RunCommand 即将把仍在运行的进程交给后台任务管理器时才武装通知。若进程已经结束，
    * 调用方仍在当前工具结果中读取终态，避免同一结果同时走工具返回和后台续轮。
    */
   async armTerminalNotification(
@@ -457,13 +413,13 @@ export class CommandSessionManager {
     if (
       task.terminalNotificationSent
       || !task.terminalNotification
-      || !this.onDetachedTaskTerminal
+      || !this.onBackgroundTaskTerminal
       || (task.status !== 'completed' && task.status !== 'failed')
       || task.stopReason === 'user'
       || task.stopReason === 'shutdown'
     ) return
     task.terminalNotificationSent = true
-    this.onDetachedTaskTerminal({
+    this.onBackgroundTaskTerminal({
       task: this.snapshot(task),
       ...(task.terminalNotification.engagedPlanId
         ? { engagedPlanId: task.terminalNotification.engagedPlanId }

@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
-  createBackgroundCommandTools,
-  START_COMMAND_TOOL_NAME,
+  createCommandTools,
   STOP_COMMAND_TOOL_NAME,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from './index.ts'
+import { RUN_COMMAND_TOOL_NAME } from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
 import type {
   BackgroundTaskState,
@@ -170,58 +170,33 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('等待中的有限命令随当前 turn 取消并终止进程树', async () => {
-    const fixture = await createFixture(
-      `process.stdout.write('ready\\n'); setInterval(() => {}, 1000)`,
-    )
-    const manager = new CommandSessionManager(fixture.storage)
-    try {
-      const started = await manager.start({
-        sessionId: SESSION_A,
-        command: fixture.command,
-        cwd: fixture.cwd,
-      })
-      const controller = new AbortController()
-      await assert.rejects(
-        manager.waitForTerminal(SESSION_A, started.id, controller.signal, () => {
-          controller.abort()
-        }),
-        /操作已取消/,
-      )
-      assert.equal((await manager.list(SESSION_A))[0]?.status, 'stopped')
-    } finally {
-      await manager.shutdown()
-      await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    }
-  })
-
-  it('只给普通 Main 暴露五个职责清晰的会话工具', () => {
+  it('只给普通会话暴露五个职责清晰的命令工具', () => {
     const manager = new CommandSessionManager('unused')
-    const tools = createBackgroundCommandTools(manager, SESSION_A)
+    const commands = createCommandTools(manager, SESSION_A)
+    const tools = [commands.runCommand, ...commands.taskTools]
     assert.equal(new Set(tools.map((tool) => tool.name)).size, 5)
-    const start = tools.find((tool) => tool.name === START_COMMAND_TOOL_NAME)
+    const run = tools.find((tool) => tool.name === RUN_COMMAND_TOOL_NAME)
     const writeInput = tools.find((tool) => tool.name === WRITE_COMMAND_INPUT_TOOL_NAME)
     const stop = tools.find((tool) => tool.name === STOP_COMMAND_TOOL_NAME)
-    assert.ok(start)
+    assert.ok(run)
     assert.ok(writeInput)
     assert.ok(stop)
-    assert.equal(start.kind, 'execute')
+    assert.equal(run.kind, 'execute')
     assert.equal(writeInput.kind, 'execute')
     assert.equal(stop.kind, 'control')
-    assert.equal(start.checkpointScope, undefined)
+    assert.equal(run.checkpointScope, undefined)
+    assert.match(run.prompt, /runInBackground=true/)
   })
 
-  it('有限命令等待终态并回传进度，只有显式 detach 的持久进程立即返回', async () => {
+  it('前台命令等待终态且不登记任务，只有显式后台进程进入任务管理器', async () => {
     const finite = await createFixture(
       `process.stdout.write('installing\\n'); setTimeout(() => process.stdout.write('ready\\n'), 50)`,
     )
     const manager = new CommandSessionManager(finite.storage)
     try {
-      const start = createBackgroundCommandTools(manager, SESSION_A)
-        .find((tool) => tool.name === START_COMMAND_TOOL_NAME)
-      assert.ok(start)
+      const run = createCommandTools(manager, SESSION_A).runCommand
       let progress = ''
-      const result = await start.execute({
+      const result = await run.execute({
         command: finite.command,
         cwd: finite.cwd,
       }, {
@@ -231,27 +206,32 @@ describe('后台命令会话', () => {
         onProgress: (output) => { progress += output },
       })
       assert.equal(result.isError, false)
-      assert.match(result.data, /状态：completed/)
       assert.match(result.data, /ready/)
       assert.match(progress, /installing/)
       assert.match(progress, /ready/)
+      assert.equal((await manager.list(SESSION_A)).length, 0)
 
       const persistentFixture = await createFixture(
         `process.stdout.write('server ready\\n'); setInterval(() => {}, 1000)`,
       )
       try {
-        const detached = await start.execute({
+        const background = await run.execute({
           command: persistentFixture.command,
           cwd: persistentFixture.cwd,
-          detach: true,
+          runInBackground: true,
         }, {
           projectDir: persistentFixture.cwd,
           additionalDirs: [],
           abortSignal: new AbortController().signal,
         })
-        assert.match(detached.data, /状态：running/)
+        assert.match(background.data, /状态：running/)
+        assert.match(background.data, /不会在终态自动通知你/)
         const running = (await manager.list(SESSION_A)).find((item) => item.status === 'running')
         assert.ok(running)
+        const projected = (await manager.backgroundTasks(SESSION_A)).tasks
+          .find((task) => task.id === running.id)
+        assert.equal(projected?.status, 'running')
+        assert.equal(projected?.wakeOnCompletion, false)
         const ready = await manager.readOutput(SESSION_A, running.id, 0, 32_768, 5_000)
         assert.match(ready.output, /server ready/)
         await manager.stop(SESSION_A, running.id)
@@ -269,29 +249,45 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('显式脱离任务自然结束后只通知一次，用户停止不产生续轮通知', async () => {
+  it('只有显式登记的后台任务自然结束后通知一次，用户停止不通知', async () => {
     const fixture = await createFixture(
       `process.stdout.write('started\\n'); setTimeout(() => process.stdout.write('done\\n'), 100)`,
     )
     const notifications: CommandTaskTerminalNotification[] = []
     const manager = new CommandSessionManager(fixture.storage, {
-      onDetachedTaskTerminal: (notification) => notifications.push(notification),
+      onBackgroundTaskTerminal: (notification) => notifications.push(notification),
     })
     try {
-      const start = createBackgroundCommandTools(manager, SESSION_A)
-        .find((tool) => tool.name === START_COMMAND_TOOL_NAME)
-      assert.ok(start)
-      const detached = await start.execute({
+      const run = createCommandTools(manager, SESSION_A).runCommand
+      const silent = await run.execute({
         command: fixture.command,
         cwd: fixture.cwd,
-        detach: true,
+        runInBackground: true,
+      }, {
+        projectDir: fixture.cwd,
+        additionalDirs: [],
+        abortSignal: new AbortController().signal,
+      })
+      assert.match(silent.data, /不会在终态自动通知你/)
+      const silentTask = (await manager.list(SESSION_A)).find((task) =>
+        task.command === fixture.command,
+      )
+      assert.ok(silentTask)
+      assert.equal((await waitForTerminal(manager, silentTask.id)).task.status, 'completed')
+      assert.equal(notifications.length, 0)
+
+      const notifying = await run.execute({
+        command: fixture.command,
+        cwd: fixture.cwd,
+        runInBackground: true,
+        wakeOnCompletion: true,
       }, {
         projectDir: fixture.cwd,
         additionalDirs: [],
         abortSignal: new AbortController().signal,
         engagedPlanId: '33333333-3333-4333-8333-333333333333',
       })
-      assert.match(detached.data, /自动通知并唤醒所属 Main/)
+      assert.match(notifying.data, /通知你并自动继续/)
       const running = (await manager.list(SESSION_A)).find((task) => task.status === 'running')
       assert.ok(running)
       assert.equal(
@@ -317,10 +313,11 @@ describe('后台命令会话', () => {
       // 用一个足够长但最终会自行退出的进程验证“用户停止”分支，避免测试失败时留下孤儿进程。
       const persistent = await createFixture(`setTimeout(() => {}, 2_000)`)
       try {
-        const stoppedStart = await start.execute({
+        const stoppedStart = await run.execute({
           command: persistent.command,
           cwd: persistent.cwd,
-          detach: true,
+          runInBackground: true,
+          wakeOnCompletion: true,
         }, {
           projectDir: persistent.cwd,
           additionalDirs: [],
@@ -346,7 +343,7 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('投影全部长命令，并独立标记终态续轮能力', async () => {
+  it('投影全部后台命令，并独立标记终态续轮能力', async () => {
     const fixture = await createFixture(`setTimeout(() => {}, 2_000)`)
     const states: BackgroundTaskState[] = []
     const manager = new CommandSessionManager(fixture.storage, {
@@ -354,42 +351,42 @@ describe('后台命令会话', () => {
     })
     let reopened: CommandSessionManager | null = null
     try {
-      const foreground = await manager.start({
+      const ordinary = await manager.start({
         sessionId: SESSION_A,
         command: fixture.command,
         cwd: fixture.cwd,
       })
-      const foregroundRunning = await manager.backgroundTasks(SESSION_A)
-      assert.equal(foregroundRunning.tasks.length, 1)
-      assert.equal(foregroundRunning.tasks[0]?.id, foreground.id)
-      assert.equal(foregroundRunning.tasks[0]?.status, 'running')
-      assert.equal(foregroundRunning.tasks[0]?.wakeOnCompletion, false)
-      await manager.stop(SESSION_A, foreground.id)
-      const foregroundStopped = await manager.backgroundTasks(SESSION_A)
-      assert.equal(foregroundStopped.tasks[0]?.status, 'stopped')
-      assert.equal(foregroundStopped.tasks[0]?.wakeOnCompletion, false)
+      const ordinaryRunning = await manager.backgroundTasks(SESSION_A)
+      assert.equal(ordinaryRunning.tasks.length, 1)
+      assert.equal(ordinaryRunning.tasks[0]?.id, ordinary.id)
+      assert.equal(ordinaryRunning.tasks[0]?.status, 'running')
+      assert.equal(ordinaryRunning.tasks[0]?.wakeOnCompletion, false)
+      await manager.stop(SESSION_A, ordinary.id)
+      const ordinaryStopped = await manager.backgroundTasks(SESSION_A)
+      assert.equal(ordinaryStopped.tasks[0]?.status, 'stopped')
+      assert.equal(ordinaryStopped.tasks[0]?.wakeOnCompletion, false)
 
-      const detached = await manager.start({
+      const notifying = await manager.start({
         sessionId: SESSION_A,
         command: fixture.command,
         cwd: fixture.cwd,
       })
       const beforeHandoff = await manager.backgroundTasks(SESSION_A)
-      assert.equal(beforeHandoff.tasks.find((task) => task.id === detached.id)?.wakeOnCompletion, false)
-      const handoff = await manager.armTerminalNotification(SESSION_A, detached.id)
+      assert.equal(beforeHandoff.tasks.find((task) => task.id === notifying.id)?.wakeOnCompletion, false)
+      const handoff = await manager.armTerminalNotification(SESSION_A, notifying.id)
       assert.equal(handoff.armed, true)
       const running = await manager.backgroundTasks(SESSION_A)
-      const detachedRunning = running.tasks.find((task) => task.id === detached.id)
+      const notifyingRunning = running.tasks.find((task) => task.id === notifying.id)
       assert.equal(running.tasks.length, 2)
-      assert.equal(detachedRunning?.kind, 'command')
-      assert.equal(detachedRunning?.status, 'running')
-      assert.equal(detachedRunning?.wakeOnCompletion, true)
+      assert.equal(notifyingRunning?.kind, 'command')
+      assert.equal(notifyingRunning?.status, 'running')
+      assert.equal(notifyingRunning?.wakeOnCompletion, true)
 
-      await manager.stop(SESSION_A, detached.id)
+      await manager.stop(SESSION_A, notifying.id)
       const stopped = await manager.backgroundTasks(SESSION_A)
-      const detachedStopped = stopped.tasks.find((task) => task.id === detached.id)
-      assert.equal(detachedStopped?.status, 'stopped')
-      assert.equal(detachedStopped?.wakeOnCompletion, false)
+      const notifyingStopped = stopped.tasks.find((task) => task.id === notifying.id)
+      assert.equal(notifyingStopped?.status, 'stopped')
+      assert.equal(notifyingStopped?.wakeOnCompletion, false)
       assert.ok(states.length >= 5)
       assert.ok(states.at(-1)!.revision > states[0]!.revision)
 
@@ -397,8 +394,8 @@ describe('后台命令会话', () => {
       reopened = new CommandSessionManager(fixture.storage)
       const restored = await reopened.backgroundTasks(SESSION_A)
       assert.equal(restored.tasks.length, 2)
-      assert.equal(restored.tasks.find((task) => task.id === foreground.id)?.status, 'stopped')
-      assert.equal(restored.tasks.find((task) => task.id === detached.id)?.status, 'stopped')
+      assert.equal(restored.tasks.find((task) => task.id === ordinary.id)?.status, 'stopped')
+      assert.equal(restored.tasks.find((task) => task.id === notifying.id)?.status, 'stopped')
     } finally {
       await reopened?.shutdown()
       await manager.shutdown()
