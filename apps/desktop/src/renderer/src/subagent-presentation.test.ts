@@ -33,6 +33,7 @@ describe('子代理状态展示', () => {
       profile: 'general',
       status: 'completed',
       activationCount: 1,
+      completedDurationMs: 1_000,
       createdAt: '2026-08-21T00:00:00.000Z',
       updatedAt: '2026-08-21T00:00:01.000Z',
       startedAt: '2026-08-21T00:00:00.000Z',

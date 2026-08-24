@@ -93,11 +93,22 @@ export function subagentSummary(manifest: SubagentManifest): SubagentSummary {
     profile: manifest.definition.profile,
     status: activation.outcome ?? 'running',
     activationCount: manifest.activations.length,
+    completedDurationMs: manifest.activations.reduce(
+      (total, item) => total + completedSubagentActivationDurationMs(item),
+      0,
+    ),
     createdAt: manifest.createdAt,
     updatedAt: manifest.updatedAt,
     startedAt: activation.startedAt,
     ...(activation.endedAt ? { endedAt: activation.endedAt } : {}),
   }
+}
+
+export function completedSubagentActivationDurationMs(
+  activation: SubagentActivation,
+): number {
+  if (!activation.endedAt) return 0
+  return Math.max(0, Date.parse(activation.endedAt) - Date.parse(activation.startedAt))
 }
 
 export function subagentListEntry(manifest: SubagentManifest): SubagentListEntry {

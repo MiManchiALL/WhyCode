@@ -30,6 +30,7 @@ import type { HostOperationScheduler } from './host-operation-scheduler.ts'
 import type { SessionScratchManager } from './session-scratch.ts'
 import { SubagentStorage } from './subagent-storage.ts'
 import {
+  completedSubagentActivationDurationMs,
   completeSubagentManifest,
   createSubagentActivation,
   markSubagentSettlementDelivered,
@@ -103,6 +104,7 @@ export class SubagentService {
   private readonly preparations = new Set<ActivationPreparation>()
   private readonly activeCounts = new Map<string, number>()
   private readonly continuationCounts = new Map<string, number>()
+  private readonly coldTranscriptLoads = new Map<string, Promise<SubagentTranscriptSnapshot>>()
   private stateRevision = 0
   private eventSequence = 0
   private closing = false
@@ -194,9 +196,33 @@ export class SubagentService {
     parentSessionId: string,
     subagentId: string,
   ): Promise<SubagentTranscriptSnapshot> {
+    const live = this.ownedActivation(parentSessionId, subagentId)
+    if (live) return this.loadTranscript(parentSessionId, subagentId, live)
+
+    const key = `${parentSessionId}:${subagentId}`
+    const existing = this.coldTranscriptLoads.get(key)
+    if (existing) return existing
+    let pending!: Promise<SubagentTranscriptSnapshot>
+    pending = this.loadTranscript(parentSessionId, subagentId, null)
+      .finally(() => {
+        if (this.coldTranscriptLoads.get(key) === pending) {
+          this.coldTranscriptLoads.delete(key)
+        }
+      })
+    this.coldTranscriptLoads.set(key, pending)
+    return pending
+  }
+
+  private async loadTranscript(
+    parentSessionId: string,
+    subagentId: string,
+    knownLive: ActiveActivation | null,
+  ): Promise<SubagentTranscriptSnapshot> {
     const manifest = await this.storage.readManifest(parentSessionId, subagentId)
-    const live = this.active.get(subagentId)
-    const journal = live?.journal ?? await this.storage.open(parentSessionId, subagentId)
+    const beforeOpen = knownLive ?? this.ownedActivation(parentSessionId, subagentId)
+    const opened = beforeOpen?.journal ?? await this.storage.open(parentSessionId, subagentId)
+    const live = beforeOpen ?? this.ownedActivation(parentSessionId, subagentId)
+    const journal = live?.journal ?? opened
     const timeline = live
       ? await live.timeline.snapshotAt(journal, () => this.eventSequence)
       : {
@@ -524,6 +550,17 @@ export class SubagentService {
         this.report(error)
         return null
       })
+      const terminalActivation = manifest?.activations.find(
+        (item) => item.id === active.activationId,
+      )
+      if (terminalActivation) {
+        this.emitChildEvent(active, {
+          type: 'work-finished',
+          durationMs: completedSubagentActivationDurationMs(terminalActivation),
+          outcome: outcome === 'completed' ? 'completed' : 'stopped',
+          forkTurnId: null,
+        }, terminalActivation.endedAt)
+      }
       await active.timeline.flush().catch((error) => this.report(error))
       await session?.dispose().catch((error) => this.report(error))
       this.release(active.parentSessionId)
@@ -567,8 +604,11 @@ export class SubagentService {
     return next
   }
 
-  private emitChildEvent(active: ActiveActivation, event: CoreEvent): void {
-    const occurredAt = new Date().toISOString()
+  private emitChildEvent(
+    active: ActiveActivation,
+    event: CoreEvent,
+    occurredAt = new Date().toISOString(),
+  ): void {
     active.timeline.capture(active.journal, event, occurredAt)
     this.options.onEvent({
       parentSessionId: active.parentSessionId,
@@ -595,6 +635,14 @@ export class SubagentService {
     } catch (error) {
       this.report(error)
     }
+  }
+
+  private ownedActivation(
+    parentSessionId: string,
+    subagentId: string,
+  ): ActiveActivation | null {
+    const active = this.active.get(subagentId)
+    return active?.parentSessionId === parentSessionId ? active : null
   }
 
   private assertAvailable(

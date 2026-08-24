@@ -97,6 +97,21 @@ describe('子代理激活生命周期', () => {
     )
     assert.equal(snapshot.subagent.activationCount, 2)
     assert.equal(snapshot.subagent.status, 'completed')
+    const finishedDurations = snapshot.viewEvents.flatMap((event) =>
+      event.type === 'core-event' && event.event.type === 'work-finished'
+        ? [event.event.durationMs]
+        : [])
+    assert.equal(finishedDurations.length, 2)
+    assert.equal(
+      snapshot.subagent.completedDurationMs,
+      finishedDurations.reduce((total, duration) => total + duration, 0),
+    )
+    const rapidSnapshots = await Promise.all(Array.from({ length: 12 }, () =>
+      fixture.service.transcript(fixture.parentJournal.sessionId, subagentId)))
+    assert.deepEqual(
+      rapidSnapshots.map((item) => item.viewEvents),
+      Array.from({ length: 12 }, () => snapshot.viewEvents),
+    )
     const transcript = await readFile(join(
       fixture.sessionsRoot,
       fixture.parentJournal.sessionId,

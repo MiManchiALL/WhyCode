@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { copyFile, lstat, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
@@ -92,7 +92,20 @@ export async function writeMetadata(
     mode: 0o600,
     flush: true,
   })
-  await rename(tempPath, path)
+  try {
+    await rename(tempPath, path)
+  } catch (error) {
+    if (!isWindowsReplaceError(error)) {
+      await rm(tempPath, { force: true }).catch(() => {})
+      throw error
+    }
+    try {
+      // metadata 是可重建缓存；Windows 不支持 rename 覆盖现有文件时直接覆写目标。
+      await copyFile(tempPath, path)
+    } finally {
+      await rm(tempPath, { force: true })
+    }
+  }
 }
 
 /** metadata 只是派生列表缓存；只在它精确对应当前 transcript 时采用。 */
@@ -204,4 +217,9 @@ async function fileIdentity(path: string): Promise<string> {
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
+}
+
+function isWindowsReplaceError(error: unknown): boolean {
+  if (process.platform !== 'win32' || !error || typeof error !== 'object') return false
+  return 'code' in error && (error.code === 'EPERM' || error.code === 'EEXIST')
 }

@@ -24,6 +24,7 @@ import {
 import { conversationSections } from './conversation-sections.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 import { ConversationView } from './conversation-view.tsx'
+import { ProcessingTime, TotalProcessingTime } from './processing-time.ts'
 import {
   isSubagentRunning,
   resolveSubagentPanelPage,
@@ -125,14 +126,20 @@ function SubagentList({
                   <SubagentStatusIcon status={subagent.status} />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center justify-between gap-2 text-xs font-medium">
-                    <span className="truncate">{subagent.name}</span>
-                    <span className="shrink-0 wc-type-tiny font-normal text-[var(--wc-faint)]">
-                      {subagentStatusLabel(subagent.status)}
-                    </span>
-                  </span>
+                  <span className="block truncate text-xs font-medium">{subagent.name}</span>
                   <span className="mt-0.5 block truncate wc-type-caption text-[var(--wc-muted)]">
                     {subagent.description}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right wc-type-tiny font-normal text-[var(--wc-faint)]">
+                  <span className="block">{subagentStatusLabel(subagent.status)}</span>
+                  <span className="mt-0.5 block">
+                    <TotalProcessingTime
+                      completedDurationMs={subagent.completedDurationMs}
+                      activeStartedAt={isSubagentRunning(subagent.status)
+                        ? Date.parse(subagent.startedAt)
+                        : null}
+                    />
                   </span>
                 </span>
               </button>
@@ -257,8 +264,13 @@ function SubagentTranscript({
           </span>
           <span className="truncate">{subagentProfileLabel(subagent.profile)}</span>
         </span>
-        <span className="ml-auto shrink-0 wc-type-caption text-[var(--wc-muted)]">
-          {subagentStatusLabel(subagent.status)}
+        <span className="ml-auto flex shrink-0 items-center gap-2 wc-type-caption text-[var(--wc-muted)]">
+          {isSubagentRunning(subagent.status) && (
+            <span className="text-[var(--wc-faint)]">
+              <ProcessingTime startedAt={Date.parse(subagent.startedAt)} />
+            </span>
+          )}
+          <span>{subagentStatusLabel(subagent.status)}</span>
         </span>
       </div>
       <ConversationView

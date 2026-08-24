@@ -145,6 +145,8 @@ export interface SubagentSummary {
   profile: SubagentProfile
   status: SubagentStatus
   activationCount: number
+  /** 已结束 activation 的累计时长；当前运行轮次由 startedAt 实时补入。 */
+  completedDurationMs: number
   createdAt: string
   updatedAt: string
   startedAt: string

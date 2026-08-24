@@ -37,6 +37,23 @@ afterEach(async () => {
 })
 
 describe('SessionStore', () => {
+  it('允许多个只读入口并发重建同一会话的派生 metadata 缓存', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\concurrent-open'),
+      modelId: 'test:model',
+    })
+    await journal.recordUserInputWithId(randomUUID(), '并发读取', true)
+    const root = storeRoots.get(store)!
+
+    const opened = await Promise.all(Array.from({ length: 12 }, () =>
+      new SessionStore(root).open(journal.sessionId)))
+
+    assert.equal(opened.length, 12)
+    assert.ok(opened.every((item) => item.sessionId === journal.sessionId))
+    assert.ok(await readMetadataCache(getSessionPaths(root, journal.sessionId), journal.sessionId))
+  })
+
   it('最新根消息编辑从根输入恢复完整 Skill 快照', async () => {
     const store = await createStore()
     const journal = await store.create({
