@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
+import { findProjectRoot } from '../project-root.ts'
 
 const PROJECT_INSTRUCTIONS_RE = /^<system-reminder>\n<whycode-project-instructions version="(sha256:[a-f0-9]{64})">\n([\s\S]*)\n<\/whycode-project-instructions>\n<\/system-reminder>$/
 const DEFAULT_MAX_CONTENT_BYTES = 32 * 1024
@@ -124,21 +125,6 @@ async function readOptionalFile(path: string): Promise<InstructionSource | null>
   } catch (error) {
     if (isNotFound(error)) return null
     throw error
-  }
-}
-
-async function findProjectRoot(projectDir: string): Promise<string> {
-  let current = projectDir
-  while (true) {
-    try {
-      await stat(join(current, '.git'))
-      return current
-    } catch (error) {
-      if (!isNotFound(error)) throw error
-    }
-    const parent = dirname(current)
-    if (parent === current) return projectDir
-    current = parent
   }
 }
 

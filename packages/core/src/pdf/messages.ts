@@ -1,5 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { COMPACT_CONTINUATION_PREFIX } from '../prompts/compact.ts'
+import { modelMessageText } from '../text.ts'
 import type { PdfAttachment } from './types.ts'
 
 const PDF_REFERENCE_CONTEXT_MAX_CHARS = 20_000
@@ -53,7 +54,7 @@ export function referencedPdfAttachmentIds(messages: readonly ModelMessage[]): S
   const ids = new Set<string>()
   for (const message of messages) {
     if (message.role !== 'user') continue
-    const text = messageText(message)
+    const text = modelMessageText(message)
     // 压缩摘要由模型生成，可能逐字复述旧引用块；权威重注入位于独立 system-reminder。
     if (text.startsWith(COMPACT_CONTINUATION_PREFIX)) continue
     let insideReferenceBlock = false
@@ -96,9 +97,4 @@ function parseReferenceId(line: string): string | null {
   } catch {
     return null
   }
-}
-
-function messageText(message: Extract<ModelMessage, { role: 'user' }>): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
 }

@@ -10,7 +10,6 @@ import { attributeValue, boundedText, elementTexts, normalizeText } from './xml.
 import {
   type WorkbookDefinedName,
   type WorkbookSheet,
-  type WorksheetCell,
   type WorksheetSummary,
 } from './xlsx-package.ts'
 import {

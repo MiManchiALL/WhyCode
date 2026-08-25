@@ -6,6 +6,8 @@
     "allowImportingTsExtensions": true,
     "lib": ["ES2023"],
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "verbatimModuleSyntax": true,

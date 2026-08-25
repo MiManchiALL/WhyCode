@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai'
+import { modelMessageText } from '../text.ts'
 import {
   MAX_USER_QUESTIONS,
   userQuestionAnswerPrefix,
@@ -83,23 +84,18 @@ export function isUserQuestionAnswer(
 
 function isUserQuestionMarker(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
-  const content = messageText(message).trim()
+  const content = modelMessageText(message).trim()
   return content.startsWith(`<system-reminder>\n${USER_QUESTION_MARKER_OPEN}\n`)
     && content.endsWith(`${USER_QUESTION_MARKER_CLOSE}\n</system-reminder>`)
 }
 
 function isRealUserMessage(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
-  return !messageText(message).trimStart().startsWith('<system-reminder>')
-}
-
-function messageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
+  return !modelMessageText(message).trimStart().startsWith('<system-reminder>')
 }
 
 function parseBinding(message: ModelMessage): UserQuestionBinding | null {
-  const content = messageText(message)
+  const content = modelMessageText(message)
   const start = content.indexOf(USER_QUESTION_MARKER_OPEN)
   if (start < 0) return null
   const body = content.slice(start + USER_QUESTION_MARKER_OPEN.length).trimStart()

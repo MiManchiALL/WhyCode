@@ -13,6 +13,7 @@ import {
   type WebPageLine,
 } from './contract.ts'
 import { pdfAttachmentSchema } from '../../pdf/types.ts'
+import { normalizeBoundedText } from '../../text.ts'
 import {
   appendWebSourceFinalResponseReminder,
   markdownWebLineCitation,
@@ -133,8 +134,8 @@ function normalizeFetchResponse(
   if (value.kind !== 'page' || !Array.isArray(value.lines)) throw invalidFetchResponse()
   const requestedUrl = normalizeWebPageUrl(value.requestedUrl)
   const finalUrl = normalizeWebPageUrl(value.finalUrl)
-  const title = normalizedText(value.title, 500, true)
-  const contentType = normalizedText(value.contentType, 200)
+  const title = normalizeBoundedText(value.title, 500, true)
+  const contentType = normalizeBoundedText(value.contentType, 200)
   const offset = normalizedInteger(value.offset, 1)
   const totalLines = normalizedInteger(value.totalLines, 0)
   const requestedOffset = request.offset ?? 1
@@ -204,7 +205,7 @@ function normalizeFindResponse(
   if (!isRecord(value) || !Array.isArray(value.matches)) throw invalidFindResponse()
   const requestedUrl = normalizeWebPageUrl(value.requestedUrl)
   const finalUrl = normalizeWebPageUrl(value.finalUrl)
-  const title = normalizedText(value.title, 500, true)
+  const title = normalizeBoundedText(value.title, 500, true)
   const totalLines = normalizedInteger(value.totalLines, 0)
   if (!requestedUrl || !finalUrl || totalLines === null || value.matches.length > request.max_results) {
     throw invalidFindResponse()
@@ -263,13 +264,6 @@ function normalizeMatch(
   return matchingLine?.text.toLowerCase().includes(pattern.toLowerCase())
     ? { lineNumber, context }
     : null
-}
-
-function normalizedText(value: unknown, maxChars: number, allowEmpty = false): string | null {
-  if (typeof value !== 'string') return null
-  const normalized = value.replace(/\s+/gu, ' ').trim()
-  if (!normalized && !allowEmpty) return null
-  return normalized.slice(0, maxChars)
 }
 
 function normalizedLine(value: unknown): string | null {

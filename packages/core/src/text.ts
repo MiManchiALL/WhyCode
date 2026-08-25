@@ -1,3 +1,21 @@
+import type { ModelMessage } from 'ai'
+
+export function modelMessageText(message: ModelMessage): string {
+  if (typeof message.content === 'string') return message.content
+  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
+}
+
+export function normalizeBoundedText(
+  value: unknown,
+  maxChars: number,
+  allowEmpty = false,
+): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.replace(/\s+/gu, ' ').trim()
+  if (!normalized && !allowEmpty) return null
+  return normalized.slice(0, maxChars)
+}
+
 export function unicodeSafePrefix(value: string, maxCodeUnits: number): string {
   let end = Math.min(value.length, maxCodeUnits)
   if (

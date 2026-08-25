@@ -1,6 +1,7 @@
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
+import { modelMessageText } from '../text.ts'
 import type {
   ContextUsageInfo,
   CoreEvent,
@@ -3199,10 +3200,6 @@ export class AgentSession {
   }
 }
 
-function modelMessageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
-}
 
 function hasDeliverableModelText(messages: ModelMessage[]): boolean {
   const text = messages.map(modelMessageText).join('\n').trim()

@@ -76,17 +76,14 @@ function rehomeCheckpointManifest(
   return {
     ...manifest,
     sessionId: targetSessionId,
-    resources: manifest.resources.map((resource) => {
-      if (resource.kind !== 'exact-file') return resource
-      return {
-        ...resource,
-        path: rebase(resource.path),
-        before: rehomeFileState(resource.before, rebase),
-        ...(resource.after
-          ? { after: rehomeFileState(resource.after, rebase) }
-          : {}),
-      }
-    }),
+    resources: manifest.resources.map((resource) => ({
+      ...resource,
+      path: rebase(resource.path),
+      before: rehomeFileState(resource.before, rebase),
+      ...(resource.after
+        ? { after: rehomeFileState(resource.after, rebase) }
+        : {}),
+    })),
   }
 }
 
@@ -109,7 +106,6 @@ function rebasePathWithin(path: string, sourceRoot: string, targetRoot: string):
 
 function collectManifestBlobs(manifest: CheckpointManifest, hashes: Set<string>): void {
   for (const resource of manifest.resources) {
-    if (resource.kind !== 'exact-file') continue
     collectStateBlob(resource.before, hashes)
     if (resource.after) collectStateBlob(resource.after, hashes)
   }

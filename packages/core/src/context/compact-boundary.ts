@@ -8,6 +8,7 @@ import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
 import { findPendingUserQuestionIndex } from '../tasks/answer-resume.ts'
 import { isCommandTaskNotificationText } from '../tools/background-command/notification.ts'
 import { isSubagentSettlementText } from '../subagents/notification.ts'
+import { modelMessageText } from '../text.ts'
 import { estimateMessageTokens } from './tokens.ts'
 
 export const COMPACT_KEEP_RECENT_TOKENS = 20_000
@@ -158,7 +159,7 @@ export function findTrailingTurnInputBatchStart(messages: readonly ModelMessage[
 
 function isPendingTurnInput(message: ModelMessage): boolean {
   return isRealUserMessage(message)
-    || (message.role === 'user' && isInternalContinuation(messageText(message)))
+    || (message.role === 'user' && isInternalContinuation(modelMessageText(message)))
 }
 
 function findRealUserAtOrAfter(
@@ -187,7 +188,7 @@ function isSafeBoundary(message: ModelMessage): boolean {
 
 function isRealUserMessage(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
-  const text = messageText(message).trimStart()
+  const text = modelMessageText(message).trimStart()
   return !text.startsWith('<system-reminder>') && !isInternalContinuation(text)
 }
 
@@ -200,9 +201,4 @@ function needsHistoryUpdate(
   completedTurnPrefixSummary: string | null,
 ): boolean {
   return messages.length > 0 || completedTurnPrefixSummary !== null
-}
-
-function messageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
 }

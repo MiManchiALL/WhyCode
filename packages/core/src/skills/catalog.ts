@@ -6,7 +6,6 @@ import { discoverSkillFiles, discoveryRoots, skillPathKey } from './discovery.ts
 import { parseSkillDocument } from './parser.ts'
 import { readBoundedSkillFile } from './read.ts'
 import {
-  SKILL_FILE_NAME,
   SKILL_MAX_DOCUMENT_BYTES,
   SKILL_MAX_SELECTIONS_PER_MESSAGE,
   skillLocatorSchema,

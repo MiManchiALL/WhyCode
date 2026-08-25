@@ -6,7 +6,6 @@ import type {
   CoreEvent,
   ContextUsageInfo,
   QueuedUserMessage,
-  SessionMetadata,
   SessionForkOrigin,
   SessionSummary,
   SubagentState,

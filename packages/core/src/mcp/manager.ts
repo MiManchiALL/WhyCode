@@ -12,7 +12,6 @@ import {
 import type {
   McpBoundTool,
   McpManagerSnapshot,
-  McpServerStatus,
 } from './manager-types.ts'
 import { McpServerConnection } from './server-connection.ts'
 

@@ -1,5 +1,4 @@
 import { Client } from '@modelcontextprotocol/sdk/client'
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import {
   getMcpBuiltinCapabilitySummary,
   type McpServerConfig,
@@ -33,7 +32,6 @@ export class McpServerConnection {
   private error?: string
   private serverInstructions?: string
   private client?: Client
-  private transport?: Transport
   private operation?: Promise<void>
   private closed = false
 
@@ -150,7 +148,6 @@ export class McpServerConnection {
     const operation = this.operation
     const client = this.client
     this.client = undefined
-    this.transport = undefined
     this.serverInstructions = undefined
     this.state = 'disconnected'
     this.revision++
@@ -184,7 +181,6 @@ export class McpServerConnection {
   private async connect(signal: AbortSignal): Promise<void> {
     const previous = this.client
     this.client = undefined
-    this.transport = undefined
     this.serverInstructions = undefined
     this.state = 'connecting'
     this.revision++
@@ -213,11 +209,9 @@ export class McpServerConnection {
       this.oauthTransportFactory,
     )
     this.client = client
-    this.transport = transport
     client.onclose = () => {
       if (this.closed || this.client !== client) return
       this.client = undefined
-      this.transport = undefined
       this.serverInstructions = undefined
       this.state = 'disconnected'
       this.error = '连接已关闭'
@@ -248,7 +242,6 @@ export class McpServerConnection {
     } catch (error) {
       if (this.client === client) {
         this.client = undefined
-        this.transport = undefined
         this.serverInstructions = undefined
         this.state = 'failed'
         this.revision++

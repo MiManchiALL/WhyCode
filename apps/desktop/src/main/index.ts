@@ -657,7 +657,6 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
           managedWorkspaces,
         )
         const recorder = runtime.journal ?? await createRuntimeJournal(
-          runtime,
           workspace,
           modelId,
           runtime.reasoningEffort,
@@ -696,7 +695,6 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
 }
 
 async function createRuntimeJournal(
-  runtime: DesktopSessionRuntime,
   workspace: WorkspaceBinding,
   modelId: string,
   reasoningEffort: ReasoningEffortSelection,

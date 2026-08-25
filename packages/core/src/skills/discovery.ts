@@ -1,6 +1,7 @@
-import { lstat, readdir, stat } from 'node:fs/promises'
+import { lstat, readdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { findProjectRoot } from '../project-root.ts'
 import type { SkillDiagnostic, SkillScope } from './types.ts'
 import { SKILL_FILE_NAME } from './types.ts'
 import { systemSkillsRoot, userSkillsRoot } from './system.ts'
@@ -127,21 +128,6 @@ async function readDirectory(
       message: `目录读取失败：${error instanceof Error ? error.message : String(error)}`,
     })
     return null
-  }
-}
-
-async function findProjectRoot(projectDir: string): Promise<string> {
-  let current = projectDir
-  while (true) {
-    try {
-      await stat(join(current, '.git'))
-      return current
-    } catch (error) {
-      if (!isNotFound(error)) throw error
-    }
-    const parent = dirname(current)
-    if (parent === current) return projectDir
-    current = parent
   }
 }
 

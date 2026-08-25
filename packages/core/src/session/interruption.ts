@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai'
+import { modelMessageText } from '../text.ts'
 
 export type TurnInterruptionReason =
   | 'user-cancel'
@@ -71,7 +72,7 @@ function serializePayload(payload: object): string {
 
 export function isTurnAbortedMessage(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
-  const content = messageText(message).trim()
+  const content = modelMessageText(message).trim()
   return content.startsWith(`<system-reminder>\n${TURN_ABORTED_MARKER_PREFIX}`)
     && content.endsWith('</whycode-turn-aborted>\n</system-reminder>')
 }
@@ -112,14 +113,9 @@ export function findPendingTurnAbortedIndex(messages: ModelMessage[]): number | 
     : markerIndex
 }
 
-function messageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
-}
-
 function isTurnAbortedConsumedMessage(message: ModelMessage): boolean {
   if (message.role !== 'user') return false
-  const content = messageText(message).trim()
+  const content = modelMessageText(message).trim()
   return content.startsWith(`<system-reminder>\n${TURN_ABORTED_CONSUMED_MARKER}\n`)
     && content.endsWith('</whycode-turn-aborted-consumed>\n</system-reminder>')
 }

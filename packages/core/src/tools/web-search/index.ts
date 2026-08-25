@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { normalizeBoundedText } from '../../text.ts'
 import { buildTool } from '../tool.ts'
 import {
   appendWebSourceFinalResponseReminder,
@@ -183,8 +184,8 @@ function normalizeQueryFailures(
   const failures: WebSearchQueryFailure[] = []
   for (const item of value) {
     if (!isRecord(item)) throw new WebSearchError('网页搜索后端返回了无效结果')
-    const query = normalizedText(item.query, WEB_SEARCH_MAX_QUERY_CHARS)
-    const message = normalizedText(item.message, 300)
+    const query = normalizeBoundedText(item.query, WEB_SEARCH_MAX_QUERY_CHARS)
+    const message = normalizeBoundedText(item.message, 300)
     if (!query || !message || !querySet.has(query) || seen.has(query)) {
       throw new WebSearchError('网页搜索后端返回了无效结果')
     }
@@ -216,12 +217,12 @@ function deduplicateResults(results: readonly WebSearchResult[]): WebSearchResul
 
 function normalizeResult(value: unknown): WebSearchResult | null {
   if (!isRecord(value)) return null
-  const title = normalizedText(value.title, WEB_SEARCH_MAX_TITLE_CHARS)
-  const snippet = normalizedText(value.snippet, WEB_SEARCH_MAX_SNIPPET_CHARS, true)
+  const title = normalizeBoundedText(value.title, WEB_SEARCH_MAX_TITLE_CHARS)
+  const snippet = normalizeBoundedText(value.snippet, WEB_SEARCH_MAX_SNIPPET_CHARS, true)
   const url = normalizedWebUrl(value.url)
   if (!title || snippet === null || !url) return null
-  const publishedDate = normalizedText(value.publishedDate, dateValueMaxChars, true)
-  const lastUpdated = normalizedText(value.lastUpdated, dateValueMaxChars, true)
+  const publishedDate = normalizeBoundedText(value.publishedDate, dateValueMaxChars, true)
+  const lastUpdated = normalizeBoundedText(value.lastUpdated, dateValueMaxChars, true)
   return {
     title,
     url,
@@ -241,17 +242,6 @@ function formatResult(result: WebSearchResult, index: number): string {
     ...(dates ? [dates] : []),
     `摘要：${result.snippet || '无摘要'}`,
   ].join('\n')
-}
-
-function normalizedText(
-  value: unknown,
-  maxChars: number,
-  allowEmpty = false,
-): string | null {
-  if (typeof value !== 'string') return null
-  const normalized = value.replace(/\s+/gu, ' ').trim()
-  if (!normalized && !allowEmpty) return null
-  return normalized.slice(0, maxChars)
 }
 
 function normalizedWebUrl(value: unknown): string | null {

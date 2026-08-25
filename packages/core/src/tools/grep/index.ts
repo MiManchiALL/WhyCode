@@ -1,8 +1,8 @@
 import { readFile, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
+import { basename, dirname, relative } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
-import { resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
+import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
 import { collectFiles, globToRegExp } from '../search/fallback.ts'
 import { runRipgrepLines } from '../search/ripgrep.ts'
 
@@ -26,16 +26,6 @@ function exclusionArgs(): string[] {
   return [...IGNORED_DIRS].flatMap((dir) => ['--glob', `!${dir}/**`])
 }
 
-function outputPath(projectDir: string, root: string, path: string): string {
-  const absolute = resolve(root, path.replace(/^\.\//, ''))
-  const projectRelative = relative(projectDir, absolute)
-  if (projectRelative && !projectRelative.startsWith('..') && !isAbsolute(projectRelative)) {
-    return projectRelative.replaceAll('\\', '/')
-  }
-  if (!projectRelative) return '.'
-  return absolute.replaceAll('\\', '/')
-}
-
 function normalizeRipgrepLine(
   line: string,
   mode: OutputMode,
@@ -43,18 +33,18 @@ function normalizeRipgrepLine(
   root: string,
 ): string {
   if (line === '--') return line
-  if (mode === 'files_with_matches') return outputPath(projectDir, root, line)
+  if (mode === 'files_with_matches') return displayToolPath(projectDir, root, line)
   if (mode === 'content') {
     const first = line.indexOf('\t')
     const second = first === -1 ? -1 : line.indexOf('\t', first + 1)
     if (first === -1 || second === -1) return line
     const path = line.slice(0, first)
     const lineNumber = line.slice(first + 1, second)
-    return `${outputPath(projectDir, root, path)}:${lineNumber}:${line.slice(second + 1)}`
+    return `${displayToolPath(projectDir, root, path)}:${lineNumber}:${line.slice(second + 1)}`
   }
   const match = line.match(/^(.*):(\d+)$/)
   if (!match) return line
-  return `${outputPath(projectDir, root, match[1]!)}:${match[2]}`
+  return `${displayToolPath(projectDir, root, match[1]!)}:${match[2]}`
 }
 
 function escapeRegExp(value: string): string {
@@ -111,7 +101,7 @@ async function fallbackSearch(options: {
       }
       if (matchingLines.length === 0) continue
 
-      const display = outputPath(options.projectDir, options.root, rootRelative)
+      const display = displayToolPath(options.projectDir, options.root, rootRelative)
       if (options.mode === 'files_with_matches') {
         results.push(display)
       } else if (options.mode === 'count') {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import {
   ArrowLeft,

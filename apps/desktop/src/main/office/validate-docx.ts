@@ -1,4 +1,3 @@
-import type { OfficeArchive } from './archive.ts'
 import { readXml } from './archive.ts'
 import type { ValidationState } from './validation-state.ts'
 import { validationIssue } from './validation-state.ts'

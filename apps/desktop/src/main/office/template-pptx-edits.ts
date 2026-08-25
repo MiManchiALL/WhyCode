@@ -58,7 +58,7 @@ export function imageRelationshipId(xml: string, shapeId: string): string {
 export function replaceImageRelationshipId(xml: string, shapeId: string, id: string): string {
   return replaceObjectById(xml, shapeId, (block) => {
     let matches = 0
-    const output = block.replace(/<a:blip\b([^>]*)/iu, (whole, attributes: string) => {
+    const output = block.replace(/<a:blip\b([^>]*)/iu, (_match, attributes: string) => {
       matches++
       return `<a:blip${setXmlAttribute(attributes, 'r:embed', id)}`
     })

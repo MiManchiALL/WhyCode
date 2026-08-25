@@ -1,4 +1,5 @@
 import type { AssistantModelMessage, ModelMessage } from 'ai'
+import { modelMessageText } from '../text.ts'
 
 const RESERVED_HOST_PREFIXES = [
   '<system-reminder',
@@ -66,7 +67,7 @@ export function sanitizeAssistantControlOutput(messages: ModelMessage[]): {
 } {
   const text = messages
     .filter((message) => message.role === 'assistant')
-    .map(messageText)
+    .map(modelMessageText)
     .join('\n')
     .trimStart()
   if (!isReservedHostOutput(text)) {
@@ -93,9 +94,4 @@ function isReservedHostOutput(text: string): boolean {
   return SUBAGENT_ID_FIELD.test(text)
     && ACTIVATION_ID_FIELD.test(text)
     && TERMINAL_OUTCOME_FIELD.test(text)
-}
-
-function messageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
 }

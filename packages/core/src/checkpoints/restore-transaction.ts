@@ -38,7 +38,6 @@ export class ResourceRestoreTransaction {
   private async captureSafety(): Promise<void> {
     for (const manifest of this.manifests) {
       for (const resource of manifest.resources) {
-        if (resource.kind !== 'exact-file') throw unsupportedLegacyCheckpoint()
         const key = pathKey(resource.path)
         if (!this.safety.has(key)) {
           this.safety.set(key, await captureFileState(resource.path, this.blobDir))
@@ -52,7 +51,6 @@ export class ResourceRestoreTransaction {
     const seen = new Set<string>()
     for (const manifest of [...this.manifests].reverse()) {
       for (const resource of [...manifest.resources].reverse()) {
-        if (resource.kind !== 'exact-file') throw unsupportedLegacyCheckpoint()
         if (!resource.after) throw new Error('精确文件检查点损坏')
         const key = pathKey(resource.path)
         if (seen.has(key)) continue
@@ -67,7 +65,6 @@ export class ResourceRestoreTransaction {
   private async applyReverse(): Promise<void> {
     for (const manifest of [...this.manifests].reverse()) {
       for (const resource of [...manifest.resources].reverse()) {
-        if (resource.kind !== 'exact-file') throw unsupportedLegacyCheckpoint()
         await restoreFileState(resource.before, this.blobDir)
       }
     }
@@ -77,7 +74,6 @@ export class ResourceRestoreTransaction {
     const expected = new Map<string, FileState>()
     for (const manifest of [...this.manifests].reverse()) {
       for (const resource of manifest.resources) {
-        if (resource.kind !== 'exact-file') throw unsupportedLegacyCheckpoint()
         expected.set(pathKey(resource.path), resource.before)
       }
     }
@@ -87,8 +83,4 @@ export class ResourceRestoreTransaction {
       }
     }
   }
-}
-
-function unsupportedLegacyCheckpoint(): Error {
-  return new Error('旧版 RunCommand 检查点已不支持回滚')
 }

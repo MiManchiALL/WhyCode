@@ -17,26 +17,12 @@ export const fileStateSchema = z.object({
 
 export type FileState = z.infer<typeof fileStateSchema>
 
-const exactFileResourceSchema = z.object({
+export const checkpointResourceSchema = z.object({
   kind: z.literal('exact-file'),
   path: z.string().min(1),
   before: fileStateSchema,
   after: fileStateSchema.optional(),
 })
-
-/** 仅用于读取既有 v1 清单并把它当作非完整边界；新代码不再创建或恢复树快照。 */
-const legacyTreeResourceSchema = z.object({
-  kind: z.literal('tree'),
-  root: z.string().min(1),
-  beforeHash: z.string().min(1),
-  afterHash: z.string().min(1).optional(),
-  changedPaths: z.array(z.string()).optional(),
-})
-
-export const checkpointResourceSchema = z.discriminatedUnion('kind', [
-  exactFileResourceSchema,
-  legacyTreeResourceSchema,
-])
 
 export type CheckpointResource = z.infer<typeof checkpointResourceSchema>
 

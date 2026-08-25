@@ -1,8 +1,8 @@
 import { readdir } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { relative } from 'node:path'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
-import { resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
+import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
 import { collectFiles, globToRegExp } from '../search/fallback.ts'
 import { runRipgrepLines } from '../search/ripgrep.ts'
 
@@ -47,16 +47,6 @@ function exclusionArgs(): string[] {
   return [...IGNORED_DIRS].flatMap((dir) => ['--glob', `!${dir}/**`])
 }
 
-function displayPath(projectDir: string, root: string, path: string): string {
-  const absolute = resolve(root, path.replace(/^\.\//, ''))
-  const projectRelative = relative(projectDir, absolute)
-  if (projectRelative && !projectRelative.startsWith('..') && !isAbsolute(projectRelative)) {
-    return projectRelative.replaceAll('\\', '/')
-  }
-  if (!projectRelative) return '.'
-  return absolute.replaceAll('\\', '/')
-}
-
 export const globTool = buildTool({
   name: GLOB_TOOL_NAME,
   description: '按模式快速查找文件名',
@@ -86,7 +76,7 @@ export const globTool = buildTool({
     let matches: string[]
     let scanTruncated = false
     if (rg) {
-      matches = rg.lines.map((path) => displayPath(ctx.projectDir, root, path))
+      matches = rg.lines.map((path) => displayToolPath(ctx.projectDir, root, path))
       scanTruncated = rg.truncated
     } else {
       const collected = await collectFiles(root, ctx.abortSignal)
@@ -94,7 +84,7 @@ export const globTool = buildTool({
       matches = collected.files
         .map((path) => ({
           relative: relative(root, path).replaceAll('\\', '/'),
-          display: displayPath(ctx.projectDir, root, relative(root, path)),
+          display: displayToolPath(ctx.projectDir, root, relative(root, path)),
         }))
         .filter(({ relative: path }) => matcher.test(path))
         .map(({ display }) => display)

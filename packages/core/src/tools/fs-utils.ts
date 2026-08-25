@@ -1,4 +1,4 @@
-import { resolve, isAbsolute } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { findOutsideBoundary } from '../permissions/path-safety.ts'
 import type { ToolContext } from './tool.ts'
 
@@ -12,6 +12,15 @@ export function resolveAllowed(ctx: ToolContext, inputPath: string): string {
     throw new Error(`路径超出允许范围：${inputPath}`)
   }
   return isAbsolute(inputPath) ? resolve(inputPath) : resolve(ctx.projectDir, inputPath)
+}
+
+export function displayToolPath(projectDir: string, root: string, path: string): string {
+  const absolute = resolve(root, path.replace(/^\.\//, ''))
+  const projectRelative = relative(projectDir, absolute)
+  if (projectRelative && !projectRelative.startsWith('..') && !isAbsolute(projectRelative)) {
+    return projectRelative.replaceAll('\\', '/')
+  }
+  return projectRelative ? absolute.replaceAll('\\', '/') : '.'
 }
 
 /** 目录遍历时跳过的项（避免扫进依赖和版本库） */

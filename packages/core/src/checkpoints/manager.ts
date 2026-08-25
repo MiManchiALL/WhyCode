@@ -129,7 +129,6 @@ export class CheckpointManager {
       if (!manifest || manifest.status !== 'pending') return null
       const resources: CheckpointResource[] = []
       for (const resource of manifest.resources) {
-        if (resource.kind !== 'exact-file') throw new Error('旧版树检查点不能继续收尾')
         const after = await captureFileState(resource.path, this.store.blobDir)
         if (!sameFileState(resource.before, after)) resources.push({ ...resource, after })
       }
@@ -138,7 +137,7 @@ export class CheckpointManager {
         return null
       }
       const ready: CheckpointManifest = { ...manifest, resources, status: 'ready' }
-      if (ready.resources.some((resource) => resource.kind !== 'exact-file' || !resource.after)) {
+      if (ready.resources.some((resource) => !resource.after)) {
         throw new Error('检查点 after 状态不完整')
       }
       await this.store.put(ready)
