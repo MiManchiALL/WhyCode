@@ -174,7 +174,7 @@ export function AppSidebar(props: AppSidebarProps) {
       >
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
-          <AlertDialog.Content className="wc-dialog-card wc-paper-card wc-paper-rose wc-paper-shape-c wc-paper-pad fixed left-1/2 top-1/2 z-[91] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 outline-none">
+          <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">
             <div className="mb-3 flex size-9 items-center justify-center rounded-xl bg-[#eee2dc] text-[var(--wc-danger)]">
               <CircleAlert size={18} />
             </div>

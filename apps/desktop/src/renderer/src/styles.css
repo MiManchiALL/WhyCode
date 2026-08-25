@@ -54,9 +54,6 @@
   --wc-status-settled: #788078;
   --wc-shadow: 0 18px 48px rgb(33 35 31 / 8%);
   --wc-soft-shadow: 0 8px 24px rgb(33 35 31 / 7%);
-  --wc-paper-padding: 1.375rem;
-  --wc-paper-compact-padding: 1.125rem;
-  --wc-paper-gap: 1.25rem;
   --wc-menu-radius: 0.95rem;
   --wc-menu-shadow: 0 2px 7px rgb(33 35 31 / 6%), 0 14px 34px rgb(33 35 31 / 9%);
   --wc-conversation-navigator-gutter: 4.75rem;
@@ -96,25 +93,10 @@ button:not(:disabled),
   background: #d8e2d8;
 }
 
-.wc-sticker {
-  border: 1px solid var(--wc-line-strong);
-  border-radius: 18px 16px 20px 15px;
-  background: var(--wc-surface-strong);
-  box-shadow: 2px 3px 0 rgb(43 46 41 / 6%), var(--wc-soft-shadow);
-}
-
-.wc-sticker-soft {
-  border: 1px solid var(--wc-line);
-  border-radius: 16px 18px 15px 19px;
-  background: var(--wc-surface);
-  box-shadow: 1px 2px 0 rgb(43 46 41 / 5%);
-}
-
 .wc-user-message-bubble {
   border: 1px solid rgb(48 50 45 / 8%);
-  border-radius: 18px 15px 19px 16px;
+  border-radius: var(--wc-menu-radius);
   background: #eeeeeb;
-  box-shadow: 1px 2px 0 rgb(43 46 41 / 4%);
 }
 
 .wc-user-message-editor:focus-within {
@@ -135,58 +117,13 @@ button:not(:disabled),
   box-shadow: 0 1px 2px rgb(33 35 31 / 4%);
 }
 
-.wc-paper-card {
-  --wc-paper-fill: rgb(255 255 253 / 97%);
-  --wc-paper-radius: 240px 18px 210px 15px / 15px 215px 18px 240px;
-  --wc-paper-border: #1e1e1e;
-  --wc-paper-shadow: rgb(84 89 82 / 18%);
-  --wc-paper-angle: -1.5deg;
-  position: relative;
-  isolation: isolate;
-  border: 2.5px solid transparent;
-  border-radius: var(--wc-paper-radius);
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
-.wc-paper-card:not(.wc-dialog-card) {
-  top: 0;
-  transition: top 200ms ease;
-}
-
-.wc-paper-card::before {
-  position: absolute;
-  z-index: -1;
-  inset: -2.5px;
-  border: 2.5px solid var(--wc-paper-border);
-  border-radius: var(--wc-paper-radius);
-  background: var(--wc-paper-fill);
-  box-shadow: 4px 5px 0 var(--wc-paper-shadow), 0 10px 24px rgb(67 72 65 / 7%);
-  content: '';
-  pointer-events: none;
-  transform: rotate(var(--wc-paper-angle));
-  transition: transform 200ms ease, box-shadow 200ms ease;
-}
-
-/* 参考手账页：只变换纸张轮廓；正文用相对定位轻抬，避免合成层重采样字体。 */
-@media (hover: hover) and (pointer: fine) {
-  .wc-paper-card:not(.wc-dialog-card):is(
-    :hover,
-    [data-wc-pointer-inside],
-    :has([data-state='open'][aria-haspopup='menu'])
-  ) {
-    top: -4px;
-  }
-
-  .wc-paper-card:not(.wc-dialog-card):is(
-    :hover,
-    [data-wc-pointer-inside],
-    :has([data-state='open'][aria-haspopup='menu'])
-  )::before {
-    box-shadow: 6px 8px 0 var(--wc-paper-shadow), 0 14px 30px rgb(67 72 65 / 9%);
-    transform: rotate(0deg) scale(1.02);
-  }
+.wc-menu-surface,
+.wc-menu-content {
+  min-width: 0;
+  border: 1px solid rgb(48 50 45 / 15%);
+  border-radius: var(--wc-menu-radius);
+  background: rgb(255 255 253 / 96%);
+  color: var(--wc-ink);
 }
 
 .wc-plan-active-dot {
@@ -248,72 +185,6 @@ button:not(:disabled),
   animation: wc-thinking-heart-pulse 5.6s ease-in-out infinite;
 }
 
-.wc-paper-shape-a {
-  --wc-paper-radius: 240px 18px 210px 15px / 15px 215px 18px 240px;
-  --wc-paper-angle: -1.5deg;
-}
-
-.wc-paper-shape-b {
-  --wc-paper-radius: 18px 230px 15px 215px / 225px 15px 235px 18px;
-  --wc-paper-angle: 1.2deg;
-}
-
-.wc-paper-shape-c {
-  --wc-paper-radius: 220px 15px 235px 18px / 18px 210px 15px 230px;
-  --wc-paper-angle: 1.8deg;
-}
-
-.wc-paper-shape-d {
-  --wc-paper-radius: 15px 225px 18px 210px / 215px 18px 240px 15px;
-  --wc-paper-angle: -1.2deg;
-}
-
-.wc-paper-angle-soft-left {
-  --wc-paper-angle: -0.35deg;
-}
-
-.wc-paper-angle-soft-right {
-  --wc-paper-angle: 0.35deg;
-}
-
-.wc-paper-frame {
-  display: grid;
-  min-width: 0;
-  padding-block: calc(1.65% + 5px);
-  padding-inline: calc(0.75% + 4px);
-}
-
-.wc-paper-frame-soft {
-  padding-block: calc(0.45% + 5px);
-  padding-inline: calc(0.35% + 4px);
-}
-
-.wc-paper-frame > .wc-paper-card {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-}
-
-.wc-paper-white {
-  --wc-paper-fill: rgb(255 255 253 / 98%);
-}
-
-.wc-paper-sage {
-  --wc-paper-fill: #e5eae2;
-}
-
-.wc-paper-blue {
-  --wc-paper-fill: #e7ecee;
-}
-
-.wc-paper-sand {
-  --wc-paper-fill: #eee9df;
-}
-
-.wc-paper-rose {
-  --wc-paper-fill: #eee4e3;
-}
-
 .wc-composer {
   container-type: inline-size;
   position: relative;
@@ -323,36 +194,49 @@ button:not(:disabled),
   box-shadow: var(--wc-soft-shadow);
 }
 
-.wc-paper-pad {
-  padding: var(--wc-paper-padding);
-}
-
-.wc-paper-compact-pad {
-  padding: var(--wc-paper-compact-padding);
-}
-
-.wc-paper-grid {
-  gap: var(--wc-paper-gap);
-}
-
-.wc-paper-section {
+.wc-settings-section {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: var(--wc-paper-gap);
+  gap: 0.85rem;
 }
 
-.wc-paper-stack {
+.wc-settings-grid {
+  gap: 0.85rem;
+}
+
+.wc-settings-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--wc-paper-gap);
+  gap: 0.75rem;
 }
 
-/* Paper decoration must never replace the dialog's viewport positioning. */
-.wc-dialog-card {
-  --wc-paper-angle: 0deg;
-  position: fixed;
-  transform: none;
+.wc-settings-panel {
+  padding: 1rem;
+}
+
+.wc-settings-input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--wc-line-strong);
+  border-radius: 0.75rem;
+  background: white;
+  padding: 0.5rem 0.75rem;
+  color: var(--wc-ink);
+  font-size: 13px;
+  line-height: 20px;
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.wc-settings-input:focus {
+  border-color: rgb(91 111 94 / 38%);
+  box-shadow: 0 0 0 2px rgb(91 111 94 / 10%);
+}
+
+.wc-settings-input:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .wc-composer textarea {
@@ -762,11 +646,7 @@ button:not(:disabled),
   min-width: 13rem;
   max-height: min(28rem, calc(100vh - 2rem));
   overflow: auto;
-  border: 1px solid rgb(48 50 45 / 15%);
-  border-radius: var(--wc-menu-radius);
-  background: rgb(255 255 253 / 92%);
   padding: 0.35rem;
-  color: var(--wc-ink);
   transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-popover-content-transform-origin));
   backdrop-filter: blur(12px) saturate(90%);
 }

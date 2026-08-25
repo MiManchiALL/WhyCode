@@ -31,7 +31,7 @@ export function ApprovalCard({
         ? `允许且本会话不再询问 ${approval.suggestion.toolName}`
         : null
   return (
-    <div className="wc-paper-card wc-paper-sand wc-paper-shape-b wc-paper-compact-pad text-sm">
+    <div className="wc-menu-surface p-3.5 text-sm">
       <div className="mb-1 flex items-center gap-2 font-medium text-[var(--wc-ink)]">
         <span className="flex size-7 items-center justify-center rounded-lg bg-white/70 text-[var(--wc-sand-ink)]">
           <ShieldAlert size={15} />

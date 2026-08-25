@@ -99,8 +99,6 @@ import { SubagentPanel } from './subagent-panel.tsx'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import type { SubagentPanelPage } from './subagent-presentation.ts'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
-import { PaperFrame } from './paper-frame.tsx'
-import { installPaperHoverTracking } from './paper-hover-tracking.ts'
 import {
   applyExpandedOverrides,
   ConversationPresentationCache,
@@ -309,7 +307,6 @@ export function App() {
     restore: restorePdfDrafts,
   } = usePdfDrafts(addError)
 
-  useEffect(() => installPaperHoverTracking(document), [])
 
   useEffect(() => {
     inputRef.current = input
@@ -1636,9 +1633,7 @@ export function App() {
 
                 {approval && (
                   <div className="mb-2">
-                    <PaperFrame>
-                      <ApprovalCard approval={approval} onRespond={respondApproval} />
-                    </PaperFrame>
+                    <ApprovalCard approval={approval} onRespond={respondApproval} />
                   </div>
                 )}
 

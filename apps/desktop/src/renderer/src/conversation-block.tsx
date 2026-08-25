@@ -80,7 +80,7 @@ export function BlockView({
     )
   }
   if (block.kind === 'error') {
-    return <div className="wc-sticker-soft mb-3 bg-[#f3e8e3] px-3 py-2 wc-type-control text-[var(--wc-danger)]">{block.text}</div>
+    return <div className="wc-menu-surface mb-3 border-[#dec8bf] bg-[#f8efec] px-3 py-2 wc-type-control text-[var(--wc-danger)]">{block.text}</div>
   }
   if (block.kind === 'notice') {
     return <div className="mb-3 rounded-xl bg-[var(--wc-blue)] px-3 py-2 text-xs text-[var(--wc-blue-ink)]">{block.text}</div>
@@ -126,7 +126,7 @@ export function BlockView({
       : <Check size={14} />
   const summary = summarizeInput(call.input)
   return (
-    <div className="wc-sticker-soft mb-3 overflow-hidden wc-type-control">
+    <div className="wc-menu-surface mb-3 overflow-hidden wc-type-control">
       <div className="flex w-full items-center gap-2 px-3 py-2">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>

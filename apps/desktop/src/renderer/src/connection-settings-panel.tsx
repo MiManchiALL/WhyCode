@@ -30,7 +30,12 @@ import {
   ConsensusModelsEditor,
 } from './agent-model-settings.tsx'
 import { McpSettingsEditor } from './mcp-settings.tsx'
-import { PaperFrame } from './paper-frame.tsx'
+import {
+  SettingsButton,
+  SettingsPanel,
+  SettingsSection,
+} from './settings-layout.tsx'
+import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 
 interface ConnectionSettingsPanelProps {
@@ -44,7 +49,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [oauthPending, setOauthPending] = useState(false)
-  const [section, setSection] = useState<SettingsSection>('models')
+  const [section, setSection] = useState<SettingsSectionId>('models')
 
   const requestClose = () => {
     if (!pending && !oauthPending) setOpen(false)
@@ -181,18 +186,16 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
               <div className="mx-auto w-full max-w-5xl px-8 py-10 lg:px-12">
                 <header className="mb-8 flex items-start justify-between gap-4">
                   <div>
-                    <Dialog.Title className="text-2xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
-                    <Dialog.Description className="mt-1.5 text-sm text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
+                    <Dialog.Title className="text-xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
+                    <Dialog.Description className="mt-1.5 text-[13px] leading-5 text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
                   </div>
-                  <button
-                    type="button"
-                    className="wc-focus-ring flex items-center gap-1.5 rounded-xl border border-[var(--wc-line)] bg-white px-3 py-2 text-xs text-[var(--wc-muted)] hover:border-[var(--wc-line-strong)] disabled:opacity-40"
+                  <SettingsButton
                     onClick={() => void refresh()}
                     disabled={pending || oauthPending}
                   >
                     <RefreshCw size={14} className={pending ? 'animate-spin' : ''} />
                     刷新
-                  </button>
+                  </SettingsButton>
                 </header>
 
                 {error && (
@@ -201,26 +204,14 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   </p>
                 )}
 
-                <div className="space-y-7">
+                <div className="space-y-6">
                   {section === 'models' && (
                     <>
-                      <section className="wc-paper-section">
-                        <div>
-                          <h2 className="text-sm font-semibold">内置厂商</h2>
-                          <p className="mt-0.5 text-xs text-[var(--wc-muted)]">配置官方端点或兼容同一厂商协议的中转地址。</p>
-                        </div>
-                        <div className="wc-paper-grid grid lg:grid-cols-2">
-                          {props.snapshot.providers.map((provider, index) => (
-                            <ProviderEditor
-                              key={provider.id}
-                              provider={provider}
-                              visualIndex={index}
-                              disabled={pending || oauthPending}
-                              onSave={(request) => mutate(() => window.whycode.saveProviderSettings(request))}
-                            />
-                          ))}
-                        </div>
-                      </section>
+                      <BuiltInProvidersEditor
+                        providers={props.snapshot.providers}
+                        disabled={pending || oauthPending}
+                        onSave={(request) => mutate(() => window.whycode.saveProviderSettings(request))}
+                      />
                       <CliProxyApiEditor
                         settings={props.snapshot.cliProxyApi}
                         disabled={pending || oauthPending}
@@ -283,9 +274,59 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   )
 }
 
-type SettingsSection = 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp'
+function BuiltInProvidersEditor(props: {
+  providers: ProviderSettingsItem[]
+  disabled: boolean
+  onSave: (request: SaveProviderSettingsRequest) => Promise<boolean>
+}) {
+  const defaultProvider = props.providers.find((provider) => provider.id === 'deepseek')
+    ?? props.providers[0]
+  const [selectedProviderId, setSelectedProviderId] = useState(defaultProvider?.id ?? '')
+  const selectedProvider = props.providers.find(
+    (provider) => provider.id === selectedProviderId,
+  ) ?? defaultProvider
 
-const SETTINGS_META: Record<SettingsSection, { title: string; description: string }> = {
+  return (
+    <SettingsSection
+      title="内置厂商"
+      description="选择一个厂商，查看其模型并配置官方端点或兼容该协议的中转地址。"
+      actions={props.providers.length > 0 ? (
+        <div className="min-w-52 wc-type-caption text-neutral-600">
+          <span className="mb-1 block">当前厂商</span>
+          <SelectMenu
+            value={selectedProvider?.id ?? ''}
+            options={props.providers.map((provider) => ({
+              value: provider.id,
+              label: `${provider.displayName}${provider.hasKey ? '' : '（未配置）'}`,
+            }))}
+            onValueChange={(value) => setSelectedProviderId(value as ProviderSettingsItem['id'])}
+            ariaLabel="内置模型厂商"
+            disabled={props.disabled}
+            align="end"
+            className="w-full"
+          />
+        </div>
+      ) : undefined}
+    >
+      {selectedProvider ? (
+        <ProviderEditor
+          key={selectedProvider.id}
+          provider={selectedProvider}
+          disabled={props.disabled}
+          onSave={props.onSave}
+        />
+      ) : (
+        <SettingsPanel>
+          <p className="wc-type-caption text-[var(--wc-muted)]">没有可配置的内置厂商。</p>
+        </SettingsPanel>
+      )}
+    </SettingsSection>
+  )
+}
+
+type SettingsSectionId = 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp'
+
+const SETTINGS_META: Record<SettingsSectionId, { title: string; description: string }> = {
   models: {
     title: '模型连接',
     description: '管理内置厂商与 CLIProxyAPI，并选择可用于会话的模型。',
@@ -319,7 +360,7 @@ function SettingsNavItem(props: {
       type="button"
       className={`wc-focus-ring flex h-10 w-full items-center gap-2.5 rounded-[var(--wc-menu-radius)] px-3 text-left text-sm transition-colors ${
         props.active
-          ? 'bg-white text-[var(--wc-ink)] shadow-[1px_2px_0_rgb(43_46_41_/_5%)]'
+          ? 'bg-black/[0.055] text-[var(--wc-ink)]'
           : 'text-[var(--wc-muted)] hover:bg-black/[0.04] hover:text-[var(--wc-ink)]'
       }`}
       onClick={props.onClick}
@@ -333,7 +374,6 @@ function SettingsNavItem(props: {
 
 function ProviderEditor(props: {
   provider: ProviderSettingsItem
-  visualIndex: number
   disabled: boolean
   onSave: (request: SaveProviderSettingsRequest) => Promise<boolean>
 }) {
@@ -351,37 +391,41 @@ function ProviderEditor(props: {
     if (ok) { setApiKey(''); setSaved(true) }
   }
   return (
-    <PaperFrame>
-      <div className={`${SETTINGS_CARD_STYLES[props.visualIndex % SETTINGS_CARD_STYLES.length]} wc-paper-pad`}>
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium">{props.provider.displayName}</p>
-            <p className="wc-type-caption text-neutral-500">{props.provider.protocolLabel}</p>
+    <SettingsPanel>
+      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,0.8fr)_minmax(22rem,1.2fr)] lg:items-start">
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{props.provider.displayName}</p>
+              <p className="wc-type-caption text-neutral-500">{props.provider.protocolLabel}</p>
+            </div>
+            <ConnectionStatus configured={props.provider.hasKey} />
           </div>
-          <ConnectionStatus configured={props.provider.hasKey} />
+          <div className="mt-3 space-y-1">
+            {props.provider.models.map((model) => (
+              <p key={model.id} className="wc-type-caption text-neutral-500">
+                {model.displayName}
+                {' · '}{model.capabilities.supportsImageInput ? '图片' : '仅文本'}
+                {' · '}{formatTokenLimit(model.capabilities.contextWindow)} 上下文
+                {' · '}{formatTokenLimit(model.capabilities.maxOutput)} 输出
+                {' · '}{model.capabilities.reasoningExposure === 'none' ? '无推理透传' : '推理'}
+              </p>
+            ))}
+          </div>
         </div>
-        <div className="mb-2 space-y-0.5">
-          {props.provider.models.map((model) => (
-            <p key={model.id} className="wc-type-caption text-neutral-500">
-              {model.displayName}
-              {' · '}{model.capabilities.supportsImageInput ? '图片' : '仅文本'}
-              {' · '}{formatTokenLimit(model.capabilities.contextWindow)} 上下文
-              {' · '}{formatTokenLimit(model.capabilities.maxOutput)} 输出
-              {' · '}{model.capabilities.reasoningExposure === 'none' ? '无推理透传' : '推理'}
-            </p>
-          ))}
+        <div className="min-w-0">
+          <label className="block wc-type-caption text-neutral-600">API Key（留空保留现有密钥）</label>
+          <input className="wc-settings-input mt-1" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={props.disabled} autoComplete="new-password" />
+          <label className="mt-3 block wc-type-caption text-neutral-600">Base URL（留空使用官方端点；也可填写保持该厂商协议的中转地址）</label>
+          <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder={props.provider.defaultBaseURL} disabled={props.disabled} />
         </div>
-        <label className="block wc-type-caption text-neutral-600">API Key（留空保留现有密钥）</label>
-        <input className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={props.disabled} autoComplete="new-password" />
-        <label className="mt-2 block wc-type-caption text-neutral-600">Base URL（留空使用官方端点；也可填写保持该厂商协议的中转地址）</label>
-        <input className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder={props.provider.defaultBaseURL} disabled={props.disabled} />
-        <div className="mt-2 flex items-center gap-2">
-          <button className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-2.5 py-1.5 text-xs text-white disabled:opacity-40" onClick={() => void submit()} disabled={props.disabled}>保存</button>
-          {props.provider.hasKey && <button className="text-xs text-red-600 disabled:opacity-40" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</button>}
+        <div className="flex flex-wrap items-center justify-end gap-2 lg:col-start-2">
           {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
+          {props.provider.hasKey && <SettingsButton variant="danger" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</SettingsButton>}
+          <SettingsButton variant="primary" onClick={() => void submit()} disabled={props.disabled}>保存</SettingsButton>
         </div>
       </div>
-    </PaperFrame>
+    </SettingsPanel>
   )
 }
 
@@ -418,67 +462,53 @@ function CliProxyApiEditor(props: {
   }
 
   return (
-    <section className="wc-paper-section">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-medium">CLIProxyAPI</h3>
-          <p className="text-xs text-neutral-500">只开放已确认与 WhyCode 型号等价的 CLIProxyAPI 路由；启用后以“（CLIProxyAPI）”区分连接来源。</p>
+    <SettingsSection
+      title="CLIProxyAPI"
+      description="只开放已确认与 WhyCode 型号等价的 CLIProxyAPI 路由；启用后以“（CLIProxyAPI）”区分连接来源。"
+      actions={<ConnectionStatus configured={props.settings.hasKey} />}
+    >
+      <SettingsPanel>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="block wc-type-caption text-neutral-600">
+            Base URL
+            <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="http://127.0.0.1:8317/v1" disabled={props.disabled} />
+          </label>
+          <label className="block wc-type-caption text-neutral-600">
+            API Key（留空保留现有密钥）
+            <input className="wc-settings-input mt-1" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={props.disabled} autoComplete="new-password" />
+          </label>
         </div>
-        <ConnectionStatus configured={props.settings.hasKey} />
-      </div>
-      <PaperFrame className="wc-paper-frame-soft">
-        <div className="wc-paper-card wc-paper-blue wc-paper-shape-d wc-paper-angle-soft-left wc-paper-pad">
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="block wc-type-caption text-neutral-600">
-              Base URL
-              <input className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="http://127.0.0.1:8317/v1" disabled={props.disabled} />
-            </label>
-            <label className="block wc-type-caption text-neutral-600">
-              API Key（留空保留现有密钥）
-              <input className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={props.disabled} autoComplete="new-password" />
-            </label>
-          </div>
-          <p className="mt-3 wc-type-caption font-medium text-neutral-600">启用模型</p>
-          <div className="mt-1 grid gap-1.5 md:grid-cols-2">
-            {props.settings.models.map((model) => (
-              <label key={model.id} className="flex items-start gap-2 rounded-xl border border-[var(--wc-line)] bg-white/60 px-2.5 py-2 text-xs">
-                <input type="checkbox" className="mt-0.5" checked={modelIds.has(model.id)} onChange={() => toggleModel(model.id)} disabled={props.disabled} />
-                <span>
-                  <span className="block text-neutral-800">{model.displayName}</span>
-                  <span className="block wc-type-tiny text-neutral-500">
-                    {model.capabilities.supportsImageInput ? '图片' : '仅文本'}
-                    {' · '}{formatTokenLimit(model.capabilities.contextWindow)} 上下文
-                    {' · '}{formatTokenLimit(model.capabilities.maxOutput)} 输出
-                    {' · '}{reasoningEffortSummary(model.capabilities.reasoningEffort)}
-                  </span>
+        <p className="mt-3 wc-type-caption font-medium text-neutral-600">启用模型</p>
+        <div className="mt-1 grid gap-1.5 md:grid-cols-2">
+          {props.settings.models.map((model) => (
+            <label key={model.id} className="flex items-start gap-2 rounded-xl border border-[var(--wc-line)] bg-white/60 px-2.5 py-2 text-xs">
+              <input type="checkbox" className="mt-0.5" checked={modelIds.has(model.id)} onChange={() => toggleModel(model.id)} disabled={props.disabled} />
+              <span>
+                <span className="block text-neutral-800">{model.displayName}</span>
+                <span className="block wc-type-tiny text-neutral-500">
+                  {model.capabilities.supportsImageInput ? '图片' : '仅文本'}
+                  {' · '}{formatTokenLimit(model.capabilities.contextWindow)} 上下文
+                  {' · '}{formatTokenLimit(model.capabilities.maxOutput)} 输出
+                  {' · '}{reasoningEffortSummary(model.capabilities.reasoningEffort)}
                 </span>
-              </label>
-            ))}
-          </div>
-          <p className="mt-2 wc-type-caption text-neutral-500">推理强度在顶部随当前会话选择；WhyCode 会按所选型号限制档位，并通过对应协议传给 CLIProxyAPI。</p>
-          <div className="mt-3 flex items-center gap-2">
-            <button className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-3 py-1.5 text-xs text-white disabled:opacity-40" onClick={() => void submit()} disabled={props.disabled}>保存</button>
-            {props.settings.hasKey && <button className="text-xs text-red-600 disabled:opacity-40" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</button>}
-            {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
-          </div>
+              </span>
+            </label>
+          ))}
         </div>
-      </PaperFrame>
-    </section>
+        <p className="mt-2 wc-type-caption text-neutral-500">推理强度在顶部随当前会话选择；WhyCode 会按所选型号限制档位，并通过对应协议传给 CLIProxyAPI。</p>
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+          {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
+          {props.settings.hasKey && <SettingsButton variant="danger" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</SettingsButton>}
+          <SettingsButton variant="primary" onClick={() => void submit()} disabled={props.disabled}>保存</SettingsButton>
+        </div>
+      </SettingsPanel>
+    </SettingsSection>
   )
 }
 
-const SETTINGS_CARD_STYLES = [
-  'wc-paper-card wc-paper-sage wc-paper-shape-a',
-  'wc-paper-card wc-paper-blue wc-paper-shape-b',
-  'wc-paper-card wc-paper-sand wc-paper-shape-c',
-  'wc-paper-card wc-paper-rose wc-paper-shape-d',
-  'wc-paper-card wc-paper-sage wc-paper-shape-b',
-  'wc-paper-card wc-paper-blue wc-paper-shape-c',
-] as const
-
 function ConnectionStatus(props: { configured: boolean }) {
   return (
-    <span className={`rounded-lg px-1.5 py-0.5 wc-type-tiny ${props.configured ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-black/[0.045] text-[var(--wc-muted)]'}`}>
+    <span className={`shrink-0 whitespace-nowrap rounded-lg px-1.5 py-0.5 wc-type-tiny ${props.configured ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-black/[0.045] text-[var(--wc-muted)]'}`}>
       {props.configured ? '已配置' : '未配置'}
     </span>
   )

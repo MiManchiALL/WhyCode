@@ -2,6 +2,7 @@ import type {
   McpOAuthRequest,
   McpSettingsItem,
 } from '../../shared/settings.ts'
+import { SettingsButton } from './settings-layout.tsx'
 
 interface McpOAuthEditorProps {
   server: McpSettingsItem['servers'][number]
@@ -18,28 +19,27 @@ export function McpOAuthEditor(props: McpOAuthEditorProps) {
     serverName: props.server.name,
   } as const
   return (
-    <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 border-t border-neutral-100 pt-2 [overflow-wrap:anywhere]">
+    <div className="mt-3 flex min-w-0 flex-wrap items-center justify-end gap-2 border-t border-[var(--wc-line)] pt-3 [overflow-wrap:anywhere]">
       {oauth.status === 'connected' ? (
         <>
           <span className="rounded bg-green-50 px-1.5 py-0.5 wc-type-tiny text-green-700">
             OAuth 已登录
           </span>
-          <button
-            className="wc-type-tiny text-red-600 disabled:opacity-40"
+          <SettingsButton
+            variant="danger"
             onClick={() => void props.onDisconnect(request)}
             disabled={props.disabled}
           >
             退出登录
-          </button>
+          </SettingsButton>
         </>
       ) : (
-        <button
-          className="rounded border border-neutral-300 px-2 py-1 wc-type-caption text-neutral-700 disabled:opacity-40"
+        <SettingsButton
           onClick={() => void props.onAuthorize(request)}
           disabled={props.disabled || oauth.status !== 'available'}
         >
           OAuth 登录
-        </button>
+        </SettingsButton>
       )}
       {oauth.message && (
         <p className="min-w-0 basis-full break-words wc-type-tiny text-amber-700">{oauth.message}</p>

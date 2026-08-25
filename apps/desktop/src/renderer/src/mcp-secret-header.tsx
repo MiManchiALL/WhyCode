@@ -1,8 +1,10 @@
+import { ChevronDown, ChevronUp, KeyRound } from 'lucide-react'
 import { useState } from 'react'
 import type {
   McpSettingsItem,
   SaveMcpSecretHeaderRequest,
 } from '../../shared/settings.ts'
+import { SettingsButton } from './settings-layout.tsx'
 
 interface McpSecretHeaderEditorProps {
   server: McpSettingsItem['servers'][number]
@@ -46,31 +48,33 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
   return (
     <div className="mt-2 min-w-0 border-t border-neutral-100 pt-2">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <button
-          className="wc-type-caption text-neutral-600 underline decoration-neutral-300 underline-offset-2 disabled:opacity-40"
+        <SettingsButton
           onClick={() => setOpen((value) => !value)}
           disabled={props.disabled}
+          aria-expanded={open}
         >
+          <KeyRound size={13} />
           {open
             ? `收起${secretKind === 'github-pat' ? ' PAT' : suggestedHeaderName ? ' API Key' : '认证'}设置`
             : secretKind === 'github-pat'
-              ? '使用 GitHub PAT'
-              : suggestedHeaderName ? 'API Key（可选）' : '认证设置'}
-        </button>
+              ? '设置 GitHub PAT'
+              : suggestedHeaderName ? '设置 API Key（可选）' : '认证设置'}
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </SettingsButton>
         {props.server.secretHeaderNames.map((name) => (
-          <span key={name} className="max-w-full break-all rounded bg-green-50 px-1.5 py-0.5 wc-type-tiny text-green-700">
+          <span key={name} className="max-w-full whitespace-nowrap rounded bg-green-50 px-1.5 py-0.5 wc-type-tiny text-green-700">
             {name} 已安全保存
           </span>
         ))}
       </div>
       {open && (
-        <div className="mt-2 min-w-0 rounded-xl border border-neutral-200 bg-neutral-50/60 p-3 [overflow-wrap:anywhere]">
+        <div className="mt-3 min-w-0 [overflow-wrap:anywhere]">
           <div className={`grid gap-2 ${suggestedHeaderName ? '' : 'md:grid-cols-2'}`}>
             {!suggestedHeaderName && (
               <label className="block min-w-0 wc-type-tiny text-neutral-600">
                 认证 Header 名称
                 <input
-                  className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+                  className="wc-settings-input mt-1"
                   value={headerName}
                   onChange={(event) => setHeaderName(event.target.value)}
                   placeholder="Authorization"
@@ -85,7 +89,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
                   ? 'API Key（官方推荐，留空也可使用）'
                 : '完整 Header 值（例如 Bearer <token>）'}
               <input
-                className="mt-1 min-w-0 w-full rounded border border-neutral-300 bg-white px-2 py-1 text-xs"
+                className="wc-settings-input mt-1"
                 type="password"
                 value={secret}
                 onChange={(event) => setSecret(event.target.value)}
@@ -100,26 +104,26 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
               : suggestedHeaderName && <>按内置服务约定通过 {suggestedHeaderName} 发送。 </>}
             密钥通过系统安全存储加密，不写入 mcp.json，也不会返回 Renderer；只有服务器 URL 未变化时才会随新会话发送。
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              className="rounded bg-neutral-900 px-2 py-1 wc-type-caption text-white disabled:opacity-40"
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            {props.server.secretHeaderNames.map((name) => (
+              <SettingsButton
+                key={name}
+                variant="danger"
+                onClick={() => void clear(name)}
+                disabled={props.disabled}
+              >
+                清除 {name}
+              </SettingsButton>
+            ))}
+            <SettingsButton
+              variant="primary"
               onClick={() => void save()}
               disabled={props.disabled || !headerName.trim() || !secret.trim()}
             >
               {secretKind === 'github-pat'
                 ? '保存 PAT'
                 : suggestedHeaderName ? '保存 API Key' : '保存认证值'}
-            </button>
-            {props.server.secretHeaderNames.map((name) => (
-              <button
-                key={name}
-                className="wc-type-tiny text-red-600 disabled:opacity-40"
-                onClick={() => void clear(name)}
-                disabled={props.disabled}
-              >
-                清除 {name}
-              </button>
-            ))}
+            </SettingsButton>
           </div>
         </div>
       )}

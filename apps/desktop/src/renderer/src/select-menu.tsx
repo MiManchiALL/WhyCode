@@ -32,7 +32,7 @@ export function SelectMenu({
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          className={`wc-select-trigger wc-focus-ring flex h-8 min-w-0 items-center justify-between gap-2 px-2.5 text-xs ${className}`}
+          className={`wc-select-trigger wc-focus-ring flex h-8 min-w-0 items-center justify-between gap-2 px-2.5 text-[13px] ${className}`}
           disabled={disabled}
           aria-label={ariaLabel}
           title={selectedLabel}

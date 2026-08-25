@@ -21,14 +21,14 @@ export function CandidateCard({
 }) {
   const hasDetails = Boolean(candidate.details?.finalAnswerOrPlan)
   return (
-    <div className="wc-sticker-soft mb-2 overflow-hidden bg-[var(--wc-blue)]/65 text-sm">
+    <div className="wc-menu-surface mb-2 overflow-hidden text-sm">
       <button
         type="button"
         className="wc-focus-ring flex w-full items-start gap-2 px-3 py-2 text-left"
         disabled={!hasDetails}
         onClick={hasDetails ? onToggle : undefined}
       >
-        <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-lg bg-white/65 text-[var(--wc-blue-ink)]">
+        <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-lg bg-[var(--wc-blue)] text-[var(--wc-blue-ink)]">
           <ClipboardList size={13} />
         </span>
         <span className="min-w-0 flex-1 text-[var(--wc-blue-ink)]">
@@ -42,7 +42,7 @@ export function CandidateCard({
         )}
       </button>
       {expanded && candidate.details && (
-        <div className="border-t border-[var(--wc-line)] bg-white/45 px-3 py-2 text-[var(--wc-ink)]">
+        <div className="border-t border-[var(--wc-line)] bg-black/[0.012] px-3 py-2 text-[var(--wc-ink)]">
           <div className="prose prose-sm max-w-none">
             <MarkdownContent text={candidate.details.finalAnswerOrPlan} />
           </div>
@@ -79,7 +79,7 @@ export function PeerCard({
         : `Agent ${peer.agentId} · 已结束`
   const lastTool = peer.tools.at(-1)
   return (
-    <div className="wc-sticker-soft mb-2 overflow-hidden bg-[var(--wc-sage)]/55 text-sm">
+    <div className="wc-menu-surface mb-2 overflow-hidden text-sm">
       <button type="button" className="wc-focus-ring flex w-full items-center gap-2 px-3 py-2 text-left" onClick={onToggle}>
         <span className={peer.status === 'working' ? 'animate-pulse text-[var(--wc-sage-ink)]' : 'text-[var(--wc-sage-ink)]'}>
           <Circle size={10} fill={peer.status === 'working' ? 'none' : 'currentColor'} />
@@ -92,12 +92,12 @@ export function PeerCard({
       </button>
       {/* 工作中实时显示当前动作，让用户看得到 B/C 在干什么 */}
       {peer.status === 'working' && lastTool && (
-        <div className="truncate border-t border-[var(--wc-line)] bg-white/35 px-3 py-1.5 text-xs text-[var(--wc-sage-ink)]">
+        <div className="truncate border-t border-[var(--wc-line)] bg-black/[0.012] px-3 py-1.5 text-xs text-[var(--wc-sage-ink)]">
           正在：{lastTool.name} <span className="text-[var(--wc-muted)]">{lastTool.summary}</span>
         </div>
       )}
       {peer.status === 'done' && peer.vote && (
-        <div className="border-t border-[var(--wc-line)] bg-white/35 px-3 py-2 text-xs text-[var(--wc-sage-ink)]">
+        <div className="border-t border-[var(--wc-line)] bg-black/[0.012] px-3 py-2 text-xs text-[var(--wc-sage-ink)]">
           {peer.vote.reason}
           {peer.vote.suggestedChange && (
             <div className="mt-1 text-[var(--wc-muted)]">建议：{peer.vote.suggestedChange}</div>
@@ -105,7 +105,7 @@ export function PeerCard({
         </div>
       )}
       {expanded && (
-        <div className="border-t border-[var(--wc-line)] bg-white/35 px-3 py-2">
+        <div className="border-t border-[var(--wc-line)] bg-black/[0.012] px-3 py-2">
           {peer.tools.map((t) => (
             <div key={t.id} className="truncate text-xs text-[var(--wc-muted)]">
               {t.isError ? '✗' : '·'} {t.name} {t.summary}

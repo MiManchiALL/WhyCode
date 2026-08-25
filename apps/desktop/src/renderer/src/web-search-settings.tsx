@@ -5,8 +5,14 @@ import type {
   WebSearchProviderId,
   WebSearchSettingsItem,
 } from '../../shared/settings.ts'
-import { PaperFrame } from './paper-frame.tsx'
 import { SelectMenu } from './select-menu.tsx'
+import {
+  SettingsActionRow,
+  SettingsButton,
+  SettingsPanel,
+  SettingsRow,
+  SettingsSection,
+} from './settings-layout.tsx'
 
 interface WebSearchSettingsProps {
   settings: WebSearchSettingsItem
@@ -28,14 +34,10 @@ export function WebSearchSettingsEditor(props: WebSearchSettingsProps) {
   })
 
   return (
-    <section className="wc-paper-section">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium">网页搜索</h3>
-          <p className="text-xs text-neutral-500">
-            Agent 始终使用统一 WebSearch 工具；这里选择实际提供搜索结果的后端。
-          </p>
-        </div>
+    <SettingsSection
+      title="网页搜索"
+      description="Agent 始终使用统一 WebSearch 工具；这里选择实际提供搜索结果的后端。"
+      actions={
         <div className="min-w-44 wc-type-caption text-neutral-600">
           <span className="mb-1 block">当前后端</span>
           <SelectMenu
@@ -52,26 +54,27 @@ export function WebSearchSettingsEditor(props: WebSearchSettingsProps) {
             align="end"
           />
         </div>
-      </div>
-      <div className="wc-paper-grid grid lg:grid-cols-2">
+      }
+    >
+      <SettingsPanel padded={false}>
         {props.settings.providers.map((provider, index) => (
           <SearchProviderEditor
             key={provider.id}
             provider={provider}
-            visualIndex={index}
+            divided={index > 0}
             active={provider.id === props.settings.activeProvider}
             disabled={props.disabled}
             onSave={props.onSave}
           />
         ))}
-      </div>
-    </section>
+      </SettingsPanel>
+    </SettingsSection>
   )
 }
 
 function SearchProviderEditor(props: {
   provider: SearchProvider
-  visualIndex: number
+  divided: boolean
   active: boolean
   disabled: boolean
   onSave: (request: SaveWebSearchSettingsRequest) => Promise<boolean>
@@ -96,31 +99,32 @@ function SearchProviderEditor(props: {
   }
 
   return (
-    <PaperFrame>
-      <div className={`${SEARCH_CARD_STYLES[props.visualIndex % SEARCH_CARD_STYLES.length]} wc-paper-pad`}>
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium">{props.provider.displayName}</p>
-            <p className="wc-type-caption text-neutral-500">
-              {providerDescription(props.provider.id)}
-            </p>
-          </div>
-          <div className="flex items-center gap-1">
-            {props.active && props.provider.hasKey && (
-              <span className="rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 wc-type-tiny text-[var(--wc-blue-ink)]">
-                当前
-              </span>
-            )}
-            <span className={`rounded-lg px-1.5 py-0.5 wc-type-tiny ${props.provider.hasKey ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-black/[0.045] text-[var(--wc-muted)]'}`}>
-              {props.provider.hasKey ? '已配置' : '未配置'}
-            </span>
-          </div>
+    <section className={props.divided ? 'border-t border-[var(--wc-line-strong)]' : undefined}>
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3 px-4 pb-2 pt-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{props.provider.displayName}</p>
+          <p className="mt-0.5 wc-type-caption text-neutral-500">
+            {providerDescription(props.provider.id)}
+          </p>
         </div>
-        <label className="block wc-type-caption text-neutral-600">
-          API Key（留空保留现有密钥）
-        </label>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          {props.active && props.provider.hasKey && (
+            <span className="whitespace-nowrap rounded-lg bg-[var(--wc-blue)] px-1.5 py-0.5 wc-type-tiny text-[var(--wc-blue-ink)]">
+              当前
+            </span>
+          )}
+          <span className={`whitespace-nowrap rounded-lg px-1.5 py-0.5 wc-type-tiny ${props.provider.hasKey ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-black/[0.045] text-[var(--wc-muted)]'}`}>
+            {props.provider.hasKey ? '已配置' : '未配置'}
+          </span>
+        </div>
+      </header>
+      <SettingsRow
+        label="API Key"
+        description="留空保存时保留当前密钥。"
+        divided={false}
+      >
         <input
-          className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs"
+          className="wc-settings-input"
           type="password"
           value={apiKey}
           onChange={(event) => setApiKey(event.target.value)}
@@ -128,47 +132,45 @@ function SearchProviderEditor(props: {
           autoComplete="new-password"
           placeholder={props.provider.id === 'tavily' ? 'tvly-…' : 'pplx-…'}
         />
-        {props.provider.id === 'tavily' && (
-          <div className="mt-2 wc-type-caption text-neutral-600">
-            <span className="mb-1 block">搜索质量</span>
-            <SelectMenu
-              value={searchDepth}
-              options={TAVILY_DEPTH_OPTIONS}
-              onValueChange={(value) => setSearchDepth(value as TavilySearchDepth)}
-              ariaLabel="Tavily 搜索质量"
-              disabled={props.disabled}
-              className="w-full"
-            />
-          </div>
-        )}
-        <div className="mt-2 flex items-center gap-2">
-          <button
-            className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-2.5 py-1.5 text-xs text-white disabled:opacity-40"
-            onClick={() => void submit()}
+      </SettingsRow>
+      {props.provider.id === 'tavily' && (
+        <SettingsRow
+          label="搜索质量"
+          description="更高质量会消耗更多搜索额度。"
+          divided={false}
+        >
+          <SelectMenu
+            value={searchDepth}
+            options={TAVILY_DEPTH_OPTIONS}
+            onValueChange={(value) => setSearchDepth(value as TavilySearchDepth)}
+            ariaLabel="Tavily 搜索质量"
+            disabled={props.disabled}
+            className="w-full"
+          />
+        </SettingsRow>
+      )}
+      <SettingsActionRow divided={false}>
+        {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
+        {props.provider.hasKey && (
+          <SettingsButton
+            variant="danger"
+            onClick={() => void submit(true)}
             disabled={props.disabled}
           >
-            保存
-          </button>
-          {props.provider.hasKey && (
-            <button
-              className="text-xs text-red-600 disabled:opacity-40"
-              onClick={() => void submit(true)}
-              disabled={props.disabled}
-            >
-              清除密钥
-            </button>
-          )}
-          {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
-        </div>
-      </div>
-    </PaperFrame>
+            清除密钥
+          </SettingsButton>
+        )}
+        <SettingsButton
+          variant="primary"
+          onClick={() => void submit()}
+          disabled={props.disabled}
+        >
+          保存
+        </SettingsButton>
+      </SettingsActionRow>
+    </section>
   )
 }
-
-const SEARCH_CARD_STYLES = [
-  'wc-paper-card wc-paper-sage wc-paper-shape-c',
-  'wc-paper-card wc-paper-blue wc-paper-shape-d',
-] as const
 
 function providerDescription(provider: WebSearchProviderId): string {
   if (provider === 'tavily') {
