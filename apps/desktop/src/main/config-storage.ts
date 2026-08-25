@@ -48,6 +48,7 @@ interface StoredConfig {
   }
   auxiliaryModels?: {
     visionModelId?: unknown
+    subagentModelId?: unknown
   }
   consensusAgents?: Partial<Record<'B' | 'C', {
     modelId?: unknown
@@ -72,7 +73,7 @@ interface StoredConfig {
   customConnections?: unknown
 }
 
-const CONFIG_VERSION = 9
+const CONFIG_VERSION = 10
 const RETIRED_MODEL_MIGRATION_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
@@ -143,7 +144,14 @@ export async function saveConfig(
       },
     } : {}),
     ...(config.auxiliaryModels ? {
-      auxiliaryModels: { visionModelId: config.auxiliaryModels.visionModelId },
+      auxiliaryModels: {
+        ...(config.auxiliaryModels.visionModelId
+          ? { visionModelId: config.auxiliaryModels.visionModelId }
+          : {}),
+        ...(config.auxiliaryModels.subagentModelId
+          ? { subagentModelId: config.auxiliaryModels.subagentModelId }
+          : {}),
+      },
     } : {}),
     ...(config.consensusAgents ? {
       consensusAgents: Object.fromEntries(
@@ -183,7 +191,13 @@ export async function saveConfig(
 function parseAuxiliaryModels(value: unknown): WhycodeConfig['auxiliaryModels'] {
   if (!isRecord(value)) return undefined
   const visionModelId = safeLabel(value.visionModelId, 300)
-  return visionModelId ? { visionModelId } : undefined
+  const subagentModelId = safeLabel(value.subagentModelId, 300)
+  return visionModelId || subagentModelId
+    ? {
+        ...(visionModelId ? { visionModelId } : {}),
+        ...(subagentModelId ? { subagentModelId } : {}),
+      }
+    : undefined
 }
 
 function parsePermissionMode(value: unknown): PermissionMode | undefined {

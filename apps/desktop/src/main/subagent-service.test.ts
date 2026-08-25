@@ -11,6 +11,7 @@ import {
   createWebSearchTool,
   localWorkspace,
   type ModelEntry,
+  type SubagentModelSnapshot,
   type SubagentSettlementNotification,
 } from '@whycode/core'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
@@ -135,6 +136,38 @@ describe('子代理激活生命周期', () => {
     await fixture.service.close()
   })
 
+  it('新建时冻结选中的子代理模型，后续激活继续沿用同一模型', async () => {
+    const fixture = await createFixture(
+      ['首次完成。', '继续完成。'],
+      undefined,
+      () => ({ modelId: 'test:fixed-subagent', reasoningEffort: 'default' }),
+    )
+    const tools = fixture.service.createTools(
+      fixture.runtime,
+      fixture.parentJournal,
+      fixture.projectDir,
+    )
+    const launched = await tools[0]!.execute(
+      { agent_id: 'explore', description: '验证固定模型', prompt: '完成首次任务' },
+      toolContext('turn-model-1', 'tool-model-1'),
+    )
+    const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
+    assert.ok(subagentId)
+    await waitFor(() => fixture.settlements.length === 1)
+
+    await tools[1]!.execute(
+      { subagent_id: subagentId, prompt: '继续同一任务' },
+      toolContext('turn-model-2', 'tool-model-2'),
+    )
+    await waitFor(() => fixture.settlements.length === 2)
+
+    assert.deepEqual(fixture.resolvedModelIds, [
+      'test:fixed-subagent',
+      'test:fixed-subagent',
+    ])
+    await fixture.service.close()
+  })
+
   it('每个父会话最多并发八个激活，但不占用户会话运行名额', async () => {
     const fixture = await createFixture(Array.from({ length: 8 }, (_, index) => `结果 ${index + 1}`))
     const tools = fixture.service.createTools(
@@ -221,6 +254,8 @@ describe('子代理激活生命周期', () => {
 async function createFixture(
   responses: string[],
   responseForCall?: (index: number) => Promise<unknown>,
+  selectModel: (parent: SubagentModelSnapshot) => SubagentModelSnapshot | null =
+    (parent) => parent,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'whycode-subagent-service-'))
   roots.push(root)
@@ -264,6 +299,7 @@ async function createFixture(
     requestApproval: async () => ({ approved: false }),
   })
   const settlements: SubagentSettlementNotification[] = []
+  const resolvedModelIds: string[] = []
   const service = new SubagentService({
     sessionsRoot,
     scratch,
@@ -271,7 +307,11 @@ async function createFixture(
     skills: new SkillCatalogService({ homeDir: root }),
     webSearchTool: createWebSearchTool({ search: async () => ({ results: [] }) }),
     createWebPageTools: () => [],
-    resolveModel: () => ({ entry, providerConfig: { apiKey: 'test' } }),
+    selectModel,
+    resolveModel: (modelId) => {
+      resolvedModelIds.push(modelId)
+      return { entry, providerConfig: { apiKey: 'test' } }
+    },
     auxiliaryImageAnalyzer: () => undefined,
     hostOperations: new HostOperationScheduler(),
     onState: () => undefined,
@@ -287,6 +327,7 @@ async function createFixture(
     sessionsRoot,
     settlements,
     modelCalls,
+    resolvedModelIds,
   }
 }
 

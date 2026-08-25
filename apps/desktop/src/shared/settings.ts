@@ -58,7 +58,12 @@ export interface ConnectionSettingsSnapshot {
 
 export interface AuxiliaryModelsSettingsItem {
   visionModelId: string | null
+  subagentModelId: string | null
   visionModels: Array<{
+    id: string
+    displayName: string
+  }>
+  subagentModels: Array<{
     id: string
     displayName: string
   }>
@@ -66,6 +71,7 @@ export interface AuxiliaryModelsSettingsItem {
 
 export interface SaveAuxiliaryModelSettingsRequest {
   visionModelId: string | null
+  subagentModelId: string | null
 }
 
 export interface ConsensusModelsSettingsItem {

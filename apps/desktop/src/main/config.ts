@@ -48,7 +48,9 @@ export interface CliProxyApiConfig {
 
 export interface AuxiliaryModelsConfig {
   /** 仅供不具备原生图片输入能力的主模型调用。 */
-  visionModelId: string
+  visionModelId?: string
+  /** 新建子代理使用的固定连接；缺省时继承父会话当前模型。 */
+  subagentModelId?: string
 }
 
 export interface WhycodeConfig {

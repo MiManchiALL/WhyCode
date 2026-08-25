@@ -176,7 +176,10 @@ describe('配置密钥存储', () => {
         },
       },
       retiredModelLabels: { 'legacy:model': 'Legacy Model' },
-      auxiliaryModels: { visionModelId: 'mimo:mimo-v2.5' },
+      auxiliaryModels: {
+        visionModelId: 'mimo:mimo-v2.5',
+        subagentModelId: 'deepseek:deepseek-v4-pro',
+      },
       consensusAgents: {
         B: { modelId: 'mimo:mimo-v2.5' },
       },
@@ -222,7 +225,10 @@ describe('配置密钥存储', () => {
         'openai:gpt-5.6-terra': 'gpt-5.6-terra',
       })
       assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
-      assert.deepEqual(loaded?.auxiliaryModels, { visionModelId: 'mimo:mimo-v2.5' })
+      assert.deepEqual(loaded?.auxiliaryModels, {
+        visionModelId: 'mimo:mimo-v2.5',
+        subagentModelId: 'deepseek:deepseek-v4-pro',
+      })
       assert.deepEqual(loaded?.consensusAgents?.B, { modelId: 'mimo:mimo-v2.5' })
       assert.equal(loaded?.webSearch?.activeProvider, 'tavily')
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')

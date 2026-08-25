@@ -1,8 +1,10 @@
 import {
   getModelEntry,
   MODEL_REGISTRY,
+  normalizeReasoningEffortSelection,
   type ModelEntry,
   type ProviderConfig,
+  type SubagentModelSnapshot,
 } from '@whycode/core'
 import {
   cliProxyModelId,
@@ -274,11 +276,47 @@ export function resolveAuxiliaryVisionModel(
     : null
 }
 
-/** 连接变更后辅助选择必须继续精确可用；失效时清空，绝不猜测替补模型。 */
-export function pruneInvalidAuxiliaryModel(config: WhycodeConfig): WhycodeConfig {
-  if (!config.auxiliaryModels || resolveAuxiliaryVisionModel(config)) return config
+/** 新建子代理在启动边界冻结一次模型；未固定时继承父会话当前选择。 */
+export function resolveSubagentModelSelection(
+  config: WhycodeConfig | null,
+  parent: SubagentModelSnapshot,
+): SubagentModelSnapshot | null {
+  const modelId = config?.auxiliaryModels?.subagentModelId ?? parent.modelId
+  const resolution = resolveModelConnection(config, modelId)
+  if (!resolution.ok) return null
+  return {
+    modelId,
+    reasoningEffort: normalizeReasoningEffortSelection(
+      resolution.value.entry.capabilities,
+      parent.reasoningEffort,
+    ),
+  }
+}
+
+/** 连接变更后辅助选择必须继续精确可用；逐项清空，绝不猜测替补模型。 */
+export function pruneInvalidAuxiliaryModels(config: WhycodeConfig): WhycodeConfig {
+  const current = config.auxiliaryModels
+  if (!current) return config
+  const visionModelId = current.visionModelId && resolveAuxiliaryVisionModel(config)
+    ? current.visionModelId
+    : undefined
+  const subagentModelId = current.subagentModelId
+    && resolveModelConnection(config, current.subagentModelId).ok
+    ? current.subagentModelId
+    : undefined
+  if (
+    visionModelId === current.visionModelId
+    && subagentModelId === current.subagentModelId
+  ) return config
   const next = structuredClone(config)
-  delete next.auxiliaryModels
+  if (visionModelId || subagentModelId) {
+    next.auxiliaryModels = {
+      ...(visionModelId ? { visionModelId } : {}),
+      ...(subagentModelId ? { subagentModelId } : {}),
+    }
+  } else {
+    delete next.auxiliaryModels
+  }
   return next
 }
 

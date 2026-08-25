@@ -13,10 +13,11 @@ import {
   listAuxiliaryVisionModelCandidates,
   listConfiguredModelCandidates,
   listModelConnections,
-  pruneInvalidAuxiliaryModel,
+  pruneInvalidAuxiliaryModels,
   pruneInvalidConsensusAgents,
   resolveAuxiliaryVisionModel,
   resolveModelConnection,
+  resolveSubagentModelSelection,
 } from './model-connections.ts'
 
 describe('模型连接解析', () => {
@@ -265,7 +266,10 @@ describe('模型连接解析', () => {
         deepseek: { apiKey: 'text-key' },
         google: { apiKey: 'vision-key' },
       },
-      auxiliaryModels: { visionModelId: 'google:gemini-3.7-flash' },
+      auxiliaryModels: {
+        visionModelId: 'google:gemini-3.7-flash',
+        subagentModelId: 'deepseek:deepseek-v4-pro',
+      },
     }
     assert.deepEqual(listAuxiliaryVisionModelCandidates(value).map((model) => model.id), [
       'google:gemini-3.1-pro-preview',
@@ -284,11 +288,45 @@ describe('模型连接解析', () => {
 
     delete value.providers.google
     assert.equal(resolveAuxiliaryVisionModel(value), null)
-    assert.equal(pruneInvalidAuxiliaryModel(value).auxiliaryModels, undefined)
+    assert.deepEqual(pruneInvalidAuxiliaryModels(value).auxiliaryModels, {
+      subagentModelId: 'deepseek:deepseek-v4-pro',
+    })
     assert.equal(
       listModelConnections(value)[0]?.imageInputMode,
       'none',
     )
+  })
+
+  it('子代理默认继承父模型，固定连接时冻结目标模型并规范化推理档位', () => {
+    const value: WhycodeConfig = {
+      providers: {
+        deepseek: { apiKey: 'deepseek-key' },
+        google: { apiKey: 'google-key' },
+      },
+    }
+    assert.deepEqual(resolveSubagentModelSelection(value, {
+      modelId: 'deepseek:deepseek-v4-flash',
+      reasoningEffort: 'high',
+    }), {
+      modelId: 'deepseek:deepseek-v4-flash',
+      reasoningEffort: 'high',
+    })
+
+    value.auxiliaryModels = { subagentModelId: 'google:gemini-3.7-flash' }
+    assert.deepEqual(resolveSubagentModelSelection(value, {
+      modelId: 'deepseek:deepseek-v4-flash',
+      reasoningEffort: 'max',
+    }), {
+      modelId: 'google:gemini-3.7-flash',
+      reasoningEffort: 'default',
+    })
+
+    delete value.providers.google
+    assert.equal(resolveSubagentModelSelection(value, {
+      modelId: 'deepseek:deepseek-v4-flash',
+      reasoningEffort: 'high',
+    }), null)
+    assert.equal(pruneInvalidAuxiliaryModels(value).auxiliaryModels, undefined)
   })
 })
 

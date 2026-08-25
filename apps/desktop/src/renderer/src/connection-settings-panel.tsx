@@ -333,7 +333,7 @@ const SETTINGS_META: Record<SettingsSectionId, { title: string; description: str
   },
   auxiliary: {
     title: '辅助模型',
-    description: '为非视觉主模型选择按需调用的辅助识图模型。',
+    description: '分别配置图片理解与子代理任务使用的模型连接。',
   },
   consensus: {
     title: '协商模型',

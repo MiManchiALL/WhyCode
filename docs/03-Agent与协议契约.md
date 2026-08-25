@@ -356,6 +356,8 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
 
+新建子代理的模型在宿主创建边界冻结：未固定时继承父会话当前模型，固定时只能引用当前已配置连接；推理档位收敛到目标模型能力闭集。后续 continuation 使用 manifest 中的原模型快照，不重新继承父模型或读取新的全局选择。
+
 settlement 先随子 manifest 持久化为 pending；父 transcript 写稳通知后才标记 delivered。父会话运行中时在下一稳定边界插入，空闲恢复产生的旧终态才开启隐藏续轮；完整压缩不能摘要或拆散未消费通知。父 Stop 或删除会中止激活并直接确认取消终态，不再唤醒父会话；仅当 Stop 实际取消未完成子代理时，同一持久中断标记附带这些子代理的稳定 ID 与任务描述。应用退出产生的未交付终态留待下次恢复，单纯切换会话不影响运行。
 
 同一父 turn 内以 `(parentTurnId, activationId)` 跟踪启动和继续产生的全部 activation。每次模型请求在尾部投影当前总数、终态数、已交付数、任务描述和逐 activation 状态；投影不写入 transcript，turn 结束后不再出现，结果正文只存在于 settlement 消息。
@@ -382,6 +384,8 @@ Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 Op
 - Renderer 只显示当前有效画像允许的档位，Main 再校验，Provider 翻译为实际协议字段。
 
 模型和强度在 turn 起点冻结。退役 modelId 的历史可读但没有可发送 AgentSession；用户必须主动选择受支持型号，系统不得静默替换。模型目录更新流程见 `.agents/skills/whycode-model-catalog/SKILL.md`。
+
+视觉辅助模型和固定子代理模型只保存统一连接 ID，不复制密钥或端点。连接失效时逐项清除设置；运行中的既有 AgentSession 不被热替换。
 
 ## 9. 修改契约的检查清单
 

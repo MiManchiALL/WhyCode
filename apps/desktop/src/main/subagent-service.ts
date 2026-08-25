@@ -16,6 +16,7 @@ import {
   type SubagentLaunchResult,
   type SubagentListEntry,
   type SubagentManifest,
+  type SubagentModelSnapshot,
   type SubagentOutcome,
   type SubagentSettlementNotification,
   type SubagentState,
@@ -82,6 +83,7 @@ export interface SubagentServiceOptions {
   skills: SkillCatalogService
   webSearchTool: ToolDefinition
   createWebPageTools: (journal: SessionJournal) => ToolDefinition[]
+  selectModel: (parent: SubagentModelSnapshot) => SubagentModelSnapshot | null
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
   auxiliaryImageAnalyzer: () => AuxiliaryImageAnalyzer | undefined
   hostOperations: HostOperationScheduler
@@ -329,12 +331,17 @@ export class SubagentService {
     let continuationAdded = false
     try {
       this.assertPreparation(preparation, parentRuntime, parentJournal)
-      const modelId = parentRuntime.modelId
-      if (!modelId) throw new Error('父会话没有可继承的模型')
+      const parentModelId = parentRuntime.modelId
+      if (!parentModelId) throw new Error('父会话没有可继承的模型')
+      const model = this.options.selectModel({
+        modelId: parentModelId,
+        reasoningEffort: parentRuntime.reasoningEffort,
+      })
+      if (!model) throw new Error('子代理模型连接不可用')
       journal = await this.storage.create(parentJournal.sessionId, {
         workspace: parentJournal.metadataSnapshot.workspace,
-        modelId,
-        reasoningEffort: parentRuntime.reasoningEffort,
+        modelId: model.modelId,
+        reasoningEffort: model.reasoningEffort,
       })
       preparation.subagentId = journal.sessionId
       this.assertPreparation(preparation, parentRuntime, parentJournal)
@@ -355,8 +362,8 @@ export class SubagentService {
         createdByToolCallId: request.parentToolCallId,
         taskDescription: request.taskDescription,
         definition: structuredClone(request.definition),
-        modelId,
-        reasoningEffort: parentRuntime.reasoningEffort,
+        modelId: model.modelId,
+        reasoningEffort: model.reasoningEffort,
         permission,
         createdAt: now,
         updatedAt: now,

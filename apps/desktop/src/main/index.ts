@@ -40,6 +40,7 @@ import {
   skillSummary,
   type ActivatedSkill,
   type SubagentEventEnvelope,
+  type SubagentModelSnapshot,
   type SubagentSettlementNotification,
   type SubagentState,
   type WorkspaceBinding,
@@ -63,10 +64,11 @@ import {
 import {
   imageInputModeForModel,
   listModelConnections,
-  pruneInvalidAuxiliaryModel,
+  pruneInvalidAuxiliaryModels,
   pruneInvalidConsensusAgents,
   resolveAuxiliaryVisionModel,
   resolveModelConnection,
+  resolveSubagentModelSelection,
 } from './model-connections.ts'
 import { resolveConsensusAgentSetups } from './consensus-models.ts'
 import {
@@ -1384,7 +1386,7 @@ async function persistConnectionConfig(
   config: NonNullable<ReturnType<typeof loadAppConfig>>,
   invalidateConsensus = false,
 ): Promise<void> {
-  config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModel(config))
+  config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModels(config))
   await saveConfig(config, configSecretCodec, getConfigPath())
   if (invalidateConsensus) {
     const consensusReady = resolveConsensusAgentSetups(config).ok
@@ -1431,7 +1433,7 @@ async function synchronizeConfiguredCliProxyRoutes(
 ): Promise<void> {
   const loaded = loadAppConfig()
   if (!loaded) return
-  const config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModel(loaded))
+  const config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModels(loaded))
   if (config !== loaded) {
     if (invalidateRuntimeConnections) await persistConnectionConfig(config, true)
     else await saveConfig(config, configSecretCodec, getConfigPath())
@@ -1456,7 +1458,7 @@ async function synchronizeConfiguredCliProxyRoutes(
   if (defaultCliProxyModelId && !modelIds.includes(defaultCliProxyModelId)) {
     delete next.defaultModel
   }
-  const synchronized = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModel(next))
+  const synchronized = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModels(next))
   if (invalidateRuntimeConnections) await persistConnectionConfig(synchronized, true)
   else await saveConfig(synchronized, configSecretCodec, getConfigPath())
 }
@@ -2484,6 +2486,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     skills,
     webSearchTool,
     createWebPageTools: createSessionWebPageTools,
+    selectModel: (parent: SubagentModelSnapshot) =>
+      resolveSubagentModelSelection(loadAppConfig(), parent),
     resolveModel: (modelId) => {
       const resolved = resolveModelConnection(loadAppConfig(), modelId)
       return resolved.ok ? resolved.value : null

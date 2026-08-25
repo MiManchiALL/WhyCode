@@ -54,7 +54,8 @@ export function createConnectionSettingsSnapshot(
   const auxiliaryVisionModelId = auxiliaryVisionModels.some(
     (candidate) => candidate.id === configuredAuxiliaryVisionModelId,
   ) ? configuredAuxiliaryVisionModelId! : null
-  const consensusModels = listConfiguredModelCandidates(config)
+  const configuredModels = listConfiguredModelCandidates(config)
+  const configuredSubagentModelId = config?.auxiliaryModels?.subagentModelId
   const configuredAgentBModelId = config?.consensusAgents?.B?.modelId
   const configuredAgentCModelId = config?.consensusAgents?.C?.modelId
 
@@ -84,12 +85,14 @@ export function createConnectionSettingsSnapshot(
     },
     auxiliaryModels: {
       visionModelId: auxiliaryVisionModelId,
+      subagentModelId: configuredModelId(configuredModels, configuredSubagentModelId),
       visionModels: auxiliaryVisionModels,
+      subagentModels: configuredModels,
     },
     consensusModels: {
-      agentBModelId: configuredModelId(consensusModels, configuredAgentBModelId),
-      agentCModelId: configuredModelId(consensusModels, configuredAgentCModelId),
-      models: consensusModels,
+      agentBModelId: configuredModelId(configuredModels, configuredAgentBModelId),
+      agentCModelId: configuredModelId(configuredModels, configuredAgentCModelId),
+      models: configuredModels,
     },
     webSearch: createWebSearchSettingsSnapshot(config),
     mcp,
@@ -121,16 +124,31 @@ export function updateAuxiliaryModelSettings(
   request: SaveAuxiliaryModelSettingsRequest,
 ): WhycodeConfig {
   const next = cloneConfig(config)
-  if (request.visionModelId === null) {
+  const visionModelId = request.visionModelId === null
+    ? null
+    : request.visionModelId.trim()
+  if (visionModelId) {
+    if (!listAuxiliaryVisionModelCandidates(next).some(
+      (candidate) => candidate.id === visionModelId,
+    )) {
+      throw new Error('视觉辅助模型必须是当前已配置且可用的多模态模型')
+    }
+  } else if (request.visionModelId !== null) {
+    throw new Error('视觉辅助模型 ID 不能为空')
+  }
+  const subagentModelId = normalizeConfiguredModelSelection(
+    listConfiguredModelCandidates(next),
+    request.subagentModelId,
+    '子代理模型',
+  )
+  if (visionModelId || subagentModelId) {
+    next.auxiliaryModels = {
+      ...(visionModelId ? { visionModelId } : {}),
+      ...(subagentModelId ? { subagentModelId } : {}),
+    }
+  } else {
     delete next.auxiliaryModels
-    return next
   }
-  const modelId = request.visionModelId.trim()
-  if (!modelId) throw new Error('辅助识图模型 ID 不能为空')
-  if (!listAuxiliaryVisionModelCandidates(next).some((candidate) => candidate.id === modelId)) {
-    throw new Error('辅助识图模型必须是当前已配置且可用的多模态模型')
-  }
-  next.auxiliaryModels = { visionModelId: modelId }
   return next
 }
 
@@ -207,12 +225,13 @@ function configuredModelId(
 function normalizeConfiguredModelSelection(
   models: readonly { id: string }[],
   value: string | null,
+  label = '协商评审模型',
 ): string | null {
   if (value === null) return null
   const modelId = value.trim()
   if (!modelId) return null
   if (!models.some((model) => model.id === modelId)) {
-    throw new Error('协商评审模型必须来自当前已配置且可用的模型连接')
+    throw new Error(`${label}必须来自当前已配置且可用的模型连接`)
   }
   return modelId
 }

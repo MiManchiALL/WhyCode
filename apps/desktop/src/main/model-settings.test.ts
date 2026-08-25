@@ -55,7 +55,7 @@ describe('模型设置数据边界', () => {
     )
   })
 
-  it('辅助识图只列出已配置的多模态模型，并以精确 ID 保存或关闭', () => {
+  it('辅助模型分别约束视觉候选和子代理候选，并以 null 表示默认行为', () => {
     const initial: WhycodeConfig = {
       providers: {
         deepseek: { apiKey: 'text-key' },
@@ -65,7 +65,14 @@ describe('模型设置数据边界', () => {
     const snapshot = createSettingsSnapshot(initial)
     assert.deepEqual(snapshot.auxiliaryModels, {
       visionModelId: null,
+      subagentModelId: null,
       visionModels: [
+        { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
+        { id: 'google:gemini-3.7-flash', displayName: 'Gemini 3.7 Flash' },
+      ],
+      subagentModels: [
+        { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
+        { id: 'deepseek:deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
         { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
         { id: 'google:gemini-3.7-flash', displayName: 'Gemini 3.7 Flash' },
       ],
@@ -73,9 +80,11 @@ describe('模型设置数据边界', () => {
 
     const enabled = updateAuxiliaryModelSettings(initial, {
       visionModelId: 'google:gemini-3.7-flash',
+      subagentModelId: 'deepseek:deepseek-v4-pro',
     })
     assert.deepEqual(enabled.auxiliaryModels, {
       visionModelId: 'google:gemini-3.7-flash',
+      subagentModelId: 'deepseek:deepseek-v4-pro',
     })
     assert.equal(
       createSettingsSnapshot(enabled).auxiliaryModels.visionModelId,
@@ -84,11 +93,29 @@ describe('模型设置数据边界', () => {
     assert.throws(
       () => updateAuxiliaryModelSettings(initial, {
         visionModelId: 'deepseek:deepseek-v4-flash',
+        subagentModelId: null,
       }),
-      /必须是当前已配置且可用的多模态模型/,
+      /视觉辅助模型必须是当前已配置且可用的多模态模型/,
+    )
+    assert.throws(
+      () => updateAuxiliaryModelSettings(initial, {
+        visionModelId: null,
+        subagentModelId: 'openai:gpt-5.6-sol',
+      }),
+      /子代理模型必须来自当前已配置且可用的模型连接/,
+    )
+    assert.deepEqual(
+      updateAuxiliaryModelSettings(enabled, {
+        visionModelId: null,
+        subagentModelId: 'deepseek:deepseek-v4-flash',
+      }).auxiliaryModels,
+      { subagentModelId: 'deepseek:deepseek-v4-flash' },
     )
     assert.equal(
-      updateAuxiliaryModelSettings(enabled, { visionModelId: null }).auxiliaryModels,
+      updateAuxiliaryModelSettings(enabled, {
+        visionModelId: null,
+        subagentModelId: null,
+      }).auxiliaryModels,
       undefined,
     )
   })
