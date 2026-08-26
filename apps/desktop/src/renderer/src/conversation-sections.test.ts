@@ -68,6 +68,19 @@ describe('已完成任务的会话展示投影', () => {
     assert.equal(findLatestForkTurnId(sections), 'turn-1')
   })
 
+  it('侧对话完成后仍保留最近一次 Main 的 Fork 锚点', () => {
+    const sections = conversationSections([
+      user('user-main', 'turn-main'),
+      text('answer-main', '主对话回答'),
+      { ...duration('duration-main'), forkTurnId: 'turn-main' } as Block,
+      user('user-btw'),
+      text('answer-btw', '侧对话回答'),
+      duration('duration-btw'),
+    ])
+
+    assert.equal(findLatestForkTurnId(sections), 'turn-main')
+  })
+
   it('直接回答仍把固定时长放到最终回答前，但没有伪造可展开内容', () => {
     const sections = conversationSections([
       user('user-1', 'turn-1'),

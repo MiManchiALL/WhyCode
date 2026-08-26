@@ -58,6 +58,7 @@ export function findLatestForkTurnId(
       section?.kind === 'completed-work'
       && section.duration.outcome === 'completed'
       && section.finalBlocks.length > 0
+      && section.forkTurnId !== null
     ) {
       return section.forkTurnId
     }
