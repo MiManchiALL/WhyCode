@@ -196,6 +196,7 @@ button:not(:disabled),
 
 .wc-user-message-bubble-btw,
 .wc-composer-btw {
+  --wc-btw-line: rgb(41 42 39 / 42%);
   position: relative;
   border-color: transparent;
 }
@@ -208,10 +209,10 @@ button:not(:disabled),
   border-radius: inherit;
   pointer-events: none;
   background:
-    repeating-linear-gradient(to right, var(--wc-line-strong) 0 12px, transparent 12px 19px) top left / 100% 1px no-repeat,
-    repeating-linear-gradient(to right, var(--wc-line-strong) 0 12px, transparent 12px 19px) bottom left / 100% 1px no-repeat,
-    repeating-linear-gradient(to bottom, var(--wc-line-strong) 0 12px, transparent 12px 19px) top left / 1px 100% no-repeat,
-    repeating-linear-gradient(to bottom, var(--wc-line-strong) 0 12px, transparent 12px 19px) top right / 1px 100% no-repeat;
+    repeating-linear-gradient(to right, var(--wc-btw-line) 0 12px, transparent 12px 19px) top left / 100% 1px no-repeat,
+    repeating-linear-gradient(to right, var(--wc-btw-line) 0 12px, transparent 12px 19px) bottom left / 100% 1px no-repeat,
+    repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 12px, transparent 12px 19px) top left / 1px 100% no-repeat,
+    repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 12px, transparent 12px 19px) top right / 1px 100% no-repeat;
 }
 
 .wc-settings-section {
