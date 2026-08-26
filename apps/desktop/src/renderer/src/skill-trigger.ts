@@ -6,7 +6,7 @@ export interface SlashTrigger {
   query: string
 }
 
-export type ComposerCommandId = 'compact' | 'fork'
+export type ComposerCommandId = 'compact' | 'fork' | 'btw' | 'bbtw'
 
 export interface ComposerCommand {
   id: ComposerCommandId

@@ -159,6 +159,10 @@ import {
   StepToolApprovalBatcher,
   type ApprovalHandler,
 } from './tool-approval.ts'
+import type {
+  BtwTurnContext,
+  BtwTurnResult,
+} from '../session/btw.ts'
 
 export type {
   ApprovalHandler,
@@ -239,6 +243,12 @@ export interface PreparedLatestTurnEdit {
   readonly skills: readonly ActivatedSkill[]
   accept(): void
   startMain(): Promise<StopReason>
+}
+
+export interface BtwTurnLifecycle {
+  /** BTW 可见事件不走 Main 的 ViewTimeline；宿主由独立事实统一恢复。 */
+  emit: (event: CoreEvent) => void
+  onSettled: (result: BtwTurnResult, continuesWithMainWork: boolean) => Promise<void>
 }
 
 interface QueuedMessage {
@@ -614,6 +624,259 @@ export class AgentSession {
   /** 协商事务锚点：返回隔离副本，失败/取消时由 Orchestrator 恢复。 */
   captureMessageSnapshot(): ModelMessage[] {
     return structuredClone(this.messages)
+  }
+
+  /**
+   * 独立侧对话：读取 Main 的稳定上下文快照，但不装配工具、不写入 Main messages。
+   * 只有成功完成的结果才可成为下一次 BBTW 的历史；该资格由 SessionJournal 决定。
+   */
+  handleBtwMessage(
+    context: BtwTurnContext,
+    lifecycle: BtwTurnLifecycle,
+  ): Promise<StopReason> {
+    if (this.isBusy || this.activeTurn) throw new Error('Agent 工作中，不能启动 BTW')
+    if (this.options.promptContext.discussion || this.protocolRound) {
+      throw new Error('协议或讨论阶段不能启动 BTW')
+    }
+    if (findPendingUserQuestion(this.messages)) {
+      throw new Error('当前问题尚未回答，不能启动 BTW')
+    }
+    const turnModelSelection: TurnModelSelection = {
+      model: this.options.model,
+      providerConfig: this.options.providerConfig,
+      reasoningEffort: this.options.reasoningEffort ?? 'default',
+    }
+    this.activeModelSelection = turnModelSelection
+    this.opAbort = new AbortController()
+    this.running = true
+    this.lastFinishReason = null
+    for (const attachment of [
+      ...context.history.flatMap((turn) => turn.attachments),
+      ...context.attachments,
+    ]) this.imageAttachments.set(attachment.storageName, structuredClone(attachment))
+    return this.runBtwTurn(context, lifecycle, this.opAbort.signal)
+      .finally(() => {
+        if (this.activeModelSelection === turnModelSelection) this.activeModelSelection = null
+      })
+  }
+
+  private async runBtwTurn(
+    context: BtwTurnContext,
+    lifecycle: BtwTurnLifecycle,
+    abortSignal: AbortSignal,
+  ): Promise<StopReason> {
+    const startedAt = Date.now()
+    lifecycle.emit({ type: 'agent-status', status: 'working' })
+    let result: BtwTurnResult
+    try {
+      result = {
+        ...await this.runBtwModel(context, lifecycle.emit, abortSignal),
+        // 模型可能因不可交付输出重试；展示的是整次 BTW 生命周期，而非最后一次请求。
+        durationMs: Math.max(0, Date.now() - startedAt),
+      }
+    } catch (error) {
+      const stopped = abortSignal.aborted
+      result = {
+        outcome: stopped ? 'stopped' : 'error',
+        assistantText: '',
+        reasoningText: '',
+        reasoningDurationMs: 0,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        ...(!stopped ? { error: error instanceof Error ? error.message : String(error) } : {}),
+      }
+      lifecycle.emit({ type: 'step-discarded' })
+      if (!stopped) lifecycle.emit({ type: 'error', message: result.error!, recoverable: true })
+    }
+
+    this.opAbort = null
+    this.currentStepAbort = null
+    const continuesWithMainWork = result.outcome !== 'error'
+      && !abortSignal.aborted
+      && this.hasPendingMessages()
+    try {
+      await lifecycle.onSettled(result, continuesWithMainWork)
+    } catch (error) {
+      this.running = false
+      if (this.queue.length > 0) await this.restoreQueuedInput().catch(() => {})
+      lifecycle.emit({ type: 'agent-status', status: 'error' })
+      this.resolveIdleWaiters()
+      throw error
+    }
+    if (continuesWithMainWork) {
+      this.running = false
+      this.activeModelSelection = null
+      return this.startPendingTurn()
+    }
+
+    this.running = false
+    if (this.queue.length > 0) {
+      try {
+        await this.restoreQueuedInput()
+      } catch (error) {
+        lifecycle.emit({
+          type: 'error',
+          message: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        })
+        result = { ...result, outcome: 'error' }
+      }
+    }
+    lifecycle.emit({ type: 'agent-status', status: result.outcome === 'error' ? 'error' : 'idle' })
+    this.resolveIdleWaiters()
+    return result.outcome === 'completed'
+      ? 'completed'
+      : result.outcome === 'stopped'
+        ? 'aborted'
+        : 'error'
+  }
+
+  private async runBtwModel(
+    context: BtwTurnContext,
+    emit: (event: CoreEvent) => void,
+    turnAbortSignal: AbortSignal,
+  ): Promise<BtwTurnResult> {
+    const baseMessages = this.captureMessageSnapshot()
+    const sideMessages = context.history.flatMap((turn): ModelMessage[] => [
+      turn.attachments.length
+        ? createImageUserMessage(turn.text, turn.attachments, 'native')
+        : { role: 'user', content: turn.text },
+      { role: 'assistant', content: turn.assistantText },
+    ])
+    const currentMessage: ModelMessage = context.attachments.length
+      ? createImageUserMessage(context.text, context.attachments, 'native')
+      : { role: 'user', content: context.text }
+    const system = `${buildSystemPrompt(
+      this.options.promptContext,
+      this.options.customSystemPrompt,
+    )}\n\n<whycode-btw>\n这是一个临时侧对话。请结合已有主对话背景直接回答最后一条侧问题；不要调用工具、执行任务或把侧问题当作主任务进度。\n</whycode-btw>`
+    const requestMessages = await this.messagesForCurrentModel(
+      [...baseMessages, ...sideMessages, currentMessage],
+      turnAbortSignal,
+      false,
+    )
+    let lastUndeliverable: UndeliverableModelResponseError | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.runBtwModelAttempt(system, requestMessages, emit, turnAbortSignal)
+      } catch (error) {
+        if (!(error instanceof UndeliverableModelResponseError) || turnAbortSignal.aborted) {
+          throw error
+        }
+        lastUndeliverable = error
+        emit({ type: 'step-discarded' })
+      }
+    }
+    const reason = lastUndeliverable?.finishReason
+      ? `（finish reason: ${lastUndeliverable.finishReason}）`
+      : ''
+    throw new Error(`模型连续两次没有返回可交付答复${reason}，请重试或切换模型。`)
+  }
+
+  private async runBtwModelAttempt(
+    system: string,
+    messages: ModelMessage[],
+    emit: (event: CoreEvent) => void,
+    turnAbortSignal: AbortSignal,
+  ): Promise<BtwTurnResult> {
+    const startedAt = Date.now()
+    const stepAbort = new AbortController()
+    const onTurnAbort = () => stepAbort.abort('user-cancel')
+    turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
+    if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
+    this.currentStepAbort = stepAbort
+    const inactivityWatchdog = new ModelInactivityWatchdog(stepAbort)
+    inactivityWatchdog.start()
+    let reasoningText = ''
+    let reasoningStartedAt: number | null = null
+    let reasoningDurationMs = 0
+    let emittedText = ''
+    let finishReason: string | null = null
+    try {
+      const stream = streamText({
+        model: this.createLanguageModel(),
+        system,
+        messages,
+        stopWhen: stepCountIs(1),
+        providerOptions: this.requestProviderOptions(),
+        abortSignal: stepAbort.signal,
+      })
+      const textGate = new AssistantTextGate((text) => {
+        emittedText += text
+        emit({ type: 'text-delta', text })
+      })
+      for await (const part of stream.fullStream) {
+        inactivityWatchdog.noteStreamActivity()
+        if (part.type === 'reasoning-delta') {
+          if (reasoningStartedAt === null) {
+            reasoningStartedAt = Date.now()
+            emit({ type: 'agent-status', status: 'thinking' })
+          }
+          reasoningText += part.text
+          emit({ type: 'thinking-delta', text: part.text })
+        } else if (part.type === 'reasoning-end') {
+          if (reasoningStartedAt !== null) {
+            reasoningDurationMs += Date.now() - reasoningStartedAt
+            reasoningStartedAt = null
+            emit({ type: 'thinking-end', durationMs: reasoningDurationMs })
+            emit({ type: 'agent-status', status: 'working' })
+          }
+        } else if (part.type === 'text-delta') {
+          textGate.push(part.text)
+        } else if (part.type === 'finish') {
+          finishReason = part.finishReason
+        } else if (part.type === 'error') {
+          throw part.error instanceof Error ? part.error : new Error(String(part.error))
+        }
+      }
+      textGate.finish()
+      if (reasoningStartedAt !== null) {
+        reasoningDurationMs += Date.now() - reasoningStartedAt
+        emit({ type: 'thinking-end', durationMs: reasoningDurationMs })
+      }
+      if (stepAbort.signal.aborted) throw new Error('BTW 已中止')
+      const response = await stream.response
+      const normalized = normalizeResponseMessagesForProvider(
+        response.messages,
+        this.currentModelSelection().model.protocol,
+      )
+      const sanitized = sanitizeAssistantControlOutput(normalized)
+      if (sanitized.rejected || !hasDeliverableModelText(sanitized.messages)) {
+        throw new UndeliverableModelResponseError(finishReason)
+      }
+      const assistantText = sanitized.messages.map(modelMessageText).join('\n').trim()
+      return {
+        outcome: 'completed',
+        assistantText,
+        reasoningText,
+        reasoningDurationMs,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      }
+    } catch (error) {
+      if (
+        stepAbort.signal.aborted
+        && stepAbort.signal.reason === MODEL_INACTIVITY_ABORT_REASON
+      ) {
+        throw new Error(
+          `模型连续 ${Math.round(MODEL_INACTIVITY_TIMEOUT_MS / 1000)} 秒没有返回数据，请重试或切换模型。`,
+        )
+      }
+      if (stepAbort.signal.aborted) {
+        if (emittedText) emit({ type: 'step-output-retained' })
+        emit({ type: 'step-discarded' })
+        return {
+          outcome: 'stopped',
+          assistantText: emittedText,
+          reasoningText: '',
+          reasoningDurationMs: 0,
+          durationMs: Math.max(0, Date.now() - startedAt),
+        }
+      }
+      throw error
+    } finally {
+      inactivityWatchdog.stop()
+      turnAbortSignal.removeEventListener('abort', onTurnAbort)
+      if (this.currentStepAbort === stepAbort) this.currentStepAbort = null
+    }
   }
 
   /** 仅允许在回合结束后恢复，持久化回滚由共识任务终点统一提交。 */

@@ -873,6 +873,81 @@ describe('会话界面时间线重建', () => {
     assert.equal(block?.kind, 'tool')
     assert.deepEqual(block?.kind === 'tool' ? block.call.attachments : [], [attachment])
   })
+
+  it('只有成功完成且未到第三轮的 BTW 才开放 BBTW', () => {
+    let state = createConversationState()
+    state = applyCoreEvent(state, {
+      type: 'btw-message-accepted',
+      inputId: 'btw-input-1',
+      text: '顺便问一下',
+      btw: {
+        conversationId: '11111111-1111-4111-8111-111111111111',
+        turnIndex: 1,
+        mode: 'btw',
+      },
+    })
+    const sideBlock = state.blocks.at(-1)
+    assert.equal(sideBlock?.kind === 'user' ? sideBlock.btw?.mode : null, 'btw')
+    state = applyCoreEvent(state, { type: 'text-delta', text: '侧对话回答' })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 100,
+      outcome: 'completed',
+      forkTurnId: null,
+    })
+    assert.deepEqual(state.btwContinuation, {
+      conversationId: '11111111-1111-4111-8111-111111111111',
+      turnIndex: 1,
+    })
+
+    state = applyCoreEvent(state, {
+      type: 'user-message-accepted',
+      inputId: 'main-input-1',
+      text: '回到主对话',
+      startsTurn: true,
+    })
+    assert.equal(state.btwContinuation, null)
+
+    state = applyCoreEvent(state, {
+      type: 'btw-message-accepted',
+      inputId: 'btw-input-3',
+      text: '第三轮',
+      btw: {
+        conversationId: '22222222-2222-4222-8222-222222222222',
+        turnIndex: 3,
+        mode: 'bbtw',
+      },
+    })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '第三轮回答' })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 100,
+      outcome: 'completed',
+      forkTurnId: null,
+    })
+    assert.equal(state.btwContinuation, null)
+
+    state = applyCoreEvent(state, {
+      type: 'btw-message-accepted',
+      inputId: 'btw-input-stopped',
+      text: '被停止',
+      btw: {
+        conversationId: '33333333-3333-4333-8333-333333333333',
+        turnIndex: 1,
+        mode: 'btw',
+      },
+    })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '部分回答' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 50,
+      outcome: 'stopped',
+      forkTurnId: null,
+    })
+    assert.equal(state.btwContinuation, null)
+  })
 })
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {

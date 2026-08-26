@@ -42,8 +42,16 @@ import {
   SKILL_MAX_SELECTIONS_PER_MESSAGE,
   type ActivatedSkill,
 } from '../skills/types.ts'
+import {
+  BTW_MAX_TURNS,
+  btwModeSchema,
+  type BtwContinuation,
+  type BtwMode,
+  type BtwTurnContext,
+  type BtwTurnResult,
+} from './btw.ts'
 
-export const SESSION_SCHEMA_VERSION = 11
+export const SESSION_SCHEMA_VERSION = 12
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -176,6 +184,50 @@ const userInputSchema = chainedEntrySchema.extend({
 const userInputRestoredSchema = chainedEntrySchema.extend({
   type: z.literal('user-input-restored'),
   inputIds: z.array(entryIdSchema).min(1),
+})
+
+const btwInputSchema = chainedEntrySchema.extend({
+  type: z.literal('btw-input'),
+  conversationId: sessionIdSchema,
+  turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
+  mode: btwModeSchema,
+  text: z.string(),
+  attachments: userImageAttachmentsSchema.optional(),
+}).superRefine((input, ctx) => {
+  validateUserInputContent({
+    text: input.text,
+    attachments: input.attachments,
+    imageDelivery: input.attachments?.length ? 'native' : undefined,
+  }, ctx)
+  input.attachments?.forEach((attachment, index) => {
+    if (attachment.sessionId !== input.sessionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['attachments', index, 'sessionId'],
+        message: '附件必须属于当前会话',
+      })
+    }
+  })
+})
+
+const btwResponseSchema = chainedEntrySchema.extend({
+  type: z.literal('btw-response'),
+  inputId: entryIdSchema,
+  conversationId: sessionIdSchema,
+  turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
+  outcome: z.enum(['completed', 'stopped', 'error']),
+  assistantText: z.string(),
+  reasoningText: z.string(),
+  reasoningDurationMs: z.number().nonnegative(),
+  durationMs: z.number().nonnegative(),
+  error: z.string().min(1).optional(),
+}).superRefine((response, ctx) => {
+  if (response.outcome === 'completed' && !response.assistantText.trim()) {
+    ctx.addIssue({ code: 'custom', path: ['assistantText'], message: '完成的 BTW 必须包含答复' })
+  }
+  if (response.outcome === 'error' && !response.error) {
+    ctx.addIssue({ code: 'custom', path: ['error'], message: '失败的 BTW 必须记录错误' })
+  }
 })
 
 const modelChangeSchema = chainedEntrySchema.extend({
@@ -318,6 +370,8 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   sessionStartSchema,
   userInputSchema,
   userInputRestoredSchema,
+  btwInputSchema,
+  btwResponseSchema,
   modelChangeSchema,
   projectInstructionsSchema,
   viewEventsEntrySchema,
@@ -425,6 +479,10 @@ export interface LoadedSession {
   interruptedConsensusBaseTurnIds: string[] | null
   consensusState: ConsensusPersistedState | null
   taskState: TaskPlanState
+  /** 仅供下一次 BBTW 请求使用；从独立侧对话事实派生，不进入 Main messages。 */
+  btwContinuation: BtwContinuation | null
+  /** 进程退出时没有终态的侧输入；恢复入口会先补写 stopped 终态。 */
+  interruptedBtw: { context: BtwTurnContext; invalidated: boolean } | null
 }
 
 export interface SessionRecorder {
@@ -443,6 +501,7 @@ export interface SessionRecorder {
   readonly interruptedConsensusTaskId: string | null
   readonly initialConsensusState: ConsensusPersistedState | null
   readonly initialTaskState: TaskPlanState
+  readonly btwContinuation: BtwContinuation | null
   /** 仅返回仍位于当前活动父链上的 turn 起点；压缩/旧回滚之前的 turn 返回 null。 */
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
@@ -470,6 +529,12 @@ export interface SessionRecorder {
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
   ): Promise<void>
+  recordBtwInput(
+    mode: BtwMode,
+    text: string,
+    attachments?: readonly ImageAttachment[],
+  ): Promise<BtwTurnContext>
+  recordBtwResponse(context: BtwTurnContext, result: BtwTurnResult): Promise<void>
   /**
    * 把回滚换根与编辑后的新根输入作为一次 flush 提交；旧 JSONL 分支保留审计，
    * 活动模型历史从 rollbackMessages 继续。

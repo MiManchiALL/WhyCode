@@ -46,6 +46,9 @@ interface UseSkillComposerOptions {
   compactDisabled: boolean
   forkAvailable: boolean
   forkDisabled: boolean
+  btwAvailable: boolean
+  bbtwAvailable: boolean
+  skillsEnabled: boolean
   onCommand: (command: ComposerCommandId) => void
 }
 
@@ -73,22 +76,26 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
       compactDisabled: options.compactDisabled,
       forkAvailable: options.forkAvailable,
       forkDisabled: options.forkDisabled,
+      btwAvailable: options.btwAvailable,
+      bbtwAvailable: options.bbtwAvailable,
     }),
     [
       options.compactAvailable,
       options.compactDisabled,
       options.forkAvailable,
       options.forkDisabled,
+      options.btwAvailable,
+      options.bbtwAvailable,
     ],
   )
   const matches = useMemo(
     () => filterComposerItems(
       commands,
-      catalog.skills,
+      options.skillsEnabled ? catalog.skills : [],
       selectedIds,
       trigger?.query ?? '',
     ),
-    [catalog.skills, commands, selectedIds, trigger?.query],
+    [catalog.skills, commands, options.skillsEnabled, selectedIds, trigger?.query],
   )
   const limitReached = selected.length >= SKILL_MAX_SELECTIONS_PER_MESSAGE
 
@@ -275,9 +282,29 @@ export function createComposerCommands(
     compactDisabled: boolean
     forkAvailable: boolean
     forkDisabled: boolean
+    btwAvailable?: boolean
+    bbtwAvailable?: boolean
   },
 ): ComposerCommand[] {
   const commands: ComposerCommand[] = []
+  if (options.btwAvailable) {
+    commands.push({
+      id: 'btw',
+      name: 'BTW',
+      description: '开始不写入主上下文的临时侧对话',
+      keywords: ['btw', '临时', '侧对话'],
+      disabled: false,
+    })
+  }
+  if (options.bbtwAvailable) {
+    commands.push({
+      id: 'bbtw',
+      name: 'BBTW',
+      description: '续接刚才的临时侧对话，最多三轮',
+      keywords: ['bbtw', '继续', '续接'],
+      disabled: false,
+    })
+  }
   if (options.forkAvailable) {
     commands.push({
       id: 'fork',

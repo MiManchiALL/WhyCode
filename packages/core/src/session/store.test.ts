@@ -1711,6 +1711,145 @@ describe('SessionStore', () => {
     assert.equal(await store.markDeleting(randomUUID()), false)
   })
 
+  it('BTW 事实可重放但永远不进入 Main 消息，并支持最多三轮续接', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\btw'),
+      modelId: 'test:model',
+    })
+
+    const first = await journal.recordBtwInput('btw', '第一条题外问题')
+    assert.equal(first.turnIndex, 1)
+    assert.deepEqual(first.history, [])
+    await journal.recordBtwResponse(first, {
+      outcome: 'completed',
+      assistantText: '第一条回答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 120,
+    })
+
+    const second = await journal.recordBtwInput('bbtw', '继续追问')
+    assert.equal(second.conversationId, first.conversationId)
+    assert.equal(second.turnIndex, 2)
+    assert.deepEqual(second.history.map((turn) => [turn.text, turn.assistantText]), [
+      ['第一条题外问题', '第一条回答'],
+    ])
+    await journal.recordBtwResponse(second, {
+      outcome: 'completed',
+      assistantText: '第二条回答',
+      reasoningText: '简短思考',
+      reasoningDurationMs: 20,
+      durationMs: 180,
+    })
+
+    const third = await journal.recordBtwInput('bbtw', '最后追问')
+    assert.equal(third.turnIndex, 3)
+    assert.equal(third.history.length, 2)
+    await journal.recordBtwResponse(third, {
+      outcome: 'completed',
+      assistantText: '第三条回答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 90,
+    })
+
+    assert.equal(journal.btwContinuation, null)
+    await assert.rejects(journal.recordBtwInput('bbtw', '第四条追问'), /没有可续接/)
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.initialMessages, [])
+    assert.equal(reopened.btwContinuation, null)
+    const sideInputs = reopened.initialViewEvents.filter((event) =>
+      event.type === 'user-message' && event.btw)
+    assert.deepEqual(sideInputs.map((event) =>
+      event.type === 'user-message'
+        ? [event.text, event.startsTurn, event.btw?.turnIndex, event.btw?.mode]
+        : null), [
+      ['第一条题外问题', false, 1, 'btw'],
+      ['继续追问', false, 2, 'bbtw'],
+      ['最后追问', false, 3, 'bbtw'],
+    ])
+    assert.equal(reopened.initialViewEvents.some((event) =>
+      event.type === 'core-event'
+      && event.event.type === 'text-delta'
+      && event.event.text === '第三条回答'), true)
+  })
+
+  it('普通消息、停止和失败都会切断 BBTW 续接', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\btw-boundaries'),
+      modelId: 'test:model',
+    })
+
+    const interrupted = await journal.recordBtwInput('btw', '即将被普通消息打断')
+    await journal.recordUserInputWithId(randomUUID(), '回到主对话', true)
+    await journal.recordBtwResponse(interrupted, {
+      outcome: 'completed',
+      assistantText: '虽完成但不可续接',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 50,
+    })
+    assert.equal(journal.btwContinuation, null)
+
+    const stopped = await journal.recordBtwInput('btw', '停止这次')
+    await journal.recordBtwResponse(stopped, {
+      outcome: 'stopped',
+      assistantText: '部分回答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 30,
+    })
+    assert.equal(journal.btwContinuation, null)
+
+    const failed = await journal.recordBtwInput('btw', '失败这次')
+    await journal.recordBtwResponse(failed, {
+      outcome: 'error',
+      assistantText: '',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 10,
+      error: '模型连接失败',
+    })
+    assert.equal(journal.btwContinuation, null)
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.btwContinuation, null)
+  })
+
+  it('恢复时为崩溃遗留的 BTW 输入补写停止终态，后续侧对话不会损坏链', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\btw-recovery'),
+      modelId: 'test:model',
+    })
+    await journal.recordBtwInput('btw', '崩溃前的侧问题')
+
+    const interrupted = await store.open(journal.sessionId)
+    await assert.rejects(interrupted.recordBtwInput('btw', '恢复前不能并发开启'), /尚未结束/)
+    await interrupted.recoverInterruptedWork()
+
+    const resumed = await interrupted.recordBtwInput('btw', '恢复后的新侧问题')
+    await interrupted.recordBtwResponse(resumed, {
+      outcome: 'completed',
+      assistantText: '新回答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 40,
+    })
+
+    const reopened = await store.open(journal.sessionId)
+    assert.equal(reopened.btwContinuation?.turns.length, 1)
+    assert.equal(reopened.btwContinuation?.turns[0]?.text, '恢复后的新侧问题')
+    const outcomes = reopened.initialViewEvents.flatMap((event) =>
+      event.type === 'core-event' && event.event.type === 'work-finished'
+        ? [event.event.outcome]
+        : [])
+    assert.deepEqual(outcomes, ['stopped', 'completed'])
+  })
+
   it('按项目过滤并安全删除会话', async () => {
     const store = await createStore()
     const first = await store.create({ workspace: localWorkspace('C:\\work\\one'), modelId: 'test:model' })

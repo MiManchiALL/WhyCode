@@ -14,6 +14,7 @@ import type { SkillSummary } from '@whycode/core/skills'
 import type {
   BackgroundTaskState,
   BackgroundTaskSummary,
+  BtwMode,
   CoreCommand,
   ReasoningEffortSelection,
   SessionForkOrigin,
@@ -115,6 +116,7 @@ export function App() {
   const [runtimeId, setRuntimeId] = useState('')
   const [view, setView] = useState(() => createConversationState())
   const [input, setInput] = useState('')
+  const [btwMode, setBtwModeState] = useState<BtwMode | null>(null)
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [workStartedAt, setWorkStartedAt] = useState<number | null>(null)
   const [stopping, setStopping] = useState(false)
@@ -188,6 +190,7 @@ export function App() {
     images: ImageDraft[]
     pdfs: PdfDraft[]
     skills: SkillSummary[]
+    btwMode: BtwMode | null
   }>())
   const conversationPresentationsRef = useRef(new ConversationPresentationCache())
   const pendingScrollRestoreRef = useRef<ConversationScrollPosition | null>(null)
@@ -198,6 +201,7 @@ export function App() {
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const inputRef = useRef('')
+  const btwModeRef = useRef<BtwMode | null>(null)
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
   const conversationEventBufferRef = useRef<ConversationEventBuffer | null>(null)
   if (!conversationEventBufferRef.current) {
@@ -239,6 +243,10 @@ export function App() {
     setShowJumpBottom(true)
   }, [releaseConversationScroll])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
+  const setBtwMode = useCallback((mode: BtwMode | null) => {
+    btwModeRef.current = mode
+    setBtwModeState(mode)
+  }, [])
   const {
     catalog: skillCatalog,
     selected: selectedSkills,
@@ -273,6 +281,11 @@ export function App() {
     forkAvailable: latestForkTurnId !== null
       && (status === 'idle' || status === 'error'),
     forkDisabled: sessionTransitionPending || forkPendingTurnId !== null,
+    btwAvailable: latestForkTurnId !== null && (status === 'idle' || status === 'error'),
+    bbtwAvailable: latestForkTurnId !== null
+      && view.btwContinuation !== null
+      && (status === 'idle' || status === 'error'),
+    skillsEnabled: btwMode === null,
     onCommand: (command) => slashCommandRef.current(command),
   })
   const checkpointRestoreAnchors = useMemo(
@@ -328,14 +341,21 @@ export function App() {
     const pdfs = detachPdfDrafts()
     const text = inputRef.current
     const skills = captureSkills()
+    const currentBtwMode = btwModeRef.current
     // 尚未产生 JSONL 的空白页没有历史入口，切走后不能再导航回来。
     if (!currentSessionId) {
       releaseImageDrafts(images)
       return
     }
     const key = composerKey(currentRuntimeId, currentSessionId)
-    if (text || images.length > 0 || pdfs.length > 0 || skills.length > 0) {
-      composerDraftsRef.current.set(key, { text, images, pdfs, skills })
+    if (text || images.length > 0 || pdfs.length > 0 || skills.length > 0 || currentBtwMode) {
+      composerDraftsRef.current.set(key, {
+        text,
+        images,
+        pdfs,
+        skills,
+        btwMode: currentBtwMode,
+      })
     } else {
       composerDraftsRef.current.delete(key)
     }
@@ -365,7 +385,8 @@ export function App() {
     clearSkills()
     clearImageDrafts()
     clearPdfDrafts()
-  }, [clearImageDrafts, clearPdfDrafts, clearSkills])
+    setBtwMode(null)
+  }, [clearImageDrafts, clearPdfDrafts, clearSkills, setBtwMode])
 
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     resumingSessionIdRef.current = sessionId
@@ -535,6 +556,7 @@ export function App() {
       const draft = composerDraftsRef.current.get(key)
       composerDraftsRef.current.delete(key)
       setInput(draft?.text ?? '')
+      setBtwMode(draft?.btwMode ?? null)
       replaceSkills(draft?.skills ?? [])
       if (draft) {
         restoreImageDrafts(draft.images)
@@ -593,6 +615,7 @@ export function App() {
     restorePdfDrafts,
     replaceSkills,
     resetSkillCatalog,
+    setBtwMode,
     setDeletionBlocksRuntime,
     setResumingSessionId,
     stashActiveComposer,
@@ -1214,6 +1237,23 @@ export function App() {
   slashCommandRef.current = (command) => {
     if (command === 'compact') compact()
     if (command === 'fork' && latestForkTurnId) forkConversation(latestForkTurnId)
+    if (command === 'btw' || command === 'bbtw') {
+      if (status !== 'idle' && status !== 'error') return
+      if (command === 'bbtw' && !view.btwContinuation) {
+        addError('当前没有可续接的 BTW 对话')
+        return
+      }
+      if (pdfDrafts.length > 0 || selectedSkills.length > 0 || restoredInputIds.length > 0) {
+        addError('BTW 不使用 PDF、Skill 或恢复队列输入；请先移除这些内容')
+        return
+      }
+      const currentModel = models.find((model) => model.id === modelId)
+      if (imageDrafts.length > 0 && currentModel?.imageInputMode !== 'native') {
+        addError('BTW 图片必须由当前模型原生读取')
+        return
+      }
+      setBtwMode(command)
+    }
   }
 
   const changePermission = useCallback((mode: PermissionMode) => {
@@ -1231,8 +1271,13 @@ export function App() {
       addError(nextModel?.unavailableReason ?? '该模型连接当前不可用')
       return
     }
-    if (imageDrafts.length > 0 && nextModel.imageInputMode === 'none') {
-      addError('已添加图片；目标模型既不支持原生识图，也没有可用的辅助识图模型')
+    if (
+      imageDrafts.length > 0
+      && (btwMode ? nextModel.imageInputMode !== 'native' : nextModel.imageInputMode === 'none')
+    ) {
+      addError(btwMode
+        ? 'BTW 图片必须由当前模型原生读取'
+        : '已添加图片；目标模型既不支持原生识图，也没有可用的辅助识图模型')
       return
     }
     const previous = modelId
@@ -1248,7 +1293,7 @@ export function App() {
     void sendRuntimeCommand({ type: 'set-model', modelId: next }).then((result) => {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
-  }, [addError, imageDrafts.length, modelId, models, reasoningEffort, sendRuntimeCommand])
+  }, [addError, btwMode, imageDrafts.length, modelId, models, reasoningEffort, sendRuntimeCommand])
 
   const changeReasoningEffort = useCallback((next: ReasoningEffortSelection) => {
     const previous = reasoningEffort
@@ -1312,9 +1357,17 @@ export function App() {
     ) return
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId) return
+    const sentBtwMode = btwModeRef.current
     const sentSkills = captureSkills()
+    if (
+      sentBtwMode
+      && (pdfDrafts.length > 0 || sentSkills.length > 0 || restoredInputIds.length > 0)
+    ) {
+      addError('BTW 不使用 PDF、Skill 或恢复队列输入')
+      return
+    }
     const text = input.trim()
-      || attachmentFallbackText(imageDrafts.length, pdfDrafts.length)
+      || attachmentFallbackText(imageDrafts.length, sentBtwMode ? 0 : pdfDrafts.length)
       || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
     if (!text && imageDrafts.length === 0) return
     const preparingWorktree = !conversationStarted && workspace.mode === 'pending-worktree'
@@ -1331,6 +1384,7 @@ export function App() {
     setInput('')
     inputRef.current = ''
     clearSkills()
+    setBtwMode(null)
     // 自己发消息 = 主动行为，恢复贴底跟随
     stickToBottom.current = true
     setShowJumpBottom(false)
@@ -1343,6 +1397,7 @@ export function App() {
       restoreImageDrafts(sentImageDrafts)
       restorePdfDrafts(sentPdfDrafts)
       mergeRestoredSkills(sentSkills)
+      setBtwMode(sentBtwMode)
       setRestoredInputIds((current) => [
         ...new Set([...sentRestoredInputIds, ...current]),
       ])
@@ -1351,19 +1406,29 @@ export function App() {
       try {
         const attachments = await prepareImageDrafts(sentImageDrafts)
         const pdfAttachments = preparePdfDrafts(sentPdfDrafts)
-        const result = await window.whycode.sendCommand(targetRuntimeId, {
-          type: 'user-message',
-          text,
-          urgent,
-          ...(attachments.length ? { attachments } : {}),
-          ...(pdfAttachments.length ? { pdfAttachments } : {}),
-          ...(sentSkills.length
-            ? { skills: sentSkills.map(({ id, path }) => ({ id, path })) }
-            : {}),
-          ...(sentRestoredInputIds.length
-            ? { restoredInputIds: sentRestoredInputIds }
-            : {}),
-        })
+        const result = await window.whycode.sendCommand(
+          targetRuntimeId,
+          sentBtwMode
+            ? {
+                type: 'btw-message',
+                mode: sentBtwMode,
+                text,
+                ...(attachments.length ? { attachments } : {}),
+              }
+            : {
+                type: 'user-message',
+                text,
+                urgent,
+                ...(attachments.length ? { attachments } : {}),
+                ...(pdfAttachments.length ? { pdfAttachments } : {}),
+                ...(sentSkills.length
+                  ? { skills: sentSkills.map(({ id, path }) => ({ id, path })) }
+                  : {}),
+                ...(sentRestoredInputIds.length
+                  ? { restoredInputIds: sentRestoredInputIds }
+                  : {}),
+              },
+        )
         if (result?.workspace && runtimeIdRef.current === targetRuntimeId) {
           setWorkspace(result.workspace)
         }
@@ -1405,6 +1470,7 @@ export function App() {
     resumingSessionId,
     sessionTransitionPending,
     stopping,
+    setBtwMode,
     workspace,
   ])
 
@@ -1459,9 +1525,10 @@ export function App() {
 
   const selectedModel = models.find((model) => model.id === modelId)
   const canAttachImages = Boolean(
-    selectedModel?.available && selectedModel.imageInputMode !== 'none',
+    selectedModel?.available
+      && (btwMode ? selectedModel.imageInputMode === 'native' : selectedModel.imageInputMode !== 'none'),
   )
-  const canAttachPdfs = Boolean(selectedModel?.available)
+  const canAttachPdfs = Boolean(selectedModel?.available && !btwMode)
   const pasteAttachments = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const imageFiles = collectPastedImageFiles(event.clipboardData)
     const pdfFiles = collectPastedPdfFiles(event.clipboardData)
@@ -1662,7 +1729,7 @@ export function App() {
                   </div>
                 )}
 
-                <footer className="wc-composer relative p-2.5">
+                <footer className={`wc-composer relative p-2.5 ${btwMode ? 'wc-composer-btw' : ''}`}>
                   {view.pendingQuestion ? (
                     <QuestionCard
                       key={view.pendingQuestion.id}
@@ -1704,6 +1771,23 @@ export function App() {
                         onRemove={removeSelectedSkill}
                       />
 
+                      {btwMode && (
+                        <div className="mb-1 flex items-center px-1.5">
+                          <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.045] px-2 py-1 text-xs text-[var(--wc-muted)]">
+                            {btwMode.toUpperCase()} · 临时侧对话
+                            <button
+                              type="button"
+                              className="wc-focus-ring rounded px-0.5 text-[var(--wc-faint)] hover:text-[var(--wc-ink)]"
+                              onClick={() => setBtwMode(null)}
+                              aria-label="退出临时侧对话模式"
+                              title="退出临时侧对话模式"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        </div>
+                      )}
+
                       <textarea
                         ref={composerTextareaRef}
                         rows={2}
@@ -1721,6 +1805,11 @@ export function App() {
                         disabled={composerDisabled}
                         onKeyDown={(event) => {
                           if (handlePickerKeyDown(event)) return
+                          if (event.key === 'Escape' && btwMode) {
+                            event.preventDefault()
+                            setBtwMode(null)
+                            return
+                          }
                           const action = composerKeyAction({
                             key: event.key,
                             shiftKey: event.shiftKey,
@@ -1746,7 +1835,9 @@ export function App() {
                                     ? '正在安全回滚文件，请等待完成…'
                                     : status === 'waiting-approval'
                                       ? 'Agent 在等你审批上方的请求…'
-                                      : busy
+                                        : btwMode
+                                          ? `${btwMode.toUpperCase()}：本次问答不会写入主上下文`
+                                        : busy
                                         ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
                                         : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
                         }

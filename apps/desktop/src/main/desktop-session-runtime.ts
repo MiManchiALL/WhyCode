@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import {
+  isStepScopedCoreEvent,
   type AgentSession,
   type AgentStatus,
   type ApprovalRequest,
@@ -60,6 +61,7 @@ export class DesktopSessionRuntime {
   workStartedAt: number | null = null
   private workOutcome: 'completed' | 'stopped' = 'completed'
   private forkTurnId: string | null = null
+  private btwWorkActive = false
   attachmentPreparationInProgress = false
   lastSelectedAt = Date.now()
   private readonly emitToHost: DesktopSessionRuntimeOptions['emit']
@@ -195,11 +197,18 @@ export class DesktopSessionRuntime {
     if (
       event.type === 'agent-status'
       && (event.status === 'idle' || event.status === 'error')
+      && !this.btwWorkActive
     ) {
       this.finishWork()
     }
     this.publish(event, persistView)
     this.notifyStateChanged()
+  }
+
+  /** 运行中的 BTW step 只借用时间线缓冲供切换会话快照使用，不提交为 Main 历史。 */
+  emitBtw(event: CoreEvent): void {
+    const bufferForSnapshot = isStepScopedCoreEvent(event) || event.type === 'step-discarded'
+    this.emit(event, bufferForSnapshot)
   }
 
   beginWork(): void {
@@ -208,6 +217,12 @@ export class DesktopSessionRuntime {
     this.forkTurnId = null
     this.workStartedAt = Date.now()
     this.publish({ type: 'work-started', startedAt: this.workStartedAt }, false)
+  }
+
+  beginBtwWork(): void {
+    if (this.btwWorkActive) throw new Error('BTW 工作边界重复启动')
+    this.btwWorkActive = true
+    this.beginWork()
   }
 
   finishWork(): void {
@@ -219,6 +234,26 @@ export class DesktopSessionRuntime {
     this.workOutcome = 'completed'
     this.forkTurnId = null
     this.publish({ type: 'work-finished', durationMs, outcome, forkTurnId }, true)
+  }
+
+  /** BTW 的可见终点由独立 JSONL 事实恢复，不能再写一份 ViewTimeline 副本。 */
+  finishBtwWork(
+    durationMs: number,
+    outcome: 'completed' | 'stopped' | 'error',
+    continuesWithMainWork: boolean,
+  ): void {
+    if (this.disposed || !this.btwWorkActive || this.workStartedAt === null) return
+    this.btwWorkActive = false
+    this.workStartedAt = null
+    this.workOutcome = 'completed'
+    this.forkTurnId = null
+    this.publish({
+      type: 'work-finished',
+      durationMs: Math.max(0, durationMs),
+      outcome: outcome === 'completed' ? 'completed' : 'stopped',
+      forkTurnId: null,
+    }, false)
+    if (continuesWithMainWork) this.beginWork()
   }
 
   private publish(event: CoreEvent, persistView: boolean): void {

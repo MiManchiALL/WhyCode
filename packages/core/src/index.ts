@@ -411,6 +411,15 @@ export {
   visibleCoreEventSchema,
 } from './session/view-events.ts'
 export type { ViewEvent, VisibleCoreEvent } from './session/view-events.ts'
+export {
+  BTW_MAX_TURNS,
+  btwModeSchema,
+  type BtwCompletedTurn,
+  type BtwContinuation,
+  type BtwMode,
+  type BtwTurnContext,
+  type BtwTurnResult,
+} from './session/btw.ts'
 export type {
   LoadedSession,
   PendingUserInput,

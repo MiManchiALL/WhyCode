@@ -41,7 +41,9 @@ export function UserMessageCard(props: UserMessageCardProps) {
           </div>
         )
         : props.block.text && (
-          <div className="wc-user-message-bubble relative flex min-h-11 w-fit max-w-full items-center px-3.5 py-2.5">
+          <div className={`wc-user-message-bubble relative flex min-h-11 w-fit max-w-full items-center px-3.5 py-2.5 ${
+            props.block.btw ? 'wc-user-message-bubble-btw' : ''
+          }`}>
             <div className="whitespace-pre-wrap">{props.block.text}</div>
           </div>
         )}
@@ -49,7 +51,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
         <MessageActions
           timestamp={props.block.timestamp}
           text={props.block.text}
-          editable={props.editable && !props.disabled}
+          editable={!props.block.btw && props.editable && !props.disabled}
           onEdit={editor.begin}
           className="-mt-1"
         />

@@ -15,6 +15,7 @@ import {
   SKILL_MAX_SELECTIONS_PER_MESSAGE,
   skillSummarySchema,
 } from '../skills/types.ts'
+import { BTW_MAX_TURNS, btwModeSchema } from './btw.ts'
 
 const toolStartSchema = z.object({
   type: z.literal('tool-start'),
@@ -174,6 +175,12 @@ const userMessageViewEventSchema = z.object({
     .min(1)
     .max(SKILL_MAX_SELECTIONS_PER_MESSAGE)
     .optional(),
+  /** 独立侧对话身份；存在时该消息永远不属于 Main turn。 */
+  btw: z.object({
+    conversationId: z.string().uuid(),
+    turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
+    mode: btwModeSchema,
+  }).strict().optional(),
 }).superRefine((event, ctx) => {
   if (event.text.length === 0 && !event.attachments?.length) {
     ctx.addIssue({
@@ -181,6 +188,9 @@ const userMessageViewEventSchema = z.object({
       path: ['text'],
       message: '空正文用户消息必须包含图片',
     })
+  }
+  if (event.btw && event.startsTurn) {
+    ctx.addIssue({ code: 'custom', path: ['startsTurn'], message: 'BTW 不建立 Main turn' })
   }
 })
 

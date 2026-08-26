@@ -16,6 +16,7 @@ import type {
 import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 import type { ReasoningEffortSelection } from './providers/catalog.ts'
 import type { SkillLocator, SkillSummary } from './skills/types.ts'
+import type { BtwMode } from './session/btw.ts'
 import { unicodeSafeSuffix } from './text.ts'
 
 /** 工具完整输出由工具日志和模型消息持有；可见时间线只保留有界尾部。 */
@@ -205,6 +206,14 @@ export type CoreEvent =
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
       skills?: SkillSummary[]
+    }
+  /** 宿主已持久化独立侧对话输入；不进入 Main 消息历史或 turn 边界。 */
+  | {
+      type: 'btw-message-accepted'
+      inputId: string
+      text: string
+      attachments?: ImageAttachment[]
+      btw: { conversationId: string; turnIndex: number; mode: BtwMode }
     }
   /**
    * 用户把最新一条根消息原位改写。该事件只负责实时投影；
@@ -418,6 +427,13 @@ export type CoreCommand =
       restoredInputIds?: string[]
       /** Renderer 只提交目录中的精确 locator；主进程在落盘前解析为不可变 Skill 快照。 */
       skills?: SkillLocator[]
+    }
+  | {
+      type: 'btw-message'
+      mode: BtwMode
+      text: string
+      /** BTW 只允许当前模型原生读取图片；PDF 与 Skill 不属于该输入协议。 */
+      attachments?: ImageMessageAttachmentInput[]
     }
   | {
       type: 'approval-response'

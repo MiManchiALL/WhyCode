@@ -99,6 +99,10 @@ button:not(:disabled),
   background: #eeeeeb;
 }
 
+.wc-user-message-bubble-btw {
+  border-style: dashed;
+}
+
 .wc-user-message-editor:focus-within {
   border-color: rgb(91 111 94 / 32%);
   box-shadow: 0 0 0 2px rgb(91 111 94 / 12%);
@@ -192,6 +196,10 @@ button:not(:disabled),
   border-radius: var(--wc-menu-radius);
   background: rgb(255 255 255 / 97%);
   box-shadow: var(--wc-soft-shadow);
+}
+
+.wc-composer-btw {
+  border-style: dashed;
 }
 
 .wc-settings-section {

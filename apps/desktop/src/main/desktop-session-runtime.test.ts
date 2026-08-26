@@ -139,6 +139,30 @@ describe('会话工作计时', () => {
     const finished = events.find((event) => event.type === 'work-finished')
     assert.equal(finished?.type === 'work-finished' && finished.forkTurnId, null)
   })
+
+  it('BTW 使用独立终点，并在排队 Main 真正开始时重建计时', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'),
+      modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+
+    runtime.beginBtwWork()
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+    assert.equal(events.some((event) => event.type === 'work-finished'), false)
+
+    runtime.finishBtwWork(125, 'completed', true)
+    const finished = events.find((event) => event.type === 'work-finished')
+    assert.deepEqual(finished, {
+      type: 'work-finished',
+      durationMs: 125,
+      outcome: 'completed',
+      forkTurnId: null,
+    })
+    assert.equal(events.filter((event) => event.type === 'work-started').length, 2)
+    assert.equal(typeof runtime.workStartedAt, 'number')
+  })
 })
 
 describe('会话授权入口', () => {

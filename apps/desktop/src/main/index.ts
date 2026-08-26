@@ -24,16 +24,20 @@ import {
   loadMcpConfiguration,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
+  prepareImageAttachmentImport,
+  type BtwTurnContext,
   type CoreCommand,
   type CoreEvent,
   type ImageAttachment,
   type ImageDeliveryMode,
+  type ImageAttachmentInput,
   type ManagedWorkspaceBinding,
   type ModelEntry,
   type PdfAttachment,
   type ProviderConfig,
   type ReasoningEffortSelection,
   RUN_COMMAND_TOOL_NAME,
+  USER_IMAGE_ATTACHMENT_MAX_COUNT,
   type SessionJournal,
   SkillCatalogService,
   SubagentDefinitionCatalogService,
@@ -890,6 +894,7 @@ function createCoordinator(
     onTaskEnd: (taskId, outcome, state) =>
       journal.recordConsensusTaskEnd(taskId, outcome, state),
     onInputsRestored: (inputIds) => journal.markUserInputsRestored(inputIds),
+    onDeferredTaskStart: () => runtime.beginWork(),
   })
   return { ok: true, value }
 }
@@ -912,6 +917,8 @@ async function handleCommand(
   switch (command.type) {
     case 'user-message':
       return handleUserMessageCommand(runtime, command)
+    case 'btw-message':
+      return handleBtwMessageCommand(runtime, command)
     case 'edit-user-message':
       return handleEditUserMessageCommand(runtime, command)
     case 'abort': {
@@ -1105,6 +1112,7 @@ async function handleCommand(
 }
 
 type UserMessageCommand = Extract<CoreCommand, { type: 'user-message' }>
+type BtwMessageCommand = Extract<CoreCommand, { type: 'btw-message' }>
 type EditUserMessageCommand = Extract<CoreCommand, { type: 'edit-user-message' }>
 type PreparedUserMessage = PreparedUserMessageAttachments & { skills: ActivatedSkill[] }
 
@@ -1307,6 +1315,151 @@ async function handleUserMessageCommand(
     // 若后台终态正因 AskUserQuestion 等待真实回答，此时用户输入已优先完成路由，
     // 可在下一稳定步骤边界把通知交给同一 Agent，而不占用第二套轮询或计时器。
     nudgeNotificationQueues()
+  }
+}
+
+async function handleBtwMessageCommand(
+  runtime: DesktopSessionRuntime,
+  command: BtwMessageCommand,
+): Promise<RuntimeCommandResult> {
+  if (settingsMutationInProgress) {
+    return rejectUserMessage(runtime, '连接设置处理中，请等待完成后再发送 BTW')
+  }
+  if (runtimeBusy(runtime) || runtime.attachmentPreparationInProgress) {
+    return rejectUserMessage(runtime, '当前对话仍在工作，结束后才能发送 BTW')
+  }
+  const reservation = runtimeRegistry.reserveWorkStart(runtime)
+  if (!reservation) {
+    return rejectUserMessage(
+      runtime,
+      `同时运行的对话已达到上限（${MAX_CONCURRENT_AGENT_RUNS} 个），请稍后重试`,
+    )
+  }
+  let imageImport: Awaited<ReturnType<typeof prepareImageAttachmentImport>> | null = null
+  let persistedContext: BtwTurnContext | null = null
+  let btwWorkStarted = false
+  try {
+    await reservation.ready
+    // 与普通消息共用 FIFO：斜杠菜单状态只是提示，最终仍以排到队首时的真实状态为准。
+    if (runtimeExecutionBusy(runtime)) {
+      return rejectUserMessage(runtime, '当前对话仍在工作，结束后才能发送 BTW')
+    }
+    const initializationError = await ensureSession(runtime)
+    if (initializationError) return rejectUserMessage(runtime, initializationError)
+    const journal = runtime.journal
+    const session = runtime.session
+    if (!journal || !session) {
+      return rejectUserMessage(runtime, '会话尚未准备完成，不能发送 BTW')
+    }
+    await runtime.timeline.flush()
+    const hasCompletedMainResponse = journal.initialViewEvents.some((event) =>
+      event.type === 'core-event'
+      && event.event.type === 'work-finished'
+      && event.event.outcome === 'completed'
+      && event.event.forkTurnId !== null)
+    if (!hasCompletedMainResponse) {
+      return rejectUserMessage(runtime, '先完成一次正常对话，才能使用 BTW')
+    }
+    const modelId = resolveCurrentModelId(runtime)
+    const resolved = modelId ? resolveModelConnection(loadAppConfig(), modelId) : null
+    if (!resolved?.ok) {
+      return rejectUserMessage(runtime, resolved?.error ?? '当前没有可用模型')
+    }
+    const imageInputs = command.attachments ?? []
+    if (imageInputs.some((input) => input.kind === 'stored')) {
+      return rejectUserMessage(runtime, 'BTW 不接受恢复队列中的旧附件')
+    }
+    if (imageInputs.length > 0 && !resolved.value.entry.capabilities.supportsImageInput) {
+      return rejectUserMessage(runtime, 'BTW 只允许当前模型原生读取图片')
+    }
+    const signal = runtime.beginAttachmentPreparation()
+    try {
+      imageImport = await prepareImageAttachmentImport(
+        imageInputs as ImageAttachmentInput[],
+        journal.attachmentDirectory,
+        journal.sessionId,
+        { abortSignal: signal, maxCount: USER_IMAGE_ATTACHMENT_MAX_COUNT },
+      )
+      await imageImport.commit()
+    } finally {
+      runtime.endAttachmentPreparation()
+    }
+    const attachments = [...imageImport.attachments]
+    const text = command.text.trim() || attachmentFallbackText(attachments.length, 0)
+    if (!text && attachments.length === 0) {
+      await imageImport.rollback()
+      return rejectUserMessage(runtime, 'BTW 消息不能为空')
+    }
+    let context
+    try {
+      context = await journal.recordBtwInput(command.mode, text, attachments)
+    } catch (error) {
+      await imageImport.rollback().catch(() => {})
+      return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))
+    }
+    persistedContext = context
+    runtime.beginBtwWork()
+    btwWorkStarted = true
+    runtime.emit({
+      type: 'btw-message-accepted',
+      inputId: context.inputId,
+      text,
+      ...(attachments.length ? { attachments } : {}),
+      btw: {
+        conversationId: context.conversationId,
+        turnIndex: context.turnIndex,
+        mode: context.mode,
+      },
+    }, false)
+    void session.handleBtwMessage(context, {
+      emit: (event) => runtime.emitBtw(event),
+      onSettled: async (result, continuesWithMainWork) => {
+        await journal.recordBtwResponse(context, result)
+        runtime.timeline.discardAll()
+        if (result.outcome === 'completed') runtime.emit({ type: 'step-committed' }, false)
+        runtime.finishBtwWork(result.durationMs, result.outcome, continuesWithMainWork)
+      },
+    }).catch((error) => {
+      runtime.timeline.discardAll()
+      runtime.emit({
+        type: 'error',
+        message: `BTW 异常退出：${error instanceof Error ? error.message : String(error)}`,
+        recoverable: true,
+      }, false)
+      runtime.finishBtwWork(0, 'error', false)
+      runtime.emit({ type: 'agent-status', status: 'error' }, false)
+    })
+    return { ok: true, workspace: runtime.workspace }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (persistedContext) {
+      // 输入一旦成为 JSONL 事实就不能再回滚其附件；启动失败也必须补齐独立终态。
+      await runtime.journal?.recordBtwResponse(persistedContext, {
+        outcome: 'error',
+        assistantText: '',
+        reasoningText: '',
+        reasoningDurationMs: 0,
+        durationMs: 0,
+        error: message,
+      }).catch((persistenceError) => {
+        runtime.emit({
+          type: 'error',
+          message: `BTW 失败终态未能写入：${
+            persistenceError instanceof Error ? persistenceError.message : String(persistenceError)
+          }`,
+          recoverable: true,
+        }, false)
+      })
+      runtime.timeline.discardAll()
+      runtime.emit({ type: 'error', message: `BTW 启动失败：${message}`, recoverable: true }, false)
+      if (btwWorkStarted) runtime.finishBtwWork(0, 'error', false)
+      runtime.emit({ type: 'agent-status', status: 'error' }, false)
+      return { ok: true, workspace: runtime.workspace }
+    }
+    await imageImport?.rollback().catch(() => {})
+    return rejectUserMessage(runtime, message)
+  } finally {
+    reservation.release()
   }
 }
 

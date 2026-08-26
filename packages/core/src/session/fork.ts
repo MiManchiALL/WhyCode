@@ -193,6 +193,13 @@ function rehomeEntry(
           ? { pdfAttachments: entry.pdfAttachments.map((value) => rehomePdf(value, sessionId)) }
           : {}),
       })
+    case 'btw-input':
+      return sessionEntrySchema.parse({
+        ...common,
+        ...(entry.attachments
+          ? { attachments: entry.attachments.map((value) => rehomeImage(value, sessionId)) }
+          : {}),
+      })
     case 'messages':
       return sessionEntrySchema.parse({
         ...common,

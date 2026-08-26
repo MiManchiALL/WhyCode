@@ -47,4 +47,24 @@ describe('输入框功能命令目录', () => {
       disabled: true,
     }])
   })
+
+  it('空闲时按续接状态提供 BTW 与 BBTW', () => {
+    assert.deepEqual(createComposerCommands({
+      compactAvailable: true,
+      compactDisabled: false,
+      forkAvailable: true,
+      forkDisabled: false,
+      btwAvailable: true,
+      bbtwAvailable: true,
+    }).map((command) => command.id), ['btw', 'bbtw', 'fork', 'compact'])
+
+    assert.deepEqual(createComposerCommands({
+      compactAvailable: true,
+      compactDisabled: true,
+      forkAvailable: false,
+      forkDisabled: false,
+      btwAvailable: false,
+      bbtwAvailable: false,
+    }).map((command) => command.id), ['compact'])
+  })
 })

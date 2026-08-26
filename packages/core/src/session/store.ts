@@ -44,6 +44,13 @@ import type { ActivatedSkill } from '../skills/types.ts'
 import { skillSummary } from '../skills/types.ts'
 import type { WorkspaceBinding } from '../workspace/types.ts'
 import {
+  BTW_MAX_TURNS,
+  type BtwContinuation,
+  type BtwMode,
+  type BtwTurnContext,
+  type BtwTurnResult,
+} from './btw.ts'
+import {
   getSessionPaths,
   getSessionDeletionMarkersDir,
   hasSessionDeletionMarker,
@@ -148,6 +155,8 @@ export class SessionStore {
       null,
       null,
       emptyTaskPlanState(),
+      null,
+      null,
     )
   }
 
@@ -225,6 +234,8 @@ export class SessionStore {
       loaded.interruptedConsensusBaseTurnIds,
       loaded.consensusState,
       loaded.taskState,
+      loaded.btwContinuation,
+      loaded.interruptedBtw,
     )
   }
 
@@ -426,6 +437,11 @@ export class SessionJournal implements SessionRecorder {
   private activeConsensusRootSkills: ActivatedSkill[]
   private consensusState: ConsensusPersistedState | null
   private taskState: TaskPlanState
+  private btwContinuationState: BtwContinuation | null
+  private readonly pendingBtwInputs = new Map<string, {
+    context: BtwTurnContext
+    invalidated: boolean
+  }>()
   private writeQueue: Promise<void> = Promise.resolve()
 
   constructor(
@@ -452,6 +468,8 @@ export class SessionJournal implements SessionRecorder {
     interruptedConsensusBaseTurnIds: string[] | null,
     consensusState: ConsensusPersistedState | null,
     taskState: TaskPlanState,
+    btwContinuation: BtwContinuation | null,
+    interruptedBtw: { context: BtwTurnContext; invalidated: boolean } | null,
   ) {
     this.paths = paths
     this.metadata = metadata
@@ -504,6 +522,10 @@ export class SessionJournal implements SessionRecorder {
     this.activeConsensusRootSkills = []
     this.consensusState = consensusState
     this.taskState = cloneTaskPlanState(taskState)
+    this.btwContinuationState = btwContinuation ? structuredClone(btwContinuation) : null
+    if (interruptedBtw) {
+      this.pendingBtwInputs.set(interruptedBtw.context.inputId, structuredClone(interruptedBtw))
+    }
   }
 
   get initialMessages(): readonly ModelMessage[] {
@@ -598,6 +620,10 @@ export class SessionJournal implements SessionRecorder {
     return cloneTaskPlanState(this.taskState)
   }
 
+  get btwContinuation(): BtwContinuation | null {
+    return this.btwContinuationState ? structuredClone(this.btwContinuationState) : null
+  }
+
   get metadataSnapshot(): SessionMetadata {
     return { ...this.metadata }
   }
@@ -687,6 +713,8 @@ export class SessionJournal implements SessionRecorder {
           state: 'queued',
         })
       }
+      this.btwContinuationState = null
+      for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true
       const clipped = clip(text)
       this.metadata.lastUserText = clipped
       if (!this.metadata.title) this.metadata.title = clipped
@@ -696,6 +724,103 @@ export class SessionJournal implements SessionRecorder {
       }
       await this.refreshMetadataCache()
     })
+  }
+
+  async recordBtwInput(
+    mode: BtwMode,
+    text: string,
+    attachments: readonly ImageAttachment[] = [],
+  ): Promise<BtwTurnContext> {
+    let context: BtwTurnContext | null = null
+    await this.enqueue(async () => {
+      if (this.pendingBtwInputs.size > 0) throw new Error('上一条 BTW 尚未结束')
+      this.assertImageAttachmentsCompatible(attachments)
+      const continuation = this.btwContinuationState
+      if (mode === 'bbtw' && !continuation) throw new Error('当前没有可续接的 BTW 对话')
+      const conversationId = mode === 'btw' ? randomUUID() : continuation!.conversationId
+      const turnIndex = mode === 'btw' ? 1 : continuation!.turns.length + 1
+      if (turnIndex > BTW_MAX_TURNS) throw new Error('BTW 对话最多连续三轮')
+      const input = this.entry({
+        type: 'btw-input',
+        conversationId,
+        turnIndex,
+        mode,
+        text,
+        ...(attachments.length ? { attachments } : {}),
+      })
+      if (input.type !== 'btw-input') throw new Error('无法创建 BTW 输入记录')
+      await this.appendEntries([input])
+      this.addImageAttachments(attachments)
+      context = {
+        inputId: input.uuid,
+        conversationId,
+        turnIndex,
+        mode,
+        text,
+        attachments: structuredClone([...attachments]),
+        history: mode === 'bbtw' ? structuredClone(continuation!.turns) : [],
+      }
+      this.pendingBtwInputs.set(input.uuid, { context: structuredClone(context), invalidated: false })
+      this.btwContinuationState = null
+      const event = btwInputViewEvent(input)
+      this.viewEvents.push(event)
+      this.viewEventTimestamps.push(input.timestamp)
+      this.metadata.updatedAt = input.timestamp
+      this.metadata.status = 'interrupted'
+      await this.refreshMetadataCache()
+    })
+    return context!
+  }
+
+  recordBtwResponse(context: BtwTurnContext, result: BtwTurnResult): Promise<void> {
+    return this.enqueue(() => this.recordBtwResponseNow(context, result))
+  }
+
+  private async recordBtwResponseNow(
+    context: BtwTurnContext,
+    result: BtwTurnResult,
+  ): Promise<void> {
+    const pending = this.pendingBtwInputs.get(context.inputId)
+    if (!pending || JSON.stringify(pending.context) !== JSON.stringify(context)) {
+      throw new Error('BTW 结果与当前输入不匹配')
+    }
+    const response = this.entry({
+      type: 'btw-response',
+      inputId: context.inputId,
+      conversationId: context.conversationId,
+      turnIndex: context.turnIndex,
+      outcome: result.outcome,
+      assistantText: result.assistantText,
+      reasoningText: result.reasoningText,
+      reasoningDurationMs: result.reasoningDurationMs,
+      durationMs: result.durationMs,
+      ...(result.error ? { error: result.error } : {}),
+    })
+    if (response.type !== 'btw-response') throw new Error('无法创建 BTW 结果记录')
+    await this.appendEntries([response])
+    this.pendingBtwInputs.delete(context.inputId)
+    if (result.outcome === 'completed' && !pending.invalidated) {
+      const turns = [...context.history, {
+        inputId: context.inputId,
+        conversationId: context.conversationId,
+        turnIndex: context.turnIndex,
+        mode: context.mode,
+        text: context.text,
+        attachments: structuredClone(context.attachments),
+        assistantText: result.assistantText,
+      }]
+      this.btwContinuationState = turns.length < BTW_MAX_TURNS
+        ? { conversationId: context.conversationId, turns }
+        : null
+    } else {
+      this.btwContinuationState = null
+    }
+    const events = btwResponseViewEvents(response)
+    this.viewEvents.push(...events)
+    this.viewEventTimestamps.push(...events.map(() => response.timestamp))
+    this.metadata.updatedAt = response.timestamp
+    this.metadata.status = result.outcome === 'error' ? 'error' : 'idle'
+    await this.refreshMetadataCache()
   }
 
   recordTurnEditInput(
@@ -731,6 +856,8 @@ export class SessionJournal implements SessionRecorder {
       )
       await this.appendEntries([transaction.snapshot, transaction.input])
       this.applyTurnEditTransaction(transaction, rollbackTaskState, attachments, pdfAttachments)
+      this.btwContinuationState = null
+      for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true
       await this.refreshMetadataCache()
     })
   }
@@ -972,6 +1099,8 @@ export class SessionJournal implements SessionRecorder {
         : null
       this.metadata.updatedAt = snapshot.timestamp
       if (reason === 'rollback') {
+        this.btwContinuationState = null
+        for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true
         this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
           ? 'running'
           : this.hasRuntimePendingInput()
@@ -1112,6 +1241,15 @@ export class SessionJournal implements SessionRecorder {
   /** 用户显式恢复时切断崩溃留下的活动边界；旧记录保留在 JSONL 中但不再进入活动父链。 */
   recoverInterruptedWork(): Promise<void> {
     return this.enqueue(async () => {
+      for (const pending of [...this.pendingBtwInputs.values()]) {
+        await this.recordBtwResponseNow(pending.context, {
+          outcome: 'stopped',
+          assistantText: '',
+          reasoningText: '',
+          reasoningDurationMs: 0,
+          durationMs: 0,
+        })
+      }
       if (
         !this.activeTurnId
         && !this.activeConsensusTaskId
@@ -1557,6 +1695,61 @@ function userMessageViewEvent(
     ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
     ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
   }
+}
+
+function btwInputViewEvent(
+  input: Extract<SessionEntry, { type: 'btw-input' }>,
+): ViewEvent {
+  return {
+    type: 'user-message',
+    inputId: input.uuid,
+    text: input.text,
+    startsTurn: false,
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    btw: {
+      conversationId: input.conversationId,
+      turnIndex: input.turnIndex,
+      mode: input.mode,
+    },
+  }
+}
+
+function btwResponseViewEvents(
+  response: Extract<SessionEntry, { type: 'btw-response' }>,
+): ViewEvent[] {
+  const events: ViewEvent[] = []
+  if (response.reasoningText) {
+    events.push({
+      type: 'core-event',
+      event: { type: 'thinking-delta', text: response.reasoningText },
+    })
+    events.push({
+      type: 'core-event',
+      event: { type: 'thinking-end', durationMs: response.reasoningDurationMs },
+    })
+  }
+  if (response.assistantText) {
+    events.push({
+      type: 'core-event',
+      event: { type: 'text-delta', text: response.assistantText },
+    })
+  }
+  if (response.error) {
+    events.push({
+      type: 'core-event',
+      event: { type: 'error', message: response.error, recoverable: true },
+    })
+  }
+  events.push({
+    type: 'core-event',
+    event: {
+      type: 'work-finished',
+      durationMs: response.durationMs,
+      outcome: response.outcome === 'completed' ? 'completed' : 'stopped',
+      forkTurnId: null,
+    },
+  })
+  return events
 }
 
 function turnEditViewEvent(

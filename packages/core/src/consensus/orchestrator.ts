@@ -74,6 +74,8 @@ export interface ConsensusCoordinatorOptions {
   ) => Promise<void>
   /** Coordinator 自持队列在停止时先持久化为 Renderer 草稿，再发送恢复事件。 */
   onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
+  /** Main 忙碌期间暂存的正常消息真正开始新任务时，宿主重建独立工作计时。 */
+  onDeferredTaskStart?: () => void
 }
 
 interface CoordinatorMessage {
@@ -667,6 +669,7 @@ export class ConsensusCoordinator {
   }
 
   private async deliverDeferredMessage(message: CoordinatorMessage): Promise<void> {
+    this.options.onDeferredTaskStart?.()
     if (message.attachments.length > 0 || message.pdfAttachments.length > 0) {
       this.options.emit({
         type: 'consensus-skipped',

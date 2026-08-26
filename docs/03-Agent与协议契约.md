@@ -122,6 +122,12 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 `context-usage` 是可空 live CoreEvent。Desktop runtime 保存最新值并进入恢复快照，Renderer 不读取模型能力或历史自行重算；B/C 的独立窗口不计入。该状态不进入 ViewEvent、JSONL、摘要或 Fork，也不增加会话 schema。模型切换使旧值失效，计量失败只隐藏指示器，不能阻断请求。idle 会话即使最终输出越过阈值，也只说明“下次请求前压缩”，不额外制造模型调用；自动压缩连续失败必须显式提示。
 
+### 1.10 BTW 临时侧对话
+
+`btw-message {mode,text,attachments?}` 是独立于普通 `user-message` 的命令。宿主只在会话空闲且已有稳定 Main 背景时接受；协议没有 PDF、Skill 或恢复队列字段，图片必须由当前模型原生接收。BTW 总是创建新 `conversationId`，BBTW 只能续接最近成功侧链；成功完成且未满三轮才保留下一次续接资格，普通用户输入、停止、错误、回滚或第三轮完成都会清除资格。
+
+模型请求顺序为：会话 System 加精简 BTW 边界、Main 稳定消息快照、BBTW 已完成侧历史（BTW 为空）、当前侧输入。调用 `streamText` 时物理不传工具，侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。输出仍使用普通推理/正文事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。
+
 ## 2. 结构化输出与步骤提交
 
 ### 2.1 校验原则

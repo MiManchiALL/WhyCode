@@ -1,10 +1,12 @@
 import type {
+  BtwMode,
   ImageAttachment,
   PdfAttachment,
   SkillSummary,
   TaskPlan,
   ViewEvent,
 } from '@whycode/core'
+import { BTW_MAX_TURNS } from '@whycode/core/btw'
 import {
   appendVisibleToolOutput,
   isStepScopedCoreEvent,
@@ -51,6 +53,7 @@ export type Block =
       attachments?: ImageAttachment[]
       pdfAttachments?: PdfAttachment[]
       skills?: SkillSummary[]
+      btw?: { conversationId: string; turnIndex: number; mode: BtwMode }
     }
   | {
       kind: 'text'
@@ -96,6 +99,9 @@ export interface ConversationState {
   pendingQuestion: UserQuestion | null
   /** 实时模型步骤开始前的稳定界面；提交时清除，丢弃时原样恢复。 */
   pendingStep: PendingStepSnapshot | null
+  /** 仅表示下一条 BBTW 是否可用；完整侧历史由主进程事实源持有。 */
+  btwContinuation: { conversationId: string; turnIndex: number } | null
+  pendingBtw: { conversationId: string; turnIndex: number; mode: BtwMode } | null
 }
 
 const VOTE_LABELS: Record<string, string> = {
@@ -121,6 +127,8 @@ export function createConversationState(
     taskPlan: null,
     pendingQuestion: null,
     pendingStep: null,
+    btwContinuation: null,
+    pendingBtw: null,
   }
   for (const [index, event] of events.entries()) {
     state = applyViewEvent(state, event, timestamps[index])
@@ -179,6 +187,7 @@ export function applyViewEvent(
         event.skills,
         event.inputId,
         timestamp,
+        event.btw,
       )
     : applyStableCoreEvent(state, event.event, timestamp)
 }
@@ -247,6 +256,18 @@ function applyStableCoreEvent(
         event.inputId,
         timestamp,
       )
+    case 'btw-message-accepted':
+      return appendUserMessage(
+        state,
+        event.text,
+        false,
+        event.attachments,
+        [],
+        [],
+        event.inputId,
+        timestamp,
+        event.btw,
+      )
     case 'text-delta':
       return appendText(state, event.text, timestamp)
     case 'thinking-delta':
@@ -265,10 +286,20 @@ function applyStableCoreEvent(
       })
       // 只有已提交的最终正文才能收起处理过程；工具等待、错误和停止都保持展开。
       // 用户已在最终正文阶段手动展开时，既有 expanded 身份会原样保留。
-      if (hasCurrentWorkFinalText(completedState.blocks)) return next
-      const expanded = new Set(next.expanded)
+      const btwContinuation = state.pendingBtw
+        && event.outcome === 'completed'
+        && hasCurrentWorkFinalText(completedState.blocks)
+        && state.pendingBtw.turnIndex < BTW_MAX_TURNS
+        ? {
+            conversationId: state.pendingBtw.conversationId,
+            turnIndex: state.pendingBtw.turnIndex,
+          }
+        : null
+      const settled = { ...next, pendingBtw: null, btwContinuation }
+      if (hasCurrentWorkFinalText(completedState.blocks)) return settled
+      const expanded = new Set(settled.expanded)
       expanded.add(currentWorkSectionId(completedState.blocks, durationId))
-      return { ...next, expanded }
+      return { ...settled, expanded }
     }
     case 'tool-start':
       return appendBlock(state, {
@@ -436,12 +467,15 @@ export function appendUserMessage(
   skills: readonly SkillSummary[] = [],
   inputId?: string,
   timestamp?: string,
+  btw?: { conversationId: string; turnIndex: number; mode: BtwMode },
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
   return appendBlock({
     ...state,
     pendingTurnStart,
     pendingQuestion: null,
+    pendingBtw: btw ? structuredClone(btw) : null,
+    btwContinuation: null,
   }, {
     kind: 'user',
     id: nextBlockId(state),
@@ -453,6 +487,7 @@ export function appendUserMessage(
       ? { pdfAttachments: pdfAttachments.map((item) => structuredClone(item)) }
       : {}),
     ...(skills.length ? { skills: skills.map((item) => structuredClone(item)) } : {}),
+    ...(btw ? { btw: structuredClone(btw) } : {}),
   })
 }
 
