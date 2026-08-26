@@ -204,7 +204,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   </p>
                 )}
 
-                <div className="space-y-6">
+                <div className="space-y-8">
                   {section === 'models' && (
                     <>
                       <BuiltInProvidersEditor
