@@ -99,10 +99,6 @@ button:not(:disabled),
   background: #eeeeeb;
 }
 
-.wc-user-message-bubble-btw {
-  border-style: dashed;
-}
-
 .wc-user-message-editor:focus-within {
   border-color: rgb(91 111 94 / 32%);
   box-shadow: 0 0 0 2px rgb(91 111 94 / 12%);
@@ -198,8 +194,24 @@ button:not(:disabled),
   box-shadow: var(--wc-soft-shadow);
 }
 
+.wc-user-message-bubble-btw,
 .wc-composer-btw {
-  border-style: dashed;
+  position: relative;
+  border-color: transparent;
+}
+
+.wc-user-message-bubble-btw::after,
+.wc-composer-btw::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(to right, var(--wc-line-strong) 0 12px, transparent 12px 19px) top left / 100% 1px no-repeat,
+    repeating-linear-gradient(to right, var(--wc-line-strong) 0 12px, transparent 12px 19px) bottom left / 100% 1px no-repeat,
+    repeating-linear-gradient(to bottom, var(--wc-line-strong) 0 12px, transparent 12px 19px) top left / 1px 100% no-repeat,
+    repeating-linear-gradient(to bottom, var(--wc-line-strong) 0 12px, transparent 12px 19px) top right / 1px 100% no-repeat;
 }
 
 .wc-settings-section {
