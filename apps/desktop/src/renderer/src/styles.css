@@ -198,8 +198,15 @@ button:not(:disabled),
 .wc-composer-btw {
   --wc-btw-line: rgb(41 42 39 / 42%);
   --wc-btw-corner-inner: calc(var(--wc-menu-radius) - 1px);
+  --wc-btw-vertical-dash: 12px;
+  --wc-btw-vertical-cycle: 19px;
   position: relative;
   border-color: transparent;
+}
+
+.wc-user-message-bubble-btw {
+  --wc-btw-vertical-dash: 6px;
+  --wc-btw-vertical-cycle: 11px;
 }
 
 .wc-user-message-bubble-btw::after,
@@ -216,8 +223,8 @@ button:not(:disabled),
     radial-gradient(circle var(--wc-menu-radius) at 0 0, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-menu-radius), transparent var(--wc-menu-radius)) bottom right / var(--wc-menu-radius) var(--wc-menu-radius) no-repeat,
     repeating-linear-gradient(to right, var(--wc-btw-line) 0 12px, transparent 12px 19px) top left / 100% 1px no-repeat,
     repeating-linear-gradient(to right, var(--wc-btw-line) 0 12px, transparent 12px 19px) bottom left / 100% 1px no-repeat,
-    repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 12px, transparent 12px 19px) top left / 1px 100% no-repeat,
-    repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 12px, transparent 12px 19px) top right / 1px 100% no-repeat;
+    repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 var(--wc-btw-vertical-dash), transparent var(--wc-btw-vertical-dash) var(--wc-btw-vertical-cycle)) top left / 1px 100% no-repeat,
+    repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 var(--wc-btw-vertical-dash), transparent var(--wc-btw-vertical-dash) var(--wc-btw-vertical-cycle)) top right / 1px 100% no-repeat;
 }
 
 .wc-settings-section {
