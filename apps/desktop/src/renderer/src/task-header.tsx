@@ -1,7 +1,8 @@
-import { FolderOpen, PanelRight } from 'lucide-react'
+import { FolderOpen } from 'lucide-react'
 import type { BackgroundTaskSummary } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { BackgroundTaskMenu } from './background-task-menu.tsx'
+import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 
 interface TaskHeaderProps {
   title: string
@@ -49,7 +50,7 @@ export function TaskHeader(props: TaskHeaderProps) {
           aria-label={props.subagentPanelOpen ? '收起侧边栏' : '展开侧边栏'}
           title={props.subagentPanelOpen ? '收起侧边栏' : '展开侧边栏'}
         >
-          <PanelRight size={16} />
+          <SidebarToggleIcon side="right" size={16} />
         </button>
       </div>
     </header>

@@ -58,6 +58,9 @@
   --wc-menu-shadow: 0 2px 7px rgb(33 35 31 / 6%), 0 14px 34px rgb(33 35 31 / 9%);
   --wc-conversation-navigator-gutter: 4.75rem;
   --wc-conversation-content-right-inset: 2.75rem;
+  --wc-conversation-balance-shift: calc(
+    (var(--wc-conversation-navigator-gutter) - var(--wc-conversation-content-right-inset)) / 2
+  );
 }
 
 html,
@@ -639,7 +642,7 @@ button:not(:disabled),
   white-space: nowrap;
   opacity: 1;
   transform: translateY(-50%);
-  transition: opacity 100ms ease-out 65ms;
+  transition: opacity 140ms ease-out 60ms;
 }
 
 .wc-sidebar-label[data-collapsed='true'] {
@@ -1288,7 +1291,9 @@ button:not(:disabled),
   .wc-conversation-balanced-content {
     width: calc(min(100%, 56rem) - var(--wc-conversation-content-right-inset));
     max-width: none;
-    margin-left: max(0px, calc((100% - 56rem) / 2));
+    margin-left: calc(
+      max(0px, calc((100% - 56rem) / 2)) - var(--wc-conversation-balance-shift)
+    );
     margin-right: auto;
   }
 }

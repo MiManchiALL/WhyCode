@@ -1,7 +1,5 @@
 import { useMemo, useState } from 'react'
 import {
-  ChevronLeft,
-  ChevronRight,
   ChevronDown,
   ChevronUp,
   CircleAlert,
@@ -18,6 +16,7 @@ import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { SessionListItem } from '../../shared/session.ts'
 import { workspaceDisplayDirectory } from '../../shared/workspace.ts'
+import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 
 interface AppSidebarProps {
   collapsed: boolean
@@ -50,24 +49,31 @@ export function AppSidebar(props: AppSidebarProps) {
 
   return (
     <aside
-      className={`wc-shell-panel relative z-20 flex h-full shrink-0 flex-col bg-[var(--wc-sidebar)] transition-[width] duration-150 ${
-        props.collapsed ? 'w-[62px]' : 'w-[240px]'
+      className={`wc-shell-panel relative z-20 flex h-full shrink-0 flex-col bg-[var(--wc-sidebar)] transition-[width] duration-200 ease-out ${
+        props.collapsed ? 'w-[62px]' : 'w-[260px]'
       }`}
       aria-label="会话侧栏"
     >
-      <div className={`flex h-14 items-center ${props.collapsed ? 'justify-center' : 'justify-between px-2.5'}`}>
-        {!props.collapsed && (
-          <div className="overflow-hidden whitespace-nowrap text-sm font-semibold tracking-tight">WhyCode</div>
-        )}
+      <div className="relative h-14 shrink-0">
         <button
           type="button"
-          className="wc-icon-button"
+          className="wc-icon-button absolute left-3 top-3"
           aria-label={props.collapsed ? '展开会话侧栏' : '收起会话侧栏'}
           title={props.collapsed ? '展开侧栏' : '收起侧栏'}
           onClick={() => props.onCollapsedChange(!props.collapsed)}
         >
-          {props.collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
+          <SidebarToggleIcon side="left" size={17} />
         </button>
+        <div
+          className={`pointer-events-none absolute left-1/2 top-1/2 whitespace-nowrap text-sm font-semibold tracking-tight transition-[opacity,transform] duration-200 ease-out ${
+            props.collapsed
+              ? '-translate-x-1/2 -translate-y-1/2 scale-95 opacity-0'
+              : '-translate-x-1/2 -translate-y-1/2 scale-100 opacity-100'
+          }`}
+          aria-hidden={props.collapsed}
+        >
+          WhyCode
+        </div>
       </div>
 
       <div className="px-2">
@@ -83,8 +89,16 @@ export function AppSidebar(props: AppSidebarProps) {
         </button>
       </div>
 
-      {props.collapsed ? (
-        <div className="mt-3 flex min-h-0 flex-1 flex-col items-center gap-1 px-2">
+      <div className="relative min-h-0 flex-1">
+        <div
+          className={`absolute inset-0 flex flex-col items-center gap-1 px-2 pt-3 transition-[opacity,transform] duration-200 ease-out ${
+            props.collapsed
+              ? 'translate-x-0 opacity-100'
+              : 'pointer-events-none -translate-x-2 opacity-0'
+          }`}
+          aria-hidden={!props.collapsed}
+          inert={!props.collapsed}
+        >
           <button
             type="button"
             className="wc-icon-button relative"
@@ -98,8 +112,15 @@ export function AppSidebar(props: AppSidebarProps) {
             )}
           </button>
         </div>
-      ) : (
-        <div className="wc-scrollbar mt-4 min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-3">
+        <div
+          className={`wc-scrollbar absolute inset-0 overflow-x-hidden overflow-y-auto px-2 pb-3 pt-4 transition-[opacity,transform] duration-200 ease-out ${
+            props.collapsed
+              ? 'pointer-events-none -translate-x-3 opacity-0'
+              : 'translate-x-0 opacity-100'
+          }`}
+          aria-hidden={props.collapsed}
+          inert={props.collapsed}
+        >
           {props.error && <SidebarError text={props.error} />}
           {props.actionError && <SidebarError text={props.actionError} />}
           {props.sessions.length === 0 && !props.error ? (
@@ -154,7 +175,7 @@ export function AppSidebar(props: AppSidebarProps) {
             </>
           )}
         </div>
-      )}
+      </div>
 
       <div className="p-2">
         <button

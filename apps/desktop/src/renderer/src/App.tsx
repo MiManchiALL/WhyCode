@@ -1896,9 +1896,9 @@ export function App() {
           </section>
 
           <div
-            className={`relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out max-[1440px]:absolute max-[1440px]:inset-y-0 max-[1440px]:right-0 max-[1440px]:z-30 max-[1440px]:shadow-xl ${
+            className={`relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
               subagentPanelOpen
-                ? 'ml-0 w-[560px] max-[600px]:w-full'
+                ? 'ml-0 w-[40vw]'
                 : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
             }`}
           >
@@ -1926,7 +1926,7 @@ export function App() {
               />
             </div>
             <div
-              className={`absolute inset-y-0 right-0 w-[560px] transition-[opacity,transform] duration-200 ease-out max-[600px]:w-full ${
+              className={`absolute inset-y-0 right-0 w-[40vw] transition-[opacity,transform] duration-200 ease-out ${
                 subagentPanelOpen
                   ? 'translate-x-0 opacity-100'
                   : 'pointer-events-none translate-x-8 opacity-0'
