@@ -1284,7 +1284,7 @@ button:not(:disabled),
   margin-block-end: 0;
 }
 
-@media (min-width: 1281px) {
+@media (min-width: 1441px) {
   .wc-conversation-balanced-content {
     width: calc(min(100%, 56rem) - var(--wc-conversation-content-right-inset));
     max-width: none;
@@ -1293,7 +1293,7 @@ button:not(:disabled),
   }
 }
 
-@media (max-width: 1280px) {
+@media (max-width: 1440px) {
   .wc-conversation-navigator {
     display: none;
   }

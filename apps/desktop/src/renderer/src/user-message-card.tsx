@@ -23,7 +23,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
   return (
     <div
       data-conversation-navigator-target={props.block.id}
-      className={`wc-user-message-copy group ml-auto flex max-w-[84%] flex-col items-end gap-2 ${
+      className={`wc-user-message-copy group ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2 ${
         editor.editing ? 'mb-8' : 'mb-2'
       }`}
     >
@@ -32,7 +32,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
       <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
-          <div className={`wc-user-message-bubble wc-user-message-editor w-[min(36rem,78vw)] px-3.5 py-2.5 ${
+          <div className={`wc-user-message-bubble wc-user-message-editor w-full min-w-0 max-w-[36rem] px-3.5 py-2.5 ${
             props.block.btw ? 'wc-user-message-bubble-btw' : ''
           }`}>
             <MessageEditor
@@ -43,10 +43,12 @@ export function UserMessageCard(props: UserMessageCardProps) {
           </div>
         )
         : props.block.text && (
-          <div className={`wc-user-message-bubble relative flex min-h-11 w-fit max-w-full items-center px-3.5 py-2.5 ${
+          <div className={`wc-user-message-bubble relative flex min-h-11 min-w-0 w-fit max-w-full items-center px-3.5 py-2.5 ${
             props.block.btw ? 'wc-user-message-bubble-btw' : ''
           }`}>
-            <div className="whitespace-pre-wrap">{props.block.text}</div>
+            <div className="min-w-0 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {props.block.text}
+            </div>
           </div>
         )}
       {!editor.editing ? (
@@ -136,11 +138,11 @@ function MessageEditor({
     void editor.submit(allowed)
   }
   return (
-    <form onSubmit={submit} className="space-y-2">
+    <form onSubmit={submit} className="w-full min-w-0 space-y-2">
       <textarea
         ref={textareaRef}
         rows={2}
-        className="block w-full resize-none overflow-y-hidden border-0 bg-transparent p-0 outline-none"
+        className="block w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent p-0 outline-none"
         style={{
           minHeight: MESSAGE_EDITOR_BASE_HEIGHT_PX,
           maxHeight: MESSAGE_EDITOR_MAX_HEIGHT_PX,

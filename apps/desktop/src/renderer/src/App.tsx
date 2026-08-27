@@ -1896,17 +1896,17 @@ export function App() {
           </section>
 
           <div
-            className={`relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out max-[1180px]:absolute max-[1180px]:inset-y-0 max-[1180px]:right-0 max-[1180px]:z-30 max-[1180px]:shadow-xl ${
+            className={`relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out max-[1440px]:absolute max-[1440px]:inset-y-0 max-[1440px]:right-0 max-[1440px]:z-30 max-[1440px]:shadow-xl ${
               subagentPanelOpen
                 ? 'ml-0 w-[560px] max-[600px]:w-full'
-                : 'ml-3 w-[348px] max-[1180px]:ml-0 max-[1180px]:w-0 max-[1180px]:pointer-events-none'
+                : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
             }`}
           >
             <div
               className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-200 ease-out ${
                 subagentPanelOpen
                   ? 'pointer-events-none -translate-x-3 opacity-0'
-                  : 'translate-x-0 opacity-100 max-[1180px]:opacity-0'
+                  : 'translate-x-0 opacity-100 max-[1440px]:opacity-0'
               }`}
               aria-hidden={subagentPanelOpen}
               inert={subagentPanelOpen}
