@@ -23,6 +23,7 @@ const ACTIVATED_MARKER_MS = 2_000
 
 export function useConversationNavigator(
   entries: readonly ConversationNavigationEntry[],
+  navigationTargetIds: ReadonlyMap<string, string>,
   scrollRef: RefObject<HTMLElement | null>,
 ) {
   const railRef = useRef<HTMLDivElement>(null)
@@ -43,7 +44,7 @@ export function useConversationNavigator(
 
   const [height, setHeight] = useState(0)
   const [offset, setOffset] = useState(0)
-  const currentIndex = useConversationCurrentIndex(entries, scrollRef)
+  const currentIndex = useConversationCurrentIndex(entries, navigationTargetIds, scrollRef)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [pointerInside, setPointerInside] = useState(false)
   const [pointerY, setPointerY] = useState<number | null>(null)

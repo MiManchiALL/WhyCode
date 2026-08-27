@@ -22,6 +22,7 @@ import {
   toggleExpanded,
 } from './conversation-state.ts'
 import { conversationSections } from './conversation-sections.ts'
+import { presentBtwConversations } from './conversation-btw-groups.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 import { ConversationView } from './conversation-view.tsx'
 import { ProcessingTime, TotalProcessingTime } from './processing-time.ts'
@@ -240,6 +241,10 @@ function SubagentTranscript({
     ),
     [subagent.startedAt, subagent.status, view.blocks],
   )
+  const presentation = useMemo(
+    () => presentBtwConversations(sections, view.expanded),
+    [sections, view.expanded],
+  )
   if (loading) {
     return <div className="flex flex-1 items-center justify-center text-xs text-[var(--wc-faint)]">正在读取子代理记录…</div>
   }
@@ -275,7 +280,8 @@ function SubagentTranscript({
       </div>
       <ConversationView
         runtimeId={runtimeId}
-        sections={sections}
+        items={presentation.items}
+        latestBtwConversationId={presentation.latestBtwConversationId}
         expandedIds={view.expanded}
         editableBlockId={null}
         busy={false}

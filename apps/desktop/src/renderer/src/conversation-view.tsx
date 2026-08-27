@@ -2,6 +2,11 @@ import { GitFork } from 'lucide-react'
 import { memo } from 'react'
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
+import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
+import {
+  BtwConversationGroup,
+  useAutomaticallyCollapsingBtwId,
+} from './btw-conversation-group.tsx'
 import {
   isForkBoundarySection,
   type ConversationSection,
@@ -16,7 +21,8 @@ import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 
 interface ConversationViewProps {
   runtimeId: string
-  sections: readonly ConversationSection[]
+  items: readonly ConversationDisplayItem[]
+  latestBtwConversationId: string | null
   expandedIds: ReadonlySet<string>
   editableBlockId: string | null
   busy: boolean
@@ -45,28 +51,58 @@ type WorkTiming =
     }
 
 export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
+  const automaticallyCollapsingId = useAutomaticallyCollapsingBtwId(
+    props.runtimeId,
+    props.latestBtwConversationId,
+  )
+
   return (
     <>
-      {props.sections.map((section) =>
-        section.kind === 'block'
-          ? (
-              <ConversationBlock
-                key={section.id}
-                {...conversationBlockProps(props, section.block)}
-              />
-            )
-          : (
-              <div key={section.id}>
-                <WorkSection {...props} section={section} />
-                {isForkBoundarySection(section, props.forkSourceTurnId)
-                  ? <ForkBoundary />
-                  : null}
-              </div>
-            ))}
+      {props.items.map((item) => item.kind === 'section'
+        ? (
+            <ConversationSectionView
+              key={item.id}
+              props={props}
+              section={item.section}
+            />
+          )
+        : (
+            <BtwConversationGroup
+              key={item.id}
+              id={item.id}
+              conversationId={item.conversationId}
+              summary={item.summary}
+              expanded={props.expandedIds.has(item.id)}
+              automaticallyCollapse={item.id === automaticallyCollapsingId}
+              onToggle={() => props.onToggle(item.id)}
+            >
+              {item.sections.map((section) => (
+                <ConversationSectionView key={section.id} props={props} section={section} />
+              ))}
+            </BtwConversationGroup>
+          ))}
       {props.showThinkingGap && <ThinkingGapIndicator />}
     </>
   )
 })
+
+function ConversationSectionView({
+  props,
+  section,
+}: {
+  props: ConversationViewProps
+  section: ConversationSection
+}) {
+  if (section.kind === 'block') {
+    return <ConversationBlock {...conversationBlockProps(props, section.block)} />
+  }
+  return (
+    <div>
+      <WorkSection {...props} section={section} />
+      {isForkBoundarySection(section, props.forkSourceTurnId) ? <ForkBoundary /> : null}
+    </div>
+  )
+}
 
 function WorkSection({
   section,

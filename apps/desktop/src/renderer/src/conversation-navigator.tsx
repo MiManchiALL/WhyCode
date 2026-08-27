@@ -14,6 +14,7 @@ const TOOLTIP_EDGE_PX = 64
 
 interface ConversationNavigatorProps {
   sections: readonly ConversationSection[]
+  navigationTargetIds: ReadonlyMap<string, string>
   scrollRef: RefObject<HTMLElement | null>
   onNavigate: (targetId: string) => void
 }
@@ -25,7 +26,11 @@ export const ConversationNavigator = memo(
       () => conversationNavigationEntries(props.sections),
       [props.sections],
     )
-    const navigation = useConversationNavigator(entries, props.scrollRef)
+    const navigation = useConversationNavigator(
+      entries,
+      props.navigationTargetIds,
+      props.scrollRef,
+    )
     const markers = visibleConversationNavigationMarkers(
       entries.length,
       navigation.height,
@@ -72,7 +77,8 @@ export const ConversationNavigator = memo(
                 activated={entries[marker.entryIndex]!.id === navigation.activatedEntryId}
                 onNavigate={() => {
                   navigation.activateEntry(entries[marker.entryIndex]!.id)
-                  props.onNavigate(entries[marker.entryIndex]!.id)
+                  const entryId = entries[marker.entryIndex]!.id
+                  props.onNavigate(props.navigationTargetIds.get(entryId) ?? entryId)
                 }}
               />
             ))}
@@ -86,8 +92,21 @@ export const ConversationNavigator = memo(
   },
   (previous, next) => previous.scrollRef === next.scrollRef
     && previous.onNavigate === next.onNavigate
+    && sameNavigationTargets(previous.navigationTargetIds, next.navigationTargetIds)
     && sameConversationNavigationTimeline(previous.sections, next.sections),
 )
+
+function sameNavigationTargets(
+  previous: ReadonlyMap<string, string>,
+  next: ReadonlyMap<string, string>,
+): boolean {
+  if (previous === next) return true
+  if (previous.size !== next.size) return false
+  for (const [entryId, targetId] of previous) {
+    if (next.get(entryId) !== targetId) return false
+  }
+  return true
+}
 
 function ConversationNavigationMarker({
   entry,

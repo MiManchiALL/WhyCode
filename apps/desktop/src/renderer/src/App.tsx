@@ -57,6 +57,7 @@ import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
 import { ConversationNavigator } from './conversation-navigator.tsx'
+import { presentBtwConversations } from './conversation-btw-groups.ts'
 import {
   conversationSections,
   findLatestForkTurnId,
@@ -227,6 +228,10 @@ export function App() {
   const sections = useMemo(
     () => conversationSections(blocks, workStartedAt),
     [blocks, workStartedAt],
+  )
+  const btwPresentation = useMemo(
+    () => presentBtwConversations(sections, view.expanded),
+    [sections, view.expanded],
   )
   const releaseConversationScroll = useCallback(() => {
     const release = conversationScrollReleaseRef.current
@@ -1641,6 +1646,7 @@ export function App() {
           <ConversationNavigator
             key={runtimeId}
             sections={sections}
+            navigationTargetIds={btwPresentation.navigationTargetIds}
             scrollRef={scrollRef}
             onNavigate={navigateConversation}
           />
@@ -1672,7 +1678,8 @@ export function App() {
                 )}
                 <ConversationView
                   runtimeId={runtimeId}
-                  sections={sections}
+                  items={btwPresentation.items}
+                  latestBtwConversationId={btwPresentation.latestBtwConversationId}
                   expandedIds={view.expanded}
                   editableBlockId={editableBlockId}
                   busy={interactionBusy}

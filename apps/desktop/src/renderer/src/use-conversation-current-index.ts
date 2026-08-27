@@ -19,6 +19,7 @@ interface NavigationAnchor {
 /** 用工作段做二分定位；只在当前段内检查少量用户插话节点。 */
 export function useConversationCurrentIndex(
   entries: readonly ConversationNavigationEntry[],
+  navigationTargetIds: ReadonlyMap<string, string>,
   scrollRef: RefObject<HTMLElement | null>,
 ): number {
   const anchorsRef = useRef<NavigationAnchor[]>([])
@@ -60,7 +61,11 @@ export function useConversationCurrentIndex(
 
   useLayoutEffect(() => {
     const scroller = scrollRef.current
-    const entryIndexes = new Map(entries.map((entry, index) => [entry.id, index]))
+    const entryIndexes = new Map<string, number>()
+    for (const [index, entry] of entries.entries()) {
+      const targetId = navigationTargetIds.get(entry.id) ?? entry.id
+      if (!entryIndexes.has(targetId)) entryIndexes.set(targetId, index)
+    }
     entryIndexesRef.current = entryIndexes
     if (!scroller) {
       anchorsRef.current = []
@@ -86,7 +91,7 @@ export function useConversationCurrentIndex(
     anchorsRef.current = anchors
     setCurrentIndex((previous) => Math.min(previous, Math.max(0, entries.length - 1)))
     update()
-  }, [entries, scrollRef, update])
+  }, [entries, navigationTargetIds, scrollRef, update])
 
   useEffect(() => {
     const scroller = scrollRef.current

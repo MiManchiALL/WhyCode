@@ -336,7 +336,7 @@ function samePreviewBlock(left: Block | undefined, right: Block | undefined): bo
   return 'text' in left && 'text' in right && left.text === right.text
 }
 
-function boundedPlainText(text: string, maximum: number): string {
+export function boundedPlainText(text: string, maximum: number): string {
   const bounded = text.slice(0, maximum * 4)
   const normalized = bounded
     .replace(/```[\s\S]*?```/g, ' 代码片段 ')
