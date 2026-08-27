@@ -68,7 +68,7 @@ export interface UsageInfo {
   costUsd: number
 }
 
-/** 当前模型请求上下文的统一估算；分项用于解释占用，total 优先采用 Provider usage 基线。 */
+/** 当前/下一次模型请求上下文的统一估算；messages 含请求时投影，total 优先采用 Provider usage 基线。 */
 export interface ContextUsageInfo {
   usedTokens: number
   contextWindow: number

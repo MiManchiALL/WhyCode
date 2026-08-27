@@ -93,10 +93,16 @@ export class SkillTurnContext {
     return tokenEstimate(this.project([]))
   }
 
-  clear(): void {
-    this.catalog = null
+  /** 根任务结束：保留下一次普通请求仍会使用的目录，只清除 turn 级正文与结果可见性。 */
+  finish(): void {
     this.active.clear()
     this.visibleResultCallIds.clear()
+  }
+
+  /** 开始新快照或物理关闭 Skill 能力时清除全部请求投影。 */
+  clear(): void {
+    this.catalog = null
+    this.finish()
   }
 }
 

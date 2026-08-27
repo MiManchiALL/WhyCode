@@ -503,7 +503,8 @@ export class AgentSession {
   /** Main 初始化/模型切换时建立可展示估算；计量失败不应影响会话可用性。 */
   async initializeContextUsage(): Promise<void> {
     try {
-      await this.refreshSubagentCatalog()
+      // 空闲态也按“下一次普通请求”投影 Skill 目录与 Skill 工具；Fork/恢复不能只算持久消息。
+      await this.prepareSkillTurn([])
       const abortSignal = new AbortController().signal
       const systemPrompt = buildSystemPrompt(
         this.options.promptContext,
@@ -1549,7 +1550,8 @@ export class AgentSession {
       this.running = false
       this.activeSubagentTurnState = null
       this.turnInterruptionContext = null
-      this.skillTurn.clear()
+      this.skillTurn.finish()
+      this.emitContextUsage()
       emit({
         type: 'error',
         message: `无法读取项目指令：${error instanceof Error ? error.message : String(error)}`,
@@ -1622,7 +1624,8 @@ export class AgentSession {
       this.opAbort = null
       this.running = false
       this.activeSubagentTurnState = null
-      this.skillTurn.clear()
+      this.skillTurn.finish()
+      this.emitContextUsage()
       this.abortRequestedDuringFinalization = false
       this.turnInterruptionContext = null
       emit({
@@ -1840,6 +1843,7 @@ export class AgentSession {
     this.activeSubagentTurnState = null
     this.turnInterruptionContext = null
     this.deliveredSubagentActivations.clear()
+    this.skillTurn.finish()
 
     this.emitContextUsage()
     emit({ type: 'turn-end', turnId, usage, stopReason })
@@ -1853,11 +1857,9 @@ export class AgentSession {
       && !this.persistenceFailed
       && (this.queue.length > 0 || stopReason !== 'waiting-user')
     ) {
-      this.skillTurn.clear()
       return this.startPendingTurn()
     }
 
-    this.skillTurn.clear()
     if (
       this.activeModelSelection
       && this.options.model.id !== this.activeModelSelection.model.id
@@ -2173,7 +2175,10 @@ export class AgentSession {
     )
   }
 
-  private emitContextUsage(): void {
+  private emitContextUsage(
+    requestMessages?: readonly ModelMessage[],
+    requestUsedTokens?: number,
+  ): void {
     if (
       this.activeModelSelection
       && this.options.model.id !== this.activeModelSelection.model.id
@@ -2197,13 +2202,14 @@ export class AgentSession {
     )
     const breakdown: ContextUsageInfo['breakdown'] = {
       ...this.contextOverhead,
-      messageTokens: estimateMessagesTokens(projectedMessages),
+      // 真实请求已装配时直接计算其 Provider 边界 messages；其余时刻投影下一次请求。
+      messageTokens: estimateMessagesTokens(requestMessages ?? projectedMessages),
     }
     const capabilities = this.currentModelSelection().model.capabilities
     this.options.emit({
       type: 'context-usage',
       usage: {
-        usedTokens: this.estimateCurrentContextTokens(),
+        usedTokens: requestUsedTokens ?? this.estimateCurrentContextTokens(),
         contextWindow: capabilities.contextWindow,
         autoCompactThreshold: autoCompactThreshold(capabilities),
         breakdown,
@@ -2488,6 +2494,16 @@ export class AgentSession {
         requestSystemPrompt,
         requestTools,
       )
+      this.contextOverhead = requestOverhead
+      const requestUsedTokens = this.tokenBaseline
+        ? this.estimateCurrentContextTokens([
+            ...this.messages,
+            ...(currentTimeReminder ? [currentTimeReminder] : []),
+          ])
+        : requestOverhead.systemPromptTokens
+          + requestOverhead.toolTokens
+          + estimateMessagesTokens(requestMessages)
+      this.emitContextUsage(requestMessages, requestUsedTokens)
       const result = streamText({
         model: this.createLanguageModel(),
         system: requestSystemPrompt,
@@ -2696,7 +2712,6 @@ export class AgentSession {
         this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
         this.tokenBaselineSubagentProjectionDelta = requestSubagentProjectionDelta
       }
-      this.contextOverhead = requestOverhead
       this.updateLastTurnAssistantText(canonicalResponseMessages)
       emit({ type: 'step-committed' })
       this.lastFinishReason = finishReason

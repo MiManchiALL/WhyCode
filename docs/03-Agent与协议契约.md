@@ -118,7 +118,9 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 ### 1.9 上下文用量
 
-`ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`usedTokens` 与压缩器必须读取同一个压力值：有 Provider usage 时使用真实基线并补估其后稳定提交的消息；没有基线时才估算 System、工具目录和消息。分项不要求机械相加等于 Provider 总量。
+`ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此不计入消息；它恢复出的工具 schema 在真实请求装配后计入 `toolTokens`。
+
+`usedTokens` 与压缩器必须读取同一个压力值：有 Provider usage 时使用真实基线并补估其后稳定提交的消息及当前请求投影变化；没有基线时才估算 System、工具目录和消息。分项不要求机械相加等于 Provider 总量。项目指令、时间提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
 
 `context-usage` 是可空 live CoreEvent。Desktop runtime 保存最新值并进入恢复快照，Renderer 不读取模型能力或历史自行重算；B/C 的独立窗口不计入。该状态不进入 ViewEvent、JSONL、摘要或 Fork，也不增加会话 schema。模型切换使旧值失效，计量失败只隐藏指示器，不能阻断请求。idle 会话即使最终输出越过阈值，也只说明“下次请求前压缩”，不额外制造模型调用；自动压缩连续失败必须显式提示。
 
