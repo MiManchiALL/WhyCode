@@ -126,9 +126,11 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 ### 1.10 BTW 临时侧对话
 
-`btw-message {mode,text,attachments?}` 是独立于普通 `user-message` 的命令。宿主只在会话空闲且已有稳定 Main 背景时接受；协议没有 PDF、Skill 或恢复队列字段，图片必须由当前模型原生接收。BTW 总是创建新 `conversationId`，BBTW 只能续接最近成功侧链；成功完成且未满三轮才保留下一次续接资格，普通用户输入、停止、错误、回滚或第三轮完成都会清除资格。
+`btw-message {mode,text,attachments?}` 是独立于普通 `user-message` 的命令。宿主只在会话空闲且已有稳定 Main 背景时接受；协议没有 PDF、Skill 或恢复队列字段，图片必须由当前模型原生接收。BTW 总是创建新 `conversationId`，BBTW 只能续接最近有效侧链；用户输入一经持久化即占用一轮，完成或停止且未满三轮都保留续接资格。普通用户输入、新 BTW、错误、回滚或第三轮终态会结束续接资格。
 
-模型请求顺序为：会话 System 加精简 BTW 边界、Main 稳定消息快照、BBTW 已完成侧历史（BTW 为空）、当前侧输入。调用 `streamText` 时物理不传工具，侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。输出仍使用普通推理/正文事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。
+模型请求顺序为：会话 System 加精简 BTW 边界、Main 稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入。停止轮次在原用户消息和可用回复片段后追加与 Main 相同的中断标记，让下一次 BBTW 明确知道此前生成被用户或进程中断。调用 `streamText` 时物理不传工具，侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
+
+`edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出仍使用普通推理/正文事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。
 
 ## 2. 结构化输出与步骤提交
 

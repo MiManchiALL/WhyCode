@@ -14,7 +14,7 @@ export interface ConversationBlockRenderProps {
   forkTurnId: string | null
   forkPending: boolean
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
-  onEdit: (turnId: string, text: string) => Promise<boolean>
+  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onFork: (turnId: string) => void
   onToggle: (id: string) => void
 }

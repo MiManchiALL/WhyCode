@@ -1120,6 +1120,9 @@ async function handleEditUserMessageCommand(
   runtime: DesktopSessionRuntime,
   command: EditUserMessageCommand,
 ): Promise<{ ok: boolean }> {
+  if (command.target.kind === 'btw') {
+    return handleEditBtwMessageCommand(runtime, command.target.inputId, command.text)
+  }
   if (settingsMutationInProgress) {
     return { ok: false }
   }
@@ -1139,7 +1142,7 @@ async function handleEditUserMessageCommand(
   const result = await startEditedUserMessage(
     runtime,
     reservation,
-    command.turnId,
+    command.target.turnId,
     command.text,
     (prepared) => deliverEditedUserMessage(runtime, prepared),
     (error) => reportUserMessageDeliveryError(runtime, error),
@@ -1400,7 +1403,7 @@ async function handleBtwMessageCommand(
     persistedContext = context
     runtime.beginBtwWork()
     btwWorkStarted = true
-    runtime.emit({
+    startPersistedBtw(runtime, journal, session, context, {
       type: 'btw-message-accepted',
       inputId: context.inputId,
       text,
@@ -1410,56 +1413,155 @@ async function handleBtwMessageCommand(
         turnIndex: context.turnIndex,
         mode: context.mode,
       },
-    }, false)
-    void session.handleBtwMessage(context, {
-      emit: (event) => runtime.emitBtw(event),
-      onSettled: async (result, continuesWithMainWork) => {
-        await journal.recordBtwResponse(context, result)
-        runtime.timeline.discardAll()
-        if (result.outcome === 'completed') runtime.emit({ type: 'step-committed' }, false)
-        runtime.finishBtwWork(result.durationMs, result.outcome, continuesWithMainWork)
-      },
-    }).catch((error) => {
-      runtime.timeline.discardAll()
-      runtime.emit({
-        type: 'error',
-        message: `BTW 异常退出：${error instanceof Error ? error.message : String(error)}`,
-        recoverable: true,
-      }, false)
-      runtime.finishBtwWork(0, 'error', false)
-      runtime.emit({ type: 'agent-status', status: 'error' }, false)
     })
     return { ok: true, workspace: runtime.workspace }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (persistedContext) {
       // 输入一旦成为 JSONL 事实就不能再回滚其附件；启动失败也必须补齐独立终态。
-      await runtime.journal?.recordBtwResponse(persistedContext, {
-        outcome: 'error',
-        assistantText: '',
-        reasoningText: '',
-        reasoningDurationMs: 0,
-        durationMs: 0,
-        error: message,
-      }).catch((persistenceError) => {
-        runtime.emit({
-          type: 'error',
-          message: `BTW 失败终态未能写入：${
-            persistenceError instanceof Error ? persistenceError.message : String(persistenceError)
-          }`,
-          recoverable: true,
-        }, false)
-      })
-      runtime.timeline.discardAll()
-      runtime.emit({ type: 'error', message: `BTW 启动失败：${message}`, recoverable: true }, false)
-      if (btwWorkStarted) runtime.finishBtwWork(0, 'error', false)
-      runtime.emit({ type: 'agent-status', status: 'error' }, false)
+      await finishFailedPersistedBtw(runtime, persistedContext, message, btwWorkStarted)
       return { ok: true, workspace: runtime.workspace }
     }
     await imageImport?.rollback().catch(() => {})
     return rejectUserMessage(runtime, message)
   } finally {
     reservation.release()
+  }
+}
+
+async function handleEditBtwMessageCommand(
+  runtime: DesktopSessionRuntime,
+  inputId: string,
+  text: string,
+): Promise<{ ok: boolean }> {
+  if (settingsMutationInProgress) return { ok: false }
+  const reservation = runtimeRegistry.reserveWorkStart(runtime)
+  if (!reservation) return { ok: false }
+  let context: BtwTurnContext | null = null
+  let workStarted = false
+  try {
+    await reservation.ready
+    if (runtimeExecutionBusy(runtime)) return { ok: false }
+    const initializationError = await ensureSession(runtime)
+    if (initializationError) return { ok: false }
+    const journal = runtime.journal
+    const session = runtime.session
+    if (!journal || !session) return { ok: false }
+    await runtime.timeline.flush()
+    const latest = journal.latestBtwTurn
+    if (!latest || latest.inputId !== inputId) return { ok: false }
+    const modelId = resolveCurrentModelId(runtime)
+    const resolved = modelId ? resolveModelConnection(loadAppConfig(), modelId) : null
+    if (!resolved?.ok) return { ok: false }
+    if (latest.attachments.length > 0 && !resolved.value.entry.capabilities.supportsImageInput) {
+      return { ok: false }
+    }
+    context = await journal.recordBtwEditInput(inputId, text.trim())
+    runtime.beginBtwWork()
+    workStarted = true
+    startPersistedBtw(runtime, journal, session, context, {
+      type: 'btw-message-edited',
+      previousInputId: inputId,
+      inputId: context.inputId,
+      text: context.text,
+      btw: {
+        conversationId: context.conversationId,
+        turnIndex: context.turnIndex,
+        mode: context.mode,
+      },
+    })
+    return { ok: true }
+  } catch (error) {
+    if (!context) return { ok: false }
+    await finishFailedPersistedBtw(
+      runtime,
+      context,
+      error instanceof Error ? error.message : String(error),
+      workStarted,
+    )
+    return { ok: true }
+  } finally {
+    reservation.release()
+  }
+}
+
+function startPersistedBtw(
+  runtime: DesktopSessionRuntime,
+  journal: SessionJournal,
+  session: AgentSession,
+  context: BtwTurnContext,
+  inputEvent: Extract<CoreEvent, { type: 'btw-message-accepted' | 'btw-message-edited' }>,
+): void {
+  runtime.emit(inputEvent, false)
+  void session.handleBtwMessage(context, {
+    emit: (event) => runtime.emitBtw(event),
+    onSettled: async (result, continuesWithMainWork) => {
+      const settlement = await journal.recordBtwResponse(context, result)
+      runtime.timeline.discardAll()
+      if (result.outcome === 'completed') runtime.emit({ type: 'step-committed' }, false)
+      runtime.finishBtwWork(
+        result.durationMs,
+        result.outcome,
+        continuesWithMainWork,
+        btwWorkProjection(context, settlement.continuationAvailable),
+      )
+    },
+  }).catch((error) => {
+    runtime.timeline.discardAll()
+    runtime.emit({
+      type: 'error',
+      message: `BTW 异常退出：${error instanceof Error ? error.message : String(error)}`,
+      recoverable: true,
+    }, false)
+    runtime.finishBtwWork(0, 'error', false, btwWorkProjection(context, false))
+    runtime.emit({ type: 'agent-status', status: 'error' }, false)
+  })
+}
+
+async function finishFailedPersistedBtw(
+  runtime: DesktopSessionRuntime,
+  context: BtwTurnContext,
+  message: string,
+  workStarted: boolean,
+): Promise<void> {
+  const settlement = await runtime.journal?.recordBtwResponse(context, {
+    outcome: 'error',
+    assistantText: '',
+    reasoningText: '',
+    reasoningDurationMs: 0,
+    durationMs: 0,
+    error: message,
+  }).catch((persistenceError) => {
+    runtime.emit({
+      type: 'error',
+      message: `BTW 失败终态未能写入：${
+        persistenceError instanceof Error ? persistenceError.message : String(persistenceError)
+      }`,
+      recoverable: true,
+    }, false)
+    return null
+  })
+  runtime.timeline.discardAll()
+  runtime.emit({ type: 'error', message: `BTW 启动失败：${message}`, recoverable: true }, false)
+  if (workStarted) {
+    runtime.finishBtwWork(
+      0,
+      'error',
+      false,
+      btwWorkProjection(context, settlement?.continuationAvailable ?? false),
+    )
+  }
+  runtime.emit({ type: 'agent-status', status: 'error' }, false)
+}
+
+function btwWorkProjection(
+  context: BtwTurnContext,
+  continuationAvailable: boolean,
+) {
+  return {
+    conversationId: context.conversationId,
+    turnIndex: context.turnIndex,
+    continuationAvailable,
   }
 }
 

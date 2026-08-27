@@ -34,6 +34,7 @@ describe('BTW 独立侧对话', () => {
       mode: 'btw',
       text: first.text,
       attachments: [],
+      outcome: 'completed',
       assistantText: '第一轮侧回答',
     }], first.conversationId, 2)
     const secondSettled: BtwTurnResult[] = []
@@ -53,6 +54,31 @@ describe('BTW 独立侧对话', () => {
     assert.match(JSON.stringify(secondSideCall.prompt), /第一轮侧回答/)
     assert.match(JSON.stringify(secondSideCall.prompt), /第二轮侧问题/)
     assert.match(JSON.stringify(secondSideCall.prompt), /不要调用工具/)
+  })
+
+  it('续接被停止的侧轮次时保留原输入、部分回复与用户中断标记', async () => {
+    const model = new MockLanguageModelV4({ doStream: [finalStep('续接回答')] })
+    const session = createSession(model)
+    const conversationId = randomUUID()
+    const context = btwContext('bbtw', '换一个角度回答', [{
+      inputId: randomUUID(),
+      conversationId,
+      turnIndex: 1,
+      mode: 'btw',
+      text: '第一轮侧问题',
+      attachments: [],
+      outcome: 'stopped',
+      assistantText: '尚未说完的部分',
+      interruptionReason: 'user-cancel',
+    }], conversationId, 2)
+
+    assert.equal(await session.handleBtwMessage(context, lifecycle([])), 'completed')
+    const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
+    assert.match(request, /第一轮侧问题/)
+    assert.match(request, /尚未说完的部分/)
+    assert.match(request, /whycode-turn-aborted/)
+    assert.match(request, /上一回合已被用户主动停止/)
+    assert.match(request, /换一个角度回答/)
   })
 })
 

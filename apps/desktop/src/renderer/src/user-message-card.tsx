@@ -15,7 +15,7 @@ interface UserMessageCardProps {
   block: UserBlock
   editable: boolean
   disabled: boolean
-  onEdit: (turnId: string, text: string) => Promise<boolean>
+  onEdit: (block: UserBlock, text: string) => Promise<boolean>
 }
 
 export function UserMessageCard(props: UserMessageCardProps) {
@@ -32,7 +32,9 @@ export function UserMessageCard(props: UserMessageCardProps) {
       <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
-          <div className="wc-user-message-bubble wc-user-message-editor w-[min(36rem,78vw)] px-3.5 py-2.5">
+          <div className={`wc-user-message-bubble wc-user-message-editor w-[min(36rem,78vw)] px-3.5 py-2.5 ${
+            props.block.btw ? 'wc-user-message-bubble-btw' : ''
+          }`}>
             <MessageEditor
               editable={props.editable}
               disabled={props.disabled}
@@ -51,7 +53,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
         <MessageActions
           timestamp={props.block.timestamp}
           text={props.block.text}
-          editable={!props.block.btw && props.editable && !props.disabled}
+          editable={props.editable && !props.disabled}
           onEdit={editor.begin}
           className="-mt-1"
         />
@@ -95,11 +97,11 @@ function useMessageEditor(
   }
   const submit = async (allowed: boolean) => {
     const text = draft.trim()
-    if (!allowed || submitting || !block.turnId || !text) return
+    if (!allowed || submitting || !text) return
     setSubmitting(true)
     setError(null)
     try {
-      if (await onEdit(block.turnId, text)) setEditing(false)
+      if (await onEdit(block, text)) setEditing(false)
       else setError('重新发送失败，请重试')
     } catch {
       setError('重新发送失败，请重试')

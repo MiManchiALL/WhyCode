@@ -414,11 +414,15 @@ export type { ViewEvent, VisibleCoreEvent } from './session/view-events.ts'
 export {
   BTW_MAX_TURNS,
   btwModeSchema,
-  type BtwCompletedTurn,
+  canContinueBtw,
+  type BtwConversation,
+  type BtwConversationTurn,
   type BtwContinuation,
+  type BtwInterruptionReason,
   type BtwMode,
   type BtwTurnContext,
   type BtwTurnResult,
+  type BtwTurnSettlement,
 } from './session/btw.ts'
 export type {
   LoadedSession,

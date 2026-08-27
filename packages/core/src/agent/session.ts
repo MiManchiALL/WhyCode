@@ -629,7 +629,7 @@ export class AgentSession {
 
   /**
    * 独立侧对话：读取 Main 的稳定上下文快照，但不装配工具、不写入 Main messages。
-   * 只有成功完成的结果才可成为下一次 BBTW 的历史；该资格由 SessionJournal 决定。
+   * 已提交输入即成为侧链轮次；停止只写入中断边界，不替用户结束整条侧链。
    */
   handleBtwMessage(
     context: BtwTurnContext,
@@ -683,6 +683,7 @@ export class AgentSession {
         reasoningText: '',
         reasoningDurationMs: 0,
         durationMs: Math.max(0, Date.now() - startedAt),
+        ...(stopped ? { interruptionReason: 'user-cancel' as const } : {}),
         ...(!stopped ? { error: error instanceof Error ? error.message : String(error) } : {}),
       }
       lifecycle.emit({ type: 'step-discarded' })
@@ -737,12 +738,18 @@ export class AgentSession {
     turnAbortSignal: AbortSignal,
   ): Promise<BtwTurnResult> {
     const baseMessages = this.captureMessageSnapshot()
-    const sideMessages = context.history.flatMap((turn): ModelMessage[] => [
-      turn.attachments.length
+    const sideMessages = context.history.flatMap((turn): ModelMessage[] => {
+      const messages: ModelMessage[] = [turn.attachments.length
         ? createImageUserMessage(turn.text, turn.attachments, 'native')
-        : { role: 'user', content: turn.text },
-      { role: 'assistant', content: turn.assistantText },
-    ])
+        : { role: 'user', content: turn.text }]
+      if (turn.assistantText) {
+        messages.push({ role: 'assistant', content: turn.assistantText })
+      }
+      if (turn.outcome === 'stopped') {
+        messages.push(createTurnAbortedMessage(turn.interruptionReason ?? 'user-cancel'))
+      }
+      return messages
+    })
     const currentMessage: ModelMessage = context.attachments.length
       ? createImageUserMessage(context.text, context.attachments, 'native')
       : { role: 'user', content: context.text }
@@ -870,6 +877,7 @@ export class AgentSession {
           reasoningText: '',
           reasoningDurationMs: 0,
           durationMs: Math.max(0, Date.now() - startedAt),
+          interruptionReason: 'user-cancel',
         }
       }
       throw error

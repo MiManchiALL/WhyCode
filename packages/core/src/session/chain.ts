@@ -23,8 +23,9 @@ import {
   validateProjectInstructionsUpdate,
 } from '../instructions/project.ts'
 import {
-  BTW_MAX_TURNS,
-  type BtwCompletedTurn,
+  canContinueBtw,
+  type BtwConversation,
+  type BtwConversationTurn,
   type BtwContinuation,
   type BtwTurnContext,
 } from './btw.ts'
@@ -159,7 +160,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     interruptedConsensusBaseTurnIds,
     consensusState,
     taskState,
-    btwContinuation: btwState.continuation,
+    btwConversation: btwState.conversation,
     interruptedBtw: btwState.pending,
     metadata: {
       schemaVersion: SESSION_SCHEMA_VERSION,
@@ -523,6 +524,22 @@ function collectViewEvents(entries: SessionEntry[]): {
           mode: entry.mode,
         },
       }, entry.timestamp)
+      if (entry.replacesInputId) {
+        push({
+          type: 'core-event',
+          event: {
+            type: 'btw-message-edited',
+            previousInputId: entry.replacesInputId,
+            inputId: entry.uuid,
+            text: entry.text,
+            btw: {
+              conversationId: entry.conversationId,
+              turnIndex: entry.turnIndex,
+              mode: entry.mode,
+            },
+          },
+        }, entry.timestamp)
+      }
       continue
     }
     if (entry.type === 'btw-response') {
@@ -543,6 +560,11 @@ function collectViewEvents(entries: SessionEntry[]): {
           durationMs: entry.durationMs,
           outcome: entry.outcome === 'completed' ? 'completed' : 'stopped',
           forkTurnId: null,
+          btw: {
+            conversationId: entry.conversationId,
+            turnIndex: entry.turnIndex,
+            continuationAvailable: entry.continuationAvailable,
+          },
         },
       }, entry.timestamp)
       continue
@@ -596,75 +618,97 @@ function collectViewEvents(entries: SessionEntry[]): {
   return { events, timestamps }
 }
 
+interface CollectedPendingBtw {
+  input: Extract<SessionEntry, { type: 'btw-input' }>
+  history: BtwConversationTurn[]
+  invalidated: boolean
+}
+
 function collectBtwState(entries: readonly SessionEntry[]): {
-  continuation: BtwContinuation | null
+  conversation: BtwConversation | null
   pending: { context: BtwTurnContext; invalidated: boolean } | null
 } {
-  const inputs = new Map<string, Extract<SessionEntry, { type: 'btw-input' }>>()
-  let continuation: BtwContinuation | null = null
-  let pending: {
-    input: Extract<SessionEntry, { type: 'btw-input' }>
-    history: BtwCompletedTurn[]
-    invalidated: boolean
-  } | null = null
+  let conversation: BtwConversation | null = null
+  let pending: CollectedPendingBtw | null = null
 
   for (const entry of entries) {
     if (entry.type === 'snapshot' && entry.reason === 'rollback') {
-      continuation = null
+      conversation = null
       pending = null
       continue
     }
     if (entry.type === 'user-input') {
-      continuation = null
+      conversation = null
       if (pending) pending.invalidated = true
       continue
     }
     if (entry.type === 'btw-input') {
       if (pending) throw new SessionCorruptError('BTW 输入缺少终态')
-      const history: BtwCompletedTurn[] | null = entry.mode === 'btw'
-        ? []
-        : continuation?.conversationId === entry.conversationId
-          && continuation.turns.length + 1 === entry.turnIndex
-          ? structuredClone(continuation.turns)
-          : null
-      if (history === null || (entry.mode === 'btw' && entry.turnIndex !== 1)) {
+      let history: BtwConversationTurn[] | null = null
+      if (entry.replacesInputId) {
+        const latest = conversation?.turns.at(-1)
+        if (
+          conversation
+          && latest?.inputId === entry.replacesInputId
+          && latest.conversationId === entry.conversationId
+          && latest.turnIndex === entry.turnIndex
+          && latest.mode === entry.mode
+        ) history = structuredClone(conversation.turns.slice(0, -1))
+      } else if (entry.mode === 'btw' && entry.turnIndex === 1) {
+        history = []
+      } else if (
+        entry.mode === 'bbtw'
+        && canContinueBtw(conversation)
+        && conversation.conversationId === entry.conversationId
+        && conversation.turns.length + 1 === entry.turnIndex
+      ) {
+        history = structuredClone(conversation.turns)
+      }
+      if (history === null) {
         throw new SessionCorruptError('BBTW 续接边界无效')
       }
-      inputs.set(entry.uuid, entry)
       pending = { input: entry, history, invalidated: false }
-      continuation = null
+      conversation = null
       continue
     }
     if (entry.type !== 'btw-response') continue
-    const input = inputs.get(entry.inputId)
+    const currentPending = pending as CollectedPendingBtw | null
+    const input = currentPending?.input
     if (
-      !pending
+      !currentPending
       || !input
-      || pending.input.uuid !== entry.inputId
+      || input.uuid !== entry.inputId
       || input.conversationId !== entry.conversationId
       || input.turnIndex !== entry.turnIndex
     ) throw new SessionCorruptError('BTW 结果引用了无效输入')
-    if (entry.outcome === 'completed' && !pending.invalidated) {
-      const completed: BtwCompletedTurn = {
-        inputId: input.uuid,
-        conversationId: input.conversationId,
-        turnIndex: input.turnIndex,
-        mode: input.mode,
-        text: input.text,
-        attachments: structuredClone(input.attachments ?? []),
-        assistantText: entry.assistantText,
-      }
-      const turns: BtwCompletedTurn[] = [...pending.history, completed]
-      continuation = turns.length < BTW_MAX_TURNS
-        ? { conversationId: input.conversationId, turns }
-        : null
-    } else {
-      continuation = null
+    const turn: BtwConversationTurn = {
+      inputId: input.uuid,
+      conversationId: input.conversationId,
+      turnIndex: input.turnIndex,
+      mode: input.mode,
+      text: input.text,
+      attachments: structuredClone(input.attachments ?? []),
+      outcome: entry.outcome,
+      assistantText: entry.assistantText,
+      ...(entry.interruptionReason
+        ? { interruptionReason: entry.interruptionReason }
+        : {}),
+      ...(entry.error ? { error: entry.error } : {}),
     }
+    const nextConversation: BtwConversation | null = currentPending.invalidated
+      ? null
+      : {
+          conversationId: input.conversationId,
+          turns: [...currentPending.history, turn],
+        }
+    if (entry.continuationAvailable !== canContinueBtw(nextConversation)) {
+      throw new SessionCorruptError('BTW 续接状态与终态不一致')
+    }
+    conversation = nextConversation
     pending = null
   }
   return {
-    continuation: continuation ? structuredClone(continuation) : null,
+    conversation: conversation ? structuredClone(conversation) : null,
     pending: pending
       ? {
           context: {
@@ -675,6 +719,9 @@ function collectBtwState(entries: readonly SessionEntry[]): {
             text: pending.input.text,
             attachments: structuredClone(pending.input.attachments ?? []),
             history: structuredClone(pending.history),
+            ...(pending.input.replacesInputId
+              ? { replacesInputId: pending.input.replacesInputId }
+              : {}),
           },
           invalidated: pending.invalidated,
         }
@@ -683,7 +730,8 @@ function collectBtwState(entries: readonly SessionEntry[]): {
 }
 
 export function collectBtwContinuation(entries: readonly SessionEntry[]): BtwContinuation | null {
-  return collectBtwState(entries).continuation
+  const conversation = collectBtwState(entries).conversation
+  return canContinueBtw(conversation) ? conversation : null
 }
 
 interface UndeliveredUserInput {

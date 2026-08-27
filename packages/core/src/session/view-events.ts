@@ -76,10 +76,26 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     taskPlan: activeTaskPlanSchema.nullable(),
   }),
   z.object({
+    type: z.literal('btw-message-edited'),
+    previousInputId: z.string().min(1),
+    inputId: z.string().min(1),
+    text: z.string().min(1),
+    btw: z.object({
+      conversationId: z.string().uuid(),
+      turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
+      mode: btwModeSchema,
+    }).strict(),
+  }),
+  z.object({
     type: z.literal('work-finished'),
     durationMs: z.number().nonnegative(),
     outcome: z.enum(['completed', 'stopped']),
     forkTurnId: z.string().min(1).nullable(),
+    btw: z.object({
+      conversationId: z.string().uuid(),
+      turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
+      continuationAvailable: z.boolean(),
+    }).strict().optional(),
   }),
   z.object({ type: z.literal('text-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-delta'), text: z.string() }),
@@ -227,7 +243,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
     return compactViewEvent(viewEventSchema.parse({ type: 'core-event', event }))
   }
   // 编辑关系已经与新根 user-input 原子落盘；重放从该事实派生，不能再写一份副本。
-  if (event.type === 'user-message-edited') return null
+  if (event.type === 'user-message-edited' || event.type === 'btw-message-edited') return null
   switch (event.type) {
     case 'turn-start':
     case 'work-finished':

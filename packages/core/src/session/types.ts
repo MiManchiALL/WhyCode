@@ -45,13 +45,16 @@ import {
 import {
   BTW_MAX_TURNS,
   btwModeSchema,
+  type BtwConversation,
+  type BtwConversationTurn,
   type BtwContinuation,
   type BtwMode,
   type BtwTurnContext,
   type BtwTurnResult,
+  type BtwTurnSettlement,
 } from './btw.ts'
 
-export const SESSION_SCHEMA_VERSION = 12
+export const SESSION_SCHEMA_VERSION = 13
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -191,6 +194,8 @@ const btwInputSchema = chainedEntrySchema.extend({
   conversationId: sessionIdSchema,
   turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
   mode: btwModeSchema,
+  /** 原位编辑只替换最近一条侧输入，不增加侧链轮次。 */
+  replacesInputId: entryIdSchema.optional(),
   text: z.string(),
   attachments: userImageAttachmentsSchema.optional(),
 }).superRefine((input, ctx) => {
@@ -220,6 +225,8 @@ const btwResponseSchema = chainedEntrySchema.extend({
   reasoningText: z.string(),
   reasoningDurationMs: z.number().nonnegative(),
   durationMs: z.number().nonnegative(),
+  interruptionReason: z.enum(['user-cancel', 'process-interruption']).optional(),
+  continuationAvailable: z.boolean(),
   error: z.string().min(1).optional(),
 }).superRefine((response, ctx) => {
   if (response.outcome === 'completed' && !response.assistantText.trim()) {
@@ -227,6 +234,30 @@ const btwResponseSchema = chainedEntrySchema.extend({
   }
   if (response.outcome === 'error' && !response.error) {
     ctx.addIssue({ code: 'custom', path: ['error'], message: '失败的 BTW 必须记录错误' })
+  }
+  if (response.outcome === 'stopped' && !response.interruptionReason) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['interruptionReason'],
+      message: '停止的 BTW 必须记录中断原因',
+    })
+  }
+  if (response.outcome !== 'stopped' && response.interruptionReason) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['interruptionReason'],
+      message: '只有停止的 BTW 可以记录中断原因',
+    })
+  }
+  if (
+    response.continuationAvailable
+    && (response.outcome === 'error' || response.turnIndex >= BTW_MAX_TURNS)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['continuationAvailable'],
+      message: '失败或达到轮次上限的 BTW 不能继续',
+    })
   }
 })
 
@@ -479,8 +510,8 @@ export interface LoadedSession {
   interruptedConsensusBaseTurnIds: string[] | null
   consensusState: ConsensusPersistedState | null
   taskState: TaskPlanState
-  /** 仅供下一次 BBTW 请求使用；从独立侧对话事实派生，不进入 Main messages。 */
-  btwContinuation: BtwContinuation | null
+  /** 最近一条侧链；即使达到上限或失败也保留，以支持最新消息原位编辑。 */
+  btwConversation: BtwConversation | null
   /** 进程退出时没有终态的侧输入；恢复入口会先补写 stopped 终态。 */
   interruptedBtw: { context: BtwTurnContext; invalidated: boolean } | null
 }
@@ -502,6 +533,8 @@ export interface SessionRecorder {
   readonly initialConsensusState: ConsensusPersistedState | null
   readonly initialTaskState: TaskPlanState
   readonly btwContinuation: BtwContinuation | null
+  /** 最近一条仍可编辑的侧链轮次；达到上限或失败后也保留。 */
+  readonly latestBtwTurn: BtwConversationTurn | null
   /** 仅返回仍位于当前活动父链上的 turn 起点；压缩/旧回滚之前的 turn 返回 null。 */
   messagesBeforeTurn(turnId: string): ModelMessage[] | null
   /** undefined = turn 已不在活动父链；null = turn 起点没有活动计划。 */
@@ -534,7 +567,11 @@ export interface SessionRecorder {
     text: string,
     attachments?: readonly ImageAttachment[],
   ): Promise<BtwTurnContext>
-  recordBtwResponse(context: BtwTurnContext, result: BtwTurnResult): Promise<void>
+  recordBtwEditInput(inputId: string, text: string): Promise<BtwTurnContext>
+  recordBtwResponse(
+    context: BtwTurnContext,
+    result: BtwTurnResult,
+  ): Promise<BtwTurnSettlement>
   /**
    * 把回滚换根与编辑后的新根输入作为一次 flush 提交；旧 JSONL 分支保留审计，
    * 活动模型历史从 rollbackMessages 继续。

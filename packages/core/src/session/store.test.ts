@@ -1754,7 +1754,8 @@ describe('SessionStore', () => {
       durationMs: 90,
     })
 
-    assert.equal(journal.btwContinuation, null)
+    const continuationAfterThird = journal.btwContinuation
+    assert.equal(continuationAfterThird, null)
     await assert.rejects(journal.recordBtwInput('bbtw', '第四条追问'), /没有可续接/)
 
     const reopened = await store.open(journal.sessionId)
@@ -1776,7 +1777,7 @@ describe('SessionStore', () => {
       && event.event.text === '第三条回答'), true)
   })
 
-  it('普通消息、停止和失败都会切断 BBTW 续接', async () => {
+  it('普通消息和失败会切断侧链，用户停止则保留 BBTW 续接资格', async () => {
     const store = await createStore()
     const journal = await store.create({
       workspace: localWorkspace('C:\\work\\btw-boundaries'),
@@ -1792,7 +1793,8 @@ describe('SessionStore', () => {
       reasoningDurationMs: 0,
       durationMs: 50,
     })
-    assert.equal(journal.btwContinuation, null)
+    const continuationAfterMainInput = journal.btwContinuation
+    assert.equal(continuationAfterMainInput, null)
 
     const stopped = await journal.recordBtwInput('btw', '停止这次')
     await journal.recordBtwResponse(stopped, {
@@ -1801,8 +1803,25 @@ describe('SessionStore', () => {
       reasoningText: '',
       reasoningDurationMs: 0,
       durationMs: 30,
+      interruptionReason: 'user-cancel',
     })
-    assert.equal(journal.btwContinuation, null)
+    assert.deepEqual(journal.btwContinuation?.turns.map((turn) => [
+      turn.text,
+      turn.outcome,
+      turn.assistantText,
+      turn.interruptionReason,
+    ]), [['停止这次', 'stopped', '部分回答', 'user-cancel']])
+
+    const continued = await journal.recordBtwInput('bbtw', '停止后继续')
+    assert.equal(continued.turnIndex, 2)
+    assert.equal(continued.history[0]?.outcome, 'stopped')
+    await journal.recordBtwResponse(continued, {
+      outcome: 'completed',
+      assistantText: '续接回答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 25,
+    })
 
     const failed = await journal.recordBtwInput('btw', '失败这次')
     await journal.recordBtwResponse(failed, {
@@ -1817,6 +1836,63 @@ describe('SessionStore', () => {
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.btwContinuation, null)
+    assert.equal(reopened.latestBtwTurn?.outcome, 'error')
+  })
+
+  it('最新 BTW 消息可原位编辑重发，保持侧链身份与轮次', async () => {
+    const store = await createStore()
+    const journal = await store.create({
+      workspace: localWorkspace('C:\\work\\btw-edit'),
+      modelId: 'test:model',
+    })
+    const first = await journal.recordBtwInput('btw', '第一轮')
+    await journal.recordBtwResponse(first, {
+      outcome: 'completed',
+      assistantText: '第一答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 20,
+    })
+    const second = await journal.recordBtwInput('bbtw', '第二轮原文')
+    await journal.recordBtwResponse(second, {
+      outcome: 'stopped',
+      assistantText: '第二答片段',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 15,
+      interruptionReason: 'user-cancel',
+    })
+
+    const edited = await journal.recordBtwEditInput(second.inputId, '第二轮改写')
+    assert.equal(edited.conversationId, second.conversationId)
+    assert.equal(edited.turnIndex, 2)
+    assert.equal(edited.mode, 'bbtw')
+    assert.equal(edited.replacesInputId, second.inputId)
+    assert.deepEqual(edited.history.map((turn) => turn.text), ['第一轮'])
+    await journal.recordBtwResponse(edited, {
+      outcome: 'completed',
+      assistantText: '改写后的第二答',
+      reasoningText: '',
+      reasoningDurationMs: 0,
+      durationMs: 18,
+    })
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.btwContinuation?.turns.map((turn) => [
+      turn.turnIndex,
+      turn.text,
+      turn.assistantText,
+    ]), [
+      [1, '第一轮', '第一答'],
+      [2, '第二轮改写', '改写后的第二答'],
+    ])
+    const editedEvents = reopened.initialViewEvents.filter((event) =>
+      event.type === 'core-event' && event.event.type === 'btw-message-edited')
+    assert.equal(editedEvents.length, 1)
+    await assert.rejects(
+      reopened.recordBtwEditInput(second.inputId, '再次编辑旧输入'),
+      /只能编辑最新一条/,
+    )
   })
 
   it('恢复时为崩溃遗留的 BTW 输入补写停止终态，后续侧对话不会损坏链', async () => {
