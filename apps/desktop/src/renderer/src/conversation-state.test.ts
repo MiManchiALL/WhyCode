@@ -874,7 +874,7 @@ describe('会话界面时间线重建', () => {
     assert.deepEqual(block?.kind === 'tool' ? block.call.attachments : [], [attachment])
   })
 
-  it('只有成功完成且未到第三轮的 BTW 才开放 BBTW', () => {
+  it('按 canonical BTW 终态开放续接，停止不会自动结束侧链', () => {
     let state = createConversationState()
     state = applyCoreEvent(state, {
       type: 'btw-message-accepted',
@@ -895,6 +895,11 @@ describe('会话界面时间线重建', () => {
       durationMs: 100,
       outcome: 'completed',
       forkTurnId: null,
+      btw: {
+        conversationId: '11111111-1111-4111-8111-111111111111',
+        turnIndex: 1,
+        continuationAvailable: true,
+      },
     })
     assert.deepEqual(state.btwContinuation, {
       conversationId: '11111111-1111-4111-8111-111111111111',
@@ -926,6 +931,11 @@ describe('会话界面时间线重建', () => {
       durationMs: 100,
       outcome: 'completed',
       forkTurnId: null,
+      btw: {
+        conversationId: '22222222-2222-4222-8222-222222222222',
+        turnIndex: 3,
+        continuationAvailable: false,
+      },
     })
     assert.equal(state.btwContinuation, null)
 
@@ -945,8 +955,99 @@ describe('会话界面时间线重建', () => {
       durationMs: 50,
       outcome: 'stopped',
       forkTurnId: null,
+      btw: {
+        conversationId: '33333333-3333-4333-8333-333333333333',
+        turnIndex: 1,
+        continuationAvailable: true,
+      },
     })
+    assert.deepEqual(state.btwContinuation, {
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      turnIndex: 1,
+    })
+  })
+
+  it('BTW 编辑原位替换最新侧轮次并移除旧回复', () => {
+    let state = createConversationState()
+    state = applyCoreEvent(state, {
+      type: 'btw-message-accepted',
+      inputId: 'btw-original',
+      text: '第二轮原文',
+      btw: {
+        conversationId: '44444444-4444-4444-8444-444444444444',
+        turnIndex: 2,
+        mode: 'bbtw',
+      },
+    })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '旧回复片段' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 20,
+      outcome: 'stopped',
+      forkTurnId: null,
+      btw: {
+        conversationId: '44444444-4444-4444-8444-444444444444',
+        turnIndex: 2,
+        continuationAvailable: true,
+      },
+    })
+
+    state = applyCoreEvent(state, {
+      type: 'btw-message-edited',
+      previousInputId: 'btw-original',
+      inputId: 'btw-edited',
+      text: '第二轮改写',
+      btw: {
+        conversationId: '44444444-4444-4444-8444-444444444444',
+        turnIndex: 2,
+        mode: 'bbtw',
+      },
+    })
+
+    assert.deepEqual(state.blocks.map((block) =>
+      block.kind === 'user' ? [block.kind, block.inputId, block.text] : [block.kind]), [
+      ['user', 'btw-edited', '第二轮改写'],
+    ])
+    assert.equal(state.pendingBtw?.turnIndex, 2)
     assert.equal(state.btwContinuation, null)
+    assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
+  })
+
+  it('重放 BTW 编辑事实时不会留下重复的新输入块', () => {
+    const conversationId = '55555555-5555-4555-8555-555555555555'
+    let state = createConversationState()
+    state = applyCoreEvent(state, {
+      type: 'btw-message-accepted',
+      inputId: 'btw-original',
+      text: '原文',
+      btw: { conversationId, turnIndex: 1, mode: 'btw' },
+    })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '旧回复' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished',
+      durationMs: 20,
+      outcome: 'stopped',
+      forkTurnId: null,
+      btw: { conversationId, turnIndex: 1, continuationAvailable: true },
+    })
+    state = applyCoreEvent(state, {
+      type: 'btw-message-accepted',
+      inputId: 'btw-edited',
+      text: '改写',
+      btw: { conversationId, turnIndex: 1, mode: 'btw' },
+    })
+    state = applyCoreEvent(state, {
+      type: 'btw-message-edited',
+      previousInputId: 'btw-original',
+      inputId: 'btw-edited',
+      text: '改写',
+      btw: { conversationId, turnIndex: 1, mode: 'btw' },
+    })
+
+    assert.deepEqual(state.blocks.map((block) =>
+      block.kind === 'user' ? [block.kind, block.inputId, block.text] : [block.kind]), [
+      ['user', 'btw-edited', '改写'],
+    ])
   })
 })
 

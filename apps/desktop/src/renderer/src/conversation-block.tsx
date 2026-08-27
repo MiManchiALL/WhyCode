@@ -36,7 +36,7 @@ export function BlockView({
   streamingAssistantText: boolean
   renderMath: boolean
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
-  onEdit: (turnId: string, text: string) => Promise<boolean>
+  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onToggle: () => void
   showAssistantActions: boolean
   forkTurnId: string | null

@@ -6,7 +6,6 @@ import type {
   TaskPlan,
   ViewEvent,
 } from '@whycode/core'
-import { BTW_MAX_TURNS } from '@whycode/core/btw'
 import {
   appendVisibleToolOutput,
   isStepScopedCoreEvent,
@@ -268,6 +267,8 @@ function applyStableCoreEvent(
         timestamp,
         event.btw,
       )
+    case 'btw-message-edited':
+      return applyBtwMessageEdited(state, event, timestamp)
     case 'text-delta':
       return appendText(state, event.text, timestamp)
     case 'thinking-delta':
@@ -286,13 +287,10 @@ function applyStableCoreEvent(
       })
       // 只有已提交的最终正文才能收起处理过程；工具等待、错误和停止都保持展开。
       // 用户已在最终正文阶段手动展开时，既有 expanded 身份会原样保留。
-      const btwContinuation = state.pendingBtw
-        && event.outcome === 'completed'
-        && hasCurrentWorkFinalText(completedState.blocks)
-        && state.pendingBtw.turnIndex < BTW_MAX_TURNS
+      const btwContinuation = event.btw?.continuationAvailable
         ? {
-            conversationId: state.pendingBtw.conversationId,
-            turnIndex: state.pendingBtw.turnIndex,
+            conversationId: event.btw.conversationId,
+            turnIndex: event.btw.turnIndex,
           }
         : null
       const settled = { ...next, pendingBtw: null, btwContinuation }
@@ -493,9 +491,52 @@ export function appendUserMessage(
 
 export function editableUserBlockId(blocks: readonly Block[]): string | null {
   const candidate = blocks.findLast((block) => block.kind === 'user')
-  return candidate?.kind === 'user' && candidate.turnId
+  return candidate?.kind === 'user'
+    && (candidate.turnId || (candidate.btw && candidate.inputId))
     ? candidate.id
     : null
+}
+
+function applyBtwMessageEdited(
+  state: ConversationState,
+  event: Extract<CoreEvent, { type: 'btw-message-edited' }>,
+  timestamp?: string,
+): ConversationState {
+  const previousIndex = state.blocks.findIndex((block) =>
+    block.kind === 'user' && block.inputId === event.previousInputId)
+  if (previousIndex < 0) return state
+  const previous = state.blocks[previousIndex] as Extract<Block, { kind: 'user' }>
+  if (!previous.btw) return state
+  const replayInput = state.blocks.find((block) =>
+    block.kind === 'user' && block.inputId === event.inputId)
+  const replacement = replayInput?.kind === 'user' ? replayInput : previous
+  const blocks: Block[] = [
+    ...state.blocks.slice(0, previousIndex),
+    {
+      ...replacement,
+      id: previous.id,
+      inputId: event.inputId,
+      text: event.text,
+      timestamp: replayInput?.kind === 'user'
+        ? replayInput.timestamp ?? timestamp
+        : timestamp ?? previous.timestamp,
+      btw: structuredClone(event.btw),
+    },
+  ]
+  const retainedIds = new Set(blocks.map((block) => block.id))
+  return {
+    ...state,
+    blocks,
+    expanded: new Set([...state.expanded].filter((id) => retainedIds.has(id))),
+    pendingTurnStart: null,
+    turnStartBlocks: new Map(
+      [...state.turnStartBlocks].filter(([, index]) => index < previousIndex),
+    ),
+    pendingQuestion: null,
+    pendingStep: null,
+    btwContinuation: null,
+    pendingBtw: structuredClone(event.btw),
+  }
 }
 
 function applyUserMessageEdited(

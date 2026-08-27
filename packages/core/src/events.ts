@@ -192,6 +192,12 @@ export type CoreEvent =
       outcome: 'completed' | 'stopped'
       /** 整段工作最后一个完整结束的模型回复；null 表示没有可 Fork 边界。 */
       forkTurnId: string | null
+      /** 侧对话终点的权威续接投影；普通 Main 工作不携带。 */
+      btw?: {
+        conversationId: string
+        turnIndex: number
+        continuationAvailable: boolean
+      }
     }
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
@@ -225,6 +231,14 @@ export type CoreEvent =
       inputId: string
       text: string
       taskPlan: ActiveTaskPlan | null
+    }
+  /** 用户把最新一条 BTW/BBTW 消息原位改写；轮次与侧链身份保持不变。 */
+  | {
+      type: 'btw-message-edited'
+      previousInputId: string
+      inputId: string
+      text: string
+      btw: { conversationId: string; turnIndex: number; mode: BtwMode }
     }
   // --- steering（M2-a）：运行中插话 ---
   | {
@@ -446,8 +460,14 @@ export type CoreCommand =
   | { type: 'set-model'; modelId: string }
   | { type: 'set-reasoning-effort'; reasoningEffort: ReasoningEffortSelection }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
-  /** 原位改写最新一条根消息，丢弃其原回答并从该位置重新执行。 */
-  | { type: 'edit-user-message'; turnId: string; text: string }
+  /** 原位改写最新一条用户消息，丢弃其原回答并从同一 Main/BTW 位置重新执行。 */
+  | {
+      type: 'edit-user-message'
+      target:
+        | { kind: 'main'; turnId: string }
+        | { kind: 'btw'; inputId: string }
+      text: string
+    }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 手动触发上下文压缩（仅空闲时） */

@@ -241,6 +241,11 @@ export class DesktopSessionRuntime {
     durationMs: number,
     outcome: 'completed' | 'stopped' | 'error',
     continuesWithMainWork: boolean,
+    btw: {
+      conversationId: string
+      turnIndex: number
+      continuationAvailable: boolean
+    },
   ): void {
     if (this.disposed || !this.btwWorkActive || this.workStartedAt === null) return
     this.btwWorkActive = false
@@ -252,6 +257,7 @@ export class DesktopSessionRuntime {
       durationMs: Math.max(0, durationMs),
       outcome: outcome === 'completed' ? 'completed' : 'stopped',
       forkTurnId: null,
+      btw,
     }, false)
     if (continuesWithMainWork) this.beginWork()
   }

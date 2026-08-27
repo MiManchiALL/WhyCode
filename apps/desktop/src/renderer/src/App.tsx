@@ -47,6 +47,7 @@ import {
   resumeTargetCommitted,
   toggleExpanded,
   voteLabel,
+  type Block,
 } from './conversation-state.ts'
 import {
   isCurrentSessionDeletion,
@@ -1488,12 +1489,21 @@ export function App() {
     })
   }, [interactionBusy, sendRuntimeCommand, stopping, view.pendingQuestion])
 
-  const editUserMessage = useCallback(async (turnId: string, text: string) => {
+  const editUserMessage = useCallback(async (
+    block: Extract<Block, { kind: 'user' }>,
+    text: string,
+  ) => {
     if (interactionBusy || stopping) return false
+    const target = block.btw && block.inputId
+      ? { kind: 'btw' as const, inputId: block.inputId }
+      : block.turnId
+        ? { kind: 'main' as const, turnId: block.turnId }
+        : null
+    if (!target) return false
     stickToBottom.current = true
     setShowJumpBottom(false)
     try {
-      const result = await sendRuntimeCommand({ type: 'edit-user-message', turnId, text })
+      const result = await sendRuntimeCommand({ type: 'edit-user-message', target, text })
       return Boolean(result?.ok)
     } catch {
       return false

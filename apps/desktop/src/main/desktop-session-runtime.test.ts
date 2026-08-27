@@ -152,13 +152,22 @@ describe('会话工作计时', () => {
     runtime.emit({ type: 'agent-status', status: 'idle' }, false)
     assert.equal(events.some((event) => event.type === 'work-finished'), false)
 
-    runtime.finishBtwWork(125, 'completed', true)
+    runtime.finishBtwWork(125, 'completed', true, {
+      conversationId: '11111111-1111-4111-8111-111111111111',
+      turnIndex: 1,
+      continuationAvailable: true,
+    })
     const finished = events.find((event) => event.type === 'work-finished')
     assert.deepEqual(finished, {
       type: 'work-finished',
       durationMs: 125,
       outcome: 'completed',
       forkTurnId: null,
+      btw: {
+        conversationId: '11111111-1111-4111-8111-111111111111',
+        turnIndex: 1,
+        continuationAvailable: true,
+      },
     })
     assert.equal(events.filter((event) => event.type === 'work-started').length, 2)
     assert.equal(typeof runtime.workStartedAt, 'number')
