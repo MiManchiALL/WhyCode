@@ -159,7 +159,11 @@ function ConversationNavigationPreview({
   top: number
 }) {
   return (
-    <div className="wc-conversation-navigator-preview" style={{ top }}>
+    <div
+      className="wc-conversation-navigator-preview"
+      data-btw={entry.isBtw ? 'true' : undefined}
+      style={{ top }}
+    >
       <div className="wc-conversation-navigator-preview-title">{entry.title}</div>
       {entry.preview && (
         <div className="wc-conversation-navigator-preview-text">{entry.preview}</div>

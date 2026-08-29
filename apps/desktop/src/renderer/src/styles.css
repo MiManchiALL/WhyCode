@@ -198,32 +198,44 @@ button:not(:disabled),
 }
 
 .wc-user-message-bubble-btw,
-.wc-composer-btw {
+.wc-composer-btw,
+.wc-conversation-navigator-preview[data-btw='true'] {
   --wc-btw-line: rgb(41 42 39 / 42%);
-  --wc-btw-corner-inner: calc(var(--wc-menu-radius) - 1px);
+  --wc-btw-corner-radius: var(--wc-menu-radius);
+  --wc-btw-corner-inner: calc(var(--wc-btw-corner-radius) - 1px);
   --wc-btw-vertical-dash: 12px;
   --wc-btw-vertical-cycle: 19px;
-  position: relative;
   border-color: transparent;
 }
 
-.wc-user-message-bubble-btw {
+.wc-user-message-bubble-btw,
+.wc-composer-btw {
+  position: relative;
+}
+
+.wc-user-message-bubble-btw,
+.wc-conversation-navigator-preview[data-btw='true'] {
   --wc-btw-vertical-dash: 6px;
   --wc-btw-vertical-cycle: 11px;
 }
 
+.wc-conversation-navigator-preview[data-btw='true'] {
+  --wc-btw-corner-radius: 0.9rem;
+}
+
 .wc-user-message-bubble-btw::after,
-.wc-composer-btw::after {
+.wc-composer-btw::after,
+.wc-conversation-navigator-preview[data-btw='true']::after {
   content: "";
   position: absolute;
   inset: -1px;
   border-radius: inherit;
   pointer-events: none;
   background:
-    radial-gradient(circle var(--wc-menu-radius) at 100% 100%, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-menu-radius), transparent var(--wc-menu-radius)) top left / var(--wc-menu-radius) var(--wc-menu-radius) no-repeat,
-    radial-gradient(circle var(--wc-menu-radius) at 0 100%, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-menu-radius), transparent var(--wc-menu-radius)) top right / var(--wc-menu-radius) var(--wc-menu-radius) no-repeat,
-    radial-gradient(circle var(--wc-menu-radius) at 100% 0, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-menu-radius), transparent var(--wc-menu-radius)) bottom left / var(--wc-menu-radius) var(--wc-menu-radius) no-repeat,
-    radial-gradient(circle var(--wc-menu-radius) at 0 0, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-menu-radius), transparent var(--wc-menu-radius)) bottom right / var(--wc-menu-radius) var(--wc-menu-radius) no-repeat,
+    radial-gradient(circle var(--wc-btw-corner-radius) at 100% 100%, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-btw-corner-radius), transparent var(--wc-btw-corner-radius)) top left / var(--wc-btw-corner-radius) var(--wc-btw-corner-radius) no-repeat,
+    radial-gradient(circle var(--wc-btw-corner-radius) at 0 100%, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-btw-corner-radius), transparent var(--wc-btw-corner-radius)) top right / var(--wc-btw-corner-radius) var(--wc-btw-corner-radius) no-repeat,
+    radial-gradient(circle var(--wc-btw-corner-radius) at 100% 0, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-btw-corner-radius), transparent var(--wc-btw-corner-radius)) bottom left / var(--wc-btw-corner-radius) var(--wc-btw-corner-radius) no-repeat,
+    radial-gradient(circle var(--wc-btw-corner-radius) at 0 0, transparent var(--wc-btw-corner-inner), var(--wc-btw-line) var(--wc-btw-corner-inner) var(--wc-btw-corner-radius), transparent var(--wc-btw-corner-radius)) bottom right / var(--wc-btw-corner-radius) var(--wc-btw-corner-radius) no-repeat,
     repeating-linear-gradient(to right, var(--wc-btw-line) 0 12px, transparent 12px 19px) top left / 100% 1px no-repeat,
     repeating-linear-gradient(to right, var(--wc-btw-line) 0 12px, transparent 12px 19px) bottom left / 100% 1px no-repeat,
     repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 var(--wc-btw-vertical-dash), transparent var(--wc-btw-vertical-dash) var(--wc-btw-vertical-cycle)) top left / 1px 100% no-repeat,

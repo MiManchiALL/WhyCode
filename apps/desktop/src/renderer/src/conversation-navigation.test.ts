@@ -44,13 +44,36 @@ describe('会话定位数据投影', () => {
     ]
 
     assert.deepEqual(conversationNavigationEntries(sections), [
-      { id: 'user-1', title: '检查这个项目 并解释实现', preview: null },
+      { id: 'user-1', title: '检查这个项目 并解释实现', preview: null, isBtw: false },
       {
         id: 'user-2',
         title: 'PDF 消息',
         preview: '结果见 正式说明，并且已经完成验证。',
+        isBtw: false,
       },
     ])
+  })
+
+  it('为 BTW 与 BBTW 锚点保留临时对话外观语义', () => {
+    const btw = user('btw-1', '临时问题')
+    btw.btw = { conversationId: 'conversation-1', turnIndex: 1, mode: 'btw' }
+    const bbtw = user('btw-2', '继续追问')
+    bbtw.btw = { conversationId: 'conversation-1', turnIndex: 2, mode: 'bbtw' }
+
+    assert.deepEqual(
+      conversationNavigationEntries([
+        { kind: 'block', id: btw.id, block: btw },
+        { kind: 'block', id: bbtw.id, block: bbtw },
+      ]).map((entry) => entry.isBtw),
+      [true, true],
+    )
+    assert.equal(
+      sameConversationNavigationTimeline(
+        [{ kind: 'block', id: btw.id, block: user(btw.id, btw.text) }],
+        [{ kind: 'block', id: btw.id, block: btw }],
+      ),
+      false,
+    )
   })
 })
 

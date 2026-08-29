@@ -13,6 +13,7 @@ export interface ConversationNavigationEntry {
   id: string
   title: string
   preview: string | null
+  isBtw: boolean
 }
 
 export interface ConversationNavigationMarker {
@@ -266,6 +267,7 @@ function entryForUser(
     id: block.id,
     title: boundedPlainText(block.text, 72) || attachmentLabel(block),
     preview,
+    isBtw: block.btw !== undefined,
   }
 }
 
@@ -318,6 +320,9 @@ function sameUser(left: Block, right: Block): boolean {
     && left.attachments?.length === right.attachments?.length
     && left.pdfAttachments?.length === right.pdfAttachments?.length
     && left.skills?.length === right.skills?.length
+    && left.btw?.conversationId === right.btw?.conversationId
+    && left.btw?.turnIndex === right.btw?.turnIndex
+    && left.btw?.mode === right.btw?.mode
 }
 
 function previewBlock(blocks: readonly Block[]): Block | undefined {
