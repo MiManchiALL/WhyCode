@@ -7,6 +7,7 @@ import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
+import { summarizeToolCall } from './tool-call-summary.ts'
 
 export function BlockView({
   runtimeId,
@@ -124,7 +125,7 @@ export function BlockView({
     : call.status === 'error'
       ? <X size={14} />
       : <Check size={14} />
-  const summary = summarizeInput(call.input)
+  const summary = summarizeToolCall(call.name, call.input)
   return (
     <div className="wc-menu-surface mb-3 overflow-hidden wc-type-control">
       <div className="flex w-full items-center gap-2 px-3 py-2">
@@ -231,14 +232,4 @@ function RestoreButton({
       </button>
     </span>
   )
-}
-
-export function summarizeInput(input: unknown): string {
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    if (typeof obj.path === 'string') return obj.path
-    if (typeof obj.pattern === 'string') return obj.pattern
-    if (typeof obj.command === 'string') return obj.command
-  }
-  return JSON.stringify(input) ?? ''
 }

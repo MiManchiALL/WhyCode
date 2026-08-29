@@ -14,6 +14,7 @@ import {
   type UserQuestion,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot } from '../../shared/session.ts'
+import { summarizeToolCall } from './tool-call-summary.ts'
 
 export interface ToolCall {
   id: string
@@ -633,7 +634,7 @@ export function applyPeerEvent(data: PeerBlockData, event: CoreEvent): PeerBlock
           {
             id: event.toolUseId,
             name: event.toolName,
-            summary: summarizeToolInput(event.input),
+            summary: summarizeToolCall(event.toolName, event.input),
             isError: false,
           },
         ],
@@ -895,14 +896,4 @@ function appendBlock(state: ConversationState, block: Block): ConversationState 
 
 function nextBlockId(state: ConversationState): string {
   return `b${state.nextId}`
-}
-
-function summarizeToolInput(input: unknown): string {
-  if (input && typeof input === 'object') {
-    const value = input as Record<string, unknown>
-    if (typeof value.path === 'string') return value.path
-    if (typeof value.pattern === 'string') return value.pattern
-    if (typeof value.command === 'string') return value.command
-  }
-  return ''
 }
