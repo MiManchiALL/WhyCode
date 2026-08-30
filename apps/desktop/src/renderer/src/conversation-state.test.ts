@@ -5,6 +5,7 @@ import { MAX_VISIBLE_TOOL_OUTPUT_CHARS } from '@whycode/core/events'
 import {
   applyCoreEvent,
   applyViewEvent,
+  appendUserMessage,
   checkpointRestoreAnchorIds,
   type ConversationState,
   createConversationState,
@@ -335,6 +336,13 @@ describe('会话界面时间线重建', () => {
           { label: '简单可靠', description: '减少复杂度' },
           { label: '功能完整', description: '覆盖更多场景' },
         ],
+      }, {
+        header: '提交范围',
+        question: '是否包含测试？',
+        options: [
+          { label: '包含测试', description: '一起验证行为' },
+          { label: '只改实现', description: '暂不调整测试' },
+        ],
       }],
     }
     let state = createConversationState([{
@@ -373,6 +381,39 @@ describe('会话界面时间线重建', () => {
       0,
     )
     assert.deepEqual(state.pendingQuestion, question)
+
+    state = appendUserMessage(
+      state,
+      '1. 回答「你更看重哪一点？」：简单可靠\n2. 回答「是否包含测试？」：包含测试',
+      true,
+    )
+    const askTool = state.blocks.find((block) =>
+      block.kind === 'tool' && block.call.id === 'ask-1')
+    assert.equal(
+      askTool?.kind === 'tool' ? askTool.call.result : null,
+      [
+        'Question: 你更看重哪一点？',
+        'Answer: 简单可靠',
+        '',
+        'Question: 是否包含测试？',
+        'Answer: 包含测试',
+      ].join('\n'),
+    )
+  })
+
+  it('CloseTaskPlan 卡片保留调用当时的活动计划 ID', () => {
+    let state = createConversationState()
+    state = applyCoreEvent(state, { type: 'task-plan-updated', plan: taskPlan(1) })
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'close-plan-id',
+      toolName: 'CloseTaskPlan',
+      input: {},
+    })
+    const tool = state.blocks.find((block) => block.kind === 'tool')
+    assert.deepEqual(tool?.kind === 'tool' ? tool.call.input : null, {
+      plan_id: '11111111-1111-4111-8111-111111111111',
+    })
   })
 
   it('显式 Skill 摘要随根消息和插话进入可见时间线', () => {

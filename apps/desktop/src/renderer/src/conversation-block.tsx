@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import type { SkillSummary } from '@whycode/core/skills'
 import { Check, LoaderCircle, RotateCcw, X } from 'lucide-react'
+import { useRef, useState } from 'react'
 import type { Block } from './conversation-state.ts'
 import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
 import { UserImageGallery } from './image-attachments.tsx'
@@ -7,6 +8,10 @@ import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
+import {
+  summarizeToolCallParts,
+  toolCallDetails,
+} from './tool-call-summary.ts'
 
 export function BlockView({
   runtimeId,
@@ -25,6 +30,8 @@ export function BlockView({
   forkTurnId,
   forkPending,
   onFork,
+  skills,
+  projectDir,
 }: {
   runtimeId: string
   block: Block
@@ -42,6 +49,8 @@ export function BlockView({
   forkTurnId: string | null
   forkPending: boolean
   onFork: (turnId: string) => void
+  skills: readonly SkillSummary[]
+  projectDir: string | null
 }) {
   if (block.kind === 'user') {
     return (
@@ -124,14 +133,30 @@ export function BlockView({
     : call.status === 'error'
       ? <X size={14} />
       : <Check size={14} />
-  const summary = summarizeInput(call.input)
+  const summary = summarizeToolCallParts(call.name, call.input, {
+    result: call.result,
+    skills,
+    projectDir,
+  })
+  const customDetails = toolCallDetails(
+    call.name,
+    call.input,
+    call.result,
+    call.status === 'error',
+  )
+  const details = customDetails ?? call.result ?? call.progress
   return (
     <div className="wc-menu-surface mb-3 overflow-hidden wc-type-control">
       <div className="flex w-full items-center gap-2 px-3 py-2">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>
-          <span className="font-medium">{call.name}</span>
-          <span className="truncate text-xs text-[var(--wc-faint)]">{summary}</span>
+          <span className="shrink-0 font-medium">{call.name}</span>
+          {summary.primary && (
+            <span className="min-w-0 truncate text-xs text-[var(--wc-faint)]">{summary.primary}</span>
+          )}
+          {summary.trailing && (
+            <span className="shrink-0 text-xs text-[var(--wc-faint)]">· {summary.trailing}</span>
+          )}
         </button>
         {showCheckpointRestore && call.status !== 'running' && (
           <RestoreButton
@@ -148,9 +173,9 @@ export function BlockView({
           <UserImageGallery attachments={call.attachments} variant="tool" />
         </div>
       ) : null}
-      {expanded && (call.result || call.progress) && (
+      {expanded && details && (
         <pre className="wc-scrollbar max-h-64 overflow-auto border-t border-[var(--wc-line)] bg-black/[0.018] px-3 py-2 text-xs leading-5 text-[var(--wc-muted)]">
-          {call.result || call.progress}
+          {details}
         </pre>
       )}
     </div>
@@ -231,14 +256,4 @@ function RestoreButton({
       </button>
     </span>
   )
-}
-
-export function summarizeInput(input: unknown): string {
-  if (input && typeof input === 'object') {
-    const obj = input as Record<string, unknown>
-    if (typeof obj.path === 'string') return obj.path
-    if (typeof obj.pattern === 'string') return obj.pattern
-    if (typeof obj.command === 'string') return obj.command
-  }
-  return JSON.stringify(input) ?? ''
 }

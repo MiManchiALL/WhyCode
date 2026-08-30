@@ -1,5 +1,4 @@
 import { ShieldAlert } from 'lucide-react'
-import { summarizeInput } from './conversation-block.tsx'
 
 export interface Approval {
   requestId: string
@@ -91,7 +90,7 @@ function ApprovalInputPreview({ input, diff }: { input: unknown; diff?: string }
   if (!diff) {
     return (
       <pre className="wc-scrollbar max-h-40 overflow-auto rounded-xl bg-white/70 p-2.5 text-xs text-[var(--wc-muted)]">
-        {summarizeInput(input)}
+        {summarizeApprovalInput(input)}
       </pre>
     )
   }
@@ -113,4 +112,14 @@ function ApprovalInputPreview({ input, diff }: { input: unknown; diff?: string }
       ))}
     </pre>
   )
+}
+
+function summarizeApprovalInput(input: unknown): string {
+  if (input && typeof input === 'object') {
+    const value = input as Record<string, unknown>
+    if (typeof value.path === 'string') return value.path
+    if (typeof value.pattern === 'string') return value.pattern
+    if (typeof value.command === 'string') return value.command
+  }
+  return JSON.stringify(input) ?? ''
 }
