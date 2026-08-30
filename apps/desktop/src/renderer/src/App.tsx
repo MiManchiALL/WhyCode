@@ -28,7 +28,11 @@ import {
   type CoreEvent,
   type QueuedUserMessage,
 } from '@whycode/core/events'
-import type { RuntimeSnapshot, SessionListItem } from '../../shared/session.ts'
+import type {
+  RuntimeEventEnvelope,
+  RuntimeSnapshot,
+  SessionListItem,
+} from '../../shared/session.ts'
 import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
 import { attachmentFallbackText } from '../../shared/user-message.ts'
 import {
@@ -113,6 +117,7 @@ import {
   scrollConversationToTarget,
 } from './conversation-scroll.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
+import { subscribeRuntimeEventBatches } from './runtime-event-stream.ts'
 
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
@@ -846,13 +851,13 @@ export function App() {
       sessionId: string | null
       occurredAt: string
     }[] = []
-    const unsubscribe = window.whycode.onEvent((
+    const acceptEvent = ({
       event,
       sequence,
-      eventRuntimeId,
-      eventSessionId,
+      runtimeId: eventRuntimeId,
+      sessionId: eventSessionId,
       occurredAt,
-    ) => {
+    }: RuntimeEventEnvelope) => {
       if (!hydrated) {
         buffered.push({
           event,
@@ -905,8 +910,11 @@ export function App() {
       ) {
         void synchronizeUnownedResume()
       }
+    }
+    const eventSubscription = subscribeRuntimeEventBatches((events) => {
+      for (const event of events) acceptEvent(event)
     })
-    void window.whycode.runtimeSnapshot().then((snapshot) => {
+    void eventSubscription.ready.then(() => window.whycode.runtimeSnapshot()).then((snapshot) => {
       if (disposed) return
       applyRuntimeSnapshot(snapshot)
       hydrated = true
@@ -927,7 +935,7 @@ export function App() {
     })
     return () => {
       disposed = true
-      unsubscribe()
+      eventSubscription.unsubscribe()
     }
   }, [
     applyRuntimeSnapshot,

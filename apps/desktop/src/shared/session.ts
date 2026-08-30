@@ -81,6 +81,9 @@ export interface RuntimeEventEnvelope {
   event: CoreEvent
 }
 
+/** Main → Renderer 的单次有序 MessagePort 批次；批内事件仍使用全局 sequence 接续。 */
+export type RuntimeEventBatch = readonly RuntimeEventEnvelope[]
+
 export interface RuntimeCommandEnvelope {
   runtimeId: string
   command: CoreCommand

@@ -1,12 +1,14 @@
 /**
  * Renderer ↔ Main 的 IPC 通道常量。M1 采用手写 channel 常量方案（决策记录见文档二 §7）。
- * 命令走 invoke/handle，事件流走 Main → Renderer 单向 send。
+ * 命令走 invoke/handle，高频运行事件走长期 MessagePort，其余低频状态走 send。
  */
 export const IPC = {
   /** Renderer → Main：发送 CoreCommand */
   command: 'whycode:command',
-  /** Main → Renderer：CoreEvent 事件流 */
-  event: 'whycode:event',
+  /** Preload → Main：为当前主页面申请一条长期 CoreEvent 流端口。 */
+  runtimeEventPortRequest: 'whycode:runtime-event-port-request',
+  /** Main → Preload：只用于转交原生 MessagePort，不承载业务事件。 */
+  runtimeEventPort: 'whycode:runtime-event-port',
   /** Main → Renderer：当前进程内后台任务整表快照。 */
   backgroundTasks: 'whycode:background-tasks',
   /** Main → Renderer：当前父会话的子代理有界摘要。 */
