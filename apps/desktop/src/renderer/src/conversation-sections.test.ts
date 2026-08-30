@@ -5,6 +5,7 @@ import {
   conversationSections,
   findLatestForkTurnId,
   isForkBoundarySection,
+  shouldSealTrailingToolBatch,
   shouldShowComposerProcessingTime,
   type ConversationSection,
 } from './conversation-sections.ts'
@@ -296,6 +297,20 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(ids(stopped.userBlocks), ['user-1'])
     assert.deepEqual(ids(stopped.activityBlocks), ['thinking-1', 'tool-1'])
     assert.deepEqual(ids(stopped.finalBlocks), ['partial-answer'])
+  })
+
+  it('用户在回复前停止时只封口执行过程末批工具', () => {
+    const sections = conversationSections([
+      user('user-1', 'turn-1'),
+      thinking('thinking-1'),
+      tool('tool-1'),
+      duration('duration-1', 'stopped'),
+    ])
+
+    const stopped = asCompleted(sections[0])
+    assert.deepEqual(ids(stopped.activityBlocks), ['thinking-1', 'tool-1'])
+    assert.deepEqual(stopped.finalBlocks, [])
+    assert.equal(shouldSealTrailingToolBatch(stopped), true)
   })
 })
 

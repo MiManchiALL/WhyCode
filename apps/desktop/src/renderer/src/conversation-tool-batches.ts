@@ -13,13 +13,21 @@ export interface ToolBatch {
   tools: ToolBlock[]
 }
 
+export interface ToolBatchSegment {
+  kind: 'tool-segment'
+  id: string
+  blocks: readonly Block[]
+  batch: ToolBatch
+  sealed: boolean
+}
+
 export type ToolBatchPresentationItem =
   | { kind: 'block'; id: string; block: Block }
-  | { kind: 'tool-batch'; id: string; batch: ToolBatch }
+  | ToolBatchSegment
 
 export type ConversationToolBatchDisplayItem =
   | ConversationDisplayItem
-  | { kind: 'tool-batch'; id: string; batch: ToolBatch }
+  | ToolBatchSegment
 
 export type ToolBatchCategory = 'files' | 'command' | 'other'
 
@@ -82,7 +90,7 @@ export function presentConversationToolBatches(
 
   const flush = () => {
     for (const item of presentToolBatches(blocks)) {
-      result.push(item.kind === 'tool-batch'
+      result.push(item.kind === 'tool-segment'
         ? item
         : {
             kind: 'section',
@@ -173,26 +181,21 @@ function appendSegment(
   blocks: readonly Block[],
   sealed: boolean,
 ): void {
-  const tools = sealed
-    ? blocks.filter((block): block is ToolBlock => block.kind === 'tool')
-    : []
+  const tools = blocks.filter((block): block is ToolBlock => block.kind === 'tool')
   if (tools.length === 0) {
     for (const block of blocks) target.push({ kind: 'block', id: block.id, block })
     return
   }
 
   const firstToolId = tools[0]!.call.id
-  let inserted = false
-  for (const block of blocks) {
-    if (block.kind !== 'tool') {
-      target.push({ kind: 'block', id: block.id, block })
-      continue
-    }
-    if (inserted) continue
-    inserted = true
-    const id = `tool-batch-${firstToolId}`
-    target.push({ kind: 'tool-batch', id, batch: { id, tools } })
-  }
+  const id = `tool-batch-${firstToolId}`
+  target.push({
+    kind: 'tool-segment',
+    id,
+    blocks: [...blocks],
+    batch: { id, tools },
+    sealed,
+  })
 }
 
 function toolSummary(

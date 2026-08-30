@@ -20,10 +20,12 @@ describe('工具批次折叠投影', () => {
     const result = presentToolBatches(blocks)
     assert.deepEqual(result.map((item) => [item.kind, item.id]), [
       ['block', 'text-1'],
-      ['tool-batch', 'tool-batch-tool-1'],
+      ['tool-segment', 'tool-batch-tool-1'],
       ['block', 'text-2'],
-      ['block', 'block-tool-3'],
+      ['tool-segment', 'tool-batch-tool-3'],
     ])
+    assert.equal(result[1]?.kind === 'tool-segment' ? result[1].sealed : null, true)
+    assert.equal(result[3]?.kind === 'tool-segment' ? result[3].sealed : null, false)
   })
 
   it('最终正文被单独投影时可封口最后一个工具批次', () => {
@@ -35,10 +37,26 @@ describe('工具批次折叠投影', () => {
     ], true)
     assert.deepEqual(result.map((item) => [item.kind, item.id]), [
       ['block', 'text-1'],
-      ['tool-batch', 'tool-batch-tool-1'],
-      ['block', 'thinking-1'],
+      ['tool-segment', 'tool-batch-tool-1'],
     ])
-    assert.equal(result[1]?.kind === 'tool-batch' ? result[1].batch.tools.length : 0, 2)
+    assert.equal(result[1]?.kind === 'tool-segment' ? result[1].batch.tools.length : 0, 2)
+    assert.deepEqual(
+      result[1]?.kind === 'tool-segment'
+        ? result[1].blocks.map((block) => block.id)
+        : [],
+      ['block-tool-1', 'thinking-1', 'block-tool-2'],
+    )
+  })
+
+  it('末批工具封口前后沿用同一 segment 身份供局部折叠过渡', () => {
+    const blocks = [tool('tool-1', 'ReadFile'), tool('tool-2', 'Grep')]
+    const [open] = presentToolBatches(blocks)
+    const [sealed] = presentToolBatches(blocks, true)
+    assert.equal(open?.kind, 'tool-segment')
+    assert.equal(sealed?.kind, 'tool-segment')
+    assert.equal(open?.id, sealed?.id)
+    assert.equal(open?.kind === 'tool-segment' ? open.sealed : null, false)
+    assert.equal(sealed?.kind === 'tool-segment' ? sealed.sealed : null, true)
   })
 
   it('用户消息是硬边界，不把两个 turn 的工具混为一批', () => {
@@ -49,11 +67,13 @@ describe('工具批次折叠投影', () => {
       text('text-2', '完成'),
     ])
     assert.deepEqual(result.map((item) => [item.kind, item.id]), [
-      ['block', 'block-tool-1'],
+      ['tool-segment', 'tool-batch-tool-1'],
       ['block', 'user-2'],
-      ['tool-batch', 'tool-batch-tool-2'],
+      ['tool-segment', 'tool-batch-tool-2'],
       ['block', 'text-2'],
     ])
+    assert.equal(result[0]?.kind === 'tool-segment' ? result[0].sealed : null, false)
+    assert.equal(result[2]?.kind === 'tool-segment' ? result[2].sealed : null, true)
   })
 
   it('按编辑、命令、其它的优先级生成摘要', () => {

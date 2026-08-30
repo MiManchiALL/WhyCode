@@ -1,6 +1,6 @@
 import type { SkillSummary } from '@whycode/core/skills'
 import { GitFork } from 'lucide-react'
-import { memo } from 'react'
+import { memo, useLayoutEffect, useRef } from 'react'
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
 import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
@@ -10,6 +10,7 @@ import {
 } from './btw-conversation-group.tsx'
 import {
   isForkBoundarySection,
+  shouldSealTrailingToolBatch,
   type ConversationSection,
 } from './conversation-sections.ts'
 import {
@@ -22,9 +23,12 @@ import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 import {
   presentConversationToolBatches,
   presentToolBatches,
+  type ConversationToolBatchDisplayItem,
   type ToolBatch,
+  type ToolBatchSegment,
 } from './conversation-tool-batches.ts'
 import { ToolBatchGroup } from './tool-batch-group.tsx'
+import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -59,12 +63,61 @@ type WorkTiming =
       outcome: 'completed' | 'stopped'
     }
 
+function useNewlySealedToolSegmentIds(
+  runtimeId: string,
+  items: readonly ConversationToolBatchDisplayItem[],
+): ReadonlySet<string> {
+  const currentStates = toolSegmentSealStates(items)
+  const previousRef = useRef<{
+    runtimeId: string
+    states: ReadonlyMap<string, boolean>
+  } | null>(null)
+  const previousStates = previousRef.current?.runtimeId === runtimeId
+    ? previousRef.current.states
+    : new Map<string, boolean>()
+  const newlySealed = new Set<string>()
+  for (const [id, sealed] of currentStates) {
+    if (sealed && previousStates.get(id) === false) newlySealed.add(id)
+  }
+  useLayoutEffect(() => {
+    previousRef.current = { runtimeId, states: currentStates }
+  })
+  return newlySealed
+}
+
+function toolSegmentSealStates(
+  items: readonly ConversationToolBatchDisplayItem[],
+): ReadonlyMap<string, boolean> {
+  const states = new Map<string, boolean>()
+  const collectSection = (section: ConversationSection) => {
+    if (section.kind === 'block') return
+    for (const item of presentToolBatches(
+      section.activityBlocks,
+      shouldSealTrailingToolBatch(section),
+    )) {
+      if (item.kind === 'tool-segment') states.set(item.id, item.sealed)
+    }
+  }
+
+  for (const item of items) {
+    if (item.kind === 'tool-segment') {
+      states.set(item.id, item.sealed)
+    } else if (item.kind === 'section') {
+      collectSection(item.section)
+    } else {
+      for (const section of item.sections) collectSection(section)
+    }
+  }
+  return states
+}
+
 export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
   const automaticallyCollapsingId = useAutomaticallyCollapsingBtwId(
     props.runtimeId,
     props.latestBtwConversationId,
   )
   const items = presentConversationToolBatches(props.items)
+  const newlySealedSegmentIds = useNewlySealedToolSegmentIds(props.runtimeId, items)
 
   return (
     <>
@@ -74,6 +127,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
               key={item.id}
               props={props}
               section={item.section}
+              newlySealedSegmentIds={newlySealedSegmentIds}
             />
           )
         : item.kind === 'btw-group' ? (
@@ -87,11 +141,21 @@ export const ConversationView = memo(function ConversationView(props: Conversati
               onToggle={() => props.onToggle(item.id)}
             >
               {item.sections.map((section) => (
-                <ConversationSectionView key={section.id} props={props} section={section} />
+                <ConversationSectionView
+                  key={section.id}
+                  props={props}
+                  section={section}
+                  newlySealedSegmentIds={newlySealedSegmentIds}
+                />
               ))}
             </BtwConversationGroup>
           ) : (
-            <ConversationToolBatch key={item.id} props={props} batch={item.batch} />
+            <ConversationToolSegment
+              key={item.id}
+              props={props}
+              segment={item}
+              animateOnMount={newlySealedSegmentIds.has(item.id)}
+            />
           ))}
       {props.showThinkingGap && <ThinkingGapIndicator />}
     </>
@@ -101,16 +165,22 @@ export const ConversationView = memo(function ConversationView(props: Conversati
 function ConversationSectionView({
   props,
   section,
+  newlySealedSegmentIds,
 }: {
   props: ConversationViewProps
   section: ConversationSection
+  newlySealedSegmentIds: ReadonlySet<string>
 }) {
   if (section.kind === 'block') {
     return <ConversationBlock {...conversationBlockProps(props, section.block)} />
   }
   return (
     <div>
-      <WorkSection {...props} section={section} />
+      <WorkSection
+        {...props}
+        section={section}
+        newlySealedSegmentIds={newlySealedSegmentIds}
+      />
       {isForkBoundarySection(section, props.forkSourceTurnId) ? <ForkBoundary /> : null}
     </div>
   )
@@ -118,9 +188,11 @@ function ConversationSectionView({
 
 function WorkSection({
   section,
+  newlySealedSegmentIds,
   ...props
 }: ConversationViewProps & {
   section: WorkSectionData
+  newlySealedSegmentIds: ReadonlySet<string>
 }) {
   const navigationEntryId = section.userBlocks.find((block) => block.kind === 'user')?.id
   const expanded = section.activityBlocks.length > 0
@@ -128,7 +200,7 @@ function WorkSection({
   const activityId = `work-activity-${section.id}`
   const activityItems = presentToolBatches(
     section.activityBlocks,
-    section.finalBlocks.some((block) => block.kind === 'text'),
+    shouldSealTrailingToolBatch(section),
   )
   return (
     <section
@@ -158,8 +230,19 @@ function WorkSection({
       />
       {expanded && (
         <div id={activityId}>
-          {activityItems.map((item) => item.kind === 'tool-batch'
-            ? <ConversationToolBatch key={item.id} props={props} batch={item.batch} />
+          {activityItems.map((item) => item.kind === 'tool-segment'
+            ? (
+                <ConversationToolSegment
+                  key={item.id}
+                  props={props}
+                  segment={item}
+                  animateOnMount={newlySealedSegmentIds.has(item.id)}
+                  renderMath={
+                    section.kind === 'active-work'
+                    || section.duration.outcome === 'completed'
+                  }
+                />
+              )
             : (
                 <ConversationBlock
                   key={item.id}
@@ -194,6 +277,35 @@ function WorkSection({
         />
       ))}
     </section>
+  )
+}
+
+function ConversationToolSegment({
+  props,
+  segment,
+  animateOnMount,
+  renderMath,
+}: {
+  props: ConversationViewProps
+  segment: ToolBatchSegment
+  animateOnMount: boolean
+  renderMath?: boolean
+}) {
+  return (
+    <ToolBatchSegmentView
+      segment={segment}
+      animateOnMount={animateOnMount}
+      renderBlock={(block) => {
+        const blockProps = conversationBlockProps(props, block)
+        return (
+          <ConversationBlock
+            {...blockProps}
+            renderMath={renderMath ?? blockProps.renderMath}
+          />
+        )
+      }}
+      renderBatch={(batch) => <ConversationToolBatch props={props} batch={batch} />}
+    />
   )
 }
 
