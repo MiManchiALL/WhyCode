@@ -67,7 +67,7 @@ import {
   findLatestForkTurnId,
   shouldShowComposerProcessingTime,
 } from './conversation-sections.ts'
-import { shouldShowThinkingGap } from './thinking-gap.ts'
+import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
@@ -305,12 +305,34 @@ export function App() {
   )
   const composerProcessingTimeVisible =
     shouldShowComposerProcessingTime(workStartedAt, sections)
-  const thinkingGapVisible = shouldShowThinkingGap({
+  const thinkingGapDelay = thinkingGapRevealDelay({
     blocks,
     status,
     stopping,
     workStartedAt,
   })
+  const [thinkingGapIdleTarget, setThinkingGapIdleTarget] = useState<{
+    runtimeId: string
+    blocks: readonly Block[]
+  } | null>(null)
+  useEffect(() => {
+    if (thinkingGapDelay === null || thinkingGapDelay === 0) {
+      setThinkingGapIdleTarget(null)
+      return
+    }
+    const observedBlocks = blocks
+    const timer = window.setTimeout(
+      () => setThinkingGapIdleTarget({ runtimeId, blocks: observedBlocks }),
+      thinkingGapDelay,
+    )
+    return () => window.clearTimeout(timer)
+  }, [blocks, runtimeId, thinkingGapDelay])
+  const thinkingGapVisible = thinkingGapDelay === 0
+    || (
+      thinkingGapDelay !== null
+      && thinkingGapIdleTarget?.runtimeId === runtimeId
+      && thinkingGapIdleTarget.blocks === blocks
+    )
   const addError = useCallback((text: string) => {
     applyConversationEvent({ type: 'error', message: text, recoverable: true })
   }, [applyConversationEvent])

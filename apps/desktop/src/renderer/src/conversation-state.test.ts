@@ -297,7 +297,7 @@ describe('会话界面时间线重建', () => {
     assert.equal(duration?.kind === 'work-duration' ? duration.forkTurnId : null, 'turn-final')
   })
 
-  it('用户停止时沿用停止瞬间的工作区展开状态', () => {
+  it('用户停止时保留未提交正文为执行过程并保持工作区展开', () => {
     let state = createConversationState([
       { type: 'user-message', text: '检查项目', startsTurn: true },
       core({
@@ -316,13 +316,13 @@ describe('会话界面时间线重建', () => {
     state = toggleExpanded(state, 'work-b0')
     assert.equal(state.expanded.has('work-b0'), false)
 
-    const startStreamingFinal = () => {
+    const startStreamingProgress = () => {
       let current = createConversationState([
         { type: 'user-message', text: '检查项目', startsTurn: true },
       ])
       current = applyCoreEvent(current, { type: 'thinking-delta', text: '分析' })
       current = applyCoreEvent(current, { type: 'thinking-end', durationMs: 500 })
-      return applyCoreEvent(current, { type: 'text-delta', text: '正在输出最终回答' })
+      return applyCoreEvent(current, { type: 'text-delta', text: '接下来读取入口文件' })
     }
     const stop = (current: ConversationState) => {
       current = applyCoreEvent(current, { type: 'step-output-retained' })
@@ -335,17 +335,12 @@ describe('会话界面时间线重建', () => {
       })
     }
 
-    const streamingFinal = stop(startStreamingFinal())
-    assert.equal(streamingFinal.expanded.has('work-b0'), false)
+    const interruptedProgress = stop(startStreamingProgress())
+    assert.equal(interruptedProgress.expanded.has('work-b0'), true)
     assert.equal(
-      streamingFinal.blocks.find((block) => block.kind === 'text')?.phase,
-      'final',
+      interruptedProgress.blocks.find((block) => block.kind === 'text')?.phase,
+      'activity',
     )
-
-    let manuallyExpanded = startStreamingFinal()
-    manuallyExpanded = toggleExpanded(manuallyExpanded, 'work-b0')
-    manuallyExpanded = stop(manuallyExpanded)
-    assert.equal(manuallyExpanded.expanded.has('work-b0'), true)
   })
 
   it('提问工具结束当前 turn 时保持处理过程展开', () => {

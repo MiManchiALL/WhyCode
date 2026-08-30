@@ -446,11 +446,6 @@ function beginPendingStep(state: ConversationState): ConversationState {
 function retainStepOutput(state: ConversationState): ConversationState {
   const snapshot = state.pendingStep
   if (!snapshot) return state
-  const retainedPhase = state.blocks
-    .slice(snapshot.blocks.length)
-    .some((block) => block.kind === 'tool')
-    ? 'activity'
-    : 'final'
   const stableById = new Map(snapshot.blocks.map((block) => [block.id, block]))
   let retained: ConversationState = { ...state, ...snapshot, pendingStep: null }
   for (const block of state.blocks) {
@@ -459,7 +454,9 @@ function retainStepOutput(state: ConversationState): ConversationState {
     const text = stable?.kind === 'text'
       ? block.text.slice(stable.text.length)
       : block.text
-    if (text) retained = appendText(retained, text, block.timestamp, retainedPhase)
+    // step-output-retained 只发生在用户中止尚未提交的模型步骤时。工具调用可能仍在
+    // 生成参数、尚未来得及出现，不能再用“当前没看到工具”猜测这就是最终回答。
+    if (text) retained = appendText(retained, text, block.timestamp, 'activity')
   }
   return retained
 }

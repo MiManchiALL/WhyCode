@@ -6,7 +6,10 @@ import {
   HEART_WAVE_LOOP_SECONDS,
   HEART_WAVE_PATH,
 } from './heart-wave.ts'
-import { shouldShowThinkingGap } from './thinking-gap.ts'
+import {
+  THINKING_GAP_VISIBLE_IDLE_MS,
+  thinkingGapRevealDelay,
+} from './thinking-gap.ts'
 
 const user: Block = { kind: 'user', id: 'user-1', text: '开始' }
 const completedTool: Block = {
@@ -21,12 +24,12 @@ const completedTool: Block = {
   },
 }
 
-function visible(blocks: readonly Block[], overrides: Partial<{
+function delay(blocks: readonly Block[], overrides: Partial<{
   status: 'idle' | 'thinking' | 'working' | 'waiting-approval' | 'error'
   stopping: boolean
   workStartedAt: number | null
-}> = {}): boolean {
-  return shouldShowThinkingGap({
+}> = {}): number | null {
+  return thinkingGapRevealDelay({
     blocks,
     status: overrides.status ?? 'working',
     stopping: overrides.stopping ?? false,
@@ -35,35 +38,50 @@ function visible(blocks: readonly Block[], overrides: Partial<{
 }
 
 describe('模型空窗反馈', () => {
-  it('首条消息提交后和工具结束后显示', () => {
-    assert.equal(visible([user]), true)
-    assert.equal(visible([user, completedTool]), true)
-    assert.equal(visible([
+  it('首条消息提交后、工具结束后和思考结束后立即显示', () => {
+    assert.equal(delay([user]), 0)
+    assert.equal(delay([user, completedTool]), 0)
+    assert.equal(delay([
       user,
       { kind: 'thinking', id: 'thinking-1', text: '分析', durationMs: 320 },
-    ]), true)
+    ]), 0)
   })
 
-  it('运行中工具、流式思考和正文输出使用各自反馈', () => {
-    assert.equal(visible([
+  it('运行中工具、流式思考和协商代理使用自身的持续反馈', () => {
+    assert.equal(delay([
       user,
       {
         ...completedTool,
         call: { ...completedTool.call, status: 'running' },
       },
-    ]), false)
-    assert.equal(visible([
+    ]), null)
+    assert.equal(delay([
       user,
       { kind: 'thinking', id: 'thinking-1', text: '分析', durationMs: null },
-    ]), false)
-    assert.equal(visible([
+    ]), null)
+    assert.equal(delay([
+      user,
+      {
+        kind: 'peer',
+        id: 'peer-1',
+        peer: { agentId: 'B', status: 'working', text: '', tools: [] },
+      },
+    ]), null)
+  })
+
+  it('正文或其它静态反馈停止更新后补上 Heart Wave', () => {
+    assert.equal(delay([
       user,
       { kind: 'text', id: 'text-1', text: '正在输出', phase: 'pending' },
-    ]), false)
+    ]), THINKING_GAP_VISIBLE_IDLE_MS)
+    assert.equal(delay([
+      user,
+      { kind: 'notice', id: 'notice-1', text: '阶段状态' },
+    ]), THINKING_GAP_VISIBLE_IDLE_MS)
   })
 
   it('任一并行工具仍在运行时不与工具转圈重复', () => {
-    assert.equal(visible([
+    assert.equal(delay([
       user,
       {
         ...completedTool,
@@ -71,14 +89,14 @@ describe('模型空窗反馈', () => {
         call: { ...completedTool.call, id: 'call-running', status: 'running' },
       },
       completedTool,
-    ]), false)
+    ]), null)
   })
 
   it('非工作状态、停止中和没有活动任务时隐藏', () => {
-    assert.equal(visible([user], { status: 'waiting-approval' }), false)
-    assert.equal(visible([user], { status: 'idle' }), false)
-    assert.equal(visible([user], { stopping: true }), false)
-    assert.equal(visible([user], { workStartedAt: null }), false)
+    assert.equal(delay([user], { status: 'waiting-approval' }), null)
+    assert.equal(delay([user], { status: 'idle' }), null)
+    assert.equal(delay([user], { stopping: true }), null)
+    assert.equal(delay([user], { workStartedAt: null }), null)
   })
 
   it('只读取最近一次工作区段', () => {
@@ -87,7 +105,7 @@ describe('模型空窗反馈', () => {
       id: 'old-tool',
       call: { ...completedTool.call, id: 'old-call', status: 'running' },
     }
-    assert.equal(visible([
+    assert.equal(delay([
       { kind: 'user', id: 'old-user', text: '旧任务' },
       oldRunningTool,
       {
@@ -98,7 +116,7 @@ describe('模型空窗反馈', () => {
         outcome: 'stopped',
       },
       user,
-    ]), true)
+    ]), 0)
   })
 
   it('Heart Wave 使用细分路径和单段连续流动线', () => {
