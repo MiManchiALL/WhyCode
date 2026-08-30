@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type {
+  SkillSummary,
   SubagentEventEnvelope,
   SubagentStatus,
   SubagentSummary,
@@ -39,6 +40,8 @@ interface SubagentPanelProps {
   runtimeId: string
   parentSessionId: string | null
   subagents: readonly SubagentSummary[]
+  skills: readonly SkillSummary[]
+  projectDir: string | null
   page: SubagentPanelPage | null
   onSelect: (subagentId: string) => void
   onBack: () => void
@@ -83,6 +86,8 @@ export function SubagentPanel(props: SubagentPanelProps) {
               runtimeId={props.runtimeId}
               parentSessionId={props.parentSessionId}
               subagent={page.subagent}
+              skills={props.skills}
+              projectDir={props.projectDir}
               onBack={props.onBack}
             />
           )
@@ -167,11 +172,15 @@ function SubagentTranscript({
   runtimeId,
   parentSessionId,
   subagent,
+  skills,
+  projectDir,
   onBack,
 }: {
   runtimeId: string
   parentSessionId: string
   subagent: SubagentSummary
+  skills: readonly SkillSummary[]
+  projectDir: string | null
   onBack: () => void
 }) {
   const [view, setView] = useState(() => createConversationState())
@@ -290,6 +299,8 @@ function SubagentTranscript({
         showThinkingGap={false}
         forkSourceTurnId={null}
         forkPendingTurnId={null}
+        skills={skills}
+        projectDir={projectDir}
         onCheckpointRestoreChange={() => {}}
         onEdit={async () => false}
         onFork={() => {}}

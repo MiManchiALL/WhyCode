@@ -1,72 +1,85 @@
+import type { SkillSummary } from '@whycode/core/skills'
 import { genericToolSummary } from './tool-call-summary-fallback.ts'
 
 const SUMMARY_MAX_CHARS = 420
 const VALUE_MAX_CHARS = 180
-const DEFAULT_SCOPE = '项目根目录'
-
 type ToolInput = Record<string, unknown>
+
+export interface ToolCallSummary {
+  primary: string
+  trailing: string
+}
+
+interface ToolCallSummaryContext {
+  result?: string
+  skills?: readonly SkillSummary[]
+  projectDir?: string | null
+}
 
 /**
  * 工具卡片只展示足以识别本次操作的关键参数；完整结果仍由展开区负责。
  * 已知工具按自身语义排序，动态 MCP / Provider 工具使用有界通用回退。
  */
-export function summarizeToolCall(toolName: string, input: unknown): string {
-  const value = record(input)
-  if (!value) return primitiveSummary(input)
-
-  const summary = knownToolSummary(toolName, value) ?? genericToolSummary(value)
-  return clip(summary, SUMMARY_MAX_CHARS)
+export function summarizeToolCall(
+  toolName: string,
+  input: unknown,
+  context: ToolCallSummaryContext = {},
+): string {
+  const summary = summarizeToolCallParts(toolName, input, context)
+  return join(summary.primary, summary.trailing)
 }
 
-function knownToolSummary(toolName: string, input: ToolInput): string | null {
+/** 尾部信息单独返回，工具卡可以在主内容省略时仍完整保留时间范围或数量。 */
+export function summarizeToolCallParts(
+  toolName: string,
+  input: unknown,
+  context: ToolCallSummaryContext = {},
+): ToolCallSummary {
+  const value = record(input)
+  if (!value) return boundedSummary(primitiveSummary(input))
+
+  const summary = knownToolSummary(toolName, value, context) ?? genericToolSummary(value)
+  return typeof summary === 'string' ? boundedSummary(summary) : boundedSummaryParts(summary)
+}
+
+function knownToolSummary(
+  toolName: string,
+  input: ToolInput,
+  context: ToolCallSummaryContext,
+): string | ToolCallSummary | null {
   switch (toolName) {
     case 'ReadFile':
       return join(text(input, 'path'), lineRange(input, 'offset', 'limit'))
     case 'ListDir':
-      return text(input, 'path') || DEFAULT_SCOPE
+      return text(input, 'path') || context.projectDir || '.'
     case 'Glob':
-      return join(quote(text(input, 'pattern')), text(input, 'path') || DEFAULT_SCOPE)
+      return join(quote(text(input, 'pattern')), text(input, 'path') || context.projectDir || '.')
     case 'Grep':
       return join(
         quote(text(input, 'pattern')),
-        text(input, 'path') || DEFAULT_SCOPE,
-        prefixed('文件', text(input, 'include')),
+        text(input, 'path') || context.projectDir || '.',
+        prefixed('include', text(input, 'include')),
       )
     case 'WriteFile':
       return text(input, 'path')
     case 'EditFile':
-      return editSummary(input)
+      return fileCount(editPaths(input))
     case 'DeleteFile':
-      return pathListSummary(stringArray(input, 'paths'))
+      return fileCount(unique(stringArray(input, 'paths')))
     case 'MoveFile':
       return arrow(text(input, 'source'), text(input, 'destination'))
     case 'RunCommand':
-      return join(
-        compact(text(input, 'command')),
-        input.runInBackground === true
-          ? input.wakeOnCompletion === true ? '后台完成后唤醒' : '后台运行'
-          : '',
-        prefixed('目录', text(input, 'cwd')),
-      )
+      return compact(text(input, 'command'))
     case 'ListCommands':
-      return '当前会话'
+      return ''
     case 'GetCommandOutput':
-      return join(taskId(input), numberLabel(input, 'offset', '偏移'))
+      return join(taskId(input), numberLabel(input, 'offset', 'offset'))
     case 'WriteCommandInput':
-      return join(
-        taskId(input),
-        inputLengthSummary(input),
-        input.appendNewline === false ? '不追加换行' : '',
-        input.closeAfterWrite === true ? '写入后关闭 stdin' : '',
-      )
+      return join(taskId(input), inputLengthSummary(input))
     case 'StopCommand':
       return taskId(input)
     case 'WebSearch':
-      return join(
-        querySummary(input.query),
-        domainsSummary(input),
-        prefixed('时间', text(input, 'recency')),
-      )
+      return { primary: querySummary(input.query), trailing: recencySummary(input) }
     case 'WebFetch':
       return join(text(input, 'url'), lineRange(input, 'offset', 'limit'))
     case 'WebFind':
@@ -74,7 +87,10 @@ function knownToolSummary(toolName: string, input: ToolInput): string | null {
     case 'ViewImage':
       return join(text(input, 'path'), imageRegionSummary(input.region), detailSummary(input))
     case 'AnalyzeImage':
-      return join(quote(text(input, 'question')), countLabel(input, 'attachmentIds', '张图片'))
+      return {
+        primary: inlineText(input.question),
+        trailing: arrayCount(input, 'attachmentIds', 'image', 'images'),
+      }
     case 'CaptureScreenshot':
       return screenshotSummary(input)
     case 'ReadPdf':
@@ -83,7 +99,7 @@ function knownToolSummary(toolName: string, input: ToolInput): string | null {
       return join(
         text(input, 'outputPath'),
         upper(text(input, 'format')),
-        input.mode === 'template' ? '模板模式' : input.mode === 'create' ? '从零创建' : '',
+        text(input, 'mode'),
       )
     case 'InspectOffice':
       return join(
@@ -95,32 +111,29 @@ function knownToolSummary(toolName: string, input: ToolInput): string | null {
     case 'RenderOffice':
       return join(
         text(input, 'path'),
-        input.view === 'overview' ? '总览' : input.view === 'pages' ? '逐页' : '',
+        text(input, 'view'),
         pageRange(input, 'startPage', 'pageCount'),
       )
     case 'Skill':
-      return join(
-        text(input, 'resourcePath') || 'SKILL.md',
-        shortId(text(input, 'skillId')),
-      )
+      return skillSummary(input, context)
     case 'AskUserQuestion':
-      return questionSummary(input)
+      return arrayCount(input, 'questions', 'question', 'questions')
     case 'CreateTaskPlan':
-      return join(quote(text(input, 'goal')), countLabel(input, 'items', '个里程碑'))
+      return arrayCount(input, 'items', 'milestone', 'milestones')
     case 'ResumeTaskPlan':
-      return prefixed('计划', shortId(text(input, 'plan_id')))
+      return prefixed('plan ID', shortId(text(input, 'plan_id')))
     case 'UpdateTaskItem':
       return taskUpdateSummary(input)
     case 'CloseTaskPlan':
-      return '当前计划'
+      return prefixed('plan ID', shortId(text(input, 'plan_id')))
     case 'Subagent':
-      return join(quote(text(input, 'description')), text(input, 'agent_id'))
+      return text(input, 'agent_id')
     case 'SendSubagentMessage':
-      return join(prefixed('子代理', shortId(text(input, 'subagent_id'))), quote(text(input, 'prompt')))
+      return shortId(text(input, 'subagent_id'))
     case 'ListSubagents':
-      return '当前会话'
+      return ''
     case 'ToolSearch':
-      return join(quote(text(input, 'query')), numberLabel(input, 'max_results', '最多'))
+      return join(quote(text(input, 'query')), numberLabel(input, 'max_results', 'max results'))
     case 'SubmitProtocolOutput':
       return protocolSummary(input)
     default:
@@ -128,18 +141,40 @@ function knownToolSummary(toolName: string, input: ToolInput): string | null {
   }
 }
 
-function editSummary(input: ToolInput): string {
+export function toolCallDetails(
+  toolName: string,
+  input: unknown,
+  result: string | undefined,
+  isError: boolean,
+): string | null {
+  if (isError) return null
+  const value = record(input)
+  if (!value) return null
+  switch (toolName) {
+    case 'EditFile':
+      return editPaths(value).join('\n')
+    case 'DeleteFile':
+      return unique(stringArray(value, 'paths')).join('\n')
+    case 'AskUserQuestion':
+      return answeredQuestionDetails(value, result)
+    case 'Subagent':
+      return subagentDetails(value, result)
+    case 'SendSubagentMessage':
+      return text(value, 'prompt')
+    default:
+      return null
+  }
+}
+
+function editPaths(input: ToolInput): string[] {
   const edits = Array.isArray(input.edits)
     ? input.edits.filter((item): item is ToolInput => record(item) !== null)
     : []
-  const paths = [...new Set(edits.map((edit) => text(edit, 'path')).filter(Boolean))]
-  return join(pathListSummary(paths), edits.length ? `${edits.length} 处修改` : '')
+  return unique(edits.map((edit) => text(edit, 'path')).filter(Boolean))
 }
 
-function pathListSummary(paths: readonly string[]): string {
-  if (paths.length === 0) return ''
-  if (paths.length === 1) return paths[0]!
-  return `${paths[0]} 等 ${paths.length} 个文件`
+function fileCount(paths: readonly string[]): string {
+  return count(paths.length, 'file', 'files')
 }
 
 function querySummary(value: unknown): string {
@@ -148,57 +183,79 @@ function querySummary(value: unknown): string {
     : Array.isArray(value)
       ? value.filter((item): item is string => typeof item === 'string')
       : []
-  if (queries.length === 0) return ''
-  if (queries.length === 1) return quote(queries[0]!)
-  return `${quote(queries[0]!)} 等 ${queries.length} 个查询`
+  return queries.map(inlineText).filter(Boolean).join(' ')
 }
 
-function domainsSummary(input: ToolInput): string {
-  const domains = stringArray(input, 'domains')
-  if (domains.length === 0) return ''
-  return domains.length === 1 ? domains[0]! : `${domains[0]} 等 ${domains.length} 个域名`
+function recencySummary(input: ToolInput): string {
+  const recency = text(input, 'recency')
+  return recency ? `past ${recency}` : 'all time'
 }
 
 function screenshotSummary(input: ToolInput): string {
+  const target = text(input, 'target') || 'screen'
   if (input.target === 'window') {
-    return join('窗口', quote(text(input, 'window_title')))
+    return join(target, text(input, 'window_title'))
   }
-  if (input.target === 'region') return imageRegionSummary(input.region) || '区域'
-  return join('屏幕', prefixed('显示器', text(input, 'display_id')))
+  if (input.target === 'region') return join(target, imageRegionSize(input.region))
+  return target
 }
 
 function pdfSourceSummary(input: ToolInput): string {
   const source = text(input, 'sourceValue')
   return input.sourceType === 'attachment'
-    ? prefixed('附件', shortId(source))
+    ? prefixed('attachment', shortId(source))
     : source
 }
 
 function officeLocationSummary(input: ToolInput): string {
   if (text(input, 'sheetName')) {
-    return join(prefixed('工作表', text(input, 'sheetName')), text(input, 'range'))
+    return join(prefixed('sheet', text(input, 'sheetName')), text(input, 'range'))
   }
-  if (typeof input.slideNumber === 'number') return `第 ${input.slideNumber} 页`
+  if (typeof input.slideNumber === 'number') return `slide ${input.slideNumber}`
   return ''
 }
 
-function questionSummary(input: ToolInput): string {
+function skillSummary(input: ToolInput, context: ToolCallSummaryContext): string {
+  const skillId = text(input, 'skillId')
+  const skill = context.skills?.find((item) => item.id === skillId)
+  const fallbackName = skillNameFromResult(context.result) || shortId(skillId)
+  return join(skill?.name ?? fallbackName, skill?.description ?? '')
+}
+
+function skillNameFromResult(result: string | undefined): string {
+  if (!result) return ''
+  const match = /<skill-resource\s+name="([^"]+)"/u.exec(result)
+  return match?.[1] ?? ''
+}
+
+function answeredQuestionDetails(input: ToolInput, result: string | undefined): string {
   const questions = Array.isArray(input.questions)
     ? input.questions.filter((item): item is ToolInput => record(item) !== null)
     : []
-  return join(
-    quote(questions[0] ? text(questions[0], 'question') : ''),
-    questions.length ? `${questions.length} 个问题` : '',
-  )
+  if (result?.startsWith('Question: ')) return result
+  return questions.map((question) => [
+    `Question: ${text(question, 'question')}`,
+    'Answer: Waiting for response',
+  ].join('\n')).join('\n\n')
+}
+
+function subagentDetails(input: ToolInput, result: string | undefined): string {
+  const subagentId = result
+    ? /subagent_id:\s*([0-9a-f-]{36})/iu.exec(result)?.[1] ?? ''
+    : ''
+  return [
+    ...(subagentId ? [`subagent_id: ${subagentId}`] : []),
+    ...(text(input, 'description') ? [`description: ${text(input, 'description')}`] : []),
+  ].join('\n')
 }
 
 function taskUpdateSummary(input: ToolInput): string {
   const status = input.status === 'in_progress'
-    ? '进行中'
-    : input.status === 'completed' ? '已完成' : ''
+    ? 'in progress'
+    : input.status === 'completed' ? 'complete' : ''
   const transition = joinWith(' → ', text(input, 'item_id'), status)
   const changes = Array.isArray(input.changes) ? input.changes.length : 0
-  return join(transition, changes ? `${changes} 项计划调整` : '')
+  return join(transition, count(changes, 'plan change', 'plan changes'))
 }
 
 function protocolSummary(input: ToolInput): string {
@@ -211,9 +268,9 @@ function lineRange(input: ToolInput, startKey: string, countKey: string): string
   const start = number(input, startKey)
   const count = number(input, countKey)
   if (start === null && count === null) return ''
-  if (start !== null && count !== null) return `第 ${start}–${start + count - 1} 行`
-  if (start !== null) return `从第 ${start} 行`
-  return `前 ${count} 行`
+  if (start !== null && count !== null) return `lines ${start}–${start + count - 1}`
+  if (start !== null) return `from line ${start}`
+  return `first ${count} lines`
 }
 
 function pageRange(input: ToolInput, startKey: string, countKey: string): string {
@@ -221,8 +278,8 @@ function pageRange(input: ToolInput, startKey: string, countKey: string): string
   const count = number(input, countKey)
   if (start === null && count === null) return ''
   const first = start ?? 1
-  if (count !== null) return `第 ${first}–${first + count - 1} 页`
-  return `从第 ${first} 页`
+  if (count !== null) return `pages ${first}–${first + count - 1}`
+  return `from page ${first}`
 }
 
 function imageRegionSummary(value: unknown): string {
@@ -233,21 +290,29 @@ function imageRegionSummary(value: unknown): string {
   const width = number(region, 'width')
   const height = number(region, 'height')
   if ([x, y, width, height].some((item) => item === null)) return ''
-  return `区域 ${x},${y} ${width}×${height}`
+  return `crop ${x},${y} ${width}×${height}`
+}
+
+function imageRegionSize(value: unknown): string {
+  const region = record(value)
+  if (!region) return ''
+  const width = number(region, 'width')
+  const height = number(region, 'height')
+  return width === null || height === null ? '' : `${width}×${height}`
 }
 
 function detailSummary(input: ToolInput): string {
   const detail = text(input, 'detail')
-  return detail === 'original' ? '原图' : detail === 'high' ? '高精度' : ''
+  return detail === 'original' || detail === 'high' ? detail : ''
 }
 
 function taskId(input: ToolInput): string {
-  return prefixed('任务', shortId(text(input, 'taskId')))
+  return prefixed('task ID', shortId(text(input, 'taskId')))
 }
 
 function inputLengthSummary(input: ToolInput): string {
   const value = typeof input.input === 'string' ? input.input : ''
-  return value ? `写入 ${value.length} 字符` : '写入空内容'
+  return `${value.length} ${value.length === 1 ? 'character' : 'characters'}`
 }
 
 function unitRange(input: ToolInput): string {
@@ -255,12 +320,12 @@ function unitRange(input: ToolInput): string {
   const count = number(input, 'unitCount')
   if (start === null && count === null) return ''
   const first = start ?? 1
-  return count === null ? `从第 ${first} 单元` : `第 ${first}–${first + count - 1} 单元`
+  return count === null ? `from unit ${first}` : `units ${first}–${first + count - 1}`
 }
 
-function countLabel(input: ToolInput, key: string, suffix: string): string {
+function arrayCount(input: ToolInput, key: string, singular: string, plural: string): string {
   const values = Array.isArray(input[key]) ? input[key] : []
-  return values.length ? `${values.length} ${suffix}` : ''
+  return count(values.length, singular, plural)
 }
 
 function numberLabel(input: ToolInput, key: string, prefix: string): string {
@@ -297,7 +362,11 @@ function primitiveSummary(value: unknown): string {
 }
 
 function compact(value: string): string {
-  return clip(value.replace(/\s+/gu, ' ').trim(), VALUE_MAX_CHARS)
+  return clip(inlineText(value), VALUE_MAX_CHARS)
+}
+
+function inlineText(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/gu, ' ').trim() : ''
 }
 
 function quote(value: string): string {
@@ -322,6 +391,14 @@ function shortId(value: string): string {
   return normalized.length > 12 ? `${normalized.slice(0, 8)}…` : normalized
 }
 
+function count(value: number, singular: string, plural: string): string {
+  return value > 0 ? `${value} ${value === 1 ? singular : plural}` : ''
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)]
+}
+
 function join(...parts: string[]): string {
   return joinWith(' · ', ...parts)
 }
@@ -332,4 +409,15 @@ function joinWith(separator: string, ...parts: string[]): string {
 
 function clip(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
+}
+
+function boundedSummary(value: string): ToolCallSummary {
+  return { primary: clip(value, SUMMARY_MAX_CHARS), trailing: '' }
+}
+
+function boundedSummaryParts(summary: ToolCallSummary): ToolCallSummary {
+  const trailing = clip(summary.trailing, SUMMARY_MAX_CHARS)
+  const separatorLength = summary.primary && trailing ? 3 : 0
+  const primaryLimit = Math.max(1, SUMMARY_MAX_CHARS - trailing.length - separatorLength)
+  return { primary: clip(summary.primary, primaryLimit), trailing }
 }

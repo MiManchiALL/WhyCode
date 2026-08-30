@@ -1688,6 +1688,8 @@ export function App() {
                   showThinkingGap={thinkingGapVisible}
                   forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
                   forkPendingTurnId={forkPendingTurnId}
+                  skills={skillCatalog.skills}
+                  projectDir={projectDir}
                   onCheckpointRestoreChange={changeCheckpointRestore}
                   onEdit={editUserMessage}
                   onFork={forkConversation}
@@ -1953,6 +1955,8 @@ export function App() {
                 runtimeId={runtimeId}
                 parentSessionId={sessionIdRef.current}
                 subagents={subagents}
+                skills={skillCatalog.skills}
+                projectDir={projectDir}
                 page={subagentPanelPage}
                 onSelect={(subagentId) => setSubagentPanelPage({
                   kind: 'transcript',

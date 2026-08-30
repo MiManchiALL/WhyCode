@@ -26,6 +26,8 @@ function props(block: Block): ConversationBlockRenderProps {
     showAssistantActions: false,
     forkTurnId: null,
     forkPending: false,
+    skills: [],
+    projectDir: 'E:\\Agent\\WhyCode',
     onCheckpointRestoreChange,
     onEdit,
     onFork,

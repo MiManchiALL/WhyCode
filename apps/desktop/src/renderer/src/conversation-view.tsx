@@ -1,3 +1,4 @@
+import type { SkillSummary } from '@whycode/core/skills'
 import { GitFork } from 'lucide-react'
 import { memo } from 'react'
 import type { Block } from './conversation-state.ts'
@@ -31,6 +32,8 @@ interface ConversationViewProps {
   showThinkingGap: boolean
   forkSourceTurnId: string | null
   forkPendingTurnId: string | null
+  skills: readonly SkillSummary[]
+  projectDir: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onFork: (turnId: string) => void
@@ -196,6 +199,8 @@ const ConversationBlock = memo(function ConversationBlock({
   forkTurnId,
   forkPending,
   onFork,
+  skills,
+  projectDir,
 }: ConversationBlockRenderProps) {
   return (
     <BlockView
@@ -215,6 +220,8 @@ const ConversationBlock = memo(function ConversationBlock({
       forkTurnId={forkTurnId}
       forkPending={forkPending}
       onFork={onFork}
+      skills={skills}
+      projectDir={projectDir}
     />
   )
 }, sameConversationBlockRenderProps)
@@ -240,6 +247,8 @@ function conversationBlockProps(
     showAssistantActions: false,
     forkTurnId: null,
     forkPending: false,
+    skills: props.skills,
+    projectDir: props.projectDir,
     onCheckpointRestoreChange: props.onCheckpointRestoreChange,
     onEdit: props.onEdit,
     onFork: props.onFork,

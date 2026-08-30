@@ -1,3 +1,4 @@
+import type { SkillSummary } from '@whycode/core/skills'
 import type { Block } from './conversation-state.ts'
 
 export interface ConversationBlockRenderProps {
@@ -13,6 +14,8 @@ export interface ConversationBlockRenderProps {
   showAssistantActions: boolean
   forkTurnId: string | null
   forkPending: boolean
+  skills: readonly SkillSummary[]
+  projectDir: string | null
   onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onFork: (turnId: string) => void
@@ -74,7 +77,9 @@ export function sameConversationBlockRenderProps(
 
   if (next.block.kind === 'tool') {
     if (
-      previous.showCheckpointRestore !== next.showCheckpointRestore
+      previous.skills !== next.skills
+      || previous.projectDir !== next.projectDir
+      || previous.showCheckpointRestore !== next.showCheckpointRestore
       || previous.checkpointRestorePending !== next.checkpointRestorePending
     ) {
       return false

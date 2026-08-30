@@ -9,6 +9,7 @@ import type {
 import {
   appendVisibleToolOutput,
   isStepScopedCoreEvent,
+  userQuestionAnswerPrefix,
   visibleToolResult,
   type CoreEvent,
   type UserQuestion,
@@ -307,7 +308,7 @@ function applyStableCoreEvent(
         call: {
           id: event.toolUseId,
           name: event.toolName,
-          input: event.input,
+          input: visibleToolInput(state, event.toolName, event.input),
           status: 'running',
           progress: '',
         },
@@ -469,8 +470,12 @@ export function appendUserMessage(
   btw?: { conversationId: string; turnIndex: number; mode: BtwMode },
 ): ConversationState {
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
+  const blocks = state.pendingQuestion
+    ? attachQuestionAnswer(state.blocks, state.pendingQuestion, text)
+    : state.blocks
   return appendBlock({
     ...state,
+    blocks,
     pendingTurnStart,
     pendingQuestion: null,
     pendingBtw: btw ? structuredClone(btw) : null,
@@ -488,6 +493,44 @@ export function appendUserMessage(
     ...(skills.length ? { skills: skills.map((item) => structuredClone(item)) } : {}),
     ...(btw ? { btw: structuredClone(btw) } : {}),
   })
+}
+
+function visibleToolInput(
+  state: ConversationState,
+  toolName: string,
+  input: unknown,
+): unknown {
+  if (
+    toolName !== 'CloseTaskPlan'
+    || !state.taskPlan
+    || input === null
+    || typeof input !== 'object'
+    || Array.isArray(input)
+  ) return input
+  return { ...input, plan_id: state.taskPlan.id }
+}
+
+function attachQuestionAnswer(
+  blocks: Block[],
+  question: UserQuestion,
+  answerText: string,
+): Block[] {
+  const index = blocks.findLastIndex((block) =>
+    block.kind === 'tool' && block.call.name === 'AskUserQuestion')
+  if (index < 0) return blocks
+  const block = blocks[index]
+  if (block?.kind !== 'tool') return blocks
+  const answerLines = answerText.split('\n')
+  const details = question.questions.map((item, itemIndex) => {
+    const prefix = userQuestionAnswerPrefix(item, itemIndex, question.questions.length)
+    const line = answerLines[itemIndex] ?? ''
+    const answer = line.startsWith(prefix) ? line.slice(prefix.length) : line
+    const label = item.question.replace(/\s+/gu, ' ').trim()
+    return [`Question: ${label}`, `Answer: ${answer || answerText}`].join('\n')
+  }).join('\n\n')
+  const next = [...blocks]
+  next[index] = { ...block, call: { ...block.call, result: details } }
+  return next
 }
 
 export function editableUserBlockId(blocks: readonly Block[]): string | null {
