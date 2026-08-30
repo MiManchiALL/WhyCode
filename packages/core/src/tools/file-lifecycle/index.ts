@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { makeDiff } from '../write-edit/index.ts'
+import { describeFileChange, type ToolFileChange } from '../file-changes.ts'
 
 export const DELETE_FILE_TOOL_NAME = 'DeleteFile'
 export const MOVE_FILE_TOOL_NAME = 'MoveFile'
@@ -22,6 +23,7 @@ type DeleteFileInput = z.infer<typeof deleteFileInputSchema>
 interface DeleteTarget {
   absolute: string
   displayPath: string
+  original?: string
 }
 
 function pathKey(path: string): string {
@@ -74,6 +76,9 @@ export const deleteFileTool = buildTool({
           requireRegularFile(absolute, `文件 ${displayPath}`),
         ),
       )
+      await Promise.all(targets.map(async (target) => {
+        target.original = await readFile(target.absolute, 'utf8')
+      }))
     } catch (error) {
       return {
         data: `删除未执行：${error instanceof Error ? error.message : String(error)}`,
@@ -82,10 +87,12 @@ export const deleteFileTool = buildTool({
     }
 
     let deleted = 0
+    const fileChanges: ToolFileChange[] = []
     try {
       for (const target of targets) {
         await unlink(target.absolute)
         deleted++
+        fileChanges.push(describeFileChange(target.displayPath, target.original ?? '', ''))
       }
     } catch (error) {
       return {
@@ -93,6 +100,7 @@ export const deleteFileTool = buildTool({
           `删除中断：${error instanceof Error ? error.message : String(error)}` +
           `；已删除 ${deleted}/${targets.length} 个文件，可使用检查点回滚`,
         isError: true,
+        ...(fileChanges.length ? { fileChanges } : {}),
       }
     }
 
@@ -101,6 +109,7 @@ export const deleteFileTool = buildTool({
         ? `已删除 ${targets[0]!.displayPath}`
         : `已删除 ${targets.length} 个文件`,
       isError: false,
+      fileChanges,
     }
   },
 })

@@ -17,6 +17,28 @@ import {
 import { conversationSections } from './conversation-sections.ts'
 
 describe('会话界面时间线重建', () => {
+  it('把持久化的逐文件增删行统计恢复到工具块', () => {
+    const state = createConversationState([
+      core({
+        type: 'tool-start',
+        toolUseId: 'edit-1',
+        toolName: 'EditFile',
+        input: { edits: [{ path: 'src/app.ts', oldText: 'old', newText: 'new' }] },
+      }),
+      core({
+        type: 'tool-end',
+        toolUseId: 'edit-1',
+        result: '已编辑',
+        isError: false,
+        fileChanges: [{ path: 'src/app.ts', added: 1, removed: 1 }],
+      }),
+    ])
+    const block = state.blocks.find((item) => item.kind === 'tool')
+    assert.deepEqual(block?.kind === 'tool' ? block.call.fileChanges : null, [
+      { path: 'src/app.ts', added: 1, removed: 1 },
+    ])
+  })
+
   it('实时工具进度始终保持有界，不把长命令输出带入切换快照', () => {
     let state = createConversationState([
       { type: 'user-message', text: '运行长命令', startsTurn: true },

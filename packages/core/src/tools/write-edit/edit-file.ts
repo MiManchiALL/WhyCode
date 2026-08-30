@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { resolveAllowed } from '../fs-utils.ts'
 import { buildTool, type ToolContext } from '../tool.ts'
 import { makeDiff } from './diff.ts'
+import { describeFileChange } from '../file-changes.ts'
 
 export const EDIT_FILE_TOOL_NAME = 'EditFile'
 
@@ -179,6 +180,8 @@ export const editFileTool = buildTool({
         ? `已编辑 ${input.edits[0]!.path}`
         : `已完成 ${input.edits.length} 处替换，涉及 ${files.length} 个文件`,
       isError: false,
+      fileChanges: files.map((file) =>
+        describeFileChange(file.displayPath, file.original, file.updated)),
     }
   },
 })

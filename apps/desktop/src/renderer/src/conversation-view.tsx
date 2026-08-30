@@ -19,6 +19,12 @@ import {
 } from './conversation-render-cache.ts'
 import { formatFinishedWorkTime, ProcessingTime } from './processing-time.ts'
 import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
+import {
+  presentConversationToolBatches,
+  presentToolBatches,
+  type ToolBatch,
+} from './conversation-tool-batches.ts'
+import { ToolBatchGroup } from './tool-batch-group.tsx'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -58,10 +64,11 @@ export const ConversationView = memo(function ConversationView(props: Conversati
     props.runtimeId,
     props.latestBtwConversationId,
   )
+  const items = presentConversationToolBatches(props.items)
 
   return (
     <>
-      {props.items.map((item) => item.kind === 'section'
+      {items.map((item) => item.kind === 'section'
         ? (
             <ConversationSectionView
               key={item.id}
@@ -69,7 +76,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
               section={item.section}
             />
           )
-        : (
+        : item.kind === 'btw-group' ? (
             <BtwConversationGroup
               key={item.id}
               id={item.id}
@@ -83,6 +90,8 @@ export const ConversationView = memo(function ConversationView(props: Conversati
                 <ConversationSectionView key={section.id} props={props} section={section} />
               ))}
             </BtwConversationGroup>
+          ) : (
+            <ConversationToolBatch key={item.id} props={props} batch={item.batch} />
           ))}
       {props.showThinkingGap && <ThinkingGapIndicator />}
     </>
@@ -117,6 +126,10 @@ function WorkSection({
   const expanded = section.activityBlocks.length > 0
     && props.expandedIds.has(section.id)
   const activityId = `work-activity-${section.id}`
+  const activityItems = presentToolBatches(
+    section.activityBlocks,
+    section.finalBlocks.some((block) => block.kind === 'text'),
+  )
   return (
     <section
       className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}
@@ -145,16 +158,18 @@ function WorkSection({
       />
       {expanded && (
         <div id={activityId}>
-          {section.activityBlocks.map((block) => (
-            <ConversationBlock
-              key={block.id}
-              {...conversationBlockProps(props, block)}
-              renderMath={
-                section.kind === 'active-work'
-                || section.duration.outcome === 'completed'
-              }
-            />
-          ))}
+          {activityItems.map((item) => item.kind === 'tool-batch'
+            ? <ConversationToolBatch key={item.id} props={props} batch={item.batch} />
+            : (
+                <ConversationBlock
+                  key={item.id}
+                  {...conversationBlockProps(props, item.block)}
+                  renderMath={
+                    section.kind === 'active-work'
+                    || section.duration.outcome === 'completed'
+                  }
+                />
+              ))}
         </div>
       )}
       {section.finalBlocks.map((block, index) => (
@@ -179,6 +194,29 @@ function WorkSection({
         />
       ))}
     </section>
+  )
+}
+
+function ConversationToolBatch({
+  props,
+  batch,
+}: {
+  props: ConversationViewProps
+  batch: ToolBatch
+}) {
+  return (
+    <ToolBatchGroup
+      runtimeId={props.runtimeId}
+      batch={batch}
+      expandedIds={props.expandedIds}
+      busy={props.busy}
+      checkpointRestoreAnchorIds={props.checkpointRestoreAnchorIds}
+      checkpointRestoreToolUseId={props.checkpointRestoreToolUseId}
+      skills={props.skills}
+      projectDir={props.projectDir}
+      onCheckpointRestoreChange={props.onCheckpointRestoreChange}
+      onToggle={props.onToggle}
+    />
   )
 }
 

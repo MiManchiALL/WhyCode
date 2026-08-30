@@ -17,7 +17,10 @@ import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 import type { ReasoningEffortSelection } from './providers/catalog.ts'
 import type { SkillLocator, SkillSummary } from './skills/types.ts'
 import type { BtwMode } from './session/btw.ts'
+import type { ToolFileChange } from './tools/file-changes.ts'
 import { unicodeSafeSuffix } from './text.ts'
+
+export type { ToolFileChange } from './tools/file-changes.ts'
 
 /** 工具完整输出由工具日志和模型消息持有；可见时间线只保留有界尾部。 */
 export const MAX_VISIBLE_TOOL_OUTPUT_CHARS = 64 * 1024
@@ -159,7 +162,13 @@ export type CoreEvent =
   | { type: 'thinking-end'; durationMs: number }
   | { type: 'tool-start'; toolUseId: string; toolName: string; input: unknown }
   | { type: 'tool-progress'; toolUseId: string; output: string }
-  | { type: 'tool-end'; toolUseId: string; result: unknown; isError: boolean }
+  | {
+      type: 'tool-end'
+      toolUseId: string
+      result: unknown
+      isError: boolean
+      fileChanges?: ToolFileChange[]
+    }
   /** 视觉工具已把图片安全复制进当前会话；元数据随所属稳定 step 可恢复。 */
   | { type: 'image-viewed'; toolUseId: string; attachments: ImageAttachment[] }
   | {

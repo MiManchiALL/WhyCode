@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { deleteFileTool, moveFileTool } from './file-lifecycle/index.ts'
 import type { ToolContext } from './tool.ts'
-import { editFileTool } from './write-edit/index.ts'
+import { editFileTool, writeFileTool } from './write-edit/index.ts'
 
 const roots: string[] = []
 
@@ -41,6 +41,10 @@ describe('统一精确编辑', () => {
     )
 
     assert.equal(result.isError, false)
+    assert.deepEqual(result.fileChanges, [
+      { path: 'a.ts', added: 2, removed: 2 },
+      { path: 'b.ts', added: 1, removed: 1 },
+    ])
     assert.equal(await readFile(join(ctx.projectDir, 'a.ts'), 'utf8'), 'new one\nnew two\n')
     assert.equal(await readFile(join(ctx.projectDir, 'b.ts'), 'utf8'), 'new b\n')
     const scope = await editFileTool.checkpointScope!(
@@ -142,6 +146,21 @@ describe('统一精确编辑', () => {
       false,
     )
   })
+
+  it('整文件写入按旧内容精确统计新增与删除行', async () => {
+    const ctx = await context()
+    await writeFile(join(ctx.projectDir, 'whole.txt'), 'keep\nbefore\n')
+
+    const result = await writeFileTool.execute(
+      { path: 'whole.txt', content: 'keep\nafter\nextra\n' },
+      ctx,
+    )
+
+    assert.equal(result.isError, false)
+    assert.deepEqual(result.fileChanges, [
+      { path: 'whole.txt', added: 2, removed: 1 },
+    ])
+  })
 })
 
 describe('文件生命周期工具', () => {
@@ -182,6 +201,10 @@ describe('文件生命周期工具', () => {
     const deleted = await deleteFileTool.execute(input, ctx)
     assert.equal(deleted.isError, false)
     assert.equal(deleted.data, '已删除 2 个文件')
+    assert.deepEqual(deleted.fileChanges, [
+      { path: 'delete-a.txt', added: 0, removed: 1 },
+      { path: 'delete-b.txt', added: 0, removed: 1 },
+    ])
     await assert.rejects(readFile(join(ctx.projectDir, 'delete-a.txt')))
     await assert.rejects(readFile(join(ctx.projectDir, 'delete-b.txt')))
   })

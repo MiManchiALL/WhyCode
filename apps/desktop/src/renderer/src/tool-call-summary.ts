@@ -166,11 +166,37 @@ export function toolCallDetails(
   }
 }
 
+/** 文件编辑类工具影响的显示路径；折叠列表按文件拆行时复用同一解析规则。 */
+export function toolCallFilePaths(toolName: string, input: unknown): string[] {
+  const value = record(input)
+  if (!value) return []
+  switch (toolName) {
+    case 'WriteFile': {
+      const path = exactText(value, 'path')
+      return path ? [path] : []
+    }
+    case 'EditFile':
+      return exactEditPaths(value)
+    case 'DeleteFile':
+      return unique(exactStringArray(value, 'paths'))
+    default:
+      return []
+  }
+}
+
 function editPaths(input: ToolInput): string[] {
   const edits = Array.isArray(input.edits)
     ? input.edits.filter((item): item is ToolInput => record(item) !== null)
     : []
   return unique(edits.map((edit) => text(edit, 'path')).filter(Boolean))
+}
+
+/** 文件身份不能复用 UI 摘要截断，否则长路径无法匹配逐文件统计。 */
+function exactEditPaths(input: ToolInput): string[] {
+  const edits = Array.isArray(input.edits)
+    ? input.edits.filter((item): item is ToolInput => record(item) !== null)
+    : []
+  return unique(edits.map((edit) => exactText(edit, 'path')).filter(Boolean))
 }
 
 function fileCount(paths: readonly string[]): string {
@@ -343,6 +369,10 @@ function text(input: ToolInput, key: string): string {
   return typeof input[key] === 'string' ? compact(input[key] as string) : ''
 }
 
+function exactText(input: ToolInput, key: string): string {
+  return typeof input[key] === 'string' ? input[key] as string : ''
+}
+
 function number(input: ToolInput, key: string): number | null {
   return typeof input[key] === 'number' && Number.isFinite(input[key])
     ? input[key] as number
@@ -352,6 +382,12 @@ function number(input: ToolInput, key: string): number | null {
 function stringArray(input: ToolInput, key: string): string[] {
   return Array.isArray(input[key])
     ? input[key].filter((item): item is string => typeof item === 'string').map(compact)
+    : []
+}
+
+function exactStringArray(input: ToolInput, key: string): string[] {
+  return Array.isArray(input[key])
+    ? input[key].filter((item): item is string => typeof item === 'string')
     : []
 }
 

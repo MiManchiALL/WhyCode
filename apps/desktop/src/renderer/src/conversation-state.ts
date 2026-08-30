@@ -12,6 +12,7 @@ import {
   userQuestionAnswerPrefix,
   visibleToolResult,
   type CoreEvent,
+  type ToolFileChange,
   type UserQuestion,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot } from '../../shared/session.ts'
@@ -24,6 +25,8 @@ export interface ToolCall {
   status: 'running' | 'done' | 'error'
   result?: string
   progress: string
+  /** 文件写入工具实际落盘后的逐文件增删行统计。 */
+  fileChanges?: ToolFileChange[]
   /** 有持久化资源检查点；切换会话或重启后仍可回滚。 */
   hasCheckpoint?: boolean
   /** ViewImage 复制进当前会话的稳定图片元数据。 */
@@ -323,6 +326,9 @@ function applyStableCoreEvent(
         ...call,
         status: event.isError ? 'error' : 'done',
         result: visibleToolResult(event.result),
+        ...(event.fileChanges
+          ? { fileChanges: event.fileChanges.map((change) => ({ ...change })) }
+          : {}),
       }))
     case 'image-viewed':
       return updateTool(state, event.toolUseId, (call) => ({

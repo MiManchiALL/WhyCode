@@ -30,11 +30,18 @@ const toolProgressSchema = z.object({
   output: z.string(),
 })
 
+const toolFileChangeSchema = z.object({
+  path: z.string(),
+  added: z.number().int().nonnegative(),
+  removed: z.number().int().nonnegative(),
+}).strict()
+
 const toolEndSchema = z.object({
   type: z.literal('tool-end'),
   toolUseId: z.string(),
   result: z.unknown(),
   isError: z.boolean(),
+  fileChanges: z.array(toolFileChangeSchema).optional(),
 })
 
 const peerInnerEventSchema = z.discriminatedUnion('type', [

@@ -136,6 +136,35 @@ describe('用户可见事件契约', () => {
     assert.match(result as string, /^\[较早的工具输出已省略\]/u)
   })
 
+  it('持久化工具实际落盘后的逐文件行统计并兼容旧事件', () => {
+    const current = toViewEvent({
+      type: 'tool-end',
+      toolUseId: 'edit-1',
+      result: '已编辑',
+      isError: false,
+      fileChanges: [{ path: 'src/app.ts', added: 3, removed: 1 }],
+    })
+    assert.deepEqual(current, {
+      type: 'core-event',
+      event: {
+        type: 'tool-end',
+        toolUseId: 'edit-1',
+        result: '已编辑',
+        isError: false,
+        fileChanges: [{ path: 'src/app.ts', added: 3, removed: 1 }],
+      },
+    })
+    assert.equal(viewEventSchema.safeParse({
+      type: 'core-event',
+      event: {
+        type: 'tool-end',
+        toolUseId: 'legacy-edit',
+        result: 'ok',
+        isError: false,
+      },
+    }).success, true)
+  })
+
   it('拒绝结构不完整的持久化事件', () => {
     assert.equal(
       viewEventSchema.safeParse({ type: 'core-event', event: { type: 'tool-end' } }).success,

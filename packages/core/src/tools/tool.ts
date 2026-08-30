@@ -5,6 +5,7 @@ import {
 } from 'ai'
 import type { ImageAttachment, ImageTransform } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
+import type { ToolFileChange } from './file-changes.ts'
 
 /**
  * WhyCode 工具接口。内置工具继续用 Zod；运行时工具可直接使用带验证器的 JSON Schema。
@@ -74,6 +75,8 @@ export interface ToolResult {
   pdfAttachments?: readonly PdfAttachment[]
   /** 模型读取这些附件时使用的像素策略；不影响持久化原图。 */
   imageTransform?: ImageTransform
+  /** 文件编辑工具实际落盘后的逐文件增删行统计。 */
+  fileChanges?: readonly ToolFileChange[]
 }
 
 const CONSERVATIVE_DEFAULTS = {

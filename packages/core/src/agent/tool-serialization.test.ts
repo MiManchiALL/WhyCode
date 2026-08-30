@@ -352,6 +352,45 @@ describe('工具副作用串行', () => {
     assert.equal(await session.handleUserMessage('运行宿主调度探针'), 'completed')
     assert.deepEqual(scheduled, ['HostScheduledEdit'])
   })
+
+  it('把工具返回的逐文件行统计附加到稳定 tool-end 事件', async () => {
+    const events: CoreEvent[] = []
+    const probe = buildTool({
+      name: 'FileChangeProbe',
+      description: '文件统计探针',
+      prompt: '返回文件统计',
+      inputSchema: z.object({}),
+      isReadOnly: true,
+      kind: 'read',
+      async execute() {
+        return {
+          data: 'ok',
+          isError: false,
+          fileChanges: [{ path: 'src/app.ts', added: 2, removed: 1 }],
+        }
+      },
+    })
+    const model = new MockLanguageModelV4({
+      doStream: [singleToolStep(probe.name, {}), finalStep()],
+    })
+    const session = new AgentSession({
+      model: modelEntry(model),
+      providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+      emit: (event) => events.push(event),
+      requestApproval: async () => ({ approved: false }),
+    })
+    session.setExtraTools([probe])
+
+    assert.equal(await session.handleUserMessage('运行文件统计探针'), 'completed')
+    assert.deepEqual(events.find((event) => event.type === 'tool-end'), {
+      type: 'tool-end',
+      toolUseId: 'single-tool',
+      result: 'ok',
+      isError: false,
+      fileChanges: [{ path: 'src/app.ts', added: 2, removed: 1 }],
+    })
+  })
 })
 
 function parallelToolStep(toolName = 'SerialProbe') {

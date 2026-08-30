@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { makeDiff } from './diff.ts'
+import { describeFileChange } from '../file-changes.ts'
 
 export const WRITE_FILE_TOOL_NAME = 'WriteFile'
 
@@ -33,8 +34,16 @@ export const writeFileTool = buildTool({
   },
   async execute(input, ctx) {
     const abs = resolveAllowed(ctx, input.path)
+    const old = await readFile(abs, 'utf-8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return ''
+      throw error
+    })
     await mkdir(dirname(abs), { recursive: true })
     await writeFile(abs, input.content, 'utf-8')
-    return { data: `已写入 ${input.path}`, isError: false }
+    return {
+      data: `已写入 ${input.path}`,
+      isError: false,
+      fileChanges: [describeFileChange(input.path, old, input.content)],
+    }
   },
 })

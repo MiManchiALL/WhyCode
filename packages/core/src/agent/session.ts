@@ -3120,6 +3120,7 @@ export class AgentSession {
               toolUseId: toolCallId,
               result: result.data,
               isError: result.isError,
+              ...(result.fileChanges?.length ? { fileChanges: [...result.fileChanges] } : {}),
             })
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, !result.isError)

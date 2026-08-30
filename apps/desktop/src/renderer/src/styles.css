@@ -987,6 +987,153 @@ button:not(:disabled),
   background-clip: padding-box;
 }
 
+.wc-tool-batch-summary {
+  color: var(--wc-faint);
+  font-size: 14px;
+  line-height: 22px;
+  transition: color 120ms ease;
+}
+
+.wc-tool-batch-summary:hover {
+  color: var(--wc-muted);
+}
+
+.wc-tool-batch-list {
+  padding-block: 0.125rem;
+}
+
+.wc-tool-batch-row {
+  color: var(--wc-faint);
+  font-size: 13px;
+  line-height: 20px;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.wc-tool-batch-row:hover {
+  background: rgb(48 50 45 / 3.5%);
+  color: var(--wc-ink);
+}
+
+.wc-tool-batch-chevron {
+  opacity: 0;
+  transition: opacity 120ms ease, transform 140ms ease;
+}
+
+.wc-tool-batch-row:hover .wc-tool-batch-chevron,
+.wc-tool-batch-row:focus-visible .wc-tool-batch-chevron {
+  opacity: 1;
+}
+
+.wc-tool-batch-item[data-error='true'] .wc-tool-batch-row {
+  color: rgb(185 95 91 / 72%);
+}
+
+.wc-tool-batch-item[data-error='true'] .wc-tool-batch-row:hover {
+  color: var(--wc-danger);
+}
+
+.wc-tool-batch-item[data-error='true'] .wc-tool-lines-added,
+.wc-tool-batch-item[data-error='true'] .wc-tool-lines-removed {
+  color: inherit;
+}
+
+.wc-tool-lines-added {
+  color: #55815b;
+}
+
+.wc-tool-lines-removed {
+  color: #aa6a62;
+}
+
+.wc-tool-batch-item:not([data-error='true']) .wc-tool-batch-row:hover .wc-tool-lines-added,
+.wc-tool-batch-item:not([data-error='true']) .wc-tool-batch-row:focus-visible .wc-tool-lines-added {
+  color: #3f7d4a;
+}
+
+.wc-tool-batch-item:not([data-error='true']) .wc-tool-batch-row:hover .wc-tool-lines-removed,
+.wc-tool-batch-item:not([data-error='true']) .wc-tool-batch-row:focus-visible .wc-tool-lines-removed {
+  color: #a9534b;
+}
+
+.wc-tool-file-name {
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, currentColor, transparent 58%);
+  text-underline-offset: 2px;
+}
+
+.wc-tool-file-path-tooltip {
+  position: fixed;
+  z-index: 80;
+  max-width: min(28rem, calc(100vw - 1.5rem));
+  padding: 0.5rem 0.7rem;
+  border: 1px solid rgb(255 255 255 / 7%);
+  border-radius: 0.75rem;
+  background: #202225;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  color: #f7f7f5;
+  font-family: var(--wc-font-family-code);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.wc-tool-batch-details {
+  --wc-tool-batch-detail-bg: color-mix(in srgb, var(--wc-surface), var(--wc-ink) 3.5%);
+  border: 1px solid rgb(48 50 45 / 9%);
+  background: var(--wc-tool-batch-detail-bg);
+  color: var(--wc-muted);
+}
+
+.wc-tool-batch-details .wc-scroll-fade {
+  --wc-scroll-fade-color: var(--wc-tool-batch-detail-bg);
+}
+
+.wc-tool-copy-button {
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+
+.wc-tool-copy-scope:hover > .wc-tool-copy-button,
+.wc-tool-copy-button:focus-visible {
+  opacity: 1;
+}
+
+.wc-scroll-fade-top,
+.wc-scroll-fade-bottom {
+  position: absolute;
+  z-index: 2;
+  right: 0.6rem;
+  left: 0;
+  height: 1.25rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.wc-scroll-fade-top {
+  top: 0;
+  background: linear-gradient(
+    to bottom,
+    var(--wc-scroll-fade-color, var(--wc-surface)) 0%,
+    rgb(253 253 251 / 0%) 100%
+  );
+}
+
+.wc-scroll-fade-bottom {
+  bottom: 0;
+  background: linear-gradient(
+    to top,
+    var(--wc-scroll-fade-color, var(--wc-surface)) 0%,
+    rgb(253 253 251 / 0%) 100%
+  );
+}
+
+.wc-scroll-fade[data-fade-top='true'] > .wc-scroll-fade-top,
+.wc-scroll-fade[data-fade-bottom='true'] > .wc-scroll-fade-bottom {
+  opacity: 0.94;
+}
+
 .wc-settings input:not([type='checkbox']),
 .wc-settings textarea {
   border-color: var(--wc-line-strong);

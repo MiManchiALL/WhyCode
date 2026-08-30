@@ -182,7 +182,7 @@ export function BlockView({
   )
 }
 
-function RestoreButton({
+export function RestoreButton({
   runtimeId,
   toolUseId,
   busy,
