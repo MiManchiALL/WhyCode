@@ -1,4 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  MessageChannelMain,
+  net,
+  safeStorage,
+  shell,
+  type WebContents,
+} from 'electron'
 import { randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -138,6 +148,7 @@ import type {
   NewSessionResult,
   ResumeSessionResult,
   RuntimeSnapshot,
+  RuntimeEventBatch,
   RuntimeEventEnvelope,
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
@@ -189,6 +200,9 @@ import {
 import { importWebPdfDocument } from './web-page/pdf-import.ts'
 import { installExternalWebLinkHandlers } from './external-link.ts'
 import { createRendererCrashRecoveryController } from './renderer-crash-recovery.ts'
+import { RuntimeEventBatcher } from './runtime-event-batcher.ts'
+import { isBackgroundRuntimeLifecycleEvent } from './runtime-event-delivery.ts'
+import { RuntimeEventPortHub } from './runtime-event-port-hub.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import { projectSessionListItems } from './session-list.ts'
 import { SessionSidebarStateStore } from './session-sidebar-state.ts'
@@ -330,6 +344,8 @@ function createWindow(): BrowserWindow {
       + (recoveryScheduled ? '已安排从运行时快照恢复' : '未安排恢复'),
     )
   })
+  const webContentsId = win.webContents.id
+  win.webContents.once('destroyed', () => runtimeEventPorts.detach(webContentsId))
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -345,15 +361,19 @@ function broadcastRuntimeEvent(
   occurredAt: string,
 ): void {
   if (event.type === 'work-finished') runtimeRegistry.markWorkFinished(runtime)
-  const envelope: RuntimeEventEnvelope = {
-    runtimeId: runtime.runtimeId,
-    sessionId: runtime.sessionId,
-    sequence: ++runtimeEventSequence,
-    occurredAt,
-    event: compactVisibleCoreEvent(event),
-  }
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(IPC.event, envelope)
+  const sequence = ++runtimeEventSequence
+  if (
+    runtimeRegistry.selected === runtime
+    || isBackgroundRuntimeLifecycleEvent(event)
+  ) {
+    const envelope: RuntimeEventEnvelope = {
+      runtimeId: runtime.runtimeId,
+      sessionId: runtime.sessionId,
+      sequence,
+      occurredAt,
+      event: compactVisibleCoreEvent(event),
+    }
+    runtimeEventBatcher.push(envelope)
   }
   if (
     event.type === 'agent-status'
@@ -361,6 +381,24 @@ function broadcastRuntimeEvent(
   ) {
     runtimeRegistry.runtimeBecameIdle(runtime)
     nudgeNotificationQueues()
+  }
+}
+
+function publishRuntimeEventBatch(events: RuntimeEventBatch): void {
+  runtimeEventPorts.publish(events)
+}
+
+function provideRuntimeEventPort(sender: WebContents): void {
+  const owner = BrowserWindow.fromWebContents(sender)
+  if (!owner || owner.isDestroyed() || sender.isDestroyed()) return
+  const channel = new MessageChannelMain()
+  try {
+    runtimeEventPorts.attach(sender.id, channel.port2)
+    sender.postMessage(IPC.runtimeEventPort, null, [channel.port1])
+  } catch (error) {
+    runtimeEventPorts.detach(sender.id)
+    channel.port1.close()
+    console.warn('运行时事件端口创建失败：', error)
   }
 }
 
@@ -417,6 +455,12 @@ function nudgeNotificationQueues(): void {
 let defaultWorkspaceDir: string | null = null
 /** Renderer 可以重载，权威运行态必须保留在不会随页面消失的主进程。 */
 let runtimeEventSequence = 0
+const runtimeEventPorts = new RuntimeEventPortHub({
+  onPublishError: (error) => console.warn('运行时事件端口推送失败：', error),
+})
+const runtimeEventBatcher = new RuntimeEventBatcher({
+  publish: publishRuntimeEventBatch,
+})
 // --- 多 Agent 协商（M3）---
 /** M4：JSONL 会话仓库；app ready 后用 userData/sessions 初始化 */
 let sessions: DesktopSessionRepository
@@ -2019,8 +2063,8 @@ async function runtimeSnapshot(
 ): Promise<RuntimeSnapshot> {
   const journal = runtime.journal
   const timeline = journal
-    ? await runtime.timeline.snapshotAt(journal, () => runtimeEventSequence)
-    : { events: [], eventTimestamps: [], boundary: runtimeEventSequence }
+    ? await runtime.timeline.snapshotAt(journal, readRuntimeEventBoundary)
+    : { events: [], eventTimestamps: [], boundary: readRuntimeEventBoundary() }
   const busy = runtimeBusy(runtime)
   const checkpointRestoreToolUseId = runtime.checkpointRestoreToolUseId
   const deletingThisSession = Boolean(
@@ -2063,6 +2107,12 @@ async function runtimeSnapshot(
     backgroundTasks,
     subagents: subagentState,
   }
+}
+
+/** 快照与实时流共享同一同步游标；批次不得横跨这个恢复边界。 */
+function readRuntimeEventBoundary(): number {
+  runtimeEventBatcher.flush()
+  return runtimeEventSequence
 }
 
 /**
@@ -2776,6 +2826,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
   )
   await commandSessions.initialize()
   await subagents.initialize()
+  ipcMain.on(IPC.runtimeEventPortRequest, (event) => {
+    if (event.senderFrame !== event.sender.mainFrame) return
+    provideRuntimeEventPort(event.sender)
+  })
   ipcMain.handle(IPC.command, (_e, envelope: RuntimeCommandEnvelope) => {
     if (
       !envelope
@@ -2971,6 +3025,8 @@ app.on('window-all-closed', () => {
 
 let shutdownStarted = false
 app.on('before-quit', (event) => {
+  runtimeEventBatcher.flush()
+  runtimeEventPorts.closeAll()
   if (shutdownStarted || !commandSessions) return
   event.preventDefault()
   shutdownStarted = true

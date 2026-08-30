@@ -8,6 +8,7 @@ import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
+import { StreamingPlainText } from './streaming-plain-text.tsx'
 import {
   summarizeToolCallParts,
   toolCallDetails,
@@ -112,9 +113,11 @@ export function BlockView({
           {streaming ? '思考中…' : `思考了 ${(block.durationMs! / 1000).toFixed(1)}s ${open ? '▾' : '▸'}`}
         </button>
         {open && (
-          <div className="mt-1 whitespace-pre-wrap border-l-2 border-[var(--wc-line)] pl-3 text-xs leading-5 text-[var(--wc-faint)]">
-            {block.text}
-          </div>
+          <StreamingPlainText
+            text={block.text}
+            resetKey={`${runtimeId}:${block.id}`}
+            className="mt-1 whitespace-pre-wrap border-l-2 border-[var(--wc-line)] pl-3 text-xs leading-5 text-[var(--wc-faint)]"
+          />
         )}
       </div>
     )

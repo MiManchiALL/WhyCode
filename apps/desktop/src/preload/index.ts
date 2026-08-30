@@ -1,8 +1,12 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import {
+  contextBridge,
+  ipcRenderer,
+  webUtils,
+  type IpcRendererEvent,
+} from 'electron'
 import type {
   BackgroundTaskState,
   CoreCommand,
-  CoreEvent,
   SkillCatalogSnapshot,
   SubagentEventEnvelope,
   SubagentState,
@@ -17,7 +21,6 @@ import type {
   NewSessionResult,
   ResumeSessionResult,
   RuntimeSnapshot,
-  RuntimeEventEnvelope,
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
   SessionDeletionState,
@@ -45,6 +48,66 @@ import type {
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
+import {
+  RUNTIME_EVENT_PORT_READY_MESSAGE,
+  RUNTIME_EVENT_PORT_REQUEST_MESSAGE,
+} from '../shared/runtime-event-port.ts'
+
+type PreloadMessagePort = IpcRendererEvent['ports'][number]
+
+interface PreloadWindowMessageEvent {
+  source: unknown
+  data: unknown
+}
+
+interface PreloadWindow {
+  addEventListener: (
+    type: 'message',
+    listener: (event: PreloadWindowMessageEvent) => void,
+  ) => void
+  postMessage: (
+    message: string,
+    targetOrigin: string,
+    transfer?: PreloadMessagePort[],
+  ) => void
+}
+
+const preloadWindow = globalThis as unknown as PreloadWindow
+let pendingRuntimeEventPort: PreloadMessagePort | null = null
+let rendererWaitingForRuntimeEventPort = false
+let runtimeEventPortRequestInFlight = false
+
+function deliverRuntimeEventPort(): void {
+  if (!rendererWaitingForRuntimeEventPort || !pendingRuntimeEventPort) return
+  const port = pendingRuntimeEventPort
+  pendingRuntimeEventPort = null
+  rendererWaitingForRuntimeEventPort = false
+  preloadWindow.postMessage(RUNTIME_EVENT_PORT_READY_MESSAGE, '*', [port])
+}
+
+ipcRenderer.on(IPC.runtimeEventPort, (event) => {
+  runtimeEventPortRequestInFlight = false
+  const port = event.ports[0]
+  if (!port) return
+  pendingRuntimeEventPort?.close()
+  pendingRuntimeEventPort = port
+  deliverRuntimeEventPort()
+})
+
+preloadWindow.addEventListener('message', (event) => {
+  if (
+    event.source !== globalThis
+    || event.data !== RUNTIME_EVENT_PORT_REQUEST_MESSAGE
+  ) return
+  rendererWaitingForRuntimeEventPort = true
+  if (pendingRuntimeEventPort) {
+    deliverRuntimeEventPort()
+    return
+  }
+  if (runtimeEventPortRequestInFlight) return
+  runtimeEventPortRequestInFlight = true
+  ipcRenderer.send(IPC.runtimeEventPortRequest)
+})
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
@@ -143,27 +206,6 @@ const api = {
     attachmentId: string,
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.openPdfAttachment, runtimeId, attachmentId),
-  onEvent: (
-    listener: (
-      event: CoreEvent,
-      sequence: number,
-      runtimeId: string,
-      sessionId: string | null,
-      occurredAt: string,
-    ) => void,
-  ): (() => void) => {
-    const wrapped = (_: unknown, envelope: RuntimeEventEnvelope) => {
-      listener(
-        envelope.event,
-        envelope.sequence,
-        envelope.runtimeId,
-        envelope.sessionId,
-        envelope.occurredAt,
-      )
-    }
-    ipcRenderer.on(IPC.event, wrapped)
-    return () => ipcRenderer.off(IPC.event, wrapped)
-  },
   onBackgroundTasks: (
     listener: (state: BackgroundTaskState) => void,
   ): (() => void) => {
