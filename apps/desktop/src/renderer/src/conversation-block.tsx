@@ -8,6 +8,7 @@ import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
+import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { StreamingPlainText } from './streaming-plain-text.tsx'
 import {
   summarizeToolCallParts,
@@ -113,11 +114,18 @@ export function BlockView({
           {streaming ? '思考中…' : `思考了 ${(block.durationMs! / 1000).toFixed(1)}s ${open ? '▾' : '▸'}`}
         </button>
         {open && (
-          <StreamingPlainText
-            text={block.text}
-            resetKey={`${runtimeId}:${block.id}`}
-            className="mt-1 whitespace-pre-wrap border-l-2 border-[var(--wc-line)] pl-3 text-xs leading-5 text-[var(--wc-faint)]"
-          />
+          <div className="mt-1">
+            <FadedScrollArea
+              className="wc-scrollbar max-h-[min(22rem,42vh)] overflow-y-auto pr-2"
+              followEnd={streaming}
+            >
+              <StreamingPlainText
+                text={block.text}
+                resetKey={`${runtimeId}:${block.id}`}
+                className="whitespace-pre-wrap border-l-2 border-[var(--wc-line)] pb-0.5 pl-3 text-xs leading-5 text-[var(--wc-faint)]"
+              />
+            </FadedScrollArea>
+          </div>
         )}
       </div>
     )

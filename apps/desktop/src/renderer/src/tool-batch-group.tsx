@@ -6,10 +6,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import {
-  type ReactNode,
-  useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
 } from 'react'
@@ -24,6 +21,7 @@ import {
   type ToolBatchCategory,
   type ToolBatchRow,
 } from './conversation-tool-batches.ts'
+import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { UserImageGallery } from './image-attachments.tsx'
 import { CopyButton } from './message-actions.tsx'
 import { toolCallDetails } from './tool-call-summary.ts'
@@ -278,50 +276,6 @@ function FilePathLabel({ name, path }: { name: string; path: string }) {
         document.body,
       ) : null}
     </>
-  )
-}
-
-function FadedScrollArea({
-  id,
-  className,
-  children,
-}: {
-  id?: string
-  className: string
-  children: ReactNode
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [fades, setFades] = useState({ top: false, bottom: false })
-  const update = useCallback(() => {
-    const element = ref.current
-    if (!element) return
-    const next = {
-      top: element.scrollTop > 1,
-      bottom: element.scrollTop + element.clientHeight < element.scrollHeight - 1,
-    }
-    setFades((previous) => previous.top === next.top && previous.bottom === next.bottom
-      ? previous
-      : next)
-  }, [])
-  useLayoutEffect(() => {
-    update()
-    const element = ref.current
-    if (!element) return
-    const observer = new ResizeObserver(update)
-    observer.observe(element)
-    if (element.firstElementChild) observer.observe(element.firstElementChild)
-    return () => observer.disconnect()
-  })
-  return (
-    <div
-      className="wc-scroll-fade relative"
-      data-fade-top={fades.top ? 'true' : 'false'}
-      data-fade-bottom={fades.bottom ? 'true' : 'false'}
-    >
-      <div ref={ref} id={id} className={className} onScroll={update}>{children}</div>
-      <span aria-hidden="true" className="wc-scroll-fade-top" />
-      <span aria-hidden="true" className="wc-scroll-fade-bottom" />
-    </div>
   )
 }
 
