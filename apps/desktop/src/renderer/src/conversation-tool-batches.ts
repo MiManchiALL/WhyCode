@@ -149,10 +149,10 @@ export function summarizeToolBatch(batch: ToolBatch): ToolBatchSummary {
   const hasCommand = categories.has('command')
   const hasOther = categories.has('other')
   let label: string
-  if (hasFiles && hasCommand && hasOther) label = '编辑了文件运行了命令并调用了工具'
-  else if (hasFiles && hasCommand) label = '编辑了文件并运行了命令'
-  else if (hasFiles && hasOther) label = '编辑了文件并调用了工具'
-  else if (hasCommand && hasOther) label = '运行了命令并调用了工具'
+  if (hasFiles && hasCommand && hasOther) label = '编辑文件运行命令并调用了工具'
+  else if (hasFiles && hasCommand) label = '编辑文件并运行了命令'
+  else if (hasFiles && hasOther) label = '编辑文件并调用了工具'
+  else if (hasCommand && hasOther) label = '运行命令并调用了工具'
   else if (hasFiles) label = '编辑了文件'
   else if (hasCommand) label = '运行了命令'
   else label = '调用了工具'

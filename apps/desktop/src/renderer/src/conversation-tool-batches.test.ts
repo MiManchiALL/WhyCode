@@ -150,7 +150,7 @@ describe('工具批次折叠投影', () => {
       tool('read', 'ReadFile'),
     ])
     assert.deepEqual(summarizeToolBatch(batch), {
-      label: '编辑了文件运行了命令并调用了工具',
+      label: '编辑文件运行命令并调用了工具',
       icon: 'files',
     })
   })
@@ -160,9 +160,9 @@ describe('工具批次折叠投影', () => {
       [['WriteFile'], '编辑了文件', 'files'],
       [['RunCommand'], '运行了命令', 'command'],
       [['ReadFile'], '调用了工具', 'other'],
-      [['EditFile', 'RunCommand'], '编辑了文件并运行了命令', 'files'],
-      [['DeleteFile', 'Glob'], '编辑了文件并调用了工具', 'files'],
-      [['RunCommand', 'Grep'], '运行了命令并调用了工具', 'command'],
+      [['EditFile', 'RunCommand'], '编辑文件并运行了命令', 'files'],
+      [['DeleteFile', 'Glob'], '编辑文件并调用了工具', 'files'],
+      [['RunCommand', 'Grep'], '运行命令并调用了工具', 'command'],
     ]
     for (const [names, label, icon] of cases) {
       const summary = summarizeToolBatch(makeBatch(names.map((name, index) =>
