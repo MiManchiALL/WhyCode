@@ -6,7 +6,11 @@ import {
   type ReactNode,
 } from 'react'
 import type { Block } from './conversation-state.ts'
-import type { ToolBatch, ToolBatchSegment } from './conversation-tool-batches.ts'
+import {
+  presentToolSegmentContent,
+  type ToolBatch,
+  type ToolBatchSegment,
+} from './conversation-tool-batches.ts'
 
 export function ToolBatchSegmentView({
   segment,
@@ -128,21 +132,11 @@ function ToolSegmentContent({
   renderBlock: (block: Block) => ReactNode
   renderBatch: (batch: ToolBatch) => ReactNode
 }) {
-  if (!sealed) {
-    return segment.blocks.map((block) => (
-      <Fragment key={block.id}>{renderBlock(block)}</Fragment>
-    ))
-  }
-
-  let renderedBatch = false
-  return segment.blocks.map((block) => {
-    if (block.kind !== 'tool') {
-      return <Fragment key={block.id}>{renderBlock(block)}</Fragment>
-    }
-    if (renderedBatch) return null
-    renderedBatch = true
-    return <Fragment key={segment.batch.id}>{renderBatch(segment.batch)}</Fragment>
-  })
+  return presentToolSegmentContent(segment, sealed).map((item) => (
+    <Fragment key={item.id}>
+      {item.kind === 'block' ? renderBlock(item.block) : renderBatch(item.batch)}
+    </Fragment>
+  ))
 }
 
 function cancelAnimations(ref: { current: Animation[] }): void {

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import type { Block } from './conversation-state.ts'
 import {
   presentToolBatches,
+  presentToolSegmentContent,
   summarizeToolBatch,
   toolBatchRows,
   type ToolBatch,
@@ -57,6 +58,72 @@ describe('工具批次折叠投影', () => {
     assert.equal(open?.id, sealed?.id)
     assert.equal(open?.kind === 'tool-segment' ? open.sealed : null, false)
     assert.equal(sealed?.kind === 'tool-segment' ? sealed.sealed : null, true)
+  })
+
+  it('没有工具时直接合并最终可见的相邻思考', () => {
+    const result = presentToolBatches([
+      thinking('thinking-1', '先定位', 3_000),
+      thinking('thinking-2', '再确认', 2_000),
+    ])
+
+    assert.equal(result.length, 1)
+    const merged = result[0]?.kind === 'block' ? result[0].block : null
+    assert.deepEqual(merged, {
+      kind: 'thinking',
+      id: 'thinking-1',
+      text: '先定位\n\n再确认',
+      durationMs: 5_000,
+    })
+  })
+
+  it('按真实工具折叠后的可见顺序合并思考', () => {
+    const [item] = presentToolBatches([
+      tool('skill-1', 'Skill'),
+      thinking('thinking-1', '规划目录扫描', 3_728),
+      tool('skill-2', 'Skill'),
+      tool('skill-3', 'Skill'),
+      tool('skill-4', 'Skill'),
+      tool('list-1', 'ListDir'),
+      thinking('thinking-2', '检查仓库细节', 466),
+      thinking('thinking-3', '整理任务计划', 37),
+    ], true)
+    assert.equal(item?.kind, 'tool-segment')
+    if (item?.kind !== 'tool-segment') return
+
+    const sealed = presentToolSegmentContent(item, true)
+    assert.deepEqual(sealed.map((entry) => [entry.kind, entry.id]), [
+      ['tool-batch', 'tool-batch-skill-1'],
+      ['block', 'thinking-1'],
+    ])
+    const merged = sealed[1]?.kind === 'block' ? sealed[1].block : null
+    assert.deepEqual(merged, {
+      kind: 'thinking',
+      id: 'thinking-1',
+      text: '规划目录扫描\n\n检查仓库细节\n\n整理任务计划',
+      durationMs: 4_231,
+    })
+  })
+
+  it('未封口工具仍是思考合并的可见边界', () => {
+    const [item] = presentToolBatches([
+      tool('read-1', 'ReadFile'),
+      thinking('thinking-1', '第一段', 3_000),
+      tool('read-2', 'ReadFile'),
+      thinking('thinking-2', '第二段', 400),
+      thinking('thinking-3', '第三段', 100),
+    ])
+    assert.equal(item?.kind, 'tool-segment')
+    if (item?.kind !== 'tool-segment') return
+
+    const open = presentToolSegmentContent(item, false)
+    assert.deepEqual(open.map((entry) => [entry.kind, entry.id]), [
+      ['block', 'block-read-1'],
+      ['block', 'thinking-1'],
+      ['block', 'block-read-2'],
+      ['block', 'thinking-2'],
+    ])
+    const merged = open[3]?.kind === 'block' ? open[3].block : null
+    assert.equal(merged?.kind === 'thinking' ? merged.durationMs : null, 500)
   })
 
   it('用户消息是硬边界，不把两个 turn 的工具混为一批', () => {
@@ -190,6 +257,14 @@ describe('工具批次折叠投影', () => {
 
 function text(id: string, value: string): Extract<Block, { kind: 'text' }> {
   return { kind: 'text', id, text: value, phase: 'activity' }
+}
+
+function thinking(
+  id: string,
+  value: string,
+  durationMs: number | null,
+): Extract<Block, { kind: 'thinking' }> {
+  return { kind: 'thinking', id, text: value, durationMs }
 }
 
 function tool(

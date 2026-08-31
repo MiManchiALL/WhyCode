@@ -29,6 +29,10 @@ export type ConversationToolBatchDisplayItem =
   | ConversationDisplayItem
   | ToolBatchSegment
 
+export type ToolSegmentContentItem =
+  | { kind: 'block'; id: string; block: Block }
+  | { kind: 'tool-batch'; id: string; batch: ToolBatch }
+
 export type ToolBatchCategory = 'files' | 'command' | 'other'
 
 export interface ToolBatchSummary {
@@ -113,6 +117,30 @@ export function presentConversationToolBatches(
   return result
 }
 
+/**
+ * ToolSegment 最终渲染顺序的纯投影。未封口时保留每张工具卡；封口后只保留
+ * 第一处批次摘要，再按此时真正可见的顺序合并相邻思考。
+ */
+export function presentToolSegmentContent(
+  segment: ToolBatchSegment,
+  sealed: boolean,
+): ToolSegmentContentItem[] {
+  const result: ToolSegmentContentItem[] = []
+  let renderedBatch = false
+
+  for (const block of segment.blocks) {
+    if (sealed && block.kind === 'tool') {
+      if (!renderedBatch) {
+        result.push({ kind: 'tool-batch', id: segment.batch.id, batch: segment.batch })
+        renderedBatch = true
+      }
+      continue
+    }
+    appendVisibleBlock(result, block)
+  }
+  return result
+}
+
 export function summarizeToolBatch(batch: ToolBatch): ToolBatchSummary {
   const categories = new Set<ToolBatchCategory>()
   for (const { call } of batch.tools) categories.add(toolCategory(call.name))
@@ -183,7 +211,9 @@ function appendSegment(
 ): void {
   const tools = blocks.filter((block): block is ToolBlock => block.kind === 'tool')
   if (tools.length === 0) {
-    for (const block of blocks) target.push({ kind: 'block', id: block.id, block })
+    for (const block of mergeAdjacentThinkingBlocks(blocks)) {
+      target.push({ kind: 'block', id: block.id, block })
+    }
     return
   }
 
@@ -196,6 +226,52 @@ function appendSegment(
     batch: { id, tools },
     sealed,
   })
+}
+
+function appendVisibleBlock(target: ToolSegmentContentItem[], block: Block): void {
+  const last = target.at(-1)
+  if (
+    last?.kind === 'block'
+    && last.block.kind === 'thinking'
+    && block.kind === 'thinking'
+  ) {
+    last.block = mergeThinkingBlocks(last.block, block)
+    return
+  }
+  target.push({ kind: 'block', id: block.id, block })
+}
+
+function mergeAdjacentThinkingBlocks(blocks: readonly Block[]): Block[] {
+  const result: Block[] = []
+  for (const block of blocks) {
+    const last = result.at(-1)
+    if (last?.kind === 'thinking' && block.kind === 'thinking') {
+      result[result.length - 1] = mergeThinkingBlocks(last, block)
+    } else {
+      result.push(block)
+    }
+  }
+  return result
+}
+
+function mergeThinkingBlocks(
+  first: Extract<Block, { kind: 'thinking' }>,
+  next: Extract<Block, { kind: 'thinking' }>,
+): Extract<Block, { kind: 'thinking' }> {
+  return {
+    ...first,
+    text: appendThinkingText(first.text, next.text),
+    durationMs: first.durationMs === null || next.durationMs === null
+      ? null
+      : first.durationMs + next.durationMs,
+  }
+}
+
+function appendThinkingText(current: string, next: string): string {
+  if (!current || !next || current.endsWith('\n') || next.startsWith('\n')) {
+    return current + next
+  }
+  return `${current}\n\n${next}`
 }
 
 function toolSummary(

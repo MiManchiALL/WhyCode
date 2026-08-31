@@ -386,6 +386,8 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。
 
+Renderer 在工具折叠等展示投影完成后，把最终可见序列中相邻的思考片段合并为同一块，按顺序追加内容并累计已完成时长；仍可见的正文、工具、用户消息等构成合并边界。原始 Block 顺序、持久事件和 Provider 回传均保持不变。
+
 推理展示与计算强度独立：
 
 - `reasoningExposure` 决定是否存在 block/field/summary；
