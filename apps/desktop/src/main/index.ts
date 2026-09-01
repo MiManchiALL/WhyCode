@@ -938,6 +938,7 @@ function createCoordinator(
     onTaskEnd: (taskId, outcome, state) =>
       journal.recordConsensusTaskEnd(taskId, outcome, state),
     onInputsRestored: (inputIds) => journal.markUserInputsRestored(inputIds),
+    onInputsDiscarded: (inputIds) => journal.markUserInputsDiscarded(inputIds),
     onDeferredTaskStart: () => runtime.beginWork(),
   })
   return { ok: true, value }
@@ -961,6 +962,8 @@ async function handleCommand(
   switch (command.type) {
     case 'user-message':
       return handleUserMessageCommand(runtime, command)
+    case 'queued-message-action':
+      return handleQueuedMessageAction(runtime, command)
     case 'btw-message':
       return handleBtwMessageCommand(runtime, command)
     case 'edit-user-message':
@@ -1362,6 +1365,44 @@ async function handleUserMessageCommand(
     // 若后台终态正因 AskUserQuestion 等待真实回答，此时用户输入已优先完成路由，
     // 可在下一稳定步骤边界把通知交给同一 Agent，而不占用第二套轮询或计时器。
     nudgeNotificationQueues()
+  }
+}
+
+async function handleQueuedMessageAction(
+  runtime: DesktopSessionRuntime,
+  command: Extract<CoreCommand, { type: 'queued-message-action' }>,
+): Promise<RuntimeCommandResult> {
+  const reservation = runtime.routingGate.reserve()
+  try {
+    await reservation.ready
+    const target = runtime.coordinator ?? runtime.session
+    if (!target) {
+      runtime.emit({ type: 'error', message: '当前会话尚未就绪，无法操作排队消息', recoverable: true })
+      return { ok: false, workspace: runtime.workspace }
+    }
+    const handled = command.action === 'edit'
+      ? await target.restoreQueuedMessage(command.id)
+      : command.action === 'discard'
+        ? await target.discardQueuedMessage(command.id)
+        : target.sendQueuedMessageNow(command.id)
+    if (handled) return { ok: true, workspace: runtime.workspace }
+
+    // 消息可能恰好在点击时完成注入；事实源已不再排队就视为幂等成功。
+    const stillQueued = runtime.journal?.pendingUserInputs.some(
+      (input) => input.id === command.id && input.state === 'queued',
+    ) ?? false
+    if (!stillQueued) return { ok: true, workspace: runtime.workspace }
+    runtime.emit({ type: 'error', message: '排队消息状态已经变化，请重试', recoverable: true })
+    return { ok: false, workspace: runtime.workspace }
+  } catch (error) {
+    runtime.emit({
+      type: 'error',
+      message: `排队消息操作失败：${error instanceof Error ? error.message : String(error)}`,
+      recoverable: true,
+    })
+    return { ok: false, workspace: runtime.workspace }
+  } finally {
+    reservation.release()
   }
 }
 

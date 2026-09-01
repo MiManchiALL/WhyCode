@@ -69,7 +69,12 @@ export function presentToolBatches(
   }
 
   for (const block of blocks) {
-    if (block.kind === 'user' || block.kind === 'work-duration') {
+    if (block.kind === 'user') {
+      flush(true)
+      presented.push({ kind: 'block', id: block.id, block })
+      continue
+    }
+    if (block.kind === 'work-duration') {
       flush(false)
       presented.push({ kind: 'block', id: block.id, block })
       continue

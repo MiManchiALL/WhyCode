@@ -207,6 +207,81 @@ describe('忙时图片 steering', () => {
       assert.doesNotMatch(transcript, /iVBORw0KGgo/)
     })
   })
+
+  it('可单独编辑或丢弃仍在运行步骤后的排队消息', async () => {
+    await withImageSession(async ({ store, journal }) => {
+      const firstStarted = deferred<void>()
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          firstStarted.resolve()
+          await aborted(options.abortSignal)
+          return finalStep('不会提交。')
+        },
+      })
+      const events: CoreEvent[] = []
+      const session = createSession(model, journal, events)
+      await journal.recordUserInput('开始', true)
+      const running = session.handleUserMessage('开始')
+      await firstStarted.promise
+
+      const editId = randomUUID()
+      const discardId = randomUUID()
+      await journal.recordUserInputWithId(editId, '重新编辑我', false)
+      session.handleUserMessage('重新编辑我', false, [], editId)
+      await journal.recordUserInputWithId(discardId, '丢弃我', false)
+      session.handleUserMessage('丢弃我', false, [], discardId)
+
+      assert.equal(await session.restoreQueuedMessage(editId), true)
+      assert.equal(await session.discardQueuedMessage(discardId), true)
+      assert.deepEqual(journal.pendingUserInputs.map(({ id, state }) => ({ id, state })), [
+        { id: editId, state: 'restored' },
+      ])
+      assert.equal(events.some((event) =>
+        event.type === 'queue-restored' && event.items?.[0]?.id === editId), true)
+      assert.equal(events.some((event) =>
+        event.type === 'message-dequeued' && event.id === discardId), true)
+
+      session.abort()
+      assert.equal(await running, 'aborted')
+      const reopened = await store.open(journal.sessionId)
+      assert.deepEqual(reopened.pendingUserInputs.map(({ id, state }) => ({ id, state })), [
+        { id: editId, state: 'restored' },
+      ])
+    })
+  })
+
+  it('马上发送会复用 urgent steering 并中断当前模型步骤', async () => {
+    await withImageSession(async ({ journal }) => {
+      const firstStarted = deferred<void>()
+      let call = 0
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          call++
+          if (call === 1) {
+            firstStarted.resolve()
+            await aborted(options.abortSignal)
+            return finalStep('这段不应提交。')
+          }
+          assert.match(JSON.stringify(options.prompt), /现在发送/)
+          return finalStep('已处理插话。')
+        },
+      })
+      const events: CoreEvent[] = []
+      const session = createSession(model, journal, events)
+      await journal.recordUserInput('开始', true)
+      const running = session.handleUserMessage('开始')
+      await firstStarted.promise
+      const inputId = randomUUID()
+      await journal.recordUserInputWithId(inputId, '现在发送', false)
+      session.handleUserMessage('现在发送', false, [], inputId)
+
+      assert.equal(session.sendQueuedMessageNow(inputId), true)
+      assert.equal(await running, 'completed')
+      assert.equal(call, 2)
+      assert.equal(events.some((event) =>
+        event.type === 'message-injected' && event.id === inputId), true)
+    })
+  })
 })
 
 async function withImageSession(run: (context: {

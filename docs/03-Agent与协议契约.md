@@ -382,6 +382,8 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 
 所有恢复都从已提交事件和 canonical snapshot 重建。ViewEvent 缓存、Renderer 展开状态、模型自述和摘要都不能补造业务状态。当前开发 schema 不兼容旧格式；不支持的旧会话明确不可打开但仍可删除。
 
+运行中的普通输入先以 `user-input(startsTurn=false)` 写稳并进入 canonical pending inputs。`queued-message-action` 只能引用仍为 `queued` 的稳定输入 ID：`edit` 追加 `user-input-restored` 并通过 `queue-restored` 退回原消息草稿，重新提交时原子消费旧 ID；`discard` 追加 `user-input-discarded` 并删除 pending 身份，实时界面只接收非持久的 `message-dequeued`；`send-now` 不创建第二条输入，只复用 urgent steering 中断当前步骤并在安全边界交付原 ID。任何持久化失败都必须保留原队列，不能先向 Renderer 宣称成功。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。

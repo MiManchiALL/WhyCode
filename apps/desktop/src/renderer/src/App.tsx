@@ -71,7 +71,6 @@ import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
   ImageDraftStrip,
-  QueuedImageStrip,
   useImageDrafts,
 } from './image-attachments.tsx'
 import {
@@ -84,7 +83,6 @@ import { collectPastedImageFiles, collectPastedPdfFiles } from './image-paste.ts
 import { useAttachmentDropTarget } from './image-drop.ts'
 import {
   PdfDraftStrip,
-  QueuedPdfStrip,
   usePdfDrafts,
 } from './pdf-attachments.tsx'
 import {
@@ -95,7 +93,7 @@ import {
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
-import { SkillBadges, SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
+import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
 import { AppSidebar } from './app-sidebar.tsx'
@@ -118,6 +116,10 @@ import {
 } from './conversation-scroll.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 import { subscribeRuntimeEventBatches } from './runtime-event-stream.ts'
+import {
+  QueuedMessageCard,
+  type QueuedMessageAction,
+} from './queued-message-card.tsx'
 
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
@@ -150,6 +152,9 @@ export function App() {
     baseRef: string | null
   } | null>(null)
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
+  const [queuedActionPending, setQueuedActionPending] = useState<
+    Partial<Record<string, QueuedMessageAction>>
+  >({})
   const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
   const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
   const [restoredSubmissionPending, setRestoredSubmissionPending] = useState(false)
@@ -454,6 +459,26 @@ export function App() {
     return window.whycode.sendCommand(targetRuntimeId, command)
   }, [])
 
+  const actOnQueuedMessage = useCallback(async (
+    id: string,
+    action: QueuedMessageAction,
+  ) => {
+    setQueuedActionPending((current) => ({ ...current, [id]: action }))
+    try {
+      const result = await sendRuntimeCommand({ type: 'queued-message-action', id, action })
+      if (result?.ok) {
+        if (action !== 'send-now') {
+          setQueuedActionPending((current) => withoutQueuedAction(current, id))
+        }
+        return
+      }
+      setQueuedActionPending((current) => withoutQueuedAction(current, id))
+    } catch {
+      setQueuedActionPending((current) => withoutQueuedAction(current, id))
+      addError('排队消息操作失败，请重试')
+    }
+  }, [addError, sendRuntimeCommand])
+
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
     if (items.length === 0) return
     setRestoredQueue((previous) => {
@@ -633,6 +658,7 @@ export function App() {
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
     setStopping(false)
     setQueued(snapshot.queuedInputs)
+    setQueuedActionPending({})
     setRestoredInputIds([])
     setRestoredQueue(snapshot.restoredInputs)
     setRestoredSubmissionPending(false)
@@ -734,19 +760,42 @@ export function App() {
       case 'message-queued':
         // 运行中插话不会重复发 work-started，但已是新的用户活动。
         void refreshSessions()
-        setQueued((prev) => [...prev, {
-          id: event.id,
-          text: event.text,
-          ...(event.attachments?.length ? { attachments: event.attachments } : {}),
-          ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
-          ...(event.skills?.length ? { skills: event.skills } : {}),
-        }])
+        setQueued((prev) => {
+          const item = {
+            id: event.id,
+            text: event.text,
+            ...(event.attachments?.length ? { attachments: event.attachments } : {}),
+            ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
+            ...(event.skills?.length ? { skills: event.skills } : {}),
+          }
+          const index = prev.findIndex((queuedMessage) => queuedMessage.id === event.id)
+          if (index < 0) return [...prev, item]
+          const next = [...prev]
+          next[index] = item
+          return next
+        })
         break
       case 'message-injected':
         setQueued((prev) => prev.filter((q) => q.id !== event.id))
+        setQueuedActionPending((current) => withoutQueuedAction(current, event.id))
+        break
+      case 'message-dequeued':
+        setQueued((prev) => prev.filter((q) => q.id !== event.id))
+        setQueuedActionPending((current) => withoutQueuedAction(current, event.id))
         break
       case 'queue-restored':
-        setQueued([])
+        if (event.items?.length) {
+          const restoredIds = new Set(event.items.map((item) => item.id))
+          setQueued((previous) => previous.filter((item) => !restoredIds.has(item.id)))
+          setQueuedActionPending((current) => {
+            let next = current
+            for (const id of restoredIds) next = withoutQueuedAction(next, id)
+            return next
+          })
+        } else {
+          setQueued([])
+          setQueuedActionPending({})
+        }
         if (event.items?.length) restoreQueuedDrafts(event.items)
         else setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
         break
@@ -1762,12 +1811,12 @@ export function App() {
                 {queued.length > 0 && (
                   <div className="mb-2 space-y-1">
                     {queued.map((queuedMessage) => (
-                      <div key={queuedMessage.id} className="rounded-xl bg-black/[0.04] px-3 py-1.5 text-xs text-[var(--wc-muted)]">
-                        <div className="truncate">已排队 · {queuedMessage.text}</div>
-                        <SkillBadges skills={queuedMessage.skills} />
-                        <QueuedImageStrip attachments={queuedMessage.attachments} />
-                        <QueuedPdfStrip attachments={queuedMessage.pdfAttachments} />
-                      </div>
+                      <QueuedMessageCard
+                        key={queuedMessage.id}
+                        message={queuedMessage}
+                        pendingAction={queuedActionPending[queuedMessage.id]}
+                        onAction={(id, action) => void actOnQueuedMessage(id, action)}
+                      />
                     ))}
                   </div>
                 )}
@@ -2013,6 +2062,16 @@ export function App() {
 
 function composerKey(runtimeId: string, sessionId: string | null): string {
   return sessionId ?? `runtime:${runtimeId}`
+}
+
+function withoutQueuedAction(
+  current: Partial<Record<string, QueuedMessageAction>>,
+  id: string,
+): Partial<Record<string, QueuedMessageAction>> {
+  if (!(id in current)) return current
+  const next = { ...current }
+  delete next[id]
+  return next
 }
 
 function sameSessionList(

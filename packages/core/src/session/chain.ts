@@ -131,7 +131,10 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     pendingUserInputs.some((input) => input.state === 'queued'),
     pendingUserQuestion !== null,
   )
-  const recordedInputs = entries.flatMap((entry) => (entry.type === 'user-input' ? [entry.text] : []))
+  const discardedInputIds = new Set(entries.flatMap((entry) =>
+    entry.type === 'user-input-discarded' ? entry.inputIds : []))
+  const recordedInputs = entries.flatMap((entry) =>
+    entry.type === 'user-input' && !discardedInputIds.has(entry.uuid) ? [entry.text] : [])
   const userTexts = recordedInputs.length > 0 ? recordedInputs : messages.flatMap(userText)
   const createdAt = start.forkOrigin?.createdAt ?? start.timestamp
 
@@ -284,6 +287,17 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
           throw new SessionCorruptError(`只能退回仍在排队的输入：${inputId}`)
         }
         pending.set(inputId, { ...input, state: 'restored' })
+      }
+      continue
+    }
+
+    if (entry.type === 'user-input-discarded') {
+      for (const inputId of entry.inputIds) {
+        const input = pending.get(inputId)
+        if (!input || input.state !== 'queued') {
+          throw new SessionCorruptError(`只能丢弃仍在排队的输入：${inputId}`)
+        }
+        pending.delete(inputId)
       }
       continue
     }

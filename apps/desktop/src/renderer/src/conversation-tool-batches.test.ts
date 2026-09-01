@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import type { Block } from './conversation-state.ts'
 import {
   presentToolBatches,
+  presentConversationToolBatches,
   presentToolSegmentContent,
   summarizeToolBatch,
   toolBatchRows,
@@ -126,7 +127,7 @@ describe('工具批次折叠投影', () => {
     assert.equal(merged?.kind === 'thinking' ? merged.durationMs : null, 500)
   })
 
-  it('用户消息是硬边界，不把两个 turn 的工具混为一批', () => {
+  it('用户消息是封口边界，不把两个 turn 的工具混为一批', () => {
     const result = presentToolBatches([
       tool('tool-1', 'ReadFile'),
       { kind: 'user', id: 'user-2', text: '继续' },
@@ -139,8 +140,39 @@ describe('工具批次折叠投影', () => {
       ['tool-segment', 'tool-batch-tool-2'],
       ['block', 'text-2'],
     ])
-    assert.equal(result[0]?.kind === 'tool-segment' ? result[0].sealed : null, false)
+    assert.equal(result[0]?.kind === 'tool-segment' ? result[0].sealed : null, true)
     assert.equal(result[2]?.kind === 'tool-segment' ? result[2].sealed : null, true)
+  })
+
+  it('只有真实用户消息进入时间线后才封口末批工具', () => {
+    const toolItem = {
+      kind: 'section' as const,
+      id: 'tool-1',
+      section: {
+        kind: 'block' as const,
+        id: 'tool-1',
+        block: tool('tool-1', 'ReadFile'),
+      },
+    }
+    const queuedOnly = presentConversationToolBatches([toolItem])
+    assert.equal(
+      queuedOnly[0]?.kind === 'tool-segment' ? queuedOnly[0].sealed : null,
+      false,
+    )
+
+    const injected = presentConversationToolBatches([
+      toolItem,
+      {
+        kind: 'section' as const,
+        id: 'user-2',
+        section: {
+          kind: 'block' as const,
+          id: 'user-2',
+          block: { kind: 'user' as const, id: 'user-2', text: '插队消息' },
+        },
+      },
+    ])
+    assert.equal(injected[0]?.kind === 'tool-segment' ? injected[0].sealed : null, true)
   })
 
   it('按编辑、命令、其它的优先级生成摘要', () => {

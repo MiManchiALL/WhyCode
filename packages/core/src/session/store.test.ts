@@ -507,6 +507,26 @@ describe('SessionStore', () => {
     assert.deepEqual(reopened.undeliveredUserInputIds, [replacementId])
   })
 
+  it('显式丢弃 steering 后从事实源移除且重启不再恢复', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const queuedId = randomUUID()
+    await journal.recordUserInputWithId(queuedId, '不再需要的排队消息', false)
+
+    await journal.markUserInputsDiscarded([queuedId])
+    assert.deepEqual(journal.pendingUserInputs, [])
+
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(reopened.pendingUserInputs, [])
+    assert.equal(reopened.metadataSnapshot.lastUserText, '')
+    const entries = await reopened.readEntriesSnapshot()
+    assert.equal(
+      entries.some((entry) =>
+        entry.type === 'user-input-discarded' && entry.inputIds.includes(queuedId)),
+      true,
+    )
+  })
+
   it('进程中断把尚未送达的 steering 恢复为草稿而不注入模型历史', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })

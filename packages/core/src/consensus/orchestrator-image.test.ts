@@ -186,10 +186,52 @@ describe('共识模式附件路由', () => {
     )
     assert.deepEqual(harness.calls[0]?.skills, [harness.skill])
   })
+
+  it('B/C 阶段的队列支持单条编辑、丢弃与马上发送', async () => {
+    const restored: string[][] = []
+    const discarded: string[][] = []
+    const editHarness = createHarness({
+      onInputsRestored: async (ids) => { restored.push([...ids]) },
+    })
+    const editInternals = editHarness.coordinator as unknown as { running: boolean; peerPhase: boolean }
+    editInternals.running = true
+    editInternals.peerPhase = true
+    editHarness.coordinator.handleUserMessage('重新编辑', false, [], 'queue-edit')
+    assert.equal(await editHarness.coordinator.restoreQueuedMessage('queue-edit'), true)
+    assert.deepEqual(restored, [['queue-edit']])
+    assert.equal(editHarness.events.some((event) =>
+      event.type === 'queue-restored' && event.items?.[0]?.id === 'queue-edit'), true)
+
+    const discardHarness = createHarness({
+      onInputsDiscarded: async (ids) => { discarded.push([...ids]) },
+    })
+    const discardInternals = discardHarness.coordinator as unknown as { running: boolean; peerPhase: boolean }
+    discardInternals.running = true
+    discardInternals.peerPhase = true
+    discardHarness.coordinator.handleUserMessage('直接丢弃', false, [], 'queue-discard')
+    assert.equal(await discardHarness.coordinator.discardQueuedMessage('queue-discard'), true)
+    assert.deepEqual(discarded, [['queue-discard']])
+    assert.equal(discardHarness.events.some((event) =>
+      event.type === 'message-dequeued' && event.id === 'queue-discard'), true)
+
+    const nowHarness = createHarness()
+    const nowInternals = nowHarness.coordinator as unknown as {
+      running: boolean
+      peerPhase: boolean
+      deferredTaskMessages: Array<{ id: string }>
+    }
+    nowInternals.running = true
+    nowInternals.peerPhase = true
+    nowHarness.coordinator.handleUserMessage('马上发送', false, [], 'queue-now')
+    assert.equal(nowHarness.coordinator.sendQueuedMessageNow('queue-now'), true)
+    assert.equal(nowInternals.deferredTaskMessages[0]?.id, 'queue-now')
+    assert.equal(nowHarness.aborts.value, 1)
+  })
 })
 
 function createHarness(options: {
   onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
+  onInputsDiscarded?: (inputIds: readonly string[]) => Promise<void>
 } = {}) {
   const calls: MainCall[] = []
   const events: CoreEvent[] = []
@@ -226,6 +268,7 @@ function createHarness(options: {
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
     onInputsRestored: options.onInputsRestored,
+    onInputsDiscarded: options.onInputsDiscarded,
   })
   const id = randomUUID()
   const sessionId = randomUUID()

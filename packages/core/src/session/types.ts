@@ -189,6 +189,11 @@ const userInputRestoredSchema = chainedEntrySchema.extend({
   inputIds: z.array(entryIdSchema).min(1),
 })
 
+const userInputDiscardedSchema = chainedEntrySchema.extend({
+  type: z.literal('user-input-discarded'),
+  inputIds: z.array(entryIdSchema).min(1),
+})
+
 const btwInputSchema = chainedEntrySchema.extend({
   type: z.literal('btw-input'),
   conversationId: sessionIdSchema,
@@ -401,6 +406,7 @@ export const sessionEntrySchema = z.discriminatedUnion('type', [
   sessionStartSchema,
   userInputSchema,
   userInputRestoredSchema,
+  userInputDiscardedSchema,
   btwInputSchema,
   btwResponseSchema,
   modelChangeSchema,
@@ -624,6 +630,7 @@ export interface SessionRecorder {
     skills?: readonly ActivatedSkill[],
   ): Promise<void>
   markUserInputsRestored(inputIds: readonly string[]): Promise<void>
+  markUserInputsDiscarded(inputIds: readonly string[]): Promise<void>
   recordConsensusTaskEnd(
     taskId: string,
     outcome: ConsensusTaskOutcome,

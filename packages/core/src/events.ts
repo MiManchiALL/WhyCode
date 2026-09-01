@@ -267,7 +267,9 @@ export type CoreEvent =
       pdfAttachments?: PdfAttachment[]
       skills?: SkillSummary[]
     }
-  /** 中断后把排队文本还给输入框（不静默丢弃） */
+  /** 用户主动丢弃尚未送达的排队消息；只改变队列，不进入对话时间线。 */
+  | { type: 'message-dequeued'; id: string }
+  /** 把排队文本安全还给输入框（中断恢复或用户主动重新编辑）。 */
   | { type: 'queue-restored'; text: string; items?: QueuedUserMessage[] }
   // --- 检查点（M2-c）---
   /** 写类工具的 before/after 资源清单已持久化；hash 当前承载稳定 checkpointId。 */
@@ -450,6 +452,12 @@ export type CoreCommand =
       restoredInputIds?: string[]
       /** Renderer 只提交目录中的精确 locator；主进程在落盘前解析为不可变 Skill 快照。 */
       skills?: SkillLocator[]
+    }
+  /** 对已经写稳、尚未送达的排队消息执行就地操作。 */
+  | {
+      type: 'queued-message-action'
+      id: string
+      action: 'edit' | 'discard' | 'send-now'
     }
   | {
       type: 'btw-message'

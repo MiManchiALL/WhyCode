@@ -1253,6 +1253,34 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
+  markUserInputsDiscarded(inputIds: readonly string[]): Promise<void> {
+    if (inputIds.length === 0) return Promise.resolve()
+    return this.enqueue(async () => {
+      this.assertPendingInputs(inputIds, 'queued', '丢弃')
+      const discarded = this.entry({ type: 'user-input-discarded', inputIds })
+      await this.appendEntries([discarded])
+      this.deletePendingInputs(inputIds)
+      this.metadata.lastUserText = clip(this.latestPendingOrVisibleUserText())
+      this.metadata.updatedAt = discarded.timestamp
+      this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
+        ? 'running'
+        : hasPendingUserQuestion(this.messages)
+          ? 'waiting-user'
+          : 'idle'
+      await this.refreshMetadataCache()
+    })
+  }
+
+  private latestPendingOrVisibleUserText(): string {
+    const pending = [...this.pendingUserInputMap.values()].at(-1)
+    if (pending) return pending.text
+    for (let index = this.viewEvents.length - 1; index >= 0; index--) {
+      const event = this.viewEvents[index]
+      if (event?.type === 'user-message') return event.text
+    }
+    return ''
+  }
+
   recordConsensusTaskEnd(
     taskId: string,
     outcome: ConsensusTaskOutcome,

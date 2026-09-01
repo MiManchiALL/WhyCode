@@ -284,6 +284,16 @@ function queuedMessageForModel(message: QueuedMessage): ModelMessage {
     : { role: 'user', content: text }
 }
 
+function queuedUserMessage(message: QueuedMessage): QueuedUserMessage {
+  return {
+    id: message.id,
+    text: message.text,
+    ...(message.attachments.length ? { attachments: message.attachments } : {}),
+    ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
+    ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
+  }
+}
+
 interface StepResult {
   committed: boolean
   hadToolCalls: boolean
@@ -935,6 +945,53 @@ export class AgentSession {
     )
   }
 
+  /** 把单条排队消息安全退回 Renderer，供用户重新编辑后原子重提。 */
+  async restoreQueuedMessage(id: string): Promise<boolean> {
+    const queued = this.takeQueuedMessage(id)
+    if (!queued) return false
+    try {
+      if (queued.message.persisted) {
+        await this.persistRequired(
+          (recorder) => recorder.markUserInputsRestored([queued.message.id]),
+          '恢复排队输入',
+        )
+      }
+    } catch (error) {
+      this.putQueuedMessageBack(queued)
+      throw error
+    }
+    const item = queuedUserMessage(queued.message)
+    this.options.emit({ type: 'queue-restored', text: item.text, items: [item] })
+    return true
+  }
+
+  /** 丢弃单条排队消息；先写稳事实源，重启后不得复活。 */
+  async discardQueuedMessage(id: string): Promise<boolean> {
+    const queued = this.takeQueuedMessage(id)
+    if (!queued) return false
+    try {
+      if (queued.message.persisted) {
+        await this.persistRequired(
+          (recorder) => recorder.markUserInputsDiscarded([queued.message.id]),
+          '丢弃排队输入',
+        )
+      }
+    } catch (error) {
+      this.putQueuedMessageBack(queued)
+      throw error
+    }
+    this.options.emit({ type: 'message-dequeued', id: queued.message.id })
+    return true
+  }
+
+  /** 复用 urgent steering：中断当前模型步骤，在下一个稳定边界注入现有队列。 */
+  sendQueuedMessageNow(id: string): boolean {
+    if (!this.queue.some((message) => message.id === id)) return false
+    this.wakeRunLoop()
+    if (this.running) this.currentStepAbort?.abort('interrupt')
+    return true
+  }
+
   /** 宿主生成的后台任务终态：运行中在稳定步骤边界注入，空闲时开启隐藏续轮。 */
   handleTaskNotification(
     notification: CommandTaskTerminalNotification,
@@ -1363,14 +1420,22 @@ export class AgentSession {
     this.options.emit({
       type: 'queue-restored',
       text: items.map((item) => item.text).join('\n'),
-      items: items.map((item) => ({
-        id: item.id,
-        text: item.text,
-        ...(item.attachments.length ? { attachments: item.attachments } : {}),
-        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
-        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
-      })),
+      items: items.map(queuedUserMessage),
     })
+  }
+
+  private takeQueuedMessage(id: string): { message: QueuedMessage; index: number } | null {
+    const index = this.queue.findIndex((message) => message.id === id)
+    if (index < 0) return null
+    const [message] = this.queue.splice(index, 1)
+    if (!message) return null
+    this.rebuildActivePdfAttachments()
+    return { message, index }
+  }
+
+  private putQueuedMessageBack(queued: { message: QueuedMessage; index: number }): void {
+    this.queue.splice(Math.min(queued.index, this.queue.length), 0, queued.message)
+    this.rebuildActivePdfAttachments()
   }
 
   /** 取出全部排队消息（清空队列） */

@@ -74,6 +74,8 @@ export interface ConsensusCoordinatorOptions {
   ) => Promise<void>
   /** Coordinator 自持队列在停止时先持久化为 Renderer 草稿，再发送恢复事件。 */
   onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
+  /** 用户显式丢弃 Coordinator 自持队列时同步更新会话事实源。 */
+  onInputsDiscarded?: (inputIds: readonly string[]) => Promise<void>
   /** Main 忙碌期间暂存的正常消息真正开始新任务时，宿主重建独立工作计时。 */
   onDeferredTaskStart?: () => void
 }
@@ -87,6 +89,16 @@ interface CoordinatorMessage {
   pdfAttachments: PdfAttachment[]
   /** 输入被接受时冻结的完整快照；讨论/协议阶段只保管，不向模型暴露。 */
   skills: ActivatedSkill[]
+}
+
+function queuedUserMessage(message: CoordinatorMessage): QueuedUserMessage {
+  return {
+    id: message.id,
+    text: message.text,
+    ...(message.attachments.length ? { attachments: message.attachments } : {}),
+    ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
+    ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
+  }
 }
 
 /**
@@ -232,6 +244,65 @@ export class ConsensusCoordinator {
       return this.queueUntilExecution(message, urgent)
     }
     this.options.mainSession.handleUserMessage(text, urgent, [], persistedInputId, [], skills)
+  }
+
+  async restoreQueuedMessage(id: string): Promise<boolean> {
+    const queued = this.takeQueuedMessage(id)
+    if (!queued) return this.options.mainSession.restoreQueuedMessage(id)
+    try {
+      if (queued.message.persistedInputId) {
+        await this.options.onInputsRestored?.([queued.message.persistedInputId])
+      }
+    } catch (error) {
+      this.putQueuedMessageBack(queued)
+      throw error
+    }
+    const item = queuedUserMessage(queued.message)
+    this.options.emit({ type: 'queue-restored', text: item.text, items: [item] })
+    return true
+  }
+
+  async discardQueuedMessage(id: string): Promise<boolean> {
+    const queued = this.takeQueuedMessage(id)
+    if (!queued) return this.options.mainSession.discardQueuedMessage(id)
+    try {
+      if (queued.message.persistedInputId) {
+        await this.options.onInputsDiscarded?.([queued.message.persistedInputId])
+      }
+    } catch (error) {
+      this.putQueuedMessageBack(queued)
+      throw error
+    }
+    this.options.emit({ type: 'message-dequeued', id: queued.message.id })
+    return true
+  }
+
+  sendQueuedMessageNow(id: string): boolean {
+    const queued = this.takeQueuedMessage(id)
+    if (!queued) return this.options.mainSession.sendQueuedMessageNow(id)
+    const message = queued.message
+    if (!this.peerPhase && this.options.mainSession.isRunning && (
+      this.executionPhase || message.skills.length === 0
+    )) {
+      try {
+        this.options.mainSession.handleUserMessage(
+          message.text,
+          true,
+          message.attachments,
+          message.persistedInputId,
+          message.pdfAttachments,
+          message.skills,
+          message.imageDelivery,
+        )
+      } catch (error) {
+        this.putQueuedMessageBack(queued)
+        throw error
+      }
+      return true
+    }
+    this.deferredTaskMessages.unshift(message)
+    this.interruptForDeferredInput()
+    return true
   }
 
   private queueUntilExecution(message: CoordinatorMessage, urgent: boolean): void {
@@ -638,6 +709,33 @@ export class ConsensusCoordinator {
     })
   }
 
+  private takeQueuedMessage(id: string): {
+    message: CoordinatorMessage
+    queue: 'pending' | 'deferred'
+    index: number
+  } | null {
+    const queues = [
+      ['pending', this.pendingTexts],
+      ['deferred', this.deferredTaskMessages],
+    ] as const
+    for (const [queue, messages] of queues) {
+      const index = messages.findIndex((message) => message.id === id)
+      if (index < 0) continue
+      const [message] = messages.splice(index, 1)
+      return message ? { message, queue, index } : null
+    }
+    return null
+  }
+
+  private putQueuedMessageBack(queued: {
+    message: CoordinatorMessage
+    queue: 'pending' | 'deferred'
+    index: number
+  }): void {
+    const messages = queued.queue === 'pending' ? this.pendingTexts : this.deferredTaskMessages
+    messages.splice(Math.min(queued.index, messages.length), 0, queued.message)
+  }
+
   private interruptForDeferredInput(): void {
     this.aborted = true
     for (const peer of this.peers) peer.abort()
@@ -658,13 +756,7 @@ export class ConsensusCoordinator {
     this.options.emit({
       type: 'queue-restored',
       text: messages.map((message) => message.text).join('\n'),
-      items: messages.map((message) => ({
-        id: message.id,
-        text: message.text,
-        ...(message.attachments.length ? { attachments: message.attachments } : {}),
-        ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
-        ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
-      })),
+      items: messages.map(queuedUserMessage),
     })
   }
 
