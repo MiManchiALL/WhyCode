@@ -16,7 +16,7 @@ import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
-  normalizeDisplayMathFences,
+  normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 import {
   externalSourcesFromList,
@@ -47,7 +47,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   const effectiveStreaming = streaming || !staticReady
   const mathEnabled = !effectiveStreaming && (renderMath ?? true)
   const renderedText = useMemo(
-    () => mathEnabled ? normalizeDisplayMathFences(text) : text,
+    () => mathEnabled ? normalizeMathDelimiters(text) : text,
     [mathEnabled, text],
   )
 

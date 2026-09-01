@@ -7,7 +7,7 @@ import { parseHTML } from 'linkedom'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
-  normalizeDisplayMathFences,
+  normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 
 describe('Markdown 渲染', () => {
@@ -135,8 +135,72 @@ $$\begin{bmatrix} 1 & 2 & 3 & 4 \\ 5 & 6 & 7 & 8 \end{bmatrix}$$`
     const source = '$$\nE = mc^2\n$$'
     const document = renderedDocument(source, false)
 
-    assert.equal(normalizeDisplayMathFences(source), source)
+    assert.equal(normalizeMathDelimiters(source), source)
     assert.equal(document.querySelectorAll('.katex-display').length, 1)
+  })
+
+  it('把标准 TeX 行内与块级定界符送入同一 KaTeX 链路', () => {
+    const source = String.raw`假设当前已经有 \(T\) 个历史 token。
+
+\[
+K,V \in \mathbb{R}^{T \times d}
+\]
+
+\[(1 \times d) \cdot (d \times T)\]`
+    const normalized = normalizeMathDelimiters(source)
+    const document = renderedDocument(source, false)
+    const formulas = [...document.querySelectorAll('.katex annotation')]
+      .map((node) => node.textContent)
+
+    assert.deepEqual(formulas, [
+      'T',
+      String.raw`K,V \in \mathbb{R}^{T \times d}`,
+      String.raw`(1 \times d) \cdot (d \times T)`,
+    ])
+    assert.equal(document.querySelectorAll('.katex-display').length, 2)
+    assert.equal(normalizeMathDelimiters(normalized), normalized)
+  })
+
+  it('块级 TeX 定界符即使附着在段落中也保持 display 语义', () => {
+    const document = renderedDocument(String.raw`前文 \[x^2 + y^2\] 后文`, false)
+
+    assert.equal(document.querySelectorAll('.katex-display').length, 1)
+    assert.deepEqual(
+      [...document.querySelectorAll('p')].map((paragraph) => paragraph.textContent),
+      ['前文', '后文'],
+    )
+  })
+
+  it('公式定界符规范化不进入围栏代码、行内代码或转义字面量', () => {
+    const source = [
+      '正文 \\(x^2\\)，代码 `\\(inline\\)`，字面量 \\\\(literal\\\\)。',
+      '',
+      '``\\[still inline code\\]``',
+      '',
+      '```tex',
+      '\\[block code\\]',
+      '\\(inline code\\)',
+      '```',
+    ].join('\n')
+    const normalized = normalizeMathDelimiters(source)
+    const document = renderedDocument(source, false)
+
+    assert.equal(document.querySelectorAll('.katex').length, 1)
+    assert.deepEqual(
+      [...document.querySelectorAll('code')].map((node) => node.textContent),
+      [
+        String.raw`\(inline\)`,
+        String.raw`\[still inline code\]`,
+        String.raw`\[block code\]\(inline code\)`,
+      ],
+    )
+    assert.match(normalized, /\\\\\(literal\\\\\)/u)
+  })
+
+  it('未闭合的 TeX 定界符保持原文，等待后续流片段补全', () => {
+    const source = String.raw`前文 \(x + 1，后文 \[y = 2`
+
+    assert.equal(normalizeMathDelimiters(source), source)
   })
 
   it('规范化真实模型常见的同行与跨行块公式而不丢失数学环境', () => {
@@ -152,14 +216,14 @@ $$\begin{aligned}
    $$G_{\mu\nu}^A = \partial_\mu G_\nu^A - \partial_\nu G_\mu^A$$
 
 $Y_u$ 为 $3 \times 3$ 的复矩阵。`
-    const normalized = normalizeDisplayMathFences(source)
+    const normalized = normalizeMathDelimiters(source)
     const document = renderedDocument(source, false)
     const formulas = [...document.querySelectorAll('.katex annotation')]
       .map((node) => node.textContent)
 
     assert.equal(document.querySelectorAll('.katex-display').length, 3)
     assert.equal(document.querySelectorAll('.katex-error').length, 0)
-    assert.equal(normalizeDisplayMathFences(normalized), normalized)
+    assert.equal(normalizeMathDelimiters(normalized), normalized)
     assert.ok(formulas.some((formula) => formula?.includes(String.raw`\begin{aligned}`)))
     assert.ok(formulas.some((formula) => formula?.includes(String.raw`G_{\mu\nu}^A`)))
     assert.equal((document.body.textContent.match(/\$\$/gu) ?? []).length, 0)
@@ -226,7 +290,7 @@ function renderedDocument(source: string, streaming: boolean) {
 }
 
 function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
-  const renderedSource = renderMath ? normalizeDisplayMathFences(source) : source
+  const renderedSource = renderMath ? normalizeMathDelimiters(source) : source
   return renderToStaticMarkup(createElement(
     Streamdown,
     {
