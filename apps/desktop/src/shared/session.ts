@@ -91,6 +91,8 @@ export interface RuntimeCommandEnvelope {
 
 export interface RuntimeCommandResult {
   ok: boolean
+  /** 只读校验或命令提交失败时，可直接展示给用户的原因。 */
+  error?: string
   /** 首条消息可能物化待创建的默认目录或 Worktree，Renderer 据此原子更新路径。 */
   workspace?: RuntimeWorkspace
 }

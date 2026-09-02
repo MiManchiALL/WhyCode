@@ -485,6 +485,8 @@ export type CoreCommand =
         | { kind: 'btw'; inputId: string }
       text: string
     }
+  /** 二次确认前只读校验检查点与目标文件，绝不执行恢复。 */
+  | { type: 'check-checkpoint-restore'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 回滚到某写操作执行前的快照（仅空闲时） */
   | { type: 'restore-checkpoint'; toolUseId: string; scope: 'files' | 'files-and-chat' }
   /** 手动触发上下文压缩（仅空闲时） */

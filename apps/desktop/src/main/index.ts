@@ -1020,6 +1020,17 @@ async function handleCommand(
       }
       return { ok: true }
     }
+    case 'check-checkpoint-restore': {
+      if (runtimeBusy(runtime)) {
+        return { ok: false, error: 'Agent 工作中，请等待当前任务结束后再回滚' }
+      }
+      if (!runtime.session) return { ok: false, error: '该操作没有可用快照' }
+      const result = await runtime.session.checkCheckpointRestore(
+        command.toolUseId,
+        command.scope,
+      )
+      return { ok: result.ok, error: result.error }
+    }
     case 'restore-checkpoint': {
       if (runtimeBusy(runtime)) {
         runtime.emit({

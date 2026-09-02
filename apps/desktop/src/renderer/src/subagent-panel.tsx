@@ -301,7 +301,7 @@ function SubagentTranscript({
         forkPendingTurnId={null}
         skills={skills}
         projectDir={projectDir}
-        onCheckpointRestoreChange={() => {}}
+        onCheckpointRestoreRequest={async () => false}
         onEdit={async () => false}
         onFork={() => {}}
         onToggle={(id) => setView((previous) => toggleExpanded(previous, id))}

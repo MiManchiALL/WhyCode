@@ -540,7 +540,7 @@ describe('会话界面时间线重建', () => {
 
     assert.match(JSON.stringify(state.blocks), /保留的旧问题/)
     assert.doesNotMatch(JSON.stringify(state.blocks), /需要回滚的问题/)
-    assert.match(JSON.stringify(state.blocks), /已回滚/)
+    assert.doesNotMatch(JSON.stringify(state.blocks), /已回滚|回滚失败/)
   })
 
   it('主进程确认的新根消息建立唯一回滚锚点，随后排队插话不覆盖它', () => {
@@ -714,7 +714,23 @@ describe('会话界面时间线重建', () => {
     const tools = state.blocks.filter((block) => block.kind === 'tool')
     assert.equal(tools[0]?.kind === 'tool' ? tools[0].call.hasCheckpoint : null, undefined)
     assert.equal(tools[1]?.kind === 'tool' ? tools[1].call.hasCheckpoint : null, false)
-    assert.match(JSON.stringify(state.blocks), /已回滚检查点覆盖的文件/)
+    assert.doesNotMatch(JSON.stringify(state.blocks), /已回滚|回滚失败/)
+  })
+
+  it('回滚失败不追加到对话时间线', () => {
+    const before = createConversationState([
+      { type: 'user-message', text: '保留当前对话', startsTurn: true },
+    ])
+    const after = applyCoreEvent(before, {
+      type: 'checkpoint-restored',
+      toolUseId: 'tool-failed',
+      turnId: 'turn-1',
+      scope: 'files-and-chat',
+      ok: false,
+      error: '只能选择仅文件',
+    })
+
+    assert.equal(after, before)
   })
 
   it('同一轮多个文件检查点只把首个工具投影为回滚入口', () => {

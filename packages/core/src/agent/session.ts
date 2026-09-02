@@ -26,7 +26,10 @@ import {
   shouldRefreshCurrentTimeReminder,
 } from '../prompts/current-time.ts'
 import { checkToolPermission } from '../permissions/engine.ts'
-import { CheckpointManager } from '../checkpoints/manager.ts'
+import {
+  CheckpointManager,
+  type RestoreCheckpointResult,
+} from '../checkpoints/manager.ts'
 import {
   autoCompactThreshold,
   estimateContextTokens,
@@ -3276,6 +3279,36 @@ export class AgentSession {
       resolveAttachment: (attachmentId) =>
         activeAttachments.get(attachmentId.toLowerCase()) ?? null,
     })]
+  }
+
+  /** 二次确认前只读校验恢复范围；实际执行仍会重新检查，避免确认期间状态变化。 */
+  async checkCheckpointRestore(
+    toolUseId: string,
+    scope: 'files' | 'files-and-chat',
+  ): Promise<RestoreCheckpointResult> {
+    if (!this.checkpoints) return { ok: false, error: '该操作没有可用快照' }
+    if (this.running || this.compacting) {
+      return { ok: false, error: 'Agent 工作中，请先停止' }
+    }
+    if (this.restoringCheckpointToolUseId) {
+      return { ok: false, error: '已有回滚操作正在进行，请等待完成' }
+    }
+    const record = await this.checkpoints.getReady(toolUseId)
+    if (!record) return { ok: false, error: '该操作没有可用快照' }
+    if (scope === 'files-and-chat') {
+      const recorder = this.options.sessionRecorder
+      if (
+        recorder?.messagesBeforeTurn(record.turnId) === null
+        || recorder?.taskStateBeforeTurn(record.turnId) === undefined
+      ) {
+        return {
+          ok: false,
+          turnId: record.turnId,
+          error: '该轮早于上下文压缩或当前活动历史，只能回滚文件（选「仅文件」）',
+        }
+      }
+    }
+    return this.checkpoints.checkRestore(toolUseId, scope)
   }
 
   /** 回滚到某写操作执行前（仅空闲时）；files-and-chat = 整个 turn「从没发生过」 */

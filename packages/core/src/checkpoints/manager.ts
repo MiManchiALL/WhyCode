@@ -30,6 +30,17 @@ export interface RestoreTransactionHooks {
   compensate: () => Promise<void>
 }
 
+type RestoreCheckpointPlan =
+  | {
+      available: true
+      turnId: string
+      manifests: CheckpointManifest[]
+    }
+  | {
+      available: false
+      result: RestoreCheckpointResult
+    }
+
 function pathKey(path: string): string {
   const absolute = resolve(path)
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute
@@ -164,26 +175,11 @@ export class CheckpointManager {
     scope: 'files' | 'files-and-chat',
     hooks?: RestoreTransactionHooks,
   ): Promise<RestoreCheckpointResult> {
-    const ready = (await this.store.list()).filter((item) => item.status === 'ready')
-    const selected = ready.find((item) => item.toolUseId === toolUseId)
-    if (!selected || selected.coverage !== 'complete') {
-      return { ok: false, error: '该操作没有可用的精确文件检查点' }
-    }
-    const target = scope === 'files-and-chat'
-      ? (ready.find((item) => item.turnId === selected.turnId) ?? selected)
-      : selected
-    const range = ready.filter((item) => item.sequence >= target.sequence)
-    if (scope === 'files-and-chat' && range.some((item) => item.coverage !== 'complete')) {
-      return {
-        ok: false,
-        turnId: selected.turnId,
-        error: '这段范围包含命令或其他未跟踪写操作；只能回滚专用文件工具跟踪的文件，不能同时截断对话',
-      }
-    }
-    const manifests = range.filter((item) => item.coverage === 'complete')
+    const plan = await this.planRestore(toolUseId, scope)
+    if (!plan.available) return plan.result
 
     const transaction = new ResourceRestoreTransaction({
-      manifests,
+      manifests: plan.manifests,
       blobDir: this.store.blobDir,
     })
     let hookStarted = false
@@ -193,7 +189,7 @@ export class CheckpointManager {
         hookStarted = true
         await hooks.commit()
       }
-      for (const manifest of manifests) {
+      for (const manifest of plan.manifests) {
         await this.store.put({ ...manifest, status: 'invalidated' })
       }
     } catch (error) {
@@ -203,13 +199,13 @@ export class CheckpointManager {
       }
       await transaction.compensate()
         .catch((compensation) => compensationErrors.push(compensation))
-      for (const manifest of manifests) {
+      for (const manifest of plan.manifests) {
         await this.store.put(manifest).catch((compensation) => compensationErrors.push(compensation))
       }
       const detail = error instanceof Error ? error.message : String(error)
       return {
         ok: false,
-        turnId: selected.turnId,
+        turnId: plan.turnId,
         error: compensationErrors.length > 0
           ? `${detail}；安全补偿也失败：${compensationErrors.map((item) => item instanceof Error ? item.message : String(item)).join('；')}`
           : detail,
@@ -218,8 +214,67 @@ export class CheckpointManager {
 
     return {
       ok: true,
+      turnId: plan.turnId,
+      invalidatedToolUseIds: plan.manifests.map((item) => item.toolUseId),
+    }
+  }
+
+  /** 在展示二次确认前只读验证恢复范围与文件冲突；实际恢复时仍会再次校验。 */
+  async checkRestore(
+    toolUseId: string,
+    scope: 'files' | 'files-and-chat',
+  ): Promise<RestoreCheckpointResult> {
+    const plan = await this.planRestore(toolUseId, scope)
+    if (!plan.available) return plan.result
+    try {
+      await new ResourceRestoreTransaction({
+        manifests: plan.manifests,
+        blobDir: this.store.blobDir,
+      }).validate()
+      return {
+        ok: true,
+        turnId: plan.turnId,
+        invalidatedToolUseIds: plan.manifests.map((item) => item.toolUseId),
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        turnId: plan.turnId,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  private async planRestore(
+    toolUseId: string,
+    scope: 'files' | 'files-and-chat',
+  ): Promise<RestoreCheckpointPlan> {
+    const ready = (await this.store.list()).filter((item) => item.status === 'ready')
+    const selected = ready.find((item) => item.toolUseId === toolUseId)
+    if (!selected || selected.coverage !== 'complete') {
+      return {
+        available: false,
+        result: { ok: false, error: '该操作没有可用的精确文件检查点' },
+      }
+    }
+    const target = scope === 'files-and-chat'
+      ? (ready.find((item) => item.turnId === selected.turnId) ?? selected)
+      : selected
+    const range = ready.filter((item) => item.sequence >= target.sequence)
+    if (scope === 'files-and-chat' && range.some((item) => item.coverage !== 'complete')) {
+      return {
+        available: false,
+        result: {
+          ok: false,
+          turnId: selected.turnId,
+          error: '这段范围包含命令或其他未跟踪写操作；只能回滚专用文件工具跟踪的文件，不能同时截断对话',
+        },
+      }
+    }
+    return {
+      available: true,
       turnId: selected.turnId,
-      invalidatedToolUseIds: manifests.map((item) => item.toolUseId),
+      manifests: range.filter((item) => item.coverage === 'complete'),
     }
   }
 

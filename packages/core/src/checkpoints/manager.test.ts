@@ -67,10 +67,36 @@ describe('持久化资源检查点', () => {
     assert.ok(await env.manager.finalize(prepared))
     await writeFile(path, 'user changed later')
 
+    const checked = await env.manager.checkRestore('tool-edit', 'files')
+    assert.equal(checked.ok, false)
+    assert.match(checked.error ?? '', /又被修改/)
+    assert.equal(await readFile(path, 'utf8'), 'user changed later')
+
     const restored = await env.manager.restore('tool-edit', 'files')
     assert.equal(restored.ok, false)
     assert.match(restored.error ?? '', /又被修改/)
     assert.equal(await readFile(path, 'utf8'), 'user changed later')
+  })
+
+  it('二次确认前的检查只读验证冲突，不提前恢复或使检查点失效', async () => {
+    const env = await createEnvironment()
+    const path = join(env.external, 'confirm.txt')
+    await writeFile(path, 'before')
+    const prepared = await env.manager.prepare('tool-confirm', 'turn-1', {
+      kind: 'exact-files', paths: [path],
+    })
+    assert.ok(prepared)
+    await writeFile(path, 'agent')
+    assert.ok(await env.manager.finalize(prepared))
+
+    const checked = await env.manager.checkRestore('tool-confirm', 'files')
+    assert.equal(checked.ok, true, checked.error)
+    assert.equal(await readFile(path, 'utf8'), 'agent')
+    assert.ok(await env.manager.getReady('tool-confirm'))
+
+    const restored = await env.manager.restore('tool-confirm', 'files')
+    assert.equal(restored.ok, true, restored.error)
+    assert.equal(await readFile(path, 'utf8'), 'before')
   })
 
   it('撤销较早操作时按相反顺序撤销同一会话的后续写入', async () => {
@@ -150,6 +176,11 @@ describe('持久化资源检查点', () => {
     await writeFile(path, 'agent')
     assert.ok(await env.manager.finalize(prepared))
     await env.manager.recordBarrier('tool-unknown', 'turn-2', '未知写操作')
+
+    const chatCheck = await env.manager.checkRestore('tool-covered', 'files-and-chat')
+    assert.equal(chatCheck.ok, false)
+    assert.match(chatCheck.error ?? '', /只能回滚专用文件工具跟踪的文件/)
+    assert.equal(await readFile(path, 'utf8'), 'agent')
 
     const chatRestore = await env.manager.restore('tool-covered', 'files-and-chat')
     assert.equal(chatRestore.ok, false)

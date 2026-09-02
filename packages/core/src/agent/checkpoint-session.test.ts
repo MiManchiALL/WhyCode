@@ -75,6 +75,11 @@ describe('Agent 资源检查点联动', () => {
     assert.ok(checkpoint?.type === 'checkpoint-created')
     assert.equal(checkpoint.coverage, 'complete')
 
+    const checked = await session.checkCheckpointRestore(checkpoint.toolUseId, 'files')
+    assert.equal(checked.ok, true, checked.error)
+    assert.equal(await readFile(target, 'utf8'), 'hello')
+    assert.deepEqual(scheduledMutations, ['tool'])
+
     await Promise.all([
       session.restoreCheckpoint(checkpoint.toolUseId, 'files'),
       session.restoreCheckpoint(checkpoint.toolUseId, 'files'),

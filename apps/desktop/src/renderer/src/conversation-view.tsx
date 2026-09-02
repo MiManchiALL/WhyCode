@@ -20,6 +20,7 @@ import {
 } from './conversation-render-cache.ts'
 import { formatFinishedWorkTime, ProcessingTime } from './processing-time.ts'
 import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
+import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import {
   presentConversationToolBatches,
   presentToolBatches,
@@ -44,7 +45,7 @@ interface ConversationViewProps {
   forkPendingTurnId: string | null
   skills: readonly SkillSummary[]
   projectDir: string | null
-  onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
+  onCheckpointRestoreRequest: CheckpointRestoreRequest
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onFork: (turnId: string) => void
   onToggle: (id: string) => void
@@ -326,7 +327,7 @@ function ConversationToolBatch({
       checkpointRestoreToolUseId={props.checkpointRestoreToolUseId}
       skills={props.skills}
       projectDir={props.projectDir}
-      onCheckpointRestoreChange={props.onCheckpointRestoreChange}
+      onCheckpointRestoreRequest={props.onCheckpointRestoreRequest}
       onToggle={props.onToggle}
     />
   )
@@ -342,7 +343,7 @@ const ConversationBlock = memo(function ConversationBlock({
   checkpointRestorePending,
   streamingAssistantText,
   renderMath,
-  onCheckpointRestoreChange,
+  onCheckpointRestoreRequest,
   onEdit,
   onToggle,
   showAssistantActions,
@@ -363,7 +364,7 @@ const ConversationBlock = memo(function ConversationBlock({
       checkpointRestorePending={checkpointRestorePending}
       streamingAssistantText={streamingAssistantText}
       renderMath={renderMath}
-      onCheckpointRestoreChange={onCheckpointRestoreChange}
+      onCheckpointRestoreRequest={onCheckpointRestoreRequest}
       onEdit={onEdit}
       onToggle={() => onToggle(block.id)}
       showAssistantActions={showAssistantActions}
@@ -399,7 +400,7 @@ function conversationBlockProps(
     forkPending: false,
     skills: props.skills,
     projectDir: props.projectDir,
-    onCheckpointRestoreChange: props.onCheckpointRestoreChange,
+    onCheckpointRestoreRequest: props.onCheckpointRestoreRequest,
     onEdit: props.onEdit,
     onFork: props.onFork,
     onToggle: props.onToggle,

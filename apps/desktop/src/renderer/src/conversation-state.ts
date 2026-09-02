@@ -755,11 +755,8 @@ function applyCheckpointRestored(
   state: ConversationState,
   event: Extract<CoreEvent, { type: 'checkpoint-restored' }>,
 ): ConversationState {
-  if (!event.ok) return appendBlock(state, {
-    kind: 'error',
-    id: nextBlockId(state),
-    text: `回滚失败：${event.error}`,
-  })
+  // 成功与失败的即时反馈由视口提示承载；这里只投影成功恢复产生的持久状态变化。
+  if (!event.ok) return state
   let blocks = state.blocks
   const invalidated = new Set(event.invalidatedToolUseIds ?? [event.toolUseId])
   blocks = blocks.map((block) =>
@@ -786,19 +783,14 @@ function applyCheckpointRestored(
   const taskPlan = event.scope === 'files-and-chat' && event.taskPlan !== undefined
     ? structuredClone(event.taskPlan)
     : state.taskPlan
-  return appendNotice(
-    {
-      ...state,
-      blocks,
-      taskPlan,
-      pendingQuestion: event.scope === 'files-and-chat'
-        ? structuredClone(event.question ?? null)
-        : state.pendingQuestion,
-    },
-    event.scope === 'files-and-chat'
-      ? '已回滚：该轮对话与文件改动均已撤销'
-      : '已回滚检查点覆盖的文件（对话保留）',
-  )
+  return {
+    ...state,
+    blocks,
+    taskPlan,
+    pendingQuestion: event.scope === 'files-and-chat'
+      ? structuredClone(event.question ?? null)
+      : state.pendingQuestion,
+  }
 }
 
 function appendText(

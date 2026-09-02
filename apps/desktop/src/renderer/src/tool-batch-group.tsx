@@ -12,6 +12,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { RestoreButton } from './conversation-block.tsx'
+import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import type { ToolCall } from './conversation-state.ts'
 import {
   summarizeToolBatch,
@@ -35,7 +36,7 @@ export function ToolBatchGroup({
   checkpointRestoreToolUseId,
   skills,
   projectDir,
-  onCheckpointRestoreChange,
+  onCheckpointRestoreRequest,
   onToggle,
 }: {
   runtimeId: string
@@ -46,7 +47,7 @@ export function ToolBatchGroup({
   checkpointRestoreToolUseId: string | null
   skills: readonly SkillSummary[]
   projectDir: string | null
-  onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
+  onCheckpointRestoreRequest: CheckpointRestoreRequest
   onToggle: (id: string) => void
 }) {
   const expanded = expandedIds.has(batch.id)
@@ -82,7 +83,7 @@ export function ToolBatchGroup({
               expanded={expandedIds.has(row.id)}
               busy={busy}
               checkpointRestorePending={checkpointRestoreToolUseId === row.call.id}
-              onCheckpointRestoreChange={onCheckpointRestoreChange}
+              onCheckpointRestoreRequest={onCheckpointRestoreRequest}
               onToggle={() => onToggle(row.id)}
             />
           ))}
@@ -98,7 +99,7 @@ function ToolBatchRowView({
   expanded,
   busy,
   checkpointRestorePending,
-  onCheckpointRestoreChange,
+  onCheckpointRestoreRequest,
   onToggle,
 }: {
   runtimeId: string
@@ -106,7 +107,7 @@ function ToolBatchRowView({
   expanded: boolean
   busy: boolean
   checkpointRestorePending: boolean
-  onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
+  onCheckpointRestoreRequest: CheckpointRestoreRequest
   onToggle: () => void
 }) {
   const failed = row.call.status === 'error'
@@ -144,7 +145,7 @@ function ToolBatchRowView({
             toolUseId={row.call.id}
             busy={busy}
             pending={checkpointRestorePending}
-            onPendingChange={onCheckpointRestoreChange}
+            onRequest={onCheckpointRestoreRequest}
           />
         ) : null}
       </div>

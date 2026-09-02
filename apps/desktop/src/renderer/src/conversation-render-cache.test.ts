@@ -7,7 +7,7 @@ import {
   type ConversationBlockRenderProps,
 } from './conversation-render-cache.ts'
 
-const onCheckpointRestoreChange = () => {}
+const onCheckpointRestoreRequest = async () => true
 const onEdit = async () => true
 const onFork = () => {}
 const onToggle = () => {}
@@ -28,7 +28,7 @@ function props(block: Block): ConversationBlockRenderProps {
     forkPending: false,
     skills: [],
     projectDir: 'E:\\Agent\\WhyCode',
-    onCheckpointRestoreChange,
+    onCheckpointRestoreRequest,
     onEdit,
     onFork,
     onToggle,

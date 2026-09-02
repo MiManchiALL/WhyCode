@@ -251,6 +251,8 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
   }
   // 编辑关系已经与新根 user-input 原子落盘；重放从该事实派生，不能再写一份副本。
   if (event.type === 'user-message-edited' || event.type === 'btw-message-edited') return null
+  // 失败回滚没有改变可恢复状态，只作为当前窗口的即时操作反馈，不污染会话时间线。
+  if (event.type === 'checkpoint-restored' && !event.ok) return null
   switch (event.type) {
     case 'turn-start':
     case 'work-finished':

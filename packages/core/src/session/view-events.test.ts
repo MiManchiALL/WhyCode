@@ -66,6 +66,36 @@ describe('用户可见事件契约', () => {
         },
       },
     )
+    assert.equal(
+      toViewEvent({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-failed',
+        turnId: 'turn-1',
+        scope: 'files-and-chat',
+        ok: false,
+        error: '只作为即时反馈展示',
+      }),
+      null,
+    )
+    assert.deepEqual(
+      toViewEvent({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-restored',
+        turnId: 'turn-1',
+        scope: 'files',
+        ok: true,
+      }),
+      {
+        type: 'core-event',
+        event: {
+          type: 'checkpoint-restored',
+          toolUseId: 'tool-restored',
+          turnId: 'turn-1',
+          scope: 'files',
+          ok: true,
+        },
+      },
+    )
     assert.deepEqual(
       toViewEvent({ type: 'message-injected', id: 'queue-1', text: '补充要求' }),
       { type: 'user-message', inputId: 'queue-1', text: '补充要求', startsTurn: false },

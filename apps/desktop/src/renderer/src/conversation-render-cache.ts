@@ -1,4 +1,5 @@
 import type { SkillSummary } from '@whycode/core/skills'
+import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import type { Block } from './conversation-state.ts'
 
 export interface ConversationBlockRenderProps {
@@ -16,7 +17,7 @@ export interface ConversationBlockRenderProps {
   forkPending: boolean
   skills: readonly SkillSummary[]
   projectDir: string | null
-  onCheckpointRestoreChange: (toolUseId: string, pending: boolean) => void
+  onCheckpointRestoreRequest: CheckpointRestoreRequest
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onFork: (turnId: string) => void
   onToggle: (id: string) => void
@@ -87,7 +88,7 @@ export function sameConversationBlockRenderProps(
     return !next.showCheckpointRestore || (
       previous.runtimeId === next.runtimeId
       && previous.busy === next.busy
-      && previous.onCheckpointRestoreChange === next.onCheckpointRestoreChange
+      && previous.onCheckpointRestoreRequest === next.onCheckpointRestoreRequest
     )
   }
 

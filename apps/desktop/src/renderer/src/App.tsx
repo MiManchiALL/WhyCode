@@ -120,6 +120,11 @@ import {
   QueuedMessageCard,
   type QueuedMessageAction,
 } from './queued-message-card.tsx'
+import {
+  ConversationFeedbackToast,
+  type ConversationFeedback,
+} from './conversation-feedback.tsx'
+import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
@@ -169,6 +174,8 @@ export function App() {
   const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
   const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
+  const [conversationFeedback, setConversationFeedback] =
+    useState<ConversationFeedback | null>(null)
   const [forkOrigin, setForkOrigin] = useState<SessionForkOrigin | null>(null)
   const [forkPendingTurnId, setForkPendingTurnId] = useState<string | null>(null)
   /** 协商进行中的状态条文案（null = 无协商） */
@@ -208,6 +215,7 @@ export function App() {
   const pendingScrollRestoreRef = useRef<ConversationScrollPosition | null>(null)
   const conversationScrollReleaseRef = useRef<(() => void) | null>(null)
   const expandedIdsRef = useRef(view.expanded)
+  const conversationFeedbackIdRef = useRef(0)
   expandedIdsRef.current = view.expanded
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
@@ -341,6 +349,19 @@ export function App() {
   const addError = useCallback((text: string) => {
     applyConversationEvent({ type: 'error', message: text, recoverable: true })
   }, [applyConversationEvent])
+  const showConversationFeedback = useCallback((
+    tone: ConversationFeedback['tone'],
+    message: string,
+  ) => {
+    setConversationFeedback({
+      id: ++conversationFeedbackIdRef.current,
+      tone,
+      message,
+    })
+  }, [])
+  const dismissConversationFeedback = useCallback((id: number) => {
+    setConversationFeedback((current) => current?.id === id ? null : current)
+  }, [])
   const {
     drafts: imageDrafts,
     addFiles: addImageFiles,
@@ -641,6 +662,7 @@ export function App() {
       pendingScrollRestoreRef.current = scroll
       stickToBottom.current = scroll.atBottom
       setShowJumpBottom(!scroll.atBottom)
+      setConversationFeedback(null)
     }
     setWorkspace(snapshot.workspace)
     if (changingRuntime) setWorktreePreparation(null)
@@ -756,6 +778,14 @@ export function App() {
         setCheckpointRestoreToolUseId((current) =>
           current === event.toolUseId ? null : current,
         )
+        showConversationFeedback(
+          event.ok ? 'success' : 'error',
+          event.ok
+            ? event.scope === 'files-and-chat'
+              ? '已回滚该轮对话与相关文件改动。'
+              : '文件已回滚，对话已保留。'
+            : `回滚失败：${event.error ?? '当前检查点无法恢复'}`,
+        )
         break
       case 'message-queued':
         // 运行中插话不会重复发 work-started，但已是新的用户活动。
@@ -831,6 +861,7 @@ export function App() {
     refreshSessions,
     restoreQueuedDrafts,
     setDeletionBlocksRuntime,
+    showConversationFeedback,
     synchronizeUnownedResume,
   ])
 
@@ -1083,12 +1114,67 @@ export function App() {
     || sessionTransitionPending
     || attachmentSubmissionPending
     || restoredSubmissionPending
+    || checkpointRestoreToolUseId !== null
 
-  const changeCheckpointRestore = useCallback((toolUseId: string, pending: boolean) => {
-    setCheckpointRestoreToolUseId((current) =>
-      pending ? (current ?? toolUseId) : current === toolUseId ? null : current,
-    )
-  }, [])
+  const requestCheckpointRestore = useCallback<CheckpointRestoreRequest>(async (
+    toolUseId,
+    scope,
+    kind,
+  ) => {
+    const targetRuntimeId = runtimeIdRef.current
+    if (!targetRuntimeId) return false
+    if (kind === 'check') {
+      try {
+        const result = await window.whycode.sendCommand(targetRuntimeId, {
+          type: 'check-checkpoint-restore',
+          toolUseId,
+          scope,
+        })
+        if (runtimeIdRef.current !== targetRuntimeId) return false
+        if (result?.ok) return true
+        showConversationFeedback(
+          'error',
+          `无法回滚：${result?.error ?? '当前检查点无法恢复'}`,
+        )
+      } catch (error) {
+        if (runtimeIdRef.current !== targetRuntimeId) return false
+        showConversationFeedback(
+          'error',
+          `回滚校验失败：${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      return false
+    }
+
+    setCheckpointRestoreToolUseId((current) => current ?? toolUseId)
+    try {
+      const result = await window.whycode.sendCommand(targetRuntimeId, {
+        type: 'restore-checkpoint',
+        toolUseId,
+        scope,
+      })
+      if (runtimeIdRef.current !== targetRuntimeId) return false
+      if (!result || result.ok) return true
+      showConversationFeedback(
+        'error',
+        `回滚失败：${result.error ?? '回滚请求未能提交'}`,
+      )
+      return false
+    } catch (error) {
+      if (runtimeIdRef.current !== targetRuntimeId) return false
+      showConversationFeedback(
+        'error',
+        `回滚失败：${error instanceof Error ? error.message : String(error)}`,
+      )
+      return false
+    } finally {
+      if (runtimeIdRef.current === targetRuntimeId) {
+        setCheckpointRestoreToolUseId((current) =>
+          current === toolUseId ? null : current,
+        )
+      }
+    }
+  }, [showConversationFeedback])
 
   const activateNewSession = useCallback(async (
     workspaceRequest?: StartWorkspaceRequest,
@@ -1729,7 +1815,14 @@ export function App() {
             scrollRef={scrollRef}
             onNavigate={navigateConversation}
           />
-          <section className="flex min-w-0 flex-1 flex-col">
+          <section className="relative flex min-w-0 flex-1 flex-col">
+            {conversationFeedback && (
+              <ConversationFeedbackToast
+                key={conversationFeedback.id}
+                feedback={conversationFeedback}
+                onDismiss={dismissConversationFeedback}
+              />
+            )}
             <main
               ref={scrollRef}
               onScroll={onScroll}
@@ -1769,7 +1862,7 @@ export function App() {
                   forkPendingTurnId={forkPendingTurnId}
                   skills={skillCatalog.skills}
                   projectDir={projectDir}
-                  onCheckpointRestoreChange={changeCheckpointRestore}
+                  onCheckpointRestoreRequest={requestCheckpointRestore}
                   onEdit={editUserMessage}
                   onFork={forkConversation}
                   onToggle={toggle}

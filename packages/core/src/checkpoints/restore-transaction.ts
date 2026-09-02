@@ -24,9 +24,25 @@ export class ResourceRestoreTransaction {
 
   async apply(): Promise<void> {
     await this.captureSafety()
-    await this.preflight()
+    await this.validate()
     await this.applyReverse()
     await this.verifyFinal()
+  }
+
+  /** 只读校验当前文件仍与 Agent 最后一次写入一致；不会创建备份或修改资源。 */
+  async validate(): Promise<void> {
+    const seen = new Set<string>()
+    for (const manifest of [...this.manifests].reverse()) {
+      for (const resource of [...manifest.resources].reverse()) {
+        if (!resource.after) throw new Error('精确文件检查点损坏')
+        const key = pathKey(resource.path)
+        if (seen.has(key)) continue
+        seen.add(key)
+        if (!await currentFileMatches(resource.after)) {
+          throw new Error(`文件在 Agent 操作后又被修改，已拒绝覆盖：${resource.path}`)
+        }
+      }
+    }
   }
 
   async compensate(): Promise<void> {
@@ -41,22 +57,6 @@ export class ResourceRestoreTransaction {
         const key = pathKey(resource.path)
         if (!this.safety.has(key)) {
           this.safety.set(key, await captureFileState(resource.path, this.blobDir))
-        }
-      }
-    }
-  }
-
-  /** 只比较每个路径最后一次 Agent 写入后的状态；更早状态由不可变 manifest 链保证。 */
-  private async preflight(): Promise<void> {
-    const seen = new Set<string>()
-    for (const manifest of [...this.manifests].reverse()) {
-      for (const resource of [...manifest.resources].reverse()) {
-        if (!resource.after) throw new Error('精确文件检查点损坏')
-        const key = pathKey(resource.path)
-        if (seen.has(key)) continue
-        seen.add(key)
-        if (!await currentFileMatches(resource.after)) {
-          throw new Error(`文件在 Agent 操作后又被修改，已拒绝覆盖：${resource.path}`)
         }
       }
     }
