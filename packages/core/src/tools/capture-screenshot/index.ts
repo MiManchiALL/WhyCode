@@ -10,22 +10,48 @@ import {
   captureScreenshotPrompt,
 } from './prompt.ts'
 
+export const SCREENSHOT_REGION_SCALE = 1_000
+
 const regionSchema = z.object({
-  x: z.number().nonnegative(),
-  y: z.number().nonnegative(),
-  width: z.number().positive().max(100_000),
-  height: z.number().positive().max(100_000),
+  x: z.number().min(0).max(SCREENSHOT_REGION_SCALE)
+    .describe('区域左边界，0～1000 标准化坐标'),
+  y: z.number().min(0).max(SCREENSHOT_REGION_SCALE)
+    .describe('区域上边界，0～1000 标准化坐标'),
+  width: z.number().positive().max(SCREENSHOT_REGION_SCALE)
+    .describe('区域宽度，0～1000 标准化尺寸'),
+  height: z.number().positive().max(SCREENSHOT_REGION_SCALE)
+    .describe('区域高度，0～1000 标准化尺寸'),
+}).superRefine((region, ctx) => {
+  if (region.x + region.width > SCREENSHOT_REGION_SCALE) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['width'],
+      message: `区域横向范围不能超过 ${SCREENSHOT_REGION_SCALE}`,
+    })
+  }
+  if (region.y + region.height > SCREENSHOT_REGION_SCALE) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['height'],
+      message: `区域纵向范围不能超过 ${SCREENSHOT_REGION_SCALE}`,
+    })
+  }
 })
 
 export function createScreenshotCaptureRequestSchema(supportsOriginalDetail: boolean) {
   return z.object({
-    target: z.enum(['screen', 'window', 'region']).default('screen'),
-    display_id: z.string().trim().min(1).max(100).optional(),
-    window_title: z.string().trim().min(1).max(500).optional(),
-    region: regionSchema.optional(),
-    detail: supportsOriginalDetail
+    target: z.enum(['screen', 'window'])
+      .describe('screen 截取显示器当前画面；window 截取指定应用窗口'),
+    display_id: z.string().trim().max(100).optional()
+      .describe('screen 使用的显示器 ID；省略时使用主显示器'),
+    window_title: z.string().trim().max(500).optional()
+      .describe('window 必须提供的窗口完整标题或唯一子串'),
+    region: regionSchema.optional()
+      .describe('screen 的可选裁剪区域，使用相对显示器的 0～1000 标准化坐标'),
+    detail: (supportsOriginalDetail
       ? z.enum(['high', 'original']).default('high')
-      : z.literal('high').default('high'),
+      : z.literal('high').default('high'))
+      .describe('图片细节级别；常规检查使用 high'),
   })
     .superRefine(validateScreenshotRequest)
     .overwrite(normalizeScreenshotRequest)
@@ -33,20 +59,24 @@ export function createScreenshotCaptureRequestSchema(supportsOriginalDetail: boo
 
 function validateScreenshotRequest(
   input: {
-    target: 'screen' | 'window' | 'region'
+    target: 'screen' | 'window'
     display_id?: string
     region?: unknown
     window_title?: string
   },
   ctx: z.RefinementCtx,
 ): void {
-  if (input.target === 'region' && !input.region) {
-    ctx.addIssue({ code: 'custom', path: ['region'], message: '区域截图必须提供 region' })
+  if (input.target === 'window' && !input.window_title?.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['window_title'],
+      message: '窗口截图必须提供 window_title',
+    })
   }
 }
 
 function normalizeScreenshotRequest<T extends {
-  target: 'screen' | 'window' | 'region'
+  target: 'screen' | 'window'
   display_id?: string
   region?: unknown
   window_title?: string
@@ -58,12 +88,11 @@ function normalizeScreenshotRequest<T extends {
   // the requested capture scope or turn an otherwise valid call into a retry.
   if (normalized.target === 'window') {
     delete normalized.display_id
+    delete normalized.region
   } else {
     delete normalized.window_title
   }
-  if (normalized.target !== 'region') {
-    delete normalized.region
-  }
+  if (!normalized.display_id) delete normalized.display_id
 
   return normalized
 }
@@ -94,7 +123,7 @@ export function createCaptureScreenshotTool(options: {
   )
   return buildTool({
     name: CAPTURE_SCREENSHOT_TOOL_NAME,
-    description: '截取屏幕、窗口或区域并交给视觉 Main 验证',
+    description: '截取应用窗口或显示器画面并进行视觉检查',
     prompt: captureScreenshotPrompt(options.supportsOriginalDetail === true),
     inputSchema,
     isReadOnly: true,

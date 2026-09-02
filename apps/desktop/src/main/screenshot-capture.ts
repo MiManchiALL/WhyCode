@@ -1,14 +1,13 @@
-import { setTimeout as delay } from 'node:timers/promises'
 import {
-  BrowserWindow,
   desktopCapturer,
   screen,
   type Display,
   type NativeImage,
 } from 'electron'
-import type {
-  ScreenshotCaptureRequest,
-  ScreenshotCaptureResult,
+import {
+  SCREENSHOT_REGION_SCALE,
+  type ScreenshotCaptureRequest,
+  type ScreenshotCaptureResult,
 } from '@whycode/core'
 import {
   fitImageSize,
@@ -16,12 +15,10 @@ import {
   selectDisplaySource,
   selectWindowSource,
 } from './screenshot-selection.ts'
-import { captureWithHostExcluded } from './screenshot-host-exclusion.ts'
 
 const MAX_CAPTURE_DIMENSION = 7_680
 const MAX_CAPTURE_PIXELS = 20_000_000
 const MAX_CAPTURE_BYTES = 20_000_000
-const HOST_HIDE_SETTLE_MS = 100
 
 export async function captureDesktopScreenshot(
   request: ScreenshotCaptureRequest,
@@ -41,34 +38,25 @@ async function captureDisplay(
     width: Math.max(1, Math.round(display.bounds.width * display.scaleFactor)),
     height: Math.max(1, Math.round(display.bounds.height * display.scaleFactor)),
   }, MAX_CAPTURE_DIMENSION, MAX_CAPTURE_PIXELS)
-  const capturedSource = await captureWithHostExcluded(currentWhyCodeWindow(), {
-    mode: process.platform === 'win32' ? 'content-protection' : 'hide-focused',
-    settleAfterHide: () => delay(HOST_HIDE_SETTLE_MS, undefined, { signal: abortSignal }),
-    capture: async () => {
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: physicalSize,
-      })
-      throwIfAborted(abortSignal)
-      return selectDisplaySource(sources, String(display.id))
-    },
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: physicalSize,
   })
-  const source = capturedSource.result
+  throwIfAborted(abortSignal)
+  const source = selectDisplaySource(sources, String(display.id))
   let image = source.thumbnail
   if (image.isEmpty()) throw new Error('系统没有返回屏幕画面；请检查操作系统的屏幕录制权限')
 
   let description = `已截取显示器 ${display.id}${display.label ? `（${display.label}）` : ''}`
-  if (capturedSource.hostExcluded) description += '；已自动排除 WhyCode 窗口'
-  if (request.target === 'region') {
-    const region = request.region!
-    const crop = regionCrop(region, display.bounds, image.getSize())
+  if (request.region) {
+    const crop = regionCrop(request.region, image.getSize(), SCREENSHOT_REGION_SCALE)
     image = image.crop(crop)
-    description += ` 的区域 DIP(${formatRegion(region)})`
+    description += ` 的标准化区域(${formatRegion(request.region)})`
   }
   const encoded = encodeBoundedPng(image)
   if (encoded.resized) description += '；为满足 20 MB 附件上限已等比缩小'
   return {
-    name: screenshotName(request.target),
+    name: screenshotName(request.region ? 'screen-region' : 'screen'),
     bytes: encoded.bytes,
     description,
   }
@@ -82,11 +70,8 @@ async function captureWindow(
     types: ['window'],
     thumbnailSize: { width: 0, height: 0 },
   })
-  const selected = selectWindowSource(
-    lightweight,
-    request.window_title,
-    currentWhyCodeWindow()?.getMediaSourceId(),
-  )
+  if (!request.window_title) throw new Error('窗口截图必须提供 window_title')
+  const selected = selectWindowSource(lightweight, request.window_title)
   throwIfAborted(abortSignal)
   const sources = await desktopCapturer.getSources({
     types: ['window'],
@@ -117,12 +102,6 @@ function selectDisplay(displayId: string | undefined): Display {
   )
 }
 
-function currentWhyCodeWindow(): BrowserWindow | null {
-  return BrowserWindow.getFocusedWindow()
-    ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed())
-    ?? null
-}
-
 function encodeBoundedPng(source: NativeImage): { bytes: Buffer; resized: boolean } {
   const sourceSize = source.getSize()
   const boundedSize = fitImageSize(
@@ -150,8 +129,8 @@ function encodeBoundedPng(source: NativeImage): { bytes: Buffer; resized: boolea
   throw new Error('截图压缩后仍超过 20 MB，请改用区域截图')
 }
 
-function screenshotName(target: ScreenshotCaptureRequest['target']): string {
-  return `screenshot-${target}-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.png`
+function screenshotName(scope: ScreenshotCaptureRequest['target'] | 'screen-region'): string {
+  return `screenshot-${scope}-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.png`
 }
 
 function formatRegion(region: { x: number; y: number; width: number; height: number }): string {

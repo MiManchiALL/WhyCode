@@ -24,12 +24,6 @@ describe('桌面截图源选择', () => {
     assert.throws(() => selectDisplaySource(sources, '3'), /没有显示器 3/)
   })
 
-  it('默认只选当前 WhyCode 窗口，不会猜测其它窗口', () => {
-    const sources = [source('window:whycode', 'WhyCode'), source('window:editor', 'Editor')]
-    assert.equal(selectWindowSource(sources, undefined, 'window:whycode').id, 'window:whycode')
-    assert.throws(() => selectWindowSource(sources, undefined, 'window:gone'), /找不到当前 WhyCode/)
-  })
-
   it('窗口标题优先精确匹配，唯一子串可用，歧义时明确失败', () => {
     const sources = [
       source('window:1', 'WhyCode — Project A'),
@@ -44,41 +38,40 @@ describe('桌面截图源选择', () => {
 })
 
 describe('区域截图坐标换算', () => {
-  it('把相对显示器的 DIP 区域映射到真实截图像素', () => {
+  it('把 0～1000 标准化区域映射到真实截图像素', () => {
     assert.deepEqual(
       regionCrop(
-        { x: 100, y: 50, width: 300, height: 200 },
-        { width: 1_920, height: 1_080 },
+        { x: 250, y: 250, width: 500, height: 500 },
         { width: 3_840, height: 2_160 },
+        1_000,
       ),
-      { x: 200, y: 100, width: 600, height: 400 },
+      { x: 960, y: 540, width: 1_920, height: 1_080 },
     )
   })
 
-  it('处理非整数缩放并把末端裁剪约束在截图边界内', () => {
+  it('使用向外取整覆盖非整数像素并把末端约束在截图边界内', () => {
     assert.deepEqual(
       regionCrop(
-        { x: 1_279, y: 719, width: 1, height: 1 },
-        { width: 1_280, height: 720 },
+        { x: 999, y: 999, width: 1, height: 1 },
         { width: 1_920, height: 1_080 },
+        1_000,
       ),
-      { x: 1_919, y: 1_079, width: 1, height: 1 },
+      { x: 1_918, y: 1_078, width: 2, height: 2 },
     )
   })
 
   it('拒绝越界、负坐标和无效尺寸', () => {
-    const display = { width: 1_920, height: 1_080 }
     const image = { width: 1_920, height: 1_080 }
     assert.throws(
-      () => regionCrop({ x: 1_900, y: 0, width: 100, height: 10 }, display, image),
-      /超出显示器/,
+      () => regionCrop({ x: 900, y: 0, width: 200, height: 10 }, image, 1_000),
+      /标准化边界/,
     )
     assert.throws(
-      () => regionCrop({ x: -1, y: 0, width: 10, height: 10 }, display, image),
-      /非负坐标/,
+      () => regionCrop({ x: -1, y: 0, width: 10, height: 10 }, image, 1_000),
+      /非负标准化坐标/,
     )
     assert.throws(
-      () => regionCrop({ x: 0, y: 0, width: 0, height: 10 }, display, image),
+      () => regionCrop({ x: 0, y: 0, width: 0, height: 10 }, image, 1_000),
       /正尺寸/,
     )
   })

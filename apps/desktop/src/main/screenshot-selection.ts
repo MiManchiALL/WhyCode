@@ -16,16 +16,8 @@ export function selectDisplaySource<T extends ScreenshotSourceLike>(
 
 export function selectWindowSource<T extends ScreenshotSourceLike>(
   sources: readonly T[],
-  windowTitle: string | undefined,
-  currentSourceId?: string,
+  windowTitle: string,
 ): T {
-  if (!windowTitle) {
-    const current = currentSourceId
-      ? sources.find((source) => source.id === currentSourceId)
-      : undefined
-    if (current) return current
-    throw new Error('找不到当前 WhyCode 窗口；请提供 window_title 选择其它窗口')
-  }
   const wanted = windowTitle.trim().toLocaleLowerCase()
   if (!wanted) throw new Error('窗口标题不能为空')
   const exact = sources.filter((source) => source.name.toLocaleLowerCase() === wanted)
@@ -41,8 +33,8 @@ export function selectWindowSource<T extends ScreenshotSourceLike>(
 
 export function regionCrop(
   region: { x: number; y: number; width: number; height: number },
-  displaySize: { width: number; height: number },
   imageSize: { width: number; height: number },
+  coordinateScale: number,
 ): { x: number; y: number; width: number; height: number } {
   if (
     !Number.isFinite(region.x)
@@ -53,34 +45,38 @@ export function regionCrop(
     || region.y < 0
     || region.width <= 0
     || region.height <= 0
+    || !Number.isFinite(coordinateScale)
+    || coordinateScale <= 0
   ) {
-    throw new Error('截图区域必须是显示器内的非负坐标和正尺寸')
+    throw new Error('截图区域必须使用有效的非负标准化坐标和正尺寸')
   }
   if (
-    !Number.isFinite(displaySize.width)
-    || !Number.isFinite(displaySize.height)
-    || !Number.isFinite(imageSize.width)
+    !Number.isFinite(imageSize.width)
     || !Number.isFinite(imageSize.height)
-    || displaySize.width <= 0
-    || displaySize.height <= 0
     || imageSize.width <= 0
     || imageSize.height <= 0
   ) {
-    throw new Error('显示器或截图尺寸无效')
+    throw new Error('截图尺寸无效')
   }
   if (
-    region.x + region.width > displaySize.width
-    || region.y + region.height > displaySize.height
+    region.x + region.width > coordinateScale
+    || region.y + region.height > coordinateScale
   ) {
-    throw new Error(`截图区域超出显示器 DIP 边界 ${displaySize.width}×${displaySize.height}`)
+    throw new Error(`截图区域超出 0～${coordinateScale} 标准化边界`)
   }
-  const scaleX = imageSize.width / displaySize.width
-  const scaleY = imageSize.height / displaySize.height
+  const left = Math.floor(region.x / coordinateScale * imageSize.width)
+  const top = Math.floor(region.y / coordinateScale * imageSize.height)
+  const right = Math.ceil(
+    (region.x + region.width) / coordinateScale * imageSize.width,
+  )
+  const bottom = Math.ceil(
+    (region.y + region.height) / coordinateScale * imageSize.height,
+  )
   const crop = {
-    x: Math.round(region.x * scaleX),
-    y: Math.round(region.y * scaleY),
-    width: Math.max(1, Math.round(region.width * scaleX)),
-    height: Math.max(1, Math.round(region.height * scaleY)),
+    x: left,
+    y: top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
   }
   crop.width = Math.min(crop.width, imageSize.width - crop.x)
   crop.height = Math.min(crop.height, imageSize.height - crop.y)

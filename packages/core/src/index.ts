@@ -174,6 +174,7 @@ export {
 export {
   CAPTURE_SCREENSHOT_TOOL_NAME,
   createCaptureScreenshotTool,
+  SCREENSHOT_REGION_SCALE,
   screenshotCaptureRequestSchema,
   type ScreenshotCaptureHandler,
   type ScreenshotCaptureRequest,

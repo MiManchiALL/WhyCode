@@ -218,11 +218,13 @@ function recencySummary(input: ToolInput): string {
 }
 
 function screenshotSummary(input: ToolInput): string {
-  const target = text(input, 'target') || 'screen'
+  const target = text(input, 'target')
   if (input.target === 'window') {
     return join(target, text(input, 'window_title'))
   }
-  if (input.target === 'region') return join(target, imageRegionSize(input.region))
+  if (input.target === 'screen' && input.region) {
+    return join(target, prefixed('region', imageRegionSize(input.region)))
+  }
   return target
 }
 

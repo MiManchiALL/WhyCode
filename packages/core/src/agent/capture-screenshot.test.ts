@@ -23,7 +23,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 describe('CaptureScreenshot Agent 链路', () => {
   it('以 target 为准规范化兼容提供商补齐的无关可选字段', () => {
     const schema = createScreenshotCaptureRequestSchema(false)
-    const region = { x: 0, y: 0, width: 1920, height: 1080 }
+    const region = { x: 100, y: 200, width: 300, height: 400 }
 
     assert.deepEqual(schema.parse({
       target: 'screen',
@@ -34,6 +34,7 @@ describe('CaptureScreenshot Agent 链路', () => {
     }), {
       target: 'screen',
       display_id: 'primary',
+      region,
       detail: 'high',
     })
     assert.deepEqual(schema.parse({
@@ -47,19 +48,14 @@ describe('CaptureScreenshot Agent 链路', () => {
       window_title: 'WhyCode',
       detail: 'high',
     })
-    assert.deepEqual(schema.parse({
-      target: 'region',
-      display_id: 'primary',
-      window_title: 'WhyCode',
-      region,
+    assert.throws(() => schema.parse({ detail: 'high' }), /target/)
+    assert.throws(() => schema.parse({ target: 'region', detail: 'high' }), /target/)
+    assert.throws(() => schema.parse({ target: 'window', detail: 'high' }), /window_title/)
+    assert.throws(() => schema.parse({
+      target: 'screen',
+      region: { x: 900, y: 0, width: 200, height: 100 },
       detail: 'high',
-    }), {
-      target: 'region',
-      display_id: 'primary',
-      region,
-      detail: 'high',
-    })
-    assert.throws(() => schema.parse({ target: 'region', detail: 'high' }), /region/)
+    }), /1000/)
   })
 
   it('受管默认工作区的视觉 Main 可截图，首次隐私审批记住后形成截图—再截图闭环', async () => {
@@ -75,21 +71,23 @@ describe('CaptureScreenshot Agent 链路', () => {
             tool.type === 'function' && tool.name === CAPTURE_SCREENSHOT_TOOL_NAME)
           assert.ok(screenshotTool?.type === 'function')
           assert.match(screenshotTool.description ?? '', /先截图建立基线.*修改.*再截图验证/)
-          assert.match(screenshotTool.description ?? '', /单个外部应用.*window_title/)
-          assert.match(screenshotTool.description ?? '', /screen\/region.*排除 WhyCode/)
+          assert.match(screenshotTool.description ?? '', /单个应用.*window_title/)
+          assert.match(screenshotTool.description ?? '', /保持打开且未最小化/)
+          assert.match(screenshotTool.description ?? '', /target=screen.*region/)
+          assert.doesNotMatch(screenshotTool.description ?? '', /Main|排除 WhyCode|target=region/)
           if (call === 1) return toolStep({ target: 'screen' })
           assert.equal(JSON.stringify(options.prompt).includes(ONE_PIXEL_PNG.toString('base64')), true)
           if (call === 2) {
             return toolStep({
-              target: 'region',
-              region: { x: 10, y: 20, width: 300, height: 200 },
+              target: 'screen',
+              region: { x: 100, y: 200, width: 300, height: 200 },
             }, 'capture-2')
           }
           return finalStep('已用修改后的第二张截图完成视觉验证。')
         },
       })
       const events: CoreEvent[] = []
-      const capturedTargets: string[] = []
+      const capturedScopes: string[] = []
       let approvals = 0
       const session = new AgentSession({
         model: modelEntry(model),
@@ -97,7 +95,7 @@ describe('CaptureScreenshot Agent 链路', () => {
         promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
         sessionRecorder: journal,
         captureScreenshot: async (request) => {
-          capturedTargets.push(request.target)
+          capturedScopes.push(`${request.target}:${request.region ? 'region' : 'full'}`)
           return {
             name: `${request.target}.png`,
             bytes: ONE_PIXEL_PNG,
@@ -114,7 +112,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       })
 
       assert.equal(await session.handleUserMessage('先看界面，修改后再截图验证'), 'completed')
-      assert.deepEqual(capturedTargets, ['screen', 'region'])
+      assert.deepEqual(capturedScopes, ['screen:full', 'screen:region'])
       assert.equal(approvals, 1)
       assert.equal(events.filter((event) => event.type === 'image-viewed').length, 2)
       const reopened = await store.open(journal.sessionId)
@@ -186,7 +184,6 @@ describe('CaptureScreenshot Agent 链路', () => {
                 detail: 'high',
                 display_id: 'primary',
                 window_title: 'WhyCode',
-                region: { x: 0, y: 0, width: 1920, height: 1080 },
               })
             : finalStep('已看见当前屏幕。')
         },
