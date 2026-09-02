@@ -4,6 +4,7 @@ import type { Block } from './conversation-state.ts'
 import {
   conversationSections,
   findLatestForkTurnId,
+  isFileRollbackBoundarySection,
   isForkBoundarySection,
   shouldSealTrailingToolBatch,
   shouldShowComposerProcessingTime,
@@ -54,6 +55,23 @@ describe('已完成任务的会话展示投影', () => {
     assert.equal(isForkBoundarySection(forkSource, null), false)
     assert.equal(isForkBoundarySection(forkSource, 'turn-other'), false)
     assert.equal(isForkBoundarySection(forkSource, 'turn-source'), true)
+  })
+
+  it('仅文件回滚边界只命中对应用户 turn 所在的区段', () => {
+    const sections = conversationSections([
+      user('user-b', 'turn-b'),
+      text('answer-b', '完成 B'),
+      duration('duration-b'),
+      user('user-c', 'turn-c'),
+      tool('tool-c'),
+      duration('duration-c'),
+    ])
+
+    assert.deepEqual(
+      sections.map((section) => isFileRollbackBoundarySection(section, 'turn-c')),
+      [false, true],
+    )
+    assert.equal(isFileRollbackBoundarySection(sections[1]!, null), false)
   })
 
   it('快捷 Fork 只选择具有最终正文的最新完整工作', () => {

@@ -19,6 +19,7 @@ import {
   summarizeToolCallParts,
   toolCallDetails,
 } from './tool-call-summary.ts'
+import { ConversationTimelineMarker } from './conversation-timeline-marker.tsx'
 
 export function BlockView({
   runtimeId,
@@ -99,7 +100,11 @@ export function BlockView({
     return <div className="wc-menu-surface mb-3 border-[#dec8bf] bg-[#f8efec] px-3 py-2 wc-type-control text-[var(--wc-danger)]">{block.text}</div>
   }
   if (block.kind === 'notice') {
-    return <div className="mb-3 rounded-xl bg-[var(--wc-blue)] px-3 py-2 text-xs text-[var(--wc-blue-ink)]">{block.text}</div>
+    return (
+      <ConversationTimelineMarker tone={block.tone ?? 'neutral'}>
+        {block.text}
+      </ConversationTimelineMarker>
+    )
   }
   if (block.kind === 'peer') {
     return <PeerCard peer={block.peer} expanded={expanded} onToggle={onToggle} />

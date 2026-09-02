@@ -79,7 +79,7 @@ export type Block =
       outcome: 'completed' | 'stopped'
     }
   | { kind: 'tool'; id: string; call: ToolCall }
-  | { kind: 'notice'; id: string; text: string }
+  | { kind: 'notice'; id: string; text: string; tone?: 'compact' }
   | { kind: 'error'; id: string; text: string }
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
@@ -89,6 +89,7 @@ interface PendingStepSnapshot {
   nextId: number
   taskPlan: TaskPlan | null
   pendingQuestion: UserQuestion | null
+  fileRollbackBoundaryTurnId: string | null
 }
 
 export interface ConversationState {
@@ -101,6 +102,8 @@ export interface ConversationState {
   taskPlan: TaskPlan | null
   /** 最近一个尚未被用户消息回答的问题；由可见事件重放恢复。 */
   pendingQuestion: UserQuestion | null
+  /** 最近一次仅文件回滚的 turn 边界；后续首次成功文件修改会清除。 */
+  fileRollbackBoundaryTurnId: string | null
   /** 实时模型步骤开始前的稳定界面；提交时清除，丢弃时原样恢复。 */
   pendingStep: PendingStepSnapshot | null
   /** 仅表示下一条 BBTW 是否可用；完整侧历史由主进程事实源持有。 */
@@ -130,6 +133,7 @@ export function createConversationState(
     turnStartBlocks: new Map(),
     taskPlan: null,
     pendingQuestion: null,
+    fileRollbackBoundaryTurnId: null,
     pendingStep: null,
     btwContinuation: null,
     pendingBtw: null,
@@ -336,12 +340,21 @@ function applyStableCoreEvent(
         attachments: event.attachments.map((attachment) => structuredClone(attachment)),
       }))
     case 'checkpoint-created':
-      // 只有完整精确覆盖才能兑现恢复承诺；partial 不具备可展示的回滚语义。
-      if (event.coverage !== 'complete') return state
-      return updateTool(state, event.toolUseId, (call) => ({
-        ...call,
-        hasCheckpoint: true,
-      }))
+      // 该事件已确认产生真实文件差异，因此先结束旧回滚标记；只有完整覆盖
+      // 才能继续兑现新的恢复承诺，partial 不展示回滚入口。
+      if (event.coverage !== 'complete') {
+        return state.fileRollbackBoundaryTurnId === null
+          ? state
+          : { ...state, fileRollbackBoundaryTurnId: null }
+      }
+      return {
+        ...updateTool(state, event.toolUseId, (call) => ({
+          ...call,
+          hasCheckpoint: true,
+        })),
+        // checkpoint-created 只会在写类工具成功产生真实文件差异后出现。
+        fileRollbackBoundaryTurnId: null,
+      }
     case 'checkpoint-disabled':
       return appendNotice(state, `检查点已禁用：${event.reason}`)
     case 'checkpoint-restored':
@@ -350,6 +363,7 @@ function applyStableCoreEvent(
       return appendNotice(
         state,
         `上下文已压缩（${event.level === 'full' ? '摘要' : '清理'}：${Math.round(event.preTokens / 1000)}k → ${Math.round(event.postTokens / 1000)}k tokens）`,
+        'compact',
       )
     case 'error':
       return appendBlock(state, { kind: 'error', id: nextBlockId(state), text: event.message })
@@ -413,6 +427,7 @@ function snapshotConversation(state: ConversationState): PendingStepSnapshot {
     nextId: state.nextId,
     taskPlan: state.taskPlan,
     pendingQuestion: state.pendingQuestion,
+    fileRollbackBoundaryTurnId: state.fileRollbackBoundaryTurnId,
   }
 }
 
@@ -623,12 +638,22 @@ function applyUserMessageEdited(
     turnStartBlocks,
     taskPlan: structuredClone(event.taskPlan),
     pendingQuestion: null,
+    fileRollbackBoundaryTurnId: null,
     pendingStep: null,
   }
 }
 
-export function appendNotice(state: ConversationState, text: string): ConversationState {
-  return appendBlock(state, { kind: 'notice', id: nextBlockId(state), text })
+export function appendNotice(
+  state: ConversationState,
+  text: string,
+  tone?: Extract<Block, { kind: 'notice' }>['tone'],
+): ConversationState {
+  return appendBlock(state, {
+    kind: 'notice',
+    id: nextBlockId(state),
+    text,
+    ...(tone ? { tone } : {}),
+  })
 }
 
 export function toggleExpanded(state: ConversationState, id: string): ConversationState {
@@ -787,6 +812,7 @@ function applyCheckpointRestored(
     ...state,
     blocks,
     taskPlan,
+    fileRollbackBoundaryTurnId: event.scope === 'files' ? event.turnId : null,
     pendingQuestion: event.scope === 'files-and-chat'
       ? structuredClone(event.question ?? null)
       : state.pendingQuestion,

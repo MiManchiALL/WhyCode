@@ -1858,6 +1858,7 @@ export function App() {
                   busy={interactionBusy}
                   checkpointRestoreAnchorIds={checkpointRestoreAnchors}
                   checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+                  fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
                   showThinkingGap={thinkingGapVisible}
                   forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
                   forkPendingTurnId={forkPendingTurnId}

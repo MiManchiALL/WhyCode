@@ -45,6 +45,10 @@
   --wc-sand-ink: #6b5e49;
   --wc-blue: #e0e7eb;
   --wc-blue-ink: #52636c;
+  --wc-compact: #e0e9e1;
+  --wc-compact-ink: #526454;
+  --wc-rollback: #eee2e1;
+  --wc-rollback-ink: #755a58;
   --wc-danger: #b95f5b;
   --wc-status-running: #279447;
   --wc-status-running-ring: rgb(39 148 71 / 42%);

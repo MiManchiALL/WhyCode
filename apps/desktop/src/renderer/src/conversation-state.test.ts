@@ -717,6 +717,145 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /已回滚|回滚失败/)
   })
 
+  it('仅文件回滚只保留一个 turn 边界，后续回滚会把它移到更早位置', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '修改 B', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-b' }),
+      { type: 'user-message', text: '修改 C', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-c' }),
+    ])
+
+    state = applyCoreEvent(state, {
+      type: 'checkpoint-restored',
+      toolUseId: 'tool-c',
+      turnId: 'turn-c',
+      scope: 'files',
+      ok: true,
+    })
+    assert.equal(state.fileRollbackBoundaryTurnId, 'turn-c')
+    assert.doesNotMatch(JSON.stringify(state.blocks), /文件已回退/)
+
+    state = applyCoreEvent(state, {
+      type: 'user-message-accepted',
+      inputId: 'input-after-restore',
+      text: '先解释现状',
+      startsTurn: true,
+    })
+    state = applyCoreEvent(state, { type: 'thinking-delta', text: '继续检查' })
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'read-after-restore',
+      toolName: 'ReadFile',
+      input: { path: 'src/app.ts' },
+    })
+    state = applyCoreEvent(state, {
+      type: 'tool-end',
+      toolUseId: 'read-after-restore',
+      result: '内容',
+      isError: false,
+    })
+    assert.equal(state.fileRollbackBoundaryTurnId, 'turn-c')
+
+    state = applyCoreEvent(state, {
+      type: 'checkpoint-restored',
+      toolUseId: 'tool-b',
+      turnId: 'turn-b',
+      scope: 'files',
+      ok: true,
+    })
+    assert.equal(state.fileRollbackBoundaryTurnId, 'turn-b')
+  })
+
+  it('真实文件检查点建立后清除回滚边界，步骤丢弃则恢复原边界', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '修改 C', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-c' }),
+      core({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-c',
+        turnId: 'turn-c',
+        scope: 'files',
+        ok: true,
+      }),
+    ])
+
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'write-after-restore',
+      toolName: 'WriteFile',
+      input: { path: 'src/new.ts' },
+    })
+    state = applyCoreEvent(state, {
+      type: 'checkpoint-created',
+      toolUseId: 'write-after-restore',
+      hash: 'checkpoint-new',
+      coverage: 'complete',
+    })
+    assert.equal(state.fileRollbackBoundaryTurnId, null)
+
+    state = applyCoreEvent(state, { type: 'step-discarded' })
+    assert.equal(state.fileRollbackBoundaryTurnId, 'turn-c')
+
+    state = applyCoreEvent(state, {
+      type: 'tool-start',
+      toolUseId: 'write-committed',
+      toolName: 'WriteFile',
+      input: { path: 'src/new.ts' },
+    })
+    state = applyCoreEvent(state, {
+      type: 'checkpoint-created',
+      toolUseId: 'write-committed',
+      hash: 'checkpoint-committed',
+      coverage: 'complete',
+    })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    assert.equal(state.fileRollbackBoundaryTurnId, null)
+  })
+
+  it('失败回滚保持现有边界，文件和对话回滚则清除边界', () => {
+    const restored = createConversationState([
+      { type: 'user-message', text: '修改 C', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-c' }),
+      core({
+        type: 'checkpoint-restored',
+        toolUseId: 'tool-c',
+        turnId: 'turn-c',
+        scope: 'files',
+        ok: true,
+      }),
+    ])
+    const failed = applyCoreEvent(restored, {
+      type: 'checkpoint-restored',
+      toolUseId: 'tool-failed',
+      turnId: 'turn-b',
+      scope: 'files',
+      ok: false,
+      error: '恢复失败',
+    })
+    assert.equal(failed, restored)
+    assert.equal(failed.fileRollbackBoundaryTurnId, 'turn-c')
+
+    const filesAndChat = applyCoreEvent(failed, {
+      type: 'checkpoint-restored',
+      toolUseId: 'tool-c',
+      turnId: 'turn-c',
+      scope: 'files-and-chat',
+      ok: true,
+    })
+    assert.equal(filesAndChat.fileRollbackBoundaryTurnId, null)
+  })
+
+  it('上下文压缩通知使用独立的绿色语义色调', () => {
+    const state = createConversationState([core({
+      type: 'context-compacted',
+      level: 'full',
+      preTokens: 49_000,
+      postTokens: 26_000,
+    })])
+
+    assert.equal(state.blocks[0]?.kind === 'notice' ? state.blocks[0].tone : null, 'compact')
+  })
+
   it('回滚失败不追加到对话时间线', () => {
     const before = createConversationState([
       { type: 'user-message', text: '保留当前对话', startsTurn: true },
@@ -778,6 +917,8 @@ describe('会话界面时间线重建', () => {
       [...checkpointRestoreAnchorIds(live)],
       [...checkpointRestoreAnchorIds(replayed)],
     )
+    assert.equal(replayed.fileRollbackBoundaryTurnId, 'turn-2')
+    assert.equal(live.fileRollbackBoundaryTurnId, replayed.fileRollbackBoundaryTurnId)
   })
 
   it('恢复结构化任务计划，并在文件和对话回滚时同步恢复计划状态', () => {

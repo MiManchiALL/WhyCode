@@ -9,6 +9,7 @@ import {
   useAutomaticallyCollapsingBtwId,
 } from './btw-conversation-group.tsx'
 import {
+  isFileRollbackBoundarySection,
   isForkBoundarySection,
   shouldSealTrailingToolBatch,
   type ConversationSection,
@@ -30,6 +31,7 @@ import {
 } from './conversation-tool-batches.ts'
 import { ToolBatchGroup } from './tool-batch-group.tsx'
 import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
+import { ConversationTimelineMarker } from './conversation-timeline-marker.tsx'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -40,6 +42,7 @@ interface ConversationViewProps {
   busy: boolean
   checkpointRestoreAnchorIds: ReadonlySet<string>
   checkpointRestoreToolUseId: string | null
+  fileRollbackBoundaryTurnId: string | null
   showThinkingGap: boolean
   forkSourceTurnId: string | null
   forkPendingTurnId: string | null
@@ -172,11 +175,21 @@ function ConversationSectionView({
   section: ConversationSection
   newlySealedSegmentIds: ReadonlySet<string>
 }) {
+  const showFileRollbackBoundary = isFileRollbackBoundarySection(
+    section,
+    props.fileRollbackBoundaryTurnId,
+  )
   if (section.kind === 'block') {
-    return <ConversationBlock {...conversationBlockProps(props, section.block)} />
+    return (
+      <>
+        {showFileRollbackBoundary ? <FileRollbackBoundary /> : null}
+        <ConversationBlock {...conversationBlockProps(props, section.block)} />
+      </>
+    )
   }
   return (
     <div>
+      {showFileRollbackBoundary ? <FileRollbackBoundary /> : null}
       <WorkSection
         {...props}
         section={section}
@@ -416,6 +429,14 @@ function ForkBoundary() {
       </span>
       <span className="h-px flex-1 bg-[var(--wc-line)]" />
     </div>
+  )
+}
+
+function FileRollbackBoundary() {
+  return (
+    <ConversationTimelineMarker tone="rollback">
+      文件已回退至此检查点
+    </ConversationTimelineMarker>
   )
 }
 

@@ -76,6 +76,19 @@ export function isForkBoundarySection(
     && section.forkTurnId === forkSourceTurnId
 }
 
+/** 仅文件回滚标记跟随对应用户 turn，独立于该 turn 的处理过程展开状态。 */
+export function isFileRollbackBoundarySection(
+  section: ConversationSection,
+  turnId: string | null,
+): boolean {
+  if (turnId === null) return false
+  if (section.kind === 'block') {
+    return section.block.kind === 'user' && section.block.turnId === turnId
+  }
+  return section.userBlocks.some((block) =>
+    block.kind === 'user' && block.turnId === turnId)
+}
+
 /**
  * 输入区计时只在处理过程仍逐块展开时显示；活动任务摘要已经自带同一计时，
  * 两处不能同时出现。
