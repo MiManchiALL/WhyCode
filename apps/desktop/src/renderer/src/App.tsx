@@ -93,6 +93,7 @@ import {
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
+import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
@@ -1948,6 +1949,7 @@ export function App() {
                           projectDir={projectDir}
                           baseRef={contextBaseRef}
                           busy={sessionChangeLocked}
+                          canChangeWorkspace={canChangeSessionWorkspace(sessionIdRef.current)}
                           onPickProject={pickProject}
                           onClearProject={startNewSession}
                           onStart={startWorkspaceSession}
