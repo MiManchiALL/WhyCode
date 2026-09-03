@@ -713,7 +713,15 @@ describe('会话界面时间线重建', () => {
 
     const tools = state.blocks.filter((block) => block.kind === 'tool')
     assert.equal(tools[0]?.kind === 'tool' ? tools[0].call.hasCheckpoint : null, undefined)
+    assert.equal(
+      tools[0]?.kind === 'tool' ? tools[0].call.createdFileCheckpoint : null,
+      undefined,
+    )
     assert.equal(tools[1]?.kind === 'tool' ? tools[1].call.hasCheckpoint : null, false)
+    assert.equal(
+      tools[1]?.kind === 'tool' ? tools[1].call.createdFileCheckpoint : null,
+      true,
+    )
     assert.doesNotMatch(JSON.stringify(state.blocks), /已回滚|回滚失败/)
   })
 

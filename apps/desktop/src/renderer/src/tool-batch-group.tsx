@@ -120,7 +120,7 @@ function ToolBatchRowView({
           aria-expanded={expanded}
           onClick={onToggle}
         >
-          <BatchIcon category={toolCategory(row.call.name)} size={13} />
+          <BatchIcon category={toolCategory(row.call)} size={13} />
           <span className="shrink-0">{row.call.name}</span>
           {row.summary ? row.fullPath ? (
             <FilePathLabel name={row.summary} path={row.fullPath} />

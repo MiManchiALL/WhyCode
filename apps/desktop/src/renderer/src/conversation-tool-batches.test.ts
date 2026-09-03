@@ -204,6 +204,25 @@ describe('工具批次折叠投影', () => {
     }
   })
 
+  it('把任何曾建立完整文件检查点的工具统一归为文件修改', () => {
+    for (const name of ['MoveFile', 'BuildOfficeArtifact', 'FutureFileTool']) {
+      assert.deepEqual(summarizeToolBatch(makeBatch([
+        checkpointedTool(`checkpointed-${name}`, name),
+      ])), {
+        label: '编辑了文件',
+        icon: 'files',
+      })
+    }
+
+    assert.deepEqual(summarizeToolBatch(makeBatch([
+      checkpointedTool('move', 'MoveFile'),
+      tool('run', 'RunCommand'),
+    ])), {
+      label: '编辑文件并运行了命令',
+      icon: 'files',
+    })
+  })
+
   it('把多文件编辑拆成独立行并匹配逐文件统计', () => {
     const edit = tool('edit', 'EditFile', {
       edits: [
@@ -309,6 +328,16 @@ function tool(
     id: `block-${id}`,
     call: { id, name, input, status: 'done', progress: '', result: 'ok' },
   }
+}
+
+function checkpointedTool(
+  id: string,
+  name: string,
+  input: unknown = {},
+): Extract<Block, { kind: 'tool' }> {
+  const block = tool(id, name, input)
+  block.call.createdFileCheckpoint = true
+  return block
 }
 
 function makeBatch(tools: Extract<Block, { kind: 'tool' }>[]): ToolBatch {

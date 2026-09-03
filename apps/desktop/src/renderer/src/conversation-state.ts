@@ -29,6 +29,8 @@ export interface ToolCall {
   fileChanges?: ToolFileChange[]
   /** 有持久化资源检查点；切换会话或重启后仍可回滚。 */
   hasCheckpoint?: boolean
+  /** 曾建立完整文件检查点；作为不可变历史事实供工具展示分类使用。 */
+  createdFileCheckpoint?: boolean
   /** ViewImage 复制进当前会话的稳定图片元数据。 */
   attachments?: ImageAttachment[]
 }
@@ -351,6 +353,7 @@ function applyStableCoreEvent(
         ...updateTool(state, event.toolUseId, (call) => ({
           ...call,
           hasCheckpoint: true,
+          createdFileCheckpoint: true,
         })),
         // checkpoint-created 只会在写类工具成功产生真实文件差异后出现。
         fileRollbackBoundaryTurnId: null,

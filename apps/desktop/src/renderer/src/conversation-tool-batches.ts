@@ -50,7 +50,8 @@ export interface ToolBatchRow {
   checkpointAnchor: boolean
 }
 
-const FILE_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile'])
+/** 输入结构支持按文件拆行的工具；完整的文件修改分类由检查点事实补齐。 */
+const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile'])
 
 /**
  * 文本是工具批次的提交边界：只有后续文本已经出现，前一段工具才折叠。
@@ -148,7 +149,7 @@ export function presentToolSegmentContent(
 
 export function summarizeToolBatch(batch: ToolBatch): ToolBatchSummary {
   const categories = new Set<ToolBatchCategory>()
-  for (const { call } of batch.tools) categories.add(toolCategory(call.name))
+  for (const { call } of batch.tools) categories.add(toolCategory(call))
 
   const hasFiles = categories.has('files')
   const hasCommand = categories.has('command')
@@ -177,7 +178,9 @@ export function toolBatchRows(
   },
 ): ToolBatchRow[] {
   return batch.tools.flatMap(({ call }) => {
-    const paths = FILE_TOOL_NAMES.has(call.name) ? toolCallFilePaths(call.name, call.input) : []
+    const paths = FILE_PATH_ROW_TOOL_NAMES.has(call.name)
+      ? toolCallFilePaths(call.name, call.input)
+      : []
     if (paths.length === 0) {
       return [{
         id: `${batch.id}:row:${call.id}`,
@@ -204,9 +207,11 @@ export function toolBatchRows(
   })
 }
 
-export function toolCategory(toolName: string): ToolBatchCategory {
-  if (FILE_TOOL_NAMES.has(toolName)) return 'files'
-  return toolName === 'RunCommand' ? 'command' : 'other'
+export function toolCategory(
+  call: Pick<ToolCall, 'name' | 'createdFileCheckpoint'>,
+): ToolBatchCategory {
+  if (call.createdFileCheckpoint || FILE_PATH_ROW_TOOL_NAMES.has(call.name)) return 'files'
+  return call.name === 'RunCommand' ? 'command' : 'other'
 }
 
 function appendSegment(
