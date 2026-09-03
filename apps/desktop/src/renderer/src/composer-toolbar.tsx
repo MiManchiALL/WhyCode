@@ -61,8 +61,8 @@ interface ComposerToolbarProps {
 export function ComposerToolbar(props: ComposerToolbarProps) {
   const isStopAction = props.primaryAction === 'stop'
   return (
-    <div className="flex min-h-10 items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-1">
+    <div className="wc-composer-toolbar">
+      <div className="wc-composer-toolbar-leading">
         <AttachmentMenu {...props} />
         <PermissionMenu {...props} />
         <button
@@ -82,7 +82,7 @@ export function ComposerToolbar(props: ComposerToolbarProps) {
           <span className="wc-composer-control-label">协商{props.consensus.enabled ? ' · 开' : ''}</span>
         </button>
       </div>
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className="wc-composer-toolbar-trailing">
         <ModelMenu {...props} />
         <ContextUsageMeter usage={props.contextUsage} />
         <button
@@ -229,11 +229,11 @@ function ModelMenu(props: ComposerToolbarProps) {
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          className="wc-composer-control wc-focus-ring flex h-8 min-w-0 max-w-[18rem] items-center gap-1 rounded-xl px-2 text-[var(--wc-muted)] transition-colors hover:bg-black/[0.045] disabled:opacity-40"
+          className="wc-composer-control wc-composer-model-trigger wc-focus-ring flex h-8 min-w-0 max-w-[18rem] items-center gap-1 overflow-hidden rounded-xl px-2 text-[var(--wc-muted)] transition-colors hover:bg-black/[0.045] disabled:opacity-40"
           disabled={props.configurationLocked}
           title={`${label}${effort ? ` · 推理 ${reasoningEffortLabel(selectedEffort as ReasoningEffort)}` : ''}`}
         >
-          <span className="truncate">{label}</span>
+          <span className="min-w-0 truncate">{label}</span>
           {effort && <span className="shrink-0 text-[var(--wc-faint)]">{reasoningEffortLabel(selectedEffort as ReasoningEffort)}</span>}
           <ChevronDown size={13} className="shrink-0" />
         </button>

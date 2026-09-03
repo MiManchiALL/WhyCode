@@ -102,6 +102,13 @@ import { TaskHeader } from './task-header.tsx'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
 import { SubagentPanel } from './subagent-panel.tsx'
+import { RightPanelResizeHandle } from './right-panel-resize-handle.tsx'
+import {
+  loadRightPanelWidthPreference,
+  normalizeRightPanelWidthRatio,
+  persistRightPanelWidthRatio,
+  rightPanelWidthExpression,
+} from './right-panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import type { SubagentPanelPage } from './subagent-presentation.ts'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
@@ -148,6 +155,10 @@ export function App() {
   const [subagentPanelOpen, setSubagentPanelOpen] = useState(false)
   const [subagentPanelRetained, setSubagentPanelRetained] = useState(false)
   const [subagentPanelPage, setSubagentPanelPage] = useState<SubagentPanelPage | null>(null)
+  const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
+  const [rightPanelWidthPreference, setRightPanelWidthPreference] = useState(
+    loadRightPanelWidthPreference,
+  )
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
@@ -183,6 +194,7 @@ export function App() {
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
   const conversationContentRef = useRef<HTMLDivElement>(null)
+  const rightPanelRef = useRef<HTMLDivElement>(null)
   const questionSubmittingRef = useRef(false)
   const sessionTransitionPendingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
@@ -916,6 +928,34 @@ export function App() {
   useEffect(() => {
     if (subagentPanelOpen) setSubagentPanelRetained(true)
   }, [subagentPanelOpen])
+
+  const updateRightPanelWidthRatio = useCallback((ratio: number) => {
+    const normalized = Math.min(
+      normalizeRightPanelWidthRatio(ratio),
+      rightPanelWidthPreference.maximumRatio,
+    )
+    setRightPanelWidthPreference((current) => current.ratio === normalized
+      ? current
+      : { ...current, ratio: normalized })
+    persistRightPanelWidthRatio(normalized)
+  }, [rightPanelWidthPreference.maximumRatio])
+
+  const collapseRightPanel = useCallback(() => {
+    setSubagentPanelOpen(false)
+  }, [])
+
+  const previewRightPanelExpand = useCallback((ratio: number) => {
+    setRightPanelWidthPreference((current) => {
+      const normalized = Math.min(
+        normalizeRightPanelWidthRatio(ratio),
+        current.maximumRatio,
+      )
+      return current.ratio === normalized
+        ? current
+        : { ...current, ratio: normalized }
+    })
+    setSubagentPanelOpen(true)
+  }, [])
 
   useEffect(() => {
     return window.whycode.onSubagents((state) => {
@@ -2078,12 +2118,31 @@ export function App() {
           </section>
 
           <div
-            className={`relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
+            ref={rightPanelRef}
+            data-panel-open={subagentPanelOpen ? 'true' : 'false'}
+            className={`wc-right-panel-shell relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
               subagentPanelOpen
-                ? 'ml-0 w-[40vw]'
+                ? 'ml-0'
                 : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
             }`}
+            style={subagentPanelOpen
+              ? { width: rightPanelWidthExpression(
+                  rightPanelWidthPreference.ratio,
+                  rightPanelWidthPreference.maximumRatio,
+                ) }
+              : undefined}
           >
+            {(subagentPanelOpen || rightPanelResizeActive) && (
+              <RightPanelResizeHandle
+                panelRef={rightPanelRef}
+                ratio={rightPanelWidthPreference.ratio}
+                maximumRatio={rightPanelWidthPreference.maximumRatio}
+                onRatioChange={updateRightPanelWidthRatio}
+                onCollapse={collapseRightPanel}
+                onPreviewExpand={previewRightPanelExpand}
+                onResizeActiveChange={setRightPanelResizeActive}
+              />
+            )}
             <div
               className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-200 ease-out ${
                 subagentPanelOpen
@@ -2108,7 +2167,7 @@ export function App() {
               />
             </div>
             <div
-              className={`absolute inset-y-0 right-0 w-[40vw] transition-[opacity,transform] duration-200 ease-out ${
+              className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-200 ease-out ${
                 subagentPanelOpen
                   ? 'translate-x-0 opacity-100'
                   : 'pointer-events-none translate-x-8 opacity-0'

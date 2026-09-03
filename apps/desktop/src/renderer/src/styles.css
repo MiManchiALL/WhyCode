@@ -124,6 +124,49 @@ button:not(:disabled),
   box-shadow: 0 1px 2px rgb(33 35 31 / 4%);
 }
 
+.wc-right-panel-shell[data-resizing='true'][data-panel-open='true'] {
+  transition-duration: 0ms;
+}
+
+.wc-right-panel-resize-handle {
+  position: absolute;
+  z-index: 30;
+  inset-block: 0;
+  left: 0;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.wc-right-panel-resize-handle::after {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 1px;
+  background: var(--wc-line);
+  content: '';
+  opacity: 1;
+  transition: opacity 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.wc-right-panel-shell[data-panel-open='false'] .wc-right-panel-resize-handle::after {
+  opacity: 0;
+}
+
+.wc-right-panel-resize-handle:hover::after,
+.wc-right-panel-resize-handle:focus-visible::after,
+.wc-right-panel-shell[data-resizing='true'] .wc-right-panel-resize-handle::after {
+  background: var(--wc-line-strong);
+  box-shadow: 1px 0 0 rgb(48 50 45 / 8%);
+}
+
+html[data-wc-right-panel-resizing='true'],
+html[data-wc-right-panel-resizing='true'] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .wc-menu-surface,
 .wc-menu-content {
   min-width: 0;
@@ -380,6 +423,34 @@ button:not(:disabled),
 .wc-composer-control {
   font-size: 13px;
   line-height: 20px;
+}
+
+.wc-composer-toolbar {
+  display: grid;
+  min-height: 2.5rem;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.wc-composer-toolbar-leading,
+.wc-composer-toolbar-trailing {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.wc-composer-toolbar-leading {
+  gap: 0.25rem;
+}
+
+.wc-composer-toolbar-trailing {
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.wc-composer-model-trigger {
+  flex: 0 1 18rem;
 }
 
 .wc-type-control {
