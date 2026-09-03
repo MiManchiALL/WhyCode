@@ -1557,9 +1557,7 @@ export function App() {
     inputRef.current = ''
     clearSkills()
     setBtwMode(null)
-    // 自己发消息 = 主动行为，恢复贴底跟随
-    stickToBottom.current = true
-    setShowJumpBottom(false)
+    // 沿用发送前的浏览位置；只有原本贴底时，既有内容跟随才会继续滚动。
     const restoreRejectedInput = () => {
       setInput((current) => {
         const restored = text && current ? `${text}\n${current}` : text || current
