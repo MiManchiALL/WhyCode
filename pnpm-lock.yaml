@@ -150,6 +150,9 @@ importers:
       ai:
         specifier: ^7.0.14
         version: 7.0.14(zod@4.4.3)
+      diff:
+        specifier: 9.0.0
+        version: 9.0.0
       sharp:
         specifier: 0.35.3
         version: 0.35.3(@types/node@24.13.2)

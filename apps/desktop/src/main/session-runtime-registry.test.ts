@@ -207,16 +207,20 @@ describe('SessionRuntimeRegistry', () => {
     const registry = new SessionRuntimeRegistry({ idleUnloadMs: -1 })
     const target = runtime('attachment')
     registry.add(target)
+    assert.equal(target.attachmentPreparationInProgress, false)
     const signal = target.beginAttachmentPreparation()
     const closing = registry.closeAll()
 
     assert.equal(signal.aborted, true)
+    assert.equal(target.attachmentPreparationInProgress, true)
+    assert.equal(target.executionBusy, true)
     let closed = false
     void closing.then(() => { closed = true })
     await Promise.resolve()
     assert.equal(closed, false)
 
     target.endAttachmentPreparation()
+    assert.equal(target.attachmentPreparationInProgress, false)
     await closing
     assert.equal(registry.get(target.runtimeId), null)
   })

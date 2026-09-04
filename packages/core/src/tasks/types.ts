@@ -92,7 +92,7 @@ export type TaskPlanState = z.infer<typeof taskPlanStateSchema>
 export type TaskPlanStepUpdate = TaskPlanState | undefined
 
 export function cloneActiveTaskPlan(plan: ActiveTaskPlan | null): ActiveTaskPlan | null {
-  return plan ? activeTaskPlanSchema.parse(structuredClone(plan)) : null
+  return plan ? activeTaskPlanSchema.parse(plan) : null
 }
 
 export function emptyTaskPlanState(): TaskPlanState {
@@ -105,7 +105,7 @@ export function emptyTaskPlanState(): TaskPlanState {
 }
 
 export function cloneTaskPlanState(state: TaskPlanState): TaskPlanState {
-  return taskPlanStateSchema.parse(structuredClone(state))
+  return taskPlanStateSchema.parse(state)
 }
 
 export function interruptTaskPlanState(

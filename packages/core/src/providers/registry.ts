@@ -5,7 +5,8 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel, ProviderMetadata } from 'ai'
 import {
   getBuiltInProvider,
-  getModelProfile,
+  MODEL_CATALOG,
+  type ModelProfile,
   type BuiltInProviderId,
   type ModelCapabilities,
   type ProviderProtocol,
@@ -48,8 +49,7 @@ export interface ModelCreateOptions {
 
 type ModelFactory = (config: ProviderConfig, wireModelId: string) => LanguageModel
 
-function registryEntry(profileId: string, factory: ModelFactory): ModelEntry {
-  const profile = getModelProfile(profileId)
+function registryEntry(profile: ModelProfile, factory: ModelFactory): ModelEntry {
   return {
     id: profile.id,
     displayName: profile.displayName,
@@ -111,65 +111,19 @@ function copyRequestHeaders(config: ProviderConfig): Record<string, string> | un
   return config.requestHeaders ? { ...config.requestHeaders } : undefined
 }
 
-/** 内置模型的官方连接适配器；模型固有信息只维护在 catalog.ts。 */
-export const MODEL_REGISTRY: readonly ModelEntry[] = [
-  registryEntry(
-    'anthropic:claude-sonnet-4-6',
-    anthropicMessages,
-  ),
-  registryEntry(
-    'deepseek:deepseek-v4-flash',
-    deepSeekChat,
-  ),
-  registryEntry(
-    'deepseek:deepseek-v4-pro',
-    deepSeekChat,
-  ),
-  registryEntry(
-    'deepseek:deepseek-v4-flash-vision-exp',
-    deepSeekChat,
-  ),
-  registryEntry(
-    'google:gemini-3.1-pro-preview',
-    googleChat,
-  ),
-  registryEntry(
-    'google:gemini-3.8-flash',
-    googleChat,
-  ),
-  registryEntry(
-    'mimo:mimo-v2.5',
-    mimoChat,
-  ),
-  registryEntry(
-    'zhipu:glm-5v-turbo',
-    zhipuChat,
-  ),
-  registryEntry(
-    'zhipu:glm-4.7',
-    zhipuChat,
-  ),
-  registryEntry(
-    'openai:gpt-5.6-sol',
-    openAIResponses,
-  ),
-  registryEntry(
-    'openai:gpt-5.6-terra',
-    openAIResponses,
-  ),
-  registryEntry(
-    'openai:gpt-5.6-luna',
-    openAIResponses,
-  ),
-  registryEntry(
-    'openai:gpt-6-astra',
-    openAIResponses,
-  ),
-  registryEntry(
-    'openai:gpt-5.5',
-    openAIResponses,
-  ),
-] as const
+const MODEL_FACTORIES: Record<BuiltInProviderId, ModelFactory> = {
+  anthropic: anthropicMessages,
+  deepseek: deepSeekChat,
+  google: googleChat,
+  mimo: mimoChat,
+  zhipu: zhipuChat,
+  openai: openAIResponses,
+}
+
+/** 内置模型的官方连接适配器；身份、顺序和固有信息只维护在 catalog.ts。 */
+export const MODEL_REGISTRY: readonly ModelEntry[] = MODEL_CATALOG.map((profile) =>
+  registryEntry(profile, MODEL_FACTORIES[profile.provider]),
+)
 
 export function getModelEntry(modelId: string): ModelEntry {
   const entry = MODEL_REGISTRY.find((m) => m.id === modelId)

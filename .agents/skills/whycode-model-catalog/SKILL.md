@@ -17,7 +17,7 @@ description: Add, replace, retire, or audit WhyCode model profiles and explicitl
 
 | 变更 | 实施范围 | 测试处理 |
 |---|---|---|
-| 只有型号、能力数值或路由数据变化，现有 SDK 能表达 | 改目录、注册项及已授权路由 | 更新现有数据用例；通常不新增测试函数或文件 |
+| 只有型号、能力数值或路由数据变化，现有 SDK 能表达 | 改目录及已授权路由；注册表自动装配 | 更新现有数据用例；通常不新增测试函数或文件 |
 | 输入模态、推理闭集、签名或请求字段有差异 | 先检查当前协议工厂和请求测试是否已覆盖 | 只补缺失的协议行为断言，放进现有套件 |
 | SDK 确实丢字段或不支持新能力 | 核对锁定版本源码与上游修复，优先更新现有依赖 | 保留能复现该问题的通用回归测试；不另造同协议适配器 |
 
@@ -40,7 +40,7 @@ description: Add, replace, retire, or audit WhyCode model profiles and explicitl
 | 位置 | 修改边界 |
 |---|---|
 | `packages/core/src/providers/catalog.ts` | 官方身份、能力和该型号唯一的 `providerOptions` |
-| `packages/core/src/providers/registry.ts` | 注册项与协议工厂；换代更新注册项，工厂不随型号复制 |
+| `packages/core/src/providers/registry.ts` | 厂商协议工厂；注册表从 `MODEL_CATALOG` 自动装配，普通型号更新不改此文件 |
 | `packages/core/src/providers/reasoning-effort.ts` | 只有协议字段翻译变化时才改 |
 | `apps/desktop/src/main/cli-proxy-models.ts` | 精确审核路由及相对官方画像的最小约束 |
 | `apps/desktop/src/main/cli-proxy-discovery.ts` | 鉴权实例目录求交集；普通新增路由不改发现流程 |
@@ -53,7 +53,7 @@ description: Add, replace, retire, or audit WhyCode model profiles and explicitl
 
 ## 4. 退役同时删除实现和专属测试
 
-“保留”只增加当前仍受支持的画像及必要数据用例，不复制整套测试。“替换/退役”同时删除旧目录项、注册项、路由、默认及辅助选择中的失效引用、专属参数、无使用方依赖、测试夹具和过时说明。源码和长期测试不维护真实退役型号名单；Git 历史无需改写。
+“保留”只增加当前仍受支持的画像及必要数据用例，不复制整套测试。“替换/退役”同时删除旧目录项、路由、默认及辅助选择中的失效引用、专属参数、无使用方依赖、测试夹具和过时说明。源码和长期测试不维护真实退役型号名单；Git 历史无需改写。
 
 历史例外只属于用户数据：
 

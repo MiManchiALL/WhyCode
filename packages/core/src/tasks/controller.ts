@@ -87,7 +87,7 @@ export class TaskPlanController {
     const update = this.stepDirty && this.pendingDisplayPlan
       ? {
           state: cloneTaskPlanState(this.state),
-          plan: taskPlanSchema.parse(structuredClone(this.pendingDisplayPlan)),
+          plan: taskPlanSchema.parse(this.pendingDisplayPlan),
         }
       : undefined
     this.resetStep()
@@ -141,7 +141,7 @@ export class TaskPlanController {
       return mutationFailure('no_state_change', '必须提供任务项变化或状态更新。')
     }
 
-    const plan = activeTaskPlanSchema.parse(structuredClone(current))
+    const plan = activeTaskPlanSchema.parse(current)
     for (const change of changes) {
       const failure = this.applyItemChange(plan, change)
       if (failure) return failure
@@ -367,7 +367,7 @@ export class TaskPlanController {
   private publish(plan: TaskPlan): void {
     this.state.version++
     this.stepDirty = true
-    this.pendingDisplayPlan = taskPlanSchema.parse(structuredClone(plan))
+    this.pendingDisplayPlan = taskPlanSchema.parse(plan)
   }
 
   private resetStep(): void {

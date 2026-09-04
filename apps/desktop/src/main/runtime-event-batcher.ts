@@ -1,8 +1,5 @@
-import {
-  coalesceAdjacentCoreEvent,
-  type CoreEvent,
-} from '@whycode/core/events'
-import type { RuntimeEventEnvelope } from '../shared/session.ts'
+import { coalesceAdjacentCoreEvent } from '@whycode/core/events'
+import { isFrameBufferedEvent, type RuntimeEventEnvelope } from '../shared/session.ts'
 
 /** 20 Hz 足以保持文字流畅，同时显著降低 Electron 事件端口的原生对象 churn。 */
 export const RUNTIME_EVENT_BATCH_DELAY_MS = 50
@@ -50,7 +47,7 @@ export class RuntimeEventBatcher {
     this.pendingInputCount++
     this.append(envelope)
     if (
-      !isFrameBufferedRuntimeEvent(envelope.event)
+      !isFrameBufferedEvent(envelope.event)
       || this.pendingInputCount >= this.options.maxPendingInputs
     ) {
       this.flush()
@@ -106,11 +103,4 @@ export class RuntimeEventBatcher {
     this.pendingInputCount = 0
     this.options.publish(pending)
   }
-}
-
-function isFrameBufferedRuntimeEvent(event: CoreEvent): boolean {
-  return event.type === 'text-delta'
-    || event.type === 'thinking-delta'
-    || event.type === 'tool-progress'
-    || (event.type === 'peer-event' && event.event.type === 'text-delta')
 }

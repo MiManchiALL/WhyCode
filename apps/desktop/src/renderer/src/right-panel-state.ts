@@ -1,3 +1,5 @@
+import { filePathKey } from './local-files.ts'
+
 export type FilePreviewToolName = 'WriteFile' | 'EditFile' | 'DeleteFile' | 'MoveFile'
 
 export type RightPanelFileSource =
@@ -256,13 +258,6 @@ function stateValue(state: StoredRightPanelState): RightPanelSessionState {
     tabs: state.tabs,
     activeTabId: state.activeTabId,
   }
-}
-
-function filePathKey(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  return /^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('//')
-    ? normalized.toLowerCase()
-    : normalized
 }
 
 function assertNever(value: never): never {

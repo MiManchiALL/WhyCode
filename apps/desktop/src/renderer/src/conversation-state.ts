@@ -422,7 +422,6 @@ function applyStableCoreEvent(
           : '🖼 本轮含图片，仅由当前视觉模型处理；B/C 未读取图片，已跳过协商。',
       )
     case 'task-plan-updated':
-      return { ...state, taskPlan: structuredClone(event.plan) }
     case 'task-plan-restored':
       return { ...state, taskPlan: structuredClone(event.plan) }
     default:

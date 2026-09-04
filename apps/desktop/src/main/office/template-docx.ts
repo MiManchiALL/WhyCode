@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import { OfficeProcessingError } from '@whycode/core/office'
+import { array, bytes, record } from './template-input.ts'
 
 interface ParagraphSpan {
   end: number
@@ -195,25 +196,6 @@ function text(value: unknown): string {
     throw new OfficeProcessingError('corrupted', 'DOCX 模板编辑文字无效')
   }
   return value
-}
-
-function bytes(value: unknown, message: string): Uint8Array {
-  if (!(value instanceof Uint8Array) || value.byteLength === 0) {
-    throw new OfficeProcessingError('corrupted', message)
-  }
-  return value
-}
-
-function array(value: unknown, name: string): unknown[] {
-  if (!Array.isArray(value)) throw new OfficeProcessingError('corrupted', `${name} 必须是数组`)
-  return value
-}
-
-function record(value: unknown, message: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new OfficeProcessingError('corrupted', message)
-  }
-  return value as Record<string, unknown>
 }
 
 function escapeXml(value: string): string {

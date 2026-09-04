@@ -55,6 +55,18 @@ Function AutomationProcessIds(name)
 End Function
 `
 
+const MICROSOFT_EXCEL_SETUP_VBS = String.raw`If failure = "" And Not ownsApplication Then failure = "dedicated Excel process was not created"
+If failure = "" Then application.Visible = False
+CaptureFailure "hide Excel"
+If failure = "" Then application.DisplayAlerts = False
+CaptureFailure "disable Excel alerts"
+If failure = "" Then application.AskToUpdateLinks = False
+CaptureFailure "disable Excel link prompts"
+If failure = "" Then application.EnableEvents = False
+CaptureFailure "disable Excel events"
+If failure = "" Then application.AutomationSecurity = 3
+CaptureFailure "disable Excel macros"`
+
 export const MICROSOFT_OFFICE_PDF_VBS = String.raw`
 Option Explicit
 Dim source, output, format, pidFile, processName
@@ -120,17 +132,7 @@ Select Case format
     Set application = CreateObject("Excel.Application")
     CaptureFailure "create Excel"
     If failure = "" Then ownsApplication = SaveNewProcessId(processName, beforePids, pidFile)
-    If failure = "" And Not ownsApplication Then failure = "dedicated Excel process was not created"
-    If failure = "" Then application.Visible = False
-    CaptureFailure "hide Excel"
-    If failure = "" Then application.DisplayAlerts = False
-    CaptureFailure "disable Excel alerts"
-    If failure = "" Then application.AskToUpdateLinks = False
-    CaptureFailure "disable Excel link prompts"
-    If failure = "" Then application.EnableEvents = False
-    CaptureFailure "disable Excel events"
-    If failure = "" Then application.AutomationSecurity = 3
-    CaptureFailure "disable Excel macros"
+    ${MICROSOFT_EXCEL_SETUP_VBS}
     If failure = "" Then Set document = application.Workbooks.Open(source, 0, True)
     CaptureFailure "open XLSX"
     If failure = "" Then document.ExportAsFixedFormat 0, output
@@ -178,17 +180,7 @@ On Error Resume Next
 Set application = CreateObject("Excel.Application")
 CaptureFailure "create Excel"
 If failure = "" Then ownsApplication = SaveNewProcessId("EXCEL.EXE", beforePids, pidFile)
-If failure = "" And Not ownsApplication Then failure = "dedicated Excel process was not created"
-If failure = "" Then application.Visible = False
-CaptureFailure "hide Excel"
-If failure = "" Then application.DisplayAlerts = False
-CaptureFailure "disable Excel alerts"
-If failure = "" Then application.AskToUpdateLinks = False
-CaptureFailure "disable Excel link prompts"
-If failure = "" Then application.EnableEvents = False
-CaptureFailure "disable Excel events"
-If failure = "" Then application.AutomationSecurity = 3
-CaptureFailure "disable Excel macros"
+${MICROSOFT_EXCEL_SETUP_VBS}
 If failure = "" Then Set workbook = application.Workbooks.Open(source, 0, False)
 CaptureFailure "open XLSX"
 If failure = "" Then application.Calculation = -4105

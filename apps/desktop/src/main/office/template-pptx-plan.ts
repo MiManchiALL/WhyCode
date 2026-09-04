@@ -1,4 +1,5 @@
 import { OfficeProcessingError } from '@whycode/core/office'
+import { array, bytes, record } from './template-input.ts'
 
 export const IMAGE_CONTENT_TYPES = {
   gif: 'image/gif',
@@ -242,23 +243,4 @@ function positiveInteger(value: unknown, name: string): number {
     throw new OfficeProcessingError('corrupted', `${name} 必须是正整数`)
   }
   return Number(number)
-}
-
-function bytes(value: unknown, message: string): Uint8Array {
-  if (!(value instanceof Uint8Array) || value.byteLength === 0) {
-    throw new OfficeProcessingError('corrupted', message)
-  }
-  return value
-}
-
-function array(value: unknown, name: string): unknown[] {
-  if (!Array.isArray(value)) throw new OfficeProcessingError('corrupted', `${name} 必须是数组`)
-  return value
-}
-
-function record(value: unknown, message: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new OfficeProcessingError('corrupted', message)
-  }
-  return value as Record<string, unknown>
 }

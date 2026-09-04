@@ -416,45 +416,28 @@ function provideRuntimeEventPort(sender: WebContents): void {
 }
 
 function broadcastBackgroundTasks(state: BackgroundTaskState): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
-    try {
-      win.webContents.send(IPC.backgroundTasks, state)
-    } catch (error) {
-      console.warn('后台任务状态推送失败：', error)
-    }
-  }
+  broadcastToWindows(IPC.backgroundTasks, state, '后台任务状态推送失败：')
 }
 
 function broadcastSessionDeletion(state: SessionDeletionState): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
-    try {
-      win.webContents.send(IPC.sessionDeletion, state)
-    } catch (error) {
-      console.warn('会话删除状态推送失败：', error)
-    }
-  }
+  broadcastToWindows(IPC.sessionDeletion, state, '会话删除状态推送失败：')
 }
 
 function broadcastSubagents(state: SubagentState): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
-    try {
-      win.webContents.send(IPC.subagents, state)
-    } catch (error) {
-      console.warn('子代理状态推送失败：', error)
-    }
-  }
+  broadcastToWindows(IPC.subagents, state, '子代理状态推送失败：')
 }
 
 function broadcastSubagentEvent(envelope: SubagentEventEnvelope): void {
+  broadcastToWindows(IPC.subagentEvent, envelope, '子代理事件推送失败：')
+}
+
+function broadcastToWindows(channel: string, payload: unknown, failureMessage: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue
     try {
-      win.webContents.send(IPC.subagentEvent, envelope)
+      win.webContents.send(channel, payload)
     } catch (error) {
-      console.warn('子代理事件推送失败：', error)
+      console.warn(failureMessage, error)
     }
   }
 }

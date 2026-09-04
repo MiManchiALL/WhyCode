@@ -1,3 +1,5 @@
+import { diffArrays } from 'diff'
+
 /** 单个文件在一次工具调用中的 Git 风格行变更统计。 */
 export interface ToolFileChange {
   path: string
@@ -25,46 +27,6 @@ function splitLines(content: string): string[] {
   }
   if (start < content.length) lines.push(content.slice(start))
   return lines
-}
-
-/** Myers 最短编辑距离；相等行沿对角线前进，其余步骤只允许插入或删除。 */
-function shortestEditDistance(before: readonly string[], after: readonly string[]): number {
-  const beforeLength = before.length
-  const afterLength = after.length
-  const maximum = beforeLength + afterLength
-  const offset = maximum + 1
-  const frontier = new Int32Array(maximum * 2 + 3)
-  frontier.fill(-1)
-  frontier[offset + 1] = 0
-
-  for (let distance = 0; distance <= maximum; distance++) {
-    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
-      const index = offset + diagonal
-      let beforeIndex: number
-      if (
-        diagonal === -distance
-        || (diagonal !== distance && frontier[index - 1]! < frontier[index + 1]!)
-      ) {
-        beforeIndex = frontier[index + 1]!
-      } else {
-        beforeIndex = frontier[index - 1]! + 1
-      }
-
-      let afterIndex = beforeIndex - diagonal
-      while (
-        beforeIndex < beforeLength
-        && afterIndex < afterLength
-        && before[beforeIndex] === after[afterIndex]
-      ) {
-        beforeIndex++
-        afterIndex++
-      }
-      frontier[index] = beforeIndex
-      if (beforeIndex >= beforeLength && afterIndex >= afterLength) return distance
-    }
-  }
-
-  return maximum
 }
 
 /** 精确计算文本从 before 变为 after 所需的最少增删行数。 */
@@ -106,22 +68,17 @@ export function countLineChanges(before: string, after: string): LineChanges {
     : remainingAfter
   const larger = smaller === remainingBefore ? remainingAfter : remainingBefore
   const smallerLines = new Set(smaller)
-  let shared = false
-  for (const line of larger) {
-    if (!smallerLines.has(line)) continue
-    shared = true
-    break
-  }
-  if (!shared) {
+  if (!larger.some((line) => smallerLines.has(line))) {
     return { added: remainingAfter.length, removed: remainingBefore.length }
   }
 
-  const distance = shortestEditDistance(remainingBefore, remainingAfter)
-  const delta = remainingAfter.length - remainingBefore.length
-  return {
-    added: (distance + delta) / 2,
-    removed: (distance - delta) / 2,
+  let added = 0
+  let removed = 0
+  for (const change of diffArrays(remainingBefore, remainingAfter)) {
+    if (change.added) added += change.count
+    if (change.removed) removed += change.count
   }
+  return { added, removed }
 }
 
 export function describeFileChange(

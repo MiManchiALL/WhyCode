@@ -37,6 +37,15 @@ describe('Main 长任务计划控制器', () => {
     const commit = controller.commitStep()
     assert.equal(commit?.plan.items.at(-1)?.kind, 'verification')
     assert.equal(commit?.plan.items[0]?.outcome, '核心能力已经可用')
+    const original = controller.stateSnapshot
+    const snapshot = controller.snapshot!
+    snapshot.items[0]!.evidence.push('外部修改')
+    commit!.plan.items[0]!.outcome = '外部修改'
+    commit!.state.activePlan!.items[0]!.outcome = '外部修改'
+    assert.deepEqual(controller.stateSnapshot, original)
+    const restored = new TaskPlanController(original)
+    original.activePlan!.items[0]!.outcome = '外部修改'
+    assert.equal(restored.snapshot?.items[0]?.outcome, '核心能力已经可用')
 
     controller.beginStep()
     assert.equal(controller.update([], { itemId: 'T1', status: 'in_progress' }).ok, true)

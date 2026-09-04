@@ -96,14 +96,6 @@ export function toolReference(tool: McpCatalogTool): McpToolReference {
   }
 }
 
-export function sameToolReference(
-  left: McpToolReference,
-  right: McpToolReference,
-): boolean {
-  return left.id === right.id && left.descriptorHash === right.descriptorHash
-    && left.serverName === right.serverName
-}
-
 export function sameMcpCatalog(
   left: readonly McpCatalogTool[],
   right: readonly McpCatalogTool[],

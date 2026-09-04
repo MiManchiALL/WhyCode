@@ -62,8 +62,6 @@ export class DesktopSessionRuntime {
   private workOutcome: 'completed' | 'stopped' = 'completed'
   private forkTurnId: string | null = null
   private btwWorkActive = false
-  attachmentPreparationInProgress = false
-  lastSelectedAt = Date.now()
   private readonly emitToHost: DesktopSessionRuntimeOptions['emit']
   private readonly pendingApprovals = new Map<string, PendingApproval>()
   private readonly idleWaiters = new Set<() => void>()
@@ -268,18 +266,20 @@ export class DesktopSessionRuntime {
     this.emitToHost(this, event, occurredAt)
   }
 
+  get attachmentPreparationInProgress(): boolean {
+    return this.attachmentAbort !== null
+  }
+
   beginAttachmentPreparation(): AbortSignal {
     if (this.attachmentPreparationInProgress) {
       throw new Error('上一条附件消息仍在准备')
     }
     this.attachmentAbort = new AbortController()
-    this.attachmentPreparationInProgress = true
     return this.attachmentAbort.signal
   }
 
   endAttachmentPreparation(): void {
     this.attachmentAbort = null
-    this.attachmentPreparationInProgress = false
     this.notifyStateChanged()
   }
 

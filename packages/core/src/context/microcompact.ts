@@ -46,45 +46,32 @@ const KEEP_RECENT = 5
  * 返回 null 表示没有可清理的内容。
  */
 export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
-  // 收集所有可清理且未清理的 tool-result 位置（消息下标 + part 下标）
-  const targets: {
-    msgIdx: number
-    partIdx: number
-  }[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]!
-    if (msg.role !== 'tool' || typeof msg.content === 'string') continue
-    for (let j = 0; j < msg.content.length; j++) {
-      const part = msg.content[j]!
-      if (part.type !== 'tool-result') continue
-      if (!COMPACTABLE_TOOLS.has(part.toolName)) continue
-      if (isCleared(part)) continue
-      targets.push({
-        msgIdx: i,
-        partIdx: j,
-      })
+  let remaining = KEEP_RECENT
+  let compacted: ModelMessage[] | null = null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!
+    if (message.role !== 'tool' || typeof message.content === 'string') continue
+    let content: typeof message.content | null = null
+    for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex--) {
+      const part = message.content[partIndex]!
+      if (
+        part.type !== 'tool-result'
+        || !COMPACTABLE_TOOLS.has(part.toolName)
+        || isCleared(part)
+      ) continue
+      if (remaining > 0) {
+        remaining--
+        continue
+      }
+      content ??= [...message.content]
+      content[partIndex] = { ...part, output: { type: 'text', value: CLEARED_MESSAGE } }
+    }
+    if (content) {
+      compacted ??= [...messages]
+      compacted[index] = { ...message, content }
     }
   }
-  const toClear = targets.slice(0, Math.max(0, targets.length - KEEP_RECENT))
-  if (toClear.length === 0) return null
-
-  const clearSet = new Map<number, Set<number>>()
-  for (const t of toClear) {
-    if (!clearSet.has(t.msgIdx)) clearSet.set(t.msgIdx, new Set())
-    clearSet.get(t.msgIdx)!.add(t.partIdx)
-  }
-  return messages.map((msg, i) => {
-    const parts = clearSet.get(i)
-    if (!parts || msg.role !== 'tool' || typeof msg.content === 'string') return msg
-    return {
-      ...msg,
-      content: msg.content.map((part, j) =>
-        parts.has(j) && part.type === 'tool-result'
-          ? { ...part, output: { type: 'text' as const, value: CLEARED_MESSAGE } }
-          : part,
-      ),
-    }
-  })
+  return compacted
 }
 
 function isCleared(part: ToolResultPart): boolean {

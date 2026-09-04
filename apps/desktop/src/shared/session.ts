@@ -76,6 +76,14 @@ export interface RuntimeSnapshot {
   subagents: SubagentState | null
 }
 
+/** 高频增量可短暂合并；其它事件都是必须立即交付的语义边界。 */
+export function isFrameBufferedEvent(event: CoreEvent): boolean {
+  return event.type === 'text-delta'
+    || event.type === 'thinking-delta'
+    || event.type === 'tool-progress'
+    || (event.type === 'peer-event' && event.event.type === 'text-delta')
+}
+
 export interface RuntimeEventEnvelope {
   runtimeId: string
   sessionId: string | null

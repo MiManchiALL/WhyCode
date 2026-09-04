@@ -1,3 +1,4 @@
+import { filePathKey, localFilePath } from './local-files.ts'
 import type {
   ImageMessageAttachmentInput,
   QueuedUserMessage,
@@ -61,7 +62,7 @@ export function appendImageDrafts(
     drafts: [...current], duplicateOrLimit: 0, unsupported: 0, invalidSize: 0,
   }
   const knownPaths = new Set(current.flatMap((draft) =>
-    draft.kind === 'path' ? [normalizePath(draft.path)] : []))
+    draft.kind === 'path' ? [filePathKey(draft.path)] : []))
   const knownMemory = new Set(current.flatMap((draft) =>
     draft.kind === 'memory' ? [draft.file] : []))
 
@@ -74,8 +75,8 @@ export function appendImageDrafts(
       result.invalidSize++
       continue
     }
-    const path = getLocalPath(file)
-    const normalizedPath = normalizePath(path)
+    const path = localFilePath(file)
+    const normalizedPath = filePathKey(path)
     if (path ? knownPaths.has(normalizedPath) : knownMemory.has(file)) {
       result.duplicateOrLimit++
       continue
@@ -109,21 +110,6 @@ export function releaseImageDrafts(drafts: readonly ImageDraft[]): void {
 
 function releaseImageDraft(draft: ImageDraft): void {
   if (draft.kind !== 'stored') URL.revokeObjectURL(draft.previewUrl)
-}
-
-function normalizePath(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
-    ? normalized.toLowerCase()
-    : normalized
-}
-
-function getLocalPath(file: File): string {
-  try {
-    return window.whycode.getPathForFile(file)
-  } catch {
-    return ''
-  }
 }
 
 function supportsImageFile(file: File): boolean {

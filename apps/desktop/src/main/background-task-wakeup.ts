@@ -23,12 +23,11 @@ export interface BackgroundTaskWakeQueueOptions {
  * Claude Code 式 task-notification 队列：进程终态只入队一次，宿主在会话可运行且
  * 全局有名额时交给 Agent；不轮询、不切换当前会话，也不建立第二份对话状态。
  */
-export class BackgroundTaskWakeQueue {
-  private readonly queue: SessionNotificationWakeQueue<CommandTaskTerminalNotification>
-
+export class BackgroundTaskWakeQueue
+  extends SessionNotificationWakeQueue<CommandTaskTerminalNotification> {
   constructor(options: BackgroundTaskWakeQueueOptions) {
-    this.queue = new SessionNotificationWakeQueue({
-      key: notificationKey,
+    super({
+      key: (notification) => `${notification.task.sessionId}:${notification.task.id}`,
       sessionId: (notification) => notification.task.sessionId,
       resolveRuntime: options.resolveRuntime,
       reserveWorkStart: options.reserveWorkStart,
@@ -37,26 +36,4 @@ export class BackgroundTaskWakeQueue {
       onError: options.onError,
     })
   }
-
-  enqueue(notification: CommandTaskTerminalNotification): void {
-    this.queue.enqueue(notification)
-  }
-
-  discardSession(sessionId: string): void {
-    this.queue.discardSession(sessionId)
-  }
-
-  /** 由任务入队、任一运行体转空闲或连接设置写入结束触发；每次只做一轮事件驱动尝试。 */
-  nudge(): Promise<void> {
-    return this.queue.nudge()
-  }
-
-  /** 应用退出时停止接收新通知，并等待正在进行的恢复/路由尝试离开临界区。 */
-  async close(): Promise<void> {
-    await this.queue.close()
-  }
-}
-
-function notificationKey(notification: CommandTaskTerminalNotification): string {
-  return `${notification.task.sessionId}:${notification.task.id}`
 }

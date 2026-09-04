@@ -42,10 +42,6 @@ export class SessionRuntimeRegistry {
       : null
   }
 
-  get selectedId(): string | null {
-    return this.selectedRuntimeId
-  }
-
   all(): DesktopSessionRuntime[] {
     return [...this.runtimes.values()]
   }
@@ -69,7 +65,6 @@ export class SessionRuntimeRegistry {
     this.add(runtime)
     const previous = this.selected
     this.clearUnload(runtime.runtimeId)
-    runtime.lastSelectedAt = Date.now()
     this.selectedRuntimeId = runtime.runtimeId
     if (runtime.sessionId) this.unreadCompletionSessionIds.delete(runtime.sessionId)
     if (previous && previous !== runtime) this.scheduleIdleUnload(previous)

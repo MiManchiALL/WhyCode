@@ -404,16 +404,6 @@ html[data-wc-right-panel-resizing='true'] * {
   gap: 0.85rem;
 }
 
-.wc-settings-grid {
-  gap: 0.85rem;
-}
-
-.wc-settings-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
 .wc-settings-panel {
   padding: 1rem;
 }
@@ -1051,8 +1041,7 @@ html[data-wc-right-panel-resizing='true'] * {
   }
 }
 
-.wc-menu-content[data-state='open'],
-.wc-popover-content[data-state='open'] {
+.wc-menu-content[data-state='open'] {
   animation: wc-pop-in 140ms ease-out;
 }
 

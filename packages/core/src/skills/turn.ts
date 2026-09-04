@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import { estimateMessageTokens } from '../context/tokens.ts'
+import { estimateMessagesTokens } from '../context/tokens.ts'
 import type { SkillCatalogService } from './catalog.ts'
 import { applySkillContext } from './context.ts'
 import {
@@ -46,7 +46,7 @@ export class SkillTurnContext {
   add(skills: readonly ActivatedSkill[]): void {
     for (const candidate of skills) {
       const skill = activatedSkillSchema.parse(candidate)
-      this.active.set(skill.id, structuredClone(skill))
+      this.active.set(skill.id, skill)
     }
   }
 
@@ -85,12 +85,12 @@ export class SkillTurnContext {
    */
   estimatedProjectionTokenDelta(messages: readonly ModelMessage[]): number {
     const projected = this.project(messages)
-    return tokenEstimate(projected) - tokenEstimate(messages)
+    return estimateMessagesTokens(projected) - estimateMessagesTokens(messages)
   }
 
   /** 历史即使全部压缩，仍无法消除的当前 Skill 目录与活动正文开销。 */
   injectedContextTokenEstimate(): number {
-    return tokenEstimate(this.project([]))
+    return estimateMessagesTokens(this.project([]))
   }
 
   /** 根任务结束：保留下一次普通请求仍会使用的目录，只清除 turn 级正文与结果可见性。 */
@@ -104,8 +104,4 @@ export class SkillTurnContext {
     this.catalog = null
     this.finish()
   }
-}
-
-function tokenEstimate(messages: readonly ModelMessage[]): number {
-  return messages.reduce((total, message) => total + estimateMessageTokens(message), 0)
 }

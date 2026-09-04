@@ -3,7 +3,6 @@ import { z } from 'zod'
 import { MCP_MAX_LOADED_TOOLS, type McpToolReference } from './catalog.ts'
 import type { McpServerInstructionsSnapshot } from './manager-types.ts'
 
-const MCP_TOOL_STATE_V1_PREFIX = '<whycode-mcp-tool-state:v1>'
 const MCP_TOOL_STATE_V2_PREFIX = '<whycode-mcp-tool-state:v2>'
 const MCP_TOOL_STATE_SUFFIX = '</whycode-mcp-tool-state>'
 const MCP_MAX_INSTRUCTION_SERVERS = 32
@@ -21,11 +20,6 @@ const instructionSnapshotSchema = z.strictObject({
   serverName: z.string().min(1).max(128),
   runtimeFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
   instructions: z.string().min(1).max(MCP_MAX_INSTRUCTION_CHARS_PER_SERVER),
-})
-
-const stateV1Schema = z.strictObject({
-  version: z.literal(1),
-  tools: z.array(toolReferenceSchema).max(MCP_MAX_LOADED_TOOLS),
 })
 
 const stateV2Schema = z.strictObject({
@@ -128,28 +122,18 @@ function parseMcpToolStateMessage(
   message: ModelMessage,
 ): McpToolState | null {
   if (message.role !== 'system' || typeof message.content !== 'string') return null
-  const prefix = message.content.startsWith(MCP_TOOL_STATE_V2_PREFIX)
-    ? MCP_TOOL_STATE_V2_PREFIX
-    : message.content.startsWith(MCP_TOOL_STATE_V1_PREFIX)
-      ? MCP_TOOL_STATE_V1_PREFIX
-      : null
-  if (!prefix || !message.content.endsWith(MCP_TOOL_STATE_SUFFIX)) return null
-  const json = message.content.slice(prefix.length, -MCP_TOOL_STATE_SUFFIX.length)
+  if (
+    !message.content.startsWith(MCP_TOOL_STATE_V2_PREFIX)
+    || !message.content.endsWith(MCP_TOOL_STATE_SUFFIX)
+  ) return null
+  const json = message.content.slice(MCP_TOOL_STATE_V2_PREFIX.length, -MCP_TOOL_STATE_SUFFIX.length)
   try {
-    const value: unknown = JSON.parse(json)
-    if (prefix === MCP_TOOL_STATE_V2_PREFIX) {
-      const state = stateV2Schema.parse(value)
-      return {
-        tools: state.tools,
-        serverInstructions: uniqueInstructionSnapshots(state.serverInstructions),
-        trustedProjectConfigurationFingerprint:
-          state.trustedProjectConfigurationFingerprint,
-      }
-    }
+    const state = stateV2Schema.parse(JSON.parse(json))
     return {
-      tools: stateV1Schema.parse(value).tools,
-      serverInstructions: [],
-      trustedProjectConfigurationFingerprint: null,
+      tools: state.tools,
+      serverInstructions: uniqueInstructionSnapshots(state.serverInstructions),
+      trustedProjectConfigurationFingerprint:
+        state.trustedProjectConfigurationFingerprint,
     }
   } catch {
     // 损坏或伪造的普通消息不能改变运行时工具目录。

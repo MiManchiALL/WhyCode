@@ -2,6 +2,7 @@ import {
   coalesceAdjacentCoreEvent,
   type CoreEvent,
 } from '@whycode/core/events'
+import { isFrameBufferedEvent } from '../../shared/session.ts'
 
 export interface BufferedConversationEvent {
   event: CoreEvent
@@ -72,11 +73,4 @@ export class ConversationEventBuffer {
     this.pending = []
     this.options.flush(events)
   }
-}
-
-function isFrameBufferedEvent(event: CoreEvent): boolean {
-  return event.type === 'text-delta'
-    || event.type === 'thinking-delta'
-    || event.type === 'tool-progress'
-    || (event.type === 'peer-event' && event.event.type === 'text-delta')
 }

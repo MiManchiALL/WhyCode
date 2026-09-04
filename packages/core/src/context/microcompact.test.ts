@@ -20,10 +20,17 @@ describe('PDF 工具结果微清理', () => {
         transform: { detail: 'high' },
       }]))
     }
+    const original = structuredClone(messages)
     const compacted = microcompact(messages)
     assert.ok(compacted)
     assert.match(JSON.stringify(compacted[0]), new RegExp(CLEARED_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     assert.match(JSON.stringify(compacted.at(-1)), /whycode-attachment-ref/)
+    assert.deepEqual(messages, original)
+    assert.notEqual(compacted[0], messages[0])
+    for (let index = 1; index < messages.length; index++) {
+      assert.equal(compacted[index], messages[index])
+    }
+    assert.equal(microcompact(compacted), null)
   })
 })
 

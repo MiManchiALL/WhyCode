@@ -1,3 +1,4 @@
+import { filePathKey, localFilePath } from './local-files.ts'
 import { useCallback, useRef, useState } from 'react'
 import type { PdfAttachment } from '@whycode/core'
 import { FileText } from 'lucide-react'
@@ -135,7 +136,7 @@ function appendPdfDrafts(current: readonly PdfDraft[], files: readonly File[]): 
   const drafts = [...current]
   const errors: string[] = []
   const knownPaths = new Set(current.flatMap((draft) =>
-    draft.kind === 'path' ? [normalizePath(draft.path)] : []))
+    draft.kind === 'path' ? [filePathKey(draft.path)] : []))
   let totalBytes = current.reduce((total, draft) => total + draft.byteLength, 0)
 
   for (const file of files) {
@@ -143,8 +144,8 @@ function appendPdfDrafts(current: readonly PdfDraft[], files: readonly File[]): 
       errors.push(`${file.name || '未命名文件'} 不是 PDF`)
       continue
     }
-    const path = getLocalPath(file)
-    const normalizedPath = normalizePath(path)
+    const path = localFilePath(file)
+    const normalizedPath = filePathKey(path)
     if (!path) {
       errors.push(`${file.name || 'PDF'} 没有可读取的本地路径`)
       continue
@@ -172,21 +173,6 @@ function appendPdfDrafts(current: readonly PdfDraft[], files: readonly File[]): 
     })
   }
   return { drafts, errors }
-}
-
-function getLocalPath(file: File): string {
-  try {
-    return window.whycode.getPathForFile(file)
-  } catch {
-    return ''
-  }
-}
-
-function normalizePath(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
-    ? normalized.toLowerCase()
-    : normalized
 }
 
 function isPdf(file: File): boolean {

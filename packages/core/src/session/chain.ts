@@ -26,7 +26,6 @@ import {
   canContinueBtw,
   type BtwConversation,
   type BtwConversationTurn,
-  type BtwContinuation,
   type BtwTurnContext,
 } from './btw.ts'
 
@@ -743,11 +742,6 @@ function collectBtwState(entries: readonly SessionEntry[]): {
         }
       : null,
   }
-}
-
-export function collectBtwContinuation(entries: readonly SessionEntry[]): BtwContinuation | null {
-  const conversation = collectBtwState(entries).conversation
-  return canContinueBtw(conversation) ? conversation : null
 }
 
 interface UndeliveredUserInput {

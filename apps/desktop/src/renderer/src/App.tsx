@@ -874,9 +874,6 @@ export function App() {
         })
         break
       case 'message-injected':
-        setQueued((prev) => prev.filter((q) => q.id !== event.id))
-        setQueuedActionPending((current) => withoutQueuedAction(current, event.id))
-        break
       case 'message-dequeued':
         setQueued((prev) => prev.filter((q) => q.id !== event.id))
         setQueuedActionPending((current) => withoutQueuedAction(current, event.id))
