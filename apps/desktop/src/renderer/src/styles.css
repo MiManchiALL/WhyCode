@@ -477,7 +477,7 @@ html[data-wc-right-panel-resizing='true'] * {
 }
 
 .wc-composer-model-trigger {
-  flex: 0 1 18rem;
+  flex: 0 1 auto;
 }
 
 .wc-type-control {
