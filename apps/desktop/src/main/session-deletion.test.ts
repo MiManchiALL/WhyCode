@@ -7,6 +7,8 @@ import { CommandSessionManager, localWorkspace } from '@whycode/core'
 import { stageSessionDeletion } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionScratchManager } from './session-scratch.ts'
+import { loadConfig, saveConfig, type ConfigSecretCodec } from './config.ts'
+import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 
 const tempRoots: string[] = []
 
@@ -15,7 +17,7 @@ afterEach(async () => {
 })
 
 describe('会话关联数据删除', () => {
-  it('级联清理目标会话，但保留同项目另一会话和项目文件', async () => {
+  it('级联删除会话，仅在最后一个历史引用消失后清掉型号原名，保留项目文件', async () => {
     const root = await createRoot()
     const project = join(root, 'project')
     const sessionsRoot = join(root, 'sessions')
@@ -28,6 +30,23 @@ describe('会话关联数据删除', () => {
     const sessions = new DesktopSessionRepository(sessionsRoot)
     const deletedJournal = await sessions.create(localWorkspace(project), 'test:model')
     const currentJournal = await sessions.create(localWorkspace(project), 'test:model')
+    await currentJournal.updateModelSelection('test:next-model', 'default')
+    const configPath = join(root, 'config.json')
+    const codec: ConfigSecretCodec = {
+      isAvailable: () => true,
+      encrypt: (value) => Buffer.from(value).toString('base64'),
+      decrypt: (value) => Buffer.from(value, 'base64').toString(),
+    }
+    await saveConfig({
+      providers: {}, retiredModelLabels: { 'test:model': '历史测试型号' },
+    }, codec, configPath)
+    const releaseModelLabels = async (excludedSessionId: string) => {
+      const references = new Set((await sessions.list())
+        .filter((session) => session.sessionId !== excludedSessionId)
+        .flatMap((session) => session.referencedModelIds))
+      await saveConfig(syncReferencedRetiredModelLabels(loadConfig(configPath, codec)!, references),
+        codec, configPath)
+    }
     const commandSessions = new CommandSessionManager(commandsRoot)
     const scratch = new SessionScratchManager(scratchRoot)
     await commandSessions.initialize()
@@ -55,6 +74,7 @@ describe('会话关联数据删除', () => {
       sessions,
       commandSessions,
       scratch,
+      onBeforeFactSourceDelete: () => releaseModelLabels(deletedJournal.sessionId),
     })
     assert.equal(deletion.sessionExists, true)
     assert.equal(await deletion.finish(), true)
@@ -66,6 +86,22 @@ describe('会话关联数据删除', () => {
     assert.equal(await readFile(currentCommandFile, 'utf8'), 'other command')
     assert.equal(await readFile(currentScratchFile, 'utf8'), 'other scratch')
     assert.equal(await readFile(currentCheckpointFile, 'utf8'), 'other checkpoint')
+    assert.equal(await readFile(projectFile, 'utf8'), 'user data')
+    assert.deepEqual({ ...loadConfig(configPath, codec)?.retiredModelLabels }, {
+      'test:model': '历史测试型号',
+    })
+
+    const finalDeletion = await stageSessionDeletion({
+      sessionId: currentJournal.sessionId, sessions, commandSessions, scratch,
+      onBeforeFactSourceDelete: () => releaseModelLabels(currentJournal.sessionId),
+    })
+    assert.equal(await finalDeletion.finish(), true)
+    assert.equal(loadConfig(configPath, codec)?.retiredModelLabels, undefined)
+    assert.doesNotMatch(await readFile(configPath, 'utf8'), /test:model|历史测试型号/)
+    assert.deepEqual(await sessions.list(), [])
+    await assert.rejects(access(join(sessionsRoot, currentJournal.sessionId)))
+    await assert.rejects(access(join(commandsRoot, currentJournal.sessionId)))
+    await assert.rejects(access(join(scratchRoot, currentJournal.sessionId)))
     assert.equal(await readFile(projectFile, 'utf8'), 'user data')
   })
 

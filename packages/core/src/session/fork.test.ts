@@ -35,6 +35,7 @@ describe('SessionStore Fork', () => {
     await source.recordStep('turn-1', [message('assistant', '第一版回答')])
     await source.recordTurnEnd('turn-1', 'completed')
     await recordForkBoundary(source, 'turn-1')
+    await source.updateModelSelection('test:next-model', 'high')
     await source.recordUserInput('继续原会话', true)
     await source.recordTurnStart('turn-2', [message('user', '继续原会话')])
     await source.recordStep('turn-2', [message('assistant', '第二版回答')])
@@ -50,6 +51,9 @@ describe('SessionStore Fork', () => {
       'turn-1',
       firstFork.metadataSnapshot.workspace,
     )
+    assert.deepEqual(source.metadataSnapshot.referencedModelIds, ['test:model', 'test:next-model'])
+    assert.deepEqual(firstFork.metadataSnapshot.referencedModelIds, ['test:model'])
+    assert.deepEqual(secondFork.metadataSnapshot.referencedModelIds, ['test:model'])
     assert.notEqual(firstFork.sessionId, source.sessionId)
     assert.deepEqual(firstFork.initialMessages, [
       message('user', '分析这个问题'),

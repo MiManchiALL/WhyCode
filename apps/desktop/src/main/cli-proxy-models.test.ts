@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { getModelEntry } from '@whycode/core'
+import { MODEL_CATALOG, getModelEntry } from '@whycode/core'
 import {
   CLI_PROXY_MODEL_COMPATIBILITY,
   cliProxyModelEntries,
@@ -136,11 +136,10 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
   })
 
   it('不接受未审核厂商或近似路由名称', () => {
-    assert.equal(getDefaultCliProxyRoute('openai:gpt-5.2'), null)
-    assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-flash'), null)
-    assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-pro'), null)
-    assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-flash-vision-exp'), null)
-    assert.equal(getDefaultCliProxyRoute('google:gemini-3.7-flash'), null)
+    assert.equal(getDefaultCliProxyRoute('test:retired-model'), null)
+    for (const model of MODEL_CATALOG.filter((model) => model.provider === 'deepseek')) {
+      assert.equal(getDefaultCliProxyRoute(model.id), null)
+    }
     assert.equal(
       isCliProxyRoute('google:gemini-3.8-flash', 'gemini-3.8-flash'),
       false,

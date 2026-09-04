@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { BUILTIN_PROVIDERS, MODEL_CATALOG } from '@whycode/core'
+import { CLI_PROXY_MODEL_COMPATIBILITY, getCliProxyEffectiveCapabilities, getDefaultCliProxyRoute } from './cli-proxy-models.ts'
 import {
   createConnectionSettingsSnapshot,
   updateAuxiliaryModelSettings,
@@ -22,32 +24,6 @@ function createSettingsSnapshot(config: WhycodeConfig | null) {
 }
 
 describe('模型设置数据边界', () => {
-  it('Astra 与 GPT-5.6 并存，CLI 候选必须由实例公布，DeepSeek 视觉可用于辅助识图', () => {
-    const config: WhycodeConfig = {
-      providers: { openai: { apiKey: 'key' }, deepseek: { apiKey: 'key' } },
-      cliProxyApi: { apiKey: 'proxy', baseURL: 'http://localhost/v1', modelIds: [], modelRoutes: {} },
-    }
-    const snapshot = createSettingsSnapshot(config)
-    assert.deepEqual(snapshot.providers.find((provider) => provider.id === 'openai')?.models.map((model) => model.id), [
-      'openai:gpt-5.6-sol',
-      'openai:gpt-5.6-terra',
-      'openai:gpt-5.6-luna',
-      'openai:gpt-6-astra',
-      'openai:gpt-5.5',
-    ])
-    assert.equal(snapshot.cliProxyApi.models.some((model) => model.id === 'openai:gpt-6-astra'), false)
-    config.cliProxyApi!.modelRoutes['openai:gpt-6-astra'] = 'gpt-6-astra'
-    assert.equal(createSettingsSnapshot(config).cliProxyApi.models.find(
-      (model) => model.id === 'openai:gpt-6-astra',
-    )?.capabilities.contextWindow, 272_000)
-    const updated = updateAuxiliaryModelSettings(config, {
-      visionModelId: 'deepseek:deepseek-v4-flash-vision-exp',
-      subagentModelId: 'openai:gpt-6-astra',
-    })
-    assert.equal(createSettingsSnapshot(updated).auxiliaryModels.visionModelId, 'deepseek:deepseek-v4-flash-vision-exp')
-    assert.equal(createSettingsSnapshot(updated).auxiliaryModels.subagentModelId, 'openai:gpt-6-astra')
-  })
-
   it('设置快照不向 Renderer 返回任何 API key', () => {
     const config: WhycodeConfig = {
       providers: { mimo: { apiKey: 'secret-key' } },
@@ -89,22 +65,13 @@ describe('模型设置数据边界', () => {
       },
     }
     const snapshot = createSettingsSnapshot(initial)
-    assert.deepEqual(snapshot.auxiliaryModels, {
-      visionModelId: null,
-      subagentModelId: null,
-      visionModels: [
-        { id: 'deepseek:deepseek-v4-flash-vision-exp', displayName: 'DeepSeek V4 Flash Vision Exp' },
-        { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
-        { id: 'google:gemini-3.8-flash', displayName: 'Gemini 3.8 Flash' },
-      ],
-      subagentModels: [
-        { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
-        { id: 'deepseek:deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
-        { id: 'deepseek:deepseek-v4-flash-vision-exp', displayName: 'DeepSeek V4 Flash Vision Exp' },
-        { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
-        { id: 'google:gemini-3.8-flash', displayName: 'Gemini 3.8 Flash' },
-      ],
-    })
+    assert.equal(snapshot.auxiliaryModels.visionModelId, null)
+    assert.equal(snapshot.auxiliaryModels.subagentModelId, null)
+    const configured = MODEL_CATALOG.filter((model) => initial.providers[model.provider]?.apiKey)
+    const candidate = ({ id, displayName }: { id: string; displayName: string }) => ({ id, displayName })
+    assert.deepEqual(snapshot.auxiliaryModels.subagentModels, configured.map(candidate))
+    assert.deepEqual(snapshot.auxiliaryModels.visionModels,
+      configured.filter((model) => model.capabilities.supportsImageInput).map(candidate))
 
     const enabled = updateAuxiliaryModelSettings(initial, {
       visionModelId: 'google:gemini-3.8-flash',
@@ -156,17 +123,9 @@ describe('模型设置数据边界', () => {
       },
     }
     const snapshot = createSettingsSnapshot(initial)
-    assert.deepEqual(snapshot.consensusModels, {
-      agentBModelId: null,
-      agentCModelId: null,
-      models: [
-        { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
-        { id: 'deepseek:deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
-        { id: 'deepseek:deepseek-v4-flash-vision-exp', displayName: 'DeepSeek V4 Flash Vision Exp' },
-        { id: 'google:gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview' },
-        { id: 'google:gemini-3.8-flash', displayName: 'Gemini 3.8 Flash' },
-      ],
-    })
+    assert.equal(snapshot.consensusModels.agentBModelId, null)
+    assert.equal(snapshot.consensusModels.agentCModelId, null)
+    assert.deepEqual(snapshot.consensusModels.models, snapshot.auxiliaryModels.subagentModels)
 
     const configured = updateConsensusModelSettings(initial, {
       agentBModelId: 'deepseek:deepseek-v4-flash',
@@ -260,96 +219,41 @@ describe('模型设置数据边界', () => {
     assert.equal(next.defaultModel, undefined)
   })
 
-  it('设置快照展示最新目录及精确推理档位', () => {
+  it('设置快照从目录装配厂商与模型，CLI 展示审核后的有效画像', () => {
     const snapshot = createSettingsSnapshot({ providers: {} })
-    const openai = snapshot.providers.find((item) => item.id === 'openai')
-    const google = snapshot.providers.find((item) => item.id === 'google')
-    const claudeProxy = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'anthropic:claude-sonnet-4-6',
-    )
-    const gemini38Proxy = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'google:gemini-3.8-flash',
-    )
-    assert.deepEqual(openai?.models.map((model) => model.id), [
-      'openai:gpt-5.6-sol',
-      'openai:gpt-5.6-terra',
-      'openai:gpt-5.6-luna',
-      'openai:gpt-6-astra',
-      'openai:gpt-5.5',
-    ])
-    assert.equal(google?.displayName, 'Google Gemini')
-    assert.deepEqual(google?.models.map((model) => model.id), [
-      'google:gemini-3.1-pro-preview',
-      'google:gemini-3.8-flash',
-    ])
-    assert.deepEqual(claudeProxy?.capabilities.reasoningEffort, {
-      supported: ['low', 'medium', 'high', 'max'],
-      default: 'high',
-    })
-    assert.equal(claudeProxy?.capabilities.contextWindow, 200_000)
-    assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
-      'anthropic:claude-sonnet-4-6',
-      'google:gemini-3.1-pro-preview',
-      'google:gemini-3.8-flash',
-      'openai:gpt-5.6-sol',
-      'openai:gpt-5.6-terra',
-      'openai:gpt-5.6-luna',
-      'openai:gpt-6-astra',
-      'openai:gpt-5.5',
-    ])
-    assert.deepEqual(gemini38Proxy?.capabilities.reasoningEffort, {
-      supported: ['low', 'medium', 'high'],
-      default: 'high',
-    })
-    assert.equal(
-      snapshot.cliProxyApi.models.some((model) => model.id.startsWith('deepseek:')),
-      false,
-    )
+    assert.deepEqual(snapshot.providers.map((provider) => provider.id), BUILTIN_PROVIDERS.map((provider) => provider.id))
+    for (const provider of snapshot.providers) {
+      const profiles = MODEL_CATALOG.filter((model) => model.provider === provider.id)
+      assert.deepEqual(provider.models, profiles.map(({ id, displayName, capabilities }) => ({
+        id, displayName, capabilities,
+      })))
+    }
+    assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id),
+      CLI_PROXY_MODEL_COMPATIBILITY.map((model) => model.profileId))
+    for (const model of snapshot.cliProxyApi.models) {
+      assert.equal(model.enabled, false)
+      assert.deepEqual(model.capabilities,
+        getCliProxyEffectiveCapabilities(model.id, getDefaultCliProxyRoute(model.id)!))
+    }
   })
 
-  it('设置快照按当前实例的精确路由展示 CLIProxyAPI 有效画像', () => {
-    const snapshot = createSettingsSnapshot({
+  it('设置快照只显示实例公布的路由，并区分启用状态与实际能力', () => {
+    const selected = 'google:gemini-3.1-pro-preview'
+    const available = 'openai:gpt-5.6-sol'
+    const config: WhycodeConfig = {
       providers: {},
       cliProxyApi: {
-        apiKey: 'proxy-key',
-        baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: [
-          'google:gemini-3.1-pro-preview',
-          'google:gemini-3.8-flash',
-          'openai:gpt-5.6-sol',
-        ],
-        modelRoutes: {
-          'google:gemini-3.1-pro-preview': 'gemini-3.1-pro-low',
-          'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
-          'openai:gpt-5.6-sol': 'gpt-5.6-sol',
-          'openai:gpt-5.6-terra': 'gpt-5.6-terra',
-        },
+        apiKey: 'proxy-key', baseURL: 'http://127.0.0.1:8317/v1',
+        modelIds: [selected], modelRoutes: {},
       },
-    })
-    const gemini = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'google:gemini-3.1-pro-preview',
-    )
-    const gemini38 = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'google:gemini-3.8-flash',
-    )
-    const gpt = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'openai:gpt-5.6-sol',
-    )
-    const terra = snapshot.cliProxyApi.models.find(
-      (model) => model.id === 'openai:gpt-5.6-terra',
-    )
-    assert.equal(gemini?.capabilities.reasoningEffort?.default, 'low')
-    assert.equal(gemini?.capabilities.maxOutput, 65_535)
-    assert.equal(gemini38?.capabilities.reasoningEffort?.default, 'high')
-    assert.equal(gemini38?.capabilities.maxOutput, 65_536)
-    assert.equal(gpt?.capabilities.contextWindow, 372_000)
-    assert.equal(gpt?.capabilities.reasoningEffort?.supported.includes('none'), false)
-    assert.equal(terra?.enabled, false)
-    assert.deepEqual(snapshot.cliProxyApi.models.map((model) => model.id), [
-      'google:gemini-3.1-pro-preview',
-      'google:gemini-3.8-flash',
-      'openai:gpt-5.6-sol',
-      'openai:gpt-5.6-terra',
-    ])
+    }
+    assert.deepEqual(createSettingsSnapshot(config).cliProxyApi.models, [])
+    config.cliProxyApi!.modelRoutes = {
+      [selected]: 'gemini-3.1-pro-low', [available]: 'gpt-5.6-sol',
+    }
+    const models = createSettingsSnapshot(config).cliProxyApi.models
+    assert.deepEqual(models.map((model) => [model.id, model.enabled]), [[selected, true], [available, false]])
+    assert.deepEqual(models[0]?.capabilities, getCliProxyEffectiveCapabilities(selected, 'gemini-3.1-pro-low'))
+    assert.deepEqual(models[1]?.capabilities, getCliProxyEffectiveCapabilities(available, 'gpt-5.6-sol'))
   })
 })

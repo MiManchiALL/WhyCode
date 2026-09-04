@@ -170,6 +170,8 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       sessionId: start.sessionId,
       workspace: start.workspace,
       modelId: modelSelection.modelId,
+      referencedModelIds: [...new Set(entries.flatMap((entry) =>
+        'modelId' in entry ? [entry.modelId] : []))],
       reasoningEffort: modelSelection.reasoningEffort,
       title: start.title ?? clip(userTexts[0] ?? ''),
       lastUserText: clip(userTexts.at(-1) ?? ''),

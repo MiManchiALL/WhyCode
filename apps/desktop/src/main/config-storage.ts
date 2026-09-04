@@ -74,7 +74,6 @@ interface StoredConfig {
 }
 
 const CONFIG_VERSION = 10
-const RETIRED_MODEL_MIGRATION_VERSION = 5
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 export function getConfigPath(): string {
@@ -237,12 +236,9 @@ export async function migrateLegacyConfig(
   if (!config) return false
   const migratedLabels = mergeLabels(
     legacyCustomModelLabels(stored.customConnections),
-    stored.version === undefined || stored.version < RETIRED_MODEL_MIGRATION_VERSION
-      ? { 'openai:gpt-5.2': 'GPT-5.2' }
-      : undefined,
+    config.retiredModelLabels,
   )
-  const retiredModelLabels = mergeLabels(migratedLabels, config.retiredModelLabels)
-  if (retiredModelLabels) config.retiredModelLabels = retiredModelLabels
+  if (migratedLabels) config.retiredModelLabels = migratedLabels
   if (config.defaultModel?.startsWith('custom:')) delete config.defaultModel
   await saveConfig(config, codec, path)
   return true

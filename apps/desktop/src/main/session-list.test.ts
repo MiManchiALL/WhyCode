@@ -49,6 +49,7 @@ function summary(sessionId: string, order: number): SessionSummary {
     resumable: true,
     workspace: localWorkspace(process.cwd()),
     modelId: 'deepseek:deepseek-v4-flash',
+    referencedModelIds: ['deepseek:deepseek-v4-flash'],
     reasoningEffort: 'default',
     status: 'idle',
   }

@@ -3,13 +3,13 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, it } from 'node:test'
 import {
+  MODEL_CATALOG,
   providerOptionsWithReasoningEffort,
   type ModelEntry,
   type ProviderConfig,
 } from '@whycode/core'
 import { cliProxyModelId, type WhycodeConfig } from './config.ts'
 import { getDefaultCliProxyRoute } from './cli-proxy-models.ts'
-import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import {
   listAuxiliaryVisionModelCandidates,
   listConfiguredModelCandidates,
@@ -31,11 +31,9 @@ describe('模型连接解析', () => {
       },
     }
 
-    assert.deepEqual(listConfiguredModelCandidates(value), [
-      { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
-      { id: 'deepseek:deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
-      { id: 'deepseek:deepseek-v4-flash-vision-exp', displayName: 'DeepSeek V4 Flash Vision Exp' },
-    ])
+    assert.deepEqual(listConfiguredModelCandidates(value), MODEL_CATALOG
+      .filter((model) => value.providers[model.provider]?.apiKey)
+      .map(({ id, displayName }) => ({ id, displayName })))
     assert.deepEqual(pruneInvalidConsensusAgents(value).consensusAgents, {
       B: { modelId: 'deepseek:deepseek-v4-flash' },
     })
@@ -96,7 +94,6 @@ describe('模型连接解析', () => {
       ['anthropic:claude-sonnet-4-6', { anthropic: { apiKey: 'official-key' } }],
       ['google:gemini-3.8-flash', { google: { apiKey: 'official-key' } }],
       ['openai:gpt-5.6-sol', { openai: { apiKey: 'official-key' } }],
-      ['openai:gpt-6-astra', { openai: { apiKey: 'official-key' } }],
     ] as const
 
     for (const [profileId, providers] of cases) {
@@ -165,48 +162,25 @@ describe('模型连接解析', () => {
     if (!unknown.ok) assert.match(unknown.error, /已不再支持模型/)
   })
 
-  it('退役模型只作为当前历史红色占位，不自动解析为替代型号', () => {
-    const value = config({ google: { apiKey: 'key' } })
-    value.retiredModelLabels = { 'custom:old-route': 'legacy-model(high)' }
-    const retiredId = 'custom:old-route'
-    const resolution = resolveModelConnection(value, retiredId)
-    assert.equal(resolution.ok, false)
-    if (!resolution.ok) {
-      assert.match(resolution.error, /WhyCode 已不再支持模型/)
-      assert.match(resolution.error, /历史对话仍会保留/)
-    }
-
-    const item = listModelConnections(value, retiredId).at(-1)
-    assert.equal(item?.id, retiredId)
-    assert.equal(item?.displayName, 'legacy-model(high)')
-    assert.equal(item?.available, false)
-    assert.equal(item?.retired, true)
-    assert.equal(
-      listModelConnections(value).some((candidate) => candidate.id === retiredId),
-      false,
-    )
-    assert.equal(
-      listModelConnections(value, 'google:gemini-3.1-pro-preview')
-        .some((candidate) => candidate.id === retiredId),
-      false,
-    )
-  })
-
-  it('替换 Gemini 不重写历史选择，内置和 CLI 历史均保留原名并拦截发送', () => {
-    for (const retiredId of ['google:gemini-3.7-flash', cliProxyModelId('google:gemini-3.7-flash')]) {
-      const value = syncReferencedRetiredModelLabels({
-        ...withCliProxy(['google:gemini-3.8-flash'], { google: { apiKey: 'key' } }),
+  it('退役模型保留历史原名并拦截发送，不修改选择或混入可用候选', () => {
+    for (const retiredId of ['test:retired-model', cliProxyModelId('test:retired-model')]) {
+      const value: WhycodeConfig = {
+        providers: { google: { apiKey: 'key' } },
         defaultModel: retiredId,
-      }, new Set([retiredId]))
+        retiredModelLabels: { [retiredId]: '历史测试型号' },
+      }
       const before = JSON.stringify(value)
       const resolution = resolveModelConnection(value, retiredId)
       assert.equal(resolution.ok, false)
       if (!resolution.ok) assert.match(resolution.error, /请先切换到当前可用模型再发送/)
       const item = listModelConnections(value, retiredId).at(-1)!
+      assert.equal(item.id, retiredId)
+      assert.equal(item.displayName, '历史测试型号')
       assert.equal(item.retired, true)
       assert.equal(item.available, false)
-      assert.match(item.displayName, /^Gemini 3\.7 Flash/)
       assert.equal(listConfiguredModelCandidates(value).some((model) => model.id === retiredId), false)
+      assert.equal(listModelConnections(value, 'google:gemini-3.1-pro-preview')
+        .some((model) => model.id === retiredId), false)
       assert.equal(JSON.stringify(value), before)
     }
   })
@@ -275,10 +249,8 @@ describe('模型连接解析', () => {
 
   it('普通模型下拉列表只返回已经配置并可用的连接', () => {
     const models = listModelConnections(config({ google: { apiKey: 'key' } }))
-    assert.deepEqual(new Set(models.map((model) => model.id)), new Set([
-      'google:gemini-3.1-pro-preview',
-      'google:gemini-3.8-flash',
-    ]))
+    assert.deepEqual(models.map((model) => model.id), MODEL_CATALOG
+      .filter((model) => model.provider === 'google').map((model) => model.id))
     assert.equal(models.every((model) => model.available), true)
   })
 
@@ -293,11 +265,9 @@ describe('模型连接解析', () => {
         subagentModelId: 'deepseek:deepseek-v4-pro',
       },
     }
-    assert.deepEqual(listAuxiliaryVisionModelCandidates(value).map((model) => model.id), [
-      'deepseek:deepseek-v4-flash-vision-exp',
-      'google:gemini-3.1-pro-preview',
-      'google:gemini-3.8-flash',
-    ])
+    assert.deepEqual(listAuxiliaryVisionModelCandidates(value).map((model) => model.id), MODEL_CATALOG
+      .filter((model) => value.providers[model.provider]?.apiKey && model.capabilities.supportsImageInput)
+      .map((model) => model.id))
     assert.equal(resolveAuxiliaryVisionModel(value)?.entry.id, 'google:gemini-3.8-flash')
     const models = listModelConnections(value)
     assert.equal(

@@ -236,12 +236,19 @@ let runtimePreferenceWriteTail: Promise<void> = Promise.resolve()
 
 function persistRuntimePreferences(
   patch: Partial<Pick<WhycodeConfig, 'defaultModel' | 'permissionMode'>>,
+  excludedSessionId?: string,
 ): Promise<void> {
-  // 多窗口快速切换必须按 IPC 到达顺序读改写配置；模型和权限共用一条写链，
-  // 避免并发读取同一旧配置后由较慢写入覆盖另一项新偏好。
+  // 偏好和历史显示名共用一条读改写链，避免多窗口选择与会话删除互相覆盖配置。
   const write = runtimePreferenceWriteTail.then(async () => {
+    const referencedModelIds = new Set((await sessions.list())
+      .filter((summary) => summary.sessionId !== excludedSessionId)
+      .flatMap((summary) => summary.referencedModelIds))
     const config = loadAppConfig() ?? { providers: {} }
-    await saveConfig({ ...config, ...patch }, configSecretCodec, getConfigPath())
+    const next = syncReferencedRetiredModelLabels(
+      Object.keys(patch).length ? { ...config, ...patch } : config,
+      referencedModelIds,
+    )
+    if (next !== config) await saveConfig(next, configSecretCodec, getConfigPath())
   })
   runtimePreferenceWriteTail = write.catch(() => {})
   return write
@@ -763,6 +770,7 @@ async function createRuntimeJournal(
     customSystemPrompt,
   )
   try {
+    await syncRetiredModelLabels()
     await sessionScratch.ensure(recorder.sessionId)
     if (workspace.mode === 'worktree') {
       await worktrees.attachSession(workspace, recorder.sessionId)
@@ -778,6 +786,8 @@ async function createRuntimeJournal(
     await sessions.markDeleting(recorder.sessionId)
       .catch((rollbackError) => rollbackErrors.push(rollbackError))
     await sessions.delete(recorder.sessionId)
+      .catch((rollbackError) => rollbackErrors.push(rollbackError))
+    await syncRetiredModelLabels()
       .catch((rollbackError) => rollbackErrors.push(rollbackError))
     if (rollbackErrors.length > 0) {
       throw new AggregateError(
@@ -1113,7 +1123,6 @@ async function handleCommand(
       }
       try {
         await persistPreferredModel(command.modelId)
-        await syncRetiredModelLabels()
       } catch (error) {
         runtime.emit({
           type: 'error',
@@ -1819,17 +1828,8 @@ async function synchronizeConfiguredCliProxyRoutes(
   else await saveConfig(synchronized, configSecretCodec, getConfigPath())
 }
 
-async function syncRetiredModelLabels(excludedSessionId?: string): Promise<void> {
-  const referencedModelIds = new Set(
-    (await sessions.list())
-      .filter((summary) => summary.sessionId !== excludedSessionId)
-      .map((summary) => summary.modelId)
-      .filter((modelId): modelId is string => Boolean(modelId)),
-  )
-  const config = loadAppConfig()
-  if (!config) return
-  const next = syncReferencedRetiredModelLabels(config, referencedModelIds)
-  if (next !== config) await saveConfig(next, configSecretCodec, getConfigPath())
+function syncRetiredModelLabels(excludedSessionId?: string): Promise<void> {
+  return persistRuntimePreferences({}, excludedSessionId)
 }
 
 function sameStringRecord(
@@ -2831,7 +2831,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   const initialRuntime = createDefaultDraftRuntime()
   runtimeRegistry.select(initialRuntime)
   await syncRetiredModelLabels()
-    .catch((error) => console.warn('退役模型显示名清理失败：', error))
+    .catch((error) => console.warn('历史模型显示名同步失败：', error))
   registerAttachmentProtocol((sessionId) =>
     runtimeRegistry.findBySessionId(sessionId)?.journal ?? null)
   backgroundTaskWakeups = new BackgroundTaskWakeQueue({

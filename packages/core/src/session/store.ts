@@ -636,7 +636,7 @@ export class SessionJournal implements SessionRecorder {
   }
 
   get metadataSnapshot(): SessionMetadata {
-    return { ...this.metadata }
+    return { ...this.metadata, referencedModelIds: [...this.metadata.referencedModelIds] }
   }
 
   /** 所有可见事件写稳后，把派生列表缓存封存在同一 transcript 边界。 */
@@ -1769,6 +1769,11 @@ export class SessionJournal implements SessionRecorder {
   private async appendEntries(entries: SessionEntry[]): Promise<void> {
     const text = entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
     await appendFile(this.paths.transcript, text, { encoding: 'utf8', flush: true })
+    for (const entry of entries) {
+      if ('modelId' in entry && !this.metadata.referencedModelIds.includes(entry.modelId)) {
+        this.metadata.referencedModelIds.push(entry.modelId)
+      }
+    }
     this.leafUuid = entries.at(-1)!.uuid
   }
 

@@ -37,6 +37,27 @@ afterEach(async () => {
 })
 
 describe('SessionStore', () => {
+  it('型号引用包含切换前的历史，缓存缺失时从原 JSONL 重建而不改写会话', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:first' })
+    await journal.updateModelSelection('test:second', 'high')
+    await journal.updateModelSelection('test:first', 'default')
+    assert.deepEqual(journal.metadataSnapshot.referencedModelIds, ['test:first', 'test:second'])
+    journal.metadataSnapshot.referencedModelIds.length = 0
+    assert.deepEqual(journal.metadataSnapshot.referencedModelIds, ['test:first', 'test:second'])
+    const paths = getSessionPaths(storeRoots.get(store)!, journal.sessionId)
+    const original = await readFile(paths.transcript, 'utf8')
+    const cache = JSON.parse(await readFile(paths.metadata, 'utf8'))
+    delete cache.referencedModelIds
+    await writeFile(paths.metadata, JSON.stringify(cache))
+    const [summary] = await store.list()
+    assert.equal(summary?.resumable, true)
+    assert.deepEqual(summary?.referencedModelIds, ['test:first', 'test:second'])
+    assert.deepEqual((await store.open(journal.sessionId)).metadataSnapshot.referencedModelIds,
+      ['test:first', 'test:second'])
+    assert.equal(await readFile(paths.transcript, 'utf8'), original)
+  })
+
   it('允许多个只读入口并发重建同一会话的派生 metadata 缓存', async () => {
     const store = await createStore()
     const journal = await store.create({

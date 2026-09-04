@@ -3,48 +3,37 @@ import { describe, it } from 'node:test'
 import { cliProxyModelId, type WhycodeConfig } from './config.ts'
 import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 
-describe('退役模型显示名生命周期', () => {
-  it('只保留仍被历史会话最后模型选择引用的显示名', () => {
-    const config: WhycodeConfig = {
-      providers: {},
-      retiredModelLabels: {
-        'custom:kept': 'Kept Model',
-        'custom:deleted': 'Deleted Model',
-      },
-    }
-    const next = syncReferencedRetiredModelLabels(config, new Set(['custom:kept']))
-    assert.deepEqual(next.retiredModelLabels, { 'custom:kept': 'Kept Model' })
-    assert.deepEqual(config.retiredModelLabels, {
-      'custom:kept': 'Kept Model',
-      'custom:deleted': 'Deleted Model',
-    })
-  })
-
-  it('没有任何历史引用时完整移除退役显示名配置域', () => {
-    const config: WhycodeConfig = {
-      providers: {},
-      retiredModelLabels: { 'openai:gpt-5.2': 'GPT-5.2' },
-    }
-    const next = syncReferencedRetiredModelLabels(config, new Set())
-    assert.equal(next.retiredModelLabels, undefined)
-  })
-
-  it('按实际引用补齐退役 Gemini 的原名，切换或删除后不留下孤儿名称', () => {
-    const officialId = 'google:gemini-3.7-flash'
-    const proxyId = cliProxyModelId(officialId)
+describe('历史模型显示名生命周期', () => {
+  it('在型号仍受支持时按会话引用保存原名，未使用的型号不生成记录', () => {
+    const id = 'google:gemini-3.1-pro-preview'
     const config: WhycodeConfig = { providers: {} }
     assert.equal(syncReferencedRetiredModelLabels(config, new Set()), config)
-    const referenced = syncReferencedRetiredModelLabels(config, new Set([officialId, proxyId]))
-    assert.deepEqual(referenced.retiredModelLabels, {
-      [officialId]: 'Gemini 3.7 Flash',
-      [proxyId]: 'Gemini 3.7 Flash（CLIProxyAPI）',
+    const saved = syncReferencedRetiredModelLabels(config, new Set([id, cliProxyModelId(id)]))
+    assert.deepEqual(saved.retiredModelLabels, {
+      [id]: 'Gemini 3.1 Pro Preview', [cliProxyModelId(id)]: 'Gemini 3.1 Pro Preview（CLIProxyAPI）',
     })
-    assert.equal(
-      syncReferencedRetiredModelLabels(referenced, new Set([officialId, proxyId])),
-      referenced,
-    )
-    const remaining = syncReferencedRetiredModelLabels(referenced, new Set([proxyId]))
-    assert.deepEqual(remaining.retiredModelLabels, { [proxyId]: 'Gemini 3.7 Flash（CLIProxyAPI）' })
+    assert.equal(config.retiredModelLabels, undefined)
+    assert.equal(syncReferencedRetiredModelLabels(saved, new Set([id, cliProxyModelId(id)])), saved)
+  })
+
+  it('无需源码保存退役型号，最后一个引用消失后移除整个显示名域', () => {
+    const id = 'test:retired-model'
+    const proxyId = cliProxyModelId(id)
+    const config: WhycodeConfig = {
+      providers: {},
+      retiredModelLabels: { [id]: '历史型号', [proxyId]: '历史路由' },
+    }
+    assert.equal(syncReferencedRetiredModelLabels(config, new Set([id, proxyId])), config)
+    const remaining = syncReferencedRetiredModelLabels(config, new Set([proxyId]))
+    assert.deepEqual(remaining.retiredModelLabels, { [proxyId]: '历史路由' })
     assert.equal(syncReferencedRetiredModelLabels(remaining, new Set()).retiredModelLabels, undefined)
+    assert.deepEqual(config.retiredModelLabels, { [id]: '历史型号', [proxyId]: '历史路由' })
+  })
+
+  it('不为未知型号猜测显示名或生成活动连接', () => {
+    const config: WhycodeConfig = { providers: {} }
+    for (const id of ['test:unknown-model', '__proto__', 'toString']) {
+      assert.equal(syncReferencedRetiredModelLabels(config, new Set([id])), config)
+    }
   })
 })

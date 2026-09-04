@@ -59,7 +59,7 @@ export interface WhycodeConfig {
   defaultModel?: string
   /** 全部已加载、新建与恢复会话共享的权限档位；具体审批结果仍只在各会话内存中。 */
   permissionMode?: PermissionMode
-  /** 只用于给已退役会话显示其原型号；不参与模型解析。 */
+  /** 按会话引用提前保存型号原名，退役后继续用于历史显示；不参与模型解析。 */
   retiredModelLabels?: Record<string, string>
   cliProxyApi?: CliProxyApiConfig
   auxiliaryModels?: AuxiliaryModelsConfig

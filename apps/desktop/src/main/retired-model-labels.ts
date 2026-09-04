@@ -1,13 +1,8 @@
-import { cliProxyModelId, type WhycodeConfig } from './config.ts'
-
-// 只作为历史显示名来源；不参与模型解析，也不向活动目录提供别名。
-const RETIRED_BUILTIN_LABELS: Readonly<Record<string, string>> = {
-  'google:gemini-3.7-flash': 'Gemini 3.7 Flash',
-  [cliProxyModelId('google:gemini-3.7-flash')]: 'Gemini 3.7 Flash（CLIProxyAPI）',
-}
+import type { WhycodeConfig } from './config.ts'
+import { listModelConnections } from './model-connections.ts'
 
 /**
- * 退役名称只服务于“最后仍选择该型号”的历史会话；不为已切换或已删除的会话保留孤儿状态。
+ * 趁目录仍支持型号时保存原名；引用来自会话事实源，不能依赖未来发布包保留旧型号表。
  */
 export function syncReferencedRetiredModelLabels(
   config: WhycodeConfig,
@@ -15,8 +10,12 @@ export function syncReferencedRetiredModelLabels(
 ): WhycodeConfig {
   const labels = config.retiredModelLabels ?? {}
   const retained = Object.fromEntries(
-    Object.entries({ ...RETIRED_BUILTIN_LABELS, ...labels })
-      .filter(([modelId]) => referencedModelIds.has(modelId)),
+    [...referencedModelIds].flatMap((modelId) => {
+      const savedName = Object.hasOwn(labels, modelId) ? labels[modelId] : undefined
+      const name = savedName ?? listModelConnections(config, modelId)
+        .find((model) => model.id === modelId && model.displayName !== modelId)?.displayName
+      return name ? [[modelId, name]] : []
+    }),
   )
   if (
     Object.keys(retained).length === Object.keys(labels).length

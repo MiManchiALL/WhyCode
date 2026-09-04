@@ -88,13 +88,13 @@ describe('默认模型选择', () => {
   })
 
   it('CLIProxyAPI 配置中的退役型号不能恢复为默认模型', () => {
-    const modelId = cliProxyModelId('openai:gpt-5.2')
+    const modelId = cliProxyModelId('test:retired-model')
     const value = config({}, modelId)
     value.cliProxyApi = {
       apiKey: 'proxy-key',
       baseURL: 'http://127.0.0.1:8317/v1',
-      modelIds: ['openai:gpt-5.2'],
-      modelRoutes: { 'openai:gpt-5.2': 'gpt-5.2' },
+      modelIds: ['test:retired-model'],
+      modelRoutes: { 'test:retired-model': 'retired-model' },
     }
     assert.equal(resolveDefaultModelId(value), null)
   })
@@ -140,26 +140,18 @@ describe('配置密钥存储', () => {
     try {
       for (const modelId of [
         'deepseek:deepseek-v4-pro',
-        'deepseek:deepseek-v4-flash-vision-exp',
-        'google:gemini-3.8-flash',
-        'openai:gpt-6-astra',
-        'openai:gpt-5.6-sol',
         cliProxyModelId('google:gemini-3.8-flash'),
-        cliProxyModelId('openai:gpt-6-astra'),
       ]) {
         await saveConfig({
           providers: {
             deepseek: { apiKey: 'deepseek-key' },
-            google: { apiKey: 'google-key' },
-            openai: { apiKey: 'openai-key' },
           },
           cliProxyApi: {
             apiKey: 'proxy-key',
             baseURL: 'http://localhost/v1',
-            modelIds: ['google:gemini-3.8-flash', 'openai:gpt-6-astra'],
+            modelIds: ['google:gemini-3.8-flash'],
             modelRoutes: {
               'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
-              'openai:gpt-6-astra': 'gpt-6-astra',
             },
           },
           defaultModel: modelId,
@@ -346,7 +338,7 @@ describe('配置密钥存储', () => {
         customConnections: [{
           id: 'old-proxy',
           name: 'CLIProxyAPI',
-          modelId: 'gpt-5.6-sol(high)',
+          modelId: 'fixture-route(high)',
           apiKey: 'removed-custom-secret',
         }],
         consensusAgents: {
@@ -362,9 +354,8 @@ describe('配置密钥存储', () => {
       assert.equal(loaded?.defaultModel, undefined)
       assert.equal(
         loaded?.retiredModelLabels?.['custom:old-proxy'],
-        'gpt-5.6-sol(high)',
+        'fixture-route(high)',
       )
-      assert.equal(loaded?.retiredModelLabels?.['openai:gpt-5.2'], 'GPT-5.2')
       assert.equal(await migrateLegacyConfig(codec, path), false)
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -422,23 +413,6 @@ describe('配置密钥存储', () => {
       const loaded = loadConfig(path, codec)
       assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['google:gemini-3.1-pro-preview'])
       assert.deepEqual(loaded?.cliProxyApi?.modelRoutes, {})
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('v5 配置升级安全存储结构时不重复执行旧模型目录迁移', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'whycode-config-v5-'))
-    const path = join(root, 'config.json')
-    try {
-      await writeFile(path, JSON.stringify({
-        version: 5,
-        providers: {},
-      }))
-      assert.equal(await migrateLegacyConfig(codec, path), true)
-      const loaded = loadConfig(path, codec)
-      assert.equal(loaded?.retiredModelLabels?.['openai:gpt-5.2'], undefined)
-      assert.equal(await migrateLegacyConfig(codec, path), false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

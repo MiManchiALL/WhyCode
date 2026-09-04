@@ -428,6 +428,8 @@ export const sessionMetadataSchema = z.object({
   sessionId: sessionIdSchema,
   workspace: workspaceBindingSchema,
   modelId: z.string().min(1),
+  /** 从整个 JSONL 派生的型号引用，包含切换前及可 Fork 的历史选择。 */
+  referencedModelIds: z.array(z.string().min(1)).min(1),
   reasoningEffort: reasoningEffortSelectionSchema,
   title: z.string(),
   lastUserText: z.string(),
@@ -450,6 +452,7 @@ export type SessionForkOrigin = z.infer<typeof sessionForkOriginSchema>
 
 interface SessionSummaryBase {
   sessionId: string
+  referencedModelIds: string[]
   title: string
   lastUserText: string
   createdAt: string
