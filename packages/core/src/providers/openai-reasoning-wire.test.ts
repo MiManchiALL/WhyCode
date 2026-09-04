@@ -18,14 +18,17 @@ import { getModelEntry } from './registry.ts'
 
 describe('OpenAI Responses 推理摘要线格式', () => {
   it('内置 GPT 默认只请求摘要，不覆盖厂商默认推理强度', async () => {
-    const captured = await captureRequest(getModelEntry('openai:gpt-5.6-sol'))
+    const captured = await captureRequest(getModelEntry('openai:gpt-6-astra'))
 
     assert.equal(captured.path, '/v1/responses')
-    assert.equal(captured.body.model, 'gpt-5.6-sol')
+    assert.equal(captured.body.model, 'gpt-6-astra')
     assert.deepEqual(captured.body.reasoning, {
       summary: 'auto',
     })
     assert.equal(captured.body.store, false)
+    assert.equal(captured.body.temperature, undefined)
+    assert.equal(captured.body.top_p, undefined)
+    assert.equal(captured.body.top_logprobs, undefined)
     assert.equal(
       records(captured.body.include).includes('reasoning.encrypted_content'),
       true,
@@ -34,7 +37,7 @@ describe('OpenAI Responses 推理摘要线格式', () => {
 
   it('内置 GPT 把会话显式选档写入 Responses reasoning.effort', async () => {
     const captured = await captureRequest(
-      getModelEntry('openai:gpt-5.6-sol'),
+      getModelEntry('openai:gpt-6-astra'),
       undefined,
       'max',
     )
@@ -45,7 +48,7 @@ describe('OpenAI Responses 推理摘要线格式', () => {
   })
 
   it('无服务端存储时重放完整 encrypted reasoning，不发送失效 item 引用', async () => {
-    const entry = getModelEntry('openai:gpt-5.6-sol')
+    const entry = getModelEntry('openai:gpt-6-astra')
     const messages: ModelMessage[] = [
       { role: 'user', content: '先读取 PDF，再回答。' },
       {

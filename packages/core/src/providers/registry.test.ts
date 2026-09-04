@@ -11,13 +11,15 @@ describe('MODEL_REGISTRY 能力边界', () => {
 
     assert.deepEqual(visualModelIds, [
       'anthropic:claude-sonnet-4-6',
+      'deepseek:deepseek-v4-flash-vision-exp',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.7-flash',
+      'google:gemini-3.8-flash',
       'mimo:mimo-v2.5',
       'zhipu:glm-5v-turbo',
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
+      'openai:gpt-6-astra',
       'openai:gpt-5.5',
     ])
   })
@@ -61,7 +63,7 @@ describe('MODEL_REGISTRY 能力边界', () => {
   it('Gemini 模型使用 Google OpenAI 兼容协议', () => {
     for (const modelId of [
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.7-flash',
+      'google:gemini-3.8-flash',
     ]) {
       const gemini = getModelEntry(modelId)
       assert.equal(gemini.provider, 'google')
@@ -87,8 +89,9 @@ describe('MODEL_REGISTRY 能力边界', () => {
     }
   })
 
-  it('GPT-5.5 与 GPT-5.6 全系使用 Responses API 和 1M 上下文', () => {
+  it('GPT-5.5、GPT-5.6 全系与 Astra 使用 Responses API 和 1M 上下文', () => {
     for (const modelId of [
+      'openai:gpt-6-astra',
       'openai:gpt-5.5',
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
@@ -123,9 +126,11 @@ describe('MODEL_REGISTRY 能力边界', () => {
       'anthropic-messages',
     )
     assert.equal(getModelEntry('openai:gpt-5.6-sol').protocol, 'openai-responses')
+    assert.equal(getModelEntry('openai:gpt-6-astra').protocol, 'openai-responses')
+    assert.equal(getModelEntry('deepseek:deepseek-v4-flash-vision-exp').protocol, 'openai-chat')
     assert.equal(getModelEntry('openai:gpt-5.6-terra').protocol, 'openai-responses')
     assert.equal(getModelEntry('openai:gpt-5.6-luna').protocol, 'openai-responses')
-    assert.equal(getModelEntry('google:gemini-3.7-flash').protocol, 'openai-chat')
+    assert.equal(getModelEntry('google:gemini-3.8-flash').protocol, 'openai-chat')
   })
 
   it('连接适配器可覆盖传输路由名而不改写 WhyCode 模型画像', () => {
@@ -168,5 +173,21 @@ describe('MODEL_REGISTRY 能力边界', () => {
         assert.equal(created.modelId, modelId.slice('deepseek:'.length))
       }
     }
+  })
+
+  it('DeepSeek 视觉实验型号独立开放图片，保留工具、缓存与压缩边界', () => {
+    const vision = getModelEntry('deepseek:deepseek-v4-flash-vision-exp')
+    assert.equal(vision.capabilities.supportsImageInput, true)
+    assert.equal(vision.capabilities.supportsOriginalImageDetail, undefined)
+    assert.equal(vision.capabilities.supportsNativeTools, true)
+    assert.equal(vision.capabilities.structuredOutput, 'json-object')
+    assert.equal(vision.capabilities.promptCaching, 'auto')
+    assert.equal(vision.capabilities.contextWindow, 1_000_000)
+    assert.equal(vision.capabilities.maxOutput, 384_000)
+    assert.equal(autoCompactThreshold(vision.capabilities), 910_000)
+    assert.deepEqual(vision.capabilities.reasoningEffort, {
+      supported: ['low', 'high', 'max'],
+      default: 'high',
+    })
   })
 })

@@ -54,7 +54,7 @@ const GPT_5_6_ROUTE_CONSTRAINTS = {
  * 连接保存时必须再与该实例的 `/models` 结果求交集；静态候选只证明型号等价，
  * 不能证明某个用户的 CLIProxyAPI 账号已经开放该路由。能力约束核对自
  * CLIProxyAPI v7.2.78（768b4c49）的 Codex 客户端目录、官方远程模型目录
- * 8b32755e（2026-07-21），以及 v7.2.132（7ea9c67）的 Gemini 3.7 定义；
+ * 8b32755e（2026-07-21）。Gemini 3.8 与 Astra 的更新依据见各项旁的注释；
  * 标准 `/models` 只用于确认可用 ID，不生成能力画像。
  */
 export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[] = [
@@ -105,9 +105,10 @@ export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[
     ],
   },
   {
-    profileId: 'google:gemini-3.7-flash',
+    // v7.2.149（2a6b87a）Antigravity 转换器；官方远程目录 f1d69888（2026-09-05）。
+    profileId: 'google:gemini-3.8-flash',
     routes: [{
-      modelId: 'gemini-3.7-flash-high',
+      modelId: 'gemini-3.8-flash-high',
       constraints: {
         maxContextWindow: 1_048_576,
         maxOutputTokens: 65_536,
@@ -154,6 +155,23 @@ export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[
           supported: ['low', 'medium', 'high', 'xhigh', 'max'],
           default: 'medium',
         },
+      },
+    }],
+  },
+  {
+    // models 与 codex_client_models 均核对自 router-for-me/models@f1d69888。
+    // Team/Plus/Pro 的共同上限为 272K；客户端 max_context_window 与 ultra 不是通用路由保证。
+    profileId: 'openai:gpt-6-astra',
+    routes: [{
+      modelId: 'gpt-6-astra',
+      constraints: {
+        maxContextWindow: 272_000,
+        maxOutputTokens: 128_000,
+        reasoningEffort: {
+          supported: ['low', 'medium', 'high', 'xhigh', 'max'],
+          default: 'medium',
+        },
+        structuredOutputAtMost: 'tool-based',
       },
     }],
   },

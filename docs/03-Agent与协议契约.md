@@ -397,7 +397,7 @@ Renderer 在工具折叠等展示投影完成后，把最终可见序列中相�
 - default 表示请求不覆盖连接默认，不等于某个固定强度；
 - Renderer 只显示当前有效画像允许的档位，Main 再校验，Provider 翻译为实际协议字段。
 
-模型和强度在 turn 起点冻结。退役 modelId 的历史可读但没有可发送 AgentSession；用户必须主动选择受支持型号，系统不得静默替换。模型目录更新流程见 `.agents/skills/whycode-model-catalog/SKILL.md`。
+模型和强度在 turn 起点冻结。退役 modelId 的历史可读但没有可发送 AgentSession；用户必须主动选择受支持型号，系统不得静默替换。Main 按历史会话当前引用同步退役显示名，仅保存仍被引用的名称；切换或删除会话后清理孤儿名称，不改写 JSONL。模型目录更新流程见 `.agents/skills/whycode-model-catalog/SKILL.md`。
 
 视觉辅助模型和固定子代理模型只保存统一连接 ID，不复制密钥或端点。连接失效时逐项清除设置；运行中的既有 AgentSession 不被热替换。
 

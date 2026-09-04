@@ -203,6 +203,26 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     providerOptions: DEEPSEEK_THINKING_OPTIONS,
   },
   {
+    id: 'deepseek:deepseek-v4-flash-vision-exp',
+    modelId: 'deepseek-v4-flash-vision-exp',
+    displayName: 'DeepSeek V4 Flash Vision Exp',
+    provider: 'deepseek',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'field',
+      reasoningEffort: {
+        supported: ['low', 'high', 'max'],
+        default: 'high',
+      },
+      structuredOutput: 'json-object',
+      promptCaching: 'auto',
+      contextWindow: 1_000_000,
+      maxOutput: 384_000,
+    },
+    providerOptions: DEEPSEEK_THINKING_OPTIONS,
+  },
+  {
     id: 'google:gemini-3.1-pro-preview',
     modelId: 'gemini-3.1-pro-preview',
     displayName: 'Gemini 3.1 Pro Preview',
@@ -223,9 +243,9 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     providerOptions: GOOGLE_THINKING_SUMMARY_OPTIONS,
   },
   {
-    id: 'google:gemini-3.7-flash',
-    modelId: 'gemini-3.7-flash',
-    displayName: 'Gemini 3.7 Flash',
+    id: 'google:gemini-3.8-flash',
+    modelId: 'gemini-3.8-flash',
+    displayName: 'Gemini 3.8 Flash',
     provider: 'google',
     capabilities: {
       supportsNativeTools: true,
@@ -315,6 +335,26 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     displayName: 'GPT-5.6 Luna',
     provider: 'openai',
     capabilities: GPT_5_6_CAPABILITIES,
+    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
+  },
+  {
+    id: 'openai:gpt-6-astra',
+    modelId: 'gpt-6-astra',
+    displayName: 'GPT-6 Astra',
+    provider: 'openai',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: true,
+      reasoningExposure: 'summary',
+      reasoningEffort: {
+        supported: ['low', 'medium', 'high', 'xhigh', 'max'],
+        default: 'medium',
+      },
+      structuredOutput: 'json-schema',
+      promptCaching: 'auto',
+      contextWindow: 1_050_000,
+      maxOutput: 128_000,
+    },
     providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
   },
   {

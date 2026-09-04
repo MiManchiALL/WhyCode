@@ -9,6 +9,7 @@ import {
 } from '@whycode/core'
 import { cliProxyModelId, type WhycodeConfig } from './config.ts'
 import { getDefaultCliProxyRoute } from './cli-proxy-models.ts'
+import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import {
   listAuxiliaryVisionModelCandidates,
   listConfiguredModelCandidates,
@@ -26,13 +27,14 @@ describe('模型连接解析', () => {
       providers: { deepseek: { apiKey: 'key' } },
       consensusAgents: {
         B: { modelId: 'deepseek:deepseek-v4-flash' },
-        C: { modelId: 'google:gemini-3.7-flash' },
+        C: { modelId: 'google:gemini-3.8-flash' },
       },
     }
 
     assert.deepEqual(listConfiguredModelCandidates(value), [
       { id: 'deepseek:deepseek-v4-flash', displayName: 'DeepSeek V4 Flash' },
       { id: 'deepseek:deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
+      { id: 'deepseek:deepseek-v4-flash-vision-exp', displayName: 'DeepSeek V4 Flash Vision Exp' },
     ])
     assert.deepEqual(pruneInvalidConsensusAgents(value).consensusAgents, {
       B: { modelId: 'deepseek:deepseek-v4-flash' },
@@ -92,8 +94,9 @@ describe('模型连接解析', () => {
     const transportSessionId = '11111111-1111-4111-8111-111111111111'
     const cases = [
       ['anthropic:claude-sonnet-4-6', { anthropic: { apiKey: 'official-key' } }],
-      ['google:gemini-3.7-flash', { google: { apiKey: 'official-key' } }],
+      ['google:gemini-3.8-flash', { google: { apiKey: 'official-key' } }],
       ['openai:gpt-5.6-sol', { openai: { apiKey: 'official-key' } }],
+      ['openai:gpt-6-astra', { openai: { apiKey: 'official-key' } }],
     ] as const
 
     for (const [profileId, providers] of cases) {
@@ -189,6 +192,25 @@ describe('模型连接解析', () => {
     )
   })
 
+  it('替换 Gemini 不重写历史选择，内置和 CLI 历史均保留原名并拦截发送', () => {
+    for (const retiredId of ['google:gemini-3.7-flash', cliProxyModelId('google:gemini-3.7-flash')]) {
+      const value = syncReferencedRetiredModelLabels({
+        ...withCliProxy(['google:gemini-3.8-flash'], { google: { apiKey: 'key' } }),
+        defaultModel: retiredId,
+      }, new Set([retiredId]))
+      const before = JSON.stringify(value)
+      const resolution = resolveModelConnection(value, retiredId)
+      assert.equal(resolution.ok, false)
+      if (!resolution.ok) assert.match(resolution.error, /请先切换到当前可用模型再发送/)
+      const item = listModelConnections(value, retiredId).at(-1)!
+      assert.equal(item.retired, true)
+      assert.equal(item.available, false)
+      assert.match(item.displayName, /^Gemini 3\.7 Flash/)
+      assert.equal(listConfiguredModelCandidates(value).some((model) => model.id === retiredId), false)
+      assert.equal(JSON.stringify(value), before)
+    }
+  })
+
   it('当前仍受支持但未启用的 CLIProxyAPI 历史不是退役型号', () => {
     const modelId = cliProxyModelId('google:gemini-3.1-pro-preview')
     const item = listModelConnections(config({}), modelId).at(-1)
@@ -198,13 +220,13 @@ describe('模型连接解析', () => {
     assert.match(item?.unavailableReason ?? '', /尚未启用/)
   })
 
-  it('CLIProxyAPI 使用官方目录登记的 Gemini 3.7 Antigravity 路由', () => {
-    const profileId = 'google:gemini-3.7-flash'
+  it('CLIProxyAPI 使用官方目录登记的 Gemini 3.8 Antigravity 路由', () => {
+    const profileId = 'google:gemini-3.8-flash'
     const modelId = cliProxyModelId(profileId)
     const value = withCliProxy(
       [profileId],
       {},
-      { [profileId]: 'gemini-3.7-flash-high' },
+      { [profileId]: 'gemini-3.8-flash-high' },
     )
     const resolution = resolveModelConnection(value, modelId)
     assert.equal(resolution.ok, true)
@@ -212,12 +234,12 @@ describe('模型连接解析', () => {
       const created = resolution.value.entry.create(resolution.value.providerConfig)
       assert.notEqual(typeof created, 'string')
       if (typeof created !== 'string') {
-        assert.equal(created.modelId, 'gemini-3.7-flash-high')
+        assert.equal(created.modelId, 'gemini-3.8-flash-high')
       }
     }
 
     const item = listModelConnections(value).find((model) => model.id === modelId)
-    assert.equal(item?.displayName, 'Gemini 3.7 Flash（CLIProxyAPI）')
+    assert.equal(item?.displayName, 'Gemini 3.8 Flash（CLIProxyAPI）')
     assert.equal(item?.available, true)
     assert.equal(item?.retired, false)
     assert.equal(item?.reasoningEffort?.default, 'high')
@@ -237,7 +259,7 @@ describe('模型连接解析', () => {
     const cases = [
       ['anthropic:claude-sonnet-4-6', 'max', 'anthropic', 'effort'],
       ['google:gemini-3.1-pro-preview', 'high', 'google', 'reasoningEffort'],
-      ['google:gemini-3.7-flash', 'medium', 'google', 'reasoningEffort'],
+      ['google:gemini-3.8-flash', 'medium', 'google', 'reasoningEffort'],
       ['openai:gpt-5.6-sol', 'xhigh', 'openai', 'reasoningEffort'],
     ] as const
     const value = withCliProxy(cases.map(([modelId]) => modelId))
@@ -255,7 +277,7 @@ describe('模型连接解析', () => {
     const models = listModelConnections(config({ google: { apiKey: 'key' } }))
     assert.deepEqual(new Set(models.map((model) => model.id)), new Set([
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.7-flash',
+      'google:gemini-3.8-flash',
     ]))
     assert.equal(models.every((model) => model.available), true)
   })
@@ -267,22 +289,23 @@ describe('模型连接解析', () => {
         google: { apiKey: 'vision-key' },
       },
       auxiliaryModels: {
-        visionModelId: 'google:gemini-3.7-flash',
+        visionModelId: 'google:gemini-3.8-flash',
         subagentModelId: 'deepseek:deepseek-v4-pro',
       },
     }
     assert.deepEqual(listAuxiliaryVisionModelCandidates(value).map((model) => model.id), [
+      'deepseek:deepseek-v4-flash-vision-exp',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.7-flash',
+      'google:gemini-3.8-flash',
     ])
-    assert.equal(resolveAuxiliaryVisionModel(value)?.entry.id, 'google:gemini-3.7-flash')
+    assert.equal(resolveAuxiliaryVisionModel(value)?.entry.id, 'google:gemini-3.8-flash')
     const models = listModelConnections(value)
     assert.equal(
       models.find((model) => model.id === 'deepseek:deepseek-v4-flash')?.imageInputMode,
       'auxiliary',
     )
     assert.equal(
-      models.find((model) => model.id === 'google:gemini-3.7-flash')?.imageInputMode,
+      models.find((model) => model.id === 'google:gemini-3.8-flash')?.imageInputMode,
       'native',
     )
 
@@ -312,12 +335,12 @@ describe('模型连接解析', () => {
       reasoningEffort: 'high',
     })
 
-    value.auxiliaryModels = { subagentModelId: 'google:gemini-3.7-flash' }
+    value.auxiliaryModels = { subagentModelId: 'google:gemini-3.8-flash' }
     assert.deepEqual(resolveSubagentModelSelection(value, {
       modelId: 'deepseek:deepseek-v4-flash',
       reasoningEffort: 'max',
     }), {
-      modelId: 'google:gemini-3.7-flash',
+      modelId: 'google:gemini-3.8-flash',
       reasoningEffort: 'default',
     })
 

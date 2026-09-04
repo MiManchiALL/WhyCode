@@ -20,16 +20,22 @@ describe('模型目录单一事实源', () => {
       'anthropic:claude-sonnet-4-6',
       'deepseek:deepseek-v4-flash',
       'deepseek:deepseek-v4-pro',
+      'deepseek:deepseek-v4-flash-vision-exp',
       'google:gemini-3.1-pro-preview',
-      'google:gemini-3.7-flash',
+      'google:gemini-3.8-flash',
       'mimo:mimo-v2.5',
       'zhipu:glm-5v-turbo',
       'zhipu:glm-4.7',
       'openai:gpt-5.6-sol',
       'openai:gpt-5.6-terra',
       'openai:gpt-5.6-luna',
+      'openai:gpt-6-astra',
       'openai:gpt-5.5',
     ])
+    assert.throws(
+      () => getModelProfile('google:gemini-3.7-flash'),
+      /未维护的模型画像/,
+    )
     assert.throws(
       () => getModelProfile('google:gemini-3.5-flash'),
       /未维护的模型画像/,

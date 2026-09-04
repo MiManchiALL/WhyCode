@@ -113,7 +113,7 @@ import {
   getCustomSystemPromptConfigPath,
   loadCustomSystemPromptSnapshot,
 } from './custom-system-prompt.ts'
-import { retainReferencedRetiredModelLabels } from './retired-model-labels.ts'
+import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
 import { deliverEditedUserMessage, startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
@@ -1113,10 +1113,11 @@ async function handleCommand(
       }
       try {
         await persistPreferredModel(command.modelId)
+        await syncRetiredModelLabels()
       } catch (error) {
         runtime.emit({
           type: 'error',
-          message: `模型已在当前会话生效，但偏好保存失败；重启后可能恢复旧模型：${error instanceof Error ? error.message : String(error)}`,
+          message: `模型已在当前会话生效，但偏好或历史显示名保存失败；重启后请核对模型选择：${error instanceof Error ? error.message : String(error)}`,
           recoverable: true,
         })
       }
@@ -1818,7 +1819,7 @@ async function synchronizeConfiguredCliProxyRoutes(
   else await saveConfig(synchronized, configSecretCodec, getConfigPath())
 }
 
-async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void> {
+async function syncRetiredModelLabels(excludedSessionId?: string): Promise<void> {
   const referencedModelIds = new Set(
     (await sessions.list())
       .filter((summary) => summary.sessionId !== excludedSessionId)
@@ -1826,8 +1827,8 @@ async function pruneRetiredModelLabels(excludedSessionId?: string): Promise<void
       .filter((modelId): modelId is string => Boolean(modelId)),
   )
   const config = loadAppConfig()
-  if (!config?.retiredModelLabels) return
-  const next = retainReferencedRetiredModelLabels(config, referencedModelIds)
+  if (!config) return
+  const next = syncReferencedRetiredModelLabels(config, referencedModelIds)
   if (next !== config) await saveConfig(next, configSecretCodec, getConfigPath())
 }
 
@@ -2664,7 +2665,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         } else {
           await managedWorkspaces.removeSession(sessionId)
         }
-        await pruneRetiredModelLabels(sessionId)
+        await syncRetiredModelLabels(sessionId)
       },
     })
     if (!deletion.sessionExists) {
@@ -2829,7 +2830,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   const initialRuntime = createDefaultDraftRuntime()
   runtimeRegistry.select(initialRuntime)
-  await pruneRetiredModelLabels()
+  await syncRetiredModelLabels()
     .catch((error) => console.warn('退役模型显示名清理失败：', error))
   registerAttachmentProtocol((sessionId) =>
     runtimeRegistry.findBySessionId(sessionId)?.journal ?? null)

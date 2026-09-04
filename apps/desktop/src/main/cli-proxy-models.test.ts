@@ -66,8 +66,8 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
       true,
     )
     assert.equal(
-      getDefaultCliProxyRoute('google:gemini-3.7-flash'),
-      'gemini-3.7-flash-high',
+      getDefaultCliProxyRoute('google:gemini-3.8-flash'),
+      'gemini-3.8-flash-high',
     )
   })
 
@@ -128,8 +128,8 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
     )
     assert.deepEqual(
       getCliProxyEffectiveCapabilities(
-        'google:gemini-3.7-flash',
-        'gemini-3.7-flash-high',
+        'google:gemini-3.8-flash',
+        'gemini-3.8-flash-high',
       )?.reasoningEffort,
       { supported: ['low', 'medium', 'high'], default: 'high' },
     )
@@ -139,13 +139,32 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
     assert.equal(getDefaultCliProxyRoute('openai:gpt-5.2'), null)
     assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-flash'), null)
     assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-pro'), null)
+    assert.equal(getDefaultCliProxyRoute('deepseek:deepseek-v4-flash-vision-exp'), null)
+    assert.equal(getDefaultCliProxyRoute('google:gemini-3.7-flash'), null)
     assert.equal(
-      isCliProxyRoute('google:gemini-3.7-flash', 'gemini-3.7-flash'),
+      isCliProxyRoute('google:gemini-3.8-flash', 'gemini-3.8-flash'),
       false,
     )
     assert.equal(
       getCliProxyEffectiveCapabilities('openai:gpt-5.6-sol', 'gpt-5.6'),
       null,
     )
+  })
+
+  it('Astra 使用账号共同上限与 medium 默认，独立于 GPT-5.6', () => {
+    const official = getModelEntry('openai:gpt-6-astra').capabilities
+    const proxy = getCliProxyEffectiveCapabilities('openai:gpt-6-astra', 'gpt-6-astra')!
+    assert.equal(getDefaultCliProxyRoute('openai:gpt-6-astra'), 'gpt-6-astra')
+    assert.equal(official.contextWindow, 1_050_000)
+    assert.equal(proxy.contextWindow, 272_000)
+    assert.equal(proxy.maxOutput, 128_000)
+    assert.equal(proxy.structuredOutput, 'tool-based')
+    assert.equal(proxy.supportsImageInput, true)
+    assert.deepEqual(proxy.reasoningEffort, {
+      supported: ['low', 'medium', 'high', 'xhigh', 'max'],
+      default: 'medium',
+    })
+    assert.equal(isCliProxyRoute('openai:gpt-6-astra', 'gpt-5.6-sol'), false)
+    assert.equal(isCliProxyRoute('openai:gpt-5.6-sol', 'gpt-6-astra'), false)
   })
 })

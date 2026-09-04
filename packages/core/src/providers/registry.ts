@@ -126,11 +126,15 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     deepSeekChat,
   ),
   registryEntry(
+    'deepseek:deepseek-v4-flash-vision-exp',
+    deepSeekChat,
+  ),
+  registryEntry(
     'google:gemini-3.1-pro-preview',
     googleChat,
   ),
   registryEntry(
-    'google:gemini-3.7-flash',
+    'google:gemini-3.8-flash',
     googleChat,
   ),
   registryEntry(
@@ -155,6 +159,10 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
   ),
   registryEntry(
     'openai:gpt-5.6-luna',
+    openAIResponses,
+  ),
+  registryEntry(
+    'openai:gpt-6-astra',
     openAIResponses,
   ),
   registryEntry(

@@ -5,8 +5,10 @@ import { describe, it } from 'node:test'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { generateText, type LanguageModel, type ModelMessage } from 'ai'
+import { generateText, modelMessageSchema, type LanguageModel, type ModelMessage } from 'ai'
+import { z } from 'zod'
 import { adaptMessagesForProvider } from './message-adapter.ts'
+import { getModelEntry } from './registry.ts'
 
 describe('Provider 多模态工具结果线格式', () => {
   it('Anthropic Messages 把图片放进同一 tool_result', async () => {
@@ -58,6 +60,32 @@ describe('Provider 多模态工具结果线格式', () => {
       part.type === 'image_url'
       && String(record(part.image_url)?.url).startsWith('data:image/png;base64,')), true)
   })
+
+  it('DeepSeek 视觉模型在工具轮回传图片和完整推理，跨新用户消息仍保留', async () => {
+    const history = canonicalHistory()
+    const assistant = history[0]!
+    assert.ok(assistant.role === 'assistant' && Array.isArray(assistant.content))
+    assistant.content.unshift({ type: 'reasoning', text: '先查看截图。' })
+    history.push({ role: 'assistant', content: '已查看。' })
+    history.push({ role: 'user', content: '继续分析。' })
+    const restored = z.array(modelMessageSchema).parse(JSON.parse(JSON.stringify(history)))
+    const entry = getModelEntry('deepseek:deepseek-v4-flash-vision-exp')
+    const body = await captureRequest(
+      (baseURL) => entry.create({ apiKey: 'test', baseURL }),
+      adaptMessagesForProvider(restored, entry.protocol),
+    )
+    assert.equal(body.model, 'deepseek-v4-flash-vision-exp')
+    const messages = records(body.messages)
+    const assistants = messages.filter((message) => message.role === 'assistant')
+    assert.equal(assistants[0]?.reasoning_content, '先查看截图。')
+    assert.equal(assistants[1]?.reasoning_content, '')
+    const images = messages.filter((message) => message.role === 'user')
+      .flatMap((message) => records(message.content))
+      .filter((part) => part.type === 'image_url')
+    assert.equal(images.length, 1)
+    assert.equal(record(images[0]?.image_url)?.url, 'data:image/png;base64,aGVsbG8=')
+    assert.equal(messages.find((message) => message.role === 'tool')?.tool_call_id, 'call-image')
+  })
 })
 
 async function captureRequest(
@@ -81,6 +109,7 @@ async function captureRequest(
     await assert.rejects(generateText({
       model: createModel(`http://127.0.0.1:${address.port}/v1`),
       messages,
+      tools: { ViewImage: { inputSchema: z.object({ path: z.string() }) } },
       maxRetries: 0,
     }))
     assert.ok(body)

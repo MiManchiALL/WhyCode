@@ -138,11 +138,36 @@ describe('配置密钥存储', () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-default-model-'))
     const path = join(root, 'config.json')
     try {
-      await saveConfig({
-        providers: { deepseek: { apiKey: 'deepseek-key' } },
-        defaultModel: 'deepseek:deepseek-v4-pro',
-      }, codec, path)
-      assert.equal(loadConfig(path, codec)?.defaultModel, 'deepseek:deepseek-v4-pro')
+      for (const modelId of [
+        'deepseek:deepseek-v4-pro',
+        'deepseek:deepseek-v4-flash-vision-exp',
+        'google:gemini-3.8-flash',
+        'openai:gpt-6-astra',
+        'openai:gpt-5.6-sol',
+        cliProxyModelId('google:gemini-3.8-flash'),
+        cliProxyModelId('openai:gpt-6-astra'),
+      ]) {
+        await saveConfig({
+          providers: {
+            deepseek: { apiKey: 'deepseek-key' },
+            google: { apiKey: 'google-key' },
+            openai: { apiKey: 'openai-key' },
+          },
+          cliProxyApi: {
+            apiKey: 'proxy-key',
+            baseURL: 'http://localhost/v1',
+            modelIds: ['google:gemini-3.8-flash', 'openai:gpt-6-astra'],
+            modelRoutes: {
+              'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
+              'openai:gpt-6-astra': 'gpt-6-astra',
+            },
+          },
+          defaultModel: modelId,
+        }, codec, path)
+        const restored = loadConfig(path, codec)
+        assert.equal(restored?.defaultModel, modelId)
+        assert.equal(resolveDefaultModelId(restored), modelId)
+      }
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -362,7 +387,7 @@ describe('配置密钥存储', () => {
             encryptedApiKey: bEncrypted,
           },
           C: {
-            model: 'google:gemini-3.7-flash',
+            model: 'google:gemini-3.8-flash',
             baseURL: 'https://old-c.example/v1',
             encryptedApiKey: cEncrypted,
           },
@@ -436,11 +461,11 @@ describe('配置密钥存储', () => {
           baseURL: 'http://127.0.0.1:8317/v1',
           modelIds: [
             'unknown:model',
-            'google:gemini-3.7-flash',
+            'google:gemini-3.8-flash',
             'openai:gpt-5.6-sol',
           ],
           modelRoutes: {
-            'google:gemini-3.7-flash': 'gemini-3.7-flash-high',
+            'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
             'openai:gpt-5.6-sol': 'gpt-5.6-sol',
             'openai:gpt-5.6-terra': 'gpt-5.6-terra',
           },
@@ -458,11 +483,11 @@ describe('配置密钥存储', () => {
       assert.equal('unknown' in loaded.providers, false)
       assert.equal(loaded.providers.mimo?.apiKey, 'valid')
       assert.deepEqual(loaded.cliProxyApi?.modelIds, [
-        'google:gemini-3.7-flash',
+        'google:gemini-3.8-flash',
         'openai:gpt-5.6-sol',
       ])
       assert.deepEqual(loaded.cliProxyApi?.modelRoutes, {
-        'google:gemini-3.7-flash': 'gemini-3.7-flash-high',
+        'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
         'openai:gpt-5.6-sol': 'gpt-5.6-sol',
         'openai:gpt-5.6-terra': 'gpt-5.6-terra',
       })
