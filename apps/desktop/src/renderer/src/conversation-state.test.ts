@@ -722,6 +722,7 @@ describe('会话界面时间线重建', () => {
       tools[1]?.kind === 'tool' ? tools[1].call.createdFileCheckpoint : null,
       true,
     )
+    assert.equal(state.fileSystemRevision, 3)
     assert.doesNotMatch(JSON.stringify(state.blocks), /已回滚|回滚失败/)
   })
 
@@ -800,9 +801,11 @@ describe('会话界面时间线重建', () => {
       coverage: 'complete',
     })
     assert.equal(state.fileRollbackBoundaryTurnId, null)
+    assert.equal(state.fileSystemRevision, 2)
 
     state = applyCoreEvent(state, { type: 'step-discarded' })
     assert.equal(state.fileRollbackBoundaryTurnId, 'turn-c')
+    assert.equal(state.fileSystemRevision, 2)
 
     state = applyCoreEvent(state, {
       type: 'tool-start',
@@ -818,6 +821,7 @@ describe('会话界面时间线重建', () => {
     })
     state = applyCoreEvent(state, { type: 'step-committed' })
     assert.equal(state.fileRollbackBoundaryTurnId, null)
+    assert.equal(state.fileSystemRevision, 3)
   })
 
   it('失败回滚保持现有边界，文件和对话回滚则清除边界', () => {
@@ -927,6 +931,7 @@ describe('会话界面时间线重建', () => {
     )
     assert.equal(replayed.fileRollbackBoundaryTurnId, 'turn-2')
     assert.equal(live.fileRollbackBoundaryTurnId, replayed.fileRollbackBoundaryTurnId)
+    assert.equal(live.fileSystemRevision, replayed.fileSystemRevision)
   })
 
   it('恢复结构化任务计划，并在文件和对话回滚时同步恢复计划状态', () => {

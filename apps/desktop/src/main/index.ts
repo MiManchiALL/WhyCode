@@ -141,6 +141,12 @@ import {
   userMessageNeedsAttachmentPreparation,
 } from './user-message-attachments.ts'
 import type {
+  CheckpointFileCurrentMatchRequest,
+  CheckpointFileCurrentMatchResult,
+  CheckpointFilePreviewRequest,
+  CheckpointFilePreviewResult,
+  CurrentFilePreviewRequest,
+  CurrentFilePreviewResult,
   DeleteSessionResult,
   ForkSessionRequest,
   ForkSessionResult,
@@ -2951,6 +2957,50 @@ if (primaryInstance) void app.whenReady().then(async () => {
     parentSessionId: string,
     subagentId: string,
   ) => subagents.transcript(parentSessionId, subagentId))
+  ipcMain.handle(IPC.checkpointFilePreview, (
+    _e,
+    request: CheckpointFilePreviewRequest,
+  ): Promise<CheckpointFilePreviewResult> => {
+    if (
+      !request
+      || typeof request.runtimeId !== 'string'
+      || typeof request.toolUseId !== 'string'
+      || typeof request.path !== 'string'
+    ) return Promise.resolve({ ok: false, error: '文件预览请求无效' })
+    const session = runtimeRegistry.get(request.runtimeId)?.session
+    return session
+      ? session.checkpointFilePreview(request.toolUseId, request.path)
+      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+  })
+  ipcMain.handle(IPC.checkpointFileCurrentMatch, (
+    _e,
+    request: CheckpointFileCurrentMatchRequest,
+  ): Promise<CheckpointFileCurrentMatchResult> => {
+    if (
+      !request
+      || typeof request.runtimeId !== 'string'
+      || typeof request.toolUseId !== 'string'
+      || typeof request.path !== 'string'
+    ) return Promise.resolve({ ok: false, error: '文件快照校验请求无效' })
+    const session = runtimeRegistry.get(request.runtimeId)?.session
+    return session
+      ? session.checkpointFileMatchesCurrent(request.toolUseId, request.path)
+      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+  })
+  ipcMain.handle(IPC.currentFilePreview, (
+    _e,
+    request: CurrentFilePreviewRequest,
+  ): Promise<CurrentFilePreviewResult> => {
+    if (
+      !request
+      || typeof request.runtimeId !== 'string'
+      || typeof request.path !== 'string'
+    ) return Promise.resolve({ ok: false, error: '当前文件预览请求无效' })
+    const session = runtimeRegistry.get(request.runtimeId)?.session
+    return session
+      ? session.currentFilePreview(request.path)
+      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+  })
   ipcMain.handle(IPC.consensusStatus, () => ({
     ready: checkConsensusReady() === null,
     reason: checkConsensusReady(),

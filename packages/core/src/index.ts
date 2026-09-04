@@ -91,6 +91,14 @@ export {
   type ApprovalRequest,
   type ApprovalResponse,
 } from './agent/session.ts'
+export {
+  CHECKPOINT_FILE_PREVIEW_MAX_BYTES,
+  type CheckpointFileCurrentMatchResult,
+  type CheckpointFilePreview,
+  type CheckpointFilePreviewResult,
+  type CheckpointFilePreviewState,
+  type CurrentFilePreviewResult,
+} from './checkpoints/types.ts'
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
 export {
   CUSTOM_SYSTEM_PROMPT_MAX_BYTES,

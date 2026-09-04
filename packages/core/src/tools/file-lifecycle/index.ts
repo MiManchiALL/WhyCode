@@ -162,7 +162,10 @@ export const moveFileTool = buildTool({
           throw unlinkError
         }
       }
-      return { data: `已移动 ${input.source} → ${input.destination}`, isError: false }
+      const action = pathKey(dirname(source)) === pathKey(dirname(destination))
+        ? '已重命名'
+        : '已移动'
+      return { data: `${action} ${input.source} → ${input.destination}`, isError: false }
     } catch (error) {
       return {
         data: `移动失败：${error instanceof Error ? error.message : String(error)}`,

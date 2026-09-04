@@ -20,6 +20,7 @@
     "@streamdown/cjk": "1.0.3",
     "@streamdown/math": "1.0.2",
     "@whycode/core": "workspace:*",
+    "diff": "9.0.0",
     "docx": "9.7.1",
     "exceljs": "4.4.0",
     "fast-xml-parser": "5.10.1",
@@ -32,6 +33,7 @@
     "pptxgenjs": "4.0.1",
     "remark-frontmatter": "5.0.0",
     "ses": "2.2.0",
+    "shiki": "3.23.0",
     "streamdown": "^2.5.0"
   },
   "devDependencies": {

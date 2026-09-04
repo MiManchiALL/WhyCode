@@ -14,8 +14,6 @@ import {
   CircleStop,
   Gauge,
   LoaderCircle,
-  Plus,
-  X,
 } from 'lucide-react'
 import {
   applyCoreEvent,
@@ -45,57 +43,29 @@ interface SubagentPanelProps {
   page: SubagentPanelPage | null
   onSelect: (subagentId: string) => void
   onBack: () => void
-  onClearPage: () => void
 }
 
-export function SubagentPanel(props: SubagentPanelProps) {
-  const page = props.active
-    ? resolveSubagentPanelPage(props.page, props.subagents)
+export function SubagentPanelContent(props: SubagentPanelProps) {
+  const requestedPage = props.active ? props.page : null
+  const page = requestedPage
+    ? resolveSubagentPanelPage(requestedPage, props.subagents)
+      ?? resolveSubagentPanelPage({ kind: 'subagent-overview' }, props.subagents)
     : null
-  const title = page?.title ?? null
-  return (
-    <aside className="flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
-      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
-        {title && (
-          <div className="flex h-7 min-w-0 max-w-40 items-center gap-1 rounded-lg bg-black/[0.045] py-1 pl-2 pr-1 text-xs">
-            <Bot size={13} className="shrink-0 text-[var(--wc-muted)]" />
-            <span className="truncate">{title}</span>
-            <button
-              type="button"
-              className="wc-focus-ring ml-auto flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--wc-faint)] hover:bg-black/[0.06] hover:text-[var(--wc-ink)]"
-              onClick={props.onClearPage}
-              aria-label="关闭当前右侧页面"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          className="wc-focus-ring flex size-7 shrink-0 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05]"
-          aria-label="新建右侧内容（暂不可用）"
-          title="更多内容稍后提供"
-        >
-          <Plus size={15} />
-        </button>
-      </div>
-      {page?.kind === 'transcript' && props.parentSessionId
-        ? (
-            <SubagentTranscript
-              key={`${props.parentSessionId}:${page.subagent.id}`}
-              runtimeId={props.runtimeId}
-              parentSessionId={props.parentSessionId}
-              subagent={page.subagent}
-              skills={props.skills}
-              projectDir={props.projectDir}
-              onBack={props.onBack}
-            />
-          )
-        : page?.kind === 'overview'
-          ? <SubagentList subagents={props.subagents} onSelect={props.onSelect} />
-          : <div className="min-h-0 flex-1" />}
-    </aside>
-  )
+  return page?.kind === 'transcript' && props.parentSessionId
+    ? (
+        <SubagentTranscript
+          key={`${props.parentSessionId}:${page.subagent.id}`}
+          runtimeId={props.runtimeId}
+          parentSessionId={props.parentSessionId}
+          subagent={page.subagent}
+          skills={props.skills}
+          projectDir={props.projectDir}
+          onBack={props.onBack}
+        />
+      )
+    : page?.kind === 'overview'
+      ? <SubagentList subagents={props.subagents} onSelect={props.onSelect} />
+      : <div className="min-h-0 flex-1" />
 }
 
 function SubagentList({

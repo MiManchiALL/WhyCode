@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { CheckpointManager } from './manager.ts'
+import { CHECKPOINT_FILE_PREVIEW_MAX_BYTES } from './types.ts'
 
 const roots: string[] = []
 
@@ -13,6 +14,176 @@ afterEach(async () => {
 })
 
 describe('持久化资源检查点', () => {
+  it('按工具和文件读取精确前后版本，检查点失效后仍可用于历史预览', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'preview.ts')
+    await writeFile(path, 'const value = 1\n')
+    const prepared = await env.manager.prepare('tool-preview', 'turn-1', {
+      kind: 'exact-files', paths: [path],
+    })
+    assert.ok(prepared)
+    await writeFile(path, 'const value = 2\n')
+    assert.ok(await env.manager.finalize(prepared))
+
+    assert.deepEqual(await env.manager.filePreview('tool-preview', path), {
+      path,
+      before: { kind: 'text', content: 'const value = 1\n', size: 16 },
+      after: { kind: 'text', content: 'const value = 2\n', size: 16 },
+    })
+    assert.equal(await env.manager.filePreviewMatchesCurrent('tool-preview', path), true)
+    assert.equal(await env.manager.filePreview('tool-preview', join(env.project, 'other.ts')), null)
+    assert.equal(
+      await env.manager.filePreviewMatchesCurrent('tool-preview', join(env.project, 'other.ts')),
+      null,
+    )
+
+    await writeFile(path, 'const value = 3\n')
+    assert.equal(await env.manager.filePreviewMatchesCurrent('tool-preview', path), false)
+    await writeFile(path, 'const value = 2\n')
+
+    assert.equal((await env.manager.restore('tool-preview', 'files')).ok, true)
+    assert.equal((await env.manager.filePreview('tool-preview', path))?.after.kind, 'text')
+  })
+
+  it('只按检查点拥有的原路径读取当前文件，不追踪移动或删除后的身份', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'current.ts')
+    await writeFile(path, 'before')
+    const prepared = await env.manager.prepare('tool-current', 'turn-1', {
+      kind: 'exact-files', paths: [path],
+    })
+    assert.ok(prepared)
+    await writeFile(path, 'snapshot')
+    assert.ok(await env.manager.finalize(prepared))
+
+    await writeFile(path, 'latest on disk')
+    assert.deepEqual(await env.manager.currentFilePreview(path), {
+      kind: 'text', content: 'latest on disk', size: 14,
+    })
+
+    const movedPath = join(env.project, 'moved.ts')
+    await rename(path, movedPath)
+    assert.deepEqual(await env.manager.currentFilePreview(path), { kind: 'missing' })
+    assert.equal(await env.manager.currentFilePreview(movedPath), null)
+    const unownedPath = join(env.external, 'not-owned.ts')
+    await writeFile(unownedPath, 'must stay private')
+    assert.equal(await env.manager.currentFilePreview(unownedPath), null)
+  })
+
+  it('当前文件读取沿用二进制与实际大小硬限制', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'bounded.dat')
+    await writeFile(path, 'before')
+    const prepared = await env.manager.prepare('tool-current-bounds', 'turn-1', {
+      kind: 'exact-files', paths: [path],
+    })
+    assert.ok(prepared)
+    await writeFile(path, 'snapshot')
+    assert.ok(await env.manager.finalize(prepared))
+
+    await writeFile(path, Buffer.from([1, 0, 2]))
+    assert.deepEqual(await env.manager.currentFilePreview(path), {
+      kind: 'unavailable', reason: 'binary', size: 3,
+    })
+
+    const size = CHECKPOINT_FILE_PREVIEW_MAX_BYTES + 1
+    await writeFile(path, Buffer.alloc(size, 97))
+    assert.deepEqual(await env.manager.currentFilePreview(path), {
+      kind: 'unavailable', reason: 'too-large', size,
+    })
+  })
+
+  it('文件预览拒绝把二进制 blob 送入界面', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'binary.dat')
+    await writeFile(path, Buffer.from([1, 0, 2]))
+    const prepared = await env.manager.prepare('tool-binary', 'turn-1', {
+      kind: 'exact-files', paths: [path],
+    })
+    assert.ok(prepared)
+    await writeFile(path, Buffer.from([3, 0, 4]))
+    assert.ok(await env.manager.finalize(prepared))
+
+    const preview = await env.manager.filePreview('tool-binary', path)
+    assert.deepEqual(preview?.before, { kind: 'unavailable', reason: 'binary', size: 3 })
+    assert.deepEqual(preview?.after, { kind: 'unavailable', reason: 'binary', size: 3 })
+  })
+
+  it('文件预览在读取正文前按实际 blob 大小执行硬上限', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'large.txt')
+    const size = CHECKPOINT_FILE_PREVIEW_MAX_BYTES + 1
+    await writeFile(path, Buffer.alloc(size, 97))
+    const prepared = await env.manager.prepare('tool-large', 'turn-1', {
+      kind: 'exact-files', paths: [path],
+    })
+    assert.ok(prepared)
+    await writeFile(path, 'small')
+    assert.ok(await env.manager.finalize(prepared))
+
+    const preview = await env.manager.filePreview('tool-large', path)
+    assert.deepEqual(preview?.before, { kind: 'unavailable', reason: 'too-large', size })
+    assert.deepEqual(preview?.after, { kind: 'text', content: 'small', size: 5 })
+  })
+
+  it('新建与删除工具的预览保留文件不存在这一侧的精确状态', async () => {
+    const env = await createEnvironment()
+    const createdPath = join(env.project, 'created.txt')
+    const create = await env.manager.prepare('tool-create-preview', 'turn-1', {
+      kind: 'exact-files', paths: [createdPath],
+    })
+    assert.ok(create)
+    await writeFile(createdPath, 'created')
+    assert.ok(await env.manager.finalize(create))
+    const created = await env.manager.filePreview('tool-create-preview', createdPath)
+    assert.deepEqual(created?.before, { kind: 'missing' })
+    assert.deepEqual(created?.after, { kind: 'text', content: 'created', size: 7 })
+
+    const deletePath = join(env.project, 'deleted.txt')
+    await writeFile(deletePath, 'deleted')
+    const remove = await env.manager.prepare('tool-delete-preview', 'turn-2', {
+      kind: 'exact-files', paths: [deletePath],
+    })
+    assert.ok(remove)
+    await rm(deletePath)
+    assert.ok(await env.manager.finalize(remove))
+    const deleted = await env.manager.filePreview('tool-delete-preview', deletePath)
+    assert.deepEqual(deleted?.before, { kind: 'text', content: 'deleted', size: 7 })
+    assert.deepEqual(deleted?.after, { kind: 'missing' })
+    assert.equal(
+      await env.manager.filePreviewMatchesCurrent('tool-delete-preview', deletePath),
+      true,
+    )
+    await writeFile(deletePath, 'recreated')
+    assert.equal(
+      await env.manager.filePreviewMatchesCurrent('tool-delete-preview', deletePath),
+      false,
+    )
+  })
+
+  it('移动工具可按目标路径读取操作后的文件快照', async () => {
+    const env = await createEnvironment()
+    const source = join(env.project, 'before-name.txt')
+    const destination = join(env.project, 'after-name.txt')
+    await writeFile(source, 'moved content')
+    const prepared = await env.manager.prepare('tool-move-preview', 'turn-1', {
+      kind: 'exact-files', paths: [source, destination],
+    })
+    assert.ok(prepared)
+    await rename(source, destination)
+    assert.ok(await env.manager.finalize(prepared))
+
+    assert.deepEqual(await env.manager.filePreview('tool-move-preview', destination), {
+      path: destination,
+      before: { kind: 'missing' },
+      after: { kind: 'text', content: 'moved content', size: 13 },
+    })
+    assert.equal(
+      await env.manager.filePreviewMatchesCurrent('tool-move-preview', destination),
+      true,
+    )
+  })
+
   it('一个检查点完整恢复同批删除的多个文件', async () => {
     const env = await createEnvironment()
     const first = join(env.project, 'first.txt')

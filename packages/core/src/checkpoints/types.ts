@@ -17,6 +17,31 @@ export const fileStateSchema = z.object({
 
 export type FileState = z.infer<typeof fileStateSchema>
 
+export const CHECKPOINT_FILE_PREVIEW_MAX_BYTES = 512 * 1_024
+
+export type CheckpointFilePreviewState =
+  | { kind: 'missing' }
+  | { kind: 'text'; content: string; size: number }
+  | { kind: 'unavailable'; reason: 'binary' | 'too-large'; size: number }
+
+export interface CheckpointFilePreview {
+  path: string
+  before: CheckpointFilePreviewState
+  after: CheckpointFilePreviewState
+}
+
+export type CheckpointFilePreviewResult =
+  | { ok: true; preview: CheckpointFilePreview }
+  | { ok: false; error: string }
+
+export type CheckpointFileCurrentMatchResult =
+  | { ok: true; matches: boolean }
+  | { ok: false; error: string }
+
+export type CurrentFilePreviewResult =
+  | { ok: true; state: CheckpointFilePreviewState }
+  | { ok: false; error: string }
+
 export const checkpointResourceSchema = z.object({
   kind: z.literal('exact-file'),
   path: z.string().min(1),

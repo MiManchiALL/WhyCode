@@ -179,9 +179,21 @@ export function toolCallFilePaths(toolName: string, input: unknown): string[] {
       return exactEditPaths(value)
     case 'DeleteFile':
       return unique(exactStringArray(value, 'paths'))
+    case 'MoveFile': {
+      const path = exactText(value, 'destination')
+      return path ? [path] : []
+    }
     default:
       return []
   }
+}
+
+/** MoveFile 的源路径只用于判断“同目录重命名”；可预览资源始终是目标路径。 */
+export function toolCallMoveSource(input: unknown): string | null {
+  const value = record(input)
+  if (!value) return null
+  const path = exactText(value, 'source')
+  return path || null
 }
 
 function editPaths(input: ToolInput): string[] {

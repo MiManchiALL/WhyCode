@@ -32,6 +32,7 @@ import {
 import { ToolBatchGroup } from './tool-batch-group.tsx'
 import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
 import { ConversationTimelineMarker } from './conversation-timeline-marker.tsx'
+import type { RightPanelPage } from './right-panel-state.ts'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -51,6 +52,7 @@ interface ConversationViewProps {
   onCheckpointRestoreRequest: CheckpointRestoreRequest
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onFork: (turnId: string) => void
+  onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onToggle: (id: string) => void
 }
 
@@ -341,6 +343,7 @@ function ConversationToolBatch({
       skills={props.skills}
       projectDir={props.projectDir}
       onCheckpointRestoreRequest={props.onCheckpointRestoreRequest}
+      onOpenFilePreview={props.onOpenFilePreview}
       onToggle={props.onToggle}
     />
   )

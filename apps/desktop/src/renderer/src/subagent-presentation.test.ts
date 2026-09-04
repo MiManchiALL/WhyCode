@@ -41,16 +41,16 @@ describe('子代理状态展示', () => {
     }
 
     assert.equal(resolveSubagentPanelPage(null, [subagent]), null)
-    assert.deepEqual(resolveSubagentPanelPage({ kind: 'overview' }, [subagent]), {
+    assert.deepEqual(resolveSubagentPanelPage({ kind: 'subagent-overview' }, [subagent]), {
       kind: 'overview',
       title: '子代理',
     })
     assert.deepEqual(
-      resolveSubagentPanelPage({ kind: 'transcript', subagentId: subagent.id }, [subagent]),
+      resolveSubagentPanelPage({ kind: 'subagent-transcript', subagentId: subagent.id }, [subagent]),
       { kind: 'transcript', title: '通用代理', subagent },
     )
     assert.equal(
-      resolveSubagentPanelPage({ kind: 'transcript', subagentId: 'missing' }, [subagent]),
+      resolveSubagentPanelPage({ kind: 'subagent-transcript', subagentId: 'missing' }, [subagent]),
       null,
     )
   })

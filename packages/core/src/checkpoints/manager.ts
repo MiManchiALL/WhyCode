@@ -1,12 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { ToolCheckpointScope } from '../tools/tool.ts'
-import { captureFileState } from './file-history.ts'
+import {
+  captureFileState,
+  currentFileMatches,
+  readCurrentFilePreview,
+  readFileStatePreview,
+} from './file-history.ts'
 import { CheckpointManifestStore } from './manifest-store.ts'
 import { ResourceRestoreTransaction } from './restore-transaction.ts'
 import {
   CHECKPOINT_MANIFEST_VERSION,
   type CheckpointManifest,
+  type CheckpointFilePreview,
+  type CheckpointFilePreviewState,
   type CheckpointResource,
   type FileState,
   type PreparedCheckpoint,
@@ -285,5 +292,50 @@ export class CheckpointManager {
     return manifest
       ? { id: manifest.id, toolUseId: manifest.toolUseId, turnId: manifest.turnId }
       : null
+  }
+
+  /** 按工具与精确资源读取稳定的前后版本，失效回滚点仍可用于历史展示。 */
+  async filePreview(toolUseId: string, path: string): Promise<CheckpointFilePreview | null> {
+    const resource = await this.filePreviewResource(toolUseId, path)
+    if (!resource?.after) return null
+    const [before, after] = await Promise.all([
+      readFileStatePreview(resource.before, this.store.blobDir),
+      readFileStatePreview(resource.after, this.store.blobDir),
+    ])
+    return { path: resource.path, before, after }
+  }
+
+  /** 判断该工具操作后的稳定快照是否就是当前路径状态；只分块计算摘要，不返回正文。 */
+  async filePreviewMatchesCurrent(toolUseId: string, path: string): Promise<boolean | null> {
+    const resource = await this.filePreviewResource(toolUseId, path)
+    if (!resource?.after) return null
+    return currentFileMatches(resource.after)
+  }
+
+  /** 只允许读取本会话精确检查点曾记录过的路径，不沿重命名追踪文件。 */
+  async currentFilePreview(path: string): Promise<CheckpointFilePreviewState | null> {
+    const manifests = await this.store.list()
+    const requestedPathKey = pathKey(path)
+    for (let index = manifests.length - 1; index >= 0; index--) {
+      const manifest = manifests[index]
+      if (!manifest) continue
+      if (manifest.status === 'pending' || manifest.coverage !== 'complete') continue
+      const resource = manifest.resources.find((item) => pathKey(item.path) === requestedPathKey)
+      if (!resource) continue
+      return readCurrentFilePreview(resource.path)
+    }
+    return null
+  }
+
+  private async filePreviewResource(
+    toolUseId: string,
+    path: string,
+  ): Promise<CheckpointResource | null> {
+    const manifest = (await this.store.list()).find(
+      (item) => item.status !== 'pending'
+        && item.coverage === 'complete'
+        && item.toolUseId === toolUseId,
+    )
+    return manifest?.resources.find((item) => pathKey(item.path) === pathKey(path)) ?? null
   }
 }

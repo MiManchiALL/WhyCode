@@ -9,9 +9,9 @@ interface TaskHeaderProps {
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
   backgroundTasks: readonly BackgroundTaskSummary[]
-  subagentPanelOpen: boolean
+  rightPanelOpen: boolean
   onOpenWorkspaceFolder: () => void
-  onToggleSubagentPanel: () => void
+  onToggleRightPanel: () => void
 }
 
 export function TaskHeader(props: TaskHeaderProps) {
@@ -44,11 +44,11 @@ export function TaskHeader(props: TaskHeaderProps) {
         <BackgroundTaskMenu tasks={props.backgroundTasks} />
         <button
           type="button"
-          className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.subagentPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}
-          onClick={props.onToggleSubagentPanel}
-          aria-pressed={props.subagentPanelOpen}
-          aria-label={props.subagentPanelOpen ? '收起侧边栏' : '展开侧边栏'}
-          title={props.subagentPanelOpen ? '收起侧边栏' : '展开侧边栏'}
+          className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.rightPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}
+          onClick={props.onToggleRightPanel}
+          aria-pressed={props.rightPanelOpen}
+          aria-label={props.rightPanelOpen ? '收起侧边栏' : '展开侧边栏'}
+          title={props.rightPanelOpen ? '收起侧边栏' : '展开侧边栏'}
         >
           <SidebarToggleIcon side="right" size={16} />
         </button>

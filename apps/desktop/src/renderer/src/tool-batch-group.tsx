@@ -13,7 +13,6 @@ import {
 import { createPortal } from 'react-dom'
 import { RestoreButton } from './conversation-block.tsx'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
-import type { ToolCall } from './conversation-state.ts'
 import {
   summarizeToolBatch,
   toolBatchRows,
@@ -25,6 +24,11 @@ import {
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { UserImageGallery } from './image-attachments.tsx'
 import { CopyButton } from './message-actions.tsx'
+import { InlineFileChange } from './file-change-view.tsx'
+import {
+  isFilePreviewToolName,
+  type RightPanelPage,
+} from './right-panel-state.ts'
 import { toolCallDetails } from './tool-call-summary.ts'
 
 export function ToolBatchGroup({
@@ -37,6 +41,7 @@ export function ToolBatchGroup({
   skills,
   projectDir,
   onCheckpointRestoreRequest,
+  onOpenFilePreview,
   onToggle,
 }: {
   runtimeId: string
@@ -48,6 +53,7 @@ export function ToolBatchGroup({
   skills: readonly SkillSummary[]
   projectDir: string | null
   onCheckpointRestoreRequest: CheckpointRestoreRequest
+  onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onToggle: (id: string) => void
 }) {
   const expanded = expandedIds.has(batch.id)
@@ -84,6 +90,7 @@ export function ToolBatchGroup({
               busy={busy}
               checkpointRestorePending={checkpointRestoreToolUseId === row.call.id}
               onCheckpointRestoreRequest={onCheckpointRestoreRequest}
+              onOpenFilePreview={onOpenFilePreview}
               onToggle={() => onToggle(row.id)}
             />
           ))}
@@ -100,6 +107,7 @@ function ToolBatchRowView({
   busy,
   checkpointRestorePending,
   onCheckpointRestoreRequest,
+  onOpenFilePreview,
   onToggle,
 }: {
   runtimeId: string
@@ -108,37 +116,84 @@ function ToolBatchRowView({
   busy: boolean
   checkpointRestorePending: boolean
   onCheckpointRestoreRequest: CheckpointRestoreRequest
+  onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onToggle: () => void
 }) {
   const failed = row.call.status === 'error'
+  const filePreviewPage = row.call.status === 'done'
+    && row.call.createdFileCheckpoint
+    && row.fullPath
+    && isFilePreviewToolName(row.call.name)
+    ? {
+        kind: 'file' as const,
+        path: row.fullPath,
+        name: row.summary,
+        source: {
+          kind: 'snapshot' as const,
+          toolUseId: row.call.id,
+          toolName: row.call.name,
+        },
+      }
+    : null
   return (
     <div className="wc-tool-batch-item" data-error={failed ? 'true' : 'false'}>
       <div className="flex min-w-0 items-center gap-1">
-        <button
-          type="button"
-          className="wc-focus-ring wc-tool-batch-row group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
-          aria-expanded={expanded}
+        <div
+          className="wc-tool-batch-row group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
           onClick={onToggle}
         >
-          <BatchIcon category={toolCategory(row.call)} size={13} />
-          <span className="shrink-0">{row.call.name}</span>
-          {row.summary ? row.fullPath ? (
-            <FilePathLabel name={row.summary} path={row.fullPath} />
-          ) : (
-            <span className="min-w-0 truncate">{row.summary}</span>
-          ) : null}
-          {row.added !== undefined && row.removed !== undefined ? (
-            <span className="flex shrink-0 gap-1.5 tabular-nums">
-              <span className="wc-tool-lines-added">+{row.added}</span>
-              <span className="wc-tool-lines-removed">-{row.removed}</span>
+          <button
+            type="button"
+            className="wc-focus-ring flex shrink-0 items-center gap-2 rounded-md text-left"
+            aria-expanded={expanded}
+          >
+            <BatchIcon category={toolCategory(row.call)} size={13} />
+            <span>{row.call.name}</span>
+          </button>
+          {row.renameFrom ? (
+            <span className="min-w-0 truncate text-[var(--wc-faint)]">
+              {row.renameFrom} →
             </span>
           ) : null}
-          <ChevronRight
-            aria-hidden="true"
-            size={13}
-            className={`wc-tool-batch-chevron ml-auto shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-          />
-        </button>
+          {row.summary ? row.fullPath ? (
+            <FilePathButton
+              name={row.summary}
+              path={row.fullPath}
+              onOpen={onOpenFilePreview && filePreviewPage
+                ? () => onOpenFilePreview(filePreviewPage)
+                : undefined}
+            />
+          ) : (
+            <button
+              type="button"
+              className="wc-focus-ring min-w-0 flex-1 truncate rounded-md text-left"
+              aria-expanded={expanded}
+            >
+              {row.summary}
+            </button>
+          ) : null}
+          {row.added !== undefined && row.removed !== undefined ? (
+            <button
+              type="button"
+              className="wc-focus-ring flex shrink-0 gap-1.5 rounded-md tabular-nums"
+              aria-expanded={expanded}
+            >
+              <span className="wc-tool-lines-added">+{row.added}</span>
+              <span className="wc-tool-lines-removed">-{row.removed}</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="wc-focus-ring ml-auto flex shrink-0 items-center rounded-md"
+            aria-expanded={expanded}
+          >
+            <ChevronRight
+              aria-hidden="true"
+              size={13}
+              className={`wc-tool-batch-chevron shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+            />
+          </button>
+        </div>
         {row.checkpointAnchor && row.call.status !== 'running' ? (
           <RestoreButton
             runtimeId={runtimeId}
@@ -149,12 +204,33 @@ function ToolBatchRowView({
           />
         ) : null}
       </div>
-      {expanded ? <ToolBatchRowDetails call={row.call} /> : null}
+      {expanded ? <ToolBatchRowDetails runtimeId={runtimeId} row={row} /> : null}
     </div>
   )
 }
 
-function ToolBatchRowDetails({ call }: { call: ToolCall }) {
+function ToolBatchRowDetails({ runtimeId, row }: { runtimeId: string; row: ToolBatchRow }) {
+  const { call } = row
+  if (
+    row.fullPath
+    && call.status === 'done'
+    && row.added !== undefined
+    && row.removed !== undefined
+    && isFilePreviewToolName(call.name)
+    && call.name !== 'MoveFile'
+  ) {
+    return (
+      <InlineFileChange
+        runtimeId={runtimeId}
+        toolUseId={call.id}
+        toolName={call.name}
+        path={row.fullPath}
+        name={row.summary}
+        added={row.added}
+        removed={row.removed}
+      />
+    )
+  }
   const customDetails = toolCallDetails(
     call.name,
     call.input,
@@ -218,8 +294,16 @@ function BatchIcon({ category, size }: { category: ToolBatchCategory; size: numb
   return <Wrench aria-hidden="true" size={size} className="shrink-0" />
 }
 
-function FilePathLabel({ name, path }: { name: string; path: string }) {
-  const labelRef = useRef<HTMLSpanElement>(null)
+function FilePathButton({
+  name,
+  path,
+  onOpen,
+}: {
+  name: string
+  path: string
+  onOpen?: () => void
+}) {
+  const labelRef = useRef<HTMLButtonElement>(null)
   const [tooltip, setTooltip] = useState<{
     left: number
     top: number
@@ -251,17 +335,23 @@ function FilePathLabel({ name, path }: { name: string; path: string }) {
 
   return (
     <>
-      <span
+      <button
+        type="button"
         ref={labelRef}
-        className="wc-tool-file-name min-w-0 truncate"
+        className="wc-tool-file-name wc-focus-ring min-w-0 truncate rounded-md text-left"
         aria-label={path}
+        onClick={(event) => {
+          if (!onOpen) return
+          event.stopPropagation()
+          onOpen()
+        }}
         onMouseEnter={show}
         onMouseLeave={() => setTooltip(null)}
         onFocus={show}
         onBlur={() => setTooltip(null)}
       >
         {name}
-      </span>
+      </button>
       {tooltip ? createPortal(
         <span
           role="tooltip"

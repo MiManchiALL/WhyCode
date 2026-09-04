@@ -14,6 +14,12 @@ import type {
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
 import type {
+  CheckpointFileCurrentMatchRequest,
+  CheckpointFileCurrentMatchResult,
+  CheckpointFilePreviewRequest,
+  CheckpointFilePreviewResult,
+  CurrentFilePreviewRequest,
+  CurrentFilePreviewResult,
   DeleteSessionResult,
   ForkSessionRequest,
   ForkSessionResult,
@@ -173,6 +179,18 @@ const api = {
     subagentId: string,
   ): Promise<SubagentTranscriptSnapshot> =>
     ipcRenderer.invoke(IPC.subagentTranscript, parentSessionId, subagentId),
+  checkpointFilePreview: (
+    request: CheckpointFilePreviewRequest,
+  ): Promise<CheckpointFilePreviewResult> =>
+    ipcRenderer.invoke(IPC.checkpointFilePreview, request),
+  checkpointFileCurrentMatch: (
+    request: CheckpointFileCurrentMatchRequest,
+  ): Promise<CheckpointFileCurrentMatchResult> =>
+    ipcRenderer.invoke(IPC.checkpointFileCurrentMatch, request),
+  currentFilePreview: (
+    request: CurrentFilePreviewRequest,
+  ): Promise<CurrentFilePreviewResult> =>
+    ipcRenderer.invoke(IPC.currentFilePreview, request),
   pickProjectDir: (): Promise<WorkspaceCandidate | null> =>
     ipcRenderer.invoke(IPC.pickProjectDir),
   worktreeStatus: (

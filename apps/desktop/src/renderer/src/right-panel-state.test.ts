@@ -1,0 +1,160 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import {
+  activeRightPanelPage,
+  closeRightPanelTab,
+  MAX_RIGHT_PANEL_TABS,
+  openRightPanelPage,
+  RightPanelSessionStore,
+  rightPanelSessionKey,
+  rightPanelTabId,
+  selectRightPanelTab,
+  type RightPanelPage,
+  type RightPanelSessionState,
+} from './right-panel-state.ts'
+
+class MemoryStorage {
+  readonly values = new Map<string, string>()
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null
+  }
+  setItem(key: string, value: string): void {
+    this.values.set(key, value)
+  }
+}
+
+const emptyState = (): RightPanelSessionState => ({
+  open: false,
+  tabs: [],
+  activeTabId: null,
+})
+
+function snapshotPage(
+  path: string,
+  toolUseId: string,
+  toolName: 'WriteFile' | 'EditFile' | 'DeleteFile' | 'MoveFile' = 'EditFile',
+): Extract<RightPanelPage, { kind: 'file' }> {
+  return {
+    kind: 'file',
+    path,
+    name: path.replaceAll('\\', '/').split('/').at(-1) ?? path,
+    source: { kind: 'snapshot', toolUseId, toolName },
+  }
+}
+
+describe('右侧栏会话配置', () => {
+  it('按会话保存通用多标签描述并在重建后恢复', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    let fileState = openRightPanelPage(emptyState(), snapshotPage(
+      'C:\\repo\\src\\app.ts',
+      'tool-1',
+    ))
+    fileState = openRightPanelPage(fileState, snapshotPage(
+      'C:\\repo\\src\\other.ts',
+      'tool-2',
+      'MoveFile',
+    ))
+    store.set('session-a', fileState)
+    store.set('session-b', openRightPanelPage(emptyState(), {
+      kind: 'subagent-transcript',
+      subagentId: 'agent-1',
+    }))
+
+    const restored = new RightPanelSessionStore(storage)
+    assert.equal(restored.get('session-a').tabs.length, 2)
+    assert.deepEqual(activeRightPanelPage(restored.get('session-a')), snapshotPage(
+      'C:\\repo\\src\\other.ts',
+      'tool-2',
+      'MoveFile',
+    ))
+    assert.deepEqual(activeRightPanelPage(restored.get('session-b')), {
+      kind: 'subagent-transcript',
+      subagentId: 'agent-1',
+    })
+  })
+
+  it('同一路径的历史版本与当前文件共享标签，不同路径并列', () => {
+    let state = openRightPanelPage(emptyState(), snapshotPage(
+      'C:\\Repo\\app.ts',
+      'tool-1',
+      'WriteFile',
+    ))
+    state = openRightPanelPage(state, snapshotPage('c:\\repo\\APP.ts', 'tool-2'))
+    assert.equal(state.tabs.length, 1)
+    assert.deepEqual(activeRightPanelPage(state), snapshotPage('c:\\repo\\APP.ts', 'tool-2'))
+
+    state = openRightPanelPage(state, {
+      kind: 'file',
+      path: 'C:\\Repo\\app.ts',
+      name: 'app.ts',
+      source: { kind: 'current' },
+    })
+    assert.equal(state.tabs.length, 1)
+    assert.equal((activeRightPanelPage(state) as { source: { kind: string } }).source.kind, 'current')
+
+    state = openRightPanelPage(state, snapshotPage('C:\\Repo\\other.ts', 'tool-3'))
+    assert.equal(state.tabs.length, 2)
+  })
+
+  it('子代理总览和详情共用一个可扩展页面标签', () => {
+    let state = openRightPanelPage(emptyState(), { kind: 'subagent-overview' })
+    state = openRightPanelPage(state, {
+      kind: 'subagent-transcript',
+      subagentId: 'agent-1',
+    })
+    assert.equal(state.tabs.length, 1)
+    assert.deepEqual(activeRightPanelPage(state), {
+      kind: 'subagent-transcript',
+      subagentId: 'agent-1',
+    })
+  })
+
+  it('切换与关闭标签不会丢失其它页面', () => {
+    let state = openRightPanelPage(emptyState(), snapshotPage('C:\\repo\\a.ts', 'tool-a'))
+    state = openRightPanelPage(state, snapshotPage('C:\\repo\\b.ts', 'tool-b'))
+    const firstId = rightPanelTabId(snapshotPage('C:\\repo\\a.ts', 'ignored'))
+    state = selectRightPanelTab(state, firstId)
+    assert.equal((activeRightPanelPage(state) as { name: string }).name, 'a.ts')
+    state = closeRightPanelTab(state, firstId)
+    assert.equal(state.tabs.length, 1)
+    assert.equal((activeRightPanelPage(state) as { name: string }).name, 'b.ts')
+  })
+
+  it('标签达到上限时只淘汰一个非当前轻量描述符', () => {
+    let state = emptyState()
+    for (let index = 0; index < MAX_RIGHT_PANEL_TABS; index++) {
+      state = openRightPanelPage(state, snapshotPage(`C:\\repo\\${index}.ts`, `tool-${index}`))
+    }
+    const activeBefore = state.activeTabId
+    state = openRightPanelPage(state, snapshotPage('C:\\repo\\next.ts', 'tool-next'))
+    assert.equal(state.tabs.length, MAX_RIGHT_PANEL_TABS)
+    assert.ok(state.tabs.some((tab) => tab.id === activeBefore))
+    assert.equal((activeRightPanelPage(state) as { name: string }).name, 'next.ts')
+  })
+
+  it('草稿运行时物化为会话时转移配置且删除后回到默认值', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    const state = openRightPanelPage(emptyState(), { kind: 'subagent-overview' })
+    store.set('runtime:draft', state)
+
+    assert.deepEqual(store.move('runtime:draft', 'session-a'), state)
+    assert.deepEqual(store.get('runtime:draft'), emptyState())
+    store.delete('session-a')
+    assert.deepEqual(store.get('session-a'), emptyState())
+  })
+
+  it('侧栏收起后仍保留标签，下一次展开与重启不会丢失页面类型', () => {
+    const storage = new MemoryStorage()
+    const opened = openRightPanelPage(emptyState(), { kind: 'subagent-overview' })
+    const state = { ...opened, open: false }
+    new RightPanelSessionStore(storage).set('session-a', state)
+    assert.deepEqual(new RightPanelSessionStore(storage).get('session-a'), state)
+  })
+
+  it('会话键在会话落盘前使用运行时身份', () => {
+    assert.equal(rightPanelSessionKey('runtime-a', null), 'runtime:runtime-a')
+    assert.equal(rightPanelSessionKey('runtime-a', 'session-a'), 'session-a')
+  })
+})

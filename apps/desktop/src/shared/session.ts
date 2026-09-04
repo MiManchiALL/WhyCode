@@ -2,6 +2,9 @@ import type {
   AgentStatus,
   ApprovalRequest,
   BackgroundTaskState,
+  CheckpointFileCurrentMatchResult,
+  CheckpointFilePreviewResult,
+  CurrentFilePreviewResult,
   CoreCommand,
   CoreEvent,
   ContextUsageInfo,
@@ -87,6 +90,25 @@ export type RuntimeEventBatch = readonly RuntimeEventEnvelope[]
 export interface RuntimeCommandEnvelope {
   runtimeId: string
   command: CoreCommand
+}
+
+export interface CheckpointFilePreviewRequest {
+  runtimeId: string
+  toolUseId: string
+  path: string
+}
+
+export interface CurrentFilePreviewRequest {
+  runtimeId: string
+  path: string
+}
+
+export type CheckpointFileCurrentMatchRequest = CheckpointFilePreviewRequest
+
+export type {
+  CheckpointFileCurrentMatchResult,
+  CheckpointFilePreviewResult,
+  CurrentFilePreviewResult,
 }
 
 export interface RuntimeCommandResult {

@@ -101,7 +101,7 @@ import { AppSidebar } from './app-sidebar.tsx'
 import { TaskHeader } from './task-header.tsx'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
-import { SubagentPanel } from './subagent-panel.tsx'
+import { RightPanel } from './right-panel.tsx'
 import { RightPanelResizeHandle } from './right-panel-resize-handle.tsx'
 import {
   loadRightPanelWidthPreference,
@@ -110,7 +110,17 @@ import {
   rightPanelWidthExpression,
 } from './right-panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
-import type { SubagentPanelPage } from './subagent-presentation.ts'
+import {
+  closeRightPanelTab,
+  openRightPanelPage as openRightPanelPageState,
+  RightPanelSessionStore,
+  rightPanelSessionKey,
+  selectRightPanelTab as selectRightPanelTabState,
+  type RightPanelPage,
+  type RightPanelSessionState,
+} from './right-panel-state.ts'
+import { currentWorkFileChanges } from './file-change-presentation.ts'
+import { ComposerFileChanges } from './composer-file-changes.tsx'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import {
   applyExpandedOverrides,
@@ -151,10 +161,14 @@ export function App() {
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null)
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary[]>([])
   const [worktreeStatusRevision, setWorktreeStatusRevision] = useState(0)
+  const [filePreviewInteractionRevision, setFilePreviewInteractionRevision] = useState(0)
   const [subagents, setSubagents] = useState<SubagentSummary[]>([])
-  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false)
-  const [subagentPanelRetained, setSubagentPanelRetained] = useState(false)
-  const [subagentPanelPage, setSubagentPanelPage] = useState<SubagentPanelPage | null>(null)
+  const [rightPanelState, setRightPanelState] = useState<RightPanelSessionState>({
+    open: false,
+    tabs: [],
+    activeTabId: null,
+  })
+  const [rightPanelRetained, setRightPanelRetained] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
   const [rightPanelWidthPreference, setRightPanelWidthPreference] = useState(
     loadRightPanelWidthPreference,
@@ -195,6 +209,11 @@ export function App() {
   const scrollRef = useRef<HTMLElement>(null)
   const conversationContentRef = useRef<HTMLDivElement>(null)
   const rightPanelRef = useRef<HTMLDivElement>(null)
+  const rightPanelStateRef = useRef(rightPanelState)
+  const rightPanelSessionStoreRef = useRef<RightPanelSessionStore | null>(null)
+  if (!rightPanelSessionStoreRef.current) {
+    rightPanelSessionStoreRef.current = new RightPanelSessionStore()
+  }
   const questionSubmittingRef = useRef(false)
   const sessionTransitionPendingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
@@ -229,6 +248,7 @@ export function App() {
   const conversationScrollReleaseRef = useRef<(() => void) | null>(null)
   const expandedIdsRef = useRef(view.expanded)
   const conversationFeedbackIdRef = useRef(0)
+  rightPanelStateRef.current = rightPanelState
   expandedIdsRef.current = view.expanded
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
@@ -253,6 +273,7 @@ export function App() {
     conversationEventBufferRef.current!.push(event, occurredAt)
   }, [])
   const blocks = view.blocks
+  const currentFileChanges = useMemo(() => currentWorkFileChanges(blocks), [blocks])
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const conversationStarted = blocks.some((block) => block.kind === 'user')
@@ -607,14 +628,49 @@ export function App() {
     setWorktreeStatusRevision((revision) => revision + 1)
   }, [])
 
+  const updateRightPanelState = useCallback((
+    update: RightPanelSessionState
+      | ((current: RightPanelSessionState) => RightPanelSessionState),
+  ) => {
+    const current = rightPanelStateRef.current
+    const next = typeof update === 'function' ? update(current) : update
+    rightPanelStateRef.current = next
+    setRightPanelState(next)
+    const currentRuntimeId = runtimeIdRef.current
+    if (currentRuntimeId) {
+      rightPanelSessionStoreRef.current!.set(
+        rightPanelSessionKey(currentRuntimeId, sessionIdRef.current),
+        next,
+      )
+    }
+  }, [])
+
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
-    const changingRuntime = runtimeIdRef.current !== snapshot.runtimeId
-    const changingSession = sessionIdRef.current !== snapshot.sessionId
+    const previousRuntimeId = runtimeIdRef.current
+    const previousSessionId = sessionIdRef.current
+    const changingRuntime = previousRuntimeId !== snapshot.runtimeId
+    const changingSession = previousSessionId !== snapshot.sessionId
     if (changingRuntime) {
       stashActiveComposer()
       stashActivePresentation()
     }
     if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
+    if (changingRuntime || changingSession) {
+      const store = rightPanelSessionStoreRef.current!
+      if (previousRuntimeId) {
+        store.set(
+          rightPanelSessionKey(previousRuntimeId, previousSessionId),
+          rightPanelStateRef.current,
+        )
+      }
+      const targetKey = rightPanelSessionKey(snapshot.runtimeId, snapshot.sessionId)
+      const next = !changingRuntime && previousSessionId === null && snapshot.sessionId
+        ? store.move(rightPanelSessionKey(previousRuntimeId, null), targetKey)
+        : store.get(targetKey)
+      rightPanelStateRef.current = next
+      setRightPanelState(next)
+      setRightPanelRetained(next.open)
+    }
     runtimeIdRef.current = snapshot.runtimeId
     sessionIdRef.current = snapshot.sessionId
     if (changingSession) {
@@ -622,7 +678,6 @@ export function App() {
       setBackgroundTasks([])
       subagentRevisionRef.current = -1
       setSubagents([])
-      setSubagentPanelPage(null)
     }
     if (snapshot.backgroundTasks) {
       applyBackgroundTaskState(snapshot.backgroundTasks)
@@ -926,8 +981,8 @@ export function App() {
   }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime])
 
   useEffect(() => {
-    if (subagentPanelOpen) setSubagentPanelRetained(true)
-  }, [subagentPanelOpen])
+    if (rightPanelState.open) setRightPanelRetained(true)
+  }, [rightPanelState.open])
 
   const updateRightPanelWidthRatio = useCallback((ratio: number) => {
     const normalized = Math.min(
@@ -941,8 +996,8 @@ export function App() {
   }, [rightPanelWidthPreference.maximumRatio])
 
   const collapseRightPanel = useCallback(() => {
-    setSubagentPanelOpen(false)
-  }, [])
+    updateRightPanelState((current) => ({ ...current, open: false }))
+  }, [updateRightPanelState])
 
   const previewRightPanelExpand = useCallback((ratio: number) => {
     setRightPanelWidthPreference((current) => {
@@ -954,8 +1009,28 @@ export function App() {
         ? current
         : { ...current, ratio: normalized }
     })
-    setSubagentPanelOpen(true)
-  }, [])
+    updateRightPanelState((current) => ({ ...current, open: true }))
+  }, [updateRightPanelState])
+
+  const showRightPanelPage = useCallback((page: RightPanelPage) => {
+    updateRightPanelState((current) => openRightPanelPageState(current, page))
+  }, [updateRightPanelState])
+
+  const openFilePreview = useCallback((
+    page: Extract<RightPanelPage, { kind: 'file' }>,
+  ) => {
+    // 同一路径复用标签时页面身份不会变化；点击文件名仍应成为一次显式重检。
+    setFilePreviewInteractionRevision((current) => current + 1)
+    showRightPanelPage(page)
+  }, [showRightPanelPage])
+
+  const selectRightPanelTab = useCallback((tabId: string) => {
+    updateRightPanelState((current) => selectRightPanelTabState(current, tabId))
+  }, [updateRightPanelState])
+
+  const closeRightPanelPage = useCallback((tabId: string) => {
+    updateRightPanelState((current) => closeRightPanelTab(current, tabId))
+  }, [updateRightPanelState])
 
   useEffect(() => {
     return window.whycode.onSubagents((state) => {
@@ -1362,6 +1437,7 @@ export function App() {
         if (detachedDraft) releaseImageDrafts(detachedDraft.images)
         composerDraftsRef.current.delete(sessionId)
         conversationPresentationsRef.current.delete(sessionId)
+        rightPanelSessionStoreRef.current!.delete(sessionId)
         for (const [eventRuntimeId, events] of backgroundEventsRef.current) {
           if (events.some((entry) => entry.sessionId === sessionId)) {
             backgroundEventsRef.current.delete(eventRuntimeId)
@@ -1841,9 +1917,12 @@ export function App() {
           projectDir={workspace.mode === 'pending-managed' ? null : projectDir}
           workspaceMode={workspace.mode}
           backgroundTasks={backgroundTasks}
-          subagentPanelOpen={subagentPanelOpen}
+          rightPanelOpen={rightPanelState.open}
           onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
-          onToggleSubagentPanel={() => setSubagentPanelOpen((open) => !open)}
+          onToggleRightPanel={() => updateRightPanelState((current) => ({
+            ...current,
+            open: !current.open,
+          }))}
         />
 
         <div className="relative flex min-h-0 flex-1">
@@ -1905,6 +1984,7 @@ export function App() {
                   onCheckpointRestoreRequest={requestCheckpointRestore}
                   onEdit={editUserMessage}
                   onFork={forkConversation}
+                  onOpenFilePreview={openFilePreview}
                   onToggle={toggle}
                 />
               </div>
@@ -1958,6 +2038,10 @@ export function App() {
                   <div className="mb-2 rounded-xl bg-[var(--wc-sand)] px-3 py-2 text-xs text-[var(--wc-sand-ink)]">
                     另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
                   </div>
+                )}
+
+                {workStartedAt !== null && (
+                  <ComposerFileChanges changes={currentFileChanges} />
                 )}
 
                 <footer className={`wc-composer relative p-2.5 ${btwMode ? 'wc-composer-btw' : ''}`}>
@@ -2119,20 +2203,20 @@ export function App() {
 
           <div
             ref={rightPanelRef}
-            data-panel-open={subagentPanelOpen ? 'true' : 'false'}
+            data-panel-open={rightPanelState.open ? 'true' : 'false'}
             className={`wc-right-panel-shell relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
-              subagentPanelOpen
+              rightPanelState.open
                 ? 'ml-0'
                 : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
             }`}
-            style={subagentPanelOpen
+            style={rightPanelState.open
               ? { width: rightPanelWidthExpression(
                   rightPanelWidthPreference.ratio,
                   rightPanelWidthPreference.maximumRatio,
                 ) }
               : undefined}
           >
-            {(subagentPanelOpen || rightPanelResizeActive) && (
+            {(rightPanelState.open || rightPanelResizeActive) && (
               <RightPanelResizeHandle
                 panelRef={rightPanelRef}
                 ratio={rightPanelWidthPreference.ratio}
@@ -2145,12 +2229,12 @@ export function App() {
             )}
             <div
               className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-200 ease-out ${
-                subagentPanelOpen
+                rightPanelState.open
                   ? 'pointer-events-none -translate-x-3 opacity-0'
                   : 'translate-x-0 opacity-100 max-[1440px]:opacity-0'
               }`}
-              aria-hidden={subagentPanelOpen}
-              inert={subagentPanelOpen}
+              aria-hidden={rightPanelState.open}
+              inert={rightPanelState.open}
             >
               <TaskInspector
                 runtimeId={runtimeId}
@@ -2161,41 +2245,38 @@ export function App() {
                 worktreeStatusRevision={worktreeStatusRevision}
                 onPrepareCommitPrompt={prepareCommitPrompt}
                 onOpenSubagents={() => {
-                  setSubagentPanelPage({ kind: 'overview' })
-                  setSubagentPanelOpen(true)
+                  showRightPanelPage({ kind: 'subagent-overview' })
                 }}
               />
             </div>
             <div
               className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-200 ease-out ${
-                subagentPanelOpen
+                rightPanelState.open
                   ? 'translate-x-0 opacity-100'
                   : 'pointer-events-none translate-x-8 opacity-0'
               }`}
-              aria-hidden={!subagentPanelOpen}
-              inert={!subagentPanelOpen}
+              aria-hidden={!rightPanelState.open}
+              inert={!rightPanelState.open}
               onTransitionEnd={(event) => {
                 if (
                   event.target === event.currentTarget
                   && event.propertyName === 'opacity'
-                  && !subagentPanelOpen
-                ) setSubagentPanelRetained(false)
+                  && !rightPanelState.open
+                ) setRightPanelRetained(false)
               }}
             >
-              <SubagentPanel
-                active={subagentPanelOpen || subagentPanelRetained}
+              <RightPanel
+                active={rightPanelState.open || rightPanelRetained}
                 runtimeId={runtimeId}
+                refreshRevision={`${view.fileSystemRevision}:${filePreviewInteractionRevision}`}
                 parentSessionId={sessionIdRef.current}
                 subagents={subagents}
                 skills={skillCatalog.skills}
                 projectDir={projectDir}
-                page={subagentPanelPage}
-                onSelect={(subagentId) => setSubagentPanelPage({
-                  kind: 'transcript',
-                  subagentId,
-                })}
-                onBack={() => setSubagentPanelPage({ kind: 'overview' })}
-                onClearPage={() => setSubagentPanelPage(null)}
+                state={rightPanelState}
+                onOpenPage={showRightPanelPage}
+                onSelectTab={selectRightPanelTab}
+                onCloseTab={closeRightPanelPage}
               />
             </div>
           </div>

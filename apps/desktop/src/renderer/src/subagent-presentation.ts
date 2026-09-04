@@ -1,8 +1,10 @@
 import type { SubagentProfile, SubagentStatus, SubagentSummary } from '@whycode/core'
+import type { RightPanelPage } from './right-panel-state.ts'
 
-export type SubagentPanelPage =
-  | { kind: 'overview' }
-  | { kind: 'transcript'; subagentId: string }
+export type SubagentPanelPage = Extract<
+  RightPanelPage,
+  { kind: 'subagent-overview' | 'subagent-transcript' }
+>
 
 export type ResolvedSubagentPanelPage =
   | { kind: 'overview'; title: '子代理' }
@@ -41,7 +43,7 @@ export function resolveSubagentPanelPage(
   subagents: readonly SubagentSummary[],
 ): ResolvedSubagentPanelPage | null {
   if (!page) return null
-  if (page.kind === 'overview') return { kind: 'overview', title: '子代理' }
+  if (page.kind === 'subagent-overview') return { kind: 'overview', title: '子代理' }
   const subagent = subagents.find((item) => item.id === page.subagentId)
   return subagent
     ? { kind: 'transcript', title: subagent.name, subagent }

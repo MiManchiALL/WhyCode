@@ -4,6 +4,7 @@ import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
 import {
   summarizeToolCallParts,
   toolCallFilePaths,
+  toolCallMoveSource,
 } from './tool-call-summary.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
@@ -44,6 +45,8 @@ export interface ToolBatchRow {
   id: string
   call: ToolCall
   summary: string
+  /** 同目录重命名时显示在可点击目标文件名之前。 */
+  renameFrom?: string
   fullPath?: string
   added?: number
   removed?: number
@@ -51,7 +54,7 @@ export interface ToolBatchRow {
 }
 
 /** 输入结构支持按文件拆行的工具；完整的文件修改分类由检查点事实补齐。 */
-const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile'])
+const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile', 'MoveFile'])
 
 /**
  * 文本是工具批次的提交边界：只有后续文本已经出现，前一段工具才折叠。
@@ -193,13 +196,23 @@ export function toolBatchRows(
     const changes = new Map(
       call.fileChanges?.map((change) => [pathKey(change.path), change] as const) ?? [],
     )
+    const moveSource = call.name === 'MoveFile'
+      ? toolCallMoveSource(call.input)
+      : null
     return paths.map((path, index) => {
       const change = changes.get(pathKey(path))
+      const fullPath = resolveDisplayPath(path, context.projectDir)
+      const resolvedMoveSource = moveSource
+        ? resolveDisplayPath(moveSource, context.projectDir)
+        : null
       return {
         id: `${batch.id}:row:${call.id}:${index}`,
         call,
         summary: fileName(path),
-        fullPath: resolveDisplayPath(path, context.projectDir),
+        ...(resolvedMoveSource && sameDisplayDirectory(resolvedMoveSource, fullPath)
+          ? { renameFrom: fileName(moveSource!) }
+          : {}),
+        fullPath,
         ...(change ? { added: change.added, removed: change.removed } : {}),
         checkpointAnchor: index === 0 && context.checkpointRestoreAnchorIds.has(call.id),
       }
@@ -298,6 +311,18 @@ function toolSummary(
 
 function pathKey(path: string): string {
   return path.replaceAll('\\', '/')
+}
+
+function sameDisplayDirectory(left: string, right: string): boolean {
+  return displayDirectoryKey(left) === displayDirectoryKey(right)
+}
+
+function displayDirectoryKey(path: string): string {
+  const normalized = path.replaceAll('\\', '/')
+  const directory = normalized.slice(0, Math.max(0, normalized.lastIndexOf('/')))
+  return /^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('//')
+    ? directory.toLowerCase()
+    : directory
 }
 
 function fileName(path: string): string {

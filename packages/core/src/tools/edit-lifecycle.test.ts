@@ -172,7 +172,17 @@ describe('文件生命周期工具', () => {
       ctx,
     )
     assert.equal(moved.isError, false)
+    assert.equal(moved.data, '已移动 source.txt → nested/destination.txt')
     assert.equal(await readFile(join(ctx.projectDir, 'nested', 'destination.txt'), 'utf8'), 'source')
+
+    await writeFile(join(ctx.projectDir, 'rename-before.txt'), 'rename')
+    const renamed = await moveFileTool.execute(
+      { source: 'rename-before.txt', destination: 'rename-after.txt' },
+      ctx,
+    )
+    assert.equal(renamed.isError, false)
+    assert.equal(renamed.data, '已重命名 rename-before.txt → rename-after.txt')
+    assert.equal(await readFile(join(ctx.projectDir, 'rename-after.txt'), 'utf8'), 'rename')
 
     await writeFile(join(ctx.projectDir, 'other.txt'), 'other')
     const refused = await moveFileTool.execute(

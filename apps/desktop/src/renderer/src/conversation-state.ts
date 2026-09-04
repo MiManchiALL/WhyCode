@@ -106,6 +106,8 @@ export interface ConversationState {
   pendingQuestion: UserQuestion | null
   /** 最近一次仅文件回滚的 turn 边界；后续首次成功文件修改会清除。 */
   fileRollbackBoundaryTurnId: string | null
+  /** 当前会话文件状态发生确定变化的单调版本；只用于刷新活动文件预览。 */
+  fileSystemRevision: number
   /** 实时模型步骤开始前的稳定界面；提交时清除，丢弃时原样恢复。 */
   pendingStep: PendingStepSnapshot | null
   /** 仅表示下一条 BBTW 是否可用；完整侧历史由主进程事实源持有。 */
@@ -136,6 +138,7 @@ export function createConversationState(
     taskPlan: null,
     pendingQuestion: null,
     fileRollbackBoundaryTurnId: null,
+    fileSystemRevision: 0,
     pendingStep: null,
     btwContinuation: null,
     pendingBtw: null,
@@ -345,9 +348,11 @@ function applyStableCoreEvent(
       // 该事件已确认产生真实文件差异，因此先结束旧回滚标记；只有完整覆盖
       // 才能继续兑现新的恢复承诺，partial 不展示回滚入口。
       if (event.coverage !== 'complete') {
-        return state.fileRollbackBoundaryTurnId === null
-          ? state
-          : { ...state, fileRollbackBoundaryTurnId: null }
+        return {
+          ...state,
+          fileRollbackBoundaryTurnId: null,
+          fileSystemRevision: state.fileSystemRevision + 1,
+        }
       }
       return {
         ...updateTool(state, event.toolUseId, (call) => ({
@@ -357,6 +362,7 @@ function applyStableCoreEvent(
         })),
         // checkpoint-created 只会在写类工具成功产生真实文件差异后出现。
         fileRollbackBoundaryTurnId: null,
+        fileSystemRevision: state.fileSystemRevision + 1,
       }
     case 'checkpoint-disabled':
       return appendNotice(state, `检查点已禁用：${event.reason}`)
@@ -816,6 +822,7 @@ function applyCheckpointRestored(
     blocks,
     taskPlan,
     fileRollbackBoundaryTurnId: event.scope === 'files' ? event.turnId : null,
+    fileSystemRevision: state.fileSystemRevision + 1,
     pendingQuestion: event.scope === 'files-and-chat'
       ? structuredClone(event.question ?? null)
       : state.pendingQuestion,

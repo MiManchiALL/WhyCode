@@ -263,6 +263,41 @@ describe('工具批次折叠投影', () => {
     ])
   })
 
+  it('MoveFile 以目标文件作为预览入口，并只在同目录重命名时保留源文件名', () => {
+    const renamed = checkpointedTool('rename', 'MoveFile', {
+      source: 'src/before.ts',
+      destination: 'src/after.ts',
+    })
+    const moved = checkpointedTool('move', 'MoveFile', {
+      source: 'src/after.ts',
+      destination: 'archive/after.ts',
+    })
+    const rows = toolBatchRows(makeBatch([renamed, moved]), {
+      skills: [],
+      projectDir: 'C:\\project',
+      checkpointRestoreAnchorIds: new Set(['rename']),
+    })
+    assert.deepEqual(rows.map((row) => ({
+      summary: row.summary,
+      renameFrom: row.renameFrom,
+      fullPath: row.fullPath,
+      checkpointAnchor: row.checkpointAnchor,
+    })), [
+      {
+        summary: 'after.ts',
+        renameFrom: 'before.ts',
+        fullPath: 'C:\\project\\src\\after.ts',
+        checkpointAnchor: true,
+      },
+      {
+        summary: 'after.ts',
+        renameFrom: undefined,
+        fullPath: 'C:\\project\\archive\\after.ts',
+        checkpointAnchor: false,
+      },
+    ])
+  })
+
   it('长路径不经摘要截断，仍能匹配统计并只展示文件名', () => {
     const fullPath = `C:\\workspace\\${'deep-folder\\'.repeat(18)}component.tsx`
     const write = tool('write', 'WriteFile', { path: fullPath, content: 'next' })
