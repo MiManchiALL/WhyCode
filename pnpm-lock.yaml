@@ -14,6 +14,9 @@ overrides:
   mermaid: 11.16.1
   qs: 6.16.0
 
+patchedDependencies:
+  node-pty@1.1.0: 30c376742859f9398c14c5ce900dbd962f1916ecb843c6d3aca686f052df3cc4
+
 importers:
 
   .: {}
@@ -82,7 +85,7 @@ importers:
         version: 2.0.0
       node-pty:
         specifier: 1.1.0
-        version: 1.1.0
+        version: 1.1.0(patch_hash=30c376742859f9398c14c5ce900dbd962f1916ecb843c6d3aca686f052df3cc4)
       pdfjs-dist:
         specifier: 6.2.108
         version: 6.2.108
@@ -6670,7 +6673,7 @@ snapshots:
       css-select: 5.2.2
       he: 1.2.0
 
-  node-pty@1.1.0:
+  node-pty@1.1.0(patch_hash=30c376742859f9398c14c5ce900dbd962f1916ecb843c6d3aca686f052df3cc4):
     dependencies:
       node-addon-api: 7.1.1
 

@@ -82,8 +82,13 @@ export function attachTerminal(info: TerminalInfo, host: HTMLDivElement): () => 
   const existing = views.get(info.id)
   const view = existing ?? createView(info, host)
   host.append(view.element)
+  const panel = host.closest<HTMLElement>('.wc-right-panel-shell')
   const fit = () => {
     if (host.clientWidth < 32 || host.clientHeight < 32) return
+    // 开合动画的中间宽度不能传给 PTY，否则 ConPTY 会截断当前行。
+    if (panel?.getAttribute('data-panel-open') === 'false'
+      || panel?.getAnimations().some((animation) => animation instanceof CSSTransition
+        && animation.transitionProperty === 'width')) return
     const dimensions = view.fit.proposeDimensions()
     if (!dimensions) return
     view.terminal.resize(
@@ -95,12 +100,20 @@ export function attachTerminal(info: TerminalInfo, host: HTMLDivElement): () => 
   if (!existing) window.whycode.controlTerminal({ terminalId: info.id, type: 'ready' })
   view.terminal.focus()
   let frame = 0
-  const observer = new ResizeObserver(() => {
+  const scheduleFit = () => {
     if (!frame) frame = requestAnimationFrame(() => { frame = 0; fit() })
-  })
+  }
+  const onWidthTransition = (event: TransitionEvent) => {
+    if (event.target === panel && event.propertyName === 'width') scheduleFit()
+  }
+  const observer = new ResizeObserver(scheduleFit)
   observer.observe(host)
+  panel?.addEventListener('transitionend', onWidthTransition)
+  panel?.addEventListener('transitioncancel', onWidthTransition)
   return () => {
     observer.disconnect()
+    panel?.removeEventListener('transitionend', onWidthTransition)
+    panel?.removeEventListener('transitioncancel', onWidthTransition)
     cancelAnimationFrame(frame)
     view.terminal.blur()
     view.element.remove()
