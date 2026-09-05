@@ -195,7 +195,7 @@ async function spawnTerminalPty(cwd: string): Promise<IPty> {
     ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
     : process.env.SHELL || '/bin/sh'
   return spawn(shell, windows ? ['-NoLogo', '-NoProfile'] : [], {
-    cwd, cols: 80, rows: 24, name: 'xterm-256color',
+    cwd, cols: TERMINAL_MAX_COLS, rows: 24, name: 'xterm-256color',
     env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     useConpty: true,
     useConptyDll: true,
