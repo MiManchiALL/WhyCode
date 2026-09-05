@@ -157,4 +157,32 @@ describe('右侧栏会话配置', () => {
     assert.equal(rightPanelSessionKey('runtime-a', null), 'runtime:runtime-a')
     assert.equal(rightPanelSessionKey('runtime-a', 'session-a'), 'session-a')
   })
+
+  it('终端并列保留但不持久化；描述符淘汰与会话切换不能关闭终端', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    let state = emptyState()
+    for (const id of ['a', 'b']) state = openRightPanelPage(state, {
+      kind: 'terminal', terminal: { id, title: `终端 ${id}`, cwd: 'E:\\project' },
+    })
+    for (let index = 0; index < MAX_RIGHT_PANEL_TABS; index++) {
+      state = openRightPanelPage(state, snapshotPage(`E:\\${index}.ts`, `tool-${index}`))
+    }
+    assert.equal(state.tabs.length, MAX_RIGHT_PANEL_TABS)
+    assert.deepEqual(state.tabs.filter((tab) => tab.page.kind === 'terminal').map((tab) => tab.id), ['terminal:a', 'terminal:b'])
+    state = selectRightPanelTab(state, 'terminal:b')
+    store.set('session-a', state)
+    assert.deepEqual(store.get('session-a'), state)
+    const disk = new RightPanelSessionStore(storage).get('session-a')
+    assert.equal(disk.tabs.some((tab) => tab.page.kind === 'terminal'), false)
+    assert.equal(activeRightPanelPage(disk)?.kind, 'file')
+    assert.equal([...storage.values.values()].some((value) => value.includes('terminal')), false)
+    for (let index = 0; index < 205; index++) {
+      store.set(`other-${index}`, openRightPanelPage(emptyState(), { kind: 'subagent-overview' }))
+    }
+    assert.equal(store.get('session-a').tabs.filter((tab) => tab.page.kind === 'terminal').length, 2)
+    store.removeTerminal('b')
+    assert.equal(store.get('session-a').tabs.some((tab) => tab.id === 'terminal:b'), false)
+    assert.equal(store.get('session-a').tabs.some((tab) => tab.id === 'terminal:a'), true)
+  })
 })

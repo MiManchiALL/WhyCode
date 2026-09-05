@@ -1,4 +1,5 @@
 import { filePathKey } from './local-files.ts'
+import type { TerminalInfo } from '../../shared/terminal.ts'
 
 export type FilePreviewToolName = 'WriteFile' | 'EditFile' | 'DeleteFile' | 'MoveFile'
 
@@ -11,6 +12,7 @@ export type RightPanelFileSource =
   | { kind: 'current' }
 
 export type RightPanelPage =
+  | { kind: 'terminal'; terminal: TerminalInfo }
   | { kind: 'subagent-overview' }
   | { kind: 'subagent-transcript'; subagentId: string }
   | {
@@ -93,9 +95,19 @@ export class RightPanelSessionStore {
     this.persist()
   }
 
+  removeTerminal(terminalId: string): void {
+    for (const [key, state] of this.states) {
+      const tab = state.tabs.find((item) => item.page.kind === 'terminal'
+        && item.page.terminal.id === terminalId)
+      if (tab) this.states.set(key, closeRightPanelTab(state, tab.id))
+    }
+    this.persist()
+  }
+
   private trimAndPersist(): void {
     while (this.states.size > MAX_STORED_SESSIONS) {
-      const oldest = this.states.keys().next().value
+      const oldest = [...this.states].find(([, state]) =>
+        !state.tabs.some((tab) => tab.page.kind === 'terminal'))?.[0]
       if (oldest === undefined) break
       this.states.delete(oldest)
     }
@@ -106,7 +118,14 @@ export class RightPanelSessionStore {
     if (!this.storage) return
     try {
       this.storage.setItem(STORAGE_KEY, JSON.stringify(
-        [...this.states].map(([key, state]) => ({ key, ...state })),
+        [...this.states].map(([key, state]) => {
+          const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal')
+          return {
+            key, open: state.open, tabs,
+            activeTabId: tabs.some((tab) => tab.id === state.activeTabId)
+              ? state.activeTabId : (tabs.at(-1)?.id ?? null),
+          }
+        }),
       ))
     } catch {
       // 当前进程仍保留偏好；磁盘不可用不应打断主界面。
@@ -134,8 +153,12 @@ export function openRightPanelPage(
     tabs[existingIndex] = tab
   } else {
     if (tabs.length >= MAX_RIGHT_PANEL_TABS) {
-      const discardIndex = tabs.findIndex((candidate) => candidate.id !== state.activeTabId)
-      tabs.splice(discardIndex >= 0 ? discardIndex : 0, 1)
+      const discardIndex = tabs.findIndex((candidate) => candidate.page.kind !== 'terminal'
+        && candidate.id !== state.activeTabId)
+      const replacement = discardIndex >= 0 ? discardIndex
+        : tabs.findIndex((candidate) => candidate.page.kind !== 'terminal')
+      if (replacement < 0) return state
+      tabs.splice(replacement, 1)
     }
     tabs.push(tab)
   }
@@ -165,6 +188,8 @@ export function closeRightPanelTab(
 
 export function rightPanelTabId(page: RightPanelPage): string {
   switch (page.kind) {
+    case 'terminal':
+      return `terminal:${page.terminal.id}`
     case 'file':
       return `file:${filePathKey(page.path)}`
     case 'subagent-overview':

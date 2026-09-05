@@ -1,5 +1,6 @@
 import type { SkillSummary, SubagentSummary } from '@whycode/core'
-import { Bot, FileText, Plus, X } from 'lucide-react'
+import { Bot, FileText, Plus, SquareTerminal, X } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useEffect, useRef } from 'react'
 import { RightPanelFilePreview } from './file-change-view.tsx'
 import {
@@ -10,6 +11,7 @@ import {
 } from './right-panel-state.ts'
 import { SubagentPanelContent } from './subagent-panel.tsx'
 import { resolveSubagentPanelPage } from './subagent-presentation.ts'
+import { TerminalPanel } from './terminal-panel.tsx'
 
 interface RightPanelProps {
   active: boolean
@@ -23,14 +25,11 @@ interface RightPanelProps {
   onOpenPage: (page: RightPanelPage) => void
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
+  terminalOpening: boolean
+  onOpenTerminal: () => void
 }
 
 export function RightPanel(props: RightPanelProps) {
-  const page = activeRightPanelPage(props.state)
-  const subagentPage = page?.kind === 'subagent-overview'
-    || page?.kind === 'subagent-transcript'
-    ? page
-    : null
   return (
     <aside className="flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
@@ -49,50 +48,79 @@ export function RightPanel(props: RightPanelProps) {
                 onClose={() => props.onCloseTab(tab.id)}
               />
             ))}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  type="button"
+                  className="wc-focus-ring flex size-7 shrink-0 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] disabled:opacity-50"
+                  aria-label="新建右侧标签页"
+                  title="新建标签页"
+                  disabled={props.terminalOpening || !props.runtimeId}
+                >
+                  <Plus size={15} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content className="wc-menu-content min-w-36" align="start" sideOffset={5}>
+                  <DropdownMenu.Item className="wc-menu-item" onSelect={props.onOpenTerminal}>
+                    <SquareTerminal size={15} />
+                    <span>终端</span>
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </div>
         </div>
-        <button
-          type="button"
-          className="wc-focus-ring flex size-7 shrink-0 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05]"
-          aria-label="新建右侧内容（暂不可用）"
-          title="更多内容稍后提供"
-        >
-          <Plus size={15} />
-        </button>
       </div>
-      {props.active && page?.kind === 'file'
-        ? (
-            <RightPanelFilePreview
-              key={filePageKey(props.runtimeId, page)}
-              runtimeId={props.runtimeId}
-              refreshRevision={props.refreshRevision}
-              page={page}
-              onOpenCurrent={() => props.onOpenPage({
-                ...page,
-                source: { kind: 'current' },
-              })}
-            />
-          )
-        : subagentPage
-          ? (
-              <SubagentPanelContent
-                active={props.active}
-                runtimeId={props.runtimeId}
-                parentSessionId={props.parentSessionId}
-                subagents={props.subagents}
-                skills={props.skills}
-                projectDir={props.projectDir}
-                page={subagentPage}
-                onSelect={(subagentId) => props.onOpenPage({
-                  kind: 'subagent-transcript',
-                  subagentId,
-                })}
-                onBack={() => props.onOpenPage({ kind: 'subagent-overview' })}
-              />
-            )
-          : <div className="min-h-0 flex-1" />}
+      <RightPanelContent {...props} />
     </aside>
   )
+}
+
+function RightPanelContent(props: RightPanelProps) {
+  const page = activeRightPanelPage(props.state)
+  if (!page) return (
+    <div className="flex min-h-0 flex-1 items-center justify-center">
+      <button
+        type="button"
+        className="wc-focus-ring flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2 text-sm text-[var(--wc-muted)] hover:bg-black/[0.035] hover:text-[var(--wc-ink)] disabled:opacity-50"
+        onClick={props.onOpenTerminal}
+        disabled={props.terminalOpening || !props.runtimeId}
+      >
+        <SquareTerminal size={17} className="shrink-0" />
+        <span>{props.terminalOpening ? '正在打开终端…' : '终端'}</span>
+      </button>
+    </div>
+  )
+  switch (page.kind) {
+    case 'terminal':
+      return <TerminalPanel key={page.terminal.id} terminal={page.terminal} active={props.active} />
+    case 'file':
+      return props.active ? (
+        <RightPanelFilePreview
+          key={filePageKey(props.runtimeId, page)}
+          runtimeId={props.runtimeId}
+          refreshRevision={props.refreshRevision}
+          page={page}
+          onOpenCurrent={() => props.onOpenPage({ ...page, source: { kind: 'current' } })}
+        />
+      ) : <div className="min-h-0 flex-1" />
+    case 'subagent-overview':
+    case 'subagent-transcript':
+      return (
+        <SubagentPanelContent
+          active={props.active}
+          runtimeId={props.runtimeId}
+          parentSessionId={props.parentSessionId}
+          subagents={props.subagents}
+          skills={props.skills}
+          projectDir={props.projectDir}
+          page={page}
+          onSelect={(subagentId) => props.onOpenPage({ kind: 'subagent-transcript', subagentId })}
+          onBack={() => props.onOpenPage({ kind: 'subagent-overview' })}
+        />
+      )
+  }
 }
 
 function RightPanelTabButton({
@@ -125,11 +153,13 @@ function RightPanelTabButton({
         type="button"
         aria-current={active ? 'page' : undefined}
         className="wc-focus-ring flex min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-md text-left"
-        title={title}
+        title={tab.page.kind === 'terminal' ? `${title}\n${tab.page.terminal.cwd}` : title}
         onClick={onSelect}
       >
         {tab.page.kind === 'file'
           ? <FileText size={13} className="shrink-0 text-[var(--wc-muted)]" />
+          : tab.page.kind === 'terminal'
+            ? <SquareTerminal size={13} className="shrink-0 text-[var(--wc-muted)]" />
           : <Bot size={13} className="shrink-0 text-[var(--wc-muted)]" />}
         <span className="truncate">{title}</span>
       </button>
@@ -153,6 +183,7 @@ function tabTitle(
   subagents: readonly SubagentSummary[],
 ): string {
   if (page.kind === 'file') return page.name
+  if (page.kind === 'terminal') return page.terminal.title
   return resolveSubagentPanelPage(page, subagents)?.title ?? '子代理'
 }
 

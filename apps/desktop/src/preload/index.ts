@@ -13,6 +13,7 @@ import type {
   SubagentTranscriptSnapshot,
 } from '@whycode/core'
 import { IPC } from '../shared/ipc.ts'
+import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type {
   CheckpointFileCurrentMatchRequest,
   CheckpointFileCurrentMatchResult,
@@ -117,6 +118,22 @@ preloadWindow.addEventListener('message', (event) => {
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
+  createTerminal: (runtimeId: string): Promise<TerminalInfo> =>
+    ipcRenderer.invoke(IPC.createTerminal, runtimeId),
+  closeTerminal: (terminalId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.closeTerminal, terminalId),
+  controlTerminal: (control: TerminalControl): void =>
+    ipcRenderer.send(IPC.terminalControl, control),
+  onTerminalEvent: (listener: (event: TerminalEvent) => void): (() => void) => {
+    const wrapped = (_: unknown, event: TerminalEvent) => listener(event)
+    ipcRenderer.on(IPC.terminalEvent, wrapped)
+    return () => ipcRenderer.off(IPC.terminalEvent, wrapped)
+  },
+  onTerminalClosed: (listener: (terminalId: string) => void): (() => void) => {
+    const wrapped = (_: unknown, terminalId: string) => listener(terminalId)
+    ipcRenderer.on(IPC.terminalClosed, wrapped)
+    return () => ipcRenderer.off(IPC.terminalClosed, wrapped)
+  },
   sendCommand: (
     runtimeId: string,
     command: CoreCommand,

@@ -105,6 +105,8 @@ import {
 } from './mcp-settings.ts'
 import { stageSessionDeletion } from './session-deletion.ts'
 import { SessionScratchManager } from './session-scratch.ts'
+import { TerminalSessions } from './terminal-sessions.ts'
+import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionPreparationLock } from './session-preparation-lock.ts'
@@ -326,6 +328,7 @@ function createWindow(): BrowserWindow {
   })
 
   win.once('ready-to-show', () => win.show())
+  installTerminalWindowLifecycle(win, terminals)
 
   installExternalWebLinkHandlers(
     win,
@@ -489,6 +492,7 @@ const pdfProcessor = new ElectronPdfProcessor()
 const officeProcessor = new ElectronOfficeProcessor(pdfProcessor)
 const officeArtifactRunner = new ElectronOfficeArtifactRunner()
 const hostOperations = new HostOperationScheduler()
+const terminals = new TerminalSessions()
 
 /** 会话创建前用户已选的权限档位（创建时应用） */
 let preferredModelId: string | null = null
@@ -706,6 +710,7 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
           runtime.reasoningEffort,
         )
         runtime.journal = recorder
+        terminals.bindSession(runtime.runtimeId, recorder.sessionId)
         if (!runtime.session) {
           runtime.session = await createMainAgentSession(
             runtime,
@@ -2638,6 +2643,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       commandSessions,
       scratch: sessionScratch,
       onBeforeArtifactsDelete: async () => {
+        terminals.closeOwner({ sessionId })
         await subagents.forgetParent(sessionId)
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
       },
@@ -2800,6 +2806,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   runtimeRegistry = new SessionRuntimeRegistry({
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
     onRemoved: async (runtime) => {
+      if (!runtime.journal) terminals.closeOwner({ runtimeId: runtime.runtimeId })
       if (runtime.journal) sessions.release(runtime.journal)
       const workspace = runtime.workspaceBinding
       if (workspace?.mode === 'worktree' && runtime.journal) {
@@ -3087,6 +3094,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
 
+  registerTerminalIpc(terminals, runtimeForId, prepareTerminalDirectory)
   createWindow()
 
   app.on('activate', () => {
@@ -3105,12 +3113,30 @@ function requireRuntimeProjectDir(runtime: DesktopSessionRuntime): string {
   return projectDir
 }
 
+async function prepareTerminalDirectory(runtime: DesktopSessionRuntime): Promise<string> {
+  const reservation = runtime.routingGate.reserve()
+  try {
+    await reservation.ready
+    if (runtime.isDisposed || shutdownStarted
+      || (runtime.sessionId && sessionDeletionLock.sessionId === runtime.sessionId)) {
+      throw new Error('当前会话正在关闭，无法打开终端')
+    }
+    await materializeRuntimeWorkspace(runtime, worktrees, managedWorkspaces)
+    return requireRuntimeProjectDir(runtime)
+  } finally {
+    reservation.release()
+    runtime.notifyStateChanged()
+    runtimeRegistry.runtimeBecameIdle(runtime)
+  }
+}
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
 let shutdownStarted = false
 app.on('before-quit', (event) => {
+  terminals.closeOwner({})
   runtimeEventBatcher.flush()
   runtimeEventPorts.closeAll()
   if (shutdownStarted || !commandSessions) return

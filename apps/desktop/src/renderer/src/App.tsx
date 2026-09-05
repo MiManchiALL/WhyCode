@@ -102,6 +102,7 @@ import { TaskHeader } from './task-header.tsx'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
 import { RightPanel } from './right-panel.tsx'
+import { disposeTerminalView, loadTerminalViews } from './terminal-panel.tsx'
 import { RightPanelResizeHandle } from './right-panel-resize-handle.tsx'
 import {
   loadRightPanelWidthPreference,
@@ -169,6 +170,7 @@ export function App() {
     activeTabId: null,
   })
   const [rightPanelRetained, setRightPanelRetained] = useState(false)
+  const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
   const [rightPanelWidthPreference, setRightPanelWidthPreference] = useState(
     loadRightPanelWidthPreference,
@@ -1026,8 +1028,47 @@ export function App() {
   }, [updateRightPanelState])
 
   const closeRightPanelPage = useCallback((tabId: string) => {
+    const tab = rightPanelStateRef.current.tabs.find((candidate) => candidate.id === tabId)
+    if (tab?.page.kind === 'terminal') {
+      void window.whycode.closeTerminal(tab.page.terminal.id)
+        .catch((error: unknown) => showConversationFeedback('error', String(error)))
+      return
+    }
     updateRightPanelState((current) => closeRightPanelTab(current, tabId))
-  }, [updateRightPanelState])
+  }, [updateRightPanelState, showConversationFeedback])
+
+  useEffect(() => window.whycode.onTerminalClosed((terminalId) => {
+    disposeTerminalView(terminalId)
+    const store = rightPanelSessionStoreRef.current!
+    store.removeTerminal(terminalId)
+    const current = rightPanelStateRef.current
+    const tab = current.tabs.find((item) => item.page.kind === 'terminal'
+      && item.page.terminal.id === terminalId)
+    if (!tab) return
+    const next = closeRightPanelTab(current, tab.id)
+    rightPanelStateRef.current = next
+    setRightPanelState(next)
+  }), [])
+
+  const openRightPanelTerminal = useCallback(async () => {
+    const targetRuntimeId = runtimeIdRef.current
+    if (!targetRuntimeId || terminalOpening) return
+    setTerminalOpening(true)
+    try {
+      await loadTerminalViews()
+      if (runtimeIdRef.current !== targetRuntimeId) return
+      const terminal = await window.whycode.createTerminal(targetRuntimeId)
+      if (runtimeIdRef.current !== targetRuntimeId || !rightPanelStateRef.current.open) {
+        await window.whycode.closeTerminal(terminal.id)
+        return
+      }
+      showRightPanelPage({ kind: 'terminal', terminal })
+    } catch (error) {
+      showConversationFeedback('error', `无法打开终端：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setTerminalOpening(false)
+    }
+  }, [terminalOpening, showRightPanelPage, showConversationFeedback])
 
   useEffect(() => {
     return window.whycode.onSubagents((state) => {
@@ -2274,6 +2315,8 @@ export function App() {
                 onOpenPage={showRightPanelPage}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}
+                terminalOpening={terminalOpening}
+                onOpenTerminal={() => { void openRightPanelTerminal() }}
               />
             </div>
           </div>

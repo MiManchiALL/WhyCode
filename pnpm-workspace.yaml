@@ -19,6 +19,7 @@ auditConfig:
 allowBuilds:
   esbuild: true
   electron: true
+  node-pty: true
 minimumReleaseAgeExclude:
   - '@ai-sdk/anthropic@4.0.7'
   - '@ai-sdk/deepseek@3.0.5'

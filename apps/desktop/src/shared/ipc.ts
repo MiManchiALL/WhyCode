@@ -23,6 +23,12 @@ export const IPC = {
   checkpointFileCurrentMatch: 'whycode:checkpoint-file-current-match',
   /** Renderer → Main：读取当前会话检查点已授权路径的实时文件状态。 */
   currentFilePreview: 'whycode:current-file-preview',
+  /** 用户终端独立于 Agent 命令；输出不进入会话事实源。 */
+  createTerminal: 'whycode:create-terminal',
+  closeTerminal: 'whycode:close-terminal',
+  terminalControl: 'whycode:terminal-control',
+  terminalEvent: 'whycode:terminal-event',
+  terminalClosed: 'whycode:terminal-closed',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
   /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */

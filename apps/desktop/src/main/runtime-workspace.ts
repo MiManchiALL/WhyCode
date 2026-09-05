@@ -36,7 +36,7 @@ export async function prepareRuntimeWorkspace(
   return pendingWorktreeWorkspace(request)
 }
 
-/** 首条消息初始化会话时，把待创建选择一次性转换为真实受管 Worktree。 */
+/** 首次发送消息或打开终端时，在运行时 FIFO 内物化受管工作区。 */
 export async function materializeRuntimeWorkspace(
   runtime: DesktopSessionRuntime,
   worktrees: WorktreeManager,
