@@ -46,6 +46,7 @@ import type { WorkspaceBinding } from '../workspace/types.ts'
 import {
   BTW_MAX_TURNS,
   canContinueBtw,
+  btwToolStepEvents,
   type BtwConversation,
   type BtwConversationTurn,
   type BtwContinuation,
@@ -811,6 +812,7 @@ export class SessionJournal implements SessionRecorder {
       attachments: structuredClone(context.attachments),
       outcome: result.outcome,
       assistantText: result.assistantText,
+      ...(result.toolSteps ? { toolSteps: structuredClone(result.toolSteps) } : {}),
       ...(result.interruptionReason
         ? { interruptionReason: result.interruptionReason }
         : {}),
@@ -823,6 +825,8 @@ export class SessionJournal implements SessionRecorder {
           turns: [...context.history, turn],
         }
     const continuationAvailable = canContinueBtw(conversation)
+    const pdfAttachments = result.toolSteps?.flatMap((step) => step.pdfAttachments ?? []) ?? []
+    this.assertPdfAttachmentsCompatible(pdfAttachments)
     const response = this.entry({
       type: 'btw-response',
       inputId: context.inputId,
@@ -830,6 +834,7 @@ export class SessionJournal implements SessionRecorder {
       turnIndex: context.turnIndex,
       outcome: result.outcome,
       assistantText: result.assistantText,
+      ...(result.toolSteps ? { toolSteps: result.toolSteps } : {}),
       reasoningText: result.reasoningText,
       reasoningDurationMs: result.reasoningDurationMs,
       durationMs: result.durationMs,
@@ -841,6 +846,7 @@ export class SessionJournal implements SessionRecorder {
     })
     if (response.type !== 'btw-response') throw new Error('无法创建 BTW 结果记录')
     await this.appendEntries([response])
+    this.addPdfAttachments(pdfAttachments)
     this.pendingBtwInputs.delete(context.inputId)
     this.btwConversationState = conversation
     const events = btwResponseViewEvents(response)
@@ -1849,7 +1855,8 @@ function btwEditViewEvent(
 function btwResponseViewEvents(
   response: Extract<SessionEntry, { type: 'btw-response' }>,
 ): ViewEvent[] {
-  const events: ViewEvent[] = []
+  const events: ViewEvent[] = btwToolStepEvents(response.toolSteps ?? [])
+    .map((event) => ({ type: 'core-event', event }))
   if (response.reasoningText) {
     events.push({
       type: 'core-event',

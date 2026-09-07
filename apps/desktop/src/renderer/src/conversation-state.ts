@@ -81,8 +81,6 @@ export type Block =
       outcome: 'completed' | 'stopped'
     }
   | { kind: 'tool'; id: string; call: ToolCall }
-  | { kind: 'notice'; id: string; text: string; tone?: 'compact' }
-  | { kind: 'error'; id: string; text: string }
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
 
@@ -364,18 +362,8 @@ function applyStableCoreEvent(
         fileRollbackBoundaryTurnId: null,
         fileSystemRevision: state.fileSystemRevision + 1,
       }
-    case 'checkpoint-disabled':
-      return appendNotice(state, `检查点已禁用：${event.reason}`)
     case 'checkpoint-restored':
       return applyCheckpointRestored(state, event)
-    case 'context-compacted':
-      return appendNotice(
-        state,
-        `上下文已压缩（${event.level === 'full' ? '摘要' : '清理'}：${Math.round(event.preTokens / 1000)}k → ${Math.round(event.postTokens / 1000)}k tokens）`,
-        'compact',
-      )
-    case 'error':
-      return appendBlock(state, { kind: 'error', id: nextBlockId(state), text: event.message })
     case 'user-question':
       return { ...state, pendingQuestion: structuredClone(event.question) }
     case 'peer-event':
@@ -396,31 +384,6 @@ function applyStableCoreEvent(
       })
       return { ...next, expanded: new Set(next.expanded).add(id) }
     }
-    case 'negotiation-started':
-      return appendNotice(
-        state,
-        `🤝 协商开始（${event.mode === 'quick_review' ? '快速评审' : '完整共识'}）：B/C 正在独立评审…`,
-      )
-    case 'round-started':
-      return appendNotice(state, `🔁 进入第 ${event.round} 轮协商`)
-    case 'negotiation-decided':
-      return appendNotice(
-        state,
-        `⚖️ 协商决定（${event.selectedCandidateIds.join('、') || '降级'}）：${event.reason}${
-          event.scores
-            ? `｜分数 Main ${event.scores.Main} / B ${event.scores.B} / C ${event.scores.C}`
-            : ''
-        }`,
-      )
-    case 'execution-started':
-      return appendNotice(state, '▶ Main 进入执行阶段')
-    case 'consensus-skipped':
-      return appendNotice(
-        state,
-        event.reason === 'pdf-input'
-          ? '📄 本轮含 PDF，仅由 Main 读取；B/C 未读取原文，已跳过协商。'
-          : '🖼 本轮含图片，仅由当前视觉模型处理；B/C 未读取图片，已跳过协商。',
-      )
     case 'task-plan-updated':
     case 'task-plan-restored':
       return { ...state, taskPlan: structuredClone(event.plan) }
@@ -651,19 +614,6 @@ function applyUserMessageEdited(
   }
 }
 
-export function appendNotice(
-  state: ConversationState,
-  text: string,
-  tone?: Extract<Block, { kind: 'notice' }>['tone'],
-): ConversationState {
-  return appendBlock(state, {
-    kind: 'notice',
-    id: nextBlockId(state),
-    text,
-    ...(tone ? { tone } : {}),
-  })
-}
-
 export function toggleExpanded(state: ConversationState, id: string): ConversationState {
   const expanded = new Set(state.expanded)
   expanded.has(id) ? expanded.delete(id) : expanded.add(id)
@@ -672,8 +622,8 @@ export function toggleExpanded(state: ConversationState, id: string): Conversati
 
 export function isTerminalResponseBlock(
   block: Block | undefined,
-): block is Extract<Block, { kind: 'text' | 'error' }> {
-  return (block?.kind === 'text' && block.phase === 'final') || block?.kind === 'error'
+): block is Extract<Block, { kind: 'text' }> {
+  return block?.kind === 'text' && block.phase === 'final'
 }
 
 function hasCurrentWorkFinalText(blocks: readonly Block[]): boolean {
@@ -761,12 +711,7 @@ function applyVote(
       block.peer.agentId === event.from &&
       block.peer.status === 'working',
   )
-  if (idx < 0) {
-    return appendNotice(
-      state,
-      `${event.from} 对 ${event.target} 投票 ${voteLabel(event.vote)}：${event.reason}`,
-    )
-  }
+  if (idx < 0) return state
   const block = state.blocks[idx]! as Extract<Block, { kind: 'peer' }>
   const blocks = [...state.blocks]
   blocks[idx] = {
@@ -880,14 +825,14 @@ function classifyPendingText(
 
 /**
  * 重放时间线没有瞬时 step-committed 事件，因此在 work-finished 的稳定边界，
- * 只把末尾连续正文（以及相邻错误）确认为最终回答，其余 pending 正文归入过程。
+ * 只把末尾连续正文确认为最终回答，其余 pending 正文归入过程。
  */
 function classifyCompletedWorkText(blocks: readonly Block[]): Block[] {
   const workStart = blocks.findLastIndex((block) => block.kind === 'work-duration') + 1
   let terminalStart = blocks.length
   for (let index = blocks.length - 1; index >= workStart; index--) {
     const block = blocks[index]
-    if (block?.kind === 'error' || block?.kind === 'text') {
+    if (block?.kind === 'text') {
       terminalStart = index
       continue
     }

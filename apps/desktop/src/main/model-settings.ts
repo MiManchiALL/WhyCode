@@ -40,12 +40,16 @@ export function createConnectionSettingsSnapshot(
     const routeModelId = configuredRoute && isCliProxyRoute(entry.id, configuredRoute)
       ? configuredRoute
       : null
-    if (cliProxyConnection?.apiKey && !routeModelId) return []
+    const enabled = Boolean(cliProxyConnection?.modelIds.includes(entry.id))
+    if (cliProxyConnection?.apiKey && !routeModelId && !enabled) return []
     const effectiveRouteModelId = routeModelId ?? getDefaultCliProxyRoute(entry.id)!
     return [{
       id: entry.id,
       displayName: entry.displayName,
-      enabled: Boolean(cliProxyConnection?.modelIds.includes(entry.id)),
+      enabled,
+      ...(cliProxyConnection?.apiKey && !routeModelId
+        ? { unavailableReason: '当前实例暂未提供该模型' }
+        : {}),
       capabilities: getCliProxyEffectiveCapabilities(entry.id, effectiveRouteModelId)!,
     }]
   })

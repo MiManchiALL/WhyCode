@@ -43,7 +43,6 @@ import {
 } from '../../shared/workspace.ts'
 import {
   applyCoreEvent,
-  appendNotice,
   checkpointRestoreAnchorIds,
   createConversationState,
   editableUserBlockId,
@@ -65,7 +64,6 @@ import { presentBtwConversations } from './conversation-btw-groups.ts'
 import {
   conversationSections,
   findLatestForkTurnId,
-  shouldShowComposerProcessingTime,
 } from './conversation-sections.ts'
 import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
@@ -141,8 +139,8 @@ import {
 } from './queued-message-card.tsx'
 import {
   ConversationFeedbackToast,
-  type ConversationFeedback,
 } from './conversation-feedback.tsx'
+import { conversationEventFeedback, type ConversationFeedback } from './conversation-feedback-state.ts'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 
 export function App() {
@@ -352,8 +350,6 @@ export function App() {
     () => checkpointRestoreAnchorIds(view),
     [view.blocks, view.turnStartBlocks],
   )
-  const composerProcessingTimeVisible =
-    shouldShowComposerProcessingTime(workStartedAt, sections)
   const thinkingGapDelay = thinkingGapRevealDelay({
     blocks,
     status,
@@ -382,9 +378,6 @@ export function App() {
       && thinkingGapIdleTarget?.runtimeId === runtimeId
       && thinkingGapIdleTarget.blocks === blocks
     )
-  const addError = useCallback((text: string) => {
-    applyConversationEvent({ type: 'error', message: text, recoverable: true })
-  }, [applyConversationEvent])
   const showConversationFeedback = useCallback((
     tone: ConversationFeedback['tone'],
     message: string,
@@ -398,6 +391,9 @@ export function App() {
   const dismissConversationFeedback = useCallback((id: number) => {
     setConversationFeedback((current) => current?.id === id ? null : current)
   }, [])
+  const showError = useCallback((text: string) => {
+    showConversationFeedback('error', text)
+  }, [showConversationFeedback])
   const {
     drafts: imageDrafts,
     addFiles: addImageFiles,
@@ -405,7 +401,7 @@ export function App() {
     clear: clearImageDrafts,
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
-  } = useImageDrafts(addError)
+  } = useImageDrafts(showError)
   const {
     drafts: pdfDrafts,
     addFiles: addPdfFiles,
@@ -413,7 +409,7 @@ export function App() {
     clear: clearPdfDrafts,
     detach: detachPdfDrafts,
     restore: restorePdfDrafts,
-  } = usePdfDrafts(addError)
+  } = usePdfDrafts(showError)
 
 
   useEffect(() => {
@@ -532,9 +528,9 @@ export function App() {
       setQueuedActionPending((current) => withoutQueuedAction(current, id))
     } catch {
       setQueuedActionPending((current) => withoutQueuedAction(current, id))
-      addError('排队消息操作失败，请重试')
+      showError('排队消息操作失败，请重试')
     }
-  }, [addError, sendRuntimeCommand])
+  }, [showError, sendRuntimeCommand])
 
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
     if (items.length === 0) return
@@ -793,10 +789,10 @@ export function App() {
       setResumingSessionId(null)
       const message = `恢复完成后的运行态同步失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
-      addError(message)
+      showError(message)
     }
   }, [
-    addError,
+    showError,
     applyRuntimeSnapshot,
     refreshModelCatalog,
     refreshSessions,
@@ -804,6 +800,8 @@ export function App() {
   ])
 
   const consumeEvent = useCallback((event: CoreEvent, occurredAt?: string) => {
+    const feedback = conversationEventFeedback(event)
+    if (feedback) showConversationFeedback(feedback.tone, feedback.message)
     applyConversationEvent(event, occurredAt)
     switch (event.type) {
       case 'work-started':
@@ -847,14 +845,6 @@ export function App() {
       case 'checkpoint-restored':
         setCheckpointRestoreToolUseId((current) =>
           current === event.toolUseId ? null : current,
-        )
-        showConversationFeedback(
-          event.ok ? 'success' : 'error',
-          event.ok
-            ? event.scope === 'files-and-chat'
-              ? '已回滚该轮对话与相关文件改动。'
-              : '文件已回滚，对话已保留。'
-            : `回滚失败：${event.error ?? '当前检查点无法恢复'}`,
         )
         break
       case 'message-queued':
@@ -1338,7 +1328,7 @@ export function App() {
     )
     if (!result.ok) {
       setWorkspaceCandidate(null)
-      addError(result.error ?? '新建会话失败')
+      showError(result.error ?? '新建会话失败')
       return false
     }
     applyRuntimeSnapshot(result.snapshot)
@@ -1347,7 +1337,7 @@ export function App() {
     void refreshSessions()
     void refreshModelCatalog()
     return true
-  }, [addError, applyRuntimeSnapshot, refreshModelCatalog, refreshSessions])
+  }, [showError, applyRuntimeSnapshot, refreshModelCatalog, refreshSessions])
 
   const pickProject = useCallback(() => {
     if (!beginSessionTransition()) return
@@ -1359,11 +1349,11 @@ export function App() {
       })
       if (activated && candidate.repositoryDirectory) setWorkspaceCandidate(candidate)
     }).catch((error) => {
-      addError(`工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
+      showError(`工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
     activateNewSession,
-    addError,
+    showError,
     beginSessionTransition,
     endSessionTransition,
   ])
@@ -1382,19 +1372,19 @@ export function App() {
     setApproval(null)
     void sendRuntimeCommand({ type: 'abort' }).catch(() => {
       setStopping(false)
-      addError('停止请求发送失败，请重试')
+      showError('停止请求发送失败，请重试')
     })
-  }, [addError, sendRuntimeCommand, stopping])
+  }, [showError, sendRuntimeCommand, stopping])
 
   const startNewSession = useCallback(() => {
     if (!beginSessionTransition()) return
     setWorkspaceCandidate(null)
     void activateNewSession()
       .catch((error) => {
-        addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
+        showError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
       })
       .finally(endSessionTransition)
-  }, [activateNewSession, addError, beginSessionTransition, endSessionTransition])
+  }, [activateNewSession, showError, beginSessionTransition, endSessionTransition])
 
   const startWorkspaceSession = useCallback((choice: WorkspaceStartChoice) => {
     const candidate = workspaceCandidate
@@ -1415,10 +1405,10 @@ export function App() {
       setWorkspaceCandidate(candidate)
     }).catch((error) => {
       setWorkspaceCandidate(candidate)
-      addError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
+      showError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
-    addError,
+    showError,
     activateNewSession,
     beginSessionTransition,
     endSessionTransition,
@@ -1444,13 +1434,13 @@ export function App() {
     }).catch((error) => {
       const message = `会话恢复请求失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
-      addError(message)
+      showError(message)
     }).finally(() => {
       ownsResumeRequestRef.current = false
       if (resumingSessionIdRef.current === sessionId) setResumingSessionId(null)
     })
   }, [
-    addError,
+    showError,
     applyRuntimeSnapshot,
     refreshModelCatalog,
     refreshSessions,
@@ -1523,11 +1513,9 @@ export function App() {
 
   const compact = useCallback(() => {
     if (status !== 'idle' && status !== 'error') return
-    setView((previous) =>
-      appendNotice(previous, '正在压缩上下文（生成摘要中，可点停止取消）…'),
-    )
+    showConversationFeedback('info', '正在压缩上下文，可点停止取消。')
     void sendRuntimeCommand({ type: 'compact' })
-  }, [sendRuntimeCommand, status])
+  }, [sendRuntimeCommand, showConversationFeedback, status])
   const forkConversation = useCallback((sourceTurnId: string) => {
     if (status !== 'idle' && status !== 'error') return
     const sourceSessionId = sessionIdRef.current
@@ -1546,13 +1534,13 @@ export function App() {
     }).catch((error) => {
       const message = `创建会话分支失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
-      addError(message)
+      showError(message)
     }).finally(() => {
       setForkPendingTurnId(null)
       endSessionTransition()
     })
   }, [
-    addError,
+    showError,
     applyRuntimeSnapshot,
     beginSessionTransition,
     endSessionTransition,
@@ -1566,16 +1554,16 @@ export function App() {
     if (command === 'btw' || command === 'bbtw') {
       if (status !== 'idle' && status !== 'error') return
       if (command === 'bbtw' && !view.btwContinuation) {
-        addError('当前没有可续接的 BTW 对话')
+        showError('当前没有可续接的 BTW 对话')
         return
       }
       if (pdfDrafts.length > 0 || selectedSkills.length > 0 || restoredInputIds.length > 0) {
-        addError('BTW 不使用 PDF、Skill 或恢复队列输入；请先移除这些内容')
+        showError('BTW 不使用 PDF、Skill 或恢复队列输入；请先移除这些内容')
         return
       }
       const currentModel = models.find((model) => model.id === modelId)
       if (imageDrafts.length > 0 && currentModel?.imageInputMode !== 'native') {
-        addError('BTW 图片必须由当前模型原生读取')
+        showError('BTW 图片必须由当前模型原生读取')
         return
       }
       setBtwMode(command)
@@ -1594,14 +1582,14 @@ export function App() {
   const changeModel = useCallback((next: string) => {
     const nextModel = models.find((model) => model.id === next)
     if (!nextModel?.available) {
-      addError(nextModel?.unavailableReason ?? '该模型连接当前不可用')
+      showError(nextModel?.unavailableReason ?? '该模型连接当前不可用')
       return
     }
     if (
       imageDrafts.length > 0
       && (btwMode ? nextModel.imageInputMode !== 'native' : nextModel.imageInputMode === 'none')
     ) {
-      addError(btwMode
+      showError(btwMode
         ? 'BTW 图片必须由当前模型原生读取'
         : '已添加图片；目标模型既不支持原生识图，也没有可用的辅助识图模型')
       return
@@ -1619,7 +1607,7 @@ export function App() {
     void sendRuntimeCommand({ type: 'set-model', modelId: next }).then((result) => {
       if (!result || !result.ok) rollback()
     }).catch(rollback)
-  }, [addError, btwMode, imageDrafts.length, modelId, models, reasoningEffort, sendRuntimeCommand])
+  }, [showError, btwMode, imageDrafts.length, modelId, models, reasoningEffort, sendRuntimeCommand])
 
   const changeReasoningEffort = useCallback((next: ReasoningEffortSelection) => {
     const previous = reasoningEffort
@@ -1638,19 +1626,19 @@ export function App() {
       setConnectionSettings(snapshot)
       setShowConnectionSettings(true)
     }).catch((error) => {
-      addError(`连接设置读取失败：${error instanceof Error ? error.message : String(error)}`)
+      showError(`连接设置读取失败：${error instanceof Error ? error.message : String(error)}`)
     })
-  }, [addError])
+  }, [showError])
 
   const openCurrentWorkspaceFolder = useCallback(() => {
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId) return
     void window.whycode.openWorkspaceFolder(targetRuntimeId).then((result) => {
-      if (!result.ok) addError(result.error)
+      if (!result.ok) showError(result.error)
     }).catch((error) => {
-      addError(`打开工作文件夹失败：${error instanceof Error ? error.message : String(error)}`)
+      showError(`打开工作文件夹失败：${error instanceof Error ? error.message : String(error)}`)
     })
-  }, [addError])
+  }, [showError])
 
   const prepareCommitPrompt = useCallback(() => {
     const prompt = '请检查当前 Worktree 的改动，先总结将要提交的内容，再创建合适的提交；如果已经配置远程且适合推送，再推送当前分支。'
@@ -1668,9 +1656,9 @@ export function App() {
     setConnectionSettings(snapshot)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshModelCatalog().catch((error) => {
-      addError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
+      showError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
     })
-  }, [addError, refreshModelCatalog])
+  }, [showError, refreshModelCatalog])
 
   const send = useCallback((urgent = false) => {
     if (
@@ -1689,7 +1677,7 @@ export function App() {
       sentBtwMode
       && (pdfDrafts.length > 0 || sentSkills.length > 0 || restoredInputIds.length > 0)
     ) {
-      addError('BTW 不使用 PDF、Skill 或恢复队列输入')
+      showError('BTW 不使用 PDF、Skill 或恢复队列输入')
       return
     }
     const text = input.trim()
@@ -1763,7 +1751,7 @@ export function App() {
         restoreRejectedInput()
       } catch {
         restoreRejectedInput()
-        addError(sentImageDrafts.length || sentPdfDrafts.length
+        showError(sentImageDrafts.length || sentPdfDrafts.length
           ? '附件读取或消息发送失败，内容已恢复到输入框'
           : '消息发送失败，内容已恢复到输入框')
       } finally {
@@ -1775,7 +1763,7 @@ export function App() {
       }
     })()
   }, [
-    addError,
+    showError,
     attachmentSubmissionPending,
     captureSkills,
     checkpointRestoreToolUseId,
@@ -1868,19 +1856,19 @@ export function App() {
     if (imageFiles.length === 0 && pdfFiles.length === 0) return
     event.preventDefault()
     if (attachmentLocked) {
-      addError('当前操作暂时锁定附件，请稍后重试')
+      showError('当前操作暂时锁定附件，请稍后重试')
       return
     }
     if (imageFiles.length > 0) {
       if (canAttachImages) addImageFiles(imageFiles)
-      else addError('当前模型没有可用的原生或辅助识图能力；PDF 仍可添加')
+      else showError('当前模型没有可用的原生或辅助识图能力；PDF 仍可添加')
     }
     if (pdfFiles.length > 0) {
       if (canAttachPdfs) addPdfFiles(pdfFiles)
-      else addError('当前没有可用模型，无法添加 PDF')
+      else showError('当前没有可用模型，无法添加 PDF')
     }
   }, [
-    addError,
+    showError,
     addImageFiles,
     addPdfFiles,
     attachmentLocked,
@@ -1893,7 +1881,7 @@ export function App() {
     interactionBusy: attachmentLocked,
     onImageFiles: addImageFiles,
     onPdfFiles: addPdfFiles,
-    onError: addError,
+    onError: showError,
   })
   const currentSession = sessions.find((session) => session.isCurrent)
   const taskTitle = currentSession?.title
@@ -2030,12 +2018,6 @@ export function App() {
 
             <div className="relative shrink-0 px-4 pb-4 pt-1">
               <div className="wc-conversation-balanced-content mx-auto w-full max-w-4xl">
-                {composerProcessingTimeVisible && workStartedAt !== null && (
-                  <div className="mb-1.5 px-2 text-xs text-[var(--wc-faint)]">
-                    <ProcessingTime startedAt={workStartedAt} />
-                  </div>
-                )}
-
                 {showJumpBottom && (
                   <button
                     type="button"
@@ -2079,7 +2061,12 @@ export function App() {
                 )}
 
                 {workStartedAt !== null && (
-                  <ComposerFileChanges changes={currentFileChanges} />
+                  <div className="mb-1.5 flex min-w-0 items-center justify-between gap-3 px-2 text-xs">
+                    <span className="shrink-0 text-[var(--wc-faint)]">
+                      <ProcessingTime startedAt={workStartedAt} />
+                    </span>
+                    <ComposerFileChanges changes={currentFileChanges} />
+                  </div>
                 )}
 
                 <footer className={`wc-composer relative p-2.5 ${btwMode ? 'wc-composer-btw' : ''}`}>

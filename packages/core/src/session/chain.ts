@@ -24,6 +24,7 @@ import {
 } from '../instructions/project.ts'
 import {
   canContinueBtw,
+  btwToolStepEvents,
   type BtwConversation,
   type BtwConversationTurn,
   type BtwTurnContext,
@@ -228,9 +229,11 @@ function collectPdfAttachments(entries: SessionEntry[]): PdfAttachment[] {
   for (const entry of entries) {
     const values = entry.type === 'user-input' || entry.type === 'messages'
       ? entry.pdfAttachments ?? []
-      : entry.type === 'snapshot'
-        ? entry.pendingUserInputs.flatMap((input) => input.pdfAttachments ?? [])
-        : []
+      : entry.type === 'btw-response'
+        ? entry.toolSteps?.flatMap((step) => step.pdfAttachments ?? []) ?? []
+        : entry.type === 'snapshot'
+          ? entry.pendingUserInputs.flatMap((input) => input.pdfAttachments ?? [])
+          : []
     for (const value of values) {
       const serialized = JSON.stringify(value)
       const previous = attachments.get(value.storageName)
@@ -558,6 +561,9 @@ function collectViewEvents(entries: SessionEntry[]): {
       continue
     }
     if (entry.type === 'btw-response') {
+      for (const event of btwToolStepEvents(entry.toolSteps ?? [])) {
+        push({ type: 'core-event', event }, entry.timestamp)
+      }
       if (entry.reasoningText) {
         push({ type: 'core-event', event: { type: 'thinking-delta', text: entry.reasoningText } }, entry.timestamp)
         push({ type: 'core-event', event: { type: 'thinking-end', durationMs: entry.reasoningDurationMs } }, entry.timestamp)
@@ -705,6 +711,7 @@ function collectBtwState(entries: readonly SessionEntry[]): {
       attachments: structuredClone(input.attachments ?? []),
       outcome: entry.outcome,
       assistantText: entry.assistantText,
+      ...(entry.toolSteps ? { toolSteps: structuredClone(entry.toolSteps) } : {}),
       ...(entry.interruptionReason
         ? { interruptionReason: entry.interruptionReason }
         : {}),

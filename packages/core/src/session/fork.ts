@@ -200,6 +200,18 @@ function rehomeEntry(
           ? { attachments: entry.attachments.map((value) => rehomeImage(value, sessionId)) }
           : {}),
       })
+    case 'btw-response':
+      return sessionEntrySchema.parse({
+        ...common,
+        ...(entry.toolSteps ? {
+          toolSteps: entry.toolSteps.map((step) => ({
+            ...step,
+            ...(step.pdfAttachments ? {
+              pdfAttachments: step.pdfAttachments.map((value) => rehomePdf(value, sessionId)),
+            } : {}),
+          })),
+        } : {}),
+      })
     case 'messages':
       return sessionEntrySchema.parse({
         ...common,

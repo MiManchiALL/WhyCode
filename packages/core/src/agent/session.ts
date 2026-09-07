@@ -170,7 +170,12 @@ import {
 import type {
   BtwTurnContext,
   BtwTurnResult,
+  BtwToolStep,
 } from '../session/btw.ts'
+import { LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME } from '../tools/list-glob/index.ts'
+import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
+import { WEB_SEARCH_TOOL_NAME } from '../tools/web-search/prompt.ts'
+import { WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME } from '../tools/web-page/prompt.ts'
 
 export type {
   ApprovalHandler,
@@ -183,6 +188,25 @@ const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
 const TASK_PROGRESS_REMINDER_STEPS = 10
 const MAX_COMPACT_FAILURES = 3
+const BTW_TOOL_NAMES = new Set([
+  READ_FILE_TOOL_NAME, LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME,
+  WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME,
+])
+
+interface ToolStepContext {
+  emit: (event: CoreEvent) => void
+  loopHealth: LoopHealthMonitor
+  planExecutionEngaged?: boolean
+  onTurnEndingTool?: (reason: 'completed' | 'waiting-user') => void
+  onReadFile?: (path: string) => void
+  onImageAttachments?: (
+    toolCallId: string, attachments: readonly ImageAttachment[],
+    transform: ImageTransform | undefined, attachmentLimit: number,
+  ) => Promise<string | null>
+  onPdfAttachments?: (
+    toolCallId: string, attachments: readonly PdfAttachment[],
+  ) => Promise<string | null>
+}
 
 export interface AgentSessionOptions {
   model: ModelEntry
@@ -646,7 +670,7 @@ export class AgentSession {
   }
 
   /**
-   * 独立侧对话：读取 Main 的稳定上下文快照，但不装配工具、不写入 Main messages。
+   * 独立侧对话只共享背景与权限，工具步骤和回答不写入 Main messages。
    * 已提交输入即成为侧链轮次；停止只写入中断边界，不替用户结束整条侧链。
    */
   handleBtwMessage(
@@ -705,8 +729,9 @@ export class AgentSession {
         ...(!stopped ? { error: error instanceof Error ? error.message : String(error) } : {}),
       }
       lifecycle.emit({ type: 'step-discarded' })
-      if (!stopped) lifecycle.emit({ type: 'error', message: result.error!, recoverable: true })
     }
+
+    if (result.error) lifecycle.emit({ type: 'error', message: result.error, recoverable: true })
 
     this.opAbort = null
     this.currentStepAbort = null
@@ -760,6 +785,7 @@ export class AgentSession {
       const messages: ModelMessage[] = [turn.attachments.length
         ? createImageUserMessage(turn.text, turn.attachments, 'native')
         : { role: 'user', content: turn.text }]
+      messages.push(...turn.toolSteps?.flatMap((step) => step.messages) ?? [])
       if (turn.assistantText) {
         messages.push({ role: 'assistant', content: turn.assistantText })
       }
@@ -774,20 +800,42 @@ export class AgentSession {
     const system = `${buildSystemPrompt(
       this.options.promptContext,
       this.options.customSystemPrompt,
-    )}\n\n<whycode-btw>\n这是一个临时侧对话。请结合已有主对话背景直接回答最后一条侧问题；不要调用工具、执行任务或把侧问题当作主任务进度。\n</whycode-btw>`
-    const requestMessages = await this.messagesForCurrentModel(
-      [...baseMessages, ...sideMessages, currentMessage],
-      turnAbortSignal,
-      false,
-    )
+    )}\n\n<whycode-btw>\n结合主对话背景回答当前侧问题，按需使用可用的只读工具核实。侧问答独立于主任务。\n</whycode-btw>`
+    const requestMessages = [...baseMessages, ...sideMessages, currentMessage]
+    const toolSteps: BtwToolStep[] = []
+    const loopHealth = new LoopHealthMonitor()
     let lastUndeliverable: UndeliverableModelResponseError | null = null
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let attempt = 0
+    while (attempt < 2) {
       try {
-        return await this.runBtwModelAttempt(system, requestMessages, emit, turnAbortSignal)
+        const result = await this.runBtwModelAttempt(
+          system,
+          await this.messagesForCurrentModel(requestMessages, turnAbortSignal, false),
+          emit, turnAbortSignal, loopHealth,
+        )
+        if (result.toolStep) {
+          toolSteps.push(result.toolStep)
+          requestMessages.push(...result.toolStep.messages)
+          emit({ type: 'step-committed' })
+          attempt = 0
+          const pauseReason = loopHealth.consumePauseReason()
+          if (pauseReason) throw new Error(pauseReason)
+          continue
+        }
+        return { ...result, ...(toolSteps.length ? { toolSteps } : {}) }
       } catch (error) {
         if (!(error instanceof UndeliverableModelResponseError) || turnAbortSignal.aborted) {
-          throw error
+          emit({ type: 'step-discarded' })
+          return {
+            outcome: turnAbortSignal.aborted ? 'stopped' : 'error',
+            assistantText: '', reasoningText: '', reasoningDurationMs: 0, durationMs: 0,
+            ...(toolSteps.length ? { toolSteps } : {}),
+            ...(turnAbortSignal.aborted
+              ? { interruptionReason: 'user-cancel' as const }
+              : { error: error instanceof Error ? error.message : String(error) }),
+          }
         }
+        attempt++
         lastUndeliverable = error
         emit({ type: 'step-discarded' })
       }
@@ -795,7 +843,11 @@ export class AgentSession {
     const reason = lastUndeliverable?.finishReason
       ? `（finish reason: ${lastUndeliverable.finishReason}）`
       : ''
-    throw new Error(`模型连续两次没有返回可交付答复${reason}，请重试或切换模型。`)
+    return {
+      outcome: 'error', assistantText: '', reasoningText: '', reasoningDurationMs: 0, durationMs: 0,
+      ...(toolSteps.length ? { toolSteps } : {}),
+      error: `模型连续两次没有返回可交付答复${reason}，请重试或切换模型。`,
+    }
   }
 
   private async runBtwModelAttempt(
@@ -803,7 +855,8 @@ export class AgentSession {
     messages: ModelMessage[],
     emit: (event: CoreEvent) => void,
     turnAbortSignal: AbortSignal,
-  ): Promise<BtwTurnResult> {
+    loopHealth: LoopHealthMonitor,
+  ): Promise<BtwTurnResult & { toolStep?: BtwToolStep }> {
     const startedAt = Date.now()
     const stepAbort = new AbortController()
     const onTurnAbort = () => stepAbort.abort('user-cancel')
@@ -817,14 +870,35 @@ export class AgentSession {
     let reasoningDurationMs = 0
     let emittedText = ''
     let finishReason: string | null = null
+    let hadToolCalls = false
+    const toolErrors: string[] = []
+    const stepPdfAttachments = new Map<string, PdfAttachment[]>()
+    let attachmentsCommitted = false
     try {
+      const tools = this.wrapToolDefinitions(
+        [...(this.options.baseTools ?? BUILTIN_TOOLS), ...(this.options.mainTools ?? [])]
+          .filter((def) => BTW_TOOL_NAMES.has(def.name)),
+        stepAbort.signal,
+        {
+          emit: (event) => {
+            if (event.type === 'tool-end' && event.isError) toolErrors.push(event.toolUseId)
+            emit(event)
+          },
+          loopHealth,
+          onPdfAttachments: (id, attachments) =>
+            this.acceptToolPdfAttachments(stepPdfAttachments, id, attachments),
+        },
+      )
       const stream = streamText({
         model: this.createLanguageModel(),
         system,
         messages,
+        tools,
         stopWhen: stepCountIs(1),
         providerOptions: this.requestProviderOptions(),
         abortSignal: stepAbort.signal,
+        onToolExecutionStart: () => { inactivityWatchdog.toolStarted() },
+        onToolExecutionEnd: () => { inactivityWatchdog.toolEnded() },
       })
       const textGate = new AssistantTextGate((text) => {
         emittedText += text
@@ -848,6 +922,8 @@ export class AgentSession {
           }
         } else if (part.type === 'text-delta') {
           textGate.push(part.text)
+        } else if (part.type === 'tool-call' && !part.providerExecuted) {
+          hadToolCalls = true
         } else if (part.type === 'finish') {
           finishReason = part.finishReason
         } else if (part.type === 'error') {
@@ -866,13 +942,33 @@ export class AgentSession {
         this.currentModelSelection().model.protocol,
       )
       const sanitized = sanitizeAssistantControlOutput(normalized)
-      if (sanitized.rejected || !hasDeliverableModelText(sanitized.messages)) {
+      if (sanitized.rejected || (!hadToolCalls && !hasDeliverableModelText(sanitized.messages))) {
         throw new UndeliverableModelResponseError(finishReason)
       }
       const assistantText = sanitized.messages.map(modelMessageText).join('\n').trim()
+      const pdfAttachments = [...new Map([...stepPdfAttachments.values()].flat()
+        .map((attachment) => [attachment.storageName, attachment])).values()]
+      const toolStep: BtwToolStep | undefined = hadToolCalls ? {
+        messages: dehydrateImageMessages([
+          ...sanitized.messages,
+          ...(pdfAttachments.length ? [{
+            role: 'user' as const,
+            content: withPdfAttachmentReferences('网页工具导入的 PDF 附件。', pdfAttachments),
+          }] : []),
+        ]),
+        reasoningDurationMs,
+        toolErrors,
+        ...(pdfAttachments.length ? { pdfAttachments } : {}),
+      } : undefined
+      if (toolStep) {
+        this.addPdfAttachments(pdfAttachments)
+        this.rebuildActivePdfAttachments()
+        attachmentsCommitted = true
+      }
       return {
         outcome: 'completed',
         assistantText,
+        ...(toolStep ? { toolStep } : {}),
         reasoningText,
         reasoningDurationMs,
         durationMs: Math.max(0, Date.now() - startedAt),
@@ -900,6 +996,13 @@ export class AgentSession {
       }
       throw error
     } finally {
+      if (!attachmentsCommitted && this.options.sessionRecorder) {
+        await removePdfAttachmentFiles(
+          this.options.sessionRecorder.attachmentDirectory,
+          [...stepPdfAttachments.values()].flat()
+            .filter((item) => !this.pdfAttachments.has(item.storageName)),
+        ).catch(() => {})
+      }
       inactivityWatchdog.stop()
       turnAbortSignal.removeEventListener('abort', onTurnAbort)
       if (this.currentStepAbort === stepAbort) this.currentStepAbort = null
@@ -2521,54 +2624,8 @@ export class AgentSession {
             })
             return null
           },
-          async (toolCallId, attachments) => {
-            if (!this.options.sessionRecorder) {
-              return 'PDF 工具附件需要会话附件存储'
-            }
-            const parsed = pdfAttachmentsSchema.safeParse(attachments)
-            const acceptedStorageNames = new Set(
-              [...stepPdfAttachments.values()]
-                .flatMap((values) => values)
-                .map((attachment) => attachment.storageName),
-            )
-            const individuallyValid = attachments.flatMap((attachment) => {
-              const value = pdfAttachmentSchema.safeParse(attachment)
-              return value.success ? [value.data] : []
-            })
-            const removeRejected = () => removePdfAttachmentFiles(
-              this.options.sessionRecorder!.attachmentDirectory,
-              individuallyValid.filter((attachment) =>
-                !this.pdfAttachments.has(attachment.storageName)
-                && !acceptedStorageNames.has(attachment.storageName)),
-            ).catch(() => {})
-            if (
-              !parsed.success
-              || parsed.data.some((attachment) =>
-                attachment.sessionId !== this.options.sessionRecorder?.sessionId)
-            ) {
-              await removeRejected()
-              return 'PDF 工具返回了无效或不属于当前会话的附件'
-            }
-            const unique = new Map<string, PdfAttachment>()
-            for (const values of stepPdfAttachments.values()) {
-              for (const attachment of values) unique.set(attachment.storageName, attachment)
-            }
-            for (const attachment of parsed.data) {
-              const previous = unique.get(attachment.storageName)
-                ?? this.pdfAttachments.get(attachment.storageName)
-              if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
-                await removeRejected()
-                return `PDF 附件元数据冲突：${attachment.storageName}`
-              }
-              unique.set(attachment.storageName, attachment)
-            }
-            if (!pdfAttachmentsSchema.safeParse([...unique.values()]).success) {
-              await removeRejected()
-              return '单个模型步骤导入的 PDF 数量或总大小超过会话附件上限'
-            }
-            stepPdfAttachments.set(toolCallId, parsed.data)
-            return null
-          },
+          (toolCallId, attachments) =>
+            this.acceptToolPdfAttachments(stepPdfAttachments, toolCallId, attachments),
           mcpStep?.toolDefinitions() ?? [],
         )
       const requestOverhead = await estimateRequestContextOverhead(
@@ -2885,7 +2942,6 @@ export class AgentSession {
     ) => Promise<string | null>,
     mcpTools: readonly ToolDefinition[],
   ): ToolSet | undefined {
-    const projectDir = this.options.promptContext.projectDir
     const model = this.currentModelSelection().model
     const extraTools = this.options.extraTools ?? []
     const taskTools = this.taskPlan
@@ -2994,10 +3050,79 @@ export class AgentSession {
       ...officeVisualTools,
       ...controlTools,
     ]
-    const toolProjectDir = projectDir
-    if (defs.length === 0) return undefined
+    return this.wrapToolDefinitions(defs, abortSignal, {
+      emit: this.options.emit,
+      loopHealth: this.loopHealth,
+      planExecutionEngaged,
+      onTurnEndingTool,
+      onImageAttachments,
+      onPdfAttachments,
+      onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
+    })
+  }
 
-    const { emit } = this.options
+  private async acceptToolPdfAttachments(
+    stepPdfAttachments: Map<string, PdfAttachment[]>,
+    toolCallId: string,
+    attachments: readonly PdfAttachment[],
+  ): Promise<string | null> {
+    if (!this.options.sessionRecorder) {
+      return 'PDF 工具附件需要会话附件存储'
+    }
+    const parsed = pdfAttachmentsSchema.safeParse(attachments)
+    const acceptedStorageNames = new Set(
+      [...stepPdfAttachments.values()]
+        .flatMap((values) => values)
+        .map((attachment) => attachment.storageName),
+    )
+    const individuallyValid = attachments.flatMap((attachment) => {
+      const value = pdfAttachmentSchema.safeParse(attachment)
+      return value.success ? [value.data] : []
+    })
+    const removeRejected = () => removePdfAttachmentFiles(
+      this.options.sessionRecorder!.attachmentDirectory,
+      individuallyValid.filter((attachment) =>
+        !this.pdfAttachments.has(attachment.storageName)
+        && !acceptedStorageNames.has(attachment.storageName)),
+    ).catch(() => {})
+    if (
+      !parsed.success
+      || parsed.data.some((attachment) =>
+        attachment.sessionId !== this.options.sessionRecorder?.sessionId)
+    ) {
+      await removeRejected()
+      return 'PDF 工具返回了无效或不属于当前会话的附件'
+    }
+    const unique = new Map<string, PdfAttachment>()
+    for (const values of stepPdfAttachments.values()) {
+      for (const attachment of values) unique.set(attachment.storageName, attachment)
+    }
+    for (const attachment of parsed.data) {
+      const previous = unique.get(attachment.storageName)
+        ?? this.pdfAttachments.get(attachment.storageName)
+      if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
+        await removeRejected()
+        return `PDF 附件元数据冲突：${attachment.storageName}`
+      }
+      unique.set(attachment.storageName, attachment)
+    }
+    if (!pdfAttachmentsSchema.safeParse([...unique.values()]).success) {
+      await removeRejected()
+      return '单个模型步骤导入的 PDF 数量或总大小超过会话附件上限'
+    }
+    stepPdfAttachments.set(toolCallId, parsed.data)
+    return null
+  }
+
+  private wrapToolDefinitions(
+    defs: readonly ToolDefinition[],
+    abortSignal: AbortSignal,
+    context: ToolStepContext,
+  ): ToolSet | undefined {
+    const { emit, loopHealth, planExecutionEngaged } = context
+    const model = this.currentModelSelection().model
+    const toolProjectDir = this.options.promptContext.projectDir
+    if (defs.length === 0) return undefined
     const approvalBatcher = new StepToolApprovalBatcher({
       permissions: () => this.permissions,
       setStatus: (status) => emit({ type: 'agent-status', status }),
@@ -3039,7 +3164,7 @@ export class AgentSession {
         if (!parsed.success) {
           const msg = `参数校验失败：${parsed.error.message}`
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-          this.loopHealth.record(def.name, input, msg, true)
+          loopHealth.record(def.name, input, msg, true)
           return msg
         }
         emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.value })
@@ -3054,7 +3179,7 @@ export class AgentSession {
         if (!authorization.approved) {
           const msg = authorization.message
           emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-          this.loopHealth.record(def.name, parsed.value, msg, true)
+          loopHealth.record(def.name, parsed.value, msg, true)
           return msg
         }
         if (authorization.approvedPaths.length > 0) {
@@ -3074,7 +3199,7 @@ export class AgentSession {
           if (abortSignal.aborted) {
             const msg = '操作已取消'
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, parsed.value, msg, true)
+            loopHealth.record(def.name, parsed.value, msg, true)
             return msg
           }
           // 批准与真正进入副作用队列之间仍可能切档；只重查不可被批准覆盖的硬拒绝。
@@ -3082,7 +3207,7 @@ export class AgentSession {
           if (currentPermission.behavior === 'deny') {
             const msg = `操作被拒绝：${currentPermission.reason}`
             emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
-            this.loopHealth.record(def.name, parsed.value, msg, true)
+            loopHealth.record(def.name, parsed.value, msg, true)
             return msg
           }
 
@@ -3153,19 +3278,23 @@ export class AgentSession {
                 emit({ type: 'tool-progress', toolUseId: toolCallId, output }),
             })
             if (result.pdfAttachments?.length) {
-              const error = await onPdfAttachments(toolCallId, result.pdfAttachments)
+              const error = context.onPdfAttachments
+                ? await context.onPdfAttachments(toolCallId, result.pdfAttachments)
+                : '当前工具步骤无法接收 PDF 附件'
               if (error) result = { data: error, isError: true }
             }
             let viewedAttachments: readonly ImageAttachment[] = []
             if (result.attachments?.length) {
-              const error = await onImageAttachments(
-                toolCallId,
-                result.attachments,
-                result.imageTransform,
-                def.name === READ_PDF_TOOL_NAME
-                  ? PDF_VISUAL_MAX_PAGES
-                  : TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
-              )
+              const error = context.onImageAttachments
+                ? await context.onImageAttachments(
+                  toolCallId,
+                  result.attachments,
+                  result.imageTransform,
+                  def.name === READ_PDF_TOOL_NAME
+                    ? PDF_VISUAL_MAX_PAGES
+                    : TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
+                )
+                : '当前工具步骤无法接收图片附件'
               if (error) result = { data: error, isError: true }
               else if (!result.isError && def.name !== READ_PDF_TOOL_NAME) {
                 viewedAttachments = result.attachments
@@ -3175,7 +3304,7 @@ export class AgentSession {
             if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
               try {
                 const abs = resolveAllowed(toolCtx, (parsed.value as { path: string }).path)
-                this.recentReadFiles.set(abs, Date.now())
+                context.onReadFile?.(abs)
               } catch {
                 /* 越界读取已被权限层处理，这里忽略 */
               }
@@ -3199,9 +3328,9 @@ export class AgentSession {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, !result.isError)
             }
             if (def.endsTurnOnSuccess && !result.isError) {
-              onTurnEndingTool(def.turnEndReasonOnSuccess)
+              context.onTurnEndingTool?.(def.turnEndReasonOnSuccess)
             }
-            this.loopHealth.record(def.name, parsed.value, result.data, result.isError)
+            loopHealth.record(def.name, parsed.value, result.data, result.isError)
             return result.data
           } catch (error) {
             await finalizeCheckpoint()
@@ -3210,7 +3339,7 @@ export class AgentSession {
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, false)
             }
-            this.loopHealth.record(def.name, parsed.value, msg, true)
+            loopHealth.record(def.name, parsed.value, msg, true)
             return msg
           }
         }
@@ -3242,7 +3371,7 @@ export class AgentSession {
             result: conflict,
             isError: true,
           })
-          this.loopHealth.record(def.name, input, conflict, true)
+          loopHealth.record(def.name, input, conflict, true)
           return Promise.resolve(conflict)
         }
         return executeTool(input, context)

@@ -29,7 +29,6 @@ import {
   createWebSearchTool,
   ensureMcpConfigTemplate,
   ensureProjectMcpConfigTemplate,
-  getModelEntry,
   installSystemSkills,
   loadMcpConfiguration,
   McpSessionRuntime,
@@ -70,7 +69,6 @@ import {
   getConfigPath,
   loadConfig,
   migrateLegacyConfig,
-  parseCliProxyModelId,
   resolveDefaultModelId,
   saveConfig,
   type WhycodeConfig,
@@ -87,7 +85,7 @@ import {
 import { resolveConsensusAgentSetups } from './consensus-models.ts'
 import {
   discoverCliProxyRoutes,
-  unresolvedCliProxyProfiles,
+  applyDiscoveredCliProxyRoutes,
 } from './cli-proxy-discovery.ts'
 import {
   createConnectionSettingsSnapshot,
@@ -1781,61 +1779,20 @@ async function persistConnectionConfig(
   }
 }
 
-async function synchronizeConfiguredCliProxyRoutes(
-  invalidateRuntimeConnections = false,
-): Promise<void> {
-  const loaded = loadAppConfig()
-  if (!loaded) return
-  const config = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModels(loaded))
-  if (config !== loaded) {
-    if (invalidateRuntimeConnections) await persistConnectionConfig(config, true)
-    else await saveConfig(config, configSecretCodec, getConfigPath())
-  }
-  const connection = config.cliProxyApi
+async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
+  const connection = loadAppConfig()?.cliProxyApi
   if (!connection?.apiKey) return
   const modelRoutes = await discoverCliProxyRoutes(
     connection,
     (input, init) => net.fetch(input, init),
   )
-  const modelIds = connection.modelIds.filter((modelId) => Boolean(modelRoutes[modelId]))
-  if (
-    sameStringRecord(connection.modelRoutes, modelRoutes)
-    && sameStringArray(connection.modelIds, modelIds)
-  ) return
-  const next = structuredClone(config)
-  next.cliProxyApi!.modelRoutes = modelRoutes
-  next.cliProxyApi!.modelIds = modelIds
-  const defaultCliProxyModelId = next.defaultModel
-    ? parseCliProxyModelId(next.defaultModel)
-    : null
-  if (defaultCliProxyModelId && !modelIds.includes(defaultCliProxyModelId)) {
-    delete next.defaultModel
-  }
-  const synchronized = pruneInvalidConsensusAgents(pruneInvalidAuxiliaryModels(next))
-  if (invalidateRuntimeConnections) await persistConnectionConfig(synchronized, true)
-  else await saveConfig(synchronized, configSecretCodec, getConfigPath())
+  const latest = loadAppConfig()
+  const next = applyDiscoveredCliProxyRoutes(latest, connection, modelRoutes)
+  if (next && next !== latest) await saveConfig(next, configSecretCodec, getConfigPath())
 }
 
 function syncRetiredModelLabels(excludedSessionId?: string): Promise<void> {
   return persistRuntimePreferences({}, excludedSessionId)
-}
-
-function sameStringRecord(
-  left: Readonly<Record<string, string>>,
-  right: Readonly<Record<string, string>>,
-): boolean {
-  const leftEntries = Object.entries(left)
-  const rightEntries = Object.entries(right)
-  return leftEntries.length === rightEntries.length
-    && leftEntries.every(([key, value]) => right[key] === value)
-}
-
-function sameStringArray(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
-  return left.length === right.length
-    && left.every((value, index) => value === right[index])
 }
 
 async function saveProviderModelSettings(
@@ -1857,11 +1814,6 @@ async function saveCliProxyApiConnectionSettings(
         next.cliProxyApi,
         (input, init) => net.fetch(input, init),
       )
-      const unresolved = unresolvedCliProxyProfiles(next.cliProxyApi.modelIds, modelRoutes)
-      if (unresolved.length > 0) {
-        const names = unresolved.map((modelId) => getModelEntry(modelId).displayName)
-        throw new Error(`当前 CLIProxyAPI 实例没有公布以下等价路由：${names.join('、')}`)
-      }
       next.cliProxyApi.modelRoutes = modelRoutes
     }
     await persistConnectionConfig(next, true)
@@ -2908,7 +2860,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.connectionSettings, async () => {
     if (!mcpOAuthController.isAuthorizing()) {
-      await synchronizeConfiguredCliProxyRoutes(true)
+      await synchronizeConfiguredCliProxyRoutes()
         .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
     }
     return currentConnectionSettingsSnapshot()

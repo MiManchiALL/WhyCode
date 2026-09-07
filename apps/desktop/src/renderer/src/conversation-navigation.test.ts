@@ -258,7 +258,6 @@ function work(
   return [{
     kind,
     id: 'work-1',
-    startedAt: 1,
     userBlocks: [userBlock],
     activityBlocks: [],
     finalBlocks: [answer],

@@ -1,17 +1,12 @@
-import { CircleCheck, TriangleAlert } from 'lucide-react'
+import { CircleCheck, Info, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   expireConversationFeedback,
   holdConversationFeedback,
   releaseConversationFeedback,
   type ConversationFeedbackPhase,
+  type ConversationFeedback,
 } from './conversation-feedback-state.ts'
-
-export interface ConversationFeedback {
-  id: number
-  tone: 'success' | 'error'
-  message: string
-}
 
 const VISIBLE_MS = 3_000
 const EXIT_MS = 680
@@ -72,7 +67,7 @@ export function ConversationFeedbackToast({
     setPhase(releaseConversationFeedback)
   }
 
-  const Icon = feedback.tone === 'success' ? CircleCheck : TriangleAlert
+  const Icon = feedback.tone === 'success' ? CircleCheck : feedback.tone === 'error' ? TriangleAlert : Info
   return (
     <div className="pointer-events-none absolute inset-x-0 top-6 z-50 flex justify-center px-6">
       <div
@@ -82,7 +77,9 @@ export function ConversationFeedbackToast({
         className={`flex max-w-xl items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-[13px] leading-5 shadow-[0_10px_30px_rgba(34,36,31,0.14)] backdrop-blur-md transition-[opacity,transform] duration-[650ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:translate-y-0 motion-reduce:duration-75 ${
           feedback.tone === 'success'
             ? 'border-[#cbd8cd] bg-[#f2f6f1]/95 text-[#38523d]'
-            : 'border-[#dec8bf] bg-[#f8efec]/95 text-[var(--wc-danger)]'
+            : feedback.tone === 'error'
+              ? 'border-[#dec8bf] bg-[#f8efec]/95 text-[var(--wc-danger)]'
+              : 'border-[var(--wc-line)] bg-[var(--wc-surface)] text-[var(--wc-muted)]'
         } ${phase === 'exiting'
           ? 'pointer-events-none translate-y-2 opacity-0'
           : 'pointer-events-auto translate-y-0 opacity-100'

@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   discoverCliProxyRoutes,
-  unresolvedCliProxyProfiles,
+  applyDiscoveredCliProxyRoutes,
 } from './cli-proxy-discovery.ts'
+import type { WhycodeConfig } from './config.ts'
 
 describe('CLIProxyAPI 实例模型目录', () => {
   it('携带密钥读取 /models，并只返回审核过且实际公布的路由', async () => {
@@ -36,11 +37,23 @@ describe('CLIProxyAPI 实例模型目录', () => {
     })
   })
 
-  it('明确报告当前实例没有公布的已选型号', () => {
-    assert.deepEqual(unresolvedCliProxyProfiles(
-      ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
-      { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
-    ), ['google:gemini-3.1-pro-preview'])
+  it('目录暂时缺项仍保留启用选择，恢复后重新获得路由，过期连接响应不覆盖新设置', () => {
+    const modelId = 'google:gemini-3.8-flash'
+    const config: WhycodeConfig = {
+      providers: {}, defaultModel: `cliproxyapi:${modelId}`,
+      cliProxyApi: {
+        apiKey: 'key', baseURL: 'http://127.0.0.1:8317/v1',
+        modelIds: [modelId], modelRoutes: { [modelId]: 'gemini-3.8-flash-high' },
+      },
+    }
+    const missing = applyDiscoveredCliProxyRoutes(config, config.cliProxyApi!, {})!
+    assert.deepEqual(missing.cliProxyApi?.modelIds, [modelId])
+    assert.equal(missing.defaultModel, config.defaultModel)
+    assert.deepEqual(missing.cliProxyApi?.modelRoutes, {})
+    const restored = applyDiscoveredCliProxyRoutes(missing, missing.cliProxyApi!, config.cliProxyApi!.modelRoutes)
+    assert.deepEqual(restored, config)
+    const changed = { ...config, cliProxyApi: { ...config.cliProxyApi!, apiKey: 'new-key' } }
+    assert.equal(applyDiscoveredCliProxyRoutes(changed, config.cliProxyApi!, {}), changed)
   })
 
   it('拒绝错误状态和畸形模型目录', async () => {

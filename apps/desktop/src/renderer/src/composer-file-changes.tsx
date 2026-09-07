@@ -20,7 +20,7 @@ export function ComposerFileChanges({
   )
   return (
     <div
-      className="wc-composer-file-changes relative z-20 mb-2 flex justify-center"
+      className="wc-composer-file-changes relative z-20 min-w-0"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocusCapture={() => setOpen(true)}
@@ -29,16 +29,16 @@ export function ComposerFileChanges({
       }}
     >
       <div
-        className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-[var(--wc-surface)] px-3 py-1 text-xs text-[var(--wc-muted)] shadow-sm"
+        className="wc-focus-ring flex min-w-0 items-center gap-1 rounded-xl border border-[var(--wc-line)] bg-[var(--wc-surface)] px-3 py-1 text-xs text-[var(--wc-muted)] shadow-sm"
         tabIndex={0}
         aria-label={`${changes.length} 个文件已更改`}
       >
-        {changes.length} 个文件已更改{' '}
-        <span className="wc-tool-lines-added tabular-nums">+{totals.added}</span>{' '}
-        <span className="wc-tool-lines-removed tabular-nums">-{totals.removed}</span>
+        <span className="truncate">{changes.length} 个文件已更改</span>
+        <span className="wc-tool-lines-added shrink-0 tabular-nums">+<LineCount value={totals.added} /></span>
+        <span className="wc-tool-lines-removed shrink-0 tabular-nums">-<LineCount value={totals.removed} /></span>
       </div>
       {open ? (
-        <div className="absolute bottom-full left-1/2 w-[min(20rem,calc(100vw-3rem))] -translate-x-1/2 pb-0.5">
+        <div className="absolute bottom-full right-0 w-[min(20rem,calc(100vw-3rem))] pb-0.5">
           <div className="wc-composer-file-popover wc-scrollbar max-h-72 overflow-y-auto rounded-2xl border border-[var(--wc-line)] bg-[var(--wc-surface)] p-1 shadow-xl">
             {changes.map((change) => (
               <div
@@ -48,8 +48,8 @@ export function ComposerFileChanges({
               >
                 <span className="min-w-0 flex-1 truncate text-[var(--wc-muted)]">{change.name}</span>
                 <span className="flex shrink-0 gap-1.5 tabular-nums">
-                  <span className="wc-tool-lines-added">+{change.added}</span>
-                  <span className="wc-tool-lines-removed">-{change.removed}</span>
+                  <span className="wc-tool-lines-added">+<LineCount value={change.added} /></span>
+                  <span className="wc-tool-lines-removed">-<LineCount value={change.removed} /></span>
                 </span>
               </div>
             ))}
@@ -57,5 +57,28 @@ export function ComposerFileChanges({
         </div>
       ) : null}
     </div>
+  )
+}
+
+function LineCount({ value }: { value: number }) {
+  const digits = String(value)
+  return (
+    <span className="inline-flex align-baseline">
+      <span className="sr-only">{digits}</span>
+      <span aria-hidden="true" className="inline-flex">
+        {Array.from(digits, (digit, index) => (
+          <span key={digits.length - index} className="relative inline-block h-[1em] w-[1ch] overflow-hidden">
+            <span
+              className="flex flex-col transition-transform duration-300 ease-out motion-reduce:transition-none"
+              style={{ transform: `translateY(${Number(digit) - 9}em)` }}
+            >
+              {[9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((number) => (
+                <span key={number} className="h-[1em] leading-none">{number}</span>
+              ))}
+            </span>
+          </span>
+        ))}
+      </span>
+    </span>
   )
 }

@@ -43,6 +43,7 @@ export interface CliProxyApiSettingsItem {
     id: string
     displayName: string
     enabled: boolean
+    unavailableReason?: string
     capabilities: ModelCapabilities
   }>
 }

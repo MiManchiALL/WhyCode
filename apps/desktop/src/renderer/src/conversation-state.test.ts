@@ -857,7 +857,7 @@ describe('会话界面时间线重建', () => {
     assert.equal(filesAndChat.fileRollbackBoundaryTurnId, null)
   })
 
-  it('上下文压缩通知使用独立的绿色语义色调', () => {
+  it('上下文压缩通知不写入对话历史', () => {
     const state = createConversationState([core({
       type: 'context-compacted',
       level: 'full',
@@ -865,7 +865,7 @@ describe('会话界面时间线重建', () => {
       postTokens: 26_000,
     })])
 
-    assert.equal(state.blocks[0]?.kind === 'notice' ? state.blocks[0].tone : null, 'compact')
+    assert.deepEqual(state.blocks, [])
   })
 
   it('回滚失败不追加到对话时间线', () => {
@@ -1034,13 +1034,10 @@ describe('会话界面时间线重建', () => {
     assert.equal(state.blocks[0]?.kind, 'user')
     assert.equal(state.blocks[0]?.kind === 'user' ? state.blocks[0].text : null, '')
     assert.equal(state.blocks[0]?.kind === 'user' ? state.blocks[0].attachments?.[0]?.name : '', 'screen.png')
-    assert.match(
-      state.blocks[1]?.kind === 'notice' ? state.blocks[1].text : '',
-      /仅由当前视觉模型处理|跳过协商/,
-    )
+    assert.equal(state.blocks.length, 1)
   })
 
-  it('恢复 PDF 卡片元数据，并明确显示 Main-only 边界', () => {
+  it('恢复 PDF 卡片元数据，但不重放临时提醒', () => {
     const state = createConversationState([{
       type: 'user-message',
       text: '总结 PDF',
@@ -1063,10 +1060,7 @@ describe('会话界面时间线重建', () => {
         : '',
       'guide.pdf',
     )
-    assert.match(
-      state.blocks[1]?.kind === 'notice' ? state.blocks[1].text : '',
-      /仅由 Main 读取|跳过协商/,
-    )
+    assert.equal(state.blocks.length, 1)
   })
 
   it('把 ViewImage 读取结果恢复到对应工具卡片', () => {

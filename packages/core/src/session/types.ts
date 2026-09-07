@@ -45,6 +45,7 @@ import {
 import {
   BTW_MAX_TURNS,
   btwModeSchema,
+  btwToolStepSchema,
   type BtwConversation,
   type BtwConversationTurn,
   type BtwContinuation,
@@ -54,7 +55,7 @@ import {
   type BtwTurnSettlement,
 } from './btw.ts'
 
-export const SESSION_SCHEMA_VERSION = 13
+export const SESSION_SCHEMA_VERSION = 14
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -227,6 +228,7 @@ const btwResponseSchema = chainedEntrySchema.extend({
   turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
   outcome: z.enum(['completed', 'stopped', 'error']),
   assistantText: z.string(),
+  toolSteps: z.array(btwToolStepSchema).optional(),
   reasoningText: z.string(),
   reasoningDurationMs: z.number().nonnegative(),
   durationMs: z.number().nonnegative(),
@@ -234,6 +236,16 @@ const btwResponseSchema = chainedEntrySchema.extend({
   continuationAvailable: z.boolean(),
   error: z.string().min(1).optional(),
 }).superRefine((response, ctx) => {
+  response.toolSteps?.forEach((step, stepIndex) => {
+    step.pdfAttachments?.forEach((attachment, index) => {
+      if (attachment.sessionId !== response.sessionId) {
+        ctx.addIssue({
+          code: 'custom', path: ['toolSteps', stepIndex, 'pdfAttachments', index, 'sessionId'],
+          message: 'PDF 附件必须属于当前会话',
+        })
+      }
+    })
+  })
   if (response.outcome === 'completed' && !response.assistantText.trim()) {
     ctx.addIssue({ code: 'custom', path: ['assistantText'], message: '完成的 BTW 必须包含答复' })
   }

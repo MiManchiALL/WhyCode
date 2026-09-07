@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { ChevronDown } from 'lucide-react'
 import type { Block } from './conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
 import { UserPdfGallery } from './pdf-attachments.tsx'
@@ -9,6 +10,7 @@ type UserBlock = Extract<Block, { kind: 'user' }>
 
 const MESSAGE_EDITOR_BASE_HEIGHT_PX = 64
 const MESSAGE_EDITOR_MAX_HEIGHT_PX = MESSAGE_EDITOR_BASE_HEIGHT_PX * 2.5
+const COLLAPSED_MESSAGE_LINES = 12
 
 interface UserMessageCardProps {
   runtimeId: string
@@ -43,12 +45,10 @@ export function UserMessageCard(props: UserMessageCardProps) {
           </div>
         )
         : props.block.text && (
-          <div className={`wc-user-message-bubble relative flex min-h-11 min-w-0 w-fit max-w-full items-center px-3.5 py-2.5 ${
+          <div className={`wc-user-message-bubble relative flex min-h-11 min-w-0 w-fit max-w-full flex-col items-start px-3.5 py-2.5 ${
             props.block.btw ? 'wc-user-message-bubble-btw' : ''
           }`}>
-            <div className="min-w-0 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {props.block.text}
-            </div>
+            <UserMessageText text={props.block.text} />
           </div>
         )}
       {!editor.editing ? (
@@ -61,6 +61,48 @@ export function UserMessageCard(props: UserMessageCardProps) {
         />
       ) : null}
     </div>
+  )
+}
+
+function UserMessageText({ text }: { text: string }) {
+  const contentId = useId()
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  useEffect(() => setExpanded(false), [text])
+  useLayoutEffect(() => {
+    const element = contentRef.current!
+    const measure = () => setOverflows(
+      element.scrollHeight > parseFloat(getComputedStyle(element).lineHeight) * COLLAPSED_MESSAGE_LINES + 1,
+    )
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [text])
+  return (
+    <>
+      <div
+        id={contentId}
+        ref={contentRef}
+        className="min-w-0 max-w-full overflow-hidden whitespace-pre-wrap [overflow-wrap:anywhere]"
+        style={{ maxHeight: expanded ? undefined : `${COLLAPSED_MESSAGE_LINES}lh` }}
+      >
+        {text}
+      </div>
+      {overflows && (
+        <button
+          type="button"
+          className="wc-focus-ring mt-2 flex items-center gap-1 rounded text-xs text-[var(--wc-muted)]"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? '收起详细输入' : '展开详细输入'}
+          <ChevronDown size={14} className={expanded ? 'rotate-180' : undefined} aria-hidden="true" />
+        </button>
+      )}
+    </>
   )
 }
 

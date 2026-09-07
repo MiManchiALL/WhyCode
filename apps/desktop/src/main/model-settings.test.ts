@@ -237,7 +237,7 @@ describe('模型设置数据边界', () => {
     }
   })
 
-  it('设置快照只显示实例公布的路由，并区分启用状态与实际能力', () => {
+  it('设置快照保留已启用但暂时不可用的型号，并按实际路由展示能力', () => {
     const selected = 'google:gemini-3.1-pro-preview'
     const available = 'openai:gpt-5.6-sol'
     const config: WhycodeConfig = {
@@ -247,7 +247,9 @@ describe('模型设置数据边界', () => {
         modelIds: [selected], modelRoutes: {},
       },
     }
-    assert.deepEqual(createSettingsSnapshot(config).cliProxyApi.models, [])
+    const unavailable = createSettingsSnapshot(config).cliProxyApi.models
+    assert.deepEqual(unavailable.map((model) => [model.id, model.enabled]), [[selected, true]])
+    assert.match(unavailable[0]!.unavailableReason!, /暂未提供/)
     config.cliProxyApi!.modelRoutes = {
       [selected]: 'gemini-3.1-pro-low', [available]: 'gpt-5.6-sol',
     }

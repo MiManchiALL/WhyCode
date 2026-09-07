@@ -485,6 +485,9 @@ function CliProxyApiEditor(props: {
               <input type="checkbox" className="mt-0.5" checked={modelIds.has(model.id)} onChange={() => toggleModel(model.id)} disabled={props.disabled} />
               <span>
                 <span className="block text-neutral-800">{model.displayName}</span>
+                {model.unavailableReason && (
+                  <span className="block wc-type-tiny text-[var(--wc-muted)]">{model.unavailableReason}</span>
+                )}
                 <span className="block wc-type-tiny text-neutral-500">
                   {model.capabilities.supportsImageInput ? '图片' : '仅文本'}
                   {' · '}{formatTokenLimit(model.capabilities.contextWindow)} 上下文

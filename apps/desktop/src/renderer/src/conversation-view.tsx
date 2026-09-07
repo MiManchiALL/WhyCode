@@ -19,7 +19,7 @@ import {
   sameConversationBlockRenderProps,
   type ConversationBlockRenderProps,
 } from './conversation-render-cache.ts'
-import { formatFinishedWorkTime, ProcessingTime } from './processing-time.ts'
+import { formatFinishedWorkTime } from './processing-time.ts'
 import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import {
@@ -31,7 +31,6 @@ import {
 } from './conversation-tool-batches.ts'
 import { ToolBatchGroup } from './tool-batch-group.tsx'
 import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
-import { ConversationTimelineMarker } from './conversation-timeline-marker.tsx'
 import type { RightPanelPage } from './right-panel-state.ts'
 
 interface ConversationViewProps {
@@ -62,7 +61,7 @@ type WorkSectionData = Extract<
 >
 
 type WorkTiming =
-  | { kind: 'active'; startedAt: number }
+  | { kind: 'active' }
   | {
       kind: 'completed'
       durationMs: number
@@ -234,7 +233,7 @@ function WorkSection({
       <WorkSummary
         activityId={activityId}
         timing={section.kind === 'active-work'
-          ? { kind: 'active', startedAt: section.startedAt }
+          ? { kind: 'active' }
           : {
               kind: 'completed',
               durationMs: section.duration.durationMs,
@@ -437,9 +436,9 @@ function ForkBoundary() {
 
 function FileRollbackBoundary() {
   return (
-    <ConversationTimelineMarker tone="rollback">
+    <div className="mb-3 rounded-xl bg-[var(--wc-rollback)] px-3 py-2 text-xs text-[var(--wc-rollback-ink)]" data-conversation-timeline-marker="rollback">
       文件已回退至此检查点
-    </ConversationTimelineMarker>
+    </div>
   )
 }
 
@@ -457,7 +456,7 @@ function WorkSummary({
   onToggle: () => void
 }) {
   const label = timing.kind === 'active'
-    ? <ProcessingTime startedAt={timing.startedAt} />
+    ? '处理过程'
     : formatFinishedWorkTime(timing.durationMs, timing.outcome)
   return (
     <div className="mb-3 px-1 text-xs text-[var(--wc-faint)]">

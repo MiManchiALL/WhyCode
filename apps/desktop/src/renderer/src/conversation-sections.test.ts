@@ -7,7 +7,6 @@ import {
   isFileRollbackBoundarySection,
   isForkBoundarySection,
   shouldSealTrailingToolBatch,
-  shouldShowComposerProcessingTime,
   type ConversationSection,
 } from './conversation-sections.ts'
 
@@ -176,7 +175,6 @@ describe('已完成任务的会话展示投影', () => {
 
     const active = asActive(sections[0])
     assert.equal(active.id, 'work-user-1')
-    assert.equal(active.startedAt, 1_000)
     assert.deepEqual(ids(active.userBlocks), ['user-1'])
     assert.deepEqual(ids(active.activityBlocks), ['thinking-1', 'tool-1'])
     assert.deepEqual(ids(active.finalBlocks), ['answer'])
@@ -192,22 +190,6 @@ describe('已完成任务的会话展示投影', () => {
 
     assert.deepEqual(sections.map((section) => section.kind), ['block', 'block', 'block'])
     assert.deepEqual(sections.map((section) => section.id), ids(blocks))
-  })
-
-  it('活动任务摘要出现后只保留摘要内计时，不再显示输入区计时', () => {
-    const runningSections = conversationSections([
-      user('user-1', 'turn-1'),
-      tool('tool-1'),
-    ], 1_000)
-    const activeSections = conversationSections([
-      user('user-1', 'turn-1'),
-      tool('tool-1'),
-      text('answer', '正在流式输出最终回答'),
-    ], 1_000)
-
-    assert.equal(shouldShowComposerProcessingTime(null, runningSections), false)
-    assert.equal(shouldShowComposerProcessingTime(1_000, runningSections), true)
-    assert.equal(shouldShowComposerProcessingTime(1_000, activeSections), false)
   })
 
   it('正文后继续调用工具时恢复运行中逐块展示', () => {
@@ -260,42 +242,6 @@ describe('已完成任务的会话展示投影', () => {
         ['block', 'tool-3'],
       ],
     )
-  })
-
-  it('让终态错误与相邻正文一起保持可见', () => {
-    const sections = conversationSections([
-      user('user-1', 'turn-1'),
-      tool('tool-1'),
-      text('answer', '已完成主要步骤'),
-      error('error-1'),
-      duration('duration-1'),
-    ])
-
-    const completed = asCompleted(sections[0])
-    assert.deepEqual(ids(completed.activityBlocks), ['tool-1'])
-    assert.deepEqual(ids(completed.finalBlocks), ['answer', 'error-1'])
-  })
-
-  it('把下一轮开始前的回滚通知留在用户消息上方', () => {
-    const sections = conversationSections([
-      notice('rollback', '已回滚：该轮对话与文件改动均已撤销'),
-      user('user-1', 'turn-1'),
-      thinking('thinking-1'),
-      text('answer', '你好'),
-      duration('duration-1'),
-    ])
-
-    assert.deepEqual(
-      sections.map((section) => [section.kind, section.id]),
-      [
-        ['block', 'rollback'],
-        ['completed-work', 'work-user-1'],
-      ],
-    )
-    const completed = asCompleted(sections[1])
-    assert.deepEqual(ids(completed.userBlocks), ['user-1'])
-    assert.deepEqual(ids(completed.activityBlocks), ['thinking-1'])
-    assert.deepEqual(ids(completed.finalBlocks), ['answer'])
   })
 
   it('用户停止任务后仍生成可折叠工作区，并保留工具、模型输出和停止终态', () => {
@@ -379,14 +325,6 @@ function tool(id: string): Block {
       progress: '',
     },
   }
-}
-
-function error(id: string): Block {
-  return { kind: 'error', id, text: '失败' }
-}
-
-function notice(id: string, text: string): Block {
-  return { kind: 'notice', id, text }
 }
 
 function duration(

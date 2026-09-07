@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
+import type { BtwToolStep } from './btw.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { ConsensusPersistedState } from '../consensus/types.ts'
 import {
@@ -1762,17 +1763,30 @@ describe('SessionStore', () => {
     const first = await journal.recordBtwInput('btw', '第一条题外问题')
     assert.equal(first.turnIndex, 1)
     assert.deepEqual(first.history, [])
+    const toolSteps: BtwToolStep[] = [{
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'side-read', toolName: 'ReadFile', input: { path: 'example.ts' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'side-read', toolName: 'ReadFile', output: { type: 'text', value: '文件正文' } }] },
+      ],
+      reasoningDurationMs: 0,
+      toolErrors: [],
+    }]
     await journal.recordBtwResponse(first, {
       outcome: 'completed',
       assistantText: '第一条回答',
+      toolSteps,
       reasoningText: '',
       reasoningDurationMs: 0,
       durationMs: 120,
     })
 
+    const resumed = await store.open(journal.sessionId)
+    assert.deepEqual(resumed.btwContinuation?.turns[0]?.toolSteps, toolSteps)
+    assert.deepEqual(resumed.initialMessages, [])
     const second = await journal.recordBtwInput('bbtw', '继续追问')
     assert.equal(second.conversationId, first.conversationId)
     assert.equal(second.turnIndex, 2)
+    assert.deepEqual(second.history[0]?.toolSteps, toolSteps)
     assert.deepEqual(second.history.map((turn) => [turn.text, turn.assistantText]), [
       ['第一条题外问题', '第一条回答'],
     ])
@@ -1802,6 +1816,12 @@ describe('SessionStore', () => {
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.initialMessages, [])
     assert.equal(reopened.btwContinuation, null)
+    assert.deepEqual(reopened.initialViewEvents.flatMap((event) =>
+      event.type === 'core-event' && (event.event.type === 'tool-start' || event.event.type === 'tool-end')
+        ? [event.event] : []), [
+      { type: 'tool-start', toolUseId: 'side-read', toolName: 'ReadFile', input: { path: 'example.ts' } },
+      { type: 'tool-end', toolUseId: 'side-read', result: '文件正文', isError: false },
+    ])
     const sideInputs = reopened.initialViewEvents.filter((event) =>
       event.type === 'user-message' && event.btw)
     assert.deepEqual(sideInputs.map((event) =>

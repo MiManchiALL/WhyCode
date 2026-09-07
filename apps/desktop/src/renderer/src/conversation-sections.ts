@@ -7,7 +7,6 @@ export type ConversationSection =
   | {
       kind: 'active-work'
       id: string
-      startedAt: number
       userBlocks: Block[]
       activityBlocks: Block[]
       finalBlocks: Block[]
@@ -90,18 +89,6 @@ export function isFileRollbackBoundarySection(
 }
 
 /**
- * 输入区计时只在处理过程仍逐块展开时显示；活动任务摘要已经自带同一计时，
- * 两处不能同时出现。
- */
-export function shouldShowComposerProcessingTime(
-  workStartedAt: number | null,
-  sections: readonly ConversationSection[],
-): boolean {
-  return workStartedAt !== null
-    && !sections.some((section) => section.kind === 'active-work')
-}
-
-/**
  * 最终正文和用户停止只封口执行过程末尾的工具批次；是否展开整个执行过程仍由
  * ConversationState.expanded 独立决定。
  */
@@ -124,7 +111,6 @@ function appendActiveWork(
   sections.push({
     kind: 'active-work',
     id: workSectionId(work, `active-${startedAt}`),
-    startedAt,
     ...sectionBlocks(work, finalIndexes),
   })
   return true

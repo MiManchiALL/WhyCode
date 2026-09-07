@@ -19,7 +19,6 @@ import {
   summarizeToolCallParts,
   toolCallDetails,
 } from './tool-call-summary.ts'
-import { ConversationTimelineMarker } from './conversation-timeline-marker.tsx'
 
 export function BlockView({
   runtimeId,
@@ -94,16 +93,6 @@ export function BlockView({
           />
         ) : null}
       </div>
-    )
-  }
-  if (block.kind === 'error') {
-    return <div className="wc-menu-surface mb-3 border-[#dec8bf] bg-[#f8efec] px-3 py-2 wc-type-control text-[var(--wc-danger)]">{block.text}</div>
-  }
-  if (block.kind === 'notice') {
-    return (
-      <ConversationTimelineMarker tone={block.tone ?? 'neutral'}>
-        {block.text}
-      </ConversationTimelineMarker>
     )
   }
   if (block.kind === 'peer') {

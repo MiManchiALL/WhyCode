@@ -1,4 +1,4 @@
-import type { CliProxyApiConfig } from './config.ts'
+import type { CliProxyApiConfig, WhycodeConfig } from './config.ts'
 import {
   CLI_PROXY_MODEL_COMPATIBILITY,
   resolveCliProxyRoutes,
@@ -44,11 +44,19 @@ export async function discoverCliProxyRoutes(
   )
 }
 
-export function unresolvedCliProxyProfiles(
-  modelIds: readonly string[],
-  routes: Readonly<Record<string, string>>,
-): string[] {
-  return modelIds.filter((modelId) => !routes[modelId])
+export function applyDiscoveredCliProxyRoutes(
+  config: WhycodeConfig | null,
+  connection: Pick<CliProxyApiConfig, 'apiKey' | 'baseURL'>,
+  modelRoutes: Record<string, string>,
+): WhycodeConfig | null {
+  if (!config) return config
+  const current = config.cliProxyApi
+  if (!current || current.apiKey !== connection.apiKey || current.baseURL !== connection.baseURL) return config
+  const entries = Object.entries(current.modelRoutes)
+  if (entries.length === Object.keys(modelRoutes).length
+    && entries.every(([id, route]) => modelRoutes[id] === route)) return config
+  // 实例目录只描述当前可用性，不能改写用户的启用选择。
+  return { ...config, cliProxyApi: { ...current, modelRoutes } }
 }
 
 function modelsEndpoint(baseURL: string): string {

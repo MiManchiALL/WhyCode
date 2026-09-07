@@ -77,7 +77,7 @@ function withImages(part: ToolResultPart, result: ImageToolResult): ToolResultPa
   }
 }
 
-function toolOutputText(output: ToolResultPart['output']): string {
+export function toolOutputText(output: ToolResultPart['output']): string {
   switch (output.type) {
     case 'text':
     case 'error-text':

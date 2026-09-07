@@ -275,7 +275,7 @@ function assistantPreview(blocks: readonly Block[]): string | null {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
     if (!block) continue
-    const text = block.kind === 'text' || block.kind === 'notice' || block.kind === 'error'
+    const text = block.kind === 'text'
       ? block.text
       : null
     if (!text) continue
@@ -328,7 +328,7 @@ function sameUser(left: Block, right: Block): boolean {
 function previewBlock(blocks: readonly Block[]): Block | undefined {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
-    if (block?.kind === 'text' || block?.kind === 'notice' || block?.kind === 'error') {
+    if (block?.kind === 'text') {
       return block
     }
   }

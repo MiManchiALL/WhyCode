@@ -69,15 +69,12 @@ describe('模型空窗反馈', () => {
     ]), null)
   })
 
-  it('正文或其它静态反馈停止更新后补上 Heart Wave', () => {
+  it('正文停止更新后补上 Heart Wave', () => {
     assert.equal(delay([
       user,
       { kind: 'text', id: 'text-1', text: '正在输出', phase: 'pending' },
     ]), THINKING_GAP_VISIBLE_IDLE_MS)
-    assert.equal(delay([
-      user,
-      { kind: 'notice', id: 'notice-1', text: '阶段状态' },
-    ]), THINKING_GAP_VISIBLE_IDLE_MS)
+
   })
 
   it('任一并行工具仍在运行时不与工具转圈重复', () => {
