@@ -20,7 +20,7 @@ export function ComposerFileChanges({
   )
   return (
     <div
-      className="wc-composer-file-changes relative z-20 min-w-0"
+      className="wc-composer-file-changes relative z-20 min-w-0 max-w-full justify-self-center"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocusCapture={() => setOpen(true)}
@@ -38,7 +38,7 @@ export function ComposerFileChanges({
         <span className="wc-tool-lines-removed shrink-0 tabular-nums">-<LineCount value={totals.removed} /></span>
       </div>
       {open ? (
-        <div className="absolute bottom-full right-0 w-[min(20rem,calc(100vw-3rem))] pb-0.5">
+        <div className="absolute bottom-full left-1/2 w-[min(20rem,calc(100vw-3rem))] -translate-x-1/2 pb-0.5">
           <div className="wc-composer-file-popover wc-scrollbar max-h-72 overflow-y-auto rounded-2xl border border-[var(--wc-line)] bg-[var(--wc-surface)] p-1 shadow-xl">
             {changes.map((change) => (
               <div

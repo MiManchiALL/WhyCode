@@ -2061,8 +2061,8 @@ export function App() {
                 )}
 
                 {workStartedAt !== null && (
-                  <div className="mb-1.5 flex min-w-0 items-center justify-between gap-3 px-2 text-xs">
-                    <span className="shrink-0 text-[var(--wc-faint)]">
+                  <div className="mb-1.5 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-3 px-2 text-xs">
+                    <span className="whitespace-nowrap text-[var(--wc-faint)]">
                       <ProcessingTime startedAt={workStartedAt} />
                     </span>
                     <ComposerFileChanges changes={currentFileChanges} />
