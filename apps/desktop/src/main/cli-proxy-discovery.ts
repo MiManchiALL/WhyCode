@@ -14,6 +14,25 @@ const MAX_RESPONSE_BYTES = 2_000_000
 const MAX_MODEL_COUNT = 10_000
 const MAX_MODEL_ID_LENGTH = 300
 
+export function createCliProxyRouteSynchronizer(
+  loadConfig: () => WhycodeConfig | null,
+  saveConfig: (config: WhycodeConfig) => Promise<void>,
+  fetchImpl: FetchImplementation,
+): () => Promise<void> {
+  let inFlight: Promise<void> | null = null
+  return () => {
+    inFlight ??= (async () => {
+      const connection = loadConfig()?.cliProxyApi
+      if (!connection?.apiKey) return
+      const routes = await discoverCliProxyRoutes(connection, fetchImpl)
+      const latest = loadConfig()
+      const next = applyDiscoveredCliProxyRoutes(latest, connection, routes)
+      if (next && next !== latest) await saveConfig(next)
+    })().finally(() => { inFlight = null })
+    return inFlight
+  }
+}
+
 export async function discoverCliProxyRoutes(
   connection: Pick<CliProxyApiConfig, 'apiKey' | 'baseURL'>,
   fetchImpl: FetchImplementation,

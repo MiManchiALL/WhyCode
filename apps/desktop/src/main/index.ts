@@ -85,7 +85,7 @@ import {
 import { resolveConsensusAgentSetups } from './consensus-models.ts'
 import {
   discoverCliProxyRoutes,
-  applyDiscoveredCliProxyRoutes,
+  createCliProxyRouteSynchronizer,
 } from './cli-proxy-discovery.ts'
 import {
   createConnectionSettingsSnapshot,
@@ -1779,17 +1779,11 @@ async function persistConnectionConfig(
   }
 }
 
-async function synchronizeConfiguredCliProxyRoutes(): Promise<void> {
-  const connection = loadAppConfig()?.cliProxyApi
-  if (!connection?.apiKey) return
-  const modelRoutes = await discoverCliProxyRoutes(
-    connection,
-    (input, init) => net.fetch(input, init),
-  )
-  const latest = loadAppConfig()
-  const next = applyDiscoveredCliProxyRoutes(latest, connection, modelRoutes)
-  if (next && next !== latest) await saveConfig(next, configSecretCodec, getConfigPath())
-}
+const synchronizeConfiguredCliProxyRoutes = createCliProxyRouteSynchronizer(
+  loadAppConfig,
+  (config) => saveConfig(config, configSecretCodec, getConfigPath()),
+  (input, init) => net.fetch(input, init),
+)
 
 function syncRetiredModelLabels(excludedSessionId?: string): Promise<void> {
   return persistRuntimePreferences({}, excludedSessionId)
@@ -2841,7 +2835,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (!runtime) return { ok: false }
     return handleCommand(runtime, envelope.command)
   })
-  ipcMain.handle(IPC.listModels, (_e, runtimeId?: string) => {
+  ipcMain.handle(IPC.listModels, async (_e, runtimeId?: string) => {
+    await synchronizeConfiguredCliProxyRoutes()
+      .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
     const runtime = runtimeForId(runtimeId)
     return listModelConnections(loadAppConfig(), resolveCurrentModelId(runtime))
   })

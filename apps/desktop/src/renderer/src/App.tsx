@@ -1082,7 +1082,6 @@ export function App() {
   }, [applySubagentState])
 
   useEffect(() => {
-    void window.whycode.listModels().then(setModels)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
   }, [refreshSessions])
@@ -1170,6 +1169,7 @@ export function App() {
       )
       for (const entry of pendingEvents) consumeEvent(entry.event, entry.occurredAt)
       void refreshSessions()
+      void refreshModelCatalog()
     }).catch(() => {
       if (disposed) return
       hydrated = true
@@ -1186,6 +1186,7 @@ export function App() {
   }, [
     applyRuntimeSnapshot,
     consumeEvent,
+    refreshModelCatalog,
     refreshSessions,
     synchronizeUnownedResume,
   ])
@@ -1845,6 +1846,24 @@ export function App() {
   }, [])
 
   const selectedModel = models.find((model) => model.id === modelId)
+  const modelNeedsRefresh = Boolean(selectedModel?.hasKey && !selectedModel.available && !selectedModel.retired)
+  useEffect(() => {
+    if (!modelNeedsRefresh) return
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      // 代理启动时可能先返回部分目录；可用后由依赖变化撤销重查。
+      void refreshModelCatalog().catch(() => {})
+    }
+    const timer = window.setInterval(refresh, 15_000)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [modelNeedsRefresh, refreshModelCatalog])
+  const modelUnavailableReason = selectedModel?.available
+    ? null
+    : selectedModel?.unavailableReason ?? '当前没有可用模型'
   const canAttachImages = Boolean(
     selectedModel?.available
       && (btwMode ? selectedModel.imageInputMode === 'native' : selectedModel.imageInputMode !== 'none'),
@@ -1861,11 +1880,11 @@ export function App() {
     }
     if (imageFiles.length > 0) {
       if (canAttachImages) addImageFiles(imageFiles)
-      else showError('当前模型没有可用的原生或辅助识图能力；PDF 仍可添加')
+      else showError(modelUnavailableReason ?? '当前模型没有可用的原生或辅助识图能力；PDF 仍可添加')
     }
     if (pdfFiles.length > 0) {
       if (canAttachPdfs) addPdfFiles(pdfFiles)
-      else showError('当前没有可用模型，无法添加 PDF')
+      else showError(modelUnavailableReason ?? '当前对话模式不支持添加 PDF')
     }
   }, [
     showError,
@@ -1874,10 +1893,12 @@ export function App() {
     attachmentLocked,
     canAttachImages,
     canAttachPdfs,
+    modelUnavailableReason,
   ])
   const attachmentDrop = useAttachmentDropTarget({
     canAttachImages,
     canAttachPdfs,
+    modelUnavailableReason,
     interactionBusy: attachmentLocked,
     onImageFiles: addImageFiles,
     onPdfFiles: addPdfFiles,

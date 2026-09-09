@@ -96,7 +96,7 @@ export function listModelConnections(
           listItem(
             cliProxyEntry(baseEntry, route),
             resolveModelConnection(config, selectedModelId),
-            false,
+            Boolean(config?.cliProxyApi?.apiKey),
             auxiliaryVisionAvailable,
           ),
         ]
@@ -120,7 +120,7 @@ export function listModelConnections(
         listItem(
           entry,
           resolveModelConnection(config, selectedModelId),
-          false,
+          Boolean(config?.providers[entry.provider]?.apiKey),
           auxiliaryVisionAvailable,
         ),
       ]

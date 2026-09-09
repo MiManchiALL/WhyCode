@@ -3,8 +3,10 @@ import { describe, it } from 'node:test'
 import {
   discoverCliProxyRoutes,
   applyDiscoveredCliProxyRoutes,
+  createCliProxyRouteSynchronizer,
 } from './cli-proxy-discovery.ts'
 import type { WhycodeConfig } from './config.ts'
+import { listModelConnections } from './model-connections.ts'
 
 describe('CLIProxyAPI 实例模型目录', () => {
   it('携带密钥读取 /models，并只返回审核过且实际公布的路由', async () => {
@@ -37,7 +39,7 @@ describe('CLIProxyAPI 实例模型目录', () => {
     })
   })
 
-  it('目录暂时缺项仍保留启用选择，恢复后重新获得路由，过期连接响应不覆盖新设置', () => {
+  it('并发刷新共享请求，目录缺项保留选择，后续刷新恢复能力且不覆盖新连接', async () => {
     const modelId = 'google:gemini-3.8-flash'
     const config: WhycodeConfig = {
       providers: {}, defaultModel: `cliproxyapi:${modelId}`,
@@ -46,12 +48,38 @@ describe('CLIProxyAPI 实例模型目录', () => {
         modelIds: [modelId], modelRoutes: { [modelId]: 'gemini-3.8-flash-high' },
       },
     }
-    const missing = applyDiscoveredCliProxyRoutes(config, config.cliProxyApi!, {})!
+    let current = config
+    let advertised: string[] = []
+    let requests = 0
+    const synchronize = createCliProxyRouteSynchronizer(
+      () => current,
+      async (next) => { current = next },
+      async () => {
+        requests++
+        return Response.json({ data: advertised.map((id) => ({ id })) })
+      },
+    )
+    const first = synchronize()
+    assert.equal(synchronize(), first)
+    await first
+    assert.equal(requests, 1)
+    const missing = current
     assert.deepEqual(missing.cliProxyApi?.modelIds, [modelId])
     assert.equal(missing.defaultModel, config.defaultModel)
     assert.deepEqual(missing.cliProxyApi?.modelRoutes, {})
-    const restored = applyDiscoveredCliProxyRoutes(missing, missing.cliProxyApi!, config.cliProxyApi!.modelRoutes)
-    assert.deepEqual(restored, config)
+    const unavailable = listModelConnections(missing, config.defaultModel).at(-1)!
+    assert.equal(unavailable.hasKey, true)
+    assert.equal(unavailable.available, false)
+    assert.equal(unavailable.supportsImageInput, true)
+    assert.equal(unavailable.imageInputMode, 'none')
+    assert.match(unavailable.unavailableReason!, /实例没有公布/)
+    advertised = ['gemini-3.8-flash-high']
+    await synchronize()
+    assert.equal(requests, 2)
+    assert.deepEqual(current, config)
+    const available = listModelConnections(current, config.defaultModel).at(-1)!
+    assert.equal(available.available, true)
+    assert.equal(available.imageInputMode, 'native')
     const changed = { ...config, cliProxyApi: { ...config.cliProxyApi!, apiKey: 'new-key' } }
     assert.equal(applyDiscoveredCliProxyRoutes(changed, config.cliProxyApi!, {}), changed)
   })

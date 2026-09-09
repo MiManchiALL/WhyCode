@@ -3,6 +3,7 @@ import { useCallback, useRef, useState, type DragEvent } from 'react'
 interface AttachmentDropOptions {
   canAttachImages: boolean
   canAttachPdfs: boolean
+  modelUnavailableReason: string | null
   interactionBusy: boolean
   onImageFiles: (files: readonly File[]) => void
   onPdfFiles: (files: readonly File[]) => void
@@ -13,6 +14,7 @@ export function useAttachmentDropTarget(options: AttachmentDropOptions) {
   const {
     canAttachImages,
     canAttachPdfs,
+    modelUnavailableReason,
     interactionBusy,
     onImageFiles,
     onPdfFiles,
@@ -61,11 +63,11 @@ export function useAttachmentDropTarget(options: AttachmentDropOptions) {
     const classified = classifyAttachmentFiles(files)
     if (classified.pdfs.length > 0) {
       if (canAttachPdfs) onPdfFiles(classified.pdfs)
-      else onError('当前没有可用模型，无法添加 PDF')
+      else onError(modelUnavailableReason ?? '当前对话模式不支持添加 PDF')
     }
     if (classified.images.length > 0) {
       if (canAttachImages) onImageFiles(classified.images)
-      else onError('当前模型不支持拖放图片；PDF 仍可添加')
+      else onError(modelUnavailableReason ?? '当前模型不支持拖放图片；PDF 仍可添加')
     }
     if (classified.unsupported.length > 0) {
       onError(`仅支持 PNG、JPEG、WebP 和 PDF；已忽略 ${classified.unsupported.length} 个文件`)
@@ -73,6 +75,7 @@ export function useAttachmentDropTarget(options: AttachmentDropOptions) {
   }, [
     canAttachImages,
     canAttachPdfs,
+    modelUnavailableReason,
     interactionBusy,
     onError,
     onImageFiles,
