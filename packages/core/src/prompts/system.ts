@@ -17,6 +17,7 @@ import {
 import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
 import type { SubagentDefinitionCatalogSnapshot } from '../subagents/types.ts'
+import { BTW_SYSTEM_PROMPT } from './btw.ts'
 
 export interface PromptContext {
   /** 当前会话的真实工作目录；默认会话在首条消息前物化受管目录。 */
@@ -211,6 +212,7 @@ export function buildSystemPrompt(
   if (ctx.subagents && !ctx.discussion && !ctx.subagent) {
     sections.push(parentSubagentSection(ctx.subagents))
   }
+  if (!ctx.discussion && !ctx.subagent) sections.push(BTW_SYSTEM_PROMPT)
   if (!ctx.discussion) sections.push(taskPlanningSection())
   sections.push(safetySection())
   const builtInPrompt = sections.join('\n\n')

@@ -128,7 +128,11 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 `btw-message {mode,text,attachments?}` 是独立于普通 `user-message` 的命令。宿主只在会话空闲且已有稳定 Main 背景时接受；协议没有 PDF、Skill 或恢复队列字段，图片必须由当前模型原生接收。BTW 总是创建新 `conversationId`，BBTW 只能续接最近有效侧链；用户输入一经持久化即占用一轮，完成或停止且未满三轮都保留续接资格。普通用户输入、新 BTW、错误、回滚或第三轮终态会结束续接资格。
 
-模型请求顺序为：会话 System 加精简 BTW 边界、Main 稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入。停止轮次在原用户消息、已提交工具步骤和可用回复片段后追加与 Main 相同的中断标记。可用工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind；执行沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。工具结果继续进入侧请求，直到模型交付正文或运行停止。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
+模型请求复用 Main 的 System、完整工具声明及顺序、模型/思考配置和冻结 Skill 目录。System 的固定规则说明临时问答不推进主任务及允许的工具；进入 BTW 不再修改 System 或过滤工具目录。MCP 沿用会话当前装配的声明，侧请求不提交 MCP 状态变化。
+
+消息顺序为：按 Main 相同规则投影的稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入及其 `<whycode-btw version="1">` 内部 user 提醒。提醒是宿主状态，不是新的用户要求；工具续轮沿用原提醒，BBTW 重建每轮输入时保留提醒原位，再追加新输入与提醒。Skill 目录继续参与前缀投影，活动正文仍遵循根任务生命周期。停止轮次在原输入及提醒、已提交工具步骤和可用回复片段后追加与 Main 相同的中断标记。
+
+允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind，名单与提示词共用 `packages/core/src/prompts/btw.ts`。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
 
 `edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
 

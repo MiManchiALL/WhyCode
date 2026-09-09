@@ -20,6 +20,7 @@ import {
 } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
+import { BTW_TOOL_NAMES, createBtwUserMessages } from '../prompts/btw.ts'
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
 import {
   createCurrentTimeReminder,
@@ -172,10 +173,6 @@ import type {
   BtwTurnResult,
   BtwToolStep,
 } from '../session/btw.ts'
-import { LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME } from '../tools/list-glob/index.ts'
-import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
-import { WEB_SEARCH_TOOL_NAME } from '../tools/web-search/prompt.ts'
-import { WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME } from '../tools/web-page/prompt.ts'
 
 export type {
   ApprovalHandler,
@@ -188,15 +185,14 @@ const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
 const TASK_PROGRESS_REMINDER_STEPS = 10
 const MAX_COMPACT_FAILURES = 3
-const BTW_TOOL_NAMES = new Set([
-  READ_FILE_TOOL_NAME, LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME,
-  WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME,
-])
 
 interface ToolStepContext {
   emit: (event: CoreEvent) => void
   loopHealth: LoopHealthMonitor
+  allowedToolNames?: ReadonlySet<string>
   planExecutionEngaged?: boolean
+  onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
+  onUserQuestion?: (question: UserQuestion) => void
   onTurnEndingTool?: (reason: 'completed' | 'waiting-user') => void
   onReadFile?: (path: string) => void
   onImageAttachments?: (
@@ -554,12 +550,7 @@ export class AgentSession {
       )
       const tools = this.buildToolSet(
         abortSignal,
-        false,
-        () => {},
-        () => {},
-        () => {},
-        async () => null,
-        async () => null,
+        { emit: this.options.emit, loopHealth: this.loopHealth },
         [],
       )
       const overhead = await estimateRequestContextOverhead(
@@ -782,9 +773,7 @@ export class AgentSession {
   ): Promise<BtwTurnResult> {
     const baseMessages = this.captureMessageSnapshot()
     const sideMessages = context.history.flatMap((turn): ModelMessage[] => {
-      const messages: ModelMessage[] = [turn.attachments.length
-        ? createImageUserMessage(turn.text, turn.attachments, 'native')
-        : { role: 'user', content: turn.text }]
+      const messages = createBtwUserMessages(turn)
       messages.push(...turn.toolSteps?.flatMap((step) => step.messages) ?? [])
       if (turn.assistantText) {
         messages.push({ role: 'assistant', content: turn.assistantText })
@@ -794,14 +783,11 @@ export class AgentSession {
       }
       return messages
     })
-    const currentMessage: ModelMessage = context.attachments.length
-      ? createImageUserMessage(context.text, context.attachments, 'native')
-      : { role: 'user', content: context.text }
-    const system = `${buildSystemPrompt(
+    const system = buildSystemPrompt(
       this.options.promptContext,
       this.options.customSystemPrompt,
-    )}\n\n<whycode-btw>\n结合主对话背景回答当前侧问题，按需使用可用的只读工具核实。侧问答独立于主任务。\n</whycode-btw>`
-    const requestMessages = [...baseMessages, ...sideMessages, currentMessage]
+    )
+    const requestMessages = [...baseMessages, ...sideMessages, ...createBtwUserMessages(context)]
     const toolSteps: BtwToolStep[] = []
     const loopHealth = new LoopHealthMonitor()
     let lastUndeliverable: UndeliverableModelResponseError | null = null
@@ -810,7 +796,7 @@ export class AgentSession {
       try {
         const result = await this.runBtwModelAttempt(
           system,
-          await this.messagesForCurrentModel(requestMessages, turnAbortSignal, false),
+          await this.messagesForCurrentModel(requestMessages, turnAbortSignal),
           emit, turnAbortSignal, loopHealth,
         )
         if (result.toolStep) {
@@ -874,10 +860,10 @@ export class AgentSession {
     const toolErrors: string[] = []
     const stepPdfAttachments = new Map<string, PdfAttachment[]>()
     let attachmentsCommitted = false
+    let mcpStep: McpStepBinding | null = null
     try {
-      const tools = this.wrapToolDefinitions(
-        [...(this.options.baseTools ?? BUILTIN_TOOLS), ...(this.options.mainTools ?? [])]
-          .filter((def) => BTW_TOOL_NAMES.has(def.name)),
+      mcpStep = await this.options.mcpRuntime?.beginStep(this.messages, stepAbort.signal) ?? null
+      const tools = this.buildToolSet(
         stepAbort.signal,
         {
           emit: (event) => {
@@ -885,9 +871,11 @@ export class AgentSession {
             emit(event)
           },
           loopHealth,
+          allowedToolNames: BTW_TOOL_NAMES,
           onPdfAttachments: (id, attachments) =>
             this.acceptToolPdfAttachments(stepPdfAttachments, id, attachments),
         },
+        mcpStep?.toolDefinitions() ?? [],
       )
       const stream = streamText({
         model: this.createLanguageModel(),
@@ -996,6 +984,7 @@ export class AgentSession {
       }
       throw error
     } finally {
+      mcpStep?.discard()
       if (!attachmentsCommitted && this.options.sessionRecorder) {
         await removePdfAttachmentFiles(
           this.options.sessionRecorder.attachmentDirectory,
@@ -2579,12 +2568,16 @@ export class AgentSession {
         stepAbort.signal,
       )
       const requestTools = this.buildToolSet(
-          stepAbort.signal,
+        stepAbort.signal,
+        {
+          emit,
+          loopHealth: this.loopHealth,
           planExecutionEngaged,
-          (action) => { stepControl.taskPlanEngagement = action },
-          (question) => { userQuestion = question },
-          (reason) => { stepControl.toolEndReason = reason },
-          async (toolCallId, attachments, transform, attachmentLimit) => {
+          onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
+          onUserQuestion: (question) => { userQuestion = question },
+          onTurnEndingTool: (reason) => { stepControl.toolEndReason = reason },
+          onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
+          onImageAttachments: async (toolCallId, attachments, transform, attachmentLimit) => {
             const parsed = createImageAttachmentsSchema(attachmentLimit).safeParse(attachments)
             const parsedTransform = imageTransformSchema.safeParse(transform ?? { detail: 'high' })
             if (
@@ -2624,10 +2617,11 @@ export class AgentSession {
             })
             return null
           },
-          (toolCallId, attachments) =>
+          onPdfAttachments: (toolCallId, attachments) =>
             this.acceptToolPdfAttachments(stepPdfAttachments, toolCallId, attachments),
-          mcpStep?.toolDefinitions() ?? [],
-        )
+        },
+        mcpStep?.toolDefinitions() ?? [],
+      )
       const requestOverhead = await estimateRequestContextOverhead(
         requestSystemPrompt,
         requestTools,
@@ -2926,20 +2920,7 @@ export class AgentSession {
   /** 包装当前角色可用的完整工具集；权限档位只在调用边界判定，不改变模型工具目录。 */
   private buildToolSet(
     abortSignal: AbortSignal,
-    planExecutionEngaged: boolean,
-    onTaskPlanEngagement: (action: TaskPlanEngagementAction) => void,
-    onUserQuestion: (question: UserQuestion) => void,
-    onTurnEndingTool: (reason: 'completed' | 'waiting-user') => void,
-    onImageAttachments: (
-      toolCallId: string,
-      attachments: readonly ImageAttachment[],
-      transform: ImageTransform | undefined,
-      attachmentLimit: number,
-    ) => Promise<string | null>,
-    onPdfAttachments: (
-      toolCallId: string,
-      attachments: readonly PdfAttachment[],
-    ) => Promise<string | null>,
+    context: ToolStepContext,
     mcpTools: readonly ToolDefinition[],
   ): ToolSet | undefined {
     const model = this.currentModelSelection().model
@@ -2948,8 +2929,8 @@ export class AgentSession {
       && !this.options.promptContext.discussion
       && !this.protocolRound
       ? createTaskPlanTools(this.taskPlan, {
-          onEngagementAction: onTaskPlanEngagement,
-          isEngaged: () => planExecutionEngaged,
+          onEngagementAction: (action) => context.onTaskPlanEngagement?.(action),
+          isEngaged: () => context.planExecutionEngaged === true,
         })
       : []
     const questionTools: ToolDefinition[] =
@@ -2957,9 +2938,7 @@ export class AgentSession {
       && !this.options.promptContext.discussion
       && !this.protocolRound
         ? [
-            createAskUserQuestionTool((question) => {
-              onUserQuestion(question)
-            }),
+            createAskUserQuestionTool((question) => context.onUserQuestion?.(question)),
           ]
         : []
     const mainTools = !this.options.promptContext.discussion
@@ -3043,22 +3022,14 @@ export class AgentSession {
           })]
         : []
     const defs: ToolDefinition[] = [
-      ...((this.options.baseTools ?? BUILTIN_TOOLS) as ToolDefinition[]),
+      ...(this.options.baseTools ?? BUILTIN_TOOLS),
       ...imageTools,
       ...auxiliaryImageTools,
       ...pdfTools,
       ...officeVisualTools,
       ...controlTools,
     ]
-    return this.wrapToolDefinitions(defs, abortSignal, {
-      emit: this.options.emit,
-      loopHealth: this.loopHealth,
-      planExecutionEngaged,
-      onTurnEndingTool,
-      onImageAttachments,
-      onPdfAttachments,
-      onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
-    })
+    return this.wrapToolDefinitions(defs, abortSignal, context)
   }
 
   private async acceptToolPdfAttachments(
@@ -3119,7 +3090,7 @@ export class AgentSession {
     abortSignal: AbortSignal,
     context: ToolStepContext,
   ): ToolSet | undefined {
-    const { emit, loopHealth, planExecutionEngaged } = context
+    const { emit, loopHealth, planExecutionEngaged, allowedToolNames } = context
     const model = this.currentModelSelection().model
     const toolProjectDir = this.options.promptContext.projectDir
     if (defs.length === 0) return undefined
@@ -3363,8 +3334,14 @@ export class AgentSession {
         input: unknown,
         context: { toolCallId: string },
       ): Promise<string> => {
-        const conflict = claimStepTool(def)
+        const deniedByMode = allowedToolNames && !allowedToolNames.has(def.name)
+        const conflict = deniedByMode
+          ? `临时对话不允许使用 ${def.name}，未执行。请使用允许的只读工具或依据已有上下文回答。`
+          : claimStepTool(def)
         if (conflict) {
+          if (deniedByMode) {
+            emit({ type: 'tool-start', toolUseId: context.toolCallId, toolName: def.name, input })
+          }
           emit({
             type: 'tool-end',
             toolUseId: context.toolCallId,

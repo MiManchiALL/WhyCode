@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -49,7 +50,7 @@ describe('AgentSession MCP 生命周期', () => {
             max_results: 5,
           })
         }
-        if (call === 2) {
+        if (call === 2 || call === 4) {
           const echo = tools.find((name) => name.startsWith('Mcp__test__echo_text__'))
           assert.ok(echo)
           return toolStep(echo, { text: 'session' })
@@ -104,6 +105,20 @@ describe('AgentSession MCP 生命周期', () => {
           JSON.stringify(message).includes('whycode-mcp-tool-search-continuation')),
         true,
       )
+      const mainSnapshot = session.captureMessageSnapshot()
+      const mainRequest = model.doStreamCalls[2]!
+      const approvalCount = approvalToolNames.length
+      assert.equal(await session.handleBtwMessage({
+        inputId: randomUUID(), conversationId: randomUUID(), turnIndex: 1,
+        mode: 'btw', text: '解释刚才的结果', attachments: [], history: [],
+      }, { emit: () => {}, onSettled: async () => {} }), 'completed')
+      for (const request of model.doStreamCalls.slice(3)) {
+        assert.deepEqual(request.tools, mainRequest.tools)
+        assert.deepEqual(request.prompt.slice(0, mainRequest.prompt.length), mainRequest.prompt)
+      }
+      assert.match(JSON.stringify(model.doStreamCalls[4]?.prompt), /临时对话不允许使用 Mcp__/)
+      assert.equal(approvalToolNames.length, approvalCount)
+      assert.deepEqual(session.captureMessageSnapshot(), mainSnapshot)
       const reopened = await store.open(recorder.sessionId)
       assert.equal(
         reopened.initialMessages.some((message) =>
