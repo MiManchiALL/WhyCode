@@ -3,7 +3,7 @@ import { isProjectInstructionsMessage } from '../instructions/project.ts'
 import type { ActivatedSkill, SkillTurnSnapshot } from './types.ts'
 import { escapeSkillXmlAttribute } from './xml.ts'
 
-const EXPIRED_SKILL_RESULT = '[Skill 工具正文不作为长期历史；当前根任务需要时由活动 Skill 上下文重新注入]'
+const EXPIRED_SKILL_RESULT = '[Skill 工具正文不作为长期历史；激活状态以本次请求末尾的活动 Skill 正文为准]'
 
 export function skillCatalogMessage(snapshot: SkillTurnSnapshot): ModelMessage | null {
   if (!snapshot.modelContext) return null
@@ -33,7 +33,7 @@ export function activeSkillsMessage(skills: readonly ActivatedSkill[]): ModelMes
     role: 'user',
     content: [
       '<system-reminder>',
-      '用户已为当前根任务显式选择以下 Skill。立即遵循；仅对当前根任务有效，不向下一根任务继承。',
+      '以下 Skill 仅在当前根任务中激活，请遵循其正文。',
       ...sections,
       '</system-reminder>',
     ].join('\n\n'),

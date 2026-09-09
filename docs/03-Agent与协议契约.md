@@ -105,6 +105,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 - 项目级来自 Git 根到当前目录各层 `.agents/skills/`；用户级来自 `~/.whycode/skills/`；系统级来自 `~/.whycode/skills/.system/`。
 - 同名项保留不同 ID，不做隐式覆盖。目录按稳定顺序和 revision 进入项目指令之后、历史之前；模型目录预算最多为上下文的 2%。
 - `Skill {skillId,resourcePath?}` 只读取当前冻结目录。主 `SKILL.md` 激活后，其完整正文按激活顺序投影到请求尾部；工具原结果从下一请求起替换为稳定占位，避免双份正文。
+- 当前激活状态以请求尾部的 `<whycode-active-skill>` 正文为准，历史调用不代表仍已激活。根任务结束（含用户中断）即清除活动正文；用户继续原任务且仍需未激活的 Skill 时，须先重新调用，已激活则直接遵循。
 - 包内资源必须通过相对路径读取，拒绝绝对路径、`.`、`..`、可疑 Windows 路径、符号链接逃逸、非 UTF-8 和超过 512 KiB 的文本。
 - 当前 schema 的 `user-input.skills` 最多保存 8 个完整冻结快照；恢复、重提、Fork 与 queued 输入使用原 digest/content，不被磁盘新版本替换。
 - Skill 不改变权限、项目、工具注册或检查点；M1、B/C、discussion 和协议回合没有 Skill 目录与工具。
