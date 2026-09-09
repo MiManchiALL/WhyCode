@@ -4,4 +4,4 @@ export const SKILL_TOOL_PROMPT = `读取当前根任务可用的 Agent Skill。
 
 resourcePath 省略时返回该 Skill 的冻结 SKILL.md。需要其中引用的文件时，再传相对 Skill 包根目录的 resourcePath；绝对路径、越界路径、目录和二进制文件都会被拒绝。
 
-Skill 仅对当前根任务有效，以请求末尾 <whycode-active-skill> 正文为准。用户中断后若继续原任务，仍需且未激活的 Skill 须先重新调用；已激活则直接遵循。Skill 不扩大文件、命令或网络权限。`
+Skill 不扩大文件、命令或网络权限。`

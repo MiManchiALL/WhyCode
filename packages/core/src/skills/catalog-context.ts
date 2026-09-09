@@ -18,8 +18,8 @@ export function renderSkillCatalog(
     : { kind: 'characters' as const, limit: DEFAULT_METADATA_CHAR_BUDGET }
   const header = [
     '<available_skills>',
-    '以下 Skill 可用于当前根任务。仅在与请求匹配时调用 Skill，并使用精确 id；不要只按同名猜测。',
-    'Skill 不会自动延续到下一根任务；下一根任务需要重新选择或重新调用。',
+    '执行或继续用户指定的 Skill 任务前，必须先调用 Skill 激活；已激活则直接遵循其流程。其他任务按需选用匹配的 Skill，调用时使用精确 id。',
+    'Skill 仅对当前根任务有效，是否激活以请求末尾的活动正文为准。',
   ]
   const footer = '</available_skills>'
   const render = (lines: readonly string[]) => [...header, ...lines, footer].join('\n')
