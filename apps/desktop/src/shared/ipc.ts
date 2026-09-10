@@ -35,6 +35,7 @@ export const IPC = {
   listSkills: 'whycode:list-skills',
   /** Renderer → Main：模型、CLIProxyAPI、网页搜索与 MCP 连接设置。 */
   connectionSettings: 'whycode:connection-settings',
+  mcpStatus: 'whycode:mcp-status',
   saveProviderSettings: 'whycode:save-provider-settings',
   saveCliProxyApiSettings: 'whycode:save-cliproxyapi-settings',
   saveAuxiliaryModelSettings: 'whycode:save-auxiliary-model-settings',

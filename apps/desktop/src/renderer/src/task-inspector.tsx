@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react'
+import type { SkillSummary } from '@whycode/core/skills'
 import type { SubagentSummary, TaskPlan } from '@whycode/core'
 import {
+  ArrowLeftRight,
+  Puzzle,
   Bot,
   CheckCircle2,
   ChevronRight,
@@ -11,12 +14,17 @@ import {
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { isSubagentRunning } from './subagent-presentation.ts'
 import { TaskPlanMenu } from './task-plan-menu.tsx'
+import { SKILL_SCOPE_LABEL } from './skill-picker.tsx'
+import type { TaskInspectorView } from './right-panel-state.ts'
 import { WorktreeEnvironmentMenu } from './worktree-panel.tsx'
 
 interface TaskInspectorProps {
   runtimeId: string
   workspace: RuntimeWorkspace
   plan: TaskPlan | null | undefined
+  activeSkills: readonly SkillSummary[]
+  view: TaskInspectorView
+  onViewChange: (view: TaskInspectorView) => void
   subagents: readonly SubagentSummary[]
   busy: boolean
   worktreeStatusRevision: number
@@ -65,9 +73,7 @@ export function TaskInspector(props: TaskInspectorProps) {
 
         <div className="wc-session-context-separator" aria-hidden="true" />
 
-        <InspectorSection icon={<ListChecks size={13} />} title="任务计划">
-          {props.plan && <TaskPlanMenu key={props.plan.id} plan={props.plan} />}
-        </InspectorSection>
+        <TaskProgressSection {...props} />
       </div>
     </aside>
   )
@@ -90,6 +96,66 @@ function InspectorSection({
       </h2>
       <div className="mt-1.5 min-h-2">{children}</div>
     </section>
+  )
+}
+
+function TaskProgressSection({ plan, activeSkills, view, onViewChange }: Pick<
+  TaskInspectorProps, 'plan' | 'activeSkills' | 'view' | 'onViewChange'
+>) {
+  const showingSkills = view === 'skills'
+  const switchLabel = showingSkills ? '切换到任务计划' : '切换到当前激活的 Skill'
+  return (
+    <section className="wc-session-context-section">
+      <div className="flex items-center justify-between gap-2">
+        <h2 key={view} className="wc-session-context-heading wc-inspector-heading-enter">
+          {showingSkills ? <Puzzle size={13} /> : <ListChecks size={13} />}
+          <span>{showingSkills ? '当前激活的 Skill' : '任务计划'}</span>
+        </h2>
+        <button
+          type="button"
+          className="wc-icon-button size-6 shrink-0"
+          title={switchLabel}
+          aria-label={switchLabel}
+          onClick={() => onViewChange(showingSkills ? 'plan' : 'skills')}
+        >
+          <ArrowLeftRight size={13} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="mt-1.5 min-h-2">
+        <div className="wc-inspector-view" data-active={!showingSkills} aria-hidden={showingSkills} inert={showingSkills}>
+          <div className="min-h-0 overflow-hidden">
+            {plan && <TaskPlanMenu key={plan.id} plan={plan} />}
+          </div>
+        </div>
+        <div className="wc-inspector-view" data-active={showingSkills} aria-hidden={!showingSkills} inert={!showingSkills}>
+          <div className="min-h-0 overflow-hidden">
+            <ActiveSkillList skills={activeSkills} />
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ActiveSkillList({ skills }: { skills: readonly SkillSummary[] }) {
+  return (
+    <div className="px-2 pb-1" aria-live="polite" aria-atomic="true">
+      {skills.length === 0 ? (
+        <p className="text-xs text-[var(--wc-faint)]">当前没有激活的 Skill</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {skills.map((skill) => (
+            <li key={skill.id} className="min-w-0" title={skill.path}>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="min-w-0 flex-1 truncate text-[var(--wc-ink)]">{skill.name}</span>
+                <span className="shrink-0 wc-type-tiny text-[var(--wc-faint)]">{SKILL_SCOPE_LABEL[skill.scope]}</span>
+              </div>
+              <p className="mt-0.5 truncate wc-type-caption text-[var(--wc-muted)]">{skill.description}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 

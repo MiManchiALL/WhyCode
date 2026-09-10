@@ -5,6 +5,8 @@ import { applySkillContext } from './context.ts'
 import {
   activatedSkillSchema,
   SKILL_FILE_NAME,
+  skillSummary,
+  type SkillSummary,
   type ActivatedSkill,
   type SkillTurnSnapshot,
 } from './types.ts'
@@ -20,16 +22,25 @@ export interface StartSkillTurnOptions {
 /** 单一根任务内的目录快照、显式/隐式激活与历史投影边界。 */
 export class SkillTurnContext {
   private readonly service?: SkillCatalogService
+  private readonly onActiveSkillsChanged?: (skills: SkillSummary[]) => void
   private catalog: SkillTurnSnapshot | null = null
   private readonly active = new Map<string, ActivatedSkill>()
   private readonly visibleResultCallIds = new Set<string>()
 
-  constructor(service?: SkillCatalogService) {
+  constructor(
+    service?: SkillCatalogService,
+    onActiveSkillsChanged?: (skills: SkillSummary[]) => void,
+  ) {
     this.service = service
+    this.onActiveSkillsChanged = onActiveSkillsChanged
   }
 
   get catalogSnapshot(): SkillTurnSnapshot | null {
     return this.catalog
+  }
+
+  get activeSkills(): SkillSummary[] {
+    return [...this.active.values()].map(skillSummary)
   }
 
   async start(options: StartSkillTurnOptions): Promise<void> {
@@ -48,6 +59,7 @@ export class SkillTurnContext {
       const skill = activatedSkillSchema.parse(candidate)
       this.active.set(skill.id, skill)
     }
+    if (skills.length > 0) this.onActiveSkillsChanged?.(this.activeSkills)
   }
 
   recordToolResult(toolCallId: string, input: unknown, succeeded: boolean): void {
@@ -95,8 +107,10 @@ export class SkillTurnContext {
 
   /** 根任务结束：保留下一次普通请求仍会使用的目录，只清除 turn 级正文与结果可见性。 */
   finish(): void {
+    const hadActiveSkills = this.active.size > 0
     this.active.clear()
     this.visibleResultCallIds.clear()
+    if (hadActiveSkills) this.onActiveSkillsChanged?.([])
   }
 
   /** 开始新快照或物理关闭 Skill 能力时清除全部请求投影。 */

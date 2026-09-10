@@ -99,6 +99,7 @@ import { AppSidebar } from './app-sidebar.tsx'
 import { TaskHeader } from './task-header.tsx'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
+import { ComposerMcpStatus } from './composer-mcp-status.tsx'
 import { RightPanel } from './right-panel.tsx'
 import { disposeTerminalView, loadTerminalViews } from './terminal-panel.tsx'
 import { RightPanelResizeHandle } from './right-panel-resize-handle.tsx'
@@ -162,10 +163,13 @@ export function App() {
   const [worktreeStatusRevision, setWorktreeStatusRevision] = useState(0)
   const [filePreviewInteractionRevision, setFilePreviewInteractionRevision] = useState(0)
   const [subagents, setSubagents] = useState<SubagentSummary[]>([])
+  const [activeSkills, setActiveSkills] = useState<SkillSummary[]>([])
+  const [showMcpStatus, setShowMcpStatus] = useState(false)
   const [rightPanelState, setRightPanelState] = useState<RightPanelSessionState>({
     open: false,
     tabs: [],
     activeTabId: null,
+    inspectorView: 'plan',
   })
   const [rightPanelRetained, setRightPanelRetained] = useState(false)
   const [terminalOpening, setTerminalOpening] = useState(false)
@@ -734,6 +738,8 @@ export function App() {
     if (changingRuntime) setWorktreePreparation(null)
     setPermMode(snapshot.permissionMode)
     setContextUsage(snapshot.contextUsage)
+    setActiveSkills(snapshot.activeSkills)
+    if (changingRuntime) setShowMcpStatus(false)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
     setDeletingSessionId((current) => {
@@ -838,6 +844,9 @@ export function App() {
         break
       case 'turn-end':
         void refreshSessions()
+        break
+      case 'active-skills-changed':
+        setActiveSkills(event.skills)
         break
       case 'context-usage':
         setContextUsage(event.usage)
@@ -1550,6 +1559,7 @@ export function App() {
     status,
   ])
   slashCommandRef.current = (command) => {
+    setShowMcpStatus(command === 'mcp')
     if (command === 'compact') compact()
     if (command === 'fork' && latestForkTurnId) forkConversation(latestForkTurnId)
     if (command === 'btw' || command === 'bbtw') {
@@ -2100,6 +2110,14 @@ export function App() {
                     />
                   ) : (
                     <>
+                      {showMcpStatus && !skillTrigger && !attachmentLocked && (
+                        <ComposerMcpStatus
+                          key={runtimeId}
+                          runtimeId={runtimeId}
+                          composerRef={composerTextareaRef}
+                          onClose={() => setShowMcpStatus(false)}
+                        />
+                      )}
                       {skillTrigger && !attachmentLocked && (
                         <ComposerSlashMenu
                           items={composerMenuItems}
@@ -2157,6 +2175,7 @@ export function App() {
                         value={input}
                         onChange={(event) => {
                           const text = event.target.value
+                          setShowMcpStatus(false)
                           inputRef.current = text
                           setInput(text)
                           updateSkillMenu(text, event.target.selectionStart)
@@ -2286,6 +2305,11 @@ export function App() {
                 runtimeId={runtimeId}
                 workspace={workspace}
                 plan={view.taskPlan}
+                activeSkills={activeSkills}
+                view={rightPanelState.inspectorView}
+                onViewChange={(inspectorView) => updateRightPanelState((current) => ({
+                  ...current, inspectorView,
+                }))}
                 subagents={subagents}
                 busy={interactionBusy}
                 worktreeStatusRevision={worktreeStatusRevision}

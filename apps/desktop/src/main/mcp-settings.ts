@@ -13,6 +13,7 @@ import {
 import type {
   AddMcpServerRequest,
   McpSettingsItem,
+  McpConnectionStatus,
   SaveMcpSecretHeaderRequest,
   SetMcpServerEnabledRequest,
 } from '../shared/settings.ts'
@@ -25,6 +26,19 @@ interface McpSettingsContext {
   currentSessionSnapshot: McpManagerSnapshot | null
   mcpSecretHeaders: readonly McpSecretHeader[]
   mcpOAuthController?: McpOAuthController
+}
+
+export async function createMcpStatusSnapshot(
+  context: McpSettingsContext,
+): Promise<McpConnectionStatus[]> {
+  const servers = context.currentSessionSnapshot?.servers ?? (
+    await loadMcpConfiguration({
+      globalConfigPath: context.globalConfigPath,
+      projectDir: context.projectDir,
+      globalSecretHeaders: context.mcpSecretHeaders,
+    })
+  ).servers.map(({ name, scope }) => ({ name, scope, state: 'idle' as const }))
+  return servers.map(({ name, scope, state }) => ({ name, scope, state })).sort(compareServers)
 }
 
 export async function createMcpSettingsSnapshot(
@@ -203,8 +217,8 @@ function serverKey(scope: McpConfigScope, name: string): string {
 }
 
 function compareServers(
-  left: McpSettingsItem['servers'][number],
-  right: McpSettingsItem['servers'][number],
+  left: Pick<McpConnectionStatus, 'name' | 'scope'>,
+  right: Pick<McpConnectionStatus, 'name' | 'scope'>,
 ): number {
   if (left.scope !== right.scope) return left.scope === 'global' ? -1 : 1
   return left.name.localeCompare(right.name)

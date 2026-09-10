@@ -43,6 +43,7 @@ import type {
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
+  McpConnectionStatus,
   McpOAuthRequest,
   ModelListItem,
   OpenMcpConfigRequest,
@@ -146,6 +147,8 @@ const api = {
     ipcRenderer.invoke(IPC.listModels, runtimeId),
   listSkills: (runtimeId?: string): Promise<SkillCatalogSnapshot> =>
     ipcRenderer.invoke(IPC.listSkills, runtimeId),
+  mcpStatus: (runtimeId: string): Promise<McpConnectionStatus[]> =>
+    ipcRenderer.invoke(IPC.mcpStatus, runtimeId),
   connectionSettings: (): Promise<ConnectionSettingsSnapshot> =>
     ipcRenderer.invoke(IPC.connectionSettings),
   saveProviderSettings: (

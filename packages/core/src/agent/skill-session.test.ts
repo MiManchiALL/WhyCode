@@ -10,6 +10,8 @@ import type { ContextUsageInfo, CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import { SessionStore } from '../session/store.ts'
+import { toViewEvent } from '../session/view-events.ts'
+import { skillSummary } from '../skills/types.ts'
 import { SkillCatalogService } from '../skills/catalog.ts'
 import { applySkillContext } from '../skills/context.ts'
 import { SKILL_TOOL_NAME } from '../tools/skill/index.ts'
@@ -33,11 +35,21 @@ describe('Agent Skill 根任务生命周期', () => {
     const listed = await catalog.list(fixture.project, 100_000)
     const { id, path } = listed.skills[0]!
     const selected = await catalog.activate({ id, path }, fixture.project, 100_000)
-    const model = new MockLanguageModelV4({ doStream: async () => finalStep() })
-    const session = createSession(model, fixture, catalog)
+    const events: CoreEvent[] = []
+    const model = new MockLanguageModelV4({ doStream: async () => {
+      assert.deepEqual(session.activeSkills, model.doStreamCalls.length === 1 ? [skillSummary(selected)] : [])
+      return finalStep()
+    } })
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      emit: (event) => events.push(event),
+    })
 
     assert.equal(await session.handleUserMessage('按所选流程执行', false, [], undefined, [], [selected]), 'completed')
+    assert.deepEqual(session.activeSkills, [])
     assert.equal(await session.handleUserMessage('普通下一任务'), 'completed')
+    const changes = events.filter((event) => event.type === 'active-skills-changed')
+    assert.deepEqual(changes.map((event) => event.skills), [[skillSummary(selected)], []])
+    assert.ok(changes.every((event) => toViewEvent(event) === null))
 
     const first = JSON.stringify(model.doStreamCalls[0]?.prompt)
     const second = JSON.stringify(model.doStreamCalls[1]?.prompt)
@@ -135,7 +147,11 @@ describe('Agent Skill 根任务生命周期', () => {
     const skillId = listed.skills[0]!.id
     let calls = 0
     const model = new MockLanguageModelV4({
-      doStream: async () => ++calls === 1 ? toolStep(skillId) : finalStep(),
+      doStream: async () => {
+        calls++
+        assert.deepEqual(session.activeSkills, calls === 2 ? listed.skills : [])
+        return calls === 1 ? toolStep(skillId) : finalStep()
+      },
     })
     const session = createSession(model, fixture, catalog)
 
@@ -204,6 +220,58 @@ describe('Agent Skill 根任务生命周期', () => {
     assert.doesNotMatch(nextRoot, new RegExp(BODY))
   })
 
+  it('中断清空活动列表，其他会话与续接任务不继承激活状态', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const listed = await catalog.list(fixture.project, 100_000)
+    let signalWaiting!: () => void
+    const waiting = new Promise<void>((resolve) => { signalWaiting = resolve })
+    const events: CoreEvent[] = []
+    let calls = 0
+    const model = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => {
+      calls++
+      if (calls === 1) return toolStep(listed.skills[0]!.id)
+      if (calls === 2) {
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal!.addEventListener('abort', () => reject(abortSignal!.reason), { once: true })
+          signalWaiting()
+        })
+      }
+      return finalStep()
+    } })
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      emit: (event) => events.push(event),
+    })
+    const work = session.handleUserMessage('使用流程')
+    await waiting
+    assert.deepEqual(session.activeSkills, listed.skills)
+    const other = createSession(new MockLanguageModelV4({ doStream: async () => finalStep() }), fixture, catalog)
+    assert.deepEqual(other.activeSkills, [])
+    session.abort()
+    assert.equal(await work, 'aborted')
+    assert.deepEqual(session.activeSkills, [])
+    assert.equal(await session.handleUserMessage('继续'), 'completed')
+    assert.deepEqual(events.filter((event) => event.type === 'active-skills-changed')
+      .map((event) => event.skills), [listed.skills, []])
+  })
+
+  it('Skill 加载失败不会显示为激活', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const events: CoreEvent[] = []
+    let calls = 0
+    const model = new MockLanguageModelV4({ doStream: async () =>
+      ++calls === 1 ? toolStep(`skill:${'0'.repeat(64)}`) : finalStep(),
+    })
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      emit: (event) => events.push(event),
+    })
+    await session.handleUserMessage('尝试不存在的流程')
+    assert.ok(events.some((event) => event.type === 'tool-end' && event.isError))
+    assert.deepEqual(session.activeSkills, [])
+    assert.equal(events.some((event) => event.type === 'active-skills-changed'), false)
+  })
+
   it('讨论和协议边界物理移除 Skill 工具', async () => {
     const fixture = await skillFixture()
     const catalog = new SkillCatalogService({ homeDir: fixture.home })
@@ -226,13 +294,19 @@ describe('Agent Skill 根任务生命周期', () => {
     const selected = await catalog.activate({ id, path }, fixture.project, 40_000)
     selected.content = 'x'.repeat(100_000)
     const model = new MockLanguageModelV4({ doStream: async () => finalStep() })
-    const session = createSession(model, fixture, catalog, undefined, 40_000)
+    const events: CoreEvent[] = []
+    const session = createSession(model, fixture, catalog, undefined, 40_000, {
+      emit: (event) => events.push(event),
+    })
 
     assert.equal(
       await session.handleUserMessage('超限任务', false, [], undefined, [], [selected]),
       'error',
     )
     assert.equal(model.doStreamCalls.length, 0)
+    assert.deepEqual(session.activeSkills, [])
+    assert.deepEqual(events.filter((event) => event.type === 'active-skills-changed')
+      .map((event) => event.skills), [[skillSummary(selected)], []])
   })
 })
 

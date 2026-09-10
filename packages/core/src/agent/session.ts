@@ -145,6 +145,7 @@ import {
   activatedSkillSchema,
   skillSummary,
   type ActivatedSkill,
+  type SkillSummary,
 } from '../skills/types.ts'
 import type { SkillCatalogService } from '../skills/catalog.ts'
 import { SkillTurnContext } from '../skills/turn.ts'
@@ -428,7 +429,9 @@ export class AgentSession {
     this.options = options
     this.transportSessionId = options.sessionRecorder?.sessionId ?? randomUUID()
     this.userQuestionsEnabled = options.userQuestionsEnabled ?? true
-    this.skillTurn = new SkillTurnContext(options.skillCatalog)
+    this.skillTurn = new SkillTurnContext(options.skillCatalog, (skills) => {
+      this.options.emit({ type: 'active-skills-changed', skills })
+    })
     const initialMessages = options.sessionRecorder?.initialMessages ?? []
     this.messages = applyProjectInstructions(
       initialMessages,
@@ -640,6 +643,10 @@ export class AgentSession {
 
   get checkpointRestoreToolUseId(): string | null {
     return this.restoringCheckpointToolUseId
+  }
+
+  get activeSkills(): SkillSummary[] {
+    return this.skillTurn.activeSkills
   }
 
   get mcpSnapshot(): McpManagerSnapshot | null {

@@ -6,6 +6,8 @@ import type {
 } from '@whycode/core'
 import type { McpServerStatus } from '@whycode/core'
 
+export type McpConnectionStatus = Pick<McpServerStatus, 'name' | 'scope' | 'state'>
+
 export interface ModelListItem {
   id: string
   displayName: string

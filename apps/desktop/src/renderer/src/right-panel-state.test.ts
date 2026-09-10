@@ -27,6 +27,7 @@ const emptyState = (): RightPanelSessionState => ({
   open: false,
   tabs: [],
   activeTabId: null,
+  inspectorView: 'plan',
 })
 
 function snapshotPage(
@@ -43,6 +44,21 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('独立保存每个会话的任务面板选择，空侧栏也保留；删除会话时清理', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    store.set('runtime:draft', { ...emptyState(), inspectorView: 'skills' })
+    store.move('runtime:draft', 'session-a')
+    store.set('session-b', emptyState())
+    const restored = new RightPanelSessionStore(storage)
+    assert.equal(restored.get('session-a').inspectorView, 'skills')
+    assert.equal(restored.get('session-b').inspectorView, 'plan')
+    const withTab = openRightPanelPage(restored.get('session-a'), { kind: 'subagent-overview' })
+    assert.equal(closeRightPanelTab(withTab, withTab.activeTabId!).inspectorView, 'skills')
+    restored.delete('session-a')
+    assert.deepEqual(new RightPanelSessionStore(storage).get('session-a'), emptyState())
+  })
+
   it('按会话保存通用多标签描述并在重建后恢复', () => {
     const storage = new MemoryStorage()
     const store = new RightPanelSessionStore(storage)

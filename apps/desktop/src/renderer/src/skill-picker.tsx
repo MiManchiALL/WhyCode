@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type { SkillDiagnostic, SkillSummary } from '@whycode/core/skills'
-import { Archive, Puzzle, X } from 'lucide-react'
+import { Archive, Plug, Puzzle, X } from 'lucide-react'
 import type { ComposerMenuItem } from './skill-trigger.ts'
 
-const SKILL_SCOPE_LABEL = {
+export const SKILL_SCOPE_LABEL = {
   project: '项目',
   user: '用户',
   system: '内置',
@@ -167,7 +167,9 @@ function ComposerMenuGroup(props: {
             onClick={() => props.onSelect(item)}
           >
             <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border border-[var(--wc-line)] bg-white text-[var(--wc-muted)]">
-              {isCommand ? <Archive size={14} /> : <Puzzle size={14} />}
+              {isCommand
+                ? item.command.id === 'mcp' ? <Plug size={14} /> : <Archive size={14} />
+                : <Puzzle size={14} />}
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2 text-sm font-medium text-[var(--wc-ink)]">

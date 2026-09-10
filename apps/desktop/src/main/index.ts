@@ -97,6 +97,7 @@ import {
 import {
   addMcpConfiguredServer,
   createMcpSettingsSnapshot,
+  createMcpStatusSnapshot,
   resolveMcpConfigPath,
   updateMcpSecretHeader,
   updateMcpServerState,
@@ -2099,6 +2100,7 @@ async function runtimeSnapshot(
     forkOrigin: journal?.metadataSnapshot.forkOrigin ?? null,
     backgroundTasks,
     subagents: subagentState,
+    activeSkills: runtime.session?.activeSkills ?? [],
   }
 }
 
@@ -2853,6 +2855,15 @@ if (primaryInstance) void app.whenReady().then(async () => {
     // pending-worktree 尚未创建真实目录；此时目录只展示用户级与内置 Skill，避免签发
     // 指向源仓库、却要在首条消息创建后的 Worktree 中校验的失效 locator。
     return skills.list(runtime.projectDir, contextWindow)
+  })
+  ipcMain.handle(IPC.mcpStatus, (_e, runtimeId: string) => {
+    const runtime = runtimeForId(runtimeId)
+    return createMcpStatusSnapshot({
+      globalConfigPath: mcpGlobalConfigPath,
+      projectDir: runtime.projectDir,
+      currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
+      mcpSecretHeaders: loadAppConfig()?.mcpSecretHeaders ?? [],
+    })
   })
   ipcMain.handle(IPC.connectionSettings, async () => {
     if (!mcpOAuthController.isAuthorizing()) {

@@ -286,7 +286,13 @@ export function createComposerCommands(
     bbtwAvailable?: boolean
   },
 ): ComposerCommand[] {
-  const commands: ComposerCommand[] = []
+  const commands: ComposerCommand[] = [{
+    id: 'mcp',
+    name: 'MCP',
+    description: '显示 MCP 服务器状态',
+    keywords: ['mcp', '服务器', '连接', '状态'],
+    disabled: false,
+  }]
   if (options.btwAvailable) {
     commands.push({
       id: 'btw',

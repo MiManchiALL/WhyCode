@@ -3,13 +3,13 @@ import { describe, it } from 'node:test'
 import { createComposerCommands } from './use-skill-composer.ts'
 
 describe('输入框功能命令目录', () => {
-  it('没有对话消息时不提供压缩命令', () => {
+  it('没有对话消息时仍可查看 MCP 状态，不提供压缩命令', () => {
     assert.deepEqual(createComposerCommands({
       compactAvailable: false,
       compactDisabled: false,
       forkAvailable: false,
       forkDisabled: false,
-    }), [])
+    }).map((command) => command.id), ['mcp'])
   })
 
   it('已有对话时提供压缩命令，并保留运行态禁用标记', () => {
@@ -18,7 +18,7 @@ describe('输入框功能命令目录', () => {
       compactDisabled: true,
       forkAvailable: true,
       forkDisabled: false,
-    }), [{
+    }).filter((command) => command.id !== 'mcp'), [{
       id: 'fork',
       name: '在新对话中继续',
       description: '从最近一次完整模型回复创建独立对话',
@@ -39,7 +39,7 @@ describe('输入框功能命令目录', () => {
       compactDisabled: true,
       forkAvailable: false,
       forkDisabled: false,
-    }), [{
+    }).filter((command) => command.id !== 'mcp'), [{
       id: 'compact',
       name: '压缩',
       description: '压缩当前会话上下文，释放上下文空间',
@@ -56,7 +56,7 @@ describe('输入框功能命令目录', () => {
       forkDisabled: false,
       btwAvailable: true,
       bbtwAvailable: true,
-    }).map((command) => command.id), ['btw', 'bbtw', 'fork', 'compact'])
+    }).map((command) => command.id), ['mcp', 'btw', 'bbtw', 'fork', 'compact'])
 
     assert.deepEqual(createComposerCommands({
       compactAvailable: true,
@@ -65,6 +65,6 @@ describe('输入框功能命令目录', () => {
       forkDisabled: false,
       btwAvailable: false,
       bbtwAvailable: false,
-    }).map((command) => command.id), ['compact'])
+    }).map((command) => command.id), ['mcp', 'compact'])
   })
 })

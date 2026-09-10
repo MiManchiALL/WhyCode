@@ -13,11 +13,46 @@ import {
 import {
   addMcpConfiguredServer,
   createMcpSettingsSnapshot,
+  createMcpStatusSnapshot,
   updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
 
 describe('MCP 连接设置', () => {
+  it('状态面板只暴露会话可用服务器；空闲草稿按配置过滤，已有运行时以冻结快照为准', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-status-'))
+    const globalConfigPath = join(root, 'mcp.json')
+    const projectDir = join(root, 'project')
+    try {
+      await writeConfig(globalConfigPath, { version: 1, servers: {
+        docs: { transport: 'http', url: 'https://docs.example/mcp', headers: { Authorization: 'secret' } },
+        hidden: { transport: 'stdio', command: 'unused', enabled: false },
+        shadowed: { transport: 'stdio', command: 'unused' },
+      } })
+      await writeConfig(join(projectDir, '.whycode', 'mcp.json'), { version: 1, servers: {
+        shadowed: { transport: 'stdio', command: 'unused', enabled: false },
+        local: { transport: 'stdio', command: 'unused' },
+      } })
+      const context = { globalConfigPath, projectDir, mcpSecretHeaders: [], currentSessionSnapshot: null }
+      assert.deepEqual(await createMcpStatusSnapshot(context), [
+        { name: 'docs', scope: 'global', state: 'idle' },
+        { name: 'local', scope: 'project', state: 'idle' },
+      ])
+      const currentSessionSnapshot: McpManagerSnapshot = {
+        tools: [], configDiagnostics: [],
+        servers: [{ name: 'existing', scope: 'global', state: 'ready', toolCount: 2, diagnostics: [], serverInstructions: 'private' }],
+      }
+      assert.deepEqual(await createMcpStatusSnapshot({ ...context, currentSessionSnapshot }), [
+        { name: 'existing', scope: 'global', state: 'ready' },
+      ])
+      assert.deepEqual(await createMcpStatusSnapshot({
+        ...context, currentSessionSnapshot: { ...currentSessionSnapshot, servers: [] },
+      }), [])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('合并配置作用域与当前会话状态，但不把连接密钥送入 Renderer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-settings-'))
     const globalConfigPath = join(root, 'home', 'mcp.json')

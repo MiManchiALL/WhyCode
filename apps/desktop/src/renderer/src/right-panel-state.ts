@@ -27,7 +27,10 @@ export interface RightPanelTab {
   page: RightPanelPage
 }
 
+export type TaskInspectorView = 'plan' | 'skills'
+
 export interface RightPanelSessionState {
+  inspectorView: TaskInspectorView
   open: boolean
   tabs: RightPanelTab[]
   activeTabId: string | null
@@ -46,6 +49,7 @@ const STORAGE_KEY = 'whycode:right-panel-sessions:v1'
 const MAX_STORED_SESSIONS = 200
 export const MAX_RIGHT_PANEL_TABS = 12
 const DEFAULT_STATE: RightPanelSessionState = {
+  inspectorView: 'plan',
   open: false,
   tabs: [],
   activeTabId: null,
@@ -77,7 +81,9 @@ export class RightPanelSessionStore {
 
   set(key: string, state: RightPanelSessionState): void {
     this.states.delete(key)
-    if (state.open || state.tabs.length > 0) this.states.set(key, structuredClone(state))
+    if (state.open || state.tabs.length > 0 || state.inspectorView === 'skills') {
+      this.states.set(key, structuredClone(state))
+    }
     this.trimAndPersist()
   }
 
@@ -121,7 +127,7 @@ export class RightPanelSessionStore {
         [...this.states].map(([key, state]) => {
           const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal')
           return {
-            key, open: state.open, tabs,
+            key, open: state.open, tabs, inspectorView: state.inspectorView,
             activeTabId: tabs.some((tab) => tab.id === state.activeTabId)
               ? state.activeTabId : (tabs.at(-1)?.id ?? null),
           }
@@ -162,7 +168,7 @@ export function openRightPanelPage(
     }
     tabs.push(tab)
   }
-  return { open: true, tabs, activeTabId: id }
+  return { ...state, open: true, tabs, activeTabId: id }
 }
 
 export function selectRightPanelTab(
@@ -212,7 +218,8 @@ function parseStoredState(value: unknown): StoredRightPanelState | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   if (
-    typeof record.key !== 'string'
+    (record.inspectorView !== 'plan' && record.inspectorView !== 'skills')
+    || typeof record.key !== 'string'
     || typeof record.open !== 'boolean'
     || !Array.isArray(record.tabs)
   ) return null
@@ -232,7 +239,7 @@ function parseStoredState(value: unknown): StoredRightPanelState | null {
   const activeTabId = tabs.some((tab) => tab.id === requestedActiveId)
     ? requestedActiveId
     : (tabs.at(-1)?.id ?? null)
-  return { key: record.key, open: record.open, tabs, activeTabId }
+  return { key: record.key, open: record.open, tabs, activeTabId, inspectorView: record.inspectorView }
 }
 
 function parseTabPage(value: unknown): RightPanelPage | null {
@@ -280,6 +287,7 @@ function parseFileSource(value: unknown): RightPanelFileSource | null {
 function stateValue(state: StoredRightPanelState): RightPanelSessionState {
   return {
     open: state.open,
+    inspectorView: state.inspectorView,
     tabs: state.tabs,
     activeTabId: state.activeTabId,
   }

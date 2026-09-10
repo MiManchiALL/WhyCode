@@ -110,6 +110,8 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 - 当前 schema 的 `user-input.skills` 最多保存 8 个完整冻结快照；恢复、重提、Fork 与 queued 输入使用原 digest/content，不被磁盘新版本替换。
 - Skill 不改变权限、项目、工具注册或检查点；M1、B/C、discussion 和协议回合没有 Skill 目录与工具。
 
+`active-skills-changed {skills: SkillSummary[]}` 是当前根任务的即时状态事件；显式选择、steering 加入及成功的 Skill 调用更新列表，结束、中断或错误收尾清空。失败调用不激活。摘要不含 digest/content，不进入步骤缓冲、ViewEvent、JSONL、摘要或 Fork；`RuntimeSnapshot.activeSkills` 直接读取该运行时的 Core 当前集合，重启后的空闲会话为空。
+
 ### 1.8 时间、运行态与缓存卫生
 
 - 每个新 turn 首个模型步骤在真实 user 输入之后追加本机日期时间、IANA 时区、UTC 偏移和 UTC；同一 turn 复用，满 5 分钟、跨本地日期或收到新 steering 后才惰性刷新。
@@ -238,6 +240,8 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 普通公开读取失败，或用户明确需要授权/登录/私有数据时，再用 `ToolSearch` 查对应 MCP 能力。研究类最终交付在关键结论附近引用真实 URL，并在末尾去重列出来源；执行任务中的中间查证无需强制输出引用。
 
 ### 3.5 MCP
+
+宿主只读接口 `mcpStatus(runtimeId)` 按会话寻址，只返回服务器 `name/scope/state`。已创建 Core 会话时读取连接管理器的冻结快照；草稿按当前有效且启用的配置返回未连接状态，排除停用或被项目同名项覆盖的服务器。查询不启动连接，不返回配置、凭据、诊断或服务器指令。
 
 `ToolSearch {query,max_results=5}` 本地检索已配置 MCP 目录，max_results 为 1～8；查询和目录不发送给第二模型或外部搜索服务。命中结果只让精确 `Mcp__<server>__<tool>__<hash>` 在下一模型步骤注册，同一步不能立即调用。
 

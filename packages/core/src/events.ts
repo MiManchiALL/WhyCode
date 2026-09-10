@@ -307,6 +307,8 @@ export type CoreEvent =
     }
   /** 仅供宿主运行态展示，不进入会话时间线；null 表示模型切换后等待重新估算。 */
   | { type: 'context-usage'; usage: ContextUsageInfo | null }
+  /** 当前根任务的活动 Skill 摘要；不进入持久历史，也不包含正文。 */
+  | { type: 'active-skills-changed'; skills: SkillSummary[] }
   // --- 多 Agent 协商（M3）---
   /** 协议模式锁定为需评审的模式，B/C 开始工作（main_only 不发） */
   | { type: 'negotiation-started'; taskId: string; mode: 'quick_review' | 'full_consensus' }

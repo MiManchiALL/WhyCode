@@ -899,6 +899,24 @@ html[data-wc-right-panel-resizing='true'] * {
   flex: none;
 }
 
+.wc-inspector-heading-enter {
+  animation: wc-fade-in 140ms ease-out;
+}
+
+.wc-inspector-view {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 160ms ease-out, opacity 140ms ease-out, visibility 160ms;
+}
+
+.wc-inspector-view[data-active='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+
 .wc-session-context-separator {
   height: 0;
   margin: 0.35rem 0.75rem;
