@@ -41,9 +41,9 @@ describe('Agent Skill 根任务生命周期', () => {
 
     const first = JSON.stringify(model.doStreamCalls[0]?.prompt)
     const second = JSON.stringify(model.doStreamCalls[1]?.prompt)
-    assert.match(first, /whycode-active-skill/)
+    assert.match(first, /<whycode-active-skill id=/)
     assert.match(first, new RegExp(BODY))
-    assert.doesNotMatch(second, /whycode-active-skill/)
+    assert.doesNotMatch(second, /<whycode-active-skill id=/)
     assert.doesNotMatch(second, new RegExp(BODY))
   })
 
@@ -145,7 +145,7 @@ describe('Agent Skill 根任务生命周期', () => {
     assert.ok(toolNames(model.doStreamCalls[0]).includes(SKILL_TOOL_NAME))
     assert.match(JSON.stringify(model.doStreamCalls[0]?.prompt), /available_skills/)
     const activatedRequest = JSON.stringify(model.doStreamCalls[1]?.prompt)
-    assert.match(activatedRequest, /whycode-active-skill/)
+    assert.match(activatedRequest, /<whycode-active-skill id=/)
     assert.match(activatedRequest, new RegExp(BODY))
     assert.match(activatedRequest, /Skill 工具正文不作为长期历史/)
     const nextRoot = JSON.stringify(model.doStreamCalls[2]?.prompt)

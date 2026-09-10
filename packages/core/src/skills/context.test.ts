@@ -19,7 +19,7 @@ describe('Skill 模型请求投影', () => {
 
     assert.match(JSON.stringify(projected[0]), /available_skills/)
     assert.deepEqual(projected.slice(1, -1), history)
-    assert.match(JSON.stringify(projected.at(-1)), /whycode-active-skill/)
+    assert.match(JSON.stringify(projected.at(-1)), /<whycode-active-skill id=/)
   })
 
   it('成功工具正文提升为当前根活动上下文，压缩输入和下一根任务都不保留原文', () => {
@@ -27,7 +27,7 @@ describe('Skill 模型请求投影', () => {
     const current = applySkillContext(messages, null, [skill()], new Set())
     const currentText = JSON.stringify(current)
     assert.equal(currentText.match(new RegExp(BODY, 'g'))?.length, 1)
-    assert.match(currentText, /whycode-active-skill/)
+    assert.match(currentText, /<whycode-active-skill id=/)
     assert.match(currentText, /Skill 工具正文不作为长期历史/)
 
     const compactionInput = applySkillContext(messages, null, [], new Set())

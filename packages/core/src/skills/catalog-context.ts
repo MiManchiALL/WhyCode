@@ -19,7 +19,7 @@ export function renderSkillCatalog(
   const header = [
     '<available_skills>',
     '执行或继续用户指定的 Skill 任务前，必须先调用 Skill 激活；已激活则直接遵循其流程。其他任务按需选用匹配的 Skill，调用时使用精确 id。',
-    'Skill 仅对当前根任务有效，是否激活以请求末尾的活动正文为准。',
+    'Skill 仅对当前根任务有效。当前激活的 Skill 以本次请求末尾的 <whycode-active-skill> 正文为准；没有该正文则当前没有已激活的 Skill，历史调用不算当前激活。',
   ]
   const footer = '</available_skills>'
   const render = (lines: readonly string[]) => [...header, ...lines, footer].join('\n')
