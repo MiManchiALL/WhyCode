@@ -12,3 +12,8 @@ export function localFilePath(file: File): string {
     return ''
   }
 }
+
+export function fileName(path: string): string {
+  const normalized = path.replaceAll('\\', '/')
+  return normalized.slice(normalized.lastIndexOf('/') + 1) || path
+}

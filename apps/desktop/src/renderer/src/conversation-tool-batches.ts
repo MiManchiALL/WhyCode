@@ -1,4 +1,5 @@
 import type { SkillSummary } from '@whycode/core/skills'
+import { fileName } from './local-files.ts'
 import type { Block, ToolCall } from './conversation-state.ts'
 import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
 import {
@@ -323,12 +324,6 @@ function displayDirectoryKey(path: string): string {
   return /^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('//')
     ? directory.toLowerCase()
     : directory
-}
-
-function fileName(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  const lastSeparator = normalized.lastIndexOf('/')
-  return normalized.slice(lastSeparator + 1) || path
 }
 
 function resolveDisplayPath(path: string, projectDir: string | null): string {

@@ -1,6 +1,6 @@
 import { diffArrays } from 'diff'
 
-/** 单个文件在一次工具调用中的 Git 风格行变更统计。 */
+/** 单个文件在两个确定版本之间的 Git 风格行变更统计。 */
 export interface ToolFileChange {
   path: string
   added: number

@@ -16,6 +16,7 @@ import type {
   ReasoningEffortSelection,
 } from '@whycode/core'
 import type { SkillSummary } from '@whycode/core/skills'
+import type { ToolFileChange } from '@whycode/core/events'
 import type { PermissionMode } from '@whycode/core/permissions'
 import type {
   RuntimeWorkspace,
@@ -76,6 +77,7 @@ export interface RuntimeSnapshot {
   /** 当前父会话拥有的子代理摘要；完整 transcript 通过独立 IPC 按需读取。 */
   subagents: SubagentState | null
   activeSkills: SkillSummary[]
+  turnFileChanges: ToolFileChange[]
 }
 
 /** 高频增量可短暂合并；其它事件都是必须立即交付的语义边界。 */

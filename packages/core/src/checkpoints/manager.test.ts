@@ -14,6 +14,95 @@ afterEach(async () => {
 })
 
 describe('持久化资源检查点', () => {
+  it('同一 turn 比较首次 before 与最新 after，追加后删回原样不留下净变化', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'net.ts')
+    const original = 'original\n'
+    await writeFile(path, original)
+    assert.deepEqual(await change(path, original + '1\n2\n3\n4\n5\n'), [
+      { path, added: 5, removed: 0 },
+    ])
+    assert.deepEqual(await change(path, original), [null])
+    assert.deepEqual(await change(path, 'replacement\n'), [{ path, added: 1, removed: 1 }])
+    assert.deepEqual(await change(path, 'another\n'), [{ path, added: 1, removed: 1 }])
+    assert.deepEqual(await change(path, original), [null])
+
+    async function change(path: string, content: string) {
+      const prepared = await env.manager.prepare(randomUUID(), 'turn-1', {
+        kind: 'exact-files', paths: [path],
+      })
+      assert.ok(prepared)
+      await writeFile(path, content)
+      const ready = await env.manager.finalize(prepared)
+      assert.ok(ready)
+      return [...(await env.manager.turnFileChanges(ready)).values()]
+    }
+  })
+
+  it('新建后删除归零，原文件删除后重建归零；空文件创建仍计为文件变化', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'lifecycle.ts')
+    const initial = await env.manager.prepare('create', 'turn-1', { kind: 'exact-files', paths: [path] })
+    assert.ok(initial)
+    await writeFile(path, '')
+    const created = await env.manager.finalize(initial)
+    assert.ok(created)
+    assert.deepEqual([...(await env.manager.turnFileChanges(created)).values()], [
+      { path, added: 0, removed: 0 },
+    ])
+    const deletion = await env.manager.prepare('delete', 'turn-1', { kind: 'exact-files', paths: [path] })
+    assert.ok(deletion)
+    await rm(path)
+    const deleted = await env.manager.finalize(deletion)
+    assert.ok(deleted)
+    assert.deepEqual([...(await env.manager.turnFileChanges(deleted)).values()], [null])
+
+    await writeFile(path, 'before\n')
+    const remove = await env.manager.prepare('remove', 'turn-2', { kind: 'exact-files', paths: [path] })
+    assert.ok(remove)
+    await rm(path)
+    const removed = await env.manager.finalize(remove)
+    assert.ok(removed)
+    assert.deepEqual([...(await env.manager.turnFileChanges(removed)).values()], [{ path, added: 0, removed: 1 }])
+    const recreate = await env.manager.prepare('recreate', 'turn-2', { kind: 'exact-files', paths: [path] })
+    assert.ok(recreate)
+    await writeFile(path, 'before\n')
+    const recreated = await env.manager.finalize(recreate)
+    assert.ok(recreated)
+    assert.deepEqual([...(await env.manager.turnFileChanges(recreated)).values()], [null])
+  })
+
+  it('不同 turn 重新建立基线，只返回本次落盘路径且不读取后来改变的工作区正文', async () => {
+    const env = await createEnvironment()
+    const paths = ['a.ts', 'b.ts'].map(name => join(env.project, name))
+    const first = await env.manager.prepare('first', 'turn-1', { kind: 'exact-files', paths })
+    assert.ok(first)
+    await Promise.all(paths.map(path => writeFile(path, 'first\n')))
+    assert.ok(await env.manager.finalize(first))
+    const path = paths[0]!
+    const second = await env.manager.prepare('second', 'turn-2', { kind: 'exact-files', paths: [path] })
+    assert.ok(second)
+    await writeFile(path, 'second\n')
+    const ready = await env.manager.finalize(second)
+    assert.ok(ready)
+    await writeFile(path, 'external\nchange\n')
+    assert.deepEqual([...(await env.manager.turnFileChanges(ready)).values()], [
+      { path, added: 1, removed: 1 },
+    ])
+  })
+
+  it('二进制或过大的正文不生成伪造的精确行数', async () => {
+    const env = await createEnvironment()
+    const paths = ['binary', 'large'].map(name => join(env.project, name))
+    const prepared = await env.manager.prepare('bounded', 'turn-1', { kind: 'exact-files', paths })
+    assert.ok(prepared)
+    await writeFile(paths[0]!, Buffer.from([0, 1, 2]))
+    await writeFile(paths[1]!, 'x'.repeat(CHECKPOINT_FILE_PREVIEW_MAX_BYTES + 1))
+    const ready = await env.manager.finalize(prepared)
+    assert.ok(ready)
+    assert.deepEqual([...(await env.manager.turnFileChanges(ready)).values()], [null, null])
+  })
+
   it('按工具和文件读取精确前后版本，检查点失效后仍可用于历史预览', async () => {
     const env = await createEnvironment()
     const path = join(env.project, 'preview.ts')

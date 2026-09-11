@@ -2101,6 +2101,7 @@ async function runtimeSnapshot(
     backgroundTasks,
     subagents: subagentState,
     activeSkills: runtime.session?.activeSkills ?? [],
+    turnFileChanges: runtime.session?.turnFileChanges ?? [],
   }
 }
 

@@ -73,7 +73,7 @@ export function TaskInspector(props: TaskInspectorProps) {
 
         <div className="wc-session-context-separator" aria-hidden="true" />
 
-        <TaskProgressSection {...props} />
+        <TaskProgressSection key={props.runtimeId} {...props} />
       </div>
     </aside>
   )

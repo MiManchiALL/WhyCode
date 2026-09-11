@@ -1,12 +1,4 @@
 import { structuredPatch } from 'diff'
-import type { Block } from './conversation-state.ts'
-
-export interface FileChangeSummary {
-  path: string
-  name: string
-  added: number
-  removed: number
-}
 
 export interface FileDiffLine {
   id: string
@@ -21,40 +13,6 @@ export interface FileDiffHunk {
   oldStart: number
   newStart: number
   lines: FileDiffLine[]
-}
-
-const PREVIEWED_FILE_TOOLS = new Set(['WriteFile', 'EditFile', 'DeleteFile'])
-
-/** 当前 turn 从最近一条主对话用户消息开始；工作结束后摘要随即消失。 */
-export function currentWorkFileChanges(blocks: readonly Block[]): FileChangeSummary[] {
-  let boundary = -1
-  for (let index = blocks.length - 1; index >= 0; index--) {
-    const block = blocks[index]!
-    if (block.kind === 'work-duration' || (block.kind === 'user' && !block.btw)) {
-      boundary = index + 1
-      break
-    }
-  }
-  const changes = new Map<string, FileChangeSummary>()
-  for (let index = Math.max(0, boundary); index < blocks.length; index++) {
-    const block = blocks[index]!
-    if (
-      block.kind !== 'tool'
-      || block.call.status !== 'done'
-      || !PREVIEWED_FILE_TOOLS.has(block.call.name)
-    ) continue
-    for (const change of block.call.fileChanges ?? []) {
-      const key = pathKey(change.path)
-      const previous = changes.get(key)
-      changes.set(key, {
-        path: previous?.path ?? change.path,
-        name: previous?.name ?? fileName(change.path),
-        added: (previous?.added ?? 0) + change.added,
-        removed: (previous?.removed ?? 0) + change.removed,
-      })
-    }
-  }
-  return [...changes.values()]
 }
 
 /** 与 Claude Code 一致保留三行上下文，并把不相邻修改拆成独立 hunk。 */
@@ -117,14 +75,4 @@ export function contentLines(
     oldLine: kind === 'added' ? null : index + 1,
     newLine: kind === 'removed' ? null : index + 1,
   }))
-}
-
-function pathKey(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  return /^[A-Za-z]:\//u.test(normalized) ? normalized.toLowerCase() : normalized
-}
-
-function fileName(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  return normalized.slice(normalized.lastIndexOf('/') + 1) || path
 }

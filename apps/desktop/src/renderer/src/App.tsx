@@ -27,6 +27,7 @@ import {
   type ContextUsageInfo,
   type CoreEvent,
   type QueuedUserMessage,
+  type ToolFileChange,
 } from '@whycode/core/events'
 import type {
   RuntimeEventEnvelope,
@@ -119,7 +120,6 @@ import {
   type RightPanelPage,
   type RightPanelSessionState,
 } from './right-panel-state.ts'
-import { currentWorkFileChanges } from './file-change-presentation.ts'
 import { ComposerFileChanges } from './composer-file-changes.tsx'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import {
@@ -164,6 +164,7 @@ export function App() {
   const [filePreviewInteractionRevision, setFilePreviewInteractionRevision] = useState(0)
   const [subagents, setSubagents] = useState<SubagentSummary[]>([])
   const [activeSkills, setActiveSkills] = useState<SkillSummary[]>([])
+  const [currentFileChanges, setCurrentFileChanges] = useState<ToolFileChange[]>([])
   const [showMcpStatus, setShowMcpStatus] = useState(false)
   const [rightPanelState, setRightPanelState] = useState<RightPanelSessionState>({
     open: false,
@@ -277,7 +278,6 @@ export function App() {
     conversationEventBufferRef.current!.push(event, occurredAt)
   }, [])
   const blocks = view.blocks
-  const currentFileChanges = useMemo(() => currentWorkFileChanges(blocks), [blocks])
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const conversationStarted = blocks.some((block) => block.kind === 'user')
@@ -739,6 +739,7 @@ export function App() {
     setPermMode(snapshot.permissionMode)
     setContextUsage(snapshot.contextUsage)
     setActiveSkills(snapshot.activeSkills)
+    setCurrentFileChanges(snapshot.turnFileChanges)
     if (changingRuntime) setShowMcpStatus(false)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
@@ -842,7 +843,14 @@ export function App() {
           && !ownsResumeRequestRef.current
         ) void synchronizeUnownedResume()
         break
+      case 'turn-start':
+        setCurrentFileChanges([])
+        break
+      case 'turn-file-changes':
+        setCurrentFileChanges(event.changes)
+        break
       case 'turn-end':
+        setCurrentFileChanges([])
         void refreshSessions()
         break
       case 'active-skills-changed':

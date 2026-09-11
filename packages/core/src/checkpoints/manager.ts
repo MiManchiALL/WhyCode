@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { ToolCheckpointScope } from '../tools/tool.ts'
+import { describeFileChange, type ToolFileChange } from '../tools/file-changes.ts'
 import {
   captureFileState,
   currentFileMatches,
@@ -141,7 +142,7 @@ export class CheckpointManager {
   }
 
   /** 工具结束后补齐 after 状态；没有实际文件变化时不生成可见回滚点。 */
-  async finalize(prepared: PreparedCheckpoint): Promise<ReadyCheckpoint | null> {
+  async finalize(prepared: PreparedCheckpoint): Promise<CheckpointManifest | null> {
     try {
       const manifest = await this.store.get(prepared.id)
       if (!manifest || manifest.status !== 'pending') return null
@@ -159,7 +160,7 @@ export class CheckpointManager {
         throw new Error('检查点 after 状态不完整')
       }
       await this.store.put(ready)
-      return { id: ready.id, toolUseId: ready.toolUseId, turnId: ready.turnId }
+      return ready
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       this.disabledReason = reason
@@ -175,6 +176,39 @@ export class CheckpointManager {
       }
       return null
     }
+  }
+
+  /** 只重算本次落盘路径；基线复用同一 turn 首次修改前的 blob，不累加编辑次数。 */
+  async turnFileChanges(manifest: CheckpointManifest): Promise<Map<string, ToolFileChange | null>> {
+    const baselines = new Map<string, FileState>()
+    for (const previous of await this.store.list()) {
+      if (
+        previous.turnId !== manifest.turnId || previous.sequence > manifest.sequence
+        || previous.status !== 'ready' || previous.coverage !== 'complete'
+      ) continue
+      for (const resource of previous.resources) {
+        const key = pathKey(resource.path)
+        if (!baselines.has(key)) baselines.set(key, resource.before)
+      }
+    }
+    const changes = new Map<string, ToolFileChange | null>()
+    for (const resource of manifest.resources) {
+      const key = pathKey(resource.path)
+      const before = baselines.get(key)
+      changes.set(key, null)
+      if (!before || !resource.after || sameFileState(before, resource.after)) continue
+      const [left, right] = await Promise.all([
+        readFileStatePreview(before, this.store.blobDir),
+        readFileStatePreview(resource.after, this.store.blobDir),
+      ])
+      if (left.kind === 'unavailable' || right.kind === 'unavailable') continue
+      changes.set(key, describeFileChange(
+        resource.path,
+        left.kind === 'text' ? left.content : '',
+        right.kind === 'text' ? right.content : '',
+      ))
+    }
+    return changes
   }
 
   async restore(

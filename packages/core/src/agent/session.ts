@@ -19,6 +19,7 @@ import {
   type ToolDefinition,
 } from '../tools/tool.ts'
 import { BUILTIN_TOOLS } from '../tools/registry.ts'
+import type { ToolFileChange } from '../tools/file-changes.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
 import { BTW_TOOL_NAMES, createBtwUserMessages } from '../prompts/btw.ts'
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
@@ -371,8 +372,8 @@ export class AgentSession {
   private readonly idleWaiters = new Set<() => void>()
   /** waiting-subagents 期间的单次事件唤醒；不轮询，也不启动额外 turn。 */
   private runLoopWake: (() => void) | null = null
-  /** 当前 turn ID（资源检查点归属用） */
-  private activeTurn: { id: string } | null = null
+  /** 根 turn 持有检查点归属与净变化摘要，结束后一起释放。 */
+  private activeTurn: { id: string; fileChanges: Map<string, ToolFileChange> } | null = null
   /** 当前操作（turn 或压缩）的中止器，session 自管 */
   private opAbort: AbortController | null = null
   /** 稳定 step 已结束后的持久化窗口不回滚结果，但停止请求会阻止队列自动接续。 */
@@ -643,6 +644,10 @@ export class AgentSession {
 
   get checkpointRestoreToolUseId(): string | null {
     return this.restoringCheckpointToolUseId
+  }
+
+  get turnFileChanges(): ToolFileChange[] {
+    return [...(this.activeTurn?.fileChanges.values() ?? [])]
   }
 
   get activeSkills(): SkillSummary[] {
@@ -1778,7 +1783,7 @@ export class AgentSession {
           ]
       : initialMessages
     // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
-    this.activeTurn = { id: turnId }
+    this.activeTurn = { id: turnId, fileChanges: new Map() }
     this.messages.push(...initialContext)
     try {
       await this.persistRequired(
@@ -3243,6 +3248,19 @@ export class AgentSession {
                 hash: ready.id,
                 coverage: 'complete',
               })
+              const turn = this.activeTurn
+              if (turn?.id === ready.turnId) {
+                try {
+                  for (const [path, change] of await this.checkpoints.turnFileChanges(ready)) {
+                    if (change) turn.fileChanges.set(path, change)
+                    else turn.fileChanges.delete(path)
+                  }
+                } catch {
+                  // 统计不可用不能撤销已完成的写入，也不能继续展示过期的精确数字。
+                  turn.fileChanges.clear()
+                }
+                emit({ type: 'turn-file-changes', changes: this.turnFileChanges })
+              }
             } else if (this.checkpoints.disabled && !this.checkpointDisabledNotified) {
               this.checkpointDisabledNotified = true
               emit({ type: 'checkpoint-disabled', reason: this.checkpoints.disabled })

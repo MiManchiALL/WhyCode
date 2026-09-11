@@ -1,10 +1,11 @@
-import type { FileChangeSummary } from './file-change-presentation.ts'
+import type { ToolFileChange } from '@whycode/core/events'
+import { fileName } from './local-files.ts'
 import { useEffect, useState } from 'react'
 
 export function ComposerFileChanges({
   changes,
 }: {
-  changes: readonly FileChangeSummary[]
+  changes: readonly ToolFileChange[]
 }) {
   const [open, setOpen] = useState(false)
   useEffect(() => {
@@ -46,7 +47,7 @@ export function ComposerFileChanges({
                 className="flex min-w-0 items-center gap-3 rounded-xl px-2 py-1.5 text-xs"
                 title={change.path}
               >
-                <span className="min-w-0 flex-1 truncate text-[var(--wc-muted)]">{change.name}</span>
+                <span className="min-w-0 flex-1 truncate text-[var(--wc-muted)]">{fileName(change.path)}</span>
                 <span className="flex shrink-0 gap-1.5 tabular-nums">
                   <span className="wc-tool-lines-added">+<LineCount value={change.added} /></span>
                   <span className="wc-tool-lines-removed">-<LineCount value={change.removed} /></span>

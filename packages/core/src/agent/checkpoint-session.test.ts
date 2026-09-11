@@ -14,7 +14,8 @@ import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
-import type { CoreEvent } from '../events.ts'
+import { isStepScopedCoreEvent, type CoreEvent } from '../events.ts'
+import { visibleCoreEventSchema } from '../session/view-events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { createUserQuestionMarker } from '../tasks/answer-resume.ts'
@@ -36,6 +37,63 @@ afterEach(async () => {
 })
 
 describe('Agent 资源检查点联动', () => {
+  it('净变化通过运行态实时投影，插队不重置，结束和新 turn 不残留统计', async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-turn-changes-'))
+    roots.push(root)
+    const path = join(root, 'net.txt')
+    await writeFile(path, 'original\n')
+    const recorder = await new SessionStore(join(root, 'sessions')).create({
+      workspace: localWorkspace(root), modelId: 'test:checkpoint',
+    })
+    const events: CoreEvent[] = []
+    let step = 0
+    const model: MockLanguageModelV4 = new MockLanguageModelV4({
+      doStream: async () => {
+        switch (step++) {
+          case 0:
+            return toolStep('WriteFile', { path, content: 'original\n1\n2\n3\n4\n5\n' }, 'add')
+          case 1:
+            assert.deepEqual(session.turnFileChanges, [{ path, added: 5, removed: 0 }])
+            return toolStep('WriteFile', { path, content: 'original\n' }, 'undo')
+          case 2:
+            assert.deepEqual(session.turnFileChanges, [])
+            return textStep('完成', 'first-final')
+          case 3:
+            assert.deepEqual(session.turnFileChanges, [])
+            return toolStep('WriteFile', { path, content: 'replacement\n' }, 'replace')
+          default:
+            assert.deepEqual(session.turnFileChanges, [{ path, added: 1, removed: 1 }])
+            return textStep('完成', 'second-final')
+        }
+      },
+    })
+    const session = new AgentSession({
+      model: modelEntry(model), providerConfig: { apiKey: 'test' },
+      promptContext: { projectDir: root, osPlatform: process.platform }, sessionRecorder: recorder,
+      requestApproval: async () => ({ approved: true, remember: false }),
+      emit: event => {
+        events.push(event)
+        if (event.type === 'turn-file-changes' && step === 1) session.handleUserMessage('补充：继续完成')
+      },
+    })
+    assert.equal(await session.handleUserMessage('追加后撤销五行'), 'completed')
+    assert.equal(events.filter(event => event.type === 'turn-start').length, 1)
+    assert.ok(events.some(event => event.type === 'message-injected'))
+    assert.deepEqual(session.turnFileChanges, [])
+    assert.equal(await session.handleUserMessage('替换一行'), 'completed')
+    assert.deepEqual(session.turnFileChanges, [])
+    const changes = events.filter(event => event.type === 'turn-file-changes')
+    assert.deepEqual(changes.map(event => event.changes), [
+      [{ path, added: 5, removed: 0 }], [], [{ path, added: 1, removed: 1 }],
+    ])
+    for (const event of changes) {
+      assert.equal(isStepScopedCoreEvent(event), false)
+      assert.equal(visibleCoreEventSchema.safeParse(event).success, false)
+    }
+    const toolChanges = events.filter(event => event.type === 'tool-end')
+    assert.deepEqual(toolChanges[1]?.fileChanges, [{ path, added: 0, removed: 5 }])
+  })
+
   it('单次批准项目外写入后建立精确检查点，并合并重复回滚请求', async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-agent-checkpoint-'))
     roots.push(root)
