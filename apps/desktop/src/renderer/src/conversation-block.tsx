@@ -8,17 +8,14 @@ import {
 } from './checkpoint-restore-controls.ts'
 import type { Block } from './conversation-state.ts'
 import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
-import { UserImageGallery } from './image-attachments.tsx'
 import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
 import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { StreamingPlainText } from './streaming-plain-text.tsx'
-import {
-  summarizeToolCallParts,
-  toolCallDetails,
-} from './tool-call-summary.ts'
+import { summarizeToolCallParts } from './tool-call-summary.ts'
+import { ToolCallDetails } from './tool-call-details.tsx'
 
 export function BlockView({
   runtimeId,
@@ -149,17 +146,15 @@ export function BlockView({
     skills,
     projectDir,
   })
-  const customDetails = toolCallDetails(
-    call.name,
-    call.input,
-    call.result,
-    call.status === 'error',
-  )
-  const details = customDetails ?? call.result ?? call.progress
   return (
     <div className="wc-menu-surface mb-3 overflow-hidden wc-type-control">
       <div className="flex w-full items-center gap-2 px-3 py-2">
-        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>
+        <button
+          type="button"
+          className="wc-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md text-left"
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>
           <span className="shrink-0 font-medium">{call.name}</span>
           {summary.primary && (
@@ -179,16 +174,11 @@ export function BlockView({
           />
         )}
       </div>
-      {call.attachments?.length ? (
-        <div className="border-t border-[var(--wc-line)] px-3 pt-2">
-          <UserImageGallery attachments={call.attachments} variant="tool" />
+      {expanded ? (
+        <div className="px-2 pb-2">
+          <ToolCallDetails runtimeId={runtimeId} call={call} projectDir={projectDir} />
         </div>
       ) : null}
-      {expanded && details && (
-        <pre className="wc-scrollbar max-h-64 overflow-auto border-t border-[var(--wc-line)] bg-black/[0.018] px-3 py-2 text-xs leading-5 text-[var(--wc-muted)]">
-          {details}
-        </pre>
-      )}
     </div>
   )
 }

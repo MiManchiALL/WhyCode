@@ -44,7 +44,7 @@ export function InlineFileChange({
     ? previewTextForTool(state.preview, toolName)
     : null
   return (
-    <div className="wc-tool-batch-details wc-file-change-detail ml-1 mt-0.5 mb-1.5 overflow-hidden rounded-xl">
+    <div className="wc-tool-details wc-file-change-detail overflow-hidden rounded-xl">
       <FileChangeHeader
         name={name}
         added={added}

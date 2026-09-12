@@ -42,15 +42,19 @@ export interface ToolBatchSummary {
   icon: ToolBatchCategory
 }
 
-export interface ToolBatchRow {
+export interface ToolFileRow {
+  summary: string
+  fullPath: string
+  /** 同目录重命名时显示在可点击目标文件名之前。 */
+  renameFrom?: string
+  added?: number
+  removed?: number
+}
+
+export interface ToolBatchRow extends Partial<ToolFileRow> {
   id: string
   call: ToolCall
   summary: string
-  /** 同目录重命名时显示在可点击目标文件名之前。 */
-  renameFrom?: string
-  fullPath?: string
-  added?: number
-  removed?: number
   checkpointAnchor: boolean
 }
 
@@ -182,10 +186,8 @@ export function toolBatchRows(
   },
 ): ToolBatchRow[] {
   return batch.tools.flatMap(({ call }) => {
-    const paths = FILE_PATH_ROW_TOOL_NAMES.has(call.name)
-      ? toolCallFilePaths(call.name, call.input)
-      : []
-    if (paths.length === 0) {
+    const files = toolCallFileRows(call, context.projectDir)
+    if (files.length === 0) {
       return [{
         id: `${batch.id}:row:${call.id}`,
         call,
@@ -194,30 +196,34 @@ export function toolBatchRows(
       }]
     }
 
-    const changes = new Map(
-      call.fileChanges?.map((change) => [pathKey(change.path), change] as const) ?? [],
-    )
-    const moveSource = call.name === 'MoveFile'
-      ? toolCallMoveSource(call.input)
-      : null
-    return paths.map((path, index) => {
-      const change = changes.get(pathKey(path))
-      const fullPath = resolveDisplayPath(path, context.projectDir)
-      const resolvedMoveSource = moveSource
-        ? resolveDisplayPath(moveSource, context.projectDir)
-        : null
-      return {
-        id: `${batch.id}:row:${call.id}:${index}`,
-        call,
-        summary: fileName(path),
-        ...(resolvedMoveSource && sameDisplayDirectory(resolvedMoveSource, fullPath)
-          ? { renameFrom: fileName(moveSource!) }
-          : {}),
-        fullPath,
-        ...(change ? { added: change.added, removed: change.removed } : {}),
-        checkpointAnchor: index === 0 && context.checkpointRestoreAnchorIds.has(call.id),
-      }
-    })
+    return files.map((file, index) => ({
+      ...file,
+      id: `${batch.id}:row:${call.id}:${index}`,
+      call,
+      checkpointAnchor: index === 0 && context.checkpointRestoreAnchorIds.has(call.id),
+    }))
+  })
+}
+
+export function toolCallFileRows(call: ToolCall, projectDir: string | null): ToolFileRow[] {
+  const paths = toolCallFilePaths(call.name, call.input)
+  if (paths.length === 0) return []
+  const changes = new Map(
+    call.fileChanges?.map((change) => [pathKey(change.path), change] as const) ?? [],
+  )
+  const moveSource = call.name === 'MoveFile' ? toolCallMoveSource(call.input) : null
+  const resolvedMoveSource = moveSource ? resolveDisplayPath(moveSource, projectDir) : null
+  return paths.map((path) => {
+    const change = changes.get(pathKey(path))
+    const fullPath = resolveDisplayPath(path, projectDir)
+    return {
+      summary: fileName(path),
+      fullPath,
+      ...(resolvedMoveSource && sameDisplayDirectory(resolvedMoveSource, fullPath)
+        ? { renameFrom: fileName(moveSource!) }
+        : {}),
+      ...(change ? { added: change.added, removed: change.removed } : {}),
+    }
   })
 }
 

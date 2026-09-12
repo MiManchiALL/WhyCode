@@ -22,14 +22,11 @@ import {
   type ToolBatchRow,
 } from './conversation-tool-batches.ts'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
-import { UserImageGallery } from './image-attachments.tsx'
-import { CopyButton } from './message-actions.tsx'
-import { InlineFileChange } from './file-change-view.tsx'
 import {
   isFilePreviewToolName,
   type RightPanelPage,
 } from './right-panel-state.ts'
-import { toolCallDetails } from './tool-call-summary.ts'
+import { ToolCallDetails } from './tool-call-details.tsx'
 
 export function ToolBatchGroup({
   runtimeId,
@@ -204,84 +201,9 @@ function ToolBatchRowView({
           />
         ) : null}
       </div>
-      {expanded ? <ToolBatchRowDetails runtimeId={runtimeId} row={row} /> : null}
-    </div>
-  )
-}
-
-function ToolBatchRowDetails({ runtimeId, row }: { runtimeId: string; row: ToolBatchRow }) {
-  const { call } = row
-  if (
-    row.fullPath
-    && call.status === 'done'
-    && row.added !== undefined
-    && row.removed !== undefined
-    && isFilePreviewToolName(call.name)
-    && call.name !== 'MoveFile'
-  ) {
-    return (
-      <InlineFileChange
-        runtimeId={runtimeId}
-        toolUseId={call.id}
-        toolName={call.name}
-        path={row.fullPath}
-        name={row.summary}
-        added={row.added}
-        removed={row.removed}
-      />
-    )
-  }
-  const customDetails = toolCallDetails(
-    call.name,
-    call.input,
-    call.result,
-    call.status === 'error',
-  )
-  const details = customDetails ?? call.result ?? call.progress
-  if (call.name === 'RunCommand') {
-    return <RunCommandDetails command={runCommand(call.input)} output={details} />
-  }
-  if (!details && !call.attachments?.length) return null
-  return (
-    <div className="wc-tool-batch-details ml-1 mt-0.5 mb-1.5 overflow-hidden rounded-xl">
-      {call.attachments?.length ? (
-        <div className="border-b border-[var(--wc-line)] px-3 pt-2">
-          <UserImageGallery attachments={call.attachments} variant="tool" />
-        </div>
-      ) : null}
-      {details ? (
-        <FadedScrollArea className="wc-scrollbar max-h-44 overflow-y-auto">
-          <pre className="whitespace-pre-wrap break-words px-3 py-2 text-xs leading-5">{details}</pre>
-        </FadedScrollArea>
-      ) : null}
-    </div>
-  )
-}
-
-function RunCommandDetails({ command, output }: { command: string; output: string }) {
-  return (
-    <div className="wc-tool-batch-details ml-1 mt-0.5 mb-1.5 overflow-hidden rounded-xl">
-      <div className="wc-tool-copy-scope relative border-b border-[var(--wc-line)] px-3 py-2 pr-9">
-        <div className="mb-1 text-xs text-[var(--wc-faint)]">Shell</div>
-        <pre className="whitespace-pre-wrap break-words text-xs leading-5">$ {command}</pre>
-        <CopyButton
-          text={command}
-          label="复制完整命令"
-          ariaLabel="复制完整命令"
-          className="wc-tool-copy-button absolute top-2 right-2 text-[var(--wc-faint)]"
-        />
-      </div>
-      {output ? (
-        <div className="wc-tool-copy-scope relative">
-          <FadedScrollArea className="wc-scrollbar max-h-44 overflow-y-auto overscroll-contain">
-            <pre className="whitespace-pre-wrap break-words px-3 py-2 pr-9 text-xs leading-5">{output}</pre>
-          </FadedScrollArea>
-          <CopyButton
-            text={output}
-            label="复制命令输出"
-            ariaLabel="复制命令输出"
-            className="wc-tool-copy-button absolute top-2 right-2 text-[var(--wc-faint)]"
-          />
+      {expanded ? (
+        <div className="ml-1 mt-0.5 mb-1.5">
+          <ToolCallDetails runtimeId={runtimeId} call={row.call} file={row} />
         </div>
       ) : null}
     </div>
@@ -368,10 +290,4 @@ function FilePathButton({
       ) : null}
     </>
   )
-}
-
-function runCommand(input: unknown): string {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return ''
-  const command = (input as Record<string, unknown>).command
-  return typeof command === 'string' ? command : ''
 }

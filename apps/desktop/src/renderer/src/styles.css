@@ -1189,19 +1189,19 @@ html[data-wc-right-panel-resizing='true'] * {
   pointer-events: none;
 }
 
-.wc-tool-batch-details {
-  --wc-tool-batch-detail-bg: color-mix(in srgb, var(--wc-surface), var(--wc-ink) 3.5%);
+.wc-tool-details {
+  --wc-tool-detail-bg: color-mix(in srgb, var(--wc-surface), var(--wc-ink) 3.5%);
   border: 1px solid rgb(48 50 45 / 9%);
-  background: var(--wc-tool-batch-detail-bg);
+  background: var(--wc-tool-detail-bg);
   color: var(--wc-muted);
 }
 
-.wc-tool-batch-details .wc-scroll-fade {
-  --wc-scroll-fade-color: var(--wc-tool-batch-detail-bg);
+.wc-tool-details .wc-scroll-fade {
+  --wc-scroll-fade-color: var(--wc-tool-detail-bg);
 }
 
 .wc-file-change-detail {
-  --wc-tool-batch-detail-bg: #fbfbfa;
+  --wc-tool-detail-bg: #fbfbfa;
 }
 
 .wc-code-scroll {
