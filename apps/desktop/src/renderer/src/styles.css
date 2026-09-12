@@ -104,6 +104,10 @@ button:not(:disabled),
   background: #eeeeeb;
 }
 
+.wc-user-message-text[data-collapsed='true'] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5lh), transparent);
+}
+
 .wc-user-message-editor:focus-within {
   border-color: rgb(91 111 94 / 32%);
   box-shadow: 0 0 0 2px rgb(91 111 94 / 12%);

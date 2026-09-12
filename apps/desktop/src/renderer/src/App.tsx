@@ -816,6 +816,7 @@ export function App() {
         void refreshSessions()
         break
       case 'turn-start':
+        setCurrentFileChanges([])
         // 后台唤醒先进入 work，再在回合起点写稳会话活动时间；这里确认最近顺序。
         void refreshSessions()
         break
@@ -842,9 +843,6 @@ export function App() {
           && resumingSessionIdRef.current
           && !ownsResumeRequestRef.current
         ) void synchronizeUnownedResume()
-        break
-      case 'turn-start':
-        setCurrentFileChanges([])
         break
       case 'turn-file-changes':
         setCurrentFileChanges(event.changes)

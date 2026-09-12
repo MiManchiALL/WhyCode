@@ -25,8 +25,8 @@ export function UserMessageCard(props: UserMessageCardProps) {
   return (
     <div
       data-conversation-navigator-target={props.block.id}
-      className={`wc-user-message-copy group ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2 ${
-        editor.editing ? 'mb-8' : 'mb-2'
+      className={`wc-user-message-copy group ml-auto flex w-full min-w-0 flex-col items-end gap-2 ${
+        editor.editing ? 'mb-8' : 'mb-2 max-w-[84%]'
       }`}
     >
       <UserImageGallery attachments={props.block.attachments} />
@@ -34,7 +34,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
       <SkillBadges skills={props.block.skills} />
       {editor.editing
         ? (
-          <div className={`wc-user-message-bubble wc-user-message-editor w-full min-w-0 max-w-[36rem] px-3.5 py-2.5 ${
+          <div className={`wc-user-message-bubble wc-user-message-editor w-full min-w-0 px-3.5 py-2.5 ${
             props.block.btw ? 'wc-user-message-bubble-btw' : ''
           }`}>
             <MessageEditor
@@ -85,7 +85,8 @@ function UserMessageText({ text }: { text: string }) {
       <div
         id={contentId}
         ref={contentRef}
-        className="min-w-0 max-w-full overflow-hidden whitespace-pre-wrap [overflow-wrap:anywhere]"
+        className="wc-user-message-text min-w-0 max-w-full overflow-hidden whitespace-pre-wrap [overflow-wrap:anywhere]"
+        data-collapsed={overflows && !expanded}
         style={{ maxHeight: expanded ? undefined : `${COLLAPSED_MESSAGE_LINES}lh` }}
       >
         {text}
@@ -93,13 +94,13 @@ function UserMessageText({ text }: { text: string }) {
       {overflows && (
         <button
           type="button"
-          className="wc-focus-ring mt-2 flex items-center gap-1 rounded text-xs text-[var(--wc-muted)]"
+          className="wc-focus-ring wc-type-control -ml-1 mt-2 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[var(--wc-muted)] hover:bg-black/5 hover:text-[var(--wc-ink)]"
           aria-expanded={expanded}
           aria-controls={contentId}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? '收起详细输入' : '展开详细输入'}
-          <ChevronDown size={14} className={expanded ? 'rotate-180' : undefined} aria-hidden="true" />
+          {expanded ? '收起' : '展开全文'}
+          <ChevronDown size={14} className={`transition-transform duration-150 motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
         </button>
       )}
     </>

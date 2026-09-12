@@ -62,6 +62,7 @@ export function BlockView({
   if (block.kind === 'user') {
     return (
       <UserMessageCard
+        key={`${runtimeId}:${block.id}`}
         runtimeId={runtimeId}
         block={block}
         editable={editable}
