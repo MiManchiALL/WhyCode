@@ -1920,7 +1920,7 @@ export function App() {
     onPdfFiles: addPdfFiles,
     onError: showError,
   })
-  const currentSession = sessions.find((session) => session.isCurrent)
+  const currentSession = sessions.find((session) => session.sessionId === sessionIdRef.current)
   const taskTitle = currentSession?.title
     || (blocks.length > 0 ? '当前会话' : '新会话')
   const composerDisabled = stopping
@@ -1962,6 +1962,8 @@ export function App() {
       <AppSidebar
         collapsed={sidebarCollapsed}
         sessions={sessions}
+        selectedSessionId={resumingSessionId ?? sessionIdRef.current}
+        resumingSessionId={resumingSessionId}
         error={sessionListError}
         actionError={sessionActionError}
         busy={sessionChangeLocked}
@@ -2217,7 +2219,7 @@ export function App() {
                               : deletionBlocksRuntime
                                 ? '正在删除当前会话及其关联数据…'
                                 : resumingSessionId
-                                  ? '输入消息…'
+                                  ? '正在加载会话…'
                                   : checkpointRestoreToolUseId
                                     ? '正在安全回滚文件，请等待完成…'
                                     : status === 'waiting-approval'
