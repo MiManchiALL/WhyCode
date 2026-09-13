@@ -1,4 +1,4 @@
-export const SKILL_TOOL_PROMPT = `读取当前根任务可用的 Agent Skill。
+export const SKILL_TOOL_PROMPT = `使用 Skill 执行任务时，必须通过本工具加载并激活 SKILL.md，不要通过其它方式获取技能正文。
 
 仅当 <available_skills> 中某项与用户请求明确匹配时调用，并传入目录中的精确 skillId；同名 Skill 必须按 id 区分，禁止猜测路径。
 
