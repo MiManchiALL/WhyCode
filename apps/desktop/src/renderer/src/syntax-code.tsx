@@ -9,11 +9,11 @@ import githubLight from 'shiki/themes/github-light.mjs'
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
 } from 'react'
 import type { FileDiffLine } from './file-change-presentation.ts'
+import { useScrollArea } from './use-scroll-area.ts'
 
 interface PooledHighlighter {
   promise: ReturnType<typeof createHighlighterCore>
@@ -75,7 +75,7 @@ export function SyntaxCode({
 }) {
   const source = useMemo(() => lines.map((line) => line.text).join('\n'), [lines])
   const highlighted = useHighlightedCode(path, source)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const { ref: scrollRef, onScroll, overscrollBehaviorY } = useScrollArea(lines, { enabled: scroll })
 
   useEffect(() => {
     if (focusLine === null) return
@@ -94,6 +94,8 @@ export function SyntaxCode({
   return (
     <div
       ref={scrollRef}
+      onScroll={onScroll}
+      style={{ overscrollBehaviorY }}
       className={`wc-code-scroll wc-scrollbar min-h-0 ${scroll ? 'overflow-auto' : 'overflow-visible'} ${className}`}
     >
       <div className="wc-code-lines min-w-max py-1 font-mono text-xs leading-5">

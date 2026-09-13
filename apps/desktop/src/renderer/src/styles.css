@@ -1117,10 +1117,6 @@ html[data-wc-right-panel-resizing='true'] * {
   padding-block: 0.125rem;
 }
 
-.wc-scroll-fade:is([data-fade-top='true'], [data-fade-bottom='true']) > .wc-tool-batch-list {
-  overscroll-behavior-y: contain;
-}
-
 .wc-tool-batch-row {
   color: var(--wc-faint);
   font-size: 13px;

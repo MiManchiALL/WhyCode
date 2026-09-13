@@ -18,6 +18,7 @@ import type {
   RightPanelPage,
 } from './right-panel-state.ts'
 import { SyntaxCode } from './syntax-code.tsx'
+import { useScrollArea } from './use-scroll-area.ts'
 
 type FilePage = Extract<RightPanelPage, { kind: 'file' }>
 type InlineFilePreviewToolName = Exclude<FilePreviewToolName, 'MoveFile'>
@@ -297,11 +298,12 @@ function EditDiff({ path, preview }: { path: string; preview: CheckpointFilePrev
       : [],
     [afterContent, beforeContent],
   )
+  const { ref, onScroll, overscrollBehaviorY } = useScrollArea(hunks, { enabled: hunks.length > 0 })
   if (!before.ok) return <PreviewMessage>{before.message}</PreviewMessage>
   if (!after.ok) return <PreviewMessage>{after.message}</PreviewMessage>
   if (hunks.length === 0) return <PreviewMessage>没有可展示的文本差异</PreviewMessage>
   return (
-    <div className="wc-scrollbar max-h-72 overflow-y-auto">
+    <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-scrollbar max-h-72 overflow-y-auto">
       {hunks.map((hunk, index) => (
         <div key={hunk.id}>
           {index > 0 ? <div className="wc-diff-hunk-gap">···</div> : null}
