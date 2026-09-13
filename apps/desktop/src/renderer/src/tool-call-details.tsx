@@ -6,6 +6,8 @@ import { UserImageGallery } from './image-attachments.tsx'
 import { CopyButton } from './message-actions.tsx'
 import { isFilePreviewToolName } from './right-panel-state.ts'
 import { toolCallDetails } from './tool-call-summary.ts'
+import { TaskPlanView } from './task-plan-view.tsx'
+import { parseTaskToolResult, type TaskToolResult } from './task-tool-result.ts'
 
 export function ToolCallDetails({
   runtimeId,
@@ -41,6 +43,8 @@ export function ToolCallDetails({
       )
     }
   }
+  const taskResult = parseTaskToolResult(call)
+  if (taskResult) return <TaskToolDetails key={`${runtimeId}:${call.id}`} result={taskResult} />
   const customDetails = toolCallDetails(call.name, call.input, call.result, call.status === 'error')
   const details = customDetails ?? call.result ?? call.progress
   const command = call.name === 'RunCommand' ? runCommand(call.input) : null
@@ -70,6 +74,26 @@ export function ToolCallDetails({
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function TaskToolDetails({ result }: { result: TaskToolResult }) {
+  return (
+    <div className="wc-tool-details overflow-hidden rounded-xl">
+      <FadedScrollArea className="wc-scrollbar max-h-72 overflow-y-auto overscroll-contain">
+        <div className="space-y-2 px-3 py-2 text-xs">
+          <p className={`whitespace-pre-wrap break-words leading-5 ${result.ok ? 'text-[var(--wc-muted)]' : 'text-[var(--wc-danger)]'}`}>
+            {result.message}
+          </p>
+          {result.plan && (
+            <>
+              <p className="whitespace-pre-wrap break-words font-medium leading-5 text-[var(--wc-ink)]">{result.plan.goal}</p>
+              <TaskPlanView plan={result.plan} historical updatedItemIds={result.updatedItemIds} />
+            </>
+          )}
+        </div>
+      </FadedScrollArea>
     </div>
   )
 }

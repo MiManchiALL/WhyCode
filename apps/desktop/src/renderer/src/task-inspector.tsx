@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { isSubagentRunning } from './subagent-presentation.ts'
-import { TaskPlanMenu } from './task-plan-menu.tsx'
+import { TaskPlanView } from './task-plan-view.tsx'
 import { SKILL_SCOPE_LABEL } from './skill-picker.tsx'
 import type { TaskInspectorView } from './right-panel-state.ts'
 import { WorktreeEnvironmentMenu } from './worktree-panel.tsx'
@@ -124,7 +124,7 @@ function TaskProgressSection({ plan, activeSkills, view, onViewChange }: Pick<
       <div className="mt-1.5 min-h-2">
         <div className="wc-inspector-view" data-active={!showingSkills} aria-hidden={showingSkills} inert={showingSkills}>
           <div className="min-h-0 overflow-hidden">
-            {plan && <TaskPlanMenu key={plan.id} plan={plan} />}
+            {plan && <TaskPlanView key={plan.id} plan={plan} />}
           </div>
         </div>
         <div className="wc-inspector-view" data-active={showingSkills} aria-hidden={!showingSkills} inert={!showingSkills}>
