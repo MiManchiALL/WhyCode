@@ -59,7 +59,7 @@ export function ToolCallDetails({
       ) : null}
       {details ? (
         <div className="wc-tool-copy-scope relative">
-          <FadedScrollArea className="wc-scrollbar max-h-44 overflow-y-auto overscroll-contain">
+          <FadedScrollArea className="wc-scrollbar max-h-44 overflow-y-auto">
             <pre className={`whitespace-pre-wrap break-words px-3 py-2 text-xs leading-5 ${command !== null ? 'pr-9' : ''}`}>
               {details}
             </pre>
@@ -81,7 +81,7 @@ export function ToolCallDetails({
 function TaskToolDetails({ result }: { result: TaskToolResult }) {
   return (
     <div className="wc-tool-details overflow-hidden rounded-xl">
-      <FadedScrollArea className="wc-scrollbar max-h-72 overflow-y-auto overscroll-contain">
+      <FadedScrollArea className="wc-scrollbar max-h-72 overflow-y-auto">
         <div className="space-y-2 px-3 py-2 text-xs">
           <p className={`whitespace-pre-wrap break-words leading-5 ${result.ok ? 'text-[var(--wc-muted)]' : 'text-[var(--wc-danger)]'}`}>
             {result.message}

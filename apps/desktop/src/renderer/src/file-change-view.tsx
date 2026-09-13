@@ -301,7 +301,7 @@ function EditDiff({ path, preview }: { path: string; preview: CheckpointFilePrev
   if (!after.ok) return <PreviewMessage>{after.message}</PreviewMessage>
   if (hunks.length === 0) return <PreviewMessage>没有可展示的文本差异</PreviewMessage>
   return (
-    <div className="wc-scrollbar max-h-72 overflow-y-auto overscroll-contain">
+    <div className="wc-scrollbar max-h-72 overflow-y-auto">
       {hunks.map((hunk, index) => (
         <div key={hunk.id}>
           {index > 0 ? <div className="wc-diff-hunk-gap">···</div> : null}

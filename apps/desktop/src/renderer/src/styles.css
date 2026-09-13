@@ -1210,7 +1210,6 @@ html[data-wc-right-panel-resizing='true'] * {
 
 .wc-code-scroll {
   background: #fbfbfa;
-  overscroll-behavior: contain;
 }
 
 .wc-code-lines {
