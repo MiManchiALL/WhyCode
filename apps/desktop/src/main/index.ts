@@ -206,6 +206,7 @@ import {
 } from './web-page/processor.ts'
 import { importWebPdfDocument } from './web-page/pdf-import.ts'
 import { installExternalWebLinkHandlers } from './external-link.ts'
+import { installImageContextMenu } from './image-context-menu.ts'
 import { createRendererCrashRecoveryController } from './renderer-crash-recovery.ts'
 import { RuntimeEventBatcher } from './runtime-event-batcher.ts'
 import { isBackgroundRuntimeLifecycleEvent } from './runtime-event-delivery.ts'
@@ -328,6 +329,7 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => win.show())
   installTerminalWindowLifecycle(win, terminals)
+  installImageContextMenu(win)
 
   installExternalWebLinkHandlers(
     win,
