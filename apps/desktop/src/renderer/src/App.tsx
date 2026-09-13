@@ -743,11 +743,10 @@ export function App() {
     if (changingRuntime) setShowMcpStatus(false)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
-    setDeletingSessionId((current) => {
-      const next = preserveDeletionTarget(current, snapshot.deletingSessionId)
-      deletingSessionIdRef.current = next
-      return next
-    })
+    setDeletingSession(preserveDeletionTarget(
+      deletingSessionIdRef.current,
+      snapshot.deletingSessionId,
+    ))
     setDeletionBlocksRuntime(Boolean(snapshot.deletingSessionId))
     setResumingSessionId(snapshot.resumingSessionId)
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
@@ -770,6 +769,7 @@ export function App() {
     replaceSkills,
     resetSkillCatalog,
     setBtwMode,
+    setDeletingSession,
     setDeletionBlocksRuntime,
     setResumingSessionId,
     stashActiveComposer,
