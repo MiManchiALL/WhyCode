@@ -123,13 +123,14 @@ function toolSegmentSealStates(
 export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
   const deferred = useDeferredValue(props)
   const rendering = deferred.runtimeId !== props.runtimeId
+  // 读取与渲染共用一次等待生命周期，阶段交接不能重建提示并重启其显示延迟。
   const pending = !!props.pendingSessionId || rendering
   useLayoutEffect(() => {
     if (!pending && props.active !== false) props.onReady?.()
   }, [pending, props.runtimeId, props.onReady, props.active, props.items])
   return (
     <>
-      {pending && <SessionLoading key={props.pendingSessionId ?? props.runtimeId} />}
+      {pending && <SessionLoading />}
       <div hidden={pending} inert={props.active === false}>
         <ConversationContents {...(pending || props.active === false ? deferred : props)} />
       </div>
