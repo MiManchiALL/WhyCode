@@ -59,7 +59,6 @@ import {
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
-import { SessionLoading } from './session-loading.tsx'
 import { ConversationNavigator } from './conversation-navigator.tsx'
 import { presentBtwConversations } from './conversation-btw-groups.ts'
 import {
@@ -1997,11 +1996,9 @@ export function App() {
             open: !current.open,
           }))}
         />
-        {loadingConversation && <SessionLoading key={resumingSessionId} />}
-
         <div
           className="relative flex min-h-0 flex-1"
-          style={{ display: loadingConversation ? 'none' : undefined }}
+          style={{ visibility: loadingConversation ? 'hidden' : undefined }}
         >
           <ConversationNavigator
             key={runtimeId}
@@ -2018,56 +2015,59 @@ export function App() {
                 onDismiss={dismissConversationFeedback}
               />
             )}
-            <main
-              ref={scrollRef}
-              onScroll={onScroll}
-              className="wc-scrollbar relative min-h-0 flex-1 overflow-y-auto px-5 py-5"
-            >
-              <div
-                ref={conversationContentRef}
-                className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
+            <div className="relative flex min-h-0 flex-1">
+              <main
+                ref={scrollRef}
+                onScroll={onScroll}
+                className="wc-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-5"
               >
-                {!conversationStarted && worktreePreparation && (
-                  <WorktreePreparation
-                    message={worktreePreparation.message}
-                    baseRef={worktreePreparation.baseRef}
+                <div
+                  ref={conversationContentRef}
+                  className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
+                >
+                  {!conversationStarted && worktreePreparation && (
+                    <WorktreePreparation
+                      message={worktreePreparation.message}
+                      baseRef={worktreePreparation.baseRef}
+                    />
+                  )}
+                  {!conversationStarted && !worktreePreparation && (
+                    <div className="mx-auto mt-[18vh] max-w-md text-center">
+                      <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
+                      <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
+                        {explicitProjectSelected
+                          ? '描述目标，WhyCode 会在当前工作区中读取、修改和验证。'
+                          : '先选择一个项目，或直接在默认工作区中开始。'}
+                      </p>
+                    </div>
+                  )}
+                  <ConversationView
+                    runtimeId={runtimeId}
+                    pendingSessionId={loadingConversation ? resumingSessionId : null}
+                    onReady={restoreConversationAfterRender}
+                    active={resumingSessionId === null}
+                    items={btwPresentation.items}
+                    latestBtwConversationId={btwPresentation.latestBtwConversationId}
+                    expandedIds={view.expanded}
+                    editableBlockId={editableBlockId}
+                    busy={interactionBusy}
+                    checkpointRestoreAnchorIds={checkpointRestoreAnchors}
+                    checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+                    fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
+                    showThinkingGap={thinkingGapVisible}
+                    forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
+                    forkPendingTurnId={forkPendingTurnId}
+                    skills={skillCatalog.skills}
+                    projectDir={projectDir}
+                    onCheckpointRestoreRequest={requestCheckpointRestore}
+                    onEdit={editUserMessage}
+                    onFork={forkConversation}
+                    onOpenFilePreview={openFilePreview}
+                    onToggle={toggle}
                   />
-                )}
-                {!conversationStarted && !worktreePreparation && (
-                  <div className="mx-auto mt-[18vh] max-w-md text-center">
-                    <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
-                    <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
-                      {explicitProjectSelected
-                        ? '描述目标，WhyCode 会在当前工作区中读取、修改和验证。'
-                        : '先选择一个项目，或直接在默认工作区中开始。'}
-                    </p>
-                  </div>
-                )}
-                <ConversationView
-                  runtimeId={runtimeId}
-                  onReady={restoreConversationAfterRender}
-                  active={resumingSessionId === null}
-                  items={btwPresentation.items}
-                  latestBtwConversationId={btwPresentation.latestBtwConversationId}
-                  expandedIds={view.expanded}
-                  editableBlockId={editableBlockId}
-                  busy={interactionBusy}
-                  checkpointRestoreAnchorIds={checkpointRestoreAnchors}
-                  checkpointRestoreToolUseId={checkpointRestoreToolUseId}
-                  fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
-                  showThinkingGap={thinkingGapVisible}
-                  forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
-                  forkPendingTurnId={forkPendingTurnId}
-                  skills={skillCatalog.skills}
-                  projectDir={projectDir}
-                  onCheckpointRestoreRequest={requestCheckpointRestore}
-                  onEdit={editUserMessage}
-                  onFork={forkConversation}
-                  onOpenFilePreview={openFilePreview}
-                  onToggle={toggle}
-                />
-              </div>
-            </main>
+                </div>
+              </main>
+            </div>
 
             <div className="relative shrink-0 px-4 pb-4 pt-1">
               <div className="wc-conversation-balanced-content mx-auto w-full max-w-4xl">
@@ -2294,12 +2294,15 @@ export function App() {
                 ? 'ml-0'
                 : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
             }`}
-            style={rightPanelState.open
-              ? { width: rightPanelWidthExpression(
-                  rightPanelWidthPreference.ratio,
-                  rightPanelWidthPreference.maximumRatio,
-                ) }
-              : undefined}
+            style={{
+              contentVisibility: loadingConversation ? 'hidden' : undefined,
+              width: rightPanelState.open
+                ? rightPanelWidthExpression(
+                    rightPanelWidthPreference.ratio,
+                    rightPanelWidthPreference.maximumRatio,
+                  )
+                : undefined,
+            }}
           >
             {(rightPanelState.open || rightPanelResizeActive) && (
               <RightPanelResizeHandle

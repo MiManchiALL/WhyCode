@@ -36,6 +36,7 @@ import type { RightPanelPage } from './right-panel-state.ts'
 
 interface ConversationViewProps {
   runtimeId: string
+  pendingSessionId?: string | null
   onReady?: () => void
   active?: boolean
   items: readonly ConversationDisplayItem[]
@@ -121,14 +122,15 @@ function toolSegmentSealStates(
 
 export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
   const deferred = useDeferredValue(props)
-  const pending = deferred.runtimeId !== props.runtimeId
+  const rendering = deferred.runtimeId !== props.runtimeId
+  const pending = !!props.pendingSessionId || rendering
   useLayoutEffect(() => {
     if (!pending && props.active !== false) props.onReady?.()
   }, [pending, props.runtimeId, props.onReady, props.active])
   return (
     <>
-      {pending && <SessionLoading key={props.runtimeId} className="absolute inset-0" />}
-      <div hidden={pending} inert={props.active === false}>
+      {pending && <SessionLoading key={props.pendingSessionId ?? props.runtimeId} />}
+      <div hidden={rendering} inert={props.active === false}>
         <ConversationContents {...(pending || props.active === false ? deferred : props)} />
       </div>
     </>
