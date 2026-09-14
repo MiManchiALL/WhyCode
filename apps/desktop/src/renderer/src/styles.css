@@ -1814,7 +1814,12 @@ html[data-wc-right-panel-resizing='true'] * {
   background-position: 150% 0;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: wc-session-loading-shine 3s ease-in-out infinite;
+  animation: wc-session-loading-reveal 0s 250ms backwards,
+    wc-session-loading-shine 3s 250ms ease-in-out infinite;
+}
+
+@keyframes wc-session-loading-reveal {
+  from { visibility: hidden; }
 }
 
 @keyframes wc-session-loading-shine {
@@ -1824,7 +1829,7 @@ html[data-wc-right-panel-resizing='true'] * {
 
 @media (prefers-reduced-motion: reduce) {
   .wc-session-loading {
-    animation: none;
+    animation-name: wc-session-loading-reveal;
     background: none;
     -webkit-text-fill-color: currentColor;
   }

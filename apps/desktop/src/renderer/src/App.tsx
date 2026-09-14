@@ -1997,7 +1997,7 @@ export function App() {
             open: !current.open,
           }))}
         />
-        {loadingConversation && <SessionLoading />}
+        {loadingConversation && <SessionLoading key={resumingSessionId} />}
 
         <div
           className="relative flex min-h-0 flex-1"
