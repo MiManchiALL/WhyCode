@@ -12,6 +12,7 @@ import type {
   SubagentState,
   SubagentTranscriptSnapshot,
 } from '@whycode/core'
+import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { IPC } from '../shared/ipc.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type {
@@ -192,6 +193,8 @@ const api = {
   ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  conversationHistory: (request: ConversationHistoryRequest): Promise<ConversationHistoryResult> =>
+    ipcRenderer.invoke(IPC.conversationHistory, request),
   runtimeSnapshot: (runtimeId?: string): Promise<RuntimeSnapshot> =>
     ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
   subagentTranscript: (
@@ -229,8 +232,8 @@ const api = {
   consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
     ipcRenderer.invoke(IPC.consensusStatus),
   listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
-  resumeSession: (sessionId: string): Promise<ResumeSessionResult> =>
-    ipcRenderer.invoke(IPC.resumeSession, sessionId),
+  resumeSession: (sessionId: string, historyStart?: string): Promise<ResumeSessionResult> =>
+    ipcRenderer.invoke(IPC.resumeSession, sessionId, historyStart),
   forkSession: (request: ForkSessionRequest): Promise<ForkSessionResult> =>
     ipcRenderer.invoke(IPC.forkSession, request),
   newSession: (request?: NewSessionRequest): Promise<NewSessionResult> =>

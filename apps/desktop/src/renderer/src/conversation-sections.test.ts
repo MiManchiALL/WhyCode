@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import {
   conversationSections,
   findLatestForkTurnId,
@@ -8,7 +8,7 @@ import {
   isForkBoundarySection,
   shouldSealTrailingToolBatch,
   type ConversationSection,
-} from './conversation-sections.ts'
+} from '../../shared/conversation-sections.ts'
 
 describe('已完成任务的会话展示投影', () => {
   it('把处理过程折叠在时长标题下，并把最终回答留在标题之后', () => {

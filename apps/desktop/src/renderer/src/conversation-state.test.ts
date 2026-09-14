@@ -13,8 +13,8 @@ import {
   runtimeEventsAfterSnapshot,
   resumeTargetCommitted,
   toggleExpanded,
-} from './conversation-state.ts'
-import { conversationSections } from './conversation-sections.ts'
+} from '../../shared/conversation-state.ts'
+import { conversationSections } from '../../shared/conversation-sections.ts'
 
 describe('会话界面时间线重建', () => {
   it('把持久化的逐文件增删行统计恢复到工具块', () => {

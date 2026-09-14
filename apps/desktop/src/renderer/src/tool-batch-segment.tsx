@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import {
   presentToolSegmentContent,
   type ToolBatch,

@@ -1,11 +1,11 @@
-import type { ToolCall } from './conversation-state.ts'
+import type { ToolCall } from '../../shared/conversation-state.ts'
 import { toolCallFileRows, type ToolBatchRow } from './conversation-tool-batches.ts'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { InlineFileChange } from './file-change-view.tsx'
 import { UserImageGallery } from './image-attachments.tsx'
 import { CopyButton } from './message-actions.tsx'
 import { isFilePreviewToolName } from './right-panel-state.ts'
-import { toolCallDetails } from './tool-call-summary.ts'
+import { toolCallDetails } from '../../shared/tool-call-summary.ts'
 import { TaskPlanView } from './task-plan-view.tsx'
 import { parseTaskToolResult, type TaskToolResult } from './task-tool-result.ts'
 

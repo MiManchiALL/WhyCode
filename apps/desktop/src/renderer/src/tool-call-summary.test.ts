@@ -4,7 +4,7 @@ import {
   summarizeToolCall,
   summarizeToolCallParts,
   toolCallDetails,
-} from './tool-call-summary.ts'
+} from '../../shared/tool-call-summary.ts'
 
 describe('工具卡片关键参数摘要', () => {
   const cases: Array<[string, Record<string, unknown>, string]> = [

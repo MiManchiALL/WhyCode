@@ -6,6 +6,9 @@ import {
   type ViewEvent,
 } from '@whycode/core'
 
+import { applyCoreEvent, type ConversationState } from '../shared/conversation-state.ts'
+import { ConversationHistoryProjection } from './conversation-history.ts'
+
 export interface ViewEventWriter {
   readonly initialViewEvents: readonly ViewEvent[]
   readonly initialViewEventTimestamps?: readonly string[]
@@ -27,6 +30,7 @@ interface PendingStep {
  */
 export class ViewTimeline {
   private readonly onWriteError: (error: unknown) => void
+  private readonly history = new ConversationHistoryProjection()
   private captureSequence = 0
   private readonly pendingWrites = new Set<Promise<void>>()
   private pending: Record<Channel, PendingStep> = {
@@ -97,6 +101,34 @@ export class ViewTimeline {
     // 等待期间可能又提交新的稳定事件；必须排空到同一同步边界，事件序号才能
     // 与快照形成无缺口的接续点。
     await this.flush()
+    const pending = this.pendingSnapshot(writer)
+    return {
+      events: [...writer.initialViewEvents.map((event) => structuredClone(event)), ...pending.events],
+      eventTimestamps: [
+        ...(writer.initialViewEventTimestamps ?? writer.initialViewEvents.map(() => '')),
+        ...pending.eventTimestamps,
+      ],
+      boundary: readBoundary(),
+    }
+  }
+
+  async conversationAt<T>(
+    writer: ViewEventWriter,
+    readBoundary: () => T,
+  ): Promise<{ state: ConversationState; boundary: T }> {
+    let state: ConversationState
+    do {
+      await this.flush()
+      state = await this.history.update(writer.initialViewEvents, writer.initialViewEventTimestamps ?? [])
+    } while (this.pendingWrites.size > 0 || this.history.eventCount < writer.initialViewEvents.length)
+    const pending = this.pendingSnapshot(writer)
+    for (const [index, entry] of pending.events.entries()) {
+      if (entry.type === 'core-event') state = applyCoreEvent(state, entry.event, pending.eventTimestamps[index])
+    }
+    return { state, boundary: readBoundary() }
+  }
+
+  private pendingSnapshot(writer: ViewEventWriter): { events: ViewEvent[]; eventTimestamps: string[] } {
     const pending = (['Main', 'B', 'C'] as const)
       .flatMap((channel) => {
         const step = this.pending[channel]
@@ -108,18 +140,10 @@ export class ViewTimeline {
         }))
       })
       .sort((left, right) => left.order - right.order)
-    const pendingEvents = pending.map(({ event }) => structuredClone(event))
-    const pendingTimestamps = pending.map(({ timestamp }) => timestamp)
-    const events = [
-      ...writer.initialViewEvents.map((event) => structuredClone(event)),
-      ...pendingEvents,
-    ]
-    const eventTimestamps = [
-      ...(writer.initialViewEventTimestamps
-        ?? writer.initialViewEvents.map(() => '')),
-      ...pendingTimestamps,
-    ]
-    return { events, eventTimestamps, boundary: readBoundary() }
+    return {
+      events: pending.map(({ event }) => structuredClone(event)),
+      eventTimestamps: pending.map(({ timestamp }) => timestamp),
+    }
   }
 
   private buffer(

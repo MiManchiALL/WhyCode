@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
+import { applyCoreEvent } from '../shared/conversation-state.ts'
+import { conversationHistoryWindow } from './conversation-history.ts'
+import { restoreConversationSnapshot } from '../shared/conversation-history.ts'
 import { ViewTimeline, type ViewEventWriter } from './view-timeline.ts'
 
 class Writer implements ViewEventWriter {
@@ -20,6 +23,26 @@ class Writer implements ViewEventWriter {
 }
 
 describe('ViewTimeline', () => {
+  it('分页快照保留步骤事务，恢复后丢弃半截输出不会删除稳定历史', async () => {
+    const writer = new Writer()
+    await writer.recordViewEvents([{ type: 'user-message', text: '检查代码', startsTurn: true }])
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-1' })
+    timeline.capture(writer, { type: 'thinking-delta', text: '尚未提交的推理' })
+    timeline.capture(writer, { type: 'text-delta', text: '部分正文' })
+    const snapshot = await timeline.conversationAt(writer, () => 9)
+    assert.equal(snapshot.boundary, 9)
+    let view = restoreConversationSnapshot(conversationHistoryWindow(snapshot.state).view)
+    assert.ok(view.pendingStep)
+    assert.equal(view.blocks.length, 3)
+    view = applyCoreEvent(view, { type: 'step-discarded' })
+    assert.equal(view.blocks.length, 1)
+    assert.equal(view.blocks[0]?.kind === 'user' && view.blocks[0].turnId, 'turn-1')
+    timeline.capture(writer, { type: 'step-discarded' })
+    const next = await timeline.conversationAt(writer, () => 10)
+    assert.deepEqual(next.state.blocks, view.blocks)
+  })
+
   it('快照等待期间新增的稳定写入也进入同一无缺口边界', async () => {
     const committed: ViewEvent[] = []
     const releases: (() => void)[] = []

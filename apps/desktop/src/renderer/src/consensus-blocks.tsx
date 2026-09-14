@@ -3,7 +3,7 @@ import {
   voteLabel,
   type CandidateBlockData,
   type PeerBlockData,
-} from './conversation-state.ts'
+} from '../../shared/conversation-state.ts'
 import { MarkdownContent } from './markdown-content.tsx'
 
 /**

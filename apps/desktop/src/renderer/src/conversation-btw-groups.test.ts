@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { BtwMode } from '@whycode/core'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import {
   presentBtwConversations,
   type ConversationDisplayItem,
 } from './conversation-btw-groups.ts'
-import { conversationSections } from './conversation-sections.ts'
+import { conversationSections } from '../../shared/conversation-sections.ts'
 
 describe('临时对话组展示投影', () => {
   it('第三轮已经用完时仍等待下一条用户消息再折叠', () => {

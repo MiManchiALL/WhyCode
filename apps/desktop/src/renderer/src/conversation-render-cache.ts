@@ -1,6 +1,6 @@
 import type { SkillSummary } from '@whycode/core/skills'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 
 export interface ConversationBlockRenderProps {
   runtimeId: string

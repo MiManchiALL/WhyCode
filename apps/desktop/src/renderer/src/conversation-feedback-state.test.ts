@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { CoreEvent } from '@whycode/core/events'
-import { applyCoreEvent, createConversationState } from './conversation-state.ts'
+import { applyCoreEvent, createConversationState } from '../../shared/conversation-state.ts'
 import {
   expireConversationFeedback,
   holdConversationFeedback,

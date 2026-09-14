@@ -1,6 +1,6 @@
-import type { Block } from './conversation-state.ts'
-import { boundedPlainText } from './conversation-navigation.ts'
-import type { ConversationSection } from './conversation-sections.ts'
+import type { Block } from '../../shared/conversation-state.ts'
+import { boundedPlainText } from '../../shared/conversation-navigation.ts'
+import type { ConversationSection } from '../../shared/conversation-sections.ts'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 

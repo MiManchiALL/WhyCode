@@ -5,7 +5,7 @@ import {
   ConversationEventBuffer,
   type BufferedConversationEvent,
 } from './conversation-event-buffer.ts'
-import { applyCoreEvent, createConversationState } from './conversation-state.ts'
+import { applyCoreEvent, createConversationState } from '../../shared/conversation-state.ts'
 
 function setupBuffer() {
   const batches: BufferedConversationEvent[][] = []

@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
 import { UserPdfGallery } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'

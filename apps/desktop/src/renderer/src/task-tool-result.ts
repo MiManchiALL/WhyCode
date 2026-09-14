@@ -1,5 +1,5 @@
 import type { TaskItem, TaskPlan } from '@whycode/core'
-import type { ToolCall } from './conversation-state.ts'
+import type { ToolCall } from '../../shared/conversation-state.ts'
 
 export type TaskPlanViewData = Pick<TaskPlan, 'goal' | 'items' | 'status'>
 

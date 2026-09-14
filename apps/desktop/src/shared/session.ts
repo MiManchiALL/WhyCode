@@ -12,9 +12,9 @@ import type {
   SessionForkOrigin,
   SessionSummary,
   SubagentState,
-  ViewEvent,
   ReasoningEffortSelection,
 } from '@whycode/core'
+import type { ConversationHistoryWindow } from './conversation-history.ts'
 import type { SkillSummary } from '@whycode/core/skills'
 import type { ToolFileChange } from '@whycode/core/events'
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -62,9 +62,7 @@ export interface RuntimeSnapshot {
   resumingSessionId: string | null
   /** 当前已经原子提交的会话；恢复中的候选会话不会提前出现在这里。 */
   sessionId: string | null
-  viewEvents: ViewEvent[]
-  /** 与 viewEvents 同序；只做宿主/Renderer 投影，不写入 ViewEvent schema。 */
-  viewEventTimestamps: string[]
+  history: ConversationHistoryWindow
   queuedInputs: QueuedUserMessage[]
   restoredInputs: QueuedUserMessage[]
   approval: ApprovalRequest | null

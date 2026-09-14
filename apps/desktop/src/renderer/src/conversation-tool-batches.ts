@@ -1,12 +1,12 @@
 import type { SkillSummary } from '@whycode/core/skills'
 import { fileName } from './local-files.ts'
-import type { Block, ToolCall } from './conversation-state.ts'
+import type { Block, ToolCall } from '../../shared/conversation-state.ts'
 import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
 import {
   summarizeToolCallParts,
   toolCallFilePaths,
   toolCallMoveSource,
-} from './tool-call-summary.ts'
+} from '../../shared/tool-call-summary.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
 

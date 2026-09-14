@@ -14,7 +14,7 @@ import {
   conversationNavigationWaveIndexAtY,
   reconcileConversationNavigationOffset,
   type ConversationNavigationEntry,
-} from './conversation-navigation.ts'
+} from '../../shared/conversation-navigation.ts'
 import { useConversationCurrentIndex } from './use-conversation-current-index.ts'
 
 const WHEEL_SETTLE_MS = 120

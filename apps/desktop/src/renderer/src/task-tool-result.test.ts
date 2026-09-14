@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { TaskPlanState } from '@whycode/core'
 import { formatTaskToolResult } from '../../../../../packages/core/src/tasks/context.ts'
-import type { ToolCall } from './conversation-state.ts'
+import type { ToolCall } from '../../shared/conversation-state.ts'
 import { parseTaskToolResult } from './task-tool-result.ts'
 
 function state(): TaskPlanState {

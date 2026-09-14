@@ -395,6 +395,15 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 
 运行中的普通输入先以 `user-input(startsTurn=false)` 写稳并进入 canonical pending inputs。`queued-message-action` 只能引用仍为 `queued` 的稳定输入 ID：`edit` 追加 `user-input-restored` 并通过 `queue-restored` 退回原消息草稿，重新提交时原子消费旧 ID；`discard` 追加 `user-input-discarded` 并删除 pending 身份，实时界面只接收非持久的 `message-dequeued`；`send-now` 不创建第二条输入，只复用 urgent steering 中断当前步骤并在安全边界交付原 ID。任何持久化失败都必须保留原队列，不能先向 Renderer 宣称成功。
 
+### 7.1 桌面会话历史窗口
+
+桌面契约单源：`apps/desktop/src/shared/conversation-history.ts` 与 `session.ts`。
+
+- `RuntimeSnapshot.history` 携带最近窗口的可序列化视图、`before` 游标与更早输入的导航摘要；活动控制状态仍是当前运行时状态，`eventSequence` 与投影处于同一同步边界，随后只消费边界之后的实时事件。
+- `conversationHistory({runtimeId,before,targetId?})` 只读取指定运行时的可见历史；`before` 表示已加载窗口前的块数，返回其之前的完整工作分组。普通读取约 20 组，定位读取每批最多 100 组；连续 BTW 链按一组计算。没有更早内容时 `before=null`。
+- `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。
+- 更早页只扩展显示前缀，不覆盖实时控制状态、当前输出或步骤提交/丢弃边界；分页不生成模型消息、不改变持久化 schema，也不取代模型的完整上下文恢复。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。

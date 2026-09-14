@@ -62,6 +62,9 @@ import {
   workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
+import { conversationHistoryWindow } from './conversation-history.ts'
+import { createConversationState } from '../shared/conversation-state.ts'
+import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { IPC } from '../shared/ipc.ts'
 import { attachmentFallbackText } from '../shared/user-message.ts'
 import {
@@ -502,7 +505,7 @@ const sessionNavigation = new SessionNavigation({
       nudgeNotificationQueues()
     }
   },
-  snapshot: (runtime) => runtimeSnapshot(runtime),
+  snapshot: (runtime, historyStart) => runtimeSnapshot(runtime, historyStart),
   commit: (runtime) => {
     const previous = runtimeRegistry.select(runtime)
     if (previous && previous !== runtime) {
@@ -2090,12 +2093,13 @@ function rejectUserMessage(
 
 async function runtimeSnapshot(
   runtime: DesktopSessionRuntime = selectedRuntime(),
+  historyStart?: string,
 ): Promise<RuntimeSnapshot> {
   const journal = runtime.journal
   const resumingSessionId = sessionNavigation.sessionId
   const timeline = journal
-    ? await runtime.timeline.snapshotAt(journal, readRuntimeEventBoundary)
-    : { events: [], eventTimestamps: [], boundary: readRuntimeEventBoundary() }
+    ? await runtime.timeline.conversationAt(journal, readRuntimeEventBoundary)
+    : { state: createConversationState(), boundary: readRuntimeEventBoundary() }
   const busy = runtimeBusy(runtime)
   const checkpointRestoreToolUseId = runtime.checkpointRestoreToolUseId
   const deletingThisSession = Boolean(
@@ -2128,8 +2132,7 @@ async function runtimeSnapshot(
       : null,
     resumingSessionId,
     sessionId: journal?.sessionId ?? null,
-    viewEvents: timeline.events,
-    viewEventTimestamps: timeline.eventTimestamps,
+    history: conversationHistoryWindow(timeline.state, { from: historyStart }),
     queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: runtime.approval,
@@ -2204,7 +2207,7 @@ async function startNewSession(request?: NewSessionRequest): Promise<NewSessionR
   }
 }
 
-async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
+async function resumeSession(sessionId: string, historyStart?: string): Promise<ResumeSessionResult> {
   if (sessionDeletionLock.blocksSession(sessionId) || sessionPreparationLock.kind === 'fork') {
     return {
       ok: false,
@@ -2213,7 +2216,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
         : sessionPreparationInProgressMessage('恢复其它会话'),
     }
   }
-  return sessionNavigation.resume(sessionId)
+  return sessionNavigation.resume(sessionId, historyStart)
 }
 
 async function forkSession(value: unknown): Promise<ForkSessionResult> {
@@ -2895,6 +2898,16 @@ if (primaryInstance) void app.whenReady().then(async () => {
     disconnectMcpOAuthConnection(request))
   ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
     openMcpConfigFile(request))
+  ipcMain.handle(IPC.conversationHistory, async (_e, request: ConversationHistoryRequest): Promise<ConversationHistoryResult> => {
+    try {
+      const runtime = runtimeForId(request.runtimeId)
+      if (!runtime.journal) throw new Error('当前会话没有更早历史')
+      const { state } = await runtime.timeline.conversationAt(runtime.journal, readRuntimeEventBoundary)
+      return { ok: true, history: conversationHistoryWindow(state, request) }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
   ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string) =>
     runtimeSnapshot(runtimeForId(runtimeId)))
   ipcMain.handle(IPC.subagentTranscript, (
@@ -2986,7 +2999,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       }
     }
   })
-  ipcMain.handle(IPC.resumeSession, (_e, sessionId: string) => resumeSession(sessionId))
+  ipcMain.handle(IPC.resumeSession, (_e, sessionId: string, historyStart?: string) => resumeSession(sessionId, historyStart))
   ipcMain.handle(IPC.forkSession, (_e, request: unknown) => forkSession(request))
   ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
   ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>

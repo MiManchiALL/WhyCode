@@ -55,7 +55,7 @@ export function restoreConversationScrollPosition(
     Math.max(0, preliminaryAnchorTop + savedAnchor.offset),
     materialized,
   )
-  const release = stabilizeMaterializedTarget(scroller, section, materialized)
+  const retained = stabilizeMaterializedTarget(section, materialized)
   const anchorTop = elementTopWithinScroller(scroller, anchor)
   scroller.scrollTop = restoredAnchorScrollTop(
     anchorTop,
@@ -63,7 +63,10 @@ export function restoreConversationScrollPosition(
     scroller,
   )
 
-  return { position: captureScrollPosition(scroller), release }
+  return {
+    position: captureScrollPosition(scroller),
+    release: retainScrollAnchor(scroller, anchor, savedAnchor.offset, retained),
+  }
 }
 
 /**
@@ -91,11 +94,11 @@ export function scrollConversationToTarget(
   if (section) {
     materializeTailUntilScrollable(scroller, section, preliminaryScrollTop, materialized)
   }
-  const release = stabilizeMaterializedTarget(scroller, section, materialized)
+  const retained = stabilizeMaterializedTarget(section, materialized)
   const desiredScrollTop = Math.max(0, elementTopWithinScroller(scroller, target) - 12)
   const scrollTop = Math.min(desiredScrollTop, maximumScrollTop(scroller))
   scroller.scrollTop = scrollTop
-  return { release }
+  return { release: retainScrollAnchor(scroller, target, -12, retained) }
 }
 
 function materializeSectionsBeforeTarget(
@@ -259,38 +262,52 @@ function releaseMaterializedSections(materialized: MaterializedSection[]): void 
 
 /** 固化非目标段的实测高度后再读取最终坐标；目标段继续保留真实布局。 */
 function stabilizeMaterializedTarget(
-  scroller: HTMLElement,
   target: HTMLElement | null,
   materialized: MaterializedSection[],
-): () => void {
+): MaterializedSection | undefined {
   const retained = target
     ? materialized.find(({ element }) => element === target)
     : undefined
   releaseMaterializedSections(materialized.filter((entry) => entry !== retained))
-  return retained ? retainVisibleSection(scroller, retained) : noop
+  return retained
 }
 
-function retainVisibleSection(
+/** Markdown/图片仍可异步改变前方高度；锚定延续到用户下一次滚动意图或事务释放。 */
+function retainScrollAnchor(
   scroller: HTMLElement,
-  retained: MaterializedSection,
+  anchor: HTMLElement,
+  offset: number,
+  retained: MaterializedSection | undefined,
 ): () => void {
   let released = false
-  let hasIntersected = false
-  const observer = typeof IntersectionObserver === 'undefined'
-    ? null
-    : new IntersectionObserver(([entry]) => {
-        if (entry?.isIntersecting) hasIntersected = true
-        else if (hasIntersected) release()
-      }, { root: scroller })
-  observer?.observe(retained.element)
+  let expectedScrollTop = scroller.scrollTop
+  const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
+    if (released || !anchor.isConnected) return
+    const next = restoredAnchorScrollTop(elementTopWithinScroller(scroller, anchor), offset, scroller)
+    if (Math.abs(next - scroller.scrollTop) < 1) return
+    scroller.scrollTop = next
+    expectedScrollTop = scroller.scrollTop
+  })
+  if (scroller.firstElementChild) observer?.observe(scroller.firstElementChild)
+  observer?.observe(anchor)
+  const onScroll = () => {
+    if (Math.abs(scroller.scrollTop - expectedScrollTop) > 1) release()
+  }
+  scroller.addEventListener('wheel', release, { passive: true })
+  scroller.addEventListener('pointerdown', release, { passive: true })
+  scroller.addEventListener('keydown', release)
+  scroller.addEventListener('scroll', onScroll, { passive: true })
 
   function release(): void {
     if (released) return
     released = true
     observer?.disconnect()
-    releaseMaterializedSections([retained])
+    scroller.removeEventListener('wheel', release)
+    scroller.removeEventListener('pointerdown', release)
+    scroller.removeEventListener('keydown', release)
+    scroller.removeEventListener('scroll', onScroll)
+    if (retained) releaseMaterializedSections([retained])
   }
-
   return release
 }
 

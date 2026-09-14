@@ -51,7 +51,7 @@ import {
   toggleExpanded,
   voteLabel,
   type Block,
-} from './conversation-state.ts'
+} from '../../shared/conversation-state.ts'
 import {
   isCurrentSessionDeletion,
   preserveDeletionTarget,
@@ -59,12 +59,14 @@ import {
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
+import { prependConversationHistory, restoreConversationSnapshot } from '../../shared/conversation-history.ts'
+import { useConversationHistory } from './use-conversation-history.ts'
 import { ConversationNavigator } from './conversation-navigator.tsx'
 import { presentBtwConversations } from './conversation-btw-groups.ts'
 import {
   conversationSections,
   findLatestForkTurnId,
-} from './conversation-sections.ts'
+} from '../../shared/conversation-sections.ts'
 import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import {
@@ -294,16 +296,31 @@ export function App() {
     release?.()
   }, [])
   useEffect(() => releaseConversationScroll, [releaseConversationScroll])
-  const navigateConversation = useCallback((targetId: string) => {
+  const scrollToConversation = useCallback((targetId: string) => {
     const scroller = scrollRef.current
-    if (!scroller) return
+    if (!scroller) return false
     releaseConversationScroll()
     const navigation = scrollConversationToTarget(scroller, targetId)
-    if (!navigation) return
+    if (!navigation) return false
     conversationScrollReleaseRef.current = navigation.release
     stickToBottom.current = false
     setShowJumpBottom(true)
+    return true
   }, [releaseConversationScroll])
+  const history = useConversationHistory({
+    prepend: (pages, isCurrent) => {
+      if (!isCurrent()) return
+      const scroller = scrollRef.current
+      if (scroller) pendingScrollRestoreRef.current = captureConversationScrollPosition(scroller)
+      setView((current) => isCurrent() ? pages.reduce(prependConversationHistory, current) : current)
+    },
+    onError: (message) => showError(message),
+  })
+  const navigateConversation = useCallback((targetId: string) => {
+    history.cancel()
+    pendingScrollRestoreRef.current = null
+    if (!scrollToConversation(targetId)) void history.loadOlder(targetId)
+  }, [history.cancel, history.loadOlder, scrollToConversation])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const setBtwMode = useCallback((mode: BtwMode | null) => {
     btwModeRef.current = mode
@@ -466,6 +483,7 @@ export function App() {
       stickToBottom.current
         ? { atBottom: true, scrollTop: 0 }
         : captureConversationScrollPosition(scrollElement),
+      scrollElement.querySelector<HTMLElement>('[data-conversation-scroll-block]')?.dataset.conversationScrollBlock,
     )
   }, [])
 
@@ -486,14 +504,16 @@ export function App() {
   }, [clearImageDrafts, clearPdfDrafts, clearSkills, setBtwMode])
 
   const setResumingSessionId = useCallback((sessionId: string | null) => {
+    if (sessionId) history.cancel()
     resumingSessionIdRef.current = sessionId
     setResumingSessionIdState(sessionId)
-  }, [])
+  }, [history.cancel])
 
   const setDeletionBlocksRuntime = useCallback((blocked: boolean) => {
+    if (blocked) history.cancel()
     deletionBlocksRuntimeRef.current = blocked
     setDeletionBlocksRuntimeState(blocked)
-  }, [])
+  }, [history.cancel])
 
   const setDeletingSession = useCallback((sessionId: string | null) => {
     deletingSessionIdRef.current = sessionId
@@ -502,10 +522,11 @@ export function App() {
 
   const beginSessionTransition = useCallback(() => {
     if (sessionTransitionPendingRef.current) return false
+    history.cancel()
     sessionTransitionPendingRef.current = true
     setSessionTransitionPending(true)
     return true
-  }, [])
+  }, [history.cancel])
 
   const endSessionTransition = useCallback(() => {
     sessionTransitionPendingRef.current = false
@@ -717,10 +738,8 @@ export function App() {
     const presentation = conversationPresentationsRef.current.get(
       composerKey(snapshot.runtimeId, snapshot.sessionId),
     )
-    const replayedView = createConversationState(
-      snapshot.viewEvents,
-      snapshot.viewEventTimestamps,
-    )
+    const replayedView = restoreConversationSnapshot(snapshot.history.view)
+    history.reset(snapshot.runtimeId, snapshot.history)
     conversationEventBufferRef.current?.clear()
     setView({
       ...replayedView,
@@ -776,6 +795,7 @@ export function App() {
     setResumingSessionId,
     stashActiveComposer,
     stashActivePresentation,
+    history.reset,
   ])
 
   const synchronizeUnownedResume = useCallback(async () => {
@@ -813,6 +833,8 @@ export function App() {
   const consumeEvent = useCallback((event: CoreEvent, occurredAt?: string) => {
     const feedback = conversationEventFeedback(event)
     if (feedback) showConversationFeedback(feedback.tone, feedback.message)
+    if (event.type === 'user-message-edited' || event.type === 'btw-message-edited'
+      || (event.type === 'checkpoint-restored' && event.ok)) history.cancel()
     applyConversationEvent(event, occurredAt)
     switch (event.type) {
       case 'work-started':
@@ -933,6 +955,7 @@ export function App() {
     restoreQueuedDrafts,
     setDeletionBlocksRuntime,
     showConversationFeedback,
+    history.cancel,
   ])
 
   useEffect(() => {
@@ -1202,14 +1225,20 @@ export function App() {
   const restoreConversationAfterRender = useCallback(() => {
     const pending = pendingScrollRestoreRef.current
     const scrollElement = scrollRef.current
-    if (resumingSessionIdRef.current || !pending || !scrollElement) return
-    pendingScrollRestoreRef.current = null
-    releaseConversationScroll()
-    const restoration = restoreConversationScrollPosition(pending, scrollElement)
-    conversationScrollReleaseRef.current = restoration.release
-    stickToBottom.current = restoration.position.atBottom
-    setShowJumpBottom(!restoration.position.atBottom)
-  }, [releaseConversationScroll])
+    if (resumingSessionIdRef.current || !scrollElement) return
+    const loaded = history.completeRender(blocks[0]?.id)
+    if (!loaded) return
+    if (pending) {
+      pendingScrollRestoreRef.current = null
+      releaseConversationScroll()
+      const restoration = restoreConversationScrollPosition(pending, scrollElement)
+      conversationScrollReleaseRef.current = restoration.release
+      stickToBottom.current = restoration.position.atBottom
+      setShowJumpBottom(!restoration.position.atBottom)
+    }
+    const target = loaded.targetId
+    if (target) scrollToConversation(btwPresentation.navigationTargetIds.get(target) ?? target)
+  }, [blocks, releaseConversationScroll, history.completeRender, scrollToConversation, btwPresentation.navigationTargetIds])
 
   useEffect(() => {
     const scrollElement = scrollRef.current
@@ -1233,17 +1262,25 @@ export function App() {
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
-    if (!el || resumingSessionIdRef.current || pendingScrollRestoreRef.current) return
+    if (!el || resumingSessionIdRef.current) return
+    if (pendingScrollRestoreRef.current) {
+      pendingScrollRestoreRef.current = captureConversationScrollPosition(el)
+      return
+    }
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
     stickToBottom.current = nearBottom
     setShowJumpBottom(!nearBottom)
-  }, [])
+    if (!nearBottom && el.scrollTop <= el.clientHeight) void history.loadOlder()
+  }, [history.loadOlder])
 
   const jumpToBottom = useCallback(() => {
+    history.cancel()
+    pendingScrollRestoreRef.current = null
+    releaseConversationScroll()
     stickToBottom.current = true
     setShowJumpBottom(false)
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [])
+  }, [history.cancel, releaseConversationScroll])
 
   const busy = status !== 'idle' && status !== 'error'
   const interactionBusy = busy
@@ -1435,7 +1472,9 @@ export function App() {
     resumeRequestRef.current = request
     setSessionActionError(null)
     setResumingSessionId(sessionId)
-    void window.whycode.resumeSession(sessionId).then((result) => {
+    const presentation = conversationPresentationsRef.current.get(sessionId)
+    const historyStart = presentation?.scroll?.atBottom === false ? presentation.historyStart : undefined
+    void window.whycode.resumeSession(sessionId, historyStart).then((result) => {
       if (resumeRequestRef.current !== request) return
       if (!result.ok) {
         setSessionActionError(result.error)
@@ -2003,6 +2042,7 @@ export function App() {
           <ConversationNavigator
             key={runtimeId}
             sections={sections}
+            earlierEntries={history.earlierEntries}
             navigationTargetIds={btwPresentation.navigationTargetIds}
             scrollRef={scrollRef}
             onNavigate={navigateConversation}
@@ -2039,6 +2079,18 @@ export function App() {
                           ? '描述目标，WhyCode 会在当前工作区中读取、修改和验证。'
                           : '先选择一个项目，或直接在默认工作区中开始。'}
                       </p>
+                    </div>
+                  )}
+                  {history.hasMore && (
+                    <div className="flex h-8 items-center justify-center">
+                      <button
+                        type="button"
+                        className="wc-focus-ring rounded-lg px-2 py-1 text-xs text-[var(--wc-muted)] hover:text-[var(--wc-ink)]"
+                        onClick={() => { void history.loadOlder() }}
+                        disabled={history.loading}
+                      >
+                        {history.loading ? '正在加载更早消息…' : '加载更早消息'}
+                      </button>
                     </div>
                   )}
                   <ConversationView

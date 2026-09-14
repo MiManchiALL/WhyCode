@@ -15,7 +15,7 @@ import {
   type ToolFileChange,
   type UserQuestion,
 } from '@whycode/core/events'
-import type { RuntimeSnapshot } from '../../shared/session.ts'
+import type { RuntimeSnapshot } from './session.ts'
 import { summarizeToolCall } from './tool-call-summary.ts'
 
 export interface ToolCall {

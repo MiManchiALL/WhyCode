@@ -24,6 +24,7 @@ const MAX_EXPANDED_OVERRIDES = 256
 interface ConversationPresentation {
   expandedOverrides: Map<string, boolean>
   scroll?: ConversationScrollPosition
+  historyStart?: string
 }
 
 export class ConversationPresentationCache {
@@ -41,11 +42,12 @@ export class ConversationPresentationCache {
     return value
   }
 
-  saveScroll(key: string, scroll: ConversationScrollPosition): void {
+  saveScroll(key: string, scroll: ConversationScrollPosition, historyStart?: string): void {
     const previous = this.entries.get(key)
     this.set(key, {
       expandedOverrides: previous?.expandedOverrides ?? new Map(),
       scroll,
+      historyStart,
     })
   }
 

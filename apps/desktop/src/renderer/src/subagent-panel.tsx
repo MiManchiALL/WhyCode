@@ -19,8 +19,8 @@ import {
   applyCoreEvent,
   createConversationState,
   toggleExpanded,
-} from './conversation-state.ts'
-import { conversationSections } from './conversation-sections.ts'
+} from '../../shared/conversation-state.ts'
+import { conversationSections } from '../../shared/conversation-sections.ts'
 import { presentBtwConversations } from './conversation-btw-groups.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 import { ConversationView } from './conversation-view.tsx'

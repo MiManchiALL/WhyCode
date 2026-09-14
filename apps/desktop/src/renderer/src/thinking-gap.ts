@@ -1,5 +1,5 @@
 import type { AgentStatus } from '@whycode/core/events'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 
 interface ThinkingGapState {
   blocks: readonly Block[]

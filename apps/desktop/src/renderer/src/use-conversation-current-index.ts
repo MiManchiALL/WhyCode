@@ -6,7 +6,7 @@ import {
   useState,
   type RefObject,
 } from 'react'
-import type { ConversationNavigationEntry } from './conversation-navigation.ts'
+import type { ConversationNavigationEntry } from '../../shared/conversation-navigation.ts'
 
 const NAVIGATION_TARGET_SELECTOR = '[data-conversation-navigator-target]'
 const NAVIGATION_SECTION_SELECTOR = '[data-conversation-navigator-section]'
@@ -29,8 +29,13 @@ export function useConversationCurrentIndex(
 
   const update = useCallback(() => {
     const scroller = scrollRef.current
+    if (!scroller || entries.length === 0) return
+    // 延迟提交会替换正文 DOM；导航索引只能复用仍连接在当前视口的节点。
+    if (!anchorsRef.current[0]?.element.isConnected) {
+      anchorsRef.current = collectNavigationAnchors(scroller, entryIndexesRef.current)
+    }
     const anchors = anchorsRef.current
-    if (!scroller || anchors.length === 0 || entries.length === 0) return
+    if (anchors.length === 0) return
     const viewportTop = scroller.getBoundingClientRect().top + 24
     let low = 0
     let high = anchors.length - 1
@@ -71,24 +76,7 @@ export function useConversationCurrentIndex(
       anchorsRef.current = []
       return
     }
-    const anchors: NavigationAnchor[] = []
-    const occupied = new Set<number>()
-    for (const section of scroller.querySelectorAll<HTMLElement>(NAVIGATION_SECTION_SELECTOR)) {
-      const id = section.dataset.conversationNavigatorSection
-      const entryIndex = id === undefined ? undefined : entryIndexes.get(id)
-      if (entryIndex === undefined) continue
-      anchors.push({ entryIndex, element: section })
-      occupied.add(entryIndex)
-    }
-    for (const target of scroller.querySelectorAll<HTMLElement>(NAVIGATION_TARGET_SELECTOR)) {
-      if (target.closest(NAVIGATION_SECTION_SELECTOR)) continue
-      const id = target.dataset.conversationNavigatorTarget
-      const entryIndex = id === undefined ? undefined : entryIndexes.get(id)
-      if (entryIndex === undefined || occupied.has(entryIndex)) continue
-      anchors.push({ entryIndex, element: target })
-    }
-    anchors.sort((left, right) => left.entryIndex - right.entryIndex)
-    anchorsRef.current = anchors
+    anchorsRef.current = collectNavigationAnchors(scroller, entryIndexes)
     setCurrentIndex((previous) => Math.min(previous, Math.max(0, entries.length - 1)))
     update()
   }, [entries, navigationTargetIds, scrollRef, update])
@@ -113,6 +101,30 @@ export function useConversationCurrentIndex(
 
   useEffect(() => () => cancelFrame(frameRef), [])
   return currentIndex
+}
+
+function collectNavigationAnchors(
+  scroller: HTMLElement,
+  entryIndexes: ReadonlyMap<string, number>,
+): NavigationAnchor[] {
+  const anchors: NavigationAnchor[] = []
+  const occupied = new Set<number>()
+  for (const section of scroller.querySelectorAll<HTMLElement>(NAVIGATION_SECTION_SELECTOR)) {
+    const id = section.dataset.conversationNavigatorSection
+    const entryIndex = id === undefined ? undefined : entryIndexes.get(id)
+    if (entryIndex === undefined) continue
+    anchors.push({ entryIndex, element: section })
+    occupied.add(entryIndex)
+  }
+  for (const target of scroller.querySelectorAll<HTMLElement>(NAVIGATION_TARGET_SELECTOR)) {
+    if (target.closest(NAVIGATION_SECTION_SELECTOR)) continue
+    const id = target.dataset.conversationNavigatorTarget
+    const entryIndex = id === undefined ? undefined : entryIndexes.get(id)
+    if (entryIndex === undefined || occupied.has(entryIndex)) continue
+    anchors.push({ entryIndex, element: target })
+  }
+  anchors.sort((left, right) => left.entryIndex - right.entryIndex)
+  return anchors
 }
 
 function cancelFrame(frame: { current: number | null }): void {

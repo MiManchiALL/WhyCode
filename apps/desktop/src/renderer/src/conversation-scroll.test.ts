@@ -8,6 +8,41 @@ import {
 } from './conversation-scroll.ts'
 
 describe('会话滚动锚定', () => {
+  it('前方异步布局变化仍保持锚点，用户主动滚动立即释放观察', () => {
+    const { document, Event } = parseHTML('<main><div><section data-conversation-scroll-section="work"><div data-conversation-navigator-target="user"></div></section></div></main>')
+    const scroller = document.querySelector<HTMLElement>('main')!
+    const target = document.querySelector<HTMLElement>('[data-conversation-navigator-target]')!
+    const currentScrollTop = defineScrollerMetrics(scroller, 0, 3_000, 400)
+    defineTop(scroller, 0)
+    let targetTop = 1_000
+    target.getBoundingClientRect = () => rectangle(targetTop - currentScrollTop())
+    let resized = () => {}
+    let disconnected = false
+    const original = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) { resized = () => callback([], this) }
+      observe() {}
+      unobserve() {}
+      disconnect() { disconnected = true }
+    }
+    try {
+      const navigation = scrollConversationToTarget(scroller, 'user')!
+      assert.equal(currentScrollTop(), 988)
+      targetTop -= 104
+      resized()
+      assert.equal(currentScrollTop(), 884)
+      assert.equal(target.getBoundingClientRect().top, 12)
+      scroller.dispatchEvent(new Event('wheel'))
+      assert.equal(disconnected, true)
+      targetTop += 200
+      resized()
+      assert.equal(currentScrollTop(), 884)
+      navigation.release()
+    } finally {
+      globalThis.ResizeObserver = original
+    }
+  })
+
   it('长正文用视口附近的顶层 Markdown 内容作为锚点', () => {
     const { document } = parseHTML(`
       <main id="scroll">

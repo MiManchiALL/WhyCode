@@ -6,7 +6,7 @@ import {
   type CheckpointRestoreRequest,
   type CheckpointRestoreScope,
 } from './checkpoint-restore-controls.ts'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
 import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
@@ -14,7 +14,7 @@ import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { StreamingPlainText } from './streaming-plain-text.tsx'
-import { summarizeToolCallParts } from './tool-call-summary.ts'
+import { summarizeToolCallParts } from '../../shared/tool-call-summary.ts'
 import { ToolCallDetails } from './tool-call-details.tsx'
 
 export function BlockView({

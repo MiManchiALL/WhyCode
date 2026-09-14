@@ -2,7 +2,7 @@ import type { SkillSummary } from '@whycode/core/skills'
 import { GitFork } from 'lucide-react'
 import { memo, useDeferredValue, useLayoutEffect, useRef } from 'react'
 import { SessionLoading } from './session-loading.tsx'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
 import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
 import {
@@ -14,7 +14,7 @@ import {
   isForkBoundarySection,
   shouldSealTrailingToolBatch,
   type ConversationSection,
-} from './conversation-sections.ts'
+} from '../../shared/conversation-sections.ts'
 import {
   assistantTextRenderState,
   sameConversationBlockRenderProps,
@@ -126,7 +126,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
   const pending = !!props.pendingSessionId || rendering
   useLayoutEffect(() => {
     if (!pending && props.active !== false) props.onReady?.()
-  }, [pending, props.runtimeId, props.onReady, props.active])
+  }, [pending, props.runtimeId, props.onReady, props.active, props.items])
   return (
     <>
       {pending && <SessionLoading key={props.pendingSessionId ?? props.runtimeId} />}

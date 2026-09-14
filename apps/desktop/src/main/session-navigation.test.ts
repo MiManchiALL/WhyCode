@@ -17,7 +17,7 @@ function fixture() {
   const commits: string[] = []
   const prepared: string[] = []
   const settled: (string | null)[] = []
-  let readSnapshot = async (runtime: DesktopSessionRuntime) => ({
+  let readSnapshot = async (runtime: DesktopSessionRuntime, _historyStart?: string) => ({
     runtimeId: runtime.runtimeId, sessionId: runtime.sessionId,
   }) as RuntimeSnapshot
   const add = (id: string) => {
@@ -35,7 +35,7 @@ function fixture() {
       await load.promise
       add(id)
     },
-    snapshot: (runtime) => readSnapshot(runtime),
+    snapshot: (runtime, historyStart) => readSnapshot(runtime, historyStart),
     commit: (runtime) => { commits.push(runtime.runtimeId) },
     settled: (runtime) => { settled.push(runtime?.runtimeId ?? null) },
   })
@@ -49,6 +49,18 @@ function fixture() {
 async function drain() { for (let i = 0; i < 12; i++) await Promise.resolve() }
 
 describe('SessionNavigation', () => {
+  it('恢复会话传递已加载历史起点，与旧请求保持隔离', async () => {
+    const f = fixture()
+    const starts: (string | undefined)[] = []
+    f.snapshot(async (runtime, historyStart) => {
+      starts.push(historyStart)
+      return { runtimeId: runtime.runtimeId, sessionId: runtime.sessionId } as RuntimeSnapshot
+    })
+    assert.equal((await f.navigation.resume('a', 'b80')).ok, true)
+    assert.equal((await f.navigation.resume('a')).ok, true)
+    assert.deepEqual(starts, ['b80', undefined])
+  })
+
   it('冷加载不阻塞已打开会话，旧加载完成也不能抢回选择', async () => {
     const f = fixture()
     const slow = f.navigation.resume('b')

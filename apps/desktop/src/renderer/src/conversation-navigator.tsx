@@ -6,14 +6,15 @@ import {
   sameConversationNavigationTimeline,
   visibleConversationNavigationMarkers,
   type ConversationNavigationEntry,
-} from './conversation-navigation.ts'
-import type { ConversationSection } from './conversation-sections.ts'
+} from '../../shared/conversation-navigation.ts'
+import type { ConversationSection } from '../../shared/conversation-sections.ts'
 import { useConversationNavigator } from './use-conversation-navigator.ts'
 
 const TOOLTIP_EDGE_PX = 64
 
 interface ConversationNavigatorProps {
   sections: readonly ConversationSection[]
+  earlierEntries: readonly ConversationNavigationEntry[]
   navigationTargetIds: ReadonlyMap<string, string>
   scrollRef: RefObject<HTMLElement | null>
   onNavigate: (targetId: string) => void
@@ -23,8 +24,8 @@ interface ConversationNavigatorProps {
 export const ConversationNavigator = memo(
   function ConversationNavigator(props: ConversationNavigatorProps) {
     const entries = useMemo(
-      () => conversationNavigationEntries(props.sections),
-      [props.sections],
+      () => [...props.earlierEntries, ...conversationNavigationEntries(props.sections)],
+      [props.earlierEntries, props.sections],
     )
     const navigation = useConversationNavigator(
       entries,
@@ -92,6 +93,7 @@ export const ConversationNavigator = memo(
   },
   (previous, next) => previous.scrollRef === next.scrollRef
     && previous.onNavigate === next.onNavigate
+    && previous.earlierEntries === next.earlierEntries
     && sameNavigationTargets(previous.navigationTargetIds, next.navigationTargetIds)
     && sameConversationNavigationTimeline(previous.sections, next.sections),
 )

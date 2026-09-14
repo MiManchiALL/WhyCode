@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { Block } from './conversation-state.ts'
+import type { Block } from '../../shared/conversation-state.ts'
 import {
   centeredConversationNavigationOffset,
   conversationNavigationCapacity,
@@ -12,8 +12,8 @@ import {
   reconcileConversationNavigationOffset,
   sameConversationNavigationTimeline,
   visibleConversationNavigationMarkers,
-} from './conversation-navigation.ts'
-import type { ConversationSection } from './conversation-sections.ts'
+} from '../../shared/conversation-navigation.ts'
+import type { ConversationSection } from '../../shared/conversation-sections.ts'
 
 describe('会话定位数据投影', () => {
   it('每条用户输入只保留有界纯文本标题和对应回答摘要', () => {
