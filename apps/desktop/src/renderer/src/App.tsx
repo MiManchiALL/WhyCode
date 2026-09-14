@@ -1984,6 +1984,17 @@ export function App() {
 
   const pendingSession = sessions.find((session) => session.sessionId === resumingSessionId)
   const loadingConversation = resumingSessionId !== null && resumingSessionId !== sessionIdRef.current
+  const pendingDraft = loadingConversation ? composerDraftsRef.current.get(resumingSessionId) : undefined
+  // 草稿仍由已确认的运行时持有；切换期间只展示目标草稿，避免旧请求改写输入。
+  const composerDraft = loadingConversation
+    ? {
+        text: pendingDraft?.text ?? '',
+        images: pendingDraft?.images ?? [],
+        pdfs: pendingDraft?.pdfs ?? [],
+        skills: pendingDraft?.skills ?? [],
+        btwMode: pendingDraft?.btwMode ?? null,
+      }
+    : { text: input, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
 
   return (
     <div
@@ -2035,20 +2046,19 @@ export function App() {
             open: !current.open,
           }))}
         />
-        <div
-          className="relative flex min-h-0 flex-1"
-          style={{ visibility: loadingConversation ? 'hidden' : undefined }}
-        >
-          <ConversationNavigator
-            key={runtimeId}
-            sections={sections}
-            earlierEntries={history.earlierEntries}
-            navigationTargetIds={btwPresentation.navigationTargetIds}
-            scrollRef={scrollRef}
-            onNavigate={navigateConversation}
-          />
+        <div className="relative flex min-h-0 flex-1">
+          {!loadingConversation && (
+            <ConversationNavigator
+              key={runtimeId}
+              sections={sections}
+              earlierEntries={history.earlierEntries}
+              navigationTargetIds={btwPresentation.navigationTargetIds}
+              scrollRef={scrollRef}
+              onNavigate={navigateConversation}
+            />
+          )}
           <section className="relative flex min-w-0 flex-1 flex-col">
-            {conversationFeedback && (
+            {!loadingConversation && conversationFeedback && (
               <ConversationFeedbackToast
                 key={conversationFeedback.id}
                 feedback={conversationFeedback}
@@ -2065,13 +2075,13 @@ export function App() {
                   ref={conversationContentRef}
                   className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
                 >
-                  {!conversationStarted && worktreePreparation && (
+                  {!loadingConversation && !conversationStarted && worktreePreparation && (
                     <WorktreePreparation
                       message={worktreePreparation.message}
                       baseRef={worktreePreparation.baseRef}
                     />
                   )}
-                  {!conversationStarted && !worktreePreparation && (
+                  {!loadingConversation && !conversationStarted && !worktreePreparation && (
                     <div className="mx-auto mt-[18vh] max-w-md text-center">
                       <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
                       <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
@@ -2111,160 +2121,169 @@ export function App() {
 
             <div className="relative shrink-0 px-4 pb-4 pt-1">
               <div className="wc-conversation-balanced-content mx-auto w-full max-w-4xl">
-                {showJumpBottom && (
-                  <button
-                    type="button"
-                    className="wc-focus-ring absolute -top-9 left-1/2 -translate-x-1/2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-1.5 text-xs text-[var(--wc-muted)] shadow-sm hover:border-[var(--wc-line-strong)]"
-                    onClick={jumpToBottom}
-                    title="回到底部并恢复自动跟随"
-                  >
-                    ↓ 回到底部
-                  </button>
-                )}
+                <div hidden={loadingConversation}>
+                  {showJumpBottom && (
+                    <button
+                      type="button"
+                      className="wc-focus-ring absolute -top-9 left-1/2 -translate-x-1/2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-1.5 text-xs text-[var(--wc-muted)] shadow-sm hover:border-[var(--wc-line-strong)]"
+                      onClick={jumpToBottom}
+                      title="回到底部并恢复自动跟随"
+                    >
+                      ↓ 回到底部
+                    </button>
+                  )}
 
-                {approval && (
-                  <div className="mb-2">
-                    <ApprovalCard approval={approval} onRespond={respondApproval} />
-                  </div>
-                )}
+                  {approval && (
+                    <div className="mb-2">
+                      <ApprovalCard approval={approval} onRespond={respondApproval} />
+                    </div>
+                  )}
 
-                {negoStatus && (
-                  <div className="mb-2 rounded-xl bg-[var(--wc-sage)] px-3 py-2 text-xs text-[var(--wc-sage-ink)]">
-                    {negoStatus}
-                  </div>
-                )}
+                  {negoStatus && (
+                    <div className="mb-2 rounded-xl bg-[var(--wc-sage)] px-3 py-2 text-xs text-[var(--wc-sage-ink)]">
+                      {negoStatus}
+                    </div>
+                  )}
 
-                {queued.length > 0 && (
-                  <div className="mb-2 space-y-1">
-                    {queued.map((queuedMessage) => (
-                      <QueuedMessageCard
-                        key={queuedMessage.id}
-                        message={queuedMessage}
-                        pendingAction={queuedActionPending[queuedMessage.id]}
-                        onAction={(id, action) => void actOnQueuedMessage(id, action)}
+                  {queued.length > 0 && (
+                    <div className="mb-2 space-y-1">
+                      {queued.map((queuedMessage) => (
+                        <QueuedMessageCard
+                          key={queuedMessage.id}
+                          message={queuedMessage}
+                          pendingAction={queuedActionPending[queuedMessage.id]}
+                          onAction={(id, action) => void actOnQueuedMessage(id, action)}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {restoredQueue.length > 0 && (
+                    <div className="mb-2 rounded-xl bg-[var(--wc-sand)] px-3 py-2 text-xs text-[var(--wc-sand-ink)]">
+                      另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
+                    </div>
+                  )}
+
+                  {workStartedAt !== null && (
+                    <div className="mb-1.5 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-3 px-2 text-xs">
+                      <span className="whitespace-nowrap text-[var(--wc-faint)]">
+                        <ProcessingTime startedAt={workStartedAt} />
+                      </span>
+                      <ComposerFileChanges changes={currentFileChanges} />
+                    </div>
+                  )}
+                </div>
+
+                <footer
+                  className={`wc-composer relative p-2.5 ${composerDraft.btwMode ? 'wc-composer-btw' : ''}`}
+                  inert={loadingConversation}
+                >
+                  <div hidden={loadingConversation}>
+                    {view.pendingQuestion && (
+                      <QuestionCard
+                        key={view.pendingQuestion.id}
+                        question={view.pendingQuestion}
+                        disabled={interactionBusy || stopping || questionSubmitting}
+                        onAnswer={answerQuestion}
                       />
-                    ))}
+                    )}
                   </div>
-                )}
+                  <div hidden={!loadingConversation && view.pendingQuestion !== null}>
+                    {showMcpStatus && !skillTrigger && !attachmentLocked && (
+                      <ComposerMcpStatus
+                        key={runtimeId}
+                        runtimeId={runtimeId}
+                        composerRef={composerTextareaRef}
+                        onClose={() => setShowMcpStatus(false)}
+                      />
+                    )}
+                    {skillTrigger && !attachmentLocked && (
+                      <ComposerSlashMenu
+                        items={composerMenuItems}
+                        activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
+                        diagnostics={skillCatalog.diagnostics}
+                        limitReached={skillLimitReached}
+                        onSelect={selectComposerMenuItem}
+                        onActivate={setSkillActiveIndex}
+                      />
+                    )}
 
-                {restoredQueue.length > 0 && (
-                  <div className="mb-2 rounded-xl bg-[var(--wc-sand)] px-3 py-2 text-xs text-[var(--wc-sand-ink)]">
-                    另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
-                  </div>
-                )}
+                    {!loadingConversation && !conversationStarted && !worktreePreparation && (
+                      <WorkspaceContextBar
+                        workspace={workspace}
+                        candidate={workspaceCandidate}
+                        projectDir={projectDir}
+                        baseRef={contextBaseRef}
+                        busy={sessionChangeLocked}
+                        canChangeWorkspace={canChangeSessionWorkspace(sessionIdRef.current)}
+                        onPickProject={pickProject}
+                        onClearProject={startNewSession}
+                        onStart={startWorkspaceSession}
+                      />
+                    )}
 
-                {workStartedAt !== null && (
-                  <div className="mb-1.5 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-3 px-2 text-xs">
-                    <span className="whitespace-nowrap text-[var(--wc-faint)]">
-                      <ProcessingTime startedAt={workStartedAt} />
-                    </span>
-                    <ComposerFileChanges changes={currentFileChanges} />
-                  </div>
-                )}
-
-                <footer className={`wc-composer relative p-2.5 ${btwMode ? 'wc-composer-btw' : ''}`}>
-                  {view.pendingQuestion ? (
-                    <QuestionCard
-                      key={view.pendingQuestion.id}
-                      question={view.pendingQuestion}
-                      disabled={interactionBusy || stopping || questionSubmitting}
-                      onAnswer={answerQuestion}
+                    <ImageDraftStrip drafts={composerDraft.images} onRemove={removeImageDraft} />
+                    <PdfDraftStrip drafts={composerDraft.pdfs} onRemove={removePdfDraft} />
+                    <SkillChips
+                      skills={composerDraft.skills}
+                      disabled={attachmentLocked}
+                      onRemove={removeSelectedSkill}
                     />
-                  ) : (
-                    <>
-                      {showMcpStatus && !skillTrigger && !attachmentLocked && (
-                        <ComposerMcpStatus
-                          key={runtimeId}
-                          runtimeId={runtimeId}
-                          composerRef={composerTextareaRef}
-                          onClose={() => setShowMcpStatus(false)}
-                        />
-                      )}
-                      {skillTrigger && !attachmentLocked && (
-                        <ComposerSlashMenu
-                          items={composerMenuItems}
-                          activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
-                          diagnostics={skillCatalog.diagnostics}
-                          limitReached={skillLimitReached}
-                          onSelect={selectComposerMenuItem}
-                          onActivate={setSkillActiveIndex}
-                        />
-                      )}
 
-                      {!conversationStarted && !worktreePreparation && (
-                        <WorkspaceContextBar
-                          workspace={workspace}
-                          candidate={workspaceCandidate}
-                          projectDir={projectDir}
-                          baseRef={contextBaseRef}
-                          busy={sessionChangeLocked}
-                          canChangeWorkspace={canChangeSessionWorkspace(sessionIdRef.current)}
-                          onPickProject={pickProject}
-                          onClearProject={startNewSession}
-                          onStart={startWorkspaceSession}
-                        />
-                      )}
+                    {composerDraft.btwMode && (
+                      <div className="mb-1 flex items-center px-1.5">
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.045] px-2 py-1 text-xs text-[var(--wc-muted)]">
+                          {composerDraft.btwMode.toUpperCase()} · 临时侧对话
+                          <button
+                            type="button"
+                            className="wc-focus-ring rounded px-0.5 text-[var(--wc-faint)] hover:text-[var(--wc-ink)]"
+                            onClick={() => setBtwMode(null)}
+                            aria-label="退出临时侧对话模式"
+                            title="退出临时侧对话模式"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      </div>
+                    )}
 
-                      <ImageDraftStrip drafts={imageDrafts} onRemove={removeImageDraft} />
-                      <PdfDraftStrip drafts={pdfDrafts} onRemove={removePdfDraft} />
-                      <SkillChips
-                        skills={selectedSkills}
-                        disabled={attachmentLocked}
-                        onRemove={removeSelectedSkill}
-                      />
-
-                      {btwMode && (
-                        <div className="mb-1 flex items-center px-1.5">
-                          <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.045] px-2 py-1 text-xs text-[var(--wc-muted)]">
-                            {btwMode.toUpperCase()} · 临时侧对话
-                            <button
-                              type="button"
-                              className="wc-focus-ring rounded px-0.5 text-[var(--wc-faint)] hover:text-[var(--wc-ink)]"
-                              onClick={() => setBtwMode(null)}
-                              aria-label="退出临时侧对话模式"
-                              title="退出临时侧对话模式"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        </div>
-                      )}
-
-                      <textarea
-                        ref={composerTextareaRef}
-                        rows={2}
-                        className="wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base leading-6 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
-                        value={input}
-                        onChange={(event) => {
-                          const text = event.target.value
-                          setShowMcpStatus(false)
-                          inputRef.current = text
-                          setInput(text)
-                          updateSkillMenu(text, event.target.selectionStart)
-                        }}
-                        onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
-                        onBlur={closeSkillMenu}
-                        onPaste={pasteAttachments}
-                        disabled={composerDisabled}
-                        onKeyDown={(event) => {
-                          if (handlePickerKeyDown(event)) return
-                          if (event.key === 'Escape' && btwMode) {
-                            event.preventDefault()
-                            setBtwMode(null)
-                            return
-                          }
-                          const action = composerKeyAction({
-                            key: event.key,
-                            shiftKey: event.shiftKey,
-                            ctrlKey: event.ctrlKey,
-                            isComposing: event.nativeEvent.isComposing,
-                          })
-                          if (action === 'ignore' || action === 'newline') return
+                    <textarea
+                      ref={composerTextareaRef}
+                      rows={2}
+                      className="wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base leading-6 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
+                      value={composerDraft.text}
+                      onChange={(event) => {
+                        const text = event.target.value
+                        setShowMcpStatus(false)
+                        inputRef.current = text
+                        setInput(text)
+                        updateSkillMenu(text, event.target.selectionStart)
+                      }}
+                      onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
+                      onBlur={closeSkillMenu}
+                      onPaste={pasteAttachments}
+                      disabled={composerDisabled}
+                      onKeyDown={(event) => {
+                        if (handlePickerKeyDown(event)) return
+                        if (event.key === 'Escape' && btwMode) {
                           event.preventDefault()
-                          send(action === 'send-immediately')
-                        }}
-                        placeholder={
-                          stopping
+                          setBtwMode(null)
+                          return
+                        }
+                        const action = composerKeyAction({
+                          key: event.key,
+                          shiftKey: event.shiftKey,
+                          ctrlKey: event.ctrlKey,
+                          isComposing: event.nativeEvent.isComposing,
+                        })
+                        if (action === 'ignore' || action === 'newline') return
+                        event.preventDefault()
+                        send(action === 'send-immediately')
+                      }}
+                      placeholder={
+                        loadingConversation
+                          ? '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
+                          : stopping
                             ? '正在停止当前任务并清理子进程…'
                             : worktreePreparation
                               ? '正在创建 Worktree 并检出文件…'
@@ -2281,46 +2300,45 @@ export function App() {
                                         : busy
                                           ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
                                           : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
-                        }
-                      />
+                      }
+                    />
 
-                      <ComposerToolbar
-                        canAttachImages={canAttachImages}
-                        canAttachPdfs={canAttachPdfs}
-                        attachmentLocked={attachmentLocked}
-                        configurationLocked={attachmentLocked}
-                        permissionLocked={
-                          sessionTransitionPending
-                          || deletionBlocksRuntime
-                          || resumingSessionId !== null
-                        }
-                        permMode={permMode}
-                        consensus={consensus}
-                        models={models}
-                        modelId={modelId}
-                        reasoningEffort={reasoningEffort}
-                        contextUsage={contextUsage}
-                        primaryAction={primaryAction}
-                        stopping={stopping}
-                        stopDisabled={
-                          stopping
-                          || sessionTransitionPending
-                          || deletionBlocksRuntime
-                          || resumingSessionId !== null
-                          || checkpointRestoreToolUseId !== null
-                        }
-                        sendDisabled={sendDisabled}
-                        onImageFiles={addImageFiles}
-                        onPdfFiles={addPdfFiles}
-                        onPermissionChange={changePermission}
-                        onToggleConsensus={toggleConsensus}
-                        onModelChange={changeModel}
-                        onReasoningEffortChange={changeReasoningEffort}
-                        onSend={() => send(false)}
-                        onStop={stop}
-                      />
-                    </>
-                  )}
+                    <ComposerToolbar
+                      canAttachImages={canAttachImages}
+                      canAttachPdfs={canAttachPdfs}
+                      attachmentLocked={attachmentLocked}
+                      configurationLocked={attachmentLocked}
+                      permissionLocked={
+                        sessionTransitionPending
+                        || deletionBlocksRuntime
+                        || resumingSessionId !== null
+                      }
+                      permMode={permMode}
+                      consensus={consensus}
+                      models={models}
+                      modelId={modelId}
+                      reasoningEffort={reasoningEffort}
+                      contextUsage={contextUsage}
+                      primaryAction={primaryAction}
+                      stopping={stopping}
+                      stopDisabled={
+                        stopping
+                        || sessionTransitionPending
+                        || deletionBlocksRuntime
+                        || resumingSessionId !== null
+                        || checkpointRestoreToolUseId !== null
+                      }
+                      sendDisabled={sendDisabled}
+                      onImageFiles={addImageFiles}
+                      onPdfFiles={addPdfFiles}
+                      onPermissionChange={changePermission}
+                      onToggleConsensus={toggleConsensus}
+                      onModelChange={changeModel}
+                      onReasoningEffortChange={changeReasoningEffort}
+                      onSend={() => send(false)}
+                      onStop={stop}
+                    />
+                  </div>
                 </footer>
               </div>
             </div>
