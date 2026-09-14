@@ -120,6 +120,21 @@ preloadWindow.addEventListener('message', (event) => {
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
+  onBeforeClose: (save: () => Promise<void>): (() => void) => {
+    const listener = (_: unknown, state: unknown) => {
+      if (state !== 'flush') return
+      void Promise.resolve().then(save).then(
+        () => ipcRenderer.send(IPC.composerPersistence, 'saved'),
+        () => ipcRenderer.send(IPC.composerPersistence, 'failed'),
+      )
+    }
+    ipcRenderer.on(IPC.composerPersistence, listener)
+    ipcRenderer.send(IPC.composerPersistence, 'ready')
+    return () => {
+      ipcRenderer.off(IPC.composerPersistence, listener)
+      ipcRenderer.send(IPC.composerPersistence, 'unready')
+    }
+  },
   createTerminal: (runtimeId: string): Promise<TerminalInfo> =>
     ipcRenderer.invoke(IPC.createTerminal, runtimeId),
   closeTerminal: (terminalId: string): Promise<void> =>

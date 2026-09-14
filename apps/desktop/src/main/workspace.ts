@@ -106,6 +106,18 @@ export class ManagedWorkspaceManager {
     }
   }
 
+  async restoreDraft(id: string): Promise<ManagedWorkspaceBinding | null> {
+    let manifest: ManagedWorkspaceManifest
+    try { manifest = await this.readOwnedManifest(id) } catch (error) {
+      if (isNotFound(error)) return null
+      throw error
+    }
+    if (manifest.sessionId) throw new Error('默认工作区已经属于已发送的会话')
+    const info = await lstat(manifest.workingDirectory)
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('新会话工作区不是普通目录')
+    return bindingFromManifest(manifest)
+  }
+
   async attachSession(binding: ManagedWorkspaceBinding, sessionId: string): Promise<void> {
     assertUuid(sessionId)
     const manifest = await this.readOwnedManifest(binding.id)

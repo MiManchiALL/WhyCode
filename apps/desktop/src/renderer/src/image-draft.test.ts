@@ -16,7 +16,7 @@ describe('图片草稿传输', () => {
     } as File
     const drafts: ImageDraft[] = [
       { id: 'memory', kind: 'memory', name: 'paste.png', previewUrl: 'blob:1', file },
-      { id: 'path', kind: 'path', name: 'picked.png', previewUrl: 'blob:2', path: 'E:\\picked.png' },
+      { id: 'path', kind: 'path', name: 'picked.png', previewUrl: 'blob:2', file, path: 'E:\\picked.png' },
     ]
 
     assert.deepEqual(await prepareImageDrafts(drafts), [

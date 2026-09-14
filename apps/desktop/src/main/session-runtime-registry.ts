@@ -10,6 +10,7 @@ export interface SessionRuntimeRegistryOptions {
   maxConcurrentRuns?: number
   idleUnloadMs?: number
   onDisposeError?: (error: unknown) => void
+  retainDraft?: (runtime: DesktopSessionRuntime) => boolean
   onRemoved?: (runtime: DesktopSessionRuntime) => void | Promise<void>
 }
 
@@ -17,7 +18,7 @@ export interface SessionRuntimeRegistryOptions {
  * 对话选择与对话执行解耦：切换只改变 selected，运行中的其它 runtime 继续存活。
  * 已建立会话且非选中、空闲的 runtime 保留一段空闲期，避免短时间切换时反复重建
  * AgentSession 和 MCP 连接；运行中的 runtime 则从任务结束时开始计算。没有历史入口的
- * 草稿由选择快照提交边界立即释放，重新选中已建立会话则取消卸载。
+ * 草稿中仅保留可通过“新会话”返回的一份，其余在选择快照提交边界释放，重新选中已建立会话则取消卸载。
  */
 export class SessionRuntimeRegistry {
   private readonly runtimes = new Map<string, DesktopSessionRuntime>()
@@ -25,6 +26,7 @@ export class SessionRuntimeRegistry {
   private readonly maxConcurrentRuns: number
   private readonly idleUnloadMs: number
   private readonly onDisposeError: (error: unknown) => void
+  private readonly retainDraft: (runtime: DesktopSessionRuntime) => boolean
   private readonly onRemoved: (runtime: DesktopSessionRuntime) => void | Promise<void>
   private readonly unreadCompletionSessionIds = new Set<string>()
   private selectedRuntimeId: string | null = null
@@ -33,6 +35,7 @@ export class SessionRuntimeRegistry {
     this.maxConcurrentRuns = options.maxConcurrentRuns ?? MAX_CONCURRENT_AGENT_RUNS
     this.idleUnloadMs = options.idleUnloadMs ?? SESSION_RUNTIME_IDLE_UNLOAD_MS
     this.onDisposeError = options.onDisposeError ?? (() => {})
+    this.retainDraft = options.retainDraft ?? (() => false)
     this.onRemoved = options.onRemoved ?? (() => {})
   }
 
@@ -115,9 +118,9 @@ export class SessionRuntimeRegistry {
     this.scheduleIdleUnload(runtime)
   }
 
-  /** 快照提交后释放没有历史入口的旧草稿；选择事务失败时调用方不会进入这里。 */
+  /** 快照提交后释放已被替换的旧草稿；选择事务失败时调用方不会进入这里。 */
   async removeUnselectedDraft(runtime: DesktopSessionRuntime): Promise<boolean> {
-    if (runtime === this.selected || runtime.sessionId || runtime.busy) return false
+    if (runtime === this.selected || runtime.sessionId || runtime.busy || this.retainDraft(runtime)) return false
     await this.remove(runtime)
     return true
   }
@@ -152,7 +155,7 @@ export class SessionRuntimeRegistry {
 
   private scheduleIdleUnload(runtime: DesktopSessionRuntime): void {
     this.clearUnload(runtime.runtimeId)
-    if (runtime.busy || this.idleUnloadMs < 0) return
+    if (runtime.busy || this.idleUnloadMs < 0 || (!runtime.sessionId && this.retainDraft(runtime))) return
     const timer = setTimeout(() => {
       this.unloadTimers.delete(runtime.runtimeId)
       if (runtime === this.selected || runtime.busy) return

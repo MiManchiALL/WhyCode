@@ -107,6 +107,8 @@ import {
 } from './mcp-settings.ts'
 import { stageSessionDeletion } from './session-deletion.ts'
 import { SessionScratchManager } from './session-scratch.ts'
+import { NewSessionStateStore } from './new-session-state.ts'
+import { installComposerWindowLifecycle } from './composer-window-lifecycle.ts'
 import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
@@ -334,6 +336,7 @@ function createWindow(): BrowserWindow {
   win.once('ready-to-show', () => win.show())
   installTerminalWindowLifecycle(win, terminals)
   installImageContextMenu(win)
+  installComposerWindowLifecycle(win)
 
   installExternalWebLinkHandlers(
     win,
@@ -483,6 +486,7 @@ let subagents: SubagentService
 let worktrees: WorktreeManager
 /** 每个默认会话独占一个受管子目录；Fork 从来源目录创建一次性快照。 */
 let managedWorkspaces: ManagedWorkspaceManager
+let newSessionState: NewSessionStateStore
 /** 普通 Main 与协商任务共用的会话级临时工作区所有权入口。 */
 let sessionScratch: SessionScratchManager
 /** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
@@ -649,11 +653,12 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     if (runtime.busy) throw new Error('Agent 工作中，请先停止再丢弃 Worktree')
 
     const wasSelected = runtimeRegistry.selected === runtime
+    await newSessionState.consume(runtime.runtimeId)
     await runtimeRegistry.remove(runtime)
     detachedCurrent = wasSelected
     await worktrees.remove(binding, true)
     if (wasSelected) {
-      replacementRuntime = createDefaultDraftRuntime()
+      replacementRuntime = await getNewSessionRuntime()
       runtimeRegistry.select(replacementRuntime)
     }
     return {
@@ -666,7 +671,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     }
   } catch (error) {
     if (detachedCurrent && !replacementRuntime) {
-      replacementRuntime = createDefaultDraftRuntime()
+      replacementRuntime = await getNewSessionRuntime()
       runtimeRegistry.select(replacementRuntime)
     }
     return {
@@ -696,11 +701,15 @@ function createDraftRuntime(
   return runtime
 }
 
-function createDefaultDraftRuntime(runtimeId = randomUUID()): DesktopSessionRuntime {
-  return createDraftRuntime(
-    prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces),
-    runtimeId,
-  )
+async function getNewSessionRuntime(): Promise<DesktopSessionRuntime> {
+  const saved = newSessionState.value
+  const existing = saved ? runtimeRegistry.get(saved.runtimeId) : null
+  if (existing && !existing.sessionId) return existing
+  if (saved) return createDraftRuntime(saved.workspace, saved.runtimeId)
+  const runtimeId = randomUUID()
+  const workspace = prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces)
+  await newSessionState.set({ runtimeId, workspace })
+  return createDraftRuntime(workspace, runtimeId)
 }
 
 /** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
@@ -717,6 +726,14 @@ function validateModel(modelId: string): string | null {
 function resolveCurrentModelId(runtime: DesktopSessionRuntime): string | null {
   runtime.modelId ??= preferredModelId ?? resolveDefaultModelId(loadAppConfig())
   return runtime.modelId
+}
+
+async function materializeWorkspace(runtime: DesktopSessionRuntime): Promise<WorkspaceBinding> {
+  const binding = await materializeRuntimeWorkspace(runtime, worktrees, managedWorkspaces)
+  if (!runtime.journal) {
+    await newSessionState.set({ runtimeId: runtime.runtimeId, workspace: binding })
+  }
+  return binding
 }
 
 async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | null> {
@@ -737,17 +754,14 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     if (!runtime.sessionInitialization) {
       let pending: Promise<string | null>
       pending = (async () => {
-        const workspace = await materializeRuntimeWorkspace(
-          runtime,
-          worktrees,
-          managedWorkspaces,
-        )
+        const workspace = await materializeWorkspace(runtime)
         const recorder = runtime.journal ?? await createRuntimeJournal(
           workspace,
           modelId,
           runtime.reasoningEffort,
         )
         runtime.journal = recorder
+        await newSessionState.consume(runtime.runtimeId)
         terminals.bindSession(runtime.runtimeId, recorder.sessionId)
         if (!runtime.session) {
           runtime.session = await createMainAgentSession(
@@ -2152,8 +2166,7 @@ function readRuntimeEventBoundary(): number {
 }
 
 /**
- * 会话选择只有在对应快照也成功生成后才算提交。失败时恢复原选择；新构造的
- * 候选运行时同时从 Registry 与 Journal 内存索引释放，不能留下半切换状态。
+ * 完整快照与新会话工作区身份均就绪后才提交选择；失败候选交回既有卸载生命周期。
  */
 async function selectRuntimeWithSnapshot(
   runtime: DesktopSessionRuntime,
@@ -2161,14 +2174,14 @@ async function selectRuntimeWithSnapshot(
   const previous = runtimeRegistry.selected
   let snapshot: RuntimeSnapshot
   try {
-    runtimeRegistry.select(runtime)
     snapshot = await runtimeSnapshot(runtime)
-  } catch (error) {
-    if (previous && previous !== runtime && !previous.isDisposed) {
-      runtimeRegistry.select(previous)
+    if (!runtime.journal) {
+      await newSessionState.set({ runtimeId: runtime.runtimeId, workspace: runtime.workspace })
     }
+    runtimeRegistry.select(runtime)
+  } catch (error) {
     if (runtimeRegistry.get(runtime.runtimeId) === runtime) {
-      await runtimeRegistry.remove(runtime)
+      runtimeRegistry.runtimeBecameIdle(runtime)
     } else if (runtime.journal) {
       sessions.release(runtime.journal)
     }
@@ -2180,7 +2193,14 @@ async function selectRuntimeWithSnapshot(
   return snapshot
 }
 
-async function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
+let newSessionPending: Promise<NewSessionResult> | null = null
+function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
+  if (newSessionPending) return newSessionPending
+  newSessionPending = prepareNewSession(request).finally(() => { newSessionPending = null })
+  return newSessionPending
+}
+
+async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
   if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
@@ -2191,10 +2211,11 @@ async function startNewSession(request?: NewSessionRequest): Promise<NewSessionR
   }
   try {
     const runtimeId = randomUUID()
-    const workspace = request?.workspace
-      ? await prepareRuntimeWorkspace(request.workspace, worktrees)
-      : prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces)
-    const runtime = createDraftRuntime(workspace, runtimeId)
+    const runtime = request?.workspace === null
+      ? createDraftRuntime(prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces), runtimeId)
+      : request?.workspace
+        ? createDraftRuntime(await prepareRuntimeWorkspace(request.workspace, worktrees))
+        : await getNewSessionRuntime()
     return {
       ok: true,
       snapshot: await selectRuntimeWithSnapshot(runtime),
@@ -2609,7 +2630,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
     backgroundTaskWakeups?.discardSession(sessionId)
     subagentWakeups?.discardSession(sessionId)
     if (deletedCurrent) {
-      replacementRuntime = createDefaultDraftRuntime()
+      replacementRuntime = await getNewSessionRuntime()
       runtimeRegistry.select(replacementRuntime)
       detachedCurrent = true
       deletionLease.allowRuntimeChanges()
@@ -2707,6 +2728,27 @@ if (primaryInstance) void app.whenReady().then(async () => {
     requireDefaultWorkspace(),
     join(dirname(getConfigPath()), 'managed-workspaces'),
   )
+  newSessionState = new NewSessionStateStore(join(app.getPath('userData'), 'new-session.json'))
+  try {
+    await newSessionState.initialize()
+    const savedDraft = newSessionState.value
+    if (savedDraft) {
+      const { runtimeId, workspace } = savedDraft
+      const binding = workspace.mode === 'managed' || workspace.mode === 'pending-managed'
+        ? await managedWorkspaces.restoreDraft(runtimeId)
+        : workspace.mode === 'worktree' || workspace.mode === 'pending-worktree'
+          ? await worktrees.restoreDraft(runtimeId, runtimeId)
+          : null
+      if (binding) await newSessionState.set({ runtimeId, workspace: binding })
+      else if (workspace.mode === 'managed' || workspace.mode === 'worktree') {
+        throw new Error('新会话工作区已不存在，无法恢复草稿目录')
+      }
+    }
+  } catch (error) {
+    dialog.showErrorBox('WhyCode 启动失败', `无法恢复新会话草稿目录：${error instanceof Error ? error.message : String(error)}`)
+    app.quit()
+    return
+  }
   await worktrees.pruneEmptyRepositoryDirectories()
     .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
   try {
@@ -2715,12 +2757,12 @@ if (primaryInstance) void app.whenReady().then(async () => {
     const worktreeCleanup = await worktrees.cleanupAbandonedDrafts(
       new Set(summaries.flatMap((summary) =>
         summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
-      )),
+      ).concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
     )
     const managedCleanup = await managedWorkspaces.cleanupAbandoned(
       new Set(summaries.flatMap((summary) =>
         summary.workspace?.mode === 'managed' ? [summary.workspace.id] : [],
-      )),
+      ).concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
     )
     const scratchCleanup = await sessionScratch.cleanupAbandoned(
       new Set(summaries.map((summary) => summary.sessionId)),
@@ -2751,9 +2793,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
   }
   runtimeRegistry = new SessionRuntimeRegistry({
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
+    retainDraft: (runtime) => newSessionState.value?.runtimeId === runtime.runtimeId,
     onRemoved: async (runtime) => {
       if (!runtime.journal) terminals.closeOwner({ runtimeId: runtime.runtimeId })
       if (runtime.journal) sessions.release(runtime.journal)
+      if (!runtime.journal && newSessionState.value?.runtimeId === runtime.runtimeId) return
       const workspace = runtime.workspaceBinding
       if (workspace?.mode === 'worktree' && runtime.journal) {
         worktrees.release(workspace, runtime.runtimeId)
@@ -2764,7 +2808,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       }
     },
   })
-  const initialRuntime = createDefaultDraftRuntime()
+  const initialRuntime = await getNewSessionRuntime()
   runtimeRegistry.select(initialRuntime)
   await syncRetiredModelLabels()
     .catch((error) => console.warn('历史模型显示名同步失败：', error))
@@ -3089,7 +3133,7 @@ async function prepareTerminalDirectory(runtime: DesktopSessionRuntime): Promise
       || (runtime.sessionId && sessionDeletionLock.sessionId === runtime.sessionId)) {
       throw new Error('当前会话正在关闭，无法打开终端')
     }
-    await materializeRuntimeWorkspace(runtime, worktrees, managedWorkspaces)
+    await materializeWorkspace(runtime)
     return requireRuntimeProjectDir(runtime)
   } finally {
     reservation.release()
@@ -3103,7 +3147,8 @@ app.on('window-all-closed', () => {
 })
 
 let shutdownStarted = false
-app.on('before-quit', (event) => {
+// 所有窗口完成草稿落盘并关闭后，才释放运行时和事件通道。
+app.on('will-quit', (event) => {
   terminals.closeOwner({})
   runtimeEventBatcher.flush()
   runtimeEventPorts.closeAll()

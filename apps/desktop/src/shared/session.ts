@@ -148,7 +148,8 @@ export type NewSessionResult =
   | { ok: false; error: string }
 
 export interface NewSessionRequest {
-  workspace: StartWorkspaceRequest
+  /** 显式 null 移除已选项目；省略整个请求则返回尚未发送的新会话。 */
+  workspace: StartWorkspaceRequest | null
 }
 
 export type DeleteSessionResult =

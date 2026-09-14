@@ -37,6 +37,23 @@ afterEach(async () => {
 })
 
 describe('受管 Worktree 生命周期', () => {
+  it('未发送草稿的 Worktree 跨重启保留目录与租约，认领后不再作为草稿恢复', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const runtimeId = randomUUID()
+    const request = await worktreeRequest(manager, fixture.repository)
+    const binding = await manager.create(request, runtimeId, runtimeId)
+    manager.release(binding, runtimeId)
+    const restarted = new WorktreeManager(fixture.managerRoot)
+    await restarted.cleanupAbandonedDrafts(new Set([runtimeId]))
+    assert.deepEqual(await restarted.restoreDraft(runtimeId, runtimeId), binding)
+    const sessionId = randomUUID()
+    await restarted.attachSession(binding, sessionId)
+    assert.equal(await restarted.restoreDraft(runtimeId, runtimeId), null)
+    restarted.release(binding, runtimeId)
+    await restarted.detachSession(binding, sessionId, true)
+  })
+
   it('选择基线时不创建目录，首条消息初始化才物化精确 Worktree', async () => {
     const fixture = await createRepository()
     const manager = new WorktreeManager(fixture.managerRoot)

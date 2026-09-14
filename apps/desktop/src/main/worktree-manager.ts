@@ -140,6 +140,17 @@ export class WorktreeManager {
     }
   }
 
+  async restoreDraft(id: string, ownerRuntimeId: string): Promise<WorktreeWorkspaceBinding | null> {
+    const scan = await this.registry.unclaimedBindings()
+    const binding = scan.bindings.find((item) => item.id === id)
+    if (!binding) return null
+    await this.assertGitWorktree(binding)
+    await assertWorktreeExecutionDirectory(binding)
+    await this.registry.validateBinding(binding)
+    this.acquire(binding, ownerRuntimeId)
+    return binding
+  }
+
   attachSession(binding: WorktreeWorkspaceBinding, sessionId: string): Promise<void> {
     return this.registry.attachSession(binding, sessionId)
   }

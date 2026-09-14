@@ -17,9 +17,9 @@ interface ImageDraftBase {
 }
 
 export type ImageDraft =
-  | (ImageDraftBase & { kind: 'path'; path: string })
+  | (ImageDraftBase & { kind: 'path'; path: string; file: File })
   | (ImageDraftBase & { kind: 'memory'; file: File })
-  | (ImageDraftBase & { kind: 'stored'; attachmentId: string })
+  | (ImageDraftBase & { kind: 'stored'; attachmentId: string; sessionId: string; storageName: string })
 
 /** 保留用户草稿顺序，避免混合选择与粘贴时改变“第几张”的语义。 */
 export async function prepareImageDrafts(
@@ -44,6 +44,8 @@ export function restoredImageDrafts(messages: readonly QueuedUserMessage[]): Ima
     name: attachment.name,
     previewUrl: `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`,
     attachmentId: attachment.id,
+    sessionId: attachment.sessionId,
+    storageName: attachment.storageName,
   })))
 }
 
@@ -89,7 +91,7 @@ export function appendImageDrafts(
     else knownMemory.add(file)
     const previewUrl = URL.createObjectURL(file)
     const base = { id: previewUrl, name: file.name || 'clipboard-image', previewUrl }
-    result.drafts.push(path ? { ...base, kind: 'path', path } : { ...base, kind: 'memory', file })
+    result.drafts.push(path ? { ...base, kind: 'path', path, file } : { ...base, kind: 'memory', file })
   }
   return result
 }

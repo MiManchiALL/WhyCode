@@ -77,7 +77,6 @@ import {
   prepareImageDrafts,
   releaseImageDrafts,
   restoredImageDrafts,
-  type ImageDraft,
 } from './image-draft.ts'
 import { collectPastedImageFiles, collectPastedPdfFiles } from './image-paste.ts'
 import { useAttachmentDropTarget } from './image-drop.ts'
@@ -88,9 +87,9 @@ import {
 import {
   preparePdfDrafts,
   restoredPdfDrafts,
-  type PdfDraft,
 } from './pdf-draft.ts'
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
+import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
 import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
@@ -242,13 +241,9 @@ export function App() {
     sessionId: string | null
     occurredAt: string
   }[]>())
-  const composerDraftsRef = useRef(new Map<string, {
-    text: string
-    images: ImageDraft[]
-    pdfs: PdfDraft[]
-    skills: SkillSummary[]
-    btwMode: BtwMode | null
-  }>())
+  const restoredInputIdsRef = useRef(restoredInputIds)
+  restoredInputIdsRef.current = restoredInputIds
+  const composerDraftsRef = useRef(new ComposerDraftStore())
   const conversationPresentationsRef = useRef(new ConversationPresentationCache())
   const pendingScrollRestoreRef = useRef<ConversationScrollPosition | null>(null)
   const conversationScrollReleaseRef = useRef<(() => void) | null>(null)
@@ -439,10 +434,7 @@ export function App() {
 
   useEffect(() => () => {
     conversationEventBufferRef.current?.clear()
-    for (const draft of composerDraftsRef.current.values()) {
-      releaseImageDrafts(draft.images)
-    }
-    composerDraftsRef.current.clear()
+    composerDraftsRef.current.dispose()
   }, [])
 
   const stashActiveComposer = useCallback(() => {
@@ -454,24 +446,48 @@ export function App() {
     const text = inputRef.current
     const skills = captureSkills()
     const currentBtwMode = btwModeRef.current
-    // 尚未产生 JSONL 的空白页没有历史入口，切走后不能再导航回来。
-    if (!currentSessionId) {
-      releaseImageDrafts(images)
-      return
-    }
-    const key = composerKey(currentRuntimeId, currentSessionId)
-    if (text || images.length > 0 || pdfs.length > 0 || skills.length > 0 || currentBtwMode) {
-      composerDraftsRef.current.set(key, {
-        text,
-        images,
-        pdfs,
-        skills,
-        btwMode: currentBtwMode,
-      })
-    } else {
-      composerDraftsRef.current.delete(key)
-    }
+    composerDraftsRef.current.cache(composerDraftKey(currentSessionId), {
+      text, images, pdfs, skills, btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
+    })
   }, [captureSkills, detachImageDrafts, detachPdfDrafts])
+
+  const draftStorageError = useCallback((error: unknown) => {
+    showError(`输入草稿保存或恢复失败：${error instanceof Error ? error.message : String(error)}`)
+  }, [showError])
+
+  const persistComposer = useCallback(async () => {
+    if (!runtimeId || runtimeId !== runtimeIdRef.current || attachmentSubmissionPending) return
+    await composerDraftsRef.current.save(composerDraftKey(sessionIdRef.current), {
+      text: inputRef.current, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
+      btwMode, restoredInputIds,
+    })
+  }, [runtimeId, input, imageDrafts, pdfDrafts, selectedSkills, btwMode, restoredInputIds,
+    attachmentSubmissionPending])
+  const persistComposerRef = useRef(persistComposer)
+  persistComposerRef.current = persistComposer
+
+  useEffect(() => { void persistComposer().catch(draftStorageError) }, [persistComposer, draftStorageError])
+  useEffect(() => window.whycode.onBeforeClose(async () => {
+    try {
+      await persistComposerRef.current()
+      await composerDraftsRef.current.flush()
+    } catch (error) {
+      draftStorageError(error)
+      throw error
+    }
+  }), [draftStorageError])
+
+  const prepareComposer = useCallback(async (snapshot: RuntimeSnapshot) => {
+    if (runtimeIdRef.current && composerDraftKey(snapshot.sessionId) === composerDraftKey(sessionIdRef.current)) return
+    await composerDraftsRef.current.load(composerDraftKey(snapshot.sessionId))
+  }, [])
+
+  const setComposerSessionId = useCallback((sessionId: string | null) => {
+    if (sessionId && sessionIdRef.current === null && runtimeIdRef.current) {
+      void composerDraftsRef.current.moveToSession(sessionId).catch(draftStorageError)
+    }
+    sessionIdRef.current = sessionId
+  }, [draftStorageError])
 
   const stashActivePresentation = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
@@ -490,10 +506,7 @@ export function App() {
   const resetActiveComposer = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
     const currentSessionId = sessionIdRef.current
-    const key = composerKey(currentRuntimeId, currentSessionId)
-    const detachedDraft = composerDraftsRef.current.get(key)
-    if (detachedDraft) releaseImageDrafts(detachedDraft.images)
-    composerDraftsRef.current.delete(key)
+    void composerDraftsRef.current.delete(composerDraftKey(currentSessionId)).catch(draftStorageError)
     backgroundEventsRef.current.delete(currentRuntimeId)
     inputRef.current = ''
     setInput('')
@@ -501,7 +514,7 @@ export function App() {
     clearImageDrafts()
     clearPdfDrafts()
     setBtwMode(null)
-  }, [clearImageDrafts, clearPdfDrafts, clearSkills, setBtwMode])
+  }, [clearImageDrafts, clearPdfDrafts, clearSkills, setBtwMode, draftStorageError])
 
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     if (sessionId) history.cancel()
@@ -697,7 +710,8 @@ export function App() {
       setRightPanelRetained(next.open)
     }
     runtimeIdRef.current = snapshot.runtimeId
-    sessionIdRef.current = snapshot.sessionId
+    if (!changingRuntime) setComposerSessionId(snapshot.sessionId)
+    else sessionIdRef.current = snapshot.sessionId
     if (changingSession) {
       backgroundTaskRevisionRef.current = -1
       setBackgroundTasks([])
@@ -722,12 +736,14 @@ export function App() {
     }
     activeSnapshotSequenceRef.current = snapshot.eventSequence
     setRuntimeId(snapshot.runtimeId)
+    const validRestoredIds = new Set(snapshot.restoredInputs.map((item) => item.id))
+    let restoredIds = restoredInputIdsRef.current.filter((id) => validRestoredIds.has(id))
     if (changingRuntime) {
       resetSkillCatalog()
-      const key = composerKey(snapshot.runtimeId, snapshot.sessionId)
-      const draft = composerDraftsRef.current.get(key)
-      composerDraftsRef.current.delete(key)
+      const draft = composerDraftsRef.current.take(composerDraftKey(snapshot.sessionId))
+      inputRef.current = draft?.text ?? ''
       setInput(draft?.text ?? '')
+      restoredIds = (draft?.restoredInputIds ?? []).filter((id) => validRestoredIds.has(id))
       setBtwMode(draft?.btwMode ?? null)
       replaceSkills(draft?.skills ?? [])
       if (draft) {
@@ -774,8 +790,8 @@ export function App() {
     setStopping(false)
     setQueued(snapshot.queuedInputs)
     setQueuedActionPending({})
-    setRestoredInputIds([])
-    setRestoredQueue(snapshot.restoredInputs)
+    setRestoredInputIds(restoredIds)
+    setRestoredQueue(snapshot.restoredInputs.filter((item) => !restoredIds.includes(item.id)))
     setRestoredSubmissionPending(false)
     setApproval(snapshot.approval)
     setModelId(snapshot.modelId ?? '')
@@ -783,6 +799,7 @@ export function App() {
     setForkOrigin(snapshot.forkOrigin)
     setForkPendingTurnId(null)
   }, [
+    setComposerSessionId,
     applyBackgroundTaskState,
     applySubagentState,
     restoreImageDrafts,
@@ -805,6 +822,8 @@ export function App() {
       const snapshot = await window.whycode.runtimeSnapshot()
       if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
       if (resumeTargetCommitted(snapshot, targetSessionId)) {
+        await prepareComposer(snapshot)
+        if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
         applyRuntimeSnapshot(snapshot)
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
@@ -825,6 +844,7 @@ export function App() {
   }, [
     showError,
     applyRuntimeSnapshot,
+    prepareComposer,
     refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
@@ -965,13 +985,13 @@ export function App() {
     backgroundEventsRef.current.delete(runtimeId)
     for (const entry of buffered) {
       if (entry.sequence <= activeSnapshotSequenceRef.current) continue
-      sessionIdRef.current = entry.sessionId
+      setComposerSessionId(entry.sessionId)
       consumeEvent(entry.event, entry.occurredAt)
     }
     if (hydratingRuntimeIdRef.current === runtimeId) {
       hydratingRuntimeIdRef.current = null
     }
-  }, [consumeEvent, runtimeId])
+  }, [consumeEvent, runtimeId, setComposerSessionId])
 
   useEffect(() => {
     return window.whycode.onBackgroundTasks((state) => {
@@ -1153,7 +1173,7 @@ export function App() {
         eventRuntimeId === runtimeIdRef.current
         && hydratingRuntimeIdRef.current !== eventRuntimeId
       ) {
-        sessionIdRef.current = eventSessionId
+        setComposerSessionId(eventSessionId)
         consumeEvent(event, occurredAt)
       } else if (
         event.type === 'work-started'
@@ -1194,7 +1214,8 @@ export function App() {
     const eventSubscription = subscribeRuntimeEventBatches((events) => {
       for (const event of events) acceptEvent(event)
     })
-    void eventSubscription.ready.then(() => window.whycode.runtimeSnapshot()).then((snapshot) => {
+    void eventSubscription.ready.then(() => window.whycode.runtimeSnapshot()).then(async (snapshot) => {
+      await prepareComposer(snapshot)
       if (disposed) return
       applyRuntimeSnapshot(snapshot)
       hydrated = true
@@ -1216,6 +1237,8 @@ export function App() {
     }
   }, [
     applyRuntimeSnapshot,
+    prepareComposer,
+    setComposerSessionId,
     consumeEvent,
     refreshModelCatalog,
     refreshSessions,
@@ -1292,7 +1315,7 @@ export function App() {
   const editableBlockId = !interactionBusy && !stopping
     ? editableUserBlockId(blocks)
     : null
-  const attachmentLocked = stopping
+  const attachmentLocked = !runtimeId || stopping
     || sessionTransitionPending
     || attachmentSubmissionPending
     || deletionBlocksRuntime
@@ -1366,23 +1389,24 @@ export function App() {
   }, [showConversationFeedback])
 
   const activateNewSession = useCallback(async (
-    workspaceRequest?: StartWorkspaceRequest,
+    workspaceRequest?: StartWorkspaceRequest | null,
   ): Promise<boolean> => {
     const result = await window.whycode.newSession(
-      workspaceRequest ? { workspace: workspaceRequest } : undefined,
+      workspaceRequest !== undefined ? { workspace: workspaceRequest } : undefined,
     )
     if (!result.ok) {
       setWorkspaceCandidate(null)
       showError(result.error ?? '新建会话失败')
       return false
     }
+    await prepareComposer(result.snapshot)
     applyRuntimeSnapshot(result.snapshot)
     setWorkspaceCandidate(null)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
     void refreshModelCatalog()
     return true
-  }, [showError, applyRuntimeSnapshot, refreshModelCatalog, refreshSessions])
+  }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions])
 
   const pickProject = useCallback(() => {
     if (!beginSessionTransition()) return
@@ -1421,10 +1445,11 @@ export function App() {
     })
   }, [showError, sendRuntimeCommand, stopping])
 
-  const startNewSession = useCallback(() => {
+  const startNewSession = useCallback((resetWorkspace = false) => {
+    if (!resetWorkspace && runtimeIdRef.current && sessionIdRef.current === null && !resumingSessionIdRef.current) return
     if (!beginSessionTransition()) return
     setWorkspaceCandidate(null)
-    void activateNewSession()
+    void activateNewSession(resetWorkspace ? null : undefined)
       .catch((error) => {
         showError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
       })
@@ -1474,12 +1499,14 @@ export function App() {
     setResumingSessionId(sessionId)
     const presentation = conversationPresentationsRef.current.get(sessionId)
     const historyStart = presentation?.scroll?.atBottom === false ? presentation.historyStart : undefined
-    void window.whycode.resumeSession(sessionId, historyStart).then((result) => {
+    void window.whycode.resumeSession(sessionId, historyStart).then(async (result) => {
       if (resumeRequestRef.current !== request) return
       if (!result.ok) {
         setSessionActionError(result.error)
         return
       }
+      await prepareComposer(result.snapshot)
+      if (resumeRequestRef.current !== request) return
       applyRuntimeSnapshot(result.snapshot)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
@@ -1497,6 +1524,7 @@ export function App() {
   }, [
     showError,
     applyRuntimeSnapshot,
+    prepareComposer,
     refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
@@ -1517,9 +1545,7 @@ export function App() {
     void window.whycode.deleteSession(sessionId).then(async (result) => {
       cleanupPending = result.ok && result.cleanupPending
       if (result.ok || result.deletedCurrent) {
-        const detachedDraft = composerDraftsRef.current.get(sessionId)
-        if (detachedDraft) releaseImageDrafts(detachedDraft.images)
-        composerDraftsRef.current.delete(sessionId)
+        void composerDraftsRef.current.delete(sessionId).catch(draftStorageError)
         conversationPresentationsRef.current.delete(sessionId)
         rightPanelSessionStoreRef.current!.delete(sessionId)
         for (const [eventRuntimeId, events] of backgroundEventsRef.current) {
@@ -1530,7 +1556,10 @@ export function App() {
       }
       if (result.deletedCurrent) {
         resetActiveComposer()
-        if (result.snapshot) applyRuntimeSnapshot(result.snapshot)
+        if (result.snapshot) {
+          await prepareComposer(result.snapshot)
+          applyRuntimeSnapshot(result.snapshot)
+        }
         conversationPresentationsRef.current.delete(sessionId)
         void window.whycode.consensusStatus().then(setConsensus)
       }
@@ -1546,6 +1575,8 @@ export function App() {
     })
   }, [
     applyRuntimeSnapshot,
+    prepareComposer,
+    draftStorageError,
     refreshSessions,
     resetActiveComposer,
     setDeletionBlocksRuntime,
@@ -1578,11 +1609,12 @@ export function App() {
     if (!sourceSessionId || !beginSessionTransition()) return
     setForkPendingTurnId(sourceTurnId)
     setSessionActionError(null)
-    void window.whycode.forkSession({ sourceSessionId, sourceTurnId }).then((result) => {
+    void window.whycode.forkSession({ sourceSessionId, sourceTurnId }).then(async (result) => {
       if (!result.ok) {
         setSessionActionError(result.error)
         return
       }
+      await prepareComposer(result.snapshot)
       applyRuntimeSnapshot(result.snapshot)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
@@ -1598,6 +1630,7 @@ export function App() {
   }, [
     showError,
     applyRuntimeSnapshot,
+    prepareComposer,
     beginSessionTransition,
     endSessionTransition,
     refreshModelCatalog,
@@ -1963,7 +1996,7 @@ export function App() {
   const currentSession = sessions.find((session) => session.sessionId === sessionIdRef.current)
   const taskTitle = currentSession?.title
     || (blocks.length > 0 ? '当前会话' : '新会话')
-  const composerDisabled = stopping
+  const composerDisabled = !runtimeId || stopping
     || sessionTransitionPending
     || deletionBlocksRuntime
     || resumingSessionId !== null
@@ -2023,7 +2056,7 @@ export function App() {
         busy={sessionChangeLocked}
         deletingSessionId={deletingSessionId}
         onCollapsedChange={setSidebarCollapsed}
-        onNewSession={startNewSession}
+        onNewSession={() => startNewSession()}
         onResume={resumeSession}
         onPinnedChange={setSessionPinned}
         onDelete={deleteSession}
@@ -2223,7 +2256,7 @@ export function App() {
                         busy={sessionChangeLocked}
                         canChangeWorkspace={canChangeSessionWorkspace(sessionIdRef.current)}
                         onPickProject={pickProject}
-                        onClearProject={startNewSession}
+                        onClearProject={() => startNewSession(true)}
                         onStart={startWorkspaceSession}
                       />
                     )}

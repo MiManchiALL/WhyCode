@@ -404,6 +404,12 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 - `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。
 - 更早页只扩展显示前缀，不覆盖实时控制状态、当前输出或步骤提交/丢弃边界；分页不生成模型消息、不改变持久化 schema，也不取代模型的完整上下文恢复。
 
+### 7.2 未发送输入草稿
+
+草稿是 Desktop 的用户输入状态，不是 Core 会话事实，不写 JSONL、模型 messages、Fork 或压缩摘要。Renderer 独立保存文本、图片数据、PDF 引用、Skill 选择、BTW 模式与退回输入的消费 ID；恢复后只保留当前 canonical restored inputs 仍存在的 ID，并从待恢复队列排除已经放入输入框的项。
+
+`newSession()` 返回尚未发送的新会话，重复请求复用同一准备事务、运行时与工作区；`newSession({workspace})` 显式更换项目，`workspace:null` 表示移除项目并回到待创建的默认目录。Main 在 `userData/new-session.json` 保存这份工作区身份，输入内容由 Renderer 的草稿存储持有。建立 Journal 后释放新会话入口，草稿随实际会话 ID 转移；仅点击新建或输入未发送内容不会建立 Journal 或发送请求。窗口关闭通过 `composerPersistence` 通道握手，Main 只接受所属主 Frame 的保存完成确认；握手不传递草稿内容，不经过 Core 命令或事件。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。
