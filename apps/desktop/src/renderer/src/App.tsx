@@ -2047,16 +2047,22 @@ export function App() {
           }))}
         />
         <div className="relative flex min-h-0 flex-1">
-          {!loadingConversation && (
-            <ConversationNavigator
-              key={runtimeId}
-              sections={sections}
-              earlierEntries={history.earlierEntries}
-              navigationTargetIds={btwPresentation.navigationTargetIds}
-              scrollRef={scrollRef}
-              onNavigate={navigateConversation}
-            />
-          )}
+          <aside
+            className="wc-conversation-navigator"
+            aria-label="会话定位"
+            aria-hidden={loadingConversation}
+          >
+            {!loadingConversation && (
+              <ConversationNavigator
+                key={runtimeId}
+                sections={sections}
+                earlierEntries={history.earlierEntries}
+                navigationTargetIds={btwPresentation.navigationTargetIds}
+                scrollRef={scrollRef}
+                onNavigate={navigateConversation}
+              />
+            )}
+          </aside>
           <section className="relative flex min-w-0 flex-1 flex-col">
             {!loadingConversation && conversationFeedback && (
               <ConversationFeedbackToast

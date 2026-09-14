@@ -54,41 +54,36 @@ export const ConversationNavigator = memo(
         )
 
     return (
-      <aside
-        className="wc-conversation-navigator"
-        aria-label="会话定位"
+      <div
+        ref={navigation.railRef}
+        className="wc-conversation-navigator-rail"
+        onPointerEnter={navigation.handlePointerEnter}
+        onPointerMove={navigation.handlePointerMove}
+        onPointerLeave={navigation.handlePointerLeave}
       >
-        <div
-          ref={navigation.railRef}
-          className="wc-conversation-navigator-rail"
-          onPointerEnter={navigation.handlePointerEnter}
-          onPointerMove={navigation.handlePointerMove}
-          onPointerLeave={navigation.handlePointerLeave}
-        >
-          <div className="wc-conversation-navigator-track">
-            {markers.map((marker) => (
-              <ConversationNavigationMarker
-                key={entries[marker.entryIndex]!.id}
-                entry={entries[marker.entryIndex]!}
-                entryIndex={marker.entryIndex}
-                y={marker.y}
-                edgeOpacity={marker.edgeOpacity}
-                waveIndex={navigation.waveIndex}
-                hovered={marker.entryIndex === navigation.highlightIndex}
-                activated={entries[marker.entryIndex]!.id === navigation.activatedEntryId}
-                onNavigate={() => {
-                  navigation.activateEntry(entries[marker.entryIndex]!.id)
-                  const entryId = entries[marker.entryIndex]!.id
-                  props.onNavigate(props.navigationTargetIds.get(entryId) ?? entryId)
-                }}
-              />
-            ))}
-          </div>
-          {navigation.pointerInside && navigation.waveIndex !== null && preview && (
-            <ConversationNavigationPreview entry={preview} top={tooltipTop} />
-          )}
+        <div className="wc-conversation-navigator-track">
+          {markers.map((marker) => (
+            <ConversationNavigationMarker
+              key={entries[marker.entryIndex]!.id}
+              entry={entries[marker.entryIndex]!}
+              entryIndex={marker.entryIndex}
+              y={marker.y}
+              edgeOpacity={marker.edgeOpacity}
+              waveIndex={navigation.waveIndex}
+              hovered={marker.entryIndex === navigation.highlightIndex}
+              activated={entries[marker.entryIndex]!.id === navigation.activatedEntryId}
+              onNavigate={() => {
+                navigation.activateEntry(entries[marker.entryIndex]!.id)
+                const entryId = entries[marker.entryIndex]!.id
+                props.onNavigate(props.navigationTargetIds.get(entryId) ?? entryId)
+              }}
+            />
+          ))}
         </div>
-      </aside>
+        {navigation.pointerInside && navigation.waveIndex !== null && preview && (
+          <ConversationNavigationPreview entry={preview} top={tooltipTop} />
+        )}
+      </div>
     )
   },
   (previous, next) => previous.scrollRef === next.scrollRef
