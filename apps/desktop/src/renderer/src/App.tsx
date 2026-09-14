@@ -2289,7 +2289,7 @@ export function App() {
           <div
             ref={rightPanelRef}
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
-            className={`wc-right-panel-shell relative h-full shrink-0 overflow-hidden bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
+            className={`wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
               rightPanelState.open
                 ? 'ml-0'
                 : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
