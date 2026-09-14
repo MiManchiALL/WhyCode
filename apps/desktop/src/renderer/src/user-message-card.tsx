@@ -72,9 +72,13 @@ function UserMessageText({ text }: { text: string }) {
   useEffect(() => setExpanded(false), [text])
   useLayoutEffect(() => {
     const element = contentRef.current!
-    const measure = () => setOverflows(
-      element.scrollHeight > parseFloat(getComputedStyle(element).lineHeight) * COLLAPSED_MESSAGE_LINES + 1,
-    )
+    const measure = () => {
+      // 不为离屏历史强制布局；进入可见区后 ResizeObserver 会再次测量。
+      if (!element.checkVisibility({ contentVisibilityAuto: true })) return
+      setOverflows(
+        element.scrollHeight > parseFloat(getComputedStyle(element).lineHeight) * COLLAPSED_MESSAGE_LINES + 1,
+      )
+    }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(element)

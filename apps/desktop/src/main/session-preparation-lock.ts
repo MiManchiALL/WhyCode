@@ -15,11 +15,6 @@ export class SessionPreparationLock {
     return this.activeKind
   }
 
-  /** Fork 不是恢复动作，不应让 Renderer 误标源会话正在恢复。 */
-  get visibleResumeSessionId(): string | null {
-    return this.activeKind === 'resume' ? this.activeId : null
-  }
-
   acquire(
     sessionId: string,
     kind: SessionPreparationKind = 'resume',

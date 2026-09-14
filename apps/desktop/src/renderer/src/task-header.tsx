@@ -6,6 +6,7 @@ import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 
 interface TaskHeaderProps {
   title: string
+  disabled?: boolean
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
   backgroundTasks: readonly BackgroundTaskSummary[]
@@ -30,7 +31,7 @@ export function TaskHeader(props: TaskHeaderProps) {
           type="button"
           className="wc-focus-ring flex min-w-0 max-w-[min(46vw,560px)] items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-[var(--wc-muted)] hover:bg-black/[0.04] hover:text-[var(--wc-ink)] disabled:cursor-default disabled:hover:bg-transparent"
           onClick={props.onOpenWorkspaceFolder}
-          disabled={!workspaceReady || !props.projectDir}
+          disabled={props.disabled || !workspaceReady || !props.projectDir}
           title={workspaceReady
             ? `打开 ${props.projectDir ?? ''}`
             : '发送首条消息后会创建默认工作目录'}
@@ -45,6 +46,7 @@ export function TaskHeader(props: TaskHeaderProps) {
         <button
           type="button"
           className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.rightPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}
+          disabled={props.disabled}
           onClick={props.onToggleRightPanel}
           aria-pressed={props.rightPanelOpen}
           aria-label={props.rightPanelOpen ? '收起侧边栏' : '展开侧边栏'}

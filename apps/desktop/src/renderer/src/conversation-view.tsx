@@ -1,6 +1,7 @@
 import type { SkillSummary } from '@whycode/core/skills'
 import { GitFork } from 'lucide-react'
-import { memo, useLayoutEffect, useRef } from 'react'
+import { memo, useDeferredValue, useLayoutEffect, useRef } from 'react'
+import { SessionLoading } from './session-loading.tsx'
 import type { Block } from './conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
 import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
@@ -35,6 +36,8 @@ import type { RightPanelPage } from './right-panel-state.ts'
 
 interface ConversationViewProps {
   runtimeId: string
+  onReady?: () => void
+  active?: boolean
   items: readonly ConversationDisplayItem[]
   latestBtwConversationId: string | null
   expandedIds: ReadonlySet<string>
@@ -117,6 +120,22 @@ function toolSegmentSealStates(
 }
 
 export const ConversationView = memo(function ConversationView(props: ConversationViewProps) {
+  const deferred = useDeferredValue(props)
+  const pending = deferred.runtimeId !== props.runtimeId
+  useLayoutEffect(() => {
+    if (!pending && props.active !== false) props.onReady?.()
+  }, [pending, props.runtimeId, props.onReady, props.active])
+  return (
+    <>
+      {pending && <SessionLoading className="absolute inset-0" />}
+      <div hidden={pending} inert={props.active === false}>
+        <ConversationContents {...(pending || props.active === false ? deferred : props)} />
+      </div>
+    </>
+  )
+})
+
+const ConversationContents = memo(function ConversationContents(props: ConversationViewProps) {
   const automaticallyCollapsingId = useAutomaticallyCollapsingBtwId(
     props.runtimeId,
     props.latestBtwConversationId,

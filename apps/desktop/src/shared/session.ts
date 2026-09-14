@@ -58,7 +58,7 @@ export interface RuntimeSnapshot {
   checkpointRestoreToolUseId: string | null
   /** Renderer 重载时恢复会阻塞当前运行时的当前会话删除；历史删除不占用运行时。 */
   deletingSessionId: string | null
-  /** Renderer 重载时恢复 Main 持有的会话恢复锁。 */
+  /** Renderer 重载时恢复 Main 中尚未提交的最新导航目标。 */
   resumingSessionId: string | null
   /** 当前已经原子提交的会话；恢复中的候选会话不会提前出现在这里。 */
   sessionId: string | null

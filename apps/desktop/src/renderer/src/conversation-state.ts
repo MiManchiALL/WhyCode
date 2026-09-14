@@ -169,11 +169,12 @@ export function checkpointRestoreAnchorIds(
   return anchors
 }
 
-export function runtimeEventsAfterSnapshot<T extends { sequence: number; event: CoreEvent }>(
+export function runtimeEventsAfterSnapshot<T extends { runtimeId: string; sequence: number }>(
   buffered: readonly T[],
-  snapshotSequence: number,
+  snapshot: Pick<RuntimeSnapshot, 'runtimeId' | 'eventSequence'>,
 ): T[] {
-  return buffered.filter((entry) => entry.sequence > snapshotSequence)
+  return buffered.filter((entry) =>
+    entry.runtimeId !== snapshot.runtimeId || entry.sequence > snapshot.eventSequence)
 }
 
 export function resumeTargetCommitted(

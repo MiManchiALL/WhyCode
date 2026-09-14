@@ -1806,3 +1806,26 @@ html[data-wc-right-panel-resizing='true'] * {
   }
 
 }
+
+.wc-session-loading {
+  color: var(--wc-muted);
+  background: linear-gradient(110deg, var(--wc-muted) 35%, #fff 50%, var(--wc-muted) 65%);
+  background-size: 250% 100%;
+  background-position: 150% 0;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: wc-session-loading-shine 3s ease-in-out infinite;
+}
+
+@keyframes wc-session-loading-shine {
+  0% { background-position: 150% 0; }
+  55%, 100% { background-position: -50% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wc-session-loading {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}

@@ -109,6 +109,7 @@ import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionPreparationLock } from './session-preparation-lock.ts'
+import { SessionNavigation } from './session-navigation.ts'
 import {
   ensureCustomSystemPromptTemplate,
   getCustomSystemPromptConfigPath,
@@ -487,6 +488,39 @@ let skills: SkillCatalogService
 const sessionDeletionLock = new SessionDeletionLock()
 /** 恢复或 Fork 完整校验与候选运行时构造期间，只允许一个物化事务。 */
 const sessionPreparationLock = new SessionPreparationLock()
+const sessionNavigation = new SessionNavigation({
+  find: (sessionId) => runtimeRegistry.findBySessionId(sessionId),
+  prepare: async (sessionId) => {
+    const release = sessionPreparationLock.acquire(sessionId)
+    if (!release) throw new Error(sessionPreparationInProgressMessage('恢复会话'))
+    try {
+      const runtime = await prepareResumedRuntime(sessionId)
+      runtimeRegistry.add(runtime)
+      runtimeRegistry.runtimeBecameIdle(runtime)
+    } finally {
+      release()
+      nudgeNotificationQueues()
+    }
+  },
+  snapshot: (runtime) => runtimeSnapshot(runtime),
+  commit: (runtime) => {
+    const previous = runtimeRegistry.select(runtime)
+    if (previous && previous !== runtime) {
+      void runtimeRegistry.removeUnselectedDraft(previous)
+        .catch((error) => console.error('旧草稿释放失败：', error))
+    }
+  },
+  settled: (runtime) => {
+    nudgeNotificationQueues()
+    const target = runtime ?? runtimeRegistry.selected
+    // 重载窗口可能没有原 IPC Promise；让它在事务完成后重新获取权威快照。
+    setTimeout(() => {
+      if (target && !target.isDisposed) {
+        target.emit({ type: 'agent-status', status: target.status }, false)
+      }
+    }, 0)
+  },
+})
 /** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
@@ -1867,7 +1901,7 @@ async function addMcpConnection(
 async function authorizeMcpOAuthConnection(
   request: McpOAuthRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
+  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
@@ -2058,6 +2092,7 @@ async function runtimeSnapshot(
   runtime: DesktopSessionRuntime = selectedRuntime(),
 ): Promise<RuntimeSnapshot> {
   const journal = runtime.journal
+  const resumingSessionId = sessionNavigation.sessionId
   const timeline = journal
     ? await runtime.timeline.snapshotAt(journal, readRuntimeEventBoundary)
     : { events: [], eventTimestamps: [], boundary: readRuntimeEventBoundary() }
@@ -2091,7 +2126,7 @@ async function runtimeSnapshot(
     deletingSessionId: deletingThisSession
       ? sessionDeletionLock.sessionId
       : null,
-    resumingSessionId: sessionPreparationLock.visibleResumeSessionId,
+    resumingSessionId,
     sessionId: journal?.sessionId ?? null,
     viewEvents: timeline.events,
     viewEventTimestamps: timeline.eventTimestamps,
@@ -2119,7 +2154,6 @@ function readRuntimeEventBoundary(): number {
  */
 async function selectRuntimeWithSnapshot(
   runtime: DesktopSessionRuntime,
-  removeOnFailure: boolean,
 ): Promise<RuntimeSnapshot> {
   const previous = runtimeRegistry.selected
   let snapshot: RuntimeSnapshot
@@ -2130,12 +2164,10 @@ async function selectRuntimeWithSnapshot(
     if (previous && previous !== runtime && !previous.isDisposed) {
       runtimeRegistry.select(previous)
     }
-    if (removeOnFailure) {
-      if (runtimeRegistry.get(runtime.runtimeId) === runtime) {
-        await runtimeRegistry.remove(runtime)
-      } else if (runtime.journal) {
-        sessions.release(runtime.journal)
-      }
+    if (runtimeRegistry.get(runtime.runtimeId) === runtime) {
+      await runtimeRegistry.remove(runtime)
+    } else if (runtime.journal) {
+      sessions.release(runtime.journal)
     }
     throw error
   }
@@ -2146,7 +2178,7 @@ async function selectRuntimeWithSnapshot(
 }
 
 async function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
-  if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId) {
+  if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.blocksSession()
@@ -2162,7 +2194,7 @@ async function startNewSession(request?: NewSessionRequest): Promise<NewSessionR
     const runtime = createDraftRuntime(workspace, runtimeId)
     return {
       ok: true,
-      snapshot: await selectRuntimeWithSnapshot(runtime, true),
+      snapshot: await selectRuntimeWithSnapshot(runtime),
     }
   } catch (error) {
     return {
@@ -2173,7 +2205,7 @@ async function startNewSession(request?: NewSessionRequest): Promise<NewSessionR
 }
 
 async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
-  if (sessionDeletionLock.blocksSession(sessionId) || sessionPreparationLock.sessionId) {
+  if (sessionDeletionLock.blocksSession(sessionId) || sessionPreparationLock.kind === 'fork') {
     return {
       ok: false,
       error: sessionDeletionLock.blocksSession(sessionId)
@@ -2181,48 +2213,7 @@ async function resumeSession(sessionId: string): Promise<ResumeSessionResult> {
         : sessionPreparationInProgressMessage('恢复其它会话'),
     }
   }
-  const existing = runtimeRegistry.findBySessionId(sessionId)
-  if (existing) {
-    try {
-      const snapshot = await selectRuntimeWithSnapshot(existing, false)
-      return { ok: true, snapshot }
-    } catch (error) {
-      return {
-        ok: false,
-        error: `会话恢复失败：${error instanceof Error ? error.message : String(error)}`,
-      }
-    }
-  }
-
-  const release = sessionPreparationLock.acquire(sessionId)
-  if (!release) {
-    return { ok: false, error: sessionPreparationInProgressMessage('恢复其它会话') }
-  }
-  let prepared: DesktopSessionRuntime | null = null
-  try {
-    prepared = await prepareResumedRuntime(sessionId)
-    const snapshot = await selectRuntimeWithSnapshot(prepared, true)
-    const resumedRuntime = prepared
-    setTimeout(() => {
-      if (!resumedRuntime.isDisposed) {
-        resumedRuntime.emit({ type: 'agent-status', status: 'idle' }, false)
-      }
-    }, 0)
-    return { ok: true, snapshot }
-  } catch (error) {
-    if (
-      prepared
-      && runtimeRegistry.get(prepared.runtimeId) === prepared
-      && !prepared.isDisposed
-    ) {
-      await runtimeRegistry.remove(prepared).catch(() => {})
-    }
-    const message = `会话恢复失败：${error instanceof Error ? error.message : String(error)}`
-    return { ok: false, error: message }
-  } finally {
-    release()
-    nudgeNotificationQueues()
-  }
+  return sessionNavigation.resume(sessionId)
 }
 
 async function forkSession(value: unknown): Promise<ForkSessionResult> {
@@ -2235,7 +2226,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       error: error instanceof Error ? error.message : String(error),
     }
   }
-  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId) {
+  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
       error: sessionDeletionLock.sessionId
@@ -2273,7 +2264,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
     await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
     await attachSessionWorkspace(forkedJournal)
     runtime = await prepareRuntimeFromJournal(forkedJournal)
-    return { ok: true, snapshot: await selectRuntimeWithSnapshot(runtime, true) }
+    return { ok: true, snapshot: await selectRuntimeWithSnapshot(runtime) }
   } catch (error) {
     const rollbackErrors: unknown[] = []
     if (runtime && runtimeRegistry.get(runtime.runtimeId) === runtime && !runtime.isDisposed) {
@@ -2423,7 +2414,7 @@ async function resolveBackgroundTaskRuntime(
   sessionId: string,
 ): Promise<BackgroundTaskRuntimeResolution> {
   if (sessionDeletionLock.sessionId === sessionId) return { kind: 'drop' }
-  if (settingsMutationInProgress || sessionPreparationLock.sessionId) return { kind: 'defer' }
+  if (settingsMutationInProgress || sessionPreparationLock.sessionId || sessionNavigation.sessionId) return { kind: 'defer' }
 
   const existing = runtimeRegistry.findBySessionId(sessionId)
   if (existing) {
@@ -2556,6 +2547,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
   if (
     sessionDeletionLock.sessionId
     || sessionPreparationLock.sessionId
+    || sessionNavigation.sessionId
     || mcpOAuthController.isAuthorizing()
     || targetRuntime?.busy
   ) {
@@ -2563,7 +2555,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       ok: false,
       error: sessionDeletionLock.sessionId
         ? '已有会话正在删除，请等待完成'
-        : sessionPreparationLock.sessionId
+        : sessionPreparationLock.sessionId || sessionNavigation.sessionId
           ? sessionPreparationInProgressMessage('删除会话')
         : mcpOAuthController.isAuthorizing()
           ? mcpOAuthInProgressMessage('删除会话')
@@ -3017,7 +3009,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     )
   })
   ipcMain.handle(IPC.pickProjectDir, async (event): Promise<WorkspaceCandidate | null> => {
-    if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId) {
+    if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
       return null
     }
     const ownerWindow = BrowserWindow.fromWebContents(event.sender)
@@ -3040,6 +3032,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
         runtimeRegistry.selected !== selectionAtOpen
         || sessionDeletionLock.blocksSession()
         || sessionPreparationLock.sessionId
+        || sessionNavigation.sessionId
       ) {
         return null
       }

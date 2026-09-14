@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -60,6 +59,7 @@ import {
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
+import { SessionLoading } from './session-loading.tsx'
 import { ConversationNavigator } from './conversation-navigator.tsx'
 import { presentBtwConversations } from './conversation-btw-groups.ts'
 import {
@@ -222,7 +222,7 @@ export function App() {
   const questionSubmittingRef = useRef(false)
   const sessionTransitionPendingRef = useRef(false)
   const resumingSessionIdRef = useRef<string | null>(null)
-  const ownsResumeRequestRef = useRef(false)
+  const resumeRequestRef = useRef<object | null>(null)
   const deletingSessionIdRef = useRef<string | null>(null)
   const deletionBlocksRuntimeRef = useRef(false)
   const runtimeIdRef = useRef('')
@@ -294,6 +294,7 @@ export function App() {
     conversationScrollReleaseRef.current = null
     release?.()
   }, [])
+  useEffect(() => releaseConversationScroll, [releaseConversationScroll])
   const navigateConversation = useCallback((targetId: string) => {
     const scroller = scrollRef.current
     if (!scroller) return
@@ -459,11 +460,13 @@ export function App() {
   const stashActivePresentation = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
     const scrollElement = scrollRef.current
-    if (!currentRuntimeId || !scrollElement) return
+    if (!currentRuntimeId || !scrollElement || pendingScrollRestoreRef.current) return
     const key = composerKey(currentRuntimeId, sessionIdRef.current)
     conversationPresentationsRef.current.saveScroll(
       key,
-      captureConversationScrollPosition(scrollElement),
+      stickToBottom.current
+        ? { atBottom: true, scrollTop: 0 }
+        : captureConversationScrollPosition(scrollElement),
     )
   }, [])
 
@@ -654,7 +657,7 @@ export function App() {
     const changingSession = previousSessionId !== snapshot.sessionId
     if (changingRuntime) {
       stashActiveComposer()
-      stashActivePresentation()
+      if (!resumingSessionIdRef.current) stashActivePresentation()
     }
     if (changingRuntime) hydratingRuntimeIdRef.current = snapshot.runtimeId
     if (changingRuntime || changingSession) {
@@ -778,9 +781,10 @@ export function App() {
 
   const synchronizeUnownedResume = useCallback(async () => {
     const targetSessionId = resumingSessionIdRef.current
-    if (!targetSessionId || ownsResumeRequestRef.current) return
+    if (!targetSessionId || resumeRequestRef.current) return
     try {
       const snapshot = await window.whycode.runtimeSnapshot()
+      if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
       if (resumeTargetCommitted(snapshot, targetSessionId)) {
         applyRuntimeSnapshot(snapshot)
         void window.whycode.consensusStatus().then(setConsensus)
@@ -793,6 +797,7 @@ export function App() {
       setStatus(snapshot.status)
       setSessionActionError('会话恢复失败，当前会话未更改')
     } catch (error) {
+      if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
       setResumingSessionId(null)
       const message = `恢复完成后的运行态同步失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
@@ -838,11 +843,6 @@ export function App() {
           void refreshSessions()
         }
         if (event.status === 'idle') setNegoStatus(null)
-        if (
-          (event.status === 'idle' || event.status === 'error')
-          && resumingSessionIdRef.current
-          && !ownsResumeRequestRef.current
-        ) void synchronizeUnownedResume()
         break
       case 'turn-file-changes':
         setCurrentFileChanges(event.changes)
@@ -934,7 +934,6 @@ export function App() {
     restoreQueuedDrafts,
     setDeletionBlocksRuntime,
     showConversationFeedback,
-    synchronizeUnownedResume,
   ])
 
   useEffect(() => {
@@ -1164,9 +1163,8 @@ export function App() {
       }
       if (
         event.type === 'agent-status'
-        && (event.status === 'idle' || event.status === 'error')
         && resumingSessionIdRef.current
-        && !ownsResumeRequestRef.current
+        && !resumeRequestRef.current
       ) {
         void synchronizeUnownedResume()
       }
@@ -1179,20 +1177,16 @@ export function App() {
       applyRuntimeSnapshot(snapshot)
       hydrated = true
       const pendingEvents = runtimeEventsAfterSnapshot(
-        buffered.splice(0).filter((entry) => entry.runtimeId === snapshot.runtimeId),
-        snapshot.eventSequence,
+        buffered.splice(0),
+        snapshot,
       )
-      for (const entry of pendingEvents) consumeEvent(entry.event, entry.occurredAt)
+      for (const entry of pendingEvents) acceptEvent(entry)
       void refreshSessions()
       void refreshModelCatalog()
     }).catch(() => {
       if (disposed) return
       hydrated = true
-      for (const bufferedEvent of buffered.splice(0)) {
-        if (bufferedEvent.runtimeId === runtimeIdRef.current) {
-          consumeEvent(bufferedEvent.event, bufferedEvent.occurredAt)
-        }
-      }
+      for (const bufferedEvent of buffered.splice(0)) acceptEvent(bufferedEvent)
     })
     return () => {
       disposed = true
@@ -1206,42 +1200,41 @@ export function App() {
     synchronizeUnownedResume,
   ])
 
-  useLayoutEffect(() => {
+  const restoreConversationAfterRender = useCallback(() => {
     const pending = pendingScrollRestoreRef.current
     const scrollElement = scrollRef.current
-    if (!pending || !scrollElement) return releaseConversationScroll
+    if (resumingSessionIdRef.current || !pending || !scrollElement) return
     pendingScrollRestoreRef.current = null
     releaseConversationScroll()
     const restoration = restoreConversationScrollPosition(pending, scrollElement)
     conversationScrollReleaseRef.current = restoration.release
     stickToBottom.current = restoration.position.atBottom
     setShowJumpBottom(!restoration.position.atBottom)
-    return releaseConversationScroll
-  }, [releaseConversationScroll, runtimeId])
+  }, [releaseConversationScroll])
 
   useEffect(() => {
     const scrollElement = scrollRef.current
     const contentElement = conversationContentRef.current
-    if (!scrollElement || !contentElement) return
+    if (resumingSessionId || !scrollElement || !contentElement) return
     // Markdown/公式与离屏段变为真实高度后，贴底语义仍应指向新的真实底部。
     const observer = new ResizeObserver(() => {
-      if (!stickToBottom.current) return
+      if (pendingScrollRestoreRef.current || !stickToBottom.current) return
       scrollElement.scrollTop = scrollElement.scrollHeight
       setShowJumpBottom(false)
     })
     observer.observe(contentElement)
     return () => observer.disconnect()
-  }, [])
+  }, [resumingSessionId])
 
   useEffect(() => {
-    if (stickToBottom.current) {
+    if (!resumingSessionId && !pendingScrollRestoreRef.current && stickToBottom.current) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
     }
-  }, [blocks, approval, thinkingGapVisible])
+  }, [blocks, approval, thinkingGapVisible, resumingSessionId])
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el || resumingSessionIdRef.current || pendingScrollRestoreRef.current) return
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
     stickToBottom.current = nearBottom
     setShowJumpBottom(!nearBottom)
@@ -1269,12 +1262,12 @@ export function App() {
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
-  const sessionChangeLocked = deletionBlocksRuntime
-    || resumingSessionId !== null
+  const sessionNavigationLocked = deletionBlocksRuntime
     || sessionTransitionPending
     || attachmentSubmissionPending
     || restoredSubmissionPending
     || checkpointRestoreToolUseId !== null
+  const sessionChangeLocked = sessionNavigationLocked || resumingSessionId !== null
 
   const requestCheckpointRestore = useCallback<CheckpointRestoreRequest>(async (
     toolUseId,
@@ -1432,28 +1425,36 @@ export function App() {
   ])
 
   const resumeSession = useCallback((sessionId: string) => {
-    if (resumingSessionIdRef.current || sessionTransitionPendingRef.current) return
-    ownsResumeRequestRef.current = true
+    if (sessionTransitionPendingRef.current) return
+    if (!resumingSessionIdRef.current) {
+      stashActivePresentation()
+      pendingScrollRestoreRef.current = conversationPresentationsRef.current.get(
+        composerKey(runtimeIdRef.current, sessionIdRef.current),
+      )?.scroll ?? null
+    }
+    const request = {}
+    resumeRequestRef.current = request
     setSessionActionError(null)
     setResumingSessionId(sessionId)
-    void window.whycode.resumeSession(sessionId).then(async (result) => {
-      // Main 的事件保留在对话中；面板同时显示结果，避免遮罩让失败提示不可见。
+    void window.whycode.resumeSession(sessionId).then((result) => {
+      if (resumeRequestRef.current !== request) return
       if (!result.ok) {
         setSessionActionError(result.error)
         return
       }
       applyRuntimeSnapshot(result.snapshot)
-      setSessionActionError(null)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
       void refreshModelCatalog()
     }).catch((error) => {
+      if (resumeRequestRef.current !== request) return
       const message = `会话恢复请求失败：${error instanceof Error ? error.message : String(error)}`
       setSessionActionError(message)
       showError(message)
     }).finally(() => {
-      ownsResumeRequestRef.current = false
-      if (resumingSessionIdRef.current === sessionId) setResumingSessionId(null)
+      if (resumeRequestRef.current !== request) return
+      resumeRequestRef.current = null
+      setResumingSessionId(null)
     })
   }, [
     showError,
@@ -1461,6 +1462,7 @@ export function App() {
     refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
+    stashActivePresentation,
   ])
 
   const deleteSession = useCallback((sessionId: string) => {
@@ -1942,6 +1944,9 @@ export function App() {
       ? workspace.baseRef
       : null
 
+  const pendingSession = sessions.find((session) => session.sessionId === resumingSessionId)
+  const loadingConversation = resumingSessionId !== null && resumingSessionId !== sessionIdRef.current
+
   return (
     <div
       className="relative flex h-screen gap-1 overflow-hidden bg-[var(--wc-canvas)] p-1 text-[var(--wc-ink)]"
@@ -1963,7 +1968,7 @@ export function App() {
         collapsed={sidebarCollapsed}
         sessions={sessions}
         selectedSessionId={resumingSessionId ?? sessionIdRef.current}
-        resumingSessionId={resumingSessionId}
+        navigationLocked={sessionNavigationLocked}
         error={sessionListError}
         actionError={sessionActionError}
         busy={sessionChangeLocked}
@@ -1978,19 +1983,26 @@ export function App() {
 
       <section className="wc-shell-panel flex min-w-0 flex-1 flex-col bg-[var(--wc-surface)]">
         <TaskHeader
-          title={taskTitle}
-          projectDir={workspace.mode === 'pending-managed' ? null : projectDir}
-          workspaceMode={workspace.mode}
-          backgroundTasks={backgroundTasks}
-          rightPanelOpen={rightPanelState.open}
+          title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
+          projectDir={loadingConversation
+            ? pendingSession?.workspace ? workspaceDisplayDirectory(pendingSession.workspace) : null
+            : workspace.mode === 'pending-managed' ? null : projectDir}
+          workspaceMode={loadingConversation ? pendingSession?.workspace?.mode ?? 'pending-managed' : workspace.mode}
+          backgroundTasks={loadingConversation ? [] : backgroundTasks}
+          rightPanelOpen={!loadingConversation && rightPanelState.open}
+          disabled={loadingConversation}
           onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
           onToggleRightPanel={() => updateRightPanelState((current) => ({
             ...current,
             open: !current.open,
           }))}
         />
+        {loadingConversation && <SessionLoading />}
 
-        <div className="relative flex min-h-0 flex-1">
+        <div
+          className="relative flex min-h-0 flex-1"
+          style={{ display: loadingConversation ? 'none' : undefined }}
+        >
           <ConversationNavigator
             key={runtimeId}
             sections={sections}
@@ -2033,6 +2045,8 @@ export function App() {
                 )}
                 <ConversationView
                   runtimeId={runtimeId}
+                  onReady={restoreConversationAfterRender}
+                  active={resumingSessionId === null}
                   items={btwPresentation.items}
                   latestBtwConversationId={btwPresentation.latestBtwConversationId}
                   expandedIds={view.expanded}
@@ -2214,21 +2228,19 @@ export function App() {
                             ? '正在停止当前任务并清理子进程…'
                             : worktreePreparation
                               ? '正在创建 Worktree 并检出文件…'
-                            : sessionTransitionPending
-                              ? '正在切换会话…'
-                              : deletionBlocksRuntime
-                                ? '正在删除当前会话及其关联数据…'
-                                : resumingSessionId
-                                  ? '正在加载会话…'
+                              : sessionTransitionPending
+                                ? '正在切换会话…'
+                                : deletionBlocksRuntime
+                                  ? '正在删除当前会话及其关联数据…'
                                   : checkpointRestoreToolUseId
                                     ? '正在安全回滚文件，请等待完成…'
                                     : status === 'waiting-approval'
                                       ? 'Agent 在等你审批上方的请求…'
-                                        : btwMode
-                                          ? `${btwMode.toUpperCase()}：本次问答不会写入主上下文`
+                                      : btwMode
+                                        ? `${btwMode.toUpperCase()}：本次问答不会写入主上下文`
                                         : busy
-                                        ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
-                                        : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
+                                          ? '工作中——Enter 排队，Ctrl+Enter 立即插话，/ 选择功能或 Skill'
+                                          : '输入消息…（/ 选择功能或 Skill，Shift+Enter 换行）'
                         }
                       />
 

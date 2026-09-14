@@ -22,10 +22,10 @@ interface AppSidebarProps {
   collapsed: boolean
   sessions: readonly SessionListItem[]
   selectedSessionId: string | null
-  resumingSessionId: string | null
   error: string | null
   actionError: string | null
   busy: boolean
+  navigationLocked: boolean
   deletingSessionId: string | null
   onCollapsedChange: (collapsed: boolean) => void
   onNewSession: () => void
@@ -151,8 +151,8 @@ export function AppSidebar(props: AppSidebarProps) {
                     <SessionItems
                       sessions={pinnedSessions}
                       selectedSessionId={props.selectedSessionId}
-                      resumingSessionId={props.resumingSessionId}
                       busy={props.busy}
+                      navigationLocked={props.navigationLocked}
                       deletingSessionId={props.deletingSessionId}
                       onResume={props.onResume}
                       onPinnedChange={props.onPinnedChange}
@@ -169,8 +169,8 @@ export function AppSidebar(props: AppSidebarProps) {
                   <SessionItems
                     sessions={recentSessions}
                     selectedSessionId={props.selectedSessionId}
-                    resumingSessionId={props.resumingSessionId}
                     busy={props.busy}
+                    navigationLocked={props.navigationLocked}
                     deletingSessionId={props.deletingSessionId}
                     onResume={props.onResume}
                     onPinnedChange={props.onPinnedChange}
@@ -235,8 +235,8 @@ export function AppSidebar(props: AppSidebarProps) {
 function SessionItems({
   sessions,
   selectedSessionId,
-  resumingSessionId,
   busy,
+  navigationLocked,
   deletingSessionId,
   onResume,
   onPinnedChange,
@@ -244,8 +244,8 @@ function SessionItems({
 }: {
   sessions: readonly SessionListItem[]
   selectedSessionId: string | null
-  resumingSessionId: string | null
   busy: boolean
+  navigationLocked: boolean
   deletingSessionId: string | null
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
@@ -258,8 +258,8 @@ function SessionItems({
           key={session.sessionId}
           session={session}
           selected={session.sessionId === selectedSessionId}
-          resuming={session.sessionId === resumingSessionId}
           busy={busy}
+          navigationLocked={navigationLocked}
           deleting={session.sessionId === deletingSessionId}
           onResume={onResume}
           onPinnedChange={onPinnedChange}
@@ -273,8 +273,8 @@ function SessionItems({
 function SessionItem({
   session,
   selected,
-  resuming,
   busy,
+  navigationLocked,
   deleting,
   onResume,
   onPinnedChange,
@@ -282,18 +282,18 @@ function SessionItem({
 }: {
   session: SessionListItem
   selected: boolean
-  resuming: boolean
   busy: boolean
+  navigationLocked: boolean
   deleting: boolean
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRequestDelete: (sessionId: string) => void
 }) {
   const directory = session.workspace ? workspaceDisplayDirectory(session.workspace) : null
-  const selectable = !busy && !deleting && !selected && session.resumable
+  const selectable = !navigationLocked && !deleting && !selected && session.resumable
   return (
     <div
-      className={`group flex min-w-0 items-center rounded-xl pr-1 transition-colors ${
+      className={`group flex min-w-0 items-center rounded-xl pr-1 ${
         selected ? 'bg-white shadow-[1px_2px_0_rgb(43_46_41_/_5%)]' : 'hover:bg-black/[0.045]'
       }`}
     >
@@ -304,8 +304,7 @@ function SessionItem({
         onClick={() => onResume(session.sessionId)}
         title={session.resumable ? directory ?? undefined : session.unavailableReason}
         aria-current={selected ? 'page' : undefined}
-        aria-busy={resuming}
-        aria-label={`${resuming ? '正在打开' : selected ? '当前' : '打开'}会话 ${session.title || '未命名会话'}${
+        aria-label={`${selected ? '当前' : '打开'}会话 ${session.title || '未命名会话'}${
           session.running ? '，运行中' : session.hasUnreadCompletion ? '，有已完成结果待查看' : ''
         }`}
       >
@@ -316,7 +315,6 @@ function SessionItem({
               <span className="min-w-0 flex-1 truncate wc-type-control font-medium">
                 {session.title || '未命名会话'}
               </span>
-              {resuming && <span role="status" className="shrink-0 wc-type-tiny text-[var(--wc-faint)]">加载中…</span>}
               {deleting && <span className="wc-type-tiny text-[var(--wc-danger)]">删除中</span>}
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5 wc-type-tiny text-[var(--wc-faint)]">

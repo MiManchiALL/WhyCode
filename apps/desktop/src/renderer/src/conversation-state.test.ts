@@ -237,16 +237,17 @@ describe('会话界面时间线重建', () => {
     assert.equal(state.pendingStep, null)
   })
 
-  it('Renderer 初始化只接续快照边界之后的实时事件', () => {
+  it('初始化去除快照内的重复事件，并保留其它会话的导航完成通知', () => {
     const events = runtimeEventsAfterSnapshot([
-      { sequence: 10, event: { type: 'text-delta', text: '已包含在快照中' } },
-      { sequence: 11, event: { type: 'text-delta', text: '快照之后的新内容' } },
-    ], 10)
+      { runtimeId: 'a', sequence: 10, event: { type: 'text-delta', text: '已包含在快照中' } },
+      { runtimeId: 'b', sequence: 9, event: { type: 'agent-status', status: 'idle' } },
+      { runtimeId: 'a', sequence: 11, event: { type: 'text-delta', text: '快照之后的新内容' } },
+    ], { runtimeId: 'a', eventSequence: 10 })
 
-    assert.deepEqual(events, [{
-      sequence: 11,
-      event: { type: 'text-delta', text: '快照之后的新内容' },
-    }])
+    assert.deepEqual(events, [
+      { runtimeId: 'b', sequence: 9, event: { type: 'agent-status', status: 'idle' } },
+      { runtimeId: 'a', sequence: 11, event: { type: 'text-delta', text: '快照之后的新内容' } },
+    ])
   })
 
   it('切换或重连会话时只重建真实时间线，不合成恢复提示', () => {

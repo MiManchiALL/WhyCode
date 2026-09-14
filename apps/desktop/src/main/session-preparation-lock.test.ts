@@ -30,17 +30,17 @@ describe('SessionPreparationLock', () => {
     assert.equal(lock.sessionId, null)
   })
 
-  it('Fork 复用生命周期互斥但不冒充 Renderer 的恢复状态', () => {
+  it('Fork 与恢复互斥，释放后允许后续恢复', () => {
     const lock = new SessionPreparationLock()
     const release = lock.acquire('source-session', 'fork')
 
     assert.equal(lock.sessionId, 'source-session')
     assert.equal(lock.kind, 'fork')
-    assert.equal(lock.visibleResumeSessionId, null)
+    assert.equal(lock.acquire('target-session'), null)
 
     release?.()
     const releaseResume = lock.acquire('target-session')
-    assert.equal(lock.visibleResumeSessionId, 'target-session')
+    assert.equal(lock.kind, 'resume')
     releaseResume?.()
   })
 })
