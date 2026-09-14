@@ -2081,18 +2081,6 @@ export function App() {
                       </p>
                     </div>
                   )}
-                  {history.hasMore && (
-                    <div className="flex h-8 items-center justify-center">
-                      <button
-                        type="button"
-                        className="wc-focus-ring rounded-lg px-2 py-1 text-xs text-[var(--wc-muted)] hover:text-[var(--wc-ink)]"
-                        onClick={() => { void history.loadOlder() }}
-                        disabled={history.loading}
-                      >
-                        {history.loading ? '正在加载更早消息…' : '加载更早消息'}
-                      </button>
-                    </div>
-                  )}
                   <ConversationView
                     runtimeId={runtimeId}
                     pendingSessionId={loadingConversation ? resumingSessionId : null}

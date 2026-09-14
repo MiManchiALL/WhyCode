@@ -25,13 +25,11 @@ export function useConversationHistory(callbacks: HistoryCallbacks) {
   const [position, setPosition] = useState<HistoryPosition>({ runtimeId: '', before: null, earlierEntries: [] })
   const positionRef = useRef(position)
   const requestRef = useRef<HistoryLoad | null>(null)
-  const [loading, setLoading] = useState(false)
 
   useEffect(() => () => { requestRef.current = null }, [])
 
   const cancel = useCallback(() => {
     requestRef.current = null
-    setLoading(false)
   }, [])
 
   const reset = useCallback((runtimeId: string, history: ConversationHistoryWindow) => {
@@ -46,7 +44,6 @@ export function useConversationHistory(callbacks: HistoryCallbacks) {
     if (initial.before === null || (requestRef.current?.pending && !targetId)) return
     const request: HistoryLoad = { pending: true }
     requestRef.current = request
-    setLoading(true)
     const pages: ConversationSnapshot[] = []
     let before: number | null = initial.before
     let earlierEntries = initial.earlierEntries
@@ -78,7 +75,6 @@ export function useConversationHistory(callbacks: HistoryCallbacks) {
       if (requestRef.current === request) {
         callbacksRef.current.onError(error instanceof Error ? error.message : String(error))
         request.pending = false
-        setLoading(false)
       }
     }
   }, [])
@@ -90,14 +86,11 @@ export function useConversationHistory(callbacks: HistoryCallbacks) {
     if (request.result.firstBlockId !== firstBlockId) return null
     positionRef.current = request.result.position
     request.pending = false
-    setLoading(false)
     return { targetId: request.result.targetId }
   }, [])
 
   return {
     earlierEntries: position.earlierEntries,
-    hasMore: position.before !== null,
-    loading,
     reset,
     cancel,
     loadOlder,
