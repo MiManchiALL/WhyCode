@@ -73,7 +73,7 @@ export function TaskInspector(props: TaskInspectorProps) {
 
         <div className="wc-session-context-separator" aria-hidden="true" />
 
-        <TaskProgressSection key={props.runtimeId} {...props} />
+        <TaskProgressSection {...props} />
       </div>
     </aside>
   )
@@ -99,8 +99,8 @@ function InspectorSection({
   )
 }
 
-function TaskProgressSection({ plan, activeSkills, view, onViewChange }: Pick<
-  TaskInspectorProps, 'plan' | 'activeSkills' | 'view' | 'onViewChange'
+function TaskProgressSection({ runtimeId, plan, activeSkills, view, onViewChange }: Pick<
+  TaskInspectorProps, 'runtimeId' | 'plan' | 'activeSkills' | 'view' | 'onViewChange'
 >) {
   const showingSkills = view === 'skills'
   const switchLabel = showingSkills ? '切换到任务计划' : '切换到当前激活的 Skill'
@@ -121,7 +121,7 @@ function TaskProgressSection({ plan, activeSkills, view, onViewChange }: Pick<
           <ArrowLeftRight size={13} aria-hidden="true" />
         </button>
       </div>
-      <div className="mt-1.5 min-h-2">
+      <div key={runtimeId} className="mt-1.5 min-h-2">
         <div className="wc-inspector-view" data-active={!showingSkills} aria-hidden={showingSkills} inert={showingSkills}>
           <div className="min-h-0 overflow-hidden">
             {plan && <TaskPlanView key={plan.id} plan={plan} />}
