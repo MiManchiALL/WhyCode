@@ -8,6 +8,41 @@ import {
 } from './conversation-scroll.ts'
 
 describe('会话滚动锚定', () => {
+  it('点击恢复或定位后的正文保持真实布局，实际滚动后才释放', () => {
+    for (const mode of ['restore', 'navigate']) {
+      const { document, Event } = parseHTML(`
+        <main><section class="wc-completed-work-section" data-conversation-scroll-section="work">
+          <div data-conversation-scroll-block="text" data-conversation-navigator-target="user"></div>
+        </section></main>
+      `)
+      const scroller = document.querySelector<HTMLElement>('main')!
+      const section = document.querySelector<HTMLElement>('section')!
+      const target = document.querySelector<HTMLElement>('div')!
+      const currentScrollTop = defineScrollerMetrics(scroller, 0, 2_000, 400)
+      defineTop(scroller, 0)
+      defineRectangle(section, 0, 1_000)
+      target.getBoundingClientRect = () => rectangle(600 - currentScrollTop())
+      const retention = mode === 'restore'
+        ? restoreConversationScrollPosition({
+          atBottom: false,
+          scrollTop: 600,
+          anchor: { sectionId: 'work', blockId: 'text', offset: 0 },
+        }, scroller)
+        : scrollConversationToTarget(scroller, 'user')!
+      const restoredTop = currentScrollTop()
+
+      target.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      assert.equal(section.style.getPropertyValue('content-visibility'), 'visible', mode)
+      assert.equal(currentScrollTop(), restoredTop, mode)
+
+      scroller.scrollTop += 100
+      scroller.dispatchEvent(new Event('scroll'))
+      assert.equal(section.style.getPropertyValue('content-visibility'), '', mode)
+      assert.equal(currentScrollTop(), restoredTop + 100, mode)
+      retention.release()
+    }
+  })
+
   it('前方异步布局变化仍保持锚点，用户主动滚动立即释放观察', () => {
     const { document, Event } = parseHTML('<main><div><section data-conversation-scroll-section="work"><div data-conversation-navigator-target="user"></div></section></div></main>')
     const scroller = document.querySelector<HTMLElement>('main')!

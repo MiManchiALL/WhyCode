@@ -71,7 +71,7 @@ export function restoreConversationScrollPosition(
 
 /**
  * 定位历史用户输入前先物化其前方折叠工作段，再把实测高度写回固有尺寸。
- * 目标段保留真实布局直到离开视口，因此直接定位和会话恢复使用同一套稳定几何。
+ * 目标段保留真实布局直到用户滚动或事务结束，直接定位和会话恢复使用同一套稳定几何。
  */
 export function scrollConversationToTarget(
   scroller: HTMLElement,
@@ -272,7 +272,10 @@ function stabilizeMaterializedTarget(
   return retained
 }
 
-/** Markdown/图片仍可异步改变前方高度；锚定延续到用户下一次滚动意图或事务释放。 */
+/**
+ * Markdown/图片仍可异步改变前方高度；锚定延续到滚动意图或事务释放。
+ * 鼠标按下后浏览器仍需定位选区，此时改回 auto 会把已命中的子树重新锁定。
+ */
 function retainScrollAnchor(
   scroller: HTMLElement,
   anchor: HTMLElement,
@@ -294,7 +297,6 @@ function retainScrollAnchor(
     if (Math.abs(scroller.scrollTop - expectedScrollTop) > 1) release()
   }
   scroller.addEventListener('wheel', release, { passive: true })
-  scroller.addEventListener('pointerdown', release, { passive: true })
   scroller.addEventListener('keydown', release)
   scroller.addEventListener('scroll', onScroll, { passive: true })
 
@@ -303,7 +305,6 @@ function retainScrollAnchor(
     released = true
     observer?.disconnect()
     scroller.removeEventListener('wheel', release)
-    scroller.removeEventListener('pointerdown', release)
     scroller.removeEventListener('keydown', release)
     scroller.removeEventListener('scroll', onScroll)
     if (retained) releaseMaterializedSections([retained])
