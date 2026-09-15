@@ -1,13 +1,17 @@
 import { protocol } from 'electron'
+import { PREVIEW_SCHEME } from '../shared/workspace-files.ts'
 import { readStoredImage, type SessionJournal } from '@whycode/core'
 
 const ATTACHMENT_SCHEME = 'whycode-attachment'
 
 /** 自定义 scheme 必须在 Electron ready 前注册权限。 */
-export function registerAttachmentScheme(): void {
+export function registerFileSchemes(): void {
   protocol.registerSchemesAsPrivileged([{
     scheme: ATTACHMENT_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: true },
+  }, {
+    scheme: PREVIEW_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
   }])
 }
 

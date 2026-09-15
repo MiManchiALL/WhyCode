@@ -1,3 +1,4 @@
+import type { CheckpointFilePreviewState } from '@whycode/core'
 import { structuredPatch } from 'diff'
 
 export interface FileDiffLine {
@@ -75,4 +76,23 @@ export function contentLines(
     oldLine: kind === 'added' ? null : index + 1,
     newLine: kind === 'removed' ? null : index + 1,
   }))
+}
+
+export function previewTextState(state: CheckpointFilePreviewState):
+  | { ok: true; content: string }
+  | { ok: false; message: string } {
+  if (state.kind === 'text') return { ok: true, content: state.content }
+  if (state.kind === 'missing') return { ok: false, message: '该版本中不存在此文件' }
+  return {
+    ok: false,
+    message: state.reason === 'binary'
+      ? '二进制文件不提供文本预览'
+      : `文件过大（${formatBytes(state.size)}），不提供内嵌预览`,
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`
+  if (bytes < 1_024 * 1_024) return `${Math.ceil(bytes / 1_024)} KB`
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`
 }

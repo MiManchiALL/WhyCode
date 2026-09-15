@@ -65,12 +65,14 @@ export function SyntaxCode({
   lines,
   focusLine = null,
   scroll = true,
+  wrap = true,
   className = '',
 }: {
   path: string
   lines: readonly FileDiffLine[]
   focusLine?: number | null
   scroll?: boolean
+  wrap?: boolean
   className?: string
 }) {
   const source = useMemo(() => lines.map((line) => line.text).join('\n'), [lines])
@@ -94,11 +96,12 @@ export function SyntaxCode({
   return (
     <div
       ref={scrollRef}
+      data-wrap={wrap}
       onScroll={onScroll}
       style={{ overscrollBehaviorY }}
       className={`wc-code-scroll wc-scrollbar min-h-0 ${scroll ? 'overflow-auto' : 'overflow-visible'} ${className}`}
     >
-      <div className="wc-code-lines min-w-max py-1 font-mono text-xs leading-5">
+      <div className={`wc-code-lines ${wrap ? 'w-full' : 'min-w-max'} py-1 font-mono text-xs leading-5`}>
         {lines.length === 0 ? (
           <div className="px-3 py-6 text-center text-[var(--wc-faint)]">空文件</div>
         ) : lines.map((line, index) => {
@@ -114,7 +117,7 @@ export function SyntaxCode({
               <span className="wc-code-line-number sticky left-0 w-14 shrink-0 select-none pr-3 text-right tabular-nums">
                 {displayLine ?? ''}
               </span>
-              <code className="block min-w-0 flex-1 whitespace-pre pr-5">
+              <code className={`block min-w-0 flex-1 pr-5 ${wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}>
                 <HighlightedLine
                   tokens={highlighted?.tokens[index]}
                   fallback={line.text}

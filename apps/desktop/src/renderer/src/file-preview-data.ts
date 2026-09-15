@@ -1,23 +1,14 @@
-import type {
-  CheckpointFilePreview,
-  CheckpointFilePreviewState,
-} from '@whycode/core'
+import type { CheckpointFilePreview } from '@whycode/core'
 import { useEffect, useRef, useState } from 'react'
 import type {
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewResult,
-  CurrentFilePreviewResult,
 } from '../../shared/session.ts'
 
 export type CheckpointPreviewLoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
   | { status: 'ready'; preview: CheckpointFilePreview }
-
-export type CurrentPreviewLoadState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; state: CheckpointFilePreviewState }
 
 export type CheckpointCurrentMatchLoadState =
   | { status: 'loading' }
@@ -29,7 +20,6 @@ const pendingCheckpointCurrentMatches = new Map<
   string,
   Promise<CheckpointFileCurrentMatchResult>
 >()
-const pendingCurrentPreviews = new Map<string, Promise<CurrentFilePreviewResult>>()
 
 export function useCheckpointFilePreview(
   runtimeId: string,
@@ -51,34 +41,6 @@ export function useCheckpointFilePreview(
     })
     return () => { active = false }
   }, [path, runtimeId, toolUseId])
-  return state
-}
-
-export function useCurrentFilePreview(
-  runtimeId: string,
-  path: string,
-  refreshRevision: string,
-): CurrentPreviewLoadState {
-  const [state, setState] = useState<CurrentPreviewLoadState>({ status: 'loading' })
-  const resourceKey = `${runtimeId}\u0000${path}`
-  const resourceKeyRef = useRef(resourceKey)
-  useEffect(() => {
-    let active = true
-    if (resourceKeyRef.current !== resourceKey) {
-      resourceKeyRef.current = resourceKey
-      setState({ status: 'loading' })
-    }
-    void requestCurrentPreview(runtimeId, path, refreshRevision).then((result) => {
-      if (!active) return
-      setState(result.ok
-        ? { status: 'ready', state: result.state }
-        : { status: 'error', message: result.error })
-    }).catch((error) => {
-      if (!active) return
-      setState({ status: 'error', message: errorMessage(error) })
-    })
-    return () => { active = false }
-  }, [path, refreshRevision, resourceKey, runtimeId])
   return state
 }
 
@@ -127,20 +89,6 @@ function requestCheckpointPreview(
   const request = window.whycode.checkpointFilePreview({ runtimeId, toolUseId, path })
   pendingCheckpointPreviews.set(key, request)
   void request.finally(() => pendingCheckpointPreviews.delete(key)).catch(() => {})
-  return request
-}
-
-function requestCurrentPreview(
-  runtimeId: string,
-  path: string,
-  refreshRevision: string,
-): Promise<CurrentFilePreviewResult> {
-  const key = `${runtimeId}\u0000${path}\u0000${refreshRevision}`
-  const pending = pendingCurrentPreviews.get(key)
-  if (pending) return pending
-  const request = window.whycode.currentFilePreview({ runtimeId, path })
-  pendingCurrentPreviews.set(key, request)
-  void request.finally(() => pendingCurrentPreviews.delete(key)).catch(() => {})
   return request
 }
 

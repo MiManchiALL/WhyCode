@@ -13,6 +13,7 @@ export type RightPanelFileSource =
 
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
+  | { kind: 'workspace'; expanded: string[] }
   | { kind: 'subagent-overview' }
   | { kind: 'subagent-transcript'; subagentId: string }
   | {
@@ -20,6 +21,8 @@ export type RightPanelPage =
       path: string
       name: string
       source: RightPanelFileSource
+      wrap?: boolean
+      previewMode?: 'preview' | 'code'
     }
 
 export interface RightPanelTab {
@@ -156,7 +159,9 @@ export function openRightPanelPage(
   const existingIndex = tabs.findIndex((tab) => tab.id === id)
   const tab = { id, page }
   if (existingIndex >= 0) {
-    tabs[existingIndex] = tab
+    const existing = tabs[existingIndex]!.page
+    tabs[existingIndex] = page.kind === 'file' && existing.kind === 'file'
+      ? { id, page: { ...existing, ...page } } : tab
   } else {
     if (tabs.length >= MAX_RIGHT_PANEL_TABS) {
       const discardIndex = tabs.findIndex((candidate) => candidate.page.kind !== 'terminal'
@@ -194,6 +199,8 @@ export function closeRightPanelTab(
 
 export function rightPanelTabId(page: RightPanelPage): string {
   switch (page.kind) {
+    case 'workspace':
+      return 'workspace'
     case 'terminal':
       return `terminal:${page.terminal.id}`
     case 'file':
@@ -251,6 +258,9 @@ function parseTabPage(value: unknown): RightPanelPage | null {
 function parsePage(value: unknown): RightPanelPage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const page = value as Record<string, unknown>
+  if (page.kind === 'workspace' && Array.isArray(page.expanded) && page.expanded.every(path => typeof path === 'string')) {
+    return { kind: page.kind, expanded: page.expanded.slice(0, 63) }
+  }
   if (page.kind === 'subagent-overview') return { kind: page.kind }
   if (page.kind === 'subagent-transcript' && typeof page.subagentId === 'string') {
     return { kind: page.kind, subagentId: page.subagentId }
@@ -261,7 +271,9 @@ function parsePage(value: unknown): RightPanelPage | null {
     && typeof page.name === 'string'
   ) {
     const source = parseFileSource(page.source)
-    return source ? { kind: page.kind, path: page.path, name: page.name, source } : null
+    if (page.wrap !== undefined && typeof page.wrap !== 'boolean') return null
+    if (page.previewMode !== undefined && page.previewMode !== 'preview' && page.previewMode !== 'code') return null
+    return source ? { kind: page.kind, path: page.path, name: page.name, source, ...(page.wrap === undefined ? {} : { wrap: page.wrap }), ...(page.previewMode === undefined ? {} : { previewMode: page.previewMode }) } : null
   }
   return null
 }

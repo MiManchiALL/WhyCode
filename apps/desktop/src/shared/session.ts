@@ -4,7 +4,6 @@ import type {
   BackgroundTaskState,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewResult,
-  CurrentFilePreviewResult,
   CoreCommand,
   CoreEvent,
   ContextUsageInfo,
@@ -108,17 +107,13 @@ export interface CheckpointFilePreviewRequest {
   path: string
 }
 
-export interface CurrentFilePreviewRequest {
-  runtimeId: string
-  path: string
-}
+
 
 export type CheckpointFileCurrentMatchRequest = CheckpointFilePreviewRequest
 
 export type {
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewResult,
-  CurrentFilePreviewResult,
 }
 
 export interface RuntimeCommandResult {

@@ -2,6 +2,14 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+
+const pdfRoot = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'))
+const pdfAssets = Object.fromEntries(Object.entries({ cMapUrl: 'cmaps', standardFontDataUrl: 'standard_fonts', wasmUrl: 'wasm' }).map(([kind, directory]) => [
+  kind, Object.fromEntries(readdirSync(join(pdfRoot, directory)).filter(name => !name.endsWith('.js') && name !== 'LICENSE').map(name => [name, readFileSync(join(pdfRoot, directory, name)).toString('base64')])),
+]))
 
 export default defineConfig({
   main: {
@@ -28,6 +36,7 @@ export default defineConfig({
     },
   },
   renderer: {
+    define: { __WHYCODE_PDF_ASSETS__: JSON.stringify(pdfAssets) },
     plugins: [react(), tailwindcss()],
   },
 })

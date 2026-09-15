@@ -111,6 +111,9 @@ import { NewSessionStateStore } from './new-session-state.ts'
 import { installComposerWindowLifecycle } from './composer-window-lifecycle.ts'
 import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
+import { WorkspaceFiles } from './workspace-files.ts'
+import { installWorkspaceFileLifecycle, registerWorkspaceFileIpc } from './workspace-files-ipc.ts'
+import { workspaceDisplayDirectory } from '../shared/workspace.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionPreparationLock } from './session-preparation-lock.ts'
@@ -152,8 +155,6 @@ import type {
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewRequest,
   CheckpointFilePreviewResult,
-  CurrentFilePreviewRequest,
-  CurrentFilePreviewResult,
   DeleteSessionResult,
   ForkSessionRequest,
   ForkSessionResult,
@@ -222,10 +223,11 @@ import { projectSessionListItems } from './session-list.ts'
 import { SessionSidebarStateStore } from './session-sidebar-state.ts'
 import {
   registerAttachmentProtocol,
-  registerAttachmentScheme,
+  registerFileSchemes,
 } from './image-protocol.ts'
 
-registerAttachmentScheme()
+registerFileSchemes()
+const workspaceFiles = new WorkspaceFiles()
 
 const configSecretCodec: ConfigSecretCodec = {
   isAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -335,6 +337,7 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => win.show())
   installTerminalWindowLifecycle(win, terminals)
+  installWorkspaceFileLifecycle(win, workspaceFiles)
   installImageContextMenu(win)
   installComposerWindowLifecycle(win)
 
@@ -2795,6 +2798,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     onDisposeError: (error) => console.error('会话运行时清理失败：', error),
     retainDraft: (runtime) => newSessionState.value?.runtimeId === runtime.runtimeId,
     onRemoved: async (runtime) => {
+      workspaceFiles.closeRuntime(runtime.runtimeId)
       if (!runtime.journal) terminals.closeOwner({ runtimeId: runtime.runtimeId })
       if (runtime.journal) sessions.release(runtime.journal)
       if (!runtime.journal && newSessionState.value?.runtimeId === runtime.runtimeId) return
@@ -2989,20 +2993,6 @@ if (primaryInstance) void app.whenReady().then(async () => {
       ? session.checkpointFileMatchesCurrent(request.toolUseId, request.path)
       : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
   })
-  ipcMain.handle(IPC.currentFilePreview, (
-    _e,
-    request: CurrentFilePreviewRequest,
-  ): Promise<CurrentFilePreviewResult> => {
-    if (
-      !request
-      || typeof request.runtimeId !== 'string'
-      || typeof request.path !== 'string'
-    ) return Promise.resolve({ ok: false, error: '当前文件预览请求无效' })
-    const session = runtimeRegistry.get(request.runtimeId)?.session
-    return session
-      ? session.currentFilePreview(request.path)
-      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
-  })
   ipcMain.handle(IPC.consensusStatus, () => ({
     ready: checkConsensusReady() === null,
     reason: checkConsensusReady(),
@@ -3106,6 +3096,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
 
+  registerWorkspaceFileIpc(workspaceFiles, runtimeId => {
+    const directory = workspaceDisplayDirectory(runtimeForId(runtimeId).workspace)
+    if (!directory) throw new Error('当前会话没有工作路径')
+    return directory
+  })
   registerTerminalIpc(terminals, runtimeForId, prepareTerminalDirectory)
   createWindow()
 

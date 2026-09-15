@@ -172,7 +172,8 @@ export function App() {
     activeTabId: null,
     inspectorView: 'plan',
   })
-  const [rightPanelRetained, setRightPanelRetained] = useState(false)
+  const [rightPanelFullscreen, setRightPanelFullscreen] = useState(false)
+  const panelFullscreen = rightPanelFullscreen && rightPanelState.open
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
   const [rightPanelWidthPreference, setRightPanelWidthPreference] = useState(
@@ -707,7 +708,6 @@ export function App() {
         : store.get(targetKey)
       rightPanelStateRef.current = next
       setRightPanelState(next)
-      setRightPanelRetained(next.open)
     }
     runtimeIdRef.current = snapshot.runtimeId
     if (!changingRuntime) setComposerSessionId(snapshot.sessionId)
@@ -1026,8 +1026,14 @@ export function App() {
   }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime])
 
   useEffect(() => {
-    if (rightPanelState.open) setRightPanelRetained(true)
-  }, [rightPanelState.open])
+    if (!rightPanelState.open) setRightPanelFullscreen(false)
+    if (!panelFullscreen) return
+    const exit = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) setRightPanelFullscreen(false)
+    }
+    window.addEventListener('keydown', exit)
+    return () => window.removeEventListener('keydown', exit)
+  }, [panelFullscreen, rightPanelState.open])
 
   const updateRightPanelWidthRatio = useCallback((ratio: number) => {
     const normalized = Math.min(
@@ -1041,6 +1047,7 @@ export function App() {
   }, [rightPanelWidthPreference.maximumRatio])
 
   const collapseRightPanel = useCallback(() => {
+    setRightPanelFullscreen(false)
     updateRightPanelState((current) => ({ ...current, open: false }))
   }, [updateRightPanelState])
 
@@ -2039,41 +2046,46 @@ export function App() {
         </div>
       )}
 
-      <AppSidebar
-        collapsed={sidebarCollapsed}
-        sessions={sessions}
-        selectedSessionId={resumingSessionId ?? sessionIdRef.current}
-        navigationLocked={sessionNavigationLocked}
-        error={sessionListError}
-        actionError={sessionActionError}
-        busy={sessionChangeLocked}
-        deletingSessionId={deletingSessionId}
-        onCollapsedChange={setSidebarCollapsed}
-        onNewSession={() => startNewSession()}
-        onResume={resumeSession}
-        onPinnedChange={setSessionPinned}
-        onDelete={deleteSession}
-        onOpenSettings={openConnectionSettings}
-      />
+      <div className="contents" inert={panelFullscreen}>
+        <AppSidebar
+          collapsed={sidebarCollapsed}
+          sessions={sessions}
+          selectedSessionId={resumingSessionId ?? sessionIdRef.current}
+          navigationLocked={sessionNavigationLocked}
+          error={sessionListError}
+          actionError={sessionActionError}
+          busy={sessionChangeLocked}
+          deletingSessionId={deletingSessionId}
+          onCollapsedChange={setSidebarCollapsed}
+          onNewSession={() => startNewSession()}
+          onResume={resumeSession}
+          onPinnedChange={setSessionPinned}
+          onDelete={deleteSession}
+          onOpenSettings={openConnectionSettings}
+        />
+      </div>
 
       <section className="wc-shell-panel flex min-w-0 flex-1 flex-col bg-[var(--wc-surface)]">
-        <TaskHeader
-          title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
-          projectDir={loadingConversation
-            ? pendingSession?.workspace ? workspaceDisplayDirectory(pendingSession.workspace) : null
-            : workspace.mode === 'pending-managed' ? null : projectDir}
-          workspaceMode={loadingConversation ? pendingSession?.workspace?.mode ?? 'pending-managed' : workspace.mode}
-          backgroundTasks={loadingConversation ? [] : backgroundTasks}
-          rightPanelOpen={rightPanelState.open}
-          disabled={loadingConversation}
-          onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
-          onToggleRightPanel={() => updateRightPanelState((current) => ({
-            ...current,
-            open: !current.open,
-          }))}
-        />
+        <div className="contents" inert={panelFullscreen}>
+          <TaskHeader
+            title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
+            projectDir={loadingConversation
+              ? pendingSession?.workspace ? workspaceDisplayDirectory(pendingSession.workspace) : null
+              : workspace.mode === 'pending-managed' ? null : projectDir}
+            workspaceMode={loadingConversation ? pendingSession?.workspace?.mode ?? 'pending-managed' : workspace.mode}
+            backgroundTasks={loadingConversation ? [] : backgroundTasks}
+            rightPanelOpen={rightPanelState.open}
+            disabled={loadingConversation}
+            onOpenWorkspaceFolder={openCurrentWorkspaceFolder}
+            onToggleRightPanel={() => updateRightPanelState((current) => ({
+              ...current,
+              open: !current.open,
+            }))}
+          />
+        </div>
         <div className="relative flex min-h-0 flex-1">
           <aside
+            inert={panelFullscreen}
             className="wc-conversation-navigator"
             aria-label="会话定位"
             aria-hidden={loadingConversation}
@@ -2089,7 +2101,7 @@ export function App() {
               />
             )}
           </aside>
-          <section className="relative flex min-w-0 flex-1 flex-col">
+          <section className="relative flex min-w-0 flex-1 flex-col" inert={panelFullscreen}>
             {!loadingConversation && conversationFeedback && (
               <ConversationFeedbackToast
                 key={conversationFeedback.id}
@@ -2377,6 +2389,7 @@ export function App() {
 
           <div
             ref={rightPanelRef}
+            data-fullscreen={panelFullscreen}
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
             aria-busy={loadingConversation}
             inert={loadingConversation}
@@ -2394,7 +2407,7 @@ export function App() {
                 : undefined,
             }}
           >
-            {(rightPanelState.open || rightPanelResizeActive) && (
+            {!panelFullscreen && (rightPanelState.open || rightPanelResizeActive) && (
               <RightPanelResizeHandle
                 panelRef={rightPanelRef}
                 ratio={rightPanelWidthPreference.ratio}
@@ -2440,16 +2453,10 @@ export function App() {
               }`}
               aria-hidden={!rightPanelState.open}
               inert={!rightPanelState.open}
-              onTransitionEnd={(event) => {
-                if (
-                  event.target === event.currentTarget
-                  && event.propertyName === 'opacity'
-                  && !rightPanelState.open
-                ) setRightPanelRetained(false)
-              }}
+
             >
               <RightPanel
-                active={rightPanelState.open || rightPanelRetained}
+                active={rightPanelState.open}
                 runtimeId={runtimeId}
                 refreshRevision={`${view.fileSystemRevision}:${filePreviewInteractionRevision}`}
                 parentSessionId={sessionIdRef.current}
@@ -2457,6 +2464,10 @@ export function App() {
                 skills={skillCatalog.skills}
                 projectDir={projectDir}
                 state={rightPanelState}
+                workspacePath={workspaceDisplayDirectory(workspace)}
+                fullscreen={panelFullscreen}
+                onToggleFullscreen={() => setRightPanelFullscreen(value => !value)}
+                onCollapse={collapseRightPanel}
                 onOpenPage={showRightPanelPage}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}

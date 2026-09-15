@@ -23,8 +23,12 @@ export const IPC = {
   checkpointFilePreview: 'whycode:checkpoint-file-preview',
   /** Renderer → Main：判断一个操作后快照是否等于当前路径状态。 */
   checkpointFileCurrentMatch: 'whycode:checkpoint-file-current-match',
-  /** Renderer → Main：读取当前会话检查点已授权路径的实时文件状态。 */
-  currentFilePreview: 'whycode:current-file-preview',
+  /** 只读文件视图与预览地址随可见标签页释放，不进入 Agent 上下文。 */
+  openWorkspaceFile: 'whycode:open-workspace-file',
+  readWorkspaceFile: 'whycode:read-workspace-file',
+  closeWorkspaceFile: 'whycode:close-workspace-file',
+  revealWorkspaceFile: 'whycode:reveal-workspace-file',
+  workspaceFileChanged: 'whycode:workspace-file-changed',
   /** 用户终端独立于 Agent 命令；输出不进入会话事实源。 */
   createTerminal: 'whycode:create-terminal',
   closeTerminal: 'whycode:close-terminal',

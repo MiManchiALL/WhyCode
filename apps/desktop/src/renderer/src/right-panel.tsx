@@ -1,8 +1,9 @@
 import type { SkillSummary, SubagentSummary } from '@whycode/core'
-import { Bot, FileText, Plus, SquareTerminal, X } from 'lucide-react'
+import { Bot, FileText, FolderOpen, Maximize2, Minimize2, PanelRightClose, Plus, SquareTerminal, X } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useEffect, useRef } from 'react'
-import { RightPanelFilePreview } from './file-change-view.tsx'
+import { RightPanelFilePreview } from './right-panel-file.tsx'
+import { WorkspaceBrowser } from './workspace-browser.tsx'
 import {
   activeRightPanelPage,
   type RightPanelPage,
@@ -21,6 +22,10 @@ interface RightPanelProps {
   subagents: readonly SubagentSummary[]
   skills: readonly SkillSummary[]
   projectDir: string | null
+  workspacePath: string | null
+  fullscreen: boolean
+  onToggleFullscreen: () => void
+  onCollapse: () => void
   state: RightPanelSessionState
   onOpenPage: (page: RightPanelPage) => void
   onSelectTab: (tabId: string) => void
@@ -55,14 +60,18 @@ export function RightPanel(props: RightPanelProps) {
                   className="wc-focus-ring flex size-7 shrink-0 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] disabled:opacity-50"
                   aria-label="新建右侧标签页"
                   title="新建标签页"
-                  disabled={props.terminalOpening || !props.runtimeId}
+                  disabled={!props.runtimeId}
                 >
                   <Plus size={15} />
                 </button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content className="wc-menu-content min-w-36" align="start" sideOffset={5}>
-                  <DropdownMenu.Item className="wc-menu-item" onSelect={props.onOpenTerminal}>
+                  <DropdownMenu.Item className="wc-menu-item" disabled={!props.workspacePath} onSelect={() => openWorkspace(props)}>
+                    <FolderOpen size={15} />
+                    <span>当前工作路径</span>
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item className="wc-menu-item" disabled={props.terminalOpening} onSelect={props.onOpenTerminal}>
                     <SquareTerminal size={15} />
                     <span>终端</span>
                   </DropdownMenu.Item>
@@ -71,6 +80,10 @@ export function RightPanel(props: RightPanelProps) {
             </DropdownMenu.Root>
           </div>
         </div>
+        <button type="button" className="wc-preview-action" title={props.fullscreen ? '退出全屏' : '全屏'} aria-label={props.fullscreen ? '退出全屏' : '全屏'} onClick={props.onToggleFullscreen}>
+          {props.fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </button>
+        {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
       <RightPanelContent {...props} />
     </aside>
@@ -80,7 +93,10 @@ export function RightPanel(props: RightPanelProps) {
 function RightPanelContent(props: RightPanelProps) {
   const page = activeRightPanelPage(props.state)
   if (!page) return (
-    <div className="flex min-h-0 flex-1 items-center justify-center">
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2">
+      <button type="button" className="wc-focus-ring flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-[var(--wc-muted)] hover:bg-black/[0.035] hover:text-[var(--wc-ink)] disabled:opacity-50" disabled={!props.runtimeId || !props.workspacePath} onClick={() => openWorkspace(props)}>
+        <FolderOpen size={17} /><span>当前工作路径</span>
+      </button>
       <button
         type="button"
         className="wc-focus-ring flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2 text-sm text-[var(--wc-muted)] hover:bg-black/[0.035] hover:text-[var(--wc-ink)] disabled:opacity-50"
@@ -93,6 +109,14 @@ function RightPanelContent(props: RightPanelProps) {
     </div>
   )
   switch (page.kind) {
+    case 'workspace':
+      return props.active && props.workspacePath ? <WorkspaceBrowser
+        key={`${props.runtimeId}:${props.workspacePath}`}
+        runtimeId={props.runtimeId} rootPath={props.workspacePath} expanded={page.expanded}
+        refreshRevision={props.refreshRevision}
+        onExpandedChange={expanded => props.onOpenPage({ ...page, expanded })}
+        onOpenFile={(path, name) => props.onOpenPage({ kind: 'file', path, name, source: { kind: 'current' } })}
+      /> : <div className="min-h-0 flex-1" />
     case 'terminal':
       return <TerminalPanel key={page.terminal.id} terminal={page.terminal} active={props.active} />
     case 'file':
@@ -102,7 +126,7 @@ function RightPanelContent(props: RightPanelProps) {
           runtimeId={props.runtimeId}
           refreshRevision={props.refreshRevision}
           page={page}
-          onOpenCurrent={() => props.onOpenPage({ ...page, source: { kind: 'current' } })}
+          onChange={props.onOpenPage}
         />
       ) : <div className="min-h-0 flex-1" />
     case 'subagent-overview':
@@ -160,6 +184,7 @@ function RightPanelTabButton({
           ? <FileText size={13} className="shrink-0 text-[var(--wc-muted)]" />
           : tab.page.kind === 'terminal'
             ? <SquareTerminal size={13} className="shrink-0 text-[var(--wc-muted)]" />
+          : tab.page.kind === 'workspace' ? <FolderOpen size={13} className="shrink-0 text-[var(--wc-muted)]" />
           : <Bot size={13} className="shrink-0 text-[var(--wc-muted)]" />}
         <span className="truncate">{title}</span>
       </button>
@@ -182,6 +207,7 @@ function tabTitle(
   page: RightPanelPage,
   subagents: readonly SubagentSummary[],
 ): string {
+  if (page.kind === 'workspace') return '当前工作路径'
   if (page.kind === 'file') return page.name
   if (page.kind === 'terminal') return page.terminal.title
   return resolveSubagentPanelPage(page, subagents)?.title ?? '子代理'
@@ -195,4 +221,9 @@ function filePageKey(
     ? 'current'
     : `${page.source.toolUseId}:${page.source.toolName}`
   return `${runtimeId}:${page.path}:${source}`
+}
+
+function openWorkspace(props: RightPanelProps): void {
+  const existing = props.state.tabs.find(tab => tab.page.kind === 'workspace')
+  props.onOpenPage(existing?.page ?? { kind: 'workspace', expanded: [] })
 }

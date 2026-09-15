@@ -202,3 +202,18 @@ describe('右侧栏会话配置', () => {
     assert.equal(store.get('session-a').tabs.some((tab) => tab.id === 'terminal:a'), true)
   })
 })
+
+it('目录展开与文件显示偏好按会话保存，打开同一文件保留偏好', () => {
+  const storage = new MemoryStorage()
+  const store = new RightPanelSessionStore(storage)
+  let state = openRightPanelPage(emptyState(), { kind: 'workspace', expanded: ['src', 'src/main'] })
+  const page = { kind: 'file', path: 'C:/repo/index.html', name: 'index.html', source: { kind: 'current' } } as const
+  state = openRightPanelPage(state, { ...page, wrap: false, previewMode: 'code' })
+  state = openRightPanelPage(state, page)
+  assert.deepEqual(activeRightPanelPage(state), { ...page, wrap: false, previewMode: 'code' })
+  store.set('a', state)
+  const restored = new RightPanelSessionStore(storage)
+  assert.deepEqual(restored.get('a'), state)
+  assert.deepEqual(restored.get('b'), emptyState())
+  assert.deepEqual(restored.get('a').tabs[0]?.page, { kind: 'workspace', expanded: ['src', 'src/main'] })
+})

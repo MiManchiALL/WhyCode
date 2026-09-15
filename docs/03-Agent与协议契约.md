@@ -410,6 +410,18 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 
 `newSession()` 返回尚未发送的新会话，重复请求复用同一准备事务、运行时与工作区；`newSession({workspace})` 显式更换项目，`workspace:null` 表示移除项目并回到待创建的默认目录。Main 在 `userData/new-session.json` 保存这份工作区身份，输入内容由 Renderer 的草稿存储持有。建立 Journal 后释放新会话入口，草稿随实际会话 ID 转移；仅点击新建或输入未发送内容不会建立 Journal 或发送请求。窗口关闭通过 `composerPersistence` 通道握手，Main 只接受所属主 Frame 的保存完成确认；握手不传递草稿内容，不经过 Core 命令或事件。
 
+### 7.3 桌面文件浏览
+
+类型与边界单源为 `apps/desktop/src/shared/workspace-files.ts`，实现位于 Main 的 `workspace-files.ts` 与 `workspace-files-ipc.ts`。仅所属窗口的主 Frame 可创建、读取、关闭和定位文件视图：
+
+- `openWorkspaceFile({runtimeId,kind,path})` 从运行时解析工作目录。目录路径相对工作目录；文件使用明确打开的绝对路径，目录外文件的静态资源范围限于其父目录。返回一次性视图 ID、目录项或文档元数据及预览地址，不通过 IPC 返回正文。
+- `readWorkspaceFile({id,offset?})` 只接受当前窗口持有的视图；目录每页最多 200 项，每个窗口最多 64 个活动视图。目录项区分目录、普通文件和不可浏览的链接/特殊项。
+- `workspaceFileChanged({id})` 只发给资源所属窗口；`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径。视图 ID 与预览地址均不持久化。
+- `whycode-preview` 仅处理 GET/HEAD，支持单段字节范围。普通文本预览上限 2 MiB，文档与静态资源上限 64 MiB；不支持的类型只返回元数据。HTML 代码视图同样受文本上限约束。
+- 每次读取以真实路径检查资源范围；禁止目录链接逃逸、特殊文件、相关隐藏文件和非静态资源。HTML 使用独立 sandbox，预览脚本不能访问宿主 API。关闭视图后其地址失效，不能借旧地址继续读取文件。
+
+上述操作不改变 Core 文件检查点、工具权限、JSONL 或模型请求；历史快照仍走已有按工具调用与路径授权的检查点读取契约。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。

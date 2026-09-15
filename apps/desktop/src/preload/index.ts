@@ -14,14 +14,13 @@ import type {
 } from '@whycode/core'
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { IPC } from '../shared/ipc.ts'
+import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type {
   CheckpointFileCurrentMatchRequest,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewRequest,
   CheckpointFilePreviewResult,
-  CurrentFilePreviewRequest,
-  CurrentFilePreviewResult,
   DeleteSessionResult,
   ForkSessionRequest,
   ForkSessionResult,
@@ -225,10 +224,17 @@ const api = {
     request: CheckpointFileCurrentMatchRequest,
   ): Promise<CheckpointFileCurrentMatchResult> =>
     ipcRenderer.invoke(IPC.checkpointFileCurrentMatch, request),
-  currentFilePreview: (
-    request: CurrentFilePreviewRequest,
-  ): Promise<CurrentFilePreviewResult> =>
-    ipcRenderer.invoke(IPC.currentFilePreview, request),
+  openWorkspaceFile: (request: OpenWorkspaceFileRequest): Promise<WorkspaceFileResult> =>
+    ipcRenderer.invoke(IPC.openWorkspaceFile, request),
+  readWorkspaceFile: (request: ReadWorkspaceFileRequest): Promise<WorkspaceFileResult> =>
+    ipcRenderer.invoke(IPC.readWorkspaceFile, request),
+  closeWorkspaceFile: (id: string): void => ipcRenderer.send(IPC.closeWorkspaceFile, id),
+  revealWorkspaceFile: (id: string): Promise<void> => ipcRenderer.invoke(IPC.revealWorkspaceFile, id),
+  onWorkspaceFileChanged: (callback: (change: WorkspaceFileChange) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, change: WorkspaceFileChange) => callback(change)
+    ipcRenderer.on(IPC.workspaceFileChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.workspaceFileChanged, listener)
+  },
   pickProjectDir: (): Promise<WorkspaceCandidate | null> =>
     ipcRenderer.invoke(IPC.pickProjectDir),
   worktreeStatus: (
