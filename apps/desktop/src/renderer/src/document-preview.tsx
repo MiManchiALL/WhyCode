@@ -14,17 +14,16 @@ type FilePage = Extract<RightPanelPage, { kind: 'file' }>
 interface DocumentProps {
   runtimeId: string
   page: FilePage
-  refreshRevision: string
   onChange: (page: FilePage) => void
 }
 
-export function DocumentPreview({ runtimeId, page, refreshRevision, onChange }: DocumentProps) {
-  const file = useWorkspaceFile(runtimeId, 'file', page.path, refreshRevision)
+export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
+  const file = useWorkspaceFile(runtimeId, 'file', page.path)
   const document = file.view?.kind === 'file' ? file.view : null
   const hasModes = document && document.size <= MAX_TEXT_PREVIEW_BYTES
     && (document.format === 'html' || document.format === 'markdown')
   const code = document?.format === 'code' || Boolean(hasModes && page.previewMode === 'code')
-  const wrap = page.wrap ?? true
+  const wrap = page.wrap ?? false
   return <div className="flex min-h-0 flex-1 flex-col">
     <FilePreviewToolbar path={document?.path ?? page.path}>
       {hasModes && (
@@ -63,7 +62,7 @@ function DocumentBody({ document, code, wrap }: { document: WorkspaceDocument; c
   if (document.format === 'image') return <ImageDocument key={document.url} url={document.url} name={document.name} />
   if (document.format === 'pdf') return (
     <Suspense fallback={<FilePreviewMessage>正在准备 PDF 阅读器…</FilePreviewMessage>}>
-      <PdfPreview url={document.url} />
+      <PdfPreview url={document.url} size={document.size} />
     </Suspense>
   )
   return null

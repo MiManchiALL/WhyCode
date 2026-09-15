@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -154,4 +154,65 @@ it('关闭文件视图立即取消仍在读取的正文流', async t => {
   const response = await files.response(new Request(page.url))
   files.close(1, page.id)
   await assert.rejects(response.arrayBuffer(), { name: 'AbortError' })
+})
+
+
+it('正文只在自身版本改变时通知；打开、读取和同目录写入不误报', async t => {
+  const { open, workspace, files } = await fixture(t)
+  const path = join(workspace, 'readme.md')
+  await writeFile(path, '# Original')
+  await utimes(path, new Date(), new Date('2026-01-01T00:00:00Z'))
+  const changes: string[] = []
+  const page = await open(path, 'file', id => changes.push(id))
+  if (page.kind !== 'file' || !page.url) throw new Error('expected document')
+  await (await files.response(new Request(page.url))).text()
+  await readFile(path)
+  const info = await stat(path)
+  await utimes(path, new Date(), info.mtime)
+  await writeFile(join(workspace, 'unrelated.md'), 'other')
+  await delay(350)
+  assert.deepEqual(changes, [])
+  await writeFile(join(workspace, 'replacement.md'), '# Changed')
+  await rename(join(workspace, 'replacement.md'), path)
+  const deadline = Date.now() + 3000
+  while (!changes.length && Date.now() < deadline) await delay(30)
+  assert.deepEqual(changes, [page.id])
+  await files.read(1, page.id)
+  changes.length = 0
+  await delay(350)
+  assert.deepEqual(changes, [])
+  files.close(1, page.id)
+  await writeFile(path, '# Closed')
+  await delay(250)
+  assert.deepEqual(changes, [])
+})
+
+it('HTML 只监听实际读取的静态依赖；刷新清除旧依赖，关闭释放依赖监听', async t => {
+  const { open, workspace, files } = await fixture(t)
+  const path = join(workspace, 'index.html')
+  const asset = join(workspace, 'assets', 'app.js')
+  await mkdir(join(workspace, 'assets'))
+  await writeFile(path, '<script src="assets/app.js"></script>')
+  await writeFile(asset, 'initial')
+  const changes: string[] = []
+  const page = await open(path, 'file', id => changes.push(id))
+  if (page.kind !== 'file' || !page.url) throw new Error('expected document')
+  await (await files.response(new Request(new URL('assets/app.js', page.url)))).text()
+  await writeFile(join(workspace, 'assets', 'other.js'), 'unrelated')
+  await delay(250)
+  assert.deepEqual(changes, [])
+  await writeFile(asset, 'changed')
+  const deadline = Date.now() + 3000
+  while (!changes.length && Date.now() < deadline) await delay(30)
+  assert.deepEqual(changes, [page.id])
+  await files.read(1, page.id)
+  changes.length = 0
+  await writeFile(asset, 'old dependency')
+  await delay(250)
+  assert.deepEqual(changes, [])
+  await (await files.response(new Request(new URL('assets/app.js', page.url)))).text()
+  files.close(1, page.id)
+  await writeFile(asset, 'closed dependency')
+  await delay(250)
+  assert.deepEqual(changes, [])
 })

@@ -65,7 +65,7 @@ export function SyntaxCode({
   lines,
   focusLine = null,
   scroll = true,
-  wrap = true,
+  wrap = false,
   className = '',
 }: {
   path: string

@@ -1,66 +1,22 @@
-import { getDocument, PDFWorker, type PDFDocumentProxy } from 'pdfjs-dist'
-import workerSource from 'pdfjs-dist/build/pdf.worker.min.mjs?raw'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { openPdf } from './pdf-runtime.ts'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { FilePreviewMessage } from './file-preview-controls.tsx'
 
-type AssetKind = 'cMapUrl' | 'standardFontDataUrl' | 'wasmUrl'
-declare const __WHYCODE_PDF_ASSETS__: Record<AssetKind, Record<string, string>>
-
-class PdfAssets {
-  async fetch({ kind, filename }: { kind: AssetKind; filename: string }): Promise<Uint8Array> {
-    const files = __WHYCODE_PDF_ASSETS__[kind]
-    const encoded = files?.[filename]
-    if (!files || !Object.hasOwn(files, filename) || !encoded) throw new Error('PDF 所需字体或解码资源不可用')
-    return Uint8Array.from(atob(encoded), char => char.charCodeAt(0))
-  }
-}
-
-export default function PdfPreview({ url }: { url: string }) {
+export default function PdfPreview({ url, size }: { url: string; size: number }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
-    const abort = new AbortController()
-    let worker: Worker | undefined
-    let workerUrl: string | undefined
-    let bridge: PDFWorker | undefined
-    let loading: ReturnType<typeof getDocument> | undefined
-    let stopped = false
-    let signalFailure!: () => void
-    const broken = new Promise<void>(resolve => { signalFailure = resolve })
-    const dispose = () => {
-      if (stopped) return
-      stopped = true
-      abort.abort()
-      void Promise.race([loading?.destroy(), broken]).catch(() => {}).finally(() => {
-        bridge?.destroy()
-        worker?.terminate()
-        if (workerUrl) URL.revokeObjectURL(workerUrl)
-      })
-    }
-    const fail = (cause: unknown) => {
-      signalFailure()
-      if (!abort.signal.aborted) setError(cause instanceof Error ? cause.message : 'PDF 工作线程无法运行')
-      dispose()
-    }
+    let active = true
     setDocument(null)
     setError(null)
-    void (async () => {
-      const response = await fetch(url, { signal: abort.signal })
-      if (!response.ok) throw new Error('PDF 已移动或无法读取，请刷新后重试')
-      const data = new Uint8Array(await response.arrayBuffer())
-      abort.signal.throwIfAborted()
-      workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }))
-      worker = new Worker(workerUrl, { type: 'module', name: 'whycode-pdf-preview' })
-      worker.onerror = fail
-      worker.onmessageerror = fail
-      bridge = PDFWorker.create({ port: worker })
-      loading = getDocument({ data, worker: bridge, BinaryDataFactory: PdfAssets, cMapPacked: true, useWorkerFetch: false, enableXfa: false, stopAtErrors: true })
-      const result = await loading.promise
-      if (!abort.signal.aborted) setDocument(result)
-    })().catch(error => { if (!abort.signal.aborted) fail(error) })
-    return dispose
-  }, [url])
+    const session = openPdf(url, size, cause => {
+      if (active) setError(cause instanceof Error ? cause.message : 'PDF 工作线程无法运行')
+    })
+    void session.document.then(result => { if (active) setDocument(result) }).catch(() => {})
+    return () => { active = false; session.dispose() }
+  }, [url, size])
   if (error) return <FilePreviewMessage>{error}</FilePreviewMessage>
   if (!document) return <FilePreviewMessage>正在读取 PDF…</FilePreviewMessage>
   return <div ref={scrollRef} className="wc-pdf-preview wc-scrollbar min-h-0 flex-1 overflow-y-auto bg-black/[0.035] px-3 py-3" aria-label={`PDF，共 ${document.numPages} 页`}>
@@ -78,7 +34,7 @@ function PdfPage({ document, pageNumber, scrollRef }: { document: PDFDocumentPro
   useEffect(() => {
     const element = host.current
     if (!element) return
-    const visibility = new IntersectionObserver(entries => setVisible(entries[0]?.isIntersecting ?? false), { root: scrollRef.current, rootMargin: '600px 0px' })
+    const visibility = new IntersectionObserver(entries => setVisible(entries[0]?.isIntersecting ?? false), { root: scrollRef.current, rootMargin: '300px 0px' })
     const resize = new ResizeObserver(entries => setWidth(Math.floor(entries[0]?.contentRect.width ?? 0)))
     visibility.observe(element)
     resize.observe(element)
@@ -95,15 +51,20 @@ function PdfPage({ document, pageNumber, scrollRef }: { document: PDFDocumentPro
     let render: ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['render']> | undefined
     const rendering = (async () => {
       const page = await document.getPage(pageNumber)
-      if (!active) return
-      const original = page.getViewport({ scale: 1 })
-      setRatio(original.height / original.width)
-      const scale = Math.min(window.devicePixelRatio || 1, 2, 4096 / width)
-      const viewport = page.getViewport({ scale: width / original.width * scale })
-      target.width = Math.ceil(viewport.width)
-      target.height = Math.ceil(viewport.height)
-      render = page.render({ canvas: target, viewport })
-      await render.promise
+      try {
+        if (!active) return
+        const original = page.getViewport({ scale: 1 })
+        const height = width * original.height / original.width
+        setRatio(original.height / original.width)
+        // 同时限制面积和长边，避免全屏或超长页面分配巨型位图。
+        const scale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(4_194_304 / (width * height)), 4096 / Math.max(width, height))
+        const viewport = page.getViewport({ scale: width / original.width * scale })
+        target.width = Math.max(1, Math.floor(viewport.width))
+        target.height = Math.max(1, Math.floor(viewport.height))
+        render = page.render({ canvas: target, viewport })
+        await render.promise
+        render = undefined
+      } finally { page.cleanup() }
     })().catch(error => {
       if (active) setError(error instanceof Error ? error.message : '页面无法渲染')
     })

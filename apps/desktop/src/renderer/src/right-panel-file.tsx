@@ -1,5 +1,5 @@
 import { FileSearch } from 'lucide-react'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import type { CheckpointFilePreview } from '@whycode/core'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { DocumentPreview } from './document-preview.tsx'
@@ -24,13 +24,22 @@ export function RightPanelFilePreview(props: FileProps) {
 }
 
 function SnapshotFile({ runtimeId, refreshRevision, page, onChange }: Omit<FileProps, 'page'> & { page: SnapshotPage }) {
-  const state = useCheckpointFilePreview(runtimeId, page.source.toolUseId, page.path)
   const match = useCheckpointFileCurrentMatch(runtimeId, page.source.toolUseId, page.path, refreshRevision)
-  const wrap = page.wrap ?? true
+  const current = match.status === 'ready' && match.matches && page.source.toolName !== 'DeleteFile'
+  useEffect(() => {
+    if (current) onChange({ ...page, source: { kind: 'current' } })
+  }, [current, onChange, page])
+  if (current || match.status === 'loading') return <FilePreviewMessage>正在读取文件…</FilePreviewMessage>
+  return <FileSnapshot runtimeId={runtimeId} page={page} onChange={onChange} matches={match.status === 'ready' && match.matches} />
+}
+
+function FileSnapshot({ runtimeId, page, onChange, matches }: Omit<FileProps, 'page' | 'refreshRevision'> & { page: SnapshotPage; matches: boolean }) {
+  const state = useCheckpointFilePreview(runtimeId, page.source.toolUseId, page.path)
+  const wrap = page.wrap ?? false
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <FilePreviewToolbar path={page.path}>
-        {match.status === 'ready' && !match.matches && (
+        {!matches && (
           <button type="button" className="wc-preview-action" title="打开当前文件" aria-label="打开当前文件"
             onClick={() => onChange({ ...page, source: { kind: 'current' } })}>
             <FileSearch size={15} />

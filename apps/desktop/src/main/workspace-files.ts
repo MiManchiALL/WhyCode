@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { createReadStream, watch, type FSWatcher } from 'node:fs'
+import { createReadStream } from 'node:fs'
 import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
+import { WorkspaceFileWatch } from './workspace-file-watch.ts'
 import {
   DIRECTORY_PAGE_SIZE, MAX_DOCUMENT_PREVIEW_BYTES, MAX_PREVIEW_VIEWS,
   MAX_TEXT_PREVIEW_BYTES, PREVIEW_SCHEME, documentFormat, previewMediaType,
@@ -17,9 +18,7 @@ interface FileView {
   root: string
   path: string
   abort: AbortController
-  watcher?: FSWatcher
-  timer?: ReturnType<typeof setTimeout>
-  changed: (id: string) => void
+  watch: WorkspaceFileWatch
 }
 
 const byName = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
@@ -28,7 +27,7 @@ const byName = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' }
 export class WorkspaceFiles {
   private readonly views = new Map<string, FileView>()
 
-  async open(owner: number, request: OpenWorkspaceFileRequest, workingDirectory: string, changed: FileView['changed']): Promise<WorkspaceFileView> {
+  async open(owner: number, request: OpenWorkspaceFileRequest, workingDirectory: string, changed: (id: string) => void): Promise<WorkspaceFileView> {
     if ([...this.views.values()].filter(view => view.owner === owner).length >= MAX_PREVIEW_VIEWS) {
       throw new Error('展开的目录过多，请先收起部分目录')
     }
@@ -37,12 +36,15 @@ export class WorkspaceFiles {
     if (request.kind === 'file' && !isAbsolute(request.path)) throw new Error('文件路径必须为绝对路径')
     const root = request.kind === 'directory' || isWithin(workspaceRoot, path) ? workspaceRoot : dirname(path)
     if (!isWithin(root, path)) throw new Error('目录不在当前工作路径中')
-    const view: FileView = { id: randomUUID(), owner, runtimeId: request.runtimeId, kind: request.kind, root, path, abort: new AbortController(), changed }
+    const id = randomUUID()
+    const view: FileView = {
+      id, owner, runtimeId: request.runtimeId, kind: request.kind, root, path,
+      abort: new AbortController(), watch: new WorkspaceFileWatch(() => changed(id)),
+    }
     this.views.set(view.id, view)
     try {
       const result = await this.read(owner, view.id)
       if (this.views.get(view.id) !== view) throw new Error('文件视图已关闭')
-      this.observe(view)
       return result
     } catch (error) {
       this.close(owner, view.id)
@@ -57,7 +59,7 @@ export class WorkspaceFiles {
       try {
         const path = await containedRealPath(view.root, view.path)
         const entries = await readdir(path, { withFileTypes: true })
-        this.observe(view)
+        view.watch.directory(path)
         entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || byName.compare(a.name, b.name))
         return {
           kind: 'directory', id, path: view.path, missing: false, total: entries.length,
@@ -88,7 +90,8 @@ export class WorkspaceFiles {
         if (sample.subarray(0, bytesRead).includes(0)) format = 'unsupported'
       } finally { await file.close() }
     }
-    this.observe(view)
+    view.watch.reset()
+    view.watch.file(path, info)
     const relativePath = relative(view.root, view.path).split(sep).map(encodeURIComponent).join('/')
     return {
       kind: 'file', id, path: view.path, name: basename(view.path), format, size: info.size,
@@ -114,6 +117,7 @@ export class WorkspaceFiles {
       const info = await stat(path)
       if (!info.isFile() || info.size > MAX_DOCUMENT_PREVIEW_BYTES) return new Response(null, { status: 413 })
       if (this.views.get(view.id) !== view) return new Response(null, { status: 404 })
+      view.watch.file(path, info)
       const mediaType = previewMediaType(path) ?? 'text/plain'
       const headers = new Headers({
         'Content-Type': mediaType + (/(?:^text\/|json$)/u.test(mediaType) ? '; charset=utf-8' : ''),
@@ -139,8 +143,7 @@ export class WorkspaceFiles {
     if (!view || view.owner !== owner) return
     this.views.delete(id)
     view.abort.abort()
-    view.watcher?.close()
-    clearTimeout(view.timer)
+    view.watch.close()
   }
 
   closeOwner(owner: number): void {
@@ -155,20 +158,6 @@ export class WorkspaceFiles {
     const view = this.views.get(id)
     if (!view || view.owner !== owner) throw new Error('文件视图已关闭，请重新打开')
     return view
-  }
-
-  private observe(view: FileView): void {
-    if (view.watcher || this.views.get(view.id) !== view) return
-    const path = view.kind === 'directory' ? view.path : dirname(view.path)
-    try {
-      view.watcher = watch(path, { persistent: false }, () => {
-        clearTimeout(view.timer)
-        view.timer = setTimeout(() => {
-          if (this.views.get(view.id) === view) view.changed(view.id)
-        }, 150)
-      })
-      view.watcher.on('error', () => { view.watcher?.close(); view.watcher = undefined; view.changed(view.id) })
-    } catch { /* 尚未创建的草稿目录由显式刷新或运行事件重新读取。 */ }
   }
 }
 

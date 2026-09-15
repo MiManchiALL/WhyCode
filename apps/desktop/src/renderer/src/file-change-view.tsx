@@ -31,7 +31,7 @@ export function InlineFileChange({
   added?: number
   removed?: number
 }) {
-  const [wrap, setWrap] = useState(true)
+  const [wrap, setWrap] = useState(false)
   const state = useCheckpointFilePreview(runtimeId, toolUseId, path)
   const copyText = state.status === 'ready'
     ? previewTextForTool(state.preview, toolName)

@@ -64,7 +64,6 @@ export function useWorkspaceFile(runtimeId: string, kind: 'directory' | 'file', 
     if (lastRevision.current === refreshRevision) return
     lastRevision.current = refreshRevision
     if (kind === 'directory') void refresh()
-    else setState(previous => ({ ...previous, changed: true }))
   }, [kind, refreshRevision, refresh])
 
   const reveal = useCallback(() => {
