@@ -1315,12 +1315,12 @@ export function App() {
   const editableBlockId = !interactionBusy && !stopping
     ? editableUserBlockId(blocks)
     : null
-  const attachmentLocked = !runtimeId || stopping
+  const composerDisabled = !runtimeId || stopping
     || sessionTransitionPending
-    || attachmentSubmissionPending
     || deletionBlocksRuntime
-    || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
+  const composerControlsLocked = composerDisabled || attachmentSubmissionPending
+  const attachmentLocked = composerControlsLocked || resumingSessionId !== null
   const sessionNavigationLocked = deletionBlocksRuntime
     || sessionTransitionPending
     || attachmentSubmissionPending
@@ -1996,18 +1996,11 @@ export function App() {
   const currentSession = sessions.find((session) => session.sessionId === sessionIdRef.current)
   const taskTitle = currentSession?.title
     || (blocks.length > 0 ? '当前会话' : '新会话')
-  const composerDisabled = !runtimeId || stopping
-    || sessionTransitionPending
-    || deletionBlocksRuntime
-    || resumingSessionId !== null
-    || checkpointRestoreToolUseId !== null
   const messageEmpty = !input.trim()
     && imageDrafts.length === 0
     && pdfDrafts.length === 0
     && selectedSkills.length === 0
-  const sendDisabled = composerDisabled
-    || attachmentSubmissionPending
-    || messageEmpty
+  const sendDisabled = composerControlsLocked || messageEmpty
   const primaryAction = composerPrimaryAction({ busy, hasDraft: !messageEmpty })
   const contextBaseRef = workspace.mode === 'pending-worktree'
     ? workspace.baseRef
@@ -2215,7 +2208,8 @@ export function App() {
 
                 <footer
                   className={`wc-composer relative p-2.5 ${composerDraft.btwMode ? 'wc-composer-btw' : ''}`}
-                  inert={loadingConversation}
+                  aria-busy={resumingSessionId !== null}
+                  inert={resumingSessionId !== null}
                 >
                   <div hidden={loadingConversation}>
                     {view.pendingQuestion && (
@@ -2265,7 +2259,7 @@ export function App() {
                     <PdfDraftStrip drafts={composerDraft.pdfs} onRemove={removePdfDraft} />
                     <SkillChips
                       skills={composerDraft.skills}
-                      disabled={attachmentLocked}
+                      disabled={composerControlsLocked}
                       onRemove={removeSelectedSkill}
                     />
 
@@ -2301,7 +2295,7 @@ export function App() {
                       onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
                       onBlur={closeSkillMenu}
                       onPaste={pasteAttachments}
-                      disabled={composerDisabled}
+                      disabled={composerDisabled || resumingSessionId !== null}
                       onKeyDown={(event) => {
                         if (handlePickerKeyDown(event)) return
                         if (event.key === 'Escape' && btwMode) {
@@ -2345,12 +2339,11 @@ export function App() {
                     <ComposerToolbar
                       canAttachImages={canAttachImages}
                       canAttachPdfs={canAttachPdfs}
-                      attachmentLocked={attachmentLocked}
-                      configurationLocked={attachmentLocked}
+                      attachmentLocked={composerControlsLocked}
+                      configurationLocked={composerControlsLocked}
                       permissionLocked={
                         sessionTransitionPending
                         || deletionBlocksRuntime
-                        || resumingSessionId !== null
                       }
                       permMode={permMode}
                       consensus={consensus}
@@ -2364,7 +2357,6 @@ export function App() {
                         stopping
                         || sessionTransitionPending
                         || deletionBlocksRuntime
-                        || resumingSessionId !== null
                         || checkpointRestoreToolUseId !== null
                       }
                       sendDisabled={sendDisabled}
