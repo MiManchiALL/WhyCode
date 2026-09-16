@@ -24,14 +24,18 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
     && (document.format === 'html' || document.format === 'markdown' || document.mediaType === 'image/svg+xml')
   const code = document?.format === 'code' || Boolean(hasModes && page.previewMode === 'code')
   const wrap = page.wrap ?? false
+  const changeMode = async (previewMode: 'preview' | 'code') => {
+    if (previewMode === (code ? 'code' : 'preview')) return
+    if (await file.refresh()) onChange({ ...page, previewMode })
+  }
   return <div className="flex min-h-0 flex-1 flex-col">
     <FilePreviewToolbar path={document?.path ?? page.path}>
       {hasModes && (
         <div className="flex shrink-0 rounded-md bg-black/[0.035] p-0.5" aria-label="文件显示方式">
-          <button type="button" className="wc-preview-mode" aria-pressed={!code}
-            onClick={() => onChange({ ...page, previewMode: 'preview' })}>预览</button>
-          <button type="button" className="wc-preview-mode" aria-pressed={code}
-            onClick={() => onChange({ ...page, previewMode: 'code' })}>代码</button>
+          <button type="button" className="wc-preview-mode" aria-pressed={!code} disabled={file.loading}
+            onClick={() => void changeMode('preview')}>预览</button>
+          <button type="button" className="wc-preview-mode" aria-pressed={code} disabled={file.loading}
+            onClick={() => void changeMode('code')}>代码</button>
         </div>
       )}
       {code && <FileWrapButton wrap={wrap} onChange={wrap => onChange({ ...page, wrap })} />}
@@ -62,7 +66,7 @@ function DocumentBody({ document, code, wrap, onOpenExternally }: {
         onClick={onOpenExternally}>用默认应用打开</button>
     </div>
   </FilePreviewMessage>
-  if (code || document.format === 'markdown') return <TextDocument url={document.url} path={document.path} markdown={!code} wrap={wrap} />
+  if (code || document.format === 'markdown') return <TextDocument key={document.url} url={document.url} path={document.path} markdown={!code} wrap={wrap} />
   if (document.format === 'html') return (
     <iframe key={document.url} src={document.url} sandbox="allow-scripts" title={document.name}
       className="min-h-0 w-full flex-1 border-0 bg-white" data-html-preview />

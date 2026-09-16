@@ -6,7 +6,8 @@ import type { PdfAttachment } from '../pdf/types.ts'
 import { clearMcpProjectTrust } from '../mcp/state.ts'
 import type { WorkspaceBinding } from '../workspace/types.ts'
 import { buildLoadedSession } from './chain.ts'
-import { copyForkAttachments, copyForkCheckpoints } from './fork-resources.ts'
+import { copyForkAttachments, copyForkCheckpoints, forkWorkspacePathMapper } from './fork-resources.ts'
+import { forkPresentations } from './fork-presentations.ts'
 import { getSessionPaths, writeMetadata, type SessionPaths } from './metadata.ts'
 import {
   SESSION_SCHEMA_VERSION,
@@ -37,6 +38,7 @@ export async function createSessionFork(
   )
   const sourceWorkspace = buildLoadedSession(sourcePrefix).metadata.workspace
   assertForkWorkspace(sourceWorkspace, input.targetWorkspace)
+  const presentations = forkPresentations(forkWorkspacePathMapper(sourceWorkspace, input.targetWorkspace))
   const entries = sourcePrefix.map((entry) =>
     rehomeEntry(
       entry,
@@ -44,6 +46,7 @@ export async function createSessionFork(
       input.title,
       input.origin,
       input.targetWorkspace,
+      presentations,
     ))
   const loaded = buildLoadedSession(entries)
 
@@ -178,6 +181,7 @@ function rehomeEntry(
   title: string,
   origin: SessionForkOrigin,
   workspace: WorkspaceBinding,
+  presentations: ReturnType<typeof forkPresentations>,
 ): SessionEntry {
   const common = { ...entry, schemaVersion: SESSION_SCHEMA_VERSION, sessionId }
   switch (entry.type) {
@@ -206,6 +210,7 @@ function rehomeEntry(
         ...(entry.toolSteps ? {
           toolSteps: entry.toolSteps.map((step) => ({
             ...step,
+            messages: presentations.messages(step.messages),
             ...(step.pdfAttachments ? {
               pdfAttachments: step.pdfAttachments.map((value) => rehomePdf(value, sessionId)),
             } : {}),
@@ -215,7 +220,7 @@ function rehomeEntry(
     case 'messages':
       return sessionEntrySchema.parse({
         ...common,
-        messages: clearMcpProjectTrust(entry.messages),
+        messages: clearMcpProjectTrust(presentations.messages(entry.messages)),
         ...(entry.attachments
           ? { attachments: entry.attachments.map((value) => rehomeImage(value, sessionId)) }
           : {}),
@@ -227,27 +232,27 @@ function rehomeEntry(
       return sessionEntrySchema.parse({
         ...common,
         rollbackMessages: entry.rollbackMessages
-          ? clearMcpProjectTrust(entry.rollbackMessages)
+          ? clearMcpProjectTrust(presentations.messages(entry.rollbackMessages))
           : null,
       })
     case 'snapshot':
       return sessionEntrySchema.parse({
         ...common,
-        messages: clearMcpProjectTrust(entry.messages),
+        messages: clearMcpProjectTrust(presentations.messages(entry.messages)),
         pendingUserInputs: entry.pendingUserInputs.map((input) =>
           rehomePendingInput(input, sessionId)),
         activeConsensusBaseMessages: entry.activeConsensusBaseMessages
-          ? clearMcpProjectTrust(entry.activeConsensusBaseMessages)
+          ? clearMcpProjectTrust(presentations.messages(entry.activeConsensusBaseMessages))
           : null,
         turnStartMessages: entry.turnStartMessages.map((start) => ({
           ...start,
-          messages: clearMcpProjectTrust(start.messages),
+          messages: clearMcpProjectTrust(presentations.messages(start.messages)),
         })),
       })
     case 'view-events':
       return sessionEntrySchema.parse({
         ...common,
-        events: entry.events.map((event) => rehomeViewEvent(event, sessionId)),
+        events: entry.events.map((event) => rehomeViewEvent(presentations.view(event), sessionId)),
       })
     default:
       return sessionEntrySchema.parse(common)

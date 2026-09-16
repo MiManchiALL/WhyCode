@@ -65,14 +65,7 @@ function rehomeCheckpointManifest(
   sourceWorkspace: WorkspaceBinding,
   targetWorkspace: WorkspaceBinding,
 ): CheckpointManifest {
-  if (sourceWorkspace.mode !== 'managed' || targetWorkspace.mode !== 'managed') {
-    return { ...manifest, sessionId: targetSessionId }
-  }
-  const rebase = (path: string): string => rebasePathWithin(
-    path,
-    sourceWorkspace.workingDirectory,
-    targetWorkspace.workingDirectory,
-  )
+  const rebase = forkWorkspacePathMapper(sourceWorkspace, targetWorkspace)
   return {
     ...manifest,
     sessionId: targetSessionId,
@@ -98,10 +91,15 @@ function rehomeFileState(
   }
 }
 
-function rebasePathWithin(path: string, sourceRoot: string, targetRoot: string): string {
-  const child = relative(resolve(sourceRoot), resolve(path))
-  const outside = child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)
-  return outside ? path : resolve(targetRoot, child)
+/** 只有受管快照复制文件；共享项目、外部文件及相对输入保留原义。 */
+export function forkWorkspacePathMapper(source: WorkspaceBinding, target: WorkspaceBinding): (path: string) => string {
+  if (source.mode !== 'managed' || target.mode !== 'managed') return path => path
+  return path => {
+    if (!isAbsolute(path)) return path
+    const child = relative(resolve(source.workingDirectory), resolve(path))
+    const outside = child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)
+    return outside ? path : resolve(target.workingDirectory, child)
+  }
 }
 
 function collectManifestBlobs(manifest: CheckpointManifest, hashes: Set<string>): void {
