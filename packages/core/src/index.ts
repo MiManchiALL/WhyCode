@@ -93,6 +93,7 @@ export {
 } from './agent/session.ts'
 export {
   CHECKPOINT_FILE_PREVIEW_MAX_BYTES,
+  type CheckpointFileChangesResult,
   type CheckpointFileCurrentMatchResult,
   type CheckpointFilePreview,
   type CheckpointFilePreviewResult,

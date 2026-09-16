@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isPresentableFile } from './document-formats.ts'
 
 export const PRESENT_TOOL_NAME = 'Present'
 const singleLine = (max: number) => z.string().trim().min(1).max(max).regex(/^[^\u0000-\u001f\u007f]+$/u)
@@ -15,9 +16,9 @@ export const presentedSourceSchema = z.object({
 
 export const presentationSchema = z.object({
   files: z.array(z.object({
-    path: singleLine(2048),
+    path: singleLine(2048).refine(isPresentableFile, '只声明可预览的 HTML、Markdown、图片或 PDF 成品；普通文本和代码修改由界面自动汇总'),
     description: singleLine(160).optional(),
-  }).strict()).max(8).describe('本次回答的最终文件；没有则填空数组'),
+  }).strict()).max(8).describe('本次回答可预览的成品文件；没有则填空数组'),
   sources: z.array(presentedSourceSchema).max(16).describe('本次回答实际引用的来源；无需来源则填空数组'),
 }).strict().refine(value => JSON.stringify(value).length <= 32 * 1024, '交付声明过长，请精简路径和说明')
 

@@ -1,8 +1,7 @@
 import type { PresentedFile } from '@whycode/core/presentation'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ArrowUpRight, ChevronDown, ChevronUp, Copy, ExternalLink, FolderOpen, LoaderCircle, MoreHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, ExternalLink, FolderOpen, LoaderCircle, MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { documentFormat } from '../../shared/workspace-files.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { fileIcon } from './file-preview-controls.tsx'
 import { fileName } from './local-files.ts'
@@ -32,7 +31,6 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
 }) {
   const name = fileName(file.path)
   const Icon = fileIcon(name)
-  const previewable = documentFormat(file.path) !== 'unsupported'
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const request = useRef<AbortController | null>(null)
@@ -52,13 +50,12 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
     }
   }
   const open = () => {
-    if (previewable) onOpenFile?.({ kind: 'file', path: file.path, name, source: { kind: 'current' } })
-    else void nativeAction('open')
+    onOpenFile?.({ kind: 'file', path: file.path, name, source: { kind: 'current' }, previewMode: 'preview' })
   }
   return <div className="wc-present-card">
     <button type="button" className="wc-present-open wc-focus-ring" title={file.path}
-      aria-label={`${previewable ? '预览' : '打开'} ${name}`}
-      disabled={pending || (previewable && !onOpenFile)} onClick={open}>
+      aria-label={`预览 ${name}`}
+      disabled={pending || !onOpenFile} onClick={open}>
       <span className="wc-present-icon"><Icon size={20} aria-hidden="true" /></span>
       <span className="wc-present-label">
         <span className="wc-present-name wc-type-control">{name}</span>
@@ -67,7 +64,7 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
           {error ?? file.description ?? (name.includes('.') ? name.split('.').at(-1)!.toUpperCase() : '文件')}
         </span>
       </span>
-      {pending ? <LoaderCircle size={15} className="shrink-0 animate-spin" /> : <ArrowUpRight size={15} className="wc-present-arrow" />}
+      {pending && <LoaderCircle size={15} className="shrink-0 animate-spin" />}
     </button>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>

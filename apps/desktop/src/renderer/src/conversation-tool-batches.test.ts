@@ -410,7 +410,7 @@ function checkpointedTool(
   input: unknown = {},
 ): Extract<Block, { kind: 'tool' }> {
   const block = tool(id, name, input)
-  block.call.createdFileCheckpoint = true
+  block.call.checkpointId = '11111111-1111-4111-8111-111111111111'
   return block
 }
 

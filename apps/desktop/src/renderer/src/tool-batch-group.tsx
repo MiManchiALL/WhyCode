@@ -118,13 +118,14 @@ function ToolBatchRowView({
 }) {
   const failed = row.call.status === 'error'
   const filePreviewPage = row.call.status === 'done'
-    && row.call.createdFileCheckpoint
+    && row.call.checkpointId
     && row.fullPath
     && isFilePreviewToolName(row.call.name)
     ? {
         kind: 'file' as const,
         path: row.fullPath,
         name: row.summary,
+        previewMode: 'code' as const,
         source: {
           kind: 'snapshot' as const,
           toolUseId: row.call.id,

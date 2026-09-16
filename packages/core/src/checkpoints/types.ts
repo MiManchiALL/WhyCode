@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ToolFileChange } from '../tools/file-changes.ts'
 
 export const CHECKPOINT_MANIFEST_VERSION = 1
 
@@ -29,6 +30,10 @@ export interface CheckpointFilePreview {
   before: CheckpointFilePreviewState
   after: CheckpointFilePreviewState
 }
+
+export type CheckpointFileChangesResult =
+  | { ok: true; changes: ToolFileChange[] }
+  | { ok: false; error: string }
 
 export type CheckpointFilePreviewResult =
   | { ok: true; preview: CheckpointFilePreview }

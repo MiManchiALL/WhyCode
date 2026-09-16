@@ -33,6 +33,7 @@ import {
   type RestoreCheckpointResult,
 } from '../checkpoints/manager.ts'
 import type {
+  CheckpointFileChangesResult,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewResult,
   CurrentFilePreviewResult,
@@ -3445,6 +3446,15 @@ export class AgentSession {
       }
     }
     return this.checkpoints.checkRestore(toolUseId, scope)
+  }
+
+  async checkpointFileChanges(checkpointIds: readonly string[]): Promise<CheckpointFileChangesResult> {
+    if (!this.checkpoints) return { ok: false, error: '当前会话没有文件检查点' }
+    try {
+      return { ok: true, changes: await this.checkpoints.fileChanges(checkpointIds) }
+    } catch (error) {
+      return { ok: false, error: `文件改动读取失败：${error instanceof Error ? error.message : String(error)}` }
+    }
   }
 
   async checkpointFilePreview(

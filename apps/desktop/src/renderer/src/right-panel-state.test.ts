@@ -217,3 +217,15 @@ it('目录展开与文件显示偏好按会话保存，打开同一文件保留�
   assert.deepEqual(restored.get('b'), emptyState())
   assert.deepEqual(restored.get('a').tabs[0]?.page, { kind: 'workspace', expanded: ['src', 'src/main'] })
 })
+
+it('工具与交付入口显式选择代码和预览，仍复用同一文件标签及换行偏好', () => {
+  const page = { kind: 'file', path: 'C:/repo/index.html', name: 'index.html', source: { kind: 'current' } } as const
+  let state = openRightPanelPage(emptyState(), { ...page, wrap: true, previewMode: 'preview' })
+  state = openRightPanelPage(state, { ...page, previewMode: 'code', source: { kind: 'snapshot', toolUseId: 't', toolName: 'WriteFile' } })
+  assert.equal(state.tabs.length, 1)
+  const current = activeRightPanelPage(state)
+  assert.ok(current?.kind === 'file')
+  assert.equal(current.previewMode, 'code')
+  state = openRightPanelPage(state, { ...page, previewMode: 'preview' })
+  assert.deepEqual(activeRightPanelPage(state), { ...page, previewMode: 'preview', wrap: true })
+})

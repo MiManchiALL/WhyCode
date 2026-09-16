@@ -17,6 +17,8 @@ import { IPC } from '../shared/ipc.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type {
+  CheckpointFileChangesRequest,
+  CheckpointFileChangesResult,
   CheckpointFileCurrentMatchRequest,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewRequest,
@@ -216,6 +218,8 @@ const api = {
     subagentId: string,
   ): Promise<SubagentTranscriptSnapshot> =>
     ipcRenderer.invoke(IPC.subagentTranscript, parentSessionId, subagentId),
+  checkpointFileChanges: (request: CheckpointFileChangesRequest): Promise<CheckpointFileChangesResult> =>
+    ipcRenderer.invoke(IPC.checkpointFileChanges, request),
   checkpointFilePreview: (
     request: CheckpointFilePreviewRequest,
   ): Promise<CheckpointFilePreviewResult> =>

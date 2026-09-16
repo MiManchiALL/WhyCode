@@ -151,6 +151,8 @@ import {
   userMessageNeedsAttachmentPreparation,
 } from './user-message-attachments.ts'
 import type {
+  CheckpointFileChangesRequest,
+  CheckpointFileChangesResult,
   CheckpointFileCurrentMatchRequest,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewRequest,
@@ -2963,6 +2965,17 @@ if (primaryInstance) void app.whenReady().then(async () => {
     parentSessionId: string,
     subagentId: string,
   ) => subagents.transcript(parentSessionId, subagentId))
+  ipcMain.handle(IPC.checkpointFileChanges, (
+    _e, request: CheckpointFileChangesRequest,
+  ): Promise<CheckpointFileChangesResult> => {
+    if (!request || typeof request.runtimeId !== 'string' || !Array.isArray(request.checkpointIds)
+      || !request.checkpointIds.every(id => typeof id === 'string')) {
+      return Promise.resolve({ ok: false, error: '文件改动请求无效' })
+    }
+    const session = runtimeRegistry.get(request.runtimeId)?.session
+    return session ? session.checkpointFileChanges(request.checkpointIds)
+      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+  })
   ipcMain.handle(IPC.checkpointFilePreview, (
     _e,
     request: CheckpointFilePreviewRequest,

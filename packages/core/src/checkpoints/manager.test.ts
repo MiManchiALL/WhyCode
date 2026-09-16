@@ -14,6 +14,36 @@ afterEach(async () => {
 })
 
 describe('持久化资源检查点', () => {
+  it('回答摘要按所选检查点的首尾状态计算，后续写入和回滚不改写历史', async () => {
+    const env = await createEnvironment()
+    const path = join(env.project, 'summary.ts')
+    const other = join(env.project, 'other.ts')
+    await writeFile(path, 'original\n')
+    const first = await change('first', [path, other], ['original\n1\n2\n3\n4\n5\n', 'other\n'])
+    const second = await change('second', [path], ['original\n'])
+    const last = await change('last', [path], ['replacement\n'])
+    assert.deepEqual(await env.manager.fileChanges([first.id, second.id]), [{ path: other, added: 1, removed: 0 }])
+    assert.deepEqual(await env.manager.fileChanges([second.id, first.id, first.id]), [{ path: other, added: 1, removed: 0 }])
+    assert.deepEqual(await env.manager.fileChanges([first.id, last.id]), [
+      { path, added: 1, removed: 1 }, { path: other, added: 1, removed: 0 },
+    ])
+    assert.deepEqual(await env.manager.fileChanges([last.id]), [{ path, added: 1, removed: 1 }])
+    assert.equal((await env.manager.restore('first', 'files')).ok, true)
+    assert.deepEqual(await env.manager.fileChanges([first.id, second.id]), [{ path: other, added: 1, removed: 0 }])
+    assert.deepEqual(await managerFor(env).fileChanges([last.id]), [{ path, added: 1, removed: 1 }])
+    await assert.rejects(env.manager.fileChanges([randomUUID()]), /检查点不可用/)
+    await assert.rejects(env.manager.fileChanges(['../outside']), /无效检查点/)
+
+    async function change(toolUseId: string, paths: string[], contents: string[]) {
+      const prepared = await env.manager.prepare(toolUseId, toolUseId, { kind: 'exact-files', paths })
+      assert.ok(prepared)
+      await Promise.all(paths.map((path, index) => writeFile(path, contents[index]!)))
+      const ready = await env.manager.finalize(prepared)
+      assert.ok(ready)
+      return ready
+    }
+  })
+
   it('同一 turn 比较首次 before 与最新 after，追加后删回原样不留下净变化', async () => {
     const env = await createEnvironment()
     const path = join(env.project, 'net.ts')

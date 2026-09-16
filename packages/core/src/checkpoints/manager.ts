@@ -180,33 +180,46 @@ export class CheckpointManager {
 
   /** 只重算本次落盘路径；基线复用同一 turn 首次修改前的 blob，不累加编辑次数。 */
   async turnFileChanges(manifest: CheckpointManifest): Promise<Map<string, ToolFileChange | null>> {
-    const baselines = new Map<string, FileState>()
-    for (const previous of await this.store.list()) {
-      if (
-        previous.turnId !== manifest.turnId || previous.sequence > manifest.sequence
-        || previous.status !== 'ready' || previous.coverage !== 'complete'
-      ) continue
-      for (const resource of previous.resources) {
+    const manifests = (await this.store.list()).filter(previous =>
+      previous.turnId === manifest.turnId && previous.sequence <= manifest.sequence
+      && previous.status === 'ready' && previous.coverage === 'complete')
+    return this.compareFileChanges(manifests, new Set(manifest.resources.map(resource => pathKey(resource.path))))
+  }
+
+  /** 按可见工具的检查点读取历史净差异，不访问当前工作区，也不扫描其它会话。 */
+  async fileChanges(checkpointIds: readonly string[]): Promise<ToolFileChange[]> {
+    const manifests: CheckpointManifest[] = []
+    for (const id of new Set(checkpointIds)) {
+      const manifest = await this.store.get(id)
+      if (!manifest || manifest.status === 'pending' || manifest.coverage !== 'complete') {
+        throw new Error('该回答的文件检查点不可用')
+      }
+      manifests.push(manifest)
+    }
+    manifests.sort((left, right) => left.sequence - right.sequence)
+    return [...(await this.compareFileChanges(manifests)).values()].filter(change => change !== null)
+  }
+
+  private async compareFileChanges(manifests: readonly CheckpointManifest[], paths?: ReadonlySet<string>): Promise<Map<string, ToolFileChange | null>> {
+    const resources = new Map<string, CheckpointResource>()
+    for (const manifest of manifests) {
+      for (const resource of manifest.resources) {
         const key = pathKey(resource.path)
-        if (!baselines.has(key)) baselines.set(key, resource.before)
+        if (paths && !paths.has(key)) continue
+        resources.set(key, { ...resource, before: resources.get(key)?.before ?? resource.before })
       }
     }
     const changes = new Map<string, ToolFileChange | null>()
-    for (const resource of manifest.resources) {
-      const key = pathKey(resource.path)
-      const before = baselines.get(key)
+    for (const [key, resource] of resources) {
       changes.set(key, null)
-      if (!before || !resource.after || sameFileState(before, resource.after)) continue
+      if (!resource.after || sameFileState(resource.before, resource.after)) continue
       const [left, right] = await Promise.all([
-        readFileStatePreview(before, this.store.blobDir),
+        readFileStatePreview(resource.before, this.store.blobDir),
         readFileStatePreview(resource.after, this.store.blobDir),
       ])
       if (left.kind === 'unavailable' || right.kind === 'unavailable') continue
-      changes.set(key, describeFileChange(
-        resource.path,
-        left.kind === 'text' ? left.content : '',
-        right.kind === 'text' ? right.content : '',
-      ))
+      changes.set(key, describeFileChange(resource.path,
+        left.kind === 'text' ? left.content : '', right.kind === 'text' ? right.content : ''))
     }
     return changes
   }

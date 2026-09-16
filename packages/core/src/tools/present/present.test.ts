@@ -62,9 +62,15 @@ describe('Present 文件和来源声明', () => {
     for (const url of ['javascript:alert(1)', 'file:///a', 'https://user:secret@example.com', 'not-url']) {
       assert.equal((await validateToolInput(presentTool, { files: [], sources: [{ title: '来源', url }] })).success, false)
     }
-    assert.equal(presentationSchema.safeParse({ files: Array(9).fill({ path: 'a' }), sources: [] }).success, false)
+    assert.equal(presentationSchema.safeParse({ files: Array(9).fill({ path: 'a.html' }), sources: [] }).success, false)
     assert.equal(presentationSchema.safeParse({ files: [], sources: [], ignored: true }).success, false)
+    for (const path of ['notes.txt', 'app.ts', 'data.json', 'report.docx', 'slides.pptx', 'archive.zip']) {
+      assert.equal((await validateToolInput(presentTool, { files: [{ path }], sources: [] })).success, false)
+    }
+    for (const path of ['index.HTML', 'report.md', 'chart.svg', 'photo.png', 'book.pdf']) {
+      assert.equal((await validateToolInput(presentTool, { files: [{ path }], sources: [] })).success, true)
+    }
     assert.equal(readPresentationResult('{"files":['), null)
-    assert.equal(presentationSchema.safeParse({ files: Array(8).fill({ path: 'a'.repeat(2048) }), sources: Array(16).fill({ title: 'a', url: 'https://example.com/' + 'a'.repeat(2000) }) }).success, false)
+    assert.equal(presentationSchema.safeParse({ files: Array(8).fill({ path: 'a'.repeat(2043) + '.html' }), sources: Array(16).fill({ title: 'a', url: 'https://example.com/' + 'a'.repeat(2000) }) }).success, false)
   })
 })

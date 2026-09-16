@@ -2,6 +2,7 @@ import type {
   AgentStatus,
   ApprovalRequest,
   BackgroundTaskState,
+  CheckpointFileChangesResult,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewResult,
   CoreCommand,
@@ -101,6 +102,11 @@ export interface RuntimeCommandEnvelope {
   command: CoreCommand
 }
 
+export interface CheckpointFileChangesRequest {
+  runtimeId: string
+  checkpointIds: string[]
+}
+
 export interface CheckpointFilePreviewRequest {
   runtimeId: string
   toolUseId: string
@@ -112,6 +118,7 @@ export interface CheckpointFilePreviewRequest {
 export type CheckpointFileCurrentMatchRequest = CheckpointFilePreviewRequest
 
 export type {
+  CheckpointFileChangesResult,
   CheckpointFileCurrentMatchResult,
   CheckpointFilePreviewResult,
 }

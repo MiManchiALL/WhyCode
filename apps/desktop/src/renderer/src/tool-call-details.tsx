@@ -22,7 +22,7 @@ export function ToolCallDetails({
 }) {
   if (
     call.status === 'done'
-    && call.createdFileCheckpoint
+    && call.checkpointId
     && isFilePreviewToolName(call.name)
     && call.name !== 'MoveFile'
   ) {

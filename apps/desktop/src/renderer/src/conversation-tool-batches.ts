@@ -218,9 +218,9 @@ export function toolCallFileRows(call: ToolCall, projectDir: string | null): Too
 }
 
 export function toolCategory(
-  call: Pick<ToolCall, 'name' | 'createdFileCheckpoint'>,
+  call: Pick<ToolCall, 'name' | 'checkpointId'>,
 ): ToolBatchCategory {
-  if (call.createdFileCheckpoint || FILE_PATH_ROW_TOOL_NAMES.has(call.name)) return 'files'
+  if (call.checkpointId || FILE_PATH_ROW_TOOL_NAMES.has(call.name)) return 'files'
   return call.name === 'RunCommand' ? 'command' : 'other'
 }
 

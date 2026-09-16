@@ -1,10 +1,11 @@
+import { IMAGE_MEDIA_TYPES, type DocumentFormat } from '@whycode/core/document-formats'
+export { documentFormat, type DocumentFormat } from '@whycode/core/document-formats'
+
 export const PREVIEW_SCHEME = 'whycode-preview'
 export const MAX_PREVIEW_VIEWS = 64
 export const DIRECTORY_PAGE_SIZE = 200
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 export const MAX_DOCUMENT_PREVIEW_BYTES = 64 * 1024 * 1024
-
-export type DocumentFormat = 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'unsupported'
 
 export interface DirectoryEntry {
   name: string
@@ -51,25 +52,11 @@ export interface WorkspaceFileChange {
   id: string
 }
 
-const IMAGE_TYPES: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-  webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif',
-}
 const ASSET_TYPES: Record<string, string> = {
-  ...IMAGE_TYPES, html: 'text/html', htm: 'text/html', css: 'text/css',
+  ...IMAGE_MEDIA_TYPES, html: 'text/html', htm: 'text/html', css: 'text/css',
   js: 'text/javascript', mjs: 'text/javascript', json: 'application/json',
   woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
   pdf: 'application/pdf',
-}
-
-export function documentFormat(path: string): DocumentFormat {
-  const extension = path.split('.').at(-1)?.toLowerCase() ?? ''
-  if (Object.hasOwn(IMAGE_TYPES, extension)) return 'image'
-  if (extension === 'html' || extension === 'htm') return 'html'
-  if (extension === 'md' || extension === 'markdown') return 'markdown'
-  if (extension === 'pdf') return 'pdf'
-  if (/^(docx?|pptx?|xlsx?|odt|odp|ods|zip|7z|rar|exe|dll|msi|sqlite|db|mp[34]|mov|webm|wav|ogg)$/u.test(extension)) return 'unsupported'
-  return 'code'
 }
 
 export function previewMediaType(path: string): string | null {

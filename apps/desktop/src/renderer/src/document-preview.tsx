@@ -21,7 +21,7 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
   const file = useWorkspaceFile(runtimeId, 'file', page.path)
   const document = file.view?.kind === 'file' ? file.view : null
   const hasModes = document && document.size <= MAX_TEXT_PREVIEW_BYTES
-    && (document.format === 'html' || document.format === 'markdown')
+    && (document.format === 'html' || document.format === 'markdown' || document.mediaType === 'image/svg+xml')
   const code = document?.format === 'code' || Boolean(hasModes && page.previewMode === 'code')
   const wrap = page.wrap ?? false
   return <div className="flex min-h-0 flex-1 flex-col">

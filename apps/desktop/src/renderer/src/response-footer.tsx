@@ -2,6 +2,7 @@ import type { Block } from '../../shared/conversation-state.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { MessageActions } from './message-actions.tsx'
 import { PresentedFiles } from './presented-files.tsx'
+import { ResponseFileChanges } from './response-file-changes.tsx'
 import { SourceCapsule } from './source-capsules.tsx'
 import { copyResponseText, responsePresentation } from './response-presentation.ts'
 
@@ -18,6 +19,7 @@ export function ResponseFooter({ runtimeId, activity, final, onOpenFile, onFork,
   const presentation = responsePresentation(activity)
   return <div className="px-1 pb-2" data-response-footer>
     {presentation?.files.length ? <PresentedFiles files={presentation.files} runtimeId={runtimeId} onOpenFile={onOpenFile} /> : null}
+    <ResponseFileChanges runtimeId={runtimeId} activity={activity} files={presentation?.files ?? []} />
     {presentation?.sources.length ? (
       <div className="wc-source-list" role="list" aria-label="来源">
         {presentation.sources.map(source => <div className="wc-source-item" role="listitem" key={source.url}>

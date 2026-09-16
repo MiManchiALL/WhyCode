@@ -19,6 +19,7 @@ export const IPC = {
   subagentEvent: 'whycode:subagent-event',
   /** Renderer → Main：按父会话所有权读取一个子代理的只读 transcript。 */
   subagentTranscript: 'whycode:subagent-transcript',
+  checkpointFileChanges: 'whycode:checkpoint-file-changes',
   /** Renderer → Main：按当前会话检查点读取一个文件工具的前后版本。 */
   checkpointFilePreview: 'whycode:checkpoint-file-preview',
   /** Renderer → Main：判断一个操作后快照是否等于当前路径状态。 */
