@@ -1,7 +1,7 @@
-import { File, FileCode2, FileImage, Folder, FolderOpen, RefreshCw } from 'lucide-react'
+import { Folder, FolderOpen, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
-import { documentFormat, MAX_PREVIEW_VIEWS, type DirectoryEntry } from '../../shared/workspace-files.ts'
-import { FilePreviewToolbar } from './file-preview-controls.tsx'
+import { MAX_PREVIEW_VIEWS, type DirectoryEntry } from '../../shared/workspace-files.ts'
+import { fileIcon, FilePreviewToolbar } from './file-preview-controls.tsx'
 import { useWorkspaceFile } from './use-workspace-file.ts'
 import { useScrollArea } from './use-scroll-area.ts'
 
@@ -64,11 +64,4 @@ function DirectoryRow(props: BrowserProps & { revision: string; entry: Directory
     </button>
     {isDirectory && expanded && <ul className="ml-3 border-l border-[var(--wc-line)] pl-1"><DirectoryLevel {...props} path={entry.path} /></ul>}
   </li>
-}
-
-function fileIcon(name: string) {
-  const format = documentFormat(name)
-  if (format === 'image') return FileImage
-  if (format === 'html' || format === 'code') return FileCode2
-  return File
 }

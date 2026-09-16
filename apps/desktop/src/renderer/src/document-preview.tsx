@@ -47,13 +47,21 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
       </button>
     </FilePreviewToolbar>
     {file.error ? <FilePreviewMessage>{file.error}</FilePreviewMessage> : document ? (
-      <DocumentBody document={document} code={code} wrap={wrap} />
+      <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally} />
     ) : <FilePreviewMessage>正在读取文件…</FilePreviewMessage>}
   </div>
 }
 
-function DocumentBody({ document, code, wrap }: { document: WorkspaceDocument; code: boolean; wrap: boolean }) {
-  if (!document.url) return <FilePreviewMessage>此文件暂不支持内嵌预览，可在文件夹中打开</FilePreviewMessage>
+function DocumentBody({ document, code, wrap, onOpenExternally }: {
+  document: WorkspaceDocument; code: boolean; wrap: boolean; onOpenExternally: () => void
+}) {
+  if (!document.url) return <FilePreviewMessage>
+    <div>
+      <p>此文件暂不支持内嵌预览</p>
+      <button type="button" className="wc-focus-ring mt-3 rounded-lg border border-[var(--wc-line)] px-3 py-1.5 text-[var(--wc-ink)]"
+        onClick={onOpenExternally}>用默认应用打开</button>
+    </div>
+  </FilePreviewMessage>
   if (code || document.format === 'markdown') return <TextDocument url={document.url} path={document.path} markdown={!code} wrap={wrap} />
   if (document.format === 'html') return (
     <iframe key={document.url} src={document.url} sandbox="allow-scripts" title={document.name}

@@ -1,4 +1,5 @@
 import type { ToolDefinition } from './tool.ts'
+import { presentTool } from './present/index.ts'
 import { readFileTool } from './read-file/index.ts'
 import { listDirTool, globTool } from './list-glob/index.ts'
 import { grepTool } from './grep/index.ts'
@@ -18,4 +19,5 @@ export const BUILTIN_TOOLS: readonly ToolDefinition<any>[] = [
   deleteFileTool,
   moveFileTool,
   runCommandTool,
+  presentTool,
 ]

@@ -9,8 +9,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { Copy, ExternalLink, FileText, GitBranch, Globe2 } from 'lucide-react'
+import { SourceIcon } from './source-capsules.tsx'
 import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import {
@@ -19,13 +18,10 @@ import {
   normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 import {
-  externalSourcesFromList,
   findSourceCapsule,
   isInlineSourceLabel,
   normalizeSourceUrl,
   sourceKindForUrl,
-  type MarkdownSource,
-  type SourceKind,
 } from './markdown-sources.ts'
 
 const MARKDOWN_CONTROLS = { table: { fullscreen: false } } as const
@@ -76,23 +72,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 
   const components = useMemo<Components>(() => ({
     ul: ({ node, className, children, ...props }) => {
-      const sources = externalSourcesFromList(node)
-      if (!sources) {
-        return (
-          <MarkdownUnorderedList {...props} node={node} className={className}>
-            {children}
-          </MarkdownUnorderedList>
-        )
-      }
-      return (
-        <div className="wc-source-list" role="list" aria-label="来源">
-          {sources.map((source, index) => (
-            <div className="wc-source-item" role="listitem" key={`${source.url}:${index}`}>
-              <SourceCapsule source={source} />
-            </div>
-          ))}
-        </div>
-      )
+      return <MarkdownUnorderedList {...props} node={node} className={className}>{children}</MarkdownUnorderedList>
     },
     a: ({ node: _node, children, className, href, onClick, ...props }) => {
       const sourceUrl = normalizeSourceUrl(href)
@@ -166,62 +146,6 @@ function useDeferredStaticMarkdown(streaming: boolean): boolean {
     return () => window.clearTimeout(id)
   }, [ready, streaming])
   return ready
-}
-
-function SourceIcon({ kind }: { kind: SourceKind }) {
-  const Icon = kind === 'git' ? GitBranch : kind === 'document' ? FileText : Globe2
-  return <Icon className="wc-source-link-icon" aria-hidden="true" />
-}
-
-function SourceCapsule({ source }: { source: MarkdownSource }) {
-  const copyLink = () => {
-    void navigator.clipboard.writeText(source.url).catch(() => undefined)
-  }
-
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <button
-          type="button"
-          className="wc-source-capsule"
-          data-source-capsule-url={source.url}
-          aria-label={`查看来源：${source.title}`}
-        >
-          <SourceIcon kind={source.kind} />
-          <span className="wc-source-label">{source.title}</span>
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          className="wc-menu-content wc-source-menu-content"
-          align="start"
-          sideOffset={6}
-          collisionPadding={8}
-        >
-          <DropdownMenu.Label className="wc-source-menu-heading">
-            <span className="wc-source-menu-icon" aria-hidden="true">
-              <SourceIcon kind={source.kind} />
-            </span>
-            <span className="wc-source-menu-summary">
-              <span className="wc-source-menu-title">{source.title}</span>
-              <span className="wc-source-menu-domain">{source.domain}</span>
-            </span>
-          </DropdownMenu.Label>
-          <DropdownMenu.Separator className="wc-source-menu-separator" />
-          <DropdownMenu.Item asChild className="wc-menu-item">
-            <a href={source.url} target="_blank" rel="noreferrer noopener">
-              <ExternalLink size={14} aria-hidden="true" />
-              打开来源
-            </a>
-          </DropdownMenu.Item>
-          <DropdownMenu.Item className="wc-menu-item" onSelect={copyLink}>
-            <Copy size={14} aria-hidden="true" />
-            复制链接
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  )
 }
 
 function textFromChildren(children: ReactNode): string {

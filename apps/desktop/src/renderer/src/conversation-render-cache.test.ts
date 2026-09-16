@@ -9,7 +9,6 @@ import {
 
 const onCheckpointRestoreRequest = async () => true
 const onEdit = async () => true
-const onFork = () => {}
 const onToggle = () => {}
 
 function props(block: Block): ConversationBlockRenderProps {
@@ -23,15 +22,11 @@ function props(block: Block): ConversationBlockRenderProps {
     checkpointRestorePending: false,
     streamingAssistantText: false,
     renderMath: true,
-    showAssistantActions: false,
-    forkTurnId: null,
-    forkPending: false,
     skills: [],
     projectDir: 'E:\\Agent\\WhyCode',
     onCheckpointRestoreRequest,
     onEdit,
-    onFork,
-    onToggle,
+      onToggle,
   }
 }
 

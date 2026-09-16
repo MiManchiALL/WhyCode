@@ -10,7 +10,6 @@ import type { Block } from '../../shared/conversation-state.ts'
 import { CandidateCard, PeerCard } from './consensus-blocks.tsx'
 import { formatFinishedWorkTime } from './processing-time.ts'
 import { UserMessageCard } from './user-message-card.tsx'
-import { MessageActions } from './message-actions.tsx'
 import { MarkdownContent } from './markdown-content.tsx'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { StreamingPlainText } from './streaming-plain-text.tsx'
@@ -30,10 +29,6 @@ export function BlockView({
   onCheckpointRestoreRequest,
   onEdit,
   onToggle,
-  showAssistantActions,
-  forkTurnId,
-  forkPending,
-  onFork,
   skills,
   projectDir,
 }: {
@@ -49,10 +44,6 @@ export function BlockView({
   onCheckpointRestoreRequest: CheckpointRestoreRequest
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
   onToggle: () => void
-  showAssistantActions: boolean
-  forkTurnId: string | null
-  forkPending: boolean
-  onFork: (turnId: string) => void
   skills: readonly SkillSummary[]
   projectDir: string | null
 }) {
@@ -71,7 +62,7 @@ export function BlockView({
   if (block.kind === 'text') {
     return (
       <div
-        className={`group max-w-none px-1 py-1 ${showAssistantActions ? 'mb-2' : 'mb-4'}`}
+        className="mb-4 max-w-none px-1 py-1"
         data-conversation-scroll-block={block.id}
       >
         <div className="wc-conversation-copy max-w-none">
@@ -81,15 +72,6 @@ export function BlockView({
             renderMath={renderMath}
           />
         </div>
-        {showAssistantActions ? (
-          <MessageActions
-            timestamp={block.timestamp}
-            text={block.text}
-            className="mt-1"
-            onFork={forkTurnId && !busy ? () => onFork(forkTurnId) : undefined}
-            forkPending={forkPending}
-          />
-        ) : null}
       </div>
     )
   }

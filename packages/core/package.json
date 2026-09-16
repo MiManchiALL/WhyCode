@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./btw": "./src/session/btw.ts",
     "./events": "./src/events.ts",
+    "./presentation": "./src/presentation.ts",
     "./image-limits": "./src/attachments/limits.ts",
     "./office": "./src/office/index.ts",
     "./skills": "./src/skills/types.ts",

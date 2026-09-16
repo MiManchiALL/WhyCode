@@ -28,6 +28,12 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
     const owner = BrowserWindow.fromWebContents(event.sender)
     if (owner && event.senderFrame === event.sender.mainFrame && typeof id === 'string') files.close(owner.id, id)
   })
+  ipcMain.handle(IPC.openWorkspaceFileExternally, async (event, id: unknown) => {
+    const owner = fileWindow(event)
+    if (typeof id !== 'string') throw new Error('文件路径无效')
+    const error = await shell.openPath(files.pathFor(owner.id, id))
+    if (error) throw new Error(error)
+  })
   ipcMain.handle(IPC.revealWorkspaceFile, (event, id: unknown) => {
     const owner = fileWindow(event)
     if (typeof id !== 'string') throw new Error('文件路径无效')

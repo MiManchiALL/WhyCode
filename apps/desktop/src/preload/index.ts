@@ -230,6 +230,7 @@ const api = {
     ipcRenderer.invoke(IPC.readWorkspaceFile, request),
   closeWorkspaceFile: (id: string): void => ipcRenderer.send(IPC.closeWorkspaceFile, id),
   revealWorkspaceFile: (id: string): Promise<void> => ipcRenderer.invoke(IPC.revealWorkspaceFile, id),
+  openWorkspaceFileExternally: (id: string): Promise<void> => ipcRenderer.invoke(IPC.openWorkspaceFileExternally, id),
   onWorkspaceFileChanged: (callback: (change: WorkspaceFileChange) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, change: WorkspaceFileChange) => callback(change)
     ipcRenderer.on(IPC.workspaceFileChanged, listener)

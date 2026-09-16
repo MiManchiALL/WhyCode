@@ -135,7 +135,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 消息顺序为：按 Main 相同规则投影的稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入及其 `<whycode-btw version="1">` 内部 user 提醒。提醒是宿主状态，不是新的用户要求；工具续轮沿用原提醒，BBTW 重建每轮输入时保留提醒原位，再追加新输入与提醒。Skill 目录继续参与前缀投影，活动正文仍遵循根任务生命周期。停止轮次在原输入及提醒、已提交工具步骤和可用回复片段后追加与 Main 相同的中断标记。
 
-允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind，名单与提示词共用 `packages/core/src/prompts/btw.ts`。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
+允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
 
 `edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
 
@@ -202,6 +202,7 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 | `WriteCommandInput` | 给仍存活命令写 stdin；按 execute 权限处理 |
 | `StopCommand` | 终止所属进程树；属于保护性控制 |
 | `AskUserQuestion` | `{questions:[...]}`，1～6 问；每题标题、问题与 2～4 个互斥选项 |
+| `Present` | `{files:[{path,description?}],sources:[{title,url}]}`；声明本次最终回答的文件与来源，精确约束见 §3.9 |
 | `Skill` | `{skillId,resourcePath?}`；只读当前根任务冻结 Skill |
 | `Subagent` | `{agent_id,description,prompt}`；异步启动并立即返回稳定 UUID |
 | `SendSubagentMessage` | `{subagent_id,prompt}`；仅继续当前父会话已终态子代理 |
@@ -239,7 +240,7 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 
 `WebFind {url,pattern,context=2,max_results=10}` 只在本会话已缓存的同一 WebFetch 正文中做字面查找，不联网、不重新抓取、不查 PDF。
 
-普通公开读取失败，或用户明确需要授权/登录/私有数据时，再用 `ToolSearch` 查对应 MCP 能力。研究类最终交付在关键结论附近引用真实 URL，并在末尾去重列出来源；执行任务中的中间查证无需强制输出引用。
+普通公开读取失败，或用户明确需要授权/登录/私有数据时，再用 `ToolSearch` 查对应 MCP 能力。研究类最终交付在关键结论附近使用 `[来源](实际URL)`，并在最终回答前用 `Present` 声明对应来源；不再另写末尾 Markdown 来源列表，执行任务中的中间查证不列来源。声明契约见 §3.9。
 
 ### 3.5 MCP
 
@@ -273,6 +274,16 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 - `RenderOffice {path,view="pages",startPage=1,pageCount=4}`：只给视觉 Main且独占步骤；pages 最多 4 页，overview 最多 50 页合成一图。
 
 创建/修改前必须读取当前 Office Skill 的 builder API；模板 PPTX 还需读取 template-following 规则。接口失败应修正同一 builder，不切换到命令或手写 OOXML 的第二实现。含公式 XLSX 只有真实 Office/LibreOffice 引擎重算、保存并复检成功后发布。非视觉 Main 只能声明结构检查；视觉 Main 还要对最终版本完成全页渲染复核。
+
+### 3.9 最终交付声明
+
+单源 schema 为 `packages/core/src/presentation.ts`，执行位于 `tools/present/`。`Present` 是只读元数据工具，不生成文件、不打开预览、不访问来源网页，也不结束运行；模型仍须随后输出最终正文。工具声明与提示词固定，Main 与 BTW 共用同一 schema。
+
+- `files` 与 `sources` 均必填，无对应内容时使用 `[]`。文件最多 8 项，来源最多 16 项，JSON 序列化后不超过 32 Ki 字符；路径及 URL 最多 2048 字符、文件说明最多 160 字符、来源标题最多 200 字符，文字字段非空且不得含控制字符。
+- 文件仅列已写入并核验的主要成品，包含命令生成的产物；不列依赖、临时脚本和普通代码修改。路径通过既有 `extractPaths` 与 `resolveAllowed` 权限边界校验，须为可读普通文件，不接受目录或链接；成功结果返回绝对路径并按平台路径语义去重。声明不保存文件副本，用户打开时读取当前版本。
+- 只有最终交付是调研、搜索、资料汇总或事实比较时才声明实际引用的来源。来源须为无内嵌凭据的 HTTP(S) URL，按完整规范 URL 去重并保留片段标识；正文引用须与声明匹配。
+- 每次成功调用提交本次回答的完整声明，替换此前成功声明；失败不覆盖，两个空数组显式清空。没有成品与来源时不调用。模型无需重复生成末尾文件或来源列表。
+- 声明复用成功工具结果，随现有 canonical 工具步骤提交、丢弃、持久化与回放；不增加 CoreEvent、会话 schema 或独立交付文件。展示仅属于同一工作分组的正常完成回答，不能从调用输入、失败结果或其它回答推测交付完成。BTW 声明留在侧链工具步骤中，不进入 Main 历史。
 
 ## 4. 上下文压缩契约
 
@@ -412,11 +423,11 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 
 ### 7.3 桌面文件浏览
 
-类型与边界单源为 `apps/desktop/src/shared/workspace-files.ts`，实现位于 Main 的 `workspace-files.ts` 与 `workspace-files-ipc.ts`。仅所属窗口的主 Frame 可创建、读取、关闭和定位文件视图：
+类型与边界单源为 `apps/desktop/src/shared/workspace-files.ts`，实现位于 Main 的 `workspace-files.ts` 与 `workspace-files-ipc.ts`。仅所属窗口的主 Frame 可创建、读取、关闭、定位或用默认应用打开文件视图：
 
 - `openWorkspaceFile({runtimeId,kind,path})` 从运行时解析工作目录。目录路径相对工作目录；文件使用明确打开的绝对路径，目录外文件的静态资源范围限于其父目录。返回一次性视图 ID、目录项或文档元数据及预览地址，不通过 IPC 返回正文。
 - `readWorkspaceFile({id,offset?})` 只接受当前窗口持有的视图；目录每页最多 200 项，每个窗口最多 64 个活动视图。目录项区分目录、普通文件和不可浏览的链接/特殊项。
-- `workspaceFileChanged({id})` 只发给资源所属窗口；文件视图仅在正文或已读取依赖的版本改变时通知，目录视图按目录变化通知。`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径。视图 ID 与预览地址均不持久化。
+- `workspaceFileChanged({id})` 只发给资源所属窗口；文件视图仅在正文或已读取依赖的版本改变时通知，目录视图按目录变化通知。`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径，`openWorkspaceFileExternally(id)` 用系统默认应用打开该路径并返回失败原因；两者只接受所属窗口的活动视图 ID，不接受 Renderer 提供的原始路径。视图 ID 与预览地址均不持久化。
 - `whycode-preview` 仅处理 GET/HEAD，支持单段字节范围。普通文本预览上限 2 MiB，文档与静态资源上限 64 MiB；不支持的类型只返回元数据。HTML 代码视图同样受文本上限约束。
 - 每次读取以真实路径检查资源范围；禁止目录链接逃逸、特殊文件、相关隐藏文件和非静态资源。HTML 使用独立 sandbox，预览脚本不能访问宿主 API。关闭视图后其地址失效，不能借旧地址继续读取文件。
 

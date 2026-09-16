@@ -1,4 +1,5 @@
 import type { SkillSummary } from '@whycode/core/skills'
+import { ResponseFooter } from './response-footer.tsx'
 import { GitFork } from 'lucide-react'
 import { memo, useDeferredValue, useLayoutEffect, useRef } from 'react'
 import { SessionLoading } from './session-loading.tsx'
@@ -292,27 +293,25 @@ function WorkSection({
               ))}
         </div>
       )}
-      {section.finalBlocks.map((block, index) => (
-        <ConversationBlock
-          key={block.id}
-          {...conversationBlockProps(props, block)}
-          streamingAssistantText={section.kind === 'active-work'}
-          renderMath={
-            section.kind === 'completed-work'
-            && section.duration.outcome === 'completed'
-          }
-          showAssistantActions={
-            section.kind === 'completed-work'
-            && section.duration.outcome === 'completed'
-          }
-          forkTurnId={section.kind === 'completed-work'
-            && index === section.finalBlocks.length - 1
-            ? section.forkTurnId
-            : null}
-          forkPending={section.kind === 'completed-work'
-            && section.forkTurnId === props.forkPendingTurnId}
-        />
-      ))}
+      <div className="group">
+        {section.finalBlocks.map((block) => (
+          <ConversationBlock
+            key={block.id}
+            {...conversationBlockProps(props, block)}
+            streamingAssistantText={section.kind === 'active-work'}
+            renderMath={
+              section.kind === 'completed-work'
+              && section.duration.outcome === 'completed'
+            }
+          />
+        ))}
+        {section.kind === 'completed-work' && section.duration.outcome === 'completed' && (
+          <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId}
+            activity={section.activityBlocks} final={section.finalBlocks} onOpenFile={props.onOpenFilePreview}
+            onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
+            forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
+        )}
+      </div>
     </section>
   )
 }
@@ -383,10 +382,6 @@ const ConversationBlock = memo(function ConversationBlock({
   onCheckpointRestoreRequest,
   onEdit,
   onToggle,
-  showAssistantActions,
-  forkTurnId,
-  forkPending,
-  onFork,
   skills,
   projectDir,
 }: ConversationBlockRenderProps) {
@@ -404,10 +399,6 @@ const ConversationBlock = memo(function ConversationBlock({
       onCheckpointRestoreRequest={onCheckpointRestoreRequest}
       onEdit={onEdit}
       onToggle={() => onToggle(block.id)}
-      showAssistantActions={showAssistantActions}
-      forkTurnId={forkTurnId}
-      forkPending={forkPending}
-      onFork={onFork}
       skills={skills}
       projectDir={projectDir}
     />
@@ -432,14 +423,10 @@ function conversationBlockProps(
     checkpointRestorePending: block.kind === 'tool'
       && props.checkpointRestoreToolUseId === block.call.id,
     ...textRendering,
-    showAssistantActions: false,
-    forkTurnId: null,
-    forkPending: false,
     skills: props.skills,
     projectDir: props.projectDir,
     onCheckpointRestoreRequest: props.onCheckpointRestoreRequest,
     onEdit: props.onEdit,
-    onFork: props.onFork,
     onToggle: props.onToggle,
   }
 }

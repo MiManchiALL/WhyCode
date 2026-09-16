@@ -72,7 +72,13 @@ export function useWorkspaceFile(runtimeId: string, kind: 'directory' | 'file', 
       setState(previous => ({ ...previous, error: errorMessage(error) }))
     })
   }, [])
-  return { ...state, refresh, reveal }
+  const openExternally = useCallback(() => {
+    if (!lease.current) return
+    void window.whycode.openWorkspaceFileExternally(lease.current.id).catch(error => {
+      setState(previous => ({ ...previous, error: errorMessage(error) }))
+    })
+  }, [])
+  return { ...state, refresh, reveal, openExternally }
 }
 
 function errorMessage(error: unknown): string {

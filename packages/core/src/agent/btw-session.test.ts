@@ -97,6 +97,24 @@ describe('BTW 独立侧对话', () => {
     assert.match(JSON.stringify(secondSideCall.prompt), /不推进主任务/)
   })
 
+  it('临时调研可声明来源，结果可重放且不进入 Main', async () => {
+    const declaration = { files: [], sources: [{ title: '公开文档', url: 'https://example.com/docs' }] }
+    const model = new MockLanguageModelV4({ doStream: [
+      finalStep('主回答'), toolStep('Present', declaration), finalStep('结论[来源](https://example.com/docs)'),
+    ] })
+    const session = createSession(model)
+    await session.handleUserMessage('主问题')
+    const main = session.captureMessageSnapshot()
+    const results: BtwTurnResult[] = []
+    await session.handleBtwMessage(btwContext('btw', '临时调研', []), lifecycle(results))
+    assert.deepEqual(session.captureMessageSnapshot(), main)
+    const result = btwToolStepEvents(results[0]!.toolSteps!).find(event => event.type === 'tool-end')
+    assert.ok(result?.type === 'tool-end')
+    assert.equal(result.isError, false)
+    assert.deepEqual(JSON.parse(String(result.result)), declaration)
+    assert.deepEqual(model.doStreamCalls[0]?.tools, model.doStreamCalls[1]?.tools)
+  })
+
   it('越界工具在审批和独占步骤之前失败，结果交回模型且不影响只读工具和后续 Main', async () => {
     for (const mode of ['default', 'auto'] as const) {
       const executed: string[] = []

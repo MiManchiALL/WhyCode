@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai'
+import { PRESENT_TOOL_NAME } from '../presentation.ts'
 import { createImageUserMessage } from '../attachments/messages.ts'
 import type { BtwTurnContext } from '../session/btw.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
@@ -9,7 +10,7 @@ import { WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME } from '../tools/web-page/promp
 
 export const BTW_TOOL_NAMES: ReadonlySet<string> = new Set([
   READ_FILE_TOOL_NAME, LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME,
-  WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME,
+  WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, WEB_FIND_TOOL_NAME, PRESENT_TOOL_NAME,
 ])
 
 export const BTW_SYSTEM_PROMPT = 'BTW 是临时问答。收到宿主的 <whycode-btw> 标记时，'

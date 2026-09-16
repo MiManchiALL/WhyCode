@@ -1,4 +1,5 @@
-import { WrapText } from 'lucide-react'
+import { File, FileCode2, FileImage, WrapText } from 'lucide-react'
+import { documentFormat } from '../../shared/workspace-files.ts'
 import type { ReactNode } from 'react'
 
 export function FilePreviewToolbar({ path, children }: { path: string; children: ReactNode }) {
@@ -22,4 +23,11 @@ export function FileWrapButton({ wrap, onChange }: { wrap: boolean; onChange: (w
 
 export function FilePreviewMessage({ children }: { children: ReactNode }) {
   return <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-4 py-8 text-center text-xs text-[var(--wc-faint)]">{children}</div>
+}
+
+export function fileIcon(name: string) {
+  const format = documentFormat(name)
+  if (format === 'image') return FileImage
+  if (format === 'html' || format === 'code') return FileCode2
+  return File
 }
