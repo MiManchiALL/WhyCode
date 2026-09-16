@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { Block } from '../../shared/conversation-state.ts'
+import { conversationSections } from '../../shared/conversation-sections.ts'
 import {
   presentToolBatches,
   presentConversationToolBatches,
@@ -173,6 +174,44 @@ describe('工具批次折叠投影', () => {
       },
     ])
     assert.equal(injected[0]?.kind === 'tool-segment' ? injected[0].sealed : null, true)
+  })
+
+  it('没有最终正文的工作终点仍封口此前工具，并与后续工具分开', () => {
+    for (const outcome of ['completed', 'stopped'] as const) {
+      const result = presentToolBatches([
+        tool('previous', 'EditFile'),
+        { kind: 'work-duration', id: 'end', durationMs: 100, outcome, forkTurnId: null },
+        tool('current', 'ReadFile'),
+      ])
+      const batches = result.filter((item) => item.kind === 'tool-segment')
+      assert.deepEqual(batches.map((batch) => [batch.id, batch.sealed]), [
+        ['tool-batch-previous', true],
+        ['tool-batch-current', false],
+      ])
+    }
+  })
+
+  it('新消息投影为工作分组后，仍保留它与前方工具的封口边界', () => {
+    for (const finished of [false, true]) {
+      const blocks: Block[] = [
+        tool('previous', 'ReadFile'),
+        { kind: 'user', id: 'next-user', text: '继续吧' },
+        { kind: 'text', id: 'next-reply', text: '继续处理', phase: 'final' },
+      ]
+      if (finished) blocks.push({
+        kind: 'work-duration', id: 'end', durationMs: 100, outcome: 'completed', forkTurnId: null,
+      })
+      const sections = conversationSections(blocks, finished ? null : 1_000)
+      const result = presentConversationToolBatches(sections.map((section) => ({
+        kind: 'section', id: section.id, section,
+      })))
+      const batch = result[0]
+      assert.ok(batch?.kind === 'tool-segment')
+      assert.equal(batch.id, 'tool-batch-previous')
+      assert.equal(batch.sealed, true)
+      assert.deepEqual(batch.batch.tools.map((block) => block.call.id), ['previous'])
+      assert.equal(result[1]?.kind, 'section')
+    }
   })
 
   it('按编辑、命令、其它的优先级生成摘要', () => {

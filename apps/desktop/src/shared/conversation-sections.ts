@@ -89,14 +89,14 @@ export function isFileRollbackBoundarySection(
 }
 
 /**
- * 最终正文和用户停止只封口执行过程末尾的工具批次；是否展开整个执行过程仍由
+ * 工作结束或最终正文出现时封口末尾工具批次；是否展开整个执行过程仍由
  * ConversationState.expanded 独立决定。
  */
 export function shouldSealTrailingToolBatch(
   section: Extract<ConversationSection, { kind: 'active-work' | 'completed-work' }>,
 ): boolean {
-  return section.finalBlocks.some((block) => block.kind === 'text')
-    || (section.kind === 'completed-work' && section.duration.outcome === 'stopped')
+  return section.kind === 'completed-work'
+    || section.finalBlocks.some((block) => block.kind === 'text')
 }
 
 function appendActiveWork(

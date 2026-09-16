@@ -62,8 +62,8 @@ export interface ToolBatchRow extends Partial<ToolFileRow> {
 const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile', 'MoveFile'])
 
 /**
- * 文本是工具批次的提交边界：只有后续文本已经出现，前一段工具才折叠。
- * trailingToolsSealed 用于最终正文已被 WorkSection 单独投影的情况。
+ * 用户消息、模型正文和工作终点统一封口前一批工具。
+ * trailingToolsSealed 保留已由 WorkSection 单独投影的终点。
  */
 export function presentToolBatches(
   blocks: readonly Block[],
@@ -78,17 +78,7 @@ export function presentToolBatches(
   }
 
   for (const block of blocks) {
-    if (block.kind === 'user') {
-      flush(true)
-      presented.push({ kind: 'block', id: block.id, block })
-      continue
-    }
-    if (block.kind === 'work-duration') {
-      flush(false)
-      presented.push({ kind: 'block', id: block.id, block })
-      continue
-    }
-    if (block.kind === 'text') {
+    if (block.kind === 'user' || block.kind === 'text' || block.kind === 'work-duration') {
       flush(true)
       presented.push({ kind: 'block', id: block.id, block })
       continue
@@ -99,15 +89,15 @@ export function presentToolBatches(
   return presented
 }
 
-/** 顶层尚未形成 WorkSection 的原始块也使用相同文本边界规则。 */
+/** 顶层原始块和已成组工作共用边界，投影不能让新一段工作吞掉前方封口。 */
 export function presentConversationToolBatches(
   items: readonly ConversationDisplayItem[],
 ): ConversationToolBatchDisplayItem[] {
   const result: ConversationToolBatchDisplayItem[] = []
   let blocks: Block[] = []
 
-  const flush = () => {
-    for (const item of presentToolBatches(blocks)) {
+  const flush = (trailingToolsSealed = false) => {
+    for (const item of presentToolBatches(blocks, trailingToolsSealed)) {
       result.push(item.kind === 'tool-segment'
         ? item
         : {
@@ -124,7 +114,7 @@ export function presentConversationToolBatches(
       blocks.push(item.section.block)
       continue
     }
-    flush()
+    flush(true)
     result.push(item)
   }
   flush()

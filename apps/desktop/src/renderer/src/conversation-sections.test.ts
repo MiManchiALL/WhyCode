@@ -122,6 +122,25 @@ describe('已完成任务的会话展示投影', () => {
     const completed = asCompleted(sections[0])
     assert.deepEqual(ids(completed.activityBlocks), ['thinking-1', 'tool-1'])
     assert.deepEqual(completed.finalBlocks, [])
+    assert.equal(shouldSealTrailingToolBatch(completed), true)
+  })
+
+  it('提问后的用户回答不让上一段已结束工具继续保持未封口', () => {
+    const questionTool = tool('question')
+    assert.ok(questionTool.kind === 'tool')
+    questionTool.call.name = 'AskUserQuestion'
+    const sections = conversationSections([
+      user('request'),
+      questionTool,
+      duration('question-duration'),
+      user('answer'),
+      pendingText('reply', '收到'),
+    ], 2_000)
+
+    const question = asCompleted(sections[0])
+    assert.deepEqual(ids(question.activityBlocks), ['question'])
+    assert.deepEqual(question.finalBlocks, [])
+    assert.equal(shouldSealTrailingToolBatch(question), true)
   })
 
   it('把同一连续任务中的用户插话留在折叠区外', () => {
