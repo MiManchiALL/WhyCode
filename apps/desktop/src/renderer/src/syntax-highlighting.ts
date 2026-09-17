@@ -1,13 +1,13 @@
-import type { ThemedToken } from 'shiki/core'
 import type { HighlightLanguage } from './syntax-highlight.worker.ts'
 
-export type HighlightTokens = Pick<ThemedToken, 'content' | 'offset' | 'htmlStyle'>[][]
+/** 高亮 Worker 生成的已转义行内标记，不包含原始文件 HTML。 */
+export type HighlightedLines = string[]
 export type HighlightRequest = { type: 'highlight'; id: number; source: string; language: HighlightLanguage }
   | { type: 'cancel'; id: number }
-export interface HighlightResponse { id: number; tokens: HighlightTokens | null }
+export interface HighlightResponse { id: number; lines: HighlightedLines | null }
 interface HighlightWorker {
   worker: Worker
-  pending: Map<number, (tokens: HighlightTokens) => void>
+  pending: Map<number, (lines: HighlightedLines) => void>
   users: number
 }
 
@@ -16,7 +16,7 @@ let shared: HighlightWorker | null = null
 let nextId = 0
 
 /** 可见代码视图共享 Worker；最后一个视图关闭时释放语法与未完成计算。 */
-export function requestHighlight(path: string, source: string, receive: (tokens: HighlightTokens) => void): () => void {
+export function requestHighlight(path: string, source: string, receive: (lines: HighlightedLines) => void): () => void {
   const language = languageForPath(path)
   if (!language || source.length > MAX_HIGHLIGHT_SOURCE_CHARS) return () => {}
   const service = shared ?? createWorker()
@@ -36,10 +36,10 @@ function createWorker(): HighlightWorker | null {
     const worker = new Worker(new URL('./syntax-highlight.worker.ts', import.meta.url), { type: 'module' })
     const service: HighlightWorker = { worker, pending: new Map(), users: 0 }
     worker.onmessage = (event: MessageEvent<HighlightResponse>) => {
-      const { id, tokens } = event.data
+      const { id, lines } = event.data
       const receive = service.pending.get(id)
       service.pending.delete(id)
-      if (tokens) receive?.(tokens)
+      if (lines) receive?.(lines)
     }
     worker.onerror = () => dispose(service)
     shared = service

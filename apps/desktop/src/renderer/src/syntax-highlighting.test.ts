@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, it } from 'node:test'
-import { requestHighlight, type HighlightRequest, type HighlightResponse, type HighlightTokens } from './syntax-highlighting.ts'
+import { requestHighlight, type HighlightRequest, type HighlightResponse, type HighlightedLines } from './syntax-highlighting.ts'
 
 class TestWorker {
   static instances: TestWorker[] = []
@@ -12,7 +12,7 @@ class TestWorker {
   postMessage(request: HighlightRequest) { this.requests.push(request) }
   terminate() { this.terminated = true }
   deliver(id: number, content: string) {
-    this.onmessage?.({ data: { id, tokens: [[{ content, offset: 0 }]] } })
+    this.onmessage?.({ data: { id, lines: [content] } })
   }
 }
 const originalWorker = Object.getOwnPropertyDescriptor(globalThis, 'Worker')
@@ -26,7 +26,7 @@ afterEach(() => {
 function setup() {
   Object.defineProperty(globalThis, 'Worker', { configurable: true, value: TestWorker })
 }
-function request(path: string, source: string, receive: (tokens: HighlightTokens) => void = () => {}) {
+function request(path: string, source: string, receive: (lines: HighlightedLines) => void = () => {}) {
   const dispose = requestHighlight(path, source, receive)
   disposers.push(dispose)
   return () => { disposers.splice(disposers.indexOf(dispose), 1); dispose() }
@@ -35,8 +35,8 @@ function request(path: string, source: string, receive: (tokens: HighlightTokens
 it('visible code views share a worker and route results to the requesting view', () => {
   setup()
   const results: string[] = []
-  const closeA = request('a.html', '<h1>A</h1>', tokens => results.push('A:' + tokens[0]![0]!.content))
-  request('b.ts', 'const b = 1', tokens => results.push('B:' + tokens[0]![0]!.content))
+  const closeA = request('a.html', '<h1>A</h1>', lines => results.push('A:' + lines[0]))
+  request('b.ts', 'const b = 1', lines => results.push('B:' + lines[0]))
   assert.equal(TestWorker.instances.length, 1)
   const worker = TestWorker.instances[0]!
   worker.deliver(worker.requests[1]!.id, 'b')

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { FolderOpen, RefreshCw } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
 import { MAX_TEXT_PREVIEW_BYTES } from '../../shared/workspace-files.ts'
@@ -99,12 +99,13 @@ function TextDocument({ url, path, markdown, wrap }: { url: string; path: string
     })
     return () => abort.abort()
   }, [url])
+  const lines = useMemo(() => markdown || text === null ? [] : contentLines(text), [markdown, text])
   if (error) return <FilePreviewMessage>{error}</FilePreviewMessage>
   if (text === null) return <FilePreviewMessage>正在读取正文…</FilePreviewMessage>
   if (markdown) return (
     <div className="wc-scrollbar min-h-0 flex-1 overflow-auto p-4"><MarkdownContent text={text} /></div>
   )
-  return <SyntaxCode path={path} lines={contentLines(text)} wrap={wrap} className="flex-1" />
+  return <SyntaxCode path={path} lines={lines} wrap={wrap} className="flex-1" />
 }
 
 function ImageDocument({ url, name }: { url: string; name: string }) {

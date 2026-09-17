@@ -1205,6 +1205,15 @@ html[data-wc-right-panel-resizing='true'] * {
   contain-intrinsic-size: auto 20px;
 }
 
+.wc-code-text {
+  white-space: pre;
+}
+
+.wc-code-scroll[data-wrap='true'] .wc-code-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .wc-code-line[data-tone='added'] {
   border-left-color: #159447;
   background: #e7f5e9;

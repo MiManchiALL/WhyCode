@@ -1,10 +1,12 @@
 import {
   createHighlighterCore,
+  stringifyTokenStyle,
   type LanguageRegistration,
 } from 'shiki/core'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
 import githubDark from 'shiki/themes/github-dark.mjs'
 import githubLight from 'shiki/themes/github-light.mjs'
+import { escapeCodeHtml } from './syntax-code-html.ts'
 import type { HighlightRequest, HighlightResponse } from './syntax-highlighting.ts'
 
 interface PooledHighlighter {
@@ -57,7 +59,7 @@ self.onmessage = (event: MessageEvent<HighlightRequest>) => {
   if (request.type === 'cancel') { pending.delete(request.id); return }
   pending.add(request.id)
   void highlightSource(request.source, request.language, request.id).catch(() => {
-    self.postMessage({ id: request.id, tokens: null } satisfies HighlightResponse)
+    self.postMessage({ id: request.id, lines: null } satisfies HighlightResponse)
   }).finally(() => pending.delete(request.id))
 }
 
@@ -74,10 +76,10 @@ async function highlightSource(
       lang: language,
       themes: { light: 'github-light', dark: 'github-dark' },
     })
-    // 语法状态包含引擎对象，跨线程只传递显示所需的 token 字段。
-    const result: HighlightResponse = { id, tokens: tokens.map(line => line.map(token => ({
-      content: token.content, offset: token.offset, htmlStyle: token.htmlStyle,
-    }))) }
+    // 静态片段在线程内转义、序列化，避免主线程复制 token 对象并创建逐 token 的 React 树。
+    const result: HighlightResponse = { id, lines: tokens.map(line => line.map(token =>
+      `<span style="${escapeCodeHtml(stringifyTokenStyle(token.htmlStyle ?? {}))}">${escapeCodeHtml(token.content)}</span>`,
+    ).join('')) }
     self.postMessage(result)
   } finally {
     entry.uses--

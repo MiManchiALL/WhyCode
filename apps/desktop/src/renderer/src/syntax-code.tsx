@@ -3,9 +3,9 @@ import {
   useEffect,
   useMemo,
   useState,
-  type CSSProperties,
 } from 'react'
-import { requestHighlight, type HighlightTokens } from './syntax-highlighting.ts'
+import { requestHighlight, type HighlightedLines } from './syntax-highlighting.ts'
+import { renderCodeLines } from './syntax-code-html.ts'
 import type { FileDiffLine } from './file-change-presentation.ts'
 import { useScrollArea } from './use-scroll-area.ts'
 
@@ -26,6 +26,10 @@ export function SyntaxCode({
 }) {
   const source = useMemo(() => lines.map((line) => line.text).join('\n'), [lines])
   const highlighted = useHighlightedCode(path, source)
+  const markup = useMemo(
+    () => ({ __html: renderCodeLines(lines, highlighted, focusLine) }),
+    [lines, highlighted, focusLine],
+  )
   const { ref: scrollRef, onScroll, overscrollBehaviorY } = useScrollArea(lines, { enabled: scroll })
 
   useEffect(() => {
@@ -50,57 +54,21 @@ export function SyntaxCode({
       style={{ overscrollBehaviorY }}
       className={`wc-code-scroll wc-scrollbar min-h-0 ${scroll ? 'overflow-auto' : 'overflow-visible'} ${className}`}
     >
-      <div className={`wc-code-lines ${wrap ? 'w-full' : 'min-w-max'} py-1 font-mono text-xs leading-5`}>
-        {lines.length === 0 ? (
-          <div className="px-3 py-6 text-center text-[var(--wc-faint)]">空文件</div>
-        ) : lines.map((line, index) => {
-          const displayLine = line.kind === 'removed' ? line.oldLine : line.newLine
-          const focus = line.kind !== 'removed' && line.newLine === focusLine
-          return (
-            <div
-              key={line.id}
-              data-tone={line.kind}
-              data-focus-line={focus ? String(focusLine) : undefined}
-              className="wc-code-line flex min-w-full"
-            >
-              <span className="wc-code-line-number sticky left-0 w-14 shrink-0 select-none pr-3 text-right tabular-nums">
-                {displayLine ?? ''}
-              </span>
-              <code className={`block min-w-0 flex-1 pr-5 ${wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}>
-                <HighlightedLine
-                  tokens={highlighted?.[index]}
-                  fallback={line.text}
-                />
-              </code>
-            </div>
-          )
-        })}
-      </div>
+      {/* 内容只来自转义后的源码与内部高亮结果；不把 HTML 源文件当作页面执行。 */}
+      <div
+        className={`wc-code-lines ${wrap ? 'w-full' : 'min-w-max'} py-1 font-mono text-xs leading-5`}
+        dangerouslySetInnerHTML={markup}
+      />
     </div>
   )
 }
 
-function HighlightedLine({
-  tokens,
-  fallback,
-}: {
-  tokens: HighlightTokens[number] | undefined
-  fallback: string
-}) {
-  if (!tokens) return <>{fallback || ' '}</>
-  return <>{tokens.map((token, index) => (
-    <span key={`${token.offset}:${index}`} style={token.htmlStyle as CSSProperties}>
-      {token.content}
-    </span>
-  ))}</>
-}
-
-function useHighlightedCode(path: string, source: string): HighlightTokens | null {
-  const [result, setResult] = useState<HighlightTokens | null>(null)
+function useHighlightedCode(path: string, source: string): HighlightedLines | null {
+  const [result, setResult] = useState<HighlightedLines | null>(null)
   useEffect(() => {
     setResult(null)
-    return requestHighlight(path, source, tokens => {
-      startTransition(() => setResult(tokens))
+    return requestHighlight(path, source, lines => {
+      startTransition(() => setResult(lines))
     })
   }, [path, source])
   return result
