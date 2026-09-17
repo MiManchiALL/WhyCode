@@ -471,3 +471,5 @@ export type {
   TaskPlan,
   TaskPlanState,
 } from './tasks/types.ts'
+
+export type { TurnEditEffects } from './checkpoints/manager.ts'

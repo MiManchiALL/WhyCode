@@ -42,7 +42,7 @@ export function BlockView({
   streamingAssistantText: boolean
   renderMath: boolean
   onCheckpointRestoreRequest: CheckpointRestoreRequest
-  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
+  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string, restoreFiles: boolean) => Promise<boolean>
   onToggle: () => void
   skills: readonly SkillSummary[]
   projectDir: string | null

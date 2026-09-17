@@ -44,12 +44,10 @@ describe('SessionStore Fork', () => {
     const firstFork = await store.fork(
       source,
       'turn-1',
-      source.metadataSnapshot.workspace,
     )
     const secondFork = await store.fork(
       firstFork,
       'turn-1',
-      firstFork.metadataSnapshot.workspace,
     )
     assert.deepEqual(source.metadataSnapshot.referencedModelIds, ['test:model', 'test:next-model'])
     assert.deepEqual(firstFork.metadataSnapshot.referencedModelIds, ['test:model'])
@@ -96,7 +94,7 @@ describe('SessionStore Fork', () => {
     await source.recordTurnEnd('turn-aborted', 'aborted')
 
     await assert.rejects(
-      store.fork(source, 'turn-aborted', source.metadataSnapshot.workspace),
+      store.fork(source, 'turn-aborted'),
       /只能从完整结束/,
     )
 
@@ -105,7 +103,7 @@ describe('SessionStore Fork', () => {
     await source.recordStep('turn-waiting', [message('assistant', '请选择')])
     await source.recordTurnEnd('turn-waiting', 'waiting-user')
     await assert.rejects(
-      store.fork(source, 'turn-waiting', source.metadataSnapshot.workspace),
+      store.fork(source, 'turn-waiting'),
       /只能从完整结束/,
     )
     assert.equal((await store.list()).length, 1)
@@ -139,7 +137,6 @@ describe('SessionStore Fork', () => {
     const forked = await store.fork(
       source,
       'turn-after-draft',
-      source.metadataSnapshot.workspace,
     )
     assert.deepEqual(forked.pendingUserInputs, [])
     assert.deepEqual(forked.initialMessages, [
@@ -182,7 +179,6 @@ describe('SessionStore Fork', () => {
     const forked = await store.fork(
       source,
       'turn-consuming-draft',
-      source.metadataSnapshot.workspace,
     )
     assert.deepEqual(forked.pendingUserInputs, [])
     assert.deepEqual(forked.initialMessages, [
@@ -200,7 +196,7 @@ describe('SessionStore Fork', () => {
     await source.recordTurnEnd('turn-without-boundary', 'completed')
 
     await assert.rejects(
-      store.fork(source, 'turn-without-boundary', source.metadataSnapshot.workspace),
+      store.fork(source, 'turn-without-boundary'),
       /Fork 边界/,
     )
     assert.equal((await store.list()).length, 1)
@@ -234,7 +230,6 @@ describe('SessionStore Fork', () => {
     const forked = await store.fork(
       source,
       'turn-batched-boundary',
-      source.metadataSnapshot.workspace,
     )
     assert.equal(source.initialViewEvents.length, 3)
     assert.deepEqual(forked.initialViewEvents, source.initialViewEvents.slice(0, -1))
@@ -249,7 +244,7 @@ describe('SessionStore Fork', () => {
     await recordForkBoundary(source, 'turn-tool-only')
 
     await assert.rejects(
-      store.fork(source, 'turn-tool-only', source.metadataSnapshot.workspace),
+      store.fork(source, 'turn-tool-only'),
       /最终文本/,
     )
     assert.equal((await store.list()).length, 1)
@@ -287,7 +282,7 @@ describe('SessionStore Fork', () => {
     await recordForkBoundary(source, 'turn-progress-then-tool')
 
     await assert.rejects(
-      store.fork(source, 'turn-progress-then-tool', source.metadataSnapshot.workspace),
+      store.fork(source, 'turn-progress-then-tool'),
       /最终文本/,
     )
     assert.equal((await store.list()).length, 1)
@@ -314,7 +309,7 @@ describe('SessionStore Fork', () => {
     await recordForkBoundary(source, 'turn-text-with-tool')
 
     await assert.rejects(
-      store.fork(source, 'turn-text-with-tool', source.metadataSnapshot.workspace),
+      store.fork(source, 'turn-text-with-tool'),
       /最终文本/,
     )
     assert.equal((await store.list()).length, 1)
@@ -340,7 +335,6 @@ describe('SessionStore Fork', () => {
     const forked = await store.fork(
       source,
       'turn-image',
-      source.metadataSnapshot.workspace,
     )
     const [forkedAttachment] = forked.initialImageAttachments
     assert.ok(forkedAttachment)
@@ -383,7 +377,6 @@ describe('SessionStore Fork', () => {
     const forked = await store.fork(
       source,
       'turn-checkpoint',
-      source.metadataSnapshot.workspace,
     )
     const forkedManager = new CheckpointManager({
       sessionDir: getSessionPaths(root, forked.sessionId).checkpoints,
@@ -397,13 +390,11 @@ describe('SessionStore Fork', () => {
     assert.equal(await readFile(trackedFile, 'utf8'), 'before')
   })
 
-  it('受管工作区分支把文件检查点重定向到独立快照', async () => {
+  it('受管工作区分支共享文件路径，独立检查点仍阻止覆盖其它会话的修改', async () => {
     const store = await createStore()
     const root = storeRoots.get(store)!
     const sourceDirectory = join(root, 'managed-source')
-    const targetDirectory = join(root, 'managed-fork')
     await mkdir(sourceDirectory)
-    await mkdir(targetDirectory)
     const createdAt = new Date().toISOString()
     const sourceWorkspace: ManagedWorkspaceBinding = {
       mode: 'managed',
@@ -411,15 +402,8 @@ describe('SessionStore Fork', () => {
       workingDirectory: sourceDirectory,
       createdAt,
     }
-    const targetWorkspace: ManagedWorkspaceBinding = {
-      mode: 'managed',
-      id: randomUUID(),
-      workingDirectory: targetDirectory,
-      createdAt,
-    }
     const source = await store.create({ workspace: sourceWorkspace, modelId: 'test:model' })
     const sourceFile = join(sourceDirectory, 'tracked.txt')
-    const targetFile = join(targetDirectory, 'tracked.txt')
     await writeFile(sourceFile, 'before')
     await source.recordUserInput('修改受管文件', true)
     await source.recordTurnStart('turn-managed-checkpoint', [
@@ -443,19 +427,8 @@ describe('SessionStore Fork', () => {
     ])
     await source.recordTurnEnd('turn-managed-checkpoint', 'completed')
     await recordForkBoundary(source, 'turn-managed-checkpoint')
-    await writeFile(targetFile, 'after')
-
-    await assert.rejects(
-      store.fork(source, 'turn-managed-checkpoint', sourceWorkspace),
-      /必须使用独立受管工作区快照/,
-    )
-
-    const forked = await store.fork(
-      source,
-      'turn-managed-checkpoint',
-      targetWorkspace,
-    )
-    assert.deepEqual(forked.metadataSnapshot.workspace, targetWorkspace)
+    const forked = await store.fork(source, 'turn-managed-checkpoint')
+    assert.deepEqual(forked.metadataSnapshot.workspace, sourceWorkspace)
     await writeFile(sourceFile, 'source-changed-after-fork')
     const forkedManager = new CheckpointManager({
       sessionDir: getSessionPaths(root, forked.sessionId).checkpoints,
@@ -463,9 +436,60 @@ describe('SessionStore Fork', () => {
     })
 
     const restored = await forkedManager.restore('tool-managed-write', 'files')
-    assert.equal(restored.ok, true, restored.error)
-    assert.equal(await readFile(targetFile, 'utf8'), 'before')
+    assert.equal(restored.ok, false)
     assert.equal(await readFile(sourceFile, 'utf8'), 'source-changed-after-fork')
+    await writeFile(sourceFile, 'after')
+    assert.equal((await forkedManager.restore('tool-managed-write', 'files')).ok, true)
+    assert.equal(await readFile(sourceFile, 'utf8'), 'before')
+  })
+
+  it('较早 Fork 点只截取对话，项目保持当前文件；临时目录检查点独立重定位', async () => {
+    const store = await createStore()
+    const root = storeRoots.get(store)!
+    const project = join(root, 'project')
+    await mkdir(project)
+    const source = await store.create({ workspace: localWorkspace(project), modelId: 'test:model' })
+    const scratch = join(root, 'scratch')
+    const sourceScratch = join(scratch, source.sessionId, 'Main')
+    await mkdir(sourceScratch, { recursive: true })
+    const sourceFile = join(sourceScratch, 'report.md')
+    const projectFile = join(project, 'a.txt')
+    const manager = new CheckpointManager({ sessionId: source.sessionId, sessionDir: source.checkpointDirectory })
+    await source.recordUserInput('创建第一版', true)
+    await source.recordTurnStart('first', [message('user', '创建第一版')])
+    const prepared = await manager.prepare('scratch-write', 'first', { kind: 'exact-files', paths: [sourceFile] })
+    assert.ok(prepared)
+    await writeFile(sourceFile, '# report')
+    await writeFile(projectFile, '1')
+    await manager.finalize(prepared)
+    await source.recordStep('first', [message('assistant', '第一版完成')])
+    await source.recordTurnEnd('first', 'completed')
+    await recordForkBoundary(source, 'first')
+    await source.recordUserInput('修改第二版', true)
+    await source.recordTurnStart('second', [message('user', '修改第二版')])
+    await writeFile(projectFile, '2')
+    await source.recordStep('second', [message('assistant', '第二版完成')])
+    await source.recordTurnEnd('second', 'completed')
+    await recordForkBoundary(source, 'second')
+
+    const fork = await store.fork(source, 'first', scratch)
+    assert.deepEqual(fork.metadataSnapshot.workspace, source.metadataSnapshot.workspace)
+    assert.doesNotMatch(JSON.stringify(fork.initialMessages), /第二版/)
+    assert.equal(await readFile(projectFile, 'utf8'), '2')
+    // Desktop copies current scratch contents; Core rehomes historical resource metadata.
+    const copiedScratch = join(scratch, fork.sessionId, 'Main')
+    await mkdir(copiedScratch, { recursive: true })
+    const copiedFile = join(copiedScratch, 'report.md')
+    await writeFile(copiedFile, await readFile(sourceFile))
+    const forkManager = new CheckpointManager({ sessionId: fork.sessionId, sessionDir: fork.checkpointDirectory })
+    assert.equal(await forkManager.filePreview('scratch-write', sourceFile), null)
+    assert.equal((await forkManager.filePreview('scratch-write', copiedFile))?.path, copiedFile)
+    await writeFile(sourceFile, '原会话继续修改')
+    await store.delete(source.sessionId)
+    assert.equal((await forkManager.restore('scratch-write', 'files')).ok, true)
+    await assert.rejects(readFile(copiedFile), /ENOENT/)
+    assert.equal(await readFile(sourceFile, 'utf8'), '原会话继续修改')
+    assert.equal(await readFile(projectFile, 'utf8'), '2')
   })
 
   it('分支从所有可恢复消息副本中清除临时 MCP 项目信任', async () => {
@@ -491,7 +515,6 @@ describe('SessionStore Fork', () => {
     const forked = await store.fork(
       source,
       'turn-trust',
-      source.metadataSnapshot.workspace,
     )
     assert.equal(
       findMcpToolState(forked.initialMessages).trustedProjectConfigurationFingerprint,

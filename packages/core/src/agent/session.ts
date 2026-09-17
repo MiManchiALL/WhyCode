@@ -30,6 +30,7 @@ import {
 import { checkToolPermission } from '../permissions/engine.ts'
 import {
   CheckpointManager,
+  type TurnEditEffects,
   type RestoreCheckpointResult,
 } from '../checkpoints/manager.ts'
 import type {
@@ -251,7 +252,8 @@ export interface AgentSessionOptions {
   scheduleProjectMutation?: <T>(
     mutation:
       | { type: 'tool'; name: string; kind: 'edit' | 'execute' }
-      | { type: 'checkpoint-restore'; toolUseId: string },
+      | { type: 'checkpoint-restore'; toolUseId: string }
+      | { type: 'turn-edit'; turnId: string },
     abortSignal: AbortSignal,
     operation: () => Promise<T>,
   ) => Promise<T>
@@ -370,6 +372,7 @@ export class AgentSession {
   private checkpointDisabledNotified = false
   /** 回滚是文件与会话的补偿事务；同一会话同一时刻只允许一个事务运行。 */
   private restoringCheckpointToolUseId: string | null = null
+  private editingTurn = false
   private readonly idleWaiters = new Set<() => void>()
   /** waiting-subagents 期间的单次事件唤醒；不轮询，也不启动额外 turn。 */
   private runLoopWake: (() => void) | null = null
@@ -635,7 +638,7 @@ export class AgentSession {
   }
 
   get isBusy(): boolean {
-    return this.running || this.compacting || this.restoringCheckpointToolUseId !== null
+    return this.running || this.compacting || this.restoringCheckpointToolUseId !== null || this.editingTurn
   }
 
   /** 空闲但仍在等待 AskUserQuestion 的真实回答；宿主应让用户输入先进入路由。 */
@@ -1156,16 +1159,38 @@ export class AgentSession {
     return this.startTurn([item.message], [], undefined, [], [item], true)
   }
 
-  /**
-   * 先把旧回合换根为编辑后的持久输入，再返回一次性启动器。宿主可在持有输入
-   * 路由 reservation 时完成准备并同步启动，避免编辑与普通新消息并发分类。
-   */
+  /** 只读检查最新用户根回合的全部内部 turn，不由 Renderer 推测文件或命令副作用。 */
+  async inspectLatestTurnEdit(turnId: string): Promise<TurnEditEffects> {
+    const { resources } = this.latestTurnEditContext(turnId)
+    return this.checkpoints?.turnEditEffects(resources.turnIds)
+      ?? { hasFileChanges: false, hasUntrackedEffects: false }
+  }
+
+  /** 文件恢复与换根共用项目写锁；对话事实提交前失败会补偿文件，不启动新回答。 */
   async prepareLatestTurnEdit(
     turnId: string,
     text: string,
+    restoreFiles = false,
   ): Promise<PreparedLatestTurnEdit> {
     const nextText = text.trim()
-    const recorder = this.turnEditRecorder(nextText)
+    if (!nextText) throw new Error('编辑后的消息不能为空')
+    const context = this.latestTurnEditContext(turnId)
+    this.editingTurn = true
+    try {
+      const operation = () => this.commitLatestTurnEdit(turnId, nextText, restoreFiles, context)
+      return this.options.scheduleProjectMutation
+        ? await this.options.scheduleProjectMutation(
+          { type: 'turn-edit', turnId }, new AbortController().signal, operation,
+        )
+        : await operation()
+    } finally {
+      this.editingTurn = false
+      this.resolveIdleWaiters()
+    }
+  }
+
+  private latestTurnEditContext(turnId: string) {
+    const recorder = this.turnEditRecorder()
     const rollbackMessages = recorder.messagesBeforeTurn(turnId)
     const rollbackTaskState = recorder.taskStateBeforeTurn(turnId)
     const skills = recorder.skillsForTurn(turnId)
@@ -1173,23 +1198,28 @@ export class AgentSession {
       throw new Error('目标回合已不在当前活动历史中')
     }
     const resources = latestTurnEditResources(
-      this.messages,
-      recorder.initialViewEvents,
-      turnId,
-      rollbackMessages.length,
+      this.messages, recorder.initialViewEvents, turnId, rollbackMessages.length,
     )
+    return { recorder, rollbackMessages, rollbackTaskState, skills, resources }
+  }
+
+  private async commitLatestTurnEdit(
+    turnId: string,
+    nextText: string,
+    restoreFiles: boolean,
+    { recorder, rollbackMessages, rollbackTaskState, skills, resources }: ReturnType<AgentSession['latestTurnEditContext']>,
+  ): Promise<PreparedLatestTurnEdit> {
     const inputId = crypto.randomUUID()
-    await recorder.recordTurnEditInput(
-      turnId,
-      inputId,
-      nextText,
-      rollbackMessages,
-      rollbackTaskState,
-      resources.attachments,
-      resources.pdfAttachments,
-      skills,
-      resources.imageDelivery,
+    const commit = () => recorder.recordTurnEditInput(
+      turnId, inputId, nextText, rollbackMessages, rollbackTaskState,
+      resources.attachments, resources.pdfAttachments, skills, resources.imageDelivery,
     )
+    if (restoreFiles) {
+      if (!this.checkpoints) throw new Error('当前会话没有可回滚的文件检查点')
+      await this.checkpoints.restoreEditedTurns(resources.turnIds, commit)
+    } else {
+      await commit()
+    }
     this.messages = structuredClone([...recorder.initialMessages])
     this.taskPlan?.restore(recorder.initialTaskState)
     this.rebuildActivePdfAttachments()
@@ -1220,9 +1250,8 @@ export class AgentSession {
     )
   }
 
-  private turnEditRecorder(text: string): SessionRecorder {
+  private turnEditRecorder(): SessionRecorder {
     const recorder = this.options.sessionRecorder
-    if (!text) throw new Error('编辑后的消息不能为空')
     if (!recorder) throw new Error('当前会话没有可回滚的持久记录')
     if (this.isBusy || this.activeTurn || this.queue.length > 0) {
       throw new Error('Agent 尚未空闲，不能编辑最新消息')
@@ -3424,7 +3453,7 @@ export class AgentSession {
     scope: 'files' | 'files-and-chat',
   ): Promise<RestoreCheckpointResult> {
     if (!this.checkpoints) return { ok: false, error: '该操作没有可用快照' }
-    if (this.running || this.compacting) {
+    if (this.running || this.compacting || this.editingTurn) {
       return { ok: false, error: 'Agent 工作中，请先停止' }
     }
     if (this.restoringCheckpointToolUseId) {
@@ -3520,7 +3549,7 @@ export class AgentSession {
       })
       return
     }
-    if (this.running || this.compacting) {
+    if (this.running || this.compacting || this.editingTurn) {
       this.emitCheckpointRestored({
         type: 'checkpoint-restored', toolUseId, turnId: '', scope, ok: false,
         error: 'Agent 工作中，请先停止',

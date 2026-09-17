@@ -15,7 +15,7 @@ export interface ConversationBlockRenderProps {
   skills: readonly SkillSummary[]
   projectDir: string | null
   onCheckpointRestoreRequest: CheckpointRestoreRequest
-  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
+  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string, restoreFiles: boolean) => Promise<boolean>
   onToggle: (id: string) => void
 }
 

@@ -1,13 +1,12 @@
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import { clearMcpProjectTrust } from '../mcp/state.ts'
 import type { WorkspaceBinding } from '../workspace/types.ts'
 import { buildLoadedSession } from './chain.ts'
-import { copyForkAttachments, copyForkCheckpoints, forkWorkspacePathMapper } from './fork-resources.ts'
-import { forkPresentations } from './fork-presentations.ts'
+import { copyForkAttachments, copyForkCheckpoints, forkScratchPathMapper, type ForkScratchCopy } from './fork-resources.ts'
+import { forkFileReferences } from './fork-file-references.ts'
 import { getSessionPaths, writeMetadata, type SessionPaths } from './metadata.ts'
 import {
   SESSION_SCHEMA_VERSION,
@@ -27,7 +26,7 @@ interface CreateSessionForkInput {
   targetSessionId: string
   title: string
   origin: SessionForkOrigin
-  targetWorkspace: WorkspaceBinding
+  scratchCopy?: ForkScratchCopy
 }
 
 export async function createSessionFork(
@@ -37,15 +36,15 @@ export async function createSessionFork(
     forkPrefix(input.sourceEntries, input.sourceTurnId),
   )
   const sourceWorkspace = buildLoadedSession(sourcePrefix).metadata.workspace
-  assertForkWorkspace(sourceWorkspace, input.targetWorkspace)
-  const presentations = forkPresentations(forkWorkspacePathMapper(sourceWorkspace, input.targetWorkspace))
+  const rebase = forkScratchPathMapper(input.scratchCopy)
+  const presentations = forkFileReferences(rebase)
   const entries = sourcePrefix.map((entry) =>
     rehomeEntry(
       entry,
       input.targetSessionId,
       input.title,
       input.origin,
-      input.targetWorkspace,
+      sourceWorkspace,
       presentations,
     ))
   const loaded = buildLoadedSession(entries)
@@ -67,8 +66,7 @@ export async function createSessionFork(
       stagingPaths,
       entries,
       input.targetSessionId,
-      sourceWorkspace,
-      input.targetWorkspace,
+      rebase,
     )
     await rename(stagingPaths.sessionDir, targetPaths.sessionDir)
     return loaded
@@ -76,31 +74,6 @@ export async function createSessionFork(
     await rm(stagingPaths.sessionDir, { recursive: true, force: true }).catch(() => {})
     throw error
   }
-}
-
-function assertForkWorkspace(
-  source: WorkspaceBinding,
-  target: WorkspaceBinding,
-): void {
-  if (source.mode === 'managed') {
-    if (
-      target.mode !== 'managed'
-      || target.id === source.id
-      || samePath(target.workingDirectory, source.workingDirectory)
-    ) {
-      throw new Error('managed 会话 Fork 必须使用独立受管工作区快照')
-    }
-    return
-  }
-  if (JSON.stringify(source) !== JSON.stringify(target)) {
-    throw new Error('Fork 不能改变来源会话的工作区绑定')
-  }
-}
-
-function samePath(left: string, right: string): boolean {
-  const a = resolve(left)
-  const b = resolve(right)
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 function forkPrefix(entries: readonly SessionEntry[], sourceTurnId: string): SessionEntry[] {
@@ -181,7 +154,7 @@ function rehomeEntry(
   title: string,
   origin: SessionForkOrigin,
   workspace: WorkspaceBinding,
-  presentations: ReturnType<typeof forkPresentations>,
+  presentations: ReturnType<typeof forkFileReferences>,
 ): SessionEntry {
   const common = { ...entry, schemaVersion: SESSION_SCHEMA_VERSION, sessionId }
   switch (entry.type) {

@@ -549,7 +549,7 @@ export function App() {
 
   const sendRuntimeCommand = useCallback((command: CoreCommand) => {
     const targetRuntimeId = runtimeIdRef.current
-    if (!targetRuntimeId) return Promise.resolve({ ok: false })
+    if (!targetRuntimeId) return Promise.resolve({ ok: false, error: '当前没有可操作的会话' })
     return window.whycode.sendCommand(targetRuntimeId, command)
   }, [])
 
@@ -1900,22 +1900,20 @@ export function App() {
   const editUserMessage = useCallback(async (
     block: Extract<Block, { kind: 'user' }>,
     text: string,
+    restoreFiles: boolean,
   ) => {
     if (interactionBusy || stopping) return false
     const target = block.btw && block.inputId
       ? { kind: 'btw' as const, inputId: block.inputId }
       : block.turnId
-        ? { kind: 'main' as const, turnId: block.turnId }
+        ? { kind: 'main' as const, turnId: block.turnId, restoreFiles }
         : null
     if (!target) return false
     stickToBottom.current = true
     setShowJumpBottom(false)
-    try {
-      const result = await sendRuntimeCommand({ type: 'edit-user-message', target, text })
-      return Boolean(result?.ok)
-    } catch {
-      return false
-    }
+    const result = await sendRuntimeCommand({ type: 'edit-user-message', target, text })
+    if (!result?.ok) throw new Error(result?.error ?? '重新发送失败，请重试')
+    return true
   }, [interactionBusy, sendRuntimeCommand, stopping])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {

@@ -834,7 +834,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(reopened.initialTaskState.activePlan, null)
     assert.equal(reopened.initialMessages.filter(isClosedTaskStateReminder).length, 1)
 
-    const forked = await store.fork(reopened, turnId, reopened.metadataSnapshot.workspace)
+    const forked = await store.fork(reopened, turnId)
     assert.equal(forked.initialTaskState.activePlan, null)
     assert.equal(forked.initialMessages.filter(isClosedTaskStateReminder).length, 1)
   })

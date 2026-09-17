@@ -35,7 +35,12 @@ export interface RestoreCheckpointResult {
 
 export interface RestoreTransactionHooks {
   commit: () => Promise<void>
-  compensate: () => Promise<void>
+  compensate?: () => Promise<void>
+}
+
+export interface TurnEditEffects {
+  hasFileChanges: boolean
+  hasUntrackedEffects: boolean
 }
 
 type RestoreCheckpointPlan =
@@ -232,6 +237,37 @@ export class CheckpointManager {
     const plan = await this.planRestore(toolUseId, scope)
     if (!plan.available) return plan.result
 
+    return this.restorePlan(plan, hooks)
+  }
+
+  async turnEditEffects(turnIds: readonly string[]): Promise<TurnEditEffects> {
+    const manifests = await this.readyTurnManifests(turnIds)
+    return {
+      hasFileChanges: manifests.some(item => item.coverage === 'complete' && item.resources.length > 0),
+      hasUntrackedEffects: manifests.some(item => item.coverage !== 'complete'),
+    }
+  }
+
+  /** 编辑替换的是整个用户根回合；仅恢复其明确跟踪的文件，不撤销命令副作用。 */
+  async restoreEditedTurns(turnIds: readonly string[], commit: () => Promise<void>): Promise<void> {
+    const manifests = (await this.readyTurnManifests(turnIds))
+      .filter(item => item.coverage === 'complete' && item.resources.length > 0)
+    if (!manifests.length) throw new Error('本轮已没有可回滚的文件改动，请取消勾选后重试')
+    const result = await this.restorePlan({
+      available: true, turnId: turnIds[0]!, manifests,
+    }, { commit })
+    if (!result.ok) throw new Error(result.error)
+  }
+
+  private async readyTurnManifests(turnIds: readonly string[]): Promise<CheckpointManifest[]> {
+    const ids = new Set(turnIds)
+    return (await this.store.list()).filter(item => item.status === 'ready' && ids.has(item.turnId))
+  }
+
+  private async restorePlan(
+    plan: Extract<RestoreCheckpointPlan, { available: true }>,
+    hooks?: RestoreTransactionHooks,
+  ): Promise<RestoreCheckpointResult> {
     const transaction = new ResourceRestoreTransaction({
       manifests: plan.manifests,
       blobDir: this.store.blobDir,
@@ -239,16 +275,17 @@ export class CheckpointManager {
     let hookStarted = false
     try {
       await transaction.apply()
+      // 所有可失败的文件与检查点写入都先完成，最后才提交对话事实源。
+      for (const manifest of plan.manifests) {
+        await this.store.put({ ...manifest, status: 'invalidated' })
+      }
       if (hooks) {
         hookStarted = true
         await hooks.commit()
       }
-      for (const manifest of plan.manifests) {
-        await this.store.put({ ...manifest, status: 'invalidated' })
-      }
     } catch (error) {
       const compensationErrors: unknown[] = []
-      if (hookStarted && hooks) {
+      if (hookStarted && hooks?.compensate) {
         await hooks.compensate().catch((compensation) => compensationErrors.push(compensation))
       }
       await transaction.compensate()

@@ -12,6 +12,30 @@ import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { deliverEditedUserMessage, startEditedUserMessage } from './user-message-edit.ts'
 
 describe('编辑消息交付边界', () => {
+  it('文件恢复选择交给 Core；准备失败保留错误、不启动工作并释放输入闸门', async () => {
+    const events: CoreEvent[] = []
+    let released = false
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    runtime.session = {
+      isBusy: false,
+      prepareLatestTurnEdit: async (turnId: string, text: string, restoreFiles: boolean) => {
+        assert.deepEqual([turnId, text, restoreFiles], ['turn-1', '新问题', true])
+        throw new Error('文件已被其它会话修改')
+      },
+    } as unknown as AgentSession
+    const result = await startEditedUserMessage(runtime,
+      { ready: Promise.resolve(), release: () => { released = true } },
+      'turn-1', '新问题', () => assert.fail('不应启动模型'), () => assert.fail('不应当作交付异常'), true,
+    )
+    assert.deepEqual(result, { ok: false, error: '文件已被其它会话修改' })
+    assert.equal(released, true)
+    assert.equal(runtime.workStartedAt, null)
+    assert.deepEqual(events, [])
+  })
+
   it('编辑事实写稳后的同步启动异常只上报交付错误，不伪报编辑失败', async () => {
     const events: CoreEvent[] = []
     const errors: unknown[] = []

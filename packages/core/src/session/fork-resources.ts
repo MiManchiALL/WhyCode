@@ -2,7 +2,6 @@ import { access, copyFile, mkdir } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CheckpointManifestStore } from '../checkpoints/manifest-store.ts'
 import type { CheckpointManifest, FileState } from '../checkpoints/types.ts'
-import type { WorkspaceBinding } from '../workspace/types.ts'
 import type { LoadedSession, SessionEntry } from './types.ts'
 import type { SessionPaths } from './metadata.ts'
 
@@ -26,8 +25,7 @@ export async function copyForkCheckpoints(
   target: SessionPaths,
   entries: readonly SessionEntry[],
   targetSessionId: string,
-  sourceWorkspace: WorkspaceBinding,
-  targetWorkspace: WorkspaceBinding,
+  rebase: (path: string) => string,
 ): Promise<void> {
   const turnIds = new Set(entries.flatMap((entry) =>
     entry.type === 'turn-start' ? [entry.turnId] : []))
@@ -49,8 +47,7 @@ export async function copyForkCheckpoints(
     await targetStore.put(rehomeCheckpointManifest(
       manifest,
       targetSessionId,
-      sourceWorkspace,
-      targetWorkspace,
+      rebase,
     ))
   }
   if (blobHashes.size === 0) return
@@ -62,10 +59,8 @@ export async function copyForkCheckpoints(
 function rehomeCheckpointManifest(
   manifest: CheckpointManifest,
   targetSessionId: string,
-  sourceWorkspace: WorkspaceBinding,
-  targetWorkspace: WorkspaceBinding,
+  rebase: (path: string) => string,
 ): CheckpointManifest {
-  const rebase = forkWorkspacePathMapper(sourceWorkspace, targetWorkspace)
   return {
     ...manifest,
     sessionId: targetSessionId,
@@ -91,14 +86,19 @@ function rehomeFileState(
   }
 }
 
-/** 只有受管快照复制文件；共享项目、外部文件及相对输入保留原义。 */
-export function forkWorkspacePathMapper(source: WorkspaceBinding, target: WorkspaceBinding): (path: string) => string {
-  if (source.mode !== 'managed' || target.mode !== 'managed') return path => path
+export interface ForkScratchCopy {
+  source: string
+  target: string
+}
+
+/** Fork 共享项目路径，只重定位明确复制的会话临时目录。 */
+export function forkScratchPathMapper(copy?: ForkScratchCopy): (path: string) => string {
+  if (!copy) return path => path
   return path => {
     if (!isAbsolute(path)) return path
-    const child = relative(resolve(source.workingDirectory), resolve(path))
+    const child = relative(resolve(copy.source), resolve(path))
     const outside = child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)
-    return outside ? path : resolve(target.workingDirectory, child)
+    return outside ? path : resolve(copy.target, child)
   }
 }
 

@@ -5,6 +5,7 @@ import type { PdfAttachment } from '../pdf/types.ts'
 import type { ViewEvent } from '../session/view-events.ts'
 
 export interface LatestTurnEditResources {
+  turnIds: string[]
   attachments: ImageAttachment[]
   imageDelivery?: ImageDeliveryMode
   pdfAttachments: PdfAttachment[]
@@ -53,6 +54,8 @@ export function latestTurnEditResources(
     throw new Error('目标回合缺少图片交付方式')
   }
   return {
+    turnIds: afterRoot.flatMap((entry) => entry.type === 'core-event'
+      && entry.event.type === 'turn-start' ? [entry.event.turnId] : []),
     attachments,
     ...(imageDelivery ? { imageDelivery } : {}),
     pdfAttachments: (rootInput.pdfAttachments ?? []).map((item) => structuredClone(item)),

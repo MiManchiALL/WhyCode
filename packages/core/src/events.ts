@@ -481,11 +481,12 @@ export type CoreCommand =
   | { type: 'set-model'; modelId: string }
   | { type: 'set-reasoning-effort'; reasoningEffort: ReasoningEffortSelection }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }
+  | { type: 'inspect-user-message-edit'; turnId: string }
   /** 原位改写最新一条用户消息，丢弃其原回答并从同一 Main/BTW 位置重新执行。 */
   | {
       type: 'edit-user-message'
       target:
-        | { kind: 'main'; turnId: string }
+        | { kind: 'main'; turnId: string; restoreFiles?: boolean }
         | { kind: 'btw'; inputId: string }
       text: string
     }

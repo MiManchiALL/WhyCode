@@ -7,7 +7,6 @@ import {
   realpath,
   rm,
   stat,
-  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -65,85 +64,80 @@ describe('会话受管默认工作区', () => {
     const abandoned = await manager.create(abandonedId)
     await writeFile(join(abandoned.workingDirectory, 'artifact.txt'), 'owned')
 
-    const result = await manager.cleanupAbandoned(new Set([retainedId]))
+    const result = await manager.cleanupAbandoned([], new Set([retainedId]))
 
     assert.deepEqual(result, { removed: [abandonedId], warnings: [] })
     assert.equal((await stat(retained.workingDirectory)).isDirectory(), true)
     await assert.rejects(() => stat(abandoned.workingDirectory), /ENOENT/)
   })
 
-  it('Fork 为目标会话复制独立快照，后续修改和删除互不影响', async () => {
+  it('Fork 并发添加共享引用，删除源会话后保留目录，最后一个引用删除才清理', async () => {
     const root = await temporaryRoot()
     const workspaceRoot = join(root, 'workspace')
     const manifests = join(root, 'manifests')
     await mkdir(workspaceRoot)
-    const manager = new ManagedWorkspaceManager(
-      await realpath(workspaceRoot),
-      manifests,
-    )
-    const source = await manager.create('11111111-1111-4111-8111-111111111111')
-    const sourceSession = '22222222-2222-4222-8222-222222222222'
-    const forkSession = '33333333-3333-4333-8333-333333333333'
-    await manager.attachSession(source, sourceSession)
-    await mkdir(join(source.workingDirectory, 'nested'))
-    await writeFile(join(source.workingDirectory, 'nested', 'artifact.txt'), 'source')
-    await assert.rejects(
-      () => manager.attachSession(source, forkSession),
-      /已经绑定到其它会话/,
-    )
-
-    const forked = await manager.snapshot(
-      source,
-      sourceSession,
-      '44444444-4444-4444-8444-444444444444',
-    )
-    await manager.attachSession(forked, forkSession)
-
-    assert.notEqual(forked.workingDirectory, source.workingDirectory)
-    assert.equal(
-      await readFile(join(forked.workingDirectory, 'nested', 'artifact.txt'), 'utf8'),
-      'source',
-    )
-    await writeFile(join(forked.workingDirectory, 'nested', 'artifact.txt'), 'fork')
-    assert.equal(
-      await readFile(join(source.workingDirectory, 'nested', 'artifact.txt'), 'utf8'),
-      'source',
-    )
-
-    await manager.removeSession(sourceSession)
-    await assert.rejects(() => stat(source.workingDirectory), /ENOENT/)
-    assert.equal(
-      await readFile(join(forked.workingDirectory, 'nested', 'artifact.txt'), 'utf8'),
-      'fork',
-    )
-    assert.deepEqual(await readdir(manifests), [`${forked.id}.json`])
+    const manager = new ManagedWorkspaceManager(await realpath(workspaceRoot), manifests)
+    const binding = await manager.create('11111111-1111-4111-8111-111111111111')
+    const source = '22222222-2222-4222-8222-222222222222'
+    const fork = '33333333-3333-4333-8333-333333333333'
+    const next = '44444444-4444-4444-8444-444444444444'
+    await Promise.all([source, fork, next].map(id => manager.attachSession(binding, id)))
+    const file = join(binding.workingDirectory, 'artifact.txt')
+    await writeFile(file, 'shared')
+    await assert.rejects(() => manager.remove(binding), /仍被会话引用/)
+    await assert.rejects(() => manager.restoreDraft(binding.id), /已经属于已发送/)
+    await manager.removeSession(source)
+    await manager.assertUsable(binding, fork)
+    await manager.assertUsable(binding, next)
+    assert.equal(await readFile(file, 'utf8'), 'shared')
+    // Failed Fork cleanup removes only the attached child's reference, and is idempotent.
+    await manager.detachSession(binding, next)
+    await manager.detachSession(binding, next)
+    await manager.assertUsable(binding, fork)
+    const reopened = new ManagedWorkspaceManager(manager.rootDirectory, manifests)
+    await reopened.assertUsable(binding, fork)
+    await reopened.detachSession(binding, fork)
+    await assert.rejects(() => stat(binding.workingDirectory), /ENOENT/)
+    assert.deepEqual(await readdir(manifests), [])
   })
 
-  it('快照遇到链接时整体失败并清理未绑定目标', async () => {
+  it('失败的未认领 Fork 不删除源目录，启动按事实源修复认领前的崩溃窗口', async () => {
     const root = await temporaryRoot()
     const workspaceRoot = join(root, 'workspace')
-    const manifests = join(root, 'manifests')
-    const outside = join(root, 'outside')
     await mkdir(workspaceRoot)
-    await mkdir(outside)
-    const manager = new ManagedWorkspaceManager(await realpath(workspaceRoot), manifests)
-    const source = await manager.create('11111111-1111-4111-8111-111111111111')
-    const sourceSession = '22222222-2222-4222-8222-222222222222'
-    const targetId = '33333333-3333-4333-8333-333333333333'
-    await manager.attachSession(source, sourceSession)
-    await symlink(
-      outside,
-      join(source.workingDirectory, 'linked'),
-      process.platform === 'win32' ? 'junction' : 'dir',
-    )
+    const manager = new ManagedWorkspaceManager(await realpath(workspaceRoot), join(root, 'manifests'))
+    const workspace = await manager.create('11111111-1111-4111-8111-111111111111')
+    const source = '22222222-2222-4222-8222-222222222222'
+    const fork = '33333333-3333-4333-8333-333333333333'
+    await manager.attachSession(workspace, source)
+    await manager.detachSession(workspace, fork)
+    await manager.assertUsable(workspace, source)
+    const result = await manager.cleanupAbandoned([
+      { sessionId: source, workspace }, { sessionId: fork, workspace },
+    ], new Set())
+    assert.deepEqual(result, { removed: [], warnings: [] })
+    await manager.detachSession(workspace, source)
+    await manager.assertUsable(workspace, fork)
+    await manager.removeSession(fork)
+    await assert.rejects(() => stat(workspace.workingDirectory), /ENOENT/)
+  })
 
-    await assert.rejects(
-      () => manager.snapshot(source, sourceSession, targetId),
-      /不支持符号链接或目录联接/,
-    )
-
-    await assert.rejects(() => stat(manager.plannedDirectory(targetId)), /ENOENT/)
-    assert.deepEqual(await readdir(manifests), [`${source.id}.json`])
+  it('启动不能丢掉损坏会话的已有引用，必须显式删除最后一个会话才清理', async () => {
+    const root = await temporaryRoot()
+    await mkdir(join(root, 'workspace'))
+    const manager = new ManagedWorkspaceManager(await realpath(join(root, 'workspace')), join(root, 'manifests'))
+    const binding = await manager.create('11111111-1111-4111-8111-111111111111')
+    const source = '22222222-2222-4222-8222-222222222222'
+    const fork = '33333333-3333-4333-8333-333333333333'
+    await manager.attachSession(binding, source)
+    await manager.attachSession(binding, fork)
+    assert.deepEqual(await manager.cleanupAbandoned([
+      { sessionId: source, workspace: binding }, { sessionId: fork },
+    ], new Set()), { removed: [], warnings: [] })
+    await manager.detachSession(binding, source)
+    assert.equal((await stat(binding.workingDirectory)).isDirectory(), true)
+    await manager.removeSession(fork)
+    await assert.rejects(stat(binding.workingDirectory), /ENOENT/)
   })
 
   it('找不到目标绑定且所有权记录损坏时中止删除，不静默遗留目录', async () => {

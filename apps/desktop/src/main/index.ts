@@ -1027,6 +1027,17 @@ async function handleCommand(
       return handleQueuedMessageAction(runtime, command)
     case 'btw-message':
       return handleBtwMessageCommand(runtime, command)
+    case 'inspect-user-message-edit': {
+      try {
+        if (runtimeBusy(runtime) || !runtime.session) {
+          return { ok: false, error: 'Agent 尚未空闲，不能编辑最新消息' }
+        }
+        await runtime.timeline.flush()
+        return { ok: true, editEffects: await runtime.session.inspectLatestTurnEdit(command.turnId) }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    }
     case 'edit-user-message':
       return handleEditUserMessageCommand(runtime, command)
     case 'abort': {
@@ -1238,7 +1249,7 @@ type PreparedUserMessage = PreparedUserMessageAttachments & { skills: ActivatedS
 async function handleEditUserMessageCommand(
   runtime: DesktopSessionRuntime,
   command: EditUserMessageCommand,
-): Promise<{ ok: boolean }> {
+): Promise<RuntimeCommandResult> {
   if (command.target.kind === 'btw') {
     return handleEditBtwMessageCommand(runtime, command.target.inputId, command.text)
   }
@@ -1265,8 +1276,9 @@ async function handleEditUserMessageCommand(
     command.text,
     (prepared) => deliverEditedUserMessage(runtime, prepared),
     (error) => reportUserMessageDeliveryError(runtime, error),
+    command.target.restoreFiles === true,
   )
-  return { ok: result.ok }
+  return result
 }
 
 async function prepareUserMessage(
@@ -2270,25 +2282,17 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
   }
   let sourceJournal: SessionJournal | null = null
   let forkedJournal: SessionJournal | null = null
-  let managedSnapshot: ManagedWorkspaceBinding | null = null
   let runtime: DesktopSessionRuntime | null = null
   try {
     if (sourceRuntime) await sourceRuntime.timeline.flush()
     sourceJournal = sourceRuntime?.journal
       ?? await sessions.prepareResume(request.sourceSessionId)
     const sourceWorkspace = sourceJournal.metadataSnapshot.workspace
-    const targetWorkspace: WorkspaceBinding = sourceWorkspace.mode === 'managed'
-      ? await managedWorkspaces.snapshot(
-          sourceWorkspace,
-          sourceJournal.sessionId,
-          randomUUID(),
-        )
-      : sourceWorkspace
-    if (targetWorkspace.mode === 'managed') managedSnapshot = targetWorkspace
+    if (sourceWorkspace.mode === 'managed') {
+      await managedWorkspaces.assertUsable(sourceWorkspace, sourceJournal.sessionId)
+    }
     forkedJournal = await sessions.fork(
-      sourceJournal,
-      request.sourceTurnId,
-      targetWorkspace,
+      sourceJournal, request.sourceTurnId, sessionScratch.rootDirectory,
     )
     await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
     await attachSessionWorkspace(forkedJournal)
@@ -2307,9 +2311,6 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       await sessions.markDeleting(forkedJournal.sessionId)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await sessions.delete(forkedJournal.sessionId)
-        .catch((rollbackError) => rollbackErrors.push(rollbackError))
-    } else if (managedSnapshot) {
-      await managedWorkspaces.remove(managedSnapshot)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
     }
     if (rollbackErrors.length > 0) {
@@ -2435,7 +2436,7 @@ async function removeForkSessionWorkspace(journal: SessionJournal): Promise<void
     await worktrees.detachSession(workspace, journal.sessionId, true)
   }
   if (workspace.mode === 'managed') {
-    await managedWorkspaces.remove(workspace)
+    await managedWorkspaces.detachSession(workspace, journal.sessionId)
   }
 }
 
@@ -2622,7 +2623,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       onBeforeFactSourceDelete: async () => {
         if (targetWorktree) await worktrees.detachSession(targetWorktree, sessionId, true)
         if (targetManagedWorkspace) {
-          await managedWorkspaces.remove(targetManagedWorkspace)
+          await managedWorkspaces.detachSession(targetManagedWorkspace, sessionId)
         } else {
           await managedWorkspaces.removeSession(sessionId)
         }
@@ -2765,9 +2766,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
       ).concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
     )
     const managedCleanup = await managedWorkspaces.cleanupAbandoned(
-      new Set(summaries.flatMap((summary) =>
-        summary.workspace?.mode === 'managed' ? [summary.workspace.id] : [],
-      ).concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
+      summaries,
+      new Set(newSessionState.value ? [newSessionState.value.runtimeId] : []),
     )
     const scratchCleanup = await sessionScratch.cleanupAbandoned(
       new Set(summaries.map((summary) => summary.sessionId)),

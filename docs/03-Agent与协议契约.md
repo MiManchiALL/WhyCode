@@ -137,7 +137,15 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
 
-`edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
+BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
+
+### 1.11 用户消息重新编辑
+
+`inspect-user-message-edit {turnId}` 只读返回最新 Main 用户根回合全部内部 turn 的 `hasFileChanges` 与 `hasUntrackedEffects`；文件恢复范围由 Core 的活动历史和精确检查点决定，不接受 Renderer 提供的文件或检查点列表。
+
+`edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。Main 目标可携带 `restoreFiles`，省略或 false 只替换对话；true 在同一次提交中恢复本轮已跟踪的文件改动。命令等未跟踪副作用只提醒、不撤销，也不禁止重新编辑。恢复或持久化失败不得替换活动对话或启动模型；文件外部改动仍按 after 状态校验并拒绝覆盖。原工具 `files-and-chat` 仍拒绝跨越未跟踪副作用。
+
+BTW 的编辑身份与轮次规则见 §1.10。
 
 ## 2. 结构化输出与步骤提交
 
@@ -402,7 +410,7 @@ Fork 点必须同时满足：模型 turn completed、`work-finished.forkTurnId` 
 
 Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact 状态、模型/推理选择、项目指令、Skill 快照、TaskPlanState、MCP 状态与附件引用；排除锚点后草稿和队列。新会话拥有独立 JSONL、运行时、附件/检查点副本和 scratch；源后台任务与临时授权不转移。
 
-受管工作区 Fork 复制文件后，结构化 `Present` 声明中位于原工作区内的绝对文件路径同步指向新工作区；canonical 消息、回滚快照、BTW 工具步骤与可见工具事件使用同一映射。相对输入、工作区外文件、共享本地项目及来源 URL 保留原义，不改写历史正文。
+Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scratch 后，`Present` 声明、文件工具结构化参数、可见文件变化和检查点资源中位于来源 scratch 内的绝对路径同步指向新 scratch；canonical 消息、回滚快照、BTW 工具步骤与可见事件使用同一映射，再次 Fork 继续重定位。项目路径、其它外部文件、相对输入、来源 URL、命令文本及文件正文保留原义，不对历史文本做全局替换。
 
 所有恢复都从已提交事件和 canonical snapshot 重建。ViewEvent 缓存、Renderer 展开状态、模型自述和摘要都不能补造业务状态。当前开发 schema 不兼容旧格式；不支持的旧会话明确不可打开但仍可删除。
 

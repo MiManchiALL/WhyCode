@@ -4,6 +4,7 @@ import type { Block } from '../../shared/conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
 import { UserPdfGallery } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
+import { MessageEditEffects, useMessageEditEffects } from './message-edit-effects.tsx'
 import { MessageActions } from './message-actions.tsx'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
@@ -17,7 +18,7 @@ interface UserMessageCardProps {
   block: UserBlock
   editable: boolean
   disabled: boolean
-  onEdit: (block: UserBlock, text: string) => Promise<boolean>
+  onEdit: (block: UserBlock, text: string, restoreFiles: boolean) => Promise<boolean>
 }
 
 export function UserMessageCard(props: UserMessageCardProps) {
@@ -38,6 +39,8 @@ export function UserMessageCard(props: UserMessageCardProps) {
             props.block.btw ? 'wc-user-message-bubble-btw' : ''
           }`}>
             <MessageEditor
+              runtimeId={props.runtimeId}
+              turnId={props.block.btw ? undefined : props.block.turnId}
               editable={props.editable}
               disabled={props.disabled}
               editor={editor}
@@ -119,7 +122,7 @@ interface MessageEditorState {
   setDraft: (text: string) => void
   begin: () => void
   cancel: () => void
-  submit: (allowed: boolean) => Promise<void>
+  submit: (allowed: boolean, restoreFiles: boolean) => Promise<void>
 }
 
 function useMessageEditor(
@@ -144,16 +147,16 @@ function useMessageEditor(
     setError(null)
     setEditing(false)
   }
-  const submit = async (allowed: boolean) => {
+  const submit = async (allowed: boolean, restoreFiles: boolean) => {
     const text = draft.trim()
     if (!allowed || submitting || !text) return
     setSubmitting(true)
     setError(null)
     try {
-      if (await onEdit(block, text)) setEditing(false)
+      if (await onEdit(block, text, restoreFiles)) setEditing(false)
       else setError('重新发送失败，请重试')
-    } catch {
-      setError('重新发送失败，请重试')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '重新发送失败，请重试')
     } finally {
       setSubmitting(false)
     }
@@ -162,14 +165,20 @@ function useMessageEditor(
 }
 
 function MessageEditor({
+  runtimeId,
+  turnId,
   editable,
   disabled,
   editor,
 }: {
+  runtimeId: string
+  turnId: string | undefined
   editable: boolean
   disabled: boolean
   editor: MessageEditorState
 }) {
+  const [restoreFiles, setRestoreFiles] = useState(false)
+  const inspection = useMessageEditEffects(runtimeId, turnId)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
     const textarea = textareaRef.current
@@ -179,10 +188,10 @@ function MessageEditor({
   useEffect(() => {
     textareaRef.current?.focus()
   }, [])
-  const allowed = editable && !disabled
+  const allowed = editable && !disabled && inspection.effects !== null
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
-    void editor.submit(allowed)
+    void editor.submit(allowed, restoreFiles && inspection.effects?.hasFileChanges === true)
   }
   return (
     <form onSubmit={submit} className="w-full min-w-0 space-y-2">
@@ -200,13 +209,17 @@ function MessageEditor({
         onKeyDown={(event) => handleEditorKeyDown(event, editor.cancel, submit)}
         aria-label="编辑用户消息"
       />
-      {editor.error && <div className="text-xs text-[var(--wc-danger)]">{editor.error}</div>}
-      <EditorActions
-        draft={editor.draft}
-        disabled={!allowed}
-        submitting={editor.submitting}
-        onCancel={editor.cancel}
-      />
+      {(editor.error || inspection.error) && <div role="alert" className="text-xs text-[var(--wc-danger)]">{editor.error || inspection.error}</div>}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs">
+        {!inspection.error && <MessageEditEffects effects={inspection.effects} checked={restoreFiles}
+          disabled={!allowed || editor.submitting} onChange={setRestoreFiles} />}
+        <EditorActions
+          draft={editor.draft}
+          disabled={!allowed}
+          submitting={editor.submitting}
+          onCancel={editor.cancel}
+        />
+      </div>
     </form>
   )
 }
@@ -250,7 +263,7 @@ function EditorActions({
   onCancel: () => void
 }) {
   return (
-    <div className="flex justify-end gap-2 text-xs">
+    <div className="ml-auto flex shrink-0 justify-end gap-2 text-xs">
       <button
         type="button"
         className="wc-focus-ring rounded-xl border border-[var(--wc-line)] bg-white px-2.5 py-1"

@@ -58,9 +58,9 @@ export class DesktopSessionRepository {
   async fork(
     source: SessionJournal,
     sourceTurnId: string,
-    targetWorkspace: WorkspaceBinding,
+    scratchRootDirectory?: string,
   ): Promise<SessionJournal> {
-    const journal = await this.store.fork(source, sourceTurnId, targetWorkspace)
+    const journal = await this.store.fork(source, sourceTurnId, scratchRootDirectory)
     this.opened.set(journal.sessionId, journal)
     return journal
   }

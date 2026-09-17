@@ -54,7 +54,7 @@ interface ConversationViewProps {
   skills: readonly SkillSummary[]
   projectDir: string | null
   onCheckpointRestoreRequest: CheckpointRestoreRequest
-  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string) => Promise<boolean>
+  onEdit: (block: Extract<Block, { kind: 'user' }>, text: string, restoreFiles: boolean) => Promise<boolean>
   onFork: (turnId: string) => void
   onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onToggle: (id: string) => void

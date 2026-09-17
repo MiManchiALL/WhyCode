@@ -17,7 +17,7 @@ describe('最新根消息编辑资格', () => {
   it('已完成或已停止的最新回合都返回原根附件资源', () => {
     assert.deepEqual(
       latestTurnEditResources(messages, rootAndTurn, 'turn-old', 0),
-      { attachments: [], pdfAttachments: [] },
+      { turnIds: ['turn-old'], attachments: [], pdfAttachments: [] },
     )
   })
 
@@ -39,7 +39,7 @@ describe('最新根消息编辑资格', () => {
     ]
     assert.deepEqual(
       latestTurnEditResources(messages, events, 'turn-old', 0),
-      { attachments: [], pdfAttachments: [] },
+      { turnIds: ['turn-old', 'turn-execute'], attachments: [], pdfAttachments: [] },
     )
     assert.throws(
       () => latestTurnEditResources(messages, events, 'turn-execute', 0),

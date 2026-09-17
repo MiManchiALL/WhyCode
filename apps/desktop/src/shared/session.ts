@@ -1,3 +1,4 @@
+import type { TurnEditEffects } from '@whycode/core'
 import type {
   AgentStatus,
   ApprovalRequest,
@@ -124,6 +125,7 @@ export type {
 }
 
 export interface RuntimeCommandResult {
+  editEffects?: TurnEditEffects
   ok: boolean
   /** 只读校验或命令提交失败时，可直接展示给用户的原因。 */
   error?: string

@@ -68,7 +68,7 @@ it('新会话物化的默认目录重启后仍归草稿所有，发送后的目�
   const binding = await manager.create(id)
   await writeFile(join(binding.workingDirectory, 'keep.txt'), 'draft terminal output')
   const restarted = new ManagedWorkspaceManager(join(root, 'work'), join(root, 'manifests'))
-  await restarted.cleanupAbandoned(new Set([id]))
+  await restarted.cleanupAbandoned([], new Set([id]))
   assert.deepEqual(await restarted.restoreDraft(id), binding)
   assert.equal(await readFile(join(binding.workingDirectory, 'keep.txt'), 'utf8'), 'draft terminal output')
   await restarted.attachSession(binding, secondId)

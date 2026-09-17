@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, open as openFile, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
 import {
   consensusPersistedStateSchema,
@@ -42,7 +42,6 @@ import {
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
 import type { ActivatedSkill } from '../skills/types.ts'
 import { skillSummary } from '../skills/types.ts'
-import type { WorkspaceBinding } from '../workspace/types.ts'
 import {
   BTW_MAX_TURNS,
   canContinueBtw,
@@ -247,7 +246,7 @@ export class SessionStore {
   fork(
     source: SessionJournal,
     sourceTurnId: string,
-    targetWorkspace: WorkspaceBinding,
+    scratchRootDirectory?: string,
   ): Promise<SessionJournal> {
     const next = this.forkQueue.then(async () => {
       const sourcePaths = this.pathsFor(source.sessionId)
@@ -277,7 +276,10 @@ export class SessionStore {
           targetSessionId,
           title: `${baseTitle}（${ordinal}）`,
           origin,
-          targetWorkspace,
+          scratchCopy: scratchRootDirectory ? {
+            source: join(scratchRootDirectory, source.sessionId),
+            target: join(scratchRootDirectory, targetSessionId),
+          } : undefined,
         })
         return await this.open(targetSessionId)
       } catch (error) {
@@ -938,7 +940,7 @@ export class SessionJournal implements SessionRecorder {
         skills,
         resolvedImageDelivery,
       )
-      await this.appendEntries([transaction.snapshot, transaction.input])
+      await this.appendEntries([transaction.snapshot, transaction.input], true)
       this.applyTurnEditTransaction(transaction, rollbackTaskState, attachments, pdfAttachments)
       this.btwConversationState = null
       for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true
@@ -1772,9 +1774,10 @@ export class SessionJournal implements SessionRecorder {
     }
   }
 
-  private async appendEntries(entries: SessionEntry[]): Promise<void> {
+  private async appendEntries(entries: SessionEntry[], rollbackOnFailure = false): Promise<void> {
     const text = entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
-    await appendFile(this.paths.transcript, text, { encoding: 'utf8', flush: true })
+    if (rollbackOnFailure) await appendTurnEdit(this.paths.transcript, text)
+    else await appendFile(this.paths.transcript, text, { encoding: 'utf8', flush: true })
     for (const entry of entries) {
       if ('modelId' in entry && !this.metadata.referencedModelIds.includes(entry.modelId)) {
         this.metadata.referencedModelIds.push(entry.modelId)
@@ -1787,6 +1790,29 @@ export class SessionJournal implements SessionRecorder {
     const next = this.writeQueue.then(operation)
     this.writeQueue = next.then(() => undefined, () => undefined)
     return next
+  }
+}
+
+/** 编辑的换根与新输入必须一起落盘；写入或 flush 失败时恢复提交前的日志尾部。 */
+async function appendTurnEdit(path: string, text: string): Promise<void> {
+  const file = await openFile(path, 'a')
+  try {
+    const { size } = await file.stat()
+    try {
+      await file.writeFile(text, 'utf8')
+      await file.sync()
+    } catch (error) {
+      try {
+        await file.truncate(size)
+        await file.sync()
+      } catch (compensation) {
+        throw new AggregateError([error, compensation], '编辑记录提交失败且日志尾部恢复失败')
+      }
+      throw error
+    }
+  } finally {
+    // sync 成功即已提交；关闭句柄的错误不能把已落盘的编辑伪报为失败。
+    await file.close().catch(() => {})
   }
 }
 

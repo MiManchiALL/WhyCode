@@ -42,6 +42,7 @@ export async function startEditedUserMessage(
   text: string,
   deliver: (prepared: PreparedLatestTurnEdit) => Promise<unknown> | void,
   onDeliveryError: (error: unknown) => void,
+  restoreFiles = false,
 ): Promise<EditedMessageStartResult> {
   let released = false
   try {
@@ -54,7 +55,7 @@ export async function startEditedUserMessage(
 
     // Core 的最新消息校验必须看到此前已经排队的全部稳定 ViewEvent。
     await runtime.timeline.flush()
-    const prepared = await session.prepareLatestTurnEdit(turnId, text)
+    const prepared = await session.prepareLatestTurnEdit(turnId, text, restoreFiles)
     runtime.beginWork()
     let running: Promise<unknown>
     try {
