@@ -1,4 +1,6 @@
 import { mkdir } from 'node:fs/promises'
+import { removeEmptyWorkspace, WorkspaceMutations, type WorkspaceReleaseOptions } from './workspace-retention.ts'
+import { directoriesOverlap } from './workspace-path.ts'
 import { dirname } from 'node:path'
 import type { WorktreeWorkspaceBinding } from '@whycode/core'
 import type {
@@ -37,6 +39,7 @@ export interface AbandonedDraftCleanupResult {
 export class WorktreeManager {
   private readonly registry: ManagedWorktreeRegistry
   private readonly leases = new Map<string, Set<string>>()
+  private readonly mutations = new WorkspaceMutations()
 
   constructor(rootDirectory: string) {
     this.registry = new ManagedWorktreeRegistry(rootDirectory)
@@ -152,20 +155,22 @@ export class WorktreeManager {
   }
 
   attachSession(binding: WorktreeWorkspaceBinding, sessionId: string): Promise<void> {
-    return this.registry.attachSession(binding, sessionId)
+    return this.mutations.run(binding.id, () => this.registry.attachSession(binding, sessionId))
   }
 
-  async assertUsable(
+  assertUsable(
     binding: WorktreeWorkspaceBinding,
     sessionId: string,
     ownerRuntimeId: string,
   ): Promise<void> {
     // session-start 与外置引用清单无法跨文件原子提交；恢复只修复
     // 完全未认领的窄窗口。多会话共享必须由 Fork 通过 attachSession 显式建立。
-    await this.assertGitWorktree(binding)
-    await assertWorktreeExecutionDirectory(binding)
-    await this.registry.claimSessionForResume(binding, sessionId)
-    this.acquire(binding, ownerRuntimeId)
+    return this.mutations.run(binding.id, async () => {
+      await this.assertGitWorktree(binding)
+      await assertWorktreeExecutionDirectory(binding)
+      await this.registry.claimSessionForResume(binding, sessionId)
+      this.acquire(binding, ownerRuntimeId)
+    })
   }
 
   release(binding: WorktreeWorkspaceBinding, ownerRuntimeId: string): void {
@@ -175,25 +180,52 @@ export class WorktreeManager {
     if (owners?.size === 0) this.leases.delete(key)
   }
 
-  async detachSession(
+  detachSession(
     binding: WorktreeWorkspaceBinding,
     sessionId: string,
-    discardChanges: boolean,
+    options: WorkspaceReleaseOptions,
   ): Promise<void> {
-    const remaining = await this.registry.detachSession(binding, sessionId)
-    if (remaining === 0) await this.remove(binding, discardChanges)
+    return this.mutations.run(binding.id, async () => {
+      const remaining = await this.registry.detachSession(binding, sessionId, options.name)
+      if (remaining || options.protectDirectory || this.leases.has(pathKey(binding.worktreeDirectory))) return
+      if (options.deleteDirectory || await removeEmptyWorkspace(binding.worktreeDirectory)) {
+        await this.removeOwned(binding, true)
+      }
+    })
+  }
+
+  records() { return this.registry.records() }
+
+  inspectBinding(binding: WorktreeWorkspaceBinding) { return this.registry.inspect(binding) }
+
+  renameRetained(binding: WorktreeWorkspaceBinding, name: string): Promise<void> {
+    return this.mutations.run(binding.id, () => this.registry.renameRetained(binding, name))
+  }
+
+  deleteRetained(binding: WorktreeWorkspaceBinding): Promise<void> {
+    return this.mutations.run(binding.id, async () => {
+      const manifest = await this.registry.inspect(binding)
+      if (!manifest.retention || manifest.sessionIds.length) throw new Error('工作区已不在保留列表中')
+      await this.removeOwned(binding, true)
+    })
   }
 
   async cleanupDraft(
     binding: WorktreeWorkspaceBinding,
     ownerRuntimeId: string,
+    protectDirectory = false,
   ): Promise<void> {
     this.release(binding, ownerRuntimeId)
+    if (protectDirectory) {
+      await this.mutations.run(binding.id, () => this.registry.retainDraft(binding))
+      return
+    }
     await this.cleanupUnclaimed(binding)
   }
 
   async cleanupAbandonedDrafts(
     knownSessionWorktreeIds: ReadonlySet<string>,
+    protectedDirectories: readonly string[] = [],
   ): Promise<AbandonedDraftCleanupResult> {
     const scan = await this.registry.unclaimedBindings()
     const result: AbandonedDraftCleanupResult = {
@@ -204,7 +236,8 @@ export class WorktreeManager {
     for (const binding of scan.bindings) {
       // session-start 与清单关联之间存在窄崩溃窗口；只要当前事实源仍引用
       // 该 Worktree，就留给恢复流程补认领，启动清理不得抢先删除。
-      if (knownSessionWorktreeIds.has(binding.id)) {
+      if (knownSessionWorktreeIds.has(binding.id)
+        || protectedDirectories.some(path => directoriesOverlap(path, binding.worktreeDirectory))) {
         result.retained.push(binding.id)
         continue
       }
@@ -233,12 +266,16 @@ export class WorktreeManager {
     await createDetachedWorktreeBranch(binding, branchName)
   }
 
-  async remove(
+  remove(binding: WorktreeWorkspaceBinding, discardChanges: boolean): Promise<void> {
+    return this.mutations.run(binding.id, () => this.removeOwned(binding, discardChanges))
+  }
+
+  private async removeOwned(
     binding: WorktreeWorkspaceBinding,
     discardChanges: boolean,
   ): Promise<void> {
     try {
-      await this.registry.assertOwned(binding)
+      if ((await this.registry.sessionIds(binding)).length) throw new Error('Worktree 仍被会话引用')
     } catch (error) {
       if (!isNotFound(error)) throw error
       if (await pathExists(binding.worktreeDirectory)) {

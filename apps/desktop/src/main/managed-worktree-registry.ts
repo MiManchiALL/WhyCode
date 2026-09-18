@@ -20,11 +20,16 @@ import {
   type WorktreeWorkspaceBinding,
 } from '@whycode/core'
 import { WorkspaceOwnershipError } from './workspace-ownership-error.ts'
+import type { WorkspaceRetention } from '../shared/workspace-lifecycle.ts'
+import { parseWorkspaceRetention, retainWorkspace, workspaceName } from './workspace-retention.ts'
+import { pathKey, samePath } from './workspace-path.ts'
+export { pathKey, samePath } from './workspace-path.ts'
 
-interface WorktreeManifest {
-  schemaVersion: 2
+export interface WorktreeManifest {
+  schemaVersion: 3
   binding: WorktreeWorkspaceBinding
   sessionIds: string[]
+  retention: WorkspaceRetention | null
 }
 
 export interface UnclaimedWorktreeScan {
@@ -58,7 +63,7 @@ export class ManagedWorktreeRegistry {
 
   async create(binding: WorktreeWorkspaceBinding): Promise<void> {
     await this.validateBinding(binding)
-    await this.write({ schemaVersion: 2, binding, sessionIds: [] })
+    await this.write({ schemaVersion: 3, binding, sessionIds: [], retention: null })
   }
 
   async attachSession(
@@ -68,7 +73,7 @@ export class ManagedWorktreeRegistry {
     validateSessionId(sessionId)
     const manifest = await this.read(binding)
     if (manifest.sessionIds.includes(sessionId)) return
-    await this.write({ ...manifest, sessionIds: [...manifest.sessionIds, sessionId] })
+    await this.write({ ...manifest, retention: null, sessionIds: [...manifest.sessionIds, sessionId] })
   }
 
   /**
@@ -85,7 +90,7 @@ export class ManagedWorktreeRegistry {
     if (manifest.sessionIds.length > 0) {
       throw new Error('Worktree 已属于其它会话')
     }
-    await this.write({ ...manifest, sessionIds: [sessionId] })
+    await this.write({ ...manifest, retention: null, sessionIds: [sessionId] })
   }
 
   async assertOwned(binding: WorktreeWorkspaceBinding): Promise<void> {
@@ -106,6 +111,7 @@ export class ManagedWorktreeRegistry {
   async detachSession(
     binding: WorktreeWorkspaceBinding,
     sessionId: string,
+    name: string,
   ): Promise<number> {
     validateSessionId(sessionId)
     let manifest: WorktreeManifest
@@ -119,13 +125,22 @@ export class ManagedWorktreeRegistry {
       return 0
     }
     const remaining = manifest.sessionIds.filter((value) => value !== sessionId)
-    if (remaining.length !== manifest.sessionIds.length) {
-      await this.write({ ...manifest, sessionIds: remaining })
+    if (remaining.length !== manifest.sessionIds.length || manifest.retention) {
+      await this.write({ ...manifest, sessionIds: remaining,
+        retention: remaining.length ? null : retainWorkspace(name, manifest.retention) })
     }
     return remaining.length
   }
 
   async unclaimedBindings(): Promise<UnclaimedWorktreeScan> {
+    const scan = await this.records()
+    return {
+      bindings: scan.records.filter(record => !record.sessionIds.length && !record.retention).map(record => record.binding),
+      warnings: scan.warnings,
+    }
+  }
+
+  async records(): Promise<{ records: WorktreeManifest[]; warnings: string[] }> {
     const registryRoot = resolve(await this.rootDirectory(), '.registry')
     const entries = await readdir(registryRoot, { withFileTypes: true }).catch(
       (error: NodeJS.ErrnoException) => {
@@ -133,7 +148,7 @@ export class ManagedWorktreeRegistry {
         throw error
       },
     )
-    const bindings: WorktreeWorkspaceBinding[] = []
+    const records: WorktreeManifest[] = []
     const warnings: string[] = []
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
@@ -146,12 +161,28 @@ export class ManagedWorktreeRegistry {
           throw new Error('所有权记录无效或文件名不匹配')
         }
         await this.validateBinding(manifest.binding)
-        if (manifest.sessionIds.length === 0) bindings.push(manifest.binding)
+        records.push(manifest)
       } catch (error) {
         warnings.push(`${entry.name}: ${errorMessage(error)}`)
       }
     }
-    return { bindings, warnings }
+    return { records, warnings }
+  }
+
+  async inspect(binding: WorktreeWorkspaceBinding): Promise<WorktreeManifest> {
+    return this.read(binding)
+  }
+
+  async renameRetained(binding: WorktreeWorkspaceBinding, name: string): Promise<void> {
+    const manifest = await this.read(binding)
+    if (!manifest.retention || manifest.sessionIds.length) throw new Error('工作区已不在保留列表中')
+    await this.write({ ...manifest, retention: { ...manifest.retention, name: workspaceName(name) } })
+  }
+
+  async retainDraft(binding: WorktreeWorkspaceBinding): Promise<void> {
+    const manifest = await this.read(binding)
+    if (manifest.sessionIds.length) return
+    await this.write({ ...manifest, retention: retainWorkspace('未发送会话', manifest.retention) })
   }
 
   async removeManifest(binding: WorktreeWorkspaceBinding): Promise<void> {
@@ -203,17 +234,15 @@ export class ManagedWorktreeRegistry {
   private async read(binding: WorktreeWorkspaceBinding): Promise<WorktreeManifest> {
     await this.validateBinding(binding)
     const text = await readFile(await this.manifestPath(binding.id), 'utf8')
-    let value: unknown
     try {
-      value = JSON.parse(text)
+      const manifest = parseManifest(JSON.parse(text))
+      if (!manifest || !isDeepStrictEqual(manifest.binding, binding)) {
+        throw new Error('Worktree 所有权记录缺失或与会话不一致')
+      }
+      return manifest
     } catch {
-      throw new WorkspaceOwnershipError('Worktree 所有权记录已损坏')
+      throw new WorkspaceOwnershipError('Worktree 所有权记录无效或与会话不一致')
     }
-    const manifest = parseManifest(value)
-    if (!manifest || !isDeepStrictEqual(manifest.binding, binding)) {
-      throw new WorkspaceOwnershipError('Worktree 所有权记录缺失或与会话不一致')
-    }
-    return manifest
   }
 
   private async write(manifest: WorktreeManifest): Promise<void> {
@@ -323,20 +352,11 @@ export async function pathExists(path: string): Promise<boolean> {
   })
 }
 
-export function pathKey(path: string): string {
-  const absolute = resolve(path)
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
-
-export function samePath(left: string, right: string): boolean {
-  return pathKey(left) === pathKey(right)
-}
-
 function parseManifest(value: unknown): WorktreeManifest | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const binding = worktreeWorkspaceBindingSchema.safeParse(record.binding)
-  if (record.schemaVersion !== 2 || !binding.success || !Array.isArray(record.sessionIds)) return null
+  if (record.schemaVersion !== 3 || !binding.success || !Array.isArray(record.sessionIds)) return null
   if (!record.sessionIds.every((sessionId) => typeof sessionId === 'string')) return null
   for (const sessionId of record.sessionIds as string[]) {
     try {
@@ -347,7 +367,9 @@ function parseManifest(value: unknown): WorktreeManifest | null {
   }
   const sessionIds = record.sessionIds as string[]
   if (new Set(sessionIds).size !== sessionIds.length) return null
-  return { schemaVersion: 2, binding: binding.data, sessionIds }
+  const retention = parseWorkspaceRetention(record.retention)
+  if (sessionIds.length && retention) return null
+  return { schemaVersion: 3, binding: binding.data, sessionIds, retention }
 }
 
 async function prepareRoot(root: string): Promise<string> {

@@ -1,3 +1,4 @@
+import { RetainedWorkspacesSettings } from './retained-workspaces-settings.tsx'
 import { useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import {
@@ -5,6 +6,7 @@ import {
   Bot,
   BrainCircuit,
   Check,
+  Folder,
   Globe2,
   Plug,
   RefreshCw,
@@ -40,6 +42,7 @@ import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 
 interface ConnectionSettingsPanelProps {
   snapshot: ConnectionSettingsSnapshot
+  onError: (message: string) => void
   onClose: () => void
   onChanged: (snapshot: ConnectionSettingsSnapshot) => void
 }
@@ -174,6 +177,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 label="MCP"
                 onClick={() => setSection('mcp')}
               />
+              <SettingsNavItem active={section === 'workspaces'} icon={<Folder size={16} />} label="保留工作区" onClick={() => setSection('workspaces')} />
             </nav>
             <div className="mt-auto flex items-center gap-2 rounded-[var(--wc-menu-radius)] bg-black/[0.035] px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">
               <Settings size={13} />
@@ -189,22 +193,23 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     <Dialog.Title className="text-xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
                     <Dialog.Description className="mt-1.5 text-[13px] leading-5 text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
                   </div>
-                  <SettingsButton
+                  {section !== 'workspaces' && <SettingsButton
                     onClick={() => void refresh()}
                     disabled={pending || oauthPending}
                   >
                     <RefreshCw size={14} className={pending ? 'animate-spin' : ''} />
                     刷新
-                  </SettingsButton>
+                  </SettingsButton>}
                 </header>
 
-                {error && (
+                {section !== 'workspaces' && error && (
                   <p className="mb-5 rounded-xl border border-[#dec8bf] bg-[#f3e8e3] px-3 py-2 text-xs text-[var(--wc-danger)]" role="alert">
                     {error}
                   </p>
                 )}
 
                 <div className="space-y-8">
+                  {section === 'workspaces' && <RetainedWorkspacesSettings onError={props.onError} />}
                   {section === 'models' && (
                     <>
                       <BuiltInProvidersEditor
@@ -324,9 +329,10 @@ function BuiltInProvidersEditor(props: {
   )
 }
 
-type SettingsSectionId = 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp'
+type SettingsSectionId = 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp' | 'workspaces'
 
 const SETTINGS_META: Record<SettingsSectionId, { title: string; description: string }> = {
+  workspaces: { title: '保留工作区', description: '最后一个关联会话删除后留下的工作目录。重新关联会话后，会从此列表移出。' },
   models: {
     title: '模型连接',
     description: '管理内置厂商与 CLIProxyAPI，并选择可用于会话的模型。',

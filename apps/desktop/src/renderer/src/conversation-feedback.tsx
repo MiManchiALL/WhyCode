@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { CircleCheck, Info, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -14,8 +15,10 @@ const EXIT_MS = 680
 export function ConversationFeedbackToast({
   feedback,
   onDismiss,
+  floating = false,
 }: {
   feedback: ConversationFeedback
+  floating?: boolean
   onDismiss: (id: number) => void
 }) {
   const [phase, setPhase] = useState<ConversationFeedbackPhase>('visible')
@@ -68,8 +71,8 @@ export function ConversationFeedbackToast({
   }
 
   const Icon = feedback.tone === 'success' ? CircleCheck : feedback.tone === 'error' ? TriangleAlert : Info
-  return (
-    <div className="pointer-events-none absolute inset-x-0 top-6 z-50 flex justify-center px-6">
+  const toast = (
+    <div className={`pointer-events-none inset-x-0 top-6 flex justify-center px-6 ${floating ? 'fixed z-[120]' : 'absolute z-50'}`}>
       <div
         role={feedback.tone === 'error' ? 'alert' : 'status'}
         aria-live={feedback.tone === 'error' ? 'assertive' : 'polite'}
@@ -92,4 +95,5 @@ export function ConversationFeedbackToast({
       </div>
     </div>
   )
+  return floating ? createPortal(toast, document.body) : toast
 }

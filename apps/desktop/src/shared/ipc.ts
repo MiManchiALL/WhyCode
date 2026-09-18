@@ -75,6 +75,12 @@ export const IPC = {
   newSession: 'whycode:new-session',
   setSessionPinned: 'whycode:set-session-pinned',
   deleteSession: 'whycode:delete-session',
+  previewSessionDeletion: 'whycode:preview-session-deletion',
+  listRetainedWorkspaces: 'whycode:list-retained-workspaces',
+  previewRetainedWorkspace: 'whycode:preview-retained-workspace',
+  openRetainedWorkspace: 'whycode:open-retained-workspace',
+  renameRetainedWorkspace: 'whycode:rename-retained-workspace',
+  deleteRetainedWorkspace: 'whycode:delete-retained-workspace',
   /** Renderer → Main：按当前会话内的 PDF 附件 ID 交给系统默认阅读器打开。 */
   openPdfAttachment: 'whycode:open-pdf-attachment',
 } as const

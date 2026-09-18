@@ -43,14 +43,14 @@ describe('会话受管默认工作区', () => {
     await writeFile(join(first.workingDirectory, 'first.txt'), 'first')
     await writeFile(join(second.workingDirectory, 'second.txt'), 'second')
 
-    await manager.removeSession(firstSession)
+    await manager.detachSession(first, firstSession, { deleteDirectory: true, name: 'first', protectDirectory: false })
 
     await assert.rejects(() => stat(first.workingDirectory), /ENOENT/)
     assert.equal((await stat(join(second.workingDirectory, 'second.txt'))).isFile(), true)
     assert.deepEqual(await readdir(manifests), [`${secondId}.json`])
   })
 
-  it('启动清理只删除没有会话事实引用的受管目录', async () => {
+  it('启动只回收空草稿，非空的未认领目录转为保留工作区', async () => {
     const root = await temporaryRoot()
     const workspaceRoot = join(root, 'workspace')
     await mkdir(workspaceRoot)
@@ -66,9 +66,10 @@ describe('会话受管默认工作区', () => {
 
     const result = await manager.cleanupAbandoned([], new Set([retainedId]))
 
-    assert.deepEqual(result, { removed: [abandonedId], warnings: [] })
+    assert.deepEqual(result, { removed: [], warnings: [] })
     assert.equal((await stat(retained.workingDirectory)).isDirectory(), true)
-    await assert.rejects(() => stat(abandoned.workingDirectory), /ENOENT/)
+    assert.equal(await readFile(join(abandoned.workingDirectory, 'artifact.txt'), 'utf8'), 'owned')
+    assert.equal((await manager.inspect(abandoned)).retention?.name, '未发送会话')
   })
 
   it('Fork 并发添加共享引用，删除源会话后保留目录，最后一个引用删除才清理', async () => {
@@ -86,7 +87,7 @@ describe('会话受管默认工作区', () => {
     await writeFile(file, 'shared')
     await assert.rejects(() => manager.remove(binding), /仍被会话引用/)
     await assert.rejects(() => manager.restoreDraft(binding.id), /已经属于已发送/)
-    await manager.removeSession(source)
+    await manager.detachSession(binding, source)
     await manager.assertUsable(binding, fork)
     await manager.assertUsable(binding, next)
     assert.equal(await readFile(file, 'utf8'), 'shared')
@@ -96,7 +97,7 @@ describe('会话受管默认工作区', () => {
     await manager.assertUsable(binding, fork)
     const reopened = new ManagedWorkspaceManager(manager.rootDirectory, manifests)
     await reopened.assertUsable(binding, fork)
-    await reopened.detachSession(binding, fork)
+    await reopened.detachSession(binding, fork, { deleteDirectory: true, name: 'fork', protectDirectory: false })
     await assert.rejects(() => stat(binding.workingDirectory), /ENOENT/)
     assert.deepEqual(await readdir(manifests), [])
   })
@@ -118,7 +119,7 @@ describe('会话受管默认工作区', () => {
     assert.deepEqual(result, { removed: [], warnings: [] })
     await manager.detachSession(workspace, source)
     await manager.assertUsable(workspace, fork)
-    await manager.removeSession(fork)
+    await manager.detachSession(workspace, fork)
     await assert.rejects(() => stat(workspace.workingDirectory), /ENOENT/)
   })
 
@@ -136,7 +137,7 @@ describe('会话受管默认工作区', () => {
     ], new Set()), { removed: [], warnings: [] })
     await manager.detachSession(binding, source)
     assert.equal((await stat(binding.workingDirectory)).isDirectory(), true)
-    await manager.removeSession(fork)
+    await manager.detachSession(binding, fork)
     await assert.rejects(stat(binding.workingDirectory), /ENOENT/)
   })
 
@@ -149,7 +150,7 @@ describe('会话受管默认工作区', () => {
     await writeFile(join(manifests, 'broken.json'), '{')
     const manager = new ManagedWorkspaceManager(await realpath(workspaceRoot), manifests)
 
-    const warnings = await manager.removeSession('33333333-3333-4333-8333-333333333333')
+    const { warnings } = await manager.records()
     assert.equal(warnings.length, 1)
     assert.match(warnings[0] ?? '', /broken.json/)
     assert.equal(await readFile(join(manifests, 'broken.json'), 'utf8'), '{')

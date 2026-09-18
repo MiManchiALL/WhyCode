@@ -22,7 +22,7 @@ import {
 } from './runtime-workspace.ts'
 import { ManagedWorkspaceManager } from './workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
-import { cleanupSessionWorkspace } from './session-deletion.ts'
+import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 
 const tempRoots: string[] = []
 
@@ -38,6 +38,63 @@ afterEach(async () => {
 })
 
 describe('受管 Worktree 生命周期', () => {
+  it('干净 Worktree 草稿重新选为 Local 后，旧草稿卸载不能删除共享目录', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const binding = await manager.create(await worktreeRequest(manager, fixture.repository), randomUUID(), 'runtime-local-draft')
+    await manager.cleanupDraft(binding, 'runtime-local-draft', true)
+    const restarted = new WorktreeManager(fixture.managerRoot)
+    await restarted.cleanupAbandonedDrafts(new Set())
+    assert.equal(await readFile(join(binding.worktreeDirectory, 'tracked.txt'), 'utf8'), 'baseline\n')
+    assert.equal((await restarted.records()).records[0]?.retention?.name, '未发送会话')
+  })
+
+  it('删除最后会话默认保留 Worktree，跨重启可重命名、打开和清理，清理保留分支', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const binding = await manager.create(await worktreeRequest(manager, fixture.repository), randomUUID(), 'runtime-retained')
+    const sessionId = randomUUID()
+    await manager.attachSession(binding, sessionId)
+    const branchName = `whycode/retained-${binding.id.slice(0, 8)}`
+    await manager.createBranch(binding, branchName)
+    const savedCommit = await git(binding.worktreeDirectory, ['rev-parse', 'HEAD'])
+    await writeFile(join(binding.worktreeDirectory, 'uncommitted.txt'), 'pending')
+    manager.release(binding, 'runtime-retained')
+    await manager.detachSession(binding, sessionId, { deleteDirectory: false, name: '网页项目', protectDirectory: false })
+    const restarted = new WorktreeManager(fixture.managerRoot)
+    assert.deepEqual(await restarted.cleanupAbandonedDrafts(new Set()), { removed: [], retained: [], warnings: [] })
+    const lifecycle = new WorkspaceLifecycle(new ManagedWorkspaceManager(join(fixture.managerRoot, 'default'), join(fixture.managerRoot, 'manifests')), restarted, async () => [])
+    const target = (await lifecycle.list()).workspaces[0]!
+    assert.equal(target.name, '网页项目')
+    assert.match((await lifecycle.previewRetained(target)).warning ?? '', /未提交改动.*未保存到分支.*已有 Git 分支/)
+    await lifecycle.renameRetained(target, '本地标识')
+    assert.equal((await lifecycle.list()).workspaces[0]?.retainedAt, target.retainedAt)
+    await lifecycle.openRetained(target, async path => { assert.equal(path, binding.worktreeDirectory) })
+    await lifecycle.deleteRetained(target)
+    await assert.rejects(access(binding.worktreeDirectory), /ENOENT/)
+    await assert.rejects(access(dirname(binding.worktreeDirectory)), /ENOENT/)
+    await assert.rejects(access(join(fixture.managerRoot, '.registry', `${binding.id}.json`)), /ENOENT/)
+    assert.doesNotMatch(await git(fixture.repository, ['worktree', 'list', '--porcelain']), new RegExp(binding.id))
+    assert.equal(await git(fixture.repository, ['rev-parse', `refs/heads/${branchName}`]), savedCommit)
+  })
+
+  it('已确认清理的 Worktree 若被其它 Local 会话使用，也不清空内容', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const binding = await manager.create(await worktreeRequest(manager, fixture.repository), randomUUID(), 'runtime-shared')
+    const sessionId = randomUUID()
+    await manager.attachSession(binding, sessionId)
+    manager.release(binding, 'runtime-shared')
+    const refs = [{ sessionId: randomUUID(), directory: binding.worktreeDirectory }]
+    const lifecycle = new WorkspaceLifecycle(new ManagedWorkspaceManager(join(fixture.managerRoot, 'default'), join(fixture.managerRoot, 'manifests')), manager, async () => refs)
+    assert.equal((await lifecycle.preview(sessionId, binding)).disposition, 'shared')
+    await lifecycle.release(sessionId, binding, 'shared', true)
+    assert.equal(await readFile(join(binding.worktreeDirectory, 'tracked.txt'), 'utf8'), 'baseline\n')
+    assert.deepEqual((await lifecycle.list()).workspaces, [])
+    refs.length = 0
+    assert.equal((await lifecycle.list()).workspaces.length, 1)
+  })
+
   it('未发送草稿的 Worktree 跨重启保留目录与租约，认领后不再作为草稿恢复', async () => {
     const fixture = await createRepository()
     const manager = new WorktreeManager(fixture.managerRoot)
@@ -52,7 +109,7 @@ describe('受管 Worktree 生命周期', () => {
     await restarted.attachSession(binding, sessionId)
     assert.equal(await restarted.restoreDraft(runtimeId, runtimeId), null)
     restarted.release(binding, runtimeId)
-    await restarted.detachSession(binding, sessionId, true)
+    await restarted.detachSession(binding, sessionId, { deleteDirectory: true, name: 'test', protectDirectory: false })
   })
 
   it('选择基线时不创建目录，首条消息初始化才物化精确 Worktree', async () => {
@@ -173,6 +230,7 @@ describe('受管 Worktree 生命周期', () => {
     )
 
     restarted.release(binding, 'runtime-restored')
+    await restarted.detachSession(binding, sessionId, { deleteDirectory: false, name: 'result', protectDirectory: false })
     await assert.rejects(restarted.remove(binding, false), /未提交更改/)
     await restarted.remove(binding, true)
     await assert.rejects(access(binding.worktreeDirectory))
@@ -420,9 +478,9 @@ describe('受管 Worktree 生命周期', () => {
     await restarted.assertUsable(binding, forkSessionId, 'runtime-fork')
     restarted.release(binding, 'runtime-after-crash')
     restarted.release(binding, 'runtime-fork')
-    await restarted.detachSession(binding, sessionId, true)
+    await restarted.detachSession(binding, sessionId, { deleteDirectory: true, name: 'test', protectDirectory: false })
     assert.equal((await restarted.status(binding)).dirty, false)
-    await restarted.detachSession(binding, forkSessionId, true)
+    await restarted.detachSession(binding, forkSessionId, { deleteDirectory: true, name: 'test', protectDirectory: false })
   })
 
   it('附加清单引用非 ignored 路径时回滚 Git 登记与受管目录', async () => {
@@ -556,10 +614,8 @@ describe('受管 Worktree 生命周期', () => {
     await writeFile(manifestPath, '{"schemaVersion":1}')
     const sessionId = randomUUID()
     await assert.rejects(manager.assertUsable(binding, sessionId, 'runtime-restore'), /所有权记录/)
-    const warning = await cleanupSessionWorkspace(sessionId, binding, {
-      detachSession: async () => { assert.fail('不应访问默认工作区') },
-      removeSession: async () => { assert.fail('不应扫描默认工作区') },
-    }, manager)
+    const lifecycle = new WorkspaceLifecycle(new ManagedWorkspaceManager(join(fixture.managerRoot, 'default'), join(fixture.managerRoot, 'manifests')), manager, async () => [])
+    const warning = await lifecycle.release(sessionId, binding, 'test', true)
     assert.match(warning ?? '', /项目文件已保留/)
     assert.equal(await readFile(join(binding.worktreeDirectory, 'tracked.txt'), 'utf8'), 'baseline\n')
     assert.equal(await readFile(manifestPath, 'utf8'), '{"schemaVersion":1}')

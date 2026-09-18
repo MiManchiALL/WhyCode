@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   ChevronDown,
   ChevronUp,
-  CircleAlert,
   Folder,
   MessageSquare,
   MoreHorizontal,
@@ -12,7 +11,7 @@ import {
   Settings,
   Trash2,
 } from 'lucide-react'
-import * as AlertDialog from '@radix-ui/react-alert-dialog'
+import { SessionDeleteDialog } from './session-delete-dialog.tsx'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { SessionListItem } from '../../shared/session.ts'
 import { workspaceDisplayDirectory } from '../../shared/workspace.ts'
@@ -30,12 +29,14 @@ interface AppSidebarProps {
   onNewSession: () => void
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
-  onDelete: (sessionId: string) => void
+  onDelete: (sessionId: string, deleteDirectory: boolean) => void
+  onError: (message: string) => void
   onOpenSettings: () => void
 }
 
 export function AppSidebar(props: AppSidebarProps) {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+  const closeDeleteDialog = useCallback(() => setDeleteTargetId(null), [])
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
   const deleteTarget = props.sessions.find((session) => session.sessionId === deleteTargetId)
   const pinnedSessions = useMemo(
@@ -193,39 +194,8 @@ export function AppSidebar(props: AppSidebarProps) {
         </button>
       </div>
 
-      <AlertDialog.Root
-        open={Boolean(deleteTarget)}
-        onOpenChange={(open) => { if (!open) setDeleteTargetId(null) }}
-      >
-        <AlertDialog.Portal>
-          <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
-          <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">
-            <div className="mb-3 flex size-9 items-center justify-center rounded-xl bg-[#eee2dc] text-[var(--wc-danger)]">
-              <CircleAlert size={18} />
-            </div>
-            <AlertDialog.Title className="text-base font-semibold">删除这个会话？</AlertDialog.Title>
-            <AlertDialog.Description className="mt-2 text-sm leading-6 text-[var(--wc-muted)]">
-              {deleteTarget ? deleteDescription(deleteTarget) : ''}
-            </AlertDialog.Description>
-            <div className="mt-5 flex justify-end gap-2">
-              <AlertDialog.Cancel asChild>
-                <button className="rounded-xl border border-[var(--wc-line)] bg-white px-3 py-2 text-sm">取消</button>
-              </AlertDialog.Cancel>
-              <AlertDialog.Action asChild>
-                <button
-                  className="rounded-xl bg-[var(--wc-danger)] px-3 py-2 text-sm text-white"
-                  onClick={() => {
-                    if (deleteTarget) props.onDelete(deleteTarget.sessionId)
-                    setDeleteTargetId(null)
-                  }}
-                >
-                  删除会话
-                </button>
-              </AlertDialog.Action>
-            </div>
-          </AlertDialog.Content>
-        </AlertDialog.Portal>
-      </AlertDialog.Root>
+      {deleteTarget && <SessionDeleteDialog key={deleteTarget.sessionId} sessionId={deleteTarget.sessionId}
+        onClose={closeDeleteDialog} onDelete={props.onDelete} onError={props.onError} />}
     </aside>
   )
 }
@@ -400,16 +370,6 @@ function SidebarError({ text }: { text: string }) {
       {text}
     </p>
   )
-}
-
-function deleteDescription(session: SessionListItem): string {
-  if (session.workspace?.mode === 'worktree') {
-    return '会话及其受管 Worktree 会被永久删除，尚未提交的文件变化会丢失；已经创建的 Git 分支及其提交仍保留。'
-  }
-  if (session.workspace?.mode === 'managed') {
-    return '会话、任务状态、检查点、后台命令记录和这个会话专属默认工作目录中的全部文件都会被永久删除。'
-  }
-  return '会话、任务状态、检查点、后台命令记录和临时数据都会被永久删除；本地工作文件夹保持不变。'
 }
 
 function lastPathSegment(path: string): string {

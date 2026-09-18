@@ -1,17 +1,10 @@
-import {
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from 'node:fs/promises'
+import { lstat, mkdir, realpath, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { ManagedWorkspaceBinding, SessionSummary } from '@whycode/core'
+import { validateSessionId, type ManagedWorkspaceBinding, type SessionSummary } from '@whycode/core'
 import { WorkspaceOwnershipError } from './workspace-ownership-error.ts'
+import { WorkspaceMutations, removeEmptyWorkspace, retainWorkspace, workspaceName, type WorkspaceReleaseOptions } from './workspace-retention.ts'
+import { ManagedWorkspaceStore, bindingFromManifest, assertSameBinding, type ManagedWorkspaceManifest } from './managed-workspace-store.ts'
+import { directoriesOverlap } from './workspace-path.ts'
 
 export const DEFAULT_WORKSPACE_NAME = 'WhyCode Workspace'
 
@@ -46,14 +39,6 @@ async function ensureDirectory(path: string): Promise<string> {
   return realpath(path)
 }
 
-interface ManagedWorkspaceManifest {
-  schemaVersion: 2
-  id: string
-  workingDirectory: string
-  createdAt: string
-  sessionIds: string[]
-}
-
 export interface ManagedWorkspaceCleanupResult {
   removed: string[]
   warnings: string[]
@@ -65,73 +50,47 @@ export interface ManagedWorkspaceCleanupResult {
  */
 export class ManagedWorkspaceManager {
   readonly rootDirectory: string
-  private readonly manifestDirectory: string
-  private mutationQueue: Promise<void> = Promise.resolve()
+  private readonly store: ManagedWorkspaceStore
+  private readonly mutations = new WorkspaceMutations()
 
   constructor(rootDirectory: string, manifestDirectory: string) {
     this.rootDirectory = resolve(rootDirectory)
-    this.manifestDirectory = resolve(manifestDirectory)
+    this.store = new ManagedWorkspaceStore(this.rootDirectory, resolve(manifestDirectory))
   }
 
   plannedDirectory(id: string): string {
-    assertUuid(id)
-    return join(this.rootDirectory, id)
+    return this.store.plannedDirectory(id)
   }
 
-  async create(id: string): Promise<ManagedWorkspaceBinding> {
-    const workingDirectory = this.plannedDirectory(id)
-    const manifest: ManagedWorkspaceManifest = {
-      schemaVersion: 2,
-      id,
-      workingDirectory,
-      createdAt: new Date().toISOString(),
-      sessionIds: [],
-    }
-    await mkdir(this.manifestDirectory, { recursive: true, mode: 0o700 })
-    await writeFile(this.manifestPath(id), JSON.stringify(manifest), {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: 'wx',
-      flush: true,
-    })
-    try {
-      await mkdir(workingDirectory, { recursive: false, mode: 0o700 })
-      const canonical = await realpath(workingDirectory)
-      if (!samePath(canonical, workingDirectory)) {
-        throw new Error(`默认工作区规范路径不一致：${canonical}`)
-      }
-      return bindingFromManifest(manifest)
-    } catch (error) {
-      await rm(this.manifestPath(id), { force: true }).catch(() => undefined)
-      throw error
-    }
+  create(id: string): Promise<ManagedWorkspaceBinding> {
+    return this.store.create(id)
   }
 
   async restoreDraft(id: string): Promise<ManagedWorkspaceBinding | null> {
     let manifest: ManagedWorkspaceManifest
-    try { manifest = await this.readOwnedManifest(id) } catch (error) {
+    try { manifest = await this.store.read(id) } catch (error) {
       if (isNotFound(error)) return null
       throw error
     }
-    if (manifest.sessionIds.length) throw new Error('默认工作区已经属于已发送的会话')
+    if (manifest.sessionIds.length || manifest.retention) throw new Error('默认工作区已经属于已发送的会话或保留工作区')
     const info = await lstat(manifest.workingDirectory)
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('新会话工作区不是普通目录')
     return bindingFromManifest(manifest)
   }
 
   attachSession(binding: ManagedWorkspaceBinding, sessionId: string): Promise<void> {
-    return this.mutate(async () => {
-      assertUuid(sessionId)
-      const manifest = await this.readOwnedManifest(binding.id)
+    return this.mutations.run(binding.id, async () => {
+      validateSessionId(sessionId)
+      const manifest = await this.store.read(binding.id)
       assertSameBinding(manifest, binding)
       if (manifest.sessionIds.includes(sessionId)) return
-      await this.replaceManifest({ ...manifest, sessionIds: [...manifest.sessionIds, sessionId] })
+      await this.store.write({ ...manifest, retention: null, sessionIds: [...manifest.sessionIds, sessionId] })
     })
   }
 
   async assertUsable(binding: ManagedWorkspaceBinding, sessionId: string): Promise<void> {
-    assertUuid(sessionId)
-    const manifest = await this.readOwnedManifest(binding.id)
+    validateSessionId(sessionId)
+    const manifest = await this.store.read(binding.id)
     assertSameBinding(manifest, binding)
     if (!manifest.sessionIds.includes(sessionId)) {
       throw new Error('默认工作区与会话绑定不一致')
@@ -143,19 +102,24 @@ export class ManagedWorkspaceManager {
   }
 
   /** 仅未发送的新会话草稿可以直接清理，已有会话必须释放自身引用。 */
-  remove(binding: ManagedWorkspaceBinding): Promise<void> {
-    return this.mutate(async () => {
-      const manifest = await this.readOwnedManifest(binding.id)
+  remove(binding: ManagedWorkspaceBinding, protectDirectory = false): Promise<void> {
+    return this.mutations.run(binding.id, async () => {
+      const manifest = await this.store.read(binding.id)
       assertSameBinding(manifest, binding)
       if (manifest.sessionIds.length) throw new Error('默认工作区仍被会话引用')
-      await this.removeManifestWorkspace(manifest)
+      if (manifest.retention) throw new Error('保留的默认工作区不能作为草稿清理')
+      await this.releaseDirectory(manifest, { deleteDirectory: false, name: '未发送会话', protectDirectory })
     })
   }
 
-  detachSession(binding: ManagedWorkspaceBinding, sessionId: string): Promise<void> {
-    return this.mutate(async () => {
+  detachSession(
+    binding: ManagedWorkspaceBinding,
+    sessionId: string,
+    options: WorkspaceReleaseOptions = { deleteDirectory: false, name: '默认工作区', protectDirectory: false },
+  ): Promise<void> {
+    return this.mutations.run(binding.id, async () => {
       let manifest: ManagedWorkspaceManifest
-      try { manifest = await this.readOwnedManifest(binding.id) } catch (error) {
+      try { manifest = await this.store.read(binding.id) } catch (error) {
         if (isNotFound(error)) {
           const directory = await lstat(binding.workingDirectory).catch((error) => {
             if (isNotFound(error)) return null
@@ -167,43 +131,31 @@ export class ManagedWorkspaceManager {
         throw error
       }
       assertSameBinding(manifest, binding)
-      await this.releaseSession(manifest, sessionId)
-    })
-  }
-
-  removeSession(sessionId: string): Promise<string[]> {
-    return this.mutate(async () => {
-      assertUuid(sessionId)
-      const warnings: string[] = []
-      for (const manifest of await this.readAllManifests(warnings)) {
-        if (manifest.sessionIds.includes(sessionId)) {
-          await this.releaseSession(manifest, sessionId)
-          return []
-        }
-      }
-      return warnings
+      await this.releaseSession(manifest, sessionId, options)
     })
   }
 
   /** 按持久会话补齐引用，覆盖 Fork 落盘后、认领前的崩溃窗口。 */
-  cleanupAbandoned(
+  async cleanupAbandoned(
     sessions: readonly Pick<SessionSummary, 'sessionId' | 'workspace'>[],
     draftIds: ReadonlySet<string>,
+    protectedDirectories: readonly string[] = [],
   ): Promise<ManagedWorkspaceCleanupResult> {
-    return this.mutate(async () => {
-      const result: ManagedWorkspaceCleanupResult = { removed: [], warnings: [] }
-      const byWorkspace = new Map<string, { sessionId: string; workspace: ManagedWorkspaceBinding }[]>()
-      for (const item of sessions) {
-        if (item.workspace?.mode !== 'managed') continue
-        const references = byWorkspace.get(item.workspace.id) ?? []
-        references.push({ sessionId: item.sessionId, workspace: item.workspace })
-        byWorkspace.set(item.workspace.id, references)
-      }
-      for (const manifest of await this.readAllManifests(result.warnings)) {
-        try {
+    const result: ManagedWorkspaceCleanupResult = { removed: [], warnings: [] }
+    const byWorkspace = new Map<string, { sessionId: string; workspace: ManagedWorkspaceBinding }[]>()
+    for (const item of sessions) {
+      if (item.workspace?.mode !== 'managed') continue
+      const references = byWorkspace.get(item.workspace.id) ?? []
+      references.push({ sessionId: item.sessionId, workspace: item.workspace })
+      byWorkspace.set(item.workspace.id, references)
+    }
+    for (const candidate of await this.store.readAll(result.warnings)) {
+      try {
+        await this.mutations.run(candidate.id, async () => {
+          const manifest = await this.store.read(candidate.id)
           const references = byWorkspace.get(manifest.id) ?? []
           for (const reference of references) {
-            assertUuid(reference.sessionId)
+            validateSessionId(reference.sessionId)
             assertSameBinding(manifest, reference.workspace)
           }
           // 仅显式解除归属才释放引用，历史缺失不能证明项目目录可回收。
@@ -211,154 +163,74 @@ export class ManagedWorkspaceManager {
             ...references.map(item => item.sessionId),
             ...manifest.sessionIds,
           ])]
-          if (!sessionIds.length && !draftIds.has(manifest.id)) {
-            await this.removeManifestWorkspace(manifest)
-            result.removed.push(manifest.id)
+          if (!sessionIds.length && !manifest.retention && !draftIds.has(manifest.id)) {
+            if (await this.releaseDirectory(manifest, {
+              deleteDirectory: false, name: '未发送会话',
+              protectDirectory: protectedDirectories.some(path => directoriesOverlap(path, manifest.workingDirectory)),
+            })) result.removed.push(manifest.id)
           } else if (sessionIds.length !== manifest.sessionIds.length
             || sessionIds.some(id => !manifest.sessionIds.includes(id))) {
-            await this.replaceManifest({ ...manifest, sessionIds })
+            await this.store.write({ ...manifest, retention: sessionIds.length ? null : manifest.retention, sessionIds })
           }
-        } catch (error) {
-          result.warnings.push(errorMessage(error))
-        }
-      }
-      return result
-    })
-  }
-
-  private async releaseSession(manifest: ManagedWorkspaceManifest, sessionId: string): Promise<void> {
-    assertUuid(sessionId)
-    if (!manifest.sessionIds.includes(sessionId)) return
-    const sessionIds = manifest.sessionIds.filter(id => id !== sessionId)
-    if (sessionIds.length) await this.replaceManifest({ ...manifest, sessionIds })
-    else await this.removeManifestWorkspace(manifest)
-  }
-
-  private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.mutationQueue.then(operation)
-    this.mutationQueue = next.then(() => undefined, () => undefined)
-    return next
-  }
-
-  private async removeManifestWorkspace(manifest: ManagedWorkspaceManifest): Promise<void> {
-    const expected = this.plannedDirectory(manifest.id)
-    if (!samePath(manifest.workingDirectory, expected)) {
-      throw new WorkspaceOwnershipError(`默认工作区 manifest 路径越界：${manifest.workingDirectory}`)
-    }
-    try {
-      const info = await lstat(expected)
-      if (!info.isDirectory() || info.isSymbolicLink()) {
-        throw new WorkspaceOwnershipError(`默认工作区不是普通目录：${expected}`)
-      }
-      await rm(expected, { recursive: true, force: false, maxRetries: 5, retryDelay: 100 })
-    } catch (error) {
-      if (!isNotFound(error)) throw error
-    }
-    await rm(this.manifestPath(manifest.id), { force: true })
-  }
-
-  private async readOwnedManifest(id: string): Promise<ManagedWorkspaceManifest> {
-    const text = await readFile(this.manifestPath(id), 'utf8')
-    try {
-      const manifest = parseManifest(text)
-      if (manifest.id !== id) throw new Error('默认工作区 manifest 身份不一致')
-      return manifest
-    } catch (error) {
-      throw new WorkspaceOwnershipError(errorMessage(error))
-    }
-  }
-
-  private async readAllManifests(warnings: string[] = []): Promise<ManagedWorkspaceManifest[]> {
-    let names: string[]
-    try {
-      names = await readdir(this.manifestDirectory)
-    } catch (error) {
-      if (isNotFound(error)) return []
-      throw error
-    }
-    const manifests: ManagedWorkspaceManifest[] = []
-    for (const name of names.filter((value) => value.endsWith('.json'))) {
-      try {
-        const manifest = parseManifest(await readFile(join(this.manifestDirectory, name), 'utf8'))
-        if (name !== `${manifest.id}.json`) throw new Error('文件名与工作区 ID 不一致')
-        manifests.push(manifest)
+        })
       } catch (error) {
-        warnings.push(`${name}：${errorMessage(error)}`)
+        result.warnings.push(errorMessage(error))
       }
     }
-    return manifests
+    return result
   }
 
-  private async replaceManifest(manifest: ManagedWorkspaceManifest): Promise<void> {
-    const target = this.manifestPath(manifest.id)
-    const temporary = `${target}.${crypto.randomUUID()}.tmp`
-    await writeFile(temporary, JSON.stringify(manifest), {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: 'wx',
-      flush: true,
+  async inspect(binding: ManagedWorkspaceBinding): Promise<ManagedWorkspaceManifest> {
+    const manifest = await this.store.read(binding.id)
+    assertSameBinding(manifest, binding)
+    return manifest
+  }
+
+  async records(): Promise<{ records: ManagedWorkspaceManifest[]; warnings: string[] }> {
+    const warnings: string[] = []
+    return { records: await this.store.readAll(warnings), warnings }
+  }
+
+  renameRetained(id: string, name: string): Promise<void> {
+    return this.mutations.run(id, async () => {
+      const manifest = await this.store.read(id)
+      if (!manifest.retention || manifest.sessionIds.length) throw new Error('工作区已不在保留列表中')
+      await this.store.write({ ...manifest, retention: { ...manifest.retention, name: workspaceName(name) } })
     })
-    try {
-      await rename(temporary, target)
-    } catch (error) {
-      await rm(temporary, { force: true }).catch(() => undefined)
-      throw error
+  }
+
+  deleteRetained(id: string): Promise<void> {
+    return this.mutations.run(id, async () => {
+      const manifest = await this.store.read(id)
+      if (!manifest.retention || manifest.sessionIds.length) throw new Error('工作区已不在保留列表中')
+      await this.store.removeDirectory(manifest)
+    })
+  }
+
+  private async releaseSession(
+    manifest: ManagedWorkspaceManifest, sessionId: string, options: WorkspaceReleaseOptions,
+  ): Promise<void> {
+    validateSessionId(sessionId)
+    if (!manifest.sessionIds.includes(sessionId) && !manifest.retention) return
+    const sessionIds = manifest.sessionIds.filter(id => id !== sessionId)
+    if (sessionIds.length) await this.store.write({ ...manifest, sessionIds })
+    else await this.releaseDirectory({ ...manifest, sessionIds }, options)
+  }
+
+  private async releaseDirectory(manifest: ManagedWorkspaceManifest, options: WorkspaceReleaseOptions): Promise<boolean> {
+    if (!options.protectDirectory) {
+      if (options.deleteDirectory) {
+        await this.store.removeDirectory(manifest)
+        return true
+      }
+      if (await removeEmptyWorkspace(manifest.workingDirectory)) {
+        await this.store.removeManifest(manifest.id)
+        return true
+      }
     }
+    await this.store.write({ ...manifest, retention: retainWorkspace(options.name, manifest.retention) })
+    return false
   }
-
-  private manifestPath(id: string): string {
-    assertUuid(id)
-    return join(this.manifestDirectory, `${id}.json`)
-  }
-}
-
-function bindingFromManifest(manifest: ManagedWorkspaceManifest): ManagedWorkspaceBinding {
-  return {
-    mode: 'managed',
-    id: manifest.id,
-    workingDirectory: manifest.workingDirectory,
-    createdAt: manifest.createdAt,
-  }
-}
-
-function assertSameBinding(
-  manifest: ManagedWorkspaceManifest,
-  binding: ManagedWorkspaceBinding,
-): void {
-  if (
-    manifest.id !== binding.id
-    || manifest.createdAt !== binding.createdAt
-    || !samePath(manifest.workingDirectory, binding.workingDirectory)
-  ) throw new WorkspaceOwnershipError('默认工作区绑定与 manifest 不一致')
-}
-
-function parseManifest(text: string): ManagedWorkspaceManifest {
-  const value: unknown = JSON.parse(text)
-  if (
-    !value
-    || typeof value !== 'object'
-    || (value as ManagedWorkspaceManifest).schemaVersion !== 2
-    || typeof (value as ManagedWorkspaceManifest).id !== 'string'
-    || typeof (value as ManagedWorkspaceManifest).workingDirectory !== 'string'
-    || typeof (value as ManagedWorkspaceManifest).createdAt !== 'string'
-    || !Array.isArray((value as ManagedWorkspaceManifest).sessionIds)
-  ) throw new Error('默认工作区 manifest 无效')
-  const manifest = value as ManagedWorkspaceManifest
-  assertUuid(manifest.id)
-  for (const sessionId of manifest.sessionIds) assertUuid(sessionId)
-  return manifest
-}
-
-function assertUuid(value: string): void {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)) {
-    throw new Error(`默认工作区 ID 无效：${value}`)
-  }
-}
-
-function samePath(left: string, right: string): boolean {
-  const a = resolve(left)
-  const b = resolve(right)
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 function isNotFound(error: unknown): boolean {

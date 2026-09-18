@@ -443,6 +443,14 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 上述操作不改变 Core 文件检查点、工具权限、JSONL 或模型请求；历史快照仍走已有按工具调用与路径授权的检查点读取契约。`checkpointFileChanges({runtimeId,checkpointIds})` 在所属会话的检查点目录中只读指定清单，返回路径与净增删行数，不返回正文；ID 来自已有 `checkpoint-created.hash`，不新增持久事件。缺失、不完整或尚未完成的检查点显式报错，已回滚的完整快照仍可读取。
 
+### 7.4 桌面工作区保留与清理
+
+契约单源为 `shared/workspace-lifecycle.ts`。`previewSessionDeletion(sessionId)` 返回目录及 `local | shared | empty | optional | unverified | missing` 判定，Renderer 仅在 `optional` 展示默认未选的目录清理选项；`deleteSession(sessionId,deleteDirectory)` 要求显式布尔值。Main 校验调用窗口、目录归属与当前引用，不把预览结果当作永久清理许可。
+
+`listRetainedWorkspaces()` 返回无关联会话的保留记录和不可读清单说明。`previewRetainedWorkspace`、`openRetainedWorkspace`、`renameRetainedWorkspace`、`deleteRetainedWorkspace` 只接受 `{mode,id}` 寻址，重命名另接收 1～200 字符名称；磁盘路径由 Main 从有效所有权清单解析，不接受 Renderer 路径作为清理依据。这些调用只允许所属窗口主 Frame，返回统一 `WorkspaceActionResult`，不进入 Agent 工具或 JSONL。
+
+受管默认目录与 Worktree 所有权清单使用 schema 3，必含可空保留信息，不读取或迁移旧 schema。目录保留、共享保护、分支和失败语义见文档二 §7.2。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。

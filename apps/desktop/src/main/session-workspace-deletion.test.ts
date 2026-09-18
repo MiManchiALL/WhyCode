@@ -1,3 +1,5 @@
+import { WorktreeManager } from './worktree-manager.ts'
+import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
@@ -5,13 +7,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { localWorkspace, type SessionJournal, type WorkspaceBinding } from '@whycode/core'
-import { cleanupSessionWorkspace, stageSessionDeletion } from './session-deletion.ts'
+import { stageSessionDeletion } from './session-deletion.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionScratchManager } from './session-scratch.ts'
 import { ManagedWorkspaceManager } from './workspace.ts'
 
 const roots: string[] = []
-const unusedWorktrees = { detachSession: async () => { assert.fail('不应清理无关 Worktree') } }
+
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
@@ -122,7 +124,7 @@ describe('删除会话与项目目录归属', () => {
     assert.deepEqual(await deleteJournal(fixture, source, workspace), { deleted: true })
     await managed.assertUsable(workspace, fork.sessionId)
     assert.deepEqual((await sessions.list()).map(item => item.sessionId), [fork.sessionId])
-    assert.deepEqual(await deleteJournal(fixture, fork, workspace), { deleted: true })
+    assert.deepEqual(await deleteJournal(fixture, fork, workspace, true), { deleted: true })
     await assert.rejects(access(workspace.workingDirectory), /ENOENT/)
     assert.deepEqual(await sessions.list(), [])
   })
@@ -139,21 +141,21 @@ describe('删除会话与项目目录归属', () => {
     assert.deepEqual(await sessions.list(), [])
   })
 
-  it('真实文件清理失败仍保留重试入口，不伪装成已删除', async () => {
+  it('真实文件清理失败仍保留重试入口，不伪装成已删除', async (t) => {
     const fixture = await createFixture()
     const { root, sessions, managed } = fixture
     const workspace = await managed.create(randomUUID())
     const journal = await sessions.create(workspace, 'test:model')
     await managed.attachSession(workspace, journal.sessionId)
     const failure = Object.assign(new Error('文件被占用'), { code: 'EBUSY' })
+    const failureMock = t.mock.method(managed, 'detachSession', async () => { throw failure })
     const deletion = await stageSessionDeletion({
       sessionId: journal.sessionId, sessions,
       commandSessions: { removeSession: async () => {} }, scratch: new SessionScratchManager(join(root, 'scratch')),
-      onBeforeFactSourceDelete: () => cleanupSessionWorkspace(journal.sessionId, workspace, {
-        detachSession: async () => { throw failure }, removeSession: managed.removeSession.bind(managed),
-      }, unusedWorktrees),
+      onBeforeFactSourceDelete: () => fixture.lifecycle.release(journal.sessionId, workspace, 'test', false),
     })
     await assert.rejects(deletion.finish(), error => error === failure)
+    failureMock.mock.restore()
     assert.equal((await sessions.list())[0]?.resumable, false)
     await access(join(root, 'sessions', journal.sessionId, 'transcript.jsonl'))
     assert.deepEqual(await deleteJournal(fixture, journal, workspace), { deleted: true })
@@ -166,20 +168,22 @@ async function createFixture() {
   roots.push(root)
   await mkdir(join(root, 'workspace'))
   const manifests = join(root, 'manifests')
-  return { root, manifests, sessions: new DesktopSessionRepository(join(root, 'sessions')),
-    managed: new ManagedWorkspaceManager(await realpath(join(root, 'workspace')), manifests) }
+  const managed = new ManagedWorkspaceManager(await realpath(join(root, 'workspace')), manifests)
+  const lifecycle = new WorkspaceLifecycle(managed, new WorktreeManager(join(root, 'worktrees')), async () => [])
+  return { root, manifests, managed, lifecycle, sessions: new DesktopSessionRepository(join(root, 'sessions')) }
 }
 
 async function deleteJournal(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   journal: SessionJournal,
   workspace: WorkspaceBinding | undefined,
+  deleteDirectory = false,
 ) {
-  const { root, sessions, managed } = fixture
+  const { root, sessions, lifecycle } = fixture
   const deletion = await stageSessionDeletion({
     sessionId: journal.sessionId, sessions,
     commandSessions: { removeSession: async () => {} }, scratch: new SessionScratchManager(join(root, 'scratch')),
-    onBeforeFactSourceDelete: () => cleanupSessionWorkspace(journal.sessionId, workspace, managed, unusedWorktrees),
+    onBeforeFactSourceDelete: () => lifecycle.release(journal.sessionId, workspace, 'test', deleteDirectory),
   })
   assert.equal(deletion.sessionExists, true)
   return deletion.finish()

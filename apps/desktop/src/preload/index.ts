@@ -1,3 +1,4 @@
+import type { RetainedWorkspaceList, RetainedWorkspaceTarget, WorkspaceDeletionPreview } from '../shared/workspace-lifecycle.ts'
 import {
   contextBridge,
   ipcRenderer,
@@ -266,8 +267,20 @@ const api = {
     ipcRenderer.invoke(IPC.newSession, request),
   setSessionPinned: (request: SetSessionPinnedRequest): Promise<SetSessionPinnedResult> =>
     ipcRenderer.invoke(IPC.setSessionPinned, request),
-  deleteSession: (sessionId: string): Promise<DeleteSessionResult> =>
-    ipcRenderer.invoke(IPC.deleteSession, sessionId),
+  deleteSession: (sessionId: string, deleteDirectory: boolean): Promise<DeleteSessionResult> =>
+    ipcRenderer.invoke(IPC.deleteSession, sessionId, deleteDirectory),
+  previewSessionDeletion: (sessionId: string): Promise<WorkspaceActionResult<WorkspaceDeletionPreview>> =>
+    ipcRenderer.invoke(IPC.previewSessionDeletion, sessionId),
+  listRetainedWorkspaces: (): Promise<WorkspaceActionResult<RetainedWorkspaceList>> =>
+    ipcRenderer.invoke(IPC.listRetainedWorkspaces),
+  previewRetainedWorkspace: (target: RetainedWorkspaceTarget): Promise<WorkspaceActionResult<WorkspaceDeletionPreview>> =>
+    ipcRenderer.invoke(IPC.previewRetainedWorkspace, target),
+  openRetainedWorkspace: (target: RetainedWorkspaceTarget): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.openRetainedWorkspace, target),
+  renameRetainedWorkspace: (target: RetainedWorkspaceTarget, name: string): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.renameRetainedWorkspace, target, name),
+  deleteRetainedWorkspace: (target: RetainedWorkspaceTarget): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.deleteRetainedWorkspace, target),
   openPdfAttachment: (
     runtimeId: string,
     attachmentId: string,

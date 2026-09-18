@@ -1,3 +1,5 @@
+import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
+import { registerWorkspaceLifecycleIpc } from './workspace-lifecycle-ipc.ts'
 import {
   app,
   BrowserWindow,
@@ -104,7 +106,7 @@ import {
   updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
-import { cleanupSessionWorkspace, stageSessionDeletion } from './session-deletion.ts'
+import { stageSessionDeletion } from './session-deletion.ts'
 import { SessionScratchManager } from './session-scratch.ts'
 import { NewSessionStateStore } from './new-session-state.ts'
 import { installComposerWindowLifecycle } from './composer-window-lifecycle.ts'
@@ -488,8 +490,9 @@ let subagentDefinitions: SubagentDefinitionCatalogService
 let subagents: SubagentService
 /** WhyCode 受管 Git Worktree 的创建、所有权、恢复校验与清理事实源。 */
 let worktrees: WorktreeManager
-/** 每个默认会话独占一个受管子目录；Fork 从来源目录创建一次性快照。 */
+/** 新会话创建受管目录；Fork 共享项目目录，各自持有独立引用。 */
 let managedWorkspaces: ManagedWorkspaceManager
+let workspaceLifecycle: WorkspaceLifecycle
 let newSessionState: NewSessionStateStore
 /** 普通 Main 与协商任务共用的会话级临时工作区所有权入口。 */
 let sessionScratch: SessionScratchManager
@@ -647,7 +650,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     const runtime = runtimeForId(runtimeId)
     const binding = worktreeBinding(runtime.workspace)
     if (!binding) throw new Error('当前会话使用本地工作区，没有可丢弃的受管 Worktree')
-    if (runtime.sessionId) return deleteSession(runtime.sessionId)
+    if (runtime.sessionId) return deleteSession(runtime.sessionId, true)
     if (runtime.busy) throw new Error('Agent 工作中，请先停止再丢弃 Worktree')
 
     const wasSelected = runtimeRegistry.selected === runtime
@@ -687,6 +690,7 @@ function createDraftRuntime(
   workspace: RuntimeWorkspace,
   runtimeId?: string,
 ): DesktopSessionRuntime {
+  workspaceLifecycle?.assertAvailable(workspaceDisplayDirectory(workspace))
   const runtime = new DesktopSessionRuntime({
     runtimeId,
     workspace,
@@ -2185,6 +2189,7 @@ async function selectRuntimeWithSnapshot(
   let snapshot: RuntimeSnapshot
   try {
     snapshot = await runtimeSnapshot(runtime)
+    workspaceLifecycle?.assertAvailable(workspaceDisplayDirectory(runtime.workspace))
     if (!runtime.journal) {
       await newSessionState.set({ runtimeId: runtime.runtimeId, workspace: runtime.workspace })
     }
@@ -2426,7 +2431,7 @@ async function attachSessionWorkspace(journal: SessionJournal): Promise<void> {
 async function removeForkSessionWorkspace(journal: SessionJournal): Promise<void> {
   const workspace = journal.metadataSnapshot.workspace
   if (workspace.mode === 'worktree') {
-    await worktrees.detachSession(workspace, journal.sessionId, true)
+    await worktrees.detachSession(workspace, journal.sessionId, { deleteDirectory: false, name: '未完成的 Fork', protectDirectory: true })
   }
   if (workspace.mode === 'managed') {
     await managedWorkspaces.detachSession(workspace, journal.sessionId)
@@ -2565,7 +2570,7 @@ function pendingInputs(
     }))
 }
 
-async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
+async function deleteSession(sessionId: string, deleteDirectory: boolean): Promise<DeleteSessionResult> {
   const targetRuntime = runtimeRegistry.findBySessionId(sessionId)
   if (
     sessionDeletionLock.sessionId
@@ -2598,6 +2603,14 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
       ? null
       : (await sessions.list()).find((item) => item.sessionId === sessionId)
     const targetWorkspace = targetRuntime?.workspaceBinding ?? summary?.workspace
+    if (typeof deleteDirectory !== 'boolean') throw new Error('删除工作目录选项无效')
+    if (deleteDirectory) {
+      const preview = await workspaceLifecycle.preview(sessionId, targetWorkspace)
+      if (['local', 'shared', 'unverified'].includes(preview.disposition)) {
+        throw new Error('工作目录无法删除或仍被其它会话使用，请重新确认')
+      }
+    }
+    const workspaceName = targetRuntime?.journal?.metadataSnapshot.title ?? summary?.title ?? '保留的工作区'
     const deletion = await stageSessionDeletion({
       sessionId,
       sessions,
@@ -2609,8 +2622,8 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
       },
       onBeforeFactSourceDelete: async () => {
-        const warning = await cleanupSessionWorkspace(
-          sessionId, targetWorkspace, managedWorkspaces, worktrees,
+        const warning = await workspaceLifecycle.release(
+          sessionId, targetWorkspace, workspaceName, deleteDirectory,
         )
         await syncRetiredModelLabels(sessionId)
         return warning
@@ -2746,14 +2759,20 @@ if (primaryInstance) void app.whenReady().then(async () => {
   try {
     const summaries = await sessions.list()
     await sessionSidebarState.initialize(new Set(summaries.map((summary) => summary.sessionId)))
+    const protectedDirectories = [
+      ...summaries.flatMap(item => item.workspace ? [workspaceDisplayDirectory(item.workspace)] : []),
+      newSessionState.value ? workspaceDisplayDirectory(newSessionState.value.workspace) : null,
+    ].filter((directory): directory is string => directory !== null)
     const worktreeCleanup = await worktrees.cleanupAbandonedDrafts(
       new Set(summaries.flatMap((summary) =>
         summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
       ).concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
+      protectedDirectories,
     )
     const managedCleanup = await managedWorkspaces.cleanupAbandoned(
       summaries,
       new Set(newSessionState.value ? [newSessionState.value.runtimeId] : []),
+      protectedDirectories,
     )
     const scratchCleanup = await sessionScratch.cleanupAbandoned(
       new Set(summaries.map((summary) => summary.sessionId)),
@@ -2794,9 +2813,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
       if (workspace?.mode === 'worktree' && runtime.journal) {
         worktrees.release(workspace, runtime.runtimeId)
       } else if (workspace?.mode === 'worktree') {
-        await worktrees.cleanupDraft(workspace, runtime.runtimeId)
+        await worktrees.cleanupDraft(workspace, runtime.runtimeId,
+          await workspaceLifecycle?.isReferenced(workspace.worktreeDirectory) ?? false)
       } else if (workspace?.mode === 'managed' && !runtime.journal) {
-        await managedWorkspaces.remove(workspace)
+        await managedWorkspaces.remove(workspace,
+          await workspaceLifecycle?.isReferenced(workspace.workingDirectory) ?? false)
       }
     },
   })
@@ -3034,7 +3055,32 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string, historyStart?: string) => resumeSession(sessionId, historyStart))
   ipcMain.handle(IPC.forkSession, (_e, request: unknown) => forkSession(request))
-  ipcMain.handle(IPC.deleteSession, (_e, sessionId: string) => deleteSession(sessionId))
+  workspaceLifecycle = new WorkspaceLifecycle(managedWorkspaces, worktrees, async () => {
+    const persisted = (await sessions.list()).flatMap(item => {
+      const directory = item.workspace ? workspaceDisplayDirectory(item.workspace) : null
+      return directory ? [{ sessionId: item.sessionId as string | null, directory }] : []
+    })
+    const active = runtimeRegistry.all().flatMap(runtime => {
+      const directory = workspaceDisplayDirectory(runtime.workspace)
+      return directory ? [{ sessionId: runtime.sessionId, directory }] : []
+    })
+    const draft = newSessionState.value
+    const directory = draft ? workspaceDisplayDirectory(draft.workspace) : null
+    return [...persisted, ...active, ...(directory ? [{ sessionId: null, directory }] : [])]
+  })
+  registerWorkspaceLifecycleIpc(workspaceLifecycle, async sessionId => {
+    const runtime = runtimeRegistry.findBySessionId(sessionId)
+    if (runtime?.workspaceBinding) return runtime.workspaceBinding
+    const summary = (await sessions.list()).find(item => item.sessionId === sessionId)
+    if (!summary) throw new Error('会话不存在')
+    return summary.workspace
+  })
+  ipcMain.handle(IPC.deleteSession, (event, sessionId: string, deleteDirectory: boolean) => {
+    if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
+      return { ok: false, error: '仅主页面可删除会话' }
+    }
+    return deleteSession(sessionId, deleteDirectory)
+  })
   ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>
     currentWorktreeStatus(runtimeId))
   ipcMain.handle(IPC.createWorktreeBranch, (_e, runtimeId: string, branchName: string) =>

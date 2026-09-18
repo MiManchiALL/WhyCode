@@ -1536,7 +1536,7 @@ export function App() {
     stashActivePresentation,
   ])
 
-  const deleteSession = useCallback((sessionId: string) => {
+  const deleteSession = useCallback((sessionId: string, deleteDirectory: boolean) => {
     if (
       deletingSessionIdRef.current
       || resumingSessionIdRef.current
@@ -1546,7 +1546,7 @@ export function App() {
     // 同步关闭删除当前会话与切换之间的点击竞态；Main 接管后立即切到替代会话。
     setDeletionBlocksRuntime(isCurrentSessionDeletion(sessionIdRef.current, sessionId))
     let cleanupPending = false
-    void window.whycode.deleteSession(sessionId).then(async (result) => {
+    void window.whycode.deleteSession(sessionId, deleteDirectory).then(async (result) => {
       cleanupPending = result.ok && result.cleanupPending
       if (result.ok || result.deletedCurrent) {
         void composerDraftsRef.current.delete(sessionId).catch(draftStorageError)
@@ -2053,6 +2053,7 @@ export function App() {
           onResume={resumeSession}
           onPinnedChange={setSessionPinned}
           onDelete={deleteSession}
+          onError={showError}
           onOpenSettings={openConnectionSettings}
         />
       </div>
@@ -2094,10 +2095,11 @@ export function App() {
             )}
           </aside>
           <section className="relative flex min-w-0 flex-1 flex-col" inert={panelFullscreen}>
-            {!loadingConversation && conversationFeedback && (
+            {(!loadingConversation || showConnectionSettings) && conversationFeedback && (
               <ConversationFeedbackToast
                 key={conversationFeedback.id}
                 feedback={conversationFeedback}
+                floating={showConnectionSettings}
                 onDismiss={dismissConversationFeedback}
               />
             )}
@@ -2476,6 +2478,7 @@ export function App() {
           snapshot={connectionSettings}
           onClose={() => setShowConnectionSettings(false)}
           onChanged={applyConnectionSettings}
+          onError={showError}
         />
       )}
     </div>
