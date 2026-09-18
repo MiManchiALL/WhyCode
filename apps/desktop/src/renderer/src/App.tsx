@@ -2356,7 +2356,7 @@ export function App() {
                       models={models}
                       modelId={modelId}
                       reasoningEffort={reasoningEffort}
-                      contextUsage={contextUsage}
+                      contextUsage={conversationStarted ? contextUsage : null}
                       primaryAction={primaryAction}
                       stopping={stopping}
                       stopDisabled={

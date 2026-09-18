@@ -15,6 +15,9 @@ import { afterEach, describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { isStepScopedCoreEvent, type CoreEvent } from '../events.ts'
+import { estimateMessagesTokens } from '../context/tokens.ts'
+import { SkillCatalogService } from '../skills/catalog.ts'
+import { applySkillContext } from '../skills/context.ts'
 import { visibleCoreEventSchema } from '../session/view-events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
@@ -199,6 +202,67 @@ describe('Agent 资源检查点联动', () => {
     assert.deepEqual(restored.question, question)
     await assert.rejects(access(target))
   })
+
+  for (const keepEarlierTurn of [false, true]) {
+    it(`文件和对话回滚${keepEarlierTurn ? '保留早期对话' : '到空历史'}后计量只包含保留消息及请求上下文`, async () => {
+      const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-context-restore-'))
+      roots.push(root)
+      const project = join(root, 'project')
+      const home = join(root, 'home')
+      const skillRoot = join(home, '.whycode', 'skills', 'context-probe')
+      await Promise.all([mkdir(project), mkdir(skillRoot, { recursive: true })])
+      await writeFile(join(skillRoot, 'SKILL.md'), '---\nname: context-probe\ndescription: 核对上下文\n---\n核对当前请求。')
+      const target = join(project, 'old.txt')
+      const store = new SessionStore(join(root, 'sessions'))
+      const recorder = await store.create({ workspace: localWorkspace(project), modelId: 'test:checkpoint' })
+      const events: CoreEvent[] = []
+      const latestUsage = () => {
+        const event = events.findLast(event => event.type === 'context-usage')
+        assert.ok(event?.type === 'context-usage' && event.usage)
+        return event.usage
+      }
+      const model = new MockLanguageModelV4({ doStream: [
+        ...(keepEarlierTurn ? [textStep('EARLIER_REPLY', 'earlier')] : []),
+        toolStep('WriteFile', { path: target, content: 'REMOVED_FILE_CONTENT' }, 'write-old'),
+        textStep('REMOVED_REPLY', 'old-final'),
+        textStep('你好', 'new-final'),
+      ] })
+      const skillCatalog = new SkillCatalogService({ homeDir: home })
+      const options = {
+        model: modelEntry(model), providerConfig: { apiKey: 'test' },
+        promptContext: { projectDir: project, homeDir: home, osPlatform: process.platform },
+        sessionRecorder: recorder, skillCatalog,
+        emit: (event: CoreEvent) => events.push(event),
+        requestApproval: async () => ({ approved: true }),
+      }
+      const session = new AgentSession(options)
+      await session.initializeContextUsage()
+      assert.ok(latestUsage().breakdown.messageTokens > 0, '空历史仍包含 Skill 目录开销')
+      if (keepEarlierTurn) assert.equal(await session.handleUserMessage('EARLIER_QUESTION'), 'completed')
+      const prefix = structuredClone(recorder.initialMessages)
+      assert.equal(await session.handleUserMessage('REMOVED_QUESTION'), 'completed')
+      const checkpoint = events.find(event => event.type === 'checkpoint-created')
+      assert.ok(checkpoint?.type === 'checkpoint-created')
+
+      await session.restoreCheckpoint(checkpoint.toolUseId, 'files-and-chat')
+      await assert.rejects(access(target))
+      assert.deepEqual(recorder.initialMessages, prefix)
+      const snapshot = await skillCatalog.snapshot(project, 100_000)
+      const restoredUsage = latestUsage()
+      assert.equal(restoredUsage.breakdown.messageTokens, estimateMessagesTokens(applySkillContext(prefix, snapshot, [], new Set())))
+      assert.equal(restoredUsage.usedTokens, Object.values(restoredUsage.breakdown).reduce((sum, tokens) => sum + tokens, 0), '旧 Provider 基线已失效')
+      const reopened = await store.open(recorder.sessionId)
+      await new AgentSession({ ...options, sessionRecorder: reopened }).initializeContextUsage()
+      assert.deepEqual(latestUsage(), restoredUsage, '运行中回滚和重新打开使用同一计量')
+
+      assert.equal(await session.handleUserMessage('你好'), 'completed')
+      const request = JSON.stringify(model.doStreamCalls.at(-1)?.prompt)
+      assert.doesNotMatch(request, /REMOVED_/u)
+      assert.equal(request.includes('EARLIER_QUESTION'), keepEarlierTurn)
+      assert.match(request, /whycode-skill-catalog/u)
+      assert.equal(latestUsage().breakdown.messageTokens, estimateMessagesTokens(applySkillContext(recorder.initialMessages, snapshot, [], new Set())))
+    })
+  }
 
   it('结束旧计划并创建新计划后，文件和对话回滚会恢复原活动计划', async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-plan-switch-'))

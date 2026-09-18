@@ -7,7 +7,7 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 const ROWS = [
   { key: 'system' as const, field: 'systemPromptTokens' as const, label: '系统提示词' },
   { key: 'tools' as const, field: 'toolTokens' as const, label: '工具' },
-  { key: 'messages' as const, field: 'messageTokens' as const, label: '对话消息' },
+  { key: 'messages' as const, field: 'messageTokens' as const, label: '消息与上下文' },
 ]
 
 export function ContextUsageMeter({ usage }: { usage: ContextUsageInfo | null }) {
@@ -89,7 +89,7 @@ export function ContextUsageMeter({ usage }: { usage: ContextUsageInfo | null })
           <dl className="wc-context-meter-rows">
             {ROWS.map((row) => (
               <div key={row.key} className="wc-context-meter-row">
-                <dt>
+                <dt title={row.key === 'messages' ? '包含当前对话、工具结果、Skill 目录及随请求发送的上下文。' : undefined}>
                   <span className={`wc-context-meter-swatch wc-context-meter-${row.key}`} aria-hidden="true" />
                   {row.label}
                 </dt>
