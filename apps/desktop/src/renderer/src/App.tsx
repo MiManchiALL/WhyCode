@@ -199,7 +199,6 @@ export function App() {
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [sessionListError, setSessionListError] = useState<string | null>(null)
-  const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [workspaceCandidate, setWorkspaceCandidate] = useState<WorkspaceCandidate | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -833,12 +832,11 @@ export function App() {
       if (snapshot.resumingSessionId) return
       setResumingSessionId(null)
       setStatus(snapshot.status)
-      setSessionActionError('会话恢复失败，当前会话未更改')
+      showError('会话恢复失败，当前会话未更改')
     } catch (error) {
       if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
       setResumingSessionId(null)
       const message = `恢复完成后的运行态同步失败：${error instanceof Error ? error.message : String(error)}`
-      setSessionActionError(message)
       showError(message)
     }
   }, [
@@ -1020,10 +1018,10 @@ export function App() {
       setDeletionBlocksRuntime(false)
     }
     if (state.status === 'failed') {
-      setSessionActionError(`会话删除未完成：${state.error}`)
+      showError(`会话删除未完成：${state.error}`)
     }
     void refreshSessions()
-  }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime])
+  }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime, showError])
 
   useEffect(() => {
     if (!rightPanelState.open) setRightPanelFullscreen(false)
@@ -1502,14 +1500,13 @@ export function App() {
     }
     const request = {}
     resumeRequestRef.current = request
-    setSessionActionError(null)
     setResumingSessionId(sessionId)
     const presentation = conversationPresentationsRef.current.get(sessionId)
     const historyStart = presentation?.scroll?.atBottom === false ? presentation.historyStart : undefined
     void window.whycode.resumeSession(sessionId, historyStart).then(async (result) => {
       if (resumeRequestRef.current !== request) return
       if (!result.ok) {
-        setSessionActionError(result.error)
+        showError(result.error)
         return
       }
       await prepareComposer(result.snapshot)
@@ -1521,7 +1518,6 @@ export function App() {
     }).catch((error) => {
       if (resumeRequestRef.current !== request) return
       const message = `会话恢复请求失败：${error instanceof Error ? error.message : String(error)}`
-      setSessionActionError(message)
       showError(message)
     }).finally(() => {
       if (resumeRequestRef.current !== request) return
@@ -1544,7 +1540,6 @@ export function App() {
       || resumingSessionIdRef.current
       || sessionTransitionPendingRef.current
     ) return
-    setSessionActionError(null)
     setDeletingSession(sessionId)
     // 同步关闭删除当前会话与切换之间的点击竞态；Main 接管后立即切到替代会话。
     setDeletionBlocksRuntime(isCurrentSessionDeletion(sessionIdRef.current, sessionId))
@@ -1570,9 +1565,9 @@ export function App() {
         conversationPresentationsRef.current.delete(sessionId)
         void window.whycode.consensusStatus().then(setConsensus)
       }
-      if (!result.ok) setSessionActionError(result.error ?? '删除会话失败')
+      if (!result.ok) showError(result.error ?? '删除会话失败')
     }).catch(() => {
-      setSessionActionError('删除会话失败，请重试')
+      showError('删除会话失败，请重试')
     }).finally(() => {
       if (!cleanupPending) {
         setDeletingSession(null)
@@ -1588,22 +1583,22 @@ export function App() {
     resetActiveComposer,
     setDeletionBlocksRuntime,
     setDeletingSession,
+    showError,
   ])
 
   const setSessionPinned = useCallback((sessionId: string, pinned: boolean) => {
-    setSessionActionError(null)
     void window.whycode.setSessionPinned({ sessionId, pinned }).then((result) => {
       if (!result.ok) {
-        setSessionActionError(result.error)
+        showError(result.error)
         return
       }
       void refreshSessions()
     }).catch((error) => {
-      setSessionActionError(
+      showError(
         `更新会话置顶状态失败：${error instanceof Error ? error.message : String(error)}`,
       )
     })
-  }, [refreshSessions])
+  }, [refreshSessions, showError])
 
   const compact = useCallback(() => {
     if (status !== 'idle' && status !== 'error') return
@@ -1615,10 +1610,9 @@ export function App() {
     const sourceSessionId = sessionIdRef.current
     if (!sourceSessionId || !beginSessionTransition()) return
     setForkPendingTurnId(sourceTurnId)
-    setSessionActionError(null)
     void window.whycode.forkSession({ sourceSessionId, sourceTurnId }).then(async (result) => {
       if (!result.ok) {
-        setSessionActionError(result.error)
+        showError(result.error)
         return
       }
       await prepareComposer(result.snapshot)
@@ -1628,7 +1622,6 @@ export function App() {
       void refreshModelCatalog()
     }).catch((error) => {
       const message = `创建会话分支失败：${error instanceof Error ? error.message : String(error)}`
-      setSessionActionError(message)
       showError(message)
     }).finally(() => {
       setForkPendingTurnId(null)
@@ -2051,7 +2044,6 @@ export function App() {
           selectedSessionId={resumingSessionId ?? sessionIdRef.current}
           navigationLocked={sessionNavigationLocked}
           error={sessionListError}
-          actionError={sessionActionError}
           busy={sessionChangeLocked}
           deletingSessionId={deletingSessionId}
           onCollapsedChange={setSidebarCollapsed}

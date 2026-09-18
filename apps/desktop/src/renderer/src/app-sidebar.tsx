@@ -23,7 +23,6 @@ interface AppSidebarProps {
   sessions: readonly SessionListItem[]
   selectedSessionId: string | null
   error: string | null
-  actionError: string | null
   busy: boolean
   navigationLocked: boolean
   deletingSessionId: string | null
@@ -124,7 +123,6 @@ export function AppSidebar(props: AppSidebarProps) {
           inert={props.collapsed}
         >
           {props.error && <SidebarError text={props.error} />}
-          {props.actionError && <SidebarError text={props.actionError} />}
           {props.sessions.length === 0 && !props.error ? (
             <div className="px-3 py-12 text-center text-xs text-[var(--wc-faint)]">
               新会话会显示在这里
