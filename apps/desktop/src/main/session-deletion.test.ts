@@ -77,7 +77,7 @@ describe('会话关联数据删除', () => {
       onBeforeFactSourceDelete: () => releaseModelLabels(deletedJournal.sessionId),
     })
     assert.equal(deletion.sessionExists, true)
-    assert.equal(await deletion.finish(), true)
+    assert.deepEqual(await deletion.finish(), { deleted: true })
 
     await assert.rejects(access(join(sessionsRoot, deletedJournal.sessionId)))
     await assert.rejects(access(join(commandsRoot, deletedJournal.sessionId)))
@@ -95,7 +95,7 @@ describe('会话关联数据删除', () => {
       sessionId: currentJournal.sessionId, sessions, commandSessions, scratch,
       onBeforeFactSourceDelete: () => releaseModelLabels(currentJournal.sessionId),
     })
-    assert.equal(await finalDeletion.finish(), true)
+    assert.deepEqual(await finalDeletion.finish(), { deleted: true })
     assert.equal(loadConfig(configPath, codec)?.retiredModelLabels, undefined)
     assert.doesNotMatch(await readFile(configPath, 'utf8'), /test:model|历史测试型号/)
     assert.deepEqual(await sessions.list(), [])
@@ -161,7 +161,7 @@ describe('会话关联数据删除', () => {
       onBeforeFactSourceDelete: async () => { calls.push('references') },
     })
     assert.deepEqual(calls, ['mark'])
-    assert.equal(await deletion.finish(), true)
+    assert.deepEqual(await deletion.finish(), { deleted: true })
     assert.deepEqual(
       calls,
       ['mark', 'detach', 'resources-closed', 'command', 'scratch', 'references', 'session'],

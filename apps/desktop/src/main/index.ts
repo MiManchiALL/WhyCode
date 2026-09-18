@@ -40,7 +40,6 @@ import {
   type ImageAttachment,
   type ImageDeliveryMode,
   type ImageAttachmentInput,
-  type ManagedWorkspaceBinding,
   type ModelEntry,
   type PdfAttachment,
   type ProviderConfig,
@@ -105,7 +104,7 @@ import {
   updateMcpSecretHeader,
   updateMcpServerState,
 } from './mcp-settings.ts'
-import { stageSessionDeletion } from './session-deletion.ts'
+import { cleanupSessionWorkspace, stageSessionDeletion } from './session-deletion.ts'
 import { SessionScratchManager } from './session-scratch.ts'
 import { NewSessionStateStore } from './new-session-state.ts'
 import { installComposerWindowLifecycle } from './composer-window-lifecycle.ts'
@@ -563,12 +562,6 @@ function worktreeBinding(
   workspace: RuntimeWorkspace | undefined,
 ): WorktreeWorkspaceBinding | null {
   return workspace?.mode === 'worktree' ? workspace : null
-}
-
-function managedWorkspaceBinding(
-  workspace: RuntimeWorkspace | undefined,
-): ManagedWorkspaceBinding | null {
-  return workspace?.mode === 'managed' ? workspace : null
 }
 
 function sourceWorkspaceDirectory(workspace: RuntimeWorkspace): string {
@@ -2604,12 +2597,7 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
     const summary = targetRuntime
       ? null
       : (await sessions.list()).find((item) => item.sessionId === sessionId)
-    const targetWorktree = worktreeBinding(
-      targetRuntime?.workspace ?? summary?.workspace,
-    )
-    const targetManagedWorkspace = managedWorkspaceBinding(
-      targetRuntime?.workspace ?? summary?.workspace,
-    )
+    const targetWorkspace = targetRuntime?.workspaceBinding ?? summary?.workspace
     const deletion = await stageSessionDeletion({
       sessionId,
       sessions,
@@ -2621,13 +2609,11 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
       },
       onBeforeFactSourceDelete: async () => {
-        if (targetWorktree) await worktrees.detachSession(targetWorktree, sessionId, true)
-        if (targetManagedWorkspace) {
-          await managedWorkspaces.detachSession(targetManagedWorkspace, sessionId)
-        } else {
-          await managedWorkspaces.removeSession(sessionId)
-        }
+        const warning = await cleanupSessionWorkspace(
+          sessionId, targetWorkspace, managedWorkspaces, worktrees,
+        )
         await syncRetiredModelLabels(sessionId)
+        return warning
       },
     })
     if (!deletion.sessionExists) {
@@ -2643,12 +2629,12 @@ async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
     }
 
     cleanupStarted = true
-    void deletion.finish().then(async (deleted) => {
-      if (!deleted) throw new Error('会话删除状态已丢失')
+    void deletion.finish().then(async (result) => {
+      if (!result.deleted) throw new Error('会话删除状态已丢失')
       runtimeRegistry.forgetSession(sessionId)
       await sessionSidebarState.setPinned(sessionId, false)
         .catch((error) => console.warn('会话已删除，但置顶状态清理失败：', error))
-      broadcastSessionDeletion({ sessionId, status: 'completed' })
+      broadcastSessionDeletion({ sessionId, status: 'completed', warning: result.warning })
     }).catch((error) => {
       broadcastSessionDeletion({
         sessionId,

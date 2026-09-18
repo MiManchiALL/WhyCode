@@ -22,6 +22,7 @@ import {
 } from './runtime-workspace.ts'
 import { ManagedWorkspaceManager } from './workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
+import { cleanupSessionWorkspace } from './session-deletion.ts'
 
 const tempRoots: string[] = []
 
@@ -542,6 +543,27 @@ describe('受管 Worktree 生命周期', () => {
 
     await assert.rejects(manager.remove(binding, true), /所有权记录已经缺失/)
     await access(binding.worktreeDirectory)
+  })
+
+  it('不支持的 Worktree 清单只阻止目录清理，不阻止会话删除', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const binding = await manager.create(
+      await worktreeRequest(manager, fixture.repository), randomUUID(), 'runtime-deletion',
+    )
+    manager.release(binding, 'runtime-deletion')
+    const manifestPath = join(fixture.managerRoot, '.registry', `${binding.id}.json`)
+    await writeFile(manifestPath, '{"schemaVersion":1}')
+    const sessionId = randomUUID()
+    await assert.rejects(manager.assertUsable(binding, sessionId, 'runtime-restore'), /所有权记录/)
+    const warning = await cleanupSessionWorkspace(sessionId, binding, {
+      detachSession: async () => { assert.fail('不应访问默认工作区') },
+      removeSession: async () => { assert.fail('不应扫描默认工作区') },
+    }, manager)
+    assert.match(warning ?? '', /项目文件已保留/)
+    assert.equal(await readFile(join(binding.worktreeDirectory, 'tracked.txt'), 'utf8'), 'baseline\n')
+    assert.equal(await readFile(manifestPath, 'utf8'), '{"schemaVersion":1}')
+    assert.match(await git(fixture.repository, ['worktree', 'list', '--porcelain']), new RegExp(binding.id))
   })
 
   it('受管路径被替换成目录联接或符号链接时拒绝递归删除', async () => {

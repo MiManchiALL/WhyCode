@@ -19,6 +19,7 @@ import {
   worktreeWorkspaceBindingSchema,
   type WorktreeWorkspaceBinding,
 } from '@whycode/core'
+import { WorkspaceOwnershipError } from './workspace-ownership-error.ts'
 
 interface WorktreeManifest {
   schemaVersion: 2
@@ -51,7 +52,7 @@ export class ManagedWorktreeRegistry {
   async validateBinding(binding: WorktreeWorkspaceBinding): Promise<void> {
     const expected = await this.expectedDirectory(binding.repositoryDirectory, binding.id)
     if (!samePath(expected, binding.worktreeDirectory)) {
-      throw new Error('Worktree 路径不属于 WhyCode 受管目录')
+      throw new WorkspaceOwnershipError('Worktree 路径不属于 WhyCode 受管目录')
     }
   }
 
@@ -107,7 +108,16 @@ export class ManagedWorktreeRegistry {
     sessionId: string,
   ): Promise<number> {
     validateSessionId(sessionId)
-    const manifest = await this.read(binding)
+    let manifest: WorktreeManifest
+    try {
+      manifest = await this.read(binding)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      if (await pathExists(binding.worktreeDirectory)) {
+        throw new WorkspaceOwnershipError('Worktree 目录仍存在，但所有权记录已经缺失')
+      }
+      return 0
+    }
     const remaining = manifest.sessionIds.filter((value) => value !== sessionId)
     if (remaining.length !== manifest.sessionIds.length) {
       await this.write({ ...manifest, sessionIds: remaining })
@@ -197,11 +207,11 @@ export class ManagedWorktreeRegistry {
     try {
       value = JSON.parse(text)
     } catch {
-      throw new Error('Worktree 所有权记录已损坏')
+      throw new WorkspaceOwnershipError('Worktree 所有权记录已损坏')
     }
     const manifest = parseManifest(value)
     if (!manifest || !isDeepStrictEqual(manifest.binding, binding)) {
-      throw new Error('Worktree 所有权记录缺失或与会话不一致')
+      throw new WorkspaceOwnershipError('Worktree 所有权记录缺失或与会话不一致')
     }
     return manifest
   }
@@ -265,12 +275,12 @@ export class ManagedWorktreeRegistry {
     })
     if (!info) return null
     if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw new Error('受管 Worktree 路径不是普通目录')
+      throw new WorkspaceOwnershipError('受管 Worktree 路径不是普通目录')
     }
     const canonical = await realpath(target)
     assertDescendant(root, canonical)
     if (!samePath(canonical, target)) {
-      throw new Error('受管 Worktree 路径穿过符号链接或目录联接')
+      throw new WorkspaceOwnershipError('受管 Worktree 路径穿过符号链接或目录联接')
     }
     return canonical
   }

@@ -166,5 +166,5 @@ export type DeleteSessionResult =
   | { ok: false; error: string; deletedCurrent?: boolean; snapshot?: RuntimeSnapshot }
 
 export type SessionDeletionState =
-  | { sessionId: string; status: 'completed' }
+  | { sessionId: string; status: 'completed'; warning?: string }
   | { sessionId: string; status: 'failed'; error: string }

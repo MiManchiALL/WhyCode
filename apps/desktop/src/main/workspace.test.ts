@@ -140,7 +140,7 @@ describe('会话受管默认工作区', () => {
     await assert.rejects(stat(binding.workingDirectory), /ENOENT/)
   })
 
-  it('找不到目标绑定且所有权记录损坏时中止删除，不静默遗留目录', async () => {
+  it('无法识别目标归属时返回保留原因，不让无关损坏记录阻塞历史删除', async () => {
     const root = await temporaryRoot()
     const workspaceRoot = join(root, 'workspace')
     const manifests = join(root, 'manifests')
@@ -149,10 +149,10 @@ describe('会话受管默认工作区', () => {
     await writeFile(join(manifests, 'broken.json'), '{')
     const manager = new ManagedWorkspaceManager(await realpath(workspaceRoot), manifests)
 
-    await assert.rejects(
-      () => manager.removeSession('33333333-3333-4333-8333-333333333333'),
-      /所有权记录损坏，未完成删除/,
-    )
+    const warnings = await manager.removeSession('33333333-3333-4333-8333-333333333333')
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0] ?? '', /broken.json/)
+    assert.equal(await readFile(join(manifests, 'broken.json'), 'utf8'), '{')
   })
 })
 

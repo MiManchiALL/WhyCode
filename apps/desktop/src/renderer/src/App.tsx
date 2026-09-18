@@ -1019,9 +1019,11 @@ export function App() {
     }
     if (state.status === 'failed') {
       showError(`会话删除未完成：${state.error}`)
+    } else if (state.warning) {
+      showConversationFeedback('info', `会话已删除；${state.warning}`)
     }
     void refreshSessions()
-  }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime, showError])
+  }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime, showError, showConversationFeedback])
 
   useEffect(() => {
     if (!rightPanelState.open) setRightPanelFullscreen(false)

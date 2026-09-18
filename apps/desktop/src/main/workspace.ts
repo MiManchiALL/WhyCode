@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ManagedWorkspaceBinding, SessionSummary } from '@whycode/core'
+import { WorkspaceOwnershipError } from './workspace-ownership-error.ts'
 
 export const DEFAULT_WORKSPACE_NAME = 'WhyCode Workspace'
 
@@ -155,7 +156,14 @@ export class ManagedWorkspaceManager {
     return this.mutate(async () => {
       let manifest: ManagedWorkspaceManifest
       try { manifest = await this.readOwnedManifest(binding.id) } catch (error) {
-        if (isNotFound(error)) return
+        if (isNotFound(error)) {
+          const directory = await lstat(binding.workingDirectory).catch((error) => {
+            if (isNotFound(error)) return null
+            throw error
+          })
+          if (directory) throw new WorkspaceOwnershipError('默认工作区所有权记录缺失')
+          return
+        }
         throw error
       }
       assertSameBinding(manifest, binding)
@@ -163,29 +171,27 @@ export class ManagedWorkspaceManager {
     })
   }
 
-  removeSession(sessionId: string): Promise<void> {
+  removeSession(sessionId: string): Promise<string[]> {
     return this.mutate(async () => {
+      assertUuid(sessionId)
       const warnings: string[] = []
       for (const manifest of await this.readAllManifests(warnings)) {
         if (manifest.sessionIds.includes(sessionId)) {
           await this.releaseSession(manifest, sessionId)
-          return
+          return []
         }
       }
-      if (warnings.length > 0) {
-        throw new Error(`默认工作区所有权记录损坏，未完成删除：${warnings.join('；')}`)
-      }
+      return warnings
     })
   }
 
-  /** 按持久会话重建引用，覆盖 Fork 落盘后、认领前的崩溃窗口。 */
+  /** 按持久会话补齐引用，覆盖 Fork 落盘后、认领前的崩溃窗口。 */
   cleanupAbandoned(
     sessions: readonly Pick<SessionSummary, 'sessionId' | 'workspace'>[],
     draftIds: ReadonlySet<string>,
   ): Promise<ManagedWorkspaceCleanupResult> {
     return this.mutate(async () => {
       const result: ManagedWorkspaceCleanupResult = { removed: [], warnings: [] }
-      const unknown = new Set(sessions.filter(item => !item.workspace).map(item => item.sessionId))
       const byWorkspace = new Map<string, { sessionId: string; workspace: ManagedWorkspaceBinding }[]>()
       for (const item of sessions) {
         if (item.workspace?.mode !== 'managed') continue
@@ -200,10 +206,10 @@ export class ManagedWorkspaceManager {
             assertUuid(reference.sessionId)
             assertSameBinding(manifest, reference.workspace)
           }
-          // 不可读的会话仍保留已有所有权，直到用户显式删除该会话。
+          // 仅显式解除归属才释放引用，历史缺失不能证明项目目录可回收。
           const sessionIds = [...new Set([
             ...references.map(item => item.sessionId),
-            ...manifest.sessionIds.filter(id => unknown.has(id)),
+            ...manifest.sessionIds,
           ])]
           if (!sessionIds.length && !draftIds.has(manifest.id)) {
             await this.removeManifestWorkspace(manifest)
@@ -237,12 +243,12 @@ export class ManagedWorkspaceManager {
   private async removeManifestWorkspace(manifest: ManagedWorkspaceManifest): Promise<void> {
     const expected = this.plannedDirectory(manifest.id)
     if (!samePath(manifest.workingDirectory, expected)) {
-      throw new Error(`默认工作区 manifest 路径越界：${manifest.workingDirectory}`)
+      throw new WorkspaceOwnershipError(`默认工作区 manifest 路径越界：${manifest.workingDirectory}`)
     }
     try {
       const info = await lstat(expected)
       if (!info.isDirectory() || info.isSymbolicLink()) {
-        throw new Error(`默认工作区不是普通目录：${expected}`)
+        throw new WorkspaceOwnershipError(`默认工作区不是普通目录：${expected}`)
       }
       await rm(expected, { recursive: true, force: false, maxRetries: 5, retryDelay: 100 })
     } catch (error) {
@@ -252,9 +258,14 @@ export class ManagedWorkspaceManager {
   }
 
   private async readOwnedManifest(id: string): Promise<ManagedWorkspaceManifest> {
-    const manifest = parseManifest(await readFile(this.manifestPath(id), 'utf8'))
-    if (manifest.id !== id) throw new Error('默认工作区 manifest 身份不一致')
-    return manifest
+    const text = await readFile(this.manifestPath(id), 'utf8')
+    try {
+      const manifest = parseManifest(text)
+      if (manifest.id !== id) throw new Error('默认工作区 manifest 身份不一致')
+      return manifest
+    } catch (error) {
+      throw new WorkspaceOwnershipError(errorMessage(error))
+    }
   }
 
   private async readAllManifests(warnings: string[] = []): Promise<ManagedWorkspaceManifest[]> {
@@ -318,7 +329,7 @@ function assertSameBinding(
     manifest.id !== binding.id
     || manifest.createdAt !== binding.createdAt
     || !samePath(manifest.workingDirectory, binding.workingDirectory)
-  ) throw new Error('默认工作区绑定与 manifest 不一致')
+  ) throw new WorkspaceOwnershipError('默认工作区绑定与 manifest 不一致')
 }
 
 function parseManifest(text: string): ManagedWorkspaceManifest {
