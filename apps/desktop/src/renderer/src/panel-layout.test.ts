@@ -21,7 +21,7 @@ describe('两侧栏宽度', () => {
     assert.equal(parsePanelWidth('left', '600'), 360)
     assert.equal(parsePanelWidth('right', '0.28'), 0.28)
     assert.equal(parsePanelWidth('right', '0.12'), 0.2)
-    assert.equal(parsePanelWidth('right', '0.9'), 0.36)
+    assert.equal(parsePanelWidth('right', '0.9'), 0.4)
   })
 
   it('分别保存全局宽度；缩窄窗口不会改写用户偏好', (context) => {
@@ -47,14 +47,14 @@ describe('两侧栏宽度', () => {
     assert.equal(loadPanelWidth('right'), 0.28)
   })
 
-  it('右侧上限收紧后，两侧最宽仍保留对话空间', () => {
+  it('两侧最宽仍保留对话空间', () => {
     assert.deepEqual(panelWidthBounds({ side: 'left', viewportWidth: 1_920, containerWidth: 1_920 }), {
       minWidth: 240, maxWidth: 360,
     })
     const right = panelWidthBounds({ side: 'right', viewportWidth: 1_920, containerWidth: 1_546 })
     assert.equal(right.minWidth, 384)
-    assert.ok(Math.abs(right.maxWidth - 691.2) < 0.001)
-    assert.ok(1_546 - right.maxWidth > 850)
+    assert.equal(right.maxWidth, 768)
+    assert.equal(1_546 - right.maxWidth, 778)
     assert.deepEqual(panelWidthBounds({ side: 'right', viewportWidth: 800, containerWidth: 546 }), {
       minWidth: 126, maxWidth: 126,
     })

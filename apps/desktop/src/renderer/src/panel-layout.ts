@@ -7,7 +7,7 @@ export const PANEL_CLOSE_OVERSHOOT = 72
 // 会话列表保存像素宽度，文件侧栏保存窗口比例；响应式限宽不改写偏好。
 export const PANEL_WIDTHS = {
   left: { minimum: 240, maximum: 360, default: 260, viewportLimit: 0.3, storageKey: 'whycode:session-sidebar-width:v1' },
-  right: { minimum: 0.2, maximum: 0.36, default: 0.36, storageKey: 'whycode:right-panel-width-ratio:v1' },
+  right: { minimum: 0.2, maximum: 0.4, default: 0.36, storageKey: 'whycode:right-panel-width-ratio:v1' },
 } as const
 
 export interface PanelWidthBounds {
