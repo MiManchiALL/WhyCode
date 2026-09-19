@@ -19,10 +19,12 @@ import { requireGitSuccess, runGit } from './git-process.ts'
 import {
   materializeRuntimeWorkspace,
   prepareRuntimeWorkspace,
+  restoreSubmittedWorkspace,
 } from './runtime-workspace.ts'
 import { ManagedWorkspaceManager } from './workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
+import { DesktopSessionRepository } from './session-repository.ts'
 
 const tempRoots: string[] = []
 
@@ -38,6 +40,34 @@ afterEach(async () => {
 })
 
 describe('受管 Worktree 生命周期', () => {
+  it('首次发送登记在检出前可见，检出后的中断恢复沿用同一工作区和会话身份', async () => {
+    const fixture = await createRepository()
+    const manager = new WorktreeManager(fixture.managerRoot)
+    const managed = new ManagedWorkspaceManager(join(fixture.managerRoot, 'default'), join(fixture.managerRoot, 'manifests'))
+    const sessions = new DesktopSessionRepository(join(fixture.managerRoot, 'sessions'))
+    const sessionId = randomUUID()
+    const request = await worktreeRequest(manager, fixture.repository)
+    const workspace = await prepareRuntimeWorkspace(request, manager)
+    await sessions.preparations.register({ sessionId, workspace, modelId: 'test:model',
+      reasoningEffort: 'default', lastUserText: '创建隔离项目' })
+    assert.equal((await sessions.list())[0]?.workspace?.mode, 'pending-worktree')
+    const binding = await manager.create(request, sessionId, sessionId)
+    manager.release(binding, sessionId)
+    const restarted = new WorktreeManager(fixture.managerRoot)
+    const recovered = await restoreSubmittedWorkspace(sessionId, workspace, restarted, managed,
+      value => sessions.preparations.updateWorkspace(sessionId, value))
+    assert.deepEqual(recovered, binding)
+    assert.deepEqual((await restarted.inspectBinding(binding)).sessionIds, [sessionId])
+    const journal = await sessions.create(binding, 'test:model', 'default', undefined, sessionId)
+    await sessions.preparations.finish(sessionId)
+    assert.equal(journal.sessionId, sessionId)
+    assert.equal((await sessions.list()).length, 1)
+    restarted.release(binding, sessionId)
+    await restarted.detachSession(binding, sessionId, { deleteDirectory: true, protectDirectory: false, name: '测试项目' })
+    await sessions.delete(sessionId)
+    await assert.rejects(access(binding.worktreeDirectory), /ENOENT/)
+  })
+
   it('干净 Worktree 草稿重新选为 Local 后，旧草稿卸载不能删除共享目录', async () => {
     const fixture = await createRepository()
     const manager = new WorktreeManager(fixture.managerRoot)

@@ -429,7 +429,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 草稿是 Desktop 的用户输入状态，不是 Core 会话事实，不写 JSONL、模型 messages、Fork 或压缩摘要。Renderer 独立保存文本、图片数据、PDF 引用、Skill 选择、BTW 模式与退回输入的消费 ID；恢复后只保留当前 canonical restored inputs 仍存在的 ID，并从待恢复队列排除已经放入输入框的项。
 
-`newSession()` 返回尚未发送的新会话，重复请求复用同一准备事务、运行时与工作区；`newSession({workspace})` 显式更换项目，`workspace:null` 表示移除项目并回到待创建的默认目录。Main 在 `userData/new-session.json` 保存这份工作区身份，输入内容由 Renderer 的草稿存储持有。建立 Journal 后释放新会话入口，草稿随实际会话 ID 转移；仅点击新建或输入未发送内容不会建立 Journal 或发送请求。窗口关闭通过 `composerPersistence` 通道握手，Main 只接受所属主 Frame 的保存完成确认；握手不传递草稿内容，不经过 Core 命令或事件。
+`newSession()` 返回尚未发送的新会话，重复请求复用同一准备事务、运行时与工作区；`newSession({workspace})` 显式更换项目，`workspace:null` 表示移除项目并回到待创建的默认目录。Main 在 `userData/new-session.json` 保存这份工作区身份，输入内容由 Renderer 的草稿存储持有。首次发送登记后释放新会话入口；`RuntimeSnapshot.sessionId` 和运行事件在工作区准备期间就携带持久身份，草稿随该身份转移，生命周期见文档二 §7.2。仅点击新建或输入未发送内容不会建立 Journal 或发送请求。窗口关闭通过 `composerPersistence` 通道握手，Main 只接受所属主 Frame 的保存完成确认；握手不传递草稿内容，不经过 Core 命令或事件。
 
 ### 7.3 桌面文件浏览
 

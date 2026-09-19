@@ -114,7 +114,7 @@ import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
 import { installWorkspaceFileLifecycle, registerWorkspaceFileIpc } from './workspace-files-ipc.ts'
-import { workspaceDisplayDirectory } from '../shared/workspace.ts'
+import { runtimeWorkspaceBinding, workspaceDisplayDirectory } from '../shared/workspace.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionPreparationLock } from './session-preparation-lock.ts'
@@ -183,6 +183,7 @@ import type {
 import {
   materializeRuntimeWorkspace,
   prepareDefaultRuntimeWorkspace,
+  restoreSubmittedWorkspace,
   prepareRuntimeWorkspace,
 } from './runtime-workspace.ts'
 import type {
@@ -733,7 +734,8 @@ function resolveCurrentModelId(runtime: DesktopSessionRuntime): string | null {
 async function materializeWorkspace(runtime: DesktopSessionRuntime): Promise<WorkspaceBinding> {
   const binding = await materializeRuntimeWorkspace(runtime, worktrees, managedWorkspaces)
   if (!runtime.journal) {
-    await newSessionState.set({ runtimeId: runtime.runtimeId, workspace: binding })
+    if (runtime.sessionId) await sessions.preparations.updateWorkspace(runtime.sessionId, binding)
+    else await newSessionState.updateWorkspace(runtime.runtimeId, binding)
   }
   return binding
 }
@@ -761,10 +763,16 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
           workspace,
           modelId,
           runtime.reasoningEffort,
+          runtime.sessionId ?? undefined,
         )
         runtime.journal = recorder
         await newSessionState.consume(runtime.runtimeId)
+        await sessions.preparations.finish(recorder.sessionId)
+        await sessionScratch.ensure(recorder.sessionId)
+        if (workspace.mode === 'worktree') await worktrees.attachSession(workspace, recorder.sessionId)
+        else if (workspace.mode === 'managed') await managedWorkspaces.attachSession(workspace, recorder.sessionId)
         terminals.bindSession(runtime.runtimeId, recorder.sessionId)
+        await syncRetiredModelLabels()
         if (!runtime.session) {
           runtime.session = await createMainAgentSession(
             runtime,
@@ -801,44 +809,18 @@ async function createRuntimeJournal(
   workspace: WorkspaceBinding,
   modelId: string,
   reasoningEffort: ReasoningEffortSelection,
+  sessionId?: string,
 ): Promise<SessionJournal> {
   const customSystemPrompt = await loadCustomSystemPromptSnapshot(
     customSystemPromptConfigPath,
   )
-  const recorder = await sessions.create(
+  return sessions.create(
     workspace,
     modelId,
     reasoningEffort,
     customSystemPrompt,
+    sessionId,
   )
-  try {
-    await syncRetiredModelLabels()
-    await sessionScratch.ensure(recorder.sessionId)
-    if (workspace.mode === 'worktree') {
-      await worktrees.attachSession(workspace, recorder.sessionId)
-    } else if (workspace.mode === 'managed') {
-      await managedWorkspaces.attachSession(workspace, recorder.sessionId)
-    }
-    return recorder
-  } catch (error) {
-    sessions.release(recorder)
-    const rollbackErrors: unknown[] = []
-    await sessionScratch.remove(recorder.sessionId)
-      .catch((rollbackError) => rollbackErrors.push(rollbackError))
-    await sessions.markDeleting(recorder.sessionId)
-      .catch((rollbackError) => rollbackErrors.push(rollbackError))
-    await sessions.delete(recorder.sessionId)
-      .catch((rollbackError) => rollbackErrors.push(rollbackError))
-    await syncRetiredModelLabels()
-      .catch((rollbackError) => rollbackErrors.push(rollbackError))
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...rollbackErrors],
-        '初始化会话资源失败且自动回滚未完成',
-      )
-    }
-    throw error
-  }
 }
 
 async function createMainAgentSession(
@@ -1373,8 +1355,25 @@ async function handleUserMessageCommand(
   try {
     let prepared: PreparedUserMessage
     try {
+      await workStart.ready
+      if (!runtime.sessionId) {
+        const modelId = resolveCurrentModelId(runtime)
+        if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
+        await sessions.preparations.register({
+          sessionId: runtime.runtimeId,
+          workspace: runtime.workspace,
+          modelId,
+          reasoningEffort: runtime.reasoningEffort,
+          lastUserText: command.text.trim().slice(0, 200),
+        })
+        runtime.registerSession()
+        await newSessionState.consume(runtime.runtimeId)
+        terminals.bindSession(runtime.runtimeId, runtime.runtimeId)
+      }
+      if (!runtime.journal) runtime.beginWork()
       prepared = await prepareUserMessage(runtime, command)
     } catch (error) {
+      if (!runtime.session) runtime.finishWork()
       return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))
     }
 
@@ -1443,6 +1442,7 @@ async function handleUserMessageCommand(
   } finally {
     // routeUserMessage 正常路径已释放；准备阶段失败时由这里释放。release 幂等。
     workStart.release()
+    if (!runtime.busy) runtime.emit({ type: 'agent-status', status: 'idle' }, false)
     // 若后台终态正因 AskUserQuestion 等待真实回答，此时用户输入已优先完成路由，
     // 可在下一稳定步骤边界把通知交给同一 Agent，而不占用第二套轮询或计时器。
     nudgeNotificationQueues()
@@ -2159,7 +2159,7 @@ async function runtimeSnapshot(
       ? sessionDeletionLock.sessionId
       : null,
     resumingSessionId,
-    sessionId: journal?.sessionId ?? null,
+    sessionId: runtime.sessionId,
     history: conversationHistoryWindow(timeline.state, { from: historyStart }),
     queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
@@ -2190,7 +2190,7 @@ async function selectRuntimeWithSnapshot(
   try {
     snapshot = await runtimeSnapshot(runtime)
     workspaceLifecycle?.assertAvailable(workspaceDisplayDirectory(runtime.workspace))
-    if (!runtime.journal) {
+    if (!runtime.sessionId) {
       await newSessionState.set({ runtimeId: runtime.runtimeId, workspace: runtime.workspace })
     }
     runtimeRegistry.select(runtime)
@@ -2353,6 +2353,22 @@ function parseForkSessionRequest(value: unknown): ForkSessionRequest {
 }
 
 async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionRuntime> {
+  const preparation = await sessions.preparations.read(sessionId)
+  if (preparation) {
+    const workspace = await restoreSubmittedWorkspace(sessionId, preparation.workspace,
+      worktrees, managedWorkspaces, binding => sessions.preparations.updateWorkspace(sessionId, binding))
+    const runtime = new DesktopSessionRuntime({
+      runtimeId: sessionId,
+      workspace,
+      modelId: preparation.modelId,
+      reasoningEffort: preparation.reasoningEffort,
+      permissionMode: preferredPermissionMode,
+      emit: broadcastRuntimeEvent,
+    })
+    runtime.registerSession()
+    runtime.consensusEnabled = preferredConsensusEnabled
+    return runtime
+  }
   const journal = await sessions.prepareResume(sessionId)
   await journal.recoverInterruptedWork()
   return prepareRuntimeFromJournal(journal)
@@ -2602,7 +2618,7 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
     const summary = targetRuntime
       ? null
       : (await sessions.list()).find((item) => item.sessionId === sessionId)
-    const targetWorkspace = targetRuntime?.workspaceBinding ?? summary?.workspace
+    const targetWorkspace = runtimeWorkspaceBinding(targetRuntime?.workspace ?? summary?.workspace)
     if (typeof deleteDirectory !== 'boolean') throw new Error('删除工作目录选项无效')
     if (deleteDirectory) {
       const preview = await workspaceLifecycle.preview(sessionId, targetWorkspace)
@@ -2736,6 +2752,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
   newSessionState = new NewSessionStateStore(join(app.getPath('userData'), 'new-session.json'))
   try {
     await newSessionState.initialize()
+    const registeredIds = new Set((await sessions.list()).map(item => item.sessionId))
+    if (newSessionState.value && registeredIds.has(newSessionState.value.runtimeId)) {
+      await newSessionState.consume(newSessionState.value.runtimeId)
+    }
     const savedDraft = newSessionState.value
     if (savedDraft) {
       const { runtimeId, workspace } = savedDraft
@@ -2758,6 +2778,16 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
   try {
     const summaries = await sessions.list()
+    for (const summary of summaries) {
+      if (!('preparing' in summary)) continue
+      try {
+        summary.workspace = await restoreSubmittedWorkspace(summary.sessionId, summary.workspace,
+          worktrees, managedWorkspaces, binding => sessions.preparations.updateWorkspace(summary.sessionId, binding))
+        if (summary.workspace.mode === 'worktree') worktrees.release(summary.workspace, summary.sessionId)
+      } catch (error) {
+        console.warn('会话准备目录恢复失败：', error)
+      }
+    }
     await sessionSidebarState.initialize(new Set(summaries.map((summary) => summary.sessionId)))
     const protectedDirectories = [
       ...summaries.flatMap(item => item.workspace ? [workspaceDisplayDirectory(item.workspace)] : []),
@@ -2765,13 +2795,15 @@ if (primaryInstance) void app.whenReady().then(async () => {
     ].filter((directory): directory is string => directory !== null)
     const worktreeCleanup = await worktrees.cleanupAbandonedDrafts(
       new Set(summaries.flatMap((summary) =>
-        summary.workspace?.mode === 'worktree' ? [summary.workspace.id] : [],
+        summary.workspace?.mode === 'worktree' ? [summary.workspace.id]
+          : summary.workspace?.mode === 'pending-worktree' ? [summary.sessionId] : [],
       ).concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
       protectedDirectories,
     )
     const managedCleanup = await managedWorkspaces.cleanupAbandoned(
-      summaries,
-      new Set(newSessionState.value ? [newSessionState.value.runtimeId] : []),
+      summaries.map(summary => ({ sessionId: summary.sessionId, workspace: runtimeWorkspaceBinding(summary.workspace) })),
+      new Set(summaries.filter(item => item.workspace?.mode === 'pending-managed').map(item => item.sessionId)
+        .concat(newSessionState.value ? [newSessionState.value.runtimeId] : [])),
       protectedDirectories,
     )
     const scratchCleanup = await sessionScratch.cleanupAbandoned(
@@ -2806,16 +2838,16 @@ if (primaryInstance) void app.whenReady().then(async () => {
     retainDraft: (runtime) => newSessionState.value?.runtimeId === runtime.runtimeId,
     onRemoved: async (runtime) => {
       workspaceFiles.closeRuntime(runtime.runtimeId)
-      if (!runtime.journal) terminals.closeOwner({ runtimeId: runtime.runtimeId })
+      if (!runtime.sessionId) terminals.closeOwner({ runtimeId: runtime.runtimeId })
       if (runtime.journal) sessions.release(runtime.journal)
-      if (!runtime.journal && newSessionState.value?.runtimeId === runtime.runtimeId) return
+      if (!runtime.sessionId && newSessionState.value?.runtimeId === runtime.runtimeId) return
       const workspace = runtime.workspaceBinding
-      if (workspace?.mode === 'worktree' && runtime.journal) {
+      if (workspace?.mode === 'worktree' && runtime.sessionId) {
         worktrees.release(workspace, runtime.runtimeId)
       } else if (workspace?.mode === 'worktree') {
         await worktrees.cleanupDraft(workspace, runtime.runtimeId,
           await workspaceLifecycle?.isReferenced(workspace.worktreeDirectory) ?? false)
-      } else if (workspace?.mode === 'managed' && !runtime.journal) {
+      } else if (workspace?.mode === 'managed' && !runtime.sessionId) {
         await managedWorkspaces.remove(workspace,
           await workspaceLifecycle?.isReferenced(workspace.workingDirectory) ?? false)
       }
@@ -3073,7 +3105,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (runtime?.workspaceBinding) return runtime.workspaceBinding
     const summary = (await sessions.list()).find(item => item.sessionId === sessionId)
     if (!summary) throw new Error('会话不存在')
-    return summary.workspace
+    return runtimeWorkspaceBinding(summary.workspace)
   })
   ipcMain.handle(IPC.deleteSession, (event, sessionId: string, deleteDirectory: boolean) => {
     if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {

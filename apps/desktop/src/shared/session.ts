@@ -24,7 +24,15 @@ import type {
   StartWorkspaceRequest,
 } from './workspace.ts'
 
-export type SessionListItem = SessionSummary & {
+/** 已登记的会话在工作区准备完毕前也具有可导航、可删除的持久身份。 */
+export type DesktopSessionSummary = SessionSummary | (
+  Omit<Extract<SessionSummary, { resumable: true }>, 'workspace'> & {
+    workspace: RuntimeWorkspace
+    preparing: true
+  }
+)
+
+export type SessionListItem = DesktopSessionSummary & {
   isCurrent: boolean
   running: boolean
   pinned: boolean
@@ -61,7 +69,7 @@ export interface RuntimeSnapshot {
   deletingSessionId: string | null
   /** Renderer 重载时恢复 Main 中尚未提交的最新导航目标。 */
   resumingSessionId: string | null
-  /** 当前已经原子提交的会话；恢复中的候选会话不会提前出现在这里。 */
+  /** 首次发送登记后即存在；恢复中的候选会话不会提前替换当前身份。 */
   sessionId: string | null
   history: ConversationHistoryWindow
   queuedInputs: QueuedUserMessage[]

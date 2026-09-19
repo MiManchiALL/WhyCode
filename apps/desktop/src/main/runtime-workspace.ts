@@ -78,6 +78,35 @@ export async function materializeRuntimeWorkspace(
   }
 }
 
+/** 恢复已发送、尚未建立 Journal 的工作区；检出中断时只恢复登记，不重新执行发送。 */
+export async function restoreSubmittedWorkspace(
+  sessionId: string,
+  workspace: RuntimeWorkspace,
+  worktrees: WorktreeManager,
+  managedWorkspaces: ManagedWorkspaceManager,
+  persistWorkspace: (workspace: RuntimeWorkspace) => Promise<void>,
+): Promise<RuntimeWorkspace> {
+  const binding = workspace.mode === 'pending-managed'
+    ? await managedWorkspaces.restoreDraft(sessionId)
+    : workspace.mode === 'pending-worktree'
+      ? await worktrees.restoreDraft(sessionId, sessionId)
+      : workspace
+  if (!binding) return workspace
+  try {
+    // 先固化目录身份，再认领引用，重启后不能把已认领目录再次当作未发送草稿。
+    await persistWorkspace(binding)
+    if (binding.mode === 'managed') {
+      await managedWorkspaces.attachSession(binding, sessionId)
+      await managedWorkspaces.assertUsable(binding, sessionId)
+    }
+    if (binding.mode === 'worktree') await worktrees.assertUsable(binding, sessionId, sessionId)
+    return binding
+  } catch (error) {
+    if (binding.mode === 'worktree') worktrees.release(binding, sessionId)
+    throw error
+  }
+}
+
 function isWorktreeStartRequest(value: Record<string, unknown>): value is WorktreeStartRequest {
   return value.mode === 'worktree'
     && typeof value.selectedDirectory === 'string'

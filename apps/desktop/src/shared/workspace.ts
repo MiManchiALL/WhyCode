@@ -31,8 +31,8 @@ export type StartWorkspaceRequest =
 export type WorktreeStartRequest = Extract<StartWorkspaceRequest, { mode: 'worktree' }>
 
 /**
- * 尚未提交首条消息的 Worktree 选择，由 Desktop 新会话草稿保存并投影到运行时快照；
- * 不属于会话持久化事实，也不代表磁盘上已经存在 Git Worktree。
+ * 尚未完成检出的 Worktree 选择，由 Desktop 草稿或首次发送登记保存；
+ * 不写入 Core Journal，也不代表磁盘上已经存在 Git Worktree。
  */
 export interface PendingWorktreeWorkspace {
   mode: 'pending-worktree'
@@ -42,7 +42,7 @@ export interface PendingWorktreeWorkspace {
   acknowledgeUncommittedChangesExcluded: boolean
 }
 
-/** 新会话尚未发送首条消息时的受管默认目录计划；路径只展示，不代表目录已创建。 */
+/** 尚未物化的受管默认目录计划；路径只展示，不代表目录已创建。 */
 export interface PendingManagedWorkspace {
   mode: 'pending-managed'
   id: string
@@ -53,6 +53,13 @@ export type RuntimeWorkspace =
   | WorkspaceBinding
   | PendingManagedWorkspace
   | PendingWorktreeWorkspace
+
+/** 未物化的选择没有可以清理或认领的目录，不能把来源项目当作 Worktree。 */
+export function runtimeWorkspaceBinding(workspace: RuntimeWorkspace | undefined): WorkspaceBinding | undefined {
+  return workspace?.mode === 'pending-worktree' || workspace?.mode === 'pending-managed'
+    ? { mode: 'none' }
+    : workspace
+}
 
 export interface WorktreeStatusEntry {
   code: string

@@ -494,6 +494,8 @@ export type SessionSummary =
     }
 
 export interface SessionCreateInput {
+  /** 宿主在准备工作区前登记的稳定身份；省略时由 Store 分配。 */
+  sessionId?: string
   workspace: WorkspaceBinding
   modelId: string
   reasoningEffort?: ReasoningEffortSelection

@@ -108,8 +108,10 @@ export class SessionStore {
   }
 
   async create(input: SessionCreateInput): Promise<SessionJournal> {
-    const sessionId = randomUUID()
+    const sessionId = input.sessionId ?? randomUUID()
+    validateSessionId(sessionId)
     const paths = this.pathsFor(sessionId)
+    if (await hasSessionDeletionMarker(paths)) throw new Error(SESSION_DELETION_PENDING_REASON)
     const timestamp = new Date().toISOString()
     const parsedStart = sessionEntrySchema.parse({
       schemaVersion: SESSION_SCHEMA_VERSION,
@@ -132,6 +134,7 @@ export class SessionStore {
     await writeFile(paths.transcript, `${JSON.stringify(start)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
+      flag: 'wx',
       flush: true,
     })
     await writeMetadata(paths.metadata, metadata)

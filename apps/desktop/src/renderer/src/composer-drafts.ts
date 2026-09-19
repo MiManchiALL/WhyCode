@@ -149,7 +149,7 @@ export class ComposerDraftStore {
     await completed(transaction)
   }
 
-  /** 首条消息建立 Journal 后原子转移草稿与附件，提交期间继续输入的内容仍属于该会话。 */
+  /** 首次发送登记后原子转移草稿与附件，提交期间继续输入的内容仍属于该会话。 */
   async moveToSession(runtimeId: string, sessionId: string): Promise<void> {
     const sourceKey = composerDraftKey(runtimeId, null)
     const cached = this.take(sourceKey)

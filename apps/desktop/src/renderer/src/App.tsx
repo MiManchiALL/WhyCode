@@ -1357,7 +1357,8 @@ export function App() {
   const sessionNavigationLocked = deletionBlocksRuntime
     || sessionTransitionPending
     || checkpointRestoreToolUseId !== null
-  const sessionChangeLocked = sessionNavigationLocked || submissionPending || resumingSessionId !== null
+  const sessionChangeLocked = sessionNavigationLocked
+    || (submissionPending && sessionIdRef.current === null) || resumingSessionId !== null
 
   const requestCheckpointRestore = useCallback<CheckpointRestoreRequest>(async (
     toolUseId,

@@ -1,5 +1,4 @@
-import type { SessionSummary } from '@whycode/core'
-import type { SessionListItem } from '../shared/session.ts'
+import type { DesktopSessionSummary, SessionListItem } from '../shared/session.ts'
 
 export interface SessionListRuntimeState {
   sessionId: string | null
@@ -8,7 +7,7 @@ export interface SessionListRuntimeState {
 
 /** 置顶顺序独立于活动时间；最近对话则保留 SessionStore 的时间顺序。 */
 export function projectSessionListItems(
-  summaries: readonly SessionSummary[],
+  summaries: readonly DesktopSessionSummary[],
   runtimes: readonly SessionListRuntimeState[],
   currentSessionId: string | null,
   pinnedSessionIds: readonly string[],

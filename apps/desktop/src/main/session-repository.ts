@@ -4,18 +4,23 @@ import {
   type CustomSystemPromptSnapshot,
   type ReasoningEffortSelection,
   type SessionJournal,
-  type SessionSummary,
   type WorkspaceBinding,
 } from '@whycode/core'
+import type { DesktopSessionSummary } from '../shared/session.ts'
+import { preparationSummary, SessionPreparations } from './session-preparation.ts'
+import { workspaceDisplayDirectory } from '../shared/workspace.ts'
+import { samePath } from './workspace-path.ts'
 
-/** Electron 宿主的会话仓库：只管理磁盘 Journal，不持有选择或 Agent 运行态。 */
+/** Electron 宿主的持久会话仓库，涵盖工作区准备登记与 Journal，不持有选择或 Agent 运行态。 */
 export class DesktopSessionRepository {
   private readonly store: SessionStore
   private readonly opened = new Map<string, SessionJournal>()
   private readonly pendingOpen = new Map<string, Promise<SessionJournal>>()
+  readonly preparations: SessionPreparations
 
   constructor(storageRoot: string, pdfProcessor?: PdfProcessor) {
     this.store = new SessionStore(storageRoot, { pdfProcessor })
+    this.preparations = new SessionPreparations(storageRoot)
   }
 
   async create(
@@ -23,8 +28,10 @@ export class DesktopSessionRepository {
     modelId: string,
     reasoningEffort: ReasoningEffortSelection = 'default',
     customSystemPrompt?: CustomSystemPromptSnapshot,
+    sessionId?: string,
   ): Promise<SessionJournal> {
     const journal = await this.store.create({
+      sessionId,
       workspace,
       modelId,
       reasoningEffort,
@@ -72,13 +79,25 @@ export class DesktopSessionRepository {
   }
 
   /** 已打开 Journal 仍拥有写入与附件事务；列表必须直接使用它们，不能并发重开。 */
-  list(
+  async list(
     projectDir?: string | null,
-  ): Promise<SessionSummary[]> {
-    return this.store.list(
-      projectDir,
+  ): Promise<DesktopSessionSummary[]> {
+    const summaries = await this.store.list(
+      undefined,
       [...this.opened.values()].map((journal) => journal.metadataSnapshot),
     )
+    const entries = await Promise.all(summaries.map(async (summary) => {
+      if (summary.resumable) return summary
+      const preparation = await this.preparations.read(summary.sessionId).catch(() => null)
+      return preparation ? preparationSummary(preparation) : summary
+    }))
+    return entries.filter(item => {
+      if (projectDir === undefined) return true
+      if (!item.workspace) return false
+      const directory = workspaceDisplayDirectory(item.workspace)
+      return directory === null || projectDir === null ? directory === projectDir : samePath(directory, projectDir)
+    })
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
   async markDeleting(sessionId: string): Promise<boolean> {

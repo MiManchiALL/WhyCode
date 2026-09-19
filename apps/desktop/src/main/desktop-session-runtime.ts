@@ -48,6 +48,7 @@ export class DesktopSessionRuntime {
   readonly routingGate = new UserMessageRoutingGate()
   readonly timeline: ViewTimeline
   private currentWorkspace: RuntimeWorkspace
+  private registeredSessionId: string | null = null
   journal: SessionJournal | null = null
   session: AgentSession | null = null
   sessionInitialization: Promise<string | null> | null = null
@@ -89,7 +90,11 @@ export class DesktopSessionRuntime {
   }
 
   get sessionId(): string | null {
-    return this.journal?.sessionId ?? null
+    return this.journal?.sessionId ?? this.registeredSessionId
+  }
+
+  registerSession(): void {
+    this.registeredSessionId = this.runtimeId
   }
 
   get workspace(): RuntimeWorkspace {

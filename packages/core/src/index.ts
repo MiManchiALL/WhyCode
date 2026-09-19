@@ -284,7 +284,7 @@ export type {
   TurnInterruptionContext,
   TurnInterruptionReason,
 } from './session/interruption.ts'
-export { validateSessionId } from './session/metadata.ts'
+export { validateSessionId, getSessionPaths, hasSessionDeletionMarker } from './session/metadata.ts'
 export { terminateProcessTree } from './tools/run-command/process-termination.ts'
 export {
   IMAGE_ATTACHMENT_MAX_DIMENSION,

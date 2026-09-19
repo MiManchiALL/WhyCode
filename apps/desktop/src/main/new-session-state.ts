@@ -21,7 +21,7 @@ export class NewSessionStateStore {
 
   async initialize(): Promise<void> {
     try {
-      this.current = parseState(JSON.parse(await readFile(this.path, 'utf8')))
+      this.current = parseNewSessionState(JSON.parse(await readFile(this.path, 'utf8')))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
@@ -37,6 +37,12 @@ export class NewSessionStateStore {
     })
   }
 
+  updateWorkspace(runtimeId: string, workspace: RuntimeWorkspace): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.current?.runtimeId === runtimeId) await this.write({ runtimeId, workspace })
+    })
+  }
+
   private enqueue(operation: () => Promise<void>): Promise<void> {
     const write = this.tail.then(operation)
     this.tail = write.catch(() => {})
@@ -46,7 +52,7 @@ export class NewSessionStateStore {
   private async write(state: NewSessionState | null): Promise<void> {
     if (JSON.stringify(this.current) === JSON.stringify(state)) return
     if (state) {
-      parseState(state)
+      parseNewSessionState(state)
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
       const temporary = `${this.path}.${randomUUID()}.tmp`
       try {
@@ -62,7 +68,7 @@ export class NewSessionStateStore {
   }
 }
 
-function parseState(value: unknown): NewSessionState {
+export function parseNewSessionState(value: unknown): NewSessionState {
   if (!value || typeof value !== 'object' || !('runtimeId' in value) || !('workspace' in value)
     || typeof value.runtimeId !== 'string') throw new Error('新会话草稿身份无效')
   validateSessionId(value.runtimeId)
