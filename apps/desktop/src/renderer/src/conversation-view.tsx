@@ -1,7 +1,9 @@
 import type { SkillSummary } from '@whycode/core/skills'
+import { readPresentationResult } from '@whycode/core/presentation'
 import { ResponseFooter } from './response-footer.tsx'
+import { ResponsePresentationContext, responsePresentationResult } from './response-presentation.ts'
 import { GitFork } from 'lucide-react'
-import { memo, useDeferredValue, useLayoutEffect, useRef } from 'react'
+import { memo, useDeferredValue, useLayoutEffect, useMemo, useRef } from 'react'
 import { SessionLoading } from './session-loading.tsx'
 import type { Block } from '../../shared/conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
@@ -236,6 +238,12 @@ function WorkSection({
   const expanded = section.activityBlocks.length > 0
     && props.expandedIds.has(section.id)
   const activityId = `work-activity-${section.id}`
+  const completed = section.kind === 'completed-work' && section.duration.outcome === 'completed'
+  const presentationResult = completed ? responsePresentationResult(section.activityBlocks) : null
+  const presentation = useMemo(
+    () => presentationResult === null ? null : readPresentationResult(presentationResult),
+    [presentationResult],
+  )
   const activityItems = presentToolBatches(
     section.activityBlocks,
     shouldSealTrailingToolBatch(section),
@@ -245,7 +253,6 @@ function WorkSection({
       className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}
       data-conversation-scroll-section={section.id}
       data-conversation-navigator-section={navigationEntryId}
-      data-source-scope=""
     >
       {section.userBlocks.map((block) => (
         <ConversationBlock
@@ -293,25 +300,24 @@ function WorkSection({
               ))}
         </div>
       )}
-      <div className="group">
-        {section.finalBlocks.map((block) => (
-          <ConversationBlock
-            key={block.id}
-            {...conversationBlockProps(props, block)}
-            streamingAssistantText={section.kind === 'active-work'}
-            renderMath={
-              section.kind === 'completed-work'
-              && section.duration.outcome === 'completed'
-            }
-          />
-        ))}
-        {section.kind === 'completed-work' && section.duration.outcome === 'completed' && (
-          <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId}
-            activity={section.activityBlocks} final={section.finalBlocks} onOpenFile={props.onOpenFilePreview}
-            onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
-            forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
-        )}
-      </div>
+      <ResponsePresentationContext value={presentation}>
+        <div className="group" data-source-scope="">
+          {section.finalBlocks.map((block) => (
+            <ConversationBlock
+              key={block.id}
+              {...conversationBlockProps(props, block)}
+              streamingAssistantText={section.kind === 'active-work'}
+              renderMath={completed}
+            />
+          ))}
+          {completed && (
+            <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId}
+              activity={section.activityBlocks} final={section.finalBlocks} onOpenFile={props.onOpenFilePreview}
+              onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
+              forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
+          )}
+        </div>
+      </ResponsePresentationContext>
     </section>
   )
 }

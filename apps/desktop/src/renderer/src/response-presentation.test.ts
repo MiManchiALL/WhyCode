@@ -4,7 +4,7 @@ import type { ViewEvent } from '@whycode/core'
 import type { Presentation } from '@whycode/core/presentation'
 import { applyCoreEvent, createConversationState, type Block, type ToolCall } from '../../shared/conversation-state.ts'
 import { conversationSections } from '../../shared/conversation-sections.ts'
-import { copyResponseText, responsePresentation, toolPresentation } from './response-presentation.ts'
+import { copyResponseText, responsePresentationResult } from './response-presentation.ts'
 
 const declaration: Presentation = {
   files: [{ path: 'C:/work/index.html', description: '网页成品' }],
@@ -29,27 +29,27 @@ function responseEvents(id: string, present: boolean): ViewEvent[] {
 
 describe('最终回答的交付投影', () => {
   it('只相信成功工具结果，忽略输入、普通工具、失败和截断结果', () => {
-    assert.deepEqual(toolPresentation(call), declaration)
+    assert.equal(responsePresentationResult([block(call)]), call.result)
     for (const changed of [
       { ...call, name: 'ReadFile' }, { ...call, status: 'error' as const },
       { ...call, status: 'running' as const }, { ...call, result: undefined, input: declaration },
       { ...call, result: '{"files":[' },
-    ]) assert.equal(toolPresentation(changed), null)
+    ]) assert.equal(responsePresentationResult([block(changed)]), null)
   })
 
   it('最近一次成功声明完整替换旧声明，允许清空；失败保留之前的结果', () => {
     const empty = { ...call, id: 'clear', result: JSON.stringify({ files: [], sources: [] }) }
     const failed = { ...call, id: 'failed', status: 'error' as const }
-    assert.deepEqual(responsePresentation([block(call), block(failed)]), declaration)
-    assert.deepEqual(responsePresentation([block(call), block(empty)]), { files: [], sources: [] })
+    assert.equal(responsePresentationResult([block(call), block(failed)]), call.result)
+    assert.equal(responsePresentationResult([block(call), block(empty)]), empty.result)
   })
 
   it('序列化重放保留本回答声明，下一回答和新会话不会继承', () => {
     const events = [...responseEvents('a', true), ...responseEvents('b', false)]
     const replay = createConversationState(JSON.parse(JSON.stringify(events)))
     const sections = conversationSections(replay.blocks)
-    const presentations = sections.filter(section => section.kind !== 'block').map(section => responsePresentation(section.activityBlocks))
-    assert.deepEqual(presentations, [declaration, null])
+    const presentations = sections.filter(section => section.kind !== 'block').map(section => responsePresentationResult(section.activityBlocks))
+    assert.deepEqual(presentations, [call.result, null])
     assert.deepEqual(conversationSections(createConversationState().blocks), [])
   })
 
@@ -57,9 +57,9 @@ describe('最终回答的交付投影', () => {
     let state = createConversationState([{ type: 'user-message', text: '任务', startsTurn: true }])
     state = applyCoreEvent(state, { type: 'tool-start', toolUseId: 'p', toolName: 'Present', input: declaration })
     state = applyCoreEvent(state, { type: 'tool-end', toolUseId: 'p', result: JSON.stringify(declaration), isError: false })
-    assert.deepEqual(responsePresentation(state.blocks), declaration)
+    assert.equal(responsePresentationResult(state.blocks), call.result)
     state = applyCoreEvent(state, { type: 'step-discarded' })
-    assert.equal(responsePresentation(state.blocks), null)
+    assert.equal(responsePresentationResult(state.blocks), null)
   })
 
   it('复制正文时补齐文件与来源，保留锚点并转义标题', () => {

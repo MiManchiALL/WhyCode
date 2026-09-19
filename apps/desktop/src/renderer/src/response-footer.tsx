@@ -1,10 +1,11 @@
 import type { Block } from '../../shared/conversation-state.ts'
+import { useContext } from 'react'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { MessageActions } from './message-actions.tsx'
 import { PresentedFiles } from './presented-files.tsx'
 import { ResponseFileChanges } from './response-file-changes.tsx'
 import { SourceCapsule } from './source-capsules.tsx'
-import { copyResponseText, responsePresentation } from './response-presentation.ts'
+import { copyResponseText, ResponsePresentationContext } from './response-presentation.ts'
 
 export function ResponseFooter({ runtimeId, activity, final, onOpenFile, onFork, forkPending }: {
   runtimeId: string
@@ -14,9 +15,9 @@ export function ResponseFooter({ runtimeId, activity, final, onOpenFile, onFork,
   onFork?: () => void
   forkPending: boolean
 }) {
+  const presentation = useContext(ResponsePresentationContext)
   const texts = final.filter(block => block.kind === 'text')
   if (!texts.length) return null
-  const presentation = responsePresentation(activity)
   return <div className="px-1 pb-2" data-response-footer>
     {presentation?.files.length ? <PresentedFiles files={presentation.files} runtimeId={runtimeId} onOpenFile={onOpenFile} /> : null}
     <ResponseFileChanges runtimeId={runtimeId} activity={activity} files={presentation?.files ?? []} />

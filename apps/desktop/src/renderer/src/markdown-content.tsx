@@ -2,25 +2,27 @@ import {
   memo,
   startTransition,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type MouseEvent,
-  type ReactNode,
 } from 'react'
 import { SourceIcon } from './source-capsules.tsx'
 import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import { MarkdownTable } from './markdown-table.tsx'
+import { ResponsePresentationContext } from './response-presentation.ts'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
   normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 import {
+  findPresentedSource,
   findSourceCapsule,
-  isInlineSourceLabel,
   normalizeSourceUrl,
   sourceKindForUrl,
 } from './markdown-sources.ts'
@@ -37,6 +39,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   streaming?: boolean
   renderMath?: boolean
 }) {
+  const presentation = useContext(ResponsePresentationContext)
   const rootRef = useRef<HTMLDivElement>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -55,7 +58,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     highlightedRef.current = null
   }, [])
 
-  useEffect(() => clearHighlight, [clearHighlight])
+  useEffect(() => clearHighlight, [clearHighlight, presentation])
 
   const revealSource = useCallback((url: string): boolean => {
     const target = rootRef.current ? findSourceCapsule(rootRef.current, url) : null
@@ -76,38 +79,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     ul: ({ node, className, children, ...props }) => {
       return <MarkdownUnorderedList {...props} node={node} className={className}>{children}</MarkdownUnorderedList>
     },
-    a: ({ node: _node, children, className, href, onClick, ...props }) => {
-      const sourceUrl = normalizeSourceUrl(href)
-      const inlineSource = Boolean(sourceUrl && isInlineSourceLabel(textFromChildren(children)))
-      const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-        onClick?.(event)
-        if (event.defaultPrevented || !inlineSource || !sourceUrl) return
-        // “[来源]”是回答内导航，不在来源尚未渲染或模型漏列时意外打开网页。
-        event.preventDefault()
-        revealSource(sourceUrl)
-      }
-      return (
-        <MarkdownAnchor
-          {...props}
-          node={_node}
-          href={href}
-          className={className}
-          inlineSource={inlineSource}
-          {...(sourceUrl
-            ? {
-                'data-source-url': sourceUrl,
-                target: '_blank',
-                rel: 'noreferrer noopener',
-              }
-            : {})}
-          onClick={handleClick}
-          title={inlineSource ? '跳转到回答末尾的对应来源' : undefined}
-        >
-          {sourceUrl ? <SourceIcon kind={sourceKindForUrl(sourceUrl)} /> : null}
-          <span className={inlineSource ? 'sr-only' : 'wc-source-label'}>{children}</span>
-        </MarkdownAnchor>
-      )
-    },
+    a: (props) => <MarkdownLink {...props} onSourceClick={revealSource} />,
   }), [revealSource])
 
   return (
@@ -126,6 +98,33 @@ export const MarkdownContent = memo(function MarkdownContent({
     </div>
   )
 })
+
+/** 链接直接订阅声明，避免 Streamdown 的正文缓存冻结来源身份。 */
+function MarkdownLink({ children, href, onClick, onSourceClick, ...props }:
+  ComponentProps<typeof MarkdownAnchor> & { onSourceClick: (url: string) => void }) {
+  const presentation = useContext(ResponsePresentationContext)
+  const sourceUrl = normalizeSourceUrl(href)
+  const source = findPresentedSource(presentation?.sources, href)
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    onClick?.(event)
+    if (event.defaultPrevented || !source || !sourceUrl) return
+    event.preventDefault()
+    onSourceClick(sourceUrl)
+  }
+  return <MarkdownAnchor
+    {...props}
+    href={href}
+    inlineSource={!!source}
+    {...(sourceUrl ? { 'data-source-url': sourceUrl, target: '_blank', rel: 'noreferrer noopener' } : {})}
+    onClick={handleClick}
+    title={source ? `跳转到来源：${source.title}` : props.title}
+  >
+    {source ? <>
+      <SourceIcon kind={sourceKindForUrl(source.url)} />
+      <span className="sr-only">来源：{source.title}</span>
+    </> : children}
+  </MarkdownAnchor>
+}
 
 /**
  * 最终事件先提交轻量的运行态收尾；完整 Markdown/TeX 在浏览器空闲阶段升级。
@@ -148,10 +147,4 @@ function useDeferredStaticMarkdown(streaming: boolean): boolean {
     return () => window.clearTimeout(id)
   }, [ready, streaming])
   return ready
-}
-
-function textFromChildren(children: ReactNode): string {
-  if (typeof children === 'string' || typeof children === 'number') return String(children)
-  if (!Array.isArray(children)) return ''
-  return children.map(textFromChildren).join('')
 }

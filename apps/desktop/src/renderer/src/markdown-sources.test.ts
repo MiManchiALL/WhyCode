@@ -1,18 +1,27 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  findPresentedSource,
   findSourceCapsule,
-  isInlineSourceLabel,
   normalizeSourceUrl,
   sourceKindForUrl,
 } from './markdown-sources.ts'
 import { parseHTML } from 'linkedom'
 
 describe('Markdown 来源语义', () => {
-  it('对正文来源标签和安全外链做最小归一化', () => {
-    assert.equal(isInlineSourceLabel(' 来源 '), true)
-    assert.equal(isInlineSourceLabel('Source'), true)
-    assert.equal(isInlineSourceLabel('官方文档'), false)
+  it('只按本回答声明的完整 URL 识别引用，与正文链接文字无关', () => {
+    const source = { title: '完整文章标题', url: 'https://EXAMPLE.com:443/report#results' }
+    assert.equal(findPresentedSource([source], 'https://example.com/report#results'), source)
+    for (const href of ['https://example.com/report', 'https://example.com/report#other',
+      'https://example.com/Report#results', 'https://example.com/elsewhere',
+      'https://user@example.com/report#results', 'javascript:alert(1)', undefined]) {
+      assert.equal(findPresentedSource([source], href), undefined)
+    }
+    assert.equal(findPresentedSource(undefined, source.url), undefined)
+    assert.equal(findPresentedSource([], source.url), undefined)
+  })
+
+  it('对安全外链做最小归一化，不丢失来源片段身份', () => {
     assert.equal(normalizeSourceUrl('https://example.com/a#part'), 'https://example.com/a#part')
     assert.equal(normalizeSourceUrl('https://user@example.com/a'), null)
   })

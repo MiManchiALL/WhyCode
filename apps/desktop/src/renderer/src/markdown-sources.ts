@@ -1,7 +1,10 @@
+import type { PresentedSource } from '@whycode/core/presentation'
+
 export type SourceKind = 'git' | 'document' | 'web'
 
-export function isInlineSourceLabel(label: string): boolean {
-  return ['来源', 'source'].includes(label.trim().toLowerCase())
+export function findPresentedSource(sources: readonly PresentedSource[] | undefined, href: unknown): PresentedSource | undefined {
+  const url = normalizeSourceUrl(href)
+  return url ? sources?.find(source => normalizeSourceUrl(source.url) === url) : undefined
 }
 
 export function normalizeSourceUrl(value: unknown): string | null {
