@@ -1,4 +1,5 @@
 import { RetainedWorkspacesSettings } from './retained-workspaces-settings.tsx'
+import type { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import { useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import {
@@ -42,6 +43,7 @@ import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 
 interface ConnectionSettingsPanelProps {
   snapshot: ConnectionSettingsSnapshot
+  workspaceCleanup: RetainedWorkspaceCleanup
   onError: (message: string) => void
   onClose: () => void
   onChanged: (snapshot: ConnectionSettingsSnapshot) => void
@@ -209,7 +211,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 )}
 
                 <div className="space-y-8">
-                  {section === 'workspaces' && <RetainedWorkspacesSettings onError={props.onError} />}
+                  {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
                   {section === 'models' && (
                     <>
                       <BuiltInProvidersEditor

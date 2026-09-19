@@ -70,6 +70,7 @@ import {
 } from '../../shared/conversation-sections.ts'
 import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
+import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import {
   ImageDraftStrip,
   useImageDrafts,
@@ -414,6 +415,10 @@ export function App() {
   const showError = useCallback((text: string) => {
     showConversationFeedback('error', text)
   }, [showConversationFeedback])
+  const [workspaceCleanup] = useState(() => new RetainedWorkspaceCleanup(async workspace => {
+    const result = await window.whycode.deleteRetainedWorkspace(workspace)
+    if (!result.ok) throw new Error(result.error)
+  }, showError))
   const {
     drafts: imageDrafts,
     addFiles: addImageFiles,
@@ -2538,6 +2543,7 @@ export function App() {
       {showConnectionSettings && connectionSettings && (
         <ConnectionSettingsPanel
           snapshot={connectionSettings}
+          workspaceCleanup={workspaceCleanup}
           onClose={() => setShowConnectionSettings(false)}
           onChanged={applyConnectionSettings}
           onError={showError}

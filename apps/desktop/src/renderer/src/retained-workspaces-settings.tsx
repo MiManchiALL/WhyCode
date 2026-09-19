@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Folder, FolderOpen, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Folder, FolderOpen, LoaderCircle, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { RetainedWorkspace } from '../../shared/workspace-lifecycle.ts'
 import { DeleteRetainedWorkspace, RenameRetainedWorkspace } from './retained-workspace-dialog.tsx'
+import { retainedWorkspaceKey, type RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import { SettingsButton, SettingsPanel } from './settings-layout.tsx'
 
-export function RetainedWorkspacesSettings({ onError }: { onError: (message: string) => void }) {
+export function RetainedWorkspacesSettings({ cleanup, onError }: {
+  cleanup: RetainedWorkspaceCleanup
+  onError: (message: string) => void
+}) {
+  const cleaning = useSyncExternalStore(cleanup.subscribe, cleanup.getSnapshot)
   const [items, setItems] = useState<RetainedWorkspace[]>([])
   const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState<string | null>(null)
@@ -23,7 +28,7 @@ export function RetainedWorkspacesSettings({ onError }: { onError: (message: str
       if (current === generation.current) onError(`读取保留工作区失败：${message(error)}`)
     }).finally(() => { if (current === generation.current) setLoading(false) })
   }, [onError])
-  useEffect(() => { refresh(); return () => { generation.current++ } }, [refresh])
+  useEffect(() => { refresh(); return () => { generation.current++ } }, [refresh, cleaning])
   const closeDialog = useCallback(() => setSelection(null), [])
   const open = async (workspace: RetainedWorkspace) => {
     setOpening(workspace.id)
@@ -43,32 +48,35 @@ export function RetainedWorkspacesSettings({ onError }: { onError: (message: str
         <Folder size={24} className="mx-auto mb-3 text-[var(--wc-faint)]" />
         {loading ? '正在读取保留记录…' : '暂无保留工作区'}
       </div> : <ul className="divide-y divide-[var(--wc-line)]">
-        {items.map(workspace => <li key={`${workspace.mode}:${workspace.id}`} className="flex min-w-0 items-center gap-3 px-4 py-3.5">
-          <Folder size={17} className="shrink-0 text-[var(--wc-muted)]" />
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-medium" title={workspace.name}>{workspace.name}</span>
-              <span className="shrink-0 rounded-md bg-black/[0.035] px-1.5 py-0.5 text-[10px] text-[var(--wc-muted)]">{workspace.mode === 'worktree' ? 'Worktree' : '默认工作区'}</span>
+        {items.map(workspace => {
+          const pending = cleaning.has(retainedWorkspaceKey(workspace))
+          return <li key={retainedWorkspaceKey(workspace)} className="flex min-w-0 items-center gap-3 px-4 py-3.5">
+            {pending ? <LoaderCircle size={17} className="shrink-0 animate-spin text-[var(--wc-muted)]" /> : <Folder size={17} className="shrink-0 text-[var(--wc-muted)]" />}
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-medium" title={workspace.name}>{workspace.name}</span>
+                <span className="shrink-0 rounded-md bg-black/[0.035] px-1.5 py-0.5 text-[10px] text-[var(--wc-muted)]">{workspace.mode === 'worktree' ? 'Worktree' : '默认工作区'}</span>
+              </div>
+              <div className="mt-1 flex min-w-0 items-center gap-3 text-xs text-[var(--wc-muted)]">
+                <p className="min-w-0 flex-1 truncate" title={workspace.directory}>{workspace.directory}</p>
+                {pending ? <span role="status" className="shrink-0 text-[11px]">清理中…</span> : <time className="shrink-0 text-[11px] text-[var(--wc-faint)]" dateTime={workspace.retainedAt} title={`保留于 ${new Date(workspace.retainedAt).toLocaleString()}`}>
+                  {new Date(workspace.retainedAt).toLocaleDateString()}
+                </time>}
+              </div>
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-3 text-xs text-[var(--wc-muted)]">
-              <p className="min-w-0 flex-1 truncate" title={workspace.directory}>{workspace.directory}</p>
-              <time className="shrink-0 text-[11px] text-[var(--wc-faint)]" dateTime={workspace.retainedAt} title={`保留于 ${new Date(workspace.retainedAt).toLocaleString()}`}>
-                {new Date(workspace.retainedAt).toLocaleDateString()}
-              </time>
-            </div>
-          </div>
-          <button className="wc-icon-button size-8 shrink-0" aria-label={`打开 ${workspace.name} 的目录`} title="打开目录" disabled={opening !== null} onClick={() => void open(workspace)}><FolderOpen size={16} /></button>
-          <DropdownMenu.Root><DropdownMenu.Trigger asChild>
-            <button className="wc-icon-button size-8 shrink-0" aria-label={`${workspace.name} 的更多操作`}><MoreHorizontal size={16} /></button>
-          </DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={5} className="wc-menu-surface z-[80] min-w-36 p-1.5 text-sm">
-            <DropdownMenu.Item className="wc-menu-item cursor-pointer" onSelect={() => setSelection({ action: 'rename', workspace })}><Pencil size={14} />重命名</DropdownMenu.Item>
-            <DropdownMenu.Item className="wc-menu-item cursor-pointer text-[var(--wc-danger)]" onSelect={() => setSelection({ action: 'delete', workspace })}><Trash2 size={14} />清理工作区</DropdownMenu.Item>
-          </DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
-        </li>)}
+            <button className="wc-icon-button size-8 shrink-0" aria-label={`打开 ${workspace.name} 的目录`} title="打开目录" disabled={pending || opening !== null} onClick={() => void open(workspace)}><FolderOpen size={16} /></button>
+            <DropdownMenu.Root><DropdownMenu.Trigger asChild>
+              <button className="wc-icon-button size-8 shrink-0" aria-label={`${workspace.name} 的更多操作`} disabled={pending}><MoreHorizontal size={16} /></button>
+            </DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={5} className="wc-menu-surface z-[80] min-w-36 p-1.5 text-sm">
+              <DropdownMenu.Item className="wc-menu-item cursor-pointer" onSelect={() => setSelection({ action: 'rename', workspace })}><Pencil size={14} />重命名</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item cursor-pointer text-[var(--wc-danger)]" onSelect={() => setSelection({ action: 'delete', workspace })}><Trash2 size={14} />清理工作区</DropdownMenu.Item>
+            </DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
+          </li>
+        })}
       </ul>}
     </SettingsPanel>
     {selection?.action === 'rename' && <RenameRetainedWorkspace workspace={selection.workspace} onClose={closeDialog} onChanged={refresh} onError={onError} />}
-    {selection?.action === 'delete' && <DeleteRetainedWorkspace workspace={selection.workspace} onClose={closeDialog} onChanged={refresh} onError={onError} />}
+    {selection?.action === 'delete' && <DeleteRetainedWorkspace workspace={selection.workspace} onClose={closeDialog} onChanged={refresh} onError={onError} onConfirm={cleanup.remove} />}
   </div>
 }
 

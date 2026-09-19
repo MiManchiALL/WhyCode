@@ -44,9 +44,10 @@ export function RenameRetainedWorkspace({ workspace, onClose, onChanged, onError
   </Dialog.Portal></Dialog.Root>
 }
 
-export function DeleteRetainedWorkspace({ workspace, onClose, onChanged, onError }: Props) {
+export function DeleteRetainedWorkspace({ workspace, onClose, onChanged, onError, onConfirm }: Props & {
+  onConfirm: (workspace: RetainedWorkspace) => void
+}) {
   const [preview, setPreview] = useState<WorkspaceDeletionPreview | null>(null)
-  const [busy, setBusy] = useState(false)
   useEffect(() => {
     let cancelled = false
     void window.whycode.previewRetainedWorkspace(workspace).then(result => {
@@ -58,17 +59,7 @@ export function DeleteRetainedWorkspace({ workspace, onClose, onChanged, onError
     })
     return () => { cancelled = true }
   }, [workspace, onClose, onChanged, onError])
-  const remove = async () => {
-    if (busy || !preview) return
-    setBusy(true)
-    try {
-      const result = await window.whycode.deleteRetainedWorkspace(workspace)
-      if (!result.ok) throw new Error(result.error)
-      onChanged()
-      onClose()
-    } catch (error) { onError(`清理失败：${message(error)}`) } finally { setBusy(false) }
-  }
-  return <AlertDialog.Root open onOpenChange={open => { if (!open && !busy) onClose() }}><AlertDialog.Portal>
+  return <AlertDialog.Root open onOpenChange={open => { if (!open) onClose() }}><AlertDialog.Portal>
     <AlertDialog.Overlay className={overlay} />
     <AlertDialog.Content className={card}>
       <AlertDialog.Title className="text-base font-semibold">清理这个工作区？</AlertDialog.Title>
@@ -78,8 +69,8 @@ export function DeleteRetainedWorkspace({ workspace, onClose, onChanged, onError
       <p className="mt-3 break-all rounded-xl bg-black/[0.035] px-3 py-2 text-xs text-[var(--wc-muted)]">{workspace.directory}</p>
       {preview?.warning && <p className="mt-3 text-xs leading-5 text-[var(--wc-danger)]">{preview.warning}</p>}
       <div className="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel asChild><SettingsButton disabled={busy}>取消</SettingsButton></AlertDialog.Cancel>
-        <AlertDialog.Action asChild><SettingsButton variant="danger" disabled={busy || !preview} onClick={event => { event.preventDefault(); void remove() }}>{busy ? '清理中…' : '删除工作目录'}</SettingsButton></AlertDialog.Action>
+        <AlertDialog.Cancel asChild><SettingsButton>取消</SettingsButton></AlertDialog.Cancel>
+        <AlertDialog.Action asChild><SettingsButton variant="danger" disabled={!preview} onClick={() => onConfirm(workspace)}>删除工作目录</SettingsButton></AlertDialog.Action>
       </div>
     </AlertDialog.Content>
   </AlertDialog.Portal></AlertDialog.Root>
