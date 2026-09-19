@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronUp,
@@ -18,6 +18,14 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { SessionListItem } from '../../shared/session.ts'
 import { workspaceDisplayDirectory } from '../../shared/workspace.ts'
 import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
+import { PanelResizeHandle } from './panel-resize-handle.tsx'
+import {
+  loadPanelWidth,
+  normalizePanelWidth,
+  panelWidthExpression,
+  persistPanelWidth,
+  SESSION_SIDEBAR_COLLAPSED_WIDTH,
+} from './panel-layout.ts'
 
 interface AppSidebarProps {
   collapsed: boolean
@@ -38,6 +46,14 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar(props: AppSidebarProps) {
+  const panelRef = useRef<HTMLElement>(null)
+  const [width, setWidth] = useState(() => loadPanelWidth('left'))
+  const [resizing, setResizing] = useState(false)
+  const updateWidth = useCallback((value: number) => {
+    const normalized = normalizePanelWidth('left', value)
+    setWidth(normalized)
+    persistPanelWidth('left', normalized)
+  }, [])
   const [renameTargetId, setRenameTargetId] = useState<string | null>(null)
   const renameTarget = props.sessions.find(session => session.sessionId === renameTargetId)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
@@ -56,104 +72,139 @@ export function AppSidebar(props: AppSidebarProps) {
 
   return (
     <aside
-      className={`wc-shell-panel relative z-20 flex h-full shrink-0 flex-col bg-[var(--wc-sidebar)] transition-[width] duration-200 ease-out ${
-        props.collapsed ? 'w-[62px]' : 'w-[260px]'
-      }`}
+      ref={panelRef}
+      className="wc-resizable-panel relative z-20 h-full shrink-0 transition-[width] duration-200 ease-out"
+      data-panel-open={!props.collapsed}
+      style={{ width: props.collapsed ? SESSION_SIDEBAR_COLLAPSED_WIDTH : panelWidthExpression('left', width) }}
       aria-label="会话侧栏"
     >
-      <div className="relative h-14 shrink-0">
-        <button
-          type="button"
-          className="wc-icon-button absolute left-3 top-3"
-          aria-label={props.collapsed ? '展开会话侧栏' : '收起会话侧栏'}
-          title={props.collapsed ? '展开侧栏' : '收起侧栏'}
-          onClick={() => props.onCollapsedChange(!props.collapsed)}
-        >
-          <SidebarToggleIcon side="left" size={17} />
-        </button>
-        <div
-          className={`pointer-events-none absolute left-1/2 top-1/2 whitespace-nowrap text-sm font-semibold tracking-tight transition-[opacity,transform] duration-200 ease-out ${
-            props.collapsed
-              ? '-translate-x-1/2 -translate-y-1/2 scale-95 opacity-0'
-              : '-translate-x-1/2 -translate-y-1/2 scale-100 opacity-100'
-          }`}
-          aria-hidden={props.collapsed}
-        >
-          WhyCode
-        </div>
-      </div>
-
-      <div className="px-2">
-        <button
-          type="button"
-          className="wc-focus-ring relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white px-3 text-sm shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-colors hover:border-[var(--wc-line-strong)]"
-          disabled={props.busy}
-          onClick={props.onNewSession}
-          title="新建会话"
-        >
-          <Plus className="shrink-0" size={17} />
-          <span className="wc-sidebar-label" data-collapsed={props.collapsed}>新会话</span>
-        </button>
-      </div>
-
-      <div className="relative min-h-0 flex-1">
-        <div
-          className={`absolute inset-0 flex flex-col items-center gap-1 px-2 pt-3 transition-[opacity,transform] duration-200 ease-out ${
-            props.collapsed
-              ? 'translate-x-0 opacity-100'
-              : 'pointer-events-none -translate-x-2 opacity-0'
-          }`}
-          aria-hidden={!props.collapsed}
-          inert={!props.collapsed}
-        >
+      {(!props.collapsed || resizing) && (
+        <PanelResizeHandle
+          side="left"
+          panelRef={panelRef}
+          width={width}
+          onWidthChange={updateWidth}
+          onCollapse={() => props.onCollapsedChange(true)}
+          onPreviewExpand={(value) => {
+            setWidth(value)
+            props.onCollapsedChange(false)
+          }}
+          onResizeActiveChange={setResizing}
+        />
+      )}
+      <div className="wc-shell-panel flex h-full min-w-0 flex-col bg-[var(--wc-sidebar)]">
+        <div className="relative h-14 shrink-0">
           <button
             type="button"
-            className="wc-icon-button relative"
-            aria-label={hasUnreadCompletion ? '展开并查看有新结果的会话' : '展开并查看会话'}
-            title="会话"
-            onClick={() => props.onCollapsedChange(false)}
+            className="wc-icon-button absolute left-3 top-3"
+            aria-label={props.collapsed ? '展开会话侧栏' : '收起会话侧栏'}
+            title={props.collapsed ? '展开侧栏' : '收起侧栏'}
+            onClick={() => props.onCollapsedChange(!props.collapsed)}
           >
-            <MessageSquare size={17} />
-            {hasUnreadCompletion && (
-              <span className="absolute right-1 top-1 size-2 rounded-full bg-[var(--wc-status-running)]" />
-            )}
+            <SidebarToggleIcon side="left" size={17} />
+          </button>
+          <div
+            className={`pointer-events-none absolute left-1/2 top-1/2 whitespace-nowrap text-sm font-semibold tracking-tight transition-[opacity,transform] duration-200 ease-out ${
+              props.collapsed
+                ? '-translate-x-1/2 -translate-y-1/2 scale-95 opacity-0'
+                : '-translate-x-1/2 -translate-y-1/2 scale-100 opacity-100'
+            }`}
+            aria-hidden={props.collapsed}
+          >
+            WhyCode
+          </div>
+        </div>
+
+        <div className="px-2">
+          <button
+            type="button"
+            className="wc-focus-ring relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white px-3 text-sm shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-colors hover:border-[var(--wc-line-strong)]"
+            disabled={props.busy}
+            onClick={props.onNewSession}
+            title="新建会话"
+          >
+            <Plus className="shrink-0" size={17} />
+            <span className="wc-sidebar-label" data-collapsed={props.collapsed}>新会话</span>
           </button>
         </div>
-        <div
-          className={`wc-scrollbar absolute inset-0 overflow-x-hidden overflow-y-auto px-2 pb-3 pt-4 transition-[opacity,transform] duration-200 ease-out ${
-            props.collapsed
-              ? 'pointer-events-none -translate-x-3 opacity-0'
-              : 'translate-x-0 opacity-100'
-          }`}
-          aria-hidden={props.collapsed}
-          inert={props.collapsed}
-        >
-          {props.error && <SidebarError text={props.error} />}
-          {props.sessions.length === 0 && !props.error ? (
-            <div className="px-3 py-12 text-center text-xs text-[var(--wc-faint)]">
-              新会话会显示在这里
-            </div>
-          ) : (
-            <>
-              {pinnedSessions.length > 0 && (
-                <section className="mb-4">
-                  <div className="group mb-1 flex h-5 items-center px-2">
-                    <h2 className="min-w-0 flex-1 whitespace-nowrap wc-type-caption font-medium tracking-wide text-[var(--wc-faint)]">
-                      置顶
+
+        <div className="relative min-h-0 flex-1">
+          <div
+            className={`absolute inset-0 flex flex-col items-center gap-1 px-2 pt-3 transition-[opacity,transform] duration-200 ease-out ${
+              props.collapsed
+                ? 'translate-x-0 opacity-100'
+                : 'pointer-events-none -translate-x-2 opacity-0'
+            }`}
+            aria-hidden={!props.collapsed}
+            inert={!props.collapsed}
+          >
+            <button
+              type="button"
+              className="wc-icon-button relative"
+              aria-label={hasUnreadCompletion ? '展开并查看有新结果的会话' : '展开并查看会话'}
+              title="会话"
+              onClick={() => props.onCollapsedChange(false)}
+            >
+              <MessageSquare size={17} />
+              {hasUnreadCompletion && (
+                <span className="absolute right-1 top-1 size-2 rounded-full bg-[var(--wc-status-running)]" />
+              )}
+            </button>
+          </div>
+          <div
+            className={`wc-scrollbar absolute inset-0 overflow-x-hidden overflow-y-auto px-2 pb-3 pt-4 transition-[opacity,transform] duration-200 ease-out ${
+              props.collapsed
+                ? 'pointer-events-none -translate-x-3 opacity-0'
+                : 'translate-x-0 opacity-100'
+            }`}
+            aria-hidden={props.collapsed}
+            inert={props.collapsed}
+          >
+            {props.error && <SidebarError text={props.error} />}
+            {props.sessions.length === 0 && !props.error ? (
+              <div className="px-3 py-12 text-center text-xs text-[var(--wc-faint)]">
+                新会话会显示在这里
+              </div>
+            ) : (
+              <>
+                {pinnedSessions.length > 0 && (
+                  <section className="mb-4">
+                    <div className="group mb-1 flex h-5 items-center px-2">
+                      <h2 className="min-w-0 flex-1 whitespace-nowrap wc-type-caption font-medium tracking-wide text-[var(--wc-faint)]">
+                        置顶
+                      </h2>
+                      <button
+                        type="button"
+                        className="wc-focus-ring flex size-5 items-center justify-center rounded-md text-[var(--wc-faint)] opacity-0 transition-opacity hover:bg-black/[0.045] hover:text-[var(--wc-muted)] focus:opacity-100 group-hover:opacity-100"
+                        aria-label={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
+                        title={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
+                        onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
+                      >
+                        {pinnedCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                      </button>
+                    </div>
+                    {!pinnedCollapsed && (
+                      <SessionItems
+                        sessions={pinnedSessions}
+                        selectedSessionId={props.selectedSessionId}
+                        busy={props.busy}
+                        navigationLocked={props.navigationLocked}
+                        deletingSessionId={props.deletingSessionId}
+                        onResume={props.onResume}
+                        onPinnedChange={props.onPinnedChange}
+                        onRequestDelete={setDeleteTargetId}
+                        onRequestRename={setRenameTargetId}
+                      />
+                    )}
+                  </section>
+                )}
+                {recentSessions.length > 0 && (
+                  <section className="mb-4">
+                    <h2 className="mb-1 whitespace-nowrap px-2 wc-type-caption font-medium tracking-wide text-[var(--wc-faint)]">
+                      最近
                     </h2>
-                    <button
-                      type="button"
-                      className="wc-focus-ring flex size-5 items-center justify-center rounded-md text-[var(--wc-faint)] opacity-0 transition-opacity hover:bg-black/[0.045] hover:text-[var(--wc-muted)] focus:opacity-100 group-hover:opacity-100"
-                      aria-label={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
-                      title={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
-                      onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
-                    >
-                      {pinnedCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-                    </button>
-                  </div>
-                  {!pinnedCollapsed && (
                     <SessionItems
-                      sessions={pinnedSessions}
+                      sessions={recentSessions}
                       selectedSessionId={props.selectedSessionId}
                       busy={props.busy}
                       navigationLocked={props.navigationLocked}
@@ -163,48 +214,30 @@ export function AppSidebar(props: AppSidebarProps) {
                       onRequestDelete={setDeleteTargetId}
                       onRequestRename={setRenameTargetId}
                     />
-                  )}
-                </section>
-              )}
-              {recentSessions.length > 0 && (
-                <section className="mb-4">
-                  <h2 className="mb-1 whitespace-nowrap px-2 wc-type-caption font-medium tracking-wide text-[var(--wc-faint)]">
-                    最近
-                  </h2>
-                  <SessionItems
-                    sessions={recentSessions}
-                    selectedSessionId={props.selectedSessionId}
-                    busy={props.busy}
-                    navigationLocked={props.navigationLocked}
-                    deletingSessionId={props.deletingSessionId}
-                    onResume={props.onResume}
-                    onPinnedChange={props.onPinnedChange}
-                    onRequestDelete={setDeleteTargetId}
-                    onRequestRename={setRenameTargetId}
-                  />
-                </section>
-              )}
-            </>
-          )}
+                  </section>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
 
-      <div className="p-2">
-        <button
-          type="button"
-          className="wc-focus-ring relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-xl px-3 text-sm text-[var(--wc-muted)] transition-colors hover:bg-black/[0.045] hover:text-[var(--wc-ink)]"
-          onClick={props.onOpenSettings}
-          title="设置"
-        >
-          <Settings className="shrink-0" size={17} />
-          <span className="wc-sidebar-label" data-collapsed={props.collapsed}>设置</span>
-        </button>
-      </div>
+        <div className="p-2">
+          <button
+            type="button"
+            className="wc-focus-ring relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-xl px-3 text-sm text-[var(--wc-muted)] transition-colors hover:bg-black/[0.045] hover:text-[var(--wc-ink)]"
+            onClick={props.onOpenSettings}
+            title="设置"
+          >
+            <Settings className="shrink-0" size={17} />
+            <span className="wc-sidebar-label" data-collapsed={props.collapsed}>设置</span>
+          </button>
+        </div>
 
-      {renameTarget && <SessionNameDialog key={renameTarget.sessionId} sessionId={renameTarget.sessionId} title={renameTarget.title}
-        onRename={props.onRename} onClose={() => setRenameTargetId(null)} />}
-      {deleteTarget && <SessionDeleteDialog key={deleteTarget.sessionId} sessionId={deleteTarget.sessionId}
-        onClose={closeDeleteDialog} onDelete={props.onDelete} onError={props.onError} />}
+        {renameTarget && <SessionNameDialog key={renameTarget.sessionId} sessionId={renameTarget.sessionId} title={renameTarget.title}
+          onRename={props.onRename} onClose={() => setRenameTargetId(null)} />}
+        {deleteTarget && <SessionDeleteDialog key={deleteTarget.sessionId} sessionId={deleteTarget.sessionId}
+          onClose={closeDeleteDialog} onDelete={props.onDelete} onError={props.onError} />}
+      </div>
     </aside>
   )
 }

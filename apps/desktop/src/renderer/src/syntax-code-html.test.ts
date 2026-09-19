@@ -44,3 +44,15 @@ it('diff rows retain both line number sequences and focus the new version', () =
   assert.equal(view.querySelector('[data-focus-line]')!.getAttribute('data-tone'), 'added')
   assert.equal(body(renderCodeLines([], null, null)).textContent, '空文件')
 })
+
+it('long code keeps every line, highlight and focus target across rendering groups', () => {
+  const source = Array.from({ length: 130 }, (_, index) => `line ${index + 1}`)
+  const highlighted = source.map(text => `<span style="color:red">${text}</span>`)
+  const view = body(renderCodeLines(contentLines(source.join('\n')), highlighted, 65))
+  assert.deepEqual([...view.querySelectorAll('code')].map(node => node.textContent), source)
+  assert.deepEqual([...view.querySelectorAll('.wc-code-line-number')].map(node => node.textContent), source.map((_, index) => String(index + 1)))
+  const focused = view.querySelector('[data-focus-line="65"]')!
+  assert.equal(focused.querySelector('code span')!.textContent, 'line 65')
+  assert.equal(focused.querySelector('code span')!.getAttribute('style'), 'color:red')
+  assert.equal(view.querySelectorAll('code span').length, 130)
+})

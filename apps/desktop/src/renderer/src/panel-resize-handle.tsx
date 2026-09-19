@@ -7,37 +7,36 @@ import {
   type RefObject,
 } from 'react'
 import {
-  RIGHT_PANEL_MIN_WIDTH_RATIO,
-  projectRightPanelDrag,
-  rightPanelRatioFromWidth,
-  rightPanelWidthBounds,
-  rightPanelWidthExpression,
-} from './right-panel-layout.ts'
+  PANEL_WIDTHS,
+  projectPanelDrag,
+  panelWidthFromPixels,
+  panelWidthBounds,
+  panelWidthExpression,
+  type PanelSide,
+} from './panel-layout.ts'
 
-interface RightPanelResizeHandleProps {
-  panelRef: RefObject<HTMLDivElement | null>
-  ratio: number
-  maximumRatio: number
-  onRatioChange: (ratio: number) => void
+interface PanelResizeHandleProps {
+  side: PanelSide
+  panelRef: RefObject<HTMLElement | null>
+  width: number
+  onWidthChange: (width: number) => void
   onCollapse: () => void
-  onPreviewExpand: (ratio: number) => void
+  onPreviewExpand: (width: number) => void
   onResizeActiveChange: (active: boolean) => void
 }
 
-const KEYBOARD_STEP_RATIO = 0.02
-
-export function RightPanelResizeHandle({
+export function PanelResizeHandle({
+  side,
   panelRef,
-  ratio,
-  maximumRatio,
-  onRatioChange,
+  width,
+  onWidthChange,
   onCollapse,
   onPreviewExpand,
   onResizeActiveChange,
-}: RightPanelResizeHandleProps) {
-  const cancelDragRef = useRef<(() => void) | null>(null)
+}: PanelResizeHandleProps) {
+  const finishDragRef = useRef<(() => void) | null>(null)
 
-  useEffect(() => () => cancelDragRef.current?.(), [])
+  useEffect(() => () => finishDragRef.current?.(), [])
 
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -46,12 +45,12 @@ export function RightPanelResizeHandle({
     const container = panel?.parentElement
     if (!panel || !container) return
 
-    cancelDragRef.current?.()
+    finishDragRef.current?.()
     const pointerId = event.pointerId
     const startX = event.clientX
     const startWidth = panel.getBoundingClientRect().width
     const viewportWidth = window.innerWidth
-    const containerWidth = container.getBoundingClientRect().width
+    const bounds = panelWidthBounds({ side, viewportWidth, containerWidth: container.getBoundingClientRect().width })
     let latestX = startX
     let latestWidth = startWidth
     let animationFrame: number | null = null
@@ -60,21 +59,20 @@ export function RightPanelResizeHandle({
     let previewCollapsed = false
 
     panel.dataset.resizing = 'true'
-    document.documentElement.dataset.wcRightPanelResizing = 'true'
+    document.documentElement.dataset.wcPanelResizing = 'true'
     handle.setPointerCapture(pointerId)
     onResizeActiveChange(true)
     event.preventDefault()
 
     function applyLatestPosition(): void {
       animationFrame = null
-      if (finished) return
-      const projection = projectRightPanelDrag({
+      if (finished || !moved) return
+      const projection = projectPanelDrag({
+        side,
         startX,
         pointerX: latestX,
         startWidth,
-        viewportWidth,
-        containerWidth,
-        maximumRatio,
+        bounds,
         collapsed: previewCollapsed,
       })
       latestWidth = projection.width
@@ -82,7 +80,7 @@ export function RightPanelResizeHandle({
       previewCollapsed = projection.shouldCollapse
       if (collapsedChanged) {
         if (previewCollapsed) onCollapse()
-        else onPreviewExpand(rightPanelRatioFromWidth(latestWidth, viewportWidth))
+        else onPreviewExpand(panelWidthFromPixels(side, latestWidth, viewportWidth))
       }
       if (!previewCollapsed) panel!.style.width = `${projection.width.toFixed(2)}px`
     }
@@ -94,10 +92,11 @@ export function RightPanelResizeHandle({
       window.removeEventListener('pointerup', handlePointerEnd)
       window.removeEventListener('pointercancel', handlePointerCancel)
       window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('resize', handleWindowBlur)
       panel!.removeAttribute('data-resizing')
-      delete document.documentElement.dataset.wcRightPanelResizing
+      delete document.documentElement.dataset.wcPanelResizing
       if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId)
-      if (cancelDragRef.current === cancelWithoutCommit) cancelDragRef.current = null
+      if (finishDragRef.current === finishWithoutFlush) finishDragRef.current = null
     }
 
     function finish(flushPosition: boolean): void {
@@ -108,21 +107,17 @@ export function RightPanelResizeHandle({
       finished = true
       removeDragEffects()
       if (previewCollapsed) {
-        onRatioChange(RIGHT_PANEL_MIN_WIDTH_RATIO)
-        onCollapse()
+        onWidthChange(PANEL_WIDTHS[side].minimum)
       } else if (moved) {
-        const nextRatio = rightPanelRatioFromWidth(latestWidth, viewportWidth)
-        panel!.style.width = rightPanelWidthExpression(nextRatio, maximumRatio)
-        onRatioChange(nextRatio)
+        const nextWidth = panelWidthFromPixels(side, latestWidth, viewportWidth)
+        panel!.style.width = panelWidthExpression(side, nextWidth)
+        onWidthChange(nextWidth)
       }
       onResizeActiveChange(false)
     }
 
-    function cancelWithoutCommit(): void {
-      if (finished) return
-      finished = true
-      removeDragEffects()
-      onResizeActiveChange(false)
+    function finishWithoutFlush(): void {
+      finish(false)
     }
 
     function handlePointerMove(pointerEvent: PointerEvent): void {
@@ -151,16 +146,17 @@ export function RightPanelResizeHandle({
       finish(true)
     }
 
-    cancelDragRef.current = cancelWithoutCommit
+    finishDragRef.current = finishWithoutFlush
     window.addEventListener('pointermove', handlePointerMove, { passive: false })
     window.addEventListener('pointerup', handlePointerEnd)
     window.addEventListener('pointercancel', handlePointerCancel)
     window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('resize', handleWindowBlur)
   }, [
-    maximumRatio,
+    side,
     onCollapse,
     onPreviewExpand,
-    onRatioChange,
+    onWidthChange,
     onResizeActiveChange,
     panelRef,
   ])
@@ -170,48 +166,53 @@ export function RightPanelResizeHandle({
     const container = panel?.parentElement
     if (!panel || !container) return
     const viewportWidth = window.innerWidth
-    const bounds = rightPanelWidthBounds({
+    const bounds = panelWidthBounds({
+      side,
       viewportWidth,
       containerWidth: container.getBoundingClientRect().width,
-      maximumRatio,
     })
     const currentWidth = panel.getBoundingClientRect().width
-    const step = viewportWidth * KEYBOARD_STEP_RATIO
+    const step = side === 'left' ? 16 : viewportWidth * 0.02
     let nextWidth: number
     switch (event.key) {
       case 'ArrowLeft':
-        nextWidth = currentWidth + step
+        nextWidth = currentWidth + (side === 'left' ? -step : step)
         break
       case 'ArrowRight':
-        nextWidth = currentWidth - step
+        nextWidth = currentWidth + (side === 'left' ? step : -step)
         break
       case 'Home':
-        nextWidth = bounds.maxWidth
+        nextWidth = side === 'left' ? bounds.minWidth : bounds.maxWidth
         break
       case 'End':
-        nextWidth = bounds.minWidth
+        nextWidth = side === 'left' ? bounds.maxWidth : bounds.minWidth
         break
       default:
         return
     }
     event.preventDefault()
-    onRatioChange(rightPanelRatioFromWidth(
+    onWidthChange(panelWidthFromPixels(
+      side,
       Math.min(Math.max(nextWidth, bounds.minWidth), bounds.maxWidth),
       viewportWidth,
     ))
-  }, [maximumRatio, onRatioChange, panelRef])
+  }, [side, onWidthChange, panelRef])
 
   return (
     <div
-      className="wc-right-panel-resize-handle"
+      className="wc-panel-resize-handle"
+      data-side={side}
       role="separator"
       tabIndex={0}
-      aria-label="调整右侧栏宽度"
+      aria-label={side === 'left' ? '调整会话侧栏宽度' : '调整右侧栏宽度'}
       aria-orientation="vertical"
-      aria-valuemin={RIGHT_PANEL_MIN_WIDTH_RATIO * 100}
-      aria-valuemax={Math.round(maximumRatio * 100)}
-      aria-valuenow={Math.round(ratio * 100)}
-      title="拖动调整宽度；向右收起后，按住向左可恢复"
+      aria-valuemin={PANEL_WIDTHS[side].minimum}
+      aria-valuemax={PANEL_WIDTHS[side].maximum}
+      aria-valuenow={width}
+      aria-valuetext={side === 'left' ? `${Math.round(width)} 像素` : `${Math.round(width * 100)}%`}
+      title={side === 'left'
+        ? '拖动调整宽度；向左收起后，按住向右可恢复'
+        : '拖动调整宽度；向右收起后，按住向左可恢复'}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
     />

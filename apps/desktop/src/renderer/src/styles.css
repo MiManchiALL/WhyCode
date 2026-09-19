@@ -126,7 +126,7 @@ button:not(:disabled),
   box-shadow: 0 1px 2px rgb(33 35 31 / 4%);
 }
 
-.wc-right-panel-shell[data-resizing='true'][data-panel-open='true'] {
+html[data-wc-panel-resizing='true'] .wc-resizable-panel[data-panel-open='true'] {
   transition-duration: 0ms;
 }
 
@@ -167,21 +167,22 @@ button:not(:disabled),
   display: none;
 }
 
-.wc-right-panel-resize-handle {
+.wc-panel-resize-handle {
   position: absolute;
   z-index: 30;
   inset-block: 0;
-  left: 0;
   width: 10px;
   cursor: col-resize;
   touch-action: none;
   outline: none;
 }
 
-.wc-right-panel-resize-handle::after {
+.wc-panel-resize-handle[data-side='left'] { right: -8px; width: 8px; }
+.wc-panel-resize-handle[data-side='right'] { left: 0; }
+
+.wc-panel-resize-handle::after {
   position: absolute;
   inset-block: 0;
-  left: 0;
   width: 1px;
   background: var(--wc-line);
   content: '';
@@ -189,22 +190,28 @@ button:not(:disabled),
   transition: opacity 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
 }
 
-.wc-right-panel-shell[data-panel-open='false'] .wc-right-panel-resize-handle::after {
+.wc-panel-resize-handle[data-side='left']::after { left: 3px; opacity: 0; }
+.wc-panel-resize-handle[data-side='right']::after { left: 0; }
+
+.wc-resizable-panel[data-panel-open='false'] .wc-panel-resize-handle::after {
   opacity: 0;
 }
 
-.wc-right-panel-resize-handle:hover::after,
-.wc-right-panel-resize-handle:focus-visible::after,
-.wc-right-panel-shell[data-resizing='true'] .wc-right-panel-resize-handle::after {
+.wc-panel-resize-handle:hover::after,
+.wc-panel-resize-handle:focus-visible::after,
+.wc-resizable-panel[data-resizing='true'] .wc-panel-resize-handle::after {
+  opacity: 1;
   background: var(--wc-line-strong);
   box-shadow: 1px 0 0 rgb(48 50 45 / 8%);
 }
 
-html[data-wc-right-panel-resizing='true'],
-html[data-wc-right-panel-resizing='true'] * {
+html[data-wc-panel-resizing='true'],
+html[data-wc-panel-resizing='true'] * {
   cursor: col-resize !important;
   user-select: none !important;
 }
+
+html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 
 .wc-menu-surface,
 .wc-menu-content {
@@ -1226,12 +1233,15 @@ html[data-wc-right-panel-resizing='true'] * {
   color: #252722;
 }
 
+.wc-code-chunk {
+  content-visibility: auto;
+  contain-intrinsic-size: auto calc(var(--wc-code-chunk-lines) * 1.25rem);
+}
+
 .wc-code-line {
   position: relative;
   min-height: 1.25rem;
   border-left: 3px solid transparent;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 20px;
 }
 
 .wc-code-text {

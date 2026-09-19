@@ -107,13 +107,13 @@ import { TaskInspector } from './task-inspector.tsx'
 import { ComposerMcpStatus } from './composer-mcp-status.tsx'
 import { RightPanel } from './right-panel.tsx'
 import { disposeTerminalView, loadTerminalViews } from './terminal-panel.tsx'
-import { RightPanelResizeHandle } from './right-panel-resize-handle.tsx'
+import { PanelResizeHandle } from './panel-resize-handle.tsx'
 import {
-  loadRightPanelWidthPreference,
-  normalizeRightPanelWidthRatio,
-  persistRightPanelWidthRatio,
-  rightPanelWidthExpression,
-} from './right-panel-layout.ts'
+  loadPanelWidth,
+  normalizePanelWidth,
+  persistPanelWidth,
+  panelWidthExpression,
+} from './panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import {
   closeRightPanelTab,
@@ -188,9 +188,7 @@ export function App() {
   const panelFullscreen = rightPanelFullscreen && rightPanelState.open
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
-  const [rightPanelWidthPreference, setRightPanelWidthPreference] = useState(
-    loadRightPanelWidthPreference,
-  )
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => loadPanelWidth('right'))
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
@@ -1066,15 +1064,10 @@ export function App() {
   }, [panelFullscreen, rightPanelState.open])
 
   const updateRightPanelWidthRatio = useCallback((ratio: number) => {
-    const normalized = Math.min(
-      normalizeRightPanelWidthRatio(ratio),
-      rightPanelWidthPreference.maximumRatio,
-    )
-    setRightPanelWidthPreference((current) => current.ratio === normalized
-      ? current
-      : { ...current, ratio: normalized })
-    persistRightPanelWidthRatio(normalized)
-  }, [rightPanelWidthPreference.maximumRatio])
+    const normalized = normalizePanelWidth('right', ratio)
+    setRightPanelWidth(normalized)
+    persistPanelWidth('right', normalized)
+  }, [])
 
   const collapseRightPanel = useCallback(() => {
     setRightPanelFullscreen(false)
@@ -1082,15 +1075,7 @@ export function App() {
   }, [updateRightPanelState])
 
   const previewRightPanelExpand = useCallback((ratio: number) => {
-    setRightPanelWidthPreference((current) => {
-      const normalized = Math.min(
-        normalizeRightPanelWidthRatio(ratio),
-        current.maximumRatio,
-      )
-      return current.ratio === normalized
-        ? current
-        : { ...current, ratio: normalized }
-    })
+    setRightPanelWidth(normalizePanelWidth('right', ratio))
     updateRightPanelState((current) => ({ ...current, open: true }))
   }, [updateRightPanelState])
 
@@ -2472,26 +2457,23 @@ export function App() {
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
             aria-busy={loadingConversation}
             inert={loadingConversation}
-            className={`wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
+            className={`wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
               rightPanelState.open
                 ? 'ml-0'
                 : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
             }`}
             style={{
               width: rightPanelState.open
-                ? rightPanelWidthExpression(
-                    rightPanelWidthPreference.ratio,
-                    rightPanelWidthPreference.maximumRatio,
-                  )
+                ? panelWidthExpression('right', rightPanelWidth)
                 : undefined,
             }}
           >
             {!panelFullscreen && (rightPanelState.open || rightPanelResizeActive) && (
-              <RightPanelResizeHandle
+              <PanelResizeHandle
+                side="right"
                 panelRef={rightPanelRef}
-                ratio={rightPanelWidthPreference.ratio}
-                maximumRatio={rightPanelWidthPreference.maximumRatio}
-                onRatioChange={updateRightPanelWidthRatio}
+                width={rightPanelWidth}
+                onWidthChange={updateRightPanelWidthRatio}
                 onCollapse={collapseRightPanel}
                 onPreviewExpand={previewRightPanelExpand}
                 onResizeActiveChange={setRightPanelResizeActive}
