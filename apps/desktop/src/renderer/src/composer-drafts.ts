@@ -16,9 +16,8 @@ type StoredImage = ImageDraft extends infer T
   ? T extends ImageDraft ? Omit<T, 'previewUrl' | 'file'> : never : never
 interface StoredDraft extends Omit<ComposerDraft, 'images'> { images: StoredImage[] }
 
-export const NEW_COMPOSER_DRAFT = 'new'
-export function composerDraftKey(sessionId: string | null): string {
-  return sessionId ?? NEW_COMPOSER_DRAFT
+export function composerDraftKey(runtimeId: string, sessionId: string | null): string {
+  return sessionId ?? `draft:${runtimeId}`
 }
 
 function hasContent(draft: ComposerDraft): boolean {
@@ -151,25 +150,27 @@ export class ComposerDraftStore {
   }
 
   /** 首条消息建立 Journal 后原子转移草稿与附件，提交期间继续输入的内容仍属于该会话。 */
-  async moveToSession(sessionId: string): Promise<void> {
-    this.invalidate(NEW_COMPOSER_DRAFT)
+  async moveToSession(runtimeId: string, sessionId: string): Promise<void> {
+    const sourceKey = composerDraftKey(runtimeId, null)
+    const cached = this.take(sourceKey)
+    if (cached) this.cache(sessionId, cached)
     this.invalidate(sessionId)
     const database = await this.open()
     const transaction = database.transaction(['drafts', 'images'], 'readwrite', { durability: 'strict' })
     const store = transaction.objectStore('drafts')
     const images = transaction.objectStore('images')
-    const request = store.get(NEW_COMPOSER_DRAFT)
+    const request = store.get(sourceKey)
     request.onsuccess = () => {
       const stored: StoredDraft | undefined = request.result
       if (!stored) return
       store.put(stored, sessionId)
-      store.delete(NEW_COMPOSER_DRAFT)
+      store.delete(sourceKey)
       for (const image of stored.images) {
         if (image.kind === 'stored') continue
-        const file = images.get([NEW_COMPOSER_DRAFT, image.id])
+        const file = images.get([sourceKey, image.id])
         file.onsuccess = () => {
           if (file.result) images.put(file.result, [sessionId, image.id])
-          images.delete([NEW_COMPOSER_DRAFT, image.id])
+          images.delete([sourceKey, image.id])
         }
       }
     }

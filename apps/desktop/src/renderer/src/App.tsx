@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ClipboardEvent,
 } from 'react'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
@@ -90,6 +91,7 @@ import {
 } from './pdf-draft.ts'
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
+import { ComposerSubmissions, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
 import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
@@ -154,7 +156,14 @@ export function App() {
   const [stopping, setStopping] = useState(false)
   const [sessionTransitionPending, setSessionTransitionPending] = useState(false)
   const [questionSubmitting, setQuestionSubmitting] = useState(false)
-  const [attachmentSubmissionPending, setAttachmentSubmissionPending] = useState(false)
+  const [composerSubmissions] = useState(() => new ComposerSubmissions())
+  const pendingSubmissions = useSyncExternalStore(composerSubmissions.subscribe, composerSubmissions.getSnapshot)
+  const activeSubmission = pendingSubmissions.get(runtimeId)
+  const submissionPending = Boolean(activeSubmission)
+  const restoredSubmissionPending = Boolean(activeSubmission?.draft.restoredInputIds.length)
+  const worktreePreparation = activeSubmission?.worktreeBaseRef !== undefined
+    ? { message: activeSubmission.draft.text, baseRef: activeSubmission.worktreeBaseRef }
+    : null
   const [models, setModels] = useState<ModelListItem[]>([])
   const [modelId, setModelId] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
@@ -184,17 +193,12 @@ export function App() {
     useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
   const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
-  const [worktreePreparation, setWorktreePreparation] = useState<{
-    message: string
-    baseRef: string | null
-  } | null>(null)
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
   const [queuedActionPending, setQueuedActionPending] = useState<
     Partial<Record<string, QueuedMessageAction>>
   >({})
   const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
   const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
-  const [restoredSubmissionPending, setRestoredSubmissionPending] = useState(false)
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const [sessions, setSessions] = useState<SessionListItem[]>([])
@@ -446,23 +450,29 @@ export function App() {
     const text = inputRef.current
     const skills = captureSkills()
     const currentBtwMode = btwModeRef.current
-    composerDraftsRef.current.cache(composerDraftKey(currentSessionId), {
+    const draft = {
       text, images, pdfs, skills, btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
-    })
-  }, [captureSkills, detachImageDrafts, detachPdfDrafts])
+    }
+    const pending = composerSubmissions.getSnapshot().get(currentRuntimeId)
+    if (pending) pending.remainder = draft
+    else composerDraftsRef.current.cache(composerDraftKey(currentRuntimeId, currentSessionId), draft)
+  }, [captureSkills, composerSubmissions, detachImageDrafts, detachPdfDrafts])
 
   const draftStorageError = useCallback((error: unknown) => {
     showError(`输入草稿保存或恢复失败：${error instanceof Error ? error.message : String(error)}`)
   }, [showError])
 
   const persistComposer = useCallback(async () => {
-    if (!runtimeId || runtimeId !== runtimeIdRef.current || attachmentSubmissionPending) return
-    await composerDraftsRef.current.save(composerDraftKey(sessionIdRef.current), {
+    if (!runtimeId || runtimeId !== runtimeIdRef.current) return
+    const draft = {
       text: inputRef.current, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
       btwMode, restoredInputIds,
-    })
+    }
+    const pending = composerSubmissions.getSnapshot().get(runtimeId)
+    await composerDraftsRef.current.save(composerDraftKey(runtimeId, sessionIdRef.current),
+      pending ? prependComposerDraft(pending.draft, draft) : draft)
   }, [runtimeId, input, imageDrafts, pdfDrafts, selectedSkills, btwMode, restoredInputIds,
-    attachmentSubmissionPending])
+    submissionPending, composerSubmissions])
   const persistComposerRef = useRef(persistComposer)
   persistComposerRef.current = persistComposer
 
@@ -477,17 +487,27 @@ export function App() {
     }
   }), [draftStorageError])
 
+  const bindComposerSession = useCallback((ownerRuntimeId: string, sessionId: string | null) => {
+    if (!sessionId) return
+    const pending = composerSubmissions.getSnapshot().get(ownerRuntimeId)
+    const promoted = pending
+      ? composerSubmissions.bindSession(ownerRuntimeId, sessionId)
+      : ownerRuntimeId === runtimeIdRef.current && sessionIdRef.current === null
+    if (promoted) return composerDraftsRef.current.moveToSession(ownerRuntimeId, sessionId)
+  }, [composerSubmissions])
+
   const prepareComposer = useCallback(async (snapshot: RuntimeSnapshot) => {
-    if (runtimeIdRef.current && composerDraftKey(snapshot.sessionId) === composerDraftKey(sessionIdRef.current)) return
-    await composerDraftsRef.current.load(composerDraftKey(snapshot.sessionId))
-  }, [])
+    await bindComposerSession(snapshot.runtimeId, snapshot.sessionId)
+    const key = composerDraftKey(snapshot.runtimeId, snapshot.sessionId)
+    if (runtimeIdRef.current && key === composerDraftKey(runtimeIdRef.current, sessionIdRef.current)) return
+    // 待确认输入只在磁盘中用于崩溃恢复；切回时输入框仍展示提交之后新写的草稿。
+    if (!composerSubmissions.getSnapshot().has(snapshot.runtimeId)) await composerDraftsRef.current.load(key)
+  }, [bindComposerSession, composerSubmissions])
 
   const setComposerSessionId = useCallback((sessionId: string | null) => {
-    if (sessionId && sessionIdRef.current === null && runtimeIdRef.current) {
-      void composerDraftsRef.current.moveToSession(sessionId).catch(draftStorageError)
-    }
+    void bindComposerSession(runtimeIdRef.current, sessionId)?.catch(draftStorageError)
     sessionIdRef.current = sessionId
-  }, [draftStorageError])
+  }, [bindComposerSession, draftStorageError])
 
   const stashActivePresentation = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
@@ -506,7 +526,7 @@ export function App() {
   const resetActiveComposer = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
     const currentSessionId = sessionIdRef.current
-    void composerDraftsRef.current.delete(composerDraftKey(currentSessionId)).catch(draftStorageError)
+    void composerDraftsRef.current.delete(composerDraftKey(currentRuntimeId, currentSessionId)).catch(draftStorageError)
     backgroundEventsRef.current.delete(currentRuntimeId)
     inputRef.current = ''
     setInput('')
@@ -739,7 +759,11 @@ export function App() {
     let restoredIds = restoredInputIdsRef.current.filter((id) => validRestoredIds.has(id))
     if (changingRuntime) {
       resetSkillCatalog()
-      const draft = composerDraftsRef.current.take(composerDraftKey(snapshot.sessionId))
+      const pending = composerSubmissions.getSnapshot().get(snapshot.runtimeId)
+      const draft = pending
+        ? pending.remainder
+        : composerDraftsRef.current.take(composerDraftKey(snapshot.runtimeId, snapshot.sessionId))
+      if (pending) pending.remainder = undefined
       inputRef.current = draft?.text ?? ''
       setInput(draft?.text ?? '')
       restoredIds = (draft?.restoredInputIds ?? []).filter((id) => validRestoredIds.has(id))
@@ -771,7 +795,6 @@ export function App() {
       setConversationFeedback(null)
     }
     setWorkspace(snapshot.workspace)
-    if (changingRuntime) setWorktreePreparation(null)
     setPermMode(snapshot.permissionMode)
     setContextUsage(snapshot.contextUsage)
     setActiveSkills(snapshot.activeSkills)
@@ -791,7 +814,6 @@ export function App() {
     setQueuedActionPending({})
     setRestoredInputIds(restoredIds)
     setRestoredQueue(snapshot.restoredInputs.filter((item) => !restoredIds.includes(item.id)))
-    setRestoredSubmissionPending(false)
     setApproval(snapshot.approval)
     setModelId(snapshot.modelId ?? '')
     setReasoningEffort(snapshot.reasoningEffort)
@@ -799,6 +821,7 @@ export function App() {
     setForkPendingTurnId(null)
   }, [
     setComposerSessionId,
+    composerSubmissions,
     applyBackgroundTaskState,
     applySubagentState,
     restoreImageDrafts,
@@ -1198,6 +1221,7 @@ export function App() {
         eventRuntimeId !== runtimeIdRef.current
         || hydratingRuntimeIdRef.current === eventRuntimeId
       ) {
+        void bindComposerSession(eventRuntimeId, eventSessionId)?.catch(draftStorageError)
         if (
           !backgroundEventsRef.current.has(eventRuntimeId)
           && backgroundEventsRef.current.size >= 8
@@ -1244,6 +1268,8 @@ export function App() {
     }
   }, [
     applyRuntimeSnapshot,
+    bindComposerSession,
+    draftStorageError,
     prepareComposer,
     setComposerSessionId,
     consumeEvent,
@@ -1315,7 +1341,7 @@ export function App() {
   const busy = status !== 'idle' && status !== 'error'
   const interactionBusy = busy
     || sessionTransitionPending
-    || attachmentSubmissionPending
+    || submissionPending
     || deletionBlocksRuntime
     || resumingSessionId !== null
     || checkpointRestoreToolUseId !== null
@@ -1326,14 +1352,12 @@ export function App() {
     || sessionTransitionPending
     || deletionBlocksRuntime
     || checkpointRestoreToolUseId !== null
-  const composerControlsLocked = composerDisabled || attachmentSubmissionPending
+  const composerControlsLocked = composerDisabled || submissionPending
   const attachmentLocked = composerControlsLocked || resumingSessionId !== null
   const sessionNavigationLocked = deletionBlocksRuntime
     || sessionTransitionPending
-    || attachmentSubmissionPending
-    || restoredSubmissionPending
     || checkpointRestoreToolUseId !== null
-  const sessionChangeLocked = sessionNavigationLocked || resumingSessionId !== null
+  const sessionChangeLocked = sessionNavigationLocked || submissionPending || resumingSessionId !== null
 
   const requestCheckpointRestore = useCallback<CheckpointRestoreRequest>(async (
     toolUseId,
@@ -1759,10 +1783,10 @@ export function App() {
       || deletionBlocksRuntime
       || resumingSessionId
       || checkpointRestoreToolUseId
-      || attachmentSubmissionPending
+      || submissionPending
     ) return
     const targetRuntimeId = runtimeIdRef.current
-    if (!targetRuntimeId) return
+    if (!targetRuntimeId || composerSubmissions.getSnapshot().has(targetRuntimeId)) return
     const sentBtwMode = btwModeRef.current
     const sentSkills = captureSkills()
     if (
@@ -1776,17 +1800,21 @@ export function App() {
       || attachmentFallbackText(imageDrafts.length, sentBtwMode ? 0 : pdfDrafts.length)
       || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
     if (!text && imageDrafts.length === 0) return
-    const preparingWorktree = !conversationStarted && workspace.mode === 'pending-worktree'
-    if (preparingWorktree) {
-      setWorktreePreparation({ message: text, baseRef: workspace.baseRef })
-    }
     const sentImageDrafts = detachImageDrafts()
     const sentPdfDrafts = detachPdfDrafts()
     const sentRestoredInputIds = restoredInputIds
+    const submission: ComposerSubmission = {
+      runtimeId: targetRuntimeId,
+      sessionId: sessionIdRef.current,
+      draft: {
+        text, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills,
+        btwMode: sentBtwMode, restoredInputIds: sentRestoredInputIds,
+      },
+      ...(!conversationStarted && workspace.mode === 'pending-worktree'
+        ? { worktreeBaseRef: workspace.baseRef } : {}),
+    }
+    composerSubmissions.start(submission)
     setRestoredInputIds([])
-    if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(true)
-    // IPC 确认持久化并交给目标 Agent 前，暂不允许切换；否则失败恢复可能落入另一对话。
-    setAttachmentSubmissionPending(true)
     setInput('')
     inputRef.current = ''
     clearSkills()
@@ -1807,7 +1835,11 @@ export function App() {
       ])
     }
     void (async () => {
+      let accepted = false
       try {
+        await composerDraftsRef.current.save(
+          composerDraftKey(targetRuntimeId, submission.sessionId), submission.draft,
+        )
         const attachments = await prepareImageDrafts(sentImageDrafts)
         const pdfAttachments = preparePdfDrafts(sentPdfDrafts)
         const result = await window.whycode.sendCommand(
@@ -1837,26 +1869,52 @@ export function App() {
           setWorkspace(result.workspace)
         }
         if (result?.ok) {
-          releaseImageDrafts(sentImageDrafts)
-          return
+          accepted = true
         }
-        restoreRejectedInput()
       } catch {
-        restoreRejectedInput()
-        showError(sentImageDrafts.length || sentPdfDrafts.length
-          ? '附件读取或消息发送失败，内容已恢复到输入框'
-          : '消息发送失败，内容已恢复到输入框')
-      } finally {
-        if (preparingWorktree && runtimeIdRef.current === targetRuntimeId) {
-          setWorktreePreparation(null)
+        if (runtimeIdRef.current === targetRuntimeId) {
+          showError(sentImageDrafts.length || sentPdfDrafts.length
+            ? '附件读取或消息发送失败，内容已恢复到输入框'
+            : '消息发送失败，内容已恢复到输入框')
         }
-        setAttachmentSubmissionPending(false)
-        if (sentRestoredInputIds.length > 0) setRestoredSubmissionPending(false)
+      } finally {
+        // IPC 确认与事件端口独立到达；首次提交须先取得正式身份，再移交后台草稿。
+        if (submission.sessionId === null) {
+          try {
+            const snapshot = await window.whycode.runtimeSnapshot(targetRuntimeId)
+            await bindComposerSession(targetRuntimeId, snapshot.sessionId)
+            if (runtimeIdRef.current === targetRuntimeId) sessionIdRef.current = snapshot.sessionId
+          } catch (error) {
+            draftStorageError(error)
+          }
+        }
+        // 先完成所属运行时的内存移交，再等待磁盘；切回时不会再次合并已经恢复的输入。
+        let saved: Promise<void> | undefined
+        try {
+          if (accepted) releaseImageDrafts(sentImageDrafts)
+          if (runtimeIdRef.current === targetRuntimeId) {
+            if (!accepted) restoreRejectedInput()
+          } else {
+            const key = composerDraftKey(targetRuntimeId, submission.sessionId)
+            const draft = accepted
+              ? submission.remainder ?? { text: '', images: [], pdfs: [], skills: [], btwMode: null, restoredInputIds: [] }
+              : prependComposerDraft(submission.draft, submission.remainder)
+            composerDraftsRef.current.cache(key, draft)
+            saved = composerDraftsRef.current.save(key, draft)
+            if (!accepted) showError('消息未能发送，内容已恢复到原会话的输入框')
+          }
+        } finally {
+          composerSubmissions.finish(submission)
+        }
+        await saved?.catch(draftStorageError)
       }
     })()
   }, [
     showError,
-    attachmentSubmissionPending,
+    submissionPending,
+    bindComposerSession,
+    composerSubmissions,
+    draftStorageError,
     captureSkills,
     checkpointRestoreToolUseId,
     clearSkills,
@@ -2010,7 +2068,10 @@ export function App() {
 
   const pendingSession = sessions.find((session) => session.sessionId === resumingSessionId)
   const loadingConversation = resumingSessionId !== null && resumingSessionId !== sessionIdRef.current
-  const pendingDraft = loadingConversation ? composerDraftsRef.current.get(resumingSessionId) : undefined
+  const pendingDraft = loadingConversation
+    ? [...pendingSubmissions.values()].find((submission) => submission.sessionId === resumingSessionId)?.remainder
+      ?? composerDraftsRef.current.get(resumingSessionId)
+    : undefined
   // 草稿仍由已确认的运行时持有；切换期间只展示目标草稿，避免旧请求改写输入。
   const composerDraft = loadingConversation
     ? {
