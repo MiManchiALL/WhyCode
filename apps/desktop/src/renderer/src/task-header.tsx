@@ -3,9 +3,12 @@ import type { BackgroundTaskSummary } from '@whycode/core'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import { BackgroundTaskMenu } from './background-task-menu.tsx'
 import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
+import { SessionTitle, type RenameSession } from './session-name-editor.tsx'
 
 interface TaskHeaderProps {
   title: string
+  sessionId: string | null
+  onRename: RenameSession
   disabled?: boolean
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
@@ -23,9 +26,7 @@ export function TaskHeader(props: TaskHeaderProps) {
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--wc-line)] bg-[var(--wc-surface)] px-4">
       <div className="flex min-w-0 items-center gap-2.5 overflow-hidden">
-        <h1 className="max-w-64 truncate text-sm font-semibold tracking-tight" title={props.title}>
-          {props.title}
-        </h1>
+        <SessionTitle key={props.sessionId} sessionId={props.sessionId} title={props.title} disabled={Boolean(props.disabled)} onRename={props.onRename} />
         <span className="h-4 w-px shrink-0 bg-[var(--wc-line)]" />
         <button
           type="button"

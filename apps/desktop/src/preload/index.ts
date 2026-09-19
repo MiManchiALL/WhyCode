@@ -15,6 +15,7 @@ import type {
 } from '@whycode/core'
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { IPC } from '../shared/ipc.ts'
+import type { RenameSessionRequest, RenameSessionResult } from '../shared/session-name.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type {
@@ -267,6 +268,8 @@ const api = {
     ipcRenderer.invoke(IPC.newSession, request),
   setSessionPinned: (request: SetSessionPinnedRequest): Promise<SetSessionPinnedResult> =>
     ipcRenderer.invoke(IPC.setSessionPinned, request),
+  renameSession: (request: RenameSessionRequest): Promise<RenameSessionResult> =>
+    ipcRenderer.invoke(IPC.renameSession, request),
   deleteSession: (sessionId: string, deleteDirectory: boolean): Promise<DeleteSessionResult> =>
     ipcRenderer.invoke(IPC.deleteSession, sessionId, deleteDirectory),
   previewSessionDeletion: (sessionId: string): Promise<WorkspaceActionResult<WorkspaceDeletionPreview>> =>

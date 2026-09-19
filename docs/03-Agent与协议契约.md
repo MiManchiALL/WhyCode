@@ -451,6 +451,12 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 受管默认目录与 Worktree 所有权清单使用 schema 3，必含可空保留信息，不读取或迁移旧 schema。目录保留、共享保护、分支和失败语义见文档二 §7.2。
 
+### 7.5 桌面会话名称
+
+契约单源为 `shared/session-name.ts`。`renameSession({sessionId,name})` 仅允许窗口主 Frame 调用，Main 验证会话存在且未在删除，再保存规范化名称；名称去除首尾空白后须为 1～200 字符的单行文本，禁止空字符。返回 `{ok:true}` 或 `{ok:false,error}`；失败不发布未持久化名称。
+
+`listSessions()` 的标题包含已保存的手动名称，准备中的会话使用同一身份和入口。名称属于 Desktop 偏好，不生成 Agent 命令或持久会话事件，也不触发模型请求。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。

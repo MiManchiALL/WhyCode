@@ -225,6 +225,7 @@ import { RuntimeEventPortHub } from './runtime-event-port-hub.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import { projectSessionListItems } from './session-list.ts'
 import { SessionSidebarStateStore } from './session-sidebar-state.ts'
+import type { RenameSessionRequest, RenameSessionResult } from '../shared/session-name.ts'
 import {
   registerAttachmentProtocol,
   registerFileSchemes,
@@ -2626,7 +2627,8 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
         throw new Error('工作目录无法删除或仍被其它会话使用，请重新确认')
       }
     }
-    const workspaceName = targetRuntime?.journal?.metadataSnapshot.title ?? summary?.title ?? '保留的工作区'
+    const workspaceName = sessionSidebarState.name(sessionId)
+      ?? targetRuntime?.journal?.metadataSnapshot.title ?? summary?.title ?? '保留的工作区'
     const deletion = await stageSessionDeletion({
       sessionId,
       sessions,
@@ -2661,8 +2663,8 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
     void deletion.finish().then(async (result) => {
       if (!result.deleted) throw new Error('会话删除状态已丢失')
       runtimeRegistry.forgetSession(sessionId)
-      await sessionSidebarState.setPinned(sessionId, false)
-        .catch((error) => console.warn('会话已删除，但置顶状态清理失败：', error))
+      await sessionSidebarState.remove(sessionId)
+        .catch((error) => console.warn('会话已删除，但侧栏偏好清理失败：', error))
       broadcastSessionDeletion({ sessionId, status: 'completed', warning: result.warning })
     }).catch((error) => {
       broadcastSessionDeletion({
@@ -3053,7 +3055,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
     const currentSessionId = runtimeRegistry.selected?.sessionId ?? null
     return projectSessionListItems(
-      await sessions.list(),
+      (await sessions.list()).map(summary => ({ ...summary, title: sessionSidebarState.name(summary.sessionId) ?? summary.title })),
       runtimeRegistry.all(),
       currentSessionId,
       sessionSidebarState.orderedPinnedSessionIds(),
@@ -3086,6 +3088,19 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
   ipcMain.handle(IPC.resumeSession, (_e, sessionId: string, historyStart?: string) => resumeSession(sessionId, historyStart))
+  ipcMain.handle(IPC.renameSession, async (event, request: RenameSessionRequest): Promise<RenameSessionResult> => {
+    if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
+      return { ok: false, error: '仅主页面可重命名会话' }
+    }
+    try {
+      if (!request || typeof request.sessionId !== 'string') throw new Error('重命名请求无效')
+      validateSessionId(request.sessionId)
+      const exists = (await sessions.list()).some(summary => summary.sessionId === request.sessionId)
+      if (!exists || sessionDeletionLock.blocksSession(request.sessionId)) throw new Error('会话不存在或正在删除')
+      await sessionSidebarState.setName(request.sessionId, request.name)
+      return { ok: true }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  })
   ipcMain.handle(IPC.forkSession, (_e, request: unknown) => forkSession(request))
   workspaceLifecycle = new WorkspaceLifecycle(managedWorkspaces, worktrees, async () => {
     const persisted = (await sessions.list()).flatMap(item => {

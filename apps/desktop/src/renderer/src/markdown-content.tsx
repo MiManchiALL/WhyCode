@@ -12,6 +12,7 @@ import {
 import { SourceIcon } from './source-capsules.tsx'
 import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
+import { MarkdownTable } from './markdown-table.tsx'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
@@ -24,7 +25,7 @@ import {
   sourceKindForUrl,
 } from './markdown-sources.ts'
 
-const MARKDOWN_CONTROLS = { table: { fullscreen: false } } as const
+const MARKDOWN_CONTROLS = { table: false } as const
 const LINK_SAFETY = { enabled: false } as const
 
 export const MarkdownContent = memo(function MarkdownContent({
@@ -71,6 +72,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   }, [clearHighlight])
 
   const components = useMemo<Components>(() => ({
+    table: MarkdownTable,
     ul: ({ node, className, children, ...props }) => {
       return <MarkdownUnorderedList {...props} node={node} className={className}>{children}</MarkdownUnorderedList>
     },

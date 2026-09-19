@@ -134,6 +134,35 @@ button:not(:disabled),
   scrollbar-width: none;
 }
 
+.wc-panel-tab {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.75rem;
+  max-width: 11rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  color: var(--wc-muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.wc-panel-tab:where(:hover) { background: rgb(0 0 0 / 3.5%); }
+.wc-panel-tab[data-active='true'] { background: rgb(0 0 0 / 5.5%); color: var(--wc-ink); }
+.wc-panel-tab-dragging { width: 100%; max-width: none; background: var(--wc-sidebar); box-shadow: var(--wc-soft-shadow); color: var(--wc-ink); cursor: grabbing; }
+
+.wc-markdown-table {
+  margin-block: 1rem;
+  overflow: hidden;
+  border: 1px solid var(--wc-line);
+  border-radius: 0.75rem;
+}
+
+.wc-markdown-table :is(th, td, tr) { border-color: var(--wc-line); }
+.wc-markdown-table thead { background: rgb(0 0 0 / 2.5%); }
+.wc-markdown-table tbody tr:last-child { border-bottom: 0; }
+
 .wc-right-panel-tabs::-webkit-scrollbar {
   display: none;
 }

@@ -1,16 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { normalizeSessionName } from '../shared/session-name.ts'
 
 interface StoredSessionSidebarState {
   version: 1
   pinnedSessionIds: string[]
+  names: Record<string, string>
 }
 
-/** 会话内容与侧栏排列是两种事实；置顶顺序使用独立、有界的宿主偏好。 */
+/** 手动名称与置顶属于宿主偏好，不改写会话历史、模型输入或活动时间。 */
 export class SessionSidebarStateStore {
   private readonly path: string
-  private pinnedSessionIds: string[] = []
+  private state: StoredSessionSidebarState = { version: 1, pinnedSessionIds: [], names: {} }
   private writeTail: Promise<void> = Promise.resolve()
 
   constructor(path: string) {
@@ -22,24 +24,54 @@ export class SessionSidebarStateStore {
     try {
       stored = parseStoredState(JSON.parse(await readFile(this.path, 'utf8')))
     } catch {}
-    this.pinnedSessionIds = (stored?.pinnedSessionIds ?? [])
-      .filter((sessionId) => validSessionIds.has(sessionId))
+    if (stored) this.state = {
+      ...stored,
+      pinnedSessionIds: stored.pinnedSessionIds.filter(id => validSessionIds.has(id)),
+      names: Object.fromEntries(Object.entries(stored.names).filter(([id]) => validSessionIds.has(id))),
+    }
   }
 
   orderedPinnedSessionIds(): readonly string[] {
-    return this.pinnedSessionIds
+    return this.state.pinnedSessionIds
+  }
+
+  name(sessionId: string): string | undefined {
+    return this.state.names[sessionId]
+  }
+
+  setName(sessionId: string, value: unknown): Promise<void> {
+    const name = normalizeSessionName(value)
+    return this.update(state => state.names[sessionId] === name ? state : {
+      ...state, names: { ...state.names, [sessionId]: name },
+    })
+  }
+
+  remove(sessionId: string): Promise<void> {
+    return this.update(state => {
+      const names = { ...state.names }
+      delete names[sessionId]
+      return { ...state, names, pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId) }
+    })
   }
 
   setPinned(sessionId: string, pinned: boolean): Promise<void> {
-    const write = this.writeTail.then(async () => {
-      const current = this.pinnedSessionIds
+    return this.update(state => {
+      const current = state.pinnedSessionIds
       const exists = current.includes(sessionId)
-      if (exists === pinned) return
-      const next = pinned
+      if (exists === pinned) return state
+      const pinnedSessionIds = pinned
         ? [...current, sessionId]
         : current.filter((candidate) => candidate !== sessionId)
+      return { ...state, pinnedSessionIds }
+    })
+  }
+
+  private update(transform: (state: StoredSessionSidebarState) => StoredSessionSidebarState): Promise<void> {
+    const write = this.writeTail.then(async () => {
+      const next = transform(this.state)
+      if (next === this.state) return
       await writeStoredState(this.path, next)
-      this.pinnedSessionIds = next
+      this.state = next
     })
     this.writeTail = write.catch(() => {})
     return write
@@ -51,21 +83,22 @@ function parseStoredState(value: unknown): StoredSessionSidebarState | null {
     return null
   }
   if (!value.pinnedSessionIds.every((sessionId) => typeof sessionId === 'string')) return null
+  const storedNames = value.names ?? {}
+  if (!isRecord(storedNames)) return null
+  const names = Object.fromEntries(Object.entries(storedNames).map(([id, name]) => [id, normalizeSessionName(name)]))
   return {
     version: 1,
     pinnedSessionIds: [...new Set(value.pinnedSessionIds)],
+    names,
   }
 }
 
-async function writeStoredState(path: string, pinnedSessionIds: string[]): Promise<void> {
+async function writeStoredState(path: string, state: StoredSessionSidebarState): Promise<void> {
   const directory = dirname(path)
   const temporary = join(directory, `.session-sidebar-${randomUUID()}.tmp`)
   await mkdir(directory, { recursive: true, mode: 0o700 })
   try {
-    await writeFile(temporary, `${JSON.stringify({
-      version: 1,
-      pinnedSessionIds,
-    } satisfies StoredSessionSidebarState, null, 2)}\n`, {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
       flag: 'wx',

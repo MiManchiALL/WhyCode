@@ -197,6 +197,15 @@ export function closeRightPanelTab(
   return { ...state, tabs, activeTabId: replacement?.id ?? null }
 }
 
+export function moveRightPanelTab(state: RightPanelSessionState, tabId: string, targetId: string): RightPanelSessionState {
+  const from = state.tabs.findIndex(tab => tab.id === tabId)
+  const to = state.tabs.findIndex(tab => tab.id === targetId)
+  if (from < 0 || to < 0 || from === to) return state
+  const tabs = state.tabs.slice()
+  tabs.splice(to, 0, ...tabs.splice(from, 1))
+  return { ...state, tabs }
+}
+
 export function rightPanelTabId(page: RightPanelPage): string {
   switch (page.kind) {
     case 'workspace':

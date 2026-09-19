@@ -5,6 +5,7 @@ import {
   closeRightPanelTab,
   MAX_RIGHT_PANEL_TABS,
   openRightPanelPage,
+  moveRightPanelTab,
   RightPanelSessionStore,
   rightPanelSessionKey,
   rightPanelTabId,
@@ -44,6 +45,26 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('排序只改变目标会话的顺序，保持活动内容与页面设置，关闭时按新顺序选择邻居', () => {
+    let state = emptyState()
+    for (const name of ['a.md', 'b.html', 'c.ts']) {
+      state = openRightPanelPage(state, { kind: 'file', path: `E:/${name}`, name, source: { kind: 'current' }, wrap: true, previewMode: 'code' })
+    }
+    const [first, second, third] = state.tabs
+    const reordered = moveRightPanelTab(state, third!.id, first!.id)
+    assert.deepEqual(reordered.tabs, [third, first, second])
+    assert.equal(activeRightPanelPage(reordered), activeRightPanelPage(state))
+    assert.equal(moveRightPanelTab(reordered, 'missing', first!.id), reordered)
+    assert.equal(moveRightPanelTab(reordered, first!.id, first!.id), reordered)
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    store.set('session-a', reordered)
+    store.set('session-b', state)
+    const restored = new RightPanelSessionStore(storage)
+    assert.deepEqual(restored.get('session-a'), reordered)
+    assert.deepEqual(restored.get('session-b'), state)
+    assert.equal(closeRightPanelTab(reordered, third!.id).activeTabId, first!.id)
+  })
   it('独立保存每个会话的任务面板选择，空侧栏也保留；删除会话时清理', () => {
     const storage = new MemoryStorage()
     const store = new RightPanelSessionStore(storage)

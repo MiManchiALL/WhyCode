@@ -74,6 +74,7 @@ export const IPC = {
   forkSession: 'whycode:fork-session',
   newSession: 'whycode:new-session',
   setSessionPinned: 'whycode:set-session-pinned',
+  renameSession: 'whycode:rename-session',
   deleteSession: 'whycode:delete-session',
   previewSessionDeletion: 'whycode:preview-session-deletion',
   listRetainedWorkspaces: 'whycode:list-retained-workspaces',

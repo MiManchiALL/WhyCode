@@ -101,6 +101,7 @@ import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
 import { AppSidebar } from './app-sidebar.tsx'
 import { TaskHeader } from './task-header.tsx'
+import { normalizeSessionName } from '../../shared/session-name.ts'
 import { ComposerToolbar } from './composer-toolbar.tsx'
 import { TaskInspector } from './task-inspector.tsx'
 import { ComposerMcpStatus } from './composer-mcp-status.tsx'
@@ -116,6 +117,7 @@ import {
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import {
   closeRightPanelTab,
+  moveRightPanelTab,
   openRightPanelPage as openRightPanelPageState,
   RightPanelSessionStore,
   rightPanelSessionKey,
@@ -1632,6 +1634,19 @@ export function App() {
     })
   }, [refreshSessions, showError])
 
+  const renameSession = useCallback(async (sessionId: string, value: string): Promise<boolean> => {
+    try {
+      const name = normalizeSessionName(value)
+      const result = await window.whycode.renameSession({ sessionId, name })
+      if (!result.ok) throw new Error(result.error)
+      await refreshSessions()
+      return true
+    } catch (error) {
+      showError(`重命名失败：${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }, [refreshSessions, showError])
+
   const compact = useCallback(() => {
     if (status !== 'idle' && status !== 'error') return
     showConversationFeedback('info', '正在压缩上下文，可点停止取消。')
@@ -2119,6 +2134,7 @@ export function App() {
           onNewSession={() => startNewSession()}
           onResume={resumeSession}
           onPinnedChange={setSessionPinned}
+          onRename={renameSession}
           onDelete={deleteSession}
           onError={showError}
           onOpenSettings={openConnectionSettings}
@@ -2128,6 +2144,8 @@ export function App() {
       <section className="wc-shell-panel flex min-w-0 flex-1 flex-col bg-[var(--wc-surface)]">
         <div className="contents" inert={panelFullscreen}>
           <TaskHeader
+            sessionId={loadingConversation ? resumingSessionId : sessionIdRef.current}
+            onRename={renameSession}
             title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
             projectDir={loadingConversation
               ? pendingSession?.workspace ? workspaceDisplayDirectory(pendingSession.workspace) : null
@@ -2532,6 +2550,7 @@ export function App() {
                 onOpenPage={showRightPanelPage}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}
+                onMoveTab={(id, targetId) => updateRightPanelState(current => moveRightPanelTab(current, id, targetId))}
                 terminalOpening={terminalOpening}
                 onOpenTerminal={() => { void openRightPanelTerminal() }}
               />

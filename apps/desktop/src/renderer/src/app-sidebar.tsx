@@ -5,12 +5,14 @@ import {
   Folder,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Pin,
   PinOff,
   Plus,
   Settings,
   Trash2,
 } from 'lucide-react'
+import { SessionNameDialog, type RenameSession } from './session-name-editor.tsx'
 import { SessionDeleteDialog } from './session-delete-dialog.tsx'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { SessionListItem } from '../../shared/session.ts'
@@ -29,12 +31,15 @@ interface AppSidebarProps {
   onNewSession: () => void
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
+  onRename: RenameSession
   onDelete: (sessionId: string, deleteDirectory: boolean) => void
   onError: (message: string) => void
   onOpenSettings: () => void
 }
 
 export function AppSidebar(props: AppSidebarProps) {
+  const [renameTargetId, setRenameTargetId] = useState<string | null>(null)
+  const renameTarget = props.sessions.find(session => session.sessionId === renameTargetId)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
   const closeDeleteDialog = useCallback(() => setDeleteTargetId(null), [])
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
@@ -156,6 +161,7 @@ export function AppSidebar(props: AppSidebarProps) {
                       onResume={props.onResume}
                       onPinnedChange={props.onPinnedChange}
                       onRequestDelete={setDeleteTargetId}
+                      onRequestRename={setRenameTargetId}
                     />
                   )}
                 </section>
@@ -174,6 +180,7 @@ export function AppSidebar(props: AppSidebarProps) {
                     onResume={props.onResume}
                     onPinnedChange={props.onPinnedChange}
                     onRequestDelete={setDeleteTargetId}
+                    onRequestRename={setRenameTargetId}
                   />
                 </section>
               )}
@@ -194,6 +201,8 @@ export function AppSidebar(props: AppSidebarProps) {
         </button>
       </div>
 
+      {renameTarget && <SessionNameDialog key={renameTarget.sessionId} sessionId={renameTarget.sessionId} title={renameTarget.title}
+        onRename={props.onRename} onClose={() => setRenameTargetId(null)} />}
       {deleteTarget && <SessionDeleteDialog key={deleteTarget.sessionId} sessionId={deleteTarget.sessionId}
         onClose={closeDeleteDialog} onDelete={props.onDelete} onError={props.onError} />}
     </aside>
@@ -209,6 +218,7 @@ function SessionItems({
   onResume,
   onPinnedChange,
   onRequestDelete,
+  onRequestRename,
 }: {
   sessions: readonly SessionListItem[]
   selectedSessionId: string | null
@@ -218,6 +228,7 @@ function SessionItems({
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRequestDelete: (sessionId: string) => void
+  onRequestRename: (sessionId: string) => void
 }) {
   return (
     <div className="space-y-0.5">
@@ -232,6 +243,7 @@ function SessionItems({
           onResume={onResume}
           onPinnedChange={onPinnedChange}
           onRequestDelete={onRequestDelete}
+          onRequestRename={onRequestRename}
         />
       ))}
     </div>
@@ -247,6 +259,7 @@ function SessionItem({
   onResume,
   onPinnedChange,
   onRequestDelete,
+  onRequestRename,
 }: {
   session: SessionListItem
   selected: boolean
@@ -256,6 +269,7 @@ function SessionItem({
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRequestDelete: (sessionId: string) => void
+  onRequestRename: (sessionId: string) => void
 }) {
   const directory = session.workspace ? workspaceDisplayDirectory(session.workspace) : null
   const selectable = !navigationLocked && !deleting && !selected && session.resumable
@@ -314,6 +328,9 @@ function SessionItem({
             >
               {session.pinned ? <PinOff size={15} /> : <Pin size={15} />}
               {session.pinned ? '取消置顶' : '置顶对话'}
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="wc-menu-item" onSelect={() => onRequestRename(session.sessionId)}>
+              <Pencil size={15} />重命名
             </DropdownMenu.Item>
             <DropdownMenu.Item
               className="wc-menu-item text-[var(--wc-danger)]"
