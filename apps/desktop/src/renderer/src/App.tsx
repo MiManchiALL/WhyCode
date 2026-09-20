@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
   type ClipboardEvent,
+  type CSSProperties,
 } from 'react'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
@@ -70,6 +71,7 @@ import {
 } from '../../shared/conversation-sections.ts'
 import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
+import { useConversationFontSize } from './conversation-font-size.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import {
   ImageDraftStrip,
@@ -190,6 +192,7 @@ export function App() {
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
   const [rightPanelWidth, setRightPanelWidth] = useState(() => loadPanelWidth('right'))
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
+  const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
@@ -2164,7 +2167,8 @@ export function App() {
               />
             )}
           </aside>
-          <section className="relative flex min-w-0 flex-1 flex-col" inert={panelFullscreen}>
+          <section className="wc-conversation relative flex min-w-0 flex-1 flex-col" inert={panelFullscreen}
+            style={{ '--wc-content-font-size': `${conversationFontSize}px` } as CSSProperties}>
             {(!loadingConversation || showConnectionSettings) && conversationFeedback && (
               <ConversationFeedbackToast
                 key={conversationFeedback.id}
@@ -2359,7 +2363,7 @@ export function App() {
                     <textarea
                       ref={composerTextareaRef}
                       rows={2}
-                      className="wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-base leading-6 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
+                      className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
                       value={composerDraft.text}
                       onChange={(event) => {
                         const text = event.target.value
@@ -2545,6 +2549,8 @@ export function App() {
         <ConnectionSettingsPanel
           snapshot={connectionSettings}
           workspaceCleanup={workspaceCleanup}
+          conversationFontSize={conversationFontSize}
+          onConversationFontSizeChange={setConversationFontSize}
           onClose={() => setShowConnectionSettings(false)}
           onChanged={applyConnectionSettings}
           onError={showError}

@@ -21,7 +21,7 @@ export function CandidateCard({
 }) {
   const hasDetails = Boolean(candidate.details?.finalAnswerOrPlan)
   return (
-    <div className="wc-menu-surface mb-2 overflow-hidden text-sm">
+    <div className="wc-menu-surface wc-type-control mb-2 overflow-hidden">
       <button
         type="button"
         className="wc-focus-ring flex w-full items-start gap-2 px-3 py-2 text-left"
@@ -43,7 +43,7 @@ export function CandidateCard({
       </button>
       {expanded && candidate.details && (
         <div className="border-t border-[var(--wc-line)] bg-black/[0.012] px-3 py-2 text-[var(--wc-ink)]">
-          <div className="prose prose-sm max-w-none">
+          <div className="wc-conversation-copy max-w-none">
             <MarkdownContent text={candidate.details.finalAnswerOrPlan} />
           </div>
           {candidate.details.evidenceRefs?.length ? (
@@ -79,7 +79,7 @@ export function PeerCard({
         : `Agent ${peer.agentId} · 已结束`
   const lastTool = peer.tools.at(-1)
   return (
-    <div className="wc-menu-surface mb-2 overflow-hidden text-sm">
+    <div className="wc-menu-surface wc-type-control mb-2 overflow-hidden">
       <button type="button" className="wc-focus-ring flex w-full items-center gap-2 px-3 py-2 text-left" onClick={onToggle}>
         <span className={peer.status === 'working' ? 'animate-pulse text-[var(--wc-sage-ink)]' : 'text-[var(--wc-sage-ink)]'}>
           <Circle size={10} fill={peer.status === 'working' ? 'none' : 'currentColor'} />
@@ -112,7 +112,7 @@ export function PeerCard({
             </div>
           ))}
           {peer.text && (
-            <div className="prose prose-sm mt-1 max-w-none text-xs text-[var(--wc-ink)]">
+            <div className="wc-conversation-copy mt-1 max-w-none text-[var(--wc-ink)]">
               <MarkdownContent text={peer.text} />
             </div>
           )}

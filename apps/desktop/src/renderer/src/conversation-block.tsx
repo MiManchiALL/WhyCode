@@ -87,7 +87,7 @@ export function BlockView({
     return (
       <div className="mb-3 px-1">
         <button
-          className="wc-focus-ring rounded-lg px-1 py-0.5 text-xs text-[var(--wc-faint)] hover:text-[var(--wc-muted)]"
+          className="wc-focus-ring wc-type-caption rounded-lg px-1 py-0.5 text-[var(--wc-faint)] hover:text-[var(--wc-muted)]"
           onClick={() => !streaming && onToggle()}
         >
           {streaming ? '思考中…' : `思考了 ${(block.durationMs! / 1000).toFixed(1)}s ${open ? '▾' : '▸'}`}
@@ -101,7 +101,7 @@ export function BlockView({
               <StreamingPlainText
                 text={block.text}
                 resetKey={`${runtimeId}:${block.id}`}
-                className="whitespace-pre-wrap border-l-2 border-[var(--wc-line)] pb-0.5 pl-3 text-xs leading-5 text-[var(--wc-faint)]"
+                className="wc-type-caption whitespace-pre-wrap border-l-2 border-[var(--wc-line)] pb-0.5 pl-3 text-[var(--wc-faint)]"
               />
             </FadedScrollArea>
           </div>
@@ -111,7 +111,7 @@ export function BlockView({
   }
   if (block.kind === 'work-duration') {
     return (
-      <div className="mb-3 px-1 text-xs text-[var(--wc-faint)]">
+      <div className="wc-type-caption mb-3 px-1 text-[var(--wc-faint)]">
         {formatFinishedWorkTime(block.durationMs, block.outcome)}
       </div>
     )
@@ -140,10 +140,10 @@ export function BlockView({
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>
           <span className="shrink-0 font-medium">{call.name}</span>
           {summary.primary && (
-            <span className="min-w-0 truncate text-xs text-[var(--wc-faint)]">{summary.primary}</span>
+            <span className="min-w-0 truncate text-[var(--wc-faint)]">{summary.primary}</span>
           )}
           {summary.trailing && (
-            <span className="shrink-0 text-xs text-[var(--wc-faint)]">· {summary.trailing}</span>
+            <span className="shrink-0 text-[var(--wc-faint)]">· {summary.trailing}</span>
           )}
         </button>
         {showCheckpointRestore && call.status !== 'running' && (

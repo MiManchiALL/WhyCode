@@ -9,8 +9,6 @@ import { MessageActions } from './message-actions.tsx'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 
-const MESSAGE_EDITOR_BASE_HEIGHT_PX = 64
-const MESSAGE_EDITOR_MAX_HEIGHT_PX = MESSAGE_EDITOR_BASE_HEIGHT_PX * 2.5
 const COLLAPSED_MESSAGE_LINES = 12
 
 interface UserMessageCardProps {
@@ -180,11 +178,6 @@ function MessageEditor({
   const [restoreFiles, setRestoreFiles] = useState(false)
   const inspection = useMessageEditEffects(runtimeId, turnId)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-    resizeMessageEditor(textarea)
-  }, [editor.draft])
   useEffect(() => {
     textareaRef.current?.focus()
   }, [])
@@ -198,11 +191,7 @@ function MessageEditor({
       <textarea
         ref={textareaRef}
         rows={2}
-        className="block w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent p-0 outline-none"
-        style={{
-          minHeight: MESSAGE_EDITOR_BASE_HEIGHT_PX,
-          maxHeight: MESSAGE_EDITOR_MAX_HEIGHT_PX,
-        }}
+        className="wc-scrollbar block max-h-40 min-h-16 w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent p-0 outline-none [field-sizing:content]"
         value={editor.draft}
         disabled={disabled || editor.submitting}
         onChange={(event) => editor.setDraft(event.target.value)}
@@ -222,18 +211,6 @@ function MessageEditor({
       </div>
     </form>
   )
-}
-
-function resizeMessageEditor(textarea: HTMLTextAreaElement): void {
-  textarea.style.overflowY = 'hidden'
-  textarea.style.height = '0px'
-  const contentHeight = textarea.scrollHeight
-  const height = Math.min(
-    Math.max(contentHeight, MESSAGE_EDITOR_BASE_HEIGHT_PX),
-    MESSAGE_EDITOR_MAX_HEIGHT_PX,
-  )
-  textarea.style.height = `${height}px`
-  textarea.style.overflowY = contentHeight > MESSAGE_EDITOR_MAX_HEIGHT_PX ? 'auto' : 'hidden'
 }
 
 function handleEditorKeyDown(

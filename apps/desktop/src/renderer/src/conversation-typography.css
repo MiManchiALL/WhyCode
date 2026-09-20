@@ -1,0 +1,187 @@
+/* 会话排版独立于应用字号；正文与次级文字沿用 DSH 的字号轴。 */
+.wc-conversation {
+  --wc-content-font-size: 14px;
+  --wc-content-font-delta: calc(var(--wc-content-font-size) - 14px);
+  --wc-content-line-height: calc(24px + var(--wc-content-font-delta));
+  --wc-content-secondary-font-size: min(
+    calc(var(--wc-content-font-size) - 1px),
+    max(13px, calc(var(--wc-content-font-size) - 2px))
+  );
+  --wc-content-secondary-delta: calc(var(--wc-content-secondary-font-size) - 13px);
+  --wc-content-secondary-line-height: calc(20px + var(--wc-content-secondary-delta));
+}
+
+.wc-user-message-copy {
+  font-size: var(--wc-content-font-size, 14px);
+  line-height: calc(22px + var(--wc-content-font-delta, 0px));
+}
+
+.wc-conversation-copy,
+.wc-composer-text {
+  font-size: var(--wc-content-font-size, 14px);
+  line-height: var(--wc-content-line-height, 24px);
+}
+
+.wc-conversation-copy .wc-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wc-conversation-copy .wc-markdown p {
+  margin-block: 16px;
+}
+
+.wc-conversation-copy .wc-markdown-content > :not(:last-child) {
+  margin-block-start: 0;
+  margin-block-end: 16px;
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
+  list-style-position: outside;
+  margin-block: 16px;
+  padding-inline-start: 18px;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item'] {
+  padding-block: 0;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item']::marker {
+  color: var(--wc-muted);
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item'] + [data-streamdown='list-item'] {
+  margin-block-start: 6px;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item'] > :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
+  margin-block: 4px 0;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item'] > p {
+  display: block;
+  margin-block: 8px;
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) [data-streamdown='ordered-list'] {
+  list-style-position: inside;
+  padding-inline-start: 0;
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) [data-streamdown='ordered-list'] [data-streamdown='list-item'] > p {
+  display: inline;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item'] > :first-child {
+  margin-block-start: 0;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='list-item'] > :last-child {
+  margin-block-end: 0;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] {
+  margin-block: 32px 16px;
+  font-weight: 700;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='heading-1'] {
+  font-size: calc(21px + var(--wc-content-font-delta, 0px));
+  line-height: calc(30px + var(--wc-content-font-delta, 0px));
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='heading-2'] {
+  font-size: calc(19px + var(--wc-content-font-delta, 0px));
+  line-height: calc(28px + var(--wc-content-font-delta, 0px));
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='heading-3'] {
+  font-size: calc(18px + var(--wc-content-font-delta, 0px));
+  line-height: calc(26px + var(--wc-content-font-delta, 0px));
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='heading-4'], [data-streamdown='heading-5'], [data-streamdown='heading-6']) {
+  margin-block: 16px;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: inherit;
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='heading-4'], [data-streamdown='heading-5'], [data-streamdown='heading-6']) + :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
+  margin-block-start: 8px;
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='heading-4'], [data-streamdown='heading-5'], [data-streamdown='heading-6']):has(+ :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list'])) {
+  margin-block-end: 8px;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='strong'] {
+  font-weight: 600;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] strong {
+  font-weight: inherit;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='blockquote'] {
+  margin-block: 16px 0;
+  border-inline-start-width: 2px;
+  padding-inline-start: 14px;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='inline-code'] {
+  font-family: var(--wc-font-family-code);
+  font-size: 0.875em;
+  line-height: 19px;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] [data-streamdown='inline-code'] {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='table-header-cell'], [data-streamdown='table-cell']) {
+  min-width: 100px;
+  max-width: min(30vw, 320px);
+  padding: 10px 16px;
+  font-size: var(--wc-content-secondary-font-size, 13px);
+  line-height: calc(22px + var(--wc-content-secondary-delta, 0px));
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='table-header-cell'] {
+  font-weight: 500;
+}
+
+/* 密集代码保留独立的小字号，避免随正文缩到难以阅读。 */
+.wc-conversation-copy .wc-markdown [data-streamdown='code-block-body'] {
+  font-family: var(--wc-font-family-code);
+  font-size: 11px;
+  line-height: 19px;
+}
+
+.wc-conversation .wc-tool-details {
+  --wc-code-font-size: 11px;
+  --wc-code-line-height: 16px;
+}
+
+.wc-conversation .wc-tool-details pre {
+  font-size: var(--wc-code-font-size);
+  line-height: var(--wc-code-line-height);
+}
+
+.wc-conversation-copy .wc-markdown :is([data-streamdown='superscript'], [data-streamdown='subscript']) {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.wc-conversation-copy .wc-markdown [data-streamdown='horizontal-rule'] {
+  margin-block: 32px;
+}
+
+.wc-conversation-copy .wc-markdown-content > :first-child {
+  margin-block-start: 0;
+}
+
+.wc-conversation-copy .wc-markdown-content > :last-child {
+  margin-block-end: 0;
+}

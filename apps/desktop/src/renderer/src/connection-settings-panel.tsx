@@ -40,10 +40,13 @@ import {
 } from './settings-layout.tsx'
 import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
+import { GeneralSettings } from './general-settings.tsx'
 
 interface ConnectionSettingsPanelProps {
   snapshot: ConnectionSettingsSnapshot
   workspaceCleanup: RetainedWorkspaceCleanup
+  conversationFontSize: number
+  onConversationFontSizeChange: (value: number) => void
   onError: (message: string) => void
   onClose: () => void
   onChanged: (snapshot: ConnectionSettingsSnapshot) => void
@@ -54,7 +57,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [oauthPending, setOauthPending] = useState(false)
-  const [section, setSection] = useState<SettingsSectionId>('models')
+  const [section, setSection] = useState<SettingsSectionId>('general')
 
   const requestClose = () => {
     if (!pending && !oauthPending) setOpen(false)
@@ -149,6 +152,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
             </button>
             <div className="mt-5 px-2 text-lg font-semibold tracking-tight">设置</div>
             <nav className="mt-4 space-y-1" aria-label="设置分类">
+              <SettingsNavItem active={section === 'general'} icon={<Settings size={16} />} label="通用" onClick={() => setSection('general')} />
               <SettingsNavItem
                 active={section === 'models'}
                 icon={<Bot size={16} />}
@@ -183,7 +187,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
             </nav>
             <div className="mt-auto flex items-center gap-2 rounded-[var(--wc-menu-radius)] bg-black/[0.035] px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">
               <Settings size={13} />
-              设置保存后立即作用于模型列表
+              设置保存后立即生效
             </div>
           </aside>
 
@@ -195,7 +199,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     <Dialog.Title className="text-xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
                     <Dialog.Description className="mt-1.5 text-[13px] leading-5 text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
                   </div>
-                  {section !== 'workspaces' && <SettingsButton
+                  {section !== 'workspaces' && section !== 'general' && <SettingsButton
                     onClick={() => void refresh()}
                     disabled={pending || oauthPending}
                   >
@@ -204,13 +208,14 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   </SettingsButton>}
                 </header>
 
-                {section !== 'workspaces' && error && (
+                {section !== 'workspaces' && section !== 'general' && error && (
                   <p className="mb-5 rounded-xl border border-[#dec8bf] bg-[#f3e8e3] px-3 py-2 text-xs text-[var(--wc-danger)]" role="alert">
                     {error}
                   </p>
                 )}
 
                 <div className="space-y-8">
+                  {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
                   {section === 'models' && (
                     <>
@@ -331,9 +336,10 @@ function BuiltInProvidersEditor(props: {
   )
 }
 
-type SettingsSectionId = 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp' | 'workspaces'
+type SettingsSectionId = 'general' | 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp' | 'workspaces'
 
 const SETTINGS_META: Record<SettingsSectionId, { title: string; description: string }> = {
+  general: { title: '通用', description: '调整会话的阅读体验。' },
   workspaces: { title: '保留工作区', description: '最后一个关联会话删除后留下的工作目录。重新关联会话后，会从此列表移出。' },
   models: {
     title: '模型连接',

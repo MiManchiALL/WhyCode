@@ -442,7 +442,7 @@ function conversationBlockProps(
 
 function ForkBoundary() {
   return (
-    <div className="mb-4 flex items-center gap-3 px-1 text-xs text-[var(--wc-faint)]">
+    <div className="wc-type-caption mb-4 flex items-center gap-3 px-1 text-[var(--wc-faint)]">
       <span className="h-px flex-1 bg-[var(--wc-line)]" />
       <span className="flex items-center gap-1 text-[var(--wc-blue-ink)]">
         <GitFork size={13} /> 从聊天中继续
@@ -454,7 +454,7 @@ function ForkBoundary() {
 
 function FileRollbackBoundary() {
   return (
-    <div className="mb-3 rounded-xl bg-[var(--wc-rollback)] px-3 py-2 text-xs text-[var(--wc-rollback-ink)]" data-conversation-timeline-marker="rollback">
+    <div className="wc-type-caption mb-3 rounded-xl bg-[var(--wc-rollback)] px-3 py-2 text-[var(--wc-rollback-ink)]" data-conversation-timeline-marker="rollback">
       文件已回退至此检查点
     </div>
   )
@@ -477,7 +477,7 @@ function WorkSummary({
     ? '处理过程'
     : formatFinishedWorkTime(timing.durationMs, timing.outcome)
   return (
-    <div className="mb-3 px-1 text-xs text-[var(--wc-faint)]">
+    <div className="wc-type-caption mb-3 px-1 text-[var(--wc-faint)]">
       {expandable ? (
         <button
           type="button"

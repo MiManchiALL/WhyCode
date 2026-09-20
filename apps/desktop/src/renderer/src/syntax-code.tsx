@@ -56,7 +56,7 @@ export function SyntaxCode({
     >
       {/* 内容只来自转义后的源码与内部高亮结果；不把 HTML 源文件当作页面执行。 */}
       <div
-        className={`wc-code-lines ${wrap ? 'w-full' : 'min-w-max'} py-1 font-mono text-xs leading-5`}
+        className={`wc-code-lines ${wrap ? 'w-full' : 'min-w-max'} py-1 font-mono`}
         dangerouslySetInnerHTML={markup}
       />
     </div>
