@@ -22,7 +22,7 @@ export function TaskPlanView({
       : '已结束'
 
   return (
-    <div className="px-2 pb-1">
+    <div className="px-2 pb-1 text-[length:var(--wc-content-secondary-font-size,12px)] leading-[var(--wc-content-secondary-line-height,20px)]">
       <div className="flex items-center gap-2">
         <div className="h-1 flex-1 overflow-hidden rounded-full bg-black/[0.055]">
           <div
@@ -36,11 +36,11 @@ export function TaskPlanView({
         {plan.items.map((item) => (
           <li
             key={item.id}
-            className={`flex items-start gap-2 rounded-md text-xs ${updatedItemIds.includes(item.id) ? 'bg-[var(--wc-sage)]' : ''}`}
+            className={`flex items-start gap-2 rounded-md ${updatedItemIds.includes(item.id) ? 'bg-[var(--wc-sage)]' : ''}`}
             data-updated={updatedItemIds.includes(item.id) || undefined}
           >
             <PlanStatusIcon status={item.status} historical={historical} />
-            <div className="min-w-0 flex-1 break-words leading-5 text-[var(--wc-ink)]">
+            <div className="min-w-0 flex-1 break-words text-[var(--wc-ink)]">
               <span className="mr-1 text-[var(--wc-faint)]">{item.id}</span>
               {item.outcome}
               {item.kind === 'verification' && (

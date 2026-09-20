@@ -146,7 +146,7 @@ function FileChangeHeader({
   copyText: string | null
 }) {
   return (
-    <div className="wc-tool-copy-scope relative flex min-w-0 items-center gap-2 border-b border-[var(--wc-line)] px-3 py-1.5 pr-9 text-xs">
+    <div className="wc-tool-copy-scope relative flex min-w-0 items-center gap-2 border-b border-[var(--wc-line)] px-3 py-1.5 pr-9">
       <span className="min-w-0 truncate text-[var(--wc-muted)]">{name}</span>
       {added !== undefined && removed !== undefined ? (
         <span className="flex shrink-0 gap-1.5 tabular-nums">

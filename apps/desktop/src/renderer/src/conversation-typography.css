@@ -152,7 +152,7 @@
   font-weight: 500;
 }
 
-/* 密集代码保留独立的小字号，避免随正文缩到难以阅读。 */
+/* 正文代码块沿用 DSH 的独立字号。 */
 .wc-conversation-copy .wc-markdown [data-streamdown='code-block-body'] {
   font-family: var(--wc-font-family-code);
   font-size: 11px;
@@ -160,11 +160,8 @@
 }
 
 .wc-conversation .wc-tool-details {
-  --wc-code-font-size: 11px;
-  --wc-code-line-height: 16px;
-}
-
-.wc-conversation .wc-tool-details pre {
+  --wc-code-font-size: var(--wc-content-secondary-font-size);
+  --wc-code-line-height: var(--wc-content-secondary-line-height);
   font-size: var(--wc-code-font-size);
   line-height: var(--wc-code-line-height);
 }

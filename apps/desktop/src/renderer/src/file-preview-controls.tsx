@@ -22,7 +22,7 @@ export function FileWrapButton({ wrap, onChange }: { wrap: boolean; onChange: (w
 }
 
 export function FilePreviewMessage({ children }: { children: ReactNode }) {
-  return <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-4 py-8 text-center text-xs text-[var(--wc-faint)]">{children}</div>
+  return <div className="wc-type-caption flex min-h-0 flex-1 items-center justify-center gap-2 px-4 py-8 text-center text-[var(--wc-faint)]">{children}</div>
 }
 
 export function fileIcon(name: string) {
