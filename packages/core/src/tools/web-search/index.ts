@@ -4,7 +4,7 @@ import { buildTool } from '../tool.ts'
 import {
   appendWebSourceFinalResponseReminder,
   markdownWebSource,
-} from '../web-source.ts'
+} from '../../web-source.ts'
 import { WEB_SEARCH_TOOL_NAME, WEB_SEARCH_TOOL_PROMPT } from './prompt.ts'
 
 export const WEB_SEARCH_MAX_RESULTS = 10

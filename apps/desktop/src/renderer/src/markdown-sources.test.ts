@@ -1,29 +1,54 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  findPresentedSource,
   findSourceCapsule,
-  normalizeSourceUrl,
+  sourceCitations,
   sourceKindForUrl,
 } from './markdown-sources.ts'
 import { parseHTML } from 'linkedom'
+import { parseMarkdown } from './markdown-rendering.ts'
 
 describe('Markdown 来源语义', () => {
-  it('只按本回答声明的完整 URL 识别引用，与正文链接文字无关', () => {
-    const source = { title: '完整文章标题', url: 'https://EXAMPLE.com:443/report#results' }
-    assert.equal(findPresentedSource([source], 'https://example.com/report#results'), source)
-    for (const href of ['https://example.com/report', 'https://example.com/report#other',
-      'https://example.com/Report#results', 'https://example.com/elsewhere',
-      'https://user@example.com/report#results', 'javascript:alert(1)', undefined]) {
-      assert.equal(findPresentedSource([source], href), undefined)
-    }
-    assert.equal(findPresentedSource(undefined, source.url), undefined)
-    assert.equal(findPresentedSource([], source.url), undefined)
+  it('只识别明确引用标记，普通链接即使同址或名为来源也保持原义', () => {
+    const tree = parseMarkdown('[**文档** `v2`](https://EXAMPLE.com:443/report#results "whycode:source") '
+      + '[来源](https://example.com/report#results) [官网](https://example.com/report#results "官网")')
+    assert.deepEqual(sourceCitations(tree).map(citation => citation.source), [
+      { title: '文档 v2', url: 'https://example.com/report#results' },
+    ])
   })
 
-  it('对安全外链做最小归一化，不丢失来源片段身份', () => {
-    assert.equal(normalizeSourceUrl('https://example.com/a#part'), 'https://example.com/a#part')
-    assert.equal(normalizeSourceUrl('https://user@example.com/a'), null)
+  it('标准解析保留转义、括号、片段及定义式引用，未使用的定义不产生来源', () => {
+    const tree = parseMarkdown('[文档 \\[正式版\\]](<https://example.com/a(b)?q=1#part> \'whycode:source\')\n\n'
+      + '[说明][docs]\n\n[docs]: https://example.com/docs "whycode:source"\n'
+      + '[unused]: https://example.com/unused "whycode:source"')
+    assert.deepEqual(sourceCitations(tree).map(citation => citation.source), [
+      { title: '文档 [正式版]', url: 'https://example.com/a(b)?q=1#part' },
+      { title: '说明', url: 'https://example.com/docs' },
+    ])
+  })
+
+  it('引用标题与正文使用相同的中文强调语义', () => {
+    const tree = parseMarkdown('[一个**“工具箱”**：说明](https://example.com/docs "whycode:source")')
+    assert.deepEqual(sourceCitations(tree).map(citation => citation.source.title), ['一个“工具箱”：说明'])
+  })
+
+  it('代码、数学、frontmatter、HTML、图片和不完整链接不成为引用', () => {
+    const link = '[文档](https://example.com/docs "whycode:source")'
+    for (const text of ['`' + link + '`', '```md\n' + link + '\n```', '    ' + link,
+      '$' + link + '$', '$$\n' + link + '\n$$', '---\nexample: ' + link + '\n---',
+      '<a href="https://example.com/docs" title="whycode:source">文档</a>', '!' + link,
+      '[文档](https://example.com/docs "whycode:source"']) {
+      assert.deepEqual(sourceCitations(parseMarkdown(text)), [], text)
+    }
+  })
+
+  it('缺少标题、凭据及非网页地址不生成来源', () => {
+    for (const link of ['[](https://example.com "whycode:source")',
+      '[文档](https://user:secret@example.com "whycode:source")',
+      '[文档](javascript:alert%281%29 "whycode:source")',
+      '[文档](file:///C:/a.html "whycode:source")', '[文档](./a.html "whycode:source")']) {
+      assert.deepEqual(sourceCitations(parseMarkdown(link)), [])
+    }
   })
 
   it('按稳定 URL 特征选择来源图标', () => {

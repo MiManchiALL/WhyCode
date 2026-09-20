@@ -4,11 +4,10 @@ import type { ViewEvent } from '@whycode/core'
 import type { Presentation } from '@whycode/core/presentation'
 import { applyCoreEvent, createConversationState, type Block, type ToolCall } from '../../shared/conversation-state.ts'
 import { conversationSections } from '../../shared/conversation-sections.ts'
-import { copyResponseText, responsePresentationResult } from './response-presentation.ts'
+import { copyResponseText, responsePresentationResult, responseSources } from './response-presentation.ts'
 
 const declaration: Presentation = {
   files: [{ path: 'C:/work/index.html', description: '网页成品' }],
-  sources: [{ title: '规范 [正式版]', url: 'https://example.com/spec#entry' }],
 }
 const call: ToolCall = { id: 'present', name: 'Present', input: {}, status: 'done', result: JSON.stringify(declaration), progress: '' }
 const block = (value: ToolCall): Block => ({ kind: 'tool', id: value.id, call: value })
@@ -38,7 +37,7 @@ describe('最终回答的交付投影', () => {
   })
 
   it('最近一次成功声明完整替换旧声明，允许清空；失败保留之前的结果', () => {
-    const empty = { ...call, id: 'clear', result: JSON.stringify({ files: [], sources: [] }) }
+    const empty = { ...call, id: 'clear', result: JSON.stringify({ files: [] }) }
     const failed = { ...call, id: 'failed', status: 'error' as const }
     assert.equal(responsePresentationResult([block(call), block(failed)]), call.result)
     assert.equal(responsePresentationResult([block(call), block(empty)]), empty.result)
@@ -63,7 +62,48 @@ describe('最终回答的交付投影', () => {
   })
 
   it('复制正文时补齐文件与来源，保留锚点并转义标题', () => {
-    assert.equal(copyResponseText('结论', null), '结论')
-    assert.equal(copyResponseText('结论', declaration), '结论\n\n- [index.html](<C:/work/index.html>) — 网页成品\n\n### 来源\n\n- [规范 \\[正式版\\]](<https://example.com/spec#entry>)')
+    assert.equal(copyResponseText(responseSources(['结论']), null), '结论')
+    const response = responseSources(['结论 [规范 \\[正式版\\]](https://example.com/spec#entry "whycode:source")'])
+    assert.equal(copyResponseText(response, declaration), '结论 [规范 \\[正式版\\]](<https://example.com/spec#entry>)\n\n- [index.html](<C:/work/index.html>) — 网页成品\n\n### 来源\n\n- [规范 \\[正式版\\]](<https://example.com/spec#entry>)')
+  })
+
+  it('不依赖 Present 汇总每处显式引用，按首次出现去重并保留不同片段', () => {
+    const text = '[第一个来源](https://EXAMPLE.com:443/docs "whycode:source") '
+      + '[同一来源](https://example.com/docs "whycode:source") '
+      + '[普通入口](https://example.com/docs) '
+      + '[第二个来源](https://example.com/docs#part "whycode:source")'
+    assert.deepEqual(responseSources([text]).sources, [
+      { title: '第一个来源', url: 'https://example.com/docs' },
+      { title: '第二个来源', url: 'https://example.com/docs#part' },
+    ])
+    assert.deepEqual(responseSources(['[普通入口](https://example.com/docs)']).sources, [])
+    assert.deepEqual(responseSources([]), { sources: [], copyText: '' })
+  })
+
+  it('每个正文块按自身 Markdown 边界解析，来源在本回答内汇总', () => {
+    const text = '[文档](https://example.com/docs "whycode:source")'
+    assert.deepEqual(responseSources(['```md\n' + text, text]).sources, [
+      { title: '文档', url: 'https://example.com/docs' },
+    ])
+    assert.deepEqual(responseSources(['[说明][docs]', '[docs]: https://example.com/docs "whycode:source"']).sources, [])
+  })
+
+  it('复制移除有效引用的内部标记，保留普通链接、代码样例和定义式链接', () => {
+    const text = '[**接口** `v2`](https://example.com/api "whycode:source") '
+      + '[控制台](https://example.com/console "控制台")\n\n'
+      + '[规范][docs]\n\n[docs]: https://example.com/docs "whycode:source"\n\n'
+      + '`[示例](https://example.com/code "whycode:source")`'
+    const response = responseSources([text])
+    assert.equal(response.copyText, '[接口 v2](<https://example.com/api>) '
+      + '[控制台](https://example.com/console "控制台")\n\n'
+      + '[规范](<https://example.com/docs>)\n\n[docs]: <https://example.com/docs>\n\n'
+      + '`[示例](https://example.com/code "whycode:source")`')
+    assert.equal(response.sources.length, 2)
+  })
+
+  it('数学规范化不把公式内的链接当作引用', () => {
+    const link = '[文档](https://example.com/docs "whycode:source")'
+    assert.deepEqual(responseSources(['\\(' + link + '\\)']).sources, [])
+    assert.deepEqual(responseSources(['\\[\n' + link + '\n\\]']).sources, [])
   })
 })

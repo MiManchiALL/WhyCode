@@ -7,7 +7,7 @@ import { PRESENT_PROMPT } from './prompt.ts'
 
 export const presentTool = buildTool({
   name: PRESENT_TOOL_NAME,
-  description: '声明最终文件与引用来源',
+  description: '声明最终成品文件',
   prompt: PRESENT_PROMPT,
   inputSchema: presentationSchema,
   isReadOnly: true,
@@ -22,12 +22,8 @@ export const presentTool = buildTool({
       await access(path, constants.R_OK)
       files.set(process.platform === 'win32' ? path.toLowerCase() : path, { ...file, path })
     }
-    const sources = new Map(input.sources.map(source => {
-      const url = new URL(source.url).href
-      return [url, { ...source, url }]
-    }))
     ctx.abortSignal.throwIfAborted()
-    const result = presentationSchema.parse({ files: [...files.values()], sources: [...sources.values()] })
+    const result = presentationSchema.parse({ files: [...files.values()] })
     return { data: JSON.stringify(result), isError: false }
   },
 })

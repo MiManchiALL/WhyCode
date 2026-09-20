@@ -1,5 +1,5 @@
 import { MCP_TOOL_SEARCH_NAME } from '../../mcp/search.ts'
-import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
+import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../../web-source.ts'
 
 export const WEB_FETCH_TOOL_NAME = 'WebFetch'
 export const WEB_FIND_TOOL_NAME = 'WebFind'

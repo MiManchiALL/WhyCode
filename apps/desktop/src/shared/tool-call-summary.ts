@@ -118,7 +118,7 @@ function knownToolSummary(
     case 'Skill':
       return skillSummary(input, context)
     case 'Present':
-      return join(arrayCount(input, 'files', 'file', 'files'), arrayCount(input, 'sources', 'source', 'sources'))
+      return arrayCount(input, 'files', 'file', 'files')
     case 'AskUserQuestion':
       return arrayCount(input, 'questions', 'question', 'questions')
     case 'CreateTaskPlan':
@@ -160,10 +160,8 @@ export function toolCallDetails(
       return unique(stringArray(value, 'paths')).join('\n')
     case 'Present': {
       const presentation = result ? readPresentationResult(result) : null
-      return presentation ? [
-        ...presentation.files.map(file => file.description ? `${file.path} — ${file.description}` : file.path),
-        ...presentation.sources.map(source => `${source.title} — ${source.url}`),
-      ].join('\n') || '已清空本次回答的交付声明' : null
+      return presentation ? presentation.files.map(file => file.description ? `${file.path} — ${file.description}` : file.path)
+        .join('\n') || '已清空本次回答的交付声明' : null
     }
     case 'AskUserQuestion':
       return answeredQuestionDetails(value, result)

@@ -7,10 +7,28 @@ import { parseHTML } from 'linkedom'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
+  MARKDOWN_REHYPE_PLUGINS,
   normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 
 describe('Markdown 渲染', () => {
+  it('清洗后只标注显式 Markdown 引用，HTML 和同址普通链接不能冒充', () => {
+    const source = '[文档](https://example.com/docs "whycode:source") '
+      + '[普通链接](https://example.com/docs)\n\n'
+      + '<a href="https://example.com/docs" title="whycode:source" data-source-citation-url="https://example.com/docs">HTML</a>'
+    for (const streaming of [true, false]) {
+      const document = renderedDocument(source, streaming)
+      const links = [...document.querySelectorAll('a')]
+      assert.deepEqual(links.map(link => link.getAttribute('data-source-citation-url')), ['https://example.com/docs', null, null])
+    }
+  })
+  it('公式规范化保留链接标题、定义和嵌套代码中的转义字面量', () => {
+    const link = '[规范 \\[正式版\\]](https://example.com/docs "whycode:source")'
+    const definition = '[docs]: https://example.com/\\(name\\) "标题"'
+    const nestedCode = '> ```md\n> \\(example\\)\n> ```'
+    for (const text of [link, definition, nestedCode]) assert.equal(normalizeMathDelimiters(text), text)
+    assert.equal(normalizeMathDelimiters(link + '\n\n\\(x+1\\)'), link + '\n\n$x+1$')
+  })
   it('流式与定稿阶段复用各自稳定的插件配置', () => {
     assert.equal(markdownPluginsFor(false), markdownPluginsFor(false))
     assert.equal(markdownPluginsFor(true), markdownPluginsFor(true))
@@ -296,7 +314,9 @@ function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
     {
       mode: streaming ? 'streaming' : 'static',
       plugins: markdownPluginsFor(renderMath),
-      remarkPlugins: streaming ? undefined : markdownRemarkPlugins(),
+      remarkPlugins: markdownRemarkPlugins(streaming),
+      rehypePlugins: MARKDOWN_REHYPE_PLUGINS,
+      linkSafety: { enabled: false },
     },
     renderedSource,
   ))

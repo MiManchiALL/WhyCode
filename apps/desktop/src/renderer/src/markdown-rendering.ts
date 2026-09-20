@@ -1,18 +1,32 @@
+import type { Nodes } from 'mdast'
 import { cjk } from '@streamdown/cjk'
 import { createMathPlugin } from '@streamdown/math'
 import remarkFrontmatter from 'remark-frontmatter'
-import { defaultRemarkPlugins } from 'streamdown'
+import remarkParse from 'remark-parse'
+import { unified } from 'unified'
+import { defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown'
+import { rehypeSourceCitations, remarkSourceCitations } from './markdown-sources.ts'
 
 const BASE_MARKDOWN_PLUGINS = { cjk } as const
-const MARKDOWN_REMARK_PLUGINS = [
+const STREAMING_REMARK_PLUGINS = [
   ...Object.values(defaultRemarkPlugins),
-  remarkFrontmatter,
+  remarkSourceCitations,
 ]
+const MARKDOWN_REMARK_PLUGINS = [...STREAMING_REMARK_PLUGINS, remarkFrontmatter]
+export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeSourceCitations]
 
 const SETTLED_MARKDOWN_PLUGINS = {
   ...BASE_MARKDOWN_PLUGINS,
   math: createMathPlugin({ singleDollarTextMath: true }),
 } as const
+
+const MARKDOWN_PARSER = unified().use(remarkParse)
+  .use(cjk.remarkPluginsBefore).use(MARKDOWN_REMARK_PLUGINS).use(cjk.remarkPluginsAfter)
+  .use([SETTLED_MARKDOWN_PLUGINS.math.remarkPlugin])
+
+export function parseMarkdown(text: string) {
+  return MARKDOWN_PARSER.parse(text)
+}
 
 const ATTACHED_DISPLAY_MATH = /^( {0,3})(\${2,})(?![ \t]*(?:\r?$))([\s\S]*?)\2[ \t]*(?=\r?$)/gmu
 const LATEX_MATH_DELIMITERS = [
@@ -24,11 +38,11 @@ export function markdownPluginsFor(renderMath: boolean) {
   return renderMath ? SETTLED_MARKDOWN_PLUGINS : BASE_MARKDOWN_PLUGINS
 }
 
-export function markdownRemarkPlugins() {
-  return MARKDOWN_REMARK_PLUGINS
+export function markdownRemarkPlugins(streaming = false) {
+  return streaming ? STREAMING_REMARK_PLUGINS : MARKDOWN_REMARK_PLUGINS
 }
 
-/** remark-math 只识别美元语法；统一模型常用 TeX 定界符时不能误处理代码示例。 */
+/** remark-math 只识别美元语法；统一模型常用 TeX 定界符时保留代码与链接的 Markdown 语义。 */
 export function normalizeMathDelimiters(markdown: string): string {
   if (
     !markdown.includes('$$')
@@ -36,92 +50,40 @@ export function normalizeMathDelimiters(markdown: string): string {
     && !markdown.includes(String.raw`\[`)
   ) return markdown
 
+  const originalRanges = markdownLiteralRanges(markdown)
+  const normalized = normalizeLatexMathDelimiters(markdown, originalRanges)
+  if (!normalized.includes('$$')) return normalized
+  const excluded = normalized === markdown ? originalRanges : markdownLiteralRanges(normalized)
   let result = ''
-  let prose = ''
-  let codeFence: { marker: '`' | '~'; length: number } | null = null
-
-  const flushProse = () => {
-    result += normalizeProseMath(prose)
-    prose = ''
+  let offset = 0
+  for (const range of excluded) {
+    result += normalizeAttachedDisplayMath(normalized.slice(offset, range.start), offset === 0 || normalized[offset - 1] === '\n')
+    result += normalized.slice(range.start, range.end)
+    offset = range.end
   }
-
-  for (const line of markdown.split(/(?<=\n)/u)) {
-    const content = line.replace(/\r?\n$/u, '')
-    const fence = markdownCodeFence(content)
-
-    if (codeFence) {
-      result += line
-      if (
-        fence
-        && fence.marker === codeFence.marker
-        && fence.length >= codeFence.length
-        && fence.closing
-      ) {
-        codeFence = null
-      }
-      continue
-    }
-
-    if (fence) {
-      flushProse()
-      result += line
-      codeFence = { marker: fence.marker, length: fence.length }
-      continue
-    }
-
-    prose += line
-  }
-
-  flushProse()
-  return result
+  return result + normalizeAttachedDisplayMath(normalized.slice(offset), offset === 0 || normalized[offset - 1] === '\n')
 }
 
-function normalizeProseMath(markdown: string): string {
-  let result = ''
-  let plainStart = 0
-  let cursor = 0
-
-  const flushPlain = (end: number) => {
-    if (end <= plainStart) return
-    result += normalizeMathSyntax(
-      markdown.slice(plainStart, end),
-      plainStart === 0 || markdown[plainStart - 1] === '\n',
-    )
-  }
-
-  while (cursor < markdown.length) {
-    if (markdown[cursor] !== '`' || isEscaped(markdown, cursor)) {
-      cursor++
-      continue
+function markdownLiteralRanges(markdown: string): Array<{ start: number; end: number }> {
+  const excluded: Array<{ start: number; end: number }> = []
+  const collect = (node: Nodes): void => {
+    if (['code', 'inlineCode', 'link', 'linkReference', 'definition', 'image', 'imageReference', 'html', 'yaml'].includes(node.type)) {
+      const start = node.position?.start.offset
+      const end = node.position?.end.offset
+      if (start !== undefined && end !== undefined) excluded.push({ start, end })
+    } else if ('children' in node) {
+      for (const child of node.children) collect(child)
     }
-    const length = characterRunLength(markdown, cursor, '`')
-    const closing = findMatchingBacktickRun(markdown, cursor + length, length)
-    if (closing < 0) {
-      cursor += length
-      continue
-    }
-    flushPlain(cursor)
-    const end = closing + length
-    result += markdown.slice(cursor, end)
-    cursor = end
-    plainStart = end
   }
-
-  flushPlain(markdown.length)
-  return result
+  collect(parseMarkdown(markdown))
+  return excluded
 }
 
-function normalizeMathSyntax(markdown: string, startsAtLineBoundary: boolean): string {
-  return normalizeAttachedDisplayMath(
-    normalizeLatexMathDelimiters(markdown),
-    startsAtLineBoundary,
-  )
-}
-
-function normalizeLatexMathDelimiters(markdown: string): string {
+function normalizeLatexMathDelimiters(markdown: string, excluded: readonly { start: number; end: number }[]): string {
   let result = ''
   let copiedThrough = 0
   let cursor = 0
+  let rangeIndex = 0
   const newline = markdown.includes('\r\n') ? '\r\n' : '\n'
   let active: {
     delimiter: (typeof LATEX_MATH_DELIMITERS)[number]
@@ -130,6 +92,12 @@ function normalizeLatexMathDelimiters(markdown: string): string {
   } | null = null
 
   while (cursor < markdown.length) {
+    const range = excluded[rangeIndex]
+    if (range && cursor >= range.start) {
+      cursor = range.end
+      rangeIndex++
+      continue
+    }
     if (!active) {
       const delimiter = markdown[cursor] === '\\' && !isEscaped(markdown, cursor)
         ? LATEX_MATH_DELIMITERS.find(({ open }) => markdown.startsWith(open, cursor))
@@ -220,50 +188,10 @@ function normalizeAttachedDisplayMath(
   )
 }
 
-function characterRunLength(markdown: string, start: number, character: string): number {
-  let cursor = start
-  while (markdown[cursor] === character) cursor++
-  return cursor - start
-}
-
-function findMatchingBacktickRun(
-  markdown: string,
-  start: number,
-  length: number,
-): number {
-  let cursor = start
-  while (cursor < markdown.length) {
-    if (markdown[cursor] !== '`') {
-      cursor++
-      continue
-    }
-    const candidateLength = characterRunLength(markdown, cursor, '`')
-    if (candidateLength === length) return cursor
-    cursor += candidateLength
-  }
-  return -1
-}
-
 function isEscaped(markdown: string, index: number): boolean {
   let backslashes = 0
   for (let cursor = index - 1; cursor >= 0 && markdown[cursor] === '\\'; cursor--) {
     backslashes++
   }
   return backslashes % 2 === 1
-}
-
-function markdownCodeFence(line: string): {
-  marker: '`' | '~'
-  length: number
-  closing: boolean
-} | null {
-  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line)
-  if (!match) return null
-
-  const sequence = match[2]!
-  return {
-    marker: sequence[0] as '`' | '~',
-    length: sequence.length,
-    closing: match[3]!.trim().length === 0,
-  }
 }

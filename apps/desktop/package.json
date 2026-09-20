@@ -33,17 +33,22 @@
     "jszip": "3.10.1",
     "linkedom": "0.18.13",
     "lucide-react": "1.28.0",
+    "mdast-util-to-string": "4.0.0",
     "node-html-markdown": "2.0.0",
     "node-pty": "1.1.0",
     "pdfjs-dist": "6.2.108",
     "pptxgenjs": "4.0.1",
     "remark-frontmatter": "5.0.0",
+    "remark-parse": "11.0.0",
     "ses": "2.2.0",
     "shiki": "3.23.0",
-    "streamdown": "^2.5.0"
+    "streamdown": "^2.5.0",
+    "unified": "11.0.5"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
+    "@types/hast": "3.0.4",
+    "@types/mdast": "4.0.4",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

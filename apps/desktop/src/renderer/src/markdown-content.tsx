@@ -14,16 +14,16 @@ import { SourceIcon } from './source-capsules.tsx'
 import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import { MarkdownTable } from './markdown-table.tsx'
-import { ResponsePresentationContext } from './response-presentation.ts'
+import { ResponseSourcesContext } from './response-presentation.ts'
+import { normalizeSourceUrl, WEB_SOURCE_CITATION_MARKER } from '@whycode/core/web-source'
 import {
   markdownPluginsFor,
   markdownRemarkPlugins,
+  MARKDOWN_REHYPE_PLUGINS,
   normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 import {
-  findPresentedSource,
   findSourceCapsule,
-  normalizeSourceUrl,
   sourceKindForUrl,
 } from './markdown-sources.ts'
 
@@ -39,7 +39,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   streaming?: boolean
   renderMath?: boolean
 }) {
-  const presentation = useContext(ResponsePresentationContext)
+  const response = useContext(ResponseSourcesContext)
   const rootRef = useRef<HTMLDivElement>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -58,7 +58,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     highlightedRef.current = null
   }, [])
 
-  useEffect(() => clearHighlight, [clearHighlight, presentation])
+  useEffect(() => clearHighlight, [clearHighlight, response])
 
   const revealSource = useCallback((url: string): boolean => {
     const target = rootRef.current ? findSourceCapsule(rootRef.current, url) : null
@@ -91,7 +91,8 @@ export const MarkdownContent = memo(function MarkdownContent({
         components={components}
         linkSafety={LINK_SAFETY}
         plugins={markdownPluginsFor(mathEnabled)}
-        remarkPlugins={effectiveStreaming ? undefined : markdownRemarkPlugins()}
+        remarkPlugins={markdownRemarkPlugins(effectiveStreaming)}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
       >
         {renderedText}
       </Streamdown>
@@ -99,12 +100,12 @@ export const MarkdownContent = memo(function MarkdownContent({
   )
 })
 
-/** 链接直接订阅声明，避免 Streamdown 的正文缓存冻结来源身份。 */
-function MarkdownLink({ children, href, onClick, onSourceClick, ...props }:
-  ComponentProps<typeof MarkdownAnchor> & { onSourceClick: (url: string) => void }) {
-  const presentation = useContext(ResponsePresentationContext)
+/** 链接直接订阅回答投影，流式块缓存也能在正常完成时切换到引用展示。 */
+function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-citation-url': citationUrl, ...props }:
+  ComponentProps<typeof MarkdownAnchor> & { onSourceClick: (url: string) => void; 'data-source-citation-url'?: string }) {
+  const response = useContext(ResponseSourcesContext)
   const sourceUrl = normalizeSourceUrl(href)
-  const source = findPresentedSource(presentation?.sources, href)
+  const source = citationUrl ? response?.sources.find(source => source.url === citationUrl) : undefined
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event)
     if (event.defaultPrevented || !source || !sourceUrl) return
@@ -117,7 +118,7 @@ function MarkdownLink({ children, href, onClick, onSourceClick, ...props }:
     inlineSource={!!source}
     {...(sourceUrl ? { 'data-source-url': sourceUrl, target: '_blank', rel: 'noreferrer noopener' } : {})}
     onClick={handleClick}
-    title={source ? `跳转到来源：${source.title}` : props.title}
+    title={source ? `跳转到来源：${source.title}` : props.title === WEB_SOURCE_CITATION_MARKER ? undefined : props.title}
   >
     {source ? <>
       <SourceIcon kind={sourceKindForUrl(source.url)} />

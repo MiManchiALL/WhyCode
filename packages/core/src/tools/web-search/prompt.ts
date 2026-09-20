@@ -1,4 +1,4 @@
-import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
+import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../../web-source.ts'
 
 export const WEB_SEARCH_TOOL_NAME = 'WebSearch'
 

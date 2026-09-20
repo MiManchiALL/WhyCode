@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
+import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../../web-source.ts'
 import {
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FETCH_TOOL_NAME,
@@ -73,7 +73,7 @@ describe('网页读取工具契约', () => {
       limit: 3,
     })
     assert.equal(result.isError, false)
-    assert.match(result.data, /来源: \[Example Docs\]\(<https:\/\/example\.com\/final>\)/)
+    assert.match(result.data, /来源: \[Example Docs\]\(<https:\/\/example\.com\/final> "whycode:source"\)/)
     assert.match(result.data, /证据范围: .*（L2-L4）/)
     assert.match(result.data, /\s+2\t# Heading/)
     assert.match(result.data, /offset=5/)

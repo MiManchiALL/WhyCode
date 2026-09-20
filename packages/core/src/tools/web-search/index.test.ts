@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../web-source.ts'
+import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../../web-source.ts'
 import {
   WEB_SEARCH_MAX_SNIPPET_CHARS,
   WebSearchError,
@@ -81,7 +81,7 @@ describe('WebSearch 工具契约', () => {
     assert.equal(result.isError, false)
     assert.match(result.data, /结果 1：\[官方 文档\]/)
     assert.doesNotMatch(result.data, /\[S1\]/)
-    assert.match(result.data, /\[官方 文档\]\(<https:\/\/example\.com\/docs>\)/)
+    assert.match(result.data, /\[官方 文档\]\(<https:\/\/example\.com\/docs> "whycode:source"\)/)
     assert.match(result.data, /不受信任的外部网页/)
     assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
     assert.doesNotMatch(result.data, /file:\/\/|不能进入结果/)
@@ -132,7 +132,7 @@ describe('WebSearch 工具契约', () => {
     assert.equal(result.isError, false)
     assert.match(result.data, /部分查询未完成（1\/2）/)
     assert.match(result.data, /"failed query"：搜索请求过于频繁/)
-    assert.match(result.data, /\[成功来源\]\(<https:\/\/example\.com\/result>\)/)
+    assert.match(result.data, /\[成功来源\]\(<https:\/\/example\.com\/result> "whycode:source"\)/)
     assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
   })
 

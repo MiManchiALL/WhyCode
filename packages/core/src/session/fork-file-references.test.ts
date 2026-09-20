@@ -40,7 +40,6 @@ it('Fork shares project deliveries and rehomes copied scratch deliveries, includ
     files: [{ path: join(root, 'source', 'index.html'), description: '网页' },
       { path: join(root, 'source-sibling', 'external.md') },
       { path: join(scratch, source.sessionId, 'Main', 'report.md') }],
-    sources: [{ title: '来源', url: 'https://example.com/source/index.html' }],
   }
   await source.recordUserInput('制作网页', true)
   await source.recordTurnStart('first', [{ role: 'user', content: '制作网页' }])
@@ -85,7 +84,7 @@ it('only structured paths move; external paths, relative inputs, file contents, 
   const root = join(tmpdir(), 'fork-paths')
   const rebase = forkScratchPathMapper({ source: join(root, 'source'), target: join(root, 'target') })
   const declaration: Presentation = {
-    files: [{ path: 'index.html' }, { path: join(root, 'source', 'index.html') }, { path: join(root, 'external.html') }], sources: [],
+    files: [{ path: 'index.html' }, { path: join(root, 'source', 'index.html') }, { path: join(root, 'external.html') }],
   }
   const refs = forkFileReferences(rebase)
   assert.equal(rebase('index.html'), 'index.html')
@@ -93,6 +92,8 @@ it('only structured paths move; external paths, relative inputs, file contents, 
   assert.deepEqual(projected.files.map(file => file.path), ['index.html', join(root, 'target', 'index.html'), join(root, 'external.html')])
   const ordinary: ModelMessage = { role: 'assistant', content: join(root, 'source', 'index.html') }
   assert.deepEqual(refs.messages([ordinary]), [ordinary])
+  const cited: ModelMessage = { role: 'assistant', content: '结论 [文档](https://example.com/source/index.html "whycode:source")' }
+  assert.deepEqual(refs.messages([cited]), [cited])
   assert.deepEqual(forkFileReferences(forkScratchPathMapper()).messages(messages(declaration)), messages(declaration))
   const unrelated = view(declaration).map(value => value.type === 'core-event' && value.event.type === 'tool-start'
     ? { ...value, event: { ...value.event, toolName: 'ReadFile' } } : value) as ViewEvent[]

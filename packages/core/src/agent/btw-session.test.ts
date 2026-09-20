@@ -97,10 +97,10 @@ describe('BTW 独立侧对话', () => {
     assert.match(JSON.stringify(secondSideCall.prompt), /不推进主任务/)
   })
 
-  it('临时调研可声明来源，结果可重放且不进入 Main', async () => {
-    const declaration = { files: [], sources: [{ title: '公开文档', url: 'https://example.com/docs' }] }
+  it('临时调研直接在正文引用来源，不增加工具步骤且不进入 Main', async () => {
+    const text = '结论 [公开文档](https://example.com/docs "whycode:source")'
     const model = new MockLanguageModelV4({ doStream: [
-      finalStep('主回答'), toolStep('Present', declaration), finalStep('结论[来源](https://example.com/docs)'),
+      finalStep('主回答'), finalStep(text),
     ] })
     const session = createSession(model)
     await session.handleUserMessage('主问题')
@@ -108,10 +108,9 @@ describe('BTW 独立侧对话', () => {
     const results: BtwTurnResult[] = []
     await session.handleBtwMessage(btwContext('btw', '临时调研', []), lifecycle(results))
     assert.deepEqual(session.captureMessageSnapshot(), main)
-    const result = btwToolStepEvents(results[0]!.toolSteps!).find(event => event.type === 'tool-end')
-    assert.ok(result?.type === 'tool-end')
-    assert.equal(result.isError, false)
-    assert.deepEqual(JSON.parse(String(result.result)), declaration)
+    assert.equal(results[0]?.assistantText, text)
+    assert.equal(results[0]?.toolSteps?.length ?? 0, 0)
+    assert.equal(model.doStreamCalls.length, 2)
     assert.deepEqual(model.doStreamCalls[0]?.tools, model.doStreamCalls[1]?.tools)
   })
 

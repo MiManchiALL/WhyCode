@@ -18,7 +18,7 @@ import {
   appendWebSourceFinalResponseReminder,
   markdownWebLineCitation,
   markdownWebSource,
-} from '../web-source.ts'
+} from '../../web-source.ts'
 
 export function formatFetchResponse(
   request: WebFetchToolInput,

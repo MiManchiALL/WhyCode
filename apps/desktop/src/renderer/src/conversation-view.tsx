@@ -1,7 +1,7 @@
 import type { SkillSummary } from '@whycode/core/skills'
 import { readPresentationResult } from '@whycode/core/presentation'
 import { ResponseFooter } from './response-footer.tsx'
-import { ResponsePresentationContext, responsePresentationResult } from './response-presentation.ts'
+import { ResponseSourcesContext, responsePresentationResult, responseSources } from './response-presentation.ts'
 import { GitFork } from 'lucide-react'
 import { memo, useDeferredValue, useLayoutEffect, useMemo, useRef } from 'react'
 import { SessionLoading } from './session-loading.tsx'
@@ -244,6 +244,9 @@ function WorkSection({
     () => presentationResult === null ? null : readPresentationResult(presentationResult),
     [presentationResult],
   )
+  // 分组数组随会话投影重建；以正文值作为依赖，避免其它轮次的流式更新重复解析历史。
+  const responseText = completed ? JSON.stringify(section.finalBlocks.flatMap(block => block.kind === 'text' ? [block.text] : [])) : null
+  const sources = useMemo(() => responseText === null ? null : responseSources(JSON.parse(responseText) as string[]), [responseText])
   const activityItems = presentToolBatches(
     section.activityBlocks,
     shouldSealTrailingToolBatch(section),
@@ -300,7 +303,7 @@ function WorkSection({
               ))}
         </div>
       )}
-      <ResponsePresentationContext value={presentation}>
+      <ResponseSourcesContext value={sources}>
         <div className="group" data-source-scope="">
           {section.finalBlocks.map((block) => (
             <ConversationBlock
@@ -312,12 +315,12 @@ function WorkSection({
           ))}
           {completed && (
             <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId}
-              activity={section.activityBlocks} final={section.finalBlocks} onOpenFile={props.onOpenFilePreview}
+              activity={section.activityBlocks} final={section.finalBlocks} presentation={presentation} onOpenFile={props.onOpenFilePreview}
               onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
               forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
           )}
         </div>
-      </ResponsePresentationContext>
+      </ResponseSourcesContext>
     </section>
   )
 }
