@@ -3,10 +3,10 @@ import type { PresentedFile } from '@whycode/core/presentation'
 import { ChevronDown, ChevronUp, FileDiff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { Block } from '../../shared/conversation-state.ts'
-import { fileName, filePathKey } from './local-files.ts'
+import { displayFilePath, fileName, filePathKey } from './local-files.ts'
 
-export function ResponseFileChanges({ runtimeId, activity, files }: {
-  runtimeId: string; activity: readonly Block[]; files: readonly PresentedFile[]
+export function ResponseFileChanges({ runtimeId, projectDir, activity, files }: {
+  runtimeId: string; projectDir: string | null; activity: readonly Block[]; files: readonly PresentedFile[]
 }) {
   const checkpoints = activity.flatMap(block => block.kind === 'tool' && block.call.checkpointId
     ? [block.call.checkpointId] : []).join(',')
@@ -41,10 +41,11 @@ export function ResponseFileChanges({ runtimeId, activity, files }: {
     </div>
     <ul className="wc-change-list">
       {(expanded ? remaining : remaining.slice(0, 3)).map(change => {
-        const name = fileName(change.path)
+        const path = displayFilePath(change.path, projectDir)
+        const name = fileName(path)
         return <li key={change.path} className="wc-change-row wc-type-control">
           <span className="wc-change-path" title={change.path}>
-            <span className="min-w-0 truncate text-[var(--wc-muted)]">{change.path.slice(0, -name.length)}</span>
+            <span className="min-w-0 truncate text-[var(--wc-muted)]">{path.slice(0, -name.length)}</span>
             <span className="max-w-full shrink-0 truncate">{name}</span>
           </span>
           <ChangeCounts added={change.added} removed={change.removed} />

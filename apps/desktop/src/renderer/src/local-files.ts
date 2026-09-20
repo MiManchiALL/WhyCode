@@ -5,6 +5,12 @@ export function filePathKey(path: string): string {
     : normalized
 }
 
+export function displayFilePath(path: string, workingDirectory: string | null): string {
+  if (!workingDirectory) return path
+  const prefix = `${workingDirectory.replace(/[\\/]+$/u, '')}/`
+  return filePathKey(path).startsWith(filePathKey(prefix)) ? path.slice(prefix.length) : path
+}
+
 export function localFilePath(file: File): string {
   try {
     return window.whycode.getPathForFile(file)

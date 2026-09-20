@@ -314,7 +314,7 @@ function WorkSection({
             />
           ))}
           {completed && (
-            <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId}
+            <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId} projectDir={props.projectDir}
               activity={section.activityBlocks} final={section.finalBlocks} presentation={presentation} onOpenFile={props.onOpenFilePreview}
               onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
               forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
