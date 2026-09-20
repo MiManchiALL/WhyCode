@@ -45,6 +45,7 @@
   --wc-sand-ink: #6b5e49;
   --wc-blue: #e0e7eb;
   --wc-blue-ink: #52636c;
+  --wc-link: #2563b5;
   --wc-rollback: #eee2e1;
   --wc-rollback-ink: #755a58;
   --wc-danger: #b95f5b;
@@ -1397,6 +1398,41 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   text-decoration: none;
   vertical-align: -0.08em;
 }
+
+.wc-markdown .wc-web-link {
+  color: var(--wc-link);
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.wc-markdown .wc-web-link:hover,
+.wc-markdown .wc-web-link:focus-visible {
+  text-decoration-color: currentColor;
+}
+
+.wc-site-icon {
+  position: relative;
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin-inline-end: 0.2em;
+  vertical-align: -0.12em;
+}
+
+.wc-site-icon > svg,
+.wc-site-icon > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.wc-site-icon > img { opacity: 0; }
+.wc-site-icon[data-loaded='true'] > img { opacity: 1; }
 
 .wc-markdown .wc-inline-source .wc-source-link-icon,
 .wc-source-list .wc-source-link-icon {

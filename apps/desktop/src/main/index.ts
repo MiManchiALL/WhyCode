@@ -7,11 +7,14 @@ import {
   ipcMain,
   MessageChannelMain,
   net,
+  protocol,
   safeStorage,
   shell,
   type WebContents,
 } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { createSiteIconHandler } from './site-icon.ts'
+import { SITE_ICON_SCHEME } from '../shared/site-icon.ts'
 import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
@@ -2861,6 +2864,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
     .catch((error) => console.warn('历史模型显示名同步失败：', error))
   registerAttachmentProtocol((sessionId) =>
     runtimeRegistry.findBySessionId(sessionId)?.journal ?? null)
+  protocol.handle(SITE_ICON_SCHEME, createSiteIconHandler({
+    fetchImpl: createElectronWebPageFetch(options => net.request(options)),
+    resolveHost: createElectronWebHostResolver((hostname, options) => net.resolveHost(hostname, options)),
+  }))
   backgroundTaskWakeups = new BackgroundTaskWakeQueue({
     resolveRuntime: resolveBackgroundTaskRuntime,
     reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),

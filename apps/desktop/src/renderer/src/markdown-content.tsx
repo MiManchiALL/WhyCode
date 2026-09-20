@@ -11,6 +11,7 @@ import {
   type MouseEvent,
 } from 'react'
 import { SourceIcon } from './source-capsules.tsx'
+import { SiteIcon } from './site-icon.tsx'
 import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import { MarkdownTable } from './markdown-table.tsx'
@@ -106,6 +107,7 @@ function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-cit
   const response = useContext(ResponseSourcesContext)
   const sourceUrl = normalizeSourceUrl(href)
   const source = citationUrl ? response?.sources.find(source => source.url === citationUrl) : undefined
+  const siteOrigin = sourceUrl && !citationUrl ? new URL(sourceUrl).origin : null
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event)
     if (event.defaultPrevented || !source || !sourceUrl) return
@@ -116,6 +118,7 @@ function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-cit
     {...props}
     href={href}
     inlineSource={!!source}
+    webLink={!!siteOrigin}
     {...(sourceUrl ? { 'data-source-url': sourceUrl, target: '_blank', rel: 'noreferrer noopener' } : {})}
     onClick={handleClick}
     title={source ? `跳转到来源：${source.title}` : props.title === WEB_SOURCE_CITATION_MARKER ? undefined : props.title}
@@ -123,7 +126,7 @@ function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-cit
     {source ? <>
       <SourceIcon kind={sourceKindForUrl(source.url)} />
       <span className="sr-only">来源：{source.title}</span>
-    </> : children}
+    </> : <>{siteOrigin && <SiteIcon key={siteOrigin} origin={siteOrigin} />}{children}</>}
   </MarkdownAnchor>
 }
 

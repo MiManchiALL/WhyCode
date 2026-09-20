@@ -1,5 +1,6 @@
 import { protocol } from 'electron'
 import { PREVIEW_SCHEME } from '../shared/workspace-files.ts'
+import { SITE_ICON_SCHEME } from '../shared/site-icon.ts'
 import { readStoredImage, type SessionJournal } from '@whycode/core'
 
 const ATTACHMENT_SCHEME = 'whycode-attachment'
@@ -12,6 +13,9 @@ export function registerFileSchemes(): void {
   }, {
     scheme: PREVIEW_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+  }, {
+    scheme: SITE_ICON_SCHEME,
+    privileges: { standard: true, secure: true },
   }])
 }
 

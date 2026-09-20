@@ -27,15 +27,16 @@ export function MarkdownAnchor({
   children,
   href,
   inlineSource = false,
+  webLink = false,
   ...props
-}: MarkdownElementProps<'a'> & { inlineSource?: boolean }) {
+}: MarkdownElementProps<'a'> & { inlineSource?: boolean; webLink?: boolean }) {
   return createElement('a', {
     ...props,
     href,
     className: classes(
-      'wrap-anywhere font-medium text-primary underline',
+      'wrap-anywhere font-medium text-primary',
       className,
-      inlineSource && 'wc-inline-source',
+      inlineSource ? 'wc-inline-source' : webLink ? 'wc-web-link wc-focus-ring' : 'underline',
     ),
     'data-incomplete': href === 'streamdown:incomplete-link',
     'data-streamdown': 'link',

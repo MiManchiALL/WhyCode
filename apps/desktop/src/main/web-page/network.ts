@@ -41,8 +41,7 @@ export interface WebDocumentFetcherOptions {
   timeoutMs?: number
 }
 
-type FetchHopResult =
-  | { redirectUrl: URL }
+type WebDocumentContent =
   | { kind: 'text'; contentType: string; text: string }
   | { kind: 'pdf'; contentType: 'application/pdf'; bytes: Uint8Array }
 
@@ -52,7 +51,10 @@ export function createWebDocumentFetcher(options: WebDocumentFetcherOptions) {
     const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? WEB_DOCUMENT_TIMEOUT_MS)
     const signal = AbortSignal.any([abortSignal, timeoutSignal])
     try {
-      return await fetchFollowingRedirects(initialUrl, options, signal)
+      const { response, finalUrl } = await fetchPublicWebResponse(initialUrl, options, signal,
+        'text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.1')
+      const content = await readDocumentResponse(response, new URL(finalUrl))
+      return { requestedUrl: initialUrl.toString(), finalUrl, ...content }
     } catch (error) {
       if (error instanceof WebPageError) throw error
       if (abortSignal.aborted) throw new WebPageError('网页读取已取消')
@@ -62,58 +64,45 @@ export function createWebDocumentFetcher(options: WebDocumentFetcherOptions) {
   }
 }
 
-async function fetchFollowingRedirects(
+/** 网页和站点图标共用同一公开地址、无凭据与逐跳重定向边界。 */
+export async function fetchPublicWebResponse(
   initialUrl: URL,
   options: WebDocumentFetcherOptions,
   signal: AbortSignal,
-): Promise<WebDocument> {
+  accept: string,
+): Promise<{ response: Response; finalUrl: string }> {
   let currentUrl = initialUrl
   for (let redirects = 0; ; redirects++) {
-    const result = await fetchHop(currentUrl, options, signal)
-    if ('redirectUrl' in result) {
+    await assertPublicWebTarget(currentUrl, options.resolveHost, signal)
+    const response = await options.fetchImpl(currentUrl.toString(), {
+      method: 'GET',
+      headers: { accept },
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'manual',
+      referrerPolicy: 'no-referrer',
+      signal,
+      bypassCustomProtocolHandlers: true,
+    })
+    if (isRedirect(response.status)) {
+      const location = response.headers.get('location')
+      await response.body?.cancel().catch(() => {})
+      if (!location) throw new WebPageError('目标网站返回了缺少地址的重定向')
       if (redirects >= WEB_DOCUMENT_MAX_REDIRECTS) {
         throw new WebPageError('目标网站重定向次数过多')
       }
-      currentUrl = result.redirectUrl
+      currentUrl = redirectUrl(location, currentUrl)
       continue
     }
-    return {
-      requestedUrl: initialUrl.toString(),
-      finalUrl: currentUrl.toString(),
-      ...result,
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {})
+      throw httpStatusError(response.status)
     }
+    return { response, finalUrl: currentUrl.toString() }
   }
 }
 
-async function fetchHop(
-  url: URL,
-  options: WebDocumentFetcherOptions,
-  signal: AbortSignal,
-): Promise<FetchHopResult> {
-  await assertPublicWebTarget(url, options.resolveHost, signal)
-  const response = await options.fetchImpl(url.toString(), {
-    method: 'GET',
-    headers: {
-      accept: 'text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.1',
-    },
-    cache: 'no-store',
-    credentials: 'omit',
-    redirect: 'manual',
-    referrerPolicy: 'no-referrer',
-    signal,
-    bypassCustomProtocolHandlers: true,
-  })
-  if (isRedirect(response.status)) {
-    const location = response.headers.get('location')
-    await response.body?.cancel().catch(() => {})
-    if (!location) throw new WebPageError('目标网站返回了缺少地址的重定向')
-    return { redirectUrl: redirectUrl(location, url) }
-  }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {})
-    throw httpStatusError(response.status)
-  }
-
+async function readDocumentResponse(response: Response, url: URL): Promise<WebDocumentContent> {
   const declaredType = parseContentType(response.headers.get('content-type'))
   const mayBePdf = declaredType.mediaType === 'application/pdf'
     || (declaredType.mediaType === 'application/octet-stream' && url.pathname.toLowerCase().endsWith('.pdf'))
@@ -136,7 +125,7 @@ async function fetchHop(
   }
 }
 
-async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+export async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
   const declaredLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     await response.body?.cancel().catch(() => {})
