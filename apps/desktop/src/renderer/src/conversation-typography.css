@@ -1,19 +1,19 @@
-/* 会话排版独立于应用字号；正文与次级文字沿用 DSH 的字号轴。 */
+/* 保留 DSH 的 14px 排版基准，阅读行高与留白随文字等比变化。 */
 .wc-conversation {
   --wc-content-font-size: 14px;
   --wc-content-font-delta: calc(var(--wc-content-font-size) - 14px);
-  --wc-content-line-height: calc(24px + var(--wc-content-font-delta));
+  --wc-content-line-height: calc(var(--wc-content-font-size) * 24 / 14);
+  --wc-content-block-gap: calc(var(--wc-content-font-size) * 16 / 14);
   --wc-content-secondary-font-size: min(
     calc(var(--wc-content-font-size) - 1px),
     max(13px, calc(var(--wc-content-font-size) - 2px))
   );
-  --wc-content-secondary-delta: calc(var(--wc-content-secondary-font-size) - 13px);
-  --wc-content-secondary-line-height: calc(20px + var(--wc-content-secondary-delta));
+  --wc-content-secondary-line-height: calc(var(--wc-content-secondary-font-size) * 20 / 13);
 }
 
 .wc-user-message-copy {
   font-size: var(--wc-content-font-size, 14px);
-  line-height: calc(22px + var(--wc-content-font-delta, 0px));
+  line-height: calc(var(--wc-content-font-size, 14px) * 22 / 14);
 }
 
 .wc-conversation-copy,
@@ -28,18 +28,18 @@
 }
 
 .wc-conversation-copy .wc-markdown p {
-  margin-block: 16px;
+  margin-block: var(--wc-content-block-gap, 16px);
 }
 
 .wc-conversation-copy .wc-markdown-content > :not(:last-child) {
   margin-block-start: 0;
-  margin-block-end: 16px;
+  margin-block-end: var(--wc-content-block-gap, 16px);
 }
 
 .wc-conversation-copy .wc-markdown :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
   list-style-position: outside;
-  margin-block: 16px;
-  padding-inline-start: 18px;
+  margin-block: var(--wc-content-block-gap, 16px);
+  padding-inline-start: calc(var(--wc-content-font-size, 14px) * 18 / 14);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='list-item'] {
@@ -51,16 +51,16 @@
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='list-item'] + [data-streamdown='list-item'] {
-  margin-block-start: 6px;
+  margin-block-start: calc(var(--wc-content-block-gap, 16px) * 6 / 16);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='list-item'] > :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
-  margin-block: 4px 0;
+  margin-block: calc(var(--wc-content-block-gap, 16px) / 4) 0;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='list-item'] > p {
   display: block;
-  margin-block: 8px;
+  margin-block: calc(var(--wc-content-block-gap, 16px) / 2);
 }
 
 .wc-conversation-copy .wc-markdown :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) [data-streamdown='ordered-list'] {
@@ -81,38 +81,38 @@
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] {
-  margin-block: 32px 16px;
+  margin-block: calc(var(--wc-content-block-gap, 16px) * 2) var(--wc-content-block-gap, 16px);
   font-weight: 700;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-1'] {
-  font-size: calc(21px + var(--wc-content-font-delta, 0px));
-  line-height: calc(30px + var(--wc-content-font-delta, 0px));
+  font-size: calc(var(--wc-content-font-size, 14px) * 21 / 14);
+  line-height: calc(var(--wc-content-font-size, 14px) * 30 / 14);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-2'] {
-  font-size: calc(19px + var(--wc-content-font-delta, 0px));
-  line-height: calc(28px + var(--wc-content-font-delta, 0px));
+  font-size: calc(var(--wc-content-font-size, 14px) * 19 / 14);
+  line-height: calc(var(--wc-content-font-size, 14px) * 28 / 14);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='heading-3'] {
-  font-size: calc(18px + var(--wc-content-font-delta, 0px));
-  line-height: calc(26px + var(--wc-content-font-delta, 0px));
+  font-size: calc(var(--wc-content-font-size, 14px) * 18 / 14);
+  line-height: calc(var(--wc-content-font-size, 14px) * 26 / 14);
 }
 
 .wc-conversation-copy .wc-markdown :is([data-streamdown='heading-4'], [data-streamdown='heading-5'], [data-streamdown='heading-6']) {
-  margin-block: 16px;
+  margin-block: var(--wc-content-block-gap, 16px);
   font-size: inherit;
   font-weight: 600;
   line-height: inherit;
 }
 
 .wc-conversation-copy .wc-markdown :is([data-streamdown='heading-4'], [data-streamdown='heading-5'], [data-streamdown='heading-6']) + :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list']) {
-  margin-block-start: 8px;
+  margin-block-start: calc(var(--wc-content-block-gap, 16px) / 2);
 }
 
 .wc-conversation-copy .wc-markdown :is([data-streamdown='heading-4'], [data-streamdown='heading-5'], [data-streamdown='heading-6']):has(+ :is([data-streamdown='ordered-list'], [data-streamdown='unordered-list'])) {
-  margin-block-end: 8px;
+  margin-block-end: calc(var(--wc-content-block-gap, 16px) / 2);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='strong'] {
@@ -124,15 +124,22 @@
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='blockquote'] {
-  margin-block: 16px 0;
+  margin-block: var(--wc-content-block-gap, 16px) 0;
   border-inline-start-width: 2px;
-  padding-inline-start: 14px;
+  border-inline-start-color: var(--wc-faint);
+  padding-inline-start: var(--wc-content-font-size, 14px);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='inline-code'] {
   font-family: var(--wc-font-family-code);
   font-size: 0.875em;
-  line-height: 19px;
+  line-height: calc(var(--wc-content-font-size, 14px) * 19 / 14);
+  border: 0.5px solid var(--wc-line);
+  border-radius: 6px;
+  padding: 0 calc(var(--wc-content-font-size, 14px) * 5 / 14);
+  background: color-mix(in srgb, var(--wc-surface), var(--wc-ink) 3.5%);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown^='heading-'] [data-streamdown='inline-code'] {
@@ -143,9 +150,9 @@
 .wc-conversation-copy .wc-markdown :is([data-streamdown='table-header-cell'], [data-streamdown='table-cell']) {
   min-width: 100px;
   max-width: min(30vw, 320px);
-  padding: 10px 16px;
+  padding: calc(var(--wc-content-font-size, 14px) * 10 / 14) var(--wc-content-block-gap, 16px);
   font-size: var(--wc-content-secondary-font-size, 13px);
-  line-height: calc(22px + var(--wc-content-secondary-delta, 0px));
+  line-height: calc(var(--wc-content-secondary-font-size, 13px) * 22 / 13);
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='table-header-cell'] {
@@ -172,7 +179,10 @@
 }
 
 .wc-conversation-copy .wc-markdown [data-streamdown='horizontal-rule'] {
-  margin-block: 32px;
+  height: 0.5px;
+  margin-block: calc(var(--wc-content-block-gap, 16px) * 2);
+  border: 0;
+  background: var(--wc-line);
 }
 
 .wc-conversation-copy .wc-markdown-content > :first-child {
