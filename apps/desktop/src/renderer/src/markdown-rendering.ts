@@ -6,6 +6,7 @@ import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown'
 import { rehypeSourceCitations, remarkSourceCitations } from './markdown-sources.ts'
+import { remarkMathSyntax } from './markdown-math.ts'
 
 const BASE_MARKDOWN_PLUGINS = { cjk } as const
 const STREAMING_REMARK_PLUGINS = [
@@ -17,7 +18,7 @@ export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), 
 
 const SETTLED_MARKDOWN_PLUGINS = {
   ...BASE_MARKDOWN_PLUGINS,
-  math: createMathPlugin({ singleDollarTextMath: true }),
+  math: { ...createMathPlugin(), remarkPlugin: remarkMathSyntax },
 } as const
 
 const MARKDOWN_PARSER = unified().use(remarkParse)
@@ -29,10 +30,8 @@ export function parseMarkdown(text: string) {
 }
 
 const ATTACHED_DISPLAY_MATH = /^( {0,3})(\${2,})(?![ \t]*(?:\r?$))([\s\S]*?)\2[ \t]*(?=\r?$)/gmu
-const LATEX_MATH_DELIMITERS = [
-  { open: String.raw`\(`, close: String.raw`\)`, fence: '$' },
-  { open: String.raw`\[`, close: String.raw`\]`, fence: '$$' },
-] as const
+const DISPLAY_MATH_OPEN = String.raw`\[`
+const DISPLAY_MATH_CLOSE = String.raw`\]`
 
 export function markdownPluginsFor(renderMath: boolean) {
   return renderMath ? SETTLED_MARKDOWN_PLUGINS : BASE_MARKDOWN_PLUGINS
@@ -42,16 +41,15 @@ export function markdownRemarkPlugins(streaming = false) {
   return streaming ? STREAMING_REMARK_PLUGINS : MARKDOWN_REMARK_PLUGINS
 }
 
-/** remark-math 只识别美元语法；统一模型常用 TeX 定界符时保留代码与链接的 Markdown 语义。 */
+/** 只规范化附着正文的块级公式；行内定界符由同一数学语法插件解析。 */
 export function normalizeMathDelimiters(markdown: string): string {
   if (
     !markdown.includes('$$')
-    && !markdown.includes(String.raw`\(`)
     && !markdown.includes(String.raw`\[`)
   ) return markdown
 
   const originalRanges = markdownLiteralRanges(markdown)
-  const normalized = normalizeLatexMathDelimiters(markdown, originalRanges)
+  const normalized = normalizeTexDisplayMath(markdown, originalRanges)
   if (!normalized.includes('$$')) return normalized
   const excluded = normalized === markdown ? originalRanges : markdownLiteralRanges(normalized)
   let result = ''
@@ -67,9 +65,11 @@ export function normalizeMathDelimiters(markdown: string): string {
 function markdownLiteralRanges(markdown: string): Array<{ start: number; end: number }> {
   const excluded: Array<{ start: number; end: number }> = []
   const collect = (node: Nodes): void => {
-    if (['code', 'inlineCode', 'link', 'linkReference', 'definition', 'image', 'imageReference', 'html', 'yaml'].includes(node.type)) {
-      const start = node.position?.start.offset
-      const end = node.position?.end.offset
+    const start = node.position?.start.offset
+    const end = node.position?.end.offset
+    // 双美元仍需判断整行 display 形式，其余已解析的行内公式保持原样。
+    const inlineMath = node.type === 'inlineMath' && start !== undefined && !markdown.startsWith('$$', start)
+    if (inlineMath || ['code', 'inlineCode', 'link', 'linkReference', 'definition', 'image', 'imageReference', 'html', 'yaml'].includes(node.type)) {
       if (start !== undefined && end !== undefined) excluded.push({ start, end })
     } else if ('children' in node) {
       for (const child of node.children) collect(child)
@@ -79,14 +79,13 @@ function markdownLiteralRanges(markdown: string): Array<{ start: number; end: nu
   return excluded
 }
 
-function normalizeLatexMathDelimiters(markdown: string, excluded: readonly { start: number; end: number }[]): string {
+function normalizeTexDisplayMath(markdown: string, excluded: readonly { start: number; end: number }[]): string {
   let result = ''
   let copiedThrough = 0
   let cursor = 0
   let rangeIndex = 0
   const newline = markdown.includes('\r\n') ? '\r\n' : '\n'
   let active: {
-    delimiter: (typeof LATEX_MATH_DELIMITERS)[number]
     openAt: number
     bodyStart: number
   } | null = null
@@ -99,29 +98,25 @@ function normalizeLatexMathDelimiters(markdown: string, excluded: readonly { sta
       continue
     }
     if (!active) {
-      const delimiter = markdown[cursor] === '\\' && !isEscaped(markdown, cursor)
-        ? LATEX_MATH_DELIMITERS.find(({ open }) => markdown.startsWith(open, cursor))
-        : undefined
-      if (!delimiter) {
+      if (!markdown.startsWith(DISPLAY_MATH_OPEN, cursor) || isEscaped(markdown, cursor)) {
         cursor++
         continue
       }
       active = {
-        delimiter,
         openAt: cursor,
-        bodyStart: cursor + delimiter.open.length,
+        bodyStart: cursor + DISPLAY_MATH_OPEN.length,
       }
       cursor = active.bodyStart
       continue
     }
 
     if (
-      markdown.startsWith(active.delimiter.close, cursor)
+      markdown.startsWith(DISPLAY_MATH_CLOSE, cursor)
       && !isEscaped(markdown, cursor)
     ) {
       result += markdown.slice(copiedThrough, active.openAt)
-      const closeEnd = cursor + active.delimiter.close.length
-      result += normalizedLatexMath(
+      const closeEnd = cursor + DISPLAY_MATH_CLOSE.length
+      result += normalizedDisplayMath(
         markdown,
         active,
         cursor,
@@ -140,10 +135,9 @@ function normalizeLatexMathDelimiters(markdown: string, excluded: readonly { sta
   return result
 }
 
-function normalizedLatexMath(
+function normalizedDisplayMath(
   markdown: string,
   active: {
-    delimiter: (typeof LATEX_MATH_DELIMITERS)[number]
     openAt: number
     bodyStart: number
   },
@@ -152,8 +146,6 @@ function normalizedLatexMath(
   newline: string,
 ): string {
   const body = markdown.slice(active.bodyStart, closeAt)
-  if (active.delimiter.fence === '$') return `$${body}$`
-
   const startsOnOwnLine = linePrefixIsWhitespace(markdown, active.openAt)
   const endsOnOwnLine = lineSuffixIsWhitespace(markdown, closeEnd)
   if (startsOnOwnLine && endsOnOwnLine) return `$$${body}$$`

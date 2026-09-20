@@ -12,6 +12,56 @@ import {
 } from './markdown-rendering.ts'
 
 describe('Markdown 渲染', () => {
+  it('美元金额不跨加粗边界形成公式，保留引用与整句文字', () => {
+    const source = '计价标注为 **$42 每 10 亿（Billion）输入 Token**（即 $0.042/M tokens），且输出不计费 '
+      + '[官网](https://example.com/pricing "whycode:source")。'
+    for (const streaming of [true, false]) {
+      const document = renderedDocument(source, streaming)
+      assert.equal(document.querySelectorAll('.katex').length, 0)
+      assert.equal(document.querySelector('[data-streamdown="strong"]')?.textContent, '$42 每 10 亿（Billion）输入 Token')
+      assert.equal(document.body.textContent, '计价标注为 $42 每 10 亿（Billion）输入 Token（即 $0.042/M tokens），且输出不计费 官网。')
+      assert.equal(document.querySelector('a')?.getAttribute('data-source-citation-url'), 'https://example.com/pricing')
+    }
+  })
+
+  it('同段多个金额、范围和紧邻数字的美元符号保持普通文本', () => {
+    for (const source of [
+      '$0.000081 vs $0.01388', '$20,000–$30,000', 'US$5 / C$10 / US$20',
+      '$5和$10', '$ 5 与 $ 10', '$x$2', '$ x$', '$y $',
+    ]) {
+      const document = renderedDocument(source, false)
+      assert.equal(document.querySelectorAll('.katex').length, 0, source)
+      assert.equal(document.body.textContent, source)
+    }
+  })
+
+  it('金额与实际公式混排，数字公式和显式 TeX 均不受影响', () => {
+    const source = String.raw`费用 $5 和 $10；公式 $x+1$、$2 \times 4$、$1.25$；显式 \( x + 1 \)2，以及 \(\text{price: \$5}\)。`
+    const document = renderedDocument(source, false)
+    assert.deepEqual([...document.querySelectorAll('.katex annotation')].map(node => node.textContent), [
+      'x+1', String.raw`2 \times 4`, '1.25', ' x + 1 ', String.raw`\text{price: \$5}`,
+    ])
+    assert.match(document.body.textContent, /费用 \$5 和 \$10/u)
+  })
+
+  it('转义美元、代码、链接地址和标题不经过金额替换', () => {
+    const source = '转义 \\$5 和 \\$10；代码 `$x$ 与 $20`；[价格 $5 与 $10](https://example.com/$5/$10 "费用 $5 与 $10")。'
+    const document = renderedDocument(source, false)
+    assert.equal(document.querySelectorAll('.katex').length, 0)
+    assert.equal(document.querySelector('code')?.textContent, '$x$ 与 $20')
+    assert.equal(document.querySelector('a')?.getAttribute('href'), 'https://example.com/$5/$10')
+    assert.equal(document.querySelector('a')?.getAttribute('title'), '费用 $5 与 $10')
+    assert.equal(normalizeMathDelimiters(source), source)
+  })
+
+  it('显式行内 TeX 保持字面位置，支持换行并尊重反斜杠转义', () => {
+    const source = String.raw`字面量 \\(x+1\\)，未闭合 \(x，公式 \(a\\) 也未闭合。`
+    assert.equal(renderedDocument(source, false).querySelectorAll('.katex').length, 0)
+    const multiline = renderedDocument('公式 \\(x +\n y\\)；价格 $5 和 $10。', false)
+    assert.equal(multiline.querySelectorAll('.katex').length, 1)
+    assert.equal(multiline.querySelector('.katex annotation')?.textContent, 'x +\n y')
+  })
+
   it('清洗后只标注显式 Markdown 引用，HTML 和同址普通链接不能冒充', () => {
     const source = '[文档](https://example.com/docs "whycode:source") '
       + '[普通链接](https://example.com/docs)\n\n'
@@ -27,7 +77,7 @@ describe('Markdown 渲染', () => {
     const definition = '[docs]: https://example.com/\\(name\\) "标题"'
     const nestedCode = '> ```md\n> \\(example\\)\n> ```'
     for (const text of [link, definition, nestedCode]) assert.equal(normalizeMathDelimiters(text), text)
-    assert.equal(normalizeMathDelimiters(link + '\n\n\\(x+1\\)'), link + '\n\n$x+1$')
+    assert.equal(normalizeMathDelimiters(link + '\n\n\\(x+1\\)'), link + '\n\n\\(x+1\\)')
   })
   it('流式与定稿阶段复用各自稳定的插件配置', () => {
     assert.equal(markdownPluginsFor(false), markdownPluginsFor(false))

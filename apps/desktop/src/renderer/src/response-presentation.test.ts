@@ -27,6 +27,12 @@ function responseEvents(id: string, present: boolean): ViewEvent[] {
 }
 
 describe('最终回答的交付投影', () => {
+  it('金额、明确公式和引用共用语法边界，复制保留金额原文', () => {
+    const text = '价格 **$42 输入**（即 $0.042/M）；公式 \\(x+1\\)2；[定价](https://example.com/pricing "whycode:source")。'
+    const response = responseSources([text])
+    assert.deepEqual(response.sources, [{ title: '定价', url: 'https://example.com/pricing' }])
+    assert.equal(response.copyText, '价格 **$42 输入**（即 $0.042/M）；公式 \\(x+1\\)2；[定价](<https://example.com/pricing>)。')
+  })
   it('只相信成功工具结果，忽略输入、普通工具、失败和截断结果', () => {
     assert.equal(responsePresentationResult([block(call)]), call.result)
     for (const changed of [

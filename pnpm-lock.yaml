@@ -89,9 +89,18 @@ importers:
       lucide-react:
         specifier: 1.28.0
         version: 1.28.0(react@19.3.0)
+      mdast-util-math:
+        specifier: 3.0.0
+        version: 3.0.0
       mdast-util-to-string:
         specifier: 4.0.0
         version: 4.0.0
+      micromark-extension-math:
+        specifier: 3.1.0
+        version: 3.1.0
+      micromark-util-character:
+        specifier: 2.1.1
+        version: 2.1.1
       node-html-markdown:
         specifier: 2.0.0
         version: 2.0.0
@@ -150,6 +159,9 @@ importers:
       electron-vite:
         specifier: ^5.0.0
         version: 5.0.0(vite@7.3.6(@types/node@24.13.2)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0))
+      micromark-util-types:
+        specifier: 2.0.2
+        version: 2.0.2
       react:
         specifier: ^19.3.0
         version: 19.3.0
