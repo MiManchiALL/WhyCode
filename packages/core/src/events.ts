@@ -155,7 +155,7 @@ export type CoreEvent =
   | { type: 'turn-file-changes'; changes: ToolFileChange[] }
   /** 当前 step 的模型消息已提交到稳定会话记录；宿主可据此提交对应可见事件。 */
   | { type: 'step-committed' }
-  /** 当前 step 未进入模型历史（取消/urgent/异常）；宿主必须丢弃对应未提交可见事件。 */
+  /** 尚未执行工具的模型流未进入历史；宿主丢弃对应未提交可见事件。 */
   | { type: 'step-discarded' }
   /** 用户主动停止时仅提交已展示的正文；工具、推理、问题和计划仍由随后 discard 撤销。 */
   | { type: 'step-output-retained' }

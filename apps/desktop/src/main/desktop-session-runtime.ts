@@ -311,14 +311,19 @@ export class DesktopSessionRuntime {
     this.notifyStateChanged()
   }
 
-  requestApproval(request: ApprovalRequest): Promise<ApprovalResponse> {
-    if (this.disposed) return Promise.resolve({ approved: false })
+  requestApproval(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalResponse> {
+    if (this.disposed || signal?.aborted) return Promise.resolve({ approved: false })
     if (this.permissionMode === 'auto') return Promise.resolve({ approved: true })
     return new Promise((resolve) => {
+      const cancel = () => this.respondApproval(request.requestId, { approved: false })
       this.pendingApprovals.set(request.requestId, {
         request: structuredClone(request),
-        resolve,
+        resolve: (response) => {
+          signal?.removeEventListener('abort', cancel)
+          resolve(response)
+        },
       })
+      signal?.addEventListener('abort', cancel, { once: true })
       this.emit({ type: 'approval-request', ...request })
     })
   }

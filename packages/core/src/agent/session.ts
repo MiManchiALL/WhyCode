@@ -68,17 +68,13 @@ import {
   messagesForModel,
   referencedImageAttachmentIds,
 } from '../attachments/messages.ts'
-import { attachImagesToToolResults } from '../attachments/tool-results.ts'
 import {
   TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
-  createImageAttachmentsSchema,
   imageAttachmentSchema,
-  imageTransformSchema,
   type ImageAttachment,
   type ImageDeliveryMode,
   type ImageTransform,
 } from '../attachments/types.ts'
-import { removeImageAttachmentFiles } from '../attachments/renditions.ts'
 import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { createViewImageTool } from '../tools/view-image/index.ts'
 import { createAnalyzeImageTool } from '../tools/analyze-image/index.ts'
@@ -94,11 +90,10 @@ import {
   referencedPdfAttachmentIds,
   withPdfAttachmentReferences,
 } from '../pdf/messages.ts'
-import { pdfAttachmentPath, removePdfAttachmentFiles } from '../pdf/storage.ts'
+import { pdfAttachmentPath } from '../pdf/storage.ts'
 import {
   PDF_VISUAL_MAX_PAGES,
   pdfAttachmentSchema,
-  pdfAttachmentsSchema,
   type PdfAttachment,
 } from '../pdf/types.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
@@ -168,6 +163,9 @@ import type {
 } from '../subagents/types.ts'
 import { subagentTurnStateSchema } from '../subagents/types.ts'
 import { AssistantTextGate, sanitizeAssistantControlOutput } from './assistant-output.ts'
+import { ToolExecutionBatch, toolsForModel, type ToolEndEvent } from './tool-execution.ts'
+import { ToolStepAttachments } from './tool-step-attachments.ts'
+import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
 import {
   StepToolApprovalBatcher,
   type ApprovalHandler,
@@ -193,6 +191,8 @@ const MAX_COMPACT_FAILURES = 3
 interface ToolStepContext {
   emit: (event: CoreEvent) => void
   loopHealth: LoopHealthMonitor
+  onToolExecutionStart?: (toolCallId: string) => Promise<void>
+  onToolExecutionEnd?: (event: ToolEndEvent) => Promise<string>
   allowedToolNames?: ReadonlySet<string>
   planExecutionEngaged?: boolean
   onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
@@ -874,7 +874,7 @@ export class AgentSession {
     let finishReason: string | null = null
     let hadToolCalls = false
     const toolErrors: string[] = []
-    const stepPdfAttachments = new Map<string, PdfAttachment[]>()
+    const stepAttachments = new ToolStepAttachments(this.options.sessionRecorder, this.imageAttachments, this.pdfAttachments)
     let attachmentsCommitted = false
     let mcpStep: McpStepBinding | null = null
     try {
@@ -889,7 +889,7 @@ export class AgentSession {
           loopHealth,
           allowedToolNames: BTW_TOOL_NAMES,
           onPdfAttachments: (id, attachments) =>
-            this.acceptToolPdfAttachments(stepPdfAttachments, id, attachments),
+            stepAttachments.acceptPdfs(id, attachments),
         },
         mcpStep?.toolDefinitions() ?? [],
       )
@@ -950,8 +950,7 @@ export class AgentSession {
         throw new UndeliverableModelResponseError(finishReason)
       }
       const assistantText = sanitized.messages.map(modelMessageText).join('\n').trim()
-      const pdfAttachments = [...new Map([...stepPdfAttachments.values()].flat()
-        .map((attachment) => [attachment.storageName, attachment])).values()]
+      const pdfAttachments = stepAttachments.pdfAttachments
       const toolStep: BtwToolStep | undefined = hadToolCalls ? {
         messages: dehydrateImageMessages([
           ...sanitized.messages,
@@ -1001,13 +1000,7 @@ export class AgentSession {
       throw error
     } finally {
       mcpStep?.discard()
-      if (!attachmentsCommitted && this.options.sessionRecorder) {
-        await removePdfAttachmentFiles(
-          this.options.sessionRecorder.attachmentDirectory,
-          [...stepPdfAttachments.values()].flat()
-            .filter((item) => !this.pdfAttachments.has(item.storageName)),
-        ).catch(() => {})
-      }
+      if (!attachmentsCommitted) await stepAttachments.discardUncommitted()
       inactivityWatchdog.stop()
       turnAbortSignal.removeEventListener('abort', onTurnAbort)
       if (this.currentStepAbort === stepAbort) this.currentStepAbort = null
@@ -1402,7 +1395,7 @@ export class AgentSession {
       })
       this.wakeRunLoop()
       if (urgent && this.running) {
-        // reason='interrupt'：步骤被静默放弃（不产生错误），循环随即注入排队消息
+        // 立即插话中止生成或派发，已开始的工具收尾并保存结果后再注入排队消息。
         this.currentStepAbort?.abort('interrupt')
       }
       return
@@ -2564,17 +2557,10 @@ export class AgentSession {
       taskPlanEngagement: null,
     }
     let userQuestion: UserQuestion | null = null
-    const toolCallOrder: string[] = []
-    const stepImageAttachments = new Map<string, {
-      attachments: ImageAttachment[]
-      transform: ImageTransform
-    }>()
-    let stepImageAttachmentCount = 0
-    let stepImageAttachmentLimit = TOOL_IMAGE_ATTACHMENT_MAX_COUNT
-    const stepImageAttachmentKeys = new Set<string>()
-    const stepPdfAttachments = new Map<string, PdfAttachment[]>()
-    let stepAttachmentsCommitted = false
-    const taskStateBeforeStep = this.taskPlan?.stateSnapshot
+    const stepAttachments = new ToolStepAttachments(this.options.sessionRecorder, this.imageAttachments, this.pdfAttachments)
+    let stepCommitted = false
+    let durableTaskState = this.taskPlan?.stateSnapshot
+    let toolExecution: ToolExecutionBatch | null = null
     let taskPlanFinalized = false
     let mcpStep: McpStepBinding | null = null
     this.taskPlan?.beginStep()
@@ -2614,53 +2600,16 @@ export class AgentSession {
         {
           emit,
           loopHealth: this.loopHealth,
+          onToolExecutionStart: (id) => toolExecution!.start(id),
+          onToolExecutionEnd: (event) => toolExecution!.finish(event),
           planExecutionEngaged,
           onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
           onUserQuestion: (question) => { userQuestion = question },
           onTurnEndingTool: (reason) => { stepControl.toolEndReason = reason },
           onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
-          onImageAttachments: async (toolCallId, attachments, transform, attachmentLimit) => {
-            const parsed = createImageAttachmentsSchema(attachmentLimit).safeParse(attachments)
-            const parsedTransform = imageTransformSchema.safeParse(transform ?? { detail: 'high' })
-            if (
-              !parsed.success
-              || !parsedTransform.success
-              || parsed.data.some((attachment) =>
-                attachment.sessionId !== this.options.sessionRecorder?.sessionId)
-            ) {
-              return '图片工具返回了无效或不属于当前会话的附件'
-            }
-            const attachmentKeys = parsed.data.map((attachment) =>
-              attachment.source?.kind === 'pdf-page'
-                ? `${attachment.source.pdfAttachmentId}:${attachment.source.pdfSha256}:${attachment.source.pageNumber}`
-                : attachment.id)
-            if (attachmentKeys.some((key) => stepImageAttachmentKeys.has(key))) {
-              await removeImageAttachmentFiles(
-                this.options.sessionRecorder!.attachmentDirectory,
-                parsed.data.filter((attachment) =>
-                  !this.imageAttachments.has(attachment.storageName)),
-              ).catch(() => {})
-              return '同一模型步骤不能重复查看同一张图片，请直接使用已经返回的视觉结果'
-            }
-            stepImageAttachmentLimit = Math.max(stepImageAttachmentLimit, attachmentLimit)
-            if (stepImageAttachmentCount + parsed.data.length > stepImageAttachmentLimit) {
-              await removeImageAttachmentFiles(
-                this.options.sessionRecorder!.attachmentDirectory,
-                parsed.data.filter((attachment) =>
-                  !this.imageAttachments.has(attachment.storageName)),
-              ).catch(() => {})
-              return `单个模型步骤最多查看 ${stepImageAttachmentLimit} 张图片，请下一步继续`
-            }
-            stepImageAttachmentCount += parsed.data.length
-            attachmentKeys.forEach((key) => stepImageAttachmentKeys.add(key))
-            stepImageAttachments.set(toolCallId, {
-              attachments: parsed.data,
-              transform: parsedTransform.data,
-            })
-            return null
-          },
-          onPdfAttachments: (toolCallId, attachments) =>
-            this.acceptToolPdfAttachments(stepPdfAttachments, toolCallId, attachments),
+          onImageAttachments: (id, attachments, transform, limit) =>
+            stepAttachments.acceptImages(id, attachments, transform, limit),
+          onPdfAttachments: (id, attachments) => stepAttachments.acceptPdfs(id, attachments),
         },
         mcpStep?.toolDefinitions() ?? [],
       )
@@ -2682,12 +2631,10 @@ export class AgentSession {
         model: this.createLanguageModel(),
         system: requestSystemPrompt,
         messages: requestMessages,
-        tools: requestTools,
+        tools: toolsForModel(requestTools),
         stopWhen: stepCountIs(1),
         providerOptions: this.requestProviderOptions(),
         abortSignal: stepAbort.signal,
-        onToolExecutionStart: () => { inactivityWatchdog.toolStarted() },
-        onToolExecutionEnd: () => { inactivityWatchdog.toolEnded() },
       })
 
       let hadToolCalls = false
@@ -2725,7 +2672,6 @@ export class AgentSession {
             if (part.providerExecuted === true) break
             hadToolCalls = true
             if (part.toolName !== UPDATE_TASK_ITEM_TOOL_NAME) hadNonProgressToolCalls = true
-            toolCallOrder.push(part.toolCallId)
             break
           case 'finish':
             finishReason = part.finishReason
@@ -2748,7 +2694,7 @@ export class AgentSession {
         emit({ type: 'thinking-end', durationMs: Date.now() - thinkingStartedAt })
       }
 
-      // 流和工具尚未完整结束前的停止必须丢弃本步；从这里开始进入稳定提交窗口。
+      // 此时工具尚未执行；不完整模型响应可以丢弃，完整调用必须先写稳再派发。
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
       const response = await result.response
       if (stepAbort.signal.aborted) throw new Error('step aborted before commit')
@@ -2763,6 +2709,48 @@ export class AgentSession {
         && (sanitizedResponse.rejected || !hasDeliverableModelText(canonicalResponseMessages))
       ) {
         throw new UndeliverableModelResponseError(finishReason)
+      }
+      if (hadToolCalls) {
+        const head = dehydrateImageMessages([
+          ...(currentTimeReminder ? [currentTimeReminder] : []),
+          ...canonicalResponseMessages,
+        ])
+        await this.persistRequired(
+          (recorder) => recorder.recordStep(this.activeTurn!.id, head),
+          '保存工具调用',
+        )
+        this.messages.push(...head)
+        toolExecution = new ToolExecutionBatch({
+          messages: canonicalResponseMessages,
+          abort: stepAbort,
+          emit,
+          recordStart: (startedToolCallId) => this.persistRequired(
+            (recorder) => recorder.recordStep(this.activeTurn!.id, [], undefined, undefined, { startedToolCallId }),
+            '登记工具执行',
+          ),
+          recordResult: async (message, event) => {
+            const { messages, attachments, pdfAttachments } = stepAttachments.forTool(event.toolUseId, message)
+            const taskState = this.taskPlan?.stateSnapshot
+            const changedTaskState = taskState?.version !== durableTaskState?.version ? taskState : undefined
+            this.assertImageAttachmentsCompatible(attachments)
+            this.assertPdfAttachmentsCompatible(pdfAttachments)
+            await this.persistRequired(
+              (recorder) => recorder.recordStep(
+                this.activeTurn!.id, messages, changedTaskState,
+                changedTaskState ? changedTaskState.activePlan?.id ?? null : stepControl.taskPlanEngagement?.planId,
+                { attachments, pdfAttachments },
+              ),
+              '保存工具结果',
+            )
+            this.messages.push(...messages)
+            this.addImageAttachments(attachments)
+            this.addPdfAttachments(pdfAttachments)
+            durableTaskState = taskState
+          },
+        })
+        inactivityWatchdog.stop()
+        await toolExecution.run(requestTools)
+        if (stepAbort.signal.aborted) stepControl.toolEndReason = null
       }
       let awaitingTaskPlanContinuation = false
       let taskPlanClosedNaturally = false
@@ -2816,54 +2804,27 @@ export class AgentSession {
         ))
       }
       const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
-      const orderedImageResults = toolCallOrder.flatMap((toolCallId) => {
-        const result = stepImageAttachments.get(toolCallId)
-        return result ? [{ ...result, toolCallId }] : []
-      })
-      const orderedImageAttachments = orderedImageResults.flatMap((result) => result.attachments)
-      const orderedPdfAttachments = [...new Map(
-        toolCallOrder
-          .flatMap((toolCallId) => stepPdfAttachments.get(toolCallId) ?? [])
-          .map((attachment) => [attachment.storageName, attachment] as const),
-      ).values()]
-      const pdfReferenceMessages: ModelMessage[] = orderedPdfAttachments.length > 0
-        ? [{
-            role: 'user',
-            content: withPdfAttachmentReferences(
-              '[应用生成：前述工具结果已将 PDF 保存为当前会话附件；需要内容时调用 ReadPdf 按页读取。]',
-              orderedPdfAttachments,
-            ),
-          }]
-        : []
       const committedMessages = dehydrateImageMessages([
-        ...(currentTimeReminder ? [currentTimeReminder] : []),
-        ...attachImagesToToolResults(canonicalResponseMessages, orderedImageResults),
-        ...pdfReferenceMessages,
+        ...(!toolExecution && currentTimeReminder ? [currentTimeReminder] : []),
+        ...(!toolExecution ? canonicalResponseMessages : []),
+        ...stepAttachments.pdfReferences(),
         ...internalMarkers,
         ...mcpCommitMessages,
       ])
       const engagementUpdate = taskPlanCommit
         ? taskPlanCommit.state.activePlan?.id ?? null
         : stepControl.taskPlanEngagement?.planId
-      this.assertImageAttachmentsCompatible(orderedImageAttachments)
-      this.assertPdfAttachmentsCompatible(orderedPdfAttachments)
       await this.persistRequired(
         (recorder) => recorder.recordStep(
           this.activeTurn!.id,
           committedMessages,
           taskPlanCommit?.state,
           engagementUpdate,
-          {
-            attachments: orderedImageAttachments,
-            pdfAttachments: orderedPdfAttachments,
-          },
         ),
         '提交模型步骤',
       )
-      stepAttachmentsCommitted = true
+      stepCommitted = true
       this.messages.push(...committedMessages)
-      this.addImageAttachments(orderedImageAttachments)
-      this.addPdfAttachments(orderedPdfAttachments)
       if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
         emit({ type: 'user-question', question: userQuestion })
       }
@@ -2902,34 +2863,16 @@ export class AgentSession {
       }
     } catch (error) {
       mcpStep?.discard()
-      if (!stepAttachmentsCommitted && stepImageAttachmentCount > 0 && this.options.sessionRecorder) {
-        await removeImageAttachmentFiles(
-          this.options.sessionRecorder.attachmentDirectory,
-          [...stepImageAttachments.values()]
-            .flatMap((result) => result.attachments)
-            .filter((attachment) => !this.imageAttachments.has(attachment.storageName)),
-        ).catch(() => {})
-      }
-      if (!stepAttachmentsCommitted && stepPdfAttachments.size > 0 && this.options.sessionRecorder) {
-        await removePdfAttachmentFiles(
-          this.options.sessionRecorder.attachmentDirectory,
-          [...new Map(
-            [...stepPdfAttachments.values()]
-              .flat()
-              .filter((attachment) => !this.pdfAttachments.has(attachment.storageName))
-              .map((attachment) => [attachment.storageName, attachment] as const),
-          ).values()],
-        ).catch(() => {})
-      }
-      if (taskPlanFinalized && !stepAttachmentsCommitted && taskStateBeforeStep) {
-        this.taskPlan?.restore(taskStateBeforeStep)
+      await stepAttachments.discardUncommitted()
+      if (!stepCommitted && durableTaskState && (taskPlanFinalized || toolExecution)) {
+        this.taskPlan?.restore(durableTaskState)
       } else {
         this.taskPlan?.discardStep()
       }
-      if (stepAbort.signal.aborted && stepAbort.signal.reason === 'user-cancel') {
+      if (!toolExecution && stepAbort.signal.aborted && stepAbort.signal.reason === 'user-cancel') {
         emit({ type: 'step-output-retained' })
       }
-      emit({ type: 'step-discarded' })
+      emit({ type: toolExecution ? 'step-committed' : 'step-discarded' })
       if (
         stepAbort.signal.aborted
         && stepAbort.signal.reason === MODEL_INACTIVITY_ABORT_REASON
@@ -2938,7 +2881,7 @@ export class AgentSession {
           `模型连续 ${Math.round(MODEL_INACTIVITY_TIMEOUT_MS / 1000)} 秒没有返回数据，当前未提交步骤已安全丢弃；请重试或切换模型。`,
         )
       }
-      // urgent 插话打断：静默放弃本步（不入历史、不报错），交给循环注入排队消息后续跑
+      // 立即插话只丢弃尚未执行的模型流；工具事实保存后再交给循环注入新消息。
       if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
         return {
           committed: false,
@@ -3074,59 +3017,6 @@ export class AgentSession {
     return this.wrapToolDefinitions(defs, abortSignal, context)
   }
 
-  private async acceptToolPdfAttachments(
-    stepPdfAttachments: Map<string, PdfAttachment[]>,
-    toolCallId: string,
-    attachments: readonly PdfAttachment[],
-  ): Promise<string | null> {
-    if (!this.options.sessionRecorder) {
-      return 'PDF 工具附件需要会话附件存储'
-    }
-    const parsed = pdfAttachmentsSchema.safeParse(attachments)
-    const acceptedStorageNames = new Set(
-      [...stepPdfAttachments.values()]
-        .flatMap((values) => values)
-        .map((attachment) => attachment.storageName),
-    )
-    const individuallyValid = attachments.flatMap((attachment) => {
-      const value = pdfAttachmentSchema.safeParse(attachment)
-      return value.success ? [value.data] : []
-    })
-    const removeRejected = () => removePdfAttachmentFiles(
-      this.options.sessionRecorder!.attachmentDirectory,
-      individuallyValid.filter((attachment) =>
-        !this.pdfAttachments.has(attachment.storageName)
-        && !acceptedStorageNames.has(attachment.storageName)),
-    ).catch(() => {})
-    if (
-      !parsed.success
-      || parsed.data.some((attachment) =>
-        attachment.sessionId !== this.options.sessionRecorder?.sessionId)
-    ) {
-      await removeRejected()
-      return 'PDF 工具返回了无效或不属于当前会话的附件'
-    }
-    const unique = new Map<string, PdfAttachment>()
-    for (const values of stepPdfAttachments.values()) {
-      for (const attachment of values) unique.set(attachment.storageName, attachment)
-    }
-    for (const attachment of parsed.data) {
-      const previous = unique.get(attachment.storageName)
-        ?? this.pdfAttachments.get(attachment.storageName)
-      if (previous && JSON.stringify(previous) !== JSON.stringify(attachment)) {
-        await removeRejected()
-        return `PDF 附件元数据冲突：${attachment.storageName}`
-      }
-      unique.set(attachment.storageName, attachment)
-    }
-    if (!pdfAttachmentsSchema.safeParse([...unique.values()]).success) {
-      await removeRejected()
-      return '单个模型步骤导入的 PDF 数量或总大小超过会话附件上限'
-    }
-    stepPdfAttachments.set(toolCallId, parsed.data)
-    return null
-  }
-
   private wrapToolDefinitions(
     defs: readonly ToolDefinition[],
     abortSignal: AbortSignal,
@@ -3157,11 +3047,20 @@ export class AgentSession {
       return null
     }
     for (const def of defs) {
+      const finishTool = (toolCallId: string, result: string, isError: boolean, fileChanges?: ToolFileChange[]): Promise<string> => {
+        const event: ToolEndEvent = {
+          type: 'tool-end', toolUseId: toolCallId, result, isError,
+          ...(fileChanges?.length ? { fileChanges } : {}),
+        }
+        if (context.onToolExecutionEnd) return context.onToolExecutionEnd(event)
+        emit(event)
+        return Promise.resolve(result)
+      }
       const executeTool = async (
         input: unknown,
         { toolCallId }: { toolCallId: string },
       ): Promise<string> => {
-        if (abortSignal.aborted) return '操作已取消'
+        if (abortSignal.aborted) return finishTool(toolCallId, TOOL_NOT_STARTED, true)
         // additionalDirs 会在审批中变化，每次调用取最新
         let toolCtx: ToolContext = {
           projectDir: toolProjectDir,
@@ -3176,11 +3075,9 @@ export class AgentSession {
         const parsed = await validateToolInput(def, input)
         if (!parsed.success) {
           const msg = `参数校验失败：${parsed.error.message}`
-          emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
           loopHealth.record(def.name, input, msg, true)
-          return msg
+          return finishTool(toolCallId, msg, true)
         }
-        emit({ type: 'tool-start', toolUseId: toolCallId, toolName: def.name, input: parsed.value })
 
         // 同一步的独立权限判定会聚合成一次精确批量审批；执行仍在副作用队列中保序。
         const authorization = await approvalBatcher.authorize(
@@ -3190,10 +3087,9 @@ export class AgentSession {
           toolCallId,
         )
         if (!authorization.approved) {
-          const msg = authorization.message
-          emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+          const msg = abortSignal.aborted ? `${TOOL_NOT_STARTED}\n${authorization.message}` : authorization.message
           loopHealth.record(def.name, parsed.value, msg, true)
-          return msg
+          return finishTool(toolCallId, msg, true)
         }
         if (authorization.approvedPaths.length > 0) {
           // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
@@ -3210,18 +3106,16 @@ export class AgentSession {
 
         const executeAuthorized = async (): Promise<string> => {
           if (abortSignal.aborted) {
-            const msg = '操作已取消'
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            const msg = TOOL_NOT_STARTED
             loopHealth.record(def.name, parsed.value, msg, true)
-            return msg
+            return finishTool(toolCallId, msg, true)
           }
           // 批准与真正进入副作用队列之间仍可能切档；只重查不可被批准覆盖的硬拒绝。
           const currentPermission = checkToolPermission(def, parsed.value, this.permissions)
           if (currentPermission.behavior === 'deny') {
             const msg = `操作被拒绝：${currentPermission.reason}`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
             loopHealth.record(def.name, parsed.value, msg, true)
-            return msg
+            return finishTool(toolCallId, msg, true)
           }
 
           // 只有工具显式声明资源边界才建立检查点；权限路径不能替代回滚覆盖契约。
@@ -3297,6 +3191,9 @@ export class AgentSession {
             }
           }
 
+          if (abortSignal.aborted) return finishTool(toolCallId, TOOL_NOT_STARTED, true)
+          await context.onToolExecutionStart?.(toolCallId)
+          if (abortSignal.aborted) return finishTool(toolCallId, TOOL_NOT_STARTED, true)
           try {
             let result = await def.execute(parsed.value, {
               ...toolCtx,
@@ -3343,13 +3240,6 @@ export class AgentSession {
                 attachments: [...viewedAttachments],
               })
             }
-            emit({
-              type: 'tool-end',
-              toolUseId: toolCallId,
-              result: result.data,
-              isError: result.isError,
-              ...(result.fileChanges?.length ? { fileChanges: [...result.fileChanges] } : {}),
-            })
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, !result.isError)
             }
@@ -3357,16 +3247,18 @@ export class AgentSession {
               context.onTurnEndingTool?.(def.turnEndReasonOnSuccess)
             }
             loopHealth.record(def.name, parsed.value, result.data, result.isError)
-            return result.data
+            const data = abortSignal.aborted && result.isError
+              ? `${TOOL_OUTCOME_UNKNOWN}\n${result.data}`
+              : result.data
+            return finishTool(toolCallId, data, result.isError, result.fileChanges ? [...result.fileChanges] : undefined)
           } catch (error) {
             await finalizeCheckpoint()
-            const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
-            emit({ type: 'tool-end', toolUseId: toolCallId, result: msg, isError: true })
+            const msg = `${TOOL_OUTCOME_UNKNOWN}\n工具执行出错：${error instanceof Error ? error.message : String(error)}`
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, false)
             }
             loopHealth.record(def.name, parsed.value, msg, true)
-            return msg
+            return finishTool(toolCallId, msg, true)
           }
         }
 
@@ -3389,22 +3281,14 @@ export class AgentSession {
         input: unknown,
         context: { toolCallId: string },
       ): Promise<string> => {
+        emit({ type: 'tool-start', toolUseId: context.toolCallId, toolName: def.name, input })
         const deniedByMode = allowedToolNames && !allowedToolNames.has(def.name)
         const conflict = deniedByMode
           ? `临时对话不允许使用 ${def.name}，未执行。请使用允许的只读工具或依据已有上下文回答。`
           : claimStepTool(def)
         if (conflict) {
-          if (deniedByMode) {
-            emit({ type: 'tool-start', toolUseId: context.toolCallId, toolName: def.name, input })
-          }
-          emit({
-            type: 'tool-end',
-            toolUseId: context.toolCallId,
-            result: conflict,
-            isError: true,
-          })
           loopHealth.record(def.name, input, conflict, true)
-          return Promise.resolve(conflict)
+          return finishTool(context.toolCallId, conflict, true)
         }
         return executeTool(input, context)
       }

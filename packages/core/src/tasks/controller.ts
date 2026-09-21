@@ -55,7 +55,7 @@ export interface TaskPlanCommit {
 }
 
 /**
- * 单活动计划的事务控制器。模型步骤提交前只修改内存草稿；取消或异常会整体回滚。
+ * 单活动计划的事务控制器。未提交草稿可撤销，持久提交边界由调用方持有。
  */
 export class TaskPlanController {
   private state: TaskPlanState

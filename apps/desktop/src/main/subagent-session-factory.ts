@@ -95,6 +95,6 @@ export async function createSubagentAgentSession(
     scheduleProjectMutation: (_mutation, abortSignal, operation) =>
       options.hostOperations.runProjectWrite(options.projectDir, abortSignal, operation),
     emit: options.emit,
-    requestApproval: (request) => options.parentRuntime.requestApproval(request),
+    requestApproval: (request, signal) => options.parentRuntime.requestApproval(request, signal),
   })
 }

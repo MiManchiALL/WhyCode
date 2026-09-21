@@ -175,6 +175,22 @@ describe('会话工作计时', () => {
 })
 
 describe('会话授权入口', () => {
+  it('步骤取消只关闭所属审批，迟到批准无效且不影响其它请求', async () => {
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model', emit: () => {},
+    })
+    const controller = new AbortController()
+    const cancelled = runtime.requestApproval({ requestId: 'cancelled', toolName: 'WriteFile', input: {}, reason: '写入审批' }, controller.signal)
+    const another = runtime.requestApproval({ requestId: 'another', toolName: 'RunCommand', input: {}, reason: '命令审批' })
+    controller.abort('interrupt')
+    assert.deepEqual(await cancelled, { approved: false })
+    assert.equal(runtime.respondApproval('cancelled', { approved: true, remember: true }), false)
+    assert.equal(runtime.approval?.requestId, 'another')
+    assert.equal(runtime.respondApproval('another', { approved: true }), true)
+    assert.deepEqual(await another, { approved: true })
+    assert.equal(runtime.approval, null)
+  })
+
   const request = {
     requestId: '11111111-1111-4111-8111-111111111111',
     toolName: 'RunCommand',

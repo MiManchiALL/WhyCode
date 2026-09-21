@@ -177,7 +177,11 @@ WhyCode 自有结构化数据一律以 Zod 为单源并在出口校验，再派�
 
 ### 2.3 工具结果与多协议配对
 
-Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回只供 AgentSession 消费的附件元数据，由稳定步骤转换为绑定原 `toolCallId` 的多模态 tool result 并与消息原子持久化。
+Core 工具结果统一为 `{data,isError}`，规范历史分别使用 `text` 与 `error-text`。图片/PDF 工具可以另返回只供 AgentSession 消费的附件元数据，由所属工具结果转换为绑定原 `toolCallId` 的多模态 tool result 并与消息原子持久化。
+
+主执行链在完整模型响应落盘后才派发本地工具。调用、执行入口和完成结果复用 `messages` 记录；入口通过 `startedToolCallId` 登记且必须 flush 成功才可进入执行函数。完成结果逐项 flush，不能等整批工具成功后才保留。取消不改写已经返回的成功结果；未派发调用返回明确的未执行错误，已开始但未取得完整结果的调用标记结果未知，要求后续先核实外部状态再重试。停止和立即插话都等待已启动调用收尾，下一次请求前必须配齐结果。持久化失败停止派发与模型续轮。
+
+审批等待绑定所属步骤的 AbortSignal。宿主在取消时仅移除该请求并返回拒绝；迟到批准不能执行工具或修改授权记忆，Main、讨论代理与子代理沿用同一取消契约。
 
 每条本地 tool result 必须在同一规范历史中存在对应 assistant tool call。Provider 自行执行的工具不能伪装成本地事实；未知供应商工具及其结果按同一 ID 成组移除。OpenAI Chat、Responses 和 Anthropic 的图片/并行结果差异只在 Provider 请求副本中投影，不改写规范历史。
 
@@ -291,7 +295,7 @@ Core 工具结果统一为 `{data,isError}`。图片/PDF 工具可以另返回�
 - `files` 必填，最多 8 项，JSON 序列化后不超过 32 Ki 字符；路径最多 2048 字符、文件说明最多 160 字符，文字字段非空且不得含控制字符。
 - 文件只接受已写入并核验的 HTML、Markdown、图片和 PDF 主要成品，包含命令生成的产物；类型判定与右侧栏共用 `document-formats.ts`。不列依赖、临时脚本、普通文本或代码修改，后者由界面自动汇总；其它格式成品在正文提供文件链接。路径通过既有 `extractPaths` 与 `resolveAllowed` 权限边界校验，须为可读普通文件，不接受目录或链接；成功结果返回绝对路径并按平台路径语义去重。声明不保存文件副本，用户打开时读取当前版本，说明不绑定某次修改的具体内容。
 - 每次成功调用提交本次回答的完整文件声明，替换此前成功声明；失败不覆盖，空数组显式清空。没有成品文件时不调用，模型无需重复生成末尾文件列表。
-- 声明复用成功工具结果，随现有 canonical 工具步骤提交、丢弃、持久化与回放；不增加 CoreEvent、会话 schema 或独立交付文件。展示仅属于同一工作分组的正常完成回答，不能从调用输入、失败结果或其它回答推测交付完成。BTW 声明留在侧链工具步骤中，不进入 Main 历史。
+- 声明复用成功工具结果，随其持久化与回放；不增加 CoreEvent、独立会话字段或交付文件。展示仅属于同一工作分组的正常完成回答，不能从调用输入、失败结果或其它回答推测交付完成。BTW 声明留在侧链工具步骤中，不进入 Main 历史。
 
 正文链接与来源引用的模型规则由 `packages/core/src/prompts/system.ts` 的 `responseLinksSection` 统一提供，不依赖是否调用网页工具；Main 与 BTW 使用同一 System 组装入口。`packages/core/src/web-source.ts` 只负责引用标记、URL 规范化和工具来源链接格式。
 
@@ -422,6 +426,8 @@ Core 从源 JSONL 活动父链复制锚点处真实上下文，包括 compact �
 Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scratch 后，`Present` 声明、文件工具结构化参数、可见文件变化和检查点资源中位于来源 scratch 内的绝对路径同步指向新 scratch；canonical 消息、回滚快照、BTW 工具步骤与可见事件使用同一映射，再次 Fork 继续重定位。项目路径、其它外部文件、相对输入、来源 URL、命令文本及文件正文保留原义，不对历史文本做全局替换。
 
 所有恢复都从已提交事件和 canonical snapshot 重建。ViewEvent 缓存、Renderer 展开状态、模型自述和摘要都不能补造业务状态。当前开发 schema 不兼容旧格式；不支持的旧会话明确不可打开但仍可删除。
+
+进程恢复按活动链中的完整调用、`startedToolCallId` 和真实结果补齐未结算调用：存在执行入口而缺结果的是“结果未知”，没有入口的是“未执行”。已有结果和供应商推理元数据保持原样；恢复快照固化同一配对历史，不自动重试工具，也不从文件或展示卡片猜测成功。
 
 运行中的普通输入先以 `user-input(startsTurn=false)` 写稳并进入 canonical pending inputs。`queued-message-action` 只能引用仍为 `queued` 的稳定输入 ID：`edit` 追加 `user-input-restored` 并通过 `queue-restored` 退回原消息草稿，重新提交时原子消费旧 ID；`discard` 追加 `user-input-discarded` 并删除 pending 身份，实时界面只接收非持久的 `message-dequeued`；`send-now` 不创建第二条输入，只复用 urgent steering 中断当前步骤并在安全边界交付原 ID。任何持久化失败都必须保留原队列，不能先向 Renderer 宣称成功。
 

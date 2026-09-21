@@ -7,6 +7,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import type { ModelEntry } from '../providers/registry.ts'
 import type { PdfProcessor } from '../pdf/processor.ts'
+import { referencedPdfAttachmentIds } from '../pdf/messages.ts'
 import { preparePdfAttachmentImport } from '../pdf/storage.ts'
 import { SessionStore } from '../session/store.ts'
 import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
@@ -119,7 +120,7 @@ describe('WebFetch Agent 链路', () => {
     }
   })
 
-  it('远程 PDF 导入后 step 若被中止则回收未提交文件', async () => {
+  it('远程 PDF 工具完成后停止仍保留已提交附件', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-web-pdf-abort-'))
     try {
       const source = join(root, 'remote.pdf')
@@ -136,6 +137,16 @@ describe('WebFetch Agent 链路', () => {
       )
       await transaction.commit()
       const attachment = { ...transaction.attachments[0]!, origin: 'web' as const }
+      const originalRecord = journal.recordStep.bind(journal)
+      let checkedCrashBoundary = false
+      journal.recordStep = async (...args) => {
+        await originalRecord(...args)
+        if (args[4]?.pdfAttachments?.length) {
+          const interrupted = await store.open(journal.sessionId)
+          assert.equal(referencedPdfAttachmentIds(interrupted.initialMessages).has(attachment.id), true)
+          checkedCrashBoundary = true
+        }
+      }
       let session!: AgentSession
       session = new AgentSession({
         model: modelEntry(new MockLanguageModelV4({ doStream: [toolStep()] })),
@@ -159,8 +170,9 @@ describe('WebFetch Agent 链路', () => {
       })
 
       assert.equal(await session.handleUserMessage('下载后立即停止'), 'aborted')
-      assert.deepEqual(await readdir(journal.attachmentDirectory), [])
-      assert.equal((await store.open(journal.sessionId)).initialPdfAttachments.length, 0)
+      assert.equal(checkedCrashBoundary, true)
+      assert.ok((await readdir(journal.attachmentDirectory)).length > 0)
+      assert.equal((await store.open(journal.sessionId)).initialPdfAttachments.length, 1)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

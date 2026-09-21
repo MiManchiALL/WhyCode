@@ -26,7 +26,8 @@ interface PendingStep {
 
 /**
  * 把模型流分成 Main/B/C 三条 step 缓冲：只有 step-committed 才写入用户可见时间线，
- * step-discarded（取消、urgent、异常）直接丢弃。turn 起点等已稳定事件立即写入。
+ * 尚未执行工具的模型流可通过 step-discarded 丢弃；中断工具批次收尾后仍提交。
+ * turn 起点等已稳定事件立即写入。
  */
 export class ViewTimeline {
   private readonly onWriteError: (error: unknown) => void

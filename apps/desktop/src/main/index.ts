@@ -907,7 +907,7 @@ async function createMainAgentSession(
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
       emit: (event) => runtime.emit(event),
-      requestApproval: (request) => runtime.requestApproval(request),
+      requestApproval: (request, signal) => runtime.requestApproval(request, signal),
     })
     next.setPermissionMode(runtime.permissionMode)
     await next.initializeContextUsage()
@@ -975,7 +975,7 @@ function createCoordinator(
     osPlatform: process.platform,
     homeDir: app.getPath('home'),
     emit: (event) => runtime.emit(event),
-    requestApproval: (request) => runtime.requestApproval(request),
+    requestApproval: (request, signal) => runtime.requestApproval(request, signal),
     initialState: journal.initialConsensusState,
     onTaskStart: (taskId, state, userText, deliveredInputIds, skills) =>
       journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds, skills),

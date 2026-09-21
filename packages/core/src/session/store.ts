@@ -1055,6 +1055,7 @@ export class SessionJournal implements SessionRecorder {
       attachments?: readonly ImageAttachment[]
       pdfAttachments?: readonly PdfAttachment[]
       deliveredInputIds?: readonly string[]
+      startedToolCallId?: string
     } = {},
   ): Promise<void> {
     const attachments = resources.attachments ?? []
@@ -1073,6 +1074,7 @@ export class SessionJournal implements SessionRecorder {
         ...(taskState !== undefined ? { taskState } : {}),
         ...(engagedPlanId !== undefined ? { engagedPlanId } : {}),
         ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
+        ...(resources.startedToolCallId ? { startedToolCallId: resources.startedToolCallId } : {}),
       })
       await this.appendEntries([batch])
       this.messages.push(...messages)

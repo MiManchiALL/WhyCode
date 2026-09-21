@@ -140,7 +140,7 @@ describe('ViewImage Agent 链路', () => {
     })
   })
 
-  it('step 在工具执行后被中止时回收未提交图片', async () => {
+  it('工具完成后停止仍保留已提交图片与模型结果', async () => {
     await withTempDirectory(async (directory) => {
       const projectDir = join(directory, 'project')
       const sessionRoot = join(directory, 'sessions')
@@ -164,10 +164,10 @@ describe('ViewImage Agent 链路', () => {
       })
 
       assert.equal(await session.handleUserMessage('查看后立即停止'), 'aborted')
-      assert.deepEqual(await readdir(journal.attachmentDirectory), [])
+      assert.ok((await readdir(journal.attachmentDirectory)).length > 0)
       const reopened = await store.open(journal.sessionId)
-      assert.equal(reopened.initialImageAttachments.length, 0)
-      assert.doesNotMatch(
+      assert.equal(reopened.initialImageAttachments.length, 1)
+      assert.match(
         await readFile(join(sessionRoot, journal.sessionId, 'transcript.jsonl'), 'utf8'),
         /whycode-attachment-ref:v1:/,
       )

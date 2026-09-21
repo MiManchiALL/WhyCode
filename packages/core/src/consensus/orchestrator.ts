@@ -642,12 +642,12 @@ export class ConsensusCoordinator {
       osPlatform: this.options.osPlatform,
       homeDir: this.options.homeDir,
       emit: (event: CoreEvent) => emit({ type: 'peer-event', agentId, event }),
-      requestApproval: (req) =>
+      requestApproval: (req, signal) =>
         requestApproval({
           ...req,
           requestId: `${agentId}-${req.requestId}`,
           reason: `[Agent ${agentId}] ${req.reason}`,
-        }),
+        }, signal),
     })
     this.peers.push(peer)
     return peer

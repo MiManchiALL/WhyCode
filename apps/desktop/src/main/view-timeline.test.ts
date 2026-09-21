@@ -23,6 +23,34 @@ class Writer implements ViewEventWriter {
 }
 
 describe('ViewTimeline', () => {
+  it('中断批次提交真实结果与未执行结果，立即插话及重放不丢工具卡片', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    timeline.capture(writer, { type: 'turn-start', turnId: 'turn-interrupted' })
+    timeline.capture(writer, { type: 'text-delta', text: '正在修改文件并执行检查。' })
+    for (const toolUseId of ['written', 'interrupted', 'not-started']) {
+      timeline.capture(writer, { type: 'tool-start', toolUseId, toolName: '工具', input: {} })
+    }
+    timeline.capture(writer, { type: 'tool-end', toolUseId: 'written', result: '已写入文件', isError: false })
+    timeline.capture(writer, { type: 'tool-end', toolUseId: 'interrupted', result: '工具执行结果未知', isError: true })
+    timeline.capture(writer, { type: 'tool-end', toolUseId: 'not-started', result: '工具未执行', isError: true })
+    timeline.capture(writer, { type: 'step-committed' })
+    await timeline.flush()
+    await writer.recordViewEvents([{ type: 'user-message', text: '现在只总结现状', startsTurn: false }])
+    timeline.capture(writer, { type: 'text-delta', text: '已停止后续操作。' })
+    timeline.capture(writer, { type: 'step-committed' })
+    timeline.capture(writer, { type: 'agent-status', status: 'idle' })
+    const snapshot = await timeline.conversationAt(writer, () => 1)
+    const replay = await new ViewTimeline(() => assert.fail('不应写入失败')).conversationAt(writer, () => 2)
+    assert.deepEqual(replay.state.blocks, snapshot.state.blocks)
+    const tools = replay.state.blocks.filter((block) => block.kind === 'tool')
+    assert.equal(tools.length, 3)
+    assert.match(JSON.stringify(tools), /已写入文件/)
+    assert.match(JSON.stringify(tools), /工具执行结果未知/)
+    assert.match(JSON.stringify(tools), /工具未执行/)
+    assert.equal(replay.state.pendingStep, null)
+  })
+
   it('分页快照保留步骤事务，恢复后丢弃半截输出不会删除稳定历史', async () => {
     const writer = new Writer()
     await writer.recordViewEvents([{ type: 'user-message', text: '检查代码', startsTurn: true }])

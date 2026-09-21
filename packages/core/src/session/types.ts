@@ -55,7 +55,7 @@ import {
   type BtwTurnSettlement,
 } from './btw.ts'
 
-export const SESSION_SCHEMA_VERSION = 14
+export const SESSION_SCHEMA_VERSION = 15
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -309,6 +309,8 @@ const messagesEntrySchema = chainedEntrySchema.extend({
   engagedPlanId: z.string().uuid().nullable().optional(),
   /** 与本批模型消息同一原子记录确认送达的忙时输入。 */
   deliveredInputIds: z.array(entryIdSchema).min(1).optional(),
+  /** 执行入口已写稳；重启时据此区分未执行与结果未知。 */
+  startedToolCallId: z.string().min(1).optional(),
 }).superRefine((entry, ctx) => {
   entry.attachments?.forEach((attachment, index) => {
     if (attachment.sessionId !== entry.sessionId) {
@@ -630,6 +632,7 @@ export interface SessionRecorder {
       attachments?: readonly ImageAttachment[]
       pdfAttachments?: readonly PdfAttachment[]
       deliveredInputIds?: readonly string[]
+      startedToolCallId?: string
     },
   ): Promise<void>
   recordTurnEnd(turnId: string, stopReason: StopReason): Promise<void>

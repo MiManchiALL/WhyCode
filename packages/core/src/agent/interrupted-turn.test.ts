@@ -410,11 +410,9 @@ describe('用户中断后的新回合', () => {
     const stepPersisted = createDeferred<void>()
     const releaseStep = createDeferred<void>()
     const originalRecordStep = journal.recordStep.bind(journal)
-    let recordedSteps = 0
     journal.recordStep = async (...args) => {
       await originalRecordStep(...args)
-      recordedSteps++
-      if (recordedSteps === 2) {
+      if (hasPendingUserQuestion(args[1])) {
         stepPersisted.resolve()
         await releaseStep.promise
       }
@@ -504,7 +502,7 @@ describe('用户中断后的新回合', () => {
     )
   })
 
-  it('Resume 工具执行后若 step 未稳定提交，不产生幽灵接合', async () => {
+  it('Resume 执行后停止保留结果，并重新设置恢复闸门', async () => {
     const model = new MockLanguageModelV4({
       doStream: [
         toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id }),
@@ -524,7 +522,9 @@ describe('用户中断后的新回合', () => {
     session.restoreTaskStateSnapshot(activeState())
 
     assert.equal(await session.handleUserMessage('继续刚才的任务'), 'aborted')
-    assert.equal(events.some((event) => event.type === 'step-discarded'), true)
+    assert.equal(events.some((event) => event.type === 'step-discarded'), false)
+    assert.equal(events.some((event) => event.type === 'step-committed'), true)
+    assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
     assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, activePlan())
 
     assert.equal(await session.handleUserMessage('TTL是什么意思'), 'completed')

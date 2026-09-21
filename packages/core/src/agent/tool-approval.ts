@@ -32,7 +32,8 @@ export interface ApprovalResponse {
   remember?: boolean
 }
 
-export type ApprovalHandler = (request: ApprovalRequest) => Promise<ApprovalResponse>
+/** 宿主必须在 signal 中止时关闭该请求并返回拒绝，不保留迟到批准。 */
+export type ApprovalHandler = (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalResponse>
 
 export type ToolAuthorization =
   | { approved: true; approvedPaths: string[] }
@@ -56,7 +57,7 @@ interface StepToolApprovalBatcherOptions {
 }
 
 /**
- * AI SDK 会在 model-call-end 并发启动同一步的全部工具。协调器先完成每项独立判定，
+ * 同一模型响应中的工具共同进入审批。协调器先完成每项独立判定，
  * 再把同一事件循环批次中的 ask 合成一张精确清单；批准不会扩张到未展示的调用。
  */
 export class StepToolApprovalBatcher {
@@ -107,7 +108,8 @@ export class StepToolApprovalBatcher {
       if (batch.length > 0) {
         const suggestion = sharedApprovalSuggestion(batch)
         const response = await this.requestBatch(batch, suggestion)
-        if (response.approved && response.remember && suggestion) {
+        if (response.approved && response.remember && suggestion
+          && !batch[0]!.toolCtx.abortSignal.aborted) {
           this.options.applySuggestion(suggestion)
         }
         this.settleBatch(batch, response)
@@ -148,10 +150,12 @@ export class StepToolApprovalBatcher {
     batch: readonly PendingToolApproval[],
     suggestion: ApprovalSuggestion | undefined,
   ): Promise<ApprovalResponse> {
+    const signal = batch[0]!.toolCtx.abortSignal
     const request = await buildApprovalRequest(batch, suggestion)
+    if (signal.aborted) return { approved: false }
     this.options.setStatus('waiting-approval')
     try {
-      return await this.options.requestApproval(request)
+      return await this.options.requestApproval(request, signal)
     } finally {
       this.options.setStatus('working')
     }
