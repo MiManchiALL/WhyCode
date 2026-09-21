@@ -339,7 +339,7 @@ function BuiltInProvidersEditor(props: {
 type SettingsSectionId = 'general' | 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp' | 'workspaces'
 
 const SETTINGS_META: Record<SettingsSectionId, { title: string; description: string }> = {
-  general: { title: '通用', description: '调整会话的阅读体验。' },
+  general: { title: '通用', description: '调整 WhyCode 的通用偏好。' },
   workspaces: { title: '保留工作区', description: '最后一个关联会话删除后留下的工作目录。重新关联会话后，会从此列表移出。' },
   models: {
     title: '模型连接',
