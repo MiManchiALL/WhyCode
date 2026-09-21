@@ -1130,8 +1130,6 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 
 .wc-tool-batch-summary {
   color: var(--wc-faint);
-  font-size: var(--wc-content-secondary-font-size, 14px);
-  line-height: var(--wc-content-line-height, 22px);
   transition: color 120ms ease;
 }
 
@@ -1145,8 +1143,6 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 
 .wc-tool-batch-row {
   color: var(--wc-faint);
-  font-size: var(--wc-content-secondary-font-size, 13px);
-  line-height: var(--wc-content-secondary-line-height, 20px);
   transition: color 120ms ease, background-color 120ms ease;
 }
 

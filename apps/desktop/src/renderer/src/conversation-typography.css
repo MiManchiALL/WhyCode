@@ -166,8 +166,20 @@
   line-height: 19px;
 }
 
+/* 工具调用沿用固定层级，正文调节不改变执行过程的阅读密度。 */
+.wc-tool-batch-summary {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.wc-tool-card,
+.wc-tool-batch-row,
+.wc-response-changes {
+  font-size: 13px;
+  line-height: 20px;
+}
+
 .wc-conversation .wc-tool-details {
-  /* 密集工具内容保持固定阅读密度，与可调正文区分层级。 */
   --wc-content-secondary-font-size: 12px;
   --wc-content-secondary-line-height: 20px;
   --wc-code-font-size: var(--wc-content-secondary-font-size);
