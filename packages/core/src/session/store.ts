@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, open as openFile, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
+import { appendOrderedMessages } from './tool-execution.ts'
 import {
   consensusPersistedStateSchema,
   keepsConsensusProgress,
@@ -1019,7 +1020,7 @@ export class SessionJournal implements SessionRecorder {
       this.turnStartSkills.set(turnId, structuredClone([...turnSkills]))
       this.undeliveredUserInputIdSet.delete(rootInputId ?? parentUuid)
       this.deletePendingInputs(deliveredInputIds)
-      this.messages.push(...messages)
+      appendOrderedMessages(this.messages, messages)
       if (projectInstructions) this.applyProjectInstructionsUpdate(projectInstructions)
       this.activeTurnId = turnId
       this.activeTurnEngagedPlanId = engagedPlanId ?? null
@@ -1077,7 +1078,7 @@ export class SessionJournal implements SessionRecorder {
         ...(resources.startedToolCallId ? { startedToolCallId: resources.startedToolCallId } : {}),
       })
       await this.appendEntries([batch])
-      this.messages.push(...messages)
+      appendOrderedMessages(this.messages, messages)
       this.addImageAttachments(attachments)
       this.addPdfAttachments(pdfAttachments)
       this.deletePendingInputs(deliveredInputIds)

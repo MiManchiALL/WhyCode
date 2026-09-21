@@ -1,4 +1,4 @@
-import type { ModelMessage } from 'ai'
+import type { ModelMessage, ToolResultPart } from 'ai'
 import { keepsConsensusProgress, type ConsensusPersistedState } from '../consensus/types.ts'
 import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
 import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
@@ -10,7 +10,7 @@ import {
   type SessionEntry,
 } from './types.ts'
 import type { ViewEvent } from './view-events.ts'
-import { interruptedToolResults } from './tool-execution.ts'
+import { appendOrderedMessages, interruptedToolResults } from './tool-execution.ts'
 import { createImageUserMessage } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import { referencedPdfAttachmentIds, withPdfAttachmentReferences } from '../pdf/messages.ts'
@@ -405,7 +405,7 @@ function collectTurnStarts(
       taskStates.set(entry.turnId, cloneTaskPlanState(taskState))
     }
     if (entry.type === 'messages') {
-      messages.push(...entry.messages)
+      appendOrderedMessages(messages, entry.messages)
       if (entry.taskState) taskState = cloneTaskPlanState(entry.taskState)
     }
     if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
@@ -1013,7 +1013,7 @@ function collectMessages(
 ): ModelMessage[] {
   let messages: ModelMessage[] = []
   const startedTools = new Set<string>()
-  const toolPdfs = new Map<ModelMessage, PdfAttachment[]>()
+  const toolPdfs = new Map<ToolResultPart, PdfAttachment[]>()
   let activeConsensusBaseMessages: ModelMessage[] | null = null
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
@@ -1056,23 +1056,26 @@ function collectMessages(
       if (entry.startedToolCallId) startedTools.add(entry.startedToolCallId)
       if (entry.pdfAttachments?.length) {
         for (const message of entry.messages) {
-          if (message.role === 'tool') toolPdfs.set(message, entry.pdfAttachments)
+          if (message.role !== 'tool') continue
+          for (const part of message.content) {
+            if (part.type === 'tool-result') toolPdfs.set(part, entry.pdfAttachments)
+          }
         }
       }
-      messages.push(...entry.messages)
+      appendOrderedMessages(messages, entry.messages)
     }
     if (entry.type === 'consensus-task-end' && entry.rollbackMessages) {
       messages = consensusRollbackMessages(entry.rollbackMessages, activeConsensusBaseMessages)
     }
     if (entry.type === 'consensus-task-end') activeConsensusBaseMessages = null
   }
-  messages.push(...interruptedToolResults(messages, startedTools))
+  appendOrderedMessages(messages, interruptedToolResults(messages, startedTools))
   // 工具结果与 PDF 元数据已写稳后，进程可能尚未来得及提交批次末尾的 user 引用。
   // 从同一活动链中的附件事实恢复，并放在配齐的工具结果之后，保持协议相邻性。
   const referencedPdfs = referencedPdfAttachmentIds(messages)
-  const activeMessages = new Set(messages)
+  const activeResults = new Set(messages.flatMap((message) => message.role === 'tool' ? message.content : []))
   const missingPdfs = [...new Map([...toolPdfs]
-    .flatMap(([message, attachments]) => activeMessages.has(message) ? attachments : [])
+    .flatMap(([result, attachments]) => activeResults.has(result) ? attachments : [])
     .filter((attachment) => !referencedPdfs.has(attachment.id))
     .map((attachment) => [attachment.id, attachment])).values()]
   if (missingPdfs.length) messages.push({

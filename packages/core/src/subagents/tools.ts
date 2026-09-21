@@ -42,7 +42,7 @@ export function createSubagentTools(
         description: subagentTaskDescriptionSchema.describe('本次子任务的 3～5 个词短描述'),
         prompt: z.string().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).describe('自包含的委派任务'),
       }).strict(),
-      isReadOnly: true,
+      isReadOnly: false,
       kind: 'control',
       async execute(input, ctx) {
         if (!ctx.turnId || !ctx.toolCallId) {
@@ -74,7 +74,7 @@ export function createSubagentTools(
         subagent_id: z.string().uuid().describe('此前 Subagent 返回的稳定 ID'),
         prompt: z.string().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).describe('追加给子代理的消息'),
       }).strict(),
-      isReadOnly: true,
+      isReadOnly: false,
       kind: 'control',
       async execute(input, ctx) {
         if (!ctx.turnId || !ctx.toolCallId) {

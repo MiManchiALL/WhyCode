@@ -1,4 +1,4 @@
-import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
+import { stepCountIs, streamText, tool as aiTool, type ModelMessage } from 'ai'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { modelMessageText } from '../text.ts'
@@ -163,9 +163,9 @@ import type {
 } from '../subagents/types.ts'
 import { subagentTurnStateSchema } from '../subagents/types.ts'
 import { AssistantTextGate, sanitizeAssistantControlOutput } from './assistant-output.ts'
-import { ToolExecutionBatch, toolsForModel, type ToolEndEvent } from './tool-execution.ts'
+import { ToolExecutionBatch, toolsForModel, type StepToolSet, type ToolEndEvent } from './tool-execution.ts'
 import { ToolStepAttachments } from './tool-step-attachments.ts'
-import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
+import { appendOrderedMessages, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
 import {
   StepToolApprovalBatcher,
   type ApprovalHandler,
@@ -246,7 +246,7 @@ export interface AgentSessionOptions {
   /** 默认开启；子代理和协议运行体在构造时物理关闭。 */
   userQuestionsEnabled?: boolean
   /**
-   * 宿主级项目副作用调度边界。单个 Agent 内仍由 serialToolTail 保序；桌面宿主
+   * 宿主级项目副作用调度边界。单个 Agent 内由工具批次屏障保序；桌面宿主
    * 可在此进一步串行同一项目中来自不同会话的 edit/execute 与检查点回滚。
    */
   scheduleProjectMutation?: <T>(
@@ -418,8 +418,6 @@ export class AgentSession {
   private taskPlan: TaskPlanController | null = null
   private loopHealth = new LoopHealthMonitor()
   private readonly skillTurn: SkillTurnContext
-  /** 非只读工具的会话级串行尾链：授权在步内聚合，检查点与实际执行属于同一临界区。 */
-  private serialToolTail: Promise<void> = Promise.resolve()
   /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
   private userQuestionsEnabled: boolean
   /** 最近一个稳定模型步骤的结束原因，供一次性子代理激活映射可靠终态。 */
@@ -563,7 +561,7 @@ export class AgentSession {
       )
       const overhead = await estimateRequestContextOverhead(
         systemPrompt,
-        tools,
+        toolsForModel(tools),
       )
       this.contextOverhead = overhead
       this.emitContextUsage()
@@ -875,6 +873,7 @@ export class AgentSession {
     let hadToolCalls = false
     const toolErrors: string[] = []
     const stepAttachments = new ToolStepAttachments(this.options.sessionRecorder, this.imageAttachments, this.pdfAttachments)
+    let toolExecution: ToolExecutionBatch | null = null
     let attachmentsCommitted = false
     let mcpStep: McpStepBinding | null = null
     try {
@@ -882,12 +881,11 @@ export class AgentSession {
       const tools = this.buildToolSet(
         stepAbort.signal,
         {
-          emit: (event) => {
-            if (event.type === 'tool-end' && event.isError) toolErrors.push(event.toolUseId)
-            emit(event)
-          },
+          emit,
           loopHealth,
           allowedToolNames: BTW_TOOL_NAMES,
+          onToolExecutionStart: (id) => toolExecution!.start(id),
+          onToolExecutionEnd: (event) => toolExecution!.finish(event),
           onPdfAttachments: (id, attachments) =>
             stepAttachments.acceptPdfs(id, attachments),
         },
@@ -897,12 +895,10 @@ export class AgentSession {
         model: this.createLanguageModel(),
         system,
         messages,
-        tools,
+        tools: toolsForModel(tools),
         stopWhen: stepCountIs(1),
         providerOptions: this.requestProviderOptions(),
         abortSignal: stepAbort.signal,
-        onToolExecutionStart: () => { inactivityWatchdog.toolStarted() },
-        onToolExecutionEnd: () => { inactivityWatchdog.toolEnded() },
       })
       const textGate = new AssistantTextGate((text) => {
         emittedText += text
@@ -950,10 +946,25 @@ export class AgentSession {
         throw new UndeliverableModelResponseError(finishReason)
       }
       const assistantText = sanitized.messages.map(modelMessageText).join('\n').trim()
+      const stepMessages = [...sanitized.messages]
+      if (hadToolCalls) {
+        toolExecution = new ToolExecutionBatch({
+          messages: sanitized.messages, abort: stepAbort,
+          emit: (event) => {
+            if (event.type === 'tool-end' && event.isError) toolErrors.push(event.toolUseId)
+            emit(event)
+          },
+          recordStart: async () => {},
+          recordResult: async (message) => { appendOrderedMessages(stepMessages, [message]) },
+        })
+        inactivityWatchdog.stop()
+        await toolExecution.run(tools)
+        if (stepAbort.signal.aborted) throw new Error('BTW 已中止')
+      }
       const pdfAttachments = stepAttachments.pdfAttachments
       const toolStep: BtwToolStep | undefined = hadToolCalls ? {
         messages: dehydrateImageMessages([
-          ...sanitized.messages,
+          ...stepMessages,
           ...(pdfAttachments.length ? [{
             role: 'user' as const,
             content: withPdfAttachmentReferences('网页工具导入的 PDF 附件。', pdfAttachments),
@@ -1527,15 +1538,6 @@ export class AgentSession {
     }
     this.taskNotifications = retained
     if (discarded.length > 0) void this.confirmNotificationsDelivered(discarded)
-  }
-
-  private enqueueSerialTool<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.serialToolTail.then(operation, operation)
-    this.serialToolTail = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
   }
 
   /** 不能安全自动接续时，排队消息弹回输入框，不静默丢弃。 */
@@ -2615,7 +2617,7 @@ export class AgentSession {
       )
       const requestOverhead = await estimateRequestContextOverhead(
         requestSystemPrompt,
-        requestTools,
+        toolsForModel(requestTools),
       )
       this.contextOverhead = requestOverhead
       const requestUsedTokens = this.tokenBaseline
@@ -2719,7 +2721,7 @@ export class AgentSession {
           (recorder) => recorder.recordStep(this.activeTurn!.id, head),
           '保存工具调用',
         )
-        this.messages.push(...head)
+        appendOrderedMessages(this.messages, head)
         toolExecution = new ToolExecutionBatch({
           messages: canonicalResponseMessages,
           abort: stepAbort,
@@ -2742,7 +2744,7 @@ export class AgentSession {
               ),
               '保存工具结果',
             )
-            this.messages.push(...messages)
+            appendOrderedMessages(this.messages, messages)
             this.addImageAttachments(attachments)
             this.addPdfAttachments(pdfAttachments)
             durableTaskState = taskState
@@ -2907,7 +2909,7 @@ export class AgentSession {
     abortSignal: AbortSignal,
     context: ToolStepContext,
     mcpTools: readonly ToolDefinition[],
-  ): ToolSet | undefined {
+  ): StepToolSet | undefined {
     const model = this.currentModelSelection().model
     const extraTools = this.options.extraTools ?? []
     const taskTools = this.taskPlan
@@ -3021,7 +3023,7 @@ export class AgentSession {
     defs: readonly ToolDefinition[],
     abortSignal: AbortSignal,
     context: ToolStepContext,
-  ): ToolSet | undefined {
+  ): StepToolSet | undefined {
     const { emit, loopHealth, planExecutionEngaged, allowedToolNames } = context
     const model = this.currentModelSelection().model
     const toolProjectDir = this.options.promptContext.projectDir
@@ -3032,7 +3034,7 @@ export class AgentSession {
       requestApproval: this.options.requestApproval,
       applySuggestion: (suggestion) => this.applySuggestion(suggestion),
     })
-    const toolSet: ToolSet = {}
+    const toolSet: StepToolSet = {}
     let firstStepToolName: string | null = null
     let standaloneStepToolName: string | null = null
     const claimStepTool = (def: ToolDefinition): string | null => {
@@ -3056,11 +3058,11 @@ export class AgentSession {
         emit(event)
         return Promise.resolve(result)
       }
-      const executeTool = async (
+      const prepareTool = async (
         input: unknown,
-        { toolCallId }: { toolCallId: string },
-      ): Promise<string> => {
-        if (abortSignal.aborted) return finishTool(toolCallId, TOOL_NOT_STARTED, true)
+        toolCallId: string,
+      ): Promise<() => Promise<string>> => {
+        if (abortSignal.aborted) return () => finishTool(toolCallId, TOOL_NOT_STARTED, true)
         // additionalDirs 会在审批中变化，每次调用取最新
         let toolCtx: ToolContext = {
           projectDir: toolProjectDir,
@@ -3076,10 +3078,10 @@ export class AgentSession {
         if (!parsed.success) {
           const msg = `参数校验失败：${parsed.error.message}`
           loopHealth.record(def.name, input, msg, true)
-          return finishTool(toolCallId, msg, true)
+          return () => finishTool(toolCallId, msg, true)
         }
 
-        // 同一步的独立权限判定会聚合成一次精确批量审批；执行仍在副作用队列中保序。
+        // 审批只准备当前精确输入，批准先后不能改变批次调度器保留的调用顺序。
         const authorization = await approvalBatcher.authorize(
           def,
           parsed.value,
@@ -3089,7 +3091,7 @@ export class AgentSession {
         if (!authorization.approved) {
           const msg = abortSignal.aborted ? `${TOOL_NOT_STARTED}\n${authorization.message}` : authorization.message
           loopHealth.record(def.name, parsed.value, msg, true)
-          return finishTool(toolCallId, msg, true)
+          return () => finishTool(toolCallId, msg, true)
         }
         if (authorization.approvedPaths.length > 0) {
           // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
@@ -3110,7 +3112,7 @@ export class AgentSession {
             loopHealth.record(def.name, parsed.value, msg, true)
             return finishTool(toolCallId, msg, true)
           }
-          // 批准与真正进入副作用队列之间仍可能切档；只重查不可被批准覆盖的硬拒绝。
+          // 批准与真正开始执行之间仍可能切档；只重查不可被批准覆盖的硬拒绝。
           const currentPermission = checkToolPermission(def, parsed.value, this.permissions)
           if (currentPermission.behavior === 'deny') {
             const msg = `操作被拒绝：${currentPermission.reason}`
@@ -3247,13 +3249,14 @@ export class AgentSession {
               context.onTurnEndingTool?.(def.turnEndReasonOnSuccess)
             }
             loopHealth.record(def.name, parsed.value, result.data, result.isError)
-            const data = abortSignal.aborted && result.isError
+            const data = abortSignal.aborted && result.isError && !def.isReadOnly
               ? `${TOOL_OUTCOME_UNKNOWN}\n${result.data}`
               : result.data
             return finishTool(toolCallId, data, result.isError, result.fileChanges ? [...result.fileChanges] : undefined)
           } catch (error) {
             await finalizeCheckpoint()
-            const msg = `${TOOL_OUTCOME_UNKNOWN}\n工具执行出错：${error instanceof Error ? error.message : String(error)}`
+            const detail = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
+            const msg = def.isReadOnly ? detail : `${TOOL_OUTCOME_UNKNOWN}\n${detail}`
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, false)
             }
@@ -3262,44 +3265,36 @@ export class AgentSession {
           }
         }
 
-        if (def.isReadOnly) return executeAuthorized()
-        return this.enqueueSerialTool(() => {
-          const operation = executeAuthorized
-          return (
-            (def.kind === 'edit' || def.kind === 'execute')
-            && this.options.scheduleProjectMutation
-          )
-            ? this.options.scheduleProjectMutation(
-                { type: 'tool', name: def.name, kind: def.kind },
-                abortSignal,
-                operation,
-              )
-            : operation()
-        })
+        return () => (def.kind === 'edit' || def.kind === 'execute') && this.options.scheduleProjectMutation
+          ? this.options.scheduleProjectMutation(
+              { type: 'tool', name: def.name, kind: def.kind }, abortSignal, executeAuthorized,
+            )
+          : executeAuthorized()
       }
-      const executeWithStepGate = (
+      const prepareWithStepGate = async (
         input: unknown,
-        context: { toolCallId: string },
-      ): Promise<string> => {
-        emit({ type: 'tool-start', toolUseId: context.toolCallId, toolName: def.name, input })
+        toolCallId: string,
+      ): Promise<() => Promise<string>> => {
         const deniedByMode = allowedToolNames && !allowedToolNames.has(def.name)
         const conflict = deniedByMode
           ? `临时对话不允许使用 ${def.name}，未执行。请使用允许的只读工具或依据已有上下文回答。`
           : claimStepTool(def)
         if (conflict) {
           loopHealth.record(def.name, input, conflict, true)
-          return finishTool(context.toolCallId, conflict, true)
+          return () => finishTool(toolCallId, conflict, true)
         }
-        return executeTool(input, context)
+        return prepareTool(input, toolCallId)
       }
-      toolSet[def.name] = aiTool({
-        description: def.prompt,
-        inputSchema: def.inputSchema,
-        // Responses 函数工具的 strict 默认值为 true；WhyCode 的运行时 Schema
-        // 保留真实可选字段，因此必须在该协议边界显式关闭，不能让上游补造参数。
-        ...(model.protocol === 'openai-responses' ? { strict: false } : {}),
-        execute: executeWithStepGate,
-      })
+      toolSet[def.name] = {
+        isReadOnly: def.isReadOnly,
+        prepare: prepareWithStepGate,
+        definition: aiTool({
+          description: def.prompt,
+          inputSchema: def.inputSchema,
+          // Responses 默认 strict 会补造可选参数；运行时 schema 才是输入权威。
+          ...(model.protocol === 'openai-responses' ? { strict: false } : {}),
+        }),
+      }
     }
     return toolSet
   }

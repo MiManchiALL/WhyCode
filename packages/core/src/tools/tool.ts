@@ -21,7 +21,7 @@ export interface ToolDefinition<
   /** 给模型的完整说明（与实现同目录的 prompt.ts） */
   prompt: string
   inputSchema: InputSchema
-  /** 只读工具可与其它只读工具并行执行 */
+  /** 显式承诺可与连续只读调用并发；会改变工作区或运行状态的工具必须为 false。 */
   isReadOnly: boolean
   /** 权限类别：read 读取；control 只限内部/保护性控制；edit/execute 受相应档位约束。 */
   kind: 'read' | 'edit' | 'execute' | 'control'

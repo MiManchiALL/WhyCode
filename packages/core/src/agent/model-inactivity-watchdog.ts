@@ -2,12 +2,10 @@ export const MODEL_INACTIVITY_ABORT_REASON = 'model-inactivity-timeout'
 export const MODEL_INACTIVITY_TIMEOUT_MS = 120_000
 
 /**
- * 只限制模型传输无活动时间；工具、审批等本地等待期间暂停计时，
- * 因此不会把长命令的合法运行时间误当成模型卡死。
+ * 只限制模型传输无活动时间；完整模型响应到达后、进入本地工具与审批前停止。
  */
 export class ModelInactivityWatchdog {
   private timer: ReturnType<typeof setTimeout> | null = null
-  private activeTools = 0
   private stopped = false
   private readonly controller: AbortController
   private readonly timeoutMs: number
@@ -25,17 +23,7 @@ export class ModelInactivityWatchdog {
   }
 
   noteStreamActivity(): void {
-    if (this.activeTools === 0) this.arm()
-  }
-
-  toolStarted(): void {
-    this.activeTools++
-    this.clearTimer()
-  }
-
-  toolEnded(): void {
-    if (this.activeTools > 0) this.activeTools--
-    if (this.activeTools === 0) this.arm()
+    this.arm()
   }
 
   stop(): void {

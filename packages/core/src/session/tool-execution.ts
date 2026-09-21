@@ -38,3 +38,32 @@ export function interruptedToolResults(
     true,
   ))
 }
+
+/** 日志按完成时刻追加；规范历史只在同一连续工具结果组内按调用顺序投影。 */
+export function appendOrderedMessages(target: ModelMessage[], messages: readonly ModelMessage[]): void {
+  for (const message of messages) {
+    target.push(message)
+    if (message.role === 'tool') orderToolResultTail(target)
+  }
+}
+
+function orderToolResultTail(messages: ModelMessage[]): void {
+  let start = messages.length - 1
+  while (start > 0 && messages[start - 1]!.role === 'tool') start--
+  let head = start
+  while (head > 0 && messages[head - 1]!.role === 'assistant') head--
+  const callIds = messages.slice(head, start).flatMap((message) =>
+    Array.isArray(message.content) ? message.content.flatMap((part) =>
+      part.type === 'tool-call' ? [part.toolCallId] : []) : [])
+  if (callIds.length < 2) return
+  const order = new Map(callIds.map((id, index) => [id, index]))
+  const results = messages.slice(start).flatMap((message) => message.role === 'tool'
+    ? message.content.map((part) => ({ message, part })) : [])
+  // 不跨用户消息、其它步骤或无关联的协议块搬动结果。
+  if (results.some(({ part }) => part.type !== 'tool-result' || !order.has(part.toolCallId))) return
+  const sorted = [...results].sort((a, b) =>
+    order.get((a.part as ToolResultPart).toolCallId)! - order.get((b.part as ToolResultPart).toolCallId)!)
+  if (sorted.every((result, index) => result === results[index])) return
+  messages.splice(start, messages.length - start, ...sorted.map(({ message, part }) =>
+    message.content.length === 1 ? message : { ...message, content: [part] }))
+}
