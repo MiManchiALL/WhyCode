@@ -18,6 +18,7 @@ import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
 import type { SubagentDefinitionCatalogSnapshot } from '../subagents/types.ts'
 import { BTW_SYSTEM_PROMPT } from './btw.ts'
+import { WEB_SOURCE_CITATION_MARKER } from '../web-source.ts'
 
 export interface PromptContext {
   /** 当前会话的真实工作目录；默认会话在首条消息前物化受管目录。 */
@@ -117,6 +118,17 @@ function toolUsageSection(
   ].join('\n')
 }
 
+function responseLinksSection(): string {
+  return [
+    '# 正文链接与来源引用',
+    '- 普通链接使用 [可读名称](真实URL)，提供可点击文字。任何任务中都可以使用，适用于官网、文档、仓库、下载页面，以及正文中需要保留名称的对象。',
+    `- 来源引用：仅当最终交付是调研、搜索、资料汇总或事实比较时引用来源；执行任务的中间查证不列来源。在相关完整句子或分句后使用 [来源名称](真实URL "${WEB_SOURCE_CITATION_MARKER}")，来源名称使用网页标题或能明确识别该来源的名称。界面将其显示为引用图标，点击定位到回答末尾的对应来源胶囊。`,
+    '- 正文必须独立完整、通顺。句子中必需的名称、操作入口和说明使用普通文字或普通链接，不能由来源引用代替。',
+    `- 网页工具返回的链接按用途使用：作为证据时保留 "${WEB_SOURCE_CITATION_MARKER}"；作为正文中的名称或访问入口时，改用 [可读名称](真实URL)。同一 URL 可以分别承担这两种用途。`,
+    '- 来源胶囊由显式引用自动汇总，无需调用 Present 或另写末尾来源列表。链接地址与来源信息必须真实，不得编造。',
+  ].join('\n')
+}
+
 function safetySection(): string {
   return [
     '# 行为约束',
@@ -206,6 +218,7 @@ export function buildSystemPrompt(
       Boolean(activeScratch),
       ctx.subagent?.toolNames,
     ),
+    responseLinksSection(),
   ]
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
   if (ctx.subagent) sections.push(subagentSection(ctx.subagent))

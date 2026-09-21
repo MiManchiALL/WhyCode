@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { buildM1Prompt, buildMainOnlyExecutionPrompt } from '../consensus/prompts.ts'
 import { requiresFullConsensus } from '../consensus/orchestrator.ts'
+import { WEB_FETCH_TOOL_PROMPT, WEB_FIND_TOOL_PROMPT } from '../tools/web-page/prompt.ts'
+import { WEB_SEARCH_TOOL_PROMPT } from '../tools/web-search/prompt.ts'
 import { buildSystemPrompt } from './system.ts'
 
 describe('通用 Agent 提示约束', () => {
@@ -70,6 +72,21 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /不要额外扩展功能、顺手重构或添加配置/)
     assert.match(prompt, /发现陌生文件、分支、锁或配置时先调查来源/)
     assert.match(prompt, /区分已观察事实、推断和准备执行的动作/)
+  })
+
+  it('正文链接与来源引用由 System 统一约束，不依赖网页工具调用', () => {
+    const prompt = buildSystemPrompt({ projectDir: 'C:\\work\\demo', osPlatform: 'win32' })
+
+    assert.equal(prompt.match(/# 正文链接与来源引用/gu)?.length, 1)
+    assert.match(prompt, /普通链接使用 \[可读名称\]\(真实URL\)，提供可点击文字。任何任务中都可以使用/)
+    assert.match(prompt, /仅当最终交付是调研、搜索、资料汇总或事实比较时引用来源；执行任务的中间查证不列来源。/)
+    assert.match(prompt, /完整句子或分句后使用 \[来源名称\]\(真实URL "whycode:source"\)/)
+    assert.match(prompt, /句子中必需的名称、操作入口和说明使用普通文字或普通链接，不能由来源引用代替/)
+    assert.match(prompt, /作为证据时保留 "whycode:source"；作为正文中的名称或访问入口时，改用 \[可读名称\]\(真实URL\)/)
+    assert.match(prompt, /无需调用 Present 或另写末尾来源列表/)
+    for (const toolPrompt of [WEB_SEARCH_TOOL_PROMPT, WEB_FETCH_TOOL_PROMPT, WEB_FIND_TOOL_PROMPT]) {
+      assert.doesNotMatch(toolPrompt, /仅当最终交付|来源胶囊|正文链接与来源引用/)
+    }
   })
 
   it('Fork 后明确把历史临时路径映射到新会话副本', () => {

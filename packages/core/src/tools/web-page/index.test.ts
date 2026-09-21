@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT } from '../../web-source.ts'
 import {
   WEB_FETCH_MAX_OUTPUT_CHARS,
   WEB_FETCH_TOOL_NAME,
@@ -78,7 +77,7 @@ describe('网页读取工具契约', () => {
     assert.match(result.data, /\s+2\t# Heading/)
     assert.match(result.data, /offset=5/)
     assert.match(result.data, /不受信任的外部网页/)
-    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
+    assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
   })
 
   it('拒绝超出输出预算或结构无效的宿主结果', async () => {
@@ -142,7 +141,7 @@ describe('网页读取工具契约', () => {
     assert.match(result.data, new RegExp(attachment.id))
     assert.match(result.data, /ReadPdf/)
     assert.doesNotMatch(result.data, /行范围|L1-L/)
-    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
+    assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
   })
 
   it('WebFind 不需要网络审批，并返回匹配上下文的稳定行号', async () => {
@@ -184,7 +183,7 @@ describe('网页读取工具契约', () => {
     assert.match(result.data, /匹配 1：第 5 行/)
     assert.match(result.data, /证据范围: .*（L4-L6）/)
     assert.match(result.data, /\s+5\tRelease Notes/)
-    assert.equal(result.data.endsWith(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT), true)
+    assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
     assert.equal(tool.initialApprovalReason, undefined)
   })
 

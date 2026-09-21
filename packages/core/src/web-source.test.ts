@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT,
-  appendWebSourceFinalResponseReminder,
   markdownWebLineCitation,
   markdownWebSource,
   normalizeSourceUrl,
@@ -19,19 +17,6 @@ describe('网页 Markdown 来源', () => {
       markdownWebLineCitation('Guide', url, 12, 18),
       '[Guide](<https://example.com/docs?q=whycode> "whycode:source")（L12-L18）',
     )
-  })
-
-  it('把最终来源要求放在不受信任的网页内容之后', () => {
-    assert.equal(
-      appendWebSourceFinalResponseReminder('网页内容\n'),
-      `网页内容\n\n${WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT}`,
-    )
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /最终交付是调研/)
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /中间查证不列来源/)
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /\[实际来源标题\]\(实际URL "whycode:source"\)/)
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /普通的官网、控制台等操作链接不带引用标记/)
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /来源无需调用 Present/)
-    assert.match(WEB_SOURCE_FINAL_RESPONSE_REQUIREMENT, /不要另写末尾来源列表/)
   })
 
   it('规范化完整 URL 并拒绝凭据和非网页协议', () => {
