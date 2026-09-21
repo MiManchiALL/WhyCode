@@ -462,7 +462,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 - `whycode-preview` 仅处理 GET/HEAD，支持单段字节范围。普通文本预览上限 2 MiB，文档与静态资源上限 64 MiB；不支持的类型只返回元数据。HTML 代码视图同样受文本上限约束。
 - 每次读取以真实路径检查资源范围；禁止目录链接逃逸、特殊文件、相关隐藏文件和非静态资源。HTML 使用独立 sandbox，预览脚本不能访问宿主 API。关闭视图后其地址失效，不能借旧地址继续读取文件。
 
-上述操作不改变 Core 文件检查点、工具权限、JSONL 或模型请求；历史快照仍走已有按工具调用与路径授权的检查点读取契约。`checkpointFileChanges({runtimeId,checkpointIds})` 在所属会话的检查点目录中只读指定清单，返回路径与净增删行数，不返回正文；ID 来自已有 `checkpoint-created.hash`，不新增持久事件。缺失、不完整或尚未完成的检查点显式报错，已回滚的完整快照仍可读取。
+上述操作不改变 Core 文件检查点、工具权限、JSONL 或模型请求；历史快照仍走已有按工具调用与路径授权的检查点读取契约。`checkpointFileChanges({runtimeId,checkpointIds})` 在所属会话的检查点目录中只读指定清单，返回路径与净增删行数，不返回正文；ID 来自已有 `checkpoint-created.hash`，不新增持久事件。该接口以及 `checkpointFilePreview`、`checkpointFileCurrentMatch` 在会话记录恢复后即可使用，不要求先发言、切换模型或建立 Agent；运行时缺失或已释放时报告会话记录不可用。缺失、不完整或尚未完成的检查点显式报错，已回滚的完整快照仍可读取。
 
 ### 7.4 桌面工作区保留与清理
 

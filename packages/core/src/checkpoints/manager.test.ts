@@ -164,54 +164,6 @@ describe('持久化资源检查点', () => {
     assert.equal((await env.manager.filePreview('tool-preview', path))?.after.kind, 'text')
   })
 
-  it('只按检查点拥有的原路径读取当前文件，不追踪移动或删除后的身份', async () => {
-    const env = await createEnvironment()
-    const path = join(env.project, 'current.ts')
-    await writeFile(path, 'before')
-    const prepared = await env.manager.prepare('tool-current', 'turn-1', {
-      kind: 'exact-files', paths: [path],
-    })
-    assert.ok(prepared)
-    await writeFile(path, 'snapshot')
-    assert.ok(await env.manager.finalize(prepared))
-
-    await writeFile(path, 'latest on disk')
-    assert.deepEqual(await env.manager.currentFilePreview(path), {
-      kind: 'text', content: 'latest on disk', size: 14,
-    })
-
-    const movedPath = join(env.project, 'moved.ts')
-    await rename(path, movedPath)
-    assert.deepEqual(await env.manager.currentFilePreview(path), { kind: 'missing' })
-    assert.equal(await env.manager.currentFilePreview(movedPath), null)
-    const unownedPath = join(env.external, 'not-owned.ts')
-    await writeFile(unownedPath, 'must stay private')
-    assert.equal(await env.manager.currentFilePreview(unownedPath), null)
-  })
-
-  it('当前文件读取沿用二进制与实际大小硬限制', async () => {
-    const env = await createEnvironment()
-    const path = join(env.project, 'bounded.dat')
-    await writeFile(path, 'before')
-    const prepared = await env.manager.prepare('tool-current-bounds', 'turn-1', {
-      kind: 'exact-files', paths: [path],
-    })
-    assert.ok(prepared)
-    await writeFile(path, 'snapshot')
-    assert.ok(await env.manager.finalize(prepared))
-
-    await writeFile(path, Buffer.from([1, 0, 2]))
-    assert.deepEqual(await env.manager.currentFilePreview(path), {
-      kind: 'unavailable', reason: 'binary', size: 3,
-    })
-
-    const size = CHECKPOINT_FILE_PREVIEW_MAX_BYTES + 1
-    await writeFile(path, Buffer.alloc(size, 97))
-    assert.deepEqual(await env.manager.currentFilePreview(path), {
-      kind: 'unavailable', reason: 'too-large', size,
-    })
-  })
-
   it('文件预览拒绝把二进制 blob 送入界面', async () => {
     const env = await createEnvironment()
     const path = join(env.project, 'binary.dat')

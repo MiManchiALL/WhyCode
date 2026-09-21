@@ -98,7 +98,6 @@ export {
   type CheckpointFilePreview,
   type CheckpointFilePreviewResult,
   type CheckpointFilePreviewState,
-  type CurrentFilePreviewResult,
 } from './checkpoints/types.ts'
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
 export {
@@ -472,4 +471,4 @@ export type {
   TaskPlanState,
 } from './tasks/types.ts'
 
-export type { TurnEditEffects } from './checkpoints/manager.ts'
+export { CheckpointManager, type TurnEditEffects } from './checkpoints/manager.ts'

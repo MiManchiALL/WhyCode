@@ -33,12 +33,6 @@ import {
   type TurnEditEffects,
   type RestoreCheckpointResult,
 } from '../checkpoints/manager.ts'
-import type {
-  CheckpointFileChangesResult,
-  CheckpointFileCurrentMatchResult,
-  CheckpointFilePreviewResult,
-  CurrentFilePreviewResult,
-} from '../checkpoints/types.ts'
 import {
   autoCompactThreshold,
   estimateContextTokens,
@@ -3354,66 +3348,6 @@ export class AgentSession {
       }
     }
     return this.checkpoints.checkRestore(toolUseId, scope)
-  }
-
-  async checkpointFileChanges(checkpointIds: readonly string[]): Promise<CheckpointFileChangesResult> {
-    if (!this.checkpoints) return { ok: false, error: '当前会话没有文件检查点' }
-    try {
-      return { ok: true, changes: await this.checkpoints.fileChanges(checkpointIds) }
-    } catch (error) {
-      return { ok: false, error: `文件改动读取失败：${error instanceof Error ? error.message : String(error)}` }
-    }
-  }
-
-  async checkpointFilePreview(
-    toolUseId: string,
-    path: string,
-  ): Promise<CheckpointFilePreviewResult> {
-    if (!this.checkpoints) return { ok: false, error: '该文件没有可用预览' }
-    try {
-      const preview = await this.checkpoints.filePreview(toolUseId, path)
-      return preview
-        ? { ok: true, preview }
-        : { ok: false, error: '该工具调用没有对应的文件快照' }
-    } catch (error) {
-      return {
-        ok: false,
-        error: `文件预览读取失败：${error instanceof Error ? error.message : String(error)}`,
-      }
-    }
-  }
-
-  async checkpointFileMatchesCurrent(
-    toolUseId: string,
-    path: string,
-  ): Promise<CheckpointFileCurrentMatchResult> {
-    if (!this.checkpoints) return { ok: false, error: '该文件没有可用快照' }
-    try {
-      const matches = await this.checkpoints.filePreviewMatchesCurrent(toolUseId, path)
-      return matches === null
-        ? { ok: false, error: '该工具调用没有对应的文件快照' }
-        : { ok: true, matches }
-    } catch (error) {
-      return {
-        ok: false,
-        error: `当前文件校验失败：${error instanceof Error ? error.message : String(error)}`,
-      }
-    }
-  }
-
-  async currentFilePreview(path: string): Promise<CurrentFilePreviewResult> {
-    if (!this.checkpoints) return { ok: false, error: '该文件没有可用预览' }
-    try {
-      const preview = await this.checkpoints.currentFilePreview(path)
-      return preview
-        ? { ok: true, state: preview }
-        : { ok: false, error: '当前会话没有对应的文件路径' }
-    } catch (error) {
-      return {
-        ok: false,
-        error: `当前文件读取失败：${error instanceof Error ? error.message : String(error)}`,
-      }
-    }
   }
 
   /** 回滚到某写操作执行前（仅空闲时）；files-and-chat = 整个 turn「从没发生过」 */

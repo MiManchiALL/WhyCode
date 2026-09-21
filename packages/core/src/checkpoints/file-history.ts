@@ -136,23 +136,6 @@ export async function readFileStatePreview(
   return readBoundedTextPreview(join(blobDir, state.blobHash))
 }
 
-/** 读取检查点已授权路径的当前状态；不跟踪移动后的文件身份。 */
-export async function readCurrentFilePreview(
-  path: string,
-): Promise<CheckpointFilePreviewState> {
-  const absolute = resolve(path)
-  const stats = await lstat(absolute).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return null
-    throw error
-  })
-  if (!stats) return { kind: 'missing' }
-  if (!stats.isFile()) throw new Error(`当前路径不是普通文件：${absolute}`)
-  return readBoundedTextPreview(absolute).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return { kind: 'missing' }
-    throw error
-  })
-}
-
 async function readBoundedTextPreview(path: string): Promise<CheckpointFilePreviewState> {
   const file = await open(path, 'r')
   try {

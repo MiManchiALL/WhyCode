@@ -67,6 +67,11 @@ import {
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { conversationHistoryWindow } from './conversation-history.ts'
+import {
+  checkCheckpointFileCurrentMatch,
+  readCheckpointFileChanges,
+  readCheckpointFilePreview,
+} from './checkpoint-history.ts'
 import { createConversationState } from '../shared/conversation-state.ts'
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { IPC } from '../shared/ipc.ts'
@@ -3020,9 +3025,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       || !request.checkpointIds.every(id => typeof id === 'string')) {
       return Promise.resolve({ ok: false, error: '文件改动请求无效' })
     }
-    const session = runtimeRegistry.get(request.runtimeId)?.session
-    return session ? session.checkpointFileChanges(request.checkpointIds)
-      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+    return readCheckpointFileChanges(runtimeRegistry.get(request.runtimeId), request.checkpointIds)
   })
   ipcMain.handle(IPC.checkpointFilePreview, (
     _e,
@@ -3034,10 +3037,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       || typeof request.toolUseId !== 'string'
       || typeof request.path !== 'string'
     ) return Promise.resolve({ ok: false, error: '文件预览请求无效' })
-    const session = runtimeRegistry.get(request.runtimeId)?.session
-    return session
-      ? session.checkpointFilePreview(request.toolUseId, request.path)
-      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+    return readCheckpointFilePreview(runtimeRegistry.get(request.runtimeId), request.toolUseId, request.path)
   })
   ipcMain.handle(IPC.checkpointFileCurrentMatch, (
     _e,
@@ -3049,10 +3049,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       || typeof request.toolUseId !== 'string'
       || typeof request.path !== 'string'
     ) return Promise.resolve({ ok: false, error: '文件快照校验请求无效' })
-    const session = runtimeRegistry.get(request.runtimeId)?.session
-    return session
-      ? session.checkpointFileMatchesCurrent(request.toolUseId, request.path)
-      : Promise.resolve({ ok: false, error: '当前会话尚未建立文件检查点' })
+    return checkCheckpointFileCurrentMatch(runtimeRegistry.get(request.runtimeId), request.toolUseId, request.path)
   })
   ipcMain.handle(IPC.consensusStatus, () => ({
     ready: checkConsensusReady() === null,

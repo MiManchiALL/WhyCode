@@ -43,10 +43,6 @@ export type CheckpointFileCurrentMatchResult =
   | { ok: true; matches: boolean }
   | { ok: false; error: string }
 
-export type CurrentFilePreviewResult =
-  | { ok: true; state: CheckpointFilePreviewState }
-  | { ok: false; error: string }
-
 export const checkpointResourceSchema = z.object({
   kind: z.literal('exact-file'),
   path: z.string().min(1),

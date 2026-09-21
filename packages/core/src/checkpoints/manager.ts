@@ -5,7 +5,6 @@ import { describeFileChange, type ToolFileChange } from '../tools/file-changes.t
 import {
   captureFileState,
   currentFileMatches,
-  readCurrentFilePreview,
   readFileStatePreview,
 } from './file-history.ts'
 import { CheckpointManifestStore } from './manifest-store.ts'
@@ -14,7 +13,6 @@ import {
   CHECKPOINT_MANIFEST_VERSION,
   type CheckpointManifest,
   type CheckpointFilePreview,
-  type CheckpointFilePreviewState,
   type CheckpointResource,
   type FileState,
   type PreparedCheckpoint,
@@ -394,21 +392,6 @@ export class CheckpointManager {
     const resource = await this.filePreviewResource(toolUseId, path)
     if (!resource?.after) return null
     return currentFileMatches(resource.after)
-  }
-
-  /** 只允许读取本会话精确检查点曾记录过的路径，不沿重命名追踪文件。 */
-  async currentFilePreview(path: string): Promise<CheckpointFilePreviewState | null> {
-    const manifests = await this.store.list()
-    const requestedPathKey = pathKey(path)
-    for (let index = manifests.length - 1; index >= 0; index--) {
-      const manifest = manifests[index]
-      if (!manifest) continue
-      if (manifest.status === 'pending' || manifest.coverage !== 'complete') continue
-      const resource = manifest.resources.find((item) => pathKey(item.path) === requestedPathKey)
-      if (!resource) continue
-      return readCurrentFilePreview(resource.path)
-    }
-    return null
   }
 
   private async filePreviewResource(
