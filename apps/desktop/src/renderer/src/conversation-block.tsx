@@ -140,10 +140,10 @@ export function BlockView({
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>
           <span className="shrink-0 font-medium">{call.name}</span>
           {summary.primary && (
-            <span className="min-w-0 truncate text-xs text-[var(--wc-faint)]">{summary.primary}</span>
+            <span className="wc-tool-card-description min-w-0 truncate text-[var(--wc-faint)]">{summary.primary}</span>
           )}
           {summary.trailing && (
-            <span className="shrink-0 text-xs text-[var(--wc-faint)]">· {summary.trailing}</span>
+            <span className="wc-tool-card-description shrink-0 text-[var(--wc-faint)]">· {summary.trailing}</span>
           )}
         </button>
         {showCheckpointRestore && call.status !== 'running' && (

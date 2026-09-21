@@ -172,11 +172,20 @@
   line-height: 22px;
 }
 
-.wc-tool-card,
 .wc-tool-batch-row,
 .wc-response-changes {
   font-size: 13px;
   line-height: 20px;
+}
+
+.wc-tool-card {
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.wc-tool-card-description {
+  font-size: 11px;
+  line-height: 18px;
 }
 
 .wc-conversation .wc-tool-details {
