@@ -167,6 +167,9 @@
 }
 
 .wc-conversation .wc-tool-details {
+  /* 密集工具内容保留原有 12/20 基准，只以正文四分之一的幅度随动。 */
+  --wc-content-secondary-font-size: calc(12px + var(--wc-content-font-delta) / 4);
+  --wc-content-secondary-line-height: calc(20px + var(--wc-content-font-delta) / 4);
   --wc-code-font-size: var(--wc-content-secondary-font-size);
   --wc-code-line-height: var(--wc-content-secondary-line-height);
   font-size: var(--wc-code-font-size);
