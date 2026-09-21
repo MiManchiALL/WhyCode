@@ -38,18 +38,24 @@ export function deliverEditedUserMessage(
 export async function startEditedUserMessage(
   runtime: DesktopSessionRuntime,
   reservation: UserMessageReservation,
-  turnId: string,
-  text: string,
-  deliver: (prepared: PreparedLatestTurnEdit) => Promise<unknown> | void,
-  onDeliveryError: (error: unknown) => void,
-  restoreFiles = false,
+  options: {
+    turnId: string
+    text: string
+    restoreFiles?: boolean
+    prepareSession: () => Promise<void>
+    deliver: (prepared: PreparedLatestTurnEdit) => Promise<unknown> | void
+    onDeliveryError: (error: unknown) => void
+  },
 ): Promise<EditedMessageStartResult> {
+  const { turnId, text, restoreFiles = false, prepareSession, deliver, onDeliveryError } = options
   let released = false
   try {
     await reservation.ready
     if (runtime.executionBusy) {
       return { ok: false, error: 'Agent 尚未空闲，不能编辑最新消息' }
     }
+    // 在改写历史前复用普通发送的连接准备，不能沿用已删除或已更换的凭据。
+    await prepareSession()
     const session = runtime.session
     if (!session) return { ok: false, error: '当前没有可编辑的会话' }
 

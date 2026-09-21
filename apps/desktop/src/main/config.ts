@@ -9,7 +9,7 @@ import type {
   TavilySearchDepth,
   WebSearchProviderId,
 } from '../shared/settings.ts'
-import { isCliProxyRoute } from './cli-proxy-models.ts'
+import { getCliProxyModelCompatibility, isCliProxyRoute } from './cli-proxy-models.ts'
 import type { McpOAuthSession } from './mcp-oauth-state.ts'
 
 const CLI_PROXY_MODEL_PREFIX = 'cliproxyapi:'
@@ -55,7 +55,7 @@ export interface AuxiliaryModelsConfig {
 
 export interface WhycodeConfig {
   providers: Partial<Record<BuiltInProviderId, ProviderConnectionConfig>>
-  /** 最近一次用户选择且当前仍可用的 Main 模型，作为新会话与重启后的首选项。 */
+  /** 最近一次用户选择的 Main 模型；代理目录暂缺不清除该偏好。 */
   defaultModel?: string
   /** 全部已加载、新建与恢复会话共享的权限档位；具体审批结果仍只在各会话内存中。 */
   permissionMode?: PermissionMode
@@ -79,15 +79,20 @@ export {
   type ConfigSecretCodec,
 } from './config-storage.ts'
 
-/** 配置指定的可用模型优先，否则按内置目录顺序回退。 */
-export function resolveDefaultModelId(config: WhycodeConfig | null): string | null {
-  if (config?.defaultModel && hasConfiguredKey(config, config.defaultModel)) {
-    return config.defaultModel
+/** 仅用于新会话：保留仍启用的选择，明确移除后才从当前候选初始化。 */
+export function resolveDefaultModelId(
+  config: WhycodeConfig | null,
+  preferredModelId?: string | null,
+): string | null {
+  for (const modelId of [preferredModelId, config?.defaultModel]) {
+    if (modelId && hasConfiguredModel(config, modelId)) return modelId
   }
-  const builtIn = MODEL_REGISTRY.find((model) => hasConfiguredKey(config, model.id))?.id
+  const builtIn = MODEL_REGISTRY.find((model) => hasConfiguredModel(config, model.id))?.id
   if (builtIn) return builtIn
-  const cliProxyBaseId = config?.cliProxyApi?.modelIds.find((modelId) =>
-    hasConfiguredKey(config, cliProxyModelId(modelId)))
+  const cliProxy = config?.cliProxyApi
+  const cliProxyBaseId = cliProxy?.modelIds.find((modelId) =>
+    hasConfiguredModel(config, cliProxyModelId(modelId))
+    && isCliProxyRoute(modelId, cliProxy.modelRoutes[modelId] ?? ''))
   return cliProxyBaseId ? cliProxyModelId(cliProxyBaseId) : null
 }
 
@@ -114,21 +119,16 @@ export function resolveWebSearchProvider(
   return webSearch?.activeProvider ?? 'perplexity'
 }
 
-function hasConfiguredKey(config: WhycodeConfig | null, modelId: string): boolean {
+function hasConfiguredModel(config: WhycodeConfig | null, modelId: string): boolean {
   if (!config) return false
   const cliProxyBaseId = parseCliProxyModelId(modelId)
-  if (cliProxyBaseId) {
-    return Boolean(
-      config.cliProxyApi?.apiKey
-      && config.cliProxyApi.modelIds.includes(cliProxyBaseId)
-      && isCliProxyRoute(
-        cliProxyBaseId,
-        config.cliProxyApi.modelRoutes[cliProxyBaseId] ?? '',
-      )
-    )
-  }
   try {
-    return Boolean(config.providers[getModelEntry(modelId).provider]?.apiKey)
+    const entry = getModelEntry(cliProxyBaseId ?? modelId)
+    return cliProxyBaseId
+      ? Boolean(config.cliProxyApi?.apiKey
+          && config.cliProxyApi.modelIds.includes(cliProxyBaseId)
+          && getCliProxyModelCompatibility(cliProxyBaseId))
+      : Boolean(config.providers[entry.provider]?.apiKey)
   } catch {
     return false
   }

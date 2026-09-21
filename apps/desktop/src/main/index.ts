@@ -67,6 +67,7 @@ import {
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { conversationHistoryWindow } from './conversation-history.ts'
+import { synchronizeRuntimeModelSelection } from './runtime-model-selection.ts'
 import {
   checkCheckpointFileCurrentMatch,
   readCheckpointFileChanges,
@@ -704,7 +705,7 @@ function createDraftRuntime(
   const runtime = new DesktopSessionRuntime({
     runtimeId,
     workspace,
-    modelId: preferredModelId ?? resolveDefaultModelId(loadAppConfig()),
+    modelId: resolveDefaultModelId(loadAppConfig(), preferredModelId),
     permissionMode: preferredPermissionMode,
     emit: broadcastRuntimeEvent,
   })
@@ -724,19 +725,9 @@ async function getNewSessionRuntime(): Promise<DesktopSessionRuntime> {
   return createDraftRuntime(workspace, runtimeId)
 }
 
-/** 校验模型可用（已注册 + 有 key），返回错误文案或 null */
-function validateModel(modelId: string): string | null {
-  const config = loadAppConfig()
-  if (!config) {
-    return '尚未配置模型，请打开“模型设置”填写 API key'
-  }
-  const resolution = resolveModelConnection(config, modelId)
-  return resolution.ok ? null : resolution.error
-}
-
 /** Main 持有模型选择事实；首次读取时按配置初始化，之后保留用户的会话内选择。 */
 function resolveCurrentModelId(runtime: DesktopSessionRuntime): string | null {
-  runtime.modelId ??= preferredModelId ?? resolveDefaultModelId(loadAppConfig())
+  runtime.modelId ??= resolveDefaultModelId(loadAppConfig(), preferredModelId)
   return runtime.modelId
 }
 
@@ -752,8 +743,6 @@ async function materializeWorkspace(runtime: DesktopSessionRuntime): Promise<Wor
 async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | null> {
   const modelId = resolveCurrentModelId(runtime)
   if (!modelId) return '没有任何已配置 key 的模型可用'
-  const err = validateModel(modelId)
-  if (err) return err
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) return resolved.error
   const { entry, providerConfig } = resolved.value
@@ -1119,6 +1108,11 @@ async function handleCommand(
         runtime.emit({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
         break
       }
+      const error = await ensureSession(runtime)
+      if (error) {
+        runtime.emit({ type: 'error', message: error, recoverable: true })
+        return { ok: false }
+      }
       await runtime.session.compactNow()
       break
     }
@@ -1133,11 +1127,6 @@ async function handleCommand(
           message: '附件消息准备中，请等待提交完成后再切换模型',
           recoverable: true,
         })
-        return { ok: false }
-      }
-      const err = validateModel(command.modelId)
-      if (err) {
-        runtime.emit({ type: 'error', message: err, recoverable: true })
         return { ok: false }
       }
       const resolved = resolveModelConnection(loadAppConfig(), command.modelId)
@@ -1248,25 +1237,18 @@ async function handleEditUserMessageCommand(
   if (!reservation) {
     return { ok: false }
   }
-  if (runtime.consensusEnabled && !runtime.coordinator) {
-    const error = buildCoordinator(runtime)
-    if (error) {
-      reservation.release()
-      runtime.emit({ type: 'error', message: error, recoverable: true })
-      return { ok: false }
-    }
-  }
-  synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
-  const result = await startEditedUserMessage(
-    runtime,
-    reservation,
-    command.target.turnId,
-    command.text,
-    (prepared) => deliverEditedUserMessage(runtime, prepared),
-    (error) => reportUserMessageDeliveryError(runtime, error),
-    command.target.restoreFiles === true,
-  )
-  return result
+  return startEditedUserMessage(runtime, reservation, {
+    turnId: command.target.turnId,
+    text: command.text,
+    restoreFiles: command.target.restoreFiles === true,
+    prepareSession: async () => {
+      const error = await ensureSession(runtime)
+      if (error) throw new Error(error)
+      synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
+    },
+    deliver: (prepared) => deliverEditedUserMessage(runtime, prepared),
+    onDeliveryError: (error) => reportUserMessageDeliveryError(runtime, error),
+  })
 }
 
 async function prepareUserMessage(
@@ -1824,35 +1806,10 @@ async function persistConnectionConfig(
       if (!consensusReady) runtime.consensusEnabled = false
     }
   }
-  preferredModelId = preferredModelId
-    && resolveModelConnection(config, preferredModelId).ok
-    ? preferredModelId
-    : resolveDefaultModelId(config)
+  preferredModelId = resolveDefaultModelId(config, preferredModelId)
   for (const runtime of runtimeRegistry.all()) {
-    const current = runtime.modelId
-      ? resolveModelConnection(config, runtime.modelId)
-      : null
-    // 退役/已删除连接的历史会话没有可构造的 Agent；保存设置不能替用户改写其模型事实。
-    if (runtime.journal && !runtime.session && current && !current.ok) continue
-    const targetModelId = current?.ok ? runtime.modelId : preferredModelId
-    if (!runtime.session || !targetModelId) {
-      runtime.modelId = targetModelId
-      continue
-    }
-    const resolved = resolveModelConnection(config, targetModelId)
-    if (!resolved.ok) continue
-    const targetReasoningEffort = normalizeReasoningEffortSelection(
-      resolved.value.entry.capabilities,
-      runtime.reasoningEffort,
-    )
-    await runtime.session.setModelSelection(
-      resolved.value.entry,
-      resolved.value.providerConfig,
-      targetReasoningEffort,
-    )
-    runtime.session.setAuxiliaryImageAnalyzer(configuredAuxiliaryImageAnalyzer(config))
-    runtime.modelId = targetModelId
-    runtime.reasoningEffort = targetReasoningEffort
+    await synchronizeRuntimeModelSelection(runtime, config, preferredModelId)
+    synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
   }
 }
 
@@ -2471,10 +2428,8 @@ async function resolveBackgroundTaskRuntime(
 
   const existing = runtimeRegistry.findBySessionId(sessionId)
   if (existing) {
-    if (!existing.session) {
-      const error = await ensureSession(existing)
-      if (error) return { kind: 'defer' }
-    }
+    const error = await ensureSession(existing)
+    if (error) return { kind: 'defer' }
     return existing.session
       ? { kind: 'ready', runtime: existing }
       : { kind: 'defer' }

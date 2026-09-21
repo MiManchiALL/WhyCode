@@ -41,7 +41,7 @@ describe('默认模型选择', () => {
     )
   })
 
-  it('默认模型不可用时回退到目录中第一个已有 key 的模型', () => {
+  it('默认连接已移除或型号已退役时，新会话选择其它已配置模型', () => {
     assert.equal(
       resolveDefaultModelId(config(
         { deepseek: { apiKey: 'deepseek-key' } },
@@ -70,7 +70,26 @@ describe('默认模型选择', () => {
     assert.equal(resolveDefaultModelId(value), modelId)
   })
 
-  it('只配置 CLIProxyAPI 时回退到首个已启用的等价型号', () => {
+  it('代理目录暂缺不改变显式偏好，明确停用或清除凭据后才重新选择', () => {
+    const modelId = cliProxyModelId('google:gemini-3.8-flash')
+    const value = config({ deepseek: { apiKey: 'key' } }, modelId)
+    value.cliProxyApi = {
+      apiKey: 'proxy-key', baseURL: 'http://localhost/v1',
+      modelIds: ['google:gemini-3.8-flash'], modelRoutes: {},
+    }
+    assert.equal(resolveDefaultModelId(value), modelId)
+    assert.equal(resolveDefaultModelId({ ...value, defaultModel: 'deepseek:deepseek-v4-flash' }, modelId), modelId)
+    for (const connection of [
+      undefined,
+      { ...value.cliProxyApi, apiKey: '' },
+      { ...value.cliProxyApi, modelIds: [] },
+    ]) {
+      assert.equal(resolveDefaultModelId({ ...value, cliProxyApi: connection }, modelId), 'deepseek:deepseek-v4-flash')
+    }
+    assert.equal(resolveDefaultModelId(value, 'test:removed-selection'), modelId)
+  })
+
+  it('没有已有选择且只配置 CLIProxyAPI 时，初始化为首个已启用且有等价路由的型号', () => {
     const value = config({})
     value.cliProxyApi = {
       apiKey: 'proxy-key',
