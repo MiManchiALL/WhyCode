@@ -4,9 +4,11 @@ import {
   MAX_SUBAGENT_PROMPT_PREVIEW_CHARS,
   SUBAGENT_SCHEMA_VERSION,
   createSubagentTools,
-  type AuxiliaryImageAnalyzer,
   type AgentSession,
   type CoreEvent,
+  type OfficeProcessor,
+  type PdfProcessor,
+  type ScreenshotCaptureHandler,
   type SessionJournal,
   type SkillCatalogService,
   type SubagentDefinitionCatalogService,
@@ -85,7 +87,9 @@ export interface SubagentServiceOptions {
   createWebPageTools: (journal: SessionJournal) => ToolDefinition[]
   selectModel: (parent: SubagentModelSnapshot) => SubagentModelSnapshot | null
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
-  auxiliaryImageAnalyzer: () => AuxiliaryImageAnalyzer | undefined
+  pdfProcessor: PdfProcessor
+  officeProcessor: OfficeProcessor
+  captureScreenshot: ScreenshotCaptureHandler
   hostOperations: HostOperationScheduler
   onState: (state: SubagentState) => void
   onEvent: (envelope: SubagentEventEnvelope) => void
@@ -113,7 +117,7 @@ export class SubagentService {
 
   constructor(options: SubagentServiceOptions) {
     this.options = options
-    this.storage = new SubagentStorage(options.sessionsRoot)
+    this.storage = new SubagentStorage(options.sessionsRoot, options.pdfProcessor)
     this.definitions = options.definitions
   }
 
@@ -170,6 +174,10 @@ export class SubagentService {
 
   async list(parentSessionId: string): Promise<SubagentListEntry[]> {
     return (await this.storage.listManifests(parentSessionId)).map(subagentListEntry)
+  }
+
+  async attachmentDirectory(parentSessionId: string, subagentId: string): Promise<string> {
+    return this.storage.attachmentDirectory(parentSessionId, subagentId)
   }
 
   /** 当前父 turn 的轻量事实投影；manifest 仍是唯一持久事实源。 */
@@ -521,7 +529,9 @@ export class SubagentService {
         webSearchTool: this.options.webSearchTool,
         createWebPageTools: this.options.createWebPageTools,
         resolveModel: this.options.resolveModel,
-        auxiliaryImageAnalyzer: this.options.auxiliaryImageAnalyzer,
+        pdfProcessor: this.options.pdfProcessor,
+        officeProcessor: this.options.officeProcessor,
+        captureScreenshot: this.options.captureScreenshot,
         hostOperations: this.options.hostOperations,
         emit: (event) => {
           if (event.type === 'error') errorMessage = event.message

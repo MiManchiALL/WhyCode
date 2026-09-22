@@ -286,7 +286,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 ### 3.7 PDF
 
-`ReadPdf {sourceType,sourceValue,startPage,pageCount}`：sourceType 为 attachment 或 path；视觉 Main 返回 100 DPI JPEG 页面图，默认/最多 20 页；非视觉 Main 返回文字，默认 5、最多 20 页且总计最多 60k 字符。结果始终含总页数、当前页段和下一页游标。
+`ReadPdf {sourceType,sourceValue,startPage,pageCount}`：sourceType 为 attachment 或 path；视觉模型返回 100 DPI JPEG 页面图，默认/最多 20 页；非视觉模型返回文字，默认 5、最多 20 页且总计最多 60k 字符。结果始终含总页数、当前页段和下一页游标。
 
 小 PDF 自动展开只适用于视觉 Main、用户上传的最近权威引用，单份和单请求均最多 10 页、总图 16 MB。Web 导入、大文件或超预算文件必须显式 `ReadPdf`。PDF 与页面缓存以附件摘要和事务校验；损坏、加密、空或越界输入明确失败。
 
@@ -294,7 +294,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 - `BuildOfficeArtifact {format,mode,scriptPath,outputPath,assets[],templateAssetKey?,pptxTemplateRequirements?}`：format 为 docx/pptx/xlsx，mode 为 create/template；模板模式必须精确引用模板 asset。脚本在无 Node 权限的 SES 中执行，最终原子发布。
 - `InspectOffice {path,startUnit=1,unitCount=20,view="content",sheetName?,range?,slideNumber?}`：view 为 content/objects/styles/relationships/validation/template/formula-trace；分页只能使用返回的 nextUnit，单次最多 50 单元、60k 文字。
-- `RenderOffice {path,view="pages",startPage=1,pageCount=4}`：只给视觉 Main且独占步骤；pages 最多 4 页，overview 最多 50 页合成一图。
+- `RenderOffice {path,view="pages",startPage=1,pageCount=4}`：只给具备视觉能力的 Main 或获准使用该工具的子代理，且独占步骤；pages 最多 4 页，overview 最多 50 页合成一图。
 
 创建/修改前必须读取当前 Office Skill 的 builder API；模板 PPTX 还需读取 template-following 规则。接口失败应修正同一 builder，不切换到命令绕过构建边界。PPTX 优先复制源页并修改现有对象；源页复制接口无法表达的局部编辑可在同一 builder 中使用 JSZip 与 fastXml 操作已检查的 OOXML 目标。
 
@@ -422,6 +422,10 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 父 Main 请求中提供稳定 `<available_subagents>`，当前画像为 explore/reviewer/general。`Subagent` 以 `description` 保存本次任务的 3～5 词语义名称并立即返回 subagent ID；`ListSubagents` 可在不暴露完整 prompt、结果或 transcript 的前提下重新发现当前会话的既有子代理。终态由运行时以 settlement 通知父会话，不依赖子模型主动调用汇报工具。settlement 的 outcome 为 `completed | error | aborted | limit | refusal`，结果最多保留 Unicode 安全的 48,000 字符。
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
+
+三类子代理的默认工具包含 `InspectOffice`、`ReadPdf`、`RenderOffice` 和 `CaptureScreenshot`，实际暴露范围由冻结定义与子代理自身模型能力共同决定。非视觉子代理保留 Office 结构检查及 PDF 文字读取，移除 `ViewImage`、`RenderOffice` 和 `CaptureScreenshot`，不借用 Main 的辅助视觉模型。Explore 仍无命令或文件写入工具；Reviewer 可运行验证命令，但无专用文件写入或 Office 构建工具。越界访问和截图沿用父会话审批链，不能因工具只读而跳过授权。
+
+文档委派提供可访问的文件路径；父会话的 PDF 附件 ID 不能直接作为子代理附件使用。子代理自己通过 WebFetch 导入的 PDF 属于其独立会话，可经 `ReadPdf` 读取并在后续激活中继续使用。无法查看页面图时，只报告文字或结构证据，视觉核验交给具备相应能力的代理。
 
 新建子代理的模型在宿主创建边界冻结：未固定时继承父会话当前模型，固定时只能引用当前已配置连接；推理档位收敛到目标模型能力闭集。后续 continuation 使用 manifest 中的原模型快照，不重新继承父模型或读取新的全局选择。
 

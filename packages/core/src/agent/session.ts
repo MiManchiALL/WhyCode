@@ -2951,7 +2951,11 @@ export class AgentSession {
       ...officeVisualTools,
       ...controlTools,
     ]
-    return this.wrapToolDefinitions(defs, abortSignal, context)
+    const subagentTools = this.options.promptContext.subagent?.toolNames
+    const availableDefs = subagentTools
+      ? defs.filter((def) => subagentTools.includes(def.name) || taskTools.includes(def))
+      : defs
+    return this.wrapToolDefinitions(availableDefs, abortSignal, context)
   }
 
   private wrapToolDefinitions(

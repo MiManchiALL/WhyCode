@@ -12,8 +12,10 @@ import {
 import { join, resolve } from 'node:path'
 import {
   SessionStore,
+  getSessionPaths,
   subagentManifestSchema,
   validateSessionId,
+  type PdfProcessor,
   type SessionCreateInput,
   type SessionJournal,
   type SubagentManifest,
@@ -24,9 +26,11 @@ const MANIFEST_FILE = 'subagent.json'
 /** 子代理 transcript 与 manifest 的单一磁盘入口；目录严格嵌套在父会话之下。 */
 export class SubagentStorage {
   private readonly sessionsRoot: string
+  private readonly pdfProcessor: PdfProcessor | undefined
 
-  constructor(sessionsRoot: string) {
+  constructor(sessionsRoot: string, pdfProcessor?: PdfProcessor) {
     this.sessionsRoot = resolve(sessionsRoot)
+    this.pdfProcessor = pdfProcessor
   }
 
   async create(
@@ -39,6 +43,11 @@ export class SubagentStorage {
 
   async open(parentSessionId: string, subagentId: string): Promise<SessionJournal> {
     return this.sessionStore(parentSessionId).open(subagentId)
+  }
+
+  async attachmentDirectory(parentSessionId: string, subagentId: string): Promise<string> {
+    await this.readManifest(parentSessionId, subagentId)
+    return getSessionPaths(this.subagentsDirectory(parentSessionId), subagentId).attachments
   }
 
   async remove(parentSessionId: string, subagentId: string): Promise<void> {
@@ -113,7 +122,9 @@ export class SubagentStorage {
   }
 
   private sessionStore(parentSessionId: string): SessionStore {
-    return new SessionStore(this.subagentsDirectory(parentSessionId))
+    return new SessionStore(this.subagentsDirectory(parentSessionId), {
+      pdfProcessor: this.pdfProcessor,
+    })
   }
 
   private subagentsDirectory(parentSessionId: string): string {

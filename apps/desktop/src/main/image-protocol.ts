@@ -1,7 +1,7 @@
 import { protocol } from 'electron'
 import { PREVIEW_SCHEME } from '../shared/workspace-files.ts'
 import { SITE_ICON_SCHEME } from '../shared/site-icon.ts'
-import { readStoredImage, type SessionJournal } from '@whycode/core'
+import { readStoredImage } from '@whycode/core'
 
 const ATTACHMENT_SCHEME = 'whycode-attachment'
 
@@ -19,9 +19,9 @@ export function registerFileSchemes(): void {
   }])
 }
 
-/** 只向 Renderer 暴露仍有运行时的会话附件，不提供任意本地文件读取。 */
+/** 只暴露宿主确认归属的会话附件目录，不提供任意本地文件读取。 */
 export function registerAttachmentProtocol(
-  journalForSession: (sessionId: string) => SessionJournal | null,
+  directoryForSession: (sessionId: string) => Promise<string | null>,
 ): void {
   protocol.handle(ATTACHMENT_SCHEME, async (request) => {
     if (request.method !== 'GET') return new Response(null, { status: 405 })
@@ -29,11 +29,11 @@ export function registerAttachmentProtocol(
       const url = new URL(request.url)
       const sessionId = url.hostname
       const storageName = decodeURIComponent(url.pathname.slice(1))
-      const journal = journalForSession(sessionId)
-      if (!journal || storageName.includes('/')) {
+      const directory = await directoryForSession(sessionId)
+      if (!directory || storageName.includes('/')) {
         return new Response(null, { status: 404 })
       }
-      const stored = await readStoredImage(journal.attachmentDirectory, storageName)
+      const stored = await readStoredImage(directory, storageName)
       return new Response(Uint8Array.from(stored.bytes), {
         status: 200,
         headers: {

@@ -1,10 +1,12 @@
 import {
   AgentSession,
-  BUILTIN_TOOLS,
-  type AuxiliaryImageAnalyzer,
+  createInspectOfficeTool,
   type CoreEvent,
   type ModelEntry,
+  type OfficeProcessor,
+  type PdfProcessor,
   type ProviderConfig,
+  type ScreenshotCaptureHandler,
   type SessionJournal,
   type SkillCatalogService,
   type SubagentManifest,
@@ -29,7 +31,9 @@ interface SubagentSessionFactoryOptions {
   webSearchTool: ToolDefinition
   createWebPageTools: (journal: SessionJournal) => ToolDefinition[]
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
-  auxiliaryImageAnalyzer: () => AuxiliaryImageAnalyzer | undefined
+  pdfProcessor: PdfProcessor
+  officeProcessor: OfficeProcessor
+  captureScreenshot: ScreenshotCaptureHandler
   hostOperations: HostOperationScheduler
   emit: (event: CoreEvent) => void
 }
@@ -46,13 +50,10 @@ export async function createSubagentAgentSession(
   )
   const parentPermission = options.parentRuntime.session?.permissionSnapshot
   if (!parentPermission) throw new Error('父会话权限上下文已释放')
-  const allowedTools = new Set(options.manifest.definition.toolNames)
-  const baseTools = (BUILTIN_TOOLS as readonly ToolDefinition[])
-    .filter((tool) => allowedTools.has(tool.name))
   const mainTools = [
-    ...(allowedTools.has(options.webSearchTool.name) ? [options.webSearchTool] : []),
-    ...options.createWebPageTools(options.journal)
-      .filter((tool) => allowedTools.has(tool.name)),
+    options.webSearchTool,
+    ...options.createWebPageTools(options.journal),
+    createInspectOfficeTool(options.officeProcessor),
   ]
   return new AgentSession({
     model: resolved.entry,
@@ -73,13 +74,12 @@ export async function createSubagentAgentSession(
         toolNames: [...options.manifest.definition.toolNames],
       },
     },
-    baseTools,
     mainTools,
     skillCatalog: options.skills,
     sessionRecorder: options.journal,
-    auxiliaryImageAnalyzer: allowedTools.has('ViewImage')
-      ? options.auxiliaryImageAnalyzer()
-      : undefined,
+    pdfProcessor: options.pdfProcessor,
+    officeProcessor: options.officeProcessor,
+    captureScreenshot: options.captureScreenshot,
     initialPermission: {
       mode: options.parentRuntime.permissionMode,
       additionalDirs: [...new Set([

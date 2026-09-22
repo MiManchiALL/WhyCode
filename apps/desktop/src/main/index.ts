@@ -552,6 +552,8 @@ const pdfProcessor = new ElectronPdfProcessor()
 const officeProcessor = new ElectronOfficeProcessor(pdfProcessor)
 const officeArtifactRunner = new ElectronOfficeArtifactRunner()
 const hostOperations = new HostOperationScheduler()
+const captureSessionScreenshot: typeof captureDesktopScreenshot = (request, abortSignal) =>
+  hostOperations.runScreenshot(abortSignal, () => captureDesktopScreenshot(request, abortSignal))
 const terminals = new TerminalSessions()
 
 /** 会话创建前用户已选的权限档位（创建时应用） */
@@ -886,11 +888,7 @@ async function createMainAgentSession(
         webSearchTool,
         ...createSessionWebPageTools(recorder),
       ],
-      captureScreenshot: (request, abortSignal) =>
-        hostOperations.runScreenshot(
-          abortSignal,
-          () => captureDesktopScreenshot(request, abortSignal),
-        ),
+      captureScreenshot: captureSessionScreenshot,
       pdfProcessor,
       officeProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
@@ -2822,8 +2820,17 @@ if (primaryInstance) void app.whenReady().then(async () => {
   runtimeRegistry.select(initialRuntime)
   await syncRetiredModelLabels()
     .catch((error) => console.warn('历史模型显示名同步失败：', error))
-  registerAttachmentProtocol((sessionId) =>
-    runtimeRegistry.findBySessionId(sessionId)?.journal ?? null)
+  registerAttachmentProtocol(async (sessionId) => {
+    const journal = runtimeRegistry.findBySessionId(sessionId)?.journal
+    if (journal) return journal.attachmentDirectory
+    for (const runtime of runtimeRegistry.all()) {
+      if (!runtime.journal) continue
+      const directory = await subagents.attachmentDirectory(runtime.journal.sessionId, sessionId)
+        .catch(() => null)
+      if (directory) return directory
+    }
+    return null
+  })
   protocol.handle(SITE_ICON_SCHEME, createSiteIconHandler({
     fetchImpl: createElectronWebPageFetch(options => net.request(options)),
     resolveHost: createElectronWebHostResolver((hostname, options) => net.resolveHost(hostname, options)),
@@ -2848,7 +2855,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
       const resolved = resolveModelConnection(loadAppConfig(), modelId)
       return resolved.ok ? resolved.value : null
     },
-    auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer,
+    pdfProcessor,
+    officeProcessor,
+    captureScreenshot: captureSessionScreenshot,
     hostOperations,
     onState: broadcastSubagents,
     onEvent: broadcastSubagentEvent,
