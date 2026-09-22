@@ -78,8 +78,10 @@ export type Block =
       id: string
       forkTurnId: string | null
       durationMs: number
-      outcome: 'completed' | 'stopped'
+      outcome: 'completed' | 'stopped' | 'error'
+      error?: string
     }
+  | { kind: 'model-request-retry'; id: string; retry: number; maxRetries: number; message: string }
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
@@ -288,6 +290,11 @@ function applyStableCoreEvent(
       return appendThinking(state, event.text)
     case 'thinking-end':
       return endThinking(state, event.durationMs)
+    case 'model-request-retry':
+      return appendBlock(state, {
+        kind: 'model-request-retry', id: nextBlockId(state),
+        retry: event.retry, maxRetries: event.maxRetries, message: event.message,
+      })
     case 'work-finished': {
       const completedState = completeTerminalResponse(state, event.outcome, timestamp)
       const durationId = nextBlockId(state)
@@ -297,6 +304,7 @@ function applyStableCoreEvent(
         forkTurnId: event.forkTurnId,
         durationMs: event.durationMs,
         outcome: event.outcome,
+        ...(event.error ? { error: event.error } : {}),
       })
       // 只有已提交的最终正文才能收起处理过程；工具等待、错误和停止都保持展开。
       // 用户已在最终正文阶段手动展开时，既有 expanded 身份会原样保留。

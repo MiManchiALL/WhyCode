@@ -116,6 +116,16 @@ export function BlockView({
       </div>
     )
   }
+  if (block.kind === 'model-request-retry') {
+    return (
+      <div className="wc-type-caption mb-3 flex items-start gap-2 px-1 text-[var(--wc-muted)]" role="status">
+        <RotateCcw size={14} className="mt-0.5 shrink-0" />
+        <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+          模型请求重试 {block.retry}/{block.maxRetries} · {block.message}
+        </span>
+      </div>
+    )
+  }
 
   const { call } = block
   const icon = call.status === 'running'

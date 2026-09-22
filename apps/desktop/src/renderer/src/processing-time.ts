@@ -17,9 +17,10 @@ export function formatTotalProcessingTime(durationMs: number): string {
 
 export function formatFinishedWorkTime(
   durationMs: number,
-  outcome: 'completed' | 'stopped',
+  outcome: 'completed' | 'stopped' | 'error',
 ): string {
   const duration = formatDuration(durationMs)
+  if (outcome === 'error') return `处理失败 · ${duration}`
   return outcome === 'stopped' ? `你在 ${duration} 后停止了` : `已处理 ${duration}`
 }
 

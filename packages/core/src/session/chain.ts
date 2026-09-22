@@ -580,7 +580,8 @@ function collectViewEvents(entries: SessionEntry[]): {
         event: {
           type: 'work-finished',
           durationMs: entry.durationMs,
-          outcome: entry.outcome === 'completed' ? 'completed' : 'stopped',
+          outcome: entry.outcome,
+          ...(entry.error ? { error: entry.error } : {}),
           forkTurnId: null,
           btw: {
             conversationId: entry.conversationId,

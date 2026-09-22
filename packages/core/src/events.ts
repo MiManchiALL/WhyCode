@@ -151,6 +151,8 @@ export type AgentStatus =
 /** core → 宿主 的事件流 */
 export type CoreEvent =
   | { type: 'turn-start'; turnId: string }
+  /** 当前模型请求的有限重试；只进入可见时间线，不进入模型消息。 */
+  | { type: 'model-request-retry'; retry: number; maxRetries: number; delayMs: number; message: string }
   /** 当前根 turn 的文件净变化；仅为运行态投影，不进入模型历史或 ViewTimeline。 */
   | { type: 'turn-file-changes'; changes: ToolFileChange[] }
   /** 当前 step 的模型消息已提交到稳定会话记录；宿主可据此提交对应可见事件。 */
@@ -200,7 +202,8 @@ export type CoreEvent =
   | {
       type: 'work-finished'
       durationMs: number
-      outcome: 'completed' | 'stopped'
+      outcome: 'completed' | 'stopped' | 'error'
+      error?: string
       /** 整段工作最后一个完整结束的模型回复；null 表示没有可 Fork 边界。 */
       forkTurnId: string | null
       /** 侧对话终点的权威续接投影；普通 Main 工作不携带。 */

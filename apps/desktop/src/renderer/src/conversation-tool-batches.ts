@@ -78,7 +78,7 @@ export function presentToolBatches(
   }
 
   for (const block of blocks) {
-    if (block.kind === 'user' || block.kind === 'text' || block.kind === 'work-duration') {
+    if (block.kind === 'user' || block.kind === 'text' || block.kind === 'work-duration' || block.kind === 'model-request-retry') {
       flush(true)
       presented.push({ kind: 'block', id: block.id, block })
       continue

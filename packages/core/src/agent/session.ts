@@ -101,11 +101,7 @@ import type { OfficeProcessor } from '../office/types.ts'
 import { createRenderOfficeTool } from '../tools/render-office/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
-import {
-  MODEL_INACTIVITY_ABORT_REASON,
-  MODEL_INACTIVITY_TIMEOUT_MS,
-  ModelInactivityWatchdog,
-} from './model-inactivity-watchdog.ts'
+import { emptyModelResponse, readModelStream, withModelRequestRetry } from '../providers/model-request.ts'
 import {
   createTaskPlanTools,
   type TaskPlanEngagementAction,
@@ -331,16 +327,6 @@ interface StepResult {
   taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
   awaitingTaskPlanContinuation: boolean
-}
-
-class UndeliverableModelResponseError extends Error {
-  override readonly name = 'UndeliverableModelResponseError'
-  readonly finishReason: string | null
-
-  constructor(finishReason: string | null) {
-    super('模型没有返回可交付答复')
-    this.finishReason = finishReason
-  }
 }
 
 /**
@@ -798,49 +784,34 @@ export class AgentSession {
     const requestMessages = [...baseMessages, ...sideMessages, ...createBtwUserMessages(context)]
     const toolSteps: BtwToolStep[] = []
     const loopHealth = new LoopHealthMonitor()
-    let lastUndeliverable: UndeliverableModelResponseError | null = null
-    let attempt = 0
-    while (attempt < 2) {
+    while (true) {
       try {
-        const result = await this.runBtwModelAttempt(
-          system,
-          await this.messagesForCurrentModel(requestMessages, turnAbortSignal),
-          emit, turnAbortSignal, loopHealth,
+        const result = await this.runModelStep(turnAbortSignal, emit, async (stepAbort) =>
+          this.runBtwModelAttempt(
+            system,
+            await this.messagesForCurrentModel(requestMessages, stepAbort.signal),
+            emit, stepAbort, loopHealth,
+          ),
         )
         if (result.toolStep) {
           toolSteps.push(result.toolStep)
           requestMessages.push(...result.toolStep.messages)
           emit({ type: 'step-committed' })
-          attempt = 0
           const pauseReason = loopHealth.consumePauseReason()
           if (pauseReason) throw new Error(pauseReason)
           continue
         }
         return { ...result, ...(toolSteps.length ? { toolSteps } : {}) }
       } catch (error) {
-        if (!(error instanceof UndeliverableModelResponseError) || turnAbortSignal.aborted) {
-          emit({ type: 'step-discarded' })
-          return {
-            outcome: turnAbortSignal.aborted ? 'stopped' : 'error',
-            assistantText: '', reasoningText: '', reasoningDurationMs: 0, durationMs: 0,
-            ...(toolSteps.length ? { toolSteps } : {}),
-            ...(turnAbortSignal.aborted
-              ? { interruptionReason: 'user-cancel' as const }
-              : { error: error instanceof Error ? error.message : String(error) }),
-          }
+        return {
+          outcome: turnAbortSignal.aborted ? 'stopped' : 'error',
+          assistantText: '', reasoningText: '', reasoningDurationMs: 0, durationMs: 0,
+          ...(toolSteps.length ? { toolSteps } : {}),
+          ...(turnAbortSignal.aborted
+            ? { interruptionReason: 'user-cancel' as const }
+            : { error: error instanceof Error ? error.message : String(error) }),
         }
-        attempt++
-        lastUndeliverable = error
-        emit({ type: 'step-discarded' })
       }
-    }
-    const reason = lastUndeliverable?.finishReason
-      ? `（finish reason: ${lastUndeliverable.finishReason}）`
-      : ''
-    return {
-      outcome: 'error', assistantText: '', reasoningText: '', reasoningDurationMs: 0, durationMs: 0,
-      ...(toolSteps.length ? { toolSteps } : {}),
-      error: `模型连续两次没有返回可交付答复${reason}，请重试或切换模型。`,
     }
   }
 
@@ -848,17 +819,10 @@ export class AgentSession {
     system: string,
     messages: ModelMessage[],
     emit: (event: CoreEvent) => void,
-    turnAbortSignal: AbortSignal,
+    stepAbort: AbortController,
     loopHealth: LoopHealthMonitor,
   ): Promise<BtwTurnResult & { toolStep?: BtwToolStep }> {
     const startedAt = Date.now()
-    const stepAbort = new AbortController()
-    const onTurnAbort = () => stepAbort.abort('user-cancel')
-    turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
-    if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
-    this.currentStepAbort = stepAbort
-    const inactivityWatchdog = new ModelInactivityWatchdog(stepAbort)
-    inactivityWatchdog.start()
     let reasoningText = ''
     let reasoningStartedAt: number | null = null
     let reasoningDurationMs = 0
@@ -886,6 +850,9 @@ export class AgentSession {
         mcpStep?.toolDefinitions() ?? [],
       )
       const stream = streamText({
+        maxRetries: 0,
+        // readModelStream 统一报告错误，避免 SDK 默认日志重复输出请求内容。
+        onError: () => {},
         model: this.createLanguageModel(),
         system,
         messages,
@@ -898,8 +865,7 @@ export class AgentSession {
         emittedText += text
         emit({ type: 'text-delta', text })
       })
-      for await (const part of stream.fullStream) {
-        inactivityWatchdog.noteStreamActivity()
+      for await (const part of readModelStream(stream.fullStream)) {
         if (part.type === 'reasoning-delta') {
           if (reasoningStartedAt === null) {
             reasoningStartedAt = Date.now()
@@ -920,8 +886,6 @@ export class AgentSession {
           hadToolCalls = true
         } else if (part.type === 'finish') {
           finishReason = part.finishReason
-        } else if (part.type === 'error') {
-          throw part.error instanceof Error ? part.error : new Error(String(part.error))
         }
       }
       textGate.finish()
@@ -937,7 +901,7 @@ export class AgentSession {
       )
       const sanitized = sanitizeAssistantControlOutput(normalized)
       if (sanitized.rejected || (!hadToolCalls && !hasDeliverableModelText(sanitized.messages))) {
-        throw new UndeliverableModelResponseError(finishReason)
+        throw emptyModelResponse(finishReason)
       }
       const assistantText = sanitized.messages.map(modelMessageText).join('\n').trim()
       const stepMessages = [...sanitized.messages]
@@ -951,7 +915,6 @@ export class AgentSession {
           recordStart: async () => {},
           recordResult: async (message) => { appendOrderedMessages(stepMessages, [message]) },
         })
-        inactivityWatchdog.stop()
         await toolExecution.run(tools)
         if (stepAbort.signal.aborted) throw new Error('BTW 已中止')
       }
@@ -982,14 +945,6 @@ export class AgentSession {
         durationMs: Math.max(0, Date.now() - startedAt),
       }
     } catch (error) {
-      if (
-        stepAbort.signal.aborted
-        && stepAbort.signal.reason === MODEL_INACTIVITY_ABORT_REASON
-      ) {
-        throw new Error(
-          `模型连续 ${Math.round(MODEL_INACTIVITY_TIMEOUT_MS / 1000)} 秒没有返回数据，请重试或切换模型。`,
-        )
-      }
       if (stepAbort.signal.aborted) {
         if (emittedText) emit({ type: 'step-output-retained' })
         emit({ type: 'step-discarded' })
@@ -1002,13 +957,11 @@ export class AgentSession {
           interruptionReason: 'user-cancel',
         }
       }
+      emit({ type: 'step-discarded' })
       throw error
     } finally {
       mcpStep?.discard()
       if (!attachmentsCommitted) await stepAttachments.discardUncommitted()
-      inactivityWatchdog.stop()
-      turnAbortSignal.removeEventListener('abort', onTurnAbort)
-      if (this.currentStepAbort === stepAbort) this.currentStepAbort = null
     }
   }
 
@@ -2173,6 +2126,7 @@ export class AgentSession {
         this.compactApplicationContext(),
         (messages) => this.messagesForCurrentModel(messages, signal, false),
         this.requestProviderOptions(),
+        (retry) => emit({ type: 'model-request-retry', ...retry }),
       )
       if (result.summaryText || microcompacted) {
         this.messages = carryMcpToolState(this.messages, result.messages)
@@ -2262,6 +2216,7 @@ export class AgentSession {
         this.compactApplicationContext(planExecutionEngaged, turnId),
         (messages) => this.messagesForCurrentModel(messages, abortSignal, false),
         this.requestProviderOptions(),
+        (retry) => this.options.emit({ type: 'model-request-retry', ...retry }),
       )
       if (!result.summaryText) {
         this.recordAutoCompactFailure()
@@ -2496,36 +2451,57 @@ export class AgentSession {
     preserveTaskPlanOnFinalText: boolean,
     subagentTurnState: SubagentTurnState | null,
   ): Promise<StepResult> {
-    const attempt = () => this.runOneStepAttempt(
-      usage,
-      turnAbortSignal,
-      planExecutionEngaged,
-      consumeInterruptionBoundary,
-      currentTime,
-      preserveTaskPlanOnFinalText,
-      subagentTurnState,
-    )
     try {
-      return await attempt()
-    } catch (error) {
-      if (!(error instanceof UndeliverableModelResponseError)) throw error
-    }
-    await this.refreshProjectInstructions()
-    try {
-      return await attempt()
-    } catch (error) {
-      if (!(error instanceof UndeliverableModelResponseError)) throw error
-      const reason = error.finishReason ? `（finish reason: ${error.finishReason}）` : ''
-      throw new Error(
-        `模型连续两次没有返回可交付答复${reason}，当前未提交步骤已安全丢弃；请重试或切换模型。`,
+      return await this.runModelStep(turnAbortSignal, this.options.emit, (stepAbort) =>
+        this.runOneStepAttempt(
+          usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
+          currentTime, preserveTaskPlanOnFinalText, subagentTurnState,
+        ),
       )
+    } catch (error) {
+      if (error !== 'interrupt') throw error
+      return {
+        committed: false,
+        hadToolCalls: false,
+        hadOnlyTaskProgressUpdates: false,
+        toolEndReason: null,
+        taskPlanChanged: false,
+        taskPlanEngagement: null,
+        interruptionBoundaryConsumed: false,
+        awaitingTaskPlanContinuation: false,
+      }
+    }
+  }
+
+  /** 停止与立即插话覆盖同一步的请求、退避等待和工具执行；请求超时不取消此边界。 */
+  private async runModelStep<T>(
+    turnSignal: AbortSignal,
+    emit: (event: CoreEvent) => void,
+    attempt: (abort: AbortController) => Promise<T>,
+  ): Promise<T> {
+    const stepAbort = new AbortController()
+    const onTurnAbort = () => stepAbort.abort('user-cancel')
+    turnSignal.addEventListener('abort', onTurnAbort, { once: true })
+    if (turnSignal.aborted) onTurnAbort()
+    this.currentStepAbort = stepAbort
+    try {
+      return await withModelRequestRetry(
+        () => attempt(stepAbort), stepAbort.signal,
+        (retry) => emit({ type: 'model-request-retry', ...retry }),
+      )
+    } catch (error) {
+      if (stepAbort.signal.aborted) throw stepAbort.signal.reason
+      throw error
+    } finally {
+      turnSignal.removeEventListener('abort', onTurnAbort)
+      if (this.currentStepAbort === stepAbort) this.currentStepAbort = null
     }
   }
 
   /** 单次模型调用 + 步内工具执行；控制面工具可在成功后终止 turn。 */
   private async runOneStepAttempt(
     usage: UsageInfo,
-    turnAbortSignal: AbortSignal,
+    stepAbort: AbortController,
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
     currentTime: Date | null,
@@ -2536,14 +2512,6 @@ export class AgentSession {
       throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
     }
     const { emit } = this.options
-    // 步骤级中止器：turn 取消（user-cancel）与 urgent 插话（interrupt）都作用在这里
-    const stepAbort = new AbortController()
-    const inactivityWatchdog = new ModelInactivityWatchdog(stepAbort)
-    this.currentStepAbort = stepAbort
-    const onTurnAbort = () => stepAbort.abort('user-cancel')
-    turnAbortSignal.addEventListener('abort', onTurnAbort, { once: true })
-    if (turnAbortSignal.aborted) stepAbort.abort('user-cancel')
-    inactivityWatchdog.start()
 
     const stepControl: {
       toolEndReason: StepResult['toolEndReason']
@@ -2624,6 +2592,8 @@ export class AgentSession {
           + estimateMessagesTokens(requestMessages)
       this.emitContextUsage(requestMessages, requestUsedTokens)
       const result = streamText({
+        maxRetries: 0,
+        onError: () => {},
         model: this.createLanguageModel(),
         system: requestSystemPrompt,
         messages: requestMessages,
@@ -2642,8 +2612,7 @@ export class AgentSession {
         if (!this.protocolRound) emit({ type: 'text-delta', text })
       })
 
-      for await (const part of result.fullStream) {
-        inactivityWatchdog.noteStreamActivity()
+      for await (const part of readModelStream(result.fullStream)) {
         switch (part.type) {
           case 'reasoning-delta': {
             if (thinkingStartedAt === null) {
@@ -2678,8 +2647,6 @@ export class AgentSession {
             stepTotalTokens =
               (part.totalUsage.inputTokens ?? 0) + (part.totalUsage.outputTokens ?? 0)
             break
-          case 'error':
-            throw part.error instanceof Error ? part.error : new Error(String(part.error))
           default:
             break
         }
@@ -2704,7 +2671,7 @@ export class AgentSession {
         !hadToolCalls
         && (sanitizedResponse.rejected || !hasDeliverableModelText(canonicalResponseMessages))
       ) {
-        throw new UndeliverableModelResponseError(finishReason)
+        throw emptyModelResponse(finishReason)
       }
       if (hadToolCalls) {
         const head = dehydrateImageMessages([
@@ -2744,7 +2711,6 @@ export class AgentSession {
             durableTaskState = taskState
           },
         })
-        inactivityWatchdog.stop()
         await toolExecution.run(requestTools)
         if (stepAbort.signal.aborted) stepControl.toolEndReason = null
       }
@@ -2869,32 +2835,7 @@ export class AgentSession {
         emit({ type: 'step-output-retained' })
       }
       emit({ type: toolExecution ? 'step-committed' : 'step-discarded' })
-      if (
-        stepAbort.signal.aborted
-        && stepAbort.signal.reason === MODEL_INACTIVITY_ABORT_REASON
-      ) {
-        throw new Error(
-          `模型连续 ${Math.round(MODEL_INACTIVITY_TIMEOUT_MS / 1000)} 秒没有返回数据，当前未提交步骤已安全丢弃；请重试或切换模型。`,
-        )
-      }
-      // 立即插话只丢弃尚未执行的模型流；工具事实保存后再交给循环注入新消息。
-      if (stepAbort.signal.aborted && stepAbort.signal.reason === 'interrupt') {
-        return {
-          committed: false,
-          hadToolCalls: false,
-          hadOnlyTaskProgressUpdates: false,
-          toolEndReason: null,
-          taskPlanChanged: false,
-          taskPlanEngagement: null,
-          interruptionBoundaryConsumed: false,
-          awaitingTaskPlanContinuation: false,
-        }
-      }
       throw error
-    } finally {
-      inactivityWatchdog.stop()
-      turnAbortSignal.removeEventListener('abort', onTurnAbort)
-      this.currentStepAbort = null
     }
   }
 

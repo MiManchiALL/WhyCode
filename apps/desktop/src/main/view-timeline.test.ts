@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ViewEvent } from '@whycode/core'
-import { applyCoreEvent } from '../shared/conversation-state.ts'
+import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
 import { conversationHistoryWindow } from './conversation-history.ts'
 import { restoreConversationSnapshot } from '../shared/conversation-history.ts'
 import { ViewTimeline, type ViewEventWriter } from './view-timeline.ts'
@@ -23,6 +23,33 @@ class Writer implements ViewEventWriter {
 }
 
 describe('ViewTimeline', () => {
+  it('重试记录不随下一次失败草稿撤销，失败原因在冷重放后仍保留', async () => {
+    const writer = new Writer()
+    const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
+    let live = createConversationState()
+    const events: import('@whycode/core').CoreEvent[] = [
+      { type: 'text-delta', text: '应丢弃的首次草稿' },
+      { type: 'step-discarded' },
+      { type: 'model-request-retry', retry: 1, maxRetries: 2, delayMs: 500, message: '连接中断' },
+      { type: 'text-delta', text: '应丢弃的重试草稿' },
+      { type: 'step-discarded' },
+      { type: 'error', message: '模型请求超时', recoverable: true },
+      { type: 'work-finished', durationMs: 10, outcome: 'error', error: '模型请求超时', forkTurnId: null },
+    ]
+    for (const event of events) {
+      timeline.capture(writer, event)
+      live = applyCoreEvent(live, event)
+    }
+    await timeline.flush()
+    const replay = createConversationState(writer.initialViewEvents)
+    assert.deepEqual(replay.blocks, live.blocks)
+    assert.equal(replay.blocks.filter(block => block.kind === 'text').length, 0)
+    assert.equal(replay.blocks.filter(block => block.kind === 'model-request-retry').length, 1)
+    const end = replay.blocks.at(-1)
+    assert.ok(end?.kind === 'work-duration')
+    assert.equal(end.outcome, 'error')
+    assert.equal(end.error, '模型请求超时')
+  })
   it('中断批次提交真实结果与未执行结果，立即插话及重放不丢工具卡片', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))

@@ -508,6 +508,7 @@ export class SubagentService {
   ): Promise<void> {
     let outcome: SubagentOutcome = 'error'
     let resultText = ''
+    let errorMessage: string | undefined
     let session: AgentSession | null = null
     try {
       session = await createSubagentAgentSession({
@@ -522,7 +523,10 @@ export class SubagentService {
         resolveModel: this.options.resolveModel,
         auxiliaryImageAnalyzer: this.options.auxiliaryImageAnalyzer,
         hostOperations: this.options.hostOperations,
-        emit: (event) => this.emitChildEvent(active, event),
+        emit: (event) => {
+          if (event.type === 'error') errorMessage = event.message
+          this.emitChildEvent(active, event)
+        },
       })
       active.session = session
       if (active.cancelRequested) throw new Error('父会话已停止，本次子代理激活已取消。')
@@ -539,9 +543,11 @@ export class SubagentService {
       const stopReason = handling ? await handling : 'error'
       resultText = session.latestTurnAssistantText
       outcome = subagentOutcome(stopReason, session.modelFinishReason)
+      if (outcome === 'error' && errorMessage) resultText = errorMessage
     } catch (error) {
       outcome = active.cancelRequested ? 'aborted' : 'error'
       resultText = error instanceof Error ? error.message : String(error)
+      errorMessage = resultText
     } finally {
       active.session = null
       active.terminalReached = true
@@ -564,7 +570,8 @@ export class SubagentService {
         this.emitChildEvent(active, {
           type: 'work-finished',
           durationMs: completedSubagentActivationDurationMs(terminalActivation),
-          outcome: outcome === 'completed' ? 'completed' : 'stopped',
+          outcome: outcome === 'error' ? 'error' : outcome === 'completed' ? 'completed' : 'stopped',
+          ...(outcome === 'error' && errorMessage ? { error: errorMessage } : {}),
           forkTurnId: null,
         }, terminalActivation.endedAt)
       }

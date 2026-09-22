@@ -1916,7 +1916,8 @@ function btwResponseViewEvents(
     event: {
       type: 'work-finished',
       durationMs: response.durationMs,
-      outcome: response.outcome === 'completed' ? 'completed' : 'stopped',
+      outcome: response.outcome,
+      ...(response.error ? { error: response.error } : {}),
       forkTurnId: null,
       btw: {
         conversationId: response.conversationId,

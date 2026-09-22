@@ -4,6 +4,7 @@ import { prepareImageAttachmentForModel } from '../attachments/renditions.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effort.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
+import { modelRequestError, withModelRequestRetry } from '../providers/model-request.ts'
 
 const AUXILIARY_VISION_SYSTEM_PROMPT = `你是主 Agent 的只读视觉观察器。你只接收主 Agent 选定的图片与一个已经结合对话上下文改写好的问题。
 
@@ -63,16 +64,16 @@ export function createAuxiliaryImageAnalyzer(options: {
           mediaType: prepared.mediaType,
         })
       }
-      const result = await generateText({
-        model: options.model.create(options.providerConfig, {
-          transportSessionId: randomUUID(),
-        }),
+      const model = options.model.create(options.providerConfig, { transportSessionId: randomUUID() })
+      const result = await withModelRequestRetry(() => generateText({
+        maxRetries: 0,
+        model,
         system: AUXILIARY_VISION_SYSTEM_PROMPT,
         messages: [{ role: 'user', content }],
         abortSignal,
         providerOptions: providerOptionsWithReasoningEffort(options.model, 'default'),
         maxOutputTokens: Math.min(4_096, options.model.capabilities.maxOutput),
-      })
+      }).catch((error: unknown) => { throw modelRequestError(error) }), abortSignal)
       const text = result.text.trim()
       if (!text) throw new Error('辅助识图模型没有返回可用观察结果')
       return text

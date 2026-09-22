@@ -2,7 +2,7 @@ import type { SkillSummary } from '@whycode/core/skills'
 import { readPresentationResult } from '@whycode/core/presentation'
 import { ResponseFooter } from './response-footer.tsx'
 import { ResponseSourcesContext, responsePresentationResult, responseSources } from './response-presentation.ts'
-import { GitFork } from 'lucide-react'
+import { AlertCircle, GitFork } from 'lucide-react'
 import { memo, useDeferredValue, useLayoutEffect, useMemo, useRef } from 'react'
 import { SessionLoading } from './session-loading.tsx'
 import type { Block } from '../../shared/conversation-state.ts'
@@ -72,7 +72,7 @@ type WorkTiming =
   | {
       kind: 'completed'
       durationMs: number
-      outcome: 'completed' | 'stopped'
+      outcome: 'completed' | 'stopped' | 'error'
     }
 
 function useNewlySealedToolSegmentIds(
@@ -301,6 +301,12 @@ function WorkSection({
                   }
                 />
               ))}
+        </div>
+      )}
+      {section.kind === 'completed-work' && section.duration.outcome === 'error' && section.duration.error && (
+        <div className="wc-type-caption mb-4 flex items-start gap-2 px-1 text-[var(--wc-muted)]" role="status">
+          <AlertCircle size={15} className="mt-0.5 shrink-0 text-[var(--wc-danger)]" />
+          <span className="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{section.duration.error}</span>
         </div>
       )}
       <ResponseSourcesContext value={sources}>

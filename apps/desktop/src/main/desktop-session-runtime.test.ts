@@ -5,6 +5,46 @@ import { pendingManagedWorkspace, pendingWorktreeWorkspace } from '../shared/wor
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 
 describe('会话工作计时', () => {
+  it('失败原因随工作终点保留，之后成功或停止的工作不继承旧错误', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    runtime.beginWork()
+    runtime.emit({ type: 'error', message: '模型请求超时；已重试 2 次', recoverable: true })
+    runtime.emit({
+      type: 'turn-end', turnId: 'failed', stopReason: 'error',
+      usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
+    })
+    runtime.emit({ type: 'agent-status', status: 'error' })
+    const failed = events.find(event => event.type === 'work-finished')
+    assert.ok(failed?.type === 'work-finished')
+    assert.equal(failed.outcome, 'error')
+    assert.equal(failed.error, '模型请求超时；已重试 2 次')
+    runtime.beginWork()
+    runtime.emit({ type: 'agent-status', status: 'idle' })
+    const next = events.filter(event => event.type === 'work-finished').at(-1)!
+    assert.equal(next.outcome, 'completed')
+    assert.equal(next.error, undefined)
+  })
+
+  it('BTW 失败使用失败终态与原因，不显示为用户停止', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    runtime.beginBtwWork()
+    runtime.emit({ type: 'error', message: '连接中断', recoverable: true })
+    runtime.finishBtwWork(1000, 'error', false, {
+      conversationId: 'btw', turnIndex: 1, continuationAvailable: false,
+    })
+    const finished = events.find(event => event.type === 'work-finished')
+    assert.ok(finished?.type === 'work-finished')
+    assert.equal(finished.outcome, 'error')
+    assert.equal(finished.error, '连接中断')
+  })
   it('根工作只启动一次，并在终态前固定持续时间', () => {
     const events: CoreEvent[] = []
     const runtime = new DesktopSessionRuntime({

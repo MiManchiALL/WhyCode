@@ -76,6 +76,13 @@ const userQuestionSchema = z.object({
 export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('turn-start'), turnId: z.string() }),
   z.object({
+    type: z.literal('model-request-retry'),
+    retry: z.number().int().positive(),
+    maxRetries: z.number().int().positive(),
+    delayMs: z.number().nonnegative(),
+    message: z.string(),
+  }),
+  z.object({
     type: z.literal('user-message-edited'),
     previousTurnId: z.string().min(1),
     inputId: z.string().min(1),
@@ -96,7 +103,8 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('work-finished'),
     durationMs: z.number().nonnegative(),
-    outcome: z.enum(['completed', 'stopped']),
+    outcome: z.enum(['completed', 'stopped', 'error']),
+    error: z.string().optional(),
     forkTurnId: z.string().min(1).nullable(),
     btw: z.object({
       conversationId: z.string().uuid(),
@@ -256,6 +264,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
   switch (event.type) {
     case 'turn-start':
     case 'work-finished':
+    case 'model-request-retry':
     case 'text-delta':
     case 'thinking-delta':
     case 'thinking-end':

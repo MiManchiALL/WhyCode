@@ -212,6 +212,30 @@ describe('子代理激活生命周期', () => {
     await fixture.service.close()
   })
 
+  it('工具执行后模型失败，向父会话和冷重放交付实际失败原因', async () => {
+    const fixture = await createFixture([], async (index) => {
+      if (index === 0) return listDirStream(index)
+      throw new Error('模型认证失败：测试凭据已失效')
+    })
+    const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
+    const launched = await tools[0]!.execute(
+      { agent_id: 'explore', description: '检查失败交付', prompt: '检查目录后给出结论' },
+      toolContext('turn-error', 'tool-error'),
+    )
+    const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
+    assert.ok(subagentId)
+    await waitFor(() => fixture.settlements.length === 1)
+    assert.equal(fixture.modelCalls.length, 2)
+    assert.equal(fixture.settlements[0]?.outcome, 'error')
+    assert.match(fixture.settlements[0]?.resultText ?? '', /模型认证失败：测试凭据已失效/u)
+    const snapshot = await fixture.service.transcript(fixture.parentJournal.sessionId, subagentId)
+    const finished = snapshot.viewEvents.flatMap((entry) =>
+      entry.type === 'core-event' && entry.event.type === 'work-finished' ? [entry.event] : []).at(-1)
+    assert.equal(finished?.outcome, 'error')
+    assert.match(finished?.error ?? '', /模型认证失败：测试凭据已失效/u)
+    await fixture.service.close()
+  })
+
   it('父会话停止会取消激活并确认终态，但不再触发自动续轮', async () => {
     const started = deferred<void>()
     const release = deferred<void>()

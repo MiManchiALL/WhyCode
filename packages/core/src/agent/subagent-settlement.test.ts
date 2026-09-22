@@ -9,8 +9,25 @@ import type {
   SubagentTurnState,
 } from '../subagents/types.ts'
 import { AgentSession } from './session.ts'
+import { ModelRequestError } from '../providers/model-request.ts'
 
 describe('子代理终态续轮', () => {
+  it('子代理结果已交付后父请求失败，重试与用户继续都保留结果且只确认一次交接', async () => {
+    let requests = 0
+    let delivered = 0
+    const model = new MockLanguageModelV4({ doStream: async (options) => {
+      assert.match(JSON.stringify(options.prompt), /已确认两个调用点/)
+      if (++requests <= 3) throw new ModelRequestError('读取响应数据超时', true, 0)
+      return finalStep('已使用保存的子代理结果继续。')
+    } })
+    const session = createSession(model, [])
+    assert.equal(await session.handleSubagentSettlement(notification(), () => { delivered++ }), 'error')
+    assert.equal(delivered, 1)
+    assert.equal(requests, 3)
+    assert.equal(await session.handleUserMessage('继续'), 'completed')
+    assert.equal(requests, 4)
+    assert.equal(delivered, 1)
+  })
   it('空闲父会话由宿主消息自动续轮，并在交接提交后确认 delivered', async () => {
     const events: CoreEvent[] = []
     let delivered = false

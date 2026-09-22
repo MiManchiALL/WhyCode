@@ -22,6 +22,7 @@ import {
   type SummarySource,
 } from './compact-boundary.ts'
 import { estimateTextTokens } from './tokens.ts'
+import { modelRequestError, withModelRequestRetry, type ModelRequestRetry } from '../providers/model-request.ts'
 
 const REINJECT_MAX_FILES = 5
 const REINJECT_TOKEN_BUDGET = 50_000
@@ -41,17 +42,19 @@ async function summarize(
   kind: SummaryKind,
   abortSignal: AbortSignal,
   providerOptions?: ProviderMetadata,
+  onRetry?: (retry: ModelRequestRetry) => void,
 ): Promise<string> {
   const prompt = kind === 'history'
     ? COMPACT_HISTORY_SUMMARY_PROMPT
     : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
-  const result = await generateText({
+  const result = await withModelRequestRetry(() => generateText({
+    maxRetries: 0,
     model,
     system: '你是对话压缩助手。忠实总结给定范围，不延续任务，不调用工具。',
     messages: [...messages, { role: 'user', content: prompt }],
     abortSignal,
     providerOptions,
-  })
+  }).catch((error: unknown) => { throw modelRequestError(error) }), abortSignal, onRetry)
   const match = /<summary>([\s\S]*?)(<\/summary>|$)/u.exec(result.text)
   const summary = (match
     ? match[1]!
@@ -96,6 +99,7 @@ export async function compactMessages(
     messages: ModelMessage[],
   ) => ModelMessage[] | Promise<ModelMessage[]>,
   providerOptions?: ProviderMetadata,
+  onRetry?: (retry: ModelRequestRetry) => void,
 ): Promise<CompactResult> {
   const projectInstructions = findProjectInstructionsMessage(messages)
   const conversationMessages = applyProjectInstructions(messages, null)
@@ -117,6 +121,7 @@ export async function compactMessages(
       abortSignal,
       prepareMessagesForModel,
       providerOptions,
+      onRetry,
     )
   }
   const turnPrefixSummary = preparation.turnPrefixSource
@@ -128,6 +133,7 @@ export async function compactMessages(
         abortSignal,
         prepareMessagesForModel,
         providerOptions,
+        onRetry,
       )
     : null
 
@@ -158,6 +164,7 @@ async function summarizeSource(
     messages: ModelMessage[],
   ) => ModelMessage[] | Promise<ModelMessage[]>,
   providerOptions?: ProviderMetadata,
+  onRetry?: (retry: ModelRequestRetry) => void,
 ): Promise<string> {
   const summaryContext = summaryContextMessages(source, kind)
   const input = projectInstructions
@@ -166,7 +173,7 @@ async function summarizeSource(
   const prepared = prepareMessagesForModel
     ? await prepareMessagesForModel(input)
     : input
-  return summarize(model, prepared, kind, abortSignal, providerOptions)
+  return summarize(model, prepared, kind, abortSignal, providerOptions, onRetry)
 }
 
 function summaryContextMessages(

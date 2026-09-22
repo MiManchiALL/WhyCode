@@ -3,6 +3,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel, ProviderMetadata } from 'ai'
+import { modelFetch } from './model-transport.ts'
 import {
   getBuiltInProvider,
   MODEL_CATALOG,
@@ -63,6 +64,7 @@ function registryEntry(profile: ModelProfile, factory: ModelFactory): ModelEntry
 
 const anthropicMessages: ModelFactory = (config, wireModelId) =>
   createAnthropic({
+    fetch: modelFetch,
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('anthropic').defaultBaseURL,
     headers: copyRequestHeaders(config),
@@ -70,6 +72,7 @@ const anthropicMessages: ModelFactory = (config, wireModelId) =>
 
 const deepSeekChat: ModelFactory = (config, wireModelId) =>
   createDeepSeek({
+    fetch: modelFetch,
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('deepseek').defaultBaseURL,
     headers: copyRequestHeaders(config),
@@ -78,6 +81,7 @@ const deepSeekChat: ModelFactory = (config, wireModelId) =>
 const googleChat: ModelFactory = (config, wireModelId) =>
   createOpenAICompatible({
     name: 'google',
+    fetch: modelFetch,
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('google').defaultBaseURL,
     headers: copyRequestHeaders(config),
@@ -87,6 +91,7 @@ const googleChat: ModelFactory = (config, wireModelId) =>
 const mimoChat: ModelFactory = (config, wireModelId) =>
   createOpenAICompatible({
     name: 'mimo',
+    fetch: modelFetch,
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('mimo').defaultBaseURL,
     headers: copyRequestHeaders(config),
@@ -95,6 +100,7 @@ const mimoChat: ModelFactory = (config, wireModelId) =>
 const zhipuChat: ModelFactory = (config, wireModelId) =>
   createOpenAICompatible({
     name: 'zhipu',
+    fetch: modelFetch,
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('zhipu').defaultBaseURL,
     headers: copyRequestHeaders(config),
@@ -102,6 +108,7 @@ const zhipuChat: ModelFactory = (config, wireModelId) =>
 
 const openAIResponses: ModelFactory = (config, wireModelId) =>
   createOpenAI({
+    fetch: modelFetch,
     apiKey: config.apiKey,
     baseURL: config.baseURL ?? getBuiltInProvider('openai').defaultBaseURL,
     headers: copyRequestHeaders(config),
