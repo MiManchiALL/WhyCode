@@ -14,6 +14,7 @@ import {
   OFFICE_BUILDER_MAX_SCRIPT_BYTES,
   OfficeProcessingError,
   officeExtension,
+  pptxTemplateRequirementsSchema,
   type OfficeArtifactBuildRequest,
   type OfficeArtifactBuildResult,
   type OfficeArtifactRunner,
@@ -54,7 +55,7 @@ export class ElectronOfficeArtifactRunner implements OfficeArtifactRunner {
             `模板格式 ${templateInspection.format.toUpperCase()} 与输出格式 ${request.format.toUpperCase()} 不一致`,
           )
         }
-        onProgress?.(`已验证 ${request.format.toUpperCase()} 模板，开始沿用原结构构建`)
+        onProgress?.(`已验证 ${request.format.toUpperCase()} 原件，开始构建`)
       }
       const result = await runOfficeWorker({
         id: randomUUID(),
@@ -75,6 +76,7 @@ export class ElectronOfficeArtifactRunner implements OfficeArtifactRunner {
         recalculatedPath: join(stagingDirectory, 'recalculated.xlsx'),
         targetPath: request.outputPath,
         ...(templateAsset ? { templatePath: templateAsset.path } : {}),
+        ...(request.pptxTemplateRequirements ? { pptxTemplateRequirements: request.pptxTemplateRequirements } : {}),
         workingDirectory: stagingDirectory,
         inspection: result.inspection,
         abortSignal,
@@ -129,6 +131,7 @@ async function compareStagedTemplate(options: {
   templatePath: string
   outputPath: string
   format: OfficeArtifactBuildRequest['format']
+  pptxTemplateRequirements?: OfficeArtifactBuildRequest['pptxTemplateRequirements']
   abortSignal: AbortSignal
 }) {
   const result = await runOfficeWorker({
@@ -137,6 +140,7 @@ async function compareStagedTemplate(options: {
     format: options.format,
     templatePath: options.templatePath,
     outputPath: options.outputPath,
+    ...(options.pptxTemplateRequirements ? { pptxTemplateRequirements: options.pptxTemplateRequirements } : {}),
   }, options.abortSignal, BUILD_TIMEOUT_MS, 384)
   if (result.operation !== 'compare-template') {
     throw new OfficeProcessingError('unknown', 'Office 模板比较返回了错误的操作结果')
@@ -145,6 +149,12 @@ async function compareStagedTemplate(options: {
 }
 
 function validateRequest(request: OfficeArtifactBuildRequest): void {
+  if (request.pptxTemplateRequirements) {
+    if (request.format !== 'pptx' || request.mode !== 'template') {
+      throw new OfficeProcessingError('unsupported', '仅 PPTX template 模式可声明模板要求')
+    }
+    pptxTemplateRequirementsSchema.parse(request.pptxTemplateRequirements)
+  }
   if (extname(request.outputPath).toLowerCase() !== officeExtension(request.format)) {
     throw new OfficeProcessingError(
       'unsupported',

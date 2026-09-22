@@ -36,7 +36,7 @@ export type SlideImageEdit = SlideEditBase & {
 export type SlideDeleteEdit = SlideEditBase & {
   delete: true
   mediaRole?: SlideMediaRole
-  reason: string
+  reason?: string
 }
 
 export type SlideKeepEdit = SlideEditBase & {
@@ -70,10 +70,18 @@ const EDIT_KEYS = new Set([
 export function parsePptxTemplatePlan(value: unknown): PptxTemplatePlan {
   const input = record(value, 'OfficeTemplate.pptx 参数必须是对象')
   const template = bytes(input.template, 'OfficeTemplate.pptx.template 必须是模板 bytes')
-  const slides = array(input.slides, 'slides').map((entry) => {
+  const slides = array(input.slides, 'slides').map((entry, index) => {
     const slide = record(entry, 'slides 项必须是对象')
     const sourceSlide = positiveInteger(slide.sourceSlide, 'sourceSlide')
-    const edits = array(slide.edits ?? [], 'slides.edits').map(parseSlideEdit)
+    const edits = array(slide.edits ?? [], 'slides.edits').map((edit, position) => {
+      try {
+        return parseSlideEdit(edit)
+      } catch (error) {
+        if (!(error instanceof OfficeProcessingError)) throw error
+        throw new OfficeProcessingError(error.code,
+          `PPTX 输出第 ${index + 1} 页（源页 ${sourceSlide}）edits[${position}]：${error.message}`, { cause: error })
+      }
+    })
     requireUniqueShapeIds(edits)
     return { sourceSlide, edits }
   })
@@ -143,9 +151,8 @@ function parseSlideEdit(value: unknown): SlideEdit {
   if (input.paragraphs !== undefined) {
     return textEdit(input, { shapeId, paragraphs: textArray(input.paragraphs, 'paragraphs') })
   }
-  const reason = requiredReason(input.reason)
   if (input.image !== undefined) {
-    return { shapeId, image: parseImage(input.image), mediaRole: mediaRole(input.mediaRole), reason }
+    return { shapeId, image: parseImage(input.image), mediaRole: mediaRole(input.mediaRole), reason: requiredReason(input.reason) }
   }
   if (input.delete !== undefined) {
     if (input.delete !== true) throw new OfficeProcessingError('corrupted', 'delete 必须为 true')
@@ -153,7 +160,7 @@ function parseSlideEdit(value: unknown): SlideEdit {
       shapeId,
       delete: true,
       ...(input.mediaRole === undefined ? {} : { mediaRole: mediaRole(input.mediaRole) }),
-      reason,
+      ...(input.reason === undefined ? {} : { reason: requiredReason(input.reason) }),
     }
   }
   if (input.keep !== true) throw new OfficeProcessingError('corrupted', 'keep 必须为 true')
@@ -161,7 +168,7 @@ function parseSlideEdit(value: unknown): SlideEdit {
   if (role !== 'brand' && role !== 'decoration') {
     throw new OfficeProcessingError('corrupted', 'keep 只适用于 brand 或 decoration 媒体')
   }
-  return { shapeId, keep: true, mediaRole: role, reason }
+  return { shapeId, keep: true, mediaRole: role, reason: requiredReason(input.reason) }
 }
 
 function textEdit(input: Record<string, unknown>, edit: SlideTextEdit): SlideTextEdit {
@@ -221,7 +228,7 @@ function editStrings(edit: SlideEdit): string[] {
   if ('text' in edit) return [edit.text]
   if ('runs' in edit) return edit.runs
   if ('paragraphs' in edit) return edit.paragraphs
-  return [edit.reason]
+  return edit.reason ? [edit.reason] : []
 }
 
 function textArray(value: unknown, name: string): string[] {

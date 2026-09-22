@@ -146,6 +146,7 @@ describe('RunCommand 中止', () => {
 
       assert.equal(result.isError, true)
       assert.match(result.data, /中断/)
+      assert.match(result.data, /结果未知/)
       assert.ok(descendantPid, '命令应输出后代进程 PID')
       await delay(100)
       assert.equal(isProcessRunning(descendantPid), false, '中止后不应残留后代进程')

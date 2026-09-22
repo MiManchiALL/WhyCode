@@ -5,6 +5,7 @@ import {
   officeArtifactBuildModeSchema,
   officeExtension,
   officeFormatSchema,
+  pptxTemplateRequirementsSchema,
   type OfficeArtifactRunner,
 } from '../../office/types.ts'
 import { buildTool } from '../tool.ts'
@@ -31,7 +32,12 @@ const inputSchema = z.object({
     .describe('构建脚本可读取的图片、模板或其它输入资源'),
   templateAssetKey: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/).optional()
     .describe('template 模式必须指定的原件 assets key'),
+  pptxTemplateRequirements: pptxTemplateRequirementsSchema.optional()
+    .describe('PPTX 模板任务按用户要求声明的附加校验；省略时只检查文件结构，设计效果另做视觉复核'),
 }).superRefine((input, ctx) => {
+  if (input.pptxTemplateRequirements && (input.format !== 'pptx' || input.mode !== 'template')) {
+    ctx.addIssue({ code: 'custom', path: ['pptxTemplateRequirements'], message: '仅 PPTX template 模式可声明模板要求' })
+  }
   const expected = officeExtension(input.format)
   if (extname(input.outputPath).toLowerCase() !== expected) {
     ctx.addIssue({
@@ -98,6 +104,7 @@ export function createBuildOfficeArtifactTool(runner: OfficeArtifactRunner) {
           path: resolveAllowed(ctx, asset.path),
         })),
         ...(input.templateAssetKey ? { templateAssetKey: input.templateAssetKey } : {}),
+        ...(input.pptxTemplateRequirements ? { pptxTemplateRequirements: input.pptxTemplateRequirements } : {}),
       }, ctx.abortSignal, ctx.onProgress)
       const { inspection } = result
       return {
@@ -108,11 +115,14 @@ export function createBuildOfficeArtifactTool(runner: OfficeArtifactRunner) {
           ...(result.recalculation
             ? [`实际重算：${result.recalculation.engine === 'microsoft-excel' ? 'Microsoft Excel' : 'LibreOffice'}，${result.recalculation.formulaCount} 个公式已重算、保存并重新检查。`]
             : []),
-          ...(result.template
+          ...(result.template && input.format !== 'pptx'
             ? [`模板继承：${result.template.protectedPartCount} 个共享版式/媒体部件全部原样保留；新增 ${result.template.addedPartCount}、删除 ${result.template.removedPartCount} 个包部件。`]
             : []),
           ...(result.template && input.format === 'pptx'
-            ? ['该结果只证明模板结构血缘；还需用 RenderOffice overview 对照源文件与成品的叙事角色、构图轮廓、视觉密度和整套节奏。']
+            ? [
+              `模板校验：${result.template.checks.length ? result.template.checks.join('；') : '未声明附加模板约束，源文件与成品已通过 OOXML 结构校验'}。`,
+              '这些检查不证明模板视觉效果合格；还需对照用户要求核对 Logo、配色、字体、版式和内容适配。',
+            ]
             : []),
           `深层校验覆盖 ${inspection.validation.checkedPartCount} 个 XML/关系部件与 ${inspection.validation.relationshipCount} 条关系。`,
           '下一步：调用 InspectOffice 核对内容；当前模型支持视觉时，先用 RenderOffice overview 检查整套，再用 pages 检查全部页面。',

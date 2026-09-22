@@ -155,7 +155,7 @@ import { subagentTurnStateSchema } from '../subagents/types.ts'
 import { AssistantTextGate, sanitizeAssistantControlOutput } from './assistant-output.ts'
 import { ToolExecutionBatch, toolsForModel, type StepToolSet, type ToolEndEvent } from './tool-execution.ts'
 import { ToolStepAttachments } from './tool-step-attachments.ts'
-import { appendOrderedMessages, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
+import { appendOrderedMessages, TOOL_NOT_STARTED } from '../session/tool-execution.ts'
 import {
   StepToolApprovalBatcher,
   type ApprovalHandler,
@@ -3184,14 +3184,10 @@ export class AgentSession {
               context.onTurnEndingTool?.(def.turnEndReasonOnSuccess)
             }
             loopHealth.record(def.name, parsed.value, result.data, result.isError)
-            const data = abortSignal.aborted && result.isError && !def.isReadOnly
-              ? `${TOOL_OUTCOME_UNKNOWN}\n${result.data}`
-              : result.data
-            return finishTool(toolCallId, data, result.isError, result.fileChanges ? [...result.fileChanges] : undefined)
+            return finishTool(toolCallId, result.data, result.isError, result.fileChanges ? [...result.fileChanges] : undefined)
           } catch (error) {
             await finalizeCheckpoint()
-            const detail = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
-            const msg = def.isReadOnly ? detail : `${TOOL_OUTCOME_UNKNOWN}\n${detail}`
+            const msg = `工具执行出错：${error instanceof Error ? error.message : String(error)}`
             if (def.name === SKILL_TOOL_NAME) {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, false)
             }

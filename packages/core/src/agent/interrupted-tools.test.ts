@@ -106,7 +106,7 @@ describe('中断工具批次的执行事实', () => {
       assert.equal(results.length, 5)
       assert.equal(results[0]!.output.type, 'text')
       if (mode !== 'queued') {
-        assert.match(JSON.stringify(results[1]!.output), /工具执行结果未知/)
+        assert.deepEqual(results[1]!.output, { type: 'error-text', value: '等待结束' })
         for (const result of results.slice(2)) assert.deepEqual(result.output, { type: 'error-text', value: TOOL_NOT_STARTED })
       }
       assert.equal(events.filter((event) => event.type === 'tool-end').length, 5)
@@ -157,9 +157,56 @@ describe('中断工具批次的执行事实', () => {
     assert.equal(await readFile(join(fixture.projectDir, 'changed.txt'), 'utf8'), '不可丢失的事实')
     const result = toolResults((await fixture.store.open(fixture.journal.sessionId)).initialMessages)[0]!
     assert.equal(result.output.type, 'error-text')
-    assert.match(JSON.stringify(result), /结果未知.*写入后的异常/)
+    assert.deepEqual(result.output, { type: 'error-text', value: '工具执行出错：写入后的异常' })
     assert.match(JSON.stringify(model.doStreamCalls[1]!.prompt), /写入后的异常/)
   })
+
+  it('写文件在写入前失败时只回传实际错误，不谎报结果丢失', async (t) => {
+    const fixture = await setup(t)
+    await mkdir(join(fixture.projectDir, 'directory'))
+    const model = new MockLanguageModelV4({ doStream: [
+      callsStep([['WriteFile', { path: 'directory', content: '不能写入目录' }]]), finalStep(),
+    ] })
+    assert.equal(await createSession(fixture, model).handleUserMessage('写文件'), 'completed')
+    const results = toolResults((await fixture.store.open(fixture.journal.sessionId)).initialMessages)
+    assert.equal(results.length, 1)
+    assert.match(JSON.stringify(results), /工具执行出错/)
+    assert.doesNotMatch(JSON.stringify(results), /结果未知/)
+    assert.deepEqual(await readdir(join(fixture.projectDir, 'directory')), [])
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[1]!.prompt), /结果未知/)
+  })
+
+  for (const form of ['return', 'throw'] as const) {
+    it(`立即插话保留 ${form} 的明确失败，历史与下一次模型请求各有一个结果`, async (t) => {
+      const fixture = await setup(t)
+      const started = deferred()
+      const tool = buildTool({
+        name: 'ValidateOnly', description: '预检失败', prompt: '检查输入',
+        inputSchema: z.object({}), isReadOnly: false, kind: 'control',
+        async execute(_input, ctx) {
+          started.resolve()
+          await untilAborted(ctx.abortSignal)
+          if (form === 'throw') throw new Error('目标不存在，未执行')
+          return { data: '目标不存在，未执行', isError: true }
+        },
+      })
+      const model = new MockLanguageModelV4({ doStream: [callsStep([[tool.name, {}]]), finalStep()] })
+      const session = createSession(fixture, model)
+      session.setExtraTools([tool])
+      const run = session.handleUserMessage('执行')
+      await started.promise
+      await session.handleUserMessage('先解释失败原因', true)
+      assert.equal(await run, 'completed')
+      const results = toolResults((await fixture.store.open(fixture.journal.sessionId)).initialMessages)
+      assert.equal(results.length, 1)
+      assert.deepEqual(results[0]!.output, {
+        type: 'error-text', value: `${form === 'throw' ? '工具执行出错：' : ''}目标不存在，未执行`,
+      })
+      const prompt = JSON.stringify(model.doStreamCalls[1]!.prompt)
+      assert.match(prompt, /目标不存在，未执行/)
+      assert.doesNotMatch(prompt, /结果未知/)
+    })
+  }
 
   it('重启按执行入口区分未知与未执行，保留完成结果与供应商元数据，恢复幂等', async (t) => {
     const fixture = await setup(t)

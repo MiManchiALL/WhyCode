@@ -2,6 +2,7 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { isAbsolute, resolve } from 'node:path'
 import type { Readable } from 'node:stream'
 import { z } from 'zod'
+import { TOOL_OUTCOME_UNKNOWN } from '../../session/tool-execution.ts'
 import {
   buildTool,
   type ToolContext,
@@ -211,7 +212,7 @@ function executeForegroundCommand(
               ? `[命令超时（${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms），已请求终止]`
               : '[已被用户中断]'
           const warning = treeStopped ? '' : '\n[警告：未能确认全部子进程均已终止]'
-          finish(`${suffix}${warning}\n`, true)
+          finish(`${suffix}${warning}\n${TOOL_OUTCOME_UNKNOWN}\n`, true)
         })
     }
     const timeout = setTimeout(

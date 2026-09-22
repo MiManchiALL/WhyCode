@@ -76,19 +76,6 @@ export function pptxSlideObjects(xml: string): PptxSlideObject[] {
     })
 }
 
-export function pptxFrameSignature(object: PptxSlideObject): string {
-  const properties = /<p:cNvPr\b([^>]*)/iu.exec(object.xml)?.[1] ?? ''
-  const placeholder = /<p:ph\b([^>]*)/iu.exec(object.xml)?.[1] ?? ''
-  const transform = /<(?:a|p):xfrm\b[^>]*>([\s\S]*?)<\/(?:a|p):xfrm>/iu
-    .exec(object.xml)?.[1] ?? ''
-  return [
-    object.tag.toLowerCase(),
-    cleanAttributes(properties),
-    cleanAttributes(placeholder),
-    transform.replace(/>\s+</gu, '><'),
-  ].join('|')
-}
-
 export function pptxRelationshipIds(xml: string): Set<string> {
   const ids = new Set<string>()
   for (const match of xml.matchAll(/\br:[A-Za-z][\w.-]*=(?:"([^"]+)"|'([^']+)')/gu)) {
@@ -131,8 +118,4 @@ function mediaKind(tag: PptxShapeTag, xml: string): PptxMediaKind | null {
   if (/<p:oleObj\b|\/oleObject$/iu.test(xml)) return 'embedded-object'
   if (/<p14:media\b|<a:(?:audioFile|videoFile)\b/iu.test(xml)) return 'media'
   return null
-}
-
-function cleanAttributes(value: string): string {
-  return value.replace(/\s+/gu, ' ').trim()
 }

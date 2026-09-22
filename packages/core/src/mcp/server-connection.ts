@@ -1,4 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client'
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
+import { TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
 import {
   getMcpBuiltinCapabilitySummary,
   type McpServerConfig,
@@ -116,6 +118,7 @@ export class McpServerConnection {
     ) {
       throw new Error('MCP 工具目录在本步骤开始后发生变化，请重新调用 ToolSearch')
     }
+    if (signal.aborted || this.lifetimeAbort.signal.aborted) throw abortError()
     try {
       return await this.client.callTool(
         { name: binding.tool.rawName, arguments: input },
@@ -136,8 +139,10 @@ export class McpServerConnection {
         },
       )
     } catch (error) {
-      if (signal.aborted || this.lifetimeAbort.signal.aborted || isAbortError(error)) throw error
-      throw new Error(`MCP 工具调用失败：${safeMcpConnectionError(error, this.config)}`)
+      const detail = `MCP 工具调用失败：${safeMcpConnectionError(error, this.config)}`
+      const receivedError = error instanceof McpError
+        && error.code !== ErrorCode.ConnectionClosed && error.code !== ErrorCode.RequestTimeout
+      throw new Error(receivedError ? detail : `${detail}\n${TOOL_OUTCOME_UNKNOWN}`)
     }
   }
 

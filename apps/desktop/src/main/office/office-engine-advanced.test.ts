@@ -45,6 +45,7 @@ describe('Office OOXML engine advanced', () => {
           templateSha256: 'b'.repeat(64), templatePartCount: 10, outputPartCount: 11,
           addedPartCount: 1, removedPartCount: 0, protectedPartCount: 4,
           modifiedProtectedParts: [],
+          checks: ['共享版式和媒体部件保持不变'],
         }
       },
       async publish(source, target, sha256) { published = { source, target, sha256 } },

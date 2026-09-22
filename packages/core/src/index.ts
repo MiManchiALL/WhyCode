@@ -368,6 +368,7 @@ export {
   officeArtifactBuildModeSchema,
   officeFormatSchema,
   officeTemplateComparisonSchema,
+  pptxTemplateRequirementsSchema,
   officeInspectionSchema,
   officeInspectionUnitSchema,
   officeUnitKindSchema,

@@ -118,9 +118,10 @@ describe('内置 Skill 安装与发现', () => {
       })
       assert.equal(templateFollowing.isError, false)
       assert.match(templateFollowing.data, /叙事角色.*构图轮廓.*视觉密度/u)
-      assert.match(templateFollowing.data, /不能因为留白多就把结束页当封面/u)
-      assert.match(templateFollowing.data, /不得反复选少数纯文字源页来绕过媒体准备/u)
-      assert.match(templateFollowing.data, /“模板继承”只证明共享部件与源页结构血缘/u)
+      assert.match(templateFollowing.data, /用户明确允许重新排版时，以用户要求为准/u)
+      assert.match(templateFollowing.data, /不要自行编造复用百分比/u)
+      assert.match(templateFollowing.data, /不默认锁死普通对象的位置、大小、顺序或媒体字节/u)
+      assert.match(templateFollowing.data, /校验失败应先核对声明是否准确，再修复输出；不能为了通过校验而降低用户要求/u)
 
       const repeated = await installSystemSkills(home)
       assert.equal(repeated.changed, false)

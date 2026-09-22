@@ -4,6 +4,7 @@ import type {
   OfficeInspectOptions,
   OfficeInspection,
   OfficeProcessingErrorCode,
+  PptxTemplateRequirements,
 } from '@whycode/core/office'
 
 interface OfficeWorkerRequestBase {
@@ -28,6 +29,7 @@ export type OfficeWorkerRequest =
       format: OfficeFormat
       templatePath: string
       outputPath: string
+      pptxTemplateRequirements?: PptxTemplateRequirements
     }
 
 export type OfficeWorkerResult =

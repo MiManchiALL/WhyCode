@@ -147,6 +147,28 @@ export interface OfficeArtifactAsset {
   path: string
 }
 
+export const pptxTemplateRequirementsSchema = z.object({
+  requireExactDimensions: z.boolean().optional()
+    .describe('仅当任务要求保留模板页面尺寸时启用'),
+  referenceSlides: z.array(z.number().int().min(1).max(10_000)).min(1).max(200).optional()
+    .describe('任务要求沿用的模板参考页，页码从 1 开始；必须同时声明最低覆盖比例'),
+  minimumCoverageRatio: z.number().min(0).max(1).optional()
+    .describe('输出页中采用参考版式的最低比例；只能来自实际任务要求，不自行编造'),
+  requirePlaceholderGeometry: z.boolean().optional()
+    .describe('要求匹配参考版式的页面保留占位符位置和尺寸；不检查普通文字或图片对象'),
+}).strict().superRefine((value, ctx) => {
+  if ((value.referenceSlides === undefined) !== (value.minimumCoverageRatio === undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'referenceSlides 与 minimumCoverageRatio 必须同时声明' })
+  }
+  if (value.requirePlaceholderGeometry && !value.referenceSlides) {
+    ctx.addIssue({ code: 'custom', path: ['referenceSlides'], message: '占位符校验必须声明模板参考页' })
+  }
+  if (value.referenceSlides && new Set(value.referenceSlides).size !== value.referenceSlides.length) {
+    ctx.addIssue({ code: 'custom', path: ['referenceSlides'], message: '模板参考页不能重复' })
+  }
+})
+export type PptxTemplateRequirements = z.infer<typeof pptxTemplateRequirementsSchema>
+
 export interface OfficeArtifactBuildRequest {
   format: OfficeFormat
   mode: OfficeArtifactBuildMode
@@ -154,6 +176,7 @@ export interface OfficeArtifactBuildRequest {
   outputPath: string
   assets: OfficeArtifactAsset[]
   templateAssetKey?: string
+  pptxTemplateRequirements?: PptxTemplateRequirements
 }
 
 export const officeTemplateComparisonSchema = z.object({
@@ -164,6 +187,7 @@ export const officeTemplateComparisonSchema = z.object({
   removedPartCount: z.number().int().nonnegative(),
   protectedPartCount: z.number().int().nonnegative(),
   modifiedProtectedParts: z.array(z.string().min(1).max(1_000)).max(100),
+  checks: z.array(z.string().min(1).max(1_000)).max(10),
 })
 export type OfficeTemplateComparison = z.infer<typeof officeTemplateComparisonSchema>
 

@@ -43,6 +43,7 @@ describe('Office tools', () => {
             removedPartCount: 0,
             protectedPartCount: 4,
             modifiedProtectedParts: [],
+            checks: ['共享版式和媒体部件保持不变'],
           },
         }
       },
@@ -106,6 +107,46 @@ describe('Office tools', () => {
     assert.equal(tool.inputSchema.safeParse({
       format: 'docx', mode: 'template', scriptPath: 'x.js', outputPath: 'x.docx',
       assets: [{ key: 'template', path: 'template.docx' }], baselineAssetKey: 'template',
+    }).success, false)
+  })
+
+  it('PPTX 模板要求只接受完整、明确的约束，并回报实际校验范围', async () => {
+    const root = await tempDirectory()
+    const requirements = { requireExactDimensions: true, referenceSlides: [1, 3], minimumCoverageRatio: 1 }
+    const tool = createBuildOfficeArtifactTool({
+      async build(request) {
+        assert.deepEqual(request.pptxTemplateRequirements, requirements)
+        return {
+          outputPath: request.outputPath, inspection: inspection('pptx'),
+          template: {
+            templateSha256: 'b'.repeat(64), templatePartCount: 10, outputPartCount: 11,
+            addedPartCount: 1, removedPartCount: 0, protectedPartCount: 0, modifiedProtectedParts: [],
+            checks: ['页面尺寸与源模板一致', '参考版式覆盖 3/3 页，达到要求的 100%'],
+          },
+        }
+      },
+    })
+    const input = {
+      format: 'pptx', mode: 'template', scriptPath: 'builder.js', outputPath: 'final.pptx',
+      assets: [{ key: 'template', path: 'template.pptx' }], templateAssetKey: 'template',
+      pptxTemplateRequirements: requirements,
+    }
+    const result = await tool.execute(tool.inputSchema.parse(input), context(root))
+    assert.match(result.data, /模板校验：页面尺寸与源模板一致/u)
+    assert.doesNotMatch(result.data, /模板继承|全部原样保留/u)
+    for (const invalid of [
+      { referenceSlides: [1] }, { minimumCoverageRatio: 1 },
+      { requirePlaceholderGeometry: true }, { referenceSlides: [1, 1], minimumCoverageRatio: 1 },
+      { referenceSlides: [0], minimumCoverageRatio: 1 },
+      { referenceSlides: [1], minimumCoverageRatio: 2 }, { inventedConstraint: true },
+    ]) {
+      assert.equal(tool.inputSchema.safeParse({ ...input, pptxTemplateRequirements: invalid }).success, false)
+    }
+    assert.equal(tool.inputSchema.safeParse({
+      ...input, mode: 'create', templateAssetKey: undefined,
+    }).success, false)
+    assert.equal(tool.inputSchema.safeParse({
+      ...input, format: 'docx', outputPath: 'final.docx',
     }).success, false)
   })
 

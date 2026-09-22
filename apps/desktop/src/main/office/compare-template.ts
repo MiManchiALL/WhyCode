@@ -3,11 +3,10 @@ import {
   OfficeProcessingError,
   type OfficeTemplateComparison,
   type OfficeFormat,
+  type PptxTemplateRequirements,
 } from '@whycode/core/office'
 import { openOfficeArchive, readXml, type OfficeArchive } from './archive.ts'
-import { orderedSlidePaths } from './inspect-pptx-views.ts'
-import { pptxFrameSignature, pptxSlideObjects } from './pptx-shapes.ts'
-import { readRelationships, relationshipTarget } from './relationships.ts'
+import { comparePptxTemplate } from './compare-pptx-template.ts'
 import { validateOfficePackage } from './validate-package.ts'
 
 const PROTECTED_PARTS: Record<OfficeFormat, readonly RegExp[]> = {
@@ -18,11 +17,7 @@ const PROTECTED_PARTS: Record<OfficeFormat, readonly RegExp[]> = {
     /^word\/_rels\/(?:header|footer)\d+\.xml\.rels$/i,
     /^word\/media\//i,
   ],
-  pptx: [
-    /^ppt\/(?:slideMasters|slideLayouts|theme|notesMasters)\//i,
-    /^ppt\/(?:presProps|viewProps|tableStyles)\.xml$/i,
-    /^ppt\/media\//i,
-  ],
+  pptx: [],
   xlsx: [
     /^xl\/(?:styles|theme\/.+|metadata)\.xml$/i,
     /^xl\/(?:charts|drawings|pivotTables|pivotCache)\//i,
@@ -34,6 +29,7 @@ export async function compareOfficeTemplate(options: {
   templatePath: string
   outputPath: string
   format: OfficeFormat
+  pptxTemplateRequirements?: PptxTemplateRequirements
 }): Promise<OfficeTemplateComparison> {
   const [template, output] = await Promise.all([
     openOfficeArchive(options.templatePath, options.format),
@@ -67,7 +63,9 @@ export async function compareOfficeTemplate(options: {
     )
   }
   if (options.format === 'docx') await requireDocxTemplateAnchors(template, output)
-  if (options.format === 'pptx') await requirePptxTemplateLineage(template, output)
+  const checks = options.format === 'pptx'
+    ? await comparePptxTemplate(template, output, options.pptxTemplateRequirements)
+    : ['共享版式和媒体部件保持不变']
   return {
     templateSha256: template.sha256,
     templatePartCount: templateParts.size,
@@ -76,6 +74,7 @@ export async function compareOfficeTemplate(options: {
     removedPartCount: differenceSize(templateParts, outputParts),
     protectedPartCount: protectedParts.length,
     modifiedProtectedParts: [],
+    checks,
   }
 }
 
@@ -100,71 +99,6 @@ async function requireDocxTemplateAnchors(
   }
 }
 
-async function requirePptxTemplateLineage(
-  template: OfficeArchive,
-  output: OfficeArchive,
-): Promise<void> {
-  const [templatePresentation, outputPresentation] = await Promise.all([
-    readXml(template, 'ppt/presentation.xml'),
-    readXml(output, 'ppt/presentation.xml'),
-  ])
-  const [templateSlides, outputSlides] = await Promise.all([
-    orderedSlidePaths(template, templatePresentation),
-    orderedSlidePaths(output, outputPresentation),
-  ])
-  const templateFramesByLayout = new Map<string, string[][]>()
-  for (const path of templateSlides) {
-    const layoutPath = await slideLayoutPath(template, path)
-    const candidates = templateFramesByLayout.get(layoutPath) ?? []
-    candidates.push(slideFrameSignatures(await readXml(template, path)))
-    templateFramesByLayout.set(layoutPath, candidates)
-  }
-  for (const path of outputSlides) {
-    const relsPath = relationshipPath(path)
-    const relationships = await readRelationships(output, relsPath)
-    const layout = relationships.find((relationship) => !relationship.external
-      && relationship.type.endsWith('/slideLayout'))
-    if (!layout) throw new OfficeProcessingError('corrupted', `PPTX 幻灯片没有版式关系：${path}`)
-    const layoutPath = relationshipTarget(relsPath, layout.target)
-    const [before, after] = await Promise.all([
-      template.zip.file(layoutPath)?.async('uint8array'),
-      output.zip.file(layoutPath)?.async('uint8array'),
-    ])
-    if (!before || !after || sha256(before) !== sha256(after)) {
-      throw new OfficeProcessingError('corrupted', `PPTX 幻灯片没有沿用模板版式：${path}`)
-    }
-    const actualFrames = slideFrameSignatures(await readXml(output, path))
-    const candidates = templateFramesByLayout.get(layoutPath) ?? []
-    if (!candidates.some((sourceFrames) => inheritedFrameSubset(actualFrames, sourceFrames))) {
-      throw new OfficeProcessingError('corrupted', `PPTX 幻灯片不是从模板源页复制后原位编辑：${path}`)
-    }
-  }
-}
-
-async function slideLayoutPath(archive: OfficeArchive, slidePath: string): Promise<string> {
-  const relsPath = relationshipPath(slidePath)
-  const relationships = await readRelationships(archive, relsPath)
-  const layout = relationships.find((relationship) => !relationship.external
-    && relationship.type.endsWith('/slideLayout'))
-  if (!layout) {
-    throw new OfficeProcessingError('corrupted', `PPTX 幻灯片没有版式关系：${slidePath}`)
-  }
-  return relationshipTarget(relsPath, layout.target)
-}
-
-function inheritedFrameSubset(actual: readonly string[], source: readonly string[]): boolean {
-  // Source-content objects may be deleted, while additions and reordering would break lineage.
-  // An empty result only inherits a source slide that was already empty.
-  if (actual.length === 0) return source.length === 0
-  let sourcePosition = 0
-  for (const signature of actual) {
-    const match = source.indexOf(signature, sourcePosition)
-    if (match < 0) return false
-    sourcePosition = match + 1
-  }
-  return true
-}
-
 function fragments(xml: string, pattern: RegExp): string[] {
   pattern.lastIndex = 0
   return [...xml.matchAll(pattern)].map((match) => normalizedTemplateXml(match[0]))
@@ -186,17 +120,6 @@ function normalizedTemplateXml(xml: string): string {
     .replace(/\s+w:rsid\w+=(?:"[^"]*"|'[^']*')/gi, '')
     .replace(/>\s+</g, '><')
     .trim()
-}
-
-function slideFrameSignatures(xml: string): string[] {
-  return pptxSlideObjects(xml).map(pptxFrameSignature)
-}
-
-function relationshipPath(partPath: string): string {
-  const separator = partPath.lastIndexOf('/')
-  const directory = partPath.slice(0, separator)
-  const name = partPath.slice(separator + 1)
-  return `${directory}/_rels/${name}.rels`
 }
 
 function fileParts(values: Iterable<string>): Set<string> {

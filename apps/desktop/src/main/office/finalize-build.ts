@@ -4,6 +4,7 @@ import {
   type OfficeTemplateComparison,
   type OfficeFormat,
   type OfficeInspection,
+  type PptxTemplateRequirements,
 } from '@whycode/core/office'
 
 export interface OfficeBuildFinalizerDependencies {
@@ -18,6 +19,7 @@ export interface OfficeBuildFinalizerDependencies {
     templatePath: string
     outputPath: string
     format: OfficeFormat
+    pptxTemplateRequirements?: PptxTemplateRequirements
     abortSignal: AbortSignal
   }): Promise<OfficeTemplateComparison>
   publish(source: string, target: string, sha256: string): Promise<void>
@@ -29,6 +31,7 @@ export async function finalizeOfficeBuild(options: {
   recalculatedPath: string
   targetPath: string
   templatePath?: string
+  pptxTemplateRequirements?: PptxTemplateRequirements
   workingDirectory: string
   inspection: OfficeInspection
   abortSignal: AbortSignal
@@ -61,6 +64,7 @@ export async function finalizeOfficeBuild(options: {
       templatePath: options.templatePath,
       outputPath: publishPath,
       format: options.format,
+      ...(options.pptxTemplateRequirements ? { pptxTemplateRequirements: options.pptxTemplateRequirements } : {}),
       abortSignal: options.abortSignal,
     })
     : undefined

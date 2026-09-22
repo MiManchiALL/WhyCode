@@ -115,12 +115,6 @@ function validateSlideEditPlan(xml: string, edits: readonly SlideEdit[]): PptxSl
     if (hasImage(action) && action.shapeId !== object.shapeId) {
       throw new OfficeProcessingError('invalid-range', '图片替换动作必须直接指向图片 shape')
     }
-    if (isDelete(action) && !action.mediaRole) {
-      throw new OfficeProcessingError(
-        'invalid-range',
-        `删除媒体 shape[${object.shapeId}] 时必须声明 mediaRole`,
-      )
-    }
   }
   return objects
 }
@@ -138,8 +132,8 @@ function validateEditTarget(
   if (isKeep(edit) && !object.mediaKind && !descendantMedia) {
     throw new OfficeProcessingError('invalid-range', `keep 必须指向媒体 shape 或包含媒体的 group`)
   }
-  if (isDelete(edit) && (object.mediaKind || descendantMedia) && !edit.mediaRole) {
-    throw new OfficeProcessingError('invalid-range', `删除媒体对象 shape[${object.shapeId}] 必须声明 mediaRole`)
+  if (isDelete(edit) && (object.mediaKind || descendantMedia) && (!edit.mediaRole || !edit.reason)) {
+    throw new OfficeProcessingError('invalid-range', `删除媒体对象 shape[${object.shapeId}] 必须声明 mediaRole 与 reason`)
   }
   if (isTextEdit(edit) && object.tag === 'grpSp') {
     throw new OfficeProcessingError('invalid-range', '文字编辑必须直接指向 group 内的文字 shape')

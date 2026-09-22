@@ -189,7 +189,7 @@ Core 工具结果统一为 `{data,isError}`，规范历史分别使用 `text` �
 
 JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组内按原 `toolCallId` 顺序组装，不能跨用户消息或后续模型步骤搬动结果。运行中上下文、冷恢复、回滚锚点、压缩与 Fork 使用相同顺序；结果正文、附件和供应商元数据保持不变。
 
-取消不改写已经返回的成功结果；未派发调用返回明确的未执行错误。只读工具正常返回的错误或捕获的执行异常作为已知错误保留；有副作用的工具在开始后异常或中断，或进程退出导致已开始调用没有完整结果时，标记结果未知，要求后续先核实实际状态。停止和立即插话都等待已启动调用收尾，下一次请求前必须配齐结果。持久化失败停止派发与模型续轮。
+取消不改写已经返回的成功或失败结果；未派发调用返回明确的未执行错误。工具返回的错误和捕获的具体执行异常直接作为已知错误保留，不因工具可能写入而统一标记未知；已知错误不保证没有部分副作用。已开始调用因进程退出等原因没有完整结果时，恢复为结果未知，要求后续先核实实际状态。命令中断或超时、MCP 请求发出后失去响应等无法确认修改状态的情况，由执行工具在具体错误后说明结果未知；MCP 服务端明确返回的失败结果或 RPC 错误保留原错误。停止和立即插话都等待已启动调用收尾，下一次请求前必须配齐结果。持久化失败停止派发与模型续轮。
 
 审批等待绑定所属步骤的 AbortSignal。宿主在取消时仅移除该请求并返回拒绝；迟到批准不能执行工具或修改授权记忆，Main、讨论代理与子代理沿用同一取消契约。
 
@@ -292,11 +292,15 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 ### 3.8 Office
 
-- `BuildOfficeArtifact {format,mode,scriptPath,outputPath,assets[],templateAssetKey?}`：format 为 docx/pptx/xlsx，mode 为 create/template；模板模式必须精确引用模板 asset。脚本在无 Node 权限的 SES 中执行，最终原子发布。
+- `BuildOfficeArtifact {format,mode,scriptPath,outputPath,assets[],templateAssetKey?,pptxTemplateRequirements?}`：format 为 docx/pptx/xlsx，mode 为 create/template；模板模式必须精确引用模板 asset。脚本在无 Node 权限的 SES 中执行，最终原子发布。
 - `InspectOffice {path,startUnit=1,unitCount=20,view="content",sheetName?,range?,slideNumber?}`：view 为 content/objects/styles/relationships/validation/template/formula-trace；分页只能使用返回的 nextUnit，单次最多 50 单元、60k 文字。
 - `RenderOffice {path,view="pages",startPage=1,pageCount=4}`：只给视觉 Main且独占步骤；pages 最多 4 页，overview 最多 50 页合成一图。
 
-创建/修改前必须读取当前 Office Skill 的 builder API；模板 PPTX 还需读取 template-following 规则。接口失败应修正同一 builder，不切换到命令或手写 OOXML 的第二实现。含公式 XLSX 只有真实 Office/LibreOffice 引擎重算、保存并复检成功后发布。非视觉 Main 只能声明结构检查；视觉 Main 还要对最终版本完成全页渲染复核。
+创建/修改前必须读取当前 Office Skill 的 builder API；模板 PPTX 还需读取 template-following 规则。接口失败应修正同一 builder，不切换到命令绕过构建边界。PPTX 优先复制源页并修改现有对象；源页复制接口无法表达的局部编辑可在同一 builder 中使用 JSZip 与 fastXml 操作已检查的 OOXML 目标。
+
+PPTX 模板模式始终检查源文件和成品的 OOXML 结构；附加约束由模型根据用户要求与原件声明，不默认锁定普通对象几何或媒体字节。`pptxTemplateRequirements` 只适用于 PPTX template 模式：`requireExactDimensions` 检查画幅；`referenceSlides` 与 `minimumCoverageRatio` 必须同时提供，按版式类型及占位符身份计算覆盖率；`requirePlaceholderGeometry` 还要求匹配参考版式的输出页保留占位符位置和尺寸，几何可继承自版式或母版。源页必须存在，比例不得凭空设定。返回的 `templateComparison.checks` 只列实际通过的约束，不能代替 Logo、配色、字体与整体设计的视觉对照。普通文字或形状删除无需媒体理由；图片和含媒体的组合删除仍须声明 `mediaRole` 与 `reason`。
+
+含公式 XLSX 只有真实 Office/LibreOffice 引擎重算、保存并复检成功后发布。非视觉 Main 只能声明结构检查；视觉 Main 还要对最终版本完成全页渲染复核。交付前的内容或视觉问题必须回到同一 builder 修复、重建并重新检查。
 
 ### 3.9 最终成品与来源引用
 

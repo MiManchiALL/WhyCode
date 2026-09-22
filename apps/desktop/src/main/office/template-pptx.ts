@@ -60,7 +60,15 @@ export async function createPptxFromTemplate(value: unknown): Promise<Uint8Array
     }
     const newSlidePath = `ppt/slides/slide${++slideNumber}.xml`
     const sourceXml = await requiredText(zip, sourcePath)
-    const applied = applySlideEdits(sourceXml, item.edits)
+    const applied = (() => {
+      try {
+        return applySlideEdits(sourceXml, item.edits)
+      } catch (error) {
+        if (!(error instanceof OfficeProcessingError)) throw error
+        throw new OfficeProcessingError(error.code,
+          `PPTX 输出第 ${slideEntries.length + 1} 页（源页 ${item.sourceSlide}）：${error.message}`, { cause: error })
+      }
+    })()
     let slideXml = updateSlideNumberFields(
       applied.xml,
       firstSlideNumber + slideEntries.length,

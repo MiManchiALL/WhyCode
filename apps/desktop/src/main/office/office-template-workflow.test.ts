@@ -113,7 +113,7 @@ describe('Office 模板工作流', () => {
     }), /表格结构/)
   })
 
-  it('PPTX 复制源页、复用版式和备注，并拒绝空白重建冒充模板', async () => {
+  it('PPTX 复制源页、复用版式和备注，未声明的设计约束交由视觉复核', async () => {
     const root = await tempDirectory()
     const template = join(root, 'template.pptx')
     await build(root, template, 'pptx', `({ PptxGenJS }) => {
@@ -267,9 +267,11 @@ describe('Office 模板工作流', () => {
       deck.addSlide().addText('Inherited cover', { x: 1, y: 1.2, w: 9, h: 0.7 })
       return deck
     }`)
-    await assert.rejects(() => compareOfficeTemplate({
+    const rebuiltComparison = await compareOfficeTemplate({
       templatePath: template, outputPath: rebuilt, format: 'pptx',
-    }), /共享版式或媒体部件|没有沿用模板版式|不是从模板源页复制/)
+    })
+    assert.equal(rebuiltComparison.protectedPartCount, 0)
+    assert.deepEqual(rebuiltComparison.checks, [])
   })
 
   it('PPTX 媒体处置可按 group 原子删除成员与关系', () => {
@@ -281,6 +283,8 @@ describe('Office 模板工作流', () => {
       + '<p:sp><p:nvSpPr><p:cNvPr id="12" name="Caption"/></p:nvSpPr>'
       + '<p:txBody><a:p><a:r><a:t>Source caption</a:t></a:r></a:p></p:txBody></p:sp>'
       + '</p:grpSp></p:spTree></p:cSld></p:sld>'
+    assert.throws(() => applySlideEdits(xml, [{ shapeId: '10', delete: true }]), /mediaRole 与 reason/u)
+    assert.throws(() => applySlideEdits(xml, [{ shapeId: '11', delete: true, mediaRole: 'content' }]), /mediaRole 与 reason/u)
     const result = applySlideEdits(xml, [{
       shapeId: '10', delete: true, mediaRole: 'content', reason: 'remove source-topic group',
     }])
