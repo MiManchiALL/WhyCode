@@ -138,6 +138,7 @@ import {
   captureConversationScrollPosition,
   restoreConversationScrollPosition,
   scrollConversationToTarget,
+  type ConversationScrollAlignment,
 } from './conversation-scroll.ts'
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 import { subscribeRuntimeEventBatches } from './runtime-event-stream.ts'
@@ -300,11 +301,11 @@ export function App() {
     release?.()
   }, [])
   useEffect(() => releaseConversationScroll, [releaseConversationScroll])
-  const scrollToConversation = useCallback((targetId: string | HTMLElement) => {
+  const scrollToConversation = useCallback((targetId: string | HTMLElement, alignment: ConversationScrollAlignment = 'start') => {
     const scroller = scrollRef.current
     if (!scroller) return false
     releaseConversationScroll()
-    const navigation = scrollConversationToTarget(scroller, targetId)
+    const navigation = scrollConversationToTarget(scroller, targetId, alignment)
     if (!navigation) return false
     conversationScrollReleaseRef.current = navigation.release
     stickToBottom.current = false
@@ -320,10 +321,10 @@ export function App() {
     },
     onError: (message) => showError(message),
   })
-  const navigateConversation = useCallback((targetId: string | HTMLElement) => {
+  const navigateConversation = useCallback((targetId: string | HTMLElement, alignment: ConversationScrollAlignment = 'start') => {
     history.cancel()
     pendingScrollRestoreRef.current = null
-    if (!scrollToConversation(targetId) && typeof targetId === 'string') void history.loadOlder(targetId)
+    if (!scrollToConversation(targetId, alignment) && typeof targetId === 'string') void history.loadOlder(targetId)
   }, [history.cancel, history.loadOlder, scrollToConversation])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const setBtwMode = useCallback((mode: BtwMode | null) => {

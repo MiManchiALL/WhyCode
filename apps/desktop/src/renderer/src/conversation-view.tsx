@@ -37,6 +37,7 @@ import { ToolBatchGroup } from './tool-batch-group.tsx'
 import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { useCheckpointRestoreNavigation } from './checkpoint-restore-navigation.ts'
+import type { ConversationScrollAlignment } from './conversation-scroll.ts'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -61,7 +62,7 @@ interface ConversationViewProps {
   onFork: (turnId: string) => void
   onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
-  onNavigate?: (target: HTMLElement) => void
+  onNavigate?: (target: HTMLElement, alignment: ConversationScrollAlignment) => void
   onToggle: (id: string) => void
 }
 

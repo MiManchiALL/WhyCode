@@ -26,20 +26,42 @@ describe('会话滚动锚定', () => {
     const original = globalThis.getComputedStyle
     globalThis.getComputedStyle = () => ({ overflowY: 'auto' }) as CSSStyleDeclaration
     try {
-      const navigation = scrollConversationToTarget(scroller, target)!
-      assert.equal(innerTop(), 348)
-      assert.equal(target.getBoundingClientRect().top, 12)
-      assert.ok(target.getBoundingClientRect().bottom <= tools.getBoundingClientRect().bottom)
-      assert.equal(section.style.getPropertyValue('content-visibility'), 'visible')
-      navigation.release()
-      tools.scrollTop = 900
-      const again = scrollConversationToTarget(scroller, target)!
-      assert.equal(innerTop(), 588)
-      assert.equal(target.getBoundingClientRect().top, 12)
-      again.release()
+      for (const [alignment, expectedTop] of [['start', 12], ['center', 288]] as const) {
+        scroller.scrollTop = 0
+        tools.scrollTop = 0
+        const navigation = scrollConversationToTarget(scroller, target, alignment)!
+        assert.equal(innerTop(), 348)
+        assert.equal(target.getBoundingClientRect().top, expectedTop)
+        assert.ok(target.getBoundingClientRect().bottom <= tools.getBoundingClientRect().bottom)
+        assert.equal(section.style.getPropertyValue('content-visibility'), 'visible')
+        navigation.release()
+        tools.scrollTop = 900
+        const again = scrollConversationToTarget(scroller, target, alignment)!
+        assert.equal(innerTop(), 588)
+        assert.equal(target.getBoundingClientRect().top, expectedTop)
+        again.release()
+      }
       assert.equal(scrollConversationToTarget(scroller, document.querySelector<HTMLElement>('#other')!), null)
     } finally {
       globalThis.getComputedStyle = original
+    }
+  })
+
+  it('居中定位按对话可视区计算，首尾和不足一屏时限制在实际滚动范围', () => {
+    for (const [targetTop, contentHeight, expectedScrollTop] of [
+      [800, 1_800, 512], [60, 1_800, 0], [1_760, 1_800, 1_200], [120, 420, 0],
+    ] as const) {
+      const { document } = parseHTML('<main><button></button></main>')
+      const scroller = document.querySelector<HTMLElement>('main')!
+      const target = document.querySelector<HTMLElement>('button')!
+      const currentScrollTop = defineScrollerMetrics(scroller, 0, contentHeight, 600)
+      defineRectangle(scroller, 80, 600)
+      target.getBoundingClientRect = () => rectangle(80 + targetTop - currentScrollTop(), 24)
+      const navigation = scrollConversationToTarget(scroller, target, 'center')!
+      assert.equal(currentScrollTop(), expectedScrollTop)
+      const bounds = target.getBoundingClientRect()
+      assert.ok(bounds.top >= 80 && bounds.bottom <= 680)
+      navigation.release()
     }
   })
 
@@ -96,18 +118,22 @@ describe('会话滚动锚定', () => {
       disconnect() { disconnected = true }
     }
     try {
-      const navigation = scrollConversationToTarget(scroller, 'user')!
-      assert.equal(currentScrollTop(), 988)
-      targetTop -= 104
-      resized()
-      assert.equal(currentScrollTop(), 884)
-      assert.equal(target.getBoundingClientRect().top, 12)
-      scroller.dispatchEvent(new Event('wheel'))
-      assert.equal(disconnected, true)
-      targetTop += 200
-      resized()
-      assert.equal(currentScrollTop(), 884)
-      navigation.release()
+      for (const [alignment, expectedTop] of [['start', 12], ['center', 200]] as const) {
+        targetTop = 1_000
+        disconnected = false
+        const navigation = scrollConversationToTarget(scroller, 'user', alignment)!
+        assert.equal(currentScrollTop(), 1_000 - expectedTop)
+        targetTop -= 104
+        resized()
+        assert.equal(currentScrollTop(), 896 - expectedTop)
+        assert.equal(target.getBoundingClientRect().top, expectedTop)
+        scroller.dispatchEvent(new Event('wheel'))
+        assert.equal(disconnected, true)
+        targetTop += 200
+        resized()
+        assert.equal(currentScrollTop(), 896 - expectedTop)
+        navigation.release()
+      }
     } finally {
       globalThis.ResizeObserver = original
     }

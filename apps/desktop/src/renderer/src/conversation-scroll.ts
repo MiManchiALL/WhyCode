@@ -10,6 +10,8 @@ const SECTION_SELECTOR = '[data-conversation-scroll-section]'
 const BLOCK_SELECTOR = '[data-conversation-scroll-block]'
 const NAVIGATION_TARGET_SELECTOR = '[data-conversation-navigator-target]'
 
+export type ConversationScrollAlignment = 'start' | 'center'
+
 interface MaterializedSection {
   element: HTMLElement
   contentVisibility: string
@@ -76,6 +78,7 @@ export function restoreConversationScrollPosition(
 export function scrollConversationToTarget(
   scroller: HTMLElement,
   targetId: string | HTMLElement,
+  alignment: ConversationScrollAlignment = 'start',
 ): ConversationScrollRetention | null {
   const target = typeof targetId === 'string' ? findByDataValue(
     scroller,
@@ -88,18 +91,19 @@ export function scrollConversationToTarget(
   const section = target.closest<HTMLElement>(SECTION_SELECTOR)
   const materialized = materializeSectionsBeforeTarget(scroller, target)
   revealNestedScrollTarget(scroller, target)
+  const offset = alignment === 'center'
+    ? (target.getBoundingClientRect().height - scroller.clientHeight) / 2
+    : -12
   const preliminaryScrollTop = Math.max(
     0,
-    elementTopWithinScroller(scroller, target) - 12,
+    elementTopWithinScroller(scroller, target) + offset,
   )
   if (section) {
     materializeTailUntilScrollable(scroller, section, preliminaryScrollTop, materialized)
   }
   const retained = stabilizeMaterializedTarget(section, materialized)
-  const desiredScrollTop = Math.max(0, elementTopWithinScroller(scroller, target) - 12)
-  const scrollTop = Math.min(desiredScrollTop, maximumScrollTop(scroller))
-  scroller.scrollTop = scrollTop
-  return { release: retainScrollAnchor(scroller, target, -12, retained) }
+  scroller.scrollTop = restoredAnchorScrollTop(elementTopWithinScroller(scroller, target), offset, scroller)
+  return { release: retainScrollAnchor(scroller, target, offset, retained) }
 }
 
 function materializeSectionsBeforeTarget(

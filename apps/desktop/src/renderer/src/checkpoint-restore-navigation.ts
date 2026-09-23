@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { ToolBatchPresentationItem } from './conversation-tool-batches.ts'
+import type { ConversationScrollAlignment } from './conversation-scroll.ts'
 
 export function useCheckpointRestoreNavigation({
   runtimeId, sectionId, items, anchors, expandedIds, onToggle, onNavigate,
@@ -10,7 +11,7 @@ export function useCheckpointRestoreNavigation({
   anchors: ReadonlySet<string>
   expandedIds: ReadonlySet<string>
   onToggle: (id: string) => void
-  onNavigate?: (target: HTMLElement) => void
+  onNavigate?: (target: HTMLElement, alignment: ConversationScrollAlignment) => void
 }) {
   const ref = useRef<HTMLElement>(null)
   const release = useRef<(() => void) | null>(null)
@@ -29,7 +30,7 @@ export function useCheckpointRestoreNavigation({
       const target = Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-checkpoint-restore]') ?? [])
         .find(element => element.dataset.checkpointRestore === toolUseId && !element.closest('[inert]'))
       if (!target) return
-      onNavigate(target)
+      onNavigate(target, 'center')
       target.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
       release.current = highlightRestoreTarget(target)
     })
