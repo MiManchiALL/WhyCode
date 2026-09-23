@@ -1,6 +1,5 @@
 import type { ToolFileChange } from '@whycode/core/events'
 import { useEffect, useState } from 'react'
-import { filePathKey } from './local-files.ts'
 
 type FileChangesState =
   | { status: 'loading' }
@@ -22,11 +21,6 @@ export function useResponseFileChanges(runtimeId: string, checkpointIds: readonl
     return () => { active = false }
   }, [runtimeId, checkpoints])
   return state
-}
-
-export function visibleFileChanges(changes: readonly ToolFileChange[], excludedPaths: readonly string[]): ToolFileChange[] {
-  const excluded = new Set(excludedPaths.map(filePathKey))
-  return changes.filter(change => !excluded.has(filePathKey(change.path)))
 }
 
 export function totalFileChanges(changes: readonly ToolFileChange[]): { added: number; removed: number } {

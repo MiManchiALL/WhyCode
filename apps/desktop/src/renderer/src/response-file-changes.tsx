@@ -1,13 +1,12 @@
-import type { PresentedFile } from '@whycode/core/presentation'
 import { ChevronDown, ChevronUp, FileDiff } from 'lucide-react'
 import { useState } from 'react'
 import type { Block } from '../../shared/conversation-state.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { ChangeCounts, ChangedFilePath } from './file-change-summary.tsx'
-import { useResponseFileChanges, visibleFileChanges, totalFileChanges } from './response-file-changes-data.ts'
+import { useResponseFileChanges, totalFileChanges } from './response-file-changes-data.ts'
 
-export function ResponseFileChanges({ runtimeId, projectDir, activity, files, onOpenChanges }: {
-  runtimeId: string; projectDir: string | null; activity: readonly Block[]; files: readonly PresentedFile[]
+export function ResponseFileChanges({ runtimeId, projectDir, activity, onOpenChanges }: {
+  runtimeId: string; projectDir: string | null; activity: readonly Block[]
   onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
 }) {
   const checkpointIds = activity.flatMap(block => block.kind === 'tool' && block.call.checkpointId ? [block.call.checkpointId] : [])
@@ -15,23 +14,22 @@ export function ResponseFileChanges({ runtimeId, projectDir, activity, files, on
   const [expanded, setExpanded] = useState(false)
   if (state.status === 'error') return <p role="status" className="py-2 text-xs text-[var(--wc-muted)]">{state.message}</p>
   if (state.status !== 'ready') return null
-  const excludedPaths = files.map(file => file.path)
-  const remaining = visibleFileChanges(state.changes, excludedPaths)
-  if (!remaining.length) return null
+  const { changes } = state
+  if (!changes.length) return null
   const open = (path: string | null) => onOpenChanges?.({
-    kind: 'changes', checkpointIds, excludedPaths, expandedPaths: path ? [path] : [], selectedPath: path,
+    kind: 'changes', checkpointIds, expandedPaths: path ? [path] : [], selectedPath: path,
   })
   return <section className="wc-response-changes" aria-label="本次文件改动">
     <button type="button" className="wc-change-heading wc-focus-ring" title="查看本次文件改动"
       disabled={!onOpenChanges} onClick={() => open(null)}>
       <span className="wc-present-icon"><FileDiff size={20} aria-hidden="true" /></span>
       <span className="min-w-0">
-        <span className="block font-medium">已更改 {remaining.length} 个文件</span>
-        <ChangeCounts {...totalFileChanges(remaining)} />
+        <span className="block font-medium">已更改 {changes.length} 个文件</span>
+        <ChangeCounts {...totalFileChanges(changes)} />
       </span>
     </button>
     <ul className="wc-change-list">
-      {(expanded ? remaining : remaining.slice(0, 3)).map(change => <li key={change.path}>
+      {(expanded ? changes : changes.slice(0, 3)).map(change => <li key={change.path}>
         <button type="button" className="wc-change-row wc-focus-ring" disabled={!onOpenChanges}
           aria-label={`查看 ${change.path} 的改动`} onClick={() => open(change.path)}>
           <ChangedFilePath path={change.path} projectDir={projectDir} />
@@ -39,9 +37,9 @@ export function ResponseFileChanges({ runtimeId, projectDir, activity, files, on
         </button>
       </li>)}
     </ul>
-    {remaining.length > 3 && <button type="button" className="wc-focus-ring wc-change-toggle"
+    {changes.length > 3 && <button type="button" className="wc-focus-ring wc-change-toggle"
       aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
-      {expanded ? '收起文件' : `再显示 ${remaining.length - 3} 个文件`}
+      {expanded ? '收起文件' : `再显示 ${changes.length - 3} 个文件`}
       {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
     </button>}
   </section>

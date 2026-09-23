@@ -2,7 +2,7 @@ import type { ToolFileChange } from '@whycode/core/events'
 import { ChevronRight, FolderOpen, PanelRightOpen } from 'lucide-react'
 import { useCallback, useId, useLayoutEffect } from 'react'
 import type { RightPanelPage } from './right-panel-state.ts'
-import { useResponseFileChanges, visibleFileChanges, totalFileChanges } from './response-file-changes-data.ts'
+import { useResponseFileChanges, totalFileChanges } from './response-file-changes-data.ts'
 import { ChangeCounts, ChangedFilePath } from './file-change-summary.tsx'
 import { FileDiff } from './file-diff.tsx'
 import { fileIcon, FilePreviewMessage } from './file-preview-controls.tsx'
@@ -32,7 +32,7 @@ export function RightPanelChanges(props: Props) {
   useLayoutEffect(focusSelected, [focusSelected, page.expandedPaths, state.status])
   if (state.status === 'loading') return <FilePreviewMessage>正在读取本轮改动…</FilePreviewMessage>
   if (state.status === 'error') return <FilePreviewMessage>{state.message}</FilePreviewMessage>
-  const changes = visibleFileChanges(state.changes, page.excludedPaths)
+  const { changes } = state
   const expanded = new Set(page.expandedPaths.map(filePathKey))
   return <div className="wc-changes-panel flex min-h-0 flex-1 flex-col">
     <div className="wc-changes-summary">

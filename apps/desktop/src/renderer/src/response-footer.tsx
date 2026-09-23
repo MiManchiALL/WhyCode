@@ -24,7 +24,7 @@ export function ResponseFooter({ runtimeId, projectDir, activity, final, present
   if (!texts.length || !response) return null
   return <div className="px-1 pb-2" data-response-footer>
     {presentation?.files.length ? <PresentedFiles files={presentation.files} runtimeId={runtimeId} onOpenFile={onOpenFile} /> : null}
-    <ResponseFileChanges runtimeId={runtimeId} projectDir={projectDir} activity={activity} files={presentation?.files ?? []} onOpenChanges={onOpenChanges} />
+    <ResponseFileChanges runtimeId={runtimeId} projectDir={projectDir} activity={activity} onOpenChanges={onOpenChanges} />
     {response.sources.length ? (
       <div className="wc-source-list" role="list" aria-label="来源">
         {response.sources.map(source => <div className="wc-source-item" role="listitem" key={source.url}>

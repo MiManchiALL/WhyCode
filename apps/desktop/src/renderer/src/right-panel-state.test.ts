@@ -47,7 +47,7 @@ function snapshotPage(
 describe('右侧栏会话配置', () => {
   it('改动卡片与逐文件入口复用一个标签，打开当前文件后能保留并返回原差异列表', () => {
     const overview: Extract<RightPanelPage, { kind: 'changes' }> = {
-      kind: 'changes', checkpointIds: ['checkpoint-a', 'checkpoint-b'], excludedPaths: ['C:/report.pdf'],
+      kind: 'changes', checkpointIds: ['checkpoint-a', 'checkpoint-b'],
       expandedPaths: [], selectedPath: null,
     }
     let state = openRightPanelPage(emptyState(), overview)

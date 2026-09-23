@@ -14,7 +14,7 @@ export type RightPanelFileSource =
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
   | { kind: 'workspace'; expanded: string[] }
-  | { kind: 'changes'; checkpointIds: string[]; excludedPaths: string[]; expandedPaths: string[]; selectedPath: string | null }
+  | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
   | { kind: 'subagent-overview' }
   | { kind: 'subagent-transcript'; subagentId: string }
   | {
@@ -276,9 +276,9 @@ function parsePage(value: unknown): RightPanelPage | null {
   if (page.kind === 'changes') {
     const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string')
     return stringList(page.checkpointIds) && page.checkpointIds.length > 0
-      && stringList(page.excludedPaths) && stringList(page.expandedPaths)
+      && stringList(page.expandedPaths)
       && (page.selectedPath === null || typeof page.selectedPath === 'string')
-      ? { kind: page.kind, checkpointIds: page.checkpointIds, excludedPaths: page.excludedPaths,
+      ? { kind: page.kind, checkpointIds: page.checkpointIds,
         expandedPaths: page.expandedPaths, selectedPath: page.selectedPath } : null
   }
   if (page.kind === 'subagent-overview') return { kind: page.kind }
