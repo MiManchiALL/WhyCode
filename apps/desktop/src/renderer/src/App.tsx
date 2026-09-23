@@ -300,7 +300,7 @@ export function App() {
     release?.()
   }, [])
   useEffect(() => releaseConversationScroll, [releaseConversationScroll])
-  const scrollToConversation = useCallback((targetId: string) => {
+  const scrollToConversation = useCallback((targetId: string | HTMLElement) => {
     const scroller = scrollRef.current
     if (!scroller) return false
     releaseConversationScroll()
@@ -320,10 +320,10 @@ export function App() {
     },
     onError: (message) => showError(message),
   })
-  const navigateConversation = useCallback((targetId: string) => {
+  const navigateConversation = useCallback((targetId: string | HTMLElement) => {
     history.cancel()
     pendingScrollRestoreRef.current = null
-    if (!scrollToConversation(targetId)) void history.loadOlder(targetId)
+    if (!scrollToConversation(targetId) && typeof targetId === 'string') void history.loadOlder(targetId)
   }, [history.cancel, history.loadOlder, scrollToConversation])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const setBtwMode = useCallback((mode: BtwMode | null) => {
@@ -2224,6 +2224,7 @@ export function App() {
                     skills={skillCatalog.skills}
                     projectDir={projectDir}
                     onCheckpointRestoreRequest={requestCheckpointRestore}
+                    onNavigate={navigateConversation}
                     onEdit={editUserMessage}
                     onFork={forkConversation}
                     onOpenFilePreview={openFilePreview}

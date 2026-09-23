@@ -8,6 +8,41 @@ import {
 } from './conversation-scroll.ts'
 
 describe('会话滚动锚定', () => {
+  it('定位工具区元素时同时揭示内层滚动目标，不接受其它会话的节点', () => {
+    const { document } = parseHTML(`<main><div>
+      <section class="wc-completed-work-section" data-conversation-scroll-section="work">
+        <div id="tools"><span id="restore"></span></div>
+      </section></div></main><span id="other"></span>`)
+    const scroller = document.querySelector<HTMLElement>('main')!
+    const section = document.querySelector<HTMLElement>('section')!
+    const tools = document.querySelector<HTMLElement>('#tools')!
+    const target = document.querySelector<HTMLElement>('#restore')!
+    const outerTop = defineScrollerMetrics(scroller, 0, 3_000, 600)
+    const innerTop = defineScrollerMetrics(tools, 0, 1_200, 288)
+    defineTop(scroller, 0)
+    defineRectangle(section, 400, 1_600)
+    tools.getBoundingClientRect = () => rectangle(600 - outerTop(), 288)
+    target.getBoundingClientRect = () => rectangle(1_200 - outerTop() - innerTop(), 24)
+    const original = globalThis.getComputedStyle
+    globalThis.getComputedStyle = () => ({ overflowY: 'auto' }) as CSSStyleDeclaration
+    try {
+      const navigation = scrollConversationToTarget(scroller, target)!
+      assert.equal(innerTop(), 348)
+      assert.equal(target.getBoundingClientRect().top, 12)
+      assert.ok(target.getBoundingClientRect().bottom <= tools.getBoundingClientRect().bottom)
+      assert.equal(section.style.getPropertyValue('content-visibility'), 'visible')
+      navigation.release()
+      tools.scrollTop = 900
+      const again = scrollConversationToTarget(scroller, target)!
+      assert.equal(innerTop(), 588)
+      assert.equal(target.getBoundingClientRect().top, 12)
+      again.release()
+      assert.equal(scrollConversationToTarget(scroller, document.querySelector<HTMLElement>('#other')!), null)
+    } finally {
+      globalThis.getComputedStyle = original
+    }
+  })
+
   it('点击恢复或定位后的正文保持真实布局，实际滚动后才释放', () => {
     for (const mode of ['restore', 'navigate']) {
       const { document, Event } = parseHTML(`

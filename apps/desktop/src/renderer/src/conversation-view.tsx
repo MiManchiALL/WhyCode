@@ -36,6 +36,7 @@ import {
 import { ToolBatchGroup } from './tool-batch-group.tsx'
 import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
 import type { RightPanelPage } from './right-panel-state.ts'
+import { useCheckpointRestoreNavigation } from './checkpoint-restore-navigation.ts'
 
 interface ConversationViewProps {
   runtimeId: string
@@ -60,6 +61,7 @@ interface ConversationViewProps {
   onFork: (turnId: string) => void
   onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
+  onNavigate?: (target: HTMLElement) => void
   onToggle: (id: string) => void
 }
 
@@ -252,8 +254,14 @@ function WorkSection({
     section.activityBlocks,
     shouldSealTrailingToolBatch(section),
   )
+  const restoreNavigation = useCheckpointRestoreNavigation({
+    runtimeId: props.runtimeId, sectionId: section.id, items: activityItems,
+    anchors: props.checkpointRestoreAnchorIds, expandedIds: props.expandedIds,
+    onToggle: props.onToggle, onNavigate: props.onNavigate,
+  })
   return (
     <section
+      ref={restoreNavigation.ref}
       className={section.kind === 'completed-work' ? 'wc-completed-work-section' : undefined}
       data-conversation-scroll-section={section.id}
       data-conversation-navigator-section={navigationEntryId}
@@ -324,6 +332,7 @@ function WorkSection({
             <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId} projectDir={props.projectDir}
               activity={section.activityBlocks} final={section.finalBlocks} presentation={presentation} onOpenFile={props.onOpenFilePreview}
               onOpenChanges={props.onOpenChanges}
+              onRevealRestore={props.busy ? undefined : restoreNavigation.navigate}
               onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
               forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
           )}
@@ -348,6 +357,7 @@ function ConversationToolSegment({
     <ToolBatchSegmentView
       segment={segment}
       animateOnMount={animateOnMount}
+      batchExpanded={props.expandedIds.has(segment.batch.id)}
       renderBlock={(block) => {
         const blockProps = conversationBlockProps(props, block)
         return (

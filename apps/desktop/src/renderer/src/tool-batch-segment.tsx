@@ -15,11 +15,13 @@ import {
 export function ToolBatchSegmentView({
   segment,
   animateOnMount,
+  batchExpanded,
   renderBlock,
   renderBatch,
 }: {
   segment: ToolBatchSegment
   animateOnMount: boolean
+  batchExpanded: boolean
   renderBlock: (block: Block) => ReactNode
   renderBatch: (batch: ToolBatch) => ReactNode
 }) {
@@ -28,7 +30,7 @@ export function ToolBatchSegmentView({
   const targetRef = useRef<HTMLDivElement>(null)
   const animationsRef = useRef<Animation[]>([])
   const [displaySealed, setDisplaySealed] = useState(
-    () => segment.sealed && !animateOnMount,
+    () => segment.sealed && (!animateOnMount || batchExpanded),
   )
 
   useLayoutEffect(() => {
@@ -38,6 +40,10 @@ export function ToolBatchSegmentView({
       return
     }
     if (displaySealed) return
+    if (batchExpanded) {
+      setDisplaySealed(true)
+      return
+    }
 
     const container = containerRef.current
     const source = sourceRef.current
@@ -80,7 +86,7 @@ export function ToolBatchSegmentView({
     heightAnimation.onfinish = () => setDisplaySealed(true)
 
     return () => cancelAnimations(animationsRef)
-  }, [displaySealed, segment.id, segment.sealed])
+  }, [batchExpanded, displaySealed, segment.id, segment.sealed])
 
   if (!segment.sealed || displaySealed) {
     return (

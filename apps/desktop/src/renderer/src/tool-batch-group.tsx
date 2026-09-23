@@ -11,7 +11,7 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { RestoreButton } from './conversation-block.tsx'
+import { RestoreButton } from './checkpoint-restore-button.tsx'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import {
   summarizeToolBatch,

@@ -70,23 +70,24 @@ export function restoreConversationScrollPosition(
 }
 
 /**
- * 定位历史用户输入前先物化其前方折叠工作段，再把实测高度写回固有尺寸。
+ * 定位历史内容前先物化其前方折叠工作段，再把实测高度写回固有尺寸。
  * 目标段保留真实布局直到用户滚动或事务结束，直接定位和会话恢复使用同一套稳定几何。
  */
 export function scrollConversationToTarget(
   scroller: HTMLElement,
-  targetId: string,
+  targetId: string | HTMLElement,
 ): ConversationScrollRetention | null {
-  const target = findByDataValue(
+  const target = typeof targetId === 'string' ? findByDataValue(
     scroller,
     NAVIGATION_TARGET_SELECTOR,
     'conversationNavigatorTarget',
     targetId,
-  )
-  if (!target) return null
+  ) : targetId
+  if (!target || !scroller.contains(target)) return null
 
   const section = target.closest<HTMLElement>(SECTION_SELECTOR)
   const materialized = materializeSectionsBeforeTarget(scroller, target)
+  revealNestedScrollTarget(scroller, target)
   const preliminaryScrollTop = Math.max(
     0,
     elementTopWithinScroller(scroller, target) - 12,
@@ -110,9 +111,19 @@ function materializeSectionsBeforeTarget(
     `${SECTION_SELECTOR}, ${NAVIGATION_TARGET_SELECTOR}`,
   )) {
     if (element.matches(SECTION_SELECTOR)) materializeSection(element, materialized)
-    if (element === target) break
+    if (element === target || element.contains(target)) break
   }
   return materialized
+}
+
+function revealNestedScrollTarget(scroller: HTMLElement, target: HTMLElement): void {
+  for (let parent = target.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+    if (!(parent.scrollHeight > parent.clientHeight) || !/^(auto|scroll)$/.test(getComputedStyle(parent).overflowY)) continue
+    const bounds = parent.getBoundingClientRect()
+    const targetBounds = target.getBoundingClientRect()
+    if (targetBounds.top < bounds.top + 12) parent.scrollTop += targetBounds.top - bounds.top - 12
+    else if (targetBounds.bottom > bounds.bottom - 12) parent.scrollTop += targetBounds.bottom - bounds.bottom + 12
+  }
 }
 
 function captureConversationScrollAnchor(
