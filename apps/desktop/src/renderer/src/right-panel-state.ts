@@ -14,6 +14,7 @@ export type RightPanelFileSource =
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
   | { kind: 'workspace'; expanded: string[] }
+  | { kind: 'changes'; checkpointIds: string[]; excludedPaths: string[]; expandedPaths: string[]; selectedPath: string | null }
   | { kind: 'subagent-overview' }
   | { kind: 'subagent-transcript'; subagentId: string }
   | {
@@ -210,6 +211,8 @@ export function rightPanelTabId(page: RightPanelPage): string {
   switch (page.kind) {
     case 'workspace':
       return 'workspace'
+    case 'changes':
+      return 'changes'
     case 'terminal':
       return `terminal:${page.terminal.id}`
     case 'file':
@@ -269,6 +272,14 @@ function parsePage(value: unknown): RightPanelPage | null {
   const page = value as Record<string, unknown>
   if (page.kind === 'workspace' && Array.isArray(page.expanded) && page.expanded.every(path => typeof path === 'string')) {
     return { kind: page.kind, expanded: page.expanded.slice(0, 63) }
+  }
+  if (page.kind === 'changes') {
+    const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string')
+    return stringList(page.checkpointIds) && page.checkpointIds.length > 0
+      && stringList(page.excludedPaths) && stringList(page.expandedPaths)
+      && (page.selectedPath === null || typeof page.selectedPath === 'string')
+      ? { kind: page.kind, checkpointIds: page.checkpointIds, excludedPaths: page.excludedPaths,
+        expandedPaths: page.expandedPaths, selectedPath: page.selectedPath } : null
   }
   if (page.kind === 'subagent-overview') return { kind: page.kind }
   if (page.kind === 'subagent-transcript' && typeof page.subagentId === 'string') {

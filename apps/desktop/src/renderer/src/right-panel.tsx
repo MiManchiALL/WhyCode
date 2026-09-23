@@ -2,6 +2,7 @@ import type { SkillSummary, SubagentSummary } from '@whycode/core'
 import { FolderOpen, Maximize2, Minimize2, PanelRightClose, Plus, SquareTerminal } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { RightPanelFilePreview } from './right-panel-file.tsx'
+import { RightPanelChanges } from './right-panel-changes.tsx'
 import { WorkspaceBrowser } from './workspace-browser.tsx'
 import {
   activeRightPanelPage,
@@ -94,6 +95,10 @@ function RightPanelContent(props: RightPanelProps) {
     </div>
   )
   switch (page.kind) {
+    case 'changes':
+      return props.active ? <RightPanelChanges key={`${props.runtimeId}:${page.checkpointIds.join(',')}`}
+        runtimeId={props.runtimeId} projectDir={props.projectDir} page={page} onOpenPage={props.onOpenPage} />
+        : <div className="min-h-0 flex-1" />
     case 'workspace':
       return props.active && props.workspacePath ? <WorkspaceBrowser
         key={`${props.runtimeId}:${props.workspacePath}`}

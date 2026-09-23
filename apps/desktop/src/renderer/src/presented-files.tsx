@@ -1,11 +1,11 @@
 import type { PresentedFile } from '@whycode/core/presentation'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { ChevronDown, ChevronUp, Copy, ExternalLink, FolderOpen, LoaderCircle, MoreHorizontal } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { fileIcon } from './file-preview-controls.tsx'
 import { fileName } from './local-files.ts'
-import { performWorkspaceFileAction, type WorkspaceFileAction } from './workspace-file-actions.ts'
+import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
 
 type OpenFile = (page: Extract<RightPanelPage, { kind: 'file' }>) => void
 
@@ -31,24 +31,7 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
 }) {
   const name = fileName(file.path)
   const Icon = fileIcon(name)
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const request = useRef<AbortController | null>(null)
-  useEffect(() => () => request.current?.abort(), [runtimeId, file.path])
-  const nativeAction = async (action: WorkspaceFileAction) => {
-    if (request.current) return
-    const abort = new AbortController()
-    request.current = abort
-    setPending(true)
-    setError(null)
-    try {
-      await performWorkspaceFileAction(window.whycode, runtimeId, file.path, action, abort.signal)
-    } catch (error) {
-      if (!abort.signal.aborted) setError(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (!abort.signal.aborted) { request.current = null; setPending(false) }
-    }
-  }
+  const { pending, error, run: nativeAction } = useWorkspaceFileAction(runtimeId, file.path)
   const open = () => {
     onOpenFile?.({ kind: 'file', path: file.path, name, source: { kind: 'current' }, previewMode: 'preview' })
   }

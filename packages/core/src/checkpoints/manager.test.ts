@@ -28,9 +28,17 @@ describe('持久化资源检查点', () => {
       { path, added: 1, removed: 1 }, { path: other, added: 1, removed: 0 },
     ])
     assert.deepEqual(await env.manager.fileChanges([last.id]), [{ path, added: 1, removed: 1 }])
+    const netPreview = {
+      path, before: { kind: 'text', content: 'original\n', size: 9 },
+      after: { kind: 'text', content: 'replacement\n', size: 12 },
+    }
+    assert.deepEqual(await env.manager.filePreview([last.id, first.id, second.id, first.id], path), netPreview)
+    assert.equal(await env.manager.filePreview([first.id, last.id], join(env.project, 'untracked.ts')), null)
     assert.equal((await env.manager.restore('first', 'files')).ok, true)
     assert.deepEqual(await env.manager.fileChanges([first.id, second.id]), [{ path: other, added: 1, removed: 0 }])
     assert.deepEqual(await managerFor(env).fileChanges([last.id]), [{ path, added: 1, removed: 1 }])
+    assert.deepEqual(await managerFor(env).filePreview([first.id, second.id, last.id], path), netPreview)
+    await assert.rejects(env.manager.filePreview([randomUUID()], path), /检查点不可用/)
     await assert.rejects(env.manager.fileChanges([randomUUID()]), /检查点不可用/)
     await assert.rejects(env.manager.fileChanges(['../outside']), /无效检查点/)
 
@@ -80,6 +88,9 @@ describe('持久化资源检查点', () => {
     assert.deepEqual([...(await env.manager.turnFileChanges(created)).values()], [
       { path, added: 0, removed: 0 },
     ])
+    assert.deepEqual(await env.manager.filePreview([created.id], path), {
+      path, before: { kind: 'missing' }, after: { kind: 'text', content: '', size: 0 },
+    })
     const deletion = await env.manager.prepare('delete', 'turn-1', { kind: 'exact-files', paths: [path] })
     assert.ok(deletion)
     await rm(path)
@@ -94,6 +105,9 @@ describe('持久化资源检查点', () => {
     const removed = await env.manager.finalize(remove)
     assert.ok(removed)
     assert.deepEqual([...(await env.manager.turnFileChanges(removed)).values()], [{ path, added: 0, removed: 1 }])
+    assert.deepEqual(await env.manager.filePreview([removed.id], path), {
+      path, before: { kind: 'text', content: 'before\n', size: 7 }, after: { kind: 'missing' },
+    })
     const recreate = await env.manager.prepare('recreate', 'turn-2', { kind: 'exact-files', paths: [path] })
     assert.ok(recreate)
     await writeFile(path, 'before\n')

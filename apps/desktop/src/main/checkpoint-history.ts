@@ -26,14 +26,14 @@ export async function readCheckpointFileChanges(
 
 export async function readCheckpointFilePreview(
   runtime: DesktopSessionRuntime | null,
-  toolUseId: string,
+  target: string | readonly string[],
   path: string,
 ): Promise<CheckpointFilePreviewResult> {
   try {
-    const preview = await checkpointsFor(runtime).filePreview(toolUseId, path)
+    const preview = await checkpointsFor(runtime).filePreview(target, path)
     return preview
       ? { ok: true, preview }
-      : { ok: false, error: '该工具调用没有对应的文件快照' }
+      : { ok: false, error: '所选检查点没有对应的文件快照' }
   } catch (error) {
     return { ok: false, error: `文件预览读取失败：${error instanceof Error ? error.message : String(error)}` }
   }

@@ -2998,10 +2998,13 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (
       !request
       || typeof request.runtimeId !== 'string'
-      || typeof request.toolUseId !== 'string'
       || typeof request.path !== 'string'
     ) return Promise.resolve({ ok: false, error: '文件预览请求无效' })
-    return readCheckpointFilePreview(runtimeRegistry.get(request.runtimeId), request.toolUseId, request.path)
+    const target = typeof request.toolUseId === 'string' && request.checkpointIds === undefined ? request.toolUseId
+      : request.toolUseId === undefined && Array.isArray(request.checkpointIds) && request.checkpointIds.length > 0
+        && request.checkpointIds.every(id => typeof id === 'string') ? request.checkpointIds : null
+    if (target === null) return Promise.resolve({ ok: false, error: '文件预览请求无效' })
+    return readCheckpointFilePreview(runtimeRegistry.get(request.runtimeId), target, request.path)
   })
   ipcMain.handle(IPC.checkpointFileCurrentMatch, (
     _e,

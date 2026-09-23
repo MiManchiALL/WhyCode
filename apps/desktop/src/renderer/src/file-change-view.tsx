@@ -3,14 +3,13 @@ import { useMemo, useState } from 'react'
 import { FilePreviewMessage as PreviewMessage, FileWrapButton } from './file-preview-controls.tsx'
 import { CopyButton } from './message-actions.tsx'
 import {
-  buildFileDiffHunks,
   contentLines,
   previewTextState,
 } from './file-change-presentation.ts'
 import { useCheckpointFilePreview } from './file-preview-data.ts'
 import type { FilePreviewToolName } from './right-panel-state.ts'
 import { SyntaxCode } from './syntax-code.tsx'
-import { useScrollArea } from './use-scroll-area.ts'
+import { FileDiff } from './file-diff.tsx'
 
 type InlineFilePreviewToolName = Exclude<FilePreviewToolName, 'MoveFile'>
 
@@ -85,7 +84,7 @@ function InlinePreviewContent({
       ? <FullFilePreview path={path} content={before.content} tone="removed" wrap={wrap} />
       : <PreviewMessage>{before.message}</PreviewMessage>
   }
-  return <EditDiff path={path} preview={preview} wrap={wrap} />
+  return <FileDiff path={path} preview={preview} wrap={wrap} className="max-h-72" />
 }
 
 function FullFilePreview({
@@ -101,33 +100,6 @@ function FullFilePreview({
 }) {
   const lines = useMemo(() => contentLines(content, tone), [content, tone])
   return <SyntaxCode path={path} lines={lines} wrap={wrap} className="max-h-64" />
-}
-
-function EditDiff({ path, preview, wrap }: { path: string; preview: CheckpointFilePreview; wrap: boolean }) {
-  const before = previewTextState(preview.before)
-  const after = previewTextState(preview.after)
-  const beforeContent = before.ok ? before.content : null
-  const afterContent = after.ok ? after.content : null
-  const hunks = useMemo(
-    () => beforeContent !== null && afterContent !== null
-      ? buildFileDiffHunks(beforeContent, afterContent)
-      : [],
-    [afterContent, beforeContent],
-  )
-  const { ref, onScroll, overscrollBehaviorY } = useScrollArea(hunks, { enabled: hunks.length > 0 })
-  if (!before.ok) return <PreviewMessage>{before.message}</PreviewMessage>
-  if (!after.ok) return <PreviewMessage>{after.message}</PreviewMessage>
-  if (hunks.length === 0) return <PreviewMessage>没有可展示的文本差异</PreviewMessage>
-  return (
-    <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-scrollbar max-h-72 overflow-y-auto">
-      {hunks.map((hunk, index) => (
-        <div key={hunk.id}>
-          {index > 0 ? <div className="wc-diff-hunk-gap">···</div> : null}
-          <SyntaxCode path={path} lines={hunk.lines} scroll={false} wrap={wrap} />
-        </div>
-      ))}
-    </div>
-  )
 }
 
 function FileChangeHeader({

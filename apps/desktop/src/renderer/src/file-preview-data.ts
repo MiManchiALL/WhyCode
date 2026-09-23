@@ -2,6 +2,7 @@ import type { CheckpointFilePreview } from '@whycode/core'
 import { useEffect, useRef, useState } from 'react'
 import type {
   CheckpointFileCurrentMatchResult,
+  CheckpointFilePreviewRequest,
   CheckpointFilePreviewResult,
 } from '../../shared/session.ts'
 
@@ -23,14 +24,19 @@ const pendingCheckpointCurrentMatches = new Map<
 
 export function useCheckpointFilePreview(
   runtimeId: string,
-  toolUseId: string,
+  target: string | readonly string[],
   path: string,
 ): CheckpointPreviewLoadState {
   const [state, setState] = useState<CheckpointPreviewLoadState>({ status: 'loading' })
+  const toolUseId = typeof target === 'string' ? target : undefined
+  const checkpoints = typeof target === 'string' ? undefined : target.join(',')
   useEffect(() => {
     let active = true
     setState({ status: 'loading' })
-    void requestCheckpointPreview(runtimeId, toolUseId, path).then((result) => {
+    const request: CheckpointFilePreviewRequest = toolUseId === undefined
+      ? { runtimeId, path, checkpointIds: checkpoints!.split(',') }
+      : { runtimeId, path, toolUseId }
+    void requestCheckpointPreview(request).then((result) => {
       if (!active) return
       setState(result.ok
         ? { status: 'ready', preview: result.preview }
@@ -40,7 +46,7 @@ export function useCheckpointFilePreview(
       setState({ status: 'error', message: errorMessage(error) })
     })
     return () => { active = false }
-  }, [path, runtimeId, toolUseId])
+  }, [path, runtimeId, toolUseId, checkpoints])
   return state
 }
 
@@ -78,15 +84,11 @@ export function useCheckpointFileCurrentMatch(
   return state
 }
 
-function requestCheckpointPreview(
-  runtimeId: string,
-  toolUseId: string,
-  path: string,
-): Promise<CheckpointFilePreviewResult> {
-  const key = `${runtimeId}\u0000${toolUseId}\u0000${path}`
+function requestCheckpointPreview(input: CheckpointFilePreviewRequest): Promise<CheckpointFilePreviewResult> {
+  const key = JSON.stringify(input)
   const pending = pendingCheckpointPreviews.get(key)
   if (pending) return pending
-  const request = window.whycode.checkpointFilePreview({ runtimeId, toolUseId, path })
+  const request = window.whycode.checkpointFilePreview(input)
   pendingCheckpointPreviews.set(key, request)
   void request.finally(() => pendingCheckpointPreviews.delete(key)).catch(() => {})
   return request

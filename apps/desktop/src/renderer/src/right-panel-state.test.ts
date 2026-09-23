@@ -45,6 +45,33 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('改动卡片与逐文件入口复用一个标签，打开当前文件后能保留并返回原差异列表', () => {
+    const overview: Extract<RightPanelPage, { kind: 'changes' }> = {
+      kind: 'changes', checkpointIds: ['checkpoint-a', 'checkpoint-b'], excludedPaths: ['C:/report.pdf'],
+      expandedPaths: [], selectedPath: null,
+    }
+    let state = openRightPanelPage(emptyState(), overview)
+    const changesId = state.activeTabId
+    const selected = { ...overview, expandedPaths: ['C:/repo/app.ts'], selectedPath: 'C:/repo/app.ts' }
+    state = openRightPanelPage(state, selected)
+    assert.equal(state.tabs.length, 1)
+    assert.equal(state.activeTabId, changesId)
+    for (const path of ['C:/repo/app.ts', 'c:\\REPO\\APP.ts']) {
+      state = openRightPanelPage(state, { kind: 'file', path, name: 'app.ts', source: { kind: 'current' }, previewMode: 'code' })
+    }
+    assert.equal(state.tabs.length, 2)
+    state = selectRightPanelTab(state, changesId!)
+    assert.deepEqual(activeRightPanelPage(state), selected)
+    const storage = new MemoryStorage()
+    new RightPanelSessionStore(storage).set('session-a', state)
+    assert.deepEqual(new RightPanelSessionStore(storage).get('session-a'), state)
+    state = openRightPanelPage(state, overview)
+    assert.deepEqual(activeRightPanelPage(state), overview)
+    state = openRightPanelPage(state, { ...overview, checkpointIds: ['next-turn'] })
+    assert.equal(state.tabs.length, 2)
+    assert.equal(state.activeTabId, changesId)
+  })
+
   it('排序只改变目标会话的顺序，保持活动内容与页面设置，关闭时按新顺序选择邻居', () => {
     let state = emptyState()
     for (const name of ['a.md', 'b.html', 'c.ts']) {

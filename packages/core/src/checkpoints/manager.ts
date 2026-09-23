@@ -191,6 +191,11 @@ export class CheckpointManager {
 
   /** 按可见工具的检查点读取历史净差异，不访问当前工作区，也不扫描其它会话。 */
   async fileChanges(checkpointIds: readonly string[]): Promise<ToolFileChange[]> {
+    return [...(await this.compareFileChanges(await this.fileChangeManifests(checkpointIds))).values()]
+      .filter(change => change !== null)
+  }
+
+  private async fileChangeManifests(checkpointIds: readonly string[]): Promise<CheckpointManifest[]> {
     const manifests: CheckpointManifest[] = []
     for (const id of new Set(checkpointIds)) {
       const manifest = await this.store.get(id)
@@ -200,18 +205,11 @@ export class CheckpointManager {
       manifests.push(manifest)
     }
     manifests.sort((left, right) => left.sequence - right.sequence)
-    return [...(await this.compareFileChanges(manifests)).values()].filter(change => change !== null)
+    return manifests
   }
 
   private async compareFileChanges(manifests: readonly CheckpointManifest[], paths?: ReadonlySet<string>): Promise<Map<string, ToolFileChange | null>> {
-    const resources = new Map<string, CheckpointResource>()
-    for (const manifest of manifests) {
-      for (const resource of manifest.resources) {
-        const key = pathKey(resource.path)
-        if (paths && !paths.has(key)) continue
-        resources.set(key, { ...resource, before: resources.get(key)?.before ?? resource.before })
-      }
-    }
+    const resources = fileChangeResources(manifests, paths)
     const changes = new Map<string, ToolFileChange | null>()
     for (const [key, resource] of resources) {
       changes.set(key, null)
@@ -376,9 +374,11 @@ export class CheckpointManager {
       : null
   }
 
-  /** 按工具与精确资源读取稳定的前后版本，失效回滚点仍可用于历史展示。 */
-  async filePreview(toolUseId: string, path: string): Promise<CheckpointFilePreview | null> {
-    const resource = await this.filePreviewResource(toolUseId, path)
+  /** 按单次工具或所选检查点的首尾快照读取精确路径，失效回滚点仍可用于历史展示。 */
+  async filePreview(target: string | readonly string[], path: string): Promise<CheckpointFilePreview | null> {
+    const resource = typeof target === 'string'
+      ? await this.filePreviewResource(target, path)
+      : fileChangeResources(await this.fileChangeManifests(target), new Set([pathKey(path)])).get(pathKey(path))
     if (!resource?.after) return null
     const [before, after] = await Promise.all([
       readFileStatePreview(resource.before, this.store.blobDir),
@@ -405,4 +405,16 @@ export class CheckpointManager {
     )
     return manifest?.resources.find((item) => pathKey(item.path) === pathKey(path)) ?? null
   }
+}
+
+function fileChangeResources(manifests: readonly CheckpointManifest[], paths?: ReadonlySet<string>): Map<string, CheckpointResource> {
+  const resources = new Map<string, CheckpointResource>()
+  for (const manifest of manifests) {
+    for (const resource of manifest.resources) {
+      const key = pathKey(resource.path)
+      if (paths && !paths.has(key)) continue
+      resources.set(key, { ...resource, before: resources.get(key)?.before ?? resource.before })
+    }
+  }
+  return resources
 }

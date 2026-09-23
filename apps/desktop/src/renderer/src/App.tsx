@@ -2225,6 +2225,7 @@ export function App() {
                     onEdit={editUserMessage}
                     onFork={forkConversation}
                     onOpenFilePreview={openFilePreview}
+                    onOpenChanges={showRightPanelPage}
                     onToggle={toggle}
                   />
                 </div>

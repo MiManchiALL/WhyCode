@@ -116,7 +116,7 @@ export interface CheckpointFileChangesRequest {
   checkpointIds: string[]
 }
 
-export interface CheckpointFilePreviewRequest {
+export interface CheckpointFileCurrentMatchRequest {
   runtimeId: string
   toolUseId: string
   path: string
@@ -124,7 +124,10 @@ export interface CheckpointFilePreviewRequest {
 
 
 
-export type CheckpointFileCurrentMatchRequest = CheckpointFilePreviewRequest
+export type CheckpointFilePreviewRequest = { runtimeId: string; path: string } & (
+  | { toolUseId: string; checkpointIds?: never }
+  | { checkpointIds: string[]; toolUseId?: never }
+)
 
 export type {
   CheckpointFileChangesResult,

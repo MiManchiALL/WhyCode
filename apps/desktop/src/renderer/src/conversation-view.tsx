@@ -59,6 +59,7 @@ interface ConversationViewProps {
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string, restoreFiles: boolean) => Promise<boolean>
   onFork: (turnId: string) => void
   onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
+  onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
   onToggle: (id: string) => void
 }
 
@@ -322,6 +323,7 @@ function WorkSection({
           {completed && (
             <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId} projectDir={props.projectDir}
               activity={section.activityBlocks} final={section.finalBlocks} presentation={presentation} onOpenFile={props.onOpenFilePreview}
+              onOpenChanges={props.onOpenChanges}
               onFork={section.forkTurnId && !props.busy ? () => props.onFork(section.forkTurnId!) : undefined}
               forkPending={section.forkTurnId !== null && section.forkTurnId === props.forkPendingTurnId} />
           )}

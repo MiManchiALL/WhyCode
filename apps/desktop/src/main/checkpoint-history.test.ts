@@ -32,9 +32,15 @@ describe('历史文件检查点读取', () => {
     assert.deepEqual(await readCheckpointFilePreview(runtime, 'edit', f.path), {
       ok: true, preview: { path: f.path, before: { kind: 'text', content: 'A', size: 1 }, after: { kind: 'text', content: 'B', size: 1 } },
     })
+    assert.deepEqual(await readCheckpointFilePreview(runtime, [f.edited.id, f.created.id, f.created.id], f.path), {
+      ok: true, preview: { path: f.path, before: { kind: 'missing' }, after: { kind: 'text', content: 'B', size: 1 } },
+    })
     assert.deepEqual(await checkCheckpointFileCurrentMatch(runtime, 'create', f.path), { ok: true, matches: false })
     assert.deepEqual(await checkCheckpointFileCurrentMatch(runtime, 'edit', f.path), { ok: true, matches: true })
     await writeFile(f.path, '外部修改')
+    assert.deepEqual(await readCheckpointFilePreview(runtime, [f.created.id, f.edited.id], f.path), {
+      ok: true, preview: { path: f.path, before: { kind: 'missing' }, after: { kind: 'text', content: 'B', size: 1 } },
+    })
     assert.deepEqual(await checkCheckpointFileCurrentMatch(runtime, 'edit', f.path), { ok: true, matches: false })
     assert.equal(runtime.session, null)
     assert.equal(await readFile(transcript, 'utf8'), before)
@@ -66,11 +72,14 @@ describe('历史文件检查点读取', () => {
     other.journal = await f.store.create({ workspace: localWorkspace(null), modelId: 'unavailable:model' })
     assert.equal((await readCheckpointFileChanges(other, [f.created.id])).ok, false)
     assert.equal((await readCheckpointFilePreview(other, 'create', f.path)).ok, false)
+    assert.equal((await readCheckpointFilePreview(other, [f.created.id], f.path)).ok, false)
+    assert.equal((await readCheckpointFilePreview(runtime, ['../outside'], f.path)).ok, false)
     assert.equal((await readCheckpointFileChanges(runtime, ['../outside'])).ok, false)
     assert.equal((await readCheckpointFileChanges(runtime, [randomUUID()])).ok, false)
     const outside = join(f.root, 'outside.txt')
     await writeFile(outside, '不属于该检查点')
     assert.equal((await readCheckpointFilePreview(runtime, 'create', outside)).ok, false)
+    assert.equal((await readCheckpointFilePreview(runtime, [f.created.id, f.edited.id], outside)).ok, false)
     assert.equal((await checkCheckpointFileCurrentMatch(runtime, 'create', outside)).ok, false)
     await writeFile(join(f.journal.checkpointDirectory, 'manifests', `${f.created.id}.json`), '损坏数据')
     const damaged = await readCheckpointFileChanges(runtime, [f.created.id])
