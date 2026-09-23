@@ -1145,6 +1145,14 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   transition: background-color 120ms ease;
 }
 
+.wc-tool-summary { container: wc-tool-summary / inline-size; overflow: hidden; }
+@container wc-tool-summary (max-width: 15rem) {
+  .wc-tool-change-counts { display: none; }
+}
+@container wc-tool-summary (max-width: 9rem) {
+  .wc-tool-file-name, .wc-tool-summary-detail, .wc-tool-card-description { display: none; }
+}
+
 .wc-tool-row:is(:hover, :has(:focus-visible, [data-navigation-highlight='true'])) {
   background: rgb(48 50 45 / 3.5%);
 }

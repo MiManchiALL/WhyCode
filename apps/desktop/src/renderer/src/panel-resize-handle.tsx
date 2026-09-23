@@ -4,7 +4,6 @@ import {
   useRef,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
-  type RefObject,
 } from 'react'
 import {
   PANEL_WIDTHS,
@@ -12,14 +11,15 @@ import {
   panelWidthFromPixels,
   panelWidthBounds,
   panelWidthExpression,
+  projectPanelWidths,
   type PanelSide,
+  type PanelWidths,
 } from './panel-layout.ts'
+import type { PanelLayout } from './use-panel-layout.ts'
 
 interface PanelResizeHandleProps {
   side: PanelSide
-  panelRef: RefObject<HTMLElement | null>
-  width: number
-  onWidthChange: (width: number) => void
+  layout: PanelLayout
   onCollapse: () => void
   onPreviewExpand: (width: number) => void
   onResizeActiveChange: (active: boolean) => void
@@ -27,14 +27,14 @@ interface PanelResizeHandleProps {
 
 export function PanelResizeHandle({
   side,
-  panelRef,
-  width,
-  onWidthChange,
+  layout,
   onCollapse,
   onPreviewExpand,
   onResizeActiveChange,
 }: PanelResizeHandleProps) {
   const finishDragRef = useRef<(() => void) | null>(null)
+  const panelRef = layout.refs[side]
+  const width = layout.widths[side]
 
   useEffect(() => () => finishDragRef.current?.(), [])
 
@@ -42,17 +42,19 @@ export function PanelResizeHandle({
     if (event.button !== 0) return
     const handle = event.currentTarget
     const panel = panelRef.current
-    const container = panel?.parentElement
-    if (!panel || !container) return
+    const geometry = layout.measure()
+    if (!panel || !geometry) return
+    const peerSide = side === 'left' ? 'right' : 'left'
+    const peer = layout.refs[peerSide].current
 
     finishDragRef.current?.()
     const pointerId = event.pointerId
     const startX = event.clientX
-    const startWidth = panel.getBoundingClientRect().width
-    const viewportWidth = window.innerWidth
-    const bounds = panelWidthBounds({ side, viewportWidth, containerWidth: container.getBoundingClientRect().width })
+    const startWidth = geometry.widths[side]
+    const viewportWidth = geometry.viewportWidth
+    const bounds = panelWidthBounds({ ...geometry, side })
     let latestX = startX
-    let latestWidth = startWidth
+    let latestWidths = geometry.widths
     let animationFrame: number | null = null
     let moved = false
     let finished = false
@@ -75,14 +77,15 @@ export function PanelResizeHandle({
         bounds,
         collapsed: previewCollapsed,
       })
-      latestWidth = projection.width
+      latestWidths = projectPanelWidths(geometry!, side, projection.width)
       const collapsedChanged = previewCollapsed !== projection.shouldCollapse
       previewCollapsed = projection.shouldCollapse
       if (collapsedChanged) {
         if (previewCollapsed) onCollapse()
-        else onPreviewExpand(panelWidthFromPixels(side, latestWidth, viewportWidth))
+        else onPreviewExpand(panelWidthFromPixels(side, latestWidths[side], viewportWidth))
       }
-      if (!previewCollapsed) panel!.style.width = `${projection.width.toFixed(2)}px`
+      if (peer && geometry!.open[peerSide]) peer.style.width = `${latestWidths[peerSide].toFixed(2)}px`
+      if (!previewCollapsed) panel!.style.width = `${latestWidths[side].toFixed(2)}px`
     }
 
     function removeDragEffects(): void {
@@ -106,13 +109,21 @@ export function PanelResizeHandle({
       if (flushPosition && moved) applyLatestPosition()
       finished = true
       removeDragEffects()
+      const changes: Partial<PanelWidths> = {}
       if (previewCollapsed) {
-        onWidthChange(PANEL_WIDTHS[side].minimum)
+        changes[side] = PANEL_WIDTHS[side].minimum
       } else if (moved) {
-        const nextWidth = panelWidthFromPixels(side, latestWidth, viewportWidth)
+        const nextWidth = panelWidthFromPixels(side, latestWidths[side], viewportWidth)
         panel!.style.width = panelWidthExpression(side, nextWidth)
-        onWidthChange(nextWidth)
+        changes[side] = nextWidth
       }
+      if (moved && peer && geometry!.open[peerSide]) {
+        const changed = Math.abs(latestWidths[peerSide] - geometry!.widths[peerSide]) >= 0.5
+        const peerWidth = changed ? panelWidthFromPixels(peerSide, latestWidths[peerSide], viewportWidth) : layout.widths[peerSide]
+        peer.style.width = panelWidthExpression(peerSide, peerWidth)
+        if (changed) changes[peerSide] = peerWidth
+      }
+      if (Object.keys(changes).length) layout.commit(changes)
       onResizeActiveChange(false)
     }
 
@@ -156,22 +167,18 @@ export function PanelResizeHandle({
     side,
     onCollapse,
     onPreviewExpand,
-    onWidthChange,
+    layout,
     onResizeActiveChange,
     panelRef,
   ])
 
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     const panel = panelRef.current
-    const container = panel?.parentElement
-    if (!panel || !container) return
-    const viewportWidth = window.innerWidth
-    const bounds = panelWidthBounds({
-      side,
-      viewportWidth,
-      containerWidth: container.getBoundingClientRect().width,
-    })
-    const currentWidth = panel.getBoundingClientRect().width
+    const geometry = layout.measure()
+    if (!panel || !geometry) return
+    const viewportWidth = geometry.viewportWidth
+    const bounds = panelWidthBounds({ ...geometry, side })
+    const currentWidth = geometry.widths[side]
     const step = side === 'left' ? 16 : viewportWidth * 0.02
     let nextWidth: number
     switch (event.key) {
@@ -191,12 +198,14 @@ export function PanelResizeHandle({
         return
     }
     event.preventDefault()
-    onWidthChange(panelWidthFromPixels(
-      side,
-      Math.min(Math.max(nextWidth, bounds.minWidth), bounds.maxWidth),
-      viewportWidth,
-    ))
-  }, [side, onWidthChange, panelRef])
+    const projected = projectPanelWidths(geometry, side, nextWidth)
+    const changes: Partial<PanelWidths> = { [side]: panelWidthFromPixels(side, projected[side], viewportWidth) }
+    const peer = side === 'left' ? 'right' : 'left'
+    if (geometry.open[peer] && Math.abs(projected[peer] - geometry.widths[peer]) >= 0.5) {
+      changes[peer] = panelWidthFromPixels(peer, projected[peer], viewportWidth)
+    }
+    layout.commit(changes)
+  }, [side, layout, panelRef])
 
   return (
     <div

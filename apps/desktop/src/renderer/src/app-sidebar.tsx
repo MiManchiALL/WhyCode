@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   ChevronDown,
   ChevronUp,
@@ -20,14 +20,13 @@ import { workspaceDisplayDirectory } from '../../shared/workspace.ts'
 import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 import { PanelResizeHandle } from './panel-resize-handle.tsx'
 import {
-  loadPanelWidth,
-  normalizePanelWidth,
   panelWidthExpression,
-  persistPanelWidth,
   SESSION_SIDEBAR_COLLAPSED_WIDTH,
 } from './panel-layout.ts'
+import type { PanelLayout } from './use-panel-layout.ts'
 
 interface AppSidebarProps {
+  layout: PanelLayout
   collapsed: boolean
   sessions: readonly SessionListItem[]
   selectedSessionId: string | null
@@ -46,14 +45,8 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar(props: AppSidebarProps) {
-  const panelRef = useRef<HTMLElement>(null)
-  const [width, setWidth] = useState(() => loadPanelWidth('left'))
+  const { layout } = props
   const [resizing, setResizing] = useState(false)
-  const updateWidth = useCallback((value: number) => {
-    const normalized = normalizePanelWidth('left', value)
-    setWidth(normalized)
-    persistPanelWidth('left', normalized)
-  }, [])
   const [renameTargetId, setRenameTargetId] = useState<string | null>(null)
   const renameTarget = props.sessions.find(session => session.sessionId === renameTargetId)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
@@ -72,21 +65,19 @@ export function AppSidebar(props: AppSidebarProps) {
 
   return (
     <aside
-      ref={panelRef}
+      ref={layout.refs.left}
       className="wc-resizable-panel relative z-20 h-full shrink-0 transition-[width] duration-200 ease-out"
       data-panel-open={!props.collapsed}
-      style={{ width: props.collapsed ? SESSION_SIDEBAR_COLLAPSED_WIDTH : panelWidthExpression('left', width) }}
+      style={{ width: props.collapsed ? SESSION_SIDEBAR_COLLAPSED_WIDTH : panelWidthExpression('left', layout.widths.left) }}
       aria-label="会话侧栏"
     >
       {(!props.collapsed || resizing) && (
         <PanelResizeHandle
           side="left"
-          panelRef={panelRef}
-          width={width}
-          onWidthChange={updateWidth}
+          layout={layout}
           onCollapse={() => props.onCollapsedChange(true)}
           onPreviewExpand={(value) => {
-            setWidth(value)
+            layout.previewExpand('left', value)
             props.onCollapsedChange(false)
           }}
           onResizeActiveChange={setResizing}

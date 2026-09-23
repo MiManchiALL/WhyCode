@@ -5,6 +5,8 @@ import {
   type CheckpointFilePreviewResult,
 } from '@whycode/core'
 import type { DesktopSessionRuntime } from './desktop-session-runtime.ts'
+import { sep } from 'node:path'
+import { pathKey } from './workspace-path.ts'
 
 // 历史快照归持久会话所有；模型连接不可用时也必须能读取，不能借此初始化 Agent。
 function checkpointsFor(runtime: DesktopSessionRuntime | null): CheckpointManager {
@@ -16,9 +18,14 @@ function checkpointsFor(runtime: DesktopSessionRuntime | null): CheckpointManage
 export async function readCheckpointFileChanges(
   runtime: DesktopSessionRuntime | null,
   checkpointIds: readonly string[],
+  scratchRootDirectory: string,
 ): Promise<CheckpointFileChangesResult> {
   try {
-    return { ok: true, changes: await checkpointsFor(runtime).fileChanges(checkpointIds) }
+    const changes = await checkpointsFor(runtime).fileChanges(checkpointIds)
+    const scratchPrefix = `${pathKey(scratchRootDirectory)}${sep}`
+    changes.sort((left, right) => Number(pathKey(left.path).startsWith(scratchPrefix))
+      - Number(pathKey(right.path).startsWith(scratchPrefix)))
+    return { ok: true, changes }
   } catch (error) {
     return { ok: false, error: `文件改动读取失败：${error instanceof Error ? error.message : String(error)}` }
   }

@@ -2989,7 +2989,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       || !request.checkpointIds.every(id => typeof id === 'string')) {
       return Promise.resolve({ ok: false, error: '文件改动请求无效' })
     }
-    return readCheckpointFileChanges(runtimeRegistry.get(request.runtimeId), request.checkpointIds)
+    return readCheckpointFileChanges(runtimeRegistry.get(request.runtimeId), request.checkpointIds, sessionScratch.rootDirectory)
   })
   ipcMain.handle(IPC.checkpointFilePreview, (
     _e,

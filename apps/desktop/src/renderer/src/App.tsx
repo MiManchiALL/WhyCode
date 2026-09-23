@@ -110,12 +110,8 @@ import { ComposerMcpStatus } from './composer-mcp-status.tsx'
 import { RightPanel } from './right-panel.tsx'
 import { disposeTerminalView, loadTerminalViews } from './terminal-panel.tsx'
 import { PanelResizeHandle } from './panel-resize-handle.tsx'
-import {
-  loadPanelWidth,
-  normalizePanelWidth,
-  persistPanelWidth,
-  panelWidthExpression,
-} from './panel-layout.ts'
+import { panelWidthExpression } from './panel-layout.ts'
+import { usePanelLayout } from './use-panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import {
   closeRightPanelTab,
@@ -192,7 +188,7 @@ export function App() {
   const panelFullscreen = rightPanelFullscreen && rightPanelState.open
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
-  const [rightPanelWidth, setRightPanelWidth] = useState(() => loadPanelWidth('right'))
+  const panelLayout = usePanelLayout()
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
   const [connectionSettings, setConnectionSettings] =
@@ -223,7 +219,6 @@ export function App() {
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
   const conversationContentRef = useRef<HTMLDivElement>(null)
-  const rightPanelRef = useRef<HTMLDivElement>(null)
   const rightPanelStateRef = useRef(rightPanelState)
   const rightPanelSessionStoreRef = useRef<RightPanelSessionStore | null>(null)
   if (!rightPanelSessionStoreRef.current) {
@@ -1068,21 +1063,15 @@ export function App() {
     return () => window.removeEventListener('keydown', exit)
   }, [panelFullscreen, rightPanelState.open])
 
-  const updateRightPanelWidthRatio = useCallback((ratio: number) => {
-    const normalized = normalizePanelWidth('right', ratio)
-    setRightPanelWidth(normalized)
-    persistPanelWidth('right', normalized)
-  }, [])
-
   const collapseRightPanel = useCallback(() => {
     setRightPanelFullscreen(false)
     updateRightPanelState((current) => ({ ...current, open: false }))
   }, [updateRightPanelState])
 
   const previewRightPanelExpand = useCallback((ratio: number) => {
-    setRightPanelWidth(normalizePanelWidth('right', ratio))
+    panelLayout.previewExpand('right', ratio)
     updateRightPanelState((current) => ({ ...current, open: true }))
-  }, [updateRightPanelState])
+  }, [panelLayout.previewExpand, updateRightPanelState])
 
   const showRightPanelPage = useCallback((page: RightPanelPage) => {
     updateRightPanelState((current) => openRightPanelPageState(current, page))
@@ -2097,6 +2086,7 @@ export function App() {
   return (
     <ConversationFeedbackContext value={showConversationFeedback}>
     <div
+      ref={panelLayout.rootRef}
       className="relative flex h-screen gap-1 overflow-hidden bg-[var(--wc-canvas)] p-1 text-[var(--wc-ink)]"
       {...attachmentDrop.handlers}
     >
@@ -2114,6 +2104,7 @@ export function App() {
 
       <div className="contents" inert={panelFullscreen}>
         <AppSidebar
+          layout={panelLayout}
           collapsed={sidebarCollapsed}
           sessions={sessions}
           selectedSessionId={resumingSessionId ?? sessionIdRef.current}
@@ -2461,7 +2452,7 @@ export function App() {
           </section>
 
           <div
-            ref={rightPanelRef}
+            ref={panelLayout.refs.right}
             data-fullscreen={panelFullscreen}
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
             aria-busy={loadingConversation}
@@ -2473,16 +2464,14 @@ export function App() {
             }`}
             style={{
               width: rightPanelState.open
-                ? panelWidthExpression('right', rightPanelWidth)
+                ? panelWidthExpression('right', panelLayout.widths.right)
                 : undefined,
             }}
           >
             {!panelFullscreen && (rightPanelState.open || rightPanelResizeActive) && (
               <PanelResizeHandle
                 side="right"
-                panelRef={rightPanelRef}
-                width={rightPanelWidth}
-                onWidthChange={updateRightPanelWidthRatio}
+                layout={panelLayout}
                 onCollapse={collapseRightPanel}
                 onPreviewExpand={previewRightPanelExpand}
                 onResizeActiveChange={setRightPanelResizeActive}

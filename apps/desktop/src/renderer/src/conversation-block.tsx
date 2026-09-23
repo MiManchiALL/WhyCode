@@ -139,12 +139,12 @@ export function BlockView({
       <div className="wc-tool-row flex w-full items-center gap-2 px-3 py-1.5">
         <button
           type="button"
-          className="wc-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md text-left"
+          className="wc-tool-summary wc-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md text-left"
           aria-expanded={expanded}
           onClick={onToggle}
         >
           <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>
-          <span className="shrink-0 font-medium">{call.name}</span>
+          <span className="truncate font-medium">{call.name}</span>
           {summary.primary && (
             <span className="wc-tool-card-description min-w-0 truncate text-[var(--wc-faint)]">{summary.primary}</span>
           )}

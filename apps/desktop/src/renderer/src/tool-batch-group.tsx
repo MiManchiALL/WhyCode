@@ -137,19 +137,19 @@ function ToolBatchRowView({
     <div className="wc-tool-batch-item" data-error={failed ? 'true' : 'false'}>
       <div className="wc-tool-row flex min-w-0 items-center gap-1 rounded-lg">
         <div
-          className="wc-tool-batch-row group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
+          className="wc-tool-summary wc-tool-batch-row flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
           onClick={onToggle}
         >
           <button
             type="button"
-            className="wc-focus-ring flex shrink-0 items-center gap-2 rounded-md text-left"
+            className="wc-focus-ring flex min-w-0 items-center gap-2 rounded-md text-left"
             aria-expanded={expanded}
           >
             <BatchIcon category={toolCategory(row.call)} size={13} />
-            <span>{row.call.name}</span>
+            <span className="truncate">{row.call.name}</span>
           </button>
           {row.renameFrom ? (
-            <span className="min-w-0 truncate text-[var(--wc-faint)]">
+            <span className="wc-tool-summary-detail min-w-0 truncate text-[var(--wc-faint)]">
               {row.renameFrom} →
             </span>
           ) : null}
@@ -164,7 +164,7 @@ function ToolBatchRowView({
           ) : (
             <button
               type="button"
-              className="wc-focus-ring min-w-0 flex-1 truncate rounded-md text-left"
+              className="wc-tool-summary-detail wc-focus-ring min-w-0 flex-1 truncate rounded-md text-left"
               aria-expanded={expanded}
             >
               {row.summary}
@@ -173,7 +173,7 @@ function ToolBatchRowView({
           {row.added !== undefined && row.removed !== undefined ? (
             <button
               type="button"
-              className="wc-focus-ring flex shrink-0 gap-1.5 rounded-md tabular-nums"
+              className="wc-tool-change-counts wc-focus-ring flex shrink-0 gap-1.5 rounded-md tabular-nums"
               aria-expanded={expanded}
             >
               <span className="wc-tool-lines-added">+{row.added}</span>
