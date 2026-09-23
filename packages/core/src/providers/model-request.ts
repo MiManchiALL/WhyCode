@@ -1,7 +1,8 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import { APICallError } from 'ai'
+import { modelRequestDetail, modelRequestMessage } from './model-request-message.ts'
 
-export const MODEL_REQUEST_MAX_RETRIES = 2
+export const MODEL_REQUEST_MAX_RETRIES = 3
 
 export interface ModelRequestRetry {
   retry: number
@@ -36,10 +37,10 @@ export function modelRequestError(error: unknown): ModelRequestError {
     causes.add(current)
     current = current.cause
   }
-  const message = error instanceof Error ? error.message : String(error)
+  const detail = modelRequestDetail(error)
   if (APICallError.isInstance(error)) {
     const status = error.statusCode
-    const quota = /insufficient[_ ](?:quota|balance)|quota[_ ]exceeded|余额不足|欠费/iu.test(message)
+    const quota = /insufficient[_ ](?:quota|balance)|quota[_ ]exceeded|余额不足|欠费/iu.test(`${detail} ${error.message}`)
     const retryable = !quota && (status === undefined ? error.isRetryable
       : status === 408 || status === 429 || (status >= 500 && status <= 599))
     const headers = error.responseHeaders
@@ -49,13 +50,13 @@ export function modelRequestError(error: unknown): ModelRequestError {
       : Number.isFinite(Number(retryAfter)) ? Math.max(0, Number(retryAfter) * 1000)
         : Math.max(0, Date.parse(retryAfter) - Date.now())
     return new ModelRequestError(
-      `${message}${status === undefined ? '' : `（HTTP ${status}）`}${requestId ? `；请求 ID：${requestId}` : ''}`,
+      modelRequestMessage(detail, status, requestId),
       retryable,
       Number.isFinite(retryAfterMs) ? retryAfterMs : undefined,
       { cause: error },
     )
   }
-  return new ModelRequestError(message, false, undefined, { cause: error })
+  return new ModelRequestError(modelRequestMessage(detail), false, undefined, { cause: error })
 }
 
 export function emptyModelResponse(finishReason?: string | null): ModelRequestError {

@@ -9,6 +9,24 @@ import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('模型失败后的步骤恢复', () => {
+  it('重试与最终失败发出同一简洁原因，不把错误页写入模型上下文', async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => {
+      throw new APICallError({
+        message: '<!DOCTYPE html><html><body>Bad Gateway</body></html>', statusCode: 502,
+        url: 'http://localhost/model', requestBodyValues: {}, responseHeaders: { 'retry-after': '0' },
+      })
+    } })
+    const events: CoreEvent[] = []
+    const session = createSession(model, event => events.push(event))
+    assert.equal(await session.handleUserMessage('回答'), 'error')
+    assert.equal(model.doStreamCalls.length, 4)
+    assert.deepEqual(events.filter(event => event.type === 'model-request-retry').map(event => event.message),
+      Array(3).fill('上游服务暂时异常（HTTP 502）'))
+    assert.equal(events.find(event => event.type === 'error')?.message,
+      '上游服务暂时异常（HTTP 502）；已重试 3 次，可稍后继续。')
+    assert.doesNotMatch(JSON.stringify(session.captureMessageSnapshot()), /DOCTYPE|Bad Gateway|HTTP 502/)
+  })
+
   it('流中途失败只重发当前请求，已执行工具不重放、半截工具不执行', async () => {
     let requests = 0
     let writes = 0
@@ -80,8 +98,8 @@ describe('模型失败后的步骤恢复', () => {
       if (event.type === 'model-request-retry') retries.push(event.retry)
     })
     assert.equal(await session.handleUserMessage('回答'), 'error')
-    assert.equal(requests, 3)
-    assert.deepEqual(retries, [1, 2])
+    assert.equal(requests, 4)
+    assert.deepEqual(retries, [1, 2, 3])
   })
 })
 

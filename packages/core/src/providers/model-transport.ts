@@ -1,4 +1,5 @@
 import { ModelRequestError } from './model-request.ts'
+import { modelRequestDetail, modelRequestMessage } from './model-request-message.ts'
 
 export const MODEL_REQUEST_IDLE_TIMEOUT_MS = 300_000
 
@@ -18,8 +19,10 @@ export function createModelFetch(
       const startedAt = Date.now()
       const timer = setTimeout(() => {
         controller.abort(new ModelRequestError(
-          `模型请求超时：${phase}，连续 ${Math.round((Date.now() - startedAt) / 1000)} 秒没有传输数据`
-            + `${status === undefined ? '' : `（HTTP ${status}）`}${requestId ? `；请求 ID：${requestId}` : ''}`,
+          modelRequestMessage(
+            `模型请求超时：${phase}，连续 ${Math.round((Date.now() - startedAt) / 1000)} 秒没有传输数据`,
+            status, requestId,
+          ),
           true,
         ))
       }, idleTimeoutMs)
@@ -33,9 +36,9 @@ export function createModelFetch(
         // SDK 已区分 fetch 的网络故障与无效 URL/请求参数，保留其原始分类依据。
         if (phase === '等待服务器响应') throw error
         // 此处只有网络 I/O；保留阶段与底层原因，SDK 包装后仍可准确恢复分类。
-        const message = error instanceof Error ? error.message : String(error)
+        const message = modelRequestMessage(modelRequestDetail(error))
         throw new ModelRequestError(
-          `模型连接中断：${phase}（${message}）${requestId ? `；请求 ID：${requestId}` : ''}`,
+          modelRequestMessage(`模型连接中断：${phase}（${message}）`, status, requestId),
           true, undefined, { cause: error },
         )
       } finally {

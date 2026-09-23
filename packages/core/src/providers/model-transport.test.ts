@@ -2,14 +2,49 @@ import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
 import { describe, it } from 'node:test'
 import { createOpenAI } from '@ai-sdk/openai'
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { streamText } from 'ai'
 import { createModelFetch, MODEL_REQUEST_IDLE_TIMEOUT_MS } from './model-transport.ts'
-import { ModelRequestError, readModelStream } from './model-request.ts'
+import { ModelRequestError, readModelStream, withModelRequestRetry, type ModelRequestRetry } from './model-request.ts'
 
 const encoder = new TextEncoder()
 const event = (data: unknown) => encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
 
 describe('模型网络请求生命周期', () => {
+  for (const [protocol, createModel] of Object.entries({
+    Responses: (fetch: typeof globalThis.fetch) => createOpenAI({ apiKey: 'test', fetch }).responses('test'),
+    Chat: (fetch: typeof globalThis.fetch) => createOpenAICompatible({ name: 'test', baseURL: 'http://localhost', fetch })('test'),
+    Messages: (fetch: typeof globalThis.fetch) => createAnthropic({ apiKey: 'test', fetch })('test'),
+  })) {
+    it(`${protocol} 实际 SDK 的错误页与代理错误共用简洁原因和三次重试预算`, async () => {
+      let requests = 0
+      const model = createModel(createModelFetch(async () => {
+        const first = ++requests === 1
+        const message = first ? '<!DOCTYPE html><html><head><style>body{margin:0}</style></head><body>Bad Gateway</body></html>'
+          : JSON.stringify({ error: { message: 'auth_unavailable: no auth available (providers=proxy, model=test)' } })
+        return new Response(message, { status: first ? 502 : 503, headers: {
+          'content-type': first ? 'text/html' : 'application/json',
+          'retry-after': '0', 'x-request-id': `request-${requests}`,
+        } })
+      }))
+      const retries: ModelRequestRetry[] = []
+      await assert.rejects(withModelRequestRetry(async () => {
+        const result = streamText({ model, prompt: 'hello', maxRetries: 0, onError: () => {} })
+        for await (const _part of readModelStream(result.fullStream)) { /* 消费真实 SDK 的错误块。 */ }
+      }, new AbortController().signal, event => retries.push(event)), (error: unknown) => {
+        assert.ok(error instanceof ModelRequestError)
+        assert.equal(error.message,
+          '上游服务暂无可用的认证凭据（auth_unavailable）（HTTP 503）；请求 ID：request-4；已重试 3 次，可稍后继续。')
+        return true
+      })
+      assert.equal(requests, 4)
+      assert.deepEqual(retries.map(event => [event.retry, event.maxRetries]), [[1, 3], [2, 3], [3, 3]])
+      assert.equal(retries[0]?.message, '上游服务暂时异常（HTTP 502）；请求 ID：request-1')
+      assert.equal(retries[1]?.message, '上游服务暂无可用的认证凭据（auth_unavailable）（HTTP 503）；请求 ID：request-2')
+    })
+  }
+
   it('Responses 在完成标记前直接断流，不能把已有正文当作成功交付', async () => {
     const parts = [
       { type: 'response.created', response: { id: 'r', created_at: 1, model: 'test' } },

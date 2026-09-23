@@ -4,15 +4,21 @@ import { APICallError } from 'ai'
 import { emptyModelResponse, ModelRequestError, modelRequestError, withModelRequestRetry } from './model-request.ts'
 
 describe('模型请求统一重试', () => {
-  it('空答复和网络失败共用两次预算，保留最后一次失败原因', async () => {
+  it('空答复和网络失败共用三次预算，保留最后一次失败原因', async () => {
     let calls = 0
     const retries: number[] = []
-    const failures = [emptyModelResponse('stop'), new ModelRequestError('连接断开', true, 0), emptyModelResponse('stop')]
+    const failures = [
+      emptyModelResponse('stop'), new ModelRequestError('连接断开', true, 0),
+      new ModelRequestError('读取超时', true, 0), emptyModelResponse('stop'),
+    ]
     await assert.rejects(withModelRequestRetry(async () => {
       throw failures[calls++]
-    }, new AbortController().signal, (event) => retries.push(event.retry)), /模型没有返回可交付答复.*已重试 2 次/)
-    assert.equal(calls, 3)
-    assert.deepEqual(retries, [1, 2])
+    }, new AbortController().signal, (event) => {
+      assert.equal(event.maxRetries, 3)
+      retries.push(event.retry)
+    }), /模型没有返回可交付答复.*已重试 3 次/)
+    assert.equal(calls, 4)
+    assert.deepEqual(retries, [1, 2, 3])
   })
 
   it('鉴权、余额、参数错误和本地异常不重试；限流和临时服务器错误可重试', async () => {
@@ -29,7 +35,7 @@ describe('模型请求统一重试', () => {
       assert.match(error.message, /test-request/)
       let calls = 0
       try { await withModelRequestRetry(async () => { calls++; throw error }, new AbortController().signal) } catch {}
-      assert.equal(calls, expected ? 3 : 1)
+      assert.equal(calls, expected ? 4 : 1)
     }
     let localCalls = 0
     await assert.rejects(withModelRequestRetry(async () => {
@@ -37,6 +43,16 @@ describe('模型请求统一重试', () => {
       throw new Error('文件写入失败')
     }, new AbortController().signal), /文件写入失败/)
     assert.equal(localCalls, 1)
+  })
+
+  it('第三次重试成功后正常交付结果', async () => {
+    let calls = 0
+    const result = await withModelRequestRetry(async () => {
+      if (++calls <= 3) throw new ModelRequestError('上游服务暂时异常', true, 0)
+      return '已完成'
+    }, new AbortController().signal)
+    assert.equal(result, '已完成')
+    assert.equal(calls, 4)
   })
 
   it('用户停止或插队取消退避等待，不发送下一次请求', async () => {

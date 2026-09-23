@@ -160,22 +160,22 @@ describe('Agent 长任务循环策略', () => {
 
   it('不可交付响应用尽统一重试预算后显式失败，不伪装成正常完成', async () => {
     const model = new MockLanguageModelV4({
-      doStream: [emptyStream('stop'), emptyStream('stop'), emptyStream('content-filter')],
+      doStream: [emptyStream('stop'), emptyStream('stop'), emptyStream('stop'), emptyStream('content-filter')],
     })
     const { session, events } = createSession(model)
 
     const stopReason = await session.handleUserMessage('请回答')
 
     assert.equal(stopReason, 'error')
-    assert.equal(model.doStreamCalls.length, 3)
+    assert.equal(model.doStreamCalls.length, 4)
     assert.equal(events.filter((event) => event.type === 'step-committed').length, 0)
-    assert.equal(events.filter((event) => event.type === 'step-discarded').length, 3)
-    assert.equal(events.filter((event) => event.type === 'model-request-retry').length, 2)
+    assert.equal(events.filter((event) => event.type === 'step-discarded').length, 4)
+    assert.equal(events.filter((event) => event.type === 'model-request-retry').length, 3)
     assert.equal(
       events.some(
         (event) => event.type === 'error'
           && event.message.includes('模型没有返回可交付答复')
-          && event.message.includes('已重试 2 次')
+          && event.message.includes('已重试 3 次')
           && event.message.includes('content-filter'),
       ),
       true,

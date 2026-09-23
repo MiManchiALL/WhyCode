@@ -30,7 +30,7 @@ describe('ViewTimeline', () => {
     const events: import('@whycode/core').CoreEvent[] = [
       { type: 'text-delta', text: '应丢弃的首次草稿' },
       { type: 'step-discarded' },
-      { type: 'model-request-retry', retry: 1, maxRetries: 2, delayMs: 500, message: '连接中断' },
+      { type: 'model-request-retry', retry: 1, maxRetries: 3, delayMs: 500, message: '上游服务暂时异常（HTTP 502）' },
       { type: 'text-delta', text: '应丢弃的重试草稿' },
       { type: 'step-discarded' },
       { type: 'error', message: '模型请求超时', recoverable: true },

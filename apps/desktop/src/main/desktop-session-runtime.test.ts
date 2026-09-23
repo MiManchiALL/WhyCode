@@ -12,7 +12,7 @@ describe('会话工作计时', () => {
       emit: (_runtime, event) => events.push(event),
     })
     runtime.beginWork()
-    runtime.emit({ type: 'error', message: '模型请求超时；已重试 2 次', recoverable: true })
+    runtime.emit({ type: 'error', message: '上游服务暂时异常（HTTP 502）；已重试 3 次，可稍后继续。', recoverable: true })
     runtime.emit({
       type: 'turn-end', turnId: 'failed', stopReason: 'error',
       usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
@@ -21,7 +21,7 @@ describe('会话工作计时', () => {
     const failed = events.find(event => event.type === 'work-finished')
     assert.ok(failed?.type === 'work-finished')
     assert.equal(failed.outcome, 'error')
-    assert.equal(failed.error, '模型请求超时；已重试 2 次')
+    assert.equal(failed.error, '上游服务暂时异常（HTTP 502）；已重试 3 次，可稍后继续。')
     runtime.beginWork()
     runtime.emit({ type: 'agent-status', status: 'idle' })
     const next = events.filter(event => event.type === 'work-finished').at(-1)!
