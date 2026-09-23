@@ -39,15 +39,18 @@ export function useCheckpointRestoreNavigation({
 }
 
 function highlightRestoreTarget(target: HTMLElement): () => void {
+  const row = target.closest('.wc-tool-row')
   target.dataset.navigationHighlight = 'true'
   const timer = window.setTimeout(clear, 3_000)
   target.addEventListener('pointerleave', clear)
-  target.addEventListener('click', clear)
+  row?.addEventListener('pointerleave', clear)
+  row?.addEventListener('click', clear)
   function clear() {
     window.clearTimeout(timer)
     delete target.dataset.navigationHighlight
     target.removeEventListener('pointerleave', clear)
-    target.removeEventListener('click', clear)
+    row?.removeEventListener('pointerleave', clear)
+    row?.removeEventListener('click', clear)
   }
   return clear
 }

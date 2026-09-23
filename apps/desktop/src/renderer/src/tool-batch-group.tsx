@@ -135,7 +135,7 @@ function ToolBatchRowView({
     : null
   return (
     <div className="wc-tool-batch-item" data-error={failed ? 'true' : 'false'}>
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="wc-tool-row flex min-w-0 items-center gap-1 rounded-lg">
         <div
           className="wc-tool-batch-row group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
           onClick={onToggle}

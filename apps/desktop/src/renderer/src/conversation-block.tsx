@@ -136,7 +136,7 @@ export function BlockView({
   })
   return (
     <div className="wc-tool-card wc-menu-surface mb-2 overflow-hidden">
-      <div className="flex w-full items-center gap-2 px-3 py-1.5">
+      <div className="wc-tool-row flex w-full items-center gap-2 px-3 py-1.5">
         <button
           type="button"
           className="wc-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md text-left"
