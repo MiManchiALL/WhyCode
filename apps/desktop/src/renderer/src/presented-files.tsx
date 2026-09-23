@@ -31,7 +31,7 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
 }) {
   const name = fileName(file.path)
   const Icon = fileIcon(name)
-  const { pending, error, run: nativeAction } = useWorkspaceFileAction(runtimeId, file.path)
+  const { pending, run: nativeAction } = useWorkspaceFileAction(runtimeId, file.path)
   const open = () => {
     onOpenFile?.({ kind: 'file', path: file.path, name, source: { kind: 'current' }, previewMode: 'preview' })
   }
@@ -42,9 +42,8 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
       <span className="wc-present-icon"><Icon size={20} aria-hidden="true" /></span>
       <span className="wc-present-label">
         <span className="wc-present-name wc-type-control">{name}</span>
-        <span className="wc-present-description wc-type-caption" role={error ? 'alert' : undefined} title={error ?? file.description}
-          data-error={!!error || undefined}>
-          {error ?? file.description ?? (name.includes('.') ? name.split('.').at(-1)!.toUpperCase() : '文件')}
+        <span className="wc-present-description wc-type-caption" title={file.description}>
+          {file.description ?? (name.includes('.') ? name.split('.').at(-1)!.toUpperCase() : '文件')}
         </span>
       </span>
       {pending && <LoaderCircle size={15} className="shrink-0 animate-spin" />}

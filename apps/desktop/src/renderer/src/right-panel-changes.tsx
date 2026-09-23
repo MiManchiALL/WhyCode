@@ -83,7 +83,6 @@ function ChangedFile({ runtimeId, projectDir, page, onOpenPage, change, expanded
         </button>
       </div>
     </div>
-    {action.error && <p className="wc-changes-file-error" role="alert">{action.error}</p>}
     {expanded && <div id={id} className="wc-changes-file-diff">
       <ChangePreview runtimeId={runtimeId} checkpointIds={page.checkpointIds} path={change.path} onReady={onReady} />
     </div>}

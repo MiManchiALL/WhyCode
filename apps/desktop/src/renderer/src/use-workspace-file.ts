@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkspaceFileView } from '../../shared/workspace-files.ts'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 
 interface FileState {
   view: WorkspaceFileView | null
@@ -10,6 +11,7 @@ interface FileState {
 interface Lease { id: string; request: number; revision: number }
 
 export function useWorkspaceFile(runtimeId: string, kind: 'directory' | 'file', path: string, refreshRevision = '') {
+  const feedback = useConversationFeedback()
   const [state, setState] = useState<FileState>({ view: null, loading: true, changed: false, error: null })
   const lease = useRef<Lease | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -71,17 +73,19 @@ export function useWorkspaceFile(runtimeId: string, kind: 'directory' | 'file', 
   }, [kind, refreshRevision, refresh])
 
   const reveal = useCallback(() => {
-    if (!lease.current) return
-    void window.whycode.revealWorkspaceFile(lease.current.id).catch(error => {
-      setState(previous => ({ ...previous, error: errorMessage(error) }))
+    const current = lease.current
+    if (!current) return
+    void window.whycode.revealWorkspaceFile(current.id).catch(error => {
+      if (lease.current === current) feedback('error', errorMessage(error))
     })
-  }, [])
+  }, [feedback])
   const openExternally = useCallback(() => {
-    if (!lease.current) return
-    void window.whycode.openWorkspaceFileExternally(lease.current.id).catch(error => {
-      setState(previous => ({ ...previous, error: errorMessage(error) }))
+    const current = lease.current
+    if (!current) return
+    void window.whycode.openWorkspaceFileExternally(current.id).catch(error => {
+      if (lease.current === current) feedback('error', errorMessage(error))
     })
-  }, [])
+  }, [feedback])
   return { ...state, refresh, reveal, openExternally }
 }
 

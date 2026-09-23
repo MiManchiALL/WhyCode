@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom'
 import { CircleCheck, Info, TriangleAlert } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
   expireConversationFeedback,
   holdConversationFeedback,
@@ -11,6 +11,16 @@ import {
 
 const VISIBLE_MS = 3_000
 const EXIT_MS = 680
+
+export const ConversationFeedbackContext = createContext<(
+  (tone: ConversationFeedback['tone'], message: string) => void
+) | null>(null)
+
+export function useConversationFeedback() {
+  const feedback = useContext(ConversationFeedbackContext)
+  if (!feedback) throw new Error('Conversation feedback requires an application provider')
+  return feedback
+}
 
 export function ConversationFeedbackToast({
   feedback,
@@ -77,7 +87,7 @@ export function ConversationFeedbackToast({
         role={feedback.tone === 'error' ? 'alert' : 'status'}
         aria-live={feedback.tone === 'error' ? 'assertive' : 'polite'}
         aria-atomic="true"
-        className={`flex max-w-xl items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-[13px] leading-5 shadow-[0_10px_30px_rgba(34,36,31,0.14)] backdrop-blur-md transition-[opacity,transform] duration-[650ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:translate-y-0 motion-reduce:duration-75 ${
+        className={`flex min-w-0 max-w-xl items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-[13px] leading-5 shadow-[0_10px_30px_rgba(34,36,31,0.14)] backdrop-blur-md transition-[opacity,transform] duration-[650ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:translate-y-0 motion-reduce:duration-75 ${
           feedback.tone === 'success'
             ? 'border-[#cbd8cd] bg-[#f2f6f1]/95 text-[#38523d]'
             : feedback.tone === 'error'
@@ -91,7 +101,7 @@ export function ConversationFeedbackToast({
         onMouseLeave={release}
       >
         <Icon aria-hidden="true" size={15} className="shrink-0" />
-        <span>{feedback.message}</span>
+        <span className="min-w-0 break-words">{feedback.message}</span>
       </div>
     </div>
   )

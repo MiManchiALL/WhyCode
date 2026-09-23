@@ -146,6 +146,7 @@ import {
   type QueuedMessageAction,
 } from './queued-message-card.tsx'
 import {
+  ConversationFeedbackContext,
   ConversationFeedbackToast,
 } from './conversation-feedback.tsx'
 import { conversationEventFeedback, type ConversationFeedback } from './conversation-feedback-state.ts'
@@ -2093,6 +2094,7 @@ export function App() {
     : { text: input, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
 
   return (
+    <ConversationFeedbackContext value={showConversationFeedback}>
     <div
       className="relative flex h-screen gap-1 overflow-hidden bg-[var(--wc-canvas)] p-1 text-[var(--wc-ink)]"
       {...attachmentDrop.handlers}
@@ -2173,7 +2175,7 @@ export function App() {
               <ConversationFeedbackToast
                 key={conversationFeedback.id}
                 feedback={conversationFeedback}
-                floating={showConnectionSettings}
+                floating={showConnectionSettings || panelFullscreen}
                 onDismiss={dismissConversationFeedback}
               />
             )}
@@ -2558,6 +2560,7 @@ export function App() {
         />
       )}
     </div>
+    </ConversationFeedbackContext>
   )
 }
 

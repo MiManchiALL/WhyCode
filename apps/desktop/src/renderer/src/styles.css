@@ -1829,7 +1829,6 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 .wc-present-name, .wc-present-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wc-present-name { font-weight: 500; }
 .wc-present-description { color: var(--wc-muted); }
-.wc-present-description[data-error='true'] { color: var(--wc-danger); }
 .wc-present-more { display: grid; flex: none; place-items: center; width: 1.75rem; height: 2rem; margin-right: 0.5rem; border-radius: 0.5rem; color: var(--wc-muted); }
 .wc-present-more:hover { background: var(--wc-sage); }
 .wc-present-toggle { display: flex; align-items: center; gap: 0.25rem; margin: 0.5rem auto 0; border-radius: 0.5rem; padding: 0.25rem 0.5rem; color: var(--wc-muted); }
@@ -1858,6 +1857,5 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 .wc-changes-file-heading:hover .wc-changes-file-actions,
 .wc-changes-file-heading:has(:focus-visible) .wc-changes-file-actions { opacity: 1; }
 .wc-changes-file-diff { border-block: 1px solid var(--wc-line); }
-.wc-changes-file-error { padding: 0.25rem 0.75rem 0.5rem; color: var(--wc-danger); font-size: 12px; overflow-wrap: anywhere; }
 @media (hover: none) { .wc-changes-file-actions { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .wc-changes-chevron, .wc-changes-file-actions { transition: none; } }
