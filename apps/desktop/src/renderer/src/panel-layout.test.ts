@@ -90,11 +90,26 @@ describe('两侧栏宽度', () => {
     const start = geometry(860, 240, 186)
     assert.deepEqual(resize(start, 'left', 325).widths, { left: 254, right: 172 })
     const closed = resize(start, 'left', 326)
-    assert.deepEqual(closed, { widths: { left: 258, right: 0 }, open: { left: true, right: false } })
+    assert.deepEqual(closed, { widths: { left: 326, right: 0 }, open: { left: true, right: false } })
     assert.equal(resize(start, 'left', 255, closed.open).open.right, false)
     const reopened = resize(start, 'left', 254, closed.open)
     assert.deepEqual(reopened, { widths: { left: 254, right: 172 }, open: start.open })
     assert.deepEqual(resize(start, 'left', 240, reopened.open).widths, start.widths)
+  })
+
+  it('左侧已达窄窗 30% 上限时，仍能联动收起右侧并继续拉宽', () => {
+    const start = geometry(800, 240, 126)
+    assert.deepEqual(resize(start, 'left', 311), { widths: start.widths, open: start.open })
+    const closed = resize(start, 'left', 312)
+    assert.deepEqual(closed, { widths: { left: 312, right: 0 }, open: { left: true, right: false } })
+    assert.deepEqual(resize(start, 'left', 420, closed.open).widths, { left: 360, right: 0 })
+    assert.equal(resize(start, 'left', 241, closed.open).open.right, false)
+    assert.deepEqual(resize(start, 'left', 240, closed.open), { widths: start.widths, open: start.open })
+    const rightClosed = { ...start, open: closed.open, widths: { left: 360, right: 0 } }
+    assert.equal(panelWidthBounds({ ...rightClosed, side: 'left' }).maxWidth, 360)
+    assert.equal(minimumConversationWidth(rightClosed), 420)
+    const tiny = { ...geometry(500, 150, 0), open: closed.open }
+    assert.equal(panelWidthBounds({ ...tiny, side: 'left' }).maxWidth, 150)
   })
 
   it('自身已达上限或收起不能释放空间时，不收起另一侧', () => {

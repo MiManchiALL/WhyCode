@@ -53,14 +53,14 @@ export function persistPanelWidth(side: PanelSide, value: number): void {
 
 export function panelWidthExpression(side: PanelSide, value: number): string {
   const width = normalizePanelWidth(side, value)
-  if (side === 'left') return `min(${width}px, ${PANEL_WIDTHS.left.viewportLimit * 100}vw)`
+  if (side === 'left') return `min(${width}px, var(--wc-panel-max-width, ${PANEL_WIDTHS.left.viewportLimit * 100}vw))`
   const percent = Number((width * 100).toFixed(4))
   return `min(${percent}vw, max(0px, calc(100% - var(--wc-conversation-min-width))))`
 }
 
-function intrinsicPanelBounds(side: PanelSide, viewportWidth: number): PanelWidthBounds {
+function intrinsicPanelBounds(side: PanelSide, viewportWidth: number, rightOpen: boolean): PanelWidthBounds {
   if (side === 'left') {
-    const maxWidth = Math.min(PANEL_WIDTHS.left.maximum, viewportWidth * PANEL_WIDTHS.left.viewportLimit)
+    const maxWidth = Math.min(PANEL_WIDTHS.left.maximum, rightOpen ? viewportWidth * PANEL_WIDTHS.left.viewportLimit : viewportWidth)
     return { minWidth: Math.min(PANEL_WIDTHS.left.minimum, maxWidth), maxWidth }
   }
   return { minWidth: viewportWidth * PANEL_WIDTHS.right.minimum, maxWidth: viewportWidth * PANEL_WIDTHS.right.maximum }
@@ -69,17 +69,17 @@ function intrinsicPanelBounds(side: PanelSide, viewportWidth: number): PanelWidt
 export function minimumConversationWidth(input: Pick<PanelGeometry, 'viewportWidth' | 'layoutWidth'>): number {
   const viewportWidth = finiteNonNegative(input.viewportWidth)
   const available = finiteNonNegative(input.layoutWidth)
-  const left = intrinsicPanelBounds('left', viewportWidth)
+  const left = intrinsicPanelBounds('left', viewportWidth, true)
   // 保留左侧 360px、右侧 45% 的阅读基线；新增侧栏空间由两侧互相让出。
   return Math.min(Math.max(0, available - left.minWidth),
     Math.max(MIN_CONVERSATION_WIDTH, available - left.maxWidth - viewportWidth * 0.45))
 }
 
 export function panelWidthBounds(input: PanelGeometry & { side: PanelSide }): PanelWidthBounds {
-  const own = intrinsicPanelBounds(input.side, finiteNonNegative(input.viewportWidth))
+  const own = intrinsicPanelBounds(input.side, finiteNonNegative(input.viewportWidth), input.open.right)
   const peer = input.side === 'left' ? 'right' : 'left'
   const peerMinimum = input.open[peer]
-    ? Math.min(input.widths[peer], intrinsicPanelBounds(peer, input.viewportWidth).minWidth)
+    ? Math.min(input.widths[peer], intrinsicPanelBounds(peer, input.viewportWidth, input.open.right).minWidth)
     : input.widths[peer]
   const available = Math.max(0, input.layoutWidth - minimumConversationWidth(input) - peerMinimum)
   const maxWidth = Math.min(own.maxWidth, available)

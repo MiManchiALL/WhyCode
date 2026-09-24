@@ -714,7 +714,7 @@ export function App() {
       updateRightPanelState(current => ({ ...current, open }))
     }
   }, [updateRightPanelState])
-  const panelLayout = usePanelLayout(changePanelOpen)
+  const panelLayout = usePanelLayout(rightPanelState.open, changePanelOpen)
 
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const previousRuntimeId = runtimeIdRef.current

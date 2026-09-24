@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  loadPanelWidth, minimumConversationWidth, normalizePanelWidth, persistPanelWidth,
+  loadPanelWidth, minimumConversationWidth, normalizePanelWidth, persistPanelWidth, panelWidthBounds,
   SESSION_SIDEBAR_COLLAPSED_WIDTH,
   type PanelGeometry, type PanelSide, type PanelWidths,
 } from './panel-layout.ts'
@@ -8,7 +8,7 @@ import {
 export type PanelLayout = ReturnType<typeof usePanelLayout>
 
 /** 连续调宽只改 DOM；开合沿用 App 状态，结束时一起提交两侧宽度偏好。 */
-export function usePanelLayout(onOpenChange: (side: PanelSide, open: boolean) => void) {
+export function usePanelLayout(rightOpen: boolean, onOpenChange: (side: PanelSide, open: boolean) => void) {
   const rootRef = useRef<HTMLDivElement>(null)
   const leftRef = useRef<HTMLElement>(null)
   const rightRef = useRef<HTMLDivElement>(null)
@@ -35,27 +35,34 @@ export function usePanelLayout(onOpenChange: (side: PanelSide, open: boolean) =>
     if (!left || !right || !container) return null
     const leftWidth = left.getBoundingClientRect().width
     const rightStyle = getComputedStyle(right)
+    const open = { left: left.dataset.panelOpen === 'true', right: right.dataset.panelOpen === 'true' }
+    const collapsedWidths = {
+      left: SESSION_SIDEBAR_COLLAPSED_WIDTH,
+      right: parseFloat(rightStyle.getPropertyValue('--wc-panel-collapsed-width'))
+        + parseFloat(rightStyle.getPropertyValue('--wc-panel-collapsed-gap')),
+    }
     return {
       viewportWidth: window.innerWidth,
       layoutWidth: leftWidth + container.getBoundingClientRect().width,
-      widths: { left: leftWidth, right: right.getBoundingClientRect().width + parseFloat(rightStyle.marginLeft) },
-      collapsedWidths: {
-        left: SESSION_SIDEBAR_COLLAPSED_WIDTH,
-        right: parseFloat(rightStyle.getPropertyValue('--wc-panel-collapsed-width'))
-          + parseFloat(rightStyle.getPropertyValue('--wc-panel-collapsed-gap')),
+      widths: {
+        left: open.left ? leftWidth : collapsedWidths.left,
+        right: open.right ? right.getBoundingClientRect().width + parseFloat(rightStyle.marginLeft) : collapsedWidths.right,
       },
-      open: { left: left.dataset.panelOpen === 'true', right: right.dataset.panelOpen === 'true' },
+      collapsedWidths,
+      open,
     }
   }, [])
   useLayoutEffect(() => {
     const update = () => {
       const geometry = measure()
-      if (geometry) rightRef.current?.style.setProperty('--wc-conversation-min-width', `${minimumConversationWidth(geometry)}px`)
+      if (!geometry) return
+      rightRef.current?.style.setProperty('--wc-conversation-min-width', `${minimumConversationWidth(geometry)}px`)
+      leftRef.current?.style.setProperty('--wc-panel-max-width', `${panelWidthBounds({ ...geometry, side: 'left' }).maxWidth}px`)
     }
     update()
     const observer = new ResizeObserver(update)
     if (rootRef.current) observer.observe(rootRef.current)
     return () => observer.disconnect()
-  }, [measure])
+  }, [measure, rightOpen])
   return { rootRef, refs, widths, commit, previewOpen, measure }
 }
