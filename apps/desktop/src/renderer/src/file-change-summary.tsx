@@ -10,7 +10,7 @@ export function ChangedFilePath({ path, projectDir }: { path: string; projectDir
 }
 
 export function ChangeCounts({ added, removed }: { added: number; removed: number }) {
-  return <span className="flex shrink-0 gap-1.5 text-xs tabular-nums">
+  return <span className="wc-change-counts flex shrink-0 gap-1.5 text-xs tabular-nums">
     <span className="wc-tool-lines-added">+{added}</span>
     <span className="wc-tool-lines-removed">-{removed}</span>
   </span>

@@ -66,7 +66,7 @@ function ChangedFile({ runtimeId, projectDir, page, onOpenPage, change, expanded
   return <section className="wc-changes-file" data-expanded={expanded} data-change-path={filePathKey(change.path)}>
     <div className="wc-changes-file-heading">
       <button type="button" className="wc-changes-file-trigger wc-focus-ring" onClick={onToggle}
-        aria-expanded={expanded} aria-controls={expanded ? id : undefined} aria-label={`查看 ${change.path} 的改动`}>
+        title={change.path} aria-expanded={expanded} aria-controls={expanded ? id : undefined} aria-label={`查看 ${change.path} 的改动`}>
         <ChevronRight size={13} className="wc-changes-chevron shrink-0" aria-hidden="true" />
         <Icon size={14} className="shrink-0 text-[var(--wc-muted)]" aria-hidden="true" />
         <ChangedFilePath path={change.path} projectDir={projectDir} />
