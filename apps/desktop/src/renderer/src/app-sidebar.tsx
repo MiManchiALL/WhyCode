@@ -75,11 +75,6 @@ export function AppSidebar(props: AppSidebarProps) {
         <PanelResizeHandle
           side="left"
           layout={layout}
-          onCollapse={() => props.onCollapsedChange(true)}
-          onPreviewExpand={(value) => {
-            layout.previewExpand('left', value)
-            props.onCollapsedChange(false)
-          }}
           onResizeActiveChange={setResizing}
         />
       )}

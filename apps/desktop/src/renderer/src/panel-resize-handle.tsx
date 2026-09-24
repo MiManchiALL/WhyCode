@@ -7,11 +7,11 @@ import {
 } from 'react'
 import {
   PANEL_WIDTHS,
-  projectPanelDrag,
+  PANEL_CLOSE_OVERSHOOT,
   panelWidthFromPixels,
   panelWidthBounds,
   panelWidthExpression,
-  projectPanelWidths,
+  projectPanelResize,
   type PanelSide,
   type PanelWidths,
 } from './panel-layout.ts'
@@ -20,16 +20,12 @@ import type { PanelLayout } from './use-panel-layout.ts'
 interface PanelResizeHandleProps {
   side: PanelSide
   layout: PanelLayout
-  onCollapse: () => void
-  onPreviewExpand: (width: number) => void
   onResizeActiveChange: (active: boolean) => void
 }
 
 export function PanelResizeHandle({
   side,
   layout,
-  onCollapse,
-  onPreviewExpand,
   onResizeActiveChange,
 }: PanelResizeHandleProps) {
   const finishDragRef = useRef<(() => void) | null>(null)
@@ -44,21 +40,16 @@ export function PanelResizeHandle({
     const panel = panelRef.current
     const geometry = layout.measure()
     if (!panel || !geometry) return
-    const peerSide = side === 'left' ? 'right' : 'left'
-    const peer = layout.refs[peerSide].current
-
     finishDragRef.current?.()
     const pointerId = event.pointerId
     const startX = event.clientX
     const startWidth = geometry.widths[side]
     const viewportWidth = geometry.viewportWidth
-    const bounds = panelWidthBounds({ ...geometry, side })
     let latestX = startX
-    let latestWidths = geometry.widths
+    let latest = { widths: geometry.widths, open: geometry.open }
     let animationFrame: number | null = null
     let moved = false
     let finished = false
-    let previewCollapsed = false
 
     panel.dataset.resizing = 'true'
     document.documentElement.dataset.wcPanelResizing = 'true'
@@ -69,23 +60,21 @@ export function PanelResizeHandle({
     function applyLatestPosition(): void {
       animationFrame = null
       if (finished || !moved) return
-      const projection = projectPanelDrag({
+      const projection = projectPanelResize({
+        geometry: geometry!,
         side,
-        startX,
-        pointerX: latestX,
-        startWidth,
-        bounds,
-        collapsed: previewCollapsed,
+        requestedWidth: startWidth + (latestX - startX) * (side === 'left' ? 1 : -1),
+        previousOpen: latest.open,
+        closeOvershoot: PANEL_CLOSE_OVERSHOOT,
       })
-      latestWidths = projectPanelWidths(geometry!, side, projection.width)
-      const collapsedChanged = previewCollapsed !== projection.shouldCollapse
-      previewCollapsed = projection.shouldCollapse
-      if (collapsedChanged) {
-        if (previewCollapsed) onCollapse()
-        else onPreviewExpand(panelWidthFromPixels(side, latestWidths[side], viewportWidth))
+      for (const target of ['left', 'right'] as const) {
+        if (projection.open[target] !== latest.open[target]) {
+          layout.previewOpen(target, projection.open[target], panelWidthFromPixels(target, projection.widths[target], viewportWidth))
+        }
+        const element = layout.refs[target].current
+        if (element && projection.open[target]) element.style.width = `${projection.widths[target].toFixed(2)}px`
       }
-      if (peer && geometry!.open[peerSide]) peer.style.width = `${latestWidths[peerSide].toFixed(2)}px`
-      if (!previewCollapsed) panel!.style.width = `${latestWidths[side].toFixed(2)}px`
+      latest = projection
     }
 
     function removeDragEffects(): void {
@@ -110,18 +99,17 @@ export function PanelResizeHandle({
       finished = true
       removeDragEffects()
       const changes: Partial<PanelWidths> = {}
-      if (previewCollapsed) {
-        changes[side] = PANEL_WIDTHS[side].minimum
-      } else if (moved) {
-        const nextWidth = panelWidthFromPixels(side, latestWidths[side], viewportWidth)
-        panel!.style.width = panelWidthExpression(side, nextWidth)
-        changes[side] = nextWidth
-      }
-      if (moved && peer && geometry!.open[peerSide]) {
-        const changed = Math.abs(latestWidths[peerSide] - geometry!.widths[peerSide]) >= 0.5
-        const peerWidth = changed ? panelWidthFromPixels(peerSide, latestWidths[peerSide], viewportWidth) : layout.widths[peerSide]
-        peer.style.width = panelWidthExpression(peerSide, peerWidth)
-        if (changed) changes[peerSide] = peerWidth
+      for (const target of ['left', 'right'] as const) {
+        if (!moved || !geometry!.open[target]) continue
+        if (!latest.open[target]) {
+          changes[target] = PANEL_WIDTHS[target].minimum
+          continue
+        }
+        const changed = target === side || Math.abs(latest.widths[target] - geometry!.widths[target]) >= 0.5
+        const nextWidth = changed ? panelWidthFromPixels(target, latest.widths[target], viewportWidth) : layout.widths[target]
+        const element = layout.refs[target].current
+        if (element) element.style.width = panelWidthExpression(target, nextWidth)
+        if (changed) changes[target] = nextWidth
       }
       if (Object.keys(changes).length) layout.commit(changes)
       onResizeActiveChange(false)
@@ -165,8 +153,6 @@ export function PanelResizeHandle({
     window.addEventListener('resize', handleWindowBlur)
   }, [
     side,
-    onCollapse,
-    onPreviewExpand,
     layout,
     onResizeActiveChange,
     panelRef,
@@ -180,6 +166,7 @@ export function PanelResizeHandle({
     const bounds = panelWidthBounds({ ...geometry, side })
     const currentWidth = geometry.widths[side]
     const step = side === 'left' ? 16 : viewportWidth * 0.02
+    const maximum = side === 'left' ? PANEL_WIDTHS.left.maximum : viewportWidth * PANEL_WIDTHS.right.maximum
     let nextWidth: number
     switch (event.key) {
       case 'ArrowLeft':
@@ -189,20 +176,29 @@ export function PanelResizeHandle({
         nextWidth = currentWidth + (side === 'left' ? step : -step)
         break
       case 'Home':
-        nextWidth = side === 'left' ? bounds.minWidth : bounds.maxWidth
+        nextWidth = side === 'left' ? bounds.minWidth : maximum
         break
       case 'End':
-        nextWidth = side === 'left' ? bounds.maxWidth : bounds.minWidth
+        nextWidth = side === 'left' ? maximum : bounds.minWidth
         break
       default:
         return
     }
     event.preventDefault()
-    const projected = projectPanelWidths(geometry, side, nextWidth)
-    const changes: Partial<PanelWidths> = { [side]: panelWidthFromPixels(side, projected[side], viewportWidth) }
-    const peer = side === 'left' ? 'right' : 'left'
-    if (geometry.open[peer] && Math.abs(projected[peer] - geometry.widths[peer]) >= 0.5) {
-      changes[peer] = panelWidthFromPixels(peer, projected[peer], viewportWidth)
+    const projected = projectPanelResize({
+      geometry, side, requestedWidth: Math.max(nextWidth, bounds.minWidth),
+      previousOpen: geometry.open, closeOvershoot: 0,
+    })
+    const changes: Partial<PanelWidths> = {}
+    for (const target of ['left', 'right'] as const) {
+      if (projected.open[target] !== geometry.open[target]) {
+        layout.previewOpen(target, projected.open[target], PANEL_WIDTHS[target].minimum)
+      }
+      if (!geometry.open[target]) continue
+      if (!projected.open[target]) changes[target] = PANEL_WIDTHS[target].minimum
+      else if (target === side || Math.abs(projected.widths[target] - geometry.widths[target]) >= 0.5) {
+        changes[target] = panelWidthFromPixels(target, projected.widths[target], viewportWidth)
+      }
     }
     layout.commit(changes)
   }, [side, layout, panelRef])

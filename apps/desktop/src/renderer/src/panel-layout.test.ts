@@ -6,8 +6,8 @@ import {
   panelWidthFromPixels,
   parsePanelWidth,
   persistPanelWidth,
-  projectPanelDrag,
-  projectPanelWidths,
+  projectPanelResize,
+  PANEL_CLOSE_OVERSHOOT,
   minimumConversationWidth,
   type PanelGeometry,
   type PanelSide,
@@ -59,18 +59,57 @@ describe('两侧栏宽度', () => {
     const right = panelWidthBounds({ ...original, side: 'right' })
     assert.equal(right.minWidth, 384)
     assert.equal(right.maxWidth, 960)
-    assert.deepEqual(projectPanelWidths(original, 'right', 960), { left: 264, right: 960 })
-    assert.deepEqual(projectPanelWidths(geometry(1_920, 264, 960), 'left', 360), { left: 360, right: 864 })
-    assert.deepEqual(projectPanelWidths(original, 'right', 900), { left: 324, right: 900 })
-    assert.deepEqual(projectPanelWidths(original, 'right', 850), { left: 360, right: 850 })
+    assert.deepEqual(resize(original, 'right', 960).widths, { left: 264, right: 960 })
+    assert.deepEqual(resize(geometry(1_920, 264, 960), 'left', 360).widths, { left: 360, right: 864 })
+    assert.deepEqual(resize(original, 'right', 900).widths, { left: 324, right: 900 })
+    assert.deepEqual(resize(original, 'right', 850).widths, { left: 360, right: 850 })
   })
 
-  it('另一侧到达最小宽度后停止让位，收起的侧栏保持原状态和宽度', () => {
-    assert.deepEqual(projectPanelWidths(geometry(2_560, 360, 1_152), 'right', 1_280), { left: 240, right: 1_272 })
+  it('另一侧到达最小宽度后仍保留收起缓冲，原本收起的侧栏不被拖拽重新展开', () => {
+    assert.deepEqual(resize(geometry(2_560, 360, 1_152), 'right', 1_280).widths, { left: 240, right: 1_272 })
     const leftClosed = { ...geometry(1_920, 62, 864), open: { left: false, right: true } }
-    assert.deepEqual(projectPanelWidths(leftClosed, 'right', 960), { left: 62, right: 960 })
-    const rightClosed = { ...geometry(1_920, 260, 348), open: { left: true, right: false } }
-    assert.deepEqual(projectPanelWidths(rightClosed, 'left', 360), { left: 360, right: 348 })
+    assert.deepEqual(resize(leftClosed, 'right', 960), { widths: { left: 62, right: 960 }, open: leftClosed.open })
+    const rightClosed = { ...geometry(1_920, 260, 360), open: { left: true, right: false } }
+    assert.deepEqual(resize(rightClosed, 'left', 360), { widths: { left: 360, right: 360 }, open: rightClosed.open })
+  })
+
+  it('窄窗口继续调宽右侧时可收起左侧，同一手势反向越过边界后恢复', () => {
+    const start = geometry(1_000, 300, 266)
+    assert.deepEqual(resize(start, 'right', 397), { widths: { left: 240, right: 326 }, open: start.open })
+    const closed = resize(start, 'right', 398)
+    assert.deepEqual(closed, { widths: { left: 62, right: 398 }, open: { left: false, right: true } })
+    assert.deepEqual(resize(start, 'right', 600, closed.open).widths, { left: 62, right: 500 })
+    assert.equal(resize(start, 'right', 327, closed.open).open.left, false)
+    const reopened = resize(start, 'right', 326, closed.open)
+    assert.deepEqual(reopened, { widths: { left: 240, right: 326 }, open: start.open })
+    assert.equal(resize(start, 'right', 397, reopened.open).open.left, true)
+    assert.deepEqual(resize(start, 'right', 266, reopened.open).widths, start.widths)
+  })
+
+  it('调宽左侧也可以收起右侧，反向拖回恢复原来分配且不压缩对话区', () => {
+    const start = geometry(860, 240, 186)
+    assert.deepEqual(resize(start, 'left', 325).widths, { left: 254, right: 172 })
+    const closed = resize(start, 'left', 326)
+    assert.deepEqual(closed, { widths: { left: 258, right: 0 }, open: { left: true, right: false } })
+    assert.equal(resize(start, 'left', 255, closed.open).open.right, false)
+    const reopened = resize(start, 'left', 254, closed.open)
+    assert.deepEqual(reopened, { widths: { left: 254, right: 172 }, open: start.open })
+    assert.deepEqual(resize(start, 'left', 240, reopened.open).widths, start.widths)
+  })
+
+  it('自身已达上限或收起不能释放空间时，不收起另一侧', () => {
+    const wide = geometry(1_920, 264, 960)
+    assert.deepEqual(resize(wide, 'right', 1_200), { widths: wide.widths, open: wide.open })
+    const noSpace = { ...geometry(1_000, 300, 266), collapsedWidths: { left: 240, right: 0 } }
+    assert.equal(resize(noSpace, 'right', 500).open.left, true)
+  })
+
+  it('键盘调宽在超过展开上限时收起对侧，停在边界上不会收起', () => {
+    const start = geometry(1_000, 240, 326)
+    assert.equal(resize(start, 'right', 326, start.open, 0).open.left, true)
+    assert.deepEqual(resize(start, 'right', 346, start.open, 0), {
+      widths: { left: 62, right: 346 }, open: { left: false, right: true },
+    })
   })
 
   it('窄窗口维持阅读下限，整体空间不足时不溢出', () => {
@@ -86,7 +125,7 @@ describe('两侧栏宽度', () => {
       const initialRight = Math.min(viewport * 0.45, input.layoutWidth - input.widths.left - minimumConversationWidth(input))
       input.widths.right = initialRight
       for (const side of ['left', 'right'] as const) {
-        const result = projectPanelWidths(input, side, viewport)
+        const result = resize(input, side, viewport).widths
         assert.ok(input.layoutWidth - result.left - result.right >= minimumConversationWidth(input) - 0.01)
         assert.ok(result.left >= 0 && result.right >= 0)
       }
@@ -95,17 +134,21 @@ describe('两侧栏宽度', () => {
 
   for (const side of ['left', 'right'] as const) {
     it(`${side}：最小宽度之后继续向外拖才收起，按住反向拖回最小宽度恢复`, () => {
-      const drag = (pointerX: number, collapsed = false) => projectPanelDrag({
-        side, startX: 500, pointerX: 500 + pointerX * (side === 'left' ? 1 : -1),
-        startWidth: 300, bounds: { minWidth: 240, maxWidth: 360 }, collapsed,
-      })
-      assert.deepEqual(drag(100), { width: 360, shouldCollapse: false })
-      assert.deepEqual(drag(-60), { width: 240, shouldCollapse: false })
-      assert.deepEqual(drag(-131), { width: 240, shouldCollapse: false })
-      assert.deepEqual(drag(-132), { width: 240, shouldCollapse: true })
-      assert.deepEqual(drag(-61, true), { width: 240, shouldCollapse: true })
-      assert.deepEqual(drag(-60, true), { width: 240, shouldCollapse: false })
-      assert.deepEqual(drag(20, true), { width: 320, shouldCollapse: false })
+      const start = geometry(side === 'left' ? 1_200 : 800, 240, 300)
+      start.open[side === 'left' ? 'right' : 'left'] = false
+      start.widths[side === 'left' ? 'right' : 'left'] = 0
+      const bounds = panelWidthBounds({ ...start, side })
+      const drag = (delta: number, collapsed = false) => {
+        const result = resize(start, side, bounds.minWidth + delta, { ...start.open, [side]: !collapsed })
+        return { width: result.widths[side], shouldCollapse: !result.open[side] }
+      }
+      assert.deepEqual(drag(500), { width: bounds.maxWidth, shouldCollapse: false })
+      assert.deepEqual(drag(0), { width: bounds.minWidth, shouldCollapse: false })
+      assert.deepEqual(drag(-71), { width: bounds.minWidth, shouldCollapse: false })
+      assert.deepEqual(drag(-72), { width: start.collapsedWidths[side], shouldCollapse: true })
+      assert.deepEqual(drag(-1, true), { width: start.collapsedWidths[side], shouldCollapse: true })
+      assert.deepEqual(drag(0, true), { width: bounds.minWidth, shouldCollapse: false })
+      assert.deepEqual(drag(20, true), { width: bounds.minWidth + 20, shouldCollapse: false })
     })
   }
 
@@ -113,14 +156,19 @@ describe('两侧栏宽度', () => {
     assert.equal(panelWidthFromPixels('left', 312, 1_920), 312)
     assert.equal(panelWidthFromPixels('right', 576, 1_920), 0.3)
     for (const side of ['left', 'right'] as PanelSide[]) {
-      const bounds = panelWidthBounds({ ...geometry(0, 0, 0), side })
-      assert.deepEqual(projectPanelDrag({ side, bounds, startX: 0, pointerX: 300, startWidth: 0, collapsed: false }), {
-        width: 0, shouldCollapse: false,
-      })
+      const empty = geometry(0, 0, 0)
+      assert.deepEqual(resize(empty, side, 300), { widths: empty.widths, open: empty.open })
     }
   })
 })
 
 function geometry(viewportWidth: number, left: number, right: number): PanelGeometry {
-  return { viewportWidth, layoutWidth: Math.max(0, viewportWidth - 14), widths: { left, right }, open: { left: true, right: true } }
+  return {
+    viewportWidth, layoutWidth: Math.max(0, viewportWidth - 14), widths: { left, right },
+    collapsedWidths: { left: 62, right: viewportWidth > 1_440 ? 360 : 0 }, open: { left: true, right: true },
+  }
+}
+
+function resize(input: PanelGeometry, side: PanelSide, requestedWidth: number, previousOpen = input.open, closeOvershoot = PANEL_CLOSE_OVERSHOOT) {
+  return projectPanelResize({ geometry: input, side, requestedWidth, previousOpen, closeOvershoot })
 }

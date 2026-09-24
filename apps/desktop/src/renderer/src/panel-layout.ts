@@ -5,6 +5,7 @@ export interface PanelGeometry {
   viewportWidth: number
   layoutWidth: number
   widths: PanelWidths
+  collapsedWidths: PanelWidths
   open: Record<PanelSide, boolean>
 }
 
@@ -85,33 +86,38 @@ export function panelWidthBounds(input: PanelGeometry & { side: PanelSide }): Pa
   return { minWidth: Math.min(own.minWidth, maxWidth), maxWidth }
 }
 
-export function projectPanelWidths(input: PanelGeometry, side: PanelSide, requestedWidth: number): PanelWidths {
-  const bounds = panelWidthBounds({ ...input, side })
-  const width = clamp(requestedWidth, bounds.minWidth, bounds.maxWidth)
-  const peer = side === 'left' ? 'right' : 'left'
-  const peerWidth = input.open[peer]
-    ? Math.min(input.widths[peer], Math.max(0, input.layoutWidth - minimumConversationWidth(input) - width))
-    : input.widths[peer]
-  return { ...input.widths, [side]: width, [peer]: peerWidth }
-}
-
-export function projectPanelDrag(input: {
+export function projectPanelResize(input: {
+  geometry: PanelGeometry
   side: PanelSide
-  startX: number
-  pointerX: number
-  startWidth: number
-  bounds: PanelWidthBounds
-  collapsed: boolean
-}): { width: number; shouldCollapse: boolean } {
-  const { minWidth, maxWidth } = input.bounds
-  const direction = input.side === 'left' ? 1 : -1
-  const rawWidth = input.startWidth + (input.pointerX - input.startX) * direction
-  return {
-    width: clamp(rawWidth, minWidth, maxWidth),
-    shouldCollapse: maxWidth > 0 && (input.collapsed
-      ? rawWidth < minWidth
-      : minWidth - rawWidth >= PANEL_CLOSE_OVERSHOOT),
+  requestedWidth: number
+  previousOpen: PanelGeometry['open']
+  closeOvershoot: number
+}): Pick<PanelGeometry, 'widths' | 'open'> {
+  const { geometry, side, requestedWidth, previousOpen, closeOvershoot } = input
+  const peer = side === 'left' ? 'right' : 'left'
+  const expandedBounds = panelWidthBounds({ ...geometry, side })
+  const collapsedBounds = panelWidthBounds({
+    ...geometry, side,
+    widths: { ...geometry.widths, [peer]: geometry.collapsedWidths[peer] },
+    open: { ...geometry.open, [peer]: false },
+  })
+  // 只有收起确实能继续调宽时才跨过边界；回到展开边界后恢复，避免临界点抖动。
+  const collapsePeer = geometry.open[peer]
+    && collapsedBounds.maxWidth > expandedBounds.maxWidth
+    && requestedWidth > expandedBounds.maxWidth
+    && (!previousOpen[peer] || requestedWidth - expandedBounds.maxWidth >= closeOvershoot)
+  const bounds = collapsePeer ? collapsedBounds : expandedBounds
+  const collapseOwn = bounds.maxWidth > 0 && requestedWidth < bounds.minWidth
+    && (!previousOpen[side] || bounds.minWidth - requestedWidth >= closeOvershoot)
+  const widths = {
+    ...geometry.widths,
+    [side]: collapseOwn ? geometry.collapsedWidths[side] : clamp(requestedWidth, bounds.minWidth, bounds.maxWidth),
   }
+  if (geometry.open[peer]) {
+    widths[peer] = collapsePeer ? geometry.collapsedWidths[peer]
+      : Math.min(geometry.widths[peer], Math.max(0, geometry.layoutWidth - minimumConversationWidth(geometry) - widths[side]))
+  }
+  return { widths, open: { ...geometry.open, [side]: !collapseOwn, [peer]: geometry.open[peer] && !collapsePeer } }
 }
 
 export function panelWidthFromPixels(side: PanelSide, width: number, viewportWidth: number): number {

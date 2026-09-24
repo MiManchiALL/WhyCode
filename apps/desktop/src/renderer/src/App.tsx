@@ -110,7 +110,7 @@ import { ComposerMcpStatus } from './composer-mcp-status.tsx'
 import { RightPanel } from './right-panel.tsx'
 import { disposeTerminalView, loadTerminalViews } from './terminal-panel.tsx'
 import { PanelResizeHandle } from './panel-resize-handle.tsx'
-import { panelWidthExpression } from './panel-layout.ts'
+import { panelWidthExpression, type PanelSide } from './panel-layout.ts'
 import { usePanelLayout } from './use-panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import {
@@ -188,7 +188,6 @@ export function App() {
   const panelFullscreen = rightPanelFullscreen && rightPanelState.open
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
-  const panelLayout = usePanelLayout()
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
   const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
   const [connectionSettings, setConnectionSettings] =
@@ -708,6 +707,15 @@ export function App() {
     }
   }, [])
 
+  const changePanelOpen = useCallback((side: PanelSide, open: boolean) => {
+    if (side === 'left') setSidebarCollapsed(!open)
+    else {
+      if (!open) setRightPanelFullscreen(false)
+      updateRightPanelState(current => ({ ...current, open }))
+    }
+  }, [updateRightPanelState])
+  const panelLayout = usePanelLayout(changePanelOpen)
+
   const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
     const previousRuntimeId = runtimeIdRef.current
     const previousSessionId = sessionIdRef.current
@@ -1062,16 +1070,6 @@ export function App() {
     window.addEventListener('keydown', exit)
     return () => window.removeEventListener('keydown', exit)
   }, [panelFullscreen, rightPanelState.open])
-
-  const collapseRightPanel = useCallback(() => {
-    setRightPanelFullscreen(false)
-    updateRightPanelState((current) => ({ ...current, open: false }))
-  }, [updateRightPanelState])
-
-  const previewRightPanelExpand = useCallback((ratio: number) => {
-    panelLayout.previewExpand('right', ratio)
-    updateRightPanelState((current) => ({ ...current, open: true }))
-  }, [panelLayout.previewExpand, updateRightPanelState])
 
   const showRightPanelPage = useCallback((page: RightPanelPage) => {
     updateRightPanelState((current) => openRightPanelPageState(current, page))
@@ -2457,11 +2455,7 @@ export function App() {
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
             aria-busy={loadingConversation}
             inert={loadingConversation}
-            className={`wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out ${
-              rightPanelState.open
-                ? 'ml-0'
-                : 'ml-3 w-[348px] max-[1440px]:ml-0 max-[1440px]:w-0 max-[1440px]:pointer-events-none'
-            }`}
+            className="wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out"
             style={{
               width: rightPanelState.open
                 ? panelWidthExpression('right', panelLayout.widths.right)
@@ -2472,8 +2466,6 @@ export function App() {
               <PanelResizeHandle
                 side="right"
                 layout={panelLayout}
-                onCollapse={collapseRightPanel}
-                onPreviewExpand={previewRightPanelExpand}
                 onResizeActiveChange={setRightPanelResizeActive}
               />
             )}
@@ -2526,7 +2518,7 @@ export function App() {
                 workspacePath={workspaceDisplayDirectory(workspace)}
                 fullscreen={panelFullscreen}
                 onToggleFullscreen={() => setRightPanelFullscreen(value => !value)}
-                onCollapse={collapseRightPanel}
+                onCollapse={() => changePanelOpen('right', false)}
                 onOpenPage={showRightPanelPage}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}

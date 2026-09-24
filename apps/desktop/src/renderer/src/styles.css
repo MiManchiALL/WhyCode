@@ -128,8 +128,21 @@ button:not(:disabled),
   box-shadow: 0 1px 2px rgb(33 35 31 / 4%);
 }
 
-html[data-wc-panel-resizing='true'] .wc-resizable-panel[data-panel-open='true'] {
+html[data-wc-panel-resizing='true'] .wc-resizable-panel {
   transition-duration: 0ms;
+}
+
+.wc-right-panel-shell {
+  --wc-panel-collapsed-width: 348px;
+  --wc-panel-collapsed-gap: 12px;
+}
+.wc-right-panel-shell[data-panel-open='false'] {
+  width: var(--wc-panel-collapsed-width);
+  margin-left: var(--wc-panel-collapsed-gap);
+}
+@media (max-width: 1440px) {
+  .wc-right-panel-shell { --wc-panel-collapsed-width: 0px; --wc-panel-collapsed-gap: 0px; }
+  .wc-right-panel-shell[data-panel-open='false'] { pointer-events: none; }
 }
 
 .wc-right-panel-tabs {
