@@ -36,7 +36,7 @@ export function RightPanelChanges(props: Props) {
   const expanded = new Set(page.expandedPaths.map(filePathKey))
   return <div className="wc-changes-panel flex min-h-0 flex-1 flex-col">
     <div className="wc-changes-summary">
-      <span>已更改 {changes.length} 个文件</span>
+      <span className="min-w-0 truncate">已更改 {changes.length} 个文件</span>
       <ChangeCounts {...totalFileChanges(changes)} />
     </div>
     <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-changes-scroll wc-scrollbar min-h-0 flex-1 overflow-y-auto">
