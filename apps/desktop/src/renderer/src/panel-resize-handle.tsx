@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import { flushSync } from 'react-dom'
 import {
   PANEL_WIDTHS,
   PANEL_CLOSE_OVERSHOOT,
@@ -41,6 +42,7 @@ export function PanelResizeHandle({
     const geometry = layout.measure()
     if (!panel || !geometry) return
     finishDragRef.current?.()
+    const panels = [layout.refs.left.current, layout.refs.right.current].filter((element): element is HTMLElement => element !== null)
     const pointerId = event.pointerId
     const startX = event.clientX
     const startWidth = geometry.widths[side]
@@ -53,6 +55,11 @@ export function PanelResizeHandle({
 
     panel.dataset.resizing = 'true'
     document.documentElement.dataset.wcPanelResizing = 'true'
+    // 动画起点固定为当前像素，避免百分比宽度随另一侧动画再次换算。
+    for (const target of ['left', 'right'] as const) {
+      const element = layout.refs[target].current
+      if (element && geometry.open[target]) element.style.width = `${geometry.widths[target].toFixed(2)}px`
+    }
     handle.setPointerCapture(pointerId)
     onResizeActiveChange(true)
     event.preventDefault()
@@ -67,14 +74,31 @@ export function PanelResizeHandle({
         previousOpen: latest.open,
         closeOvershoot: PANEL_CLOSE_OVERSHOOT,
       })
+      const toggled = projection.open.left !== latest.open.left || projection.open.right !== latest.open.right
+      if (toggled) {
+        // 开合时两侧同时过渡，避免主动侧瞬间占用另一侧尚未释放的空间。
+        for (const element of panels) element.dataset.resizeTransition = 'true'
+        flushSync(() => {
+          for (const target of ['left', 'right'] as const) {
+            if (projection.open[target] !== latest.open[target]) {
+              layout.previewOpen(target, projection.open[target], panelWidthFromPixels(target, projection.widths[target], viewportWidth))
+            }
+          }
+        })
+      }
       for (const target of ['left', 'right'] as const) {
-        if (projection.open[target] !== latest.open[target]) {
-          layout.previewOpen(target, projection.open[target], panelWidthFromPixels(target, projection.widths[target], viewportWidth))
-        }
         const element = layout.refs[target].current
         if (element && projection.open[target]) element.style.width = `${projection.widths[target].toFixed(2)}px`
       }
       latest = projection
+    }
+
+    function settlePanelTransitions(event: TransitionEvent): void {
+      if (!panels.includes(event.target as HTMLElement) || !['width', 'margin-left'].includes(event.propertyName)) return
+      const running = panels.some(element => element.getAnimations().some(animation =>
+        animation instanceof CSSTransition && ['width', 'margin-left'].includes(animation.transitionProperty)
+        && (animation.playState === 'running' || animation.pending)))
+      if (!running) for (const element of panels) delete element.dataset.resizeTransition
     }
 
     function removeDragEffects(): void {
@@ -87,6 +111,11 @@ export function PanelResizeHandle({
       window.removeEventListener('resize', handleWindowBlur)
       panel!.removeAttribute('data-resizing')
       delete document.documentElement.dataset.wcPanelResizing
+      for (const element of panels) {
+        element.removeEventListener('transitionend', settlePanelTransitions)
+        element.removeEventListener('transitioncancel', settlePanelTransitions)
+        delete element.dataset.resizeTransition
+      }
       if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId)
       if (finishDragRef.current === finishWithoutFlush) finishDragRef.current = null
     }
@@ -100,12 +129,12 @@ export function PanelResizeHandle({
       removeDragEffects()
       const changes: Partial<PanelWidths> = {}
       for (const target of ['left', 'right'] as const) {
-        if (!moved || !geometry!.open[target]) continue
+        if (!geometry!.open[target]) continue
         if (!latest.open[target]) {
           changes[target] = PANEL_WIDTHS[target].minimum
           continue
         }
-        const changed = target === side || Math.abs(latest.widths[target] - geometry!.widths[target]) >= 0.5
+        const changed = moved && (target === side || Math.abs(latest.widths[target] - geometry!.widths[target]) >= 0.5)
         const nextWidth = changed ? panelWidthFromPixels(target, latest.widths[target], viewportWidth) : layout.widths[target]
         const element = layout.refs[target].current
         if (element) element.style.width = panelWidthExpression(target, nextWidth)
@@ -151,6 +180,10 @@ export function PanelResizeHandle({
     window.addEventListener('pointercancel', handlePointerCancel)
     window.addEventListener('blur', handleWindowBlur)
     window.addEventListener('resize', handleWindowBlur)
+    for (const element of panels) {
+      element.addEventListener('transitionend', settlePanelTransitions)
+      element.addEventListener('transitioncancel', settlePanelTransitions)
+    }
   }, [
     side,
     layout,
