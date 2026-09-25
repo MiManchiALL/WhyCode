@@ -83,7 +83,8 @@ describe('子代理终态续轮', () => {
     assert.equal(delivered, 1)
   })
 
-  it('同一 turn 逐个接收终态、允许用户插话，并等待全部交付后才结束', async () => {
+  it('同一 turn 逐个接收终态、允许用户插话，并等待全部交付后才结束', async (context) => {
+    context.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 25, 10).getTime() })
     const events: CoreEvent[] = []
     const calls = [deferred<void>(), deferred<void>(), deferred<void>(), deferred<void>()]
     const delivered = new Set<string>()
@@ -95,6 +96,7 @@ describe('子代理终态续轮', () => {
         const index = call++
         const prompt = JSON.stringify(options.prompt)
         calls[index]?.resolve()
+        assert.equal(prompt.split('当前日期：').length - 1, 1)
         if (index === 0) {
           assert.match(prompt, /whycode-subagent-turn-state/)
           assert.match(prompt, /用一次简短说明结束当前响应并等待，不要重复播报/)

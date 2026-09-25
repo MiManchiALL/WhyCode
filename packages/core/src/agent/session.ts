@@ -23,10 +23,7 @@ import type { ToolFileChange } from '../tools/file-changes.ts'
 import { buildSystemPrompt, type PromptContext } from '../prompts/system.ts'
 import { BTW_TOOL_NAMES, createBtwUserMessages } from '../prompts/btw.ts'
 import type { CustomSystemPromptSnapshot } from '../prompts/custom-system.ts'
-import {
-  createCurrentTimeReminder,
-  shouldRefreshCurrentTimeReminder,
-} from '../prompts/current-time.ts'
+import { currentDateReminder } from '../prompts/current-date.ts'
 import { checkToolPermission } from '../permissions/engine.ts'
 import {
   CheckpointManager,
@@ -1817,7 +1814,6 @@ export class AgentSession {
       let steeringDecisionPending = false
       let stepsSincePlanMutation = 0
       let stepsSincePlanReminder = 0
-      let currentTimeReminderAt: Date | null = null
       let projectInstructionsFresh = true
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
       // 只有稳定提交 Create/Resume，或回答计划自身的问题卡，才接合计划执行生命周期。
@@ -1836,7 +1832,6 @@ export class AgentSession {
         await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
         if (this.hasPendingMessages()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
-          currentTimeReminderAt = null
           if (injectedUserMessage) steeringDecisionPending = true
         }
         const subagentState = await this.subagentTurnState(turnId)
@@ -1845,11 +1840,6 @@ export class AgentSession {
         if (maxSteps !== null && steps === maxSteps - FINALIZATION_RESERVE_STEPS) {
           await this.injectStepLimitReminder()
         }
-        const currentTime = new Date()
-        const refreshCurrentTime = shouldRefreshCurrentTimeReminder(
-          currentTimeReminderAt,
-          currentTime,
-        )
         const step = await this.runOneStep(
           usage,
           abortSignal,
@@ -1858,11 +1848,9 @@ export class AgentSession {
             && !interruptionBoundaryConsumed
             && !this.options.promptContext.discussion
             && !this.protocolRound,
-          refreshCurrentTime ? currentTime : null,
           steeringDecisionPending || hasOutstandingSubagentActivations(subagentState),
           subagentState,
         )
-        if (refreshCurrentTime && step.committed) currentTimeReminderAt = currentTime
         // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
         // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
         steeringDecisionPending = steeringDecisionPending
@@ -1905,7 +1893,6 @@ export class AgentSession {
             break
           }
           const injectedUserMessage = await this.injectQueuedMidTurn()
-          currentTimeReminderAt = null
           if (injectedUserMessage) steeringDecisionPending = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
@@ -1937,7 +1924,6 @@ export class AgentSession {
               stopReason = 'aborted'
               break
             }
-            currentTimeReminderAt = null
             continue
           }
           if (step.awaitingTaskPlanContinuation) {
@@ -2441,13 +2427,12 @@ export class AgentSession {
     return null
   }
 
-  /** 不可交付响应没有可提交的模型事实，可安全复用同一上下文重试一次而不重放工具。 */
+  /** 未提交的模型响应可复用已提交上下文重试，不重放工具。 */
   private async runOneStep(
     usage: UsageInfo,
     turnAbortSignal: AbortSignal,
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
-    currentTime: Date | null,
     preserveTaskPlanOnFinalText: boolean,
     subagentTurnState: SubagentTurnState | null,
   ): Promise<StepResult> {
@@ -2455,7 +2440,7 @@ export class AgentSession {
       return await this.runModelStep(turnAbortSignal, this.options.emit, (stepAbort) =>
         this.runOneStepAttempt(
           usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
-          currentTime, preserveTaskPlanOnFinalText, subagentTurnState,
+          preserveTaskPlanOnFinalText, subagentTurnState,
         ),
       )
     } catch (error) {
@@ -2504,7 +2489,6 @@ export class AgentSession {
     stepAbort: AbortController,
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
-    currentTime: Date | null,
     preserveTaskPlanOnFinalText: boolean,
     subagentTurnState: SubagentTurnState | null,
   ): Promise<StepResult> {
@@ -2533,19 +2517,17 @@ export class AgentSession {
         this.messages,
         stepAbort.signal,
       ) ?? null
-      const currentTimeReminder = currentTime
-        ? createCurrentTimeReminder(currentTime)
-        : null
+      const dateReminder = currentDateReminder(this.messages, new Date())
       const subagentTurnStateMessage = subagentTurnState
         ? createSubagentTurnStateMessage(subagentTurnState)
         : null
       const modelInputMessages = [
         ...this.messages,
-        ...(currentTimeReminder ? [currentTimeReminder] : []),
+        ...(dateReminder ? [dateReminder] : []),
         ...(subagentTurnStateMessage ? [subagentTurnStateMessage] : []),
       ]
       const persistentInputMessageCount =
-        this.messages.length + (currentTimeReminder ? 1 : 0)
+        this.messages.length + (dateReminder ? 1 : 0)
       const requestSkillProjectionDelta =
         this.skillTurn.estimatedProjectionTokenDelta(modelInputMessages)
       const requestSubagentProjectionDelta = subagentTurnStateMessage
@@ -2585,7 +2567,7 @@ export class AgentSession {
       const requestUsedTokens = this.tokenBaseline
         ? this.estimateCurrentContextTokens([
             ...this.messages,
-            ...(currentTimeReminder ? [currentTimeReminder] : []),
+            ...(dateReminder ? [dateReminder] : []),
           ])
         : requestOverhead.systemPromptTokens
           + requestOverhead.toolTokens
@@ -2675,7 +2657,7 @@ export class AgentSession {
       }
       if (hadToolCalls) {
         const head = dehydrateImageMessages([
-          ...(currentTimeReminder ? [currentTimeReminder] : []),
+          ...(dateReminder ? [dateReminder] : []),
           ...canonicalResponseMessages,
         ])
         await this.persistRequired(
@@ -2767,7 +2749,7 @@ export class AgentSession {
       }
       const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
       const committedMessages = dehydrateImageMessages([
-        ...(!toolExecution && currentTimeReminder ? [currentTimeReminder] : []),
+        ...(!toolExecution && dateReminder ? [dateReminder] : []),
         ...(!toolExecution ? canonicalResponseMessages : []),
         ...stepAttachments.pdfReferences(),
         ...internalMarkers,
@@ -2798,7 +2780,7 @@ export class AgentSession {
           message.role !== 'assistant')
         this.tokenBaseline = {
           usageTokens: stepTotalTokens,
-          // usage 覆盖模型输入（含本步时间提醒）和 assistant 输出，
+          // usage 覆盖模型输入（含本步日期提醒）和 assistant 输出，
           // 不含宿主随后追加的 tool result、页面图和控制标记。
           coveredMessageCount:
             persistentInputMessageCount

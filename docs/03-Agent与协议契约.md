@@ -58,7 +58,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 6. 最新真实 user、assistant、tool 内容及当前 turn 子代理状态投影；
 7. 当前激活 Skill 正文。
 
-控制消息必须使用不可与普通用户文本混淆的版本化容器，并明确“不是新的用户要求”。同一语义只能存在一个活动版本；旧版本可以留在 append-only 审计事件中，但不得同时发给模型。
+控制消息必须使用不可与普通用户文本混淆的版本化容器，并明确“不是新的用户要求”。配置或控制状态的同一语义只能存在一个活动版本；旧版本可以留在 append-only 审计事件中，但不得同时发给模型。日期提醒的历史时点语义见 §1.8。
 
 ### 1.5 项目指令
 
@@ -113,10 +113,13 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 `active-skills-changed {skills: SkillSummary[]}` 是当前根任务的即时状态事件；显式选择、steering 加入及成功的 Skill 调用更新列表，结束、中断或错误收尾清空。失败调用不激活。摘要不含 digest/content，不进入步骤缓冲、ViewEvent、JSONL、摘要或 Fork；`RuntimeSnapshot.activeSkills` 直接读取该运行时的 Core 当前集合，重启后的空闲会话为空。
 
-### 1.8 时间、运行态与缓存卫生
+### 1.8 日期、运行态与缓存卫生
 
-- 每个新 turn 首个模型步骤在真实 user 输入之后追加本机日期时间、IANA 时区、UTC 偏移和 UTC；同一 turn 复用，满 5 分钟、跨本地日期或收到新 steering 后才惰性刷新。
-- 不使用 watcher 或计时器制造项目指令、Skill 或时间消息。
+- `prompts/current-date.ts` 在每次 Agent 步骤请求组装时读取本机日期，并与有效历史中最后一条日期提醒比较；缺失或日期变化时才在消息尾部追加 `<whycode-current-date version="1">` 内部 user 消息，提供本地日期与 IANA 时区，不携带时分秒或重复 UTC 时间。日期变化包括跨天与系统日期回拨；仅时刻变化不刷新。
+- 同日新 turn、steering、子代理唤醒与会话恢复复用历史中的提醒；压缩或回滚移除提醒后，下次请求重新补充。判断只依赖当前有效 messages，不另存“上次注入日期”。
+- 历史日期提醒保留在原位置，最后一条表示当前日期；追加时不重写已提交的消息前缀。
+- 长任务跨天在工具结果写稳后的下一次正常模型请求补充日期，不中断正在流式输出的响应，不为跨天单独唤醒模型。提醒与对应完整模型响应沿同一提交边界持久化；失败或中止的未提交响应不留下孤立提醒，重试重新检查有效历史。
+- 不使用 watcher 或计时器制造项目指令、Skill 或日期消息。任务需要精确时刻时通过现有工具查询。
 - `transportSessionId` 是传输元数据：同一 AgentSession 稳定、不同 AgentSession 独立；CLIProxyAPI 使用 `X-Session-ID`。它不进入 transcript、摘要或用户可见正文。
 - 普通 Main 的稳定基础工具顺序/schema 不因计划状态变化；非法状态由控制器返回结构化错误。
 
@@ -124,7 +127,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 `ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此不计入消息；它恢复出的工具 schema 在真实请求装配后计入 `toolTokens`。
 
-`usedTokens` 与压缩器必须读取同一个压力值：有 Provider usage 时使用真实基线并补估其后稳定提交的消息及当前请求投影变化；没有基线时才估算 System、工具目录和消息。分项不要求机械相加等于 Provider 总量。项目指令、时间提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
+`usedTokens` 与压缩器必须读取同一个压力值：有 Provider usage 时使用真实基线并补估其后稳定提交的消息及当前请求投影变化；没有基线时才估算 System、工具目录和消息。分项不要求机械相加等于 Provider 总量。项目指令、日期提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
 
 `context-usage` 是可空 live CoreEvent。Desktop runtime 保存最新值并进入恢复快照，Renderer 不读取模型能力或历史自行重算；B/C 的独立窗口不计入。该状态不进入 ViewEvent、JSONL、摘要或 Fork，也不增加会话 schema。模型切换使旧值失效，计量失败只隐藏指示器，不能阻断请求。idle 会话即使最终输出越过阈值，也只说明“下次请求前压缩”，不额外制造模型调用；自动压缩连续失败必须显式提示。
 
