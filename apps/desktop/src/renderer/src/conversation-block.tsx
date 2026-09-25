@@ -143,10 +143,10 @@ export function BlockView({
           aria-expanded={expanded}
           onClick={onToggle}
         >
-          <span className={call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}>{icon}</span>
+          <span className={`shrink-0 ${call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}`}>{icon}</span>
           <span className="truncate font-medium">{call.name}</span>
           {summary.primary && (
-            <span className="wc-tool-card-description min-w-0 truncate text-[var(--wc-faint)]">{summary.primary}</span>
+            <span className="wc-tool-summary-detail wc-tool-card-description min-w-0 truncate text-[var(--wc-faint)]">{summary.primary}</span>
           )}
           {summary.trailing && (
             <span className="wc-tool-card-description shrink-0 text-[var(--wc-faint)]">· {summary.trailing}</span>

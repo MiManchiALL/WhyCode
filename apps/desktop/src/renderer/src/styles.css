@@ -1159,6 +1159,10 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 }
 
 .wc-tool-summary { container: wc-tool-summary / inline-size; overflow: hidden; }
+.wc-tool-summary-detail, .wc-tool-file-name {
+  flex: 1 1 0%;
+  max-width: max-content;
+}
 @container wc-tool-summary (max-width: 15rem) {
   .wc-tool-change-counts { display: none; }
 }

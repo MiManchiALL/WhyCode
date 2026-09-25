@@ -164,7 +164,7 @@ function ToolBatchRowView({
           ) : (
             <button
               type="button"
-              className="wc-tool-summary-detail wc-focus-ring min-w-0 flex-1 truncate rounded-md text-left"
+              className="wc-tool-summary-detail wc-focus-ring min-w-0 truncate rounded-md text-left"
               aria-expanded={expanded}
             >
               {row.summary}
