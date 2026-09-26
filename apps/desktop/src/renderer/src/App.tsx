@@ -1139,6 +1139,8 @@ export function App() {
 
   useEffect(() => {
     return window.whycode.onSubagents((state) => {
+      // 子代理收尾可能晚于父会话终态，会话列表需重新读取宿主的运行状态。
+      void refreshSessions()
       if (
         state.parentSessionId === sessionIdRef.current
         && hydratingRuntimeIdRef.current === null
@@ -1156,7 +1158,7 @@ export function App() {
         if (oldestSessionId) states.delete(oldestSessionId)
       }
     })
-  }, [applySubagentState])
+  }, [applySubagentState, refreshSessions])
 
   useEffect(() => {
     void window.whycode.consensusStatus().then(setConsensus)
