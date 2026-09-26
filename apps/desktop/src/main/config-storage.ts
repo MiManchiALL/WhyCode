@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -38,7 +38,7 @@ interface StoredCredential {
 
 interface StoredConfig {
   version?: number
-  providers?: Record<string, StoredCredential>
+  providers: Record<string, StoredCredential>
   defaultModel?: string
   permissionMode?: unknown
   retiredModelLabels?: Record<string, string>
@@ -76,45 +76,62 @@ interface StoredConfig {
 const CONFIG_VERSION = 10
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
+export class ConfigReadError extends Error {
+  constructor(reason: string) {
+    super(`WhyCode 配置读取失败：${reason}。原文件已保留，请检查配置文件或系统安全存储。`)
+    this.name = 'ConfigReadError'
+  }
+}
+
 export function getConfigPath(): string {
   return join(homedir(), '.whycode', 'config.json')
 }
 
-/** 同步读取保留现有调用语义；损坏项 fail-closed，不把密钥送入 Renderer。 */
+/** 只有文件不存在表示尚未配置；读取失败不能成为下一次写入的空配置。 */
 export function loadConfig(
   path = getConfigPath(),
   codec?: ConfigSecretCodec,
 ): WhycodeConfig | null {
+  const stored = readStoredConfig(path)
+  if (!stored) return null
+  const providers = Object.create(null) as WhycodeConfig['providers']
+  for (const provider of BUILTIN_PROVIDERS) {
+    const credential = parseCredential(stored.providers[provider.id], codec)
+    if (credential) providers[provider.id] = credential
+  }
+  const retiredModelLabels = parseRetiredModelLabels(stored.retiredModelLabels)
+  const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
+  const auxiliaryModels = parseAuxiliaryModels(stored.auxiliaryModels)
+  const consensusAgents = parseConsensusAgents(stored.consensusAgents)
+  const webSearch = parseWebSearch(stored.webSearch, codec)
+  const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
+  const mcpOAuthSessions = parseStoredMcpOAuthSessions(stored.mcpOAuthSessions, codec)
+  const permissionMode = parsePermissionMode(stored.permissionMode)
+  return {
+    providers,
+    ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(retiredModelLabels ? { retiredModelLabels } : {}),
+    ...(cliProxyApi ? { cliProxyApi } : {}),
+    ...(auxiliaryModels ? { auxiliaryModels } : {}),
+    ...(consensusAgents ? { consensusAgents } : {}),
+    ...(webSearch ? { webSearch } : {}),
+    ...(mcpSecretHeaders ? { mcpSecretHeaders } : {}),
+    ...(mcpOAuthSessions ? { mcpOAuthSessions } : {}),
+  }
+}
+
+function readStoredConfig(path: string): (Record<string, unknown> & {
+  providers: Record<string, unknown>
+}) | null {
   try {
-    const stored = JSON.parse(readFileSync(path, 'utf-8')) as StoredConfig
-    if (!isRecord(stored.providers)) return null
-    const providers = Object.create(null) as WhycodeConfig['providers']
-    for (const provider of BUILTIN_PROVIDERS) {
-      const credential = parseCredential(stored.providers[provider.id], codec)
-      if (credential) providers[provider.id] = credential
-    }
-    const retiredModelLabels = parseRetiredModelLabels(stored.retiredModelLabels)
-    const cliProxyApi = parseCliProxyApi(stored.cliProxyApi, codec)
-    const auxiliaryModels = parseAuxiliaryModels(stored.auxiliaryModels)
-    const consensusAgents = parseConsensusAgents(stored.consensusAgents)
-    const webSearch = parseWebSearch(stored.webSearch, codec)
-    const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
-    const mcpOAuthSessions = parseStoredMcpOAuthSessions(stored.mcpOAuthSessions, codec)
-    const permissionMode = parsePermissionMode(stored.permissionMode)
-    return {
-      providers,
-      ...(typeof stored.defaultModel === 'string' ? { defaultModel: stored.defaultModel } : {}),
-      ...(permissionMode ? { permissionMode } : {}),
-      ...(retiredModelLabels ? { retiredModelLabels } : {}),
-      ...(cliProxyApi ? { cliProxyApi } : {}),
-      ...(auxiliaryModels ? { auxiliaryModels } : {}),
-      ...(consensusAgents ? { consensusAgents } : {}),
-      ...(webSearch ? { webSearch } : {}),
-      ...(mcpSecretHeaders ? { mcpSecretHeaders } : {}),
-      ...(mcpOAuthSessions ? { mcpOAuthSessions } : {}),
-    }
-  } catch {
-    return null
+    const stored: unknown = JSON.parse(readFileSync(path, 'utf-8'))
+    if (!isRecord(stored) || !isRecord(stored.providers)) throw new ConfigReadError('格式无效')
+    return { ...stored, providers: stored.providers }
+  } catch (error) {
+    if (isRecord(error) && error.code === 'ENOENT') return null
+    if (error instanceof ConfigReadError) throw error
+    throw new ConfigReadError(error instanceof SyntaxError ? '格式无效' : '无法读取')
   }
 }
 
@@ -124,6 +141,8 @@ export async function saveConfig(
   path = getConfigPath(),
 ): Promise<void> {
   if (!codec.isAvailable()) throw new Error('系统安全存储当前不可用，不能安全保存 API key')
+  // 写入边界重新确认原文件可完整读取，保护持有旧快照或直接保存的调用方。
+  loadConfig(path, codec)
   const stored: StoredConfig = {
     version: CONFIG_VERSION,
     providers: Object.fromEntries(Object.entries(config.providers).map(([provider, value]) => [
@@ -217,17 +236,10 @@ export async function migrateLegacyConfig(
   path = getConfigPath(),
 ): Promise<boolean> {
   if (!codec.isAvailable()) return false
-  let raw: string
-  let stored: StoredConfig
-  try {
-    raw = await readFile(path, 'utf-8')
-    stored = JSON.parse(raw) as StoredConfig
-  } catch {
-    return false
-  }
-  if (!isRecord(stored.providers)) return false
+  const stored = readStoredConfig(path)
+  if (!stored) return false
   const hasLegacyConnections = Object.hasOwn(stored, 'customConnections')
-  const hasPlaintextSecret = /"apiKey"\s*:\s*"[^"]+"/.test(raw)
+  const hasPlaintextSecret = /"apiKey"\s*:\s*"[^"]+"/.test(JSON.stringify(stored))
   if (stored.version === CONFIG_VERSION && !hasLegacyConnections && !hasPlaintextSecret) {
     return false
   }
@@ -245,9 +257,9 @@ export async function migrateLegacyConfig(
 }
 
 function parseCredential(value: unknown, codec?: ConfigSecretCodec): ProviderConnectionConfig | null {
-  if (!isRecord(value)) return null
+  if (value === undefined) return null
+  if (!isRecord(value)) throw new ConfigReadError('凭据格式无效')
   const apiKey = readSecret(value, codec)
-  if (apiKey === null) return null
   const baseURL = optionalString(value.baseURL)
   return { apiKey, ...(baseURL ? { baseURL } : {}) }
 }
@@ -270,7 +282,8 @@ function parseWebSearch(
   value: unknown,
   codec?: ConfigSecretCodec,
 ): WhycodeConfig['webSearch'] {
-  if (!isRecord(value)) return undefined
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new ConfigReadError('搜索配置格式无效')
   const parsedPerplexity = parseCredential(value.perplexity, codec)
   const parsedTavily = parseCredential(value.tavily, codec)
   const perplexity = parsedPerplexity?.apiKey ? parsedPerplexity : null
@@ -299,7 +312,8 @@ function parseStoredMcpSecretHeaders(
   value: unknown,
   codec?: ConfigSecretCodec,
 ): McpSecretHeader[] | undefined {
-  if (!Array.isArray(value) || !codec) return undefined
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw new ConfigReadError('MCP 密钥格式无效')
   const parsed = new Map<string, McpSecretHeader>()
   for (const candidate of value) {
     if (
@@ -308,17 +322,17 @@ function parseStoredMcpSecretHeaders(
       || typeof candidate.connectionFingerprint !== 'string'
       || typeof candidate.headerName !== 'string'
       || typeof candidate.encryptedValue !== 'string'
-    ) continue
+    ) throw new ConfigReadError('MCP 密钥格式无效')
     try {
       const entry = parseMcpSecretHeader({
         serverName: candidate.serverName,
         connectionFingerprint: candidate.connectionFingerprint,
         headerName: candidate.headerName,
-        value: codec.decrypt(candidate.encryptedValue),
+        value: decryptSecret(candidate.encryptedValue, codec),
       })
       parsed.set(mcpSecretHeaderKey(entry), entry)
     } catch {
-      // 单个损坏密钥 fail-closed；不能拖垮其它模型和连接配置。
+      throw new ConfigReadError('MCP 密钥无法读取')
     }
   }
   return parsed.size > 0 ? [...parsed.values()] : undefined
@@ -350,7 +364,8 @@ function parseStoredMcpOAuthSessions(
   value: unknown,
   codec?: ConfigSecretCodec,
 ): McpOAuthSession[] | undefined {
-  if (!Array.isArray(value) || !codec) return undefined
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw new ConfigReadError('MCP OAuth 状态格式无效')
   const parsed = new Map<string, McpOAuthSession>()
   for (const candidate of value) {
     if (
@@ -358,9 +373,9 @@ function parseStoredMcpOAuthSessions(
       || typeof candidate.serverName !== 'string'
       || typeof candidate.connectionFingerprint !== 'string'
       || typeof candidate.encryptedPayload !== 'string'
-    ) continue
+    ) throw new ConfigReadError('MCP OAuth 状态格式无效')
     try {
-      const payload = JSON.parse(codec.decrypt(candidate.encryptedPayload)) as unknown
+      const payload = JSON.parse(decryptSecret(candidate.encryptedPayload, codec)) as unknown
       const entry = parseMcpOAuthSession({
         serverName: candidate.serverName,
         connectionFingerprint: candidate.connectionFingerprint,
@@ -368,7 +383,7 @@ function parseStoredMcpOAuthSessions(
       })
       parsed.set(mcpOAuthSessionKey(entry), entry)
     } catch {
-      // 单个损坏 OAuth 状态 fail-closed；其它连接仍可继续使用。
+      throw new ConfigReadError('MCP OAuth 状态无法读取')
     }
   }
   return parsed.size > 0 ? [...parsed.values()] : undefined
@@ -414,9 +429,10 @@ function parseCliProxyApi(
   value: unknown,
   codec?: ConfigSecretCodec,
 ): WhycodeConfig['cliProxyApi'] {
+  if (value === undefined) return undefined
   const credential = parseCredential(value, codec)
   if (!credential?.baseURL || !isRecord(value) || !Array.isArray(value.modelIds)) {
-    return undefined
+    throw new ConfigReadError('CLIProxyAPI 配置格式无效')
   }
   const modelIds = [...new Set(value.modelIds.filter(
     (modelId): modelId is string => (
@@ -489,18 +505,23 @@ function storeCredential(value: ProviderConnectionConfig, codec: ConfigSecretCod
   }
 }
 
-function readSecret(value: Record<string, unknown>, codec?: ConfigSecretCodec): string | null {
+function readSecret(value: Record<string, unknown>, codec?: ConfigSecretCodec): string {
   // 允许高级用户在 JSON 中显式写入新 key；下次启动会立即迁移为加密字段。
   if (typeof value.apiKey === 'string' && value.apiKey.trim()) return value.apiKey.trim()
   if (typeof value.encryptedApiKey === 'string') {
-    if (!codec) return null
-    try {
-      return codec.decrypt(value.encryptedApiKey)
-    } catch {
-      return null
-    }
+    return decryptSecret(value.encryptedApiKey, codec)
   }
-  return typeof value.apiKey === 'string' ? '' : null
+  if (typeof value.apiKey === 'string') return ''
+  throw new ConfigReadError('凭据格式无效')
+}
+
+function decryptSecret(payload: string, codec?: ConfigSecretCodec): string {
+  if (!codec?.isAvailable()) throw new ConfigReadError('密钥无法解密')
+  try {
+    return codec.decrypt(payload)
+  } catch {
+    throw new ConfigReadError('密钥无法解密')
+  }
 }
 
 async function writeStoredConfig(stored: StoredConfig, path: string): Promise<void> {

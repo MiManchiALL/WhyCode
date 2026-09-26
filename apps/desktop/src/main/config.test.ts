@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   cliProxyModelId,
+  ConfigReadError,
   loadConfig,
   migrateLegacyConfig,
   resolveDefaultModelId,
@@ -13,6 +14,7 @@ import {
   type ConfigSecretCodec,
   type WhycodeConfig,
 } from './config.ts'
+import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 
 function config(
   providers: WhycodeConfig['providers'],
@@ -153,6 +155,117 @@ describe('网页搜索后端选择', () => {
 })
 
 describe('配置密钥存储', () => {
+  it('只有不存在的文件视为未配置，其它读取失败会保留原文件', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-config-read-'))
+    const path = join(root, 'config.json')
+    try {
+      assert.equal(loadConfig(path, codec), null)
+      await saveConfig({ providers: {} }, codec, path)
+      assert.ok(loadConfig(path, codec))
+
+      const malformed = '{"providers":{"mimo":{"apiKey":"private-test-value"}'
+      await writeFile(path, malformed)
+      assert.throws(() => loadConfig(path, codec), (error: unknown) => {
+        assert.ok(error instanceof ConfigReadError)
+        assert.match(error.message, /格式无效.*原文件已保留/)
+        assert.doesNotMatch(error.message, /private-test-value/)
+        return true
+      })
+      await assert.rejects(saveConfig({ providers: {} }, codec, path), ConfigReadError)
+      await assert.rejects(migrateLegacyConfig(codec, path), ConfigReadError)
+      assert.equal(await readFile(path, 'utf-8'), malformed)
+
+      const directory = join(root, 'directory')
+      await mkdir(directory)
+      assert.throws(() => loadConfig(directory, codec), /配置读取失败：无法读取/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  const secretFixtures: [string, WhycodeConfig][] = [
+    ['厂商连接', { providers: { mimo: { apiKey: 'provider-secret' } } }],
+    ['CLIProxyAPI', {
+      providers: {},
+      cliProxyApi: {
+        apiKey: 'proxy-secret', baseURL: 'http://localhost:8317/v1',
+        modelIds: ['openai:gpt-5.6-sol'], modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
+      },
+    }],
+    ['网页搜索', { providers: {}, webSearch: { tavily: { apiKey: 'search-secret' } } }],
+    ['MCP 请求头', {
+      providers: {},
+      mcpSecretHeaders: [{
+        serverName: 'test', connectionFingerprint: 'a'.repeat(64),
+        headerName: 'Authorization', value: 'Bearer header-secret',
+      }],
+    }],
+    ['MCP OAuth', {
+      providers: {},
+      mcpOAuthSessions: [{
+        serverName: 'test', connectionFingerprint: 'b'.repeat(64),
+        tokens: { access_token: 'oauth-secret', token_type: 'bearer' },
+      }],
+    }],
+  ]
+  for (const [name, value] of secretFixtures) {
+    it(`${name} 在其它安全存储上下文中无法解密时，拒绝启动同步和空配置覆盖`, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'whycode-config-profile-'))
+      const path = join(root, 'config.json')
+      const otherProfile: ConfigSecretCodec = {
+        ...codec,
+        decrypt: () => { throw new Error('private-decryption-details') },
+      }
+      try {
+        await saveConfig({ ...value, retiredModelLabels: { 'old:model': 'Old Model' } }, codec, path)
+        const original = await readFile(path, 'utf-8')
+        const syncLabels = async () => {
+          const current = loadConfig(path, otherProfile) ?? { providers: {} }
+          const next = syncReferencedRetiredModelLabels(current, new Set())
+          if (next !== current) await saveConfig(next, otherProfile, path)
+        }
+        await assert.rejects(syncLabels(), (error: unknown) => {
+          assert.ok(error instanceof ConfigReadError)
+          assert.doesNotMatch(error.message, /private-decryption-details/)
+          return true
+        })
+        assert.throws(() => loadConfig(path), ConfigReadError)
+        assert.throws(() => loadConfig(path, { ...codec, isAvailable: () => false }), ConfigReadError)
+        await assert.rejects(saveConfig({ providers: {} }, otherProfile, path), ConfigReadError)
+        assert.equal(await readFile(path, 'utf-8'), original)
+        assert.ok(loadConfig(path, codec))
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+  }
+
+  it('旧快照不能覆盖后来损坏的配置，启动迁移也不能清除无法解密的凭据', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-config-write-'))
+    const path = join(root, 'config.json')
+    try {
+      await saveConfig({ providers: { mimo: { apiKey: 'retained-secret' } } }, codec, path)
+      const snapshot = loadConfig(path, codec)!
+      const original = JSON.parse(await readFile(path, 'utf-8'))
+      const damaged = JSON.stringify({ ...original, providers: { mimo: null } })
+      await writeFile(path, damaged)
+      await assert.rejects(saveConfig(snapshot, codec, path), ConfigReadError)
+      assert.equal(await readFile(path, 'utf-8'), damaged)
+
+      const legacy = JSON.stringify({ ...original, version: 9 })
+      await writeFile(path, legacy)
+      await assert.rejects(migrateLegacyConfig({
+        ...codec, decrypt: () => { throw new Error('different-profile') },
+      }, path), ConfigReadError)
+      assert.equal(await readFile(path, 'utf-8'), legacy)
+
+      await saveConfig({ providers: {} }, codec, path)
+      assert.deepEqual(Object.keys(loadConfig(path, codec)!.providers), [])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('最后选择的模型可跨配置重载恢复', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-default-model-'))
     const path = join(root, 'config.json')
@@ -295,7 +408,7 @@ describe('配置密钥存储', () => {
     }
   })
 
-  it('单个损坏的 MCP OAuth 状态 fail-closed，不影响其它有效连接', async () => {
+  it('MCP OAuth 状态损坏时拒绝读取和写回，保留其它有效连接', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-oauth-'))
     const path = join(root, 'config.json')
     const validPayload = {
@@ -321,11 +434,10 @@ describe('配置密钥存储', () => {
           },
         ],
       }))
-      assert.deepEqual(loadConfig(path, codec)?.mcpOAuthSessions, [{
-        serverName: 'github',
-        connectionFingerprint: 'a'.repeat(64),
-        ...validPayload,
-      }])
+      const original = await readFile(path, 'utf-8')
+      assert.throws(() => loadConfig(path, codec), ConfigReadError)
+      await assert.rejects(saveConfig({ providers: {} }, codec, path), ConfigReadError)
+      assert.equal(await readFile(path, 'utf-8'), original)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -442,7 +554,7 @@ describe('配置密钥存储', () => {
     const path = join(root, 'config.json')
     try {
       await writeFile(path, JSON.stringify({ providers: [] }))
-      assert.equal(loadConfig(path), null)
+      assert.throws(() => loadConfig(path), ConfigReadError)
       await writeFile(path, JSON.stringify({
         version: 5,
         providers: {

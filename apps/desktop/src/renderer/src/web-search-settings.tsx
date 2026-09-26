@@ -83,9 +83,7 @@ function SearchProviderEditor(props: {
   const [searchDepth, setSearchDepth] = useState<TavilySearchDepth>(
     props.provider.searchDepth ?? 'basic',
   )
-  const [saved, setSaved] = useState(false)
   const submit = async (clearApiKey = false) => {
-    setSaved(false)
     const ok = await props.onSave({
       provider: props.provider.id,
       apiKey,
@@ -94,7 +92,6 @@ function SearchProviderEditor(props: {
     })
     if (ok) {
       setApiKey('')
-      setSaved(true)
     }
   }
 
@@ -150,7 +147,6 @@ function SearchProviderEditor(props: {
         </SettingsRow>
       )}
       <SettingsActionRow divided={false}>
-        {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
         {props.provider.hasKey && (
           <SettingsButton
             variant="danger"

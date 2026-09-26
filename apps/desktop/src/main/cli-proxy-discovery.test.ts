@@ -88,6 +88,13 @@ describe('CLIProxyAPI 实例模型目录', () => {
     await assert.rejects(
       discoverCliProxyRoutes({
         apiKey: 'secret',
+        baseURL: 'http://127.0.0.1:8317',
+      }, async () => new Response('', { status: 404 })),
+      /HTTP 404.*Base URL.*\/v1/,
+    )
+    await assert.rejects(
+      discoverCliProxyRoutes({
+        apiKey: 'secret',
         baseURL: 'http://127.0.0.1:8317/v1',
       }, async () => new Response('', { status: 401 })),
       /HTTP 401/,

@@ -84,6 +84,7 @@ import {
   migrateLegacyConfig,
   resolveDefaultModelId,
   saveConfig,
+  ConfigReadError,
   type WhycodeConfig,
 } from './config.ts'
 import {
@@ -254,6 +255,16 @@ const mcpGlobalConfigPath = join(dirname(getConfigPath()), 'mcp.json')
 
 function loadAppConfig() {
   return loadConfig(getConfigPath(), configSecretCodec)
+}
+
+function loadDisplayConfig() {
+  try {
+    return loadAppConfig()
+  } catch (error) {
+    if (!(error instanceof ConfigReadError)) throw error
+    // 配置故障不阻止查看历史；连接读取、实际请求和所有写入仍由严格入口报错。
+    return null
+  }
 }
 
 let runtimePreferenceWriteTail: Promise<void> = Promise.resolve()
@@ -707,7 +718,7 @@ function createDraftRuntime(
   const runtime = new DesktopSessionRuntime({
     runtimeId,
     workspace,
-    modelId: resolveDefaultModelId(loadAppConfig(), preferredModelId),
+    modelId: resolveDefaultModelId(loadDisplayConfig(), preferredModelId),
     permissionMode: preferredPermissionMode,
     emit: broadcastRuntimeEvent,
   })
@@ -729,7 +740,7 @@ async function getNewSessionRuntime(): Promise<DesktopSessionRuntime> {
 
 /** Main 持有模型选择事实；首次读取时按配置初始化，之后保留用户的会话内选择。 */
 function resolveCurrentModelId(runtime: DesktopSessionRuntime): string | null {
-  runtime.modelId ??= resolveDefaultModelId(loadAppConfig(), preferredModelId)
+  runtime.modelId ??= resolveDefaultModelId(loadDisplayConfig(), preferredModelId)
   return runtime.modelId
 }
 
@@ -743,9 +754,10 @@ async function materializeWorkspace(runtime: DesktopSessionRuntime): Promise<Wor
 }
 
 async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | null> {
+  const config = loadAppConfig()
   const modelId = resolveCurrentModelId(runtime)
   if (!modelId) return '没有任何已配置 key 的模型可用'
-  const resolved = resolveModelConnection(loadAppConfig(), modelId)
+  const resolved = resolveModelConnection(config, modelId)
   if (!resolved.ok) return resolved.error
   const { entry, providerConfig } = resolved.value
   runtime.reasoningEffort = normalizeReasoningEffortSelection(
@@ -931,8 +943,13 @@ function synchronizeRuntimeAuxiliaryImageAnalyzer(
 
 /** 协商可用性检查：B/C 评审员只引用统一模型连接，不持有独立凭据。 */
 function checkConsensusReady(): string | null {
-  const resolved = resolveConsensusAgentSetups(loadAppConfig())
-  return resolved.ok ? null : resolved.error
+  try {
+    const resolved = resolveConsensusAgentSetups(loadAppConfig())
+    return resolved.ok ? null : resolved.error
+  } catch (error) {
+    if (!(error instanceof ConfigReadError)) throw error
+    return error.message
+  }
 }
 
 function buildCoordinator(runtime: DesktopSessionRuntime): string | null {
@@ -2342,7 +2359,7 @@ async function prepareRuntimeFromJournal(
   journal: SessionJournal,
 ): Promise<DesktopSessionRuntime> {
   const metadata = journal.metadataSnapshot
-  const resolved = resolveModelConnection(loadAppConfig(), metadata.modelId)
+  const resolved = resolveModelConnection(loadDisplayConfig(), metadata.modelId)
   const targetReasoningEffort = resolved.ok
     ? normalizeReasoningEffortSelection(
         resolved.value.entry.capabilities,
@@ -2674,7 +2691,7 @@ if (!primaryInstance) {
 if (primaryInstance) void app.whenReady().then(async () => {
   await migrateLegacyConfig(configSecretCodec, getConfigPath())
     .catch((error) => console.error('配置安全迁移失败：', error))
-  preferredPermissionMode = loadAppConfig()?.permissionMode ?? 'default'
+  preferredPermissionMode = loadDisplayConfig()?.permissionMode ?? 'default'
   await ensureCustomSystemPromptTemplate(customSystemPromptConfigPath)
     .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
   await ensureMcpConfigTemplate(mcpGlobalConfigPath)
@@ -3018,11 +3035,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
     ) return Promise.resolve({ ok: false, error: '文件快照校验请求无效' })
     return checkCheckpointFileCurrentMatch(runtimeRegistry.get(request.runtimeId), request.toolUseId, request.path)
   })
-  ipcMain.handle(IPC.consensusStatus, () => ({
-    ready: checkConsensusReady() === null,
-    reason: checkConsensusReady(),
-    enabled: selectedRuntime().consensusEnabled,
-  }))
+  ipcMain.handle(IPC.consensusStatus, () => {
+    const reason = checkConsensusReady()
+    return { ready: reason === null, reason, enabled: selectedRuntime().consensusEnabled }
+  })
   ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
     const currentSessionId = runtimeRegistry.selected?.sessionId ?? null
     return projectSessionListItems(

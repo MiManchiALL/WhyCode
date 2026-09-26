@@ -72,6 +72,7 @@ export interface WhycodeConfig {
 }
 
 export {
+  ConfigReadError,
   getConfigPath,
   loadConfig,
   migrateLegacyConfig,

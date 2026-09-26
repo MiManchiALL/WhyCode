@@ -41,6 +41,7 @@ import {
 import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 import { GeneralSettings } from './general-settings.tsx'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 
 interface ConnectionSettingsPanelProps {
   snapshot: ConnectionSettingsSnapshot
@@ -54,7 +55,7 @@ interface ConnectionSettingsPanelProps {
 
 export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [open, setOpen] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const feedback = useConversationFeedback()
   const [pending, setPending] = useState(false)
   const [oauthPending, setOauthPending] = useState(false)
   const [section, setSection] = useState<SettingsSectionId>('general')
@@ -63,63 +64,44 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
     if (!pending && !oauthPending) setOpen(false)
   }
 
-  const mutate = async (operation: () => Promise<SettingsMutationResult>) => {
-    setPending(true)
-    setError(null)
+  const mutate = async (operation: () => Promise<SettingsMutationResult>, oauth = false) => {
+    const setBusy = oauth ? setOauthPending : setPending
+    setBusy(true)
     try {
       const result = await operation()
       if (!result.ok || !result.snapshot) {
-        setError(result.error ?? '设置保存失败')
+        props.onError(result.error ?? (oauth ? 'OAuth 登录失败' : '设置保存失败'))
         return false
       }
       props.onChanged(result.snapshot)
+      feedback('success', oauth ? 'OAuth 登录成功' : '设置已保存')
       return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      props.onError(cause instanceof Error ? cause.message : String(cause))
       return false
     } finally {
-      setPending(false)
-    }
-  }
-
-  const mutateOAuth = async (operation: () => Promise<SettingsMutationResult>) => {
-    setOauthPending(true)
-    setError(null)
-    try {
-      const result = await operation()
-      if (!result.ok || !result.snapshot) {
-        setError(result.error ?? 'OAuth 登录失败')
-        return false
-      }
-      props.onChanged(result.snapshot)
-      return true
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-      return false
-    } finally {
-      setOauthPending(false)
+      setBusy(false)
     }
   }
 
   const refresh = async () => {
     setPending(true)
-    setError(null)
     try {
       props.onChanged(await window.whycode.connectionSettings())
+      feedback('success', '设置已刷新')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      props.onError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setPending(false)
     }
   }
 
   const openMcpConfig = async (request: OpenMcpConfigRequest) => {
-    setError(null)
     try {
       const result = await window.whycode.openMcpConfig(request)
-      if (!result.ok) setError(result.error ?? '无法打开 MCP 配置文件')
+      if (!result.ok) props.onError(result.error ?? '无法打开 MCP 配置文件')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      props.onError(cause instanceof Error ? cause.message : String(cause))
     }
   }
 
@@ -208,12 +190,6 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   </SettingsButton>}
                 </header>
 
-                {section !== 'workspaces' && section !== 'general' && error && (
-                  <p className="mb-5 rounded-xl border border-[#dec8bf] bg-[#f3e8e3] px-3 py-2 text-xs text-[var(--wc-danger)]" role="alert">
-                    {error}
-                  </p>
-                )}
-
                 <div className="space-y-8">
                   {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
@@ -269,7 +245,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                       onSaveSecretHeader={(request: SaveMcpSecretHeaderRequest) =>
                         mutate(() => window.whycode.saveMcpSecretHeader(request))}
                       onAuthorizeOAuth={(request: McpOAuthRequest) =>
-                        mutateOAuth(() => window.whycode.authorizeMcpOAuth(request))}
+                        mutate(() => window.whycode.authorizeMcpOAuth(request), true)}
                       onDisconnectOAuth={(request: McpOAuthRequest) =>
                         mutate(() => window.whycode.disconnectMcpOAuth(request))}
                       onOpenConfig={openMcpConfig}
@@ -393,16 +369,14 @@ function ProviderEditor(props: {
 }) {
   const [apiKey, setApiKey] = useState('')
   const [baseURL, setBaseURL] = useState(props.provider.baseURL ?? '')
-  const [saved, setSaved] = useState(false)
   const submit = async (clearApiKey = false) => {
-    setSaved(false)
     const ok = await props.onSave({
       providerId: props.provider.id,
       apiKey,
       clearApiKey,
       baseURL,
     })
-    if (ok) { setApiKey(''); setSaved(true) }
+    if (ok) setApiKey('')
   }
   return (
     <SettingsPanel>
@@ -434,7 +408,6 @@ function ProviderEditor(props: {
           <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder={props.provider.defaultBaseURL} disabled={props.disabled} />
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2 lg:col-start-2">
-          {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
           {props.provider.hasKey && <SettingsButton variant="danger" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</SettingsButton>}
           <SettingsButton variant="primary" onClick={() => void submit()} disabled={props.disabled}>保存</SettingsButton>
         </div>
@@ -453,7 +426,6 @@ function CliProxyApiEditor(props: {
   const [modelIds, setModelIds] = useState(() => new Set(
     props.settings.models.filter((model) => model.enabled).map((model) => model.id),
   ))
-  const [saved, setSaved] = useState(false)
   const toggleModel = (modelId: string) => {
     setModelIds((current) => {
       const next = new Set(current)
@@ -463,7 +435,6 @@ function CliProxyApiEditor(props: {
     })
   }
   const submit = async (clearApiKey = false) => {
-    setSaved(false)
     const ok = await props.onSave({
       baseURL,
       apiKey,
@@ -472,7 +443,7 @@ function CliProxyApiEditor(props: {
         .filter((model) => modelIds.has(model.id))
         .map((model) => model.id),
     })
-    if (ok) { setApiKey(''); setSaved(true) }
+    if (ok) setApiKey('')
   }
 
   return (
@@ -484,7 +455,7 @@ function CliProxyApiEditor(props: {
       <SettingsPanel>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="block wc-type-caption text-neutral-600">
-            Base URL
+            Base URL（API 根地址，通常以 /v1 结尾）
             <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="http://127.0.0.1:8317/v1" disabled={props.disabled} />
           </label>
           <label className="block wc-type-caption text-neutral-600">
@@ -514,7 +485,6 @@ function CliProxyApiEditor(props: {
         </div>
         <p className="mt-2 wc-type-caption text-neutral-500">推理强度在顶部随当前会话选择；WhyCode 会按所选型号限制档位，并通过对应协议传给 CLIProxyAPI。</p>
         <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-          {saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
           {props.settings.hasKey && <SettingsButton variant="danger" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</SettingsButton>}
           <SettingsButton variant="primary" onClick={() => void submit()} disabled={props.disabled}>保存</SettingsButton>
         </div>

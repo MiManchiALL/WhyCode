@@ -21,8 +21,6 @@ export function AuxiliaryModelsEditor(props: {
   const [subagentModelId, setSubagentModelId] = useState(
     props.settings.subagentModelId ?? '',
   )
-  const [visionSaved, setVisionSaved] = useState(false)
-  const [subagentSaved, setSubagentSaved] = useState(false)
   useEffect(() => {
     setVisionModelId(props.settings.visionModelId ?? '')
   }, [props.settings.visionModelId])
@@ -31,18 +29,16 @@ export function AuxiliaryModelsEditor(props: {
   }, [props.settings.subagentModelId])
 
   const saveVisionModel = async () => {
-    setVisionSaved(false)
-    if (await props.onSave({
+    await props.onSave({
       visionModelId: visionModelId || null,
       subagentModelId: props.settings.subagentModelId,
-    })) setVisionSaved(true)
+    })
   }
   const saveSubagentModel = async () => {
-    setSubagentSaved(false)
-    if (await props.onSave({
+    await props.onSave({
       visionModelId: props.settings.visionModelId,
       subagentModelId: subagentModelId || null,
-    })) setSubagentSaved(true)
+    })
   }
 
   return (
@@ -63,7 +59,7 @@ export function AuxiliaryModelsEditor(props: {
                   label: model.displayName,
                 })),
               ]}
-              onValueChange={(value) => { setVisionModelId(value); setVisionSaved(false) }}
+              onValueChange={setVisionModelId}
               ariaLabel="视觉辅助模型"
               disabled={props.disabled}
               className="w-full"
@@ -76,7 +72,6 @@ export function AuxiliaryModelsEditor(props: {
           )}
           <SaveRow
             disabled={props.disabled}
-            saved={visionSaved}
             onSave={saveVisionModel}
           />
         </SettingsPanel>
@@ -98,7 +93,7 @@ export function AuxiliaryModelsEditor(props: {
                   label: model.displayName,
                 })),
               ]}
-              onValueChange={(value) => { setSubagentModelId(value); setSubagentSaved(false) }}
+              onValueChange={setSubagentModelId}
               ariaLabel="子代理模型"
               disabled={props.disabled}
               className="w-full"
@@ -106,7 +101,6 @@ export function AuxiliaryModelsEditor(props: {
           </div>
           <SaveRow
             disabled={props.disabled}
-            saved={subagentSaved}
             onSave={saveSubagentModel}
           />
         </SettingsPanel>
@@ -122,7 +116,6 @@ export function ConsensusModelsEditor(props: {
 }) {
   const [agentBModelId, setAgentBModelId] = useState(props.settings.agentBModelId ?? '')
   const [agentCModelId, setAgentCModelId] = useState(props.settings.agentCModelId ?? '')
-  const [saved, setSaved] = useState(false)
   useEffect(() => {
     setAgentBModelId(props.settings.agentBModelId ?? '')
     setAgentCModelId(props.settings.agentCModelId ?? '')
@@ -133,11 +126,10 @@ export function ConsensusModelsEditor(props: {
     ...props.settings.models.map((model) => ({ value: model.id, label: model.displayName })),
   ]
   const submit = async () => {
-    setSaved(false)
-    if (await props.onSave({
+    await props.onSave({
       agentBModelId: agentBModelId || null,
       agentCModelId: agentCModelId || null,
-    })) setSaved(true)
+    })
   }
 
   return (
@@ -152,14 +144,14 @@ export function ConsensusModelsEditor(props: {
             value={agentBModelId}
             options={options}
             disabled={props.disabled}
-            onValueChange={(value) => { setAgentBModelId(value); setSaved(false) }}
+            onValueChange={setAgentBModelId}
           />
           <ModelSelector
             label="Agent C"
             value={agentCModelId}
             options={options}
             disabled={props.disabled}
-            onValueChange={(value) => { setAgentCModelId(value); setSaved(false) }}
+            onValueChange={setAgentCModelId}
           />
         </div>
         {props.settings.models.length === 0 && (
@@ -167,7 +159,7 @@ export function ConsensusModelsEditor(props: {
             请先在“模型连接”中配置至少一个可用模型。
           </p>
         )}
-        <SaveRow disabled={props.disabled} saved={saved} onSave={submit} />
+        <SaveRow disabled={props.disabled} onSave={submit} />
       </SettingsPanel>
     </SettingsSection>
   )
@@ -202,12 +194,10 @@ function ModelSelector(props: {
 
 function SaveRow(props: {
   disabled: boolean
-  saved: boolean
   onSave: () => Promise<void>
 }) {
   return (
     <div className="mt-3 flex items-center justify-end gap-2">
-      {props.saved && <span className="wc-type-caption text-[var(--wc-sage-ink)]">已保存</span>}
       <SettingsButton
         variant="primary"
         onClick={() => void props.onSave()}

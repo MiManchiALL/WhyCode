@@ -665,10 +665,16 @@ export function App() {
 
   const refreshModelCatalog = useCallback(async () => {
     const targetRuntimeId = runtimeIdRef.current
-    const nextModels = await window.whycode.listModels(targetRuntimeId || undefined)
-    if (runtimeIdRef.current !== targetRuntimeId) return
-    setModels(nextModels)
-  }, [])
+    try {
+      const nextModels = await window.whycode.listModels(targetRuntimeId || undefined)
+      if (runtimeIdRef.current !== targetRuntimeId) return
+      setModels(nextModels)
+    } catch (error) {
+      if (runtimeIdRef.current === targetRuntimeId) {
+        showError(error instanceof Error ? error.message : String(error))
+      }
+    }
+  }, [showError])
 
   const applyBackgroundTaskState = useCallback((state: BackgroundTaskState) => {
     if (
@@ -1769,10 +1775,8 @@ export function App() {
   const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
     setConnectionSettings(snapshot)
     void window.whycode.consensusStatus().then(setConsensus)
-    void refreshModelCatalog().catch((error) => {
-      showError(`模型列表刷新失败：${error instanceof Error ? error.message : String(error)}`)
-    })
-  }, [showError, refreshModelCatalog])
+    void refreshModelCatalog()
+  }, [refreshModelCatalog])
 
   const send = useCallback((urgent = false) => {
     if (
@@ -1997,7 +2001,7 @@ export function App() {
     const refresh = () => {
       if (document.visibilityState !== 'visible') return
       // 代理启动时可能先返回部分目录；可用后由依赖变化撤销重查。
-      void refreshModelCatalog().catch(() => {})
+      void refreshModelCatalog()
     }
     const timer = window.setInterval(refresh, 15_000)
     window.addEventListener('focus', refresh)

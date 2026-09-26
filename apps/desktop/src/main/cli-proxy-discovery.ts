@@ -46,6 +46,9 @@ export async function discoverCliProxyRoutes(
     signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
   })
   if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('CLIProxyAPI 模型目录不存在（HTTP 404），请检查 Base URL 的 API 路径，通常以 /v1 结尾')
+    }
     throw new Error(`CLIProxyAPI 模型目录请求失败（HTTP ${response.status}）`)
   }
 
