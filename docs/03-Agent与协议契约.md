@@ -282,7 +282,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 - 单条用户消息最多 10 张 PNG/JPEG/WebP，与正文共享不可拆分 delivery ID。长期消息保存附件 ID/显示名/路由，不保存绝对路径或 Base64。
 - `ViewImage` 读取当前会话/权限允许的图片，支持 high、经画像验证的 original 与 autoOrient 后源像素 region；结果返回模型到源图映射。
-- `CaptureScreenshot {target,display_id?,window_title?,region?,detail}`：target 为 screen/window/region。外部单窗口优先 window；Windows 捕获事务排除 WhyCode，不通过隐藏/显示制造画面抖动。
+- `CaptureScreenshot {target,display_id?,window_title?,region?,detail}`：target 为 screen/window，region 是 screen 的可选裁剪区域。单个应用优先 window 并提供唯一匹配的 window_title；目标窗口可位于后台或被遮挡，但须打开且未最小化。显示器截图不一定包含目标应用，仅在检查多窗口、桌面布局或显示器整体状态时使用 screen。Windows 捕获事务排除 WhyCode，不通过隐藏/显示制造画面抖动。
 - `AnalyzeImage {attachmentIds,question}` 只给非视觉 Main 且必须有有效辅助视觉连接；每次 1～10 张。辅助请求不接收主历史、项目、文件名、工具或密钥。
 - 用户输入最多 10 张；普通视觉工具、MCP 和 `RenderOffice` 单步骤最多 4 张。视觉 `ReadPdf` 使用自身最多 20 页/32 MB 边界。
 - Base64 只存在于无路径剪贴板发送前和当前 Provider 内存请求；JSONL、CoreEvent、ViewEvent 与摘要只保存稳定引用。
