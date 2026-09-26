@@ -105,6 +105,7 @@ import { AppSidebar } from './app-sidebar.tsx'
 import { TaskHeader } from './task-header.tsx'
 import { normalizeSessionName } from '../../shared/session-name.ts'
 import { ComposerToolbar } from './composer-toolbar.tsx'
+import { isSubagentRunning } from './subagent-presentation.ts'
 import { TaskInspector } from './task-inspector.tsx'
 import { ComposerMcpStatus } from './composer-mcp-status.tsx'
 import { RightPanel } from './right-panel.tsx'
@@ -2415,6 +2416,9 @@ export function App() {
                     />
 
                     <ComposerToolbar
+                      runtimeId={runtimeId}
+                      workStartedAt={workStartedAt}
+                      runningSubagentCount={subagents.filter((subagent) => isSubagentRunning(subagent.status)).length}
                       canAttachImages={canAttachImages}
                       canAttachPdfs={canAttachPdfs}
                       attachmentLocked={composerControlsLocked}

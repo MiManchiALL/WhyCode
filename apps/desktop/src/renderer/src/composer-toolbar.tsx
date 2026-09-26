@@ -6,7 +6,6 @@ import type {
   ReasoningEffortSelection,
 } from '@whycode/core'
 import {
-  ArrowUp,
   Check,
   ChevronDown,
   ChevronRight,
@@ -15,7 +14,6 @@ import {
   Plus,
   ShieldCheck,
   Sparkles,
-  Square,
   Users,
   Zap,
 } from 'lucide-react'
@@ -24,7 +22,7 @@ import { USER_IMAGE_ATTACHMENT_MAX_COUNT } from '@whycode/core/image-limits'
 import type { ModelListItem } from '../../shared/settings.ts'
 import { MAX_PDF_DRAFTS } from './pdf-draft.ts'
 import { ContextUsageMeter } from './context-usage-meter.tsx'
-import type { ComposerPrimaryAction } from './composer-key.ts'
+import { ComposerActionButton, type ComposerActionButtonProps } from './composer-action-button.tsx'
 
 interface ConsensusControl {
   ready: boolean
@@ -32,7 +30,7 @@ interface ConsensusControl {
   enabled: boolean
 }
 
-interface ComposerToolbarProps {
+interface ComposerToolbarProps extends ComposerActionButtonProps {
   canAttachImages: boolean
   canAttachPdfs: boolean
   attachmentLocked: boolean
@@ -44,22 +42,15 @@ interface ComposerToolbarProps {
   modelId: string
   reasoningEffort: ReasoningEffortSelection
   contextUsage: ContextUsageInfo | null
-  primaryAction: ComposerPrimaryAction
-  stopping: boolean
-  stopDisabled: boolean
-  sendDisabled: boolean
   onImageFiles: (files: FileList | null) => void
   onPdfFiles: (files: FileList | null) => void
   onPermissionChange: (mode: PermissionMode) => void
   onToggleConsensus: () => void
   onModelChange: (modelId: string) => void
   onReasoningEffortChange: (effort: ReasoningEffortSelection) => void
-  onSend: () => void
-  onStop: () => void
 }
 
 export function ComposerToolbar(props: ComposerToolbarProps) {
-  const isStopAction = props.primaryAction === 'stop'
   return (
     <div className="wc-composer-toolbar">
       <div className="wc-composer-toolbar-leading">
@@ -85,16 +76,7 @@ export function ComposerToolbar(props: ComposerToolbarProps) {
       <div className="wc-composer-toolbar-trailing">
         <ModelMenu {...props} />
         <ContextUsageMeter usage={props.contextUsage} />
-        <button
-          type="button"
-          className="wc-focus-ring flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--wc-ink)] text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:cursor-default disabled:bg-[#a9aaa5] disabled:hover:translate-y-0"
-          disabled={isStopAction ? props.stopDisabled : props.sendDisabled}
-          onClick={isStopAction ? props.onStop : props.onSend}
-          title={isStopAction ? (props.stopping ? '停止中' : '停止') : '发送'}
-          aria-label={isStopAction ? (props.stopping ? '停止中' : '停止') : '发送'}
-        >
-          {isStopAction ? <Square size={13} fill="currentColor" /> : <ArrowUp size={17} />}
-        </button>
+        <ComposerActionButton {...props} />
       </div>
     </div>
   )
