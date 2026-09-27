@@ -14,7 +14,7 @@ WhyCode 是一款 Windows 优先的通用桌面 Agent，尤其擅长代码与工
 - 工具范围已覆盖文件、搜索、命令与后台唤醒、网页、MCP、图片/截图、PDF、Office 和 Skill。
 - Desktop 已形成统一会话侧栏、中央时间线、上下文用量、会话定位轨、输入框以及环境/子代理/任务计划侧栏。
 - 当前开发应以代码和 `01`～`03` 的现状契约为准；本轮未竟事项、验证边界和阻塞只看 `05-暂存区便签.md`。
-- 安装与运行：项目依赖自包含于仓库相关缓存，通常执行 `pnpm install`、`pnpm dev`；修改 Core 后需重启 dev，不能假定 Electron Main 会热载。
+- 安装与运行：通常执行 `pnpm install`、`pnpm dev`；开发依赖与缓存布局见文档二 §1.2。修改 Core 后需重启 dev，不能假定 Electron Main 会热载。
 - API key 只由 Electron Main 通过 `safeStorage` 保存；Renderer 永远不得取回明文密钥。
 
 只有整体阶段、当前开发焦点或开工入口发生变化时才更新本节。单个功能的完成日期、commit、测试数量和客户端验收记录只留在 Git 历史。
