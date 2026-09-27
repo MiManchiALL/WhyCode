@@ -5,7 +5,7 @@ import {
   MAX_USER_QUESTIONS,
   type CoreEvent,
 } from '../events.ts'
-import { activeTaskPlanSchema, taskPlanSchema } from '../tasks/types.ts'
+import { taskPlanSchema } from '../tasks/types.ts'
 import {
   toolImageAttachmentsSchema,
   userImageAttachmentsSchema,
@@ -87,7 +87,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     previousTurnId: z.string().min(1),
     inputId: z.string().min(1),
     text: z.string().min(1),
-    taskPlan: activeTaskPlanSchema.nullable(),
+    taskPlan: taskPlanSchema.nullable(),
   }),
   z.object({
     type: z.literal('btw-message-edited'),

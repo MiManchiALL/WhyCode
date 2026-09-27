@@ -7,7 +7,7 @@
  * - 新增事件必须同步更新宿主适配、可见事件契约、恢复投影与对应测试。
  */
 
-import type { ActiveTaskPlan, TaskPlan } from './tasks/types.ts'
+import type { TaskPlan } from './tasks/types.ts'
 import type {
   ImageAttachment,
   ImageDeliveryMode,
@@ -244,7 +244,7 @@ export type CoreEvent =
       previousTurnId: string
       inputId: string
       text: string
-      taskPlan: ActiveTaskPlan | null
+      taskPlan: TaskPlan | null
     }
   /** 用户把最新一条 BTW/BBTW 消息原位改写；轮次与侧链身份保持不变。 */
   | {

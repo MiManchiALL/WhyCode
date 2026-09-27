@@ -105,6 +105,7 @@ import {
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
+import { taskPlanViewBeforeTurn } from '../session/task-plan-view.ts'
 import {
   createTaskContextMessage,
   createTaskExecutionBoundaryMessage,
@@ -1242,7 +1243,11 @@ export class AgentSession {
         previousTurnId,
         inputId,
         text,
-        taskPlan: this.taskPlan?.snapshot ?? null,
+        taskPlan: taskPlanViewBeforeTurn(
+          this.options.sessionRecorder!.initialViewEvents,
+          previousTurnId,
+          this.options.sessionRecorder!.initialTaskState,
+        ),
       })
     }
     return {

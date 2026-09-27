@@ -10,6 +10,7 @@ import {
   type SessionEntry,
 } from './types.ts'
 import type { ViewEvent } from './view-events.ts'
+import { latestVisibleTaskPlan, taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { appendOrderedMessages, interruptedToolResults } from './tool-execution.ts'
 import { createImageUserMessage } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
@@ -615,7 +616,7 @@ function collectViewEvents(entries: SessionEntry[]): {
             previousTurnId: entry.replacesTurnId,
             inputId: entry.uuid,
             text: entry.text,
-            taskPlan: structuredClone(parent.taskState.activePlan),
+            taskPlan: taskPlanViewBeforeTurn(events, entry.replacesTurnId, parent.taskState),
           },
         }, entry.timestamp)
       }
@@ -1115,7 +1116,7 @@ function reconcileTaskPlanView(
   const visible = latestVisibleTaskPlan(viewEvents)
   const active = taskState.activePlan
   if (active) {
-    if (visible?.kind === 'active' && visible.id === active.id && visible.revision === active.revision) {
+    if (visible?.status === 'active' && visible.id === active.id && visible.revision === active.revision) {
       return
     }
     viewEvents.push({
@@ -1124,38 +1125,11 @@ function reconcileTaskPlanView(
     })
     return
   }
-  if (!visible || visible.kind === 'none') return
-  if (visible.kind === 'terminal') return
+  if (!visible || visible.status !== 'active') return
   viewEvents.push({
     type: 'core-event',
     event: { type: 'task-plan-restored', plan: null },
   })
-}
-
-function latestVisibleTaskPlan(
-  viewEvents: ViewEvent[],
-): { kind: 'none' } | { kind: 'active' | 'terminal'; id: string; revision: number } | null {
-  for (let index = viewEvents.length - 1; index >= 0; index--) {
-    const entry = viewEvents[index]
-    if (entry?.type !== 'core-event') continue
-    const event = entry.event
-    if (event.type === 'task-plan-updated') {
-      return {
-        kind: event.plan.status === 'active' ? 'active' : 'terminal',
-        id: event.plan.id,
-        revision: event.plan.revision,
-      }
-    }
-    if (event.type === 'task-plan-restored') {
-      if (!event.plan) return { kind: 'none' }
-      return {
-        kind: event.plan.status === 'active' ? 'active' : 'terminal',
-        id: event.plan.id,
-        revision: event.plan.revision,
-      }
-    }
-  }
-  return null
 }
 
 function collectModelSelection(

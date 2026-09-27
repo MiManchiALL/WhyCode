@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { ViewEvent } from '@whycode/core'
+import type { CoreEvent, ViewEvent } from '@whycode/core'
 import { MAX_VISIBLE_TOOL_OUTPUT_CHARS } from '@whycode/core/events'
 import {
   applyCoreEvent,
@@ -631,6 +631,36 @@ describe('会话界面时间线重建', () => {
     }, editedAt)
     assert.deepEqual(state.blocks.map((block) => block.kind), ['user'])
     assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].timestamp, editedAt)
+  })
+
+  it('编辑后续消息时保留上一轮终态计划，实时与历史重放一致', () => {
+    const base = taskPlan(1)
+    const completed = {
+      ...base, status: 'completed' as const,
+      items: base.items.map(item => ({ ...item, status: 'completed' as const, evidence: ['验证通过'] })),
+    }
+    const history: ViewEvent[] = [
+      { type: 'user-message', inputId: 'input-a', text: '完成计划 A', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-a' }),
+      core({ type: 'task-plan-updated', plan: completed }),
+      core({ type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: 'turn-a' }),
+      { type: 'user-message', inputId: 'input-b', text: '后续消息', startsTurn: true },
+      core({ type: 'turn-start', turnId: 'turn-b' }),
+    ]
+    const edited: CoreEvent = {
+      type: 'user-message-edited', previousTurnId: 'turn-b', inputId: 'edited-b', text: '重发后续消息',
+      taskPlan: completed,
+    }
+    const live = applyCoreEvent(createConversationState(history), edited)
+    assert.deepEqual(live.taskPlan, completed)
+    const replay = createConversationState([...history,
+      { type: 'user-message', inputId: 'edited-b', text: '重发后续消息', startsTurn: true },
+      core(edited),
+    ])
+    assert.deepEqual(replay.taskPlan, completed)
+    assert.deepEqual(replay.blocks.map(block => block.id), live.blocks.map(block => block.id))
+    const continued = applyCoreEvent(live, { type: 'turn-start', turnId: 'edited-turn' })
+    assert.deepEqual(continued.taskPlan, completed)
   })
 
   it('最新根消息在有完整回答或停止输出后仍保持编辑资格', () => {

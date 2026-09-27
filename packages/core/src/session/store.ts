@@ -20,6 +20,7 @@ import {
 import { createTaskContextMessage } from '../tasks/context.ts'
 import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
 import { compactViewEvent, viewEventSchema, type ViewEvent } from './view-events.ts'
+import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createSessionFork } from './fork.ts'
 import { readSessionStartOrigin } from './fork-origin.ts'
@@ -1623,7 +1624,7 @@ export class SessionJournal implements SessionRecorder {
     this.addPdfAttachments(pdfAttachments)
     this.viewEvents.push(
       userMessageViewEvent(transaction.input),
-      turnEditViewEvent(transaction.input, taskState),
+      turnEditViewEvent(transaction.input, taskState, this.viewEvents),
     )
     this.viewEventTimestamps.push(transaction.input.timestamp, transaction.input.timestamp)
     const clipped = clip(transaction.input.text)
@@ -1932,6 +1933,7 @@ function btwResponseViewEvents(
 function turnEditViewEvent(
   input: Extract<SessionEntry, { type: 'user-input' }>,
   taskState: TaskPlanState,
+  viewEvents: readonly ViewEvent[],
 ): ViewEvent {
   if (!input.replacesTurnId) throw new Error('编辑输入缺少旧回合身份')
   return {
@@ -1941,7 +1943,7 @@ function turnEditViewEvent(
       previousTurnId: input.replacesTurnId,
       inputId: input.uuid,
       text: input.text,
-      taskPlan: structuredClone(taskState.activePlan),
+      taskPlan: taskPlanViewBeforeTurn(viewEvents, input.replacesTurnId, taskState),
     },
   }
 }
