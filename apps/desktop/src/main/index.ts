@@ -63,7 +63,6 @@ import {
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
   validateSessionId,
-  workspaceWorkingDirectory,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { conversationHistoryWindow } from './conversation-history.ts'
@@ -124,7 +123,7 @@ import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
 import { installWorkspaceFileLifecycle, registerWorkspaceFileIpc } from './workspace-files-ipc.ts'
-import { runtimeWorkspaceBinding, workspaceDisplayDirectory } from '../shared/workspace.ts'
+import { runtimeWorkspaceBinding, workspaceDisplayDirectory, workspaceProjectDirectory } from '../shared/workspace.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
 import { SessionPreparationLock } from './session-preparation-lock.ts'
@@ -180,7 +179,6 @@ import type {
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
   SessionDeletionState,
-  SessionListItem,
   SetSessionPinnedRequest,
   SetSessionPinnedResult,
 } from '../shared/session.ts'
@@ -235,6 +233,8 @@ import { RuntimeEventPortHub } from './runtime-event-port-hub.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import { projectSessionListItems } from './session-list.ts'
 import { SessionSidebarStateStore } from './session-sidebar-state.ts'
+import { ProjectStore } from './project-store.ts'
+import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { RenameSessionRequest, RenameSessionResult } from '../shared/session-name.ts'
 import {
   registerAttachmentProtocol,
@@ -501,6 +501,7 @@ const runtimeEventBatcher = new RuntimeEventBatcher({
 let sessions: DesktopSessionRepository
 let runtimeRegistry!: SessionRuntimeRegistry
 let sessionSidebarState: SessionSidebarStateStore
+let projects: ProjectStore
 /** 后台命令跨 AgentSession 存活；任务仍按会话 ID 隔离。 */
 let commandSessions: CommandSessionManager
 /** 后台命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
@@ -592,17 +593,8 @@ function worktreeBinding(
 }
 
 function sourceWorkspaceDirectory(workspace: RuntimeWorkspace): string {
-  if (workspace.mode === 'pending-worktree') return workspace.selectedDirectory
   if (workspace.mode === 'pending-managed') return requireDefaultWorkspace()
-  if (workspace.mode === 'worktree') {
-    return workspace.relativeWorkingDirectory === '.'
-      ? workspace.repositoryDirectory
-      : join(
-          workspace.repositoryDirectory,
-          ...workspace.relativeWorkingDirectory.split('/'),
-        )
-  }
-  return workspaceWorkingDirectory(workspace) ?? requireDefaultWorkspace()
+  return workspaceProjectDirectory(workspace) ?? workspaceDisplayDirectory(workspace) ?? requireDefaultWorkspace()
 }
 
 async function currentWorktreeStatus(
@@ -1372,6 +1364,7 @@ async function handleUserMessageCommand(
           reasoningEffort: runtime.reasoningEffort,
           lastUserText: command.text.trim().slice(0, 200),
         })
+        await projects.attachSession(runtime.runtimeId, runtime.workspace)
         runtime.registerSession()
         await newSessionState.consume(runtime.runtimeId)
         terminals.bindSession(runtime.runtimeId, runtime.runtimeId)
@@ -2206,16 +2199,17 @@ async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessio
     }
   }
   try {
+    const replacedDraftRuntimeId = request?.workspace !== undefined ? newSessionState.value?.runtimeId ?? null : null
     const runtimeId = randomUUID()
     const runtime = request?.workspace === null
       ? createDraftRuntime(prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces), runtimeId)
       : request?.workspace
         ? createDraftRuntime(await prepareRuntimeWorkspace(request.workspace, worktrees))
         : await getNewSessionRuntime()
-    return {
-      ok: true,
-      snapshot: await selectRuntimeWithSnapshot(runtime),
-    }
+    const snapshot = await selectRuntimeWithSnapshot(runtime)
+    const replaced = replacedDraftRuntimeId && runtimeRegistry.get(replacedDraftRuntimeId)
+    if (replaced) await runtimeRegistry.removeUnselectedDraft(replaced)
+    return { ok: true, snapshot, replacedDraftRuntimeId }
   } catch (error) {
     return {
       ok: false,
@@ -2275,6 +2269,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
     )
     await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
     await attachSessionWorkspace(forkedJournal)
+    await projects.inheritSession(sourceJournal.sessionId, forkedJournal.sessionId)
     runtime = await prepareRuntimeFromJournal(forkedJournal)
     return { ok: true, snapshot: await selectRuntimeWithSnapshot(runtime) }
   } catch (error) {
@@ -2283,6 +2278,8 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       await runtimeRegistry.remove(runtime).catch(() => {})
     }
     if (forkedJournal) {
+      await projects.detachSession(forkedJournal.sessionId)
+        .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await sessionScratch.remove(forkedJournal.sessionId)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await removeForkSessionWorkspace(forkedJournal)
@@ -2641,8 +2638,12 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
     void deletion.finish().then(async (result) => {
       if (!result.deleted) throw new Error('会话删除状态已丢失')
       runtimeRegistry.forgetSession(sessionId)
-      await sessionSidebarState.remove(sessionId)
-        .catch((error) => console.warn('会话已删除，但侧栏偏好清理失败：', error))
+      const sidebarCleanup = await Promise.allSettled([
+        sessionSidebarState.remove(sessionId), projects.detachSession(sessionId),
+      ])
+      for (const cleanup of sidebarCleanup) {
+        if (cleanup.status === 'rejected') console.warn('会话已删除，但侧栏信息清理失败：', cleanup.reason)
+      }
       broadcastSessionDeletion({ sessionId, status: 'completed', warning: result.warning })
     }).catch((error) => {
       broadcastSessionDeletion({
@@ -2721,6 +2722,13 @@ if (primaryInstance) void app.whenReady().then(async () => {
   sessionSidebarState = new SessionSidebarStateStore(
     join(app.getPath('userData'), 'session-sidebar.json'),
   )
+  projects = new ProjectStore(join(app.getPath('userData'), 'projects.json'))
+  try { await projects.initialize() }
+  catch (error) {
+    dialog.showErrorBox('项目记录读取失败', error instanceof Error ? error.message : String(error))
+    app.quit()
+    return
+  }
   sessionScratch = new SessionScratchManager(join(app.getPath('userData'), 'scratch'))
   skills = new SkillCatalogService({ homeDir: app.getPath('home') })
   subagentDefinitions = new SubagentDefinitionCatalogService({ homeDir: app.getPath('home') })
@@ -3039,16 +3047,29 @@ if (primaryInstance) void app.whenReady().then(async () => {
     const reason = checkConsensusReady()
     return { ready: reason === null, reason, enabled: selectedRuntime().consensusEnabled }
   })
-  ipcMain.handle(IPC.listSessions, async (): Promise<SessionListItem[]> => {
+  ipcMain.handle(IPC.listSessionSidebar, async (): Promise<SessionSidebarSnapshot> => {
     const currentSessionId = runtimeRegistry.selected?.sessionId ?? null
-    return projectSessionListItems(
+    const items = projectSessionListItems(
       (await sessions.list()).map(summary => ({ ...summary, title: sessionSidebarState.name(summary.sessionId) ?? summary.title })),
       runtimeRegistry.all(),
       currentSessionId,
       sessionSidebarState.orderedPinnedSessionIds(),
       (sessionId) => runtimeRegistry.hasUnreadCompletion(sessionId),
     )
+    return { sessions: items, projects: projects.list() }
   })
+  for (const [channel, mutate] of [
+    [IPC.renameProject, (id: unknown, name: unknown) => projects.rename(id, name)],
+    [IPC.removeProject, (id: unknown) => projects.remove(id)],
+  ] as const) {
+    ipcMain.handle(channel, async (event, id: unknown, name: unknown): Promise<WorkspaceActionResult> => {
+      if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
+        return { ok: false, error: '仅主页面可管理项目' }
+      }
+      try { await mutate(id, name); return { ok: true } }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+    })
+  }
   ipcMain.handle(IPC.newSession, (_e, request?: NewSessionRequest) =>
     startNewSession(request))
   ipcMain.handle(IPC.setSessionPinned, async (
@@ -3134,44 +3155,39 @@ if (primaryInstance) void app.whenReady().then(async () => {
       (path) => shell.openPath(path),
     )
   })
-  ipcMain.handle(IPC.pickProjectDir, async (event): Promise<WorkspaceCandidate | null> => {
+  ipcMain.handle(IPC.pickProjectDir, async (event, projectId?: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> => {
     if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
-      return null
+      return { ok: false, error: '会话处理中，请稍后选择项目' }
     }
     const ownerWindow = BrowserWindow.fromWebContents(event.sender)
-    if (!ownerWindow || ownerWindow.isDestroyed()) return null
+    if (!ownerWindow || ownerWindow.isDestroyed() || event.senderFrame !== event.sender.mainFrame) {
+      return { ok: false, error: '仅主页面可选择项目' }
+    }
     const selectionAtOpen = selectedRuntime()
-    const result = await dialog.showOpenDialog(
-      ownerWindow,
-      {
-        title: '选择工作文件夹',
-        defaultPath: sourceWorkspaceDirectory(selectionAtOpen.workspace),
-        properties: ['openDirectory'],
-      },
-    )
-    const selected = result.filePaths[0]
-    if (!selected) return null
     try {
+      const selected = projectId === undefined
+        ? (await dialog.showOpenDialog(ownerWindow, {
+            title: '添加项目',
+            defaultPath: sourceWorkspaceDirectory(selectionAtOpen.workspace),
+            properties: ['openDirectory'],
+          })).filePaths[0]
+        : projects.get(projectId).directory
+      if (!selected) return { ok: true, value: null }
       const candidate = await worktrees.inspect(selected)
       // 父窗口模态约束用户交互；这里仍防御窗口销毁和其它宿主生命周期竞态。
       if (
-        runtimeRegistry.selected !== selectionAtOpen
+        ownerWindow.isDestroyed()
+        || runtimeRegistry.selected !== selectionAtOpen
         || sessionDeletionLock.blocksSession()
         || sessionPreparationLock.sessionId
         || sessionNavigation.sessionId
       ) {
-        return null
+        return { ok: true, value: null }
       }
-      return candidate
+      if (projectId === undefined) await projects.add(candidate.selectedDirectory)
+      return { ok: true, value: candidate }
     } catch (error) {
-      selectionAtOpen.emit({
-        type: 'error',
-        message: `工作文件夹检查失败：${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        recoverable: true,
-      })
-      return null
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
 

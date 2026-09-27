@@ -159,7 +159,12 @@ export interface ForkSessionRequest {
 export type ForkSessionResult = ResumeSessionResult
 
 export type NewSessionResult =
-  | { ok: true; snapshot: RuntimeSnapshot }
+  | {
+      ok: true
+      snapshot: RuntimeSnapshot
+      /** 显式选择工作区替换唯一草稿时，Renderer 据此移交已有输入。 */
+      replacedDraftRuntimeId: string | null
+    }
   | { ok: false; error: string }
 
 export interface NewSessionRequest {

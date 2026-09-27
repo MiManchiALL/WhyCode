@@ -102,6 +102,7 @@ import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
 import { AppSidebar } from './app-sidebar.tsx'
+import type { SidebarProject } from '../../shared/projects.ts'
 import { TaskHeader } from './task-header.tsx'
 import { normalizeSessionName } from '../../shared/session-name.ts'
 import { ComposerToolbar } from './composer-toolbar.tsx'
@@ -204,6 +205,7 @@ export function App() {
   const [permMode, setPermMode] = useState<PermissionMode>('default')
   const [consensus, setConsensus] = useState<{ ready: boolean; reason: string | null; enabled: boolean }>({ ready: false, reason: null, enabled: false })
   const [sessions, setSessions] = useState<SessionListItem[]>([])
+  const [projects, setProjects] = useState<SidebarProject[]>([])
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [workspaceCandidate, setWorkspaceCandidate] = useState<WorkspaceCandidate | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -498,7 +500,7 @@ export function App() {
     const promoted = pending
       ? composerSubmissions.bindSession(ownerRuntimeId, sessionId)
       : ownerRuntimeId === runtimeIdRef.current && sessionIdRef.current === null
-    if (promoted) return composerDraftsRef.current.moveToSession(ownerRuntimeId, sessionId)
+    if (promoted) return composerDraftsRef.current.move(composerDraftKey(ownerRuntimeId, null), sessionId)
   }, [composerSubmissions])
 
   const prepareComposer = useCallback(async (snapshot: RuntimeSnapshot) => {
@@ -645,8 +647,9 @@ export function App() {
       do {
         sessionListRefreshRequestedRef.current = false
         try {
-          const next = await window.whycode.listSessions()
-          setSessions((current) => sameSessionList(current, next) ? current : next)
+          const next = await window.whycode.listSessionSidebar()
+          setSessions((current) => sameSidebarItems(current, next.sessions) ? current : next.sessions)
+          setProjects((current) => sameSidebarItems(current, next.projects) ? current : next.projects)
           setSessionListError(null)
         } catch (error) {
           setSessionListError(
@@ -1424,19 +1427,28 @@ export function App() {
       showError(result.error ?? '新建会话失败')
       return false
     }
+    const replacedDraft = result.replacedDraftRuntimeId
+    if (replacedDraft) {
+      if (replacedDraft === runtimeIdRef.current) await persistComposerRef.current()
+      await composerDraftsRef.current.move(composerDraftKey(replacedDraft, null), composerDraftKey(result.snapshot.runtimeId, null))
+    }
     await prepareComposer(result.snapshot)
     applyRuntimeSnapshot(result.snapshot)
+    if (replacedDraft) void composerDraftsRef.current.delete(composerDraftKey(replacedDraft, null)).catch(draftStorageError)
     setWorkspaceCandidate(null)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
     void refreshModelCatalog()
     return true
-  }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions])
+  }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions, draftStorageError])
 
-  const pickProject = useCallback(() => {
+  const pickProject = useCallback((projectId?: string) => {
     if (!beginSessionTransition()) return
-    void window.whycode.pickProjectDir().then(async (candidate) => {
+    void window.whycode.pickProjectDir(projectId).then(async (result) => {
+      if (!result.ok) { showError(result.error); return }
+      const candidate = result.value
       if (!candidate) return
+      void refreshSessions()
       const activated = await activateNewSession({
         mode: 'local',
         selectedDirectory: candidate.selectedDirectory,
@@ -1450,7 +1462,28 @@ export function App() {
     showError,
     beginSessionTransition,
     endSessionTransition,
+    refreshSessions,
   ])
+
+  const renameProject = useCallback(async (id: string, name: string): Promise<boolean> => {
+    try {
+      const result = await window.whycode.renameProject(id, name)
+      if (!result.ok) { showError(result.error); return false }
+      await refreshSessions()
+      return true
+    } catch (error) {
+      showError(`项目重命名失败：${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }, [refreshSessions, showError])
+
+  const removeProject = useCallback((id: string) => {
+    void window.whycode.removeProject(id).then(async result => {
+      if (!result.ok) { showError(result.error); return }
+      await refreshSessions()
+      showConversationFeedback('info', '项目已移除，会话和文件已保留')
+    }).catch(error => showError(`移除项目失败：${error instanceof Error ? error.message : String(error)}`))
+  }, [refreshSessions, showError, showConversationFeedback])
 
   const toggleConsensus = useCallback(() => {
     const enabled = !consensus.enabled
@@ -2112,6 +2145,10 @@ export function App() {
           layout={panelLayout}
           collapsed={sidebarCollapsed}
           sessions={sessions}
+          projects={projects}
+          onSelectProject={pickProject}
+          onRenameProject={renameProject}
+          onRemoveProject={removeProject}
           selectedSessionId={resumingSessionId ?? sessionIdRef.current}
           navigationLocked={sessionNavigationLocked}
           error={sessionListError}
@@ -2324,6 +2361,7 @@ export function App() {
 
                     {!loadingConversation && !conversationStarted && !worktreePreparation && (
                       <WorkspaceContextBar
+                        projects={projects}
                         workspace={workspace}
                         candidate={workspaceCandidate}
                         projectDir={projectDir}
@@ -2571,9 +2609,9 @@ function withoutQueuedAction(
   return next
 }
 
-function sameSessionList(
-  current: readonly SessionListItem[],
-  next: readonly SessionListItem[],
+function sameSidebarItems(
+  current: readonly unknown[],
+  next: readonly unknown[],
 ): boolean {
   if (current.length !== next.length) return false
   return current.every((item, index) => JSON.stringify(item) === JSON.stringify(next[index]))

@@ -16,6 +16,7 @@ import type {
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import { IPC } from '../shared/ipc.ts'
 import type { RenameSessionRequest, RenameSessionResult } from '../shared/session-name.ts'
+import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type {
@@ -35,7 +36,6 @@ import type {
   RuntimeCommandEnvelope,
   RuntimeCommandResult,
   SessionDeletionState,
-  SessionListItem,
   SetSessionPinnedRequest,
   SetSessionPinnedResult,
 } from '../shared/session.ts'
@@ -242,8 +242,8 @@ const api = {
     ipcRenderer.on(IPC.workspaceFileChanged, listener)
     return () => ipcRenderer.removeListener(IPC.workspaceFileChanged, listener)
   },
-  pickProjectDir: (): Promise<WorkspaceCandidate | null> =>
-    ipcRenderer.invoke(IPC.pickProjectDir),
+  pickProjectDir: (projectId?: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> =>
+    ipcRenderer.invoke(IPC.pickProjectDir, projectId),
   worktreeStatus: (
     runtimeId: string,
   ): Promise<WorkspaceActionResult<WorktreeStatus>> =>
@@ -259,7 +259,9 @@ const api = {
     ipcRenderer.invoke(IPC.discardWorktree, runtimeId),
   consensusStatus: (): Promise<{ ready: boolean; reason: string | null; enabled: boolean }> =>
     ipcRenderer.invoke(IPC.consensusStatus),
-  listSessions: (): Promise<SessionListItem[]> => ipcRenderer.invoke(IPC.listSessions),
+  listSessionSidebar: (): Promise<SessionSidebarSnapshot> => ipcRenderer.invoke(IPC.listSessionSidebar),
+  renameProject: (id: string, name: string): Promise<WorkspaceActionResult> => ipcRenderer.invoke(IPC.renameProject, id, name),
+  removeProject: (id: string): Promise<WorkspaceActionResult> => ipcRenderer.invoke(IPC.removeProject, id),
   resumeSession: (sessionId: string, historyStart?: string): Promise<ResumeSessionResult> =>
     ipcRenderer.invoke(IPC.resumeSession, sessionId, historyStart),
   forkSession: (request: ForkSessionRequest): Promise<ForkSessionResult> =>

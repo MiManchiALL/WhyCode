@@ -1,7 +1,11 @@
 import { Folder, X } from 'lucide-react'
-import type {
-  RuntimeWorkspace,
-  WorkspaceCandidate,
+import type { SidebarProject } from '../../shared/projects.ts'
+import { ProjectPicker } from './project-picker.tsx'
+import { fileName, filePathKey } from './local-files.ts'
+import {
+  workspaceProjectDirectory,
+  type RuntimeWorkspace,
+  type WorkspaceCandidate,
 } from '../../shared/workspace.ts'
 import {
   WorkspaceStartControls,
@@ -10,18 +14,23 @@ import {
 
 interface WorkspaceContextBarProps {
   workspace: RuntimeWorkspace
+  projects: readonly SidebarProject[]
   candidate: WorkspaceCandidate | null
   projectDir: string | null
   baseRef: string | null
   busy: boolean
   canChangeWorkspace: boolean
-  onPickProject: () => void
+  onPickProject: (id?: string) => void
   onClearProject: () => void
   onStart: (choice: WorkspaceStartChoice) => void
 }
 
 export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
   const projectSelected = props.workspace.mode !== 'pending-managed' && Boolean(props.projectDir)
+  const selectedDirectory = workspaceProjectDirectory(props.workspace)
+  const selectedProject = selectedDirectory
+    ? props.projects.find(project => filePathKey(project.directory) === filePathKey(selectedDirectory))
+    : undefined
   return (
     <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl bg-black/[0.035] px-2 py-1.5">
       {projectSelected && props.projectDir ? (
@@ -50,35 +59,37 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
             </span>
           )}
           {props.canChangeWorkspace ? (
-            <button
-              type="button"
-              className="wc-focus-ring min-w-0 truncate rounded-lg py-1 pl-0.5 pr-1.5 text-left"
-              disabled={props.busy}
-              onClick={props.onPickProject}
-              title={`更改项目：${props.projectDir}`}
-            >
-              {lastPathSegment(props.projectDir)}
-            </button>
+            <ProjectPicker projects={props.projects} selectedId={selectedProject?.id} onSelect={props.onPickProject}>
+              <button
+                type="button"
+                className="wc-focus-ring min-w-0 truncate rounded-lg py-1 pl-0.5 pr-1.5 text-left"
+                disabled={props.busy}
+                title={`更改项目：${props.projectDir}`}
+              >
+                {selectedProject?.name ?? fileName(props.projectDir)}
+              </button>
+            </ProjectPicker>
           ) : (
             <span
               className="min-w-0 truncate py-1 pl-0.5 pr-1.5"
               title={props.projectDir}
             >
-              {lastPathSegment(props.projectDir)}
+              {fileName(props.projectDir)}
             </span>
           )}
         </div>
       ) : (
-        <button
-          type="button"
-          className="wc-focus-ring flex min-w-0 max-w-[22rem] items-center gap-1.5 rounded-lg px-1.5 py-1 wc-type-tiny text-[var(--wc-muted)] hover:bg-white/70 hover:text-[var(--wc-ink)] disabled:cursor-default disabled:opacity-60"
-          disabled={props.busy || !props.canChangeWorkspace}
-          onClick={props.onPickProject}
-          title="选择项目；Git 仓库可继续选择 Local 或 Worktree"
-        >
-          <Folder size={14} className="shrink-0" />
-          <span className="truncate">选择项目</span>
-        </button>
+        <ProjectPicker projects={props.projects} selectedId={selectedProject?.id} onSelect={props.onPickProject}>
+          <button
+            type="button"
+            className="wc-focus-ring flex min-w-0 max-w-[22rem] items-center gap-1.5 rounded-lg px-1.5 py-1 wc-type-tiny text-[var(--wc-muted)] hover:bg-white/70 hover:text-[var(--wc-ink)] disabled:cursor-default disabled:opacity-60"
+            disabled={props.busy || !props.canChangeWorkspace}
+            title="选择项目；Git 仓库可继续选择 Local 或 Worktree"
+          >
+            <Folder size={14} className="shrink-0" />
+            <span className="truncate">选择项目</span>
+          </button>
+        </ProjectPicker>
       )}
 
       {props.canChangeWorkspace && projectSelected && props.candidate?.repositoryDirectory && (
@@ -92,9 +103,4 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
       )}
     </div>
   )
-}
-
-function lastPathSegment(path: string): string {
-  const normalized = path.replace(/[\\/]+$/u, '')
-  return normalized.split(/[\\/]/u).at(-1) || path
 }

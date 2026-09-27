@@ -149,12 +149,12 @@ export class ComposerDraftStore {
     await completed(transaction)
   }
 
-  /** 首次发送登记后原子转移草稿与附件，提交期间继续输入的内容仍属于该会话。 */
-  async moveToSession(runtimeId: string, sessionId: string): Promise<void> {
-    const sourceKey = composerDraftKey(runtimeId, null)
+  /** 首次发送及显式更换草稿工作区共用一次原子移交，附件与文字保持同一归属。 */
+  async move(sourceKey: string, targetKey: string): Promise<void> {
+    if (sourceKey === targetKey) return
     const cached = this.take(sourceKey)
-    if (cached) this.cache(sessionId, cached)
-    this.invalidate(sessionId)
+    if (cached) this.cache(targetKey, cached)
+    this.invalidate(targetKey)
     const database = await this.open()
     const transaction = database.transaction(['drafts', 'images'], 'readwrite', { durability: 'strict' })
     const store = transaction.objectStore('drafts')
@@ -163,13 +163,13 @@ export class ComposerDraftStore {
     request.onsuccess = () => {
       const stored: StoredDraft | undefined = request.result
       if (!stored) return
-      store.put(stored, sessionId)
+      store.put(stored, targetKey)
       store.delete(sourceKey)
       for (const image of stored.images) {
         if (image.kind === 'stored') continue
         const file = images.get([sourceKey, image.id])
         file.onsuccess = () => {
-          if (file.result) images.put(file.result, [sessionId, image.id])
+          if (file.result) images.put(file.result, [targetKey, image.id])
           images.delete([sourceKey, image.id])
         }
       }

@@ -118,9 +118,19 @@ export function workspaceDisplayDirectory(binding: RuntimeWorkspace): string | n
   if (binding.mode === 'local' || binding.mode === 'managed') {
     return binding.workingDirectory
   }
-  if (binding.relativeWorkingDirectory === '.') return binding.worktreeDirectory
-  const separator = binding.worktreeDirectory.includes('\\') ? '\\' : '/'
-  return `${binding.worktreeDirectory}${separator}${
-    binding.relativeWorkingDirectory.replaceAll('/', separator)
-  }`
+  return directoryWithin(binding.worktreeDirectory, binding.relativeWorkingDirectory)
+}
+
+/** 项目分组沿用用户选择的源目录，受管默认目录不自动登记为项目。 */
+export function workspaceProjectDirectory(binding: RuntimeWorkspace): string | null {
+  if (binding.mode === 'local') return binding.workingDirectory
+  if (binding.mode === 'pending-worktree') return binding.selectedDirectory
+  if (binding.mode === 'worktree') return directoryWithin(binding.repositoryDirectory, binding.relativeWorkingDirectory)
+  return null
+}
+
+function directoryWithin(root: string, relative: string): string {
+  if (relative === '.') return root
+  const separator = root.includes('\\') ? '\\' : '/'
+  return `${root.replace(/[\\/]+$/u, '')}${separator}${relative.replaceAll('/', separator)}`
 }
