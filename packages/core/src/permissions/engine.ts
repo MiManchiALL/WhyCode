@@ -1,8 +1,7 @@
-import { isAbsolute, resolve } from 'node:path'
+import { localWorkspaceIO, outsideWorkspaceBoundary } from '../workspace/io.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import type { PermissionContext, PermissionDecision } from './types.ts'
 import {
-  findOutsideBoundary,
   findSuspiciousWindowsPattern,
   isSensitivePath,
 } from './path-safety.ts'
@@ -32,12 +31,12 @@ export function checkInitialToolApproval(
  * - 常规的同工具审批由信息更具体的首次审批替代；
  * - 路径/敏感审批与首次审批合并原因，并保留更严格的常规记忆边界。
  */
-export function checkToolAuthorization(
+export async function checkToolAuthorization(
   def: ToolDefinition,
   input: unknown,
   ctx: PermissionContext,
-): PermissionDecision {
-  const permission = checkToolPermission(def, input, ctx)
+): Promise<PermissionDecision> {
+  const permission = await checkToolPermission(def, input, ctx)
   if (permission.behavior === 'deny') return permission
 
   const initial = checkInitialToolApproval(def, ctx)
@@ -65,16 +64,18 @@ export function checkToolAuthorization(
  * 讨论档硬边界 → 敏感/越界约束聚合 → 角色/会话/档位策略。
  * 可疑 Windows 路径永远拒绝；讨论 Agent 的 scratch 边界也不受 Main 全自动档放宽。
  */
-export function checkToolPermission(
+export async function checkToolPermission(
   def: ToolDefinition,
   input: unknown,
   ctx: PermissionContext,
-): PermissionDecision {
+): Promise<PermissionDecision> {
+  const io = ctx.workspaceIO ?? localWorkspaceIO
+  const { isAbsolute, resolve } = io.path
   const projectDir = ctx.projectDir
   const rawPaths = def.extractPaths?.(input as Record<string, unknown>) ?? []
 
   // 1. Windows 可疑模式：直接拒绝，不给审批机会（防沙箱绕过）
-  for (const p of rawPaths) {
+  for (const p of io.platform === 'win32' ? rawPaths : []) {
     const pattern = findSuspiciousWindowsPattern(p)
     if (pattern) {
       return { behavior: 'deny', reason: `路径包含可疑模式（${pattern}）：${p}` }
@@ -95,10 +96,9 @@ export function checkToolPermission(
     return { behavior: 'deny', reason: '当前为只读模式，不允许修改或执行' }
   }
 
-  const outsidePaths = uniquePaths(rawPaths.flatMap((path) => {
-    const outside = findOutsideBoundary(path, projectDir, ctx.additionalDirs)
-    return outside ? [outside] : []
-  }))
+  const outsidePaths = uniquePaths((await Promise.all(rawPaths.map(path =>
+    outsideWorkspaceBoundary(io, path, projectDir, ctx.additionalDirs),
+  ))).filter((path): path is string => path !== null))
   if (ctx.discussion && outsidePaths.length > 0) {
     return {
       behavior: 'deny',
@@ -114,11 +114,9 @@ export function checkToolPermission(
         reason: '讨论阶段修改未声明临时工作区内的资源边界',
       }
     }
-    const outsideScratch = uniquePaths(rawPaths.flatMap((path) => {
-      const abs = isAbsolute(path) ? resolve(path) : resolve(projectDir, path)
-      const outside = findOutsideBoundary(abs, scratchDir, [])
-      return outside ? [outside] : []
-    }))
+    const outsideScratch = uniquePaths((await Promise.all(rawPaths.map(path =>
+      outsideWorkspaceBoundary(io, resolve(projectDir, path), scratchDir, []),
+    ))).filter((path): path is string => path !== null))
     if (def.kind === 'edit' && outsideScratch.length > 0) {
       return {
         behavior: 'deny',

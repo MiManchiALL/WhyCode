@@ -96,3 +96,24 @@ it('保存失败不发布未持久化变更；损坏登记明确报错，不静�
   await restored.initialize()
   assert.equal(restored.get(project.id).name, '可继续保存')
 })
+
+it('远端项目按服务器身份和区分大小写的目录归组，重连配置可复用登记但不改写会话绑定', async t => {
+  const { path, store } = await fixture(t)
+  const binding = { mode: 'ssh' as const, connectionId: randomUUID(), target: 'ssh:user@host:22#SHA256:key', label: '服务器', workingDirectory: '/project' }
+  const first = await store.addRemote(binding)
+  const secondHost = await store.addRemote({ ...binding, target: 'ssh:user@other:22#SHA256:key' })
+  const upperCase = await store.addRemote({ ...binding, workingDirectory: '/Project' })
+  assert.equal(new Set([first.id, secondHost.id, upperCase.id]).size, 3)
+  const sessionId = randomUUID()
+  await store.attachSession(sessionId, binding)
+  await store.rename(first.id, '远端开发')
+  const replacement = { ...binding, connectionId: randomUUID(), label: '新连接' }
+  assert.equal((await store.addRemote(replacement)).id, first.id)
+  const restarted = new ProjectStore(path)
+  await restarted.initialize()
+  assert.deepEqual(restarted.get(first.id), { ...first, name: '远端开发', sessionIds: [sessionId],
+    remote: { connectionId: replacement.connectionId, target: binding.target, label: replacement.label } })
+  assert.deepEqual(restarted.get(secondHost.id).sessionIds, [])
+  assert.deepEqual(restarted.get(upperCase.id).sessionIds, [])
+  assert.notEqual(binding.connectionId, replacement.connectionId)
+})

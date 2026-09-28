@@ -3,6 +3,7 @@
  * 命令走 invoke/handle，高频运行事件走长期 MessagePort，其余低频状态走 send。
  */
 export const IPC = {
+  ssh: 'whycode:ssh',
   /** 窗口关闭前的草稿落盘握手，仅传递 ready/flush/saved/failed/unready 状态。 */
   composerPersistence: 'whycode:composer-persistence',
   /** Renderer → Main：发送 CoreCommand */

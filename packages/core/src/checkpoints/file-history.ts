@@ -1,17 +1,7 @@
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-  rmdir,
-  type FileHandle,
-  writeFile,
-} from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { mkdir, open, readFile, writeFile, type FileHandle } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { FileState } from './types.ts'
 import {
   CHECKPOINT_FILE_PREVIEW_MAX_BYTES,
@@ -22,11 +12,16 @@ function hash(content: Buffer): string {
   return createHash('sha256').update(content).digest('hex')
 }
 
-async function collectMissingParents(path: string): Promise<string[]> {
+async function collectMissingParents(path: string, io: WorkspaceIO): Promise<string[]> {
+  const { dirname } = io.path
+  const { lstat } = io.fs
   const missing: string[] = []
   let current = dirname(path)
   while (current !== dirname(current)) {
-    if (await lstat(current).then(() => true, () => false)) break
+    if (await lstat(current).then(() => true, (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false
+      throw error
+    })) break
     missing.push(current)
     current = dirname(current)
   }
@@ -34,9 +29,9 @@ async function collectMissingParents(path: string): Promise<string[]> {
 }
 
 /** 捕获精确文件，不经过 .gitignore；因此敏感文件、二进制和项目外路径也可可靠回滚。 */
-export async function captureFileState(path: string, blobDir: string): Promise<FileState> {
-  const absolute = resolve(path)
-  const stats = await lstat(absolute).catch((error: NodeJS.ErrnoException) => {
+export async function captureFileState(path: string, blobDir: string, io: WorkspaceIO = localWorkspaceIO): Promise<FileState> {
+  const absolute = io.path.resolve(path)
+  const stats = await io.fs.lstat(absolute).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return null
     throw error
   })
@@ -44,13 +39,13 @@ export async function captureFileState(path: string, blobDir: string): Promise<F
     return {
       path: absolute,
       kind: 'missing',
-      missingParents: await collectMissingParents(absolute),
+      missingParents: await collectMissingParents(absolute, io),
     }
   }
   if (!stats.isFile()) {
     throw new Error(`精确回滚只支持普通文件：${absolute}`)
   }
-  const content = await readFile(absolute)
+  const content = await io.fs.readFile(absolute)
   const contentHash = hash(content)
   await mkdir(blobDir, { recursive: true, mode: 0o700 })
   const blobPath = join(blobDir, contentHash)
@@ -70,14 +65,14 @@ export async function captureFileState(path: string, blobDir: string): Promise<F
   }
 }
 
-export async function currentFileMatches(expected: FileState): Promise<boolean> {
-  const stats = await lstat(expected.path).catch((error: NodeJS.ErrnoException) => {
+export async function currentFileMatches(expected: FileState, io: WorkspaceIO = localWorkspaceIO): Promise<boolean> {
+  const stats = await io.fs.lstat(expected.path).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return null
     throw error
   })
   if (expected.kind === 'missing') return stats === null
   if (!stats?.isFile() || stats.size !== expected.size) return false
-  return hashFile(expected.path).then(
+  return hashFile(expected.path, io).then(
     (currentHash) => currentHash === expected.contentHash,
     (error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return false
@@ -87,8 +82,8 @@ export async function currentFileMatches(expected: FileState): Promise<boolean> 
 }
 
 /** 分块计算当前文件摘要，避免预览一致性检查把大文件整体读入内存。 */
-async function hashFile(path: string): Promise<string> {
-  const file = await open(path, 'r')
+async function hashFile(path: string, io: WorkspaceIO): Promise<string> {
+  const file = await io.fs.open(path, 'r')
   try {
     const digest = createHash('sha256')
     const buffer = Buffer.allocUnsafe(64 * 1_024)
@@ -105,7 +100,9 @@ async function hashFile(path: string): Promise<string> {
   }
 }
 
-export async function restoreFileState(state: FileState, blobDir: string): Promise<void> {
+export async function restoreFileState(state: FileState, blobDir: string, io: WorkspaceIO = localWorkspaceIO): Promise<void> {
+  const { rm, rmdir, mkdir, writeFile, rename, chmod } = io.fs
+  const { dirname } = io.path
   if (state.kind === 'missing') {
     await rm(state.path, { force: true })
     for (const parent of state.missingParents) {
@@ -121,7 +118,7 @@ export async function restoreFileState(state: FileState, blobDir: string): Promi
   const temp = `${state.path}.${process.pid}.${randomUUID()}.whycode-restore`
   await writeFile(temp, content, { mode: state.mode ?? 0o600, flush: true })
   // Windows rename 不覆盖已有目标；先移除已通过冲突预检的当前版本，再原子放入备份。
-  await rm(state.path, { force: true })
+  if (io.platform === 'win32') await rm(state.path, { force: true })
   await rename(temp, state.path)
   if (state.mode !== undefined) await chmod(state.path, state.mode).catch(() => {})
 }

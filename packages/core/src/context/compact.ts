@@ -4,7 +4,7 @@ import {
   type ModelMessage,
   type ProviderMetadata,
 } from 'ai'
-import { readFile } from 'node:fs/promises'
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import {
   COMPACT_HISTORY_SUMMARY_PROMPT,
   COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
@@ -67,12 +67,13 @@ async function summarize(
 /** 重注入最近读过的文件（新鲜内容重读，防压缩后失忆）。 */
 async function buildFileReinjection(
   recentReadFiles: { path: string; readAt: number }[],
+  io: WorkspaceIO,
 ): Promise<string | null> {
   const sorted = [...recentReadFiles].sort((a, b) => b.readAt - a.readAt).slice(0, REINJECT_MAX_FILES)
   let budget = REINJECT_TOKEN_BUDGET
   const sections: string[] = []
   for (const file of sorted) {
-    const content = await readFile(file.path, 'utf-8').catch(() => null)
+    const content = await io.fs.readFile(file.path, 'utf8').catch(() => null)
     if (content === null) continue
     let text = content
     while (estimateTextTokens(text) > REINJECT_MAX_TOKENS_PER_FILE) {
@@ -100,6 +101,7 @@ export async function compactMessages(
   ) => ModelMessage[] | Promise<ModelMessage[]>,
   providerOptions?: ProviderMetadata,
   onRetry?: (retry: ModelRequestRetry) => void,
+  io: WorkspaceIO = localWorkspaceIO,
 ): Promise<CompactResult> {
   const projectInstructions = findProjectInstructionsMessage(messages)
   const conversationMessages = applyProjectInstructions(messages, null)
@@ -147,7 +149,7 @@ export async function compactMessages(
     createCompactSummaryMessage({ historySummary, turnPrefixSummary }),
     ...preparation.tail,
   ]
-  await injectApplicationContext(rebuilt, recentReadFiles, applicationContext)
+  await injectApplicationContext(rebuilt, recentReadFiles, applicationContext, io)
   return {
     messages: applyProjectInstructions(rebuilt, projectInstructions),
     summaryText: [historySummary, turnPrefixSummary].filter(Boolean).join('\n\n---\n\n'),
@@ -200,9 +202,10 @@ async function injectApplicationContext(
   messages: ModelMessage[],
   recentReadFiles: { path: string; readAt: number }[],
   applicationContext?: string,
+  io: WorkspaceIO = localWorkspaceIO,
 ): Promise<void> {
   const sections = [
-    await buildFileReinjection(recentReadFiles),
+    await buildFileReinjection(recentReadFiles, io),
     applicationContext,
   ].filter((section): section is string => Boolean(section))
   if (sections.length === 0) return

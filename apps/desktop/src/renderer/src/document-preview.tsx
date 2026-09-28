@@ -45,10 +45,10 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
         <RefreshCw size={15} className={file.changed ? 'text-[var(--wc-sage-ink)]' : ''} />
         {file.changed && <span className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-[var(--wc-sage-ink)]" />}
       </button>
-      <button type="button" className="wc-preview-action" disabled={!document}
+      {!document?.remote && <button type="button" className="wc-preview-action" disabled={!document}
         title="在文件夹中显示" aria-label="在文件夹中显示" onClick={file.reveal}>
         <FolderOpen size={15} />
-      </button>
+      </button>}
     </FilePreviewToolbar>
     {file.error ? <FilePreviewMessage>{file.error}</FilePreviewMessage> : document ? (
       <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally} />
@@ -62,8 +62,8 @@ function DocumentBody({ document, code, wrap, onOpenExternally }: {
   if (!document.url) return <FilePreviewMessage>
     <div>
       <p>此文件暂不支持内嵌预览</p>
-      <button type="button" className="wc-focus-ring mt-3 rounded-lg border border-[var(--wc-line)] px-3 py-1.5 text-[var(--wc-ink)]"
-        onClick={onOpenExternally}>用默认应用打开</button>
+      {!document.remote && <button type="button" className="wc-focus-ring mt-3 rounded-lg border border-[var(--wc-line)] px-3 py-1.5 text-[var(--wc-ink)]"
+        onClick={onOpenExternally}>用默认应用打开</button>}
     </div>
   </FilePreviewMessage>
   if (code || document.format === 'markdown') return <TextDocument key={document.url} url={document.url} path={document.path} markdown={!code} wrap={wrap} />

@@ -17,8 +17,11 @@ export class HostOperationScheduler {
     projectDir: string,
     abortSignal: AbortSignal,
     operation: () => Promise<T>,
+    targetIdentity?: string,
   ): Promise<T> {
-    return this.enqueue(`project:${normalizePath(projectDir)}`, abortSignal, operation)
+    const key = targetIdentity && targetIdentity !== 'local'
+      ? `project:${targetIdentity}:${projectDir}` : `project:${normalizePath(projectDir)}`
+    return this.enqueue(key, abortSignal, operation)
   }
 
   runScreenshot<T>(

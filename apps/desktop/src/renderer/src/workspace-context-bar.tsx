@@ -31,11 +31,13 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
   const projectSelected = props.workspace.mode !== 'pending-managed' && Boolean(props.projectDir)
   const selectedDirectory = workspaceProjectDirectory(props.workspace)
   const selectedProject = selectedDirectory
-    ? props.projects.find(project => filePathKey(project.directory) === filePathKey(selectedDirectory))
+    ? props.projects.find(project => props.workspace.mode === 'ssh'
+      ? project.remote?.target === props.workspace.target && project.directory === selectedDirectory
+      : !project.remote && filePathKey(project.directory) === filePathKey(selectedDirectory))
     : undefined
   useEffect(() => {
     setCandidate(null)
-    if (!props.runtimeId || !props.canChangeWorkspace || !selectedDirectory) return
+    if (!props.runtimeId || !props.canChangeWorkspace || !selectedDirectory || props.workspace.mode === 'ssh') return
     let active = true
     void window.whycode.inspectDraftWorkspace(props.runtimeId).then(result => {
       if (!active) return
@@ -45,7 +47,7 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
       if (active) feedback('error', `工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
     })
     return () => { active = false }
-  }, [props.runtimeId, props.canChangeWorkspace, selectedDirectory, feedback])
+  }, [props.runtimeId, props.canChangeWorkspace, selectedDirectory, props.workspace.mode, feedback])
   return (
     <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl bg-black/[0.035] px-2 py-1.5">
       {projectSelected && props.projectDir ? (
@@ -107,6 +109,7 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
         </ProjectPicker>
       )}
 
+      {props.workspace.mode === 'ssh' && <span className="truncate rounded-md bg-black/[0.04] px-2 py-1 text-xs text-[var(--wc-muted)]" title={props.workspace.target}>SSH · {props.workspace.label}</span>}
       {props.canChangeWorkspace && projectSelected && candidate?.repositoryDirectory && (
         <WorkspaceStartControls
           candidate={candidate}

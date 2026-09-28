@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { open, readdir, realpath, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '@whycode/core'
 import { Readable } from 'node:stream'
 import { WorkspaceFileWatch } from './workspace-file-watch.ts'
 import {
@@ -11,6 +9,7 @@ import {
 } from '../shared/workspace-files.ts'
 
 interface FileView {
+  io: WorkspaceIO
   id: string
   owner: number
   runtimeId: string
@@ -27,18 +26,19 @@ const byName = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' }
 export class WorkspaceFiles {
   private readonly views = new Map<string, FileView>()
 
-  async open(owner: number, request: OpenWorkspaceFileRequest, workingDirectory: string, changed: (id: string) => void): Promise<WorkspaceFileView> {
+  async open(owner: number, request: OpenWorkspaceFileRequest, workingDirectory: string, changed: (id: string) => void, io: WorkspaceIO = localWorkspaceIO): Promise<WorkspaceFileView> {
+    const { resolve, isAbsolute, dirname } = io.path
     if ([...this.views.values()].filter(view => view.owner === owner).length >= MAX_PREVIEW_VIEWS) {
       throw new Error('展开的目录过多，请先收起部分目录')
     }
     const workspaceRoot = resolve(workingDirectory)
     const path = request.kind === 'directory' ? resolve(workspaceRoot, request.path) : resolve(request.path)
     if (request.kind === 'file' && !isAbsolute(request.path)) throw new Error('文件路径必须为绝对路径')
-    const root = request.kind === 'directory' || isWithin(workspaceRoot, path) ? workspaceRoot : dirname(path)
-    if (!isWithin(root, path)) throw new Error('目录不在当前工作路径中')
+    const root = request.kind === 'directory' || isWithin(io, workspaceRoot, path) ? workspaceRoot : dirname(path)
+    if (!isWithin(io, root, path)) throw new Error('目录不在当前工作路径中')
     const id = randomUUID()
     const view: FileView = {
-      id, owner, runtimeId: request.runtimeId, kind: request.kind, root, path,
+      io, id, owner, runtimeId: request.runtimeId, kind: request.kind, root, path,
       abort: new AbortController(), watch: new WorkspaceFileWatch(() => changed(id)),
     }
     this.views.set(view.id, view)
@@ -54,12 +54,15 @@ export class WorkspaceFiles {
 
   async read(owner: number, id: string, offset = 0): Promise<WorkspaceFileView> {
     const view = this.owned(owner, id)
+    const { io } = view
+    const { readdir, open, stat } = io.fs
+    const { relative, resolve, sep, basename } = io.path
     if (!Number.isInteger(offset) || offset < 0) throw new Error('目录读取位置无效')
     if (view.kind === 'directory') {
       try {
-        const path = await containedRealPath(view.root, view.path)
+        const path = await containedRealPath(io, view.root, view.path)
         const entries = await readdir(path, { withFileTypes: true })
-        view.watch.directory(path)
+        if (io.identity === 'local') view.watch.directory(path)
         entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || byName.compare(a.name, b.name))
         return {
           kind: 'directory', id, path: view.path, missing: false, total: entries.length,
@@ -76,7 +79,7 @@ export class WorkspaceFiles {
         throw error
       }
     }
-    const path = await containedRealPath(view.root, view.path)
+    const path = await containedRealPath(io, view.root, view.path)
     const info = await stat(path)
     if (!info.isFile()) throw new Error('所选路径不是普通文件')
     let format = documentFormat(path)
@@ -91,10 +94,10 @@ export class WorkspaceFiles {
       } finally { await file.close() }
     }
     view.watch.reset()
-    view.watch.file(path, info)
+    if (io.identity === 'local') view.watch.file(path, info)
     const relativePath = relative(view.root, view.path).split(sep).map(encodeURIComponent).join('/')
     return {
-      kind: 'file', id, path: view.path, name: basename(view.path), format, size: info.size,
+      kind: 'file', remote: io.identity !== 'local', id, path: view.path, name: basename(view.path), format, size: info.size,
       mediaType: previewMediaType(path) ?? 'text/plain',
       url: format === 'unsupported' ? null : `${PREVIEW_SCHEME}://${id}/${relativePath}?v=${randomUUID()}`,
     }
@@ -106,6 +109,9 @@ export class WorkspaceFiles {
       const url = new URL(request.url)
       const view = this.views.get(url.hostname)
       if (!view || view.kind !== 'file') return new Response(null, { status: 404 })
+      const { io } = view
+      const { resolve } = io.path
+      const { stat, createReadStream } = io.fs
       const decoded = decodeURIComponent(url.pathname.slice(1))
       if (!decoded || decoded.includes('\0') || decoded.includes('\\') || decoded.includes(':')) return new Response(null, { status: 403 })
       const target = resolve(view.root, decoded)
@@ -113,11 +119,11 @@ export class WorkspaceFiles {
       if (!primary && (decoded.split('/').some(part => part.startsWith('.')) || !previewMediaType(target))) {
         return new Response(null, { status: 403 })
       }
-      const path = await containedRealPath(view.root, target)
+      const path = await containedRealPath(io, view.root, target)
       const info = await stat(path)
       if (!info.isFile() || info.size > MAX_DOCUMENT_PREVIEW_BYTES) return new Response(null, { status: 413 })
       if (this.views.get(view.id) !== view) return new Response(null, { status: 404 })
-      view.watch.file(path, info)
+      if (io.identity === 'local') view.watch.file(path, info)
       const mediaType = previewMediaType(path) ?? 'text/plain'
       const headers = new Headers({
         'Content-Type': mediaType + (/(?:^text\/|json$)/u.test(mediaType) ? '; charset=utf-8' : ''),
@@ -136,7 +142,11 @@ export class WorkspaceFiles {
     } catch { return new Response(null, { status: 404 }) }
   }
 
-  pathFor(owner: number, id: string): string { return this.owned(owner, id).path }
+  pathFor(owner: number, id: string): string {
+    const view = this.owned(owner, id)
+    if (view.io.identity !== 'local') throw new Error('远端文件请在工作区面板中查看')
+    return view.path
+  }
 
   close(owner: number, id: string): void {
     const view = this.views.get(id)
@@ -161,13 +171,15 @@ export class WorkspaceFiles {
   }
 }
 
-async function containedRealPath(root: string, path: string): Promise<string> {
+async function containedRealPath(io: WorkspaceIO, root: string, path: string): Promise<string> {
+  const { realpath } = io.fs
   const [realRoot, realPath] = await Promise.all([realpath(root), realpath(path)])
-  if (!isWithin(realRoot, realPath)) throw new Error('路径超出当前工作目录')
+  if (!isWithin(io, realRoot, realPath)) throw new Error('路径超出当前工作目录')
   return realPath
 }
 
-function isWithin(root: string, path: string): boolean {
+function isWithin(io: WorkspaceIO, root: string, path: string): boolean {
+  const { relative, sep, isAbsolute } = io.path
   const tail = relative(root, path)
   return tail === '' || (!tail.startsWith(`..${sep}`) && tail !== '..' && !isAbsolute(tail))
 }

@@ -48,7 +48,7 @@ export function createSubagentTools(
         if (!ctx.turnId || !ctx.toolCallId) {
           return { data: '子代理调用缺少父回合身份', isError: true }
         }
-        const snapshot = await catalog.snapshot(projectDir)
+        const snapshot = await catalog.snapshot(projectDir, ctx.workspaceIO)
         const definition = snapshot.definitions.find((item) => item.id === input.agent_id)
         if (!definition) return { data: `未知或已移除的子代理：${input.agent_id}`, isError: true }
         const result = await host.launch({

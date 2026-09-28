@@ -16,6 +16,7 @@ export interface WorkspaceCandidate {
 }
 
 export type StartWorkspaceRequest =
+  | { mode: 'ssh'; connectionId: string; selectedDirectory: string }
   | {
       mode: 'local'
       selectedDirectory: string
@@ -115,7 +116,7 @@ export function workspaceDisplayDirectory(binding: RuntimeWorkspace): string | n
   if (binding.mode === 'pending-worktree') return binding.selectedDirectory
   if (binding.mode === 'pending-managed') return binding.workingDirectory
   if (binding.mode === 'none') return null
-  if (binding.mode === 'local' || binding.mode === 'managed') {
+  if (binding.mode === 'local' || binding.mode === 'managed' || binding.mode === 'ssh') {
     return binding.workingDirectory
   }
   return directoryWithin(binding.worktreeDirectory, binding.relativeWorkingDirectory)
@@ -123,7 +124,7 @@ export function workspaceDisplayDirectory(binding: RuntimeWorkspace): string | n
 
 /** 项目分组沿用用户选择的源目录，受管默认目录不自动登记为项目。 */
 export function workspaceProjectDirectory(binding: RuntimeWorkspace): string | null {
-  if (binding.mode === 'local') return binding.workingDirectory
+  if (binding.mode === 'local' || binding.mode === 'ssh') return binding.workingDirectory
   if (binding.mode === 'pending-worktree') return binding.selectedDirectory
   if (binding.mode === 'worktree') return directoryWithin(binding.repositoryDirectory, binding.relativeWorkingDirectory)
   return null

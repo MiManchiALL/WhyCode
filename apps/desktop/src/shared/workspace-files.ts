@@ -23,6 +23,7 @@ export interface WorkspaceDirectory {
 }
 
 export interface WorkspaceDocument {
+  remote?: boolean
   kind: 'file'
   id: string
   path: string

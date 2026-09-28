@@ -72,7 +72,7 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
     kind: 'read',
     extractPaths: (input) => input.sourceType === 'path' ? [input.sourceValue] : [],
     async execute(input, ctx) {
-      const source = resolvePdfSource(input.sourceType, input.sourceValue, options, ctx)
+      const source = await resolvePdfSource(input.sourceType, input.sourceValue, options, ctx)
       const pageCount = input.pageCount ?? defaultPages
       const visual = options.supportsVisual
 
@@ -182,14 +182,14 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
   })
 }
 
-function resolvePdfSource(
+async function resolvePdfSource(
   sourceType: 'attachment' | 'path',
   sourceValue: string,
   options: ReadPdfToolOptions,
   ctx: ToolContext,
-): { name: string; path: string; expectedSha256?: string; attachmentId?: string } {
+): Promise<{ name: string; path: string; expectedSha256?: string; attachmentId?: string }> {
   if (sourceType === 'path') {
-    const path = resolveAllowed(ctx, sourceValue)
+    const path = await resolveAllowed(ctx, sourceValue)
     return { name: basename(path), path }
   }
   const resolved = options.resolveAttachment(sourceValue)

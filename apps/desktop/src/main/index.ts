@@ -1,3 +1,7 @@
+import { SshConnectionStore } from './ssh/store.ts'
+import { SshConnections } from './ssh/connections.ts'
+import { SshWorkspaces } from './ssh/workspaces.ts'
+import { registerSshIpc } from './ssh/ipc.ts'
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 import { registerWorkspaceLifecycleIpc } from './workspace-lifecycle-ipc.ts'
 import {
@@ -518,6 +522,7 @@ let worktrees: WorktreeManager
 let managedWorkspaces: ManagedWorkspaceManager
 let workspaceLifecycle: WorkspaceLifecycle
 let newSessionState: NewSessionStateStore
+let sshWorkspaces: SshWorkspaces
 /** 普通 Main 与协商任务共用的会话级临时工作区所有权入口。 */
 let sessionScratch: SessionScratchManager
 /** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
@@ -594,8 +599,12 @@ function worktreeBinding(
 }
 
 function sourceWorkspaceDirectory(workspace: RuntimeWorkspace): string {
-  if (workspace.mode === 'pending-managed') return requireDefaultWorkspace()
+  if (workspace.mode === 'pending-managed' || workspace.mode === 'ssh') return requireDefaultWorkspace()
   return workspaceProjectDirectory(workspace) ?? workspaceDisplayDirectory(workspace) ?? requireDefaultWorkspace()
+}
+
+function localWorkspaceDirectory(workspace: RuntimeWorkspace): string | null {
+  return workspace.mode === 'ssh' ? null : workspaceDisplayDirectory(workspace)
 }
 
 async function currentWorktreeStatus(
@@ -651,7 +660,9 @@ async function openCurrentWorkspaceFolder(
   runtimeId: string,
 ): Promise<WorkspaceActionResult> {
   try {
-    const path = requireRuntimeProjectDir(runtimeForId(runtimeId))
+    const targetRuntime = runtimeForId(runtimeId)
+    if (targetRuntime.workspace.mode === 'ssh') throw new Error('远端文件夹请在工作区面板中查看')
+    const path = requireRuntimeProjectDir(targetRuntime)
     const error = await shell.openPath(path)
     if (error) throw new Error(error)
     return { ok: true }
@@ -707,7 +718,7 @@ function createDraftRuntime(
   workspace: RuntimeWorkspace,
   runtimeId?: string,
 ): DesktopSessionRuntime {
-  workspaceLifecycle?.assertAvailable(workspaceDisplayDirectory(workspace))
+  workspaceLifecycle?.assertAvailable(localWorkspaceDirectory(workspace))
   const runtime = new DesktopSessionRuntime({
     runtimeId,
     workspace,
@@ -715,7 +726,8 @@ function createDraftRuntime(
     permissionMode: preferredPermissionMode,
     emit: broadcastRuntimeEvent,
   })
-  runtime.consensusEnabled = preferredConsensusEnabled
+  runtime.workspaceIO = sshWorkspaces.io(runtime.workspace)
+  runtime.consensusEnabled = runtime.workspace.mode === 'ssh' ? false : preferredConsensusEnabled
   runtimeRegistry.add(runtime)
   return runtime
 }
@@ -836,15 +848,16 @@ async function createMainAgentSession(
   providerConfig: ProviderConfig,
   reasoningEffort: ReasoningEffortSelection,
 ): Promise<AgentSession> {
-  const scratch = sessionScratch.paths(recorder.sessionId)
-  const forkSourceScratch = recorder.metadataSnapshot.forkOrigin
+  const remote = await sshWorkspaces.prepare(runtime)
+  const scratch = remote?.scratch ?? sessionScratch.paths(recorder.sessionId)
+  const forkSourceScratch = !remote && recorder.metadataSnapshot.forkOrigin
     ? sessionScratch.paths(recorder.metadataSnapshot.forkOrigin.sourceSessionId)
     : null
   const mcpRuntime = new McpSessionRuntime({
     configuration: mcpOAuthController.runtimeConfiguration(
       await loadMcpConfiguration({
         globalConfigPath: mcpGlobalConfigPath,
-        projectDir: targetProjectDir,
+        projectDir: remote ? undefined : targetProjectDir,
         globalSecretHeaders: loadAppConfig()?.mcpSecretHeaders,
       }),
     ),
@@ -867,10 +880,11 @@ async function createMainAgentSession(
       model,
       providerConfig,
       reasoningEffort,
+      workspaceIO: runtime.workspaceIO,
       promptContext: {
         projectDir: targetProjectDir,
-        osPlatform: process.platform,
-        homeDir: app.getPath('home'),
+        osPlatform: remote ? 'linux' : process.platform,
+        homeDir: remote?.home ?? app.getPath('home'),
         scratch: {
           rootDir: scratch.rootDirectory,
           workingDir: scratch.mainDirectory,
@@ -883,26 +897,25 @@ async function createMainAgentSession(
       baseTools,
       sessionRecorder: recorder,
       mcpRuntime,
-      skillCatalog: skills,
+      skillCatalog: remote ? undefined : skills,
       subagentCatalog: subagentDefinitions,
       mainTools: [
-        createBuildOfficeArtifactTool(officeArtifactRunner),
-        createInspectOfficeTool(officeProcessor),
+        ...(!remote ? [createBuildOfficeArtifactTool(officeArtifactRunner), createInspectOfficeTool(officeProcessor)] : []),
         ...commandTools.taskTools,
         ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
         ...createSessionWebPageTools(recorder),
       ],
-      captureScreenshot: captureSessionScreenshot,
-      pdfProcessor,
-      officeProcessor,
-      auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
+      captureScreenshot: remote ? undefined : captureSessionScreenshot,
+      pdfProcessor: remote ? undefined : pdfProcessor,
+      officeProcessor: remote ? undefined : officeProcessor,
+      auxiliaryImageAnalyzer: remote ? undefined : configuredAuxiliaryImageAnalyzer(),
       hasPendingTaskPlanContinuation: (planId) =>
         commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
         || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
       getSubagentTurnState: (turnId) => subagents.turnState(recorder.sessionId, turnId),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
-        hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation),
+        hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation, runtime.workspaceIO?.identity),
       emit: (event) => runtime.emit(event),
       requestApproval: (request, signal) => runtime.requestApproval(request, signal),
     })
@@ -931,7 +944,7 @@ function synchronizeRuntimeAuxiliaryImageAnalyzer(
   config: WhycodeConfig | null,
 ): void {
   if (!runtime.session || runtime.session.isBusy) return
-  runtime.session.setAuxiliaryImageAnalyzer(configuredAuxiliaryImageAnalyzer(config))
+  runtime.session.setAuxiliaryImageAnalyzer(runtime.workspace.mode === 'ssh' ? undefined : configuredAuxiliaryImageAnalyzer(config))
 }
 
 /** 协商可用性检查：B/C 评审员只引用统一模型连接，不持有独立凭据。 */
@@ -946,6 +959,7 @@ function checkConsensusReady(): string | null {
 }
 
 function buildCoordinator(runtime: DesktopSessionRuntime): string | null {
+  if (runtime.workspace.mode === 'ssh') return 'SSH 工作区暂不支持协商模式'
   const journal = runtime.journal
   if (!journal) return '会话记录尚未初始化，无法启动协商'
   const result = createCoordinator(
@@ -1014,6 +1028,10 @@ async function handleCommand(
       return handleBtwMessageCommand(runtime, command)
     case 'inspect-user-message-edit': {
       try {
+        if (!runtime.session && runtime.journal && !runtimeBusy(runtime)) {
+          const error = await ensureSession(runtime)
+          if (error) return { ok: false, error }
+        }
         if (runtimeBusy(runtime) || !runtime.session) {
           return { ok: false, error: 'Agent 尚未空闲，不能编辑最新消息' }
         }
@@ -1051,7 +1069,7 @@ async function handleCommand(
         preferredConsensusEnabled = false
         return { ok: true }
       }
-      const notReady = checkConsensusReady()
+      const notReady = runtime.workspace.mode === 'ssh' ? 'SSH 工作区暂不支持协商模式' : checkConsensusReady()
       if (notReady) {
         runtime.emit({ type: 'error', message: notReady, recoverable: true })
         return { ok: false }
@@ -1080,6 +1098,10 @@ async function handleCommand(
     case 'check-checkpoint-restore': {
       if (runtimeBusy(runtime)) {
         return { ok: false, error: 'Agent 工作中，请等待当前任务结束后再回滚' }
+      }
+      if (!runtime.session && runtime.journal) {
+        const error = await ensureSession(runtime)
+        if (error) return { ok: false, error }
       }
       if (!runtime.session) return { ok: false, error: '该操作没有可用快照' }
       const result = await runtime.session.checkCheckpointRestore(
@@ -1320,6 +1342,10 @@ async function prepareUserMessageSkills(
   command: UserMessageCommand,
 ): Promise<ActivatedSkill[]> {
   if (command.skills === undefined) return []
+  if (runtime.workspace.mode === 'ssh') {
+    if (command.skills.length) throw new Error('SSH 工作区暂不支持 Skill')
+    return []
+  }
   const modelId = resolveCurrentModelId(runtime)
   if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
@@ -1327,7 +1353,7 @@ async function prepareUserMessageSkills(
   return prepareMessageSkills({
     catalog: skills,
     locators: command.skills,
-    projectDir: runtime.projectDir,
+    projectDir: runtime.localProjectDir,
     contextWindow: resolved.value.entry.capabilities.contextWindow,
     restoredInputIds: command.restoredInputIds,
     pendingInputs: runtime.journal?.pendingUserInputs,
@@ -1890,7 +1916,7 @@ async function setMcpServerConnectionState(
   return mutateConnectionSettings(() =>
     updateMcpServerState({
       globalConfigPath: mcpGlobalConfigPath,
-      projectDir: selectedRuntime().projectDir,
+      projectDir: selectedRuntime().localProjectDir,
     }, request))
 }
 
@@ -1900,7 +1926,7 @@ async function addMcpConnection(
   return mutateConnectionSettings(() =>
     addMcpConfiguredServer({
       globalConfigPath: mcpGlobalConfigPath,
-      projectDir: selectedRuntime().projectDir,
+      projectDir: selectedRuntime().localProjectDir,
     }, request))
 }
 
@@ -1949,7 +1975,7 @@ async function saveMcpSecretHeaderConnection(
     const next = await updateMcpSecretHeader(
       {
         globalConfigPath: mcpGlobalConfigPath,
-        projectDir: selectedRuntime().projectDir,
+        projectDir: selectedRuntime().localProjectDir,
       },
       loadAppConfig(),
       request,
@@ -1987,7 +2013,7 @@ async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSn
   const runtime = selectedRuntime()
   const mcp = await createMcpSettingsSnapshot({
     globalConfigPath: mcpGlobalConfigPath,
-    projectDir: runtime.projectDir,
+    projectDir: runtime.localProjectDir,
     currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
     mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
     mcpOAuthController,
@@ -2002,7 +2028,7 @@ async function resolveGlobalMcpHttpServer(request: McpOAuthRequest) {
   const appConfig = loadAppConfig()
   const configuration = await loadMcpConfiguration({
     globalConfigPath: mcpGlobalConfigPath,
-    projectDir: selectedRuntime().projectDir,
+    projectDir: selectedRuntime().localProjectDir,
     globalSecretHeaders: appConfig?.mcpSecretHeaders,
   })
   const server = configuration.servers.find((candidate) =>
@@ -2045,7 +2071,7 @@ async function openMcpConfigFile(
     const path = resolveMcpConfigPath(
       {
         globalConfigPath: mcpGlobalConfigPath,
-        projectDir: selectedRuntime().projectDir,
+        projectDir: selectedRuntime().localProjectDir,
       },
       request.scope,
     )
@@ -2164,7 +2190,7 @@ async function selectRuntimeWithSnapshot(
   let snapshot: RuntimeSnapshot
   try {
     snapshot = await runtimeSnapshot(runtime)
-    workspaceLifecycle?.assertAvailable(workspaceDisplayDirectory(runtime.workspace))
+    workspaceLifecycle?.assertAvailable(localWorkspaceDirectory(runtime.workspace))
     if (!runtime.sessionId) {
       await newSessionState.set({ runtimeId: runtime.runtimeId, workspace: runtime.workspace })
     }
@@ -2205,7 +2231,7 @@ async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessio
     const runtime = request?.workspace === null
       ? createDraftRuntime(prepareDefaultRuntimeWorkspace(runtimeId, managedWorkspaces), runtimeId)
       : request?.workspace
-        ? createDraftRuntime(await prepareRuntimeWorkspace(request.workspace, worktrees))
+        ? createDraftRuntime(await prepareRuntimeWorkspace(request.workspace, worktrees, sshWorkspaces))
         : await getNewSessionRuntime()
     const snapshot = await selectRuntimeWithSnapshot(runtime)
     const replaced = replacedDraftRuntimeId && runtimeRegistry.get(replacedDraftRuntimeId)
@@ -2262,6 +2288,7 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
     sourceJournal = sourceRuntime?.journal
       ?? await sessions.prepareResume(request.sourceSessionId)
     const sourceWorkspace = sourceJournal.metadataSnapshot.workspace
+    if (sourceWorkspace.mode === 'ssh') throw new Error('SSH 工作区暂不支持创建会话分支')
     if (sourceWorkspace.mode === 'managed') {
       await managedWorkspaces.assertUsable(sourceWorkspace, sourceJournal.sessionId)
     }
@@ -2345,7 +2372,8 @@ async function prepareResumedRuntime(sessionId: string): Promise<DesktopSessionR
       emit: broadcastRuntimeEvent,
     })
     runtime.registerSession()
-    runtime.consensusEnabled = preferredConsensusEnabled
+    runtime.workspaceIO = sshWorkspaces.io(runtime.workspace)
+    runtime.consensusEnabled = runtime.workspace.mode === 'ssh' ? false : preferredConsensusEnabled
     return runtime
   }
   const journal = await sessions.prepareResume(sessionId)
@@ -2372,7 +2400,8 @@ async function prepareRuntimeFromJournal(
     emit: broadcastRuntimeEvent,
   })
   const targetProjectDir = requireRuntimeProjectDir(runtime)
-  runtime.consensusEnabled = preferredConsensusEnabled
+  runtime.workspaceIO = sshWorkspaces.io(runtime.workspace)
+  runtime.consensusEnabled = runtime.workspace.mode === 'ssh' ? false : preferredConsensusEnabled
   runtime.journal = journal
   try {
     if (metadata.workspace.mode === 'worktree') {
@@ -2385,7 +2414,7 @@ async function prepareRuntimeFromJournal(
       await managedWorkspaces.assertUsable(metadata.workspace, journal.sessionId)
     }
     await sessionScratch.ensure(journal.sessionId)
-    if (resolved.ok) {
+    if (resolved.ok && metadata.workspace.mode !== 'ssh') {
       runtime.session = await createMainAgentSession(
         runtime,
         journal,
@@ -2723,6 +2752,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
   sessionSidebarState = new SessionSidebarStateStore(
     join(app.getPath('userData'), 'session-sidebar.json'),
   )
+  sshWorkspaces = new SshWorkspaces(new SshConnections(
+    new SshConnectionStore(join(app.getPath('userData'), 'ssh-connections.json'), configSecretCodec),
+    join(app.getAppPath(), 'resources', 'remote'),
+  ))
   projects = new ProjectStore(join(app.getPath('userData'), 'projects.json'))
   try { await projects.initialize() }
   catch (error) {
@@ -2779,8 +2812,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
     await sessionSidebarState.initialize(new Set(summaries.map((summary) => summary.sessionId)))
     const protectedDirectories = [
-      ...summaries.flatMap(item => item.workspace ? [workspaceDisplayDirectory(item.workspace)] : []),
-      newSessionState.value ? workspaceDisplayDirectory(newSessionState.value.workspace) : null,
+      ...summaries.flatMap(item => item.workspace ? [localWorkspaceDirectory(item.workspace)] : []),
+      newSessionState.value ? localWorkspaceDirectory(newSessionState.value.workspace) : null,
     ].filter((directory): directory is string => directory !== null)
     const worktreeCleanup = await worktrees.cleanupAbandonedDrafts(
       new Set(summaries.flatMap((summary) =>
@@ -2936,6 +2969,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.listSkills, async (_e, runtimeId?: string) => {
     const runtime = runtimeForId(runtimeId)
+    if (runtime.workspace.mode === 'ssh') return { revision: 'ssh', skills: [], diagnostics: [], modelContext: null, omittedCount: 0 }
     const modelId = resolveCurrentModelId(runtime)
     const resolved = modelId
       ? resolveModelConnection(loadAppConfig(), modelId)
@@ -2951,7 +2985,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     const runtime = runtimeForId(runtimeId)
     return createMcpStatusSnapshot({
       globalConfigPath: mcpGlobalConfigPath,
-      projectDir: runtime.projectDir,
+      projectDir: runtime.localProjectDir,
       currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
       mcpSecretHeaders: loadAppConfig()?.mcpSecretHeaders ?? [],
     })
@@ -3045,7 +3079,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     return checkCheckpointFileCurrentMatch(runtimeRegistry.get(request.runtimeId), request.toolUseId, request.path)
   })
   ipcMain.handle(IPC.consensusStatus, () => {
-    const reason = checkConsensusReady()
+    const reason = selectedRuntime().workspace.mode === 'ssh' ? 'SSH 工作区暂不支持协商模式' : checkConsensusReady()
     return { ready: reason === null, reason, enabled: selectedRuntime().consensusEnabled }
   })
   ipcMain.handle(IPC.listSessionSidebar, async (): Promise<SessionSidebarSnapshot> => {
@@ -3113,15 +3147,15 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.forkSession, (_e, request: unknown) => forkSession(request))
   workspaceLifecycle = new WorkspaceLifecycle(managedWorkspaces, worktrees, async () => {
     const persisted = (await sessions.list()).flatMap(item => {
-      const directory = item.workspace ? workspaceDisplayDirectory(item.workspace) : null
+      const directory = item.workspace ? localWorkspaceDirectory(item.workspace) : null
       return directory ? [{ sessionId: item.sessionId as string | null, directory }] : []
     })
     const active = runtimeRegistry.all().flatMap(runtime => {
-      const directory = workspaceDisplayDirectory(runtime.workspace)
+      const directory = localWorkspaceDirectory(runtime.workspace)
       return directory ? [{ sessionId: runtime.sessionId, directory }] : []
     })
     const draft = newSessionState.value
-    const directory = draft ? workspaceDisplayDirectory(draft.workspace) : null
+    const directory = draft ? localWorkspaceDirectory(draft.workspace) : null
     return [...persisted, ...active, ...(directory ? [{ sessionId: null, directory }] : [])]
   })
   registerWorkspaceLifecycleIpc(workspaceLifecycle, async sessionId => {
@@ -3159,7 +3193,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.inspectDraftWorkspace, async (_event, runtimeId: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> => {
     try {
       const runtime = runtimeForId(runtimeId)
-      const directory = runtime.sessionId ? null : workspaceProjectDirectory(runtime.workspace)
+      const directory = runtime.sessionId || runtime.workspace.mode === 'ssh' ? null : workspaceProjectDirectory(runtime.workspace)
       return { ok: true, value: directory ? await worktrees.inspect(directory) : null }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -3201,12 +3235,14 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
 
+  registerSshIpc(sshWorkspaces, projects)
   registerWorkspaceFileIpc(workspaceFiles, runtimeId => {
     const directory = workspaceDisplayDirectory(runtimeForId(runtimeId).workspace)
     if (!directory) throw new Error('当前会话没有工作路径')
     return directory
-  })
-  registerTerminalIpc(terminals, runtimeForId, prepareTerminalDirectory)
+  }, runtimeId => sshWorkspaces.io(runtimeForId(runtimeId).workspace))
+  registerTerminalIpc(terminals, runtimeForId, prepareTerminalDirectory, runtime => runtime.workspace.mode === 'ssh'
+    ? cwd => sshWorkspaces.terminal(runtime, cwd) : undefined)
   createWindow()
 
   app.on('activate', () => {
@@ -3271,5 +3307,5 @@ app.on('will-quit', (event) => {
       mcpOAuthController.close()
         .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
     ]))
-    .finally(() => app.quit())
+    .finally(() => { sshWorkspaces?.connections.close(); app.quit() })
 })

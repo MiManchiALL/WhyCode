@@ -1,12 +1,13 @@
 import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { IPC } from '../shared/ipc.ts'
 import type { DesktopSessionRuntime } from './desktop-session-runtime.ts'
-import { TerminalSessions } from './terminal-sessions.ts'
+import { TerminalSessions, type TerminalPty } from './terminal-sessions.ts'
 
 export function registerTerminalIpc(
   terminals: TerminalSessions,
   runtimeForId: (runtimeId: string) => DesktopSessionRuntime,
   prepareDirectory: (runtime: DesktopSessionRuntime) => Promise<string>,
+  spawnForWorkspace?: (runtime: DesktopSessionRuntime) => ((cwd: string) => Promise<TerminalPty>) | undefined,
 ): void {
   ipcMain.handle(IPC.createTerminal, (event, runtimeId: unknown) => {
     const window = terminalWindow(event)
@@ -21,6 +22,7 @@ export function registerTerminalIpc(
       (terminalId) => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC.terminalClosed, terminalId)
       },
+      spawnForWorkspace?.(runtime),
     )
   })
   ipcMain.handle(IPC.closeTerminal, (event, terminalId: unknown) => {

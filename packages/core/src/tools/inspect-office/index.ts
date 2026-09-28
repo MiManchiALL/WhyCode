@@ -36,7 +36,7 @@ export function createInspectOfficeTool(processor: OfficeProcessor) {
     kind: 'read',
     extractPaths: (input) => [input.path],
     async execute(input, ctx) {
-      const inspection = await processor.inspect(resolveAllowed(ctx, input.path), {
+      const inspection = await processor.inspect(await resolveAllowed(ctx, input.path), {
         startUnit: input.startUnit,
         unitCount: input.unitCount,
         view: input.view,

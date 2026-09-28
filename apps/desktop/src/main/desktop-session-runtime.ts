@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { WorkspaceIO } from '@whycode/core'
 import {
   isStepScopedCoreEvent,
   type AgentSession,
@@ -44,6 +45,8 @@ interface PendingApproval {
  * 共享资源由 Registry/调度器持有；二者不再借用“当前对话”全局变量互相寻址。
  */
 export class DesktopSessionRuntime {
+  workspaceIO?: WorkspaceIO
+  workspaceScratch?: import('./session-scratch.ts').SessionScratchPaths
   readonly runtimeId: string
   readonly routingGate = new UserMessageRoutingGate()
   readonly timeline: ViewTimeline
@@ -124,6 +127,10 @@ export class DesktopSessionRuntime {
   get projectDir(): string | null {
     const binding = this.workspaceBinding
     return binding ? workspaceWorkingDirectory(binding) : null
+  }
+
+  get localProjectDir(): string | null {
+    return this.workspace.mode === 'ssh' ? null : this.projectDir
   }
 
   bindPendingWorktree(binding: WorktreeWorkspaceBinding): void {

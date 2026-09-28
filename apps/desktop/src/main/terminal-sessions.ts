@@ -49,6 +49,7 @@ export class TerminalSessions {
     prepareDirectory: () => Promise<string>,
     publish: TerminalEntry['publish'],
     closed: TerminalEntry['closed'],
+    spawnForWorkspace?: (cwd: string) => Promise<TerminalPty>,
   ): Promise<TerminalInfo> {
     if (this.entries.size >= MAX_TERMINALS) {
       throw new Error(`最多同时打开 ${MAX_TERMINALS} 个终端，请先关闭不再使用的终端`)
@@ -57,7 +58,7 @@ export class TerminalSessions {
     const titles = new Set([...this.entries.values()].map((entry) => entry.info.title))
     while (titles.has(`终端 ${number}`)) number++
     const info: TerminalInfo = { id: randomUUID(), title: `终端 ${number}`, cwd: '' }
-    if (process.platform === 'win32') info.windowsBuild = Number(release().split('.')[2])
+    if (!spawnForWorkspace && process.platform === 'win32') info.windowsBuild = Number(release().split('.')[2])
     const entry: TerminalEntry = {
       ...owner, info, publish, closed,
       pty: null, subscriptions: [], ready: false, outstanding: 0,
@@ -67,7 +68,7 @@ export class TerminalSessions {
     try {
       info.cwd = await prepareDirectory()
       if (!this.has(entry)) throw new Error('终端启动已取消')
-      const pty = await this.spawnPty(info.cwd)
+      const pty = await (spawnForWorkspace ?? this.spawnPty)(info.cwd)
       if (!this.has(entry)) {
         pty.kill()
         throw new Error('终端启动已取消')

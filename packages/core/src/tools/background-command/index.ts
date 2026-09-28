@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { localWorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tool.ts'
 import {
@@ -57,7 +57,8 @@ export function createCommandTools(
       const task = await manager.start({
         sessionId,
         command: command.command,
-        cwd: resolve(ctx.projectDir, command.cwd ?? '.'),
+        cwd: (ctx.workspaceIO ?? localWorkspaceIO).path.resolve(ctx.projectDir, command.cwd ?? '.'),
+        workspaceIO: ctx.workspaceIO,
         timeoutMs: command.timeoutMs,
       })
       if (task.status !== 'running') {

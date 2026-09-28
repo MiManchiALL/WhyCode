@@ -22,12 +22,16 @@ export function prepareDefaultRuntimeWorkspace(
 export async function prepareRuntimeWorkspace(
   target: unknown,
   worktrees: WorktreeManager,
+  ssh?: import('./ssh/workspaces.ts').SshWorkspaces,
 ): Promise<RuntimeWorkspace> {
   if (!isRecord(target) || typeof target.selectedDirectory !== 'string') {
     throw new Error('新会话工作区请求无效')
   }
   if (target.mode === 'local') {
     return localWorkspace(await canonicalDirectory(target.selectedDirectory))
+  }
+  if (target.mode === 'ssh' && typeof target.connectionId === 'string' && ssh) {
+    return ssh.select(target.connectionId, target.selectedDirectory)
   }
   if (!isWorktreeStartRequest(target)) {
     throw new Error('新会话 Worktree 请求无效')

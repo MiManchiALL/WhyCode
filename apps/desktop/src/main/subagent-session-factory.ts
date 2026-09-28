@@ -44,24 +44,30 @@ export async function createSubagentAgentSession(
 ): Promise<AgentSession> {
   const resolved = options.resolveModel(options.manifest.modelId)
   if (!resolved) throw new Error(`子代理模型连接不可用：${options.manifest.modelId}`)
-  const scratch = await options.scratch.ensureSubagent(
-    options.manifest.parentSessionId,
-    options.manifest.id,
-  )
+  const io = options.parentRuntime.workspaceIO
+  const remoteScratch = options.parentRuntime.workspaceScratch
+  const scratch = remoteScratch && io
+    ? { ...remoteScratch, subagentDirectory: io.path.join(remoteScratch.subagentsDirectory, options.manifest.id) }
+    : await options.scratch.ensureSubagent(options.manifest.parentSessionId, options.manifest.id)
+  if (remoteScratch && io) {
+    await io.fs.mkdir(scratch.subagentDirectory, { recursive: true })
+    if ((await io.fs.lstat(scratch.subagentDirectory)).isSymbolicLink()) throw new Error('子代理临时目录不能是符号链接')
+  }
   const parentPermission = options.parentRuntime.session?.permissionSnapshot
   if (!parentPermission) throw new Error('父会话权限上下文已释放')
   const mainTools = [
     options.webSearchTool,
     ...options.createWebPageTools(options.journal),
-    createInspectOfficeTool(options.officeProcessor),
+    ...(!remoteScratch ? [createInspectOfficeTool(options.officeProcessor)] : []),
   ]
   return new AgentSession({
+    workspaceIO: io,
     model: resolved.entry,
     providerConfig: resolved.providerConfig,
     reasoningEffort: options.manifest.reasoningEffort,
     promptContext: {
       projectDir: options.projectDir,
-      osPlatform: process.platform,
+      osPlatform: io?.platform ?? process.platform,
       scratch: {
         rootDir: scratch.subagentDirectory,
         workingDir: scratch.subagentDirectory,
@@ -75,11 +81,11 @@ export async function createSubagentAgentSession(
       },
     },
     mainTools,
-    skillCatalog: options.skills,
+    skillCatalog: remoteScratch ? undefined : options.skills,
     sessionRecorder: options.journal,
-    pdfProcessor: options.pdfProcessor,
-    officeProcessor: options.officeProcessor,
-    captureScreenshot: options.captureScreenshot,
+    pdfProcessor: remoteScratch ? undefined : options.pdfProcessor,
+    officeProcessor: remoteScratch ? undefined : options.officeProcessor,
+    captureScreenshot: remoteScratch ? undefined : options.captureScreenshot,
     initialPermission: {
       mode: options.parentRuntime.permissionMode,
       additionalDirs: [...new Set([
@@ -93,7 +99,7 @@ export async function createSubagentAgentSession(
     },
     userQuestionsEnabled: false,
     scheduleProjectMutation: (_mutation, abortSignal, operation) =>
-      options.hostOperations.runProjectWrite(options.projectDir, abortSignal, operation),
+      options.hostOperations.runProjectWrite(options.projectDir, abortSignal, operation, io?.identity),
     emit: options.emit,
     requestApproval: (request, signal) => options.parentRuntime.requestApproval(request, signal),
   })

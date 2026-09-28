@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { localWorkspaceIO, workspacePathKey, type WorkspaceIO } from '../workspace/io.ts'
 import {
   captureFileState,
   currentFileMatches,
@@ -6,18 +6,15 @@ import {
 } from './file-history.ts'
 import type { CheckpointManifest, FileState } from './types.ts'
 
-function pathKey(path: string): string {
-  const absolute = resolve(path)
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
-
 /** 单次资源回滚事务。manifest 状态提交由上层负责，本类只处理文件系统的原子性。 */
 export class ResourceRestoreTransaction {
   private readonly manifests: CheckpointManifest[]
   private readonly blobDir: string
+  private readonly io: WorkspaceIO
   private readonly safety = new Map<string, FileState>()
 
-  constructor(options: { manifests: CheckpointManifest[]; blobDir: string }) {
+  constructor(options: { manifests: CheckpointManifest[]; blobDir: string; workspaceIO?: WorkspaceIO }) {
+    this.io = options.workspaceIO ?? localWorkspaceIO
     this.manifests = options.manifests
     this.blobDir = options.blobDir
   }
@@ -35,10 +32,10 @@ export class ResourceRestoreTransaction {
     for (const manifest of [...this.manifests].reverse()) {
       for (const resource of [...manifest.resources].reverse()) {
         if (!resource.after) throw new Error('精确文件检查点损坏')
-        const key = pathKey(resource.path)
+        const key = workspacePathKey(this.io, resource.path)
         if (seen.has(key)) continue
         seen.add(key)
-        if (!await currentFileMatches(resource.after)) {
+        if (!await currentFileMatches(resource.after, this.io)) {
           throw new Error(`文件在 Agent 操作后又被修改，已拒绝覆盖：${resource.path}`)
         }
       }
@@ -47,16 +44,16 @@ export class ResourceRestoreTransaction {
 
   async compensate(): Promise<void> {
     for (const state of this.safety.values()) {
-      await restoreFileState(state, this.blobDir)
+      await restoreFileState(state, this.blobDir, this.io)
     }
   }
 
   private async captureSafety(): Promise<void> {
     for (const manifest of this.manifests) {
       for (const resource of manifest.resources) {
-        const key = pathKey(resource.path)
+        const key = workspacePathKey(this.io, resource.path)
         if (!this.safety.has(key)) {
-          this.safety.set(key, await captureFileState(resource.path, this.blobDir))
+          this.safety.set(key, await captureFileState(resource.path, this.blobDir, this.io))
         }
       }
     }
@@ -65,7 +62,7 @@ export class ResourceRestoreTransaction {
   private async applyReverse(): Promise<void> {
     for (const manifest of [...this.manifests].reverse()) {
       for (const resource of [...manifest.resources].reverse()) {
-        await restoreFileState(resource.before, this.blobDir)
+        await restoreFileState(resource.before, this.blobDir, this.io)
       }
     }
   }
@@ -74,11 +71,11 @@ export class ResourceRestoreTransaction {
     const expected = new Map<string, FileState>()
     for (const manifest of [...this.manifests].reverse()) {
       for (const resource of manifest.resources) {
-        expected.set(pathKey(resource.path), resource.before)
+        expected.set(workspacePathKey(this.io, resource.path), resource.before)
       }
     }
     for (const state of expected.values()) {
-      if (!await currentFileMatches(state)) {
+      if (!await currentFileMatches(state, this.io)) {
         throw new Error(`回滚校验失败：${state.path}`)
       }
     }

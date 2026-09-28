@@ -4,6 +4,7 @@ export interface SidebarProject {
   id: string
   name: string
   directory: string
+  remote?: { connectionId: string; target: string; label: string }
   sessionIds: string[]
 }
 

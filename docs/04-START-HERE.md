@@ -10,7 +10,7 @@ WhyCode 是一款 Windows 优先的通用桌面 Agent，尤其擅长代码与工
 
 ## 2. 当前状态
 
-- 主链路已具备完整 Main Agent、权限/审批、Local/managed/Worktree、会话持久化与 Fork、上下文压缩、TaskPlan、协商与子代理。
+- 主链路已具备完整 Main Agent、权限/审批、Local/managed/Worktree 与 SSH 工作区、会话持久化与本地 Fork、上下文压缩、TaskPlan、协商与子代理；SSH 的能力边界见文档二 §7.5。
 - 工具范围已覆盖文件、搜索、命令与后台唤醒、网页、MCP、图片/截图、PDF、Office 和 Skill。
 - Desktop 已形成统一会话侧栏、中央时间线、上下文用量、会话定位轨、输入框以及环境/子代理/任务计划侧栏。
 - 当前开发应以代码和 `01`～`03` 的现状契约为准；本轮未竟事项、验证边界和阻塞只看 `05-暂存区便签.md`。

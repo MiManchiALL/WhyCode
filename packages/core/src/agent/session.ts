@@ -1,6 +1,6 @@
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import { stepCountIs, streamText, tool as aiTool, type ModelMessage } from 'ai'
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, resolve } from 'node:path'
 import { modelMessageText } from '../text.ts'
 import type {
   ContextUsageInfo,
@@ -197,6 +197,7 @@ interface ToolStepContext {
 }
 
 export interface AgentSessionOptions {
+  workspaceIO?: WorkspaceIO
   model: ModelEntry
   providerConfig: ProviderConfig
   reasoningEffort?: ReasoningEffortSelection
@@ -437,11 +438,12 @@ export class AgentSession {
       options.promptContext.discussion,
       options.promptContext.scratch?.rootDir,
     )
+    this.permissions.workspaceIO = options.workspaceIO
     if (options.initialPermission) {
       this.permissions.mode = options.initialPermission.mode
       this.permissions.additionalDirs = [...new Set([
         ...this.permissions.additionalDirs,
-        ...options.initialPermission.additionalDirs.map((path) => resolve(path)),
+        ...options.initialPermission.additionalDirs.map((path) => (options.workspaceIO ?? localWorkspaceIO).path.resolve(path)),
       ])]
       this.permissions.sessionAllowedTools = [...new Set(
         options.initialPermission.sessionAllowedTools,
@@ -457,6 +459,7 @@ export class AgentSession {
       this.checkpoints = new CheckpointManager({
         sessionDir: options.sessionRecorder.checkpointDirectory,
         sessionId: options.sessionRecorder.sessionId,
+        workspaceIO: options.workspaceIO,
       })
     }
   }
@@ -1445,7 +1448,7 @@ export class AgentSession {
       return
     }
     try {
-      const snapshot = await catalog.snapshot(this.options.promptContext.projectDir)
+      const snapshot = await catalog.snapshot(this.options.promptContext.projectDir, this.options.workspaceIO)
       this.options = {
         ...this.options,
         promptContext: { ...this.options.promptContext, subagents: snapshot },
@@ -2118,6 +2121,7 @@ export class AgentSession {
         (messages) => this.messagesForCurrentModel(messages, signal, false),
         this.requestProviderOptions(),
         (retry) => emit({ type: 'model-request-retry', ...retry }),
+        this.options.workspaceIO,
       )
       if (result.summaryText || microcompacted) {
         this.messages = carryMcpToolState(this.messages, result.messages)
@@ -2208,6 +2212,7 @@ export class AgentSession {
         (messages) => this.messagesForCurrentModel(messages, abortSignal, false),
         this.requestProviderOptions(),
         (retry) => this.options.emit({ type: 'model-request-retry', ...retry }),
+        this.options.workspaceIO,
       )
       if (!result.summaryText) {
         this.recordAutoCompactFailure()
@@ -2870,6 +2875,7 @@ export class AgentSession {
     ]
     const imageTools: ToolDefinition[] =
       model.capabilities.supportsImageInput
+      && (!this.options.workspaceIO || this.options.workspaceIO.identity === 'local')
       && this.options.sessionRecorder
       && !this.options.promptContext.discussion
       && !this.protocolRound
@@ -2991,6 +2997,7 @@ export class AgentSession {
         if (abortSignal.aborted) return () => finishTool(toolCallId, TOOL_NOT_STARTED, true)
         // additionalDirs 会在审批中变化，每次调用取最新
         let toolCtx: ToolContext = {
+          workspaceIO: this.options.workspaceIO,
           projectDir: toolProjectDir,
           additionalDirs: this.permissions.additionalDirs,
           abortSignal,
@@ -3026,7 +3033,7 @@ export class AgentSession {
             additionalDirs: [
               ...toolCtx.additionalDirs,
               ...authorization.approvedPaths.map((path) =>
-                isAbsolute(path) ? resolve(path) : resolve(toolProjectDir, path),
+                (this.options.workspaceIO ?? localWorkspaceIO).path.resolve(toolProjectDir, path),
               ),
             ],
           }
@@ -3039,7 +3046,7 @@ export class AgentSession {
             return finishTool(toolCallId, msg, true)
           }
           // 批准与真正开始执行之间仍可能切档；只重查不可被批准覆盖的硬拒绝。
-          const currentPermission = checkToolPermission(def, parsed.value, this.permissions)
+          const currentPermission = await checkToolPermission(def, parsed.value, this.permissions)
           if (currentPermission.behavior === 'deny') {
             const msg = `操作被拒绝：${currentPermission.reason}`
             loopHealth.record(def.name, parsed.value, msg, true)
@@ -3154,7 +3161,7 @@ export class AgentSession {
             // 记录读过的文件（压缩后重注入，防失忆）
             if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
               try {
-                const abs = resolveAllowed(toolCtx, (parsed.value as { path: string }).path)
+                const abs = await resolveAllowed(toolCtx, (parsed.value as { path: string }).path)
                 context.onReadFile?.(abs)
               } catch {
                 /* 越界读取已被权限层处理，这里忽略 */
@@ -3469,6 +3476,7 @@ export class AgentSession {
     message: ModelMessage | null
   }> {
     const snapshot = await loadProjectInstructions({
+      workspaceIO: this.options.workspaceIO,
       homeDir: this.options.promptContext.homeDir,
       projectDir: this.options.promptContext.projectDir,
     })

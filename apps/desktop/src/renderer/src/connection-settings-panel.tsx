@@ -1,3 +1,4 @@
+import { SshSettings } from './ssh-settings.tsx'
 import { RetainedWorkspacesSettings } from './retained-workspaces-settings.tsx'
 import type { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import { useState } from 'react'
@@ -44,6 +45,7 @@ import { GeneralSettings } from './general-settings.tsx'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 
 interface ConnectionSettingsPanelProps {
+  initialSection?: 'general' | 'ssh'
   snapshot: ConnectionSettingsSnapshot
   workspaceCleanup: RetainedWorkspaceCleanup
   conversationFontSize: number
@@ -58,7 +60,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const feedback = useConversationFeedback()
   const [pending, setPending] = useState(false)
   const [oauthPending, setOauthPending] = useState(false)
-  const [section, setSection] = useState<SettingsSectionId>('general')
+  const [section, setSection] = useState<SettingsSectionId>(props.initialSection ?? 'general')
 
   const requestClose = () => {
     if (!pending && !oauthPending) setOpen(false)
@@ -165,6 +167,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 label="MCP"
                 onClick={() => setSection('mcp')}
               />
+              <SettingsNavItem active={section === 'ssh'} icon={<Globe2 size={16} />} label="SSH 连接" onClick={() => setSection('ssh')} />
               <SettingsNavItem active={section === 'workspaces'} icon={<Folder size={16} />} label="保留工作区" onClick={() => setSection('workspaces')} />
             </nav>
             <div className="mt-auto flex items-center gap-2 rounded-[var(--wc-menu-radius)] bg-black/[0.035] px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">
@@ -181,7 +184,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     <Dialog.Title className="text-xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
                     <Dialog.Description className="mt-1.5 text-[13px] leading-5 text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
                   </div>
-                  {section !== 'workspaces' && section !== 'general' && <SettingsButton
+                  {section !== 'ssh' && section !== 'workspaces' && section !== 'general' && <SettingsButton
                     onClick={() => void refresh()}
                     disabled={pending || oauthPending}
                   >
@@ -191,6 +194,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 </header>
 
                 <div className="space-y-8">
+                  {section === 'ssh' && <SshSettings />}
                   {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
                   {section === 'models' && (
@@ -312,9 +316,10 @@ function BuiltInProvidersEditor(props: {
   )
 }
 
-type SettingsSectionId = 'general' | 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp' | 'workspaces'
+type SettingsSectionId = 'ssh' | 'general' | 'models' | 'auxiliary' | 'consensus' | 'search' | 'mcp' | 'workspaces'
 
 const SETTINGS_META: Record<SettingsSectionId, { title: string; description: string }> = {
+  ssh: { title: 'SSH 连接', description: '管理服务器连接与远端项目。模型与会话记录保存在这台电脑。' },
   general: { title: '通用', description: '调整 WhyCode 的通用偏好。' },
   workspaces: { title: '保留工作区', description: '最后一个关联会话删除后留下的工作目录。重新关联会话后，会从此列表移出。' },
   models: {

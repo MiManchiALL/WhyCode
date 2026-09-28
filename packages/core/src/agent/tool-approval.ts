@@ -39,14 +39,17 @@ export type ToolAuthorization =
   | { approved: true; approvedPaths: string[] }
   | { approved: false; message: string }
 
-interface PendingToolApproval {
+interface QueuedToolApproval {
   def: ToolDefinition
   input: Record<string, unknown>
   toolCtx: ToolContext
   toolCallId: string
-  decision: Extract<ReturnType<typeof checkToolAuthorization>, { behavior: 'ask' }>
   resolve: (authorization: ToolAuthorization) => void
   reject: (error: unknown) => void
+}
+
+interface PendingToolApproval extends QueuedToolApproval {
+  decision: Extract<Awaited<ReturnType<typeof checkToolAuthorization>>, { behavior: 'ask' }>
 }
 
 interface StepToolApprovalBatcherOptions {
@@ -61,7 +64,7 @@ interface StepToolApprovalBatcherOptions {
  * 再把同一事件循环批次中的 ask 合成一张精确清单；批准不会扩张到未展示的调用。
  */
 export class StepToolApprovalBatcher {
-  private pending: PendingToolApproval[] = []
+  private pending: QueuedToolApproval[] = []
   private scheduled = false
   private draining = false
   private readonly options: StepToolApprovalBatcherOptions
@@ -77,15 +80,8 @@ export class StepToolApprovalBatcher {
     toolCallId: string,
   ): Promise<ToolAuthorization> {
     if (toolCtx.abortSignal.aborted) return Promise.resolve(cancelledAuthorization())
-    const decision = checkToolAuthorization(def, input, this.options.permissions())
-    if (decision.behavior === 'deny') {
-      return Promise.resolve(deniedAuthorization(decision.reason))
-    }
-    if (decision.behavior === 'allow') {
-      return Promise.resolve(allowedAuthorization(def, input))
-    }
     return new Promise<ToolAuthorization>((resolve, reject) => {
-      this.pending.push({ def, input, toolCtx, toolCallId, decision, resolve, reject })
+      this.pending.push({ def, input, toolCtx, toolCallId, resolve, reject })
       this.scheduleDrain()
     })
   }
@@ -103,8 +99,9 @@ export class StepToolApprovalBatcher {
   private async drain(): Promise<void> {
     if (this.draining || this.pending.length === 0) return
     this.draining = true
-    const batch = this.refreshPending(this.pending.splice(0))
+    const queued = this.pending.splice(0)
     try {
+      const batch = await this.refreshPending(queued)
       if (batch.length > 0) {
         const suggestion = sharedApprovalSuggestion(batch)
         const response = await this.requestBatch(batch, suggestion)
@@ -112,27 +109,31 @@ export class StepToolApprovalBatcher {
           && !batch[0]!.toolCtx.abortSignal.aborted) {
           this.options.applySuggestion(suggestion)
         }
-        this.settleBatch(batch, response)
+        await this.settleBatch(batch, response)
       }
     } catch (error) {
-      for (const pending of batch) pending.reject(error)
+      for (const pending of queued) pending.reject(error)
     } finally {
       this.draining = false
       if (this.pending.length > 0) this.scheduleDrain()
     }
   }
 
-  private refreshPending(queued: PendingToolApproval[]): PendingToolApproval[] {
-    return queued.flatMap((pending) => {
+  private async refreshPending(queued: QueuedToolApproval[]): Promise<PendingToolApproval[]> {
+    return (await Promise.all(queued.map(async (pending) => {
       if (pending.toolCtx.abortSignal.aborted) {
         pending.resolve(cancelledAuthorization())
         return []
       }
-      const latest = checkToolAuthorization(
+      const latest = await checkToolAuthorization(
         pending.def,
         pending.input,
         this.options.permissions(),
       )
+      if (pending.toolCtx.abortSignal.aborted) {
+        pending.resolve(cancelledAuthorization())
+        return []
+      }
       if (latest.behavior === 'deny') {
         pending.resolve(deniedAuthorization(latest.reason))
         return []
@@ -141,9 +142,8 @@ export class StepToolApprovalBatcher {
         pending.resolve(allowedAuthorization(pending.def, pending.input))
         return []
       }
-      pending.decision = latest
-      return [pending]
-    })
+      return [{ ...pending, decision: latest }]
+    }))).flat()
   }
 
   private async requestBatch(
@@ -161,17 +161,19 @@ export class StepToolApprovalBatcher {
     }
   }
 
-  private settleBatch(
+  private async settleBatch(
     batch: readonly PendingToolApproval[],
     response: ApprovalResponse,
-  ): void {
+  ): Promise<void> {
     for (const pending of batch) {
       if (pending.toolCtx.abortSignal.aborted) {
         pending.resolve(cancelledAuthorization())
         continue
       }
-      const latest = checkToolPermission(pending.def, pending.input, this.options.permissions())
-      if (latest.behavior === 'deny') {
+      const latest = await checkToolPermission(pending.def, pending.input, this.options.permissions())
+      if (pending.toolCtx.abortSignal.aborted) {
+        pending.resolve(cancelledAuthorization())
+      } else if (latest.behavior === 'deny') {
         pending.resolve(deniedAuthorization(latest.reason))
       } else if (!response.approved) {
         pending.resolve({

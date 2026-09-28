@@ -47,7 +47,7 @@ export function createRenderOfficeTool(options: {
     requiresStandaloneStep: true,
     extractPaths: (input) => [input.path],
     async execute(input, ctx) {
-      const source = resolveAllowed(ctx, input.path)
+      const source = await resolveAllowed(ctx, input.path)
       const outputDirectory = await mkdtemp(join(tmpdir(), 'whycode-office-render-'))
       const imported: ImageAttachment[] = []
       try {

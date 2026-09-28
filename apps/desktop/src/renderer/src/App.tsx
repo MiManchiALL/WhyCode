@@ -189,6 +189,7 @@ export function App() {
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<'general' | 'ssh'>('general')
   const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettingsSnapshot | null>(null)
@@ -1437,7 +1438,18 @@ export function App() {
   }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions, draftStorageError])
 
   const pickProject = useCallback((projectId?: string) => {
+    if (projectId === 'ssh') {
+      setSettingsSection('ssh')
+      void window.whycode.connectionSettings().then(snapshot => { setConnectionSettings(snapshot); setShowConnectionSettings(true) }).catch(error => showError(String(error)))
+      return
+    }
     if (!beginSessionTransition()) return
+    const project = projects.find(item => item.id === projectId)
+    if (project?.remote) {
+      void activateNewSession({ mode: 'ssh', connectionId: project.remote.connectionId, selectedDirectory: project.directory })
+        .catch(error => showError(String(error))).finally(endSessionTransition)
+      return
+    }
     void window.whycode.pickProjectDir(projectId).then(async (result) => {
       if (!result.ok) { showError(result.error); return }
       const selectedDirectory = result.value
@@ -1452,6 +1464,7 @@ export function App() {
     }).finally(endSessionTransition)
   }, [
     activateNewSession,
+    projects,
     showError,
     beginSessionTransition,
     endSessionTransition,
@@ -1753,6 +1766,7 @@ export function App() {
   }, [reasoningEffort, sendRuntimeCommand])
 
   const openConnectionSettings = useCallback(() => {
+    setSettingsSection('general')
     void window.whycode.connectionSettings().then((snapshot) => {
       setConnectionSettings(snapshot)
       setShowConnectionSettings(true)
@@ -1764,12 +1778,16 @@ export function App() {
   const openCurrentWorkspaceFolder = useCallback(() => {
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId) return
+    if (workspace.mode === 'ssh') {
+      showRightPanelPage({ kind: 'workspace', expanded: [] })
+      return
+    }
     void window.whycode.openWorkspaceFolder(targetRuntimeId).then((result) => {
       if (!result.ok) showError(result.error)
     }).catch((error) => {
       showError(`打开工作文件夹失败：${error instanceof Error ? error.message : String(error)}`)
     })
-  }, [showError])
+  }, [showError, workspace.mode, showRightPanelPage])
 
   const prepareCommitPrompt = useCallback(() => {
     const prompt = '请检查当前 Worktree 的改动，先总结将要提交的内容，再创建合适的提交；如果已经配置远程且适合推送，再推送当前分支。'
@@ -2143,6 +2161,7 @@ export function App() {
       <section className="wc-shell-panel flex min-w-0 flex-1 flex-col bg-[var(--wc-surface)]">
         <div className="contents" inert={panelFullscreen}>
           <TaskHeader
+            workspaceLabel={workspace.mode === 'ssh' ? workspace.label : undefined}
             sessionId={loadingConversation ? resumingSessionId : sessionIdRef.current}
             onRename={renameSession}
             title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
@@ -2531,6 +2550,7 @@ export function App() {
 
             >
               <RightPanel
+                remote={workspace.mode === 'ssh'}
                 active={rightPanelState.open}
                 runtimeId={runtimeId}
                 refreshRevision={`${view.fileSystemRevision}:${filePreviewInteractionRevision}`}
@@ -2557,11 +2577,12 @@ export function App() {
 
       {showConnectionSettings && connectionSettings && (
         <ConnectionSettingsPanel
+          initialSection={settingsSection}
           snapshot={connectionSettings}
           workspaceCleanup={workspaceCleanup}
           conversationFontSize={conversationFontSize}
           onConversationFontSizeChange={setConversationFontSize}
-          onClose={() => setShowConnectionSettings(false)}
+          onClose={() => { setShowConnectionSettings(false); void refreshSessions() }}
           onChanged={applyConnectionSettings}
           onError={showError}
         />

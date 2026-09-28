@@ -12,7 +12,10 @@ export const PERMISSION_MODES: { id: PermissionMode; label: string }[] = [
   { id: 'auto', label: '全自动' },
 ]
 
+import type { WorkspaceIO } from '../workspace/io.ts'
+
 export interface PermissionContext {
+  workspaceIO?: WorkspaceIO
   mode: PermissionMode
   /** 当前会话的真实工作目录。 */
   projectDir: string

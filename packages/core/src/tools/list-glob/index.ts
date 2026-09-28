@@ -1,5 +1,4 @@
-import { readdir } from 'node:fs/promises'
-import { relative } from 'node:path'
+import { localWorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
@@ -26,7 +25,10 @@ export const listDirTool = buildTool({
   kind: 'read',
   extractPaths: (input) => [input.path],
   async execute(input, ctx) {
-    const abs = resolveAllowed(ctx, input.path)
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { readdir } = io.fs
+
+    const abs = await resolveAllowed(ctx, input.path)
     const entries = await readdir(abs, { withFileTypes: true })
     const all = entries
       .filter((entry) => !IGNORED_DIRS.has(entry.name))
@@ -62,7 +64,10 @@ export const globTool = buildTool({
   kind: 'read',
   extractPaths: (input) => (input.path ? [input.path] : []),
   async execute(input, ctx) {
-    const root = resolveAllowed(ctx, input.path ?? '.')
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { relative } = io.path
+
+    const root = await resolveAllowed(ctx, input.path ?? '.')
     const offset = input.offset ?? 0
     const limit = input.limit ?? DEFAULT_GLOB_LIMIT
     const requested = offset + limit + 1
@@ -71,20 +76,21 @@ export const globTool = buildTool({
       root,
       ctx.abortSignal,
       requested,
+      io,
     )
 
     let matches: string[]
     let scanTruncated = false
     if (rg) {
-      matches = rg.lines.map((path) => displayToolPath(ctx.projectDir, root, path))
+      matches = rg.lines.map((path) => displayToolPath(ctx.projectDir, root, path, io))
       scanTruncated = rg.truncated
     } else {
-      const collected = await collectFiles(root, ctx.abortSignal)
+      const collected = await collectFiles(root, ctx.abortSignal, io)
       const matcher = globToRegExp(input.pattern.replaceAll('\\', '/'))
       matches = collected.files
         .map((path) => ({
           relative: relative(root, path).replaceAll('\\', '/'),
-          display: displayToolPath(ctx.projectDir, root, relative(root, path)),
+          display: displayToolPath(ctx.projectDir, root, relative(root, path), io),
         }))
         .filter(({ relative: path }) => matcher.test(path))
         .map(({ display }) => display)

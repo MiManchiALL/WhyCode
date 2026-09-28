@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { validateSessionId } from '@whycode/core'
+import { validateSessionId, type WorkspaceBinding } from '@whycode/core'
 import { MAX_PROJECT_NAME_LENGTH, normalizeProjectName, type SidebarProject } from '../shared/projects.ts'
 import { workspaceProjectDirectory, type RuntimeWorkspace } from '../shared/workspace.ts'
 import { samePath } from './workspace-path.ts'
@@ -37,7 +37,7 @@ export class ProjectStore {
     if (!(await stat(canonical)).isDirectory()) throw new Error('请选择文件夹')
     let result!: SidebarProject
     await this.update(projects => {
-      const existing = projects.find(item => samePath(item.directory, canonical))
+      const existing = projects.find(item => !item.remote && samePath(item.directory, canonical))
       if (existing) { result = existing; return projects }
       const name = normalizeProjectName((basename(canonical) || canonical).slice(0, MAX_PROJECT_NAME_LENGTH))
       result = { id: randomUUID(), name, directory: canonical, sessionIds: [] }
@@ -54,6 +54,23 @@ export class ProjectStore {
     })
   }
 
+  async addRemote(binding: Extract<WorkspaceBinding, { mode: 'ssh' }>): Promise<SidebarProject> {
+    let result!: SidebarProject
+    await this.update(projects => {
+      const existing = projects.find(item => item.remote?.target === binding.target && item.directory === binding.workingDirectory)
+      if (existing) {
+        result = { ...existing, remote: { connectionId: binding.connectionId, target: binding.target, label: binding.label } }
+        return projects.map(item => item === existing ? result : item)
+      }
+      const name = normalizeProjectName((binding.workingDirectory.split('/').filter(Boolean).at(-1) ?? binding.label).slice(0, MAX_PROJECT_NAME_LENGTH))
+      result = { id: randomUUID(), name,
+        directory: binding.workingDirectory, sessionIds: [],
+        remote: { connectionId: binding.connectionId, target: binding.target, label: binding.label } }
+      return [...projects, result]
+    })
+    return structuredClone(result)
+  }
+
   remove(id: unknown): Promise<void> {
     return this.update(projects => {
       this.get(id)
@@ -65,7 +82,9 @@ export class ProjectStore {
     validateSessionId(sessionId)
     const directory = workspaceProjectDirectory(workspace)
     return this.update(projects => {
-      const project = directory && projects.find(item => samePath(item.directory, directory))
+      const project = directory && projects.find(item => workspace.mode === 'ssh'
+        ? item.remote?.target === workspace.target && item.directory === directory
+        : !item.remote && samePath(item.directory, directory))
       if (!project || project.sessionIds.includes(sessionId)) return projects
       return projects.map(item => item === project ? { ...item, sessionIds: [...item.sessionIds, sessionId] } : item)
     })
@@ -113,14 +132,19 @@ function parseProjects(value: unknown): SidebarProject[] {
     if (!item || typeof item !== 'object' || typeof item.id !== 'string'
       || typeof item.directory !== 'string' || !isAbsolute(item.directory) || !Array.isArray(item.sessionIds)) return invalid()
     validateSessionId(item.id)
-    if (ids.has(item.id) || projects.some(project => samePath(project.directory, item.directory))) return invalid()
+    if (item.remote && (typeof item.remote.connectionId !== 'string' || typeof item.remote.target !== 'string' || typeof item.remote.label !== 'string' || !item.directory.startsWith('/'))) return invalid()
+    if (item.remote) validateSessionId(item.remote.connectionId)
+    if (ids.has(item.id) || projects.some(project => item.remote
+      ? project.remote?.target === item.remote.target && project.directory === item.directory
+      : !project.remote && samePath(project.directory, item.directory))) return invalid()
     ids.add(item.id)
     for (const id of item.sessionIds) {
       if (typeof id !== 'string' || sessionIds.has(id)) return invalid()
       validateSessionId(id)
       sessionIds.add(id)
     }
-    projects.push({ id: item.id, name: normalizeProjectName(item.name), directory: item.directory, sessionIds: item.sessionIds })
+    projects.push({ id: item.id, name: normalizeProjectName(item.name), directory: item.directory, sessionIds: item.sessionIds,
+      ...(item.remote ? { remote: { connectionId: item.remote.connectionId, target: item.remote.target, label: item.remote.label } } : {}) })
   }
   return projects
 }

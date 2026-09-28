@@ -1,5 +1,4 @@
-import { createReadStream } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { createInterface } from 'node:readline'
 import { z } from 'zod'
 import { unicodeSafePrefix } from '../../text.ts'
@@ -13,8 +12,8 @@ const MAX_LINES = 1_000
 const MAX_LINE_CHARS = 2_000
 const BINARY_PROBE_BYTES = 512
 
-async function isBinaryFile(path: string): Promise<boolean> {
-  const handle = await open(path, 'r')
+async function isBinaryFile(path: string, io: WorkspaceIO): Promise<boolean> {
+  const handle = await io.fs.open(path, 'r')
   try {
     const buffer = Buffer.alloc(BINARY_PROBE_BYTES)
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
@@ -44,14 +43,15 @@ export const readFileTool = buildTool({
   kind: 'read',
   extractPaths: (input) => [input.path],
   async execute(input, ctx) {
-    const absolute = resolveAllowed(ctx, input.path)
-    if (await isBinaryFile(absolute)) {
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const absolute = await resolveAllowed(ctx, input.path)
+    if (await isBinaryFile(absolute, io)) {
       return { data: `无法按文本读取二进制文件：${input.path}`, isError: true }
     }
 
     const startLine = input.offset ?? 1
     const limit = input.limit ?? MAX_LINES
-    const stream = createReadStream(absolute, { encoding: 'utf8' })
+    const stream = io.fs.createReadStream(absolute, { encoding: 'utf8' })
     const lines = createInterface({ input: stream, crlfDelay: Infinity })
     const output: string[] = []
     let lineNumber = 0

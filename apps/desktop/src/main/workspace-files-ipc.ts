@@ -3,7 +3,8 @@ import { IPC } from '../shared/ipc.ts'
 import { PREVIEW_SCHEME, type OpenWorkspaceFileRequest, type ReadWorkspaceFileRequest, type WorkspaceFileResult } from '../shared/workspace-files.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
 
-export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (runtimeId: string) => string): void {
+export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (runtimeId: string) => string,
+  ioFor?: (runtimeId: string) => import('@whycode/core').WorkspaceIO): void {
   protocol.handle(PREVIEW_SCHEME, request => files.response(request))
   ipcMain.handle(IPC.openWorkspaceFile, async (event, request: OpenWorkspaceFileRequest): Promise<WorkspaceFileResult> => {
     try {
@@ -12,7 +13,7 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
         || !['directory', 'file'].includes(request.kind)) throw new Error('文件浏览请求无效')
       const view = await files.open(owner.id, request, directoryFor(request.runtimeId), id => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC.workspaceFileChanged, { id })
-      })
+      }, ioFor?.(request.runtimeId))
       if (owner.isDestroyed()) { files.close(owner.id, view.id); throw new Error('窗口已关闭') }
       return { ok: true, view }
     } catch (error) { return { ok: false, error: errorMessage(error) } }

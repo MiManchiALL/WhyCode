@@ -51,6 +51,13 @@ export const worktreeWorkspaceBindingSchema = z.object({
 })
 
 export const workspaceBindingSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('ssh'),
+    connectionId: z.string().uuid(),
+    target: z.string().min(1),
+    label: z.string().min(1),
+    workingDirectory: z.string().startsWith('/'),
+  }),
   noWorkspaceBindingSchema,
   localWorkspaceBindingSchema,
   managedWorkspaceBindingSchema,
@@ -69,7 +76,7 @@ export function localWorkspace(workingDirectory: string | null): WorkspaceBindin
 
 export function workspaceWorkingDirectory(binding: WorkspaceBinding): string | null {
   if (binding.mode === 'none') return null
-  if (binding.mode === 'local' || binding.mode === 'managed') {
+  if (binding.mode === 'local' || binding.mode === 'managed' || binding.mode === 'ssh') {
     return binding.workingDirectory
   }
   if (binding.relativeWorkingDirectory === '.') return binding.worktreeDirectory

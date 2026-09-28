@@ -6,6 +6,7 @@ import {
 import type { ImageAttachment, ImageTransform } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ToolFileChange } from './file-changes.ts'
+import type { WorkspaceIO } from '../workspace/io.ts'
 
 /**
  * WhyCode 工具接口。内置工具继续用 Zod；运行时工具可直接使用带验证器的 JSON Schema。
@@ -51,6 +52,8 @@ export interface ToolDefinition<
 export type ToolCheckpointScope = { kind: 'exact-files'; paths: string[] }
 
 export interface ToolContext {
+  /** Workspace operations use this target; omitted for local tools. */
+  workspaceIO?: WorkspaceIO
   /** 项目根目录（所有相对路径的基准） */
   projectDir: string
   /** 本会话固定 scratch 与额外授权目录（与权限上下文同步） */

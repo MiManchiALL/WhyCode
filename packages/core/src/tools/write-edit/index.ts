@@ -1,5 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { localWorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
@@ -23,23 +22,29 @@ export const writeFileTool = buildTool({
   isReadOnly: false,
   kind: 'edit',
   extractPaths: (input) => [input.path],
-  checkpointScope: (input, ctx) => ({
+  checkpointScope: async (input, ctx) => ({
     kind: 'exact-files',
-    paths: [resolveAllowed(ctx, input.path)],
+    paths: [await resolveAllowed(ctx, input.path)],
   }),
   async renderDiff(input, ctx) {
-    const abs = resolveAllowed(ctx, input.path)
-    const old = await readFile(abs, 'utf-8').catch(() => '')
+    const { readFile } = (ctx.workspaceIO ?? localWorkspaceIO).fs
+
+    const abs = await resolveAllowed(ctx, input.path)
+    const old = await readFile(abs, 'utf8').catch(() => '')
     return makeDiff(input.path, old, input.content)
   },
   async execute(input, ctx) {
-    const abs = resolveAllowed(ctx, input.path)
-    const old = await readFile(abs, 'utf-8').catch((error: NodeJS.ErrnoException) => {
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { readFile, writeFile, mkdir } = io.fs
+    const { dirname } = io.path
+
+    const abs = await resolveAllowed(ctx, input.path)
+    const old = await readFile(abs, 'utf8').catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return ''
       throw error
     })
     await mkdir(dirname(abs), { recursive: true })
-    await writeFile(abs, input.content, 'utf-8')
+    await writeFile(abs, input.content, 'utf8')
     return {
       data: `已写入 ${input.path}`,
       isError: false,

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
+import { localWorkspaceIO, workspacePathKey, type WorkspaceIO } from '../workspace/io.ts'
+import { isUnknownWorkspaceOutcome } from '../workspace/errors.ts'
 import type { ToolCheckpointScope } from '../tools/tool.ts'
 import { describeFileChange, type ToolFileChange } from '../tools/file-changes.ts'
 import {
@@ -20,6 +21,7 @@ import {
 } from './types.ts'
 
 export interface CheckpointManagerOptions {
+  workspaceIO?: WorkspaceIO
   sessionDir: string
   sessionId: string
 }
@@ -52,13 +54,8 @@ type RestoreCheckpointPlan =
       result: RestoreCheckpointResult
     }
 
-function pathKey(path: string): string {
-  const absolute = resolve(path)
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
-
-function uniquePaths(paths: string[]): string[] {
-  return [...new Map(paths.map((path) => [pathKey(path), resolve(path)])).values()]
+function uniquePaths(paths: string[], io: WorkspaceIO): string[] {
+  return [...new Map(paths.map((path) => [workspacePathKey(io, path), io.path.resolve(path)])).values()]
 }
 
 function sameFileState(left: FileState, right: FileState): boolean {
@@ -73,10 +70,13 @@ function sameFileState(left: FileState, right: FileState): boolean {
  */
 export class CheckpointManager {
   private readonly sessionId: string
+  private readonly io: WorkspaceIO
+  private pathKey = (path: string): string => workspacePathKey(this.io, path)
   private readonly store: CheckpointManifestStore
   private disabledReason: string | null = null
 
   constructor(options: CheckpointManagerOptions) {
+    this.io = options.workspaceIO ?? localWorkspaceIO
     this.sessionId = options.sessionId
     this.store = new CheckpointManifestStore(options.sessionDir)
   }
@@ -95,10 +95,10 @@ export class CheckpointManager {
       const previous = await this.store.list()
       const id = randomUUID()
       const resources: CheckpointResource[] = await Promise.all(
-        uniquePaths(scope.paths).map(async (path) => ({
+        uniquePaths(scope.paths, this.io).map(async (path) => ({
           kind: 'exact-file' as const,
           path,
-          before: await captureFileState(path, this.store.blobDir),
+          before: await captureFileState(path, this.store.blobDir, this.io),
         })),
       )
       if (resources.length === 0) {
@@ -151,7 +151,7 @@ export class CheckpointManager {
       if (!manifest || manifest.status !== 'pending') return null
       const resources: CheckpointResource[] = []
       for (const resource of manifest.resources) {
-        const after = await captureFileState(resource.path, this.store.blobDir)
+        const after = await captureFileState(resource.path, this.store.blobDir, this.io)
         if (!sameFileState(resource.before, after)) resources.push({ ...resource, after })
       }
       if (resources.length === 0) {
@@ -186,7 +186,7 @@ export class CheckpointManager {
     const manifests = (await this.store.list()).filter(previous =>
       previous.turnId === manifest.turnId && previous.sequence <= manifest.sequence
       && previous.status === 'ready' && previous.coverage === 'complete')
-    return this.compareFileChanges(manifests, new Set(manifest.resources.map(resource => pathKey(resource.path))))
+    return this.compareFileChanges(manifests, new Set(manifest.resources.map(resource => this.pathKey(resource.path))))
   }
 
   /** 按可见工具的检查点读取历史净差异，不访问当前工作区，也不扫描其它会话。 */
@@ -209,7 +209,7 @@ export class CheckpointManager {
   }
 
   private async compareFileChanges(manifests: readonly CheckpointManifest[], paths?: ReadonlySet<string>): Promise<Map<string, ToolFileChange | null>> {
-    const resources = fileChangeResources(manifests, paths)
+    const resources = fileChangeResources(manifests, this.io, paths)
     const changes = new Map<string, ToolFileChange | null>()
     for (const [key, resource] of resources) {
       changes.set(key, null)
@@ -267,6 +267,7 @@ export class CheckpointManager {
     const transaction = new ResourceRestoreTransaction({
       manifests: plan.manifests,
       blobDir: this.store.blobDir,
+      workspaceIO: this.io,
     })
     let hookStarted = false
     try {
@@ -281,6 +282,7 @@ export class CheckpointManager {
       }
     } catch (error) {
       const compensationErrors: unknown[] = []
+      if (isUnknownWorkspaceOutcome(error)) return { ok: false, turnId: plan.turnId, error: error.message }
       if (hookStarted && hooks?.compensate) {
         await hooks.compensate().catch((compensation) => compensationErrors.push(compensation))
       }
@@ -317,6 +319,7 @@ export class CheckpointManager {
       await new ResourceRestoreTransaction({
         manifests: plan.manifests,
         blobDir: this.store.blobDir,
+      workspaceIO: this.io,
       }).validate()
       return {
         ok: true,
@@ -378,7 +381,7 @@ export class CheckpointManager {
   async filePreview(target: string | readonly string[], path: string): Promise<CheckpointFilePreview | null> {
     const resource = typeof target === 'string'
       ? await this.filePreviewResource(target, path)
-      : fileChangeResources(await this.fileChangeManifests(target), new Set([pathKey(path)])).get(pathKey(path))
+      : fileChangeResources(await this.fileChangeManifests(target), this.io, new Set([this.pathKey(path)])).get(this.pathKey(path))
     if (!resource?.after) return null
     const [before, after] = await Promise.all([
       readFileStatePreview(resource.before, this.store.blobDir),
@@ -391,7 +394,7 @@ export class CheckpointManager {
   async filePreviewMatchesCurrent(toolUseId: string, path: string): Promise<boolean | null> {
     const resource = await this.filePreviewResource(toolUseId, path)
     if (!resource?.after) return null
-    return currentFileMatches(resource.after)
+    return currentFileMatches(resource.after, this.io)
   }
 
   private async filePreviewResource(
@@ -403,15 +406,15 @@ export class CheckpointManager {
         && item.coverage === 'complete'
         && item.toolUseId === toolUseId,
     )
-    return manifest?.resources.find((item) => pathKey(item.path) === pathKey(path)) ?? null
+    return manifest?.resources.find((item) => this.pathKey(item.path) === this.pathKey(path)) ?? null
   }
 }
 
-function fileChangeResources(manifests: readonly CheckpointManifest[], paths?: ReadonlySet<string>): Map<string, CheckpointResource> {
+function fileChangeResources(manifests: readonly CheckpointManifest[], io: WorkspaceIO, paths?: ReadonlySet<string>): Map<string, CheckpointResource> {
   const resources = new Map<string, CheckpointResource>()
   for (const manifest of manifests) {
     for (const resource of manifest.resources) {
-      const key = pathKey(resource.path)
+      const key = workspacePathKey(io, resource.path)
       if (paths && !paths.has(key)) continue
       resources.set(key, { ...resource, before: resources.get(key)?.before ?? resource.before })
     }

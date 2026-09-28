@@ -12,6 +12,7 @@ interface TaskHeaderProps {
   disabled?: boolean
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
+  workspaceLabel?: string
   backgroundTasks: readonly BackgroundTaskSummary[]
   rightPanelOpen: boolean
   onOpenWorkspaceFolder: () => void
@@ -23,6 +24,7 @@ export function TaskHeader(props: TaskHeaderProps) {
     || props.workspaceMode === 'managed'
     || props.workspaceMode === 'worktree'
     || props.workspaceMode === 'pending-worktree'
+    || props.workspaceMode === 'ssh'
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--wc-line)] bg-[var(--wc-surface)] px-4">
       <div className="flex min-w-0 items-center gap-2.5 overflow-hidden">
@@ -38,7 +40,7 @@ export function TaskHeader(props: TaskHeaderProps) {
             : '发送首条消息后会创建默认工作目录'}
         >
           <FolderOpen size={14} className="shrink-0" />
-          <span className="truncate">{props.projectDir ?? '未选择项目'}</span>
+          <span className="truncate">{props.workspaceLabel ? `${props.workspaceLabel} · ` : ''}{props.projectDir ?? '未选择项目'}</span>
         </button>
         <WorkspaceBadge mode={props.workspaceMode} />
       </div>
@@ -61,6 +63,7 @@ export function TaskHeader(props: TaskHeaderProps) {
 }
 
 function WorkspaceBadge({ mode }: { mode: RuntimeWorkspace['mode'] }) {
+  if (mode === 'ssh') return <span className="shrink-0 rounded-lg bg-[var(--wc-blue)] px-2 py-1 wc-type-tiny text-[var(--wc-blue-ink)]">SSH</span>
   if (mode === 'worktree') {
     return <span className="shrink-0 rounded-lg bg-[var(--wc-sage)] px-2 py-1 wc-type-tiny font-medium text-[var(--wc-sage-ink)]">Worktree</span>
   }

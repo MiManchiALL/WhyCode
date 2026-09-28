@@ -54,7 +54,7 @@ export class WorkspaceLifecycle {
   }
 
   async preview(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<WorkspaceDeletionPreview> {
-    if (workspace?.mode === 'local') {
+    if (workspace?.mode === 'local' || workspace?.mode === 'ssh') {
       return { directory: workspace.workingDirectory, disposition: 'local', warning: null }
     }
     try {
@@ -70,7 +70,7 @@ export class WorkspaceLifecycle {
   async release(
     sessionId: string, workspace: WorkspaceBinding | undefined, name: string, deleteDirectory: boolean,
   ): Promise<string | undefined> {
-    if (workspace?.mode === 'none') return
+    if (workspace?.mode === 'none' || workspace?.mode === 'ssh') return
     try {
       if (workspace?.mode === 'local') {
         // 用户重新以本地项目使用过的保留目录，只更新时间，不获得删除本地目录的权限。
@@ -171,7 +171,7 @@ export class WorkspaceLifecycle {
   }
 
   private async resolve(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<OwnedWorkspace | null> {
-    if (workspace?.mode === 'none' || workspace?.mode === 'local') return null
+    if (workspace?.mode === 'none' || workspace?.mode === 'local' || workspace?.mode === 'ssh') return null
     if (!workspace) {
       const scan = await this.records()
       const found = scan.records.find(record => record.sessionIds.includes(sessionId))

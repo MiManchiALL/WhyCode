@@ -14,6 +14,7 @@ import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 
 interface RightPanelProps {
+  remote?: boolean
   active: boolean
   runtimeId: string
   refreshRevision: string
@@ -97,7 +98,7 @@ function RightPanelContent(props: RightPanelProps) {
   switch (page.kind) {
     case 'changes':
       return props.active ? <RightPanelChanges key={`${props.runtimeId}:${page.checkpointIds.join(',')}`}
-        runtimeId={props.runtimeId} projectDir={props.projectDir} page={page} onOpenPage={props.onOpenPage} />
+        runtimeId={props.runtimeId} projectDir={props.projectDir} remote={props.remote} page={page} onOpenPage={props.onOpenPage} />
         : <div className="min-h-0 flex-1" />
     case 'workspace':
       return props.active && props.workspacePath ? <WorkspaceBrowser

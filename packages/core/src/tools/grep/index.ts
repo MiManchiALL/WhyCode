@@ -1,5 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
-import { basename, dirname, relative } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
@@ -31,20 +30,21 @@ function normalizeRipgrepLine(
   mode: OutputMode,
   projectDir: string,
   root: string,
+  io: WorkspaceIO,
 ): string {
   if (line === '--') return line
-  if (mode === 'files_with_matches') return displayToolPath(projectDir, root, line)
+  if (mode === 'files_with_matches') return displayToolPath(projectDir, root, line, io)
   if (mode === 'content') {
     const first = line.indexOf('\t')
     const second = first === -1 ? -1 : line.indexOf('\t', first + 1)
     if (first === -1 || second === -1) return line
     const path = line.slice(0, first)
     const lineNumber = line.slice(first + 1, second)
-    return `${displayToolPath(projectDir, root, path)}:${lineNumber}:${line.slice(second + 1)}`
+    return `${displayToolPath(projectDir, root, path, io)}:${lineNumber}:${line.slice(second + 1)}`
   }
   const match = line.match(/^(.*):(\d+)$/)
   if (!match) return line
-  return `${displayToolPath(projectDir, root, match[1]!)}:${match[2]}`
+  return `${displayToolPath(projectDir, root, match[1]!, io)}:${match[2]}`
 }
 
 function escapeRegExp(value: string): string {
@@ -52,6 +52,7 @@ function escapeRegExp(value: string): string {
 }
 
 async function fallbackSearch(options: {
+  io: WorkspaceIO
   root: string
   onlyFile?: string
   projectDir: string
@@ -64,9 +65,11 @@ async function fallbackSearch(options: {
   signal: AbortSignal
   resultLimit: number
 }): Promise<{ lines: string[]; truncated: boolean }> {
+  const { readFile, stat } = options.io.fs
+  const { relative, basename } = options.io.path
   const collected = options.onlyFile
     ? { files: [options.onlyFile], truncated: false }
-    : await collectFiles(options.root, options.signal)
+    : await collectFiles(options.root, options.signal, options.io)
   const includeMatcher = options.include ? globToRegExp(options.include) : null
   const expression = new RegExp(
     options.literal ? escapeRegExp(options.pattern) : options.pattern,
@@ -82,7 +85,13 @@ async function fallbackSearch(options: {
     }
     const batch = collected.files.slice(start, start + READ_BATCH_SIZE)
     const contents = await Promise.all(
-      batch.map(async (path) => ({ path, buffer: await readFile(path).catch(() => null) })),
+      batch.map(async (path) => {
+        try { return { path, buffer: (await stat(path)).size <= MAX_FILE_BYTES ? await readFile(path) : null } }
+        catch (error) {
+          if (['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) return { path, buffer: null }
+          throw error
+        }
+      }),
     )
     for (const { path, buffer } of contents) {
       if (!buffer || buffer.length > MAX_FILE_BYTES || looksBinary(buffer)) continue
@@ -101,7 +110,7 @@ async function fallbackSearch(options: {
       }
       if (matchingLines.length === 0) continue
 
-      const display = displayToolPath(options.projectDir, options.root, rootRelative)
+      const display = displayToolPath(options.projectDir, options.root, rootRelative, options.io)
       if (options.mode === 'files_with_matches') {
         results.push(display)
       } else if (options.mode === 'count') {
@@ -153,7 +162,11 @@ export const grepTool = buildTool({
   kind: 'read',
   extractPaths: (input) => (input.path ? [input.path] : []),
   async execute(input, ctx) {
-    const requestedPath = resolveAllowed(ctx, input.path ?? '.')
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { stat } = io.fs
+    const { dirname, basename } = io.path
+
+    const requestedPath = await resolveAllowed(ctx, input.path ?? '.')
     const pathStats = await stat(requestedPath)
     if (!pathStats.isDirectory() && !pathStats.isFile()) {
       return { data: `搜索失败：${input.path ?? '.'} 不是普通文件或目录`, isError: true }
@@ -185,15 +198,16 @@ export const grepTool = buildTool({
     if (input.include) args.push('--glob', input.include)
     args.push('--regexp', input.pattern, target)
 
-    const rg = await runRipgrepLines(args, root, ctx.abortSignal, requested)
+    const rg = await runRipgrepLines(args, root, ctx.abortSignal, requested, io)
     const searched = rg
       ? {
           lines: rg.lines.map((line) =>
-            normalizeRipgrepLine(line, mode, ctx.projectDir, root),
+            normalizeRipgrepLine(line, mode, ctx.projectDir, root, io),
           ),
           truncated: rg.truncated,
         }
       : await fallbackSearch({
+          io,
           root,
           onlyFile: pathStats.isFile() ? requestedPath : undefined,
           projectDir: ctx.projectDir,

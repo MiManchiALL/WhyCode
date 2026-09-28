@@ -13,6 +13,7 @@ import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
 
 type ChangesPage = Extract<RightPanelPage, { kind: 'changes' }>
 interface Props {
+  remote?: boolean
   runtimeId: string
   projectDir: string | null
   page: ChangesPage
@@ -56,7 +57,7 @@ export function RightPanelChanges(props: Props) {
   </div>
 }
 
-function ChangedFile({ runtimeId, projectDir, page, onOpenPage, change, expanded, onToggle, onReady }: Props & {
+function ChangedFile({ runtimeId, projectDir, remote, page, onOpenPage, change, expanded, onToggle, onReady }: Props & {
   change: ToolFileChange; expanded: boolean; onToggle: () => void; onReady?: () => void
 }) {
   const id = useId()
@@ -77,10 +78,10 @@ function ChangedFile({ runtimeId, projectDir, page, onOpenPage, change, expanded
           onClick={() => onOpenPage({ kind: 'file', path: change.path, name, source: { kind: 'current' }, previewMode: 'code' })}>
           <PanelRightOpen size={14} />
         </button>
-        <button type="button" className="wc-preview-action" title="在文件夹中显示" aria-label={`在文件夹中显示 ${name}`}
+        {!remote && <button type="button" className="wc-preview-action" title="在文件夹中显示" aria-label={`在文件夹中显示 ${name}`}
           disabled={action.pending} aria-busy={action.pending} onClick={() => void action.run('reveal')}>
           <FolderOpen size={14} />
-        </button>
+        </button>}
       </div>
     </div>
     {expanded && <div id={id} className="wc-changes-file-diff">

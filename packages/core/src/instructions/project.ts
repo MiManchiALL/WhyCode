@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import type { ModelMessage } from 'ai'
 import { findProjectRoot } from '../project-root.ts'
 
@@ -24,21 +23,24 @@ export interface ProjectInstructionsUpdate {
 
 export async function loadProjectInstructions(
   input: {
+    workspaceIO?: WorkspaceIO
     homeDir?: string
     projectDir: string | null
     maxContentBytes?: number
   },
 ): Promise<ProjectInstructionsSnapshot | null> {
+  const io = input.workspaceIO ?? localWorkspaceIO
+  const { join, resolve } = io.path
   const sources: InstructionSource[] = []
   if (input.homeDir) {
-    const global = await readOptionalFile(join(resolve(input.homeDir), '.whycode', 'AGENTS.md'))
+    const global = await readOptionalFile(join(resolve(input.homeDir), '.whycode', 'AGENTS.md'), io)
     if (global !== null) sources.push(global)
   }
   if (input.projectDir) {
     const selectedDir = resolve(input.projectDir)
-    const projectRoot = await findProjectRoot(selectedDir)
-    for (const directory of directoriesBetween(projectRoot, selectedDir)) {
-      const source = await readDirectoryInstructions(directory)
+    const projectRoot = await findProjectRoot(selectedDir, io)
+    for (const directory of directoriesBetween(projectRoot, selectedDir, io)) {
+      const source = await readDirectoryInstructions(directory, io)
       if (source) sources.push(source)
     }
   }
@@ -113,22 +115,23 @@ export function validateProjectInstructionsUpdate(
       && projectInstructionsVersion(update.message) === update.version
 }
 
-async function readDirectoryInstructions(directory: string): Promise<InstructionSource | null> {
-  const override = await readOptionalFile(join(directory, 'AGENTS.override.md'))
+async function readDirectoryInstructions(directory: string, io: WorkspaceIO): Promise<InstructionSource | null> {
+  const override = await readOptionalFile(io.path.join(directory, 'AGENTS.override.md'), io)
   if (override !== null) return override
-  return readOptionalFile(join(directory, 'AGENTS.md'))
+  return readOptionalFile(io.path.join(directory, 'AGENTS.md'), io)
 }
 
-async function readOptionalFile(path: string): Promise<InstructionSource | null> {
+async function readOptionalFile(path: string, io: WorkspaceIO): Promise<InstructionSource | null> {
   try {
-    return { path, content: await readFile(path, 'utf8') }
+    return { path, content: await io.fs.readFile(path, 'utf8') }
   } catch (error) {
     if (isNotFound(error)) return null
     throw error
   }
 }
 
-function directoriesBetween(root: string, leaf: string): string[] {
+function directoriesBetween(root: string, leaf: string, io: WorkspaceIO): string[] {
+  const { dirname } = io.path
   const directories: string[] = []
   let current = leaf
   while (true) {

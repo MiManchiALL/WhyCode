@@ -1,3 +1,4 @@
+import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
@@ -58,7 +59,9 @@ export async function runRipgrepLines(
   cwd: string,
   signal: AbortSignal,
   maxLines: number,
+  io: WorkspaceIO = localWorkspaceIO,
 ): Promise<RipgrepLines | null> {
+  if (io.identity !== 'local') return null
   const executable = await getRipgrepPath()
   if (!executable) return null
   if (signal.aborted) throw abortError()

@@ -1,6 +1,5 @@
+import { localWorkspaceIO, workspacePathKey } from '../../workspace/io.ts'
 import { constants } from 'node:fs'
-import { copyFile, lstat, mkdir, readFile, rename, rm, unlink } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import { z } from 'zod'
 import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
@@ -26,22 +25,18 @@ interface DeleteTarget {
   original?: string
 }
 
-function pathKey(path: string): string {
-  return process.platform === 'win32' ? path.toLowerCase() : path
-}
-
-function resolveDeleteTargets(input: DeleteFileInput, ctx: ToolContext): DeleteTarget[] {
+async function resolveDeleteTargets(input: DeleteFileInput, ctx: ToolContext): Promise<DeleteTarget[]> {
   const targets = new Map<string, DeleteTarget>()
   for (const displayPath of input.paths) {
-    const absolute = resolveAllowed(ctx, displayPath)
-    const key = pathKey(absolute)
+    const absolute = await resolveAllowed(ctx, displayPath)
+    const key = workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, absolute)
     if (!targets.has(key)) targets.set(key, { absolute, displayPath })
   }
   return [...targets.values()]
 }
 
-async function requireRegularFile(path: string, label: string): Promise<void> {
-  const stats = await lstat(path).catch(() => null)
+async function requireRegularFile(path: string, label: string, ctx: ToolContext): Promise<void> {
+  const stats = await (ctx.workspaceIO ?? localWorkspaceIO).fs.lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
   if (!stats) throw new Error(`${label}不存在`)
   if (!stats.isFile()) throw new Error(`${label}不是普通文件；本工具不操作目录或符号链接`)
 }
@@ -55,12 +50,14 @@ export const deleteFileTool = buildTool({
   isReadOnly: false,
   kind: 'edit',
   extractPaths: (input) => input.paths,
-  checkpointScope: (input, ctx) => ({
+  checkpointScope: async (input, ctx) => ({
     kind: 'exact-files',
-    paths: resolveDeleteTargets(input, ctx).map((target) => target.absolute),
+    paths: (await resolveDeleteTargets(input, ctx)).map((target) => target.absolute),
   }),
   async renderDiff(input, ctx) {
-    const targets = resolveDeleteTargets(input, ctx)
+    const { readFile } = (ctx.workspaceIO ?? localWorkspaceIO).fs
+
+    const targets = await resolveDeleteTargets(input, ctx)
     return (await Promise.all(
       targets.map(async ({ absolute, displayPath }) =>
         makeDiff(displayPath, await readFile(absolute, 'utf8'), ''),
@@ -68,12 +65,15 @@ export const deleteFileTool = buildTool({
     )).filter(Boolean).join('\n\n')
   },
   async execute(input, ctx) {
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { readFile, unlink } = io.fs
+
     let targets: DeleteTarget[]
     try {
-      targets = resolveDeleteTargets(input, ctx)
+      targets = await resolveDeleteTargets(input, ctx)
       await Promise.all(
         targets.map(({ absolute, displayPath }) =>
-          requireRegularFile(absolute, `文件 ${displayPath}`),
+          requireRegularFile(absolute, `文件 ${displayPath}`, ctx),
         ),
       )
       await Promise.all(targets.map(async (target) => {
@@ -126,15 +126,17 @@ export const moveFileTool = buildTool({
   isReadOnly: false,
   kind: 'edit',
   extractPaths: (input) => [input.source, input.destination],
-  checkpointScope: (input, ctx) => ({
+  checkpointScope: async (input, ctx) => ({
     kind: 'exact-files',
     paths: [
-      resolveAllowed(ctx, input.source),
-      resolveAllowed(ctx, input.destination),
+      await resolveAllowed(ctx, input.source),
+      await resolveAllowed(ctx, input.destination),
     ],
   }),
   async renderDiff(input, ctx) {
-    const source = resolveAllowed(ctx, input.source)
+    const { readFile } = (ctx.workspaceIO ?? localWorkspaceIO).fs
+
+    const source = await resolveAllowed(ctx, input.source)
     const content = await readFile(source, 'utf8')
     return [
       makeDiff(input.source, content, ''),
@@ -142,11 +144,15 @@ export const moveFileTool = buildTool({
     ].join('\n\n')
   },
   async execute(input, ctx) {
-    const source = resolveAllowed(ctx, input.source)
-    const destination = resolveAllowed(ctx, input.destination)
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { copyFile, lstat, mkdir, rename, rm, unlink } = io.fs
+    const { dirname } = io.path
+
+    const source = await resolveAllowed(ctx, input.source)
+    const destination = await resolveAllowed(ctx, input.destination)
     try {
-      await requireRegularFile(source, `源文件 ${input.source}`)
-      if (await lstat(destination).catch(() => null)) {
+      await requireRegularFile(source, `源文件 ${input.source}`, ctx)
+      if (await lstat(destination).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })) {
         return { data: `移动失败：目标 ${input.destination} 已存在`, isError: true }
       }
       await mkdir(dirname(destination), { recursive: true })
@@ -162,7 +168,7 @@ export const moveFileTool = buildTool({
           throw unlinkError
         }
       }
-      const action = pathKey(dirname(source)) === pathKey(dirname(destination))
+      const action = workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, dirname(source)) === workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, dirname(destination))
         ? '已重命名'
         : '已移动'
       return { data: `${action} ${input.source} → ${input.destination}`, isError: false }

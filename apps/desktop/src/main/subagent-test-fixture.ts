@@ -128,7 +128,7 @@ export async function createFixture(
   }
 }
 
-function languageModel(doStream: (options: ModelCall) => Promise<unknown>) {
+export function languageModel(doStream: (options: ModelCall) => Promise<unknown>) {
   return {
     specificationVersion: 'v4' as const,
     provider: 'test',
@@ -139,7 +139,7 @@ function languageModel(doStream: (options: ModelCall) => Promise<unknown>) {
   } as ReturnType<ModelEntry['create']>
 }
 
-function modelEntry(model: ReturnType<ModelEntry['create']>, supportsImageInput = false): ModelEntry {
+export function modelEntry(model: ReturnType<ModelEntry['create']>, supportsImageInput = false): ModelEntry {
   return {
     id: 'test:subagent',
     displayName: 'Subagent Test',

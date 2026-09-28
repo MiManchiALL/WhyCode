@@ -1,8 +1,8 @@
+import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
+import { stopWorkspaceProcess, type WorkspaceProcess } from '../../workspace/process.ts'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
-import { resolve } from 'node:path'
 import { unicodeSafePrefix } from '../../text.ts'
-import { terminateProcessTree } from '../run-command/process-termination.ts'
 import {
   type BackgroundTaskState,
   type BackgroundTaskSummary,
@@ -24,7 +24,7 @@ const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
 const MAX_BACKGROUND_TASK_DETAIL_CHARS = 240
 
 interface LiveCommandTask extends PersistedCommandTask {
-  child?: ChildProcessWithoutNullStreams
+  child?: ChildProcessWithoutNullStreams | WorkspaceProcess
   timeout?: ReturnType<typeof setTimeout>
   stopReason?: 'user' | 'timeout' | 'shutdown'
   outputWriteFailed?: boolean
@@ -39,6 +39,7 @@ interface LiveCommandTask extends PersistedCommandTask {
 }
 
 export interface CommandStartInput {
+  workspaceIO?: WorkspaceIO
   sessionId: string
   command: string
   cwd: string
@@ -109,7 +110,8 @@ export class CommandSessionManager {
     }
 
     const id = crypto.randomUUID()
-    const cwd = resolve(input.cwd)
+    const io = input.workspaceIO ?? localWorkspaceIO
+    const cwd = io.path.resolve(input.cwd)
     const task: LiveCommandTask = {
       schemaVersion: 1,
       id,
@@ -127,7 +129,8 @@ export class CommandSessionManager {
     await this.storage.prepare(task)
     this.tasks.set(this.key(input.sessionId, id), task)
 
-    const child = spawn(input.command, {
+    let child: ChildProcessWithoutNullStreams | WorkspaceProcess
+    try { child = io.spawn ? io.spawn(input.command, cwd) : spawn(input.command, {
       shell: process.platform === 'win32' ? 'powershell.exe' : true,
       cwd,
       windowsHide: true,
@@ -138,7 +141,10 @@ export class CommandSessionManager {
         PAGER: 'cat',
         GIT_PAGER: 'cat',
       },
-    })
+    }) } catch (error) {
+      await this.finish(task, 'failed', null, `启动失败：${error instanceof Error ? error.message : String(error)}`)
+      return this.snapshot(task)
+    }
     task.child = child
     child.stdout.on('data', (chunk: Buffer) => this.appendOutput(task, chunk))
     child.stderr.on('data', (chunk: Buffer) => this.appendOutput(task, chunk))
@@ -362,7 +368,7 @@ export class CommandSessionManager {
   ): Promise<void> {
     task.stopReason = reason
     const child = task.child
-    const confirmed = child ? await terminateProcessTree(child).catch(() => false) : false
+    const confirmed = child ? await stopWorkspaceProcess(child).catch(() => false) : false
     if (child && child.exitCode === null && child.signalCode === null) {
       await Promise.race([
         once(child, 'close').then(() => undefined, () => undefined),

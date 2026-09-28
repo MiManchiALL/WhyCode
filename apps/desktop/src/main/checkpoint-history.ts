@@ -12,7 +12,7 @@ import { pathKey } from './workspace-path.ts'
 function checkpointsFor(runtime: DesktopSessionRuntime | null): CheckpointManager {
   if (!runtime?.journal || runtime.isDisposed) throw new Error('当前会话记录不可用')
   const journal = runtime.journal
-  return new CheckpointManager({ sessionId: journal.sessionId, sessionDir: journal.checkpointDirectory })
+  return new CheckpointManager({ sessionId: journal.sessionId, sessionDir: journal.checkpointDirectory, workspaceIO: runtime.workspaceIO })
 }
 
 export async function readCheckpointFileChanges(

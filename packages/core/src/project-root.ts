@@ -1,7 +1,8 @@
-import { stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from './workspace/io.ts'
 
-export async function findProjectRoot(projectDir: string): Promise<string> {
+export async function findProjectRoot(projectDir: string, io: WorkspaceIO = localWorkspaceIO): Promise<string> {
+  const { stat } = io.fs
+  const { dirname, join } = io.path
   let current = projectDir
   while (true) {
     try {

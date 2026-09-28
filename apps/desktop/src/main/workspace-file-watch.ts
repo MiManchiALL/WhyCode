@@ -1,4 +1,5 @@
-import { watch, type FSWatcher, type Stats } from 'node:fs'
+import { watch, type FSWatcher } from 'node:fs'
+import type { WorkspaceStat } from '@whycode/core'
 import { stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
@@ -17,7 +18,7 @@ export class WorkspaceFileWatch {
 
   directory(path: string): void { this.observe(path, null) }
 
-  file(path: string, info: Stats): void {
+  file(path: string, info: Pick<WorkspaceStat, 'dev' | 'ino' | 'size' | 'mtimeMs'>): void {
     // 一份文档只监听有界的静态依赖，其余资源仍可手动刷新。
     const count = [...this.directories.values()].reduce((sum, entry) => sum + (entry.files?.size ?? 0), 0)
     if (count >= 128) return
@@ -70,4 +71,4 @@ export class WorkspaceFileWatch {
 }
 
 function pathKey(path: string): string { return process.platform === 'win32' ? path.toLowerCase() : path }
-function version(info: Stats): string { return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}` }
+function version(info: Pick<WorkspaceStat, 'dev' | 'ino' | 'size' | 'mtimeMs'>): string { return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}` }

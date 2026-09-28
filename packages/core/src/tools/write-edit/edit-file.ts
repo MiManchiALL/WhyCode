@@ -1,9 +1,10 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { localWorkspaceIO, workspacePathKey } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { resolveAllowed } from '../fs-utils.ts'
 import { buildTool, type ToolContext } from '../tool.ts'
 import { makeDiff } from './diff.ts'
 import { describeFileChange } from '../file-changes.ts'
+import { isUnknownWorkspaceOutcome } from '../../workspace/errors.ts'
 
 export const EDIT_FILE_TOOL_NAME = 'EditFile'
 
@@ -41,10 +42,6 @@ interface StagedFile {
   original: string
   replacements: Replacement[]
   updated: string
-}
-
-function pathKey(path: string): string {
-  return process.platform === 'win32' ? path.toLowerCase() : path
 }
 
 function findMatches(content: string, oldText: string): Array<{ start: number; end: number }> {
@@ -93,11 +90,11 @@ function applyReplacements(file: StagedFile): string {
 async function stageChanges(input: EditFileInput, ctx: ToolContext): Promise<StagedFile[]> {
   const files = new Map<string, StagedFile>()
   for (const edit of input.edits) {
-    const absolute = resolveAllowed(ctx, edit.path)
-    const key = pathKey(absolute)
+    const absolute = await resolveAllowed(ctx, edit.path)
+    const key = workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, absolute)
     let file = files.get(key)
     if (!file) {
-      const original = await readFile(absolute, 'utf8')
+      const original = await (ctx.workspaceIO ?? localWorkspaceIO).fs.readFile(absolute, 'utf8')
       file = {
         absolute,
         displayPath: edit.path,
@@ -114,11 +111,11 @@ async function stageChanges(input: EditFileInput, ctx: ToolContext): Promise<Sta
   return [...files.values()]
 }
 
-function resolvedEditPaths(input: EditFileInput, ctx: ToolContext): string[] {
+async function resolvedEditPaths(input: EditFileInput, ctx: ToolContext): Promise<string[]> {
   const paths = new Map<string, string>()
   for (const edit of input.edits) {
-    const absolute = resolveAllowed(ctx, edit.path)
-    paths.set(pathKey(absolute), absolute)
+    const absolute = await resolveAllowed(ctx, edit.path)
+    paths.set(workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, absolute), absolute)
   }
   return [...paths.values()]
 }
@@ -132,11 +129,12 @@ export const editFileTool = buildTool({
   isReadOnly: false,
   kind: 'edit',
   extractPaths: (input) => [...new Set(input.edits.map((edit) => edit.path))],
-  checkpointScope: (input, ctx) => ({
+  checkpointScope: async (input, ctx) => ({
     kind: 'exact-files',
-    paths: resolvedEditPaths(input, ctx),
+    paths: await resolvedEditPaths(input, ctx),
   }),
   async renderDiff(input, ctx) {
+
     const files = await stageChanges(input, ctx)
     return files
       .map((file) => makeDiff(file.displayPath, file.original, file.updated))
@@ -144,6 +142,9 @@ export const editFileTool = buildTool({
       .join('\n\n')
   },
   async execute(input, ctx) {
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const { writeFile } = io.fs
+
     let files: StagedFile[]
     try {
       files = await stageChanges(input, ctx)
@@ -161,6 +162,7 @@ export const editFileTool = buildTool({
         await writeFile(file.absolute, file.updated, 'utf8')
       }
     } catch (error) {
+      if (isUnknownWorkspaceOutcome(error)) return { data: error.message, isError: true }
       const restored = await Promise.allSettled(
         attempted.map((file) => writeFile(file.absolute, file.original, 'utf8')),
       )

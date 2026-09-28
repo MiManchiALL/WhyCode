@@ -18,6 +18,8 @@ allowBuilds:
   esbuild: true
   electron: true
   node-pty: true
+  cpu-features: false
+  ssh2: false
 minimumReleaseAgeExclude:
   - '@ai-sdk/anthropic@4.0.7'
   - '@ai-sdk/deepseek@3.0.5'

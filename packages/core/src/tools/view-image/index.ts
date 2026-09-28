@@ -32,7 +32,7 @@ export function createViewImageTool(options: {
     kind: 'read',
     extractPaths: (input) => [input.path],
     async execute(input, ctx) {
-      const absolute = resolveAllowed(ctx, input.path)
+      const absolute = await resolveAllowed(ctx, input.path)
       const attachments = await importImageAttachments(
         [{ kind: 'path', path: absolute }],
         options.attachmentDirectory,

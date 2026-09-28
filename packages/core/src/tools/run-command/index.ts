@@ -1,6 +1,9 @@
+import { localWorkspaceIO } from '../../workspace/io.ts'
+import { stopWorkspaceProcess } from '../../workspace/process.ts'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { isAbsolute, resolve } from 'node:path'
 import type { Readable } from 'node:stream'
+import { unicodeSafeSuffix } from '../../text.ts'
 import { z } from 'zod'
 import { TOOL_OUTCOME_UNKNOWN } from '../../session/tool-execution.ts'
 import {
@@ -9,7 +12,6 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from '../tool.ts'
-import { terminateProcessTree } from './process-termination.ts'
 
 export const RUN_COMMAND_TOOL_NAME = 'RunCommand'
 
@@ -171,20 +173,22 @@ function executeForegroundCommand(
 ): Promise<ToolResult> {
   return new Promise((resolvePromise) => {
     // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位。
-    const cwd = input.cwd ? resolve(ctx.projectDir, input.cwd) : ctx.projectDir
-    const child = spawnNonInteractiveCommand(input.command, cwd)
+    const io = ctx.workspaceIO ?? localWorkspaceIO
+    const cwd = io.path.resolve(ctx.projectDir, input.cwd ?? '.')
+    const child = io.spawn ? io.spawn(input.command, cwd) : spawnNonInteractiveCommand(input.command, cwd)
 
     let output = ''
+    let truncated = false
     let done = false
     let stopping: 'timeout' | 'abort' | null = null
-    const append = (chunk: Buffer) => {
+    const append = (text: string) => {
       if (done) return
-      const text = chunk.toString('utf-8')
-      output += text
+      truncated ||= output.length + text.length > MAX_OUTPUT_CHARS
+      output = unicodeSafeSuffix(output + text, MAX_OUTPUT_CHARS)
       ctx.onProgress?.(text)
     }
-    child.stdout.on('data', append)
-    child.stderr.on('data', append)
+    child.stdout.setEncoding('utf8').on('data', append)
+    child.stderr.setEncoding('utf8').on('data', append)
 
     const finish = (suffix: string, isError: boolean) => {
       if (done) return
@@ -192,8 +196,8 @@ function executeForegroundCommand(
       clearTimeout(timeout)
       ctx.abortSignal.removeEventListener('abort', onAbort)
       let data = output + suffix
-      if (data.length > MAX_OUTPUT_CHARS) {
-        data = `[输出过长，仅保留尾部 ${MAX_OUTPUT_CHARS} 字符]\n` + data.slice(-MAX_OUTPUT_CHARS)
+      if (truncated || data.length > MAX_OUTPUT_CHARS) {
+        data = `[输出过长，仅保留尾部 ${MAX_OUTPUT_CHARS} 字符]\n` + unicodeSafeSuffix(data, MAX_OUTPUT_CHARS)
       }
       resolvePromise({
         data: data || (isError ? '（命令失败，无标准输出）' : '（命令成功，无标准输出）'),
@@ -204,7 +208,7 @@ function executeForegroundCommand(
     const requestStop = (reason: 'timeout' | 'abort') => {
       if (done || stopping) return
       stopping = reason
-      void terminateProcessTree(child)
+      void stopWorkspaceProcess(child)
         .catch(() => false)
         .then((treeStopped) => {
           const suffix =
@@ -227,8 +231,10 @@ function executeForegroundCommand(
       finish(code === 0 ? '' : `\n[退出码 ${code}]`, code !== 0)
     })
     child.on('error', (err) => {
-      if (!stopping) finish(`[启动失败：${err.message}]`, true)
+      if (!stopping) finish(`[命令失败：${err.message}]`, true)
     })
+    // 远端命令与本地 ignore stdin 保持一致，不能等待无人提供的输入。
+    child.stdin?.end()
     // AbortSignal 在监听器注册前已中止时不会补发事件，必须显式检查。
     if (ctx.abortSignal.aborted) requestStop('abort')
   })

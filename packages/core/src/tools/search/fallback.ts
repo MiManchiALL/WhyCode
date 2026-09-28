@@ -1,5 +1,4 @@
-import { readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { IGNORED_DIRS } from '../fs-utils.ts'
 
 const DIRECTORY_BATCH_SIZE = 32
@@ -21,7 +20,10 @@ function throwIfAborted(signal: AbortSignal): void {
 export async function collectFiles(
   root: string,
   signal: AbortSignal,
+  io: WorkspaceIO = localWorkspaceIO,
 ): Promise<CollectedFiles> {
+  const { readdir } = io.fs
+  const { join } = io.path
   const files: string[] = []
   const directories = [root]
 
@@ -31,7 +33,10 @@ export async function collectFiles(
     const results = await Promise.all(
       batch.map(async (dir) => ({
         dir,
-        entries: await readdir(dir, { withFileTypes: true }).catch(() => []),
+        entries: await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+          if (['ENOENT', 'EACCES', 'EPERM'].includes(error.code ?? '')) return []
+          throw error
+        }),
       })),
     )
     for (const { dir, entries } of results) {

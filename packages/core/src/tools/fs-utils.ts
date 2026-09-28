@@ -1,20 +1,21 @@
-import { isAbsolute, relative, resolve } from 'node:path'
-import { findOutsideBoundary } from '../permissions/path-safety.ts'
+import { localWorkspaceIO, outsideWorkspaceBoundary, type WorkspaceIO } from '../workspace/io.ts'
 import type { ToolContext } from './tool.ts'
 
 /**
  * 工具侧的路径解析：限制在项目目录 + 会话 scratch + 已授权目录内。
  * 权限引擎在执行前已做过边界审批，这里是执行时的最后防线（越界抛错）。
  */
-export function resolveAllowed(ctx: ToolContext, inputPath: string): string {
-  const outside = findOutsideBoundary(inputPath, ctx.projectDir, [...ctx.additionalDirs])
+export async function resolveAllowed(ctx: ToolContext, inputPath: string): Promise<string> {
+  const io = ctx.workspaceIO ?? localWorkspaceIO
+  const outside = await outsideWorkspaceBoundary(io, inputPath, ctx.projectDir, ctx.additionalDirs)
   if (outside) {
     throw new Error(`路径超出允许范围：${inputPath}`)
   }
-  return isAbsolute(inputPath) ? resolve(inputPath) : resolve(ctx.projectDir, inputPath)
+  return io.path.resolve(ctx.projectDir, inputPath)
 }
 
-export function displayToolPath(projectDir: string, root: string, path: string): string {
+export function displayToolPath(projectDir: string, root: string, path: string, io: WorkspaceIO = localWorkspaceIO): string {
+  const { resolve, relative, isAbsolute } = io.path
   const absolute = resolve(root, path.replace(/^\.\//, ''))
   const projectRelative = relative(projectDir, absolute)
   if (projectRelative && !projectRelative.startsWith('..') && !isAbsolute(projectRelative)) {

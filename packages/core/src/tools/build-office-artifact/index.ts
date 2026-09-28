@@ -89,20 +89,20 @@ export function createBuildOfficeArtifactTool(runner: OfficeArtifactRunner) {
       input.outputPath,
       ...input.assets.map((asset) => asset.path),
     ],
-    checkpointScope: (input, ctx) => ({
+    checkpointScope: async (input, ctx) => ({
       kind: 'exact-files',
-      paths: [resolveAllowed(ctx, input.outputPath)],
+      paths: [await resolveAllowed(ctx, input.outputPath)],
     }),
     async execute(input, ctx) {
       const result = await runner.build({
         format: input.format,
         mode: input.mode,
-        scriptPath: resolveAllowed(ctx, input.scriptPath),
-        outputPath: resolveAllowed(ctx, input.outputPath),
-        assets: input.assets.map((asset) => ({
+        scriptPath: await resolveAllowed(ctx, input.scriptPath),
+        outputPath: await resolveAllowed(ctx, input.outputPath),
+        assets: await Promise.all(input.assets.map(async (asset) => ({
           key: asset.key,
-          path: resolveAllowed(ctx, asset.path),
-        })),
+          path: await resolveAllowed(ctx, asset.path),
+        }))),
         ...(input.templateAssetKey ? { templateAssetKey: input.templateAssetKey } : {}),
         ...(input.pptxTemplateRequirements ? { pptxTemplateRequirements: input.pptxTemplateRequirements } : {}),
       }, ctx.abortSignal, ctx.onProgress)

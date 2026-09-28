@@ -1,6 +1,5 @@
-import { lstat, readFile, readdir } from 'node:fs/promises'
+import { localWorkspaceIO, type WorkspaceIO, type WorkspaceDirent } from '../workspace/io.ts'
 import { basename, join, resolve } from 'node:path'
-import type { Dirent } from 'node:fs'
 import { parseDocument } from 'yaml'
 import {
   type SubagentDefinitionCatalogSnapshot,
@@ -89,26 +88,26 @@ export class SubagentDefinitionCatalogService {
     this.homeDir = options.homeDir ? resolve(options.homeDir) : undefined
   }
 
-  async snapshot(projectDir: string | null): Promise<SubagentDefinitionCatalogSnapshot> {
+  async snapshot(projectDir: string | null, workspaceIO: WorkspaceIO = localWorkspaceIO): Promise<SubagentDefinitionCatalogSnapshot> {
     const diagnostics: SubagentDefinitionDiagnostic[] = []
     const definitions = new Map<string, SubagentDefinitionSnapshot>(
       BUILTIN_DEFINITIONS.map((definition) => [definition.id, structuredClone(definition)]),
     )
-    const roots: Array<{ path: string; scope: Exclude<SubagentDefinitionScope, 'builtin'> }> = []
-    if (this.homeDir) roots.push({ path: join(this.homeDir, '.whycode', 'agents'), scope: 'user' })
-    if (projectDir) roots.push({ path: join(resolve(projectDir), '.whycode', 'agents'), scope: 'project' })
+    const roots: Array<{ path: string; scope: Exclude<SubagentDefinitionScope, 'builtin'>; io: WorkspaceIO }> = []
+    if (this.homeDir) roots.push({ path: join(this.homeDir, '.whycode', 'agents'), scope: 'user', io: localWorkspaceIO })
+    if (projectDir) roots.push({ path: workspaceIO.path.join(workspaceIO.path.resolve(projectDir), '.whycode', 'agents'), scope: 'project', io: workspaceIO })
 
     for (const root of roots) {
-      const entries = await readAgentDirectory(root.path, diagnostics)
+      const entries = await readAgentDirectory(root.path, diagnostics, root.io)
       let loadedBytes = 0
       const files = entries
         .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
         .sort((left, right) => left.name.localeCompare(right.name))
         .slice(0, MAX_AGENT_FILES_PER_ROOT)
       for (const file of files) {
-        const path = join(root.path, file.name)
+        const path = root.io.path.join(root.path, file.name)
         try {
-          const definition = await loadCustomDefinition(path, root.scope)
+          const definition = await loadCustomDefinition(path, root.scope, root.io)
           const cost = Buffer.byteLength(definition.instructions, 'utf8')
           if (loadedBytes + cost > MAX_AGENT_BYTES_PER_ROOT) {
             diagnostics.push({
@@ -163,15 +162,16 @@ function builtin(
 async function loadCustomDefinition(
   path: string,
   scope: Exclude<SubagentDefinitionScope, 'builtin'>,
+  io: WorkspaceIO,
 ): Promise<SubagentDefinitionSnapshot> {
-  const info = await lstat(path)
+  const info = await io.fs.lstat(path)
   if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error('Agent 定义必须是普通文件且不能是符号链接')
   }
   if (info.size > MAX_AGENT_FILE_BYTES) {
     throw new Error(`Agent 定义超过 ${MAX_AGENT_FILE_BYTES} 字节上限`)
   }
-  const bytes = await readFile(path)
+  const bytes = await io.fs.readFile(path)
   if (bytes.byteLength > MAX_AGENT_FILE_BYTES) {
     throw new Error(`Agent 定义超过 ${MAX_AGENT_FILE_BYTES} 字节上限`)
   }
@@ -210,7 +210,7 @@ async function loadCustomDefinition(
     scope,
     instructions,
     toolNames: [...new Set([...PROFILE_TOOLS[profile], ...declaredTools])],
-    sourcePath: resolve(path),
+    sourcePath: io.path.resolve(path),
   })
 }
 
@@ -250,14 +250,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 async function readAgentDirectory(
   path: string,
   diagnostics: SubagentDefinitionDiagnostic[],
-): Promise<Dirent<string>[]> {
+  io: WorkspaceIO,
+): Promise<WorkspaceDirent[]> {
   try {
-    const info = await lstat(path)
+    const info = await io.fs.lstat(path)
     if (!info.isDirectory() || info.isSymbolicLink()) {
       diagnostics.push({ path, message: 'Agent 根路径必须是普通目录且不能是符号链接' })
       return []
     }
-    return await readdir(path, { withFileTypes: true })
+    return await io.fs.readdir(path, { withFileTypes: true })
   } catch (error) {
     if (isMissing(error)) return []
     diagnostics.push({
