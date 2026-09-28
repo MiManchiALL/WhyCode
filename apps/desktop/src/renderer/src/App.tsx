@@ -41,7 +41,6 @@ import {
   workspaceDisplayDirectory,
   type RuntimeWorkspace,
   type StartWorkspaceRequest,
-  type WorkspaceCandidate,
 } from '../../shared/workspace.ts'
 import {
   applyCoreEvent,
@@ -95,7 +94,6 @@ import {
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
 import { ComposerSubmissions, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
-import type { WorkspaceStartChoice } from './workspace-start-controls.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
@@ -207,7 +205,6 @@ export function App() {
   const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [projects, setProjects] = useState<SidebarProject[]>([])
   const [sessionListError, setSessionListError] = useState<string | null>(null)
-  const [workspaceCandidate, setWorkspaceCandidate] = useState<WorkspaceCandidate | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
@@ -1418,14 +1415,13 @@ export function App() {
 
   const activateNewSession = useCallback(async (
     workspaceRequest?: StartWorkspaceRequest | null,
-  ): Promise<boolean> => {
+  ): Promise<void> => {
     const result = await window.whycode.newSession(
       workspaceRequest !== undefined ? { workspace: workspaceRequest } : undefined,
     )
     if (!result.ok) {
-      setWorkspaceCandidate(null)
       showError(result.error ?? '新建会话失败')
-      return false
+      return
     }
     const replacedDraft = result.replacedDraftRuntimeId
     if (replacedDraft) {
@@ -1435,25 +1431,22 @@ export function App() {
     await prepareComposer(result.snapshot)
     applyRuntimeSnapshot(result.snapshot)
     if (replacedDraft) void composerDraftsRef.current.delete(composerDraftKey(replacedDraft, null)).catch(draftStorageError)
-    setWorkspaceCandidate(null)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
     void refreshModelCatalog()
-    return true
   }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions, draftStorageError])
 
   const pickProject = useCallback((projectId?: string) => {
     if (!beginSessionTransition()) return
     void window.whycode.pickProjectDir(projectId).then(async (result) => {
       if (!result.ok) { showError(result.error); return }
-      const candidate = result.value
-      if (!candidate) return
+      const selectedDirectory = result.value
+      if (!selectedDirectory) return
       void refreshSessions()
-      const activated = await activateNewSession({
+      await activateNewSession({
         mode: 'local',
-        selectedDirectory: candidate.selectedDirectory,
+        selectedDirectory,
       })
-      if (activated && candidate.repositoryDirectory) setWorkspaceCandidate(candidate)
     }).catch((error) => {
       showError(`工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
@@ -1506,7 +1499,6 @@ export function App() {
   const startNewSession = useCallback((resetWorkspace = false) => {
     if (!resetWorkspace && runtimeIdRef.current && sessionIdRef.current === null && !resumingSessionIdRef.current) return
     if (!beginSessionTransition()) return
-    setWorkspaceCandidate(null)
     void activateNewSession(resetWorkspace ? null : undefined)
       .catch((error) => {
         showError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
@@ -1514,25 +1506,9 @@ export function App() {
       .finally(endSessionTransition)
   }, [activateNewSession, showError, beginSessionTransition, endSessionTransition])
 
-  const startWorkspaceSession = useCallback((choice: WorkspaceStartChoice) => {
-    const candidate = workspaceCandidate
-    if (!candidate || !beginSessionTransition()) return
-    const workspaceRequest = choice.mode === 'local'
-      ? {
-          mode: 'local' as const,
-          selectedDirectory: candidate.selectedDirectory,
-        }
-      : {
-          mode: 'worktree' as const,
-          selectedDirectory: candidate.selectedDirectory,
-          baseRef: choice.base.ref,
-          expectedBaseCommit: choice.base.commit,
-          acknowledgeUncommittedChangesExcluded: candidate.dirty,
-        }
-    void activateNewSession(workspaceRequest).then(() => {
-      setWorkspaceCandidate(candidate)
-    }).catch((error) => {
-      setWorkspaceCandidate(candidate)
+  const startWorkspaceSession = useCallback((workspaceRequest: StartWorkspaceRequest) => {
+    if (!beginSessionTransition()) return
+    void activateNewSession(workspaceRequest).catch((error) => {
       showError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
     }).finally(endSessionTransition)
   }, [
@@ -1540,7 +1516,6 @@ export function App() {
     activateNewSession,
     beginSessionTransition,
     endSessionTransition,
-    workspaceCandidate,
   ])
 
   const resumeSession = useCallback((sessionId: string) => {
@@ -2361,9 +2336,10 @@ export function App() {
 
                     {!loadingConversation && !conversationStarted && !worktreePreparation && (
                       <WorkspaceContextBar
+                        key={runtimeId}
+                        runtimeId={runtimeId}
                         projects={projects}
                         workspace={workspace}
-                        candidate={workspaceCandidate}
                         projectDir={projectDir}
                         baseRef={contextBaseRef}
                         busy={sessionChangeLocked}

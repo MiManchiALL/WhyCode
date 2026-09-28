@@ -242,8 +242,10 @@ const api = {
     ipcRenderer.on(IPC.workspaceFileChanged, listener)
     return () => ipcRenderer.removeListener(IPC.workspaceFileChanged, listener)
   },
-  pickProjectDir: (projectId?: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> =>
+  pickProjectDir: (projectId?: string): Promise<WorkspaceActionResult<string | null>> =>
     ipcRenderer.invoke(IPC.pickProjectDir, projectId),
+  inspectDraftWorkspace: (runtimeId: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> =>
+    ipcRenderer.invoke(IPC.inspectDraftWorkspace, runtimeId),
   worktreeStatus: (
     runtimeId: string,
   ): Promise<WorkspaceActionResult<WorktreeStatus>> =>

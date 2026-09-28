@@ -1,36 +1,51 @@
+import { useEffect, useState } from 'react'
 import { Folder, X } from 'lucide-react'
 import type { SidebarProject } from '../../shared/projects.ts'
 import { ProjectPicker } from './project-picker.tsx'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 import { fileName, filePathKey } from './local-files.ts'
 import {
   workspaceProjectDirectory,
   type RuntimeWorkspace,
+  type StartWorkspaceRequest,
   type WorkspaceCandidate,
 } from '../../shared/workspace.ts'
-import {
-  WorkspaceStartControls,
-  type WorkspaceStartChoice,
-} from './workspace-start-controls.tsx'
+import { WorkspaceStartControls } from './workspace-start-controls.tsx'
 
 interface WorkspaceContextBarProps {
+  runtimeId: string | null
   workspace: RuntimeWorkspace
   projects: readonly SidebarProject[]
-  candidate: WorkspaceCandidate | null
   projectDir: string | null
   baseRef: string | null
   busy: boolean
   canChangeWorkspace: boolean
   onPickProject: (id?: string) => void
   onClearProject: () => void
-  onStart: (choice: WorkspaceStartChoice) => void
+  onStart: (request: StartWorkspaceRequest) => void
 }
 
 export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
+  const [candidate, setCandidate] = useState<WorkspaceCandidate | null>(null)
+  const feedback = useConversationFeedback()
   const projectSelected = props.workspace.mode !== 'pending-managed' && Boolean(props.projectDir)
   const selectedDirectory = workspaceProjectDirectory(props.workspace)
   const selectedProject = selectedDirectory
     ? props.projects.find(project => filePathKey(project.directory) === filePathKey(selectedDirectory))
     : undefined
+  useEffect(() => {
+    setCandidate(null)
+    if (!props.runtimeId || !props.canChangeWorkspace || !selectedDirectory) return
+    let active = true
+    void window.whycode.inspectDraftWorkspace(props.runtimeId).then(result => {
+      if (!active) return
+      if (result.ok) setCandidate(result.value)
+      else feedback('error', `工作文件夹检查失败：${result.error}`)
+    }).catch(error => {
+      if (active) feedback('error', `工作文件夹检查失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+    return () => { active = false }
+  }, [props.runtimeId, props.canChangeWorkspace, selectedDirectory, feedback])
   return (
     <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl bg-black/[0.035] px-2 py-1.5">
       {projectSelected && props.projectDir ? (
@@ -92,9 +107,9 @@ export function WorkspaceContextBar(props: WorkspaceContextBarProps) {
         </ProjectPicker>
       )}
 
-      {props.canChangeWorkspace && projectSelected && props.candidate?.repositoryDirectory && (
+      {props.canChangeWorkspace && projectSelected && candidate?.repositoryDirectory && (
         <WorkspaceStartControls
-          candidate={props.candidate}
+          candidate={candidate}
           mode={props.workspace.mode}
           baseRef={props.baseRef}
           busy={props.busy}

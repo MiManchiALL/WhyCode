@@ -194,6 +194,7 @@ import {
   restoreSubmittedWorkspace,
   prepareRuntimeWorkspace,
 } from './runtime-workspace.ts'
+import { canonicalDirectory } from './managed-worktree-registry.ts'
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
@@ -3155,7 +3156,16 @@ if (primaryInstance) void app.whenReady().then(async () => {
       (path) => shell.openPath(path),
     )
   })
-  ipcMain.handle(IPC.pickProjectDir, async (event, projectId?: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> => {
+  ipcMain.handle(IPC.inspectDraftWorkspace, async (_event, runtimeId: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> => {
+    try {
+      const runtime = runtimeForId(runtimeId)
+      const directory = runtime.sessionId ? null : workspaceProjectDirectory(runtime.workspace)
+      return { ok: true, value: directory ? await worktrees.inspect(directory) : null }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+  ipcMain.handle(IPC.pickProjectDir, async (event, projectId?: string): Promise<WorkspaceActionResult<string | null>> => {
     if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
       return { ok: false, error: '会话处理中，请稍后选择项目' }
     }
@@ -3173,7 +3183,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
           })).filePaths[0]
         : projects.get(projectId).directory
       if (!selected) return { ok: true, value: null }
-      const candidate = await worktrees.inspect(selected)
+      const directory = await canonicalDirectory(selected)
       // 父窗口模态约束用户交互；这里仍防御窗口销毁和其它宿主生命周期竞态。
       if (
         ownerWindow.isDestroyed()
@@ -3184,8 +3194,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
       ) {
         return { ok: true, value: null }
       }
-      if (projectId === undefined) await projects.add(candidate.selectedDirectory)
-      return { ok: true, value: candidate }
+      if (projectId === undefined) await projects.add(directory)
+      return { ok: true, value: directory }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }

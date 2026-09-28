@@ -9,6 +9,7 @@ import {
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { ManagedWorkspaceManager } from './workspace.ts'
 import { WorktreeManager } from './worktree-manager.ts'
+import { canonicalDirectory } from './managed-worktree-registry.ts'
 
 export function prepareDefaultRuntimeWorkspace(
   runtimeId: string,
@@ -26,8 +27,7 @@ export async function prepareRuntimeWorkspace(
     throw new Error('新会话工作区请求无效')
   }
   if (target.mode === 'local') {
-    const candidate = await worktrees.inspect(target.selectedDirectory)
-    return localWorkspace(candidate.selectedDirectory)
+    return localWorkspace(await canonicalDirectory(target.selectedDirectory))
   }
   if (!isWorktreeStartRequest(target)) {
     throw new Error('新会话 Worktree 请求无效')

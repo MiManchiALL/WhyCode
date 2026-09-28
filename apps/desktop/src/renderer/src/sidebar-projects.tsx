@@ -71,6 +71,6 @@ function ProjectGroup({ project, selectedSessionId, busy, onSelect, onRename, on
         </DropdownMenu.Root>
       </div>
     </div>
-    {expanded && <div className="ml-3 border-l border-[var(--wc-line)] pl-1">{children}</div>}
+    {expanded && <div className="ml-3 pl-1">{children}</div>}
   </div>
 }

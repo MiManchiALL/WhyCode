@@ -3,20 +3,17 @@ import { Check, ChevronDown, GitBranch, Laptop } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   RuntimeWorkspace,
+  StartWorkspaceRequest,
   WorkspaceCandidate,
   WorktreeBase,
 } from '../../shared/workspace.ts'
-
-export type WorkspaceStartChoice =
-  | { mode: 'local' }
-  | { mode: 'worktree'; base: WorktreeBase }
 
 interface WorkspaceStartControlsProps {
   candidate: WorkspaceCandidate
   mode: RuntimeWorkspace['mode']
   baseRef: string | null
   busy: boolean
-  onStart: (choice: WorkspaceStartChoice) => void
+  onStart: (request: StartWorkspaceRequest) => void
 }
 
 export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
@@ -45,13 +42,21 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
     && !props.candidate.worktreeUnavailableReason,
   )
 
+  const startWorktree = (base: WorktreeBase) => props.onStart({
+    mode: 'worktree',
+    selectedDirectory: props.candidate.selectedDirectory,
+    baseRef: base.ref,
+    expectedBaseCommit: base.commit,
+    acknowledgeUncommittedChangesExcluded: props.candidate.dirty,
+  })
+
   const changeMode = (value: string) => {
     if (value === 'local') {
-      if (worktreeMode) props.onStart({ mode: 'local' })
+      if (worktreeMode) props.onStart({ mode: 'local', selectedDirectory: props.candidate.selectedDirectory })
       return
     }
     if (!worktreeMode && worktreeAvailable && selectedBase) {
-      props.onStart({ mode: 'worktree', base: selectedBase })
+      startWorktree(selectedBase)
     }
   }
 
@@ -60,7 +65,7 @@ export function WorkspaceStartControls(props: WorkspaceStartControlsProps) {
     const base = props.candidate.worktreeBases.find(
       (candidate) => worktreeBaseKey(candidate) === value,
     )
-    if (worktreeMode && base) props.onStart({ mode: 'worktree', base })
+    if (worktreeMode && base) startWorktree(base)
   }
 
   return (

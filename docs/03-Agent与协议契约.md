@@ -469,6 +469,8 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 `newSession()` 返回尚未发送的新会话，重复请求复用同一准备事务、运行时与工作区；`newSession({workspace})` 显式更换项目，`workspace:null` 表示移除项目并回到待创建的默认目录。Main 在 `userData/new-session.json` 保存这份工作区身份，输入内容由 Renderer 的草稿存储持有。首次发送登记后释放新会话入口；`RuntimeSnapshot.sessionId` 和运行事件在工作区准备期间就携带持久身份，草稿随该身份转移，生命周期见文档二 §7.2。仅点击新建或输入未发送内容不会建立 Journal 或发送请求。窗口关闭通过 `composerPersistence` 通道握手，Main 只接受所属主 Frame 的保存完成确认；握手不传递草稿内容，不经过 Core 命令或事件。
 
+`inspectDraftWorkspace(runtimeId)` 返回 `WorkspaceActionResult<WorkspaceCandidate | null>`，只读检查指定未发送运行时的项目源目录；已登记会话或没有项目源目录时返回空值。目录来自 Main 的工作区描述符，Renderer 不传路径；检查不创建目录、切换会话或登记项目，读取失败通过已有浮动反馈呈现。
+
 ### 7.3 桌面文件浏览
 
 类型与边界单源为 `apps/desktop/src/shared/workspace-files.ts`，实现位于 Main 的 `workspace-files.ts` 与 `workspace-files-ipc.ts`。仅所属窗口的主 Frame 可创建、读取、关闭、定位或用默认应用打开文件视图：
@@ -499,7 +501,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 契约单源为 `shared/projects.ts`。`listSessionSidebar()` 同时返回会话投影与项目登记；Renderer 按明确归属展示置顶、项目、最近，项目内保留会话活动时间顺序，置顶项不重复展示。项目登记与会话工作区绑定相互独立，不按历史路径猜测旧会话归属。
 
-`pickProjectDir(projectId?)` 只接受窗口主 Frame：传入 ID 时检查已登记目录，省略时打开原生目录选择框并登记成功选择的目录。返回 `WorkspaceActionResult<WorkspaceCandidate | null>`，取消不修改选择，失败通过既有浮动反馈呈现。`renameProject(id,name)` 与 `removeProject(id)` 同样限主 Frame，名称为 1～200 字符的单行文本；移除只解除登记，不删除会话、项目文件或工作区所有权清单。
+`pickProjectDir(projectId?)` 只接受窗口主 Frame：传入 ID 时检查已登记目录，省略时打开原生目录选择框并登记成功选择的目录。返回 `WorkspaceActionResult<string | null>`，成功值是规范化目录，取消不修改选择，失败通过既有浮动反馈呈现。`renameProject(id,name)` 与 `removeProject(id)` 同样限主 Frame，名称为 1～200 字符的单行文本；移除只解除登记，不删除会话、项目文件或工作区所有权清单。
 
 所有项目入口仍调用 `newSession({workspace})`。成功结果包含 `snapshot` 和可空的 `replacedDraftRuntimeId`，明确待移交的唯一未发送草稿；普通 `newSession()` 返回原草稿且替换身份为空。目录替换的输入移交与首次发送共用 Renderer 草稿存储，不把输入内容送入 Main 的项目登记，也不向模型追加控制消息。
 
