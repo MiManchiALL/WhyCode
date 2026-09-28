@@ -10,6 +10,10 @@ const storedSchema = sshConnectionInputSchema.omit({ secret: true }).extend({
 }).strict()
 type StoredConnection = z.infer<typeof storedSchema>
 
+export class SshConnectionMissingError extends Error {
+  constructor() { super('SSH 连接不存在或已删除；同名的新连接不会自动接管原项目和会话') }
+}
+
 /** Credentials never leave Main. A failed read/decryption must never overwrite saved data. */
 export class SshConnectionStore {
   private transient = new Map<string, string>()
@@ -29,7 +33,7 @@ export class SshConnectionStore {
   async list(): Promise<SshConnection[]> { return (await this.read()).map(value => this.public(value)) }
   async get(id: string): Promise<{ connection: SshConnection; secret?: string }> {
     const stored = (await this.read()).find(value => value.id === id)
-    if (!stored) throw new Error('SSH 连接不存在')
+    if (!stored) throw new SshConnectionMissingError()
     let secret = this.transient.get(id)
     if (!secret && stored.encryptedSecret) {
       if (!this.codec.isAvailable()) throw new Error('系统密钥保护不可用')
@@ -43,7 +47,7 @@ export class SshConnectionStore {
     if (input.authentication === 'key' && !input.privateKeyPath) throw new Error('请选择私钥文件')
     return this.update(async entries => {
       const existing = input.id ? entries.find(entry => entry.id === input.id) : undefined
-      if (input.id && !existing) throw new Error('SSH 连接不存在')
+      if (input.id && !existing) throw new SshConnectionMissingError()
       const { secret, ...settings } = input
       const id = existing?.id ?? randomUUID()
       const sameHost = existing?.host === input.host && existing.port === input.port
@@ -69,7 +73,7 @@ export class SshConnectionStore {
   trust(id: string, fingerprint: string): Promise<void> {
     return this.update(async entries => {
       const entry = entries.find(value => value.id === id)
-      if (!entry) throw new Error('SSH 连接不存在')
+      if (!entry) throw new SshConnectionMissingError()
       if (entry.fingerprint && entry.fingerprint !== fingerprint) throw new Error('服务器指纹已变化，连接已拒绝')
       entry.fingerprint = fingerprint
       await this.write(entries)

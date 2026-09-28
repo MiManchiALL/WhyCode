@@ -30,7 +30,7 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
         case 'directory': return { ok: true, directory: await connections.directory(request.id, request.path) }
         case 'disconnect': connections.disconnect(request.id); return { ok: true }
         case 'cleanup': await connections.cleanup(request.id); return { ok: true }
-        case 'remove': connections.disconnect(request.id); await connections.store.remove(request.id); return { ok: true }
+        case 'remove': await connections.remove(request.id); return { ok: true }
         case 'project': {
           const binding = await workspaces.select(request.id, request.path)
           if (binding.mode !== 'ssh') throw new Error('远端项目身份无效')

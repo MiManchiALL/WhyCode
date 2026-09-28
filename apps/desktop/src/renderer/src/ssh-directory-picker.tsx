@@ -37,8 +37,7 @@ export function SshDirectoryPicker({ connection, onClose }: { connection: SshCon
       <Dialog.Description className="mt-1 break-words text-sm text-[var(--wc-muted)]">{connection.name} · {connection.username}@{connection.host}</Dialog.Description>
       <form className="my-4 flex gap-2" onSubmit={event => { event.preventDefault(); if (!busy) void load(path) }}>
         <SettingsButton aria-label="上一级文件夹" disabled={busy || !directory || directory.path === '/'} onClick={() => void load(directory!.path.split('/').slice(0, -1).join('/') || '/')}><ArrowUp size={16} /></SettingsButton>
-        <input className="wc-settings-input min-w-0 flex-1" aria-label="远端文件夹路径" value={path} onChange={event => setPath(event.target.value)} />
-        <SettingsButton type="submit" disabled={busy}>前往</SettingsButton>
+        <input className="wc-settings-input min-w-0 flex-1" aria-label="远端文件夹路径" title="输入路径后按 Enter 前往" value={path} onChange={event => setPath(event.target.value)} />
       </form>
       <div className="wc-scrollbar h-64 overflow-y-auto rounded-xl border border-[var(--wc-line)] p-2" aria-busy={busy}>
         {!directory?.directories.length && <p className="p-4 text-sm text-[var(--wc-faint)]">{busy ? '正在读取…' : '没有子文件夹'}</p>}

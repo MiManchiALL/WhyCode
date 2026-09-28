@@ -49,7 +49,11 @@ export function SshSettings() {
   }
   const action = (connection: SshConnection, action: 'remove' | 'disconnect' | 'cleanup') => {
     const titles = { remove: '删除此连接？', disconnect: '断开 SSH 连接？', cleanup: '清理远端组件？' }
-    const descriptions = { remove: '删除本机连接配置并断开连接。项目文件和会话记录会保留。', disconnect: '此连接下正在运行的命令和终端将被停止。', cleanup: '停止此连接的命令和终端，删除 WhyCode 的远端组件缓存。项目文件和会话记录会保留。' }
+    const descriptions = {
+      remove: '清理远端组件并删除本机连接配置，停止相关命令和终端。项目、会话记录及远端临时文件保留，但无法再通过此连接继续工作。清理失败时保留连接配置，便于重试。',
+      disconnect: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留。',
+      cleanup: '停止相关命令和终端，删除 WhyCode 的远端组件。连接配置、项目、会话记录和临时文件保留；再次连接时自动重新部署组件。',
+    }
     setConfirmation({ title: titles[action], description: descriptions[action], action: '确认', run: () => {
       setBusy(connection.id)
       void request({ action, id: connection.id }).then(async result => {

@@ -134,20 +134,35 @@ export class SshConnections {
     if (!host) return
     this.connected.delete(id); host.processes.close(); host.client.end()
   }
-  async cleanup(id: string): Promise<void> {
+  /** File cleanup must work without deploying or starting the process component. */
+  async withFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, target?: string): Promise<T> {
     const current = this.connected.get(id)
     if (current) {
-      current.processes.close()
-      try { await cleanupRemoteComponent(current.io.fs, current.componentDirectory) }
-      finally { this.disconnect(id) }
-      return
+      const host = this.host(id, target)
+      return operation(host.io.fs, host.home)
     }
-    // 清理不能依赖待清理组件成功启动，否则损坏的组件无法由界面移除。
-    this.disconnect(id)
     const transport = await this.authenticate(id, new AbortController().signal)
     if ('status' in transport) throw new Error('请先连接并确认服务器指纹')
-    try { await cleanupRemoteComponent(transport.fs, path.posix.join(transport.home, '.cache', 'whycode-remote')) }
+    try {
+      if (target && target !== transport.target) throw new Error('此会话绑定的 SSH 服务器与当前连接不同')
+      return await operation(transport.fs, transport.home)
+    }
     finally { transport.client.end() }
+  }
+  async cleanup(id: string): Promise<void> {
+    this.connecting.get(id)?.controller.abort(new Error('SSH 连接已取消'))
+    this.connecting.delete(id)
+    this.connected.get(id)?.processes.close()
+    try {
+      await this.withFiles(id, (fs, home) => cleanupRemoteComponent(fs, path.posix.join(home, '.cache', 'whycode-remote')))
+    } finally { this.disconnect(id) }
+  }
+  async remove(id: string): Promise<void> {
+    const { connection } = await this.store.get(id)
+    // Untrusted entries have never deployed a component and need no remote removal.
+    if (connection.fingerprint) await this.cleanup(id)
+    else this.disconnect(id)
+    await this.store.remove(id)
   }
   close(): void { for (const id of new Set([...this.connected.keys(), ...this.connecting.keys()])) this.disconnect(id) }
 }

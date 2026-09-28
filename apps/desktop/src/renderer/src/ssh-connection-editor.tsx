@@ -33,7 +33,7 @@ export function SshConnectionEditor({ connection, onClose, onSave }: {
           {value.authentication === 'key' && <label className="block text-sm">私钥文件路径<input required className="wc-settings-input mt-1" value={value.privateKeyPath ?? ''} onChange={event => change('privateKeyPath', event.target.value)} placeholder="本机私钥的完整路径" /></label>}
           {value.authentication !== 'agent' && <>
             <label className="block text-sm">{value.authentication === 'key' ? '私钥密码（可选）' : '密码'}<input type="password" autoComplete="new-password" className="wc-settings-input mt-1" value={value.secret ?? ''} onChange={event => change('secret', event.target.value)} placeholder={connection?.hasSecret ? '留空保留现有密码' : ''} /></label>
-            <div className="flex items-center justify-between text-sm"><span>记住密码<span className="ml-2 text-xs text-[var(--wc-faint)]">使用系统加密存储</span></span><SettingsSwitch checked={value.rememberSecret} ariaLabel="记住 SSH 密码" onCheckedChange={next => change('rememberSecret', next)} /></div>
+            <div className="flex items-center justify-between gap-3 text-sm"><span>记住密码<span className="ml-2 text-xs text-[var(--wc-faint)]">重启后无需重新输入</span></span><SettingsSwitch checked={value.rememberSecret} ariaLabel="记住 SSH 密码" onCheckedChange={next => change('rememberSecret', next)} /></div>
           </>}
         </fieldset>
         <div className="flex justify-end gap-2 pt-2"><SettingsButton onClick={onClose} disabled={busy}>取消</SettingsButton><SettingsButton type="submit" variant="primary" disabled={busy}>{busy ? '保存中…' : '保存'}</SettingsButton></div>

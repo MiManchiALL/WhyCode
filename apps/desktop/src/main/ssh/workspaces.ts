@@ -4,6 +4,7 @@ import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { SessionScratchPaths } from '../session-scratch.ts'
 import type { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
 import { SshConnections } from './connections.ts'
+import { SshConnectionMissingError } from './store.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
 
 export class SshWorkspaces {
@@ -26,15 +27,28 @@ export class SshWorkspaces {
     if (result.status !== 'connected') throw new Error('请先在连接设置中确认服务器指纹')
     const host = this.connections.host(workspace.connectionId, workspace.target)
     runtime.workspaceIO = this.io(workspace)
-    validateSessionId(runtime.sessionId ?? runtime.runtimeId)
-    const rootDirectory = posix.join(host.home, '.cache', 'whycode-scratch', runtime.sessionId ?? runtime.runtimeId)
-    const scratch = { rootDirectory, mainDirectory: posix.join(rootDirectory, 'Main'), subagentsDirectory: posix.join(rootDirectory, 'subagents') }
-    for (const directory of [posix.dirname(rootDirectory), rootDirectory, scratch.mainDirectory, scratch.subagentsDirectory]) {
+    const scratch = scratchPaths(host.home, runtime.sessionId ?? runtime.runtimeId)
+    for (const directory of [posix.dirname(scratch.rootDirectory), scratch.rootDirectory, scratch.mainDirectory, scratch.subagentsDirectory]) {
       await host.io.fs.mkdir(directory, { recursive: true })
-      if ((await host.io.fs.lstat(directory)).isSymbolicLink()) throw new Error('远端临时目录不能是符号链接')
+      if (await host.io.fs.realpath(directory) !== directory) throw new Error('远端临时目录不能经过符号链接')
     }
     runtime.workspaceScratch = scratch
     return { home: host.home, scratch }
+  }
+  async removeScratch(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<string | void> {
+    validateSessionId(sessionId)
+    if (workspace?.mode !== 'ssh') return
+    return this.connections.withFiles(workspace.connectionId, async (fs, home) => {
+      const { rootDirectory } = scratchPaths(home, sessionId)
+      const parent = posix.dirname(rootDirectory)
+      const canonical = await fs.realpath(parent).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
+      if (canonical === null) return
+      if (canonical !== parent) throw new Error('远端临时目录不能经过符号链接，已保留文件')
+      await fs.rm(rootDirectory, { recursive: true, force: true })
+    }, workspace.target).catch((error: unknown) => {
+      if (error instanceof SshConnectionMissingError) return 'SSH 连接已删除，服务器上的会话临时文件已保留'
+      throw error
+    })
   }
   async terminal(runtime: DesktopSessionRuntime, cwd: string): Promise<TerminalPty> {
     await this.prepare(runtime)
@@ -60,4 +74,10 @@ export class SshWorkspaces {
     }
     return pty
   }
+}
+
+function scratchPaths(home: string, sessionId: string): SessionScratchPaths {
+  validateSessionId(sessionId)
+  const rootDirectory = posix.join(home, '.cache', 'whycode-scratch', sessionId)
+  return { rootDirectory, mainDirectory: posix.join(rootDirectory, 'Main'), subagentsDirectory: posix.join(rootDirectory, 'subagents') }
 }

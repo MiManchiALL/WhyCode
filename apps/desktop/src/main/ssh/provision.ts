@@ -60,9 +60,14 @@ export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, h
 
 /** Only known component files are removed; unknown contents, projects and scratch are untouched. */
 export async function cleanupRemoteComponent(fs: WorkspaceFileSystem, directory: string): Promise<void> {
-  if ((await fs.lstat(directory)).isSymbolicLink() || await fs.readFile(posix.join(directory, '.owner'), 'utf8') !== OWNER) throw new Error('远端组件目录归属校验失败')
+  const info = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
+  if (!info) return
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('远端组件目录归属校验失败')
   const entries = await fs.readdir(directory, { withFileTypes: true })
   if (entries.some(entry => !entry.isFile() || (entry.name !== '.owner' && !/^host-[0-9a-f]{64}$/u.test(entry.name)))) throw new Error('组件目录包含未知文件，已保留目录')
-  for (const entry of entries) await fs.unlink(posix.join(directory, entry.name))
+  const owner = posix.join(directory, '.owner')
+  if (await fs.readFile(owner, 'utf8') !== OWNER) throw new Error('远端组件目录归属校验失败')
+  for (const entry of entries) if (entry.name !== '.owner') await fs.unlink(posix.join(directory, entry.name))
+  await fs.unlink(owner)
   await fs.rmdir(directory)
 }

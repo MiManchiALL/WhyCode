@@ -9,6 +9,8 @@ import { AgentSession, SessionStore, CheckpointManager, CommandSessionManager, B
 import { WorkspaceFiles } from '../workspace-files.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshConnectionStore } from './store.ts'
+import { SshWorkspaces } from './workspaces.ts'
+import { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
 import { languageModel, modelEntry, toolStream, finalStream } from '../subagent-test-fixture.ts'
 
 const tool = (name: string) => BUILTIN_TOOLS.find(item => item.name === name)!
@@ -117,6 +119,13 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   const journal = await new SessionStore(join(env.root, 'sessions')).create({
     workspace: { mode: 'ssh', connectionId: env.id, target: host.target, label: 'fixture', workingDirectory: env.project }, modelId: 'test:subagent',
   })
+  const workspace = journal.metadataSnapshot.workspace
+  const runtime = new DesktopSessionRuntime({ workspace, modelId: null, emit: () => {} })
+  runtime.journal = journal
+  const workspaces = new SshWorkspaces(env.connections)
+  const remote = await workspaces.prepare(runtime)
+  assert.ok(remote)
+  await io.fs.writeFile(`${remote.scratch.mainDirectory}/keep.txt`, 'session scratch')
   let calls = 0
   const events: CoreEvent[] = []
   const session = new AgentSession({
@@ -154,6 +163,8 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   assert.equal(env.connections.isConnected(env.id), false)
   await assert.rejects(readFile(join(env.root, '.cache/whycode-remote/.owner')), { code: 'ENOENT' })
   assert.equal(await readFile(join(env.root, 'project/目录/说明.txt'), 'utf8'), 'hello\n世界\n')
+  assert.equal((await env.store.list()).length, 1)
+  assert.equal(await readFile(join(env.root, '.cache/whycode-scratch', journal.sessionId, 'Main/keep.txt'), 'utf8'), 'session scratch')
 
   await env.connections.connect(env.id)
   const componentDirectory = env.connections.host(env.id).componentDirectory
@@ -163,4 +174,13 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   await assert.rejects(env.connections.connect(env.id), /校验失败/)
   await env.connections.cleanup(env.id)
   await assert.rejects(readFile(join(env.root, '.cache/whycode-remote/.owner')), { code: 'ENOENT' })
+  await env.connections.cleanup(env.id)
+  await env.connections.connect(env.id)
+  assert.equal(env.connections.isConnected(env.id), true)
+  await env.connections.remove(env.id)
+  assert.equal(env.connections.isConnected(env.id), false)
+  assert.deepEqual(await env.store.list(), [])
+  await assert.rejects(readFile(join(env.root, '.cache/whycode-remote/.owner')), { code: 'ENOENT' })
+  assert.equal(await readFile(join(env.root, '.cache/whycode-scratch', journal.sessionId, 'Main/keep.txt'), 'utf8'), 'session scratch')
+  assert.equal(await readFile(join(env.root, 'project/agent.txt'), 'utf8'), 'remote agent')
 })

@@ -2645,11 +2645,12 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
       },
       onBeforeFactSourceDelete: async () => {
+        const scratchWarning = await sshWorkspaces.removeScratch(sessionId, targetWorkspace)
         const warning = await workspaceLifecycle.release(
           sessionId, targetWorkspace, workspaceName, deleteDirectory,
         )
         await syncRetiredModelLabels(sessionId)
-        return warning
+        return [scratchWarning, warning].filter(Boolean).join('；') || undefined
       },
     })
     if (!deletion.sessionExists) {

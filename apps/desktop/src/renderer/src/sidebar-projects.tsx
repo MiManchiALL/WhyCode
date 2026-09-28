@@ -56,7 +56,11 @@ function ProjectGroup({ project, selectedSessionId, busy, onSelect, onRename, on
           <ProjectIcon size={15} className="group-hover/project-row:opacity-0 group-focus-visible/project-toggle:opacity-0" />
           <ChevronRight size={14} className={`absolute opacity-0 transition-transform group-hover/project-row:opacity-100 group-focus-visible/project-toggle:opacity-100 ${expanded ? 'rotate-90' : ''}`} />
         </span>
-        <span className="min-w-0 truncate font-medium">{project.name}</span>
+        {project.remote ? <span className="flex min-w-0 flex-1 items-center gap-1 font-medium">
+          <span className="max-w-[calc(50%-0.5rem)] truncate text-[var(--wc-muted)]">{project.remote.label}</span>
+          <span aria-hidden="true" className="shrink-0 text-[var(--wc-faint)]">/</span>
+          <span className="max-w-[calc(50%-0.5rem)] truncate">{project.name}</span>
+        </span> : <span className="min-w-0 truncate font-medium">{project.name}</span>}
       </button>
       <div className="flex shrink-0 items-center opacity-0 group-hover/project-row:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100">
         <button type="button" className="wc-icon-button size-6" aria-label={`在 ${project.name} 中新建会话`} title="新建会话" disabled={busy}
