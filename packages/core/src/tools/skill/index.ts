@@ -1,5 +1,4 @@
-import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
 import { findSuspiciousWindowsPattern } from '../../permissions/path-safety.ts'
 import {
@@ -7,7 +6,7 @@ import {
   SKILL_MAX_RESOURCE_BYTES,
   type SkillTurnSnapshot,
 } from '../../skills/types.ts'
-import { readBoundedSkillFile } from '../../skills/read.ts'
+import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
 import { escapeSkillXmlAttribute } from '../../skills/xml.ts'
 import { buildTool } from '../tool.ts'
 import { SKILL_TOOL_PROMPT } from './prompt.ts'
@@ -29,18 +28,19 @@ export function createSkillTool(snapshot: SkillTurnSnapshot) {
     inputSchema: skillInputSchema,
     isReadOnly: true,
     kind: 'read',
-    async execute(input) {
+    async execute(input, ctx) {
+      const io = ctx.workspaceIO ?? localWorkspaceIO
       const skill = snapshot.entries.find((entry) => entry.id === input.skillId)
       if (!skill) return { data: 'Skill 不在当前根任务的目录快照中', isError: true }
       try {
-        const resourcePath = normalizeResourcePath(input.resourcePath ?? SKILL_FILE_NAME)
+        const resourcePath = normalizeResourcePath(input.resourcePath ?? SKILL_FILE_NAME, io)
         if (resourcePath === SKILL_FILE_NAME) {
           return {
             data: renderSkillResource(skill.name, SKILL_FILE_NAME, skill.content),
             isError: false,
           }
         }
-        const content = await readSkillResource(skill.rootPath, resourcePath)
+        const content = await readSkillResource(skill.rootPath, resourcePath, io, ctx.abortSignal)
         return { data: renderSkillResource(skill.name, resourcePath, content), isError: false }
       } catch (error) {
         return {
@@ -52,22 +52,25 @@ export function createSkillTool(snapshot: SkillTurnSnapshot) {
   })
 }
 
-async function readSkillResource(rootPath: string, resourcePath: string): Promise<string> {
+async function readSkillResource(rootPath: string, resourcePath: string, io: WorkspaceIO, signal: AbortSignal): Promise<string> {
+  const { resolve, relative, isAbsolute } = io.path
+  const { lstat, realpath } = io.fs
   const candidate = resolve(rootPath, resourcePath)
   const rootMetadata = await lstat(rootPath)
   if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
     throw new Error('Skill 包根目录已被符号链接或目录联接替换')
   }
-  await rejectSymbolicLinkSegments(rootPath, resourcePath)
+  await rejectSymbolicLinkSegments(rootPath, resourcePath, io)
   const root = await realpath(rootPath)
   const resolved = await realpath(candidate)
-  if (!isInside(root, resolved)) throw new Error('resourcePath 越过 Skill 包根目录')
+  const child = relative(root, resolved)
+  if (child === '..' || child.startsWith(`..${io.path.sep}`) || isAbsolute(child)) throw new Error('resourcePath 越过 Skill 包根目录')
   const metadata = await lstat(resolved)
   if (!metadata.isFile()) throw new Error('resourcePath 必须指向普通文件')
   if (metadata.size > SKILL_MAX_RESOURCE_BYTES) {
     throw new Error(`Skill 资源超过 ${SKILL_MAX_RESOURCE_BYTES} 字节上限`)
   }
-  const bytes = await readBoundedSkillFile(resolved, SKILL_MAX_RESOURCE_BYTES)
+  const bytes = await readBoundedWorkspaceFile(resolved, SKILL_MAX_RESOURCE_BYTES, io, signal)
   if (bytes.includes(0)) throw new Error('Skill 资源不是文本文件')
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
@@ -76,38 +79,33 @@ async function readSkillResource(rootPath: string, resourcePath: string): Promis
   }
 }
 
-function normalizeResourcePath(resourcePath: string): string {
+function normalizeResourcePath(resourcePath: string, io: WorkspaceIO): string {
   if (/[\u0000-\u001F\u007F]/u.test(resourcePath)) {
     throw new Error('resourcePath 不能包含控制字符')
   }
   const normalized = resourcePath.replaceAll('\\', '/')
-  if (isAbsolute(resourcePath) || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
+  if (io.path.isAbsolute(resourcePath) || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
     throw new Error('resourcePath 必须是 Skill 包内相对路径')
   }
   const segments = normalized.split('/')
   if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
     throw new Error('resourcePath 不能包含空路径段、. 或 ..')
   }
-  if (process.platform === 'win32') {
+  if (io.platform === 'win32') {
     const suspicious = findSuspiciousWindowsPattern(resourcePath)
     if (suspicious) throw new Error(`resourcePath 包含不安全的 Windows 路径：${suspicious}`)
   }
   return segments.join('/')
 }
 
-async function rejectSymbolicLinkSegments(rootPath: string, resourcePath: string): Promise<void> {
+async function rejectSymbolicLinkSegments(rootPath: string, resourcePath: string, io: WorkspaceIO): Promise<void> {
   let current = rootPath
   for (const segment of resourcePath.split('/')) {
-    current = join(current, segment)
-    if ((await lstat(current)).isSymbolicLink()) {
+    current = io.path.join(current, segment)
+    if ((await io.fs.lstat(current)).isSymbolicLink()) {
       throw new Error('resourcePath 不能经过符号链接或目录联接')
     }
   }
-}
-
-function isInside(rootPath: string, candidatePath: string): boolean {
-  const path = relative(rootPath, candidatePath)
-  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
 }
 
 function renderSkillResource(skillName: string, path: string, content: string): string {

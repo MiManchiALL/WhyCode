@@ -1,9 +1,9 @@
-import { BrowserWindow, ipcMain, protocol, shell, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, dialog, ipcMain, protocol, shell, type IpcMainInvokeEvent } from 'electron'
 import { IPC } from '../shared/ipc.ts'
 import { PREVIEW_SCHEME, type OpenWorkspaceFileRequest, type ReadWorkspaceFileRequest, type WorkspaceFileResult } from '../shared/workspace-files.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
 
-export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (runtimeId: string) => string,
+export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (runtimeId: string) => string | Promise<string>,
   ioFor?: (runtimeId: string) => import('@whycode/core').WorkspaceIO): void {
   protocol.handle(PREVIEW_SCHEME, request => files.response(request))
   ipcMain.handle(IPC.openWorkspaceFile, async (event, request: OpenWorkspaceFileRequest): Promise<WorkspaceFileResult> => {
@@ -11,7 +11,7 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
       const owner = fileWindow(event)
       if (!request || typeof request.runtimeId !== 'string' || !request.runtimeId || typeof request.path !== 'string'
         || !['directory', 'file'].includes(request.kind)) throw new Error('文件浏览请求无效')
-      const view = await files.open(owner.id, request, directoryFor(request.runtimeId), id => {
+      const view = await files.open(owner.id, request, await directoryFor(request.runtimeId), id => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC.workspaceFileChanged, { id })
       }, ioFor?.(request.runtimeId))
       if (owner.isDestroyed()) { files.close(owner.id, view.id); throw new Error('窗口已关闭') }
@@ -22,6 +22,7 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
     try {
       const owner = fileWindow(event)
       if (!request || typeof request.id !== 'string') throw new Error('文件读取请求无效')
+      await directoryFor(files.runtimeFor(owner.id, request.id))
       return { ok: true, view: await files.read(owner.id, request.id, request.offset) }
     } catch (error) { return { ok: false, error: errorMessage(error) } }
   })
@@ -39,6 +40,15 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
     const owner = fileWindow(event)
     if (typeof id !== 'string') throw new Error('文件路径无效')
     shell.showItemInFolder(files.pathFor(owner.id, id))
+  })
+  ipcMain.handle(IPC.saveWorkspaceFile, async (event, id: unknown): Promise<boolean> => {
+    const owner = fileWindow(event)
+    if (typeof id !== 'string') throw new Error('文件路径无效')
+    const result = await dialog.showSaveDialog(owner, { title: '保存到本机', defaultPath: files.fileNameFor(owner.id, id) })
+    if (result.canceled || !result.filePath) return false
+    await directoryFor(files.runtimeFor(owner.id, id))
+    await files.save(owner.id, id, result.filePath)
+    return true
   })
 }
 

@@ -1,5 +1,5 @@
 import type { ToolFileChange } from '@whycode/core/events'
-import { ChevronRight, FolderOpen, PanelRightOpen } from 'lucide-react'
+import { ChevronRight, Download, FolderOpen, PanelRightOpen } from 'lucide-react'
 import { useCallback, useId, useLayoutEffect } from 'react'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { useResponseFileChanges, totalFileChanges } from './response-file-changes-data.ts'
@@ -78,10 +78,10 @@ function ChangedFile({ runtimeId, projectDir, remote, page, onOpenPage, change, 
           onClick={() => onOpenPage({ kind: 'file', path: change.path, name, source: { kind: 'current' }, previewMode: 'code' })}>
           <PanelRightOpen size={14} />
         </button>
-        {!remote && <button type="button" className="wc-preview-action" title="在文件夹中显示" aria-label={`在文件夹中显示 ${name}`}
-          disabled={action.pending} aria-busy={action.pending} onClick={() => void action.run('reveal')}>
-          <FolderOpen size={14} />
-        </button>}
+        <button type="button" className="wc-preview-action" title={remote ? '保存到本机' : '在文件夹中显示'} aria-label={`${remote ? '保存到本机' : '在文件夹中显示'} ${name}`}
+          disabled={action.pending} aria-busy={action.pending} onClick={() => void action.run(remote ? 'save' : 'reveal')}>
+          {remote ? <Download size={14} /> : <FolderOpen size={14} />}
+        </button>
       </div>
     </div>
     {expanded && <div id={id} className="wc-changes-file-diff">

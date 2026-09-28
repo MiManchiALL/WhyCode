@@ -1,5 +1,5 @@
 import { access, copyFile, mkdir } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import path, { join } from 'node:path'
 import { CheckpointManifestStore } from '../checkpoints/manifest-store.ts'
 import type { CheckpointManifest, FileState } from '../checkpoints/types.ts'
 import type { LoadedSession, SessionEntry } from './types.ts'
@@ -92,8 +92,9 @@ export interface ForkScratchCopy {
 }
 
 /** Fork 共享项目路径，只重定位明确复制的会话临时目录。 */
-export function forkScratchPathMapper(copy?: ForkScratchCopy): (path: string) => string {
+export function forkScratchPathMapper(copy?: ForkScratchCopy, paths = path): (path: string) => string {
   if (!copy) return path => path
+  const { isAbsolute, relative, resolve, sep } = paths
   return path => {
     if (!isAbsolute(path)) return path
     const child = relative(resolve(copy.source), resolve(path))

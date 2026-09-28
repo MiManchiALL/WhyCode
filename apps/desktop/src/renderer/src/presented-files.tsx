@@ -1,6 +1,6 @@
 import type { PresentedFile } from '@whycode/core/presentation'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronUp, Copy, ExternalLink, FolderOpen, LoaderCircle, MoreHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronUp, Copy, Download, ExternalLink, FolderOpen, LoaderCircle, MoreHorizontal } from 'lucide-react'
 import { useState } from 'react'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { fileIcon } from './file-preview-controls.tsx'
@@ -9,14 +9,14 @@ import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
 
 type OpenFile = (page: Extract<RightPanelPage, { kind: 'file' }>) => void
 
-export function PresentedFiles({ files, runtimeId, onOpenFile }: {
-  files: readonly PresentedFile[]; runtimeId: string; onOpenFile?: OpenFile
+export function PresentedFiles({ files, runtimeId, remote, onOpenFile }: {
+  files: readonly PresentedFile[]; runtimeId: string; remote?: boolean; onOpenFile?: OpenFile
 }) {
   const [expanded, setExpanded] = useState(false)
   const visible = expanded ? files : files.slice(0, 4)
   return <div className="wc-present-files">
     <div className="wc-present-grid" data-single={files.length === 1 || undefined}>
-      {visible.map(file => <PresentedFileCard key={file.path} file={file} runtimeId={runtimeId} onOpenFile={onOpenFile} />)}
+      {visible.map(file => <PresentedFileCard key={file.path} file={file} runtimeId={runtimeId} remote={remote} onOpenFile={onOpenFile} />)}
     </div>
     {files.length > 4 && <button type="button" className="wc-present-toggle wc-focus-ring wc-type-caption"
       aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
@@ -26,8 +26,8 @@ export function PresentedFiles({ files, runtimeId, onOpenFile }: {
   </div>
 }
 
-function PresentedFileCard({ file, runtimeId, onOpenFile }: {
-  file: PresentedFile; runtimeId: string; onOpenFile?: OpenFile
+function PresentedFileCard({ file, runtimeId, remote, onOpenFile }: {
+  file: PresentedFile; runtimeId: string; remote?: boolean; onOpenFile?: OpenFile
 }) {
   const name = fileName(file.path)
   const Icon = fileIcon(name)
@@ -56,8 +56,11 @@ function PresentedFileCard({ file, runtimeId, onOpenFile }: {
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={6} collisionPadding={8}>
-          <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('open')}><ExternalLink size={14} />用默认应用打开</DropdownMenu.Item>
-          <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('reveal')}><FolderOpen size={14} />在文件夹中显示</DropdownMenu.Item>
+          {!remote && <>
+            <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('open')}><ExternalLink size={14} />用默认应用打开</DropdownMenu.Item>
+            <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('reveal')}><FolderOpen size={14} />在文件夹中显示</DropdownMenu.Item>
+          </>}
+          <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('save')}><Download size={14} />保存到本机</DropdownMenu.Item>
           <DropdownMenu.Item className="wc-menu-item" onSelect={() => void navigator.clipboard.writeText(file.path).catch(() => undefined)}><Copy size={14} />复制路径</DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

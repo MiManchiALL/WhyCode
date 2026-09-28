@@ -8,7 +8,8 @@ import { ResponseFileChanges } from './response-file-changes.tsx'
 import { SourceCapsule } from './source-capsules.tsx'
 import { copyResponseText, ResponseSourcesContext } from './response-presentation.ts'
 
-export function ResponseFooter({ runtimeId, projectDir, activity, final, presentation, onOpenFile, onOpenChanges, onRevealRestore, onFork, forkPending }: {
+export function ResponseFooter({ runtimeId, remote, projectDir, activity, final, presentation, onOpenFile, onOpenChanges, onRevealRestore, onFork, forkPending }: {
+  remote?: boolean
   runtimeId: string
   projectDir: string | null
   activity: readonly Block[]
@@ -24,7 +25,7 @@ export function ResponseFooter({ runtimeId, projectDir, activity, final, present
   const texts = final.filter(block => block.kind === 'text')
   if (!texts.length || !response) return null
   return <div className="px-1 pb-2" data-response-footer>
-    {presentation?.files.length ? <PresentedFiles files={presentation.files} runtimeId={runtimeId} onOpenFile={onOpenFile} /> : null}
+    {presentation?.files.length ? <PresentedFiles remote={remote} files={presentation.files} runtimeId={runtimeId} onOpenFile={onOpenFile} /> : null}
     <ResponseFileChanges runtimeId={runtimeId} projectDir={projectDir} activity={activity} onOpenChanges={onOpenChanges} onRevealRestore={onRevealRestore} />
     {response.sources.length ? (
       <div className="wc-source-list" role="list" aria-label="来源">

@@ -126,7 +126,7 @@ import {
 import type { McpSessionRuntime, McpStepBinding } from '../mcp/runtime.ts'
 import type { McpManagerSnapshot } from '../mcp/manager.ts'
 import { carryMcpToolState, withoutMcpToolState } from '../mcp/state.ts'
-import { latestTurnEditResources } from './turn-edit.ts'
+import { inspectLatestTurnEdit, latestTurnEditContext } from './turn-edit.ts'
 import {
   activatedSkillSchema,
   skillSummary,
@@ -1113,9 +1113,7 @@ export class AgentSession {
 
   /** 只读检查最新用户根回合的全部内部 turn，不由 Renderer 推测文件或命令副作用。 */
   async inspectLatestTurnEdit(turnId: string): Promise<TurnEditEffects> {
-    const { resources } = this.latestTurnEditContext(turnId)
-    return this.checkpoints?.turnEditEffects(resources.turnIds)
-      ?? { hasFileChanges: false, hasUntrackedEffects: false }
+    return inspectLatestTurnEdit(this.turnEditRecorder(), turnId)
   }
 
   /** 文件恢复与换根共用项目写锁；对话事实提交前失败会补偿文件，不启动新回答。 */
@@ -1126,7 +1124,7 @@ export class AgentSession {
   ): Promise<PreparedLatestTurnEdit> {
     const nextText = text.trim()
     if (!nextText) throw new Error('编辑后的消息不能为空')
-    const context = this.latestTurnEditContext(turnId)
+    const context = latestTurnEditContext(this.turnEditRecorder(), turnId, this.messages)
     this.editingTurn = true
     try {
       const operation = () => this.commitLatestTurnEdit(turnId, nextText, restoreFiles, context)
@@ -1141,25 +1139,11 @@ export class AgentSession {
     }
   }
 
-  private latestTurnEditContext(turnId: string) {
-    const recorder = this.turnEditRecorder()
-    const rollbackMessages = recorder.messagesBeforeTurn(turnId)
-    const rollbackTaskState = recorder.taskStateBeforeTurn(turnId)
-    const skills = recorder.skillsForTurn(turnId)
-    if (rollbackMessages === null || rollbackTaskState === undefined || skills === null) {
-      throw new Error('目标回合已不在当前活动历史中')
-    }
-    const resources = latestTurnEditResources(
-      this.messages, recorder.initialViewEvents, turnId, rollbackMessages.length,
-    )
-    return { recorder, rollbackMessages, rollbackTaskState, skills, resources }
-  }
-
   private async commitLatestTurnEdit(
     turnId: string,
     nextText: string,
     restoreFiles: boolean,
-    { recorder, rollbackMessages, rollbackTaskState, skills, resources }: ReturnType<AgentSession['latestTurnEditContext']>,
+    { recorder, rollbackMessages, rollbackTaskState, skills, resources }: ReturnType<typeof latestTurnEditContext>,
   ): Promise<PreparedLatestTurnEdit> {
     const inputId = crypto.randomUUID()
     const commit = () => recorder.recordTurnEditInput(
@@ -1212,15 +1196,10 @@ export class AgentSession {
       this.options.promptContext.discussion
       || this.protocolRound
       || this.terminalStatusManaged
-      || recorder.interruptedConsensusTaskId
     ) {
       throw new Error('协商或评审回合不能使用单回合编辑')
     }
-    if (
-      this.persistenceFailed
-      || recorder.undeliveredUserInputIds.length > 0
-      || recorder.pendingUserInputs.length > 0
-    ) {
+    if (this.persistenceFailed) {
       throw new Error('会话仍有待处理输入，不能编辑最新消息')
     }
     return recorder
@@ -2875,7 +2854,6 @@ export class AgentSession {
     ]
     const imageTools: ToolDefinition[] =
       model.capabilities.supportsImageInput
-      && (!this.options.workspaceIO || this.options.workspaceIO.identity === 'local')
       && this.options.sessionRecorder
       && !this.options.promptContext.discussion
       && !this.protocolRound

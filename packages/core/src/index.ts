@@ -473,6 +473,7 @@ export type {
 } from './tasks/types.ts'
 
 export { CheckpointManager, type TurnEditEffects } from './checkpoints/manager.ts'
+export { inspectLatestTurnEdit } from './agent/turn-edit.ts'
 export { localWorkspaceIO, workspacePathKey, outsideWorkspaceBoundary } from './workspace/io.ts'
 export type { WorkspaceIO, WorkspaceFileSystem, WorkspaceStat, WorkspaceReader } from './workspace/io.ts'
 export type { WorkspaceProcess } from './workspace/process.ts'

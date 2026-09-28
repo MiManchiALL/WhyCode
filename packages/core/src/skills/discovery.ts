@@ -1,6 +1,4 @@
-import { lstat, readdir } from 'node:fs/promises'
-import type { Dirent } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { localWorkspaceIO, workspacePathKey, type WorkspaceIO, type WorkspaceDirent } from '../workspace/io.ts'
 import { findProjectRoot } from '../project-root.ts'
 import type { SkillDiagnostic, SkillScope } from './types.ts'
 import { SKILL_FILE_NAME } from './types.ts'
@@ -18,20 +16,22 @@ export interface DiscoveryRoot {
 export async function discoveryRoots(
   projectDir: string | null,
   homeDir: string | undefined,
+  io: WorkspaceIO = localWorkspaceIO,
 ): Promise<DiscoveryRoot[]> {
+  const { resolve, join } = io.path
   const roots: DiscoveryRoot[] = []
   if (projectDir) {
     const selected = resolve(projectDir)
-    const projectRoot = await findProjectRoot(selected)
-    const directories = directoriesBetween(projectRoot, selected).reverse()
+    const projectRoot = await findProjectRoot(selected, io)
+    const directories = directoriesBetween(projectRoot, selected, io).reverse()
     roots.push(...directories.map((directory) => ({
       path: join(directory, '.agents', 'skills'),
       scope: 'project' as const,
     })))
   }
   if (homeDir) {
-    roots.push({ path: userSkillsRoot(homeDir), scope: 'user' })
-    roots.push({ path: systemSkillsRoot(homeDir), scope: 'system' })
+    roots.push({ path: userSkillsRoot(homeDir, io.path), scope: 'user' })
+    roots.push({ path: systemSkillsRoot(homeDir, io.path), scope: 'system' })
   }
   return roots
 }
@@ -40,10 +40,12 @@ export async function discoverSkillFiles(
   root: string,
   diagnostics: SkillDiagnostic[],
   maxEntries = MAX_SKILL_ENTRIES_PER_ROOT,
+  io: WorkspaceIO = localWorkspaceIO,
 ): Promise<string[]> {
+  const { resolve, join } = io.path
   const files: string[] = []
   const absoluteRoot = resolve(root)
-  if (!await validateRoot(absoluteRoot, diagnostics)) return files
+  if (!await validateRoot(absoluteRoot, diagnostics, io)) return files
 
   const queue: { path: string; depth: number }[] = [{ path: absoluteRoot, depth: 0 }]
   let queueIndex = 0
@@ -55,7 +57,7 @@ export async function discoverSkillFiles(
       diagnostics.push({ path: root, message: `目录扫描达到 ${MAX_DIRECTORIES_PER_ROOT} 个上限` })
       break
     }
-    const entries = await readDirectory(current.path, diagnostics)
+    const entries = await readDirectory(current.path, diagnostics, io)
     if (!entries) continue
     entries.sort((left, right) => left.name.localeCompare(right.name, 'en'))
     for (const entry of entries) {
@@ -75,7 +77,7 @@ export async function discoverSkillFiles(
         && !entry.name.startsWith('.')
       ) {
         // 复核目录身份后再入队，拒绝少数文件系统中被替换成链接的 Dirent。
-        const info = await lstat(path).catch(() => null)
+        const info = await io.fs.lstat(path).catch(() => null)
         if (info?.isDirectory() && !info.isSymbolicLink()) {
           queue.push({ path, depth: current.depth + 1 })
         }
@@ -85,17 +87,18 @@ export async function discoverSkillFiles(
   return files
 }
 
-export function skillPathKey(path: string): string {
-  const absolute = resolve(path).replaceAll('\\', '/')
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+export function skillPathKey(path: string, io: WorkspaceIO = localWorkspaceIO): string {
+  const key = workspacePathKey(io, path)
+  return io.platform === 'win32' ? key.replaceAll('\\', '/') : key
 }
 
 async function validateRoot(
   absoluteRoot: string,
   diagnostics: SkillDiagnostic[],
+  io: WorkspaceIO,
 ): Promise<boolean> {
   try {
-    const rootInfo = await lstat(absoluteRoot)
+    const rootInfo = await io.fs.lstat(absoluteRoot)
     if (rootInfo.isSymbolicLink()) {
       diagnostics.push({ path: absoluteRoot, message: 'Skill 根目录是符号链接，已跳过' })
       return false
@@ -118,9 +121,10 @@ async function validateRoot(
 async function readDirectory(
   path: string,
   diagnostics: SkillDiagnostic[],
-): Promise<Dirent<string>[] | null> {
+  io: WorkspaceIO,
+): Promise<WorkspaceDirent[] | null> {
   try {
-    return await readdir(path, { withFileTypes: true })
+    return await io.fs.readdir(path, { withFileTypes: true })
   } catch (error) {
     if (isNotFound(error)) return null
     diagnostics.push({
@@ -131,13 +135,13 @@ async function readDirectory(
   }
 }
 
-function directoriesBetween(root: string, leaf: string): string[] {
+function directoriesBetween(root: string, leaf: string, io: WorkspaceIO): string[] {
   const result: string[] = []
   let current = leaf
   while (true) {
     result.push(current)
-    if (skillPathKey(current) === skillPathKey(root)) return result.reverse()
-    const parent = dirname(current)
+    if (skillPathKey(current, io) === skillPathKey(root, io)) return result.reverse()
+    const parent = io.path.dirname(current)
     if (parent === current) return [leaf]
     current = parent
   }

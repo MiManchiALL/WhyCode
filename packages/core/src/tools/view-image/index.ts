@@ -4,7 +4,9 @@ import {
   removeImageAttachmentFiles,
 } from '../../attachments/renditions.ts'
 import { importImageAttachments } from '../../attachments/storage.ts'
-import { imageRegionSchema } from '../../attachments/types.ts'
+import { IMAGE_ATTACHMENT_MAX_SOURCE_BYTES, imageRegionSchema } from '../../attachments/types.ts'
+import { localWorkspaceIO } from '../../workspace/io.ts'
+import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
 import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { VIEW_IMAGE_TOOL_NAME, viewImagePrompt } from './prompt.ts'
@@ -21,10 +23,10 @@ export function createViewImageTool(options: {
     : z.literal('high').default('high')
   return buildTool({
     name: VIEW_IMAGE_TOOL_NAME,
-    description: '查看本地图片并交给视觉模型分析',
+    description: '查看工作区图片并交给视觉模型分析',
     prompt: viewImagePrompt(options.supportsOriginalDetail === true),
     inputSchema: z.object({
-      path: z.string().min(1).describe('本地图片路径（相对项目目录或已获授权的绝对路径）'),
+      path: z.string().min(1).describe('工作区图片路径（相对项目目录或已获授权的绝对路径）'),
       detail: detailSchema,
       region: imageRegionSchema.optional().describe('可选裁剪区域；坐标基于 autoOrient 后的源图像素'),
     }),
@@ -33,8 +35,10 @@ export function createViewImageTool(options: {
     extractPaths: (input) => [input.path],
     async execute(input, ctx) {
       const absolute = await resolveAllowed(ctx, input.path)
+      const io = ctx.workspaceIO ?? localWorkspaceIO
       const attachments = await importImageAttachments(
-        [{ kind: 'path', path: absolute }],
+        [{ kind: 'bytes', name: io.path.basename(absolute),
+          bytes: await readBoundedWorkspaceFile(absolute, IMAGE_ATTACHMENT_MAX_SOURCE_BYTES, io, ctx.abortSignal) }],
         options.attachmentDirectory,
         options.sessionId,
         ctx.abortSignal,

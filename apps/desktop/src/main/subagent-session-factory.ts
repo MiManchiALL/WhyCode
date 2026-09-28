@@ -81,9 +81,9 @@ export async function createSubagentAgentSession(
       },
     },
     mainTools,
-    skillCatalog: remoteScratch ? undefined : options.skills,
+    skillCatalog: remoteScratch ? options.parentRuntime.skillCatalog : options.skills,
     sessionRecorder: options.journal,
-    pdfProcessor: remoteScratch ? undefined : options.pdfProcessor,
+    pdfProcessor: options.pdfProcessor,
     officeProcessor: remoteScratch ? undefined : options.officeProcessor,
     captureScreenshot: remoteScratch ? undefined : options.captureScreenshot,
     initialPermission: {

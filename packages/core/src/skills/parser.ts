@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { basename, dirname, resolve } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
+import { skillPathKey } from './discovery.ts'
 import { parseDocument } from 'yaml'
 import {
   SKILL_MAX_DESCRIPTION_CHARS,
@@ -16,9 +17,12 @@ export interface ParseSkillInput {
   path: string
   scope: SkillScope
   content: string
+  workspaceIO?: WorkspaceIO
 }
 
 export function parseSkillDocument(input: ParseSkillInput): ActivatedSkill {
+  const io = input.workspaceIO ?? localWorkspaceIO
+  const { resolve, dirname, basename } = io.path
   const path = resolve(input.path)
   const content = input.content.replace(/^\uFEFF/, '')
   const byteLength = Buffer.byteLength(content, 'utf8')
@@ -51,7 +55,7 @@ export function parseSkillDocument(input: ParseSkillInput): ActivatedSkill {
 
   const rootPath = dirname(path)
   return {
-    id: skillId(path),
+    id: skillId(path, io),
     path,
     rootPath,
     name,
@@ -62,10 +66,9 @@ export function parseSkillDocument(input: ParseSkillInput): ActivatedSkill {
   }
 }
 
-export function skillId(path: string): string {
-  const normalized = process.platform === 'win32'
-    ? resolve(path).replaceAll('\\', '/').toLowerCase()
-    : resolve(path)
+export function skillId(path: string, io: WorkspaceIO = localWorkspaceIO): string {
+  const key = skillPathKey(path, io)
+  const normalized = io.identity === 'local' ? key : `${io.identity}\0${key}`
   return `skill:${createHash('sha256').update(normalized, 'utf8').digest('hex')}`
 }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import {
   IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
@@ -12,6 +12,7 @@ import {
 } from './types.ts'
 import { imageSha256, validateImageDecodes } from './decoder.ts'
 import { inspectImage } from './inspection.ts'
+import { readBoundedWorkspaceFile } from '../workspace/read.ts'
 
 export { inspectImage } from './inspection.ts'
 
@@ -249,25 +250,9 @@ export async function readBoundedImageFile(
   path: string,
   maxBytes = IMAGE_ATTACHMENT_MAX_SOURCE_BYTES,
 ): Promise<Buffer> {
-  const file = await open(path, 'r')
-  try {
-    const stat = await file.stat()
-    if (!stat.isFile()) throw new Error(`附件不是普通文件：${path}`)
-    if (stat.size <= 0) throw new Error(`图片文件为空：${path}`)
-    if (stat.size > maxBytes) {
-      throw new Error(`图片不能超过 ${(maxBytes / 1_000_000).toFixed(2)} MB：${basename(path)}`)
-    }
-    const bytes = Buffer.alloc(Number(stat.size))
-    let offset = 0
-    while (offset < bytes.byteLength) {
-      const { bytesRead } = await file.read(bytes, offset, bytes.byteLength - offset, offset)
-      if (bytesRead === 0) throw new Error(`读取图片时文件发生变化：${path}`)
-      offset += bytesRead
-    }
-    return bytes
-  } finally {
-    await file.close()
-  }
+  const bytes = await readBoundedWorkspaceFile(path, maxBytes)
+  if (!bytes.length) throw new Error(`图片文件为空：${path}`)
+  return bytes
 }
 
 function decodeInlineImage(input: Extract<ImageAttachmentInput, { kind: 'inline' }>): Buffer {

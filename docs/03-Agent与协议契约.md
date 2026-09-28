@@ -145,7 +145,7 @@ BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnI
 
 ### 1.11 用户消息重新编辑
 
-`inspect-user-message-edit {turnId}` 只读返回最新 Main 用户根回合全部内部 turn 的 `hasFileChanges` 与 `hasUntrackedEffects`；文件恢复范围由 Core 的活动历史和精确检查点决定，不接受 Renderer 提供的文件或检查点列表。
+`inspect-user-message-edit {turnId}` 从本机历史和检查点只读返回最新 Main 用户根回合全部内部 turn 的 `hasFileChanges` 与 `hasUntrackedEffects`，不要求可用模型或 SSH 连接；文件恢复范围由 Core 的活动历史和精确检查点决定，不接受 Renderer 提供的文件或检查点列表。
 
 `edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。Main 目标可携带 `restoreFiles`，省略或 false 只替换对话；true 在同一次提交中恢复本轮已跟踪的文件改动。命令等未跟踪副作用只提醒、不撤销，也不禁止重新编辑。恢复或持久化失败不得替换活动对话或启动模型；文件外部改动仍按 after 状态校验并拒绝覆盖。原工具 `files-and-chat` 仍拒绝跨越未跟踪副作用。
 
@@ -284,7 +284,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 ### 3.6 图片与截图
 
 - 单条用户消息最多 10 张 PNG/JPEG/WebP，与正文共享不可拆分 delivery ID。长期消息保存附件 ID/显示名/路由，不保存绝对路径或 Base64。
-- `ViewImage` 读取当前会话/权限允许的图片，支持 high、经画像验证的 original 与 autoOrient 后源像素 region；结果返回模型到源图映射。
+- `ViewImage` 读取当前工作区/权限允许的图片；SSH 路径指服务器文件。支持 high、经画像验证的 original 与 autoOrient 后源像素 region；结果返回模型到源图映射。
 - `CaptureScreenshot {target,display_id?,window_title?,region?,detail}`：target 为 screen/window，region 是 screen 的可选裁剪区域。单个应用优先 window 并提供唯一匹配的 window_title；目标窗口可位于后台或被遮挡，但须打开且未最小化。显示器截图不一定包含目标应用，仅在检查多窗口、桌面布局或显示器整体状态时使用 screen。Windows 捕获事务排除 WhyCode，不通过隐藏/显示制造画面抖动。
 - `AnalyzeImage {attachmentIds,question}` 只给非视觉 Main 且必须有有效辅助视觉连接；每次 1～10 张。辅助请求不接收主历史、项目、文件名、工具或密钥。
 - 用户输入最多 10 张；普通视觉工具、MCP 和 `RenderOffice` 单步骤最多 4 张。视觉 `ReadPdf` 使用自身最多 20 页/32 MB 边界。
@@ -293,6 +293,8 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 ### 3.7 PDF
 
 `ReadPdf {sourceType,sourceValue,startPage,pageCount}`：sourceType 为 attachment 或 path；视觉模型返回 100 DPI JPEG 页面图，默认/最多 20 页；非视觉模型返回文字，默认 5、最多 20 页且总计最多 60k 字符。结果始终含总页数、当前页段和下一页游标。
+
+`path` 按当前工作区寻址，SSH 会话从服务器读取且仍受项目与附加目录权限限制；远端源文件不超过既有 `PDF_ATTACHMENT_MAX_SOURCE_BYTES`。`attachment` 始终引用当前会话在本机保存的附件 ID。远端读取与本机处理的生命周期见文档二 §10.2。
 
 小 PDF 自动展开只适用于视觉 Main、用户上传的最近权威引用，单份和单请求均最多 10 页、总图 16 MB。Web 导入、大文件或超预算文件必须显式 `ReadPdf`。PDF 与页面缓存以附件摘要和事务校验；损坏、加密、空或越界输入明确失败。
 
@@ -479,6 +481,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 - `openWorkspaceFile({runtimeId,kind,path})` 从运行时解析工作目录。目录路径相对工作目录；文件使用明确打开的绝对路径，目录外文件的静态资源范围限于其父目录。返回一次性视图 ID、目录项或文档元数据及预览地址，不通过 IPC 返回正文。
 - `readWorkspaceFile({id,offset?})` 只接受当前窗口持有的视图；目录每页最多 200 项，每个窗口最多 64 个活动视图。目录项区分目录、普通文件和不可浏览的链接/特殊项。
 - `workspaceFileChanged({id})` 只发给资源所属窗口；文件视图仅在正文或已读取依赖的版本改变时通知，目录视图按目录变化通知。`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径，`openWorkspaceFileExternally(id)` 用系统默认应用打开该路径并返回失败原因；两者只接受所属窗口的活动视图 ID，不接受 Renderer 提供的原始路径。视图 ID 与预览地址均不持久化。
+- `saveWorkspaceFile(id)` 只保存当前窗口的活动文件视图，由 Main 的系统保存对话框选择本机目标，取消返回 false。内容流式写入目标旁的排他暂存文件，完成且字节数符合读取前尺寸后才替换目标；关闭视图、传输失败或尺寸变化清理暂存并保留原目标。Renderer 不能直接提交任意本机写入路径。
 - `whycode-preview` 仅处理 GET/HEAD，支持单段字节范围。普通文本预览上限 2 MiB，文档与静态资源上限 64 MiB；不支持的类型只返回元数据。HTML 代码视图同样受文本上限约束。
 - 每次读取以真实路径检查资源范围；禁止目录链接逃逸、特殊文件、相关隐藏文件和非静态资源。HTML 使用独立 sandbox，预览脚本不能访问宿主 API。关闭视图后其地址失效，不能借旧地址继续读取文件。
 - SSH 视图返回 `remote: true`，读取走绑定服务器的 SFTP；不注册本地文件监听，用户按需刷新。系统默认应用与文件夹定位对远端视图明确拒绝，Renderer 隐藏对应入口；本机历史检查点不受连接状态影响。
@@ -511,9 +514,9 @@ SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存 `{target,label
 
 ### 7.7 SSH 连接与进程通道
 
-Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
+Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`resolve {target}` 只读返回该稳定身份的已验证配置与连接状态，优先当前连接，无匹配时返回空，不触发认证；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
 
-SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知，连接成功、主动断开和意外断线后通知 Renderer 重读列表，取消订阅释放监听。连接管理、所有权与清理语义见文档二 §7.5。
+SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知，配置保存或删除、连接成功、主动断开和意外断线后通知 Renderer 重读列表及所属会话状态，取消订阅释放监听。连接管理、所有权与清理语义见文档二 §7.5。
 
 远端组件只通过已有 SSH channel 的标准输入输出交换协议 1 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。命令通过 `/bin/sh -c` 在指定绝对目录执行，字节使用 base64，stdout/stderr 合并为工具既有输出；前台立即关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
 

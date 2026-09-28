@@ -16,6 +16,7 @@ export interface WorkspaceStat {
 }
 export interface WorkspaceDirent extends WorkspaceStat { name: string }
 export interface WorkspaceReader {
+  stat(): Promise<WorkspaceStat>
   read(buffer: Buffer, offset: number, length: number, position: number): Promise<{ bytesRead: number }>
   close(): Promise<void>
 }
@@ -31,7 +32,7 @@ export interface WorkspaceFileSystem {
   open(path: string, flags: 'r'): Promise<WorkspaceReader>
   createReadStream(path: string, options?: { encoding?: BufferEncoding; start?: number; end?: number; signal?: AbortSignal }): Readable
   readdir(path: string, options: { withFileTypes: true }): Promise<WorkspaceDirent[]>
-  mkdir(path: string, options: { recursive: true }): Promise<unknown>
+  mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>
   rm(path: string, options: { force?: boolean; recursive?: boolean }): Promise<void>
   unlink(path: string): Promise<void>
   rmdir(path: string): Promise<void>

@@ -25,6 +25,7 @@ export type SshConnectResult =
 export interface SshDirectory { path: string; directories: string[] }
 export type SshRequest =
   | { action: 'list' }
+  | { action: 'resolve'; target: string }
   | { action: 'save'; connection: SshConnectionInput }
   | { action: 'connect'; id: string; fingerprint?: string; secret?: string }
   | { action: 'disconnect' | 'remove' | 'cleanup'; id: string }

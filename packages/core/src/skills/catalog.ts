@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import { lstat } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { renderSkillCatalog } from './catalog-context.ts'
 import { discoverSkillFiles, discoveryRoots, skillPathKey } from './discovery.ts'
 import { parseSkillDocument } from './parser.ts'
-import { readBoundedSkillFile } from './read.ts'
+import { readBoundedWorkspaceFile } from '../workspace/read.ts'
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import {
   SKILL_MAX_DOCUMENT_BYTES,
   SKILL_MAX_SELECTIONS_PER_MESSAGE,
@@ -31,6 +31,7 @@ interface CachedSkill {
 
 export interface SkillCatalogOptions {
   homeDir?: string
+  workspaceIO?: WorkspaceIO
   /** 测试/宿主可收紧；默认 32 MiB，避免大量合法大文件占满进程内存。 */
   maxParsedCacheBytes?: number
   /** 单个任务冻结的正文总量；达到后按发现优先级稳定截断。 */
@@ -42,6 +43,7 @@ export interface SkillCatalogOptions {
  * 未变化文件按身份与时间/尺寸签名复用有界解析结果，当前 turn 持有独立冻结快照。
  */
 export class SkillCatalogService {
+  private readonly io: WorkspaceIO
   private readonly homeDir: string | undefined
   private readonly parsedFiles = new Map<string, CachedSkill>()
   private readonly maxParsedCacheBytes: number
@@ -49,7 +51,8 @@ export class SkillCatalogService {
   private parsedCacheBytes = 0
 
   constructor(options: SkillCatalogOptions = {}) {
-    this.homeDir = options.homeDir ? resolve(options.homeDir) : undefined
+    this.io = options.workspaceIO ?? localWorkspaceIO
+    this.homeDir = options.homeDir ? this.io.path.resolve(options.homeDir) : undefined
     this.maxParsedCacheBytes = positiveBudget(
       options.maxParsedCacheBytes,
       DEFAULT_MAX_PARSED_CACHE_BYTES,
@@ -65,15 +68,15 @@ export class SkillCatalogService {
     contextWindow?: number,
   ): Promise<SkillTurnSnapshot> {
     const diagnostics: SkillDiagnostic[] = []
-    const roots = await discoveryRoots(projectDir, this.homeDir)
+    const roots = await discoveryRoots(projectDir, this.homeDir, this.io)
     const entries: ActivatedSkill[] = []
     const seenPaths = new Set<string>()
     let snapshotBytes = 0
 
     rootLoop: for (const root of roots) {
-      const discovered = await discoverSkillFiles(root.path, diagnostics)
+      const discovered = await discoverSkillFiles(root.path, diagnostics, undefined, this.io)
       for (const path of discovered) {
-        const key = skillPathKey(path)
+        const key = skillPathKey(path, this.io)
         if (seenPaths.has(key)) continue
         seenPaths.add(key)
         const parsed = await this.loadSkill(path, root.scope, diagnostics)
@@ -132,9 +135,9 @@ export class SkillCatalogService {
     const snapshot = await this.snapshot(projectDir, contextWindow)
     const selected = new Set<string>()
     return parsedLocators.map((locator) => {
-      const requestedPath = skillPathKey(locator.path)
+      const requestedPath = skillPathKey(locator.path, this.io)
       const skill = snapshot.entries.find((entry) =>
-        entry.id === locator.id && skillPathKey(entry.path) === requestedPath)
+        entry.id === locator.id && skillPathKey(entry.path, this.io) === requestedPath)
       if (!skill) throw new Error('所选 Skill 已移动、删除或不属于当前工作区')
       if (selected.has(skill.id)) throw new Error(`不能重复选择 Skill：${skill.name}`)
       selected.add(skill.id)
@@ -154,19 +157,21 @@ export class SkillCatalogService {
   ): Promise<ActivatedSkill | null> {
     let signature: string
     let size: bigint
+    let bytes: Buffer | undefined
     try {
-      const metadata = await lstat(path, { bigint: true })
+      const metadata = this.io.identity === 'local'
+        ? await lstat(path, { bigint: true }) : await this.io.fs.lstat(path)
       if (metadata.isSymbolicLink() || !metadata.isFile()) {
         throw new Error('SKILL.md 必须是普通文件且不能是符号链接')
       }
-      size = metadata.size
-      signature = [
-        metadata.dev,
-        metadata.ino,
-        metadata.size,
-        metadata.mtimeNs,
-        metadata.ctimeNs,
-      ].join(':')
+      size = BigInt(metadata.size)
+      if ('mtimeNs' in metadata) {
+        signature = [metadata.dev, metadata.ino, size, metadata.mtimeNs, metadata.ctimeNs].join(':')
+      } else {
+        // SFTP v3 的时间戳只有秒精度；同一秒的等长修改必须按内容识别。
+        bytes = await readBoundedWorkspaceFile(path, SKILL_MAX_DOCUMENT_BYTES, this.io)
+        signature = createHash('sha256').update(bytes).digest('hex')
+      }
     } catch (error) {
       diagnostics.push({
         path,
@@ -174,7 +179,7 @@ export class SkillCatalogService {
       })
       return null
     }
-    const key = skillPathKey(path)
+    const key = skillPathKey(path, this.io)
     const cached = this.parsedFiles.get(key)
     if (cached?.signature === signature) {
       this.parsedFiles.delete(key)
@@ -186,14 +191,14 @@ export class SkillCatalogService {
       if (size > BigInt(SKILL_MAX_DOCUMENT_BYTES)) {
         throw new Error(`SKILL.md 超过 ${SKILL_MAX_DOCUMENT_BYTES} 字节上限`)
       }
-      const bytes = await readBoundedSkillFile(path, SKILL_MAX_DOCUMENT_BYTES)
+      bytes ??= await readBoundedWorkspaceFile(path, SKILL_MAX_DOCUMENT_BYTES, this.io)
       let content: string
       try {
         content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
       } catch {
         throw new Error('SKILL.md 必须是有效 UTF-8 文本')
       }
-      const value = parseSkillDocument({ path, scope, content })
+      const value = parseSkillDocument({ path, scope, content, workspaceIO: this.io })
       this.cacheFile(key, {
         signature,
         value,

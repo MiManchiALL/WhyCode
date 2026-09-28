@@ -10,7 +10,7 @@ import { WorkspaceFiles } from '../workspace-files.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshConnectionStore } from './store.ts'
 import { SshCredentialsRequiredError } from './connections.ts'
-import { SshWorkspaces } from './workspaces.ts'
+import { SshWorkspaces, sshScratchPaths } from './workspaces.ts'
 import { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
 import { languageModel, modelEntry, toolStream, finalStream } from '../subagent-test-fixture.ts'
 
@@ -127,6 +127,15 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   const remote = await workspaces.prepare(runtime)
   assert.ok(remote)
   await io.fs.writeFile(`${remote.scratch.mainDirectory}/keep.txt`, 'session scratch')
+  const forkId = randomUUID()
+  const forkScratch = sshScratchPaths(host.home, forkId)
+  await workspaces.snapshot(workspace, journal.sessionId, forkId)
+  assert.equal(await io.fs.readFile(`${forkScratch.mainDirectory}/keep.txt`, 'utf8'), 'session scratch')
+  await io.fs.writeFile(`${forkScratch.mainDirectory}/keep.txt`, 'fork scratch')
+  await assert.rejects(workspaces.snapshot(workspace, journal.sessionId, forkId))
+  assert.equal(await io.fs.readFile(`${forkScratch.mainDirectory}/keep.txt`, 'utf8'), 'fork scratch')
+  assert.equal(await io.fs.readFile(`${remote.scratch.mainDirectory}/keep.txt`, 'utf8'), 'session scratch')
+  await workspaces.removeScratch(forkId, workspace)
   let calls = 0
   const events: CoreEvent[] = []
   const session = new AgentSession({

@@ -1,4 +1,5 @@
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import type { ModelMessage } from 'ai'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
@@ -36,7 +37,7 @@ export async function createSessionFork(
     forkPrefix(input.sourceEntries, input.sourceTurnId),
   )
   const sourceWorkspace = buildLoadedSession(sourcePrefix).metadata.workspace
-  const rebase = forkScratchPathMapper(input.scratchCopy)
+  const rebase = forkScratchPathMapper(input.scratchCopy, sourceWorkspace.mode === 'ssh' ? path.posix : path)
   const presentations = forkFileReferences(rebase)
   const entries = sourcePrefix.map((entry) =>
     rehomeEntry(

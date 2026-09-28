@@ -6,6 +6,7 @@ import type { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
 import { SshConnections } from './connections.ts'
 import { SshConnectionMissingError } from './store.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
+import { copyDirectorySnapshot } from '../directory-snapshot.ts'
 
 export class SshWorkspaces {
   readonly connections: SshConnections
@@ -21,27 +22,43 @@ export class SshWorkspaces {
   io(workspace: RuntimeWorkspace) {
     return workspace.mode === 'ssh' ? this.connections.io(workspace.target) : localWorkspaceIO
   }
-  async prepare(runtime: DesktopSessionRuntime): Promise<{ home: string; scratch: SessionScratchPaths } | null> {
-    const workspace = runtime.workspace
+  async connect(workspace: RuntimeWorkspace) {
     if (workspace.mode !== 'ssh') return null
     const id = await this.connections.connectionIdForTarget(workspace.target)
     const result = await this.connections.connect(id)
     if (result.status !== 'connected') throw new Error('请先在连接设置中确认服务器指纹')
     const host = this.connections.host(id, workspace.target)
-    runtime.workspaceIO = this.io(workspace)
-    const scratch = scratchPaths(host.home, runtime.sessionId ?? runtime.runtimeId)
-    for (const directory of [posix.dirname(scratch.rootDirectory), scratch.rootDirectory, scratch.mainDirectory, scratch.subagentsDirectory]) {
-      await host.io.fs.mkdir(directory, { recursive: true })
-      if (await host.io.fs.realpath(directory) !== directory) throw new Error('远端临时目录不能经过符号链接')
-    }
+    if (!(await host.io.fs.stat(workspace.workingDirectory)).isDirectory()) throw new Error('远端工作目录不存在或不是文件夹')
+    return host
+  }
+  async prepare(runtime: DesktopSessionRuntime): Promise<{ home: string; scratch: SessionScratchPaths } | null> {
+    const host = await this.connect(runtime.workspace)
+    if (!host) return null
+    runtime.workspaceIO = this.io(runtime.workspace)
+    const scratch = await ensureScratch(host, runtime.sessionId ?? runtime.runtimeId)
     runtime.workspaceScratch = scratch
     return { home: host.home, scratch }
+  }
+  async snapshot(workspace: WorkspaceBinding, sourceId: string, targetId: string): Promise<void> {
+    const host = await this.connect(workspace)
+    if (!host) throw new Error('不是 SSH 工作区')
+    const source = await ensureScratch(host, sourceId)
+    const target = sshScratchPaths(host.home, targetId)
+    await host.io.fs.mkdir(target.rootDirectory)
+    try {
+      await copyDirectorySnapshot(source.rootDirectory, target.rootDirectory, host.io)
+    } catch (error) {
+      await host.io.fs.rm(target.rootDirectory, { recursive: true, force: true }).catch(cleanup => {
+        throw new AggregateError([error, cleanup], '创建远端临时目录快照失败且未能完整清理')
+      })
+      throw error
+    }
   }
   async removeScratch(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<string | void> {
     validateSessionId(sessionId)
     if (workspace?.mode !== 'ssh') return
     return this.connections.connectionIdForTarget(workspace.target).then(id => this.connections.withFiles(id, async (fs, home) => {
-      const { rootDirectory } = scratchPaths(home, sessionId)
+      const { rootDirectory } = sshScratchPaths(home, sessionId)
       const parent = posix.dirname(rootDirectory)
       const canonical = await fs.realpath(parent).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
       if (canonical === null) return
@@ -81,8 +98,17 @@ export class SshWorkspaces {
   }
 }
 
-function scratchPaths(home: string, sessionId: string): SessionScratchPaths {
+export function sshScratchPaths(home: string, sessionId: string): SessionScratchPaths {
   validateSessionId(sessionId)
   const rootDirectory = posix.join(home, '.cache', 'whycode-scratch', sessionId)
   return { rootDirectory, mainDirectory: posix.join(rootDirectory, 'Main'), subagentsDirectory: posix.join(rootDirectory, 'subagents') }
+}
+
+async function ensureScratch(host: NonNullable<Awaited<ReturnType<SshWorkspaces['connect']>>>, sessionId: string) {
+  const scratch = sshScratchPaths(host.home, sessionId)
+  for (const directory of [posix.dirname(scratch.rootDirectory), scratch.rootDirectory, scratch.mainDirectory, scratch.subagentsDirectory]) {
+    await host.io.fs.mkdir(directory, { recursive: true })
+    if (await host.io.fs.realpath(directory) !== directory) throw new Error('远端临时目录不能经过符号链接')
+  }
+  return scratch
 }

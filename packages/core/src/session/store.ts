@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, open as openFile, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, resolve, posix } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { appendOrderedMessages } from './tool-execution.ts'
 import {
@@ -264,6 +264,7 @@ export class SessionStore {
 
       const ordinal = await this.nextForkOrdinal(familyId)
       const targetSessionId = randomUUID()
+      const scratchJoin = sourceLoaded.metadata.workspace.mode === 'ssh' ? posix.join : join
       const origin = {
         familyId,
         sourceSessionId: source.sessionId,
@@ -282,8 +283,8 @@ export class SessionStore {
           title: `${baseTitle}（${ordinal}）`,
           origin,
           scratchCopy: scratchRootDirectory ? {
-            source: join(scratchRootDirectory, source.sessionId),
-            target: join(scratchRootDirectory, targetSessionId),
+            source: scratchJoin(scratchRootDirectory, source.sessionId),
+            target: scratchJoin(scratchRootDirectory, targetSessionId),
           } : undefined,
         })
         return await this.open(targetSessionId)

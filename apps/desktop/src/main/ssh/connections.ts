@@ -29,6 +29,7 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
   private readonly resources: string
   constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
   isConnected(id: string): boolean { return this.connected.has(id) }
+  isTargetConnected(target: string): boolean { return [...this.connected.values()].some(host => host.target === target) }
 
   async configuredTargets(): Promise<Map<string, string>> {
     return new Map((await this.store.list()).flatMap(connection => connection.fingerprint
@@ -197,6 +198,7 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     if (connection.fingerprint) await this.cleanup(id)
     else this.disconnect(id)
     await this.store.remove(id)
+    this.emit('changed')
   }
   close(): void { for (const id of new Set([...this.connected.keys(), ...this.connecting.keys()])) this.disconnect(id) }
 }

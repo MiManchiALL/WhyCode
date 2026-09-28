@@ -1,6 +1,6 @@
 import { SshConnectionStore } from './ssh/store.ts'
 import { SshConnections } from './ssh/connections.ts'
-import { SshWorkspaces } from './ssh/workspaces.ts'
+import { SshWorkspaces, sshScratchPaths } from './ssh/workspaces.ts'
 import { registerSshIpc } from './ssh/ipc.ts'
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 import { registerWorkspaceLifecycleIpc } from './workspace-lifecycle-ipc.ts'
@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { createSiteIconHandler } from './site-icon.ts'
 import { SITE_ICON_SCHEME } from '../shared/site-icon.ts'
 import { rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix } from 'node:path'
 import {
   AgentSession,
   type BackgroundTaskState,
@@ -39,6 +39,7 @@ import {
   ensureMcpConfigTemplate,
   ensureProjectMcpConfigTemplate,
   installSystemSkills,
+  inspectLatestTurnEdit,
   loadMcpConfiguration,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
@@ -770,6 +771,7 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     runtime.reasoningEffort,
   )
   if (runtime.session) {
+    await sshWorkspaces.prepare(runtime)
     await runtime.session.setModelSelection(entry, providerConfig, runtime.reasoningEffort)
   } else {
     if (!runtime.sessionInitialization) {
@@ -785,7 +787,7 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
         runtime.journal = recorder
         await newSessionState.consume(runtime.runtimeId)
         await sessions.preparations.finish(recorder.sessionId)
-        await sessionScratch.ensure(recorder.sessionId)
+        if (workspace.mode !== 'ssh') await sessionScratch.ensure(recorder.sessionId)
         if (workspace.mode === 'worktree') await worktrees.attachSession(workspace, recorder.sessionId)
         else if (workspace.mode === 'managed') await managedWorkspaces.attachSession(workspace, recorder.sessionId)
         terminals.bindSession(runtime.runtimeId, recorder.sessionId)
@@ -850,8 +852,9 @@ async function createMainAgentSession(
 ): Promise<AgentSession> {
   const remote = await sshWorkspaces.prepare(runtime)
   const scratch = remote?.scratch ?? sessionScratch.paths(recorder.sessionId)
-  const forkSourceScratch = !remote && recorder.metadataSnapshot.forkOrigin
-    ? sessionScratch.paths(recorder.metadataSnapshot.forkOrigin.sourceSessionId)
+  const forkSourceScratch = recorder.metadataSnapshot.forkOrigin
+    ? remote ? sshScratchPaths(remote.home, recorder.metadataSnapshot.forkOrigin.sourceSessionId)
+      : sessionScratch.paths(recorder.metadataSnapshot.forkOrigin.sourceSessionId)
     : null
   const mcpRuntime = new McpSessionRuntime({
     configuration: mcpOAuthController.runtimeConfiguration(
@@ -897,7 +900,7 @@ async function createMainAgentSession(
       baseTools,
       sessionRecorder: recorder,
       mcpRuntime,
-      skillCatalog: remote ? undefined : skills,
+      skillCatalog: await skillCatalogFor(runtime),
       subagentCatalog: subagentDefinitions,
       mainTools: [
         ...(!remote ? [createBuildOfficeArtifactTool(officeArtifactRunner), createInspectOfficeTool(officeProcessor)] : []),
@@ -907,9 +910,9 @@ async function createMainAgentSession(
         ...createSessionWebPageTools(recorder),
       ],
       captureScreenshot: remote ? undefined : captureSessionScreenshot,
-      pdfProcessor: remote ? undefined : pdfProcessor,
+      pdfProcessor,
       officeProcessor: remote ? undefined : officeProcessor,
-      auxiliaryImageAnalyzer: remote ? undefined : configuredAuxiliaryImageAnalyzer(),
+      auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
       hasPendingTaskPlanContinuation: (planId) =>
         commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
         || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
@@ -928,6 +931,13 @@ async function createMainAgentSession(
   }
 }
 
+async function skillCatalogFor(runtime: DesktopSessionRuntime): Promise<SkillCatalogService> {
+  if (runtime.workspace.mode !== 'ssh') return skills
+  const host = await sshWorkspaces.connect(runtime.workspace)
+  runtime.skillCatalog ??= new SkillCatalogService({ homeDir: host!.home, workspaceIO: sshWorkspaces.io(runtime.workspace) })
+  return runtime.skillCatalog
+}
+
 function configuredAuxiliaryImageAnalyzer(config: WhycodeConfig | null = loadAppConfig()) {
   const resolved = resolveAuxiliaryVisionModel(config)
   return resolved
@@ -944,7 +954,7 @@ function synchronizeRuntimeAuxiliaryImageAnalyzer(
   config: WhycodeConfig | null,
 ): void {
   if (!runtime.session || runtime.session.isBusy) return
-  runtime.session.setAuxiliaryImageAnalyzer(runtime.workspace.mode === 'ssh' ? undefined : configuredAuxiliaryImageAnalyzer(config))
+  runtime.session.setAuxiliaryImageAnalyzer(configuredAuxiliaryImageAnalyzer(config))
 }
 
 /** 协商可用性检查：B/C 评审员只引用统一模型连接，不持有独立凭据。 */
@@ -1028,15 +1038,14 @@ async function handleCommand(
       return handleBtwMessageCommand(runtime, command)
     case 'inspect-user-message-edit': {
       try {
-        if (!runtime.session && runtime.journal && !runtimeBusy(runtime)) {
-          const error = await ensureSession(runtime)
-          if (error) return { ok: false, error }
-        }
-        if (runtimeBusy(runtime) || !runtime.session) {
+        if (runtimeBusy(runtime) || !runtime.journal) {
           return { ok: false, error: 'Agent 尚未空闲，不能编辑最新消息' }
         }
         await runtime.timeline.flush()
-        return { ok: true, editEffects: await runtime.session.inspectLatestTurnEdit(command.turnId) }
+        const editEffects = runtime.session
+          ? await runtime.session.inspectLatestTurnEdit(command.turnId)
+          : await inspectLatestTurnEdit(runtime.journal, command.turnId)
+        return { ok: true, editEffects }
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
@@ -1099,7 +1108,7 @@ async function handleCommand(
       if (runtimeBusy(runtime)) {
         return { ok: false, error: 'Agent 工作中，请等待当前任务结束后再回滚' }
       }
-      if (!runtime.session && runtime.journal) {
+      if (runtime.journal) {
         const error = await ensureSession(runtime)
         if (error) return { ok: false, error }
       }
@@ -1122,7 +1131,14 @@ async function handleCommand(
         }, false)
         break
       }
-      await runtime.session?.restoreCheckpoint(command.toolUseId, command.scope)
+      try {
+        const error = await ensureSession(runtime)
+        if (error) throw new Error(error)
+        await runtime.session?.restoreCheckpoint(command.toolUseId, command.scope)
+      } catch (error) {
+        runtime.emit({ type: 'checkpoint-restored', toolUseId: command.toolUseId, turnId: '',
+          scope: command.scope, ok: false, error: error instanceof Error ? error.message : String(error) }, false)
+      }
       break
     }
     case 'compact': {
@@ -1134,7 +1150,7 @@ async function handleCommand(
         })
         return { ok: false }
       }
-      if (!runtime.session) {
+      if (!runtime.session && !runtime.journal) {
         runtime.emit({ type: 'error', message: '还没有对话，无需压缩', recoverable: true })
         break
       }
@@ -1143,7 +1159,7 @@ async function handleCommand(
         runtime.emit({ type: 'error', message: error, recoverable: true })
         return { ok: false }
       }
-      await runtime.session.compactNow()
+      await runtime.session!.compactNow()
       break
     }
     case 'set-model': {
@@ -1342,18 +1358,14 @@ async function prepareUserMessageSkills(
   command: UserMessageCommand,
 ): Promise<ActivatedSkill[]> {
   if (command.skills === undefined) return []
-  if (runtime.workspace.mode === 'ssh') {
-    if (command.skills.length) throw new Error('SSH 工作区暂不支持 Skill')
-    return []
-  }
   const modelId = resolveCurrentModelId(runtime)
   if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
   const resolved = resolveModelConnection(loadAppConfig(), modelId)
   if (!resolved.ok) throw new Error(resolved.error)
   return prepareMessageSkills({
-    catalog: skills,
+    catalog: await skillCatalogFor(runtime),
     locators: command.skills,
-    projectDir: runtime.localProjectDir,
+    projectDir: runtime.projectDir,
     contextWindow: resolved.value.entry.capabilities.contextWindow,
     restoredInputIds: command.restoredInputIds,
     pendingInputs: runtime.journal?.pendingUserInputs,
@@ -2288,14 +2300,17 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
     sourceJournal = sourceRuntime?.journal
       ?? await sessions.prepareResume(request.sourceSessionId)
     const sourceWorkspace = sourceJournal.metadataSnapshot.workspace
-    if (sourceWorkspace.mode === 'ssh') throw new Error('SSH 工作区暂不支持创建会话分支')
+    const remote = await sshWorkspaces.connect(sourceWorkspace)
     if (sourceWorkspace.mode === 'managed') {
       await managedWorkspaces.assertUsable(sourceWorkspace, sourceJournal.sessionId)
     }
     forkedJournal = await sessions.fork(
-      sourceJournal, request.sourceTurnId, sessionScratch.rootDirectory,
+      sourceJournal, request.sourceTurnId, remote
+        ? posix.dirname(sshScratchPaths(remote.home, sourceJournal.sessionId).rootDirectory)
+        : sessionScratch.rootDirectory,
     )
-    await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
+    if (remote) await sshWorkspaces.snapshot(sourceWorkspace, sourceJournal.sessionId, forkedJournal.sessionId)
+    else await sessionScratch.snapshot(sourceJournal.sessionId, forkedJournal.sessionId)
     await attachSessionWorkspace(forkedJournal)
     await projects.inheritSession(sourceJournal.sessionId, forkedJournal.sessionId)
     runtime = await prepareRuntimeFromJournal(forkedJournal)
@@ -2308,7 +2323,9 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
     if (forkedJournal) {
       await projects.detachSession(forkedJournal.sessionId)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
-      await sessionScratch.remove(forkedJournal.sessionId)
+      await (forkedJournal.metadataSnapshot.workspace.mode === 'ssh'
+        ? sshWorkspaces.removeScratch(forkedJournal.sessionId, forkedJournal.metadataSnapshot.workspace)
+        : sessionScratch.remove(forkedJournal.sessionId))
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
       await removeForkSessionWorkspace(forkedJournal)
         .catch((rollbackError) => rollbackErrors.push(rollbackError))
@@ -2413,7 +2430,7 @@ async function prepareRuntimeFromJournal(
     } else if (metadata.workspace.mode === 'managed') {
       await managedWorkspaces.assertUsable(metadata.workspace, journal.sessionId)
     }
-    await sessionScratch.ensure(journal.sessionId)
+    if (metadata.workspace.mode !== 'ssh') await sessionScratch.ensure(journal.sessionId)
     if (resolved.ok && metadata.workspace.mode !== 'ssh') {
       runtime.session = await createMainAgentSession(
         runtime,
@@ -2974,7 +2991,9 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.listSkills, async (_e, runtimeId?: string) => {
     const runtime = runtimeForId(runtimeId)
-    if (runtime.workspace.mode === 'ssh') return { revision: 'ssh', skills: [], diagnostics: [], modelContext: null, omittedCount: 0 }
+    if (runtime.workspace.mode === 'ssh' && !sshWorkspaces.connections.isTargetConnected(runtime.workspace.target)) {
+      return { revision: 'disconnected', skills: [], diagnostics: [{ path: '', message: '连接 SSH 后可使用远端 Skill' }], modelContext: null, omittedCount: 0 }
+    }
     const modelId = resolveCurrentModelId(runtime)
     const resolved = modelId
       ? resolveModelConnection(loadAppConfig(), modelId)
@@ -2984,7 +3003,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       : undefined
     // pending-worktree 尚未创建真实目录；此时目录只展示用户级与内置 Skill，避免签发
     // 指向源仓库、却要在首条消息创建后的 Worktree 中校验的失效 locator。
-    return skills.list(runtime.projectDir, contextWindow)
+    return (await skillCatalogFor(runtime)).list(runtime.projectDir, contextWindow)
   })
   ipcMain.handle(IPC.mcpStatus, (_e, runtimeId: string) => {
     const runtime = runtimeForId(runtimeId)
@@ -3241,8 +3260,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
 
   registerSshIpc(sshWorkspaces, projects)
-  registerWorkspaceFileIpc(workspaceFiles, runtimeId => {
-    const directory = workspaceDisplayDirectory(runtimeForId(runtimeId).workspace)
+  registerWorkspaceFileIpc(workspaceFiles, async runtimeId => {
+    const runtime = runtimeForId(runtimeId)
+    await sshWorkspaces.connect(runtime.workspace)
+    const directory = workspaceDisplayDirectory(runtime.workspace)
     if (!directory) throw new Error('当前会话没有工作路径')
     return directory
   }, runtimeId => sshWorkspaces.io(runtimeForId(runtimeId).workspace))

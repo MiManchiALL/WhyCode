@@ -31,6 +31,7 @@ export const IPC = {
   readWorkspaceFile: 'whycode:read-workspace-file',
   closeWorkspaceFile: 'whycode:close-workspace-file',
   revealWorkspaceFile: 'whycode:reveal-workspace-file',
+  saveWorkspaceFile: 'whycode:save-workspace-file',
   openWorkspaceFileExternally: 'whycode:open-workspace-file-externally',
   workspaceFileChanged: 'whycode:workspace-file-changed',
   /** 用户终端独立于 Agent 命令；输出不进入会话事实源。 */

@@ -29,6 +29,7 @@ export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
     open: async path => {
       const handle = await call<Buffer>(done => sftp.open(path, 'r', done))
       return {
+        stat: () => call(done => sftp.fstat(handle, done)),
         read: async (buffer, offset, length, position) => ({ bytesRead: await call<number>(done => sftp.read(handle, buffer, offset, length, position, done)) }),
         close: () => call<void>(done => sftp.close(handle, done)),
       }
@@ -47,11 +48,11 @@ export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
       isDirectory: () => (entry.attrs.mode & 0o170000) === 0o040000,
       isSymbolicLink: () => (entry.attrs.mode & 0o170000) === 0o120000,
     })),
-    mkdir: async path => {
-      if (path === '/') return
-      try { await call<void>(done => sftp.mkdir(path, { mode: 0o700 }, done)) }
+    mkdir: async (path, options) => {
+      if (path === '/' && options?.recursive) return
+      try { await call<void>(done => sftp.mkdir(path, { mode: options?.mode ?? 0o700 }, done)) }
       catch (error) {
-        if (isUnknownWorkspaceOutcome(error)) throw error
+        if (!options?.recursive || isUnknownWorkspaceOutcome(error)) throw error
         const existing = await io.stat(path).catch((failure: NodeJS.ErrnoException) => { if (failure.code === 'ENOENT') return null; throw failure })
         if (existing?.isDirectory()) return
         if (existing) throw error

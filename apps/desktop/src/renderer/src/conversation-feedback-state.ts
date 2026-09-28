@@ -4,6 +4,7 @@ export interface ConversationFeedback {
   id: number
   tone: 'success' | 'error' | 'info'
   message: string
+  floating?: boolean
 }
 
 export function conversationEventFeedback(

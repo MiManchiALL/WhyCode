@@ -5,9 +5,11 @@ import { sshConnectionInputSchema, type SshResult } from '../../shared/ssh.ts'
 import type { ProjectStore } from '../project-store.ts'
 import type { SshWorkspaces } from './workspaces.ts'
 import { SshCredentialsRequiredError } from './connections.ts'
+import { SshConnectionMissingError } from './store.ts'
 
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list') }),
+  z.object({ action: z.literal('resolve'), target: z.string().min(1).max(4096) }),
   z.object({ action: z.literal('save'), connection: sshConnectionInputSchema }),
   z.object({ action: z.literal('connect'), id: z.string().uuid(), fingerprint: z.string().optional(), secret: z.string().max(16384).optional() }),
   z.object({ action: z.enum(['disconnect', 'remove', 'cleanup']), id: z.string().uuid() }),
@@ -22,9 +24,18 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
       const request = requestSchema.parse(value)
       switch (request.action) {
         case 'list': return { ok: true, connections: (await connections.store.list()).map(connection => ({ ...connection, connected: connections.isConnected(connection.id) })) }
+        case 'resolve': {
+          const id = await connections.connectionIdForTarget(request.target).catch(error => {
+            if (error instanceof SshConnectionMissingError) return null
+            throw error
+          })
+          if (!id) return { ok: true }
+          return { ok: true, connection: { ...(await connections.store.get(id)).connection, connected: connections.isConnected(id) } }
+        }
         case 'save': {
           if (request.connection.id) connections.disconnect(request.connection.id)
           const connection = await connections.store.save(request.connection)
+          connections.emit('changed')
           return { ok: true, connection }
         }
         case 'connect': return { ok: true, connect: await connections.connect(request.id, request.fingerprint, request.secret) }

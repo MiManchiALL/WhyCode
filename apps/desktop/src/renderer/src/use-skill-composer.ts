@@ -147,6 +147,9 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
 
   const menuOpen = trigger !== null
   useEffect(() => {
+    if (options.workspaceMode === 'ssh') return window.whycode.onSshChanged(() => { void refresh() })
+  }, [options.workspaceMode, refresh])
+  useEffect(() => {
     if (menuOpen) void refresh()
   }, [menuOpen, refresh])
 

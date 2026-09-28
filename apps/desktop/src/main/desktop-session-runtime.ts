@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { WorkspaceIO } from '@whycode/core'
+import type { WorkspaceIO, SkillCatalogService } from '@whycode/core'
 import {
   isStepScopedCoreEvent,
   type AgentSession,
@@ -46,6 +46,7 @@ interface PendingApproval {
  */
 export class DesktopSessionRuntime {
   workspaceIO?: WorkspaceIO
+  skillCatalog?: SkillCatalogService
   workspaceScratch?: import('./session-scratch.ts').SessionScratchPaths
   readonly runtimeId: string
   readonly routingGate = new UserMessageRoutingGate()
@@ -407,5 +408,7 @@ export class DesktopSessionRuntime {
     this.session = null
     this.coordinator = null
     await target?.dispose()
+    this.skillCatalog?.invalidate()
+    this.skillCatalog = undefined
   }
 }

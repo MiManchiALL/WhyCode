@@ -1,13 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { FolderOpen, RefreshCw } from 'lucide-react'
+import { Download, FolderOpen, RefreshCw, WrapText } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
 import { MAX_TEXT_PREVIEW_BYTES } from '../../shared/workspace-files.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
-import { FilePreviewMessage, FilePreviewToolbar, FileWrapButton } from './file-preview-controls.tsx'
+import { FilePreviewActions, FilePreviewMessage, FilePreviewToolbar, type FilePreviewAction } from './file-preview-controls.tsx'
 import { useWorkspaceFile } from './use-workspace-file.ts'
 import { SyntaxCode } from './syntax-code.tsx'
 import { contentLines } from './file-change-presentation.ts'
 import { MarkdownContent } from './markdown-content.tsx'
+import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
 
 const PdfPreview = lazy(() => import('./pdf-preview.tsx'))
 type FilePage = Extract<RightPanelPage, { kind: 'file' }>
@@ -20,6 +21,7 @@ interface DocumentProps {
 export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
   const file = useWorkspaceFile(runtimeId, 'file', page.path)
   const document = file.view?.kind === 'file' ? file.view : null
+  const save = useWorkspaceFileAction(runtimeId, page.path)
   const hasModes = document && document.size <= MAX_TEXT_PREVIEW_BYTES
     && (document.format === 'html' || document.format === 'markdown' || document.mediaType === 'image/svg+xml')
   const code = document?.format === 'code' || Boolean(hasModes && page.previewMode === 'code')
@@ -28,27 +30,20 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
     if (previewMode === (code ? 'code' : 'preview')) return
     if (await file.refresh()) onChange({ ...page, previewMode })
   }
+  const actions: FilePreviewAction[] = [
+    ...(code ? [{ label: '自动换行', title: wrap ? '关闭自动换行' : '开启自动换行', icon: WrapText,
+      pressed: wrap, run: () => onChange({ ...page, wrap: !wrap }) }] : []),
+    { label: '刷新文件', title: file.changed ? '文件已更新，点击刷新' : '刷新文件', icon: RefreshCw,
+      disabled: file.loading, marked: file.changed, run: () => { void file.refresh() } },
+    ...(!document?.remote ? [{ label: '在文件夹中显示', icon: FolderOpen, disabled: !document, run: file.reveal }] : []),
+    { label: '保存到本机', icon: Download, disabled: !document || save.pending, pending: save.pending,
+      run: () => { void save.run('save') } },
+  ]
   return <div className="flex min-h-0 flex-1 flex-col">
     <FilePreviewToolbar path={document?.path ?? page.path}>
-      {hasModes && (
-        <div className="flex shrink-0 rounded-md bg-black/[0.035] p-0.5" aria-label="文件显示方式">
-          <button type="button" className="wc-preview-mode" aria-pressed={!code} disabled={file.loading}
-            onClick={() => void changeMode('preview')}>预览</button>
-          <button type="button" className="wc-preview-mode" aria-pressed={code} disabled={file.loading}
-            onClick={() => void changeMode('code')}>代码</button>
-        </div>
-      )}
-      {code && <FileWrapButton wrap={wrap} onChange={wrap => onChange({ ...page, wrap })} />}
-      <button type="button" className="wc-preview-action" disabled={file.loading}
-        title={file.changed ? '文件已更新，点击刷新' : '刷新文件'} aria-label="刷新文件"
-        onClick={() => void file.refresh()}>
-        <RefreshCw size={15} className={file.changed ? 'text-[var(--wc-sage-ink)]' : ''} />
-        {file.changed && <span className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-[var(--wc-sage-ink)]" />}
-      </button>
-      {!document?.remote && <button type="button" className="wc-preview-action" disabled={!document}
-        title="在文件夹中显示" aria-label="在文件夹中显示" onClick={file.reveal}>
-        <FolderOpen size={15} />
-      </button>}
+      <FilePreviewActions actions={actions} mode={hasModes ? {
+        value: code ? 'code' : 'preview', disabled: file.loading, change: value => { void changeMode(value) },
+      } : undefined} />
     </FilePreviewToolbar>
     {file.error ? <FilePreviewMessage>{file.error}</FilePreviewMessage> : document ? (
       <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally} />
@@ -90,7 +85,7 @@ function TextDocument({ url, path, markdown, wrap }: { url: string; path: string
       if (!response.ok) throw new Error('文件已移动或无法读取，请刷新后重试')
       if (Number(response.headers.get('Content-Length')) > MAX_TEXT_PREVIEW_BYTES) {
         await response.body?.cancel()
-        throw new Error('文件超过 2 MiB，无法显示代码，请在文件夹中打开')
+        throw new Error('文件超过 2 MiB，无法显示代码，可保存到本机后查看')
       }
       const content = await response.text()
       if (!abort.signal.aborted) setText(content)

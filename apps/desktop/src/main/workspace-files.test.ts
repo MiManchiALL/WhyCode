@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { Readable } from 'node:stream'
+import { localWorkspaceIO } from '@whycode/core'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -29,6 +31,28 @@ async function fixture(t: TestContext) {
   }
   return { root, workspace, files, open, document }
 }
+
+it('保存文件遇到传输失败或视图关闭时清理暂存，不覆盖已存在的目标文件', async t => {
+  const { root, workspace, files } = await fixture(t)
+  const source = join(workspace, 'source.bin')
+  const destination = join(root, 'saved.bin')
+  await writeFile(source, Buffer.alloc(1024))
+  await writeFile(destination, 'preserved')
+  for (const close of [false, true]) {
+    const io = { ...localWorkspaceIO, identity: 'remote-test', fs: { ...localWorkspaceIO.fs,
+      createReadStream: () => Readable.from((async function* () {
+        yield Buffer.alloc(10)
+        if (close) files.closeOwner(1)
+        throw new Error('连接中断')
+      })()),
+    } }
+    const view = await files.open(1, { runtimeId: 'a', kind: 'file', path: source }, workspace, () => {}, io)
+    await assert.rejects(files.save(1, view.id, destination), /连接中断|abort/i)
+    assert.equal(await readFile(destination, 'utf8'), 'preserved')
+    assert.deepEqual((await readdir(root)).filter(name => name.endsWith('.download')), [])
+    files.closeOwner(1)
+  }
+})
 
 it('按层读取目录、目录优先并自然排序，分页无重复；缺失草稿目录不物化', async t => {
   const { workspace, open, files } = await fixture(t)

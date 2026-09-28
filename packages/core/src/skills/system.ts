@@ -14,12 +14,12 @@ export interface SystemSkillsInstallResult {
   changed: boolean
 }
 
-export function userSkillsRoot(homeDir: string): string {
-  return join(resolve(homeDir), '.whycode', 'skills')
+export function userSkillsRoot(homeDir: string, paths = { join, resolve }): string {
+  return paths.join(paths.resolve(homeDir), '.whycode', 'skills')
 }
 
-export function systemSkillsRoot(homeDir: string): string {
-  return join(userSkillsRoot(homeDir), SYSTEM_SKILLS_DIRECTORY)
+export function systemSkillsRoot(homeDir: string, paths = { join, resolve }): string {
+  return paths.join(userSkillsRoot(homeDir, paths), SYSTEM_SKILLS_DIRECTORY)
 }
 
 /**

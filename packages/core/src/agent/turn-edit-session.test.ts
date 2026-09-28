@@ -12,6 +12,7 @@ import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { AgentSession } from './session.ts'
+import { inspectLatestTurnEdit } from './turn-edit.ts'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -76,6 +77,10 @@ for (const files of [false, true]) for (const command of [false, true]) {
     const f = await fixture(files, command)
     const before = [...f.recorder.initialMessages]
     assert.deepEqual(await f.session.inspectLatestTurnEdit('first'), {
+      hasFileChanges: files, hasUntrackedEffects: command,
+    })
+    const cold = await f.store.open(f.recorder.sessionId)
+    assert.deepEqual(await inspectLatestTurnEdit(cold, 'first'), {
       hasFileChanges: files, hasUntrackedEffects: command,
     })
     assert.equal(await readFile(f.path, 'utf8'), files ? 'first' : 'before')

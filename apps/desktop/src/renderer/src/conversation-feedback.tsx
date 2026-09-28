@@ -14,7 +14,7 @@ const VISIBLE_MS = 3_000
 const EXIT_MS = 680
 
 export const ConversationFeedbackContext = createContext<(
-  (tone: ConversationFeedback['tone'], message: string) => void
+  (tone: ConversationFeedback['tone'], message: string, floating?: boolean) => void
 ) | null>(null)
 
 export function useConversationFeedback() {

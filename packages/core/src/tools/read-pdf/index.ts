@@ -1,5 +1,5 @@
-import { basename, join } from 'node:path'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { z } from 'zod'
 import { importImageAttachments } from '../../attachments/storage.ts'
@@ -7,6 +7,7 @@ import { removeImageAttachmentFiles } from '../../attachments/renditions.ts'
 import type { ImageAttachment } from '../../attachments/types.ts'
 import {
   PDF_TEXT_DEFAULT_PAGES,
+  PDF_ATTACHMENT_MAX_SOURCE_BYTES,
   PDF_TEXT_MAX_CHARS,
   PDF_TEXT_MAX_PAGES,
   PDF_VISUAL_MAX_BYTES,
@@ -18,6 +19,8 @@ import { formatPdfTextResult, formatPdfVisualResult } from '../../pdf/content.ts
 import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { READ_PDF_TOOL_NAME, readPdfPrompt } from './prompt.ts'
+import { localWorkspaceIO } from '../../workspace/io.ts'
+import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
 
 export { READ_PDF_TOOL_NAME } from './prompt.ts'
 
@@ -43,7 +46,7 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
   const inputSchema = z.object({
     sourceType: z.enum(['attachment', 'path']).describe('PDF 来源类型'),
     sourceValue: z.string().min(1).describe(
-      'sourceType=attachment 时填写消息中 PDF 卡片的附件 ID；sourceType=path 时填写项目内或已授权的本地 PDF 路径',
+      'sourceType=attachment 时填写消息中 PDF 卡片的附件 ID；sourceType=path 时填写项目内或已授权的工作区 PDF 路径',
     ),
     startPage: z.number().int().positive().default(1).describe('起始页，从 1 开始'),
     pageCount: z.number().int().min(1).max(maxPages).optional()
@@ -75,13 +78,21 @@ export function createReadPdfTool(options: ReadPdfToolOptions) {
       const source = await resolvePdfSource(input.sourceType, input.sourceValue, options, ctx)
       const pageCount = input.pageCount ?? defaultPages
       const visual = options.supportsVisual
+      const io = ctx.workspaceIO ?? localWorkspaceIO
+      const remoteFile = input.sourceType === 'path' && io.identity !== 'local'
 
-      const outputDirectory = visual
+      const outputDirectory = visual || remoteFile
         ? await mkdtemp(join(tmpdir(), 'whycode-pdf-render-'))
         : undefined
       try {
+        let localPath = source.path
+        if (remoteFile) {
+          localPath = join(outputDirectory!, 'source.pdf')
+          const bytes = await readBoundedWorkspaceFile(source.path, PDF_ATTACHMENT_MAX_SOURCE_BYTES, io, ctx.abortSignal)
+          await writeFile(localPath, bytes, { mode: 0o600, flag: 'wx', signal: ctx.abortSignal })
+        }
         const result = await options.processor.readPages(
-          source.path,
+          localPath,
           visual
             ? {
                 startPage: input.startPage,
@@ -190,7 +201,7 @@ async function resolvePdfSource(
 ): Promise<{ name: string; path: string; expectedSha256?: string; attachmentId?: string }> {
   if (sourceType === 'path') {
     const path = await resolveAllowed(ctx, sourceValue)
-    return { name: basename(path), path }
+    return { name: (ctx.workspaceIO ?? localWorkspaceIO).path.basename(path), path }
   }
   const resolved = options.resolveAttachment(sourceValue)
   if (!resolved || resolved.attachment.sessionId !== options.sessionId) {

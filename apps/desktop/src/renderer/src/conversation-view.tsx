@@ -40,6 +40,7 @@ import { useCheckpointRestoreNavigation } from './checkpoint-restore-navigation.
 import type { ConversationScrollAlignment } from './conversation-scroll.ts'
 
 interface ConversationViewProps {
+  remote?: boolean
   runtimeId: string
   pendingSessionId?: string | null
   onReady?: () => void
@@ -331,6 +332,7 @@ function WorkSection({
           ))}
           {completed && (
             <ResponseFooter key={`${props.runtimeId}:${section.id}`} runtimeId={props.runtimeId} projectDir={props.projectDir}
+              remote={props.remote}
               activity={section.activityBlocks} final={section.finalBlocks} presentation={presentation} onOpenFile={props.onOpenFilePreview}
               onOpenChanges={props.onOpenChanges}
               onRevealRestore={props.busy ? undefined : restoreNavigation.navigate}

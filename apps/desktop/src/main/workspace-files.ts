@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { localWorkspaceIO, type WorkspaceIO } from '@whycode/core'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { createWriteStream } from 'node:fs'
+import { rename, rm } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { WorkspaceFileWatch } from './workspace-file-watch.ts'
 import {
   DIRECTORY_PAGE_SIZE, MAX_DOCUMENT_PREVIEW_BYTES, MAX_PREVIEW_VIEWS,
@@ -146,6 +150,34 @@ export class WorkspaceFiles {
     const view = this.owned(owner, id)
     if (view.io.identity !== 'local') throw new Error('远端文件请在工作区面板中查看')
     return view.path
+  }
+
+  fileNameFor(owner: number, id: string): string {
+    const view = this.owned(owner, id)
+    if (view.kind !== 'file') throw new Error('只能保存文件')
+    return view.io.path.basename(view.path)
+  }
+
+  runtimeFor(owner: number, id: string): string { return this.owned(owner, id).runtimeId }
+
+  async save(owner: number, id: string, destination: string): Promise<void> {
+    const view = this.owned(owner, id)
+    if (view.kind !== 'file') throw new Error('只能保存文件')
+    const path = await containedRealPath(view.io, view.root, view.path)
+    const info = await view.io.fs.stat(path)
+    if (!info.isFile() || !Number.isSafeInteger(info.size) || info.size < 0) throw new Error('只能保存普通文件')
+    const staging = join(dirname(destination), `.${basename(destination)}.${randomUUID()}.download`)
+    try {
+      view.abort.signal.throwIfAborted()
+      const output = createWriteStream(staging, { flags: 'wx', mode: 0o600 })
+      await pipeline(view.io.fs.createReadStream(path, { signal: view.abort.signal, end: info.size }),
+        output, { signal: view.abort.signal })
+      if (output.bytesWritten !== info.size) throw new Error('保存时源文件发生变化，请重试')
+      view.abort.signal.throwIfAborted()
+      await rename(staging, destination)
+    } finally {
+      await rm(staging, { force: true })
+    }
   }
 
   close(owner: number, id: string): void {

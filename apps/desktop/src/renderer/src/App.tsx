@@ -402,11 +402,13 @@ export function App() {
   const showConversationFeedback = useCallback((
     tone: ConversationFeedback['tone'],
     message: string,
+    floating = false,
   ) => {
     setConversationFeedback({
       id: ++conversationFeedbackIdRef.current,
       tone,
       message,
+      floating,
     })
   }, [])
   const dismissConversationFeedback = useCallback((id: number) => {
@@ -2164,6 +2166,7 @@ export function App() {
         <div className="contents" inert={panelFullscreen}>
           <TaskHeader
             workspaceLabel={workspace.mode === 'ssh' ? workspace.label : undefined}
+            sshTarget={workspace.mode === 'ssh' ? workspace.target : undefined}
             sessionId={loadingConversation ? resumingSessionId : sessionIdRef.current}
             onRename={renameSession}
             title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
@@ -2205,7 +2208,7 @@ export function App() {
               <ConversationFeedbackToast
                 key={conversationFeedback.id}
                 feedback={conversationFeedback}
-                floating={showConnectionSettings || panelFullscreen}
+                floating={conversationFeedback.floating || showConnectionSettings || panelFullscreen}
                 onDismiss={dismissConversationFeedback}
               />
             )}
@@ -2236,6 +2239,7 @@ export function App() {
                     </div>
                   )}
                   <ConversationView
+                    remote={workspace.mode === 'ssh'}
                     runtimeId={runtimeId}
                     pendingSessionId={loadingConversation ? resumingSessionId : null}
                     onReady={restoreConversationAfterRender}

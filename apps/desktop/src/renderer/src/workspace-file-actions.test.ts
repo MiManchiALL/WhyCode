@@ -13,13 +13,14 @@ function fixture() {
       closeWorkspaceFile: (id: string) => { calls.push(['close', id]) },
       openWorkspaceFileExternally: async (id: string) => { calls.push(['open', id]) },
       revealWorkspaceFile: async (id: string) => { calls.push(['reveal', id]) },
+      saveWorkspaceFile: async (id: string) => { calls.push(['save', id]); return true },
     },
   }
 }
 
 describe('交付文件的用户操作', () => {
   it('按会话取得文件视图，通过视图执行打开或定位并立即释放', async () => {
-    for (const action of ['open', 'reveal'] as const) {
+    for (const action of ['open', 'reveal', 'save'] as const) {
       const { api, calls } = fixture()
       await performWorkspaceFileAction(api, 'runtime-a', 'C:/report.docx', action, new AbortController().signal)
       assert.deepEqual(calls, [{ runtimeId: 'runtime-a', kind: 'file', path: 'C:/report.docx' }, [action, 'lease'], ['close', 'lease']])
