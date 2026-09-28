@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom'
+import { Branch } from '@radix-ui/react-dismissable-layer'
 import { CircleCheck, Info, TriangleAlert } from 'lucide-react'
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
@@ -83,7 +84,7 @@ export function ConversationFeedbackToast({
   const Icon = feedback.tone === 'success' ? CircleCheck : feedback.tone === 'error' ? TriangleAlert : Info
   const toast = (
     <div className={`pointer-events-none inset-x-0 top-6 flex justify-center px-6 ${floating ? 'fixed z-[120]' : 'absolute z-50'}`}>
-      <div
+      <Branch
         role={feedback.tone === 'error' ? 'alert' : 'status'}
         aria-live={feedback.tone === 'error' ? 'assertive' : 'polite'}
         aria-atomic="true"
@@ -102,7 +103,7 @@ export function ConversationFeedbackToast({
       >
         <Icon aria-hidden="true" size={15} className="shrink-0" />
         <span className="min-w-0 break-words">{feedback.message}</span>
-      </div>
+      </Branch>
     </div>
   )
   return floating ? createPortal(toast, document.body) : toast

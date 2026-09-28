@@ -9,6 +9,7 @@ import { AgentSession, SessionStore, CheckpointManager, CommandSessionManager, B
 import { WorkspaceFiles } from '../workspace-files.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshConnectionStore } from './store.ts'
+import { SshCredentialsRequiredError } from './connections.ts'
 import { SshWorkspaces } from './workspaces.ts'
 import { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
 import { languageModel, modelEntry, toolStream, finalStream } from '../subagent-test-fixture.ts'
@@ -20,7 +21,7 @@ it('未知主机先返回指纹，认证失败和取消不部署组件，密码�
   assert.deepEqual(await env.connections.connect(env.id), { status: 'trust-required', fingerprint: env.fingerprint, host: `127.0.0.1:${(await env.store.get(env.id)).connection.port}` })
   assert.equal(env.commands.length, 0)
   await assert.rejects(env.connections.connect(env.id, 'SHA256:wrong'), /指纹/)
-  await assert.rejects(env.connections.connect(env.id, env.fingerprint, 'wrong'), /authentication/i)
+  await assert.rejects(env.connections.connect(env.id, env.fingerprint, 'wrong'), SshCredentialsRequiredError)
   const publicData = JSON.stringify(await env.store.list())
   assert.ok(!publicData.includes((await env.store.get(env.id)).secret!))
   assert.equal((await env.store.list())[0]?.fingerprint, undefined)

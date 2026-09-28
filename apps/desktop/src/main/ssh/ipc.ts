@@ -4,6 +4,7 @@ import { IPC } from '../../shared/ipc.ts'
 import { sshConnectionInputSchema, type SshResult } from '../../shared/ssh.ts'
 import type { ProjectStore } from '../project-store.ts'
 import type { SshWorkspaces } from './workspaces.ts'
+import { SshCredentialsRequiredError } from './connections.ts'
 
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list') }),
@@ -38,6 +39,9 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
           return { ok: true }
         }
       }
-    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof SshCredentialsRequiredError ? { credentialsRequired: true } : {}) }
+    }
   })
 }

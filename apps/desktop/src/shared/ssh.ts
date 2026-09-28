@@ -30,7 +30,7 @@ export type SshRequest =
   | { action: 'directory'; id: string; path?: string }
   | { action: 'project'; id: string; path: string }
 
-export type SshResult = { ok: false; error: string } | {
+export type SshResult = { ok: false; error: string; credentialsRequired?: boolean } | {
   ok: true
   connections?: SshConnection[]
   connection?: SshConnection

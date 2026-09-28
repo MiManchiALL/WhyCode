@@ -511,7 +511,7 @@ SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存连接 ID、稳
 
 ### 7.7 SSH 连接与进程通道
 
-Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记远端项目；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error}`。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
+Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记远端项目；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
 
 SSH 工作区绑定为 `{mode:'ssh',connectionId,target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，连接句柄不落盘。连接管理、所有权与清理语义见文档二 §7.5。
 

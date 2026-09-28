@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { it, type TestContext } from 'node:test'
 import type { WorkspaceBinding } from '@whycode/core'
 import { DesktopSessionRepository } from '../session-repository.ts'
@@ -9,6 +9,8 @@ import { SessionScratchManager } from '../session-scratch.ts'
 import { stageSessionDeletion } from '../session-deletion.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshWorkspaces } from './workspaces.ts'
+import { SshConnections, SshCredentialsRequiredError } from './connections.ts'
+import { SshConnectionStore } from './store.ts'
 import { ProjectStore } from '../project-store.ts'
 
 async function fixture(t: TestContext) {
@@ -61,7 +63,7 @@ it('SSH 清理失败保留会话事实供删除重试；连接已删除则明确
     commandSessions: { removeSession: async () => {} },
     onBeforeFactSourceDelete: () => env.workspaces.removeScratch(journal.sessionId, env.workspace),
   }
-  await assert.rejects((await stageSessionDeletion(options)).finish(), /authentication/i)
+  await assert.rejects((await stageSessionDeletion(options)).finish(), SshCredentialsRequiredError)
   await access(join(env.root, 'sessions', journal.sessionId, 'transcript.jsonl'))
   assert.equal((await sessions.list())[0]?.resumable, false)
   assert.match((await sessions.list())[0]?.unavailableReason ?? '', /删除未完成.*重试删除/)
@@ -136,5 +138,44 @@ it('删除连接在组件清理成功后移除配置；失败可重试，保留�
   await assert.rejects(env.workspaces.select(project.remote!.connectionId, project.directory), /连接不存在或已删除/)
   assert.notEqual(replacement.id, project.remote!.connectionId)
   await env.connections.remove(replacement.id)
+  assert.deepEqual(await env.store.list(), [])
+})
+
+it('重启丢失临时密码后连接、清理和删除都要求补充凭据；补充后可清理删除且不强制记住', async t => {
+  const env = await fixture(t)
+  const current = await env.store.get(env.id)
+  const store = new SshConnectionStore(join(env.root, 'connections.json'), {
+    isAvailable: () => true, encrypt: value => Buffer.from(value).toString('base64'), decrypt: value => Buffer.from(value, 'base64').toString(),
+  })
+  const connections = new SshConnections(store, resolve('resources/remote'))
+  t.after(() => connections.close())
+  const component = join(env.root, '.cache/whycode-remote')
+  await mkdir(component, { recursive: true })
+  await writeFile(join(component, '.owner'), 'WhyCode remote process host v1\n')
+  assert.equal((await store.list())[0]?.hasSecret, false)
+  for (const action of ['connect', 'cleanup', 'remove'] as const) {
+    await assert.rejects(connections[action](env.id), SshCredentialsRequiredError)
+    assert.equal((await store.list()).length, 1)
+    await access(join(component, '.owner'))
+  }
+  assert.equal(env.clients.size, 0)
+  await store.save({ ...current.connection, secret: current.secret, rememberSecret: false })
+  assert.equal((await store.list())[0]?.hasSecret, true)
+  assert.equal(JSON.parse(await readFile(join(env.root, 'connections.json'), 'utf8'))[0].encryptedSecret, undefined)
+  await connections.remove(env.id)
+  await assert.rejects(access(component), { code: 'ENOENT' })
+  assert.deepEqual(await store.list(), [])
+  assert.equal(env.commands.length, 0)
+})
+
+it('加密私钥缺少口令时给出凭据请求，保存口令后可直接清理；错误口令仍可重试', async t => {
+  const env = await fixture(t)
+  const connection = (await env.store.get(env.id)).connection
+  await env.store.save({ ...connection, authentication: 'key', privateKeyPath: env.keyPath, secret: '', rememberSecret: false })
+  await assert.rejects(env.connections.cleanup(env.id), SshCredentialsRequiredError)
+  await env.store.save({ ...connection, authentication: 'key', privateKeyPath: env.keyPath, secret: 'wrong', rememberSecret: false })
+  await assert.rejects(env.connections.cleanup(env.id), SshCredentialsRequiredError)
+  await env.store.save({ ...connection, authentication: 'key', privateKeyPath: env.keyPath, secret: env.keyPassword, rememberSecret: false })
+  await env.connections.remove(env.id)
   assert.deepEqual(await env.store.list(), [])
 })

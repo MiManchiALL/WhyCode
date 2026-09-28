@@ -18,6 +18,9 @@ interface ConnectedHost {
   processes: RemoteProcessHost
 }
 interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: string; target: string }
+
+export class SshCredentialsRequiredError extends Error {}
+
 export class SshConnections {
   private readonly connected = new Map<string, ConnectedHost>()
   private readonly connecting = new Map<string, { promise: Promise<SshConnectResult>; controller: AbortController }>()
@@ -43,6 +46,9 @@ export class SshConnections {
     signal.throwIfAborted()
     const connection = stored.connection
     const secret = suppliedSecret ?? stored.secret
+    if (connection.authentication === 'password' && !secret) {
+      throw new SshCredentialsRequiredError('请输入 SSH 密码；未记住的密码在 WhyCode 退出后会被清除')
+    }
     const expected = connection.fingerprint ?? approved
     let observed: string | undefined
     const client = new Client()
@@ -82,6 +88,13 @@ export class SshConnections {
       signal.throwIfAborted()
       if (observed && !expected) return { status: 'trust-required', fingerprint: observed, host: `${connection.host}:${connection.port}` }
       if (observed && expected !== observed) throw new Error('服务器指纹与已保存的指纹不一致，已拒绝连接')
+      if (error instanceof Error && 'level' in error && error.level === 'client-authentication') {
+        if (connection.authentication === 'agent') throw new Error('系统 SSH Agent 身份验证失败，请检查已加载的密钥和服务器授权')
+        throw new SshCredentialsRequiredError('SSH 身份验证失败，请检查用户名及密码或私钥；连接配置已保留')
+      }
+      if (connection.authentication === 'key' && error instanceof Error && /Cannot parse privateKey:.*(?:no passphrase|bad passphrase)/iu.test(error.message)) {
+        throw new SshCredentialsRequiredError('请输入正确的私钥密码；连接配置已保留')
+      }
       throw error
     }
   }
