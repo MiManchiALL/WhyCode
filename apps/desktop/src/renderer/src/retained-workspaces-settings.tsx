@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Folder, FolderOpen, LoaderCircle, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { Folder, FolderOpen, LoaderCircle, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { RetainedWorkspace } from '../../shared/workspace-lifecycle.ts'
 import { DeleteRetainedWorkspace, RenameRetainedWorkspace } from './retained-workspace-dialog.tsx'
 import { retainedWorkspaceKey, type RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
-import { SettingsButton, SettingsPanel } from './settings-layout.tsx'
+import { SettingsPanel } from './settings-layout.tsx'
 
 export function RetainedWorkspacesSettings({ cleanup, onError }: {
   cleanup: RetainedWorkspaceCleanup
@@ -28,7 +28,12 @@ export function RetainedWorkspacesSettings({ cleanup, onError }: {
       if (current === generation.current) onError(`读取保留工作区失败：${message(error)}`)
     }).finally(() => { if (current === generation.current) setLoading(false) })
   }, [onError])
-  useEffect(() => { refresh(); return () => { generation.current++ } }, [refresh, cleaning])
+  useEffect(() => {
+    refresh()
+    window.addEventListener('focus', refresh)
+    const unsubscribe = window.whycode.onSessionDeletion(state => { if (state.status === 'completed') refresh() })
+    return () => { generation.current++; unsubscribe(); window.removeEventListener('focus', refresh) }
+  }, [refresh, cleaning])
   const closeDialog = useCallback(() => setSelection(null), [])
   const open = async (workspace: RetainedWorkspace) => {
     setOpening(workspace.id)
@@ -41,7 +46,6 @@ export function RetainedWorkspacesSettings({ cleanup, onError }: {
   return <div className="space-y-4">
     <div className="flex items-center justify-between gap-3 text-xs text-[var(--wc-muted)]">
       <span>{loading && !items.length ? '正在读取…' : `${items.length} 个工作区 · 最近保留的在前`}</span>
-      <SettingsButton onClick={refresh} disabled={loading}><RefreshCw size={14} className={loading ? 'animate-spin' : ''} />刷新</SettingsButton>
     </div>
     <SettingsPanel padded={false} className="overflow-hidden">
       {!items.length ? <div className="px-6 py-12 text-center text-sm text-[var(--wc-muted)]">

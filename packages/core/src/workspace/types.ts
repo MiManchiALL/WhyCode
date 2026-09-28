@@ -53,7 +53,6 @@ export const worktreeWorkspaceBindingSchema = z.object({
 export const workspaceBindingSchema = z.discriminatedUnion('mode', [
   z.object({
     mode: z.literal('ssh'),
-    connectionId: z.string().uuid(),
     target: z.string().min(1),
     label: z.string().min(1),
     workingDirectory: z.string().startsWith('/'),

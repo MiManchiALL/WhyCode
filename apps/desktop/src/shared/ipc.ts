@@ -4,6 +4,7 @@
  */
 export const IPC = {
   ssh: 'whycode:ssh',
+  sshChanged: 'whycode:ssh-changed',
   /** 窗口关闭前的草稿落盘握手，仅传递 ready/flush/saved/failed/unready 状态。 */
   composerPersistence: 'whycode:composer-persistence',
   /** Renderer → Main：发送 CoreCommand */

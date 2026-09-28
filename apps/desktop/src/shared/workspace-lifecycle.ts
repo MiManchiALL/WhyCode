@@ -13,7 +13,7 @@ export type RetainedWorkspaceTarget = Pick<RetainedWorkspace, 'id' | 'mode'>
 
 export interface WorkspaceDeletionPreview {
   directory: string | null
-  disposition: 'local' | 'shared' | 'empty' | 'optional' | 'unverified' | 'missing'
+  disposition: 'local' | 'remote' | 'shared' | 'empty' | 'optional' | 'unverified' | 'missing'
   /** 只在用户选择删除目录时展示；Worktree 的 Git 分支始终保留。 */
   warning: string | null
 }

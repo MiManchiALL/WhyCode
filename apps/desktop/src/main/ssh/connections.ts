@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { Client } from 'ssh2'
 import type { WorkspaceFileSystem, WorkspaceIO } from '@whycode/core'
 import type { SshConnection, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
-import { SshConnectionStore } from './store.ts'
+import { SshConnectionMissingError, SshConnectionStore } from './store.ts'
 import { createSftpFileSystem } from './sftp.ts'
 import { cleanupRemoteComponent, execChannel, provisionRemote, quoteShell } from './provision.ts'
 import { RemoteProcessHost } from './process.ts'
@@ -21,13 +22,29 @@ interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: str
 
 export class SshCredentialsRequiredError extends Error {}
 
-export class SshConnections {
+export class SshConnections extends EventEmitter<{ changed: [] }> {
   private readonly connected = new Map<string, ConnectedHost>()
   private readonly connecting = new Map<string, { promise: Promise<SshConnectResult>; controller: AbortController }>()
   readonly store: SshConnectionStore
   private readonly resources: string
-  constructor(store: SshConnectionStore, resources: string) { this.store = store; this.resources = resources }
+  constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
   isConnected(id: string): boolean { return this.connected.has(id) }
+
+  async configuredTargets(): Promise<Map<string, string>> {
+    return new Map((await this.store.list()).flatMap(connection => connection.fingerprint
+      ? [[targetIdentity(connection, connection.fingerprint), connection.id]] : []))
+  }
+  async connectionIdForTarget(target: string): Promise<string> {
+    const active = [...this.connected].find(([, host]) => host.target === target)
+    const id = active?.[0] ?? (await this.configuredTargets()).get(target)
+    if (!id) throw new SshConnectionMissingError()
+    return id
+  }
+  targetHost(target: string): ConnectedHost {
+    const host = [...this.connected.values()].find(item => item.target === target)
+    if (!host) throw new Error('SSH 未连接，请在连接设置中连接原服务器')
+    return host
+  }
 
   connect(id: string, fingerprint?: string, secret?: string): Promise<SshConnectResult> {
     const current = this.connected.get(id)
@@ -110,7 +127,11 @@ export class SshConnections {
       const io: WorkspaceIO = { identity: target, platform: 'linux', path: path.posix, fs, spawn: (command, cwd) => processes.spawn(command, cwd) }
       const host: ConnectedHost = { client, io, home, target, processes, componentDirectory: component.directory }
       this.connected.set(id, host)
-      client.once('close', () => { if (this.connected.get(id) === host) this.connected.delete(id); processes.close() })
+      this.emit('changed')
+      client.once('close', () => {
+        if (this.connected.get(id) === host) { this.connected.delete(id); this.emit('changed') }
+        processes.close()
+      })
       return { status: 'connected', home }
     } catch (error) {
       client.end()
@@ -125,13 +146,13 @@ export class SshConnections {
     return host
   }
   /** Operations resolve the live channel each time, but never reconnect or replay automatically. */
-  io(id: string, target: string): WorkspaceIO {
+  io(target: string): WorkspaceIO {
     const fs = new Proxy({} as WorkspaceIO['fs'], { get: (_value, key) => (...args: unknown[]) => {
-      const files = this.host(id, target).io.fs
+      const files = this.targetHost(target).io.fs
       const operation = files[key as keyof typeof files] as (...args: unknown[]) => unknown
       return operation.apply(files, args)
     } })
-    return { identity: target, platform: 'linux', path: path.posix, fs, spawn: (command, cwd) => this.host(id, target).processes.spawn(command, cwd) }
+    return { identity: target, platform: 'linux', path: path.posix, fs, spawn: (command, cwd) => this.targetHost(target).processes.spawn(command, cwd) }
   }
   async directory(id: string, value?: string): Promise<SshDirectory> {
     const host = this.host(id)
@@ -145,7 +166,7 @@ export class SshConnections {
     this.connecting.delete(id)
     const host = this.connected.get(id)
     if (!host) return
-    this.connected.delete(id); host.processes.close(); host.client.end()
+    this.connected.delete(id); host.processes.close(); host.client.end(); this.emit('changed')
   }
   /** File cleanup must work without deploying or starting the process component. */
   async withFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, target?: string): Promise<T> {

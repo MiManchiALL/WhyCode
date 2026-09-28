@@ -11,7 +11,7 @@ const storedSchema = sshConnectionInputSchema.omit({ secret: true }).extend({
 type StoredConnection = z.infer<typeof storedSchema>
 
 export class SshConnectionMissingError extends Error {
-  constructor() { super('SSH 连接不存在或已删除；同名的新连接不会自动接管原项目和会话') }
+  constructor() { super('SSH 连接不存在或已删除，请在设置中重新添加并连接原服务器') }
 }
 
 /** Credentials never leave Main. A failed read/decryption must never overwrite saved data. */

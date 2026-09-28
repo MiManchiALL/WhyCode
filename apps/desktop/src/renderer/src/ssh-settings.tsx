@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
-import { FolderPlus, MoreHorizontal, Plus, RefreshCw, Server } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { FolderPlus, MoreHorizontal, Plus, Server } from 'lucide-react'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { SshConnection, SshConnectionInput, SshRequest, SshResult } from '../../shared/ssh.ts'
+import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 import { SettingsButton, SettingsPanel, SettingsSection } from './settings-layout.tsx'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 import { SshConnectionEditor } from './ssh-connection-editor.tsx'
@@ -14,13 +15,14 @@ interface ConnectionEditor {
   resume?: { action: Exclude<ConnectionAction, 'disconnect'>; fingerprint?: string }
 }
 
-export function SshSettings() {
+export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: StartWorkspaceRequest) => Promise<boolean> }) {
   const [connections, setConnections] = useState<SshConnection[]>([])
   const [editor, setEditor] = useState<ConnectionEditor | null>(null)
   const [picker, setPicker] = useState<SshConnection | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; action: string; run: () => void } | null>(null)
   const feedback = useConversationFeedback()
+  const generation = useRef(0)
   const request = useCallback(async (request: SshRequest, onCredentialsRequired?: () => void): Promise<Extract<SshResult, { ok: true }> | null> => {
     try {
       const result = await window.whycode.ssh(request)
@@ -32,12 +34,23 @@ export function SshSettings() {
     } catch (error) { feedback('error', error instanceof Error ? error.message : String(error)); return null }
   }, [feedback])
   const refresh = useCallback(async () => {
-    const result = await request({ action: 'list' })
-    if (result?.connections) {
-      setConnections(result.connections)
+    const current = ++generation.current
+    try {
+      const result = await window.whycode.ssh({ action: 'list' })
+      if (current !== generation.current) return
+      if (!result.ok) throw new Error(result.error)
+      if (result.connections) setConnections(result.connections)
+    } catch (error) {
+      if (current === generation.current) feedback('error', error instanceof Error ? error.message : String(error))
     }
-  }, [request])
-  useEffect(() => { void refresh() }, [refresh])
+  }, [feedback])
+  useEffect(() => {
+    const reload = () => { void refresh() }
+    const unsubscribe = window.whycode.onSshChanged(reload)
+    reload()
+    window.addEventListener('focus', reload)
+    return () => { generation.current++; unsubscribe(); window.removeEventListener('focus', reload) }
+  }, [refresh])
   const run = async (connection: SshConnection, action: ConnectionAction, fingerprint?: string) => {
     setBusy(connection.id)
     const result = await request(action === 'connect' ? { action, id: connection.id, fingerprint } : { action, id: connection.id }, () => {
@@ -63,7 +76,7 @@ export function SshSettings() {
   const action = (connection: SshConnection, action: 'remove' | 'disconnect' | 'cleanup') => {
     const titles = { remove: '删除此连接？', disconnect: '断开 SSH 连接？', cleanup: '清理远端组件？' }
     const descriptions = {
-      remove: '清理远端组件并删除本机连接配置，停止相关命令和终端。项目、会话记录及远端临时文件保留，但无法再通过此连接继续工作。清理失败时保留连接配置，便于重试。',
+      remove: '清理远端组件并删除本机连接配置，停止相关命令和终端。项目、会话记录及远端临时文件保留；重新添加并连接原服务器后可继续使用。清理失败时保留连接配置，便于重试。',
       disconnect: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留。',
       cleanup: '停止相关命令和终端，删除 WhyCode 的远端组件。连接配置、项目、会话记录和临时文件保留；再次连接时自动重新部署组件。',
     }
@@ -71,10 +84,7 @@ export function SshSettings() {
   }
   return <>
     <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。首次连接会自动准备轻量运行组件。"
-      actions={<div className="flex items-center gap-2">
-        <SettingsButton aria-label="刷新 SSH 连接状态" onClick={() => void refresh()} disabled={Boolean(busy)}><RefreshCw size={15} /></SettingsButton>
-        <SettingsButton onClick={() => setEditor({})} disabled={Boolean(busy)}><Plus size={15} />添加连接</SettingsButton>
-      </div>}>
+      actions={connections.length > 0 && <SettingsButton onClick={() => setEditor({})} disabled={Boolean(busy)}><Plus size={15} />添加连接</SettingsButton>}>
       <SettingsPanel padded={false}>
         {!connections.length && <div className="flex flex-col items-center gap-3 px-8 py-12 text-[var(--wc-muted)]">
           <Server size={30} strokeWidth={1.4} />
@@ -111,7 +121,7 @@ export function SshSettings() {
       </SettingsPanel>
     </SettingsSection>
     {editor && <SshConnectionEditor connection={editor.connection} purpose={editor.resume?.action} onClose={() => setEditor(null)} onSave={save} />}
-    {picker && <SshDirectoryPicker connection={picker} onClose={() => setPicker(null)} />}
+    {picker && <SshDirectoryPicker connection={picker} onClose={() => setPicker(null)} onSelect={onSelectProject} />}
     <AlertDialog.Root open={Boolean(confirmation)} onOpenChange={open => { if (!open) setConfirmation(null) }}><AlertDialog.Portal>
       <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
       <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">

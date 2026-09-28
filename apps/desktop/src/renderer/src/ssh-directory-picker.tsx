@@ -2,10 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowUp, Folder } from 'lucide-react'
 import type { SshConnection, SshDirectory } from '../../shared/ssh.ts'
+import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 import { SettingsButton } from './settings-layout.tsx'
 
-export function SshDirectoryPicker({ connection, onClose }: { connection: SshConnection; onClose: () => void }) {
+export function SshDirectoryPicker({ connection, onClose, onSelect }: {
+  connection: SshConnection; onClose: () => void
+  onSelect: (workspace: StartWorkspaceRequest) => Promise<boolean>
+}) {
   const [directory, setDirectory] = useState<SshDirectory | null>(null)
   const [path, setPath] = useState('')
   const [busy, setBusy] = useState(false)
@@ -26,7 +30,8 @@ export function SshDirectoryPicker({ connection, onClose }: { connection: SshCon
     try {
       const result = await window.whycode.ssh({ action: 'project', id: connection.id, path: directory.path })
       if (!result.ok) throw new Error(result.error)
-      feedback('success', '已添加远端项目'); onClose()
+      if (!result.project?.remote) throw new Error('远端项目登记结果无效')
+      if (await onSelect({ mode: 'ssh', target: result.project.remote.target, selectedDirectory: result.project.directory })) onClose()
     } catch (error) { feedback('error', error instanceof Error ? error.message : String(error)) }
     finally { setBusy(false) }
   }

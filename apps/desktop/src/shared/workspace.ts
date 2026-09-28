@@ -16,7 +16,7 @@ export interface WorkspaceCandidate {
 }
 
 export type StartWorkspaceRequest =
-  | { mode: 'ssh'; connectionId: string; selectedDirectory: string }
+  | { mode: 'ssh'; target: string; selectedDirectory: string }
   | {
       mode: 'local'
       selectedDirectory: string

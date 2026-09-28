@@ -25,7 +25,6 @@ interface McpSettingsEditorProps {
   onAuthorizeOAuth: (request: McpOAuthRequest) => Promise<boolean>
   onDisconnectOAuth: (request: McpOAuthRequest) => Promise<boolean>
   onOpenConfig: (request: OpenMcpConfigRequest) => Promise<void>
-  onRefresh: () => Promise<void>
 }
 
 export function McpSettingsEditor(props: McpSettingsEditorProps) {
@@ -35,12 +34,6 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
       description="外部工具按需连接并通过 ToolSearch 延迟加载；启停写入原 MCP 配置，新会话生效。"
       actions={
         <div className="flex flex-wrap gap-1.5">
-          <SettingsButton
-            onClick={() => void props.onRefresh()}
-            disabled={props.disabled}
-          >
-            刷新状态
-          </SettingsButton>
           <SettingsButton
             onClick={() => void props.onOpenConfig({ scope: 'global' })}
             disabled={props.disabled}

@@ -2628,7 +2628,7 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
     if (typeof deleteDirectory !== 'boolean') throw new Error('删除工作目录选项无效')
     if (deleteDirectory) {
       const preview = await workspaceLifecycle.preview(sessionId, targetWorkspace)
-      if (['local', 'shared', 'unverified'].includes(preview.disposition)) {
+      if (['local', 'remote', 'shared', 'unverified'].includes(preview.disposition)) {
         throw new Error('工作目录无法删除或仍被其它会话使用，请重新确认')
       }
     }
@@ -2670,7 +2670,10 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
       if (!result.deleted) throw new Error('会话删除状态已丢失')
       runtimeRegistry.forgetSession(sessionId)
       const sidebarCleanup = await Promise.allSettled([
-        sessionSidebarState.remove(sessionId), projects.detachSession(sessionId),
+        sessionSidebarState.remove(sessionId),
+        targetWorkspace?.mode === 'ssh'
+          ? sshWorkspaces.connections.configuredTargets().then(targets => projects.detachSession(sessionId, new Set(targets.keys())))
+          : projects.detachSession(sessionId),
       ])
       for (const cleanup of sidebarCleanup) {
         if (cleanup.status === 'rejected') console.warn('会话已删除，但侧栏信息清理失败：', cleanup.reason)
@@ -2757,6 +2760,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     new SshConnectionStore(join(app.getPath('userData'), 'ssh-connections.json'), configSecretCodec),
     join(app.getAppPath(), 'resources', 'remote'),
   ))
+  sshWorkspaces.connections.on('changed', () => broadcastToWindows(IPC.sshChanged, undefined, 'SSH 状态推送失败：'))
   projects = new ProjectStore(join(app.getPath('userData'), 'projects.json'))
   try { await projects.initialize() }
   catch (error) {

@@ -97,9 +97,9 @@ it('保存失败不发布未持久化变更；损坏登记明确报错，不静�
   assert.equal(restored.get(project.id).name, '可继续保存')
 })
 
-it('远端项目按服务器身份和区分大小写的目录归组，重连配置可复用登记但不改写会话绑定', async t => {
+it('远端项目按服务器身份和区分大小写的目录归组，重新添加复用原项目与会话归属', async t => {
   const { path, store } = await fixture(t)
-  const binding = { mode: 'ssh' as const, connectionId: randomUUID(), target: 'ssh:user@host:22#SHA256:key', label: '服务器', workingDirectory: '/project' }
+  const binding = { mode: 'ssh' as const, target: 'ssh:user@host:22#SHA256:key', label: '服务器', workingDirectory: '/project' }
   const first = await store.addRemote(binding)
   const secondHost = await store.addRemote({ ...binding, target: 'ssh:user@other:22#SHA256:key' })
   const upperCase = await store.addRemote({ ...binding, workingDirectory: '/Project' })
@@ -107,13 +107,37 @@ it('远端项目按服务器身份和区分大小写的目录归组，重连配�
   const sessionId = randomUUID()
   await store.attachSession(sessionId, binding)
   await store.rename(first.id, '远端开发')
-  const replacement = { ...binding, connectionId: randomUUID(), label: '新连接' }
+  const replacement = { ...binding, label: '新连接' }
   assert.equal((await store.addRemote(replacement)).id, first.id)
   const restarted = new ProjectStore(path)
   await restarted.initialize()
   assert.deepEqual(restarted.get(first.id), { ...first, name: '远端开发', sessionIds: [sessionId],
-    remote: { connectionId: replacement.connectionId, target: binding.target, label: replacement.label } })
+    remote: { target: binding.target, label: replacement.label } })
   assert.deepEqual(restarted.get(secondHost.id).sessionIds, [])
   assert.deepEqual(restarted.get(upperCase.id).sessionIds, [])
-  assert.notEqual(binding.connectionId, replacement.connectionId)
+  const nextSession = randomUUID()
+  await restarted.attachSession(nextSession, replacement)
+  assert.deepEqual(restarted.get(first.id).sessionIds, [sessionId, nextSession])
+})
+
+it('只在失去连接的项目最后一个会话删除后移除分组；重建连接、断开和组件清理保留分组', async t => {
+  const { path, directory, store } = await fixture(t)
+  const target = 'ssh:user@host:22#SHA256:key'
+  const binding = { mode: 'ssh' as const, target, label: '服务器', workingDirectory: '/project' }
+  const project = await store.addRemote(binding)
+  const other = await store.addRemote({ ...binding, workingDirectory: '/other' })
+  const local = await store.add(directory)
+  const first = randomUUID(), second = randomUUID()
+  await store.attachSession(first, binding)
+  await store.attachSession(second, binding)
+  await store.detachSession(second, new Set())
+  assert.deepEqual(store.get(project.id).sessionIds, [first])
+  await store.detachSession(first, new Set([target]))
+  assert.deepEqual(store.get(project.id).sessionIds, [])
+  await store.attachSession(first, binding)
+  await store.detachSession(first, new Set())
+  assert.throws(() => store.get(project.id), /项目不存在/)
+  const restarted = new ProjectStore(path)
+  await restarted.initialize()
+  assert.deepEqual(restarted.list(), [other, local])
 })

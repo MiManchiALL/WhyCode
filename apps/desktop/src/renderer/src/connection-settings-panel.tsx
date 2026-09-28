@@ -1,7 +1,7 @@
 import { SshSettings } from './ssh-settings.tsx'
 import { RetainedWorkspacesSettings } from './retained-workspaces-settings.tsx'
 import type { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
-import { useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { ReasoningEffort, ReasoningEffortCapability } from '@whycode/core'
 import {
   ArrowLeft,
@@ -11,7 +11,7 @@ import {
   Folder,
   Globe2,
   Plug,
-  RefreshCw,
+  Server,
   Settings,
   UsersRound,
 } from 'lucide-react'
@@ -43,6 +43,7 @@ import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 import { GeneralSettings } from './general-settings.tsx'
 import { useConversationFeedback } from './conversation-feedback.tsx'
+import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 
 interface ConnectionSettingsPanelProps {
   initialSection?: 'general' | 'ssh'
@@ -53,6 +54,7 @@ interface ConnectionSettingsPanelProps {
   onError: (message: string) => void
   onClose: () => void
   onChanged: (snapshot: ConnectionSettingsSnapshot) => void
+  onStartSession: (workspace: StartWorkspaceRequest) => Promise<boolean>
 }
 
 export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
@@ -61,12 +63,14 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [pending, setPending] = useState(false)
   const [oauthPending, setOauthPending] = useState(false)
   const [section, setSection] = useState<SettingsSectionId>(props.initialSection ?? 'general')
+  const refreshGeneration = useRef(0)
 
   const requestClose = () => {
     if (!pending && !oauthPending) setOpen(false)
   }
 
   const mutate = async (operation: () => Promise<SettingsMutationResult>, oauth = false) => {
+    refreshGeneration.current++
     const setBusy = oauth ? setOauthPending : setPending
     setBusy(true)
     try {
@@ -86,17 +90,24 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
     }
   }
 
-  const refresh = async () => {
-    setPending(true)
+  const refresh = useEffectEvent(async () => {
+    if (pending || oauthPending) return
+    const generation = ++refreshGeneration.current
     try {
-      props.onChanged(await window.whycode.connectionSettings())
-      feedback('success', '设置已刷新')
+      const snapshot = await window.whycode.connectionSettings()
+      if (generation === refreshGeneration.current) props.onChanged(snapshot)
     } catch (cause) {
-      props.onError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setPending(false)
+      if (generation === refreshGeneration.current) props.onError(cause instanceof Error ? cause.message : String(cause))
     }
-  }
+  })
+
+  useEffect(() => {
+    if (!open || ['general', 'ssh', 'workspaces'].includes(section)) return
+    const onFocus = () => { void refresh() }
+    onFocus()
+    window.addEventListener('focus', onFocus)
+    return () => { refreshGeneration.current++; window.removeEventListener('focus', onFocus) }
+  }, [open, section])
 
   const openMcpConfig = async (request: OpenMcpConfigRequest) => {
     try {
@@ -167,7 +178,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 label="MCP"
                 onClick={() => setSection('mcp')}
               />
-              <SettingsNavItem active={section === 'ssh'} icon={<Globe2 size={16} />} label="SSH 连接" onClick={() => setSection('ssh')} />
+              <SettingsNavItem active={section === 'ssh'} icon={<Server size={16} />} label="SSH 连接" onClick={() => setSection('ssh')} />
               <SettingsNavItem active={section === 'workspaces'} icon={<Folder size={16} />} label="保留工作区" onClick={() => setSection('workspaces')} />
             </nav>
             <div className="mt-auto flex items-center gap-2 rounded-[var(--wc-menu-radius)] bg-black/[0.035] px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">
@@ -184,17 +195,14 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     <Dialog.Title className="text-xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
                     <Dialog.Description className="mt-1.5 text-[13px] leading-5 text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
                   </div>
-                  {section !== 'ssh' && section !== 'workspaces' && section !== 'general' && <SettingsButton
-                    onClick={() => void refresh()}
-                    disabled={pending || oauthPending}
-                  >
-                    <RefreshCw size={14} className={pending ? 'animate-spin' : ''} />
-                    刷新
-                  </SettingsButton>}
                 </header>
 
                 <div className="space-y-8">
-                  {section === 'ssh' && <SshSettings />}
+                  {section === 'ssh' && <SshSettings onSelectProject={async workspace => {
+                    const started = await props.onStartSession(workspace)
+                    if (started) requestClose()
+                    return started
+                  }} />}
                   {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
                   {section === 'models' && (
@@ -253,7 +261,6 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                       onDisconnectOAuth={(request: McpOAuthRequest) =>
                         mutate(() => window.whycode.disconnectMcpOAuth(request))}
                       onOpenConfig={openMcpConfig}
-                      onRefresh={refresh}
                     />
                   )}
                 </div>

@@ -59,13 +59,13 @@ export class ProjectStore {
     await this.update(projects => {
       const existing = projects.find(item => item.remote?.target === binding.target && item.directory === binding.workingDirectory)
       if (existing) {
-        result = { ...existing, remote: { connectionId: binding.connectionId, target: binding.target, label: binding.label } }
+        result = { ...existing, remote: { target: binding.target, label: binding.label } }
         return projects.map(item => item === existing ? result : item)
       }
       const name = normalizeProjectName((binding.workingDirectory.split('/').filter(Boolean).at(-1) ?? binding.label).slice(0, MAX_PROJECT_NAME_LENGTH))
       result = { id: randomUUID(), name,
         directory: binding.workingDirectory, sessionIds: [],
-        remote: { connectionId: binding.connectionId, target: binding.target, label: binding.label } }
+        remote: { target: binding.target, label: binding.label } }
       return [...projects, result]
     })
     return structuredClone(result)
@@ -99,9 +99,14 @@ export class ProjectStore {
     })
   }
 
-  detachSession(sessionId: string): Promise<void> {
+  detachSession(sessionId: string, configuredSshTargets?: ReadonlySet<string>): Promise<void> {
     return this.update(projects => projects.some(item => item.sessionIds.includes(sessionId))
-      ? projects.map(item => ({ ...item, sessionIds: item.sessionIds.filter(id => id !== sessionId) })) : projects)
+      ? projects.flatMap(item => {
+        if (!item.sessionIds.includes(sessionId)) return [item]
+        const sessionIds = item.sessionIds.filter(id => id !== sessionId)
+        if (!sessionIds.length && item.remote && configuredSshTargets && !configuredSshTargets.has(item.remote.target)) return []
+        return [{ ...item, sessionIds }]
+      }) : projects)
   }
 
   private update(transform: (projects: SidebarProject[]) => SidebarProject[]): Promise<void> {
@@ -132,8 +137,7 @@ function parseProjects(value: unknown): SidebarProject[] {
     if (!item || typeof item !== 'object' || typeof item.id !== 'string'
       || typeof item.directory !== 'string' || !isAbsolute(item.directory) || !Array.isArray(item.sessionIds)) return invalid()
     validateSessionId(item.id)
-    if (item.remote && (typeof item.remote.connectionId !== 'string' || typeof item.remote.target !== 'string' || typeof item.remote.label !== 'string' || !item.directory.startsWith('/'))) return invalid()
-    if (item.remote) validateSessionId(item.remote.connectionId)
+    if (item.remote && (typeof item.remote.target !== 'string' || typeof item.remote.label !== 'string' || !item.directory.startsWith('/'))) return invalid()
     if (ids.has(item.id) || projects.some(project => item.remote
       ? project.remote?.target === item.remote.target && project.directory === item.directory
       : !project.remote && samePath(project.directory, item.directory))) return invalid()
@@ -144,7 +148,7 @@ function parseProjects(value: unknown): SidebarProject[] {
       sessionIds.add(id)
     }
     projects.push({ id: item.id, name: normalizeProjectName(item.name), directory: item.directory, sessionIds: item.sessionIds,
-      ...(item.remote ? { remote: { connectionId: item.remote.connectionId, target: item.remote.target, label: item.remote.label } } : {}) })
+      ...(item.remote ? { remote: { target: item.remote.target, label: item.remote.label } } : {}) })
   }
   return projects
 }

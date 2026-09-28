@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { SidebarProject } from './projects.ts'
 
 export const sshConnectionInputSchema = z.object({
   id: z.string().uuid().optional(),
@@ -36,4 +37,5 @@ export type SshResult = { ok: false; error: string; credentialsRequired?: boolea
   connection?: SshConnection
   connect?: SshConnectResult
   directory?: SshDirectory
+  project?: SidebarProject
 }

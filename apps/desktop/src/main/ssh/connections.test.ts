@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { access, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { once } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -57,7 +57,7 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   const env = await sshFixture(t, true)
   assert.equal((await env.connections.connect(env.id, env.fingerprint)).status, 'connected')
   const host = env.connections.host(env.id)
-  const io = env.connections.io(env.id, host.target)
+  const io = env.connections.io(host.target)
   const ctx: ToolContext = { workspaceIO: io, projectDir: env.project, additionalDirs: [], abortSignal: new AbortController().signal }
   assert.equal((await tool('WriteFile').execute({ path: '目录/说明.txt', content: 'hello\n世界\n' }, ctx)).isError, false)
   assert.equal(await readFile(join(env.root, 'project/目录/说明.txt'), 'utf8'), 'hello\n世界\n')
@@ -118,7 +118,7 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   await mkdir(join(env.root, 'project/.git'))
   await io.fs.writeFile(`${env.project}/AGENTS.md`, 'Remote fixture instructions')
   const journal = await new SessionStore(join(env.root, 'sessions')).create({
-    workspace: { mode: 'ssh', connectionId: env.id, target: host.target, label: 'fixture', workingDirectory: env.project }, modelId: 'test:subagent',
+    workspace: { mode: 'ssh', target: host.target, label: 'fixture', workingDirectory: env.project }, modelId: 'test:subagent',
   })
   const workspace = journal.metadataSnapshot.workspace
   const runtime = new DesktopSessionRuntime({ workspace, modelId: null, emit: () => {} })
@@ -178,10 +178,31 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   await env.connections.cleanup(env.id)
   await env.connections.connect(env.id)
   assert.equal(env.connections.isConnected(env.id), true)
+  const original = await env.store.get(env.id)
   await env.connections.remove(env.id)
   assert.equal(env.connections.isConnected(env.id), false)
   assert.deepEqual(await env.store.list(), [])
   await assert.rejects(readFile(join(env.root, '.cache/whycode-remote/.owner')), { code: 'ENOENT' })
   assert.equal(await readFile(join(env.root, '.cache/whycode-scratch', journal.sessionId, 'Main/keep.txt'), 'utf8'), 'session scratch')
   assert.equal(await readFile(join(env.root, 'project/agent.txt'), 'utf8'), 'remote agent')
+
+  await assert.rejects(workspaces.prepare(runtime), /连接不存在或已删除/)
+  const replacement = await env.store.save({ ...original.connection, id: undefined, secret: original.secret, name: '重新添加的服务器' })
+  assert.notEqual(replacement.id, env.id)
+  await assert.rejects(workspaces.prepare(runtime), /连接不存在或已删除/)
+  const changes: boolean[] = []
+  env.connections.on('changed', () => changes.push(env.connections.isConnected(replacement.id)))
+  await env.connections.connect(replacement.id, env.fingerprint)
+  assert.equal((await workspaces.select(host.target, env.project)).workingDirectory, env.project)
+  assert.equal((await workspaces.prepare(runtime))?.scratch.rootDirectory, remote.scratch.rootDirectory)
+  assert.equal(await io.fs.readFile(`${remote.scratch.mainDirectory}/keep.txt`, 'utf8'), 'session scratch')
+  const continued = await tool('RunCommand').execute({ command: "printf 'resumed'", timeoutMs: 2_000 }, { ...ctx, workspaceIO: runtime.workspaceIO })
+  assert.equal(continued.isError, false)
+  assert.equal(continued.data, 'resumed')
+  await workspaces.removeScratch(journal.sessionId, workspace)
+  await assert.rejects(access(join(env.root, '.cache/whycode-scratch')), { code: 'ENOENT' })
+  assert.ok((await workspaces.prepare(runtime))?.scratch.mainDirectory)
+  await access(join(env.root, '.cache/whycode-scratch', journal.sessionId, 'Main'))
+  env.connections.disconnect(replacement.id)
+  assert.deepEqual(changes, [true, false])
 })

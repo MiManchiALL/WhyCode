@@ -56,6 +56,13 @@ for (const empty of [true, false]) it(`本地项目${empty ? '为空' : '非空'
   assert.deepEqual((await f.lifecycle.list()).workspaces, [])
 })
 
+it('远端会话删除预览明确区分服务器目录，释放会话不接触项目文件', async () => {
+  const f = await fixture()
+  const workspace = { mode: 'ssh' as const, target: 'ssh:user@host:22#SHA256:key', label: '服务器', workingDirectory: '/project' }
+  assert.deepEqual(await f.lifecycle.preview(f.sessionId, workspace), { directory: '/project', disposition: 'remote', warning: null })
+  await f.lifecycle.release(f.sessionId, workspace, 'remote', true)
+})
+
 it('默认保留非空工作目录，记录最后会话名称，重启清理不会删除', async () => {
   const f = await fixture()
   const file = join(f.binding.workingDirectory, 'project.html')

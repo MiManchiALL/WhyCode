@@ -30,8 +30,8 @@ export async function prepareRuntimeWorkspace(
   if (target.mode === 'local') {
     return localWorkspace(await canonicalDirectory(target.selectedDirectory))
   }
-  if (target.mode === 'ssh' && typeof target.connectionId === 'string' && ssh) {
-    return ssh.select(target.connectionId, target.selectedDirectory)
+  if (target.mode === 'ssh' && typeof target.target === 'string' && ssh) {
+    return ssh.select(target.target, target.selectedDirectory)
   }
   if (!isWorktreeStartRequest(target)) {
     throw new Error('新会话 Worktree 请求无效')

@@ -33,10 +33,8 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
         case 'cleanup': await connections.cleanup(request.id); return { ok: true }
         case 'remove': await connections.remove(request.id); return { ok: true }
         case 'project': {
-          const binding = await workspaces.select(request.id, request.path)
-          if (binding.mode !== 'ssh') throw new Error('远端项目身份无效')
-          await projects.addRemote(binding)
-          return { ok: true }
+          const binding = await workspaces.select(connections.host(request.id).target, request.path)
+          return { ok: true, project: await projects.addRemote(binding) }
         }
       }
     } catch (error) {

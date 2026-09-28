@@ -55,7 +55,7 @@ export class WorkspaceLifecycle {
 
   async preview(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<WorkspaceDeletionPreview> {
     if (workspace?.mode === 'local' || workspace?.mode === 'ssh') {
-      return { directory: workspace.workingDirectory, disposition: 'local', warning: null }
+      return { directory: workspace.workingDirectory, disposition: workspace.mode === 'ssh' ? 'remote' : 'local', warning: null }
     }
     try {
       const owned = await this.resolve(sessionId, workspace)

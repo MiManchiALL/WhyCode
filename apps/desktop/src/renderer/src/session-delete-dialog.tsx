@@ -68,6 +68,7 @@ export function SessionDeleteDialog({ sessionId, onClose, onDelete, onError }: P
 function description(preview: WorkspaceDeletionPreview): string {
   switch (preview.disposition) {
     case 'local': return '本地项目目录及其中的文件会保留。'
+    case 'remote': return '服务器上的项目目录及其中的文件会保留。'
     case 'shared': return '工作目录仍被其它会话使用，目录及其中的文件会保留。'
     case 'empty': return 'WhyCode 创建的工作目录为空，将一并清理。'
     case 'unverified': return '无法确认工作目录归属，项目文件会保留。'

@@ -1416,13 +1416,13 @@ export function App() {
 
   const activateNewSession = useCallback(async (
     workspaceRequest?: StartWorkspaceRequest | null,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const result = await window.whycode.newSession(
       workspaceRequest !== undefined ? { workspace: workspaceRequest } : undefined,
     )
     if (!result.ok) {
       showError(result.error ?? '新建会话失败')
-      return
+      return false
     }
     const replacedDraft = result.replacedDraftRuntimeId
     if (replacedDraft) {
@@ -1435,6 +1435,7 @@ export function App() {
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
     void refreshModelCatalog()
+    return true
   }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions, draftStorageError])
 
   const pickProject = useCallback((projectId?: string) => {
@@ -1446,7 +1447,7 @@ export function App() {
     if (!beginSessionTransition()) return
     const project = projects.find(item => item.id === projectId)
     if (project?.remote) {
-      void activateNewSession({ mode: 'ssh', connectionId: project.remote.connectionId, selectedDirectory: project.directory })
+      void activateNewSession({ mode: 'ssh', target: project.remote.target, selectedDirectory: project.directory })
         .catch(error => showError(String(error))).finally(endSessionTransition)
       return
     }
@@ -1519,11 +1520,12 @@ export function App() {
       .finally(endSessionTransition)
   }, [activateNewSession, showError, beginSessionTransition, endSessionTransition])
 
-  const startWorkspaceSession = useCallback((workspaceRequest: StartWorkspaceRequest) => {
-    if (!beginSessionTransition()) return
-    void activateNewSession(workspaceRequest).catch((error) => {
+  const startWorkspaceSession = useCallback(async (workspaceRequest: StartWorkspaceRequest): Promise<boolean> => {
+    if (!beginSessionTransition()) return false
+    try { return await activateNewSession(workspaceRequest) } catch (error) {
       showError(`新建会话失败：${error instanceof Error ? error.message : String(error)}`)
-    }).finally(endSessionTransition)
+      return false
+    } finally { endSessionTransition() }
   }, [
     showError,
     activateNewSession,
@@ -2578,6 +2580,7 @@ export function App() {
       {showConnectionSettings && connectionSettings && (
         <ConnectionSettingsPanel
           initialSection={settingsSection}
+          onStartSession={startWorkspaceSession}
           snapshot={connectionSettings}
           workspaceCleanup={workspaceCleanup}
           conversationFontSize={conversationFontSize}

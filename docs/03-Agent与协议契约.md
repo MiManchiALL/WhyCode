@@ -507,13 +507,13 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 所有项目入口仍调用 `newSession({workspace})`。成功结果包含 `snapshot` 和可空的 `replacedDraftRuntimeId`，明确待移交的唯一未发送草稿；普通 `newSession()` 返回原草稿且替换身份为空。目录替换的输入移交与首次发送共用 Renderer 草稿存储，不把输入内容送入 Main 的项目登记，也不向模型追加控制消息。
 
-SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存连接 ID、稳定服务器身份和显示名称；项目去重及会话归属使用服务器身份与区分大小写的真实路径。`newSession` 的 SSH 选择只传连接 ID 和目录，Main 重新连接并核实目录后生成绑定；不会接受 Renderer 自报的服务器身份。移除分组保留文件与会话，删除连接不会自动把已有会话改绑到新连接。
+SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存 `{target,label}`；项目去重及会话归属使用稳定服务器身份与区分大小写的真实路径。`newSession` 的 SSH 请求为 `{mode:'ssh',target,selectedDirectory}`，Renderer 引用 Main 返回的 `target`；Main 从已验证配置解析身份、复核实际连接并核实目录后生成绑定，无匹配配置时拒绝。移除分组保留文件与会话，重新添加连接后的恢复及空项目移除边界见文档二 §7.5。
 
 ### 7.7 SSH 连接与进程通道
 
-Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记远端项目；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
+Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
 
-SSH 工作区绑定为 `{mode:'ssh',connectionId,target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，连接句柄不落盘。连接管理、所有权与清理语义见文档二 §7.5。
+SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知，连接成功、主动断开和意外断线后通知 Renderer 重读列表，取消订阅释放监听。连接管理、所有权与清理语义见文档二 §7.5。
 
 远端组件只通过已有 SSH channel 的标准输入输出交换协议 1 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。命令通过 `/bin/sh -c` 在指定绝对目录执行，字节使用 base64，stdout/stderr 合并为工具既有输出；前台立即关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
 

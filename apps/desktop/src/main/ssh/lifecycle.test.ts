@@ -18,11 +18,23 @@ async function fixture(t: TestContext) {
   await env.store.trust(env.id, env.fingerprint)
   const connection = (await env.store.get(env.id)).connection
   const workspace: Extract<WorkspaceBinding, { mode: 'ssh' }> = {
-    mode: 'ssh', connectionId: env.id, label: connection.name, workingDirectory: env.project,
+    mode: 'ssh', label: connection.name, workingDirectory: env.project,
     target: `ssh:${connection.username}@${connection.host}:${connection.port}#${env.fingerprint}`,
   }
   return { ...env, workspace, workspaces: new SshWorkspaces(env.connections) }
 }
+
+it('只有相同账户、主机、端口和已验证指纹的配置能恢复历史工作区', async t => {
+  const env = await fixture(t)
+  const original = await env.store.get(env.id)
+  await env.connections.remove(env.id)
+  for (const changed of [{ username: 'other' }, { host: 'other.example' }, { port: original.connection.port + 1 }, {}]) {
+    const candidate = await env.store.save({ ...original.connection, id: undefined, ...changed, secret: original.secret })
+    await env.store.trust(candidate.id, Object.keys(changed).length ? env.fingerprint : 'SHA256:different-host-key')
+    await assert.rejects(env.connections.connectionIdForTarget(env.workspace.target), /连接不存在或已删除/)
+    await env.store.remove(candidate.id)
+  }
+})
 
 it('删除 SSH 会话清理自己的远端与本地临时文件，保留项目、其它会话和组件；不启动组件', async t => {
   const env = await fixture(t)
@@ -92,7 +104,7 @@ it('远端临时清理拒绝越界 ID、错误服务器身份和重定向的父�
   await mkdir(join(env.root, '.cache'))
   await symlink(join(env.root, 'project'), parent, process.platform === 'win32' ? 'junction' : 'dir')
   await assert.rejects(env.workspaces.removeScratch('../project', env.workspace), /无效会话 ID/)
-  await assert.rejects(env.workspaces.removeScratch(id, { ...env.workspace, target: 'another-server' }), /服务器.*不同/)
+  assert.match((await env.workspaces.removeScratch(id, { ...env.workspace, target: 'another-server' }))!, /临时文件已保留/)
   await assert.rejects(env.workspaces.removeScratch(id, env.workspace), /符号链接/)
   assert.equal(await readFile(join(outside, 'keep.txt'), 'utf8'), 'keep')
 })
@@ -107,6 +119,41 @@ it('远端临时目录中的链接只删除链接，不遍历其指向的项目'
   await env.workspaces.removeScratch(id, env.workspace)
   assert.equal(await readFile(join(env.root, 'project/keep.txt'), 'utf8'), 'keep')
   await assert.rejects(access(root), { code: 'ENOENT' })
+  await assert.rejects(access(join(env.root, '.cache/whycode-scratch')), { code: 'ENOENT' })
+  await access(join(env.root, '.cache'))
+})
+
+it('最后一个会话删除后清理空 scratch 根目录；并发新会话和未知文件不会被删除', async t => {
+  const env = await fixture(t)
+  const first = randomUUID(), second = randomUUID()
+  const parent = join(env.root, '.cache/whycode-scratch')
+  await mkdir(join(parent, first, 'Main'), { recursive: true })
+  await mkdir(join(parent, second, 'Main'), { recursive: true })
+  await writeFile(join(parent, second, 'Main/keep.txt'), 'keep')
+  await env.workspaces.removeScratch(first, env.workspace)
+  assert.equal(await readFile(join(parent, second, 'Main/keep.txt'), 'utf8'), 'keep')
+  await writeFile(join(parent, 'unknown.txt'), 'keep')
+  await env.workspaces.removeScratch(second, env.workspace)
+  assert.equal(await readFile(join(parent, 'unknown.txt'), 'utf8'), 'keep')
+  await env.connections.withFiles(env.id, fs => fs.unlink(`${env.remoteRoot}/.cache/whycode-scratch/unknown.txt`))
+
+  const withFiles = env.connections.withFiles.bind(env.connections)
+  const concurrent = randomUUID()
+  const intercept: SshConnections['withFiles'] = (id, operation, target) => withFiles(id, async (fs, home) => {
+    const rmdir = fs.rmdir
+    fs.rmdir = async path => {
+      if (path === `${env.remoteRoot}/.cache/whycode-scratch`) await mkdir(join(parent, concurrent, 'Main'), { recursive: true })
+      return rmdir(path)
+    }
+    return operation(fs, home)
+  }, target)
+  const mock = t.mock.method(env.connections, 'withFiles', intercept)
+  await env.workspaces.removeScratch(second, env.workspace)
+  await access(join(parent, concurrent, 'Main'))
+  mock.mock.restore()
+  await env.workspaces.removeScratch(concurrent, env.workspace)
+  await assert.rejects(access(parent), { code: 'ENOENT' })
+  await env.workspaces.removeScratch(concurrent, env.workspace)
 })
 
 it('删除连接在组件清理成功后移除配置；失败可重试，保留项目登记与临时目录', async t => {
@@ -135,8 +182,8 @@ it('删除连接在组件清理成功后移除配置；失败可重试，保留�
   assert.equal(env.commands.length, 0)
 
   const replacement = await env.store.save({ name: 'same server', host: '127.0.0.1', username: 'fixture', port: 22, authentication: 'password', rememberSecret: false })
-  await assert.rejects(env.workspaces.select(project.remote!.connectionId, project.directory), /连接不存在或已删除/)
-  assert.notEqual(replacement.id, project.remote!.connectionId)
+  await assert.rejects(env.workspaces.select(project.remote!.target, project.directory), /连接不存在或已删除/)
+  assert.notEqual(replacement.id, env.id)
   await env.connections.remove(replacement.id)
   assert.deepEqual(await env.store.list(), [])
 })
