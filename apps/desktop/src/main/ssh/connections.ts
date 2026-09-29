@@ -140,7 +140,11 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       const processes = new RemoteProcessHost(await execChannel(client, `exec ${quoteShell(component.executable)}`), () => client.end())
       await processes.ready()
       signal.throwIfAborted()
-      const io: WorkspaceIO = { identity: target, platform: 'linux', path: path.posix, fs, spawn: (command, cwd) => processes.spawn(command, cwd) }
+      const io: WorkspaceIO = {
+        identity: target, platform: 'linux', path: path.posix, fs,
+        spawn: (command, cwd) => processes.spawn(command, cwd),
+        ripgrep: (args, cwd) => processes.spawn({ executable: component.ripgrep, args }, cwd),
+      }
       const host: ConnectedHost = { client, io, home, target, processes, componentDirectory: component.directory }
       const active: ConnectionState = { status: 'connected', host }
       this.states.set(id, active)
@@ -170,7 +174,11 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       const operation = files[key as keyof typeof files] as (...args: unknown[]) => unknown
       return operation.apply(files, args)
     } })
-    return { identity: target, platform: 'linux', path: path.posix, fs, spawn: (command, cwd) => this.targetHost(target).processes.spawn(command, cwd) }
+    return {
+      identity: target, platform: 'linux', path: path.posix, fs,
+      spawn: (command, cwd) => this.targetHost(target).processes.spawn(command, cwd),
+      ripgrep: (args, cwd) => this.targetHost(target).io.ripgrep!(args, cwd),
+    }
   }
   async directory(id: string, value?: string): Promise<SshDirectory> {
     const host = this.host(id)

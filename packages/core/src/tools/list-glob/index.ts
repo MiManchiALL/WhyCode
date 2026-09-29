@@ -3,7 +3,9 @@ import { z } from 'zod'
 import { buildTool } from '../tool.ts'
 import { displayToolPath, resolveAllowed, IGNORED_DIRS } from '../fs-utils.ts'
 import { collectFiles, globToRegExp } from '../search/fallback.ts'
-import { runRipgrepLines } from '../search/ripgrep.ts'
+import { runRipgrepLines, SEARCH_EXCLUSIONS } from '../search/ripgrep.ts'
+import { withSearchDeadline } from '../search/deadline.ts'
+import { matchFallback } from '../search/fallback-worker.ts'
 
 export const LIST_DIR_TOOL_NAME = 'ListDir'
 export const GLOB_TOOL_NAME = 'Glob'
@@ -45,10 +47,6 @@ export const listDirTool = buildTool({
   },
 })
 
-function exclusionArgs(): string[] {
-  return [...IGNORED_DIRS].flatMap((dir) => ['--glob', `!${dir}/**`])
-}
-
 export const globTool = buildTool({
   name: GLOB_TOOL_NAME,
   description: '按模式快速查找文件名',
@@ -64,45 +62,44 @@ export const globTool = buildTool({
   kind: 'read',
   extractPaths: (input) => (input.path ? [input.path] : []),
   async execute(input, ctx) {
-    const io = ctx.workspaceIO ?? localWorkspaceIO
-    const { relative } = io.path
+    return withSearchDeadline(ctx, async ctx => {
+      const io = ctx.workspaceIO ?? localWorkspaceIO
+      const { relative } = io.path
 
-    const root = await resolveAllowed(ctx, input.path ?? '.')
-    const offset = input.offset ?? 0
-    const limit = input.limit ?? DEFAULT_GLOB_LIMIT
-    const requested = offset + limit + 1
-    const rg = await runRipgrepLines(
-      ['--files', '--hidden', '--no-ignore', ...exclusionArgs(), '--glob', input.pattern, '.'],
-      root,
-      ctx.abortSignal,
-      requested,
-      io,
-    )
+      const root = await resolveAllowed(ctx, input.path ?? '.')
+      ctx.abortSignal.throwIfAborted()
+      const offset = input.offset ?? 0
+      const limit = input.limit ?? DEFAULT_GLOB_LIMIT
+      const requested = offset + limit + 1
+      const rg = await runRipgrepLines(
+        ['--files', '--hidden', '--no-ignore', '--sort', 'path', '--glob', input.pattern, ...SEARCH_EXCLUSIONS, '--', '.'],
+        root,
+        ctx.abortSignal,
+        requested,
+        io,
+      )
 
-    let matches: string[]
-    let scanTruncated = false
-    if (rg) {
-      matches = rg.lines.map((path) => displayToolPath(ctx.projectDir, root, path, io))
-      scanTruncated = rg.truncated
-    } else {
-      const collected = await collectFiles(root, ctx.abortSignal, io)
-      const matcher = globToRegExp(input.pattern.replaceAll('\\', '/'))
-      matches = collected.files
-        .map((path) => ({
-          relative: relative(root, path).replaceAll('\\', '/'),
-          display: displayToolPath(ctx.projectDir, root, relative(root, path), io),
-        }))
-        .filter(({ relative: path }) => matcher.test(path))
-        .map(({ display }) => display)
-        .sort((a, b) => a.localeCompare(b))
-      scanTruncated = collected.truncated
-    }
+      let matches: string[]
+      let scanTruncated = false
+      if (rg) {
+        matches = rg.lines.map((path) => displayToolPath(ctx.projectDir, root, path, io))
+        scanTruncated = rg.truncated
+      } else {
+        const collected = await collectFiles(root, ctx.abortSignal, io)
+        const paths = await matchFallback({
+          kind: 'glob', files: collected.files.map(path => relative(root, path).replaceAll('\\', '/')),
+          expression: globToRegExp(input.pattern).source, limit: requested,
+        }, ctx.abortSignal)
+        matches = paths.map(path => displayToolPath(ctx.projectDir, root, path, io))
+        scanTruncated = collected.truncated || paths.length >= requested
+      }
 
-    const hasMore = scanTruncated || matches.length > offset + limit
-    const shown = matches.slice(offset, offset + limit)
-    const note = hasMore
-      ? `\n[结果已截断；用更具体的 pattern/path，或 offset=${offset + shown.length} 继续]`
-      : ''
-    return { data: shown.join('\n') + note || '（无匹配文件）', isError: false }
+      const hasMore = scanTruncated || matches.length > offset + limit
+      const shown = matches.slice(offset, offset + limit)
+      const note = hasMore
+        ? `\n[结果已截断；用更具体的 pattern/path，或 offset=${offset + shown.length} 继续]`
+        : ''
+      return { data: shown.join('\n') + note || '（无匹配文件）', isError: false }
+    })
   },
 })

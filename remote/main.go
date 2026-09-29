@@ -18,26 +18,29 @@ import (
 	"github.com/creack/pty"
 )
 
-const protocol = 1
+const protocol = 2
 const maxTasks = 32
 
 type request struct {
-	ID      string `json:"id"`
-	Method  string `json:"method"`
-	Task    string `json:"task"`
-	Command string `json:"command"`
-	Cwd     string `json:"cwd"`
-	Data    []byte `json:"data"`
-	PTY     bool   `json:"pty"`
-	Cols    uint16 `json:"cols"`
-	Rows    uint16 `json:"rows"`
-	End     bool   `json:"end"`
+	ID         string   `json:"id"`
+	Method     string   `json:"method"`
+	Task       string   `json:"task"`
+	Command    string   `json:"command"`
+	Executable string   `json:"executable"`
+	Args       []string `json:"args"`
+	Cwd        string   `json:"cwd"`
+	Data       []byte   `json:"data"`
+	PTY        bool     `json:"pty"`
+	Cols       uint16   `json:"cols"`
+	Rows       uint16   `json:"rows"`
+	End        bool     `json:"end"`
 }
 type response struct {
 	ID      string `json:"id,omitempty"`
 	Task    string `json:"task,omitempty"`
 	Event   string `json:"event,omitempty"`
 	Data    []byte `json:"data,omitempty"`
+	Stream  string `json:"stream,omitempty"`
 	Code    *int   `json:"code,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Version int    `json:"version,omitempty"`
@@ -189,6 +192,12 @@ func (s *server) start(r request) response {
 		return response{Error: "进程身份、目录无效或任务数已达上限"}
 	}
 	cmd := exec.Command("/bin/sh", "-c", r.Command)
+	if r.Executable != "" {
+		if r.Executable[0] != '/' || r.PTY {
+			return response{Error: "程序路径必须是绝对路径，且不能用于交互终端"}
+		}
+		cmd = exec.Command(r.Executable, r.Args...)
+	}
 	cmd.Dir = r.Cwd
 	cmd.Env = append(os.Environ(), "PAGER=cat", "GIT_PAGER=cat")
 	t := &task{cmd: cmd, done: make(chan struct{}), outputSlots: make(chan struct{}, 8), cancelOutput: make(chan struct{})}
@@ -247,9 +256,13 @@ func (s *server) start(r request) response {
 	}
 	s.tasks[r.Task] = t
 	var outputs sync.WaitGroup
-	for _, reader := range readers {
+	for index, reader := range readers {
 		outputs.Add(1)
-		go func(reader io.ReadCloser) { defer outputs.Done(); s.read(r.Task, t, reader) }(reader)
+		stream := "stdout"
+		if index == 1 && r.Executable != "" {
+			stream = "stderr"
+		}
+		go func(reader io.ReadCloser, stream string) { defer outputs.Done(); s.read(r.Task, t, reader, stream) }(reader, stream)
 	}
 	go func() {
 		// Wait on the process first; its descendants must not hold the channel open forever.
@@ -276,7 +289,7 @@ func (s *server) start(r request) response {
 	return response{Task: r.Task}
 }
 
-func (s *server) read(id string, t *task, reader io.Reader) {
+func (s *server) read(id string, t *task, reader io.Reader, stream string) {
 	buffer := make([]byte, 16*1024)
 	for {
 		n, err := reader.Read(buffer)
@@ -291,7 +304,7 @@ func (s *server) read(id string, t *task, reader io.Reader) {
 			}
 			data := append([]byte(nil), buffer[:n]...)
 			select {
-			case s.output <- response{Task: id, Event: "data", Data: data}:
+			case s.output <- response{Task: id, Event: "data", Data: data, Stream: stream}:
 			case <-s.closing:
 				return
 			case <-t.cancelOutput:

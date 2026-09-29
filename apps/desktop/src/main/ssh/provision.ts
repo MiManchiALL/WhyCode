@@ -30,9 +30,8 @@ async function architecture(client: Client): Promise<'x64' | 'arm64'> {
   })
 }
 
-export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, home: string, resourceDirectory: string): Promise<{ executable: string; directory: string }> {
+export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, home: string, resourceDirectory: string): Promise<{ executable: string; ripgrep: string; directory: string }> {
   const arch = await architecture(client)
-  const binary = await readFile(join(resourceDirectory, `whycode-remote-linux-${arch}`))
   const directory = posix.join(home, '.cache', 'whycode-remote')
   await fs.mkdir(directory, { recursive: true })
   if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error('远端组件目录不能是符号链接')
@@ -45,17 +44,23 @@ export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, h
     await fs.writeFile(ownerPath, OWNER, { flag: 'wx', mode: 0o600 }); owner = OWNER
   }
   if (owner !== OWNER) throw new Error('远端组件目录归属校验失败')
-  const hash = digest(binary)
-  const executable = posix.join(directory, `host-${hash}`)
-  const executableInfo = await fs.lstat(executable).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
-  if (executableInfo && !executableInfo.isFile()) throw new Error('远端组件不是普通文件')
-  const installed = await fs.readFile(executable).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
-  if (installed && digest(installed) !== hash) throw new Error('远端组件校验失败，请清理后重新连接')
-  if (!installed) {
-    await atomicSftpWrite(fs, executable, binary, 0o700)
-    if (digest(await fs.readFile(executable)) !== hash) throw new Error('远端组件上传校验失败')
+  const install = async (resource: string, prefix: string): Promise<string> => {
+    const binary = await readFile(join(resourceDirectory, resource))
+    const hash = digest(binary)
+    const executable = posix.join(directory, `${prefix}-${hash}`)
+    const executableInfo = await fs.lstat(executable).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
+    if (executableInfo && !executableInfo.isFile()) throw new Error('远端组件不是普通文件')
+    const installed = await fs.readFile(executable).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
+    if (installed && digest(installed) !== hash) throw new Error('远端组件校验失败，请清理后重新连接')
+    if (!installed) {
+      await atomicSftpWrite(fs, executable, binary, 0o700)
+      if (digest(await fs.readFile(executable)) !== hash) throw new Error('远端组件上传校验失败')
+    }
+    return executable
   }
-  return { executable, directory }
+  const executable = await install(`whycode-remote-linux-${arch}`, 'host')
+  const ripgrep = await install(`ripgrep-linux-${arch}`, 'rg')
+  return { executable, ripgrep, directory }
 }
 
 /** Only known component files are removed; unknown contents, projects and scratch are untouched. */
@@ -64,7 +69,7 @@ export async function cleanupRemoteComponent(fs: WorkspaceFileSystem, directory:
   if (!info) return
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('远端组件目录归属校验失败')
   const entries = await fs.readdir(directory, { withFileTypes: true })
-  if (entries.some(entry => !entry.isFile() || (entry.name !== '.owner' && !/^host-[0-9a-f]{64}$/u.test(entry.name)))) throw new Error('组件目录包含未知文件，已保留目录')
+  if (entries.some(entry => !entry.isFile() || (entry.name !== '.owner' && !/^(?:host|rg)-[0-9a-f]{64}$/u.test(entry.name)))) throw new Error('组件目录包含未知文件，已保留目录')
   const owner = posix.join(directory, '.owner')
   if (await fs.readFile(owner, 'utf8') !== OWNER) throw new Error('远端组件目录归属校验失败')
   for (const entry of entries) if (entry.name !== '.owner') await fs.unlink(posix.join(directory, entry.name))

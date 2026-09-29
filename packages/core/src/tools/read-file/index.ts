@@ -1,10 +1,10 @@
 import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
-import { createInterface } from 'node:readline'
 import { z } from 'zod'
 import { unicodeSafePrefix } from '../../text.ts'
 import { buildTool } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { VIEW_IMAGE_TOOL_NAME } from '../view-image/prompt.ts'
+import { boundedLines } from './lines.ts'
 
 export const READ_FILE_TOOL_NAME = 'ReadFile'
 
@@ -21,12 +21,6 @@ async function isBinaryFile(path: string, io: WorkspaceIO): Promise<boolean> {
   } finally {
     await handle.close()
   }
-}
-
-function abortError(): Error {
-  const error = new Error('读取已被中止')
-  error.name = 'AbortError'
-  return error
 }
 
 export const readFileTool = buildTool({
@@ -51,16 +45,14 @@ export const readFileTool = buildTool({
 
     const startLine = input.offset ?? 1
     const limit = input.limit ?? MAX_LINES
-    const stream = io.fs.createReadStream(absolute, { encoding: 'utf8' })
-    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    ctx.abortSignal.throwIfAborted()
+    const stream = io.fs.createReadStream(absolute, { encoding: 'utf8', signal: ctx.abortSignal })
     const output: string[] = []
     let lineNumber = 0
     let hasMore = false
-    const onAbort = () => stream.destroy(abortError())
-    ctx.abortSignal.addEventListener('abort', onAbort, { once: true })
 
     try {
-      for await (const line of lines) {
+      for await (const line of boundedLines(stream, MAX_LINE_CHARS)) {
         lineNumber++
         if (lineNumber < startLine) continue
         if (output.length >= limit) {
@@ -74,12 +66,10 @@ export const readFileTool = buildTool({
         output.push(`${String(lineNumber).padStart(5)}\t${shown}`)
       }
     } finally {
-      ctx.abortSignal.removeEventListener('abort', onAbort)
-      lines.close()
       stream.destroy()
     }
 
-    if (ctx.abortSignal.aborted) throw abortError()
+    ctx.abortSignal.throwIfAborted()
     if (output.length === 0) {
       return {
         data: lineNumber === 0 ? '（空文件）' : `（从第 ${startLine} 行起无内容；文件共 ${lineNumber} 行）`,

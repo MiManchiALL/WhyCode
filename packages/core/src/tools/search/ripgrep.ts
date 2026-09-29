@@ -4,9 +4,14 @@ import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
+import { stopWorkspaceProcess } from '../../workspace/process.ts'
+import { IGNORED_DIRS } from '../fs-utils.ts'
 
-const SEARCH_TIMEOUT_MS = 20_000
 const MAX_STDERR_CHARS = 4_000
+const MAX_OUTPUT_CHARS = 1024 * 1024
+const MAX_LINE_CHARS = 64 * 1024
+
+export const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!${dir}/**`])
 
 export interface RipgrepLines {
   lines: string[]
@@ -44,12 +49,6 @@ function getRipgrepPath(): Promise<string | null> {
   return (ripgrepPathPromise ??= findRipgrepPath())
 }
 
-function abortError(): Error {
-  const error = new Error('搜索已被中止')
-  error.name = 'AbortError'
-  return error
-}
-
 /**
  * 执行 ripgrep 并按行流式截断，避免大仓库搜索先把全部 stdout 放进内存。
  * code=1 表示无匹配，仍属于成功；达到行数上限时主动结束 rg 并返回部分结果。
@@ -61,14 +60,16 @@ export async function runRipgrepLines(
   maxLines: number,
   io: WorkspaceIO = localWorkspaceIO,
 ): Promise<RipgrepLines | null> {
-  if (io.identity !== 'local') return null
-  const executable = await getRipgrepPath()
-  if (!executable) return null
-  if (signal.aborted) throw abortError()
+  signal.throwIfAborted()
+  const executable = !io.ripgrep && io.identity === 'local' ? await getRipgrepPath() : null
+  signal.throwIfAborted()
+  if (!io.ripgrep && !executable) return null
 
   return new Promise<RipgrepLines>((resolve, reject) => {
-    const child = spawn(executable, ['--no-config', ...args], {
+    const argv = ['--no-config', ...args]
+    const child = io.ripgrep ? io.ripgrep(argv, cwd) : spawn(executable!, argv, {
       cwd,
+      detached: process.platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -78,12 +79,14 @@ export async function runRipgrepLines(
     let stderr = ''
     let settled = false
     let limitReached = false
-    let timedOut = false
+    let outputChars = 0
+    let stopping: Promise<boolean> | undefined
+
+    const stop = () => { stopping ??= stopWorkspaceProcess(child); void stopping.catch(finish) }
 
     const finish = (error?: Error) => {
       if (settled) return
       settled = true
-      clearTimeout(timeout)
       signal.removeEventListener('abort', onAbort)
       if (error) reject(error)
       else resolve({ lines, truncated: limitReached })
@@ -92,46 +95,43 @@ export async function runRipgrepLines(
     const acceptLine = (line: string) => {
       if (line.endsWith('\r')) line = line.slice(0, -1)
       if (line.length === 0) return
-      if (lines.length < maxLines) {
-        lines.push(line)
-        return
-      }
-      limitReached = true
-      child.kill()
+      lines.push(line)
+      outputChars += line.length
+      if (lines.length >= maxLines || outputChars >= MAX_OUTPUT_CHARS) { limitReached = true; stop() }
     }
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      if (limitReached) return
+    child.stdout!.on('data', (chunk: Buffer) => {
+      if (settled || limitReached || signal.aborted) return
       pending += decoder.write(chunk)
       const parts = pending.split('\n')
       pending = parts.pop() ?? ''
       for (const line of parts) {
+        if (line.length > MAX_LINE_CHARS) { stop(); finish(new Error('搜索输出单行超过限制，请缩小搜索范围')); return }
         acceptLine(line)
         if (limitReached) break
       }
+      if (pending.length > MAX_LINE_CHARS) { stop(); finish(new Error('搜索输出单行超过限制，请缩小搜索范围')) }
     })
-    child.stderr.on('data', (chunk: Buffer) => {
-      if (stderr.length < MAX_STDERR_CHARS) stderr += chunk.toString('utf8')
+    child.stderr!.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString('utf8')).slice(-MAX_STDERR_CHARS)
     })
 
-    const onAbort = () => child.kill()
+    const onAbort = () => { stop(); finish(signal.reason) }
     signal.addEventListener('abort', onAbort, { once: true })
-    const timeout = setTimeout(() => {
-      timedOut = true
-      child.kill()
-    }, SEARCH_TIMEOUT_MS)
 
     child.on('error', (error) => finish(error))
     child.on('close', (code) => {
+      if (settled) return
       if (!limitReached) {
         pending += decoder.end()
         if (pending) acceptLine(pending)
       }
-      if (signal.aborted) return finish(abortError())
-      if (timedOut) return finish(new Error(`搜索超时（${SEARCH_TIMEOUT_MS}ms）`))
+      if (signal.aborted) return finish(signal.reason)
       if (limitReached || code === 0 || code === 1) return finish()
       const detail = stderr.trim().slice(-MAX_STDERR_CHARS)
       finish(new Error(`ripgrep 执行失败（退出码 ${code ?? 'unknown'}）${detail ? `：${detail}` : ''}`))
     })
+    child.stdin?.end()
+    if (signal.aborted) onAbort()
   })
 }

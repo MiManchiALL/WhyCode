@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ToolContext } from '../tool.ts'
 import { readFileTool } from './index.ts'
+import { Readable } from 'node:stream'
+import { boundedLines } from './lines.ts'
 
 const roots: string[] = []
 
@@ -28,6 +30,12 @@ async function fixture(content: string | Buffer): Promise<{ path: string; ctx: T
 }
 
 describe('ReadFile 流式读取', () => {
+  it('跨数据块的 CRLF 与多兆单行不累积完整内容', async () => {
+    const stream = Readable.from(['one\r', '\ntwo\rthree\n', ...Array.from({ length: 32 }, () => 'x'.repeat(64 * 1024)), '\nlast'])
+    const lines: string[] = []
+    for await (const line of boundedLines(stream, 2_000)) lines.push(line)
+    assert.deepEqual(lines, ['one', 'two', 'three', 'x'.repeat(2_001), 'last'])
+  })
   it('按 offset/limit 返回行号并提示继续位置', async () => {
     const { ctx } = await fixture('one\ntwo\nthree\nfour\n')
     const result = await readFileTool.execute({ path: 'fixture.txt', offset: 2, limit: 2 }, ctx)

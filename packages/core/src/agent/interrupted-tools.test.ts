@@ -11,10 +11,35 @@ import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolResultMessage } from '../session/tool-execution.ts'
 import { buildTool } from '../tools/tool.ts'
+import { withSearchDeadline, SEARCH_TIMEOUT_MS } from '../tools/search/deadline.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { AgentSession, type ApprovalHandler } from './session.ts'
 
 describe('中断工具批次的执行事实', () => {
+  it('搜索超时作为失败工具结果进入模型下一轮，模型能够继续回答', async t => {
+    const fixture = await setup(t)
+    const model = new MockLanguageModelV4({ doStream: [callsStep([['SearchTimeout', {}]]), finalStep()] })
+    const session = createSession(fixture, model)
+    session.setExtraTools([buildTool({
+      name: 'SearchTimeout', description: '搜索超时验证', prompt: '搜索', inputSchema: z.object({}), isReadOnly: true, kind: 'read',
+      async execute(_input, ctx) {
+        t.mock.timers.enable({ apis: ['setTimeout'] })
+        try {
+          const result = withSearchDeadline(ctx, async () => {
+            t.mock.timers.tick(SEARCH_TIMEOUT_MS)
+            return { data: '未完成的结果', isError: false }
+          })
+          return await result
+        } finally { t.mock.timers.reset() }
+      },
+    })])
+    assert.equal(await session.handleUserMessage('查找文件'), 'completed')
+    const messages = JSON.stringify(model.doStreamCalls[1]!.prompt)
+    assert.match(messages, /error-text/)
+    assert.match(messages, /搜索超时（30 秒）/)
+    assert.doesNotMatch(messages, /未完成的结果/)
+    await session.dispose()
+  })
   for (const mode of ['stop', 'urgent'] as const) {
     it(`${mode} 取消等待中的审批，不阻塞批次收尾或执行被取消的写入`, async (t) => {
       const fixture = await setup(t)

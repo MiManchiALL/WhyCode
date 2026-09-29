@@ -4,10 +4,12 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { prepareRemoteSearch } from './remote-search.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const source = join(root, 'remote')
 const output = join(root, 'apps/desktop/resources/remote')
+await prepareRemoteSearch(root, output)
 const hash = createHash('sha256')
 for (const name of (await readdir(source)).filter(name => /\.(go|mod|sum)$/u.test(name)).sort()) {
   hash.update(name); hash.update(await readFile(join(source, name)))

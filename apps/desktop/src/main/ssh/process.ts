@@ -8,6 +8,7 @@ import { unknownWorkspaceOutcome, type WorkspaceProcess } from '@whycode/core'
 const packetSchema = z.object({
   id: z.string().optional(), task: z.string().optional(),
   event: z.enum(['data', 'exit']).optional(), data: z.string().max(24 * 1024).optional(),
+  stream: z.enum(['stdout', 'stderr']).optional(),
   code: z.number().int().optional(), error: z.string().optional(), version: z.number().int().optional(),
 })
 type Packet = z.infer<typeof packetSchema>
@@ -64,12 +65,12 @@ export class RemoteProcessHost {
   }
   async ready(): Promise<void> {
     const reply = await this.request({ method: 'hello' })
-    if (reply.version !== 1) { this.close(); throw new Error('远端组件版本不匹配') }
+    if (reply.version !== 2) { this.close(); throw new Error('远端组件版本不匹配') }
   }
-  spawn(command: string, cwd: string, terminal?: { cols: number; rows: number }): RemoteProcess {
+  spawn(command: string | { executable: string; args: string[] }, cwd: string, terminal?: { cols: number; rows: number }): RemoteProcess {
     const process = new RemoteProcess(this)
     this.processes.set(process.id, process)
-    void this.request({ method: 'start', task: process.id, command, cwd, pty: Boolean(terminal), ...terminal })
+    void this.request({ method: 'start', task: process.id, ...(typeof command === 'string' ? { command } : command), cwd, pty: Boolean(terminal), ...terminal })
       .then(() => process.emit('spawn'), error => { this.processes.delete(process.id); process.finish(null, error) })
     return process
   }
@@ -101,7 +102,8 @@ export class RemoteProcessHost {
       const process = packet.task && this.processes.get(packet.task)
       if (!process) continue
       if (packet.event === 'data' && typeof packet.data === 'string') {
-        process.stdout.write(Buffer.from(packet.data, 'base64'), () => {
+        const output = packet.stream === 'stderr' ? process.stderr : process.stdout
+        output.write(Buffer.from(packet.data, 'base64'), () => {
           if (!this.closed) this.channel.write(`${JSON.stringify({ id: randomUUID(), method: 'ack', task: process.id })}\n`)
         })
       }

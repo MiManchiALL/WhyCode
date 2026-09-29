@@ -48,6 +48,8 @@ export interface WorkspaceIO {
   readonly path: typeof path
   readonly fs: WorkspaceFileSystem
   spawn?: (command: string, cwd: string) => WorkspaceProcess
+  /** 宿主提供的受管搜索程序；参数直接传递，不经过 shell。 */
+  ripgrep?: (args: string[], cwd: string) => WorkspaceProcess
 }
 
 export const localWorkspaceIO: WorkspaceIO = {

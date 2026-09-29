@@ -3,17 +3,11 @@ import { IGNORED_DIRS } from '../fs-utils.ts'
 
 const DIRECTORY_BATCH_SIZE = 32
 const MAX_SCANNED_FILES = 200_000
+const MAX_SCANNED_DIRECTORIES = 20_000
 
 export interface CollectedFiles {
   files: string[]
   truncated: boolean
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (!signal.aborted) return
-  const error = new Error('搜索已被中止')
-  error.name = 'AbortError'
-  throw error
 }
 
 /** ripgrep 不可用时的有界并发遍历；不跟随目录符号链接，避免循环。 */
@@ -26,10 +20,12 @@ export async function collectFiles(
   const { join } = io.path
   const files: string[] = []
   const directories = [root]
+  let scannedDirectories = 0
 
-  while (directories.length > 0 && files.length < MAX_SCANNED_FILES) {
-    throwIfAborted(signal)
-    const batch = directories.splice(0, DIRECTORY_BATCH_SIZE)
+  while (directories.length > 0 && files.length < MAX_SCANNED_FILES && scannedDirectories < MAX_SCANNED_DIRECTORIES) {
+    signal.throwIfAborted()
+    const batch = directories.splice(0, Math.min(DIRECTORY_BATCH_SIZE, MAX_SCANNED_DIRECTORIES - scannedDirectories))
+    scannedDirectories += batch.length
     const results = await Promise.all(
       batch.map(async (dir) => ({
         dir,
@@ -39,11 +35,15 @@ export async function collectFiles(
         }),
       })),
     )
+    signal.throwIfAborted()
     for (const { dir, entries } of results) {
       for (const entry of entries) {
         if (IGNORED_DIRS.has(entry.name)) continue
         const full = join(dir, entry.name)
-        if (entry.isDirectory()) directories.push(full)
+        if (entry.isDirectory()) {
+          if (directories.length + scannedDirectories >= MAX_SCANNED_DIRECTORIES) return { files, truncated: true }
+          directories.push(full)
+        }
         else if (entry.isFile()) files.push(full)
         if (files.length >= MAX_SCANNED_FILES) break
       }
@@ -59,6 +59,8 @@ export async function collectFiles(
 
 /** 支持常用的 *, **, ?, {a,b}；作为无 ripgrep 环境的兼容回退。 */
 export function globToRegExp(pattern: string): RegExp {
+  pattern = pattern.replaceAll('\\', '/')
+  const basenameOnly = !pattern.includes('/')
   let source = ''
   for (let i = 0; i < pattern.length; i++) {
     const char = pattern[i]!
@@ -92,7 +94,7 @@ export function globToRegExp(pattern: string): RegExp {
       source += escapeRegExp(char)
     }
   }
-  return new RegExp(`^${source}$`)
+  return new RegExp(`${basenameOnly ? '(?:^|/)' : '^'}${source}$`)
 }
 
 function escapeRegExp(value: string): string {
