@@ -17,11 +17,14 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   const io = env.connections.io(host.target)
   const ctx: ToolContext = { workspaceIO: io, projectDir: env.project, additionalDirs: [], abortSignal: new AbortController().signal }
   await mkdir(join(env.root, 'project/nested'))
-  await mkdir(join(env.root, 'project/node_modules'))
+  for (const directory of ['node_modules', 'nested/node_modules', 'nested/.cache', 'nested/build']) {
+    await mkdir(join(env.root, 'project', directory))
+    await writeFile(join(env.root, 'project', directory, 'code.ts'), 'needle ignored')
+    await writeFile(join(env.root, 'project', directory, 'target.png'), 'ignored image')
+  }
   await writeFile(join(env.root, 'project/target.png'), 'needle in image filename fixture')
   await writeFile(join(env.root, 'project/nested/target.png'), 'nested')
   await writeFile(join(env.root, 'project/nested/code.ts'), 'const needle = "中文"\n')
-  await writeFile(join(env.root, 'project/node_modules/code.ts'), 'needle ignored')
   await writeFile(join(env.root, 'project/-options.txt'), 'needle single file\n')
   await writeFile(join(env.root, "project/quote'file.txt"), 'needle quoted file\n')
   const fs = { ...host.io.fs,
@@ -30,8 +33,7 @@ it('远端 Glob/Grep 原生搜索，不通过 SFTP 扫目录或下载文件，�
   }
   const searchCtx = { ...ctx, workspaceIO: { ...io, fs } }
   const glob = await globTool.execute({ pattern: 'target.png' }, searchCtx)
-  assert.match(glob.data, /nested\/target.png/)
-  assert.match(glob.data, /(?:^|\n)target.png/)
+  assert.equal(glob.data, 'nested/target.png\ntarget.png')
   const grep = await grepTool.execute({ pattern: 'needle', include: '*.ts' }, searchCtx)
   assert.equal(grep.data, 'nested/code.ts:1:const needle = "中文"')
   for (const path of ['-options.txt', "quote'file.txt"]) {

@@ -11,7 +11,8 @@ const MAX_STDERR_CHARS = 4_000
 const MAX_OUTPUT_CHARS = 1024 * 1024
 const MAX_LINE_CHARS = 64 * 1024
 
-export const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!${dir}/**`])
+// 匹配任意深度的目录本身才能在进入前剪枝；仅排除其内容仍会读取目录。
+export const SEARCH_EXCLUSIONS = [...IGNORED_DIRS].flatMap(dir => ['--glob', `!**/${dir}`])
 
 export interface RipgrepLines {
   lines: string[]
@@ -66,7 +67,7 @@ export async function runRipgrepLines(
   if (!io.ripgrep && !executable) return null
 
   return new Promise<RipgrepLines>((resolve, reject) => {
-    const argv = ['--no-config', ...args]
+    const argv = ['--no-config', '--line-buffered', ...args]
     const child = io.ripgrep ? io.ripgrep(argv, cwd) : spawn(executable!, argv, {
       cwd,
       detached: process.platform !== 'win32',

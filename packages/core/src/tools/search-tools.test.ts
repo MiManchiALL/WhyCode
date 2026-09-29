@@ -6,6 +6,8 @@ import { afterEach, describe, it } from 'node:test'
 import type { ToolContext } from './tool.ts'
 import { globTool } from './list-glob/index.ts'
 import { grepTool } from './grep/index.ts'
+import { localWorkspaceIO } from '../workspace/io.ts'
+import { IGNORED_DIRS } from './fs-utils.ts'
 
 const roots: string[] = []
 
@@ -33,6 +35,30 @@ async function fixture(): Promise<{ root: string; ctx: ToolContext }> {
 }
 
 describe('高性能搜索工具', () => {
+  for (const fallback of [false, true]) {
+    it(`${fallback ? '回退' : '原生'}搜索在每层跳过依赖、缓存和构建目录`, async () => {
+      const { root, ctx } = await fixture()
+      for (const prefix of ['', 'src/nested']) {
+        for (const name of IGNORED_DIRS) {
+          const directory = join(root, prefix, name, 'deeper')
+          await mkdir(directory, { recursive: true })
+          await writeFile(join(directory, 'target.txt'), 'needle excluded\n')
+        }
+      }
+      await mkdir(join(root, 'src', 'build-tools'))
+      await writeFile(join(root, 'target.txt'), 'needle root\n')
+      await writeFile(join(root, 'src', 'build-tools', 'target.txt'), 'needle source\n')
+      if (fallback) ctx.workspaceIO = { ...localWorkspaceIO, identity: 'fallback-fixture' }
+
+      const glob = await globTool.execute({ pattern: '**/target.txt' }, ctx)
+      assert.equal(glob.isError, false)
+      assert.deepEqual(glob.data.split('\n'), ['src/build-tools/target.txt', 'target.txt'])
+      const grep = await grepTool.execute({ pattern: 'needle', include: '**/target.txt' }, ctx)
+      assert.equal(grep.isError, false)
+      assert.deepEqual(grep.data.split('\n'), ['src/build-tools/target.txt:1:needle source', 'target.txt:1:needle root'])
+    })
+  }
+
   it('Glob 支持搜索根目录、brace 模式、分页并跳过依赖目录', async () => {
     const { ctx } = await fixture()
     const first = await globTool.execute(
