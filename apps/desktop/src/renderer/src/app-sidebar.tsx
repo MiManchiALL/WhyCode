@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { SessionNameDialog, type RenameSession } from './session-name-editor.tsx'
 import { SessionDeleteDialog } from './session-delete-dialog.tsx'
-import type { SessionListItem } from '../../shared/session.ts'
+import type { DeleteSessionOptions, DeleteSessionResult, SessionListItem } from '../../shared/session.ts'
 import { SessionItems } from './sidebar-sessions.tsx'
 import { SidebarProjects } from './sidebar-projects.tsx'
 import { groupSidebarSessions } from './sidebar-groups.ts'
@@ -39,7 +39,7 @@ interface AppSidebarProps {
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRename: RenameSession
-  onDelete: (sessionId: string, deleteDirectory: boolean) => void
+  onDelete: (sessionId: string, options: DeleteSessionOptions) => Promise<DeleteSessionResult | null>
   onError: (message: string) => void
   onOpenSettings: () => void
 }

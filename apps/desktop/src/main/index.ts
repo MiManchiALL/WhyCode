@@ -1,6 +1,6 @@
 import { SshConnectionStore } from './ssh/store.ts'
 import { SshConnections } from './ssh/connections.ts'
-import { SshWorkspaces, sshScratchPaths } from './ssh/workspaces.ts'
+import { SshScratchCleanupError, SshWorkspaces, sshScratchPaths } from './ssh/workspaces.ts'
 import { registerSshIpc } from './ssh/ipc.ts'
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 import { registerWorkspaceLifecycleIpc } from './workspace-lifecycle-ipc.ts'
@@ -173,6 +173,7 @@ import type {
   CheckpointFilePreviewRequest,
   CheckpointFilePreviewResult,
   DeleteSessionResult,
+  DeleteSessionOptions,
   ForkSessionRequest,
   ForkSessionResult,
   NewSessionRequest,
@@ -679,7 +680,7 @@ async function discardCurrentWorktree(runtimeId: string): Promise<DeleteSessionR
     const runtime = runtimeForId(runtimeId)
     const binding = worktreeBinding(runtime.workspace)
     if (!binding) throw new Error('当前会话使用本地工作区，没有可丢弃的受管 Worktree')
-    if (runtime.sessionId) return deleteSession(runtime.sessionId, true)
+    if (runtime.sessionId) return deleteSession(runtime.sessionId, { deleteDirectory: true, remoteCleanup: 'required' })
     if (runtime.busy) throw new Error('Agent 工作中，请先停止再丢弃 Worktree')
 
     const wasSelected = runtimeRegistry.selected === runtime
@@ -2482,7 +2483,7 @@ async function removeForkSessionWorkspace(journal: SessionJournal): Promise<void
 async function resolveBackgroundTaskRuntime(
   sessionId: string,
 ): Promise<BackgroundTaskRuntimeResolution> {
-  if (sessionDeletionLock.sessionId === sessionId) return { kind: 'drop' }
+  if (sessionDeletionLock.sessionId === sessionId) return { kind: 'defer' }
   if (settingsMutationInProgress || sessionPreparationLock.sessionId || sessionNavigation.sessionId) return { kind: 'defer' }
 
   const existing = runtimeRegistry.findBySessionId(sessionId)
@@ -2609,7 +2610,7 @@ function pendingInputs(
     }))
 }
 
-async function deleteSession(sessionId: string, deleteDirectory: boolean): Promise<DeleteSessionResult> {
+async function deleteSession(sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult> {
   const targetRuntime = runtimeRegistry.findBySessionId(sessionId)
   if (
     sessionDeletionLock.sessionId
@@ -2641,8 +2642,12 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
     const summary = targetRuntime
       ? null
       : (await sessions.list()).find((item) => item.sessionId === sessionId)
+    if (!targetRuntime && !summary) return { ok: false, error: '会话不存在' }
     const targetWorkspace = runtimeWorkspaceBinding(targetRuntime?.workspace ?? summary?.workspace)
-    if (typeof deleteDirectory !== 'boolean') throw new Error('删除工作目录选项无效')
+    if (!options || typeof options.deleteDirectory !== 'boolean'
+      || !['required', 'skip'].includes(options.remoteCleanup)) throw new Error('删除会话选项无效')
+    const { deleteDirectory, remoteCleanup } = options
+    if (remoteCleanup === 'skip' && targetWorkspace?.mode !== 'ssh') throw new Error('仅 SSH 会话可跳过远端清理')
     if (deleteDirectory) {
       const preview = await workspaceLifecycle.preview(sessionId, targetWorkspace)
       if (['local', 'remote', 'shared', 'unverified'].includes(preview.disposition)) {
@@ -2656,18 +2661,21 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
       sessions,
       commandSessions,
       scratch: sessionScratch,
-      onBeforeArtifactsDelete: async () => {
+      onBeforeMarkDeleting: async () => {
         terminals.closeOwner({ sessionId })
+        await commandSessions.stopSession(sessionId)
+        if (remoteCleanup === 'required') await sshWorkspaces.removeScratch(sessionId, targetWorkspace)
+      },
+      onBeforeArtifactsDelete: async () => {
         await subagents.forgetParent(sessionId)
         if (targetRuntime) await runtimeRegistry.remove(targetRuntime)
       },
       onBeforeFactSourceDelete: async () => {
-        const scratchWarning = await sshWorkspaces.removeScratch(sessionId, targetWorkspace)
         const warning = await workspaceLifecycle.release(
           sessionId, targetWorkspace, workspaceName, deleteDirectory,
         )
         await syncRetiredModelLabels(sessionId)
-        return [scratchWarning, warning].filter(Boolean).join('；') || undefined
+        return remoteCleanup === 'skip' ? '服务器上的会话临时文件已保留' : warning
       },
     })
     if (!deletion.sessionExists) {
@@ -2716,13 +2724,17 @@ async function deleteSession(sessionId: string, deleteDirectory: boolean): Promi
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
+      ...(error instanceof SshScratchCleanupError ? { remoteCleanupFailure: error.failure } : {}),
       deletedCurrent: detachedCurrent || undefined,
       ...(replacementRuntime
         ? { snapshot: await runtimeSnapshot(replacementRuntime) }
         : {}),
     }
   } finally {
-    if (!cleanupStarted) deletionLease.release()
+    if (!cleanupStarted) {
+      deletionLease.release()
+      nudgeNotificationQueues()
+    }
   }
 }
 
@@ -3189,11 +3201,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
     if (!summary) throw new Error('会话不存在')
     return runtimeWorkspaceBinding(summary.workspace)
   })
-  ipcMain.handle(IPC.deleteSession, (event, sessionId: string, deleteDirectory: boolean) => {
+  ipcMain.handle(IPC.deleteSession, (event, sessionId: string, options: DeleteSessionOptions) => {
     if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) {
       return { ok: false, error: '仅主页面可删除会话' }
     }
-    return deleteSession(sessionId, deleteDirectory)
+    return deleteSession(sessionId, options)
   })
   ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>
     currentWorktreeStatus(runtimeId))

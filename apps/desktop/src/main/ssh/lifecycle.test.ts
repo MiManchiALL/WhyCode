@@ -8,7 +8,7 @@ import { DesktopSessionRepository } from '../session-repository.ts'
 import { SessionScratchManager } from '../session-scratch.ts'
 import { stageSessionDeletion } from '../session-deletion.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
-import { SshWorkspaces } from './workspaces.ts'
+import { SshScratchCleanupError, SshWorkspaces } from './workspaces.ts'
 import { SshConnections, SshCredentialsRequiredError } from './connections.ts'
 import { SshConnectionStore } from './store.ts'
 import { ProjectStore } from '../project-store.ts'
@@ -51,7 +51,7 @@ it('删除 SSH 会话清理自己的远端与本地临时文件，保留项目�
   await writeFile(join(local.mainDirectory, 'tmp.txt'), 'local')
   const deletion = await stageSessionDeletion({ sessionId: journal.sessionId, sessions, scratch,
     commandSessions: { removeSession: async () => {} },
-    onBeforeFactSourceDelete: () => env.workspaces.removeScratch(journal.sessionId, env.workspace),
+    onBeforeMarkDeleting: () => env.workspaces.removeScratch(journal.sessionId, env.workspace),
   })
   assert.deepEqual(await deletion.finish(), { deleted: true })
   await assert.rejects(access(remoteScratch), { code: 'ENOENT' })
@@ -64,35 +64,70 @@ it('删除 SSH 会话清理自己的远端与本地临时文件，保留项目�
   assert.equal(env.connections.isConnected(env.id), false)
 })
 
-it('SSH 清理失败保留会话事实供删除重试；连接已删除则明确提醒保留远端文件', async t => {
+it('SSH 认证失败保留可用会话和全部本地数据，修正凭据后可重试清理', async t => {
   const env = await fixture(t)
   const sessions = new DesktopSessionRepository(join(env.root, 'sessions'))
   const journal = await sessions.create(env.workspace, 'test:model')
   const scratch = new SessionScratchManager(join(env.root, 'scratch'))
+  const local = await scratch.ensure(journal.sessionId)
+  const localFile = join(local.mainDirectory, 'keep.txt')
+  await writeFile(localFile, 'local scratch')
+  await mkdir(journal.checkpointDirectory, { recursive: true })
+  const checkpoint = join(journal.checkpointDirectory, 'keep.txt')
+  await writeFile(checkpoint, 'checkpoint')
+  const transcript = join(env.root, 'sessions', journal.sessionId, 'transcript.jsonl')
+  const history = await readFile(transcript, 'utf8')
   const current = await env.store.get(env.id)
   await env.store.save({ ...current.connection, secret: 'wrong' })
   const options = { sessionId: journal.sessionId, sessions, scratch,
     commandSessions: { removeSession: async () => {} },
-    onBeforeFactSourceDelete: () => env.workspaces.removeScratch(journal.sessionId, env.workspace),
+    onBeforeMarkDeleting: () => env.workspaces.removeScratch(journal.sessionId, env.workspace),
   }
-  await assert.rejects((await stageSessionDeletion(options)).finish(), SshCredentialsRequiredError)
-  await access(join(env.root, 'sessions', journal.sessionId, 'transcript.jsonl'))
-  assert.equal((await sessions.list())[0]?.resumable, false)
-  assert.match((await sessions.list())[0]?.unavailableReason ?? '', /删除未完成.*重试删除/)
+  await assert.rejects(stageSessionDeletion(options), error => error instanceof SshScratchCleanupError
+    && error.failure === 'failed' && error.cause instanceof SshCredentialsRequiredError)
+  assert.equal(await readFile(transcript, 'utf8'), history)
+  assert.equal(await readFile(localFile, 'utf8'), 'local scratch')
+  assert.equal(await readFile(checkpoint, 'utf8'), 'checkpoint')
+  assert.equal((await sessions.list())[0]?.resumable, true)
+  await sessions.prepareResume(journal.sessionId)
   await env.store.save({ ...current.connection, secret: current.secret })
   assert.deepEqual(await (await stageSessionDeletion(options)).finish(), { deleted: true })
+})
 
+it('连接配置已删除时保留会话等待选择，明确仅删除本地时保留远端文件', async t => {
+  const env = await fixture(t)
+  const sessions = new DesktopSessionRepository(join(env.root, 'sessions'))
+  const scratch = new SessionScratchManager(join(env.root, 'scratch'))
   const remaining = await sessions.create(env.workspace, 'test:model')
   const remoteFile = join(env.root, '.cache/whycode-scratch', remaining.sessionId, 'Main/tmp.txt')
   await mkdir(join(remoteFile, '..'), { recursive: true }); await writeFile(remoteFile, 'keep')
   await env.connections.remove(env.id)
-  const deletion = await stageSessionDeletion({ ...options, sessionId: remaining.sessionId,
-    onBeforeFactSourceDelete: () => env.workspaces.removeScratch(remaining.sessionId, env.workspace),
-  })
-  const result = await deletion.finish()
-  assert.equal(result.deleted, true)
-  assert.match(result.warning!, /连接已删除.*临时文件已保留/)
+  const options = { sessionId: remaining.sessionId, sessions, scratch, commandSessions: { removeSession: async () => {} } }
+  await assert.rejects(stageSessionDeletion({ ...options,
+    onBeforeMarkDeleting: () => env.workspaces.removeScratch(remaining.sessionId, env.workspace),
+  }), error => error instanceof SshScratchCleanupError && error.failure === 'connection-missing')
+  assert.equal((await sessions.list())[0]?.resumable, true)
+  assert.deepEqual(await (await stageSessionDeletion(options)).finish(), { deleted: true })
   assert.equal(await readFile(remoteFile, 'utf8'), 'keep')
+})
+
+it('重新添加并验证同一服务器的配置后，旧会话可直接清理远端临时文件', async t => {
+  const env = await fixture(t)
+  const original = await env.store.get(env.id)
+  const sessionId = randomUUID()
+  const remoteScratch = join(env.root, '.cache/whycode-scratch', sessionId)
+  await mkdir(remoteScratch, { recursive: true })
+  await writeFile(join(remoteScratch, 'tmp.txt'), 'temporary')
+  await env.connections.remove(env.id)
+  const replacement = await env.store.save({ ...original.connection, id: undefined, secret: original.secret })
+  assert.notEqual(replacement.id, env.id)
+  await assert.rejects(env.workspaces.removeScratch(sessionId, env.workspace),
+    error => error instanceof SshScratchCleanupError && error.failure === 'connection-missing')
+  await env.store.trust(replacement.id, env.fingerprint)
+  await env.workspaces.removeScratch(sessionId, env.workspace)
+  await assert.rejects(access(remoteScratch), { code: 'ENOENT' })
+  assert.equal(env.commands.length, 0)
+  assert.equal(env.connections.isConnected(replacement.id), false)
 })
 
 it('远端临时清理拒绝越界 ID、错误服务器身份和重定向的父目录', async t => {
@@ -104,7 +139,8 @@ it('远端临时清理拒绝越界 ID、错误服务器身份和重定向的父�
   await mkdir(join(env.root, '.cache'))
   await symlink(join(env.root, 'project'), parent, process.platform === 'win32' ? 'junction' : 'dir')
   await assert.rejects(env.workspaces.removeScratch('../project', env.workspace), /无效会话 ID/)
-  assert.match((await env.workspaces.removeScratch(id, { ...env.workspace, target: 'another-server' }))!, /临时文件已保留/)
+  await assert.rejects(env.workspaces.removeScratch(id, { ...env.workspace, target: 'another-server' }),
+    error => error instanceof SshScratchCleanupError && error.failure === 'connection-missing')
   await assert.rejects(env.workspaces.removeScratch(id, env.workspace), /符号链接/)
   assert.equal(await readFile(join(outside, 'keep.txt'), 'utf8'), 'keep')
 })

@@ -172,6 +172,13 @@ export interface NewSessionRequest {
   workspace: StartWorkspaceRequest | null
 }
 
+export interface DeleteSessionOptions {
+  deleteDirectory: boolean
+  remoteCleanup: 'required' | 'skip'
+}
+
+export type RemoteCleanupFailure = 'failed' | 'connection-missing'
+
 export type DeleteSessionResult =
   | {
       ok: true
@@ -179,7 +186,7 @@ export type DeleteSessionResult =
       cleanupPending: boolean
       snapshot?: RuntimeSnapshot
     }
-  | { ok: false; error: string; deletedCurrent?: boolean; snapshot?: RuntimeSnapshot }
+  | { ok: false; error: string; remoteCleanupFailure?: RemoteCleanupFailure; deletedCurrent?: boolean; snapshot?: RuntimeSnapshot }
 
 export type SessionDeletionState =
   | { sessionId: string; status: 'completed'; warning?: string }

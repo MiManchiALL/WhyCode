@@ -116,6 +116,7 @@ describe('会话关联数据删除', () => {
         },
         commandSessions: { removeSession: async () => { calls.push('command') } },
         scratch: { remove: async () => { calls.push('scratch') } },
+        onBeforeMarkDeleting: async () => { calls.push('prepare') },
       }),
       /无效会话 ID/,
     )
@@ -153,6 +154,7 @@ describe('会话关联数据删除', () => {
       },
       commandSessions: { removeSession: async () => { calls.push('command') } },
       scratch: { remove: async () => { calls.push('scratch') } },
+      onBeforeMarkDeleting: async () => { calls.push('prepare') },
       onBeforeArtifactsDelete: async () => {
         calls.push('detach')
         await new Promise((resolve) => setImmediate(resolve))
@@ -160,11 +162,11 @@ describe('会话关联数据删除', () => {
       },
       onBeforeFactSourceDelete: async () => { calls.push('references') },
     })
-    assert.deepEqual(calls, ['mark'])
+    assert.deepEqual(calls, ['prepare', 'mark'])
     assert.deepEqual(await deletion.finish(), { deleted: true })
     assert.deepEqual(
       calls,
-      ['mark', 'detach', 'resources-closed', 'command', 'scratch', 'references', 'session'],
+      ['prepare', 'mark', 'detach', 'resources-closed', 'command', 'scratch', 'references', 'session'],
     )
   })
 })

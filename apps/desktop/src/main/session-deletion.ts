@@ -10,6 +10,8 @@ interface SessionDeletionOptions {
   sessions: Pick<DesktopSessionRepository, 'markDeleting' | 'delete'>
   commandSessions: Pick<CommandSessionManager, 'removeSession'>
   scratch: Pick<SessionScratchManager, 'remove'>
+  /** 远端清理失败必须保留可用会话，不能先写入不可恢复的删除标记。 */
+  onBeforeMarkDeleting?: () => Promise<void>
   /** 删除标记已提交后关闭仍引用目标目录的运行时资源。 */
   onBeforeArtifactsDelete?: () => Promise<void>
   /** 删除标记已生效、目标会话已不可恢复，但事实源尚在，供引用型元数据完成原子收尾。 */
@@ -27,7 +29,7 @@ export interface StagedSessionDeletion {
 }
 
 /**
- * 先持久标成 delete-only，再把会话事实源放在最后删除；中途失败仍可见且只能重试。
+ * 前置清理成功后持久标成 delete-only，会话事实源最后删除；提交后失败只能重试。
  * Local 用户目录始终不处理；Worktree、默认会话目录等 app-owned 资源由收尾回调
  * 在事实源删除前按各自所有权记录清理。
  */
@@ -35,6 +37,7 @@ export async function stageSessionDeletion(
   options: SessionDeletionOptions,
 ): Promise<StagedSessionDeletion> {
   validateSessionId(options.sessionId)
+  await options.onBeforeMarkDeleting?.()
   const sessionExists = await options.sessions.markDeleting(options.sessionId)
   let finishing: Promise<FinishedSessionDeletion> | null = null
   return {

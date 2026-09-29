@@ -7,6 +7,15 @@ import { SshConnections } from './connections.ts'
 import { SshConnectionMissingError } from './store.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
 import { copyDirectorySnapshot } from '../directory-snapshot.ts'
+import type { RemoteCleanupFailure } from '../../shared/session.ts'
+
+export class SshScratchCleanupError extends Error {
+  readonly failure: RemoteCleanupFailure
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.failure = cause instanceof SshConnectionMissingError ? 'connection-missing' : 'failed'
+  }
+}
 
 export class SshWorkspaces {
   readonly connections: SshConnections
@@ -54,7 +63,7 @@ export class SshWorkspaces {
       throw error
     }
   }
-  async removeScratch(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<string | void> {
+  async removeScratch(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<void> {
     validateSessionId(sessionId)
     if (workspace?.mode !== 'ssh') return
     return this.connections.connectionIdForTarget(workspace.target).then(id => this.connections.withFiles(id, async (fs, home) => {
@@ -68,8 +77,7 @@ export class SshWorkspaces {
         if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error
       })
     }, workspace.target)).catch((error: unknown) => {
-      if (error instanceof SshConnectionMissingError) return 'SSH 连接已删除，服务器上的会话临时文件已保留'
-      throw error
+      throw new SshScratchCleanupError(error)
     })
   }
   async terminal(runtime: DesktopSessionRuntime, cwd: string): Promise<TerminalPty> {

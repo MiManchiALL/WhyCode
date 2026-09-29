@@ -34,6 +34,8 @@ import type {
   RuntimeEventEnvelope,
   RuntimeSnapshot,
   SessionListItem,
+  DeleteSessionOptions,
+  DeleteSessionResult,
 } from '../../shared/session.ts'
 import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
 import { attachmentFallbackText } from '../../shared/user-message.ts'
@@ -1579,17 +1581,18 @@ export function App() {
     stashActivePresentation,
   ])
 
-  const deleteSession = useCallback((sessionId: string, deleteDirectory: boolean) => {
+  const deleteSession = useCallback(async (sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult | null> => {
     if (
       deletingSessionIdRef.current
       || resumingSessionIdRef.current
       || sessionTransitionPendingRef.current
-    ) return
+    ) return null
     setDeletingSession(sessionId)
-    // 同步关闭删除当前会话与切换之间的点击竞态；Main 接管后立即切到替代会话。
+    // 前置清理期间保留当前会话，防止发送与删除并发；提交后再切到替代会话。
     setDeletionBlocksRuntime(isCurrentSessionDeletion(sessionIdRef.current, sessionId))
     let cleanupPending = false
-    void window.whycode.deleteSession(sessionId, deleteDirectory).then(async (result) => {
+    try {
+      const result = await window.whycode.deleteSession(sessionId, options)
       cleanupPending = result.ok && result.cleanupPending
       if (result.ok || result.deletedCurrent) {
         void composerDraftsRef.current.delete(sessionId).catch(draftStorageError)
@@ -1610,16 +1613,18 @@ export function App() {
         conversationPresentationsRef.current.delete(sessionId)
         void window.whycode.consensusStatus().then(setConsensus)
       }
-      if (!result.ok) showError(result.error ?? '删除会话失败')
-    }).catch(() => {
-      showError('删除会话失败，请重试')
-    }).finally(() => {
+      if (!result.ok) showConversationFeedback('error', result.error, true)
+      return result
+    } catch {
+      showConversationFeedback('error', '删除会话失败，请重试', true)
+      return null
+    } finally {
       if (!cleanupPending) {
         setDeletingSession(null)
         setDeletionBlocksRuntime(false)
       }
       void refreshSessions()
-    })
+    }
   }, [
     applyRuntimeSnapshot,
     prepareComposer,
@@ -1628,7 +1633,7 @@ export function App() {
     resetActiveComposer,
     setDeletionBlocksRuntime,
     setDeletingSession,
-    showError,
+    showConversationFeedback,
   ])
 
   const setSessionPinned = useCallback((sessionId: string, pinned: boolean) => {

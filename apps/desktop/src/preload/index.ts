@@ -27,6 +27,7 @@ import type {
   CheckpointFilePreviewRequest,
   CheckpointFilePreviewResult,
   DeleteSessionResult,
+  DeleteSessionOptions,
   ForkSessionRequest,
   ForkSessionResult,
   NewSessionRequest,
@@ -281,8 +282,8 @@ const api = {
     ipcRenderer.invoke(IPC.setSessionPinned, request),
   renameSession: (request: RenameSessionRequest): Promise<RenameSessionResult> =>
     ipcRenderer.invoke(IPC.renameSession, request),
-  deleteSession: (sessionId: string, deleteDirectory: boolean): Promise<DeleteSessionResult> =>
-    ipcRenderer.invoke(IPC.deleteSession, sessionId, deleteDirectory),
+  deleteSession: (sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult> =>
+    ipcRenderer.invoke(IPC.deleteSession, sessionId, options),
   previewSessionDeletion: (sessionId: string): Promise<WorkspaceActionResult<WorkspaceDeletionPreview>> =>
     ipcRenderer.invoke(IPC.previewSessionDeletion, sessionId),
   listRetainedWorkspaces: (): Promise<WorkspaceActionResult<RetainedWorkspaceList>> =>

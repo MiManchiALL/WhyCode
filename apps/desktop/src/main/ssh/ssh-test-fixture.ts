@@ -17,9 +17,10 @@ export async function sshFixture(t: TestContext, linux = false) {
   const temporaryRoot = await realpath(tmpdir())
   const root = await mkdtemp(join(temporaryRoot, 'whycode-ssh-'))
   const remoteRoot = process.platform === 'win32' ? `/mnt/${root[0]!.toLowerCase()}${root.slice(2).replaceAll('\\', '/')}` : root
-  const keys = utils.generateKeyPairSync('ed25519')
+  // ssh2 的 Ed25519 生成器会剥离公钥前导零，导致随机产生无法解析的测试密钥。
+  const keys = utils.generateKeyPairSync('ecdsa', { bits: 256 })
   const keyPassword = randomBytes(16).toString('hex')
-  const clientKeys = utils.generateKeyPairSync('ed25519', { passphrase: keyPassword, cipher: 'aes256-cbc', rounds: 8 })
+  const clientKeys = utils.generateKeyPairSync('ecdsa', { bits: 256, passphrase: keyPassword, cipher: 'aes256-cbc', rounds: 8 })
   const clientKey = utils.parseKey(clientKeys.public)
   assert.ok(!(clientKey instanceof Error))
   const keyPath = join(root, 'identity')
@@ -49,7 +50,7 @@ export async function sshFixture(t: TestContext, linux = false) {
         if (info.command === 'uname -s; uname -m') { channel.write('Linux\nx86_64\n'); channel.exit(0); channel.end(); return }
         if (!linux) { channel.exit(1); channel.end(); return }
         const child = process.platform === 'win32'
-          ? spawn('wsl.exe', ['-d', 'Ubuntu', '--', '/bin/sh', '-c', info.command], { windowsHide: true })
+          ? spawn('wsl.exe', ['-d', 'Ubuntu', '--exec', '/bin/sh', '-c', info.command], { windowsHide: true })
           : spawn('/bin/sh', ['-c', info.command])
         children.add(child)
         channel.pipe(child.stdin); child.stdout.pipe(channel, { end: false }); child.stderr.pipe(channel.stderr, { end: false })
