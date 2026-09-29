@@ -29,6 +29,7 @@ it('未知主机先返回指纹，认证失败和取消不部署组件，密码�
   env.connections.disconnect(env.id)
   await assert.rejects(connecting, /取消/)
   assert.equal(env.connections.isConnected(env.id), false)
+  await assert.rejects(env.connections.resume(env.id), /请先点击/)
   assert.equal(env.commands.length, 0)
 })
 
@@ -55,6 +56,8 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   skip: process.env.WHYCODE_SSH_INTEGRATION !== '1', timeout: 120_000,
 }, async t => {
   const env = await sshFixture(t, true)
+  await assert.rejects(env.connections.resume(env.id), /请先点击/)
+  assert.equal(env.commands.length, 0)
   assert.equal((await env.connections.connect(env.id, env.fingerprint)).status, 'connected')
   const host = env.connections.host(env.id)
   const io = env.connections.io(host.target)
@@ -161,25 +164,34 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   assert.equal(env.connections.isConnected(env.id), false)
   assert.throws(() => io.fs.readFile(file), /未连接/)
   await env.store.save({ ...(await env.store.get(env.id)).connection, authentication: 'key', privateKeyPath: env.keyPath, secret: env.keyPassword, rememberSecret: false })
-  await env.connections.connect(env.id)
+  await workspaces.connect(workspace)
   assert.equal(await io.fs.readFile(file, 'utf8'), 'hello\n世界\n')
 
   await io.fs.writeFile(`${host.componentDirectory}/keep.txt`, 'keep')
   await assert.rejects(env.connections.cleanup(env.id), /未知文件/)
+  await assert.rejects(workspaces.prepare(runtime), /请先点击/)
   assert.equal(await readFile(join(env.root, '.cache/whycode-remote/keep.txt'), 'utf8'), 'keep')
   await env.connections.connect(env.id)
   await env.connections.host(env.id).io.fs.unlink(`${host.componentDirectory}/keep.txt`)
-  await env.connections.cleanup(env.id)
+  const cleanup = env.connections.cleanup(env.id)
+  await assert.rejects(env.connections.connect(env.id), /正在清理/)
+  await cleanup
   assert.equal(env.connections.isConnected(env.id), false)
   await assert.rejects(readFile(join(env.root, '.cache/whycode-remote/.owner')), { code: 'ENOENT' })
   assert.equal(await readFile(join(env.root, 'project/目录/说明.txt'), 'utf8'), 'hello\n世界\n')
   assert.equal((await env.store.list()).length, 1)
   assert.equal(await readFile(join(env.root, '.cache/whycode-scratch', journal.sessionId, 'Main/keep.txt'), 'utf8'), 'session scratch')
+  const commandCount = env.commands.length
+  await assert.rejects(workspaces.prepare(runtime), /请先点击/)
+  await assert.rejects(workspaces.select(host.target, env.project), /请先点击/)
+  assert.equal(env.commands.length, commandCount)
+  await assert.rejects(access(join(env.root, '.cache/whycode-remote')), { code: 'ENOENT' })
 
   await env.connections.connect(env.id)
   const componentDirectory = env.connections.host(env.id).componentDirectory
   const executable = (await io.fs.readdir(componentDirectory, { withFileTypes: true })).find(entry => entry.name.startsWith('host-'))!
   env.connections.disconnect(env.id)
+  await assert.rejects(workspaces.connect(workspace), /请先点击/)
   await writeFile(join(env.root, '.cache/whycode-remote', executable.name), 'damaged component')
   await assert.rejects(env.connections.connect(env.id), /校验失败/)
   await env.connections.cleanup(env.id)

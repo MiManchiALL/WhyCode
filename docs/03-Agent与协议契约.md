@@ -514,6 +514,8 @@ SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存 `{target,label
 
 ### 7.7 SSH 连接与进程通道
 
+`connect` 表示用户明确发起连接。普通会话和资源操作只能恢复本次运行中意外断开的连接；主动断开、组件清理后以及应用重启后，须先由用户调用 `connect`，不能因发送消息或读取文件而重新部署组件。清理与删除期间拒绝并发连接；会话临时目录清理使用独立 SFTP 文件通道，不授予会话自动重连资格。
+
 Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`resolve {target}` 只读返回该稳定身份的已验证配置与连接状态，优先当前连接，无匹配时返回空，不触发认证；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
 
 SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知，配置保存或删除、连接成功、主动断开和意外断线后通知 Renderer 重读列表及所属会话状态，取消订阅释放监听。连接管理、所有权与清理语义见文档二 §7.5。

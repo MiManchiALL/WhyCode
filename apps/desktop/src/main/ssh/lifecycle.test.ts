@@ -200,6 +200,7 @@ it('重启丢失临时密码后连接、清理和删除都要求补充凭据；�
   await mkdir(component, { recursive: true })
   await writeFile(join(component, '.owner'), 'WhyCode remote process host v1\n')
   assert.equal((await store.list())[0]?.hasSecret, false)
+  await assert.rejects(connections.resume(env.id), /请先点击/)
   for (const action of ['connect', 'cleanup', 'remove'] as const) {
     await assert.rejects(connections[action](env.id), SshCredentialsRequiredError)
     assert.equal((await store.list()).length, 1)

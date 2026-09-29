@@ -62,7 +62,8 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
       const trust = result.connect
       setConfirmation({ title: '信任此服务器？', description: `${trust.host}\n服务器指纹：\n${trust.fingerprint}`, action: '信任并连接', run: () => void run(connection, 'connect', trust.fingerprint) })
     } else if (result) {
-      feedback('success', action === 'connect' ? 'SSH 已连接' : '操作已完成')
+      const messages = { connect: 'SSH 已连接', disconnect: 'SSH 已断开', cleanup: '远端组件已清理，SSH 已断开', remove: 'SSH 连接已删除' }
+      feedback('success', messages[action])
     }
   }
   const save = async (value: SshConnectionInput): Promise<void> => {
@@ -77,8 +78,8 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     const titles = { remove: '删除此连接？', disconnect: '断开 SSH 连接？', cleanup: '清理远端组件？' }
     const descriptions = {
       remove: '清理远端组件并删除本机连接配置，停止相关命令和终端。项目、会话记录及远端临时文件保留；重新添加并连接原服务器后可继续使用。清理失败时保留连接配置，便于重试。',
-      disconnect: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留。',
-      cleanup: '停止相关命令和终端，删除 WhyCode 的远端组件。连接配置、项目、会话记录和临时文件保留；再次连接时自动重新部署组件。',
+      disconnect: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留；再次点击“连接”后恢复使用。',
+      cleanup: '停止相关命令和终端，删除 WhyCode 的远端组件。连接配置、项目、会话记录和临时文件保留；再次点击“连接”时重新部署组件。',
     }
     setConfirmation({ title: titles[action], description: descriptions[action], action: '确认', run: () => void run(connection, action) })
   }

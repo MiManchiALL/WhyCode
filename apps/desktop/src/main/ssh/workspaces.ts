@@ -13,7 +13,7 @@ export class SshWorkspaces {
   constructor(connections: SshConnections) { this.connections = connections }
   async select(target: string, directory: string): Promise<Extract<WorkspaceBinding, { mode: 'ssh' }>> {
     const id = await this.connections.connectionIdForTarget(target)
-    const connected = await this.connections.connect(id)
+    const connected = await this.connections.resume(id)
     if (connected.status !== 'connected') throw new Error('请先在连接设置中确认服务器指纹')
     const { path } = await this.connections.directory(id, directory)
     const connection = await this.connections.store.get(id)
@@ -25,7 +25,7 @@ export class SshWorkspaces {
   async connect(workspace: RuntimeWorkspace) {
     if (workspace.mode !== 'ssh') return null
     const id = await this.connections.connectionIdForTarget(workspace.target)
-    const result = await this.connections.connect(id)
+    const result = await this.connections.resume(id)
     if (result.status !== 'connected') throw new Error('请先在连接设置中确认服务器指纹')
     const host = this.connections.host(id, workspace.target)
     if (!(await host.io.fs.stat(workspace.workingDirectory)).isDirectory()) throw new Error('远端工作目录不存在或不是文件夹')

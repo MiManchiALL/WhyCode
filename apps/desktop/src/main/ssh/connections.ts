@@ -19,44 +19,59 @@ interface ConnectedHost {
   processes: RemoteProcessHost
 }
 interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: string; target: string }
+type ConnectionState =
+  | { status: 'connected'; host: ConnectedHost }
+  | { status: 'disconnected' }
+  | { status: 'connecting'; promise: Promise<SshConnectResult>; controller: AbortController }
+  | { status: 'releasing' }
 
 export class SshCredentialsRequiredError extends Error {}
 
 export class SshConnections extends EventEmitter<{ changed: [] }> {
-  private readonly connected = new Map<string, ConnectedHost>()
-  private readonly connecting = new Map<string, { promise: Promise<SshConnectResult>; controller: AbortController }>()
+  private readonly states = new Map<string, ConnectionState>()
   readonly store: SshConnectionStore
   private readonly resources: string
   constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
-  isConnected(id: string): boolean { return this.connected.has(id) }
-  isTargetConnected(target: string): boolean { return [...this.connected.values()].some(host => host.target === target) }
+  isConnected(id: string): boolean { return this.states.get(id)?.status === 'connected' }
+  isTargetConnected(target: string): boolean {
+    return [...this.states.values()].some(state => state.status === 'connected' && state.host.target === target)
+  }
 
   async configuredTargets(): Promise<Map<string, string>> {
     return new Map((await this.store.list()).flatMap(connection => connection.fingerprint
       ? [[targetIdentity(connection, connection.fingerprint), connection.id]] : []))
   }
   async connectionIdForTarget(target: string): Promise<string> {
-    const active = [...this.connected].find(([, host]) => host.target === target)
+    const active = [...this.states].find(([, state]) => state.status === 'connected' && state.host.target === target)
     const id = active?.[0] ?? (await this.configuredTargets()).get(target)
     if (!id) throw new SshConnectionMissingError()
     return id
   }
   targetHost(target: string): ConnectedHost {
-    const host = [...this.connected.values()].find(item => item.target === target)
-    if (!host) throw new Error('SSH 未连接，请在连接设置中连接原服务器')
-    return host
+    for (const state of this.states.values()) {
+      if (state.status === 'connected' && state.host.target === target) return state.host
+    }
+    throw new Error('SSH 未连接，请在连接设置中连接原服务器')
   }
 
+  /** 只有本次运行中成功连接后意外断开的通道，才允许由新操作恢复。 */
+  resume(id: string): Promise<SshConnectResult> {
+    if (!this.states.has(id)) return Promise.reject(new Error('SSH 未连接，请先点击会话顶部或设置中的“连接”'))
+    return this.connect(id)
+  }
   connect(id: string, fingerprint?: string, secret?: string): Promise<SshConnectResult> {
-    const current = this.connected.get(id)
-    if (current) return Promise.resolve({ status: 'connected', home: current.home })
-    const pending = this.connecting.get(id)
-    if (pending) return pending.promise
+    const current = this.states.get(id)
+    if (current?.status === 'connected') return Promise.resolve({ status: 'connected', home: current.host.home })
+    if (current?.status === 'connecting') return current.promise
+    if (current?.status === 'releasing') return Promise.reject(new Error('SSH 连接正在清理，请稍后再连接'))
     const controller = new AbortController()
     const promise = this.open(id, controller.signal, fingerprint, secret).finally(() => {
-      if (this.connecting.get(id)?.controller === controller) this.connecting.delete(id)
+      if (this.states.get(id) !== pending) return
+      if (current?.status === 'disconnected') this.states.set(id, current)
+      else this.states.delete(id)
     })
-    this.connecting.set(id, { promise, controller })
+    const pending: ConnectionState = { status: 'connecting', promise, controller }
+    this.states.set(id, pending)
     return promise
   }
   private async authenticate(id: string, signal: AbortSignal, approved?: string, suppliedSecret?: string): Promise<AuthenticatedHost | Extract<SshConnectResult, { status: 'trust-required' }>> {
@@ -127,10 +142,11 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       signal.throwIfAborted()
       const io: WorkspaceIO = { identity: target, platform: 'linux', path: path.posix, fs, spawn: (command, cwd) => processes.spawn(command, cwd) }
       const host: ConnectedHost = { client, io, home, target, processes, componentDirectory: component.directory }
-      this.connected.set(id, host)
+      const active: ConnectionState = { status: 'connected', host }
+      this.states.set(id, active)
       this.emit('changed')
       client.once('close', () => {
-        if (this.connected.get(id) === host) { this.connected.delete(id); this.emit('changed') }
+        if (this.states.get(id) === active) { this.states.set(id, { status: 'disconnected' }); this.emit('changed') }
         processes.close()
       })
       return { status: 'connected', home }
@@ -141,8 +157,9 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     }
   }
   host(id: string, target?: string): ConnectedHost {
-    const host = this.connected.get(id)
-    if (!host) throw new Error('SSH 未连接，请在连接设置中连接服务器')
+    const state = this.states.get(id)
+    if (state?.status !== 'connected') throw new Error('SSH 未连接，请在连接设置中连接服务器')
+    const host = state.host
     if (target && target !== host.target) throw new Error('此会话绑定的 SSH 服务器与当前连接不同')
     return host
   }
@@ -163,16 +180,16 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     return { path: directory, directories: entries.filter(item => item.isDirectory()).map(item => item.name).sort() }
   }
   disconnect(id: string): void {
-    this.connecting.get(id)?.controller.abort(new Error('SSH 连接已取消'))
-    this.connecting.delete(id)
-    const host = this.connected.get(id)
-    if (!host) return
-    this.connected.delete(id); host.processes.close(); host.client.end(); this.emit('changed')
+    const current = this.states.get(id)
+    if (current?.status === 'releasing') return
+    this.states.delete(id)
+    if (current?.status === 'connecting') current.controller.abort(new Error('SSH 连接已取消'))
+    if (current?.status === 'connected') { current.host.processes.close(); current.host.client.end() }
+    if (current) this.emit('changed')
   }
   /** File cleanup must work without deploying or starting the process component. */
   async withFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, target?: string): Promise<T> {
-    const current = this.connected.get(id)
-    if (current) {
+    if (this.isConnected(id)) {
       const host = this.host(id, target)
       return operation(host.io.fs, host.home)
     }
@@ -184,23 +201,33 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     }
     finally { transport.client.end() }
   }
-  async cleanup(id: string): Promise<void> {
-    this.connecting.get(id)?.controller.abort(new Error('SSH 连接已取消'))
-    this.connecting.delete(id)
-    this.connected.get(id)?.processes.close()
-    try {
-      await this.withFiles(id, (fs, home) => cleanupRemoteComponent(fs, path.posix.join(home, '.cache', 'whycode-remote')))
-    } finally { this.disconnect(id) }
-  }
-  async remove(id: string): Promise<void> {
-    const { connection } = await this.store.get(id)
-    // Untrusted entries have never deployed a component and need no remote removal.
-    if (connection.fingerprint) await this.cleanup(id)
-    else this.disconnect(id)
-    await this.store.remove(id)
+  cleanup(id: string): Promise<void> { return this.release(id, false) }
+  remove(id: string): Promise<void> { return this.release(id, true) }
+  private release(id: string, remove: boolean): Promise<void> {
+    const current = this.states.get(id)
+    if (current?.status === 'releasing') return Promise.reject(new Error('SSH 连接正在清理，请稍后重试'))
+    const host = current?.status === 'connected' ? current.host : null
+    const promise = Promise.resolve().then(async () => {
+      if (current?.status === 'connecting') await current.promise.catch(() => {})
+      // 未经认证的配置从未部署组件；清理复用现有 SFTP，且期间禁止重新部署。
+      if (!remove || (await this.store.get(id)).connection.fingerprint) {
+        const clean = (fs: WorkspaceFileSystem, home: string) => cleanupRemoteComponent(fs, path.posix.join(home, '.cache', 'whycode-remote'))
+        if (host) await clean(host.io.fs, host.home)
+        else await this.withFiles(id, clean)
+      }
+      if (remove) await this.store.remove(id)
+    }).finally(() => {
+      host?.client.end()
+      if (this.states.get(id) === releasing) { this.states.delete(id); this.emit('changed') }
+    })
+    const releasing: ConnectionState = { status: 'releasing' }
+    this.states.set(id, releasing)
+    if (current?.status === 'connecting') current.controller.abort(new Error('SSH 连接已取消'))
+    host?.processes.close()
     this.emit('changed')
+    return promise
   }
-  close(): void { for (const id of new Set([...this.connected.keys(), ...this.connecting.keys()])) this.disconnect(id) }
+  close(): void { for (const id of this.states.keys()) this.disconnect(id) }
 }
 
 function targetIdentity(connection: SshConnection, fingerprint: string): string {
