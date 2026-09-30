@@ -46,11 +46,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
           </div>
         )
         : props.block.text && (
-          <div className={`wc-user-message-bubble relative flex min-h-11 min-w-0 w-fit max-w-full flex-col items-start px-3.5 py-2.5 ${
-            props.block.btw ? 'wc-user-message-bubble-btw' : ''
-          }`}>
-            <UserMessageText text={props.block.text} />
-          </div>
+          <UserMessageBubble text={props.block.text} btw={Boolean(props.block.btw)} />
         )}
       {!editor.editing ? (
         <MessageActions
@@ -61,6 +57,16 @@ export function UserMessageCard(props: UserMessageCardProps) {
           className="-mt-1"
         />
       ) : null}
+    </div>
+  )
+}
+
+export function UserMessageBubble({ text, btw = false }: { text: string; btw?: boolean }) {
+  return (
+    <div className={`wc-user-message-bubble relative flex min-h-11 min-w-0 w-fit max-w-full flex-col items-start px-3.5 py-2.5 ${
+      btw ? 'wc-user-message-bubble-btw' : ''
+    }`}>
+      <UserMessageText text={text} />
     </div>
   )
 }

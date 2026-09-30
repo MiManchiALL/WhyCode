@@ -95,7 +95,14 @@ import {
 } from './pdf-draft.ts'
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
-import { ComposerSubmissions, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
+import {
+  ComposerSubmissions,
+  composerInputIds,
+  composerSubmissionVisible,
+  prependComposerDraft,
+  type ComposerSubmission,
+} from './composer-submissions.ts'
+import { PendingUserMessage } from './pending-user-message.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
@@ -167,7 +174,7 @@ export function App() {
   const submissionPending = Boolean(activeSubmission)
   const restoredSubmissionPending = Boolean(activeSubmission?.draft.restoredInputIds.length)
   const worktreePreparation = activeSubmission?.worktreeBaseRef !== undefined
-    ? { message: activeSubmission.draft.text, baseRef: activeSubmission.worktreeBaseRef }
+    ? { baseRef: activeSubmission.worktreeBaseRef }
     : null
   const [models, setModels] = useState<ModelListItem[]>([])
   const [modelId, setModelId] = useState('')
@@ -232,7 +239,7 @@ export function App() {
   const deletingSessionIdRef = useRef<string | null>(null)
   const runtimeIdRef = useRef('')
   const sessionIdRef = useRef<string | null>(null)
-  const activeSnapshotSequenceRef = useRef(0)
+  const activeEventSequenceRef = useRef(0)
   const sessionListRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const sessionListRefreshRequestedRef = useRef(false)
   const backgroundTaskRevisionRef = useRef(-1)
@@ -279,6 +286,8 @@ export function App() {
     conversationEventBufferRef.current!.push(event, occurredAt)
   }, [])
   const blocks = view.blocks
+  const pendingMessage = activeSubmission && composerSubmissionVisible(activeSubmission, blocks, queued)
+    ? activeSubmission.draft : null
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const conversationStarted = blocks.some((block) => block.kind === 'user')
@@ -758,7 +767,7 @@ export function App() {
         subagentStatesRef.current.delete(buffered.parentSessionId)
       }
     }
-    activeSnapshotSequenceRef.current = snapshot.eventSequence
+    activeEventSequenceRef.current = snapshot.eventSequence
     setRuntimeId(snapshot.runtimeId)
     const validRestoredIds = new Set(snapshot.restoredInputs.map((item) => item.id))
     let restoredIds = restoredInputIdsRef.current.filter((id) => validRestoredIds.has(id))
@@ -783,6 +792,7 @@ export function App() {
       composerKey(snapshot.runtimeId, snapshot.sessionId),
     )
     const replayedView = restoreConversationSnapshot(snapshot.history.view)
+    composerSubmissions.receiveSnapshot(snapshot.runtimeId, replayedView.blocks, snapshot.queuedInputs)
     history.reset(snapshot.runtimeId, snapshot.history)
     conversationEventBufferRef.current?.clear()
     setView({
@@ -880,6 +890,7 @@ export function App() {
     if (event.type === 'user-message-edited' || event.type === 'btw-message-edited'
       || (event.type === 'checkpoint-restored' && event.ok)) history.cancel()
     applyConversationEvent(event, occurredAt)
+    composerSubmissions.receiveEvent(runtimeIdRef.current, event)
     switch (event.type) {
       case 'work-started':
         setWorkStartedAt(event.startedAt)
@@ -995,6 +1006,7 @@ export function App() {
     }
   }, [
     applyConversationEvent,
+    composerSubmissions,
     refreshSessions,
     restoreQueuedDrafts,
     showConversationFeedback,
@@ -1007,7 +1019,8 @@ export function App() {
       .sort((left, right) => left.sequence - right.sequence)
     backgroundEventsRef.current.delete(runtimeId)
     for (const entry of buffered) {
-      if (entry.sequence <= activeSnapshotSequenceRef.current) continue
+      if (entry.sequence <= activeEventSequenceRef.current) continue
+      activeEventSequenceRef.current = entry.sequence
       setComposerSessionId(entry.sessionId)
       consumeEvent(entry.event, entry.occurredAt)
     }
@@ -1177,6 +1190,8 @@ export function App() {
         eventRuntimeId === runtimeIdRef.current
         && hydratingRuntimeIdRef.current !== eventRuntimeId
       ) {
+        if (sequence <= activeEventSequenceRef.current) return
+        activeEventSequenceRef.current = sequence
         setComposerSessionId(eventSessionId)
         consumeEvent(event, occurredAt)
       } else if (
@@ -1825,6 +1840,7 @@ export function App() {
     const submission: ComposerSubmission = {
       runtimeId: targetRuntimeId,
       sessionId: sessionIdRef.current,
+      previousInputIds: composerInputIds(blocks, [...queued, ...restoredQueue]),
       draft: {
         text, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills,
         btwMode: sentBtwMode, restoredInputIds: sentRestoredInputIds,
@@ -1887,22 +1903,30 @@ export function App() {
         if (result?.workspace && runtimeIdRef.current === targetRuntimeId) {
           setWorkspace(result.workspace)
         }
-        if (result?.ok) {
+        if (result?.ok || submission.receivedInputId) {
           accepted = true
         }
       } catch {
-        if (runtimeIdRef.current === targetRuntimeId) {
+        accepted = Boolean(submission.receivedInputId)
+        if (!accepted && runtimeIdRef.current === targetRuntimeId) {
           showError(sentImageDrafts.length || sentPdfDrafts.length
             ? '附件读取或消息发送失败，内容已恢复到输入框'
             : '消息发送失败，内容已恢复到输入框')
         }
       } finally {
         // IPC 确认与事件端口独立到达；首次提交须先取得正式身份，再移交后台草稿。
-        if (submission.sessionId === null) {
+        if (submission.sessionId === null || (accepted && !submission.receivedInputId)) {
           try {
             const snapshot = await window.whycode.runtimeSnapshot(targetRuntimeId)
             await bindComposerSession(targetRuntimeId, snapshot.sessionId)
-            if (runtimeIdRef.current === targetRuntimeId) sessionIdRef.current = snapshot.sessionId
+            const needsTimeline = accepted && !submission.receivedInputId
+            composerSubmissions.receiveSnapshot(targetRuntimeId, snapshot.history.view.blocks, snapshot.queuedInputs)
+            if (runtimeIdRef.current === targetRuntimeId) {
+              sessionIdRef.current = snapshot.sessionId
+              // 确认先于事件到达时，以宿主快照接替预览，不能先清掉气泡再等待事件。
+              if (needsTimeline && !resumingSessionIdRef.current && !sessionTransitionPendingRef.current
+                && snapshot.eventSequence >= activeEventSequenceRef.current) applyRuntimeSnapshot(snapshot)
+            }
           } catch (error) {
             draftStorageError(error)
           }
@@ -1931,7 +1955,11 @@ export function App() {
   }, [
     showError,
     submissionPending,
+    applyRuntimeSnapshot,
     bindComposerSession,
+    blocks,
+    queued,
+    restoredQueue,
     composerSubmissions,
     draftStorageError,
     captureSkills,
@@ -2206,13 +2234,7 @@ export function App() {
                   ref={conversationContentRef}
                   className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
                 >
-                  {!loadingConversation && !conversationStarted && worktreePreparation && (
-                    <WorktreePreparation
-                      message={worktreePreparation.message}
-                      baseRef={worktreePreparation.baseRef}
-                    />
-                  )}
-                  {!loadingConversation && !conversationStarted && !worktreePreparation && (
+                  {!loadingConversation && !conversationStarted && !pendingMessage && (
                     <div className="mx-auto mt-[18vh] max-w-md text-center">
                       <h2 className="text-lg font-semibold tracking-tight">想一起做点什么？</h2>
                       <p className="mt-1.5 text-sm leading-6 text-[var(--wc-muted)]">
@@ -2249,6 +2271,10 @@ export function App() {
                     onOpenChanges={showRightPanelPage}
                     onToggle={toggle}
                   />
+                  {!loadingConversation && pendingMessage && <PendingUserMessage draft={pendingMessage} />}
+                  {!loadingConversation && !conversationStarted && pendingMessage && worktreePreparation && (
+                    <WorktreePreparation baseRef={worktreePreparation.baseRef} />
+                  )}
                 </div>
               </main>
             </div>
@@ -2343,7 +2369,7 @@ export function App() {
                       />
                     )}
 
-                    {!loadingConversation && !conversationStarted && !worktreePreparation && (
+                    {!loadingConversation && !conversationStarted && !submissionPending && (
                       <WorkspaceContextBar
                         key={runtimeId}
                         runtimeId={runtimeId}

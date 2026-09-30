@@ -44,7 +44,7 @@ export function PdfDraftStrip({
   onRemove,
 }: {
   drafts: readonly PdfDraft[]
-  onRemove: (id: string) => void
+  onRemove?: (id: string) => void
 }) {
   if (drafts.length === 0) return null
   return (
@@ -58,7 +58,7 @@ export function PdfDraftStrip({
           <span className="rounded bg-red-600 px-1.5 py-1 font-semibold text-white">PDF</span>
           <span className="min-w-0 flex-1 truncate">{draft.name}</span>
           <span className="shrink-0 text-neutral-400">{formatBytes(draft.byteLength)}</span>
-          <button
+          {onRemove && <button
             type="button"
             className="shrink-0 text-neutral-400 hover:text-neutral-800"
             onClick={() => onRemove(draft.id)}
@@ -66,7 +66,7 @@ export function PdfDraftStrip({
             aria-label={`移除 ${draft.name}`}
           >
             ×
-          </button>
+          </button>}
         </div>
       ))}
     </div>

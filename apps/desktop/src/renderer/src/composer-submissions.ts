@@ -1,9 +1,13 @@
 import type { ComposerDraft } from './composer-drafts.ts'
+import type { CoreEvent, QueuedUserMessage } from '@whycode/core/events'
+import type { Block } from '../../shared/conversation-state.ts'
 
 export interface ComposerSubmission {
   readonly runtimeId: string
   sessionId: string | null
   readonly draft: ComposerDraft
+  readonly previousInputIds: ReadonlySet<string>
+  receivedInputId?: string
   /** 切走后暂存继续编辑的输入；提交完成前不能被普通草稿缓存淘汰。 */
   remainder?: ComposerDraft
   readonly worktreeBaseRef?: string | null
@@ -34,6 +38,33 @@ export class ComposerSubmissions {
     return true
   }
 
+  receiveEvent(runtimeId: string, event: CoreEvent): void {
+    if (event.type === 'user-message-accepted' || event.type === 'btw-message-accepted') {
+      if (event.inputId) this.receive(runtimeId, event.inputId, event.text, event.type === 'btw-message-accepted')
+    } else if (event.type === 'message-queued') {
+      this.receive(runtimeId, event.id, event.text, false)
+    }
+  }
+
+  receiveSnapshot(runtimeId: string, blocks: readonly Block[], queued: readonly QueuedUserMessage[]): void {
+    const submission = this.pending.get(runtimeId)
+    if (!submission || submission.receivedInputId) return
+    for (const block of blocks) {
+      if (block.kind === 'user' && block.inputId) {
+        this.receive(runtimeId, block.inputId, block.text, Boolean(block.btw))
+      }
+    }
+    for (const input of queued) this.receive(runtimeId, input.id, input.text, false)
+  }
+
+  private receive(runtimeId: string, inputId: string, text: string, btw: boolean): void {
+    const submission = this.pending.get(runtimeId)
+    if (!submission || submission.receivedInputId || submission.previousInputIds.has(inputId)
+      || submission.draft.text !== text || Boolean(submission.draft.btwMode) !== btw) return
+    submission.receivedInputId = inputId
+    this.publish(new Map(this.pending))
+  }
+
   finish(submission: ComposerSubmission): void {
     if (this.pending.get(submission.runtimeId) !== submission) return
     const next = new Map(this.pending)
@@ -45,6 +76,25 @@ export class ComposerSubmissions {
     this.pending = pending
     for (const listener of this.listeners) listener()
   }
+}
+
+export function composerInputIds(blocks: readonly Block[], queued: readonly QueuedUserMessage[]): Set<string> {
+  return new Set([
+    ...blocks.flatMap(block => block.kind === 'user' && block.inputId ? [block.inputId] : []),
+    ...queued.map(input => input.id),
+  ])
+}
+
+/** 以正式输入身份接替预览；重复文本和此前排队输入都不能提前隐藏当前提交。 */
+export function composerSubmissionVisible(
+  submission: ComposerSubmission | undefined,
+  blocks: readonly Block[],
+  queued: readonly QueuedUserMessage[],
+): boolean {
+  if (!submission) return false
+  const inputId = submission.receivedInputId
+  return !inputId || (!blocks.some(block => block.kind === 'user' && block.inputId === inputId)
+    && !queued.some(input => input.id === inputId))
 }
 
 export function prependComposerDraft(sent: ComposerDraft, current?: ComposerDraft): ComposerDraft {

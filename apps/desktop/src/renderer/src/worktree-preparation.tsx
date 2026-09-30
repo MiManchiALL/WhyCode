@@ -1,7 +1,6 @@
 import { LoaderCircle } from 'lucide-react'
 
 interface WorktreePreparationProps {
-  message: string
   baseRef: string | null
 }
 
@@ -9,11 +8,6 @@ interface WorktreePreparationProps {
 export function WorktreePreparation(props: WorktreePreparationProps) {
   return (
     <div className="pt-2">
-      {props.message && (
-        <div className="wc-user-message-copy wc-user-message-bubble ml-auto w-fit max-w-[84%] px-3.5 py-2.5">
-          <div className="whitespace-pre-wrap">{props.message}</div>
-        </div>
-      )}
       <div className="mx-auto mt-[12vh] max-w-lg rounded-2xl border border-[var(--wc-line)] bg-white/70 px-4 py-3.5">
         <div className="flex items-center gap-2 text-xs font-medium text-[var(--wc-ink)]">
           <LoaderCircle size={14} className="animate-spin text-[var(--wc-sage-ink)]" />

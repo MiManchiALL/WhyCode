@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { composerDraftKey, type ComposerDraft } from './composer-drafts.ts'
-import { ComposerSubmissions, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
+import { ComposerSubmissions, composerInputIds, composerSubmissionVisible, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
+import type { Block } from '../../shared/conversation-state.ts'
+import type { QueuedUserMessage } from '@whycode/core/events'
 
 describe('跨会话提交归属', () => {
   it('Worktree 创建未完成时，另一会话可独立提交，源请求结束不解除另一请求', () => {
@@ -56,8 +58,78 @@ describe('跨会话提交归属', () => {
   })
 })
 
+describe('提交消息的即时展示', () => {
+  it('宿主准备未完成时立即显示；计时、工具事件及重复文本的旧消息不能提前接替', () => {
+    const submissions = new ComposerSubmissions()
+    const previous = [user('old')]
+    const pending = { ...submission('runtime', 'session'), previousInputIds: composerInputIds(previous, []) }
+    submissions.start(pending)
+    assert.equal(composerSubmissionVisible(pending, previous, []), true)
+    submissions.receiveEvent('runtime', { type: 'work-started', startedAt: 100 })
+    submissions.receiveEvent('runtime', { type: 'user-message-accepted', startsTurn: true, inputId: 'old', text: '请求' })
+    submissions.receiveEvent('other', { type: 'user-message-accepted', startsTurn: true, inputId: 'new', text: '请求' })
+    submissions.receiveEvent('runtime', { type: 'user-message-accepted', startsTurn: true, inputId: 'unrelated', text: '另一条输入' })
+    assert.equal(pending.receivedInputId, undefined)
+    assert.equal(composerSubmissionVisible(pending, previous, []), true)
+
+    submissions.receiveEvent('runtime', { type: 'user-message-accepted', startsTurn: true, inputId: 'new', text: '请求' })
+    // 宿主确认与 React 消息投影可先后到达，正式气泡出现前不能留空。
+    assert.equal(composerSubmissionVisible(pending, previous, []), true)
+    assert.equal(composerSubmissionVisible(pending, [...previous, user('new')], []), false)
+    submissions.finish(pending)
+    assert.equal(composerSubmissionVisible(submissions.getSnapshot().get('runtime'), previous, []), false)
+  })
+
+  it('正在排队的旧输入注入主线不影响当前提交，新队列卡片到达后接替预览', () => {
+    const submissions = new ComposerSubmissions()
+    const oldQueue: QueuedUserMessage = { id: 'old-queue', text: '请求' }
+    const pending = { ...submission('runtime', 'session'), previousInputIds: composerInputIds([], [oldQueue]) }
+    submissions.start(pending)
+    submissions.receiveSnapshot('runtime', [user('old-queue')], [])
+    assert.equal(composerSubmissionVisible(pending, [user('old-queue')], []), true)
+    const queued: QueuedUserMessage = { id: 'new-queue', text: '请求' }
+    submissions.receiveSnapshot('runtime', [user('old-queue')], [queued])
+    assert.equal(composerSubmissionVisible(pending, [user('old-queue')], []), true)
+    assert.equal(composerSubmissionVisible(pending, [user('old-queue')], [queued]), false)
+  })
+
+  it('切回后台提交时可由快照接替；迟到的旧输入不匹配同文的新提交', () => {
+    const submissions = new ComposerSubmissions()
+    const pending = submission('runtime', 'session')
+    const other = submission('other', 'other-session')
+    submissions.start(pending)
+    submissions.start(other)
+    submissions.receiveSnapshot('runtime', [user('first')], [])
+    assert.equal(composerSubmissionVisible(pending, [user('first')], []), false)
+    assert.equal(composerSubmissionVisible(other, [], []), true)
+    submissions.finish(pending)
+    const next = { ...submission('runtime', 'session'), previousInputIds: composerInputIds([user('first')], []) }
+    submissions.start(next)
+    submissions.receiveEvent('runtime', { type: 'user-message-accepted', startsTurn: true, inputId: 'first', text: '请求' })
+    assert.equal(composerSubmissionVisible(next, [user('first')], []), true)
+    submissions.receiveSnapshot('runtime', [user('first'), user('second')], [])
+    assert.equal(composerSubmissionVisible(next, [user('first'), user('second')], []), false)
+  })
+
+  it('BTW 的预览只由对应的旁路消息接替', () => {
+    const submissions = new ComposerSubmissions()
+    const pending = submission('runtime', 'session')
+    pending.draft.btwMode = 'btw'
+    submissions.start(pending)
+    submissions.receiveEvent('runtime', { type: 'user-message-accepted', startsTurn: true, inputId: 'main', text: '请求' })
+    assert.equal(pending.receivedInputId, undefined)
+    const btw = { ...user('side'), btw: { conversationId: 'btw', turnIndex: 0, mode: 'btw' as const } }
+    submissions.receiveSnapshot('runtime', [btw], [])
+    assert.equal(composerSubmissionVisible(pending, [btw], []), false)
+  })
+})
+
+function user(inputId: string): Extract<Block, { kind: 'user' }> {
+  return { kind: 'user', id: `user-${inputId}`, inputId, text: '请求' }
+}
+
 function submission(runtimeId: string, sessionId: string | null): ComposerSubmission {
-  return { runtimeId, sessionId, draft: draft('请求') }
+  return { runtimeId, sessionId, draft: draft('请求'), previousInputIds: new Set() }
 }
 
 function draft(text: string): ComposerDraft {

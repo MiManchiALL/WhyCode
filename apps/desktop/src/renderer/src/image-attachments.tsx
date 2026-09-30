@@ -71,7 +71,7 @@ export function ImageDraftStrip({
   onRemove,
 }: {
   drafts: readonly ImageDraft[]
-  onRemove: (id: string) => void
+  onRemove?: (id: string) => void
 }) {
   const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
   if (drafts.length === 0) return null
@@ -88,7 +88,7 @@ export function ImageDraftStrip({
             >
               <img src={draft.previewUrl} alt={draft.name} className="h-full w-full object-cover" />
             </button>
-            <button
+            {onRemove && <button
               type="button"
               className="absolute right-1 top-1 rounded bg-black/65 px-1.5 py-0.5 text-xs text-white opacity-80 hover:opacity-100"
               onClick={() => onRemove(draft.id)}
@@ -96,7 +96,7 @@ export function ImageDraftStrip({
               aria-label={`移除 ${draft.name}`}
             >
               ×
-            </button>
+            </button>}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 wc-type-tiny text-white">
               {draft.name}
             </div>
