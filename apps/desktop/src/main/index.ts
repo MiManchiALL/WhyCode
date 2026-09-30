@@ -1410,7 +1410,8 @@ async function handleUserMessageCommand(
         await newSessionState.consume(runtime.runtimeId)
         terminals.bindSession(runtime.runtimeId, runtime.runtimeId)
       }
-      if (!runtime.journal) runtime.beginWork()
+      // 已有会话同样从消息准备开始计时，远端连接与附件读取都属于本次工作。
+      runtime.beginWork()
       prepared = await prepareUserMessage(runtime, command)
     } catch (error) {
       if (!runtime.session) runtime.finishWork()
