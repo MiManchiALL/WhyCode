@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { SessionNameDialog, type RenameSession } from './session-name-editor.tsx'
 import { SessionDeleteDialog } from './session-delete-dialog.tsx'
-import type { DeleteSessionOptions, DeleteSessionResult, SessionListItem } from '../../shared/session.ts'
+import type { DeleteSessionOptions, DeleteSessionResult, RemoteCleanupFailure, SessionListItem } from '../../shared/session.ts'
 import { SessionItems } from './sidebar-sessions.tsx'
 import { SidebarProjects } from './sidebar-projects.tsx'
 import { groupSidebarSessions } from './sidebar-groups.ts'
@@ -49,10 +49,16 @@ export function AppSidebar(props: AppSidebarProps) {
   const [resizing, setResizing] = useState(false)
   const [renameTargetId, setRenameTargetId] = useState<string | null>(null)
   const renameTarget = props.sessions.find(session => session.sessionId === renameTargetId)
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-  const closeDeleteDialog = useCallback(() => setDeleteTargetId(null), [])
+  const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; remoteFailure?: RemoteCleanupFailure } | null>(null)
+  const closeDeleteDialog = useCallback(() => setDeleteTarget(null), [])
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
-  const deleteTarget = props.sessions.find((session) => session.sessionId === deleteTargetId)
+  const deleteSession = async (sessionId: string, options: DeleteSessionOptions) => {
+    const result = await props.onDelete(sessionId, options)
+    if (result && !result.ok && result.remoteCleanupFailure) {
+      setDeleteTarget({ sessionId, remoteFailure: result.remoteCleanupFailure })
+    }
+    return result
+  }
   const { pinned: pinnedSessions, recent: recentSessions, byProject } = useMemo(
     () => groupSidebarSessions(props.sessions, props.projects), [props.sessions, props.projects],
   )
@@ -61,7 +67,7 @@ export function AppSidebar(props: AppSidebarProps) {
     sessions={sessions} selectedSessionId={props.selectedSessionId} busy={props.busy}
     navigationLocked={props.navigationLocked} deletingSessionId={props.deletingSessionId}
     onResume={props.onResume} onPinnedChange={props.onPinnedChange}
-    onRequestDelete={setDeleteTargetId} onRequestRename={setRenameTargetId} />
+    onRequestDelete={sessionId => setDeleteTarget({ sessionId })} onRequestRename={setRenameTargetId} />
 
   return (
     <aside
@@ -202,7 +208,7 @@ export function AppSidebar(props: AppSidebarProps) {
         {renameTarget && <SessionNameDialog key={renameTarget.sessionId} sessionId={renameTarget.sessionId} title={renameTarget.title}
           onRename={props.onRename} onClose={() => setRenameTargetId(null)} />}
         {deleteTarget && <SessionDeleteDialog key={deleteTarget.sessionId} sessionId={deleteTarget.sessionId}
-          onClose={closeDeleteDialog} onDelete={props.onDelete} onError={props.onError} />}
+          remoteFailure={deleteTarget.remoteFailure} onClose={closeDeleteDialog} onDelete={deleteSession} onError={props.onError} />}
       </div>
     </aside>
   )

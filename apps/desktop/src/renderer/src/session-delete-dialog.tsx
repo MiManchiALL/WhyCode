@@ -6,16 +6,15 @@ import type { DeleteSessionOptions, DeleteSessionResult, RemoteCleanupFailure } 
 
 interface Props {
   sessionId: string
+  remoteFailure?: RemoteCleanupFailure
   onClose: () => void
   onDelete: (sessionId: string, options: DeleteSessionOptions) => Promise<DeleteSessionResult | null>
   onError: (message: string) => void
 }
 
-export function SessionDeleteDialog({ sessionId, onClose, onDelete, onError }: Props) {
+export function SessionDeleteDialog({ sessionId, remoteFailure, onClose, onDelete, onError }: Props) {
   const [preview, setPreview] = useState<WorkspaceDeletionPreview | null>(null)
   const [deleteDirectory, setDeleteDirectory] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [remoteFailure, setRemoteFailure] = useState<RemoteCleanupFailure | null>(null)
   useEffect(() => {
     let cancelled = false
     void window.whycode.previewSessionDeletion(sessionId).then(result => {
@@ -30,21 +29,16 @@ export function SessionDeleteDialog({ sessionId, onClose, onDelete, onError }: P
     return () => { cancelled = true }
   }, [sessionId, onError, onClose])
 
-  const submit = async (remoteCleanup: DeleteSessionOptions['remoteCleanup']) => {
-    if (pending) return
-    setPending(true)
-    try {
-      const result = await onDelete(sessionId, { deleteDirectory, remoteCleanup })
-      if (result?.ok || result?.deletedCurrent) onClose()
-      else if (result?.remoteCleanupFailure) setRemoteFailure(result.remoteCleanupFailure)
-    } finally { setPending(false) }
+  const submit = (remoteCleanup: DeleteSessionOptions['remoteCleanup']) => {
+    onClose()
+    void onDelete(sessionId, { deleteDirectory, remoteCleanup })
   }
 
   return (
-    <AlertDialog.Root open onOpenChange={open => { if (!open && !pending) onClose() }}>
+    <AlertDialog.Root open onOpenChange={open => { if (!open) onClose() }}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
-        <AlertDialog.Content onEscapeKeyDown={event => { if (pending) event.preventDefault() }} className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] max-h-[90vh] w-[min(92vw,460px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 outline-none">
+        <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] max-h-[90vh] w-[min(92vw,460px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 outline-none">
           <CircleAlert size={20} className="mb-3 text-[var(--wc-danger)]" />
           <AlertDialog.Title className="text-base font-semibold">{remoteFailure ? '远端临时文件未清理' : '删除这个会话？'}</AlertDialog.Title>
           <AlertDialog.Description className="mt-2 text-sm leading-6 text-[var(--wc-muted)]">
@@ -59,7 +53,7 @@ export function SessionDeleteDialog({ sessionId, onClose, onDelete, onError }: P
               {preview.directory && <p className="mb-3 break-all rounded-xl bg-black/[0.035] px-3 py-2 text-xs text-[var(--wc-muted)]">{preview.directory}</p>}
               {preview.disposition === 'optional' ? <>
                 <label className="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" disabled={pending} className="wc-focus-ring accent-[var(--wc-sage-ink)]" checked={deleteDirectory} onChange={event => setDeleteDirectory(event.target.checked)} />
+                  <input type="checkbox" className="wc-focus-ring accent-[var(--wc-sage-ink)]" checked={deleteDirectory} onChange={event => setDeleteDirectory(event.target.checked)} />
                   同时删除工作目录
                 </label>
                 <p className={`mt-2 text-xs leading-5 ${deleteDirectory ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}`}>
@@ -68,14 +62,14 @@ export function SessionDeleteDialog({ sessionId, onClose, onDelete, onError }: P
               </> : <p className="text-[var(--wc-muted)]">{description(preview)}</p>}
             </>}
           </div>
-          <div className="mt-5 flex flex-wrap justify-end gap-2" aria-busy={pending}>
-            <AlertDialog.Cancel asChild><button disabled={pending} className="wc-focus-ring rounded-xl border border-[var(--wc-line)] px-3 py-2 text-sm disabled:opacity-40">取消</button></AlertDialog.Cancel>
-            {remoteFailure && <button disabled={pending} className="wc-focus-ring rounded-xl border border-[var(--wc-line)] px-3 py-2 text-sm text-[var(--wc-danger)] disabled:opacity-40" onClick={() => { void submit('skip') }}>
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <AlertDialog.Cancel asChild><button className="wc-focus-ring rounded-xl border border-[var(--wc-line)] px-3 py-2 text-sm">取消</button></AlertDialog.Cancel>
+            {remoteFailure && <button className="wc-focus-ring rounded-xl border border-[var(--wc-line)] px-3 py-2 text-sm text-[var(--wc-danger)]" onClick={() => submit('skip')}>
               仅删除本地会话
             </button>}
             {remoteFailure !== 'connection-missing' &&
-              <button disabled={!preview || pending} className="wc-focus-ring rounded-xl bg-[var(--wc-danger)] px-3 py-2 text-sm text-white disabled:opacity-40" onClick={() => { void submit('required') }}>
-                {pending ? '正在删除…' : remoteFailure ? '重试' : '删除会话'}
+              <button disabled={!preview} className="wc-focus-ring rounded-xl bg-[var(--wc-danger)] px-3 py-2 text-sm text-white disabled:opacity-40" onClick={() => submit('required')}>
+                {remoteFailure ? '重试' : '删除会话'}
               </button>
             }
           </div>

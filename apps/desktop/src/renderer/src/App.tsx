@@ -210,7 +210,6 @@ export function App() {
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
-  const [deletionBlocksRuntime, setDeletionBlocksRuntimeState] = useState(false)
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
   const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
   const [conversationFeedback, setConversationFeedback] =
@@ -227,11 +226,10 @@ export function App() {
     rightPanelSessionStoreRef.current = new RightPanelSessionStore()
   }
   const questionSubmittingRef = useRef(false)
-  const sessionTransitionPendingRef = useRef(false)
+  const sessionTransitionPendingRef = useRef<{ promise: Promise<void>; finish: () => void } | null>(null)
   const resumingSessionIdRef = useRef<string | null>(null)
-  const resumeRequestRef = useRef<object | null>(null)
+  const resumeRequestRef = useRef<Promise<void> | null>(null)
   const deletingSessionIdRef = useRef<string | null>(null)
-  const deletionBlocksRuntimeRef = useRef(false)
   const runtimeIdRef = useRef('')
   const sessionIdRef = useRef<string | null>(null)
   const activeSnapshotSequenceRef = useRef(0)
@@ -427,7 +425,6 @@ export function App() {
     drafts: imageDrafts,
     addFiles: addImageFiles,
     remove: removeImageDraft,
-    clear: clearImageDrafts,
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
   } = useImageDrafts(showError)
@@ -435,7 +432,6 @@ export function App() {
     drafts: pdfDrafts,
     addFiles: addPdfFiles,
     remove: removePdfDraft,
-    clear: clearPdfDrafts,
     detach: detachPdfDrafts,
     restore: restorePdfDrafts,
   } = usePdfDrafts(showError)
@@ -532,29 +528,10 @@ export function App() {
     )
   }, [])
 
-  const resetActiveComposer = useCallback(() => {
-    const currentRuntimeId = runtimeIdRef.current
-    const currentSessionId = sessionIdRef.current
-    void composerDraftsRef.current.delete(composerDraftKey(currentRuntimeId, currentSessionId)).catch(draftStorageError)
-    backgroundEventsRef.current.delete(currentRuntimeId)
-    inputRef.current = ''
-    setInput('')
-    clearSkills()
-    clearImageDrafts()
-    clearPdfDrafts()
-    setBtwMode(null)
-  }, [clearImageDrafts, clearPdfDrafts, clearSkills, setBtwMode, draftStorageError])
-
   const setResumingSessionId = useCallback((sessionId: string | null) => {
     if (sessionId) history.cancel()
     resumingSessionIdRef.current = sessionId
     setResumingSessionIdState(sessionId)
-  }, [history.cancel])
-
-  const setDeletionBlocksRuntime = useCallback((blocked: boolean) => {
-    if (blocked) history.cancel()
-    deletionBlocksRuntimeRef.current = blocked
-    setDeletionBlocksRuntimeState(blocked)
   }, [history.cancel])
 
   const setDeletingSession = useCallback((sessionId: string | null) => {
@@ -565,13 +542,16 @@ export function App() {
   const beginSessionTransition = useCallback(() => {
     if (sessionTransitionPendingRef.current) return false
     history.cancel()
-    sessionTransitionPendingRef.current = true
+    let finish!: () => void
+    const promise = new Promise<void>(resolve => { finish = resolve })
+    sessionTransitionPendingRef.current = { promise, finish }
     setSessionTransitionPending(true)
     return true
   }, [history.cancel])
 
   const endSessionTransition = useCallback(() => {
-    sessionTransitionPendingRef.current = false
+    sessionTransitionPendingRef.current?.finish()
+    sessionTransitionPendingRef.current = null
     setSessionTransitionPending(false)
   }, [])
 
@@ -831,7 +811,6 @@ export function App() {
       deletingSessionIdRef.current,
       snapshot.deletingSessionId,
     ))
-    setDeletionBlocksRuntime(Boolean(snapshot.deletingSessionId))
     setResumingSessionId(snapshot.resumingSessionId)
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
     setStopping(false)
@@ -855,7 +834,6 @@ export function App() {
     resetSkillCatalog,
     setBtwMode,
     setDeletingSession,
-    setDeletionBlocksRuntime,
     setResumingSessionId,
     stashActiveComposer,
     stashActivePresentation,
@@ -1019,7 +997,6 @@ export function App() {
     applyConversationEvent,
     refreshSessions,
     restoreQueuedDrafts,
-    setDeletionBlocksRuntime,
     showConversationFeedback,
     history.cancel,
   ])
@@ -1063,7 +1040,6 @@ export function App() {
   useEffect(() => window.whycode.onSessionDeletion((state) => {
     if (deletingSessionIdRef.current === state.sessionId) {
       setDeletingSession(null)
-      setDeletionBlocksRuntime(false)
     }
     if (state.status === 'failed') {
       showError(`会话删除未完成：${state.error}`)
@@ -1071,7 +1047,7 @@ export function App() {
       showConversationFeedback('info', `会话已删除；${state.warning}`)
     }
     void refreshSessions()
-  }), [refreshSessions, setDeletingSession, setDeletionBlocksRuntime, showError, showConversationFeedback])
+  }), [refreshSessions, setDeletingSession, showError, showConversationFeedback])
 
   useEffect(() => {
     if (!rightPanelState.open) setRightPanelFullscreen(false)
@@ -1337,6 +1313,8 @@ export function App() {
   }, [history.cancel, releaseConversationScroll])
 
   const busy = status !== 'idle' && status !== 'error'
+  const deletionBlocksRuntime = deletingSessionId !== null
+    && isCurrentSessionDeletion(sessionIdRef.current, deletingSessionId)
   const interactionBusy = busy
     || sessionTransitionPending
     || submissionPending
@@ -1352,8 +1330,7 @@ export function App() {
     || checkpointRestoreToolUseId !== null
   const composerControlsLocked = composerDisabled || submissionPending
   const attachmentLocked = composerControlsLocked || resumingSessionId !== null
-  const sessionNavigationLocked = deletionBlocksRuntime
-    || sessionTransitionPending
+  const sessionNavigationLocked = sessionTransitionPending
     || checkpointRestoreToolUseId !== null
   const sessionChangeLocked = sessionNavigationLocked
     || (submissionPending && sessionIdRef.current === null) || resumingSessionId !== null
@@ -1545,12 +1522,10 @@ export function App() {
         composerKey(runtimeIdRef.current, sessionIdRef.current),
       )?.scroll ?? null
     }
-    const request = {}
-    resumeRequestRef.current = request
     setResumingSessionId(sessionId)
     const presentation = conversationPresentationsRef.current.get(sessionId)
     const historyStart = presentation?.scroll?.atBottom === false ? presentation.historyStart : undefined
-    void window.whycode.resumeSession(sessionId, historyStart).then(async (result) => {
+    const request = window.whycode.resumeSession(sessionId, historyStart).then(async (result) => {
       if (resumeRequestRef.current !== request) return
       if (!result.ok) {
         showError(result.error)
@@ -1571,6 +1546,7 @@ export function App() {
       resumeRequestRef.current = null
       setResumingSessionId(null)
     })
+    resumeRequestRef.current = request
   }, [
     showError,
     applyRuntimeSnapshot,
@@ -1582,18 +1558,32 @@ export function App() {
   ])
 
   const deleteSession = useCallback(async (sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult | null> => {
+    const pendingNavigation = () => [resumeRequestRef.current, sessionTransitionPendingRef.current?.promise].filter(Boolean)
     if (
       deletingSessionIdRef.current
       || resumingSessionIdRef.current
       || sessionTransitionPendingRef.current
     ) return null
     setDeletingSession(sessionId)
-    // 前置清理期间保留当前会话，防止发送与删除并发；提交后再切到替代会话。
-    setDeletionBlocksRuntime(isCurrentSessionDeletion(sessionIdRef.current, sessionId))
+    if (isCurrentSessionDeletion(sessionIdRef.current, sessionId)) history.cancel()
     let cleanupPending = false
     try {
       const result = await window.whycode.deleteSession(sessionId, options)
       cleanupPending = result.ok && result.cleanupPending
+      // 先让用户已发起的导航落定；失败时仍可切离已经删除的会话。
+      for (let pending = pendingNavigation(); pending.length; pending = pendingNavigation()) {
+        await Promise.allSettled(pending)
+      }
+      const stillViewingTarget = () => sessionIdRef.current === sessionId
+        && !resumingSessionIdRef.current && !sessionTransitionPendingRef.current
+      if (result.deletedCurrent && result.snapshot && stillViewingTarget()) {
+        await prepareComposer(result.snapshot)
+        // 清理可能持续数秒，完成时只替换仍停留在删除目标上的视图。
+        if (stillViewingTarget()) {
+          applyRuntimeSnapshot(result.snapshot)
+          void window.whycode.consensusStatus().then(setConsensus)
+        }
+      }
       if (result.ok || result.deletedCurrent) {
         void composerDraftsRef.current.delete(sessionId).catch(draftStorageError)
         conversationPresentationsRef.current.delete(sessionId)
@@ -1604,24 +1594,14 @@ export function App() {
           }
         }
       }
-      if (result.deletedCurrent) {
-        resetActiveComposer()
-        if (result.snapshot) {
-          await prepareComposer(result.snapshot)
-          applyRuntimeSnapshot(result.snapshot)
-        }
-        conversationPresentationsRef.current.delete(sessionId)
-        void window.whycode.consensusStatus().then(setConsensus)
-      }
       if (!result.ok) showConversationFeedback('error', result.error, true)
       return result
     } catch {
       showConversationFeedback('error', '删除会话失败，请重试', true)
       return null
     } finally {
-      if (!cleanupPending) {
+      if (!cleanupPending && deletingSessionIdRef.current === sessionId) {
         setDeletingSession(null)
-        setDeletionBlocksRuntime(false)
       }
       void refreshSessions()
     }
@@ -1630,8 +1610,7 @@ export function App() {
     prepareComposer,
     draftStorageError,
     refreshSessions,
-    resetActiveComposer,
-    setDeletionBlocksRuntime,
+    history.cancel,
     setDeletingSession,
     showConversationFeedback,
   ])

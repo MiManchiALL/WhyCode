@@ -59,7 +59,8 @@ export function SshWorkspaceStatus({ target }: { target: string }) {
   const label = loading ? 'SSH' : connecting ? 'SSH · 连接中' : connection?.connected
     ? 'SSH · 已连接' : connection ? 'SSH · 未连接' : 'SSH · 未配置'
   return <>
-    <button type="button" className="wc-focus-ring shrink-0 rounded-lg bg-[var(--wc-blue)] px-2 py-1 wc-type-tiny text-[var(--wc-blue-ink)] disabled:cursor-default"
+    <button type="button" className={`wc-focus-ring shrink-0 rounded-lg px-2 py-1 wc-type-tiny disabled:cursor-default ${connection?.connected
+      ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-[var(--wc-blue)] text-[var(--wc-blue-ink)]'}`}
       disabled={loading || connecting || !connection || connection.connected}
       aria-label={connection?.connected ? 'SSH 已连接' : '连接 SSH'}
       title={connection?.connected ? connection.name : connection ? '连接服务器' : '原连接已删除，可在设置中重新添加原服务器'}

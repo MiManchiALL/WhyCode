@@ -772,7 +772,8 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
     runtime.reasoningEffort,
   )
   if (runtime.session) {
-    await sshWorkspaces.prepare(runtime)
+    // 临时目录已随 AgentSession 初始化，后续输入只检查远端可用性。
+    await sshWorkspaces.connect(runtime.workspace)
     await runtime.session.setModelSelection(entry, providerConfig, runtime.reasoningEffort)
   } else {
     if (!runtime.sessionInitialization) {
@@ -1807,20 +1808,14 @@ function reportUserMessageDeliveryError(
 
 function runtimeBusy(runtime: DesktopSessionRuntime): boolean {
   return Boolean(
-    (
-      sessionDeletionLock.blocksRuntime
-      && sessionDeletionLock.sessionId === runtime.sessionId
-    )
+    sessionDeletionLock.blocksSession(runtime.sessionId ?? undefined)
     || runtime.busy,
   )
 }
 
 function runtimeExecutionBusy(runtime: DesktopSessionRuntime): boolean {
   return Boolean(
-    (
-      sessionDeletionLock.blocksRuntime
-      && sessionDeletionLock.sessionId === runtime.sessionId
-    )
+    sessionDeletionLock.blocksSession(runtime.sessionId ?? undefined)
     || runtime.executionBusy,
   )
 }
@@ -2145,8 +2140,7 @@ async function runtimeSnapshot(
   const busy = runtimeBusy(runtime)
   const checkpointRestoreToolUseId = runtime.checkpointRestoreToolUseId
   const deletingThisSession = Boolean(
-    sessionDeletionLock.blocksRuntime
-    && sessionDeletionLock.sessionId === runtime.sessionId,
+    sessionDeletionLock.blocksSession(runtime.sessionId ?? undefined),
   )
   const backgroundTasks = journal
     ? await commandSessions.backgroundTasks(journal.sessionId)
@@ -2230,12 +2224,10 @@ function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult>
 }
 
 async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
-  if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
+  if (sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
-      error: sessionDeletionLock.blocksSession()
-        ? '会话数据删除中，请等待完成后再新建会话'
-        : sessionPreparationInProgressMessage('新建会话'),
+      error: sessionPreparationInProgressMessage('新建会话'),
     }
   }
   try {
@@ -2632,10 +2624,9 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
             : '目标会话仍在工作，请先停止再删除',
     }
   }
-  const deletedCurrent = runtimeRegistry.selected?.sessionId === sessionId
   let detachedCurrent = false
   let replacementRuntime: DesktopSessionRuntime | null = null
-  const deletionLease = sessionDeletionLock.acquire(sessionId, deletedCurrent)
+  const deletionLease = sessionDeletionLock.acquire(sessionId)
   if (!deletionLease) return { ok: false, error: '已有会话正在删除，请等待完成' }
   let cleanupStarted = false
   try {
@@ -2683,11 +2674,14 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
     }
     backgroundTaskWakeups?.discardSession(sessionId)
     subagentWakeups?.discardSession(sessionId)
-    if (deletedCurrent) {
-      replacementRuntime = await getNewSessionRuntime()
-      runtimeRegistry.select(replacementRuntime)
-      detachedCurrent = true
-      deletionLease.allowRuntimeChanges()
+    if (runtimeRegistry.selected?.sessionId === sessionId) {
+      const replacement = await getNewSessionRuntime()
+      // 远端清理期间可以切换会话；迟到的删除结果不能覆盖用户的新选择。
+      if (runtimeRegistry.selected?.sessionId === sessionId) {
+        replacementRuntime = replacement
+        runtimeRegistry.select(replacement)
+        detachedCurrent = true
+      }
     }
 
     cleanupStarted = true
@@ -3236,7 +3230,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
   ipcMain.handle(IPC.pickProjectDir, async (event, projectId?: string): Promise<WorkspaceActionResult<string | null>> => {
-    if (sessionDeletionLock.blocksSession() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
+    if (sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
       return { ok: false, error: '会话处理中，请稍后选择项目' }
     }
     const ownerWindow = BrowserWindow.fromWebContents(event.sender)
@@ -3258,7 +3252,6 @@ if (primaryInstance) void app.whenReady().then(async () => {
       if (
         ownerWindow.isDestroyed()
         || runtimeRegistry.selected !== selectionAtOpen
-        || sessionDeletionLock.blocksSession()
         || sessionPreparationLock.sessionId
         || sessionNavigation.sessionId
       ) {

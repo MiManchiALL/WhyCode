@@ -492,7 +492,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 ### 7.4 桌面工作区保留与清理
 
-目录契约单源为 `shared/workspace-lifecycle.ts`。`previewSessionDeletion(sessionId)` 返回目录及 `local | remote | shared | empty | optional | unverified | missing` 判定，Renderer 仅在 `optional` 展示默认未选的目录清理选项。删除契约位于 `shared/session.ts`：`deleteSession(sessionId,{deleteDirectory,remoteCleanup})` 要求显式布尔值和 `required | skip` 策略；`skip` 仅适用于 SSH 会话，由用户明确选择仅删除本地时提交。远端前置清理失败返回 `ok:false` 与 `remoteCleanupFailure: failed | connection-missing`，尚未提交删除，Renderer 保留原会话与确认框；具体错误复用浮动反馈。Main 校验调用窗口、目录归属与当前引用，不把预览结果当作永久清理许可。生命周期与清理范围见文档二 §7。
+目录契约单源为 `shared/workspace-lifecycle.ts`。`previewSessionDeletion(sessionId)` 返回目录及 `local | remote | shared | empty | optional | unverified | missing` 判定，Renderer 仅在 `optional` 展示默认未选的目录清理选项。删除契约位于 `shared/session.ts`：`deleteSession(sessionId,{deleteDirectory,remoteCleanup})` 要求显式布尔值和 `required | skip` 策略；`skip` 仅适用于 SSH 会话，由用户明确选择仅删除本地时提交。远端前置清理失败返回 `ok:false` 与 `remoteCleanupFailure: failed | connection-missing`，尚未提交删除，Renderer 保留原会话并重新打开清理确认框；具体错误复用浮动反馈。Main 校验调用窗口、目录归属与当前引用，不把预览结果当作永久清理许可。生命周期与清理范围见文档二 §7。
 
 `listRetainedWorkspaces()` 返回无关联会话的保留记录和不可读清单说明。`previewRetainedWorkspace`、`openRetainedWorkspace`、`renameRetainedWorkspace`、`deleteRetainedWorkspace` 只接受 `{mode,id}` 寻址，重命名另接收 1～200 字符名称；磁盘路径由 Main 从有效所有权清单解析，不接受 Renderer 路径作为清理依据。这些调用只允许所属窗口主 Frame，返回统一 `WorkspaceActionResult`，不进入 Agent 工具或 JSONL。
 
