@@ -520,7 +520,9 @@ SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存 `{target,label
 
 Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`resolve {target}` 只读返回该稳定身份的已验证配置与连接状态，优先当前连接，无匹配时返回空，不触发认证；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
 
-SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知，配置保存或删除、连接成功、主动断开和意外断线后通知 Renderer 重读列表及所属会话状态，取消订阅释放监听。连接管理、所有权与清理语义见文档二 §7.5。
+`list`、`resolve` 和 `save` 返回的配置摘要带有必填 `status: disconnected | connecting | connected | releasing`，由 Main 实时状态表产生，不写入连接配置。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知；配置保存或删除、连接开始/成功/失败/取消、主动断开、意外断线及清理状态变化后，Renderer 重读列表及所属会话状态，取消订阅释放监听。
+
+SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。连接管理、所有权与清理语义见文档二 §7.5。
 
 远端组件只通过已有 SSH channel 的标准输入输出交换协议 2 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。`start` 使用 `command` 通过 `/bin/sh -c` 执行用户命令，或使用宿主提供的绝对 `executable` 与 `args` 直接启动搜索程序；两者均指定绝对工作目录，直接执行不支持 PTY。字节使用 base64，`data.stream` 区分 stdout/stderr；用户命令沿用合并输出，原生搜索分别消费结果和诊断。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
 

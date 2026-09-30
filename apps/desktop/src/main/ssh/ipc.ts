@@ -23,20 +23,20 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
       if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) throw new Error('仅主页面可管理 SSH 连接')
       const request = requestSchema.parse(value)
       switch (request.action) {
-        case 'list': return { ok: true, connections: (await connections.store.list()).map(connection => ({ ...connection, connected: connections.isConnected(connection.id) })) }
+        case 'list': return { ok: true, connections: (await connections.store.list()).map(connection => ({ ...connection, status: connections.status(connection.id) })) }
         case 'resolve': {
           const id = await connections.connectionIdForTarget(request.target).catch(error => {
             if (error instanceof SshConnectionMissingError) return null
             throw error
           })
           if (!id) return { ok: true }
-          return { ok: true, connection: { ...(await connections.store.get(id)).connection, connected: connections.isConnected(id) } }
+          return { ok: true, connection: { ...(await connections.store.get(id)).connection, status: connections.status(id) } }
         }
         case 'save': {
           if (request.connection.id) connections.disconnect(request.connection.id)
           const connection = await connections.store.save(request.connection)
           connections.emit('changed')
-          return { ok: true, connection }
+          return { ok: true, connection: { ...connection, status: connections.status(connection.id) } }
         }
         case 'connect': return { ok: true, connect: await connections.connect(request.id, request.fingerprint, request.secret) }
         case 'directory': return { ok: true, directory: await connections.directory(request.id, request.path) }

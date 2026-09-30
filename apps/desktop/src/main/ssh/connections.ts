@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { Client } from 'ssh2'
 import type { WorkspaceFileSystem, WorkspaceIO } from '@whycode/core'
-import type { SshConnection, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
+import type { SshConnection, SshConnectionStatus, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
 import { SshConnectionMissingError, SshConnectionStore } from './store.ts'
 import { createSftpFileSystem } from './sftp.ts'
 import { cleanupRemoteComponent, execChannel, provisionRemote, quoteShell } from './provision.ts'
@@ -32,6 +32,7 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
   readonly store: SshConnectionStore
   private readonly resources: string
   constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
+  status(id: string): SshConnectionStatus { return this.states.get(id)?.status ?? 'disconnected' }
   isConnected(id: string): boolean { return this.states.get(id)?.status === 'connected' }
   isTargetConnected(target: string): boolean {
     return [...this.states.values()].some(state => state.status === 'connected' && state.host.target === target)
@@ -69,9 +70,11 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       if (this.states.get(id) !== pending) return
       if (current?.status === 'disconnected') this.states.set(id, current)
       else this.states.delete(id)
+      this.emit('changed')
     })
     const pending: ConnectionState = { status: 'connecting', promise, controller }
     this.states.set(id, pending)
+    this.emit('changed')
     return promise
   }
   private async authenticate(id: string, signal: AbortSignal, approved?: string, suppliedSecret?: string): Promise<AuthenticatedHost | Extract<SshConnectResult, { status: 'trust-required' }>> {

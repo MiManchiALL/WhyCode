@@ -72,6 +72,7 @@ import {
 } from '../../shared/conversation-sections.ts'
 import { thinkingGapRevealDelay } from './thinking-gap.ts'
 import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
+import { useSshWorkspaceConnection } from './use-ssh-workspace-connection.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import { useConversationFontSize } from './conversation-font-size.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
@@ -428,6 +429,8 @@ export function App() {
   const showError = useCallback((text: string) => {
     showConversationFeedback('error', text)
   }, [showConversationFeedback])
+  const sshConnection = useSshWorkspaceConnection(workspace.mode === 'ssh' ? workspace.target : null, showError)
+  const sshConnecting = sshConnection.connection?.status === 'connecting'
   const [workspaceCleanup] = useState(() => new RetainedWorkspaceCleanup(async workspace => {
     const result = await window.whycode.deleteRetainedWorkspace(workspace)
     if (!result.ok) throw new Error(result.error)
@@ -1815,6 +1818,7 @@ export function App() {
   const send = useCallback((urgent = false) => {
     if (
       stopping
+      || sshConnecting
       || sessionTransitionPending
       || deletionBlocksRuntime
       || resumingSessionId
@@ -1957,6 +1961,7 @@ export function App() {
   }, [
     showError,
     submissionPending,
+    sshConnecting,
     applyRuntimeSnapshot,
     bindComposerSession,
     blocks,
@@ -2107,7 +2112,7 @@ export function App() {
     && imageDrafts.length === 0
     && pdfDrafts.length === 0
     && selectedSkills.length === 0
-  const sendDisabled = composerControlsLocked || messageEmpty
+  const sendDisabled = composerControlsLocked || messageEmpty || sshConnecting
   const primaryAction = composerPrimaryAction({ busy, hasDraft: !messageEmpty })
   const contextBaseRef = workspace.mode === 'pending-worktree'
     ? workspace.baseRef
@@ -2180,7 +2185,7 @@ export function App() {
         <div className="contents" inert={panelFullscreen}>
           <TaskHeader
             workspaceLabel={workspace.mode === 'ssh' ? workspace.label : undefined}
-            sshTarget={workspace.mode === 'ssh' ? workspace.target : undefined}
+            ssh={workspace.mode === 'ssh' ? { target: workspace.target, ...sshConnection } : undefined}
             sessionId={loadingConversation ? resumingSessionId : sessionIdRef.current}
             onRename={renameSession}
             title={loadingConversation ? pendingSession?.title || '未命名会话' : taskTitle}
@@ -2495,6 +2500,7 @@ export function App() {
                         || checkpointRestoreToolUseId !== null
                       }
                       sendDisabled={sendDisabled}
+                      sendPendingLabel={sshConnecting ? '连接中' : undefined}
                       onImageFiles={addImageFiles}
                       onPdfFiles={addPdfFiles}
                       onPermissionChange={changePermission}

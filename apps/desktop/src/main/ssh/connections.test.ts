@@ -18,16 +18,25 @@ const tool = (name: string) => BUILTIN_TOOLS.find(item => item.name === name)!
 
 it('未知主机先返回指纹，认证失败和取消不部署组件，密码不进入公开配置', async t => {
   const env = await sshFixture(t)
+  const changes: string[] = []
+  env.connections.on('changed', () => changes.push(env.connections.status(env.id)))
+  assert.equal(env.connections.status(env.id), 'disconnected')
   assert.deepEqual(await env.connections.connect(env.id), { status: 'trust-required', fingerprint: env.fingerprint, host: `127.0.0.1:${(await env.store.get(env.id)).connection.port}` })
+  assert.deepEqual(changes.splice(0), ['connecting', 'disconnected'])
   assert.equal(env.commands.length, 0)
   await assert.rejects(env.connections.connect(env.id, 'SHA256:wrong'), /指纹/)
   await assert.rejects(env.connections.connect(env.id, env.fingerprint, 'wrong'), SshCredentialsRequiredError)
+  assert.deepEqual(changes.splice(0), ['connecting', 'disconnected', 'connecting', 'disconnected'])
   const publicData = JSON.stringify(await env.store.list())
   assert.ok(!publicData.includes((await env.store.get(env.id)).secret!))
   assert.equal((await env.store.list())[0]?.fingerprint, undefined)
   const connecting = env.connections.connect(env.id, env.fingerprint)
+  assert.equal(env.connections.status(env.id), 'connecting')
+  assert.equal(env.connections.connect(env.id, env.fingerprint), connecting)
   env.connections.disconnect(env.id)
+  assert.equal(env.connections.status(env.id), 'disconnected')
   await assert.rejects(connecting, /取消/)
+  assert.deepEqual(changes, ['connecting', 'disconnected'])
   assert.equal(env.connections.isConnected(env.id), false)
   await assert.rejects(env.connections.resume(env.id), /请先点击/)
   assert.equal(env.commands.length, 0)
@@ -211,8 +220,8 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   const replacement = await env.store.save({ ...original.connection, id: undefined, secret: original.secret, name: '重新添加的服务器' })
   assert.notEqual(replacement.id, env.id)
   await assert.rejects(workspaces.prepare(runtime), /连接不存在或已删除/)
-  const changes: boolean[] = []
-  env.connections.on('changed', () => changes.push(env.connections.isConnected(replacement.id)))
+  const changes: string[] = []
+  env.connections.on('changed', () => changes.push(env.connections.status(replacement.id)))
   await env.connections.connect(replacement.id, env.fingerprint)
   assert.equal((await workspaces.select(host.target, env.project)).workingDirectory, env.project)
   assert.equal((await workspaces.prepare(runtime))?.scratch.rootDirectory, remote.scratch.rootDirectory)
@@ -225,5 +234,5 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   assert.ok((await workspaces.prepare(runtime))?.scratch.mainDirectory)
   await access(join(env.root, '.cache/whycode-scratch', journal.sessionId, 'Main'))
   env.connections.disconnect(replacement.id)
-  assert.deepEqual(changes, [true, false])
+  assert.deepEqual(changes, ['connecting', 'connected', 'disconnected'])
 })

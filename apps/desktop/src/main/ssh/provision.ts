@@ -14,18 +14,26 @@ export function execChannel(client: Client, command: string): Promise<ClientChan
 }
 
 async function architecture(client: Client): Promise<'x64' | 'arm64'> {
-  const channel = await execChannel(client, 'uname -s; uname -m')
+  const [os, arch] = (await commandOutput(client, 'uname -s; uname -m')).trim().split(/\s+/u)
+  if (os !== 'Linux' || !['x86_64', 'aarch64', 'arm64'].includes(arch ?? '')) throw new Error('目前支持 Linux x64 / ARM64 服务器')
+  return arch === 'x86_64' ? 'x64' : 'arm64'
+}
+
+async function commandOutput(client: Client, command: string): Promise<string> {
+  const channel = await execChannel(client, command)
   return new Promise((resolve, reject) => {
     let output = ''
-    const timer = setTimeout(() => { channel.close(); reject(new Error('远端环境检测超时')) }, 10_000)
-    channel.on('data', (chunk: Buffer) => { output += chunk.toString(); if (output.length > 1024) channel.close() })
+    const timer = setTimeout(() => { reject(new Error('远端环境检测超时')); channel.close() }, 10_000)
+    channel.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+      if (output.length > 1024) { clearTimeout(timer); reject(new Error('远端环境检测输出过长')); channel.close() }
+    })
     channel.stderr.resume()
     channel.on('error', (error: Error) => { clearTimeout(timer); reject(error) })
     channel.on('close', (code: number) => {
       clearTimeout(timer)
-      const [os, arch] = output.trim().split(/\s+/u)
-      if (code !== 0 || os !== 'Linux' || !['x86_64', 'aarch64', 'arm64'].includes(arch ?? '')) reject(new Error('目前支持 Linux x64 / ARM64 服务器'))
-      else resolve(arch === 'x86_64' ? 'x64' : 'arm64')
+      if (code !== 0) reject(new Error('远端组件检测失败，请确认服务器可执行 uname 和 sha256sum'))
+      else resolve(output)
     })
   })
 }
@@ -50,12 +58,12 @@ export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, h
     const executable = posix.join(directory, `${prefix}-${hash}`)
     const executableInfo = await fs.lstat(executable).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
     if (executableInfo && !executableInfo.isFile()) throw new Error('远端组件不是普通文件')
-    const installed = await fs.readFile(executable).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
-    if (installed && digest(installed) !== hash) throw new Error('远端组件校验失败，请清理后重新连接')
-    if (!installed) {
+    if (!executableInfo) {
       await atomicSftpWrite(fs, executable, binary, 0o700)
-      if (digest(await fs.readFile(executable)) !== hash) throw new Error('远端组件上传校验失败')
     }
+    // 校验留在服务器，避免每次重连都经 SFTP 下载完整组件并耗尽文件请求时限。
+    const installedHash = (await commandOutput(client, `sha256sum -- ${quoteShell(executable)}`)).trim().split(/\s+/u)[0]
+    if (installedHash !== hash) throw new Error('远端组件校验失败，请清理后重新连接')
     return executable
   }
   const executable = await install(`whycode-remote-linux-${arch}`, 'host')

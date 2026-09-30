@@ -11,6 +11,7 @@ export interface ComposerActionButtonProps {
   stopping: boolean
   stopDisabled: boolean
   sendDisabled: boolean
+  sendPendingLabel?: string
   onSend: () => void
   onStop: () => void
 }
@@ -26,7 +27,7 @@ export function ComposerActionButton(props: ComposerActionButtonProps) {
   const open = needsConfirmation
     && confirmation?.runtimeId === props.runtimeId
     && confirmation.workStartedAt === props.workStartedAt
-  const label = isStopAction ? (props.stopping ? '停止中' : '停止') : '发送'
+  const label = isStopAction ? (props.stopping ? '停止中' : '停止') : props.sendPendingLabel ?? '发送'
 
   useEffect(() => {
     // 取消已失效的确认，切回原会话或出现新的子代理时也不重新弹出。
@@ -42,7 +43,7 @@ export function ComposerActionButton(props: ComposerActionButtonProps) {
       <AlertDialog.Trigger asChild>
         <button
           type="button"
-          className="wc-focus-ring flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--wc-ink)] text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:cursor-default disabled:bg-[#a9aaa5] disabled:hover:translate-y-0"
+          className="wc-focus-ring flex h-9 min-w-9 shrink-0 items-center justify-center rounded-full bg-[var(--wc-ink)] text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:cursor-default disabled:bg-[#a9aaa5] disabled:hover:translate-y-0"
           disabled={isStopAction ? props.stopDisabled : props.sendDisabled}
           onClick={(event) => {
             if (needsConfirmation) return
@@ -56,7 +57,8 @@ export function ComposerActionButton(props: ComposerActionButtonProps) {
           aria-expanded={needsConfirmation ? open : undefined}
           aria-controls={needsConfirmation ? dialogId : undefined}
         >
-          {isStopAction ? <Square size={13} fill="currentColor" /> : <ArrowUp size={17} />}
+          {isStopAction ? <Square size={13} fill="currentColor" /> : props.sendPendingLabel
+            ? <span className="whitespace-nowrap px-3 text-xs">{props.sendPendingLabel}</span> : <ArrowUp size={17} />}
         </button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>

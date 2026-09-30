@@ -5,6 +5,7 @@ import { BackgroundTaskMenu } from './background-task-menu.tsx'
 import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 import { SessionTitle, type RenameSession } from './session-name-editor.tsx'
 import { SshWorkspaceStatus } from './ssh-workspace-status.tsx'
+import type { SshConnectionSnapshot } from '../../shared/ssh.ts'
 
 interface TaskHeaderProps {
   title: string
@@ -14,7 +15,7 @@ interface TaskHeaderProps {
   projectDir: string | null
   workspaceMode: RuntimeWorkspace['mode']
   workspaceLabel?: string
-  sshTarget?: string
+  ssh?: { target: string; connection: SshConnectionSnapshot | null; loading: boolean }
   backgroundTasks: readonly BackgroundTaskSummary[]
   rightPanelOpen: boolean
   onOpenWorkspaceFolder: () => void
@@ -44,7 +45,7 @@ export function TaskHeader(props: TaskHeaderProps) {
           <FolderOpen size={14} className="shrink-0" />
           <span className="truncate">{props.workspaceLabel ? `${props.workspaceLabel} · ` : ''}{props.projectDir ?? '未选择项目'}</span>
         </button>
-        {props.sshTarget ? <SshWorkspaceStatus key={props.sshTarget} target={props.sshTarget} /> : <WorkspaceBadge mode={props.workspaceMode} />}
+        {props.ssh ? <SshWorkspaceStatus key={props.ssh.target} {...props.ssh} /> : <WorkspaceBadge mode={props.workspaceMode} />}
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <BackgroundTaskMenu tasks={props.backgroundTasks} />

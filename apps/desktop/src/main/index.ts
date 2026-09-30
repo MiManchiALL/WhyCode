@@ -1031,6 +1031,15 @@ async function handleCommand(
     })
     return { ok: false }
   }
+  if (runtime.workspace.mode === 'ssh' && (command.type === 'user-message' || command.type === 'btw-message')) {
+    try {
+      const connections = sshWorkspaces.connections
+      const id = await connections.connectionIdForTarget(runtime.workspace.target)
+      if (connections.status(id) === 'connecting') return rejectUserMessage(runtime, 'SSH 正在连接，请连接完成后再发送')
+    } catch (error) {
+      return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))
+    }
+  }
   switch (command.type) {
     case 'user-message':
       return handleUserMessageCommand(runtime, command)

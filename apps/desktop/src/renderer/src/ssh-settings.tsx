@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FolderPlus, MoreHorizontal, Plus, Server } from 'lucide-react'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import type { SshConnection, SshConnectionInput, SshRequest, SshResult } from '../../shared/ssh.ts'
+import type { SshConnection, SshConnectionInput, SshConnectionSnapshot, SshRequest, SshResult } from '../../shared/ssh.ts'
 import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 import { SettingsButton, SettingsPanel, SettingsSection } from './settings-layout.tsx'
 import { useConversationFeedback } from './conversation-feedback.tsx'
@@ -16,13 +16,13 @@ interface ConnectionEditor {
 }
 
 export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: StartWorkspaceRequest) => Promise<boolean> }) {
-  const [connections, setConnections] = useState<SshConnection[]>([])
+  const [connections, setConnections] = useState<SshConnectionSnapshot[]>([])
   const [editor, setEditor] = useState<ConnectionEditor | null>(null)
   const [picker, setPicker] = useState<SshConnection | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; action: string; run: () => void } | null>(null)
   const feedback = useConversationFeedback()
   const generation = useRef(0)
+  const mounted = useRef(true)
   const request = useCallback(async (request: SshRequest, onCredentialsRequired?: () => void): Promise<Extract<SshResult, { ok: true }> | null> => {
     try {
       const result = await window.whycode.ssh(request)
@@ -31,7 +31,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
         throw new Error(result.error)
       }
       return result
-    } catch (error) { feedback('error', error instanceof Error ? error.message : String(error)); return null }
+    } catch (error) { feedback('error', error instanceof Error ? error.message : String(error), true); return null }
   }, [feedback])
   const refresh = useCallback(async () => {
     const current = ++generation.current
@@ -45,25 +45,24 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     }
   }, [feedback])
   useEffect(() => {
+    mounted.current = true
     const reload = () => { void refresh() }
     const unsubscribe = window.whycode.onSshChanged(reload)
     reload()
     window.addEventListener('focus', reload)
-    return () => { generation.current++; unsubscribe(); window.removeEventListener('focus', reload) }
+    return () => { mounted.current = false; generation.current++; unsubscribe(); window.removeEventListener('focus', reload) }
   }, [refresh])
   const run = async (connection: SshConnection, action: ConnectionAction, fingerprint?: string) => {
-    setBusy(connection.id)
     const result = await request(action === 'connect' ? { action, id: connection.id, fingerprint } : { action, id: connection.id }, () => {
-      if (action !== 'disconnect') setEditor({ connection, resume: { action, fingerprint } })
+      if (mounted.current && action !== 'disconnect') setEditor({ connection, resume: { action, fingerprint } })
     })
-    await refresh()
-    setBusy(null)
     if (result?.connect?.status === 'trust-required') {
+      if (!mounted.current) { feedback('info', '请返回 SSH 设置确认服务器指纹后继续连接', true); return }
       const trust = result.connect
       setConfirmation({ title: '信任此服务器？', description: `${trust.host}\n服务器指纹：\n${trust.fingerprint}`, action: '信任并连接', run: () => void run(connection, 'connect', trust.fingerprint) })
     } else if (result) {
       const messages = { connect: 'SSH 已连接', disconnect: 'SSH 已断开', cleanup: '远端组件已清理，SSH 已断开', remove: 'SSH 连接已删除' }
-      feedback('success', messages[action])
+      feedback('success', messages[action], true)
     }
   }
   const save = async (value: SshConnectionInput): Promise<void> => {
@@ -71,8 +70,8 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     const result = await request({ action: 'save', connection: value })
     if (!result) return
     setEditor(null)
-    if (resume && result.connection) await run(result.connection, resume.action, resume.fingerprint)
-    else { await refresh(); feedback('success', 'SSH 连接已保存') }
+    if (resume && result.connection) void run(result.connection, resume.action, resume.fingerprint)
+    else feedback('success', 'SSH 连接已保存')
   }
   const action = (connection: SshConnection, action: 'remove' | 'disconnect' | 'cleanup') => {
     const titles = { remove: '删除此连接？', disconnect: '断开 SSH 连接？', cleanup: '清理远端组件？' }
@@ -85,7 +84,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
   }
   return <>
     <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。首次连接会自动准备轻量运行组件。"
-      actions={connections.length > 0 && <SettingsButton onClick={() => setEditor({})} disabled={Boolean(busy)}><Plus size={15} />添加连接</SettingsButton>}>
+      actions={connections.length > 0 && <SettingsButton onClick={() => setEditor({})}><Plus size={15} />添加连接</SettingsButton>}>
       <SettingsPanel padded={false}>
         {!connections.length && <div className="flex flex-col items-center gap-3 px-8 py-12 text-[var(--wc-muted)]">
           <Server size={30} strokeWidth={1.4} />
@@ -98,24 +97,24 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
             <div className="truncate text-sm font-medium">{connection.name}</div>
             <div className="truncate text-xs text-[var(--wc-faint)]">{connection.username}@{connection.host}:{connection.port}</div>
           </div>
-          <SettingsButton disabled={Boolean(busy) || connection.connected} onClick={() => void run(connection, 'connect')}>
-            {busy === connection.id ? '处理中…' : connection.connected ? '已连接' : '连接'}
+          <SettingsButton disabled={connection.status !== 'disconnected'} onClick={() => void run(connection, 'connect')}>
+            {connection.status === 'connecting' ? '连接中…' : connection.status === 'releasing' ? '清理中…' : connection.status === 'connected' ? '已连接' : '连接'}
           </SettingsButton>
-          <SettingsButton aria-label={`添加 ${connection.name} 的项目`} disabled={Boolean(busy) || !connection.connected} onClick={() => setPicker(connection)}>
+          <SettingsButton aria-label={`添加 ${connection.name} 的项目`} disabled={connection.status !== 'connected'} onClick={() => setPicker(connection)}>
             <FolderPlus size={16} />添加项目
           </SettingsButton>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
-              <button className="wc-focus-ring flex size-8 items-center justify-center rounded-lg hover:bg-black/[0.05]" aria-label={`${connection.name} 的更多选项`} disabled={Boolean(busy)}>
+              <button className="wc-focus-ring flex size-8 items-center justify-center rounded-lg hover:bg-black/[0.05]" aria-label={`${connection.name} 的更多选项`} disabled={connection.status === 'releasing'}>
                 <MoreHorizontal size={18} />
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={5}>
-              <DropdownMenu.Item className="wc-menu-item" onSelect={() => setEditor({ connection })}>编辑连接</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.connected} onSelect={() => action(connection, 'disconnect')}>断开连接</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint} onSelect={() => action(connection, 'cleanup')}>清理远端组件</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'connecting'} onSelect={() => setEditor({ connection })}>编辑连接</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'disconnected'} onSelect={() => connection.status === 'connecting' ? void run(connection, 'disconnect') : action(connection, 'disconnect')}>{connection.status === 'connecting' ? '取消连接' : '断开连接'}</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => action(connection, 'cleanup')}>清理远端组件</DropdownMenu.Item>
               <DropdownMenu.Separator className="my-1 h-px bg-[var(--wc-line)]" />
-              <DropdownMenu.Item className="wc-menu-item" onSelect={() => action(connection, 'remove')}>删除连接</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'connecting'} onSelect={() => action(connection, 'remove')}>删除连接</DropdownMenu.Item>
             </DropdownMenu.Content></DropdownMenu.Portal>
           </DropdownMenu.Root>
         </div>)}

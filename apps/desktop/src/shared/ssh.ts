@@ -17,8 +17,9 @@ export interface SshConnection extends Omit<SshConnectionInput, 'id' | 'secret'>
   id: string
   fingerprint?: string
   hasSecret: boolean
-  connected?: boolean
 }
+export type SshConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'releasing'
+export interface SshConnectionSnapshot extends SshConnection { status: SshConnectionStatus }
 export type SshConnectResult =
   | { status: 'connected'; home: string }
   | { status: 'trust-required'; fingerprint: string; host: string }
@@ -34,8 +35,8 @@ export type SshRequest =
 
 export type SshResult = { ok: false; error: string; credentialsRequired?: boolean } | {
   ok: true
-  connections?: SshConnection[]
-  connection?: SshConnection
+  connections?: SshConnectionSnapshot[]
+  connection?: SshConnectionSnapshot
   connect?: SshConnectResult
   directory?: SshDirectory
   project?: SidebarProject
