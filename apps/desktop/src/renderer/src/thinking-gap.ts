@@ -6,6 +6,7 @@ interface ThinkingGapState {
   status: AgentStatus
   stopping: boolean
   workStartedAt: number | null
+  pendingMessage: boolean
 }
 
 /**
@@ -26,12 +27,11 @@ export function thinkingGapRevealDelay({
   status,
   stopping,
   workStartedAt,
+  pendingMessage,
 }: ThinkingGapState): number | null {
-  if (
-    workStartedAt === null
-    || stopping
-    || (status !== 'working' && status !== 'thinking')
-  ) return null
+  if (stopping || status === 'waiting-approval') return null
+  // 提交与远端准备早于模型状态；沿用待确认输入和宿主工作起点，不另存运行状态。
+  if (workStartedAt === null) return pendingMessage ? 0 : null
 
   const currentWorkStart = lastWorkBoundary(blocks) + 1
   let hasUser = false
@@ -41,7 +41,7 @@ export function thinkingGapRevealDelay({
     if (block.kind === 'user') hasUser = true
     if (hasPersistentFeedback(block)) return null
   }
-  if (!hasUser) return null
+  if (!hasUser) return pendingMessage ? 0 : null
 
   const latest = blocks.at(-1)
   if (!latest || latest.kind === 'work-duration') return null

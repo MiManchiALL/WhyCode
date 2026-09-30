@@ -24,7 +24,6 @@ import {
   type ConversationBlockRenderProps,
 } from './conversation-render-cache.ts'
 import { formatFinishedWorkTime } from './processing-time.ts'
-import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import {
   presentConversationToolBatches,
@@ -53,7 +52,6 @@ interface ConversationViewProps {
   checkpointRestoreAnchorIds: ReadonlySet<string>
   checkpointRestoreToolUseId: string | null
   fileRollbackBoundaryTurnId: string | null
-  showThinkingGap: boolean
   forkSourceTurnId: string | null
   forkPendingTurnId: string | null
   skills: readonly SkillSummary[]
@@ -192,7 +190,6 @@ const ConversationContents = memo(function ConversationContents(props: Conversat
               animateOnMount={newlySealedSegmentIds.has(item.id)}
             />
           ))}
-      {props.showThinkingGap && <ThinkingGapIndicator />}
     </>
   )
 })

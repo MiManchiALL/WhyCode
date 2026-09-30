@@ -267,7 +267,6 @@ function SubagentTranscript({
         checkpointRestoreAnchorIds={EMPTY_IDS}
         checkpointRestoreToolUseId={null}
         fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
-        showThinkingGap={false}
         forkSourceTurnId={null}
         forkPendingTurnId={null}
         skills={skills}

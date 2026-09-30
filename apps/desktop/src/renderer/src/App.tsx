@@ -71,6 +71,7 @@ import {
   findLatestForkTurnId,
 } from '../../shared/conversation-sections.ts'
 import { thinkingGapRevealDelay } from './thinking-gap.ts'
+import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import { useConversationFontSize } from './conversation-font-size.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
@@ -385,6 +386,7 @@ export function App() {
     status,
     stopping,
     workStartedAt,
+    pendingMessage: pendingMessage !== null && worktreePreparation === null,
   })
   const [thinkingGapIdleTarget, setThinkingGapIdleTarget] = useState<{
     runtimeId: string
@@ -2258,7 +2260,6 @@ export function App() {
                     checkpointRestoreAnchorIds={checkpointRestoreAnchors}
                     checkpointRestoreToolUseId={checkpointRestoreToolUseId}
                     fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
-                    showThinkingGap={thinkingGapVisible}
                     forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
                     forkPendingTurnId={forkPendingTurnId}
                     skills={skillCatalog.skills}
@@ -2275,6 +2276,7 @@ export function App() {
                   {!loadingConversation && !conversationStarted && pendingMessage && worktreePreparation && (
                     <WorktreePreparation baseRef={worktreePreparation.baseRef} />
                   )}
+                  {!loadingConversation && thinkingGapVisible && <ThinkingGapIndicator />}
                 </div>
               </main>
             </div>

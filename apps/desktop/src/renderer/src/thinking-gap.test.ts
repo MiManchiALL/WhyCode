@@ -28,16 +28,35 @@ function delay(blocks: readonly Block[], overrides: Partial<{
   status: 'idle' | 'thinking' | 'working' | 'waiting-approval' | 'error'
   stopping: boolean
   workStartedAt: number | null
+  pendingMessage: boolean
 }> = {}): number | null {
   return thinkingGapRevealDelay({
     blocks,
     status: overrides.status ?? 'working',
     stopping: overrides.stopping ?? false,
     workStartedAt: overrides.workStartedAt === undefined ? 1 : overrides.workStartedAt,
+    pendingMessage: overrides.pendingMessage ?? false,
   })
 }
 
 describe('模型空窗反馈', () => {
+  it('发送即显示，并贯穿宿主开始准备、正式接收与模型开始的交接', () => {
+    const history: Block[] = [
+      user,
+      { kind: 'text', id: 'old-response', text: '已完成', phase: 'final' },
+      { kind: 'work-duration', id: 'old-work', forkTurnId: null, durationMs: 100, outcome: 'completed' },
+    ]
+    for (const blocks of [[], history]) {
+      for (const status of ['idle', 'error'] as const) {
+        assert.equal(delay(blocks, { status, workStartedAt: null, pendingMessage: true }), 0)
+        assert.equal(delay(blocks, { status, pendingMessage: true }), 0)
+        const accepted: Block[] = [...blocks, { ...user, id: 'new-user' }]
+        assert.equal(delay(accepted, { status }), 0)
+        assert.equal(delay(accepted, { status: 'thinking' }), 0)
+      }
+    }
+  })
+
   it('首条消息提交后、工具结束后和思考结束后立即显示', () => {
     assert.equal(delay([user]), 0)
     assert.equal(delay([user, completedTool]), 0)
@@ -89,11 +108,26 @@ describe('模型空窗反馈', () => {
     ]), null)
   })
 
-  it('非工作状态、停止中和没有活动任务时隐藏', () => {
+  it('审批等待、停止和工作结束时隐藏；提交失败不遗留动画', () => {
     assert.equal(delay([user], { status: 'waiting-approval' }), null)
-    assert.equal(delay([user], { status: 'idle' }), null)
+    assert.equal(delay([user], { status: 'waiting-approval', pendingMessage: true }), null)
+    assert.equal(delay([user], { status: 'idle', workStartedAt: null }), null)
+    assert.equal(delay([], { status: 'error', workStartedAt: null }), null)
     assert.equal(delay([user], { stopping: true }), null)
+    assert.equal(delay([], { stopping: true, pendingMessage: true }), null)
     assert.equal(delay([user], { workStartedAt: null }), null)
+  })
+
+  it('工作中继续提交不盖过工具、思考流或正文原有反馈', () => {
+    assert.equal(delay([user, { ...completedTool, call: { ...completedTool.call, status: 'running' } }], {
+      pendingMessage: true,
+    }), null)
+    assert.equal(delay([user, { kind: 'thinking', id: 'thinking-1', text: '分析', durationMs: null }], {
+      pendingMessage: true,
+    }), null)
+    assert.equal(delay([user, { kind: 'text', id: 'text-1', text: '正在输出', phase: 'pending' }], {
+      pendingMessage: true,
+    }), THINKING_GAP_VISIBLE_IDLE_MS)
   })
 
   it('只读取最近一次工作区段', () => {
