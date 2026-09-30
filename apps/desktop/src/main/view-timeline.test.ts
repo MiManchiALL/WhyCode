@@ -23,15 +23,22 @@ class Writer implements ViewEventWriter {
 }
 
 describe('ViewTimeline', () => {
-  it('重试记录不随下一次失败草稿撤销，失败原因在冷重放后仍保留', async () => {
+  it('最终失败正文与错误在冷重放后保留，重试草稿仍撤销', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
     let live = createConversationState()
     const events: import('@whycode/core').CoreEvent[] = [
+      { type: 'turn-start', turnId: 'turn-failed' },
+      { type: 'text-delta', text: '已完成步骤的说明。' },
+      { type: 'tool-start', toolUseId: 'read', toolName: 'ReadFile', input: { path: 'README.md' } },
+      { type: 'tool-end', toolUseId: 'read', result: '已读取文件', isError: false },
+      { type: 'step-committed' },
       { type: 'text-delta', text: '应丢弃的首次草稿' },
       { type: 'step-discarded' },
       { type: 'model-request-retry', retry: 1, maxRetries: 3, delayMs: 500, message: '上游服务暂时异常（HTTP 502）' },
-      { type: 'text-delta', text: '应丢弃的重试草稿' },
+      { type: 'thinking-delta', text: '未完成的推理' },
+      { type: 'text-delta', text: '失败前已展示的正文。' },
+      { type: 'step-output-retained' },
       { type: 'step-discarded' },
       { type: 'error', message: '模型请求超时', recoverable: true },
       { type: 'work-finished', durationMs: 10, outcome: 'error', error: '模型请求超时', forkTurnId: null },
@@ -43,7 +50,11 @@ describe('ViewTimeline', () => {
     await timeline.flush()
     const replay = createConversationState(writer.initialViewEvents)
     assert.deepEqual(replay.blocks, live.blocks)
-    assert.equal(replay.blocks.filter(block => block.kind === 'text').length, 0)
+    assert.deepEqual(replay.blocks.filter(block => block.kind === 'text').map(block => [block.text, block.phase]), [
+      ['已完成步骤的说明。', 'activity'], ['失败前已展示的正文。', 'activity'],
+    ])
+    assert.doesNotMatch(JSON.stringify(replay.blocks), /应丢弃的首次草稿|未完成的推理/)
+    assert.match(JSON.stringify(replay.blocks), /已读取文件/)
     assert.equal(replay.blocks.filter(block => block.kind === 'model-request-retry').length, 1)
     const end = replay.blocks.at(-1)
     assert.ok(end?.kind === 'work-duration')

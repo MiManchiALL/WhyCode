@@ -60,7 +60,67 @@ describe('模型失败后的步骤恢复', () => {
     assert.doesNotMatch(JSON.stringify(session.captureMessageSnapshot()), /不完整的草稿|uncommitted|模型请求重试/)
     assert.equal(events.filter(event => event.type === 'tool-end').length, 1)
     assert.equal(events.filter(event => event.type === 'model-request-retry').length, 1)
+    assert.equal(events.filter(event => event.type === 'step-discarded').length, 1)
+    assert.equal(events.some(event => event.type === 'step-output-retained'), false)
   })
+
+  for (const retryable of [false, true]) {
+    it(`${retryable ? '重试耗尽' : '流直接失败'}保留末次已展示正文，不提交半截模型消息或执行工具`, async () => {
+      let requests = 0
+      let writes = 0
+      const model = new MockLanguageModelV4({ doStream: async () => {
+        requests++
+        if (requests === 1) return { stream: simulateReadableStream({ chunks: [
+          { type: 'text-start', id: 'progress' },
+          { type: 'text-delta', id: 'progress', delta: '先记录检查结果。' },
+          { type: 'text-end', id: 'progress' },
+          { type: 'tool-call', toolCallId: 'committed', toolName: 'WriteProbe', input: '{}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage },
+        ] }) }
+        return { stream: simulateReadableStream({ chunks: [
+          { type: 'text-start', id: 'draft' },
+          { type: 'text-delta', id: 'draft', delta: `本次已显示的正文 ${requests}` },
+          { type: 'tool-call', toolCallId: 'uncommitted', toolName: 'WriteProbe', input: '{}' },
+          { type: 'error', error: retryable ? new APICallError({
+            message: '连接中断', statusCode: 503, url: 'http://localhost/model',
+            requestBodyValues: {}, responseHeaders: { 'retry-after': '0' },
+          }) : new Error('stream closed before response.completed') },
+        ] }) }
+      } })
+      const events: CoreEvent[] = []
+      const session = createSession(model, event => events.push(event))
+      session.setPermissionMode('auto')
+      session.setExtraTools([buildTool({
+        name: 'WriteProbe', description: '记录副作用', prompt: '测试', inputSchema: z.object({}),
+        kind: 'edit', isReadOnly: false,
+        async execute() { writes++; return { data: '文件已写入', isError: false } },
+      })])
+      assert.equal(await session.handleUserMessage('先修改再解释'), 'error')
+      assert.equal(requests, retryable ? 5 : 2)
+      assert.equal(writes, 1)
+      assert.deepEqual(events.filter(event => [
+        'step-committed', 'step-discarded', 'step-output-retained', 'error',
+      ].includes(event.type)).map(event => event.type), [
+        'step-committed',
+        ...(retryable ? Array(3).fill('step-discarded') : []),
+        'step-output-retained', 'step-discarded', 'error',
+      ])
+      const retained = events.findIndex(event => event.type === 'step-output-retained')
+      assert.equal(events.slice(0, retained).findLast(event => event.type === 'text-delta')?.text,
+        `本次已显示的正文 ${requests}`)
+      const history = JSON.stringify(session.captureMessageSnapshot())
+      assert.match(history, /先记录检查结果。/)
+      assert.match(history, /文件已写入/)
+      assert.doesNotMatch(history, /本次已显示的正文|uncommitted|连接中断|stream closed/)
+      for (const request of model.doStreamCalls.slice(2)) {
+        assert.deepEqual(request.prompt, model.doStreamCalls[1]!.prompt)
+      }
+      model.doStream = async () => finalStep()
+      assert.equal(await session.handleUserMessage('继续解释'), 'completed')
+      assert.equal(writes, 1)
+      assert.doesNotMatch(JSON.stringify(model.doStreamCalls.at(-1)!.prompt), /本次已显示的正文|uncommitted/)
+    })
+  }
 
   for (const mode of ['stop', 'urgent'] as const) {
     it(`${mode} 取消重试等待，继续时使用最新输入与已有历史`, async () => {

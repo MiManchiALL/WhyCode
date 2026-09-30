@@ -449,7 +449,7 @@ function retainStepOutput(state: ConversationState): ConversationState {
     const text = stable?.kind === 'text'
       ? block.text.slice(stable.text.length)
       : block.text
-    // step-output-retained 只发生在用户中止尚未提交的模型步骤时。工具调用可能仍在
+    // 停止或最终失败时保留的正文来自尚未提交的模型步骤。工具调用可能仍在
     // 生成参数、尚未来得及出现，不能再用“当前没看到工具”猜测这就是最终回答。
     if (text) retained = appendText(retained, text, block.timestamp, 'activity')
   }

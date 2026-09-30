@@ -2425,14 +2425,28 @@ export class AgentSession {
     preserveTaskPlanOnFinalText: boolean,
     subagentTurnState: SubagentTurnState | null,
   ): Promise<StepResult> {
+    const { emit } = this.options
+    let uncommittedStepFailed = false
+    const discardFailedStep = (retainOutput: boolean) => {
+      if (!uncommittedStepFailed) return
+      if (retainOutput) emit({ type: 'step-output-retained' })
+      emit({ type: 'step-discarded' })
+      uncommittedStepFailed = false
+    }
     try {
-      return await this.runModelStep(turnAbortSignal, this.options.emit, (stepAbort) =>
+      return await this.runModelStep(turnAbortSignal, (event) => {
+        discardFailedStep(false)
+        emit(event)
+      }, (stepAbort) =>
         this.runOneStepAttempt(
           usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
           preserveTaskPlanOnFinalText, subagentTurnState,
+          () => { uncommittedStepFailed = true },
         ),
       )
     } catch (error) {
+      // 重试决定落定后才撤销展示；最终失败或停止保留正文，立即插话仍撤回草稿。
+      discardFailedStep(error !== 'interrupt')
       if (error !== 'interrupt') throw error
       return {
         committed: false,
@@ -2480,6 +2494,7 @@ export class AgentSession {
     consumeInterruptionBoundary: boolean,
     preserveTaskPlanOnFinalText: boolean,
     subagentTurnState: SubagentTurnState | null,
+    onUncommittedFailure: () => void,
   ): Promise<StepResult> {
     if (this.options.sessionRecorder && this.persistenceFailed) {
       throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
@@ -2802,10 +2817,8 @@ export class AgentSession {
       } else {
         this.taskPlan?.discardStep()
       }
-      if (!toolExecution && stepAbort.signal.aborted && stepAbort.signal.reason === 'user-cancel') {
-        emit({ type: 'step-output-retained' })
-      }
-      emit({ type: toolExecution ? 'step-committed' : 'step-discarded' })
+      if (toolExecution) emit({ type: 'step-committed' })
+      else onUncommittedFailure()
       throw error
     }
   }
