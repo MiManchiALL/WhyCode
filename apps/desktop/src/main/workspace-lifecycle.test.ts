@@ -44,6 +44,33 @@ async function fixture() {
   return { root, managed, worktrees, references, lifecycle, binding, sessionId }
 }
 
+for (const nonempty of [false, true]) it(`并发删除共享工作区的会话，最后一个引用${nonempty ? '保留文件' : '清理空目录'}`, { timeout: 10_000 }, async t => {
+  const f = await fixture()
+  const fork = randomUUID()
+  await f.managed.attachSession(f.binding, fork)
+  if (nonempty) await writeFile(join(f.binding.workingDirectory, 'keep.txt'), 'project data')
+  let signalStarted!: () => void, unblock!: () => void
+  const started = new Promise<void>(resolve => { signalStarted = resolve })
+  const blocked = new Promise<void>(resolve => { unblock = resolve })
+  const detach = f.managed.detachSession.bind(f.managed)
+  t.mock.method(f.managed, 'detachSession', (async (binding, sessionId, options) => {
+    if (sessionId === f.sessionId) { signalStarted(); await blocked }
+    return detach(binding, sessionId, options)
+  }) satisfies ManagedWorkspaceManager['detachSession'])
+  const first = f.lifecycle.release(f.sessionId, f.binding, 'first', false)
+  await started
+  const second = f.lifecycle.release(fork, f.binding, 'last', false)
+  const completed = Promise.all([first, second])
+  unblock()
+  await completed
+  if (nonempty) {
+    assert.equal(await readFile(join(f.binding.workingDirectory, 'keep.txt'), 'utf8'), 'project data')
+    const records = (await f.lifecycle.list()).workspaces
+    assert.equal(records.length, 1)
+    assert.equal(records[0]?.name, 'last')
+  } else await assert.rejects(access(f.binding.workingDirectory), { code: 'ENOENT' })
+})
+
 for (const empty of [true, false]) it(`本地项目${empty ? '为空' : '非空'}也不提供清理选项，伪造勾选不会删除目录`, async () => {
   const f = await fixture()
   const directory = join(f.root, 'local')

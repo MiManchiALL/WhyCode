@@ -3,18 +3,28 @@ import { describe, it } from 'node:test'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
 
 describe('SessionDeletionLock', () => {
-  it('历史会话删除保持单飞，但不阻塞当前运行时', () => {
+  it('不同会话独立删除，逆序完成只解除对应目标', () => {
     const lock = new SessionDeletionLock()
-    const release = lock.acquire('historical-session')
+    assert.equal(lock.busy, false)
+    const first = lock.acquire('historical-session')!
+    const second = lock.acquire('another-session')!
 
-    assert.equal(lock.sessionId, 'historical-session')
+    assert.ok(first)
+    assert.ok(second)
+    assert.equal(lock.busy, true)
     assert.equal(lock.blocksSession(), false)
     assert.equal(lock.blocksSession('other-session'), false)
     assert.equal(lock.blocksSession('historical-session'), true)
+    assert.equal(lock.blocksSession('another-session'), true)
+    assert.equal(lock.acquire('historical-session'), null)
     assert.equal(lock.acquire('another-session'), null)
 
-    release?.release()
-    assert.equal(lock.sessionId, null)
+    second.release()
+    assert.equal(lock.blocksSession('another-session'), false)
+    assert.equal(lock.blocksSession('historical-session'), true)
+    assert.equal(lock.busy, true)
+    first.release()
+    assert.equal(lock.busy, false)
   })
 
   it('当前会话删除只锁定该会话，旧 lease 不能释放后续删除', () => {
@@ -24,14 +34,14 @@ describe('SessionDeletionLock', () => {
     assert.equal(lock.blocksSession(), false)
     assert.equal(lock.blocksSession('other-session'), false)
     assert.equal(lock.blocksSession('current-session'), true)
-    assert.equal(lock.acquire('another-session'), null)
+    assert.equal(lock.acquire('current-session'), null)
 
     current.release()
     const next = lock.acquire('current-session')!
     current.release()
 
-    assert.equal(lock.sessionId, 'current-session')
+    assert.equal(lock.blocksSession('current-session'), true)
     next.release()
-    assert.equal(lock.sessionId, null)
+    assert.equal(lock.busy, false)
   })
 })

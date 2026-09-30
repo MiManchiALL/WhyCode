@@ -9,7 +9,7 @@ export function SessionItems({
   selectedSessionId,
   busy,
   navigationLocked,
-  deletingSessionId,
+  deletingSessionIds,
   onResume,
   onPinnedChange,
   onRequestDelete,
@@ -19,7 +19,7 @@ export function SessionItems({
   selectedSessionId: string | null
   busy: boolean
   navigationLocked: boolean
-  deletingSessionId: string | null
+  deletingSessionIds: ReadonlySet<string>
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRequestDelete: (sessionId: string) => void
@@ -34,8 +34,7 @@ export function SessionItems({
           selected={session.sessionId === selectedSessionId}
           busy={busy}
           navigationLocked={navigationLocked}
-          deleting={session.sessionId === deletingSessionId}
-          deletionPending={deletingSessionId !== null}
+          deleting={deletingSessionIds.has(session.sessionId)}
           onResume={onResume}
           onPinnedChange={onPinnedChange}
           onRequestDelete={onRequestDelete}
@@ -52,7 +51,6 @@ function SessionItem({
   busy,
   navigationLocked,
   deleting,
-  deletionPending,
   onResume,
   onPinnedChange,
   onRequestDelete,
@@ -63,7 +61,6 @@ function SessionItem({
   busy: boolean
   navigationLocked: boolean
   deleting: boolean
-  deletionPending: boolean
   onResume: (sessionId: string) => void
   onPinnedChange: (sessionId: string, pinned: boolean) => void
   onRequestDelete: (sessionId: string) => void
@@ -132,7 +129,7 @@ function SessionItem({
             </DropdownMenu.Item>
             <DropdownMenu.Item
               className="wc-menu-item text-[var(--wc-danger)]"
-              disabled={session.running || deletionPending}
+              disabled={session.running || deleting}
               onSelect={() => onRequestDelete(session.sessionId)}
             >
               <Trash2 size={15} />

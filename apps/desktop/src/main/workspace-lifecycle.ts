@@ -24,7 +24,7 @@ export class WorkspaceLifecycle {
   private readonly managed: ManagedWorkspaceManager
   private readonly worktrees: WorktreeManager
   private readonly references: () => Promise<WorkspaceReference[]>
-  private readonly cleaning = new Set<string>()
+  private readonly cleaning = new Map<string, Promise<void>>()
 
   constructor(
     managed: ManagedWorkspaceManager,
@@ -37,7 +37,7 @@ export class WorkspaceLifecycle {
   }
 
   assertAvailable(directory: string | null): void {
-    if (directory && [...this.cleaning].some(path => directoriesOverlap(path, directory))) {
+    if (directory && [...this.cleaning.keys()].some(path => directoriesOverlap(path, directory))) {
       throw new Error('这个工作目录正在清理，请等待完成后再选择')
     }
   }
@@ -48,9 +48,18 @@ export class WorkspaceLifecycle {
 
   private async withCleanup<T>(record: OwnedWorkspace, operation: () => Promise<T>): Promise<T> {
     const directory = directoryOf(record)
-    this.assertAvailable(directory)
-    this.cleaning.add(directory)
-    try { return await operation() } finally { this.cleaning.delete(directory) }
+    // 不同会话可并发删除，共享目录的引用释放仍须按顺序完成。
+    for (;;) {
+      const pending = [...this.cleaning].filter(([path]) => directoriesOverlap(path, directory))
+      if (!pending.length) break
+      await Promise.all(pending.map(([, completion]) => completion))
+    }
+    let release!: () => void
+    this.cleaning.set(directory, new Promise<void>(resolve => { release = resolve }))
+    try { return await operation() } finally {
+      this.cleaning.delete(directory)
+      release()
+    }
   }
 
   async preview(sessionId: string, workspace: WorkspaceBinding | undefined): Promise<WorkspaceDeletionPreview> {
@@ -83,9 +92,11 @@ export class WorkspaceLifecycle {
         }
         return
       }
-      const owned = await this.resolve(sessionId, workspace)
-      if (!owned) return
-      return await this.withCleanup(owned, async () => {
+      const target = await this.resolve(sessionId, workspace)
+      if (!target) return
+      return await this.withCleanup(target, async () => {
+        const owned = await this.resolve(sessionId, workspace)
+        if (!owned) return
         const protectDirectory = await this.shared(owned, sessionId)
         const options = { deleteDirectory, protectDirectory, name: name.trim().slice(0, 200) || '保留的工作区' }
         if (owned.binding.mode === 'managed') {

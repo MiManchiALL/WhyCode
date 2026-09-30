@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   isCurrentSessionDeletion,
-  preserveDeletionTarget,
+  updateDeletingSessions,
 } from './session-deletion-state.ts'
 
 describe('会话删除界面作用域', () => {
@@ -14,8 +14,21 @@ describe('会话删除界面作用域', () => {
     assert.equal(isCurrentSessionDeletion('current', 'current'), true)
   })
 
-  it('切换到其它会话时保留仍在进行的历史删除', () => {
-    assert.equal(preserveDeletionTarget('historical', null), 'historical')
-    assert.equal(preserveDeletionTarget(null, 'current'), 'current')
+  it('新增目标和导航快照保留其它删除，单个完成或失败不解除其它目标', () => {
+    const first = updateDeletingSessions(new Set(), 'historical', true)
+    const both = updateDeletingSessions(first, 'current', true)
+    assert.deepEqual([...first], ['historical'])
+    assert.deepEqual([...both], ['historical', 'current'])
+    assert.equal(updateDeletingSessions(both, 'current', true), both)
+    const remaining = updateDeletingSessions(both, 'current', false)
+    assert.deepEqual([...remaining], ['historical'])
+    assert.equal(updateDeletingSessions(remaining, 'current', false), remaining)
+    assert.equal(updateDeletingSessions(remaining, 'historical', false).size, 0)
+  })
+
+  it('完成事件先于 IPC 确认时，重复解除保持结束状态', () => {
+    const pending = updateDeletingSessions(new Set(), 'target', true)
+    const completed = updateDeletingSessions(pending, 'target', false)
+    assert.equal(updateDeletingSessions(completed, 'target', false), completed)
   })
 })

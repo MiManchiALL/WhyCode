@@ -2,29 +2,26 @@ export interface SessionDeletionLease {
   release(): void
 }
 
-/** 删除始终单飞，只锁定目标会话，远端清理期间仍可操作其它会话。 */
+/** 每个会话独立持有删除租约；同一目标不能重复删除。 */
 export class SessionDeletionLock {
-  private active: { sessionId: string } | null = null
+  private readonly active = new Map<string, SessionDeletionLease>()
 
-  get sessionId(): string | null {
-    return this.active?.sessionId ?? null
+  get busy(): boolean {
+    return this.active.size > 0
   }
 
   blocksSession(sessionId?: string): boolean {
-    return sessionId !== undefined && this.active?.sessionId === sessionId
+    return sessionId !== undefined && this.active.has(sessionId)
   }
 
   acquire(sessionId: string): SessionDeletionLease | null {
-    if (this.active) return null
-    const lease = { sessionId }
-    this.active = lease
-    let released = false
-    return {
+    if (this.active.has(sessionId)) return null
+    const lease: SessionDeletionLease = {
       release: () => {
-        if (released) return
-        released = true
-        if (this.active === lease) this.active = null
+        if (this.active.get(sessionId) === lease) this.active.delete(sessionId)
       },
     }
+    this.active.set(sessionId, lease)
+    return lease
   }
 }

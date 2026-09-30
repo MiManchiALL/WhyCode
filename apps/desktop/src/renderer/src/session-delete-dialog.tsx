@@ -6,13 +6,14 @@ import type { DeleteSessionOptions, DeleteSessionResult, RemoteCleanupFailure } 
 
 interface Props {
   sessionId: string
+  sessionTitle?: string
   remoteFailure?: RemoteCleanupFailure
   onClose: () => void
   onDelete: (sessionId: string, options: DeleteSessionOptions) => Promise<DeleteSessionResult | null>
   onError: (message: string) => void
 }
 
-export function SessionDeleteDialog({ sessionId, remoteFailure, onClose, onDelete, onError }: Props) {
+export function SessionDeleteDialog({ sessionId, sessionTitle, remoteFailure, onClose, onDelete, onError }: Props) {
   const [preview, setPreview] = useState<WorkspaceDeletionPreview | null>(null)
   const [deleteDirectory, setDeleteDirectory] = useState(false)
   useEffect(() => {
@@ -41,6 +42,7 @@ export function SessionDeleteDialog({ sessionId, remoteFailure, onClose, onDelet
         <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] max-h-[90vh] w-[min(92vw,460px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 outline-none">
           <CircleAlert size={20} className="mb-3 text-[var(--wc-danger)]" />
           <AlertDialog.Title className="text-base font-semibold">{remoteFailure ? '远端临时文件未清理' : '删除这个会话？'}</AlertDialog.Title>
+          {sessionTitle && <p className="mt-2 truncate text-sm font-medium" title={sessionTitle}>{sessionTitle}</p>}
           <AlertDialog.Description className="mt-2 text-sm leading-6 text-[var(--wc-muted)]">
             {remoteFailure === 'connection-missing'
               ? '会话已保留。请重新添加并连接原服务器后再删除，或仅删除本地会话，保留服务器上的临时文件。'

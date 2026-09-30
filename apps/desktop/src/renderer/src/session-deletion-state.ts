@@ -5,10 +5,15 @@ export function isCurrentSessionDeletion(
   return currentSessionId === targetSessionId
 }
 
-/** 切换会话的快照只描述“是否删除当前会话”，不能清掉 Renderer 正在跟踪的历史删除。 */
-export function preserveDeletionTarget(
-  localTarget: string | null,
-  snapshotTarget: string | null,
-): string | null {
-  return localTarget ?? snapshotTarget
+/** 单个请求或完成事件只更新自己的目标，导航快照不能清掉其它删除。 */
+export function updateDeletingSessions(
+  targets: ReadonlySet<string>,
+  sessionId: string,
+  deleting: boolean,
+): ReadonlySet<string> {
+  if (targets.has(sessionId) === deleting) return targets
+  const next = new Set(targets)
+  if (deleting) next.add(sessionId)
+  else next.delete(sessionId)
+  return next
 }

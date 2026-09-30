@@ -632,7 +632,7 @@ async function createCurrentWorktreeBranch(
     if (!binding) throw new Error('当前会话使用本地工作区，没有受管 Worktree')
     if (
       runtime.sessionId
-      && sessionDeletionLock.sessionId === runtime.sessionId
+      && sessionDeletionLock.blocksSession(runtime.sessionId)
     ) {
       throw new Error('当前会话删除中，请等待完成')
     }
@@ -1951,10 +1951,10 @@ async function addMcpConnection(
 async function authorizeMcpOAuthConnection(
   request: McpOAuthRequest,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
+  if (sessionDeletionLock.busy || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
-      error: sessionDeletionLock.sessionId
+      error: sessionDeletionLock.busy
         ? '会话数据删除中，请等待完成后再开始 MCP OAuth 登录'
         : sessionPreparationInProgressMessage('开始 MCP OAuth 登录'),
     }
@@ -2005,7 +2005,7 @@ async function saveMcpSecretHeaderConnection(
 async function mutateConnectionSettings(
   mutation: () => Promise<void>,
 ): Promise<SettingsMutationResult> {
-  if (sessionDeletionLock.sessionId) {
+  if (sessionDeletionLock.busy) {
     return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
   }
   if (anyRuntimeBusy()) {
@@ -2174,7 +2174,7 @@ async function runtimeSnapshot(
     busy,
     checkpointRestoreToolUseId,
     deletingSessionId: deletingThisSession
-      ? sessionDeletionLock.sessionId
+      ? runtime.sessionId ?? null
       : null,
     resumingSessionId,
     sessionId: runtime.sessionId,
@@ -2282,10 +2282,10 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       error: error instanceof Error ? error.message : String(error),
     }
   }
-  if (sessionDeletionLock.sessionId || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
+  if (sessionDeletionLock.busy || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
-      error: sessionDeletionLock.sessionId
+      error: sessionDeletionLock.busy
         ? '会话数据删除中，请等待完成后再创建分支'
         : sessionPreparationInProgressMessage('创建会话分支'),
     }
@@ -2485,7 +2485,7 @@ async function removeForkSessionWorkspace(journal: SessionJournal): Promise<void
 async function resolveBackgroundTaskRuntime(
   sessionId: string,
 ): Promise<BackgroundTaskRuntimeResolution> {
-  if (sessionDeletionLock.sessionId === sessionId) return { kind: 'defer' }
+  if (sessionDeletionLock.blocksSession(sessionId)) return { kind: 'defer' }
   if (settingsMutationInProgress || sessionPreparationLock.sessionId || sessionNavigation.sessionId) return { kind: 'defer' }
 
   const existing = runtimeRegistry.findBySessionId(sessionId)
@@ -2615,7 +2615,7 @@ function pendingInputs(
 async function deleteSession(sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult> {
   const targetRuntime = runtimeRegistry.findBySessionId(sessionId)
   if (
-    sessionDeletionLock.sessionId
+    sessionDeletionLock.blocksSession(sessionId)
     || sessionPreparationLock.sessionId
     || sessionNavigation.sessionId
     || mcpOAuthController.isAuthorizing()
@@ -2623,8 +2623,8 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
   ) {
     return {
       ok: false,
-      error: sessionDeletionLock.sessionId
-        ? '已有会话正在删除，请等待完成'
+      error: sessionDeletionLock.blocksSession(sessionId)
+        ? '此会话正在删除，请等待完成'
         : sessionPreparationLock.sessionId || sessionNavigation.sessionId
           ? sessionPreparationInProgressMessage('删除会话')
         : mcpOAuthController.isAuthorizing()
@@ -2637,7 +2637,7 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
   let detachedCurrent = false
   let replacementRuntime: DesktopSessionRuntime | null = null
   const deletionLease = sessionDeletionLock.acquire(sessionId)
-  if (!deletionLease) return { ok: false, error: '已有会话正在删除，请等待完成' }
+  if (!deletionLease) return { ok: false, error: '此会话正在删除，请等待完成' }
   let cleanupStarted = false
   try {
     const summary = targetRuntime
@@ -3307,7 +3307,7 @@ async function prepareTerminalDirectory(runtime: DesktopSessionRuntime): Promise
   try {
     await reservation.ready
     if (runtime.isDisposed || shutdownStarted
-      || (runtime.sessionId && sessionDeletionLock.sessionId === runtime.sessionId)) {
+      || sessionDeletionLock.blocksSession(runtime.sessionId ?? undefined)) {
       throw new Error('当前会话正在关闭，无法打开终端')
     }
     await materializeWorkspace(runtime)

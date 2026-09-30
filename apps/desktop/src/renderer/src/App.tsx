@@ -57,7 +57,7 @@ import {
 } from '../../shared/conversation-state.ts'
 import {
   isCurrentSessionDeletion,
-  preserveDeletionTarget,
+  updateDeletingSessions,
 } from './session-deletion-state.ts'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
@@ -218,7 +218,7 @@ export function App() {
   const [projects, setProjects] = useState<SidebarProject[]>([])
   const [sessionListError, setSessionListError] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [deletingSessionIds, setDeletingSessionIds] = useState<ReadonlySet<string>>(() => new Set())
   const [resumingSessionId, setResumingSessionIdState] = useState<string | null>(null)
   const [checkpointRestoreToolUseId, setCheckpointRestoreToolUseId] = useState<string | null>(null)
   const [conversationFeedback, setConversationFeedback] =
@@ -238,7 +238,7 @@ export function App() {
   const sessionTransitionPendingRef = useRef<{ promise: Promise<void>; finish: () => void } | null>(null)
   const resumingSessionIdRef = useRef<string | null>(null)
   const resumeRequestRef = useRef<Promise<void> | null>(null)
-  const deletingSessionIdRef = useRef<string | null>(null)
+  const deletingSessionIdsRef = useRef(deletingSessionIds)
   const runtimeIdRef = useRef('')
   const sessionIdRef = useRef<string | null>(null)
   const activeEventSequenceRef = useRef(0)
@@ -548,9 +548,10 @@ export function App() {
     setResumingSessionIdState(sessionId)
   }, [history.cancel])
 
-  const setDeletingSession = useCallback((sessionId: string | null) => {
-    deletingSessionIdRef.current = sessionId
-    setDeletingSessionId(sessionId)
+  const setDeletingSession = useCallback((sessionId: string, deleting: boolean) => {
+    const next = updateDeletingSessions(deletingSessionIdsRef.current, sessionId, deleting)
+    deletingSessionIdsRef.current = next
+    setDeletingSessionIds(next)
   }, [])
 
   const beginSessionTransition = useCallback(() => {
@@ -822,10 +823,7 @@ export function App() {
     if (changingRuntime) setShowMcpStatus(false)
     setWorkStartedAt(snapshot.workStartedAt)
     setStatus(snapshot.status)
-    setDeletingSession(preserveDeletionTarget(
-      deletingSessionIdRef.current,
-      snapshot.deletingSessionId,
-    ))
+    if (snapshot.deletingSessionId) setDeletingSession(snapshot.deletingSessionId, true)
     setResumingSessionId(snapshot.resumingSessionId)
     setCheckpointRestoreToolUseId(snapshot.checkpointRestoreToolUseId)
     setStopping(false)
@@ -1056,9 +1054,7 @@ export function App() {
   }, [applyBackgroundTaskState])
 
   useEffect(() => window.whycode.onSessionDeletion((state) => {
-    if (deletingSessionIdRef.current === state.sessionId) {
-      setDeletingSession(null)
-    }
+    setDeletingSession(state.sessionId, false)
     if (state.status === 'failed') {
       showError(`会话删除未完成：${state.error}`)
     } else if (state.warning) {
@@ -1333,8 +1329,8 @@ export function App() {
   }, [history.cancel, releaseConversationScroll])
 
   const busy = status !== 'idle' && status !== 'error'
-  const deletionBlocksRuntime = deletingSessionId !== null
-    && isCurrentSessionDeletion(sessionIdRef.current, deletingSessionId)
+  const deletionBlocksRuntime = sessionIdRef.current !== null
+    && deletingSessionIds.has(sessionIdRef.current)
   const interactionBusy = busy
     || sessionTransitionPending
     || submissionPending
@@ -1580,11 +1576,11 @@ export function App() {
   const deleteSession = useCallback(async (sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult | null> => {
     const pendingNavigation = () => [resumeRequestRef.current, sessionTransitionPendingRef.current?.promise].filter(Boolean)
     if (
-      deletingSessionIdRef.current
+      deletingSessionIdsRef.current.has(sessionId)
       || resumingSessionIdRef.current
       || sessionTransitionPendingRef.current
     ) return null
-    setDeletingSession(sessionId)
+    setDeletingSession(sessionId, true)
     if (isCurrentSessionDeletion(sessionIdRef.current, sessionId)) history.cancel()
     let cleanupPending = false
     try {
@@ -1620,9 +1616,7 @@ export function App() {
       showConversationFeedback('error', '删除会话失败，请重试', true)
       return null
     } finally {
-      if (!cleanupPending && deletingSessionIdRef.current === sessionId) {
-        setDeletingSession(null)
-      }
+      if (!cleanupPending) setDeletingSession(sessionId, false)
       void refreshSessions()
     }
   }, [
@@ -2169,7 +2163,7 @@ export function App() {
           navigationLocked={sessionNavigationLocked}
           error={sessionListError}
           busy={sessionChangeLocked}
-          deletingSessionId={deletingSessionId}
+          deletingSessionIds={deletingSessionIds}
           onCollapsedChange={setSidebarCollapsed}
           onNewSession={() => startNewSession()}
           onResume={resumeSession}

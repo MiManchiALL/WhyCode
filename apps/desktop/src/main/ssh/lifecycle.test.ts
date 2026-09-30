@@ -24,6 +24,67 @@ async function fixture(t: TestContext) {
   return { ...env, workspace, workspaces: new SshWorkspaces(env.connections) }
 }
 
+for (const failFirst of [false, true]) it(`同一服务器并发删除，慢任务${failFirst ? '失败保留会话' : '完成'}不阻塞另一个清理`, { timeout: 15_000 }, async t => {
+  const env = await fixture(t)
+  const sessions = new DesktopSessionRepository(join(env.root, 'sessions'))
+  const scratch = new SessionScratchManager(join(env.root, 'scratch'))
+  const first = await sessions.create(env.workspace, 'test:model')
+  const second = await sessions.create(env.workspace, 'test:model')
+  const parent = join(env.root, '.cache/whycode-scratch')
+  for (const id of [first.sessionId, second.sessionId]) {
+    await mkdir(join(parent, id, 'Main'), { recursive: true })
+    await writeFile(join(parent, id, 'Main/tmp.txt'), id)
+  }
+  await writeFile(join(env.root, 'project/keep.txt'), 'project data')
+  let signalStarted!: () => void, unblock!: () => void
+  const started = new Promise<void>(resolve => { signalStarted = resolve })
+  const blocked = new Promise<void>(resolve => { unblock = resolve })
+  const withFiles = env.connections.withFiles.bind(env.connections)
+  t.mock.method(env.connections, 'withFiles', ((id, operation, target) => withFiles(id, (fs, home) => operation({
+    ...fs,
+    rm: async (path, options) => {
+      if (path.endsWith(`/${first.sessionId}`)) {
+        signalStarted()
+        await blocked
+        if (failFirst) throw new Error('模拟慢连接失败')
+      }
+      await fs.rm(path, options)
+    },
+  }, home), target)) satisfies SshConnections['withFiles'])
+  const remove = async (sessionId: string) => {
+    const deletion = await stageSessionDeletion({ sessionId, sessions, scratch,
+      commandSessions: { removeSession: async () => {} },
+      onBeforeMarkDeleting: () => env.workspaces.removeScratch(sessionId, env.workspace),
+    })
+    return deletion.finish()
+  }
+  const pending = remove(first.sessionId)
+  try {
+    await started
+    assert.deepEqual(await remove(second.sessionId), { deleted: true })
+    assert.deepEqual((await sessions.list()).map(session => session.sessionId), [first.sessionId])
+    assert.equal(await readFile(join(parent, first.sessionId, 'Main/tmp.txt'), 'utf8'), first.sessionId)
+    await assert.rejects(access(join(parent, second.sessionId)), { code: 'ENOENT' })
+  } finally {
+    unblock()
+    if (failFirst) await assert.rejects(pending, /模拟慢连接失败/)
+    else await pending
+  }
+  assert.equal(await readFile(join(env.root, 'project/keep.txt'), 'utf8'), 'project data')
+  if (failFirst) assert.equal((await sessions.list())[0]?.resumable, true)
+  else await assert.rejects(access(parent), { code: 'ENOENT' })
+  assert.equal(env.commands.length, 0)
+})
+
+it('并发删除最后两个远端临时目录后移除空根目录', { timeout: 15_000 }, async t => {
+  const env = await fixture(t)
+  const ids = [randomUUID(), randomUUID()]
+  const parent = join(env.root, '.cache/whycode-scratch')
+  for (const id of ids) await mkdir(join(parent, id, 'Main'), { recursive: true })
+  await Promise.all(ids.map(id => env.workspaces.removeScratch(id, env.workspace)))
+  await assert.rejects(access(parent), { code: 'ENOENT' })
+})
+
 it('只有相同账户、主机、端口和已验证指纹的配置能恢复历史工作区', async t => {
   const env = await fixture(t)
   const original = await env.store.get(env.id)

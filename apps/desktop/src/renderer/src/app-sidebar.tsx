@@ -30,7 +30,7 @@ interface AppSidebarProps {
   error: string | null
   busy: boolean
   navigationLocked: boolean
-  deletingSessionId: string | null
+  deletingSessionIds: ReadonlySet<string>
   onCollapsedChange: (collapsed: boolean) => void
   onNewSession: () => void
   onSelectProject: (id?: string) => void
@@ -49,13 +49,16 @@ export function AppSidebar(props: AppSidebarProps) {
   const [resizing, setResizing] = useState(false)
   const [renameTargetId, setRenameTargetId] = useState<string | null>(null)
   const renameTarget = props.sessions.find(session => session.sessionId === renameTargetId)
-  const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; remoteFailure?: RemoteCleanupFailure } | null>(null)
-  const closeDeleteDialog = useCallback(() => setDeleteTarget(null), [])
+  const [deleteTargets, setDeleteTargets] = useState<{ sessionId: string; remoteFailure?: RemoteCleanupFailure }[]>([])
+  const deleteTarget = deleteTargets[0]
+  const closeDeleteDialog = useCallback(() => setDeleteTargets(targets => targets.slice(1)), [])
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
   const deleteSession = async (sessionId: string, options: DeleteSessionOptions) => {
     const result = await props.onDelete(sessionId, options)
     if (result && !result.ok && result.remoteCleanupFailure) {
-      setDeleteTarget({ sessionId, remoteFailure: result.remoteCleanupFailure })
+      const target = { sessionId, remoteFailure: result.remoteCleanupFailure }
+      // 并发失败排在当前确认之后，不能替换用户正在确认的其它会话。
+      setDeleteTargets(targets => [...targets.filter(item => item.sessionId !== sessionId), target])
     }
     return result
   }
@@ -65,9 +68,9 @@ export function AppSidebar(props: AppSidebarProps) {
   const hasUnreadCompletion = props.sessions.some((session) => session.hasUnreadCompletion)
   const renderSessions = (sessions: readonly SessionListItem[]) => <SessionItems
     sessions={sessions} selectedSessionId={props.selectedSessionId} busy={props.busy}
-    navigationLocked={props.navigationLocked} deletingSessionId={props.deletingSessionId}
+    navigationLocked={props.navigationLocked} deletingSessionIds={props.deletingSessionIds}
     onResume={props.onResume} onPinnedChange={props.onPinnedChange}
-    onRequestDelete={sessionId => setDeleteTarget({ sessionId })} onRequestRename={setRenameTargetId} />
+    onRequestDelete={sessionId => setDeleteTargets(targets => [...targets, { sessionId }])} onRequestRename={setRenameTargetId} />
 
   return (
     <aside
@@ -208,6 +211,7 @@ export function AppSidebar(props: AppSidebarProps) {
         {renameTarget && <SessionNameDialog key={renameTarget.sessionId} sessionId={renameTarget.sessionId} title={renameTarget.title}
           onRename={props.onRename} onClose={() => setRenameTargetId(null)} />}
         {deleteTarget && <SessionDeleteDialog key={deleteTarget.sessionId} sessionId={deleteTarget.sessionId}
+          sessionTitle={props.sessions.find(session => session.sessionId === deleteTarget.sessionId)?.title}
           remoteFailure={deleteTarget.remoteFailure} onClose={closeDeleteDialog} onDelete={deleteSession} onError={props.onError} />}
       </div>
     </aside>
