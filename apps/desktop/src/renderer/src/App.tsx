@@ -1074,6 +1074,9 @@ export function App() {
   }, [panelFullscreen, rightPanelState.open])
 
   const showRightPanelPage = useCallback((page: RightPanelPage) => {
+    if (page.kind === 'workspace' && !rightPanelStateRef.current.tabs.some(tab => tab.page.kind === 'workspace')) {
+      conversationPresentationsRef.current.saveWorkspacePosition(composerKey(runtimeIdRef.current, sessionIdRef.current), undefined)
+    }
     updateRightPanelState((current) => openRightPanelPageState(current, page))
   }, [updateRightPanelState])
 
@@ -1781,7 +1784,8 @@ export function App() {
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId) return
     if (workspace.mode === 'ssh') {
-      showRightPanelPage({ kind: 'workspace', expanded: [] })
+      const page = rightPanelStateRef.current.tabs.find(tab => tab.page.kind === 'workspace')?.page
+      showRightPanelPage(page ?? { kind: 'workspace', expanded: [] })
       return
     }
     void window.whycode.openWorkspaceFolder(targetRuntimeId).then((result) => {
@@ -2131,6 +2135,7 @@ export function App() {
       }
     : { text: input, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
 
+  const panelSessionKey = composerKey(runtimeId, sessionIdRef.current)
   return (
     <ConversationFeedbackContext value={showConversationFeedback}>
     <div
@@ -2587,6 +2592,13 @@ export function App() {
                 onMoveTab={(id, targetId) => updateRightPanelState(current => moveRightPanelTab(current, id, targetId))}
                 terminalOpening={terminalOpening}
                 onOpenTerminal={() => { void openRightPanelTerminal() }}
+                workspacePosition={conversationPresentationsRef.current.get(panelSessionKey)?.workspacePosition}
+                onWorkspacePositionChange={position => {
+                  const owner = rightPanelSessionStoreRef.current!.get(panelSessionKey)
+                  if (owner.tabs.some(tab => tab.page.kind === 'workspace')) {
+                    conversationPresentationsRef.current.saveWorkspacePosition(panelSessionKey, position)
+                  }
+                }}
               />
             </div>
           </div>

@@ -1,3 +1,5 @@
+import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
+
 export interface ScrollMetrics {
   scrollTop: number
   scrollHeight: number
@@ -25,6 +27,7 @@ interface ConversationPresentation {
   expandedOverrides: Map<string, boolean>
   scroll?: ConversationScrollPosition
   historyStart?: string
+  workspacePosition?: WorkspaceBrowserPosition
 }
 
 export class ConversationPresentationCache {
@@ -45,10 +48,17 @@ export class ConversationPresentationCache {
   saveScroll(key: string, scroll: ConversationScrollPosition, historyStart?: string): void {
     const previous = this.entries.get(key)
     this.set(key, {
+      ...previous,
       expandedOverrides: previous?.expandedOverrides ?? new Map(),
       scroll,
       historyStart,
     })
+  }
+
+  saveWorkspacePosition(key: string, workspacePosition: WorkspaceBrowserPosition | undefined): void {
+    const previous = this.entries.get(key)
+    if (!previous && !workspacePosition) return
+    this.set(key, { ...previous, expandedOverrides: previous?.expandedOverrides ?? new Map(), workspacePosition })
   }
 
   setExpanded(key: string, id: string, expanded: boolean): void {

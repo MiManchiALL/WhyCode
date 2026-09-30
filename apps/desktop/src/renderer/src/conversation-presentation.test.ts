@@ -82,4 +82,26 @@ describe('会话展示偏好', () => {
     assert.equal(overrides?.has('work-0'), false)
     assert.equal(overrides?.has('work-256'), true)
   })
+
+  it('文件树与对话阅读位置按会话独立保存，沿用同一淘汰和删除边界', () => {
+    const cache = new ConversationPresentationCache()
+    const position = {
+      rootPath: '/home/Lin', scrollTop: 920,
+      anchor: { path: 'fpga/notes.txt', offset: 5 }, directories: { '': 400, fpga: 200 },
+    }
+    cache.saveWorkspacePosition('a', position)
+    cache.saveScroll('a', { atBottom: false, scrollTop: 130 })
+    cache.setExpanded('a', 'work-1', true)
+    assert.deepEqual(cache.get('a')?.workspacePosition, position)
+    assert.equal(cache.get('a')?.scroll?.scrollTop, 130)
+    assert.equal(cache.get('b'), undefined)
+    cache.saveWorkspacePosition('a', undefined)
+    assert.equal(cache.get('a')?.workspacePosition, undefined)
+    assert.equal(cache.get('a')?.scroll?.scrollTop, 130)
+    for (let index = 0; index < 32; index++) cache.saveWorkspacePosition(`session-${index}`, position)
+    assert.equal(cache.size, 32)
+    assert.equal(cache.get('a'), undefined)
+    cache.delete('session-0')
+    assert.equal(cache.get('session-0'), undefined)
+  })
 })

@@ -12,6 +12,7 @@ import {
 import { SubagentPanelContent } from './subagent-panel.tsx'
 import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
+import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 
 interface RightPanelProps {
   remote?: boolean
@@ -33,6 +34,8 @@ interface RightPanelProps {
   onMoveTab: (tabId: string, targetId: string) => void
   terminalOpening: boolean
   onOpenTerminal: () => void
+  workspacePosition?: WorkspaceBrowserPosition
+  onWorkspacePositionChange: (position: WorkspaceBrowserPosition) => void
 }
 
 export function RightPanel(props: RightPanelProps) {
@@ -105,6 +108,7 @@ function RightPanelContent(props: RightPanelProps) {
         key={`${props.runtimeId}:${props.workspacePath}`}
         runtimeId={props.runtimeId} rootPath={props.workspacePath} expanded={page.expanded}
         refreshRevision={props.refreshRevision}
+        position={props.workspacePosition} onPositionChange={props.onWorkspacePositionChange}
         onExpandedChange={expanded => props.onOpenPage({ ...page, expanded })}
         onOpenFile={(path, name) => props.onOpenPage({ kind: 'file', path, name, source: { kind: 'current' } })}
       /> : <div className="min-h-0 flex-1" />
