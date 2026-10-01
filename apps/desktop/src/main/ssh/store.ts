@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import ipaddr from 'ipaddr.js'
 import { z } from 'zod'
 import { sshConnectionInputSchema, type SshConnection, type SshConnectionInput } from '../../shared/ssh.ts'
 import type { ConfigSecretCodec } from '../config-storage.ts'
@@ -48,6 +49,8 @@ export class SshConnectionStore {
     return this.update(async entries => {
       const existing = input.id ? entries.find(entry => entry.id === input.id) : undefined
       if (input.id && !existing) throw new SshConnectionMissingError()
+      const duplicate = entries.find(entry => entry.id !== input.id && endpointKey(entry) === endpointKey(input))
+      if (duplicate) throw new Error(`该服务器账户已存在，请编辑「${duplicate.name}」`)
       const { secret, ...settings } = input
       const id = existing?.id ?? randomUUID()
       const sameHost = existing?.host === input.host && existing.port === input.port
@@ -100,4 +103,10 @@ export class SshConnectionStore {
       await rename(temporary, this.file)
     } finally { await rm(temporary, { force: true }) }
   }
+}
+
+function endpointKey(connection: SshConnectionInput): string {
+  const host = connection.host.replace(/^\[(.*)\]$/u, '$1')
+  const normalized = ipaddr.isValid(host) ? ipaddr.process(host).toString() : host.toLowerCase().replace(/\.$/u, '')
+  return JSON.stringify([normalized, connection.port, connection.username])
 }

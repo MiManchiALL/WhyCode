@@ -76,9 +76,9 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
   const action = (connection: SshConnection, action: 'remove' | 'disconnect' | 'cleanup') => {
     const titles = { remove: '删除此连接？', disconnect: '断开 SSH 连接？', cleanup: '清理远端组件？' }
     const descriptions = {
-      remove: '清理远端组件并删除本机连接配置，停止相关命令和终端。项目、会话记录及远端临时文件保留；重新添加并连接原服务器后可继续使用。清理失败时保留连接配置，便于重试。',
+      remove: '清理远端组件，断开本机共用该组件的连接并停止相关命令和终端；仅删除此项连接配置。项目、会话记录及远端临时文件保留，重新添加并连接原服务器后可继续使用。清理失败时保留连接配置，便于重试。',
       disconnect: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留；再次点击“连接”后恢复使用。',
-      cleanup: '停止相关命令和终端，删除 WhyCode 的远端组件。连接配置、项目、会话记录和临时文件保留；再次点击“连接”时重新部署组件。',
+      cleanup: '断开本机共用该组件的连接，停止相关命令和终端，并删除远端组件。连接配置、项目、会话记录和临时文件保留；再次点击“连接”时重新部署组件。',
     }
     setConfirmation({ title: titles[action], description: descriptions[action], action: '确认', run: () => void run(connection, action) })
   }

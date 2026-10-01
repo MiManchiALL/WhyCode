@@ -33,9 +33,7 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
           return { ok: true, connection: { ...(await connections.store.get(id)).connection, status: connections.status(id) } }
         }
         case 'save': {
-          if (request.connection.id) connections.disconnect(request.connection.id)
-          const connection = await connections.store.save(request.connection)
-          connections.emit('changed')
+          const connection = await connections.save(request.connection)
           return { ok: true, connection: { ...connection, status: connections.status(connection.id) } }
         }
         case 'connect': return { ok: true, connect: await connections.connect(request.id, request.fingerprint, request.secret) }

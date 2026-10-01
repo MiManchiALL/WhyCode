@@ -4,8 +4,8 @@ import { join, posix } from 'node:path'
 import type { Client, ClientChannel } from 'ssh2'
 import type { WorkspaceFileSystem } from '@whycode/core'
 import { atomicSftpWrite } from './sftp.ts'
+import type { RemoteComponent } from './component.ts'
 
-const OWNER = 'WhyCode remote process host v1\n'
 export const quoteShell = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
 export const digest = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex')
 
@@ -38,20 +38,9 @@ async function commandOutput(client: Client, command: string): Promise<string> {
   })
 }
 
-export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, home: string, resourceDirectory: string): Promise<{ executable: string; ripgrep: string; directory: string }> {
+export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, component: RemoteComponent, resourceDirectory: string): Promise<{ executable: string; ripgrep: string }> {
   const arch = await architecture(client)
-  const directory = posix.join(home, '.cache', 'whycode-remote')
-  await fs.mkdir(directory, { recursive: true })
-  if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error('远端组件目录不能是符号链接')
-  const ownerPath = posix.join(directory, '.owner')
-  const ownerInfo = await fs.lstat(ownerPath).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
-  if (ownerInfo && !ownerInfo.isFile()) throw new Error('远端组件归属文件不是普通文件')
-  let owner = await fs.readFile(ownerPath, 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
-  if (owner === null) {
-    if ((await fs.readdir(directory, { withFileTypes: true })).length) throw new Error('远端缓存目录已被占用')
-    await fs.writeFile(ownerPath, OWNER, { flag: 'wx', mode: 0o600 }); owner = OWNER
-  }
-  if (owner !== OWNER) throw new Error('远端组件目录归属校验失败')
+  const { directory } = component
   const install = async (resource: string, prefix: string): Promise<string> => {
     const binary = await readFile(join(resourceDirectory, resource))
     const hash = digest(binary)
@@ -68,19 +57,5 @@ export async function provisionRemote(client: Client, fs: WorkspaceFileSystem, h
   }
   const executable = await install(`whycode-remote-linux-${arch}`, 'host')
   const ripgrep = await install(`ripgrep-linux-${arch}`, 'rg')
-  return { executable, ripgrep, directory }
-}
-
-/** Only known component files are removed; unknown contents, projects and scratch are untouched. */
-export async function cleanupRemoteComponent(fs: WorkspaceFileSystem, directory: string): Promise<void> {
-  const info = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
-  if (!info) return
-  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('远端组件目录归属校验失败')
-  const entries = await fs.readdir(directory, { withFileTypes: true })
-  if (entries.some(entry => !entry.isFile() || (entry.name !== '.owner' && !/^(?:host|rg)-[0-9a-f]{64}$/u.test(entry.name)))) throw new Error('组件目录包含未知文件，已保留目录')
-  const owner = posix.join(directory, '.owner')
-  if (await fs.readFile(owner, 'utf8') !== OWNER) throw new Error('远端组件目录归属校验失败')
-  for (const entry of entries) if (entry.name !== '.owner') await fs.unlink(posix.join(directory, entry.name))
-  await fs.unlink(owner)
-  await fs.rmdir(directory)
+  return { executable, ripgrep }
 }

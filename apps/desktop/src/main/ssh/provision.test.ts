@@ -7,6 +7,7 @@ import { it } from 'node:test'
 import type { Client, ClientChannel } from 'ssh2'
 import { localWorkspaceIO, type WorkspaceFileSystem } from '@whycode/core'
 import { digest, provisionRemote, quoteShell } from './provision.ts'
+import { prepareRemoteComponent } from './component.ts'
 
 it('远端校验只返回摘要，不下载组件；首次发布、重复连接与损坏校验保持一致', async t => {
   const root = await mkdtemp(join(tmpdir(), 'whycode-provision-'))
@@ -48,7 +49,7 @@ it('远端校验只返回摘要，不下载组件；首次发布、重复连接�
   const fs: WorkspaceFileSystem = {
     ...localWorkspaceIO.fs,
     readFile: ((file: string, encoding?: 'utf8') => {
-      assert.equal(posix.basename(file), '.owner', '组件二进制不能通过 SFTP 读回本机')
+      assert.ok(['.owner', '.identity'].includes(posix.basename(file)), '组件二进制不能通过 SFTP 读回本机')
       return encoding ? localWorkspaceIO.fs.readFile(file, encoding) : localWorkspaceIO.fs.readFile(file)
     }) as WorkspaceFileSystem['readFile'],
     writeFile: async (file, data, options) => {
@@ -56,16 +57,18 @@ it('远端校验只返回摘要，不下载组件；首次发布、重复连接�
       await localWorkspaceIO.fs.writeFile(file, data, options)
     },
   }
-  const installed = await provisionRemote(client, fs, home, resources)
+  const component = await prepareRemoteComponent(fs, home)
+  const installed = await provisionRemote(client, fs, component, resources)
   assert.equal(uploads.length, 2)
   assert.equal(commands.filter(command => command.startsWith('sha256sum')).length, 2)
   commands.length = 0
   uploads.length = 0
-  assert.deepEqual(await provisionRemote(client, fs, home, resources), installed)
+  assert.deepEqual(await prepareRemoteComponent(fs, home), component)
+  assert.deepEqual(await provisionRemote(client, fs, component, resources), installed)
   assert.equal(uploads.length, 0)
   assert.deepEqual(commands, ['uname -s; uname -m', ...remoteFiles.keys()])
   await writeFile(installed.executable, 'corrupted')
-  await assert.rejects(provisionRemote(client, fs, home, resources), /校验失败/)
+  await assert.rejects(provisionRemote(client, fs, component, resources), /校验失败/)
   checksumAvailable = false
-  await assert.rejects(provisionRemote(client, fs, home, resources), /sha256sum/)
+  await assert.rejects(provisionRemote(client, fs, component, resources), /sha256sum/)
 })

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -13,10 +13,10 @@ import { SshConnectionStore } from './store.ts'
 
 const { Server, utils } = ssh2
 
-export async function sshFixture(t: TestContext, linux = false) {
+export async function sshFixture(t: TestContext, linux: boolean | 'protocol' = false) {
   const temporaryRoot = await realpath(tmpdir())
   const root = await mkdtemp(join(temporaryRoot, 'whycode-ssh-'))
-  const remoteRoot = process.platform === 'win32' ? `/mnt/${root[0]!.toLowerCase()}${root.slice(2).replaceAll('\\', '/')}` : root
+  const remoteRoot = linux === 'protocol' ? '/home/fixture' : process.platform === 'win32' ? `/mnt/${root[0]!.toLowerCase()}${root.slice(2).replaceAll('\\', '/')}` : root
   // ssh2 的 Ed25519 生成器会剥离公钥前导零，导致随机产生无法解析的测试密钥。
   const keys = utils.generateKeyPairSync('ecdsa', { bits: 256 })
   const keyPassword = randomBytes(16).toString('hex')
@@ -48,6 +48,26 @@ export async function sshFixture(t: TestContext, linux = false) {
       session.on('exec', (acceptExec, _reject, info) => {
         const channel = acceptExec(); commands.push(info.command)
         if (info.command === 'uname -s; uname -m') { channel.write('Linux\nx86_64\n'); channel.exit(0); channel.end(); return }
+        if (linux === 'protocol') {
+          const checksum = /^sha256sum -- '(.+)'$/u.exec(info.command)
+          if (checksum) {
+            assert.ok(checksum[1]!.startsWith(`${remoteRoot}/`))
+            void readFile(join(root, checksum[1]!.slice(remoteRoot.length + 1))).then(bytes => {
+              channel.write(`${createHash('sha256').update(bytes).digest('hex')}\n`); channel.exit(0); channel.end()
+            })
+          } else {
+            assert.ok(info.command.startsWith(`exec '${remoteRoot}/.cache/whycode-remote/host-`))
+            let buffer = ''
+            channel.on('data', (chunk: Buffer) => {
+              buffer += chunk.toString()
+              for (let end; (end = buffer.indexOf('\n')) >= 0;) {
+                const packet = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1)
+                channel.write(`${JSON.stringify({ id: packet.id, version: 2 })}\n`)
+              }
+            })
+          }
+          return
+        }
         if (!linux) { channel.exit(1); channel.end(); return }
         const child = process.platform === 'win32'
           ? spawn('wsl.exe', ['-d', 'Ubuntu', '--exec', '/bin/sh', '-c', info.command], { windowsHide: true })
@@ -63,12 +83,26 @@ export async function sshFixture(t: TestContext, linux = false) {
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
+  const servers = new Set([server])
+  const addEndpoint = async () => {
+    const peer = new Server({ hostKeys: [keys.private] }, client => { server.emit('connection', client) })
+    servers.add(peer)
+    await new Promise<void>(done => peer.listen(0, '127.0.0.1', done))
+    const address = peer.address()
+    assert.ok(address && typeof address !== 'string')
+    return address.port
+  }
   const store = new SshConnectionStore(join(root, 'connections.json'), {
     isAvailable: () => true,
     encrypt: value => Buffer.from(value).toString('base64'),
     decrypt: value => Buffer.from(value, 'base64').toString(),
   })
-  const connections = new SshConnections(store, resolve('resources/remote'))
+  const resources = linux === 'protocol' ? join(root, 'resources') : resolve('resources/remote')
+  if (linux === 'protocol') {
+    await mkdir(resources)
+    for (const name of ['whycode-remote-linux-x64', 'ripgrep-linux-x64']) await writeFile(join(resources, name), name)
+  }
+  const connections = new SshConnections(store, resources)
   const saved = await store.save({ name: '隔离测试', host: '127.0.0.1', port: address.port, username: 'fixture', authentication: 'password', secret: password, rememberSecret: false })
   const project = `${remoteRoot}/project`
   await mkdir(join(root, 'project'))
@@ -77,9 +111,9 @@ export async function sshFixture(t: TestContext, linux = false) {
     for (const client of clients) client.end()
     for (const child of children) child.stdin?.end()
     await Promise.all([...children].map(child => once(child, 'close')))
-    await new Promise<void>(done => server.close(() => done()))
+    await Promise.all([...servers].map(server => new Promise<void>(done => server.close(() => done()))))
     assert.ok(resolve(root).startsWith(resolve(temporaryRoot, 'whycode-ssh-')))
     await rm(root, { recursive: true, force: true })
   })
-  return { root, remoteRoot, project, connections, store, id: saved.id, fingerprint, commands, clients, keyPath, keyPassword }
+  return { root, remoteRoot, project, connections, store, id: saved.id, fingerprint, commands, clients, keyPath, keyPassword, addEndpoint }
 }

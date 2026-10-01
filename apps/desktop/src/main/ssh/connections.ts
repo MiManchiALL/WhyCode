@@ -4,10 +4,11 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { Client } from 'ssh2'
 import type { WorkspaceFileSystem, WorkspaceIO } from '@whycode/core'
-import type { SshConnection, SshConnectionStatus, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
+import type { SshConnection, SshConnectionInput, SshConnectionStatus, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
 import { SshConnectionMissingError, SshConnectionStore } from './store.ts'
 import { createSftpFileSystem } from './sftp.ts'
-import { cleanupRemoteComponent, execChannel, provisionRemote, quoteShell } from './provision.ts'
+import { execChannel, provisionRemote, quoteShell } from './provision.ts'
+import { cleanupRemoteComponent, prepareRemoteComponent, readComponentIdentity, type RemoteComponent } from './component.ts'
 import { RemoteProcessHost } from './process.ts'
 
 interface ConnectedHost {
@@ -15,15 +16,15 @@ interface ConnectedHost {
   io: WorkspaceIO
   home: string
   target: string
-  componentDirectory: string
+  component: RemoteComponent
   processes: RemoteProcessHost
 }
 interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: string; target: string }
 type ConnectionState =
   | { status: 'connected'; host: ConnectedHost }
-  | { status: 'disconnected' }
-  | { status: 'connecting'; promise: Promise<SshConnectResult>; controller: AbortController }
-  | { status: 'releasing' }
+  | { status: 'disconnected'; component: RemoteComponent }
+  | { status: 'connecting'; promise: Promise<SshConnectResult>; controller: AbortController; component?: RemoteComponent }
+  | { status: 'releasing'; component?: RemoteComponent }
 
 export class SshCredentialsRequiredError extends Error {}
 
@@ -36,6 +37,14 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
   isConnected(id: string): boolean { return this.states.get(id)?.status === 'connected' }
   isTargetConnected(target: string): boolean {
     return [...this.states.values()].some(state => state.status === 'connected' && state.host.target === target)
+  }
+
+  async save(input: SshConnectionInput): Promise<SshConnection> {
+    if (input.id && ['connecting', 'releasing'].includes(this.status(input.id))) throw new Error('SSH 连接正在处理，请稍后再编辑')
+    const connection = await this.store.save(input)
+    if (input.id) this.disconnect(input.id)
+    this.emit('changed')
+    return connection
   }
 
   async configuredTargets(): Promise<Map<string, string>> {
@@ -66,13 +75,13 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     if (current?.status === 'connecting') return current.promise
     if (current?.status === 'releasing') return Promise.reject(new Error('SSH 连接正在清理，请稍后再连接'))
     const controller = new AbortController()
-    const promise = this.open(id, controller.signal, fingerprint, secret).finally(() => {
+    const promise = Promise.resolve().then(() => this.open(id, pending, fingerprint, secret)).finally(() => {
       if (this.states.get(id) !== pending) return
       if (current?.status === 'disconnected') this.states.set(id, current)
       else this.states.delete(id)
       this.emit('changed')
     })
-    const pending: ConnectionState = { status: 'connecting', promise, controller }
+    const pending: Extract<ConnectionState, { status: 'connecting' }> = { status: 'connecting', promise, controller }
     this.states.set(id, pending)
     this.emit('changed')
     return promise
@@ -134,26 +143,37 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       throw error
     }
   }
-  private async open(id: string, signal: AbortSignal, approved?: string, suppliedSecret?: string): Promise<SshConnectResult> {
+  private async open(id: string, pending: Extract<ConnectionState, { status: 'connecting' }>, approved?: string, suppliedSecret?: string): Promise<SshConnectResult> {
+    const signal = pending.controller.signal
     const transport = await this.authenticate(id, signal, approved, suppliedSecret)
     if ('status' in transport) return transport
     const { client, fs, home, target } = transport
     try {
-      const component = await provisionRemote(client, fs, home, this.resources)
-      const processes = new RemoteProcessHost(await execChannel(client, `exec ${quoteShell(component.executable)}`), () => client.end())
+      const component = await prepareRemoteComponent(fs, home)
+      pending.component = component
+      if ([...this.states.values()].some(state => state.status === 'releasing' && state.component?.identity === component.identity)) {
+        throw new Error('此服务器的远端组件正在清理，请稍后再连接')
+      }
+      // 共用目录的安装按已经开始的连接排序，避免上传与清理交错。
+      const installing = [...this.states.values()].flatMap(state => state !== pending && state.status === 'connecting' && state.component?.identity === component.identity ? [state.promise] : [])
+      await Promise.allSettled(installing)
+      signal.throwIfAborted()
+      const installed = await provisionRemote(client, fs, component, this.resources)
+      signal.throwIfAborted()
+      const processes = new RemoteProcessHost(await execChannel(client, `exec ${quoteShell(installed.executable)}`), () => client.end())
       await processes.ready()
       signal.throwIfAborted()
       const io: WorkspaceIO = {
         identity: target, platform: 'linux', path: path.posix, fs,
         spawn: (command, cwd) => processes.spawn(command, cwd),
-        ripgrep: (args, cwd) => processes.spawn({ executable: component.ripgrep, args }, cwd),
+        ripgrep: (args, cwd) => processes.spawn({ executable: installed.ripgrep, args }, cwd),
       }
-      const host: ConnectedHost = { client, io, home, target, processes, componentDirectory: component.directory }
+      const host: ConnectedHost = { client, io, home, target, processes, component }
       const active: ConnectionState = { status: 'connected', host }
       this.states.set(id, active)
       this.emit('changed')
       client.once('close', () => {
-        if (this.states.get(id) === active) { this.states.set(id, { status: 'disconnected' }); this.emit('changed') }
+        if (this.states.get(id) === active) { this.states.set(id, { status: 'disconnected', component }); this.emit('changed') }
         processes.close()
       })
       return { status: 'connected', home }
@@ -218,27 +238,55 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     const current = this.states.get(id)
     if (current?.status === 'releasing') return Promise.reject(new Error('SSH 连接正在清理，请稍后重试'))
     const host = current?.status === 'connected' ? current.host : null
+    const releasing: Extract<ConnectionState, { status: 'releasing' }> = { status: 'releasing', component: componentOf(current) }
+    if (releasing.component && [...this.states.values()].some(state => state.status === 'releasing' && state.component?.identity === releasing.component!.identity)) {
+      return Promise.reject(new Error('此服务器的远端组件正在清理，请稍后重试'))
+    }
+    const stopped = new Map<string, ConnectionState>()
+    const stop = (connectionId: string, state: ConnectionState | undefined) => {
+      if (state) stopped.set(connectionId, state)
+      this.states.set(connectionId, releasing)
+      if (state?.status === 'connecting') state.controller.abort(new Error('远端组件正在清理，SSH 连接已取消'))
+      if (state?.status === 'connected') state.host.processes.close()
+    }
+    const stopRelated = (component: RemoteComponent) => {
+      const related = [...this.states].filter(([, state]) => componentOf(state)?.identity === component.identity)
+      if (related.some(([, state]) => state.status === 'releasing' && state !== releasing)) throw new Error('此服务器的远端组件正在清理，请稍后重试')
+      releasing.component = component
+      for (const [connectionId, state] of related) if (state !== releasing) stop(connectionId, state)
+      this.emit('changed')
+    }
+    const waitForInstallers = () => Promise.allSettled([...stopped.values()].flatMap(state => state.status === 'connecting' ? [state.promise] : []))
+    stop(id, current)
+    if (releasing.component) stopRelated(releasing.component)
+    else this.emit('changed')
     const promise = Promise.resolve().then(async () => {
-      if (current?.status === 'connecting') await current.promise.catch(() => {})
+      await waitForInstallers()
       // 未经认证的配置从未部署组件；清理复用现有 SFTP，且期间禁止重新部署。
       if (!remove || (await this.store.get(id)).connection.fingerprint) {
-        const clean = (fs: WorkspaceFileSystem, home: string) => cleanupRemoteComponent(fs, path.posix.join(home, '.cache', 'whycode-remote'))
+        const clean = async (fs: WorkspaceFileSystem, home: string) => {
+          const directory = path.posix.join(home, '.cache', 'whycode-remote')
+          const identity = await readComponentIdentity(fs, directory)
+          if (identity) stopRelated({ directory, identity })
+          await waitForInstallers()
+          await cleanupRemoteComponent(fs, directory)
+        }
         if (host) await clean(host.io.fs, host.home)
         else await this.withFiles(id, clean)
       }
       if (remove) await this.store.remove(id)
     }).finally(() => {
-      host?.client.end()
-      if (this.states.get(id) === releasing) { this.states.delete(id); this.emit('changed') }
+      for (const state of stopped.values()) if (state.status === 'connected') state.host.client.end()
+      for (const [connectionId, state] of this.states) if (state === releasing) this.states.delete(connectionId)
+      this.emit('changed')
     })
-    const releasing: ConnectionState = { status: 'releasing' }
-    this.states.set(id, releasing)
-    if (current?.status === 'connecting') current.controller.abort(new Error('SSH 连接已取消'))
-    host?.processes.close()
-    this.emit('changed')
     return promise
   }
   close(): void { for (const id of this.states.keys()) this.disconnect(id) }
+}
+
+function componentOf(state: ConnectionState | undefined): RemoteComponent | undefined {
+  return state?.status === 'connected' ? state.host.component : state?.component
 }
 
 function targetIdentity(connection: SshConnection, fingerprint: string): string {

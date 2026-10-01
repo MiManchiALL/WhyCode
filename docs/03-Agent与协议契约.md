@@ -526,6 +526,8 @@ Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调�
 
 `list`、`resolve` 和 `save` 返回的配置摘要带有必填 `status: disconnected | connecting | connected | releasing`，由 Main 实时状态表产生，不写入连接配置。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知；配置保存或删除、连接开始/成功/失败/取消、主动断开、意外断线及清理状态变化后，Renderer 重读列表及所属会话状态，取消订阅释放监听。
 
+`save` 对新增与编辑统一拒绝重复连接入口，失败通过现有 `error` 返回已有连接名称，不关闭原通道或修改凭据。`cleanup` 和 `remove` 的状态通知覆盖本机所有共用该远端组件的已识别入口；`remove` 仅删除请求指定的配置。组件身份不进入 Renderer、会话绑定或模型上下文；入口查重和共享释放边界见文档二 §7.5。
+
 SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。连接管理、所有权与清理语义见文档二 §7.5。
 
 远端组件只通过已有 SSH channel 的标准输入输出交换协议 2 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。`start` 使用 `command` 通过 `/bin/sh -c` 执行用户命令，或使用宿主提供的绝对 `executable` 与 `args` 直接启动搜索程序；两者均指定绝对工作目录，直接执行不支持 PTY。字节使用 base64，`data.stream` 区分 stdout/stderr；用户命令沿用合并输出，原生搜索分别消费结果和诊断。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。

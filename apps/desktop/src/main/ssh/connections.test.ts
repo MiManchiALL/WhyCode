@@ -176,12 +176,12 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   await workspaces.connect(workspace)
   assert.equal(await io.fs.readFile(file, 'utf8'), 'hello\n世界\n')
 
-  await io.fs.writeFile(`${host.componentDirectory}/keep.txt`, 'keep')
+  await io.fs.writeFile(`${host.component.directory}/keep.txt`, 'keep')
   await assert.rejects(env.connections.cleanup(env.id), /未知文件/)
   await assert.rejects(workspaces.prepare(runtime), /请先点击/)
   assert.equal(await readFile(join(env.root, '.cache/whycode-remote/keep.txt'), 'utf8'), 'keep')
   await env.connections.connect(env.id)
-  await env.connections.host(env.id).io.fs.unlink(`${host.componentDirectory}/keep.txt`)
+  await env.connections.host(env.id).io.fs.unlink(`${host.component.directory}/keep.txt`)
   const cleanup = env.connections.cleanup(env.id)
   await assert.rejects(env.connections.connect(env.id), /正在清理/)
   await cleanup
@@ -197,7 +197,7 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   await assert.rejects(access(join(env.root, '.cache/whycode-remote')), { code: 'ENOENT' })
 
   await env.connections.connect(env.id)
-  const componentDirectory = env.connections.host(env.id).componentDirectory
+  const componentDirectory = env.connections.host(env.id).component.directory
   const executable = (await io.fs.readdir(componentDirectory, { withFileTypes: true })).find(entry => entry.name.startsWith('host-'))!
   env.connections.disconnect(env.id)
   await assert.rejects(workspaces.connect(workspace), /请先点击/)
