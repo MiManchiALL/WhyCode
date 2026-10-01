@@ -1,4 +1,5 @@
 import type { SkillSummary, SubagentSummary } from '@whycode/core'
+import { useEffect, useMemo } from 'react'
 import { FolderOpen, Maximize2, Minimize2, PanelRightClose, Plus, SquareTerminal } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { RightPanelFilePreview } from './right-panel-file.tsx'
@@ -13,6 +14,7 @@ import { SubagentPanelContent } from './subagent-panel.tsx'
 import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
+import { WorkspaceDirectories } from './workspace-directories.ts'
 
 interface RightPanelProps {
   remote?: boolean
@@ -39,6 +41,22 @@ interface RightPanelProps {
 }
 
 export function RightPanel(props: RightPanelProps) {
+  const workspacePage = props.state.tabs.find(tab => tab.page.kind === 'workspace')?.page
+  const expanded = workspacePage?.kind === 'workspace' ? workspacePage.expanded : undefined
+  const hasWorkspace = expanded !== undefined
+  const directories = useMemo(() => new WorkspaceDirectories(window.whycode, props.runtimeId, props.refreshRevision),
+    [props.runtimeId, props.workspacePath, hasWorkspace])
+  const browsing = props.active && activeRightPanelPage(props.state)?.kind === 'workspace'
+  useEffect(() => () => directories.close(), [directories])
+  useEffect(() => directories.retain(expanded ?? []), [directories, expanded])
+  useEffect(() => directories.setActive(browsing, Boolean(props.remote)), [directories, browsing, props.remote])
+  useEffect(() => directories.setRevision(props.refreshRevision), [directories, props.refreshRevision])
+  useEffect(() => {
+    if (!browsing) return
+    const refresh = () => directories.invalidate()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [directories, browsing])
   return (
     <aside className="flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
@@ -75,12 +93,12 @@ export function RightPanel(props: RightPanelProps) {
         </button>
         {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
-      <RightPanelContent {...props} />
+      <RightPanelContent {...props} directories={directories} />
     </aside>
   )
 }
 
-function RightPanelContent(props: RightPanelProps) {
+function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDirectories }) {
   const page = activeRightPanelPage(props.state)
   if (!page) return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2">
@@ -106,8 +124,7 @@ function RightPanelContent(props: RightPanelProps) {
     case 'workspace':
       return props.active && props.workspacePath ? <WorkspaceBrowser
         key={`${props.runtimeId}:${props.workspacePath}`}
-        runtimeId={props.runtimeId} rootPath={props.workspacePath} expanded={page.expanded}
-        refreshRevision={props.refreshRevision}
+        directories={props.directories} rootPath={props.workspacePath} expanded={page.expanded}
         position={props.workspacePosition} onPositionChange={props.onWorkspacePositionChange}
         onExpandedChange={expanded => props.onOpenPage({ ...page, expanded })}
         onOpenFile={(path, name) => props.onOpenPage({ kind: 'file', path, name, source: { kind: 'current' } })}

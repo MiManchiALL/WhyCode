@@ -19,7 +19,7 @@ interface DocumentProps {
 }
 
 export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
-  const file = useWorkspaceFile(runtimeId, 'file', page.path)
+  const file = useWorkspaceFile(runtimeId, page.path)
   const document = file.view?.kind === 'file' ? file.view : null
   const save = useWorkspaceFileAction(runtimeId, page.path)
   const hasModes = document && document.size <= MAX_TEXT_PREVIEW_BYTES

@@ -1,5 +1,9 @@
 import { filePathKey } from './local-files.ts'
 import type { TerminalInfo } from '../../shared/terminal.ts'
+import { MAX_PREVIEW_VIEWS } from '../../shared/workspace-files.ts'
+
+// 根目录之外，为文件预览及用户的保存/定位操作各留一个视图。
+export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
 
 export type FilePreviewToolName = 'WriteFile' | 'EditFile' | 'DeleteFile' | 'MoveFile'
 
@@ -271,7 +275,7 @@ function parsePage(value: unknown): RightPanelPage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const page = value as Record<string, unknown>
   if (page.kind === 'workspace' && Array.isArray(page.expanded) && page.expanded.every(path => typeof path === 'string')) {
-    return { kind: page.kind, expanded: page.expanded.slice(0, 63) }
+    return { kind: page.kind, expanded: page.expanded.slice(0, MAX_EXPANDED_WORKSPACE_DIRECTORIES) }
   }
   if (page.kind === 'changes') {
     const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string')
