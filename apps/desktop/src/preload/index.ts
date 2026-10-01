@@ -125,6 +125,11 @@ preloadWindow.addEventListener('message', (event) => {
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
   ssh: (request: import('../shared/ssh.ts').SshRequest): Promise<import('../shared/ssh.ts').SshResult> => ipcRenderer.invoke(IPC.ssh, request),
+  onSshSkillsChanged: (listener: () => void): (() => void) => {
+    const wrapped = () => listener()
+    ipcRenderer.on(IPC.sshSkillsChanged, wrapped)
+    return () => { ipcRenderer.removeListener(IPC.sshSkillsChanged, wrapped) }
+  },
   onSshChanged: (listener: () => void): (() => void) => {
     const wrapped = () => listener()
     ipcRenderer.on(IPC.sshChanged, wrapped)

@@ -3273,7 +3273,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
 
-  registerSshIpc(sshWorkspaces, projects)
+  registerSshIpc(sshWorkspaces, projects, () => broadcastToWindows(IPC.sshSkillsChanged, undefined, 'SSH Skill 状态推送失败：'))
   registerWorkspaceFileIpc(workspaceFiles, async runtimeId => {
     const runtime = runtimeForId(runtimeId)
     await sshWorkspaces.connect(runtime.workspace)

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { SidebarProject } from './projects.ts'
+import type { SshReleaseOptions, SshSkillJob, SshSkillListing } from './ssh-skills.ts'
 
 export const sshConnectionInputSchema = z.object({
   id: z.string().uuid().optional(),
@@ -29,15 +30,22 @@ export type SshRequest =
   | { action: 'resolve'; target: string }
   | { action: 'save'; connection: SshConnectionInput }
   | { action: 'connect'; id: string; fingerprint?: string; secret?: string }
-  | { action: 'disconnect' | 'remove' | 'cleanup'; id: string }
+  | { action: 'disconnect' | 'remove-local'; id: string }
+  | ({ action: 'remove' | 'cleanup'; id: string } & SshReleaseOptions)
+  | { action: 'skills-list' | 'skills-status'; id: string }
+  | { action: 'skills-sync'; id: string; skills: string[] }
+  | { action: 'skills-clean'; id: string; skills: string[]; allowModified: string[] }
   | { action: 'directory'; id: string; path?: string }
   | { action: 'project'; id: string; path: string }
 
-export type SshResult = { ok: false; error: string; credentialsRequired?: boolean } | {
+export type SshResult = { ok: false; error: string; credentialsRequired?: boolean; modifiedSkills?: string[] } | {
   ok: true
   connections?: SshConnectionSnapshot[]
   connection?: SshConnectionSnapshot
   connect?: SshConnectResult
   directory?: SshDirectory
   project?: SidebarProject
+  skills?: SshSkillListing
+  skillJob?: SshSkillJob
+  preservedSkills?: string[]
 }

@@ -10,6 +10,9 @@ import { createSftpFileSystem } from './sftp.ts'
 import { execChannel, provisionRemote, quoteShell } from './provision.ts'
 import { cleanupRemoteComponent, prepareRemoteComponent, readComponentIdentity, type RemoteComponent } from './component.ts'
 import { RemoteProcessHost } from './process.ts'
+import type { SshReleaseOptions } from '../../shared/ssh-skills.ts'
+import { cleanManagedSkills } from './skill-remote.ts'
+import { remoteSkillIO } from './skill-files.ts'
 
 interface ConnectedHost {
   client: Client
@@ -30,6 +33,7 @@ export class SshCredentialsRequiredError extends Error {}
 
 export class SshConnections extends EventEmitter<{ changed: [] }> {
   private readonly states = new Map<string, ConnectionState>()
+  private readonly skillOperations = new Map<string, string>()
   readonly store: SshConnectionStore
   private readonly resources: string
   constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
@@ -40,7 +44,7 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
   }
 
   async save(input: SshConnectionInput): Promise<SshConnection> {
-    if (input.id && ['connecting', 'releasing'].includes(this.status(input.id))) throw new Error('SSH 连接正在处理，请稍后再编辑')
+    if (input.id && (['connecting', 'releasing'].includes(this.status(input.id)) || this.skillOperations.has(input.id))) throw new Error('SSH 连接正在处理，请稍后再编辑')
     const connection = await this.store.save(input)
     if (input.id) this.disconnect(input.id)
     this.emit('changed')
@@ -232,13 +236,42 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     }
     finally { transport.client.end() }
   }
-  cleanup(id: string): Promise<void> { return this.release(id, false) }
-  remove(id: string): Promise<void> { return this.release(id, true) }
-  private release(id: string, remove: boolean): Promise<void> {
+  async withSkillFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>): Promise<T> {
+    if (['connecting', 'releasing'].includes(this.status(id))) throw new Error('SSH 连接正在处理，请稍后管理 Skill')
+    return this.withFiles(id, (fs, home) => this.withSkillLock(id, fs, home, operation))
+  }
+  private async withSkillLock<T>(id: string, fs: WorkspaceFileSystem, home: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, releasing = false): Promise<T> {
+    if (this.skillOperations.has(id)) throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
+    this.skillOperations.set(id, `pending:${id}`)
+    try {
+      const key = `${(await this.store.get(id)).connection.fingerprint}:${home}`
+      if ([...this.skillOperations.values()].includes(key)) throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
+      if (!releasing && this.status(id) === 'releasing') throw new Error('SSH 连接正在清理，请稍后管理 Skill')
+      this.skillOperations.set(id, key)
+      return await operation(fs, home)
+    }
+    finally { this.skillOperations.delete(id) }
+  }
+  private assertSkillsIdle(id: string, component?: RemoteComponent): void {
+    if (this.skillOperations.has(id) || (component && [...this.skillOperations.keys()].some(key => componentOf(this.states.get(key))?.identity === component.identity))) {
+      throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
+    }
+  }
+  async removeLocal(id: string): Promise<void> {
+    this.assertSkillsIdle(id)
+    if (this.status(id) === 'releasing') throw new Error('连接仍在清理，请等待完成后重试')
+    this.disconnect(id)
+    await this.store.remove(id)
+    this.emit('changed')
+  }
+  cleanup(id: string, options: SshReleaseOptions = {}): Promise<string[]> { return this.release(id, false, options) }
+  remove(id: string, options: SshReleaseOptions = {}): Promise<string[]> { return this.release(id, true, options) }
+  private release(id: string, remove: boolean, options: SshReleaseOptions): Promise<string[]> {
     const current = this.states.get(id)
     if (current?.status === 'releasing') return Promise.reject(new Error('SSH 连接正在清理，请稍后重试'))
     const host = current?.status === 'connected' ? current.host : null
     const releasing: Extract<ConnectionState, { status: 'releasing' }> = { status: 'releasing', component: componentOf(current) }
+    try { this.assertSkillsIdle(id, releasing.component) } catch (error) { return Promise.reject(error) }
     if (releasing.component && [...this.states.values()].some(state => state.status === 'releasing' && state.component?.identity === releasing.component!.identity)) {
       return Promise.reject(new Error('此服务器的远端组件正在清理，请稍后重试'))
     }
@@ -261,20 +294,29 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     if (releasing.component) stopRelated(releasing.component)
     else this.emit('changed')
     const promise = Promise.resolve().then(async () => {
+      const preserved: string[] = []
       await waitForInstallers()
       // 未经认证的配置从未部署组件；清理复用现有 SFTP，且期间禁止重新部署。
       if (!remove || (await this.store.get(id)).connection.fingerprint) {
         const clean = async (fs: WorkspaceFileSystem, home: string) => {
           const directory = path.posix.join(home, '.cache', 'whycode-remote')
           const identity = await readComponentIdentity(fs, directory)
+          this.assertSkillsIdle(id, identity ? { directory, identity } : undefined)
           if (identity) stopRelated({ directory, identity })
           await waitForInstallers()
+          if (options.cleanSkills) {
+            const results = await this.withSkillLock(id, fs, home, () => cleanManagedSkills(remoteSkillIO(fs, home), home, options), true)
+            const failures = results.filter(result => !result.ok)
+            if (failures.length) throw new Error(failures.map(result => `${result.name}：${result.message}`).join('\n'))
+            preserved.push(...results.filter(result => result.preserved).map(result => result.name))
+          }
           await cleanupRemoteComponent(fs, directory)
         }
         if (host) await clean(host.io.fs, host.home)
         else await this.withFiles(id, clean)
       }
       if (remove) await this.store.remove(id)
+      return preserved
     }).finally(() => {
       for (const state of stopped.values()) if (state.status === 'connected') state.host.client.end()
       for (const [connectionId, state] of this.states) if (state === releasing) this.states.delete(connectionId)

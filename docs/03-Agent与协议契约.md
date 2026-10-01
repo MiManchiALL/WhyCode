@@ -522,11 +522,18 @@ SSH 项目经 §7.7 的远端目录选择登记，`remote` 保存 `{target,label
 
 `connect` 表示用户明确发起连接。普通会话和资源操作只能恢复本次运行中意外断开的连接；主动断开、组件清理后以及应用重启后，须先由用户调用 `connect`，不能因发送消息或读取文件而重新部署组件。清理与删除期间拒绝并发连接；会话临时目录清理使用独立 SFTP 文件通道，不授予会话自动重连资格。
 
-Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`resolve {target}` 只读返回该稳定身份的已验证配置与连接状态，优先当前连接，无匹配时返回空，不触发认证；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 清理组件后删除配置，失败保留配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
+Desktop 单源为 `shared/ssh.ts`，`ssh(request)` 仅允许窗口主 Frame 调用。`list` 返回配置摘要和连接状态；`resolve {target}` 只读返回该稳定身份的已验证配置与连接状态，优先当前连接，无匹配时返回空，不触发认证；`save` 保存认证配置；`connect` 返回 `connected` 或 `trust-required`，后者包含主机与 SHA256 指纹；`directory` 返回规范化路径和子目录；`project` 登记并返回 `SidebarProject`，供既有新会话入口使用；`disconnect` 断开连接，`cleanup` 清理组件，`remove` 完成所选清理后删除配置，失败保留配置；`remove-local` 仅断开并删除本机配置。响应统一为 `{ok:true,...}` 或 `{ok:false,error,credentialsRequired?,modifiedSkills?}`。`credentialsRequired: true` 仅表示 Main 判定需要补充密码或私钥口令，Renderer 在用户提交后继续原连接或已确认的清理、删除操作；网络、指纹和系统 SSH Agent 错误不设置此标记。凭据仅接受 Renderer 提交，不从 Main 返回明文；确认指纹必须与实际握手一致，不能用输入值覆盖既有信任。释放范围见文档二 §7.5。
 
 `list`、`resolve` 和 `save` 返回的配置摘要带有必填 `status: disconnected | connecting | connected | releasing`，由 Main 实时状态表产生，不写入连接配置。`onSshChanged` 订阅不含载荷的 `whycode:ssh-changed` 通知；配置保存或删除、连接开始/成功/失败/取消、主动断开、意外断线及清理状态变化后，Renderer 重读列表及所属会话状态，取消订阅释放监听。
 
 `save` 对新增与编辑统一拒绝重复连接入口，失败通过现有 `error` 返回已有连接名称，不关闭原通道或修改凭据。`cleanup` 和 `remove` 的状态通知覆盖本机所有共用该远端组件的已识别入口；`remove` 仅删除请求指定的配置。组件身份不进入 Renderer、会话绑定或模型上下文；入口查重和共享释放边界见文档二 §7.5。
+
+Skill 管理契约由 `shared/ssh-skills.ts` 定义，沿用 `ssh(request)`，不增加模型工具或会话事件：
+
+- `skills-list {id}` 返回目录、候选摘要和当前任务；状态为 `missing | same | update | conflict | remote-only`，`managed/modified` 分别表示可管理的副本和远端变化。
+- `skills-status {id}` 只读 Main 任务快照 `{operation,running,total,results}`，不连接服务器。`onSshSkillsChanged` 订阅无载荷通知，任务开始、逐项结束和收尾后重读快照；取消订阅释放监听。
+- `skills-sync {id,skills}` 和 `skills-clean {id,skills,allowModified}` 返回逐项结果；失败项带原因，不能把部分成功报为全部成功。同步选择最多 200 项，清理和修改选择最多 2000 项；标识只接受 Skill 根下的相对目录，拒绝空段、`.`、`..`、反斜线、冒号和 NUL。
+- `cleanup/remove` 可带 `cleanSkills`、`allowModified`、`keepModified`。未决定的远端修改通过失败字段 `modifiedSkills` 返回相对目录；重试须明确选择删除或保留，成功的 `preservedSkills` 返回保留名称。补充凭据后继续同一操作及选择，不改为连接或重新部署。归属、更新事务与清理机制见文档二 §11.1。
 
 SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。连接管理、所有权与清理语义见文档二 §7.5。
 

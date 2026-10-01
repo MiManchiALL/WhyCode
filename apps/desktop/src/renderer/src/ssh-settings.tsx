@@ -8,26 +8,31 @@ import { SettingsButton, SettingsPanel, SettingsSection } from './settings-layou
 import { useConversationFeedback } from './conversation-feedback.tsx'
 import { SshConnectionEditor } from './ssh-connection-editor.tsx'
 import { SshDirectoryPicker } from './ssh-directory-picker.tsx'
+import { SshSkillDialog } from './ssh-skill-dialog.tsx'
+import { SshReleaseDialog, type SshReleaseDialogState } from './ssh-release-dialog.tsx'
+import type { SshReleaseOptions } from '../../shared/ssh-skills.ts'
 
-type ConnectionAction = 'connect' | 'disconnect' | 'cleanup' | 'remove'
+type ConnectionAction = 'connect' | 'disconnect' | 'cleanup' | 'remove' | 'remove-local'
 interface ConnectionEditor {
   connection?: SshConnection
-  resume?: { action: Exclude<ConnectionAction, 'disconnect'>; fingerprint?: string }
+  resume?: { action: 'connect' | 'cleanup' | 'remove'; fingerprint?: string; options?: SshReleaseOptions }
 }
 
 export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: StartWorkspaceRequest) => Promise<boolean> }) {
   const [connections, setConnections] = useState<SshConnectionSnapshot[]>([])
   const [editor, setEditor] = useState<ConnectionEditor | null>(null)
   const [picker, setPicker] = useState<SshConnection | null>(null)
+  const [skillConnection, setSkillConnection] = useState<string | null>(null)
+  const [release, setRelease] = useState<SshReleaseDialogState | null>(null)
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; action: string; run: () => void } | null>(null)
   const feedback = useConversationFeedback()
   const generation = useRef(0)
   const mounted = useRef(true)
-  const request = useCallback(async (request: SshRequest, onCredentialsRequired?: () => void): Promise<Extract<SshResult, { ok: true }> | null> => {
+  const request = useCallback(async (request: SshRequest, onFailure?: (result: Extract<SshResult, { ok: false }>) => void): Promise<Extract<SshResult, { ok: true }> | null> => {
     try {
       const result = await window.whycode.ssh(request)
       if (!result.ok) {
-        if (result.credentialsRequired) onCredentialsRequired?.()
+        onFailure?.(result)
         throw new Error(result.error)
       }
       return result
@@ -52,17 +57,20 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     window.addEventListener('focus', reload)
     return () => { mounted.current = false; generation.current++; unsubscribe(); window.removeEventListener('focus', reload) }
   }, [refresh])
-  const run = async (connection: SshConnection, action: ConnectionAction, fingerprint?: string) => {
-    const result = await request(action === 'connect' ? { action, id: connection.id, fingerprint } : { action, id: connection.id }, () => {
-      if (mounted.current && action !== 'disconnect') setEditor({ connection, resume: { action, fingerprint } })
+  const run = async (connection: SshConnection, action: ConnectionAction, fingerprint?: string, options: SshReleaseOptions = {}) => {
+    const result = await request(action === 'connect' ? { action, id: connection.id, fingerprint } : { action, id: connection.id, ...options }, failure => {
+      if (!mounted.current) return
+      if (failure.credentialsRequired && action !== 'disconnect' && action !== 'remove-local') setEditor({ connection, resume: { action, fingerprint, options } })
+      else if (action === 'cleanup' || action === 'remove') setRelease({ connection, action, options, error: failure.error, modifiedSkills: failure.modifiedSkills })
     })
     if (result?.connect?.status === 'trust-required') {
       if (!mounted.current) { feedback('info', '请返回 SSH 设置确认服务器指纹后继续连接', true); return }
       const trust = result.connect
       setConfirmation({ title: '信任此服务器？', description: `${trust.host}\n服务器指纹：\n${trust.fingerprint}`, action: '信任并连接', run: () => void run(connection, 'connect', trust.fingerprint) })
     } else if (result) {
-      const messages = { connect: 'SSH 已连接', disconnect: 'SSH 已断开', cleanup: '远端组件已清理，SSH 已断开', remove: 'SSH 连接已删除' }
-      feedback('success', messages[action], true)
+      const messages = { connect: 'SSH 已连接', disconnect: 'SSH 已断开', cleanup: '远端组件已清理，SSH 已断开', remove: 'SSH 连接已删除', 'remove-local': '连接配置已删除，远端文件保留' }
+      const preserved = result.preservedSkills?.length ?? 0
+      feedback('success', `${messages[action]}${preserved ? `；保留了 ${preserved} 个在远端修改过的 Skill` : options.cleanSkills ? '，已同步 Skill 已清理' : ''}`, true)
     }
   }
   const save = async (value: SshConnectionInput): Promise<void> => {
@@ -70,18 +78,14 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     const result = await request({ action: 'save', connection: value })
     if (!result) return
     setEditor(null)
-    if (resume && result.connection) void run(result.connection, resume.action, resume.fingerprint)
+    if (resume && result.connection) void run(result.connection, resume.action, resume.fingerprint, resume.options)
     else feedback('success', 'SSH 连接已保存')
   }
   const action = (connection: SshConnection, action: 'remove' | 'disconnect' | 'cleanup') => {
-    const titles = { remove: '删除此连接？', disconnect: '断开 SSH 连接？', cleanup: '清理远端组件？' }
-    const descriptions = {
-      remove: '清理远端组件，断开本机共用该组件的连接并停止相关命令和终端；仅删除此项连接配置。项目、会话记录及远端临时文件保留，重新添加并连接原服务器后可继续使用。清理失败时保留连接配置，便于重试。',
-      disconnect: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留；再次点击“连接”后恢复使用。',
-      cleanup: '断开本机共用该组件的连接，停止相关命令和终端，并删除远端组件。连接配置、项目、会话记录和临时文件保留；再次点击“连接”时重新部署组件。',
-    }
-    setConfirmation({ title: titles[action], description: descriptions[action], action: '确认', run: () => void run(connection, action) })
+    if (action !== 'disconnect') { setRelease({ connection, action }); return }
+    setConfirmation({ title: '断开 SSH 连接？', description: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留；再次点击“连接”后恢复使用。', action: '确认', run: () => void run(connection, action) })
   }
+  const skillsFor = connections.find(connection => connection.id === skillConnection)
   return <>
     <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。首次连接会自动准备轻量运行组件。"
       actions={connections.length > 0 && <SettingsButton onClick={() => setEditor({})}><Plus size={15} />添加连接</SettingsButton>}>
@@ -111,6 +115,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={5}>
               <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'connecting'} onSelect={() => setEditor({ connection })}>编辑连接</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => setSkillConnection(connection.id)}>同步本地 Skill</DropdownMenu.Item>
               <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'disconnected'} onSelect={() => connection.status === 'connecting' ? void run(connection, 'disconnect') : action(connection, 'disconnect')}>{connection.status === 'connecting' ? '取消连接' : '断开连接'}</DropdownMenu.Item>
               <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => action(connection, 'cleanup')}>清理远端组件</DropdownMenu.Item>
               <DropdownMenu.Separator className="my-1 h-px bg-[var(--wc-line)]" />
@@ -122,6 +127,8 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     </SettingsSection>
     {editor && <SshConnectionEditor connection={editor.connection} purpose={editor.resume?.action} onClose={() => setEditor(null)} onSave={save} />}
     {picker && <SshDirectoryPicker connection={picker} onClose={() => setPicker(null)} onSelect={onSelectProject} />}
+    {skillsFor && <SshSkillDialog key={skillsFor.id} connection={skillsFor} onClose={() => setSkillConnection(null)} />}
+    {release && <SshReleaseDialog state={release} onClose={() => setRelease(null)} onConfirm={options => { setRelease(null); void run(release.connection, release.action, undefined, options) }} onRemoveLocal={() => { setRelease(null); void run(release.connection, 'remove-local') }} />}
     <AlertDialog.Root open={Boolean(confirmation)} onOpenChange={open => { if (!open) setConfirmation(null) }}><AlertDialog.Portal>
       <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
       <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">
