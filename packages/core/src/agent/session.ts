@@ -506,6 +506,7 @@ export class AgentSession {
     reasoningEffort: ReasoningEffortSelection,
   ): Promise<void> {
     const modelChanged = this.options.model.id !== model.id
+    if (modelChanged) await this.assertModelContextCapacity(model)
     if (
       modelChanged
       || this.options.reasoningEffort !== reasoningEffort
@@ -525,31 +526,37 @@ export class AgentSession {
     }
   }
 
+  /** 在持久化选择和清除旧 usage 基线前校验；冷恢复也使用同一请求估算。 */
+  async assertModelContextCapacity(model: ModelEntry): Promise<void> {
+    if (!this.contextOverhead) await this.prepareContextUsage()
+    if (this.estimateCurrentContextTokens() >= autoCompactThreshold(model.capabilities)) {
+      throw new Error('当前上下文超过目标模型的可用容量，请先在当前模型下压缩后再尝试切换，或新建会话。')
+    }
+  }
+
   /** Main 初始化/模型切换时建立可展示估算；计量失败不应影响会话可用性。 */
   async initializeContextUsage(): Promise<void> {
     try {
-      // 空闲态也按“下一次普通请求”投影 Skill 目录与 Skill 工具；Fork/恢复不能只算持久消息。
-      await this.prepareSkillTurn([])
-      const abortSignal = new AbortController().signal
-      const systemPrompt = buildSystemPrompt(
-        this.options.promptContext,
-        this.options.customSystemPrompt,
-      )
-      const tools = this.buildToolSet(
-        abortSignal,
-        { emit: this.options.emit, loopHealth: this.loopHealth },
-        [],
-      )
-      const overhead = await estimateRequestContextOverhead(
-        systemPrompt,
-        toolsForModel(tools),
-      )
-      this.contextOverhead = overhead
+      await this.prepareContextUsage()
       this.emitContextUsage()
     } catch {
       this.contextOverhead = null
       this.options.emit({ type: 'context-usage', usage: null })
     }
+  }
+
+  private async prepareContextUsage(): Promise<void> {
+    // 空闲态也按“下一次普通请求”投影 Skill 目录与 Skill 工具；Fork/恢复不能只算持久消息。
+    if (!this.activeModelSelection) await this.prepareSkillTurn([])
+    const tools = this.buildToolSet(
+      new AbortController().signal,
+      { emit: this.options.emit, loopHealth: this.loopHealth },
+      [],
+    )
+    this.contextOverhead = await estimateRequestContextOverhead(
+      buildSystemPrompt(this.options.promptContext, this.options.customSystemPrompt),
+      toolsForModel(tools),
+    )
   }
 
   setAuxiliaryImageAnalyzer(analyzer: AuxiliaryImageAnalyzer | undefined): void {

@@ -1743,19 +1743,29 @@ export function App() {
         : '已添加图片；目标模型既不支持原生识图，也没有可用的辅助识图模型')
       return
     }
+    const targetRuntimeId = runtimeIdRef.current
     const previous = modelId
     const previousReasoningEffort = reasoningEffort
     setModelId(next)
     setReasoningEffort('default')
     const rollback = () => {
+      if (runtimeIdRef.current !== targetRuntimeId) return
       setModelId((current) => current === next ? previous : current)
       setReasoningEffort((current) =>
         current === 'default' ? previousReasoningEffort : current,
       )
     }
     void sendRuntimeCommand({ type: 'set-model', modelId: next }).then((result) => {
-      if (!result || !result.ok) rollback()
-    }).catch(rollback)
+      if (!result || !result.ok) {
+        rollback()
+        if (result?.error && runtimeIdRef.current === targetRuntimeId) showError(result.error)
+      }
+    }).catch((error: unknown) => {
+      rollback()
+      if (runtimeIdRef.current === targetRuntimeId) {
+        showError(error instanceof Error ? error.message : String(error))
+      }
+    })
   }, [showError, btwMode, imageDrafts.length, modelId, models, reasoningEffort, sendRuntimeCommand])
 
   const changeReasoningEffort = useCallback((next: ReasoningEffortSelection) => {

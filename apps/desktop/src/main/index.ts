@@ -71,7 +71,7 @@ import {
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { conversationHistoryWindow } from './conversation-history.ts'
-import { synchronizeRuntimeModelSelection } from './runtime-model-selection.ts'
+import { selectRuntimeModel, synchronizeRuntimeModelSelection } from './runtime-model-selection.ts'
 import {
   checkCheckpointFileCurrentMatch,
   readCheckpointFileChanges,
@@ -803,6 +803,7 @@ async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | n
             providerConfig,
             runtime.reasoningEffort,
           )
+          await runtime.session.initializeContextUsage()
           runtime.coordinator = null
         }
         if (runtime.consensusEnabled && !runtime.coordinator) {
@@ -925,7 +926,6 @@ async function createMainAgentSession(
       requestApproval: (request, signal) => runtime.requestApproval(request, signal),
     })
     next.setPermissionMode(runtime.permissionMode)
-    await next.initializeContextUsage()
     return next
   } catch (error) {
     await mcpRuntime.close().catch(() => {})
@@ -1191,26 +1191,24 @@ async function handleCommand(
         runtime.emit({ type: 'error', message: resolved.error, recoverable: true })
         return { ok: false }
       }
-      const targetReasoningEffort = 'default'
-      if (runtime.session) {
-        await runtime.session.setModelSelection(
+      try {
+        await selectRuntimeModel(
+          runtime,
           resolved.value.entry,
           resolved.value.providerConfig,
-          targetReasoningEffort,
+          (journal) => createMainAgentSession(
+            runtime,
+            journal,
+            requireRuntimeProjectDir(runtime),
+            resolved.value.entry,
+            resolved.value.providerConfig,
+            'default',
+          ),
         )
-      } else if (runtime.journal) {
-        await runtime.journal.updateModelSelection(command.modelId, targetReasoningEffort)
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
-      runtime.modelId = command.modelId
-      runtime.reasoningEffort = targetReasoningEffort
       preferredModelId = command.modelId
-      if (!runtime.session && runtime.journal) {
-        const initializationError = await ensureSession(runtime)
-        if (initializationError) {
-          runtime.emit({ type: 'error', message: initializationError, recoverable: true })
-          return { ok: false }
-        }
-      }
       try {
         await persistPreferredModel(command.modelId)
       } catch (error) {
@@ -2443,6 +2441,7 @@ async function prepareRuntimeFromJournal(
         resolved.value.providerConfig,
         targetReasoningEffort,
       )
+      await runtime.session.initializeContextUsage()
     }
     if (runtime.consensusEnabled && runtime.session) {
       const built = createCoordinator(

@@ -3,15 +3,110 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { simulateReadableStream } from 'ai'
+import { simulateReadableStream, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import type { CoreEvent } from '../events.ts'
+import { autoCompactThreshold } from '../context/tokens.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
+
+const capacityError = '当前上下文超过目标模型的可用容量，请先在当前模型下压缩后再尝试切换，或新建会话。'
+
+describe('模型切换的上下文容量', () => {
+  it('700k 历史拒绝切到 256k，保留选择、正文和用量；用户在原模型压缩后可重试', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-model-capacity-'))
+    try {
+      const large = new MockLanguageModelV4({
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: '<summary>已完成前面的长任务，继续处理后续请求。</summary>' }],
+          finishReason: { unified: 'stop', raw: undefined }, usage: usage(), warnings: [],
+        }),
+      })
+      const small = new MockLanguageModelV4({ doStream: [textStep('继续处理')] })
+      const current = modelEntry('test:large', large, 1_000_000)
+      current.capabilities.reasoningEffort = { supported: ['high'], default: 'high' }
+      const target = modelEntry('test:small', small, 256_000)
+      const store = new SessionStore(root)
+      const journal = await store.create({ workspace: localWorkspace(root), modelId: current.id, reasoningEffort: 'high' })
+      const messages: ModelMessage[] = Array.from({ length: 35 }, () => [
+        { role: 'user' as const, content: 'x'.repeat(40_000) },
+        { role: 'assistant' as const, content: 'y'.repeat(40_000) },
+      ]).flat()
+      await journal.recordSnapshot('compact', messages)
+      const events: CoreEvent[] = []
+      const session = new AgentSession({
+        model: current, providerConfig: { apiKey: 'large' }, reasoningEffort: 'high',
+        promptContext: { projectDir: root, osPlatform: process.platform },
+        sessionRecorder: journal,
+        emit: event => events.push(event), requestApproval: async () => ({ approved: false }),
+      })
+      await session.initializeContextUsage()
+      const before = session.captureMessageSnapshot()
+      const beforeEvents = events.length
+
+      await assert.rejects(session.setModelSelection(target, { apiKey: 'small' }, 'default'), { message: capacityError })
+      assert.equal(journal.metadataSnapshot.modelId, current.id)
+      assert.equal(journal.metadataSnapshot.reasoningEffort, 'high')
+      assert.equal((await store.open(journal.sessionId)).metadataSnapshot.modelId, current.id)
+      assert.deepEqual(session.captureMessageSnapshot(), before)
+      assert.equal(events.length, beforeEvents)
+      assert.equal(large.doGenerateCalls.length, 0)
+      assert.equal(small.doStreamCalls.length, 0)
+
+      await session.compactNow()
+      assert.equal(large.doGenerateCalls.length, 1, JSON.stringify(events.filter(event => event.type === 'error')))
+      assert.equal(small.doGenerateCalls.length, 0)
+      assert.ok(events.some(event => event.type === 'context-compacted'))
+      await session.setModelSelection(target, { apiKey: 'small' }, 'default')
+      assert.equal(journal.metadataSnapshot.modelId, target.id)
+      assert.equal(journal.metadataSnapshot.reasoningEffort, 'default')
+      assert.equal(await session.handleUserMessage('压缩后继续'), 'completed')
+      assert.equal(small.doStreamCalls.length, 1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('按 Provider 真实 usage 和目标可用预算拦截，同模型更新不被拦截，扩容仍可切换', async () => {
+    const currentModel = new MockLanguageModelV4({ doStream: [textStep('简短回复', 235_000)] })
+    const current = modelEntry('test:large', currentModel, 1_000_000)
+    const events: CoreEvent[] = []
+    const session = new AgentSession({
+      model: current, providerConfig: { apiKey: 'large' },
+      promptContext: { projectDir: process.cwd(), osPlatform: process.platform },
+      emit: event => events.push(event), requestApproval: async () => ({ approved: false }),
+    })
+    assert.equal(await session.handleUserMessage('带有较大 Provider 用量的短消息'), 'completed')
+    const target = modelEntry('test:small', new MockLanguageModelV4(), 256_000)
+    const lastUsage = events.filter(event => event.type === 'context-usage').at(-1)?.usage
+    assert.ok(lastUsage && lastUsage.usedTokens > autoCompactThreshold(target.capabilities))
+    assert.ok(lastUsage.usedTokens < target.capabilities.contextWindow)
+    const beforeEvents = events.length
+    await assert.rejects(session.setModelSelection(target, { apiKey: 'small' }, 'default'), { message: capacityError })
+    assert.equal(events.length, beforeEvents)
+    await session.setModelSelection(current, { apiKey: 'updated' }, 'default')
+    await session.setModelSelection(modelEntry('test:larger', new MockLanguageModelV4(), 2_000_000), { apiKey: 'larger' }, 'default')
+    assert.equal(events.filter(event => event.type === 'context-usage').at(-1)?.usage?.contextWindow, 2_000_000)
+  })
+
+  it('历史较短时允许切换到更小窗口，未初始化用量也计入 System 与工具开销', async () => {
+    const target = modelEntry('test:small', new MockLanguageModelV4(), 64_000)
+    const session = new AgentSession({
+      model: modelEntry('test:large', new MockLanguageModelV4(), 1_000_000),
+      providerConfig: { apiKey: 'large' },
+      promptContext: { projectDir: process.cwd(), osPlatform: process.platform },
+      emit: () => {}, requestApproval: async () => ({ approved: false }),
+    })
+    session.restoreMessageSnapshot([{ role: 'user', content: 'x'.repeat((autoCompactThreshold(target.capabilities) - 10) * 4) }])
+    await assert.rejects(session.setModelSelection(target, { apiKey: 'small' }, 'default'), { message: capacityError })
+    session.restoreMessageSnapshot([{ role: 'user', content: '简短历史' }, { role: 'assistant', content: '收到' }])
+    await session.setModelSelection(target, { apiKey: 'small' }, 'default')
+  })
+})
 
 describe('运行中模型选择', () => {
   it('当前 turn 固化原模型，运行中选择的新模型从下一 turn 生效', async () => {
@@ -128,7 +223,7 @@ function toolStep(toolName: string) {
   }
 }
 
-function textStep(text: string) {
+function textStep(text: string, inputTokens = 10) {
   return {
     stream: simulateReadableStream({
       chunks: [
@@ -138,7 +233,7 @@ function textStep(text: string) {
         {
           type: 'finish' as const,
           finishReason: { unified: 'stop' as const, raw: undefined },
-          usage: usage(),
+          usage: usage(inputTokens),
         },
       ],
     }),
@@ -172,9 +267,9 @@ function modelEntry(
   }
 }
 
-function usage() {
+function usage(inputTokens = 10) {
   return {
-    inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+    inputTokens: { total: inputTokens, noCache: inputTokens, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 5, text: 5, reasoning: undefined },
   }
 }
