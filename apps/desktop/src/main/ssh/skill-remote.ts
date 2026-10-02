@@ -53,7 +53,7 @@ export async function managedSkills(io: WorkspaceIO, home: string): Promise<Mana
     }
     for (const entry of await io.fs.readdir(current.path, { withFileTypes: true })) {
       if (++entries > 2000) throw new Error('远端 Skill 目录超过 2000 项，无法完整核对，请精简后重试')
-      if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.name.startsWith('.') && !(current.depth === 0 && isStaging(entry.name)))) continue
+      if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.name.startsWith('.') && !(current.depth === 0 && (entry.name === '.system' || isStaging(entry.name))))) continue
       if (current.depth >= 6) continue
       const id = current.id ? `${current.id}/${entry.name}` : entry.name
       const directory = skillPath(root, id, io.path)

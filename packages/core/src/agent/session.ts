@@ -94,8 +94,6 @@ import {
   normalizeResponseMessagesForProvider,
 } from '../providers/message-adapter.ts'
 import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
-import type { OfficeProcessor } from '../office/types.ts'
-import { createRenderOfficeTool } from '../tools/render-office/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import { emptyModelResponse, readModelStream, withModelRequestRetry } from '../providers/model-request.ts'
@@ -214,8 +212,6 @@ export interface AgentSessionOptions {
   captureScreenshot?: ScreenshotCaptureHandler
   /** 宿主注入的隔离 PDF 处理端口；未提供时物理移除 ReadPdf。 */
   pdfProcessor?: PdfProcessor
-  /** Office 结构检查与后台渲染端口；视觉渲染只对图片模型开放。 */
-  officeProcessor?: OfficeProcessor
   /** 非视觉 Main 可按需调用的独立识图模型；视觉 Main 不装配对应工具。 */
   auxiliaryImageAnalyzer?: AuxiliaryImageAnalyzer
   /** 宿主判断当前计划是否仍有已登记、将自动唤醒同一会话的后台任务。 */
@@ -2922,24 +2918,11 @@ export class AgentSession {
               this.pdfPageImage(attachmentId, pageNumber),
           })]
         : []
-    const officeVisualTools: ToolDefinition[] =
-      this.options.officeProcessor
-      && model.capabilities.supportsImageInput
-      && this.options.sessionRecorder
-      && !this.options.promptContext.discussion
-      && !this.protocolRound
-        ? [createRenderOfficeTool({
-            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
-            sessionId: this.options.sessionRecorder.sessionId,
-            processor: this.options.officeProcessor,
-          })]
-        : []
     const defs: ToolDefinition[] = [
       ...(this.options.baseTools ?? BUILTIN_TOOLS),
       ...imageTools,
       ...auxiliaryImageTools,
       ...pdfTools,
-      ...officeVisualTools,
       ...controlTools,
     ]
     const subagentTools = this.options.promptContext.subagent?.toolNames

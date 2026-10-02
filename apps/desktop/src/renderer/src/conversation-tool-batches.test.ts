@@ -244,7 +244,7 @@ describe('工具批次折叠投影', () => {
   })
 
   it('把任何曾建立完整文件检查点的工具统一归为文件修改', () => {
-    for (const name of ['MoveFile', 'BuildOfficeArtifact', 'FutureFileTool']) {
+    for (const name of ['MoveFile', 'WriteFile', 'FutureFileTool']) {
       assert.deepEqual(summarizeToolBatch(makeBatch([
         checkpointedTool(`checkpointed-${name}`, name),
       ])), {

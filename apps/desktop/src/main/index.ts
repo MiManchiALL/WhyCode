@@ -31,8 +31,7 @@ import {
   ConsensusCoordinator,
   createCommandTools,
   createAuxiliaryImageAnalyzer,
-  createBuildOfficeArtifactTool,
-  createInspectOfficeTool,
+  createLoadWorkspaceDependenciesTool,
   createWebFetchTool,
   createWebFindTool,
   createWebSearchTool,
@@ -156,8 +155,7 @@ import { SubagentService } from './subagent-service.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
 import { ElectronPdfProcessor } from './pdf/processor.ts'
-import { ElectronOfficeArtifactRunner } from './office/builder.ts'
-import { ElectronOfficeProcessor } from './office/processor.ts'
+import { WorkspaceDependencies } from './workspace-dependencies/index.ts'
 import { openPdfAttachment } from './pdf/open.ts'
 import { ensureDefaultWorkspace, ManagedWorkspaceManager } from './workspace.ts'
 import {
@@ -569,8 +567,7 @@ const sessionNavigation = new SessionNavigation({
 /** 连接设置写入期间阻止启动新 Agent 工作，避免配置在请求中途切换。 */
 let settingsMutationInProgress = false
 const pdfProcessor = new ElectronPdfProcessor()
-const officeProcessor = new ElectronOfficeProcessor(pdfProcessor)
-const officeArtifactRunner = new ElectronOfficeArtifactRunner()
+let workspaceDependencies: WorkspaceDependencies
 const hostOperations = new HostOperationScheduler()
 const captureSessionScreenshot: typeof captureDesktopScreenshot = (request, abortSignal) =>
   hostOperations.runScreenshot(abortSignal, () => captureDesktopScreenshot(request, abortSignal))
@@ -906,7 +903,7 @@ async function createMainAgentSession(
       skillCatalog: await skillCatalogFor(runtime),
       subagentCatalog: subagentDefinitions,
       mainTools: [
-        ...(!remote ? [createBuildOfficeArtifactTool(officeArtifactRunner), createInspectOfficeTool(officeProcessor)] : []),
+        createLoadWorkspaceDependenciesTool(context => workspaceDependencies.load(context)),
         ...commandTools.taskTools,
         ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
@@ -914,7 +911,6 @@ async function createMainAgentSession(
       ],
       captureScreenshot: remote ? undefined : captureSessionScreenshot,
       pdfProcessor,
-      officeProcessor: remote ? undefined : officeProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
       hasPendingTaskPlanContinuation: (planId) =>
         commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
@@ -2792,6 +2788,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     new SshConnectionStore(join(app.getPath('userData'), 'ssh-connections.json'), configSecretCodec),
     join(app.getAppPath(), 'resources', 'remote'),
   ))
+  workspaceDependencies = new WorkspaceDependencies(join(app.getAppPath(), 'resources', 'office'), join(app.getPath('userData'), 'workspace-dependencies'), sshWorkspaces.connections)
   sshWorkspaces.connections.on('changed', () => broadcastToWindows(IPC.sshChanged, undefined, 'SSH 状态推送失败：'))
   projects = new ProjectStore(join(app.getPath('userData'), 'projects.json'))
   try { await projects.initialize() }
@@ -2952,7 +2949,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       return resolved.ok ? resolved.value : null
     },
     pdfProcessor,
-    officeProcessor,
+    loadWorkspaceDependencies: context => workspaceDependencies.load(context),
     captureScreenshot: captureSessionScreenshot,
     hostOperations,
     onState: broadcastSubagents,

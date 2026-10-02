@@ -7,7 +7,7 @@ import type { WorkspaceFileSystem, WorkspaceIO } from '@whycode/core'
 import type { SshConnection, SshConnectionInput, SshConnectionStatus, SshConnectResult, SshDirectory } from '../../shared/ssh.ts'
 import { SshConnectionMissingError, SshConnectionStore } from './store.ts'
 import { createSftpFileSystem } from './sftp.ts'
-import { execChannel, provisionRemote, quoteShell } from './provision.ts'
+import { execChannel, provisionRemote, quoteShell, removeRemoteEnvironment } from './provision.ts'
 import { cleanupRemoteComponent, prepareRemoteComponent, readComponentIdentity, type RemoteComponent } from './component.ts'
 import { RemoteProcessHost } from './process.ts'
 import type { SshReleaseOptions } from '../../shared/ssh-skills.ts'
@@ -31,7 +31,7 @@ type ConnectionState =
 
 export class SshCredentialsRequiredError extends Error {}
 
-export class SshConnections extends EventEmitter<{ changed: [] }> {
+export class SshConnections extends EventEmitter<{ changed: []; connected: [id: string] }> {
   private readonly states = new Map<string, ConnectionState>()
   private readonly skillOperations = new Map<string, string>()
   readonly store: SshConnectionStore
@@ -176,6 +176,7 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       const active: ConnectionState = { status: 'connected', host }
       this.states.set(id, active)
       this.emit('changed')
+      this.emit('connected', id)
       client.once('close', () => {
         if (this.states.get(id) === active) { this.states.set(id, { status: 'disconnected', component }); this.emit('changed') }
         processes.close()
@@ -223,16 +224,16 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
     if (current) this.emit('changed')
   }
   /** File cleanup must work without deploying or starting the process component. */
-  async withFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, target?: string): Promise<T> {
+  async withFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string, client: Client) => Promise<T>, target?: string): Promise<T> {
     if (this.isConnected(id)) {
       const host = this.host(id, target)
-      return operation(host.io.fs, host.home)
+      return operation(host.io.fs, host.home, host.client)
     }
     const transport = await this.authenticate(id, new AbortController().signal)
     if ('status' in transport) throw new Error('请先连接并确认服务器指纹')
     try {
       if (target && target !== transport.target) throw new Error('此会话绑定的 SSH 服务器与当前连接不同')
-      return await operation(transport.fs, transport.home)
+      return await operation(transport.fs, transport.home, transport.client)
     }
     finally { transport.client.end() }
   }
@@ -298,7 +299,7 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
       await waitForInstallers()
       // 未经认证的配置从未部署组件；清理复用现有 SFTP，且期间禁止重新部署。
       if (!remove || (await this.store.get(id)).connection.fingerprint) {
-        const clean = async (fs: WorkspaceFileSystem, home: string) => {
+        const clean = async (fs: WorkspaceFileSystem, home: string, client: Client) => {
           const directory = path.posix.join(home, '.cache', 'whycode-remote')
           const identity = await readComponentIdentity(fs, directory)
           this.assertSkillsIdle(id, identity ? { directory, identity } : undefined)
@@ -310,9 +311,9 @@ export class SshConnections extends EventEmitter<{ changed: [] }> {
             if (failures.length) throw new Error(failures.map(result => `${result.name}：${result.message}`).join('\n'))
             preserved.push(...results.filter(result => result.preserved).map(result => result.name))
           }
-          await cleanupRemoteComponent(fs, directory)
+          await cleanupRemoteComponent(fs, directory, environment => removeRemoteEnvironment(client, environment))
         }
-        if (host) await clean(host.io.fs, host.home)
+        if (host) await clean(host.io.fs, host.home, host.client)
         else await this.withFiles(id, clean)
       }
       if (remove) await this.store.remove(id)

@@ -8,6 +8,7 @@ import type { ConfigSecretCodec } from '../config-storage.ts'
 
 const storedSchema = sshConnectionInputSchema.omit({ secret: true }).extend({
   id: z.string().uuid(), fingerprint: z.string().optional(), encryptedSecret: z.string().optional(),
+  initializeSkills: z.literal(true).optional(),
 }).strict()
 type StoredConnection = z.infer<typeof storedSchema>
 
@@ -63,6 +64,7 @@ export class SshConnectionStore {
         encryptedSecret = this.codec.encrypt(cleartext)
       }
       const stored: StoredConnection = { ...settings, id,
+        ...(!existing || existing.initializeSkills ? { initializeSkills: true as const } : {}),
         ...(sameHost && existing?.fingerprint ? { fingerprint: existing.fingerprint } : {}),
         ...(encryptedSecret ? { encryptedSecret } : {}),
       }
@@ -87,7 +89,17 @@ export class SshConnectionStore {
       await this.write(entries.filter(entry => entry.id !== id)); this.transient.delete(id)
     })
   }
-  private public({ encryptedSecret, ...entry }: StoredConnection): SshConnection {
+  takeSkillInitialization(id: string): Promise<boolean> {
+    return this.update(async entries => {
+      const entry = entries.find(value => value.id === id)
+      if (!entry) throw new SshConnectionMissingError()
+      if (!entry.initializeSkills) return false
+      delete entry.initializeSkills
+      await this.write(entries)
+      return true
+    })
+  }
+  private public({ encryptedSecret, initializeSkills: _initializeSkills, ...entry }: StoredConnection): SshConnection {
     return { ...entry, hasSecret: Boolean(encryptedSecret || this.transient.get(entry.id)) }
   }
   private update<T>(operation: (entries: StoredConnection[]) => Promise<T>): Promise<T> {

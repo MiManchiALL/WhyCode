@@ -1,0 +1,1 @@
+export const LOAD_WORKSPACE_DEPENDENCIES_PROMPT = '准备当前工作区所属设备上的受管运行环境，首次使用可能下载依赖，后续复用。返回 Node、脚本启动器、Office 检查和渲染命令的绝对路径及可用库。SSH 会话返回服务器路径，命令在服务器执行。需要内置 Office Skill 的依赖时先调用本工具，再用 RunCommand 执行；Skill 正文说明命令用法。不要猜测 PATH、安装全局 npm 包或使用本机路径处理远端文件。失败会返回原因，不代表环境已准备完成。'

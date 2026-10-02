@@ -16,11 +16,23 @@ export class SshSkillSync {
   job(id: string): SshSkillJob | undefined { return this.jobs.get(id) }
   forget(id: string): void { this.jobs.delete(id) }
 
+  /** 只消费新连接的首次同步机会；重连和清理后由用户主动同步。 */
+  async initialize(id: string): Promise<void> {
+    try {
+      if (!await this.connections.store.takeSkillInitialization(id)) return
+      const selected = (await this.local()).filter(item => item.skill.scope === 'system').map(item => item.id)
+      if (selected.length) await this.sync(id, selected)
+    } catch (error) {
+      if (!this.jobs.has(id)) await this.run(id, 'sync', ['.system'], async () => { throw error }).catch(() => undefined)
+      this.changed()
+    }
+  }
+
   private async local(): Promise<LocalSkill[]> {
-    const skills = (await new SkillCatalogService({ homeDir: this.home }).list(null)).skills.filter(skill => skill.scope === 'user')
+    const skills = (await new SkillCatalogService({ homeDir: this.home }).list(null)).skills.filter(skill => skill.scope === 'user' || skill.scope === 'system')
     const root = localWorkspaceIO.path.join(this.home, '.whycode', 'skills')
     const candidates = skills.filter(skill => !skills.some(other => other !== skill && skill.rootPath.startsWith(`${other.rootPath}${localWorkspaceIO.path.sep}`)))
-    if (candidates.length > 200) throw new Error('本地用户 Skill 超过 200 个，请精简后同步')
+    if (candidates.length > 200) throw new Error('本地 Skill 超过 200 个，请精简后同步')
     const result: LocalSkill[] = []
     for (const skill of candidates) {
       const id = localWorkspaceIO.path.relative(root, skill.rootPath).split(localWorkspaceIO.path.sep).join('/')
@@ -32,12 +44,12 @@ export class SshSkillSync {
 
   private async inspect(io: WorkspaceIO, home: string, local: LocalSkill[]): Promise<{ rows: SshSkillRow[]; managed: ManagedSkill[] }> {
     const managed = await managedSkills(io, home)
-    const native = (await new SkillCatalogService({ homeDir: home, workspaceIO: io }).list(null)).skills.filter(skill => skill.scope === 'user')
+    const native = (await new SkillCatalogService({ homeDir: home, workspaceIO: io }).list(null)).skills
     const rows: SshSkillRow[] = []
     for (const item of local) {
       const remote = managed.find(entry => entry.id === item.id)
       const destination = skillPath(skillRoot(io, home), item.id, io.path)
-      const conflict = native.some(skill => (skill.name === item.skill.name && skill.rootPath !== destination) || destination.startsWith(`${skill.rootPath}/`))
+      const conflict = native.some(skill => (skill.scope === item.skill.scope && skill.name === item.skill.name && skill.rootPath !== destination) || destination.startsWith(`${skill.rootPath}/`))
         || managed.some(entry => item.id.startsWith(`${entry.id}/`))
       const status = item.error || conflict || remote?.modified ? 'conflict'
         : remote ? remote.marker?.digest === item.digest ? 'same' : 'update'
@@ -71,7 +83,12 @@ export class SshSkillSync {
       for (const key of selected) {
         const candidate = local.find(item => item.id === key)
         const row = inspection.rows.find(item => item.id === key)
-        if (!candidate || !row || !['missing', 'update'].includes(row.status)) throw new Error(`Skill 已变化或存在冲突，请刷新后重试：${key}`)
+        if (!candidate || !row) throw new Error(`Skill 已变化，请重新查看：${key}`)
+        if (row.status === 'same') { progress({ id: key, name: row.name, ok: true, message: '内容一致' }); continue }
+        if (row.status === 'conflict') {
+          progress({ id: key, name: row.name, ok: false, message: row.error ?? '远端有修改，保留现有版本' })
+          continue
+        }
         const tree = await readSkillTree(localWorkspaceIO, candidate.skill.rootPath)
         bytes += tree.bytes
         if (bytes > SKILL_SYNC_BYTES) throw new Error('所选 Skill 内容超过单次 20 MiB 上限，请减少选择')

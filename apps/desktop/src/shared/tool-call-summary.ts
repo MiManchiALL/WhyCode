@@ -96,25 +96,6 @@ function knownToolSummary(
       return screenshotSummary(input)
     case 'ReadPdf':
       return join(pdfSourceSummary(input), pageRange(input, 'startPage', 'pageCount'))
-    case 'BuildOfficeArtifact':
-      return join(
-        text(input, 'outputPath'),
-        upper(text(input, 'format')),
-        text(input, 'mode'),
-      )
-    case 'InspectOffice':
-      return join(
-        text(input, 'path'),
-        text(input, 'view'),
-        officeLocationSummary(input),
-        unitRange(input),
-      )
-    case 'RenderOffice':
-      return join(
-        text(input, 'path'),
-        text(input, 'view'),
-        pageRange(input, 'startPage', 'pageCount'),
-      )
     case 'Skill':
       return skillSummary(input, context)
     case 'Present':
@@ -255,14 +236,6 @@ function pdfSourceSummary(input: ToolInput): string {
     : source
 }
 
-function officeLocationSummary(input: ToolInput): string {
-  if (text(input, 'sheetName')) {
-    return join(prefixed('sheet', text(input, 'sheetName')), text(input, 'range'))
-  }
-  if (typeof input.slideNumber === 'number') return `slide ${input.slideNumber}`
-  return ''
-}
-
 function skillSummary(input: ToolInput, context: ToolCallSummaryContext): string {
   const skillId = text(input, 'skillId')
   const skill = context.skills?.find((item) => item.id === skillId)
@@ -363,14 +336,6 @@ function inputLengthSummary(input: ToolInput): string {
   return `${value.length} ${value.length === 1 ? 'character' : 'characters'}`
 }
 
-function unitRange(input: ToolInput): string {
-  const start = number(input, 'startUnit')
-  const count = number(input, 'unitCount')
-  if (start === null && count === null) return ''
-  const first = start ?? 1
-  return count === null ? `from unit ${first}` : `units ${first}–${first + count - 1}`
-}
-
 function arrayCount(input: ToolInput, key: string, singular: string, plural: string): string {
   const values = Array.isArray(input[key]) ? input[key] : []
   return count(values.length, singular, plural)
@@ -437,10 +402,6 @@ function prefixed(prefix: string, value: string): string {
 
 function arrow(source: string, destination: string): string {
   return source && destination ? `${source} → ${destination}` : source || destination
-}
-
-function upper(value: string): string {
-  return value.toUpperCase()
 }
 
 function shortId(value: string): string {

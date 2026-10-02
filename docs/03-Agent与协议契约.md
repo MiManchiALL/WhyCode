@@ -293,7 +293,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 - `ViewImage` 读取当前工作区/权限允许的图片；SSH 路径指服务器文件。支持 high、经画像验证的 original 与 autoOrient 后源像素 region；结果返回模型到源图映射。
 - `CaptureScreenshot {target,display_id?,window_title?,region?,detail}`：target 为 screen/window，region 是 screen 的可选裁剪区域。单个应用优先 window 并提供唯一匹配的 window_title；目标窗口可位于后台或被遮挡，但须打开且未最小化。显示器截图不一定包含目标应用，仅在检查多窗口、桌面布局或显示器整体状态时使用 screen。Windows 捕获事务排除 WhyCode，不通过隐藏/显示制造画面抖动。
 - `AnalyzeImage {attachmentIds,question}` 只给非视觉 Main 且必须有有效辅助视觉连接；每次 1～10 张。辅助请求不接收主历史、项目、文件名、工具或密钥。
-- 用户输入最多 10 张；普通视觉工具、MCP 和 `RenderOffice` 单步骤最多 4 张。视觉 `ReadPdf` 使用自身最多 20 页/32 MB 边界。
+- 用户输入最多 10 张；普通视觉工具和 MCP 单步骤最多 4 张。视觉 `ReadPdf` 使用自身最多 20 页/32 MB 边界。
 - Base64 只存在于无路径剪贴板发送前和当前 Provider 内存请求；JSONL、CoreEvent、ViewEvent 与摘要只保存稳定引用。
 
 ### 3.7 PDF
@@ -304,17 +304,18 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 小 PDF 自动展开只适用于视觉 Main、用户上传的最近权威引用，单份和单请求均最多 10 页、总图 16 MB。Web 导入、大文件或超预算文件必须显式 `ReadPdf`。PDF 与页面缓存以附件摘要和事务校验；损坏、加密、空或越界输入明确失败。
 
-### 3.8 Office
+### 3.8 工作区依赖与 Office 命令
 
-- `BuildOfficeArtifact {format,mode,scriptPath,outputPath,assets[],templateAssetKey?,pptxTemplateRequirements?}`：format 为 docx/pptx/xlsx，mode 为 create/template；模板模式必须精确引用模板 asset。脚本在无 Node 权限的 SES 中执行，最终原子发布。
-- `InspectOffice {path,startUnit=1,unitCount=20,view="content",sheetName?,range?,slideNumber?}`：view 为 content/objects/styles/relationships/validation/template/formula-trace；分页只能使用返回的 nextUnit，单次最多 50 单元、60k 文字。
-- `RenderOffice {path,view="pages",startPage=1,pageCount=4}`：只给具备视觉能力的 Main 或获准使用该工具的子代理，且独占步骤；pages 最多 4 页，overview 最多 50 页合成一图。
+`LoadWorkspaceDependencies {}` 是宿主注入的执行工具，按当前工作区 IO 准备环境，返回 `node`、`run`、`office`、`check` 绝对路径与 `libraries`。SSH 返回服务器路径，不能作为本机路径使用。首次准备可下载依赖，整体上限十五分钟，取消或安装失败以工具错误返回；工具结果只声明环境就绪，不声明文档成功。讨论和 BTW 不提供此工具，子代理按冻结白名单装配，Explore 不获准准备环境或运行命令。
 
-创建/修改前必须读取当前 Office Skill 的 builder API；模板 PPTX 还需读取 template-following 规则。接口失败应修正同一 builder，不切换到命令绕过构建边界。PPTX 优先复制源页并修改现有对象；源页复制接口无法表达的局部编辑可在同一 builder 中使用 JSZip 与 fastXml 操作已检查的 OOXML 目标。
+模型先读取相应 Office Skill，再通过普通 `RunCommand` 执行：
 
-PPTX 模板模式始终检查源文件和成品的 OOXML 结构；附加约束由模型根据用户要求与原件声明，不默认锁定普通对象几何或媒体字节。`pptxTemplateRequirements` 只适用于 PPTX template 模式：`requireExactDimensions` 检查画幅；`referenceSlides` 与 `minimumCoverageRatio` 必须同时提供，按版式类型及占位符身份计算覆盖率；`requirePlaceholderGeometry` 还要求匹配参考版式的输出页保留占位符位置和尺寸，几何可继承自版式或母版。源页必须存在，比例不得凭空设定。返回的 `templateComparison.checks` 只列实际通过的约束，不能代替 Logo、配色、字体与整体设计的视觉对照。普通文字或形状删除无需媒体理由；图片和含媒体的组合删除仍须声明 `mediaRole` 与 `reason`。
+- `NODE RUN script.mjs`：使用正常 Node 权限运行工作区脚本，提供 docx、pptxgenjs、exceljs、jszip 和 fast-xml-parser 的包解析。输入素材和输出由脚本处理；沿用命令审批、取消、超时和结果回传，不建立专用 Office 发布事务或隐式检查点。
+- `NODE CHECK file [--contains TEXT] [--count N] [--sheet NAME] [--offset N --limit N] [--require-calculated]`：验证有界 ZIP/XML 与内部关系，返回 JSON 内容摘要及错误。默认每批 20、最多 50 单位，正文预览约 60k 字符；DOCX 单位为段落，PPTX 为幻灯片，XLSX 为工作表，继续位置使用 nextOffset。每表最多展示 200 个单元格，公式计数、错误和缺失结果核对覆盖全表。失败非零退出；输入不超过 100 MiB、包不超过 10000 文件、展开不超过 128 MiB、单个 XML 不超过 16 MiB。
+- `NODE OFFICE render --input FILE --output-dir NEW_DIR [--pages 1,2] [--sheet NAME --range A1:D20]`：调用 LibreOffice Kit 生成 PNG 与清单；模型用通用 `ViewImage` 查看页图。
+- `NODE OFFICE convert --input FILE --output FILE` 与 `recalculate`：转换格式或实际重算并另存工作簿，失败返回非零退出码与 JSON 原因。默认 120 秒，允许设置 1–600 秒；输入和输出各限 100 MiB、最多 10000 归档条目、展开最多 250 MiB，沿用引擎的其它限制。可用 `--font-directory` 选择现有字体目录。
 
-含公式 XLSX 只有真实 Office/LibreOffice 引擎重算、保存并复检成功后发布。非视觉 Main 只能声明结构检查；视觉 Main 还要对最终版本完成全页渲染复核。交付前的内容或视觉问题必须回到同一 builder 修复、重建并重新检查。
+创建或修改后的最终版本需执行任务所需的内容和结构检查；含公式工作簿需实际重算、检查缓存和关键值。视觉模型按 Skill 查看最终页图，非视觉模型如实说明未执行视觉复核。结构成功不证明业务逻辑、模板保真或视觉排版正确；检查失败应修正脚本或文档并重新验证，不伪造成功声明。
 
 ### 3.9 最终成品与来源引用
 
@@ -437,7 +438,7 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
 
-三类子代理的默认工具包含 `InspectOffice`、`ReadPdf`、`RenderOffice` 和 `CaptureScreenshot`，实际暴露范围由冻结定义与子代理自身模型能力共同决定。非视觉子代理保留 Office 结构检查及 PDF 文字读取，移除 `ViewImage`、`RenderOffice` 和 `CaptureScreenshot`，不借用 Main 的辅助视觉模型。Explore 仍无命令或文件写入工具；Reviewer 可运行验证命令，但无专用文件写入或 Office 构建工具。越界访问和截图沿用父会话审批链，不能因工具只读而跳过授权。
+内置 Explore、Reviewer、General 均可用 `ReadPdf`；具备视觉能力时提供 `ViewImage`、视觉 `ReadPdf` 与本地 `CaptureScreenshot`。Reviewer 和 General 可用 `LoadWorkspaceDependencies` 与命令执行 Office 工作流，Explore 没有命令或依赖准备权限。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
 
 文档委派提供可访问的文件路径；父会话的 PDF 附件 ID 不能直接作为子代理附件使用。子代理自己通过 WebFetch 导入的 PDF 属于其独立会话，可经 `ReadPdf` 读取并在后续激活中继续使用。无法查看页面图时，只报告文字或结构证据，视觉核验交给具备相应能力的代理。
 

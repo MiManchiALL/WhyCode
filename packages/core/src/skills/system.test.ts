@@ -67,61 +67,17 @@ describe('内置 Skill 安装与发现', () => {
 
       for (const skillName of ['documents', 'presentations', 'spreadsheets']) {
         const skill = snapshot.entries.find((entry) => entry.name === skillName)!
-        assert.match(skill.description, /读取、分析、创建、修改或验收/)
+        assert.match(skill.description, /读取/)
         const main = await readFile(join(installed.rootPath, skillName, 'SKILL.md'), 'utf8')
-        assert.match(main, /只读问答/)
-        assert.match(main, /quality-checklist\.md/)
-        if (skillName !== 'spreadsheets') {
-          assert.match(main, /开始任何创建或修改前，必须读取 `references\/builder-api\.md`/)
-        }
-        assert.match(main, /旧检查失效/)
-        assert.match(main, /同一个.*builder/)
-
-        for (const [resourcePath, expected] of [
-          ['references/builder-api.md', /构建接口/],
-          ['references/quality-checklist.md', /交付质量清单/],
-        ] as const) {
-          const officeReference = await createSkillTool(snapshot).execute({
-            skillId: skill.id,
-            resourcePath,
-          }, {
-            projectDir: home,
-            additionalDirs: [],
-            abortSignal: new AbortController().signal,
-          })
-          assert.equal(officeReference.isError, false)
-          assert.match(officeReference.data, expected)
-          if (resourcePath === 'references/builder-api.md') {
-            assert.match(officeReference.data, /mode: "template"/)
-            if (skillName !== 'spreadsheets') {
-              assert.match(officeReference.data, /OfficeTemplate\.(?:docx|pptx)/)
-              assert.match(officeReference.data, /直接返回 bytes/)
-            }
-          }
-          if (resourcePath === 'references/quality-checklist.md') {
-            assert.match(
-              officeReference.data,
-              skillName === 'spreadsheets' ? /重算引擎证据证明最终文件经过实际重算/ : /逐页检查/,
-            )
-          }
-        }
+        assert.match(main, /LoadWorkspaceDependencies/)
+        assert.match(main, /RunCommand/)
+        assert.match(main, /ViewImage/)
+        const reference = await createSkillTool(snapshot).execute({
+          skillId: skill.id, resourcePath: 'references/commands.md',
+        }, { projectDir: home, additionalDirs: [], abortSignal: new AbortController().signal })
+        assert.equal(reference.isError, false)
+        assert.match(reference.data, /import /)
       }
-
-      const presentations = snapshot.entries.find((entry) => entry.name === 'presentations')!
-      const templateFollowing = await createSkillTool(snapshot).execute({
-        skillId: presentations.id,
-        resourcePath: 'references/template-following.md',
-      }, {
-        projectDir: home,
-        additionalDirs: [],
-        abortSignal: new AbortController().signal,
-      })
-      assert.equal(templateFollowing.isError, false)
-      assert.match(templateFollowing.data, /叙事角色.*构图轮廓.*视觉密度/u)
-      assert.match(templateFollowing.data, /用户明确允许重新排版时，以用户要求为准/u)
-      assert.match(templateFollowing.data, /不要自行编造复用百分比/u)
-      assert.match(templateFollowing.data, /不默认锁死普通对象的位置、大小、顺序或媒体字节/u)
-      assert.match(templateFollowing.data, /校验失败应先核对声明是否准确，再修复输出；不能为了通过校验而降低用户要求/u)
 
       const repeated = await installSystemSkills(home)
       assert.equal(repeated.changed, false)

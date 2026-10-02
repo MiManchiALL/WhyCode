@@ -22,7 +22,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
   const [connections, setConnections] = useState<SshConnectionSnapshot[]>([])
   const [editor, setEditor] = useState<ConnectionEditor | null>(null)
   const [picker, setPicker] = useState<SshConnection | null>(null)
-  const [skillConnection, setSkillConnection] = useState<string | null>(null)
+  const [skillConnection, setSkillConnection] = useState<{ id: string; mode: 'sync' | 'clean' } | null>(null)
   const [release, setRelease] = useState<SshReleaseDialogState | null>(null)
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; action: string; run: () => void } | null>(null)
   const feedback = useConversationFeedback()
@@ -85,9 +85,9 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     if (action !== 'disconnect') { setRelease({ connection, action }); return }
     setConfirmation({ title: '断开 SSH 连接？', description: '停止此连接下正在运行的命令和终端。连接配置、远端组件和文件全部保留；再次点击“连接”后恢复使用。', action: '确认', run: () => void run(connection, action) })
   }
-  const skillsFor = connections.find(connection => connection.id === skillConnection)
+  const skillsFor = connections.find(connection => connection.id === skillConnection?.id)
   return <>
-    <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。首次连接会自动准备轻量运行组件。"
+    <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。新连接首次成功后自动同步内置 Skill，Office 环境按需准备。"
       actions={connections.length > 0 && <SettingsButton onClick={() => setEditor({})}><Plus size={15} />添加连接</SettingsButton>}>
       <SettingsPanel padded={false}>
         {!connections.length && <div className="flex flex-col items-center gap-3 px-8 py-12 text-[var(--wc-muted)]">
@@ -115,7 +115,8 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={5}>
               <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'connecting'} onSelect={() => setEditor({ connection })}>编辑连接</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => setSkillConnection(connection.id)}>同步本地 Skill</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => setSkillConnection({ id: connection.id, mode: 'sync' })}>同步/更新 Skill</DropdownMenu.Item>
+              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => setSkillConnection({ id: connection.id, mode: 'clean' })}>清理远端 Skill</DropdownMenu.Item>
               <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'disconnected'} onSelect={() => connection.status === 'connecting' ? void run(connection, 'disconnect') : action(connection, 'disconnect')}>{connection.status === 'connecting' ? '取消连接' : '断开连接'}</DropdownMenu.Item>
               <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => action(connection, 'cleanup')}>清理远端组件</DropdownMenu.Item>
               <DropdownMenu.Separator className="my-1 h-px bg-[var(--wc-line)]" />
@@ -127,7 +128,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
     </SettingsSection>
     {editor && <SshConnectionEditor connection={editor.connection} purpose={editor.resume?.action} onClose={() => setEditor(null)} onSave={save} />}
     {picker && <SshDirectoryPicker connection={picker} onClose={() => setPicker(null)} onSelect={onSelectProject} />}
-    {skillsFor && <SshSkillDialog key={skillsFor.id} connection={skillsFor} onClose={() => setSkillConnection(null)} />}
+    {skillsFor && skillConnection && <SshSkillDialog key={skillsFor.id} connection={skillsFor} initialMode={skillConnection.mode} onClose={() => setSkillConnection(null)} />}
     {release && <SshReleaseDialog state={release} onClose={() => setRelease(null)} onConfirm={options => { setRelease(null); void run(release.connection, release.action, undefined, options) }} onRemoveLocal={() => { setRelease(null); void run(release.connection, 'remove-local') }} />}
     <AlertDialog.Root open={Boolean(confirmation)} onOpenChange={open => { if (!open) setConfirmation(null) }}><AlertDialog.Portal>
       <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />

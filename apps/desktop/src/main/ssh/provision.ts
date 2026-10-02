@@ -13,6 +13,18 @@ export function execChannel(client: Client, command: string): Promise<ClientChan
   return new Promise((resolve, reject) => client.exec(command, (error, channel) => error ? reject(error) : resolve(channel)))
 }
 
+/** 大型受管环境在服务器删除，避免逐文件 SFTP 往返；调用方先验证归属。 */
+export async function removeRemoteEnvironment(client: Client, directory: string): Promise<void> {
+  if (!posix.isAbsolute(directory) || !directory.endsWith('/.cache/whycode-remote/office') || posix.normalize(directory) !== directory) throw new Error('远端环境清理路径无效')
+  const channel = await execChannel(client, `rm -rf -- ${quoteShell(directory)}`)
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { channel.close(); reject(new Error('远端运行环境清理超时，可重试清理')) }, 120_000)
+    channel.resume(); channel.stderr.resume()
+    channel.once('error', (error: Error) => { clearTimeout(timer); reject(error) })
+    channel.once('close', (code: number) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('远端运行环境清理失败')) })
+  })
+}
+
 async function architecture(client: Client): Promise<'x64' | 'arm64'> {
   const [os, arch] = (await commandOutput(client, 'uname -s; uname -m')).trim().split(/\s+/u)
   if (os !== 'Linux' || !['x86_64', 'aarch64', 'arm64'].includes(arch ?? '')) throw new Error('目前支持 Linux x64 / ARM64 服务器')

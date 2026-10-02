@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { WorkspaceFileSystem } from '@whycode/core'
 
 const OWNER = 'WhyCode remote process host v1\n'
+export const ENVIRONMENT_OWNER = 'WhyCode workspace dependencies v1\n'
 export interface RemoteComponent { directory: string; identity: string }
 
 export async function readComponentIdentity(fs: WorkspaceFileSystem, directory: string): Promise<string | null> {
@@ -47,16 +48,26 @@ export async function prepareRemoteComponent(fs: WorkspaceFileSystem, home: stri
 }
 
 /** Only known component files are removed; unknown contents, projects and scratch are untouched. */
-export async function cleanupRemoteComponent(fs: WorkspaceFileSystem, directory: string): Promise<void> {
+export async function cleanupRemoteComponent(fs: WorkspaceFileSystem, directory: string, removeEnvironment: (directory: string) => Promise<void>): Promise<void> {
   const info = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
   if (!info) return
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('远端组件目录归属校验失败')
   const entries = await fs.readdir(directory, { withFileTypes: true })
-  if (entries.some(entry => !entry.isFile() || (!['.owner', '.identity'].includes(entry.name) && !/^(?:host|rg)-[0-9a-f]{64}$/u.test(entry.name)))) throw new Error('组件目录包含未知文件，已保留目录')
+  const unknown = entries.some(entry => entry.name === 'office'
+    ? !entry.isDirectory() || entry.isSymbolicLink()
+    : !entry.isFile() || (!['.owner', '.identity'].includes(entry.name) && !/^(?:host|rg)-[0-9a-f]{64}$/u.test(entry.name)))
+  if (unknown) throw new Error('组件目录包含未知文件，已保留目录')
   const owner = posix.join(directory, '.owner')
   if (await fs.readFile(owner, 'utf8') !== OWNER) throw new Error('远端组件目录归属校验失败')
   await readComponentIdentity(fs, directory)
-  for (const entry of entries) if (entry.name !== '.owner' && entry.name !== '.identity') await fs.unlink(posix.join(directory, entry.name))
+  if (entries.some(entry => entry.name === 'office')) {
+    const environment = posix.join(directory, 'office')
+    const marker = posix.join(environment, '.owner')
+    const metadata = await fs.lstat(marker)
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 128 || await fs.readFile(marker, 'utf8') !== ENVIRONMENT_OWNER) throw new Error('远端 Office 环境归属校验失败，已保留目录')
+    await removeEnvironment(environment)
+  }
+  for (const entry of entries) if (!['.owner', '.identity', 'office'].includes(entry.name)) await fs.unlink(posix.join(directory, entry.name))
   await fs.unlink(owner)
   // 身份最后删除；归属标记已移除时，新入口不能给正在清理的目录创建新身份。
   if (entries.some(entry => entry.name === '.identity')) await fs.unlink(posix.join(directory, '.identity'))

@@ -1,0 +1,16 @@
+{
+  "name": "whycode-office-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.21.0" },
+  "dependencies": {
+    "@deepseek-ai/libreoffice-kit": "0.1.5",
+    "docx": "9.7.1",
+    "exceljs": "4.4.0",
+    "fast-xml-parser": "5.10.1",
+    "jszip": "3.10.1",
+    "pptxgenjs": "4.0.1"
+  },
+  "overrides": { "exceljs": { "uuid": "11.1.1" }, "fflate": "0.8.3", "image-size": "2.0.4" }
+}

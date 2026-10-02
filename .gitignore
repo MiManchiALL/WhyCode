@@ -30,3 +30,5 @@ Thumbs.db
 # 外部参考源码必须位于仓库外；若被误拷入也一律忽略
 Claude Code/
 claude-code/
+
+apps/desktop/resources/office/

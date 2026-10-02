@@ -26,6 +26,7 @@ const requestSchema = z.discriminatedUnion('action', [
 export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore, onSkillsChanged: () => void): void {
   const connections = workspaces.connections
   const skills = new SshSkillSync(connections, app.getPath('home'), onSkillsChanged)
+  connections.on('connected', id => { void skills.initialize(id) })
   ipcMain.handle(IPC.ssh, async (event, value: unknown): Promise<SshResult> => {
     try {
       if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) throw new Error('仅主页面可管理 SSH 连接')

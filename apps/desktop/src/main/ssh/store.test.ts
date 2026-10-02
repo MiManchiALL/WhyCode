@@ -19,6 +19,19 @@ async function fixture(t: TestContext) {
 
 const input = { name: '服务器', host: 'example.test', port: 22, username: 'Lin', authentication: 'password' as const, rememberSecret: false }
 
+it('首次 Skill 初始化机会原子消费，编辑与重启不会重新授权自动上传', async t => {
+  const { file, store } = await fixture(t)
+  const first = await store.save(input)
+  assert.equal('initializeSkills' in first, false)
+  const edited = await store.save({ ...first, name: '新名称' })
+  assert.deepEqual(await Promise.all([store.takeSkillInitialization(edited.id), store.takeSkillInitialization(edited.id)]), [true, false])
+  await store.save({ ...edited, name: '再次编辑' })
+  assert.equal(await store.takeSkillInitialization(first.id), false)
+  assert.equal(JSON.parse(await readFile(file, 'utf8'))[0].initializeSkills, undefined)
+  await store.remove(first.id)
+  assert.equal(await store.takeSkillInitialization((await store.save(input)).id), true)
+})
+
 it('连接名称和认证方式不产生新服务器，重复保存不改配置、凭据或信任', async t => {
   const { file, store } = await fixture(t)
   const first = await store.save({ ...input, secret: 'first-secret' })

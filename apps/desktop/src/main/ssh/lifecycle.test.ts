@@ -40,7 +40,7 @@ for (const failFirst of [false, true]) it(`同一服务器并发删除，慢任�
   const started = new Promise<void>(resolve => { signalStarted = resolve })
   const blocked = new Promise<void>(resolve => { unblock = resolve })
   const withFiles = env.connections.withFiles.bind(env.connections)
-  t.mock.method(env.connections, 'withFiles', ((id, operation, target) => withFiles(id, (fs, home) => operation({
+  t.mock.method(env.connections, 'withFiles', ((id, operation, target) => withFiles(id, (fs, home, client) => operation({
     ...fs,
     rm: async (path, options) => {
       if (path.endsWith(`/${first.sessionId}`)) {
@@ -50,7 +50,7 @@ for (const failFirst of [false, true]) it(`同一服务器并发删除，慢任�
       }
       await fs.rm(path, options)
     },
-  }, home), target)) satisfies SshConnections['withFiles'])
+  }, home, client), target)) satisfies SshConnections['withFiles'])
   const remove = async (sessionId: string) => {
     const deletion = await stageSessionDeletion({ sessionId, sessions, scratch,
       commandSessions: { removeSession: async () => {} },
@@ -236,13 +236,13 @@ it('最后一个会话删除后清理空 scratch 根目录；并发新会话和�
 
   const withFiles = env.connections.withFiles.bind(env.connections)
   const concurrent = randomUUID()
-  const intercept: SshConnections['withFiles'] = (id, operation, target) => withFiles(id, async (fs, home) => {
+  const intercept: SshConnections['withFiles'] = (id, operation, target) => withFiles(id, async (fs, home, client) => {
     const rmdir = fs.rmdir
     fs.rmdir = async path => {
       if (path === `${env.remoteRoot}/.cache/whycode-scratch`) await mkdir(join(parent, concurrent, 'Main'), { recursive: true })
       return rmdir(path)
     }
-    return operation(fs, home)
+    return operation(fs, home, client)
   }, target)
   const mock = t.mock.method(env.connections, 'withFiles', intercept)
   await env.workspaces.removeScratch(second, env.workspace)

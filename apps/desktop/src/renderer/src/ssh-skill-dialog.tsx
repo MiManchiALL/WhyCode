@@ -11,9 +11,9 @@ import { useSshSkills } from './use-ssh-skills.ts'
 const STATUS: Record<SshSkillRow['status'], string> = { missing: '远端缺少', same: '内容一致', update: '可更新', conflict: '有冲突', 'remote-only': '仅远端副本' }
 const canSync = (row: SshSkillRow) => row.status === 'missing' || row.status === 'update'
 
-export function SshSkillDialog({ connection, onClose }: { connection: SshConnectionSnapshot; onClose: () => void }) {
+export function SshSkillDialog({ connection, initialMode, onClose }: { connection: SshConnectionSnapshot; initialMode: 'sync' | 'clean'; onClose: () => void }) {
   const state = useSshSkills(connection.id)
-  const [mode, setMode] = useState<'sync' | 'clean'>('sync')
+  const [mode, setMode] = useState(initialMode)
   const [selected, setSelected] = useState<string[] | null>(null)
   const [showExisting, setShowExisting] = useState(true)
   const [cleanup, setCleanup] = useState<SshSkillRow[] | null>(null)
@@ -33,10 +33,10 @@ export function SshSkillDialog({ connection, onClose }: { connection: SshConnect
       <Dialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
       <Dialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] flex max-h-[90vh] w-[min(92vw,680px)] -translate-x-1/2 -translate-y-1/2 flex-col p-5 outline-none">
         <div className="flex items-center justify-between gap-3"><Dialog.Title className="text-base font-semibold">同步与管理 Skill</Dialog.Title><Dialog.Close asChild><button className="wc-focus-ring rounded-lg p-1.5 hover:bg-black/[0.05]" aria-label="关闭 Skill 管理"><X size={17} /></button></Dialog.Close></div>
-        <Dialog.Description className="mt-2 break-words text-sm leading-6 text-[var(--wc-muted)]">{connection.name} · {connection.username}@{connection.host}<br />同步本机用户 Skill 的完整目录，此账号下的所有项目共用。脚本依赖仍需满足服务器环境要求。</Dialog.Description>
+        <Dialog.Description className="mt-2 break-words text-sm leading-6 text-[var(--wc-muted)]">{connection.name} · {connection.username}@{connection.host}<br />管理 WhyCode 内置 Skill 和本地用户 Skill 的远端副本，此账号下的所有项目共用。清理后不会在重连时自动上传，可在此重新同步。</Dialog.Description>
         <div className="my-4 flex flex-wrap items-center gap-2">
-          <SettingsButton variant={mode === 'sync' ? 'primary' : undefined} onClick={() => changeMode('sync')}>同步本地 Skill</SettingsButton>
-          <SettingsButton variant={mode === 'clean' ? 'primary' : undefined} onClick={() => changeMode('clean')}>管理已同步 Skill</SettingsButton>
+          <SettingsButton variant={mode === 'sync' ? 'primary' : undefined} onClick={() => changeMode('sync')}>同步/更新 Skill</SettingsButton>
+          <SettingsButton variant={mode === 'clean' ? 'primary' : undefined} onClick={() => changeMode('clean')}>清理远端 Skill</SettingsButton>
           {mode === 'sync' && <label className="ml-auto flex items-center gap-2 text-xs text-[var(--wc-muted)]"><input type="checkbox" checked={showExisting} onChange={event => setShowExisting(event.target.checked)} />显示已有项</label>}
         </div>
         <div className="wc-scrollbar min-h-0 flex-1 overflow-y-auto rounded-xl border border-[var(--wc-line)]" aria-busy={state.loading || state.busy}>
@@ -45,10 +45,10 @@ export function SshSkillDialog({ connection, onClose }: { connection: SshConnect
             <input type="checkbox" className="mt-1" disabled={state.busy || (mode === 'sync' && !canSync(row))} checked={chosen.some(item => item.id === row.id)} onChange={event => setSelected(old => event.target.checked ? [...(old ?? defaults), row.id] : (old ?? defaults).filter(id => id !== row.id))} />
             <span className="min-w-0 flex-1"><span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"><span className="break-words text-sm font-medium">{row.name}</span><span className="text-xs text-[var(--wc-muted)]">{row.modified ? '远端有修改' : STATUS[row.status]}</span></span>
               <span className="mt-1 block break-words text-xs leading-5 text-[var(--wc-muted)]">{row.error ?? row.description}</span>
-              <span className="mt-1 block break-all text-xs text-[var(--wc-faint)]">{row.id}</span>
+              <span className="mt-1 block break-all text-xs text-[var(--wc-faint)]">{row.id.startsWith('.system/') ? '内置' : '用户'} · {row.id}</span>
             </span>
           </label>)}
-          {!state.loading && !visible.length && <p className="p-5 text-center text-sm text-[var(--wc-muted)]">{state.busy ? '操作正在后台继续…' : mode === 'clean' ? '没有已同步的 Skill' : '没有符合条件的本地用户 Skill'}</p>}
+          {!state.loading && !visible.length && <p className="p-5 text-center text-sm text-[var(--wc-muted)]">{state.busy ? '操作正在后台继续…' : mode === 'clean' ? '没有已同步的 Skill' : '没有符合条件的本地 Skill'}</p>}
         </div>
         {state.error && <p className="mt-3 break-words text-sm text-[var(--wc-danger)]">{state.error} <button className="underline" disabled={state.busy} onClick={() => void state.load()}>重试读取</button></p>}
         {state.job && <div className="mt-3 max-h-28 overflow-y-auto text-xs leading-5" aria-live="polite">

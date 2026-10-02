@@ -23,15 +23,15 @@ describe('子代理文档与视觉工具', () => {
         })
         await launch(fixture, role)
         const names = fixture.modelCalls[0]!.tools!.map((tool) => tool.name)
-        assert.ok(names.includes('InspectOffice'))
+        assert.equal(names.includes('LoadWorkspaceDependencies'), role !== 'explore')
         assert.ok(names.includes('ReadPdf'))
-        for (const name of ['RenderOffice', 'CaptureScreenshot', 'ViewImage']) {
+        for (const name of ['CaptureScreenshot', 'ViewImage']) {
           assert.equal(names.includes(name), visual, name)
         }
         assert.equal(names.includes('AnalyzeImage'), false)
         assert.equal(names.includes('RunCommand'), role !== 'explore')
         assert.equal(names.includes('WriteFile'), role === 'general')
-        for (const name of ['BuildOfficeArtifact', 'Subagent', 'AskUserQuestion']) {
+        for (const name of ['Subagent', 'AskUserQuestion']) {
           assert.equal(names.includes(name), false, name)
         }
         assert.ok(names.includes('CreateTaskPlan'))
@@ -40,35 +40,32 @@ describe('子代理文档与视觉工具', () => {
     }
   }
 
-  it('文字子代理实际读取 Office 结构和 PDF 文字，不生成图片或改写源文件', async () => {
+  it('文字子代理实际读取 PDF 文字，不生成图片或改写源文件', async () => {
     const documents = documentProcessors()
     const fixture = await createFixture([], async (index, call) => {
-      if (index === 0) return toolStream('InspectOffice', { path: 'slides.pptx' }, 'inspect')
-      if (index === 1) return toolStream('ReadPdf', {
+      if (index === 0) return toolStream('ReadPdf', {
         sourceType: 'path', sourceValue: 'paper.pdf', pageCount: 1,
       }, 'pdf')
-      assert.match(JSON.stringify(call.prompt), /模板标题/)
       assert.match(JSON.stringify(call.prompt), /第一页正文/)
       return finalStream('已核验文字和结构。')
     }, undefined, { ...documents, parentSupportsImageInput: true })
     await writeSources(fixture)
     const id = await launch(fixture)
-    assert.deepEqual(documents.operations, ['office:inspect', 'pdf:text'])
+    assert.deepEqual(documents.operations, ['pdf:text'])
     const stored = await new SubagentStorage(fixture.sessionsRoot, documents.pdfProcessor)
       .open(fixture.parentJournal.sessionId, id)
     assert.equal(stored.initialImageAttachments.length, 0)
-    assert.equal(await readFile(join(fixture.projectDir, 'slides.pptx'), 'utf8'), 'test-office')
+    assert.equal(await readFile(join(fixture.projectDir, 'paper.pdf'), 'utf8'), '%PDF-1.4\npaper')
     await fixture.service.close()
   })
 
   it('视觉子代理的渲染、PDF 页图及截图归属自身，冷恢复仍能读取并展示', async () => {
     const documents = documentProcessors()
     const fixture = await createFixture([], async (index, call) => {
-      if (index === 0) return toolStream('RenderOffice', { path: 'slides.pptx', pageCount: 1 }, 'render')
-      if (index === 1) return toolStream('ReadPdf', {
+      if (index === 0) return toolStream('ReadPdf', {
         sourceType: 'path', sourceValue: 'paper.pdf', pageCount: 1,
       }, 'pdf')
-      if (index === 2) return toolStream('CaptureScreenshot', { target: 'window', window_title: '测试' }, 'capture')
+      if (index === 1) return toolStream('CaptureScreenshot', { target: 'window', window_title: '测试' }, 'capture')
       assert.ok(JSON.stringify(call.prompt).includes(SMALL_JPEG.toString('base64')))
       return finalStream('已核验页面图。')
     }, undefined, { ...documents, supportsImageInput: true, parentSupportsImageInput: false })
@@ -79,7 +76,7 @@ describe('子代理文档与视觉工具', () => {
     }
     await writeSources(fixture)
     const id = await launch(fixture, 'reviewer')
-    assert.deepEqual(documents.operations, ['office:render', 'pdf:visual', 'screenshot'])
+    assert.deepEqual(documents.operations, ['pdf:visual', 'screenshot'])
     assert.equal(approvals.length, 1)
     assert.match(JSON.stringify(approvals[0]), /截图会读取/)
     assert.equal(fixture.parentJournal.initialImageAttachments.length, 0)
@@ -88,7 +85,7 @@ describe('子代理文档与视觉工具', () => {
     const coldService = new SubagentService(fixture.serviceOptions)
     const stored = await new SubagentStorage(fixture.sessionsRoot, documents.pdfProcessor)
       .open(fixture.parentJournal.sessionId, id)
-    assert.equal(stored.initialImageAttachments.length, 3)
+    assert.equal(stored.initialImageAttachments.length, 2)
     const directory = await coldService.attachmentDirectory(fixture.parentJournal.sessionId, id)
     for (const attachment of stored.initialImageAttachments) {
       assert.equal(attachment.sessionId, id)
@@ -144,11 +141,11 @@ describe('子代理文档与视觉工具', () => {
   it('模型强行调用被能力过滤的工具也无法执行', async () => {
     const documents = documentProcessors()
     const fixture = await createFixture([], async (index) => index === 0
-      ? toolStream('RenderOffice', { path: 'slides.pptx' }) : finalStream('仅核验结构。'),
+      ? toolStream('CaptureScreenshot', { target: 'screen' }) : finalStream('仅核验文字。'),
     undefined, documents)
     await launch(fixture)
     assert.deepEqual(documents.operations, [])
-    assert.match(JSON.stringify(fixture.modelCalls.at(-1)?.prompt), /unavailable tool 'RenderOffice'/)
+    assert.match(JSON.stringify(fixture.modelCalls.at(-1)?.prompt), /unavailable tool 'CaptureScreenshot'/)
     await fixture.service.close()
   })
 
@@ -165,7 +162,7 @@ describe('子代理文档与视觉工具', () => {
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
     assert.ok(names.includes('ReadPdf'))
     assert.ok(names.includes('CreateTaskPlan'))
-    for (const name of ['InspectOffice', 'RenderOffice', 'CaptureScreenshot', 'ViewImage', 'WebSearch', 'ReadFile']) {
+    for (const name of ['LoadWorkspaceDependencies', 'CaptureScreenshot', 'ViewImage', 'WebSearch', 'ReadFile']) {
       assert.equal(names.includes(name), false, name)
     }
     await fixture.service.close()
@@ -204,6 +201,5 @@ async function launch(fixture: Fixture, role = 'explore'): Promise<string> {
 }
 
 async function writeSources(fixture: Fixture): Promise<void> {
-  await writeFile(join(fixture.projectDir, 'slides.pptx'), 'test-office')
   await writeFile(join(fixture.projectDir, 'paper.pdf'), '%PDF-1.4\npaper')
 }

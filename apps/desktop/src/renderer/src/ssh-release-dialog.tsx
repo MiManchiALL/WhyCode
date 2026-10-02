@@ -24,7 +24,7 @@ export function SshReleaseDialog({ state, onClose, onConfirm, onRemoveLocal }: {
       <AlertDialog.Title className="text-base font-semibold">{remove ? '删除此连接？' : '清理远端组件？'}</AlertDialog.Title>
       <AlertDialog.Description className="mt-3 text-sm leading-6 text-[var(--wc-muted)]">
         {state.connection.name} · {state.connection.username}@{state.connection.host}<br />
-        断开共用远端组件的连接并停止相关命令、终端，清理远端组件。{remove ? '完成后删除此连接配置。' : '保留连接配置，重连时自动准备组件。'}项目、会话记录与远端临时文件保留。
+        断开共用远端组件的连接并停止相关命令、终端，清理远端组件及已准备的 Office 环境。{remove ? '完成后删除此连接配置。' : '保留连接配置，重连时自动准备组件，Office 环境在需要时重新准备。'}项目、会话记录与远端临时文件保留。
       </AlertDialog.Description>
       <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={cleanSkills} onChange={event => setCleanSkills(event.target.checked)} /><span>同时清理已同步 Skill<span className="mt-1 block text-xs leading-5 text-[var(--wc-muted)]">影响此服务器当前账号下的所有项目；服务器原有 Skill 保留。</span></span></label>
       {state.error && <p className="mt-3 break-words text-sm text-[var(--wc-danger)]">{state.error}</p>}

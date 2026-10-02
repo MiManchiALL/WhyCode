@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, readFile, rm, writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { SkillCatalogService } from '@whycode/core'
+import { SkillCatalogService, installSystemSkills } from '@whycode/core'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshSkillSync } from './skill-sync.ts'
 import { ModifiedSshSkillsError } from './skill-remote.ts'
@@ -17,6 +17,39 @@ async function localSkill(home: string, name: string, content = '初始内容') 
   await writeFile(join(root, 'empty.txt'), '')
   return root
 }
+
+test('新连接只初始化内置 Skill 一次；清理和重启后不自动补回，手动同步仍可恢复', async t => {
+  const env = await sshFixture(t, 'protocol')
+  const home = join(env.root, 'local-home')
+  await localSkill(home, 'mine')
+  await installSystemSkills(home)
+  await localSkill(env.root, 'documents', '服务器原有用户 Skill')
+  const sync = new SshSkillSync(env.connections, home, () => {})
+  await env.connections.connect(env.id, env.fingerprint)
+  await sync.initialize(env.id)
+  assert.ok(sync.job(env.id)?.results.every(item => item.ok))
+  const rows = (await sync.list(env.id)).rows
+  const builtin = rows.filter(row => row.id.startsWith('.system/')).map(row => row.id)
+  assert.equal(builtin.length, 7)
+  assert.ok(rows.filter(row => builtin.includes(row.id)).every(row => row.status === 'same'))
+  assert.equal(rows.find(row => row.id === 'mine')!.status, 'missing')
+  const catalog = new SkillCatalogService({ homeDir: env.remoteRoot, workspaceIO: env.connections.host(env.id).io })
+  assert.equal((await catalog.list(null)).skills.filter(skill => skill.scope === 'system').length, 7)
+  await sync.clean(env.id, builtin, [])
+  await assert.rejects(access(join(env.root, '.whycode/skills/.system')), { code: 'ENOENT' })
+  env.connections.disconnect(env.id)
+  await env.connections.connect(env.id)
+  const restarted = new SshSkillSync(env.connections, home, () => {})
+  await restarted.initialize(env.id)
+  assert.equal(restarted.job(env.id), undefined)
+  await assert.rejects(access(join(env.root, '.whycode/skills/.system')), { code: 'ENOENT' })
+  const restored = await restarted.sync(env.id, [...builtin, 'mine'])
+  assert.ok(restored.results.every(item => item.ok))
+  assert.match(await readFile(join(env.root, '.whycode/skills/documents/SKILL.md'), 'utf8'), /服务器原有/)
+  await env.connections.remove(env.id, { cleanSkills: true })
+  await assert.rejects(access(join(env.root, '.whycode/skills/.system')), { code: 'ENOENT' })
+  await access(join(env.root, '.whycode/skills/documents/SKILL.md'))
+})
 
 test('SSH Skill 同步完整目录、更新未改副本、保护冲突，并可离线清空包括远端孤立副本', async t => {
   const env = await sshFixture(t, 'protocol')
@@ -48,7 +81,7 @@ test('SSH Skill 同步完整目录、更新未改副本、保护冲突，并可�
   assert.equal(await readFile(join(destination, 'references/中文资料.txt'), 'utf8'), '本地更新')
   await writeFile(join(destination, 'references/中文资料.txt'), '服务器修改')
   assert.equal((await sync.list(env.id)).rows[0]!.status, 'conflict')
-  await assert.rejects(sync.sync(env.id, ['alpha']), /冲突/)
+  assert.equal((await sync.sync(env.id, ['alpha'])).results[0]!.ok, false)
   await assert.rejects(sync.clean(env.id, ['alpha'], []), ModifiedSshSkillsError)
   assert.equal(await readFile(join(destination, 'references/中文资料.txt'), 'utf8'), '服务器修改')
 
