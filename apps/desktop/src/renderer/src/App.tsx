@@ -339,6 +339,7 @@ export function App() {
   }, [])
   const {
     catalog: skillCatalog,
+    loading: skillCatalogLoading,
     selected: selectedSkills,
     trigger: skillTrigger,
     matches: composerMenuItems,
@@ -2379,6 +2380,7 @@ export function App() {
                         items={composerMenuItems}
                         activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
                         diagnostics={skillCatalog.diagnostics}
+                        loading={skillCatalogLoading}
                         limitReached={skillLimitReached}
                         onSelect={selectComposerMenuItem}
                         onActivate={setSkillActiveIndex}

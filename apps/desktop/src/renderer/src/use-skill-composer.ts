@@ -55,6 +55,7 @@ interface UseSkillComposerOptions {
 /** Skill 目录和输入触发状态独立于附件草稿，App 只负责消息事务编排。 */
 export function useSkillComposer(options: UseSkillComposerOptions) {
   const [catalog, setCatalog] = useState<SkillCatalogSnapshot>(EMPTY_CATALOG)
+  const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<SkillSummary[]>([])
   const [trigger, setTrigger] = useState<SlashTrigger | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -114,17 +115,14 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     const targetRuntimeId = options.runtimeIdRef.current
     if (!targetRuntimeId) return
     const sequence = ++refreshSequenceRef.current
+    const isCurrent = () => options.runtimeIdRef.current === targetRuntimeId
+      && refreshSequenceRef.current === sequence
+    setLoading(true)
     try {
       const next = await window.whycode.listSkills(targetRuntimeId)
-      if (
-        options.runtimeIdRef.current === targetRuntimeId
-        && refreshSequenceRef.current === sequence
-      ) setCatalog(next)
+      if (isCurrent()) setCatalog(next)
     } catch (error) {
-      if (
-        options.runtimeIdRef.current !== targetRuntimeId
-        || refreshSequenceRef.current !== sequence
-      ) return
+      if (!isCurrent()) return
       setCatalog({
         ...EMPTY_CATALOG,
         diagnostics: [{
@@ -132,9 +130,12 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
           message: `Skill 目录读取失败：${error instanceof Error ? error.message : String(error)}`,
         }],
       })
+    } finally {
+      if (isCurrent()) setLoading(false)
     }
   }, [options.runtimeIdRef])
 
+  useEffect(() => () => { refreshSequenceRef.current++ }, [])
   useEffect(() => {
     if (options.runtimeId) void refresh()
   }, [
@@ -253,11 +254,13 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
   const resetCatalog = useCallback(() => {
     refreshSequenceRef.current++
     setCatalog(EMPTY_CATALOG)
+    setLoading(false)
   }, [])
   const closeMenu = useCallback(() => setTrigger(null), [])
 
   return {
     catalog,
+    loading,
     selected,
     trigger,
     matches,

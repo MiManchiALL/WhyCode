@@ -65,6 +65,7 @@ export function ComposerSlashMenu({
   items,
   activeIndex,
   diagnostics,
+  loading,
   limitReached,
   onSelect,
   onActivate,
@@ -72,6 +73,7 @@ export function ComposerSlashMenu({
   items: readonly ComposerMenuItem[]
   activeIndex: number
   diagnostics: readonly SkillDiagnostic[]
+  loading: boolean
   limitReached: boolean
   onSelect: (item: ComposerMenuItem) => void
   onActivate: (index: number) => void
@@ -96,7 +98,7 @@ export function ComposerSlashMenu({
         输入筛选，Enter 选择
       </div>
       <div ref={listRef} className="wc-scrollbar max-h-72 overflow-y-auto p-1.5">
-        {items.length === 0 ? (
+        {items.length === 0 && !loading ? (
           <div className="px-3 py-5 text-center text-xs text-[var(--wc-faint)]">
             没有匹配的功能或 Skill
           </div>
@@ -121,14 +123,16 @@ export function ComposerSlashMenu({
           </>
         )}
       </div>
-      {(diagnostics.length > 0 || limitReached) && (
+      {(loading || diagnostics.length > 0 || limitReached) && (
         <div
           role="status"
           aria-label="Skill 目录提示"
           className="wc-scrollbar max-h-24 space-y-1 overflow-y-auto border-t border-[var(--wc-line)] px-3 py-1.5 wc-type-tiny text-[var(--wc-sand-ink)] [overflow-wrap:anywhere]"
         >
           {limitReached && <p>本条消息已达到 8 个 Skill 上限</p>}
-          {diagnostics.map((diagnostic, index) => (
+          {loading ? (
+            <p className="text-[var(--wc-muted)]">正在读取 Skill…</p>
+          ) : diagnostics.map((diagnostic, index) => (
             <p key={`${diagnostic.path}:${index}`}>
               {diagnostic.message}
               {diagnostic.path && (
