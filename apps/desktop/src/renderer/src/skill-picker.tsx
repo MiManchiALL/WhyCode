@@ -122,10 +122,20 @@ export function ComposerSlashMenu({
         )}
       </div>
       {(diagnostics.length > 0 || limitReached) && (
-        <div className="border-t border-[var(--wc-line)] px-3 py-1.5 wc-type-tiny text-[var(--wc-sand-ink)]">
-          {limitReached
-            ? '本条消息已达到 8 个 Skill 上限'
-            : `${diagnostics.length} 个 Skill 目录项校验未通过`}
+        <div
+          role="status"
+          aria-label="Skill 目录提示"
+          className="wc-scrollbar max-h-24 space-y-1 overflow-y-auto border-t border-[var(--wc-line)] px-3 py-1.5 wc-type-tiny text-[var(--wc-sand-ink)] [overflow-wrap:anywhere]"
+        >
+          {limitReached && <p>本条消息已达到 8 个 Skill 上限</p>}
+          {diagnostics.map((diagnostic, index) => (
+            <p key={`${diagnostic.path}:${index}`}>
+              {diagnostic.message}
+              {diagnostic.path && (
+                <span className="block text-[var(--wc-faint)]">{diagnostic.path}</span>
+              )}
+            </p>
+          ))}
         </div>
       )}
     </div>
