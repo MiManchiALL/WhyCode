@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
-import { localWorkspaceIO, type ToolContext, type WorkspaceIO } from '@whycode/core'
+import { localWorkspaceIO, type SkillRuntimeContext, type SkillSummary, type WorkspaceIO } from '@whycode/core'
 import type { SshConnections } from '../ssh/connections.ts'
 import { localNode, nodeArchive, NODE_VERSION } from './node.ts'
 import { runDependencyProcess, waitDependencyProcess } from './process.ts'
@@ -10,7 +10,7 @@ import { environmentRoot, installRemoteDependencies } from './remote.ts'
 const FILES = ['package.json', 'package-lock.json', 'run.mjs', 'office.mjs', 'check.mjs']
 export interface DependencyPaths { node: string; run: string; office: string; check: string; libraries: string[] }
 
-/** Installs only when explicitly invoked; ordinary SSH reconnects never prepare Office dependencies. */
+/** Office Skill 激活时准备环境；目录枚举与普通 SSH 重连不触发安装。 */
 export class WorkspaceDependencies {
   private readonly pending = new Map<string, Promise<unknown>>()
   private readonly resources: string
@@ -18,7 +18,15 @@ export class WorkspaceDependencies {
   private readonly connections: SshConnections
   constructor(resources: string, cache: string, connections: SshConnections) { this.resources = resources; this.cache = cache; this.connections = connections }
 
-  async load(ctx: ToolContext): Promise<DependencyPaths> {
+  async prepareSkill(skill: SkillSummary, context: SkillRuntimeContext): Promise<string | null> {
+    if (skill.scope !== 'system' || !['documents', 'presentations', 'spreadsheets'].includes(skill.name)) return null
+    if (!context.canExecute) return '## Office 运行环境\n\n当前角色不能执行命令，未准备 Office 运行环境；生成、渲染与重算需交给具备命令执行能力的会话。'
+    const paths = await this.load(context)
+    const device = context.workspaceIO && context.workspaceIO.identity !== 'local' ? 'SSH 服务器' : '本机'
+    return `## Office 运行环境\n\nWhyCode 已在${device}准备以下运行环境。所有 Office 命令使用这些绝对路径；NODE/RUN/OFFICE/CHECK 分别对应 node/run/office/check。无需安装项目依赖或全局包。\n\n${JSON.stringify(paths, null, 2)}`
+  }
+
+  private async load(ctx: Pick<SkillRuntimeContext, 'workspaceIO' | 'abortSignal' | 'onProgress'>): Promise<DependencyPaths> {
     const io = ctx.workspaceIO ?? localWorkspaceIO
     const signal = AbortSignal.any([ctx.abortSignal, AbortSignal.timeout(15 * 60 * 1000)])
     return this.exclusive(io.identity, signal, async () => {

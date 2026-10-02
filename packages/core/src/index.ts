@@ -134,6 +134,8 @@ export {
   type SkillScope,
   type SkillSummary,
   type SkillTurnSnapshot,
+  type SkillRuntimeContext,
+  type PrepareSkillRuntime,
 } from './skills/index.ts'
 export { createSkillTool, SKILL_TOOL_NAME } from './tools/skill/index.ts'
 export {
@@ -430,5 +432,4 @@ export type { WorkspaceIO, WorkspaceFileSystem, WorkspaceStat, WorkspaceReader }
 export type { WorkspaceProcess } from './workspace/process.ts'
 export { unknownWorkspaceOutcome, isUnknownWorkspaceOutcome } from './workspace/errors.ts'
 
-export { createLoadWorkspaceDependenciesTool, LOAD_WORKSPACE_DEPENDENCIES_TOOL_NAME } from './tools/load-workspace-dependencies/index.ts'
 export { stopWorkspaceProcess } from './workspace/process.ts'

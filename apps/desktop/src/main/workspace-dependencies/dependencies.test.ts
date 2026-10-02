@@ -3,11 +3,26 @@ import { test } from 'node:test'
 import { mkdtemp, mkdir, writeFile, access, rm, symlink } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { localWorkspaceIO } from '@whycode/core'
-import { readReady } from './index.ts'
+import { localWorkspaceIO, type SkillSummary } from '@whycode/core'
+import { readReady, WorkspaceDependencies } from './index.ts'
+import type { SshConnections } from '../ssh/connections.ts'
 import { environmentRoot } from './remote.ts'
 import { runDependencyProcess } from './process.ts'
 import { cleanupRemoteComponent, prepareRemoteComponent, ENVIRONMENT_OWNER } from '../ssh/component.ts'
+
+test('同名用户 Skill 和只读角色不触发 Office 安装或声明环境就绪', async () => {
+  const dependencies = new WorkspaceDependencies('absent-resources', 'absent-cache', {} as SshConnections)
+  const skill: SkillSummary = { id: `skill:${'a'.repeat(64)}`, scope: 'system', name: 'documents', description: 'Office',
+    path: join(tmpdir(), 'documents/SKILL.md'), rootPath: join(tmpdir(), 'documents') }
+  const context = { canExecute: true, abortSignal: new AbortController().signal }
+  for (const scope of ['project', 'user'] as const) {
+    assert.equal(await dependencies.prepareSkill({ ...skill, scope }, context), null)
+  }
+  assert.equal(await dependencies.prepareSkill({ ...skill, name: 'other-skill' }, context), null)
+  const disabled = await dependencies.prepareSkill(skill, { ...context, canExecute: false })
+  assert.match(disabled!, /不能执行命令，未准备/)
+  assert.doesNotMatch(disabled!, /"node"|已在.*准备/)
+})
 
 test('依赖取消会终止子进程，失败输出有界并保留原因', async () => {
   const controller = new AbortController()

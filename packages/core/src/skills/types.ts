@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { isWellFormedUnicode } from '../text.ts'
+import type { WorkspaceIO } from '../workspace/io.ts'
 
 export const SKILL_FILE_NAME = 'SKILL.md'
 export const SKILL_MAX_NAME_CHARS = 64
@@ -52,6 +53,16 @@ export const activatedSkillSchema = skillSummarySchema.extend({
 export type SkillScope = z.infer<typeof skillScopeSchema>
 export type SkillLocator = z.infer<typeof skillLocatorSchema>
 export type SkillSummary = z.infer<typeof skillSummarySchema>
+
+export interface SkillRuntimeContext {
+  workspaceIO?: WorkspaceIO
+  abortSignal: AbortSignal
+  onProgress?: (message: string) => void
+  canExecute: boolean
+}
+
+/** 宿主准备所需环境并返回正文末尾声明；不修改磁盘 Skill 或持久快照。 */
+export type PrepareSkillRuntime = (skill: SkillSummary, context: SkillRuntimeContext) => Promise<string | null>
 export type ActivatedSkill = z.infer<typeof activatedSkillSchema>
 
 export interface SkillDiagnostic {

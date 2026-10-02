@@ -32,7 +32,6 @@ export const SUBAGENT_ALLOWED_TOOL_NAMES = [
   'WebFetch',
   'WebFind',
   'ViewImage',
-  'LoadWorkspaceDependencies',
   'ReadPdf',
   'CaptureScreenshot',
   'Skill',
@@ -47,7 +46,7 @@ const PROFILE_TOOLS: Record<SubagentProfile, readonly string[]> = {
     'ReadPdf', 'CaptureScreenshot',
   ],
   reviewer: [
-    'ReadFile', 'ListDir', 'Glob', 'Grep', 'RunCommand', 'LoadWorkspaceDependencies',
+    'ReadFile', 'ListDir', 'Glob', 'Grep', 'RunCommand',
     'WebSearch', 'WebFetch', 'WebFind', 'ViewImage', 'Skill',
     'ReadPdf', 'CaptureScreenshot',
   ],

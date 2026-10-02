@@ -5,10 +5,11 @@ import {
   SKILL_FILE_NAME,
   SKILL_MAX_RESOURCE_BYTES,
   type SkillTurnSnapshot,
+  type ActivatedSkill,
 } from '../../skills/types.ts'
 import { readBoundedWorkspaceFile } from '../../workspace/read.ts'
 import { escapeSkillXmlAttribute } from '../../skills/xml.ts'
-import { buildTool } from '../tool.ts'
+import { buildTool, type ToolContext } from '../tool.ts'
 import { SKILL_TOOL_PROMPT } from './prompt.ts'
 
 export const SKILL_TOOL_NAME = 'Skill'
@@ -20,7 +21,7 @@ const skillInputSchema = z.object({
     .describe('可选的 Skill 包内 UTF-8 文本资源相对路径；省略时读取冻结的 SKILL.md'),
 }).strict()
 
-export function createSkillTool(snapshot: SkillTurnSnapshot) {
+export function createSkillTool(snapshot: SkillTurnSnapshot, activate?: (skill: ActivatedSkill, context: ToolContext) => Promise<string>) {
   return buildTool({
     name: SKILL_TOOL_NAME,
     description: '读取当前任务可用的 Skill 指令或包内文本资源',
@@ -34,14 +35,10 @@ export function createSkillTool(snapshot: SkillTurnSnapshot) {
       if (!skill) return { data: 'Skill 不在当前根任务的目录快照中', isError: true }
       try {
         const resourcePath = normalizeResourcePath(input.resourcePath ?? SKILL_FILE_NAME, io)
-        if (resourcePath === SKILL_FILE_NAME) {
-          return {
-            data: renderSkillResource(skill.name, SKILL_FILE_NAME, skill.content),
-            isError: false,
-          }
-        }
-        const content = await readSkillResource(skill.rootPath, resourcePath, io, ctx.abortSignal)
-        return { data: renderSkillResource(skill.name, resourcePath, content), isError: false }
+        const resource = resourcePath === SKILL_FILE_NAME ? null
+          : await readSkillResource(skill.rootPath, resourcePath, io, ctx.abortSignal)
+        const body = activate ? await activate(skill, ctx) : skill.content
+        return { data: renderSkillResource(skill.name, resourcePath, resource ?? body), isError: false }
       } catch (error) {
         return {
           data: error instanceof Error ? error.message : String(error),

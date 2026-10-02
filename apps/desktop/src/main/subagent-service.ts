@@ -6,7 +6,7 @@ import {
   createSubagentTools,
   type AgentSession,
   type CoreEvent,
-  type ToolContext,
+  type PrepareSkillRuntime,
   type PdfProcessor,
   type ScreenshotCaptureHandler,
   type SessionJournal,
@@ -88,7 +88,7 @@ export interface SubagentServiceOptions {
   selectModel: (parent: SubagentModelSnapshot) => SubagentModelSnapshot | null
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
   pdfProcessor: PdfProcessor
-  loadWorkspaceDependencies: (context: ToolContext) => Promise<unknown>
+  prepareSkillRuntime: PrepareSkillRuntime
   captureScreenshot: ScreenshotCaptureHandler
   hostOperations: HostOperationScheduler
   onState: (state: SubagentState) => void
@@ -530,7 +530,7 @@ export class SubagentService {
         createWebPageTools: this.options.createWebPageTools,
         resolveModel: this.options.resolveModel,
         pdfProcessor: this.options.pdfProcessor,
-        loadWorkspaceDependencies: this.options.loadWorkspaceDependencies,
+        prepareSkillRuntime: this.options.prepareSkillRuntime,
         captureScreenshot: this.options.captureScreenshot,
         hostOperations: this.options.hostOperations,
         emit: (event) => {

@@ -69,7 +69,7 @@ describe('内置 Skill 安装与发现', () => {
         const skill = snapshot.entries.find((entry) => entry.name === skillName)!
         assert.match(skill.description, /读取/)
         const main = await readFile(join(installed.rootPath, skillName, 'SKILL.md'), 'utf8')
-        assert.match(main, /LoadWorkspaceDependencies/)
+        assert.match(main, /正文末尾追加本次运行环境声明/)
         assert.match(main, /RunCommand/)
         assert.match(main, /ViewImage/)
         const reference = await createSkillTool(snapshot).execute({

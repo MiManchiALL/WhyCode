@@ -130,6 +130,8 @@ import {
   skillSummary,
   type ActivatedSkill,
   type SkillSummary,
+  type PrepareSkillRuntime,
+  type SkillRuntimeContext,
 } from '../skills/types.ts'
 import type { SkillCatalogService } from '../skills/catalog.ts'
 import { SkillTurnContext } from '../skills/turn.ts'
@@ -224,6 +226,8 @@ export interface AgentSessionOptions {
   mcpRuntime?: McpSessionRuntime
   /** 普通 Main 的 Skill 磁盘事实源；讨论/协议回合即使复用 Session 也不会装配。 */
   skillCatalog?: SkillCatalogService
+  /** Skill 实际激活时由宿主准备环境；声明只进入本次正文投影。 */
+  prepareSkillRuntime?: PrepareSkillRuntime
   /** 普通 Main 每个根任务重新扫描的子代理定义目录；子代理自身不传入。 */
   subagentCatalog?: SubagentDefinitionCatalogService
   /** 子代理冷恢复时继承的父权限与已批准规则；角色工具白名单仍可继续收窄。 */
@@ -1424,6 +1428,15 @@ export class AgentSession {
     await this.refreshSubagentCatalog()
   }
 
+  private skillRuntimeContext(abortSignal: AbortSignal, onProgress?: (message: string) => void): SkillRuntimeContext {
+    return {
+      workspaceIO: this.options.workspaceIO, abortSignal, onProgress,
+      canExecute: !this.options.promptContext.discussion && !this.protocolRound
+        && (this.options.baseTools ?? BUILTIN_TOOLS).some(tool => tool.name === 'RunCommand')
+        && (!this.options.promptContext.subagent || this.options.promptContext.subagent.toolNames.includes('RunCommand')),
+    }
+  }
+
   private async refreshSubagentCatalog(): Promise<void> {
     const catalog = this.options.subagentCatalog
     if (!catalog || this.options.promptContext.discussion || this.options.promptContext.subagent) {
@@ -1819,10 +1832,12 @@ export class AgentSession {
           await this.injectTaskProgressReminder()
           stepsSincePlanReminder = 0
         }
+        await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
         await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
         if (this.hasPendingMessages()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
           if (injectedUserMessage) steeringDecisionPending = true
+          await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
         }
         const subagentState = await this.subagentTurnState(turnId)
         this.activeSubagentTurnState = subagentState
@@ -2859,7 +2874,9 @@ export class AgentSession {
       && skillCatalog.entries.length > 0
       && !this.options.promptContext.discussion
       && !this.protocolRound
-      ? [createSkillTool(skillCatalog)]
+      ? [createSkillTool(skillCatalog, (skill, ctx) => this.skillTurn.activate(
+          skill, this.options.prepareSkillRuntime, this.skillRuntimeContext(ctx.abortSignal, ctx.onProgress),
+        ))]
       : []
     const controlTools: ToolDefinition[] = [
       ...extraTools,

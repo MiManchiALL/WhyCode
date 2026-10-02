@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
   createWebFetchTool, preparePdfAttachmentImport, readStoredImage,
@@ -15,6 +15,25 @@ import { createFixture, finalStream, toolContext, toolStream, waitFor } from './
 type Fixture = Awaited<ReturnType<typeof createFixture>>
 
 describe('子代理文档与视觉工具', () => {
+  for (const role of ['explore', 'general']) {
+    it(`${role} 的 Skill 声明遵循子代理自身命令权限`, async () => {
+      let skillId = ''
+      const fixture = await createFixture([], async index => index === 0
+        ? toolStream('Skill', { skillId }, 'office-skill') : finalStream('已读取流程'), undefined, {
+        prepareSkillRuntime: async (_skill, context) => context.canExecute ? 'OFFICE_READY' : 'OFFICE_DISABLED',
+      })
+      const skillPath = join(dirname(fixture.sessionsRoot), '.whycode/skills/.system/documents/SKILL.md')
+      await mkdir(dirname(skillPath), { recursive: true })
+      await writeFile(skillPath, '---\nname: documents\ndescription: Office\n---\nCreate documents.')
+      skillId = (await fixture.serviceOptions.skills.list(fixture.projectDir)).skills[0]!.id
+      await launch(fixture, role)
+      const prompt = JSON.stringify(fixture.modelCalls[1]?.prompt)
+      assert.match(prompt, role === 'explore' ? /OFFICE_DISABLED/ : /OFFICE_READY/)
+      assert.doesNotMatch(prompt, role === 'explore' ? /OFFICE_READY/ : /OFFICE_DISABLED/)
+      await fixture.service.close()
+    })
+  }
+
   for (const role of ['explore', 'reviewer', 'general']) {
     for (const visual of [false, true]) {
       it(`${role} 按自己的${visual ? '视觉' : '文字'}模型装配工具，保留角色边界`, async () => {
@@ -23,7 +42,6 @@ describe('子代理文档与视觉工具', () => {
         })
         await launch(fixture, role)
         const names = fixture.modelCalls[0]!.tools!.map((tool) => tool.name)
-        assert.equal(names.includes('LoadWorkspaceDependencies'), role !== 'explore')
         assert.ok(names.includes('ReadPdf'))
         for (const name of ['CaptureScreenshot', 'ViewImage']) {
           assert.equal(names.includes(name), visual, name)
@@ -162,7 +180,7 @@ describe('子代理文档与视觉工具', () => {
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
     assert.ok(names.includes('ReadPdf'))
     assert.ok(names.includes('CreateTaskPlan'))
-    for (const name of ['LoadWorkspaceDependencies', 'CaptureScreenshot', 'ViewImage', 'WebSearch', 'ReadFile']) {
+    for (const name of ['CaptureScreenshot', 'ViewImage', 'WebSearch', 'ReadFile']) {
       assert.equal(names.includes(name), false, name)
     }
     await fixture.service.close()

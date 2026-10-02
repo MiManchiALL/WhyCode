@@ -20,7 +20,7 @@ import { SubagentService, type SubagentServiceOptions } from './subagent-service
 
 type ModelCall = Parameters<Extract<ReturnType<ModelEntry['create']>, { specificationVersion: 'v4' }>['doStream']>[0]
 interface FixtureOptions extends Partial<Pick<SubagentServiceOptions,
-  'pdfProcessor' | 'loadWorkspaceDependencies' | 'captureScreenshot' | 'createWebPageTools'>> {
+  'pdfProcessor' | 'prepareSkillRuntime' | 'captureScreenshot' | 'createWebPageTools'>> {
   supportsImageInput?: boolean
   parentSupportsImageInput?: boolean
 }
@@ -99,7 +99,7 @@ export async function createFixture(
       inspect: async () => { throw new Error('unexpected PDF inspect') },
       readPages: async () => { throw new Error('unexpected PDF read') },
     },
-    loadWorkspaceDependencies: options.loadWorkspaceDependencies ?? (async () => ({ node: '/runtime/node' })),
+    prepareSkillRuntime: options.prepareSkillRuntime ?? (async () => null),
     captureScreenshot: options.captureScreenshot ?? (async () => { throw new Error('unexpected screenshot') }),
     hostOperations: new HostOperationScheduler(),
     onState: () => undefined,

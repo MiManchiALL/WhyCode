@@ -10,7 +10,7 @@ export function officeSkillDocument(...lines: string[]): string {
 export const OFFICE_EXECUTION_GUIDE: readonly string[] = [
   "## 执行环境",
   "",
-  "先调用 LoadWorkspaceDependencies，取得当前设备上的 `node`、`run`、`office`、`check` 绝对路径。首次准备可能需要下载，后续复用。下面的 NODE/RUN/OFFICE/CHECK 代表返回值，替换为真实路径并按当前 shell 引用；PowerShell 执行带引号的可执行路径要加 `&`。",
+  "WhyCode 在加载本 Skill 时自动准备所需环境，并在正文末尾追加本次运行环境声明。下面的 NODE/RUN/OFFICE/CHECK 分别代表声明中的 `node`、`run`、`office`、`check`，替换为实际绝对路径并按当前 shell 引用；PowerShell 执行带引号的可执行路径要加 `&`。",
   "",
   "- 生成或修改：`NODE RUN /绝对路径/task.mjs`。脚本是普通 Node ESM，可以读写文件；支持 import `docx`、`pptxgenjs`、`exceljs`、`jszip`、`fast-xml-parser`。库解析由 RUN 负责，不必在项目中安装依赖。",
   "- 检查：`NODE CHECK /绝对路径/output.docx --contains \"必需文字\" --offset 0 --limit 20`。DOCX 按段落、PPTX 按幻灯片、XLSX 按工作表分页；返回 nextOffset 时继续读取。`--count N` 核对上述单位数量。结构报告有界，全文提取或复杂对象分析可用脚本读取 OOXML。",

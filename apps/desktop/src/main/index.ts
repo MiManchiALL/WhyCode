@@ -31,7 +31,6 @@ import {
   ConsensusCoordinator,
   createCommandTools,
   createAuxiliaryImageAnalyzer,
-  createLoadWorkspaceDependenciesTool,
   createWebFetchTool,
   createWebFindTool,
   createWebSearchTool,
@@ -901,9 +900,9 @@ async function createMainAgentSession(
       sessionRecorder: recorder,
       mcpRuntime,
       skillCatalog: await skillCatalogFor(runtime),
+      prepareSkillRuntime: (skill, context) => workspaceDependencies.prepareSkill(skill, context),
       subagentCatalog: subagentDefinitions,
       mainTools: [
-        createLoadWorkspaceDependenciesTool(context => workspaceDependencies.load(context)),
         ...commandTools.taskTools,
         ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
@@ -2949,7 +2948,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       return resolved.ok ? resolved.value : null
     },
     pdfProcessor,
-    loadWorkspaceDependencies: context => workspaceDependencies.load(context),
+    prepareSkillRuntime: (skill, context) => workspaceDependencies.prepareSkill(skill, context),
     captureScreenshot: captureSessionScreenshot,
     hostOperations,
     onState: broadcastSubagents,

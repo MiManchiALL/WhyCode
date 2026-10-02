@@ -30,4 +30,6 @@ export {
   type SkillScope,
   type SkillSummary,
   type SkillTurnSnapshot,
+  type SkillRuntimeContext,
+  type PrepareSkillRuntime,
 } from './types.ts'

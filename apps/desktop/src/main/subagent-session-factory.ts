@@ -1,9 +1,8 @@
 import {
   AgentSession,
-  createLoadWorkspaceDependenciesTool,
   type CoreEvent,
   type ModelEntry,
-  type ToolContext,
+  type PrepareSkillRuntime,
   type PdfProcessor,
   type ProviderConfig,
   type ScreenshotCaptureHandler,
@@ -32,7 +31,7 @@ interface SubagentSessionFactoryOptions {
   createWebPageTools: (journal: SessionJournal) => ToolDefinition[]
   resolveModel: (modelId: string) => ResolvedSubagentModel | null
   pdfProcessor: PdfProcessor
-  loadWorkspaceDependencies: (context: ToolContext) => Promise<unknown>
+  prepareSkillRuntime: PrepareSkillRuntime
   captureScreenshot: ScreenshotCaptureHandler
   hostOperations: HostOperationScheduler
   emit: (event: CoreEvent) => void
@@ -58,7 +57,6 @@ export async function createSubagentAgentSession(
   const mainTools = [
     options.webSearchTool,
     ...options.createWebPageTools(options.journal),
-    createLoadWorkspaceDependenciesTool(options.loadWorkspaceDependencies),
   ]
   return new AgentSession({
     workspaceIO: io,
@@ -82,6 +80,7 @@ export async function createSubagentAgentSession(
     },
     mainTools,
     skillCatalog: remoteScratch ? options.parentRuntime.skillCatalog : options.skills,
+    prepareSkillRuntime: options.prepareSkillRuntime,
     sessionRecorder: options.journal,
     pdfProcessor: options.pdfProcessor,
     captureScreenshot: remoteScratch ? undefined : options.captureScreenshot,

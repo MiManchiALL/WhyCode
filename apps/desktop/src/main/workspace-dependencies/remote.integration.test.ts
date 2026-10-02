@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import type { SkillSummary } from '@whycode/core'
 import { sshFixture } from '../ssh/ssh-test-fixture.ts'
-import { WorkspaceDependencies } from './index.ts'
+import { WorkspaceDependencies, type DependencyPaths } from './index.ts'
 import { waitDependencyProcess } from './process.ts'
 
 test('Linux SSH prepares, reuses and removes Office dependencies while preserving project and Skill files', {
@@ -16,10 +17,14 @@ test('Linux SSH prepares, reuses and removes Office dependencies while preservin
   const messages: string[] = []
   const context = { projectDir: env.project, additionalDirs: [], workspaceIO: host.io,
     abortSignal: new AbortController().signal, onProgress: (message: string) => { messages.push(message); console.log(message) } }
-  const paths = await dependencies.load(context)
+  const skill: SkillSummary = { id: `skill:${'a'.repeat(64)}`, scope: 'system', name: 'documents', description: 'Office',
+    path: host.home + '/.whycode/skills/.system/documents/SKILL.md', rootPath: host.home + '/.whycode/skills/.system/documents' }
+  const declaration = await dependencies.prepareSkill(skill, { ...context, canExecute: true })
+  assert.match(declaration!, /SSH 服务器/)
+  const paths = JSON.parse(declaration!.match(/\n\n(\{[\s\S]*\})$/)![1]!) as DependencyPaths
   assert.ok(paths.node.startsWith(host.home + '/.cache/whycode-remote/office/'))
   const first = messages.length
-  assert.deepEqual(await dependencies.load(context), paths)
+  assert.equal(await dependencies.prepareSkill(skill, { ...context, canExecute: true }), declaration)
   assert.equal(messages.length, first)
   const testFile = env.project + '/office.test.mjs'
   await host.io.fs.writeFile(testFile, await readFile(resolve('../../workspace-runtime/office/office.test.mjs')))

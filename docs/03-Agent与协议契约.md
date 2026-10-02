@@ -306,7 +306,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 ### 3.8 工作区依赖与 Office 命令
 
-`LoadWorkspaceDependencies {}` 是宿主注入的执行工具，按当前工作区 IO 准备环境，返回 `node`、`run`、`office`、`check` 绝对路径与 `libraries`。SSH 返回服务器路径，不能作为本机路径使用。首次准备可下载依赖，整体上限十五分钟，取消或安装失败以工具错误返回；工具结果只声明环境就绪，不声明文档成功。讨论和 BTW 不提供此工具，子代理按冻结白名单装配，Explore 不获准准备环境或运行命令。
+内置 Office Skill 实际激活时，宿主按当前工作区 IO 自动准备环境，并在冻结正文末尾强制追加运行环境声明，包含 `node`、`run`、`office`、`check` 绝对路径与 `libraries`。模型直接使用这些路径执行普通命令，不需要额外调用环境工具。SSH 声明只提供服务器路径，不能作为本机路径使用。首次准备可下载依赖，整体上限十五分钟；失败或取消不得声明环境就绪，声明也不代表文档已生成成功。准备的生命周期和失败处理见文档二 §10.3。
 
 模型先读取相应 Office Skill，再通过普通 `RunCommand` 执行：
 
@@ -438,7 +438,7 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
 
-内置 Explore、Reviewer、General 均可用 `ReadPdf`；具备视觉能力时提供 `ViewImage`、视觉 `ReadPdf` 与本地 `CaptureScreenshot`。Reviewer 和 General 可用 `LoadWorkspaceDependencies` 与命令执行 Office 工作流，Explore 没有命令或依赖准备权限。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
+内置 Explore、Reviewer、General 均可用 `ReadPdf`；具备视觉能力时提供 `ViewImage`、视觉 `ReadPdf` 与本地 `CaptureScreenshot`。Reviewer 和 General 加载内置 Office Skill 时可自动准备环境，再通过命令执行工作流；Explore 没有命令权限，只获得环境未准备的说明。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
 
 文档委派提供可访问的文件路径；父会话的 PDF 附件 ID 不能直接作为子代理附件使用。子代理自己通过 WebFetch 导入的 PDF 属于其独立会话，可经 `ReadPdf` 读取并在后续激活中继续使用。无法查看页面图时，只报告文字或结构证据，视觉核验交给具备相应能力的代理。
 

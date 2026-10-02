@@ -9,7 +9,11 @@ import {
   type SkillSummary,
   type ActivatedSkill,
   type SkillTurnSnapshot,
+  type PrepareSkillRuntime,
+  type SkillRuntimeContext,
 } from './types.ts'
+
+interface ActiveSkill { snapshot: ActivatedSkill; runtime?: string }
 
 export interface StartSkillTurnOptions {
   skills: readonly ActivatedSkill[]
@@ -24,7 +28,7 @@ export class SkillTurnContext {
   private readonly service?: SkillCatalogService
   private readonly onActiveSkillsChanged?: (skills: SkillSummary[]) => void
   private catalog: SkillTurnSnapshot | null = null
-  private readonly active = new Map<string, ActivatedSkill>()
+  private readonly active = new Map<string, ActiveSkill>()
   private readonly visibleResultCallIds = new Set<string>()
 
   constructor(
@@ -40,7 +44,7 @@ export class SkillTurnContext {
   }
 
   get activeSkills(): SkillSummary[] {
-    return [...this.active.values()].map(skillSummary)
+    return [...this.active.values()].map(entry => skillSummary(entry.snapshot))
   }
 
   async start(options: StartSkillTurnOptions): Promise<void> {
@@ -57,9 +61,32 @@ export class SkillTurnContext {
   add(skills: readonly ActivatedSkill[]): void {
     for (const candidate of skills) {
       const skill = activatedSkillSchema.parse(candidate)
-      this.active.set(skill.id, skill)
+      this.active.set(skill.id, { snapshot: skill })
     }
     if (skills.length > 0) this.onActiveSkillsChanged?.(this.activeSkills)
+  }
+
+  async prepare(prepareRuntime: PrepareSkillRuntime | undefined, context: SkillRuntimeContext): Promise<void> {
+    for (const entry of this.active.values()) await this.prepareEntry(entry, prepareRuntime, context)
+  }
+
+  async activate(skill: ActivatedSkill, prepareRuntime: PrepareSkillRuntime | undefined, context: SkillRuntimeContext): Promise<string> {
+    // 显式选择的冻结正文优先；失败的隐式加载不进入活动上下文。
+    const entry = this.active.get(skill.id) ?? { snapshot: skill }
+    await this.prepareEntry(entry, prepareRuntime, context)
+    if (!this.active.has(skill.id)) {
+      this.active.set(skill.id, entry)
+      this.onActiveSkillsChanged?.(this.activeSkills)
+    }
+    return projectedSkill(entry).content
+  }
+
+  private async prepareEntry(entry: ActiveSkill, prepareRuntime: PrepareSkillRuntime | undefined, context: SkillRuntimeContext): Promise<void> {
+    if (!prepareRuntime || entry.runtime !== undefined) return
+    context.abortSignal.throwIfAborted()
+    const runtime = await prepareRuntime(skillSummary(entry.snapshot), context)
+    context.abortSignal.throwIfAborted()
+    entry.runtime = runtime ?? ''
   }
 
   recordToolResult(toolCallId: string, input: unknown, succeeded: boolean): void {
@@ -68,13 +95,6 @@ export class SkillTurnContext {
       return
     }
     const payload = input && typeof input === 'object' ? input : null
-    const skillId = payload && 'skillId' in payload
-      ? payload.skillId
-      : null
-    if (typeof skillId !== 'string') return
-    const skill = this.catalog?.entries.find((entry) => entry.id === skillId)
-    // 已由用户显式选择或 steering 更新的冻结快照优先；模型重复调用不能用稍后磁盘版本改写它。
-    if (skill && !this.active.has(skill.id)) this.add([skill])
     const resourcePath = payload && 'resourcePath' in payload ? payload.resourcePath : undefined
     if (typeof resourcePath === 'string' && resourcePath !== SKILL_FILE_NAME) {
       // 包内参考资料没有等价的活动上下文，当前根任务必须保留这次工具结果。
@@ -86,7 +106,7 @@ export class SkillTurnContext {
     return applySkillContext(
       messages,
       includeActiveContext ? this.catalog : null,
-      includeActiveContext ? [...this.active.values()] : [],
+      includeActiveContext ? [...this.active.values()].map(projectedSkill) : [],
       includeActiveContext ? this.visibleResultCallIds : new Set(),
     )
   }
@@ -118,4 +138,8 @@ export class SkillTurnContext {
     this.catalog = null
     this.finish()
   }
+}
+
+function projectedSkill(entry: ActiveSkill): ActivatedSkill {
+  return entry.runtime ? { ...entry.snapshot, content: `${entry.snapshot.content}\n\n${entry.runtime}` } : entry.snapshot
 }

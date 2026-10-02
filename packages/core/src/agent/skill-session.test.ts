@@ -11,7 +11,7 @@ import type { ModelEntry } from '../providers/registry.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import { SessionStore } from '../session/store.ts'
 import { toViewEvent } from '../session/view-events.ts'
-import { skillSummary } from '../skills/types.ts'
+import { skillSummary, type PrepareSkillRuntime } from '../skills/types.ts'
 import { SkillCatalogService } from '../skills/catalog.ts'
 import { applySkillContext } from '../skills/context.ts'
 import { SKILL_TOOL_NAME } from '../tools/skill/index.ts'
@@ -29,6 +29,121 @@ afterEach(async () => {
 })
 
 describe('Agent Skill 根任务生命周期', () => {
+  it('显式选择自动准备环境并在正文末尾声明，目录枚举不安装，快照与下一任务不携带路径', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const selected = (await catalog.snapshot(fixture.project)).entries[0]!
+    const original = structuredClone(selected)
+    const model = new MockLanguageModelV4({ doStream: async () => finalStep() })
+    let preparations = 0
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      prepareSkillRuntime: async (_skill, context) => {
+        preparations++
+        assert.equal(context.canExecute, true)
+        return 'ENVIRONMENT_READY /runtime/node'
+      },
+    })
+    await session.initializeContextUsage()
+    assert.equal(preparations, 0)
+    assert.equal(await session.handleUserMessage('使用流程', false, [], undefined, [], [selected]), 'completed')
+    const first = JSON.stringify(model.doStreamCalls[0]?.prompt)
+    assert.match(first, /CURRENT_TURN_SKILL_BODY_7f0d.*ENVIRONMENT_READY.*<\/whycode-active-skill>/s)
+    assert.equal(first.match(/ENVIRONMENT_READY/g)?.length, 1)
+    assert.deepEqual(selected, original)
+    assert.equal(preparations, 1)
+    await session.handleUserMessage('普通下一任务')
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[1]?.prompt), /ENVIRONMENT_READY/)
+    await session.handleUserMessage('再次选择流程', false, [], undefined, [], [selected])
+    assert.equal(preparations, 2)
+  })
+
+  for (const resource of [undefined, 'references/guide.md']) {
+    it(`隐式读取 ${resource ?? '正文'} 会准备环境，重复读取复用声明且计入请求投影`, async () => {
+      const fixture = await skillFixture()
+      const catalog = new SkillCatalogService({ homeDir: fixture.home })
+      const selected = (await catalog.snapshot(fixture.project)).entries[0]!
+      let calls = 0, preparations = 0
+      const events: CoreEvent[] = []
+      const model = new MockLanguageModelV4({ doStream: async () => ++calls <= 2
+        ? toolStep(selected.id, resource, `skill-${calls}`) : finalStep() })
+      const session = createSession(model, fixture, catalog, undefined, 100_000, {
+        prepareSkillRuntime: async (_skill, context) => {
+          preparations++; context.onProgress?.('正在准备环境')
+          return 'ENVIRONMENT_READY /runtime/node'
+        },
+        emit: event => events.push(event),
+      })
+      await session.handleUserMessage('读取流程')
+      assert.equal(preparations, 1)
+      for (const call of model.doStreamCalls.slice(1)) {
+        assert.equal(JSON.stringify(call.prompt).match(/ENVIRONMENT_READY/g)?.length, 1)
+      }
+      if (!resource) assert.ok(events.some(event => event.type === 'tool-end' && String(event.result).includes('ENVIRONMENT_READY')))
+      else assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), new RegExp(RESOURCE_BODY))
+      assert.ok(events.some(event => event.type === 'tool-progress' && event.output === '正在准备环境'))
+    })
+  }
+
+  it('环境准备失败作为 Skill 错误交给模型，重试成功后才激活正文', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const selected = (await catalog.snapshot(fixture.project)).entries[0]!
+    let calls = 0, attempts = 0
+    const model = new MockLanguageModelV4({ doStream: async () => ++calls <= 2
+      ? toolStep(selected.id, undefined, `skill-${calls}`) : finalStep() })
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      prepareSkillRuntime: async () => {
+        if (++attempts === 1) throw new Error('ENVIRONMENT_DOWNLOAD_FAILED')
+        return 'ENVIRONMENT_READY'
+      },
+    })
+    assert.equal(await session.handleUserMessage('使用流程'), 'completed')
+    const failed = JSON.stringify(model.doStreamCalls[1]?.prompt)
+    assert.match(failed, /ENVIRONMENT_DOWNLOAD_FAILED/)
+    assert.doesNotMatch(failed, /<whycode-active-skill id=|ENVIRONMENT_READY/)
+    assert.match(JSON.stringify(model.doStreamCalls[2]?.prompt), /ENVIRONMENT_READY/)
+    assert.equal(attempts, 2)
+  })
+
+  it('显式 Skill 的环境准备可停止，取消后不调用模型且不保留活动声明', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const selected = (await catalog.snapshot(fixture.project)).entries[0]!
+    let started!: () => void
+    const waiting = new Promise<void>(resolve => { started = resolve })
+    const model = new MockLanguageModelV4({ doStream: async () => finalStep() })
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      prepareSkillRuntime: async (_skill, { abortSignal }) => new Promise((_resolve, reject) => {
+        abortSignal.addEventListener('abort', () => reject(abortSignal.reason), { once: true })
+        started()
+      }),
+    })
+    const work = session.handleUserMessage('使用流程', false, [], undefined, [], [selected])
+    await waiting
+    session.abort()
+    assert.equal(await work, 'aborted')
+    assert.equal(model.doStreamCalls.length, 0)
+    assert.deepEqual(session.activeSkills, [])
+  })
+
+  it('中途插话新选择 Skill 时，在接续模型请求前追加运行声明', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const selected = (await catalog.snapshot(fixture.project)).entries[0]!
+    let calls = 0, preparations = 0
+    const model = new MockLanguageModelV4({ doStream: async () => {
+      if (++calls === 1) await session.handleUserMessage('追加所选流程', false, [], undefined, [], [selected])
+      return finalStep()
+    } })
+    const session = createSession(model, fixture, catalog, undefined, 100_000, {
+      prepareSkillRuntime: async () => { preparations++; return 'ENVIRONMENT_READY' },
+    })
+    assert.equal(await session.handleUserMessage('先处理普通任务'), 'completed')
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[0]?.prompt), /ENVIRONMENT_READY/)
+    assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), /ENVIRONMENT_READY/)
+    assert.equal(preparations, 1)
+  })
+
   it('显式选择在首个模型请求前注入，下一根任务不继承正文', async () => {
     const fixture = await skillFixture()
     const catalog = new SkillCatalogService({ homeDir: fixture.home })
@@ -340,6 +455,7 @@ function createSession(
   options?: {
     recorder?: SessionRecorder
     emit?: (event: CoreEvent) => void
+    prepareSkillRuntime?: PrepareSkillRuntime
   },
 ) {
   return new AgentSession({
@@ -352,6 +468,7 @@ function createSession(
       discussion,
     },
     ...(skillCatalog ? { skillCatalog } : {}),
+    prepareSkillRuntime: options?.prepareSkillRuntime,
     ...(options?.recorder ? { sessionRecorder: options.recorder } : {}),
     emit: options?.emit ?? (() => {}),
     requestApproval: async () => ({ approved: false }),
@@ -384,13 +501,13 @@ function requestMessagesFromMock(
     }) as ModelMessage[]
 }
 
-function toolStep(skillId: string, resourcePath?: string) {
+function toolStep(skillId: string, resourcePath?: string, toolCallId = 'load-skill') {
   return {
     stream: simulateReadableStream({
       chunks: [
         {
           type: 'tool-call' as const,
-          toolCallId: 'load-skill',
+          toolCallId,
           toolName: SKILL_TOOL_NAME,
           input: JSON.stringify({ skillId, ...(resourcePath ? { resourcePath } : {}) }),
         },
