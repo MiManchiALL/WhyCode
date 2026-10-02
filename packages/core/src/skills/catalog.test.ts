@@ -10,17 +10,19 @@ import { renderSkillCatalog } from './catalog-context.ts'
 import { userSkillsRoot } from './system.ts'
 
 describe('Skill 发现、优先级与缓存失效', () => {
-  it('按当前目录到仓库根再到 WhyCode 用户目录发现，不再扫描旧全局目录', async () => {
+  it('按当前目录到仓库根再到两个用户目录发现，同名 Skill 保留独立身份', async () => {
     const fixture = await createFixture()
     try {
       const projectSkill = join(fixture.repo, '.agents', 'skills', 'review', 'SKILL.md')
       const nestedSkill = join(fixture.cwd, '.agents', 'skills', 'nested', 'review', 'SKILL.md')
       const userSkill = join(userSkillsRoot(fixture.home), 'review', 'SKILL.md')
-      const oldUserSkill = join(fixture.home, '.agents', 'skills', 'review', 'SKILL.md')
+      const systemSkill = join(userSkillsRoot(fixture.home), '.system', 'review', 'SKILL.md')
+      const agentsSkill = join(fixture.home, '.agents', 'skills', 'review', 'SKILL.md')
       await skill(projectSkill, 'review', '仓库评审')
       await skill(nestedSkill, 'review', '当前目录评审')
       await skill(userSkill, 'review', '用户评审')
-      await skill(oldUserSkill, 'review', '旧全局目录评审')
+      await skill(systemSkill, 'review', '内置评审')
+      await skill(agentsSkill, 'review', '通用用户目录评审')
 
       const service = new SkillCatalogService({ homeDir: fixture.home })
       const snapshot = await service.snapshot(fixture.cwd, 100_000)
@@ -29,10 +31,34 @@ describe('Skill 发现、优先级与缓存失效', () => {
         '当前目录评审',
         '仓库评审',
         '用户评审',
+        '内置评审',
+        '通用用户目录评审',
       ])
-      assert.equal(new Set(snapshot.skills.map((entry) => entry.id)).size, 3)
+      assert.equal(new Set(snapshot.skills.map((entry) => entry.id)).size, 5)
       assert.equal(snapshot.skills[0]?.scope, 'project')
       assert.equal(snapshot.skills[2]?.scope, 'user')
+      assert.equal(snapshot.skills[3]?.scope, 'system')
+      assert.equal(snapshot.skills[4]?.scope, 'user')
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it('工作目录与用户目录重合时按路径去重，切换目录后缓存不沿用旧作用域', async () => {
+    const fixture = await createFixture()
+    try {
+      await skill(join(fixture.home, '.agents', 'skills', 'review', 'SKILL.md'), 'review', '通用用户评审')
+      const service = new SkillCatalogService({ homeDir: fixture.home })
+      const project = await service.snapshot(fixture.home)
+      const user = await service.snapshot(fixture.cwd)
+      const restored = await service.snapshot(fixture.home)
+      for (const snapshot of [project, user, restored]) {
+        assert.equal(snapshot.skills.length, 1)
+        assert.equal(snapshot.skills[0]!.id, project.skills[0]!.id)
+      }
+      assert.equal(project.skills[0]!.scope, 'project')
+      assert.equal(user.skills[0]!.scope, 'user')
+      assert.equal(restored.skills[0]!.scope, 'project')
     } finally {
       await rm(fixture.root, { recursive: true, force: true })
     }

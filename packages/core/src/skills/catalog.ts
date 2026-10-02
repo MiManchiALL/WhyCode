@@ -185,7 +185,7 @@ export class SkillCatalogService {
       this.parsedFiles.delete(key)
       this.parsedFiles.set(key, cached)
       if (cached.diagnostic) diagnostics.push({ path, message: cached.diagnostic })
-      return cached.value ? structuredClone(cached.value) : null
+      return cached.value ? { ...structuredClone(cached.value), scope } : null
     }
     try {
       if (size > BigInt(SKILL_MAX_DOCUMENT_BYTES)) {

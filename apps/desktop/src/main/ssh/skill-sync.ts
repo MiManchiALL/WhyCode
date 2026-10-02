@@ -1,4 +1,4 @@
-import { SkillCatalogService, type SkillSummary, type WorkspaceIO } from '@whycode/core'
+import { SkillCatalogService, workspacePathKey, type SkillSummary, type WorkspaceIO } from '@whycode/core'
 import type { SshSkillJob, SshSkillListing, SshSkillResult, SshSkillRow } from '../../shared/ssh-skills.ts'
 import type { SshConnections } from './connections.ts'
 import { exists, localWorkspaceIO, readSkillTree, remoteSkillIO, skillPath, SKILL_SYNC_BYTES, type SkillTree } from './skill-files.ts'
@@ -29,8 +29,10 @@ export class SshSkillSync {
   }
 
   private async local(): Promise<LocalSkill[]> {
-    const skills = (await new SkillCatalogService({ homeDir: this.home }).list(null)).skills.filter(skill => skill.scope === 'user' || skill.scope === 'system')
-    const root = localWorkspaceIO.path.join(this.home, '.whycode', 'skills')
+    const root = skillRoot(localWorkspaceIO, this.home)
+    const prefix = `${workspacePathKey(localWorkspaceIO, root)}${localWorkspaceIO.path.sep}`
+    const skills = (await new SkillCatalogService({ homeDir: this.home }).list(null)).skills
+      .filter(skill => workspacePathKey(localWorkspaceIO, skill.rootPath).startsWith(prefix))
     const candidates = skills.filter(skill => !skills.some(other => other !== skill && skill.rootPath.startsWith(`${other.rootPath}${localWorkspaceIO.path.sep}`)))
     if (candidates.length > 200) throw new Error('本地 Skill 超过 200 个，请精简后同步')
     const result: LocalSkill[] = []

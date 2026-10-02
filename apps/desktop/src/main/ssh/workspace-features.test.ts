@@ -22,16 +22,27 @@ async function withWorkspace(t: TestContext, run: (env: Awaited<ReturnType<typeo
   })
 }
 
-it('SSH Skill 从远端发现、选择和读取资源，等长修改立即更新且不混入本机路径', async t => {
+it('SSH Skill 从项目与两个远端用户目录发现、选择和读取资源，同名来源独立且等长修改立即更新', async t => {
   await withWorkspace(t, async (env, io, ctx) => {
     const root = join(env.root, 'project/.agents/skills/review')
     await mkdir(root, { recursive: true })
     const content = '---\nname: review\ndescription: Review remote code\n---\nFirst instruction.'
     await writeFile(join(root, 'SKILL.md'), content)
     await writeFile(join(root, 'notes.md'), 'Remote reference')
+    for (const base of ['.whycode', '.agents']) {
+      const userRoot = join(env.root, base, 'skills/review')
+      await mkdir(userRoot, { recursive: true })
+      await writeFile(join(userRoot, 'SKILL.md'), content)
+      await writeFile(join(userRoot, 'notes.md'), `${base} remote reference`)
+    }
     const catalog = new SkillCatalogService({ homeDir: env.remoteRoot, workspaceIO: io })
     const snapshot = await catalog.snapshot(env.project)
-    assert.equal(snapshot.entries.length, 1)
+    assert.deepEqual(snapshot.entries.map(skill => skill.path), [
+      `${env.project}/.agents/skills/review/SKILL.md`,
+      `${env.remoteRoot}/.whycode/skills/review/SKILL.md`,
+      `${env.remoteRoot}/.agents/skills/review/SKILL.md`,
+    ])
+    assert.equal(new Set(snapshot.entries.map(skill => skill.id)).size, 3)
     const skill = snapshot.entries[0]!
     assert.equal(skill.path, `${env.project}/.agents/skills/review/SKILL.md`)
     assert.equal((await catalog.activate({ id: skill.id, path: skill.path }, env.project)).content, content)
@@ -39,6 +50,13 @@ it('SSH Skill 从远端发现、选择和读取资源，等长修改立即更新
     assert.notEqual((await otherHost.list(env.project)).skills[0]!.id, skill.id)
     await assert.rejects(otherHost.activate({ id: skill.id, path: skill.path }, env.project), /不属于当前工作区/)
     const tool = createSkillTool(snapshot)
+    for (const userSkill of snapshot.entries.slice(1)) {
+      assert.equal(userSkill.scope, 'user')
+      assert.equal((await catalog.activate({ id: userSkill.id, path: userSkill.path }, env.project)).content, content)
+      const reference = await tool.execute({ skillId: userSkill.id, resourcePath: 'notes.md' }, ctx)
+      assert.equal(reference.isError, false)
+      assert.match(reference.data, /remote reference/)
+    }
     assert.match((await tool.execute({ skillId: skill.id, resourcePath: 'notes.md' }, ctx)).data, /Remote reference/)
     assert.equal((await tool.execute({ skillId: skill.id, resourcePath: '../notes.md' }, ctx)).isError, true)
     await symlink(join(env.root, 'project'), join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')

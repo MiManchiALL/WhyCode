@@ -32,6 +32,7 @@ export async function discoveryRoots(
   if (homeDir) {
     roots.push({ path: userSkillsRoot(homeDir, io.path), scope: 'user' })
     roots.push({ path: systemSkillsRoot(homeDir, io.path), scope: 'system' })
+    roots.push({ path: join(resolve(homeDir), '.agents', 'skills'), scope: 'user' })
   }
   return roots
 }

@@ -124,6 +124,39 @@ test('删除连接可保留远端修改；原有 Skill 与项目、临时目录�
   await access(join(env.root, 'project'))
 })
 
+test('双根发现不扩大本地同步来源；远端 agents 同名项阻止覆盖且不纳入清理', async t => {
+  const env = await sshFixture(t, 'protocol')
+  const home = join(env.root, 'local-home')
+  await localSkill(home, 'alpha'); await localSkill(home, 'review')
+  const remoteAgents = join(env.root, '.agents/skills/review')
+  const content = '---\nname: review\ndescription: 服务器原有 Skill\n---\n远端正文'
+  const localAgents = join(home, '.agents/skills/local-only')
+  await mkdir(localAgents, { recursive: true })
+  await writeFile(join(localAgents, 'SKILL.md'), '---\nname: local-only\ndescription: 不参与同步\n---\n本机正文')
+  await mkdir(remoteAgents, { recursive: true })
+  await writeFile(join(remoteAgents, 'SKILL.md'), content)
+  await env.connections.connect(env.id, env.fingerprint)
+  const sync = new SshSkillSync(env.connections, home, () => {})
+  const rows = (await sync.list(env.id)).rows
+  assert.deepEqual(rows.map(row => [row.id, row.status]), [['alpha', 'missing'], ['review', 'conflict']])
+  await assert.rejects(sync.sync(env.id, ['local-only']), /Skill 已变化/)
+  const synced = await sync.sync(env.id, ['alpha', 'review'])
+  assert.deepEqual(Object.fromEntries(synced.results.map(item => [item.id, item.ok])), { alpha: true, review: false })
+  await assert.rejects(access(join(env.root, '.whycode/skills/review')), { code: 'ENOENT' })
+  await assert.rejects(access(join(env.root, '.whycode/skills/local-only')), { code: 'ENOENT' })
+  // 即使外部目录里也有归属文件，清理权限仍只属于 .whycode 下的副本。
+  const marker = await readFile(join(env.root, '.whycode/skills/alpha/.whycode-skill-sync.json'))
+  await writeFile(join(remoteAgents, '.whycode-skill-sync.json'), marker)
+  await assert.rejects(sync.clean(env.id, ['review'], ['review']), /不属于/)
+  await env.connections.cleanup(env.id, { cleanSkills: true })
+  await assert.rejects(access(join(env.root, '.whycode')), { code: 'ENOENT' })
+  assert.equal(await readFile(join(remoteAgents, 'SKILL.md'), 'utf8'), content)
+  assert.deepEqual(await readFile(join(remoteAgents, '.whycode-skill-sync.json')), marker)
+  await env.connections.remove(env.id, { cleanSkills: true })
+  assert.equal(await readFile(join(remoteAgents, 'SKILL.md'), 'utf8'), content)
+  assert.match(await readFile(join(localAgents, 'SKILL.md'), 'utf8'), /本机正文/)
+})
+
 test('远端原有同名目录不接管，连接配置显式本地删除不会访问远端', async t => {
   const env = await sshFixture(t, 'protocol')
   const home = join(env.root, 'local-home')
