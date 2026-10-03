@@ -6,6 +6,7 @@ import type { Readable } from 'node:stream'
 import { unicodeSafeSuffix } from '../../text.ts'
 import { z } from 'zod'
 import { TOOL_OUTCOME_UNKNOWN } from '../../session/tool-execution.ts'
+import { powerShellCommandArgs } from '../powershell.ts'
 import {
   buildTool,
   type ToolContext,
@@ -21,19 +22,6 @@ const MAX_TIMEOUT_MS = 86_400_000
 const QUOTED_ENV_PATH_RE = /["'](\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^"']*)?)["']/gi
 const BARE_ENV_PATH_RE = /(?:^|[\s=(,])(\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^\s"'|<>)\],;]+)?)/gi
 
-function encodePowerShellCommand(command: string): string {
-  // powershell.exe 不会可靠透传最后一个原生命令的退出码，显式收口才能保留失败语义。
-  const script = [
-    command,
-    '$__whycodeCommandSucceeded = $?',
-    '$__whycodeCommandExitCode = $LASTEXITCODE',
-    'if ($__whycodeCommandSucceeded) { exit 0 }',
-    'if (($null -ne $__whycodeCommandExitCode) -and ($__whycodeCommandExitCode -ne 0)) { exit $__whycodeCommandExitCode }',
-    'exit 1',
-  ].join('\n')
-  return Buffer.from(script, 'utf16le').toString('base64')
-}
-
 function spawnNonInteractiveCommand(
   command: string,
   cwd: string,
@@ -46,11 +34,8 @@ function spawnNonInteractiveCommand(
   }
   if (process.platform === 'win32') {
     return spawn('powershell.exe', [
-      '-NoLogo',
-      '-NoProfile',
       '-NonInteractive',
-      '-EncodedCommand',
-      encodePowerShellCommand(command),
+      ...powerShellCommandArgs(command),
     ], { ...options, stdio: ['ignore', 'pipe', 'pipe'] })
   }
   return spawn(command, { ...options, shell: true, stdio: ['ignore', 'pipe', 'pipe'] })

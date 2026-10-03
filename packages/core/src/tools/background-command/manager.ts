@@ -14,6 +14,7 @@ import {
   type PersistedCommandTask,
 } from './types.ts'
 import { CommandTaskStorage } from './storage.ts'
+import { powerShellCommandArgs } from '../powershell.ts'
 
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const MAX_RUNNING_COMMANDS = 16
@@ -130,18 +131,24 @@ export class CommandSessionManager {
     this.tasks.set(this.key(input.sessionId, id), task)
 
     let child: ChildProcessWithoutNullStreams | WorkspaceProcess
-    try { child = io.spawn ? io.spawn(input.command, cwd) : spawn(input.command, {
-      shell: process.platform === 'win32' ? 'powershell.exe' : true,
-      cwd,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      env: {
-        ...process.env,
-        NO_COLOR: '1',
-        PAGER: 'cat',
-        GIT_PAGER: 'cat',
-      },
-    }) } catch (error) {
+    try {
+      child = io.spawn ? io.spawn(input.command, cwd) : spawn(
+        process.platform === 'win32' ? 'powershell.exe' : input.command,
+        process.platform === 'win32' ? powerShellCommandArgs(input.command) : [],
+        {
+          shell: process.platform !== 'win32',
+          cwd,
+          windowsHide: true,
+          detached: process.platform !== 'win32',
+          env: {
+            ...process.env,
+            NO_COLOR: '1',
+            PAGER: 'cat',
+            GIT_PAGER: 'cat',
+          },
+        },
+      )
+    } catch (error) {
       await this.finish(task, 'failed', null, `启动失败：${error instanceof Error ? error.message : String(error)}`)
       return this.snapshot(task)
     }

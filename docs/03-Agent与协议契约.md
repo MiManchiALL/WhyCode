@@ -310,13 +310,13 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 模型先读取相应 Office Skill，再通过普通 `RunCommand` 执行：
 
-- `NODE RUN script.mjs`：使用正常 Node 权限运行工作区脚本，提供 docx、pptxgenjs、exceljs、jszip、fast-xml-parser 和 sharp 的包解析。输入素材和输出由脚本处理；沿用命令审批、取消、超时和结果回传，不建立专用 Office 发布事务或隐式检查点。
-- `NODE CHECK file [--contains TEXT] [--count N] [--sheet NAME] [--offset N --limit N] [--require-calculated]`：验证有界 ZIP/XML 与内部关系，返回 JSON 内容摘要及错误。默认每批 20、最多 50 单位，正文预览约 60k 字符；DOCX 单位为段落，PPTX 为幻灯片，XLSX 为工作表，继续位置使用 nextOffset。每表最多展示 200 个单元格，公式计数、错误和缺失结果核对覆盖全表。失败非零退出；输入不超过 100 MiB、包不超过 10000 文件、展开不超过 128 MiB、单个 XML 不超过 16 MiB。
+- `NODE RUN script.mjs [arguments]`：使用正常 Node 权限运行工作区脚本并透传参数，提供 docx、pptxgenjs、exceljs、jszip、fast-xml-parser 和 sharp 的包解析；裸 Node 不启用该解析。入口只接受脚本文件，`-e/--eval` 等参数返回非零退出码与写入 `.mjs` 后执行的用法，`--help` 可查看说明。输入素材和输出由脚本处理；沿用命令审批、取消、超时和结果回传，不建立专用 Office 发布事务或隐式检查点。
+- `NODE CHECK file [--contains TEXT] [--count N] [--sheet NAME] [--offset N --limit N] [--require-calculated]`：验证有界 ZIP/XML 与内部关系，返回 JSON 内容摘要及错误。`--offset` 为从 0 开始的非负整数；`--limit` 为 1～50 的整数，默认 20，正文预览约 60k 字符。DOCX 单位为段落，PPTX 为幻灯片，XLSX 为工作表；unitCount 为总数，继续位置使用 nextOffset。`--count` 断言整份文档的总单位数，不控制分页；未知文档直接读取，不猜测数量或添加内容断言。参数校验在打开文件前完成，错误指出参数及允许范围，`--help` 提供完整用法。每表最多展示 200 个单元格，公式计数、错误和缺失结果核对覆盖全表。失败非零退出；输入不超过 100 MiB、包不超过 10000 文件、展开不超过 128 MiB、单个 XML 不超过 16 MiB。
 - `NODE OFFICE render --input FILE --output-dir NEW_DIR [--pages 1,2] [--sheet NAME --range A1:D20]`：调用 LibreOffice Kit 生成 PNG 与清单；模型用通用 `ViewImage` 查看页图。
 - `NODE MONTAGE --output NEW.png [--columns N] [--label TEXT ...] IMAGE ...`：按参数顺序拼接 1～36 张单帧 PNG/JPEG/WebP，默认列数为图片数平方根向上取整。单图最多 20 MiB、2000 万像素、单边 8192，输出 PNG 最长边 2048，保留比例并按需留白；每张缩放与最终合成各限时 15 秒，整个命令沿用 RunCommand 超时和取消。默认标注编号与文件名；自定义标签须与输入一一对应，每条 1～160 字符。JSON 返回输出尺寸、行列和完整来源映射，已有输出不覆盖。Skill 建议按任务和清晰度灵活分组，常用 4 张（2×2）或 9 张（3×3），需要细节时减少分组或查看原图、局部。
 - `NODE OFFICE convert --input FILE --output FILE` 与 `recalculate`：转换格式或实际重算并另存工作簿，失败返回非零退出码与 JSON 原因。默认 120 秒，允许设置 1–600 秒；输入和输出各限 100 MiB、最多 10000 归档条目、展开最多 250 MiB，沿用引擎的其它限制。可用 `--font-directory` 选择现有字体目录。
 
-创建或修改后的最终版本需执行任务所需的内容和结构检查；含公式工作簿需实际重算、检查缓存和关键值。视觉模型按 Skill 查看最终页图，非视觉模型如实说明未执行视觉复核。结构成功不证明业务逻辑、模板保真或视觉排版正确；检查失败应修正脚本或文档并重新验证，不伪造成功声明。
+演示文稿 Skill 区分读取分析与创建修改：只读任务保留原件，先读取摘要和实际页序，按任务需要查看页图或提取复杂对象；创建或修改后的最终版本需执行任务所需的内容和结构检查，明确的数量和内容要求才转为断言。含公式工作簿需实际重算、检查缓存和关键值。视觉模型按 Skill 查看最终页图，非视觉模型如实说明未执行视觉复核。结构成功不证明业务逻辑、模板保真或视觉排版正确；检查失败应修正脚本或文档并重新验证，不伪造成功声明。
 
 ### 3.9 最终成品与来源引用
 

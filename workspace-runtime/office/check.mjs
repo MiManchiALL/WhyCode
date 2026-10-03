@@ -9,6 +9,23 @@ const parser = new XMLParser({ ignoreAttributes: false, transformTagName: name =
 const array = value => value === undefined ? [] : Array.isArray(value) ? value : [value]
 const text = value => typeof value === 'string' ? value : value?.['#text'] ?? ''
 const relationId = node => Object.entries(node).find(([name]) => /^@_.+:id$/.test(name))?.[1]
+const usage = `Usage: node check.mjs FILE [--offset N --limit N] [--sheet NAME] [--count N] [--contains TEXT] [--require-calculated]
+Read without assertions: node check.mjs FILE
+Units: DOCX paragraphs, PPTX slides, XLSX worksheets. unitCount is the total; nextOffset continues pagination.
+--offset: non-negative integer, default 0 (zero-based).
+--limit: integer from 1 to 50, default 20 (units per response).
+--count: expected TOTAL units, not a page size or a page number. Omit when reading an unknown document.
+--contains: assert required text; repeat for multiple values.
+--require-calculated: assert that spreadsheet formulas have saved results and no formula errors.`
+
+function integerOption(value, name, min, max = Number.MAX_SAFE_INTEGER) {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  if (!Number.isSafeInteger(number) || number < min || number > max) {
+    const range = max === Number.MAX_SAFE_INTEGER ? `an integer >= ${min}` : `an integer from ${min} to ${max}`
+    throw new Error(`--${name} must be ${range}; received ${JSON.stringify(value)}.${name === 'limit' ? ' Use nextOffset to read the next page.' : ''}`)
+  }
+  return number
+}
 
 function collect(node, key) {
   if (!node || typeof node !== 'object') return []
@@ -58,6 +75,9 @@ async function openPackage(path) {
 
 /** Deterministic structure/content checks; appearance and business logic require task-specific review. */
 export async function checkOffice(path, options = {}) {
+  const offset = integerOption(options.offset ?? 0, 'offset', 0)
+  const limit = integerOption(options.limit ?? 20, 'limit', 1, 50)
+  const count = options.count === undefined ? undefined : integerOption(options.count, 'count', 0)
   const format = extname(path).slice(1).toLowerCase()
   if (!['docx', 'pptx', 'xlsx'].includes(format)) throw new Error('Supported inputs: DOCX, PPTX, XLSX')
   const { xml, relationships, externalLinks } = await openPackage(path)
@@ -120,9 +140,7 @@ export async function checkOffice(path, options = {}) {
     }
   }
   for (const required of options.contains ?? []) if (!allText.includes(required)) errors.push(`Required text not found: ${required}`)
-  if (options.count !== undefined && units.length !== options.count) errors.push(`Expected ${options.count} units, found ${units.length}`)
-  const offset = options.offset ?? 0
-  const limit = options.limit ?? 20
+  if (count !== undefined && units.length !== count) errors.push(`--count expected ${count} total units, found ${units.length}. --count asserts the document total; use --limit for page size, or omit --count when reading.`)
   const page = []
   let chars = 0
   for (const unit of units.slice(offset, offset + limit)) {
@@ -140,12 +158,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const { values, positionals } = parseArgs({ allowPositionals: true, options: {
       contains: { type: 'string', multiple: true }, count: { type: 'string' }, sheet: { type: 'string' },
-      offset: { type: 'string', default: '0' }, limit: { type: 'string', default: '20' }, 'require-calculated': { type: 'boolean' },
+      offset: { type: 'string' }, limit: { type: 'string' }, 'require-calculated': { type: 'boolean' }, help: { type: 'boolean' },
     } })
-    if (positionals.length !== 1) throw new Error('Usage: check.mjs FILE [--contains TEXT] [--count N] [--sheet NAME] [--offset N --limit N] [--require-calculated]')
-    const offset = Number(values.offset), limit = Number(values.limit), count = values.count === undefined ? undefined : Number(values.count)
-    if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 50 || (count !== undefined && (!Number.isInteger(count) || count < 0))) throw new Error('Invalid count, offset or limit')
-    const report = await checkOffice(resolve(positionals[0]), { contains: values.contains, count, sheet: values.sheet, offset, limit, requireCalculated: values['require-calculated'] })
-    console.log(JSON.stringify(report)); if (!report.ok) process.exitCode = 1
+    if (values.help) console.log(usage)
+    else {
+      if (positionals.length !== 1) throw new Error(usage)
+      const report = await checkOffice(resolve(positionals[0]), { contains: values.contains, count: values.count, sheet: values.sheet, offset: values.offset, limit: values.limit, requireCalculated: values['require-calculated'] })
+      console.log(JSON.stringify(report)); if (!report.ok) process.exitCode = 1
+    }
   } catch (error) { console.log(JSON.stringify({ ok: false, errors: [error.message] })); process.exitCode = 1 }
 }

@@ -19,10 +19,8 @@ after(async () => {
   assert.ok(root.startsWith(join(tmpdir(), 'whycode-office-test-')))
   await rm(root, { recursive: true, force: true })
 })
-const command = async (...args) => {
-  const result = await promisify(execFile)(process.execPath, [join(environment, 'office.mjs'), ...args], { windowsHide: true, timeout: 150000, maxBuffer: 1024 * 1024 })
-  return JSON.parse(result.stdout)
-}
+const executeScript = (name, ...args) => promisify(execFile)(process.execPath, [join(environment, name), ...args], { windowsHide: true, timeout: 150000, maxBuffer: 1024 * 1024 })
+const command = async (...args) => JSON.parse((await executeScript('office.mjs', ...args)).stdout)
 const docxPath = join(root, '文档.docx')
 const deckPath = join(root, 'slides.pptx')
 const bookPath = join(root, 'book.xlsx')
@@ -74,6 +72,75 @@ test('large sheet previews remain bounded and pagination advances', async () => 
   assert.equal(report.units[0].cellsTruncated, true)
   assert.equal(report.nextOffset, null)
   assert.ok(JSON.stringify(report).length < 60000)
+})
+
+test('checker reads unknown slide counts, paginates independently and explains a mistaken total assertion', async () => {
+  const before = await readFile(deckPath)
+  const report = JSON.parse((await executeScript('check.mjs', deckPath)).stdout)
+  assert.equal(report.ok, true)
+  assert.equal(report.unitCount, 2)
+  assert.equal(report.units.length, 2)
+  const first = await checkOffice(deckPath, { limit: 1, count: 2 })
+  assert.equal(first.ok, true)
+  assert.equal(first.units.length, 1)
+  assert.equal(first.nextOffset, 1)
+  const second = await checkOffice(deckPath, { offset: first.nextOffset, limit: 1 })
+  assert.equal(second.ok, true)
+  assert.equal(second.units[0].slide, 2)
+  assert.equal(second.nextOffset, null)
+  await assert.rejects(executeScript('check.mjs', deckPath, '--count', '1', '--limit', '1'), error => {
+    assert.equal(error.code, 1)
+    const result = JSON.parse(error.stdout)
+    assert.equal(result.ok, false)
+    assert.equal(result.unitCount, 2)
+    assert.equal(result.units.length, 1)
+    assert.match(result.errors[0], /--count expected 1 total units, found 2/)
+    assert.match(result.errors[0], /--limit.*omit --count/)
+    return true
+  })
+  assert.deepEqual(await readFile(deckPath), before)
+})
+
+test('checker validates each parameter before opening input and returns actionable CLI errors', async () => {
+  for (const limit of [100, 200, 0, 51, 1.5]) {
+    await assert.rejects(checkOffice('missing.pptx', { limit }), /--limit must be an integer from 1 to 50.*nextOffset/)
+  }
+  for (const name of ['offset', 'count']) {
+    await assert.rejects(checkOffice('missing.pptx', { [name]: -1 }), new RegExp(`--${name} must be an integer >= 0`))
+  }
+  for (const value of ['100', '200', 'invalid']) {
+    await assert.rejects(executeScript('check.mjs', deckPath, '--limit', value), error => {
+      assert.equal(error.code, 1)
+      const result = JSON.parse(error.stdout)
+      assert.equal(result.ok, false)
+      assert.match(result.errors[0], /--limit must be an integer from 1 to 50/)
+      assert.ok(result.errors[0].includes(value))
+      return true
+    })
+  }
+  assert.equal((await checkOffice(deckPath, { limit: 50 })).ok, true)
+  const help = await executeScript('check.mjs', '--help')
+  assert.match(help.stdout, /--limit: integer from 1 to 50/)
+  assert.match(help.stdout, /--count: expected TOTAL units/)
+})
+
+test('script entry rejects inline flags and resolves bundled imports for files with forwarded arguments', async () => {
+  for (const args of [[], ['-e', 'console.log(1)'], ['--eval', 'console.log(1)']]) {
+    await assert.rejects(executeScript('run.mjs', ...args), error => {
+      assert.equal(error.code, 1)
+      assert.match(error.stderr, /Usage: node run.mjs <script.mjs>/)
+      assert.match(error.stderr, /Write JavaScript to a .mjs file/)
+      assert.doesNotMatch(error.stderr, /ERR_MODULE_NOT_FOUND/)
+      return true
+    })
+  }
+  assert.match((await executeScript('run.mjs', '--help')).stdout, /Usage:/)
+  const script = join(root, '提取脚本.mjs')
+  await writeFile(script, "import JSZip from 'jszip'\nconsole.log(JSON.stringify({ importType: typeof JSZip.loadAsync, argv: process.argv.slice(1) }))\n")
+  const args = ['中文 参数', '--custom-flag', 'quoted "value"']
+  const result = JSON.parse((await executeScript('run.mjs', script, ...args)).stdout)
+  assert.equal(result.importType, 'function')
+  assert.deepEqual(result.argv, [script, ...args])
 })
 test('LibreOffice produces PNGs and PDF without changing input packages', async () => {
   const previews = []
