@@ -140,6 +140,47 @@ describe('ViewImage Agent 链路', () => {
     })
   })
 
+  it('同一步接收十张图片，超限错误反馈模型且下一步可继续读取', async () => {
+    await withTempDirectory(async (directory) => {
+      const projectDir = join(directory, 'project')
+      await mkdir(projectDir)
+      const paths = Array.from({ length: 11 }, (_, index) => `page-${index + 1}.png`)
+      await Promise.all(paths.map(path => writeFile(join(projectDir, path), ONE_PIXEL_PNG)))
+      const store = new SessionStore(join(directory, 'sessions'))
+      const journal = await store.create({ workspace: localWorkspace(projectDir), modelId: 'test:vision' })
+      const events: CoreEvent[] = []
+      let call = 0
+      const model = new MockLanguageModelV4({
+        doStream: async options => {
+          call++
+          if (call === 1) return viewImageStep(paths)
+          const results = options.prompt.flatMap(message => message.role === 'tool' ? message.content : [])
+          assert.equal(results.filter(result => result.type === 'tool-result' && result.output.type === 'content').length, call === 2 ? 10 : 11)
+          const failures = events.filter(event => event.type === 'tool-end' && event.isError)
+          assert.equal(failures.length, 1)
+          assert.match(JSON.stringify(options.prompt), /单个模型步骤最多查看 10 张图片/)
+          if (call === 2) {
+            assert.equal((await readdir(journal.attachmentDirectory)).length, 10)
+            const failure = failures[0]!
+            assert.ok(failure.type === 'tool-end')
+            const start = events.find(event => event.type === 'tool-start' && event.toolUseId === failure.toolUseId)
+            assert.ok(start?.type === 'tool-start')
+            return viewImageStep((start.input as { path: string }).path, 'retry')
+          }
+          return finalStep('十一页已分批查看。')
+        },
+      })
+      assert.equal(await createSession(model, journal, projectDir, true, event => events.push(event))
+        .handleUserMessage('查看十一页'), 'completed')
+      assert.equal(call, 3)
+      assert.equal(events.filter(event => event.type === 'image-viewed').length, 11)
+      const reopened = await store.open(journal.sessionId)
+      assert.equal(reopened.initialImageAttachments.length, 11)
+      assert.equal((await readdir(journal.attachmentDirectory)).length, 11)
+      assert.equal(JSON.stringify(reopened.initialMessages).includes(ONE_PIXEL_PNG.toString('base64')), false)
+    })
+  })
+
   it('工具完成后停止仍保留已提交图片与模型结果', async () => {
     await withTempDirectory(async (directory) => {
       const projectDir = join(directory, 'project')
@@ -248,16 +289,16 @@ function modelEntry(model: MockLanguageModelV4, supportsImageInput: boolean): Mo
   }
 }
 
-function viewImageStep(path: string) {
+function viewImageStep(paths: string | readonly string[], prefix = 'view-image') {
   return {
     stream: simulateReadableStream({
       chunks: [
-        {
+        ...(typeof paths === 'string' ? [paths] : paths).map((path, index) => ({
           type: 'tool-call' as const,
-          toolCallId: 'view-image-1',
+          toolCallId: `${prefix}-${index + 1}`,
           toolName: VIEW_IMAGE_TOOL_NAME,
           input: JSON.stringify({ path }),
-        },
+        })),
         {
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },

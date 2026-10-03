@@ -299,7 +299,7 @@ describe('用户可见事件契约', () => {
     )
   })
 
-  it('用户消息允许十图，普通图片工具仍保持四图边界', () => {
+  it('用户消息与普通图片工具均允许十图并拒绝超限事件', () => {
     const attachments = Array.from({
       length: USER_IMAGE_ATTACHMENT_MAX_COUNT + 1,
     }, (_, index) => {
@@ -319,7 +319,7 @@ describe('用户可见事件契约', () => {
       type: 'core-event',
       event: {
         type: 'image-viewed',
-        toolUseId: 'view-image-4',
+        toolUseId: 'view-image-ten',
         attachments: attachments.slice(0, TOOL_IMAGE_ATTACHMENT_MAX_COUNT),
       },
     }).success, true)
@@ -327,7 +327,7 @@ describe('用户可见事件契约', () => {
       type: 'core-event',
       event: {
         type: 'image-viewed',
-        toolUseId: 'view-image-5',
+        toolUseId: 'view-image-over-limit',
         attachments: attachments.slice(0, TOOL_IMAGE_ATTACHMENT_MAX_COUNT + 1),
       },
     }).success, false)

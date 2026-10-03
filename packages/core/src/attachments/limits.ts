@@ -1,7 +1,7 @@
 /** 单条用户消息最多携带的图片数。 */
 export const USER_IMAGE_ATTACHMENT_MAX_COUNT = 10
 /** 单个普通工具步骤最多返回的图片数；PDF 页面图使用会话层专用边界。 */
-export const TOOL_IMAGE_ATTACHMENT_MAX_COUNT = 4
+export const TOOL_IMAGE_ATTACHMENT_MAX_COUNT = 10
 /** 会话允许保存的原图上限；模型请求使用更小的衍生图边界。 */
 export const IMAGE_ATTACHMENT_MAX_SOURCE_BYTES = 20_000_000
 /** 避免 Base64 膨胀后把单张模型输入推到常见 5 MB 上限之外。 */

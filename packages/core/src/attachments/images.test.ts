@@ -191,10 +191,10 @@ describe('图片附件', () => {
     })
   })
 
-  it('用户导入可显式接收十张图片，普通工具批次仍限制为四张', async () => {
+  it('用户与工具批次均可接收十张图片，超限导入被拒绝', async () => {
     await withTempDirectory(async (directory) => {
       const sources = await Promise.all(Array.from({
-        length: USER_IMAGE_ATTACHMENT_MAX_COUNT,
+        length: Math.max(USER_IMAGE_ATTACHMENT_MAX_COUNT, TOOL_IMAGE_ATTACHMENT_MAX_COUNT) + 1,
       }, async (_, index) => ({
         kind: 'bytes' as const,
         name: `image-${index}.png`,
@@ -209,8 +209,15 @@ describe('图片附件', () => {
         new RegExp(`本批最多添加 ${TOOL_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`),
       )
 
+      const imported = await importImageAttachments(
+        sources.slice(0, TOOL_IMAGE_ATTACHMENT_MAX_COUNT),
+        join(directory, 'tool-attachments'),
+        SESSION_ID,
+      )
+      assert.equal(imported.length, TOOL_IMAGE_ATTACHMENT_MAX_COUNT)
+
       const transaction = await prepareImageAttachmentImport(
-        sources,
+        sources.slice(0, USER_IMAGE_ATTACHMENT_MAX_COUNT),
         join(directory, 'user-attachments'),
         SESSION_ID,
         { maxCount: USER_IMAGE_ATTACHMENT_MAX_COUNT },
