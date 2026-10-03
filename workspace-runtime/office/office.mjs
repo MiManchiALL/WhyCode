@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createConverter, discoverRuntime } from '@deepseek-ai/libreoffice-kit'
+import sharp from 'sharp'
 
 let converter
 try {
@@ -16,7 +17,9 @@ try {
     throw new Error('Usage: office.mjs capabilities | render --input FILE --output-dir DIR [--pages 1,3] [--sheet NAME --range A1:D20] | convert --input FILE --output FILE | recalculate --input FILE --output FILE')
   }
   if (command === 'capabilities') {
-    console.log(JSON.stringify({ runtime: await discoverRuntime(), commands: ['render', 'convert', 'recalculate'], libraries: ['docx', 'pptxgenjs', 'exceljs', 'jszip', 'fast-xml-parser'] }))
+    // 安装探测同时验证目标平台的图片处理二进制可用。
+    await sharp({ create: { width: 1, height: 1, channels: 3, background: 'white' } }).png().toBuffer()
+    console.log(JSON.stringify({ runtime: await discoverRuntime(), commands: ['render', 'convert', 'recalculate'], libraries: ['docx', 'pptxgenjs', 'exceljs', 'jszip', 'fast-xml-parser', 'sharp'] }))
   } else {
     if (!values.input) throw new Error('--input is required')
     const timeoutMs = Number(values['timeout-ms'])

@@ -26,13 +26,17 @@ test('Linux SSH prepares, reuses and removes Office dependencies while preservin
   const first = messages.length
   assert.equal(await dependencies.prepareSkill(skill, { ...context, canExecute: true }), declaration)
   assert.equal(messages.length, first)
-  const testFile = env.project + '/office.test.mjs'
-  await host.io.fs.writeFile(testFile, await readFile(resolve('../../workspace-runtime/office/office.test.mjs')))
-  const output = await waitDependencyProcess(host.processes.spawn({
-    executable: paths.node, args: [paths.run, testFile, host.io.path.dirname(paths.office)],
-  }, env.project), context.abortSignal)
-  console.log(output)
-  assert.match(output, /pass 6/)
+  assert.equal(paths.montage, host.io.path.join(host.io.path.dirname(paths.office), 'montage.mjs'))
+  for (const file of ['office.test.mjs', 'montage.test.mjs']) {
+    const testFile = env.project + '/' + file
+    await host.io.fs.writeFile(testFile, await readFile(resolve('../../workspace-runtime/office', file)))
+    const output = await waitDependencyProcess(host.processes.spawn({
+      executable: paths.node, args: [paths.run, testFile, host.io.path.dirname(paths.office)],
+    }, env.project), context.abortSignal)
+    console.log(output)
+    assert.match(output, /pass [1-9]/)
+    assert.match(output, /fail 0/)
+  }
   const native = host.home + '/.whycode/skills/native'
   await host.io.fs.mkdir(native, { recursive: true })
   await host.io.fs.writeFile(native + '/SKILL.md', 'native')

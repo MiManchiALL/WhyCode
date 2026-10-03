@@ -7,8 +7,8 @@ import { localNode, nodeArchive, NODE_VERSION } from './node.ts'
 import { runDependencyProcess, waitDependencyProcess } from './process.ts'
 import { environmentRoot, installRemoteDependencies } from './remote.ts'
 
-const FILES = ['package.json', 'package-lock.json', 'run.mjs', 'office.mjs', 'check.mjs']
-export interface DependencyPaths { node: string; run: string; office: string; check: string; libraries: string[] }
+const FILES = ['package.json', 'package-lock.json', 'run.mjs', 'office.mjs', 'check.mjs', 'montage.mjs']
+export interface DependencyPaths { node: string; run: string; office: string; check: string; montage: string; libraries: string[] }
 
 /** Office Skill 激活时准备环境；目录枚举与普通 SSH 重连不触发安装。 */
 export class WorkspaceDependencies {
@@ -23,7 +23,7 @@ export class WorkspaceDependencies {
     if (!context.canExecute) return '## Office 运行环境\n\n当前角色不能执行命令，未准备 Office 运行环境；生成、渲染与重算需交给具备命令执行能力的会话。'
     const paths = await this.load(context)
     const device = context.workspaceIO && context.workspaceIO.identity !== 'local' ? 'SSH 服务器' : '本机'
-    return `## Office 运行环境\n\nWhyCode 已在${device}准备以下运行环境。所有 Office 命令使用这些绝对路径；NODE/RUN/OFFICE/CHECK 分别对应 node/run/office/check。无需安装项目依赖或全局包。\n\n${JSON.stringify(paths, null, 2)}`
+    return `## Office 运行环境\n\nWhyCode 已在${device}准备以下运行环境。所有 Office 命令使用这些绝对路径；NODE/RUN/OFFICE/CHECK/MONTAGE 分别对应 node/run/office/check/montage。无需安装项目依赖或全局包。\n\n${JSON.stringify(paths, null, 2)}`
   }
 
   private async load(ctx: Pick<SkillRuntimeContext, 'workspaceIO' | 'abortSignal' | 'onProgress'>): Promise<DependencyPaths> {
@@ -70,7 +70,8 @@ export class WorkspaceDependencies {
         for (const file of FILES) await copyFile(join(this.resources, file), join(staging, file))
         progress(`正在准备 Office 依赖（${platform}/${arch}），首次安装可能需要几分钟`)
         await runDependencyProcess(node.executable, [node.npm, 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund',
-          `--os=${platform}`, `--cpu=${arch}`, '--registry=https://registry.npmjs.org', `--cache=${join(this.cache, 'npm-cache')}`,
+          `--os=${platform}`, `--cpu=${arch}`, ...(platform === 'linux' ? ['--libc=glibc'] : []),
+          '--registry=https://registry.npmjs.org', `--cache=${join(this.cache, 'npm-cache')}`,
         ], staging, signal, progress)
         if (platform === 'linux') {
           await copyFile(await nodeArchive(join(this.cache, 'downloads'), platform, arch, signal, progress), join(staging, 'node.tar.xz'))
@@ -137,5 +138,5 @@ export async function readReady(io: WorkspaceIO, directory: string, key: string)
 
 function dependencyPaths(root: string, node: string, io: WorkspaceIO): DependencyPaths {
   return { node, run: io.path.join(root, 'run.mjs'), office: io.path.join(root, 'office.mjs'), check: io.path.join(root, 'check.mjs'),
-    libraries: ['docx', 'pptxgenjs', 'exceljs', 'jszip', 'fast-xml-parser'] }
+    montage: io.path.join(root, 'montage.mjs'), libraries: ['docx', 'pptxgenjs', 'exceljs', 'jszip', 'fast-xml-parser', 'sharp'] }
 }

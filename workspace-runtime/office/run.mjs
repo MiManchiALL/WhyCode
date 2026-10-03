@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 // 工作脚本留在项目内；只把随环境发布的库解析到受管目录。
-const libraries = new Set(['docx', 'exceljs', 'pptxgenjs', 'jszip', 'fast-xml-parser'])
+const libraries = new Set(['docx', 'exceljs', 'pptxgenjs', 'jszip', 'fast-xml-parser', 'sharp'])
 registerHooks({
   resolve(specifier, context, nextResolve) {
     return nextResolve(specifier, libraries.has(specifier) ? { ...context, parentURL: import.meta.url } : context)

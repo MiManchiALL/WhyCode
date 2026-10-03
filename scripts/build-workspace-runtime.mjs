@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const source = join(root, 'workspace-runtime/office')
 const target = join(root, 'apps/desktop/resources/office')
-const files = ['package.json', 'package-lock.json', 'run.mjs', 'office.mjs', 'check.mjs']
+const files = ['package.json', 'package-lock.json', 'run.mjs', 'office.mjs', 'check.mjs', 'montage.mjs']
 const hash = createHash('sha256')
 await mkdir(target, { recursive: true })
 for (const file of files) {

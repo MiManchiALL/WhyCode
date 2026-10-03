@@ -10,6 +10,7 @@ import { Document, Packer, Paragraph } from 'docx'
 import pptxgen from 'pptxgenjs'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
+import sharp from 'sharp'
 
 const environment = resolve(process.argv[2] ?? '')
 const { checkOffice } = await import(pathToFileURL(join(environment, 'check.mjs')).href)
@@ -75,13 +76,21 @@ test('large sheet previews remain bounded and pagination advances', async () => 
   assert.ok(JSON.stringify(report).length < 60000)
 })
 test('LibreOffice produces PNGs and PDF without changing input packages', async () => {
+  const previews = []
   for (const [input, extra] of [[docxPath, ['--pages', '1']], [deckPath, ['--pages', '2']], [bookPath, ['--sheet', 'Summary', '--range', 'A1:C3']]]) {
     const before = await readFile(input)
     const output = join(root, 'preview-' + input.split('.').at(-1))
     await command('render', '--input', input, '--output-dir', output, '--dpi', '72', ...extra)
-    assert.ok((await readdir(output, { recursive: true })).some(name => name.endsWith('.png')))
+    const image = (await readdir(output, { recursive: true })).find(name => name.endsWith('.png'))
+    assert.ok(image)
+    previews.push(join(output, image))
     assert.deepEqual(await readFile(input), before)
   }
+  const montage = join(root, 'overview.png')
+  await promisify(execFile)(process.execPath, [join(environment, 'montage.mjs'), '--output', montage, '--columns', '2', ...previews], { windowsHide: true, timeout: 60000 })
+  const overview = await sharp(montage).metadata()
+  assert.equal(overview.format, 'png')
+  assert.ok(overview.width <= 2048 && overview.height <= 2048)
   const pdf = join(root, 'report.pdf')
   await command('convert', '--input', docxPath, '--output', pdf)
   assert.equal((await readFile(pdf)).subarray(0, 5).toString(), '%PDF-')
