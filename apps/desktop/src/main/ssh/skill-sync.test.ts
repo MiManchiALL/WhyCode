@@ -19,7 +19,7 @@ async function localSkill(home: string, name: string, content = '初始内容') 
   return root
 }
 
-test('新连接只初始化内置 Skill 一次；清理和重启后不自动补回，手动同步仍可恢复', async t => {
+test('新连接一次同步内置和用户 Skill；清理和重启后不自动补回，手动同步仍可恢复', async t => {
   const env = await sshFixture(t, 'protocol')
   const home = join(env.root, 'local-home')
   await localSkill(home, 'mine')
@@ -33,23 +33,52 @@ test('新连接只初始化内置 Skill 一次；清理和重启后不自动补�
   const builtin = rows.filter(row => row.id.startsWith('.system/')).map(row => row.id)
   assert.equal(builtin.length, 7)
   assert.ok(rows.filter(row => builtin.includes(row.id)).every(row => row.status === 'same'))
-  assert.equal(rows.find(row => row.id === 'mine')!.status, 'missing')
+  assert.equal(rows.find(row => row.id === 'mine')!.status, 'same')
+  assert.equal(sync.job(env.id)!.results.length, builtin.length + 1)
+  assert.equal(await readFile(join(env.root, '.whycode/skills/mine/references/中文资料.txt'), 'utf8'), '初始内容')
   const catalog = new SkillCatalogService({ homeDir: env.remoteRoot, workspaceIO: env.connections.host(env.id).io })
-  assert.equal((await catalog.list(null)).skills.filter(skill => skill.scope === 'system').length, 7)
-  await sync.clean(env.id, builtin, [])
+  const available = (await catalog.list(null)).skills
+  assert.equal(available.filter(skill => skill.scope === 'system').length, 7)
+  assert.ok(available.some(skill => skill.scope === 'user' && skill.name === 'mine'))
+  const copied = [...builtin, 'mine']
+  await sync.clean(env.id, copied, [])
   await assert.rejects(access(join(env.root, '.whycode/skills/.system')), { code: 'ENOENT' })
+  await assert.rejects(access(join(env.root, '.whycode/skills/mine')), { code: 'ENOENT' })
   env.connections.disconnect(env.id)
+  await localSkill(home, 'later')
   await env.connections.connect(env.id)
   const restarted = new SshSkillSync(env.connections, home, () => {})
   await restarted.initialize(env.id)
   assert.equal(restarted.job(env.id), undefined)
   await assert.rejects(access(join(env.root, '.whycode/skills/.system')), { code: 'ENOENT' })
-  const restored = await restarted.sync(env.id, [...builtin, 'mine'])
+  await assert.rejects(access(join(env.root, '.whycode/skills/mine')), { code: 'ENOENT' })
+  await assert.rejects(access(join(env.root, '.whycode/skills/later')), { code: 'ENOENT' })
+  const restored = await restarted.sync(env.id, copied)
   assert.ok(restored.results.every(item => item.ok))
   assert.match(await readFile(join(env.root, '.whycode/skills/documents/SKILL.md'), 'utf8'), /服务器原有/)
   await env.connections.remove(env.id, { cleanSkills: true })
   await assert.rejects(access(join(env.root, '.whycode/skills/.system')), { code: 'ENOENT' })
   await access(join(env.root, '.whycode/skills/documents/SKILL.md'))
+})
+
+test('首次同步用户 Skill 保留远端同名项，沿用手动同步的来源范围', async t => {
+  const env = await sshFixture(t, 'protocol')
+  const home = join(env.root, 'local-home')
+  await localSkill(home, 'mine'); await localSkill(home, 'review')
+  await localSkill(env.root, 'review', '服务器原有用户 Skill')
+  for (const directory of [join(home, '.agents/skills/local-only'), join(home, 'project/.agents/skills/project-only')]) {
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, 'SKILL.md'), '---\nname: outside\ndescription: 不参与上传\n---\n保留在本机')
+  }
+  await env.connections.connect(env.id, env.fingerprint)
+  const sync = new SshSkillSync(env.connections, home, () => {})
+  await sync.initialize(env.id)
+  assert.deepEqual(Object.fromEntries(sync.job(env.id)!.results.map(item => [item.id, item.ok])), { mine: true, review: false })
+  assert.equal(env.connections.isConnected(env.id), true)
+  assert.match(await readFile(join(env.root, '.whycode/skills/review/SKILL.md'), 'utf8'), /服务器原有用户 Skill/)
+  await assert.rejects(access(join(env.root, '.whycode/skills/review/.whycode-skill-sync.json')), { code: 'ENOENT' })
+  await assert.rejects(access(join(env.root, '.whycode/skills/local-only')), { code: 'ENOENT' })
+  await assert.rejects(access(join(env.root, '.whycode/skills/project-only')), { code: 'ENOENT' })
 })
 
 test('SSH Skill 同步完整目录、更新未改副本、保护冲突，并可离线清空包括远端孤立副本', async t => {

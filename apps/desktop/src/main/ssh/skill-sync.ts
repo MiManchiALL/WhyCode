@@ -20,7 +20,7 @@ export class SshSkillSync {
   async initialize(id: string): Promise<void> {
     try {
       if (!await this.connections.store.takeSkillInitialization(id)) return
-      const selected = (await this.local()).filter(item => item.skill.scope === 'system').map(item => item.id)
+      const selected = (await this.local()).map(item => item.id)
       if (selected.length) await this.sync(id, selected)
     } catch (error) {
       if (!this.jobs.has(id)) await this.run(id, 'sync', ['.system'], async () => { throw error }).catch(() => undefined)

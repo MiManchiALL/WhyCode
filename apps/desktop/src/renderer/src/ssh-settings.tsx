@@ -87,7 +87,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
   }
   const skillsFor = connections.find(connection => connection.id === skillConnection?.id)
   return <>
-    <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。新连接首次成功后自动同步内置 Skill，Office 环境按需准备。"
+    <SettingsSection title="SSH 连接" description="连接后添加远端项目，像本地项目一样开始会话。新连接首次成功后自动同步内置及本地用户 Skill，Office 环境按需准备。"
       actions={connections.length > 0 && <SettingsButton onClick={() => setEditor({})}><Plus size={15} />添加连接</SettingsButton>}>
       <SettingsPanel padded={false}>
         {!connections.length && <div className="flex flex-col items-center gap-3 px-8 py-12 text-[var(--wc-muted)]">
