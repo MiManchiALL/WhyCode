@@ -95,35 +95,38 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
           <p className="text-sm">通过 SSH 连接你的服务器</p>
           <SettingsButton variant="primary" onClick={() => setEditor({})}>添加连接</SettingsButton>
         </div>}
-        {connections.map(connection => <div key={connection.id} className="flex min-w-0 flex-wrap items-center gap-3 border-b border-[var(--wc-line)] p-4 last:border-b-0">
-          <Server size={20} className="shrink-0 text-[var(--wc-muted)]" />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{connection.name}</div>
-            <div className="truncate text-xs text-[var(--wc-faint)]">{connection.username}@{connection.host}:{connection.port}</div>
+        {connections.map(connection => {
+          const busy = connection.status === 'connecting' || connection.status === 'releasing'
+          return <div key={connection.id} className="flex min-w-0 flex-wrap items-center gap-3 border-b border-[var(--wc-line)] p-4 last:border-b-0">
+            <Server size={20} className="shrink-0 text-[var(--wc-muted)]" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium">{connection.name}</div>
+              <div className="truncate text-xs text-[var(--wc-faint)]">{connection.username}@{connection.host}:{connection.port}</div>
+            </div>
+            <SettingsButton disabled={connection.status !== 'disconnected'} onClick={() => void run(connection, 'connect')}>
+              {connection.status === 'connecting' ? '连接中…' : connection.status === 'releasing' ? '清理中…' : connection.status === 'connected' ? '已连接' : '连接'}
+            </SettingsButton>
+            <SettingsButton aria-label={`添加 ${connection.name} 的项目`} disabled={connection.status !== 'connected'} onClick={() => setPicker(connection)}>
+              <FolderPlus size={16} />添加项目
+            </SettingsButton>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button className="wc-focus-ring flex size-8 items-center justify-center rounded-lg enabled:hover:bg-black/[0.05] disabled:cursor-default disabled:opacity-40" aria-label={`${connection.name} 的更多选项`} disabled={connection.status === 'releasing'}>
+                  <MoreHorizontal size={18} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={5}>
+                <DropdownMenu.Item className="wc-menu-item" disabled={busy} onSelect={() => setEditor({ connection })}>编辑连接</DropdownMenu.Item>
+                <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || busy} onSelect={() => setSkillConnection({ id: connection.id, mode: 'sync' })}>同步/更新 Skill</DropdownMenu.Item>
+                <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || busy} onSelect={() => setSkillConnection({ id: connection.id, mode: 'clean' })}>清理远端 Skill</DropdownMenu.Item>
+                <DropdownMenu.Item className="wc-menu-item" disabled={connection.status !== 'connected' && connection.status !== 'connecting'} onSelect={() => connection.status === 'connecting' ? void run(connection, 'disconnect') : action(connection, 'disconnect')}>{connection.status === 'connecting' ? '取消连接' : '断开连接'}</DropdownMenu.Item>
+                <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || busy} onSelect={() => action(connection, 'cleanup')}>清理远端组件</DropdownMenu.Item>
+                <DropdownMenu.Separator className="my-1 h-px bg-[var(--wc-line)]" />
+                <DropdownMenu.Item className="wc-menu-item" disabled={busy} onSelect={() => action(connection, 'remove')}>删除连接</DropdownMenu.Item>
+              </DropdownMenu.Content></DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </div>
-          <SettingsButton disabled={connection.status !== 'disconnected'} onClick={() => void run(connection, 'connect')}>
-            {connection.status === 'connecting' ? '连接中…' : connection.status === 'releasing' ? '清理中…' : connection.status === 'connected' ? '已连接' : '连接'}
-          </SettingsButton>
-          <SettingsButton aria-label={`添加 ${connection.name} 的项目`} disabled={connection.status !== 'connected'} onClick={() => setPicker(connection)}>
-            <FolderPlus size={16} />添加项目
-          </SettingsButton>
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <button className="wc-focus-ring flex size-8 items-center justify-center rounded-lg hover:bg-black/[0.05]" aria-label={`${connection.name} 的更多选项`} disabled={connection.status === 'releasing'}>
-                <MoreHorizontal size={18} />
-              </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={5}>
-              <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'connecting'} onSelect={() => setEditor({ connection })}>编辑连接</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => setSkillConnection({ id: connection.id, mode: 'sync' })}>同步/更新 Skill</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => setSkillConnection({ id: connection.id, mode: 'clean' })}>清理远端 Skill</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'disconnected'} onSelect={() => connection.status === 'connecting' ? void run(connection, 'disconnect') : action(connection, 'disconnect')}>{connection.status === 'connecting' ? '取消连接' : '断开连接'}</DropdownMenu.Item>
-              <DropdownMenu.Item className="wc-menu-item" disabled={!connection.fingerprint || connection.status === 'connecting'} onSelect={() => action(connection, 'cleanup')}>清理远端组件</DropdownMenu.Item>
-              <DropdownMenu.Separator className="my-1 h-px bg-[var(--wc-line)]" />
-              <DropdownMenu.Item className="wc-menu-item" disabled={connection.status === 'connecting'} onSelect={() => action(connection, 'remove')}>删除连接</DropdownMenu.Item>
-            </DropdownMenu.Content></DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        </div>)}
+        })}
       </SettingsPanel>
     </SettingsSection>
     {editor && <SshConnectionEditor connection={editor.connection} purpose={editor.resume?.action} onClose={() => setEditor(null)} onSave={save} />}
