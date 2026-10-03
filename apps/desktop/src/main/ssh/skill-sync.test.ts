@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, readFile, rm, writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { Client } from 'ssh2'
 import { SkillCatalogService, installSystemSkills } from '@whycode/core'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshSkillSync } from './skill-sync.ts'
@@ -211,29 +212,75 @@ test('后台任务快照跨界面保留，同账号重复操作和组件清理�
   assert.equal(sync.job(env.id)?.running, false)
 })
 
-test('重启丢失临时密码时保留副本和配置，补充凭据后可用 SFTP 清理', async t => {
+test('重启后缺少密码可重试；同步和清理临时连接不启动组件或启用会话', async t => {
   const env = await sshFixture(t, 'protocol')
   const home = join(env.root, 'local-home')
-  await localSkill(home, 'alpha')
+  const source = await localSkill(home, 'alpha')
   await env.connections.connect(env.id, env.fingerprint)
   await new SshSkillSync(env.connections, home, () => {}).sync(env.id, ['alpha'])
   const saved = await env.store.get(env.id)
-  env.connections.disconnect(env.id)
+  await env.connections.cleanup(env.id)
   const store = new SshConnectionStore(join(env.root, 'connections.json'), {
     isAvailable: () => false, encrypt: () => { throw new Error('此用例不保存密码') }, decrypt: () => { throw new Error('此用例不读取密码') },
   })
   const connections = new SshConnections(store, join(env.root, 'missing-resources'))
   const sync = new SshSkillSync(connections, home, () => {})
   t.after(() => connections.close())
+  await assert.rejects(sync.sync(env.id, ['alpha']), SshCredentialsRequiredError)
   await assert.rejects(sync.clean(env.id, ['alpha'], []), SshCredentialsRequiredError)
   assert.equal((await store.list()).length, 1)
   assert.equal(sync.job(env.id)?.running, false)
   await access(join(env.root, '.whycode/skills/alpha/SKILL.md'))
   await connections.save({ ...saved.connection, secret: saved.secret })
   const commands = env.commands.length
+  await writeFile(join(source, 'references/中文资料.txt'), '离线更新')
+  assert.equal((await sync.sync(env.id, ['alpha'])).results[0]!.ok, true)
+  assert.equal(await readFile(join(env.root, '.whycode/skills/alpha/references/中文资料.txt'), 'utf8'), '离线更新')
+  assert.equal(connections.status(env.id), 'disconnected')
+  assert.throws(() => connections.host(env.id), /未连接/)
+  await assert.rejects(connections.resume(env.id), /请先点击/)
+  await assert.rejects(access(join(env.root, '.cache/whycode-remote')), { code: 'ENOENT' })
   assert.equal((await sync.clean(env.id, ['alpha'], [])).results[0]!.ok, true)
   assert.ok(env.commands.slice(commands).every(command => command === '/bin/sh -s'))
   await assert.rejects(access(join(env.root, '.whycode')), { code: 'ENOENT' })
+})
+
+test('临时同步期间可以单独连接会话，任务收尾只关闭临时连接', async t => {
+  const env = await sshFixture(t, 'protocol')
+  const home = join(env.root, 'local-home')
+  await localSkill(home, 'alpha')
+  await env.store.trust(env.id, env.fingerprint)
+  let entered!: () => void
+  let resume!: () => void
+  const uploading = new Promise<void>(resolve => { entered = resolve })
+  const continueWrite = new Promise<void>(resolve => { resume = resolve })
+  let temporary: Client | undefined
+  let closed = Promise.resolve()
+  const withFiles = env.connections.withFiles.bind(env.connections)
+  const paused: SshConnections['withFiles'] = (id, operation, target) => withFiles(id, (fs, home, client) => {
+    temporary = client
+    closed = new Promise<void>(resolve => { client.once('close', resolve) })
+    return operation({ ...fs, writeFile: async (file, data, options) => {
+      if (file.endsWith('SKILL.md')) { entered(); await continueWrite }
+      await fs.writeFile(file, data, options)
+    } }, home, client)
+  }, target)
+  t.mock.method(env.connections, 'withFiles', paused)
+  const sync = new SshSkillSync(env.connections, home, () => {})
+  const task = sync.sync(env.id, ['alpha'])
+  await uploading
+  try {
+    assert.equal(sync.job(env.id)?.running, true)
+    assert.equal(env.connections.status(env.id), 'disconnected')
+    await assert.rejects(env.connections.resume(env.id), /请先点击/)
+    assert.equal((await env.connections.connect(env.id)).status, 'connected')
+    assert.notEqual(env.connections.host(env.id).client, temporary)
+  } finally { resume() }
+  const host = env.connections.host(env.id)
+  assert.equal((await task).results[0]!.ok, true)
+  await closed
+  assert.equal(env.connections.host(env.id), host)
+  assert.equal((await env.connections.directory(env.id, env.project)).path, env.project)
 })
 
 test('单次同步总量超限时整批拒绝，不提前发布部分 Skill', async t => {

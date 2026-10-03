@@ -54,12 +54,12 @@ export function SshSkillDialog({ connection, initialMode, onClose }: { connectio
         {state.job && <div className="mt-3 max-h-28 overflow-y-auto text-xs leading-5" aria-live="polite">
           {state.busy ? <p className="flex items-center gap-2 text-[var(--wc-muted)]"><Loader2 size={14} className="animate-spin" />{state.job.operation === 'sync' ? '正在同步' : '正在清理'} {state.job.results.length}/{state.job.total}，关闭弹窗后继续。</p> : state.job.results.map(item => <p key={item.id} className={`break-words ${item.ok ? 'text-[var(--wc-muted)]' : 'text-[var(--wc-danger)]'}`}>{item.name}：{item.message}</p>)}
         </div>}
-        {mode === 'sync' && connection.status !== 'connected' && <p className="mt-3 text-xs text-[var(--wc-muted)]">连接 SSH 后可同步；清理可通过临时文件连接完成。</p>}
+        {connection.status === 'disconnected' && <p className="mt-3 text-xs text-[var(--wc-muted)]">未连接时会临时连接，操作完成后断开；会话仍需单独连接。</p>}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <label className="flex items-center gap-2 text-xs text-[var(--wc-muted)]"><input type="checkbox" disabled={state.busy || !selectable.length} checked={selectable.length > 0 && chosen.length === selectable.length} onChange={event => setSelected(event.target.checked ? selectable.map(row => row.id) : [])} />全选 · 已选 {chosen.length}/{selectable.length}</label>
           <div className="flex flex-wrap gap-2">
             {mode === 'clean' && <SettingsButton disabled={state.busy || state.loading || !visible.length} onClick={() => setCleanup(visible)}>清理全部已同步 Skill</SettingsButton>}
-            <SettingsButton variant="primary" disabled={state.busy || state.loading || !chosen.length || (mode === 'sync' && connection.status !== 'connected')} onClick={() => mode === 'sync' ? void state.run({ action: 'skills-sync', id: connection.id, skills: chosen.map(row => row.id) }) : setCleanup(chosen)}>{mode === 'sync' ? '同步已选项' : '清理已选项'}</SettingsButton>
+            <SettingsButton variant="primary" disabled={state.busy || state.loading || !chosen.length} onClick={() => mode === 'sync' ? void state.run({ action: 'skills-sync', id: connection.id, skills: chosen.map(row => row.id) }) : setCleanup(chosen)}>{mode === 'sync' ? '同步已选项' : '清理已选项'}</SettingsButton>
           </div>
         </div>
       </Dialog.Content>

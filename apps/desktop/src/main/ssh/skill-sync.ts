@@ -75,7 +75,6 @@ export class SshSkillSync {
   }
 
   async sync(id: string, selected: string[]): Promise<SshSkillJob> {
-    this.connections.host(id)
     return this.run(id, 'sync', selected, async progress => this.connections.withSkillFiles(id, async (fs, home, client) => {
       const io = remoteSkillIO(fs, home, client)
       const local = await this.local()
