@@ -55,9 +55,7 @@ export function useSshSkills(id: string) {
     }
     void status(true)
     const unsubscribe = window.whycode.onSshSkillsChanged(() => { void status() })
-    const focus = () => { void status(true) }
-    window.addEventListener('focus', focus)
-    return () => { mounted.current = false; sequence.current++; statusSequence.current++; unsubscribe(); window.removeEventListener('focus', focus) }
+    return () => { mounted.current = false; sequence.current++; statusSequence.current++; unsubscribe() }
   }, [id, load])
 
   const run = async (request: SshRequest) => {
