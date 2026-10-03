@@ -1026,15 +1026,6 @@ async function handleCommand(
     })
     return { ok: false }
   }
-  if (runtime.workspace.mode === 'ssh' && (command.type === 'user-message' || command.type === 'btw-message')) {
-    try {
-      const connections = sshWorkspaces.connections
-      const id = await connections.connectionIdForTarget(runtime.workspace.target)
-      if (connections.status(id) === 'connecting') return rejectUserMessage(runtime, 'SSH 正在连接，请连接完成后再发送')
-    } catch (error) {
-      return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))
-    }
-  }
   switch (command.type) {
     case 'user-message':
       return handleUserMessageCommand(runtime, command)
@@ -1292,6 +1283,7 @@ async function handleEditUserMessageCommand(
     text: command.text,
     restoreFiles: command.target.restoreFiles === true,
     prepareSession: async () => {
+      await sshWorkspaces.assertMessageAllowed(runtime.workspace)
       const error = await ensureSession(runtime)
       if (error) throw new Error(error)
       synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
@@ -1397,6 +1389,7 @@ async function handleUserMessageCommand(
     let prepared: PreparedUserMessage
     try {
       await workStart.ready
+      await sshWorkspaces.assertMessageAllowed(runtime.workspace)
       if (!runtime.sessionId) {
         const modelId = resolveCurrentModelId(runtime)
         if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
@@ -1552,6 +1545,7 @@ async function handleBtwMessageCommand(
   let btwWorkStarted = false
   try {
     await reservation.ready
+    await sshWorkspaces.assertMessageAllowed(runtime.workspace)
     // 与普通消息共用 FIFO：斜杠菜单状态只是提示，最终仍以排到队首时的真实状态为准。
     if (runtimeExecutionBusy(runtime)) {
       return rejectUserMessage(runtime, '当前对话仍在工作，结束后才能发送 BTW')
@@ -1650,6 +1644,7 @@ async function handleEditBtwMessageCommand(
   let workStarted = false
   try {
     await reservation.ready
+    await sshWorkspaces.assertMessageAllowed(runtime.workspace)
     if (runtimeExecutionBusy(runtime)) return { ok: false }
     const initializationError = await ensureSession(runtime)
     if (initializationError) return { ok: false }

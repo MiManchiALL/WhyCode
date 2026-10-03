@@ -432,6 +432,7 @@ export function App() {
   }, [showConversationFeedback])
   const sshConnection = useSshWorkspaceConnection(workspace.mode === 'ssh' ? workspace.target : null, showError)
   const sshConnecting = sshConnection.connection?.status === 'connecting'
+  const sshSendUnavailableReason = sshConnection.sendUnavailableReason
   const [workspaceCleanup] = useState(() => new RetainedWorkspaceCleanup(async workspace => {
     const result = await window.whycode.deleteRetainedWorkspace(workspace)
     if (!result.ok) throw new Error(result.error)
@@ -1827,13 +1828,13 @@ export function App() {
   const send = useCallback((urgent = false) => {
     if (
       stopping
-      || sshConnecting
       || sessionTransitionPending
       || deletionBlocksRuntime
       || resumingSessionId
       || checkpointRestoreToolUseId
       || submissionPending
     ) return
+    if (sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId || composerSubmissions.getSnapshot().has(targetRuntimeId)) return
     const sentBtwMode = btwModeRef.current
@@ -1970,7 +1971,7 @@ export function App() {
   }, [
     showError,
     submissionPending,
-    sshConnecting,
+    sshSendUnavailableReason,
     applyRuntimeSnapshot,
     bindComposerSession,
     blocks,
@@ -2002,6 +2003,7 @@ export function App() {
   const answerQuestion = useCallback((answers: string[]) => {
     const question = view.pendingQuestion
     if (!question || interactionBusy || stopping || questionSubmittingRef.current) return
+    if (sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
     const text = formatUserQuestionAnswer(question, answers)
     questionSubmittingRef.current = true
     setQuestionSubmitting(true)
@@ -2011,7 +2013,7 @@ export function App() {
       questionSubmittingRef.current = false
       setQuestionSubmitting(false)
     })
-  }, [interactionBusy, sendRuntimeCommand, stopping, view.pendingQuestion])
+  }, [interactionBusy, sendRuntimeCommand, showError, sshSendUnavailableReason, stopping, view.pendingQuestion])
 
   const editUserMessage = useCallback(async (
     block: Extract<Block, { kind: 'user' }>,
@@ -2019,6 +2021,7 @@ export function App() {
     restoreFiles: boolean,
   ) => {
     if (interactionBusy || stopping) return false
+    if (sshSendUnavailableReason) throw new Error(sshSendUnavailableReason)
     const target = block.btw && block.inputId
       ? { kind: 'btw' as const, inputId: block.inputId }
       : block.turnId
@@ -2030,7 +2033,7 @@ export function App() {
     const result = await sendRuntimeCommand({ type: 'edit-user-message', target, text })
     if (!result?.ok) throw new Error(result?.error ?? '重新发送失败，请重试')
     return true
-  }, [interactionBusy, sendRuntimeCommand, stopping])
+  }, [interactionBusy, sendRuntimeCommand, sshSendUnavailableReason, stopping])
 
   const respondApproval = useCallback((approved: boolean, remember = false) => {
     if (!approval) return
@@ -2121,7 +2124,7 @@ export function App() {
     && imageDrafts.length === 0
     && pdfDrafts.length === 0
     && selectedSkills.length === 0
-  const sendDisabled = composerControlsLocked || messageEmpty || sshConnecting
+  const sendDisabled = composerControlsLocked || messageEmpty || Boolean(sshSendUnavailableReason)
   const primaryAction = composerPrimaryAction({ busy, hasDraft: !messageEmpty })
   const contextBaseRef = workspace.mode === 'pending-worktree'
     ? workspace.baseRef
@@ -2511,6 +2514,7 @@ export function App() {
                         || checkpointRestoreToolUseId !== null
                       }
                       sendDisabled={sendDisabled}
+                      sendUnavailableReason={sshSendUnavailableReason ?? undefined}
                       sendPendingLabel={sshConnecting ? '连接中' : undefined}
                       onImageFiles={addImageFiles}
                       onPdfFiles={addPdfFiles}

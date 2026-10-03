@@ -103,7 +103,7 @@ export function SshSettings({ onSelectProject }: { onSelectProject: (workspace: 
               <div className="truncate text-sm font-medium">{connection.name}</div>
               <div className="truncate text-xs text-[var(--wc-faint)]">{connection.username}@{connection.host}:{connection.port}</div>
             </div>
-            <SettingsButton disabled={connection.status !== 'disconnected'} onClick={() => void run(connection, 'connect')}>
+            <SettingsButton disabled={busy || connection.status === 'connected'} onClick={() => void run(connection, 'connect')}>
               {connection.status === 'connecting' ? '连接中…' : connection.status === 'releasing' ? '清理中…' : connection.status === 'connected' ? '已连接' : '连接'}
             </SettingsButton>
             <SettingsButton aria-label={`添加 ${connection.name} 的项目`} disabled={connection.status !== 'connected'} onClick={() => setPicker(connection)}>

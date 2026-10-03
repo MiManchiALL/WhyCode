@@ -8,6 +8,7 @@ import { SshConnectionMissingError } from './store.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
 import { copyDirectorySnapshot } from '../directory-snapshot.ts'
 import type { RemoteCleanupFailure } from '../../shared/session.ts'
+import { sshMessageUnavailableReason } from '../../shared/ssh.ts'
 
 export class SshScratchCleanupError extends Error {
   readonly failure: RemoteCleanupFailure
@@ -20,6 +21,12 @@ export class SshScratchCleanupError extends Error {
 export class SshWorkspaces {
   readonly connections: SshConnections
   constructor(connections: SshConnections) { this.connections = connections }
+  async assertMessageAllowed(workspace: RuntimeWorkspace): Promise<void> {
+    if (workspace.mode !== 'ssh') return
+    const id = await this.connections.connectionIdForTarget(workspace.target)
+    const reason = sshMessageUnavailableReason(this.connections.status(id))
+    if (reason) throw new Error(reason)
+  }
   async select(target: string, directory: string): Promise<Extract<WorkspaceBinding, { mode: 'ssh' }>> {
     const id = await this.connections.connectionIdForTarget(target)
     const connected = await this.connections.resume(id)

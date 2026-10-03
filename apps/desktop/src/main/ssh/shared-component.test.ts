@@ -76,7 +76,7 @@ it('清理撤销同组件意外掉线入口的自动恢复资格', { timeout: 60
   const host = env.connections.host(env.id)
   const closed = once(host.client, 'close')
   host.client.end(); await closed
-  assert.equal(env.connections.status(env.id), 'disconnected')
+  assert.equal(env.connections.status(env.id), 'interrupted')
   await env.connections.cleanup(env.second)
   await assert.rejects(env.connections.resume(env.id), /请先点击/)
 })

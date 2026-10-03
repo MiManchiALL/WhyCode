@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { SshConnectionSnapshot } from '../../shared/ssh.ts'
+import { sshMessageUnavailableReason, type SshConnectionSnapshot } from '../../shared/ssh.ts'
 
 /** Header 和发送入口共用宿主快照；切换会话不把旧服务器状态带入新草稿。 */
 export function useSshWorkspaceConnection(target: string | null, onError: (message: string) => void) {
@@ -28,8 +28,8 @@ export function useSshWorkspaceConnection(target: string | null, onError: (messa
     window.addEventListener('focus', reload)
     return () => { generation.current++; unsubscribe(); window.removeEventListener('focus', reload) }
   }, [target, refresh])
-  return {
-    connection: snapshot?.target === target ? snapshot.connection : null,
-    loading: target !== null && snapshot?.target !== target,
-  }
+  const connection = snapshot?.target === target ? snapshot.connection : null
+  const loading = target !== null && snapshot?.target !== target
+  return { connection, loading, sendUnavailableReason: target === null ? null
+    : loading ? '正在读取 SSH 连接状态，请稍后发送' : sshMessageUnavailableReason(connection?.status) }
 }

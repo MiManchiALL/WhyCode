@@ -38,7 +38,7 @@ export function SshWorkspaceStatus({ connection, loading }: { connection: SshCon
   return <>
     <button type="button" className={`wc-focus-ring shrink-0 rounded-lg px-2 py-1 wc-type-tiny disabled:cursor-default ${connected
       ? 'bg-[var(--wc-sage)] text-[var(--wc-sage-ink)]' : 'bg-[var(--wc-blue)] text-[var(--wc-blue-ink)]'}`}
-      disabled={loading || !connection || connection.status !== 'disconnected'}
+      disabled={loading || !connection || (connection.status !== 'disconnected' && connection.status !== 'interrupted')}
       aria-label={connected ? 'SSH 已连接' : connection?.status === 'connecting' ? 'SSH 连接中' : '连接 SSH'}
       title={connected ? connection.name : connection ? '连接服务器' : '原连接已删除，可在设置中重新添加原服务器'}
       onClick={() => connection && void connect(connection)}>{label}</button>

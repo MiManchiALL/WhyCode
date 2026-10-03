@@ -11,6 +11,7 @@ export interface ComposerActionButtonProps {
   stopping: boolean
   stopDisabled: boolean
   sendDisabled: boolean
+  sendUnavailableReason?: string
   sendPendingLabel?: string
   onSend: () => void
   onStop: () => void
@@ -51,7 +52,7 @@ export function ComposerActionButton(props: ComposerActionButtonProps) {
             if (isStopAction) props.onStop()
             else props.onSend()
           }}
-          title={label}
+          title={!isStopAction && props.sendUnavailableReason ? props.sendUnavailableReason : label}
           aria-label={label}
           aria-haspopup={needsConfirmation ? 'dialog' : undefined}
           aria-expanded={needsConfirmation ? open : undefined}

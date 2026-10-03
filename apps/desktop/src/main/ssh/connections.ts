@@ -25,7 +25,7 @@ interface ConnectedHost {
 interface AuthenticatedHost { client: Client; fs: WorkspaceFileSystem; home: string; target: string }
 type ConnectionState =
   | { status: 'connected'; host: ConnectedHost }
-  | { status: 'disconnected'; component: RemoteComponent }
+  | { status: 'interrupted'; component: RemoteComponent }
   | { status: 'connecting'; promise: Promise<SshConnectResult>; controller: AbortController; component?: RemoteComponent }
   | { status: 'releasing'; component?: RemoteComponent }
 
@@ -81,7 +81,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
     const controller = new AbortController()
     const promise = Promise.resolve().then(() => this.open(id, pending, fingerprint, secret)).finally(() => {
       if (this.states.get(id) !== pending) return
-      if (current?.status === 'disconnected') this.states.set(id, current)
+      if (current?.status === 'interrupted') this.states.set(id, current)
       else this.states.delete(id)
       this.emit('changed')
     })
@@ -178,7 +178,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
       this.emit('changed')
       this.emit('connected', id)
       client.once('close', () => {
-        if (this.states.get(id) === active) { this.states.set(id, { status: 'disconnected', component }); this.emit('changed') }
+        if (this.states.get(id) === active) { this.states.set(id, { status: 'interrupted', component }); this.emit('changed') }
         processes.close()
       })
       return { status: 'connected', home }
