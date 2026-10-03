@@ -6,10 +6,17 @@ import type { SFTPWrapper } from 'ssh2'
 import { isUnknownWorkspaceOutcome, unknownWorkspaceOutcome, type WorkspaceFileSystem } from '@whycode/core'
 
 /** Map SFTP status to filesystem errors consumed by the existing file/checkpoint tools. */
-function fileError(error: Error & { code?: number | string }): Error {
+function fileError(error: Error & { code?: number | string }): Error & { code?: number | string } {
   if (error.code === 6 || error.code === 7 || error.code === 'ECONNRESET' || /connection|channel|no response|closed/i.test(error.message)) return unknownWorkspaceOutcome('SSH 文件连接中断')
   const codes: Record<number, string> = { 2: 'ENOENT', 3: 'EACCES', 6: 'ENOTCONN', 7: 'ENOTCONN', 11: 'EEXIST', 18: 'ENOTEMPTY' }
   return Object.assign(new Error(error.message), { code: typeof error.code === 'number' ? codes[error.code] ?? 'EIO' : error.code })
+}
+
+/** 先于消费者注册，让流错误沿用普通 SFTP 调用的结果未知和文件错误语义。 */
+function normalizeStreamError(error: Error & { code?: number | string }): void {
+  const normalized = fileError(error)
+  error.message = normalized.message
+  error.code = normalized.code
 }
 export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
   const call = <T>(operation: (callback: (error: Error | undefined | null, result: T) => void) => void): Promise<T> => new Promise((resolve, reject) => {
@@ -36,12 +43,14 @@ export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
     },
     createReadStream: (path, options) => {
       const stream = sftp.createReadStream(path, options)
+      stream.on('error', normalizeStreamError)
       const abort = () => stream.destroy(new Error('读取已取消'))
       options?.signal?.addEventListener('abort', abort, { once: true })
       stream.once('close', () => options?.signal?.removeEventListener('abort', abort))
       if (options?.signal?.aborted) abort()
       return stream
     },
+    createWriteStream: (path, options) => sftp.createWriteStream(path, options).on('error', normalizeStreamError),
     readdir: async path => (await call<import('ssh2').FileEntry[]>(done => sftp.readdir(path, done))).map(entry => ({
       name: entry.filename, size: entry.attrs.size, mode: entry.attrs.mode,
       isFile: () => (entry.attrs.mode & 0o170000) === 0o100000,

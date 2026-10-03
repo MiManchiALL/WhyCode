@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import path from 'node:path'
-import type { Readable } from 'node:stream'
+import type { Readable, Writable } from 'node:stream'
 import type { WorkspaceProcess } from './process.ts'
 
 export interface WorkspaceStat {
@@ -31,6 +31,7 @@ export interface WorkspaceFileSystem {
   writeFile(path: string, data: string | Uint8Array, options?: 'utf8' | { mode?: number; flag?: string; flush?: boolean }): Promise<void>
   open(path: string, flags: 'r'): Promise<WorkspaceReader>
   createReadStream(path: string, options?: { encoding?: BufferEncoding; start?: number; end?: number; signal?: AbortSignal }): Readable
+  createWriteStream(path: string, options?: { flags?: 'w' | 'wx'; mode?: number; flush?: boolean }): Writable
   readdir(path: string, options: { withFileTypes: true }): Promise<WorkspaceDirent[]>
   mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>
   rm(path: string, options: { force?: boolean; recursive?: boolean }): Promise<void>
@@ -57,6 +58,7 @@ export const localWorkspaceIO: WorkspaceIO = {
   fs: {
     ...fs,
     createReadStream,
+    createWriteStream,
     readdir: async (directory, options) => (await fs.readdir(directory, options)).map(entry => ({
       name: entry.name, size: 0, mode: 0,
       isFile: () => entry.isFile(), isDirectory: () => entry.isDirectory(),

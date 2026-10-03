@@ -5,6 +5,7 @@ import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
 import { makeDiff } from '../write-edit/index.ts'
 import { describeFileChange, type ToolFileChange } from '../file-changes.ts'
+import { readFileTextPreview } from '../../checkpoints/file-history.ts'
 
 export const DELETE_FILE_TOOL_NAME = 'DeleteFile'
 export const MOVE_FILE_TOOL_NAME = 'MoveFile'
@@ -22,7 +23,7 @@ type DeleteFileInput = z.infer<typeof deleteFileInputSchema>
 interface DeleteTarget {
   absolute: string
   displayPath: string
-  original?: string
+  change?: ToolFileChange
 }
 
 async function resolveDeleteTargets(input: DeleteFileInput, ctx: ToolContext): Promise<DeleteTarget[]> {
@@ -55,18 +56,17 @@ export const deleteFileTool = buildTool({
     paths: (await resolveDeleteTargets(input, ctx)).map((target) => target.absolute),
   }),
   async renderDiff(input, ctx) {
-    const { readFile } = (ctx.workspaceIO ?? localWorkspaceIO).fs
-
     const targets = await resolveDeleteTargets(input, ctx)
-    return (await Promise.all(
-      targets.map(async ({ absolute, displayPath }) =>
-        makeDiff(displayPath, await readFile(absolute, 'utf8'), ''),
-      ),
-    )).filter(Boolean).join('\n\n')
+    const diffs: string[] = []
+    for (const { absolute, displayPath } of targets) {
+      const preview = await readFileTextPreview(absolute, ctx.workspaceIO)
+      if (preview.kind === 'text') diffs.push(makeDiff(displayPath, preview.content, ''))
+    }
+    return diffs.filter(Boolean).join('\n\n')
   },
   async execute(input, ctx) {
     const io = ctx.workspaceIO ?? localWorkspaceIO
-    const { readFile, unlink } = io.fs
+    const { unlink } = io.fs
 
     let targets: DeleteTarget[]
     try {
@@ -76,9 +76,10 @@ export const deleteFileTool = buildTool({
           requireRegularFile(absolute, `文件 ${displayPath}`, ctx),
         ),
       )
-      await Promise.all(targets.map(async (target) => {
-        target.original = await readFile(target.absolute, 'utf8')
-      }))
+      for (const target of targets) {
+        const preview = await readFileTextPreview(target.absolute, io)
+        if (preview.kind === 'text') target.change = describeFileChange(target.displayPath, preview.content, '')
+      }
     } catch (error) {
       return {
         data: `删除未执行：${error instanceof Error ? error.message : String(error)}`,
@@ -92,7 +93,7 @@ export const deleteFileTool = buildTool({
       for (const target of targets) {
         await unlink(target.absolute)
         deleted++
-        fileChanges.push(describeFileChange(target.displayPath, target.original ?? '', ''))
+        if (target.change) fileChanges.push(target.change)
       }
     } catch (error) {
       return {
@@ -134,13 +135,12 @@ export const moveFileTool = buildTool({
     ],
   }),
   async renderDiff(input, ctx) {
-    const { readFile } = (ctx.workspaceIO ?? localWorkspaceIO).fs
-
     const source = await resolveAllowed(ctx, input.source)
-    const content = await readFile(source, 'utf8')
+    const preview = await readFileTextPreview(source, ctx.workspaceIO)
+    if (preview.kind !== 'text') return undefined
     return [
-      makeDiff(input.source, content, ''),
-      makeDiff(input.destination, '', content),
+      makeDiff(input.source, preview.content, ''),
+      makeDiff(input.destination, '', preview.content),
     ].join('\n\n')
   },
   async execute(input, ctx) {

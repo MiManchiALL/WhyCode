@@ -6,6 +6,8 @@ import { afterEach, describe, it } from 'node:test'
 import { deleteFileTool, moveFileTool } from './file-lifecycle/index.ts'
 import type { ToolContext } from './tool.ts'
 import { editFileTool, writeFileTool } from './write-edit/index.ts'
+import { localWorkspaceIO } from '../workspace/io.ts'
+import { CHECKPOINT_FILE_PREVIEW_MAX_BYTES } from '../checkpoints/types.ts'
 
 const roots: string[] = []
 
@@ -164,6 +166,53 @@ describe('统一精确编辑', () => {
 })
 
 describe('文件生命周期工具', () => {
+  it('删除和移动的审批只读取有界文本，二进制和大文件不生成文本差异或行数', async () => {
+    const ctx = await context()
+    ctx.workspaceIO = { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs,
+      readFile: async () => assert.fail('生命周期工具不能整批读取完整文件'),
+    } }
+    await writeFile(join(ctx.projectDir, 'small.txt'), 'one\ntwo\n')
+    await writeFile(join(ctx.projectDir, 'binary.tmp'), Buffer.from([0, 255, 10]))
+    await writeFile(join(ctx.projectDir, 'invalid-utf8.tmp'), Buffer.from([255, 255, 10]))
+    await writeFile(join(ctx.projectDir, 'large.tmp'), Buffer.alloc(CHECKPOINT_FILE_PREVIEW_MAX_BYTES + 1, 97))
+    const input = { paths: ['small.txt', 'binary.tmp', 'invalid-utf8.tmp', 'large.tmp'] }
+    const diff = await deleteFileTool.renderDiff!(input, ctx)
+    assert.match(diff!, /small.txt/)
+    assert.doesNotMatch(diff!, /\.tmp/)
+    for (const source of input.paths.slice(1)) {
+      assert.equal(await moveFileTool.renderDiff!({ source, destination: 'moved.tmp' }, ctx), undefined)
+    }
+    const result = await deleteFileTool.execute(input, ctx)
+    assert.equal(result.isError, false)
+    assert.deepEqual(result.fileChanges, [{ path: 'small.txt', added: 0, removed: 2 }])
+    for (const path of input.paths) await assert.rejects(readFile(join(ctx.projectDir, path)), { code: 'ENOENT' })
+  })
+
+  it('任一预检读取失败时保留所有目标，删除中途失败时只报告已删除文件的统计', async () => {
+    const ctx = await context()
+    for (const name of ['first.txt', 'second.txt']) await writeFile(join(ctx.projectDir, name), name)
+    ctx.workspaceIO = { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs,
+      open: async (path, flags) => {
+        if (path.endsWith('second.txt')) throw new Error('读取失败')
+        return localWorkspaceIO.fs.open(path, flags)
+      },
+    } }
+    const input = { paths: ['first.txt', 'second.txt'] }
+    assert.match((await deleteFileTool.execute(input, ctx)).data, /删除未执行.*读取失败/)
+    assert.equal(await readFile(join(ctx.projectDir, 'first.txt'), 'utf8'), 'first.txt')
+    ctx.workspaceIO = { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs,
+      unlink: async path => {
+        if (path.endsWith('second.txt')) throw new Error('删除失败')
+        await localWorkspaceIO.fs.unlink(path)
+      },
+    } }
+    const result = await deleteFileTool.execute(input, ctx)
+    assert.equal(result.isError, true)
+    assert.match(result.data, /已删除 1\/2/)
+    assert.deepEqual(result.fileChanges, [{ path: 'first.txt', added: 0, removed: 1 }])
+    assert.equal(await readFile(join(ctx.projectDir, 'second.txt'), 'utf8'), 'second.txt')
+  })
+
   it('移动文件时创建父目录且拒绝覆盖目标', async () => {
     const ctx = await context()
     await writeFile(join(ctx.projectDir, 'source.txt'), 'source')

@@ -1,16 +1,15 @@
-import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
+import { localWorkspaceIO, type WorkspaceIO, type WorkspaceReader } from '../workspace/io.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, writeFile, type FileHandle } from 'node:fs/promises'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { link, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import type { FileState } from './types.ts'
 import {
   CHECKPOINT_FILE_PREVIEW_MAX_BYTES,
   type CheckpointFilePreviewState,
 } from './types.ts'
-
-function hash(content: Buffer): string {
-  return createHash('sha256').update(content).digest('hex')
-}
 
 async function collectMissingParents(path: string, io: WorkspaceIO): Promise<string[]> {
   const { dirname } = io.path
@@ -45,23 +44,29 @@ export async function captureFileState(path: string, blobDir: string, io: Worksp
   if (!stats.isFile()) {
     throw new Error(`精确回滚只支持普通文件：${absolute}`)
   }
-  const content = await io.fs.readFile(absolute)
-  const contentHash = hash(content)
   await mkdir(blobDir, { recursive: true, mode: 0o700 })
-  const blobPath = join(blobDir, contentHash)
-  await writeFile(blobPath, content, { flag: 'wx', mode: 0o600 }).catch(
-    (error: NodeJS.ErrnoException) => {
+  const temporary = join(blobDir, `${randomUUID()}.tmp`)
+  const digest = createHash('sha256')
+  let size = 0
+  try {
+    await pipeline(io.fs.createReadStream(absolute), new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        digest.update(chunk)
+        size += chunk.length
+        callback(null, chunk)
+      },
+    }), createWriteStream(temporary, { flags: 'wx', mode: 0o600, flush: true }))
+    const contentHash = digest.digest('hex')
+    // 完整写入后才发布按内容寻址的 blob，另一个捕获者不会读到半份备份。
+    await link(temporary, join(blobDir, contentHash)).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'EEXIST') throw error
-    },
-  )
-  return {
-    path: absolute,
-    kind: 'file',
-    contentHash,
-    blobHash: contentHash,
-    size: content.byteLength,
-    mode: stats.mode,
-    missingParents: [],
+    })
+    return {
+      path: absolute, kind: 'file', contentHash, blobHash: contentHash,
+      size, mode: stats.mode, missingParents: [],
+    }
+  } finally {
+    await rm(temporary, { force: true })
   }
 }
 
@@ -101,7 +106,7 @@ async function hashFile(path: string, io: WorkspaceIO): Promise<string> {
 }
 
 export async function restoreFileState(state: FileState, blobDir: string, io: WorkspaceIO = localWorkspaceIO): Promise<void> {
-  const { rm, rmdir, mkdir, writeFile, rename, chmod } = io.fs
+  const { rm, rmdir, mkdir, rename, chmod } = io.fs
   const { dirname } = io.path
   if (state.kind === 'missing') {
     await rm(state.path, { force: true })
@@ -113,14 +118,18 @@ export async function restoreFileState(state: FileState, blobDir: string, io: Wo
     return
   }
   if (!state.blobHash) throw new Error(`文件备份缺少内容引用：${state.path}`)
-  const content = await readFile(join(blobDir, state.blobHash))
   await mkdir(dirname(state.path), { recursive: true })
   const temp = `${state.path}.${process.pid}.${randomUUID()}.whycode-restore`
-  await writeFile(temp, content, { mode: state.mode ?? 0o600, flush: true })
-  // Windows rename 不覆盖已有目标；先移除已通过冲突预检的当前版本，再原子放入备份。
-  if (io.platform === 'win32') await rm(state.path, { force: true })
-  await rename(temp, state.path)
-  if (state.mode !== undefined) await chmod(state.path, state.mode).catch(() => {})
+  try {
+    await pipeline(createReadStream(join(blobDir, state.blobHash)),
+      io.fs.createWriteStream(temp, { flags: 'wx', mode: state.mode ?? 0o600, flush: true }))
+    // Windows rename 不覆盖已有目标；先移除已通过冲突预检的当前版本，再原子放入备份。
+    if (io.platform === 'win32') await rm(state.path, { force: true })
+    await rename(temp, state.path)
+    if (state.mode !== undefined) await chmod(state.path, state.mode).catch(() => {})
+  } finally {
+    await rm(temp, { force: true })
+  }
 }
 
 /** 预览只读取检查点已经拥有的精确 blob；大文件和二进制不进入 Renderer。 */
@@ -130,11 +139,12 @@ export async function readFileStatePreview(
 ): Promise<CheckpointFilePreviewState> {
   if (state.kind === 'missing') return { kind: 'missing' }
   if (!state.blobHash) throw new Error(`文件备份缺少内容引用：${state.path}`)
-  return readBoundedTextPreview(join(blobDir, state.blobHash))
+  return readFileTextPreview(join(blobDir, state.blobHash))
 }
 
-async function readBoundedTextPreview(path: string): Promise<CheckpointFilePreviewState> {
-  const file = await open(path, 'r')
+/** 历史展示、审批与行数统计共用边界；不可预览不妨碍按字节备份或操作文件。 */
+export async function readFileTextPreview(path: string, io: WorkspaceIO = localWorkspaceIO): Promise<CheckpointFilePreviewState> {
+  const file = await io.fs.open(path, 'r')
   try {
     const stats = await file.stat()
     if (!stats.isFile()) throw new Error(`文件预览只支持普通文件：${path}`)
@@ -159,7 +169,7 @@ async function readBoundedTextPreview(path: string): Promise<CheckpointFilePrevi
   }
 }
 
-async function readFromStart(file: FileHandle, buffer: Buffer): Promise<number> {
+async function readFromStart(file: WorkspaceReader, buffer: Buffer): Promise<number> {
   let offset = 0
   while (offset < buffer.length) {
     const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset)

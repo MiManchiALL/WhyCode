@@ -32,6 +32,8 @@ function splitLines(content: string): string[] {
 /** 精确计算文本从 before 变为 after 所需的最少增删行数。 */
 export function countLineChanges(before: string, after: string): LineChanges {
   if (before === after) return { added: 0, removed: 0 }
+  if (!before) return { added: countLines(after), removed: 0 }
+  if (!after) return { added: 0, removed: countLines(before) }
 
   const beforeLines = splitLines(before)
   const afterLines = splitLines(after)
@@ -79,6 +81,15 @@ export function countLineChanges(before: string, after: string): LineChanges {
     if (change.removed) removed += change.count
   }
   return { added, removed }
+}
+
+/** 整文件新增或删除只需计数，不为每一行分配字符串。 */
+function countLines(content: string): number {
+  let lines = 0
+  for (let index = 0; index < content.length; index++) {
+    if (content.charCodeAt(index) === 10) lines++
+  }
+  return lines + (content.endsWith('\n') ? 0 : 1)
 }
 
 export function describeFileChange(

@@ -227,8 +227,8 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `ReadFile` | 路径加有界 offset/limit；只读 UTF-8/支持的文本 |
 | `WriteFile` | `{path,content}`；只用于新建或整文件重写 |
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
-| `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元 |
-| `MoveFile` | 单个普通文件源/目标；目标必须不存在，不递归目录、不静默覆盖 |
+| `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元，支持二进制和大文件；文本预览与统计边界见文档二 §5.2 |
+| `MoveFile` | 单个普通文件源/目标；目标必须不存在，不递归目录、不静默覆盖；文本审批预览边界同上 |
 | `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与命令任务工具管理，只有显式 `wakeOnCompletion=true` 才登记终态续轮；不扫描工作区、不建文件检查点 |
 | `ListCommands` | 列出当前会话可见命令任务 |
 | `GetCommandOutput` | 增量读取命令输出 |
