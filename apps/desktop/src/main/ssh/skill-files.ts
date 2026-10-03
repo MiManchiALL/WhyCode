@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+import type { Client } from 'ssh2'
 import { localWorkspaceIO, readBoundedWorkspaceFile, type WorkspaceFileSystem, type WorkspaceIO } from '@whycode/core'
 import { sshSkillIdSchema } from '../../shared/ssh-skills.ts'
+import { remoteSkillDigest } from './skill-digest.ts'
 
 export const SKILL_SYNC_MARKER = '.whycode-skill-sync.json'
 export const SKILL_SYNC_BYTES = 20 * 1024 * 1024
 const MAX_ENTRIES = 2000
 export interface SkillTree { digest: string; bytes: number; directories: string[]; files: { path: string; data: Buffer; mode: number }[] }
+export interface SkillTreeManifest { bytes: number; directories: string[]; files: { path: string; absolute: string; size: number; mode: number }[] }
+export interface SkillWorkspaceIO extends WorkspaceIO { digestSkillTree?: (manifest: SkillTreeManifest) => Promise<string> }
 
-export function remoteSkillIO(fs: WorkspaceFileSystem, home: string): WorkspaceIO {
-  return { identity: `skill-sync:${home}`, platform: 'linux', path: path.posix, fs }
+export function remoteSkillIO(fs: WorkspaceFileSystem, home: string, client: Client): SkillWorkspaceIO {
+  return { identity: `skill-sync:${home}`, platform: 'linux', path: path.posix, fs, digestSkillTree: manifest => remoteSkillDigest(client, manifest) }
 }
 export function skillPath(root: string, id: string, paths: typeof path): string {
   return paths.join(root, ...sshSkillIdSchema.parse(id).split('/'))
@@ -48,10 +52,10 @@ export async function mapSkillFiles<T, R>(items: readonly T[], work: (item: T) =
   return result
 }
 
-export async function readSkillTree(io: WorkspaceIO, root: string): Promise<SkillTree> {
+async function scanSkillTree(io: WorkspaceIO, root: string): Promise<SkillTreeManifest> {
   if (!await ordinaryDirectory(io, root)) throw new Error(`Skill 目录已不存在：${root}`)
   const directories: string[] = []
-  const paths: { relative: string; absolute: string; size: number; mode: number }[] = []
+  const files: SkillTreeManifest['files'] = []
   const pending = [{ absolute: root, relative: '', depth: 0 }]
   let count = 0
   let bytes = 0
@@ -71,17 +75,29 @@ export async function readSkillTree(io: WorkspaceIO, root: string): Promise<Skil
       } else if (info.isFile()) {
         bytes += info.size
         if (bytes > SKILL_SYNC_BYTES) throw new Error('Skill 内容超过单次 20 MiB 同步上限')
-        paths.push({ relative, absolute, size: info.size, mode: info.mode & 0o111 ? 0o700 : 0o600 })
+        files.push({ path: relative, absolute, size: info.size, mode: info.mode & 0o111 ? 0o700 : 0o600 })
       } else throw new Error(`Skill 内含不支持的文件：${relative}`)
     }
   }
-  const files = await mapSkillFiles(paths, async file => {
-    const data = await readBoundedWorkspaceFile(file.absolute, file.size, io)
-    if (data.length !== file.size) throw new Error('Skill 文件在读取时发生变化，请重试')
-    return { path: file.relative, data, mode: file.mode }
-  })
   files.sort((a, b) => a.path.localeCompare(b.path, 'en'))
   directories.sort((a, b) => a.localeCompare(b, 'en'))
+  return { bytes, directories, files }
+}
+
+export async function skillTreeDigest(io: SkillWorkspaceIO, root: string): Promise<string> {
+  return io.digestSkillTree
+    ? io.digestSkillTree(await scanSkillTree(io, root))
+    : (await readSkillTree(io, root)).digest
+}
+
+export async function readSkillTree(io: WorkspaceIO, root: string): Promise<SkillTree> {
+  const manifest = await scanSkillTree(io, root)
+  const files = await mapSkillFiles(manifest.files, async file => {
+    const data = await readBoundedWorkspaceFile(file.absolute, file.size, io)
+    if (data.length !== file.size) throw new Error('Skill 文件在读取时发生变化，请重试')
+    return { path: file.path, data, mode: file.mode }
+  })
+  const { bytes, directories } = manifest
   const hash = createHash('sha256')
   for (const directory of directories) hash.update(`d\0${directory}\0`)
   for (const file of files) hash.update(`f\0${file.path}\0${file.mode}\0${file.data.length}\0`).update(file.data)

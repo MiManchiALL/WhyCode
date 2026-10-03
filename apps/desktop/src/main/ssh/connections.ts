@@ -237,9 +237,9 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
     }
     finally { transport.client.end() }
   }
-  async withSkillFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>): Promise<T> {
+  async withSkillFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string, client: Client) => Promise<T>): Promise<T> {
     if (['connecting', 'releasing'].includes(this.status(id))) throw new Error('SSH 连接正在处理，请稍后管理 Skill')
-    return this.withFiles(id, (fs, home) => this.withSkillLock(id, fs, home, operation))
+    return this.withFiles(id, (fs, home, client) => this.withSkillLock(id, fs, home, () => operation(fs, home, client)))
   }
   private async withSkillLock<T>(id: string, fs: WorkspaceFileSystem, home: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, releasing = false): Promise<T> {
     if (this.skillOperations.has(id)) throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
@@ -306,7 +306,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
           if (identity) stopRelated({ directory, identity })
           await waitForInstallers()
           if (options.cleanSkills) {
-            const results = await this.withSkillLock(id, fs, home, () => cleanManagedSkills(remoteSkillIO(fs, home), home, options), true)
+            const results = await this.withSkillLock(id, fs, home, () => cleanManagedSkills(remoteSkillIO(fs, home, client), home, options), true)
             const failures = results.filter(result => !result.ok)
             if (failures.length) throw new Error(failures.map(result => `${result.name}：${result.message}`).join('\n'))
             preserved.push(...results.filter(result => result.preserved).map(result => result.name))

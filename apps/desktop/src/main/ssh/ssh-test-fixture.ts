@@ -49,6 +49,22 @@ export async function sshFixture(t: TestContext, linux: boolean | 'protocol' = f
         const channel = acceptExec(); commands.push(info.command)
         if (info.command === 'uname -s; uname -m') { channel.write('Linux\nx86_64\n'); channel.exit(0); channel.end(); return }
         if (linux === 'protocol') {
+          if (info.command === '/bin/sh -s') {
+            let script = ''
+            channel.on('data', (chunk: Buffer) => { script += chunk.toString('utf8') })
+            channel.once('end', () => {
+              // 执行真实校验脚本；仅把隔离服务器的路径映射到测试目录。
+              const child = spawn('sh', ['-s'], { windowsHide: true })
+              children.add(child)
+              child.stdout.pipe(channel, { end: false }); child.stderr.pipe(channel.stderr, { end: false })
+              child.stdin.on('error', () => {})
+              child.once('error', error => { channel.stderr.write(error.message); channel.exit(1); channel.end() })
+              child.once('close', code => { children.delete(child); channel.exit(code ?? 1); channel.end() })
+              channel.once('close', () => child.stdin.end())
+              child.stdin.end(script.replaceAll(remoteRoot, root.replaceAll('\\', '/')))
+            })
+            return
+          }
           const checksum = /^sha256sum -- '(.+)'$/u.exec(info.command)
           if (checksum) {
             assert.ok(checksum[1]!.startsWith(`${remoteRoot}/`))

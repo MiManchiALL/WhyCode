@@ -1,7 +1,7 @@
-import { SkillCatalogService, workspacePathKey, type SkillSummary, type WorkspaceIO } from '@whycode/core'
+import { SkillCatalogService, workspacePathKey, type SkillSummary } from '@whycode/core'
 import type { SshSkillJob, SshSkillListing, SshSkillResult, SshSkillRow } from '../../shared/ssh-skills.ts'
 import type { SshConnections } from './connections.ts'
-import { exists, localWorkspaceIO, readSkillTree, remoteSkillIO, skillPath, SKILL_SYNC_BYTES, type SkillTree } from './skill-files.ts'
+import { exists, localWorkspaceIO, readSkillTree, remoteSkillIO, skillPath, SKILL_SYNC_BYTES, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
 import { cleanManagedSkills, managedSkills, publishSkill, skillRoot, type ManagedSkill } from './skill-remote.ts'
 
 interface LocalSkill { id: string; skill: SkillSummary; digest?: string; error?: string }
@@ -44,7 +44,7 @@ export class SshSkillSync {
     return result
   }
 
-  private async inspect(io: WorkspaceIO, home: string, local: LocalSkill[]): Promise<{ rows: SshSkillRow[]; managed: ManagedSkill[] }> {
+  private async inspect(io: SkillWorkspaceIO, home: string, local: LocalSkill[]): Promise<{ rows: SshSkillRow[]; managed: ManagedSkill[] }> {
     const managed = await managedSkills(io, home)
     const native = (await new SkillCatalogService({ homeDir: home, workspaceIO: io }).list(null)).skills
     const rows: SshSkillRow[] = []
@@ -68,16 +68,16 @@ export class SshSkillSync {
 
   async list(id: string): Promise<SshSkillListing> {
     const local = await this.local()
-    return this.connections.withFiles(id, async (fs, home) => ({
-      rows: (await this.inspect(remoteSkillIO(fs, home), home, local)).rows,
-      directory: skillRoot(remoteSkillIO(fs, home), home), job: this.job(id),
-    }))
+    return this.connections.withFiles(id, async (fs, home, client) => {
+      const io = remoteSkillIO(fs, home, client)
+      return { rows: (await this.inspect(io, home, local)).rows, directory: skillRoot(io, home), job: this.job(id) }
+    })
   }
 
   async sync(id: string, selected: string[]): Promise<SshSkillJob> {
     this.connections.host(id)
-    return this.run(id, 'sync', selected, async progress => this.connections.withSkillFiles(id, async (fs, home) => {
-      const io = remoteSkillIO(fs, home)
+    return this.run(id, 'sync', selected, async progress => this.connections.withSkillFiles(id, async (fs, home, client) => {
+      const io = remoteSkillIO(fs, home, client)
       const local = await this.local()
       const inspection = await this.inspect(io, home, local)
       const packages: { candidate: LocalSkill; tree: SkillTree }[] = []
@@ -106,8 +106,8 @@ export class SshSkillSync {
   }
 
   clean(id: string, selected: string[], allowModified: string[]): Promise<SshSkillJob> {
-    return this.run(id, 'clean', selected, progress => this.connections.withSkillFiles(id, (fs, home) =>
-      cleanManagedSkills(remoteSkillIO(fs, home), home, { allowModified }, selected, progress)))
+    return this.run(id, 'clean', selected, progress => this.connections.withSkillFiles(id, (fs, home, client) =>
+      cleanManagedSkills(remoteSkillIO(fs, home, client), home, { allowModified }, selected, progress)))
   }
 
   private async run(id: string, operation: SshSkillJob['operation'], selected: string[], work: (progress: (result: SshSkillResult) => void) => Promise<unknown>): Promise<SshSkillJob> {

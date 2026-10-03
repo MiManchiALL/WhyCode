@@ -79,11 +79,12 @@ test('SSH Skill 同步完整目录、更新未改副本、保护冲突，并可�
   assert.equal((await sync.list(env.id)).rows[0]!.status, 'update')
   assert.equal((await sync.sync(env.id, ['alpha'])).results[0]!.ok, true)
   assert.equal(await readFile(join(destination, 'references/中文资料.txt'), 'utf8'), '本地更新')
-  await writeFile(join(destination, 'references/中文资料.txt'), '服务器修改')
+  // 等长资源修改也必须发现，不能用大小或时间戳替代内容校验。
+  await writeFile(join(destination, 'references/中文资料.txt'), '远端修改')
   assert.equal((await sync.list(env.id)).rows[0]!.status, 'conflict')
   assert.equal((await sync.sync(env.id, ['alpha'])).results[0]!.ok, false)
   await assert.rejects(sync.clean(env.id, ['alpha'], []), ModifiedSshSkillsError)
-  assert.equal(await readFile(join(destination, 'references/中文资料.txt'), 'utf8'), '服务器修改')
+  assert.equal(await readFile(join(destination, 'references/中文资料.txt'), 'utf8'), '远端修改')
 
   // 本机目录和远端正文丢失都不丢清理入口。
   await rm(join(home, '.whycode/skills/beta'), { recursive: true })
@@ -95,7 +96,7 @@ test('SSH Skill 同步完整目录、更新未改副本、保护冲突，并可�
   const commands = env.commands.length
   const cleaned = await sync.clean(env.id, ['alpha', 'beta'], ['alpha', 'beta'])
   assert.equal(cleaned.results.every(item => item.ok), true)
-  assert.equal(env.commands.length, commands)
+  assert.ok(env.commands.slice(commands).every(command => command === '/bin/sh -s'))
   await assert.rejects(access(join(env.root, '.whycode')), { code: 'ENOENT' })
   assert.equal(env.connections.status(env.id), 'disconnected')
 })
@@ -231,7 +232,7 @@ test('重启丢失临时密码时保留副本和配置，补充凭据后可用 S
   await connections.save({ ...saved.connection, secret: saved.secret })
   const commands = env.commands.length
   assert.equal((await sync.clean(env.id, ['alpha'], [])).results[0]!.ok, true)
-  assert.equal(env.commands.length, commands)
+  assert.ok(env.commands.slice(commands).every(command => command === '/bin/sh -s'))
   await assert.rejects(access(join(env.root, '.whycode')), { code: 'ENOENT' })
 })
 

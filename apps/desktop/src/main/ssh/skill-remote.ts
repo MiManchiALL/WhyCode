@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { readBoundedWorkspaceFile, skillSummarySchema, type WorkspaceIO } from '@whycode/core'
 import type { SshReleaseOptions, SshSkillResult } from '../../shared/ssh-skills.ts'
-import { exists, mapSkillFiles, ordinaryDirectory, pruneSkillParents, readSkillTree, skillPath, SKILL_SYNC_MARKER, type SkillTree } from './skill-files.ts'
+import { exists, mapSkillFiles, ordinaryDirectory, pruneSkillParents, skillTreeDigest, skillPath, SKILL_SYNC_MARKER, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
 
 const markerSchema = skillSummarySchema.pick({ name: true, description: true }).extend({
   owner: z.literal('whycode-skill-sync'),
@@ -27,7 +27,7 @@ async function markerAt(io: WorkspaceIO, directory: string): Promise<SkillMarker
 }
 
 /** 扫描归属记录而非 SKILL.md，本机或远端正文已被删除的副本仍然可以清理。 */
-export async function managedSkills(io: WorkspaceIO, home: string): Promise<ManagedSkill[]> {
+export async function managedSkills(io: SkillWorkspaceIO, home: string): Promise<ManagedSkill[]> {
   const root = skillRoot(io, home)
   if (!await ordinaryDirectory(io, root)) return []
   const queue = [{ id: '', path: root, depth: 0 }]
@@ -41,7 +41,7 @@ export async function managedSkills(io: WorkspaceIO, home: string): Promise<Mana
         throw error
       })
       if (marker) {
-        try { result.push({ id: current.id, marker, modified: (await readSkillTree(io, current.path)).digest !== marker.digest }) }
+        try { result.push({ id: current.id, marker, modified: await skillTreeDigest(io, current.path) !== marker.digest }) }
         catch (error) { result.push({ id: current.id, marker, modified: true, error: error instanceof Error ? error.message : String(error) }) }
         continue
       }
@@ -63,7 +63,7 @@ export async function managedSkills(io: WorkspaceIO, home: string): Promise<Mana
   return result
 }
 
-export async function publishSkill(io: WorkspaceIO, home: string, id: string, tree: SkillTree, metadata: Pick<SkillMarker, 'name' | 'description'>, previous?: string): Promise<void> {
+export async function publishSkill(io: SkillWorkspaceIO, home: string, id: string, tree: SkillTree, metadata: Pick<SkillMarker, 'name' | 'description'>, previous?: string): Promise<void> {
   const root = skillRoot(io, home)
   const destination = skillPath(root, id, io.path)
   await ordinaryDirectory(io, io.path.dirname(destination), true)
@@ -81,7 +81,7 @@ export async function publishSkill(io: WorkspaceIO, home: string, id: string, tr
     await mapSkillFiles(tree.files, file => io.fs.writeFile(io.path.join(staging, file.path), file.data, { flag: 'wx', mode: file.mode }))
     if (previous) {
       const marker = await markerAt(io, destination)
-      if (!marker || marker.digest !== previous || (await readSkillTree(io, destination)).digest !== previous) throw new Error('远端 Skill 已变化，保留现有内容，请重新查看')
+      if (!marker || marker.digest !== previous || await skillTreeDigest(io, destination) !== previous) throw new Error('远端 Skill 已变化，保留现有内容，请重新查看')
       await io.fs.rename(destination, backup); moved = true
     } else if (await exists(io.fs, destination)) throw new Error('远端目录已存在，未覆盖任何文件')
     await io.fs.rename(staging, destination); published = true
@@ -96,7 +96,7 @@ export async function publishSkill(io: WorkspaceIO, home: string, id: string, tr
   }
 }
 
-export async function cleanManagedSkills(io: WorkspaceIO, home: string, options: SshReleaseOptions, ids?: string[], progress?: (result: SshSkillResult) => void): Promise<SshSkillResult[]> {
+export async function cleanManagedSkills(io: SkillWorkspaceIO, home: string, options: SshReleaseOptions, ids?: string[], progress?: (result: SshSkillResult) => void): Promise<SshSkillResult[]> {
   const all = await managedSkills(io, home)
   const selected = ids ? ids.map(id => {
     const entry = all.find(item => item.id === id)
@@ -119,7 +119,7 @@ export async function cleanManagedSkills(io: WorkspaceIO, home: string, options:
       await ordinaryDirectory(io, directory)
       const marker = entry.marker ? await markerAt(io, directory) : null
       if (entry.marker ? !marker || marker.digest !== entry.marker.digest : !isStaging(entry.id)) throw new Error('Skill 归属记录已变化，请重试')
-      if (!options.allowModified?.includes(entry.id) && (await readSkillTree(io, directory)).digest !== marker?.digest) throw new Error('Skill 在服务器上有新的修改，未删除')
+      if (!options.allowModified?.includes(entry.id) && await skillTreeDigest(io, directory) !== marker?.digest) throw new Error('Skill 在服务器上有新的修改，未删除')
       // 先退到专用临时目录；递归删除中断、归属文件已移除时仍有可核对的清理入口。
       const deleting = isStaging(entry.id) ? directory : temporaryPath(io, home)
       if (deleting !== directory) {
