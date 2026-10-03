@@ -938,7 +938,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureMessageSnapshot().some(isTurnAbortedMessage), false)
   })
 
-  it('运行中暂停回应可先记账计划进度，再由最终文本结束', async () => {
+  it('暂停前记账会保存自动推进后的当前项，最终回复后不再执行', async () => {
     let requestCount = 0
     let releaseCurrentStep!: () => void
     const currentStepMayFinish = new Promise<void>((resolve) => {
@@ -981,7 +981,7 @@ describe('用户中断后的新回合', () => {
       false,
     )
     assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[0]?.status, 'completed')
-    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'pending')
+    assert.equal(session.captureTaskStateSnapshot()?.activePlan?.items[1]?.status, 'in_progress')
   })
 
   it('steering 后继续调用实际工具，最终正文自然结束当前计划', async () => {

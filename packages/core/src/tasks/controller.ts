@@ -123,7 +123,7 @@ export class TaskPlanController {
     this.publish(next.plan)
     return {
       ok: true,
-      message: `已建立 ${next.plan.items.length} 项宏观计划；里程碑尚未开始，下一步先进入 ${next.plan.items[0]!.id}。`,
+      message: this.progressMessage(next.plan, `已建立 ${next.plan.items.length} 项宏观计划`),
     }
   }
 
@@ -154,7 +154,7 @@ export class TaskPlanController {
       if (changes.length === 0 && transition) {
         return {
           ok: true,
-          message: `${transition.itemId} 已处于 ${transition.status}；计划无需更新。`,
+          message: this.progressMessage(current, `${transition.itemId} 已处于 ${transition.status}；计划无需更新`),
         }
       }
       return mutationFailure('no_state_change', '计划内容和状态没有实质变化。')
@@ -167,7 +167,13 @@ export class TaskPlanController {
     }
     this.state.activePlan = parsed.data
     this.publish(parsed.data)
-    return { ok: true, message: this.progressMessage(parsed.data) }
+    return {
+      ok: true,
+      message: this.progressMessage(
+        parsed.data,
+        transition?.status === 'completed' ? `${transition.itemId} 已完成` : undefined,
+      ),
+    }
   }
 
   close(): TaskMutationResult {
@@ -346,6 +352,8 @@ export class TaskPlanController {
       }
       item.status = 'completed'
       item.evidence = evidence
+      const next = plan.items.find((entry) => entry.status === 'pending')
+      if (next) next.status = 'in_progress'
       return null
     }
     return null
@@ -410,7 +418,7 @@ export class TaskPlanController {
       id: `T${index + 1}`,
       kind: draft.kind,
       outcome: draft.outcome,
-      status: 'pending',
+      status: index === 0 ? 'in_progress' : 'pending',
       evidence: [],
     }))
     return {
@@ -424,10 +432,16 @@ export class TaskPlanController {
     }
   }
 
-  private progressMessage(plan: ActiveTaskPlan): string {
+  private progressMessage(plan: ActiveTaskPlan, message = '计划已更新'): string {
     const done = plan.items.filter((item) => item.status === 'completed').length
     const current = plan.items.find((item) => item.status === 'in_progress')
-    return `计划已更新；进度 ${done}/${plan.items.length}${current ? `，当前里程碑 ${current.id}` : ''}。`
+    const progress = `${message}；进度 ${done}/${plan.items.length}。`
+    if (current) {
+      return `${progress}当前进行中：${current.id}「${current.outcome}」，无需重复设置 in_progress。`
+    }
+    return progress + (done === plan.items.length
+      ? '全部里程碑已完成。'
+      : '当前没有进行中项；继续时先将下一项设为 in_progress。')
   }
 }
 

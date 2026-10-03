@@ -53,7 +53,7 @@ describe('Main 长任务端到端控制', () => {
     assert.equal(await accepts({ evidence: ['游离证据'] }), false)
   })
 
-  it('任务工具在受管默认工作区中可用，计划状态随每步注入并在最终正文自然关闭', async () => {
+  it('创建与完成自动推进，工具结果、界面事件和后续请求使用同一状态', async () => {
     const model = modelWithSteps([
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
         goal: '交付可靠功能',
@@ -65,25 +65,13 @@ describe('Main 长任务端到端控制', () => {
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T1',
-        status: 'in_progress',
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
         status: 'completed',
         evidence: ['实现文件已检查'],
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T2',
-        status: 'in_progress',
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T2',
         status: 'completed',
         evidence: ['调用检查通过'],
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T3',
-        status: 'in_progress',
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T3',
@@ -97,21 +85,40 @@ describe('Main 长任务端到端控制', () => {
     const result = await session.handleUserMessage('完成复杂任务')
 
     assert.equal(result, 'completed')
-    assert.equal(model.doStreamCalls.length, 8)
+    assert.equal(model.doStreamCalls.length, 5)
     const taskTools = JSON.stringify(model.doStreamCalls[0]?.tools)
     assert.match(taskTools, /item_id/)
     assert.doesNotMatch(taskTools, /transition/)
     assert.match(JSON.stringify(model.doStreamCalls[1]), /交付可靠功能|T1/)
     assert.match(JSON.stringify(model.doStreamCalls[1]), /whycode-task-state/)
     assert.match(JSON.stringify(model.doStreamCalls[1]), /whycode-task-execution/)
-    assert.match(JSON.stringify(model.doStreamCalls[7]), /active_plan/)
-    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[7]), /historical_plans/)
-    assert.match(JSON.stringify(model.doStreamCalls[7]), /completed/)
+    assert.match(JSON.stringify(model.doStreamCalls[4]), /active_plan/)
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[4]), /historical_plans/)
+    assert.match(JSON.stringify(model.doStreamCalls[4]), /completed/)
     for (const call of model.doStreamCalls.slice(1)) {
       assert.deepEqual(call.tools, model.doStreamCalls[0]?.tools)
     }
     const updates = events.filter((event) => event.type === 'task-plan-updated')
-    assert.equal(updates.length, 8)
+    assert.equal(updates.length, 5)
+    assert.deepEqual(updates.slice(0, 4).map((event) => event.plan.items.map((item) => item.status)), [
+      ['in_progress', 'pending', 'pending'],
+      ['completed', 'in_progress', 'pending'],
+      ['completed', 'completed', 'in_progress'],
+      ['completed', 'completed', 'completed'],
+    ])
+    const results = events.filter((event) => event.type === 'tool-end')
+    assert.equal(results.length, 4)
+    for (const [index, event] of results.entries()) {
+      assert.equal(event.isError, false)
+      const state = String(event.result).match(/<whycode-task-state schema-version="1">\n(.+)\n<\/whycode-task-state>/)
+      assert.ok(state)
+      assert.deepEqual(JSON.parse(state[1]!).active_plan, updates[index]?.plan)
+      assert.match(JSON.stringify(model.doStreamCalls[index + 1]?.prompt), /whycode-task-state/)
+    }
+    assert.match(String(results[0]?.result), /当前进行中：T1「核心功能已经实现」/)
+    assert.match(String(results[1]?.result), /T1 已完成.*当前进行中：T2「相关调用已经统一」/)
+    assert.match(String(results[2]?.result), /T2 已完成.*当前进行中：T3「完整功能通过验证」/)
+    assert.match(String(results[3]?.result), /全部里程碑已完成/)
     assert.equal(updates.at(-1)?.type === 'task-plan-updated' && updates.at(-1)?.plan.status, 'completed')
   })
 
@@ -157,10 +164,6 @@ describe('Main 长任务端到端控制', () => {
           { kind: 'verification', outcome: '修复通过整体验证' },
         ],
       }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T1',
-        status: 'in_progress',
-      }),
       ...Array.from(
         { length: 10 },
         (_, offset) => toolStep('ListDir', { path: '.', limit: 1, offset }),
@@ -172,16 +175,8 @@ describe('Main 长任务端到端控制', () => {
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T2',
-        status: 'in_progress',
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T2',
         status: 'completed',
         evidence: ['调用路径检查通过'],
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T3',
-        status: 'in_progress',
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T3',
@@ -193,8 +188,8 @@ describe('Main 长任务端到端控制', () => {
     const { session } = createSession(model, 'E:\\workspace\\WhyCode')
 
     assert.equal(await session.handleUserMessage('完成一项复杂排查'), 'completed')
-    assert.match(JSON.stringify(model.doStreamCalls[12]), /已有 10 个模型步骤没有更新/)
-    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[11]), /已有 10 个模型步骤没有更新/)
+    assert.match(JSON.stringify(model.doStreamCalls[11]), /已有 10 个模型步骤没有更新/)
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[10]), /已有 10 个模型步骤没有更新/)
   })
 
   it('engaged 自动压缩保留 canonical TaskState 和同一执行 continuation', async () => {
@@ -448,7 +443,7 @@ describe('Main 长任务端到端控制', () => {
       event.type === 'task-plan-updated' && event.plan.status === 'active')
     assert.ok(changed?.type === 'task-plan-updated' && changed.plan.status === 'active')
     assert.equal(changed.plan.items.find((item) => item.id === 'T2')?.outcome, '所有调用路径已经统一')
-    assert.equal(changed.plan.items.find((item) => item.id === 'T2')?.status, 'pending')
+    assert.equal(changed.plan.items.find((item) => item.id === 'T2')?.status, 'in_progress')
     assert.equal(changed.plan.items.some((item) => item.id === 'T4'), true)
   })
 
@@ -554,16 +549,8 @@ describe('Main 长任务端到端控制', () => {
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T2',
-        status: 'in_progress',
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T2',
         status: 'completed',
         evidence: ['调用路径已收口'],
-      }),
-      toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
-        item_id: 'T3',
-        status: 'in_progress',
       }),
       toolStep(UPDATE_TASK_ITEM_TOOL_NAME, {
         item_id: 'T3',
