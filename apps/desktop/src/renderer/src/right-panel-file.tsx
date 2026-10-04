@@ -7,6 +7,7 @@ import { FilePreviewMessage, FilePreviewToolbar, FileWrapButton } from './file-p
 import { useCheckpointFileCurrentMatch, useCheckpointFilePreview } from './file-preview-data.ts'
 import { contentLines, firstChangedLine, previewTextState } from './file-change-presentation.ts'
 import { SyntaxCode } from './syntax-code.tsx'
+import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
 
 type FilePage = Extract<RightPanelPage, { kind: 'file' }>
 type SnapshotPage = FilePage & { source: Extract<FilePage['source'], { kind: 'snapshot' }> }
@@ -35,13 +36,14 @@ function SnapshotFile({ runtimeId, refreshRevision, page, onChange }: Omit<FileP
 
 function FileSnapshot({ runtimeId, page, onChange, matches }: Omit<FileProps, 'page' | 'refreshRevision'> & { page: SnapshotPage; matches: boolean }) {
   const state = useCheckpointFilePreview(runtimeId, page.source.toolUseId, page.path)
+  const file = useWorkspaceFileAction(runtimeId, page.path)
   const wrap = page.wrap ?? false
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <FilePreviewToolbar path={page.path}>
         {!matches && (
           <button type="button" className="wc-preview-action" title="打开当前文件" aria-label="打开当前文件"
-            onClick={() => onChange({ ...page, source: { kind: 'current' } })}>
+            disabled={file.pending} onClick={() => { void file.run('check').then(ok => { if (ok) onChange({ ...page, source: { kind: 'current' } }) }) }}>
             <FileSearch size={15} />
           </button>
         )}

@@ -17,6 +17,7 @@ export type RightPanelFileSource =
 
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
+  | { kind: 'browser'; id: string; url: string; title: string }
   | { kind: 'workspace'; expanded: string[] }
   | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
   | { kind: 'subagent-overview' }
@@ -169,16 +170,24 @@ export function openRightPanelPage(
       ? { id, page: { ...existing, ...page } } : tab
   } else {
     if (tabs.length >= MAX_RIGHT_PANEL_TABS) {
-      const discardIndex = tabs.findIndex((candidate) => candidate.page.kind !== 'terminal'
+      const discardIndex = tabs.findIndex((candidate) => discardablePage(candidate.page)
         && candidate.id !== state.activeTabId)
       const replacement = discardIndex >= 0 ? discardIndex
-        : tabs.findIndex((candidate) => candidate.page.kind !== 'terminal')
+        : tabs.findIndex((candidate) => discardablePage(candidate.page))
       if (replacement < 0) return state
       tabs.splice(replacement, 1)
     }
     tabs.push(tab)
   }
   return { ...state, open: true, tabs, activeTabId: id }
+}
+
+export function canAddRightPanelTab(state: RightPanelSessionState): boolean {
+  return state.tabs.length < MAX_RIGHT_PANEL_TABS || state.tabs.some(tab => discardablePage(tab.page))
+}
+
+function discardablePage(page: RightPanelPage): boolean {
+  return page.kind !== 'terminal' && page.kind !== 'browser'
 }
 
 export function selectRightPanelTab(
@@ -211,6 +220,12 @@ export function moveRightPanelTab(state: RightPanelSessionState, tabId: string, 
   return { ...state, tabs }
 }
 
+export function updateRightPanelPage(state: RightPanelSessionState, page: RightPanelPage): RightPanelSessionState {
+  const id = rightPanelTabId(page)
+  if (!state.tabs.some(tab => tab.id === id)) return state
+  return { ...state, tabs: state.tabs.map(tab => tab.id === id ? { id, page } : tab) }
+}
+
 export function rightPanelTabId(page: RightPanelPage): string {
   switch (page.kind) {
     case 'workspace':
@@ -219,6 +234,8 @@ export function rightPanelTabId(page: RightPanelPage): string {
       return 'changes'
     case 'terminal':
       return `terminal:${page.terminal.id}`
+    case 'browser':
+      return `browser:${page.id}`
     case 'file':
       return `file:${filePathKey(page.path)}`
     case 'subagent-overview':
@@ -274,6 +291,9 @@ function parseTabPage(value: unknown): RightPanelPage | null {
 function parsePage(value: unknown): RightPanelPage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const page = value as Record<string, unknown>
+  if (page.kind === 'browser' && typeof page.id === 'string' && typeof page.url === 'string' && typeof page.title === 'string') {
+    return { kind: page.kind, id: page.id, url: page.url, title: page.title }
+  }
   if (page.kind === 'workspace' && Array.isArray(page.expanded) && page.expanded.every(path => typeof path === 'string')) {
     return { kind: page.kind, expanded: page.expanded.slice(0, MAX_EXPANDED_WORKSPACE_DIRECTORIES) }
   }

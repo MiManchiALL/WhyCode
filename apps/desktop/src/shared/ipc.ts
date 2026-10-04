@@ -30,6 +30,7 @@ export const IPC = {
   /** 只读文件视图与预览地址随可见标签页释放，不进入 Agent 上下文。 */
   openWorkspaceFile: 'whycode:open-workspace-file',
   readWorkspaceFile: 'whycode:read-workspace-file',
+  checkWorkspaceFile: 'whycode:check-workspace-file',
   closeWorkspaceFile: 'whycode:close-workspace-file',
   revealWorkspaceFile: 'whycode:reveal-workspace-file',
   saveWorkspaceFile: 'whycode:save-workspace-file',
@@ -41,6 +42,10 @@ export const IPC = {
   terminalControl: 'whycode:terminal-control',
   terminalEvent: 'whycode:terminal-event',
   terminalClosed: 'whycode:terminal-closed',
+  acquireBrowser: 'whycode:acquire-browser',
+  releaseBrowser: 'whycode:release-browser',
+  openBrowserExternally: 'whycode:open-browser-externally',
+  browserEvent: 'whycode:browser-event',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
   /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */

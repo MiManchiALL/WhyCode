@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { localWorkspaceIO } from '@whycode/core'
 import { tmpdir } from 'node:os'
@@ -52,6 +52,21 @@ it('保存文件遇到传输失败或视图关闭时清理暂存，不覆盖已�
     assert.deepEqual((await readdir(root)).filter(name => name.endsWith('.download')), [])
     files.closeOwner(1)
   }
+})
+
+it('文件操作重新校验源文件及所有权，不撤销已读页面地址；删除后拒绝操作，重建后可恢复', async t => {
+  const { document, files } = await fixture(t)
+  const view = await document('interactive.html', '<button>game</button>')
+  assert.equal(await files.check(1, view.id), await realpath(view.path))
+  await assert.rejects(files.check(2, view.id), /文件视图已关闭/)
+  await rm(view.path)
+  await assert.rejects(files.check(1, view.id), { code: 'ENOENT' })
+  await assert.rejects(files.pathFor(1, view.id), { code: 'ENOENT' })
+  assert.equal((await files.response(new Request(view.url!))).status, 404)
+  await writeFile(view.path, '<button>restored</button>')
+  assert.equal(await files.check(1, view.id), await realpath(view.path))
+  assert.equal((await files.read(1, view.id)).kind, 'file')
+  assert.equal(await (await files.response(new Request(view.url!))).text(), '<button>restored</button>')
 })
 
 it('按层读取目录、目录优先并自然排序，分页无重复；缺失草稿目录不物化', async t => {

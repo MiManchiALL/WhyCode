@@ -125,6 +125,7 @@ import { installComposerWindowLifecycle } from './composer-window-lifecycle.ts'
 import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
+import { BrowserGuests } from './browser-guests.ts'
 import { installWorkspaceFileLifecycle, registerWorkspaceFileIpc } from './workspace-files-ipc.ts'
 import { runtimeWorkspaceBinding, workspaceDisplayDirectory, workspaceProjectDirectory } from '../shared/workspace.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
@@ -349,6 +350,8 @@ function createSessionWebPageTools(recorder: SessionJournal) {
   ]
 }
 
+const browserGuests = new BrowserGuests(process.env.ELECTRON_RENDERER_URL)
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
@@ -361,12 +364,14 @@ function createWindow(): BrowserWindow {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
       contextIsolation: true,
+      webviewTag: true,
     },
   })
 
   win.once('ready-to-show', () => win.show())
   installTerminalWindowLifecycle(win, terminals)
   installWorkspaceFileLifecycle(win, workspaceFiles)
+  browserGuests.bind(win)
   installImageContextMenu(win)
   installComposerWindowLifecycle(win)
 
@@ -3274,6 +3279,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   }, runtimeId => sshWorkspaces.io(runtimeForId(runtimeId).workspace))
   registerTerminalIpc(terminals, runtimeForId, prepareTerminalDirectory, runtime => runtime.workspace.mode === 'ssh'
     ? cwd => sshWorkspaces.terminal(runtime, cwd) : undefined)
+  browserGuests.register()
   createWindow()
 
   app.on('activate', () => {

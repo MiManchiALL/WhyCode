@@ -490,6 +490,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 - `openWorkspaceFile({runtimeId,kind,path})` 从运行时解析工作目录。目录路径相对工作目录；文件使用明确打开的绝对路径，目录外文件的静态资源范围限于其父目录。返回一次性视图 ID、目录项或文档元数据及预览地址，不通过 IPC 返回正文。
 - `readWorkspaceFile({id,offset?})` 只接受当前窗口持有的视图；目录每页最多 200 项，每个窗口最多 64 个活动视图。目录项区分目录、普通文件和不可浏览的链接/特殊项。
+- `checkWorkspaceFile(id)` 校验所属窗口的活动文件视图、真实路径范围与普通文件状态，返回 `{ok:true}` 或 `{ok:false,error}`；不读取正文、生成新预览地址或重置监听。缺失文件统一显示“当前文件已被删除或移动”；系统打开与文件夹定位同样在执行前校验，不能仅凭旧视图元数据执行。
 - `workspaceFileChanged({id})` 只发给资源所属窗口；文件视图仅在正文或已读取依赖的版本改变时通知，目录视图按目录变化通知。`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径，`openWorkspaceFileExternally(id)` 用系统默认应用打开该路径并返回失败原因；两者只接受所属窗口的活动视图 ID，不接受 Renderer 提供的原始路径。视图 ID 与预览地址均不持久化。
 - `saveWorkspaceFile(id)` 只保存当前窗口的活动文件视图，由 Main 的系统保存对话框选择本机目标，取消返回 false。内容流式写入目标旁的排他暂存文件，完成且字节数符合读取前尺寸后才替换目标；关闭视图、传输失败或尺寸变化清理暂存并保留原目标。Renderer 不能直接提交任意本机写入路径。
 - `whycode-preview` 仅处理 GET/HEAD，支持单段字节范围。普通文本预览上限 2 MiB，文档与静态资源上限 64 MiB；不支持的类型只返回元数据。HTML 代码视图同样受文本上限约束。
@@ -544,6 +545,12 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 远端组件只通过已有 SSH channel 的标准输入输出交换协议 2 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。`start` 使用 `command` 通过 `/bin/sh -c` 执行用户命令，或使用宿主提供的绝对 `executable` 与 `args` 直接启动搜索程序；两者均指定绝对工作目录，直接执行不支持 PTY。字节使用 base64，`data.stream` 区分 stdout/stderr；用户命令沿用合并输出，原生搜索分别消费结果和诊断。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
 
 单组件最多 32 个进程，单请求行不超过 1 MiB；Main 同时等待的请求最多 64 个，12 秒未响应则关闭通道并报告结果未知。每 15 秒心跳，组件超过 75 秒未收到有效心跳后在定时检查中退出。输出按 16 KiB 分块，每个进程最多 8 个未消费块；消费后发 `ack`，暂停某个终端不会堵塞其它任务、停止或心跳。SFTP 单操作超时为 30 秒；断线后的旧请求不会自动重放。
+
+### 7.8 桌面内置浏览器
+
+共享契约位于 `shared/browser.ts`。`acquireBrowser()` 仅允许所属窗口的主 Frame，返回一次性 `{id,partition}`；`releaseBrowser(id)` 幂等释放该窗口持有的租约。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载，也不能跨窗口使用；窗口重载、崩溃或关闭撤销全部租约。
+
+`browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；网页导航、站点存储与用户交互不进入 CoreCommand、JSONL 或模型上下文。UI、网络限制和资源生命周期见文档二 §12.6。
 
 ## 8. 推理与模型选择
 

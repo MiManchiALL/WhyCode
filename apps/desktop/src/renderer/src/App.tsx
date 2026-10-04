@@ -126,7 +126,9 @@ import { usePanelLayout } from './use-panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import {
   closeRightPanelTab,
+  canAddRightPanelTab,
   moveRightPanelTab,
+  updateRightPanelPage,
   openRightPanelPage as openRightPanelPageState,
   RightPanelSessionStore,
   rightPanelSessionKey,
@@ -1079,8 +1081,10 @@ export function App() {
     if (page.kind === 'workspace' && !rightPanelStateRef.current.tabs.some(tab => tab.page.kind === 'workspace')) {
       conversationPresentationsRef.current.saveWorkspacePosition(composerKey(runtimeIdRef.current, sessionIdRef.current), undefined)
     }
-    updateRightPanelState((current) => openRightPanelPageState(current, page))
-  }, [updateRightPanelState])
+    const next = openRightPanelPageState(rightPanelStateRef.current, page)
+    if (next === rightPanelStateRef.current) { showConversationFeedback('info', '标签页已满，请先关闭部分标签'); return }
+    updateRightPanelState(next)
+  }, [updateRightPanelState, showConversationFeedback])
 
   const openFilePreview = useCallback((
     page: Extract<RightPanelPage, { kind: 'file' }>,
@@ -1119,13 +1123,14 @@ export function App() {
 
   const openRightPanelTerminal = useCallback(async () => {
     const targetRuntimeId = runtimeIdRef.current
-    if (!targetRuntimeId || terminalOpening) return
+    if (!targetRuntimeId || terminalOpening || !canAddRightPanelTab(rightPanelStateRef.current)) return
     setTerminalOpening(true)
     try {
       await loadTerminalViews()
       if (runtimeIdRef.current !== targetRuntimeId) return
       const terminal = await window.whycode.createTerminal(targetRuntimeId)
-      if (runtimeIdRef.current !== targetRuntimeId || !rightPanelStateRef.current.open) {
+      if (runtimeIdRef.current !== targetRuntimeId || !rightPanelStateRef.current.open
+        || !canAddRightPanelTab(rightPanelStateRef.current)) {
         await window.whycode.closeTerminal(terminal.id)
         return
       }
@@ -2603,6 +2608,7 @@ export function App() {
                 onToggleFullscreen={() => setRightPanelFullscreen(value => !value)}
                 onCollapse={() => changePanelOpen('right', false)}
                 onOpenPage={showRightPanelPage}
+                onUpdatePage={page => updateRightPanelState(current => updateRightPanelPage(current, page))}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}
                 onMoveTab={(id, targetId) => updateRightPanelState(current => moveRightPanelTab(current, id, targetId))}

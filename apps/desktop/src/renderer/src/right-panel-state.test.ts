@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   activeRightPanelPage,
   closeRightPanelTab,
+  canAddRightPanelTab,
   MAX_RIGHT_PANEL_TABS,
   openRightPanelPage,
   moveRightPanelTab,
@@ -10,6 +11,7 @@ import {
   rightPanelSessionKey,
   rightPanelTabId,
   selectRightPanelTab,
+  updateRightPanelPage,
   type RightPanelPage,
   type RightPanelSessionState,
 } from './right-panel-state.ts'
@@ -45,6 +47,28 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('浏览器标签独立保存网址，后台标题变化不抢焦点，已关闭标签不会被迟到更新恢复', () => {
+    const first = { kind: 'browser' as const, id: 'a', url: 'https://example.com/', title: 'Example' }
+    const second = { kind: 'browser' as const, id: 'b', url: 'http://localhost:3000/', title: 'Game' }
+    let state = openRightPanelPage(openRightPanelPage(emptyState(), first), second)
+    state = updateRightPanelPage(state, { ...first, title: 'Updated' })
+    assert.equal(state.activeTabId, 'browser:b')
+    const storage = new MemoryStorage()
+    new RightPanelSessionStore(storage).set('conversation', state)
+    assert.deepEqual(new RightPanelSessionStore(storage).get('conversation'), state)
+    state = closeRightPanelTab(state, 'browser:a')
+    assert.equal(updateRightPanelPage(state, first), state)
+  })
+  it('标签上限不会自动淘汰仍有网页状态的浏览器，关闭后可继续新建', () => {
+    let state = emptyState()
+    for (let i = 0; i < MAX_RIGHT_PANEL_TABS; i++) state = openRightPanelPage(state, { kind: 'browser', id: String(i), url: 'about:blank', title: '' })
+    assert.equal(canAddRightPanelTab(state), false)
+    const file = { kind: 'file' as const, path: '/note.txt', name: 'note.txt', source: { kind: 'current' as const } }
+    assert.equal(openRightPanelPage(state, file), state)
+    state = closeRightPanelTab(state, 'browser:0')
+    assert.equal(canAddRightPanelTab(state), true)
+    assert.equal(openRightPanelPage(state, file).tabs.length, MAX_RIGHT_PANEL_TABS)
+  })
   it('改动卡片与逐文件入口复用一个标签，打开当前文件后能保留并返回原差异列表', () => {
     const overview: Extract<RightPanelPage, { kind: 'changes' }> = {
       kind: 'changes', checkpointIds: ['checkpoint-a', 'checkpoint-b'],

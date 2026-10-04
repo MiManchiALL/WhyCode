@@ -43,7 +43,7 @@ export class WorkspaceFileResource {
     if (this.request.kind === 'directory' && this.automatic) void this.refresh()
   }
 
-  refresh = (offset = 0): Promise<boolean> => {
+  refresh = (offset = 0, failure: 'replace' | 'preserve' = 'replace'): Promise<boolean> => {
     if (this.pending) return this.pending
     let current = this.lease
     if (!current) {
@@ -69,7 +69,9 @@ export class WorkspaceFileResource {
     }, error => {
       if (this.lease === reading) {
         this.pending = null
-        this.publish({ ...this.state, loading: false, error: error instanceof Error ? error.message : String(error) })
+        this.publish({ ...this.state,
+          view: this.request.kind === 'file' && failure === 'replace' ? null : this.state.view,
+          loading: false, error: error instanceof Error ? error.message : String(error) })
       }
       return false
     })

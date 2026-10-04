@@ -1,7 +1,7 @@
 import type { WhycodeApi } from '../../preload/index.ts'
 
 type FileActionsApi = Pick<WhycodeApi, 'openWorkspaceFile' | 'closeWorkspaceFile' | 'revealWorkspaceFile' | 'openWorkspaceFileExternally' | 'saveWorkspaceFile'>
-export type WorkspaceFileAction = 'open' | 'reveal' | 'save'
+export type WorkspaceFileAction = 'open' | 'reveal' | 'save' | 'check'
 
 /** 卡片仅在用户点击后借用文件视图，操作结束或导航取消时立即归还。 */
 export async function performWorkspaceFileAction(
@@ -16,6 +16,6 @@ export async function performWorkspaceFileAction(
     signal.throwIfAborted()
     if (action === 'save') await api.saveWorkspaceFile(result.view.id)
     else if (action === 'open') await api.openWorkspaceFileExternally(result.view.id)
-    else await api.revealWorkspaceFile(result.view.id)
+    else if (action === 'reveal') await api.revealWorkspaceFile(result.view.id)
   } finally { signal.removeEventListener('abort', cancel); api.closeWorkspaceFile(result.view.id) }
 }

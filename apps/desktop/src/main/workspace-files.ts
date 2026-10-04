@@ -146,10 +146,19 @@ export class WorkspaceFiles {
     } catch { return new Response(null, { status: 404 }) }
   }
 
-  pathFor(owner: number, id: string): string {
+  async check(owner: number, id: string): Promise<string> {
+    const view = this.owned(owner, id)
+    const path = await containedRealPath(view.io, view.root, view.path)
+    const info = await view.io.fs.stat(path)
+    if (view.kind !== 'file' || !info.isFile()) throw new Error('所选路径不是普通文件')
+    view.abort.signal.throwIfAborted()
+    return path
+  }
+
+  async pathFor(owner: number, id: string): Promise<string> {
     const view = this.owned(owner, id)
     if (view.io.identity !== 'local') throw new Error('远端文件请在工作区面板中查看')
-    return view.path
+    return this.check(owner, id)
   }
 
   fileNameFor(owner: number, id: string): string {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FolderOpen, RefreshCw, WrapText } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
 import { MAX_TEXT_PREVIEW_BYTES } from '../../shared/workspace-files.ts'
@@ -20,6 +20,8 @@ interface DocumentProps {
 
 export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
   const file = useWorkspaceFile(runtimeId, page.path)
+  const currentPage = useRef(page)
+  currentPage.current = page
   const document = file.view?.kind === 'file' ? file.view : null
   const save = useWorkspaceFileAction(runtimeId, page.path)
   const hasModes = document && document.size <= MAX_TEXT_PREVIEW_BYTES
@@ -27,12 +29,12 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
   const code = document?.format === 'code' || Boolean(hasModes && page.previewMode === 'code')
   const wrap = page.wrap ?? false
   const changeMode = async (previewMode: 'preview' | 'code') => {
-    if (previewMode === (code ? 'code' : 'preview')) return
-    if (await file.refresh()) onChange({ ...page, previewMode })
+    if (previewMode === (code ? 'code' : 'preview')) { await file.check(); return }
+    if (await file.refreshForAction() && currentPage.current === page) onChange({ ...page, previewMode })
   }
   const actions: FilePreviewAction[] = [
     ...(code ? [{ label: '自动换行', title: wrap ? '关闭自动换行' : '开启自动换行', icon: WrapText,
-      pressed: wrap, run: () => onChange({ ...page, wrap: !wrap }) }] : []),
+      pressed: wrap, disabled: file.loading, run: () => { void file.check().then(ok => { if (ok && currentPage.current === page) onChange({ ...page, wrap: !wrap }) }) } }] : []),
     { label: '刷新文件', title: file.changed ? '文件已更新，点击刷新' : '刷新文件', icon: RefreshCw,
       disabled: file.loading, marked: file.changed, run: () => { void file.refresh() } },
     ...(!document?.remote ? [{ label: '在文件夹中显示', icon: FolderOpen, disabled: !document, run: file.reveal }] : []),
@@ -45,9 +47,9 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
         value: code ? 'code' : 'preview', disabled: file.loading, change: value => { void changeMode(value) },
       } : undefined} />
     </FilePreviewToolbar>
-    {file.error ? <FilePreviewMessage>{file.error}</FilePreviewMessage> : document ? (
+    {document ? (
       <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally} />
-    ) : <FilePreviewMessage>正在读取文件…</FilePreviewMessage>}
+    ) : <FilePreviewMessage>{file.error ?? '正在读取文件…'}</FilePreviewMessage>}
   </div>
 }
 

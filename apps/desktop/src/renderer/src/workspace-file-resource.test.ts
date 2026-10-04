@@ -6,6 +6,26 @@ import { WorkspaceDirectories } from './workspace-directories.ts'
 import { WorkspaceFileResource } from './workspace-file-resource.ts'
 
 describe('目录标签的数据所有权', () => {
+  it('文件删除后动作重读保留当前版本；主动刷新失败清除视图，重建后可刷新恢复', async () => {
+    const api = fixture()
+    const file = new WorkspaceFileResource(api, { runtimeId: 'a', kind: 'file', path: '/note.txt' })
+    await file.refresh()
+    const original = file.getSnapshot().view
+    api.failure = '当前文件已被删除或移动'
+    api.change()
+    assert.equal(await file.refresh(0, 'preserve'), false)
+    assert.equal(file.getSnapshot().view, original)
+    assert.equal(file.getSnapshot().changed, true)
+    assert.equal(await file.refresh(), false)
+    assert.equal(file.getSnapshot().view, null)
+    assert.equal(file.getSnapshot().error, api.failure)
+    api.failure = null
+    assert.equal(await file.refresh(), true)
+    assert.equal(file.getSnapshot().view?.kind, 'file')
+    assert.equal(file.getSnapshot().error, null)
+    file.close()
+    assert.equal(api.views.size, 0)
+  })
   it('切换标签保留列表和监听，本地无变化不重读，隐藏期间多次变化在切回时合并读取', async () => {
     const api = fixture()
     const tree = new WorkspaceDirectories(api, 'a', '0')

@@ -19,6 +19,7 @@ import type { RenameSessionRequest, RenameSessionResult } from '../shared/sessio
 import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
+import type { BrowserEvent, BrowserLease } from '../shared/browser.ts'
 import type {
   CheckpointFileChangesRequest,
   CheckpointFileChangesResult,
@@ -244,8 +245,18 @@ const api = {
     ipcRenderer.invoke(IPC.checkpointFileCurrentMatch, request),
   openWorkspaceFile: (request: OpenWorkspaceFileRequest): Promise<WorkspaceFileResult> =>
     ipcRenderer.invoke(IPC.openWorkspaceFile, request),
+  acquireBrowser: (): Promise<BrowserLease> => ipcRenderer.invoke(IPC.acquireBrowser),
+  releaseBrowser: (id: string): void => ipcRenderer.send(IPC.releaseBrowser, id),
+  openBrowserExternally: (id: string): Promise<void> => ipcRenderer.invoke(IPC.openBrowserExternally, id),
+  onBrowserEvent: (callback: (event: BrowserEvent) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, value: BrowserEvent) => callback(value)
+    ipcRenderer.on(IPC.browserEvent, listener)
+    return () => ipcRenderer.removeListener(IPC.browserEvent, listener)
+  },
   readWorkspaceFile: (request: ReadWorkspaceFileRequest): Promise<WorkspaceFileResult> =>
     ipcRenderer.invoke(IPC.readWorkspaceFile, request),
+  checkWorkspaceFile: (id: string): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke(IPC.checkWorkspaceFile, id),
   closeWorkspaceFile: (id: string): void => ipcRenderer.send(IPC.closeWorkspaceFile, id),
   revealWorkspaceFile: (id: string): Promise<void> => ipcRenderer.invoke(IPC.revealWorkspaceFile, id),
   saveWorkspaceFile: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.saveWorkspaceFile, id),

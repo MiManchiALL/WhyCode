@@ -1,12 +1,13 @@
 import type { SkillSummary, SubagentSummary } from '@whycode/core'
 import { useEffect, useMemo } from 'react'
-import { FolderOpen, Maximize2, Minimize2, PanelRightClose, Plus, SquareTerminal } from 'lucide-react'
+import { FolderOpen, Globe, Maximize2, Minimize2, PanelRightClose, Plus, SquareTerminal } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { RightPanelFilePreview } from './right-panel-file.tsx'
 import { RightPanelChanges } from './right-panel-changes.tsx'
 import { WorkspaceBrowser } from './workspace-browser.tsx'
 import {
   activeRightPanelPage,
+  canAddRightPanelTab,
   type RightPanelPage,
   type RightPanelSessionState,
 } from './right-panel-state.ts'
@@ -15,6 +16,7 @@ import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 import { WorkspaceDirectories } from './workspace-directories.ts'
+import { BrowserPanel } from './browser-panel.tsx'
 
 interface RightPanelProps {
   remote?: boolean
@@ -31,6 +33,7 @@ interface RightPanelProps {
   onCollapse: () => void
   state: RightPanelSessionState
   onOpenPage: (page: RightPanelPage) => void
+  onUpdatePage: (page: RightPanelPage) => void
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onMoveTab: (tabId: string, targetId: string) => void
@@ -80,9 +83,12 @@ export function RightPanel(props: RightPanelProps) {
                   <FolderOpen size={15} />
                   <span>当前工作路径</span>
                 </DropdownMenu.Item>
-                <DropdownMenu.Item className="wc-menu-item" disabled={props.terminalOpening} onSelect={props.onOpenTerminal}>
+                <DropdownMenu.Item className="wc-menu-item" disabled={props.terminalOpening || !canAddRightPanelTab(props.state)} onSelect={props.onOpenTerminal}>
                   <SquareTerminal size={15} />
                   <span>终端</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className="wc-menu-item" disabled={!canAddRightPanelTab(props.state)} onSelect={() => openBrowser(props)}>
+                  <Globe size={15} /><span>内置浏览器</span>
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
@@ -94,6 +100,9 @@ export function RightPanel(props: RightPanelProps) {
         {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
       <RightPanelContent {...props} directories={directories} />
+      {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
+        page={tab.page} active={props.active && props.state.activeTabId === tab.id}
+        onChange={props.onUpdatePage} onOpen={url => openBrowser(props, url)} onClose={() => props.onCloseTab(tab.id)} />)}
     </aside>
   )
 }
@@ -114,9 +123,12 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
         <SquareTerminal size={17} className="shrink-0" />
         <span>{props.terminalOpening ? '正在打开终端…' : '终端'}</span>
       </button>
+      <button type="button" className="wc-focus-ring flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-[var(--wc-muted)] hover:bg-black/[0.035] hover:text-[var(--wc-ink)] disabled:opacity-50"
+        disabled={!props.runtimeId} onClick={() => openBrowser(props)}><Globe size={17} /><span>内置浏览器</span></button>
     </div>
   )
   switch (page.kind) {
+    case 'browser': return null
     case 'changes':
       return props.active ? <RightPanelChanges key={`${props.runtimeId}:${page.checkpointIds.join(',')}`}
         runtimeId={props.runtimeId} projectDir={props.projectDir} remote={props.remote} page={page} onOpenPage={props.onOpenPage} />
@@ -172,4 +184,8 @@ function filePageKey(
 function openWorkspace(props: RightPanelProps): void {
   const existing = props.state.tabs.find(tab => tab.page.kind === 'workspace')
   props.onOpenPage(existing?.page ?? { kind: 'workspace', expanded: [] })
+}
+
+function openBrowser(props: RightPanelProps, url = 'about:blank'): void {
+  props.onOpenPage({ kind: 'browser', id: crypto.randomUUID(), url, title: '' })
 }

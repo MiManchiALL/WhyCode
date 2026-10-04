@@ -30,16 +30,25 @@ export function registerWorkspaceFileIpc(files: WorkspaceFiles, directoryFor: (r
     const owner = BrowserWindow.fromWebContents(event.sender)
     if (owner && event.senderFrame === event.sender.mainFrame && typeof id === 'string') files.close(owner.id, id)
   })
+  ipcMain.handle(IPC.checkWorkspaceFile, async (event, id: unknown) => {
+    try {
+      const owner = fileWindow(event)
+      if (typeof id !== 'string') throw new Error('文件路径无效')
+      await directoryFor(files.runtimeFor(owner.id, id))
+      await files.check(owner.id, id)
+      return { ok: true }
+    } catch (error) { return { ok: false, error: errorMessage(error) } }
+  })
   ipcMain.handle(IPC.openWorkspaceFileExternally, async (event, id: unknown) => {
     const owner = fileWindow(event)
     if (typeof id !== 'string') throw new Error('文件路径无效')
-    const error = await shell.openPath(files.pathFor(owner.id, id))
+    const error = await shell.openPath(await files.pathFor(owner.id, id).catch(error => { throw new Error(errorMessage(error)) }))
     if (error) throw new Error(error)
   })
-  ipcMain.handle(IPC.revealWorkspaceFile, (event, id: unknown) => {
+  ipcMain.handle(IPC.revealWorkspaceFile, async (event, id: unknown) => {
     const owner = fileWindow(event)
     if (typeof id !== 'string') throw new Error('文件路径无效')
-    shell.showItemInFolder(files.pathFor(owner.id, id))
+    shell.showItemInFolder(await files.pathFor(owner.id, id).catch(error => { throw new Error(errorMessage(error)) }))
   })
   ipcMain.handle(IPC.saveWorkspaceFile, async (event, id: unknown): Promise<boolean> => {
     const owner = fileWindow(event)
@@ -68,5 +77,8 @@ function fileWindow(event: IpcMainInvokeEvent): BrowserWindow {
 }
 
 function errorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(String(error.code))) {
+    return '当前文件已被删除或移动'
+  }
   return error instanceof Error ? error.message : String(error)
 }

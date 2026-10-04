@@ -15,6 +15,25 @@ export function useWorkspaceFile(runtimeId: string, path: string) {
       if (file.getSnapshot().view?.id === id) feedback('error', error instanceof Error ? error.message : String(error))
     })
   }, [feedback, file])
-  return { ...state, refresh: file.refresh,
+  const check = async () => {
+    const id = file.getSnapshot().view?.id
+    if (!id) return false
+    try {
+      const result = await window.whycode.checkWorkspaceFile(id)
+      if (file.getSnapshot().view?.id !== id) return false
+      if (!result.ok) feedback('error', result.error)
+      return result.ok
+    } catch (error) {
+      if (file.getSnapshot().view?.id === id) feedback('error', error instanceof Error ? error.message : String(error))
+      return false
+    }
+  }
+  const refreshForAction = async () => {
+    const ok = await file.refresh(0, 'preserve')
+    const error = file.getSnapshot().error
+    if (!ok && error) feedback('error', error)
+    return ok
+  }
+  return { ...state, refresh: file.refresh, check, refreshForAction,
     reveal: () => perform('revealWorkspaceFile'), openExternally: () => perform('openWorkspaceFileExternally') }
 }
