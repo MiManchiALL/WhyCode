@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Block } from '../../shared/conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
@@ -6,6 +6,8 @@ import { UserPdfGallery } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
 import { MessageEditEffects, useMessageEditEffects } from './message-edit-effects.tsx'
 import { MessageActions } from './message-actions.tsx'
+import { ComposerInput, type ComposerInputHandle } from './composer-input.tsx'
+import { splitPathReferences } from './path-reference.ts'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 
@@ -72,6 +74,7 @@ export function UserMessageBubble({ text, btw = false }: { text: string; btw?: b
 }
 
 function UserMessageText({ text }: { text: string }) {
+  const parts = useMemo(() => splitPathReferences(text), [text])
   const contentId = useId()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState(false)
@@ -100,7 +103,9 @@ function UserMessageText({ text }: { text: string }) {
         data-collapsed={overflows && !expanded}
         style={{ maxHeight: expanded ? undefined : `${COLLAPSED_MESSAGE_LINES}lh` }}
       >
-        {text}
+        {parts.map((part, index) => part.reference
+          ? <span key={index} className="wc-path-reference" data-kind={part.reference.kind} title={part.reference.path}>{part.reference.name}</span>
+          : part.text)}
       </div>
       {overflows && (
         <button
@@ -183,9 +188,9 @@ function MessageEditor({
 }) {
   const [restoreFiles, setRestoreFiles] = useState(false)
   const inspection = useMessageEditEffects(runtimeId, turnId)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<ComposerInputHandle>(null)
   useEffect(() => {
-    textareaRef.current?.focus()
+    editorRef.current?.focus()
   }, [])
   const allowed = editable && !disabled && inspection.effects !== null
   const submit = (event?: FormEvent) => {
@@ -194,13 +199,14 @@ function MessageEditor({
   }
   return (
     <form onSubmit={submit} className="w-full min-w-0 space-y-2">
-      <textarea
-        ref={textareaRef}
-        rows={2}
-        className="wc-scrollbar block max-h-40 min-h-16 w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent p-0 outline-none [field-sizing:content]"
+      <ComposerInput
+        ref={editorRef}
+        scopeKey={runtimeId}
+        runtimeId={runtimeId}
+        className="wc-scrollbar block max-h-40 min-h-16 w-full min-w-0 overflow-y-auto border-0 bg-transparent p-0 outline-none"
         value={editor.draft}
         disabled={disabled || editor.submitting}
-        onChange={(event) => editor.setDraft(event.target.value)}
+        onChange={text => editor.setDraft(text)}
         onKeyDown={(event) => handleEditorKeyDown(event, editor.cancel, submit)}
         aria-label="编辑用户消息"
       />
@@ -220,11 +226,11 @@ function MessageEditor({
 }
 
 function handleEditorKeyDown(
-  event: KeyboardEvent<HTMLTextAreaElement>,
+  event: KeyboardEvent,
   cancel: () => void,
   submit: () => void,
 ): void {
-  if (event.nativeEvent.isComposing) return
+  if (event.isComposing) return
   if (event.key === 'Escape') {
     event.preventDefault()
     cancel()

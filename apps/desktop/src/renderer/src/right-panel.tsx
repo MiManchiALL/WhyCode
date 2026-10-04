@@ -17,6 +17,7 @@ import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 import { WorkspaceDirectories } from './workspace-directories.ts'
 import { BrowserPanel } from './browser-panel.tsx'
+import type { PathReference } from './path-reference.ts'
 
 interface RightPanelProps {
   remote?: boolean
@@ -39,6 +40,8 @@ interface RightPanelProps {
   onMoveTab: (tabId: string, targetId: string) => void
   terminalOpening: boolean
   onOpenTerminal: () => void
+  canReferencePath: boolean
+  onReferencePath: (runtimeId: string, reference: PathReference) => void
   workspacePosition?: WorkspaceBrowserPosition
   onWorkspacePositionChange: (position: WorkspaceBrowserPosition) => void
 }
@@ -136,6 +139,7 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
     case 'workspace':
       return props.active && props.workspacePath ? <WorkspaceBrowser
         key={`${props.runtimeId}:${props.workspacePath}`}
+        runtimeId={props.runtimeId} canReferencePath={props.canReferencePath} onReferencePath={props.onReferencePath}
         directories={props.directories} rootPath={props.workspacePath} expanded={page.expanded}
         position={props.workspacePosition} onPositionChange={props.onWorkspacePositionChange}
         onExpandedChange={expanded => props.onOpenPage({ ...page, expanded })}

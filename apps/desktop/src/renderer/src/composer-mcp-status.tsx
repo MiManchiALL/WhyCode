@@ -14,7 +14,7 @@ const CONNECTION_LABELS: Record<McpConnectionStatus['state'], string> = {
 
 export function ComposerMcpStatus({ runtimeId, composerRef, onClose }: {
   runtimeId: string
-  composerRef: RefObject<HTMLTextAreaElement | null>
+  composerRef: RefObject<{ focus: () => void } | null>
   onClose: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)

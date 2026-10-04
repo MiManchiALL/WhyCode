@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type Dispatch,
-  type KeyboardEvent,
   type MutableRefObject,
   type SetStateAction,
 } from 'react'
@@ -24,6 +23,7 @@ import {
   type SlashTrigger,
 } from './skill-trigger.ts'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
+import type { ComposerInputHandle } from './composer-input.tsx'
 
 const EMPTY_CATALOG: SkillCatalogSnapshot = {
   revision: '',
@@ -61,7 +61,7 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
   const [activeIndex, setActiveIndex] = useState(0)
   const selectedRef = useRef<SkillSummary[]>([])
   const refreshSequenceRef = useRef(0)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<ComposerInputHandle>(null)
 
   useEffect(() => {
     selectedRef.current = selected
@@ -192,10 +192,10 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     }
     setTrigger(null)
     requestAnimationFrame(() => {
-      const textarea = textareaRef.current
-      if (!textarea) return
-      textarea.focus()
-      textarea.setSelectionRange(replacement.cursor, replacement.cursor)
+      const editor = editorRef.current
+      if (!editor) return
+      editor.focus()
+      editor.setCursor(replacement.cursor)
     })
     if (item.kind === 'command') options.onCommand(item.command.id)
   }, [options.input, options.inputRef, options.onCommand, options.setInput, trigger])
@@ -220,8 +220,8 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     })
   }, [])
 
-  const handlePickerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing || !trigger) return false
+  const handlePickerKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.isComposing || !trigger) return false
     if (event.key === 'Escape') {
       event.preventDefault()
       setTrigger(null)
@@ -267,7 +267,7 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
     selectedIds,
     activeIndex,
     limitReached,
-    textareaRef,
+    editorRef,
     capture,
     clear,
     replace,

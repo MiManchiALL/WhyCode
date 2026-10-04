@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 @import 'katex/dist/katex.min.css';
 @import './conversation-typography.css';
+@import './composer-input.css';
 /* Streamdown 组件内部类名需要纳入 Tailwind 扫描 */
 @source '../../../node_modules/streamdown/dist/*.js';
 @source '../../../node_modules/@streamdown/cjk/dist/*.js';

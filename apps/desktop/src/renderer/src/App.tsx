@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ClipboardEvent,
   type CSSProperties,
 } from 'react'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
@@ -96,6 +95,7 @@ import {
   restoredPdfDrafts,
 } from './pdf-draft.ts'
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
+import { ComposerInput } from './composer-input.tsx'
 import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
 import {
   ComposerSubmissions,
@@ -347,7 +347,7 @@ export function App() {
     matches: composerMenuItems,
     activeIndex: skillActiveIndex,
     limitReached: skillLimitReached,
-    textareaRef: composerTextareaRef,
+    editorRef: composerInputRef,
     capture: captureSkills,
     clear: clearSkills,
     replace: replaceSkills,
@@ -1820,9 +1820,9 @@ export function App() {
       return next
     })
     requestAnimationFrame(() => {
-      composerTextareaRef.current?.focus()
+      composerInputRef.current?.focus()
     })
-  }, [composerTextareaRef])
+  }, [composerInputRef])
 
   const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
     setConnectionSettings(snapshot)
@@ -2087,7 +2087,8 @@ export function App() {
       && (btwMode ? selectedModel.imageInputMode === 'native' : selectedModel.imageInputMode !== 'none'),
   )
   const canAttachPdfs = Boolean(selectedModel?.available && !btwMode)
-  const pasteAttachments = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const pasteAttachments = useCallback((event: ClipboardEvent) => {
+    if (!event.clipboardData) return
     const imageFiles = collectPastedImageFiles(event.clipboardData)
     const pdfFiles = collectPastedPdfFiles(event.clipboardData)
     if (imageFiles.length === 0 && pdfFiles.length === 0) return
@@ -2379,7 +2380,7 @@ export function App() {
                       <ComposerMcpStatus
                         key={runtimeId}
                         runtimeId={runtimeId}
-                        composerRef={composerTextareaRef}
+                        composerRef={composerInputRef}
                         onClose={() => setShowMcpStatus(false)}
                       />
                     )}
@@ -2436,19 +2437,19 @@ export function App() {
                       </div>
                     )}
 
-                    <textarea
-                      ref={composerTextareaRef}
-                      rows={2}
-                      className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full resize-none overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none [field-sizing:content] placeholder:text-[var(--wc-faint)]"
+                    <ComposerInput
+                      ref={composerInputRef}
+                      scopeKey={resumingSessionId ?? runtimeId}
+                      runtimeId={runtimeId}
+                      className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
                       value={composerDraft.text}
-                      onChange={(event) => {
-                        const text = event.target.value
+                      onChange={(text, cursor) => {
                         setShowMcpStatus(false)
                         inputRef.current = text
                         setInput(text)
-                        updateSkillMenu(text, event.target.selectionStart)
+                        updateSkillMenu(text, cursor)
                       }}
-                      onSelect={(event) => updateSkillMenu(inputRef.current, event.currentTarget.selectionStart)}
+                      onSelect={cursor => updateSkillMenu(inputRef.current, cursor)}
                       onBlur={closeSkillMenu}
                       onPaste={pasteAttachments}
                       disabled={composerDisabled || resumingSessionId !== null}
@@ -2463,7 +2464,7 @@ export function App() {
                           key: event.key,
                           shiftKey: event.shiftKey,
                           ctrlKey: event.ctrlKey,
-                          isComposing: event.nativeEvent.isComposing,
+                          isComposing: event.isComposing,
                         })
                         if (action === 'ignore' || action === 'newline') return
                         event.preventDefault()
@@ -2614,6 +2615,16 @@ export function App() {
                 onMoveTab={(id, targetId) => updateRightPanelState(current => moveRightPanelTab(current, id, targetId))}
                 terminalOpening={terminalOpening}
                 onOpenTerminal={() => { void openRightPanelTerminal() }}
+                canReferencePath={!composerDisabled && resumingSessionId === null}
+                onReferencePath={(owner, reference) => {
+                  if (owner === runtimeIdRef.current && !composerDisabled && resumingSessionId === null) {
+                    if (panelFullscreen) setRightPanelFullscreen(false)
+                    composerInputRef.current?.appendReference(reference)
+                    if (panelFullscreen) requestAnimationFrame(() => {
+                      if (owner === runtimeIdRef.current) composerInputRef.current?.focus()
+                    })
+                  }
+                }}
                 workspacePosition={conversationPresentationsRef.current.get(panelSessionKey)?.workspacePosition}
                 onWorkspacePositionChange={position => {
                   const owner = rightPanelSessionStoreRef.current!.get(panelSessionKey)
