@@ -139,7 +139,9 @@ export class BrowserGuests {
     browser.setDevicePermissionHandler(() => false)
     browser.setDisplayMediaRequestHandler((_request, callback) => callback({}))
     browser.webRequest.onBeforeRequest((details, callback) => {
-      callback({ cancel: !browserRequestAllowed(details.url, this.applicationUrl) })
+      // 检查器首个请求早于 devToolsWebContents 可用；remote 是 Electron 的原生前端类型。
+      const inspector = details.webContents?.getType() === 'remote'
+      callback({ cancel: !browserRequestAllowed(details.url, this.applicationUrl, inspector) })
     })
     browser.on('will-download', (event, item, contents) => {
       const entry = [...this.leases].find(([, lease]) => lease.guest === contents)

@@ -43,6 +43,15 @@ it('guest 的 DOM 参数不能启用 Node、任意 preload 或关闭隔离', () 
   assert.equal(preferences.disablePopups, false)
 })
 
+it('开发者工具资源仅供所属网页的原生检查器读取，网页本身不能导航或请求', () => {
+  const url = 'devtools://devtools/bundled/devtools_app.html'
+  assert.equal(browserRequestAllowed(url), false)
+  assert.equal(browserNavigationAllowed(url), false)
+  assert.equal(browserRequestAllowed(url, undefined, true), true)
+  assert.equal(browserRequestAllowed('file:///C:/secret', undefined, true), false)
+  assert.equal(browserRequestAllowed('devtools://other/bundled/a', undefined, true), false)
+})
+
 it('浏览器快捷键覆盖导航、标签与缩放，输入法组合与网页常用编辑键保持原义', () => {
   assert.equal(browserShortcut({ key: 'l', control: true }), 'address')
   assert.equal(browserShortcut({ key: 'r', meta: true, shift: true }), 'reload-clean')

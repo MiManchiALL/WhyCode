@@ -114,7 +114,7 @@ it('隔离预览地址支持 HTML 相对资源、UTF-8 文件名、刷新版本�
   const response = await files.response(new Request(page.url))
   assert.equal(await response.text(), '<p>hello</p>')
   assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8')
-  assert.match(response.headers.get('content-security-policy')!, /sandbox allow-scripts;/)
+  assert.match(response.headers.get('content-security-policy')!, /sandbox allow-scripts allow-same-origin;/)
   assert.equal(response.headers.get('access-control-allow-origin'), '*')
   await mkdir(join(workspace, 'assets'))
   await writeFile(join(workspace, 'assets', 'app.js'), '123456789')
@@ -129,6 +129,21 @@ it('隔离预览地址支持 HTML 相对资源、UTF-8 文件名、刷新版本�
   assert.equal((await files.response(new Request(asset, { method: 'POST' }))).status, 405)
   const refreshed = await files.read(1, page.id)
   assert.equal(refreshed.kind === 'file' && refreshed.url !== page.url, true)
+})
+
+it('文件视图各有独立预览源，撤销一个地址不影响其它预览', async t => {
+  const { document, files } = await fixture(t)
+  const first = await document('first.html', '<p>first</p>')
+  const second = await document('second.html', '<p>second</p>')
+  assert.notEqual(new URL(first.url!).host, new URL(second.url!).host)
+  files.close(2, first.id)
+  assert.equal((await files.response(new Request(first.url!))).status, 200)
+  files.close(1, first.id)
+  files.close(1, first.id)
+  assert.equal((await files.response(new Request(first.url!))).status, 404)
+  assert.equal((await files.response(new Request(second.url!))).status, 200)
+  files.closeRuntime('a')
+  assert.equal((await files.response(new Request(second.url!))).status, 404)
 })
 
 it('目录不能越界；HTML 不能读取隐藏、非静态文件、路径转义或目录链接外的文件', async t => {

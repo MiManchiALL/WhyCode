@@ -2,6 +2,7 @@ import { IMAGE_MEDIA_TYPES, type DocumentFormat } from '@whycode/core/document-f
 export { documentFormat, type DocumentFormat } from '@whycode/core/document-formats'
 
 export const PREVIEW_SCHEME = 'whycode-preview'
+export const PREVIEW_SANDBOX = 'allow-scripts allow-same-origin'
 export const MAX_PREVIEW_VIEWS = 64
 export const DIRECTORY_PAGE_SIZE = 200
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024

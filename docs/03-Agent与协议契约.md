@@ -494,7 +494,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 - `workspaceFileChanged({id})` 只发给资源所属窗口；文件视图仅在正文或已读取依赖的版本改变时通知，目录视图按目录变化通知。`closeWorkspaceFile(id)` 幂等释放资源，`revealWorkspaceFile(id)` 在系统文件夹定位已打开的路径，`openWorkspaceFileExternally(id)` 用系统默认应用打开该路径并返回失败原因；两者只接受所属窗口的活动视图 ID，不接受 Renderer 提供的原始路径。视图 ID 与预览地址均不持久化。
 - `saveWorkspaceFile(id)` 只保存当前窗口的活动文件视图，由 Main 的系统保存对话框选择本机目标，取消返回 false。内容流式写入目标旁的排他暂存文件，完成且字节数符合读取前尺寸后才替换目标；关闭视图、传输失败或尺寸变化清理暂存并保留原目标。Renderer 不能直接提交任意本机写入路径。
 - `whycode-preview` 仅处理 GET/HEAD，支持单段字节范围。普通文本预览上限 2 MiB，文档与静态资源上限 64 MiB；不支持的类型只返回元数据。HTML 代码视图同样受文本上限约束。
-- 每次读取以真实路径检查资源范围；禁止目录链接逃逸、特殊文件、相关隐藏文件和非静态资源。HTML 使用独立 sandbox，预览脚本不能访问宿主 API。关闭视图后其地址失效，不能借旧地址继续读取文件。
+- 每次读取以真实路径检查资源范围；禁止目录链接逃逸、特殊文件、相关隐藏文件和非静态资源。HTML 使用独立源与 sandbox，预览脚本不能访问宿主 API。关闭视图后其地址失效，不能借旧地址继续读取文件；文档原生存储的隔离与释放见文档二 §12.5。
 - SSH 视图返回 `remote: true`，读取走绑定服务器的 SFTP；不注册本地文件监听，用户按需刷新。系统默认应用与文件夹定位对远端视图明确拒绝，Renderer 隐藏对应入口；本机历史检查点不受连接状态影响。
 
 上述操作不改变 Core 文件检查点、工具权限、JSONL 或模型请求。`checkpointFileChanges({runtimeId,checkpointIds})` 在所属会话的检查点目录中只读指定清单，返回路径与净增删行数，不返回正文；ID 来自已有 `checkpoint-created.hash`，不新增持久事件。`checkpointFilePreview` 接受 `runtimeId`、精确 `path` 以及互斥的 `toolUseId` 或非空 `checkpointIds`：前者读取单次工具快照，后者按检查点顺序返回该路径的首个 before 与最后一个 after，与改动清单的净统计同源，不读取当前磁盘版本。以上接口及仍按单次工具校验的 `checkpointFileCurrentMatch` 在会话记录恢复后即可使用，不要求先发言、切换模型或建立 Agent；运行时缺失或已释放时报告会话记录不可用。缺失、不完整或尚未完成的检查点显式报错，已回滚的完整快照仍可读取。

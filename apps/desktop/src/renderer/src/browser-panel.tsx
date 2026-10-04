@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, ExternalLink, Globe, MoreHorizontal, Plus, Minus, RotateCw, Search, X } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, ExternalLink, Globe, LoaderCircle, MoreHorizontal, Plus, Minus, RotateCw, Search, X } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { WebviewTag } from 'electron'
 import { browserShortcut, type BrowserShortcut } from '../../shared/browser.ts'
@@ -73,6 +73,9 @@ export function BrowserPanel({ page, active, onChange, onOpen, onClose }: Props)
         onClick={() => state.loading ? browser.run(view => view.stop()) : browser.reload()}>{state.loading ? <X size={15} /> : <RotateCw size={15} />}</button>
       <form className="mx-1 flex min-w-0 flex-1 items-center rounded-lg bg-black/[0.035] px-2 focus-within:ring-1 focus-within:ring-[var(--wc-line)]"
         onSubmit={event => { event.preventDefault(); browser.navigate(address); browser.element.current?.focus() }}>
+        <span className="mr-1.5 shrink-0 text-[var(--wc-faint)]" role="status" aria-label={state.loading ? '正在加载网页' : '网页'}>
+          {state.loading ? <LoaderCircle size={13} className="animate-spin motion-reduce:animate-none" /> : <Globe size={13} />}
+        </span>
         <input ref={addressRef} value={address} onChange={event => setAddress(event.target.value)} onFocus={event => event.target.select()}
           className="h-8 min-w-0 flex-1 bg-transparent text-xs text-[var(--wc-ink)] outline-none placeholder:text-[var(--wc-faint)]"
           aria-label="网址或搜索" placeholder="输入网址或搜索" spellCheck={false} autoCapitalize="off" autoCorrect="off"

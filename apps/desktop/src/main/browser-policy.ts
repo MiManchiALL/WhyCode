@@ -1,8 +1,9 @@
 import { isBrowserUrl } from '../shared/browser.ts'
 
-export function browserRequestAllowed(value: string, applicationUrl?: string): boolean {
+export function browserRequestAllowed(value: string, applicationUrl?: string, devTools = false): boolean {
   try {
     const url = new URL(value)
+    if (url.protocol === 'devtools:') return devTools && url.hostname === 'devtools' && url.pathname.startsWith('/bundled/')
     if (['about:', 'data:', 'blob:'].includes(url.protocol)) return true
     if (!['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) || url.username || url.password) return false
     if (!applicationUrl) return true

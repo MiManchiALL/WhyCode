@@ -8,7 +8,7 @@ import { basename, dirname, join } from 'node:path'
 import { WorkspaceFileWatch } from './workspace-file-watch.ts'
 import {
   DIRECTORY_PAGE_SIZE, MAX_DOCUMENT_PREVIEW_BYTES, MAX_PREVIEW_VIEWS,
-  MAX_TEXT_PREVIEW_BYTES, PREVIEW_SCHEME, documentFormat, previewMediaType,
+  MAX_TEXT_PREVIEW_BYTES, PREVIEW_SCHEME, PREVIEW_SANDBOX, documentFormat, previewMediaType,
   type OpenWorkspaceFileRequest, type WorkspaceFileView,
 } from '../shared/workspace-files.ts'
 
@@ -133,7 +133,7 @@ export class WorkspaceFiles {
         'Content-Type': mediaType + (/(?:^text\/|json$)/u.test(mediaType) ? '; charset=utf-8' : ''),
         'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
         'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes',
-        'Content-Security-Policy': "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' whycode-preview: https: blob:; style-src 'unsafe-inline' whycode-preview: https:; img-src whycode-preview: https: data: blob:; font-src whycode-preview: https: data:; connect-src whycode-preview: https:; base-uri 'none'; form-action 'none'",
+        'Content-Security-Policy': `sandbox ${PREVIEW_SANDBOX}; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' whycode-preview: https: blob:; style-src 'unsafe-inline' whycode-preview: https:; img-src whycode-preview: https: data: blob:; font-src whycode-preview: https: data:; connect-src whycode-preview: https:; base-uri 'none'; form-action 'none'`,
       })
       const range = byteRange(request.headers.get('Range'), info.size)
       if (!range) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${info.size}` } })

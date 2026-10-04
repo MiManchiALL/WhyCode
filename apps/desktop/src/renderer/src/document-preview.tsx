@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FolderOpen, RefreshCw, WrapText } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
-import { MAX_TEXT_PREVIEW_BYTES } from '../../shared/workspace-files.ts'
+import { MAX_TEXT_PREVIEW_BYTES, PREVIEW_SANDBOX } from '../../shared/workspace-files.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { FilePreviewActions, FilePreviewMessage, FilePreviewToolbar, type FilePreviewAction } from './file-preview-controls.tsx'
 import { useWorkspaceFile } from './use-workspace-file.ts'
@@ -64,8 +64,9 @@ function DocumentBody({ document, code, wrap, onOpenExternally }: {
     </div>
   </FilePreviewMessage>
   if (code || document.format === 'markdown') return <TextDocument key={document.url} url={document.url} path={document.path} markdown={!code} wrap={wrap} />
+  // credentialless 让原生存储仅存于临时上下文，不为每个预览源留下持久数据。
   if (document.format === 'html') return (
-    <iframe key={document.url} src={document.url} sandbox="allow-scripts" title={document.name}
+    <iframe key={document.url} {...{ credentialless: true }} src={document.url} sandbox={PREVIEW_SANDBOX} title={document.name}
       className="min-h-0 w-full flex-1 border-0 bg-white" data-html-preview />
   )
   if (document.format === 'image') return <ImageDocument key={document.url} url={document.url} name={document.name} />

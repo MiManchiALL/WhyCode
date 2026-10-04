@@ -24,7 +24,7 @@ export function useBrowserPage(props: Props) {
   const ready = useRef(false)
   const [started, setStarted] = useState(props.active)
   const [lease, setLease] = useState<BrowserLease | null>(null)
-  const [state, setState] = useState<BrowserPageState>({ url: props.url, title: '', loading: false,
+  const [state, setState] = useState<BrowserPageState>({ url: props.url, title: '', loading: props.url !== 'about:blank',
     ready: false, back: false, forward: false, error: null, zoom: 1, match: null })
   useEffect(() => { if (props.active) setStarted(true) }, [props.active])
   useEffect(() => {
@@ -40,7 +40,7 @@ export function useBrowserPage(props: Props) {
     void window.whycode.acquireBrowser().then(value => {
       if (cancelled) { window.whycode.releaseBrowser(value.id); return }
       current = value; setLease(value)
-    }).catch(error => { if (!cancelled) setState(value => ({ ...value, error: String(error) })) })
+    }).catch(error => { if (!cancelled) setState(value => ({ ...value, loading: false, error: String(error) })) })
     return () => { cancelled = true; ready.current = false; if (current) window.whycode.releaseBrowser(current.id) }
   }, [started])
 
@@ -55,19 +55,26 @@ export function useBrowserPage(props: Props) {
       webview.addEventListener(name, handler)
       removers.push(() => webview.removeEventListener(name, handler))
     }
-    const update = () => {
+    const update = (committed = false) => {
       if (closed || !ready.current) return
       const rawUrl = webview.getURL()
-      if (firstDocument && isBrowserUrl(rawUrl)) {
+      const bootstrap = rawUrl.startsWith('about:blank#')
+      if (committed && firstDocument && isBrowserUrl(rawUrl)) {
         // 租约空白页只负责启动 guest，不属于用户的浏览历史。
         webview.clearHistory()
         firstDocument = false
       }
-      const url = rawUrl.startsWith('about:blank#') ? 'about:blank' : rawUrl
-      const title = url === 'about:blank' ? '' : webview.getTitle().slice(0, 256)
-      setState(value => ({ ...value, url, title, ready: true, back: webview.canGoBack(),
-        forward: webview.canGoForward(), zoom: webview.getZoomFactor() }))
-      if (!rawUrl.startsWith('about:blank#')) callbacks.current.onNavigate(url, title)
+      const title = rawUrl === 'about:blank' ? '' : webview.getTitle().slice(0, 256)
+      const progress = { ready: true, loading: webview.isLoading(), back: webview.canGoBack(),
+        forward: webview.canGoForward(), zoom: webview.getZoomFactor() }
+      // 初始化空白页不覆盖目标；导航结束后用真实地址收尾，下载或取消也回到当前页。
+      setState(value => {
+        const settled = committed || (!progress.loading && !value.error)
+        return { ...value, ...progress,
+          url: !bootstrap && settled ? rawUrl : value.url,
+          title: !bootstrap && (settled || value.url === rawUrl) ? title : value.title }
+      })
+      if (!bootstrap && (committed || callbacks.current.url === rawUrl)) callbacks.current.onNavigate(rawUrl, title)
     }
     listen('dom-ready', () => {
       ready.current = true
@@ -77,11 +84,16 @@ export function useBrowserPage(props: Props) {
       if (initialUrl.current !== 'about:blank') navigate(initialUrl.current)
     })
     listen('did-start-loading', () => setState(value => ({ ...value, loading: true })))
-    listen('did-stop-loading', () => { setState(value => ({ ...value, loading: false })); update() })
+    listen('did-stop-loading', () => update())
     listen('did-start-navigation', event => {
-      if ((event as Event & { isMainFrame: boolean }).isMainFrame) setState(value => ({ ...value, error: null }))
+      const navigation = event as Event & { isMainFrame: boolean; url: string }
+      if (navigation.isMainFrame && !navigation.url.startsWith('about:blank#')) {
+        setState(value => ({ ...value, url: navigation.url, loading: true, error: null, match: null }))
+      }
     })
-    for (const name of ['did-navigate', 'did-navigate-in-page', 'page-title-updated']) listen(name, update)
+    listen('did-navigate', () => update(true))
+    listen('did-navigate-in-page', event => { if ((event as Event & { isMainFrame: boolean }).isMainFrame) update(true) })
+    listen('page-title-updated', () => update())
     listen('did-fail-load', event => {
       const failure = event as Event & { isMainFrame: boolean; errorCode: number; errorDescription: string; validatedURL: string }
       if (!failure.isMainFrame || failure.errorCode === -3) return
