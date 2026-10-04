@@ -437,7 +437,7 @@ export class TaskPlanController {
     const current = plan.items.find((item) => item.status === 'in_progress')
     const progress = `${message}；进度 ${done}/${plan.items.length}。`
     if (current) {
-      return `${progress}当前进行中：${current.id}「${current.outcome}」，无需重复设置 in_progress。`
+      return `${progress}当前进行中：${current.id}「${current.outcome}」。`
     }
     return progress + (done === plan.items.length
       ? '全部里程碑已完成。'

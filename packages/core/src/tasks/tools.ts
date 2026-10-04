@@ -101,7 +101,7 @@ export function createTaskPlanTools(
       name: CREATE_TASK_PLAN_TOOL_NAME,
       description: '为复杂目标建立宏观任务计划',
       prompt:
-        '先定向扫描关键文件形成整体认知，再创建 3～7 个结果导向里程碑；不写详细步骤，最后一项必须是唯一 verification。创建时首项自动进入 in_progress，其余为 pending；按结果中的当前项开始执行，无需重复设置状态。本工具独占模型步骤。',
+        '先定向扫描关键文件形成整体认知，再创建 3～7 个结果导向里程碑；不写详细步骤，最后一项必须是唯一 verification。创建时首项自动进入 in_progress，其余为 pending；按结果中的当前项开始执行。本工具独占模型步骤。',
       inputSchema: z.object({
         goal: z.string().min(1).describe('整个任务最终要达到的可验证结果'),
         items: z.array(draftSchema).min(3).max(7).describe('3～7 个宏观里程碑'),
@@ -139,7 +139,7 @@ export function createTaskPlanTools(
       name: UPDATE_TASK_ITEM_TOOL_NAME,
       description: '原子调整活动计划并推进任务项状态',
       prompt:
-        '用 changes 原子增删改排当前或未来里程碑；用顶层 item_id/status 设置目标状态，该操作幂等。当前项达到 outcome 后附真实 evidence 设为 completed，会按本次调整后的计划顺序自动启动首个 pending 项；按结果中的当前项继续，无需重复设置 in_progress。删除当前项不会自动推进；没有进行中项时才需显式设置 in_progress。禁止重复 outcome，已完成项不可修改。',
+        '用 changes 原子增删改排当前或未来里程碑；用顶层 item_id/status 设置目标状态，该操作幂等。当前项达到 outcome 后附真实 evidence 设为 completed，会按本次调整后的计划顺序自动启动首个 pending 项；按结果中的当前项继续。删除当前项不会自动推进；没有进行中项时才需显式设置 in_progress。禁止重复 outcome，已完成项不可修改。',
       inputSchema: updateInputSchema,
       isReadOnly: false,
       kind: 'control',

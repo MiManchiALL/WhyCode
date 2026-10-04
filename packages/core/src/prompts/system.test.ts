@@ -184,7 +184,6 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /不写或输出详细子步骤/)
     assert.match(prompt, /创建时首项自动进入 in_progress/)
     assert.match(prompt, /完成当前项后.*自动启动首个 pending 项/)
-    assert.match(prompt, /无需重复设置 in_progress/)
     assert.match(prompt, /删除当前项不会自动推进/)
     assert.match(prompt, /原子增删改排当前或未来项/)
     assert.match(prompt, /独立新目标在后续步骤重新扫描后 Create/)

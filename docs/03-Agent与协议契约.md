@@ -413,7 +413,7 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 自动推进只发生在创建或首次成功完成当前项时；重复完成不再次推进，相同状态与证据的幂等重放不增加 revision/version。结构与状态校验失败不提交任何变化；删除当前项不自动启动其它项。最终 verification 自动启动后仍需实际验证和完成证据，全部项完成后不再启动新项。
 
-每个计划工具结果先返回 `<whycode-task-result schema-version="1">`，再返回最新 `<whycode-task-state schema-version="1">`。创建和更新成功的 message 给出当前项 ID、结果描述和无需重复设置状态的提示；没有进行中项时明确全部完成或需显式启动下一项。非法转换返回结构化错误和当前状态。
+每个计划工具结果先返回 `<whycode-task-result schema-version="1">`，再返回最新 `<whycode-task-state schema-version="1">`。创建和更新成功的 message 给出当前项 ID 和结果描述；没有进行中项时明确全部完成或需显式启动下一项。非法转换返回结构化错误和当前状态。
 
 正常 engaged run 的完整无工具最终正文在同一稳定 step 自动清空 active plan；全部项完成记 completed，否则 ended。用户 Stop、必要 `AskUserQuestion`、明确暂缓或等待后台/子代理终态时保留。自然最终回答是唯一交付总结，Close 不传灰色总结文字。
 
