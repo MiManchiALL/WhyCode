@@ -36,8 +36,8 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
     { label: '刷新文件', title: file.changed ? '文件已更新，点击刷新' : '刷新文件', icon: RefreshCw,
       disabled: file.loading, marked: file.changed, run: () => { void file.refresh() } },
     ...(!document?.remote ? [{ label: '在文件夹中显示', icon: FolderOpen, disabled: !document, run: file.reveal }] : []),
-    { label: '保存到本机', icon: Download, disabled: !document || save.pending, pending: save.pending,
-      run: () => { void save.run('save') } },
+    ...(document?.remote ? [{ label: '保存到本机', icon: Download, disabled: save.pending, pending: save.pending,
+      run: () => { void save.run('save') } }] : []),
   ]
   return <div className="flex min-h-0 flex-1 flex-col">
     <FilePreviewToolbar path={document?.path ?? page.path}>
@@ -85,7 +85,7 @@ function TextDocument({ url, path, markdown, wrap }: { url: string; path: string
       if (!response.ok) throw new Error('文件已移动或无法读取，请刷新后重试')
       if (Number(response.headers.get('Content-Length')) > MAX_TEXT_PREVIEW_BYTES) {
         await response.body?.cancel()
-        throw new Error('文件超过 2 MiB，无法显示代码，可保存到本机后查看')
+        throw new Error('文件超过 2 MiB，无法显示代码')
       }
       const content = await response.text()
       if (!abort.signal.aborted) setText(content)

@@ -60,7 +60,7 @@ function PresentedFileCard({ file, runtimeId, remote, onOpenFile }: {
             <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('open')}><ExternalLink size={14} />用默认应用打开</DropdownMenu.Item>
             <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('reveal')}><FolderOpen size={14} />在文件夹中显示</DropdownMenu.Item>
           </>}
-          <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('save')}><Download size={14} />保存到本机</DropdownMenu.Item>
+          {remote && <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('save')}><Download size={14} />保存到本机</DropdownMenu.Item>}
           <DropdownMenu.Item className="wc-menu-item" onSelect={() => void navigator.clipboard.writeText(file.path).catch(() => undefined)}><Copy size={14} />复制路径</DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
