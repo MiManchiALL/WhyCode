@@ -134,7 +134,8 @@ export class RightPanelSessionStore {
     try {
       this.storage.setItem(STORAGE_KEY, JSON.stringify(
         [...this.states].map(([key, state]) => {
-          const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal')
+          const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal'
+            && !(tab.page.kind === 'browser' && tab.page.url.startsWith('data:')))
           return {
             key, open: state.open, tabs, inspectorView: state.inspectorView,
             activeTabId: tabs.some((tab) => tab.id === state.activeTabId)

@@ -550,6 +550,8 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 共享契约位于 `shared/browser.ts`。`acquireBrowser()` 仅允许所属窗口的主 Frame，返回一次性 `{id,partition}`；`releaseBrowser(id)` 幂等释放该窗口持有的租约。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载，也不能跨窗口使用；窗口重载、崩溃或关闭撤销全部租约。
 
+`prepareBrowserFile(id,url)` 仅由所属窗口的主 Frame 为已挂载的 guest 准备本机 file 地址，返回该 guest 获准加载的内部地址；不接受远端共享、网络地址或调用者构造的内部协议。网页资源请求继续校验租约归属、发起页面和目录范围；Renderer 只将公开 file 地址投影到地址栏与标签记录，不读取本机文件内容。标签释放后撤销全部目录授权，迟到准备结果不能触发已关闭或已变更目标的导航。
+
 `browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；网页导航、站点存储与用户交互不进入 CoreCommand、JSONL 或模型上下文。UI、网络限制和资源生命周期见文档二 §12.6。
 
 ## 8. 推理与模型选择

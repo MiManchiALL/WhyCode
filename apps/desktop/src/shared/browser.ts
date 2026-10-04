@@ -1,5 +1,7 @@
 export const BROWSER_PARTITION = 'persist:whycode-browser'
 export const MAX_BROWSER_GUESTS = 12
+export const BROWSER_FILE_SCHEME = 'whycode-browser-file'
+export const MAX_BROWSER_DATA_URL_LENGTH = 1024 * 1024
 
 export interface BrowserLease { id: string; partition: string }
 export type BrowserShortcut = 'address' | 'find' | 'reload' | 'reload-clean' | 'back' | 'forward'
@@ -11,12 +13,22 @@ export type BrowserEventPayload =
 export type BrowserEvent = { id: string } & BrowserEventPayload
 
 export function browserAddress(input: string): string {
-  const text = input.trim()
+  let text = input.trim()
   if (!text || text === 'about:blank') return 'about:blank'
-  if (text.length > 8192) throw new Error('网址过长')
+  const path = text.startsWith('"') && text.endsWith('"') ? text.slice(1, -1) : text
+  if (/^(?:\\\\|\/\/)/u.test(path)) throw new Error('暂不支持网络共享路径')
+  if (/^[a-z]:[\\/]/iu.test(path) || /^\/(?!\/)/u.test(path)) {
+    const url = new URL('file:///')
+    url.pathname = path.replaceAll('\\', '/').replaceAll('%', '%25')
+    text = url.href
+  }
+  const limit = /^data:/iu.test(text) ? MAX_BROWSER_DATA_URL_LENGTH : 8192
+  if (text.length > limit) throw new Error('地址内容过长，请改为打开文件')
   if (/^[a-z][a-z\d+.-]*:/iu.test(text) && !/^[^\s/:]+:\d+(?:\/|$)/u.test(text)) {
-    if (!isBrowserUrl(text)) throw new Error('内置浏览器仅支持 HTTP 和 HTTPS 网址')
-    return new URL(text).href
+    if (!isBrowserUrl(text)) throw new Error('支持 HTTP、HTTPS、本机 file:、data: 和 about:blank 地址')
+    const url = new URL(text).href
+    if (url.length > limit) throw new Error('地址内容过长，请改为打开文件')
+    return url
   }
   if (!/\s/u.test(text) && /^(?:localhost|\[[\da-f:]+\]|[^/]+[.:][^/]*)(?:\/|$)/iu.test(text)) {
     const local = /^(?:localhost|127\.|\[::1\]|[^/]+:\d+(?:\/|$))/iu.test(text)
@@ -28,11 +40,27 @@ export function browserAddress(input: string): string {
 }
 
 export function isBrowserUrl(value: string): boolean {
+  if (value.length > MAX_BROWSER_DATA_URL_LENGTH) return false
   try {
     const url = new URL(value)
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
-      && value.length <= 8192 && !/[\u0000-\u0020\\]/u.test(value)
+    if (url.username || url.password || /[\u0000-\u001f\u007f]/u.test(value)) return false
+    if (url.protocol === 'data:') return url.pathname.includes(',')
+    if (value.length > 8192) return false
+    if (url.protocol === 'about:') return url.pathname === 'blank' && !url.search
+    if (url.protocol === 'file:') return !url.hostname && !url.pathname.startsWith('//')
+    return ['http:', 'https:'].includes(url.protocol) && !/[\u0020\\]/u.test(value)
   } catch { return false }
+}
+
+/** 本地页面实际使用隔离 origin，地址栏与标签记录仍保留用户的文件地址。 */
+export function browserDisplayUrl(value: string): string {
+  if (!value.startsWith(`${BROWSER_FILE_SCHEME}:`)) return value
+  const url = new URL(value)
+  return `file://${url.pathname}${url.search}${url.hash}`
+}
+
+export function isExternalBrowserUrl(value: string): boolean {
+  return /^https?:/u.test(value) && isBrowserUrl(value)
 }
 
 export function browserShortcut(input: {

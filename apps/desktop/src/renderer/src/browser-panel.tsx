@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, ExternalLink, Globe, LoaderCircle, MoreHorizontal, Plus, Minus, RotateCw, Search, X } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { WebviewTag } from 'electron'
-import { browserShortcut, type BrowserShortcut } from '../../shared/browser.ts'
+import { browserShortcut, isExternalBrowserUrl, type BrowserShortcut } from '../../shared/browser.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { useBrowserPage } from './use-browser-page.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
@@ -87,7 +87,7 @@ export function BrowserPanel({ page, active, onChange, onOpen, onClose }: Props)
           <DropdownMenu.Item className="wc-menu-item" onSelect={() => onOpen('about:blank')}><Plus size={14} />新标签页</DropdownMenu.Item>
           <DropdownMenu.Item className="wc-menu-item" disabled={!state.ready} onSelect={() => shortcut('find')}><Search size={14} />在页面中查找</DropdownMenu.Item>
           <DropdownMenu.Item className="wc-menu-item" disabled={state.url === 'about:blank'} onSelect={copy}><Copy size={14} />复制网址</DropdownMenu.Item>
-          <DropdownMenu.Item className="wc-menu-item" disabled={!state.ready || state.url === 'about:blank'} onSelect={browser.external}><ExternalLink size={14} />在系统浏览器中打开</DropdownMenu.Item>
+          <DropdownMenu.Item className="wc-menu-item" disabled={!state.ready || !isExternalBrowserUrl(state.url)} onSelect={browser.external}><ExternalLink size={14} />在系统浏览器中打开</DropdownMenu.Item>
           <DropdownMenu.Separator className="wc-menu-separator" />
           <div className="flex items-center gap-2 px-2 py-1 text-xs text-[var(--wc-muted)]" aria-label="网页缩放">
             <span className="mr-auto">缩放</span>

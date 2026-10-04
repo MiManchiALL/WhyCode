@@ -10,9 +10,10 @@ export function samePath(left: string, right: string): boolean {
 }
 
 export function directoriesOverlap(left: string, right: string): boolean {
-  const contains = (parent: string, child: string) => {
-    const suffix = relative(pathKey(parent), pathKey(child))
-    return suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix)
-  }
-  return contains(left, right) || contains(right, left)
+  return containsPath(left, right) || containsPath(right, left)
+}
+
+export function containsPath(parent: string, child: string): boolean {
+  const suffix = relative(pathKey(parent), pathKey(child))
+  return suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix)
 }

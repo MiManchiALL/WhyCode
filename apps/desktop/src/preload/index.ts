@@ -246,6 +246,7 @@ const api = {
   openWorkspaceFile: (request: OpenWorkspaceFileRequest): Promise<WorkspaceFileResult> =>
     ipcRenderer.invoke(IPC.openWorkspaceFile, request),
   acquireBrowser: (): Promise<BrowserLease> => ipcRenderer.invoke(IPC.acquireBrowser),
+  prepareBrowserFile: (id: string, url: string): Promise<string> => ipcRenderer.invoke(IPC.prepareBrowserFile, id, url),
   releaseBrowser: (id: string): void => ipcRenderer.send(IPC.releaseBrowser, id),
   openBrowserExternally: (id: string): Promise<void> => ipcRenderer.invoke(IPC.openBrowserExternally, id),
   onBrowserEvent: (callback: (event: BrowserEvent) => void): (() => void) => {

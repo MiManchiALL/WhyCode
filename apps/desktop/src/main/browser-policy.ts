@@ -15,8 +15,7 @@ export function browserRequestAllowed(value: string, applicationUrl?: string, de
 }
 
 export function browserNavigationAllowed(value: string, applicationUrl?: string): boolean {
-  return (value === 'about:blank' || value.startsWith('about:blank#') || isBrowserUrl(value))
-    && browserRequestAllowed(value, applicationUrl)
+  return isBrowserUrl(value) && browserRequestAllowed(value, applicationUrl)
 }
 
 /** 挂载参数来自 DOM；只保留原生弹窗派发标记，其余权限由宿主固定。 */

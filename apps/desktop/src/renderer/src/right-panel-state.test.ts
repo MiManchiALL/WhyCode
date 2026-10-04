@@ -69,6 +69,19 @@ describe('右侧栏会话配置', () => {
     assert.equal(canAddRightPanelTab(state), true)
     assert.equal(openRightPanelPage(state, file).tabs.length, MAX_RIGHT_PANEL_TABS)
   })
+  it('data 临时页保留进程内切换状态，磁盘只恢复普通网址与本机文件', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    const local = { kind: 'browser' as const, id: 'file', url: 'file:///C:/demo/index.html', title: 'Local' }
+    const inline = { kind: 'browser' as const, id: 'data', url: 'data:text/html,<h1>Temporary</h1>', title: 'Inline' }
+    const state = openRightPanelPage(openRightPanelPage(emptyState(), local), inline)
+    store.set('conversation', state)
+    assert.deepEqual(store.get('conversation'), state)
+    assert.equal([...storage.values.values()].some(value => value.includes('Temporary')), false)
+    const restored = new RightPanelSessionStore(storage).get('conversation')
+    assert.deepEqual(restored.tabs.map(tab => tab.page), [local])
+    assert.equal(restored.activeTabId, 'browser:file')
+  })
   it('改动卡片与逐文件入口复用一个标签，打开当前文件后能保留并返回原差异列表', () => {
     const overview: Extract<RightPanelPage, { kind: 'changes' }> = {
       kind: 'changes', checkpointIds: ['checkpoint-a', 'checkpoint-b'],

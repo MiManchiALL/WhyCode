@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, clipboard, ipcMain, Menu, session, shell, type WebContents } from 'electron'
-import { BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserShortcut, type BrowserEvent, type BrowserEventPayload, type BrowserLease } from '../shared/browser.ts'
+import { BrowserWindow, clipboard, ipcMain, Menu, net, session, shell, type WebContents } from 'electron'
+import { pathToFileURL } from 'node:url'
+import { BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserShortcut, isExternalBrowserUrl, type BrowserEvent, type BrowserEventPayload, type BrowserLease } from '../shared/browser.ts'
 import { IPC } from '../shared/ipc.ts'
 import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowed } from './browser-policy.ts'
+import { BrowserFiles } from './browser-files.ts'
 
 interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents }
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
 export class BrowserGuests {
   private readonly leases = new Map<string, GuestLease>()
+  private readonly files = new BrowserFiles()
   private readonly applicationUrl: string | undefined
 
   constructor(applicationUrl?: string) { this.applicationUrl = applicationUrl }
@@ -26,6 +29,7 @@ export class BrowserGuests {
     const lease = this.leases.get(id)
     if (!lease || lease.owner !== owner) return
     this.leases.delete(id)
+    this.files.release(id)
     if (lease.guest && !lease.guest.isDestroyed()) lease.guest.close({ waitForBeforeUnload: false })
   }
 
@@ -35,6 +39,13 @@ export class BrowserGuests {
       this.requireOwner(event)
       return this.acquire(event.sender)
     })
+    ipcMain.handle(IPC.prepareBrowserFile, (event, id: unknown, url: unknown) => {
+      this.requireOwner(event)
+      const lease = typeof id === 'string' ? this.leases.get(id) : undefined
+      if (typeof id !== 'string' || typeof url !== 'string' || lease?.owner !== event.sender
+        || !lease.guest || lease.guest.isDestroyed()) throw new Error('浏览器标签已关闭')
+      return this.files.open(id, url)
+    })
     ipcMain.on(IPC.releaseBrowser, (event, id: unknown) => {
       if (event.senderFrame === event.sender.mainFrame && typeof id === 'string') this.release(event.sender, id)
     })
@@ -43,7 +54,7 @@ export class BrowserGuests {
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (lease?.owner !== event.sender || !lease.guest || lease.guest.isDestroyed()) throw new Error('浏览器标签已关闭')
       const url = lease.guest.getURL()
-      if (url === 'about:blank' || !browserNavigationAllowed(url, this.applicationUrl)) throw new Error('当前页面没有可打开的网址')
+      if (!isExternalBrowserUrl(url) || !browserNavigationAllowed(url, this.applicationUrl)) throw new Error('当前页面没有可在系统浏览器中打开的网址')
       await shell.openExternal(url)
     })
   }
@@ -81,10 +92,11 @@ export class BrowserGuests {
         guest.close({ waitForBeforeUnload: false }); return
       }
       id = key; lease.guest = guest
-      guest.once('destroyed', () => { this.leases.delete(key) })
+      guest.once('destroyed', () => { this.leases.delete(key); this.files.release(key) })
     })
+    const allowed = (url: string) => browserNavigationAllowed(url, this.applicationUrl) || (!!id && this.files.allows(id, url))
     const open = (url: string) => {
-      if (browserNavigationAllowed(url, this.applicationUrl)) send({ type: 'open', url })
+      if (allowed(url)) send({ type: 'open', url: browserDisplayUrl(url) })
     }
     guest.setWindowOpenHandler(({ url, postBody }) => {
       if (!postBody) open(url)
@@ -92,10 +104,10 @@ export class BrowserGuests {
       return { action: 'deny' }
     })
     guest.on('will-frame-navigate', event => {
-      if (event.isMainFrame && !browserNavigationAllowed(event.url, this.applicationUrl)) event.preventDefault()
+      if (event.isMainFrame && !allowed(event.url)) event.preventDefault()
     })
     guest.on('will-redirect', (event, url, _inPlace, mainFrame) => {
-      if (mainFrame && !browserNavigationAllowed(url, this.applicationUrl)) event.preventDefault()
+      if (mainFrame && !allowed(url)) event.preventDefault()
     })
     guest.on('will-attach-webview', event => event.preventDefault())
     guest.on('before-input-event', (event, input) => {
@@ -108,9 +120,9 @@ export class BrowserGuests {
     })
     guest.on('context-menu', (_event, params) => {
       const items: Electron.MenuItemConstructorOptions[] = []
-      if (params.linkURL && browserNavigationAllowed(params.linkURL, this.applicationUrl)) {
+      if (params.linkURL && allowed(params.linkURL)) {
         items.push({ label: '在新标签页中打开链接', click: () => open(params.linkURL) },
-          { label: '复制链接地址', click: () => clipboard.writeText(params.linkURL) })
+          { label: '复制链接地址', click: () => clipboard.writeText(browserDisplayUrl(params.linkURL)) })
       }
       if (params.mediaType === 'image' && params.hasImageContents) {
         items.push({ label: '复制图片', click: () => guest.copyImageAt(params.x, params.y) },
@@ -127,6 +139,18 @@ export class BrowserGuests {
 
   private configureSession(): void {
     const browser = session.fromPartition(BROWSER_PARTITION)
+    browser.protocol.handle(BROWSER_FILE_SCHEME, async request => {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 })
+      try {
+        const path = await this.files.resolve(request.url)
+        const response = await net.fetch(pathToFileURL(path).href, {
+          method: request.method, headers: request.headers, signal: request.signal,
+        })
+        const headers = new Headers(response.headers)
+        headers.set('Cache-Control', 'no-store')
+        return new Response(response.body, { status: response.status, headers })
+      } catch { return new Response('文件不存在或无法读取', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }) }
+    })
     browser.setPermissionCheckHandler((_contents, permission) => permission === 'fullscreen')
     browser.setPermissionRequestHandler((contents, permission, callback) => {
       callback(permission === 'fullscreen')
@@ -141,7 +165,12 @@ export class BrowserGuests {
     browser.webRequest.onBeforeRequest((details, callback) => {
       // 检查器首个请求早于 devToolsWebContents 可用；remote 是 Electron 的原生前端类型。
       const inspector = details.webContents?.getType() === 'remote'
-      callback({ cancel: !browserRequestAllowed(details.url, this.applicationUrl, inspector) })
+      const entry = [...this.leases].find(([, lease]) => lease.guest === details.webContents)
+      const source = (details.resourceType === 'subFrame' ? details.frame?.parent?.url : details.frame?.url)
+        ?? details.webContents?.getURL() ?? ''
+      const local = !!entry && this.files.allows(entry[0], details.url)
+        && (details.resourceType === 'mainFrame' || this.files.allows(entry[0], source))
+      callback({ cancel: !local && !browserRequestAllowed(details.url, this.applicationUrl, inspector) })
     })
     browser.on('will-download', (event, item, contents) => {
       const entry = [...this.leases].find(([, lease]) => lease.guest === contents)

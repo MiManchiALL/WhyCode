@@ -1,6 +1,7 @@
 import { protocol } from 'electron'
 import { PREVIEW_SCHEME } from '../shared/workspace-files.ts'
 import { SITE_ICON_SCHEME } from '../shared/site-icon.ts'
+import { BROWSER_FILE_SCHEME } from '../shared/browser.ts'
 import { readStoredImage } from '@whycode/core'
 
 const ATTACHMENT_SCHEME = 'whycode-attachment'
@@ -12,6 +13,9 @@ export function registerFileSchemes(): void {
     privileges: { standard: true, secure: true, supportFetchAPI: true },
   }, {
     scheme: PREVIEW_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+  }, {
+    scheme: BROWSER_FILE_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
   }, {
     scheme: SITE_ICON_SCHEME,

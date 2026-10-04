@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
-import { browserAddress, isBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
+import { browserAddress, browserDisplayUrl, isBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 
 export interface BrowserPageState {
@@ -22,6 +22,7 @@ export function useBrowserPage(props: Props) {
   const initialUrl = useRef(props.url)
   const element = useRef<WebviewTag | null>(null)
   const ready = useRef(false)
+  const navigation = useRef(0)
   const [started, setStarted] = useState(props.active)
   const [lease, setLease] = useState<BrowserLease | null>(null)
   const [state, setState] = useState<BrowserPageState>({ url: props.url, title: '', loading: props.url !== 'about:blank',
@@ -41,7 +42,7 @@ export function useBrowserPage(props: Props) {
       if (cancelled) { window.whycode.releaseBrowser(value.id); return }
       current = value; setLease(value)
     }).catch(error => { if (!cancelled) setState(value => ({ ...value, loading: false, error: String(error) })) })
-    return () => { cancelled = true; ready.current = false; if (current) window.whycode.releaseBrowser(current.id) }
+    return () => { cancelled = true; ready.current = false; navigation.current++; if (current) window.whycode.releaseBrowser(current.id) }
   }, [started])
 
   useEffect(() => {
@@ -57,14 +58,15 @@ export function useBrowserPage(props: Props) {
     }
     const update = (committed = false) => {
       if (closed || !ready.current) return
-      const rawUrl = webview.getURL()
-      const bootstrap = rawUrl.startsWith('about:blank#')
+      const rawUrl = browserDisplayUrl(webview.getURL())
+      const bootstrap = rawUrl === `about:blank#${lease.id}`
       if (committed && firstDocument && isBrowserUrl(rawUrl)) {
         // 租约空白页只负责启动 guest，不属于用户的浏览历史。
         webview.clearHistory()
         firstDocument = false
       }
-      const title = rawUrl === 'about:blank' ? '' : webview.getTitle().slice(0, 256)
+      const pageTitle = webview.getTitle()
+      const title = rawUrl === 'about:blank' ? '' : (pageTitle === webview.getURL() ? rawUrl : pageTitle).slice(0, 256)
       const progress = { ready: true, loading: webview.isLoading(), back: webview.canGoBack(),
         forward: webview.canGoForward(), zoom: webview.getZoomFactor() }
       // 初始化空白页不覆盖目标；导航结束后用真实地址收尾，下载或取消也回到当前页。
@@ -86,9 +88,9 @@ export function useBrowserPage(props: Props) {
     listen('did-start-loading', () => setState(value => ({ ...value, loading: true })))
     listen('did-stop-loading', () => update())
     listen('did-start-navigation', event => {
-      const navigation = event as Event & { isMainFrame: boolean; url: string }
-      if (navigation.isMainFrame && !navigation.url.startsWith('about:blank#')) {
-        setState(value => ({ ...value, url: navigation.url, loading: true, error: null, match: null }))
+      const detail = event as Event & { isMainFrame: boolean; url: string }
+      if (detail.isMainFrame && detail.url !== `about:blank#${lease.id}`) {
+        setState(value => ({ ...value, url: browserDisplayUrl(detail.url), loading: true, error: null, match: null }))
       }
     })
     listen('did-navigate', () => update(true))
@@ -97,7 +99,7 @@ export function useBrowserPage(props: Props) {
     listen('did-fail-load', event => {
       const failure = event as Event & { isMainFrame: boolean; errorCode: number; errorDescription: string; validatedURL: string }
       if (!failure.isMainFrame || failure.errorCode === -3) return
-      setState(value => ({ ...value, loading: false, url: failure.validatedURL,
+      setState(value => ({ ...value, loading: false, url: browserDisplayUrl(failure.validatedURL),
         error: `页面加载失败（${failure.errorDescription}），请检查网址或网络后重试` }))
     })
     listen('render-process-gone', () => {
@@ -128,10 +130,17 @@ export function useBrowserPage(props: Props) {
       setState(value => ({ ...value, url, loading: true }))
       return
     }
+    const request = ++navigation.current
     run(webview => {
       setState(value => ({ ...value, error: null, url, loading: true }))
-      // 导航失败由 did-fail-load 单一投影；旧 loadURL 的拒绝不能覆盖新导航。
-      void webview.loadURL(url).catch(() => {})
+      const target = url.startsWith('file:') && lease ? window.whycode.prepareBrowserFile(lease.id, url) : Promise.resolve(url)
+      void target.then(value => {
+        if (request !== navigation.current || !ready.current) return
+        // 导航失败由 did-fail-load 单一投影；旧 loadURL 的拒绝不能覆盖新导航。
+        void webview.loadURL(value).catch(() => {})
+      }, error => {
+        if (request === navigation.current && ready.current) setState(value => ({ ...value, loading: false, error: String(error) }))
+      })
     })
   }
   const reload = (ignoreCache = false) => run(webview => {

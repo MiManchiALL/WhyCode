@@ -1,19 +1,43 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
-import { browserAddress, browserShortcut, isBrowserUrl } from '../shared/browser.ts'
+import { browserAddress, browserDisplayUrl, browserShortcut, isBrowserUrl, isExternalBrowserUrl, MAX_BROWSER_DATA_URL_LENGTH } from '../shared/browser.ts'
 import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowed } from './browser-policy.ts'
 
-it('地址栏区分网址、本机服务与搜索，拒绝脚本、文件与内嵌凭据', () => {
+it('地址栏区分网址、本机服务与搜索，拒绝脚本和内嵌凭据', () => {
   assert.equal(browserAddress(' example.com/a?q=b '), 'https://example.com/a?q=b')
   assert.equal(browserAddress('localhost:3000/game'), 'http://localhost:3000/game')
   assert.equal(browserAddress('127.0.0.1:5174'), 'http://127.0.0.1:5174/')
   assert.equal(browserAddress('[::1]:3000'), 'http://[::1]:3000/')
   assert.equal(browserAddress('http://172.22.231.25:8080'), 'http://172.22.231.25:8080/')
   assert.equal(browserAddress('布局 配色'), 'https://www.bing.com/search?q=%E5%B8%83%E5%B1%80%20%E9%85%8D%E8%89%B2')
-  for (const url of ['file:///C:/Windows/a', 'javascript:alert(1)', 'data:text/html,a', 'https://user:secret@example.com', 'whycode-preview://id/a']) {
+  for (const url of ['javascript:alert(1)', 'about:crash', 'about:blank?test', 'file://server/share/a', 'file:////server/share/a',
+    'data:text/html', 'https://user:secret@example.com', 'whycode-preview://id/a', 'whycode-browser-file://id/a']) {
     assert.throws(() => browserAddress(url))
     assert.equal(isBrowserUrl(url), false)
   }
+})
+
+it('本机路径保留中文、空格与特殊字符，file URL 保留查询与锚点', () => {
+  const url = 'file:///C:/demo/%E6%B5%8B%E8%AF%95%20%23100%25.html'
+  assert.equal(browserAddress('C:\\demo\\测试 #100%.html'), url)
+  assert.equal(browserAddress('"C:\\demo\\测试 #100%.html"'), url)
+  assert.equal(browserAddress('file:///C:/demo/测试 #level1'), 'file:///C:/demo/%E6%B5%8B%E8%AF%95%20#level1')
+  assert.equal(browserAddress('file:///C:/demo/game.html?v=2#start'), 'file:///C:/demo/game.html?v=2#start')
+  assert.equal(browserAddress('/home/demo/a b.html'), 'file:///home/demo/a%20b.html')
+  assert.throws(() => browserAddress('\\\\server\\share\\file'))
+  assert.equal(browserAddress('"exact phrase"'), 'https://www.bing.com/search?q=%22exact%20phrase%22')
+  assert.equal(browserDisplayUrl('whycode-browser-file://id/C:/demo/a%20b.html?v=2#start'), 'file:///C:/demo/a%20b.html?v=2#start')
+})
+
+it('data 页面使用独立大小限制，空白页可导航，系统浏览器仅接收网络网址', () => {
+  const data = 'data:text/html,<h1>Hello world</h1>'
+  assert.equal(browserAddress(data), data)
+  assert.equal(browserAddress(`data:text/plain,${'x'.repeat(8192)}`).length > 8192, true)
+  assert.throws(() => browserAddress(`data:text/plain,${'x'.repeat(MAX_BROWSER_DATA_URL_LENGTH)}`))
+  assert.throws(() => browserAddress(`data:text/plain,${'图'.repeat(Math.ceil(MAX_BROWSER_DATA_URL_LENGTH / 9))}`))
+  assert.equal(browserAddress('ABOUT:blank#anchor'), 'about:blank#anchor')
+  for (const value of [data, 'file:///C:/demo/a.exe', 'about:blank']) assert.equal(isExternalBrowserUrl(value), false)
+  assert.equal(isExternalBrowserUrl('https://example.com/'), true)
 })
 
 it('网页允许网络、表单与内存资源，不能读取应用页面或自定义文件协议', () => {
@@ -24,7 +48,9 @@ it('网页允许网络、表单与内存资源，不能读取应用页面或自�
   for (const url of ['http://127.0.0.1:5173/src/App.tsx', 'ws://[::1]:5173/', 'file:///C:/secret', 'whycode-attachment://id/a', 'https://user:secret@example.com']) {
     assert.equal(browserRequestAllowed(url, app), false, url)
   }
-  assert.equal(browserNavigationAllowed('data:text/html,content', app), false)
+  assert.equal(browserNavigationAllowed('data:text/html,content', app), true)
+  assert.equal(browserNavigationAllowed('file:///C:/demo/game.html', app), false)
+  assert.equal(browserNavigationAllowed('about:crash', app), false)
   assert.equal(browserNavigationAllowed('https://example.com', app), true)
   assert.equal(browserNavigationAllowed('about:blank#lease', app), true)
 })
