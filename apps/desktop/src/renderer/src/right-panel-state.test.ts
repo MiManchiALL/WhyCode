@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   activeRightPanelPage,
   closeRightPanelTab,
+  closeBrowserTabs,
   canAddRightPanelTab,
   MAX_RIGHT_PANEL_TABS,
   openRightPanelPage,
@@ -47,6 +48,27 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('全部清理关闭当前与后台会话的浏览器标签，保留其它面板与阅读位置', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    const file = snapshotPage('E:/index.html', 'tool')
+    let state = openRightPanelPage(emptyState(), file)
+    for (const id of ['a', 'b']) state = openRightPanelPage(state, { kind: 'browser', id, url: `https://${id}.test/`, title: id })
+    state = selectRightPanelTab(state, rightPanelTabId(file))
+    store.set('current', state)
+    store.set('background', selectRightPanelTab(state, 'browser:b'))
+    store.set('only-browser', openRightPanelPage(emptyState(), { kind: 'browser', id: 'c', url: 'data:text/html,private', title: '' }))
+    const closed = closeBrowserTabs(state)
+    assert.deepEqual(closed.tabs, [{ id: rightPanelTabId(file), page: file }])
+    assert.equal(closed.activeTabId, state.activeTabId)
+    assert.equal(updateRightPanelPage(closed, state.tabs[1]!.page), closed)
+    store.removeBrowserTabs()
+    const restored = new RightPanelSessionStore(storage)
+    for (const key of ['current', 'background']) assert.deepEqual(restored.get(key), closed)
+    assert.deepEqual(restored.get('only-browser').tabs, [])
+    assert.equal(restored.get('only-browser').activeTabId, null)
+    assert.equal([...storage.values.values()].some(value => value.includes('https://')), false)
+  })
   it('浏览器标签独立保存网址，后台标题变化不抢焦点，已关闭标签不会被迟到更新恢复', () => {
     const first = { kind: 'browser' as const, id: 'a', url: 'https://example.com/', title: 'Example' }
     const second = { kind: 'browser' as const, id: 'b', url: 'http://localhost:3000/', title: 'Game' }

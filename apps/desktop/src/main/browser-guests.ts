@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, clipboard, ipcMain, Menu, net, session, shell, type WebContents } from 'electron'
+import { BrowserWindow, clipboard, ipcMain, Menu, net, session, shell, webContents, type DownloadItem, type WebContents } from 'electron'
 import { pathToFileURL } from 'node:url'
-import { BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserShortcut, isExternalBrowserUrl, type BrowserEvent, type BrowserEventPayload, type BrowserLease } from '../shared/browser.ts'
+import {
+  BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserShortcut, isExternalBrowserUrl,
+  type BrowserDataClearMode, type BrowserDataState, type BrowserEvent, type BrowserEventPayload, type BrowserLease,
+} from '../shared/browser.ts'
 import { IPC } from '../shared/ipc.ts'
 import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowed } from './browser-policy.ts'
 import { BrowserFiles } from './browser-files.ts'
+import { clearBrowserSession } from './browser-data.ts'
 
 interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents }
 
@@ -12,11 +16,14 @@ interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContent
 export class BrowserGuests {
   private readonly leases = new Map<string, GuestLease>()
   private readonly files = new BrowserFiles()
+  private readonly downloads = new Set<DownloadItem>()
+  private clearing: BrowserDataClearMode | null = null
   private readonly applicationUrl: string | undefined
 
   constructor(applicationUrl?: string) { this.applicationUrl = applicationUrl }
 
   acquire(owner: WebContents): BrowserLease {
+    if (this.clearing === 'all') throw new Error('正在清除全部浏览器数据，请稍后打开')
     if ([...this.leases.values()].filter(item => item.owner === owner).length >= MAX_BROWSER_GUESTS) {
       throw new Error('内置浏览器标签过多，请先关闭部分标签')
     }
@@ -35,6 +42,15 @@ export class BrowserGuests {
 
   register(): void {
     this.configureSession()
+    ipcMain.handle(IPC.getBrowserDataState, event => {
+      this.requireOwner(event)
+      return { clearing: this.clearing } satisfies BrowserDataState
+    })
+    ipcMain.handle(IPC.clearBrowserData, (event, mode: unknown) => {
+      this.requireOwner(event)
+      if (mode !== 'cache' && mode !== 'all') throw new Error('未知的浏览器清理方式')
+      return this.clearData(mode)
+    })
     ipcMain.handle(IPC.acquireBrowser, event => {
       this.requireOwner(event)
       return this.acquire(event.sender)
@@ -64,7 +80,7 @@ export class BrowserGuests {
     owner.on('will-attach-webview', (event, preferences, params) => {
       const id = params.src?.startsWith('about:blank#') ? params.src.slice('about:blank#'.length) : ''
       const lease = this.leases.get(id)
-      if (!lease || lease.owner !== owner || lease.attached || params.partition !== BROWSER_PARTITION) {
+      if (this.clearing === 'all' || !lease || lease.owner !== owner || lease.attached || params.partition !== BROWSER_PARTITION) {
         event.preventDefault(); return
       }
       lease.attached = true
@@ -163,6 +179,7 @@ export class BrowserGuests {
     browser.setDevicePermissionHandler(() => false)
     browser.setDisplayMediaRequestHandler((_request, callback) => callback({}))
     browser.webRequest.onBeforeRequest((details, callback) => {
+      if (this.clearing === 'all') { callback({ cancel: true }); return }
       // 检查器首个请求早于 devToolsWebContents 可用；remote 是 Electron 的原生前端类型。
       const inspector = details.webContents?.getType() === 'remote'
       const entry = [...this.leases].find(([, lease]) => lease.guest === details.webContents)
@@ -174,14 +191,44 @@ export class BrowserGuests {
     })
     browser.on('will-download', (event, item, contents) => {
       const entry = [...this.leases].find(([, lease]) => lease.guest === contents)
-      if (!entry) { event.preventDefault(); return }
+      if (this.clearing === 'all' || !entry) { event.preventDefault(); return }
+      this.downloads.add(item)
       item.setSaveDialogOptions({ title: '保存下载文件' })
       item.once('done', (_event, state) => {
+        this.downloads.delete(item)
         if (state === 'cancelled' || entry[1].owner.isDestroyed()) return
         entry[1].owner.send(IPC.browserEvent, { id: entry[0], type: 'notice', error: state !== 'completed',
           message: state === 'completed' ? `已下载：${item.getFilename()}` : `下载失败：${item.getFilename()}` } satisfies BrowserEvent)
       })
     })
+  }
+
+  private async clearData(mode: BrowserDataClearMode): Promise<void> {
+    if (this.clearing) throw new Error('浏览器数据正在清理，请等待完成')
+    this.setClearing(mode)
+    try {
+      const browser = session.fromPartition(BROWSER_PARTITION)
+      if (mode === 'all') {
+        for (const item of this.downloads) item.cancel()
+        // 包含尚未 dom-ready、还未写回租约的 guest；关闭旧页面后再清理，防止重新写入。
+        await Promise.all(webContents.getAllWebContents()
+          .filter(contents => contents.session === browser)
+          .map(contents => new Promise<void>(resolve => {
+            if (contents.isDestroyed()) { resolve(); return }
+            contents.once('destroyed', () => resolve())
+            contents.close({ waitForBeforeUnload: false })
+          })))
+        for (const [id, lease] of this.leases) this.release(lease.owner, id)
+      }
+      await clearBrowserSession(browser, mode)
+    } finally { this.setClearing(null) }
+  }
+
+  private setClearing(clearing: BrowserDataClearMode | null): void {
+    this.clearing = clearing
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.webContents.isDestroyed()) window.webContents.send(IPC.browserDataChanged, { clearing } satisfies BrowserDataState)
+    }
   }
 
   private requireOwner(event: Electron.IpcMainInvokeEvent): void {

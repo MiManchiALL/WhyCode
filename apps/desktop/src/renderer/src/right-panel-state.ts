@@ -119,6 +119,11 @@ export class RightPanelSessionStore {
     this.persist()
   }
 
+  removeBrowserTabs(): void {
+    for (const [key, state] of this.states) this.states.set(key, closeBrowserTabs(state))
+    this.persist()
+  }
+
   private trimAndPersist(): void {
     while (this.states.size > MAX_STORED_SESSIONS) {
       const oldest = [...this.states].find(([, state]) =>
@@ -210,6 +215,11 @@ export function closeRightPanelTab(
   if (state.activeTabId !== tabId) return { ...state, tabs }
   const replacement = tabs[Math.min(index, tabs.length - 1)] ?? null
   return { ...state, tabs, activeTabId: replacement?.id ?? null }
+}
+
+export function closeBrowserTabs(state: RightPanelSessionState): RightPanelSessionState {
+  return state.tabs.filter(tab => tab.page.kind === 'browser')
+    .reduce((next, tab) => closeRightPanelTab(next, tab.id), state)
 }
 
 export function moveRightPanelTab(state: RightPanelSessionState, tabId: string, targetId: string): RightPanelSessionState {

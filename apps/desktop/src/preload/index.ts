@@ -19,7 +19,7 @@ import type { RenameSessionRequest, RenameSessionResult } from '../shared/sessio
 import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
-import type { BrowserEvent, BrowserLease } from '../shared/browser.ts'
+import type { BrowserDataClearMode, BrowserDataState, BrowserEvent, BrowserLease } from '../shared/browser.ts'
 import type {
   CheckpointFileChangesRequest,
   CheckpointFileChangesResult,
@@ -249,6 +249,13 @@ const api = {
   prepareBrowserFile: (id: string, url: string): Promise<string> => ipcRenderer.invoke(IPC.prepareBrowserFile, id, url),
   releaseBrowser: (id: string): void => ipcRenderer.send(IPC.releaseBrowser, id),
   openBrowserExternally: (id: string): Promise<void> => ipcRenderer.invoke(IPC.openBrowserExternally, id),
+  getBrowserDataState: (): Promise<BrowserDataState> => ipcRenderer.invoke(IPC.getBrowserDataState),
+  clearBrowserData: (mode: BrowserDataClearMode): Promise<void> => ipcRenderer.invoke(IPC.clearBrowserData, mode),
+  onBrowserDataChanged: (callback: (state: BrowserDataState) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, value: BrowserDataState) => callback(value)
+    ipcRenderer.on(IPC.browserDataChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.browserDataChanged, listener)
+  },
   onBrowserEvent: (callback: (event: BrowserEvent) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, value: BrowserEvent) => callback(value)
     ipcRenderer.on(IPC.browserEvent, listener)

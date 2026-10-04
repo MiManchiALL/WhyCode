@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { CONVERSATION_FONT_SIZE } from './conversation-font-size.ts'
 import { SettingsRow } from './settings-layout.tsx'
+import { BrowserDataSettings } from './browser-data-settings.tsx'
 
 const ARROW_CLASS = 'wc-focus-ring flex h-3 w-[17px] items-center justify-center rounded-[3px] bg-white/75 text-[var(--wc-ink)] hover:bg-white disabled:cursor-default disabled:text-[var(--wc-faint)]'
 
@@ -8,7 +9,7 @@ export function GeneralSettings({ fontSize, onFontSizeChange }: {
   fontSize: number
   onFontSizeChange: (value: number) => void
 }) {
-  return <SettingsRow label={<span className="text-sm font-normal">字号大小</span>}
+  return <div className="space-y-6"><SettingsRow label={<span className="text-sm font-normal">字号大小</span>}
     description="仅影响会话内容的字号" className="wc-font-size-setting" divided={false}>
     <div className="flex items-center gap-2 text-sm">
       <div role="group" aria-label="会话字号" className="group relative flex h-9 w-[72px] items-center justify-center rounded-full bg-black/[0.035]">
@@ -26,5 +27,5 @@ export function GeneralSettings({ fontSize, onFontSizeChange }: {
       </div>
       <span className="text-[var(--wc-muted)]">px</span>
     </div>
-  </SettingsRow>
+  </SettingsRow><BrowserDataSettings /></div>
 }

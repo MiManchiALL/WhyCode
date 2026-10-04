@@ -126,6 +126,7 @@ import { usePanelLayout } from './use-panel-layout.ts'
 import { WorktreePreparation } from './worktree-preparation.tsx'
 import {
   closeRightPanelTab,
+  closeBrowserTabs,
   canAddRightPanelTab,
   moveRightPanelTab,
   updateRightPanelPage,
@@ -136,6 +137,7 @@ import {
   type RightPanelPage,
   type RightPanelSessionState,
 } from './right-panel-state.ts'
+import { watchBrowserData } from './browser-data-state.ts'
 import { ComposerFileChanges } from './composer-file-changes.tsx'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import {
@@ -1120,6 +1122,14 @@ export function App() {
     rightPanelStateRef.current = next
     setRightPanelState(next)
   }), [])
+
+  useEffect(() => watchBrowserData(state => {
+    if (state.clearing !== 'all') return
+    rightPanelSessionStoreRef.current!.removeBrowserTabs()
+    const next = closeBrowserTabs(rightPanelStateRef.current)
+    rightPanelStateRef.current = next
+    setRightPanelState(next)
+  }, error => showConversationFeedback('error', String(error), true)), [showConversationFeedback])
 
   const openRightPanelTerminal = useCallback(async () => {
     const targetRuntimeId = runtimeIdRef.current

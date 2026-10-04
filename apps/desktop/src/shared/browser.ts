@@ -4,6 +4,8 @@ export const BROWSER_FILE_SCHEME = 'whycode-browser-file'
 export const MAX_BROWSER_DATA_URL_LENGTH = 1024 * 1024
 
 export interface BrowserLease { id: string; partition: string }
+export type BrowserDataClearMode = 'cache' | 'all'
+export interface BrowserDataState { clearing: BrowserDataClearMode | null }
 export type BrowserShortcut = 'address' | 'find' | 'reload' | 'reload-clean' | 'back' | 'forward'
   | 'new-tab' | 'close-tab' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'escape'
 export type BrowserEventPayload =

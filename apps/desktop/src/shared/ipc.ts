@@ -47,6 +47,9 @@ export const IPC = {
   releaseBrowser: 'whycode:release-browser',
   openBrowserExternally: 'whycode:open-browser-externally',
   browserEvent: 'whycode:browser-event',
+  getBrowserDataState: 'whycode:get-browser-data-state',
+  clearBrowserData: 'whycode:clear-browser-data',
+  browserDataChanged: 'whycode:browser-data-changed',
   /** Renderer → Main：获取可用模型列表 */
   listModels: 'whycode:list-models',
   /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */

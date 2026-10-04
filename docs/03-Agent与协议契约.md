@@ -556,6 +556,8 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 `browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；网页导航、站点存储与用户交互不进入 CoreCommand、JSONL 或模型上下文。UI、网络限制和资源生命周期见文档二 §12.6。
 
+`getBrowserDataState()` 返回 `{clearing: 'cache' | 'all' | null}`，`browserDataChanged` 向主窗口发布相同形状的状态。`clearBrowserData(mode)` 只接受 `cache` 或 `all`，仅主窗口主 Frame 可调用，操作针对固定浏览器分区；不接受自定义路径、分区或存储类别。并发清理直接拒绝，完成 Promise 只在所有清理步骤结束后返回，部分失败以错误返回并恢复可重试状态。全部清理期间拒绝浏览器租约申请和挂载；具体删除、保留范围见文档二 §12.6。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。
