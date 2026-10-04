@@ -1,7 +1,7 @@
 import type { WhycodeApi } from '../../preload/index.ts'
 
 type FileActionsApi = Pick<WhycodeApi, 'openWorkspaceFile' | 'closeWorkspaceFile' | 'revealWorkspaceFile' | 'openWorkspaceFileExternally' | 'saveWorkspaceFile'>
-export type WorkspaceFileAction = 'open' | 'reveal' | 'save' | 'check'
+export type WorkspaceFileAction = 'open' | 'reveal' | 'save'
 
 /** 卡片仅在用户点击后借用文件视图，操作结束或导航取消时立即归还。 */
 export async function performWorkspaceFileAction(

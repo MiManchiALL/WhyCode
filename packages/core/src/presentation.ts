@@ -8,7 +8,7 @@ export const presentationSchema = z.object({
   files: z.array(z.object({
     path: singleLine(2048).refine(isPresentableFile, '只声明可预览的 HTML、Markdown、图片或 PDF 成品；普通文本和代码修改由界面自动汇总'),
     description: singleLine(160).optional(),
-  }).strict()).max(8).describe('本次回答可预览的成品文件；没有则填空数组'),
+  }).strict()).max(8).describe('本次回答要交付的完整成品文件列表；空数组仅用于撤回本次回答已提交的全部成品声明'),
 }).strict().refine(value => JSON.stringify(value).length <= 32 * 1024, '交付声明过长，请精简路径和说明')
 
 export type Presentation = z.infer<typeof presentationSchema>

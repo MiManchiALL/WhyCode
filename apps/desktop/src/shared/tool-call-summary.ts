@@ -142,7 +142,7 @@ export function toolCallDetails(
     case 'Present': {
       const presentation = result ? readPresentationResult(result) : null
       return presentation ? presentation.files.map(file => file.description ? `${file.path} — ${file.description}` : file.path)
-        .join('\n') || '已清空本次回答的交付声明' : null
+        .join('\n') || '本次回答未列出成品文件' : null
     }
     case 'AskUserQuestion':
       return answeredQuestionDetails(value, result)
