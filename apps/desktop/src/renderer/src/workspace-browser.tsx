@@ -124,7 +124,7 @@ function DirectoryRow(props: DirectoryProps & { entry: DirectoryEntry; expandedS
         </button>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className="wc-menu-content min-w-40" collisionPadding={8}
+        <ContextMenu.Content className="wc-menu-content" data-density="compact" collisionPadding={8}
           onCloseAutoFocus={event => {
             if (!quoteOnClose.current) return
             quoteOnClose.current = false
