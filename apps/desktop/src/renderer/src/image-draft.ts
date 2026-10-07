@@ -14,6 +14,7 @@ interface ImageDraftBase {
   id: string
   name: string
   previewUrl: string
+  source?: import('@whycode/core/browser-reference').BrowserReferenceSource
 }
 
 export type ImageDraft =
@@ -29,7 +30,7 @@ export async function prepareImageDrafts(
   for (const draft of drafts) {
     if (draft.kind === 'path') inputs.push({ kind: 'path', path: draft.path })
     else if (draft.kind === 'memory') {
-      inputs.push({ kind: 'inline', name: draft.name, base64: await fileToBase64(draft.file) })
+      inputs.push({ kind: 'inline', name: draft.name, base64: await fileToBase64(draft.file), ...(draft.source ? { source: draft.source } : {}) })
     } else {
       inputs.push({ kind: 'stored', attachmentId: draft.attachmentId })
     }
@@ -46,6 +47,7 @@ export function restoredImageDrafts(messages: readonly QueuedUserMessage[]): Ima
     attachmentId: attachment.id,
     sessionId: attachment.sessionId,
     storageName: attachment.storageName,
+    ...(attachment.source?.kind === 'browser-reference' ? { source: attachment.source } : {}),
   })))
 }
 

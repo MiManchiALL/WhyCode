@@ -10,6 +10,7 @@ export interface BrowserPageState {
 interface Props {
   active: boolean
   url: string
+  workspaceRuntimeId?: string
   onNavigate: (url: string, title: string) => void
   onOpen: (url: string) => void
   onShortcut: (command: BrowserShortcut) => void
@@ -67,7 +68,7 @@ export function useBrowserPage(props: Props) {
       }
       const pageTitle = webview.getTitle()
       const title = rawUrl === 'about:blank' ? '' : (pageTitle === webview.getURL() ? rawUrl : pageTitle).slice(0, 256)
-      const progress = { ready: true, loading: webview.isLoading(), back: webview.canGoBack(),
+      const progress = { ready: !bootstrap || initialUrl.current === 'about:blank', loading: webview.isLoading(), back: webview.canGoBack(),
         forward: webview.canGoForward(), zoom: webview.getZoomFactor() }
       // 初始化空白页不覆盖目标；导航结束后用真实地址收尾，下载或取消也回到当前页。
       setState(value => {
@@ -133,7 +134,7 @@ export function useBrowserPage(props: Props) {
     const request = ++navigation.current
     run(webview => {
       setState(value => ({ ...value, error: null, url, loading: true }))
-      const target = url.startsWith('file:') && lease ? window.whycode.prepareBrowserFile(lease.id, url) : Promise.resolve(url)
+      const target = url.startsWith('file:') && lease ? window.whycode.prepareBrowserFile(lease.id, url, callbacks.current.workspaceRuntimeId) : Promise.resolve(url)
       void target.then(value => {
         if (request !== navigation.current || !ready.current) return
         // 导航失败由 did-fail-load 单一投影；旧 loadURL 的拒绝不能覆盖新导航。

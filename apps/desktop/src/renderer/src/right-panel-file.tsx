@@ -15,6 +15,7 @@ interface FileProps {
   refreshRevision: string
   page: FilePage
   onChange: (page: FilePage) => void
+  onReferenceInBrowser?: (path: string) => void
 }
 
 export function RightPanelFilePreview(props: FileProps) {

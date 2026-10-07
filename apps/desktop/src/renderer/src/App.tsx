@@ -447,6 +447,8 @@ export function App() {
     remove: removeImageDraft,
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
+    addReference: addBrowserReference,
+    editReference: editBrowserReference,
   } = useImageDrafts(showError)
   const {
     drafts: pdfDrafts,
@@ -2429,7 +2431,7 @@ export function App() {
                       />
                     )}
 
-                    <ImageDraftStrip drafts={composerDraft.images} onRemove={removeImageDraft} />
+                    <ImageDraftStrip drafts={composerDraft.images} onRemove={removeImageDraft} onEditReference={editBrowserReference} />
                     <PdfDraftStrip drafts={composerDraft.pdfs} onRemove={removePdfDraft} />
                     <SkillChips
                       skills={composerDraft.skills}
@@ -2633,6 +2635,13 @@ export function App() {
                 terminalOpening={terminalOpening}
                 onOpenTerminal={() => { void openRightPanelTerminal() }}
                 canReferencePath={!composerDisabled && resumingSessionId === null}
+                canReferenceBrowser={!composerDisabled && resumingSessionId === null && canAttachImages}
+                onReferenceBrowser={(owner, image) => {
+                  if (owner !== runtimeIdRef.current || composerDisabled || resumingSessionId !== null || !canAttachImages) return false
+                  const added = addBrowserReference(image)
+                  if (added && panelFullscreen) setRightPanelFullscreen(false)
+                  return added
+                }}
                 onReferencePath={(owner, reference) => {
                   if (owner === runtimeIdRef.current && !composerDisabled && resumingSessionId === null) {
                     if (panelFullscreen) setRightPanelFullscreen(false)

@@ -44,6 +44,8 @@ export const IPC = {
   terminalClosed: 'whycode:terminal-closed',
   acquireBrowser: 'whycode:acquire-browser',
   prepareBrowserFile: 'whycode:prepare-browser-file',
+  pickBrowserTarget: 'whycode:pick-browser-target',
+  cancelBrowserReference: 'whycode:cancel-browser-reference',
   releaseBrowser: 'whycode:release-browser',
   openBrowserExternally: 'whycode:open-browser-externally',
   browserEvent: 'whycode:browser-event',

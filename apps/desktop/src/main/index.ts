@@ -3289,7 +3289,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
   }, runtimeId => sshWorkspaces.io(runtimeForId(runtimeId).workspace))
   registerTerminalIpc(terminals, runtimeForId, prepareTerminalDirectory, runtime => runtime.workspace.mode === 'ssh'
     ? cwd => sshWorkspaces.terminal(runtime, cwd) : undefined)
-  browserGuests.register()
+  browserGuests.register(async runtimeId => {
+    const runtime = runtimeForId(runtimeId)
+    await sshWorkspaces.connect(runtime.workspace)
+    return sshWorkspaces.io(runtime.workspace)
+  })
   createWindow()
 
   app.on('activate', () => {

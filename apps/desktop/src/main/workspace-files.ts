@@ -229,7 +229,7 @@ function hasCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
 }
 
-function byteRange(value: string | null, size: number): { start: number; end: number; partial: boolean } | null {
+export function byteRange(value: string | null, size: number): { start: number; end: number; partial: boolean } | null {
   if (!value) return { start: 0, end: size - 1, partial: false }
   const match = /^bytes=(\d*)-(\d*)$/u.exec(value)
   if (!match || (!match[1] && !match[2]) || size === 0) return null

@@ -141,7 +141,7 @@ describe('ReadPdf', () => {
       supportsVisual: true,
       resolveAttachment: () => ({ attachment, path: sourcePath }),
       resolvePageImage: (_attachmentId, pageNumber) =>
-        existing?.source?.pageNumber === pageNumber ? existing : null,
+        existing?.source?.kind === 'pdf-page' && existing.source.pageNumber === pageNumber ? existing : null,
     })
     const input = tool.inputSchema.parse({
       sourceType: 'attachment', sourceValue: ATTACHMENT_ID, pageCount: 1,

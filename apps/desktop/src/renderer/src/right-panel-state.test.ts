@@ -48,6 +48,18 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('工作区网页保留远端文件作用域，重启不重新开启一次性的引用模式', () => {
+    const storage = new MemoryStorage()
+    const page = { kind: 'browser' as const, id: 'remote', url: 'file:///home/project/index.html', title: 'Remote',
+      workspaceFile: true, referenceOnReady: true }
+    const store = new RightPanelSessionStore(storage)
+    store.set('conversation', openRightPanelPage(emptyState(), page))
+    assert.equal((store.get('conversation').tabs[0]?.page as typeof page).referenceOnReady, true)
+    const restored = new RightPanelSessionStore(storage).get('conversation').tabs[0]!.page
+    assert.ok(restored.kind === 'browser')
+    assert.equal(restored.workspaceFile, true)
+    assert.equal(restored.referenceOnReady, undefined)
+  })
   it('全部清理关闭当前与后台会话的浏览器标签，保留其它面板与阅读位置', () => {
     const storage = new MemoryStorage()
     const store = new RightPanelSessionStore(storage)

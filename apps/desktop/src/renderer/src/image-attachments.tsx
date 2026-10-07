@@ -8,6 +8,8 @@ import {
   type ImageDraft,
 } from './image-draft.ts'
 import { ImagePreviewDialog, type ImagePreviewTarget } from './image-preview.tsx'
+import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
+import { BrowserReferenceChip } from './browser-reference-chip.tsx'
 
 export function useImageDrafts(onError: (message: string) => void) {
   const [drafts, setDrafts] = useState<ImageDraft[]>([])
@@ -63,22 +65,54 @@ export function useImageDrafts(onError: (message: string) => void) {
     replace([...restored, ...current])
   }, [replace])
 
-  return { drafts, addFiles, remove, clear, detach, restore }
+  const addReference = useCallback((image: BrowserReferenceImage): boolean => {
+    if (draftsRef.current.length >= USER_IMAGE_ATTACHMENT_MAX_COUNT) {
+      onError(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片或网页引用`); return false
+    }
+    const file = new File([new Uint8Array(image.bytes)], '网页引用.jpg', { type: 'image/jpeg' })
+    const previewUrl = URL.createObjectURL(file)
+    replace([...draftsRef.current, { kind: 'memory', id: crypto.randomUUID(), name: file.name, file, previewUrl, source: image.source }])
+    return true
+  }, [onError, replace])
+
+  const editReference = useCallback(async (id: string, comment: string): Promise<boolean> => {
+    const draft = draftsRef.current.find(item => item.id === id)
+    if (!draft?.source) return false
+    try {
+      let file: File
+      if (draft.kind === 'stored') {
+        const response = await fetch(draft.previewUrl)
+        if (!response.ok) throw new Error('无法读取网页引用截图，请重新添加引用')
+        file = new File([await response.blob()], draft.name, { type: 'image/jpeg' })
+      } else file = draft.file
+      if (!draftsRef.current.includes(draft)) return false
+      const edited: ImageDraft = { kind: 'memory', id, name: draft.name, file,
+        previewUrl: URL.createObjectURL(file), source: { ...draft.source, comment: comment.trim() } }
+      replace(draftsRef.current.map(item => item === draft ? edited : item))
+      releaseImageDrafts([draft]); return true
+    } catch (error) { onError(String(error)); return false }
+  }, [onError, replace])
+
+  return { drafts, addFiles, remove, clear, detach, restore, addReference, editReference }
 }
 
 export function ImageDraftStrip({
   drafts,
   onRemove,
+  onEditReference,
 }: {
   drafts: readonly ImageDraft[]
   onRemove?: (id: string) => void
+  onEditReference?: (id: string, comment: string) => Promise<boolean>
 }) {
   const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
   if (drafts.length === 0) return null
   return (
     <>
       <div className="mb-2 flex flex-wrap gap-2">
-        {drafts.map((draft) => (
+        <BrowserReferenceChip items={drafts.flatMap(draft => draft.source ? [{ id: draft.id, previewUrl: draft.previewUrl, source: draft.source }] : [])}
+          onRemove={onRemove} onEdit={onEditReference} onPreview={(src, name) => setPreview({ src, name })} />
+        {drafts.filter(draft => !draft.source).map((draft) => (
           <div key={draft.id} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
             <button
               type="button"
@@ -122,7 +156,10 @@ export function UserImageGallery({
       <div className={variant === 'message'
         ? 'flex max-w-full flex-wrap justify-end gap-2'
         : 'mb-2 flex flex-wrap gap-2'}>
-        {attachments.map((attachment) => {
+        <BrowserReferenceChip items={attachments.flatMap(item => item.source?.kind === 'browser-reference' ? [{
+          id: item.id, previewUrl: `whycode-attachment://${item.sessionId}/${encodeURIComponent(item.storageName)}`, source: item.source,
+        }] : [])} onPreview={(src, name) => setPreview({ src, name })} />
+        {attachments.filter(item => item.source?.kind !== 'browser-reference').map((attachment) => {
           const src = `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`
           const details = `${attachment.width}×${attachment.height} · ${formatBytes(attachment.byteLength)}`
           return (

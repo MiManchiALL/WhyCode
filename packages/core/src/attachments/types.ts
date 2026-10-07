@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { browserReferenceSourceSchema, type BrowserReferenceSource } from './browser-reference.ts'
 import {
   IMAGE_ATTACHMENT_MAX_DIMENSION,
   IMAGE_ATTACHMENT_MAX_PIXELS,
@@ -19,7 +20,7 @@ export {
 /** 宿主交付的有序图片来源；inline Base64 只允许在落盘边界短暂存在。 */
 export type ImageAttachmentInput =
   | { kind: 'path'; path: string }
-  | { kind: 'inline'; name: string; base64: string }
+  | { kind: 'inline'; name: string; base64: string; source?: BrowserReferenceSource }
 
 /** Renderer 重新提交中断后恢复的会话图片时只回传不透明 ID，Main 再按事实源解析。 */
 export type ImageMessageAttachmentInput =
@@ -40,6 +41,7 @@ export const imageAttachmentStorageNameSchema = z
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:png|jpg|webp)$/i)
 
 export const imageAttachmentSourceSchema = z.discriminatedUnion('kind', [
+  browserReferenceSourceSchema,
   z.object({
     kind: z.literal('pdf-page'),
     pdfAttachmentId: z.string().uuid(),
@@ -59,7 +61,7 @@ export const imageAttachmentSchema = z.object({
   byteLength: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_SOURCE_BYTES),
   width: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
   height: z.number().int().positive().max(IMAGE_ATTACHMENT_MAX_DIMENSION),
-  /** 可重现衍生图的稳定来源；用于复用同一 PDF 页面而不是重复落盘。 */
+  /** 图片来源随附件保存，不依赖仍然打开的网页或文档。 */
   source: imageAttachmentSourceSchema.optional(),
 }).superRefine((attachment, ctx) => {
   if (!attachment.storageName.toLowerCase().startsWith(`${attachment.id.toLowerCase()}.`)) {

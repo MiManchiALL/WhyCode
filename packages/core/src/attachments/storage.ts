@@ -13,6 +13,7 @@ import {
 import { imageSha256, validateImageDecodes } from './decoder.ts'
 import { inspectImage } from './inspection.ts'
 import { readBoundedWorkspaceFile } from '../workspace/read.ts'
+import { browserReferenceSourceSchema } from './browser-reference.ts'
 
 export { inspectImage } from './inspection.ts'
 
@@ -89,10 +90,12 @@ export async function prepareImageAttachmentImport(
           ? decodeInlineImage(source)
           : boundedImageBytes(source.bytes)
       const digest = imageSha256(bytes)
-      if (seenDigests.has(digest)) {
+      const sourceMetadata = source.kind === 'inline' && source.source !== undefined ? browserReferenceSourceSchema.parse(source.source) : undefined
+      const identity = sourceMetadata ? `reference:${sourceMetadata.id}` : digest
+      if (seenDigests.has(identity)) {
         throw new Error('同一张图片不能重复添加')
       }
-      seenDigests.add(digest)
+      seenDigests.add(identity)
       const info = inspectImage(bytes)
       await validateImageDecodes(bytes, info, options.abortSignal)
       throwIfImageImportAborted(options.abortSignal)
@@ -115,6 +118,7 @@ export async function prepareImageAttachmentImport(
         byteLength: bytes.byteLength,
         width: info.width,
         height: info.height,
+        ...(sourceMetadata ? { source: sourceMetadata } : {}),
       }))
     }
     return createImportTransaction(directory, stagingDirectory, attachments)

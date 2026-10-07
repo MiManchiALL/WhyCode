@@ -14,6 +14,7 @@
     "./web-source": "./src/web-source.ts",
     "./document-formats": "./src/document-formats.ts",
     "./image-limits": "./src/attachments/limits.ts",
+    "./browser-reference": "./src/attachments/browser-reference.ts",
     "./skills": "./src/skills/types.ts",
     "./pdf": "./src/pdf/index.ts",
     "./pdf-limits": "./src/pdf/limits.ts",

@@ -9,8 +9,10 @@ import { IPC } from '../shared/ipc.ts'
 import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowed } from './browser-policy.ts'
 import { BrowserFiles } from './browser-files.ts'
 import { clearBrowserSession } from './browser-data.ts'
+import { BrowserReferences } from './browser-references.ts'
+import type { WorkspaceIO } from '@whycode/core'
 
-interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents }
+interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents; references?: BrowserReferences }
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
 export class BrowserGuests {
@@ -36,11 +38,12 @@ export class BrowserGuests {
     const lease = this.leases.get(id)
     if (!lease || lease.owner !== owner) return
     this.leases.delete(id)
+    lease.references?.cancel()
     this.files.release(id)
     if (lease.guest && !lease.guest.isDestroyed()) lease.guest.close({ waitForBeforeUnload: false })
   }
 
-  register(): void {
+  register(workspaceFor: (runtimeId: string) => Promise<WorkspaceIO>): void {
     this.configureSession()
     ipcMain.handle(IPC.getBrowserDataState, event => {
       this.requireOwner(event)
@@ -55,12 +58,24 @@ export class BrowserGuests {
       this.requireOwner(event)
       return this.acquire(event.sender)
     })
-    ipcMain.handle(IPC.prepareBrowserFile, (event, id: unknown, url: unknown) => {
+    ipcMain.handle(IPC.prepareBrowserFile, async (event, id: unknown, url: unknown, runtimeId: unknown) => {
       this.requireOwner(event)
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (typeof id !== 'string' || typeof url !== 'string' || lease?.owner !== event.sender
         || !lease.guest || lease.guest.isDestroyed()) throw new Error('浏览器标签已关闭')
-      return this.files.open(id, url)
+      const io = typeof runtimeId === 'string' ? await workspaceFor(runtimeId) : undefined
+      if (this.leases.get(id) !== lease) throw new Error('浏览器标签已关闭')
+      return this.files.open(id, url, io)
+    })
+    ipcMain.handle(IPC.pickBrowserTarget, (event, id: unknown, options: unknown) => {
+      this.requireOwner(event)
+      const lease = typeof id === 'string' ? this.leases.get(id) : undefined
+      if (lease?.owner !== event.sender || !lease.references) throw new Error('浏览器标签已关闭')
+      return lease.references.pick(options)
+    })
+    ipcMain.on(IPC.cancelBrowserReference, (event, id: unknown) => {
+      const lease = typeof id === 'string' ? this.leases.get(id) : undefined
+      if (event.senderFrame === event.sender.mainFrame && lease?.owner === event.sender) lease.references?.cancel()
     })
     ipcMain.on(IPC.releaseBrowser, (event, id: unknown) => {
       if (event.senderFrame === event.sender.mainFrame && typeof id === 'string') this.release(event.sender, id)
@@ -108,6 +123,7 @@ export class BrowserGuests {
         guest.close({ waitForBeforeUnload: false }); return
       }
       id = key; lease.guest = guest
+      lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
       guest.once('destroyed', () => { this.leases.delete(key); this.files.release(key) })
     })
     const allowed = (url: string) => browserNavigationAllowed(url, this.applicationUrl) || (!!id && this.files.allows(id, url))
@@ -158,6 +174,8 @@ export class BrowserGuests {
     browser.protocol.handle(BROWSER_FILE_SCHEME, async request => {
       if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 })
       try {
+        const remote = await this.files.remoteResponse(request)
+        if (remote) return remote
         const path = await this.files.resolve(request.url)
         const response = await net.fetch(pathToFileURL(path).href, {
           method: request.method, headers: request.headers, signal: request.signal,

@@ -11,6 +11,7 @@ import {
   parseImageAttachmentReference,
 } from './references.ts'
 import type { ImageAttachment, ImageDeliveryMode } from './types.ts'
+import { browserReferenceContext } from './browser-reference.ts'
 
 type ToolContentOutput = Extract<ToolResultPart['output'], { type: 'content' }>
 type ToolContentPart = ToolContentOutput['value'][number]
@@ -30,7 +31,7 @@ export function createImageUserMessage(
         ? [
             {
               type: 'text' as const,
-              text: `[图片 ${index + 1}：${attachment.name}；附件 ID：${attachment.id}]`,
+              text: imageContext(attachment, index),
             },
             {
               type: 'file' as const,
@@ -41,10 +42,16 @@ export function createImageUserMessage(
           ]
         : [{
             type: 'text' as const,
-            text: `[图片 ${index + 1}：${attachment.name}；附件 ID：${attachment.id}；像素需调用 AnalyzeImage。]\n${createImageAttachmentIdReference(attachment.id)}`,
+            text: `${imageContext(attachment, index)}\n[像素需调用 AnalyzeImage。]\n${createImageAttachmentIdReference(attachment.id)}`,
           }]),
     ],
   }
+}
+
+function imageContext(attachment: ImageAttachment, index: number): string {
+  const label = `[图片 ${index + 1}：${attachment.name}；附件 ID：${attachment.id}]`
+  return attachment.source?.kind === 'browser-reference'
+    ? `${label}\n[原始截图尺寸：${attachment.width}×${attachment.height}]\n${browserReferenceContext(attachment.source)}` : label
 }
 
 /** 请求副本适配：视觉模型临时水合，非视觉模型明确降级且不收到图片字节。 */

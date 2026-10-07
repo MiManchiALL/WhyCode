@@ -170,7 +170,8 @@ function validatePreparedAttachments(
     throw new Error(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片`)
   }
   const imageIdentities = attachments.map((attachment) =>
-    attachment.sha256 ?? attachment.storageName)
+    attachment.source?.kind === 'browser-reference'
+      ? `reference:${attachment.source.id}` : attachment.sha256 ?? attachment.storageName)
   if (new Set(imageIdentities).size !== imageIdentities.length) {
     throw new Error('同一张图片不能重复添加')
   }

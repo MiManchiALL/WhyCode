@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Download, FolderOpen, RefreshCw, WrapText } from 'lucide-react'
+import { Download, FolderOpen, RefreshCw, WrapText, MousePointer2 } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
 import { MAX_TEXT_PREVIEW_BYTES, PREVIEW_SANDBOX } from '../../shared/workspace-files.ts'
 import type { RightPanelPage } from './right-panel-state.ts'
@@ -16,9 +16,10 @@ interface DocumentProps {
   runtimeId: string
   page: FilePage
   onChange: (page: FilePage) => void
+  onReferenceInBrowser?: (path: string) => void
 }
 
-export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
+export function DocumentPreview({ runtimeId, page, onChange, onReferenceInBrowser }: DocumentProps) {
   const file = useWorkspaceFile(runtimeId, page.path)
   const currentPage = useRef(page)
   currentPage.current = page
@@ -33,6 +34,9 @@ export function DocumentPreview({ runtimeId, page, onChange }: DocumentProps) {
     if (await file.refreshForAction() && currentPage.current === page) onChange({ ...page, previewMode })
   }
   const actions: FilePreviewAction[] = [
+    ...(onReferenceInBrowser && document && (document.format === 'html' || document.mediaType === 'image/svg+xml')
+      ? [{ label: '在浏览器中引用', icon: MousePointer2, disabled: file.loading,
+        run: () => { void file.check().then(ok => { if (ok && currentPage.current === page) onReferenceInBrowser(document.path) }) } }] : []),
     ...(code ? [{ label: '自动换行', title: wrap ? '关闭自动换行' : '开启自动换行', icon: WrapText,
       pressed: wrap, disabled: file.loading, run: () => { void file.check().then(ok => { if (ok && currentPage.current === page) onChange({ ...page, wrap: !wrap }) }) } }] : []),
     { label: '刷新文件', title: file.changed ? '文件已更新，点击刷新' : '刷新文件', icon: RefreshCw,

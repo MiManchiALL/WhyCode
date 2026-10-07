@@ -17,7 +17,7 @@ export type RightPanelFileSource =
 
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
-  | { kind: 'browser'; id: string; url: string; title: string }
+  | { kind: 'browser'; id: string; url: string; title: string; workspaceFile?: boolean; referenceOnReady?: boolean }
   | { kind: 'workspace'; expanded: string[] }
   | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
   | { kind: 'subagent-overview' }
@@ -141,6 +141,7 @@ export class RightPanelSessionStore {
         [...this.states].map(([key, state]) => {
           const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal'
             && !(tab.page.kind === 'browser' && tab.page.url.startsWith('data:')))
+            .map(tab => tab.page.kind === 'browser' ? { ...tab, page: { ...tab.page, referenceOnReady: undefined } } : tab)
           return {
             key, open: state.open, tabs, inspectorView: state.inspectorView,
             activeTabId: tabs.some((tab) => tab.id === state.activeTabId)
@@ -303,7 +304,8 @@ function parsePage(value: unknown): RightPanelPage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const page = value as Record<string, unknown>
   if (page.kind === 'browser' && typeof page.id === 'string' && typeof page.url === 'string' && typeof page.title === 'string') {
-    return { kind: page.kind, id: page.id, url: page.url, title: page.title }
+    return { kind: page.kind, id: page.id, url: page.url, title: page.title,
+      ...(page.workspaceFile === true ? { workspaceFile: true } : {}) }
   }
   if (page.kind === 'workspace' && Array.isArray(page.expanded) && page.expanded.every(path => typeof path === 'string')) {
     return { kind: page.kind, expanded: page.expanded.slice(0, MAX_EXPANDED_WORKSPACE_DIRECTORIES) }

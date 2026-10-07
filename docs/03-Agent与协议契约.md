@@ -556,9 +556,15 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 共享契约位于 `shared/browser.ts`。`acquireBrowser()` 仅允许所属窗口的主 Frame，返回一次性 `{id,partition}`；`releaseBrowser(id)` 幂等释放该窗口持有的租约。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载，也不能跨窗口使用；窗口重载、崩溃或关闭撤销全部租约。
 
-`prepareBrowserFile(id,url)` 仅由所属窗口的主 Frame 为已挂载的 guest 准备本机 file 地址，返回该 guest 获准加载的内部地址；不接受远端共享、网络地址或调用者构造的内部协议。网页资源请求继续校验租约归属、发起页面和目录范围；Renderer 只将公开 file 地址投影到地址栏与标签记录，不读取本机文件内容。标签释放后撤销全部目录授权，迟到准备结果不能触发已关闭或已变更目标的导航。
+`prepareBrowserFile(id,url,runtimeId?)` 仅由所属窗口的主 Frame 为已挂载的 guest 准备 file 地址，返回该 guest 获准加载的内部地址；省略 runtimeId 时使用本机 IO，从工作区文件进入时由 Main 解析所属 runtime 的 IO。此入口不接受网络共享、网络网址或调用者构造的内部协议。网页资源请求继续校验租约归属、发起页面和目录范围；Renderer 只将公开 file 地址投影到地址栏与标签记录。标签释放后撤销全部目录授权，迟到准备结果不能触发已关闭或已变更目标的导航。
 
-`browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；网页导航、站点存储与用户交互不进入 CoreCommand、JSONL 或模型上下文。UI、网络限制和资源生命周期见文档二 §12.6。
+`browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；普通浏览不产生 CoreCommand 或模型消息。UI、网络限制和资源生命周期见文档二 §12.6。
+
+`pickBrowserTarget(id,{selected,parent?})` 只接受所属主窗口对已挂载 guest 的有界选取请求，不接收可执行脚本。返回元素或区域元数据、实际页面来源、裁剪坐标与截图字节；取消返回 null，失败拒绝。`cancelBrowserReference(id)` 幂等取消同一租约的待选请求与覆盖层；导航或销毁使旧结果失效。页面只能响应真实用户选取事件，不能调用宿主 IPC。
+
+一条网页引用使用现有 `ImageAttachment.source` 的 `browser-reference` 分支：`id`、用户 `comment`、`page` 与有序 `targets`。批注最多 4000 字符，一条引用最多 6 个目标；目标包含种类、标签、可用的选择器/文本/HTML/样式、CSS 文档矩形、视口/滚动/缩放、捕获时间及拼图中的像素范围。Main 校验页面结果，附件导入时由 Core schema 再校验来源元数据；data URL 不保存内联页面正文。每条引用对应一张有编号的拼图，计入每条消息最多 10 张的图片总上限。内容相同而批注不同的引用允许同时提交，重复引用 ID 拒绝。
+
+`createImageUserMessage` 将用户批注与网页证据分别标记，网页字段以 JSON 转义后作为不可信证据交付；模型同时收到截图附件 ID 和原始尺寸。原生视觉使用现有水合，辅助识图使用同一附件 ID 调用 AnalyzeImage，没有识图能力时沿用图片入口的拒绝规则。只记录选取时的快照，不随网页变化改写历史；不新增模型工具或独立会话记录。
 
 `getBrowserDataState()` 返回 `{clearing: 'cache' | 'all' | null}`，`browserDataChanged` 向主窗口发布相同形状的状态。`clearBrowserData(mode)` 只接受 `cache` 或 `all`，仅主窗口主 Frame 可调用，操作针对固定浏览器分区；不接受自定义路径、分区或存储类别。并发清理直接拒绝，完成 Promise 只在所有清理步骤结束后返回，部分失败以错误返回并恢复可重试状态。全部清理期间拒绝浏览器租约申请和挂载；具体删除、保留范围见文档二 §12.6。
 

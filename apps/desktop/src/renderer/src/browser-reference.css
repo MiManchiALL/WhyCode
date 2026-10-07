@@ -1,0 +1,17 @@
+.wc-reference-chip { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border:1px solid var(--wc-line); border-radius:9px; background:var(--wc-surface); color:var(--wc-ink); font-size:12px; line-height:18px; box-shadow:0 1px 2px rgb(0 0 0 / 3%); }
+.wc-reference-chip:hover, .wc-reference-chip[data-state=open] { background:var(--wc-hover, #f0f1ed); }
+.wc-reference-popover { z-index:80; border:1px solid var(--wc-line); border-radius:14px; background:var(--wc-surface); color:var(--wc-ink); box-shadow:0 6px 24px rgb(0 0 0 / 12%),0 1px 3px rgb(0 0 0 / 5%); padding:12px; outline:none; max-width:calc(100vw - 24px); }
+.wc-reference-editor { width:320px; max-width:var(--radix-popover-content-available-width); max-height:var(--radix-popover-content-available-height); overflow:auto; }
+.wc-reference-list { width:360px; }
+.wc-reference-textarea { display:block; resize:vertical; width:100%; min-height:70px; max-height:180px; margin:8px 0; border:1px solid var(--wc-line); border-radius:8px; padding:8px 10px; background:transparent; font-size:13px; line-height:20px; outline:none; }
+.wc-reference-textarea:focus { border-color:#719bd8; box-shadow:0 0 0 2px #1769ef12; }
+.wc-reference-target { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:3px 5px; border-radius:6px; background:#1769ef0c; font-size:11px; line-height:16px; }
+.wc-reference-target b { display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; flex-shrink:0; border-radius:4px; color:#fff; background:#1769ef; font-size:10px; }
+.wc-reference-target button { flex-shrink:0; border-radius:3px; padding:2px; }
+.wc-reference-secondary,.wc-reference-submit { display:inline-flex; align-items:center; justify-content:center; gap:4px; white-space:nowrap; border-radius:7px; padding:6px 8px; font-size:12px; line-height:18px; }
+.wc-reference-secondary { color:var(--wc-muted); }
+.wc-reference-secondary:hover { background:rgb(0 0 0 / 4%); color:var(--wc-ink); }
+.wc-reference-submit { background:var(--wc-ink); color:var(--wc-surface); }
+.wc-reference-submit:disabled,.wc-reference-secondary:disabled { opacity:.4; cursor:default; }
+.wc-reference-chip:focus-visible,.wc-reference-secondary:focus-visible,.wc-reference-submit:focus-visible,.wc-reference-target button:focus-visible { outline:2px solid #719bd8; outline-offset:2px; }
+.wc-browser-reference-active { color:#125bd5!important; background:#1769ef12!important; box-shadow:inset 0 0 0 1px #1769ef33; }
