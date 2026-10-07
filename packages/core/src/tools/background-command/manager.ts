@@ -24,10 +24,17 @@ const PROCESS_CLOSE_GRACE_MS = 2_000
 const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
 const MAX_BACKGROUND_TASK_DETAIL_CHARS = 240
 
+type CommandStopReason = 'model' | 'timeout' | 'shutdown'
+const COMMAND_STOP_DETAILS: Record<CommandStopReason, string> = {
+  model: '模型主动停止',
+  timeout: '后台命令超时，已请求终止进程树',
+  shutdown: '应用退出时已终止',
+}
+
 interface LiveCommandTask extends PersistedCommandTask {
   child?: ChildProcessWithoutNullStreams | WorkspaceProcess
   timeout?: ReturnType<typeof setTimeout>
-  stopReason?: 'user' | 'timeout' | 'shutdown'
+  stopReason?: CommandStopReason
   outputWriteFailed?: boolean
   terminalPersisted?: boolean
   writeTail: Promise<void>
@@ -268,9 +275,10 @@ export class CommandSessionManager {
     return this.snapshot(task)
   }
 
+  /** 单任务停止来自 StopCommand；宿主清理走 stopSession/shutdown，避免归因到模型。 */
   async stop(sessionId: string, taskId: string): Promise<CommandTaskSnapshot> {
     const task = await this.getOwnedTask(sessionId, taskId)
-    await this.stopTask(task, 'user')
+    await this.stopTask(task, 'model')
     return this.snapshot(task)
   }
 
@@ -350,11 +358,13 @@ export class CommandSessionManager {
   }
 
   private async finishFromClose(task: LiveCommandTask, code: number | null): Promise<void> {
-    if (task.stopReason === 'timeout') {
-      await this.finish(task, 'failed', code, '后台命令超时，已请求终止进程树')
-    } else if (task.stopReason) {
-      const reason = task.stopReason === 'shutdown' ? '应用退出时已终止' : '用户已停止'
-      await this.finish(task, 'stopped', code, reason)
+    if (task.stopReason) {
+      await this.finish(
+        task,
+        task.stopReason === 'timeout' ? 'failed' : 'stopped',
+        code,
+        COMMAND_STOP_DETAILS[task.stopReason],
+      )
     } else {
       await this.finish(task, code === 0 ? 'completed' : 'failed', code, code === 0 ? undefined : `退出码 ${code}`)
     }
@@ -362,7 +372,7 @@ export class CommandSessionManager {
 
   private stopTask(
     task: LiveCommandTask,
-    reason: 'user' | 'timeout' | 'shutdown',
+    reason: CommandStopReason,
   ): Promise<void> {
     if (task.status !== 'running') return Promise.resolve()
     task.stopPromise ??= this.performStop(task, reason)
@@ -371,7 +381,7 @@ export class CommandSessionManager {
 
   private async performStop(
     task: LiveCommandTask,
-    reason: 'user' | 'timeout' | 'shutdown',
+    reason: CommandStopReason,
   ): Promise<void> {
     task.stopReason = reason
     const child = task.child
@@ -387,7 +397,7 @@ export class CommandSessionManager {
       return
     }
     const status: CommandTaskStatus = reason === 'timeout' ? 'failed' : 'stopped'
-    const label = reason === 'timeout' ? '后台命令超时' : reason === 'shutdown' ? '应用退出时已终止' : '用户已停止'
+    const label = COMMAND_STOP_DETAILS[reason]
     await this.trackFinish(task, () =>
       this.finish(
         task,
@@ -428,7 +438,7 @@ export class CommandSessionManager {
       || !task.terminalNotification
       || !this.onBackgroundTaskTerminal
       || (task.status !== 'completed' && task.status !== 'failed')
-      || task.stopReason === 'user'
+      || task.stopReason === 'model'
       || task.stopReason === 'shutdown'
     ) return
     task.terminalNotificationSent = true

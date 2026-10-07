@@ -95,7 +95,7 @@ export function BackgroundTaskMenu({ tasks }: { tasks: readonly BackgroundTaskSu
                   {formatBackgroundTaskDuration(task, now)}
                 </time>
                 {task.detail && (
-                  <span className="wc-background-task-detail" title={task.detail}>
+                  <span className="wc-background-task-detail" data-status={task.status} title={task.detail}>
                     {task.detail}
                   </span>
                 )}

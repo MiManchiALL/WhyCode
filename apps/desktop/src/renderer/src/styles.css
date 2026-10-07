@@ -859,9 +859,14 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 .wc-background-task-detail {
   grid-column: 4 / -1;
   overflow: hidden;
-  color: var(--wc-danger);
+  color: var(--wc-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wc-background-task-detail[data-status='failed'],
+.wc-background-task-detail[data-status='interrupted'] {
+  color: var(--wc-danger);
 }
 
 .wc-sidebar-label {

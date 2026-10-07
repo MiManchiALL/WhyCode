@@ -124,6 +124,7 @@ describe('后台命令会话', () => {
 
       const stopped = await manager.stop(SESSION_A, started.id)
       assert.equal(stopped.status, 'stopped')
+      assert.equal(stopped.failureReason, '模型主动停止')
       assert.equal((await manager.list(SESSION_A)).length, 1)
     } finally {
       await manager.shutdown()
@@ -249,7 +250,7 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('只有显式登记的后台任务自然结束后通知一次，用户停止不通知', async () => {
+  it('只有显式登记的后台任务自然结束后通知一次，模型停止不通知', async () => {
     const fixture = await createFixture(
       `process.stdout.write('started\\n'); setTimeout(() => process.stdout.write('done\\n'), 100)`,
     )
@@ -310,7 +311,7 @@ describe('后台命令会话', () => {
       assert.equal(notifications[0]?.task.id, running.id)
       assert.equal(notifications[0]?.engagedPlanId, '33333333-3333-4333-8333-333333333333')
 
-      // 用一个足够长但最终会自行退出的进程验证“用户停止”分支，避免测试失败时留下孤儿进程。
+      // 用一个足够长但最终会自行退出的进程验证主动停止，避免测试失败时留下孤儿进程。
       const persistent = await createFixture(`setTimeout(() => {}, 2_000)`)
       try {
         const stoppedStart = await run.execute({
