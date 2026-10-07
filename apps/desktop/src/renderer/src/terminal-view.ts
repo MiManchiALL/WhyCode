@@ -60,8 +60,12 @@ function createView(info: TerminalInfo, host: HTMLDivElement): TerminalView {
   })
   terminal.onResize(({ cols, rows }) =>
     window.whycode.controlTerminal({ terminalId: info.id, type: 'resize', cols, rows }))
-  terminal.attachCustomKeyEventHandler((event) => !(event.ctrlKey
-    && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'c' && terminal.hasSelection()))
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (!event.ctrlKey || event.altKey || event.metaKey) return true
+    const key = event.key.toLowerCase()
+    // 交给浏览器原生粘贴，再由 xterm 处理换行与 bracketed paste，不能向远端发送 Ctrl+V 字符。
+    return key !== 'v' && !(key === 'c' && terminal.hasSelection())
+  })
   terminal.attachCustomWheelEventHandler((event) => !event.shiftKey && event.deltaX === 0)
   const view = { terminal, element, fit, scrollLeft: 0 }
   views.set(info.id, view)

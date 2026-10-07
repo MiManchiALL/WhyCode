@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import {
   ChevronDown,
-  ChevronUp,
   MessageSquare,
   Plus,
   Settings,
@@ -158,18 +157,16 @@ export function AppSidebar(props: AppSidebarProps) {
             {props.error && <SidebarError text={props.error} />}
             {pinnedSessions.length > 0 && (
               <section className="mb-4">
-                <div className="group mb-1 flex h-5 items-center px-2">
-                  <h2 className="min-w-0 flex-1 whitespace-nowrap wc-type-caption font-medium tracking-wide text-[var(--wc-faint)]">
-                    置顶
-                  </h2>
+                <div className="mb-1 flex h-7 items-center gap-1 px-2">
                   <button
                     type="button"
-                    className="wc-focus-ring flex size-5 items-center justify-center rounded-md text-[var(--wc-faint)] opacity-0 transition-opacity hover:bg-black/[0.045] hover:text-[var(--wc-muted)] focus:opacity-100 group-hover:opacity-100"
+                    className="wc-focus-ring flex min-w-0 items-center gap-1 rounded-md wc-type-caption font-medium text-[var(--wc-faint)] hover:text-[var(--wc-muted)]"
+                    aria-expanded={!pinnedCollapsed}
                     aria-label={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
                     title={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
                     onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
                   >
-                    {pinnedCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                    <span>置顶</span><ChevronDown size={12} className={`transition-transform ${pinnedCollapsed ? '-rotate-90' : ''}`} />
                   </button>
                 </div>
                 {!pinnedCollapsed && (
