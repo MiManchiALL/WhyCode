@@ -1,5 +1,6 @@
 import { AgentSession, type ApprovalHandler } from '../agent/session.ts'
 import type { CoreEvent } from '../events.ts'
+import type { TurnAbortReason } from '../session/interruption.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import { runProtocolRound, type RoundResult } from './run-round.ts'
 import type { ProtocolToolSpec } from './protocol-tool.ts'
@@ -60,8 +61,7 @@ export class PeerAgent {
     await this.session.handleUserMessage(input)
   }
 
-  /** 中止当前探索（用户取消整个协商时） */
-  abort(): void {
-    this.session.abort()
+  abort(reason: TurnAbortReason): void {
+    this.session.abort(reason)
   }
 }

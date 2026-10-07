@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { createFixture, deferred, finalStream, listDirStream, toolContext, waitFor } from './subagent-test-fixture.ts'
+import { SubagentStorage } from './subagent-storage.ts'
 
 describe('子代理激活生命周期', () => {
   it('冷启动独立 transcript，结束即释放，并可用同一稳定 ID 继续', async () => {
@@ -251,5 +252,35 @@ describe('子代理激活生命周期', () => {
     assert.equal(state.activations[0]?.outcome, 'aborted')
     assert.equal(state.activations[0]?.settlement, 'delivered')
     await fixture.service.close()
+  })
+
+  it('应用关闭的来源传入子代理，并在重新打开记录时保留', async () => {
+    const started = deferred<AbortSignal>()
+    const fixture = await createFixture([], async (_index, { abortSignal }) => {
+      assert.ok(abortSignal)
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            abortSignal.addEventListener('abort', () => controller.error(new Error('已取消')), { once: true })
+            started.resolve(abortSignal)
+          },
+        }),
+      }
+    })
+    const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
+    const launched = await tools[0]!.execute(
+      { agent_id: 'explore', description: '关闭时的调查', prompt: '检查当前项目' },
+      toolContext('turn-shutdown', 'tool-shutdown'),
+    )
+    const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
+    assert.ok(subagentId)
+    const signal = await started.promise
+    await fixture.service.close()
+    assert.equal(signal.reason, 'process-interruption')
+    const journal = await new SubagentStorage(fixture.sessionsRoot).open(fixture.parentJournal.sessionId, subagentId)
+    const history = JSON.stringify(journal.initialMessages)
+    assert.match(history, /whycode-turn-aborted.*process-interruption/)
+    assert.doesNotMatch(history, /用户主动停止/)
+    assert.equal(fixture.settlements[0]?.outcome, 'aborted')
   })
 })

@@ -24,7 +24,7 @@ import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createSessionFork } from './fork.ts'
 import { readSessionStartOrigin } from './fork-origin.ts'
-import { createTurnAbortedMessage } from './interruption.ts'
+import { createTurnAbortedMessage, type TurnAbortReason } from './interruption.ts'
 import { attachmentValidationSignature } from './attachment-validation-cache.ts'
 import { dehydrateImageMessages } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
@@ -1301,8 +1301,12 @@ export class SessionJournal implements SessionRecorder {
     taskId: string,
     outcome: ConsensusTaskOutcome,
     state: ConsensusPersistedState,
+    interruptionReason: TurnAbortReason | null,
   ): Promise<void> {
     return this.enqueue(async () => {
+      if (outcome === 'aborted' && interruptionReason === null) {
+        throw new Error('已取消的协商任务必须记录中断来源')
+      }
       if (
         this.activeConsensusTaskId !== taskId
         || !this.activeConsensusBaseMessages
@@ -1315,7 +1319,7 @@ export class SessionJournal implements SessionRecorder {
         : [
             ...this.activeConsensusBaseMessages,
             createTurnAbortedMessage(
-              outcome === 'aborted' ? 'user-cancel' : 'consensus-failure',
+              interruptionReason ?? 'consensus-failure',
             ),
           ]
       const taskState = keepsConsensusProgress(outcome)

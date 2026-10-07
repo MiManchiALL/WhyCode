@@ -24,8 +24,8 @@ const PROCESS_CLOSE_GRACE_MS = 2_000
 const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
 const MAX_BACKGROUND_TASK_DETAIL_CHARS = 240
 
-type CommandStopReason = 'model' | 'timeout' | 'shutdown'
-const COMMAND_STOP_DETAILS: Record<CommandStopReason, string> = {
+type CommandStopReason = { source: 'model'; detail?: string } | { source: 'timeout' | 'shutdown' }
+const COMMAND_STOP_DETAILS: Record<CommandStopReason['source'], string> = {
   model: '模型主动停止',
   timeout: '后台命令超时，已请求终止进程树',
   shutdown: '应用退出时已终止',
@@ -188,7 +188,7 @@ export class CommandSessionManager {
       await this.persist(task)
     } catch (error) {
       // 没有可靠 manifest 就不能把进程交给后台；先清理进程树，避免生成无法管理的孤儿。
-      await this.stopTask(task, 'shutdown').catch(() => undefined)
+      await this.stopTask(task, { source: 'shutdown' }).catch(() => undefined)
       this.tasks.delete(this.key(task.sessionId, task.id))
       await this.storage.removeTask(task).catch(() => undefined)
       throw error
@@ -198,7 +198,7 @@ export class CommandSessionManager {
 
     if (input.timeoutMs && task.status === 'running') {
       task.timeout = setTimeout(
-        () => this.runDetached(task, this.stopTask(task, 'timeout')),
+        () => this.runDetached(task, this.stopTask(task, { source: 'timeout' })),
         input.timeoutMs,
       )
       task.timeout.unref()
@@ -276,9 +276,9 @@ export class CommandSessionManager {
   }
 
   /** 单任务停止来自 StopCommand；宿主清理走 stopSession/shutdown，避免归因到模型。 */
-  async stop(sessionId: string, taskId: string): Promise<CommandTaskSnapshot> {
+  async stop(sessionId: string, taskId: string, reason?: string): Promise<CommandTaskSnapshot> {
     const task = await this.getOwnedTask(sessionId, taskId)
-    await this.stopTask(task, 'model')
+    await this.stopTask(task, { source: 'model', detail: reason })
     return this.snapshot(task)
   }
 
@@ -301,7 +301,7 @@ export class CommandSessionManager {
     await Promise.all(
       owned
         .filter((task) => task.status === 'running')
-        .map((task) => this.stopTask(task, 'shutdown')),
+        .map((task) => this.stopTask(task, { source: 'shutdown' })),
     )
     await Promise.all(owned.map((task) => this.settleTask(task)))
   }
@@ -322,7 +322,7 @@ export class CommandSessionManager {
     await Promise.all(
       tasks
         .filter((task) => task.status === 'running')
-        .map((task) => this.stopTask(task, 'shutdown')),
+        .map((task) => this.stopTask(task, { source: 'shutdown' })),
     )
     await Promise.all(tasks.map((task) => this.settleTask(task)))
   }
@@ -361,9 +361,9 @@ export class CommandSessionManager {
     if (task.stopReason) {
       await this.finish(
         task,
-        task.stopReason === 'timeout' ? 'failed' : 'stopped',
+        task.stopReason.source === 'timeout' ? 'failed' : 'stopped',
         code,
-        COMMAND_STOP_DETAILS[task.stopReason],
+        commandStopDetail(task.stopReason),
       )
     } else {
       await this.finish(task, code === 0 ? 'completed' : 'failed', code, code === 0 ? undefined : `退出码 ${code}`)
@@ -396,8 +396,8 @@ export class CommandSessionManager {
       await task.finishPromise
       return
     }
-    const status: CommandTaskStatus = reason === 'timeout' ? 'failed' : 'stopped'
-    const label = COMMAND_STOP_DETAILS[reason]
+    const status: CommandTaskStatus = reason.source === 'timeout' ? 'failed' : 'stopped'
+    const label = commandStopDetail(reason)
     await this.trackFinish(task, () =>
       this.finish(
         task,
@@ -438,8 +438,8 @@ export class CommandSessionManager {
       || !task.terminalNotification
       || !this.onBackgroundTaskTerminal
       || (task.status !== 'completed' && task.status !== 'failed')
-      || task.stopReason === 'model'
-      || task.stopReason === 'shutdown'
+      || task.stopReason?.source === 'model'
+      || task.stopReason?.source === 'shutdown'
     ) return
     task.terminalNotificationSent = true
     this.onBackgroundTaskTerminal({
@@ -572,6 +572,11 @@ export class CommandSessionManager {
   private key(sessionId: string, taskId: string): string {
     return `${sessionId}:${taskId}`
   }
+}
+
+function commandStopDetail(reason: CommandStopReason): string {
+  const label = COMMAND_STOP_DETAILS[reason.source]
+  return reason.source === 'model' && reason.detail ? `${label}：${reason.detail}` : label
 }
 
 function compareBackgroundTasks(left: LiveCommandTask, right: LiveCommandTask): number {

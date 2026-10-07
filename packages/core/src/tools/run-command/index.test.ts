@@ -115,46 +115,52 @@ describe('RunCommand 模型契约', () => {
 })
 
 describe('RunCommand 中止', () => {
-  it('停止时终止命令进程树并及时返回', async () => {
-    const abortController = new AbortController()
-    let progress = ''
-    let descendantPid: number | null = null
-    let abortScheduled = false
+  for (const reason of ['user-cancel', 'process-interruption'] as const) {
+    it(`停止时终止命令进程树并返回实际原因：${reason}`, async () => {
+      const abortController = new AbortController()
+      let progress = ''
+      let descendantPid: number | null = null
+      let abortScheduled = false
 
-    const execution = runCommandTool.execute(
-      { command: descendantCommand(), timeoutMs: 30_000 },
-      {
-        projectDir: process.cwd(),
-        additionalDirs: [],
-        abortSignal: abortController.signal,
-        onProgress(output) {
-          progress += output
-          const match = progress.match(/\b(\d+)\b/)
-          if (!match || abortScheduled) return
-          descendantPid = Number(match[1])
-          abortScheduled = true
-          setTimeout(() => abortController.abort('user-cancel'), 50)
+      const execution = runCommandTool.execute(
+        { command: descendantCommand(), timeoutMs: 30_000 },
+        {
+          projectDir: process.cwd(),
+          additionalDirs: [],
+          abortSignal: abortController.signal,
+          onProgress(output) {
+            progress += output
+            const match = progress.match(/\b(\d+)\b/)
+            if (!match || abortScheduled) return
+            descendantPid = Number(match[1])
+            abortScheduled = true
+            setTimeout(() => abortController.abort(reason), 50)
+          },
         },
-      },
-    )
+      )
 
-    try {
-      const result = await Promise.race([
-        execution,
-        failAfter(4_000),
-      ])
+      try {
+        const result = await Promise.race([
+          execution,
+          failAfter(4_000),
+        ])
 
-      assert.equal(result.isError, true)
-      assert.match(result.data, /中断/)
-      assert.match(result.data, /结果未知/)
-      assert.ok(descendantPid, '命令应输出后代进程 PID')
-      await delay(100)
-      assert.equal(isProcessRunning(descendantPid), false, '中止后不应残留后代进程')
-    } finally {
-      abortController.abort('test-cleanup')
-      if (descendantPid) await forceKill(descendantPid)
-    }
-  })
+        assert.equal(result.isError, true)
+        if (reason === 'user-cancel') assert.match(result.data, /用户已停止/)
+        else {
+          assert.match(result.data, /应用关闭或进程中断/)
+          assert.doesNotMatch(result.data, /用户/)
+        }
+        assert.match(result.data, /结果未知/)
+        assert.ok(descendantPid, '命令应输出后代进程 PID')
+        await delay(100)
+        assert.equal(isProcessRunning(descendantPid), false, '中止后不应残留后代进程')
+      } finally {
+        abortController.abort('test-cleanup')
+        if (descendantPid) await forceKill(descendantPid)
+      }
+    })
+  }
 })
 
 describe('RunCommand 结果', () => {

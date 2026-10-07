@@ -11,6 +11,7 @@ import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
   STOP_COMMAND_TOOL_NAME,
+  MAX_COMMAND_STOP_REASON_CHARS,
   WRITE_COMMAND_INPUT_TOOL_NAME,
 } from './constants.ts'
 
@@ -170,14 +171,17 @@ export function createCommandTools(
     buildTool({
       name: STOP_COMMAND_TOOL_NAME,
       description: '停止后台命令及其进程树',
-      prompt: '停止当前会话中的后台命令，并终止其完整进程树。对已结束任务调用是幂等的，只返回现有终态。',
+      prompt: '停止当前会话中的后台命令，并终止其完整进程树。可用 reason 简要说明停止原因。对已结束任务调用只返回现有终态，不改写原原因。',
       inputSchema: z.object({
         taskId: z.string().uuid().describe('后台任务 ID'),
+        reason: z.string().trim().min(1).max(MAX_COMMAND_STOP_REASON_CHARS)
+          .regex(/^[^\r\n]*$/, '停止原因请使用单行文字').optional()
+          .describe('简短的停止原因，例如“已取得结果，无需继续运行”'),
       }),
       isReadOnly: false,
       kind: 'control',
       async execute(input) {
-        const task = await manager.stop(sessionId, input.taskId)
+        const task = await manager.stop(sessionId, input.taskId, input.reason)
         return { data: taskSummary(task), isError: false }
       },
     }),

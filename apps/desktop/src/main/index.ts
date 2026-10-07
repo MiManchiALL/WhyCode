@@ -1007,8 +1007,8 @@ function createCoordinator(
     initialState: journal.initialConsensusState,
     onTaskStart: (taskId, state, userText, deliveredInputIds, skills) =>
       journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds, skills),
-    onTaskEnd: (taskId, outcome, state) =>
-      journal.recordConsensusTaskEnd(taskId, outcome, state),
+    onTaskEnd: (taskId, outcome, state, interruptionReason) =>
+      journal.recordConsensusTaskEnd(taskId, outcome, state, interruptionReason),
     onInputsRestored: (inputIds) => journal.markUserInputsRestored(inputIds),
     onInputsDiscarded: (inputIds) => journal.markUserInputsDiscarded(inputIds),
     onDeferredTaskStart: () => runtime.beginWork(),

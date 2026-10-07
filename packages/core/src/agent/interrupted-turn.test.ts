@@ -72,7 +72,7 @@ describe('用户中断后的新回合', () => {
 
     const running = session.handleUserMessage('启动两个子代理')
     await waitFor(() => events.some((event) => event.type === 'text-delta'))
-    session.abort({
+    session.abort('user-cancel', {
       interruptedSubagents: [{
         subagentId: '22222222-2222-4222-8222-222222222222',
         description: '核对 Core 实现',
@@ -257,31 +257,38 @@ describe('用户中断后的新回合', () => {
     assert.match(JSON.stringify(model.doStreamCalls[3]), /核心功能已经实现|完整功能通过验证/)
   })
 
-  it('UI 停止 engaged run 后持久化恢复闸门，临时问题不会清除', async () => {
-    let requestCount = 0
-    const model = new MockLanguageModelV4({
-      doStream: async (options) => {
-        requestCount++
-        if (requestCount === 1) {
-          return toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id })
-        }
-        if (requestCount === 2) return abortableStep(options.abortSignal)
-        return finalStep('TTL 是 Time to Live。')
-      },
+  for (const reason of ['user-cancel', 'process-interruption'] as const) {
+    it(`停止 engaged run 后保留原因与恢复闸门，临时问题不会清除：${reason}`, async () => {
+      let requestCount = 0
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          requestCount++
+          if (requestCount === 1) {
+            return toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id })
+          }
+          if (requestCount === 2) return abortableStep(options.abortSignal)
+          return finalStep('TTL 是 Time to Live。')
+        },
+      })
+      const store = new SessionStore(await temporaryDirectory())
+      const journal = await store.create({ workspace: localWorkspace(process.cwd()), modelId: 'test:interruption' })
+      const session = createSession(model, journal)
+      session.restoreTaskStateSnapshot(activeState())
+
+      const running = session.handleUserMessage('继续刚才的任务')
+      await waitFor(() => model.doStreamCalls.length === 2)
+      session.abort(reason)
+
+      assert.equal(await running, 'aborted')
+      assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
+      assert.equal(session.captureTaskStateSnapshot()?.interruptionReason, reason)
+      const reopened = await store.open(journal.sessionId)
+      assert.equal(reopened.initialTaskState.resumeRequired, true)
+      assert.equal(reopened.initialTaskState.interruptionReason, reason)
+      assert.equal(await session.handleUserMessage('TTL 是什么'), 'completed')
+      assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
     })
-    const session = createMemorySession(model)
-    session.restoreTaskStateSnapshot(activeState())
-
-    const running = session.handleUserMessage('继续刚才的任务')
-    await waitFor(() => model.doStreamCalls.length === 2)
-    session.abort()
-
-    assert.equal(await running, 'aborted')
-    assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
-    assert.equal(session.captureTaskStateSnapshot()?.interruptionReason, 'user-cancel')
-    assert.equal(await session.handleUserMessage('TTL 是什么'), 'completed')
-    assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
-  })
+  }
 
   it('中止开发后询问游戏热度时保留完整历史和稳定工具', async () => {
     let firstRequest = true

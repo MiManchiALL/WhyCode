@@ -314,7 +314,7 @@ export class SubagentService {
     }
     for (const activation of targets) {
       activation.cancelRequested = true
-      activation.session?.abort()
+      activation.session?.abort('process-interruption')
     }
     await Promise.all([
       ...preparations.map((preparation) => preparation.done),

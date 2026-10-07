@@ -231,33 +231,36 @@ describe('BTW 独立侧对话', () => {
     }
   })
 
-  it('停止 BTW 会取消正在等待的网页工具，并结束当前轮次', async () => {
-    let onStarted!: () => void
-    const started = new Promise<void>((resolve) => { onStarted = resolve })
-    let signal: AbortSignal | undefined
-    const model = new MockLanguageModelV4({
-      doStream: [toolStep('WebFetch', { url: 'https://example.com/slow' })],
+  for (const reason of ['user-cancel', 'process-interruption'] as const) {
+    it(`停止 BTW 保留原因，并取消正在等待的网页工具：${reason}`, async () => {
+      let onStarted!: () => void
+      const started = new Promise<void>((resolve) => { onStarted = resolve })
+      let signal: AbortSignal | undefined
+      const model = new MockLanguageModelV4({
+        doStream: [toolStep('WebFetch', { url: 'https://example.com/slow' })],
+      })
+      const session = createSession(model, {
+        mainTools: [createWebFetchTool({ fetchPage: async (_request, abortSignal) => {
+          signal = abortSignal
+          onStarted()
+          return new Promise((_resolve, reject) => {
+            abortSignal.addEventListener('abort', () => reject(new Error('已取消')), { once: true })
+          })
+        } })],
+      })
+      session.setPermissionMode('auto')
+      const results: BtwTurnResult[] = []
+      const running = session.handleBtwMessage(btwContext('btw', '读取网页', []), lifecycle(results))
+      await started
+      session.abort(reason)
+      assert.equal(await running, 'aborted')
+      assert.equal(signal?.aborted, true)
+      assert.equal(signal?.reason, reason)
+      assert.equal(results[0]?.interruptionReason, reason)
+      assert.equal(model.doStreamCalls.length, 1)
+      assert.deepEqual(session.captureMessageSnapshot(), [])
     })
-    const session = createSession(model, {
-      mainTools: [createWebFetchTool({ fetchPage: async (_request, abortSignal) => {
-        signal = abortSignal
-        onStarted()
-        return new Promise((_resolve, reject) => {
-          abortSignal.addEventListener('abort', () => reject(new Error('已取消')), { once: true })
-        })
-      } })],
-    })
-    session.setPermissionMode('auto')
-    const results: BtwTurnResult[] = []
-    const running = session.handleBtwMessage(btwContext('btw', '读取网页', []), lifecycle(results))
-    await started
-    session.abort()
-    assert.equal(await running, 'aborted')
-    assert.equal(signal?.aborted, true)
-    assert.equal(results[0]?.interruptionReason, 'user-cancel')
-    assert.equal(model.doStreamCalls.length, 1)
-    assert.deepEqual(session.captureMessageSnapshot(), [])
-  })
+  }
 })
 
 function createSession(

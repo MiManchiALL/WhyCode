@@ -5,6 +5,7 @@ import type { PdfAttachment } from '../pdf/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import {
   createTurnAbortedMessage,
+  type TurnAbortReason,
   type TurnInterruptionContext,
 } from '../session/interruption.ts'
 import { skillSummary, type ActivatedSkill } from '../skills/types.ts'
@@ -71,6 +72,7 @@ export interface ConsensusCoordinatorOptions {
     taskId: string,
     outcome: ConsensusTaskOutcome,
     state: ConsensusPersistedState,
+    interruptionReason: TurnAbortReason | null,
   ) => Promise<void>
   /** Coordinator 自持队列在停止时先持久化为 Renderer 草稿，再发送恢复事件。 */
   onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
@@ -119,7 +121,7 @@ export class ConsensusCoordinator {
   private peerPhase = false
   /** 区分 Main 的 M1 讨论与最终执行，保证 Skill 只进入普通执行工具面。 */
   private executionPhase = false
-  private aborted = false
+  private abortReason: TurnAbortReason | null = null
   /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
   private sessionScore: Record<ConsensusAgentId, number> = { Main: 0, B: 0, C: 0 }
   /** B/C 跨任务记忆（协议 §10：任务结束只留结构化摘要，下任务注入） */
@@ -150,7 +152,7 @@ export class ConsensusCoordinator {
     this.peers = []
     this.peerPhase = false
     this.executionPhase = false
-    this.aborted = false
+    this.abortReason = null
     if (state) this.restoreState(state)
   }
 
@@ -319,10 +321,10 @@ export class ConsensusCoordinator {
   private async deferUntilMainIdle(message: CoordinatorMessage): Promise<void> {
     this.deferredTaskMessages.push(message)
     this.running = true
-    this.aborted = false
+    this.abortReason = null
     this.emitQueued(message)
     await this.options.mainSession.waitUntilIdle()
-    if (this.aborted) {
+    if (this.abortReason) {
       this.running = false
       this.options.emit({ type: 'agent-status', status: 'idle' })
       return
@@ -334,10 +336,10 @@ export class ConsensusCoordinator {
   }
 
   /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
-  async abort(context?: TurnInterruptionContext): Promise<void> {
-    this.aborted = true
-    for (const peer of this.peers) peer.abort()
-    this.options.mainSession.abort(context)
+  async abort(reason: TurnAbortReason = 'user-cancel', context?: TurnInterruptionContext): Promise<void> {
+    this.abortReason ??= reason
+    for (const peer of this.peers) peer.abort(this.abortReason)
+    this.options.mainSession.abort(this.abortReason, context)
     const queued = [...this.pendingTexts, ...this.deferredTaskMessages]
     this.pendingTexts = []
     this.deferredTaskMessages = []
@@ -351,7 +353,7 @@ export class ConsensusCoordinator {
   ): Promise<void> {
     const { mainSession, emit } = this.options
     this.running = true
-    this.aborted = false
+    this.abortReason = null
     emit({ type: 'agent-status', status: 'working' })
     mainSession.setTerminalStatusManaged(true)
     mainSession.setUserQuestionsEnabled(false)
@@ -384,7 +386,7 @@ export class ConsensusCoordinator {
           ...(skills.length ? { skills: skills.map(skillSummary) } : {}),
         })
       }
-      if (this.aborted) {
+      if (this.abortReason) {
         outcome = 'aborted'
         return
       }
@@ -392,7 +394,7 @@ export class ConsensusCoordinator {
         this.options.sessionScratchDir,
         taskId,
       )
-      if (this.aborted) {
+      if (this.abortReason) {
         outcome = 'aborted'
         return
       }
@@ -413,7 +415,7 @@ export class ConsensusCoordinator {
           forcedProtocolMode: forceFullConsensus ? 'full_consensus' : undefined,
         },
       )
-      if (this.aborted) {
+      if (this.abortReason) {
         outcome = 'aborted'
         return
       }
@@ -476,7 +478,7 @@ export class ConsensusCoordinator {
           m1,
           memoryOf: (agentId) => digest + formatMemories(this.memories[agentId]),
           sessionScore: this.sessionScore,
-          isAborted: () => this.aborted,
+          isAborted: () => this.abortReason !== null,
         })
         packageText = result?.packageText ?? null
         if (result) this.saveMemories(taskId, [...result.outputs.values()])
@@ -484,8 +486,8 @@ export class ConsensusCoordinator {
         packageText = await this.runQuickReview(userText, m1.candidate, taskId, scratch.agentDirs, digest)
       }
       this.peerPhase = false
-      if (this.aborted || packageText === null) {
-        outcome = this.aborted ? 'aborted' : 'error'
+      if (this.abortReason || packageText === null) {
+        outcome = this.abortReason ? 'aborted' : 'error'
         return
       }
 
@@ -507,12 +509,13 @@ export class ConsensusCoordinator {
         recoverable: true,
       })
     } finally {
+      const interruptionReason = outcome === 'aborted' ? this.abortReason ?? 'process-interruption' : null
       if (!keepsConsensusProgress(outcome)) {
         this.restoreState(startState)
         const rollbackMessages = [
           ...interruptedBaseMessages,
           createTurnAbortedMessage(
-            outcome === 'aborted' ? 'user-cancel' : 'consensus-failure',
+            interruptionReason ?? 'consensus-failure',
           ),
         ]
         mainSession.restoreMessageSnapshot(rollbackMessages)
@@ -520,7 +523,7 @@ export class ConsensusCoordinator {
         taskPlanRolledBack = true
       }
       if (taskBoundaryStarted) {
-        await this.persistTaskEnd(taskId, outcome, this.snapshotState())
+        await this.persistTaskEnd(taskId, outcome, this.snapshotState(), interruptionReason)
       }
       if (taskPlanRolledBack) {
         emit({ type: 'task-plan-restored', plan: startTaskState?.activePlan ?? null })
@@ -570,7 +573,7 @@ export class ConsensusCoordinator {
       return { agentId, result }
     }
     const reviews = await Promise.all([run('B'), run('C')])
-    if (this.aborted) return null
+    if (this.abortReason) return null
     this.saveMemories(
       taskId,
       reviews.filter((r) => r.result.ok).map((r) => (r.result as { ok: true; output: ProtocolOutput }).output),
@@ -737,9 +740,9 @@ export class ConsensusCoordinator {
   }
 
   private interruptForDeferredInput(): void {
-    this.aborted = true
-    for (const peer of this.peers) peer.abort()
-    this.options.mainSession.abort()
+    this.abortReason ??= 'user-cancel'
+    for (const peer of this.peers) peer.abort(this.abortReason)
+    this.options.mainSession.abort(this.abortReason)
   }
 
   private async restoreQueuedMessages(messages: CoordinatorMessage[]): Promise<void> {
@@ -812,7 +815,7 @@ export class ConsensusCoordinator {
   }
 
   private executionOutcome(stopReason: StopReason | void): ConsensusTaskOutcome {
-    if (this.aborted || stopReason === 'aborted') return 'aborted'
+    if (this.abortReason || stopReason === 'aborted') return 'aborted'
     if (stopReason === 'max-turns') return 'max-turns'
     if (stopReason === 'paused') return 'paused'
     return stopReason === 'completed' ? 'completed' : 'error'
@@ -855,9 +858,10 @@ export class ConsensusCoordinator {
     taskId: string,
     outcome: ConsensusTaskOutcome,
     state: ConsensusPersistedState,
+    interruptionReason: TurnAbortReason | null,
   ): Promise<void> {
     try {
-      await this.options.onTaskEnd?.(taskId, outcome, state)
+      await this.options.onTaskEnd?.(taskId, outcome, state, interruptionReason)
     } catch (error) {
       this.reportPersistenceError('终点', error)
     }

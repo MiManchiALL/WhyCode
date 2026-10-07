@@ -1,10 +1,15 @@
 import type { ModelMessage } from 'ai'
 import { modelMessageText } from '../text.ts'
 
-export type TurnInterruptionReason =
-  | 'user-cancel'
-  | 'process-interruption'
-  | 'consensus-failure'
+export type TurnAbortReason = 'user-cancel' | 'process-interruption'
+export type TurnInterruptionReason = TurnAbortReason | 'consensus-failure'
+
+/** 只有明确的用户取消或插话才记为用户行为。 */
+export function turnAbortReason(signal: AbortSignal): TurnAbortReason {
+  return signal.reason === 'user-cancel' || signal.reason === 'interrupt'
+    ? 'user-cancel'
+    : 'process-interruption'
+}
 
 export interface TurnInterruptedSubagent {
   subagentId: string

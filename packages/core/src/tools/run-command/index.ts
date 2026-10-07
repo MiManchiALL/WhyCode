@@ -6,6 +6,7 @@ import type { Readable } from 'node:stream'
 import { unicodeSafeSuffix } from '../../text.ts'
 import { z } from 'zod'
 import { TOOL_OUTCOME_UNKNOWN } from '../../session/tool-execution.ts'
+import { turnAbortReason } from '../../session/interruption.ts'
 import { powerShellCommandArgs } from '../powershell.ts'
 import {
   buildTool,
@@ -199,7 +200,9 @@ function executeForegroundCommand(
           const suffix =
             reason === 'timeout'
               ? `[命令超时（${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms），已请求终止]`
-              : '[已被用户中断]'
+              : turnAbortReason(ctx.abortSignal) === 'user-cancel'
+                ? '[用户已停止]'
+                : '[应用关闭或进程中断，命令已停止]'
           const warning = treeStopped ? '' : '\n[警告：未能确认全部子进程均已终止]'
           finish(`${suffix}${warning}\n${TOOL_OUTCOME_UNKNOWN}\n`, true)
         })

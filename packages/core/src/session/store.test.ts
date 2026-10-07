@@ -255,6 +255,7 @@ describe('SessionStore', () => {
       'task-skills',
       'completed',
       consensusState(1),
+      null,
     )
     const queuedInputId = randomUUID()
     await journal.recordUserInputWithId(
@@ -399,7 +400,7 @@ describe('SessionStore', () => {
       version: second.version,
       message: second.message,
     })
-    await journal.recordConsensusTaskEnd('instruction-consensus', 'aborted', state)
+    await journal.recordConsensusTaskEnd('instruction-consensus', 'aborted', state, 'user-cancel')
 
     const reopened = await store.open(journal.sessionId)
     const active = JSON.stringify(reopened.initialMessages)
@@ -1153,7 +1154,7 @@ describe('SessionStore', () => {
     ])
     await journal.recordStep('turn-execute', [message('assistant', '旧答案')])
     await journal.recordTurnEnd('turn-execute', 'completed')
-    await journal.recordConsensusTaskEnd('task-3', 'completed', afterTask)
+    await journal.recordConsensusTaskEnd('task-3', 'completed', afterTask, null)
 
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.consensusStateBeforeTurn('turn-m1'), beforeTask)
@@ -1299,7 +1300,7 @@ describe('SessionStore', () => {
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordConsensusTaskStart('task-1', consensusState(1), '提交共识任务')
     const committed = consensusState(1, '最终方案')
-    await journal.recordConsensusTaskEnd('task-1', 'completed', committed)
+    await journal.recordConsensusTaskEnd('task-1', 'completed', committed, null)
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.interruptedConsensusTaskId, null)
@@ -1317,7 +1318,7 @@ describe('SessionStore', () => {
     await journal.recordStep('execution', [assistant])
     await journal.recordTurnEnd('execution', 'max-turns')
     const committed = consensusState(1, '部分进度')
-    await journal.recordConsensusTaskEnd('task-1', 'max-turns', committed)
+    await journal.recordConsensusTaskEnd('task-1', 'max-turns', committed, null)
 
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.initialMessages, [user, assistant])
@@ -1505,7 +1506,7 @@ describe('SessionStore', () => {
     assert.deepEqual(interrupted.initialTaskState, baseState)
 
     await journal.recordTurnEnd('execution', 'aborted')
-    await journal.recordConsensusTaskEnd('task-1', 'aborted', consensusState(1))
+    await journal.recordConsensusTaskEnd('task-1', 'aborted', consensusState(1), 'user-cancel')
     const cancelled = await store.open(journal.sessionId)
     assert.deepEqual(cancelled.initialTaskState, baseState)
   })
@@ -1533,7 +1534,7 @@ describe('SessionStore', () => {
     await journal.recordConsensusTaskStart('task-snapshot-root', state, '原始共识请求')
     await journal.recordSnapshot('compact', [message('user', '压缩摘要')])
     await journal.recordUserInput('快照后的未交付消息', true)
-    await journal.recordConsensusTaskEnd('task-snapshot-root', 'aborted', state)
+    await journal.recordConsensusTaskEnd('task-snapshot-root', 'aborted', state, 'user-cancel')
 
     const transcript = join(
       storeRoots.get(store)!,
@@ -1568,7 +1569,7 @@ describe('SessionStore', () => {
     await journal.recordTurnStart('m1', [message('user', '内部协议提示')])
     await journal.recordStep('m1', [message('assistant', '半截候选')])
     await journal.recordTurnEnd('m1', 'completed')
-    await journal.recordConsensusTaskEnd('task-1', 'aborted', state)
+    await journal.recordConsensusTaskEnd('task-1', 'aborted', state, 'user-cancel')
 
     assert.deepEqual(journal.messagesBeforeTurn('base'), [])
     assert.equal(journal.messagesBeforeTurn('m1'), null)

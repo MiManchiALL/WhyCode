@@ -6,6 +6,7 @@ import {
   type ConsensusTaskOutcome,
 } from '../consensus/types.ts'
 import type { StopReason } from '../events.ts'
+import type { TurnAbortReason } from './interruption.ts'
 import {
   taskPlanStateSchema,
   type TaskPlanState,
@@ -655,6 +656,7 @@ export interface SessionRecorder {
     taskId: string,
     outcome: ConsensusTaskOutcome,
     state: ConsensusPersistedState,
+    interruptionReason: TurnAbortReason | null,
   ): Promise<void>
   updateModelSelection(
     modelId: string,

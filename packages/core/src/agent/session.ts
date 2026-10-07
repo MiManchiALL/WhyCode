@@ -51,6 +51,8 @@ import {
   createTurnAbortedConsumedMessage,
   createTurnAbortedMessage,
   findPendingTurnAbortedIndex,
+  turnAbortReason,
+  type TurnAbortReason,
   type TurnInterruptionContext,
 } from '../session/interruption.ts'
 import {
@@ -718,7 +720,7 @@ export class AgentSession {
         reasoningText: '',
         reasoningDurationMs: 0,
         durationMs: Math.max(0, Date.now() - startedAt),
-        ...(stopped ? { interruptionReason: 'user-cancel' as const } : {}),
+        ...(stopped ? { interruptionReason: turnAbortReason(abortSignal) } : {}),
         ...(!stopped ? { error: error instanceof Error ? error.message : String(error) } : {}),
       }
       lifecycle.emit({ type: 'step-discarded' })
@@ -816,7 +818,7 @@ export class AgentSession {
           assistantText: '', reasoningText: '', reasoningDurationMs: 0, durationMs: 0,
           ...(toolSteps.length ? { toolSteps } : {}),
           ...(turnAbortSignal.aborted
-            ? { interruptionReason: 'user-cancel' as const }
+            ? { interruptionReason: turnAbortReason(turnAbortSignal) }
             : { error: error instanceof Error ? error.message : String(error) }),
         }
       }
@@ -962,7 +964,7 @@ export class AgentSession {
           reasoningText: '',
           reasoningDurationMs: 0,
           durationMs: Math.max(0, Date.now() - startedAt),
-          interruptionReason: 'user-cancel',
+          interruptionReason: turnAbortReason(stepAbort.signal),
         }
       }
       emit({ type: 'step-discarded' })
@@ -1457,14 +1459,13 @@ export class AgentSession {
     }
   }
 
-  /** 用户点「停止」：中止当前 turn 或压缩 */
-  abort(context?: TurnInterruptionContext): void {
+  abort(reason: TurnAbortReason = 'user-cancel', context?: TurnInterruptionContext): void {
     if (context?.interruptedSubagents.length && (this.running || this.activeTurn)) {
       this.turnInterruptionContext = {
         interruptedSubagents: context.interruptedSubagents.map((subagent) => ({ ...subagent })),
       }
     }
-    if (this.opAbort) this.opAbort.abort('user-cancel')
+    if (this.opAbort) this.opAbort.abort(reason)
     else if (this.running) this.abortRequestedDuringFinalization = true
     this.discardCurrentTurnSubagentNotifications()
     this.wakeRunLoop()
@@ -1970,11 +1971,12 @@ export class AgentSession {
     // 循环已产生稳定终态；后续短暂持久化窗口不再接受“停止”去回滚已提交 step。
     this.opAbort = null
     if (stopReason === 'aborted') {
+      const interruptionReason = turnAbortReason(abortSignal)
       const interruptedState = planExecutionEngaged
-        ? this.taskPlan?.interrupt('user-cancel') ?? null
+        ? this.taskPlan?.interrupt(interruptionReason) ?? null
         : null
       const markers: ModelMessage[] = [
-        createTurnAbortedMessage('user-cancel', this.turnInterruptionContext ?? undefined),
+        createTurnAbortedMessage(interruptionReason, this.turnInterruptionContext ?? undefined),
       ]
       if (interruptedState) {
         const taskContext = createTaskContextMessage(interruptedState)
@@ -2486,7 +2488,7 @@ export class AgentSession {
     attempt: (abort: AbortController) => Promise<T>,
   ): Promise<T> {
     const stepAbort = new AbortController()
-    const onTurnAbort = () => stepAbort.abort('user-cancel')
+    const onTurnAbort = () => stepAbort.abort(turnSignal.reason)
     turnSignal.addEventListener('abort', onTurnAbort, { once: true })
     if (turnSignal.aborted) onTurnAbort()
     this.currentStepAbort = stepAbort

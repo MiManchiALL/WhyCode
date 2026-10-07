@@ -389,10 +389,11 @@ export class DesktopSessionRuntime {
     interruption?: TurnInterruptionContext,
   ): Promise<void> {
     if (source === 'user' && this.workStartedAt !== null) this.workOutcome = 'stopped'
-    this.attachmentAbort?.abort('user-cancel')
+    const reason = source === 'user' ? 'user-cancel' : 'process-interruption'
+    this.attachmentAbort?.abort(reason)
     this.rejectApprovals()
-    if (this.coordinator) await this.coordinator.abort(interruption)
-    else this.session?.abort(interruption)
+    if (this.coordinator) await this.coordinator.abort(reason, interruption)
+    else this.session?.abort(reason, interruption)
   }
 
   async dispose(): Promise<void> {

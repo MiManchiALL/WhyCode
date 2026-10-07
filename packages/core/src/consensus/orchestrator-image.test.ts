@@ -95,14 +95,14 @@ describe('共识模式附件路由', () => {
     const internals = harness.coordinator as unknown as {
       running: boolean
       peerPhase: boolean
-      aborted: boolean
+      abortReason: string | null
       deferredTaskMessages: unknown[]
     }
     internals.running = true
     internals.peerPhase = true
 
     harness.coordinator.handleUserMessage('立即以此为准', true, [harness.attachment], 'input-now')
-    assert.equal(internals.aborted, true)
+    assert.equal(internals.abortReason, 'user-cancel')
     assert.equal(internals.deferredTaskMessages.length, 1)
     assert.equal(harness.aborts.value, 1)
     const queued = harness.events.find((event) => event.type === 'message-queued')
