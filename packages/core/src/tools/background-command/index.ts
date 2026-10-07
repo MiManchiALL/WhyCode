@@ -6,7 +6,7 @@ import {
   RUN_COMMAND_TOOL_NAME,
 } from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
-import type { CommandOutputChunk, CommandTaskSnapshot } from './types.ts'
+import { isCommandTaskActive, type CommandOutputChunk, type CommandTaskSnapshot } from './types.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
@@ -62,7 +62,7 @@ export function createCommandTools(
         workspaceIO: ctx.workspaceIO,
         timeoutMs: command.timeoutMs,
       })
-      if (task.status !== 'running') {
+      if (!isCommandTaskActive(task.status)) {
         const offset = Math.max(0, task.outputBytes - 64 * 1024)
         return terminalTaskResult(await manager.readOutput(
           sessionId,
@@ -75,7 +75,7 @@ export function createCommandTools(
         return {
           data:
             `${taskSummary(task)}\n\n` +
-            `该命令已转入后台，不会在终态自动通知你；需要查看进度或交互时使用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}。`,
+            `该命令已转入后台，自然完成或失败时不会自动通知你；用户手动停止时会通知。需要查看进度或交互时使用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}。`,
           isError: false,
         }
       }
@@ -124,7 +124,7 @@ export function createCommandTools(
       name: GET_COMMAND_OUTPUT_TOOL_NAME,
       description: '增量读取后台命令输出和状态',
       prompt:
-        '按字节偏移增量读取后台命令日志，并返回最新状态、nextOffset 与是否还有更多。运行中暂无新输出时可用 waitMs 等待，避免高频轮询。',
+        '按字节偏移增量读取后台命令日志，并返回最新状态、nextOffset 与是否还有更多。运行中暂无新输出时可用 waitMs 等待，避免高频轮询。用户主动停止仅针对该任务，不代表取消整个对话或计划；不要自行重启被用户停止的任务。',
       inputSchema: z.object({
         taskId: z.string().uuid().describe(`${RUN_COMMAND_TOOL_NAME} 后台模式返回的任务 ID`),
         offset: z.number().int().nonnegative().optional().describe('从该字节偏移开始，首次省略或传 0；后续使用上次 nextOffset'),
@@ -133,13 +133,14 @@ export function createCommandTools(
       }),
       isReadOnly: true,
       kind: 'read',
-      async execute(input) {
+      async execute(input, ctx) {
         const chunk = await manager.readOutput(
           sessionId,
           input.taskId,
           input.offset,
           input.maxBytes,
           input.waitMs,
+          ctx.abortSignal,
         )
         const header = `${taskSummary(chunk.task)}\n读取偏移：${chunk.offset} → ${chunk.nextOffset}`
         return { data: `${header}\n\n${chunk.output || '（本次没有新输出）'}`, isError: false }
@@ -181,7 +182,7 @@ export function createCommandTools(
       isReadOnly: false,
       kind: 'control',
       async execute(input) {
-        const task = await manager.stop(sessionId, input.taskId, input.reason)
+        const task = await manager.stop(sessionId, input.taskId, { source: 'model', detail: input.reason })
         return { data: taskSummary(task), isError: false }
       },
     }),
@@ -190,6 +191,7 @@ export function createCommandTools(
 }
 
 export { CommandSessionManager } from './manager.ts'
+export { isCommandTaskActive } from './types.ts'
 export {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,

@@ -582,6 +582,12 @@ export function App() {
     return window.whycode.sendCommand(targetRuntimeId, command)
   }, [])
 
+  const stopBackgroundTask = useCallback(async (task: BackgroundTaskSummary) => {
+    if (sessionIdRef.current !== task.sessionId) throw new Error('会话已切换，请重新打开后台任务')
+    const result = await sendRuntimeCommand({ type: 'stop-background-task', taskId: task.id })
+    if (!result?.ok) throw new Error(result?.error || '停止后台任务失败，请重试')
+  }, [sendRuntimeCommand])
+
   const actOnQueuedMessage = useCallback(async (
     id: string,
     action: QueuedMessageAction,
@@ -2223,6 +2229,7 @@ export function App() {
               : workspace.mode === 'pending-managed' ? null : projectDir}
             workspaceMode={loadingConversation ? pendingSession?.workspace?.mode ?? 'pending-managed' : workspace.mode}
             backgroundTasks={loadingConversation ? [] : backgroundTasks}
+            onStopBackgroundTask={stopBackgroundTask}
             rightPanelOpen={rightPanelState.open}
             disabled={loadingConversation}
             onOpenWorkspaceFolder={openCurrentWorkspaceFolder}

@@ -118,7 +118,7 @@ export function createRunCommandTool(
     ? backgroundCapableInputSchema
     : foregroundInputSchema
   const backgroundPrompt = options.startInBackground
-    ? '需要让命令脱离当前工具步骤、跨回合继续运行时才设 runInBackground=true；后台模式会立即返回任务 ID，并由命令任务工具管理。若你需要在任务自然完成或失败后收到通知并自动继续，再设 wakeOnCompletion=true；否则不会自动通知。'
+    ? '需要让命令脱离当前工具步骤、跨回合继续运行时才设 runInBackground=true；后台模式会立即返回任务 ID，并由命令任务工具管理。若你需要在任务自然完成或失败后收到通知并自动继续，再设 wakeOnCompletion=true；用户从后台任务菜单手动停止时会单独通知。'
     : ''
   return buildTool({
     name: RUN_COMMAND_TOOL_NAME,

@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./btw": "./src/session/btw.ts",
+    "./background-command": "./src/tools/background-command/types.ts",
     "./events": "./src/events.ts",
     "./presentation": "./src/presentation.ts",
     "./web-source": "./src/web-source.ts",

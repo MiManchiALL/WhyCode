@@ -233,7 +233,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
 | `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元，支持二进制和大文件；文本预览与统计边界见文档二 §5.2 |
 | `MoveFile` | 单个普通文件源/目标；目标必须不存在，不递归目录、不静默覆盖；文本审批预览边界同上 |
-| `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与命令任务工具管理，只有显式 `wakeOnCompletion=true` 才登记终态续轮；不扫描工作区、不建文件检查点 |
+| `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与命令任务工具管理，`wakeOnCompletion=true` 登记自然终态续轮，用户手动停止独立通知；不扫描工作区、不建文件检查点 |
 | `ListCommands` | 列出当前会话可见命令任务 |
 | `GetCommandOutput` | 增量读取命令输出 |
 | `WriteCommandInput` | 给仍存活命令写 stdin；按 execute 权限处理 |
@@ -255,7 +255,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 ### 3.3 后台任务通知
 
-只有 `RunCommand(runInBackground=true)` 在离开当前工具步骤后继续，任务状态由宿主投影到 Header 后台任务菜单。`wakeOnCompletion` 默认 `false`，且设为 `true` 时必须同时启用后台模式；只有这类已登记任务在自然进入 `completed` 或 `failed` 后，才向所属模型会话注入：
+只有 `RunCommand(runInBackground=true)` 在离开当前工具步骤后继续，任务状态由宿主投影到 Header 后台任务菜单。`wakeOnCompletion` 默认 `false`，且设为 `true` 时必须同时启用后台模式；已登记任务在自然进入 `completed` 或 `failed` 后通知所属模型会话。用户从菜单手动停止后，无论该开关如何，均以 `stopped` 终态发送同一种内部消息：
 
 ```text
 <task-notification source="background-command" version="1">
@@ -264,9 +264,9 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 </task-notification>
 ```
 
-通知是内部 user 消息但不是用户要求，不生成用户气泡。模型调用 `StopCommand` 或应用退出不生成自动唤醒。宿主根据会话与计划所有权决定是否续轮；模型不得用 Sleep 或高频轮询等待。
+通知是内部 user 消息，不生成用户气泡。用户手动停止的说明为“用户主动停止”，消息明确要求尊重停止操作、不得自行重启该任务，同时说明停止单个任务不代表取消整个对话或计划。模型调用 `StopCommand` 或应用退出不生成自动唤醒；正在读取输出的模型若已直接得到终态，不再重复交付通知。宿主根据会话与计划所有权决定是否续轮；模型不得用 Sleep 或高频轮询等待。
 
-`StopCommand` 将运行中的任务记为 `stopped`，说明为“模型主动停止”；提供 `reason` 时显示“模型主动停止：<reason>”。`reason` 为可选单行文字，去除首尾空白后须为 1～120 字符；它只补充说明，不能改变由实际调用入口确定的停止来源。超时与应用退出保留各自原因。工具结果、后续命令查询、Header 和重启恢复共用持久化的终态说明；并发停止保留首次请求的原因，对已结束任务再次停止只返回原终态，不改写原原因。
+`StopCommand` 发起停止后进入 `stopping`，确认退出后记为 `stopped`，说明为“模型主动停止”；提供 `reason` 时显示“模型主动停止：<reason>”。`reason` 为可选单行文字，去除首尾空白后须为 1～120 字符；它只补充说明，不能改变由实际调用入口确定的停止来源。超时与应用退出保留各自原因。工具结果、后续命令查询、Header 和重启恢复共用持久化的终态说明；并发停止保留首次请求的原因，对已结束任务再次停止只返回原终态，不改写原原因。停止失败不伪造终态，任务仍可查询或重试；重启时遗留的活动任务恢复为 `interrupted`。
 
 ### 3.4 Web
 

@@ -101,7 +101,7 @@ for (const scenario of stopCases) {
     assert.ok(repeated.data.includes(scenario.detail))
     assert.deepEqual((await manager.list(SESSION))[0], terminal)
     assert.equal(terminateCalls, scenario.reason === 'exit' ? 0 : 1)
-    assert.equal(notifications.length, terminal.status === 'failed' ? 1 : 0)
+    assert.equal(notifications.length, 0, '直接等待得到终态或模型/宿主停止均不重复通知')
 
     reopened = new CommandSessionManager(root)
     for (const current of [manager, reopened]) {

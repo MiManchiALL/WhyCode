@@ -28,6 +28,7 @@ import {
   cleanupUnreferencedAttachments,
   compactVisibleCoreEvent,
   CommandSessionManager,
+  isCommandTaskActive,
   ConsensusCoordinator,
   createCommandTools,
   createAuxiliaryImageAnalyzer,
@@ -642,7 +643,7 @@ async function createCurrentWorktreeBranch(
     if (runtime.executionBusy) throw new Error('Agent 工作中，请等待任务结束后再创建分支')
     if (runtime.sessionId) {
       const backgroundRunning = (await commandSessions.list(runtime.sessionId))
-        .some((task) => task.status === 'running')
+        .some((task) => isCommandTaskActive(task.status))
       if (backgroundRunning) throw new Error('仍有后台命令运行，请先停止后再创建分支')
     }
     const signal = new AbortController().signal
@@ -1069,6 +1070,15 @@ async function handleCommand(
         subagentAbort?.done ?? Promise.resolve(),
       ])
       break
+    }
+    case 'stop-background-task': {
+      if (!runtime.sessionId) return { ok: false, error: '当前没有可操作的会话' }
+      try {
+        await commandSessions.stop(runtime.sessionId, command.taskId, { source: 'user' })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
     }
     case 'set-consensus': {
       if (!command.enabled) {

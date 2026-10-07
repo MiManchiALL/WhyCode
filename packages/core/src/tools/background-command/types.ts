@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 export const commandTaskStatusSchema = z.enum([
   'running',
+  'stopping',
   'completed',
   'failed',
   'stopped',
@@ -25,6 +26,10 @@ export const persistedCommandTaskSchema = z.object({
 
 export type CommandTaskStatus = z.infer<typeof commandTaskStatusSchema>
 export type PersistedCommandTask = z.infer<typeof persistedCommandTaskSchema>
+
+export function isCommandTaskActive(status: CommandTaskStatus): boolean {
+  return status === 'running' || status === 'stopping'
+}
 
 export interface CommandTaskSnapshot extends PersistedCommandTask {
   canWrite: boolean
@@ -58,7 +63,7 @@ export interface BackgroundTaskSummary {
   startedAt: string
   endedAt?: string
   detail?: string
-  /** 只表示任务终态会触发所属模型会话续轮，不改变任务类型。 */
+  /** 自然完成或失败时是否通知；用户手动停止独立通知所属模型会话。 */
   wakeOnCompletion: boolean
 }
 

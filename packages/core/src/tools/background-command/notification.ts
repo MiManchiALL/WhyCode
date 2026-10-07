@@ -36,7 +36,9 @@ export function createCommandTaskNotificationMessage(
     content: [
       COMMAND_TASK_NOTIFICATION_OPEN,
       serializePayload(payload),
-      '这是应用生成的后台任务终态，不是用户输入。请读取尚未检查的输出并据此继续当前工作；不要只复述通知。',
+      task.status === 'stopped'
+        ? '这是应用生成的后台任务通知：用户主动停止了这个任务，不代表取消整个对话或计划。不要自行重启该任务；结合现有结果与用户意图继续，必要时向用户确认。'
+        : '这是应用生成的后台任务终态，不是用户输入。请读取尚未检查的输出并据此继续当前工作；不要只复述通知。',
       COMMAND_TASK_NOTIFICATION_CLOSE,
     ].join('\n'),
   }

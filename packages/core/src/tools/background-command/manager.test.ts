@@ -10,6 +10,7 @@ import {
 } from './index.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
+import { isCommandTaskActive } from './types.ts'
 import type {
   BackgroundTaskState,
   CommandOutputChunk,
@@ -58,7 +59,7 @@ async function waitForTerminal(
     const chunk = await manager.readOutput(SESSION_A, taskId, currentOffset, 32_768, 500)
     output += chunk.output
     currentOffset = chunk.nextOffset
-    if (chunk.task.status !== 'running') return { ...chunk, output, offset }
+    if (!isCommandTaskActive(chunk.task.status)) return { ...chunk, output, offset }
   }
   throw new Error('后台命令未在测试时限内结束')
 }
@@ -122,7 +123,7 @@ describe('后台命令会话', () => {
       assert.match(second.output, /input:hello/)
       await assert.rejects(() => manager.readOutput(SESSION_B, started.id), /当前会话不存在/)
 
-      const stopped = await manager.stop(SESSION_A, started.id)
+      const stopped = await manager.stop(SESSION_A, started.id, { source: 'model' })
       assert.equal(stopped.status, 'stopped')
       assert.equal(stopped.failureReason, '模型主动停止')
       assert.equal((await manager.list(SESSION_A)).length, 1)
@@ -226,7 +227,7 @@ describe('后台命令会话', () => {
           abortSignal: new AbortController().signal,
         })
         assert.match(background.data, /状态：running/)
-        assert.match(background.data, /不会在终态自动通知你/)
+        assert.match(background.data, /自然完成或失败时不会自动通知你/)
         const running = (await manager.list(SESSION_A)).find((item) => item.status === 'running')
         assert.ok(running)
         const projected = (await manager.backgroundTasks(SESSION_A)).tasks
@@ -235,7 +236,7 @@ describe('后台命令会话', () => {
         assert.equal(projected?.wakeOnCompletion, false)
         const ready = await manager.readOutput(SESSION_A, running.id, 0, 32_768, 5_000)
         assert.match(ready.output, /server ready/)
-        await manager.stop(SESSION_A, running.id)
+        await manager.stop(SESSION_A, running.id, { source: 'model' })
       } finally {
         await rm(persistentFixture.root, {
           recursive: true,
@@ -250,13 +251,18 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('只有显式登记的后台任务自然结束后通知一次，模型停止不通知', async () => {
+  it('只有显式登记的后台任务自然结束后通知一次，模型停止不通知', { timeout: 15_000 }, async () => {
     const fixture = await createFixture(
       `process.stdout.write('started\\n'); setTimeout(() => process.stdout.write('done\\n'), 100)`,
     )
     const notifications: CommandTaskTerminalNotification[] = []
+    let notify!: () => void
+    const firstNotification = new Promise<void>((resolve) => { notify = resolve })
     const manager = new CommandSessionManager(fixture.storage, {
-      onBackgroundTaskTerminal: (notification) => notifications.push(notification),
+      onBackgroundTaskTerminal: (notification) => {
+        notifications.push(notification)
+        notify()
+      },
     })
     try {
       const run = createCommandTools(manager, SESSION_A).runCommand
@@ -269,7 +275,7 @@ describe('后台命令会话', () => {
         additionalDirs: [],
         abortSignal: new AbortController().signal,
       })
-      assert.match(silent.data, /不会在终态自动通知你/)
+      assert.match(silent.data, /自然完成或失败时不会自动通知你/)
       const silentTask = (await manager.list(SESSION_A)).find((task) =>
         task.command === fixture.command,
       )
@@ -298,8 +304,9 @@ describe('后台命令会话', () => {
         ),
         true,
       )
-      const completed = await waitForTerminal(manager, running.id)
-      assert.equal(completed.task.status, 'completed')
+      // GetCommandOutput 接收终态会消费通知；这里仅观察生命周期，验证无人读取时的自动通知。
+      await firstNotification
+      assert.equal(notifications[0]?.task.status, 'completed')
       assert.equal(
         manager.hasPendingPlanContinuation(
           SESSION_A,
@@ -328,7 +335,7 @@ describe('后台命令会话', () => {
         const stoppedTask = (await manager.list(SESSION_A)).find((task) =>
           task.status === 'running' && task.id !== running.id)
         assert.ok(stoppedTask)
-        await manager.stop(SESSION_A, stoppedTask.id)
+        await manager.stop(SESSION_A, stoppedTask.id, { source: 'model' })
         assert.equal(notifications.length, 1)
       } finally {
         await rm(persistent.root, {
@@ -362,7 +369,7 @@ describe('后台命令会话', () => {
       assert.equal(ordinaryRunning.tasks[0]?.id, ordinary.id)
       assert.equal(ordinaryRunning.tasks[0]?.status, 'running')
       assert.equal(ordinaryRunning.tasks[0]?.wakeOnCompletion, false)
-      await manager.stop(SESSION_A, ordinary.id)
+      await manager.stop(SESSION_A, ordinary.id, { source: 'model' })
       const ordinaryStopped = await manager.backgroundTasks(SESSION_A)
       assert.equal(ordinaryStopped.tasks[0]?.status, 'stopped')
       assert.equal(ordinaryStopped.tasks[0]?.wakeOnCompletion, false)
@@ -383,7 +390,7 @@ describe('后台命令会话', () => {
       assert.equal(notifyingRunning?.status, 'running')
       assert.equal(notifyingRunning?.wakeOnCompletion, true)
 
-      await manager.stop(SESSION_A, notifying.id)
+      await manager.stop(SESSION_A, notifying.id, { source: 'model' })
       const stopped = await manager.backgroundTasks(SESSION_A)
       const notifyingStopped = stopped.tasks.find((task) => task.id === notifying.id)
       assert.equal(notifyingStopped?.status, 'stopped')

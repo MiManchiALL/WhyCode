@@ -17,6 +17,7 @@ interface TaskHeaderProps {
   workspaceLabel?: string
   ssh?: { target: string; connection: SshConnectionSnapshot | null; loading: boolean }
   backgroundTasks: readonly BackgroundTaskSummary[]
+  onStopBackgroundTask: (task: BackgroundTaskSummary) => Promise<void>
   rightPanelOpen: boolean
   onOpenWorkspaceFolder: () => void
   onToggleRightPanel: () => void
@@ -48,7 +49,7 @@ export function TaskHeader(props: TaskHeaderProps) {
         {props.ssh ? <SshWorkspaceStatus key={props.ssh.target} {...props.ssh} /> : <WorkspaceBadge mode={props.workspaceMode} />}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <BackgroundTaskMenu tasks={props.backgroundTasks} />
+        <BackgroundTaskMenu key={props.sessionId} tasks={props.backgroundTasks} onStop={props.onStopBackgroundTask} />
         <button
           type="button"
           className={`wc-focus-ring flex size-8 items-center justify-center rounded-lg text-[var(--wc-muted)] hover:bg-black/[0.05] hover:text-[var(--wc-ink)] ${props.rightPanelOpen ? 'bg-black/[0.055] text-[var(--wc-ink)]' : ''}`}

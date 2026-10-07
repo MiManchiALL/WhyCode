@@ -30,54 +30,64 @@ describe('后台任务终态续轮', () => {
     assert.equal(isCommandTaskNotificationText(content), true)
   })
 
-  it('Main 空闲时以隐藏内部消息自动唤醒模型，不伪造用户消息事件', async () => {
-    const events: CoreEvent[] = []
-    const model = new MockLanguageModelV4({
-      doStream: async (options) => {
-        const prompt = JSON.stringify(options.prompt)
-        assert.match(prompt, /task-notification/)
-        assert.match(prompt, new RegExp(TASK_ID))
-        return finalStep('已读取后台结果并继续处理。')
-      },
+  for (const status of ['completed', 'stopped'] as const) {
+    it(`Main 空闲时以隐藏内部消息自动唤醒模型，不伪造用户消息事件：${status}`, async () => {
+      const events: CoreEvent[] = []
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          const prompt = JSON.stringify(options.prompt)
+          assert.match(prompt, /task-notification/)
+          assert.match(prompt, new RegExp(TASK_ID))
+          if (status === 'stopped') {
+            assert.match(prompt, /用户主动停止/)
+            assert.match(prompt, /不要自行重启/)
+            assert.match(prompt, /不代表取消整个对话或计划/)
+          }
+          return finalStep('已读取后台结果并继续处理。')
+        },
+      })
+      const session = createSession(model, events)
+
+      assert.equal(await session.handleTaskNotification(notification(undefined, status)), 'completed')
+      assert.equal(model.doStreamCalls.length, 1)
+      assert.equal(events.some((event) => event.type === 'message-queued'), false)
+      assert.equal(events.some((event) => event.type === 'message-injected'), false)
+      assert.equal(events.some((event) => event.type === 'turn-start'), true)
     })
-    const session = createSession(model, events)
 
-    assert.equal(await session.handleTaskNotification(notification()), 'completed')
-    assert.equal(model.doStreamCalls.length, 1)
-    assert.equal(events.some((event) => event.type === 'message-queued'), false)
-    assert.equal(events.some((event) => event.type === 'message-injected'), false)
-    assert.equal(events.some((event) => event.type === 'turn-start'), true)
-  })
+    it(`Main 正在工作时在下一稳定步骤边界注入终态，并继续同一轮模型调用：${status}`, async () => {
+      const firstStarted = deferred<void>()
+      const releaseFirst = deferred<void>()
+      let call = 0
+      const events: CoreEvent[] = []
+      const model = new MockLanguageModelV4({
+        doStream: async (options) => {
+          call++
+          if (call === 1) {
+            firstStarted.resolve()
+            await releaseFirst.promise
+            assert.equal(options.abortSignal?.aborted, false)
+            return finalStep('第一步结束。')
+          }
+          assert.match(JSON.stringify(options.prompt), new RegExp(TASK_ID))
+          if (status === 'stopped') assert.match(JSON.stringify(options.prompt), /用户主动停止/)
+          return finalStep('后台结果已经接续处理。')
+        },
+      })
+      const session = createSession(model, events)
+      const running = session.handleUserMessage('开始执行任务')
+      await firstStarted.promise
 
-  it('Main 正在工作时在下一稳定步骤边界注入终态，并继续同一轮模型调用', async () => {
-    const firstStarted = deferred<void>()
-    const releaseFirst = deferred<void>()
-    let call = 0
-    const events: CoreEvent[] = []
-    const model = new MockLanguageModelV4({
-      doStream: async (options) => {
-        call++
-        if (call === 1) {
-          firstStarted.resolve()
-          await releaseFirst.promise
-          return finalStep('第一步结束。')
-        }
-        assert.match(JSON.stringify(options.prompt), new RegExp(TASK_ID))
-        return finalStep('后台结果已经接续处理。')
-      },
+      assert.equal(session.handleTaskNotification(notification(undefined, status)), undefined)
+      releaseFirst.resolve()
+
+      assert.equal(await running, 'completed')
+      assert.equal(call, 2)
+      assert.equal(events.some((event) => event.type === 'message-queued'), false)
+      assert.equal(events.some((event) => event.type === 'message-injected'), false)
+      assert.equal(events.filter((event) => event.type === 'turn-start').length, 1)
     })
-    const session = createSession(model, events)
-    const running = session.handleUserMessage('开始执行任务')
-    await firstStarted.promise
-
-    assert.equal(session.handleTaskNotification(notification()), undefined)
-    releaseFirst.resolve()
-
-    assert.equal(await running, 'completed')
-    assert.equal(call, 2)
-    assert.equal(events.some((event) => event.type === 'message-queued'), false)
-    assert.equal(events.some((event) => event.type === 'message-injected'), false)
-  })
+  }
 
   it('等待用户问题时保持通知排队，直到真实用户消息到达才一并交付', async () => {
     const model = new MockLanguageModelV4({
@@ -105,7 +115,7 @@ describe('后台任务终态续轮', () => {
     ])
 
     assert.equal(session.waitingForUserInput, true)
-    assert.equal(session.handleTaskNotification(notification()), undefined)
+    assert.equal(session.handleTaskNotification(notification(undefined, 'stopped')), undefined)
     assert.equal(model.doStreamCalls.length, 0)
     assert.equal(
       await session.handleUserMessage('回答「你使用哪个系统？」：Windows'),
@@ -184,7 +194,7 @@ describe('后台任务终态续轮', () => {
   })
 })
 
-function notification(engagedPlanId?: string): CommandTaskTerminalNotification {
+function notification(engagedPlanId?: string, status: 'completed' | 'stopped' = 'completed'): CommandTaskTerminalNotification {
   return {
     task: {
       schemaVersion: 1,
@@ -192,10 +202,11 @@ function notification(engagedPlanId?: string): CommandTaskTerminalNotification {
       sessionId: SESSION_ID,
       command: 'node build.mjs',
       cwd: 'C:\\workspace',
-      status: 'completed',
+      status,
       startedAt: '2026-08-05T08:00:00.000Z',
       endedAt: '2026-08-05T08:00:01.000Z',
-      exitCode: 0,
+      exitCode: status === 'stopped' ? 143 : 0,
+      ...(status === 'stopped' ? { failureReason: '用户主动停止' } : {}),
       outputBytes: 128,
       outputTruncated: false,
       canWrite: false,

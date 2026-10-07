@@ -156,6 +156,7 @@ export {
 } from './tools/read-pdf/index.ts'
 export {
   CommandSessionManager,
+  isCommandTaskActive,
   createCommandTools,
   LIST_COMMANDS_TOOL_NAME,
   GET_COMMAND_OUTPUT_TOOL_NAME,

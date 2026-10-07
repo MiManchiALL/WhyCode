@@ -18,6 +18,7 @@ describe('后台任务展示', () => {
 
   it('为所有生命周期状态提供稳定文案', () => {
     assert.equal(backgroundTaskStatusLabel('running'), '运行中')
+    assert.equal(backgroundTaskStatusLabel('stopping'), '正在停止…')
     assert.equal(backgroundTaskStatusLabel('completed'), '已完成')
     assert.equal(backgroundTaskStatusLabel('failed'), '失败')
     assert.equal(backgroundTaskStatusLabel('stopped'), '已停止')

@@ -103,7 +103,7 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   t.after(() => manager.shutdown())
   const background = await manager.start({ sessionId: 'session', command: 'sleep 60 & wait', cwd: env.project, workspaceIO: io })
   assert.equal(background.status, 'running')
-  assert.equal((await manager.stop('session', background.id)).status, 'stopped')
+  assert.equal((await manager.stop('session', background.id, { source: 'user' })).status, 'stopped')
   assert.ok((await manager.backgroundTasks('session')).tasks.every(task => task.status !== 'running'))
 
   const terminal = host.processes.spawn('read value; stty size; printf "%s" "$value"', env.project, { cols: 80, rows: 24 })

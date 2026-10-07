@@ -481,6 +481,8 @@ export type CoreCommand =
       remember?: boolean
     }
   | { type: 'abort' }
+  /** 用户只停止所属会话中的一个后台任务，不中断当前模型步骤。 */
+  | { type: 'stop-background-task'; taskId: string }
   | { type: 'set-model'; modelId: string }
   | { type: 'set-reasoning-effort'; reasoningEffort: ReasoningEffortSelection }
   | { type: 'set-permission-mode'; mode: 'readonly' | 'default' | 'acceptEdits' | 'auto' }

@@ -2,6 +2,7 @@ import type { BackgroundTaskSummary } from '@whycode/core'
 
 const STATUS_LABELS: Record<BackgroundTaskSummary['status'], string> = {
   running: '运行中',
+  stopping: '正在停止…',
   completed: '已完成',
   failed: '失败',
   stopped: '已停止',
