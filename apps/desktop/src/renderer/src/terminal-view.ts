@@ -33,6 +33,7 @@ function createView(info: TerminalInfo, host: HTMLDivElement): TerminalView {
       background: style.getPropertyValue('--wc-surface').trim(),
       foreground: style.getPropertyValue('--wc-ink').trim(),
       cursor: style.getPropertyValue('--wc-ink').trim(),
+      cursorAccent: style.getPropertyValue('--wc-surface').trim(),
       selectionBackground: style.getPropertyValue('--wc-blue').trim(),
     },
     ...(info.windowsBuild !== undefined
