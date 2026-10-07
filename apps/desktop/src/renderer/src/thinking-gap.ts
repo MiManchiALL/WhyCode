@@ -30,21 +30,18 @@ export function thinkingGapRevealDelay({
   pendingMessage,
 }: ThinkingGapState): number | null {
   if (stopping || status === 'waiting-approval') return null
-  // 提交与远端准备早于模型状态；沿用待确认输入和宿主工作起点，不另存运行状态。
+  // 提交与远端准备早于模型状态；后台唤醒也由宿主开始工作，不依赖新的用户气泡。
   if (workStartedAt === null) return pendingMessage ? 0 : null
 
   const currentWorkStart = lastWorkBoundary(blocks) + 1
-  let hasUser = false
   for (let index = currentWorkStart; index < blocks.length; index++) {
     const block = blocks[index]
     if (!block) continue
-    if (block.kind === 'user') hasUser = true
     if (hasPersistentFeedback(block)) return null
   }
-  if (!hasUser) return pendingMessage ? 0 : null
 
   const latest = blocks.at(-1)
-  if (!latest || latest.kind === 'work-duration') return null
+  if (!latest || latest.kind === 'work-duration') return 0
   if (
     latest.kind === 'user'
     || latest.kind === 'tool'

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { Block } from '../../shared/conversation-state.ts'
+import { applyCoreEvent, createConversationState, type Block } from '../../shared/conversation-state.ts'
 import {
   HEART_WAVE_FLOW_SPAN,
   HEART_WAVE_LOOP_SECONDS,
@@ -64,6 +64,53 @@ describe('模型空窗反馈', () => {
       user,
       { kind: 'thinking', id: 'thinking-1', text: '分析', durationMs: 320 },
     ]), 0)
+  })
+
+  it('后台唤醒没有新用户气泡，等待首个输出和后续静默仍有反馈', () => {
+    let state = createConversationState([
+      { type: 'user-message', text: '运行一个后台命令', startsTurn: true },
+      { type: 'core-event', event: { type: 'turn-start', turnId: 'old-turn' } },
+      { type: 'core-event', event: { type: 'text-delta', text: '后台命令已启动' } },
+      { type: 'core-event', event: { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: 'old-turn' } },
+    ])
+    assert.equal(delay(state.blocks, { status: 'idle', workStartedAt: null }), null)
+
+    // 手动停止和自然完成均从内部通知续轮，不生成新的用户消息。
+    for (const status of ['idle', 'thinking', 'working'] as const) {
+      assert.equal(delay(state.blocks, { status }), 0)
+    }
+    state = applyCoreEvent(state, { type: 'turn-start', turnId: 'wake-turn' })
+    assert.equal(delay(state.blocks), 0)
+    state = applyCoreEvent(state, { type: 'text-delta', text: '后台命令已结束' })
+    assert.equal(delay(state.blocks), THINKING_GAP_VISIBLE_IDLE_MS)
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, {
+      type: 'work-finished', durationMs: 200, outcome: 'completed', forkTurnId: 'wake-turn',
+    })
+    assert.equal(delay(state.blocks, { status: 'idle', workStartedAt: null }), null)
+    assert.equal(state.blocks.filter(block => block.kind === 'user').length, 1)
+    assert.equal(state.blocks.filter(block => block.kind === 'work-duration').length, 2)
+  })
+
+  it('无用户气泡的续轮仍沿用工具与思考反馈，并在停止或失败后释放', () => {
+    const boundary: Block = {
+      kind: 'work-duration', id: 'previous-work', forkTurnId: null,
+      durationMs: 100, outcome: 'completed',
+    }
+    assert.equal(delay([]), 0)
+    assert.equal(delay([boundary, completedTool]), 0)
+    assert.equal(delay([boundary, {
+      ...completedTool, call: { ...completedTool.call, status: 'running' },
+    }]), null)
+    assert.equal(delay([boundary, {
+      kind: 'thinking', id: 'wake-thinking', text: '检查任务结果', durationMs: null,
+    }]), null)
+    assert.equal(delay([boundary, {
+      kind: 'thinking', id: 'wake-thinking', text: '检查任务结果', durationMs: 300,
+    }]), 0)
+    assert.equal(delay([boundary], { status: 'waiting-approval' }), null)
+    assert.equal(delay([boundary], { stopping: true }), null)
+    assert.equal(delay([boundary], { status: 'error', workStartedAt: null }), null)
   })
 
   it('运行中工具、流式思考和协商代理使用自身的持续反馈', () => {
