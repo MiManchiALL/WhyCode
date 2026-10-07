@@ -4,6 +4,8 @@ export interface BrowserPickOptions {
   selected: BrowserTarget[]
   parent?: boolean
 }
+export interface BrowserReferenceProjection { missing: string[]; anchor?: BrowserRect }
+export interface BrowserReferenceSelection { selected: BrowserTarget[]; reveal?: boolean }
 export interface BrowserTargetCapture {
   target: BrowserTarget
   page: BrowserReferenceSource['page']
@@ -14,4 +16,5 @@ export interface BrowserTargetCapture {
 export interface BrowserReferenceImage {
   bytes: Uint8Array
   source: BrowserReferenceSource
+  browserId?: string
 }

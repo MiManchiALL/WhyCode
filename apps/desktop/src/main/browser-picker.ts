@@ -1,27 +1,49 @@
 /// <reference lib="dom" />
-import type { BrowserPickOptions } from '../shared/browser-reference.ts'
+import type { BrowserPickOptions, BrowserReferenceSelection } from '../shared/browser-reference.ts'
+
+type PickerCommand = (BrowserPickOptions & { captureId: string }) | (BrowserReferenceSelection & { display: true })
 
 /** 函数完整运行于 guest 的隔离世界，不暴露 preload、Node 或宿主消息入口。 */
-export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | 'show'): Promise<unknown> | void {
-  type PickerWindow = Window & { __whycodePicker?: { close: () => void; host: HTMLElement; last: Element | null } }
+export function browserPicker(options: PickerCommand | 'clear' | 'hide'): Promise<unknown> | void {
+  type PickerWindow = Window & { __whycodePicker?: { close: () => void; host: HTMLElement; nodes: Map<string, Element> } }
   const world = window as PickerWindow
   const previous = world.__whycodePicker
-  if (options === 'hide' || options === 'show') {
-    if (previous) previous.host.style.setProperty('visibility', options === 'hide' ? 'hidden' : 'visible', 'important')
+  if (options === 'hide') {
+    if (previous) previous.host.style.setProperty('visibility', 'hidden', 'important')
     // 等下一次合成提交再截图，避免把上一次绘制的选取边框一起截入原图。
-    if (options === 'hide') return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve({ width: innerWidth, height: innerHeight, scrollX, scrollY }))))
-    return
+    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve({ width: innerWidth, height: innerHeight, scrollX, scrollY }))))
   }
-  const selectedSelector = typeof options !== 'string' && options.parent ? options.selected.at(-1)?.selector : undefined
-  const parent = previous?.last?.parentElement ?? (selectedSelector ? document.querySelector(selectedSelector)?.parentElement : null)
+  const nodes = new Map<string, Element>()
+  if (options !== 'clear') for (const target of options.selected) {
+    const existing = previous?.nodes.get(target.id)
+    const matches = target.selector ? document.querySelectorAll(target.selector) : []
+    const candidate = matches.length === 1 ? matches[0] : null
+    const element = existing?.isConnected ? existing : candidate?.localName === target.label.split(' · ')[0] ? candidate : null
+    if (element) nodes.set(target.id, element)
+  }
+  // inline/display:contents 等容器可能没有包住子元素的布局框，不能把别处的空框当作扩大后的选区。
+  const enclosingParent = (element: Element | undefined) => {
+    if (!element?.isConnected) return null
+    const child = element.getBoundingClientRect()
+    let parent: Element | null = element.parentElement ?? (element.getRootNode() instanceof ShadowRoot ? (element.getRootNode() as ShadowRoot).host : null)
+    while (parent) {
+      const rect = parent.getBoundingClientRect()
+      if (rect.width >= 2 && rect.height >= 2 && rect.left <= child.left + 1 && rect.top <= child.top + 1
+        && rect.right >= child.right - 1 && rect.bottom >= child.bottom - 1) return parent
+      parent = parent.parentElement ?? (parent.getRootNode() instanceof ShadowRoot ? (parent.getRootNode() as ShadowRoot).host : null)
+    }
+    return null
+  }
+  const parent = options !== 'clear' && 'parent' in options && options.parent ? enclosingParent(nodes.get(options.selected.at(-1)!.id)) : null
   previous?.close()
   if (options === 'clear') return
-  if (options.parent && !parent) return Promise.reject(new Error('此目标无法继续选择父元素'))
+  const display = 'display' in options
+  if (!display && options.parent && !parent) return Promise.reject(new Error('没有可包住当前目标的父元素'))
   return new Promise(resolve => {
     // 独立 SVG 文档的 createElement 不会创建 HTMLElement，明确指定覆盖层的 HTML 命名空间。
     const html = <K extends keyof HTMLElementTagNameMap>(tag: K) => document.createElementNS('http://www.w3.org/1999/xhtml', tag) as HTMLElementTagNameMap[K]
     const host = html('div')
-    host.style.cssText = 'all:initial!important;position:fixed!important;inset:0!important;z-index:2147483647!important;pointer-events:none!important;'
+    host.style.cssText = 'all:initial!important;position:fixed!important;inset:0!important;z-index:2147483647!important;pointer-events:none!important;cursor:inherit!important;'
     const shadow = host.attachShadow({ mode: 'closed' })
     const style = html('style')
     style.textContent = `
@@ -31,7 +53,7 @@ export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | '
       .region{border-style:dashed;background:#1769ef18}
       .badge{position:absolute;top:2px;left:2px;background:#125bd5;color:white;font:600 12px/22px system-ui;
       padding:0 6px;min-width:22px;border-radius:5px;box-shadow:0 1px 4px #0003;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis}
-      .frame{position:fixed;pointer-events:auto;background:transparent;cursor:crosshair}
+      .frame{position:fixed;pointer-events:auto;background:transparent;cursor:inherit}
     `
     shadow.append(style)
     const hover = html('div')
@@ -46,7 +68,7 @@ export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | '
       box.className = `box selected${target.kind === 'region' ? ' region' : ''}`
       const badge = html('span')
       badge.className = 'badge'; badge.textContent = String(index + 1); box.append(badge); shadow.append(box)
-      return { box, rect: target.rect }
+      return { box, target, element: nodes.get(target.id) }
     })
     // 跨域 frame 内无法读取 DOM，用透明命中面提供明确的区域引用。
     const frames = Array.from(document.querySelectorAll('iframe,frame')).slice(0, 100).map(frame => {
@@ -61,7 +83,7 @@ export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | '
     let hovered: Element | null = null
     let down: { x: number; y: number } | null = null
     let dragging = false
-    let finished = false
+    let finished = display
     let closed = false
     const listeners: (() => void)[] = []
     const listen = (type: string, callback: EventListener) => {
@@ -81,17 +103,29 @@ export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | '
         const matrix = svgRoot.getScreenCTM()?.inverse()
         if (matrix) foreign.setAttribute('transform', `matrix(${matrix.a} ${matrix.b} ${matrix.c} ${matrix.d} ${matrix.e} ${matrix.f})`)
       }
-      selected.forEach(({ box, rect }) => place(box, { ...rect, x: rect.x - scrollX, y: rect.y - scrollY }))
+      selected.forEach(({ box, target, element }) => {
+        if (target.kind === 'element' && !element?.isConnected) { box.hidden = true; return }
+        place(box, element?.isConnected ? element.getBoundingClientRect() : { ...target.rect, x: target.rect.x - scrollX, y: target.rect.y - scrollY })
+      })
       frames.forEach(({ frame, cover }) => place(cover, frame.getBoundingClientRect()))
       if (hovered && !finished && !dragging) place(hover, hovered.getBoundingClientRect())
     }
+    let frame = 0
+    const scheduleDraw = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw() }) }
+    const resize = new ResizeObserver(scheduleDraw)
+    resize.observe(root)
+    for (const element of nodes.values()) resize.observe(element)
+    const mutations = new MutationObserver(records => {
+      if (records.some(record => !(foreign ?? host).contains(record.target))) scheduleDraw()
+    })
+    mutations.observe(root, { childList: true, subtree: true, attributes: true, characterData: true })
     const close = () => {
       if (closed) return
-      closed = true; listeners.forEach(remove => remove()); (foreign ?? host).remove()
+      closed = true; listeners.forEach(remove => remove()); resize.disconnect(); mutations.disconnect(); cancelAnimationFrame(frame); (foreign ?? host).remove()
       if (world.__whycodePicker?.host === host) delete world.__whycodePicker
       if (!finished) resolve(null)
     }
-    world.__whycodePicker = { close, host, last: null }
+    world.__whycodePicker = { close, host, nodes }
     const hit = (x: number, y: number): Element | null => {
       ;(foreign ?? host).style.setProperty('display', 'none', 'important')
       let element = document.elementFromPoint(x, y)
@@ -149,15 +183,11 @@ export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | '
       const rect = { x: measured.x, y: measured.y, width: measured.width, height: measured.height }
       if (finished || rect.width < 2 || rect.height < 2) return
       finished = true; down = null; dragging = false; hover.hidden = true
-      world.__whycodePicker!.last = element
+      if (display) return
+      if (element) nodes.set(options.captureId, element)
       const region = !element || ['iframe', 'frame', 'canvas'].includes(element.localName)
-      const box = html('div'); box.className = `box selected${region ? ' region' : ''}`
-      const badge = html('span'); badge.className = 'badge'; badge.textContent = String(options.selected.length + 1)
-      box.append(badge); shadow.append(box)
-      const marked = { ...rect, x: rect.x + scrollX, y: rect.y + scrollY }
-      selected.push({ box, rect: marked })
-      place(box, rect)
       const target: Record<string, unknown> = {
+        id: options.captureId,
         kind: region ? 'region' : 'element', label: region ? '所选网页区域' : named(element!),
         rect: { ...rect, x: rect.x + scrollX, y: rect.y + scrollY },
         viewport: { width: innerWidth, height: innerHeight, scrollX, scrollY, zoom: 1 },
@@ -196,25 +226,37 @@ export function browserPicker(options: BrowserPickOptions | 'clear' | 'hide' | '
       stop(e)
       if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId)
       if (finished || !down) return
-      if (dragging) finish(null, selectionRect(point(e)), e.shiftKey)
-      else if (hovered) finish(hovered, hovered.getBoundingClientRect(), e.shiftKey)
+      if (dragging) finish(null, selectionRect(point(e)), e.ctrlKey || e.metaKey)
+      else if (hovered) finish(hovered, hovered.getBoundingClientRect(), e.ctrlKey || e.metaKey)
     })
     for (const type of ['click', 'dblclick', 'contextmenu', 'mousedown', 'mouseup', 'dragstart']) listen(type, stop)
     listen('pointercancel', () => { down = null; dragging = false; hover.hidden = true })
     listen('keydown', event => {
       const e = event as KeyboardEvent
       if (e.isComposing || !e.isTrusted) return
-      if (e.key === 'Escape') { stop(e); close() }
-      else if (!finished && e.key === 'ArrowUp' && hovered?.parentElement) {
-        stop(e); hovered = hovered.parentElement; label.textContent = named(hovered); draw()
-      } else if (!finished && e.key === 'Enter' && hovered) { stop(e); finish(hovered, hovered.getBoundingClientRect(), e.shiftKey) }
+      if (!finished && e.key === 'ArrowUp' && hovered) {
+        stop(e); hovered = enclosingParent(hovered) ?? hovered; label.textContent = named(hovered); draw()
+      } else if (!finished && e.key === 'Enter' && hovered) { stop(e); finish(hovered, hovered.getBoundingClientRect(), e.ctrlKey || e.metaKey) }
     })
-    listen('scroll', draw); listen('resize', draw); listen('pagehide', close)
+    listen('scroll', scheduleDraw); listen('resize', scheduleDraw); listen('pagehide', close)
+    if (display && options.reveal) {
+      const target = options.selected.at(-1)
+      const element = target ? nodes.get(target.id) : null
+      if (element) element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+      else if (target?.kind === 'region') scrollTo({ left: target.viewport.scrollX, top: target.viewport.scrollY, behavior: 'instant' })
+    }
     draw()
-    if (options.parent && parent?.isConnected) finish(parent, parent.getBoundingClientRect(), false)
+    if (display) {
+      const last = selected.at(-1)
+      const rect = last?.box.getBoundingClientRect()
+      resolve({ missing: options.selected.filter(target => target.kind === 'element' && !nodes.has(target.id)).map(target => target.id),
+        anchor: rect && !last?.box.hidden ? { x: rect.x / innerWidth, y: rect.y / innerHeight,
+          width: rect.width / innerWidth, height: rect.height / innerHeight } : undefined })
+    }
+    else if (options.parent && parent?.isConnected) finish(parent, parent.getBoundingClientRect(), false)
   })
 }
 
-export function browserPickerScript(options: BrowserPickOptions | 'clear' | 'hide' | 'show'): string {
+export function browserPickerScript(options: Parameters<typeof browserPicker>[0]): string {
   return `(${browserPicker.toString()})(${JSON.stringify(options)})`
 }

@@ -15,6 +15,7 @@ interface ImageDraftBase {
   name: string
   previewUrl: string
   source?: import('@whycode/core/browser-reference').BrowserReferenceSource
+  browserId?: string
 }
 
 export type ImageDraft =

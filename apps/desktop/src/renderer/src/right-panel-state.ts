@@ -1,6 +1,7 @@
 import { filePathKey } from './local-files.ts'
 import type { TerminalInfo } from '../../shared/terminal.ts'
 import { MAX_PREVIEW_VIEWS } from '../../shared/workspace-files.ts'
+import { browserDisplayUrl } from '../../shared/browser.ts'
 
 // 根目录之外，为文件预览及用户的保存/定位操作各留一个视图。
 export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
@@ -15,9 +16,11 @@ export type RightPanelFileSource =
     }
   | { kind: 'current' }
 
+export type BrowserReferenceRequest = { kind: 'new' } | { kind: 'edit'; draftId: string }
+
 export type RightPanelPage =
   | { kind: 'terminal'; terminal: TerminalInfo }
-  | { kind: 'browser'; id: string; url: string; title: string; workspaceFile?: boolean; referenceOnReady?: boolean }
+  | { kind: 'browser'; id: string; url: string; title: string; workspaceFile?: boolean; referenceRequest?: BrowserReferenceRequest }
   | { kind: 'workspace'; expanded: string[] }
   | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
   | { kind: 'subagent-overview' }
@@ -141,7 +144,7 @@ export class RightPanelSessionStore {
         [...this.states].map(([key, state]) => {
           const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal'
             && !(tab.page.kind === 'browser' && tab.page.url.startsWith('data:')))
-            .map(tab => tab.page.kind === 'browser' ? { ...tab, page: { ...tab.page, referenceOnReady: undefined } } : tab)
+            .map(tab => tab.page.kind === 'browser' ? { ...tab, page: { ...tab.page, referenceRequest: undefined } } : tab)
           return {
             key, open: state.open, tabs, inspectorView: state.inspectorView,
             activeTabId: tabs.some((tab) => tab.id === state.activeTabId)
@@ -161,6 +164,24 @@ export function rightPanelSessionKey(runtimeId: string, sessionId: string | null
 
 export function activeRightPanelPage(state: RightPanelSessionState): RightPanelPage | null {
   return state.tabs.find((tab) => tab.id === state.activeTabId)?.page ?? null
+}
+
+/** 明确引用同一页面时复用原 guest；普通“新标签页”仍保留独立浏览器。 */
+export function browserReferencePage(state: RightPanelSessionState, url: string, workspaceFile: boolean,
+  request: BrowserReferenceRequest, browserId?: string, remote = false): Extract<RightPanelPage, { kind: 'browser' }> {
+  const key = (value: string) => {
+    const address = browserDisplayUrl(value)
+    if (!address.startsWith('file:')) return address
+    const parsed = new URL(address)
+    const path = decodeURIComponent(parsed.pathname).replace(/^\/(?=[A-Za-z]:\/)/u, '')
+    return `file:${filePathKey(path)}${parsed.search}`
+  }
+  const pages = state.tabs.flatMap(tab => tab.page.kind === 'browser' ? [tab.page] : [])
+  const matches = (page: typeof pages[number]) => (!remote || !url.startsWith('file:') || !!page.workspaceFile === workspaceFile) && key(page.url) === key(url)
+  const existing = pages.find(page => page.id === browserId && (url.startsWith('data:') && page.url.startsWith('data:') || matches(page))) ?? pages.find(matches)
+  if (!existing && url.startsWith('data:')) throw new Error('临时页面已关闭，请重新打开后引用')
+  return existing ? { ...existing, referenceRequest: request }
+    : { kind: 'browser', id: crypto.randomUUID(), url, title: '', workspaceFile, referenceRequest: request }
 }
 
 export function openRightPanelPage(

@@ -130,6 +130,7 @@ import {
   canAddRightPanelTab,
   moveRightPanelTab,
   updateRightPanelPage,
+  browserReferencePage,
   openRightPanelPage as openRightPanelPageState,
   RightPanelSessionStore,
   rightPanelSessionKey,
@@ -448,7 +449,6 @@ export function App() {
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
     addReference: addBrowserReference,
-    editReference: editBrowserReference,
   } = useImageDrafts(showError)
   const {
     drafts: pdfDrafts,
@@ -2431,7 +2431,14 @@ export function App() {
                       />
                     )}
 
-                    <ImageDraftStrip drafts={composerDraft.images} onRemove={removeImageDraft} onEditReference={editBrowserReference} />
+                    <ImageDraftStrip drafts={composerDraft.images} onRemove={removeImageDraft} onEditReference={id => {
+                      const draft = imageDrafts.find(item => item.id === id)
+                      if (!draft?.source || composerDisabled || resumingSessionId !== null || !canAttachImages) return
+                      try {
+                        showRightPanelPage(browserReferencePage(rightPanelStateRef.current, draft.source.page.url,
+                          !!draft.source.page.file?.remote, { kind: 'edit', draftId: id }, draft.browserId, workspace.mode === 'ssh'))
+                      } catch (error) { showError(String(error)) }
+                    }} />
                     <PdfDraftStrip drafts={composerDraft.pdfs} onRemove={removePdfDraft} />
                     <SkillChips
                       skills={composerDraft.skills}
@@ -2636,9 +2643,10 @@ export function App() {
                 onOpenTerminal={() => { void openRightPanelTerminal() }}
                 canReferencePath={!composerDisabled && resumingSessionId === null}
                 canReferenceBrowser={!composerDisabled && resumingSessionId === null && canAttachImages}
-                onReferenceBrowser={(owner, image) => {
+                referenceDrafts={imageDrafts}
+                onReferenceBrowser={(owner, image, replaceId) => {
                   if (owner !== runtimeIdRef.current || composerDisabled || resumingSessionId !== null || !canAttachImages) return false
-                  const added = addBrowserReference(image)
+                  const added = addBrowserReference(image, replaceId)
                   if (added && panelFullscreen) setRightPanelFullscreen(false)
                   return added
                 }}

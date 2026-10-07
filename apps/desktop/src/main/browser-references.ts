@@ -3,20 +3,23 @@ import type { WebContents } from 'electron'
 import { z } from 'zod'
 import { BROWSER_REFERENCE_MAX_TARGETS, browserTargetSchema, type BrowserReferenceSource } from '@whycode/core/browser-reference'
 import { browserDisplayUrl } from '../shared/browser.ts'
-import type { BrowserTargetCapture } from '../shared/browser-reference.ts'
+import type { BrowserReferenceProjection, BrowserTargetCapture } from '../shared/browser-reference.ts'
 import { browserPickerScript } from './browser-picker.ts'
 
 const optionsSchema = z.object({ selected: z.array(browserTargetSchema).max(BROWSER_REFERENCE_MAX_TARGETS), parent: z.boolean().optional() })
+const selectionSchema = optionsSchema.omit({ parent: true }).extend({ reveal: z.boolean().optional() })
 const resultSchema = z.object({
-  target: browserTargetSchema.omit({ id: true, capturedAt: true }),
+  target: browserTargetSchema.omit({ capturedAt: true }),
   title: z.string().max(256), continuePicking: z.boolean(),
 })
 const WORLD = 1004
+const cursor = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="m4 4 7.07 17 2.51-7.39L21 11.07z" fill="white" stroke="#1769ef" stroke-width="2" stroke-linejoin="round"/></svg>')}") 4 4, crosshair`
 
 /** 每个 guest 只有一个选取请求；导航、关闭和新请求使所有迟到结果失效。 */
 export class BrowserReferences {
   private pending: AbortController | null = null
   private revision = 0
+  private cursorStyle: Promise<string> | null = null
   private readonly guest: WebContents
   private readonly fileSource: (url: string) => BrowserReferenceSource['page']['file']
 
@@ -30,11 +33,35 @@ export class BrowserReferences {
   cancel(): void {
     this.revision++
     this.pending?.abort(); this.pending = null
+    const style = this.cursorStyle; this.cursorStyle = null
+    if (style) void style.then(key => { if (!this.guest.isDestroyed()) return this.guest.removeInsertedCSS(key) }).catch(() => {})
     if (!this.guest.isDestroyed()) void this.execute('clear').catch(() => {})
+  }
+
+  get active(): boolean { return this.cursorStyle !== null }
+
+  private enableCursor(): Promise<string> {
+    // Electron 43 的按 key 移除只撤销 author 样式；引用光标必须能随退出完整清理。
+    return this.cursorStyle ??= this.guest.insertCSS(`:root, :root * { cursor: ${cursor} !important; }`)
+  }
+
+  async display(input: unknown): Promise<BrowserReferenceProjection | null> {
+    const options = selectionSchema.parse(input)
+    this.pending?.abort(); this.pending = null
+    const revision = ++this.revision
+    await this.enableCursor()
+    if (revision !== this.revision || this.guest.isDestroyed()) return null
+    const result = await this.execute({ ...options, display: true })
+    return revision === this.revision ? z.object({
+      missing: z.array(z.string().uuid()).max(BROWSER_REFERENCE_MAX_TARGETS),
+      anchor: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1),
+        width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional(),
+    }).parse(result) : null
   }
 
   async pick(input: unknown): Promise<BrowserTargetCapture | null> {
     const options = optionsSchema.parse(input)
+    if (options.parent && options.selected.at(-1)?.kind !== 'element') throw new Error('请先选择一个元素')
     this.pending?.abort()
     const revision = ++this.revision
     const pending = new AbortController()
@@ -42,18 +69,23 @@ export class BrowserReferences {
     const valid = () => this.revision === revision && !pending.signal.aborted && !this.guest.isDestroyed()
     let stop: () => void = () => {}
     try {
+      await this.enableCursor()
+      if (!valid()) return null
       const cancelled = new Promise<null>(resolve => {
         stop = () => resolve(null)
         pending.signal.addEventListener('abort', stop, { once: true })
       })
-      const raw = await Promise.race([this.execute(options), cancelled])
+      const captureId = options.parent ? options.selected.at(-1)!.id : randomUUID()
+      const raw = await Promise.race([this.execute({ ...options, captureId }), cancelled])
       if (!raw || !valid()) return null
       const result = resultSchema.parse(raw)
       const { viewport, rect } = result.target
-      const left = Math.max(0, rect.x - viewport.scrollX - 36)
-      const top = Math.max(0, rect.y - viewport.scrollY - 36)
-      const right = Math.min(viewport.width, rect.x - viewport.scrollX + rect.width + 36)
-      const bottom = Math.min(viewport.height, rect.y - viewport.scrollY + rect.height + 36)
+      const paddingX = Math.max(96, Math.min(180, rect.width * 0.25))
+      const paddingY = Math.max(96, Math.min(180, rect.height * 0.25))
+      const left = Math.max(0, rect.x - viewport.scrollX - paddingX)
+      const top = Math.max(0, rect.y - viewport.scrollY - paddingY)
+      const right = Math.min(viewport.width, rect.x - viewport.scrollX + rect.width + paddingX)
+      const bottom = Math.min(viewport.height, rect.y - viewport.scrollY + rect.height + paddingY)
       if (right - left < 2 || bottom - top < 2) throw new Error('目标已移出可见区域，请重新选择')
       const zoom = this.guest.getZoomFactor()
       const crop = { x: left + viewport.scrollX, y: top + viewport.scrollY, width: right - left, height: bottom - top }
@@ -77,7 +109,7 @@ export class BrowserReferences {
       const rawUrl = this.guest.getURL()
       const url = rawUrl.startsWith('data:') ? `${rawUrl.slice(0, rawUrl.indexOf(',') + 1)}[页面内容省略]` : browserDisplayUrl(rawUrl)
       return {
-        target: { ...result.target, id: randomUUID(), viewport: { ...viewport, zoom }, capturedAt: new Date().toISOString() },
+        target: { ...result.target, viewport: { ...viewport, zoom }, capturedAt: new Date().toISOString() },
         page: { url: url.slice(0, 8192), title: result.title, file: this.fileSource(rawUrl) },
         bytes, crop, continuePicking: result.continuePicking,
       }
@@ -86,7 +118,7 @@ export class BrowserReferences {
       throw error
     } finally {
       pending.signal.removeEventListener('abort', stop)
-      if (valid()) { this.pending = null; void this.execute('show').catch(() => {}) }
+      if (valid()) this.pending = null
     }
   }
 

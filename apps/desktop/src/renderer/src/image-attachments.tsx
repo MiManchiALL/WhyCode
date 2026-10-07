@@ -65,35 +65,22 @@ export function useImageDrafts(onError: (message: string) => void) {
     replace([...restored, ...current])
   }, [replace])
 
-  const addReference = useCallback((image: BrowserReferenceImage): boolean => {
-    if (draftsRef.current.length >= USER_IMAGE_ATTACHMENT_MAX_COUNT) {
+  const addReference = useCallback((image: BrowserReferenceImage, replaceId?: string): boolean => {
+    const previous = replaceId ? draftsRef.current.find(draft => draft.id === replaceId) : undefined
+    if (replaceId && !previous) { onError('原引用已不在草稿中，请重新添加'); return false }
+    if (!previous && draftsRef.current.length >= USER_IMAGE_ATTACHMENT_MAX_COUNT) {
       onError(`每条消息最多添加 ${USER_IMAGE_ATTACHMENT_MAX_COUNT} 张图片或网页引用`); return false
     }
     const file = new File([new Uint8Array(image.bytes)], '网页引用.jpg', { type: 'image/jpeg' })
     const previewUrl = URL.createObjectURL(file)
-    replace([...draftsRef.current, { kind: 'memory', id: crypto.randomUUID(), name: file.name, file, previewUrl, source: image.source }])
+    // 图片内容变化使用新身份，沿用 IndexedDB 的新增/移除事务，避免复用旧图片字节。
+    const draft: ImageDraft = { kind: 'memory', id: crypto.randomUUID(), name: file.name, file, previewUrl, source: image.source, browserId: image.browserId }
+    replace(previous ? draftsRef.current.map(item => item === previous ? draft : item) : [...draftsRef.current, draft])
+    if (previous) releaseImageDrafts([previous])
     return true
   }, [onError, replace])
 
-  const editReference = useCallback(async (id: string, comment: string): Promise<boolean> => {
-    const draft = draftsRef.current.find(item => item.id === id)
-    if (!draft?.source) return false
-    try {
-      let file: File
-      if (draft.kind === 'stored') {
-        const response = await fetch(draft.previewUrl)
-        if (!response.ok) throw new Error('无法读取网页引用截图，请重新添加引用')
-        file = new File([await response.blob()], draft.name, { type: 'image/jpeg' })
-      } else file = draft.file
-      if (!draftsRef.current.includes(draft)) return false
-      const edited: ImageDraft = { kind: 'memory', id, name: draft.name, file,
-        previewUrl: URL.createObjectURL(file), source: { ...draft.source, comment: comment.trim() } }
-      replace(draftsRef.current.map(item => item === draft ? edited : item))
-      releaseImageDrafts([draft]); return true
-    } catch (error) { onError(String(error)); return false }
-  }, [onError, replace])
-
-  return { drafts, addFiles, remove, clear, detach, restore, addReference, editReference }
+  return { drafts, addFiles, remove, clear, detach, restore, addReference }
 }
 
 export function ImageDraftStrip({
@@ -103,7 +90,7 @@ export function ImageDraftStrip({
 }: {
   drafts: readonly ImageDraft[]
   onRemove?: (id: string) => void
-  onEditReference?: (id: string, comment: string) => Promise<boolean>
+  onEditReference?: (id: string) => void
 }) {
   const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
   if (drafts.length === 0) return null

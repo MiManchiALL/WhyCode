@@ -20,7 +20,7 @@ import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
 import type { BrowserDataClearMode, BrowserDataState, BrowserEvent, BrowserLease } from '../shared/browser.ts'
-import type { BrowserPickOptions, BrowserTargetCapture } from '../shared/browser-reference.ts'
+import type { BrowserPickOptions, BrowserTargetCapture, BrowserReferenceSelection, BrowserReferenceProjection } from '../shared/browser-reference.ts'
 import type {
   CheckpointFileChangesRequest,
   CheckpointFileChangesResult,
@@ -249,6 +249,7 @@ const api = {
   acquireBrowser: (): Promise<BrowserLease> => ipcRenderer.invoke(IPC.acquireBrowser),
   prepareBrowserFile: (id: string, url: string, runtimeId?: string): Promise<string> => ipcRenderer.invoke(IPC.prepareBrowserFile, id, url, runtimeId),
   pickBrowserTarget: (id: string, options: BrowserPickOptions): Promise<BrowserTargetCapture | null> => ipcRenderer.invoke(IPC.pickBrowserTarget, id, options),
+  displayBrowserReference: (id: string, options: BrowserReferenceSelection): Promise<BrowserReferenceProjection | null> => ipcRenderer.invoke(IPC.displayBrowserReference, id, options),
   cancelBrowserReference: (id: string): void => ipcRenderer.send(IPC.cancelBrowserReference, id),
   releaseBrowser: (id: string): void => ipcRenderer.send(IPC.releaseBrowser, id),
   openBrowserExternally: (id: string): Promise<void> => ipcRenderer.invoke(IPC.openBrowserExternally, id),

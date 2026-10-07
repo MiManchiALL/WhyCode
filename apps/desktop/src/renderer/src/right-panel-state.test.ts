@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   activeRightPanelPage,
+  browserReferencePage,
   closeRightPanelTab,
   closeBrowserTabs,
   canAddRightPanelTab,
@@ -48,17 +49,51 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('同一路径再次引用复用已打开的浏览器及其位置，满标签时也不新建', () => {
+    const file = { kind: 'browser' as const, id: 'svg', url: 'file:///C:/Project/sample%20one.svg#detail', title: 'Sample' }
+    let state = openRightPanelPage(emptyState(), file)
+    for (let i = 1; i < MAX_RIGHT_PANEL_TABS; i++) state = openRightPanelPage(state, { kind: 'browser', id: String(i), url: 'about:blank', title: '' })
+    const selected = browserReferencePage(state, 'file:///c:/project/SAMPLE%20ONE.svg', true, { kind: 'new' })
+    assert.deepEqual(selected, { ...file, referenceRequest: { kind: 'new' } })
+    state = openRightPanelPage(state, selected)
+    assert.equal(state.activeTabId, 'browser:svg')
+    assert.equal(state.tabs.length, MAX_RIGHT_PANEL_TABS)
+  })
+  it('SSH 会话引用文件时不会复用同名本机网页，远端路径仍区分大小写', () => {
+    const local = { kind: 'browser' as const, id: 'local', url: 'file:///home/project/index.html', title: '' }
+    const remote = { ...local, id: 'remote', workspaceFile: true }
+    const state = openRightPanelPage(openRightPanelPage(emptyState(), local), remote)
+    const request = { kind: 'new' as const }
+    assert.equal(browserReferencePage(state, local.url, false, request, undefined, true).id, 'local')
+    assert.equal(browserReferencePage(state, local.url, true, request, undefined, true).id, 'remote')
+    assert.notEqual(browserReferencePage(state, 'file:///home/Project/index.html', true, request, undefined, true).id, 'remote')
+  })
+  it('重新编辑优先原浏览器，页面关闭后按网址重开，临时页面不从省略正文重建', () => {
+    const first = { kind: 'browser' as const, id: 'first', url: 'https://example.test/', title: '' }
+    const second = { ...first, id: 'second' }
+    let state = openRightPanelPage(openRightPanelPage(emptyState(), first), second)
+    const request = { kind: 'edit' as const, draftId: 'draft' }
+    assert.equal(browserReferencePage(state, first.url, false, request, second.id).id, second.id)
+    state = closeRightPanelTab(closeRightPanelTab(state, 'browser:first'), 'browser:second')
+    const reopened = browserReferencePage(state, first.url, false, request, second.id)
+    assert.equal(reopened.url, first.url)
+    assert.deepEqual(reopened.referenceRequest, request)
+    assert.notEqual(reopened.id, second.id)
+    assert.throws(() => browserReferencePage(state, 'data:text/html,[页面内容省略]', false, request, 'data'), /临时页面已关闭/u)
+    state = openRightPanelPage(state, { ...first, id: 'data', url: 'data:text/html,<p>test</p>' })
+    assert.equal(browserReferencePage(state, 'data:text/html,[页面内容省略]', false, request, 'data').url, 'data:text/html,<p>test</p>')
+  })
   it('工作区网页保留远端文件作用域，重启不重新开启一次性的引用模式', () => {
     const storage = new MemoryStorage()
     const page = { kind: 'browser' as const, id: 'remote', url: 'file:///home/project/index.html', title: 'Remote',
-      workspaceFile: true, referenceOnReady: true }
+      workspaceFile: true, referenceRequest: { kind: 'new' as const } }
     const store = new RightPanelSessionStore(storage)
     store.set('conversation', openRightPanelPage(emptyState(), page))
-    assert.equal((store.get('conversation').tabs[0]?.page as typeof page).referenceOnReady, true)
+    assert.deepEqual((store.get('conversation').tabs[0]?.page as typeof page).referenceRequest, { kind: 'new' })
     const restored = new RightPanelSessionStore(storage).get('conversation').tabs[0]!.page
     assert.ok(restored.kind === 'browser')
     assert.equal(restored.workspaceFile, true)
-    assert.equal(restored.referenceOnReady, undefined)
+    assert.equal(restored.referenceRequest, undefined)
   })
   it('全部清理关闭当前与后台会话的浏览器标签，保留其它面板与阅读位置', () => {
     const storage = new MemoryStorage()

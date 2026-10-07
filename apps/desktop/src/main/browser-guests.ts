@@ -73,6 +73,12 @@ export class BrowserGuests {
       if (lease?.owner !== event.sender || !lease.references) throw new Error('浏览器标签已关闭')
       return lease.references.pick(options)
     })
+    ipcMain.handle(IPC.displayBrowserReference, (event, id: unknown, options: unknown) => {
+      this.requireOwner(event)
+      const lease = typeof id === 'string' ? this.leases.get(id) : undefined
+      if (lease?.owner !== event.sender || !lease.references) throw new Error('浏览器标签已关闭')
+      return lease.references.display(options)
+    })
     ipcMain.on(IPC.cancelBrowserReference, (event, id: unknown) => {
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (event.senderFrame === event.sender.mainFrame && lease?.owner === event.sender) lease.references?.cancel()
@@ -146,7 +152,7 @@ export class BrowserGuests {
       if (input.type !== 'keyDown') return
       const command = browserShortcut(input)
       if (!command) return
-      if (command === 'escape') { if (guest.isLoading()) guest.stop(); return }
+      if (command === 'escape' && !(id && this.leases.get(id)?.references?.active)) { if (guest.isLoading()) guest.stop(); return }
       event.preventDefault()
       send({ type: 'shortcut', command })
     })

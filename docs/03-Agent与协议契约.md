@@ -560,9 +560,9 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 `browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；普通浏览不产生 CoreCommand 或模型消息。UI、网络限制和资源生命周期见文档二 §12.6。
 
-`pickBrowserTarget(id,{selected,parent?})` 只接受所属主窗口对已挂载 guest 的有界选取请求，不接收可执行脚本。返回元素或区域元数据、实际页面来源、裁剪坐标与截图字节；取消返回 null，失败拒绝。`cancelBrowserReference(id)` 幂等取消同一租约的待选请求与覆盖层；导航或销毁使旧结果失效。页面只能响应真实用户选取事件，不能调用宿主 IPC。
+`pickBrowserTarget(id,{selected,parent?})` 只接受所属主窗口对已挂载 guest 的有界选取请求，不接收可执行脚本。返回元素或区域元数据、实际页面来源、裁剪坐标与截图字节；父元素请求替换最后一个元素目标并保留 ID，取消返回 null，失败拒绝。`displayBrowserReference(id,{selected,reveal?})` 按确认后的列表统一投影选框与编号，返回无法定位的目标 ID 和当前弹层锚点；reveal 用于重新编辑时展示目标。锚点只用于界面定位，不改写截图事实。`cancelBrowserReference(id)` 幂等取消同一租约的待选请求、覆盖层和光标样式；导航或销毁使旧结果失效。页面只能响应真实用户选取事件，不能调用宿主 IPC。
 
-一条网页引用使用现有 `ImageAttachment.source` 的 `browser-reference` 分支：`id`、用户 `comment`、`page` 与有序 `targets`。批注最多 4000 字符，一条引用最多 6 个目标；目标包含种类、标签、可用的选择器/文本/HTML/样式、CSS 文档矩形、视口/滚动/缩放、捕获时间及拼图中的像素范围。Main 校验页面结果，附件导入时由 Core schema 再校验来源元数据；data URL 不保存内联页面正文。每条引用对应一张有编号的拼图，计入每条消息最多 10 张的图片总上限。内容相同而批注不同的引用允许同时提交，重复引用 ID 拒绝。
+一条网页引用使用现有 `ImageAttachment.source` 的 `browser-reference` 分支：`id`、用户 `comment`、`page` 与有序 `targets`。批注最多 4000 字符，一条引用最多 6 个目标；目标包含种类、标签、可用的选择器/文本/HTML/样式、CSS 文档矩形 `rect`、含周边上下文的 CSS 文档裁剪矩形 `crop`、视口/滚动/缩放、捕获时间及拼图中的像素范围 `imageRect`。`crop` 与 `imageRect` 支持从现有附件恢复编辑画面。Main 校验页面结果，附件导入时由 Core schema 再校验来源元数据；data URL 不保存内联页面正文。浏览器标签 ID 和待编辑草稿 ID 只属于界面状态，不进入模型来源契约。每条引用对应一张有编号的拼图，计入每条消息最多 10 张的图片总上限。内容相同而批注不同的引用允许同时提交，重复引用 ID 拒绝。
 
 `createImageUserMessage` 将用户批注与网页证据分别标记，网页字段以 JSON 转义后作为不可信证据交付；模型同时收到截图附件 ID 和原始尺寸。原生视觉使用现有水合，辅助识图使用同一附件 ID 调用 AnalyzeImage，没有识图能力时沿用图片入口的拒绝规则。只记录选取时的快照，不随网页变化改写历史；不新增模型工具或独立会话记录。
 

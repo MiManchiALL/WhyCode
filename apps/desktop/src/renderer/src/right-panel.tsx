@@ -8,6 +8,7 @@ import { WorkspaceBrowser } from './workspace-browser.tsx'
 import {
   activeRightPanelPage,
   canAddRightPanelTab,
+  browserReferencePage,
   type RightPanelPage,
   type RightPanelSessionState,
 } from './right-panel-state.ts'
@@ -20,6 +21,7 @@ import { BrowserPanel } from './browser-panel.tsx'
 import type { PathReference } from './path-reference.ts'
 import { browserAddress } from '../../shared/browser.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
+import type { ImageDraft } from './image-draft.ts'
 
 interface RightPanelProps {
   remote?: boolean
@@ -45,7 +47,8 @@ interface RightPanelProps {
   canReferencePath: boolean
   onReferencePath: (runtimeId: string, reference: PathReference) => void
   canReferenceBrowser: boolean
-  onReferenceBrowser: (runtimeId: string, image: BrowserReferenceImage) => boolean
+  onReferenceBrowser: (runtimeId: string, image: BrowserReferenceImage, replaceId?: string) => boolean
+  referenceDrafts: readonly ImageDraft[]
   workspacePosition?: WorkspaceBrowserPosition
   onWorkspacePositionChange: (position: WorkspaceBrowserPosition) => void
 }
@@ -109,7 +112,8 @@ export function RightPanel(props: RightPanelProps) {
       <RightPanelContent {...props} directories={directories} />
       {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
         page={tab.page} active={props.active && props.state.activeTabId === tab.id}
-        runtimeId={props.runtimeId} canReference={props.canReferenceBrowser} onReference={image => props.onReferenceBrowser(props.runtimeId, image)}
+        runtimeId={props.runtimeId} canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts}
+        onReference={(image, replaceId) => props.onReferenceBrowser(props.runtimeId, image, replaceId)}
         onChange={props.onUpdatePage} onOpen={url => openBrowser(props, url, tab.page.kind === 'browser' && !!tab.page.workspaceFile && url.startsWith('file:'))} onClose={() => props.onCloseTab(tab.id)} />)}
     </aside>
   )
@@ -160,8 +164,8 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
           refreshRevision={props.refreshRevision}
           page={page}
           onChange={props.onOpenPage}
-          onReferenceInBrowser={props.canReferenceBrowser && canAddRightPanelTab(props.state)
-            ? path => openBrowser(props, browserAddress(path), true, true) : undefined}
+          onReferenceInBrowser={props.canReferenceBrowser
+            ? path => props.onOpenPage(browserReferencePage(props.state, browserAddress(path), true, { kind: 'new' }, undefined, props.remote)) : undefined}
         />
       ) : <div className="min-h-0 flex-1" />
     case 'subagent-overview':
@@ -197,6 +201,6 @@ function openWorkspace(props: RightPanelProps): void {
   props.onOpenPage(existing?.page ?? { kind: 'workspace', expanded: [] })
 }
 
-function openBrowser(props: RightPanelProps, url = 'about:blank', workspaceFile = false, referenceOnReady = false): void {
-  props.onOpenPage({ kind: 'browser', id: crypto.randomUUID(), url, title: '', workspaceFile, referenceOnReady })
+function openBrowser(props: RightPanelProps, url = 'about:blank', workspaceFile = false): void {
+  props.onOpenPage({ kind: 'browser', id: crypto.randomUUID(), url, title: '', workspaceFile })
 }

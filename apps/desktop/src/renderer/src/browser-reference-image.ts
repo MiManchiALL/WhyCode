@@ -37,13 +37,34 @@ export async function composeBrowserReference(captures: readonly BrowserTargetCa
       context.strokeStyle = '#1769ef'; context.lineWidth = 3
       context.strokeRect(x + rx / crop.width * width + 1.5, y + header + ry / crop.height * height + 1.5,
         Math.max(1, rw / crop.width * width - 3), Math.max(1, rh / crop.height * height - 3))
-      return { ...capture.target, imageRect: { x, y: y + header, width, height } }
+      return { ...capture.target, crop, imageRect: { x, y: y + header, width, height } }
     })
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('无法生成引用截图')), 'image/jpeg', 0.9))
     return { bytes: new Uint8Array(await blob.arrayBuffer()), source: browserReferenceSourceSchema.parse({
       kind: 'browser-reference', id: crypto.randomUUID(), comment, page: captures[0]!.page, targets,
     }) }
   } finally { images.forEach(image => image.close()) }
+}
+
+/** 从现有附件还原各目标，不另存原图副本；未重新选取的目标保留原捕获事实。 */
+export async function restoreBrowserReference(previewUrl: string, source: import('@whycode/core/browser-reference').BrowserReferenceSource): Promise<BrowserTargetCapture[]> {
+  const response = await fetch(previewUrl)
+  if (!response.ok) throw new Error('无法读取引用截图，请重新选择')
+  const image = await createImageBitmap(await response.blob())
+  try {
+    return await Promise.all(source.targets.map(async ({ imageRect, crop, ...target }) => {
+      if (imageRect.x < 0 || imageRect.y < 0 || imageRect.x + imageRect.width > image.width || imageRect.y + imageRect.height > image.height) {
+        throw new Error('引用截图与目标范围不一致，请重新选择')
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = imageRect.width; canvas.height = imageRect.height
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('无法读取引用截图')
+      context.drawImage(image, imageRect.x, imageRect.y, imageRect.width, imageRect.height, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('无法读取引用截图')), 'image/jpeg', 0.95))
+      return { target, crop, page: source.page, continuePicking: false, bytes: new Uint8Array(await blob.arrayBuffer()) }
+    }))
+  } finally { image.close() }
 }
 
 export function sameBrowserTarget(a: BrowserTargetCapture, b: BrowserTargetCapture): boolean {

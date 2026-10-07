@@ -14,7 +14,7 @@ describe('图片草稿传输', () => {
   it('网页引用的批注随草稿提交和恢复，不依赖浏览器页面仍然存在', async () => {
     const source: BrowserReferenceSource = { kind: 'browser-reference', id: crypto.randomUUID(), comment: '修改标题',
       page: { url: 'file:///home/index.html', title: 'Page' }, targets: [{ id: crypto.randomUUID(), kind: 'element', label: 'h1',
-        selector: '#title', rect: { x: 0, y: 10, width: 80, height: 20 }, imageRect: { x: 0, y: 0, width: 100, height: 60 },
+        selector: '#title', rect: { x: 0, y: 10, width: 80, height: 20 }, imageRect: { x: 0, y: 0, width: 100, height: 60 }, crop: { x: 0, y: 0, width: 100, height: 60 },
         viewport: { width: 800, height: 600, scrollX: 0, scrollY: 0, zoom: 1 }, capturedAt: new Date().toISOString() }] }
     const file = new File([Uint8Array.from([1, 2, 3])], 'reference.jpg', { type: 'image/jpeg' })
     const [input] = await prepareImageDrafts([{ kind: 'memory', id: 'draft', name: file.name, file, previewUrl: 'blob:test', source }])

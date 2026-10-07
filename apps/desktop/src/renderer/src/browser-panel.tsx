@@ -9,19 +9,21 @@ import { useConversationFeedback } from './conversation-feedback.tsx'
 import { useBrowserReference } from './use-browser-reference.ts'
 import { BrowserReferenceEditor } from './browser-reference-editor.tsx'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
+import type { ImageDraft } from './image-draft.ts'
 
 type BrowserPage = Extract<RightPanelPage, { kind: 'browser' }>
 interface Props {
   page: BrowserPage; active: boolean
   runtimeId: string
   canReference: boolean
-  onReference: (image: BrowserReferenceImage) => boolean
+  onReference: (image: BrowserReferenceImage, replaceId?: string) => boolean
+  referenceDrafts: readonly ImageDraft[]
   onChange: (page: BrowserPage) => void
   onOpen: (url: string) => void
   onClose: () => void
 }
 
-export function BrowserPanel({ page, active, runtimeId, canReference, onReference, onChange, onOpen, onClose }: Props) {
+export function BrowserPanel({ page, active, runtimeId, canReference, onReference, referenceDrafts, onChange, onOpen, onClose }: Props) {
   const addressRef = useRef<HTMLInputElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const [address, setAddress] = useState(page.url === 'about:blank' ? '' : page.url)
@@ -34,10 +36,10 @@ export function BrowserPanel({ page, active, runtimeId, canReference, onReferenc
     onNavigate: (url, title) => { if (url !== page.url || title !== page.title) onChange({ ...page, url, title }) },
     onOpen, onShortcut: command => { if (active) shortcut(command) },
   })
-  const reference = useBrowserReference({ leaseId: browser.lease?.id, active,
+  const reference = useBrowserReference({ leaseId: browser.lease?.id, pageId: page.id, active, drafts: referenceDrafts,
     available: canReference && browser.state.ready && !browser.state.error && browser.state.url !== 'about:blank',
-    url: browser.state.url, loading: browser.state.loading, autoStart: page.referenceOnReady ?? false,
-    onAutoStarted: () => onChange({ ...page, referenceOnReady: undefined }), onAdd: onReference,
+    url: browser.state.url, loading: browser.state.loading, request: page.referenceRequest,
+    onRequestHandled: () => onChange({ ...page, referenceRequest: undefined }), onAdd: onReference,
     focusPage: () => browser.element.current?.focus() })
   const { state } = browser
   useEffect(() => {
@@ -76,6 +78,7 @@ export function BrowserPanel({ page, active, runtimeId, canReference, onReferenc
   const nextMatch = (forward: boolean) => browser.find(query, forward, true)
   return <section aria-label="内置浏览器" hidden={!active} className={active ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
     onKeyDown={event => {
+      if (event.defaultPrevented) return
       const command = browserShortcut({ key: event.key, control: event.ctrlKey, meta: event.metaKey,
         alt: event.altKey, shift: event.shiftKey, isComposing: event.nativeEvent.isComposing })
       if (command) { event.preventDefault(); event.stopPropagation(); shortcut(command) }
@@ -127,7 +130,7 @@ export function BrowserPanel({ page, active, runtimeId, canReference, onReferenc
       <button className="wc-preview-action" aria-label="关闭查找" onClick={() => shortcut('escape')}><X size={14} /></button>
     </div>}
     {reference.mode !== 'off' && <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--wc-line)] px-3 text-xs text-[var(--wc-muted)]" role="status">
-      <span className="min-w-0 flex-1 truncate" title="点击元素，拖拽框选区域 · Shift 多选 · ↑ 选父元素">{reference.mode === 'picking' ? '点击元素，拖拽框选区域 · Shift 多选 · ↑ 选父元素' : '同一条批注可描述多个目标'}</span>
+      <span className="min-w-0 flex-1 truncate" title="点击元素，拖拽框选区域 · Ctrl 多选 · ↑ 选父元素">{reference.mode === 'restoring' ? '正在恢复引用…' : reference.mode === 'picking' ? '点击元素，拖拽框选区域 · Ctrl 多选 · ↑ 选父元素' : '同一条批注可描述多个目标'}</span>
       {reference.mode === 'picking' && reference.captures.length > 0 && <button className="wc-reference-secondary" onClick={reference.finishPicking}>完成选择 ({reference.captures.length})</button>}
       <button className="wc-preview-action" title="退出引用" aria-label="退出引用" onClick={reference.cancel}><X size={14} /></button>
     </div>}
