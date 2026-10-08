@@ -370,8 +370,8 @@ function collectTurnStarts(
       activeConsensusBaseTurnIds = entry.activeConsensusBaseTurnIds
         ? new Set(entry.activeConsensusBaseTurnIds)
         : null
-      for (const start of entry.turnStartMessages) {
-        starts.set(start.turnId, structuredClone(start.messages))
+      for (const start of entry.turnStarts) {
+        starts.set(start.turnId, messages.slice(0, start.messageCount))
         taskStates.set(start.turnId, cloneTaskPlanState(start.taskState))
       }
     }
@@ -402,7 +402,7 @@ function collectTurnStarts(
       activeConsensusBaseTurnIds = new Set(entry.baseTurnIds)
     }
     if (entry.type === 'turn-start' && !partialTurnIds.has(entry.turnId)) {
-      starts.set(entry.turnId, structuredClone(messages))
+      starts.set(entry.turnId, [...messages])
       taskStates.set(entry.turnId, cloneTaskPlanState(taskState))
     }
     if (entry.type === 'messages') {
@@ -853,6 +853,12 @@ function validateEntrySemantics(entries: SessionEntry[]): void {
       ) {
         throw new SessionCorruptError('snapshot 的活动共识边界不完整')
       }
+      for (const start of entry.turnStarts) {
+        if (
+          (turnIndexes.get(start.turnId) ?? Number.MAX_SAFE_INTEGER)
+          >= entryIndexes.get(entry.uuid)!
+        ) throw new SessionCorruptError('snapshot 引用了无效的回合边界')
+      }
     }
     if (entry.type === 'consensus-task-end') {
       const shouldRollback = !keepsConsensusProgress(entry.outcome)
@@ -1168,12 +1174,14 @@ function findInterruptedWork(
   let visibleMessages: ModelMessage[] = []
   for (const entry of chain) {
     if (entry.type === 'snapshot') {
-      visibleMessages = structuredClone(entry.messages)
+      visibleMessages = [...entry.messages]
       interruptedTurnId = entry.activeTurnId
       interruptedTurnEngagedPlanId = entry.activeTurnEngagedPlanId
       interruptedConsensusTaskId = entry.activeConsensusTaskId
       // 重放是纯读取：后续遇到未交付输入时会向工作副本 push，绝不能污染已解析快照。
-      interruptedConsensusBaseMessages = structuredClone(entry.activeConsensusBaseMessages)
+      interruptedConsensusBaseMessages = entry.activeConsensusBaseMessages
+        ? [...entry.activeConsensusBaseMessages]
+        : null
       interruptedConsensusBaseTaskState = structuredClone(entry.activeConsensusBaseTaskState)
       interruptedConsensusBaseTurnIds = structuredClone(entry.activeConsensusBaseTurnIds)
     }

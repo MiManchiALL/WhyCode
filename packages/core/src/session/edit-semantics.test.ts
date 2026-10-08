@@ -53,7 +53,7 @@ describe('编辑与根输入身份校验', () => {
       reasoningEffort: 'default',
       messages: [],
       pendingUserInputs: [],
-      turnStartMessages: [],
+      turnStarts: [],
     })
     const edited = fixture.entry({
       type: 'user-input',

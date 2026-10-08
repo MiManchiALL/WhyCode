@@ -542,7 +542,8 @@ export class SessionJournal implements SessionRecorder {
   }
 
   get initialMessages(): readonly ModelMessage[] {
-    return this.messages
+    // 回滚锚点共享已提交消息；跨所有权边界时才复制，避免调用方修改内部历史。
+    return structuredClone(this.messages)
   }
 
   get customSystemPrompt(): CustomSystemPromptSnapshot | undefined {
@@ -926,12 +927,13 @@ export class SessionJournal implements SessionRecorder {
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
   ): Promise<void> {
+    const recordedMessages = structuredClone(rollbackMessages)
     return this.enqueue(async () => {
       const resolvedImageDelivery = attachments.length
         ? imageDelivery ?? 'native'
         : undefined
       this.assertTurnEditCurrent(
-        previousTurnId, rollbackMessages, rollbackTaskState,
+        previousTurnId, recordedMessages, rollbackTaskState,
       )
       this.assertImageAttachmentsCompatible(attachments)
       this.assertPdfAttachmentsCompatible(pdfAttachments)
@@ -939,7 +941,7 @@ export class SessionJournal implements SessionRecorder {
         previousTurnId,
         inputId,
         text,
-        rollbackMessages,
+        recordedMessages,
         rollbackTaskState,
         attachments,
         pdfAttachments,
@@ -974,6 +976,7 @@ export class SessionJournal implements SessionRecorder {
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
+    const recordedMessages = structuredClone(messages)
     return this.enqueue(async () => {
       this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
       if (rootInputId && !this.undeliveredUserInputIdSet.has(rootInputId)) {
@@ -983,7 +986,7 @@ export class SessionJournal implements SessionRecorder {
         throw new Error('项目指令更新无效')
       }
       const parentUuid = this.leafUuid
-      const messagesBeforeTurn = structuredClone(this.messages)
+      const messagesBeforeTurn = [...this.messages]
       const taskStateBeforeTurn = cloneTaskPlanState(this.taskState)
       const started = this.entry({
         type: 'turn-start',
@@ -995,7 +998,7 @@ export class SessionJournal implements SessionRecorder {
         {
           type: 'messages',
           turnId,
-          messages: dehydrateImageMessages(messages),
+          messages: dehydrateImageMessages(recordedMessages),
           engagedPlanId: engagedPlanId ?? null,
           ...(deliveredInputIds.length ? { deliveredInputIds } : {}),
         },
@@ -1022,8 +1025,10 @@ export class SessionJournal implements SessionRecorder {
       this.turnStartSkills.set(turnId, structuredClone([...turnSkills]))
       this.undeliveredUserInputIdSet.delete(rootInputId ?? parentUuid)
       this.deletePendingInputs(deliveredInputIds)
-      appendOrderedMessages(this.messages, messages)
-      if (projectInstructions) this.applyProjectInstructionsUpdate(projectInstructions)
+      appendOrderedMessages(this.messages, recordedMessages)
+      if (instructionEntry?.type === 'project-instructions') {
+        this.applyProjectInstructionsUpdate(instructionEntry)
+      }
       this.activeTurnId = turnId
       this.activeTurnEngagedPlanId = engagedPlanId ?? null
       this.metadata.updatedAt = instructionEntry?.timestamp ?? started.timestamp
@@ -1043,7 +1048,7 @@ export class SessionJournal implements SessionRecorder {
         message: update.message,
       })
       await this.appendEntries([entry])
-      this.applyProjectInstructionsUpdate(update)
+      if (entry.type === 'project-instructions') this.applyProjectInstructionsUpdate(entry)
       this.metadata.updatedAt = entry.timestamp
       await this.refreshMetadataCache()
     })
@@ -1061,6 +1066,7 @@ export class SessionJournal implements SessionRecorder {
       startedToolCallId?: string
     } = {},
   ): Promise<void> {
+    const recordedMessages = structuredClone(messages)
     const attachments = resources.attachments ?? []
     const pdfAttachments = resources.pdfAttachments ?? []
     const deliveredInputIds = resources.deliveredInputIds ?? []
@@ -1071,7 +1077,7 @@ export class SessionJournal implements SessionRecorder {
       const batch = this.entry({
         type: 'messages',
         turnId,
-        messages: dehydrateImageMessages(messages),
+        messages: dehydrateImageMessages(recordedMessages),
         ...(attachments.length ? { attachments } : {}),
         ...(pdfAttachments.length ? { pdfAttachments } : {}),
         ...(taskState !== undefined ? { taskState } : {}),
@@ -1080,7 +1086,7 @@ export class SessionJournal implements SessionRecorder {
         ...(resources.startedToolCallId ? { startedToolCallId: resources.startedToolCallId } : {}),
       })
       await this.appendEntries([batch])
-      appendOrderedMessages(this.messages, messages)
+      appendOrderedMessages(this.messages, recordedMessages)
       this.addImageAttachments(attachments)
       this.addPdfAttachments(pdfAttachments)
       this.deletePendingInputs(deliveredInputIds)
@@ -1124,12 +1130,13 @@ export class SessionJournal implements SessionRecorder {
     activeTurnId?: string,
     taskState?: TaskPlanState,
   ): Promise<void> {
+    const recordedMessages = structuredClone(messages)
     return this.enqueue(async () => {
       if (this.undeliveredUserInputIdSet.size > 0) {
         throw new Error('存在尚未交付给模型的用户输入，不能建立会话快照')
       }
       const normalizedMessages = applyProjectInstructions(
-        messages,
+        recordedMessages,
         findProjectInstructionsMessage(this.messages),
       )
       const runtimeTurnStarts = reason === 'rollback'
@@ -1155,10 +1162,10 @@ export class SessionJournal implements SessionRecorder {
           reasoningEffort: this.metadata.reasoningEffort,
           messages: dehydrateImageMessages(normalizedMessages),
           pendingUserInputs: this.pendingUserInputs,
-          turnStartMessages: runtimeTurnStarts.map((start) => ({
+          turnStarts: runtimeTurnStarts.map((start) => ({
             turnId: start.turnId,
             taskState: start.taskState,
-            messages: dehydrateImageMessages(start.messages),
+            messageCount: start.messages.length,
           })),
         },
         null,
@@ -1172,7 +1179,7 @@ export class SessionJournal implements SessionRecorder {
         : null
       this.turnStartMessages = new Map(
         runtimeTurnStarts
-          .map((start) => [start.turnId, structuredClone(start.messages)]),
+          .map((start) => [start.turnId, start.messages]),
       )
       this.turnStartTaskStates = new Map(
         runtimeTurnStarts
@@ -1427,10 +1434,10 @@ export class SessionJournal implements SessionRecorder {
             ...input,
             state: input.state === 'queued' ? 'restored' as const : input.state,
           })),
-          turnStartMessages: runtimeTurnStarts.map((start) => ({
+          turnStarts: runtimeTurnStarts.map((start) => ({
             turnId: start.turnId,
             taskState: start.taskState,
-            messages: dehydrateImageMessages(start.messages),
+            messageCount: start.messages.length,
           })),
         },
         null,
@@ -1455,7 +1462,7 @@ export class SessionJournal implements SessionRecorder {
       this.metadata.status = hasPendingUserQuestion(recoveredMessages) ? 'waiting-user' : 'idle'
       this.turnStartMessages = new Map(
         runtimeTurnStarts
-          .map((start) => [start.turnId, structuredClone(start.messages)]),
+          .map((start) => [start.turnId, start.messages]),
       )
       this.turnStartTaskStates = new Map(
         runtimeTurnStarts
@@ -1573,10 +1580,10 @@ export class SessionJournal implements SessionRecorder {
       reasoningEffort: this.metadata.reasoningEffort,
       messages: dehydrateImageMessages(messages),
       pendingUserInputs: [],
-      turnStartMessages: turnStarts.map((start) => ({
+      turnStarts: turnStarts.map((start) => ({
         turnId: start.turnId,
         taskState: start.taskState,
-        messages: dehydrateImageMessages(start.messages),
+        messageCount: start.messages.length,
       })),
     }, null)
     const input = this.entry({
@@ -1604,7 +1611,7 @@ export class SessionJournal implements SessionRecorder {
     this.messages = transaction.messages
     this.taskState = cloneTaskPlanState(taskState)
     this.turnStartMessages = new Map(transaction.turnStarts.map((start) => [
-      start.turnId, structuredClone(start.messages),
+      start.turnId, start.messages,
     ]))
     this.turnStartTaskStates = new Map(transaction.turnStarts.map((start) => [
       start.turnId, cloneTaskPlanState(start.taskState),
@@ -1730,12 +1737,10 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
-  private turnStartsWithin(messages: ModelMessage[], allowedTurnIds?: ReadonlySet<string>): {
-    turnId: string
-    messages: ModelMessage[]
-    taskState: TaskPlanState
-    consensusState: ConsensusPersistedState | null
-  }[] {
+  private turnStartsWithin(
+    messages: ModelMessage[],
+    allowedTurnIds?: ReadonlySet<string>,
+  ): TurnStartSnapshot[] {
     return [...this.turnStartMessages]
       .filter(([turnId, start]) =>
         (allowedTurnIds === undefined || allowedTurnIds.has(turnId))
@@ -1743,7 +1748,7 @@ export class SessionJournal implements SessionRecorder {
         && isMessagePrefix(start, messages))
       .map(([turnId, start]) => ({
         turnId,
-        messages: structuredClone(start),
+        messages: messages.slice(0, start.length),
         taskState: cloneTaskPlanState(this.turnStartTaskStates.get(turnId)!),
         consensusState: this.turnStartConsensusStates.get(turnId)
           ? consensusPersistedStateSchema.parse(this.turnStartConsensusStates.get(turnId)!)
@@ -1831,7 +1836,7 @@ async function appendTurnEdit(path: string, text: string): Promise<void> {
 function isMessagePrefix(prefix: ModelMessage[], messages: ModelMessage[]): boolean {
   if (prefix.length > messages.length) return false
   return prefix.every((message, index) =>
-    JSON.stringify(message) === JSON.stringify(messages[index]),
+    message === messages[index] || JSON.stringify(message) === JSON.stringify(messages[index]),
   )
 }
 

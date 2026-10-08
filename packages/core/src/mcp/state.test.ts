@@ -100,4 +100,24 @@ describe('MCP 会话状态', () => {
     assert.equal(state.tools[0]?.serverName, 'project-server')
     assert.equal(state.serverInstructions[0]?.instructions, '服务器说明')
   })
+
+  it('Fork 原位清除所有历史信任，后续已不再信任时也保持每个前缀的目录和边界', () => {
+    const messages = ['old', 'current'].flatMap((serverName, index) => [
+      createMcpToolStateMessage({
+        tools: [],
+        trustedProjectConfigurationFingerprint: index === 0 ? 'c'.repeat(64) : null,
+        serverInstructions: [{ serverName, runtimeFingerprint: 'a'.repeat(64), instructions: serverName }],
+      }),
+      { role: 'user' as const, content: serverName },
+    ])
+    const forked = clearMcpProjectTrust(messages)
+    assert.equal(forked.length, messages.length)
+    for (let end = 1; end <= messages.length; end++) {
+      const original = findMcpToolState(messages.slice(0, end))
+      assert.deepEqual(findMcpToolState(forked.slice(0, end)), {
+        ...original, trustedProjectConfigurationFingerprint: null,
+      })
+    }
+    assert.equal(findMcpToolState(messages.slice(0, 1)).trustedProjectConfigurationFingerprint, 'c'.repeat(64))
+  })
 })

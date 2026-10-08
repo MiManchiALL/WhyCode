@@ -56,7 +56,7 @@ import {
   type BtwTurnSettlement,
 } from './btw.ts'
 
-export const SESSION_SCHEMA_VERSION = 15
+export const SESSION_SCHEMA_VERSION = 16
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
@@ -379,13 +379,26 @@ const snapshotSchema = chainedEntrySchema.extend({
   messages: messagesSchema,
   /** 换根时携带忙时输入；当前 schema 不为开发期旧会话补兼容默认值。 */
   pendingUserInputs: z.array(pendingUserInputSchema),
-  /** 回滚换根后仍保留新根内较早 turn 的边界；压缩快照写空数组。 */
-  turnStartMessages: z.array(z.object({
+  /** 锚点只引用本快照 messages 的前缀；压缩快照不保留旧回合边界。 */
+  turnStarts: z.array(z.object({
     turnId: z.string().min(1),
-    messages: messagesSchema,
+    messageCount: z.number().int().nonnegative(),
     taskState: taskPlanStateSchema,
   })),
 }).superRefine((snapshot, ctx) => {
+  const turnIds = new Set<string>()
+  snapshot.turnStarts.forEach((start, index) => {
+    if (turnIds.has(start.turnId)) {
+      ctx.addIssue({ code: 'custom', path: ['turnStarts', index, 'turnId'], message: '回合边界重复' })
+    }
+    turnIds.add(start.turnId)
+    if (start.messageCount >= snapshot.messages.length) {
+      ctx.addIssue({ code: 'custom', path: ['turnStarts', index, 'messageCount'], message: '回合边界超出快照历史' })
+    }
+  })
+  if (snapshot.reason === 'compact' && snapshot.turnStarts.length > 0) {
+    ctx.addIssue({ code: 'custom', path: ['turnStarts'], message: '压缩快照不能保留旧回合边界' })
+  }
   if (snapshot.activeTurnEngagedPlanId && !snapshot.activeTurnId) {
     ctx.addIssue({ code: 'custom', message: '没有 activeTurnId 时不能保留 engaged plan' })
   }

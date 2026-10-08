@@ -492,13 +492,13 @@ describe('SessionStore Fork', () => {
     assert.equal(await readFile(projectFile, 'utf8'), '2')
   })
 
-  it('分支从所有可恢复消息副本中清除临时 MCP 项目信任', async () => {
+  it('分支清除历史 MCP 信任并保持快照中每个回合前缀的目录和位置', async () => {
     const store = await createStore()
     const source = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const trustedState = createMcpToolStateMessage({
       tools: [],
       trustedProjectConfigurationFingerprint: 'a'.repeat(64),
-      serverInstructions: [],
+      serverInstructions: [{ serverName: 'first', runtimeFingerprint: 'a'.repeat(64), instructions: '最初目录' }],
     })
     const sourceMessages = [message('user', '检查项目配置'), trustedState]
     await source.recordUserInput('检查项目配置', true)
@@ -508,23 +508,31 @@ describe('SessionStore Fork', () => {
     await source.recordTurnEnd('turn-before-snapshot', 'completed')
     await source.recordUserInput('继续处理', true)
     await source.recordTurnStart('turn-trust', [message('user', '继续处理')])
-    await source.recordStep('turn-trust', [message('assistant', '继续完成')])
+    await source.recordStep('turn-trust', [createMcpToolStateMessage({
+      tools: [],
+      trustedProjectConfigurationFingerprint: 'b'.repeat(64),
+      serverInstructions: [{ serverName: 'second', runtimeFingerprint: 'b'.repeat(64), instructions: '后续目录' }],
+    }), message('assistant', '继续完成')])
     await source.recordTurnEnd('turn-trust', 'completed')
+    await source.recordSnapshot('rollback', [...source.initialMessages])
     await recordForkBoundary(source, 'turn-trust')
 
     const forked = await store.fork(
       source,
       'turn-trust',
     )
-    assert.equal(
-      findMcpToolState(forked.initialMessages).trustedProjectConfigurationFingerprint,
-      null,
-    )
-    assert.equal(
-      findMcpToolState(forked.messagesBeforeTurn('turn-before-snapshot') ?? [])
-        .trustedProjectConfigurationFingerprint,
-      null,
-    )
+    for (const journal of [forked, await store.open(forked.sessionId)]) {
+      const current = findMcpToolState(journal.initialMessages)
+      assert.equal(current.trustedProjectConfigurationFingerprint, null)
+      assert.equal(current.serverInstructions[0]?.serverName, 'second')
+      const beforeTrust = journal.messagesBeforeTurn('turn-trust')!
+      assert.equal(beforeTrust.length, source.messagesBeforeTurn('turn-trust')!.length)
+      const previous = findMcpToolState(beforeTrust)
+      assert.equal(previous.trustedProjectConfigurationFingerprint, null)
+      assert.equal(previous.serverInstructions[0]?.serverName, 'first')
+      assert.deepEqual(journal.messagesBeforeTurn('turn-before-snapshot'), [])
+    }
+    assert.equal(findMcpToolState(source.initialMessages).trustedProjectConfigurationFingerprint, 'b'.repeat(64))
   })
 })
 

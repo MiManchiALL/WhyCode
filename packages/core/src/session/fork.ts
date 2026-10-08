@@ -218,10 +218,6 @@ function rehomeEntry(
         activeConsensusBaseMessages: entry.activeConsensusBaseMessages
           ? clearMcpProjectTrust(presentations.messages(entry.activeConsensusBaseMessages))
           : null,
-        turnStartMessages: entry.turnStartMessages.map((start) => ({
-          ...start,
-          messages: clearMcpProjectTrust(presentations.messages(start.messages)),
-        })),
       })
     case 'view-events':
       return sessionEntrySchema.parse({

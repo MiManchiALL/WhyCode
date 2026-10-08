@@ -99,13 +99,13 @@ export function carryMcpToolState(
 export function clearMcpProjectTrust(
   messages: readonly ModelMessage[],
 ): ModelMessage[] {
-  const state = findMcpToolState(messages)
-  if (state.trustedProjectConfigurationFingerprint === null) return [...messages]
-  const next = withoutMcpToolState(messages)
-  return [...next, createMcpToolStateMessage({
-    ...state,
-    trustedProjectConfigurationFingerprint: null,
-  })]
+  // Fork 的回滚锚点引用消息前缀；原位清除每个状态的信任，保留边界和当时的工具目录。
+  return messages.map((message) => {
+    const state = parseMcpToolStateMessage(message)
+    return state?.trustedProjectConfigurationFingerprint
+      ? createMcpToolStateMessage({ ...state, trustedProjectConfigurationFingerprint: null })
+      : message
+  })
 }
 
 export function sameMcpToolState(
