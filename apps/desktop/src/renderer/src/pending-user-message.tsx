@@ -1,5 +1,5 @@
 import type { ComposerDraft } from './composer-drafts.ts'
-import { ImageDraftStrip } from './image-attachments.tsx'
+import { PendingImageGallery } from './image-attachments.tsx'
 import { PdfDraftStrip } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
 import { UserMessageBubble } from './user-message-card.tsx'
@@ -12,7 +12,7 @@ export function PendingUserMessage({ draft }: { draft: ComposerDraft }) {
       aria-busy="true"
       className="wc-user-message-copy mb-2 ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2"
     >
-      <ImageDraftStrip drafts={draft.images} />
+      <PendingImageGallery drafts={draft.images} />
       <PdfDraftStrip drafts={draft.pdfs} className="justify-end" />
       <SkillBadges skills={draft.skills} />
       {draft.text && <UserMessageBubble text={draft.text} btw={Boolean(draft.btwMode)} />}

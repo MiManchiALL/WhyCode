@@ -129,7 +129,7 @@ function user(inputId: string): Extract<Block, { kind: 'user' }> {
 }
 
 function submission(runtimeId: string, sessionId: string | null): ComposerSubmission {
-  return { runtimeId, sessionId, draft: draft('请求'), previousInputIds: new Set() }
+  return { runtimeId, sessionId, draft: draft('请求'), previousInputIds: new Set(), abortController: new AbortController() }
 }
 
 function draft(text: string): ComposerDraft {

@@ -1534,13 +1534,18 @@ export function App() {
 
   const stop = useCallback(() => {
     if (stopping) return
+    const targetRuntimeId = runtimeIdRef.current
+    composerSubmissions.getSnapshot().get(targetRuntimeId)?.abortController.abort()
     setStopping(true)
     setApproval(null)
-    void sendRuntimeCommand({ type: 'abort' }).catch(() => {
+    void sendRuntimeCommand({ type: 'abort' }).then((result) => {
+      if (!result?.ok) throw new Error('停止请求未被接受')
+    }).catch(() => {
+      if (runtimeIdRef.current !== targetRuntimeId) return
       setStopping(false)
       showError('停止请求发送失败，请重试')
     })
-  }, [showError, sendRuntimeCommand, stopping])
+  }, [composerSubmissions, showError, sendRuntimeCommand, stopping])
 
   const startNewSession = useCallback((resetWorkspace = false) => {
     if (!resetWorkspace && runtimeIdRef.current && sessionIdRef.current === null && !resumingSessionIdRef.current) return
@@ -1887,6 +1892,7 @@ export function App() {
       runtimeId: targetRuntimeId,
       sessionId: sessionIdRef.current,
       previousInputIds: composerInputIds(blocks, [...queued, ...restoredQueue]),
+      abortController: new AbortController(),
       draft: {
         text, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills,
         btwMode: sentBtwMode, restoredInputIds: sentRestoredInputIds,
@@ -1917,11 +1923,14 @@ export function App() {
     }
     void (async () => {
       let accepted = false
+      const { signal } = submission.abortController
       try {
         await composerDraftsRef.current.save(
           composerDraftKey(targetRuntimeId, submission.sessionId), submission.draft,
         )
-        const attachments = await prepareImageDrafts(sentImageDrafts)
+        signal.throwIfAborted()
+        const attachments = await prepareImageDrafts(sentImageDrafts, signal)
+        signal.throwIfAborted()
         const pdfAttachments = preparePdfDrafts(sentPdfDrafts)
         const result = await window.whycode.sendCommand(
           targetRuntimeId,
@@ -1954,7 +1963,7 @@ export function App() {
         }
       } catch {
         accepted = Boolean(submission.receivedInputId)
-        if (!accepted && runtimeIdRef.current === targetRuntimeId) {
+        if (!accepted && !signal.aborted && runtimeIdRef.current === targetRuntimeId) {
           showError(sentImageDrafts.length || sentPdfDrafts.length
             ? '附件读取或消息发送失败，内容已恢复到输入框'
             : '消息发送失败，内容已恢复到输入框')
@@ -1982,7 +1991,10 @@ export function App() {
         try {
           if (accepted) releaseImageDrafts(sentImageDrafts)
           if (runtimeIdRef.current === targetRuntimeId) {
-            if (!accepted) restoreRejectedInput()
+            if (!accepted) {
+              restoreRejectedInput()
+              if (signal.aborted) setStopping(false)
+            }
           } else {
             const key = composerDraftKey(targetRuntimeId, submission.sessionId)
             const draft = accepted
@@ -1990,7 +2002,7 @@ export function App() {
               : prependComposerDraft(submission.draft, submission.remainder)
             composerDraftsRef.current.cache(key, draft)
             saved = composerDraftsRef.current.save(key, draft)
-            if (!accepted) showError('消息未能发送，内容已恢复到原会话的输入框')
+            if (!accepted && !signal.aborted) showError('消息未能发送，内容已恢复到原会话的输入框')
           }
         } finally {
           composerSubmissions.finish(submission)
@@ -2156,7 +2168,11 @@ export function App() {
     && pdfDrafts.length === 0
     && selectedSkills.length === 0
   const sendDisabled = composerControlsLocked || messageEmpty || Boolean(sshSendUnavailableReason)
-  const primaryAction = composerPrimaryAction({ busy, hasDraft: !messageEmpty })
+  const primaryAction = composerPrimaryAction({
+    busy: busy || workStartedAt !== null,
+    submissionPending,
+    hasDraft: !messageEmpty,
+  })
   const contextBaseRef = workspace.mode === 'pending-worktree'
     ? workspace.baseRef
     : workspace.mode === 'worktree'

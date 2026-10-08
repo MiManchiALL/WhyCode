@@ -1,8 +1,59 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { localWorkspace, type CoreEvent } from '@whycode/core'
+import { localWorkspace, type AgentSession, type CoreEvent } from '@whycode/core'
 import { pendingManagedWorkspace, pendingWorktreeWorkspace } from '../shared/workspace.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
+import { routeUserMessage } from './user-message-routing.ts'
+
+describe('提交期间停止', () => {
+  it('会话尚未初始化时的停止等待消息交付，不会被随后启动的 Agent 遗漏', async () => {
+    const events: CoreEvent[] = []
+    const calls: string[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    const reservation = runtime.routingGate.reserve()
+    const stopping = runtime.abort()
+    let stopped = false
+    void stopping.then(() => { stopped = true })
+    await Promise.resolve()
+    assert.equal(stopped, false)
+
+    runtime.beginWork()
+    runtime.session = {
+      abort: (reason: string) => {
+        calls.push(reason)
+        runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+      },
+    } as AgentSession
+    await routeUserMessage('请求', false, {
+      isBusy: () => false,
+      reserve: () => runtime.routingGate.reserve(),
+      record: async () => { calls.push('record') },
+      acceptRoot: () => {},
+      deliver: () => { calls.push('deliver') },
+    }, reservation)
+    await stopping
+    assert.deepEqual(calls, ['record', 'deliver', 'user-cancel'])
+    const finished = events.find(event => event.type === 'work-finished')
+    assert.equal(finished?.type === 'work-finished' && finished.outcome, 'stopped')
+  })
+
+  it('附件处理立即收到取消；准备失败释放占位后停止也能完成', async () => {
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model', emit: () => {},
+    })
+    const reservation = runtime.routingGate.reserve()
+    const signal = runtime.beginAttachmentPreparation()
+    const stopping = runtime.abort()
+    assert.equal(signal.aborted, true)
+    runtime.endAttachmentPreparation()
+    reservation.release()
+    await stopping
+    assert.equal(runtime.busy, false)
+  })
+})
 
 describe('会话工作计时', () => {
   it('失败原因随工作终点保留，之后成功或停止的工作不继承旧错误', () => {

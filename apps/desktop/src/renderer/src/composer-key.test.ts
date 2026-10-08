@@ -4,9 +4,14 @@ import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 
 describe('主输入框按钮行为', () => {
   it('运行中有草稿时发送，清空后恢复停止', () => {
-    assert.equal(composerPrimaryAction({ busy: true, hasDraft: true }), 'send')
-    assert.equal(composerPrimaryAction({ busy: true, hasDraft: false }), 'stop')
-    assert.equal(composerPrimaryAction({ busy: false, hasDraft: false }), 'send')
+    assert.equal(composerPrimaryAction({ busy: true, submissionPending: false, hasDraft: true }), 'send')
+    assert.equal(composerPrimaryAction({ busy: true, submissionPending: false, hasDraft: false }), 'stop')
+    assert.equal(composerPrimaryAction({ busy: false, submissionPending: false, hasDraft: false }), 'send')
+  })
+
+  it('模型尚未运行的提交阶段立即显示停止，继续输入也不切回不可用的发送入口', () => {
+    assert.equal(composerPrimaryAction({ busy: false, submissionPending: true, hasDraft: false }), 'stop')
+    assert.equal(composerPrimaryAction({ busy: false, submissionPending: true, hasDraft: true }), 'stop')
   })
 })
 

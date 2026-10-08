@@ -14,6 +14,10 @@ export class UserMessageRoutingGate {
     return this.reservationCount > 0
   }
 
+  waitUntilDelivered(): Promise<void> {
+    return this.tail
+  }
+
   reserve(): UserMessageReservation {
     const ready = this.tail
     let unlock!: () => void

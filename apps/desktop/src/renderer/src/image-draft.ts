@@ -26,12 +26,14 @@ export type ImageDraft =
 /** 保留用户草稿顺序，避免混合选择与粘贴时改变“第几张”的语义。 */
 export async function prepareImageDrafts(
   drafts: readonly ImageDraft[],
+  signal?: AbortSignal,
 ): Promise<ImageMessageAttachmentInput[]> {
   const inputs: ImageMessageAttachmentInput[] = []
   for (const draft of drafts) {
+    signal?.throwIfAborted()
     if (draft.kind === 'path') inputs.push({ kind: 'path', path: draft.path })
     else if (draft.kind === 'memory') {
-      inputs.push({ kind: 'inline', name: draft.name, base64: await fileToBase64(draft.file), ...(draft.source ? { source: draft.source } : {}) })
+      inputs.push({ kind: 'inline', name: draft.name, base64: await fileToBase64(draft.file, signal), ...(draft.source ? { source: draft.source } : {}) })
     } else {
       inputs.push({ kind: 'stored', attachmentId: draft.attachmentId })
     }
@@ -122,8 +124,9 @@ function supportsImageFile(file: File): boolean {
     || /\.(?:png|jpe?g|webp)$/i.test(file.name)
 }
 
-async function fileToBase64(file: File): Promise<string> {
+async function fileToBase64(file: File, signal?: AbortSignal): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer())
+  signal?.throwIfAborted()
   if (bytes.byteLength <= 0 || bytes.byteLength > IMAGE_ATTACHMENT_MAX_SOURCE_BYTES) {
     throw new Error('剪贴板图片为空或超过 20 MB')
   }

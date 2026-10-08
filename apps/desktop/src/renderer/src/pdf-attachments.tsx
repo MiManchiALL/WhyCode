@@ -42,7 +42,7 @@ export function usePdfDrafts(onError: (message: string) => void) {
 export function PdfDraftStrip({
   drafts,
   onRemove,
-  className = 'mb-2',
+  className = 'mb-2 w-full [&>*]:max-w-[calc((100%_-_0.5rem)/2)]',
 }: {
   drafts: readonly PdfDraft[]
   onRemove?: (id: string) => void

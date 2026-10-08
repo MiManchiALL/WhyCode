@@ -11,6 +11,23 @@ import { USER_IMAGE_ATTACHMENT_MAX_COUNT } from '@whycode/core/image-limits'
 import type { BrowserReferenceSource } from '@whycode/core/browser-reference'
 
 describe('图片草稿传输', () => {
+  it('停止提交后不编码正在读取的图片，也不继续读取后续图片', async t => {
+    const abort = new AbortController()
+    let finishRead!: (bytes: ArrayBuffer) => void
+    const first = { arrayBuffer: () => new Promise<ArrayBuffer>(resolve => { finishRead = resolve }) } as File
+    const readNext = t.mock.fn(async () => new ArrayBuffer(1))
+    const drafts: ImageDraft[] = [
+      { id: 'first', kind: 'memory', name: 'first.png', previewUrl: 'blob:1', file: first },
+      { id: 'next', kind: 'memory', name: 'next.png', previewUrl: 'blob:2', file: { arrayBuffer: readNext } as unknown as File },
+    ]
+    const preparing = prepareImageDrafts(drafts, abort.signal)
+    abort.abort()
+    finishRead(new ArrayBuffer(0))
+    await assert.rejects(preparing, { name: 'AbortError' })
+    assert.equal(readNext.mock.callCount(), 0)
+    await assert.rejects(prepareImageDrafts(drafts, abort.signal), { name: 'AbortError' })
+  })
+
   it('网页引用的批注随草稿提交和恢复，不依赖浏览器页面仍然存在', async () => {
     const source: BrowserReferenceSource = { kind: 'browser-reference', id: crypto.randomUUID(), comment: '修改标题',
       page: { url: 'file:///home/index.html', title: 'Page' }, targets: [{ id: crypto.randomUUID(), kind: 'element', label: 'h1',

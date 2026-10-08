@@ -7,7 +7,7 @@ import {
   releaseImageDrafts,
   type ImageDraft,
 } from './image-draft.ts'
-import { ImagePreviewDialog } from './image-preview.tsx'
+import { ImagePreviewDialog, type ImagePreviewTarget } from './image-preview.tsx'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import { BrowserReferenceChip } from './browser-reference-chip.tsx'
 
@@ -137,15 +137,31 @@ export function UserImageGallery({
   attachments?: readonly ImageAttachment[]
   variant?: 'message' | 'tool'
 }) {
-  const [previewId, setPreviewId] = useState<string | null>(null)
-  if (!attachments?.length) return null
-  const targets = attachments.map(attachment => ({
+  const targets = (attachments ?? []).map(attachment => ({
     id: attachment.id,
     src: `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`,
     name: (attachment.source?.kind === 'browser-reference' && attachment.source.page.title) || attachment.name,
     details: `${attachment.width}×${attachment.height} · ${formatBytes(attachment.byteLength)}`,
     source: attachment.source,
   }))
+  return <ImageGallery targets={targets} variant={variant} />
+}
+
+export function PendingImageGallery({ drafts }: { drafts: readonly ImageDraft[] }) {
+  return <ImageGallery variant="message" targets={drafts.map(draft => ({
+    id: draft.id,
+    src: draft.previewUrl,
+    name: draft.source?.page.title || draft.name,
+    source: draft.source,
+  }))} />
+}
+
+function ImageGallery({ targets, variant }: {
+  targets: readonly (ImagePreviewTarget & Pick<ImageAttachment, 'source'>)[]
+  variant: 'message' | 'tool'
+}) {
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  if (!targets.length) return null
   return (
     <>
       <div className={variant === 'message'
@@ -162,7 +178,7 @@ export function UserImageGallery({
               ? 'cursor-zoom-in overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-transform hover:-translate-y-0.5'
               : 'cursor-zoom-in rounded border border-neutral-300 bg-white p-0.5'}
             onClick={() => setPreviewId(target.id)}
-            title={`${target.name} · ${target.details} · 点击查看原图`}
+            title={[target.name, target.details, '点击查看原图'].filter(Boolean).join(' · ')}
           >
             <img
               src={target.src}

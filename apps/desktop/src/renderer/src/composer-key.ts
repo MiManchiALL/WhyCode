@@ -3,9 +3,10 @@ export type ComposerPrimaryAction = 'send' | 'stop'
 
 export function composerPrimaryAction(input: {
   busy: boolean
+  submissionPending: boolean
   hasDraft: boolean
 }): ComposerPrimaryAction {
-  return input.busy && !input.hasDraft ? 'stop' : 'send'
+  return input.submissionPending || (input.busy && !input.hasDraft) ? 'stop' : 'send'
 }
 
 export function composerKeyAction(input: {

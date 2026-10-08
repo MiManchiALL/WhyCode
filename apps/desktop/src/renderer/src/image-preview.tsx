@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 
-interface ImagePreviewTarget {
+export interface ImagePreviewTarget {
   id: string
   src: string
   name: string

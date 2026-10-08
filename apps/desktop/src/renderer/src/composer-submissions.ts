@@ -7,6 +7,7 @@ export interface ComposerSubmission {
   sessionId: string | null
   readonly draft: ComposerDraft
   readonly previousInputIds: ReadonlySet<string>
+  readonly abortController: AbortController
   receivedInputId?: string
   /** 切走后暂存继续编辑的输入；提交完成前不能被普通草稿缓存淘汰。 */
   remainder?: ComposerDraft

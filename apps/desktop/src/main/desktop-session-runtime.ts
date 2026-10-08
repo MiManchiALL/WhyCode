@@ -392,6 +392,9 @@ export class DesktopSessionRuntime {
     const reason = source === 'user' ? 'user-cancel' : 'process-interruption'
     this.attachmentAbort?.abort(reason)
     this.rejectApprovals()
+    // 首次消息可能仍在准备或持久化；等输入交付边界后，停止才会作用于它的 Agent。
+    await this.routingGate.waitUntilDelivered()
+    if (source === 'user' && this.workStartedAt !== null) this.workOutcome = 'stopped'
     if (this.coordinator) await this.coordinator.abort(reason, interruption)
     else this.session?.abort(reason, interruption)
   }
