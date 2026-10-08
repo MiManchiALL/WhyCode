@@ -136,7 +136,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
   }, [pending, props.runtimeId, props.onReady, props.active, props.items])
   return (
     <>
-      {pending && <SessionLoading />}
+      {pending && <SessionLoading alignConversation />}
       <div hidden={pending} inert={props.active === false}>
         <ConversationContents {...(pending || props.active === false ? deferred : props)} />
       </div>

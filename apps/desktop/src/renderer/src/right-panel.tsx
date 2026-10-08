@@ -22,10 +22,12 @@ import type { PathReference } from './path-reference.ts'
 import { browserAddress } from '../../shared/browser.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { ImageDraft } from './image-draft.ts'
+import { SessionLoading } from './session-loading.tsx'
 
 interface RightPanelProps {
   remote?: boolean
   active: boolean
+  loading: boolean
   runtimeId: string
   refreshRevision: string
   parentSessionId: string | null
@@ -59,7 +61,7 @@ export function RightPanel(props: RightPanelProps) {
   const hasWorkspace = expanded !== undefined
   const directories = useMemo(() => new WorkspaceDirectories(window.whycode, props.runtimeId, props.refreshRevision),
     [props.runtimeId, props.workspacePath, hasWorkspace])
-  const browsing = props.active && activeRightPanelPage(props.state)?.kind === 'workspace'
+  const browsing = !props.loading && props.active && activeRightPanelPage(props.state)?.kind === 'workspace'
   useEffect(() => () => directories.close(), [directories])
   useEffect(() => directories.retain(expanded ?? []), [directories, expanded])
   useEffect(() => directories.setActive(browsing, Boolean(props.remote)), [directories, browsing, props.remote])
@@ -73,7 +75,7 @@ export function RightPanel(props: RightPanelProps) {
   return (
     <aside className="flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
-        <RightPanelTabs key={props.runtimeId} tabs={props.state.tabs} activeTabId={props.state.activeTabId}
+        <RightPanelTabs key={props.parentSessionId ?? props.runtimeId} tabs={props.state.tabs} activeTabId={props.state.activeTabId}
           subagents={props.subagents} onSelect={props.onSelectTab} onClose={props.onCloseTab} onMove={props.onMoveTab}>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
@@ -109,12 +111,14 @@ export function RightPanel(props: RightPanelProps) {
         </button>
         {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
-      <RightPanelContent {...props} directories={directories} />
-      {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
-        page={tab.page} active={props.active && props.state.activeTabId === tab.id}
-        runtimeId={props.runtimeId} canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts}
-        onReference={(image, replaceId) => props.onReferenceBrowser(props.runtimeId, image, replaceId)}
-        onChange={props.onUpdatePage} onOpen={url => openBrowser(props, url, tab.page.kind === 'browser' && !!tab.page.workspaceFile && url.startsWith('file:'))} onClose={() => props.onCloseTab(tab.id)} />)}
+      {props.loading ? <div className="relative min-h-0 flex-1"><SessionLoading /></div> : <>
+        <RightPanelContent {...props} directories={directories} />
+        {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
+          page={tab.page} active={props.active && props.state.activeTabId === tab.id}
+          runtimeId={props.runtimeId} canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts}
+          onReference={(image, replaceId) => props.onReferenceBrowser(props.runtimeId, image, replaceId)}
+          onChange={props.onUpdatePage} onOpen={url => openBrowser(props, url, tab.page.kind === 'browser' && !!tab.page.workspaceFile && url.startsWith('file:'))} onClose={() => props.onCloseTab(tab.id)} />)}
+      </>}
     </aside>
   )
 }

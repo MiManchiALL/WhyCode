@@ -105,6 +105,7 @@ import {
   type ComposerSubmission,
 } from './composer-submissions.ts'
 import { PendingUserMessage } from './pending-user-message.tsx'
+import { SessionLoading } from './session-loading.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
@@ -194,14 +195,13 @@ export function App() {
   const [activeSkills, setActiveSkills] = useState<SkillSummary[]>([])
   const [currentFileChanges, setCurrentFileChanges] = useState<ToolFileChange[]>([])
   const [showMcpStatus, setShowMcpStatus] = useState(false)
-  const [rightPanelState, setRightPanelState] = useState<RightPanelSessionState>({
+  const [committedRightPanelState, setRightPanelState] = useState<RightPanelSessionState>({
     open: false,
     tabs: [],
     activeTabId: null,
     inspectorView: 'plan',
   })
   const [rightPanelFullscreen, setRightPanelFullscreen] = useState(false)
-  const panelFullscreen = rightPanelFullscreen && rightPanelState.open
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
   const [showConnectionSettings, setShowConnectionSettings] = useState(false)
@@ -234,7 +234,7 @@ export function App() {
   const [negoStatus, setNegoStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLElement>(null)
   const conversationContentRef = useRef<HTMLDivElement>(null)
-  const rightPanelStateRef = useRef(rightPanelState)
+  const rightPanelStateRef = useRef(committedRightPanelState)
   const rightPanelSessionStoreRef = useRef<RightPanelSessionStore | null>(null)
   if (!rightPanelSessionStoreRef.current) {
     rightPanelSessionStoreRef.current = new RightPanelSessionStore()
@@ -268,8 +268,14 @@ export function App() {
   const conversationScrollReleaseRef = useRef<(() => void) | null>(null)
   const expandedIdsRef = useRef(view.expanded)
   const conversationFeedbackIdRef = useRef(0)
-  rightPanelStateRef.current = rightPanelState
+  rightPanelStateRef.current = committedRightPanelState
   expandedIdsRef.current = view.expanded
+  const loadingConversation = resumingSessionId !== null && resumingSessionId !== sessionIdRef.current
+  // 描述符跟随导航展示；只有成功快照才能移交可写状态，失败时仍属于原会话。
+  const rightPanelState = loadingConversation
+    ? rightPanelSessionStoreRef.current.get(resumingSessionId)
+    : committedRightPanelState
+  const panelFullscreen = rightPanelFullscreen && rightPanelState.open
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
@@ -2157,7 +2163,6 @@ export function App() {
       : null
 
   const pendingSession = sessions.find((session) => session.sessionId === resumingSessionId)
-  const loadingConversation = resumingSessionId !== null && resumingSessionId !== sessionIdRef.current
   const pendingDraft = loadingConversation
     ? [...pendingSubmissions.values()].find((submission) => submission.sessionId === resumingSessionId)?.remainder
       ?? composerDraftsRef.current.get(resumingSessionId)
@@ -2592,7 +2597,7 @@ export function App() {
               aria-hidden={rightPanelState.open}
               inert={rightPanelState.open}
             >
-              <TaskInspector
+              {loadingConversation ? <SessionLoading /> : <TaskInspector
                 runtimeId={runtimeId}
                 workspace={workspace}
                 plan={view.taskPlan}
@@ -2608,7 +2613,7 @@ export function App() {
                 onOpenSubagents={() => {
                   showRightPanelPage({ kind: 'subagent-overview' })
                 }}
-              />
+              />}
             </div>
             <div
               className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-200 ease-out ${
@@ -2623,10 +2628,11 @@ export function App() {
               <RightPanel
                 remote={workspace.mode === 'ssh'}
                 active={rightPanelState.open}
-                runtimeId={runtimeId}
+                loading={loadingConversation}
+                runtimeId={loadingConversation ? '' : runtimeId}
                 refreshRevision={`${view.fileSystemRevision}:${filePreviewInteractionRevision}`}
-                parentSessionId={sessionIdRef.current}
-                subagents={subagents}
+                parentSessionId={loadingConversation ? resumingSessionId : sessionIdRef.current}
+                subagents={loadingConversation ? [] : subagents}
                 skills={skillCatalog.skills}
                 projectDir={projectDir}
                 state={rightPanelState}
