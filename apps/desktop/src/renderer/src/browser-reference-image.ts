@@ -48,10 +48,12 @@ export async function composeBrowserReference(captures: readonly BrowserTargetCa
 
 /** 从现有附件还原各目标，不另存原图副本；未重新选取的目标保留原捕获事实。 */
 export async function restoreBrowserReference(previewUrl: string, source: import('@whycode/core/browser-reference').BrowserReferenceSource): Promise<BrowserTargetCapture[]> {
-  const response = await fetch(previewUrl)
-  if (!response.ok) throw new Error('无法读取引用截图，请重新选择')
-  const image = await createImageBitmap(await response.blob())
+  // 附件属于 img-src；沿用图片加载边界，不把预览地址当网络请求读取。
+  const image = new Image()
+  image.crossOrigin = 'anonymous'
+  image.src = previewUrl
   try {
+    await image.decode().catch(cause => { throw new Error('无法读取引用截图，请重新选择', { cause }) })
     return await Promise.all(source.targets.map(async ({ imageRect, crop, ...target }) => {
       if (imageRect.x < 0 || imageRect.y < 0 || imageRect.x + imageRect.width > image.width || imageRect.y + imageRect.height > image.height) {
         throw new Error('引用截图与目标范围不一致，请重新选择')
@@ -64,7 +66,7 @@ export async function restoreBrowserReference(previewUrl: string, source: import
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('无法读取引用截图')), 'image/jpeg', 0.95))
       return { target, crop, page: source.page, continuePicking: false, bytes: new Uint8Array(await blob.arrayBuffer()) }
     }))
-  } finally { image.close() }
+  } finally { image.removeAttribute('src') }
 }
 
 export function sameBrowserTarget(a: BrowserTargetCapture, b: BrowserTargetCapture): boolean {

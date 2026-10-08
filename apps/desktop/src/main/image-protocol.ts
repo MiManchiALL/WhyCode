@@ -10,7 +10,7 @@ const ATTACHMENT_SCHEME = 'whycode-attachment'
 export function registerFileSchemes(): void {
   protocol.registerSchemesAsPrivileged([{
     scheme: ATTACHMENT_SCHEME,
-    privileges: { standard: true, secure: true, supportFetchAPI: true },
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
   }, {
     scheme: PREVIEW_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
@@ -45,6 +45,8 @@ export function registerAttachmentProtocol(
           'Cache-Control': 'no-store',
           'Content-Type': stored.mediaType,
           'X-Content-Type-Options': 'nosniff',
+          // 主页面从已授权图片还原引用画面；匿名图片解码后允许 Canvas 裁剪。
+          'Access-Control-Allow-Origin': '*',
         },
       })
     } catch {
