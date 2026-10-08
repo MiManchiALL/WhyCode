@@ -8,11 +8,13 @@ import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 const require = createRequire(import.meta.url)
 const desktop = path.resolve(import.meta.dirname, '../../..')
 
-test('正式 CSP 下的新建和已存储网页引用都能还原截图', {
+test('网页引用在正式 CSP 下恢复截图、标注编号并约束连续拖动', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY,
 }, async (t) => {
@@ -25,11 +27,14 @@ test('正式 CSP 下的新建和已存储网页引用都能还原截图', {
   const common = { configFile: false, root: desktop, logLevel: 'silent' }
   await build({
     ...common,
+    plugins: [react(), tailwindcss()],
+    define: { 'process.env.NODE_ENV': '"production"' },
     build: {
       outDir: directory, emptyOutDir: false, minify: false,
       lib: {
-        entry: path.join(desktop, 'src/renderer/src/browser-reference-image.ts'),
+        entry: path.join(desktop, 'src/renderer/src/test-fixtures/browser-reference.tsx'),
         name: 'BrowserReferenceImage', formats: ['iife'], fileName: () => 'renderer.js',
+        cssFileName: 'renderer',
       },
     },
   })
@@ -49,7 +54,7 @@ test('正式 CSP 下的新建和已存储网页引用都能还原截图', {
   })
   // 直接使用主界面的 CSP，避免隔离用例遗漏真实的资源加载边界。
   const html = await readFile(path.join(desktop, 'src/renderer/index.html'), 'utf8')
-  const fixture = html.replace('<script type="module" src="/src/main.tsx"></script>', '<script src="./renderer.js"></script>')
+  const fixture = html.replace('<script type="module" src="/src/main.tsx"></script>', '<link rel="stylesheet" href="./renderer.css"><script src="./renderer.js"></script>')
   assert.notEqual(fixture, html)
   await writeFile(path.join(directory, 'index.html'), fixture)
   const env = { ...process.env, WHYCODE_REFERENCE_TEST_DIR: directory }

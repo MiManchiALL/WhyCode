@@ -23,9 +23,10 @@ export function BrowserReferenceEditor(props: Props) {
   const constrain: Modifier = ({ transform, draggingNodeRect }) => {
     if (!draggingNodeRect || !props.boundary) return transform
     const bounds = props.boundary.getBoundingClientRect()
+    // dnd-kit 的测量去除了整个 transform，约束必须计入已提交的拖动位移。
     return { ...transform,
-      x: Math.max(bounds.left + 8 - draggingNodeRect.left, Math.min(bounds.right - 8 - draggingNodeRect.right, transform.x)),
-      y: Math.max(bounds.top + 8 - draggingNodeRect.top, Math.min(bounds.bottom - 8 - draggingNodeRect.bottom, transform.y)) }
+      x: Math.max(bounds.left + 8 - draggingNodeRect.left - offset.x, Math.min(bounds.right - 8 - draggingNodeRect.right - offset.x, transform.x)),
+      y: Math.max(bounds.top + 8 - draggingNodeRect.top - offset.y, Math.min(bounds.bottom - 8 - draggingNodeRect.bottom - offset.y, transform.y)) }
   }
   return <DndContext sensors={sensors} modifiers={[constrain]} autoScroll={false}
     onDragEnd={({ delta }) => setOffset(current => ({ x: current.x + delta.x, y: current.y + delta.y }))}

@@ -1,4 +1,4 @@
-import { browserReferenceSourceSchema } from '@whycode/core/browser-reference'
+import { browserReferenceSourceSchema, type BrowserRect } from '@whycode/core/browser-reference'
 import type { BrowserReferenceImage, BrowserTargetCapture } from '../../shared/browser-reference.ts'
 
 /** 每个编号保留自己捕获时的画面；滚动后的目标不能套用旧截图坐标。 */
@@ -30,20 +30,38 @@ export async function composeBrowserReference(captures: readonly BrowserTargetCa
       context.fillStyle = '#172439'; context.font = '600 16px sans-serif'
       context.fillText(`${index + 1}  ${capture.target.label}`, x + 4, y + 22, cell - 8)
       context.drawImage(image, x, y + header, width, height)
-      const rect = capture.target.rect, crop = capture.crop
-      const rx = Math.max(0, rect.x - crop.x), ry = Math.max(0, rect.y - crop.y)
-      const rw = Math.min(crop.width, rect.x - crop.x + rect.width) - rx
-      const rh = Math.min(crop.height, rect.y - crop.y + rect.height) - ry
-      context.strokeStyle = '#1769ef'; context.lineWidth = 3
-      context.strokeRect(x + rx / crop.width * width + 1.5, y + header + ry / crop.height * height + 1.5,
-        Math.max(1, rw / crop.width * width - 3), Math.max(1, rh / crop.height * height - 3))
-      return { ...capture.target, crop, imageRect: { x, y: y + header, width, height } }
+      const imageRect = { x, y: y + header, width, height }
+      drawTargetMarker(context, capture, imageRect, index + 1)
+      return { ...capture.target, crop: capture.crop, imageRect }
     })
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('无法生成引用截图')), 'image/jpeg', 0.9))
     return { bytes: new Uint8Array(await blob.arrayBuffer()), source: browserReferenceSourceSchema.parse({
       kind: 'browser-reference', id: crypto.randomUUID(), comment, page: captures[0]!.page, targets,
     }) }
   } finally { images.forEach(image => image.close()) }
+}
+
+function drawTargetMarker(context: CanvasRenderingContext2D, capture: BrowserTargetCapture, image: BrowserRect, number: number): void {
+  const rect = capture.target.rect, crop = capture.crop
+  const rx = Math.max(0, rect.x - crop.x), ry = Math.max(0, rect.y - crop.y)
+  const rw = Math.min(crop.width, rect.x - crop.x + rect.width) - rx
+  const rh = Math.min(crop.height, rect.y - crop.y + rect.height) - ry
+  const left = image.x + rx / crop.width * image.width, top = image.y + ry / crop.height * image.height
+  context.save()
+  context.beginPath(); context.rect(image.x, image.y, image.width, image.height); context.clip()
+  context.strokeStyle = '#1769ef'; context.lineWidth = 3
+  context.strokeRect(left + 1.5, top + 1.5,
+    Math.max(1, rw / crop.width * image.width - 3), Math.max(1, rh / crop.height * image.height - 3))
+  const size = Math.min(28, image.width, image.height)
+  const x = Math.min(left, image.x + image.width - size), y = Math.max(image.y, top - size)
+  // 重编辑会从附件还原画面；不放大旧画面，实色底板覆盖同位置的旧编号。
+  context.fillStyle = '#fff'; context.fillRect(x, y, size, size)
+  context.fillStyle = '#1769ef'; context.beginPath()
+  context.roundRect(x + 1, y + 1, size - 2, size - 2, Math.min(5, size / 4)); context.fill()
+  context.fillStyle = '#fff'; context.font = `700 ${size * 0.6}px sans-serif`
+  context.textAlign = 'center'; context.textBaseline = 'middle'
+  context.fillText(String(number), x + size / 2, y + size / 2 + 0.5)
+  context.restore()
 }
 
 /** 从现有附件还原各目标，不另存原图副本；未重新选取的目标保留原捕获事实。 */
