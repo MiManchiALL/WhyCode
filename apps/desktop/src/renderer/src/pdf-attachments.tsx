@@ -1,7 +1,7 @@
 import { filePathKey, localFilePath } from './local-files.ts'
 import { useCallback, useRef, useState } from 'react'
 import type { PdfAttachment } from '@whycode/core'
-import { FileText } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
 import {
   MAX_PDF_DRAFT_BYTES,
   MAX_PDF_DRAFT_TOTAL_BYTES,
@@ -42,32 +42,18 @@ export function usePdfDrafts(onError: (message: string) => void) {
 export function PdfDraftStrip({
   drafts,
   onRemove,
+  className = 'mb-2',
 }: {
   drafts: readonly PdfDraft[]
   onRemove?: (id: string) => void
+  className?: string
 }) {
   if (drafts.length === 0) return null
   return (
-    <div className="mb-2 flex flex-wrap gap-2">
+    <div className={`flex max-w-full flex-wrap gap-2 ${className}`}>
       {drafts.map((draft) => (
-        <div
-          key={draft.id}
-          className="flex max-w-72 items-center gap-2 rounded border border-red-200 bg-white px-2 py-1.5 text-xs"
-          title={`${draft.name} · ${formatBytes(draft.byteLength)}`}
-        >
-          <span className="rounded bg-red-600 px-1.5 py-1 font-semibold text-white">PDF</span>
-          <span className="min-w-0 flex-1 truncate">{draft.name}</span>
-          <span className="shrink-0 text-neutral-400">{formatBytes(draft.byteLength)}</span>
-          {onRemove && <button
-            type="button"
-            className="shrink-0 text-neutral-400 hover:text-neutral-800"
-            onClick={() => onRemove(draft.id)}
-            title={`移除 ${draft.name}`}
-            aria-label={`移除 ${draft.name}`}
-          >
-            ×
-          </button>}
-        </div>
+        <PdfChip key={draft.id} name={draft.name} byteLength={draft.byteLength}
+          onRemove={onRemove ? () => onRemove(draft.id) : undefined} />
       ))}
     </div>
   )
@@ -86,23 +72,14 @@ export function UserPdfGallery({
     <div className="max-w-full">
       <div className="flex flex-wrap justify-end gap-2">
         {attachments.map((attachment) => (
-          <button
-            key={attachment.id}
-            type="button"
-            className="flex max-w-sm items-center gap-2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-2 text-left text-xs shadow-[1px_2px_0_rgb(43_46_41_/_4%)] transition-colors hover:border-[var(--wc-line-strong)]"
-            title={`${attachment.name} · ${attachment.pageCount} 页 · ${formatBytes(attachment.byteLength)} · 点击打开`}
-            onClick={() => {
+          <PdfChip key={attachment.id} name={attachment.name} byteLength={attachment.byteLength} pageCount={attachment.pageCount}
+            onOpen={() => {
               setError(null)
               void window.whycode.openPdfAttachment(runtimeId, attachment.id).then((result) => {
                 if (!result.ok) setError(result.error ?? '无法打开 PDF')
               }).catch(() => setError('无法打开 PDF'))
             }}
-          >
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[#d85858] text-white">
-              <FileText size={11} />
-            </span>
-            <span className="min-w-0 flex-1 truncate font-medium">{attachment.name}</span>
-          </button>
+          />
         ))}
       </div>
       {error && <div className="mt-1 text-xs text-red-600">{error}</div>}
@@ -113,18 +90,36 @@ export function UserPdfGallery({
 export function QueuedPdfStrip({ attachments }: { attachments?: readonly PdfAttachment[] }) {
   if (!attachments?.length) return null
   return (
-    <div className="mt-1 flex flex-wrap gap-1">
+    <div className="mt-1 flex max-w-full flex-wrap gap-2">
       {attachments.map((attachment) => (
-        <span
-          key={attachment.id}
-          className="max-w-56 truncate rounded border border-red-200 bg-white px-1.5 py-1 wc-type-tiny text-red-700"
-          title={attachment.name}
-        >
-          PDF · {attachment.name}
-        </span>
+        <PdfChip key={attachment.id} name={attachment.name} byteLength={attachment.byteLength} pageCount={attachment.pageCount} />
       ))}
     </div>
   )
+}
+
+function PdfChip({ name, byteLength, pageCount, onOpen, onRemove }: {
+  name: string
+  byteLength: number
+  pageCount?: number
+  onOpen?: () => void
+  onRemove?: () => void
+}) {
+  const Tag = onOpen ? 'button' : 'div'
+  const title = [name, pageCount ? `${pageCount} 页` : '', formatBytes(byteLength), onOpen ? '点击打开' : ''].filter(Boolean).join(' · ')
+  return <Tag
+    type={onOpen ? 'button' : undefined}
+    onClick={onOpen}
+    title={title}
+    className={`wc-user-message-copy wc-focus-ring flex min-w-0 max-w-[min(100%,24rem)] items-center gap-2 rounded-full border border-[var(--wc-line)] bg-white px-3 py-2 text-left shadow-[1px_2px_0_rgb(43_46_41_/_4%)] ${onOpen ? 'transition-colors hover:border-[var(--wc-line-strong)]' : ''}`}
+  >
+    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[#d85858] text-white" aria-hidden="true">
+      <FileText size={11} />
+    </span>
+    <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+    {onRemove && <button type="button" className="wc-focus-ring flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--wc-muted)] transition-colors hover:bg-black/5 hover:text-[var(--wc-ink)]"
+      onClick={onRemove} title={`移除 ${name}`} aria-label={`移除 ${name}`}><X size={12} /></button>}
+  </Tag>
 }
 
 interface AppendPdfDraftResult {

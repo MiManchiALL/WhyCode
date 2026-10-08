@@ -7,7 +7,7 @@ import {
   releaseImageDrafts,
   type ImageDraft,
 } from './image-draft.ts'
-import { ImagePreviewDialog, type ImagePreviewTarget } from './image-preview.tsx'
+import { ImagePreviewDialog } from './image-preview.tsx'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import { BrowserReferenceChip } from './browser-reference-chip.tsx'
 
@@ -92,19 +92,19 @@ export function ImageDraftStrip({
   onRemove?: (id: string) => void
   onEditReference?: (id: string) => void
 }) {
-  const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
+  const [previewId, setPreviewId] = useState<string | null>(null)
   if (drafts.length === 0) return null
   return (
     <>
       <div className="mb-2 flex flex-wrap gap-2">
         <BrowserReferenceChip items={drafts.flatMap(draft => draft.source ? [{ id: draft.id, previewUrl: draft.previewUrl, source: draft.source }] : [])}
-          onRemove={onRemove} onEdit={onEditReference} onPreview={(src, name) => setPreview({ src, name })} />
+          onRemove={onRemove} onEdit={onEditReference} onPreview={setPreviewId} />
         {drafts.filter(draft => !draft.source).map((draft) => (
           <div key={draft.id} className="group relative h-20 w-20 overflow-hidden rounded border border-neutral-200 bg-white">
             <button
               type="button"
               className="block h-full w-full cursor-zoom-in"
-              onClick={() => setPreview({ src: draft.previewUrl, name: draft.name })}
+              onClick={() => setPreviewId(draft.id)}
               title={`查看 ${draft.name}`}
             >
               <img src={draft.previewUrl} alt={draft.name} className="h-full w-full object-cover" />
@@ -124,7 +124,8 @@ export function ImageDraftStrip({
           </div>
         ))}
       </div>
-      <ImagePreviewDialog target={preview} onClose={() => setPreview(null)} />
+      <ImagePreviewDialog selectedId={previewId} onSelect={setPreviewId}
+        targets={drafts.map(draft => ({ id: draft.id, src: draft.previewUrl, name: draft.source?.page.title || draft.name }))} />
     </>
   )
 }
@@ -136,42 +137,45 @@ export function UserImageGallery({
   attachments?: readonly ImageAttachment[]
   variant?: 'message' | 'tool'
 }) {
-  const [preview, setPreview] = useState<ImagePreviewTarget | null>(null)
+  const [previewId, setPreviewId] = useState<string | null>(null)
   if (!attachments?.length) return null
+  const targets = attachments.map(attachment => ({
+    id: attachment.id,
+    src: `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`,
+    name: (attachment.source?.kind === 'browser-reference' && attachment.source.page.title) || attachment.name,
+    details: `${attachment.width}×${attachment.height} · ${formatBytes(attachment.byteLength)}`,
+    source: attachment.source,
+  }))
   return (
     <>
       <div className={variant === 'message'
         ? 'flex max-w-full flex-wrap justify-end gap-2'
         : 'mb-2 flex flex-wrap gap-2'}>
-        <BrowserReferenceChip items={attachments.flatMap(item => item.source?.kind === 'browser-reference' ? [{
-          id: item.id, previewUrl: `whycode-attachment://${item.sessionId}/${encodeURIComponent(item.storageName)}`, source: item.source,
-        }] : [])} onPreview={(src, name) => setPreview({ src, name })} />
-        {attachments.filter(item => item.source?.kind !== 'browser-reference').map((attachment) => {
-          const src = `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`
-          const details = `${attachment.width}×${attachment.height} · ${formatBytes(attachment.byteLength)}`
-          return (
-            <button
-              key={attachment.id}
-              type="button"
+        <BrowserReferenceChip items={targets.flatMap(item => item.source?.kind === 'browser-reference' ? [{
+          id: item.id, previewUrl: item.src, source: item.source,
+        }] : [])} onPreview={setPreviewId} />
+        {targets.filter(item => item.source?.kind !== 'browser-reference').map(target => (
+          <button
+            key={target.id}
+            type="button"
+            className={variant === 'message'
+              ? 'cursor-zoom-in overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-transform hover:-translate-y-0.5'
+              : 'cursor-zoom-in rounded border border-neutral-300 bg-white p-0.5'}
+            onClick={() => setPreviewId(target.id)}
+            title={`${target.name} · ${target.details} · 点击查看原图`}
+          >
+            <img
+              src={target.src}
+              alt={target.name}
+              loading="lazy"
               className={variant === 'message'
-                ? 'cursor-zoom-in overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-transform hover:-translate-y-0.5'
-                : 'cursor-zoom-in rounded border border-neutral-300 bg-white p-0.5'}
-              onClick={() => setPreview({ src, name: attachment.name, details })}
-              title={`${attachment.name} · ${details} · 点击查看原图`}
-            >
-              <img
-                src={src}
-                alt={attachment.name}
-                loading="lazy"
-                className={variant === 'message'
-                  ? 'h-24 w-24 object-cover'
-                  : 'max-h-56 max-w-72 object-contain'}
-              />
-            </button>
-          )
-        })}
+                ? 'h-24 w-24 object-cover'
+                : 'max-h-56 max-w-72 object-contain'}
+            />
+          </button>
+        ))}
       </div>
-      <ImagePreviewDialog target={preview} onClose={() => setPreview(null)} />
+      <ImagePreviewDialog targets={targets} selectedId={previewId} onSelect={setPreviewId} />
     </>
   )
 }

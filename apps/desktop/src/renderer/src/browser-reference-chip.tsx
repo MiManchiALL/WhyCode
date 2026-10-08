@@ -9,7 +9,7 @@ export function BrowserReferenceChip({ items, onRemove, onEdit, onPreview }: {
   items: readonly BrowserReferenceItem[]
   onRemove?: (id: string) => void
   onEdit?: (id: string) => void
-  onPreview: (url: string, name: string) => void
+  onPreview: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const pinned = useRef(false)
@@ -33,7 +33,7 @@ export function BrowserReferenceChip({ items, onRemove, onEdit, onPreview }: {
         {items.map(item => <div key={item.id} className="min-w-0 border-t border-[var(--wc-line)] pt-2 first:border-0 first:pt-0">
           <div className="flex min-w-0 items-center gap-2">
             <button type="button" className="shrink-0 overflow-hidden rounded-md border border-[var(--wc-line)]" title="查看选取时的截图"
-              onClick={() => onPreview(item.previewUrl, item.source.page.title || '网页引用')}>
+              onClick={() => onPreview(item.id)}>
               <img src={item.previewUrl} alt="选取时的截图" className="h-10 w-14 object-cover" />
             </button>
             <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium" title={item.source.page.url}>{item.source.page.title || item.source.page.url || '网页'}</p>

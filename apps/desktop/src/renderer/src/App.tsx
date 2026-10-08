@@ -665,8 +665,9 @@ export function App() {
         sessionListRefreshRequestedRef.current = false
         try {
           const next = await window.whycode.listSessionSidebar()
+          const orderedProjects = next.projects.toReversed().sort((a, b) => Number(Boolean(a.remote)) - Number(Boolean(b.remote)))
           setSessions((current) => sameSidebarItems(current, next.sessions) ? current : next.sessions)
-          setProjects((current) => sameSidebarItems(current, next.projects) ? current : next.projects)
+          setProjects((current) => sameSidebarItems(current, orderedProjects) ? current : orderedProjects)
           setSessionListError(null)
         } catch (error) {
           setSessionListError(
