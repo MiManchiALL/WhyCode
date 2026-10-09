@@ -1539,7 +1539,7 @@ export function App() {
     setStopping(true)
     setApproval(null)
     void sendRuntimeCommand({ type: 'abort' }).then((result) => {
-      if (!result?.ok) throw new Error('停止请求未被接受')
+      if (result?.ok === false) throw new Error('停止请求未被接受')
     }).catch(() => {
       if (runtimeIdRef.current !== targetRuntimeId) return
       setStopping(false)
