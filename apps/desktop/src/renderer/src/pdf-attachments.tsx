@@ -53,7 +53,6 @@ export function PdfDraftStrip({
     <div className={`flex max-w-full flex-wrap gap-2 ${variant === 'composer' ? 'mb-2 w-full [&>*]:max-w-[calc((100%_-_0.5rem)/2)]' : 'justify-end'}`}>
       {drafts.map((draft) => (
         <PdfChip key={draft.id} name={draft.name} byteLength={draft.byteLength}
-          compact={variant === 'composer'}
           onRemove={onRemove ? () => onRemove(draft.id) : undefined} />
       ))}
     </div>
@@ -99,13 +98,12 @@ export function QueuedPdfStrip({ attachments }: { attachments?: readonly PdfAtta
   )
 }
 
-function PdfChip({ name, byteLength, pageCount, onOpen, onRemove, compact = false }: {
+function PdfChip({ name, byteLength, pageCount, onOpen, onRemove }: {
   name: string
   byteLength: number
   pageCount?: number
   onOpen?: () => void
   onRemove?: () => void
-  compact?: boolean
 }) {
   const Tag = onOpen ? 'button' : 'div'
   const title = [name, pageCount ? `${pageCount} 页` : '', formatBytes(byteLength), onOpen ? '点击打开' : ''].filter(Boolean).join(' · ')
@@ -113,9 +111,9 @@ function PdfChip({ name, byteLength, pageCount, onOpen, onRemove, compact = fals
     type={onOpen ? 'button' : undefined}
     onClick={onOpen}
     title={title}
-    className={`wc-focus-ring flex min-w-0 max-w-[min(100%,24rem)] items-center rounded-full border border-[var(--wc-line)] bg-white text-left shadow-[1px_2px_0_rgb(43_46_41_/_4%)] ${compact ? 'wc-type-control gap-1.5 px-2.5 py-1.5' : 'wc-user-message-copy gap-2 px-3 py-2'} ${onOpen ? 'transition-colors hover:border-[var(--wc-line-strong)]' : ''}`}
+    className={`wc-type-control wc-focus-ring flex min-h-8.5 min-w-0 max-w-[min(100%,24rem)] items-center gap-1.5 rounded-full border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-left shadow-[1px_2px_0_rgb(43_46_41_/_4%)] ${onOpen ? 'transition-colors hover:border-[var(--wc-line-strong)]' : ''}`}
   >
-    <span className={`flex shrink-0 items-center justify-center rounded-full bg-[#d85858] text-white ${compact ? 'size-4.5' : 'size-5'}`} aria-hidden="true">
+    <span className="flex size-4.5 shrink-0 items-center justify-center rounded-full bg-[#d85858] text-white" aria-hidden="true">
       <FileText size={11} />
     </span>
     <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
