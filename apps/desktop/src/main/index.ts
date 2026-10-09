@@ -564,7 +564,8 @@ const sessionNavigation = new SessionNavigation({
     // 重载窗口可能没有原 IPC Promise；让它在事务完成后重新获取权威快照。
     setTimeout(() => {
       if (target && !target.isDisposed) {
-        target.emit({ type: 'agent-status', status: target.status }, false)
+        // 刷新通知不能重新进入运行态处理，否则准备阶段的 idle 会提前结束工作。
+        broadcastRuntimeEvent(target, { type: 'agent-status', status: target.status }, new Date().toISOString())
       }
     }, 0)
   },
