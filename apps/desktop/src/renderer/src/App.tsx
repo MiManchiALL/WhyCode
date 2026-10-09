@@ -105,7 +105,6 @@ import {
   type ComposerSubmission,
 } from './composer-submissions.ts'
 import { PendingUserMessage } from './pending-user-message.tsx'
-import { SessionLoading } from './session-loading.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
@@ -2614,12 +2613,12 @@ export function App() {
               aria-hidden={rightPanelState.open}
               inert={rightPanelState.open}
             >
-              {loadingConversation ? <SessionLoading /> : <TaskInspector
+              <TaskInspector
                 runtimeId={runtimeId}
                 workspace={workspace}
                 plan={view.taskPlan}
                 activeSkills={activeSkills}
-                view={rightPanelState.inspectorView}
+                view={committedRightPanelState.inspectorView}
                 onViewChange={(inspectorView) => updateRightPanelState((current) => ({
                   ...current, inspectorView,
                 }))}
@@ -2630,7 +2629,7 @@ export function App() {
                 onOpenSubagents={() => {
                   showRightPanelPage({ kind: 'subagent-overview' })
                 }}
-              />}
+              />
             </div>
             <div
               className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-200 ease-out ${

@@ -22,7 +22,6 @@ import type { PathReference } from './path-reference.ts'
 import { browserAddress } from '../../shared/browser.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { ImageDraft } from './image-draft.ts'
-import { SessionLoading } from './session-loading.tsx'
 
 interface RightPanelProps {
   remote?: boolean
@@ -111,7 +110,7 @@ export function RightPanel(props: RightPanelProps) {
         </button>
         {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
-      {props.loading ? <div className="relative min-h-0 flex-1"><SessionLoading /></div> : <>
+      {!props.loading && <>
         <RightPanelContent {...props} directories={directories} />
         {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
           page={tab.page} active={props.active && props.state.activeTabId === tab.id}
