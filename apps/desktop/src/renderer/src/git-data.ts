@@ -41,8 +41,7 @@ export function useGitSnapshot(runtimeId: string, comparison: GitComparison, rev
     const schedule = () => { clearTimeout(timer); timer = setTimeout(() => void read(), 120) }
     refreshRef.current = schedule
     schedule()
-    window.addEventListener('focus', schedule)
-    return () => { active = false; clearTimeout(timer); refreshRef.current = () => {}; window.removeEventListener('focus', schedule) }
+    return () => { active = false; clearTimeout(timer); refreshRef.current = () => {} }
   }, [runtimeId, query, enabled])
   useEffect(refresh, [revision, refresh])
   return { ...(state.key === key ? state : { snapshot: null, loading: true, error: null }), refresh }

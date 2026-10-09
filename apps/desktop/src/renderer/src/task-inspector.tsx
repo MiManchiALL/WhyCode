@@ -29,6 +29,7 @@ interface TaskInspectorProps {
   subagents: readonly SubagentSummary[]
   busy: boolean
   gitData: GitData
+  conversationStarted: boolean
   onOpenGit: () => void
   onOpenSubagents: () => void
 }
@@ -41,8 +42,8 @@ export function TaskInspector(props: TaskInspectorProps) {
     >
       <div className="wc-menu-content wc-session-context-menu">
         <InspectorSection icon={<GitBranch size={13} />} title="环境信息">
-          <GitEnvironment runtimeId={props.runtimeId} workspace={props.workspace} data={props.gitData}
-            busy={props.busy} onOpen={props.onOpenGit} />
+          {props.conversationStarted && <GitEnvironment runtimeId={props.runtimeId} workspace={props.workspace} data={props.gitData}
+            busy={props.busy} onOpen={props.onOpenGit} />}
         </InspectorSection>
 
         <div className="wc-session-context-separator" aria-hidden="true" />

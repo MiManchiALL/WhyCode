@@ -9,8 +9,7 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
 }) {
   const repo = data.snapshot?.repository
   const changes = data.snapshot?.changes
-  if (workspace.mode === 'pending-worktree') return <div className="px-2 text-xs text-[var(--wc-muted)]">Worktree 待创建</div>
-  if (workspace.mode === 'none' || workspace.mode === 'pending-managed') return null
+  if (workspace.mode === 'none' || workspace.mode.startsWith('pending-')) return null
   if (!repo) return <div className="px-2 text-xs text-[var(--wc-faint)]">
     {data.error ? <button className="wc-focus-ring w-full text-left" onClick={data.refresh} title={data.error}>Git 读取失败，点击重试</button>
       : data.loading ? '正在读取仓库…' : '当前目录不是 Git 仓库'}
@@ -24,9 +23,11 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
       <button type="button" className="wc-menu-item min-w-0 flex-1" onClick={onOpen}
         title={changes ? `当前工作区相对 ${changes.baseLabel} 的变化（含未提交）${changes.truncated ? '；清单已截断，统计仅覆盖已列出的文件' : ''}${changes.untracked ? '；行数不包含未跟踪文件' : ''}` : '查看仓库变更'}>
         <FileDiff size={14} className="shrink-0" /><span className="min-w-0 flex-1 text-left">变更</span>
-        {changes ? changes.files.length ? changes.added + changes.removed > 0 ? <ChangeCounts added={changes.added} removed={changes.removed} /> : <span className="text-xs text-[var(--wc-faint)]">{changes.files.length} 个文件</span>
-          : <span className="text-xs text-[var(--wc-faint)]">无变更</span> : <span className="text-xs text-[var(--wc-faint)]">查看</span>}
-        {changes?.truncated && <span className="text-xs text-[var(--wc-faint)]">部分</span>}
+        <span className="wc-git-change-counts">
+          {changes ? changes.files.length ? changes.added + changes.removed > 0 ? <ChangeCounts added={changes.added} removed={changes.removed} /> : <span className="text-xs text-[var(--wc-faint)]">{changes.files.length} 个文件</span>
+            : <span className="text-xs text-[var(--wc-faint)]">无变更</span> : <span className="text-xs text-[var(--wc-faint)]">查看</span>}
+          {changes?.truncated && <span className="text-xs text-[var(--wc-faint)]">部分</span>}
+        </span>
       </button>
       <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={data.refresh} />
     </div>

@@ -18,7 +18,7 @@ export function GitActions({ runtimeId, repository, busy, onChanged }: {
   return <>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button ref={trigger} type="button" className="wc-preview-action wc-git-actions" aria-label="Git 操作" title={busy ? '任务结束后可操作 Git' : 'Git 操作'} disabled={busy}>
+        <button ref={trigger} type="button" className="wc-preview-action wc-git-actions" aria-label="Git 操作" title={busy ? '任务结束后可操作 Git' : repository.branch ?? '分离 HEAD'} disabled={busy}>
           <GitBranch size={15} />
         </button>
       </DropdownMenu.Trigger>
