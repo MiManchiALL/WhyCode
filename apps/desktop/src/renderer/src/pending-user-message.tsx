@@ -13,7 +13,7 @@ export function PendingUserMessage({ draft }: { draft: ComposerDraft }) {
       className="wc-user-message-copy mb-2 ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2"
     >
       <PendingImageGallery drafts={draft.images} />
-      <PdfDraftStrip drafts={draft.pdfs} className="justify-end" />
+      <PdfDraftStrip drafts={draft.pdfs} variant="message" />
       <SkillBadges skills={draft.skills} />
       {draft.text && <UserMessageBubble text={draft.text} btw={Boolean(draft.btwMode)} />}
     </div>
