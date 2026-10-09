@@ -16,7 +16,8 @@ import { isSubagentRunning } from './subagent-presentation.ts'
 import { TaskPlanView } from './task-plan-view.tsx'
 import { SKILL_SCOPE_LABEL } from './skill-picker.tsx'
 import type { TaskInspectorView } from './right-panel-state.ts'
-import { WorktreeEnvironmentMenu } from './worktree-panel.tsx'
+import { GitEnvironment } from './git-environment.tsx'
+import type { GitData } from './git-data.ts'
 
 interface TaskInspectorProps {
   runtimeId: string
@@ -27,8 +28,8 @@ interface TaskInspectorProps {
   onViewChange: (view: TaskInspectorView) => void
   subagents: readonly SubagentSummary[]
   busy: boolean
-  worktreeStatusRevision: number
-  onPrepareCommitPrompt: () => void
+  gitData: GitData
+  onOpenGit: () => void
   onOpenSubagents: () => void
 }
 
@@ -40,26 +41,8 @@ export function TaskInspector(props: TaskInspectorProps) {
     >
       <div className="wc-menu-content wc-session-context-menu">
         <InspectorSection icon={<GitBranch size={13} />} title="环境信息">
-          {props.workspace.mode === 'worktree' && (
-            <WorktreeEnvironmentMenu
-              key={props.runtimeId}
-              runtimeId={props.runtimeId}
-              binding={props.workspace}
-              busy={props.busy}
-              statusRevision={props.worktreeStatusRevision}
-              onPrepareCommitPrompt={props.onPrepareCommitPrompt}
-            />
-          )}
-          {props.workspace.mode === 'pending-worktree' && (
-            <div className="px-2 pb-1">
-              <div className="text-xs font-medium text-[var(--wc-ink)]">
-                Worktree 待创建
-              </div>
-              <div className="mt-1 truncate font-mono wc-type-tiny text-[var(--wc-muted)]">
-                {props.workspace.baseRef ?? 'detached HEAD'}
-              </div>
-            </div>
-          )}
+          <GitEnvironment runtimeId={props.runtimeId} workspace={props.workspace} data={props.gitData}
+            busy={props.busy} onOpen={props.onOpenGit} />
         </InspectorSection>
 
         <div className="wc-session-context-separator" aria-hidden="true" />

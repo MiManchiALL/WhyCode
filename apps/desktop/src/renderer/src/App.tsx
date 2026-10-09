@@ -75,6 +75,8 @@ import { useSshWorkspaceConnection } from './use-ssh-workspace-connection.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import { useConversationFontSize } from './conversation-font-size.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
+import { useGitSnapshot } from './git-data.ts'
+import { defaultGitPage } from './right-panel-state.ts'
 import {
   ImageDraftStrip,
   useImageDrafts,
@@ -188,7 +190,7 @@ export function App() {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSelection>('default')
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo | null>(null)
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary[]>([])
-  const [worktreeStatusRevision, setWorktreeStatusRevision] = useState(0)
+  const [gitStatusRevision, setGitStatusRevision] = useState(0)
   const [filePreviewInteractionRevision, setFilePreviewInteractionRevision] = useState(0)
   const [subagents, setSubagents] = useState<SubagentSummary[]>([])
   const [activeSkills, setActiveSkills] = useState<SkillSummary[]>([])
@@ -443,6 +445,10 @@ export function App() {
   const sshConnection = useSshWorkspaceConnection(workspace.mode === 'ssh' ? workspace.target : null, showError)
   const sshConnecting = sshConnection.connection?.status === 'connecting'
   const sshSendUnavailableReason = sshConnection.sendUnavailableReason
+  const gitPage = committedRightPanelState.tabs.find(tab => tab.page.kind === 'git')?.page
+  const gitRevision = `${gitStatusRevision}:${sshConnection.connection?.status ?? ''}`
+  const gitData = useGitSnapshot(runtimeId, { mode: 'branch', baseRef: gitPage?.kind === 'git' ? gitPage.baseRef : null },
+    gitRevision, !loadingConversation && !!runtimeId && !workspace.mode.startsWith('pending-') && workspace.mode !== 'none')
   const [workspaceCleanup] = useState(() => new RetainedWorkspaceCleanup(async workspace => {
     const result = await window.whycode.deleteRetainedWorkspace(workspace)
     if (!result.ok) throw new Error(result.error)
@@ -704,7 +710,7 @@ export function App() {
     ) return
     backgroundTaskRevisionRef.current = state.revision
     setBackgroundTasks(state.tasks)
-    setWorktreeStatusRevision((revision) => revision + 1)
+    setGitStatusRevision((revision) => revision + 1)
   }, [])
 
   const applySubagentState = useCallback((state: SubagentState) => {
@@ -714,7 +720,7 @@ export function App() {
     ) return
     subagentRevisionRef.current = state.revision
     setSubagents(state.subagents)
-    setWorktreeStatusRevision((revision) => revision + 1)
+    setGitStatusRevision((revision) => revision + 1)
   }, [])
 
   const updateRightPanelState = useCallback((
@@ -926,11 +932,11 @@ export function App() {
         break
       case 'work-finished':
         setWorkStartedAt(null)
-        setWorktreeStatusRevision((revision) => revision + 1)
+        setGitStatusRevision((revision) => revision + 1)
         void refreshSessions()
         break
       case 'tool-end':
-        setWorktreeStatusRevision((revision) => revision + 1)
+        setGitStatusRevision((revision) => revision + 1)
         break
       case 'agent-status':
         setStatus(event.status)
@@ -1841,18 +1847,6 @@ export function App() {
     })
   }, [showError, workspace.mode, showRightPanelPage])
 
-  const prepareCommitPrompt = useCallback(() => {
-    const prompt = '请检查当前 Worktree 的改动，先总结将要提交的内容，再创建合适的提交；如果已经配置远程且适合推送，再推送当前分支。'
-    setInput((current) => {
-      const next = current.trim() ? `${current.trimEnd()}\n\n${prompt}` : prompt
-      inputRef.current = next
-      return next
-    })
-    requestAnimationFrame(() => {
-      composerInputRef.current?.focus()
-    })
-  }, [composerInputRef])
-
   const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
     setConnectionSettings(snapshot)
     void window.whycode.consensusStatus().then(setConsensus)
@@ -2624,8 +2618,8 @@ export function App() {
                 }))}
                 subagents={subagents}
                 busy={interactionBusy}
-                worktreeStatusRevision={worktreeStatusRevision}
-                onPrepareCommitPrompt={prepareCommitPrompt}
+                gitData={gitData}
+                onOpenGit={() => showRightPanelPage(gitPage?.kind === 'git' ? { ...gitPage, mode: 'branch' } : defaultGitPage())}
                 onOpenSubagents={() => {
                   showRightPanelPage({ kind: 'subagent-overview' })
                 }}
@@ -2642,6 +2636,9 @@ export function App() {
 
             >
               <RightPanel
+                gitData={gitData}
+                gitRevision={gitRevision}
+                busy={interactionBusy}
                 remote={workspace.mode === 'ssh'}
                 active={rightPanelState.open}
                 loading={loadingConversation}

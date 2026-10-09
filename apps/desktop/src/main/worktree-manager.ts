@@ -7,7 +7,6 @@ import type {
   WorkspaceCandidate,
   WorktreeBase,
   WorktreeStartRequest,
-  WorktreeStatus,
 } from '../shared/workspace.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
 import {
@@ -21,13 +20,13 @@ import {
 import { copyWorktreeIncludes } from './worktree-include.ts'
 import {
   assertGitWorktreeRoot,
-  createDetachedWorktreeBranch,
   inspectGitWorkspace,
   isGitRepositoryDirectory,
   isWorktreePathRegistered,
   isWorktreeRegistered,
   managedWorktreeStateArgs,
   readWorktreeStatus,
+  type WorktreeStatus,
 } from './worktree-git.ts'
 
 export interface AbandonedDraftCleanupResult {
@@ -261,11 +260,6 @@ export class WorktreeManager {
     return readWorktreeStatus(binding)
   }
 
-  async createBranch(binding: WorktreeWorkspaceBinding, branchName: string): Promise<void> {
-    await this.assertGitWorktree(binding)
-    await createDetachedWorktreeBranch(binding, branchName)
-  }
-
   remove(binding: WorktreeWorkspaceBinding, discardChanges: boolean): Promise<void> {
     return this.mutations.run(binding.id, () => this.removeOwned(binding, discardChanges))
   }
@@ -351,7 +345,7 @@ export class WorktreeManager {
     return true
   }
 
-  private async assertGitWorktree(binding: WorktreeWorkspaceBinding): Promise<void> {
+  async assertGitWorktree(binding: WorktreeWorkspaceBinding): Promise<void> {
     await this.registry.assertOwned(binding)
     await this.registry.assertManagedDirectory(binding)
     await assertGitWorktreeRoot(binding.worktreeDirectory)

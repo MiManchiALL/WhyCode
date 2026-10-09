@@ -1,15 +1,13 @@
-import type { ToolFileChange } from '@whycode/core/events'
-import { ChevronRight, Download, FolderOpen, PanelRightOpen } from 'lucide-react'
-import { useCallback, useId, useLayoutEffect } from 'react'
+import { useCallback, useLayoutEffect } from 'react'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { useResponseFileChanges, totalFileChanges } from './response-file-changes-data.ts'
-import { ChangeCounts, ChangedFilePath } from './file-change-summary.tsx'
+import { ChangeCounts } from './file-change-summary.tsx'
+import { ChangedFile } from './changed-file.tsx'
 import { FileDiff } from './file-diff.tsx'
-import { fileIcon, FilePreviewMessage } from './file-preview-controls.tsx'
+import { FilePreviewMessage } from './file-preview-controls.tsx'
 import { useCheckpointFilePreview } from './file-preview-data.ts'
-import { fileName, filePathKey } from './local-files.ts'
+import { filePathKey } from './local-files.ts'
 import { useScrollArea } from './use-scroll-area.ts'
-import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
 
 type ChangesPage = Extract<RightPanelPage, { kind: 'changes' }>
 interface Props {
@@ -44,50 +42,18 @@ export function RightPanelChanges(props: Props) {
       <div>
         {!changes.length && <FilePreviewMessage>没有可展示的文件改动</FilePreviewMessage>}
         {changes.map(change => <ChangedFile key={filePathKey(change.path)} {...props} change={change}
-          onReady={page.selectedPath && filePathKey(page.selectedPath) === filePathKey(change.path) ? focusSelected : undefined}
           expanded={expanded.has(filePathKey(change.path))}
           onToggle={() => {
             const open = !expanded.has(filePathKey(change.path))
             onOpenPage({ ...page, selectedPath: null,
               expandedPaths: open ? [...page.expandedPaths, change.path]
                 : page.expandedPaths.filter(path => filePathKey(path) !== filePathKey(change.path)) })
-          }} />)}
+          }}><ChangePreview runtimeId={runtimeId} checkpointIds={page.checkpointIds} path={change.path}
+            onReady={page.selectedPath && filePathKey(page.selectedPath) === filePathKey(change.path) ? focusSelected : undefined} />
+        </ChangedFile>)}
       </div>
     </div>
   </div>
-}
-
-function ChangedFile({ runtimeId, projectDir, remote, page, onOpenPage, change, expanded, onToggle, onReady }: Props & {
-  change: ToolFileChange; expanded: boolean; onToggle: () => void; onReady?: () => void
-}) {
-  const id = useId()
-  const name = fileName(change.path)
-  const Icon = fileIcon(name)
-  const action = useWorkspaceFileAction(runtimeId, change.path)
-  return <section className="wc-changes-file" data-expanded={expanded} data-change-path={filePathKey(change.path)}>
-    <div className="wc-changes-file-heading">
-      <button type="button" className="wc-changes-file-trigger wc-focus-ring" onClick={onToggle}
-        title={change.path} aria-expanded={expanded} aria-controls={expanded ? id : undefined} aria-label={`查看 ${change.path} 的改动`}>
-        <ChevronRight size={13} className="wc-changes-chevron shrink-0" aria-hidden="true" />
-        <Icon size={14} className="shrink-0 text-[var(--wc-muted)]" aria-hidden="true" />
-        <ChangedFilePath path={change.path} projectDir={projectDir} />
-        <ChangeCounts added={change.added} removed={change.removed} />
-      </button>
-      <div className="wc-changes-file-actions">
-        <button type="button" className="wc-preview-action" title="在标签页中打开文件" aria-label={`在标签页中打开 ${name}`}
-          onClick={() => onOpenPage({ kind: 'file', path: change.path, name, source: { kind: 'current' }, previewMode: 'code' })}>
-          <PanelRightOpen size={14} />
-        </button>
-        <button type="button" className="wc-preview-action" title={remote ? '保存到本机' : '在文件夹中显示'} aria-label={`${remote ? '保存到本机' : '在文件夹中显示'} ${name}`}
-          disabled={action.pending} aria-busy={action.pending} onClick={() => void action.run(remote ? 'save' : 'reveal')}>
-          {remote ? <Download size={14} /> : <FolderOpen size={14} />}
-        </button>
-      </div>
-    </div>
-    {expanded && <div id={id} className="wc-changes-file-diff">
-      <ChangePreview runtimeId={runtimeId} checkpointIds={page.checkpointIds} path={change.path} onReady={onReady} />
-    </div>}
-  </section>
 }
 
 function ChangePreview({ runtimeId, checkpointIds, path, onReady }: {

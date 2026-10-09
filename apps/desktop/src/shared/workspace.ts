@@ -62,21 +62,6 @@ export function runtimeWorkspaceBinding(workspace: RuntimeWorkspace | undefined)
     : workspace
 }
 
-export interface WorktreeStatusEntry {
-  code: string
-  path: string
-}
-
-export interface WorktreeStatus {
-  branch: string | null
-  headCommit: string
-  dirty: boolean
-  entries: WorktreeStatusEntry[]
-  entriesTruncated: boolean
-  diff: string
-  diffTruncated: boolean
-}
-
 export type WorkspaceActionResult<T = undefined> =
   | (T extends undefined ? { ok: true } : { ok: true; value: T })
   | { ok: false; error: string }

@@ -1,19 +1,19 @@
 import { isAbsolute, relative } from 'node:path'
 import type { WorktreeWorkspaceBinding } from '@whycode/core'
-import type {
-  WorkspaceCandidate,
-  WorktreeStatus,
-  WorktreeStatusEntry,
-} from '../shared/workspace.ts'
+import type { WorkspaceCandidate } from '../shared/workspace.ts'
 import { requireGitSuccess, runGit } from './git-process.ts'
 import { readWorktreeBases } from './worktree-bases.ts'
+import { parsePorcelainStatus } from './git-status.ts'
 import {
   canonicalDirectory,
   samePath,
 } from './managed-worktree-registry.ts'
 
-const STATUS_ENTRY_LIMIT = 200
-const DIFF_OUTPUT_LIMIT = 256 * 1024
+export interface WorktreeStatus {
+  branch: string | null
+  headCommit: string
+  dirty: boolean
+}
 
 // Windows cannot faithfully check out Git's executable bit. Repositories copied
 // from Unix sometimes keep core.filemode=true, which otherwise makes a brand-new
@@ -120,7 +120,7 @@ export async function assertGitWorktreeRoot(worktreeDirectory: string): Promise<
 export async function readWorktreeStatus(
   binding: WorktreeWorkspaceBinding,
 ): Promise<WorktreeStatus> {
-  const [branch, head, statusResult, diff] = await Promise.all([
+  const [branch, head, statusResult] = await Promise.all([
     runGit(
       binding.worktreeDirectory,
       ['symbolic-ref', '--quiet', '--short', 'HEAD'],
@@ -141,27 +141,12 @@ export async function readWorktreeStatus(
       ]),
       { readOnly: true, outputLimit: 4 * 1024 * 1024 },
     ),
-    runGit(
-      binding.worktreeDirectory,
-      managedWorktreeStateArgs([
-        'diff',
-        '--no-ext-diff',
-        '--unified=3',
-        'HEAD',
-        '--',
-      ]),
-      { readOnly: true, outputLimit: DIFF_OUTPUT_LIMIT },
-    ),
   ])
-  const entries = parsePorcelainStatus(requireGitSuccess(statusResult, '读取 Worktree 状态'))
+  const status = requireGitSuccess(statusResult, '读取 Worktree 状态')
   return {
     branch: branch.code === 0 ? branch.stdout.trim() : null,
     headCommit: requireGitSuccess(head, '读取 Worktree HEAD').trim(),
-    dirty: entries.length > 0 || statusResult.outputTruncated,
-    entries: entries.slice(0, STATUS_ENTRY_LIMIT),
-    entriesTruncated: entries.length > STATUS_ENTRY_LIMIT || statusResult.outputTruncated,
-    diff: requireGitSuccess(diff, '读取 Worktree 差异'),
-    diffTruncated: diff.outputTruncated,
+    dirty: status.length > 0 || statusResult.outputTruncated,
   }
 }
 
@@ -191,32 +176,6 @@ export async function isWorktreePathRegistered(
     && samePath(line.slice('worktree '.length), worktreeDirectory))
 }
 
-export async function createDetachedWorktreeBranch(
-  binding: WorktreeWorkspaceBinding,
-  branchName: string,
-): Promise<void> {
-  const normalizedName = branchName.trim()
-  if (!normalizedName) throw new Error('分支名不能为空')
-  const current = await runGit(
-    binding.worktreeDirectory,
-    ['symbolic-ref', '--quiet', '--short', 'HEAD'],
-    { readOnly: true },
-  )
-  if (current.code === 0) throw new Error(`Worktree 已位于分支 ${current.stdout.trim()}`)
-  requireGitSuccess(
-    await runGit(
-      binding.worktreeDirectory,
-      ['check-ref-format', '--branch', normalizedName],
-      { readOnly: true },
-    ),
-    '校验分支名',
-  )
-  requireGitSuccess(
-    await runGit(binding.worktreeDirectory, ['switch', '-c', normalizedName]),
-    '创建 Worktree 分支',
-  )
-}
-
 export async function isGitRepositoryDirectory(
   repositoryDirectory: string,
 ): Promise<boolean> {
@@ -241,24 +200,6 @@ function unavailableCandidate(
     changedFileCount: 0,
     worktreeUnavailableReason: reason,
   }
-}
-
-function parsePorcelainStatus(output: string): WorktreeStatusEntry[] {
-  const records = output.split('\0')
-  const entries: WorktreeStatusEntry[] = []
-  for (let index = 0; index < records.length; index++) {
-    const record = records[index]
-    if (!record || record.length < 4) continue
-    const code = record.slice(0, 2)
-    const target = record.slice(3)
-    if (code.includes('R') || code.includes('C')) {
-      const source = records[++index] ?? ''
-      entries.push({ code, path: `${source} → ${target}` })
-    } else {
-      entries.push({ code, path: target })
-    }
-  }
-  return entries
 }
 
 function repositoryRelativePath(repository: string, selected: string): string {

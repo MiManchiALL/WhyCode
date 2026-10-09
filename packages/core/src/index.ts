@@ -99,6 +99,7 @@ export {
   type CheckpointFilePreviewResult,
   type CheckpointFilePreviewState,
 } from './checkpoints/types.ts'
+export { readFileTextPreview, decodeTextPreview } from './checkpoints/file-history.ts'
 export { buildSystemPrompt, type PromptContext } from './prompts/system.ts'
 export {
   CUSTOM_SYSTEM_PROMPT_MAX_BYTES,

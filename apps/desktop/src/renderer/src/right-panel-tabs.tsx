@@ -104,7 +104,7 @@ function SortableTab({ tab, title, active, onSelect, onClose }: {
 function TabLabel({ tab, title }: { tab: RightPanelTab; title: string }) {
   const Icon = tab.page.kind === 'file' ? FileText : tab.page.kind === 'terminal' ? SquareTerminal
     : tab.page.kind === 'browser' ? Globe
-    : tab.page.kind === 'workspace' ? FolderOpen : tab.page.kind === 'changes' ? FileDiff : Bot
+    : tab.page.kind === 'workspace' ? FolderOpen : tab.page.kind === 'changes' || tab.page.kind === 'git' ? FileDiff : Bot
   return <><Icon size={13} className="shrink-0 text-[var(--wc-muted)]" /><span className="truncate">{title}</span></>
 }
 
@@ -112,6 +112,7 @@ function tabTitle(tab: RightPanelTab, subagents: readonly SubagentSummary[]): st
   const page = tab.page
   if (page.kind === 'workspace') return '当前工作路径'
   if (page.kind === 'changes') return '本轮改动'
+  if (page.kind === 'git') return '变更'
   if (page.kind === 'file') return page.name
   if (page.kind === 'terminal') return page.terminal.title
   if (page.kind === 'browser') return page.title || (page.url === 'about:blank' ? '内置浏览器' : page.url)

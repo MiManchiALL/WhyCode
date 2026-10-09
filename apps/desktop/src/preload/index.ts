@@ -45,8 +45,8 @@ import type {
 import type {
   WorkspaceActionResult,
   WorkspaceCandidate,
-  WorktreeStatus,
 } from '../shared/workspace.ts'
+import type { GitComparison, GitSnapshot, GitFilePreview, GitHistory, GitMutation } from '../shared/git.ts'
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
@@ -282,15 +282,14 @@ const api = {
     ipcRenderer.invoke(IPC.pickProjectDir, projectId),
   inspectDraftWorkspace: (runtimeId: string): Promise<WorkspaceActionResult<WorkspaceCandidate | null>> =>
     ipcRenderer.invoke(IPC.inspectDraftWorkspace, runtimeId),
-  worktreeStatus: (
-    runtimeId: string,
-  ): Promise<WorkspaceActionResult<WorktreeStatus>> =>
-    ipcRenderer.invoke(IPC.worktreeStatus, runtimeId),
-  createWorktreeBranch: (
-    runtimeId: string,
-    branchName: string,
-  ): Promise<WorkspaceActionResult> =>
-    ipcRenderer.invoke(IPC.createWorktreeBranch, runtimeId, branchName),
+  gitSnapshot: (runtimeId: string, comparison: GitComparison): Promise<WorkspaceActionResult<GitSnapshot>> =>
+    ipcRenderer.invoke(IPC.gitSnapshot, runtimeId, comparison),
+  gitFilePreview: (runtimeId: string, comparison: GitComparison, path: string): Promise<WorkspaceActionResult<GitFilePreview>> =>
+    ipcRenderer.invoke(IPC.gitFilePreview, runtimeId, comparison, path),
+  gitHistory: (runtimeId: string, skip: number): Promise<WorkspaceActionResult<GitHistory>> =>
+    ipcRenderer.invoke(IPC.gitHistory, runtimeId, skip),
+  gitMutate: (runtimeId: string, mutation: GitMutation): Promise<WorkspaceActionResult<string>> =>
+    ipcRenderer.invoke(IPC.gitMutate, runtimeId, mutation),
   openWorkspaceFolder: (runtimeId: string): Promise<WorkspaceActionResult> =>
     ipcRenderer.invoke(IPC.openWorkspaceFolder, runtimeId),
   discardWorktree: (runtimeId: string): Promise<DeleteSessionResult> =>

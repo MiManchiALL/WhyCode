@@ -570,6 +570,17 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 `getBrowserDataState()` 返回 `{clearing: 'cache' | 'all' | null}`，`browserDataChanged` 向主窗口发布相同形状的状态。`clearBrowserData(mode)` 只接受 `cache` 或 `all`，仅主窗口主 Frame 可调用，操作针对固定浏览器分区；不接受自定义路径、分区或存储类别。并发清理直接拒绝，完成 Promise 只在所有清理步骤结束后返回，部分失败以错误返回并恢复可重试状态。全部清理期间拒绝浏览器租约申请和挂载；具体删除、保留范围见文档二 §12.6。
 
+### 7.9 桌面 Git
+
+类型与校验单源为 `shared/git.ts`。Git 入口只接受所属主窗口主 Frame；仓库路径和本地/SSH IO 由 Main 按 runtimeId 解析，Renderer 不传执行命令、工作目录或远端 URL。能力属于用户界面，不生成 CoreCommand、模型消息、检查点或 Journal 事件。
+
+- `gitSnapshot(runtimeId, comparison)` 返回仓库信息与所选范围的变更清单；非仓库返回空仓库，基准失效时保留仓库信息并返回比较错误。范围为 branch、uncommitted、unstaged、staged 或指定完整提交哈希的 commit。
+- `gitFilePreview(runtimeId, comparison, relativePath)` 验证路径位于仓库并仍属于所选变更，返回与检查点预览相同的 before/after 形状。重命名读取来源 blob；工作区链接不能越过仓库。工作区 CRLF 按 Git 的 text/eol 属性与 core.autocrlf 设置规范化，预览不改写文件。单侧正文沿用检查点的 512 KiB 上限，二进制与过大文件返回不可预览状态。
+- `gitHistory(runtimeId, skip)` 每页 40 个当前 HEAD 可达的提交，含哈希、父节点、说明、作者和时间，skip 上限 100,000。Renderer 只保留当前页。
+- `gitMutate(runtimeId, {expectedHead, expectedBranch, action})` 只接受创建分支、切换已有分支、提交指定范围和推送到已配置远端。预期 HEAD 与分支必须仍匹配，结果以 `{ok:true,value}` 或 `{ok:false,error}` 返回；不接受强制覆盖参数。
+
+普通 Git 命令默认 30 秒与每条输出流 1 MiB 上限；变更/状态清单允许 4 MiB，最多返回 2,000 个变更文件，截断明确标记且统计仅覆盖已列出的文件。提交与推送最多 180 秒，正常完成后的 hook 输出截断不改报操作失败。进程退出释放输出与计时器；SSH 中断不自动重放写入。界面和比较语义见文档二 §12.7。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。

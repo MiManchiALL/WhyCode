@@ -86,7 +86,7 @@ describe('受管 Worktree 生命周期', () => {
     const sessionId = randomUUID()
     await manager.attachSession(binding, sessionId)
     const branchName = `whycode/retained-${binding.id.slice(0, 8)}`
-    await manager.createBranch(binding, branchName)
+    requireGitSuccess(await runGit(binding.worktreeDirectory, ['switch', '-c', branchName]), '创建测试分支')
     const savedCommit = await git(binding.worktreeDirectory, ['rev-parse', 'HEAD'])
     await writeFile(join(binding.worktreeDirectory, 'uncommitted.txt'), 'pending')
     manager.release(binding, 'runtime-retained')
@@ -246,14 +246,12 @@ describe('受管 Worktree 生命周期', () => {
     const restarted = new WorktreeManager(fixture.managerRoot)
     await restarted.assertUsable(binding, sessionId, 'runtime-restored')
     const branchName = `whycode/test-${binding.id.slice(0, 8)}`
-    await restarted.createBranch(binding, branchName)
+    requireGitSuccess(await runGit(binding.worktreeDirectory, ['switch', '-c', branchName]), '创建测试分支')
     assert.equal((await restarted.status(binding)).branch, branchName)
 
     await writeFile(join(binding.worktreeDirectory, 'tracked.txt'), 'worktree result\n', 'utf8')
     const changed = await restarted.status(binding)
     assert.equal(changed.dirty, true)
-    assert.equal(changed.entries.some((entry) => entry.path === 'tracked.txt'), true)
-    assert.match(changed.diff, /worktree result/)
     assert.equal(
       await readFile(join(fixture.repository, 'tracked.txt'), 'utf8'),
       'local dirty\n',
@@ -481,7 +479,7 @@ describe('受管 Worktree 生命周期', () => {
     await assert.rejects(manager.remove(binding, false), /尚未绑定分支/)
 
     const branchName = `whycode/detached-${binding.id.slice(0, 8)}`
-    await manager.createBranch(binding, branchName)
+    requireGitSuccess(await runGit(binding.worktreeDirectory, ['switch', '-c', branchName]), '创建测试分支')
     await manager.remove(binding, false)
     assert.equal(
       await git(fixture.repository, ['rev-parse', `refs/heads/${branchName}`]),

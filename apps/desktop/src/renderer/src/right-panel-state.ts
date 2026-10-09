@@ -2,6 +2,7 @@ import { filePathKey } from './local-files.ts'
 import type { TerminalInfo } from '../../shared/terminal.ts'
 import { MAX_PREVIEW_VIEWS } from '../../shared/workspace-files.ts'
 import { browserDisplayUrl } from '../../shared/browser.ts'
+import { gitComparisonSchema, type GitComparison } from '../../shared/git.ts'
 
 // 根目录之外，为文件预览及用户的保存/定位操作各留一个视图。
 export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
@@ -23,6 +24,7 @@ export type RightPanelPage =
   | { kind: 'browser'; id: string; url: string; title: string; workspaceFile?: boolean; referenceRequest?: BrowserReferenceRequest }
   | { kind: 'workspace'; expanded: string[] }
   | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
+  | GitPage
   | { kind: 'subagent-overview' }
   | { kind: 'subagent-transcript'; subagentId: string }
   | {
@@ -33,6 +35,25 @@ export type RightPanelPage =
       wrap?: boolean
       previewMode?: 'preview' | 'code'
     }
+
+export interface GitPage {
+  kind: 'git'
+  mode: GitComparison['mode']
+  baseRef: string | null
+  commit: string | null
+  expandedPaths: string[]
+  selectedPath: string | null
+}
+
+export function gitPageComparison(page: GitPage): GitComparison {
+  if (page.mode === 'branch') return { mode: 'branch', baseRef: page.baseRef }
+  if (page.mode === 'commit') return { mode: 'commit', commit: page.commit ?? '' }
+  return { mode: page.mode }
+}
+
+export function defaultGitPage(): GitPage {
+  return { kind: 'git', mode: 'branch', baseRef: null, commit: null, expandedPaths: [], selectedPath: null }
+}
 
 export interface RightPanelTab {
   id: string
@@ -265,6 +286,8 @@ export function rightPanelTabId(page: RightPanelPage): string {
       return 'workspace'
     case 'changes':
       return 'changes'
+    case 'git':
+      return 'git'
     case 'terminal':
       return `terminal:${page.terminal.id}`
     case 'browser':
@@ -338,6 +361,15 @@ function parsePage(value: unknown): RightPanelPage | null {
       && (page.selectedPath === null || typeof page.selectedPath === 'string')
       ? { kind: page.kind, checkpointIds: page.checkpointIds,
         expandedPaths: page.expandedPaths, selectedPath: page.selectedPath } : null
+  }
+  if (page.kind === 'git' && ['branch', 'uncommitted', 'unstaged', 'staged', 'commit'].includes(String(page.mode))
+    && (page.baseRef === null || typeof page.baseRef === 'string' && page.baseRef.length <= 1024)
+    && (page.commit === null || typeof page.commit === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(page.commit))
+    && Array.isArray(page.expandedPaths) && page.expandedPaths.every(path => typeof path === 'string')
+    && (page.selectedPath === null || typeof page.selectedPath === 'string')) {
+    const result: GitPage = { kind: 'git', mode: page.mode as GitPage['mode'], baseRef: page.baseRef, commit: page.commit,
+      expandedPaths: page.expandedPaths.slice(0, 20) as string[], selectedPath: page.selectedPath }
+    return result.mode === 'commit' && result.commit === null || gitComparisonSchema.safeParse(gitPageComparison(result)).success ? result : null
   }
   if (page.kind === 'subagent-overview') return { kind: page.kind }
   if (page.kind === 'subagent-transcript' && typeof page.subagentId === 'string') {

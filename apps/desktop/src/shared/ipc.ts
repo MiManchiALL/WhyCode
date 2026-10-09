@@ -74,8 +74,10 @@ export const IPC = {
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
   inspectDraftWorkspace: 'whycode:inspect-draft-workspace',
-  worktreeStatus: 'whycode:worktree-status',
-  createWorktreeBranch: 'whycode:create-worktree-branch',
+  gitSnapshot: 'whycode:git-snapshot',
+  gitFilePreview: 'whycode:git-file-preview',
+  gitHistory: 'whycode:git-history',
+  gitMutate: 'whycode:git-mutate',
   openWorkspaceFolder: 'whycode:open-workspace-folder',
   discardWorktree: 'whycode:discard-worktree',
   /** Renderer 重载/崩溃恢复：重新取得当前会话、稳定时间线与主进程运行态。 */

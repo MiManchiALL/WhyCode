@@ -4,6 +4,8 @@ import { FolderOpen, Globe, Maximize2, Minimize2, PanelRightClose, Plus, SquareT
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { RightPanelFilePreview } from './right-panel-file.tsx'
 import { RightPanelChanges } from './right-panel-changes.tsx'
+import { GitPanel } from './git-panel.tsx'
+import type { GitData } from './git-data.ts'
 import { WorkspaceBrowser } from './workspace-browser.tsx'
 import {
   activeRightPanelPage,
@@ -24,6 +26,9 @@ import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { ImageDraft } from './image-draft.ts'
 
 interface RightPanelProps {
+  gitData: GitData
+  gitRevision: string
+  busy: boolean
   remote?: boolean
   active: boolean
   loading: boolean
@@ -143,6 +148,9 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
     </div>
   )
   switch (page.kind) {
+    case 'git':
+      return props.active ? <GitPanel key={props.runtimeId} runtimeId={props.runtimeId} page={page}
+        branchData={props.gitData} revision={props.gitRevision} busy={props.busy} remote={props.remote} onOpenPage={props.onOpenPage} /> : null
     case 'browser': return null
     case 'changes':
       return props.active ? <RightPanelChanges key={`${props.runtimeId}:${page.checkpointIds.join(',')}`}

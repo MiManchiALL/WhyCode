@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { terminateProcessTree } from '@whycode/core'
+import { stopWorkspaceProcess, type WorkspaceIO } from '@whycode/core'
+import { quoteShell } from './ssh/provision.ts'
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024
@@ -12,10 +13,12 @@ export interface GitCommandResult {
   timedOut: boolean
 }
 
-interface GitCommandOptions {
+export interface GitCommandOptions {
   timeoutMs?: number
   outputLimit?: number
   readOnly?: boolean
+  io?: WorkspaceIO
+  encoding?: 'utf8' | 'base64'
 }
 
 export function runGit(
@@ -24,20 +27,20 @@ export function runGit(
   options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
   const outputLimit = options.outputLimit ?? DEFAULT_OUTPUT_LIMIT
-  const child = spawn('git', ['-C', workingDirectory, ...args], {
-    detached: process.platform !== 'win32',
-    env: {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_PAGER: 'cat',
-      PAGER: 'cat',
-      NO_COLOR: '1',
-      ...(options.readOnly ? { GIT_OPTIONAL_LOCKS: '0' } : {}),
-    },
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  })
+  const environment = {
+    GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat', NO_COLOR: '1', LC_ALL: 'C',
+    ...(options.readOnly ? { GIT_OPTIONAL_LOCKS: '0' } : {}),
+  }
+  const child = options.io?.spawn
+    ? options.io.spawn(`env ${Object.entries(environment).map(([key, value]) => `${key}=${value}`).join(' ')} git ${args.map(quoteShell).join(' ')}`, workingDirectory)
+    : spawn('git', ['-C', workingDirectory, ...args], {
+      detached: process.platform !== 'win32',
+      env: { ...process.env, ...environment },
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+  if ('terminate' in child) child.once('spawn', () => child.stdin.end())
 
   return new Promise((resolve, reject) => {
     const stdout: Buffer[] = []
@@ -69,7 +72,7 @@ export function runGit(
 
     const timer = setTimeout(() => {
       timedOut = true
-      void terminateProcessTree(child).catch(() => child.kill())
+      void stopWorkspaceProcess(child).catch(() => undefined)
     }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     timer.unref()
 
@@ -89,7 +92,7 @@ export function runGit(
       clearTimeout(timer)
       resolve({
         code,
-        stdout: Buffer.concat(stdout).toString('utf8'),
+        stdout: Buffer.concat(stdout).toString(options.encoding ?? 'utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
         outputTruncated,
         timedOut,

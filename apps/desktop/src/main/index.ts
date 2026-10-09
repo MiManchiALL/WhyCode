@@ -42,6 +42,7 @@ import {
   loadMcpConfiguration,
   McpSessionRuntime,
   normalizeReasoningEffortSelection,
+  outsideWorkspaceBoundary,
   prepareImageAttachmentImport,
   type BtwTurnContext,
   type CoreCommand,
@@ -191,7 +192,6 @@ import type {
   RuntimeWorkspace,
   WorkspaceActionResult,
   WorkspaceCandidate,
-  WorktreeStatus,
 } from '../shared/workspace.ts'
 import {
   materializeRuntimeWorkspace,
@@ -237,6 +237,10 @@ import { RuntimeEventBatcher } from './runtime-event-batcher.ts'
 import { isBackgroundRuntimeLifecycleEvent } from './runtime-event-delivery.ts'
 import { RuntimeEventPortHub } from './runtime-event-port-hub.ts'
 import { WorktreeManager } from './worktree-manager.ts'
+import { openGitRepository, type GitRepository } from './git-repository.ts'
+import { registerGitIpc } from './git-ipc.ts'
+import { mutateGitRepository } from './git-actions.ts'
+import type { GitMutation } from '../shared/git.ts'
 import { projectSessionListItems } from './session-list.ts'
 import { SessionSidebarStateStore } from './session-sidebar-state.ts'
 import { ProjectStore } from './project-store.ts'
@@ -612,52 +616,44 @@ function localWorkspaceDirectory(workspace: RuntimeWorkspace): string | null {
   return workspace.mode === 'ssh' ? null : workspaceDisplayDirectory(workspace)
 }
 
-async function currentWorktreeStatus(
-  runtimeId: string,
-): Promise<WorkspaceActionResult<WorktreeStatus>> {
-  try {
-    const binding = worktreeBinding(runtimeForId(runtimeId).workspace)
-    if (!binding) throw new Error('当前会话使用本地工作区，没有受管 Worktree')
-    return { ok: true, value: await worktrees.status(binding) }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
+async function currentGitRepository(runtimeId: string): Promise<GitRepository | null> {
+  const runtime = runtimeForId(runtimeId)
+  if (runtime.workspace.mode.startsWith('pending-')) return null
+  const directory = workspaceDisplayDirectory(runtime.workspace)
+  if (!directory) return null
+  await sshWorkspaces.connect(runtime.workspace)
+  return openGitRepository(directory, sshWorkspaces.io(runtime.workspace), runtime.workspace.mode === 'worktree' ? runtime.workspace.repositoryDirectory : undefined)
 }
 
-async function createCurrentWorktreeBranch(
-  runtimeId: string,
-  branchName: string,
-): Promise<WorkspaceActionResult> {
-  let reservation: ReturnType<DesktopSessionRuntime['routingGate']['reserve']> | null = null
+async function mutateCurrentGit(runtimeId: string, mutation: GitMutation): Promise<string> {
+  const runtime = runtimeForId(runtimeId)
+  const repo = await currentGitRepository(runtimeId)
+  if (!repo) throw new Error('当前工作路径不是 Git 仓库')
+  const candidates = await Promise.all(runtimeRegistry.all().map(async candidate => {
+    const directory = workspaceDisplayDirectory(candidate.workspace)
+    if (!directory || sshWorkspaces.io(candidate.workspace).identity !== repo.io.identity) return null
+    const overlaps = await outsideWorkspaceBoundary(repo.io, directory, repo.root, []) === null
+      || await outsideWorkspaceBoundary(repo.io, repo.root, directory, []) === null
+    return overlaps ? candidate : null
+  }))
+  const related = candidates.filter(candidate => candidate !== null)
+  if (!related.includes(runtime)) related.push(runtime)
+  if (related.some(candidate => candidate.busy)) throw new Error('此仓库仍有 Agent 工作中，请等待结束后再操作 Git')
+  const reservations = related.map(candidate => candidate.routingGate.reserve())
   try {
-    const runtime = runtimeForId(runtimeId)
-    const binding = worktreeBinding(runtime.workspace)
-    if (!binding) throw new Error('当前会话使用本地工作区，没有受管 Worktree')
-    if (
-      runtime.sessionId
-      && sessionDeletionLock.blocksSession(runtime.sessionId)
-    ) {
-      throw new Error('当前会话删除中，请等待完成')
-    }
-    reservation = runtime.routingGate.reserve()
-    await reservation.ready
-    if (runtime.executionBusy) throw new Error('Agent 工作中，请等待任务结束后再创建分支')
-    if (runtime.sessionId) {
-      const backgroundRunning = (await commandSessions.list(runtime.sessionId))
+    await Promise.all(reservations.map(reservation => reservation.ready))
+    for (const candidate of related) {
+      if (candidate.isDisposed || shutdownStarted || sessionDeletionLock.blocksSession(candidate.sessionId ?? undefined)) throw new Error('会话正在关闭或删除，请稍后再操作')
+      if (candidate.executionBusy) throw new Error('此仓库仍有 Agent 工作中，请等待结束后再操作 Git')
+      const backgroundRunning = candidate.sessionId && (await commandSessions.list(candidate.sessionId))
         .some((task) => isCommandTaskActive(task.status))
-      if (backgroundRunning) throw new Error('仍有后台命令运行，请先停止后再创建分支')
+      if (backgroundRunning) throw new Error('仍有后台命令运行，请先停止后再操作 Git')
     }
-    const signal = new AbortController().signal
-    await hostOperations.runProjectWrite(
-      requireRuntimeProjectDir(runtime),
-      signal,
-      () => worktrees.createBranch(binding, branchName),
-    )
-    return { ok: true }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    if (runtime.workspace.mode === 'worktree') await worktrees.assertGitWorktree(runtime.workspace)
+    return await hostOperations.runProjectWrite(repo.root, new AbortController().signal,
+      () => mutateGitRepository(repo, mutation), repo.io.identity)
   } finally {
-    reservation?.release()
+    for (const reservation of reservations) reservation.release()
   }
 }
 
@@ -3217,10 +3213,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
     return deleteSession(sessionId, options)
   })
-  ipcMain.handle(IPC.worktreeStatus, (_e, runtimeId: string) =>
-    currentWorktreeStatus(runtimeId))
-  ipcMain.handle(IPC.createWorktreeBranch, (_e, runtimeId: string, branchName: string) =>
-    createCurrentWorktreeBranch(runtimeId, branchName))
+  registerGitIpc(currentGitRepository, mutateCurrentGit)
   ipcMain.handle(IPC.openWorkspaceFolder, (_e, runtimeId: string) =>
     openCurrentWorkspaceFolder(runtimeId))
   ipcMain.handle(IPC.discardWorktree, (_e, runtimeId: string) =>

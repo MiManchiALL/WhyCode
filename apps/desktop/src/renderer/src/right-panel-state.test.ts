@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   activeRightPanelPage,
+  defaultGitPage,
   browserReferencePage,
   closeRightPanelTab,
   closeBrowserTabs,
@@ -49,6 +50,23 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('Git 比较和文件选择随会话保存，独立于本轮改动且不持久化正文', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    const git: RightPanelPage = { ...defaultGitPage(), baseRef: 'refs/remotes/origin/main', mode: 'commit',
+      commit: 'a'.repeat(40), selectedPath: 'src/中文.ts', expandedPaths: ['src/中文.ts'] }
+    let state = openRightPanelPage(emptyState(), git)
+    state = openRightPanelPage(state, { kind: 'changes', checkpointIds: ['checkpoint'], expandedPaths: [], selectedPath: null })
+    store.set('session-a', state)
+    store.set('session-b', openRightPanelPage(emptyState(), defaultGitPage()))
+    const restored = new RightPanelSessionStore(storage)
+    assert.deepEqual(restored.get('session-a').tabs.find(tab => tab.id === 'git')?.page, git)
+    assert.equal(restored.get('session-a').tabs.length, 2)
+    assert.equal(restored.get('session-b').tabs.length, 1)
+    assert.deepEqual(restored.get('session-b').tabs[0]?.page, defaultGitPage())
+    restored.delete('session-a')
+    assert.equal(new RightPanelSessionStore(storage).get('session-a').tabs.length, 0)
+  })
   it('同一路径再次引用复用已打开的浏览器及其位置，满标签时也不新建', () => {
     const file = { kind: 'browser' as const, id: 'svg', url: 'file:///C:/Project/sample%20one.svg#detail', title: 'Sample' }
     let state = openRightPanelPage(emptyState(), file)

@@ -179,7 +179,7 @@ async function readFromStart(file: WorkspaceReader, buffer: Buffer): Promise<num
   return offset
 }
 
-function decodeTextPreview(content: Buffer): CheckpointFilePreviewState {
+export function decodeTextPreview(content: Buffer): CheckpointFilePreviewState {
   if (content.includes(0)) {
     return { kind: 'unavailable', reason: 'binary', size: content.length }
   }
