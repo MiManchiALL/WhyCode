@@ -2,13 +2,11 @@
 .wc-git-branch-label { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wc-muted); font-size: 12px; }
 .wc-git-change-row { position: relative; display: flex; align-items: center; border-radius: 8px; }
 .wc-git-change-counts { display: inline-flex; align-items: center; gap: 6px; min-width: 28px; justify-content: flex-end; }
-.wc-git-change-row .wc-git-actions { position: absolute; right: 4px; opacity: 0; pointer-events: none; }
+.wc-git-change-row .wc-git-actions { position: absolute; right: 4px; visibility: hidden; pointer-events: none; }
 .wc-git-change-row:is(:hover, :focus-within, :has([data-state='open'])) { background: rgb(0 0 0 / 4%); }
 .wc-git-change-row > .wc-menu-item:hover { background: transparent; }
 .wc-git-change-row:is(:hover, :focus-within, :has([data-state='open'])) .wc-git-change-counts { opacity: 0; }
-.wc-git-change-row:is(:hover, :focus-within, :has([data-state='open'])) .wc-git-actions { opacity: 1; pointer-events: auto; }
-.wc-git-status { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 8px 0; color: var(--wc-faint); font-size: 11px; }
-.wc-git-status > span { display: inline-flex; align-items: center; gap: 2px; }
+.wc-git-change-row:is(:hover, :focus-within, :has([data-state='open'])) .wc-git-actions { visibility: visible; pointer-events: auto; }
 .wc-git-read-error { display: flex; gap: 5px; align-items: center; padding: 6px 8px 0; color: var(--wc-danger); font-size: 11px; }
 .wc-git-dialog { position: fixed; left: 50%; top: 50%; z-index: 91; width: min(92vw, 440px); max-height: 85vh; overflow: auto; transform: translate(-50%, -50%); padding: 22px; outline: none; }
 .wc-git-label { display: block; margin-bottom: 8px; font-size: 13px; color: var(--wc-muted); }
@@ -47,6 +45,6 @@
   .wc-git-file-label { display: none; }
 }
 @media (hover: none) {
-  .wc-git-change-row .wc-git-actions { opacity: 1; pointer-events: auto; }
+  .wc-git-change-row .wc-git-actions { visibility: visible; pointer-events: auto; }
   .wc-git-change-counts { opacity: 0; }
 }

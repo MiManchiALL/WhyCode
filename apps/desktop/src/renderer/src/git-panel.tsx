@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { largeGitChanges, type GitComparison, type GitFilePreview, type GitFileChange, type GitChanges } from '../../shared/git.ts'
 import { gitPageComparison, type GitPage, type RightPanelPage } from './right-panel-state.ts'
 import { useGitSnapshot, type GitData } from './git-data.ts'
@@ -73,8 +73,7 @@ function GitChangeFiles({ runtimeId, remote, root, changes, comparison, page, on
   page: GitPage; onOpenPage: (page: RightPanelPage) => void
 }) {
   const single = largeGitChanges(changes)
-  const index = Math.max(0, changes.files.findIndex(file => file.relativePath === page.selectedPath))
-  const current = changes.files[index]
+  const current = changes.files.find(file => file.relativePath === page.selectedPath) ?? changes.files[0]
   const { ref, onScroll, overscrollBehaviorY } = useScrollArea(changes)
   const select = (file: GitFileChange) => onOpenPage({ ...page, selectedPath: file.relativePath, expandedPaths: [file.relativePath] })
   useEffect(() => { if (single && current && !changes.files.some(file => file.relativePath === page.selectedPath)) select(current) }, [single, changes, page.selectedPath])
@@ -87,9 +86,6 @@ function GitChangeFiles({ runtimeId, remote, root, changes, comparison, page, on
           <SelectMenu value={file.relativePath} options={changes.files.map(entry => ({ value: entry.relativePath, label: entry.relativePath }))}
             searchable ariaLabel="变更文件" onValueChange={value => { const selected = changes.files.find(entry => entry.relativePath === value); if (selected) select(selected) }} className="min-w-0 flex-1" />
           {file.added !== undefined && file.removed !== undefined && <ChangeCounts added={file.added} removed={file.removed} />}
-          <span className="shrink-0 text-xs tabular-nums text-[var(--wc-faint)]">{index + 1}/{changes.files.length}</span>
-          <button type="button" className="wc-preview-action" disabled={index === 0} aria-label="上一个变更文件" onClick={() => select(changes.files[index - 1]!)}><ChevronLeft size={14} /></button>
-          <button type="button" className="wc-preview-action" disabled={index === changes.files.length - 1} aria-label="下一个变更文件" onClick={() => select(changes.files[index + 1]!)}><ChevronRight size={14} /></button>
         </div> : undefined}
         label={file.binary ? '二进制' : ({ '?': '未跟踪', R: '重命名', U: '冲突', D: '删除', A: '新增' })[file.status]}
         onToggle={() => onOpenPage({ ...page, expandedPaths: page.expandedPaths.includes(file.relativePath)

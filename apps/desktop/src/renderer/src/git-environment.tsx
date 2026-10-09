@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, FileDiff, RefreshCw } from 'lucide-react'
+import { FileDiff, RefreshCw } from 'lucide-react'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { GitData } from './git-data.ts'
 import { ChangeCounts } from './file-change-summary.tsx'
@@ -15,7 +15,7 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
       : data.loading ? '正在读取仓库…' : '当前目录不是 Git 仓库'}
   </div>
   return <div className="wc-git-environment">
-    <div className="wc-git-repository" title={`${repo.root}\n${repo.branch ?? repo.head ?? '尚无提交'}`}>
+    <div className="wc-git-repository" title={`${repo.root}\n${repo.branch ?? repo.head ?? '尚无提交'}${repo.upstream ? `\n${repo.upstream}: 领先 ${repo.ahead} · 落后 ${repo.behind}` : ''}${repo.conflicts ? `\n${repo.conflicts} 个冲突` : ''}`}>
       <span className="min-w-0 flex-1 truncate font-medium">{repo.name}</span>
       <span className="wc-git-branch-label">{repo.branch ?? `HEAD · ${repo.head?.slice(0, 7)}`}</span>
     </div>
@@ -31,12 +31,6 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
       </button>
       <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={data.refresh} />
     </div>
-    {(repo.ahead > 0 || repo.behind > 0 || repo.conflicts > 0 || (changes?.untracked ?? 0) > 0) && <div className="wc-git-status">
-      {repo.ahead > 0 && <span title="领先跟踪分支"><ArrowUp size={11} />{repo.ahead}</span>}
-      {repo.behind > 0 && <span title="落后跟踪分支"><ArrowDown size={11} />{repo.behind}</span>}
-      {repo.conflicts > 0 && <span className="text-[var(--wc-danger)]">{repo.conflicts} 个冲突</span>}
-      {(changes?.untracked ?? 0) > 0 && <span>{changes!.untracked} 个未跟踪文件</span>}
-    </div>}
     {(data.error || data.snapshot?.changesError) && <button type="button" className="wc-git-read-error" onClick={data.refresh}
       title={data.error ?? data.snapshot?.changesError ?? ''}><RefreshCw size={12} />读取未完成，点击重试</button>}
   </div>
