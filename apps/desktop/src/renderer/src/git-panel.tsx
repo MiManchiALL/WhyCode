@@ -32,7 +32,7 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
   onOpenPage: (page: RightPanelPage) => void
 }) {
   const comparison = gitPageComparison(page)
-  const selected = useGitSnapshot(runtimeId, comparison, revision, page.mode !== 'branch' && (page.mode !== 'commit' || !!page.commit))
+  const selected = useGitSnapshot(runtimeId, comparison, revision, page.mode !== 'branch' && (page.mode !== 'commit' || !!page.commit), branchData.unavailableReason)
   const data = page.mode === 'branch' ? branchData : selected
   const repo = data.snapshot?.repository ?? branchData.snapshot?.repository
   const changes = data.snapshot?.changes
@@ -40,10 +40,11 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
   const update = (patch: Partial<GitPage>) => onOpenPage({ ...page, ...patch })
   const refresh = () => { branchData.refresh(); selected.refresh() }
   useEffect(() => {
-    if (page.mode === 'branch' && repo && !branchData.loading && !bases.some(ref => ref.ref === (page.baseRef ?? repo.defaultBase))) {
+    if (!branchData.unavailableReason && page.mode === 'branch' && repo && !branchData.loading && !bases.some(ref => ref.ref === (page.baseRef ?? repo.defaultBase))) {
       onOpenPage(gitOverviewPage(page, repo))
     }
-  }, [page, repo, branchData.loading, onOpenPage])
+  }, [page, repo, branchData.loading, branchData.unavailableReason, onOpenPage])
+  if (branchData.unavailableReason) return <FilePreviewMessage>{branchData.unavailableReason}</FilePreviewMessage>
   return <div className="wc-git-panel wc-changes-panel flex min-h-0 flex-1 flex-col">
     <div className="wc-git-toolbar">
       <div className="wc-git-scope wc-git-control" title={`${descriptions[page.mode]}${changes ? `\n${changes.files.length} 个文件${changes.untracked ? ` · ${changes.untracked} 个未跟踪文件未计入行数` : ''}${changes.truncated ? '（部分）' : ''}` : ''}`}>

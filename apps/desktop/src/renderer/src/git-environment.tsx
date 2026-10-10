@@ -10,9 +10,9 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
   const repo = data.snapshot?.repository
   const changes = data.snapshot?.changes
   if (workspace.mode === 'none' || workspace.mode.startsWith('pending-')) return null
-  if (!repo) return <div className="px-2 text-xs text-[var(--wc-faint)]">
-    {data.error ? <button className="wc-focus-ring w-full text-left" onClick={data.refresh} title={data.error}>Git 读取失败，点击重试</button>
-      : data.loading ? '正在读取仓库…' : '当前目录不是 Git 仓库'}
+  if (data.unavailableReason || !repo) return <div className="px-2 text-xs text-[var(--wc-faint)]">
+    {data.unavailableReason ?? (data.error ? <button className="wc-focus-ring w-full text-left" onClick={data.refresh} title={data.error}>Git 读取失败，点击重试</button>
+      : data.loading ? '正在读取仓库…' : '当前目录不是 Git 仓库')}
   </div>
   return <div className="wc-git-environment">
     <div className="wc-git-repository" title={`${repo.root}\n${repo.branch ?? repo.head ?? '尚无提交'}${repo.upstream ? `\n${repo.upstream}: 领先 ${repo.ahead} · 落后 ${repo.behind}` : ''}${repo.conflicts ? `\n${repo.conflicts} 个冲突` : ''}`}>

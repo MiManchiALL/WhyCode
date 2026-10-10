@@ -1,14 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GitComparison, GitSnapshot } from '../../shared/git.ts'
+import type { SshConnectionStatus } from '../../shared/ssh.ts'
 
 export interface GitData {
   snapshot: GitSnapshot | null
   loading: boolean
   error: string | null
+  unavailableReason: string | null
   refresh: () => void
 }
 
-export function useGitSnapshot(runtimeId: string, comparison: GitComparison, revision: string | number, enabled = true): GitData {
+export function gitConnectionUnavailableReason(status: SshConnectionStatus | undefined, loading: boolean): string | null {
+  if (loading) return '正在读取 SSH 连接状态…'
+  switch (status) {
+    case 'connected': return null
+    case 'connecting': return 'SSH 正在连接…'
+    case 'interrupted': return 'SSH 连接已中断，请重新连接'
+    case 'releasing': return 'SSH 正在清理，请稍后重新连接'
+    case 'disconnected': return 'SSH 未连接，请先连接服务器'
+    case undefined: return 'SSH 未配置，请在设置中添加连接'
+  }
+}
+
+export function useGitSnapshot(runtimeId: string, comparison: GitComparison, revision: string | number, enabled = true, unavailableReason: string | null = null): GitData {
   const query = JSON.stringify(comparison)
   const key = `${runtimeId}:${query}`
   const [state, setState] = useState<{ key: string; snapshot: GitSnapshot | null; loading: boolean; error: string | null }>(
@@ -16,7 +30,7 @@ export function useGitSnapshot(runtimeId: string, comparison: GitComparison, rev
   const refreshRef = useRef<() => void>(() => {})
   const refresh = useCallback(() => refreshRef.current(), [])
   useEffect(() => {
-    if (!enabled || !runtimeId) return
+    if (!enabled || unavailableReason || !runtimeId) return
     let active = true, running = false, dirty = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const read = async () => {
@@ -42,7 +56,7 @@ export function useGitSnapshot(runtimeId: string, comparison: GitComparison, rev
     refreshRef.current = schedule
     schedule()
     return () => { active = false; clearTimeout(timer); refreshRef.current = () => {} }
-  }, [runtimeId, query, enabled])
+  }, [runtimeId, query, enabled, unavailableReason])
   useEffect(refresh, [revision, refresh])
-  return { ...(state.key === key ? state : { snapshot: null, loading: true, error: null }), refresh }
+  return { ...(state.key === key ? state : { snapshot: null, loading: true, error: null }), unavailableReason, refresh }
 }

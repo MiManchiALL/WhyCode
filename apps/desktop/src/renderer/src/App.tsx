@@ -75,7 +75,7 @@ import { useSshWorkspaceConnection } from './use-ssh-workspace-connection.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import { useConversationFontSize } from './conversation-font-size.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
-import { useGitSnapshot } from './git-data.ts'
+import { gitConnectionUnavailableReason, useGitSnapshot } from './git-data.ts'
 import { defaultGitPage } from './right-panel-state.ts'
 import { gitOverviewPage } from './git-comparison.ts'
 import {
@@ -449,7 +449,8 @@ export function App() {
   const gitPage = committedRightPanelState.tabs.find(tab => tab.page.kind === 'git')?.page
   const gitRevision = `${gitStatusRevision}:${sshConnection.connection?.status ?? ''}`
   const gitData = useGitSnapshot(runtimeId, { mode: 'branch', baseRef: gitPage?.kind === 'git' ? gitPage.baseRef : null },
-    gitRevision, conversationStarted && !loadingConversation && !!runtimeId && !workspace.mode.startsWith('pending-') && workspace.mode !== 'none')
+    gitRevision, conversationStarted && !loadingConversation && !!runtimeId && !workspace.mode.startsWith('pending-') && workspace.mode !== 'none',
+    workspace.mode === 'ssh' ? gitConnectionUnavailableReason(sshConnection.connection?.status, sshConnection.loading) : null)
   const [workspaceCleanup] = useState(() => new RetainedWorkspaceCleanup(async workspace => {
     const result = await window.whycode.deleteRetainedWorkspace(workspace)
     if (!result.ok) throw new Error(result.error)
