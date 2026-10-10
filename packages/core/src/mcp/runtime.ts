@@ -73,13 +73,29 @@ export class McpSessionRuntime {
     messages: readonly ModelMessage[],
     abortSignal: AbortSignal,
   ): Promise<McpStepBinding> {
+    const originalState = this.restoreState(messages)
+    const includeProject = this.projectConfigIsTrusted()
+    const activeState = this.reconcileState(originalState, includeProject)
+    await this.manager.prepareReferences(activeState.tools, abortSignal, includeProject)
+    return this.bindStep(originalState, includeProject)
+  }
+
+  /** 计量只读取已知目录；打开会话不能为了估算而启动或连接外部服务。 */
+  toolDefinitions(messages: readonly ModelMessage[]): ToolDefinition[] {
+    const originalState = this.restoreState(messages)
+    return this.bindStep(originalState, this.projectConfigIsTrusted()).toolDefinitions()
+  }
+
+  private restoreState(messages: readonly ModelMessage[]): McpToolState {
     const originalState = findMcpToolState(messages)
     this.restoreProjectConfigurationTrust(
       originalState.trustedProjectConfigurationFingerprint,
     )
-    const includeProject = this.projectConfigIsTrusted()
+    return originalState
+  }
+
+  private bindStep(originalState: McpToolState, includeProject: boolean): McpStepBinding {
     const activeState = this.reconcileState(originalState, includeProject)
-    await this.manager.prepareReferences(activeState.tools, abortSignal, includeProject)
     const snapshot = this.manager.snapshot(true)
     const instructionSnapshots = this.mergeInstructionSnapshots(
       activeState.serverInstructions,

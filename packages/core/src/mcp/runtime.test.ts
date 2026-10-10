@@ -35,6 +35,7 @@ describe('MCP 延迟工具检索', () => {
       abortSignal: signal,
     }
     try {
+      assert.deepEqual(runtime.toolDefinitions([]).map(tool => tool.name), [MCP_TOOL_SEARCH_NAME])
       const first = await runtime.beginStep([], signal)
       const firstTools = first.toolDefinitions()
       assert.deepEqual(firstTools.map((tool) => tool.name), [MCP_TOOL_SEARCH_NAME])
@@ -74,6 +75,10 @@ describe('MCP 延迟工具检索', () => {
 
       const second = await runtime.beginStep(messages, signal)
       const secondTools = second.toolDefinitions()
+      assert.deepEqual(
+        runtime.toolDefinitions(messages).map(tool => ({ name: tool.name, prompt: tool.prompt })),
+        secondTools.map(tool => ({ name: tool.name, prompt: tool.prompt })),
+      )
       assert.equal(secondTools[0]?.name, MCP_TOOL_SEARCH_NAME)
       const echo = secondTools.find((tool) => tool.name.startsWith('Mcp__test__echo_text__'))
       assert.ok(echo)
@@ -140,6 +145,10 @@ describe('MCP 延迟工具检索', () => {
 
       const resumed = new McpSessionRuntime({ configuration })
       try {
+        const preview = resumed.toolDefinitions(committed)
+        assert.deepEqual(preview.map(tool => tool.name), [MCP_TOOL_SEARCH_NAME])
+        assert.equal(preview[0]?.initialApprovalReason, undefined)
+        assert.equal(resumed.connectionManager().snapshot(true).tools.length, 0, '预览不能启动 MCP 服务')
         const resumedStep = await resumed.beginStep(committed, signal)
         const resumedSearch = resumedStep.toolDefinitions()[0]!
         assert.equal(resumedSearch.initialApprovalReason, undefined)

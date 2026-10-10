@@ -367,11 +367,11 @@ export class AgentSession {
   /** 手动压缩进行中（此间用户消息排队，压缩后接续） */
   private compacting = false
   /** token 计量基线（最后一次 API usage）；改写历史后置 null 全量重估 */
-  private tokenBaseline: TokenBaseline | null = null
-  /** API usage 所含 Skill 请求投影相对长期消息的差值。 */
-  private tokenBaselineSkillProjectionDelta = 0
-  /** API usage 所含当前 turn 子代理状态投影相对长期消息的差值。 */
-  private tokenBaselineSubagentProjectionDelta = 0
+  private tokenBaseline: (TokenBaseline & {
+    /** API usage 已含的 System / 工具开销，以及请求投影相对长期消息的差值。 */
+    overheadTokens: number
+    projectionDelta: number
+  }) | null = null
   /** 仅在当前 turn 内存在，用于请求投影和上下文估算；从不写入 transcript。 */
   private activeSubagentTurnState: SubagentTurnState | null = null
   /** 父 transcript 已提交的终态；manifest 的 delivered 回写失败也不能让 turn 永久等待。 */
@@ -553,7 +553,7 @@ export class AgentSession {
     const tools = this.buildToolSet(
       new AbortController().signal,
       { emit: this.options.emit, loopHealth: this.loopHealth },
-      [],
+      this.options.mcpRuntime?.toolDefinitions(this.messages) ?? [],
     )
     this.contextOverhead = await estimateRequestContextOverhead(
       buildSystemPrompt(this.options.promptContext, this.options.customSystemPrompt),
@@ -1834,6 +1834,7 @@ export class AgentSession {
           stepsSincePlanReminder = 0
         }
         await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
+        await this.prepareContextUsage()
         await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
         if (this.hasPendingMessages()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
@@ -2306,26 +2307,24 @@ export class AgentSession {
       this.tokenBaseline,
       fallbackOverheadTokens,
     )
-    const currentSkillDelta = this.skillTurn.estimatedProjectionTokenDelta(messages)
-    const baselineDelta = this.tokenBaseline
-      ? this.tokenBaselineSkillProjectionDelta
-      : 0
+    const projectionDelta = estimateMessagesTokens(this.projectContextMessages(messages))
+      - estimateMessagesTokens(messages)
+    return Math.max(
+      0,
+      rawEstimate + projectionDelta - (this.tokenBaseline?.projectionDelta ?? 0)
+        + (this.tokenBaseline ? fallbackOverheadTokens - this.tokenBaseline.overheadTokens : 0),
+    )
+  }
+
+  private projectContextMessages(messages: readonly ModelMessage[]): ModelMessage[] {
     const subagentStateMessage = this.activeSubagentTurnState
       ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
       : null
-    const currentSubagentDelta = subagentStateMessage
-      ? estimateMessagesTokens([subagentStateMessage])
-      : 0
-    const baselineSubagentDelta = this.tokenBaseline
-      ? this.tokenBaselineSubagentProjectionDelta
-      : 0
-    return Math.max(
-      0,
-      rawEstimate
-        + currentSkillDelta
-        - baselineDelta
-        + currentSubagentDelta
-        - baselineSubagentDelta,
+    return this.skillTurn.project(
+      withoutMcpToolState([
+        ...messages,
+        ...(subagentStateMessage ? [subagentStateMessage] : []),
+      ]),
     )
   }
 
@@ -2344,20 +2343,10 @@ export class AgentSession {
       this.options.emit({ type: 'context-usage', usage: null })
       return
     }
-    const subagentStateMessage = this.activeSubagentTurnState
-      ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
-      : null
-    const projectedMessages = this.skillTurn.project(
-      withoutMcpToolState([
-        ...this.messages,
-        ...(subagentStateMessage ? [subagentStateMessage] : []),
-      ]),
-      true,
-    )
     const breakdown: ContextUsageInfo['breakdown'] = {
       ...this.contextOverhead,
       // 真实请求已装配时直接计算其 Provider 边界 messages；其余时刻投影下一次请求。
-      messageTokens: estimateMessagesTokens(requestMessages ?? projectedMessages),
+      messageTokens: estimateMessagesTokens(requestMessages ?? this.projectContextMessages(this.messages)),
     }
     const capabilities = this.currentModelSelection().model.capabilities
     this.options.emit({
@@ -2545,18 +2534,16 @@ export class AgentSession {
       const subagentTurnStateMessage = subagentTurnState
         ? createSubagentTurnStateMessage(subagentTurnState)
         : null
-      const modelInputMessages = [
+      const persistentInputMessages = [
         ...this.messages,
         ...(dateReminder ? [dateReminder] : []),
+      ]
+      const modelInputMessages = [
+        ...persistentInputMessages,
         ...(subagentTurnStateMessage ? [subagentTurnStateMessage] : []),
       ]
-      const persistentInputMessageCount =
-        this.messages.length + (dateReminder ? 1 : 0)
-      const requestSkillProjectionDelta =
-        this.skillTurn.estimatedProjectionTokenDelta(modelInputMessages)
-      const requestSubagentProjectionDelta = subagentTurnStateMessage
-        ? estimateMessagesTokens([subagentTurnStateMessage])
-        : 0
+      const requestProjectionDelta = estimateMessagesTokens(this.projectContextMessages(persistentInputMessages))
+        - estimateMessagesTokens(persistentInputMessages)
       const requestSystemPrompt = buildSystemPrompt(
         this.options.promptContext,
         this.options.customSystemPrompt,
@@ -2589,10 +2576,7 @@ export class AgentSession {
       )
       this.contextOverhead = requestOverhead
       const requestUsedTokens = this.tokenBaseline
-        ? this.estimateCurrentContextTokens([
-            ...this.messages,
-            ...(dateReminder ? [dateReminder] : []),
-          ])
+        ? this.estimateCurrentContextTokens(persistentInputMessages)
         : requestOverhead.systemPromptTokens
           + requestOverhead.toolTokens
           + estimateMessagesTokens(requestMessages)
@@ -2807,13 +2791,13 @@ export class AgentSession {
           // usage 覆盖模型输入（含本步日期提醒）和 assistant 输出，
           // 不含宿主随后追加的 tool result、页面图和控制标记。
           coveredMessageCount:
-            persistentInputMessageCount
+            persistentInputMessages.length
             + (responseCoveredCount < 0
               ? canonicalResponseMessages.length
               : responseCoveredCount),
+          overheadTokens: requestOverhead.systemPromptTokens + requestOverhead.toolTokens,
+          projectionDelta: requestProjectionDelta,
         }
-        this.tokenBaselineSkillProjectionDelta = requestSkillProjectionDelta
-        this.tokenBaselineSubagentProjectionDelta = requestSubagentProjectionDelta
       }
       this.updateLastTurnAssistantText(canonicalResponseMessages)
       emit({ type: 'step-committed' })

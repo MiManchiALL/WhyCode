@@ -111,15 +111,6 @@ export class SkillTurnContext {
     )
   }
 
-  /**
-   * Skill 请求投影相对长期消息的 token 差值。API usage 已经包含上一次投影，
-   * AgentSession 用本次差值减去基线差值，避免活动正文变化时漏算或重复计算。
-   */
-  estimatedProjectionTokenDelta(messages: readonly ModelMessage[]): number {
-    const projected = this.project(messages)
-    return estimateMessagesTokens(projected) - estimateMessagesTokens(messages)
-  }
-
   /** 历史即使全部压缩，仍无法消除的当前 Skill 目录与活动正文开销。 */
   injectedContextTokenEstimate(): number {
     return estimateMessagesTokens(this.project([]))

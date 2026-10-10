@@ -127,9 +127,11 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 ### 1.9 上下文用量
 
-`ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此不计入消息；它恢复出的工具 schema 在真实请求装配后计入 `toolTokens`。
+`ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此在消息分项与总量中均不计入。
 
-`usedTokens` 与压缩器必须读取同一个压力值：有 Provider usage 时使用真实基线并补估其后稳定提交的消息及当前请求投影变化；没有基线时才估算 System、工具目录和消息。分项不要求机械相加等于 Provider 总量。项目指令、日期提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
+工具分项与模型请求共用工具组装。初始化、冷恢复和请求前的压缩检查均计入当前可用的内置工具、`ToolSearch` 与已解析的 MCP schema；SSH 等工作区能力差异按实际可用工具体现，不使用固定 token 常量。空闲计量只读取 MCP 目录快照，不启动或连接服务；冷恢复中尚未重新解析的 MCP 工具只在真实请求恢复成功后计入。实际检索、目录变化、模型能力变化可以改变工具用量，单纯开始或结束回复不应遗漏同一组工具。
+
+`usedTokens` 与压缩器必须读取同一个压力值：有 Provider usage 时使用真实基线并补估其后稳定提交的消息、当前请求投影变化及 System/工具目录相对该次请求的增减；没有基线时才估算 System、工具目录和消息。基线与其覆盖的消息边界、固定开销和投影差额一起更新、一起失效，工具开销不重复累计。分项不要求机械相加等于 Provider 总量。项目指令、日期提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
 
 `context-usage` 是可空 live CoreEvent。Desktop runtime 保存最新值并进入恢复快照，Renderer 不读取模型能力或历史自行重算；B/C 的独立窗口不计入。该状态不进入 ViewEvent、JSONL、摘要或 Fork，也不增加会话 schema。模型切换成功后才使旧值失效，展示计量失败只隐藏指示器，不能阻断普通请求。idle 会话即使最终输出越过阈值，也只说明“下次请求前压缩”，不额外制造模型调用；自动压缩连续失败必须显式提示。
 

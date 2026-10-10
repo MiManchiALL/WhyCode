@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
-import { estimateMessageTokens } from '../context/tokens.ts'
 import { applySkillContext } from './context.ts'
-import { SkillTurnContext } from './turn.ts'
 import { skillSummary, type ActivatedSkill, type SkillTurnSnapshot } from './types.ts'
 
 const BODY = 'CANONICAL_SKILL_BODY_f542'
@@ -45,19 +43,6 @@ describe('Skill 模型请求投影', () => {
     const nextRoot = applySkillContext(messages, null, [], new Set())
     assert.doesNotMatch(JSON.stringify(nextRoot), /RESOURCE_NOT_FOUND/)
   })
-
-  it('投影 token 差值覆盖活动正文注入和 Skill 工具正文冻结', () => {
-    const turn = new SkillTurnContext()
-    turn.add([skill()])
-    const messages = [skillToolResult('skill-call', BODY)]
-
-    assert.equal(
-      turn.estimatedProjectionTokenDelta(messages),
-      tokenEstimate(turn.project(messages)) - tokenEstimate(messages),
-    )
-    assert.notEqual(turn.estimatedProjectionTokenDelta(messages), 0)
-    assert.ok(turn.injectedContextTokenEstimate() > 0)
-  })
 })
 
 function skill(): ActivatedSkill {
@@ -95,8 +80,4 @@ function skillToolResult(toolCallId: string, value: string): ModelMessage {
       output: { type: 'text', value },
     }],
   }
-}
-
-function tokenEstimate(messages: readonly ModelMessage[]): number {
-  return messages.reduce((total, message) => total + estimateMessageTokens(message), 0)
 }
