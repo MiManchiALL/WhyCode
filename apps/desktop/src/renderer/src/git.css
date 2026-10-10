@@ -1,4 +1,4 @@
-.wc-git-repository { display: flex; align-items: center; gap: 10px; padding: 2px 8px 8px; font-size: 13px; }
+.wc-git-repository { display: flex; align-items: center; gap: 10px; padding: 4px 8px; font-size: 13px; }
 .wc-git-branch-label { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wc-muted); font-size: 12px; }
 .wc-git-change-row { position: relative; display: flex; align-items: center; border-radius: 8px; }
 .wc-git-change-counts { display: inline-flex; align-items: center; gap: 6px; min-width: 28px; justify-content: flex-end; }
@@ -42,7 +42,6 @@
 @container git-panel (max-width: 480px) {
   .wc-git-comparison, .wc-git-history-trigger { grid-column: 1 / -1; grid-row: 2; }
   .wc-git-file-picker > .wc-change-counts { display: none; }
-  .wc-git-file-label { display: none; }
 }
 @media (hover: none) {
   .wc-git-change-row .wc-git-actions { visibility: visible; pointer-events: auto; }

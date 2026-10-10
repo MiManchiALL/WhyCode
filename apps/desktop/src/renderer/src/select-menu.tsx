@@ -7,6 +7,7 @@ const SEARCH_RESULT_LIMIT = 200
 export interface SelectMenuOption {
   value: string
   label: string
+  detail?: string
   disabled?: boolean
 }
 
@@ -34,7 +35,8 @@ export function SelectMenu({
   const [search, setSearch] = useState('')
   const searchInput = useRef<HTMLInputElement>(null)
   const filtered = options.filter(option => !searchable || option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
-  const selectedLabel = options.find((option) => option.value === value)?.label ?? '请选择'
+  const selected = options.find((option) => option.value === value)
+  const selectedLabel = selected?.label ?? '请选择'
   return (
     <DropdownMenu.Root onOpenChange={open => { if (!open) setSearch('') }}>
       <DropdownMenu.Trigger asChild>
@@ -45,15 +47,18 @@ export function SelectMenu({
           aria-label={ariaLabel}
           title={selectedLabel}
         >
-          <span className="min-w-0 truncate">{selectedLabel}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
+          {selected?.detail && <span className="wc-select-detail">{selected.detail}</span>}
           <ChevronDown size={13} className="shrink-0 text-[var(--wc-faint)]" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className="wc-menu-content min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[min(30rem,calc(100vw-2rem))]"
+          className={`wc-menu-content ${searchable ? 'wc-select-search-menu' : 'min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[min(30rem,calc(100vw-2rem))]'}`}
+          data-density={searchable ? 'compact' : undefined}
           align={align}
           sideOffset={5}
+          collisionPadding={8}
           onFocus={event => { if (searchable && event.target === event.currentTarget) { event.preventDefault(); searchInput.current?.focus() } }}
           onEscapeKeyDown={event => { if (event.isComposing) event.preventDefault() }}
         >
@@ -67,12 +72,13 @@ export function SelectMenu({
                 items?.[event.key === 'ArrowDown' ? 0 : items.length - 1]?.focus()
               }
             }} />}
-          <div className="wc-scrollbar max-h-64 overflow-y-auto">
+          <div className="wc-select-options wc-scrollbar min-h-0 max-h-64 overflow-y-auto">
           <DropdownMenu.RadioGroup value={value} onValueChange={onValueChange}>
             {(searchable ? filtered.slice(0, SEARCH_RESULT_LIMIT) : filtered).map((option) => (
               <DropdownMenu.RadioItem
                 key={option.value}
                 value={option.value}
+                textValue={option.label}
                 disabled={option.disabled}
                 className="wc-menu-item min-w-0"
                 title={option.label}
@@ -82,7 +88,8 @@ export function SelectMenu({
                     <Check size={14} />
                   </DropdownMenu.ItemIndicator>
                 </span>
-                <span className="min-w-0 truncate">{option.label}</span>
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {option.detail && <span className="wc-select-detail">{option.detail}</span>}
               </DropdownMenu.RadioItem>
             ))}
           </DropdownMenu.RadioGroup>

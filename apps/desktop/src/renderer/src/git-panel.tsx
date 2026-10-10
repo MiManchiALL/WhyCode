@@ -23,6 +23,10 @@ const descriptions = {
   commit: '查看所选提交相对第一父提交的变化；首次提交显示全部新增文件。',
 }
 
+function gitFileLabel(file: GitFileChange): string | undefined {
+  return file.binary ? '二进制' : ({ '?': '未跟踪', R: '重命名', U: '冲突', D: '删除', A: '新增' })[file.status]
+}
+
 export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, onOpenPage }: {
   runtimeId: string; page: GitPage; branchData: GitData; revision: string; busy: boolean; remote?: boolean
   onOpenPage: (page: RightPanelPage) => void
@@ -86,11 +90,11 @@ function GitChangeFiles({ runtimeId, remote, root, changes, comparison, page, on
       {(single ? current ? [current] : [] : changes.files).map(file => <ChangedFile key={single ? '' : file.relativePath} change={file} runtimeId={runtimeId} remote={remote}
         projectDir={root} onOpenPage={onOpenPage} expanded={single || page.expandedPaths.includes(file.relativePath)}
         heading={single ? <div className="wc-git-file-picker" title={file.binary ? '二进制文件' : file.status === '?' ? '未跟踪文件，未计入总行数' : undefined}>
-          <SelectMenu value={file.relativePath} options={changes.files.map(entry => ({ value: entry.relativePath, label: entry.relativePath }))}
+          <SelectMenu value={file.relativePath} options={changes.files.map(entry => ({ value: entry.relativePath, label: entry.relativePath, detail: gitFileLabel(entry) }))}
             searchable ariaLabel="变更文件" onValueChange={value => { const selected = changes.files.find(entry => entry.relativePath === value); if (selected) select(selected) }} className="min-w-0 flex-1" />
           {file.added !== undefined && file.removed !== undefined && <ChangeCounts added={file.added} removed={file.removed} />}
         </div> : undefined}
-        label={file.binary ? '二进制' : ({ '?': '未跟踪', R: '重命名', U: '冲突', D: '删除', A: '新增' })[file.status]}
+        label={gitFileLabel(file)}
         onToggle={() => onOpenPage({ ...page, expandedPaths: page.expandedPaths.includes(file.relativePath)
           ? page.expandedPaths.filter(path => path !== file.relativePath) : [...page.expandedPaths, file.relativePath] })}>
         <GitFileDiff key={file.relativePath} runtimeId={runtimeId} comparison={comparison} file={file} revision={changes} />

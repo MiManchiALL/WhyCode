@@ -78,7 +78,7 @@ function InspectorSection({
         {icon}
         <span>{title}</span>
       </h2>
-      <div className="mt-1.5 min-h-2">{children}</div>
+      <div className="wc-session-context-body">{children}</div>
     </section>
   )
 }
@@ -105,7 +105,7 @@ function TaskProgressSection({ runtimeId, plan, activeSkills, view, onViewChange
           <ArrowLeftRight size={13} aria-hidden="true" />
         </button>
       </div>
-      <div key={runtimeId} className="mt-1.5 min-h-2">
+      <div key={runtimeId} className="wc-session-context-body">
         <div className="wc-inspector-view" data-active={!showingSkills} aria-hidden={showingSkills} inert={showingSkills}>
           <div className="min-h-0 overflow-hidden">
             {plan && <TaskPlanView key={plan.id} plan={plan} />}
