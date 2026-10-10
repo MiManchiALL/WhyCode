@@ -20,7 +20,7 @@
 .wc-git-control { display: flex; align-items: center; min-width: 0; height: 34px; border: 1px solid var(--wc-line); border-radius: 999px; background: var(--wc-surface); }
 .wc-git-control .wc-select-trigger { border: 0; border-radius: 999px; background: transparent; box-shadow: none; }
 .wc-git-scope { flex-shrink: 0; gap: 2px; }
-.wc-git-scope > .wc-change-counts { padding-right: 10px; }
+.wc-git-scope > .wc-git-summary { padding-right: 10px; }
 .wc-git-comparison { max-width: 100%; justify-self: start; gap: 6px; padding-left: 12px; font-size: 12px; }
 .wc-git-current-branch { flex: 0 1 auto; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wc-git-description { padding: 8px 12px; font-size: 11px; line-height: 17px; color: var(--wc-faint); }

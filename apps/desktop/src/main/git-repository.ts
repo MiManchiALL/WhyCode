@@ -82,7 +82,8 @@ export class GitRepository {
 
 export async function openGitRepository(directory: string, io = localWorkspaceIO, managedRepository?: string): Promise<GitRepository | null> {
   const result = await runGit(directory, ['rev-parse', '--show-toplevel'], { readOnly: true, io })
-  if (result.code !== 0 && /not a git repository/iu.test(result.stderr)) return null
+  // SSH shell 命令合并输出，Git 的诊断会出现在 stdout。
+  if (!result.timedOut && result.code !== 0 && /fatal: not a git repository\b/iu.test(result.stderr || result.stdout)) return null
   const root = requireGitSuccess(result, '读取 Git 仓库').trim()
   return new GitRepository(root, io, managedRepository)
 }

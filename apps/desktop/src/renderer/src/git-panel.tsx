@@ -8,7 +8,8 @@ import { GitHistoryPicker } from './git-history.tsx'
 import { gitComparisonRefs, gitOverviewPage } from './git-comparison.ts'
 import { SelectMenu } from './select-menu.tsx'
 import { ChangedFile } from './changed-file.tsx'
-import { ChangeCounts } from './file-change-summary.tsx'
+import { ChangeCounts, GitChangeCounts } from './file-change-summary.tsx'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 import { FileDiff } from './file-diff.tsx'
 import { FilePreviewMessage } from './file-preview-controls.tsx'
 import { useScrollArea } from './use-scroll-area.ts'
@@ -45,7 +46,7 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
         <SelectMenu value={page.mode} options={modes.map(mode => ({ ...mode, disabled: mode.value === 'branch' && !bases.length }))} ariaLabel="变更范围" onValueChange={mode => update({ mode: mode as GitPage['mode'],
           baseRef: mode === 'branch' ? gitOverviewPage(page, repo).baseRef ?? bases[0]?.ref ?? null : page.baseRef,
           commit: mode === 'commit' ? page.commit ?? repo?.head ?? null : page.commit, expandedPaths: [], selectedPath: null })} />
-        {changes && <ChangeCounts added={changes.added} removed={changes.removed} />}
+        {changes && <GitChangeCounts changes={changes} />}
       </div>
       {page.mode === 'branch' && repo && bases.length > 0 && <div className="wc-git-comparison wc-git-control" title={descriptions.branch}>
         <span className="wc-git-current-branch" title={repo.branch ?? 'HEAD'}>{repo.branch ?? 'HEAD'}</span><span className="text-[var(--wc-faint)]">→</span>
@@ -73,14 +74,16 @@ function GitChangeFiles({ runtimeId, remote, root, changes, comparison, page, on
   page: GitPage; onOpenPage: (page: RightPanelPage) => void
 }) {
   const single = largeGitChanges(changes)
+  const feedback = useConversationFeedback()
   const current = changes.files.find(file => file.relativePath === page.selectedPath) ?? changes.files[0]
   const { ref, onScroll, overscrollBehaviorY } = useScrollArea(changes)
   const select = (file: GitFileChange) => onOpenPage({ ...page, selectedPath: file.relativePath, expandedPaths: [file.relativePath] })
   useEffect(() => { if (single && current && !changes.files.some(file => file.relativePath === page.selectedPath)) select(current) }, [single, changes, page.selectedPath])
   useEffect(() => { if (single && ref.current) ref.current.scrollTop = 0 }, [single, page.selectedPath])
+  useEffect(() => { if (single) feedback('info', '变更较多，当前为逐文件查看，可通过文件下拉框切换。', true) }, [single, feedback])
   return <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-changes-scroll wc-scrollbar min-h-0 flex-1 overflow-y-auto">
       {!changes.files.length && <FilePreviewMessage>没有变更</FilePreviewMessage>}
-      {(single ? current ? [current] : [] : changes.files).map(file => <ChangedFile key={file.relativePath} change={file} runtimeId={runtimeId} remote={remote}
+      {(single ? current ? [current] : [] : changes.files).map(file => <ChangedFile key={single ? '' : file.relativePath} change={file} runtimeId={runtimeId} remote={remote}
         projectDir={root} onOpenPage={onOpenPage} expanded={single || page.expandedPaths.includes(file.relativePath)}
         heading={single ? <div className="wc-git-file-picker" title={file.binary ? '二进制文件' : file.status === '?' ? '未跟踪文件，未计入总行数' : undefined}>
           <SelectMenu value={file.relativePath} options={changes.files.map(entry => ({ value: entry.relativePath, label: entry.relativePath }))}
@@ -90,7 +93,7 @@ function GitChangeFiles({ runtimeId, remote, root, changes, comparison, page, on
         label={file.binary ? '二进制' : ({ '?': '未跟踪', R: '重命名', U: '冲突', D: '删除', A: '新增' })[file.status]}
         onToggle={() => onOpenPage({ ...page, expandedPaths: page.expandedPaths.includes(file.relativePath)
           ? page.expandedPaths.filter(path => path !== file.relativePath) : [...page.expandedPaths, file.relativePath] })}>
-        <GitFileDiff runtimeId={runtimeId} comparison={comparison} file={file} revision={changes} />
+        <GitFileDiff key={file.relativePath} runtimeId={runtimeId} comparison={comparison} file={file} revision={changes} />
       </ChangedFile>)}
       {changes.truncated && <p className="wc-git-description">变更清单超过显示上限，仅展示前 2,000 个文件；统计仅覆盖已列出的文件。</p>}
     </div>

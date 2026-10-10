@@ -15,6 +15,8 @@ test('SSH 仓库通过正式远端进程读取差异、提交、切换与推送�
   const repo = new GitRepository(env.project, io)
   const git = (args: string[]) => repo.text(args, '远端测试 Git', { readOnly: false })
   await git(['init', '-b', 'main'])
+  assert.equal(await openGitRepository(env.remoteRoot, io), null)
+  await assert.rejects(openGitRepository(`${env.remoteRoot}/missing`, io), /no such file|chdir/iu)
   await git(['config', 'user.name', 'Remote Test'])
   await git(['config', 'user.email', 'remote@example.invalid'])
   const path = "file ' $(touch unexpected).txt"

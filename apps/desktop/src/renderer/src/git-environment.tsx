@@ -1,7 +1,7 @@
 import { FileDiff, RefreshCw } from 'lucide-react'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { GitData } from './git-data.ts'
-import { ChangeCounts } from './file-change-summary.tsx'
+import { GitChangeCounts } from './file-change-summary.tsx'
 import { GitActions } from './git-actions.tsx'
 
 export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
@@ -24,9 +24,7 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
         title={changes ? `当前工作区相对 ${changes.baseLabel} 的变化（含未提交）${changes.truncated ? '；清单已截断，统计仅覆盖已列出的文件' : ''}${changes.untracked ? '；行数不包含未跟踪文件' : ''}` : '查看仓库变更'}>
         <FileDiff size={14} className="shrink-0" /><span className="min-w-0 flex-1 text-left">变更</span>
         <span className="wc-git-change-counts">
-          {changes ? changes.files.length ? changes.added + changes.removed > 0 ? <ChangeCounts added={changes.added} removed={changes.removed} /> : <span className="text-xs text-[var(--wc-faint)]">{changes.files.length} 个文件</span>
-            : <span className="text-xs text-[var(--wc-faint)]">无变更</span> : <span className="text-xs text-[var(--wc-faint)]">查看</span>}
-          {changes?.truncated && <span className="text-xs text-[var(--wc-faint)]">部分</span>}
+          {changes ? <GitChangeCounts changes={changes} /> : <span className="text-xs text-[var(--wc-faint)]">查看</span>}
         </span>
       </button>
       <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={data.refresh} />
