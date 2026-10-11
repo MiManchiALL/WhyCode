@@ -1780,7 +1780,7 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   -webkit-line-clamp: 2;
 }
 
-@media (min-width: 1441px) {
+@media (min-width: 1025px) {
   .wc-conversation-balanced-content {
     width: calc(min(100%, 56rem) - var(--wc-conversation-content-right-inset));
     max-width: none;
@@ -1791,7 +1791,7 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   }
 }
 
-@media (max-width: 1440px) {
+@media (max-width: 1024px) {
   .wc-conversation-navigator {
     display: none;
   }
