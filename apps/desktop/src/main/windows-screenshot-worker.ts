@@ -27,7 +27,9 @@ process.once('message', async message => {
     await released
     controller.signal.throwIfAborted()
   } catch (error) {
-    failure = error instanceof Error ? error.message : String(error)
+    const reason = controller.signal.aborted && error instanceof Error && error.name === 'AbortError'
+      ? controller.signal.reason : error
+    failure = reason instanceof Error ? reason.message : String(reason)
   } finally {
     try { await prepared?.restore() }
     catch (error) { failure = `${failure ? `${failure}；` : ''}${error instanceof Error ? error.message : String(error)}` }

@@ -1,20 +1,21 @@
 import assert from 'node:assert/strict'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { build } from 'vite'
 import type { withWindowsScreenshotWindow as captureWindow } from './windows-screenshot.ts'
 
 const require = createRequire(import.meta.url)
 
 test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开也归还窗口', {
-  skip: process.platform !== 'win32' || process.env.WHYCODE_TEST_DESKTOP_CAPTURE !== '1', timeout: 60_000,
+  skip: process.platform !== 'win32' || process.env.WHYCODE_TEST_DESKTOP_CAPTURE !== '1', timeout: 90_000,
 }, async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'whycode-screenshot-test-'))
   const children: ChildProcess[] = []
@@ -145,6 +146,98 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     const before = read()
     await assert.rejects(withWindowsScreenshotWindow('Missing Screenshot Fixture', undefined, new AbortController().signal, async () => {}), /找不到/)
     assert.deepEqual(read(), before)
+  })
+
+  const launcher = path.join(directory, 'Launcher.exe')
+  await promisify(execFile)(path.join(process.env.SystemRoot!, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), [
+    '/nologo', '/target:winexe', `/out:${launcher}`, '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll',
+    path.join(import.meta.dirname, 'test-fixtures/screenshot-launcher.cs'),
+  ], { windowsHide: true })
+  await mkdir(path.join(directory, 'app'))
+  await copyFile(launcher, path.join(directory, 'app/Fixture.exe'))
+  const titleText = user32.func('int GetWindowTextW(void *, void *, int)')
+  const enumerate = user32.func('__stdcall', 'EnumWindows', 'int', [koffi.pointer(koffi.proto('int __stdcall ColdFixtureVisitor(void *, intptr_t)')), 'intptr_t'])
+  const close = user32.func('int PostMessageW(void *, uint32_t, uintptr_t, intptr_t)')
+  const exists = user32.func('int IsWindow(void *)')
+  const fixtureWindow = () => {
+    let found: bigint | undefined
+    enumerate((handle: bigint) => {
+      const buffer = Buffer.alloc(1024)
+      const length = titleText(handle, buffer, 512)
+      if (buffer.toString('utf16le', 0, length * 2) === 'WhyCode Launcher Child') found = handle
+      return 1
+    }, 0)
+    return found
+  }
+  for (const mode of ['success', 'capture-failure', 'title-mismatch', 'cancel'] as const) {
+    await t.test(`启动器退出、子进程延迟显示窗口：${mode}`, async t => {
+      const before = foreground()
+      const observed = new Set<bigint | null>()
+      const observer = setInterval(() => observed.add(foreground()), 5)
+      const controller = new AbortController()
+      const cancel = mode === 'cancel' ? setInterval(() => {
+        if (fixtureWindow()) controller.abort()
+      }, 20) : undefined
+      let window: bigint | undefined
+      try {
+        const capture = withWindowsScreenshotWindow(
+          mode === 'title-mismatch' || mode === 'cancel' ? 'Unmatched Fixture Title' : 'WhyCode Launcher Child',
+          launcher, controller.signal, async source => {
+            window = BigInt(source.id)
+            assert.equal(source.launched, true)
+            assert.equal(fixtureWindow(), window)
+            const color = [0], alpha = [255], flags = [0]
+            assert.ok(layer(window, color, alpha, flags))
+            assert.equal(alpha[0], 0)
+            assert.equal(foreground(), before)
+            assert.ok(visible(window))
+            assert.equal(minimized(window), 0)
+            if (mode === 'capture-failure') throw new Error('Fixture frame failed')
+            return 'child frame'
+          },
+        )
+        if (mode === 'success') assert.equal(await capture, 'child frame')
+        else await assert.rejects(capture, mode === 'capture-failure' ? /Fixture frame failed/ : mode === 'cancel' ? /取消/ : /未出现匹配/)
+        window = fixtureWindow()
+        assert.ok(window, '匹配失败也应恢复已启动的子进程窗口')
+        assert.ok(minimized(window))
+        assert.equal(Number(style(window, -20)) & (0x80000 | 0x08000000 | 0x20), 0)
+        if ([...observed].some(handle => handle !== before)) {
+          t.diagnostic('应用在窗口事件送达前发生过瞬时激活；WinEvent 为异步观察，不能把最终恢复等同于从未抢焦点。')
+        }
+        assert.equal(foreground(), before)
+      } finally {
+        clearInterval(observer)
+        clearInterval(cancel)
+        for (let attempt = 0; attempt < 30 && !window; attempt++) {
+          window = fixtureWindow()
+          if (!window) await delay(50)
+        }
+        if (window) {
+          close(window, 0x10, 0, 0)
+          for (let attempt = 0; attempt < 50 && exists(window); attempt++) await delay(50)
+          assert.equal(exists(window), 0)
+        }
+      }
+    })
+  }
+  await t.test('窗口建立前取消启动，不留下迟到弹窗或自有子进程', async () => {
+    const marker = path.join(directory, 'app/started')
+    await rm(marker, { force: true })
+    const controller = new AbortController()
+    const capture = assert.rejects(withWindowsScreenshotWindow('WhyCode Launcher Child', launcher, controller.signal,
+      async () => assert.fail('取消的启动不应进入截图')), /取消/)
+    try {
+      let started = false
+      for (let attempt = 0; attempt < 100 && !started; attempt++) {
+        started = await readFile(marker, 'utf8').then(() => true, () => false)
+        if (!started) await delay(20)
+      }
+      assert.ok(started, '确实启动子程序后再取消')
+    } finally { controller.abort() }
+    await capture
+    await delay(600)
+    assert.equal(fixtureWindow(), undefined)
   })
 })
 

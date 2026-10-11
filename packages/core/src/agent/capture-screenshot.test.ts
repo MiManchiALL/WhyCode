@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -24,6 +24,52 @@ const ONE_PIXEL_PNG = Buffer.from(
 )
 
 describe('CaptureScreenshot Agent 链路', () => {
+  it('同一步的修改、截图、再修改按原顺序执行，图片随各自结果交给下一轮模型', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-capture-order-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const projectDir = join(root, 'project')
+    await mkdir(projectDir)
+    const journal = await new SessionStore(join(root, 'sessions')).create({
+      workspace: localWorkspace(projectDir), modelId: 'test:vision',
+    })
+    const calls = [
+      ['WriteFile', { path: 'view.txt', content: 'before' }],
+      [CAPTURE_SCREENSHOT_TOOL_NAME, { target: 'window', window_title: 'Fixture' }],
+      ['WriteFile', { path: 'view.txt', content: 'after' }],
+      [CAPTURE_SCREENSHOT_TOOL_NAME, { target: 'window', window_title: 'Fixture' }],
+    ] as const
+    let step = 0
+    const model = new MockLanguageModelV4({ doStream: async options => {
+      if (step++ === 0) return { stream: simulateReadableStream({ chunks: [
+        ...calls.map(([toolName, input], index) => ({ type: 'tool-call' as const, toolCallId: `call-${index}`, toolName, input: JSON.stringify(input) })),
+        { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: usage() },
+      ] }) }
+      const results = options.prompt.flatMap(message => message.role === 'tool'
+        ? message.content.filter(part => part.type === 'tool-result') : [])
+      assert.deepEqual(results.map(result => result.toolCallId), ['call-0', 'call-1', 'call-2', 'call-3'])
+      for (const index of [1, 3]) assert.ok(JSON.stringify(results[index]).includes(ONE_PIXEL_PNG.toString('base64')))
+      return finalStep('已检查修改前后截图。')
+    } })
+    const frames: string[] = []
+    const session = new AgentSession({
+      model: modelEntry(model), providerConfig: { apiKey: 'test' }, sessionRecorder: journal,
+      promptContext: { projectDir, osPlatform: 'win32' }, emit: () => {},
+      requestApproval: async () => { throw new Error('自动档不应审批') },
+      captureScreenshot: async () => {
+        const content = await readFile(join(projectDir, 'view.txt'), 'utf8')
+        // 跨越事件循环后仍应是同一版本，后续写入不能越过截图屏障。
+        await new Promise(resolve => setTimeout(resolve, 30))
+        assert.equal(await readFile(join(projectDir, 'view.txt'), 'utf8'), content)
+        frames.push(content)
+        return { name: 'window.png', bytes: ONE_PIXEL_PNG, description: content }
+      },
+    })
+    session.setPermissionMode('auto')
+    assert.equal(await session.handleUserMessage('在同一步依次修改和截图'), 'completed')
+    assert.deepEqual(frames, ['before', 'after'])
+    assert.equal(step, 2)
+  })
+
   it('以 target 为准规范化兼容提供商补齐的无关可选字段', () => {
     const schema = createScreenshotCaptureRequestSchema(false)
     const region = { x: 100, y: 200, width: 300, height: 400 }

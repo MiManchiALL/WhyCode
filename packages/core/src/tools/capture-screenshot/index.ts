@@ -139,7 +139,6 @@ export function createCaptureScreenshotTool(options: {
     inputSchema,
     isReadOnly: false,
     kind: 'execute',
-    requiresStandaloneStep: true,
     extractPaths: input => input.application_path ? [input.application_path] : [],
     initialApprovalReason: '截图会读取可能包含敏感内容的应用，并可能临时恢复窗口或启动指定应用',
     async execute(input, ctx) {
