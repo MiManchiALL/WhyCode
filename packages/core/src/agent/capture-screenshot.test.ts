@@ -11,7 +11,10 @@ import { SessionStore } from '../session/store.ts'
 import {
   CAPTURE_SCREENSHOT_TOOL_NAME,
   createScreenshotCaptureRequestSchema,
+  createCaptureScreenshotTool,
 } from '../tools/capture-screenshot/index.ts'
+import { checkToolAuthorization } from '../permissions/engine.ts'
+import { createPermissionContext } from '../permissions/types.ts'
 import { AgentSession } from './session.ts'
 import { localWorkspace } from '../workspace/types.ts'
 
@@ -29,6 +32,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       target: 'screen',
       display_id: 'primary',
       window_title: 'WhyCode',
+      application_path: 'C:\\Applications\\Example.exe',
       region,
       detail: 'high',
     }), {
@@ -58,6 +62,28 @@ describe('CaptureScreenshot Agent 链路', () => {
     }), /1000/)
   })
 
+  it('冷启动只接受程序绝对路径，不能夹带命令参数', () => {
+    const schema = createScreenshotCaptureRequestSchema(false)
+    const request = { target: 'window', window_title: 'Example', application_path: 'C:\\Apps\\Example.exe' }
+    assert.equal(schema.parse(request).application_path, request.application_path)
+    for (const application_path of ['Example.exe', 'C:\\Apps\\Example.exe --run', 'C:\\Apps\\Example.cmd']) {
+      assert.throws(() => schema.parse({ ...request, application_path }), /application_path/)
+    }
+  })
+
+  it('启动应用沿用执行权限，只读档不能借截图绕过，自动档仍无需审批', async () => {
+    const tool = createCaptureScreenshotTool({ attachmentDirectory: '.', sessionId: 'permissions', capture: async () => { throw new Error('unused') } })
+    const input = { target: 'window', window_title: 'Example', application_path: 'C:\\Apps\\Example.exe' }
+    const context = createPermissionContext('C:\\project')
+    context.mode = 'readonly'
+    context.sessionAllowedTools.push(tool.name)
+    assert.equal((await checkToolAuthorization(tool, input, context)).behavior, 'deny')
+    context.mode = 'auto'
+    assert.equal((await checkToolAuthorization(tool, input, context)).behavior, 'allow')
+    context.mode = 'default'
+    assert.equal((await checkToolAuthorization(tool, input, context)).behavior, 'ask')
+  })
+
   it('受管默认工作区的视觉 Main 可截图，首次隐私审批记住后形成截图—再截图闭环', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-screen-'))
     try {
@@ -72,7 +98,8 @@ describe('CaptureScreenshot Agent 链路', () => {
           assert.ok(screenshotTool?.type === 'function')
           assert.match(screenshotTool.description ?? '', /先截图建立基线.*修改.*再截图验证/)
           assert.match(screenshotTool.description ?? '', /单个应用.*window_title/)
-          assert.match(screenshotTool.description ?? '', /保持打开且未最小化/)
+          assert.match(screenshotTool.description ?? '', /临时透明恢复最小化\/隐藏窗口/)
+          assert.match(screenshotTool.description ?? '', /application_path/)
           assert.match(screenshotTool.description ?? '', /target=screen.*region/)
           assert.doesNotMatch(screenshotTool.description ?? '', /Main|排除 WhyCode|target=region/)
           if (call === 1) return toolStep({ target: 'screen' })

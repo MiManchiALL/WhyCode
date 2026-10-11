@@ -4,6 +4,7 @@ import {
   type Display,
   type NativeImage,
 } from 'electron'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   SCREENSHOT_REGION_SCALE,
   type ScreenshotCaptureRequest,
@@ -15,6 +16,7 @@ import {
   selectDisplaySource,
   selectWindowSource,
 } from './screenshot-selection.ts'
+import { withWindowsScreenshotWindow } from './windows-screenshot.ts'
 
 const MAX_CAPTURE_DIMENSION = 7_680
 const MAX_CAPTURE_PIXELS = 20_000_000
@@ -66,19 +68,39 @@ async function captureWindow(
   request: ScreenshotCaptureRequest,
   abortSignal: AbortSignal,
 ): Promise<ScreenshotCaptureResult> {
+  if (!request.window_title) throw new Error('窗口截图必须提供 window_title')
+  if (process.platform === 'win32') {
+    return withWindowsScreenshotWindow(request.window_title, request.application_path, abortSignal,
+      async (selected, captureSignal) => captureWindowSource(selected.id, selected.launched, captureSignal, selected.size))
+  }
+  if (request.application_path) throw new Error('应用后台启动截图目前仅支持 Windows')
   const lightweight = await desktopCapturer.getSources({
     types: ['window'],
     thumbnailSize: { width: 0, height: 0 },
   })
-  if (!request.window_title) throw new Error('窗口截图必须提供 window_title')
   const selected = selectWindowSource(lightweight, request.window_title)
-  throwIfAborted(abortSignal)
-  const sources = await desktopCapturer.getSources({
-    types: ['window'],
-    thumbnailSize: { width: MAX_CAPTURE_DIMENSION, height: MAX_CAPTURE_DIMENSION },
-  })
-  throwIfAborted(abortSignal)
-  const source = sources.find((candidate) => candidate.id === selected.id)
+  return captureWindowSource(selected.id, false, abortSignal)
+}
+
+async function captureWindowSource(
+  id: string,
+  launched: boolean,
+  abortSignal: AbortSignal,
+  size = { width: MAX_CAPTURE_DIMENSION, height: MAX_CAPTURE_DIMENSION },
+): Promise<ScreenshotCaptureResult> {
+  let source: Electron.DesktopCapturerSource | undefined
+  // 显示状态就绪早于合成器首帧；仅等待同一窗口的有效帧，不切前台或扩大截图范围。
+  for (let attempt = 0; attempt < 10; attempt++) {
+    throwIfAborted(abortSignal)
+    const sources = await desktopCapturer.getSources({
+      types: ['window'], thumbnailSize: fitImageSize(size, MAX_CAPTURE_DIMENSION, MAX_CAPTURE_PIXELS),
+    })
+    throwIfAborted(abortSignal)
+    source = sources.find(candidate => process.platform === 'win32'
+      ? candidate.id.startsWith(`window:${id}:`) : candidate.id === id)
+    if (source && !source.thumbnail.isEmpty()) break
+    if (attempt < 9) await delay(100, undefined, { signal: abortSignal })
+  }
   if (!source || source.thumbnail.isEmpty()) {
     throw new Error('系统没有返回所选窗口画面；窗口可能已关闭、最小化或缺少屏幕录制权限')
   }
@@ -86,7 +108,7 @@ async function captureWindow(
   return {
     name: screenshotName('window'),
     bytes: encoded.bytes,
-    description: `已截取窗口「${source.name}」${encoded.resized ? '；为满足 20 MB 附件上限已等比缩小' : ''}`,
+    description: `已截取窗口「${source.name}」${launched ? '；本次按需启动应用' : ''}${encoded.resized ? '；为满足 20 MB 附件上限已等比缩小' : ''}`,
   }
 }
 

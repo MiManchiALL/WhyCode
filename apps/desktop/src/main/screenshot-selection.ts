@@ -18,6 +18,16 @@ export function selectWindowSource<T extends ScreenshotSourceLike>(
   sources: readonly T[],
   windowTitle: string,
 ): T {
+  const selected = findWindowSource(sources, windowTitle)
+  if (selected) return selected
+  const available = sources.slice(0, 8).map((source) => source.name).filter(Boolean)
+  throw new Error(`找不到窗口「${windowTitle}」${available.length ? `；可用窗口：${available.join('、')}` : ''}`)
+}
+
+export function findWindowSource<T extends ScreenshotSourceLike>(
+  sources: readonly T[],
+  windowTitle: string,
+): T | undefined {
   const wanted = windowTitle.trim().toLocaleLowerCase()
   if (!wanted) throw new Error('窗口标题不能为空')
   const exact = sources.filter((source) => source.name.toLocaleLowerCase() === wanted)
@@ -27,8 +37,7 @@ export function selectWindowSource<T extends ScreenshotSourceLike>(
   if (exact.length > 1 || partial.length > 1) {
     throw new Error(`窗口标题不唯一：${(exact.length ? exact : partial).map((source) => source.name).join('、')}`)
   }
-  const available = sources.slice(0, 8).map((source) => source.name).filter(Boolean)
-  throw new Error(`找不到窗口「${windowTitle}」${available.length ? `；可见窗口：${available.join('、')}` : ''}`)
+  return undefined
 }
 
 export function regionCrop(

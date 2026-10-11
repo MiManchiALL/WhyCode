@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { win32 } from 'node:path'
 import {
   prepareImageAttachmentForModel,
   removeImageAttachmentFiles,
@@ -46,6 +47,8 @@ export function createScreenshotCaptureRequestSchema(supportsOriginalDetail: boo
       .describe('screen 使用的显示器 ID；省略时使用主显示器'),
     window_title: z.string().trim().max(500).optional()
       .describe('window 必须提供的窗口完整标题或唯一子串'),
+    application_path: z.string().trim().max(4096).optional()
+      .describe('仅 Windows window：应用未打开时使用的 .exe 绝对路径，不含参数；已打开时不启动'),
     region: regionSchema.optional()
       .describe('screen 的可选裁剪区域，使用相对显示器的 0～1000 标准化坐标'),
     detail: (supportsOriginalDetail
@@ -63,6 +66,7 @@ function validateScreenshotRequest(
     display_id?: string
     region?: unknown
     window_title?: string
+    application_path?: string
   },
   ctx: z.RefinementCtx,
 ): void {
@@ -73,6 +77,10 @@ function validateScreenshotRequest(
       message: '窗口截图必须提供 window_title',
     })
   }
+  if (input.target === 'window' && input.application_path
+    && (!win32.isAbsolute(input.application_path) || !/\.exe$/i.test(input.application_path))) {
+    ctx.addIssue({ code: 'custom', path: ['application_path'], message: 'application_path 必须是 .exe 绝对路径，不含参数' })
+  }
 }
 
 function normalizeScreenshotRequest<T extends {
@@ -80,6 +88,7 @@ function normalizeScreenshotRequest<T extends {
   display_id?: string
   region?: unknown
   window_title?: string
+  application_path?: string
 }>(input: T): T {
   const normalized = { ...input }
 
@@ -91,8 +100,10 @@ function normalizeScreenshotRequest<T extends {
     delete normalized.region
   } else {
     delete normalized.window_title
+    delete normalized.application_path
   }
   if (!normalized.display_id) delete normalized.display_id
+  if (!normalized.application_path) delete normalized.application_path
 
   return normalized
 }
@@ -126,10 +137,11 @@ export function createCaptureScreenshotTool(options: {
     description: '截取应用窗口或显示器画面并进行视觉检查',
     prompt: captureScreenshotPrompt(options.supportsOriginalDetail === true),
     inputSchema,
-    isReadOnly: true,
-    kind: 'read',
+    isReadOnly: false,
+    kind: 'execute',
     requiresStandaloneStep: true,
-    initialApprovalReason: '截图会读取屏幕上其它应用可能包含的敏感内容',
+    extractPaths: input => input.application_path ? [input.application_path] : [],
+    initialApprovalReason: '截图会读取可能包含敏感内容的应用，并可能临时恢复窗口或启动指定应用',
     async execute(input, ctx) {
       const captured = await options.capture(input, ctx.abortSignal)
       const attachments = await importImageAttachments(

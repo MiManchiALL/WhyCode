@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   fitImageSize,
+  findWindowSource,
   regionCrop,
   selectDisplaySource,
   selectWindowSource,
@@ -34,6 +35,9 @@ describe('桌面截图源选择', () => {
     assert.equal(selectWindowSource(sources, 'Project A').id, 'window:1')
     assert.throws(() => selectWindowSource(sources, 'WhyCode'), /标题不唯一/)
     assert.throws(() => selectWindowSource(sources, '   '), /标题不能为空/)
+    assert.equal(findWindowSource(sources, 'Missing application'), undefined)
+    assert.throws(() => findWindowSource(sources, 'WhyCode'), /标题不唯一/)
+    assert.throws(() => selectWindowSource(sources, 'Missing application'), /找不到窗口/)
   })
 })
 

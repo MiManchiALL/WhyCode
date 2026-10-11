@@ -32,6 +32,7 @@
     "diff": "9.0.0",
     "ipaddr.js": "2.4.0",
     "katex": "0.16.47",
+    "koffi": "3.3.3",
     "lexical": "0.42.0",
     "linkedom": "0.18.13",
     "lucide-react": "1.28.0",

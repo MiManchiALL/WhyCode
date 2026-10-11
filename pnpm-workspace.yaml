@@ -13,6 +13,7 @@ allowBuilds:
   esbuild: true
   electron: true
   node-pty: true
+  koffi: true
   cpu-features: false
   ssh2: false
 minimumReleaseAgeExclude:
