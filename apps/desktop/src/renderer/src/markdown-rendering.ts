@@ -1,16 +1,28 @@
 import type { Nodes } from 'mdast'
 import { cjk } from '@streamdown/cjk'
 import { createMathPlugin } from '@streamdown/math'
+import remarkCjkStrikethrough from 'remark-cjk-friendly-gfm-strikethrough'
 import remarkFrontmatter from 'remark-frontmatter'
 import remarkParse from 'remark-parse'
-import { unified } from 'unified'
+import { unified, type Pluggable } from 'unified'
 import { defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown'
 import { rehypeSourceCitations, remarkSourceCitations } from './markdown-sources.ts'
 import { remarkMathSyntax } from './markdown-math.ts'
 
-const BASE_MARKDOWN_PLUGINS = { cjk } as const
+// GFM 和中文扩展各自注册删除线语法，两处都必须保留数值范围中的单波浪号。
+const CJK_REMARK_PLUGINS_AFTER = cjk.remarkPluginsAfter.map(plugin =>
+  plugin === remarkCjkStrikethrough ? doubleTildeOnly(plugin) : plugin,
+)
+const MARKDOWN_CJK = {
+  ...cjk,
+  remarkPluginsAfter: CJK_REMARK_PLUGINS_AFTER,
+  remarkPlugins: [...cjk.remarkPluginsBefore, ...CJK_REMARK_PLUGINS_AFTER],
+}
+const BASE_MARKDOWN_PLUGINS = { cjk: MARKDOWN_CJK } as const
 const STREAMING_REMARK_PLUGINS = [
-  ...Object.values(defaultRemarkPlugins),
+  ...Object.entries(defaultRemarkPlugins).map(([name, plugin]) =>
+    name === 'gfm' ? doubleTildeOnly(plugin) : plugin,
+  ),
   remarkSourceCitations,
 ]
 const MARKDOWN_REMARK_PLUGINS = [...STREAMING_REMARK_PLUGINS, remarkFrontmatter]
@@ -22,8 +34,13 @@ const SETTLED_MARKDOWN_PLUGINS = {
 } as const
 
 const MARKDOWN_PARSER = unified().use(remarkParse)
-  .use(cjk.remarkPluginsBefore).use(MARKDOWN_REMARK_PLUGINS).use(cjk.remarkPluginsAfter)
+  .use(MARKDOWN_CJK.remarkPluginsBefore).use(MARKDOWN_REMARK_PLUGINS).use(MARKDOWN_CJK.remarkPluginsAfter)
   .use([SETTLED_MARKDOWN_PLUGINS.math.remarkPlugin])
+
+function doubleTildeOnly(plugin: Pluggable): Pluggable {
+  if (Array.isArray(plugin)) return [plugin[0], { ...plugin[1], singleTilde: false }]
+  return typeof plugin === 'function' ? [plugin, { singleTilde: false }] : plugin
+}
 
 export function parseMarkdown(text: string) {
   return MARKDOWN_PARSER.parse(text)

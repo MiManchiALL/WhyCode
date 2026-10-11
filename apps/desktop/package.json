@@ -42,6 +42,7 @@
     "node-html-markdown": "2.0.0",
     "node-pty": "1.1.0",
     "pdfjs-dist": "6.2.108",
+    "remark-cjk-friendly-gfm-strikethrough": "2.3.1",
     "remark-frontmatter": "5.0.0",
     "remark-parse": "11.0.0",
     "shiki": "3.23.0",

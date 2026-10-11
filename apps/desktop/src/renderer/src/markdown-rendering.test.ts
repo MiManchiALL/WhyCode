@@ -9,9 +9,55 @@ import {
   markdownRemarkPlugins,
   MARKDOWN_REHYPE_PLUGINS,
   normalizeMathDelimiters,
+  parseMarkdown,
 } from './markdown-rendering.ts'
 
 describe('Markdown 渲染', () => {
+  it('同段的近似值与数值范围不会跨正文形成删除线', () => {
+    const source = '快速恢复的窗口约为（~90 ms）；**中断时间延长到 100 ms** 后，需要 6~7 秒完成重训练。'
+    for (const streaming of [true, false]) {
+      const document = renderedDocument(source, streaming)
+      assert.equal(document.querySelectorAll('del').length, 0)
+      assert.equal(document.body.textContent, source.replaceAll('**', ''))
+      assert.equal(document.querySelector('[data-streamdown="strong"]')?.textContent, '中断时间延长到 100 ms')
+    }
+    assert.doesNotMatch(JSON.stringify(parseMarkdown(source)), /"type":"delete"/u)
+  })
+
+  it('逐段接收单波浪号时保持原文，双波浪号仍支持中英文删除线', () => {
+    const source = '大约 ~90 ms，范围 6~7 秒；保留~~“旧方案”~~，以及 ~~obsolete~~。'
+    const ordinary = source.slice(0, source.indexOf('；'))
+    for (let end = 1; end <= ordinary.length; end++) {
+      const document = renderedDocument(ordinary.slice(0, end), true)
+      assert.equal(document.querySelectorAll('del').length, 0, `流式位置 ${end}`)
+      assert.equal(document.body.textContent, ordinary.slice(0, end).trimEnd())
+    }
+    for (const streaming of [true, false]) {
+      const document = renderedDocument(source, streaming)
+      assert.deepEqual([...document.querySelectorAll('del')].map(node => node.textContent), ['“旧方案”', 'obsolete'])
+      assert.equal(document.body.textContent, source.replaceAll('~~', ''))
+    }
+    assert.match(JSON.stringify(parseMarkdown('保留~~“旧方案”~~')), /"type":"delete"/u)
+  })
+
+  it('单波浪号配置不改写代码、转义、链接和表格中的字面值', () => {
+    const source = [
+      '代码 `~90 ms；6~7 秒`，转义 \\~原文\\~，[~90 ms；6~7 秒](https://example.com/~user)。',
+      '',
+      '| 近似值 | 范围 |',
+      '| --- | --- |',
+      '| ~90 ms | 6~7 秒 |',
+    ].join('\n')
+    for (const streaming of [true, false]) {
+      const document = renderedDocument(source, streaming)
+      assert.equal(document.querySelectorAll('del').length, 0)
+      assert.equal(document.querySelector('code')?.textContent, '~90 ms；6~7 秒')
+      assert.equal(document.querySelector('a')?.getAttribute('href'), 'https://example.com/~user')
+      assert.match(document.body.textContent, /转义 ~原文~/u)
+      assert.deepEqual([...document.querySelectorAll('td')].map(node => node.textContent), ['~90 ms', '6~7 秒'])
+    }
+  })
+
   it('美元金额不跨加粗边界形成公式，保留引用与整句文字', () => {
     const source = '计价标注为 **$42 每 10 亿（Billion）输入 Token**（即 $0.042/M tokens），且输出不计费 '
       + '[官网](https://example.com/pricing "whycode:source")。'
