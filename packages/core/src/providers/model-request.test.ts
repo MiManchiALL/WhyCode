@@ -1,9 +1,42 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { APICallError } from 'ai'
-import { emptyModelResponse, ModelRequestError, modelRequestError, withModelRequestRetry } from './model-request.ts'
+import {
+  emptyModelResponse, ModelContextOverflowError, ModelRequestError, modelRequestError,
+  readModelStream, withModelRequestRetry,
+} from './model-request.ts'
 
 describe('模型请求统一重试', () => {
+  it('明确的上下文超限与普通参数、文件大小、配额和输出限制分别分类', async () => {
+    for (const [statusCode, detail, expected] of [
+      [400, { code: 'context_length_exceeded', message: 'Too many tokens' }, true],
+      [400, { message: 'This model has a maximum context length of 100000 tokens.' }, true],
+      [400, { type: 'invalid_request_error', message: 'prompt is too long: 210000 > 200000' }, true],
+      [400, { message: 'The input token count (110000) exceeds the maximum number of tokens allowed (100000).' }, true],
+      [413, { message: 'Request entity too large' }, false],
+      [400, { message: 'max_tokens exceeds maximum output tokens' }, false],
+      [400, { message: 'Invalid tool schema' }, false],
+      [429, { message: 'Token quota exceeded' }, false],
+      [401, { message: 'context_length_exceeded' }, false],
+    ] as const) {
+      const error = modelRequestError(new APICallError({
+        message: 'Model request failed', url: 'http://localhost/model', requestBodyValues: {},
+        statusCode, responseBody: JSON.stringify({ error: detail }),
+      }))
+      assert.equal(error instanceof ModelContextOverflowError, expected, JSON.stringify(detail))
+      if (expected) {
+        assert.equal(error.retryable, false, '不能直接重发同一份上下文')
+        assert.equal(modelRequestError(new Error('wrapper', { cause: error })), error)
+      }
+    }
+    const stream = async function* () {
+      yield { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long' } }
+    }
+    await assert.rejects(async () => {
+      for await (const _part of readModelStream(stream())) { /* 错误块不能透传。 */ }
+    }, ModelContextOverflowError)
+  })
+
   it('空答复和网络失败共用三次预算，保留最后一次失败原因', async () => {
     let calls = 0
     const retries: number[] = []

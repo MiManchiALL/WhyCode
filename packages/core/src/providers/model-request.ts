@@ -4,6 +4,14 @@ import { modelRequestDetail, modelRequestMessage } from './model-request-message
 
 export const MODEL_REQUEST_MAX_RETRIES = 3
 
+const CONTEXT_OVERFLOW_PATTERNS = [
+  /\bcontext[_ ](?:length|window)[_ ]exceeded\b/iu,
+  /\b(?:maximum|max) context length\b/iu,
+  /\bprompt is too long\b/iu,
+  /\binput token count\b.*\bexceeds?\b.*\bmaximum\b/iu,
+  /\binput (?:length|tokens?)\b.*\bexceeds?\b.*\bcontext (?:length|window)\b/iu,
+]
+
 export interface ModelRequestRetry {
   retry: number
   maxRetries: number
@@ -12,7 +20,7 @@ export interface ModelRequestRetry {
 }
 
 export class ModelRequestError extends Error {
-  override readonly name = 'ModelRequestError'
+  override readonly name: string = 'ModelRequestError'
   readonly retryable: boolean
   readonly retryAfterMs: number | undefined
 
@@ -28,6 +36,15 @@ export class ModelRequestError extends Error {
   }
 }
 
+/** 模型明确拒绝了上下文大小；普通网络重试不能缩小请求。 */
+export class ModelContextOverflowError extends ModelRequestError {
+  override readonly name = 'ModelContextOverflowError'
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, false, undefined, options)
+  }
+}
+
 /** 只在模型 I/O 边界分类；本地工具、持久化和用户取消不能进入请求重试。 */
 export function modelRequestError(error: unknown): ModelRequestError {
   const causes = new Set<unknown>()
@@ -38,25 +55,31 @@ export function modelRequestError(error: unknown): ModelRequestError {
     current = current.cause
   }
   const detail = modelRequestDetail(error)
-  if (APICallError.isInstance(error)) {
-    const status = error.statusCode
-    const quota = /insufficient[_ ](?:quota|balance)|quota[_ ]exceeded|余额不足|欠费/iu.test(`${detail} ${error.message}`)
-    const retryable = !quota && (status === undefined ? error.isRetryable
+  const apiError = APICallError.isInstance(error) ? error : undefined
+  const status = apiError?.statusCode
+  const headers = apiError?.responseHeaders
+  const message = modelRequestMessage(detail, status, headers?.['x-request-id'] ?? headers?.['request-id'])
+  // 仅识别供应商明确的上下文错误，不把通用 400/413、输出上限或速率配额当成可压缩历史。
+  if ((status === undefined || [400, 413, 422].includes(status))
+    && CONTEXT_OVERFLOW_PATTERNS.some(pattern => pattern.test(detail))) {
+    return new ModelContextOverflowError(message, { cause: error })
+  }
+  if (apiError) {
+    const quota = /insufficient[_ ](?:quota|balance)|quota[_ ]exceeded|余额不足|欠费/iu.test(`${detail} ${apiError.message}`)
+    const retryable = !quota && (status === undefined ? apiError.isRetryable
       : status === 408 || status === 429 || (status >= 500 && status <= 599))
-    const headers = error.responseHeaders
-    const requestId = headers?.['x-request-id'] ?? headers?.['request-id']
     const retryAfter = headers?.['retry-after']
     const retryAfterMs = retryAfter === undefined ? undefined
       : Number.isFinite(Number(retryAfter)) ? Math.max(0, Number(retryAfter) * 1000)
         : Math.max(0, Date.parse(retryAfter) - Date.now())
     return new ModelRequestError(
-      modelRequestMessage(detail, status, requestId),
+      message,
       retryable,
       Number.isFinite(retryAfterMs) ? retryAfterMs : undefined,
       { cause: error },
     )
   }
-  return new ModelRequestError(modelRequestMessage(detail), false, undefined, { cause: error })
+  return new ModelRequestError(message, false, undefined, { cause: error })
 }
 
 export function emptyModelResponse(finishReason?: string | null): ModelRequestError {

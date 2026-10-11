@@ -98,7 +98,13 @@ import {
 import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
-import { emptyModelResponse, readModelStream, withModelRequestRetry } from '../providers/model-request.ts'
+import {
+  emptyModelResponse,
+  ModelContextOverflowError,
+  ModelRequestError,
+  readModelStream,
+  withModelRequestRetry,
+} from '../providers/model-request.ts'
 import {
   createTaskPlanTools,
   type TaskPlanEngagementAction,
@@ -177,6 +183,15 @@ const BOUNDED_MAX_STEPS = 40
 const FINALIZATION_RESERVE_STEPS = 5
 const TASK_PROGRESS_REMINDER_STEPS = 10
 const MAX_COMPACT_FAILURES = 3
+
+interface PreparedRequestContext {
+  dateReminder: ModelMessage | null
+  persistentMessages: ModelMessage[]
+  messages: ModelMessage[]
+  projectionDelta: number
+  requestProjectionDelta: number
+  usedTokens: number
+}
 
 interface ToolStepContext {
   emit: (event: CoreEvent) => void
@@ -371,6 +386,8 @@ export class AgentSession {
     /** API usage 已含的 System / 工具开销，以及请求投影相对长期消息的差值。 */
     overheadTokens: number
     projectionDelta: number
+    /** 含附件展开与 Provider 适配；空闲展示仍用不读取附件的逻辑投影差额。 */
+    requestProjectionDelta: number
   }) | null = null
   /** 仅在当前 turn 内存在，用于请求投影和上下文估算；从不写入 transcript。 */
   private activeSubagentTurnState: SubagentTurnState | null = null
@@ -1834,8 +1851,6 @@ export class AgentSession {
           stepsSincePlanReminder = 0
         }
         await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
-        await this.prepareContextUsage()
-        await this.compactIfNeeded(abortSignal, planExecutionEngaged, turnId)
         if (this.hasPendingMessages()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
           if (injectedUserMessage) steeringDecisionPending = true
@@ -1856,7 +1871,6 @@ export class AgentSession {
             && !this.options.promptContext.discussion
             && !this.protocolRound,
           steeringDecisionPending || hasOutstandingSubagentActivations(subagentState),
-          subagentState,
         )
         // UpdateTaskItem 只是把暂停前的真实进度写稳；让下一次最终文本继续决定是否结束。
         // 其它任何工具均表示模型选择继续实质处理，仍按原逻辑消费本窗口。
@@ -2169,15 +2183,15 @@ export class AgentSession {
   }
 
   /**
-   * 上下文压缩检查（每次模型请求前，文档一 §3.4）：
+   * 以最终请求的计量检查压缩（文档三 §1.9）；明确超限时允许绕过估算阈值。
    * 超阈值 → 先微清理（零成本）→ 仍超 → 全量摘要压缩；连续失败熔断。
    */
   private async compactIfNeeded(
+    prepared: PreparedRequestContext,
     abortSignal: AbortSignal,
     planExecutionEngaged: boolean,
-    turnId: string,
-  ): Promise<void> {
-    const { emit } = this.options
+    force: boolean,
+  ): Promise<PreparedRequestContext> {
     const model = this.currentModelSelection().model
     const threshold = autoCompactThreshold(model.capabilities)
     const skillTokens = this.skillTurn.injectedContextTokenEstimate()
@@ -2186,77 +2200,69 @@ export class AgentSession {
         `当前选择的 Skill 内容约 ${skillTokens} tokens，超过该模型单次任务的上下文预算；请减少选择或缩短 SKILL.md`,
       )
     }
-    let estimate = this.estimateCurrentContextTokens()
-    if (estimate < threshold || this.compactFailures >= MAX_COMPACT_FAILURES) return
+    if (!force && (prepared.usedTokens < threshold || this.compactFailures >= MAX_COMPACT_FAILURES)) {
+      return prepared
+    }
 
-    const preTokens = estimate
+    let request = prepared
     // 第一级：微清理旧工具输出（改写历史后基线失效，全量重估）
-    const microcompacted = this.microcompactCurrentMessages()
-    if (microcompacted) {
-      estimate = this.estimateCurrentContextTokens()
-      if (estimate < threshold) {
+    if (this.microcompactCurrentMessages()) {
+      request = await this.commitAutoCompaction('micro', prepared.usedTokens, abortSignal)
+      if (force
+        ? estimateMessagesTokens(request.messages) < estimateMessagesTokens(prepared.messages)
+        : request.usedTokens < threshold) {
         this.compactFailures = 0
-        await this.commitAutoMicrocompaction(preTokens, turnId)
-        return
+        return request
       }
     }
 
     // 第二级：全量摘要压缩
+    let result: Awaited<ReturnType<typeof compactMessages>>
     try {
-      const result = await compactMessages(
+      result = await compactMessages(
         this.createLanguageModel(),
         withoutMcpToolState(this.messages),
         [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
         abortSignal,
-        this.compactApplicationContext(planExecutionEngaged, turnId),
+        this.compactApplicationContext(planExecutionEngaged, this.activeTurn!.id),
         (messages) => this.messagesForCurrentModel(messages, abortSignal, false),
         this.requestProviderOptions(),
         (retry) => this.options.emit({ type: 'model-request-retry', ...retry }),
         this.options.workspaceIO,
       )
-      if (!result.summaryText) {
-        this.recordAutoCompactFailure()
-        if (microcompacted) {
-          await this.commitAutoMicrocompaction(preTokens, turnId)
-        }
-        return
-      }
-      this.messages = carryMcpToolState(this.messages, result.messages)
-      await this.refreshProjectInstructions()
-      this.rebuildActivePdfAttachments()
-      await this.persist((recorder) =>
-        recorder.recordSnapshot(
-          'compact',
-          this.messages,
-          this.activeTurn?.id,
-          this.taskPlan?.stateSnapshot,
-        ),
-      )
-      this.tokenBaseline = null
-      this.compactFailures = 0
-      // 消息数组已重建：旧对话回滚锚点失效（仅文件回滚仍可用）
-      const postTokens = this.estimateCurrentContextTokens()
-      emit({ type: 'context-compacted', level: 'full', preTokens, postTokens })
-      this.emitContextUsage()
     } catch (error) {
       if (abortSignal.aborted) throw error
       this.recordAutoCompactFailure()
-      if (microcompacted) await this.commitAutoMicrocompaction(preTokens, turnId)
       // 失败不阻塞：请求可能仍能成功（估算偏保守）。
+      return request
     }
+    if (!result.summaryText) {
+      this.recordAutoCompactFailure()
+      return request
+    }
+    this.messages = carryMcpToolState(this.messages, result.messages)
+    await this.refreshProjectInstructions()
+    this.rebuildActivePdfAttachments()
+    this.tokenBaseline = null
+    this.compactFailures = 0
+    return this.commitAutoCompaction('full', request.usedTokens, abortSignal)
   }
 
-  private async commitAutoMicrocompaction(preTokens: number, turnId: string): Promise<void> {
-    await this.persist((recorder) =>
-      recorder.recordSnapshot('compact', this.messages, turnId, this.taskPlan?.stateSnapshot),
+  private async commitAutoCompaction(
+    level: 'micro' | 'full',
+    preTokens: number,
+    abortSignal: AbortSignal,
+  ): Promise<PreparedRequestContext> {
+    await this.persistRequired((recorder) =>
+      recorder.recordSnapshot('compact', this.messages, this.activeTurn!.id, this.taskPlan?.stateSnapshot),
+      '保存上下文压缩',
     )
+    const request = await this.prepareRequestContext(abortSignal)
     this.options.emit({
-      type: 'context-compacted',
-      level: 'micro',
-      preTokens,
-      postTokens: this.estimateCurrentContextTokens(),
+      type: 'context-compacted', level, preTokens, postTokens: request.usedTokens,
     })
-    this.emitContextUsage()
+    this.emitContextUsage(request.messages, request.usedTokens)
+    return request
   }
 
   private recordAutoCompactFailure(): void {
@@ -2298,7 +2304,10 @@ export class AgentSession {
     return sections.length > 0 ? sections.join('\n\n') : undefined
   }
 
-  private estimateCurrentContextTokens(messages: ModelMessage[] = this.messages): number {
+  private estimateCurrentContextTokens(
+    messages: ModelMessage[] = this.messages,
+    requestProjectionDelta?: number,
+  ): number {
     const fallbackOverheadTokens = this.contextOverhead
       ? this.contextOverhead.systemPromptTokens + this.contextOverhead.toolTokens
       : 0
@@ -2307,11 +2316,14 @@ export class AgentSession {
       this.tokenBaseline,
       fallbackOverheadTokens,
     )
-    const projectionDelta = estimateMessagesTokens(this.projectContextMessages(messages))
-      - estimateMessagesTokens(messages)
+    const projectionDelta = requestProjectionDelta
+      ?? estimateMessagesTokens(this.projectContextMessages(messages)) - estimateMessagesTokens(messages)
+    const baselineProjection = requestProjectionDelta === undefined
+      ? this.tokenBaseline?.projectionDelta
+      : this.tokenBaseline?.requestProjectionDelta
     return Math.max(
       0,
-      rawEstimate + projectionDelta - (this.tokenBaseline?.projectionDelta ?? 0)
+      rawEstimate + projectionDelta - (baselineProjection ?? 0)
         + (this.tokenBaseline ? fallbackOverheadTokens - this.tokenBaseline.overheadTokens : 0),
     )
   }
@@ -2326,6 +2338,29 @@ export class AgentSession {
         ...(subagentStateMessage ? [subagentStateMessage] : []),
       ]),
     )
+  }
+
+  private async prepareRequestContext(abortSignal: AbortSignal): Promise<PreparedRequestContext> {
+    abortSignal.throwIfAborted()
+    const dateReminder = currentDateReminder(this.messages, new Date())
+    const persistentMessages = [...this.messages, ...(dateReminder ? [dateReminder] : [])]
+    const subagentMessage = this.activeSubagentTurnState
+      ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
+      : null
+    const messages = await this.messagesForCurrentModel([
+      ...persistentMessages, ...(subagentMessage ? [subagentMessage] : []),
+    ], abortSignal)
+    abortSignal.throwIfAborted()
+    const persistentTokens = estimateMessagesTokens(persistentMessages)
+    const requestProjectionDelta = estimateMessagesTokens(messages) - persistentTokens
+    return {
+      dateReminder,
+      persistentMessages,
+      messages,
+      projectionDelta: estimateMessagesTokens(this.projectContextMessages(persistentMessages)) - persistentTokens,
+      requestProjectionDelta,
+      usedTokens: this.estimateCurrentContextTokens(persistentMessages, requestProjectionDelta),
+    }
   }
 
   private emitContextUsage(
@@ -2432,10 +2467,10 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
     preserveTaskPlanOnFinalText: boolean,
-    subagentTurnState: SubagentTurnState | null,
   ): Promise<StepResult> {
     const { emit } = this.options
     let uncommittedStepFailed = false
+    let contextRecoveryUsed = false
     const discardFailedStep = (retainOutput: boolean) => {
       if (!uncommittedStepFailed) return
       if (retainOutput) emit({ type: 'step-output-retained' })
@@ -2446,13 +2481,25 @@ export class AgentSession {
       return await this.runModelStep(turnAbortSignal, (event) => {
         discardFailedStep(false)
         emit(event)
-      }, (stepAbort) =>
-        this.runOneStepAttempt(
-          usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
-          preserveTaskPlanOnFinalText, subagentTurnState,
-          () => { uncommittedStepFailed = true },
-        ),
-      )
+      }, async (stepAbort) => {
+        const attempt = (recovery?: { error: ModelContextOverflowError; onRetry: () => void }) =>
+          this.runOneStepAttempt(
+            usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
+            preserveTaskPlanOnFinalText, () => { uncommittedStepFailed = true }, recovery,
+          )
+        try {
+          return await attempt()
+        } catch (error) {
+          if (contextRecoveryUsed || stepAbort.signal.aborted
+            || !(error instanceof ModelContextOverflowError)) throw error
+          contextRecoveryUsed = true
+          return attempt({ error, onRetry: () => {
+            discardFailedStep(false)
+            emit({ type: 'model-request-retry', retry: 1, maxRetries: 1, delayMs: 0,
+              message: '模型上下文超限，已压缩后重试' })
+          } })
+        }
+      })
     } catch (error) {
       // 重试决定落定后才撤销展示；最终失败或停止保留正文，立即插话仍撤回草稿。
       discardFailedStep(error !== 'interrupt')
@@ -2502,8 +2549,8 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
     preserveTaskPlanOnFinalText: boolean,
-    subagentTurnState: SubagentTurnState | null,
     onUncommittedFailure: () => void,
+    recovery?: { error: ModelContextOverflowError; onRetry: () => void },
   ): Promise<StepResult> {
     if (this.options.sessionRecorder && this.persistenceFailed) {
       throw new Error('会话持久化已不可用；为避免重复执行，当前模型步骤未启动')
@@ -2530,27 +2577,9 @@ export class AgentSession {
         this.messages,
         stepAbort.signal,
       ) ?? null
-      const dateReminder = currentDateReminder(this.messages, new Date())
-      const subagentTurnStateMessage = subagentTurnState
-        ? createSubagentTurnStateMessage(subagentTurnState)
-        : null
-      const persistentInputMessages = [
-        ...this.messages,
-        ...(dateReminder ? [dateReminder] : []),
-      ]
-      const modelInputMessages = [
-        ...persistentInputMessages,
-        ...(subagentTurnStateMessage ? [subagentTurnStateMessage] : []),
-      ]
-      const requestProjectionDelta = estimateMessagesTokens(this.projectContextMessages(persistentInputMessages))
-        - estimateMessagesTokens(persistentInputMessages)
       const requestSystemPrompt = buildSystemPrompt(
         this.options.promptContext,
         this.options.customSystemPrompt,
-      )
-      const requestMessages = await this.messagesForCurrentModel(
-        modelInputMessages,
-        stepAbort.signal,
       )
       const requestTools = this.buildToolSet(
         stepAbort.signal,
@@ -2575,12 +2604,22 @@ export class AgentSession {
         toolsForModel(requestTools),
       )
       this.contextOverhead = requestOverhead
-      const requestUsedTokens = this.tokenBaseline
-        ? this.estimateCurrentContextTokens(persistentInputMessages)
-        : requestOverhead.systemPromptTokens
-          + requestOverhead.toolTokens
-          + estimateMessagesTokens(requestMessages)
-      this.emitContextUsage(requestMessages, requestUsedTokens)
+      const prepared = await this.prepareRequestContext(stepAbort.signal)
+      this.emitContextUsage(prepared.messages, prepared.usedTokens)
+      const request = await this.compactIfNeeded(
+        prepared, stepAbort.signal, planExecutionEngaged, Boolean(recovery),
+      )
+      if (recovery) {
+        if (estimateMessagesTokens(request.messages) >= estimateMessagesTokens(prepared.messages)) {
+          throw new ModelRequestError(
+            `模型上下文超限，自动压缩未能缩小请求；请减少本次输入、附件或工具，或切换更大上下文的模型。${recovery.error.message}`,
+            false, undefined, { cause: recovery.error },
+          )
+        }
+        recovery.onRetry()
+      }
+      stepAbort.signal.throwIfAborted()
+      const { dateReminder, persistentMessages: persistentInputMessages, messages: requestMessages } = request
       const result = streamText({
         maxRetries: 0,
         onError: () => {},
@@ -2796,7 +2835,8 @@ export class AgentSession {
               ? canonicalResponseMessages.length
               : responseCoveredCount),
           overheadTokens: requestOverhead.systemPromptTokens + requestOverhead.toolTokens,
-          projectionDelta: requestProjectionDelta,
+          projectionDelta: request.projectionDelta,
+          requestProjectionDelta: request.requestProjectionDelta,
         }
       }
       this.updateLastTurnAssistantText(canonicalResponseMessages)
