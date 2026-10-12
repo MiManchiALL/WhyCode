@@ -1,4 +1,5 @@
 import { prepareScreenshotWindow, type PreparedScreenshotWindow } from './windows-screenshot-native.ts'
+import type { WindowsScreenshotRequest } from './windows-screenshot.ts'
 
 const controller = new AbortController()
 let release: () => void
@@ -19,9 +20,9 @@ process.once('message', async message => {
   let prepared: PreparedScreenshotWindow | undefined
   let failure: string | undefined
   try {
-    const request = message as { type: string; windowTitle: string; applicationPath?: string }
-    if (request.type !== 'prepare' || typeof request.windowTitle !== 'string') throw new Error('窗口截图请求无效')
-    prepared = await prepareScreenshotWindow(request.windowTitle, request.applicationPath, controller.signal)
+    const request = message as WindowsScreenshotRequest & { type: string }
+    if (request.type !== 'prepare' || (!request.windowTitle && !request.windowId)) throw new Error('窗口截图请求无效')
+    prepared = await prepareScreenshotWindow(request, controller.signal)
     controller.signal.throwIfAborted()
     if (process.connected) process.send?.({ type: 'prepared', id: prepared.id, name: prepared.name, size: prepared.size, launched: prepared.launched })
     await released

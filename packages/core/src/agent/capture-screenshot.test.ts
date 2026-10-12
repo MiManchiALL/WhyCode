@@ -78,6 +78,7 @@ describe('CaptureScreenshot Agent 链路', () => {
       target: 'screen',
       display_id: 'primary',
       window_title: 'WhyCode',
+      window_id: 'window:123:456',
       application_path: 'C:\\Applications\\Example.exe',
       region,
       detail: 'high',
@@ -106,6 +107,14 @@ describe('CaptureScreenshot Agent 链路', () => {
       region: { x: 900, y: 0, width: 200, height: 100 },
       detail: 'high',
     }), /1000/)
+  })
+
+  it('按工具返回的窗口 ID 选择，不要求再次猜测标题', () => {
+    const schema = createScreenshotCaptureRequestSchema(false)
+    assert.deepEqual(schema.parse({ target: 'window', window_id: '123:456' }), {
+      target: 'window', window_id: '123:456', detail: 'high',
+    })
+    assert.throws(() => schema.parse({ target: 'window', window_id: ' ' }), /window_title 或 window_id/)
   })
 
   it('冷启动只接受程序绝对路径，不能夹带命令参数', () => {

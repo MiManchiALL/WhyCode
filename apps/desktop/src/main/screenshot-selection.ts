@@ -2,6 +2,7 @@ export interface ScreenshotSourceLike {
   id: string
   name: string
   display_id: string
+  description?: string
 }
 
 export function selectDisplaySource<T extends ScreenshotSourceLike>(
@@ -16,28 +17,38 @@ export function selectDisplaySource<T extends ScreenshotSourceLike>(
 
 export function selectWindowSource<T extends ScreenshotSourceLike>(
   sources: readonly T[],
-  windowTitle: string,
+  windowTitle: string | undefined,
+  windowId?: string,
 ): T {
-  const selected = findWindowSource(sources, windowTitle)
+  const selected = findWindowSource(sources, windowTitle, windowId)
   if (selected) return selected
-  const available = sources.slice(0, 8).map((source) => source.name).filter(Boolean)
+  const related = sources.filter(source => source.name.toLowerCase().includes(windowTitle?.trim().toLowerCase() ?? ''))
+  const available = (related.length ? related : sources).slice(0, 8).map(describeWindowSource)
   throw new Error(`找不到窗口「${windowTitle}」${available.length ? `；可用窗口：${available.join('、')}` : ''}`)
 }
 
 export function findWindowSource<T extends ScreenshotSourceLike>(
   sources: readonly T[],
-  windowTitle: string,
+  windowTitle: string | undefined,
+  windowId?: string,
 ): T | undefined {
-  const wanted = windowTitle.trim().toLocaleLowerCase()
+  if (windowId) {
+    const selected = sources.find(source => source.id === windowId)
+    if (!selected) throw new Error('所选 window_id 已失效或不属于指定应用；请按 window_title 重新获取候选窗口')
+    return selected
+  }
+  const wanted = windowTitle?.trim().toLocaleLowerCase()
   if (!wanted) throw new Error('窗口标题不能为空')
   const exact = sources.filter((source) => source.name.toLocaleLowerCase() === wanted)
   if (exact.length === 1) return exact[0]!
-  const partial = sources.filter((source) => source.name.toLocaleLowerCase().includes(wanted))
-  if (partial.length === 1) return partial[0]!
-  if (exact.length > 1 || partial.length > 1) {
-    throw new Error(`窗口标题不唯一：${(exact.length ? exact : partial).map((source) => source.name).join('、')}`)
+  if (exact.length > 1) {
+    throw new Error(`窗口标题不唯一；请用 window_id 选择：${exact.slice(0, 8).map(describeWindowSource).join('、')}`)
   }
   return undefined
+}
+
+export function describeWindowSource(source: ScreenshotSourceLike): string {
+  return `${source.name} [window_id=${JSON.stringify(source.id)}${source.description ? `；${source.description}` : ''}]`
 }
 
 export function regionCrop(

@@ -9,9 +9,14 @@ interface WindowCaptureSource {
   launched: boolean
 }
 
+export interface WindowsScreenshotRequest {
+  windowTitle?: string
+  windowId?: string
+  applicationPath?: string
+}
+
 export function withWindowsScreenshotWindow<T>(
-  windowTitle: string,
-  applicationPath: string | undefined,
+  request: WindowsScreenshotRequest,
   signal: AbortSignal,
   capture: (source: WindowCaptureSource, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
@@ -40,7 +45,7 @@ export function withWindowsScreenshotWindow<T>(
     child.stderr?.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-2000) })
     child.once('error', error => { failure = error })
     child.once('spawn', () => {
-      send({ type: 'prepare', windowTitle, applicationPath })
+      send({ type: 'prepare', ...request })
       if (signal.aborted) cancel()
     })
     child.on('message', async message => {

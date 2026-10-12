@@ -9,6 +9,7 @@ const dwm = koffi.load(join(systemDirectory, 'dwmapi.dll'))
 export const api = {
   enumerate: user32.func('__stdcall', 'EnumWindows', 'int', [koffi.pointer(koffi.proto('int __stdcall WindowVisitor(void *, intptr_t)')), 'intptr_t']),
   title: user32.func('int __stdcall GetWindowTextW(void *, void *, int)'),
+  rect: user32.func('int __stdcall GetWindowRect(void *, void *)'),
   pid: user32.func('uint32_t __stdcall GetWindowThreadProcessId(void *, _Out_ uint32_t *)'),
   visible: user32.func('int __stdcall IsWindowVisible(void *)'),
   minimized: user32.func('int __stdcall IsIconic(void *)'),
@@ -26,6 +27,7 @@ export const api = {
   show: user32.func('int __stdcall ShowWindowAsync(void *, int)'),
   attribute: dwm.func('int __stdcall DwmGetWindowAttribute(void *, uint32_t, void *, uint32_t)'),
   openProcess: kernel32.func('void * __stdcall OpenProcess(uint32_t, int, uint32_t)'),
+  processPath: kernel32.func('int __stdcall QueryFullProcessImageNameW(void *, uint32_t, void *, _Inout_ uint32_t *)'),
   close: kernel32.func('int __stdcall CloseHandle(void *)'),
   error: kernel32.func('uint32_t __stdcall GetLastError()'),
   clearError: kernel32.func('void __stdcall SetLastError(uint32_t)'),
@@ -40,10 +42,13 @@ export interface NativeScreenshotWindow {
   display_id: string
   handle: bigint
   pid: number
+  description: string
+  executable?: string
 }
 
-export function listScreenshotWindows(): NativeScreenshotWindow[] {
+export function listScreenshotWindows(owns?: (pid: number) => boolean): NativeScreenshotWindow[] {
   const windows: NativeScreenshotWindow[] = []
+  const processes = new Map<number, { included: boolean; executable?: string }>()
   api.enumerate((handle: bigint) => {
     const title = Buffer.alloc(1024)
     const length = api.title(handle, title, 512)
@@ -52,10 +57,35 @@ export function listScreenshotWindows(): NativeScreenshotWindow[] {
     if (api.attribute(handle, 14, cloaked, cloaked.length) === 0 && cloaked.readUInt32LE()) return 1
     const pid = [0]
     api.pid(handle, pid)
-    windows.push({ id: String(handle), name: title.toString('utf16le', 0, length * 2), display_id: '', handle, pid: pid[0]! })
+    let process = processes.get(pid[0]!)
+    if (!process) {
+      const included = !owns || owns(pid[0]!)
+      process = { included, executable: included ? processExecutable(pid[0]!) : undefined }
+      processes.set(pid[0]!, process)
+    }
+    if (!process.included) return 1
+    const { executable } = process
+    const bounds = Buffer.alloc(16)
+    if (!api.rect(handle, bounds)) return 1
+    const width = bounds.readInt32LE(8) - bounds.readInt32LE(0), height = bounds.readInt32LE(12) - bounds.readInt32LE(4)
+    if (width <= 1 || height <= 1) return 1
+    const state = api.minimized(handle) ? '最小化' : api.visible(handle) ? '已显示' : '隐藏'
+    windows.push({
+      id: `${handle}:${pid[0]}`, name: title.toString('utf16le', 0, length * 2), display_id: '', handle, pid: pid[0]!, executable,
+      description: `${executable ?? `PID ${pid[0]}`}；${state}；${width}×${height}`,
+    })
     return 1
   }, 0)
   return windows
+}
+
+function processExecutable(pid: number): string | undefined {
+  const process = api.openProcess(0x1000, 0, pid)
+  if (!process) return undefined
+  try {
+    const buffer = Buffer.alloc(65_536), length = [buffer.length / 2]
+    return api.processPath(process, 0, buffer, length) ? buffer.toString('utf16le', 0, length[0]! * 2) : undefined
+  } finally { api.close(process) }
 }
 
 /** 在第一次改动前保存，冷启动的无标题窗口也沿用同一份恢复逻辑。 */
@@ -129,12 +159,12 @@ export function windowSize(handle: bigint): { width: number; height: number } {
   return { width, height }
 }
 
-async function waitForWindowState(ready: () => boolean, signal?: AbortSignal): Promise<void> {
+export async function waitForWindowState(ready: () => boolean, signal?: AbortSignal, message = '目标应用未完成窗口状态切换'): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt++) {
     await delay(50, undefined, { signal })
     if (ready()) return
   }
-  throw new Error('目标应用未完成窗口状态切换')
+  throw new Error(message)
 }
 
 function setWindowStyle(handle: bigint, style: number): void {

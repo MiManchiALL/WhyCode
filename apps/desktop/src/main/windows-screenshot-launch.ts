@@ -2,11 +2,11 @@ import { realpath, stat } from 'node:fs/promises'
 import { dirname, win32 } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import koffi from 'koffi'
-import { findWindowSource } from './screenshot-selection.ts'
+import { describeWindowSource, findWindowSource } from './screenshot-selection.ts'
 import type { PreparedScreenshotWindow } from './windows-screenshot-native.ts'
 import {
   api, check, kernel32, listScreenshotWindows, preserveScreenshotWindow,
-  showScreenshotWindow, user32, windowSize,
+  showScreenshotWindow, user32, waitForWindowState, windowSize,
 } from './windows-screenshot-win32.ts'
 
 const eventCallback = koffi.proto('void __stdcall ScreenshotWindowEvent(void *, uint32_t, void *, int32_t, int32_t, uint32_t, uint32_t)')
@@ -52,17 +52,22 @@ export async function launchScreenshotApplication(path: string, title: string, s
   const guard = watchApplicationWindows()
   try {
     launchHidden(executable, guard.job)
-    for (let attempt = 0; attempt < 150; attempt++) {
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
       await delay(100, undefined, { signal })
       guard.check()
-      const selected = findWindowSource(listScreenshotWindows().filter(window => guard.owns(window.pid)), title)
+      const selected = findWindowSource(listScreenshotWindows(guard.owns), title)
       if (!selected) continue
       guard.protect(selected.handle)
       if (!guard.userSelected(selected.handle)) await showScreenshotWindow(selected.handle, signal)
+      await guard.waitForFocus(signal)
       guard.check()
-      return { ...selected, size: windowSize(selected.handle), launched: true, restore: guard.restore }
+      return { id: String(selected.handle), name: selected.name, size: windowSize(selected.handle), launched: true, restore: guard.restore }
     }
-    throw new Error('应用已启动，但未出现匹配的窗口；请核对窗口标题和启动路径')
+    // 单实例启动器可能只通知已运行的进程；没有归属证据时返回候选身份，不跨进程猜选。
+    const candidates = listScreenshotWindows().filter(window => window.name.toLowerCase().includes(title.toLowerCase()))
+    throw new Error(`应用已启动，但未出现匹配的自有窗口；请核对窗口标题和启动路径${candidates.length
+      ? `；现有候选窗口：${candidates.slice(0, 8).map(describeWindowSource).join('、')}` : ''}`)
   } catch (error) {
     await guard.restore(true)
     throw error
@@ -118,10 +123,8 @@ function watchApplicationWindows() {
       userSelected.add(handle)
       void windows.get(handle)?.restore(true).catch(error => { failure ??= error })
     } else if (!userSelected.has(handle) && lastForeground && api.exists(lastForeground)) {
-      const activated = launchApi.foreground(lastForeground)
-      if (!activated && api.foreground() === handle) {
-        throw new Error('目标应用主动激活窗口，无法恢复启动前的焦点')
-      }
+      // 请求激活不等于切换已完成；在交付窗口前统一等待真实焦点状态。
+      launchApi.foreground(lastForeground)
     }
   }
   const callback = koffi.register((_hook: unknown, event: number, handle: bigint, object: number, child: number) => {
@@ -164,13 +167,19 @@ function watchApplicationWindows() {
   }
   return {
     job, owns, protect, userSelected: (handle: bigint) => userSelected.has(handle),
+    waitForFocus: (signal: AbortSignal) => waitForWindowState(() => {
+      const handle = api.foreground() as bigint | null, pid = [0]
+      if (!handle || userSelected.has(handle)) return true
+      api.pid(handle, pid)
+      return !owns(pid[0]!)
+    }, signal, '目标应用主动激活窗口，无法恢复启动前的焦点'),
     check: () => { if (failure) throw failure },
     restore: async (startupFailed = false) => {
       stop()
       try {
         // 尚未显示窗口的自有启动必须结束，否则取消后子进程仍会迟到弹窗。
         if (startupFailed && !userSelected.size
-          && !listScreenshotWindows().some(window => owns(window.pid) && api.visible(window.handle))) {
+          && !listScreenshotWindows(owns).some(window => api.visible(window.handle))) {
           check(launchApi.terminate(job, 1), '取消未完成的应用启动')
         }
         const results = await Promise.allSettled([...windows].map(([handle, lease]) => lease.restore(userSelected.has(handle))))

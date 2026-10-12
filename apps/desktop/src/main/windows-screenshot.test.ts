@@ -88,7 +88,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
       await setState(state === 'failure' || state === 'cancel' ? 'hidden' : state)
       const before = read()
       const controller = new AbortController()
-      const result = withWindowsScreenshotWindow(title, undefined, controller.signal, async (source, signal) => {
+      const result = withWindowsScreenshotWindow({ windowTitle: title }, controller.signal, async (source, signal) => {
         assert.equal(source.id, handle)
         assert.ok(source.size.width > 0 && source.size.height > 0)
         if (state === 'background') assert.deepEqual(read(), before)
@@ -112,7 +112,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     assert.ok(setLayer(hwnd, 0, 173, 2))
     try {
       const before = read()
-      await withWindowsScreenshotWindow(title, undefined, new AbortController().signal, async () => {
+      await withWindowsScreenshotWindow({ windowTitle: title }, new AbortController().signal, async () => {
         assert.equal(read().alpha, 0)
       })
       assert.deepEqual(read(), before)
@@ -137,15 +137,42 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
   await t.test('捕获停滞时到期释放窗口并取消迟到结果', async () => {
     await setState('hidden')
     const before = read()
-    await assert.rejects(withWindowsScreenshotWindow(title, undefined, new AbortController().signal, async (_source, signal) => {
-      await delay(30_000, undefined, { signal })
-    }), /超时/)
-    assert.deepEqual(read(), before)
+    let activated = false
+    const observer = setInterval(() => { activated ||= foreground() === hwnd }, 5)
+    try {
+      await assert.rejects(withWindowsScreenshotWindow({ windowTitle: title }, new AbortController().signal, async (_source, signal) => {
+        await delay(30_000, undefined, { signal })
+      }), /超时/)
+      assert.equal(activated, false)
+      // 长等待期间用户可切换其它应用；只要求归还本窗口状态，不锁住整个桌面的前台顺序。
+      const after = read()
+      for (const field of ['style', 'color', 'alpha', 'flags', 'minimized', 'visible'] as const) assert.equal(after[field], before[field])
+    } finally { clearInterval(observer) }
   })
   await t.test('找不到窗口时明确失败且不改变窗口状态', async () => {
     const before = read()
-    await assert.rejects(withWindowsScreenshotWindow('Missing Screenshot Fixture', undefined, new AbortController().signal, async () => {}), /找不到/)
+    await assert.rejects(withWindowsScreenshotWindow({ windowTitle: 'Missing Screenshot Fixture' }, new AbortController().signal, async () => {}), /找不到/)
     assert.deepEqual(read(), before)
+  })
+
+  await t.test('同名窗口返回身份并可按 ID 截图，错误应用路径不能忽略', async () => {
+    await setState('hidden')
+    await setState('duplicate')
+    const before = read(), windowId = `${handle}:${target.pid}`
+    try {
+      await assert.rejects(withWindowsScreenshotWindow({ windowTitle: title }, new AbortController().signal,
+        async () => assert.fail('重名时不应猜选')), error => {
+        assert.match(String(error), new RegExp(windowId))
+        assert.match(String(error), /window_id/)
+        return true
+      })
+      await withWindowsScreenshotWindow({ windowId }, new AbortController().signal, async source => assert.equal(source.id, handle))
+      await assert.rejects(withWindowsScreenshotWindow({ windowId: `${handle}:0`, windowTitle: title }, new AbortController().signal,
+        async () => assert.fail('失效 ID 不回退')), /已失效/)
+      await assert.rejects(withWindowsScreenshotWindow({ windowTitle: title, applicationPath: path.join(directory, 'missing.exe') }, new AbortController().signal,
+        async () => assert.fail('提供的路径必须验证')), /ENOENT/)
+      assert.deepEqual(read(), before)
+    } finally { await setState('remove-duplicate') }
   })
 
   const launcher = path.join(directory, 'Launcher.exe')
@@ -155,6 +182,8 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
   ], { windowsHide: true })
   await mkdir(path.join(directory, 'app'))
   await copyFile(launcher, path.join(directory, 'app/Fixture.exe'))
+  await copyFile(launcher, path.join(directory, 'Fixture.exe'))
+  await copyFile(launcher, path.join(directory, 'ActiveFixture.exe'))
   const titleText = user32.func('int GetWindowTextW(void *, void *, int)')
   const enumerate = user32.func('__stdcall', 'EnumWindows', 'int', [koffi.pointer(koffi.proto('int __stdcall ColdFixtureVisitor(void *, intptr_t)')), 'intptr_t'])
   const close = user32.func('int PostMessageW(void *, uint32_t, uintptr_t, intptr_t)')
@@ -162,6 +191,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
   const fixtureWindow = () => {
     let found: bigint | undefined
     enumerate((handle: bigint) => {
+      if (handle === hwnd) return 1
       const buffer = Buffer.alloc(1024)
       const length = titleText(handle, buffer, 512)
       if (buffer.toString('utf16le', 0, length * 2) === 'WhyCode Launcher Child') found = handle
@@ -169,7 +199,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     }, 0)
     return found
   }
-  for (const mode of ['success', 'capture-failure', 'title-mismatch', 'cancel'] as const) {
+  for (const mode of ['success', 'activation', 'capture-failure', 'title-mismatch', 'cancel'] as const) {
     await t.test(`启动器退出、子进程延迟显示窗口：${mode}`, async t => {
       const before = foreground()
       const observed = new Set<bigint | null>()
@@ -180,12 +210,15 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
       }, 20) : undefined
       let window: bigint | undefined
       try {
+        // 其它应用即使使用相同标题，提供启动路径时仍必须只截取实际启动的程序。
+        if (mode === 'success') await setState('launcher-title')
         const capture = withWindowsScreenshotWindow(
-          mode === 'title-mismatch' || mode === 'cancel' ? 'Unmatched Fixture Title' : 'WhyCode Launcher Child',
-          launcher, controller.signal, async source => {
+          { windowTitle: mode === 'title-mismatch' || mode === 'cancel' ? 'Unmatched Fixture Title' : 'WhyCode Launcher Child',
+            applicationPath: mode === 'activation' ? path.join(directory, 'ActiveFixture.exe') : launcher },
+          controller.signal, async source => {
             window = BigInt(source.id)
             assert.equal(source.launched, true)
-            assert.equal(fixtureWindow(), window)
+            assert.notEqual(window, hwnd)
             const color = [0], alpha = [255], flags = [0]
             assert.ok(layer(window, color, alpha, flags))
             assert.equal(alpha[0], 0)
@@ -197,16 +230,31 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
           },
         )
         if (mode === 'success') assert.equal(await capture, 'child frame')
-        else await assert.rejects(capture, mode === 'capture-failure' ? /Fixture frame failed/ : mode === 'cancel' ? /取消/ : /未出现匹配/)
+        else if (mode === 'activation') {
+          // Windows 前台锁由真实桌面输入决定；主动激活只能成功归还焦点或明确失败，均须恢复窗口。
+          try { assert.equal(await capture, 'child frame') }
+          catch (error) {
+            assert.match(String(error), /目标应用主动激活窗口，无法恢复启动前的焦点/)
+            assert.ok([...observed].some(handle => handle !== before))
+            t.diagnostic('系统未允许归还前台焦点；工具明确失败后仍执行窗口恢复。')
+          }
+        } else await assert.rejects(capture, mode === 'capture-failure' ? /Fixture frame failed/ : mode === 'cancel' ? /取消/ : /未出现匹配/)
         window = fixtureWindow()
         assert.ok(window, '匹配失败也应恢复已启动的子进程窗口')
         assert.ok(minimized(window))
         assert.equal(Number(style(window, -20)) & (0x80000 | 0x08000000 | 0x20), 0)
+        if (mode === 'success') {
+          await assert.rejects(withWindowsScreenshotWindow({
+            windowTitle: 'WhyCode Launcher Child', applicationPath: path.join(directory, 'Fixture.exe'),
+          }, new AbortController().signal, async () => assert.fail('路径不同的运行中程序须返回候选，不猜选或重启')), /存在同名程序.*window_id/)
+          assert.ok(minimized(window))
+        }
         if ([...observed].some(handle => handle !== before)) {
           t.diagnostic('应用在窗口事件送达前发生过瞬时激活；WinEvent 为异步观察，不能把最终恢复等同于从未抢焦点。')
         }
         assert.equal(foreground(), before)
       } finally {
+        if (mode === 'success') await setState('original-title')
         clearInterval(observer)
         clearInterval(cancel)
         for (let attempt = 0; attempt < 30 && !window; attempt++) {
@@ -225,7 +273,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     const marker = path.join(directory, 'app/started')
     await rm(marker, { force: true })
     const controller = new AbortController()
-    const capture = assert.rejects(withWindowsScreenshotWindow('WhyCode Launcher Child', launcher, controller.signal,
+    const capture = assert.rejects(withWindowsScreenshotWindow({ windowTitle: 'WhyCode Launcher Child', applicationPath: launcher }, controller.signal,
       async () => assert.fail('取消的启动不应进入截图')), /取消/)
     try {
       let started = false

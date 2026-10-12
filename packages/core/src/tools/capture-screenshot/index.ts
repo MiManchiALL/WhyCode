@@ -46,9 +46,11 @@ export function createScreenshotCaptureRequestSchema(supportsOriginalDetail: boo
     display_id: z.string().trim().max(100).optional()
       .describe('screen 使用的显示器 ID；省略时使用主显示器'),
     window_title: z.string().trim().max(500).optional()
-      .describe('window 必须提供的窗口完整标题或唯一子串'),
+      .describe('window 的完整标题，非应用名称子串；与 window_id 至少提供一个'),
+    window_id: z.string().trim().max(100).optional()
+      .describe('从工具返回的候选窗口中选择的 ID；精确选择已有窗口，不猜测 ID'),
     application_path: z.string().trim().max(4096).optional()
-      .describe('仅 Windows window：应用未打开时使用的 .exe 绝对路径，不含参数；已打开时不启动'),
+      .describe('仅 Windows window：限定目标程序的 .exe 绝对路径，不含参数；无匹配窗口时按此路径启动'),
     region: regionSchema.optional()
       .describe('screen 的可选裁剪区域，使用相对显示器的 0～1000 标准化坐标'),
     detail: (supportsOriginalDetail
@@ -66,15 +68,16 @@ function validateScreenshotRequest(
     display_id?: string
     region?: unknown
     window_title?: string
+    window_id?: string
     application_path?: string
   },
   ctx: z.RefinementCtx,
 ): void {
-  if (input.target === 'window' && !input.window_title?.trim()) {
+  if (input.target === 'window' && !input.window_title?.trim() && !input.window_id?.trim()) {
     ctx.addIssue({
       code: 'custom',
       path: ['window_title'],
-      message: '窗口截图必须提供 window_title',
+      message: '窗口截图必须提供 window_title 或 window_id',
     })
   }
   if (input.target === 'window' && input.application_path
@@ -88,6 +91,7 @@ function normalizeScreenshotRequest<T extends {
   display_id?: string
   region?: unknown
   window_title?: string
+  window_id?: string
   application_path?: string
 }>(input: T): T {
   const normalized = { ...input }
@@ -100,10 +104,12 @@ function normalizeScreenshotRequest<T extends {
     delete normalized.region
   } else {
     delete normalized.window_title
+    delete normalized.window_id
     delete normalized.application_path
   }
   if (!normalized.display_id) delete normalized.display_id
   if (!normalized.application_path) delete normalized.application_path
+  if (!normalized.window_id) delete normalized.window_id
 
   return normalized
 }

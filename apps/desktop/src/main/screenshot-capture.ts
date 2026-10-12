@@ -68,9 +68,9 @@ async function captureWindow(
   request: ScreenshotCaptureRequest,
   abortSignal: AbortSignal,
 ): Promise<ScreenshotCaptureResult> {
-  if (!request.window_title) throw new Error('窗口截图必须提供 window_title')
+  if (!request.window_title && !request.window_id) throw new Error('窗口截图必须提供 window_title 或 window_id')
   if (process.platform === 'win32') {
-    return withWindowsScreenshotWindow(request.window_title, request.application_path, abortSignal,
+    return withWindowsScreenshotWindow({ windowTitle: request.window_title, windowId: request.window_id, applicationPath: request.application_path }, abortSignal,
       async (selected, captureSignal) => captureWindowSource(selected.id, selected.launched, captureSignal, selected.size))
   }
   if (request.application_path) throw new Error('应用后台启动截图目前仅支持 Windows')
@@ -78,7 +78,7 @@ async function captureWindow(
     types: ['window'],
     thumbnailSize: { width: 0, height: 0 },
   })
-  const selected = selectWindowSource(lightweight, request.window_title)
+  const selected = selectWindowSource(lightweight, request.window_title, request.window_id)
   return captureWindowSource(selected.id, false, abortSignal)
 }
 

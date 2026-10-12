@@ -25,19 +25,30 @@ describe('桌面截图源选择', () => {
     assert.throws(() => selectDisplaySource(sources, '3'), /没有显示器 3/)
   })
 
-  it('窗口标题优先精确匹配，唯一子串可用，歧义时明确失败', () => {
+  it('只按完整标题匹配，聊天标题提及目标应用时不得自动截图', () => {
     const sources = [
       source('window:1', 'WhyCode — Project A'),
       source('window:2', 'WhyCode — Project B'),
       source('window:3', 'Browser'),
     ]
     assert.equal(selectWindowSource(sources, 'browser').id, 'window:3')
-    assert.equal(selectWindowSource(sources, 'Project A').id, 'window:1')
-    assert.throws(() => selectWindowSource(sources, 'WhyCode'), /标题不唯一/)
+    assert.equal(selectWindowSource(sources, 'WhyCode — Project A').id, 'window:1')
+    assert.throws(() => selectWindowSource(sources, 'WhyCode'), /找不到窗口/)
     assert.throws(() => selectWindowSource(sources, '   '), /标题不能为空/)
     assert.equal(findWindowSource(sources, 'Missing application'), undefined)
-    assert.throws(() => findWindowSource(sources, 'WhyCode'), /标题不唯一/)
+    assert.equal(findWindowSource([source('window:4', '查看飞书 - DeepSeek Harness')], '飞书'), undefined)
     assert.throws(() => selectWindowSource(sources, 'Missing application'), /找不到窗口/)
+  })
+
+  it('重名窗口保留不同身份，候选 ID 可精确选择，失效 ID 不退回标题猜选', () => {
+    const windows = [source('101:7', 'ToDesk'), source('102:7', 'ToDesk')]
+    assert.throws(() => selectWindowSource(windows, 'ToDesk'), error => {
+      assert.match(String(error), /window_id="101:7"/)
+      assert.match(String(error), /window_id="102:7"/)
+      return true
+    })
+    assert.equal(selectWindowSource(windows, undefined, '102:7'), windows[1])
+    assert.throws(() => selectWindowSource(windows, 'ToDesk', '102:8'), /已失效/)
   })
 })
 
