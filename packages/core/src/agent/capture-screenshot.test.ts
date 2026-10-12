@@ -24,6 +24,40 @@ const ONE_PIXEL_PNG = Buffer.from(
 )
 
 describe('CaptureScreenshot Agent 链路', () => {
+  it('传入路径只返回启动文字，下一次按窗口身份调用才生成图片', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-capture-start-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const store = new SessionStore(root)
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:vision' })
+    let step = 0
+    const events: CoreEvent[] = []
+    const model = new MockLanguageModelV4({ doStream: async options => {
+      if (step++ === 0) return toolStep({ target: 'window', application_path: 'C:\\Apps\\Example.exe' })
+      if (step === 2) {
+        assert.match(JSON.stringify(options.prompt), /本次未截图/)
+        assert.equal(events.filter(event => event.type === 'image-viewed').length, 0)
+        assert.equal(JSON.stringify(options.prompt).includes(ONE_PIXEL_PNG.toString('base64')), false)
+        return toolStep({ target: 'window', window_id: '123:456' }, 'capture-2')
+      }
+      assert.equal(JSON.stringify(options.prompt).includes(ONE_PIXEL_PNG.toString('base64')), true)
+      return finalStep('已截图。')
+    } })
+    const session = new AgentSession({
+      model: modelEntry(model), providerConfig: { apiKey: 'test' }, sessionRecorder: journal,
+      promptContext: { projectDir: process.cwd(), osPlatform: 'win32' }, emit: event => events.push(event),
+      requestApproval: async () => { throw new Error('自动档不应审批') },
+      captureScreenshot: async request => {
+        if (request.application_path) return { type: 'application-start', description: '已启动，本次未截图；再次按 window_id=123:456 截图。' }
+        assert.equal(request.window_id, '123:456')
+        return { name: 'window.png', bytes: ONE_PIXEL_PNG, description: '已截取窗口' }
+      },
+    })
+    session.setPermissionMode('auto')
+    assert.equal(await session.handleUserMessage('启动应用再截图'), 'completed')
+    assert.equal(events.filter(event => event.type === 'image-viewed').length, 1)
+    assert.equal((await store.open(journal.sessionId)).initialImageAttachments.length, 1)
+  })
+
   it('同一步的修改、截图、再修改按原顺序执行，图片随各自结果交给下一轮模型', async t => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-capture-order-'))
     t.after(() => rm(root, { recursive: true, force: true }))
@@ -119,7 +153,7 @@ describe('CaptureScreenshot Agent 链路', () => {
 
   it('冷启动只接受程序绝对路径，不能夹带命令参数', () => {
     const schema = createScreenshotCaptureRequestSchema(false)
-    const request = { target: 'window', window_title: 'Example', application_path: 'C:\\Apps\\Example.exe' }
+    const request = { target: 'window', application_path: 'C:\\Apps\\Example.exe' }
     assert.equal(schema.parse(request).application_path, request.application_path)
     for (const application_path of ['Example.exe', 'C:\\Apps\\Example.exe --run', 'C:\\Apps\\Example.cmd']) {
       assert.throws(() => schema.parse({ ...request, application_path }), /application_path/)
@@ -153,7 +187,7 @@ describe('CaptureScreenshot Agent 链路', () => {
           assert.ok(screenshotTool?.type === 'function')
           assert.match(screenshotTool.description ?? '', /先截图建立基线.*修改.*再截图验证/)
           assert.match(screenshotTool.description ?? '', /单个应用.*window_title/)
-          assert.match(screenshotTool.description ?? '', /临时透明恢复最小化\/隐藏窗口/)
+          assert.match(screenshotTool.description ?? '', /截完还原原有显示状态/)
           assert.match(screenshotTool.description ?? '', /application_path/)
           assert.match(screenshotTool.description ?? '', /target=screen.*region/)
           assert.doesNotMatch(screenshotTool.description ?? '', /Main|排除 WhyCode|target=region/)

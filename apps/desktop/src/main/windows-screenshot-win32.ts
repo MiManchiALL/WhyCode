@@ -33,7 +33,9 @@ export const api = {
   clearError: kernel32.func('void __stdcall SetLastError(uint32_t)'),
 }
 const LAYERED = 0x80000
-const TEMPORARY_STYLES = LAYERED | 0x08000000 | 0x20 // NOACTIVATE, TRANSPARENT
+// NOACTIVATE 会让无 APPWINDOW 样式的窗口退出任务栏管理，最小化后变成桌面图标。
+// 透明分层窗口已穿透鼠标；显示和层级操作各自使用不激活标志。
+const TEMPORARY_STYLES = LAYERED | 0x20
 const POSITION_FLAGS = 0x4000 | 0x200 | 0x10 | 0x2 | 0x1
 
 export interface NativeScreenshotWindow {
@@ -88,8 +90,8 @@ function processExecutable(pid: number): string | undefined {
   } finally { api.close(process) }
 }
 
-/** 在第一次改动前保存，冷启动的无标题窗口也沿用同一份恢复逻辑。 */
-export function preserveScreenshotWindow(window: Pick<NativeScreenshotWindow, 'handle' | 'pid'>, launched: boolean) {
+/** 只借用已有窗口，截图、失败和取消均归还借用前的状态。 */
+export function preserveScreenshotWindow(window: Pick<NativeScreenshotWindow, 'handle' | 'pid'>) {
   const { handle } = window
   if (api.hung(handle)) throw new Error('目标应用没有响应，无法安全恢复窗口用于截图')
   const style = Number(api.style(handle, -20))
@@ -105,32 +107,29 @@ export function preserveScreenshotWindow(window: Pick<NativeScreenshotWindow, 'h
     setWindowStyle(handle, Number(api.style(handle, -20)) | TEMPORARY_STYLES)
     check(api.setLayer(handle, 0, 0, 2), '设置截图期间的透明窗口')
   }
-  const restore = async (userActivated = api.foreground() === handle) => {
+  const restore = async () => {
     const pid = [0]
     api.pid(handle, pid)
     if (!api.exists(handle) || pid[0] !== window.pid) return
-    // 用户主动激活目标后只撤销临时样式，不再隐藏、最小化或重新排列用户窗口。
     const errors: unknown[] = []
     try {
-      if (!userActivated) {
-        if (minimized || (launched && api.visible(handle))) {
-          const original = Buffer.from(placement)
-          original.writeUInt32LE(original.readUInt32LE(4) | 4, 4)
-          original.writeUInt32LE(7, 8) // SW_SHOWMINNOACTIVE avoids activation during restoration.
-          check(api.setPlacement(handle, original), '还原最小化状态')
-          await waitForWindowState(() => Boolean(api.minimized(handle)))
-        }
-        if (!launched && !visible) {
-          check(api.show(handle, 0), '还原隐藏状态')
-          await waitForWindowState(() => !api.visible(handle))
-        }
-        if (!launched && (style & 8)) check(api.position(handle, -1n, 0, 0, 0, 0, POSITION_FLAGS), '还原置顶状态')
-        if (!launched && (!previous || api.exists(previous))) {
-          // 跟在置顶窗口后调用 SetWindowPos 会改变所属层；普通窗口应回到普通层顶部。
-          const insertAfter = !(style & 8) && previous && (Number(api.style(previous, -20)) & 8) ? null : previous
-          check(api.position(handle, insertAfter, 0, 0, 0, 0, POSITION_FLAGS), '还原窗口层级')
-          await waitForWindowState(() => api.previous(handle, 3) === previous && (Number(api.style(handle, -20)) & 8) === (style & 8))
-        }
+      if (minimized) {
+        const original = Buffer.from(placement)
+        original.writeUInt32LE(original.readUInt32LE(4) | 4, 4)
+        original.writeUInt32LE(7, 8) // SW_SHOWMINNOACTIVE avoids activation during restoration.
+        check(api.setPlacement(handle, original), '还原最小化状态')
+        await waitForWindowState(() => Boolean(api.minimized(handle)))
+      }
+      if (!visible) {
+        check(api.show(handle, 0), '还原隐藏状态')
+        await waitForWindowState(() => !api.visible(handle))
+      }
+      if (style & 8) check(api.position(handle, -1n, 0, 0, 0, 0, POSITION_FLAGS), '还原置顶状态')
+      if (!previous || api.exists(previous)) {
+        // 跟在置顶窗口后调用 SetWindowPos 会改变所属层；普通窗口应回到普通层顶部。
+        const insertAfter = !(style & 8) && previous && (Number(api.style(previous, -20)) & 8) ? null : previous
+        check(api.position(handle, insertAfter, 0, 0, 0, 0, POSITION_FLAGS), '还原窗口层级')
+        await waitForWindowState(() => api.previous(handle, 3) === previous && (Number(api.style(handle, -20)) & 8) === (style & 8))
       }
     } catch (error) { errors.push(error) }
     try {

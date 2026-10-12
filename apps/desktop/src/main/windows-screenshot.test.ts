@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'vite'
-import type { withWindowsScreenshotWindow as captureWindow } from './windows-screenshot.ts'
+import type { withWindowsScreenshotWindow as captureWindow, startWindowsScreenshotApplication as launchApplication } from './windows-screenshot.ts'
 
 const require = createRequire(import.meta.url)
 
@@ -42,8 +42,9 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
       },
     },
   })
-  const { withWindowsScreenshotWindow } = await import(pathToFileURL(path.join(directory, 'windows-screenshot.js')).href) as {
+  const { withWindowsScreenshotWindow, startWindowsScreenshotApplication } = await import(pathToFileURL(path.join(directory, 'windows-screenshot.js')).href) as {
     withWindowsScreenshotWindow: typeof captureWindow
+    startWindowsScreenshotApplication: typeof launchApplication
   }
   const env: NodeJS.ProcessEnv = { ...process.env, WHYCODE_SCREENSHOT_TEST_DIR: directory }
   delete env.ELECTRON_RUN_AS_NODE
@@ -60,6 +61,8 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
   const foreground = user32.func('void * GetForegroundWindow()')
   const previous = user32.func('void * GetWindow(void *, uint32_t)')
   const style = user32.func('intptr_t GetWindowLongPtrW(void *, int)')
+  const setStyle = user32.func('intptr_t SetWindowLongPtrW(void *, int, intptr_t)')
+  const rect = user32.func('int GetWindowRect(void *, void *)')
   const layer = user32.func('int GetLayeredWindowAttributes(void *, _Out_ uint32_t *, _Out_ uint8_t *, _Out_ uint32_t *)')
   const setLayer = user32.func('int SetLayeredWindowAttributes(void *, uint32_t, uint8_t, uint32_t)')
   const minimized = user32.func('int IsIconic(void *)')
@@ -118,6 +121,26 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
       assert.deepEqual(read(), before)
     } finally { setLayer(hwnd, 0, 0, 2) }
   })
+  await t.test('普通任务栏窗口截图后仍在屏幕外最小化，不变成桌面白条且不接收鼠标点击', async () => {
+    const original = Number(style(hwnd, -20))
+    setStyle(hwnd, -20, original & ~0x40000) // 无 APPWINDOW 的普通顶层窗口，飞书采用此形态。
+    const point = koffi.struct({ x: 'int32_t', y: 'int32_t' })
+    const hitTest = user32.func('__stdcall', 'WindowFromPoint', 'void *', [point])
+    const bounds = () => { const data = Buffer.alloc(16); rect(hwnd, data); return [0, 4, 8, 12].map(offset => data.readInt32LE(offset)) }
+    try {
+      await setState('minimized')
+      const before = bounds()
+      assert.ok(before[0]! < 0 && before[1]! < 0)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await withWindowsScreenshotWindow({ windowTitle: title }, new AbortController().signal, async () => {
+          const [left, top, right, bottom] = bounds() as [number, number, number, number]
+          assert.notEqual(hitTest({ x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) }), hwnd)
+        })
+        assert.equal(minimized(hwnd), 1)
+        assert.deepEqual(bounds(), before)
+      }
+    } finally { setStyle(hwnd, -20, original) }
+  })
   await t.test('IPC 断开后的 finally 不依赖仍然存活的宿主', async () => {
     await setState('minimized')
     const before = read()
@@ -169,8 +192,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
       await withWindowsScreenshotWindow({ windowId }, new AbortController().signal, async source => assert.equal(source.id, handle))
       await assert.rejects(withWindowsScreenshotWindow({ windowId: `${handle}:0`, windowTitle: title }, new AbortController().signal,
         async () => assert.fail('失效 ID 不回退')), /已失效/)
-      await assert.rejects(withWindowsScreenshotWindow({ windowTitle: title, applicationPath: path.join(directory, 'missing.exe') }, new AbortController().signal,
-        async () => assert.fail('提供的路径必须验证')), /ENOENT/)
+      await assert.rejects(startWindowsScreenshotApplication(path.join(directory, 'missing.exe'), new AbortController().signal), /ENOENT/)
       assert.deepEqual(read(), before)
     } finally { await setState('remove-duplicate') }
   })
@@ -199,68 +221,49 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     }, 0)
     return found
   }
-  for (const mode of ['success', 'activation', 'capture-failure', 'title-mismatch', 'cancel'] as const) {
-    await t.test(`启动器退出、子进程延迟显示窗口：${mode}`, async t => {
+  for (const mode of ['success', 'activation'] as const) {
+    await t.test(`只启动并最小化，另一次按身份截图：${mode}`, async t => {
       const before = foreground()
       const observed = new Set<bigint | null>()
       const observer = setInterval(() => observed.add(foreground()), 5)
-      const controller = new AbortController()
-      const cancel = mode === 'cancel' ? setInterval(() => {
-        if (fixtureWindow()) controller.abort()
-      }, 20) : undefined
       let window: bigint | undefined
       try {
-        // 其它应用即使使用相同标题，提供启动路径时仍必须只截取实际启动的程序。
         if (mode === 'success') await setState('launcher-title')
-        const capture = withWindowsScreenshotWindow(
-          { windowTitle: mode === 'title-mismatch' || mode === 'cancel' ? 'Unmatched Fixture Title' : 'WhyCode Launcher Child',
-            applicationPath: mode === 'activation' ? path.join(directory, 'ActiveFixture.exe') : launcher },
-          controller.signal, async source => {
-            window = BigInt(source.id)
-            assert.equal(source.launched, true)
-            assert.notEqual(window, hwnd)
-            const color = [0], alpha = [255], flags = [0]
-            assert.ok(layer(window, color, alpha, flags))
-            assert.equal(alpha[0], 0)
-            assert.equal(foreground(), before)
-            assert.ok(visible(window))
-            assert.equal(minimized(window), 0)
-            if (mode === 'capture-failure') throw new Error('Fixture frame failed')
-            return 'child frame'
-          },
-        )
-        if (mode === 'success') assert.equal(await capture, 'child frame')
-        else if (mode === 'activation') {
-          // Windows 前台锁由真实桌面输入决定；主动激活只能成功归还焦点或明确失败，均须恢复窗口。
-          try { assert.equal(await capture, 'child frame') }
-          catch (error) {
-            assert.match(String(error), /目标应用主动激活窗口，无法恢复启动前的焦点/)
-            assert.ok([...observed].some(handle => handle !== before))
-            t.diagnostic('系统未允许归还前台焦点；工具明确失败后仍执行窗口恢复。')
-          }
-        } else await assert.rejects(capture, mode === 'capture-failure' ? /Fixture frame failed/ : mode === 'cancel' ? /取消/ : /未出现匹配/)
+        const description = await startWindowsScreenshotApplication(
+          mode === 'activation' ? path.join(directory, 'ActiveFixture.exe') : launcher, new AbortController().signal)
+        assert.match(description, /本次未截图.*不带 application_path/)
         window = fixtureWindow()
-        assert.ok(window, '匹配失败也应恢复已启动的子进程窗口')
+        assert.ok(window)
+        assert.notEqual(window, hwnd)
         assert.ok(minimized(window))
         assert.equal(Number(style(window, -20)) & (0x80000 | 0x08000000 | 0x20), 0)
+        const id = description.match(/window_id="([^"]+)"/)?.[1]
+        assert.ok(id)
+        assert.ok(id.startsWith(`${window}:`))
+        const beforeRect = Buffer.alloc(16)
+        rect(window, beforeRect)
+        assert.ok(beforeRect.readInt32LE(0) < 0 && beforeRect.readInt32LE(4) < 0)
+        await withWindowsScreenshotWindow({ windowId: id }, new AbortController().signal, async source => {
+          assert.equal(source.id, String(window))
+          assert.equal(minimized(window), 0)
+          assert.equal(foreground(), before)
+        })
+        assert.ok(minimized(window))
+        const afterRect = Buffer.alloc(16)
+        rect(window, afterRect)
+        assert.deepEqual(afterRect, beforeRect)
         if (mode === 'success') {
-          await assert.rejects(withWindowsScreenshotWindow({
-            windowTitle: 'WhyCode Launcher Child', applicationPath: path.join(directory, 'Fixture.exe'),
-          }, new AbortController().signal, async () => assert.fail('路径不同的运行中程序须返回候选，不猜选或重启')), /存在同名程序.*window_id/)
+          const existing = await startWindowsScreenshotApplication(path.join(directory, 'app/Fixture.exe'), new AbortController().signal)
+          assert.match(existing, /已在运行.*未重复启动.*本次未截图/)
+          await assert.rejects(startWindowsScreenshotApplication(path.join(directory, 'Fixture.exe'), new AbortController().signal), /存在同名程序.*window_id/)
           assert.ok(minimized(window))
         }
-        if ([...observed].some(handle => handle !== before)) {
-          t.diagnostic('应用在窗口事件送达前发生过瞬时激活；WinEvent 为异步观察，不能把最终恢复等同于从未抢焦点。')
-        }
+        if ([...observed].some(handle => handle !== before)) t.diagnostic('启动时曾瞬时激活，随后归还焦点。')
         assert.equal(foreground(), before)
       } finally {
         if (mode === 'success') await setState('original-title')
         clearInterval(observer)
-        clearInterval(cancel)
-        for (let attempt = 0; attempt < 30 && !window; attempt++) {
-          window = fixtureWindow()
-          if (!window) await delay(50)
-        }
+        window ??= fixtureWindow()
         if (window) {
           close(window, 0x10, 0, 0)
           for (let attempt = 0; attempt < 50 && exists(window); attempt++) await delay(50)
@@ -273,8 +276,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     const marker = path.join(directory, 'app/started')
     await rm(marker, { force: true })
     const controller = new AbortController()
-    const capture = assert.rejects(withWindowsScreenshotWindow({ windowTitle: 'WhyCode Launcher Child', applicationPath: launcher }, controller.signal,
-      async () => assert.fail('取消的启动不应进入截图')), /取消/)
+    const capture = assert.rejects(startWindowsScreenshotApplication(launcher, controller.signal), /取消/)
     try {
       let started = false
       for (let attempt = 0; attempt < 100 && !started; attempt++) {

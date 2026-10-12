@@ -6,19 +6,30 @@ interface WindowCaptureSource {
   id: string
   name: string
   size: { width: number; height: number }
-  launched: boolean
 }
 
 export interface WindowsScreenshotRequest {
   windowTitle?: string
   windowId?: string
-  applicationPath?: string
 }
 
 export function withWindowsScreenshotWindow<T>(
   request: WindowsScreenshotRequest,
   signal: AbortSignal,
   capture: (source: WindowCaptureSource, signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return runWindowsScreenshotOperation({ type: 'prepare', ...request }, signal, capture)
+}
+
+export function startWindowsScreenshotApplication(applicationPath: string, signal: AbortSignal): Promise<string> {
+  return runWindowsScreenshotOperation({ type: 'launch', applicationPath }, signal,
+    async (result: { description: string }) => result.description)
+}
+
+function runWindowsScreenshotOperation<S, T>(
+  request: object,
+  signal: AbortSignal,
+  consume: (source: S, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   signal.throwIfAborted()
   const lifetime = new AbortController()
@@ -45,11 +56,11 @@ export function withWindowsScreenshotWindow<T>(
     child.stderr?.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-2000) })
     child.once('error', error => { failure = error })
     child.once('spawn', () => {
-      send({ type: 'prepare', ...request })
+      send(request)
       if (signal.aborted) cancel()
     })
     child.on('message', async message => {
-      const result = message as WindowCaptureSource & { type: string; error?: string }
+      const result = message as S & { type: string; error?: string }
       if (result.type === 'restored') {
         restored = true
         if (result.error) failure = new Error(result.error)
@@ -58,7 +69,7 @@ export function withWindowsScreenshotWindow<T>(
         prepared = true
         try {
           signal.throwIfAborted()
-          value = await capture(result, captureSignal)
+          value = await consume(result, captureSignal)
           captureSignal.throwIfAborted()
           captured = true
         } catch (error) {

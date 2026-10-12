@@ -43,10 +43,19 @@ export async function runSharpOperation<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   if (abortSignal?.aborted) throw new Error('图片处理已取消')
-  const abort = () => pipeline.destroy(new Error('图片处理已取消'))
+  let rejectCancelled: (error: Error) => void
+  const cancelled = new Promise<never>((_resolve, reject) => { rejectCancelled = reject })
+  const abort = () => {
+    // Sharp 的 Promise API 不订阅流的 error；destroy(error) 会变成未捕获异常。
+    // 原生任务由既有超时约束，race 继续接收它的迟到结果或错误。
+    pipeline.destroy()
+    rejectCancelled(new Error('图片处理已取消'))
+  }
   abortSignal?.addEventListener('abort', abort, { once: true })
   try {
-    return await operation()
+    const result = await Promise.race([operation(), cancelled])
+    if (abortSignal?.aborted) throw new Error('图片处理已取消')
+    return result
   } finally {
     abortSignal?.removeEventListener('abort', abort)
   }

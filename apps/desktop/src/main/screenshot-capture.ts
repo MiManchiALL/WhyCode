@@ -16,7 +16,7 @@ import {
   selectDisplaySource,
   selectWindowSource,
 } from './screenshot-selection.ts'
-import { withWindowsScreenshotWindow } from './windows-screenshot.ts'
+import { startWindowsScreenshotApplication, withWindowsScreenshotWindow } from './windows-screenshot.ts'
 
 const MAX_CAPTURE_DIMENSION = 7_680
 const MAX_CAPTURE_PIXELS = 20_000_000
@@ -68,23 +68,25 @@ async function captureWindow(
   request: ScreenshotCaptureRequest,
   abortSignal: AbortSignal,
 ): Promise<ScreenshotCaptureResult> {
+  if (request.application_path) {
+    if (process.platform !== 'win32') throw new Error('应用后台启动目前仅支持 Windows')
+    return { type: 'application-start', description: await startWindowsScreenshotApplication(request.application_path, abortSignal) }
+  }
   if (!request.window_title && !request.window_id) throw new Error('窗口截图必须提供 window_title 或 window_id')
   if (process.platform === 'win32') {
-    return withWindowsScreenshotWindow({ windowTitle: request.window_title, windowId: request.window_id, applicationPath: request.application_path }, abortSignal,
-      async (selected, captureSignal) => captureWindowSource(selected.id, selected.launched, captureSignal, selected.size))
+    return withWindowsScreenshotWindow({ windowTitle: request.window_title, windowId: request.window_id }, abortSignal,
+      async (selected, captureSignal) => captureWindowSource(selected.id, captureSignal, selected.size))
   }
-  if (request.application_path) throw new Error('应用后台启动截图目前仅支持 Windows')
   const lightweight = await desktopCapturer.getSources({
     types: ['window'],
     thumbnailSize: { width: 0, height: 0 },
   })
   const selected = selectWindowSource(lightweight, request.window_title, request.window_id)
-  return captureWindowSource(selected.id, false, abortSignal)
+  return captureWindowSource(selected.id, abortSignal)
 }
 
 async function captureWindowSource(
   id: string,
-  launched: boolean,
   abortSignal: AbortSignal,
   size = { width: MAX_CAPTURE_DIMENSION, height: MAX_CAPTURE_DIMENSION },
 ): Promise<ScreenshotCaptureResult> {
@@ -108,7 +110,7 @@ async function captureWindowSource(
   return {
     name: screenshotName('window'),
     bytes: encoded.bytes,
-    description: `已截取窗口「${source.name}」${launched ? '；本次按需启动应用' : ''}${encoded.resized ? '；为满足 20 MB 附件上限已等比缩小' : ''}`,
+    description: `已截取窗口「${source.name}」${encoded.resized ? '；为满足 20 MB 附件上限已等比缩小' : ''}`,
   }
 }
 

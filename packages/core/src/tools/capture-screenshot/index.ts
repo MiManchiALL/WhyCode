@@ -46,11 +46,11 @@ export function createScreenshotCaptureRequestSchema(supportsOriginalDetail: boo
     display_id: z.string().trim().max(100).optional()
       .describe('screen 使用的显示器 ID；省略时使用主显示器'),
     window_title: z.string().trim().max(500).optional()
-      .describe('window 的完整标题，非应用名称子串；与 window_id 至少提供一个'),
+      .describe('截图窗口的完整标题，非应用名称子串；与 window_id 至少提供一个'),
     window_id: z.string().trim().max(100).optional()
       .describe('从工具返回的候选窗口中选择的 ID；精确选择已有窗口，不猜测 ID'),
     application_path: z.string().trim().max(4096).optional()
-      .describe('仅 Windows window：限定目标程序的 .exe 绝对路径，不含参数；无匹配窗口时按此路径启动'),
+      .describe('仅 Windows window：.exe 绝对路径，不含参数；提供时本次只后台启动，不截图，之后不带此字段再次截图'),
     region: regionSchema.optional()
       .describe('screen 的可选裁剪区域，使用相对显示器的 0～1000 标准化坐标'),
     detail: (supportsOriginalDetail
@@ -73,7 +73,7 @@ function validateScreenshotRequest(
   },
   ctx: z.RefinementCtx,
 ): void {
-  if (input.target === 'window' && !input.window_title?.trim() && !input.window_id?.trim()) {
+  if (input.target === 'window' && !input.application_path?.trim() && !input.window_title?.trim() && !input.window_id?.trim()) {
     ctx.addIssue({
       code: 'custom',
       path: ['window_title'],
@@ -118,11 +118,11 @@ export const screenshotCaptureRequestSchema = createScreenshotCaptureRequestSche
 
 export type ScreenshotCaptureRequest = z.infer<typeof screenshotCaptureRequestSchema>
 
-export interface ScreenshotCaptureResult {
+export type ScreenshotCaptureResult = {
   name: string
   bytes: Uint8Array
   description: string
-}
+} | { type: 'application-start'; description: string }
 
 export type ScreenshotCaptureHandler = (
   request: ScreenshotCaptureRequest,
@@ -149,6 +149,7 @@ export function createCaptureScreenshotTool(options: {
     initialApprovalReason: '截图会读取可能包含敏感内容的应用，并可能临时恢复窗口或启动指定应用',
     async execute(input, ctx) {
       const captured = await options.capture(input, ctx.abortSignal)
+      if ('type' in captured) return { data: captured.description, isError: false }
       const attachments = await importImageAttachments(
         [{ kind: 'bytes', name: captured.name, bytes: captured.bytes }],
         options.attachmentDirectory,
