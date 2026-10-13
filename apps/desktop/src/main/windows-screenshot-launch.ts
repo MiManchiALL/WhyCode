@@ -3,7 +3,9 @@ import { dirname, win32 } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import koffi from 'koffi'
 import { describeWindowSource } from './screenshot-selection.ts'
-import { api, check, kernel32, listScreenshotWindows, user32, waitForWindowState } from './windows-screenshot-win32.ts'
+import { api, check, kernel32, listScreenshotWindows, preserveWindowAppearance, user32 } from './windows-screenshot-win32.ts'
+
+const WINDOW_SETTLE_MS = 1_500
 
 const eventCallback = koffi.proto('void __stdcall ScreenshotWindowEvent(void *, uint32_t, void *, int32_t, int32_t, uint32_t, uint32_t)')
 const startupType = koffi.struct({
@@ -53,10 +55,10 @@ export async function launchScreenshotApplication(path: string, signal: AbortSig
     while (Date.now() < deadline) {
       await delay(100, undefined, { signal })
       guard.check()
-      const ready = listScreenshotWindows(guard.owns).filter(window => api.visible(window.handle) && api.minimized(window.handle))
-      if (!ready.length) continue
-      await guard.waitForFocus(signal)
-      guard.check()
+      const ready = listScreenshotWindows(guard.owns).filter(window => api.visible(window.handle))
+      for (const window of ready) guard.minimize(window.handle)
+      if (!ready.length || ready.some(window => !api.minimized(window.handle)) || !guard.settled()) continue
+      guard.restoreAppearance()
       return launchDescription('已后台启动应用，窗口保持最小化', ready)
     }
     throw new Error('应用未建立可用的最小化窗口；请核对启动路径')
@@ -75,7 +77,9 @@ function watchApplicationWindows() {
   const job = launchApi.job(null, null) as bigint
   check(job, '建立应用启动范围')
   const hooks: bigint[] = []
+  const appearances = new Map<bigint, ReturnType<typeof preserveWindowAppearance>>()
   let failure: unknown
+  let lastActivity = Date.now()
   let lastForeground = api.foreground() as bigint | null
   const owns = (pid: number): boolean => {
     const process = api.openProcess(0x1000, 0, pid)
@@ -90,8 +94,21 @@ function watchApplicationWindows() {
     return Boolean(api.pid(handle, pid)) && owns(pid[0]!)
   }
   const minimize = (handle: bigint) => {
-    if (!api.exists(handle) || launchApi.ancestor(handle, 1) !== launchApi.desktop() || !ownsWindow(handle)) return
-    if (api.visible(handle) && !api.minimized(handle)) check(api.show(handle, 7), '保持启动窗口最小化')
+    const root = launchApi.ancestor(handle, 2) as bigint | null
+    if (!root || launchApi.ancestor(root, 1) !== launchApi.desktop() || !ownsWindow(root)) return
+    if (!api.visible(root)) return true
+    if (!appearances.has(root)) {
+      appearances.set(root, preserveWindowAppearance(root))
+      lastActivity = Date.now()
+    }
+    appearances.get(root)!.conceal()
+    const active = api.foreground() === root
+    // SHOWMINNOACTIVE 不会解除已有前台资格；主动激活后的窗口必须通过 MINIMIZE 交还前台。
+    if (!api.minimized(root) || active) {
+      lastActivity = Date.now()
+      check(api.show(root, active ? 6 : 7), '保持启动窗口最小化')
+    }
+    return true
   }
   const foregroundChanged = () => {
     const handle = api.foreground() as bigint | null
@@ -105,7 +122,9 @@ function watchApplicationWindows() {
   const callback = koffi.register((_hook: unknown, event: number, handle: bigint, object: number, child: number) => {
     try {
       if (event === 3) foregroundChanged()
-      else if (handle && object === 0 && child === 0) minimize(handle)
+      else if (event === 0x8001 && object === 0 && child === 0) {
+        if (appearances.delete(handle)) lastActivity = Date.now()
+      } else if (handle && object === 0 && child === 0 && minimize(handle)) lastActivity = Date.now()
     } catch (error) { failure ??= error }
   }, koffi.pointer(eventCallback))
   let timer: ReturnType<typeof setInterval> | undefined
@@ -116,8 +135,8 @@ function watchApplicationWindows() {
     api.close(job)
   }
   try {
-    // 只观察本次进程树的新窗口；不为启动制造透明窗口、恢复动作或可点击的临时表面。
-    for (const event of [3, 0x8002]) {
+    // 已显示窗口的还原只发 MINIMIZEEND；渲染子窗口的 SHOW 也属于同一次启动。
+    for (const event of [3, 0x16, 0x17, 0x8000, 0x8001, 0x8002]) {
       const hook = launchApi.hook(event, event, null, callback, 0, 0, 2) as bigint
       check(hook, '监听应用窗口')
       hooks.push(hook)
@@ -134,11 +153,12 @@ function watchApplicationWindows() {
     }, 5)
   } catch (error) { close(); throw error }
   return {
-    job, owns, close,
-    waitForFocus: (signal: AbortSignal) => waitForWindowState(() => {
+    job, owns, close, minimize,
+    restoreAppearance: () => { for (const appearance of appearances.values()) appearance.restore() },
+    settled: () => {
       const handle = api.foreground() as bigint | null
-      return !handle || !ownsWindow(handle)
-    }, signal, '目标应用主动激活窗口，无法恢复启动前的焦点'),
+      return Date.now() - lastActivity >= WINDOW_SETTLE_MS && (!handle || !ownsWindow(handle))
+    },
     check: () => { if (failure) throw failure },
   }
 }

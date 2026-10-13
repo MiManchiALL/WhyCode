@@ -90,6 +90,26 @@ function processExecutable(pid: number): string | undefined {
   } finally { api.close(process) }
 }
 
+export function preserveWindowAppearance(handle: bigint) {
+  const pid = [0]
+  api.pid(handle, pid)
+  const style = Number(api.style(handle, -20))
+  const color = [0], alpha = [255], layerFlags = [2]
+  if (style & LAYERED) check(api.layer(handle, color, alpha, layerFlags), '读取窗口透明度')
+  return {
+    conceal: () => {
+      setWindowStyle(handle, Number(api.style(handle, -20)) | TEMPORARY_STYLES)
+      check(api.setLayer(handle, 0, 0, 2), '设置临时透明窗口')
+    },
+    restore: () => {
+      const currentPid = [0]
+      if (!api.exists(handle) || !api.pid(handle, currentPid) || currentPid[0] !== pid[0]) return
+      if (style & LAYERED) check(api.setLayer(handle, color[0], alpha[0], layerFlags[0]), '还原窗口透明度')
+      setWindowStyle(handle, (Number(api.style(handle, -20)) & ~TEMPORARY_STYLES) | (style & TEMPORARY_STYLES))
+    },
+  }
+}
+
 /** 只借用已有窗口，截图、失败和取消均归还借用前的状态。 */
 export function preserveScreenshotWindow(window: Pick<NativeScreenshotWindow, 'handle' | 'pid'>) {
   const { handle } = window
@@ -101,12 +121,7 @@ export function preserveScreenshotWindow(window: Pick<NativeScreenshotWindow, 'h
   const placement = Buffer.alloc(60)
   placement.writeUInt32LE(placement.length)
   check(api.placement(handle, placement), '读取窗口位置')
-  const color = [0], alpha = [255], layerFlags = [2]
-  if (style & LAYERED) check(api.layer(handle, color, alpha, layerFlags), '读取窗口透明度')
-  const conceal = () => {
-    setWindowStyle(handle, Number(api.style(handle, -20)) | TEMPORARY_STYLES)
-    check(api.setLayer(handle, 0, 0, 2), '设置截图期间的透明窗口')
-  }
+  const appearance = preserveWindowAppearance(handle)
   const restore = async () => {
     const pid = [0]
     api.pid(handle, pid)
@@ -132,13 +147,10 @@ export function preserveScreenshotWindow(window: Pick<NativeScreenshotWindow, 'h
         await waitForWindowState(() => api.previous(handle, 3) === previous && (Number(api.style(handle, -20)) & 8) === (style & 8))
       }
     } catch (error) { errors.push(error) }
-    try {
-      if (style & LAYERED) check(api.setLayer(handle, color[0], alpha[0], layerFlags[0]), '还原窗口透明度')
-      setWindowStyle(handle, (Number(api.style(handle, -20)) & ~TEMPORARY_STYLES) | (style & TEMPORARY_STYLES))
-    } catch (error) { errors.push(error) }
+    try { appearance.restore() } catch (error) { errors.push(error) }
     if (errors.length) throw new AggregateError(errors, `窗口状态未能完整还原：${errors.map(error => error instanceof Error ? error.message : String(error)).join('；')}`)
   }
-  return { conceal, restore }
+  return { conceal: appearance.conceal, restore }
 }
 
 export async function showScreenshotWindow(handle: bigint, signal: AbortSignal): Promise<void> {

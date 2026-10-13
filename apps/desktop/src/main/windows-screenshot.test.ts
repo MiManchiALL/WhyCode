@@ -206,6 +206,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
   await copyFile(launcher, path.join(directory, 'app/Fixture.exe'))
   await copyFile(launcher, path.join(directory, 'Fixture.exe'))
   await copyFile(launcher, path.join(directory, 'ActiveFixture.exe'))
+  await copyFile(launcher, path.join(directory, 'RestoringFixture.exe'))
   const titleText = user32.func('int GetWindowTextW(void *, void *, int)')
   const enumerate = user32.func('__stdcall', 'EnumWindows', 'int', [koffi.pointer(koffi.proto('int __stdcall ColdFixtureVisitor(void *, intptr_t)')), 'intptr_t'])
   const close = user32.func('int PostMessageW(void *, uint32_t, uintptr_t, intptr_t)')
@@ -221,7 +222,7 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     }, 0)
     return found
   }
-  for (const mode of ['success', 'activation'] as const) {
+  for (const mode of ['success', 'activation', 'delayed-restore'] as const) {
     await t.test(`只启动并最小化，另一次按身份截图：${mode}`, async t => {
       const before = foreground()
       const observed = new Set<bigint | null>()
@@ -230,12 +231,18 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
       try {
         if (mode === 'success') await setState('launcher-title')
         const description = await startWindowsScreenshotApplication(
-          mode === 'activation' ? path.join(directory, 'ActiveFixture.exe') : launcher, new AbortController().signal)
+          mode === 'success' ? launcher : path.join(directory, mode === 'activation' ? 'ActiveFixture.exe' : 'RestoringFixture.exe'),
+          new AbortController().signal)
         assert.match(description, /本次未截图.*不带 application_path/)
         window = fixtureWindow()
         assert.ok(window)
         assert.notEqual(window, hwnd)
         assert.ok(minimized(window))
+        if (mode === 'delayed-restore') {
+          assert.equal(await readFile(path.join(directory, 'restored'), 'utf8'), 'protected\nprotected\n')
+          await delay(500)
+          assert.ok(minimized(window), '延迟还原结束后才交付窗口')
+        }
         assert.equal(Number(style(window, -20)) & (0x80000 | 0x08000000 | 0x20), 0)
         const id = description.match(/window_id="([^"]+)"/)?.[1]
         assert.ok(id)
@@ -289,6 +296,37 @@ test('Windows 外部窗口截图保留原状态，失败、取消和宿主断开
     await delay(600)
     assert.equal(fixtureWindow(), undefined)
   })
+  for (const end of ['cancel', 'disconnect'] as const) {
+    await t.test(`启动窗口受保护期间结束：${end}`, async () => {
+      const worker = spawn(process.execPath, [path.join(directory, 'windows-screenshot-worker.js')], {
+        windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+      })
+      children.push(worker)
+      worker.stderr?.resume()
+      const messages: { type: string; error?: string }[] = []
+      worker.on('message', message => messages.push(message as typeof messages[number]))
+      const exited = once(worker, 'exit', { signal: AbortSignal.timeout(10_000) })
+      worker.send({ type: 'launch', applicationPath: path.join(directory, 'RestoringFixture.exe') })
+      try {
+        let window: bigint | undefined
+        for (let attempt = 0; attempt < 100; attempt++) {
+          window = fixtureWindow()
+          if (window && (Number(style(window, -20)) & 0x80020) === 0x80020) break
+          await delay(20)
+        }
+        assert.ok(window && (Number(style(window, -20)) & 0x80020) === 0x80020)
+      } finally {
+        if (end === 'cancel') worker.send({ type: 'cancel' })
+        else worker.disconnect()
+      }
+      await exited
+      assert.equal(messages.some(message => message.type === 'prepared'), false)
+      if (end === 'cancel') assert.match(messages.find(message => message.type === 'restored')?.error ?? '', /取消/)
+      for (let attempt = 0; attempt < 50 && fixtureWindow(); attempt++) await delay(20)
+      assert.equal(fixtureWindow(), undefined)
+      assert.ok(exists(hwnd), '既有窗口不属于本次启动进程树')
+    })
+  }
 })
 
 async function disconnect(child: ChildProcess): Promise<void> {
