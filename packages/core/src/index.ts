@@ -436,3 +436,4 @@ export type { WorkspaceProcess } from './workspace/process.ts'
 export { unknownWorkspaceOutcome, isUnknownWorkspaceOutcome } from './workspace/errors.ts'
 
 export { stopWorkspaceProcess } from './workspace/process.ts'
+export type { BrowserDriver, BrowserExecution } from './tools/browser/index.ts'

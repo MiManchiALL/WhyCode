@@ -128,6 +128,7 @@ import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
 import { BrowserGuests } from './browser-guests.ts'
+import { BrowserAgent } from './browser-agent.ts'
 import { installWorkspaceFileLifecycle, registerWorkspaceFileIpc } from './workspace-files-ipc.ts'
 import { runtimeWorkspaceBinding, workspaceDisplayDirectory, workspaceProjectDirectory } from '../shared/workspace.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
@@ -356,6 +357,7 @@ function createSessionWebPageTools(recorder: SessionJournal) {
 }
 
 const browserGuests = new BrowserGuests(process.env.ELECTRON_RENDERER_URL)
+const browserAgent = new BrowserAgent(browserGuests)
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -912,6 +914,7 @@ async function createMainAgentSession(
         ...createSessionWebPageTools(recorder),
       ],
       captureScreenshot: remote ? undefined : captureSessionScreenshot,
+      browser: browserAgent.forRuntime(runtime.runtimeId),
       pdfProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
       hasPendingTaskPlanContinuation: (planId) =>
@@ -3288,6 +3291,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     await sshWorkspaces.connect(runtime.workspace)
     return sshWorkspaces.io(runtime.workspace)
   })
+  browserAgent.pages.register()
   createWindow()
 
   app.on('activate', () => {

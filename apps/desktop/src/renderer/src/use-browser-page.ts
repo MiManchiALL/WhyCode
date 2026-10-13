@@ -8,6 +8,8 @@ export interface BrowserPageState {
   error: string | null; zoom: number; match: { current: number; total: number } | null
 }
 interface Props {
+  lease: BrowserLease
+  navigationRevision: number
   active: boolean
   url: string
   workspaceRuntimeId?: string
@@ -24,27 +26,16 @@ export function useBrowserPage(props: Props) {
   const element = useRef<WebviewTag | null>(null)
   const ready = useRef(false)
   const navigation = useRef(0)
-  const [started, setStarted] = useState(props.active)
-  const [lease, setLease] = useState<BrowserLease | null>(null)
+  const lease = props.lease
   const [state, setState] = useState<BrowserPageState>({ url: props.url, title: '', loading: props.url !== 'about:blank',
     ready: false, back: false, forward: false, error: null, zoom: 1, match: null })
-  useEffect(() => { if (props.active) setStarted(true) }, [props.active])
   useEffect(() => {
     if (props.active && ready.current && element.current) {
       const zoom = element.current.getZoomFactor()
       setState(value => ({ ...value, zoom }))
     }
   }, [props.active])
-  useEffect(() => {
-    if (!started) return
-    let cancelled = false
-    let current: BrowserLease | null = null
-    void window.whycode.acquireBrowser().then(value => {
-      if (cancelled) { window.whycode.releaseBrowser(value.id); return }
-      current = value; setLease(value)
-    }).catch(error => { if (!cancelled) setState(value => ({ ...value, loading: false, error: String(error) })) })
-    return () => { cancelled = true; ready.current = false; navigation.current++; if (current) window.whycode.releaseBrowser(current.id) }
-  }, [started])
+  useEffect(() => { if (props.navigationRevision) navigate(props.url) }, [props.navigationRevision])
 
   useEffect(() => {
     const webview = element.current
@@ -84,7 +75,7 @@ export function useBrowserPage(props: Props) {
       update()
       if (bootstrapped) return
       bootstrapped = true
-      if (initialUrl.current !== 'about:blank') navigate(initialUrl.current)
+      navigate(initialUrl.current)
     })
     listen('did-start-loading', () => setState(value => ({ ...value, loading: true })))
     listen('did-stop-loading', () => update())
@@ -116,8 +107,8 @@ export function useBrowserPage(props: Props) {
       else if (event.type === 'shortcut') callbacks.current.onShortcut(event.command)
       else feedback(event.error ? 'error' : 'info', event.message, true)
     })
-    return () => { closed = true; ready.current = false; removers.forEach(remove => remove()); unsubscribe() }
-  }, [lease, feedback])
+    return () => { closed = true; ready.current = false; navigation.current++; removers.forEach(remove => remove()); unsubscribe() }
+  }, [lease.id, feedback])
 
   const run = (action: (webview: WebviewTag) => void) => {
     if (!ready.current || !element.current) return

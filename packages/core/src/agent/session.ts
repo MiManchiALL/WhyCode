@@ -143,6 +143,7 @@ import {
 } from '../skills/types.ts'
 import type { SkillCatalogService } from '../skills/catalog.ts'
 import { SkillTurnContext } from '../skills/turn.ts'
+import { BrowserTurnContext, type BrowserDriver } from '../tools/browser/index.ts'
 import { createSkillTool, SKILL_TOOL_NAME } from '../tools/skill/index.ts'
 import { createCommandTaskNotificationMessage } from '../tools/background-command/notification.ts'
 import type { CommandTaskTerminalNotification } from '../tools/background-command/types.ts'
@@ -229,6 +230,7 @@ export interface AgentSessionOptions {
   mainTools?: ToolDefinition[]
   /** Electron 等宿主注入的桌面采集能力；Core 不依赖具体窗口系统。 */
   captureScreenshot?: ScreenshotCaptureHandler
+  browser?: BrowserDriver
   /** 宿主注入的隔离 PDF 处理端口；未提供时物理移除 ReadPdf。 */
   pdfProcessor?: PdfProcessor
   /** 非视觉 Main 可按需调用的独立识图模型；视觉 Main 不装配对应工具。 */
@@ -416,6 +418,7 @@ export class AgentSession {
   private taskPlan: TaskPlanController | null = null
   private loopHealth = new LoopHealthMonitor()
   private readonly skillTurn: SkillTurnContext
+  private readonly browserTurn = new BrowserTurnContext()
   /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
   private userQuestionsEnabled: boolean
   /** 最近一个稳定模型步骤的结束原因，供一次性子代理激活映射可靠终态。 */
@@ -2002,6 +2005,12 @@ export class AgentSession {
         recorder.recordStep(turnId, markers, interruptedState ?? undefined, null),
       )
     }
+    try { await this.options.browser?.finishTurn(turnId) }
+    catch (error) {
+      emit({ type: 'error', message: `浏览器收尾失败：${error instanceof Error ? error.message : String(error)}`, recoverable: true })
+      if (stopReason !== 'aborted') stopReason = 'error'
+    }
+    finally { this.browserTurn.finish() }
     await this.persist((recorder) => recorder.recordTurnEnd(turnId, stopReason))
     this.activeTurn = null
     this.opAbort = null
@@ -2194,10 +2203,10 @@ export class AgentSession {
   ): Promise<PreparedRequestContext> {
     const model = this.currentModelSelection().model
     const threshold = autoCompactThreshold(model.capabilities)
-    const skillTokens = this.skillTurn.injectedContextTokenEstimate()
-    if (skillTokens >= threshold) {
+    const activeContextTokens = this.skillTurn.injectedContextTokenEstimate() + this.browserTurn.tokenEstimate()
+    if (activeContextTokens >= threshold) {
       throw new Error(
-        `当前选择的 Skill 内容约 ${skillTokens} tokens，超过该模型单次任务的上下文预算；请减少选择或缩短 SKILL.md`,
+        `当前活动指引（Skill、Browser）约 ${activeContextTokens} tokens，超过该模型单次任务的上下文预算；请减少 Skill 内容或选择上下文更大的模型`,
       )
     }
     if (!force && (prepared.usedTokens < threshold || this.compactFailures >= MAX_COMPACT_FAILURES)) {
@@ -2332,12 +2341,12 @@ export class AgentSession {
     const subagentStateMessage = this.activeSubagentTurnState
       ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
       : null
-    return this.skillTurn.project(
+    return this.browserTurn.project(this.skillTurn.project(
       withoutMcpToolState([
         ...messages,
         ...(subagentStateMessage ? [subagentStateMessage] : []),
       ]),
-    )
+    ))
   }
 
   private async prepareRequestContext(abortSignal: AbortSignal): Promise<PreparedRequestContext> {
@@ -2398,15 +2407,15 @@ export class AgentSession {
   private async messagesForCurrentModel(
     messages: ModelMessage[],
     abortSignal?: AbortSignal,
-    includeActiveSkillContext = true,
+    includeActiveContext = true,
   ): Promise<ModelMessage[]> {
     const model = this.currentModelSelection().model
     const supportsImages = model.capabilities.supportsImageInput
     const signal = abortSignal ?? new AbortController().signal
-    const modelMessages = this.skillTurn.project(
+    const modelMessages = this.browserTurn.project(this.skillTurn.project(
       withoutMcpToolState(messages),
-      includeActiveSkillContext,
-    )
+      includeActiveContext,
+    ), includeActiveContext)
     const withPdfPages = supportsImages
       && this.options.pdfProcessor
       && this.options.sessionRecorder
@@ -2910,6 +2919,11 @@ export class AgentSession {
       ...questionTools,
       ...skillTools,
       ...mainTools,
+      ...(this.options.browser && this.options.sessionRecorder && !this.options.promptContext.discussion && !this.protocolRound
+        ? [this.browserTurn.tool({ driver: this.options.browser,
+            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
+            sessionId: this.options.sessionRecorder.sessionId, supportsImages: model.capabilities.supportsImageInput })]
+        : []),
     ]
     const imageTools: ToolDefinition[] =
       model.capabilities.supportsImageInput

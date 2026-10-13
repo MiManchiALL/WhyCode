@@ -26,5 +26,6 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/openai-compatible@3.0.5'
   - '@ai-sdk/openai@4.0.7'
   - fast-uri@3.1.7
+  - '@earendil-works/pi-codemode@1.2.0'
 patchedDependencies:
   node-pty@1.1.0: patches/node-pty@1.1.0.patch

@@ -94,6 +94,8 @@ function knownToolSummary(
       }
     case 'CaptureScreenshot':
       return screenshotSummary(input)
+    case 'Browser':
+      return text(input, 'description') || (text(input, 'code') ? '操作网页' : '加载浏览器指引')
     case 'ReadPdf':
       return join(pdfSourceSummary(input), pageRange(input, 'startPage', 'pageCount'))
     case 'Skill':

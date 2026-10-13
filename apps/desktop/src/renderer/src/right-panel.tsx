@@ -19,7 +19,7 @@ import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 import { WorkspaceDirectories } from './workspace-directories.ts'
-import { BrowserPanel } from './browser-panel.tsx'
+import { BrowserSurfaces } from './browser-surfaces.tsx'
 import type { PathReference } from './path-reference.ts'
 import { browserAddress } from '../../shared/browser.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
@@ -45,6 +45,7 @@ interface RightPanelProps {
   state: RightPanelSessionState
   onOpenPage: (page: RightPanelPage) => void
   onUpdatePage: (page: RightPanelPage) => void
+  onRegisterBrowserPage: (page: Extract<RightPanelPage, { kind: 'browser' }>) => void
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onMoveTab: (tabId: string, targetId: string) => void
@@ -77,7 +78,7 @@ export function RightPanel(props: RightPanelProps) {
     return () => window.removeEventListener('focus', refresh)
   }, [directories, browsing])
   return (
-    <aside className="flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
+    <aside className="relative flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
         <RightPanelTabs key={props.parentSessionId ?? props.runtimeId} tabs={props.state.tabs} activeTabId={props.state.activeTabId}
           subagents={props.subagents} onSelect={props.onSelectTab} onClose={props.onCloseTab} onMove={props.onMoveTab}>
@@ -117,12 +118,10 @@ export function RightPanel(props: RightPanelProps) {
       </div>
       {!props.loading && <>
         <RightPanelContent {...props} directories={directories} />
-        {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
-          page={tab.page} active={props.active && props.state.activeTabId === tab.id}
-          runtimeId={props.runtimeId} canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts}
-          onReference={(image, replaceId) => props.onReferenceBrowser(props.runtimeId, image, replaceId)}
-          onChange={props.onUpdatePage} onOpen={url => openBrowser(props, url, tab.page.kind === 'browser' && !!tab.page.workspaceFile && url.startsWith('file:'))} onClose={() => props.onCloseTab(tab.id)} />)}
       </>}
+      <BrowserSurfaces runtimeId={props.runtimeId} active={!props.loading && props.active} fullscreen={props.fullscreen} state={props.state}
+        canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts} onReference={props.onReferenceBrowser}
+        onUpdate={props.onUpdatePage} onRegister={props.onRegisterBrowserPage} onOpen={props.onOpenPage} onClose={props.onCloseTab} />
     </aside>
   )
 }
