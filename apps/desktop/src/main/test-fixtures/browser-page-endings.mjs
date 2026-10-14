@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict'
+
+export async function checkBrowserPageEndings({ run, finish, execute, until, agent, guests, url }) {
+  await execute('fixture.visible(false)')
+  assert.equal((await run('collapsed', `await browser.open({url:${JSON.stringify(url)}});`)).isError, false)
+  await execute('fixture.visible(true)')
+  await until(() => execute('fixture.state().tabs.some(tab=>tab.page.kind==="browser")'), 'viewing promotes temporary tab')
+  const collapsed = guests.get(agent.pages.current('collapsed').surfaceId)
+  await collapsed.executeJavaScript('document.querySelector("input").value="temporary"')
+  await execute('fixture.visible(false)')
+  await until(() => !agent.pages.list('alpha').some(page => page.active), 'collapsed sidebar')
+  await finish('collapsed')
+  assert.equal(collapsed.isDestroyed(), true, '收起时结束不保留隐藏 Agent DOM')
+  assert.equal(await execute('fixture.state().tabs.filter(tab=>tab.page.kind==="browser").length'), 1, '看过的标签保留地址')
+  await execute('fixture.visible(true)')
+  await until(() => agent.pages.list('alpha').some(page => guests.get(page.id)?.getURL() === url), 'reopen retained address')
+  const reloaded = guests.get(agent.pages.list('alpha')[0].id)
+  assert.equal(await reloaded.executeJavaScript('document.querySelector("input").value'), '', '重新按 URL 加载，不继承隐藏 Agent 的临时输入')
+
+  assert.equal((await run('personal', 'await browser.open();')).isError, false)
+  await until(() => execute('!!document.querySelector(\'[aria-label="切换到我的网页"]\')'), 'personal view switch ready')
+  await execute('document.querySelector(\'[aria-label="切换到我的网页"]\').click()')
+  await until(() => agent.pages.list('alpha').some(page => !page.agent && guests.get(page.id)?.getURL() === url), 'personal page loaded')
+  const personal = guests.get(agent.pages.list('alpha').find(page => !page.agent).id)
+  await personal.executeJavaScript('document.querySelector("input").value="my-draft"')
+  await finish('personal')
+  assert.equal(reloaded.isDestroyed(), true)
+  assert.equal(personal.isDestroyed(), false)
+  assert.equal(await personal.executeJavaScript('document.querySelector("input").value'), 'my-draft', '停留在用户视图时原样保留自己的内容')
+
+  assert.equal((await run('away', 'await browser.open();')).isError, false)
+  await execute('fixture.session("beta")')
+  await until(() => !agent.pages.list('alpha').some(page => page.active), 'session switched away')
+  await finish('away')
+  assert.equal(personal.isDestroyed(), true, '切走会话后结束释放 Agent DOM')
+  await execute('fixture.session("alpha")')
+  await until(() => execute('fixture.state().tabs.length===0'), 'endings fixture reset')
+}

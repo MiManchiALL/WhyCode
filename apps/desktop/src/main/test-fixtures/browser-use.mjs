@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, nativeImage, protocol } from 'electron'
 import { BrowserGuests } from '../browser-guests.ts'
 import { BrowserAgent } from '../browser-agent.ts'
+import { checkBrowserObservation } from './browser-observation.mjs'
+import { checkBrowserPageEndings } from './browser-page-endings.mjs'
 
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
 app.setPath('userData', path.join(directory, 'profile'))
@@ -46,6 +48,8 @@ app.whenReady().then(async () => {
   assert.equal(win.isVisible(), true)
   assert.equal(win.isFocused(), false, '截图不激活宿主窗口')
   await finish('cold')
+  await until(() => execute('fixture.display().tabs.length===0'), 'never viewed tab removed')
+  assert.equal(await execute('fixture.state().tabs.length'), 0, '未查看的后台网页不保存标签')
   assert.equal(win.webContents.getBackgroundThrottling(), true, '隐藏 Agent 页结束后恢复宿主节流')
   win.hide()
   win.setOpacity(1)
@@ -77,16 +81,41 @@ app.whenReady().then(async () => {
   assert.equal(textClick.isError, false, textClick.text)
   assert.ok(textClick.text.startsWith('[]'), '快照省略无名称的布局容器')
   assert.equal(await originalGuest.executeJavaScript('document.body.dataset.palette'), 'chosen', '文字引用点击其所属真实元素')
+  await checkBrowserObservation(run, originalGuest)
+  // 高侧栏属于展开窗口；保持不可见且不激活，建立与实际窗口大小一致的原生表面。
+  win.setOpacity(0)
+  win.setSize(1400, 1400)
+  win.showInactive()
+  await execute('fixture.tall(true)')
+  await until(() => originalGuest.executeJavaScript('innerHeight>1000'), 'tall viewport fills panel')
+  await originalGuest.executeJavaScript(`document.body.insertAdjacentHTML('beforeend','<div id="bottom-marker" style="position:fixed;bottom:0;left:0;right:0;height:10px;background:rgb(255,0,255)"></div>')`)
+  const tall = await run('one', 'text(await browser.snapshot()); image(await browser.screenshot());')
+  assert.equal(tall.isError, false, tall.text)
+  const tallSize = nativeImage.createFromBuffer(tall.images[0].bytes).getSize()
+  assert.equal(tallSize.height, await originalGuest.executeJavaScript('innerHeight'), '截图保持真实视口高度')
+  const tallBitmap = nativeImage.createFromBuffer(tall.images[0].bytes).toBitmap()
+  const bottomPixel = ((tallSize.height - 5) * tallSize.width + 100) * 4
+  assert.deepEqual([...tallBitmap.subarray(bottomPixel, bottomPixel + 3)], [255, 0, 255], '完整捕获高视口底部，不拉伸旧画面')
+  const layout = await execute(`(() => {const view=document.querySelector('[aria-label="Agent 浏览器"] webview');return [view.getBoundingClientRect().height,view.parentElement.getBoundingClientRect().height]})()`)
+  assert.equal(layout[0], layout[1], '网页填满容器，不留底部白条')
+  await originalGuest.executeJavaScript('document.getElementById("bottom-marker").remove()')
+  await execute('fixture.tall(false)')
+  win.setSize(1000, 800)
+  await until(() => originalGuest.executeJavaScript('innerHeight===800'), 'default viewport')
+  assert.equal(win.isFocused(), false, '高视口捕获不抢焦点')
+  win.hide()
+  win.setOpacity(1)
   const invalidWait = await run('one', 'await browser.wait({timeoutMs:5});')
   assert.match(invalidWait.text, /ref 或 text/)
   const invalidExpression = await run('one', 'await browser.evaluate(() => document.title);')
   assert.match(invalidExpression.text, /不能传入函数/)
   assert.equal(win.isVisible(), false, '浏览器操作不显示宿主窗口')
+  await execute('fixture.narrow()')
+  await until(() => execute('document.querySelector("[aria-label=\'Agent 浏览器\']").getBoundingClientRect().width===300'), 'narrow viewport')
+  assert.ok(await execute(`(() => {const toolbar=document.querySelector('[aria-label="Agent 浏览器"]').firstElementChild;return toolbar.scrollWidth<=toolbar.clientWidth})()`), '窄栏工具条不溢出')
   if (process.env.WHYCODE_BROWSER_REVIEW_DIR) {
     await mkdir(process.env.WHYCODE_BROWSER_REVIEW_DIR, { recursive: true })
     await writeFile(path.join(process.env.WHYCODE_BROWSER_REVIEW_DIR, 'agent.png'), changed.images[0].bytes)
-    await execute('fixture.narrow()')
-    await until(() => execute('document.querySelector("[aria-label=\'Agent 浏览器\']").getBoundingClientRect().width===300'), 'narrow viewport')
     await writeFile(path.join(process.env.WHYCODE_BROWSER_REVIEW_DIR, 'narrow.png'), (await win.webContents.capturePage()).toPNG())
   }
   await execute(`document.querySelector('[aria-label="切换到我的网页"]').click()`)
@@ -171,9 +200,12 @@ app.whenReady().then(async () => {
   assert.match(navigation.text, /Local content/)
   assert.match(navigation.text, /元素引用已失效/)
   assert.equal(agent.pages.surface(agent.pages.current('four')).page.workspaceFile, true)
-  await until(() => execute(`fixture.state().tabs.some(tab=>tab.page.url===${JSON.stringify(pathToFileURL(file).href)} && tab.page.workspaceFile)`), 'hidden navigation updates descriptor')
+  await until(() => execute(`fixture.display().tabs.some(tab=>tab.page.url===${JSON.stringify(pathToFileURL(file).href)} && tab.page.workspaceFile)`), 'hidden navigation updates temporary tab')
+  assert.equal(await execute('fixture.state().tabs.some(tab=>tab.page.kind==="browser")'), false, '未查看的导航不保存浏览器标签')
   await finish('four')
+  await until(() => execute('!fixture.display().tabs.some(tab=>tab.page.kind==="browser")'), 'unviewed temporary tab gone')
   assert.equal(agent.pages.list('alpha').length, 0)
+  await checkBrowserPageEndings({ run, finish, execute, until, agent, guests, url })
   assert.equal((await run('five', `await browser.open({url:${JSON.stringify(url)}})`)).isError, false)
   await execute('window.whycode.clearBrowserData("all")')
   assert.equal(win.webContents.getBackgroundThrottling(), true, '全部清理释放绘制活动')

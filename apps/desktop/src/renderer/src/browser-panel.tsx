@@ -147,7 +147,7 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
         <div className="relative min-h-0 w-full flex-1" style={agent ? { minWidth: BROWSER_VIEWPORT.width, minHeight: BROWSER_VIEWPORT.height } : undefined}>
           {browser.lease && <webview ref={node => { browser.element.current = node as unknown as WebviewTag | null }}
             src={`about:blank#${browser.lease.id}`} partition={browser.lease.partition} allowpopups={'true' as unknown as boolean}
-            style={agent ? { display: 'flex', position: 'absolute', ...BROWSER_VIEWPORT }
+            style={agent ? { display: 'flex', position: 'absolute', width: BROWSER_VIEWPORT.width, height: '100%' }
               : { display: 'flex', position: 'absolute', width: '100%', height: '100%' }} aria-label="网页内容" />}
         </div>
         {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--wc-surface)] px-6 text-center text-sm text-[var(--wc-muted)]">

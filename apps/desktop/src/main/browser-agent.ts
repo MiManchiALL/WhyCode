@@ -40,25 +40,27 @@ export class BrowserAgent {
             name, run: async (input: unknown, signal: AbortSignal) => {
               const turn = connect()
               const guest = await this.pages.guest(turn, signal)
-              let automation = this.automation.get(turnId)
-              if (!automation) { automation = new BrowserAutomation(guest); this.automation.set(turnId, automation) }
+              const automation = this.automation.get(turnId) ?? new BrowserAutomation(guest)
+              this.automation.set(turnId, automation)
               signal.throwIfAborted()
-              switch (name) {
-                case 'navigate': await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal); return { url: guest.getURL() }
-                case 'snapshot': return automation.snapshot(input, signal)
-                case 'click': await automation.click(input, signal); break
-                case 'fill': await automation.fill(input, signal); break
-                case 'type': await automation.type(input, signal); break
-                case 'press': await automation.press(input, signal); break
-                case 'scroll': await automation.scroll(input, signal); break
-                case 'evaluate': return automation.evaluate(input, signal)
-                case 'wait': return automation.wait(input, signal)
-                case 'screenshot':
-                  // 输入完成与画面提交不是同一时刻；等待浏览器提交新帧，避免截到上一次绘制。
-                  await automation.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))))' }, signal)
-                  return captureBrowserPage(guest, signal)
-              }
-              return { completed: true }
+              return automation.perform(async () => {
+                switch (name) {
+                  case 'navigate': await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal); return { url: guest.getURL() }
+                  case 'snapshot': return automation.snapshot(input, signal)
+                  case 'click': await automation.click(input, signal); break
+                  case 'fill': await automation.fill(input, signal); break
+                  case 'type': await automation.type(input, signal); break
+                  case 'press': await automation.press(input, signal); break
+                  case 'scroll': await automation.scroll(input, signal); break
+                  case 'evaluate': return automation.evaluate(input, signal)
+                  case 'wait': return automation.wait(input, signal)
+                  case 'screenshot':
+                    // 输入完成与画面提交不是同一时刻；等待浏览器提交新帧，避免截到上一次绘制。
+                    await automation.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))))' }, signal)
+                    return captureBrowserPage(guest, signal, await automation.viewport(signal))
+                }
+                return { completed: true }
+              }, signal)
             },
           })),
         ]

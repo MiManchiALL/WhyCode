@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import { BrowserPanel } from './browser-panel.tsx'
@@ -25,7 +25,6 @@ export function BrowserSurfaces(props: Props) {
   const state = useBrowserHostState()
   const confirmation = useBrowserConfirmation()
   const feedback = useConversationFeedback()
-  const registered = useRef(new Set<string>())
   const { anchor, bounds } = useBrowserBounds(props.active)
   const pages = props.state.tabs.flatMap(tab => tab.page.kind === 'browser' ? [tab.page] : [])
   const activePage = props.state.tabs.find(tab => tab.id === props.state.activeTabId)?.page
@@ -44,14 +43,10 @@ export function BrowserSurfaces(props: Props) {
     if (confirmation && confirmation.runtimeId !== props.runtimeId) dismissBrowserConfirmation()
   }, [confirmation, props.runtimeId])
   useEffect(() => {
-    for (const agent of state.agents) {
-      if (agent.runtimeId !== props.runtimeId || registered.current.has(agent.turnId)) continue
-      registered.current.add(agent.turnId)
-      props.onRegister({ kind: 'browser', ...agent.page })
-    }
-    const turns = new Set(state.agents.map(agent => agent.turnId))
-    for (const id of registered.current) if (!turns.has(id)) registered.current.delete(id)
-  }, [state.agents, props.runtimeId, props.onRegister])
+    // 后台页面只投影临时标签；用户真正查看后才进入会话偏好。
+    const agent = state.agents.find(agent => agent.runtimeId === props.runtimeId && agent.surfaceId === state.visibleId)
+    if (props.active && agent) props.onRegister({ kind: 'browser', ...agent.page })
+  }, [state.agents, state.visibleId, props.active, props.runtimeId, props.onRegister])
   useEffect(() => {
     for (const surface of state.surfaces) {
       if (surface.runtimeId !== props.runtimeId) continue
@@ -74,7 +69,7 @@ export function BrowserSurfaces(props: Props) {
       // 负层级或全透明会被 Chromium 剔除合成；保留不可交互的极低透明度表面供后台截图。
       return <div key={surface.id} aria-hidden={!shown} inert={!shown}
         style={shown ? { position: 'fixed', ...bounds, display: 'flex', zIndex: props.fullscreen ? 50 : 20, overflow: 'hidden' }
-          : { position: 'fixed', left: 0, top: 0, width: 1280, height: 849, display: surface.turnId ? 'flex' : 'none', zIndex: 0, opacity: 0.001, pointerEvents: 'none' }}>
+          : { position: 'fixed', left: 0, top: 0, width: 1280, height: Math.max(849, bounds.height), display: surface.turnId ? 'flex' : 'none', zIndex: 0, opacity: 0.001, pointerEvents: 'none' }}>
         <BrowserPanel page={page} active={shown} lease={surface} navigationRevision={surface.navigation} agent={!!surface.turnId}
           runtimeId={surface.runtimeId} canReference={shown && props.canReference} referenceDrafts={props.referenceDrafts}
           onReference={(image, replaceId) => props.onReference(surface.runtimeId, image, replaceId)}
