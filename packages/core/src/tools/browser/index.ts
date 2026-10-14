@@ -32,7 +32,7 @@ export class BrowserTurnContext {
     return buildTool({
       name: 'Browser',
       description: '浏览和操作内置网页',
-      prompt: 'Inspect and interact with built-in browser pages using JavaScript. First call without code to load the API guide, then use code. Scripts are independent; pages last for the current Turn. Prefer the relevant open user page. Browser screenshots use this tool; external application screenshots use CaptureScreenshot.',
+      prompt: 'Inspect and interact with built-in browser pages using JavaScript. First call without code to load the API guide. Start with browser.open({url}) in code: WhyCode reuses the matching user page or opens it in the background. No sidebar preparation is needed. Scripts are independent; pages last for the current Turn. Use this tool for browser screenshots, CaptureScreenshot for external applications.',
       inputSchema: z.object({
         code: z.string().max(32_000).optional().describe('JavaScript using the loaded browser API; omit on first use'),
         description: z.string().max(120).optional().describe('Brief description of this browser action'),

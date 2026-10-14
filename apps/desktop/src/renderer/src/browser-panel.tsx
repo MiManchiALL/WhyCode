@@ -80,7 +80,7 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
   }
   const copy = () => { void navigator.clipboard.writeText(state.url).then(() => feedback('success', '已复制网址'), error => feedback('error', String(error))) }
   const nextMatch = (forward: boolean) => browser.find(query, forward, true)
-  return <section aria-label={agent ? 'Agent 浏览器' : '内置浏览器'} className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wc-surface)]"
+  return <section aria-label={agent ? 'Agent 浏览器' : '内置浏览器'} data-agent={agent} className="wc-browser-panel flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wc-surface)]"
     onKeyDown={event => {
       if (event.defaultPrevented) return
       const command = browserShortcut({ key: event.key, control: event.ctrlKey, meta: event.metaKey,
@@ -102,14 +102,14 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
           aria-label="网址或搜索" placeholder="输入网址或搜索" spellCheck={false} autoCapitalize="off" autoCorrect="off"
           onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault() }} />
       </form>
-      {switchView && <button className="wc-preview-action !w-auto gap-1 px-1.5" onClick={switchView}
+      {switchView && <button className="wc-preview-action wc-browser-view-toggle !w-auto gap-1 px-1.5" onClick={switchView}
         title={agent ? '正在查看 Agent 网页；切换到我的网页' : '切换到 Agent 正在操作的网页'} aria-label={agent ? '切换到我的网页' : '切换到 Agent 网页'} aria-pressed={agent}>
-        <ArrowLeftRight size={14} />
+        <span className="wc-browser-view-dot" aria-hidden /><span className="text-xs">{agent ? 'Agent' : '我的网页'}</span><ArrowLeftRight size={12} />
       </button>}
       <button className={`wc-preview-action !w-auto gap-1 px-1.5 ${reference.mode !== 'off' ? 'wc-browser-reference-active' : ''}`}
         title="引用网页元素或区域" aria-label="引用网页元素或区域" aria-pressed={reference.mode !== 'off'}
         disabled={!canReference || !state.ready || state.loading || !!state.error || state.url === 'about:blank'}
-        onClick={() => { setFinding(false); browser.find(''); reference.toggle() }}><MousePointer2 size={15} /><span className="text-xs">引用</span></button>
+        onClick={() => { setFinding(false); browser.find(''); reference.toggle() }}><MousePointer2 size={15} /><span className="wc-browser-reference-label text-xs">引用</span></button>
       <DropdownMenu.Root><DropdownMenu.Trigger asChild><button className="wc-preview-action" aria-label="浏览器操作" title="浏览器操作"><MoreHorizontal size={16} /></button></DropdownMenu.Trigger>
         <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content min-w-48" align="end" sideOffset={6}
           onCloseAutoFocus={event => { if (finding) event.preventDefault() }}>
@@ -142,19 +142,22 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
       {reference.mode === 'picking' && reference.captures.length > 0 && <button className="wc-reference-secondary" onClick={reference.finishPicking}>完成选择 ({reference.captures.length})</button>}
       <button className="wc-preview-action" title="退出引用" aria-label="退出引用" onClick={reference.cancel}><X size={14} /></button>
     </div>}
-    <div ref={setStage} className="relative flex min-h-0 flex-1 flex-col overflow-auto bg-white" aria-busy={state.loading}>
-      <div className="relative min-h-0 w-full flex-1" style={agent ? { minWidth: BROWSER_VIEWPORT.width, minHeight: BROWSER_VIEWPORT.height } : undefined}>
-      {browser.lease && <webview ref={node => { browser.element.current = node as unknown as WebviewTag | null }}
-        src={`about:blank#${browser.lease.id}`} partition={browser.lease.partition} allowpopups={'true' as unknown as boolean}
-        style={agent ? { display: 'flex', position: 'absolute', ...BROWSER_VIEWPORT }
-          : { display: 'flex', position: 'absolute', width: '100%', height: '100%' }} aria-label="网页内容" />}
+    <div className="wc-browser-viewport relative flex min-h-0 flex-1 flex-col">
+      <div ref={setStage} className="relative flex min-h-0 flex-1 flex-col overflow-auto bg-white" aria-busy={state.loading}>
+        <div className="relative min-h-0 w-full flex-1" style={agent ? { minWidth: BROWSER_VIEWPORT.width, minHeight: BROWSER_VIEWPORT.height } : undefined}>
+          {browser.lease && <webview ref={node => { browser.element.current = node as unknown as WebviewTag | null }}
+            src={`about:blank#${browser.lease.id}`} partition={browser.lease.partition} allowpopups={'true' as unknown as boolean}
+            style={agent ? { display: 'flex', position: 'absolute', ...BROWSER_VIEWPORT }
+              : { display: 'flex', position: 'absolute', width: '100%', height: '100%' }} aria-label="网页内容" />}
+        </div>
+        {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--wc-surface)] px-6 text-center text-sm text-[var(--wc-muted)]">
+          <Globe size={26} className="text-[var(--wc-faint)]" />
+          <p className="max-w-sm break-words">{state.error ?? '输入网址，浏览网页或打开本机开发服务'}</p>
+          {state.error && state.ready && <button className="wc-focus-ring rounded-lg border border-[var(--wc-line)] px-3 py-1.5" onClick={() => shortcut('reload')}>重新加载</button>}
+        </div>}
+        <BrowserReferenceEditor reference={reference} boundary={stage} />
       </div>
-      {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--wc-surface)] px-6 text-center text-sm text-[var(--wc-muted)]">
-        <Globe size={26} className="text-[var(--wc-faint)]" />
-        <p className="max-w-sm break-words">{state.error ?? '输入网址，浏览网页或打开本机开发服务'}</p>
-        {state.error && state.ready && <button className="wc-focus-ring rounded-lg border border-[var(--wc-line)] px-3 py-1.5" onClick={() => shortcut('reload')}>重新加载</button>}
-      </div>}
-      <BrowserReferenceEditor reference={reference} boundary={stage} />
+      {active && <div key={agent ? 'agent' : 'user'} className="wc-browser-view-reveal" aria-hidden />}
     </div>
   </section>
 }

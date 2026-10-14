@@ -51,7 +51,9 @@ export class BrowserAutomation {
     this.invalidate()
     await this.command('Runtime.releaseObjectGroup', { objectGroup: 'whycode-browser' }, signal)
     const { nodes } = await this.command('Accessibility.getFullAXTree', {}, signal) as { nodes: AxNode[] }
-    const visible = nodes.filter(node => !node.ignored && node.role?.value !== 'InlineTextBox')
+    const visible = nodes.filter(node => !node.ignored && node.role?.value !== 'InlineTextBox'
+      && (node.role?.value !== 'generic' || node.name?.value || node.value?.value
+        || node.properties?.some(property => property.name === 'focusable' && property.value.value === true)))
     let length = 0
     const items = []
     for (const node of visible.slice(offset, offset + limit)) {
@@ -124,7 +126,8 @@ export class BrowserAutomation {
   }
 
   async evaluate(input: unknown, signal: AbortSignal): Promise<unknown> {
-    const { expression } = z.object({ expression: z.string().max(20_000) }).parse(input)
+    const { expression } = z.object({ expression: z.string().max(20_000) },
+      { error: 'browser.evaluate 需要 {expression: "JavaScript 表达式"}，不能传入函数' }).parse(input)
     const { frameTree } = await this.command('Page.getFrameTree', {}, signal)
     const { executionContextId } = await this.command('Page.createIsolatedWorld', { frameId: frameTree.frame.id, worldName: 'whycode-browser' }, signal)
     const response = await this.command('Runtime.evaluate', { expression, contextId: executionContextId,
@@ -137,7 +140,8 @@ export class BrowserAutomation {
 
   async wait(input: unknown, signal: AbortSignal): Promise<unknown> {
     const options = z.object({ ref: z.string().optional(), text: z.string().min(1).max(1000).optional(),
-      timeoutMs: z.number().int().min(1).max(10_000).default(5000) }).refine(v => v.ref || v.text, '需要 ref 或 text').parse(input)
+      timeoutMs: z.number().int().min(1).max(10_000).default(5000) }).refine(v => v.ref || v.text,
+      'browser.wait 必须提供 ref 或 text；timeoutMs 是等待条件的期限，不是固定延时').parse(input)
     const deadline = Date.now() + options.timeoutMs
     do {
       signal.throwIfAborted()
@@ -164,6 +168,13 @@ export class BrowserAutomation {
     if (!backendNodeId) throw new Error('元素引用已失效，请先 browser.snapshot()')
     const { object } = await this.command('DOM.resolveNode', { backendNodeId, objectGroup: 'whycode-browser' }, signal)
     if (!object?.objectId) throw new Error('元素已移除，请重新观察')
+    // AX 的 StaticText 可以指向 Text 节点；交互应落在其真实所属元素上。
+    if (object.className === 'Text') {
+      const { result } = await this.command('Runtime.callFunctionOn', { objectId: object.objectId,
+        functionDeclaration: 'function(){return this.parentElement}', objectGroup: 'whycode-browser' }, signal)
+      if (!result?.objectId) throw new Error('元素已移除，请重新观察')
+      return result.objectId
+    }
     return object.objectId
   }
   private async clickAt(x: number, y: number, signal: AbortSignal): Promise<void> {

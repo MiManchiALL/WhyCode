@@ -32,6 +32,7 @@ function Fixture() {
     narrow: () => setWidth(300),
   }
   return <ConversationFeedbackContext value={feedback}>
+    <div style={{ position: 'fixed', inset: 0, background: 'var(--wc-surface)' }} />
     <div style={{ position: 'relative', width, height: 700, marginLeft: 100 }}>
       <BrowserSurfaces runtimeId={runtimeId} active={state.open} state={state} canReference referenceDrafts={[]}
         onReference={() => true} onUpdate={page => setState(current => updateRightPanelPage(current, page))}

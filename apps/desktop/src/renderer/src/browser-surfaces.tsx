@@ -71,9 +71,10 @@ export function BrowserSurfaces(props: Props) {
       const shown = state.visibleId === surface.id && props.active && props.runtimeId === surface.runtimeId
       const descriptor = pages.find(page => page.id === surface.page.id)
       const page = { kind: 'browser' as const, ...surface.page, ...(shown ? { referenceRequest: descriptor?.referenceRequest } : {}) }
+      // 负层级或全透明会被 Chromium 剔除合成；保留不可交互的极低透明度表面供后台截图。
       return <div key={surface.id} aria-hidden={!shown} inert={!shown}
         style={shown ? { position: 'fixed', ...bounds, display: 'flex', zIndex: props.fullscreen ? 50 : 20, overflow: 'hidden' }
-          : { position: 'fixed', left: 0, top: 0, width: 1280, height: 849, display: surface.turnId ? 'flex' : 'none', zIndex: -1, pointerEvents: 'none' }}>
+          : { position: 'fixed', left: 0, top: 0, width: 1280, height: 849, display: surface.turnId ? 'flex' : 'none', zIndex: 0, opacity: 0.001, pointerEvents: 'none' }}>
         <BrowserPanel page={page} active={shown} lease={surface} navigationRevision={surface.navigation} agent={!!surface.turnId}
           runtimeId={surface.runtimeId} canReference={shown && props.canReference} referenceDrafts={props.referenceDrafts}
           onReference={(image, replaceId) => props.onReference(surface.runtimeId, image, replaceId)}

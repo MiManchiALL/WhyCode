@@ -26,6 +26,7 @@ export class BrowserPages {
   private readonly views = new Map<WebContents, BrowserViewRequest>()
   private readonly owners = new Map<string, WebContents>()
   private readonly turns = new Map<string, BrowserTurnPage>()
+  private readonly ownerThrottling = new Map<WebContents, boolean>()
   private revision = 0
 
   constructor(private readonly guests: BrowserGuests) {
@@ -55,6 +56,7 @@ export class BrowserPages {
   sync(owner: WebContents, view: BrowserViewRequest): void {
     if (!this.views.has(owner)) owner.once('destroyed', () => {
       this.views.delete(owner)
+      this.ownerThrottling.delete(owner)
       for (const [id, current] of this.owners) if (current === owner) this.owners.delete(id)
     })
     this.views.set(owner, view)
@@ -121,12 +123,17 @@ export class BrowserPages {
     const candidate = candidates.find(page => page.active) ?? (candidates.length === 1 ? candidates[0] : undefined)
     if (target.id && !candidate) throw new Error('指定页面已关闭或与网址不符，请重新列出网页')
     if (!candidate && candidates.length > 1) throw new Error('有多个匹配页面，请从 browser.tabs() 中选择 id')
-    if (!candidate && !url) throw new Error('没有可用网页，请提供 url')
+    if (!candidate && !url) throw new Error('本轮没有已打开的网页，请调用 browser.open({url: "目标网址"})；无需用户打开侧栏')
     const value = candidate ? this.surfaces.get(candidate.id)!.value
       : this.create(owner, runtimeId, { id: randomUUID(), url: url!, title: '', workspaceFile: url!.startsWith('file:') })
     value.turnId = turnId
     const turn: BrowserTurnPage = { owner, runtimeId, turnId, surfaceId: value.id, view: 'agent', abort: new AbortController() }
     this.turns.set(turnId, turn)
+    // guest 能执行脚本不代表宿主会提交画面；两层都保持绘制，截图才不依赖侧栏和窗口可见性。
+    if (!this.ownerThrottling.has(owner)) {
+      this.ownerThrottling.set(owner, owner.getBackgroundThrottling())
+      owner.setBackgroundThrottling(false)
+    }
     this.guests.get(value.id)?.setBackgroundThrottling(false)
     this.publish(owner)
     return turn
@@ -134,7 +141,7 @@ export class BrowserPages {
 
   current(turnId: string): BrowserTurnPage {
     const turn = this.turns.get(turnId)
-    if (!turn) throw new Error('先调用 browser.open() 选择网页')
+    if (!turn) throw new Error('本轮尚未选择网页，请先调用 browser.open({url: "目标网址"})')
     turn.abort.signal.throwIfAborted()
     return turn
   }
@@ -174,6 +181,7 @@ export class BrowserPages {
       delete value.turnId
       this.guests.get(value.id)?.setBackgroundThrottling(true)
     } else this.remove(turn.surfaceId)
+    this.releaseActivity(turn.owner)
     this.publish(turn.owner)
   }
 
@@ -201,8 +209,18 @@ export class BrowserPages {
   private closed(id: string, reason: string): void {
     const surface = this.surfaces.get(id)
     this.surfaces.delete(id)
-    for (const turn of this.turns.values()) if (turn.surfaceId === id) turn.abort.abort(new Error(reason))
+    for (const turn of this.turns.values()) if (turn.surfaceId === id) {
+      turn.abort.abort(new Error(reason))
+      this.releaseActivity(turn.owner)
+    }
     if (surface) this.publish(surface.owner)
+  }
+  private releaseActivity(owner: WebContents): void {
+    if ([...this.turns.values()].some(turn => turn.owner === owner && !turn.abort.signal.aborted)) return
+    const throttling = this.ownerThrottling.get(owner)
+    if (throttling === undefined) return
+    this.ownerThrottling.delete(owner)
+    if (!owner.isDestroyed()) owner.setBackgroundThrottling(throttling)
   }
   private visible(owner: WebContents): string | null {
     const view = this.views.get(owner)

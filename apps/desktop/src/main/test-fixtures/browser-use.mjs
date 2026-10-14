@@ -11,9 +11,10 @@ const directory = process.env.WHYCODE_BROWSER_TEST_DIR
 app.setPath('userData', path.join(directory, 'profile'))
 protocol.registerSchemesAsPrivileged([{ scheme: 'whycode-browser-file', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 const timeout = setTimeout(() => app.exit(1), 80_000)
-const server = createServer((_request, response) => response.end(`<!doctype html><html><head><title>Browser fixture</title></head><body style="background:#bada55">
+const server = createServer((_request, response) => response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Browser fixture</title></head><body style="background:#bada55">
   <label>Username <input aria-label="Username" value=""></label>
   <button onclick="document.querySelector('output').textContent=++window.count;document.body.style.background='rgb(100,150,200)'">Increment</button><output>0</output>
+  <span onclick="document.body.dataset.palette='chosen'">🎨</span>
   <script>window.count=0;</script></body></html>`))
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const url = `http://127.0.0.1:${server.address().port}/`
@@ -35,6 +36,21 @@ app.whenReady().then(async () => {
   const finish = turnId => agent.forRuntime('alpha').finishTurn(turnId)
   await win.loadFile(path.join(directory, 'index.html'))
   await until(() => execute('!!window.fixture'), 'fixture')
+  win.setOpacity(0)
+  win.setSkipTaskbar(true)
+  win.showInactive()
+  const coldFile = path.join(directory, 'cold.html')
+  await writeFile(coldFile, '<!doctype html><title>Cold file</title><body style="background:#bada55"><button>Ready</button>')
+  const cold = await run('cold', `await browser.open({url:${JSON.stringify(pathToFileURL(coldFile).href)}}); text(await browser.snapshot()); image(await browser.screenshot());`)
+  assert.equal(cold.isError, false, cold.text)
+  assert.equal(win.isVisible(), true)
+  assert.equal(win.isFocused(), false, '截图不激活宿主窗口')
+  await finish('cold')
+  assert.equal(win.webContents.getBackgroundThrottling(), true, '隐藏 Agent 页结束后恢复宿主节流')
+  win.hide()
+  win.setOpacity(1)
+  await execute('fixture.session("alpha")')
+  await until(() => execute('fixture.state().tabs.length===0'), 'clear cold descriptor')
   await execute(`fixture.open(${JSON.stringify(url)})`)
   await until(() => agent.pages.list('alpha').some(page => guests.get(page.id)?.getURL() === url), 'user page')
   const original = agent.pages.list('alpha')[0]
@@ -57,6 +73,14 @@ app.whenReady().then(async () => {
   const keyboard = await run('one', 'const s=await browser.snapshot(); await browser.click({ref:s.nodes.find(n=>n.role==="textbox").ref}); await browser.press({key:"Control+A"}); await browser.type({text:"typed"});')
   assert.equal(keyboard.isError, false, keyboard.text)
   assert.equal(await originalGuest.executeJavaScript('document.querySelector("input").value'), 'typed')
+  const textClick = await run('one', 'const s=await browser.snapshot(); text(s.nodes.filter(n=>n.role==="generic"&&!n.name)); await browser.click({ref:s.nodes.find(n=>n.role==="StaticText"&&n.name==="🎨").ref});')
+  assert.equal(textClick.isError, false, textClick.text)
+  assert.ok(textClick.text.startsWith('[]'), '快照省略无名称的布局容器')
+  assert.equal(await originalGuest.executeJavaScript('document.body.dataset.palette'), 'chosen', '文字引用点击其所属真实元素')
+  const invalidWait = await run('one', 'await browser.wait({timeoutMs:5});')
+  assert.match(invalidWait.text, /ref 或 text/)
+  const invalidExpression = await run('one', 'await browser.evaluate(() => document.title);')
+  assert.match(invalidExpression.text, /不能传入函数/)
   assert.equal(win.isVisible(), false, '浏览器操作不显示宿主窗口')
   if (process.env.WHYCODE_BROWSER_REVIEW_DIR) {
     await mkdir(process.env.WHYCODE_BROWSER_REVIEW_DIR, { recursive: true })
@@ -89,8 +113,15 @@ app.whenReady().then(async () => {
   assert.equal(background.isError, false, background.text)
   assert.equal(await originalGuest.executeJavaScript('document.querySelector("output").textContent'), '2')
   assert.ok(background.images[0].bytes.length > 1000)
+  const other = await agent.forRuntime('beta').execute(`await browser.open({url:${JSON.stringify(url)}})`, {
+    turnId: 'other', toolCallId: 'other', abortSignal: new AbortController().signal,
+  })
+  assert.equal(other.isError, false, other.text)
   await finish('one')
   assert.equal(originalGuest.isDestroyed(), true, '隐藏 Agent 页面 Turn 结束销毁')
+  assert.equal(win.webContents.getBackgroundThrottling(), false, '另一个会话仍在使用浏览器时不提前恢复节流')
+  await agent.forRuntime('beta').finishTurn('other')
+  assert.equal(win.webContents.getBackgroundThrottling(), true)
 
   await execute('fixture.session("alpha")')
   await execute(`fixture.open(${JSON.stringify(url)})`)
@@ -101,6 +132,7 @@ app.whenReady().then(async () => {
   assert.equal((await run('two', 'await browser.open(); await browser.evaluate({expression:\'document.querySelector("input").value="preserved"\'});')).isError, false)
   await until(() => execute('!!document.querySelector(\'[aria-label="切换到我的网页"]\')'), 'agent switch')
   await finish('two')
+  assert.equal(win.webContents.getBackgroundThrottling(), true, '网页交还用户后恢复宿主节流')
   assert.equal(handoffGuest.isDestroyed(), false, '用户观看中的网页原样交还')
   assert.equal(await handoffGuest.executeJavaScript('document.querySelector("input").value'), 'preserved')
   assert.ok(Math.abs(handoffGuest.getZoomFactor() - 1.5) < 0.001, '交还时恢复用户缩放')
@@ -119,6 +151,7 @@ app.whenReady().then(async () => {
   assert.match(stopped.text, /user_closed/)
   assert.match(stopped.text, /completed/)
   assert.match(stopped.text, /uncertain/)
+  assert.equal(win.webContents.getBackgroundThrottling(), true, '用户关闭时立即释放绘制活动')
   assert.doesNotMatch(stopped.text, /"operation":"click"/)
   assert.equal((await run('three', `await browser.open({url:${JSON.stringify(url)}})`)).isError, true, '用户关闭后同 Turn 不自动重建')
   await finish('three')
@@ -143,6 +176,7 @@ app.whenReady().then(async () => {
   assert.equal(agent.pages.list('alpha').length, 0)
   assert.equal((await run('five', `await browser.open({url:${JSON.stringify(url)}})`)).isError, false)
   await execute('window.whycode.clearBrowserData("all")')
+  assert.equal(win.webContents.getBackgroundThrottling(), true, '全部清理释放绘制活动')
   assert.equal(agent.pages.list('alpha').length, 0, '全部清理释放 Agent 网页')
   assert.equal((await run('five', `await browser.open({url:${JSON.stringify(url)}})`)).isError, true, '清理后旧 Turn 不能恢复写入')
   await finish('five')
