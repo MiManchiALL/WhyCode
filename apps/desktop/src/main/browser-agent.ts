@@ -69,7 +69,7 @@ export class BrowserAgent {
       },
       finishTurn: async turnId => {
         try { this.automation.get(turnId)?.close() }
-        finally { this.automation.delete(turnId); this.pages.finish(turnId) }
+        finally { this.automation.delete(turnId); await this.pages.finish(turnId) }
       },
     }
   }

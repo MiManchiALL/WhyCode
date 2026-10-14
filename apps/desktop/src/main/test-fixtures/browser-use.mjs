@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, nativeImage, protocol } from 'electron'
+import { app, BrowserWindow, nativeImage, protocol, webContents } from 'electron'
 import { BrowserGuests } from '../browser-guests.ts'
 import { BrowserAgent } from '../browser-agent.ts'
 import { checkBrowserObservation } from './browser-observation.mjs'
@@ -33,6 +33,9 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1000, height: 800,
     webPreferences: { preload: path.join(directory, 'preload.cjs'), webviewTag: true, sandbox: true, contextIsolation: true } })
   guests.bind(win)
+  const rendererFailures = []
+  win.webContents.on('console-message', event => { if (event.level === 'error') rendererFailures.push(event.message) })
+  win.webContents.on('render-process-gone', (_event, details) => rendererFailures.push(`renderer gone: ${JSON.stringify(details)}`))
   const execute = code => win.webContents.executeJavaScript(code)
   const run = (turnId, code, signal = new AbortController().signal, onProgress) => agent.forRuntime('alpha').execute(code, { turnId, toolCallId: turnId, abortSignal: signal, onProgress })
   const finish = turnId => agent.forRuntime('alpha').finishTurn(turnId)
@@ -65,7 +68,7 @@ app.whenReady().then(async () => {
   assert.equal(first.isError, false, first.text)
   assert.match(first.text, /user-draft/)
   assert.equal(agent.pages.current('one').surfaceId, original.id, '优先接管已有用户 DOM')
-  assert.deepEqual(await originalGuest.executeJavaScript('[innerWidth,innerHeight]'), [1280, 800], 'fixed viewport')
+  await until(() => originalGuest.executeJavaScript('innerWidth===1280 && innerHeight===800'), 'fixed viewport')
   const changed = await run('one', `const s=await browser.snapshot(); await browser.fill({ref:s.nodes.find(n=>n.role==='textbox').ref,value:'agent-draft'}); await browser.click({ref:s.nodes.find(n=>n.role==='button').ref}); image(await browser.screenshot());`)
   assert.equal(changed.isError, false, changed.text)
   assert.equal(changed.images.length, 1)
@@ -206,12 +209,42 @@ app.whenReady().then(async () => {
   await until(() => execute('!fixture.display().tabs.some(tab=>tab.page.kind==="browser")'), 'unviewed temporary tab gone')
   assert.equal(agent.pages.list('alpha').length, 0)
   await checkBrowserPageEndings({ run, finish, execute, until, agent, guests, url })
+  for (let index = 0; index < 16; index++) {
+    await execute('fixture.session("alpha")')
+    const turnId = `switch-${index}`
+    const opened = await run(turnId, `await browser.open({url:${JSON.stringify(url)}}); ${index % 2 ? 'image(await browser.screenshot());' : ''}`)
+    assert.equal(opened.isError, false, opened.text)
+    await execute('fixture.visible(true)')
+    await until(() => agent.pages.list('alpha').some(page => page.active), 'stress page shown')
+    const guest = guests.get(agent.pages.current(turnId).surfaceId)
+    if (index === 0) await guest.executeJavaScript('onbeforeunload=()=>"keep page"; null')
+    const navigation = guest.loadURL(url + `?cycle=${index}`).catch(() => {})
+    await execute('fixture.session("")')
+    await until(() => !agent.pages.list('alpha').some(page => page.active), 'stress loading transition')
+    await finish(turnId)
+    assert.equal(guest.isDestroyed(), true, 'Turn 完成前等待物理网页释放')
+    await navigation
+    await execute('fixture.session("beta")')
+    await until(() => execute('document.querySelectorAll("webview").length===0'), 'stress removal')
+    assert.equal(webContents.getAllWebContents().filter(contents => contents.getType() === 'webview').length, 0, '切换后不遗留原生网页')
+  }
+  await execute('fixture.session("alpha")')
+  assert.equal((await run('reload', `await browser.open({url:${JSON.stringify(url)}}); image(await browser.screenshot());`)).isError, false)
+  const beforeReload = guests.get(agent.pages.current('reload').surfaceId)
+  await win.loadFile(path.join(directory, 'index.html'))
+  await until(() => execute('!!window.fixture'), 'host reloaded')
+  assert.equal(beforeReload.isDestroyed(), true, '宿主重载释放旧网页')
+  await finish('reload')
   assert.equal((await run('five', `await browser.open({url:${JSON.stringify(url)}})`)).isError, false)
+  const inspecting = guests.get(agent.pages.current('five').surfaceId)
+  inspecting.openDevTools({ mode: 'right', activate: false })
+  await until(() => inspecting.isDevToolsOpened(), 'inspector opened')
   await execute('window.whycode.clearBrowserData("all")')
   assert.equal(win.webContents.getBackgroundThrottling(), true, '全部清理释放绘制活动')
   assert.equal(agent.pages.list('alpha').length, 0, '全部清理释放 Agent 网页')
   assert.equal((await run('five', `await browser.open({url:${JSON.stringify(url)}})`)).isError, true, '清理后旧 Turn 不能恢复写入')
   await finish('five')
+  assert.deepEqual(rendererFailures, [], '会话切换和网页销毁不得产生未捕获异常或宿主崩溃')
   win.destroy()
   clearTimeout(timeout)
   server.close()

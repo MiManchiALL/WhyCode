@@ -76,7 +76,8 @@ export class BrowserPages {
   action(owner: WebContents, action: BrowserViewAction): void {
     if (action.type === 'update') {
       const surface = this.surfaces.get(action.id)
-      if (surface?.owner !== owner) throw new Error('网页已关闭')
+      if (!surface) return
+      if (surface.owner !== owner) throw new Error('网页不属于当前窗口')
       surface.value.page = { ...surface.value.page, url: action.url, title: action.title }
     } else {
       if (this.owners.get(action.runtimeId) !== owner) throw new Error('网页不属于当前窗口')
@@ -168,21 +169,23 @@ export class BrowserPages {
     await guest.loadURL(target)
   }
 
-  finish(turnId: string): void {
+  async finish(turnId: string): Promise<void> {
     const turn = this.turns.get(turnId)
     if (!turn) return
     const value = this.surfaces.get(turn.surfaceId)?.value
     const visible = this.visible(turn.owner) === turn.surfaceId
     this.turns.delete(turnId)
     turn.abort.abort(new Error('turn_ended: 本轮浏览器操作已结束'))
+    let released: Promise<void> | undefined
     if (value && visible) {
       const previous = this.userSurface(turn.runtimeId, value.page.id)
-      if (previous) this.remove(previous.id)
+      if (previous) released = this.remove(previous.id)
       delete value.turnId
       this.guests.get(value.id)?.setBackgroundThrottling(true)
-    } else this.remove(turn.surfaceId)
-    this.releaseActivity(turn.owner)
+    } else released = this.remove(turn.surfaceId)
     this.publish(turn.owner)
+    await released
+    this.releaseActivity(turn.owner)
   }
 
   surface(turn: BrowserTurnPage): BrowserSurface {
@@ -200,11 +203,11 @@ export class BrowserPages {
     this.surfaces.set(value.id, { owner, value })
     return value
   }
-  private remove(id: string): void {
+  private remove(id: string): Promise<void> {
     const surface = this.surfaces.get(id)
-    if (!surface) return
+    if (!surface) return Promise.resolve()
     this.surfaces.delete(id)
-    this.guests.release(surface.owner, id)
+    return this.guests.release(surface.owner, id)
   }
   private closed(id: string, reason: string): void {
     const surface = this.surfaces.get(id)

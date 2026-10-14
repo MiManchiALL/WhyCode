@@ -54,14 +54,19 @@ export class BrowserGuests {
     return { id, partition: BROWSER_PARTITION }
   }
 
-  release(owner: WebContents, id: string): void {
+  release(owner: WebContents, id: string): Promise<void> {
     const lease = this.leases.get(id)
-    if (!lease || lease.owner !== owner) return
+    if (!lease || lease.owner !== owner) return Promise.resolve()
+    const destroyed = lease.guest && !lease.guest.isDestroyed()
+      ? new Promise<void>(resolve => lease.guest!.once('destroyed', () => resolve()))
+      : Promise.resolve()
     this.leases.delete(id)
     this.onClosed?.(id, 'page_closed: 网页已关闭')
     lease.references?.cancel()
     this.files.release(id)
-    if (lease.guest && !lease.guest.isDestroyed()) lease.guest.close({ waitForBeforeUnload: false })
+    // 撤销租约后由 Renderer 卸载 webview，Electron 随 DOM 分离销毁 guest。
+    // 提前 close 会让尚未卸载的元素把迟到事件发给已经销毁的原生窗口。
+    return destroyed
   }
 
   register(workspaceFor: (runtimeId: string) => Promise<WorkspaceIO>): void {
@@ -140,9 +145,7 @@ export class BrowserGuests {
     guest.once('dom-ready', () => {
       const key = guest.getURL().slice('about:blank#'.length)
       const lease = this.leases.get(key)
-      if (!lease || lease.owner !== window.webContents || lease.guest) {
-        guest.close({ waitForBeforeUnload: false }); return
-      }
+      if (!lease || lease.owner !== window.webContents || lease.guest) return
       id = key; lease.guest = guest
       lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
       guest.once('destroyed', () => {
@@ -253,14 +256,16 @@ export class BrowserGuests {
       if (mode === 'all') {
         for (const item of this.downloads) item.cancel()
         // 包含尚未 dom-ready、还未写回租约的 guest；关闭旧页面后再清理，防止重新写入。
-        await Promise.all(webContents.getAllWebContents()
+        const destroyed = Promise.all(webContents.getAllWebContents()
           .filter(contents => contents.session === browser)
           .map(contents => new Promise<void>(resolve => {
             if (contents.isDestroyed()) { resolve(); return }
             contents.once('destroyed', () => resolve())
-            contents.close({ waitForBeforeUnload: false })
+            // 检查器没有 webview DOM，沿其自身窗口生命周期关闭。
+            if (contents.getType() !== 'webview') contents.close({ waitForBeforeUnload: false })
           })))
         for (const [id, lease] of this.leases) this.release(lease.owner, id)
+        await destroyed
       }
       await clearBrowserSession(browser, mode)
     } finally { this.setClearing(null) }

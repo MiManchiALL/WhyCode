@@ -235,7 +235,7 @@ import { installExternalWebLinkHandlers } from './external-link.ts'
 import { installImageContextMenu } from './image-context-menu.ts'
 import { createRendererCrashRecoveryController } from './renderer-crash-recovery.ts'
 import { RuntimeEventBatcher } from './runtime-event-batcher.ts'
-import { isBackgroundRuntimeLifecycleEvent } from './runtime-event-delivery.ts'
+import { shouldDeliverRuntimeEvent } from './runtime-event-delivery.ts'
 import { RuntimeEventPortHub } from './runtime-event-port-hub.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import { openGitRepository, type GitRepository } from './git-repository.ts'
@@ -430,10 +430,7 @@ function broadcastRuntimeEvent(
 ): void {
   if (event.type === 'work-finished') runtimeRegistry.markWorkFinished(runtime)
   const sequence = ++runtimeEventSequence
-  if (
-    runtimeRegistry.selected === runtime
-    || isBackgroundRuntimeLifecycleEvent(event)
-  ) {
+  if (shouldDeliverRuntimeEvent(event, runtime, runtimeRegistry.selected, sessionNavigation.sessionId)) {
     const envelope: RuntimeEventEnvelope = {
       runtimeId: runtime.runtimeId,
       sessionId: runtime.sessionId,

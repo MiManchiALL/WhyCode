@@ -497,7 +497,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 - `RuntimeSnapshot.history` 携带最近窗口的可序列化视图、`before` 游标与更早输入的导航摘要；活动控制状态仍是当前运行时状态，`eventSequence` 与投影处于同一同步边界，随后只消费边界之后的实时事件。
 - `conversationHistory({runtimeId,before,targetId?})` 只读取指定运行时的可见历史；`before` 表示已加载窗口前的块数，返回其之前的完整工作分组。普通读取约 20 组，定位读取每批最多 100 组；连续 BTW 链按一组计算。没有更早内容时 `before=null`。
-- `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。
+- `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。Main 从恢复请求成立起投递目标会话的完整实时事件，覆盖读取快照到提交选择的间隙；Renderer 按快照游标接续，不能漏掉工具封口或步骤提交。未选中且未在恢复的会话只投递生命周期事件。
 - 更早页只扩展显示前缀，不覆盖实时控制状态、当前输出或步骤提交/丢弃边界；分页不生成模型消息、不改变持久化 schema，也不取代模型的完整上下文恢复。
 
 ### 7.2 未发送输入草稿

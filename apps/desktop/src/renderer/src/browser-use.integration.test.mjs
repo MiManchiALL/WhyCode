@@ -43,8 +43,9 @@ test('Browser 真实 webview：接管、后台操作、视图切换、交还、�
   await writeFile(path.join(directory, 'start.mjs'), "import { app } from 'electron'; import('./main.mjs').catch(error => { process.stderr.write(String(error.stack)); app.exit(1) });")
   const env = { ...process.env, WHYCODE_BROWSER_TEST_DIR: directory }
   delete env.ELECTRON_RUN_AS_NODE
-  const { stdout } = await promisify(execFile)(require('electron'), [path.join(directory, 'start.mjs')], {
+  const { stdout, stderr } = await promisify(execFile)(require('electron'), [path.join(directory, 'start.mjs')], {
     env, windowsHide: true, timeout: 90_000, maxBuffer: 2_000_000,
   })
   assert.match(stdout, /browser use passed/)
+  assert.doesNotMatch(stderr, /Invalid guestInstanceId|Uncaught|render-process-gone/)
 })
