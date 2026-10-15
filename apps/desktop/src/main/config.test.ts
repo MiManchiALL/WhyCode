@@ -350,11 +350,13 @@ describe('配置密钥存储', () => {
         clientInformation: {
           client_id: 'github-client-id',
           client_secret: 'github-client-secret',
+          issuer: 'https://github.com/login/oauth',
         },
         tokens: {
           access_token: 'github-oauth-token',
           refresh_token: 'github-refresh-token',
           token_type: 'bearer',
+          issuer: 'https://github.com/login/oauth',
         },
       }],
     }
@@ -396,11 +398,13 @@ describe('配置密钥存储', () => {
         clientInformation: {
           client_id: 'github-client-id',
           client_secret: 'github-client-secret',
+          issuer: 'https://github.com/login/oauth',
         },
         tokens: {
           access_token: 'github-oauth-token',
           refresh_token: 'github-refresh-token',
           token_type: 'bearer',
+          issuer: 'https://github.com/login/oauth',
         },
       }])
     } finally {

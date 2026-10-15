@@ -2077,6 +2077,7 @@ function githubOAuthClientFromEnvironment(): {
     github: {
       clientId,
       clientSecret,
+      issuer: 'https://github.com/login/oauth',
       tokenEndpointAuthMethod: 'client_secret_post',
     },
   }

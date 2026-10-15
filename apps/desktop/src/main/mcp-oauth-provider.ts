@@ -12,6 +12,7 @@ const GITHUB_DEFAULT_SCOPE = 'repo read:org read:user'
 
 export interface McpRegisteredOAuthClient {
   clientId: string
+  issuer: string
   clientSecret?: string
   scope?: string
   tokenEndpointAuthMethod?: 'client_secret_post'
@@ -40,7 +41,7 @@ export class DesktopMcpOAuthProvider implements OAuthClientProvider {
     this.clientInformationValue = session?.clientInformation
     this.tokenValue = session?.tokens
     if (authorizationState) this.state = () => authorizationState
-    if (interactive) {
+    if (interactive && !controller.registeredClient(config)) {
       this.saveClientInformation = async (clientInformation) => {
         this.clientInformationValue = clientInformation
         await this.persist()
@@ -70,6 +71,7 @@ export class DesktopMcpOAuthProvider implements OAuthClientProvider {
     const registered = this.controller.registeredClient(this.config)
     return registered ? {
       client_id: registered.clientId,
+      issuer: registered.issuer,
       ...(registered.clientSecret ? { client_secret: registered.clientSecret } : {}),
       redirect_uris: [this.redirectUrl.href],
       client_name: 'WhyCode',

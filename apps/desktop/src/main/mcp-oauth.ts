@@ -209,8 +209,14 @@ export class McpOAuthController {
       connectionFingerprint: connectionFingerprint(config),
     }
     const key = mcpOAuthSessionKey(target)
-    return this.options.readSessions().find((session) =>
+    const session = this.options.readSessions().find((session) =>
       mcpOAuthSessionKey(session) === key)
+    // 缺少签发方的凭据不能交给服务端发现结果补绑定。
+    if (
+      (session?.clientInformation && !session.clientInformation.issuer)
+      || (session?.tokens && !session.tokens.issuer)
+    ) return undefined
+    return session
   }
 
   private async fetchOAuth(

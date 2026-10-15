@@ -6,6 +6,7 @@ import {
   type ServerResponse,
 } from 'node:http'
 import { describe, it } from 'node:test'
+import { auth } from '@modelcontextprotocol/sdk/client/auth.js'
 import {
   MCP_GITHUB_BUILTIN,
   type McpHttpServerConfig,
@@ -14,11 +15,14 @@ import {
   McpOAuthController,
   type McpRegisteredOAuthClient,
 } from './mcp-oauth.ts'
-import type { McpOAuthSession } from './mcp-oauth-state.ts'
+import { parseMcpOAuthSession, type McpOAuthSession } from './mcp-oauth-state.ts'
+import { DesktopMcpOAuthProvider } from './mcp-oauth-provider.ts'
 
 describe('MCP OAuth', () => {
   it('按标准发现、动态注册与 PKCE 回调保存令牌，并按 URL 指纹供运行时复用', async () => {
-    const oauth = await createOAuthFixture()
+    const discovery: { authorizationServerUrl?: string } = {}
+    const oauth = await createOAuthFixture(discovery)
+    const otherIssuer = await createOAuthFixture()
     const callbackPort = await reservePort()
     const callbackUrl = `http://127.0.0.1:${callbackPort}/mcp/oauth/callback`
     let sessions: McpOAuthSession[] = []
@@ -56,12 +60,23 @@ describe('MCP OAuth', () => {
       assert.equal(controller.availability(config).status, 'connected')
       assert.equal(sessions[0]?.tokens?.access_token, 'access-token')
       assert.equal(sessions[0]?.clientInformation?.client_id, 'dynamic-client')
+      sessions = sessions.map(parseMcpOAuthSession)
+      assert.equal(sessions[0]?.tokens?.issuer, oauth.origin)
+      assert.equal(sessions[0]?.clientInformation?.issuer, oauth.origin)
       const runtimeTransport = controller.runtimeTransport(config)
       assert.ok(runtimeTransport)
       await assert.rejects(
         runtimeTransport.fetchImpl('http://auth.example.test/token'),
         /网络请求只允许 HTTPS/,
       )
+
+      discovery.authorizationServerUrl = otherIssuer.origin
+      await assert.rejects(auth(new DesktopMcpOAuthProvider(controller, config, false), {
+        serverUrl: config.url,
+        fetchFn: runtimeTransport.fetchImpl,
+      }), /bound to authorization server/u)
+      assert.equal(otherIssuer.registrationCount(), 0)
+      assert.equal(otherIssuer.tokenExchangeCount(), 0)
 
       const changed = {
         ...config,
@@ -89,6 +104,57 @@ describe('MCP OAuth', () => {
 
       await controller.disconnect(config)
       assert.deepEqual(sessions, [])
+    } finally {
+      await controller.close()
+      await closeServer(oauth.server)
+      await closeServer(otherIssuer.server)
+    }
+  })
+
+  it('缺少签发方的凭据不能成为已连接状态或运行时凭据', async () => {
+    const config = httpConfig('https://mcp.example.test/mcp')
+    const issuer = 'https://auth.example.test'
+    for (const unbound of ['client', 'tokens']) {
+      const controller = new McpOAuthController({
+        fetchImpl: async () => assert.fail('未绑定的凭据不能触发联网'),
+        openExternal: async () => assert.fail('不能自动打开授权窗口'),
+        readSessions: () => [{
+          serverName: config.name,
+          connectionFingerprint: config.connectionFingerprint!,
+          clientInformation: { client_id: 'client', ...(unbound === 'client' ? {} : { issuer }) },
+          tokens: { access_token: 'token', token_type: 'bearer', ...(unbound === 'tokens' ? {} : { issuer }) },
+        }],
+        writeSessions: async () => assert.fail('读取不改写凭据'),
+      })
+      try {
+        assert.equal(controller.availability(config).status, 'available')
+        assert.equal(controller.runtimeTransport(config), undefined)
+      } finally {
+        await controller.close()
+      }
+    }
+  })
+
+  it('预注册客户端拒绝把凭据交给不同的授权服务器', async () => {
+    const oauth = await createOAuthFixture()
+    const callbackPort = await reservePort()
+    const controller = new McpOAuthController({
+      fetchImpl: fetch,
+      callbackUrl: `http://127.0.0.1:${callbackPort}/mcp/oauth/callback`,
+      openExternal: async () => assert.fail('不应打开另一签发方的登录页'),
+      readSessions: () => [],
+      writeSessions: async () => assert.fail('不应注册新客户端或写入凭据'),
+      registeredClients: { github: {
+        clientId: 'client', clientSecret: 'secret', issuer: 'https://auth.example.test',
+      } },
+    })
+    try {
+      await assert.rejects(
+        controller.authorize(httpConfig(oauth.mcpUrl, { builtinId: 'github' })),
+        /bound to authorization server/u,
+      )
+      assert.equal(oauth.registrationCount(), 0)
+      assert.equal(oauth.tokenExchangeCount(), 0)
     } finally {
       await controller.close()
       await closeServer(oauth.server)
@@ -180,6 +246,7 @@ describe('MCP OAuth', () => {
     const client: McpRegisteredOAuthClient = {
       clientId: 'whycode-client',
       clientSecret: 'whycode-secret',
+      issuer: oauth.origin,
       tokenEndpointAuthMethod: 'client_secret_post',
     }
     let sessions: McpOAuthSession[] = []
@@ -210,6 +277,7 @@ describe('MCP OAuth', () => {
       assert.equal(oauth.lastTokenRequest()?.get('client_id'), client.clientId)
       assert.equal(oauth.lastTokenRequest()?.get('client_secret'), client.clientSecret)
       assert.equal(sessions[0]?.clientInformation?.client_id, client.clientId)
+      assert.equal(sessions[0]?.clientInformation?.issuer, client.issuer)
       assert.equal(
         sessions[0]?.clientInformation
         && 'token_endpoint_auth_method' in sessions[0].clientInformation
@@ -228,6 +296,7 @@ describe('MCP OAuth', () => {
 async function createOAuthFixture(options: {
   dynamicRegistration?: boolean
   tokenAuthMethods?: string[]
+  authorizationServerUrl?: string
 } = {}): Promise<{
   server: Server
   origin: string
@@ -247,7 +316,7 @@ async function createOAuthFixture(options: {
     if (url.pathname.includes('.well-known/oauth-protected-resource')) {
       json(response, {
         resource: `${origin}/mcp`,
-        authorization_servers: [origin],
+        authorization_servers: [options.authorizationServerUrl ?? origin],
         scopes_supported: ['read'],
       })
       return
