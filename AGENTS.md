@@ -1,6 +1,6 @@
 # WhyCode 开发约定
 
-本文件约束 Agent 对 WhyCode 源码仓库的开发。详细红线与文档地图见 [开发指南](docs/04-START-HERE.md)，验证和 PR 流程见 [CONTRIBUTING](CONTRIBUTING.md)。按任务读取下表，不要求每轮通读全部文档。
+WhyCode 是 Windows 优先的 Electron + React + TypeScript 桌面 Agent。按任务读取下表中的文档，不要求每轮通读；详细红线与文档地图见 [开发指南](docs/04-START-HERE.md)，验证和 PR 流程见 [CONTRIBUTING](CONTRIBUTING.md)。
 
 ## 常驻规则
 
