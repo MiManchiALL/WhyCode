@@ -5,7 +5,7 @@ description: Add, replace, retire, or audit WhyCode model profiles and explicitl
 
 # WhyCode 模型目录维护
 
-遵守根目录 `AGENTS.md` 和开发指南的适用红线。普通型号更新应主要改变目录数据；研究、实现和测试按实际差异展开，不能把每次换代都做成完整接入工程。
+遵守[开发指南](../../../docs/04-START-HERE.md)的适用红线。普通型号更新应主要改变目录数据；研究、实现和测试按实际差异展开，不能把每次换代都做成完整接入工程。
 
 ## 1. 先确定最短实施路径
 
