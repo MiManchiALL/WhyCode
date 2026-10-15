@@ -51,7 +51,8 @@ export async function executeBrowserScript(code: string, operations: BrowserOper
       .map((item, index) => ({ name: `browser-${index + 1}.${item.mimeType.split('/')[1]}`, bytes: Buffer.from(item.data, 'base64') }))
     const output = result.output.filter(item => item.type === 'text').map(item => item.text).join('\n').slice(0, 64_000)
     const stop = result.ok ? '' : `\n停止原因：${signal.aborted ? String(signal.reason) : result.error.message}`
-    const incomplete = journal.some(record => record.status !== 'completed')
+    // 子操作失败可以由脚本捕获；只有仍未收束的操作需要覆盖沙箱的成功结果。
+    const incomplete = journal.some(record => record.status === 'not_started' || record.status === 'uncertain')
     return { text: `${output}${stop}\n操作记录：${JSON.stringify(journal)}${incomplete ? '\nuncertain 表示已发出但未确认完成；not_started 仅指脚本已请求但尚未派发的操作。' : ''}`,
       isError: !result.ok || incomplete, images }
   } finally { await sandbox.close() }
