@@ -39,8 +39,9 @@ flowchart LR
 ### 环境要求
 
 - Windows 10/11
-- Node.js 22.18 或更高版本
-- pnpm 11.9
+- Node.js 22.19 或更高版本，精确约束见 [package.json](package.json)
+- pnpm 使用 `package.json` 的 `packageManager` 版本
+- Go 1.25 或更高版本，用于构建随桌面分发的远端组件
 
 ### 启动开发环境
 
@@ -57,6 +58,8 @@ pnpm dev
 首次使用时，在应用设置中配置希望使用的模型连接。密钥由桌面宿主通过系统安全存储管理，不应写入仓库。
 
 ## 常用命令
+
+以下是全仓命令；本地开发按改动定向验证，具体选择见 [验证规则](CONTRIBUTING.md#验证规则)。
 
 ```bash
 pnpm test

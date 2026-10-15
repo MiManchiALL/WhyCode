@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Keep the required check present for documentation-only PRs as well.
+      - name: Inspect change scope and whitespace
+        id: scope
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CI_FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = $env:CI_BASE_SHA
+          if (-not $base -or $base -match '^0+$') {
+            $paths = @(git -c core.quotepath=false ls-files)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            git show --format= --check HEAD
+          } else {
+            # Disable rename detection so moving code into docs cannot skip checks.
+            $paths = @((git -c core.quotepath=false diff --no-renames --name-only -z $base HEAD --) -split "`0" | Where-Object { $_.Length -gt 0 })
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            git diff --check $base HEAD --
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $docsOnly = $paths.Count -gt 0 -and @($paths | Where-Object {
+            $_ -cnotmatch '^(AGENTS\.md|README\.md|CONTRIBUTING\.md|docs/.*\.md|\.agents/skills/.*\.md)$'
+          }).Count -eq 0
+          $code = $env:CI_FORCE_FULL -eq 'true' -or -not $docsOnly
+          $dependencies = @($paths | Where-Object {
+            $_ -cmatch '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|patches/.*|(apps|packages)/[^/]+/package\.json)$'
+          }).Count -gt 0
+          $officeDependencies = @($paths | Where-Object {
+            $_ -cmatch '^workspace-runtime/office/(package(-lock)?\.json|\.npmrc)$'
+          }).Count -gt 0
+          "code=$($code.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "dependencies=$($dependencies.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "office_dependencies=$($officeDependencies.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "Code checks: $code; workspace audit: $dependencies; Office audit: $officeDependencies" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Set up Node
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Set up pnpm
+        if: steps.scope.outputs.code == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+          cache: true
+
+      - name: Set up Go
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: remote/go.mod
+          cache: false
+
+      - name: Install locked dependencies
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm typecheck
+
+      - name: Test
+        if: steps.scope.outputs.code == 'true'
+        timeout-minutes: 15
+        run: pnpm test
+
+      - name: Build production resources and app
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm build
+
+      - name: Audit workspace dependencies
+        if: steps.scope.outputs.dependencies == 'true'
+        run: pnpm audit --prod
+
+      - name: Audit Office dependencies
+        if: steps.scope.outputs.office_dependencies == 'true'
+        working-directory: workspace-runtime/office
+        run: npm audit --omit=dev

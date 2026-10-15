@@ -637,4 +637,4 @@ Main 模型选择与连接可用性遵守以下边界：
 6. Renderer 是否只消费投影，而没有复制协议判断；
 7. 权限、会话归属、路径、资源与容量边界是否 fail-closed；
 8. 旧代码和失效 schema 是否同步删除；
-9. 受影响契约测试、全仓 typecheck、生产 build 与 `git diff --check` 是否通过。
+9. 是否按 [CONTRIBUTING 验证规则](../CONTRIBUTING.md#验证规则) 覆盖受影响契约及消费者，并如实区分本地结果、CI 状态和未测边界。
