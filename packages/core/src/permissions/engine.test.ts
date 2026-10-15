@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { win32 } from 'node:path'
 import { describe, it } from 'node:test'
 import { z } from 'zod'
 import { buildTool } from '../tools/tool.ts'
@@ -8,6 +9,20 @@ import {
   checkToolPermission,
 } from './engine.ts'
 import { createPermissionContext } from './types.ts'
+import { localWorkspaceIO } from '../workspace/io.ts'
+
+// 权限决策使用固定的 Windows 路径语义，不依赖宿主盘符或已有文件。
+function createTestContext(...args: Parameters<typeof createPermissionContext>) {
+  return {
+    ...createPermissionContext(...args),
+    workspaceIO: {
+      ...localWorkspaceIO,
+      platform: 'win32' as const,
+      path: win32,
+      fs: { ...localWorkspaceIO.fs, realpath: async (path: string) => path },
+    },
+  }
+}
 
 const controlTool = buildTool({
   name: 'ControlProbe',
@@ -114,7 +129,7 @@ const projectProcessTool = buildTool({
 
 describe('统一权限决策', () => {
   it('普通会话把自身 scratch 作为稳定路径边界而不是临时越界授权', async () => {
-    const context = createPermissionContext(
+    const context = createTestContext(
       'C:\\workspace',
       undefined,
       'C:\\scratch\\session',
@@ -136,7 +151,7 @@ describe('统一权限决策', () => {
   })
 
   it('只读模式在项目内外均直接拒绝写和命令，不产生可批准入口', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     context.mode = 'readonly'
     context.additionalDirs.push('D:\\outside')
     context.sessionAllowedTools.push(editTool.name, executeTool.name, projectProcessTool.name)
@@ -156,7 +171,7 @@ describe('统一权限决策', () => {
 
   it('默认与自动编辑档的项目外副作用只生成一项路径审批', async () => {
     for (const mode of ['default', 'acceptEdits'] as const) {
-      const context = createPermissionContext('C:\\workspace')
+      const context = createTestContext('C:\\workspace')
       context.mode = mode
       assert.deepEqual(
         (await checkToolAuthorization(editTool, { path: 'D:\\outside\\result.txt' }, context)),
@@ -178,7 +193,7 @@ describe('统一权限决策', () => {
   })
 
   it('项目外路径与首次隐私审批合并为一张卡，路径记忆边界优先', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     assert.deepEqual(
       (await checkToolAuthorization(
         privacyPathReadTool,
@@ -194,7 +209,7 @@ describe('统一权限决策', () => {
   })
 
   it('同一调用的敏感路径和全部越界路径共同展示，批准条件不会短路', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     assert.deepEqual(
       (await checkToolAuthorization(
         multiPathEditTool,
@@ -218,7 +233,7 @@ describe('统一权限决策', () => {
   })
 
   it('讨论档的项目写硬拒绝先于敏感路径审批', async () => {
-    const context = createPermissionContext('C:\\workspace', {
+    const context = createTestContext('C:\\workspace', {
       scratchDir: 'C:\\scratch\\agent-b',
     })
     const decision = (await checkToolAuthorization(editTool, { path: '.env' }, context))
@@ -230,7 +245,7 @@ describe('统一权限决策', () => {
   })
 
   it('讨论档命令未完全限定在 scratch 时直接拒绝，不提供审批绕过', async () => {
-    const context = createPermissionContext('C:\\workspace', {
+    const context = createTestContext('C:\\workspace', {
       scratchDir: 'C:\\scratch\\agent-b',
     })
     for (const decision of [
@@ -250,7 +265,7 @@ describe('统一权限决策', () => {
   })
 
   it('讨论档修改未声明资源路径时按 fail-closed 直接拒绝', async () => {
-    const context = createPermissionContext('C:\\workspace', {
+    const context = createTestContext('C:\\workspace', {
       scratchDir: 'C:\\scratch\\agent-b',
     })
     assert.deepEqual((await checkToolAuthorization(unboundedEditTool, {}, context)), {
@@ -260,7 +275,7 @@ describe('统一权限决策', () => {
   })
 
   it('只读仍允许读，但项目外读取必须经过路径审批', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     context.mode = 'readonly'
     assert.deepEqual(
       (await checkToolPermission(
@@ -277,7 +292,7 @@ describe('统一权限决策', () => {
   })
 
   it('可疑 Windows 路径在全自动档和首次审批之前仍直接拒绝', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     context.mode = 'auto'
     const decision = (await checkToolAuthorization(
       privacyPathReadTool,
@@ -291,7 +306,7 @@ describe('统一权限决策', () => {
 
 describe('工具首次隐私审批', () => {
   it('只在全自动档跳过首次提示，其余权限档继续询问', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
 
     for (const mode of ['readonly', 'default', 'acceptEdits'] as const) {
       context.mode = mode
@@ -312,14 +327,14 @@ describe('工具首次隐私审批', () => {
   })
 
   it('会话记住允许后不再重复首次提示', () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     context.sessionAllowedTools.push(privacyReadTool.name)
 
     assert.equal(checkInitialToolApproval(privacyReadTool, context), null)
   })
 
   it('全自动档也跳过项目进程等显式信任提示', () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     context.mode = 'auto'
 
     assert.equal(checkInitialToolApproval(projectProcessTool, context), null)
@@ -328,7 +343,7 @@ describe('工具首次隐私审批', () => {
 
 describe('控制面工具权限', () => {
   it('只读模式允许控制状态，但继续拒绝文件修改', async () => {
-    const context = createPermissionContext('C:\\workspace')
+    const context = createTestContext('C:\\workspace')
     context.mode = 'readonly'
 
     assert.deepEqual((await checkToolPermission(controlTool, {}, context)), { behavior: 'allow' })
@@ -339,7 +354,7 @@ describe('控制面工具权限', () => {
   })
 
   it('讨论模式允许协议控制状态，但继续限制项目文件修改', async () => {
-    const context = createPermissionContext('C:\\workspace', {
+    const context = createTestContext('C:\\workspace', {
       scratchDir: 'C:\\scratch\\agent-b',
     })
 

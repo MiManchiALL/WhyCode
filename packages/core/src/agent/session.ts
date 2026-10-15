@@ -3533,7 +3533,6 @@ export class AgentSession {
       || next.some((entry, index) => entry !== this.messages[index])
     if (!changed) return
     this.messages = next
-    this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
     this.emitContextUsage()
   }
