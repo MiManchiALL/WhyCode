@@ -653,7 +653,13 @@ function currentWorkSectionId(blocks: readonly Block[], boundaryId: string): str
   const segment = blocks.slice(segmentStart)
   const userIndex = segment.findIndex((block) => block.kind === 'user')
   const firstWorkBlock = segment[userIndex >= 0 ? userIndex : 0]
-  return `work-${firstWorkBlock?.id ?? boundaryId}`
+  return workSectionId(firstWorkBlock, boundaryId)
+}
+
+/** 重发会保留用户消息的定位块，但新的输入不能继承旧执行过程的开合身份。 */
+export function workSectionId(firstBlock: Block | undefined, boundaryId: string): string {
+  const inputId = firstBlock?.kind === 'user' ? firstBlock.inputId : undefined
+  return `work-${inputId ?? firstBlock?.id ?? boundaryId}`
 }
 
 export function createPeerBlock(agentId: 'B' | 'C'): PeerBlockData {

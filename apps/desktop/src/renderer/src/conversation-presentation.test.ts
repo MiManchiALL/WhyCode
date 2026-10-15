@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { applyCoreEvent, createConversationState } from '../../shared/conversation-state.ts'
+import { conversationSections } from '../../shared/conversation-sections.ts'
+import { conversationHistoryWindow } from '../../main/conversation-history.ts'
 import {
   applyExpandedOverrides,
   captureScrollPosition,
@@ -9,6 +12,35 @@ import {
 } from './conversation-presentation.ts'
 
 describe('会话展示偏好', () => {
+  it('重新发送后在后台完成，切回不继承旧一轮的手动展开，但保留其它轮次的选择', () => {
+    let state = createConversationState()
+    for (const id of ['earlier', 'old']) {
+      state = applyCoreEvent(state, { type: 'user-message-accepted', inputId: id, text: '操作网页', startsTurn: true })
+      state = applyCoreEvent(state, { type: 'turn-start', turnId: id })
+      state = applyCoreEvent(state, { type: 'text-delta', text: '已完成' })
+      state = applyCoreEvent(state, { type: 'step-committed' })
+      state = applyCoreEvent(state, { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: id })
+    }
+    const [earlier, old] = conversationSections(state.blocks)
+    const cache = new ConversationPresentationCache()
+    cache.setExpanded('session', earlier!.id, true)
+    cache.setExpanded('session', old!.id, true)
+    const userId = state.blocks.find(block => block.kind === 'user' && block.inputId === 'old')!.id
+    state = applyCoreEvent(state, { type: 'user-message-edited', previousTurnId: 'old', inputId: 'retry', text: '操作网页', taskPlan: null })
+    state = applyCoreEvent(state, { type: 'turn-start', turnId: 'retry' })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '已重新完成' })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, { type: 'work-finished', durationMs: 200, outcome: 'completed', forkTurnId: 'retry' })
+    const snapshot = conversationHistoryWindow(state).view
+    const retry = conversationSections(snapshot.blocks).at(-1)!
+    assert.equal(snapshot.blocks.find(block => block.kind === 'user' && block.inputId === 'retry')!.id, userId, '消息定位锚点仍保留')
+    const restored = applyExpandedOverrides(new Set(snapshot.expanded), cache.get('session')?.expandedOverrides)
+    assert.equal(restored.has(retry.id), false, '新一次执行不得继承旧过程的手动展开')
+    assert.equal(restored.has(earlier!.id), true, '其它历史过程的手动选择不受影响')
+    cache.setExpanded('session', retry.id, true)
+    assert.equal(applyExpandedOverrides(new Set(snapshot.expanded), cache.get('session')?.expandedOverrides).has(retry.id), true)
+  })
+
   it('只用手动覆盖修正重放默认值，并保留新内容的默认展开状态', () => {
     const expanded = applyExpandedOverrides(
       new Set(['ask-work', 'new-work']),

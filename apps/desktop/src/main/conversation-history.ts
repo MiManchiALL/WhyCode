@@ -3,6 +3,7 @@ import type { ViewEvent } from '@whycode/core'
 import {
   applyViewEvent,
   createConversationState,
+  workSectionId,
   type Block,
   type ConversationState,
 } from '../shared/conversation-state.ts'
@@ -72,7 +73,7 @@ export function conversationHistoryWindow(
     if (target >= start && target < end) start = workStartAt(starts, target)
   }
   const pageBlocks = blocks.slice(start, end)
-  const included = new Set(pageBlocks.flatMap((block) => [block.id, `work-${block.id}`]))
+  const included = new Set(pageBlocks.flatMap((block) => [block.id, workSectionId(block, block.id)]))
   const pendingStep = end === blocks.length && state.pendingStep
     ? { ...state.pendingStep, blocks: state.pendingStep.blocks.slice(start) }
     : null

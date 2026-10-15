@@ -33,7 +33,7 @@ describe('临时对话组展示投影', () => {
     const group = asGroup(presentation.items[0])
 
     assert.equal(group.summary, '第一轮问题 以及更多说明')
-    assert.deepEqual(group.sections.map((section) => section.id), ['work-a-1', 'work-a-2'])
+    assert.deepEqual(group.sections.map((section) => section.id), ['work-a-1-input', 'work-a-2-input'])
     assert.equal(presentation.items[1]?.id, 'main-next')
     assert.equal(presentation.navigationTargetIds.get('a-1'), group.id)
     assert.equal(presentation.navigationTargetIds.get('a-2'), group.id)

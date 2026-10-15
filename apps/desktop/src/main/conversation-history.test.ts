@@ -132,6 +132,21 @@ describe('会话历史分页', () => {
       assert.deepEqual(restoreConversationSnapshot(page.view), state)
     }
   })
+
+  it('停止或失败后的过程在切回历史快照时继续展开', () => {
+    for (const outcome of ['stopped', 'error'] as const) {
+      const state = createConversationState([
+        { type: 'user-message', inputId: 'current-input', text: '检查网页', startsTurn: true },
+        core({ type: 'turn-start', turnId: 'current-turn' }),
+        core({ type: 'text-delta', text: '正在检查' }),
+        core({ type: 'work-finished', durationMs: 100, outcome, forkTurnId: 'current-turn' }),
+      ])
+      const restored = restoreConversationSnapshot(conversationHistoryWindow(state).view)
+      const section = conversationSections(restored.blocks)[0]!
+      assert.equal(restored.expanded.has(section.id), true)
+      assert.deepEqual(restored, state)
+    }
+  })
 })
 
 describe('宿主历史投影', () => {
