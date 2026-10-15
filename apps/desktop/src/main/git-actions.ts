@@ -1,7 +1,12 @@
 import type { GitMutation } from '../shared/git.ts'
 import { GitRepository } from './git-repository.ts'
+import { gitPushProxyArgs, type SystemProxyResolver } from './git-proxy.ts'
 
-export async function mutateGitRepository(repo: GitRepository, mutation: GitMutation): Promise<string> {
+export async function mutateGitRepository(
+  repo: GitRepository,
+  mutation: GitMutation,
+  resolveProxy?: SystemProxyResolver,
+): Promise<string> {
   const info = await repo.info()
   if (info.head !== mutation.expectedHead || info.branch !== mutation.expectedBranch) {
     throw new Error('当前分支或提交已变化，请刷新后再操作')
@@ -41,7 +46,8 @@ export async function mutateGitRepository(repo: GitRepository, mutation: GitMuta
       const upstream = (await repo.text(['for-each-ref', '--format=%(upstream:remotename)%00%(upstream:remoteref)',
         `refs/heads/${info.branch}`], '读取推送目标')).trim().split('\0')
       const target = upstream[0] === action.remote && upstream[1] ? upstream[1] : `refs/heads/${info.branch}`
-      await repo.text(['push', '--porcelain', '--set-upstream', '--', action.remote, `refs/heads/${info.branch}:${target}`],
+      const proxyArgs = resolveProxy ? await gitPushProxyArgs(repo, action.remote, resolveProxy) : []
+      await repo.text([...proxyArgs, 'push', '--porcelain', '--set-upstream', '--', action.remote, `refs/heads/${info.branch}:${target}`],
         '推送', { readOnly: false, timeoutMs: 180_000 })
       return `已推送 ${info.branch}`
     }

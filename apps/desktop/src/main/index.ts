@@ -13,6 +13,7 @@ import {
   net,
   protocol,
   safeStorage,
+  session,
   shell,
   type WebContents,
 } from 'electron'
@@ -650,7 +651,7 @@ async function mutateCurrentGit(runtimeId: string, mutation: GitMutation): Promi
     }
     if (runtime.workspace.mode === 'worktree') await worktrees.assertGitWorktree(runtime.workspace)
     return await hostOperations.runProjectWrite(repo.root, new AbortController().signal,
-      () => mutateGitRepository(repo, mutation), repo.io.identity)
+      () => mutateGitRepository(repo, mutation, url => session.defaultSession.resolveProxy(url)), repo.io.identity)
   } finally {
     for (const reservation of reservations) reservation.release()
   }
