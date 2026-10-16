@@ -15,8 +15,9 @@ import { buildTool } from '../tools/tool.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { AgentSession, type ApprovalHandler } from './session.ts'
 
-describe('工具调用顺序与执行屏障', { timeout: 15_000 }, () => {
-  it('新建后读取能看到文件，慢读取结束前不能覆盖文件', async (t) => {
+// 串行用例各自限时，避免前面的耗时挤占后续用例的等待预算。
+describe('工具调用顺序与执行屏障', () => {
+  it('新建后读取能看到文件，慢读取结束前不能覆盖文件', { timeout: 15_000 }, async (t) => {
     const started = deferred(t)
     const release = deferred(t)
     const f = await setup(t, [
@@ -45,7 +46,7 @@ describe('工具调用顺序与执行屏障', { timeout: 15_000 }, () => {
     assert.equal(results.every((result) => result.output.type === 'text'), true)
   })
 
-  it('连续只读调用最多并发十个，空出的槽位立即补入，写入等待整组完成', async (t) => {
+  it('连续只读调用最多并发十个，空出的槽位立即补入，写入等待整组完成', { timeout: 15_000 }, async (t) => {
     const started = Array.from({ length: 12 }, () => deferred(t))
     const release = Array.from({ length: 12 }, () => deferred(t))
     let active = 0
@@ -81,7 +82,7 @@ describe('工具调用顺序与执行屏障', { timeout: 15_000 }, () => {
   })
 
   for (const mode of ['complete', 'stop', 'urgent'] as const) {
-    it(`${mode}：快结果立即落盘，恢复与下一次请求仍按调用顺序，未开始的屏障不会偷跑`, async (t) => {
+    it(`${mode}：快结果立即落盘，恢复与下一次请求仍按调用顺序，未开始的屏障不会偷跑`, { timeout: 15_000 }, async (t) => {
       const release = deferred(t)
       const fastSaved = deferred(t)
       const f = await setup(t, [
@@ -123,7 +124,7 @@ describe('工具调用顺序与执行屏障', { timeout: 15_000 }, () => {
     })
   }
 
-  it('前一个调用等待审批时，后一个已允许的状态操作不能越过它', async (t) => {
+  it('前一个调用等待审批时，后一个已允许的状态操作不能越过它', { timeout: 15_000 }, async (t) => {
     const shown = deferred(t)
     const approved = deferred(t)
     const executions: string[] = []
@@ -147,7 +148,7 @@ describe('工具调用顺序与执行屏障', { timeout: 15_000 }, () => {
     assert.deepEqual(executions, ['NeedsApproval', 'Allowed'])
   })
 
-  it('只读工具的已知错误不误报成副作用结果未知', async (t) => {
+  it('只读工具的已知错误不误报成副作用结果未知', { timeout: 15_000 }, async (t) => {
     const f = await setup(t, [['FailRead', {}]])
     f.session.setExtraTools([buildTool({
       name: 'FailRead', description: '失败读取', prompt: '读取', inputSchema: z.object({}),
@@ -160,7 +161,7 @@ describe('工具调用顺序与执行屏障', { timeout: 15_000 }, () => {
     assert.doesNotMatch(JSON.stringify(result), /结果未知|工具未执行/)
   })
 
-  it('并发结果落盘失败后排空已启动调用，并阻止后续写入与模型续轮', async (t) => {
+  it('并发结果落盘失败后排空已启动调用，并阻止后续写入与模型续轮', { timeout: 15_000 }, async (t) => {
     const started = deferred(t)
     const release = deferred(t)
     const failed = deferred(t)

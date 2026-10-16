@@ -11,6 +11,7 @@ import type { DeleteSessionOptions, DeleteSessionResult, RemoteCleanupFailure, S
 import { SessionItems } from './sidebar-sessions.tsx'
 import { SidebarProjects } from './sidebar-projects.tsx'
 import { groupSidebarSessions } from './sidebar-groups.ts'
+import { useSidebarGroupCollapsed } from './sidebar-collapse.ts'
 import type { SidebarProject } from '../../shared/projects.ts'
 import { SidebarToggleIcon } from './sidebar-toggle-icon.tsx'
 import { PanelResizeHandle } from './panel-resize-handle.tsx'
@@ -51,7 +52,7 @@ export function AppSidebar(props: AppSidebarProps) {
   const [deleteTargets, setDeleteTargets] = useState<{ sessionId: string; remoteFailure?: RemoteCleanupFailure }[]>([])
   const deleteTarget = deleteTargets[0]
   const closeDeleteDialog = useCallback(() => setDeleteTargets(targets => targets.slice(1)), [])
-  const [pinnedCollapsed, setPinnedCollapsed] = useState(false)
+  const [pinnedCollapsed, setPinnedCollapsed] = useSidebarGroupCollapsed('pinned')
   const deleteSession = async (sessionId: string, options: DeleteSessionOptions) => {
     const result = await props.onDelete(sessionId, options)
     if (result && !result.ok && result.remoteCleanupFailure) {
@@ -164,7 +165,7 @@ export function AppSidebar(props: AppSidebarProps) {
                     aria-expanded={!pinnedCollapsed}
                     aria-label={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
                     title={pinnedCollapsed ? '展开置顶会话' : '收起置顶会话'}
-                    onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
+                    onClick={() => setPinnedCollapsed(!pinnedCollapsed)}
                   >
                     <span>置顶</span><ChevronDown size={12} className={`transition-transform ${pinnedCollapsed ? '-rotate-90' : ''}`} />
                   </button>
@@ -174,7 +175,7 @@ export function AppSidebar(props: AppSidebarProps) {
                 )}
               </section>
             )}
-            <SidebarProjects projects={props.projects} selectedSessionId={props.selectedSessionId}
+            <SidebarProjects projects={props.projects}
               busy={props.busy || props.navigationLocked} onSelect={props.onSelectProject}
               onRename={props.onRenameProject} onRemove={props.onRemoveProject}
               renderSessions={project => {
