@@ -114,6 +114,7 @@ import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
 import { AppSidebar } from './app-sidebar.tsx'
+import { pruneSidebarProjectCollapse } from './sidebar-collapse.ts'
 import type { SidebarProject } from '../../shared/projects.ts'
 import { TaskHeader } from './task-header.tsx'
 import { normalizeSessionName } from '../../shared/session-name.ts'
@@ -673,6 +674,7 @@ export function App() {
         sessionListRefreshRequestedRef.current = false
         try {
           const next = await window.whycode.listSessionSidebar()
+          pruneSidebarProjectCollapse(next.projects)
           const orderedProjects = next.projects.toReversed().sort((a, b) => Number(Boolean(a.remote)) - Number(Boolean(b.remote)))
           setSessions((current) => sameSidebarItems(current, next.sessions) ? current : next.sessions)
           setProjects((current) => sameSidebarItems(current, orderedProjects) ? current : orderedProjects)
@@ -2335,18 +2337,19 @@ export function App() {
                     onOpenFilePreview={openFilePreview}
                     onOpenChanges={showRightPanelPage}
                     onToggle={toggle}
-                  />
-                  {!loadingConversation && pendingMessage && <PendingUserMessage draft={pendingMessage} />}
-                  {!loadingConversation && !conversationStarted && pendingMessage && worktreePreparation && (
-                    <WorktreePreparation baseRef={worktreePreparation.baseRef} />
-                  )}
-                  {!loadingConversation && thinkingGapVisible && <ThinkingGapIndicator />}
+                  >
+                    {pendingMessage && <PendingUserMessage draft={pendingMessage} />}
+                    {!conversationStarted && pendingMessage && worktreePreparation && (
+                      <WorktreePreparation baseRef={worktreePreparation.baseRef} />
+                    )}
+                    {thinkingGapVisible && <ThinkingGapIndicator />}
+                  </ConversationView>
                 </div>
               </main>
             </div>
 
             <div className="relative shrink-0 px-4 pb-4 pt-1">
-              <div className="wc-conversation-balanced-content mx-auto w-full max-w-4xl">
+              <div className="wc-conversation-balanced-content relative mx-auto w-full max-w-4xl">
                 <div hidden={loadingConversation}>
                   {showJumpBottom && (
                     <button

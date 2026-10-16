@@ -3,7 +3,7 @@ import { readPresentationResult } from '@whycode/core/presentation'
 import { ResponseFooter } from './response-footer.tsx'
 import { ResponseSourcesContext, responsePresentationResult, responseSources } from './response-presentation.ts'
 import { AlertCircle, GitFork } from 'lucide-react'
-import { memo, useDeferredValue, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useDeferredValue, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { SessionLoading } from './session-loading.tsx'
 import type { Block } from '../../shared/conversation-state.ts'
 import { BlockView } from './conversation-block.tsx'
@@ -39,6 +39,7 @@ import { useCheckpointRestoreNavigation } from './checkpoint-restore-navigation.
 import type { ConversationScrollAlignment } from './conversation-scroll.ts'
 
 interface ConversationViewProps {
+  children?: ReactNode
   remote?: boolean
   runtimeId: string
   pendingSessionId?: string | null
@@ -131,6 +132,7 @@ export const ConversationView = memo(function ConversationView(props: Conversati
   const rendering = deferred.runtimeId !== props.runtimeId
   // 读取与渲染共用一次等待生命周期，阶段交接不能重建提示并重启其显示延迟。
   const pending = !!props.pendingSessionId || rendering
+  const { children, ...contents } = pending || props.active === false ? deferred : props
   useLayoutEffect(() => {
     if (!pending && props.active !== false) props.onReady?.()
   }, [pending, props.runtimeId, props.onReady, props.active, props.items])
@@ -138,7 +140,8 @@ export const ConversationView = memo(function ConversationView(props: Conversati
     <>
       {pending && <SessionLoading />}
       <div hidden={pending} inert={props.active === false}>
-        <ConversationContents {...(pending || props.active === false ? deferred : props)} />
+        <ConversationContents {...contents} />
+        {children}
       </div>
     </>
   )

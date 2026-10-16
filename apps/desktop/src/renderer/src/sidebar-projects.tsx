@@ -1,12 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Server, Trash2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { MAX_PROJECT_NAME_LENGTH, type SidebarProject } from '../../shared/projects.ts'
 import { NameEditorDialog } from './name-editor.tsx'
+import { useSidebarGroupCollapsed } from './sidebar-collapse.ts'
 
 interface SidebarProjectsProps {
   projects: readonly SidebarProject[]
-  selectedSessionId: string | null
   busy: boolean
   onSelect: (projectId?: string) => void
   onRename: (id: string, name: string) => Promise<boolean>
@@ -15,13 +15,13 @@ interface SidebarProjectsProps {
 }
 
 export function SidebarProjects(props: SidebarProjectsProps) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useSidebarGroupCollapsed('projects')
   const [renameId, setRenameId] = useState<string | null>(null)
   const renamed = props.projects.find(project => project.id === renameId)
   return <section className="mb-4" aria-label="项目">
     <div className="group/projects mb-1 flex h-7 items-center gap-1 px-2">
       <button type="button" className="wc-focus-ring flex min-w-0 items-center gap-1 rounded-md wc-type-caption font-medium text-[var(--wc-faint)] hover:text-[var(--wc-muted)]"
-        aria-expanded={!collapsed} aria-label={collapsed ? '展开项目' : '收起项目'} onClick={() => setCollapsed(value => !value)}>
+        aria-expanded={!collapsed} aria-label={collapsed ? '展开项目' : '收起项目'} onClick={() => setCollapsed(!collapsed)}>
         <span>项目</span><ChevronDown size={12} className={`transition-transform ${collapsed ? '-rotate-90' : ''}`} />
       </button>
       <button type="button" className="wc-icon-button ml-auto size-6 opacity-0 group-hover/projects:opacity-100 focus-visible:opacity-100"
@@ -29,7 +29,7 @@ export function SidebarProjects(props: SidebarProjectsProps) {
         onClick={() => { setCollapsed(false); props.onSelect() }}><Plus size={15} /></button>
     </div>
     {!collapsed && (props.projects.length ? <div className="space-y-1">
-      {props.projects.map(project => <ProjectGroup key={project.id} project={project} selectedSessionId={props.selectedSessionId}
+      {props.projects.map(project => <ProjectGroup key={project.id} project={project}
         busy={props.busy} onSelect={props.onSelect} onRename={() => setRenameId(project.id)} onRemove={props.onRemove}>
         {props.renderSessions(project)}
       </ProjectGroup>)}
@@ -40,21 +40,19 @@ export function SidebarProjects(props: SidebarProjectsProps) {
   </section>
 }
 
-function ProjectGroup({ project, selectedSessionId, busy, onSelect, onRename, onRemove, children }: {
-  project: SidebarProject; selectedSessionId: string | null; busy: boolean
+function ProjectGroup({ project, busy, onSelect, onRename, onRemove, children }: {
+  project: SidebarProject; busy: boolean
   onSelect: (id: string) => void; onRename: () => void; onRemove: (id: string) => void; children: ReactNode
 }) {
-  const [expanded, setExpanded] = useState(true)
-  const selected = selectedSessionId !== null && project.sessionIds.includes(selectedSessionId)
+  const [collapsed, setCollapsed] = useSidebarGroupCollapsed(`project:${project.id}`)
   const ProjectIcon = project.remote ? Server : Folder
-  useEffect(() => { if (selected) setExpanded(true) }, [selected, selectedSessionId])
   return <div>
     <div className="group/project-row flex min-w-0 items-center rounded-lg pr-1 hover:bg-black/[0.045] has-[[data-state=open]]:bg-black/[0.045]">
       <button type="button" className="group/project-toggle wc-focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left wc-type-control"
-        aria-expanded={expanded} title={project.remote ? `${project.remote.label} · ${project.directory}` : project.directory} onClick={() => setExpanded(value => !value)}>
+        aria-expanded={!collapsed} title={project.remote ? `${project.remote.label} · ${project.directory}` : project.directory} onClick={() => setCollapsed(!collapsed)}>
         <span className="relative flex size-4 shrink-0 items-center justify-center text-[var(--wc-muted)]" aria-hidden="true">
           <ProjectIcon size={15} className="group-hover/project-row:opacity-0 group-focus-visible/project-toggle:opacity-0" />
-          <ChevronRight size={14} className={`absolute opacity-0 transition-transform group-hover/project-row:opacity-100 group-focus-visible/project-toggle:opacity-100 ${expanded ? 'rotate-90' : ''}`} />
+          <ChevronRight size={14} className={`absolute opacity-0 transition-transform group-hover/project-row:opacity-100 group-focus-visible/project-toggle:opacity-100 ${collapsed ? '' : 'rotate-90'}`} />
         </span>
         {project.remote ? <span className="flex min-w-0 flex-1 items-center gap-1 font-medium">
           <span className="max-w-[calc(50%-0.5rem)] truncate text-[var(--wc-muted)]">{project.remote.label}</span>
@@ -64,7 +62,7 @@ function ProjectGroup({ project, selectedSessionId, busy, onSelect, onRename, on
       </button>
       <div className="flex shrink-0 items-center opacity-0 group-hover/project-row:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100">
         <button type="button" className="wc-icon-button size-6" aria-label={`在 ${project.name} 中新建会话`} title="新建会话" disabled={busy}
-          onClick={() => { setExpanded(true); onSelect(project.id) }}><Plus size={15} /></button>
+          onClick={() => { setCollapsed(false); onSelect(project.id) }}><Plus size={15} /></button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild><button type="button" className="wc-icon-button size-6" aria-label={`管理项目 ${project.name}`} title="管理项目" disabled={busy}>
             <MoreHorizontal size={15} />
@@ -76,6 +74,6 @@ function ProjectGroup({ project, selectedSessionId, busy, onSelect, onRename, on
         </DropdownMenu.Root>
       </div>
     </div>
-    {expanded && <div className="ml-3 pl-1">{children}</div>}
+    {!collapsed && <div className="ml-3 pl-1">{children}</div>}
   </div>
 }
