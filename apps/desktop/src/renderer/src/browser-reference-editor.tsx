@@ -42,10 +42,11 @@ function ReferenceForm({ reference, boundary, offset }: Props & { offset: { x: n
   const drag = useDraggable({ id: 'browser-reference-editor' })
   const last = reference.captures.at(-1)?.target
   const open = reference.mode === 'comment' || reference.mode === 'saving'
-  if (!last) return null
+  // 边界未挂载时的临时锚点会在就绪后重定位，不能让拖动提前使用旧坐标。
+  if (!last || !boundary) return null
   const anchor = reference.anchor ?? { x: 0.5, y: 0.5, width: 0, height: 0 }
   const above = anchor.y, below = 1 - anchor.y - anchor.height
-  const outside = Math.max(above, below) * (boundary?.clientHeight ?? 0) >= 200
+  const outside = Math.max(above, below) * boundary.clientHeight >= 200
   const side = outside && below >= above ? 'bottom' : 'top'
   const x = Math.max(4, Math.min(90, (anchor.x + anchor.width / 2) * 100))
   // 从选框外侧定位；目标占满视口时靠底部放置，避免弹层被压到无法操作。
