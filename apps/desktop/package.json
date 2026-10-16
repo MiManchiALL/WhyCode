@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node ../../scripts/build-workspace-runtime.mjs && node ../../scripts/build-remote.mjs && electron-vite dev",
     "build": "node ../../scripts/build-workspace-runtime.mjs && node ../../scripts/build-remote.mjs && electron-vite build",
-    "test": "node --test",
+    "test": "install-electron && node --test",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {

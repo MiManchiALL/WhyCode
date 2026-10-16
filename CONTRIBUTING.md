@@ -36,11 +36,13 @@ main 的保护规则要求通过 PR、CI 成功且分支与 main 同步，禁止
 测试使用 Node 内置运行器。从仓库根目录定向运行，例如：
 
 ```sh
-pnpm --filter @whycode/desktop exec node --test src/main/browser-execution.test.ts
+pnpm --filter @whycode/desktop test src/main/browser-execution.test.ts
 pnpm --filter @whycode/core exec node --test src/session/view-events.test.ts
 pnpm --filter @whycode/desktop typecheck
 git diff --check
 ```
+
+桌面包的 `test` 入口先完成 Electron 官方安装，再并行运行用例。若绕过该入口直接调用 `node --test`，首次安装或更新 Electron 后须先执行 `pnpm --filter @whycode/desktop exec install-electron`，避免多个测试同时安装、启动同一份程序。
 
 需要定位一个用例时，将 `--test-name-pattern="用例名"` 放在测试文件前，并核对实际执行数量。仅修改测试筛选条件、漏选用例或全部 skip 不能作为通过证据。不要为了满足清单而新增只复述实现的测试。
 
