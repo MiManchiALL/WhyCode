@@ -7,12 +7,21 @@ import '../styles.css'
 
 export { composeBrowserReference, restoreBrowserReference } from '../browser-reference-image.ts'
 
-export function mountEditor() { createRoot(document.getElementById('root')!).render(<EditorFixture />) }
+let root: ReturnType<typeof createRoot> | undefined
 
-function EditorFixture() {
+export function mountEditor(width = 680) {
+  root ??= createRoot(document.getElementById('root')!)
+  root.render(<EditorFixture width={width} />)
+}
+
+export function unmountEditor() {
+  root?.unmount()
+  root = undefined
+}
+
+function EditorFixture({ width }: { width: number }) {
   const [boundary, setBoundary] = useState<HTMLDivElement | null>(null)
   const [open, setOpen] = useState(true)
-  const [width, setWidth] = useState(680)
   const [comment, setComment] = useState('调整这几个按钮')
   const [anchor] = useState({ x: 0.5, y: 0.3, width: 0.1, height: 0.1 })
   const [captures] = useState<BrowserTargetCapture[]>(() => Array.from({ length: 6 }, (_, index) => ({
@@ -27,11 +36,7 @@ function EditorFixture() {
     pick() {}, async save() {}, cancel() { setOpen(false) }, escape() { setOpen(false) },
     finishPicking() {}, remove() {}, toggle() {},
   }
-  return <>
-    <button id="reopen" onClick={() => setOpen(true)}>重新编辑</button>
-    <button id="narrow" onClick={() => setWidth(300)}>缩窄侧栏</button>
-    <div ref={setBoundary} id="browser-boundary" style={{ position: 'absolute', left: 360, top: 100, width, height: 550 }}>
-      {open && <BrowserReferenceEditor reference={reference} boundary={boundary} />}
-    </div>
-  </>
+  return <div ref={setBoundary} id="browser-boundary" style={{ position: 'absolute', left: 360, top: 100, width, height: 550 }}>
+    {open && <BrowserReferenceEditor reference={reference} boundary={boundary} />}
+  </div>
 }

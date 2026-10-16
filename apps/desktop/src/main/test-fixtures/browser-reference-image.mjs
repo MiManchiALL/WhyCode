@@ -113,7 +113,23 @@ async function checkMarkers(win) {
 
 async function checkDragging(win) {
   const execute = (code) => win.webContents.executeJavaScript(code)
-  const pause = () => new Promise(resolve => setTimeout(resolve, 40))
+  win.webContents.debugger.attach('1.3')
+  const command = (method, params) => win.webContents.debugger.sendCommand(method, params)
+  const waitForLayout = (condition = 'true') => execute(`new Promise((resolve, reject) => {
+    const deadline = performance.now() + 5000
+    const check = () => {
+      if (${condition}) return requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      if (performance.now() >= deadline) return reject(new Error('等待页面状态超时: ' + ${JSON.stringify(condition)}))
+      requestAnimationFrame(check)
+    }
+    check()
+  })`)
+  // 原生输入必须等 Chromium 确认，再跨过绘制帧读取 React 提交后的布局，不能用固定延时推测完成。
+  const mouse = async (type, x, y, buttons = 0) => {
+    await command('Input.dispatchMouseEvent', { type, x, y, buttons,
+      button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 })
+    await waitForLayout()
+  }
   const rects = () => execute(`(() => ({
     editor: document.querySelector('[aria-label="网页批注"]').getBoundingClientRect().toJSON(),
     boundary: document.getElementById('browser-boundary').getBoundingClientRect().toJSON(),
@@ -127,29 +143,39 @@ async function checkDragging(win) {
   const drag = async (x, y) => {
     const p = await execute(`(() => { const r = document.querySelector('[aria-label="移动批注框"]').getBoundingClientRect();
       return { x: Math.round(r.x + 50), y: Math.round(r.y + r.height / 2) } })()`)
-    win.webContents.sendInputEvent({ type: 'mouseMove', ...p })
-    win.webContents.sendInputEvent({ type: 'mouseDown', ...p, button: 'left', clickCount: 1 }); await pause()
-    win.webContents.sendInputEvent({ type: 'mouseMove', x: p.x + 6, y: p.y + 6 }); await pause()
+    await mouse('mouseMoved', p.x, p.y)
+    await mouse('mousePressed', p.x, p.y, 1)
+    await mouse('mouseMoved', p.x + 6, p.y + 6, 1)
+    assert.equal(await execute('document.querySelector("[aria-label=移动批注框]").getAttribute("aria-pressed")'), 'true', '真实鼠标输入已开始拖动')
     for (let index = 1; index <= 20; index++) {
-      win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(p.x + (x - p.x) * index / 20), y: Math.round(p.y + (y - p.y) * index / 20) })
-      await pause(); await assertInside()
+      await mouse('mouseMoved', Math.round(p.x + (x - p.x) * index / 20), Math.round(p.y + (y - p.y) * index / 20), 1)
+      await assertInside()
     }
     const beforeDrop = await assertInside()
-    win.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 }); await pause()
+    await mouse('mouseReleased', x, y)
+    assert.equal(await execute('document.querySelector("[aria-label=移动批注框]").hasAttribute("aria-pressed")'), false, '真实鼠标输入已结束拖动')
     const afterDrop = await assertInside()
-    assert.ok(Math.abs(beforeDrop.x - afterDrop.x) < 1 && Math.abs(beforeDrop.y - afterDrop.y) < 1, '松手不改变批注框位置')
+    assert.ok(Math.abs(beforeDrop.x - afterDrop.x) < 1 && Math.abs(beforeDrop.y - afterDrop.y) < 1, `松手不改变批注框位置: ${JSON.stringify({ x, y, beforeDrop, afterDrop })}`)
   }
   win.setContentSize(1200, 850)
-  await execute('BrowserReferenceImage.mountEditor()')
-  for (let i = 0; i < 20 && !await execute('!!document.querySelector("[aria-label=网页批注]")'); i++) await pause()
+  await waitForLayout()
   for (let pass = 0; pass < 2; pass++) {
+    // 同一套断言覆盖正常渲染和慢渲染，不依赖 CI 机器恰好足够快。
+    await command('Emulation.setCPUThrottlingRate', { rate: pass === 0 ? 1 : 6 })
+    await execute('BrowserReferenceImage.mountEditor()')
+    await waitForLayout('document.querySelector("[aria-label=网页批注]")')
     await drag(1150, 800); await drag(400, 160); await drag(0, 840); await drag(1190, 5)
-    await execute('document.querySelector("[aria-label=取消本条引用]").click()'); await pause()
-    await execute('document.getElementById("reopen").click()'); await pause()
+    if (pass === 1) {
+      await execute('BrowserReferenceImage.mountEditor(300)')
+      await waitForLayout('document.getElementById("browser-boundary").clientWidth === 300')
+      await assertInside()
+      await drag(1150, 800); await drag(0, 5)
+    }
+    await command('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', windowsVirtualKeyCode: 27 })
+    await command('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', windowsVirtualKeyCode: 27 })
+    await waitForLayout('!document.querySelector("[aria-label=网页批注]")')
+    await execute('BrowserReferenceImage.unmountEditor()')
   }
-  await execute('document.getElementById("narrow").click()'); await pause()
-  await assertInside()
-  await drag(1150, 800); await drag(0, 5)
 }
 
 app.whenReady().then(async () => {
