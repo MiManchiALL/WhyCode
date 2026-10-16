@@ -122,6 +122,8 @@ async function checkDragging(win) {
       if (performance.now() >= deadline) return reject(new Error('等待页面状态超时: ' + ${JSON.stringify(condition)} + '\\n' + JSON.stringify({
         viewport: [innerWidth, innerHeight], focused: document.hasFocus(),
         handle: document.querySelector('[aria-label="移动批注框"]')?.getBoundingClientRect().toJSON(),
+        editor: document.querySelector('[aria-label="网页批注"]')?.getBoundingClientRect().toJSON(),
+        side: document.querySelector('[aria-label="网页批注"]')?.dataset.side,
         events: window.pointerTrace,
       })))
       requestAnimationFrame(check)
@@ -183,6 +185,9 @@ async function checkDragging(win) {
   for (let pass = 0; pass < 2; pass++) {
     // 同一套断言覆盖正常渲染和慢渲染，不依赖 CI 机器恰好足够快。
     await command('Emulation.setCPUThrottlingRate', { rate: pass === 0 ? 1 : 6 })
+    await execute('BrowserReferenceImage.mountEditor(680, false)')
+    await waitFor('document.getElementById("browser-boundary")?.dataset.ready === "true"')
+    assert.equal(await execute('Boolean(document.querySelector("[aria-label=网页批注]"))'), false, '边界尚未交付时不显示可拖动的批注框')
     await execute('BrowserReferenceImage.mountEditor()')
     await waitFor('document.querySelector("[aria-label=网页批注]")')
     await drag(1150, 800); await drag(400, 160); await drag(0, 840); await drag(1190, 5)

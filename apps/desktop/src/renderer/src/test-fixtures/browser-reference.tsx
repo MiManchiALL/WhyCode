@@ -9,9 +9,9 @@ export { composeBrowserReference, restoreBrowserReference } from '../browser-ref
 
 let root: ReturnType<typeof createRoot> | undefined
 
-export function mountEditor(width = 680) {
+export function mountEditor(width = 680, boundaryReady = true) {
   root ??= createRoot(document.getElementById('root')!)
-  root.render(<EditorFixture width={width} />)
+  root.render(<EditorFixture width={width} boundaryReady={boundaryReady} />)
 }
 
 export function unmountEditor() {
@@ -19,7 +19,7 @@ export function unmountEditor() {
   root = undefined
 }
 
-function EditorFixture({ width }: { width: number }) {
+function EditorFixture({ width, boundaryReady }: { width: number; boundaryReady: boolean }) {
   const [boundary, setBoundary] = useState<HTMLDivElement | null>(null)
   const [open, setOpen] = useState(true)
   const [comment, setComment] = useState('调整这几个按钮')
@@ -36,7 +36,7 @@ function EditorFixture({ width }: { width: number }) {
     pick() {}, async save() {}, cancel() { setOpen(false) }, escape() { setOpen(false) },
     finishPicking() {}, remove() {}, toggle() {},
   }
-  return <div ref={setBoundary} id="browser-boundary" style={{ position: 'absolute', left: 360, top: 100, width, height: 550 }}>
-    {open && <BrowserReferenceEditor reference={reference} boundary={boundary} />}
+  return <div ref={setBoundary} id="browser-boundary" data-ready={Boolean(boundary)} style={{ position: 'absolute', left: 360, top: 100, width, height: 550 }}>
+    {open && <BrowserReferenceEditor reference={reference} boundary={boundaryReady ? boundary : null} />}
   </div>
 }
