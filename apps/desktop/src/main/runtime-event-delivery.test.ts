@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { CoreEvent } from '@whycode/core/events'
-import { isBackgroundRuntimeLifecycleEvent } from './runtime-event-delivery.ts'
+import { shouldDeliverRuntimeEvent } from './runtime-event-delivery.ts'
+import { SessionNavigation } from './session-navigation.ts'
+import type { DesktopSessionRuntime } from './desktop-session-runtime.ts'
+import type { RuntimeSnapshot } from '../shared/session.ts'
+import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
+
+const hidden = { sessionId: 'background' }
 
 describe('后台运行时事件投影', () => {
   it('保留会话列表需要的开始、结束与终态事件', () => {
@@ -20,7 +26,7 @@ describe('后台运行时事件投影', () => {
     ]
 
     for (const event of lifecycleEvents) {
-      assert.equal(isBackgroundRuntimeLifecycleEvent(event), true)
+      assert.equal(shouldDeliverRuntimeEvent(event, hidden, null, null), true)
     }
   })
 
@@ -35,7 +41,46 @@ describe('后台运行时事件投影', () => {
     ]
 
     for (const event of hiddenEvents) {
-      assert.equal(isBackgroundRuntimeLifecycleEvent(event), false)
+      assert.equal(shouldDeliverRuntimeEvent(event, hidden, null, null), false)
     }
+  })
+
+  it('恢复快照取得后、选择提交前的工具封口不丢失，最终正文仍能收起过程', async () => {
+    const current = { sessionId: 'current' } as DesktopSessionRuntime
+    const target = { runtimeId: 'target', sessionId: 'target' } as DesktopSessionRuntime
+    let selected = current
+    const stream: CoreEvent[] = []
+    const initial = applyCoreEvent(createConversationState([{ type: 'user-message', text: '操作网页', startsTurn: true }]),
+      { type: 'tool-start', toolName: 'Browser', toolUseId: 'browser', input: { code: 'await browser.snapshot()' } })
+    const snapshot = { runtimeId: target.runtimeId, sessionId: target.sessionId } as RuntimeSnapshot
+    let captured!: () => void
+    const capturedSnapshot = new Promise<void>(resolve => { captured = resolve })
+    let complete!: () => void
+    const awaitingMetadata = new Promise<void>(resolve => { complete = resolve })
+    const navigation = new SessionNavigation({
+      find: () => target, prepare: async () => {},
+      snapshot: async () => { captured(); await awaitingMetadata; return snapshot },
+      commit: runtime => { selected = runtime }, settled: () => {},
+    })
+    const restoring = navigation.resume(target.sessionId!)
+    await capturedSnapshot
+    for (const event of [
+      { type: 'tool-end', toolUseId: 'browser', result: '已完成', isError: false },
+      { type: 'step-committed' },
+    ] satisfies CoreEvent[]) {
+      if (shouldDeliverRuntimeEvent(event, target, selected, navigation.sessionId)) stream.push(event)
+    }
+    complete()
+    assert.equal((await restoring).ok, true)
+    let restored = stream.reduce((state, event) => applyCoreEvent(state, event), initial)
+    for (const event of [
+      { type: 'text-delta', text: '浏览器操作已完成。' },
+      { type: 'step-committed' },
+      { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: null },
+    ] satisfies CoreEvent[]) restored = applyCoreEvent(restored, event)
+    assert.ok(restored.blocks.some(block => block.kind === 'text' && block.phase === 'final' && block.text === '浏览器操作已完成。'))
+    assert.equal(restored.expanded.has('work-b0'), false)
+    assert.equal(restored.blocks.at(-1)?.kind, 'work-duration')
+    assert.equal(shouldDeliverRuntimeEvent({ type: 'text-delta', text: '旧目标' }, target, current, 'another'), false)
   })
 })

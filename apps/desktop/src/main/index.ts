@@ -13,6 +13,7 @@ import {
   net,
   protocol,
   safeStorage,
+  session,
   shell,
   type WebContents,
 } from 'electron'
@@ -128,6 +129,7 @@ import { TerminalSessions } from './terminal-sessions.ts'
 import { installTerminalWindowLifecycle, registerTerminalIpc } from './terminal-ipc.ts'
 import { WorkspaceFiles } from './workspace-files.ts'
 import { BrowserGuests } from './browser-guests.ts'
+import { BrowserAgent } from './browser-agent.ts'
 import { installWorkspaceFileLifecycle, registerWorkspaceFileIpc } from './workspace-files-ipc.ts'
 import { runtimeWorkspaceBinding, workspaceDisplayDirectory, workspaceProjectDirectory } from '../shared/workspace.ts'
 import { SessionDeletionLock } from './session-deletion-lock.ts'
@@ -234,7 +236,7 @@ import { installExternalWebLinkHandlers } from './external-link.ts'
 import { installImageContextMenu } from './image-context-menu.ts'
 import { createRendererCrashRecoveryController } from './renderer-crash-recovery.ts'
 import { RuntimeEventBatcher } from './runtime-event-batcher.ts'
-import { isBackgroundRuntimeLifecycleEvent } from './runtime-event-delivery.ts'
+import { shouldDeliverRuntimeEvent } from './runtime-event-delivery.ts'
 import { RuntimeEventPortHub } from './runtime-event-port-hub.ts'
 import { WorktreeManager } from './worktree-manager.ts'
 import { openGitRepository, type GitRepository } from './git-repository.ts'
@@ -356,6 +358,7 @@ function createSessionWebPageTools(recorder: SessionJournal) {
 }
 
 const browserGuests = new BrowserGuests(process.env.ELECTRON_RENDERER_URL)
+const browserAgent = new BrowserAgent(browserGuests)
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -428,10 +431,7 @@ function broadcastRuntimeEvent(
 ): void {
   if (event.type === 'work-finished') runtimeRegistry.markWorkFinished(runtime)
   const sequence = ++runtimeEventSequence
-  if (
-    runtimeRegistry.selected === runtime
-    || isBackgroundRuntimeLifecycleEvent(event)
-  ) {
+  if (shouldDeliverRuntimeEvent(event, runtime, runtimeRegistry.selected, sessionNavigation.sessionId)) {
     const envelope: RuntimeEventEnvelope = {
       runtimeId: runtime.runtimeId,
       sessionId: runtime.sessionId,
@@ -651,7 +651,7 @@ async function mutateCurrentGit(runtimeId: string, mutation: GitMutation): Promi
     }
     if (runtime.workspace.mode === 'worktree') await worktrees.assertGitWorktree(runtime.workspace)
     return await hostOperations.runProjectWrite(repo.root, new AbortController().signal,
-      () => mutateGitRepository(repo, mutation), repo.io.identity)
+      () => mutateGitRepository(repo, mutation, url => session.defaultSession.resolveProxy(url)), repo.io.identity)
   } finally {
     for (const reservation of reservations) reservation.release()
   }
@@ -912,6 +912,7 @@ async function createMainAgentSession(
         ...createSessionWebPageTools(recorder),
       ],
       captureScreenshot: remote ? undefined : captureSessionScreenshot,
+      browser: browserAgent.forRuntime(runtime.runtimeId),
       pdfProcessor,
       auxiliaryImageAnalyzer: configuredAuxiliaryImageAnalyzer(),
       hasPendingTaskPlanContinuation: (planId) =>
@@ -2077,6 +2078,7 @@ function githubOAuthClientFromEnvironment(): {
     github: {
       clientId,
       clientSecret,
+      issuer: 'https://github.com/login/oauth',
       tokenEndpointAuthMethod: 'client_secret_post',
     },
   }
@@ -3288,6 +3290,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     await sshWorkspaces.connect(runtime.workspace)
     return sshWorkspaces.io(runtime.workspace)
   })
+  browserAgent.pages.register()
   createWindow()
 
   app.on('activate', () => {

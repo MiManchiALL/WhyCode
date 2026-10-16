@@ -16,13 +16,33 @@ interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContent
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
 export class BrowserGuests {
+  onClosed?: (id: string, reason: string) => void
+  onOpen?: (id: string, url: string) => boolean
+  isAgent?: (id: string) => boolean
   private readonly leases = new Map<string, GuestLease>()
   private readonly files = new BrowserFiles()
   private readonly downloads = new Set<DownloadItem>()
   private clearing: BrowserDataClearMode | null = null
   private readonly applicationUrl: string | undefined
+  private workspaceFor?: (runtimeId: string) => Promise<WorkspaceIO>
 
   constructor(applicationUrl?: string) { this.applicationUrl = applicationUrl }
+
+  get(id: string): WebContents | undefined {
+    const guest = this.leases.get(id)?.guest
+    return guest && !guest.isDestroyed() ? guest : undefined
+  }
+
+  async prepare(id: string, url: string, runtimeId?: string): Promise<string> {
+    if (!this.get(id)) throw new Error('浏览器标签已关闭')
+    if (!url.startsWith('file:')) {
+      if (!browserNavigationAllowed(url, this.applicationUrl)) throw new Error('不支持此网页地址')
+      return url
+    }
+    const io = runtimeId ? await this.workspaceFor?.(runtimeId) : undefined
+    if (!this.get(id)) throw new Error('浏览器标签已关闭')
+    return this.files.open(id, url, io)
+  }
 
   acquire(owner: WebContents): BrowserLease {
     if (this.clearing === 'all') throw new Error('正在清除全部浏览器数据，请稍后打开')
@@ -34,16 +54,23 @@ export class BrowserGuests {
     return { id, partition: BROWSER_PARTITION }
   }
 
-  release(owner: WebContents, id: string): void {
+  release(owner: WebContents, id: string): Promise<void> {
     const lease = this.leases.get(id)
-    if (!lease || lease.owner !== owner) return
+    if (!lease || lease.owner !== owner) return Promise.resolve()
+    const destroyed = lease.guest && !lease.guest.isDestroyed()
+      ? new Promise<void>(resolve => lease.guest!.once('destroyed', () => resolve()))
+      : Promise.resolve()
     this.leases.delete(id)
+    this.onClosed?.(id, 'page_closed: 网页已关闭')
     lease.references?.cancel()
     this.files.release(id)
-    if (lease.guest && !lease.guest.isDestroyed()) lease.guest.close({ waitForBeforeUnload: false })
+    // 撤销租约后由 Renderer 卸载 webview，Electron 随 DOM 分离销毁 guest。
+    // 提前 close 会让尚未卸载的元素把迟到事件发给已经销毁的原生窗口。
+    return destroyed
   }
 
   register(workspaceFor: (runtimeId: string) => Promise<WorkspaceIO>): void {
+    this.workspaceFor = workspaceFor
     this.configureSession()
     ipcMain.handle(IPC.getBrowserDataState, event => {
       this.requireOwner(event)
@@ -54,18 +81,13 @@ export class BrowserGuests {
       if (mode !== 'cache' && mode !== 'all') throw new Error('未知的浏览器清理方式')
       return this.clearData(mode)
     })
-    ipcMain.handle(IPC.acquireBrowser, event => {
-      this.requireOwner(event)
-      return this.acquire(event.sender)
-    })
     ipcMain.handle(IPC.prepareBrowserFile, async (event, id: unknown, url: unknown, runtimeId: unknown) => {
       this.requireOwner(event)
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (typeof id !== 'string' || typeof url !== 'string' || lease?.owner !== event.sender
         || !lease.guest || lease.guest.isDestroyed()) throw new Error('浏览器标签已关闭')
-      const io = typeof runtimeId === 'string' ? await workspaceFor(runtimeId) : undefined
-      if (this.leases.get(id) !== lease) throw new Error('浏览器标签已关闭')
-      return this.files.open(id, url, io)
+      if (!url.startsWith('file:')) throw new Error('此入口仅接受文件地址')
+      return this.prepare(id, url, typeof runtimeId === 'string' ? runtimeId : undefined)
     })
     ipcMain.handle(IPC.pickBrowserTarget, (event, id: unknown, options: unknown) => {
       this.requireOwner(event)
@@ -82,9 +104,6 @@ export class BrowserGuests {
     ipcMain.on(IPC.cancelBrowserReference, (event, id: unknown) => {
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (event.senderFrame === event.sender.mainFrame && lease?.owner === event.sender) lease.references?.cancel()
-    })
-    ipcMain.on(IPC.releaseBrowser, (event, id: unknown) => {
-      if (event.senderFrame === event.sender.mainFrame && typeof id === 'string') this.release(event.sender, id)
     })
     ipcMain.handle(IPC.openBrowserExternally, async (event, id: unknown) => {
       this.requireOwner(event)
@@ -106,6 +125,7 @@ export class BrowserGuests {
       }
       lease.attached = true
       browserGuestPreferences(preferences as Record<string, unknown>, BROWSER_PARTITION)
+      preferences.backgroundThrottling = !this.isAgent?.(id)
       params.httpreferrer = ''
     })
     owner.on('did-attach-webview', (_event, guest) => this.attach(window, guest))
@@ -125,16 +145,17 @@ export class BrowserGuests {
     guest.once('dom-ready', () => {
       const key = guest.getURL().slice('about:blank#'.length)
       const lease = this.leases.get(key)
-      if (!lease || lease.owner !== window.webContents || lease.guest) {
-        guest.close({ waitForBeforeUnload: false }); return
-      }
+      if (!lease || lease.owner !== window.webContents || lease.guest) return
       id = key; lease.guest = guest
       lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
-      guest.once('destroyed', () => { this.leases.delete(key); this.files.release(key) })
+      guest.once('destroyed', () => {
+        this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭')
+      })
+      guest.on('render-process-gone', () => this.release(window.webContents, key))
     })
     const allowed = (url: string) => browserNavigationAllowed(url, this.applicationUrl) || (!!id && this.files.allows(id, url))
     const open = (url: string) => {
-      if (allowed(url)) send({ type: 'open', url: browserDisplayUrl(url) })
+      if (allowed(url) && !(id && this.onOpen?.(id, url))) send({ type: 'open', url: browserDisplayUrl(url) })
     }
     guest.setWindowOpenHandler(({ url, postBody }) => {
       if (!postBody) open(url)
@@ -169,8 +190,8 @@ export class BrowserGuests {
       if (params.isEditable) items.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' })
       else if (params.selectionText) items.push({ role: 'copy' })
       if (items.length) items.push({ type: 'separator' })
-      items.push({ label: '重新加载', click: () => guest.reload() },
-        { label: '检查元素', click: () => guest.inspectElement(params.x, params.y) })
+      items.push({ label: '重新加载', click: () => send({ type: 'shortcut', command: 'reload' }) },
+        { label: '检查元素', enabled: !id || !this.isAgent?.(id), click: () => guest.inspectElement(params.x, params.y) })
       Menu.buildFromTemplate(items).popup({ window })
     })
   }
@@ -235,14 +256,16 @@ export class BrowserGuests {
       if (mode === 'all') {
         for (const item of this.downloads) item.cancel()
         // 包含尚未 dom-ready、还未写回租约的 guest；关闭旧页面后再清理，防止重新写入。
-        await Promise.all(webContents.getAllWebContents()
+        const destroyed = Promise.all(webContents.getAllWebContents()
           .filter(contents => contents.session === browser)
           .map(contents => new Promise<void>(resolve => {
             if (contents.isDestroyed()) { resolve(); return }
             contents.once('destroyed', () => resolve())
-            contents.close({ waitForBeforeUnload: false })
+            // 检查器没有 webview DOM，沿其自身窗口生命周期关闭。
+            if (contents.getType() !== 'webview') contents.close({ waitForBeforeUnload: false })
           })))
         for (const [id, lease] of this.leases) this.release(lease.owner, id)
+        await destroyed
       }
       await clearBrowserSession(browser, mode)
     } finally { this.setClearing(null) }

@@ -9,19 +9,22 @@ Treat this skill as structural guidance, not an instruction to shorten documents
 
 ## Start from the repository contract
 
-Before documentation work, read `docs/04-START-HERE.md` completely and read `docs/05-暂存区便签.md`. Obey the quality redlines in `04`.
+Before documentation work, read the document map and writing rules in `docs/04-START-HERE.md` (§3–4), and `docs/05-暂存区便签.md`. Read other guide sections only when the task reaches their subject. Obey the applicable quality redlines in `04`.
 
 Use the current document map in `04` as the authority until the user explicitly authorizes a new map. Do not redesign the taxonomy merely because two documents currently overlap.
 
 The current ownership boundaries are:
 
+- Standing instructions: concise constraints for agents developing WhyCode and links selected by task. Keep module details, versions, progress, incidents, and situational procedures elsewhere; do not require every linked document on every turn.
+- `CONTRIBUTING.md`: contributor environment, the authoritative local verification policy, commit/PR responsibilities, and CI boundaries. Executable CI commands belong to `.github/workflows/ci.yml`.
 - `01-需求与MVP.md`: product goals, current scope, non-goals, user-facing acceptance results, and trigger-based future directions.
 - `02-技术栈与架构.md`: current architecture, module ownership, implementation mechanisms, lifecycles, data flow, Renderer baseline, and engineering constraints.
 - `03-Agent与协议契约.md`: model-visible prompts and messages, context, tool schemas, structured output, persistence, planning, multi-agent, and recovery contracts.
-- `04-START-HERE.md`: the single entry point, standing development rules, quality redlines, high-level current focus, and links to trigger-specific project skills.
+- `04-START-HERE.md`: the detailed development guide, quality redlines, asynchronous/error-handling principles, and complete document map; read relevant sections on demand.
 - `05-暂存区便签.md`: only current unfinished work, pending verification, blockers, and immediate next actions.
+- `06-依赖安全例外.md`: verified dependency security exceptions, review conditions, and audit ownership.
 
-Trigger-specific workflows that do not belong in the core document map live in project skills. `.agents/skills/whycode-model-catalog/SKILL.md` is the sole detailed owner of model catalog and CLIProxyAPI maintenance; `04` keeps only the mandatory trigger link.
+Trigger-specific workflows live in project skills. `.agents/skills/whycode-model-catalog/SKILL.md` owns model catalog and CLIProxyAPI maintenance; standing instructions and `04` keep only the mandatory trigger link. Skills may add domain-specific evidence, but link to CONTRIBUTING rather than redefine the general test policy.
 
 When a transient fact becomes stable, move its durable conclusion to the owning document and remove the stale copy from `05`. Delete completed handoff entries; Git owns completion history.
 
@@ -66,4 +69,4 @@ When a document exceeds a practical size, first relocate misplaced detail, then 
 - Check relative links and referenced paths against the repository.
 - Run existing relevant documentation or repository checks; do not invent a new validation command merely to satisfy this skill.
 - Run `git diff --check` and inspect the final diff for accidental scope expansion.
-- Confirm that every changed fact has one owner and that `04` and `05` reflect only true current state.
+- Confirm that every changed fact has one owner, standing instructions remain limited to constraints and routing, and `05` contains only current unfinished work.

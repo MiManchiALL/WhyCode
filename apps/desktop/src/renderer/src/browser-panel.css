@@ -1,0 +1,46 @@
+.wc-browser-panel { container: browser-panel / inline-size; }
+.wc-browser-view-toggle { white-space: nowrap; }
+.wc-browser-view-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+.wc-browser-panel[data-agent='true'] .wc-browser-view-toggle {
+  background: var(--wc-blue);
+  color: var(--wc-blue-ink);
+}
+.wc-browser-panel[data-agent='true'] .wc-browser-view-dot { opacity: 1; }
+.wc-browser-viewport::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc-blue-ink) 38%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--wc-blue) 55%, transparent);
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+.wc-browser-panel[data-agent='true'] .wc-browser-viewport::after { opacity: 1; }
+.wc-browser-view-reveal {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--wc-surface);
+  animation: wc-browser-view-reveal 180ms ease-out both;
+}
+@keyframes wc-browser-view-reveal {
+  from { opacity: 0.85; }
+  to { opacity: 0; }
+}
+@container browser-panel (max-width: 420px) {
+  .wc-browser-reference-label { display: none; }
+  .wc-browser-view-toggle { gap: 3px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wc-browser-viewport::after { transition: none; }
+  .wc-browser-view-reveal { animation: none; opacity: 0; }
+}

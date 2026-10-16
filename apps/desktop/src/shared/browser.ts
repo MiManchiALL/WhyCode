@@ -1,5 +1,6 @@
 export const BROWSER_PARTITION = 'persist:whycode-browser'
-export const MAX_BROWSER_GUESTS = 12
+// 12 个侧栏入口可以同时各有一份用户网页和一份本轮 Agent 网页。
+export const MAX_BROWSER_GUESTS = 24
 export const BROWSER_FILE_SCHEME = 'whycode-browser-file'
 export const MAX_BROWSER_DATA_URL_LENGTH = 1024 * 1024
 

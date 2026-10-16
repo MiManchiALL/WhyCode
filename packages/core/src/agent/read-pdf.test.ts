@@ -20,9 +20,11 @@ const SMALL_JPEG = Buffer.from(
 )
 
 describe('ReadPdf Agent 链路', () => {
-  it('文字模型也能按稳定附件 ID 读取，且 PDF 字节不进入模型上下文', async () => {
+  it('项目指令加载和更新不影响按附件 ID 读取 PDF，且 PDF 字节不进入模型上下文', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-'))
     try {
+      const instructions = join(root, 'AGENTS.md')
+      await writeFile(instructions, '项目规则一')
       const source = join(root, 'guide.pdf')
       await writeFile(source, '%PDF-1.4\nprivate-pdf-bytes')
       const processor = fakeProcessor()
@@ -48,7 +50,12 @@ describe('ReadPdf Agent 链路', () => {
           const prompt = JSON.stringify(options.prompt)
           assert.match(prompt, new RegExp(attachment.id))
           assert.equal(prompt.includes('private-pdf-bytes'), false)
-          if (call === 1) return readPdfStep(attachment.id)
+          if (call === 1) {
+            assert.match(prompt, /项目规则一/)
+            await writeFile(instructions, '项目规则二')
+            return readPdfStep(attachment.id)
+          }
+          assert.match(prompt, /项目规则二/)
           assert.match(prompt, /第一页正文/)
           return finalStep('文档已读取。')
         },
@@ -56,7 +63,7 @@ describe('ReadPdf Agent 链路', () => {
       const session = new AgentSession({
         model: modelEntry(model),
         providerConfig: { apiKey: 'test' },
-        promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
+        promptContext: { projectDir: root, homeDir: join(root, 'home'), osPlatform: 'win32' },
         sessionRecorder: journal,
         pdfProcessor: processor,
         emit: () => {},

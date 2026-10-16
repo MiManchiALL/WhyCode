@@ -1,4 +1,4 @@
-import { isTerminalResponseBlock, type Block } from './conversation-state.ts'
+import { isTerminalResponseBlock, workSectionId, type Block } from './conversation-state.ts'
 
 type WorkDurationBlock = Extract<Block, { kind: 'work-duration' }>
 
@@ -110,7 +110,7 @@ function appendActiveWork(
   appendBlocks(sections, leading)
   sections.push({
     kind: 'active-work',
-    id: workSectionId(work, `active-${startedAt}`),
+    id: workSectionId(work[0], `active-${startedAt}`),
     ...sectionBlocks(work, finalIndexes),
   })
   return true
@@ -126,7 +126,7 @@ function appendCompletedWork(
   const finalIndexes = terminalResponseIndexes(work)
   sections.push({
     kind: 'completed-work',
-    id: workSectionId(work, duration.id),
+    id: workSectionId(work[0], duration.id),
     forkTurnId: duration.forkTurnId,
     duration,
     ...sectionBlocks(work, finalIndexes),
@@ -160,10 +160,6 @@ function sectionBlocks(
       block.kind !== 'user' && !finalIndexes.has(index)),
     finalBlocks: segment.filter((_block, index) => finalIndexes.has(index)),
   }
-}
-
-function workSectionId(segment: readonly Block[], boundaryId: string): string {
-  return `work-${segment[0]?.id ?? boundaryId}`
 }
 
 function terminalResponseIndexes(blocks: readonly Block[]): ReadonlySet<number> {

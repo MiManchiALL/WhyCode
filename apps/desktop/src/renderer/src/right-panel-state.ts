@@ -3,6 +3,7 @@ import type { TerminalInfo } from '../../shared/terminal.ts'
 import { MAX_PREVIEW_VIEWS } from '../../shared/workspace-files.ts'
 import { browserDisplayUrl } from '../../shared/browser.ts'
 import { gitComparisonSchema, type GitComparison } from '../../shared/git.ts'
+import type { BrowserAgentPage } from '../../shared/browser-agent.ts'
 
 // 根目录之外，为文件预览及用户的保存/定位操作各留一个视图。
 export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
@@ -81,6 +82,16 @@ interface KeyValueStorage {
 const STORAGE_KEY = 'whycode:right-panel-sessions:v1'
 const MAX_STORED_SESSIONS = 200
 export const MAX_RIGHT_PANEL_TABS = 12
+
+/** 未查看的 Agent 页只随运行时投影，不写入会话标签偏好。 */
+export function withAgentBrowserTab(state: RightPanelSessionState, agent?: BrowserAgentPage): RightPanelSessionState {
+  if (!agent || agent.view !== 'agent' || state.tabs.length >= MAX_RIGHT_PANEL_TABS) return state
+  const page: RightPanelPage = { kind: 'browser', ...agent.page }
+  const id = rightPanelTabId(page)
+  if (state.tabs.some(tab => tab.id === id)) return state
+  return { ...state, tabs: [...state.tabs, { id, page }], activeTabId: state.activeTabId ?? id }
+}
+
 const DEFAULT_STATE: RightPanelSessionState = {
   inspectorView: 'plan',
   open: false,

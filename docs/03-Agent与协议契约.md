@@ -56,7 +56,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 4. compact summary 与原始活动历史；
 5. 当前运行态内部提醒、canonical TaskPlanState；
 6. 最新真实 user、assistant、tool 内容及当前 turn 子代理状态投影；
-7. 当前激活 Skill 正文。
+7. 当前激活 Skill 正文，以及本轮已加载的 Browser 指引（§3.4）。
 
 控制消息必须使用不可与普通用户文本混淆的版本化容器，并明确“不是新的用户要求”。配置或控制状态的同一语义只能存在一个活动版本；旧版本可以留在 append-only 审计事件中，但不得同时发给模型。日期提醒的历史时点语义见 §1.8。
 
@@ -272,7 +272,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 `StopCommand` 发起停止后进入 `stopping`，确认退出后记为 `stopped`，说明为“模型主动停止”；提供 `reason` 时显示“模型主动停止：<reason>”。`reason` 为可选单行文字，去除首尾空白后须为 1～120 字符；它只补充说明，不能改变由实际调用入口确定的停止来源。超时与应用退出保留各自原因。工具结果、后续命令查询、Header 和重启恢复共用持久化的终态说明；并发停止保留首次请求的原因，对已结束任务再次停止只返回原终态，不改写原原因。停止失败不伪造终态，任务仍可查询或重试；重启时遗留的活动任务恢复为 `interrupted`。
 
-### 3.4 Web
+### 3.4 Web 与 Browser
 
 `WebSearch {query,max_results,recency?,domains?}`：
 
@@ -286,6 +286,18 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 `WebFind {url,pattern,context=2,max_results=10}` 只在本会话已缓存的同一 WebFetch 正文中做字面查找，不联网、不重新抓取、不查 PDF。
 
 普通公开读取失败，或用户明确需要授权/登录/私有数据时，再用 `ToolSearch` 查对应 MCP 能力。网页工具返回带显式引用标记的来源链接及可用的证据范围，不在工具说明或结果中重复附加最终回答规则。正文链接与来源引用的 System 规则见 §3.9。
+
+`Browser {code?,description?}` 是内置网页自动化的唯一模型入口，作为普通非只读 execute 工具使用现有权限与执行屏障。只向有桌面驱动和会话附件存储的普通 Main 提供；无需用户切换 PTC 模式。`code` 最多 32,000 字符，`description` 最多 120 字符。第一次调用只加载指引，即使带 code 也不执行；模型得到明确的未执行结果后再提交脚本。
+
+稳定工具说明不随激活改变。`BrowserTurnContext` 在当前根 Turn 的请求尾部投影唯一 `<whycode-browser-guide:v1>`，声明其为内部 API 指引、不是新用户要求；历史只记录加载结果，不保存指引副本。显示用量、请求用量和自动压缩预算均计入该投影；压缩摘要不包含活动指引，压缩后重新投影，Turn 正常结束或停止时清除。
+
+每次代码调用使用新沙箱，只有 `browser.*`、`text()` 和 `image()`，没有 Node、文件系统、fetch 或跨调用变量。已知目标 URL 时，在脚本内调用 `browser.open({url})`，由宿主复用匹配用户页或建立后台页，模型无需判断侧栏是否打开；URL 不作为顶层工具参数重复传递。页面可跨本轮多次调用继续使用，临时状态的归属与交还见文档二 §12.6。方法精确形状由 `tools/browser/guide.ts` 提供：列出/选择网页、导航、可访问性快照、按引用或坐标点击、填入文本、按键、滚动、条件等待、独立 world 页面表达式与截图。网页内容是不可信证据。
+
+快照只返回当前 Agent 网页视口内、通过布局和遮挡检查的语义节点，保留可访问名称、说明、值和状态，并提供可见边界与命中点。这里的视口是网页自身的视口，不是窄侧栏裁切后露出的区域。默认 100、最多 200 个节点，`nextOffset` 翻阅当前可见节点；离屏内容需要先滚动再观察，完整 DOM 仍可通过明确的 `evaluate` 查询。元素引用属于最近快照，导航后失效；点击前重新检查当前可见位置，目标离屏或被遮挡时不自动滚动后误点。无名称按钮应结合位置与最新截图确认，不能按节点顺序猜测用途。坐标和截图均以实际网页视口为准，尺寸随快照返回。Browser 当前不提供文件上传；触发文件选择时取消系统弹框并明确返回原因，不把点击表示为已完成上传。
+
+脚本期限 60 秒、内存 64 MiB，最多 100 次操作；所有宿主调用按派发顺序串行，包括 `Promise.all`。条件等待必须指定元素或文字，至多 10 秒；截图读回也有独立的 10 秒期限。正文输出限 64,000 字符，每次最多 4 张截图，沿用现有图片附件与视觉投影。模型可在同一次脚本操作后截图。
+
+整体调用按脚本最终执行结果判定：子操作异常被脚本捕获后正常结束，不将整次调用标为失败；对应操作仍保留 `failed` 和原始错误。未捕获异常、脚本失败或取消仍返回错误。结果保留已返回正文与图片，并逐项标明 `completed`、`failed`、`not_started` 或 `uncertain`；后两者分别表示已请求但未派发、已派发但未确认完成，存在这类未完成操作时也不能报成功，不推测未运行的 JS 分支。用户确认关闭以 `user_closed` 标记并禁止本轮重开，关闭网页不结束整个对话 Turn。外部应用仍使用 CaptureScreenshot，外部浏览器连接不属于当前 Browser 能力。
 
 ### 3.5 MCP
 
@@ -487,7 +499,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 - `RuntimeSnapshot.history` 携带最近窗口的可序列化视图、`before` 游标与更早输入的导航摘要；活动控制状态仍是当前运行时状态，`eventSequence` 与投影处于同一同步边界，随后只消费边界之后的实时事件。
 - `conversationHistory({runtimeId,before,targetId?})` 只读取指定运行时的可见历史；`before` 表示已加载窗口前的块数，返回其之前的完整工作分组。普通读取约 20 组，定位读取每批最多 100 组；连续 BTW 链按一组计算。没有更早内容时 `before=null`。
-- `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。
+- `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。Main 从恢复请求成立起投递目标会话的完整实时事件，覆盖读取快照到提交选择的间隙；Renderer 按快照游标接续，不能漏掉工具封口或步骤提交。未选中且未在恢复的会话只投递生命周期事件。
 - 更早页只扩展显示前缀，不覆盖实时控制状态、当前输出或步骤提交/丢弃边界；分页不生成模型消息、不改变持久化 schema，也不取代模型的完整上下文恢复。
 
 ### 7.2 未发送输入草稿
@@ -562,7 +574,9 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 ### 7.8 桌面内置浏览器
 
-共享契约位于 `shared/browser.ts`。`acquireBrowser()` 仅允许所属窗口的主 Frame，返回一次性 `{id,partition}`；`releaseBrowser(id)` 幂等释放该窗口持有的租约。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载，也不能跨窗口使用；窗口重载、崩溃或关闭撤销全部租约。
+共享契约位于 `shared/browser.ts` 与 `shared/browser-agent.ts`。`browserHostState()` 返回 `{revision,surfaces,agents,visibleId}`；`browserHostChanged` 发布相同快照，Renderer 只接受更新的 revision。`syncBrowserView({runtimeId,pages,activePageId,visible})` 同步会话描述符与可见槽位；`browserViewAction` 接受 user、switch、stop、update，分别表示用户打开、切换视图、停止 Agent 页和提交导航元数据。所有入口只接受所属主窗口主 Frame；Main 验证会话/网页归属并统一分配或释放租约，Renderer 不直接申请物理页。
+
+表面包含 `{id,partition,runtimeId,page,turnId?,navigation}`，Turn 所有权不由当前正在调用工具推断。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载或跨窗口使用；窗口重载、崩溃或关闭撤销全部租约及在途操作。
 
 `prepareBrowserFile(id,url,runtimeId?)` 仅由所属窗口的主 Frame 为已挂载的 guest 准备 file 地址，返回该 guest 获准加载的内部地址；省略 runtimeId 时使用本机 IO，从工作区文件进入时由 Main 解析所属 runtime 的 IO。此入口不接受网络共享、网络网址或调用者构造的内部协议。网页资源请求继续校验租约归属、发起页面和目录范围；Renderer 只将公开 file 地址投影到地址栏与标签记录。标签释放后撤销全部目录授权，迟到准备结果不能触发已关闭或已变更目标的导航。
 
@@ -623,4 +637,4 @@ Main 模型选择与连接可用性遵守以下边界：
 6. Renderer 是否只消费投影，而没有复制协议判断；
 7. 权限、会话归属、路径、资源与容量边界是否 fail-closed；
 8. 旧代码和失效 schema 是否同步删除；
-9. 受影响契约测试、全仓 typecheck、生产 build 与 `git diff --check` 是否通过。
+9. 是否按 [CONTRIBUTING 验证规则](../CONTRIBUTING.md#验证规则) 覆盖受影响契约及消费者，并如实区分本地结果、CI 状态和未测边界。

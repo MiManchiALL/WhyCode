@@ -3,6 +3,7 @@
 @import './conversation-typography.css';
 @import './composer-input.css';
 @import './browser-reference.css';
+@import './browser-panel.css';
 @import './git.css';
 /* Streamdown 组件内部类名需要纳入 Tailwind 扫描 */
 @source '../../../node_modules/streamdown/dist/*.js';

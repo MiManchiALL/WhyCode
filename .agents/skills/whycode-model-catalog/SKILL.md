@@ -5,7 +5,7 @@ description: Add, replace, retire, or audit WhyCode model profiles and explicitl
 
 # WhyCode 模型目录维护
 
-遵守 `docs/04-START-HERE.md`。普通型号更新应主要改变目录数据；研究、实现和测试按实际差异展开，不能把每次换代都做成完整接入工程。
+遵守[开发指南](../../../docs/04-START-HERE.md)的适用红线。普通型号更新应主要改变目录数据；研究、实现和测试按实际差异展开，不能把每次换代都做成完整接入工程。
 
 ## 1. 先确定最短实施路径
 
@@ -81,10 +81,10 @@ description: Add, replace, retire, or audit WhyCode model profiles and explicitl
 
 ## 6. 验证一次有效结果
 
-以当前 `package.json` 命令及 `docs/02-技术栈与架构.md` §13 为准；测试运行器是 Node 内置 `node --test`。
+基础验证与扩围条件以 [CONTRIBUTING](../../../CONTRIBUTING.md#验证规则) 为准，命令以当前 `package.json` 为准；测试运行器是 Node 内置 `node --test`。
 
-- 型号/路由数据改动：运行受影响包的既有测试，以及全仓 `pnpm typecheck`、`pnpm build`。Core 和 Desktop 均受影响时直接执行一次 `pnpm test`。
-- SDK、共享协议或生命周期变化：可先用 `node --test` 加明确文件路径定位问题，收尾执行全仓测试、类型检查和构建；依赖变化另跑 `pnpm audit --prod`，不新增无依据的安全例外。
+- 型号/路由数据改动：定向运行相关目录、路由及受影响消费者的既有测试，检查受影响包的类型；不因跨包目录数据更新自动扩大到全仓测试或构建。
+- SDK、共享协议或生命周期变化：覆盖受影响的请求捕获、工具续轮、恢复及消费者测试；涉及构建或运行入口时验证生产构建，依赖变化审计对应依赖图，不新增无依据的安全例外。全仓检查交由 CI，除非命中 CONTRIBUTING 的本地扩围条件。
 - 仅维护本 Skill 或说明文字：检查 Skill 格式、引用及 `git diff --check`，不新增应用测试、不运行应用全仓回归。
 
 通过且代码未再变化的结果直接复用，不依次重复跑文件、包和全仓的相同覆盖。出现新修改或失败才补跑受影响检查。Windows 测试断言完成但进程不退出时，先检查测试子进程回收与执行权限；不要无限等待，也不要用强制退出掩盖失败。

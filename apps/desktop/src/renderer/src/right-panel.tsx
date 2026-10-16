@@ -11,6 +11,7 @@ import {
   activeRightPanelPage,
   canAddRightPanelTab,
   browserReferencePage,
+  withAgentBrowserTab,
   type RightPanelPage,
   type RightPanelSessionState,
 } from './right-panel-state.ts'
@@ -19,7 +20,8 @@ import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 import { WorkspaceDirectories } from './workspace-directories.ts'
-import { BrowserPanel } from './browser-panel.tsx'
+import { BrowserSurfaces } from './browser-surfaces.tsx'
+import { guardBrowserAction, useBrowserHostState } from './browser-host-state.ts'
 import type { PathReference } from './path-reference.ts'
 import { browserAddress } from '../../shared/browser.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
@@ -45,6 +47,7 @@ interface RightPanelProps {
   state: RightPanelSessionState
   onOpenPage: (page: RightPanelPage) => void
   onUpdatePage: (page: RightPanelPage) => void
+  onRegisterBrowserPage: (page: Extract<RightPanelPage, { kind: 'browser' }>) => void
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onMoveTab: (tabId: string, targetId: string) => void
@@ -60,6 +63,19 @@ interface RightPanelProps {
 }
 
 export function RightPanel(props: RightPanelProps) {
+  const host = useBrowserHostState()
+  const state = withAgentBrowserTab(props.state, host.agents.find(agent => agent.runtimeId === props.runtimeId))
+  const temporaryPage = (id: string) => props.state.tabs.some(tab => tab.id === id) ? undefined
+    : state.tabs.find(tab => tab.id === id)?.page
+  const register = (id: string) => {
+    const page = temporaryPage(id)
+    if (page?.kind === 'browser') props.onRegisterBrowserPage(page)
+  }
+  const close = (id: string) => {
+    const page = temporaryPage(id)
+    if (page?.kind === 'browser') guardBrowserAction(props.runtimeId, page.id, () => props.onCloseTab(id))
+    else props.onCloseTab(id)
+  }
   const workspacePage = props.state.tabs.find(tab => tab.page.kind === 'workspace')?.page
   const expanded = workspacePage?.kind === 'workspace' ? workspacePage.expanded : undefined
   const hasWorkspace = expanded !== undefined
@@ -77,10 +93,11 @@ export function RightPanel(props: RightPanelProps) {
     return () => window.removeEventListener('focus', refresh)
   }, [directories, browsing])
   return (
-    <aside className="flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
+    <aside className="relative flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
-        <RightPanelTabs key={props.parentSessionId ?? props.runtimeId} tabs={props.state.tabs} activeTabId={props.state.activeTabId}
-          subagents={props.subagents} onSelect={props.onSelectTab} onClose={props.onCloseTab} onMove={props.onMoveTab}>
+        <RightPanelTabs key={props.parentSessionId ?? props.runtimeId} tabs={state.tabs} activeTabId={state.activeTabId}
+          subagents={props.subagents} onSelect={id => { register(id); props.onSelectTab(id) }} onClose={close}
+          onMove={(id, targetId) => { register(id); props.onMoveTab(id, targetId) }}>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
@@ -116,13 +133,11 @@ export function RightPanel(props: RightPanelProps) {
         {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
       {!props.loading && <>
-        <RightPanelContent {...props} directories={directories} />
-        {props.state.tabs.map(tab => tab.page.kind === 'browser' && <BrowserPanel key={`${props.runtimeId}:${tab.id}`}
-          page={tab.page} active={props.active && props.state.activeTabId === tab.id}
-          runtimeId={props.runtimeId} canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts}
-          onReference={(image, replaceId) => props.onReferenceBrowser(props.runtimeId, image, replaceId)}
-          onChange={props.onUpdatePage} onOpen={url => openBrowser(props, url, tab.page.kind === 'browser' && !!tab.page.workspaceFile && url.startsWith('file:'))} onClose={() => props.onCloseTab(tab.id)} />)}
+        <RightPanelContent {...props} state={state} directories={directories} />
       </>}
+      <BrowserSurfaces runtimeId={props.runtimeId} active={!props.loading && props.active} fullscreen={props.fullscreen} state={state}
+        canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts} onReference={props.onReferenceBrowser}
+        onUpdate={props.onUpdatePage} onRegister={props.onRegisterBrowserPage} onOpen={props.onOpenPage} onClose={close} />
     </aside>
   )
 }

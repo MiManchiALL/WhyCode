@@ -122,6 +122,7 @@ import { isSubagentRunning } from './subagent-presentation.ts'
 import { TaskInspector } from './task-inspector.tsx'
 import { ComposerMcpStatus } from './composer-mcp-status.tsx'
 import { RightPanel } from './right-panel.tsx'
+import { guardBrowserAction, routeBrowserPage } from './browser-host-state.ts'
 import { disposeTerminalView, loadTerminalViews } from './terminal-panel.tsx'
 import { PanelResizeHandle } from './panel-resize-handle.tsx'
 import { panelWidthExpression, type PanelSide } from './panel-layout.ts'
@@ -1102,6 +1103,7 @@ export function App() {
   }, [panelFullscreen, rightPanelState.open])
 
   const showRightPanelPage = useCallback((page: RightPanelPage) => {
+    if (page.kind === 'browser') page = routeBrowserPage(runtimeIdRef.current, page, message => showConversationFeedback('error', message))
     if (page.kind === 'workspace' && !rightPanelStateRef.current.tabs.some(tab => tab.page.kind === 'workspace')) {
       conversationPresentationsRef.current.saveWorkspacePosition(composerKey(runtimeIdRef.current, sessionIdRef.current), undefined)
     }
@@ -1129,7 +1131,9 @@ export function App() {
         .catch((error: unknown) => showConversationFeedback('error', String(error)))
       return
     }
-    updateRightPanelState((current) => closeRightPanelTab(current, tabId))
+    const close = () => updateRightPanelState((current) => closeRightPanelTab(current, tabId))
+    if (tab?.page.kind === 'browser') guardBrowserAction(runtimeIdRef.current, tab.page.id, close)
+    else close()
   }, [updateRightPanelState, showConversationFeedback])
 
   useEffect(() => window.whycode.onTerminalClosed((terminalId) => {
@@ -2658,6 +2662,11 @@ export function App() {
                 onCollapse={() => changePanelOpen('right', false)}
                 onOpenPage={showRightPanelPage}
                 onUpdatePage={page => updateRightPanelState(current => updateRightPanelPage(current, page))}
+                onRegisterBrowserPage={page => updateRightPanelState(current => {
+                  if (current.tabs.some(tab => tab.page.kind === 'browser' && tab.page.id === page.id)) return current
+                  const next = openRightPanelPageState(current, page)
+                  return { ...next, open: current.open, activeTabId: current.activeTabId ?? next.activeTabId }
+                })}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}
                 onMoveTab={(id, targetId) => updateRightPanelState(current => moveRightPanelTab(current, id, targetId))}
