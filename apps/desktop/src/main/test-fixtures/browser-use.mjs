@@ -8,6 +8,7 @@ import { BrowserGuests } from '../browser-guests.ts'
 import { BrowserAgent } from '../browser-agent.ts'
 import { checkBrowserObservation } from './browser-observation.mjs'
 import { checkBrowserPageEndings } from './browser-page-endings.mjs'
+import { checkBrowserReadiness } from './browser-readiness.mjs'
 
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
 app.setPath('userData', path.join(directory, 'profile'))
@@ -56,6 +57,7 @@ app.whenReady().then(async () => {
   assert.equal(win.webContents.getBackgroundThrottling(), true, '隐藏 Agent 页结束后恢复宿主节流')
   win.hide()
   win.setOpacity(1)
+  await checkBrowserReadiness({ directory, run, finish, agent, guests })
   await execute('fixture.session("alpha")')
   await until(() => execute('fixture.state().tabs.length===0'), 'clear cold descriptor')
   await execute(`fixture.open(${JSON.stringify(url)})`)

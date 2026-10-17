@@ -62,3 +62,25 @@ export const browserNodeGeometry = `function(requireEnabled = false) {
   }
   return null;
 }`
+
+/** 文档 load 可能早于 SPA 内容；观察等待实际内容，不把背景色或空布局当成就绪。 */
+export const browserHasVisibleContent = `(() => {
+  if (!document.body || document.readyState === 'loading') return false;
+  const geometry = ${browserNodeGeometry};
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (node.nodeType === 1) {
+        if (['SCRIPT','STYLE','TEMPLATE','NOSCRIPT'].includes(node.tagName)) return NodeFilter.FILTER_REJECT;
+        if (!node.checkVisibility({opacityProperty:true, visibilityProperty:true, contentVisibilityAuto:true})
+          && getComputedStyle(node).display !== 'contents') return NodeFilter.FILTER_REJECT;
+        return ['IMG','SVG','CANVAS','VIDEO','IFRAME','INPUT','TEXTAREA'].includes(node.tagName.toUpperCase())
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      }
+      return node.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+    }
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (geometry.call(node)) return true;
+  }
+  return false;
+})()`

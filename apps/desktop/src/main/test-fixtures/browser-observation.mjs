@@ -40,4 +40,18 @@ export async function checkBrowserObservation(run, guest) {
   assert.equal(outside.isError, true)
   assert.match(outside.text, /1280×800/)
   await guest.executeJavaScript('document.getElementById("observation").remove()')
+  await guest.executeJavaScript(`document.body.insertAdjacentHTML('beforeend', \`<section id="nested" style="position:fixed;left:400px;top:100px;width:800px;height:600px;overflow:auto;background:white">
+    <button>Nested top</button><div style="height:900px"></div><button>Nested bottom</button>
+  </section>\`)`)
+  const nested = await run('one', 'await browser.scroll({y:600}); text(await browser.snapshot());')
+  assert.equal(nested.isError, false, nested.text)
+  assert.match(nested.text, /Nested bottom/)
+  assert.ok(await guest.executeJavaScript('document.getElementById("nested").scrollTop>0 && scrollY===0'), '中心滚轮交给内部容器，不能误滚动文档')
+  // 窄容器不再位于视口中心；引用决定滚轮落点，仍由 Chromium 选择真正的滚动祖先。
+  await guest.executeJavaScript('document.getElementById("nested").style.cssText+=";left:20px;width:300px"')
+  const targeted = await run('one', 'const s=await browser.snapshot(); await browser.scroll({y:-600,ref:s.nodes.find(n=>n.name==="Nested bottom"&&n.role==="button").ref}); text(await browser.snapshot());')
+  assert.equal(targeted.isError, false, targeted.text)
+  assert.match(targeted.text, /Nested top/)
+  assert.equal(await guest.executeJavaScript('document.getElementById("nested").scrollTop'), 0)
+  await guest.executeJavaScript('document.getElementById("nested").remove()')
 }

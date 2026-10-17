@@ -46,7 +46,7 @@ export class BrowserAgent {
               return automation.perform(async () => {
                 switch (name) {
                   case 'navigate': await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal); return { url: guest.getURL() }
-                  case 'snapshot': return automation.snapshot(input, signal)
+                  case 'snapshot': await automation.observe(signal); return automation.snapshot(input, signal)
                   case 'click': await automation.click(input, signal); break
                   case 'fill': await automation.fill(input, signal); break
                   case 'type': await automation.type(input, signal); break
@@ -55,8 +55,7 @@ export class BrowserAgent {
                   case 'evaluate': return automation.evaluate(input, signal)
                   case 'wait': return automation.wait(input, signal)
                   case 'screenshot':
-                    // 输入完成与画面提交不是同一时刻；等待浏览器提交新帧，避免截到上一次绘制。
-                    await automation.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))))' }, signal)
+                    await automation.observe(signal)
                     return captureBrowserPage(guest, signal, await automation.viewport(signal))
                 }
                 return { completed: true }
