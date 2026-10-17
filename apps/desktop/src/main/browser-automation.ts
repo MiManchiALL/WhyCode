@@ -1,8 +1,9 @@
 import type { WebContents } from 'electron'
+import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { browserDisplayUrl } from '../shared/browser.ts'
 import { browserInputFunction, focusedBrowserElement } from './browser-input.ts'
-import { browserNodeGeometry, type BrowserNodeGeometry } from './browser-visibility.ts'
+import { browserHasVisibleContent, browserNodeGeometry, type BrowserNodeGeometry } from './browser-visibility.ts'
 
 interface AxNode {
   ignored?: boolean; backendDOMNodeId?: number; role?: { value?: string }; name?: { value?: string }
@@ -18,9 +19,11 @@ export class BrowserAutomation {
   private readonly refs = new Map<string, number>()
   private revision = 0
   private readonly originalZoom: number
+  private readonly guest: WebContents
   private readonly invalidate = () => { this.revision++; this.refs.clear() }
 
-  constructor(private readonly guest: WebContents) {
+  constructor(guest: WebContents) {
+    this.guest = guest
     this.originalZoom = guest.getZoomFactor()
     guest.on('did-navigate', this.invalidate)
     guest.on('did-navigate-in-page', this.invalidate)
@@ -62,6 +65,17 @@ export class BrowserAutomation {
 
   async viewport(signal: AbortSignal): Promise<{ width: number; height: number }> {
     return await this.evaluate({ expression: '({width: innerWidth, height: innerHeight})' }, signal) as { width: number; height: number }
+  }
+
+  async observe(signal: AbortSignal): Promise<void> {
+    // 页面可能合法为空；预算耗尽后保留真实空白，不制造内容或把读操作判为失败。
+    const deadline = Date.now() + 3000
+    while (!await this.evaluate({ expression: browserHasVisibleContent }, signal)) {
+      if (Date.now() >= deadline) break
+      await delay(Math.max(1, Math.min(100, deadline - Date.now())), undefined, { signal })
+    }
+    // DOM 已可见仍不等于画面已提交；同一步操作后的截图也经过这一绘制边界。
+    await this.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))))' }, signal)
   }
 
   async snapshot(input: unknown, signal: AbortSignal): Promise<unknown> {
@@ -146,8 +160,18 @@ export class BrowserAutomation {
   }
 
   async scroll(input: unknown, signal: AbortSignal): Promise<void> {
-    const { x, y } = z.object({ x: z.number().min(-10000).max(10000).default(0), y: z.number().min(-10000).max(10000).default(600) }).parse(input ?? {})
-    await this.evaluate({ expression: `window.scrollBy({left:${x},top:${y},behavior:'instant'}); null` }, signal)
+    const { x, y, ref } = z.object({ x: z.number().min(-10000).max(10000).default(0),
+      y: z.number().min(-10000).max(10000).default(600), ref: z.string().max(80).optional() }).parse(input ?? {})
+    const viewport = await this.viewport(signal)
+    let point = { x: viewport.width / 2, y: viewport.height / 2 }
+    if (ref) {
+      const objectId = await this.resolve(ref, signal)
+      const geometry = await this.call(objectId, browserNodeGeometry, [], signal) as BrowserNodeGeometry | null
+      if (!geometry) throw new Error('滚动目标不在可见视口内或被遮挡，请重新观察页面')
+      point = geometry.point
+    }
+    await this.command('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point }, signal)
+    await this.command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX: x, deltaY: y }, signal)
   }
 
   async evaluate(input: unknown, signal: AbortSignal): Promise<unknown> {
