@@ -88,14 +88,17 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   const view = await files.open(1, { runtimeId: 'remote', kind: 'file', path: file }, env.project, () => {}, io)
   assert.ok(view.kind === 'file' && view.remote && view.url)
   assert.equal(await (await files.response(new Request(view.url))).text(), 'hello\n世界\n')
-  assert.throws(() => files.pathFor(1, view.id), /远端/)
+  await assert.rejects(files.pathFor(1, view.id), /远端/)
   files.closeOwner(1)
 
   const command = host.processes.spawn("printf '中文'; printf 'error' >&2", env.project)
   let output = ''
   command.stdout.setEncoding('utf8'); command.stdout.on('data', chunk => { output += chunk })
+  let errors = ''
+  command.stderr.setEncoding('utf8'); command.stderr.on('data', chunk => { errors += chunk })
   assert.deepEqual(await once(command, 'close'), [0])
-  assert.ok(output.includes('中文') && output.includes('error'))
+  assert.equal(output, '中文')
+  assert.equal(errors, 'error')
   const noninteractive = await tool('RunCommand').execute({ command: "read value || printf 'stdin closed'", timeoutMs: 2_000 }, ctx)
   assert.equal(noninteractive.isError, false)
   assert.equal(noninteractive.data, 'stdin closed')

@@ -3,7 +3,8 @@ import { stopWorkspaceProcess } from '../../workspace/process.ts'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { isAbsolute, resolve } from 'node:path'
 import type { Readable } from 'node:stream'
-import { unicodeSafeSuffix } from '../../text.ts'
+import { CommandOutput, captureCommandOutput } from './output.ts'
+import { COMMAND_PREVIEW_BYTES, COMMAND_PREVIEW_LINES, serializeCommandOutputResult } from './output-result.ts'
 import { z } from 'zod'
 import { TOOL_OUTCOME_UNKNOWN } from '../../session/tool-execution.ts'
 import { turnAbortReason } from '../../session/interruption.ts'
@@ -17,7 +18,6 @@ import {
 
 export const RUN_COMMAND_TOOL_NAME = 'RunCommand'
 
-const MAX_OUTPUT_CHARS = 30_000
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 86_400_000
 const QUOTED_ENV_PATH_RE = /["'](\$env:([A-Za-z_][A-Za-z0-9_]*)(?:[\\/][^"']*)?)["']/gi
@@ -130,7 +130,8 @@ export function createRunCommandTool(
       '多行或包含复杂引号的非交付脚本先用 WriteFile 保存到环境提供的临时工作区，再执行脚本文件；需要交付的项目脚本写入项目目录。不要塞进 python -c 或 node -e。导入第三方包前先检查环境是否已有。' +
       '可用 cwd 指定工作目录（绝对路径）。创建、修改、删除或移动明确文件应使用 WriteFile/EditFile/DeleteFile/MoveFile，不要用命令绕过其路径授权。' +
       '命令产生的文件及外部副作用不建立检查点，无法回滚。' +
-      '前台返回 stdout+stderr（超长截断尾部保留），默认超时 120 秒。',
+      `前台返回 stdout+stderr，默认超时 120 秒。输出超过 ${COMMAND_PREVIEW_LINES} 行或 ${COMMAND_PREVIEW_BYTES / 1024} KiB 时，完整 UTF-8 日志保存到当前角色的会话临时目录 command-output/；` +
+      '结果返回 command-output JSON：output 只含尾部完整行（单行超限时省略），fullOutputPath 是完整日志路径，可用 ReadFile 分页读取或 Grep 搜索。日志随会话删除；保存失败会停止命令并明确报错。',
     inputSchema,
     isReadOnly: false,
     kind: 'execute',
@@ -153,57 +154,44 @@ export function createRunCommandTool(
   })
 }
 
-function executeForegroundCommand(
+async function executeForegroundCommand(
   input: ForegroundRunCommandInput,
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  return new Promise((resolvePromise) => {
-    // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位。
-    const io = ctx.workspaceIO ?? localWorkspaceIO
-    const cwd = io.path.resolve(ctx.projectDir, input.cwd ?? '.')
-    const child = io.spawn ? io.spawn(input.command, cwd) : spawnNonInteractiveCommand(input.command, cwd)
-
-    let output = ''
-    let truncated = false
+  // 相对 cwd 按项目目录解析（与权限引擎判定基准一致），防 spawn 按进程目录解析造成错位。
+  const io = ctx.workspaceIO ?? localWorkspaceIO
+  const cwd = io.path.resolve(ctx.projectDir, input.cwd ?? '.')
+  const child = io.spawn ? io.spawn(input.command, cwd) : spawnNonInteractiveCommand(input.command, cwd)
+  const output = new CommandOutput(io, ctx.scratchDirectory, ctx.onProgress)
+  let outputError: Error | undefined
+  let captured: Promise<void>
+  const outcome = await new Promise<{ suffix: string; isError: boolean }>((resolvePromise) => {
     let done = false
-    let stopping: 'timeout' | 'abort' | null = null
-    const append = (text: string) => {
-      if (done) return
-      truncated ||= output.length + text.length > MAX_OUTPUT_CHARS
-      output = unicodeSafeSuffix(output + text, MAX_OUTPUT_CHARS)
-      ctx.onProgress?.(text)
-    }
-    child.stdout.setEncoding('utf8').on('data', append)
-    child.stderr.setEncoding('utf8').on('data', append)
-
+    let stopping = false
     const finish = (suffix: string, isError: boolean) => {
       if (done) return
       done = true
       clearTimeout(timeout)
       ctx.abortSignal.removeEventListener('abort', onAbort)
-      let data = output + suffix
-      if (truncated || data.length > MAX_OUTPUT_CHARS) {
-        data = `[输出过长，仅保留尾部 ${MAX_OUTPUT_CHARS} 字符]\n` + unicodeSafeSuffix(data, MAX_OUTPUT_CHARS)
-      }
-      resolvePromise({
-        data: data || (isError ? '（命令失败，无标准输出）' : '（命令成功，无标准输出）'),
-        isError,
-      })
+      resolvePromise({ suffix, isError })
     }
 
-    const requestStop = (reason: 'timeout' | 'abort') => {
+    const requestStop = (reason: 'timeout' | 'abort' | 'output') => {
       if (done || stopping) return
-      stopping = reason
+      stopping = true
       void stopWorkspaceProcess(child)
         .catch(() => false)
         .then((treeStopped) => {
           const suffix =
             reason === 'timeout'
               ? `[命令超时（${input.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms），已请求终止]`
-              : turnAbortReason(ctx.abortSignal) === 'user-cancel'
+              : reason === 'output'
+                ? '[命令输出保存失败，已请求终止]'
+                : turnAbortReason(ctx.abortSignal) === 'user-cancel'
                 ? '[用户已停止]'
                 : '[应用关闭或进程中断，命令已停止]'
           const warning = treeStopped ? '' : '\n[警告：未能确认全部子进程均已终止]'
+          if (!treeStopped) output.destroy(new Error('未能确认命令停止，输出可能不完整'))
           finish(`${suffix}${warning}\n${TOOL_OUTCOME_UNKNOWN}\n`, true)
         })
     }
@@ -221,11 +209,28 @@ function executeForegroundCommand(
     child.on('error', (err) => {
       if (!stopping) finish(`[命令失败：${err.message}]`, true)
     })
+    captured = captureCommandOutput([child.stdout, child.stderr], output).catch(error => {
+      outputError = error instanceof Error ? error : new Error(String(error))
+      requestStop('output')
+    })
     // 远端命令与本地 ignore stdin 保持一致，不能等待无人提供的输入。
     child.stdin?.end()
     // AbortSignal 在监听器注册前已中止时不会补发事件，必须显式检查。
     if (ctx.abortSignal.aborted) requestStop('abort')
   })
+  // 进程 close（尤其 SSH）不代表消费端及文件已排空；工具结果必须等句柄关闭。
+  await captured!
+  const isError = outcome.isError || !!outputError
+  const diagnostic = [outcome.suffix, outputError ? `[完整输出未保存：${outputError.message}]` : ''].filter(Boolean).join('\n')
+  const preview = output.preview()
+  const data = output.truncated
+    ? serializeCommandOutputResult({
+      type: 'command-output', output: preview, totalBytes: output.totalBytes, totalLines: output.totalLines,
+      ...(output.fullOutputPath ? { fullOutputPath: output.fullOutputPath } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
+    })
+    : preview + diagnostic
+  return { data: data || (isError ? '（命令失败，无标准输出）' : '（命令成功，无标准输出）'), isError }
 }
 
 export const runCommandTool = createRunCommandTool()

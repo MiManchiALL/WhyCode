@@ -1,4 +1,5 @@
 import { readPresentationResult } from '@whycode/core/presentation'
+import { readCommandOutputResult, commandOutputDetails } from '@whycode/core/command-output'
 import type { SkillSummary } from '@whycode/core/skills'
 import { genericToolSummary } from './tool-call-summary-fallback.ts'
 
@@ -133,6 +134,10 @@ export function toolCallDetails(
   result: string | undefined,
   isError: boolean,
 ): string | null {
+  if (toolName === 'RunCommand' && result) {
+    const command = readCommandOutputResult(result)
+    if (command) return commandOutputDetails(command)
+  }
   if (isError) return null
   const value = record(input)
   if (!value) return null

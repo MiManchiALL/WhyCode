@@ -3037,6 +3037,7 @@ export class AgentSession {
         let toolCtx: ToolContext = {
           workspaceIO: this.options.workspaceIO,
           projectDir: toolProjectDir,
+          scratchDirectory: this.options.promptContext.scratch?.workingDir,
           additionalDirs: this.permissions.additionalDirs,
           abortSignal,
           ...(this.activeTurn ? { turnId: this.activeTurn.id } : {}),
