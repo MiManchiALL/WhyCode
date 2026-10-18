@@ -170,6 +170,8 @@ html[data-wc-panel-resizing='true'] .wc-resizable-panel:not([data-resize-transit
 .wc-panel-tab:where(:hover) { background: rgb(0 0 0 / 3.5%); }
 .wc-panel-tab[data-active='true'] { background: rgb(0 0 0 / 5.5%); color: var(--wc-ink); }
 .wc-panel-tab-dragging { width: 100%; max-width: none; background: var(--wc-sidebar); box-shadow: var(--wc-soft-shadow); color: var(--wc-ink); cursor: grabbing; }
+.wc-panel-tab[data-agent-controlled='true'] { background: var(--wc-blue); color: var(--wc-blue-ink); }
+.wc-panel-tab[data-agent-controlled='true'][data-active='true'] { background: color-mix(in srgb, var(--wc-blue-ink) 8%, var(--wc-blue)); }
 
 .wc-markdown-table {
   margin-block: 1rem;

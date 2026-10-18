@@ -580,7 +580,7 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 共享契约位于 `shared/browser.ts` 与 `shared/browser-agent.ts`。`browserHostState()` 返回 `{revision,surfaces,agents,visibleId}`；`browserHostChanged` 发布相同快照，Renderer 只接受更新的 revision。`syncBrowserView({runtimeId,pages,activePageId,visible})` 同步会话描述符与可见槽位；`browserViewAction` 接受 user、switch、stop、update，分别表示用户打开、切换视图、停止 Agent 页和提交导航元数据。所有入口只接受所属主窗口主 Frame；Main 验证会话/网页归属并统一分配或释放租约，Renderer 不直接申请物理页。
 
-表面包含 `{id,partition,runtimeId,page,turnId?,navigation}`，Turn 所有权不由当前正在调用工具推断。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载或跨窗口使用；窗口重载、崩溃或关闭撤销全部租约及在途操作。
+表面包含 `{id,partition,runtimeId,page,turnId?,navigation,audible}`，Turn 所有权不由当前正在调用工具推断。`audible` 由 Main 根据 Electron 的 `audio-state-changed` 事件更新，只发布给所属窗口；释放后的通知忽略，不写入页面持久描述符。网页必须以租约对应的空白页和固定分区挂载，Main 在创建 guest 前去掉 Renderer 提供的权限与 Preload 参数。租约不能重复挂载或跨窗口使用；窗口重载、崩溃或关闭撤销全部租约及在途操作。
 
 `prepareBrowserFile(id,url,runtimeId?)` 仅由所属窗口的主 Frame 为已挂载的 guest 准备 file 地址，返回该 guest 获准加载的内部地址；省略 runtimeId 时使用本机 IO，从工作区文件进入时由 Main 解析所属 runtime 的 IO。此入口不接受网络共享、网络网址或调用者构造的内部协议。网页资源请求继续校验租约归属、发起页面和目录范围；Renderer 只将公开 file 地址投影到地址栏与标签记录。标签释放后撤销全部目录授权，迟到准备结果不能触发已关闭或已变更目标的导航。
 

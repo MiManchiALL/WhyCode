@@ -96,6 +96,7 @@ export function RightPanel(props: RightPanelProps) {
     <aside className="relative flex h-full w-full flex-col border-l border-[var(--wc-line)] bg-[var(--wc-surface)]">
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--wc-line)] px-2">
         <RightPanelTabs key={props.parentSessionId ?? props.runtimeId} tabs={state.tabs} activeTabId={state.activeTabId}
+          runtimeId={props.runtimeId} browserHost={host}
           subagents={props.subagents} onSelect={id => { register(id); props.onSelectTab(id) }} onClose={close}
           onMove={(id, targetId) => { register(id); props.onMoveTab(id, targetId) }}>
           <DropdownMenu.Root>

@@ -18,6 +18,7 @@ interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContent
 export class BrowserGuests {
   onClosed?: (id: string, reason: string) => void
   onOpen?: (id: string, url: string) => boolean
+  onAudioStateChanged?: (id: string, audible: boolean) => void
   isAgent?: (id: string) => boolean
   private readonly leases = new Map<string, GuestLease>()
   private readonly files = new BrowserFiles()
@@ -169,6 +170,9 @@ export class BrowserGuests {
       if (mainFrame && !allowed(url)) event.preventDefault()
     })
     guest.on('will-attach-webview', event => event.preventDefault())
+    guest.on('audio-state-changed', event => {
+      if (id && this.leases.get(id)?.guest === guest) this.onAudioStateChanged?.(id, event.audible)
+    })
     guest.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown') return
       const command = browserShortcut(input)
