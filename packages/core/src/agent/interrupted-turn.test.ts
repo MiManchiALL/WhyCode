@@ -258,7 +258,8 @@ describe('用户中断后的新回合', () => {
   })
 
   for (const reason of ['user-cancel', 'process-interruption'] as const) {
-    it(`停止 engaged run 后保留原因与恢复闸门，临时问题不会清除：${reason}`, async () => {
+    it(`停止 engaged run 后保留原因与恢复闸门，临时问题不会清除：${reason}`, { timeout: 15_000 }, async t => {
+      const requestStarted = createDeferred<void>()
       let requestCount = 0
       const model = new MockLanguageModelV4({
         doStream: async (options) => {
@@ -266,7 +267,11 @@ describe('用户中断后的新回合', () => {
           if (requestCount === 1) {
             return toolStep(RESUME_TASK_PLAN_TOOL_NAME, { plan_id: activePlan().id })
           }
-          if (requestCount === 2) return abortableStep(options.abortSignal)
+          if (requestCount === 2) {
+            const response = abortableStep(options.abortSignal)
+            requestStarted.resolve()
+            return response
+          }
           return finalStep('TTL 是 Time to Live。')
         },
       })
@@ -275,8 +280,12 @@ describe('用户中断后的新回合', () => {
       const session = createSession(model, journal)
       session.restoreTaskStateSnapshot(activeState())
 
-      const running = session.handleUserMessage('继续刚才的任务')
-      await waitFor(() => model.doStreamCalls.length === 2)
+      const running = Promise.resolve(session.handleUserMessage('继续刚才的任务'))
+      t.after(async () => { session.abort(reason); await running })
+      await Promise.race([
+        requestStarted.promise,
+        running.then(() => assert.fail('回合在第二次模型请求前结束')),
+      ])
       session.abort(reason)
 
       assert.equal(await running, 'aborted')

@@ -71,13 +71,16 @@ export function createSftpFileSystem(sftp: SFTPWrapper): WorkspaceFileSystem {
     },
     unlink: path => call<void>(done => sftp.unlink(path, done)),
     rmdir: async path => {
-      try { await call<void>(done => sftp.rmdir(path, done)) }
-      catch (error) {
-        // SFTP v3 uses generic FAILURE for nonempty directories; preserve Node's rmdir contract.
-        if ((error as NodeJS.ErrnoException).code === 'EIO' && (await io.readdir(path, { withFileTypes: true })).length) {
-          throw Object.assign(new Error('目录非空'), { code: 'ENOTEMPTY' })
+      for (let attempt = 0; ; attempt++) {
+        try { await call<void>(done => sftp.rmdir(path, done)); return }
+        catch (error) {
+          // SFTP v3 的非空目录只返回 FAILURE；复查时另一清理可能已删完目录内容。
+          if ((error as NodeJS.ErrnoException).code !== 'EIO') throw error
+          if ((await io.readdir(path, { withFileTypes: true })).length) {
+            throw Object.assign(new Error('目录非空', { cause: error }), { code: 'ENOTEMPTY' })
+          }
+          if (attempt === 1) throw error
         }
-        throw error
       }
     },
     rm: async (path, options) => {
