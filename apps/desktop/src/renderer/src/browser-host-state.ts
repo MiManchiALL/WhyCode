@@ -25,10 +25,10 @@ export function browserAction(action: BrowserViewAction): Promise<void> {
   return window.whycode.browserViewAction(action).then(updateBrowserHost)
 }
 
-export function routeBrowserPage(runtimeId: string, page: Page, onError: (message: string) => void): Page {
+export async function routeBrowserPage(runtimeId: string, page: Page): Promise<Page> {
   const agent = state.agents.find(agent => agent.runtimeId === runtimeId)
   const routed = agent ? { ...page, id: agent.page.id } : page
-  void browserAction({ type: 'user', runtimeId, page: routed }).catch(error => onError(String(error)))
+  await browserAction({ type: 'user', runtimeId, page: routed })
   return routed
 }
 

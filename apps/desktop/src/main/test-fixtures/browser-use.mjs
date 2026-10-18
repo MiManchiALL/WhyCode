@@ -133,11 +133,38 @@ app.whenReady().then(async () => {
   await execute(`fixture.open(${JSON.stringify(url + 'second')})`)
   assert.equal(await execute('fixture.state().tabs.length'), 1, '新建浏览器复用 Agent 外层入口')
   await until(() => guests.get(personal.id)?.getURL() === url + 'second', 'user navigation')
+  await until(() => execute('!!document.querySelector(\'[aria-label="内置浏览器"] [aria-label="刷新网页"]\')'), 'personal page ready before reference')
   assert.equal(originalGuest.getURL(), url)
+  await execute(`(() => {
+    const view = document.querySelector('[aria-label="内置浏览器"] webview');
+    const load = view.loadURL.bind(view);
+    view.loadURL = address => {
+      view.loadURL = load;
+      return new Promise((resolve, reject) => {
+        window.continueReferenceNavigation = () => load(address).then(resolve, reject);
+      });
+    };
+  })()`)
   await execute('fixture.file()')
   await execute(`fixture.reference(${JSON.stringify(url)})`)
+  await until(() => execute('!!window.continueReferenceNavigation'), 'reference navigation requested')
+  await execute(`fixture.flush(() => document.querySelector('[aria-label="内置浏览器"] webview').dispatchEvent(new Event('page-title-updated')))`)
+  assert.equal(await execute('fixture.state().tabs.some(tab => tab.page.referenceRequest)'), true, '旧文档的迟到事件不能提前消费引用请求')
+  assert.equal(await execute('!!document.querySelector(\'[aria-label="退出引用"]\')'), false, '导航完成前不在旧页面开启引用')
+  await execute('window.continueReferenceNavigation()')
   await until(() => execute('!!document.querySelector(\'[aria-label="退出引用"]\')'), 'file reference enters personal page')
+  assert.equal(guests.get(personal.id).getURL(), url, '引用绑定导航后的用户文档')
+  await until(() => execute('!fixture.state().tabs.some(tab => tab.page.referenceRequest)'), 'reference request consumed after readiness')
   assert.equal(await execute('fixture.state().tabs.length'), 2, '保留文件标签，浏览器入口仍然只有一个')
+  await execute('fixture.reference("http://127.0.0.1:1/")')
+  await until(() => execute('Array.from(document.querySelectorAll(\'[aria-label="内置浏览器"] button\')).some(button => button.textContent === "重新加载")'), 'failed reference navigation')
+  await until(() => execute('!!document.querySelector(\'[aria-label="内置浏览器"] [aria-label="刷新网页"]\')'), 'failed navigation settles loading')
+  assert.equal(await execute('!!document.querySelector(\'[aria-label="退出引用"]\')'), false, '加载失败不在旧文档开启引用')
+  assert.equal(await execute('fixture.state().tabs.some(tab => tab.page.referenceRequest)'), true, '失败不消耗引用请求')
+  await execute(`fixture.reference(${JSON.stringify(url + 'recovered')})`)
+  await until(() => execute('!!document.querySelector(\'[aria-label="退出引用"]\')'), 'reference recovers after failed navigation')
+  assert.equal(guests.get(personal.id).getURL(), url + 'recovered')
+  assert.equal(originalGuest.getURL(), url, '用户导航与引用不影响 Agent 文档')
   assert.ok(!originalGuest.isDestroyed())
   await execute('fixture.close()')
   await until(() => !guests.get(personal.id), 'close personal view')

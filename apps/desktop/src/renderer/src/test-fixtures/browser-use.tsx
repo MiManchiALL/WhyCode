@@ -1,5 +1,6 @@
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { BrowserSurfaces } from '../browser-surfaces.tsx'
 import { RightPanelTabs } from '../right-panel-tabs.tsx'
 import { ConversationFeedbackContext } from '../conversation-feedback.tsx'
@@ -16,9 +17,9 @@ function Fixture() {
   const [height, setHeight] = useState(700)
   const host = useBrowserHostState()
   const display = withAgentBrowserTab(state, host.agents.find(agent => agent.runtimeId === runtimeId))
-  const open = (page: RightPanelPage) => {
-    if (page.kind === 'browser') page = routeBrowserPage(runtimeId, page, message => feedback('error', message))
-    setState(current => openRightPanelPage(current, page))
+  const open = async (page: RightPanelPage) => {
+    if (page.kind === 'browser') page = await routeBrowserPage(runtimeId, page)
+    flushSync(() => setState(current => openRightPanelPage(current, page)))
   }
   const close = (id: string) => {
     const page = display.tabs.find(tab => tab.id === id)?.page
@@ -27,6 +28,7 @@ function Fixture() {
     else proceed()
   }
   ;(window as any).fixture = {
+    flush: flushSync,
     open: (url: string) => open({ kind: 'browser', id: crypto.randomUUID(), url, title: '' }),
     file: () => open({ kind: 'file', path: 'fixture.html', name: 'fixture.html', source: { kind: 'current' } }),
     reference: (url: string) => open({ kind: 'browser', id: crypto.randomUUID(), url, title: '', referenceRequest: { kind: 'new' } }),

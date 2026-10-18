@@ -1104,8 +1104,13 @@ export function App() {
     return () => window.removeEventListener('keydown', exit)
   }, [panelFullscreen, rightPanelState.open])
 
-  const showRightPanelPage = useCallback((page: RightPanelPage) => {
-    if (page.kind === 'browser') page = routeBrowserPage(runtimeIdRef.current, page, message => showConversationFeedback('error', message))
+  const showRightPanelPage = useCallback(async (page: RightPanelPage) => {
+    if (page.kind === 'browser') {
+      const runtimeId = runtimeIdRef.current
+      try { page = await routeBrowserPage(runtimeId, page) }
+      catch (error) { showConversationFeedback('error', String(error)); return }
+      if (runtimeId !== runtimeIdRef.current) return
+    }
     if (page.kind === 'workspace' && !rightPanelStateRef.current.tabs.some(tab => tab.page.kind === 'workspace')) {
       conversationPresentationsRef.current.saveWorkspacePosition(composerKey(runtimeIdRef.current, sessionIdRef.current), undefined)
     }

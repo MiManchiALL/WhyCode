@@ -22,12 +22,13 @@ interface Props {
   canReference: boolean
   onReference: (image: BrowserReferenceImage, replaceId?: string) => boolean
   referenceDrafts: readonly ImageDraft[]
-  onChange: (page: BrowserPage) => void
+  onChange: (url: string, title: string) => void
+  onReferenceHandled: () => void
   onOpen: (url: string) => void
   onClose: () => void
 }
 
-export function BrowserPanel({ page, active, lease, navigationRevision, agent, switchView, onNavigate, runtimeId, canReference, onReference, referenceDrafts, onChange, onOpen, onClose }: Props) {
+export function BrowserPanel({ page, active, lease, navigationRevision, agent, switchView, onNavigate, runtimeId, canReference, onReference, referenceDrafts, onChange, onReferenceHandled, onOpen, onClose }: Props) {
   const addressRef = useRef<HTMLInputElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const [address, setAddress] = useState(page.url === 'about:blank' ? '' : page.url)
@@ -37,13 +38,13 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
   const [stage, setStage] = useState<HTMLDivElement | null>(null)
   const browser = useBrowserPage({ active, lease, navigationRevision, url: page.url,
     workspaceRuntimeId: page.workspaceFile ? runtimeId : undefined,
-    onNavigate: (url, title) => { if (url !== page.url || title !== page.title) onChange({ ...page, url, title }) },
+    onNavigate: (url, title) => { if (url !== page.url || title !== page.title) onChange(url, title) },
     onOpen, onShortcut: command => { if (active) shortcut(command) },
   })
   const reference = useBrowserReference({ leaseId: browser.lease?.id, pageId: page.id, active, drafts: referenceDrafts,
     available: canReference && browser.state.ready && !browser.state.error && browser.state.url !== 'about:blank',
     url: browser.state.url, loading: browser.state.loading, request: page.referenceRequest,
-    onRequestHandled: () => onChange({ ...page, referenceRequest: undefined }), onAdd: onReference,
+    onRequestHandled: onReferenceHandled, onAdd: onReference,
     focusPage: () => browser.element.current?.focus() })
   const { state } = browser
   useEffect(() => {

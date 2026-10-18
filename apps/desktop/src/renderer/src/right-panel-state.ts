@@ -288,7 +288,8 @@ export function moveRightPanelTab(state: RightPanelSessionState, tabId: string, 
 export function updateRightPanelPage(state: RightPanelSessionState, page: RightPanelPage): RightPanelSessionState {
   const id = rightPanelTabId(page)
   if (!state.tabs.some(tab => tab.id === id)) return state
-  return { ...state, tabs: state.tabs.map(tab => tab.id === id ? { id, page } : tab) }
+  return { ...state, tabs: state.tabs.map(tab => tab.id === id
+    ? { id, page: tab.page.kind === 'browser' && page.kind === 'browser' ? { ...tab.page, ...page } : page } : tab) }
 }
 
 export function rightPanelTabId(page: RightPanelPage): string {

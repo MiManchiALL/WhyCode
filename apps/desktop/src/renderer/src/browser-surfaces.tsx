@@ -54,7 +54,7 @@ export function BrowserSurfaces(props: Props) {
       const agent = state.agents.find(agent => agent.runtimeId === surface.runtimeId && agent.page.id === surface.page.id)
       if (!descriptor || (agent && !!surface.turnId !== (agent.view === 'agent'))) continue
       if (descriptor.url !== surface.page.url || descriptor.title !== surface.page.title || descriptor.workspaceFile !== surface.page.workspaceFile) {
-        props.onUpdate({ ...descriptor, ...surface.page, kind: 'browser' })
+        props.onUpdate({ ...surface.page, kind: 'browser', workspaceFile: surface.page.workspaceFile })
       }
     }
   }, [state.surfaces, state.agents, props.runtimeId, props.onUpdate, serializedView])
@@ -73,12 +73,8 @@ export function BrowserSurfaces(props: Props) {
         <BrowserPanel page={page} active={shown} lease={surface} navigationRevision={surface.navigation} agent={!!surface.turnId}
           runtimeId={surface.runtimeId} canReference={shown && props.canReference} referenceDrafts={props.referenceDrafts}
           onReference={(image, replaceId) => props.onReference(surface.runtimeId, image, replaceId)}
-          onChange={updated => {
-            if (updated.url !== surface.page.url || updated.title !== surface.page.title) {
-              void browserAction({ type: 'update', id: surface.id, url: updated.url, title: updated.title }).catch(fail)
-            }
-            if (shown) props.onUpdate(updated)
-          }}
+          onChange={(url, title) => { void browserAction({ type: 'update', id: surface.id, url, title }).catch(fail) }}
+          onReferenceHandled={() => props.onUpdate({ ...page, referenceRequest: undefined })}
           onOpen={url => props.onOpen({ kind: 'browser', id: crypto.randomUUID(), url, title: '', workspaceFile: surface.page.workspaceFile && url.startsWith('file:') })}
           onClose={() => props.onClose(rightPanelTabId(page))}
           onNavigate={address => guardBrowserAction(surface.runtimeId, surface.page.id, () => props.onOpen({ ...page, url: address, referenceRequest: undefined }))}
