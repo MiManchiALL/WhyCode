@@ -56,6 +56,8 @@ export interface ToolContext {
   workspaceIO?: WorkspaceIO
   /** 项目根目录（所有相对路径的基准） */
   projectDir: string
+  /** 当前角色拥有的会话临时工作目录，位于 workspaceIO 所指的执行端。 */
+  scratchDirectory?: string
   /** 本会话固定 scratch 与额外授权目录（与权限上下文同步） */
   additionalDirs: readonly string[]
   abortSignal: AbortSignal

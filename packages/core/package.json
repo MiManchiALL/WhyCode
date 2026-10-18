@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./btw": "./src/session/btw.ts",
     "./background-command": "./src/tools/background-command/types.ts",
+    "./command-output": "./src/tools/run-command/output-result.ts",
     "./events": "./src/events.ts",
     "./presentation": "./src/presentation.ts",
     "./web-source": "./src/web-source.ts",

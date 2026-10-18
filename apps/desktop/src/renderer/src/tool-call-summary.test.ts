@@ -6,6 +6,18 @@ import {
   toolCallDetails,
 } from '../../shared/tool-call-summary.ts'
 
+it('长命令结果展示预览、完整日志路径和失败诊断，复制文本不暴露 JSON 包装', () => {
+  const data = JSON.stringify({ type: 'command-output', output: '最后一行😀\r\n', totalBytes: 100_000,
+    totalLines: 5000, fullOutputPath: 'C:\\scratch\\Main\\command-output\\test.log', diagnostic: '[退出码 1]' })
+  for (const isError of [false, true]) {
+    const details = toolCallDetails('RunCommand', { command: 'build' }, data, isError)!
+    assert.match(details, /最后一行😀\r\n/)
+    assert.ok(details.includes('完整日志：C:\\scratch\\Main\\command-output\\test.log'))
+    assert.match(details, /\[退出码 1\]/)
+    assert.doesNotMatch(details, /"type":"command-output"/)
+  }
+})
+
 describe('工具卡片关键参数摘要', () => {
   const cases: Array<[string, Record<string, unknown>, string]> = [
     ['ReadFile', { path: 'src/app.ts', offset: 11, limit: 20 }, 'src/app.ts · lines 11–30'],

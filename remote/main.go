@@ -259,7 +259,7 @@ func (s *server) start(r request) response {
 	for index, reader := range readers {
 		outputs.Add(1)
 		stream := "stdout"
-		if index == 1 && r.Executable != "" {
+		if index == 1 {
 			stream = "stderr"
 		}
 		go func(reader io.ReadCloser, stream string) { defer outputs.Done(); s.read(r.Task, t, reader, stream) }(reader, stream)

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, it } from 'node:test'
 import type { ModelMessage } from 'ai'
 import { readPresentationResult, type Presentation } from '../presentation.ts'
+import { readCommandOutputResult, serializeCommandOutputResult } from '../tools/run-command/output-result.ts'
 import { type WorkspaceBinding } from '../workspace/types.ts'
 import { forkScratchPathMapper } from './fork-resources.ts'
 import { forkFileReferences } from './fork-file-references.ts'
@@ -29,6 +30,26 @@ function outputs(items: readonly ModelMessage[]) {
     part.type === 'tool-result' && part.toolName === 'Present' && part.output.type === 'text'
       ? [readPresentationResult(part.output.value)] : []) : [])
 }
+
+it('失败与 peer 命令的完整日志也随 Fork 重定位，日志预览文字保留原义', () => {
+  const oldPath = '/scratch/source/Main/command-output/log.txt'
+  const newPath = '/scratch/target/Main/command-output/log.txt'
+  const data = serializeCommandOutputResult({ type: 'command-output', output: oldPath,
+    fullOutputPath: oldPath, totalBytes: 100_000, totalLines: 5000, diagnostic: '[退出码 1]' })
+  const refs = forkFileReferences(path => path === oldPath ? newPath : path)
+  const projected = refs.messages([{ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'run', toolName: 'RunCommand', output: { type: 'error-text', value: data } }] }])[0]!
+  assert.equal(projected.role, 'tool')
+  if (projected.role !== 'tool') return
+  const output = projected.content[0]!
+  assert.ok(output.type === 'tool-result' && output.output.type === 'error-text')
+  const result = readCommandOutputResult(output.output.value)!
+  assert.equal(result.fullOutputPath, newPath)
+  assert.equal(result.output, oldPath)
+  refs.view({ type: 'core-event', event: { type: 'peer-event', agentId: 'B', event: { type: 'tool-start', toolUseId: 'run', toolName: 'RunCommand', input: { command: oldPath } } } })
+  const event = refs.view({ type: 'core-event', event: { type: 'peer-event', agentId: 'B', event: { type: 'tool-end', toolUseId: 'run', isError: true, result: data } } })
+  assert.ok(event.type === 'core-event' && event.event.type === 'peer-event' && event.event.event.type === 'tool-end')
+  assert.equal(readCommandOutputResult(String(event.event.event.result))!.fullOutputPath, newPath)
+})
 
 it('Fork shares project deliveries and rehomes copied scratch deliveries, including repeated Fork', async () => {
   const root = await mkdtemp(join(tmpdir(), 'whycode-fork-delivery-')); roots.push(root)

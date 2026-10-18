@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { resolve } from 'node:path'
 import { describe, it } from 'node:test'
 import { validateToolInput } from '../tool.ts'
 import { createRunCommandTool, runCommandTool, scanCommandPaths } from './index.ts'
+import { readCommandOutputResult } from './output-result.ts'
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
 
@@ -40,13 +44,13 @@ async function forceKill(pid: number): Promise<void> {
 function nodeCommand(script: string): string {
   // Windows PowerShell 5.1 会剥掉原生参数中的嵌套引号，测试脚本先编码再传递。
   const encoded = Buffer.from(script, 'utf8').toString('base64')
-  const runner = 'eval(atob(process.argv[1]))'
+  const runner = 'eval(Buffer.from(process.argv[1],process.argv[2]).toString())'
   if (process.platform === 'win32') {
     const executable = process.execPath.replaceAll("'", "''")
-    return `& '${executable}' -e '${runner}' '${encoded}'`
+    return `& '${executable}' -e '${runner}' '${encoded}' base64`
   }
   const executable = process.execPath.replaceAll("'", "'\\''")
-  return `'${executable}' -e '${runner}' '${encoded}'`
+  return `'${executable}' -e '${runner}' '${encoded}' base64`
 }
 
 function descendantCommand(): string {
@@ -164,6 +168,37 @@ describe('RunCommand 中止', () => {
 })
 
 describe('RunCommand 结果', () => {
+  it('真实命令的长日志可读取中间内容，停止后返回已关闭的完整日志', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-run-command-log-'))
+    const abort = new AbortController()
+    let progressTail = ''
+    const expected = Array.from({ length: 4000 }, (_, i) => `line-${i}: 中文😀`).join('\n') + '\n'
+    try {
+      const result = await runCommandTool.execute({ command: nodeCommand(
+        "process.stdout.write(Array.from({length:4000}, (_, i) => `line-${i}: 中文😀`).join(String.fromCharCode(10)) + String.fromCharCode(10)); console.log('OUTPUT-READY'); setInterval(() => {}, 1000)",
+      ) }, {
+        projectDir: root, scratchDirectory: root, additionalDirs: [root], abortSignal: abort.signal,
+        onProgress(text) {
+          progressTail = (progressTail + text).slice(-64)
+          if (progressTail.includes('OUTPUT-READY')) abort.abort('user-cancel')
+        },
+      })
+      assert.equal(result.isError, true)
+      const saved = readCommandOutputResult(result.data)!
+      assert.ok(saved, result.data)
+      assert.ok(saved.fullOutputPath, result.data)
+      assert.match(saved.diagnostic!, /用户已停止/)
+      const full = (await readFile(saved.fullOutputPath, 'utf8')).replaceAll('\r\n', '\n')
+      assert.equal(full, expected + 'OUTPUT-READY\n')
+      assert.match(full, /line-2000: 中文😀/)
+      assert.doesNotMatch(saved.output, /�/)
+      assert.match(saved.output, /line-3999: 中文😀/)
+    } finally {
+      abort.abort('test-cleanup')
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('关闭 stdin，让等待输入结束的命令立即收到 EOF', async () => {
     const abortController = new AbortController()
     const execution = runCommandTool.execute(
