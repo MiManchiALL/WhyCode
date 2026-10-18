@@ -38,6 +38,8 @@ export async function checkBrowserTabIndicators({ run, finish, execute, until, a
   await until(async () => (await status())?.agent, 'controlled tab blue')
   const blue = (await status()).color
   assert.notEqual(blue, gray)
+  assert.equal(await execute(`getComputedStyle(document.querySelector('[aria-label="切换到我的网页"]')).backgroundColor`),
+    blue, 'Agent 切换按钮与活动标签共用同一雾霾蓝')
   assert.equal((await status()).audible, true, '接管保留原网页的声音状态')
   await execute('fixture.narrow()')
   await until(() => execute(`document.querySelector('[aria-label="Agent 浏览器"]').getBoundingClientRect().width === 300`), 'narrow tab layout ready')
