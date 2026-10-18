@@ -146,6 +146,16 @@ describe('右侧栏会话配置', () => {
     state = closeRightPanelTab(state, 'browser:a')
     assert.equal(updateRightPanelPage(state, first), state)
   })
+  it('网址和标题投影保留待处理引用，消费后不会被迟到投影重新写回', () => {
+    const page = { kind: 'browser' as const, id: 'reference', url: 'https://example.com/', title: '' }
+    const request = { kind: 'new' as const }
+    let state = openRightPanelPage(emptyState(), { ...page, referenceRequest: request, workspaceFile: true })
+    state = updateRightPanelPage(state, { ...page, title: 'Ready', workspaceFile: undefined })
+    assert.deepEqual(state.tabs[0]!.page, { ...page, title: 'Ready', referenceRequest: request, workspaceFile: undefined })
+    state = updateRightPanelPage(state, { ...page, referenceRequest: undefined })
+    state = updateRightPanelPage(state, { ...page, title: 'Later title' })
+    assert.deepEqual(state.tabs[0]!.page, { ...page, title: 'Later title', referenceRequest: undefined, workspaceFile: undefined })
+  })
   it('标签上限不会自动淘汰仍有网页状态的浏览器，关闭后可继续新建', () => {
     let state = emptyState()
     for (let i = 0; i < MAX_RIGHT_PANEL_TABS; i++) state = openRightPanelPage(state, { kind: 'browser', id: String(i), url: 'about:blank', title: '' })

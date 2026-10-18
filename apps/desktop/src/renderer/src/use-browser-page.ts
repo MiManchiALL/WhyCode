@@ -27,7 +27,8 @@ export function useBrowserPage(props: Props) {
   const ready = useRef(false)
   const navigation = useRef(0)
   const lease = props.lease
-  const [state, setState] = useState<BrowserPageState>({ url: props.url, title: '', loading: props.url !== 'about:blank',
+  const [state, setState] = useState<BrowserPageState & { settledNavigation: number | null }>({ settledNavigation: null,
+    url: props.url, title: '', loading: props.url !== 'about:blank',
     ready: false, back: false, forward: false, error: null, zoom: 1, match: null })
   useEffect(() => {
     if (props.active && ready.current && element.current) {
@@ -123,15 +124,17 @@ export function useBrowserPage(props: Props) {
       return
     }
     const request = ++navigation.current
+    const revision = callbacks.current.navigationRevision
     run(webview => {
-      setState(value => ({ ...value, error: null, url, loading: true }))
+      setState(value => ({ ...value, settledNavigation: null, error: null, url, loading: true }))
       const target = url.startsWith('file:') && lease ? window.whycode.prepareBrowserFile(lease.id, url, callbacks.current.workspaceRuntimeId) : Promise.resolve(url)
-      void target.then(value => {
+      void target.then(async value => {
         if (request !== navigation.current || !ready.current) return
         // 导航失败由 did-fail-load 单一投影；旧 loadURL 的拒绝不能覆盖新导航。
-        void webview.loadURL(value).catch(() => {})
+        await webview.loadURL(value).catch(() => {})
+        if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision }))
       }, error => {
-        if (request === navigation.current && ready.current) setState(value => ({ ...value, loading: false, error: String(error) }))
+        if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision, loading: false, error: String(error) }))
       })
     })
   }
@@ -150,5 +153,7 @@ export function useBrowserPage(props: Props) {
   const external = () => {
     if (lease) void window.whycode.openBrowserExternally(lease.id).catch(error => feedback('error', String(error)))
   }
-  return { element, lease, state, run, navigate, reload, zoom, find, external }
+  // 原生事件可能仍来自旧文档；请求的导航结束前不能把该页面交给引用等操作。
+  return { element, lease, state: { ...state, loading: state.loading || state.settledNavigation !== props.navigationRevision },
+    run, navigate, reload, zoom, find, external }
 }
