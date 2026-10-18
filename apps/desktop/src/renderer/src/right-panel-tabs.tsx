@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { SubagentSummary } from '@whycode/core'
-import { Bot, FileDiff, FileText, FolderOpen, Globe, SquareTerminal, X } from 'lucide-react'
+import { Bot, FileDiff, FileText, FolderOpen, Globe, SquareTerminal, Volume2, X } from 'lucide-react'
 import {
   closestCenter, defaultDropAnimationSideEffects, DndContext, DragOverlay,
   KeyboardSensor, PointerSensor, useSensor, useSensors,
@@ -10,11 +10,16 @@ import { horizontalListSortingStrategy, SortableContext, sortableKeyboardCoordin
 import { CSS } from '@dnd-kit/utilities'
 import type { RightPanelTab } from './right-panel-state.ts'
 import { resolveSubagentPanelPage } from './subagent-presentation.ts'
+import type { BrowserHostState } from '../../shared/browser-agent.ts'
+
+interface TabStatus { agentControlled: boolean; audible: boolean }
 
 interface Props {
   tabs: readonly RightPanelTab[]
   activeTabId: string | null
   subagents: readonly SubagentSummary[]
+  runtimeId: string
+  browserHost: BrowserHostState
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onMove: (id: string, targetId: string) => void
@@ -32,6 +37,14 @@ export function RightPanelTabs(props: Props) {
     }),
   )
   const dragged = props.tabs.find(tab => tab.id === draggedId)
+  const statusFor = (tab: RightPanelTab): TabStatus => {
+    const page = tab.page
+    if (page.kind !== 'browser') return { agentControlled: false, audible: false }
+    return {
+      agentControlled: props.browserHost.agents.some(agent => agent.runtimeId === props.runtimeId && agent.page.id === page.id && agent.view === 'agent'),
+      audible: props.browserHost.surfaces.some(surface => surface.runtimeId === props.runtimeId && surface.page.id === page.id && surface.audible),
+    }
+  }
   const titleFor = (id: string | number) => {
     const tab = props.tabs.find(tab => tab.id === id)
     return tab ? tabTitle(tab, props.subagents) : '标签'
@@ -58,6 +71,7 @@ export function RightPanelTabs(props: Props) {
         <SortableContext items={props.tabs.map(tab => tab.id)} strategy={horizontalListSortingStrategy}>
           {props.tabs.map(tab => <SortableTab key={tab.id} tab={tab}
             title={tabTitle(tab, props.subagents)} active={tab.id === props.activeTabId}
+            status={statusFor(tab)}
             onSelect={() => props.onSelect(tab.id)} onClose={() => props.onClose(tab.id)} />)}
         </SortableContext>
         {props.children}
@@ -68,16 +82,18 @@ export function RightPanelTabs(props: Props) {
         duration: 200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
         sideEffects: defaultDropAnimationSideEffects({ styles: { active: { opacity: '0' } } }),
       }
-    }>{dragged ? <div aria-hidden className="wc-panel-tab wc-panel-tab-dragging">
-      <TabLabel tab={dragged} title={tabTitle(dragged, props.subagents)} /><X size={12} className="mx-1 shrink-0 text-[var(--wc-faint)]" />
+    }>{dragged ? <div aria-hidden className="wc-panel-tab wc-panel-tab-dragging"
+      data-active={dragged.id === props.activeTabId} data-agent-controlled={statusFor(dragged).agentControlled}>
+      <TabLabel tab={dragged} title={tabTitle(dragged, props.subagents)} status={statusFor(dragged)} /><X size={12} className="mx-1 shrink-0 text-[var(--wc-faint)]" />
     </div> : null}</DragOverlay>, document.body)}
   </DndContext>
 }
 
-function SortableTab({ tab, title, active, onSelect, onClose }: {
+function SortableTab({ tab, title, active, status, onSelect, onClose }: {
   tab: RightPanelTab
   title: string
   active: boolean
+  status: TabStatus
   onSelect: () => void
   onClose: () => void
 }) {
@@ -89,23 +105,29 @@ function SortableTab({ tab, title, active, onSelect, onClose }: {
     if (active) buttonRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [active])
   return <div ref={setNodeRef} data-panel-tab={tab.id} className="wc-panel-tab group" data-active={active}
+    data-agent-controlled={status.agentControlled}
     style={{ transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0 : undefined }}>
     <button type="button" ref={node => { buttonRef.current = node; setActivatorNodeRef(node) }}
       {...attributes} {...listeners} aria-current={active ? 'page' : undefined}
       className="wc-focus-ring flex min-w-0 flex-1 touch-none items-center gap-1 overflow-hidden rounded-md text-left"
       title={tab.page.kind === 'terminal' ? `${title}\n${tab.page.terminal.cwd}` : title} onClick={onSelect}>
-      <TabLabel tab={tab} title={title} />
+      <TabLabel tab={tab} title={title} status={status} />
     </button>
     <button type="button" className="wc-focus-ring ml-auto flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--wc-faint)] opacity-70 hover:bg-black/[0.06] hover:text-[var(--wc-ink)] group-hover:opacity-100"
       onClick={onClose} aria-label={`关闭 ${title}`}><X size={12} /></button>
   </div>
 }
 
-function TabLabel({ tab, title }: { tab: RightPanelTab; title: string }) {
+function TabLabel({ tab, title, status }: { tab: RightPanelTab; title: string; status: TabStatus }) {
   const Icon = tab.page.kind === 'file' ? FileText : tab.page.kind === 'terminal' ? SquareTerminal
     : tab.page.kind === 'browser' ? Globe
     : tab.page.kind === 'workspace' ? FolderOpen : tab.page.kind === 'changes' || tab.page.kind === 'git' ? FileDiff : Bot
-  return <><Icon size={13} className="shrink-0 text-[var(--wc-muted)]" /><span className="truncate">{title}</span></>
+  return <><Icon size={13} className="shrink-0 text-[var(--wc-muted)]" /><span className="truncate">{title}</span>
+    {status.agentControlled && <span className="sr-only">（Agent 正在控制）</span>}
+    {status.audible && <span role="img" aria-label="正在播放声音" title="正在播放声音" className="ml-auto flex shrink-0 text-[var(--wc-muted)]">
+      <Volume2 size={12} />
+    </span>}
+  </>
 }
 
 function tabTitle(tab: RightPanelTab, subagents: readonly SubagentSummary[]): string {

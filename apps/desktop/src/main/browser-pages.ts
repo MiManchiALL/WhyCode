@@ -31,6 +31,12 @@ export class BrowserPages {
 
   constructor(private readonly guests: BrowserGuests) {
     guests.onClosed = (id, reason) => this.closed(id, reason)
+    guests.onAudioStateChanged = (id, audible) => {
+      const surface = this.surfaces.get(id)
+      if (!surface || surface.value.audible === audible) return
+      surface.value.audible = audible
+      this.publish(surface.owner)
+    }
     guests.isAgent = id => !!this.surfaces.get(id)?.value.turnId
     guests.onOpen = (id, url) => {
       const turn = [...this.turns.values()].find(turn => turn.surfaceId === id && !turn.abort.signal.aborted)
@@ -199,7 +205,7 @@ export class BrowserPages {
     return [...this.surfaces.values()].find(s => s.value.runtimeId === runtimeId && s.value.page.id === pageId && !s.value.turnId)?.value
   }
   private create(owner: WebContents, runtimeId: string, page: BrowserSurface['page']): BrowserSurface {
-    const value: BrowserSurface = { ...this.guests.acquire(owner), runtimeId, page: { ...page }, navigation: 0 }
+    const value: BrowserSurface = { ...this.guests.acquire(owner), runtimeId, page: { ...page }, navigation: 0, audible: false }
     this.surfaces.set(value.id, { owner, value })
     return value
   }

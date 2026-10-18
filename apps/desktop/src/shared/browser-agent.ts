@@ -8,6 +8,7 @@ export interface BrowserSurface extends BrowserLease {
   page: BrowserPageDescriptor
   turnId?: string
   navigation: number
+  audible: boolean
 }
 export interface BrowserAgentPage {
   runtimeId: string; turnId: string; surfaceId: string; page: BrowserPageDescriptor; view: 'user' | 'agent'

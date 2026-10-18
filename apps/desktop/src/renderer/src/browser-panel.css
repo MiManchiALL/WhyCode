@@ -8,7 +8,7 @@
   opacity: 0.5;
 }
 .wc-browser-panel[data-agent='true'] .wc-browser-view-toggle {
-  background: var(--wc-blue);
+  background: var(--wc-browser-agent);
   color: var(--wc-blue-ink);
 }
 .wc-browser-panel[data-agent='true'] .wc-browser-view-dot { opacity: 1; }
