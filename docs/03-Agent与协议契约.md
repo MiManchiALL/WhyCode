@@ -598,7 +598,7 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 类型与校验单源为 `shared/git.ts`。Git 入口只接受所属主窗口主 Frame；仓库路径和本地/SSH IO 由 Main 按 runtimeId 解析，Renderer 不传执行命令、工作目录或远端 URL。能力属于用户界面，不生成 CoreCommand、模型消息、检查点或 Journal 事件。
 
-- `gitSnapshot(runtimeId, comparison)` 返回仓库信息与所选范围的变更清单；非仓库返回空仓库，基准失效时保留仓库信息并返回比较错误。范围为 branch、uncommitted、unstaged、staged 或指定完整提交哈希的 commit。
+- `gitSnapshot(runtimeId, comparison)` 用 `status` 区分 `ready`、`not-repository` 与 `git-not-found`；后两者的仓库、变更和比较错误均为空。Main 将本地启动 Git 的 `ENOENT`、远端退出 127 且同次命令中 `command -v git` 未找到可执行文件的标记归为 `git-not-found`；退出码 127 本身不足以判定 Git 缺失，无执行权限的退出 126 保留为错误。其它读取错误仍返回失败，基准失效时保留仓库信息并返回比较错误。范围为 branch、uncommitted、unstaged、staged 或指定完整提交哈希的 commit。
 - `gitFilePreview(runtimeId, comparison, relativePath)` 验证路径位于仓库并仍属于所选变更，返回与检查点预览相同的 before/after 形状。重命名读取来源 blob；工作区链接不能越过仓库。工作区 CRLF 按 Git 的 text/eol 属性与 core.autocrlf 设置规范化，预览不改写文件。单侧正文沿用检查点的 512 KiB 上限，二进制与过大文件返回不可预览状态。
 - `gitHistory(runtimeId, skip)` 每页 40 个当前 HEAD 可达的提交，含哈希、父节点、说明、作者和时间，skip 上限 100,000。Renderer 只保留当前页。
 - `gitMutate(runtimeId, {expectedHead, expectedBranch, action})` 只接受创建分支、切换已有分支、提交指定范围和推送到已配置远端。预期 HEAD 与分支必须仍匹配，结果以 `{ok:true,value}` 或 `{ok:false,error}` 返回；不接受强制覆盖参数。
