@@ -50,10 +50,16 @@ export interface GitChanges {
   truncated: boolean
   baseLabel: string
 }
-export interface GitSnapshot {
-  repository: GitRepositoryInfo | null
+export type GitSnapshot = {
+  status: 'ready'
+  repository: GitRepositoryInfo
   changes: GitChanges | null
   changesError: string | null
+} | {
+  status: 'not-repository' | 'git-not-found'
+  repository: null
+  changes: null
+  changesError: null
 }
 export interface GitCommit {
   hash: string

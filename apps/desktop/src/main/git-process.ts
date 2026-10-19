@@ -4,6 +4,14 @@ import { quoteShell } from './ssh/provision.ts'
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024
+const GIT_NOT_FOUND_MARKER = '\nwhycode:git-not-found\n'
+
+export class GitNotFoundError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('未检测到 Git，未安装或不在 PATH 中', options)
+    this.name = 'GitNotFoundError'
+  }
+}
 
 export interface GitCommandResult {
   code: number | null
@@ -32,7 +40,12 @@ export function runGit(
     ...(options.readOnly ? { GIT_OPTIONAL_LOCKS: '0' } : {}),
   }
   const child = options.io?.spawn
-    ? options.io.spawn(`env ${Object.entries(environment).map(([key, value]) => `${key}=${value}`).join(' ')} git ${args.map(quoteShell).join(' ')}`, workingDirectory)
+    ? options.io.spawn([
+      `env ${Object.entries(environment).map(([key, value]) => `${key}=${value}`).join(' ')} git ${args.map(quoteShell).join(' ')}`,
+      'whycode_git_exit=$?',
+      `if [ "$whycode_git_exit" -eq 127 ] && ! command -v git >/dev/null 2>&1; then printf '%s' ${quoteShell(GIT_NOT_FOUND_MARKER)} >&2; fi`,
+      'exit "$whycode_git_exit"',
+    ].join('\n'), workingDirectory)
     : spawn('git', ['-C', workingDirectory, ...args], {
       detached: process.platform !== 'win32',
       env: { ...process.env, ...environment },
@@ -80,20 +93,23 @@ export function runGit(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      reject(new Error(
-        'code' in error && error.code === 'ENOENT'
-          ? '未找到 Git，请先安装 Git 并确保 git 命令在 PATH 中'
-          : `Git 进程启动失败：${error.message}`,
-      ))
+      reject(!options.io?.spawn && 'code' in error && error.code === 'ENOENT'
+        ? new GitNotFoundError({ cause: error })
+        : new Error(`Git 进程启动失败：${error.message}`, { cause: error }))
     })
     child.once('close', (code) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      const errorOutput = Buffer.concat(stderr).toString('utf8')
+      if (options.io?.spawn && !timedOut && code === 127 && errorOutput.endsWith(GIT_NOT_FOUND_MARKER)) {
+        reject(new GitNotFoundError({ cause: new Error(errorOutput.slice(0, -GIT_NOT_FOUND_MARKER.length).trim()) }))
+        return
+      }
       resolve({
         code,
         stdout: Buffer.concat(stdout).toString(options.encoding ?? 'utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
+        stderr: errorOutput,
         outputTruncated,
         timedOut,
       })

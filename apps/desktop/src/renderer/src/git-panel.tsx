@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react'
 import { largeGitChanges, type GitComparison, type GitFilePreview, type GitFileChange, type GitChanges } from '../../shared/git.ts'
 import { gitPageComparison, type GitPage, type RightPanelPage } from './right-panel-state.ts'
 import { useGitSnapshot, type GitData } from './git-data.ts'
+import { GitNotFound } from './git-not-found.tsx'
 import { GitActions } from './git-actions.tsx'
 import { GitHistoryPicker } from './git-history.tsx'
 import { gitComparisonRefs, gitOverviewPage } from './git-comparison.ts'
@@ -32,9 +33,11 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
   onOpenPage: (page: RightPanelPage) => void
 }) {
   const comparison = gitPageComparison(page)
-  const selected = useGitSnapshot(runtimeId, comparison, revision, page.mode !== 'branch' && (page.mode !== 'commit' || !!page.commit), branchData.unavailableReason)
+  const selectedEnabled = page.mode !== 'branch' && (page.mode !== 'commit' || !!page.commit)
+  const selected = useGitSnapshot(runtimeId, comparison, revision, selectedEnabled, branchData.unavailableReason)
   const data = page.mode === 'branch' ? branchData : selected
-  const repo = data.snapshot?.repository ?? branchData.snapshot?.repository
+  const gitNotFound = data.snapshot?.status === 'git-not-found' || branchData.snapshot?.status === 'git-not-found'
+  const repo = gitNotFound ? null : data.snapshot?.repository ?? branchData.snapshot?.repository
   const changes = data.snapshot?.changes
   const bases = gitComparisonRefs(repo)
   const update = (patch: Partial<GitPage>) => onOpenPage({ ...page, ...patch })
@@ -45,6 +48,7 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
     }
   }, [page, repo, branchData.loading, branchData.unavailableReason, onOpenPage])
   if (branchData.unavailableReason) return <FilePreviewMessage>{branchData.unavailableReason}</FilePreviewMessage>
+  if (gitNotFound && !data.error) return <FilePreviewMessage><GitNotFound loading={branchData.loading || (selectedEnabled && selected.loading)} onRetry={refresh} /></FilePreviewMessage>
   return <div className="wc-git-panel wc-changes-panel flex min-h-0 flex-1 flex-col">
     <div className="wc-git-toolbar">
       <div className="wc-git-scope wc-git-control" title={`${descriptions[page.mode]}${changes ? `\n${changes.files.length} 个文件${changes.untracked ? ` · ${changes.untracked} 个未跟踪文件未计入行数` : ''}${changes.truncated ? '（部分）' : ''}` : ''}`}>

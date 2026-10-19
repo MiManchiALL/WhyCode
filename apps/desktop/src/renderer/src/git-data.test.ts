@@ -8,7 +8,7 @@ import type { SshConnectionStatus } from '../../shared/ssh.ts'
 import type { WorkspaceActionResult } from '../../shared/workspace.ts'
 import { gitConnectionUnavailableReason, useGitSnapshot, type GitData } from './git-data.ts'
 
-const snapshot: GitSnapshot = { repository: null, changes: null, changesError: null }
+const snapshot: GitSnapshot = { status: 'not-repository', repository: null, changes: null, changesError: null }
 
 describe('Git 读取与 SSH 状态', () => {
   it('连接状态未就绪时不读取，刷新也不会连接服务器；连接完成后自动读取', async t => {
@@ -61,6 +61,34 @@ describe('Git 读取与 SSH 状态', () => {
     await act(async () => page.requests[1]!.resolve({ ok: true, value: snapshot }))
     assert.equal(page.current.error, null)
     assert.equal(page.current.snapshot, snapshot)
+  })
+
+  it('缺少 Git 清除旧仓库，重新检测成功后恢复；断线提示仍由 SSH 状态决定', async t => {
+    const page = await gitFixture(t)
+    await page.render({ status: 'connected', loading: false })
+    await page.tick()
+    const ready: GitSnapshot = { status: 'ready', repository: {
+      root: '/project', name: 'project', branch: 'main', head: null, upstream: null, ahead: 0, behind: 0,
+      refs: [], remotes: [], defaultBase: null, staged: 0, unstaged: 0, untracked: 0, conflicts: 0,
+    }, changes: null, changesError: null }
+    await act(async () => page.requests[0]!.resolve({ ok: true, value: ready }))
+    await act(async () => page.current.refresh())
+    await page.tick()
+    await act(async () => page.requests[1]!.resolve({ ok: true, value: { ...snapshot, status: 'git-not-found' } }))
+    assert.equal(page.current.snapshot?.status, 'git-not-found')
+    assert.equal(page.current.snapshot?.repository, null)
+    assert.equal(page.current.error, null)
+    assert.equal(page.current.unavailableReason, null)
+
+    await act(async () => page.current.refresh())
+    await page.tick()
+    await act(async () => page.requests[2]!.resolve({ ok: true, value: ready }))
+    assert.equal(page.current.snapshot, ready)
+    await page.render({ status: 'disconnected' })
+    assert.equal(page.current.unavailableReason, 'SSH 未连接，请先连接服务器')
+    await act(async () => page.current.refresh())
+    await page.tick()
+    assert.equal(page.requests.length, 3)
   })
 })
 

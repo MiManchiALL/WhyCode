@@ -4,6 +4,7 @@ import { sshFixture } from './ssh/ssh-test-fixture.ts'
 import { GitRepository, openGitRepository } from './git-repository.ts'
 import { readGitChanges, readGitFilePreview } from './git-changes.ts'
 import { mutateGitRepository } from './git-actions.ts'
+import { readGitSnapshot } from './git-snapshot.ts'
 
 test('SSH 仓库通过正式远端进程读取差异、提交、切换与推送，参数保持字面含义', {
   skip: process.env.WHYCODE_SSH_INTEGRATION !== '1', timeout: 120_000,
@@ -12,6 +13,10 @@ test('SSH 仓库通过正式远端进程读取差异、提交、切换与推送�
   assert.equal((await env.connections.connect(env.id, env.fingerprint)).status, 'connected')
   const host = env.connections.host(env.id)
   const io = env.connections.io(host.target)
+  const missingGit = await readGitSnapshot(openGitRepository(env.project, {
+    ...io, spawn: (command, cwd) => io.spawn!(`PATH=; export PATH; ${command}`, cwd),
+  }), { mode: 'uncommitted' })
+  assert.equal(missingGit.status, 'git-not-found')
   const repo = new GitRepository(env.project, io)
   const git = (args: string[]) => repo.text(args, '远端测试 Git', { readOnly: false })
   await git(['init', '-b', 'main'])
