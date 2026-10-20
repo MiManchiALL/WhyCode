@@ -316,6 +316,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 ### 3.6 图片与截图
 
 - 单条用户消息最多 10 张 PNG/JPEG/WebP，与正文共享不可拆分 delivery ID。长期消息保存附件 ID/显示名/路由，不保存绝对路径或 Base64。
+- 普通上传图片的原生视觉消息只包含用户正文和按顺序排列的图片块，不附加文件名、附件 ID 或识图提醒；纯图片输入只包含图片块。网页引用保留批注、来源与定位上下文；非视觉 Main 的辅助识图请求提供可调用的附件 ID，包括从原生视觉历史切换模型后的请求。
 - `ViewImage` 读取当前工作区/权限允许的图片；SSH 路径指服务器文件。支持 high、经画像验证的 original 与 autoOrient 后源像素 region；结果返回模型到源图映射。
 - `CaptureScreenshot {target,display_id?,window_title?,window_id?,application_path?,region?,detail}`：target 为 screen/window，region 是 screen 的可选裁剪区域。window 截图至少提供完整标题 window_title 或候选结果中的 window_id；ID 优先，不猜测、不因失效而按标题回退。未找到或重名时返回候选身份，不按应用名称子串自动选窗。Windows 自动管理最小化/隐藏状态；提供 application_path 时该次调用只后台启动，不截图，不生成图片附件，无需提供标题或 ID。路径须为不含参数的 `.exe` 绝对路径；结果文字包含窗口候选，并要求下一次不带 application_path 选择已有窗口截图。进程归属、状态恢复、平台和静默边界见文档二 §10.1。
 - 截图可启动应用或临时改变窗口状态，按 execute 能力授权；只读档不可调用，全自动档直接执行，其余沿用首次截图隐私审批与应用路径权限检查。screen 仅用于检查桌面整体，默认主显示器；规范化时移除与所选 target 无关的字段，不将窗口捕获失败扩展成桌面截图。
