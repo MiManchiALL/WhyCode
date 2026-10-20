@@ -80,7 +80,7 @@ function toolMessage(toolCallId: string): ModelMessage {
     content: [{
       type: 'tool-result',
       toolCallId,
-      toolName: 'ViewImage',
+      toolName: 'ReadFile',
       output: { type: 'text', value: '已读取图片。' },
     }],
   }

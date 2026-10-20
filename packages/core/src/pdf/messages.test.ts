@@ -25,8 +25,8 @@ describe('PDF 模型引用', () => {
         content: [{
           type: 'tool-call',
           toolCallId: 'read-pdf-1',
-          toolName: 'ReadPdf',
-          input: { sourceType: 'attachment', sourceValue: ATTACHMENT.id },
+          toolName: 'ReadFile',
+          input: { path: `attachment://${ATTACHMENT.id}` },
         }],
       },
       { role: 'user', content: pdfAttachmentReferenceBlock([ATTACHMENT]) },

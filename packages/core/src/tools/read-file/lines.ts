@@ -1,6 +1,6 @@
 import type { Readable } from 'node:stream'
 
-/** readline 会累积完整单行；此处只保留展示所需前缀，丢弃超长行的其余字符。 */
+/** 有界扫描；额外保留一个字符供调用方检测超限，跳过长行时也不会累积整行。 */
 export async function* boundedLines(stream: Readable, maxChars: number): AsyncGenerator<string> {
   let prefix = ''
   let skipLf = false

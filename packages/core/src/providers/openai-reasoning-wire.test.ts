@@ -67,8 +67,8 @@ describe('OpenAI Responses 推理摘要线格式', () => {
           {
             type: 'tool-call',
             toolCallId: 'call_fixture',
-            toolName: 'ReadPdf',
-            input: { sourceType: 'attachment', sourceValue: 'pdf-1' },
+            toolName: 'ReadFile',
+            input: { path: 'attachment://11111111-1111-4111-8111-111111111111' },
             providerOptions: { openai: { itemId: 'fc_fixture' } },
           },
         ],
@@ -78,7 +78,7 @@ describe('OpenAI Responses 推理摘要线格式', () => {
         content: [{
           type: 'tool-result',
           toolCallId: 'call_fixture',
-          toolName: 'ReadPdf',
+          toolName: 'ReadFile',
           output: { type: 'text', value: 'PDF contents' },
         }],
       },
@@ -92,11 +92,10 @@ describe('OpenAI Responses 推理摘要线格式', () => {
         model,
         messages: restoredMessages,
         tools: {
-          ReadPdf: tool({
+          ReadFile: tool({
             description: '读取 PDF',
             inputSchema: z.object({
-              sourceType: z.string(),
-              sourceValue: z.string(),
+              path: z.string(),
             }),
           }),
         },

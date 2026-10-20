@@ -17,7 +17,7 @@ export const SPREADSHEET_OFFICE_SKILL_FILES: readonly EmbeddedOfficeSkillFile[] 
       "2. 写入数据和真实公式，设置日期/货币/百分比格式、列宽、冻结窗格与筛选。不要把应动态计算的结果全部写死。生成脚本通过 RunCommand 在当前设备执行。",
       "3. 含公式时用 OFFICE recalculate 将输入重算到新的 XLSX 输出。ExcelJS 不负责计算公式；存在公式文本不等于缓存结果已更新。",
       "4. 对重算后的最终文件执行 CHECK `--require-calculated`，核对工作表名称、数量、必需文字、公式错误和结果缓存；再用脚本按任务核对关键单元格、汇总值与边界数据。外部工作簿链接或引擎不支持的函数不能宣称已经完整重算。",
-      "5. 需要视觉检查时指定工作表和有限范围渲染，再用 ViewImage 查看数字格式、截断、列宽和图表；不要为了检查小区域渲染整张巨表。修复后重复重算和检查，交付最终可编辑 XLSX。",
+      "5. 需要视觉检查时指定工作表和有限范围渲染，再用 ReadFile 查看数字格式、截断、列宽和图表；不要为了检查小区域渲染整张巨表。修复后重复重算和检查，交付最终可编辑 XLSX。",
       "",
       ...OFFICE_EXECUTION_GUIDE,
     ),

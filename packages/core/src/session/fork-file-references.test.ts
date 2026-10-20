@@ -17,6 +17,20 @@ import type { ViewEvent } from './view-events.ts'
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 const managed = (path: string): WorkspaceBinding => ({ mode: 'managed', id: randomUUID(), workingDirectory: path, createdAt: new Date().toISOString() })
+
+it('统一 ReadFile 只重定位文件路径，附件引用保持身份', () => {
+  const reference = `attachment://${randomUUID()}`
+  const files = ['note.md', 'screen.png', 'paper.pdf']
+  const refs = forkFileReferences(path => path.replace('/source/', '/target/'))
+  const calls: ModelMessage[] = [reference, ...files.map(name => `/source/${name}`)].map((path, i) => ({
+    role: 'assistant',
+    content: [{ type: 'tool-call', toolCallId: String(i), toolName: 'ReadFile', input: { path } }],
+  }))
+  const projected = refs.messages(calls)
+  assert.deepEqual(projected[0], calls[0])
+  for (const name of files) assert.match(JSON.stringify(projected), new RegExp(`/target/${name}`))
+  assert.deepEqual(forkFileReferences(() => 'must-not-rebase-attachment').messages([calls[0]!]), [calls[0]])
+})
 function messages(declaration: Presentation): ModelMessage[] {
   return [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'delivery', toolName: 'Present', input: declaration }] },
     { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'delivery', toolName: 'Present', output: { type: 'text', value: JSON.stringify(declaration) } }] }]

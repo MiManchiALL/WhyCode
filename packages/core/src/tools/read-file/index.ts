@@ -1,84 +1,63 @@
-import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { z } from 'zod'
-import { unicodeSafePrefix } from '../../text.ts'
+import { attachmentReferenceId, fileReadKind, isAttachmentReference, parsePageRange } from '../../file-read.ts'
+import { PDF_VISUAL_MAX_PAGES } from '../../pdf/limits.ts'
 import { buildTool } from '../tool.ts'
-import { resolveAllowed } from '../fs-utils.ts'
-import { VIEW_IMAGE_TOOL_NAME } from '../view-image/prompt.ts'
-import { boundedLines } from './lines.ts'
+import { readImage, type ReadImageOptions } from './image.ts'
+import { readPdf, type ReadPdfOptions } from './pdf.ts'
+import { readText } from './text.ts'
+import { READ_FILE_TOOL_NAME, readFilePrompt } from './prompt.ts'
 
-export const READ_FILE_TOOL_NAME = 'ReadFile'
+export { READ_FILE_TOOL_NAME } from './prompt.ts'
 
-const MAX_LINES = 1_000
-const MAX_LINE_CHARS = 2_000
-const BINARY_PROBE_BYTES = 512
-
-async function isBinaryFile(path: string, io: WorkspaceIO): Promise<boolean> {
-  const handle = await io.fs.open(path, 'r')
-  try {
-    const buffer = Buffer.alloc(BINARY_PROBE_BYTES)
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-    return buffer.subarray(0, bytesRead).includes(0)
-  } finally {
-    await handle.close()
-  }
+export interface ReadFileToolOptions {
+  image?: ReadImageOptions
+  pdf?: ReadPdfOptions
 }
 
-export const readFileTool = buildTool({
-  name: READ_FILE_TOOL_NAME,
-  description: '按行流式读取文本文件',
-  prompt:
-    `读取允许范围内的 UTF-8 文本文件，返回带行号的内容。默认最多返回 1000 行；用 offset/limit 分段读取大文件。读取会在获得所需行后立即停止，不会把整个大文件载入内存；超长单行会安全截断。图片使用 ${VIEW_IMAGE_TOOL_NAME}；其它二进制和 PDF 请使用对应工具，不要当文本读取。`,
-  inputSchema: z.object({
-    path: z.string().describe('文件路径（项目内或经用户授权的绝对路径）'),
-    offset: z.number().int().min(1).optional().describe('起始行号，从 1 开始'),
-    limit: z.number().int().min(1).max(MAX_LINES).optional().describe('最多读取行数，最大 1000'),
-  }),
-  isReadOnly: true,
-  kind: 'read',
-  extractPaths: (input) => [input.path],
-  async execute(input, ctx) {
-    const io = ctx.workspaceIO ?? localWorkspaceIO
-    const absolute = await resolveAllowed(ctx, input.path)
-    if (await isBinaryFile(absolute, io)) {
-      return { data: `无法按文本读取二进制文件：${input.path}`, isError: true }
-    }
-
-    const startLine = input.offset ?? 1
-    const limit = input.limit ?? MAX_LINES
-    ctx.abortSignal.throwIfAborted()
-    const stream = io.fs.createReadStream(absolute, { encoding: 'utf8', signal: ctx.abortSignal })
-    const output: string[] = []
-    let lineNumber = 0
-    let hasMore = false
-
-    try {
-      for await (const line of boundedLines(stream, MAX_LINE_CHARS)) {
-        lineNumber++
-        if (lineNumber < startLine) continue
-        if (output.length >= limit) {
-          hasMore = true
-          break
+export function createReadFileTool(options: ReadFileToolOptions = {}) {
+  return buildTool({
+    name: READ_FILE_TOOL_NAME,
+    description: '读取文本、图片或 PDF 文件',
+    prompt: readFilePrompt(!!options.image, options.pdf?.supportsVisual),
+    inputSchema: z.strictObject({
+      path: z.string().min(1).describe('工作区相对路径、已授权的绝对路径，或当前会话提供的附件引用'),
+      offset: z.number().int().min(1).optional().describe('文本起始行号，从 1 开始（适合长文件）'),
+      limit: z.number().int().min(1).optional().describe('最多读取的文本行数（适合长文件）'),
+      pages: z.string().optional().describe('PDF 页码或连续页段，例如 "3"、"1-5"；最多 20 页'),
+    }).superRefine((input, ctx) => {
+      const kind = fileReadKind(input.path)
+      if (isAttachmentReference(input.path) && !attachmentReferenceId(input.path)) {
+        ctx.addIssue({ code: 'custom', path: ['path'], message: '附件引用必须使用 attachment:// 后接当前会话提供的附件 UUID' })
+      }
+      for (const key of ['offset', 'limit'] as const) {
+        if (kind !== 'text' && input[key] !== undefined) {
+          ctx.addIssue({ code: 'custom', path: [key], message: `${key} 仅用于文本文件` })
         }
-        const shown =
-          line.length > MAX_LINE_CHARS
-            ? `${unicodeSafePrefix(line, MAX_LINE_CHARS)}…[本行超过 ${MAX_LINE_CHARS} 字符，已截断]`
-            : line
-        output.push(`${String(lineNumber).padStart(5)}\t${shown}`)
       }
-    } finally {
-      stream.destroy()
-    }
+      if (input.pages !== undefined) {
+        const range = parsePageRange(input.pages)
+        if (kind !== 'pdf' || !range || range.pageCount > PDF_VISUAL_MAX_PAGES) {
+          ctx.addIssue({ code: 'custom', path: ['pages'], message: 'pages 仅用于 PDF，填写正整数页码或连续页段，每次最多 20 页' })
+        }
+      }
+    }),
+    isReadOnly: true,
+    kind: 'read',
+    extractPaths: (input) => isAttachmentReference(input.path) ? [] : [input.path],
+    async execute(input, ctx) {
+      ctx.abortSignal.throwIfAborted()
+      switch (fileReadKind(input.path)) {
+        case 'image':
+          if (!options.image) return { data: '当前模型或会话不支持读取图片', isError: true }
+          return readImage(input.path, options.image, ctx)
+        case 'pdf':
+          if (!options.pdf) return { data: '当前环境未提供 PDF 读取能力', isError: true }
+          return readPdf(input.path, input.pages === undefined ? undefined : parsePageRange(input.pages)!, options.pdf, ctx)
+        case 'text':
+          return readText(input, ctx)
+      }
+    },
+  })
+}
 
-    ctx.abortSignal.throwIfAborted()
-    if (output.length === 0) {
-      return {
-        data: lineNumber === 0 ? '（空文件）' : `（从第 ${startLine} 行起无内容；文件共 ${lineNumber} 行）`,
-        isError: false,
-      }
-    }
-    const note = hasMore
-      ? `\n[内容已截断，可用 offset=${startLine + output.length} 继续读取]`
-      : ''
-    return { data: output.join('\n') + note, isError: false }
-  },
-})
+export const readFileTool = createReadFileTool()

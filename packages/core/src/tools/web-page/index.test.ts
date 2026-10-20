@@ -139,7 +139,7 @@ describe('网页读取工具契约', () => {
     assert.deepEqual(result.pdfAttachments, [attachment])
     assert.match(result.data, /PDF 已保存为当前会话附件/)
     assert.match(result.data, new RegExp(attachment.id))
-    assert.match(result.data, /ReadPdf/)
+    assert.match(result.data, /ReadFile/)
     assert.doesNotMatch(result.data, /行范围|L1-L/)
     assert.doesNotMatch(result.data, /仅当最终交付|来源胶囊/)
   })

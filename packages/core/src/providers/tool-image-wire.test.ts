@@ -109,7 +109,7 @@ async function captureRequest(
     await assert.rejects(generateText({
       model: createModel(`http://127.0.0.1:${address.port}/v1`),
       messages,
-      tools: { ViewImage: { inputSchema: z.object({ path: z.string() }) } },
+      tools: { ReadFile: { inputSchema: z.object({ path: z.string() }) } },
       maxRetries: 0,
     }))
     assert.ok(body)
@@ -144,7 +144,7 @@ function canonicalHistory(): ModelMessage[] {
       content: [{
         type: 'tool-call',
         toolCallId: 'call-image',
-        toolName: 'ViewImage',
+        toolName: 'ReadFile',
         input: { path: 'screen.png' },
       }],
     },
@@ -153,7 +153,7 @@ function canonicalHistory(): ModelMessage[] {
       content: [{
         type: 'tool-result',
         toolCallId: 'call-image',
-        toolName: 'ViewImage',
+        toolName: 'ReadFile',
         output: {
           type: 'content',
           value: [

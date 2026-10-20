@@ -42,8 +42,8 @@ describe('子代理文档与视觉工具', () => {
         })
         await launch(fixture, role)
         const names = fixture.modelCalls[0]!.tools!.map((tool) => tool.name)
-        assert.ok(names.includes('ReadPdf'))
-        for (const name of ['CaptureScreenshot', 'ViewImage']) {
+        assert.ok(names.includes('ReadFile'))
+        for (const name of ['CaptureScreenshot']) {
           assert.equal(names.includes(name), visual, name)
         }
         assert.equal(names.includes('AnalyzeImage'), false)
@@ -61,8 +61,8 @@ describe('子代理文档与视觉工具', () => {
   it('文字子代理实际读取 PDF 文字，不生成图片或改写源文件', async () => {
     const documents = documentProcessors()
     const fixture = await createFixture([], async (index, call) => {
-      if (index === 0) return toolStream('ReadPdf', {
-        sourceType: 'path', sourceValue: 'paper.pdf', pageCount: 1,
+      if (index === 0) return toolStream('ReadFile', {
+        path: 'paper.pdf', pages: '1',
       }, 'pdf')
       assert.match(JSON.stringify(call.prompt), /第一页正文/)
       return finalStream('已核验文字和结构。')
@@ -80,8 +80,8 @@ describe('子代理文档与视觉工具', () => {
   it('视觉子代理的渲染、PDF 页图及截图归属自身，冷恢复仍能读取并展示', async () => {
     const documents = documentProcessors()
     const fixture = await createFixture([], async (index, call) => {
-      if (index === 0) return toolStream('ReadPdf', {
-        sourceType: 'path', sourceValue: 'paper.pdf', pageCount: 1,
+      if (index === 0) return toolStream('ReadFile', {
+        path: 'paper.pdf', pages: '1',
       }, 'pdf')
       if (index === 1) return toolStream('CaptureScreenshot', { target: 'window', window_title: '测试' }, 'capture')
       assert.ok(JSON.stringify(call.prompt).includes(SMALL_JPEG.toString('base64')))
@@ -123,8 +123,8 @@ describe('子代理文档与视觉工具', () => {
     let attachment: PdfAttachment | undefined
     const fixture = await createFixture([], async (index) => {
       if (index === 0) return toolStream('WebFetch', { url: 'https://example.test/paper.pdf' }, 'fetch')
-      if (index === 2) return toolStream('ReadPdf', {
-        sourceType: 'attachment', sourceValue: attachment!.id, pageCount: 1,
+      if (index === 2) return toolStream('ReadFile', {
+        path: `attachment://${attachment!.id}`, pages: '1',
       }, 'read-imported')
       return finalStream('完成。')
     }, undefined, {
@@ -172,15 +172,15 @@ describe('子代理文档与视觉工具', () => {
     const id = await launch(fixture)
     const storage = new SubagentStorage(fixture.sessionsRoot)
     const manifest = await storage.readManifest(fixture.parentJournal.sessionId, id)
-    manifest.definition.toolNames = ['ReadPdf']
+    manifest.definition.toolNames = ['ReadFile']
     await storage.writeManifest(manifest)
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     await tools[1]!.execute({ subagent_id: id, prompt: '继续' }, toolContext('next', 'next'))
     await waitFor(() => fixture.settlements.length === 2)
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
-    assert.ok(names.includes('ReadPdf'))
+    assert.ok(names.includes('ReadFile'))
     assert.ok(names.includes('CreateTaskPlan'))
-    for (const name of ['CaptureScreenshot', 'ViewImage', 'WebSearch', 'ReadFile']) {
+    for (const name of ['CaptureScreenshot', 'WebSearch']) {
       assert.equal(names.includes(name), false, name)
     }
     await fixture.service.close()
@@ -189,7 +189,7 @@ describe('子代理文档与视觉工具', () => {
   it('越界文件和截图沿用父会话审批，拒绝后不执行处理器', async () => {
     const documents = documentProcessors()
     const fixture = await createFixture([], async (index) => {
-      if (index === 0) return toolStream('ReadPdf', { sourceType: 'path', sourceValue: '../outside.pdf' }, 'pdf')
+      if (index === 0) return toolStream('ReadFile', { path: '../outside.pdf' }, 'pdf')
       if (index === 1) return toolStream('CaptureScreenshot', { target: 'screen' }, 'capture')
       return finalStream('权限不足。')
     }, undefined, { ...documents, supportsImageInput: true })
@@ -199,7 +199,7 @@ describe('子代理文档与视觉工具', () => {
       return { approved: false }
     }
     await launch(fixture)
-    assert.deepEqual(approvals.map((request) => request.toolName), ['ReadPdf', 'CaptureScreenshot'])
+    assert.deepEqual(approvals.map((request) => request.toolName), ['ReadFile', 'CaptureScreenshot'])
     assert.deepEqual(documents.operations, [])
     await fixture.service.close()
   })

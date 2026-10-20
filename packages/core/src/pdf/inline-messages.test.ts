@@ -103,7 +103,7 @@ describe('小 PDF 请求期页面图展开', () => {
     assert.ok(firstInline >= 0 && secondInline > firstInline)
   })
 
-  it('大 PDF 只保留稳定引用，等待模型按页调用 ReadPdf', async () => {
+  it('大 PDF 只保留稳定引用，等待模型按页调用 ReadFile', async () => {
     const root = await tempRoot()
     const attachment = pdfAttachment('44444444-4444-4444-8444-444444444444', 'large.pdf', 11)
     const messages: ModelMessage[] = [{
@@ -120,7 +120,7 @@ describe('小 PDF 请求期页面图展开', () => {
     assert.deepEqual(result, messages)
   })
 
-  it('远程 PDF 即使页数较少也统一等待 ReadPdf', async () => {
+  it('远程 PDF 即使页数较少也统一等待 ReadFile', async () => {
     const root = await tempRoot()
     const attachment: PdfAttachment = {
       ...pdfAttachment('88888888-8888-4888-8888-888888888888', 'remote.pdf', 2),

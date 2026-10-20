@@ -145,7 +145,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 消息顺序为：按 Main 相同规则投影的稳定消息快照、BBTW 侧历史（BTW 为空）、当前侧输入及其 `<whycode-btw version="1">` 内部 user 提醒。提醒是宿主状态，不是新的用户要求；工具续轮沿用原提醒，BBTW 重建每轮输入时保留提醒原位，再追加新输入与提醒。Skill 目录继续参与前缀投影，活动正文仍遵循根任务生命周期。停止轮次在原输入及提醒、已提交工具步骤和可用回复片段后追加与 Main 相同的中断标记。
 
-允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
+允许执行的工具限定为当前已装配的 ReadFile、ListDir、Glob、Grep、WebSearch、WebFetch、WebFind、Present，名单与提示词共用 `packages/core/src/prompts/btw.ts`。侧对话的 ReadFile 只读取文本，媒体附件不经侧对话工具步骤导入。其它工具在独占步骤、审批、任务状态及副作用边界之前拒绝，输出普通失败工具事件和对应结果交回模型；允许的工具沿用会话权限、授权记忆、宿主设置和现有模型停滞/工具循环检查，不新增侧对话专属执行上限。成功与失败结果均继续进入侧请求，直到模型交付正文或运行停止，并保留正常缓存写入策略供工具续轮和 BBTW 复用。侧请求不建立 Main turn、不修改 Main messages、不进入 TaskPlan、压缩或上下文用量。
 
 BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnIndex` 和 `mode`，以新的 canonical 输入身份替换旧输入并移除其后旧回复；编辑重发不增加侧链轮次。输出使用普通推理、正文和工具事件；`btw-input` 与 `btw-response` 是唯一持久事实，重放投影的用户消息必须为 `startsTurn=false` 并携带侧链身份。响应中的 `toolSteps` 只保存中间工具步骤的 canonical messages、推理耗时、失败调用 ID 与可选 PDF 元数据；Provider metadata 随消息保留，不另存一份展示事件。PDF 元数据必须属于该会话，Fork 时重定位，最终正文不重复写入工具步骤。
 
@@ -232,7 +232,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `ListDir` | `{path,offset?,limit?}`；有界目录分页 |
 | `Glob` | `{path,pattern,offset?,limit?}`；有界文件名匹配 |
 | `Grep` | `{path,pattern,outputMode?,include?,caseSensitive?,literal?,context?,offset?,limit?}` |
-| `ReadFile` | 路径加有界 offset/limit；只读 UTF-8/支持的文本 |
+| `ReadFile` | `path` 加可选 `offset`、`limit`、`pages`；统一读取文本、图片和 PDF |
 | `WriteFile` | `{path,content}`；只用于新建或整文件重写 |
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
 | `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元，支持二进制和大文件；文本预览与统计边界见文档二 §5.2 |
@@ -250,6 +250,8 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `ListSubagents` | `{}`；列出当前父会话保留子代理的 agent_id、稳定 ID、任务描述与状态 |
 
 `Glob` 与 `Grep` 每次执行共用 30 秒总预算，覆盖执行内的目录校验、搜索和回退；本地与 SSH 相同，不开放单次超时参数。到期取消搜索进程或匹配 Worker，返回明确的失败工具结果供模型继续处理；不把超时视为无匹配、成功的部分结果或用户停止，不取消所属 Agent 回合。原生搜索按路径排序以稳定分页；无路径分隔符的 glob 匹配各层文件名。
+
+`ReadFile` 的 `path` 接受工作区相对路径、已授权的绝对路径或当前会话提供的 `attachment://<UUID>` PDF 引用。文本返回带行号的 UTF-8 内容；省略 `offset`、`limit` 时尝试完整读取，单次输出受 256 KiB 和约 25,000 token 限制，超限明确失败并提示缩小范围。指定行范围可流式读取大文件，不静默截断字符或行；成功结果说明后续起始行。`offset`、`limit` 只用于文本，`pages` 只用于 PDF，错用参数明确拒绝。图片和 PDF 的返回方式见 §3.6–3.7。
 
 `RunCommand` 前台输出以 UTF-8 字节和行数双重约束，最多预览尾部 50 KiB、2000 行。未超限时直接返回文本，不创建日志；超限时返回 `command-output` JSON，schema 单源为 `tools/run-command/output-result.ts`，包含 `output`、`totalBytes`、`totalLines`，仅在完整写入并关闭文件后提供 `fullOutputPath`，终态或保存失败说明置于 `diagnostic`。预览保留完整字符与整行，EOF 的无换行末行可保留；超限单行整行省略，JSON 转义超过结果预算时继续省略最早整行，文件内容不受影响。模型可用 `ReadFile` 分页读取或 `Grep` 搜索日志；Renderer 按同一结构展示预览、路径与诊断。取消和超时仍可返回停止前已完整保存的输出，保存失败使工具失败且不声称日志完整；磁盘上的部分文件仍归会话清理。日志位置、背压与释放机制见文档二 §5.2、§7.2。
 
@@ -283,7 +285,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 - 用于搜索和核实公开网页的当前事实、官方资料和来源。模型记忆不能替代需要核实的事实，但已有充分依据且核实不实质提高可靠性时无需搜索。
 - 搜索后端、score 和厂商字段不进入模型 schema；结果按规范 URL 去重并提供可复用的引用链接。
 
-`WebFetch {url,offset?,limit?}` 只读取无需登录的公开 HTTP(S) 页面。已知 URL 直接读取，不先搜索；正文转为带稳定行号的 Markdown，单次最多 100 行/9k 字符，并返回总行数与下一 offset。命中 PDF 时导入为当前会话 PDF 附件，再用 `ReadPdf`。
+`WebFetch {url,offset?,limit?}` 只读取无需登录的公开 HTTP(S) 页面。已知 URL 直接读取，不先搜索；正文转为带稳定行号的 Markdown，单次最多 100 行/9k 字符，并返回总行数与下一 offset。命中 PDF 时导入为当前会话 PDF 附件，再用 `ReadFile`。
 
 `WebFind {url,pattern,context=2,max_results=10}` 只在本会话已缓存的同一 WebFetch 正文中做字面查找，不联网、不重新抓取、不查 PDF。
 
@@ -317,21 +319,21 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 - 单条用户消息最多 10 张 PNG/JPEG/WebP，与正文共享不可拆分 delivery ID。长期消息保存附件 ID/显示名/路由，不保存绝对路径或 Base64。
 - 普通上传图片的原生视觉消息只包含用户正文和按顺序排列的图片块，不附加文件名、附件 ID 或识图提醒；纯图片输入只包含图片块。网页引用保留批注、来源与定位上下文；非视觉 Main 的辅助识图请求提供可调用的附件 ID，包括从原生视觉历史切换模型后的请求。
-- `ViewImage` 读取当前工作区/权限允许的图片；SSH 路径指服务器文件。支持 high、经画像验证的 original 与 autoOrient 后源像素 region；结果返回模型到源图映射。
+- `ReadFile` 读取当前工作区/权限允许的 PNG、JPEG、WebP 图片；SSH 路径指服务器文件。图片固定使用 high 视觉内容，结果保留原图信息、模型副本与像素映射；不提供 detail 或 region 参数。非视觉模型、讨论和协议回合不开放此读取能力。
 - `CaptureScreenshot {target,display_id?,window_title?,window_id?,application_path?,region?,detail}`：target 为 screen/window，region 是 screen 的可选裁剪区域。window 截图至少提供完整标题 window_title 或候选结果中的 window_id；ID 优先，不猜测、不因失效而按标题回退。未找到或重名时返回候选身份，不按应用名称子串自动选窗。Windows 自动管理最小化/隐藏状态；提供 application_path 时该次调用只后台启动，不截图，不生成图片附件，无需提供标题或 ID。路径须为不含参数的 `.exe` 绝对路径；结果文字包含窗口候选，并要求下一次不带 application_path 选择已有窗口截图。进程归属、状态恢复、平台和静默边界见文档二 §10.1。
 - 截图可启动应用或临时改变窗口状态，按 execute 能力授权；只读档不可调用，全自动档直接执行，其余沿用首次截图隐私审批与应用路径权限检查。screen 仅用于检查桌面整体，默认主显示器；规范化时移除与所选 target 无关的字段，不将窗口捕获失败扩展成桌面截图。
 - 截图可与编辑、命令等工具出现在同一步，沿用 §3 的非只读执行屏障，按模型原调用顺序依次执行，不自动重排。需要验证操作结果时先操作、再截图；后台任务须先等待完成。各张图片绑定自己的工具结果，下一轮模型统一接收。
 - `AnalyzeImage {attachmentIds,question}` 只给非视觉 Main 且必须有有效辅助视觉连接；每次 1～10 张。辅助请求不接收主历史、项目、文件名、工具或密钥。
-- 用户输入最多 10 张；普通视觉工具和 MCP 在同一模型步骤合计最多 10 张，超限结果返回模型可见错误，后续步骤重新计数。单图尺寸与字节边界不随数量增加而放宽。视觉 `ReadPdf` 使用自身最多 20 页/32 MB 边界。
+- 用户输入最多 10 张；普通视觉工具和 MCP 在同一模型步骤合计最多 10 张，超限结果返回模型可见错误，后续步骤重新计数。单图尺寸与字节边界不随数量增加而放宽。`ReadFile` 的 PDF 视觉结果使用自身最多 20 页/32 MB 边界。
 - Base64 只存在于无路径剪贴板发送前和当前 Provider 内存请求；JSONL、CoreEvent、ViewEvent 与摘要只保存稳定引用。
 
 ### 3.7 PDF
 
-`ReadPdf {sourceType,sourceValue,startPage,pageCount}`：sourceType 为 attachment 或 path；视觉模型返回 100 DPI JPEG 页面图，默认/最多 20 页；非视觉模型返回文字，默认 5、最多 20 页且总计最多 60k 字符。结果始终含总页数、当前页段和下一页游标。
+`ReadFile` 读取 PDF 时用 `path` 提供文件路径或附件引用，`pages` 可指定单页或连续页段（如 `"3"`、`"1-5"`），每次最多 20 页。省略 `pages` 时从第 1 页开始：视觉模型返回 100 DPI JPEG 页面图，最多 20 页；非视觉模型返回文字，最多 5 页且总计最多 60k 字符。结果说明实际读取页段、总页数和后续起始页，不生成下一次调用的固定页段。
 
-`path` 按当前工作区寻址，SSH 会话从服务器读取且仍受项目与附加目录权限限制；远端源文件不超过既有 `PDF_ATTACHMENT_MAX_SOURCE_BYTES`。`attachment` 始终引用当前会话在本机保存的附件 ID。远端读取与本机处理的生命周期见文档二 §10.2。
+`path` 按当前工作区寻址，SSH 会话从服务器读取且仍受项目与附加目录权限限制；远端源文件不超过既有 `PDF_ATTACHMENT_MAX_SOURCE_BYTES`。`attachment://<UUID>` 只解析当前会话仍有效的 PDF 附件，在本机读取保存的源文件。上传与 WebFetch 结果提供该引用，压缩后由应用重注入。远端读取与本机处理的生命周期见文档二 §10.2。
 
-小 PDF 自动展开只适用于视觉 Main、用户上传的最近权威引用，单份和单请求均最多 10 页、总图 16 MB。Web 导入、大文件或超预算文件必须显式 `ReadPdf`。PDF 与页面缓存以附件摘要和事务校验；损坏、加密、空或越界输入明确失败。
+小 PDF 自动展开只适用于视觉 Main、用户上传的最近权威引用，单份和单请求均最多 10 页、总图 16 MB。Web 导入、大文件或超预算文件必须显式 `ReadFile`。PDF 与页面缓存以附件摘要和事务校验；损坏、加密、空或越界输入明确失败。
 
 ### 3.8 工作区依赖与 Office 命令
 
@@ -341,7 +343,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 - `NODE RUN script.mjs [arguments]`：使用正常 Node 权限运行工作区脚本并透传参数，提供 docx、pptxgenjs、exceljs、jszip、fast-xml-parser 和 sharp 的包解析；裸 Node 不启用该解析。入口只接受脚本文件，`-e/--eval` 等参数返回非零退出码与写入 `.mjs` 后执行的用法，`--help` 可查看说明。输入素材和输出由脚本处理；沿用命令审批、取消、超时和结果回传，不建立专用 Office 发布事务或隐式检查点。
 - `NODE CHECK file [--contains TEXT] [--count N] [--sheet NAME] [--offset N --limit N] [--require-calculated]`：验证有界 ZIP/XML 与内部关系，返回 JSON 内容摘要及错误。`--offset` 为从 0 开始的非负整数；`--limit` 为 1～50 的整数，默认 20，正文预览约 60k 字符。DOCX 单位为段落，PPTX 为幻灯片，XLSX 为工作表；unitCount 为总数，继续位置使用 nextOffset。`--count` 断言整份文档的总单位数，不控制分页；未知文档直接读取，不猜测数量或添加内容断言。参数校验在打开文件前完成，错误指出参数及允许范围，`--help` 提供完整用法。每表最多展示 200 个单元格，公式计数、错误和缺失结果核对覆盖全表。失败非零退出；输入不超过 100 MiB、包不超过 10000 文件、展开不超过 128 MiB、单个 XML 不超过 16 MiB。
-- `NODE OFFICE render --input FILE --output-dir NEW_DIR [--pages 1,2] [--sheet NAME --range A1:D20]`：调用 LibreOffice Kit 生成 PNG 与清单；模型用通用 `ViewImage` 查看页图。
+- `NODE OFFICE render --input FILE --output-dir NEW_DIR [--pages 1,2] [--sheet NAME --range A1:D20]`：调用 LibreOffice Kit 生成 PNG 与清单；模型用通用 `ReadFile` 查看页图。
 - `NODE MONTAGE --output NEW.png [--columns N] [--label TEXT ...] IMAGE ...`：按参数顺序拼接 1～36 张单帧 PNG/JPEG/WebP，默认列数为图片数平方根向上取整。单图最多 20 MiB、2000 万像素、单边 8192，输出 PNG 最长边 2048，保留比例并按需留白；每张缩放与最终合成各限时 15 秒，整个命令沿用 RunCommand 超时和取消。默认标注编号与文件名；自定义标签须与输入一一对应，每条 1～160 字符。JSON 返回输出尺寸、行列和完整来源映射，已有输出不覆盖。Skill 建议按任务和清晰度灵活分组，常用 4 张（2×2）或 9 张（3×3），需要细节时减少分组或查看原图、局部。
 - `NODE OFFICE convert --input FILE --output FILE` 与 `recalculate`：转换格式或实际重算并另存工作簿，失败返回非零退出码与 JSON 原因。默认 120 秒，允许设置 1–600 秒；输入和输出各限 100 MiB、最多 10000 归档条目、展开最多 250 MiB，沿用引擎的其它限制。可用 `--font-directory` 选择现有字体目录。
 
@@ -470,9 +472,9 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
 
-内置 Explore、Reviewer、General 均可用 `ReadPdf`；具备视觉能力时提供 `ViewImage`、视觉 `ReadPdf` 与本地 `CaptureScreenshot`。Reviewer 和 General 加载内置 Office Skill 时可自动准备环境，再通过命令执行工作流；Explore 没有命令权限，只获得环境未准备的说明。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
+内置 Explore、Reviewer、General 均可用 `ReadFile` 读取文本与 PDF；具备视觉能力时可读取图片与 PDF 页面图，并提供本地 `CaptureScreenshot`。Reviewer 和 General 加载内置 Office Skill 时可自动准备环境，再通过命令执行工作流；Explore 没有命令权限，只获得环境未准备的说明。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
 
-文档委派提供可访问的文件路径；父会话的 PDF 附件 ID 不能直接作为子代理附件使用。子代理自己通过 WebFetch 导入的 PDF 属于其独立会话，可经 `ReadPdf` 读取并在后续激活中继续使用。无法查看页面图时，只报告文字或结构证据，视觉核验交给具备相应能力的代理。
+文档委派提供可访问的文件路径；父会话的 PDF 附件引用不能直接作为子代理附件使用。子代理自己通过 WebFetch 导入的 PDF 属于其独立会话，可经 `ReadFile` 读取并在后续激活中继续使用。无法查看页面图时，只报告文字或结构证据，视觉核验交给具备相应能力的代理。
 
 新建子代理的模型在宿主创建边界冻结：未固定时继承父会话当前模型，固定时只能引用当前已配置连接；推理档位收敛到目标模型能力闭集。后续 continuation 使用 manifest 中的原模型快照，不重新继承父模型或读取新的全局选择。
 

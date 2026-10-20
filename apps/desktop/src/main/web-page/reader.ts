@@ -72,7 +72,7 @@ export function createWebPageReader(options: WebPageReaderOptions): WebPageReade
     const requestedUrl = parseWebPageUrl(request.url).toString()
     const page = getCachedPage(cache, requestedUrl, now())
     if (!page) {
-      throw new WebPageError('当前会话没有这个文本网页的有效缓存；请先使用 WebFetch 读取同一 URL，若结果是 PDF 则改用 ReadPdf')
+      throw new WebPageError('当前会话没有这个文本网页的有效缓存；请先使用 WebFetch 读取同一 URL，若结果是 PDF 则改用 ReadFile')
     }
     const pattern = request.pattern.toLowerCase()
     const matches: WebFindMatch[] = []

@@ -71,7 +71,7 @@ describe('内置 Skill 安装与发现', () => {
         const main = await readFile(join(installed.rootPath, skillName, 'SKILL.md'), 'utf8')
         assert.match(main, /正文末尾追加本次运行环境声明/)
         assert.match(main, /RunCommand/)
-        assert.match(main, /ViewImage/)
+        assert.match(main, /ReadFile/)
         const reference = await createSkillTool(snapshot).execute({
           skillId: skill.id, resourcePath: 'references/commands.md',
         }, { projectDir: home, additionalDirs: [], abortSignal: new AbortController().signal })

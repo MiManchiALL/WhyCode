@@ -68,8 +68,8 @@ import {
   type ImageDeliveryMode,
   type ImageTransform,
 } from '../attachments/types.ts'
-import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
-import { createViewImageTool } from '../tools/view-image/index.ts'
+import { createReadFileTool, readFileTool, READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
+import { fileReadKind } from '../file-read.ts'
 import { createAnalyzeImageTool } from '../tools/analyze-image/index.ts'
 import type { AuxiliaryImageAnalyzer } from '../auxiliary/image-analysis.ts'
 import {
@@ -95,7 +95,6 @@ import {
   adaptMessagesForProvider,
   normalizeResponseMessagesForProvider,
 } from '../providers/message-adapter.ts'
-import { createReadPdfTool, READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
 import { TaskPlanController } from '../tasks/controller.ts'
 import { LoopHealthMonitor } from '../tasks/loop-health.ts'
 import {
@@ -200,6 +199,8 @@ interface ToolStepContext {
   onToolExecutionStart?: (toolCallId: string) => Promise<void>
   onToolExecutionEnd?: (event: ToolEndEvent) => Promise<string>
   allowedToolNames?: ReadonlySet<string>
+  /** 侧对话保留原有的文本文件读取边界，不创建视觉工具附件。 */
+  textOnlyFileReads?: boolean
   planExecutionEngaged?: boolean
   onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
   onUserQuestion?: (question: UserQuestion) => void
@@ -231,7 +232,7 @@ export interface AgentSessionOptions {
   /** Electron 等宿主注入的桌面采集能力；Core 不依赖具体窗口系统。 */
   captureScreenshot?: ScreenshotCaptureHandler
   browser?: BrowserDriver
-  /** 宿主注入的隔离 PDF 处理端口；未提供时物理移除 ReadPdf。 */
+  /** 宿主注入的隔离 PDF 处理端口；未提供时 ReadFile 不开放 PDF 读取。 */
   pdfProcessor?: PdfProcessor
   /** 非视觉 Main 可按需调用的独立识图模型；视觉 Main 不装配对应工具。 */
   auxiliaryImageAnalyzer?: AuxiliaryImageAnalyzer
@@ -406,7 +407,7 @@ export class AgentSession {
   private recentReadFiles = new Map<string, number>()
   /** 用户输入与图片工具导入的权威附件元数据；长期消息只保存其稳定引用。 */
   private imageAttachments = new Map<string, ImageAttachment>()
-  /** 用户上传 PDF 的权威元数据；ReadPdf 只通过此表解析不透明 ID。 */
+  /** 用户上传 PDF 的权威元数据；ReadFile 只通过此表解析不透明 ID。 */
   private pdfAttachments = new Map<string, PdfAttachment>()
   /** 当前模型活动历史或待处理输入仍引用的 PDF；回滚后不得重新注入已离开分支的附件。 */
   private activePdfAttachmentIds = new Set<string>()
@@ -872,6 +873,7 @@ export class AgentSession {
           emit,
           loopHealth,
           allowedToolNames: BTW_TOOL_NAMES,
+          textOnlyFileReads: true,
           onToolExecutionStart: (id) => toolExecution!.start(id),
           onToolExecutionEnd: (event) => toolExecution!.finish(event),
           onPdfAttachments: (id, attachments) =>
@@ -1189,7 +1191,7 @@ export class AgentSession {
     this.taskPlan?.restore(recorder.initialTaskState)
     this.rebuildActivePdfAttachments()
     // 原消息的附件不在回滚前缀中；按普通根输入的同一路径重新登记，尤其要让
-    // ReadPdf 在编辑后的首个模型步骤仍能读取原附件。
+    // ReadFile 在编辑后的首个模型步骤仍能读取原附件。
     this.addImageAttachments(resources.attachments)
     this.addPdfAttachments(resources.pdfAttachments)
     this.tokenBaseline = null
@@ -2925,61 +2927,35 @@ export class AgentSession {
             sessionId: this.options.sessionRecorder.sessionId, supportsImages: model.capabilities.supportsImageInput })]
         : []),
     ]
-    const imageTools: ToolDefinition[] =
-      model.capabilities.supportsImageInput
-      && this.options.sessionRecorder
-      && !this.options.promptContext.discussion
-      && !this.protocolRound
-        ? [
-            createViewImageTool({
-              attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
-              sessionId: this.options.sessionRecorder.sessionId,
-              supportsOriginalDetail:
-                model.capabilities.supportsOriginalImageDetail === true,
-            }),
-            ...(this.options.captureScreenshot
-              ? [createCaptureScreenshotTool({
-                  attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
-                  sessionId: this.options.sessionRecorder.sessionId,
-                  capture: this.options.captureScreenshot,
-                  supportsOriginalDetail:
-                    model.capabilities.supportsOriginalImageDetail === true,
-                })]
-              : []),
-          ]
-        : []
-    const auxiliaryImageTools = this.buildAuxiliaryImageTools()
-    const pdfTools: ToolDefinition[] =
-      this.options.pdfProcessor
-      && this.options.sessionRecorder
-      && !this.options.promptContext.discussion
-      && !this.protocolRound
-        ? [createReadPdfTool({
-            attachmentDirectory: this.options.sessionRecorder.attachmentDirectory,
-            sessionId: this.options.sessionRecorder.sessionId,
-            processor: this.options.pdfProcessor,
-            supportsVisual: model.capabilities.supportsImageInput,
-            resolveAttachment: (attachmentId) => {
-              const attachment = this.pdfAttachmentById(attachmentId)
-              return attachment
-                ? {
-                    attachment,
-                    path: pdfAttachmentPath(
-                      this.options.sessionRecorder!.attachmentDirectory,
-                      attachment.storageName,
-                    ),
-                  }
-                : null
-            },
-            resolvePageImage: (attachmentId, pageNumber) =>
-              this.pdfPageImage(attachmentId, pageNumber),
-          })]
-        : []
+    const recorder = this.options.sessionRecorder
+    const canReadMedia = !!recorder && !this.options.promptContext.discussion && !this.protocolRound
+    const image = canReadMedia && model.capabilities.supportsImageInput
+      ? { attachmentDirectory: recorder.attachmentDirectory, sessionId: recorder.sessionId }
+      : undefined
+    const fileReader = createReadFileTool({
+      image,
+      pdf: canReadMedia && this.options.pdfProcessor ? {
+        attachmentDirectory: recorder.attachmentDirectory,
+        sessionId: recorder.sessionId,
+        processor: this.options.pdfProcessor,
+        supportsVisual: model.capabilities.supportsImageInput,
+        resolveAttachment: (attachmentId) => {
+          const attachment = this.pdfAttachmentById(attachmentId)
+          return attachment
+            ? { attachment, path: pdfAttachmentPath(recorder.attachmentDirectory, attachment.storageName) }
+            : null
+        },
+        resolvePageImage: (attachmentId, pageNumber) => this.pdfPageImage(attachmentId, pageNumber),
+      } : undefined,
+    })
     const defs: ToolDefinition[] = [
-      ...(this.options.baseTools ?? BUILTIN_TOOLS),
-      ...imageTools,
-      ...auxiliaryImageTools,
-      ...pdfTools,
+      ...(this.options.baseTools ?? BUILTIN_TOOLS).map(def => def === readFileTool ? fileReader : def),
+      ...(image && this.options.captureScreenshot ? [createCaptureScreenshotTool({
+        ...image,
+        capture: this.options.captureScreenshot,
+        supportsOriginalDetail: model.capabilities.supportsOriginalImageDetail === true,
+      })] : []),
+      ...this.buildAuxiliaryImageTools(),
       ...controlTools,
     ]
     const subagentTools = this.options.promptContext.subagent?.toolNames
@@ -3050,6 +3026,12 @@ export class AgentSession {
         if (!parsed.success) {
           const msg = `参数校验失败：${parsed.error.message}`
           loopHealth.record(def.name, input, msg, true)
+          return () => finishTool(toolCallId, msg, true)
+        }
+        if (context.textOnlyFileReads && def.name === READ_FILE_TOOL_NAME
+          && fileReadKind((parsed.value as { path: string }).path) !== 'text') {
+          const msg = '侧对话的 ReadFile 只支持读取文本文件'
+          loopHealth.record(def.name, parsed.value, msg, true)
           return () => finishTool(toolCallId, msg, true)
         }
 
@@ -3180,6 +3162,9 @@ export class AgentSession {
                 : '当前工具步骤无法接收 PDF 附件'
               if (error) result = { data: error, isError: true }
             }
+            const readKind = def.name === READ_FILE_TOOL_NAME
+              ? fileReadKind((parsed.value as { path: string }).path)
+              : undefined
             let viewedAttachments: readonly ImageAttachment[] = []
             if (result.attachments?.length) {
               const error = context.onImageAttachments
@@ -3187,18 +3172,18 @@ export class AgentSession {
                   toolCallId,
                   result.attachments,
                   result.imageTransform,
-                  def.name === READ_PDF_TOOL_NAME
+                  readKind === 'pdf'
                     ? PDF_VISUAL_MAX_PAGES
                     : TOOL_IMAGE_ATTACHMENT_MAX_COUNT,
                 )
                 : '当前工具步骤无法接收图片附件'
               if (error) result = { data: error, isError: true }
-              else if (!result.isError && def.name !== READ_PDF_TOOL_NAME) {
+              else if (!result.isError && readKind !== 'pdf') {
                 viewedAttachments = result.attachments
               }
             }
             // 记录读过的文件（压缩后重注入，防失忆）
-            if (def.name === READ_FILE_TOOL_NAME && !result.isError) {
+            if (readKind === 'text' && !result.isError) {
               try {
                 const abs = await resolveAllowed(toolCtx, (parsed.value as { path: string }).path)
                 context.onReadFile?.(abs)

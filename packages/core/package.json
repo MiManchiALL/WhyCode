@@ -13,6 +13,7 @@
     "./events": "./src/events.ts",
     "./presentation": "./src/presentation.ts",
     "./web-source": "./src/web-source.ts",
+    "./file-read": "./src/file-read.ts",
     "./document-formats": "./src/document-formats.ts",
     "./image-limits": "./src/attachments/limits.ts",
     "./browser-reference": "./src/attachments/browser-reference.ts",

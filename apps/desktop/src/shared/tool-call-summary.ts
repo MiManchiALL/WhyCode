@@ -1,6 +1,7 @@
 import { readPresentationResult } from '@whycode/core/presentation'
 import { readCommandOutputResult, commandOutputDetails } from '@whycode/core/command-output'
 import type { SkillSummary } from '@whycode/core/skills'
+import { attachmentReferenceId, fileReadKind, parsePageRange } from '@whycode/core/file-read'
 import { genericToolSummary } from './tool-call-summary-fallback.ts'
 
 const SUMMARY_MAX_CHARS = 420
@@ -51,6 +52,8 @@ function knownToolSummary(
 ): string | ToolCallSummary | null {
   switch (toolName) {
     case 'ReadFile':
+      if (fileReadKind(text(input, 'path')) === 'image') return join(text(input, 'path'), 'high')
+      if (fileReadKind(text(input, 'path')) === 'pdf') return readPdfSummary(input)
       return join(text(input, 'path'), lineRange(input, 'offset', 'limit'))
     case 'ListDir':
       return text(input, 'path') || context.projectDir || '.'
@@ -86,8 +89,6 @@ function knownToolSummary(
       return join(text(input, 'url'), lineRange(input, 'offset', 'limit'))
     case 'WebFind':
       return join(quote(text(input, 'pattern')), text(input, 'url'))
-    case 'ViewImage':
-      return join(text(input, 'path'), imageRegionSummary(input.region), detailSummary(input))
     case 'AnalyzeImage':
       return {
         primary: inlineText(input.question),
@@ -97,8 +98,6 @@ function knownToolSummary(
       return screenshotSummary(input)
     case 'Browser':
       return text(input, 'description') || (text(input, 'code') ? '操作网页' : '加载浏览器指引')
-    case 'ReadPdf':
-      return join(pdfSourceSummary(input), pageRange(input, 'startPage', 'pageCount'))
     case 'Skill':
       return skillSummary(input, context)
     case 'Present':
@@ -236,11 +235,14 @@ function screenshotSummary(input: ToolInput): string {
   return target
 }
 
-function pdfSourceSummary(input: ToolInput): string {
-  const source = text(input, 'sourceValue')
-  return input.sourceType === 'attachment'
-    ? prefixed('attachment', shortId(source))
-    : source
+function readPdfSummary(input: ToolInput): string {
+  const path = text(input, 'path')
+  const id = attachmentReferenceId(path)
+  const source = id ? prefixed('attachment', shortId(id)) : path
+  const range = parsePageRange(text(input, 'pages'))
+  return join(source, range
+    ? `pages ${range.startPage}–${range.startPage + range.pageCount - 1}`
+    : 'from page 1')
 }
 
 function skillSummary(input: ToolInput, context: ToolCallSummaryContext): string {
@@ -301,37 +303,12 @@ function lineRange(input: ToolInput, startKey: string, countKey: string): string
   return `first ${count} lines`
 }
 
-function pageRange(input: ToolInput, startKey: string, countKey: string): string {
-  const start = number(input, startKey)
-  const count = number(input, countKey)
-  if (start === null && count === null) return ''
-  const first = start ?? 1
-  if (count !== null) return `pages ${first}–${first + count - 1}`
-  return `from page ${first}`
-}
-
-function imageRegionSummary(value: unknown): string {
-  const region = record(value)
-  if (!region) return ''
-  const x = number(region, 'x')
-  const y = number(region, 'y')
-  const width = number(region, 'width')
-  const height = number(region, 'height')
-  if ([x, y, width, height].some((item) => item === null)) return ''
-  return `crop ${x},${y} ${width}×${height}`
-}
-
 function imageRegionSize(value: unknown): string {
   const region = record(value)
   if (!region) return ''
   const width = number(region, 'width')
   const height = number(region, 'height')
   return width === null || height === null ? '' : `${width}×${height}`
-}
-
-function detailSummary(input: ToolInput): string {
-  const detail = text(input, 'detail')
-  return detail === 'original' || detail === 'high' ? detail : ''
 }
 
 function taskId(input: ToolInput): string {

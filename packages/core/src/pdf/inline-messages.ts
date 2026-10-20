@@ -65,7 +65,7 @@ export async function inlineSmallPdfMessages(
         ...(appended.get(selection.messageIndex) ?? []),
         {
           type: 'text',
-          text: '[PDF 自动展开失败；请调用 ReadPdf 按页读取。]',
+          text: '[PDF 自动展开失败；请调用 ReadFile 按页读取。]',
         },
       ])
     }
