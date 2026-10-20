@@ -29,10 +29,10 @@ export function createImageUserMessage(
       ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
       ...attachments.flatMap((attachment, index) => deliveryMode === 'native'
         ? [
-            {
+            ...(attachment.source?.kind === 'browser-reference' ? [{
               type: 'text' as const,
               text: imageContext(attachment, index),
-            },
+            }] : []),
             {
               type: 'file' as const,
               data: createImageAttachmentReference(attachment.storageName),
@@ -65,7 +65,9 @@ export async function messagesForModel(
 ): Promise<ModelMessage[]> {
   if (!supportsImageInput) {
     return messages.map((message) =>
-      stripImagesForNonVisualModel(message, auxiliaryImageAnalysisAvailable))
+      stripImagesForNonVisualModel(
+        message, auxiliaryImageAnalysisAvailable, attachmentMetadata ?? [],
+      ))
   }
   if (!hasStoredImageReferences(messages)) return [...messages]
   if (!attachmentDirectory) throw new Error('视觉模型请求缺少会话附件目录')
@@ -80,6 +82,7 @@ export async function messagesForModel(
 function stripImagesForNonVisualModel(
   message: ModelMessage,
   auxiliaryImageAnalysisAvailable: boolean,
+  attachmentMetadata: readonly ImageAttachment[],
 ): ModelMessage {
   if (message.role === 'user' && typeof message.content !== 'string') {
     let hiddenImages = 0
@@ -91,11 +94,17 @@ function stripImagesForNonVisualModel(
       return [part]
     })
     if (hiddenImages > 0) {
+      const attachmentIds = auxiliaryImageAnalysisAvailable
+        ? [...referencedImageAttachmentIds([message], attachmentMetadata)]
+        : []
       content.push({
         type: 'text',
-        text: auxiliaryImageAnalysisAvailable
-          ? `[该消息包含 ${hiddenImages} 张图片；主模型不直接接收像素，需要时请按消息中的附件 ID 调用 AnalyzeImage。]`
-          : `[该消息包含 ${hiddenImages} 张图片；当前模型不支持识图，图片内容不可见。]`,
+        text: [
+          auxiliaryImageAnalysisAvailable
+            ? `[该消息包含 ${hiddenImages} 张图片；主模型不直接接收像素，需要时请按消息中的附件 ID 调用 AnalyzeImage。]`
+            : `[该消息包含 ${hiddenImages} 张图片；当前模型不支持识图，图片内容不可见。]`,
+          ...attachmentIds.map((id) => `[附件 ID：${id}]`),
+        ].join('\n'),
       })
     }
     return { ...message, content }

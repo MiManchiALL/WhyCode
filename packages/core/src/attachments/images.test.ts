@@ -247,7 +247,23 @@ describe('图片附件', () => {
 
       const request = await messagesForModel(persisted, true, attachments, imported)
       assert.match(JSON.stringify(request), /iVBORw0KGgo/)
+      const message = request[0]!
+      assert.ok(message.role === 'user' && Array.isArray(message.content))
+      assert.deepEqual(message.content.map((part) => part.type), ['text', 'file'])
+      assert.deepEqual(message.content.filter((part) => part.type === 'text'), [
+        { type: 'text', text: '分析截图' },
+      ])
       assert.match(JSON.stringify(runtime), /whycode-attachment-ref:v1:/)
+      const nonVisualRequest = await messagesForModel(
+        persisted, false, undefined, imported, undefined, true,
+      )
+      const nonVisualMessage = nonVisualRequest[0]!
+      assert.ok(nonVisualMessage.role === 'user' && Array.isArray(nonVisualMessage.content))
+      assert.equal(nonVisualMessage.content.every((part) => part.type === 'text'), true)
+      assert.match(JSON.stringify(nonVisualMessage), new RegExp(imported[0]!.id))
+      assert.match(JSON.stringify(nonVisualMessage), /AnalyzeImage/)
+      assert.doesNotMatch(JSON.stringify(nonVisualMessage), /whycode-attachment-ref|iVBORw0KGgo/)
+      assert.deepEqual(persisted, runtime)
       await assert.rejects(
         messagesForModel(persisted, true, attachments, []),
         /缺少权威元数据/,
@@ -294,6 +310,12 @@ describe('图片附件', () => {
         false,
       )
       assert.doesNotMatch(JSON.stringify(message), /请分析这些图片/)
+      if (mode === 'native') {
+        assert.deepEqual(message.content.map((part) => part.type), ['file'])
+      } else {
+        assert.match(JSON.stringify(message), new RegExp(attachment.id))
+        assert.match(JSON.stringify(message), /AnalyzeImage/)
+      }
     }
   })
 
