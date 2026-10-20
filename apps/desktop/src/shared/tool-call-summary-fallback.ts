@@ -1,3 +1,5 @@
+import type { ToolCallSummary } from './tool-call-summary.ts'
+
 const DYNAMIC_VALUE_MAX_CHARS = 180
 
 type ToolInput = Record<string, unknown>
@@ -8,12 +10,12 @@ const PRIORITY_KEYS = [
 ]
 
 /** 动态 MCP / Provider 工具没有本地语义契约，只投影前两个有用且非敏感参数。 */
-export function genericToolSummary(input: ToolInput): string {
+export function genericToolSummary(input: ToolInput): ToolCallSummary {
   const entries = Object.entries(input)
     .filter(([key, value]) => !isSensitiveKey(key) && displayValue(value) !== '')
     .sort(([left], [right]) => keyPriority(left) - keyPriority(right))
     .slice(0, 2)
-  return entries.map(([key, value]) => `${key}: ${displayValue(value)}`).join(' · ')
+  return { parts: entries.map(([key, value]) => ({ text: `${key}: ${displayValue(value)}` })), separator: ' · ' }
 }
 
 function displayValue(value: unknown): string {

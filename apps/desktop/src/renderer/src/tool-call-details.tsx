@@ -29,7 +29,7 @@ export function ToolCallDetails({
     const preview = file ?? (call.name === 'WriteFile'
       ? toolCallFileRows(call, projectDir)[0]
       : undefined)
-    if (preview?.fullPath) {
+    if (preview?.fullPath && preview.summary) {
       return (
         <InlineFileChange
           runtimeId={runtimeId}

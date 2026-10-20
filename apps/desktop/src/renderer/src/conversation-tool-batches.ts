@@ -6,6 +6,7 @@ import {
   summarizeToolCallParts,
   toolCallFilePaths,
   toolCallMoveSource,
+  type ToolCallSummary,
 } from '../../shared/tool-call-summary.ts'
 
 export type ToolBlock = Extract<Block, { kind: 'tool' }>
@@ -54,7 +55,7 @@ export interface ToolFileRow {
 export interface ToolBatchRow extends Partial<ToolFileRow> {
   id: string
   call: ToolCall
-  summary: string
+  parameters?: ToolCallSummary
   checkpointAnchor: boolean
 }
 
@@ -175,13 +176,17 @@ export function toolBatchRows(
     checkpointRestoreAnchorIds: ReadonlySet<string>
   },
 ): ToolBatchRow[] {
-  return batch.tools.flatMap(({ call }) => {
+  return batch.tools.flatMap<ToolBatchRow>(({ call }) => {
     const files = toolCallFileRows(call, context.projectDir)
     if (files.length === 0) {
       return [{
         id: `${batch.id}:row:${call.id}`,
         call,
-        summary: toolSummary(call, context),
+        parameters: summarizeToolCallParts(call.name, call.input, {
+          result: call.result,
+          skills: context.skills,
+          projectDir: context.projectDir,
+        }),
         checkpointAnchor: context.checkpointRestoreAnchorIds.has(call.id),
       }]
     }
@@ -292,18 +297,6 @@ function appendThinkingText(current: string, next: string): string {
     return current + next
   }
   return `${current}\n\n${next}`
-}
-
-function toolSummary(
-  call: ToolCall,
-  context: { skills: readonly SkillSummary[]; projectDir: string | null },
-): string {
-  const summary = summarizeToolCallParts(call.name, call.input, {
-    result: call.result,
-    skills: context.skills,
-    projectDir: context.projectDir,
-  })
-  return [summary.primary, summary.trailing].filter(Boolean).join(' · ')
 }
 
 function pathKey(path: string): string {

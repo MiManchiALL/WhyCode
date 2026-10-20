@@ -9,8 +9,13 @@ const VALUE_MAX_CHARS = 180
 type ToolInput = Record<string, unknown>
 
 export interface ToolCallSummary {
-  primary: string
-  trailing: string
+  parts: ToolSummaryPart[]
+  separator: string
+}
+
+export interface ToolSummaryPart {
+  text: string
+  fixed?: boolean
 }
 
 interface ToolCallSummaryContext {
@@ -29,20 +34,20 @@ export function summarizeToolCall(
   context: ToolCallSummaryContext = {},
 ): string {
   const summary = summarizeToolCallParts(toolName, input, context)
-  return join(summary.primary, summary.trailing)
+  return summary.parts.map(part => part.text).join(summary.separator)
 }
 
-/** 尾部信息单独返回，工具卡可以在主内容省略时仍完整保留时间范围或数量。 */
+/** 保留参数边界，让每项独立省略，避免长路径吞掉行数、范围或其它参数。 */
 export function summarizeToolCallParts(
   toolName: string,
   input: unknown,
   context: ToolCallSummaryContext = {},
 ): ToolCallSummary {
   const value = record(input)
-  if (!value) return boundedSummary(primitiveSummary(input))
+  if (!value) return boundedSummaryParts(parts(primitiveSummary(input)))
 
   const summary = knownToolSummary(toolName, value, context) ?? genericToolSummary(value)
-  return typeof summary === 'string' ? boundedSummary(summary) : boundedSummaryParts(summary)
+  return boundedSummaryParts(typeof summary === 'string' ? parts(summary) : summary)
 }
 
 function knownToolSummary(
@@ -52,15 +57,15 @@ function knownToolSummary(
 ): string | ToolCallSummary | null {
   switch (toolName) {
     case 'ReadFile':
-      if (fileReadKind(text(input, 'path')) === 'image') return join(text(input, 'path'), 'high')
-      if (fileReadKind(text(input, 'path')) === 'pdf') return readPdfSummary(input)
-      return join(text(input, 'path'), lineRange(input, 'offset', 'limit'))
+      if (fileReadKind(exactText(input, 'path')) === 'image') return parts(text(input, 'path'), fixed('high'))
+      if (fileReadKind(exactText(input, 'path')) === 'pdf') return readPdfSummary(input)
+      return parts(text(input, 'path'), fixed(lineRange(input, 'offset', 'limit')))
     case 'ListDir':
       return text(input, 'path') || context.projectDir || '.'
     case 'Glob':
-      return join(quote(text(input, 'pattern')), text(input, 'path') || context.projectDir || '.')
+      return parts(quote(text(input, 'pattern')), text(input, 'path') || context.projectDir || '.')
     case 'Grep':
-      return join(
+      return parts(
         quote(text(input, 'pattern')),
         text(input, 'path') || context.projectDir || '.',
         prefixed('include', text(input, 'include')),
@@ -72,28 +77,25 @@ function knownToolSummary(
     case 'DeleteFile':
       return fileCount(unique(stringArray(input, 'paths')))
     case 'MoveFile':
-      return arrow(text(input, 'source'), text(input, 'destination'))
+      return { ...parts(text(input, 'source'), text(input, 'destination')), separator: ' → ' }
     case 'RunCommand':
       return compact(text(input, 'command'))
     case 'ListCommands':
       return ''
     case 'GetCommandOutput':
-      return join(taskId(input), numberLabel(input, 'offset', 'offset'))
+      return parts(taskId(input), fixed(numberLabel(input, 'offset', 'offset')))
     case 'WriteCommandInput':
-      return join(taskId(input), inputLengthSummary(input))
+      return parts(taskId(input), fixed(inputLengthSummary(input)))
     case 'StopCommand':
       return taskId(input)
     case 'WebSearch':
-      return { primary: querySummary(input.query), trailing: recencySummary(input) }
+      return parts(querySummary(input.query), fixed(recencySummary(input)))
     case 'WebFetch':
-      return join(text(input, 'url'), lineRange(input, 'offset', 'limit'))
+      return parts(text(input, 'url'), fixed(lineRange(input, 'offset', 'limit')))
     case 'WebFind':
-      return join(quote(text(input, 'pattern')), text(input, 'url'))
+      return parts(quote(text(input, 'pattern')), text(input, 'url'))
     case 'AnalyzeImage':
-      return {
-        primary: inlineText(input.question),
-        trailing: arrayCount(input, 'attachmentIds', 'image', 'images'),
-      }
+      return parts(inlineText(input.question), fixed(arrayCount(input, 'attachmentIds', 'image', 'images')))
     case 'CaptureScreenshot':
       return screenshotSummary(input)
     case 'Browser':
@@ -119,7 +121,7 @@ function knownToolSummary(
     case 'ListSubagents':
       return ''
     case 'ToolSearch':
-      return join(quote(text(input, 'query')), numberLabel(input, 'max_results', 'max results'))
+      return parts(quote(text(input, 'query')), fixed(numberLabel(input, 'max_results', 'max results')))
     case 'SubmitProtocolOutput':
       return protocolSummary(input)
     default:
@@ -224,32 +226,32 @@ function recencySummary(input: ToolInput): string {
   return recency ? `past ${recency}` : 'all time'
 }
 
-function screenshotSummary(input: ToolInput): string {
+function screenshotSummary(input: ToolInput): string | ToolCallSummary {
   const target = text(input, 'target')
   if (input.target === 'window') {
-    return join(target, text(input, 'window_title') || text(input, 'window_id'))
+    return parts(fixed(target), text(input, 'window_title') || text(input, 'window_id'))
   }
   if (input.target === 'screen' && input.region) {
-    return join(target, prefixed('region', imageRegionSize(input.region)))
+    return parts(target, prefixed('region', imageRegionSize(input.region)))
   }
   return target
 }
 
-function readPdfSummary(input: ToolInput): string {
+function readPdfSummary(input: ToolInput): ToolCallSummary {
   const path = text(input, 'path')
   const id = attachmentReferenceId(path)
   const source = id ? prefixed('attachment', shortId(id)) : path
   const range = parsePageRange(text(input, 'pages'))
-  return join(source, range
+  return parts(source, fixed(range
     ? `pages ${range.startPage}–${range.startPage + range.pageCount - 1}`
-    : 'from page 1')
+    : 'from page 1'))
 }
 
-function skillSummary(input: ToolInput, context: ToolCallSummaryContext): string {
+function skillSummary(input: ToolInput, context: ToolCallSummaryContext): ToolCallSummary {
   const skillId = text(input, 'skillId')
   const skill = context.skills?.find((item) => item.id === skillId)
   const fallbackName = skillNameFromResult(context.result) || shortId(skillId)
-  return join(skill?.name ?? fallbackName, skill?.description ?? '')
+  return parts(skill?.name ?? fallbackName, skill?.description ?? '')
 }
 
 function skillNameFromResult(result: string | undefined): string {
@@ -279,19 +281,19 @@ function subagentDetails(input: ToolInput, result: string | undefined): string {
   ].join('\n')
 }
 
-function taskUpdateSummary(input: ToolInput): string {
+function taskUpdateSummary(input: ToolInput): ToolCallSummary {
   const status = input.status === 'in_progress'
     ? 'in progress'
     : input.status === 'completed' ? 'complete' : ''
   const transition = joinWith(' → ', text(input, 'item_id'), status)
   const changes = Array.isArray(input.changes) ? input.changes.length : 0
-  return join(transition, count(changes, 'plan change', 'plan changes'))
+  return parts(transition, fixed(count(changes, 'plan change', 'plan changes')))
 }
 
-function protocolSummary(input: ToolInput): string {
+function protocolSummary(input: ToolInput): string | ToolCallSummary {
   const candidate = record(input.candidate)
   if (candidate) return quote(text(candidate, 'summary'))
-  return join(text(input, 'vote'), quote(text(input, 'reason')))
+  return parts(text(input, 'vote'), quote(text(input, 'reason')))
 }
 
 function lineRange(input: ToolInput, startKey: string, countKey: string): string {
@@ -384,10 +386,6 @@ function prefixed(prefix: string, value: string): string {
   return value ? `${prefix} ${value}` : ''
 }
 
-function arrow(source: string, destination: string): string {
-  return source && destination ? `${source} → ${destination}` : source || destination
-}
-
 function shortId(value: string): string {
   if (!value) return ''
   const normalized = value.startsWith('skill:') ? value.slice('skill:'.length) : value
@@ -402,8 +400,15 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
 }
 
-function join(...parts: string[]): string {
-  return joinWith(' · ', ...parts)
+function parts(...values: (string | ToolSummaryPart)[]): ToolCallSummary {
+  return {
+    parts: values.map(value => typeof value === 'string' ? { text: value } : value).filter(part => part.text),
+    separator: ' · ',
+  }
+}
+
+function fixed(text: string): ToolSummaryPart {
+  return { text, fixed: true }
 }
 
 function joinWith(separator: string, ...parts: string[]): string {
@@ -414,13 +419,8 @@ function clip(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, limit - 1)}…` : value
 }
 
-function boundedSummary(value: string): ToolCallSummary {
-  return { primary: clip(value, SUMMARY_MAX_CHARS), trailing: '' }
-}
-
 function boundedSummaryParts(summary: ToolCallSummary): ToolCallSummary {
-  const trailing = clip(summary.trailing, SUMMARY_MAX_CHARS)
-  const separatorLength = summary.primary && trailing ? 3 : 0
-  const primaryLimit = Math.max(1, SUMMARY_MAX_CHARS - trailing.length - separatorLength)
-  return { primary: clip(summary.primary, primaryLimit), trailing }
+  const separatorLength = Math.max(0, summary.parts.length - 1) * summary.separator.length
+  const limit = Math.floor((SUMMARY_MAX_CHARS - separatorLength) / Math.max(1, summary.parts.length))
+  return { ...summary, parts: summary.parts.map(part => ({ ...part, text: clip(part.text, limit) })) }
 }
