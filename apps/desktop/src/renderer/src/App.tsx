@@ -2661,6 +2661,7 @@ export function App() {
                 refreshRevision={`${view.fileSystemRevision}:${filePreviewInteractionRevision}`}
                 parentSessionId={loadingConversation ? resumingSessionId : sessionIdRef.current}
                 subagents={loadingConversation ? [] : subagents}
+                conversationFontSize={conversationFontSize}
                 skills={skillCatalog.skills}
                 projectDir={projectDir}
                 state={rightPanelState}

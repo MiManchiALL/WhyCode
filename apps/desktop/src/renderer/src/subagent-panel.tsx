@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type {
   SkillSummary,
   SubagentEventEnvelope,
@@ -38,6 +38,7 @@ interface SubagentPanelProps {
   runtimeId: string
   parentSessionId: string | null
   subagents: readonly SubagentSummary[]
+  conversationFontSize: number
   skills: readonly SkillSummary[]
   projectDir: string | null
   page: SubagentPanelPage | null
@@ -58,6 +59,7 @@ export function SubagentPanelContent(props: SubagentPanelProps) {
           runtimeId={props.runtimeId}
           parentSessionId={props.parentSessionId}
           subagent={page.subagent}
+          conversationFontSize={props.conversationFontSize}
           skills={props.skills}
           projectDir={props.projectDir}
           onBack={props.onBack}
@@ -142,6 +144,7 @@ function SubagentTranscript({
   runtimeId,
   parentSessionId,
   subagent,
+  conversationFontSize,
   skills,
   projectDir,
   onBack,
@@ -149,6 +152,7 @@ function SubagentTranscript({
   runtimeId: string
   parentSessionId: string
   subagent: SubagentSummary
+  conversationFontSize: number
   skills: readonly SkillSummary[]
   projectDir: string | null
   onBack: () => void
@@ -231,7 +235,8 @@ function SubagentTranscript({
     return <div className="m-3 rounded-xl bg-[#f3e8e3] px-3 py-2 text-xs text-[var(--wc-danger)]">{error}</div>
   }
   return (
-    <div className="wc-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
+    <div className="wc-conversation wc-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3"
+      style={{ '--wc-content-font-size': `${conversationFontSize}px` } as CSSProperties}>
       <div className="mb-3 flex items-center gap-2 border-b border-[var(--wc-line)] pb-3">
         <button
           type="button"

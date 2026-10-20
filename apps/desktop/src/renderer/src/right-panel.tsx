@@ -38,6 +38,7 @@ interface RightPanelProps {
   refreshRevision: string
   parentSessionId: string | null
   subagents: readonly SubagentSummary[]
+  conversationFontSize: number
   skills: readonly SkillSummary[]
   projectDir: string | null
   workspacePath: string | null
@@ -203,6 +204,7 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
           runtimeId={props.runtimeId}
           parentSessionId={props.parentSessionId}
           subagents={props.subagents}
+          conversationFontSize={props.conversationFontSize}
           skills={props.skills}
           projectDir={props.projectDir}
           page={page}
