@@ -3,14 +3,29 @@ import { describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
 import { attachImagesToToolResults } from '../attachments/tool-results.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
-import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
+import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import {
   CLEARED_MESSAGE,
   microcompact,
 } from './microcompact.ts'
 
 describe('PDF 工具结果微清理', () => {
-  it('清理旧 ReadPdf 文字结果时同步移除配对页面图', () => {
+  it('ReadFile 图片视觉结果不随旧文本和 PDF 输出被清理', () => {
+    const imageCall: ModelMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool-call', toolName: READ_FILE_TOOL_NAME, toolCallId: 'image', input: { path: 'diagram.png' } }],
+    }
+    const imageResult = attachImagesToToolResults([toolResult('image')], [{
+      toolCallId: 'image', attachments: [imageAttachment(0)], transform: { detail: 'high' },
+    }])[0]!
+    const messages = [imageCall, imageResult, ...Array.from({ length: 6 }, (_, i) => toolResult(`pdf-${i}`))]
+    const compacted = microcompact(messages)!
+    assert.equal(compacted[1], imageResult)
+    assert.match(JSON.stringify(compacted[2]), /旧工具输出已清理/)
+    assert.match(JSON.stringify(compacted[1]), /whycode-attachment-ref/)
+  })
+
+  it('清理旧 ReadFile 文字结果时同步移除配对页面图', () => {
     const messages: ModelMessage[] = []
     for (let index = 0; index < 6; index++) {
       const toolCallId = `pdf-${index}`
@@ -40,7 +55,7 @@ function toolResult(toolCallId: string): ModelMessage {
     content: [{
       type: 'tool-result',
       toolCallId,
-      toolName: READ_PDF_TOOL_NAME,
+      toolName: READ_FILE_TOOL_NAME,
       output: { type: 'text', value: `PDF ${toolCallId}` },
     }],
   }

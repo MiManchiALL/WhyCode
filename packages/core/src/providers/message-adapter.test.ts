@@ -106,11 +106,11 @@ function history(): ModelMessage[] {
     {
       role: 'assistant',
       content: [
-        { type: 'tool-call', toolCallId: 'call-a', toolName: 'ViewImage', input: {} },
+        { type: 'tool-call', toolCallId: 'call-a', toolName: 'ReadFile', input: {} },
         { type: 'tool-call', toolCallId: 'call-b', toolName: 'CaptureScreenshot', input: {} },
       ],
     },
-    toolMessage('call-a', 'ViewImage', 'a.png'),
+    toolMessage('call-a', 'ReadFile', 'a.png'),
     toolMessage('call-b', 'CaptureScreenshot', 'b.png'),
     { role: 'assistant', content: '两张图片都已查看。' },
   ]

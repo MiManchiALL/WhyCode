@@ -10,7 +10,7 @@ import type { PdfProcessor } from '../pdf/processor.ts'
 import { referencedPdfAttachmentIds } from '../pdf/messages.ts'
 import { preparePdfAttachmentImport } from '../pdf/storage.ts'
 import { SessionStore } from '../session/store.ts'
-import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
+import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import {
   WEB_FETCH_TOOL_NAME,
   WebPageError,
@@ -58,7 +58,7 @@ describe('WebFetch Agent 链路', () => {
     assert.equal(approvals, 1)
   })
 
-  it('远程 PDF 随工具 step 登记后可立即与重启后统一使用 ReadPdf', async () => {
+  it('远程 PDF 随工具 step 登记后可立即与重启后统一使用 ReadFile', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-web-pdf-'))
     try {
       const source = join(root, 'remote.pdf')
@@ -85,10 +85,10 @@ describe('WebFetch Agent 链路', () => {
           const prompt = JSON.stringify(options.prompt)
           assert.match(prompt, new RegExp(attachment.id))
           assert.equal((options.tools ?? []).some((tool) =>
-            tool.type === 'function' && tool.name === READ_PDF_TOOL_NAME), true)
+            tool.type === 'function' && tool.name === READ_FILE_TOOL_NAME), true)
           if (modelCalls === 2) return readPdfStep(attachment.id)
           assert.match(prompt, /远程 PDF 第一页/)
-          return finalStep('已通过 ReadPdf 读取。')
+          return finalStep('已通过 ReadFile 读取。')
         },
       })
       const session = new AgentSession({
@@ -223,12 +223,9 @@ function readPdfStep(attachmentId: string) {
         {
           type: 'tool-call' as const,
           toolCallId: 'read-pdf-1',
-          toolName: READ_PDF_TOOL_NAME,
+          toolName: READ_FILE_TOOL_NAME,
           input: JSON.stringify({
-            sourceType: 'attachment',
-            sourceValue: attachmentId,
-            startPage: 1,
-            pageCount: 1,
+            path: `attachment://${attachmentId}`, pages: "1-1",
           }),
         },
         {

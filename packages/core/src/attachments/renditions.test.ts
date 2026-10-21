@@ -213,7 +213,7 @@ function toolResultMessage() {
     content: [{
       type: 'tool-result' as const,
       toolCallId: 'view-image-1',
-      toolName: 'ViewImage',
+      toolName: 'ReadFile',
       output: { type: 'text' as const, value: '已读取图片。' },
     }],
   }

@@ -10,6 +10,7 @@ import { MarkdownContent } from './markdown-content.tsx'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { StreamingPlainText } from './streaming-plain-text.tsx'
 import { summarizeToolCallParts } from '../../shared/tool-call-summary.ts'
+import { ToolSummaryParameters } from './tool-summary-parameters.tsx'
 import { ToolCallDetails } from './tool-call-details.tsx'
 
 export function BlockView({
@@ -144,12 +145,9 @@ export function BlockView({
           onClick={onToggle}
         >
           <span className={`shrink-0 ${call.status === 'error' ? 'text-[var(--wc-danger)]' : 'text-[var(--wc-muted)]'}`}>{icon}</span>
-          <span className="truncate font-medium">{call.name}</span>
-          {summary.primary && (
-            <span className="wc-tool-summary-detail wc-tool-card-description min-w-0 truncate text-[var(--wc-faint)]">{summary.primary}</span>
-          )}
-          {summary.trailing && (
-            <span className="wc-tool-card-description shrink-0 text-[var(--wc-faint)]">· {summary.trailing}</span>
+          <span className="max-w-[40%] shrink-0 truncate font-medium">{call.name}</span>
+          {summary.parts.length > 0 && (
+            <ToolSummaryParameters summary={summary} className="wc-tool-card-description text-[var(--wc-faint)]" />
           )}
         </button>
         {showCheckpointRestore && call.status !== 'running' && (

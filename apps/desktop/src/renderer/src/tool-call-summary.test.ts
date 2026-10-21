@@ -36,12 +36,14 @@ describe('工具卡片关键参数摘要', () => {
     ['WebSearch', { query: ['WhyCode', 'agent UI'], domains: ['github.com'], recency: 'week' }, 'WhyCode agent UI · past week'],
     ['WebFetch', { url: 'https://example.com/', offset: 101, limit: 100 }, 'https://example.com/ · lines 101–200'],
     ['WebFind', { url: 'https://example.com/', pattern: 'AgentSession' }, '“AgentSession” · https://example.com/'],
-    ['ViewImage', { path: 'screen.png', detail: 'original' }, 'screen.png · original'],
+    ['ReadFile', { path: 'screen.png' }, 'screen.png · high'],
+    ['ReadFile', { path: 'diagram.svg', offset: 1, limit: 40 }, 'diagram.svg · lines 1–40'],
     ['AnalyzeImage', { question: '按钮是否对齐？', attachmentIds: ['a', 'b'] }, '按钮是否对齐？ · 2 images'],
     ['CaptureScreenshot', { target: 'window', window_title: 'WhyCode' }, 'window · WhyCode'],
     ['CaptureScreenshot', { target: 'screen' }, 'screen'],
     ['CaptureScreenshot', { target: 'screen', region: { x: 100, y: 200, width: 300, height: 200 } }, 'screen · region 300×200'],
-    ['ReadPdf', { sourceType: 'path', sourceValue: 'guide.pdf', startPage: 3, pageCount: 4 }, 'guide.pdf · pages 3–6'],
+    ['ReadFile', { path: 'guide.pdf', pages: '3-6' }, 'guide.pdf · pages 3–6'],
+    ['ReadFile', { path: 'attachment://22222222-2222-4222-8222-222222222222', pages: '21-40' }, 'attachment 22222222… · pages 21–40'],
     ['AskUserQuestion', { questions: [{ question: '保留还是替换？' }, { question: '是否推送？' }] }, '2 questions'],
     ['CreateTaskPlan', { goal: '完成工具摘要优化', items: [{}, {}, {}] }, '3 milestones'],
     ['ResumeTaskPlan', { plan_id: '12345678-1234-4234-8234-123456789abc' }, 'plan ID 12345678…'],
@@ -74,15 +76,61 @@ describe('工具卡片关键参数摘要', () => {
     }), 'review · 审查当前改动并报告可行动问题')
   })
 
-  it('为搜索时间与图片数量提供不可截断的尾部摘要', () => {
+  it('为搜索时间与图片数量保留独立的摘要参数', () => {
     assert.deepEqual(summarizeToolCallParts('WebSearch', {
       query: ['今日头条', '热点新闻'],
       recency: 'day',
-    }), { primary: '今日头条 热点新闻', trailing: 'past day' })
+    }), { parts: [{ text: '今日头条 热点新闻' }, { text: 'past day', fixed: true }], separator: ' · ' })
     assert.deepEqual(summarizeToolCallParts('AnalyzeImage', {
       question: '逐项检查界面中的对齐和留白是否一致',
       attachmentIds: ['a', 'b'],
-    }), { primary: '逐项检查界面中的对齐和留白是否一致', trailing: '2 images' })
+    }), { parts: [{ text: '逐项检查界面中的对齐和留白是否一致' }, { text: '2 images', fixed: true }], separator: ' · ' })
+  })
+
+  it('长文件路径不吞掉行数、页码或图片精度，未传行数时不补造范围', () => {
+    const directory = `E:/workspace/${'very-long-folder/'.repeat(20)}`
+    const cases: Array<[Record<string, unknown>, string[]]> = [
+      [{ path: `${directory}code.ts`, offset: 1, limit: 80 }, ['lines 1–80']],
+      [{ path: `${directory}code.ts`, offset: 100 }, ['from line 100']],
+      [{ path: `${directory}code.ts`, limit: 100 }, ['first 100 lines']],
+      [{ path: `${directory}code.ts` }, []],
+      [{ path: `${directory}image.png` }, ['high']],
+      [{ path: `${directory}guide.pdf`, pages: '21-40' }, ['pages 21–40']],
+      [{ path: `${directory}guide.pdf` }, ['from page 1']],
+    ]
+    for (const [input, suffix] of cases) {
+      const summary = summarizeToolCallParts('ReadFile', input)
+      assert.equal(summary.parts[0]?.text.endsWith('…'), true)
+      assert.deepEqual(summary.parts.slice(1), suffix.map(text => ({ text, fixed: true })))
+    }
+  })
+
+  it('多个长参数分别有界，末项参数不会被总长度预算删除', () => {
+    const summary = summarizeToolCallParts('Grep', {
+      pattern: 'pattern · literal'.repeat(30),
+      path: `/${'directory/'.repeat(30)}`,
+      include: '*.tsx',
+    })
+    assert.equal(summary.parts.length, 3)
+    assert.match(summary.parts[0]!.text, /pattern · literal/)
+    assert.equal(summary.parts[0]?.text.endsWith('…'), true)
+    assert.equal(summary.parts[1]?.text.endsWith('…'), true)
+    assert.equal(summary.parts[2]?.text, 'include *.tsx')
+    assert.ok(summary.parts.map(part => part.text).join(summary.separator).length <= 420)
+  })
+
+  it('其它多参数工具和动态工具保留各参数边界', () => {
+    const cases: Array<[string, Record<string, unknown>, string[]]> = [
+      ['Glob', { pattern: '**/*.tsx', path: 'apps' }, ['“**/*.tsx”', 'apps']],
+      ['MoveFile', { source: 'old.ts', destination: 'new.ts' }, ['old.ts', 'new.ts']],
+      ['WebFetch', { url: 'https://example.com/', offset: 1, limit: 20 }, ['https://example.com/', 'lines 1–20']],
+      ['WebFind', { pattern: 'query', url: 'https://example.com/' }, ['“query”', 'https://example.com/']],
+      ['ToolSearch', { query: 'search', max_results: 5 }, ['“search”', 'max results 5']],
+      ['Mcp__files__search', { query: 'query · literal', path: 'apps', apiKey: 'hidden' }, ['query: query · literal', 'path: apps']],
+    ]
+    for (const [tool, input, expected] of cases) {
+      assert.deepEqual(summarizeToolCallParts(tool, input).parts.map(part => part.text), expected)
+    }
   })
 
   it('Glob 省略 path 时展示当前工作目录而不是抽象根目录文案', () => {

@@ -27,6 +27,7 @@ import {
   type RightPanelPage,
 } from './right-panel-state.ts'
 import { ToolCallDetails } from './tool-call-details.tsx'
+import { ToolSummaryParameters } from './tool-summary-parameters.tsx'
 
 export function ToolBatchGroup({
   runtimeId,
@@ -120,6 +121,7 @@ function ToolBatchRowView({
   const filePreviewPage = row.call.status === 'done'
     && row.call.checkpointId
     && row.fullPath
+    && row.summary
     && isFilePreviewToolName(row.call.name)
     ? {
         kind: 'file' as const,
@@ -142,7 +144,7 @@ function ToolBatchRowView({
         >
           <button
             type="button"
-            className="wc-focus-ring flex min-w-0 items-center gap-2 rounded-md text-left"
+            className="wc-focus-ring flex min-w-0 max-w-[40%] shrink-0 items-center gap-2 rounded-md text-left"
             aria-expanded={expanded}
           >
             <BatchIcon category={toolCategory(row.call)} size={13} />
@@ -153,7 +155,7 @@ function ToolBatchRowView({
               {row.renameFrom} →
             </span>
           ) : null}
-          {row.summary ? row.fullPath ? (
+          {row.summary && row.fullPath ? (
             <FilePathButton
               name={row.summary}
               path={row.fullPath}
@@ -161,13 +163,13 @@ function ToolBatchRowView({
                 ? () => onOpenFilePreview(filePreviewPage)
                 : undefined}
             />
-          ) : (
+          ) : row.parameters && row.parameters.parts.length > 0 ? (
             <button
               type="button"
-              className="wc-tool-summary-detail wc-focus-ring min-w-0 truncate rounded-md text-left"
+              className="wc-focus-ring flex min-w-0 max-w-max flex-1 rounded-md text-left"
               aria-expanded={expanded}
             >
-              {row.summary}
+              <ToolSummaryParameters summary={row.parameters} />
             </button>
           ) : null}
           {row.added !== undefined && row.removed !== undefined ? (

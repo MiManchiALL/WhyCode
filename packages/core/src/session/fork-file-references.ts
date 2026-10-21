@@ -2,6 +2,7 @@ import type { ModelMessage } from 'ai'
 import { PRESENT_TOOL_NAME, presentationSchema, readPresentationResult, type Presentation } from '../presentation.ts'
 import type { ViewEvent } from './view-events.ts'
 import { readCommandOutputResult, serializeCommandOutputResult } from '../tools/run-command/output-result.ts'
+import { isAttachmentReference } from '../file-read.ts'
 
 type VisibleEvent = Extract<ViewEvent, { type: 'core-event' }>['event']
 
@@ -34,11 +35,11 @@ export function forkFileReferences(rebase: (path: string) => string) {
       return Object.fromEntries(Object.entries(item).map(([key, field]) =>
         [key, keys.includes(key) && typeof field === 'string' ? rebase(field) : field]))
     }
-    if (['ReadFile', 'WriteFile', 'ListDir', 'Glob', 'Grep', 'ViewImage'].includes(name)) return paths(fields, ['path'])
+    if (name === 'ReadFile' && typeof fields.path === 'string' && isAttachmentReference(fields.path)) return fields
+    if (['ReadFile', 'WriteFile', 'ListDir', 'Glob', 'Grep'].includes(name)) return paths(fields, ['path'])
     if (name === 'MoveFile') return paths(fields, ['source', 'destination'])
     if (name === 'EditFile' && Array.isArray(fields.edits)) return { ...fields, edits: fields.edits.map(item => paths(item, ['path'])) }
     if (name === 'DeleteFile' && Array.isArray(fields.paths)) return { ...fields, paths: fields.paths.map(path => typeof path === 'string' ? rebase(path) : path) }
-    if (name === 'ReadPdf' && fields.sourceType === 'path') return paths(fields, ['sourceValue'])
     return value
   }
   const event = (value: VisibleEvent, owner = 'Main'): VisibleEvent => {

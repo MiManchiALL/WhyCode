@@ -1258,11 +1258,29 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   flex: 1 1 0%;
   max-width: max-content;
 }
+.wc-tool-summary-parameters {
+  display: grid;
+  column-gap: 0.5ch;
+  flex: 1 1 0%;
+  min-width: 0;
+  max-width: max-content;
+  text-align: left;
+}
+.wc-tool-summary-parameter {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5ch;
+  min-width: 0;
+}
+.wc-tool-summary-separator {
+  flex-shrink: 0;
+  opacity: 0.65;
+}
 @container wc-tool-summary (max-width: 15rem) {
   .wc-tool-change-counts { display: none; }
 }
 @container wc-tool-summary (max-width: 9rem) {
-  .wc-tool-file-name, .wc-tool-summary-detail, .wc-tool-card-description { display: none; }
+  .wc-tool-file-name, .wc-tool-summary-detail { display: none; }
 }
 
 .wc-tool-row:is(:hover, :has(:focus-visible, [data-navigation-highlight='true'])) {

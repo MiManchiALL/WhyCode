@@ -38,7 +38,7 @@ export const pdfAttachmentSchema = z.object({
   name: z.string().min(1).max(255),
   storageName: pdfAttachmentStorageNameSchema,
   mediaType: z.literal('application/pdf'),
-  /** WebFetch 导入的 PDF 不在请求期自动展开，统一等待 ReadPdf 按页读取。 */
+  /** WebFetch 导入的 PDF 不在请求期自动展开，统一等待 ReadFile 按页读取。 */
   origin: z.literal('web').optional(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   byteLength: z.number().int().positive().max(PDF_ATTACHMENT_MAX_SOURCE_BYTES),

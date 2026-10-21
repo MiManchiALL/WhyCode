@@ -31,7 +31,7 @@ export interface ToolCall {
   hasCheckpoint?: boolean
   /** 完整检查点的稳定标识；回滚后仍可读取当时版本与净改动。 */
   checkpointId?: string
-  /** ViewImage 复制进当前会话的稳定图片元数据。 */
+  /** ReadFile 复制进当前会话的稳定图片元数据。 */
   attachments?: ImageAttachment[]
 }
 

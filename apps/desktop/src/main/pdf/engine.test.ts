@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, before, describe, it } from 'node:test'
+import { createReadFileTool } from '@whycode/core'
 import { inspectPdf, readPdfPages } from './engine.ts'
 
 const tempDirectories: string[] = []
@@ -56,6 +57,23 @@ describe('桌面 PDF 引擎', () => {
     assert.deepEqual([...jpeg.subarray(0, 3)], [0xff, 0xd8, 0xff])
     assert.deepEqual([...jpeg.subarray(-2)], [0xff, 0xd9])
     assert.ok(jpeg.byteLength > 1_000)
+
+    const fileReader = createReadFileTool({ pdf: {
+      attachmentDirectory: join(root, 'attachments'),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      processor: { inspect: inspectPdf, readPages: readPdfPages },
+      supportsVisual: true,
+      resolveAttachment: () => null,
+    } })
+    const fileResult = await fileReader.execute({ path: 'hello.pdf', pages: '1' }, {
+      projectDir: root, additionalDirs: [], abortSignal: new AbortController().signal,
+    })
+    assert.equal(fileResult.isError, false)
+    assert.equal(fileResult.attachments?.length, 1)
+    assert.match(fileResult.data, /已到末页/)
+    assert.doesNotMatch(fileResult.data, /Hello WhyCode PDF/)
+    const savedPage = await readFile(join(root, 'attachments', fileResult.attachments![0]!.storageName))
+    assert.deepEqual([...savedPage.subarray(0, 3)], [0xff, 0xd8, 0xff])
   })
 
   it('拒绝伪装文件和越界页码', async () => {

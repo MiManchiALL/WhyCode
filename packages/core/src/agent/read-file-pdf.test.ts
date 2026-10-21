@@ -10,7 +10,7 @@ import type { PdfProcessor } from '../pdf/processor.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import { preparePdfAttachmentImport } from '../pdf/storage.ts'
 import { SessionStore } from '../session/store.ts'
-import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
+import { READ_FILE_TOOL_NAME } from '../tools/read-file/index.ts'
 import { AgentSession } from './session.ts'
 import { localWorkspace } from '../workspace/types.ts'
 
@@ -19,7 +19,7 @@ const SMALL_JPEG = Buffer.from(
   'base64',
 )
 
-describe('ReadPdf Agent 链路', () => {
+describe('ReadFile PDF Agent 链路', () => {
   it('项目指令加载和更新不影响按附件 ID 读取 PDF，且 PDF 字节不进入模型上下文', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-'))
     try {
@@ -46,7 +46,7 @@ describe('ReadPdf Agent 链路', () => {
       const model = new MockLanguageModelV4({
         doStream: async (options) => {
           call++
-          assert.equal(toolNames(options).includes(READ_PDF_TOOL_NAME), true)
+          assert.equal(toolNames(options).includes(READ_FILE_TOOL_NAME), true)
           const prompt = JSON.stringify(options.prompt)
           assert.match(prompt, new RegExp(attachment.id))
           assert.equal(prompt.includes('private-pdf-bytes'), false)
@@ -130,7 +130,7 @@ describe('ReadPdf Agent 链路', () => {
     }
   })
 
-  it('视觉模型可在一次 ReadPdf 中接收并持久化二十页内部页面图而不展示', async () => {
+  it('视觉模型可在一次 ReadFile 中接收并持久化二十页内部页面图而不展示', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-twenty-pages-'))
     try {
       const source = join(root, 'twenty-pages.pdf')
@@ -205,7 +205,7 @@ describe('ReadPdf Agent 链路', () => {
         doStream: async () => {
           call++
           if (call === 1) return readPdfStep(attachment.id, 'initial-read', 4)
-          if (call === 3) return repeatedReadPdfStep(attachment.id)
+          if (call === 3) return repeatedReadFileStep(attachment.id)
           return finalStep('已读取。')
         },
       })
@@ -236,10 +236,13 @@ describe('ReadPdf Agent 链路', () => {
     }
   })
 
-  it('讨论与协议回合物理移除 ReadPdf', async () => {
+  it('讨论回合的 ReadFile 不开放 PDF 读取', async () => {
+    let call = 0
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
-        assert.equal(toolNames(options).includes(READ_PDF_TOOL_NAME), false)
+        assert.equal(toolNames(options).includes(READ_FILE_TOOL_NAME), true)
+        if (++call === 1) return readPdfStep('11111111-1111-4111-8111-111111111111')
+        assert.match(JSON.stringify(options.prompt), /未提供 PDF 读取能力|操作被拒绝/)
         return finalStep('不读取 PDF。')
       },
     })
@@ -378,7 +381,7 @@ function sessionThatProbesUnavailablePdf(
 function modelEntry(model: MockLanguageModelV4, supportsImageInput = false): ModelEntry {
   return {
     id: 'test:text',
-    displayName: 'ReadPdf Mock',
+    displayName: 'ReadFile Mock',
     provider: 'openai',
     protocol: 'openai-responses',
     capabilities: {
@@ -401,12 +404,9 @@ function readPdfStep(attachmentId: string, toolCallId = 'read-pdf-1', pageCount 
         {
           type: 'tool-call' as const,
           toolCallId,
-          toolName: READ_PDF_TOOL_NAME,
+          toolName: READ_FILE_TOOL_NAME,
           input: JSON.stringify({
-            sourceType: 'attachment',
-            sourceValue: attachmentId,
-            startPage: 1,
-            pageCount,
+            path: `attachment://${attachmentId}`, pages: `1-${pageCount}`,
           }),
         },
         {
@@ -419,18 +419,15 @@ function readPdfStep(attachmentId: string, toolCallId = 'read-pdf-1', pageCount 
   }
 }
 
-function repeatedReadPdfStep(attachmentId: string) {
+function repeatedReadFileStep(attachmentId: string) {
   const input = JSON.stringify({
-    sourceType: 'attachment',
-    sourceValue: attachmentId,
-    startPage: 1,
-    pageCount: 4,
+    path: `attachment://${attachmentId}`, pages: "1-4",
   })
   return {
     stream: simulateReadableStream({
       chunks: [
-        { type: 'tool-call' as const, toolCallId: 'repeat-one', toolName: READ_PDF_TOOL_NAME, input },
-        { type: 'tool-call' as const, toolCallId: 'repeat-two', toolName: READ_PDF_TOOL_NAME, input },
+        { type: 'tool-call' as const, toolCallId: 'repeat-one', toolName: READ_FILE_TOOL_NAME, input },
+        { type: 'tool-call' as const, toolCallId: 'repeat-two', toolName: READ_FILE_TOOL_NAME, input },
         {
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },

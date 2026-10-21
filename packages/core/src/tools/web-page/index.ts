@@ -18,7 +18,7 @@ import {
 export function createWebFetchTool(options: { fetchPage: WebFetchHandler }) {
   return buildTool({
     name: WEB_FETCH_TOOL_NAME,
-    description: '读取公开网页，或将远程 PDF 保存为可用 ReadPdf 读取的会话附件',
+    description: '读取公开网页，或将远程 PDF 保存为可用 ReadFile 读取的会话附件',
     prompt: WEB_FETCH_TOOL_PROMPT,
     inputSchema: webFetchRequestSchema,
     isReadOnly: true,

@@ -5,7 +5,7 @@ import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
 import { WRITE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '../tools/write-edit/index.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
-import { READ_PDF_TOOL_NAME } from '../tools/read-pdf/index.ts'
+import { fileReadKind } from '../file-read.ts'
 import {
   GET_COMMAND_OUTPUT_TOOL_NAME,
   LIST_COMMANDS_TOOL_NAME,
@@ -21,7 +21,6 @@ import {
 /** 只清理可重现/可再获取的工具输出 */
 const COMPACTABLE_TOOLS = new Set([
   READ_FILE_TOOL_NAME,
-  READ_PDF_TOOL_NAME,
   LIST_DIR_TOOL_NAME,
   GLOB_TOOL_NAME,
   GREP_TOOL_NAME,
@@ -46,6 +45,16 @@ const KEEP_RECENT = 5
  * 返回 null 表示没有可清理的内容。
  */
 export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
+  // 图片的视觉上下文继续保留；文本与 PDF 仍可按需重读。
+  const imageReads = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'assistant' || typeof message.content === 'string') continue
+    for (const part of message.content) {
+      if (part.type !== 'tool-call' || part.toolName !== READ_FILE_TOOL_NAME) continue
+      const input = part.input as { path?: unknown } | null
+      if (typeof input?.path === 'string' && fileReadKind(input.path) === 'image') imageReads.add(part.toolCallId)
+    }
+  }
   let remaining = KEEP_RECENT
   let compacted: ModelMessage[] | null = null
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -57,6 +66,7 @@ export function microcompact(messages: ModelMessage[]): ModelMessage[] | null {
       if (
         part.type !== 'tool-result'
         || !COMPACTABLE_TOOLS.has(part.toolName)
+        || imageReads.has(part.toolCallId)
         || isCleared(part)
       ) continue
       if (remaining > 0) {

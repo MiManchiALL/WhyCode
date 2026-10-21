@@ -1094,7 +1094,7 @@ describe('会话界面时间线重建', () => {
     assert.equal(state.blocks.length, 1)
   })
 
-  it('把 ViewImage 读取结果恢复到对应工具卡片', () => {
+  it('把 ReadFile 读取结果恢复到对应工具卡片', () => {
     const attachment = {
       id: '22222222-2222-4222-8222-222222222222',
       sessionId: '11111111-1111-4111-8111-111111111111',
@@ -1110,7 +1110,7 @@ describe('会话界面时间线重建', () => {
       core({
         type: 'tool-start',
         toolUseId: 'view-image-1',
-        toolName: 'ViewImage',
+        toolName: 'ReadFile',
         input: { path: 'project-screen.png' },
       }),
       core({ type: 'image-viewed', toolUseId: 'view-image-1', attachments: [attachment] }),

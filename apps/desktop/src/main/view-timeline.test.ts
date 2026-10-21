@@ -314,7 +314,7 @@ describe('ViewTimeline', () => {
     }]])
   })
 
-  it('ViewImage 图片只随成功提交的 step 进入可恢复时间线', async () => {
+  it('ReadFile 图片只随成功提交的 step 进入可恢复时间线', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
     const attachment = {

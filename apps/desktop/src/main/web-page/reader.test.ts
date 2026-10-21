@@ -187,7 +187,7 @@ describe('会话级网页正文读取器', () => {
       pattern: 'anything',
       context: 0,
       maxResults: 1,
-    }, activeSignal), /ReadPdf/)
+    }, activeSignal), /ReadFile/)
   })
 })
 

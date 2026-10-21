@@ -3,9 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
 import { it, type TestContext } from 'node:test'
-import { AgentSession, CheckpointManager, SessionStore, SkillCatalogService, createReadPdfTool, createSkillTool, inspectLatestTurnEdit,
+import { AgentSession, CheckpointManager, SessionStore, SkillCatalogService, createReadFileTool, createSkillTool, inspectLatestTurnEdit,
   type PdfProcessor, type ToolContext, type WorkspaceIO } from '@whycode/core'
-import { createViewImageTool } from '../../../../../packages/core/src/tools/view-image/index.ts'
 import { readBoundedWorkspaceFile } from '../../../../../packages/core/src/workspace/read.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { copyDirectorySnapshot } from '../directory-snapshot.ts'
@@ -73,7 +72,7 @@ it('SSH 图片和 PDF 通过 SFTP 读取、由本机处理；读取失败和取�
     const attachmentDirectory = join(env.root, 'attachments')
     const jpeg = Buffer.from('/9j/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AL+AD//Z', 'base64')
     await writeFile(join(env.root, 'project/photo.jpg'), jpeg)
-    const image = createViewImageTool({ attachmentDirectory, sessionId })
+    const image = createReadFileTool({ image: { attachmentDirectory, sessionId } })
     const result = await image.execute(image.inputSchema.parse({ path: 'photo.jpg' }), ctx)
     assert.equal(result.isError, false)
     assert.equal(result.attachments?.[0]?.name, 'photo.jpg')
@@ -96,8 +95,8 @@ it('SSH 图片和 PDF 通过 SFTP 读取、由本机处理；读取失败和取�
         return { mode: 'text', pageCount: 1, pages: [{ pageNumber: 1, text: 'Remote PDF content' }] }
       },
     }
-    const pdf = createReadPdfTool({ attachmentDirectory, sessionId, processor, supportsVisual: false, resolveAttachment: () => null })
-    const input = pdf.inputSchema.parse({ sourceType: 'path', sourceValue: 'report.pdf' })
+    const pdf = createReadFileTool({ pdf: { attachmentDirectory, sessionId, processor, supportsVisual: false, resolveAttachment: () => null } })
+    const input = pdf.inputSchema.parse({ path: 'report.pdf' ,})
     assert.match((await pdf.execute(input, ctx)).data, /Remote PDF content/)
     await assert.rejects(access(staged), { code: 'ENOENT' })
     fail = true

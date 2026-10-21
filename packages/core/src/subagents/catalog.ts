@@ -31,8 +31,6 @@ export const SUBAGENT_ALLOWED_TOOL_NAMES = [
   'WebSearch',
   'WebFetch',
   'WebFind',
-  'ViewImage',
-  'ReadPdf',
   'CaptureScreenshot',
   'Skill',
 ] as const
@@ -42,13 +40,13 @@ const ALLOWED_TOOL_NAMES = new Set<string>(SUBAGENT_ALLOWED_TOOL_NAMES)
 const PROFILE_TOOLS: Record<SubagentProfile, readonly string[]> = {
   explore: [
     'ReadFile', 'ListDir', 'Glob', 'Grep',
-    'WebSearch', 'WebFetch', 'WebFind', 'ViewImage', 'Skill',
-    'ReadPdf', 'CaptureScreenshot',
+    'WebSearch', 'WebFetch', 'WebFind', 'Skill',
+    'CaptureScreenshot',
   ],
   reviewer: [
     'ReadFile', 'ListDir', 'Glob', 'Grep', 'RunCommand',
-    'WebSearch', 'WebFetch', 'WebFind', 'ViewImage', 'Skill',
-    'ReadPdf', 'CaptureScreenshot',
+    'WebSearch', 'WebFetch', 'WebFind', 'Skill',
+    'CaptureScreenshot',
   ],
   general: [...SUBAGENT_ALLOWED_TOOL_NAMES],
 }

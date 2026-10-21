@@ -262,6 +262,21 @@ describe('工具批次折叠投影', () => {
     })
   })
 
+  it('折叠工具列表保留各参数边界，与独立卡片使用同一摘要', () => {
+    const read = tool('read-long', 'ReadFile', {
+      path: `E:/workspace/${'long-directory/'.repeat(25)}code.ts`, offset: 1, limit: 80,
+    })
+    const grep = tool('grep-long', 'Grep', {
+      pattern: 'pattern · literal'.repeat(20), path: 'src', include: '*.tsx',
+    })
+    const rows = toolBatchRows(makeBatch([read, grep]), {
+      skills: [], projectDir: null, checkpointRestoreAnchorIds: new Set(),
+    })
+    assert.equal(rows[0]?.summary, undefined)
+    assert.deepEqual(rows[0]?.parameters?.parts.slice(1), [{ text: 'lines 1–80', fixed: true }])
+    assert.deepEqual(rows[1]?.parameters?.parts.slice(1), [{ text: 'src' }, { text: 'include *.tsx' }])
+  })
+
   it('把多文件编辑拆成独立行并匹配逐文件统计', () => {
     const edit = tool('edit', 'EditFile', {
       edits: [

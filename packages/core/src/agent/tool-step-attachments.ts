@@ -107,7 +107,7 @@ export class ToolStepAttachments {
     return this.pdfAttachments.length ? [{
       role: 'user',
       content: withPdfAttachmentReferences(
-        '[应用生成：前述工具结果已将 PDF 保存为当前会话附件；需要内容时调用 ReadPdf 按页读取。]', this.pdfAttachments,
+        '[应用生成：前述工具结果已将 PDF 保存为当前会话附件；需要内容时调用 ReadFile 按页读取。]', this.pdfAttachments,
       ),
     }] : []
   }

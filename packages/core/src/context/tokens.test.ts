@@ -27,7 +27,7 @@ describe('视觉上下文估算', () => {
       { role: 'tool', content: [{
         type: 'tool-result',
         toolCallId: 'pdf-1',
-        toolName: 'ReadPdf',
+        toolName: 'ReadFile',
         output: {
           type: 'content',
           value: [

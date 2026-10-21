@@ -149,12 +149,7 @@ export {
   createAnalyzeImageTool,
   type AnalyzeImageToolOptions,
 } from './tools/analyze-image/index.ts'
-export {
-  createReadPdfTool,
-  READ_PDF_TOOL_NAME,
-  type ReadPdfToolOptions,
-  type ResolvedPdfAttachment,
-} from './tools/read-pdf/index.ts'
+export { createReadFileTool, READ_FILE_TOOL_NAME, type ReadFileToolOptions } from './tools/read-file/index.ts'
 export {
   CommandSessionManager,
   isCommandTaskActive,
