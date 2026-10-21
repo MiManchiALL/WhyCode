@@ -12,7 +12,7 @@ Node 和 pnpm 版本以 [package.json](package.json) 的 `engines`、`packageMan
 
 一个功能分支围绕一个明确目标；从已同步的 main 开始，或续用适合当前任务的分支。检查并保护现有未提交改动，不覆盖其它任务成果。不要为普通任务增加长期 develop 分支。
 
-默认分工：Agent 完成实现、相关文档、定向验证、自查和本地 commit，并准备 PR 标题与说明；维护者通过 WhyCode 推送功能分支、在 GitHub 创建 PR、验收后合并。只有明确授权时，Agent 才代为推送、创建或合并 PR。GitHub 上的动作与本地 commit 分开授权。
+默认分工：Agent 完成实现、相关文档、定向验证、自查和本地 commit，并在回复中直接给出 PR 标题与说明；维护者通过 WhyCode 推送功能分支、在 GitHub 创建 PR、验收后合并。只有明确授权时，Agent 才代为推送、创建或合并 PR。GitHub 上的动作与本地 commit 分开授权。
 
 流程为：功能分支 → 本地验证与提交 → 推送分支 → PR → CI 通过与维护者验收 → GitHub 合并。默认 Squash merge，让 main 中一个提交对应一个完整改动。合并后同步本地 main；确认 PR 已合入、分支没有新增或未提交工作后，再按清理授权删除本地分支。远端分支由仓库设置在合并后删除。
 
