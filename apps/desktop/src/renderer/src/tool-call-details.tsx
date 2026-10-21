@@ -24,7 +24,6 @@ export function ToolCallDetails({
     call.status === 'done'
     && call.checkpointId
     && isFilePreviewToolName(call.name)
-    && call.name !== 'MoveFile'
   ) {
     const preview = file ?? (call.name === 'WriteFile'
       ? toolCallFileRows(call, projectDir)[0]

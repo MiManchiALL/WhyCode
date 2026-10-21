@@ -7,12 +7,7 @@ import { PassThrough } from 'node:stream'
 import { it } from 'node:test'
 import { localWorkspaceIO } from '../../workspace/io.ts'
 import type { WorkspaceProcess } from '../../workspace/process.ts'
-import {
-  createCommandTools,
-  GET_COMMAND_OUTPUT_TOOL_NAME,
-  LIST_COMMANDS_TOOL_NAME,
-  STOP_COMMAND_TOOL_NAME,
-} from './index.ts'
+import { createCommandTools } from './index.ts'
 import { CommandSessionManager } from './manager.ts'
 import type { CommandTaskTerminalNotification } from './types.ts'
 import { validateToolInput } from '../tool.ts'
@@ -43,6 +38,8 @@ for (const scenario of stopCases) {
       signalCode: null as NodeJS.Signals | null,
       async terminate() {
         terminateCalls++
+        ;(child.stdout as PassThrough).end()
+        ;(child.stderr as PassThrough).end()
         child.exitCode = 143
         if (scenario.emitClose) child.emit('close', child.exitCode)
         return scenario.confirmed
@@ -75,12 +72,12 @@ for (const scenario of stopCases) {
     })
     await manager.armTerminalNotification(SESSION, started.id)
     const ctx = { projectDir: root, additionalDirs: [], abortSignal: new AbortController().signal }
-    const stop = createCommandTools(manager, SESSION).taskTools.find(tool => tool.name === STOP_COMMAND_TOOL_NAME)!
+    const stop = createCommandTools(manager, SESSION).manageCommand
     if (scenario.reason === 'model') {
       // 重复请求共用首次停止，不能在等待进程退出时改写原因或重复终止。
       const results = await Promise.all([
-        stop.execute({ taskId: started.id, reason: note }, ctx),
-        stop.execute({ taskId: started.id, reason: '后续请求不应覆盖首次停止原因' }, ctx),
+        stop.execute({ action: 'stop', taskId: started.id, reason: note }, ctx),
+        stop.execute({ action: 'stop', taskId: started.id, reason: '后续请求不应覆盖首次停止原因' }, ctx),
       ])
       assert.deepEqual(results[0], results[1])
       assert.equal(results[0].isError, false)
@@ -88,7 +85,7 @@ for (const scenario of stopCases) {
     } else if (scenario.reason === 'shutdown') {
       await manager.shutdown()
     } else {
-      if (scenario.reason === 'exit') child.emit('close', 17)
+      if (scenario.reason === 'exit') { (child.stdout as PassThrough).end(); (child.stderr as PassThrough).end(); child.exitCode = 17; child.emit('close', 17) }
       await manager.readOutput(SESSION, started.id, 0, 1024, 5_000)
     }
 
@@ -97,7 +94,7 @@ for (const scenario of stopCases) {
     assert.ok(terminal)
     assert.equal(terminal.status, scenario.reason === 'timeout' || scenario.reason === 'exit' ? 'failed' : 'stopped')
     assert.equal(terminal.failureReason, scenario.detail)
-    const repeated = await stop.execute({ taskId: started.id, reason: '终态之后不应改写原因' }, ctx)
+    const repeated = await stop.execute({ action: 'stop', taskId: started.id, reason: '终态之后不应改写原因' }, ctx)
     assert.ok(repeated.data.includes(scenario.detail))
     assert.deepEqual((await manager.list(SESSION))[0], terminal)
     assert.equal(terminateCalls, scenario.reason === 'exit' ? 0 : 1)
@@ -105,9 +102,9 @@ for (const scenario of stopCases) {
 
     reopened = new CommandSessionManager(root)
     for (const current of [manager, reopened]) {
-      const taskTools = createCommandTools(current, SESSION).taskTools
-      const list = await taskTools.find(tool => tool.name === LIST_COMMANDS_TOOL_NAME)!.execute({}, ctx)
-      const output = await taskTools.find(tool => tool.name === GET_COMMAND_OUTPUT_TOOL_NAME)!.execute({ taskId: started.id }, ctx)
+      const manage = createCommandTools(current, SESSION).manageCommand
+      const list = await manage.execute({ action: 'list' }, ctx)
+      const output = await manage.execute({ action: 'read', taskId: started.id }, ctx)
       for (const result of [list, output]) {
         assert.ok(result.data.includes(scenario.detail))
         assert.doesNotMatch(result.data, /用户已停止/)
@@ -120,16 +117,16 @@ for (const scenario of stopCases) {
   })
 }
 
-it('StopCommand 原因为可选单行文字，去除首尾空白并限制长度', async () => {
+it('ManageCommand stop 原因为可选单行文字，去除首尾空白并限制长度', async () => {
   const manager = new CommandSessionManager(join(tmpdir(), 'unused-whycode-stop-schema'))
-  const stop = createCommandTools(manager, SESSION).taskTools.find(tool => tool.name === STOP_COMMAND_TOOL_NAME)!
+  const stop = createCommandTools(manager, SESSION).manageCommand
   const taskId = crypto.randomUUID()
-  assert.equal((await validateToolInput(stop, { taskId })).success, true)
-  const trimmed = await validateToolInput(stop, { taskId, reason: '  已取得结果  ' })
+  assert.equal((await validateToolInput(stop, { action: 'stop', taskId })).success, true)
+  const trimmed = await validateToolInput(stop, { action: 'stop', taskId, reason: '  已取得结果  ' })
   assert.equal(trimmed.success, true)
   if (trimmed.success) assert.equal(trimmed.value.reason, '已取得结果')
-  assert.equal((await validateToolInput(stop, { taskId, reason: '字'.repeat(120) })).success, true)
+  assert.equal((await validateToolInput(stop, { action: 'stop', taskId, reason: '字'.repeat(120) })).success, true)
   for (const reason of ['', '  ', '字'.repeat(121), '第一行\n第二行']) {
-    assert.equal((await validateToolInput(stop, { taskId, reason })).success, false)
+    assert.equal((await validateToolInput(stop, { action: 'stop', taskId, reason })).success, false)
   }
 })

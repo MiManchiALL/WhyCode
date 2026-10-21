@@ -26,6 +26,8 @@ export interface ToolDefinition<
   isReadOnly: boolean
   /** 权限类别：read 读取；control 只限内部/保护性控制；edit/execute 受相应档位约束。 */
   kind: 'read' | 'edit' | 'execute' | 'control'
+  /** 多操作工具在参数校验后确定本次调用的权限与并发行为；未提供时使用静态声明。 */
+  behavior?: (input: InferSchema<InputSchema>) => ToolBehavior
   /** 该工具建立计划身份或执行权边界，必须独占一次模型 step。 */
   requiresStandaloneStep: boolean
   /** 成功执行后立即结束当前 turn，不再发起下一次模型调用。 */
@@ -50,6 +52,12 @@ export interface ToolDefinition<
 }
 
 export type ToolCheckpointScope = { kind: 'exact-files'; paths: string[] }
+
+export type ToolBehavior = Pick<ToolDefinition, 'kind' | 'isReadOnly'>
+
+export function toolBehavior(def: ToolDefinition, input: unknown): ToolBehavior {
+  return def.behavior?.(input) ?? def
+}
 
 export interface ToolContext {
   /** Workspace operations use this target; omitted for local tools. */

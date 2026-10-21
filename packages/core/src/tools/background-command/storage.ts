@@ -1,5 +1,4 @@
 import {
-  appendFile,
   copyFile,
   mkdir,
   open,
@@ -10,10 +9,12 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises'
+import { Writable } from 'node:stream'
 import { resolve } from 'node:path'
 import {
   persistedCommandTaskSchema,
   type PersistedCommandTask,
+  type CommandOutputChunk,
 } from './types.ts'
 
 /** 后台命令的小型磁盘层：manifest 原子更新、日志追加与会话级清理集中在这里。 */
@@ -42,41 +43,68 @@ export class CommandTaskStorage {
           file === `${parsed.id}.json` &&
           this.sessionDir(parsed.sessionId) === dir
         ) {
-          result.push(parsed)
+          // 活动任务的 manifest 不逐块重写；崩溃恢复以实际落盘长度恢复读取游标。
+          const size = await stat(this.outputPath(parsed)).then(info => info.size, () => parsed.outputBytes)
+          result.push({ ...parsed, outputBytes: size })
         }
       }
     }
     return result
   }
 
-  async prepare(task: Pick<PersistedCommandTask, 'sessionId' | 'id'>): Promise<void> {
+  async createOutput(
+    task: Pick<PersistedCommandTask, 'sessionId' | 'id'>,
+    onWrite: (bytes: number) => void,
+  ): Promise<Writable> {
     await mkdir(this.sessionDir(task.sessionId), { recursive: true })
-    await writeFile(this.outputPath(task), '', { flag: 'wx' })
-  }
-
-  appendOutput(task: Pick<PersistedCommandTask, 'sessionId' | 'id'>, chunk: Buffer): Promise<void> {
-    return appendFile(this.outputPath(task), chunk)
+    const handle = await open(this.outputPath(task), 'wx', 0o600)
+    return new Writable({
+      // writeFile 结算后才交付游标与 drain；pipe 的背压限制待写队列。
+      write(chunk: Buffer, _encoding, callback) {
+        void handle.writeFile(chunk).then(() => {
+          onWrite(chunk.length)
+          callback()
+        }, callback)
+      },
+      destroy(error, callback) {
+        void handle.close().then(() => callback(error), callback)
+      },
+    })
   }
 
   async readOutput(
-    task: Pick<PersistedCommandTask, 'sessionId' | 'id'>,
+    task: Pick<PersistedCommandTask, 'sessionId' | 'id' | 'outputBytes'>,
     offset: number,
     maxBytes: number,
-  ): Promise<{ output: string; offset: number; nextOffset: number }> {
+  ): Promise<Omit<CommandOutputChunk, 'task'>> {
     const path = this.outputPath(task)
-    const size = (await stat(path).catch(() => null))?.size ?? 0
+    const size = Math.min((await stat(path)).size, task.outputBytes)
     const safeOffset = Math.min(offset, size)
-    const length = Math.min(maxBytes, size - safeOffset)
-    if (length === 0) return { output: '', offset: safeOffset, nextOffset: safeOffset }
+    if (safeOffset === size) return { output: '', offset: size, nextOffset: size, hasMore: false, partialLine: false }
 
     const handle = await open(path, 'r')
     try {
-      const buffer = Buffer.alloc(length)
-      const { bytesRead } = await handle.read(buffer, 0, length, safeOffset)
+      // 任意 offset 也不能从 UTF-8 字符中间解码；最多向前对齐三个字节。
+      const position = Math.max(0, safeOffset - 3)
+      const buffer = Buffer.alloc(Math.min(size - position, maxBytes + 6))
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
+      let start = safeOffset - position
+      while (start > 0 && (buffer[start]! & 0xc0) === 0x80) start--
+      let end = Math.min(bytesRead, start + maxBytes)
+      while (end < bytesRead && (buffer[end]! & 0xc0) === 0x80) end--
+      // 优先完整行；超长单行仍可按字符边界前进，不跳过任何已保存的内容。
+      if (position + end < size) {
+        const newline = buffer.lastIndexOf(0x0a, end - 1)
+        if (newline >= start) end = newline + 1
+      }
+      const nextOffset = position + end
       return {
-        output: buffer.subarray(0, bytesRead).toString('utf-8'),
-        offset: safeOffset,
-        nextOffset: safeOffset + bytesRead,
+        output: buffer.subarray(start, end).toString('utf-8'),
+        offset: position + start,
+        nextOffset,
+        hasMore: nextOffset < size,
+        partialLine: (position + start > 0 && buffer[start - 1] !== 0x0a)
+          || (nextOffset < size && buffer[end - 1] !== 0x0a),
       }
     } finally {
       await handle.close()

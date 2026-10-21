@@ -150,11 +150,6 @@ function ToolBatchRowView({
             <BatchIcon category={toolCategory(row.call)} size={13} />
             <span className="truncate">{row.call.name}</span>
           </button>
-          {row.renameFrom ? (
-            <span className="wc-tool-summary-detail min-w-0 truncate text-[var(--wc-faint)]">
-              {row.renameFrom} →
-            </span>
-          ) : null}
           {row.summary && row.fullPath ? (
             <FilePathButton
               name={row.summary}

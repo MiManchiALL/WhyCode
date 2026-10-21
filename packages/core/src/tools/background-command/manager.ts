@@ -1,3 +1,5 @@
+import { finished } from 'node:stream/promises'
+import { captureCommandOutput } from '../run-command/output.ts'
 import { localWorkspaceIO, type WorkspaceIO } from '../../workspace/io.ts'
 import { stopWorkspaceProcess, type WorkspaceProcess } from '../../workspace/process.ts'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -16,7 +18,6 @@ import {
 import { CommandTaskStorage } from './storage.ts'
 import { powerShellCommandArgs } from '../powershell.ts'
 
-const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 const MAX_RUNNING_COMMANDS = 16
 const MAX_RETAINED_TERMINAL_TASKS = 16
 const DEFAULT_READ_BYTES = 32 * 1024
@@ -25,12 +26,13 @@ const MAX_BACKGROUND_TASK_LABEL_CHARS = 500
 const MAX_BACKGROUND_TASK_DETAIL_CHARS = 240
 
 type CommandStopRequest = { source: 'model'; detail?: string } | { source: 'user' }
-type CommandStopReason = CommandStopRequest | { source: 'timeout' | 'shutdown' }
+type CommandStopReason = CommandStopRequest | { source: 'timeout' | 'shutdown' | 'output-error' }
 const COMMAND_STOP_DETAILS: Record<CommandStopReason['source'], string> = {
   model: '模型主动停止',
   user: '用户主动停止',
   timeout: '后台命令超时，已请求终止进程树',
   shutdown: '应用退出时已终止',
+  'output-error': '日志保存失败，已请求停止后台命令',
 }
 
 interface OutputReader {
@@ -41,9 +43,9 @@ interface LiveCommandTask extends PersistedCommandTask {
   child?: ChildProcessWithoutNullStreams | WorkspaceProcess
   timeout?: ReturnType<typeof setTimeout>
   stopReason?: CommandStopReason
-  outputWriteFailed?: boolean
+  outputError?: Error
   terminalPersisted?: boolean
-  writeTail: Promise<void>
+  outputDone: Promise<void>
   persistTail: Promise<void>
   finishPromise?: Promise<void>
   stopPromise?: Promise<void>
@@ -135,12 +137,14 @@ export class CommandSessionManager {
       status: 'running',
       startedAt: new Date().toISOString(),
       outputBytes: 0,
-      outputTruncated: false,
-      writeTail: Promise.resolve(),
+      outputDone: Promise.resolve(),
       persistTail: Promise.resolve(),
       readers: new Set(),
     }
-    await this.storage.prepare(task)
+    const output = await this.storage.createOutput(task, bytes => {
+      task.outputBytes += bytes
+      this.notify(task)
+    })
     this.tasks.set(this.key(input.sessionId, id), task)
 
     let child: ChildProcessWithoutNullStreams | WorkspaceProcess
@@ -162,12 +166,20 @@ export class CommandSessionManager {
         },
       )
     } catch (error) {
+      task.outputDone = finished(output, { cleanup: true }).catch(error => {
+        task.outputError = error instanceof Error ? error : new Error(String(error))
+      })
+      output.end()
       await this.finish(task, 'failed', null, `启动失败：${error instanceof Error ? error.message : String(error)}`)
       return this.snapshot(task)
     }
     task.child = child
-    child.stdout.on('data', (chunk: Buffer) => this.appendOutput(task, chunk))
-    child.stderr.on('data', (chunk: Buffer) => this.appendOutput(task, chunk))
+    // stdin 关闭只取消交互能力，不代表进程结束；写入回调把错误交还当前工具调用。
+    void finished(child.stdin, { cleanup: true }).catch(() => this.notify(task))
+    task.outputDone = captureCommandOutput([child.stdout, child.stderr], output).catch(error => {
+      task.outputError = error instanceof Error ? error : new Error(String(error))
+      this.runDetached(task, this.stopTask(task, { source: 'output-error' }))
+    })
     child.on('close', (code) => {
       // 停止请求需同时结算进程树终止结果；close 不能抢先宣布成功或丢掉失败诊断。
       if (task.status === 'stopping') return
@@ -238,12 +250,12 @@ export class CommandSessionManager {
         await this.waitForChange(reader, waitMs)
       }
       abortSignal?.throwIfAborted()
-      await task.writeTail
       const chunk = await this.storage.readOutput(task, offset, maxBytes)
       abortSignal?.throwIfAborted()
       const snapshot = this.snapshot(task)
       if (!isCommandTaskActive(snapshot.status)) task.terminalNotificationSent = true
-      return { task: snapshot, ...chunk }
+      // 读取文件期间可能继续落盘甚至结束；hasMore 必须与一并返回的最新状态一致。
+      return { task: snapshot, ...chunk, hasMore: chunk.nextOffset < snapshot.outputBytes }
     } finally {
       abortSignal?.removeEventListener('abort', release)
       release()
@@ -288,15 +300,29 @@ export class CommandSessionManager {
     taskId: string,
     input: string,
     closeAfterWrite = false,
+    abortSignal?: AbortSignal,
   ): Promise<CommandTaskSnapshot> {
     const task = await this.getOwnedTask(sessionId, taskId)
+    abortSignal?.throwIfAborted()
     if (task.status !== 'running' || !task.child?.stdin.writable) {
       throw new Error(`后台命令 ${taskId} 已不接受输入（状态：${task.status}）`)
     }
+    const stdin = task.child.stdin
     await new Promise<void>((done, reject) => {
-      const callback = (error?: Error | null) => (error ? reject(error) : done())
-      if (closeAfterWrite) task.child!.stdin.end(input, callback)
-      else task.child!.stdin.write(input, callback)
+      const complete = (error?: Error | null) => {
+        abortSignal?.removeEventListener('abort', onAbort)
+        stdin.off('close', onClose)
+        stdin.off('error', complete)
+        if (error) reject(error)
+        else done()
+      }
+      const onClose = () => complete(new Error('标准输入已关闭，无法确认本次输入是否完整写入'))
+      const onAbort = () => complete(new Error('输入等待已取消；已提交的内容可能已被进程接收，请先查看输出，不要直接重发', { cause: abortSignal?.reason }))
+      stdin.once('close', onClose)
+      stdin.once('error', complete)
+      abortSignal?.addEventListener('abort', onAbort, { once: true })
+      if (closeAfterWrite) stdin.end(input, complete)
+      else stdin.write(input, complete)
     })
     return this.snapshot(task)
   }
@@ -364,25 +390,6 @@ export class CommandSessionManager {
     return task
   }
 
-  private appendOutput(task: LiveCommandTask, chunk: Buffer): void {
-    if (!isCommandTaskActive(task.status) || chunk.length === 0) return
-    const remaining = MAX_OUTPUT_BYTES - task.outputBytes
-    if (remaining <= 0) {
-      task.outputTruncated = true
-      return
-    }
-    const accepted = chunk.subarray(0, remaining)
-    task.outputBytes += accepted.length
-    if (accepted.length < chunk.length) task.outputTruncated = true
-    task.writeTail = task.writeTail
-      .then(() => this.storage.appendOutput(task, accepted))
-      .catch(() => {
-        task.outputTruncated = true
-        task.outputWriteFailed = true
-      })
-    this.notify(task)
-  }
-
   private async finishFromClose(task: LiveCommandTask, code: number | null): Promise<void> {
     task.stopReason = undefined
     await this.finish(task, code === 0 ? 'completed' : 'failed', code, code === 0 ? undefined : `退出码 ${code}`)
@@ -405,7 +412,7 @@ export class CommandSessionManager {
     const child = task.child
     // exit 可先于 close 到达，此时保留进程自己的结果并等待剩余输出。
     if (child && (child.exitCode !== null || child.signalCode !== null)) {
-      await waitForProcessClose(child)
+      if (!task.finishPromise) await waitForProcessClose(child)
       await this.trackFinish(task, () => this.finishFromClose(task, child.exitCode))
       return
     }
@@ -430,7 +437,7 @@ export class CommandSessionManager {
       await this.trackFinish(task, () => this.finishFromClose(task, 0))
       return
     }
-    const status: CommandTaskStatus = reason.source === 'timeout' ? 'failed' : 'stopped'
+    const status: CommandTaskStatus = reason.source === 'timeout' || reason.source === 'output-error' ? 'failed' : 'stopped'
     const label = commandStopDetail(reason)
     await this.trackFinish(task, () =>
       this.finish(
@@ -449,15 +456,15 @@ export class CommandSessionManager {
     failureReason?: string,
   ): Promise<void> {
     if (!isCommandTaskActive(task.status)) return
-    task.status = status
+    await task.outputDone
+    task.status = task.outputError && status === 'completed' ? 'failed' : status
     task.exitCode = exitCode
     task.endedAt = new Date().toISOString()
-    task.failureReason = [failureReason, task.outputWriteFailed ? '输出日志写入不完整' : undefined]
+    task.failureReason = [failureReason, task.outputError ? `输出日志不完整：${task.outputError.message}` : undefined]
       .filter(Boolean)
       .join('；') || undefined
     if (task.timeout) clearTimeout(task.timeout)
     task.child = undefined
-    await task.writeTail
     await this.persist(task)
     task.terminalPersisted = true
     await this.pruneTerminalTasks(task.sessionId)
@@ -521,7 +528,7 @@ export class CommandSessionManager {
 
   private async settleTask(task: LiveCommandTask): Promise<void> {
     await task.finishPromise
-    await task.writeTail
+    await task.outputDone
     await task.persistTail
   }
 
@@ -538,7 +545,6 @@ export class CommandSessionManager {
       ...(task.exitCode !== undefined ? { exitCode: task.exitCode } : {}),
       ...(task.failureReason ? { failureReason: task.failureReason } : {}),
       outputBytes: task.outputBytes,
-      outputTruncated: task.outputTruncated,
       canWrite: task.status === 'running' && Boolean(task.child?.stdin.writable),
     }
   }
@@ -547,7 +553,7 @@ export class CommandSessionManager {
     return {
       ...persisted,
       terminalPersisted: !isCommandTaskActive(persisted.status),
-      writeTail: Promise.resolve(),
+      outputDone: Promise.resolve(),
       persistTail: Promise.resolve(),
       readers: new Set(),
     }

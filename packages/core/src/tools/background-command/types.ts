@@ -21,7 +21,6 @@ export const persistedCommandTaskSchema = z.object({
   exitCode: z.number().int().nullable().optional(),
   failureReason: z.string().optional(),
   outputBytes: z.number().int().nonnegative(),
-  outputTruncated: z.boolean(),
 })
 
 export type CommandTaskStatus = z.infer<typeof commandTaskStatusSchema>
@@ -40,6 +39,9 @@ export interface CommandOutputChunk {
   output: string
   offset: number
   nextOffset: number
+  hasMore: boolean
+  /** 为保持有界读取而分段的长行，或从行中间接续的输出。 */
+  partialLine: boolean
 }
 
 export interface CommandTaskTerminalNotification {

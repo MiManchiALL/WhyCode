@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { deleteFileTool, moveFileTool } from './file-lifecycle/index.ts'
+import { deleteFileTool } from './file-lifecycle/index.ts'
 import type { ToolContext } from './tool.ts'
 import { editFileTool, writeFileTool } from './write-edit/index.ts'
 import { localWorkspaceIO } from '../workspace/io.ts'
@@ -166,7 +166,7 @@ describe('统一精确编辑', () => {
 })
 
 describe('文件生命周期工具', () => {
-  it('删除和移动的审批只读取有界文本，二进制和大文件不生成文本差异或行数', async () => {
+  it('删除审批只读取有界文本，二进制和大文件不生成文本差异或行数', async () => {
     const ctx = await context()
     ctx.workspaceIO = { ...localWorkspaceIO, fs: { ...localWorkspaceIO.fs,
       readFile: async () => assert.fail('生命周期工具不能整批读取完整文件'),
@@ -179,9 +179,6 @@ describe('文件生命周期工具', () => {
     const diff = await deleteFileTool.renderDiff!(input, ctx)
     assert.match(diff!, /small.txt/)
     assert.doesNotMatch(diff!, /\.tmp/)
-    for (const source of input.paths.slice(1)) {
-      assert.equal(await moveFileTool.renderDiff!({ source, destination: 'moved.tmp' }, ctx), undefined)
-    }
     const result = await deleteFileTool.execute(input, ctx)
     assert.equal(result.isError, false)
     assert.deepEqual(result.fileChanges, [{ path: 'small.txt', added: 0, removed: 2 }])
@@ -211,35 +208,6 @@ describe('文件生命周期工具', () => {
     assert.match(result.data, /已删除 1\/2/)
     assert.deepEqual(result.fileChanges, [{ path: 'first.txt', added: 0, removed: 1 }])
     assert.equal(await readFile(join(ctx.projectDir, 'second.txt'), 'utf8'), 'second.txt')
-  })
-
-  it('移动文件时创建父目录且拒绝覆盖目标', async () => {
-    const ctx = await context()
-    await writeFile(join(ctx.projectDir, 'source.txt'), 'source')
-    const moved = await moveFileTool.execute(
-      { source: 'source.txt', destination: 'nested/destination.txt' },
-      ctx,
-    )
-    assert.equal(moved.isError, false)
-    assert.equal(moved.data, '已移动 source.txt → nested/destination.txt')
-    assert.equal(await readFile(join(ctx.projectDir, 'nested', 'destination.txt'), 'utf8'), 'source')
-
-    await writeFile(join(ctx.projectDir, 'rename-before.txt'), 'rename')
-    const renamed = await moveFileTool.execute(
-      { source: 'rename-before.txt', destination: 'rename-after.txt' },
-      ctx,
-    )
-    assert.equal(renamed.isError, false)
-    assert.equal(renamed.data, '已重命名 rename-before.txt → rename-after.txt')
-    assert.equal(await readFile(join(ctx.projectDir, 'rename-after.txt'), 'utf8'), 'rename')
-
-    await writeFile(join(ctx.projectDir, 'other.txt'), 'other')
-    const refused = await moveFileTool.execute(
-      { source: 'other.txt', destination: 'nested/destination.txt' },
-      ctx,
-    )
-    assert.equal(refused.isError, true)
-    assert.equal(await readFile(join(ctx.projectDir, 'other.txt'), 'utf8'), 'other')
   })
 
   it('一次删除多个文件，并用一个检查点覆盖全部目标', async () => {

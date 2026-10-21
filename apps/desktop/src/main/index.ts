@@ -906,7 +906,7 @@ async function createMainAgentSession(
       prepareSkillRuntime: (skill, context) => workspaceDependencies.prepareSkill(skill, context),
       subagentCatalog: subagentDefinitions,
       mainTools: [
-        ...commandTools.taskTools,
+        commandTools.manageCommand,
         ...subagents.createTools(runtime, recorder, targetProjectDir),
         webSearchTool,
         ...createSessionWebPageTools(recorder),

@@ -128,7 +128,7 @@ export function createRunCommandTool(
       '默认以前台非交互方式执行、等待终态且不接受 stdin；长安装、构建和测试仍保持前台，并按需设置足够的 timeoutMs。' +
       backgroundPrompt +
       '多行或包含复杂引号的非交付脚本先用 WriteFile 保存到环境提供的临时工作区，再执行脚本文件；需要交付的项目脚本写入项目目录。不要塞进 python -c 或 node -e。导入第三方包前先检查环境是否已有。' +
-      '可用 cwd 指定工作目录（绝对路径）。创建、修改、删除或移动明确文件应使用 WriteFile/EditFile/DeleteFile/MoveFile，不要用命令绕过其路径授权。' +
+      '可用 cwd 指定工作目录（绝对路径）。创建、修改或删除明确文件应使用 WriteFile/EditFile/DeleteFile。移动或重命名文件可使用本工具，先确认目标不存在，避免覆盖；命令的文件副作用没有精确检查点。' +
       '命令产生的文件及外部副作用不建立检查点，无法回滚。' +
       `前台返回 stdout+stderr，默认超时 120 秒。输出超过 ${COMMAND_PREVIEW_LINES} 行或 ${COMMAND_PREVIEW_BYTES / 1024} KiB 时，完整 UTF-8 日志保存到当前角色的会话临时目录 command-output/；` +
       '结果返回 command-output JSON：output 只含尾部完整行（单行超限时省略），fullOutputPath 是完整日志路径，可用 ReadFile 分页读取或 Grep 搜索。日志随会话删除；保存失败会停止命令并明确报错。',

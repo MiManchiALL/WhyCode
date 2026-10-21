@@ -1,5 +1,4 @@
 import { localWorkspaceIO, workspacePathKey } from '../../workspace/io.ts'
-import { constants } from 'node:fs'
 import { z } from 'zod'
 import { buildTool, type ToolContext } from '../tool.ts'
 import { resolveAllowed } from '../fs-utils.ts'
@@ -8,7 +7,6 @@ import { describeFileChange, type ToolFileChange } from '../file-changes.ts'
 import { readFileTextPreview } from '../../checkpoints/file-history.ts'
 
 export const DELETE_FILE_TOOL_NAME = 'DeleteFile'
-export const MOVE_FILE_TOOL_NAME = 'MoveFile'
 
 const deleteFileInputSchema = z.object({
   paths: z
@@ -111,72 +109,6 @@ export const deleteFileTool = buildTool({
         : `已删除 ${targets.length} 个文件`,
       isError: false,
       fileChanges,
-    }
-  },
-})
-
-export const moveFileTool = buildTool({
-  name: MOVE_FILE_TOOL_NAME,
-  description: '移动或重命名单个文件',
-  prompt:
-    '移动或重命名允许范围内的单个普通文件，并对源文件和目标文件建立精确检查点。目标必须不存在，避免静默覆盖；如确实需要替换，先显式处理目标文件。不要用 RunCommand 绕过文件授权。',
-  inputSchema: z.object({
-    source: z.string().describe('现有源文件路径'),
-    destination: z.string().describe('尚不存在的目标文件路径'),
-  }),
-  isReadOnly: false,
-  kind: 'edit',
-  extractPaths: (input) => [input.source, input.destination],
-  checkpointScope: async (input, ctx) => ({
-    kind: 'exact-files',
-    paths: [
-      await resolveAllowed(ctx, input.source),
-      await resolveAllowed(ctx, input.destination),
-    ],
-  }),
-  async renderDiff(input, ctx) {
-    const source = await resolveAllowed(ctx, input.source)
-    const preview = await readFileTextPreview(source, ctx.workspaceIO)
-    if (preview.kind !== 'text') return undefined
-    return [
-      makeDiff(input.source, preview.content, ''),
-      makeDiff(input.destination, '', preview.content),
-    ].join('\n\n')
-  },
-  async execute(input, ctx) {
-    const io = ctx.workspaceIO ?? localWorkspaceIO
-    const { copyFile, lstat, mkdir, rename, rm, unlink } = io.fs
-    const { dirname } = io.path
-
-    const source = await resolveAllowed(ctx, input.source)
-    const destination = await resolveAllowed(ctx, input.destination)
-    try {
-      await requireRegularFile(source, `源文件 ${input.source}`, ctx)
-      if (await lstat(destination).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })) {
-        return { data: `移动失败：目标 ${input.destination} 已存在`, isError: true }
-      }
-      await mkdir(dirname(destination), { recursive: true })
-      try {
-        await rename(source, destination)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
-        await copyFile(source, destination, constants.COPYFILE_EXCL)
-        try {
-          await unlink(source)
-        } catch (unlinkError) {
-          await rm(destination, { force: true }).catch(() => undefined)
-          throw unlinkError
-        }
-      }
-      const action = workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, dirname(source)) === workspacePathKey(ctx.workspaceIO ?? localWorkspaceIO, dirname(destination))
-        ? '已重命名'
-        : '已移动'
-      return { data: `${action} ${input.source} → ${input.destination}`, isError: false }
-    } catch (error) {
-      return {
-        data: `移动失败：${error instanceof Error ? error.message : String(error)}`,
-        isError: true,
-      }
     }
   },
 })

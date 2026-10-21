@@ -27,12 +27,13 @@ describe('工具卡片关键参数摘要', () => {
     ['WriteFile', { path: 'src/new.ts', content: 'hidden' }, 'src/new.ts'],
     ['EditFile', { edits: [{ path: 'a.ts' }, { path: 'a.ts' }, { path: 'b.ts' }] }, '2 files'],
     ['DeleteFile', { paths: ['a.ts', 'b.ts'] }, '2 files'],
-    ['MoveFile', { source: 'old.ts', destination: 'new.ts' }, 'old.ts → new.ts'],
     ['RunCommand', { command: 'pnpm test', cwd: 'E:\\Agent\\WhyCode', runInBackground: true, wakeOnCompletion: true }, 'pnpm test'],
-    ['ListCommands', {}, ''],
-    ['GetCommandOutput', { taskId: '12345678-1234-4234-8234-123456789abc', offset: 4096 }, 'task ID 12345678… · offset 4096'],
-    ['WriteCommandInput', { taskId: '12345678-1234-4234-8234-123456789abc', input: 'yes', closeAfterWrite: true }, 'task ID 12345678… · 3 characters'],
-    ['StopCommand', { taskId: '12345678-1234-4234-8234-123456789abc' }, 'task ID 12345678…'],
+    ['ManageCommand', { action: 'list' }, 'list'],
+    ['ManageCommand', { action: 'read', taskId: '12345678-1234-4234-8234-123456789abc', offset: 4096 }, 'read · task ID 12345678… · offset 4096'],
+    ['ManageCommand', { action: 'write', taskId: '12345678-1234-4234-8234-123456789abc', input: 'yes' }, 'write · task ID 12345678… · 3 characters'],
+    ['ManageCommand', { action: 'close', taskId: '12345678-1234-4234-8234-123456789abc' }, 'close · task ID 12345678…'],
+    ['ManageCommand', { action: 'close', taskId: '12345678-1234-4234-8234-123456789abc', input: 'last\n' }, 'close · task ID 12345678… · 5 characters'],
+    ['ManageCommand', { action: 'stop', taskId: '12345678-1234-4234-8234-123456789abc' }, 'stop · task ID 12345678…'],
     ['WebSearch', { query: ['WhyCode', 'agent UI'], domains: ['github.com'], recency: 'week' }, 'WhyCode agent UI · past week'],
     ['WebFetch', { url: 'https://example.com/', offset: 101, limit: 100 }, 'https://example.com/ · lines 101–200'],
     ['WebFind', { url: 'https://example.com/', pattern: 'AgentSession' }, '“AgentSession” · https://example.com/'],
@@ -122,7 +123,6 @@ describe('工具卡片关键参数摘要', () => {
   it('其它多参数工具和动态工具保留各参数边界', () => {
     const cases: Array<[string, Record<string, unknown>, string[]]> = [
       ['Glob', { pattern: '**/*.tsx', path: 'apps' }, ['“**/*.tsx”', 'apps']],
-      ['MoveFile', { source: 'old.ts', destination: 'new.ts' }, ['old.ts', 'new.ts']],
       ['WebFetch', { url: 'https://example.com/', offset: 1, limit: 20 }, ['https://example.com/', 'lines 1–20']],
       ['WebFind', { pattern: 'query', url: 'https://example.com/' }, ['“query”', 'https://example.com/']],
       ['ToolSearch', { query: 'search', max_results: 5 }, ['“search”', 'max results 5']],
@@ -174,9 +174,9 @@ describe('工具卡片关键参数摘要', () => {
 
   it('后台输入只显示真实长度，不泄漏内容或受摘要截断影响', () => {
     const hiddenInput = 's'.repeat(1_000)
-    assert.equal(summarizeToolCall('WriteCommandInput', {
+    assert.equal(summarizeToolCall('ManageCommand', { action: 'write',
       taskId: '12345678-1234-4234-8234-123456789abc',
       input: hiddenInput,
-    }), 'task ID 12345678… · 1000 characters')
+    }), 'write · task ID 12345678… · 1000 characters')
   })
 })

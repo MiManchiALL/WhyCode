@@ -11,8 +11,6 @@ import type { FilePreviewToolName } from './right-panel-state.ts'
 import { SyntaxCode } from './syntax-code.tsx'
 import { FileDiff } from './file-diff.tsx'
 
-type InlineFilePreviewToolName = Exclude<FilePreviewToolName, 'MoveFile'>
-
 export function InlineFileChange({
   runtimeId,
   toolUseId,
@@ -24,7 +22,7 @@ export function InlineFileChange({
 }: {
   runtimeId: string
   toolUseId: string
-  toolName: InlineFilePreviewToolName
+  toolName: FilePreviewToolName
   path: string
   name: string
   added?: number
@@ -68,7 +66,7 @@ function InlinePreviewContent({
   wrap,
 }: {
   wrap: boolean
-  toolName: InlineFilePreviewToolName
+  toolName: FilePreviewToolName
   path: string
   preview: CheckpointFilePreview
 }) {
@@ -141,7 +139,7 @@ function FileChangeHeader({
 
 function previewTextForTool(
   preview: CheckpointFilePreview,
-  toolName: InlineFilePreviewToolName,
+  toolName: FilePreviewToolName,
 ): string | null {
   const state = toolName === 'DeleteFile' ? preview.before : preview.after
   return state.kind === 'text' ? state.content : null

@@ -4,14 +4,9 @@ import { LIST_DIR_TOOL_NAME, GLOB_TOOL_NAME } from '../tools/list-glob/index.ts'
 import { GREP_TOOL_NAME } from '../tools/grep/index.ts'
 import { WRITE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '../tools/write-edit/index.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
-import { DELETE_FILE_TOOL_NAME, MOVE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
+import { DELETE_FILE_TOOL_NAME } from '../tools/file-lifecycle/index.ts'
 import { fileReadKind } from '../file-read.ts'
-import {
-  GET_COMMAND_OUTPUT_TOOL_NAME,
-  LIST_COMMANDS_TOOL_NAME,
-  STOP_COMMAND_TOOL_NAME,
-  WRITE_COMMAND_INPUT_TOOL_NAME,
-} from '../tools/background-command/constants.ts'
+import { MANAGE_COMMAND_TOOL_NAME } from '../tools/background-command/constants.ts'
 
 /**
  * 微清理（M2-d 第一级，零模型成本）：把「可重现」工具的旧输出替换为占位文本。
@@ -27,12 +22,8 @@ const COMPACTABLE_TOOLS = new Set([
   WRITE_FILE_TOOL_NAME,
   EDIT_FILE_TOOL_NAME,
   DELETE_FILE_TOOL_NAME,
-  MOVE_FILE_TOOL_NAME,
   RUN_COMMAND_TOOL_NAME,
-  LIST_COMMANDS_TOOL_NAME,
-  GET_COMMAND_OUTPUT_TOOL_NAME,
-  WRITE_COMMAND_INPUT_TOOL_NAME,
-  STOP_COMMAND_TOOL_NAME,
+  MANAGE_COMMAND_TOOL_NAME,
 ])
 
 export const CLEARED_MESSAGE = '[旧工具输出已清理以节省上下文，如需内容请重新调用工具]'

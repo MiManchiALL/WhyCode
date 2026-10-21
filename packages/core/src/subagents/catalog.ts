@@ -26,7 +26,6 @@ export const SUBAGENT_ALLOWED_TOOL_NAMES = [
   'WriteFile',
   'EditFile',
   'DeleteFile',
-  'MoveFile',
   'RunCommand',
   'WebSearch',
   'WebFetch',

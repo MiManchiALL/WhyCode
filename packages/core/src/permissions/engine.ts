@@ -1,5 +1,5 @@
 import { localWorkspaceIO, outsideWorkspaceBoundary } from '../workspace/io.ts'
-import type { ToolDefinition } from '../tools/tool.ts'
+import { toolBehavior, type ToolDefinition } from '../tools/tool.ts'
 import type { PermissionContext, PermissionDecision } from './types.ts'
 import {
   findSuspiciousWindowsPattern,
@@ -69,6 +69,7 @@ export async function checkToolPermission(
   input: unknown,
   ctx: PermissionContext,
 ): Promise<PermissionDecision> {
+  const { kind } = toolBehavior(def, input)
   const io = ctx.workspaceIO ?? localWorkspaceIO
   const { isAbsolute, resolve } = io.path
   const projectDir = ctx.projectDir
@@ -90,8 +91,8 @@ export async function checkToolPermission(
   if (
     !ctx.discussion
     && ctx.mode === 'readonly'
-    && def.kind !== 'read'
-    && def.kind !== 'control'
+    && kind !== 'read'
+    && kind !== 'control'
   ) {
     return { behavior: 'deny', reason: '当前为只读模式，不允许修改或执行' }
   }
@@ -108,7 +109,7 @@ export async function checkToolPermission(
 
   if (ctx.discussion) {
     const scratchDir = ctx.discussion.scratchDir
-    if (def.kind === 'edit' && rawPaths.length === 0) {
+    if (kind === 'edit' && rawPaths.length === 0) {
       return {
         behavior: 'deny',
         reason: '讨论阶段修改未声明临时工作区内的资源边界',
@@ -117,13 +118,13 @@ export async function checkToolPermission(
     const outsideScratch = uniquePaths((await Promise.all(rawPaths.map(path =>
       outsideWorkspaceBoundary(io, resolve(projectDir, path), scratchDir, []),
     ))).filter((path): path is string => path !== null))
-    if (def.kind === 'edit' && outsideScratch.length > 0) {
+    if (kind === 'edit' && outsideScratch.length > 0) {
       return {
         behavior: 'deny',
         reason: `讨论阶段禁止修改原项目或工作区外文件（${describePaths(outsideScratch)}），实验文件请写入你的临时工作区：${scratchDir}`,
       }
     }
-    if (def.kind === 'execute' && (rawPaths.length === 0 || outsideScratch.length > 0)) {
+    if (kind === 'execute' && (rawPaths.length === 0 || outsideScratch.length > 0)) {
       const reason = outsideScratch.length > 0
         ? `讨论阶段命令涉及临时工作区之外的路径：${describePaths(outsideScratch)}`
         : '讨论阶段命令未限定在临时工作区内（请显式传 cwd 为你的 scratch 目录）'
@@ -133,7 +134,7 @@ export async function checkToolPermission(
 
   // 敏感、越界和讨论命令审批必须合成同一决定；不能先批准一个条件后顺带放行其它路径。
   const sensitivePaths =
-    def.kind === 'edit' || def.kind === 'execute'
+    kind === 'edit' || kind === 'execute'
       ? uniquePaths(rawPaths.filter((path) => {
           const abs = isAbsolute(path) ? resolve(path) : resolve(projectDir, path)
           return isSensitivePath(abs)
@@ -162,14 +163,14 @@ export async function checkToolPermission(
   }
 
   // 5. 读操作：边界内一律放行
-  if (def.kind === 'read' || def.kind === 'control') return { behavior: 'allow' }
+  if (kind === 'read' || kind === 'control') return { behavior: 'allow' }
 
   // 6. 会话内「记住允许」的工具
   if (ctx.sessionAllowedTools.includes(def.name)) return { behavior: 'allow' }
 
   // 7. 模式快速通道
   if (ctx.mode === 'auto') return { behavior: 'allow' }
-  if (ctx.mode === 'acceptEdits' && def.kind === 'edit') return { behavior: 'allow' }
+  if (ctx.mode === 'acceptEdits' && kind === 'edit') return { behavior: 'allow' }
 
   // 8. 默认：写/执行类询问，批准可选择本会话记住该工具
   return {

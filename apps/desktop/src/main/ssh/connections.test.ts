@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { once } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
 import { it } from 'node:test'
-import { AgentSession, SessionStore, CheckpointManager, CommandSessionManager, BUILTIN_TOOLS, type ToolContext, type CoreEvent } from '@whycode/core'
+import { AgentSession, SessionStore, CheckpointManager, CommandSessionManager, createCommandTools, BUILTIN_TOOLS, type ToolContext, type CoreEvent } from '@whycode/core'
 import { WorkspaceFiles } from '../workspace-files.ts'
 import { sshFixture } from './ssh-test-fixture.ts'
 import { SshConnectionStore } from './store.ts'
@@ -104,6 +104,30 @@ it('真实 SSH/SFTP 与 Linux 组件完成文件、检查点、输出、后台�
   assert.equal(noninteractive.data, 'stdin closed')
   const manager = new CommandSessionManager(join(env.root, 'tasks'))
   t.after(() => manager.shutdown())
+  const manage = createCommandTools(manager, 'session').manageCommand
+  const interactive = await manager.start({ sessionId: 'session', command: "cat; printf '|EOF'", cwd: env.project, workspaceIO: io })
+  await manage.execute({ action: 'write', taskId: interactive.id, input: '中文' }, ctx)
+  await manage.execute({ action: 'close', taskId: interactive.id, input: '😀\n' }, ctx)
+  const readBackground = async (taskId: string) => {
+    const deadline = Date.now() + 30_000
+    let offset = 0
+    let output = ''
+    while (Date.now() < deadline) {
+      const chunk = await manager.readOutput('session', taskId, offset, undefined, 500, t.signal)
+      output += chunk.output
+      offset = chunk.nextOffset
+      if (chunk.task.status === 'completed' && !chunk.hasMore) return output
+      assert.ok(chunk.task.status === 'running' || chunk.task.status === 'completed', chunk.task.failureReason)
+    }
+    assert.fail('后台日志未在时限内完成')
+  }
+  assert.equal(await readBackground(interactive.id), '中文😀\n|EOF')
+  const large = await manager.start({ sessionId: 'session', cwd: env.project, workspaceIO: io,
+    command: "printf '开始😀\\n'; head -c 9437184 /dev/zero | tr '\\000' x; printf '\\n结束\\n'",
+  })
+  const log = await readBackground(large.id)
+  assert.equal(log, `开始😀\n${'x'.repeat(9437184)}\n结束\n`)
+  assert.equal(await readFile(join(env.root, 'tasks/session', `${large.id}.log`), 'utf8'), log)
   const background = await manager.start({ sessionId: 'session', command: 'sleep 60 & wait', cwd: env.project, workspaceIO: io })
   assert.equal(background.status, 'running')
   assert.equal((await manager.stop('session', background.id, { source: 'user' })).status, 'stopped')

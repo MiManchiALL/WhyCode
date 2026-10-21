@@ -15,6 +15,7 @@ import type { ReasoningEffortSelection } from '../providers/catalog.ts'
 import { providerOptionsWithReasoningEffort } from '../providers/reasoning-effort.ts'
 import {
   validateToolInput,
+  toolBehavior,
   type ToolContext,
   type ToolDefinition,
 } from '../tools/tool.ts'
@@ -159,7 +160,7 @@ import type {
 } from '../subagents/types.ts'
 import { subagentTurnStateSchema } from '../subagents/types.ts'
 import { AssistantTextGate, sanitizeAssistantControlOutput } from './assistant-output.ts'
-import { ToolExecutionBatch, toolsForModel, type StepToolSet, type ToolEndEvent } from './tool-execution.ts'
+import { ToolExecutionBatch, toolsForModel, type StepToolSet, type PreparedToolCall, type ToolEndEvent } from './tool-execution.ts'
 import { ToolStepAttachments } from './tool-step-attachments.ts'
 import { appendOrderedMessages, TOOL_NOT_STARTED } from '../session/tool-execution.ts'
 import {
@@ -3007,8 +3008,8 @@ export class AgentSession {
       const prepareTool = async (
         input: unknown,
         toolCallId: string,
-      ): Promise<() => Promise<string>> => {
-        if (abortSignal.aborted) return () => finishTool(toolCallId, TOOL_NOT_STARTED, true)
+      ): Promise<PreparedToolCall> => {
+        if (abortSignal.aborted) return { isReadOnly: false, execute: () => finishTool(toolCallId, TOOL_NOT_STARTED, true) }
         // additionalDirs 会在审批中变化，每次调用取最新
         let toolCtx: ToolContext = {
           workspaceIO: this.options.workspaceIO,
@@ -3026,14 +3027,16 @@ export class AgentSession {
         if (!parsed.success) {
           const msg = `参数校验失败：${parsed.error.message}`
           loopHealth.record(def.name, input, msg, true)
-          return () => finishTool(toolCallId, msg, true)
+          return { isReadOnly: false, execute: () => finishTool(toolCallId, msg, true) }
         }
         if (context.textOnlyFileReads && def.name === READ_FILE_TOOL_NAME
           && fileReadKind((parsed.value as { path: string }).path) !== 'text') {
           const msg = '侧对话的 ReadFile 只支持读取文本文件'
           loopHealth.record(def.name, parsed.value, msg, true)
-          return () => finishTool(toolCallId, msg, true)
+          return { isReadOnly: false, execute: () => finishTool(toolCallId, msg, true) }
         }
+
+        const behavior = toolBehavior(def, parsed.value)
 
         // 审批只准备当前精确输入，批准先后不能改变批次调度器保留的调用顺序。
         const authorization = await approvalBatcher.authorize(
@@ -3045,7 +3048,7 @@ export class AgentSession {
         if (!authorization.approved) {
           const msg = abortSignal.aborted ? `${TOOL_NOT_STARTED}\n${authorization.message}` : authorization.message
           loopHealth.record(def.name, parsed.value, msg, true)
-          return () => finishTool(toolCallId, msg, true)
+          return { isReadOnly: false, execute: () => finishTool(toolCallId, msg, true) }
         }
         if (authorization.approvedPaths.length > 0) {
           // 用户批准的是这组完整输入：路径只扩展当前调用，是否持久化仍由 remember 决定。
@@ -3077,7 +3080,7 @@ export class AgentSession {
           // 只有工具显式声明资源边界才建立检查点；权限路径不能替代回滚覆盖契约。
           let preparedCheckpoint: Awaited<ReturnType<CheckpointManager['prepare']>> = null
           if (
-            (def.kind === 'edit' || def.kind === 'execute') &&
+            (behavior.kind === 'edit' || behavior.kind === 'execute') &&
             this.checkpoints &&
             this.activeTurn &&
             !this.permissions.discussion
@@ -3218,28 +3221,30 @@ export class AgentSession {
           }
         }
 
-        return () => (def.kind === 'edit' || def.kind === 'execute') && this.options.scheduleProjectMutation
-          ? this.options.scheduleProjectMutation(
-              { type: 'tool', name: def.name, kind: def.kind }, abortSignal, executeAuthorized,
-            )
-          : executeAuthorized()
+        return {
+          isReadOnly: behavior.isReadOnly,
+          execute: () => (behavior.kind === 'edit' || behavior.kind === 'execute') && this.options.scheduleProjectMutation
+            ? this.options.scheduleProjectMutation(
+                { type: 'tool', name: def.name, kind: behavior.kind }, abortSignal, executeAuthorized,
+              )
+            : executeAuthorized(),
+        }
       }
       const prepareWithStepGate = async (
         input: unknown,
         toolCallId: string,
-      ): Promise<() => Promise<string>> => {
+      ): Promise<PreparedToolCall> => {
         const deniedByMode = allowedToolNames && !allowedToolNames.has(def.name)
         const conflict = deniedByMode
           ? `临时对话不允许使用 ${def.name}，未执行。请使用允许的只读工具或依据已有上下文回答。`
           : claimStepTool(def)
         if (conflict) {
           loopHealth.record(def.name, input, conflict, true)
-          return () => finishTool(toolCallId, conflict, true)
+          return { isReadOnly: false, execute: () => finishTool(toolCallId, conflict, true) }
         }
         return prepareTool(input, toolCallId)
       }
       toolSet[def.name] = {
-        isReadOnly: def.isReadOnly,
         prepare: prepareWithStepGate,
         definition: aiTool({
           description: def.prompt,

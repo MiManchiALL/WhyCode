@@ -3,11 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import {
-  createCommandTools,
-  STOP_COMMAND_TOOL_NAME,
-  WRITE_COMMAND_INPUT_TOOL_NAME,
-} from './index.ts'
+import { createCommandTools, MANAGE_COMMAND_TOOL_NAME } from './index.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
 import { isCommandTaskActive } from './types.ts'
@@ -59,7 +55,7 @@ async function waitForTerminal(
     const chunk = await manager.readOutput(SESSION_A, taskId, currentOffset, 32_768, 500)
     output += chunk.output
     currentOffset = chunk.nextOffset
-    if (!isCommandTaskActive(chunk.task.status)) return { ...chunk, output, offset }
+    if (!isCommandTaskActive(chunk.task.status) && !chunk.hasMore) return { ...chunk, output, offset }
   }
   throw new Error('后台命令未在测试时限内结束')
 }
@@ -172,20 +168,16 @@ describe('后台命令会话', () => {
     }
   })
 
-  it('只给普通会话暴露五个职责清晰的命令工具', () => {
+  it('只给普通会话暴露启动与管理两个命令工具', () => {
     const manager = new CommandSessionManager('unused')
     const commands = createCommandTools(manager, SESSION_A)
-    const tools = [commands.runCommand, ...commands.taskTools]
-    assert.equal(new Set(tools.map((tool) => tool.name)).size, 5)
+    const tools = [commands.runCommand, commands.manageCommand]
+    assert.equal(new Set(tools.map((tool) => tool.name)).size, 2)
     const run = tools.find((tool) => tool.name === RUN_COMMAND_TOOL_NAME)
-    const writeInput = tools.find((tool) => tool.name === WRITE_COMMAND_INPUT_TOOL_NAME)
-    const stop = tools.find((tool) => tool.name === STOP_COMMAND_TOOL_NAME)
+    const manage = tools.find((tool) => tool.name === MANAGE_COMMAND_TOOL_NAME)
     assert.ok(run)
-    assert.ok(writeInput)
-    assert.ok(stop)
+    assert.ok(manage)
     assert.equal(run.kind, 'execute')
-    assert.equal(writeInput.kind, 'execute')
-    assert.equal(stop.kind, 'control')
     assert.equal(run.checkpointScope, undefined)
     assert.match(run.prompt, /runInBackground=true/)
   })
@@ -304,7 +296,7 @@ describe('后台命令会话', () => {
         ),
         true,
       )
-      // GetCommandOutput 接收终态会消费通知；这里仅观察生命周期，验证无人读取时的自动通知。
+      // ManageCommand read 接收终态会消费通知；这里仅观察生命周期，验证无人读取时的自动通知。
       await firstNotification
       assert.equal(notifications[0]?.task.status, 'completed')
       assert.equal(

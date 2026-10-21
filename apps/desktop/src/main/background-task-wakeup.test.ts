@@ -157,7 +157,6 @@ function notification(): CommandTaskTerminalNotification {
       endedAt: '2026-08-05T08:00:01.000Z',
       exitCode: 0,
       outputBytes: 128,
-      outputTruncated: false,
       canWrite: false,
     },
   }
