@@ -16,7 +16,7 @@
     "@dnd-kit/utilities": "3.2.2",
     "@earendil-works/pi-codemode": "1.2.0",
     "@lexical/react": "0.42.0",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@mozilla/readability": "0.6.0",
     "@napi-rs/canvas": "1.0.2",
     "@radix-ui/react-alert-dialog": "1.1.23",
