@@ -9,11 +9,7 @@ import {
   RESUME_TASK_PLAN_TOOL_NAME,
   UPDATE_TASK_ITEM_TOOL_NAME,
 } from '../tasks/tools.ts'
-import {
-  GET_COMMAND_OUTPUT_TOOL_NAME,
-  STOP_COMMAND_TOOL_NAME,
-  WRITE_COMMAND_INPUT_TOOL_NAME,
-} from '../tools/background-command/constants.ts'
+import { MANAGE_COMMAND_TOOL_NAME } from '../tools/background-command/constants.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
 import type { SubagentDefinitionCatalogSnapshot } from '../subagents/types.ts'
@@ -86,7 +82,7 @@ function toolUsageSection(
 ): string {
   const hasTool = (name: string) => availableTools === undefined || availableTools.includes(name)
   const hasWriteTools = ['WriteFile', 'EditFile'].some(hasTool)
-  const hasLifecycleTools = ['DeleteFile', 'MoveFile'].some(hasTool)
+  const hasDeleteFile = hasTool('DeleteFile')
   const hasRunCommand = hasTool(RUN_COMMAND_TOOL_NAME)
   return [
     '# 工具使用',
@@ -96,11 +92,8 @@ function toolUsageSection(
     ...(hasWriteTools
       ? ['- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。']
       : []),
-    ...(hasLifecycleTools
-      ? [hasRunCommand
-          ? `- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile；${RUN_COMMAND_TOOL_NAME} 的文件副作用没有精确检查点，不用它绕过专用文件工具。`
-          : '- 删除、移动或重命名明确文件使用 DeleteFile/MoveFile。']
-      : []),
+    ...(hasDeleteFile ? ['- 删除明确文件使用 DeleteFile，以保留精确检查点。'] : []),
+    ...(hasRunCommand ? [`- 移动或重命名文件使用 ${RUN_COMMAND_TOOL_NAME}，先确认目标不存在，避免覆盖；命令的文件副作用没有精确检查点。`] : []),
     ...(scratchAvailable
       ? ['- 项目交付物保存在项目目录；非交付脚本、日志、下载或转换中间物及其它临时产物放在临时工作区，不要用临时文件污染项目。']
       : []),
@@ -109,10 +102,10 @@ function toolUsageSection(
     '- 没有新的实质内容时直接继续调用工具，不为每个工具或下一步计划单独发文字，也不重复未变化状态。这些文字只是阶段性进度；全部工具结束后再交付完整、自包含的最终回答，不用“见上文”或前序进度代替最终结果。',
     ...(backgroundCommandsAvailable
       ? [
-          `- 终端命令统一使用 ${RUN_COMMAND_TOOL_NAME}。普通命令以及长安装、构建和测试保持前台等待，长任务设置足够的 timeoutMs，终态后当前任务会自动继续；不能先用文字承诺“后台完成后再验证”便结束。只有必须脱离当前工具步骤、跨回合继续运行的进程才设 runInBackground=true，并用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}/${STOP_COMMAND_TOOL_NAME} 管理。若你需要在任务自然完成或失败后收到通知并自动继续，再设 wakeOnCompletion=true；否则后台任务不会主动唤醒你。已登记续轮的任务不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
+          `- 终端命令统一使用 ${RUN_COMMAND_TOOL_NAME}。普通命令以及长安装、构建和测试保持前台等待，长任务设置足够的 timeoutMs，终态后当前任务会自动继续；不能先用文字承诺“后台完成后再验证”便结束。只有必须脱离当前工具步骤、跨回合继续运行的进程才设 runInBackground=true，并用 ${MANAGE_COMMAND_TOOL_NAME} 管理。若你需要在任务自然完成或失败后收到通知并自动继续，再设 wakeOnCompletion=true；否则后台任务不会主动唤醒你。已登记续轮的任务不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
         ]
       : []),
-    ...(hasWriteTools || hasLifecycleTools || hasRunCommand
+    ...(hasWriteTools || hasDeleteFile || hasRunCommand
       ? ['- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。']
       : []),
   ].join('\n')

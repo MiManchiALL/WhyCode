@@ -8,7 +8,7 @@ import { setImmediate } from 'node:timers/promises'
 import { it, type TestContext } from 'node:test'
 import { localWorkspaceIO } from '../../workspace/io.ts'
 import type { WorkspaceProcess } from '../../workspace/process.ts'
-import { createCommandTools, GET_COMMAND_OUTPUT_TOOL_NAME } from './index.ts'
+import { createCommandTools } from './index.ts'
 import { CommandSessionManager } from './manager.ts'
 import type { BackgroundTaskState, CommandTaskTerminalNotification } from './types.ts'
 
@@ -97,7 +97,7 @@ for (const code of [0, 17]) {
     const stopped = env.manager.stop(SESSION, env.task.id, { source: 'user' })
     await setImmediate()
     env.child.stdout.write('last output')
-    env.child.emit('close', code)
+    finish(env.child, code)
     const terminal = await stopped
     assert.equal(terminal.status, code === 0 ? 'completed' : 'failed')
     assert.equal(terminal.failureReason, code === 0 ? undefined : '退出码 17')
@@ -123,11 +123,11 @@ it('接受终止后以退出码 0 收尾仍属于用户停止，不冒充自然�
   assert.equal(env.notifications.length, 1)
 })
 
-it('GetCommandOutput 等待中直接得到用户停止终态时不重复续轮', async t => {
+it('ManageCommand read 等待中直接得到用户停止终态时不重复续轮', async t => {
   const env = await fixture(t)
   await env.manager.armTerminalNotification(SESSION, env.task.id)
-  const output = createCommandTools(env.manager, SESSION).taskTools.find(t => t.name === GET_COMMAND_OUTPUT_TOOL_NAME)!
-  const reading = output.execute({ taskId: env.task.id, waitMs: 30_000 }, {
+  const output = createCommandTools(env.manager, SESSION).manageCommand
+  const reading = output.execute({ action: 'read', taskId: env.task.id, waitMs: 30_000 }, {
     projectDir: env.root, additionalDirs: [], abortSignal: new AbortController().signal,
   })
   await setImmediate()
@@ -209,6 +209,8 @@ async function fixture(t: TestContext, terminate?: (child: WorkspaceProcess) => 
 }
 
 function finish(child: WorkspaceProcess, code: number) {
+  ;(child.stdout as PassThrough).end()
+  ;(child.stderr as PassThrough).end()
   child.exitCode = code
   child.emit('close', code)
 }

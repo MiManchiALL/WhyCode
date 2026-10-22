@@ -37,7 +37,6 @@ export function forkFileReferences(rebase: (path: string) => string) {
     }
     if (name === 'ReadFile' && typeof fields.path === 'string' && isAttachmentReference(fields.path)) return fields
     if (['ReadFile', 'WriteFile', 'ListDir', 'Glob', 'Grep'].includes(name)) return paths(fields, ['path'])
-    if (name === 'MoveFile') return paths(fields, ['source', 'destination'])
     if (name === 'EditFile' && Array.isArray(fields.edits)) return { ...fields, edits: fields.edits.map(item => paths(item, ['path'])) }
     if (name === 'DeleteFile' && Array.isArray(fields.paths)) return { ...fields, paths: fields.paths.map(path => typeof path === 'string' ? rebase(path) : path) }
     return value

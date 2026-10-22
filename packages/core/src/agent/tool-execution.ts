@@ -11,9 +11,13 @@ export type ToolEndEvent = Extract<CoreEvent, { type: 'tool-end' }> & { result: 
 
 export interface StepTool {
   definition: ToolSet[string]
-  isReadOnly: boolean
   /** 校验和审批可以合并准备；返回的执行函数只由批次调度器派发。 */
-  prepare: (input: unknown, toolCallId: string) => Promise<() => Promise<string>>
+  prepare: (input: unknown, toolCallId: string) => Promise<PreparedToolCall>
+}
+
+export interface PreparedToolCall {
+  isReadOnly: boolean
+  execute: () => Promise<string>
 }
 
 export type StepToolSet = Record<string, StepTool>
@@ -74,7 +78,8 @@ export class ToolExecutionBatch {
     let next = 0
     while (next < calls.length && !this.options.abort.signal.aborted && !failure) {
       const call = calls[next]!
-      if (!tools?.[call.toolName]?.isReadOnly) {
+      const preparedCall = prepared[next]!
+      if (!preparedCall.isReadOnly) {
         // 屏障前的读取全部结算后，独占调用才能进入；后面的读取不能越过它。
         await Promise.all(running)
         if (this.options.abort.signal.aborted || failure) break
@@ -82,13 +87,13 @@ export class ToolExecutionBatch {
         await Promise.race(running)
         continue
       }
-      const execution = this.invoke(call, prepared[next]!).catch((error) => {
+      const execution = this.invoke(call, preparedCall.execute).catch((error) => {
         failure ??= { error }
         this.options.abort.abort('tool-execution-failure')
       }).finally(() => running.delete(execution))
       running.add(execution)
       next++
-      if (!tools?.[call.toolName]?.isReadOnly) await execution
+      if (!preparedCall.isReadOnly) await execution
     }
     await Promise.all(running)
     if (failure) throw failure.error
@@ -98,16 +103,19 @@ export class ToolExecutionBatch {
     await this.writeQueue
   }
 
-  private async prepare(call: ToolCallPart, tool: StepTool | undefined): Promise<() => Promise<string>> {
+  private async prepare(call: ToolCallPart, tool: StepTool | undefined): Promise<PreparedToolCall> {
     this.options.emit({ type: 'tool-start', toolUseId: call.toolCallId, toolName: call.toolName, input: call.input })
     try {
       if (!tool) throw new Error(`工具不存在：${call.toolName}`)
       return await tool.prepare(call.input, call.toolCallId)
     } catch (error) {
-      return () => this.finish({
-        type: 'tool-end', toolUseId: call.toolCallId, isError: true,
-        result: `工具未执行：准备失败。${error instanceof Error ? error.message : String(error)}`,
-      })
+      return {
+        isReadOnly: false,
+        execute: () => this.finish({
+          type: 'tool-end', toolUseId: call.toolCallId, isError: true,
+          result: `工具未执行：准备失败。${error instanceof Error ? error.message : String(error)}`,
+        }),
+      }
     }
   }
 

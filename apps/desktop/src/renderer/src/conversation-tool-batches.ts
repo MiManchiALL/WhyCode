@@ -5,7 +5,6 @@ import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
 import {
   summarizeToolCallParts,
   toolCallFilePaths,
-  toolCallMoveSource,
   type ToolCallSummary,
 } from '../../shared/tool-call-summary.ts'
 
@@ -46,8 +45,6 @@ export interface ToolBatchSummary {
 export interface ToolFileRow {
   summary: string
   fullPath: string
-  /** 同目录重命名时显示在可点击目标文件名之前。 */
-  renameFrom?: string
   added?: number
   removed?: number
 }
@@ -60,7 +57,7 @@ export interface ToolBatchRow extends Partial<ToolFileRow> {
 }
 
 /** 输入结构支持按文件拆行的工具；完整的文件修改分类由检查点事实补齐。 */
-const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile', 'MoveFile'])
+const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile'])
 
 /**
  * 用户消息、模型正文和工作终点统一封口前一批工具。
@@ -206,17 +203,12 @@ export function toolCallFileRows(call: ToolCall, projectDir: string | null): Too
   const changes = new Map(
     call.fileChanges?.map((change) => [pathKey(change.path), change] as const) ?? [],
   )
-  const moveSource = call.name === 'MoveFile' ? toolCallMoveSource(call.input) : null
-  const resolvedMoveSource = moveSource ? resolveDisplayPath(moveSource, projectDir) : null
   return paths.map((path) => {
     const change = changes.get(pathKey(path))
     const fullPath = resolveDisplayPath(path, projectDir)
     return {
       summary: fileName(path),
       fullPath,
-      ...(resolvedMoveSource && sameDisplayDirectory(resolvedMoveSource, fullPath)
-        ? { renameFrom: fileName(moveSource!) }
-        : {}),
       ...(change ? { added: change.added, removed: change.removed } : {}),
     }
   })
@@ -301,18 +293,6 @@ function appendThinkingText(current: string, next: string): string {
 
 function pathKey(path: string): string {
   return path.replaceAll('\\', '/')
-}
-
-function sameDisplayDirectory(left: string, right: string): boolean {
-  return displayDirectoryKey(left) === displayDirectoryKey(right)
-}
-
-function displayDirectoryKey(path: string): string {
-  const normalized = path.replaceAll('\\', '/')
-  const directory = normalized.slice(0, Math.max(0, normalized.lastIndexOf('/')))
-  return /^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('//')
-    ? directory.toLowerCase()
-    : directory
 }
 
 function resolveDisplayPath(path: string, projectDir: string | null): string {

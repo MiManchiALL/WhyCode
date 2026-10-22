@@ -236,12 +236,8 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `WriteFile` | `{path,content}`；只用于新建或整文件重写 |
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
 | `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元，支持二进制和大文件；文本预览与统计边界见文档二 §5.2 |
-| `MoveFile` | 单个普通文件源/目标；目标必须不存在，不递归目录、不静默覆盖；文本审批预览边界同上 |
-| `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与命令任务工具管理，`wakeOnCompletion=true` 登记自然终态续轮，用户手动停止独立通知；不扫描工作区、不建文件检查点 |
-| `ListCommands` | 列出当前会话可见命令任务 |
-| `GetCommandOutput` | 增量读取命令输出 |
-| `WriteCommandInput` | 给仍存活命令写 stdin；按 execute 权限处理 |
-| `StopCommand` | `{taskId,reason?}`；终止所属进程树，可附简短原因，属于保护性控制 |
+| `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与 `ManageCommand` 管理，`wakeOnCompletion=true` 登记自然终态续轮，用户手动停止独立通知；不扫描工作区、不建文件检查点 |
+| `ManageCommand` | `{action,taskId?,input?,offset?,waitMs?,reason?}`；`list/read/write/close/stop` 管理当前会话的后台命令 |
 | `AskUserQuestion` | `{questions:[...]}`，1～6 问；每题标题、问题与 2～4 个互斥选项 |
 | `Present` | `{files:[{path,description?}]}`；声明本次最终回答的成品文件，精确约束见 §3.9 |
 | `Skill` | `{skillId,resourcePath?}`；只读当前根任务冻结 Skill |
@@ -254,6 +250,10 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 `ReadFile` 的 `path` 接受工作区相对路径、已授权的绝对路径或当前会话提供的 `attachment://<UUID>` PDF 引用。文本返回带行号的 UTF-8 内容；省略 `offset`、`limit` 时尝试完整读取，单次输出受 256 KiB 和约 25,000 token 限制，超限明确失败并提示缩小范围。指定行范围可流式读取大文件，不静默截断字符或行；成功结果说明后续起始行。`offset`、`limit` 只用于文本，`pages` 只用于 PDF，错用参数明确拒绝。图片和 PDF 的返回方式见 §3.6–3.7。
 
 `RunCommand` 前台输出以 UTF-8 字节和行数双重约束，最多预览尾部 50 KiB、2000 行。未超限时直接返回文本，不创建日志；超限时返回 `command-output` JSON，schema 单源为 `tools/run-command/output-result.ts`，包含 `output`、`totalBytes`、`totalLines`，仅在完整写入并关闭文件后提供 `fullOutputPath`，终态或保存失败说明置于 `diagnostic`。预览保留完整字符与整行，EOF 的无换行末行可保留；超限单行整行省略，JSON 转义超过结果预算时继续省略最早整行，文件内容不受影响。模型可用 `ReadFile` 分页读取或 `Grep` 搜索日志；Renderer 按同一结构展示预览、路径与诊断。取消和超时仍可返回停止前已完整保存的输出，保存失败使工具失败且不声称日志完整；磁盘上的部分文件仍归会话清理。日志位置、背压与释放机制见文档二 §5.2、§7.2。
+
+`ManageCommand` 不启动进程；除 `list` 外必须提供 `taskId`，拒绝无关参数。`list/read` 按只读权限和并发规则处理；`write/close` 按 execute 权限处理，经过项目副作用锁并标记为不可回滚；`stop` 为保护性 control，三种非只读操作均按模型原调用顺序独占执行。`write` 必填 `input`，按原样写入，不追加换行；`close` 可先写入可选末段，再关闭 stdin 发送 EOF，进程是否结束仍看返回状态。取消输入等待不停止后台进程，也不能宣称已提交的输入未送达或自动重发。
+
+`read` 返回状态、输出字节数、输入可写性、实际 `offset`、`nextOffset` 和 `hasMore`。默认从字节 0 读取，每次最多 32 KiB，后续使用 `nextOffset`；`hasMore` 与一并返回的最新落盘长度一致。窗口优先在换行处结束，不切碎 UTF-8 字符；单行超过窗口时显式说明分段，仍可无损续读，不跳过原始内容。EOF 的无换行内容可立即返回，供交互提示使用。仅 `read` 接受 `offset/waitMs`；没有新输出且任务仍活动时可等待 0～30000 ms，默认不等待，超时不停止任务。完整日志的存储和保留生命周期见文档二 §5.2。
 
 输入框上方的文件统计由 Core 当前根 turn 持有：复用完整检查点，比较各精确路径在该 turn 首次修改前与最新操作后的版本，仅重算本次落盘路径。`turn-file-changes` 与 `RuntimeSnapshot.turnFileChanges` 只传路径和净增删行数，不写入模型历史或 ViewTimeline；插队消息不重置，根 turn 开始和结束时清空。恢复原样的路径移出汇总，空文件的新建/删除仍计文件数；二进制、超过 512 KiB 或检查点不可用时不提供精确行数，不退回累加单次统计。命令和未声明精确资源的工具不在统计范围，不扫描工作区。工具卡片的 `fileChanges` 仍表示该次调用的行数变化。最终回答的历史改动摘要复用相同资源与大小边界，按该回答包含的完整检查点比较首个 before 与最后一个 after；后续修改或回滚不改写已有摘要，展示机制见文档二 §12.2。
 
@@ -268,13 +268,13 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 ```text
 <task-notification source="background-command" version="1">
   task_id, status, exit_code, command, working_directory,
-  output_bytes, output_truncated, failure_reason?
+  output_bytes, read_output: {tool, action, taskId}, failure_reason?
 </task-notification>
 ```
 
-通知是内部 user 消息，不生成用户气泡。用户手动停止的说明为“用户主动停止”，消息明确要求尊重停止操作、不得自行重启该任务，同时说明停止单个任务不代表取消整个对话或计划。模型调用 `StopCommand` 或应用退出不生成自动唤醒；正在读取输出的模型若已直接得到终态，不再重复交付通知。宿主根据会话与计划所有权决定是否续轮；模型不得用 Sleep 或高频轮询等待。
+通知是内部 user 消息，不生成用户气泡。用户手动停止的说明为“用户主动停止”，消息明确要求尊重停止操作、不得自行重启该任务，同时说明停止单个任务不代表取消整个对话或计划。模型调用 `ManageCommand(action="stop")` 或应用退出不生成自动唤醒；正在读取输出的模型若已直接得到终态，不再重复交付通知。宿主根据会话与计划所有权决定是否续轮；模型不得用 Sleep 或高频轮询等待。
 
-`StopCommand` 发起停止后进入 `stopping`，确认退出后记为 `stopped`，说明为“模型主动停止”；提供 `reason` 时显示“模型主动停止：<reason>”。`reason` 为可选单行文字，去除首尾空白后须为 1～120 字符；它只补充说明，不能改变由实际调用入口确定的停止来源。超时与应用退出保留各自原因。工具结果、后续命令查询、Header 和重启恢复共用持久化的终态说明；并发停止保留首次请求的原因，对已结束任务再次停止只返回原终态，不改写原原因。停止失败不伪造终态，任务仍可查询或重试；重启时遗留的活动任务恢复为 `interrupted`。
+`ManageCommand(action="stop")` 发起停止后进入 `stopping`，确认退出后记为 `stopped`，说明为“模型主动停止”；提供 `reason` 时显示“模型主动停止：<reason>”。`reason` 为可选单行文字，去除首尾空白后须为 1～120 字符；它只补充说明，不能改变由实际调用入口确定的停止来源。超时与应用退出保留各自原因。工具结果、后续命令查询、Header 和重启恢复共用持久化的终态说明；并发停止保留首次请求的原因，对已结束任务再次停止只返回原终态，不改写原原因。停止失败不伪造终态，任务仍可查询或重试；重启时遗留的活动任务恢复为 `interrupted`。
 
 ### 3.4 Web 与 Browser
 
@@ -575,7 +575,7 @@ Skill 管理契约由 `shared/ssh-skills.ts` 定义，沿用 `ssh(request)`，�
 
 SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历史与本地项目同用 `WorkspaceBinding`，认证配置 ID 和连接句柄不进入绑定。连接管理、所有权与清理语义见文档二 §7.5。
 
-远端组件只通过已有 SSH channel 的标准输入输出交换协议 2 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。`start` 使用 `command` 通过 `/bin/sh -c` 执行用户命令，或使用宿主提供的绝对 `executable` 与 `args` 直接启动搜索程序；两者均指定绝对工作目录，直接执行不支持 PTY。字节使用 base64，非 PTY 的 `data.stream` 始终区分 stdout/stderr，避免不同流的半个 UTF-8 字符在解码前混合；前台命令分别解码后合并预览与日志，原生搜索分别消费结果和诊断。PTY 由终端合并输出。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
+远端组件只通过已有 SSH channel 的标准输入输出交换协议 2 的 JSONL。请求带 `id`；进程请求另带 `task`。方法为 `hello`、`ping`、`start`、`input`、`resize`、`stop`、`ack`；异步事件为 `data` 与 `exit`。`start` 使用 `command` 通过 `/bin/sh -c` 执行用户命令，或使用宿主提供的绝对 `executable` 与 `args` 直接启动搜索程序；两者均指定绝对工作目录，直接执行不支持 PTY。字节使用 base64，非 PTY 的 `data.stream` 始终区分 stdout/stderr，避免不同流的半个 UTF-8 字符在解码前混合；前台和后台命令分别解码后合并输出与日志，原生搜索分别消费结果和诊断。PTY 由终端合并输出。前台关闭 stdin，后台与 PTY 保留输入。停止终止组件持有的进程组，不承诺控制命令自行脱离的守护进程。
 
 单组件最多 32 个进程，单请求行不超过 1 MiB；Main 同时等待的请求最多 64 个，12 秒未响应则关闭通道并报告结果未知。每 15 秒心跳，组件超过 75 秒未收到有效心跳后在定时检查中退出。输出按 16 KiB 分块，每个进程最多 8 个未消费块；消费后发 `ack`，暂停某个终端不会堵塞其它任务、停止或心跳。SFTP 单操作超时为 30 秒；断线后的旧请求不会自动重放。
 

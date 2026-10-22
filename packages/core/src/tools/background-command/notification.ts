@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai'
 import { unicodeSafePrefix } from '../../text.ts'
 import type { CommandTaskTerminalNotification } from './types.ts'
+import { MANAGE_COMMAND_TOOL_NAME } from './constants.ts'
 
 const MAX_COMMAND_CHARS = 2_000
 const MAX_FAILURE_REASON_CHARS = 2_000
@@ -14,7 +15,7 @@ export function isCommandTaskNotificationText(text: string): boolean {
     && trimmed.endsWith(`\n${COMMAND_TASK_NOTIFICATION_CLOSE}`)
 }
 
-/** 只携带权威终态与读取入口；完整日志继续由 GetCommandOutput 按需提供。 */
+/** 只携带权威终态与读取入口；完整日志由 ManageCommand 的 read 操作按需提供。 */
 export function createCommandTaskNotificationMessage(
   notification: CommandTaskTerminalNotification,
 ): ModelMessage {
@@ -26,7 +27,7 @@ export function createCommandTaskNotificationMessage(
     command: unicodeSafePrefix(task.command, MAX_COMMAND_CHARS),
     working_directory: task.cwd,
     output_bytes: task.outputBytes,
-    output_truncated: task.outputTruncated,
+    read_output: { tool: MANAGE_COMMAND_TOOL_NAME, action: 'read', taskId: task.id },
     failure_reason: task.failureReason
       ? unicodeSafePrefix(task.failureReason, MAX_FAILURE_REASON_CHARS)
       : null,

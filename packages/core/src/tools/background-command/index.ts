@@ -1,5 +1,5 @@
 import { localWorkspaceIO } from '../../workspace/io.ts'
-import { z } from 'zod'
+import { unicodeSafePrefix } from '../../text.ts'
 import { buildTool, type ToolDefinition } from '../tool.ts'
 import {
   createRunCommandTool,
@@ -7,28 +7,32 @@ import {
 } from '../run-command/index.ts'
 import { CommandSessionManager } from './manager.ts'
 import { isCommandTaskActive, type CommandOutputChunk, type CommandTaskSnapshot } from './types.ts'
-import {
-  GET_COMMAND_OUTPUT_TOOL_NAME,
-  LIST_COMMANDS_TOOL_NAME,
-  STOP_COMMAND_TOOL_NAME,
-  MAX_COMMAND_STOP_REASON_CHARS,
-  WRITE_COMMAND_INPUT_TOOL_NAME,
-} from './constants.ts'
+import { MANAGE_COMMAND_TOOL_NAME } from './constants.ts'
+import { manageCommandInputSchema } from './input.ts'
+import { MANAGE_COMMAND_PROMPT } from './prompt.ts'
 
 function taskSummary(task: CommandTaskSnapshot): string {
   const command = task.command.length > 1_000
-    ? `${task.command.slice(0, 1_000)}…（命令已截断）`
+    ? `${unicodeSafePrefix(task.command, 1_000)}…（命令已截断）`
     : task.command
   const details = [
     `任务 ID：${task.id}`,
     `状态：${task.status}`,
     `命令：${command}`,
     `工作目录：${task.cwd}`,
-    `输出字节：${task.outputBytes}${task.outputTruncated ? '（已达到日志上限，后续输出被丢弃）' : ''}`,
+    `输出字节：${task.outputBytes}`,
+    `可写入输入：${task.canWrite ? '是' : '否'}`,
   ]
   if (task.exitCode !== undefined) details.push(`退出码：${task.exitCode ?? '未知'}`)
   if (task.failureReason) details.push(`说明：${task.failureReason}`)
   return details.join('\n')
+}
+
+function outputSummary(chunk: CommandOutputChunk): string {
+  return [
+    `offset: ${chunk.offset}; nextOffset: ${chunk.nextOffset}; hasMore: ${chunk.hasMore}`,
+    ...(chunk.partialLine ? ['本次包含长行或续接行的片段；完整日志仍保留，使用 nextOffset 可继续读取。'] : []),
+  ].join('\n')
 }
 
 function terminalTaskResult(
@@ -37,14 +41,14 @@ function terminalTaskResult(
   return {
     data:
       `${taskSummary(completed.task)}\n\n` +
-      `命令输出（最多保留末尾 ${64 * 1024} 字节）：\n${completed.output || '（无输出）'}`,
+      `命令输出（末尾窗口；完整日志可用 ${MANAGE_COMMAND_TOOL_NAME} 读取）：\n${outputSummary(completed)}\n${completed.output || '（无输出）'}`,
     isError: completed.task.status !== 'completed',
   }
 }
 
 export interface CommandTools {
   runCommand: ToolDefinition
-  taskTools: ToolDefinition[]
+  manageCommand: ToolDefinition
 }
 
 /** 为普通会话装配统一命令入口与会话隔离的后台任务控制工具。 */
@@ -75,7 +79,7 @@ export function createCommandTools(
         return {
           data:
             `${taskSummary(task)}\n\n` +
-            `该命令已转入后台，自然完成或失败时不会自动通知你；用户手动停止时会通知。需要查看进度或交互时使用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}。`,
+            `该命令已转入后台，自然完成或失败时不会自动通知你；用户手动停止时会通知。需要查看进度或交互时使用 ${MANAGE_COMMAND_TOOL_NAME}。`,
           isError: false,
         }
       }
@@ -96,108 +100,50 @@ export function createCommandTools(
       return {
         data:
           `${taskSummary(handoff.task)}\n\n` +
-          `该命令已由 ${RUN_COMMAND_TOOL_NAME} 转入后台。自然进入 completed/failed 终态后，应用会通知你并自动继续；需要中间进度或交互时再使用 ${GET_COMMAND_OUTPUT_TOOL_NAME}/${WRITE_COMMAND_INPUT_TOOL_NAME}。`,
+          `该命令已由 ${RUN_COMMAND_TOOL_NAME} 转入后台。自然进入 completed/failed 终态后，应用会通知你并自动继续；需要中间进度或交互时再使用 ${MANAGE_COMMAND_TOOL_NAME}。`,
         isError: false,
       }
     },
   })
-  const taskTools: ToolDefinition[] = [
-    buildTool({
-      name: LIST_COMMANDS_TOOL_NAME,
-      description: '列出当前会话的后台命令',
-      prompt:
-        '列出当前会话保留的后台命令及任务 ID、状态、命令和工作目录。切回旧会话、上下文压缩后忘记任务 ID，或准备启动重复服务前使用。',
-      inputSchema: z.object({}),
-      isReadOnly: true,
-      kind: 'read',
-      async execute() {
+  const manageCommand = buildTool({
+    name: MANAGE_COMMAND_TOOL_NAME,
+    description: '查看和管理当前会话的后台命令',
+    prompt: MANAGE_COMMAND_PROMPT,
+    inputSchema: manageCommandInputSchema,
+    behavior: ({ action }) => action === 'list' || action === 'read'
+      ? { kind: 'read', isReadOnly: true }
+      : { kind: action === 'stop' ? 'control' : 'execute', isReadOnly: false },
+    async execute(input, ctx) {
+      if (input.action === 'list') {
         const tasks = await manager.list(sessionId)
         return {
-          data: tasks.length === 0
-            ? '当前会话没有后台命令。'
+          data: tasks.length === 0 ? '当前会话没有后台命令。'
             : tasks.map((task, index) => `#${index + 1}\n${taskSummary(task)}`).join('\n\n'),
           isError: false,
         }
-      },
-    }),
-    buildTool({
-      name: GET_COMMAND_OUTPUT_TOOL_NAME,
-      description: '增量读取后台命令输出和状态',
-      prompt:
-        '按字节偏移增量读取后台命令日志，并返回最新状态、nextOffset 与是否还有更多。运行中暂无新输出时可用 waitMs 等待，避免高频轮询。用户主动停止仅针对该任务，不代表取消整个对话或计划；不要自行重启被用户停止的任务。',
-      inputSchema: z.object({
-        taskId: z.string().uuid().describe(`${RUN_COMMAND_TOOL_NAME} 后台模式返回的任务 ID`),
-        offset: z.number().int().nonnegative().optional().describe('从该字节偏移开始，首次省略或传 0；后续使用上次 nextOffset'),
-        maxBytes: z.number().int().min(1024).max(65_536).optional().describe('本次最多读取字节数，默认 32768'),
-        waitMs: z.number().int().min(0).max(30_000).optional().describe('没有新输出且仍在运行时最多等待多久，默认不等待'),
-      }),
-      isReadOnly: true,
-      kind: 'read',
-      async execute(input, ctx) {
-        const chunk = await manager.readOutput(
-          sessionId,
-          input.taskId,
-          input.offset,
-          input.maxBytes,
-          input.waitMs,
-          ctx.abortSignal,
-        )
-        const header = `${taskSummary(chunk.task)}\n读取偏移：${chunk.offset} → ${chunk.nextOffset}`
-        return { data: `${header}\n\n${chunk.output || '（本次没有新输出）'}`, isError: false }
-      },
-    }),
-    buildTool({
-      name: WRITE_COMMAND_INPUT_TOOL_NAME,
-      description: '向运行中的后台命令写入标准输入',
-      prompt: '向当前会话中仍在运行的后台命令写入 stdin。默认在输入末尾追加换行；只用于已启动任务，不会开启新命令。',
-      inputSchema: z.object({
-        taskId: z.string().uuid().describe('后台任务 ID'),
-        input: z.string().max(100_000).describe('写入内容'),
-        appendNewline: z.boolean().optional().describe('是否追加换行，默认 true'),
-        closeAfterWrite: z.boolean().optional().describe('写入后是否关闭 stdin（发送 EOF），默认 false'),
-      }),
-      isReadOnly: false,
-      // stdin 可让既有进程产生文件或外部副作用，不属于只改变会话内部状态的 control。
-      kind: 'execute',
-      async execute(input) {
-        const task = await manager.writeInput(
-          sessionId,
-          input.taskId,
-          input.input + (input.appendNewline === false ? '' : '\n'),
-          input.closeAfterWrite,
-        )
-        return { data: `输入已写入。\n${taskSummary(task)}`, isError: false }
-      },
-    }),
-    buildTool({
-      name: STOP_COMMAND_TOOL_NAME,
-      description: '停止后台命令及其进程树',
-      prompt: '停止当前会话中的后台命令，并终止其完整进程树。可用 reason 简要说明停止原因。对已结束任务调用只返回现有终态，不改写原原因。',
-      inputSchema: z.object({
-        taskId: z.string().uuid().describe('后台任务 ID'),
-        reason: z.string().trim().min(1).max(MAX_COMMAND_STOP_REASON_CHARS)
-          .regex(/^[^\r\n]*$/, '停止原因请使用单行文字').optional()
-          .describe('简短的停止原因，例如“已取得结果，无需继续运行”'),
-      }),
-      isReadOnly: false,
-      kind: 'control',
-      async execute(input) {
-        const task = await manager.stop(sessionId, input.taskId, { source: 'model', detail: input.reason })
-        return { data: taskSummary(task), isError: false }
-      },
-    }),
-  ]
-  return { runCommand, taskTools }
+      }
+      const taskId = input.taskId!
+      if (input.action === 'read') {
+        const chunk = await manager.readOutput(sessionId, taskId, input.offset, undefined, input.waitMs, ctx.abortSignal)
+        return {
+          data: `${taskSummary(chunk.task)}\n${outputSummary(chunk)}\n\n${chunk.output || '（本次没有新输出）'}`,
+          isError: false,
+        }
+      }
+      if (input.action === 'stop') {
+        return { data: taskSummary(await manager.stop(sessionId, taskId, { source: 'model', detail: input.reason })), isError: false }
+      }
+      const closing = input.action === 'close'
+      const task = await manager.writeInput(sessionId, taskId, input.input ?? '', closing, ctx.abortSignal)
+      return { data: `${closing ? '标准输入已关闭（EOF）。' : '输入已写入。'}\n${taskSummary(task)}`, isError: false }
+    },
+  })
+  return { runCommand, manageCommand }
 }
 
 export { CommandSessionManager } from './manager.ts'
 export { isCommandTaskActive } from './types.ts'
-export {
-  GET_COMMAND_OUTPUT_TOOL_NAME,
-  LIST_COMMANDS_TOOL_NAME,
-  STOP_COMMAND_TOOL_NAME,
-  WRITE_COMMAND_INPUT_TOOL_NAME,
-} from './constants.ts'
+export { MANAGE_COMMAND_TOOL_NAME } from './constants.ts'
 export type {
   BackgroundTaskState,
   BackgroundTaskSummary,

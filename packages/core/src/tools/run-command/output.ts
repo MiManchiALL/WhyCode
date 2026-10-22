@@ -113,7 +113,7 @@ export class CommandOutput extends Writable {
 }
 
 /** 两路独立解码后合流；读端暂停会沿本地管道或 SSH ACK 窗口传回生产端。 */
-export async function captureCommandOutput(streams: readonly Readable[], output: CommandOutput): Promise<void> {
+export async function captureCommandOutput(streams: readonly Readable[], output: Writable): Promise<void> {
   const outputDone = finished(output, { cleanup: true })
   const readers = streams.map(stream => finished(stream, { cleanup: true }))
   void outputDone.catch(() => { for (const stream of streams) stream.destroy() })

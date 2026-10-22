@@ -208,7 +208,6 @@ function notification(engagedPlanId?: string, status: 'completed' | 'stopped' = 
       exitCode: status === 'stopped' ? 143 : 0,
       ...(status === 'stopped' ? { failureReason: '用户主动停止' } : {}),
       outputBytes: 128,
-      outputTruncated: false,
       canWrite: false,
     },
     ...(engagedPlanId ? { engagedPlanId } : {}),

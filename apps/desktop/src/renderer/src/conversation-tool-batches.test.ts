@@ -244,7 +244,7 @@ describe('工具批次折叠投影', () => {
   })
 
   it('把任何曾建立完整文件检查点的工具统一归为文件修改', () => {
-    for (const name of ['MoveFile', 'WriteFile', 'FutureFileTool']) {
+    for (const name of ['EditFile', 'WriteFile', 'FutureFileTool']) {
       assert.deepEqual(summarizeToolBatch(makeBatch([
         checkpointedTool(`checkpointed-${name}`, name),
       ])), {
@@ -254,7 +254,7 @@ describe('工具批次折叠投影', () => {
     }
 
     assert.deepEqual(summarizeToolBatch(makeBatch([
-      checkpointedTool('move', 'MoveFile'),
+      checkpointedTool('edit', 'EditFile'),
       tool('run', 'RunCommand'),
     ])), {
       label: '编辑文件并运行了命令',
@@ -312,41 +312,6 @@ describe('工具批次折叠投影', () => {
         fullPath: 'src/b.ts',
         added: 5,
         removed: 0,
-        checkpointAnchor: false,
-      },
-    ])
-  })
-
-  it('MoveFile 以目标文件作为预览入口，并只在同目录重命名时保留源文件名', () => {
-    const renamed = checkpointedTool('rename', 'MoveFile', {
-      source: 'src/before.ts',
-      destination: 'src/after.ts',
-    })
-    const moved = checkpointedTool('move', 'MoveFile', {
-      source: 'src/after.ts',
-      destination: 'archive/after.ts',
-    })
-    const rows = toolBatchRows(makeBatch([renamed, moved]), {
-      skills: [],
-      projectDir: 'C:\\project',
-      checkpointRestoreAnchorIds: new Set(['rename']),
-    })
-    assert.deepEqual(rows.map((row) => ({
-      summary: row.summary,
-      renameFrom: row.renameFrom,
-      fullPath: row.fullPath,
-      checkpointAnchor: row.checkpointAnchor,
-    })), [
-      {
-        summary: 'after.ts',
-        renameFrom: 'before.ts',
-        fullPath: 'C:\\project\\src\\after.ts',
-        checkpointAnchor: true,
-      },
-      {
-        summary: 'after.ts',
-        renameFrom: undefined,
-        fullPath: 'C:\\project\\archive\\after.ts',
         checkpointAnchor: false,
       },
     ])

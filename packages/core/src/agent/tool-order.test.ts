@@ -12,11 +12,56 @@ import { parseTranscript } from '../session/chain.ts'
 import { SessionStore } from '../session/store.ts'
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../session/tool-execution.ts'
 import { buildTool } from '../tools/tool.ts'
+import { createCommandTools, CommandSessionManager } from '../tools/background-command/index.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { AgentSession, type ApprovalHandler } from './session.ts'
 
 // 串行用例各自限时，避免前面的耗时挤占后续用例的等待预算。
 describe('工具调用顺序与执行屏障', () => {
+  it('同一 ManageCommand 的查询可并发，写入、EOF 和停止按调用顺序形成屏障', { timeout: 15_000 }, async t => {
+    const taskId = crypto.randomUUID()
+    const firstReads = [deferred(t), deferred(t)]
+    const releaseReads = deferred(t)
+    const writeStarted = deferred(t)
+    const releaseWrite = deferred(t)
+    const events: string[] = []
+    const f = await setup(t, [
+      ['ManageCommand', { action: 'read', taskId, offset: 0 }],
+      ['ManageCommand', { action: 'read', taskId, offset: 1 }],
+      ['ManageCommand', { action: 'write', taskId, input: 'yes\n' }],
+      ['ManageCommand', { action: 'close', taskId }],
+      ['ManageCommand', { action: 'stop', taskId }],
+      ['ManageCommand', { action: 'read', taskId, offset: 2 }],
+    ])
+    const tool = createCommandTools(new CommandSessionManager('unused'), 'session').manageCommand
+    f.session.setExtraTools([{ ...tool, async execute(input) {
+      const label = `${input.action}:${input.offset ?? ''}`
+      events.push(`start:${label}`)
+      if (input.action === 'read' && input.offset < 2) {
+        firstReads[input.offset]!.resolve()
+        await releaseReads.promise
+      }
+      if (input.action === 'write') {
+        writeStarted.resolve()
+        await releaseWrite.promise
+      }
+      events.push(`end:${label}`)
+      return { data: 'ok', isError: false }
+    } }])
+    const running = f.session.handleUserMessage('依次读取、交互与停止后台命令')
+    await Promise.all(firstReads.map(gate => gate.promise))
+    assert.deepEqual(events, ['start:read:0', 'start:read:1'])
+    releaseReads.resolve()
+    await writeStarted.promise
+    assert.ok(events.includes('end:read:0') && events.includes('end:read:1'))
+    assert.equal(events.at(-1), 'start:write:')
+    releaseWrite.resolve()
+    assert.equal(await running, 'completed')
+    assert.deepEqual(events.slice(-7), [
+      'end:write:', 'start:close:', 'end:close:', 'start:stop:', 'end:stop:', 'start:read:2', 'end:read:2',
+    ])
+  })
+
   it('新建后读取能看到文件，慢读取结束前不能覆盖文件', { timeout: 15_000 }, async (t) => {
     const started = deferred(t)
     const release = deferred(t)
