@@ -1211,6 +1211,7 @@ export function App() {
   useEffect(() => {
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
+    return window.whycode.onSshChanged(() => { void refreshSessions() })
   }, [refreshSessions])
 
   useEffect(() => {

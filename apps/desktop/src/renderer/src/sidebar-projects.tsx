@@ -1,9 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Server, Trash2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import { MAX_PROJECT_NAME_LENGTH, type SidebarProject } from '../../shared/projects.ts'
 import { NameEditorDialog } from './name-editor.tsx'
 import { useSidebarGroupCollapsed } from './sidebar-collapse.ts'
+import { SettingsButton } from './settings-layout.tsx'
 
 interface SidebarProjectsProps {
   projects: readonly SidebarProject[]
@@ -45,6 +47,8 @@ function ProjectGroup({ project, busy, onSelect, onRename, onRemove, children }:
   onSelect: (id: string) => void; onRename: () => void; onRemove: (id: string) => void; children: ReactNode
 }) {
   const [collapsed, setCollapsed] = useSidebarGroupCollapsed(`project:${project.id}`)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const menuTrigger = useRef<HTMLButtonElement>(null)
   const ProjectIcon = project.remote ? Server : Folder
   return <div>
     <div className="group/project-row flex min-w-0 items-center rounded-lg pr-1 hover:bg-black/[0.045] has-[[data-state=open]]:bg-black/[0.045]">
@@ -64,16 +68,36 @@ function ProjectGroup({ project, busy, onSelect, onRename, onRemove, children }:
         <button type="button" className="wc-icon-button size-6" aria-label={`在 ${project.name} 中新建会话`} title="新建会话" disabled={busy}
           onClick={() => { setCollapsed(false); onSelect(project.id) }}><Plus size={15} /></button>
         <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild><button type="button" className="wc-icon-button size-6" aria-label={`管理项目 ${project.name}`} title="管理项目" disabled={busy}>
+          <DropdownMenu.Trigger asChild><button ref={menuTrigger} type="button" className="wc-icon-button size-6" aria-label={`管理项目 ${project.name}`} title="管理项目" disabled={busy}>
             <MoreHorizontal size={15} />
           </button></DropdownMenu.Trigger>
-          <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" sideOffset={5} align="end">
+          <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" sideOffset={5} align="end"
+            onCloseAutoFocus={event => { if (confirmRemove) event.preventDefault() }}>
             <DropdownMenu.Item className="wc-menu-item" onSelect={onRename}><Pencil size={15} />重命名</DropdownMenu.Item>
-            <DropdownMenu.Item className="wc-menu-item text-[var(--wc-danger)]" onSelect={() => onRemove(project.id)}><Trash2 size={15} />移除项目</DropdownMenu.Item>
+            <DropdownMenu.Item className="wc-menu-item text-[var(--wc-danger)]" onSelect={() => {
+              if (project.sessionIds.length) setConfirmRemove(true)
+              else onRemove(project.id)
+            }}><Trash2 size={15} />移除项目</DropdownMenu.Item>
           </DropdownMenu.Content></DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
     </div>
     {!collapsed && <div className="ml-3 pl-1">{children}</div>}
+    <AlertDialog.Root open={confirmRemove} onOpenChange={setConfirmRemove}><AlertDialog.Portal>
+      <AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
+      <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] max-h-[90vh] w-[min(92vw,460px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 outline-none"
+        onEscapeKeyDown={event => { if (event.isComposing) event.preventDefault() }}
+        onCloseAutoFocus={event => { event.preventDefault(); menuTrigger.current?.focus() }}>
+        <AlertDialog.Title className="text-base font-semibold">移除项目？</AlertDialog.Title>
+        <p className="mt-2 truncate text-sm font-medium" title={project.name}>{project.name}</p>
+        <AlertDialog.Description className="mt-2 text-sm leading-6 text-[var(--wc-muted)]">
+          会话将移到“最近”，置顶会话保持不变。
+        </AlertDialog.Description>
+        <div className="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel asChild><SettingsButton>取消</SettingsButton></AlertDialog.Cancel>
+          <AlertDialog.Action asChild><SettingsButton variant="danger" disabled={busy} onClick={() => onRemove(project.id)}>移除项目</SettingsButton></AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal></AlertDialog.Root>
   </div>
 }

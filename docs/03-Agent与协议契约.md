@@ -548,7 +548,7 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 ### 7.6 桌面项目分组
 
-契约单源为 `shared/projects.ts`。`listSessionSidebar()` 同时返回会话投影与项目登记；Renderer 按明确归属展示置顶、项目、最近，项目内保留会话活动时间顺序，置顶项不重复展示。项目登记与会话工作区绑定相互独立，不按历史路径猜测旧会话归属。
+契约单源为 `shared/projects.ts`。`listSessionSidebar()` 同时返回会话与项目投影；Renderer 按明确归属展示置顶、项目、最近，项目内保留会话活动时间顺序，置顶项不重复展示。项目登记与会话工作区绑定相互独立，不按历史路径猜测旧会话归属。SSH 连接名称的投影与刷新见文档二 §7.5。
 
 `pickProjectDir(projectId?)` 只接受窗口主 Frame：传入 ID 时检查已登记目录，省略时打开原生目录选择框并登记成功选择的目录。返回 `WorkspaceActionResult<string | null>`，成功值是规范化目录，取消不修改选择，失败通过既有浮动反馈呈现。`renameProject(id,name)` 与 `removeProject(id)` 同样限主 Frame，名称为 1～200 字符的单行文本；移除只解除登记，不删除会话、项目文件或工作区所有权清单。
 
