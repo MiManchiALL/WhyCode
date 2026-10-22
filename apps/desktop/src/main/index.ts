@@ -243,7 +243,7 @@ import { openGitRepository, type GitRepository } from './git-repository.ts'
 import { registerGitIpc } from './git-ipc.ts'
 import { mutateGitRepository } from './git-actions.ts'
 import type { GitMutation } from '../shared/git.ts'
-import { projectSessionListItems } from './session-list.ts'
+import { projectSessionListItems, projectSidebarProjects } from './session-list.ts'
 import { SessionSidebarStateStore } from './session-sidebar-state.ts'
 import { ProjectStore } from './project-store.ts'
 import type { SessionSidebarSnapshot } from '../shared/projects.ts'
@@ -3135,7 +3135,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
       sessionSidebarState.orderedPinnedSessionIds(),
       (sessionId) => runtimeRegistry.hasUnreadCompletion(sessionId),
     )
-    return { sessions: items, projects: projects.list() }
+    const registeredProjects = projects.list()
+    const connections = registeredProjects.some(project => project.remote)
+      ? await sshWorkspaces.connections.configuredTargets() : new Map()
+    return { sessions: items, projects: projectSidebarProjects(registeredProjects, connections) }
   })
   for (const [channel, mutate] of [
     [IPC.renameProject, (id: unknown, name: unknown) => projects.rename(id, name)],

@@ -1,8 +1,21 @@
 import type { DesktopSessionSummary, SessionListItem } from '../shared/session.ts'
+import type { SidebarProject } from '../shared/projects.ts'
+import type { SshConnection } from '../shared/ssh.ts'
 
 export interface SessionListRuntimeState {
   sessionId: string | null
   busy: boolean
+}
+
+export function projectSidebarProjects(
+  projects: readonly SidebarProject[],
+  connections: ReadonlyMap<string, Pick<SshConnection, 'name'>>,
+): SidebarProject[] {
+  return projects.map(project => {
+    if (!project.remote) return project
+    const connection = connections.get(project.remote.target)
+    return connection ? { ...project, remote: { ...project.remote, label: connection.name } } : project
+  })
 }
 
 /** 置顶顺序独立于活动时间；最近对话则保留 SessionStore 的时间顺序。 */

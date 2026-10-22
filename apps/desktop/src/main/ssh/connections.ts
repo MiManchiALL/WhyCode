@@ -51,13 +51,13 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
     return connection
   }
 
-  async configuredTargets(): Promise<Map<string, string>> {
+  async configuredTargets(): Promise<Map<string, SshConnection>> {
     return new Map((await this.store.list()).flatMap(connection => connection.fingerprint
-      ? [[targetIdentity(connection, connection.fingerprint), connection.id]] : []))
+      ? [[targetIdentity(connection, connection.fingerprint), connection]] : []))
   }
   async connectionIdForTarget(target: string): Promise<string> {
     const active = [...this.states].find(([, state]) => state.status === 'connected' && state.host.target === target)
-    const id = active?.[0] ?? (await this.configuredTargets()).get(target)
+    const id = active?.[0] ?? (await this.configuredTargets()).get(target)?.id
     if (!id) throw new SshConnectionMissingError()
     return id
   }
