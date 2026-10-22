@@ -672,6 +672,10 @@ export class AgentSession {
     return this.options.mcpRuntime?.connectionManager().snapshot(true) ?? null
   }
 
+  async removeProjectMcpServers(): Promise<void> {
+    await this.options.mcpRuntime?.removeProjectServers()
+  }
+
   waitUntilIdle(): Promise<void> {
     if (!this.isBusy) return Promise.resolve()
     return new Promise((resolve) => this.idleWaiters.add(resolve))

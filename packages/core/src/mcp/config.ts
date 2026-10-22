@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import {
   MCP_CONFIG_VERSION,
   formatMcpConfigError,
@@ -133,8 +134,8 @@ export interface McpConfiguration {
   projectServerCount: number
 }
 
-export function getProjectMcpConfigPath(projectDir: string): string {
-  return join(projectDir, '.whycode', 'mcp.json')
+export function getProjectMcpConfigPath(projectDir: string, io = localWorkspaceIO): string {
+  return io.path.join(projectDir, '.whycode', 'mcp.json')
 }
 
 export async function ensureMcpConfigTemplate(path: string): Promise<void> {
@@ -149,6 +150,11 @@ export async function ensureProjectMcpConfigTemplate(path: string): Promise<void
 export async function loadMcpConfiguration(options: {
   globalConfigPath: string
   projectDir?: string | null
+  projectIO?: WorkspaceIO
+  /** 宿主可在读取时登记项目资源归属；解析与错误诊断仍由 Core 统一处理。 */
+  projectReadFile?: () => Promise<Buffer>
+  /** 远端项目只使用宿主提供的远端环境；不能回退到本机环境。 */
+  projectEnvironment?: (names: readonly string[]) => Promise<NodeJS.ProcessEnv>
   env?: NodeJS.ProcessEnv
   /** 由宿主安全存储解密；只叠加到全局 HTTP 服务器，不进入配置摘要。 */
   globalSecretHeaders?: readonly McpSecretHeader[]
@@ -159,10 +165,12 @@ export async function loadMcpConfiguration(options: {
     options.globalConfigPath,
   ), env, globalSecretHeaders)
   const projectPath = options.projectDir
-    ? getProjectMcpConfigPath(options.projectDir)
+    ? getProjectMcpConfigPath(options.projectDir, options.projectIO)
     : null
   const project = projectPath
-    ? await readConfigFile('project', projectPath, options.projectDir!, env, EMPTY_HEADERS)
+    ? await readConfigFile('project', projectPath, options.projectDir!,
+      options.projectIO && options.projectIO.identity !== 'local' ? {} : env,
+      EMPTY_HEADERS, options.projectIO, options.projectEnvironment, options.projectReadFile)
     : emptyReadResult()
   const effective = new Map<string, McpServerConfig>()
   for (const server of global.servers) effective.set(server.name, server)
@@ -208,10 +216,13 @@ async function readConfigFile(
   baseDir: string,
   env: NodeJS.ProcessEnv,
   secretHeaders: ReadonlyMap<string, Readonly<Record<string, string>>>,
+  io: WorkspaceIO = localWorkspaceIO,
+  environment?: (names: readonly string[]) => Promise<NodeJS.ProcessEnv>,
+  readFile?: () => Promise<Buffer>,
 ): Promise<ConfigReadResult> {
   let bytes: Buffer
   try {
-    bytes = await readMcpConfigBytes(path)
+    bytes = await (readFile ? readFile() : readMcpConfigBytes(path, io))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyReadResult()
     return {
@@ -266,12 +277,16 @@ async function readConfigFile(
     })
     if (!value.enabled) continue
     try {
+      const values = value.transport === 'stdio' ? value.env : value.headers
+      const names = [...new Set(Object.values(values ?? {}).flatMap(text =>
+        [...text.matchAll(ENV_REFERENCE)].map(match => match[1]!)))]
       servers.push(resolveServer(
         name,
         scope,
         baseDir,
         value,
-        env,
+        environment && names.length ? await environment(names) : env,
+        io,
         fingerprint
           ? secretHeaders.get(secretHeaderTargetKey(name, fingerprint))
           : undefined,
@@ -295,6 +310,7 @@ function resolveServer(
   baseDir: string,
   value: ParsedMcpServer,
   env: NodeJS.ProcessEnv,
+  io: WorkspaceIO,
   secretHeaders?: Readonly<Record<string, string>>,
 ): McpServerConfig {
   const sourceFingerprint = sha256(JSON.stringify(value))
@@ -306,8 +322,8 @@ function resolveServer(
       command: value.command,
       args: value.args,
       cwd: value.cwd
-        ? isAbsolute(value.cwd) ? resolve(value.cwd) : resolve(baseDir, value.cwd)
-        : resolve(baseDir),
+        ? io.path.resolve(baseDir, value.cwd)
+        : io.path.resolve(baseDir),
       env: resolveRecord(value.env ?? {}, env),
       startupTimeoutMs: value.startupTimeoutMs,
       toolTimeoutMs: value.toolTimeoutMs,
@@ -317,6 +333,7 @@ function resolveServer(
       sourceFingerprint,
       runtimeFingerprint: effectiveRuntimeFingerprint({
         ...resolved,
+        workspace: [io.identity, baseDir],
         env: Object.keys(resolved.env).sort(),
       }),
     }
@@ -337,6 +354,7 @@ function resolveServer(
     sourceFingerprint,
     runtimeFingerprint: effectiveRuntimeFingerprint({
       ...resolved,
+      workspace: [io.identity, baseDir],
       headers: Object.keys(resolved.headers)
         .map((header) => header.toLowerCase())
         .sort(),

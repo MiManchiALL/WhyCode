@@ -33,7 +33,7 @@ export class SshCredentialsRequiredError extends Error {}
 
 export class SshConnections extends EventEmitter<{ changed: []; connected: [id: string] }> {
   private readonly states = new Map<string, ConnectionState>()
-  private readonly skillOperations = new Map<string, string>()
+  private readonly configurationOperations = new Set<{ id: string; key: string | null; done: Promise<void> }>()
   readonly store: SshConnectionStore
   private readonly resources: string
   constructor(store: SshConnectionStore, resources: string) { super(); this.store = store; this.resources = resources }
@@ -44,7 +44,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
   }
 
   async save(input: SshConnectionInput): Promise<SshConnection> {
-    if (input.id && (['connecting', 'releasing'].includes(this.status(input.id)) || this.skillOperations.has(input.id))) throw new Error('SSH 连接正在处理，请稍后再编辑')
+    if (input.id && (['connecting', 'releasing'].includes(this.status(input.id)) || [...this.configurationOperations].some(operation => operation.id === input.id))) throw new Error('SSH 连接正在处理，请稍后再编辑')
     const connection = await this.store.save(input)
     if (input.id) this.disconnect(input.id)
     this.emit('changed')
@@ -237,29 +237,33 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
     }
     finally { transport.client.end() }
   }
-  async withSkillFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string, client: Client) => Promise<T>): Promise<T> {
-    if (['connecting', 'releasing'].includes(this.status(id))) throw new Error('SSH 连接正在处理，请稍后管理 Skill')
-    return this.withFiles(id, (fs, home, client) => this.withSkillLock(id, fs, home, () => operation(fs, home, client)))
+  async withConfigurationFiles<T>(id: string, operation: (fs: WorkspaceFileSystem, home: string, client: Client) => Promise<T>, target?: string, wait = false): Promise<T> {
+    if (['connecting', 'releasing'].includes(this.status(id))) throw new Error('SSH 连接正在处理，请稍后管理远端配置')
+    return this.withFiles(id, (fs, home, client) => this.withConfigurationLock(id, fs, home, () => operation(fs, home, client), false, wait), target)
   }
-  private async withSkillLock<T>(id: string, fs: WorkspaceFileSystem, home: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, releasing = false): Promise<T> {
-    if (this.skillOperations.has(id)) throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
-    this.skillOperations.set(id, `pending:${id}`)
+  private async withConfigurationLock<T>(id: string, fs: WorkspaceFileSystem, home: string, operation: (fs: WorkspaceFileSystem, home: string) => Promise<T>, releasing = false, wait = false): Promise<T> {
+    const previous = [...this.configurationOperations]
+    let finish!: () => void
+    const pending = { id, key: null as string | null, done: new Promise<void>(resolve => { finish = resolve }) }
+    this.configurationOperations.add(pending)
     try {
       const key = `${(await this.store.get(id)).connection.fingerprint}:${home}`
-      if ([...this.skillOperations.values()].includes(key)) throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
-      if (!releasing && this.status(id) === 'releasing') throw new Error('SSH 连接正在清理，请稍后管理 Skill')
-      this.skillOperations.set(id, key)
+      pending.key = key
+      const preceding = previous.filter(operation => operation.id === id || operation.key === null || operation.key === key)
+      if (!wait && preceding.length) throw new Error('此服务器账号的远端配置操作仍在后台进行，请稍后重试')
+      await Promise.all(preceding.map(operation => operation.done))
+      if (!releasing && this.status(id) === 'releasing') throw new Error('SSH 连接正在清理，请稍后管理远端配置')
       return await operation(fs, home)
     }
-    finally { this.skillOperations.delete(id) }
+    finally { this.configurationOperations.delete(pending); finish() }
   }
-  private assertSkillsIdle(id: string, component?: RemoteComponent): void {
-    if (this.skillOperations.has(id) || (component && [...this.skillOperations.keys()].some(key => componentOf(this.states.get(key))?.identity === component.identity))) {
-      throw new Error('此服务器账号的 Skill 操作仍在后台进行，请稍后重试')
+  private assertConfigurationIdle(id: string, component?: RemoteComponent): void {
+    if ([...this.configurationOperations].some(operation => operation.id === id || (component && componentOf(this.states.get(operation.id))?.identity === component.identity))) {
+      throw new Error('此服务器账号的远端配置操作仍在后台进行，请稍后重试')
     }
   }
   async removeLocal(id: string): Promise<void> {
-    this.assertSkillsIdle(id)
+    this.assertConfigurationIdle(id)
     if (this.status(id) === 'releasing') throw new Error('连接仍在清理，请等待完成后重试')
     this.disconnect(id)
     await this.store.remove(id)
@@ -272,7 +276,7 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
     if (current?.status === 'releasing') return Promise.reject(new Error('SSH 连接正在清理，请稍后重试'))
     const host = current?.status === 'connected' ? current.host : null
     const releasing: Extract<ConnectionState, { status: 'releasing' }> = { status: 'releasing', component: componentOf(current) }
-    try { this.assertSkillsIdle(id, releasing.component) } catch (error) { return Promise.reject(error) }
+    try { this.assertConfigurationIdle(id, releasing.component) } catch (error) { return Promise.reject(error) }
     if (releasing.component && [...this.states.values()].some(state => state.status === 'releasing' && state.component?.identity === releasing.component!.identity)) {
       return Promise.reject(new Error('此服务器的远端组件正在清理，请稍后重试'))
     }
@@ -302,11 +306,11 @@ export class SshConnections extends EventEmitter<{ changed: []; connected: [id: 
         const clean = async (fs: WorkspaceFileSystem, home: string, client: Client) => {
           const directory = path.posix.join(home, '.cache', 'whycode-remote')
           const identity = await readComponentIdentity(fs, directory)
-          this.assertSkillsIdle(id, identity ? { directory, identity } : undefined)
+          this.assertConfigurationIdle(id, identity ? { directory, identity } : undefined)
           if (identity) stopRelated({ directory, identity })
           await waitForInstallers()
           if (options.cleanSkills) {
-            const results = await this.withSkillLock(id, fs, home, () => cleanManagedSkills(remoteSkillIO(fs, home, client), home, options), true)
+            const results = await this.withConfigurationLock(id, fs, home, () => cleanManagedSkills(remoteSkillIO(fs, home, client), home, options), true)
             const failures = results.filter(result => !result.ok)
             if (failures.length) throw new Error(failures.map(result => `${result.name}：${result.message}`).join('\n'))
             preserved.push(...results.filter(result => result.preserved).map(result => result.name))

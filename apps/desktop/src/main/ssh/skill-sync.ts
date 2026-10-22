@@ -1,7 +1,8 @@
 import { SkillCatalogService, workspacePathKey, type SkillSummary } from '@whycode/core'
 import type { SshSkillJob, SshSkillListing, SshSkillResult, SshSkillRow } from '../../shared/ssh-skills.ts'
 import type { SshConnections } from './connections.ts'
-import { exists, localWorkspaceIO, readSkillTree, remoteSkillIO, skillPath, SKILL_SYNC_BYTES, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
+import { exists } from './config-files.ts'
+import { localWorkspaceIO, readSkillTree, remoteSkillIO, skillPath, SKILL_SYNC_BYTES, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
 import { cleanManagedSkills, managedSkills, publishSkill, skillRoot, type ManagedSkill } from './skill-remote.ts'
 
 interface LocalSkill { id: string; skill: SkillSummary; digest?: string; error?: string }
@@ -75,7 +76,7 @@ export class SshSkillSync {
   }
 
   async sync(id: string, selected: string[]): Promise<SshSkillJob> {
-    return this.run(id, 'sync', selected, async progress => this.connections.withSkillFiles(id, async (fs, home, client) => {
+    return this.run(id, 'sync', selected, async progress => this.connections.withConfigurationFiles(id, async (fs, home, client) => {
       const io = remoteSkillIO(fs, home, client)
       const local = await this.local()
       const inspection = await this.inspect(io, home, local)
@@ -105,7 +106,7 @@ export class SshSkillSync {
   }
 
   clean(id: string, selected: string[], allowModified: string[]): Promise<SshSkillJob> {
-    return this.run(id, 'clean', selected, progress => this.connections.withSkillFiles(id, (fs, home, client) =>
+    return this.run(id, 'clean', selected, progress => this.connections.withConfigurationFiles(id, (fs, home, client) =>
       cleanManagedSkills(remoteSkillIO(fs, home, client), home, { allowModified }, selected, progress)))
   }
 

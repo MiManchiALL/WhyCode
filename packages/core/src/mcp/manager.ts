@@ -8,6 +8,7 @@ import {
   mapWithConcurrency,
   type McpFetch,
   type McpOAuthTransportFactory,
+  type McpTransportFactory,
 } from './connection-utils.ts'
 import type {
   McpBoundTool,
@@ -32,12 +33,13 @@ export class McpConnectionManager {
     configuration: McpConfiguration,
     fetchImpl: McpFetch = globalThis.fetch,
     oauthTransportFactory?: McpOAuthTransportFactory,
+    transportFactory?: McpTransportFactory,
   ) {
     this.configuration = configuration
     for (const config of configuration.servers) {
       this.connections.set(
         config.name,
-        new McpServerConnection(config, fetchImpl, oauthTransportFactory),
+        new McpServerConnection(config, fetchImpl, oauthTransportFactory, transportFactory),
       )
     }
   }
@@ -105,6 +107,18 @@ export class McpConnectionManager {
       throw new Error('MCP 工具目录在本步骤开始后发生变化，请重新调用 ToolSearch')
     }
     return connection.call(binding, input, signal, onProgress)
+  }
+
+  async removeProjectServers(): Promise<void> {
+    const removed = [...this.connections.values()].filter(server => server.config.scope === 'project')
+    this.configuration.servers = this.configuration.servers.filter(server => server.scope !== 'project')
+    this.configuration.configuredServers = this.configuration.configuredServers.filter(server => server.scope !== 'project')
+    this.configuration.projectServerCount = 0
+    this.configuration.projectConfigDigest = null
+    await Promise.all(removed.map(async server => {
+      await server.close()
+      this.connections.delete(server.config.name)
+    }))
   }
 
   async close(): Promise<void> {

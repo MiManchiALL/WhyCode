@@ -26,6 +26,8 @@ export interface McpOAuthTransport {
 export type McpOAuthTransportFactory = (
   config: McpHttpServerConfig,
 ) => McpOAuthTransport | undefined
+/** 宿主提供工作区传输；未覆盖的服务器仍使用默认传输。 */
+export type McpTransportFactory = (config: McpServerConfig) => Transport | undefined
 
 export function createMcpTransport(
   config: McpServerConfig,

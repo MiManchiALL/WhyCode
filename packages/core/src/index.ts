@@ -72,7 +72,9 @@ export {
   type McpServerConfig,
   type McpStdioServerConfig,
 } from './mcp/config.ts'
-export { parseMcpSecretHeader } from './mcp/config-schema.ts'
+export { parseMcpSecretHeader, parseMcpConfig, formatMcpConfigError } from './mcp/config-schema.ts'
+export { MCP_CONFIG_MAX_BYTES, readMcpConfigBytes, decodeMcpConfig } from './mcp/config-storage.ts'
+export { withMcpServer, withMcpServerEnabled } from './mcp/config-mutations.ts'
 export {
   MCP_TOOL_SEARCH_NAME,
   McpSessionRuntime,
@@ -82,6 +84,8 @@ export type { McpManagerSnapshot, McpServerStatus } from './mcp/manager.ts'
 export type {
   McpOAuthTransport,
   McpOAuthTransportFactory,
+  McpTransportFactory,
+  McpFetch,
 } from './mcp/connection-utils.ts'
 export {
   AgentSession,

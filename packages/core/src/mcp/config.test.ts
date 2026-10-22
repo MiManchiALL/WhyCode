@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix } from 'node:path'
+import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
 import { describe, it } from 'node:test'
 import {
   MCP_GLOBAL_CONFIG_TEMPLATE,
@@ -16,6 +17,36 @@ import {
 } from './config.ts'
 
 describe('MCP 配置', () => {
+  it('远端项目使用远端路径和环境，传输身份绑定服务器及项目，全局配置保持本机语义', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-config-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const globalConfigPath = join(root, 'global.json')
+    const projectPath = join(root, 'project.json')
+    await writeFile(globalConfigPath, JSON.stringify({ version: 1, servers: { global: { transport: 'stdio', command: 'node', env: { TOKEN: '${TOKEN}' } } } }))
+    await writeFile(projectPath, JSON.stringify({ version: 1, servers: {
+      remote: { transport: 'stdio', command: 'python3', cwd: 'service', env: { TOKEN: '${TOKEN}' } },
+      http: { transport: 'http', url: 'http://localhost:3000/mcp', headers: { Authorization: '${TOKEN}' } },
+    } }))
+    const projectIO: WorkspaceIO = { ...localWorkspaceIO, identity: 'ssh:first', platform: 'linux', path: posix,
+      fs: { ...localWorkspaceIO.fs, open: async (path, flags) => {
+        assert.equal(path, '/project/.whycode/mcp.json')
+        return localWorkspaceIO.fs.open(projectPath, flags)
+      } } }
+    const options = { globalConfigPath, projectDir: '/project', projectIO, env: { TOKEN: 'host-only-secret' } }
+    const missing = await loadMcpConfiguration(options)
+    assert.deepEqual(missing.servers.map(server => server.name), ['global'])
+    assert.equal(missing.diagnostics.length, 2)
+    const projectEnvironment = async (names: readonly string[]) => { assert.deepEqual(names, ['TOKEN']); return { TOKEN: 'remote-secret' } }
+    const first = await loadMcpConfiguration({ ...options, projectEnvironment })
+    const remote = first.servers.find(server => server.name === 'remote')!
+    assert.equal(remote.transport, 'stdio')
+    if (remote.transport === 'stdio') { assert.equal(remote.cwd, '/project/service'); assert.equal(remote.env.TOKEN, 'remote-secret') }
+    const global = first.servers.find(server => server.name === 'global')!
+    if (global.transport === 'stdio') assert.equal(global.env.TOKEN, 'host-only-secret')
+    const second = await loadMcpConfiguration({ ...options, projectEnvironment, projectIO: { ...projectIO, identity: 'ssh:second' } })
+    for (const name of ['remote', 'http']) assert.notEqual(first.servers.find(server => server.name === name)?.runtimeFingerprint, second.servers.find(server => server.name === name)?.runtimeFingerprint)
+    assert.equal(global.runtimeFingerprint, second.servers.find(server => server.name === 'global')?.runtimeFingerprint)
+  })
   it('原子补齐默认启用的 Context7 与只读 GitHub，不覆盖已有同名条目', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-mcp-config-'))
     const path = join(root, '.whycode', 'mcp.json')

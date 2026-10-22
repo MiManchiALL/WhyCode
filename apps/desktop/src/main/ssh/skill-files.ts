@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { Client } from 'ssh2'
 import { localWorkspaceIO, readBoundedWorkspaceFile, type WorkspaceFileSystem, type WorkspaceIO } from '@whycode/core'
 import { sshSkillIdSchema } from '../../shared/ssh-skills.ts'
+import { ordinaryDirectory } from './config-files.ts'
 import { remoteSkillDigest } from './skill-digest.ts'
 
 export const SKILL_SYNC_MARKER = '.whycode-skill-sync.json'
@@ -18,26 +19,6 @@ export function remoteSkillIO(fs: WorkspaceFileSystem, home: string, client: Cli
 export function skillPath(root: string, id: string, paths: typeof path): string {
   return paths.join(root, ...sshSkillIdSchema.parse(id).split('/'))
 }
-export async function exists(fs: WorkspaceFileSystem, file: string) {
-  try { return await fs.lstat(file) }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
-}
-
-/** 每一层都拒绝链接；删除和发布不能借助用户目录中的链接越界。 */
-export async function ordinaryDirectory(io: WorkspaceIO, root: string, create = false): Promise<boolean> {
-  const parent = io.path.dirname(root)
-  if (parent !== root && !await ordinaryDirectory(io, parent, create)) return false
-  let info = await exists(io.fs, root)
-  if (!info && create) {
-    try { await io.fs.mkdir(root, { mode: 0o700 }) }
-    catch (error) { if (!await exists(io.fs, root)) throw error }
-    info = await exists(io.fs, root)
-  }
-  if (!info) return false
-  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Skill 目录不是普通目录：${root}`)
-  return true
-}
-
 export async function mapSkillFiles<T, R>(items: readonly T[], work: (item: T) => Promise<R>): Promise<R[]> {
   const result: R[] = []
   let cursor = 0
@@ -102,18 +83,6 @@ export async function readSkillTree(io: WorkspaceIO, root: string): Promise<Skil
   for (const directory of directories) hash.update(`d\0${directory}\0`)
   for (const file of files) hash.update(`f\0${file.path}\0${file.mode}\0${file.data.length}\0`).update(file.data)
   return { digest: hash.digest('hex'), bytes, files, directories }
-}
-
-export async function pruneSkillParents(io: WorkspaceIO, directory: string, stop: string): Promise<void> {
-  for (let current = directory; current !== stop; current = io.path.dirname(current)) {
-    if (!await ordinaryDirectory(io, current)) continue
-    if ((await io.fs.readdir(current, { withFileTypes: true })).length > 0) break
-    try { await io.fs.rmdir(current) }
-    catch (error) {
-      if ((await io.fs.readdir(current, { withFileTypes: true })).length > 0) break
-      throw error
-    }
-  }
 }
 
 export { localWorkspaceIO }

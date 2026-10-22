@@ -22,7 +22,7 @@ import {
   type McpServerInstructionsSnapshot,
   type McpServerStatus,
 } from './manager.ts'
-import type { McpOAuthTransportFactory } from './connection-utils.ts'
+import type { McpOAuthTransportFactory, McpTransportFactory } from './connection-utils.ts'
 import {
   MCP_TOOL_SEARCH_NAME,
   MCP_TOOL_SEARCH_DEFAULT_RESULTS,
@@ -49,6 +49,7 @@ export interface McpSessionRuntimeOptions {
   configuration: McpConfiguration
   fetchImpl?: McpFetch
   oauthTransportFactory?: McpOAuthTransportFactory
+  transportFactory?: McpTransportFactory
   attachments?: McpOutputAttachmentContext
 }
 
@@ -66,6 +67,7 @@ export class McpSessionRuntime {
       options.configuration,
       options.fetchImpl,
       options.oauthTransportFactory,
+      options.transportFactory,
     )
   }
 
@@ -118,6 +120,12 @@ export class McpSessionRuntime {
 
   async close(): Promise<void> {
     await this.manager.close()
+  }
+
+  async removeProjectServers(): Promise<void> {
+    this.trustedProjectConfigurationFingerprint = null
+    this.searchIndex = null
+    await this.manager.removeProjectServers()
   }
 
   inputSchema(tool: McpCatalogTool): Schema<Record<string, unknown>> | null {

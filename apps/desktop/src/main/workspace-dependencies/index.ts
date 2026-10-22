@@ -38,7 +38,7 @@ export class WorkspaceDependencies {
         return dependencyPaths(environment.directory, environment.node, io)
       }
       const id = await this.connections.connectionIdForTarget(io.identity)
-      return this.connections.withSkillFiles(id, async () => {
+      return this.connections.withConfigurationFiles(id, async () => {
         const host = this.connections.host(id)
         const architecture = (await waitDependencyProcess(host.processes.spawn('uname -m', host.home), signal)).trim()
         const arch = architecture === 'x86_64' ? 'x64' : architecture === 'aarch64' || architecture === 'arm64' ? 'arm64' : null

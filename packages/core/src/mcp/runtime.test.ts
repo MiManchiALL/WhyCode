@@ -10,6 +10,7 @@ import {
   type McpConfiguration,
 } from './config.ts'
 import type { McpFetch } from './manager.ts'
+import { createMcpTransport } from './connection-utils.ts'
 import { MCP_TOOL_SEARCH_NAME, McpSessionRuntime } from './runtime.ts'
 import {
   createMcpToolStateMessage,
@@ -24,6 +25,51 @@ const fixture = join(
 )
 
 describe('MCP 延迟工具检索', () => {
+  it('删除项目配置时关闭失败可重试，失败期间旧工具立即失效', async t => {
+    const configuration = testConfiguration()
+    configuration.servers[0]!.scope = 'project'
+    configuration.projectServerCount = 1
+    configuration.projectConfigDigest = 'project'
+    let attempts = 0
+    const runtime = new McpSessionRuntime({ configuration, transportFactory: config => {
+      const transport = createMcpTransport(config, globalThis.fetch)
+      const close = transport.close.bind(transport)
+      transport.close = async () => {
+        if (++attempts === 1) throw new Error('fixture close failed')
+        await close()
+      }
+      return transport
+    } })
+    t.after(() => runtime.close())
+    runtime.trustProjectConfiguration()
+    const manager = runtime.connectionManager()
+    await manager.prepareAll(new AbortController().signal, true)
+    assert.ok(manager.snapshot(true).tools.length > 0)
+    await assert.rejects(runtime.removeProjectServers(), /fixture close failed/)
+    assert.deepEqual(manager.snapshot(true).tools, [])
+    await runtime.removeProjectServers()
+    assert.equal(attempts, 2)
+    assert.deepEqual(manager.snapshot(true).servers, [])
+  })
+  it('删除项目配置关闭已有连接，旧状态不能在下次步骤重新启动服务器', async t => {
+    const configuration = testConfiguration()
+    configuration.servers[0]!.scope = 'project'
+    configuration.projectServerCount = 1
+    configuration.projectConfigDigest = 'project'
+    const runtime = new McpSessionRuntime({ configuration })
+    t.after(() => runtime.close())
+    runtime.trustProjectConfiguration()
+    const manager = runtime.connectionManager()
+    const signal = new AbortController().signal
+    await manager.prepareAll(signal, true)
+    const loaded = manager.snapshot(true)
+    assert.ok(loaded.tools.length > 0)
+    await runtime.removeProjectServers()
+    assert.equal(runtime.hasProjectServers(), false)
+    assert.deepEqual(manager.snapshot(true).servers, [])
+    await manager.prepareAll(signal, true)
+    assert.deepEqual(manager.snapshot(true).tools, [])
+  })
   it('首步只暴露 ToolSearch，检索提交后的下一步才暴露真实具名工具', async () => {
     const runtime = new McpSessionRuntime({
       configuration: testConfiguration(),

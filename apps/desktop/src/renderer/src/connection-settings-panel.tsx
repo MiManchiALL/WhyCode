@@ -34,6 +34,8 @@ import {
   ConsensusModelsEditor,
 } from './agent-model-settings.tsx'
 import { McpSettingsEditor } from './mcp-settings.tsx'
+import { RemoteMcpEditor } from './remote-mcp-editor.tsx'
+import type { RemoteMcpDocument } from '../../shared/ssh-mcp.ts'
 import {
   SettingsButton,
   SettingsPanel,
@@ -62,6 +64,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const feedback = useConversationFeedback()
   const [pending, setPending] = useState(false)
   const [oauthPending, setOauthPending] = useState(false)
+  const [mcpDocument, setMcpDocument] = useState<RemoteMcpDocument | null>(null)
   const [section, setSection] = useState<SettingsSectionId>(props.initialSection ?? 'general')
   const refreshGeneration = useRef(0)
 
@@ -113,13 +116,14 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
     try {
       const result = await window.whycode.openMcpConfig(request)
       if (!result.ok) props.onError(result.error ?? '无法打开 MCP 配置文件')
+      else if (result.document) setMcpDocument(result.document)
     } catch (cause) {
       props.onError(cause instanceof Error ? cause.message : String(cause))
     }
   }
 
   return (
-    <Dialog.Root
+    <><Dialog.Root
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) requestClose()
@@ -270,6 +274,10 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+    {mcpDocument && <RemoteMcpEditor document={mcpDocument} onClose={() => setMcpDocument(null)} onSaved={result => {
+      if (result.snapshot) props.onChanged(result.snapshot)
+      feedback('success', '项目 MCP 配置已保存')
+    }} />}</>
   )
 }
 

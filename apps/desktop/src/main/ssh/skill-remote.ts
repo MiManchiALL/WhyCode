@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { readBoundedWorkspaceFile, skillSummarySchema, type WorkspaceIO } from '@whycode/core'
 import type { SshReleaseOptions, SshSkillResult } from '../../shared/ssh-skills.ts'
-import { exists, mapSkillFiles, ordinaryDirectory, pruneSkillParents, skillTreeDigest, skillPath, SKILL_SYNC_MARKER, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
+import { exists, ordinaryDirectory, pruneEmptyParents } from './config-files.ts'
+import { mapSkillFiles, skillTreeDigest, skillPath, SKILL_SYNC_MARKER, type SkillTree, type SkillWorkspaceIO } from './skill-files.ts'
 
 const markerSchema = skillSummarySchema.pick({ name: true, description: true }).extend({
   owner: z.literal('whycode-skill-sync'),
@@ -92,7 +93,7 @@ export async function publishSkill(io: SkillWorkspaceIO, home: string, id: strin
   } finally {
     // 只删除本次创建的暂存路径；中断后仍可通过归属扫描列出并清理残留。
     if (await exists(io.fs, staging)) await io.fs.rm(staging, { recursive: true })
-    if (!published) await pruneSkillParents(io, io.path.dirname(destination), home)
+    if (!published) await pruneEmptyParents(io, io.path.dirname(destination), home)
   }
 }
 
@@ -124,13 +125,13 @@ export async function cleanManagedSkills(io: SkillWorkspaceIO, home: string, opt
       const deleting = isStaging(entry.id) ? directory : temporaryPath(io, home)
       if (deleting !== directory) {
         await io.fs.rename(directory, deleting)
-        await pruneSkillParents(io, io.path.dirname(directory), home)
+        await pruneEmptyParents(io, io.path.dirname(directory), home)
       }
       await io.fs.rm(deleting, { recursive: true })
       result = { id: entry.id, name, ok: true, message: '已清理' }
     } catch (error) { result = { id: entry.id, name, ok: false, message: error instanceof Error ? error.message : String(error) } }
     results.push(result); progress?.(result)
   }
-  await pruneSkillParents(io, root, home)
+  await pruneEmptyParents(io, root, home)
   return results
 }

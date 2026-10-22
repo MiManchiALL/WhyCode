@@ -4,16 +4,16 @@ import {
   access,
   mkdir,
   open,
-  readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { TextDecoder } from 'node:util'
+import { localWorkspaceIO } from '../workspace/io.ts'
+import { readBoundedWorkspaceFile } from '../workspace/read.ts'
 
-const MCP_CONFIG_MAX_BYTES = 256 * 1024
+export const MCP_CONFIG_MAX_BYTES = 256 * 1024
 
 export async function ensureMcpFile(path: string, template: string): Promise<void> {
   try {
@@ -36,16 +36,8 @@ export async function ensureMcpFile(path: string, template: string): Promise<voi
   }
 }
 
-export async function readMcpConfigBytes(path: string): Promise<Buffer> {
-  const info = await stat(path)
-  if (!info.isFile() || info.size > MCP_CONFIG_MAX_BYTES) {
-    throw new Error(
-      info.size > MCP_CONFIG_MAX_BYTES
-        ? `配置超过 ${MCP_CONFIG_MAX_BYTES / 1024} KiB`
-        : '配置不是普通文件',
-    )
-  }
-  return readFile(path)
+export async function readMcpConfigBytes(path: string, io = localWorkspaceIO): Promise<Buffer> {
+  return readBoundedWorkspaceFile(path, MCP_CONFIG_MAX_BYTES, io)
 }
 
 export function decodeMcpConfig(
@@ -67,10 +59,11 @@ export function decodeMcpConfig(
 export async function writeMcpConfig(path: string, value: unknown): Promise<void> {
   const directory = dirname(path)
   const temporaryPath = join(directory, `.mcp-${randomUUID()}.tmp`)
+  const text = `${JSON.stringify(value, null, 2)}\n`
+  if (Buffer.byteLength(text) > MCP_CONFIG_MAX_BYTES) throw new Error('MCP 配置超过 256 KiB')
   await mkdir(directory, { recursive: true, mode: 0o700 })
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: 'utf8',
+    await writeFile(temporaryPath, text, {
       mode: 0o600,
       flag: 'wx',
       flush: true,

@@ -5,13 +5,13 @@ import { SettingsButton, SettingsSwitch } from './settings-layout.tsx'
 import { SelectMenu } from './select-menu.tsx'
 
 export function SshConnectionEditor({ connection, purpose, onClose, onSave }: {
-  connection?: SshConnection; purpose?: 'connect' | 'cleanup' | 'remove' | 'skills'
+  connection?: SshConnection; purpose?: 'connect' | 'cleanup' | 'remove' | 'skills' | 'mcp'
   onClose: () => void; onSave: (value: SshConnectionInput) => Promise<void>
 }) {
   const [value, setValue] = useState<SshConnectionInput>({ name: '', host: '', username: '', port: 22,
     authentication: 'password', rememberSecret: false, ...connection, secret: '' })
   const [busy, setBusy] = useState(false)
-  const actionLabel = purpose && { connect: '连接', cleanup: '清理远端组件', remove: '删除连接', skills: '管理 Skill' }[purpose]
+  const actionLabel = purpose && { connect: '连接', cleanup: '清理远端组件', remove: '删除连接', skills: '管理 Skill', mcp: '管理 MCP 配置' }[purpose]
   const change = <K extends keyof SshConnectionInput>(key: K, next: SshConnectionInput[K]) => setValue(old => ({ ...old, [key]: next }))
   return <Dialog.Root open onOpenChange={open => { if (!open && !busy) onClose() }}><Dialog.Portal>
     <Dialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
