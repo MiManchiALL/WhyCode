@@ -194,6 +194,12 @@ export interface OpenMcpConfigRequest {
   scope: McpConfigScope
 }
 
+export interface OpenMcpConfigResult {
+  ok: boolean
+  error?: string
+  document?: import('./ssh-mcp.ts').RemoteMcpDocument
+}
+
 export interface SettingsMutationResult {
   ok: boolean
   error?: string

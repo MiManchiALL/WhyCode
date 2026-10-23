@@ -16,13 +16,19 @@ export async function setMcpServerEnabled(
   enabled: boolean,
 ): Promise<void> {
   const raw = await readMutableMcpConfig(path, false)
+  await writeMcpConfig(path, withMcpServerEnabled(raw, name, enabled))
+}
+
+export function withMcpServerEnabled(raw: unknown, name: string, enabled: boolean): Record<string, unknown> {
+  validateMcpConfig(raw)
+  if (!isRecord(raw)) throw new Error('MCP 配置必须是 JSON 对象')
   const servers = recordField(raw, 'servers')
   const current = servers[name]
   if (!isRecord(current)) throw new Error(`MCP 服务器不存在：${name}`)
   const next = structuredClone(raw)
   recordField(next, 'servers')[name] = { ...current, enabled }
   validateMcpConfig(next)
-  await writeMcpConfig(path, next)
+  return next
 }
 
 export async function addMcpServer(
@@ -31,12 +37,18 @@ export async function addMcpServer(
   server: McpServerConfigInput,
 ): Promise<void> {
   const raw = await readMutableMcpConfig(path, true)
+  await writeMcpConfig(path, withMcpServer(raw, name, server))
+}
+
+export function withMcpServer(raw: unknown, name: string, server: McpServerConfigInput): Record<string, unknown> {
+  validateMcpConfig(raw)
+  if (!isRecord(raw)) throw new Error('MCP 配置必须是 JSON 对象')
   const servers = recordField(raw, 'servers')
   if (Object.hasOwn(servers, name)) throw new Error(`MCP 服务器名称已存在：${name}`)
   const next = structuredClone(raw)
   recordField(next, 'servers')[name] = server
   validateMcpConfig(next)
-  await writeMcpConfig(path, next)
+  return next
 }
 
 export async function ensureMcpServers(

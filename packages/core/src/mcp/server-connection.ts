@@ -19,6 +19,7 @@ import {
   waitForMcpOperation,
   type McpFetch,
   type McpOAuthTransportFactory,
+  type McpTransportFactory,
 } from './connection-utils.ts'
 import type { McpBoundTool, McpServerStatus } from './manager-types.ts'
 
@@ -26,6 +27,7 @@ export class McpServerConnection {
   readonly config: McpServerConfig
   private readonly fetchImpl: McpFetch
   private readonly oauthTransportFactory?: McpOAuthTransportFactory
+  private readonly transportFactory?: McpTransportFactory
   private readonly lifetimeAbort = new AbortController()
   private state: McpServerStatus['state'] = 'idle'
   private revision = 0
@@ -41,10 +43,12 @@ export class McpServerConnection {
     config: McpServerConfig,
     fetchImpl: McpFetch,
     oauthTransportFactory?: McpOAuthTransportFactory,
+    transportFactory?: McpTransportFactory,
   ) {
     this.config = config
     this.fetchImpl = fetchImpl
     this.oauthTransportFactory = oauthTransportFactory
+    this.transportFactory = transportFactory
   }
 
   status(): McpServerStatus {
@@ -147,17 +151,20 @@ export class McpServerConnection {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return
+    if (this.closed && !this.client) return
     this.closed = true
     this.lifetimeAbort.abort()
     const operation = this.operation
     const client = this.client
-    this.client = undefined
     this.serverInstructions = undefined
     this.state = 'disconnected'
     this.revision++
-    await client?.close().catch(() => {})
-    await operation?.catch(() => {})
+    try {
+      await client?.close()
+      if (this.client === client) this.client = undefined
+    } finally {
+      await operation?.catch(() => {})
+    }
   }
 
   private async refreshUnshared(signal: AbortSignal): Promise<void> {
@@ -208,7 +215,7 @@ export class McpServerConnection {
         },
       },
     )
-    const transport = createMcpTransport(
+    const transport = this.transportFactory?.(this.config) ?? createMcpTransport(
       this.config,
       this.fetchImpl,
       this.oauthTransportFactory,

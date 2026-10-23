@@ -223,7 +223,10 @@ const api = {
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.disconnectMcpOAuth, request),
   openMcpConfig: (
     request: OpenMcpConfigRequest,
-  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.openMcpConfig, request),
+  ): Promise<import('../shared/settings.ts').OpenMcpConfigResult> => ipcRenderer.invoke(IPC.openMcpConfig, request),
+  saveRemoteMcpConfig: (
+    request: import('../shared/ssh-mcp.ts').RemoteMcpDocument,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveRemoteMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   conversationHistory: (request: ConversationHistoryRequest): Promise<ConversationHistoryResult> =>

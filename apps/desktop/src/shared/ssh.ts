@@ -49,6 +49,8 @@ export type SshRequest =
   | { action: 'skills-clean'; id: string; skills: string[]; allowModified: string[] }
   | { action: 'directory'; id: string; path?: string }
   | { action: 'project'; id: string; path: string }
+  | { action: 'mcp-list'; id: string; directory?: string }
+  | { action: 'mcp-remove'; id: string; projects: import('./ssh-mcp.ts').RemoteMcpSelection[] }
 
 export type SshResult = { ok: false; error: string; credentialsRequired?: boolean; modifiedSkills?: string[] } | {
   ok: true
@@ -60,4 +62,5 @@ export type SshResult = { ok: false; error: string; credentialsRequired?: boolea
   skills?: SshSkillListing
   skillJob?: SshSkillJob
   preservedSkills?: string[]
+  mcpProjects?: import('./ssh-mcp.ts').RemoteMcpProject[]
 }

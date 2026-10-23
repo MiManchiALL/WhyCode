@@ -7,7 +7,7 @@ import type { Client, SFTPWrapper } from 'ssh2'
 import type { WorkspaceIO } from '@whycode/core'
 import type { RemoteProcessHost } from '../ssh/process.ts'
 import { quoteShell } from '../ssh/provision.ts'
-import { ordinaryDirectory } from '../ssh/skill-files.ts'
+import { ordinaryDirectory } from '../ssh/config-files.ts'
 import { waitDependencyProcess } from './process.ts'
 import { ENVIRONMENT_OWNER } from '../ssh/component.ts'
 

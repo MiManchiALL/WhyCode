@@ -9,6 +9,9 @@ import { SshConnectionMissingError } from './store.ts'
 import { SshSkillSync } from './skill-sync.ts'
 import { ModifiedSshSkillsError } from './skill-remote.ts'
 import { sshSkillIdSchema, sshSkillSelectionSchema } from '../../shared/ssh-skills.ts'
+import { remoteMcpSelectionSchema, remoteMcpProjectPathSchema } from '../../shared/ssh-mcp.ts'
+import type { SshMcpProjects } from './mcp-projects.ts'
+import type { SettingsMutationResult } from '../../shared/settings.ts'
 
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list') }),
@@ -22,8 +25,10 @@ const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('skills-clean'), id: z.string().uuid(), skills: sshSkillSelectionSchema, allowModified: z.array(sshSkillIdSchema).max(2000) }),
   z.object({ action: z.literal('directory'), id: z.string().uuid(), path: z.string().max(4096).optional() }),
   z.object({ action: z.literal('project'), id: z.string().uuid(), path: z.string().max(4096) }),
+  z.object({ action: z.literal('mcp-list'), id: z.string().uuid(), directory: remoteMcpProjectPathSchema.optional() }),
+  z.object({ action: z.literal('mcp-remove'), id: z.string().uuid(), projects: z.array(remoteMcpSelectionSchema).min(1).max(1000) }),
 ])
-export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore, onSkillsChanged: () => void): void {
+export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore, onSkillsChanged: () => void, mcp: SshMcpProjects, mutateSettings: (operation: () => Promise<void>) => Promise<SettingsMutationResult>): void {
   const connections = workspaces.connections
   const skills = new SshSkillSync(connections, app.getPath('home'), onSkillsChanged)
   connections.on('connected', id => { void skills.initialize(id) })
@@ -55,6 +60,12 @@ export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore
         }
         case 'remove-local': await connections.removeLocal(request.id); skills.forget(request.id); return { ok: true }
         case 'skills-status': return { ok: true, skillJob: skills.job(request.id) }
+        case 'mcp-list': return { ok: true, mcpProjects: await mcp.list(request.id, request.directory) }
+        case 'mcp-remove': {
+          const result = await mutateSettings(() => mcp.remove(request.id, request.projects))
+          if (!result.ok) return { ok: false, error: result.error ?? '删除失败' }
+          return { ok: true }
+        }
         case 'skills-list': return { ok: true, skills: await skills.list(request.id) }
         case 'skills-sync': return { ok: true, skillJob: await skills.sync(request.id, [...new Set(request.skills)]) }
         case 'skills-clean': return { ok: true, skillJob: await skills.clean(request.id, [...new Set(request.skills)], request.allowModified) }

@@ -2,6 +2,10 @@ import { SshConnectionStore } from './ssh/store.ts'
 import { SshConnections } from './ssh/connections.ts'
 import { SshScratchCleanupError, SshWorkspaces, sshScratchPaths } from './ssh/workspaces.ts'
 import { registerSshIpc } from './ssh/ipc.ts'
+import { SshMcpProjects } from './ssh/mcp-projects.ts'
+import { remoteMcpTransport } from './ssh/mcp-transport.ts'
+import { remoteMcpSaveSchema } from '../shared/ssh-mcp.ts'
+import type { OpenMcpConfigResult } from '../shared/settings.ts'
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 import { registerWorkspaceLifecycleIpc } from './workspace-lifecycle-ipc.ts'
 import {
@@ -532,6 +536,7 @@ let managedWorkspaces: ManagedWorkspaceManager
 let workspaceLifecycle: WorkspaceLifecycle
 let newSessionState: NewSessionStateStore
 let sshWorkspaces: SshWorkspaces
+let sshMcpProjects: SshMcpProjects
 /** 普通 Main 与协商任务共用的会话级临时工作区所有权入口。 */
 let sessionScratch: SessionScratchManager
 /** Skill 解析缓存跨会话复用；每个根任务仍重新枚举并取得不可变快照。 */
@@ -862,7 +867,7 @@ async function createMainAgentSession(
     configuration: mcpOAuthController.runtimeConfiguration(
       await loadMcpConfiguration({
         globalConfigPath: mcpGlobalConfigPath,
-        projectDir: remote ? undefined : targetProjectDir,
+        ...(runtime.workspace.mode === 'ssh' ? sshMcpProjects.options(runtime.workspace) : { projectDir: targetProjectDir }),
         globalSecretHeaders: loadAppConfig()?.mcpSecretHeaders,
       }),
     ),
@@ -871,6 +876,7 @@ async function createMainAgentSession(
       init,
     ),
     oauthTransportFactory: (config) => mcpOAuthController.runtimeTransport(config),
+    transportFactory: runtime.workspace.mode === 'ssh' ? remoteMcpTransport(sshWorkspaces.connections, runtime.workspace.target) : undefined,
     attachments: {
       attachmentDirectory: recorder.attachmentDirectory,
       sessionId: recorder.sessionId,
@@ -1932,6 +1938,8 @@ async function saveWebSearchConnectionSettings(
 async function setMcpServerConnectionState(
   request: SetMcpServerEnabledRequest,
 ): Promise<SettingsMutationResult> {
+  const workspace = selectedRuntime().workspace
+  if (request.scope === 'project' && workspace.mode === 'ssh') return mutateConnectionSettings(() => sshMcpProjects.mutate(workspace, request))
   return mutateConnectionSettings(() =>
     updateMcpServerState({
       globalConfigPath: mcpGlobalConfigPath,
@@ -1942,6 +1950,8 @@ async function setMcpServerConnectionState(
 async function addMcpConnection(
   request: AddMcpServerRequest,
 ): Promise<SettingsMutationResult> {
+  const workspace = selectedRuntime().workspace
+  if (request.scope === 'project' && workspace.mode === 'ssh') return mutateConnectionSettings(() => sshMcpProjects.mutate(workspace, request))
   return mutateConnectionSettings(() =>
     addMcpConfiguredServer({
       globalConfigPath: mcpGlobalConfigPath,
@@ -2009,7 +2019,7 @@ async function mutateConnectionSettings(
   if (sessionDeletionLock.busy) {
     return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
   }
-  if (anyRuntimeBusy()) {
+  if (anyRuntimeBusy() || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return { ok: false, error: '当前有对话或其它操作进行中，请结束后再修改连接设置' }
   }
   if (mcpOAuthController.isAuthorizing()) {
@@ -2032,7 +2042,7 @@ async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSn
   const runtime = selectedRuntime()
   const mcp = await createMcpSettingsSnapshot({
     globalConfigPath: mcpGlobalConfigPath,
-    projectDir: runtime.localProjectDir,
+    ...(runtime.workspace.mode === 'ssh' ? sshMcpProjects.options(runtime.workspace) : { projectDir: runtime.localProjectDir }),
     currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
     mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
     mcpOAuthController,
@@ -2086,8 +2096,12 @@ function githubOAuthClientFromEnvironment(): {
 
 async function openMcpConfigFile(
   request: OpenMcpConfigRequest,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<OpenMcpConfigResult> {
   try {
+    const workspace = selectedRuntime().workspace
+    if (request.scope === 'project' && workspace.mode === 'ssh') {
+      return { ok: true, document: await sshMcpProjects.read(workspace.target, workspace.workingDirectory) }
+    }
     const path = resolveMcpConfigPath(
       {
         globalConfigPath: mcpGlobalConfigPath,
@@ -2236,6 +2250,7 @@ function startNewSession(request?: NewSessionRequest): Promise<NewSessionResult>
 }
 
 async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessionResult> {
+  if (settingsMutationInProgress) return { ok: false, error: '连接设置正在保存，请完成后再新建会话' }
   if (sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
@@ -2263,6 +2278,7 @@ async function prepareNewSession(request?: NewSessionRequest): Promise<NewSessio
 }
 
 async function resumeSession(sessionId: string, historyStart?: string): Promise<ResumeSessionResult> {
+  if (settingsMutationInProgress) return { ok: false, error: '连接设置正在保存，请完成后再恢复会话' }
   if (sessionDeletionLock.blocksSession(sessionId) || sessionPreparationLock.kind === 'fork') {
     return {
       ok: false,
@@ -2275,6 +2291,7 @@ async function resumeSession(sessionId: string, historyStart?: string): Promise<
 }
 
 async function forkSession(value: unknown): Promise<ForkSessionResult> {
+  if (settingsMutationInProgress) return { ok: false, error: '连接设置正在保存，请完成后再创建会话分支' }
   let request: ForkSessionRequest
   try {
     request = parseForkSessionRequest(value)
@@ -2502,6 +2519,7 @@ async function resolveBackgroundTaskRuntime(
 
   const summary = (await sessions.list()).find((item) => item.sessionId === sessionId)
   if (!summary || !summary.resumable) return { kind: 'drop' }
+  if (settingsMutationInProgress) return { kind: 'defer' }
   const release = sessionPreparationLock.acquire(sessionId)
   if (!release) return { kind: 'defer' }
   try {
@@ -2797,6 +2815,15 @@ if (primaryInstance) void app.whenReady().then(async () => {
     join(app.getAppPath(), 'resources', 'remote'),
   ))
   workspaceDependencies = new WorkspaceDependencies(join(app.getAppPath(), 'resources', 'office'), join(app.getPath('userData'), 'workspace-dependencies'), sshWorkspaces.connections)
+  sshMcpProjects = new SshMcpProjects(sshWorkspaces.connections,
+    target => [...new Set([
+      ...projects.list().filter(project => project.remote?.target === target).map(project => project.directory),
+      ...runtimeRegistry.all().flatMap(runtime => runtime.workspace.mode === 'ssh' && runtime.workspace.target === target ? [runtime.workspace.workingDirectory] : []),
+    ])],
+    async (target, directory) => {
+      const affected = runtimeRegistry.all().filter(runtime => runtime.workspace.mode === 'ssh' && runtime.workspace.target === target && runtime.workspace.workingDirectory === directory)
+      await Promise.all(affected.map(runtime => runtime.session?.removeProjectMcpServers()))
+    })
   sshWorkspaces.connections.on('changed', () => broadcastToWindows(IPC.sshChanged, undefined, 'SSH 状态推送失败：'))
   projects = new ProjectStore(join(app.getPath('userData'), 'projects.json'))
   try { await projects.initialize() }
@@ -3029,7 +3056,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     const runtime = runtimeForId(runtimeId)
     return createMcpStatusSnapshot({
       globalConfigPath: mcpGlobalConfigPath,
-      projectDir: runtime.localProjectDir,
+      ...(runtime.workspace.mode === 'ssh' ? sshMcpProjects.options(runtime.workspace) : { projectDir: runtime.localProjectDir }),
       currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
       mcpSecretHeaders: loadAppConfig()?.mcpSecretHeaders ?? [],
     })
@@ -3067,8 +3094,14 @@ if (primaryInstance) void app.whenReady().then(async () => {
     authorizeMcpOAuthConnection(request))
   ipcMain.handle(IPC.disconnectMcpOAuth, (_e, request: McpOAuthRequest) =>
     disconnectMcpOAuthConnection(request))
-  ipcMain.handle(IPC.openMcpConfig, (_e, request: OpenMcpConfigRequest) =>
-    openMcpConfigFile(request))
+  ipcMain.handle(IPC.openMcpConfig, (event, request: OpenMcpConfigRequest) => {
+    if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '仅主页面可编辑 MCP 配置' }
+    return openMcpConfigFile(request)
+  })
+  ipcMain.handle(IPC.saveRemoteMcpConfig, (event, value: unknown) => {
+    if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '仅主页面可编辑 MCP 配置' }
+    return mutateConnectionSettings(() => sshMcpProjects.save(remoteMcpSaveSchema.parse(value)))
+  })
   ipcMain.handle(IPC.conversationHistory, async (_e, request: ConversationHistoryRequest): Promise<ConversationHistoryResult> => {
     try {
       const runtime = runtimeForId(request.runtimeId)
@@ -3278,7 +3311,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
 
-  registerSshIpc(sshWorkspaces, projects, () => broadcastToWindows(IPC.sshSkillsChanged, undefined, 'SSH Skill 状态推送失败：'))
+  registerSshIpc(sshWorkspaces, projects, () => broadcastToWindows(IPC.sshSkillsChanged, undefined, 'SSH Skill 状态推送失败：'), sshMcpProjects, mutateConnectionSettings)
   registerWorkspaceFileIpc(workspaceFiles, async runtimeId => {
     const runtime = runtimeForId(runtimeId)
     await sshWorkspaces.connect(runtime.workspace)

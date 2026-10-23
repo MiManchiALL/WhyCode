@@ -9,6 +9,7 @@ import {
   type McpConfigScope,
   type McpManagerSnapshot,
   type McpSecretHeader,
+  type WorkspaceIO,
 } from '@whycode/core'
 import type {
   AddMcpServerRequest,
@@ -23,6 +24,9 @@ import type { McpOAuthController } from './mcp-oauth.ts'
 interface McpSettingsContext {
   globalConfigPath: string
   projectDir: string | null
+  projectIO?: WorkspaceIO
+  projectReadFile?: () => Promise<Buffer>
+  projectEnvironment?: (names: readonly string[]) => Promise<NodeJS.ProcessEnv>
   currentSessionSnapshot: McpManagerSnapshot | null
   mcpSecretHeaders: readonly McpSecretHeader[]
   mcpOAuthController?: McpOAuthController
@@ -35,6 +39,9 @@ export async function createMcpStatusSnapshot(
     await loadMcpConfiguration({
       globalConfigPath: context.globalConfigPath,
       projectDir: context.projectDir,
+      projectIO: context.projectIO,
+      projectReadFile: context.projectReadFile,
+      projectEnvironment: context.projectEnvironment,
       globalSecretHeaders: context.mcpSecretHeaders,
     })
   ).servers.map(({ name, scope }) => ({ name, scope, state: 'idle' as const }))
@@ -47,6 +54,9 @@ export async function createMcpSettingsSnapshot(
   const configuration = await loadMcpConfiguration({
     globalConfigPath: context.globalConfigPath,
     projectDir: context.projectDir,
+    projectIO: context.projectIO,
+    projectReadFile: context.projectReadFile,
+    projectEnvironment: context.projectEnvironment,
     globalSecretHeaders: context.mcpSecretHeaders,
   })
   const currentStatuses = new Map(
@@ -58,7 +68,7 @@ export async function createMcpSettingsSnapshot(
   return {
     globalConfigPath: context.globalConfigPath,
     ...(context.projectDir
-      ? { projectConfigPath: getProjectMcpConfigPath(context.projectDir) }
+      ? { projectConfigPath: getProjectMcpConfigPath(context.projectDir, context.projectIO) }
       : {}),
     currentSessionUsesSnapshot: context.currentSessionSnapshot !== null,
     servers: configuration.configuredServers

@@ -313,7 +313,9 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 每个会话最多加载 64 个 MCP 工具，模型定义合计不超过 256 KiB。`<whycode-mcp-tool-state:v2>` 保存 descriptor 引用、服务器 runtime fingerprint、受限 initialize instructions 与可空项目配置信任；它从摘要输入排除，并在压缩后由宿主精确重建。
 
-实际 MCP 工具无论 `readOnlyHint` 都按外部 execute 进入统一权限链。凭据、OAuth token、授权 URL 和 callback code 不进入模型、JSONL、工具结果或 Renderer；外部内容先做结构限额与凭据型 URL 字段脱敏。配置或 descriptor 变化时旧工具失效，不能绑定到新实现。
+实际 MCP 工具无论 `readOnlyHint` 都按外部 execute 进入统一权限链。密钥库中的凭据、OAuth token、授权 URL 和 callback code 不进入模型、JSONL、工具结果或 Renderer；外部内容先做结构限额与凭据型 URL 字段脱敏。用户主动打开远端项目配置时，编辑器只接收该文件正文，不读取本机密钥库。
+
+项目 MCP 的 runtime fingerprint 包含工作区身份及项目目录，SSH 服务器或项目变化不能沿用旧工具绑定和临时信任。配置或 descriptor 变化时旧工具失效，不能绑定到新实现；从管理入口删除项目配置会关闭对应连接并移除当前运行时的项目服务器，历史检索状态不能使其重新启动。普通配置编辑仍遵循会话冻结快照，文件归属与清理机制见文档二 §11.3。
 
 ### 3.6 图片与截图
 

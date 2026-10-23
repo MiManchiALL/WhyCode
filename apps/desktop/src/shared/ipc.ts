@@ -73,6 +73,7 @@ export const IPC = {
   authorizeMcpOAuth: 'whycode:authorize-mcp-oauth',
   disconnectMcpOAuth: 'whycode:disconnect-mcp-oauth',
   openMcpConfig: 'whycode:open-mcp-config',
+  saveRemoteMcpConfig: 'whycode:save-remote-mcp-config',
   /** Renderer → Main：弹目录选择框，返回选中的项目目录（取消返回 null） */
   pickProjectDir: 'whycode:pick-project-dir',
   inspectDraftWorkspace: 'whycode:inspect-draft-workspace',
