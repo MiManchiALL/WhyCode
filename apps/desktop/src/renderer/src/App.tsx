@@ -2427,7 +2427,7 @@ export function App() {
                   <div hidden={!loadingConversation && view.pendingQuestion !== null}>
                     {showMcpStatus && !skillTrigger && !attachmentLocked && (
                       <ComposerMcpStatus
-                        key={runtimeId}
+                        key={`mcp:${runtimeId}`}
                         runtimeId={runtimeId}
                         composerRef={composerInputRef}
                         onClose={() => setShowMcpStatus(false)}
@@ -2447,7 +2447,7 @@ export function App() {
 
                     {!loadingConversation && !conversationStarted && !submissionPending && (
                       <WorkspaceContextBar
-                        key={runtimeId}
+                        key={`workspace:${runtimeId}`}
                         runtimeId={runtimeId}
                         projects={projects}
                         workspace={workspace}
