@@ -20,6 +20,7 @@ import type {
   AddMcpServerRequest,
   CliProxyApiSettingsItem,
   ConnectionSettingsSnapshot,
+  McpSettingsItem,
   McpOAuthRequest,
   OpenMcpConfigRequest,
   ProviderSettingsItem,
@@ -49,13 +50,12 @@ import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 
 interface ConnectionSettingsPanelProps {
   initialSection?: 'general' | 'ssh'
-  snapshot: ConnectionSettingsSnapshot
   workspaceCleanup: RetainedWorkspaceCleanup
   conversationFontSize: number
   onConversationFontSizeChange: (value: number) => void
   onError: (message: string) => void
   onClose: () => void
-  onChanged: (snapshot: ConnectionSettingsSnapshot) => void
+  onChanged: () => void
   onStartSession: (workspace: StartWorkspaceRequest) => Promise<boolean>
 }
 
@@ -63,54 +63,72 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
   const [open, setOpen] = useState(true)
   const feedback = useConversationFeedback()
   const [pending, setPending] = useState(false)
-  const [oauthPending, setOauthPending] = useState(false)
+  const [snapshot, setSnapshot] = useState<ConnectionSettingsSnapshot | null>(null)
+  const [mcpSnapshot, setMcpSnapshot] = useState<McpSettingsItem | null>(null)
+  const [readState, setReadState] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [mcpDocument, setMcpDocument] = useState<RemoteMcpDocument | null>(null)
   const [section, setSection] = useState<SettingsSectionId>(props.initialSection ?? 'general')
+  const needsSnapshot = !['general', 'ssh', 'workspaces'].includes(section)
   const refreshGeneration = useRef(0)
 
   const requestClose = () => {
-    if (!pending && !oauthPending) setOpen(false)
+    if (!pending) setOpen(false)
   }
 
-  const mutate = async (operation: () => Promise<SettingsMutationResult>, oauth = false) => {
+  const receiveConnections = (next: ConnectionSettingsSnapshot) => {
+    setSnapshot(next)
+    props.onChanged()
+  }
+
+  const mutate = async <T,>(operation: () => Promise<SettingsMutationResult<T>>, receive: (snapshot: T) => void, oauth = false) => {
     refreshGeneration.current++
-    const setBusy = oauth ? setOauthPending : setPending
-    setBusy(true)
+    setReadState('ready')
+    setPending(true)
     try {
       const result = await operation()
       if (!result.ok || !result.snapshot) {
         props.onError(result.error ?? (oauth ? 'OAuth 登录失败' : '设置保存失败'))
         return false
       }
-      props.onChanged(result.snapshot)
+      receive(result.snapshot)
       feedback('success', oauth ? 'OAuth 登录成功' : '设置已保存')
       return true
     } catch (cause) {
       props.onError(cause instanceof Error ? cause.message : String(cause))
       return false
     } finally {
-      setBusy(false)
+      setPending(false)
     }
   }
 
   const refresh = useEffectEvent(async () => {
-    if (pending || oauthPending) return
+    if (pending) return
     const generation = ++refreshGeneration.current
+    setReadState('loading')
     try {
-      const snapshot = await window.whycode.connectionSettings()
-      if (generation === refreshGeneration.current) props.onChanged(snapshot)
+      if (section === 'mcp') {
+        const next = await window.whycode.mcpSettings()
+        if (generation === refreshGeneration.current) setMcpSnapshot(next)
+      } else {
+        const next = await window.whycode.connectionSettings()
+        if (generation === refreshGeneration.current) receiveConnections(next)
+      }
+      if (generation === refreshGeneration.current) setReadState('ready')
     } catch (cause) {
-      if (generation === refreshGeneration.current) props.onError(cause instanceof Error ? cause.message : String(cause))
+      if (generation === refreshGeneration.current) {
+        setReadState('failed')
+        props.onError(cause instanceof Error ? cause.message : String(cause))
+      }
     }
   })
 
   useEffect(() => {
-    if (!open || ['general', 'ssh', 'workspaces'].includes(section)) return
+    if (!open || !needsSnapshot) return
     const onFocus = () => { void refresh() }
     onFocus()
     window.addEventListener('focus', onFocus)
-    return () => { refreshGeneration.current++; window.removeEventListener('focus', onFocus) }
-  }, [open, section])
+    return () => { refreshGeneration.current++; setReadState('loading'); window.removeEventListener('focus', onFocus) }
+  }, [open, section, needsSnapshot])
 
   const openMcpConfig = async (request: OpenMcpConfigRequest) => {
     try {
@@ -122,6 +140,9 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
     }
   }
 
+  const hasSnapshot = section === 'mcp' ? mcpSnapshot !== null : snapshot !== null
+  const disabled = pending || readState === 'loading'
+
   return (
     <><Dialog.Root
       open={open}
@@ -132,6 +153,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
       <Dialog.Portal>
         <Dialog.Content
           className="wc-dialog-page wc-settings fixed inset-0 z-50 flex gap-1 overflow-hidden bg-[var(--wc-canvas)] p-1 text-[var(--wc-ink)] outline-none"
+          onEscapeKeyDown={event => { if (event.isComposing) event.preventDefault() }}
           onAnimationEnd={(event) => {
             if (
               event.target === event.currentTarget
@@ -144,46 +166,51 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
               type="button"
               className="wc-focus-ring flex h-10 items-center gap-2 rounded-[var(--wc-menu-radius)] px-2.5 text-sm text-[var(--wc-muted)] hover:bg-black/[0.04] hover:text-[var(--wc-ink)]"
               onClick={requestClose}
-              disabled={pending || oauthPending}
+              disabled={pending}
             >
               <ArrowLeft size={16} />
               返回 WhyCode
             </button>
             <div className="mt-5 px-2 text-lg font-semibold tracking-tight">设置</div>
             <nav className="mt-4 space-y-1" aria-label="设置分类">
-              <SettingsNavItem active={section === 'general'} icon={<Settings size={16} />} label="通用" onClick={() => setSection('general')} />
+              <SettingsNavItem disabled={pending} active={section === 'general'} icon={<Settings size={16} />} label="通用" onClick={() => setSection('general')} />
               <SettingsNavItem
+                disabled={pending}
                 active={section === 'models'}
                 icon={<Bot size={16} />}
                 label="模型连接"
                 onClick={() => setSection('models')}
               />
               <SettingsNavItem
+                disabled={pending}
                 active={section === 'auxiliary'}
                 icon={<BrainCircuit size={16} />}
                 label="辅助模型"
                 onClick={() => setSection('auxiliary')}
               />
               <SettingsNavItem
+                disabled={pending}
                 active={section === 'consensus'}
                 icon={<UsersRound size={16} />}
                 label="协商模型"
                 onClick={() => setSection('consensus')}
               />
               <SettingsNavItem
+                disabled={pending}
                 active={section === 'search'}
                 icon={<Globe2 size={16} />}
                 label="网页搜索"
                 onClick={() => setSection('search')}
               />
               <SettingsNavItem
+                disabled={pending}
                 active={section === 'mcp'}
                 icon={<Plug size={16} />}
                 label="MCP"
                 onClick={() => setSection('mcp')}
               />
-              <SettingsNavItem active={section === 'ssh'} icon={<Server size={16} />} label="SSH 连接" onClick={() => setSection('ssh')} />
-              <SettingsNavItem active={section === 'workspaces'} icon={<Folder size={16} />} label="保留工作区" onClick={() => setSection('workspaces')} />
+              <SettingsNavItem disabled={pending} active={section === 'ssh'} icon={<Server size={16} />} label="SSH 连接" onClick={() => setSection('ssh')} />
+              <SettingsNavItem disabled={pending} active={section === 'workspaces'} icon={<Folder size={16} />} label="保留工作区" onClick={() => setSection('workspaces')} />
             </nav>
             <div className="mt-auto flex items-center gap-2 rounded-[var(--wc-menu-radius)] bg-black/[0.035] px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">
               <Settings size={13} />
@@ -201,7 +228,10 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   </div>
                 </header>
 
-                <div className="space-y-8">
+                <div className="space-y-8" aria-busy={needsSnapshot && readState === 'loading'}>
+                  {needsSnapshot && !hasSnapshot && <p role="status" className="text-sm text-[var(--wc-muted)]">
+                    {readState === 'failed' ? '设置暂不可用，请重新进入此分类重试。' : '正在读取设置…'}
+                  </p>}
                   {section === 'ssh' && <SshSettings onSelectProject={async workspace => {
                     const started = await props.onStartSession(workspace)
                     if (started) requestClose()
@@ -209,61 +239,61 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   }} />}
                   {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
-                  {section === 'models' && (
+                  {section === 'models' && snapshot && (
                     <>
                       <BuiltInProvidersEditor
-                        providers={props.snapshot.providers}
-                        disabled={pending || oauthPending}
-                        onSave={(request) => mutate(() => window.whycode.saveProviderSettings(request))}
+                        providers={snapshot.providers}
+                        disabled={disabled}
+                        onSave={(request) => mutate(() => window.whycode.saveProviderSettings(request), receiveConnections)}
                       />
                       <CliProxyApiEditor
-                        settings={props.snapshot.cliProxyApi}
-                        disabled={pending || oauthPending}
-                        onSave={(request) => mutate(() => window.whycode.saveCliProxyApiSettings(request))}
+                        settings={snapshot.cliProxyApi}
+                        disabled={disabled}
+                        onSave={(request) => mutate(() => window.whycode.saveCliProxyApiSettings(request), receiveConnections)}
                       />
                     </>
                   )}
 
-                  {section === 'auxiliary' && (
+                  {section === 'auxiliary' && snapshot && (
                     <AuxiliaryModelsEditor
-                      settings={props.snapshot.auxiliaryModels}
-                      disabled={pending || oauthPending}
+                      settings={snapshot.auxiliaryModels}
+                      disabled={disabled}
                       onSave={(request) => mutate(() =>
-                        window.whycode.saveAuxiliaryModelSettings(request))}
+                        window.whycode.saveAuxiliaryModelSettings(request), receiveConnections)}
                     />
                   )}
 
-                  {section === 'consensus' && (
+                  {section === 'consensus' && snapshot && (
                     <ConsensusModelsEditor
-                      settings={props.snapshot.consensusModels}
-                      disabled={pending || oauthPending}
+                      settings={snapshot.consensusModels}
+                      disabled={disabled}
                       onSave={(request) => mutate(() =>
-                        window.whycode.saveConsensusModelSettings(request))}
+                        window.whycode.saveConsensusModelSettings(request), receiveConnections)}
                     />
                   )}
 
-                  {section === 'search' && (
+                  {section === 'search' && snapshot && (
                     <WebSearchSettingsEditor
-                      settings={props.snapshot.webSearch}
-                      disabled={pending || oauthPending}
-                      onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request))}
+                      settings={snapshot.webSearch}
+                      disabled={disabled}
+                      onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request), receiveConnections)}
                     />
                   )}
 
-                  {section === 'mcp' && (
+                  {section === 'mcp' && mcpSnapshot && (
                     <McpSettingsEditor
-                      settings={props.snapshot.mcp}
-                      disabled={pending || oauthPending}
+                      settings={mcpSnapshot}
+                      disabled={disabled}
                       onSetEnabled={(request: SetMcpServerEnabledRequest) =>
-                        mutate(() => window.whycode.setMcpServerEnabled(request))}
+                        mutate(() => window.whycode.setMcpServerEnabled(request), setMcpSnapshot)}
                       onAddServer={(request: AddMcpServerRequest) =>
-                        mutate(() => window.whycode.addMcpServer(request))}
+                        mutate(() => window.whycode.addMcpServer(request), setMcpSnapshot)}
                       onSaveSecretHeader={(request: SaveMcpSecretHeaderRequest) =>
-                        mutate(() => window.whycode.saveMcpSecretHeader(request))}
+                        mutate(() => window.whycode.saveMcpSecretHeader(request), setMcpSnapshot)}
                       onAuthorizeOAuth={(request: McpOAuthRequest) =>
-                        mutate(() => window.whycode.authorizeMcpOAuth(request), true)}
+                        mutate(() => window.whycode.authorizeMcpOAuth(request), setMcpSnapshot, true)}
                       onDisconnectOAuth={(request: McpOAuthRequest) =>
-                        mutate(() => window.whycode.disconnectMcpOAuth(request))}
+                        mutate(() => window.whycode.disconnectMcpOAuth(request), setMcpSnapshot)}
                       onOpenConfig={openMcpConfig}
                     />
                   )}
@@ -275,7 +305,9 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
       </Dialog.Portal>
     </Dialog.Root>
     {mcpDocument && <RemoteMcpEditor document={mcpDocument} onClose={() => setMcpDocument(null)} onSaved={result => {
-      if (result.snapshot) props.onChanged(result.snapshot)
+      refreshGeneration.current++
+      setReadState('ready')
+      if (result.snapshot) setMcpSnapshot(result.snapshot)
       feedback('success', '项目 MCP 配置已保存')
     }} />}</>
   )
@@ -360,6 +392,7 @@ const SETTINGS_META: Record<SettingsSectionId, { title: string; description: str
 }
 
 function SettingsNavItem(props: {
+  disabled: boolean
   active: boolean
   icon: React.ReactNode
   label: string
@@ -368,6 +401,7 @@ function SettingsNavItem(props: {
   return (
     <button
       type="button"
+      disabled={props.disabled}
       className={`wc-focus-ring flex h-10 w-full items-center gap-2.5 rounded-[var(--wc-menu-radius)] px-3 text-left text-sm transition-colors ${
         props.active
           ? 'bg-black/[0.055] text-[var(--wc-ink)]'

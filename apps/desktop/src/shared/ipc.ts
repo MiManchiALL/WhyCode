@@ -59,8 +59,9 @@ export const IPC = {
   listModels: 'whycode:list-models',
   /** Renderer → Main：按当前运行目录与模型预算取得本轮 Skill 目录。 */
   listSkills: 'whycode:list-skills',
-  /** Renderer → Main：模型、CLIProxyAPI、网页搜索与 MCP 连接设置。 */
+  /** Renderer → Main：模型、CLIProxyAPI 与网页搜索设置，不读取项目 MCP。 */
   connectionSettings: 'whycode:connection-settings',
+  mcpSettings: 'whycode:mcp-settings',
   mcpStatus: 'whycode:mcp-status',
   saveProviderSettings: 'whycode:save-provider-settings',
   saveCliProxyApiSettings: 'whycode:save-cliproxyapi-settings',

@@ -6,7 +6,6 @@ import {
 } from '@whycode/core'
 import type {
   ConnectionSettingsSnapshot,
-  McpSettingsItem,
   SaveAuxiliaryModelSettingsRequest,
   SaveCliProxyApiSettingsRequest,
   SaveConsensusModelSettingsRequest,
@@ -32,7 +31,6 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 
 export function createConnectionSettingsSnapshot(
   config: WhycodeConfig | null,
-  mcp: McpSettingsItem,
 ): ConnectionSettingsSnapshot {
   const cliProxyConnection = config?.cliProxyApi
   const cliProxyModels = cliProxyModelEntries().flatMap(({ entry }) => {
@@ -99,7 +97,6 @@ export function createConnectionSettingsSnapshot(
       models: configuredModels,
     },
     webSearch: createWebSearchSettingsSnapshot(config),
-    mcp,
   }
 }
 

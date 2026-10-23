@@ -28,7 +28,7 @@ const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('mcp-list'), id: z.string().uuid(), directory: remoteMcpProjectPathSchema.optional() }),
   z.object({ action: z.literal('mcp-remove'), id: z.string().uuid(), projects: z.array(remoteMcpSelectionSchema).min(1).max(1000) }),
 ])
-export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore, onSkillsChanged: () => void, mcp: SshMcpProjects, mutateSettings: (operation: () => Promise<void>) => Promise<SettingsMutationResult>): void {
+export function registerSshIpc(workspaces: SshWorkspaces, projects: ProjectStore, onSkillsChanged: () => void, mcp: SshMcpProjects, mutateSettings: (operation: () => Promise<void>) => Promise<SettingsMutationResult<undefined>>): void {
   const connections = workspaces.connections
   const skills = new SshSkillSync(connections, app.getPath('home'), onSkillsChanged)
   connections.on('connected', id => { void skills.initialize(id) })

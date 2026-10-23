@@ -56,7 +56,6 @@ export interface ConnectionSettingsSnapshot {
   auxiliaryModels: AuxiliaryModelsSettingsItem
   consensusModels: ConsensusModelsSettingsItem
   webSearch: WebSearchSettingsItem
-  mcp: McpSettingsItem
 }
 
 export interface AuxiliaryModelsSettingsItem {
@@ -200,8 +199,8 @@ export interface OpenMcpConfigResult {
   document?: import('./ssh-mcp.ts').RemoteMcpDocument
 }
 
-export interface SettingsMutationResult {
+export interface SettingsMutationResult<T = ConnectionSettingsSnapshot> {
   ok: boolean
   error?: string
-  snapshot?: ConnectionSettingsSnapshot
+  snapshot?: T
 }
