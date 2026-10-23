@@ -138,7 +138,7 @@ export function ConsensusModelsEditor(props: {
       description="Main 始终使用当前会话模型；B/C 复用模型连接中的凭据与端点，不再单独配置连接。"
     >
       <SettingsPanel>
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="wc-settings-columns">
           <ModelSelector
             label="Agent B"
             value={agentBModelId}

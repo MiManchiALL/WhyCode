@@ -15,10 +15,10 @@ export function SettingsSection({
 }: SettingsSectionProps) {
   return (
     <section className="wc-settings-section">
-      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-[13.5px] font-medium leading-5 text-[var(--wc-ink)]">{title}</h2>
-          <p className="mt-0.5 text-[12.5px] leading-5 text-[var(--wc-muted)]">{description}</p>
+      <header className="wc-settings-section-header">
+        <div className="wc-settings-section-heading">
+          <h2>{title}</h2>
+          <p>{description}</p>
         </div>
         {actions}
       </header>
@@ -37,7 +37,7 @@ export function SettingsPanel({
   padded?: boolean
 }) {
   return (
-    <div className={`wc-menu-surface${padded ? ' wc-settings-panel' : ''}${className ? ` ${className}` : ''}`}>
+    <div className={`wc-settings-surface${padded ? ' wc-settings-panel' : ''}${className ? ` ${className}` : ''}`}>
       {children}
     </div>
   )
@@ -57,7 +57,7 @@ export function SettingsRow({
   divided?: boolean
 }) {
   return (
-    <div className={`grid min-w-0 gap-2 px-4 py-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(16rem,1.2fr)] sm:items-center${divided ? ' border-t border-[var(--wc-line)]' : ''}${className ? ` ${className}` : ''}`}>
+    <div className={`wc-settings-row${divided ? ' border-t border-[var(--wc-line)]' : ''}${className ? ` ${className}` : ''}`}>
       <div className="min-w-0">
         <div className="text-[13px] font-medium leading-5 text-[var(--wc-ink)]">{label}</div>
         {description && (
@@ -102,18 +102,11 @@ export function SettingsSwitch({
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
-      className={`wc-focus-ring relative inline-flex h-6 w-10 shrink-0 rounded-full transition-colors disabled:cursor-default disabled:opacity-40 ${
-        checked ? 'bg-[#329cff]' : 'bg-black/[0.11]'
-      }`}
+      className="wc-settings-switch wc-focus-ring"
       onClick={() => onCheckedChange(!checked)}
       disabled={disabled}
     >
-      <span
-        aria-hidden="true"
-        className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${
-          checked ? 'translate-x-[18px]' : 'translate-x-0.5'
-        }`}
-      />
+      <span aria-hidden="true" />
     </button>
   )
 }
@@ -122,12 +115,6 @@ type SettingsButtonVariant = 'primary' | 'secondary' | 'danger'
 
 interface SettingsButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: SettingsButtonVariant
-}
-
-const SETTINGS_BUTTON_VARIANTS: Record<SettingsButtonVariant, string> = {
-  primary: 'border-transparent bg-[var(--wc-ink)] text-white hover:bg-[#30322e]',
-  secondary: 'border-[var(--wc-line)] bg-white text-[var(--wc-muted)] hover:border-[var(--wc-line-strong)] hover:text-[var(--wc-ink)]',
-  danger: 'border-[#dec8bf] bg-[#f8efec] text-[var(--wc-danger)] hover:bg-[#f2e3de]',
 }
 
 export function SettingsButton({
@@ -140,7 +127,8 @@ export function SettingsButton({
     <button
       {...props}
       type={type ?? 'button'}
-      className={`wc-focus-ring inline-flex min-h-8 items-center justify-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-medium leading-5 transition-colors disabled:cursor-default disabled:opacity-40 ${SETTINGS_BUTTON_VARIANTS[variant]}${className ? ` ${className}` : ''}`}
+      data-variant={variant}
+      className={`wc-settings-button wc-focus-ring${className ? ` ${className}` : ''}`}
     />
   )
 }

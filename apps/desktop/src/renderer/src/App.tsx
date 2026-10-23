@@ -111,6 +111,7 @@ import { PendingUserMessage } from './pending-user-message.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
+import { useScrollIntent } from './use-scroll-intent.ts'
 import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
 import { AppSidebar } from './app-sidebar.tsx'
@@ -281,6 +282,7 @@ export function App() {
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
+  const recentlyScrolledAway = useScrollIntent(scrollRef, () => { stickToBottom.current = false }, !loadingConversation)
   const inputRef = useRef('')
   const btwModeRef = useRef<BtwMode | null>(null)
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
@@ -351,6 +353,8 @@ export function App() {
     setBtwModeState(mode)
   }, [])
   const {
+    menuId: composerMenuId,
+    activeOptionId: composerActiveOptionId,
     catalog: skillCatalog,
     loading: skillCatalogLoading,
     selected: selectedSkills,
@@ -1366,10 +1370,10 @@ export function App() {
       return
     }
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-    stickToBottom.current = nearBottom
-    setShowJumpBottom(!nearBottom)
+    stickToBottom.current = nearBottom && (!recentlyScrolledAway() || el.scrollHeight - el.scrollTop - el.clientHeight <= 1)
+    setShowJumpBottom(!stickToBottom.current)
     if (!nearBottom && el.scrollTop <= el.clientHeight) void history.loadOlder()
-  }, [history.loadOlder])
+  }, [history.loadOlder, recentlyScrolledAway])
 
   const jumpToBottom = useCallback(() => {
     history.cancel()
@@ -2425,6 +2429,7 @@ export function App() {
                     )}
                     {skillTrigger && !attachmentLocked && (
                       <ComposerSlashMenu
+                        id={composerMenuId}
                         items={composerMenuItems}
                         activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
                         diagnostics={skillCatalog.diagnostics}
@@ -2485,6 +2490,8 @@ export function App() {
 
                     <ComposerInput
                       ref={composerInputRef}
+                      aria-controls={skillTrigger && !attachmentLocked ? composerMenuId : undefined}
+                      aria-activedescendant={skillTrigger && !attachmentLocked ? composerActiveOptionId : undefined}
                       scopeKey={resumingSessionId ?? runtimeId}
                       runtimeId={runtimeId}
                       className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
@@ -2589,7 +2596,7 @@ export function App() {
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
             aria-busy={loadingConversation}
             inert={loadingConversation}
-            className="wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out"
+            className="wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-[var(--wc-motion-layout)] ease-out"
             style={{
               width: rightPanelState.open
                 ? panelWidthExpression('right', panelLayout.widths.right)
@@ -2604,7 +2611,7 @@ export function App() {
               />
             )}
             <div
-              className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-200 ease-out ${
+              className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-[var(--wc-motion-layout)] ease-out ${
                 rightPanelState.open
                   ? 'pointer-events-none -translate-x-3 opacity-0'
                   : 'translate-x-0 opacity-100 max-[1440px]:opacity-0'
@@ -2632,7 +2639,7 @@ export function App() {
               />
             </div>
             <div
-              className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-200 ease-out ${
+              className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-[var(--wc-motion-layout)] ease-out ${
                 rightPanelState.open
                   ? 'translate-x-0 opacity-100'
                   : 'pointer-events-none translate-x-8 opacity-0'

@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { isNearScrollEnd, scrollAreaFades } from './scroll-fades.ts'
+import { useScrollIntent } from './use-scroll-intent.ts'
 
 export function useScrollArea(
   content: unknown,
@@ -8,6 +9,7 @@ export function useScrollArea(
   const ref = useRef<HTMLDivElement>(null)
   const followingEndRef = useRef(followEnd)
   const [fades, setFades] = useState({ top: false, bottom: false })
+  const recentlyScrolledAway = useScrollIntent(ref, () => { followingEndRef.current = false }, enabled && followEnd)
 
   const updateFades = useCallback(() => {
     const element = ref.current
@@ -28,9 +30,12 @@ export function useScrollArea(
   const handleScroll = useCallback(() => {
     const element = ref.current
     if (!element) return
-    if (followEnd) followingEndRef.current = isNearScrollEnd(element)
+    if (followEnd) {
+      followingEndRef.current = isNearScrollEnd(element)
+        && (!recentlyScrolledAway() || isNearScrollEnd(element, 1))
+    }
     updateFades()
-  }, [followEnd, updateFades])
+  }, [followEnd, recentlyScrolledAway, updateFades])
 
   useLayoutEffect(() => {
     if (enabled) followAndMeasure()

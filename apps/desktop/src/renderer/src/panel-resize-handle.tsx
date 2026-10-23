@@ -18,6 +18,8 @@ import {
 } from './panel-layout.ts'
 import type { PanelLayout } from './use-panel-layout.ts'
 
+const RESIZE_ACTIVATION_DISTANCE_PX = 4
+
 interface PanelResizeHandleProps {
   side: PanelSide
   layout: PanelLayout
@@ -151,7 +153,7 @@ export function PanelResizeHandle({
     function handlePointerMove(pointerEvent: PointerEvent): void {
       if (pointerEvent.pointerId !== pointerId) return
       latestX = pointerEvent.clientX
-      moved ||= Math.abs(latestX - startX) >= 0.5
+      moved ||= Math.abs(latestX - startX) >= RESIZE_ACTIVATION_DISTANCE_PX
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(applyLatestPosition)
       }
@@ -161,7 +163,7 @@ export function PanelResizeHandle({
     function handlePointerEnd(pointerEvent: PointerEvent): void {
       if (pointerEvent.pointerId !== pointerId) return
       latestX = pointerEvent.clientX
-      moved ||= Math.abs(latestX - startX) >= 0.5
+      moved ||= Math.abs(latestX - startX) >= RESIZE_ACTIVATION_DISTANCE_PX
       finish(true)
     }
 

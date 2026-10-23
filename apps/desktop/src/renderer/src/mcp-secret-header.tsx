@@ -69,7 +69,7 @@ export function McpSecretHeaderEditor(props: McpSecretHeaderEditorProps) {
       </div>
       {open && (
         <div className="mt-3 min-w-0 [overflow-wrap:anywhere]">
-          <div className={`grid gap-2 ${suggestedHeaderName ? '' : 'md:grid-cols-2'}`}>
+          <div className={suggestedHeaderName ? 'grid gap-2' : 'wc-settings-columns'}>
             {!suggestedHeaderName && (
               <label className="block min-w-0 wc-type-tiny text-neutral-600">
                 认证 Header 名称

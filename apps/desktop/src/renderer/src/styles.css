@@ -2,6 +2,7 @@
 @import 'katex/dist/katex.min.css';
 @import './conversation-typography.css';
 @import './composer-input.css';
+@import './settings.css';
 @import './browser-reference.css';
 @import './browser-panel.css';
 @import './git.css';
@@ -25,6 +26,8 @@
   --text-xl--line-height: 32px;
   --text-2xl: 24px;
   --text-2xl--line-height: 32px;
+  --default-transition-duration: var(--wc-motion-feedback);
+  --default-transition-timing-function: var(--wc-ease-out);
 }
 
 :root {
@@ -65,6 +68,17 @@
   --wc-soft-shadow: 0 8px 24px rgb(33 35 31 / 7%);
   --wc-menu-radius: 0.95rem;
   --wc-menu-shadow: 0 2px 7px rgb(33 35 31 / 6%), 0 14px 34px rgb(33 35 31 / 9%);
+  --wc-control-radius: 8px;
+  --wc-hover: rgb(48 50 45 / 4%);
+  --wc-selected: rgb(48 50 45 / 7%);
+  --wc-focus: rgb(91 111 94 / 48%);
+  --wc-focus-soft: rgb(91 111 94 / 12%);
+  --wc-motion-press: 70ms;
+  --wc-motion-feedback: 120ms;
+  --wc-motion-enter: 160ms;
+  --wc-motion-exit: 100ms;
+  --wc-motion-layout: 200ms;
+  --wc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --wc-conversation-navigator-gutter: 4.75rem;
   --wc-conversation-content-right-inset: 2.75rem;
   --wc-conversation-balance-shift: calc(
@@ -99,6 +113,14 @@ input {
 button:not(:disabled),
 [role='button']:not([aria-disabled='true']) {
   cursor: pointer;
+}
+
+@layer base {
+  :where(button, [role='button']) {
+    transition-property: color, background-color, border-color, box-shadow;
+    transition-duration: var(--wc-motion-feedback);
+    transition-timing-function: var(--wc-ease-out);
+  }
 }
 
 ::selection {
@@ -314,7 +336,11 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   border-radius: var(--wc-menu-radius);
   background: rgb(255 255 255 / 97%);
   box-shadow: var(--wc-soft-shadow);
+  transition: border-color var(--wc-motion-feedback) var(--wc-ease-out), box-shadow var(--wc-motion-feedback) var(--wc-ease-out);
 }
+
+.wc-composer:focus-within { border-color: rgb(48 50 45 / 28%); box-shadow: 0 6px 24px rgb(33 35 31 / 9%); }
+.wc-composer-btw:focus-within { border-color: transparent; }
 
 .wc-user-message-bubble-btw,
 .wc-composer-btw,
@@ -440,48 +466,6 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 .wc-btw-history-content-inner {
   min-height: 0;
   overflow: hidden;
-}
-
-.wc-settings-section {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.wc-font-size-setting {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  border-top: 1px solid var(--wc-line);
-  padding: 16px 0;
-}
-
-.wc-settings-panel {
-  padding: 1rem;
-}
-
-.wc-settings-input {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid var(--wc-line-strong);
-  border-radius: 0.75rem;
-  background: white;
-  padding: 0.5rem 0.75rem;
-  color: var(--wc-ink);
-  font-size: 13px;
-  line-height: 20px;
-  outline: none;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
-}
-
-.wc-settings-input:focus {
-  border-color: rgb(91 111 94 / 38%);
-  box-shadow: 0 0 0 2px rgb(91 111 94 / 10%);
-}
-
-.wc-settings-input:disabled {
-  cursor: default;
-  opacity: 0.55;
 }
 
 .wc-composer textarea {
@@ -947,7 +931,7 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   justify-content: center;
   border-radius: 0.7rem;
   color: var(--wc-muted);
-  transition: color 140ms ease, background-color 140ms ease, transform 140ms ease;
+  transition: color var(--wc-motion-feedback) var(--wc-ease-out), background-color var(--wc-motion-feedback) var(--wc-ease-out), transform var(--wc-motion-press) var(--wc-ease-out);
 }
 
 .wc-icon-button:hover:not(:disabled) {
@@ -961,7 +945,7 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 
 .wc-icon-button:focus-visible,
 .wc-focus-ring:focus-visible {
-  outline: 2px solid rgb(91 111 94 / 38%);
+  outline: 2px solid var(--wc-focus);
   outline-offset: 2px;
 }
 
@@ -972,7 +956,9 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   overflow: auto;
   padding: 0.35rem;
   transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-popover-content-transform-origin));
-  backdrop-filter: blur(12px) saturate(90%);
+  background: var(--wc-surface-strong);
+  box-shadow: var(--wc-menu-shadow);
+  overscroll-behavior: contain;
 }
 
 .wc-session-context-menu {
@@ -981,6 +967,7 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
   max-height: none;
   overflow: hidden;
   padding: 0;
+  box-shadow: none;
 }
 
 .wc-session-context-section {
@@ -1200,24 +1187,27 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 }
 
 .wc-menu-content[data-state='open'] {
-  animation: wc-pop-in 140ms ease-out;
+  animation: wc-pop-in var(--wc-motion-enter) var(--wc-ease-out);
 }
 
 .wc-dialog-overlay[data-state='open'] {
-  animation: wc-fade-in 140ms ease-out;
+  animation: wc-fade-in var(--wc-motion-enter) var(--wc-ease-out);
 }
 
 .wc-dialog-card[data-state='open'] {
-  animation: wc-dialog-in 160ms ease-out;
+  animation: wc-dialog-in var(--wc-motion-enter) var(--wc-ease-out);
 }
 
 .wc-dialog-page[data-state='open'] {
-  animation: wc-fade-in 150ms ease-out;
+  animation: wc-fade-in var(--wc-motion-enter) var(--wc-ease-out);
 }
 
+.wc-menu-content[data-state='closed'],
+.wc-dialog-overlay[data-state='closed'],
+.wc-dialog-card[data-state='closed'],
 .wc-dialog-page[data-state='closed'] {
   opacity: 0;
-  animation: wc-fade-out 140ms ease-in;
+  animation: wc-fade-out var(--wc-motion-exit) ease-in;
 }
 
 .wc-scrollbar {
@@ -1491,24 +1481,6 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 .wc-scroll-fade[data-fade-top='true'] > .wc-scroll-fade-top,
 .wc-scroll-fade[data-fade-bottom='true'] > .wc-scroll-fade-bottom {
   opacity: 0.94;
-}
-
-.wc-settings input:not([type='checkbox']),
-.wc-settings textarea {
-  border-color: var(--wc-line-strong);
-  border-radius: 0.75rem;
-  background: rgb(255 255 255 / 88%);
-  outline: none;
-}
-
-.wc-settings input:not([type='checkbox']):focus,
-.wc-settings textarea:focus {
-  border-color: rgb(92 109 94 / 52%);
-  box-shadow: 0 0 0 2px rgb(92 109 94 / 12%);
-}
-
-.wc-settings input[type='checkbox'] {
-  accent-color: #667a69;
 }
 
 .wc-source-link-icon {
@@ -1895,9 +1867,6 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
-  }
-
-  .wc-sidebar-label {
     transition-delay: 0ms !important;
   }
 
