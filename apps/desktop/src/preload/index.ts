@@ -51,6 +51,7 @@ import type { GitComparison, GitSnapshot, GitFilePreview, GitHistory, GitMutatio
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
+  McpSettingsItem,
   McpConnectionStatus,
   McpOAuthRequest,
   ModelListItem,
@@ -185,6 +186,7 @@ const api = {
     ipcRenderer.invoke(IPC.mcpStatus, runtimeId),
   connectionSettings: (): Promise<ConnectionSettingsSnapshot> =>
     ipcRenderer.invoke(IPC.connectionSettings),
+  mcpSettings: (): Promise<McpSettingsItem> => ipcRenderer.invoke(IPC.mcpSettings),
   saveProviderSettings: (
     request: SaveProviderSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveProviderSettings, request),
@@ -208,25 +210,25 @@ const api = {
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebSearchSettings, request),
   setMcpServerEnabled: (
     request: SetMcpServerEnabledRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.setMcpServerEnabled, request),
+  ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.setMcpServerEnabled, request),
   addMcpServer: (
     request: AddMcpServerRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.addMcpServer, request),
+  ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.addMcpServer, request),
   saveMcpSecretHeader: (
     request: SaveMcpSecretHeaderRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveMcpSecretHeader, request),
+  ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.saveMcpSecretHeader, request),
   authorizeMcpOAuth: (
     request: McpOAuthRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.authorizeMcpOAuth, request),
+  ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.authorizeMcpOAuth, request),
   disconnectMcpOAuth: (
     request: McpOAuthRequest,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.disconnectMcpOAuth, request),
+  ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.disconnectMcpOAuth, request),
   openMcpConfig: (
     request: OpenMcpConfigRequest,
   ): Promise<import('../shared/settings.ts').OpenMcpConfigResult> => ipcRenderer.invoke(IPC.openMcpConfig, request),
   saveRemoteMcpConfig: (
     request: import('../shared/ssh-mcp.ts').RemoteMcpDocument,
-  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveRemoteMcpConfig, request),
+  ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.saveRemoteMcpConfig, request),
   /** sandbox Renderer 不能读取 File.path；只通过 Electron 官方桥接取得本地选择路径。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   conversationHistory: (request: ConversationHistoryRequest): Promise<ConversationHistoryResult> =>

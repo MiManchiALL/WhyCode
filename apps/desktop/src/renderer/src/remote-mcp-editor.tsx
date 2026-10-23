@@ -2,13 +2,13 @@ import { useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import type { RemoteMcpDocument } from '../../shared/ssh-mcp.ts'
-import type { SettingsMutationResult } from '../../shared/settings.ts'
+import type { McpSettingsItem, SettingsMutationResult } from '../../shared/settings.ts'
 import { SettingsButton } from './settings-layout.tsx'
 
 export function RemoteMcpEditor({ document, onClose, onSaved }: {
   document: RemoteMcpDocument
   onClose: () => void
-  onSaved: (result: SettingsMutationResult) => void
+  onSaved: (result: SettingsMutationResult<McpSettingsItem>) => void
 }) {
   const [text, setText] = useState(document.text)
   const [busy, setBusy] = useState(false)

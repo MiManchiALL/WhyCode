@@ -209,6 +209,7 @@ import { canonicalDirectory } from './managed-worktree-registry.ts'
 import type {
   AddMcpServerRequest,
   ConnectionSettingsSnapshot,
+  McpSettingsItem,
   McpOAuthRequest,
   OpenMcpConfigRequest,
   SaveAuxiliaryModelSettingsRequest,
@@ -1889,7 +1890,7 @@ async function saveProviderModelSettings(
   return mutateConnectionSettings(async () => {
     const next = updateProviderSettings(loadAppConfig(), request)
     await persistConnectionConfig(next, true)
-  })
+  }, currentConnectionSettingsSnapshot)
 }
 
 async function saveCliProxyApiConnectionSettings(
@@ -1905,7 +1906,7 @@ async function saveCliProxyApiConnectionSettings(
       next.cliProxyApi.modelRoutes = modelRoutes
     }
     await persistConnectionConfig(next, true)
-  })
+  }, currentConnectionSettingsSnapshot)
 }
 
 async function saveAuxiliaryModelConnectionSettings(
@@ -1914,7 +1915,7 @@ async function saveAuxiliaryModelConnectionSettings(
   return mutateConnectionSettings(async () => {
     const next = updateAuxiliaryModelSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
-  })
+  }, currentConnectionSettingsSnapshot)
 }
 
 async function saveConsensusModelConnectionSettings(
@@ -1923,7 +1924,7 @@ async function saveConsensusModelConnectionSettings(
   return mutateConnectionSettings(async () => {
     const next = updateConsensusModelSettings(loadAppConfig(), request)
     await persistConnectionConfig(next, true)
-  })
+  }, currentConnectionSettingsSnapshot)
 }
 
 async function saveWebSearchConnectionSettings(
@@ -1932,36 +1933,36 @@ async function saveWebSearchConnectionSettings(
   return mutateConnectionSettings(async () => {
     const next = updateWebSearchSettings(loadAppConfig(), request)
     await persistConnectionConfig(next)
-  })
+  }, currentConnectionSettingsSnapshot)
 }
 
 async function setMcpServerConnectionState(
   request: SetMcpServerEnabledRequest,
-): Promise<SettingsMutationResult> {
+): Promise<SettingsMutationResult<McpSettingsItem>> {
   const workspace = selectedRuntime().workspace
-  if (request.scope === 'project' && workspace.mode === 'ssh') return mutateConnectionSettings(() => sshMcpProjects.mutate(workspace, request))
+  if (request.scope === 'project' && workspace.mode === 'ssh') return mutateConnectionSettings(() => sshMcpProjects.mutate(workspace, request), currentMcpSettingsSnapshot)
   return mutateConnectionSettings(() =>
     updateMcpServerState({
       globalConfigPath: mcpGlobalConfigPath,
       projectDir: selectedRuntime().localProjectDir,
-    }, request))
+    }, request), currentMcpSettingsSnapshot)
 }
 
 async function addMcpConnection(
   request: AddMcpServerRequest,
-): Promise<SettingsMutationResult> {
+): Promise<SettingsMutationResult<McpSettingsItem>> {
   const workspace = selectedRuntime().workspace
-  if (request.scope === 'project' && workspace.mode === 'ssh') return mutateConnectionSettings(() => sshMcpProjects.mutate(workspace, request))
+  if (request.scope === 'project' && workspace.mode === 'ssh') return mutateConnectionSettings(() => sshMcpProjects.mutate(workspace, request), currentMcpSettingsSnapshot)
   return mutateConnectionSettings(() =>
     addMcpConfiguredServer({
       globalConfigPath: mcpGlobalConfigPath,
       projectDir: selectedRuntime().localProjectDir,
-    }, request))
+    }, request), currentMcpSettingsSnapshot)
 }
 
 async function authorizeMcpOAuthConnection(
   request: McpOAuthRequest,
-): Promise<SettingsMutationResult> {
+): Promise<SettingsMutationResult<McpSettingsItem>> {
   if (sessionDeletionLock.busy || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
     return {
       ok: false,
@@ -1976,7 +1977,7 @@ async function authorizeMcpOAuthConnection(
   try {
     const server = await resolveGlobalMcpHttpServer(request)
     await mcpOAuthController.authorize(server)
-    return { ok: true, snapshot: await currentConnectionSettingsSnapshot() }
+    return { ok: true, snapshot: await currentMcpSettingsSnapshot() }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -1984,16 +1985,16 @@ async function authorizeMcpOAuthConnection(
 
 async function disconnectMcpOAuthConnection(
   request: McpOAuthRequest,
-): Promise<SettingsMutationResult> {
+): Promise<SettingsMutationResult<McpSettingsItem>> {
   return mutateConnectionSettings(async () => {
     const server = await resolveGlobalMcpHttpServer(request)
     await mcpOAuthController.disconnect(server)
-  })
+  }, currentMcpSettingsSnapshot)
 }
 
 async function saveMcpSecretHeaderConnection(
   request: SaveMcpSecretHeaderRequest,
-): Promise<SettingsMutationResult> {
+): Promise<SettingsMutationResult<McpSettingsItem>> {
   return mutateConnectionSettings(async () => {
     if (!request.clearSecret && request.headerName.trim().toLowerCase() === 'authorization') {
       const server = await resolveGlobalMcpHttpServer(request)
@@ -2010,12 +2011,13 @@ async function saveMcpSecretHeaderConnection(
       request,
     )
     await persistConnectionConfig(next)
-  })
+  }, currentMcpSettingsSnapshot)
 }
 
-async function mutateConnectionSettings(
+async function mutateConnectionSettings<T>(
   mutation: () => Promise<void>,
-): Promise<SettingsMutationResult> {
+  snapshot: () => T | Promise<T>,
+): Promise<SettingsMutationResult<T>> {
   if (sessionDeletionLock.busy) {
     return { ok: false, error: '会话数据删除中，请等待完成后再修改连接设置' }
   }
@@ -2028,7 +2030,7 @@ async function mutateConnectionSettings(
   settingsMutationInProgress = true
   try {
     await mutation()
-    return { ok: true, snapshot: await currentConnectionSettingsSnapshot() }
+    return { ok: true, snapshot: await snapshot() }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
@@ -2037,17 +2039,20 @@ async function mutateConnectionSettings(
   }
 }
 
-async function currentConnectionSettingsSnapshot(): Promise<ConnectionSettingsSnapshot> {
+function currentConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
+  return createConnectionSettingsSnapshot(loadAppConfig())
+}
+
+async function currentMcpSettingsSnapshot(): Promise<McpSettingsItem> {
   const config = loadAppConfig()
   const runtime = selectedRuntime()
-  const mcp = await createMcpSettingsSnapshot({
+  return createMcpSettingsSnapshot({
     globalConfigPath: mcpGlobalConfigPath,
     ...(runtime.workspace.mode === 'ssh' ? sshMcpProjects.options(runtime.workspace) : { projectDir: runtime.localProjectDir }),
     currentSessionSnapshot: runtime.session?.mcpSnapshot ?? null,
     mcpSecretHeaders: config?.mcpSecretHeaders ?? [],
     mcpOAuthController,
   })
-  return createConnectionSettingsSnapshot(config, mcp)
 }
 
 async function resolveGlobalMcpHttpServer(request: McpOAuthRequest) {
@@ -3068,6 +3073,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
     return currentConnectionSettingsSnapshot()
   })
+  ipcMain.handle(IPC.mcpSettings, () => currentMcpSettingsSnapshot())
   ipcMain.handle(IPC.saveProviderSettings, (_e, request: SaveProviderSettingsRequest) =>
     saveProviderModelSettings(request))
   ipcMain.handle(IPC.saveCliProxyApiSettings, (_e, request: SaveCliProxyApiSettingsRequest) =>
@@ -3100,7 +3106,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.saveRemoteMcpConfig, (event, value: unknown) => {
     if (!BrowserWindow.fromWebContents(event.sender) || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '仅主页面可编辑 MCP 配置' }
-    return mutateConnectionSettings(() => sshMcpProjects.save(remoteMcpSaveSchema.parse(value)))
+    return mutateConnectionSettings(() => sshMcpProjects.save(remoteMcpSaveSchema.parse(value)), currentMcpSettingsSnapshot)
   })
   ipcMain.handle(IPC.conversationHistory, async (_e, request: ConversationHistoryRequest): Promise<ConversationHistoryResult> => {
     try {
@@ -3311,7 +3317,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     }
   })
 
-  registerSshIpc(sshWorkspaces, projects, () => broadcastToWindows(IPC.sshSkillsChanged, undefined, 'SSH Skill 状态推送失败：'), sshMcpProjects, mutateConnectionSettings)
+  registerSshIpc(sshWorkspaces, projects, () => broadcastToWindows(IPC.sshSkillsChanged, undefined, 'SSH Skill 状态推送失败：'), sshMcpProjects,
+    mutation => mutateConnectionSettings(mutation, () => undefined))
   registerWorkspaceFileIpc(workspaceFiles, async runtimeId => {
     const runtime = runtimeForId(runtimeId)
     await sshWorkspaces.connect(runtime.workspace)

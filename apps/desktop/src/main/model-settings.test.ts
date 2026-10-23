@@ -10,18 +10,6 @@ import {
   updateProviderSettings,
 } from './model-settings.ts'
 import type { WhycodeConfig } from './config.ts'
-import type { McpSettingsItem } from '../shared/settings.ts'
-
-const emptyMcpSettings: McpSettingsItem = {
-  globalConfigPath: 'C:\\Users\\test\\.whycode\\mcp.json',
-  currentSessionUsesSnapshot: false,
-  servers: [],
-  diagnostics: [],
-}
-
-function createSettingsSnapshot(config: WhycodeConfig | null) {
-  return createConnectionSettingsSnapshot(config, emptyMcpSettings)
-}
 
 describe('模型设置数据边界', () => {
   it('设置快照不向 Renderer 返回任何 API key', () => {
@@ -39,7 +27,7 @@ describe('模型设置数据边界', () => {
         tavily: { apiKey: 'tavily-secret' },
       },
     }
-    const snapshot = createSettingsSnapshot(config)
+    const snapshot = createConnectionSettingsSnapshot(config)
     assert.equal(snapshot.providers.find((item) => item.id === 'mimo')?.hasKey, true)
     assert.equal(snapshot.cliProxyApi.hasKey, true)
     assert.equal(
@@ -64,7 +52,7 @@ describe('模型设置数据边界', () => {
         google: { apiKey: 'vision-key' },
       },
     }
-    const snapshot = createSettingsSnapshot(initial)
+    const snapshot = createConnectionSettingsSnapshot(initial)
     assert.equal(snapshot.auxiliaryModels.visionModelId, null)
     assert.equal(snapshot.auxiliaryModels.subagentModelId, null)
     const configured = MODEL_CATALOG.filter((model) => initial.providers[model.provider]?.apiKey)
@@ -82,7 +70,7 @@ describe('模型设置数据边界', () => {
       subagentModelId: 'deepseek:deepseek-v4-pro',
     })
     assert.equal(
-      createSettingsSnapshot(enabled).auxiliaryModels.visionModelId,
+      createConnectionSettingsSnapshot(enabled).auxiliaryModels.visionModelId,
       'google:gemini-3.8-flash',
     )
     assert.throws(
@@ -122,7 +110,7 @@ describe('模型设置数据边界', () => {
         google: { apiKey: 'google-key' },
       },
     }
-    const snapshot = createSettingsSnapshot(initial)
+    const snapshot = createConnectionSettingsSnapshot(initial)
     assert.equal(snapshot.consensusModels.agentBModelId, null)
     assert.equal(snapshot.consensusModels.agentCModelId, null)
     assert.deepEqual(snapshot.consensusModels.models, snapshot.auxiliaryModels.subagentModels)
@@ -135,7 +123,7 @@ describe('模型设置数据边界', () => {
       B: { modelId: 'deepseek:deepseek-v4-flash' },
       C: { modelId: 'google:gemini-3.8-flash' },
     })
-    assert.deepEqual(createSettingsSnapshot(configured).consensusModels, {
+    assert.deepEqual(createConnectionSettingsSnapshot(configured).consensusModels, {
       agentBModelId: 'deepseek:deepseek-v4-flash',
       agentCModelId: 'google:gemini-3.8-flash',
       models: snapshot.consensusModels.models,
@@ -220,7 +208,7 @@ describe('模型设置数据边界', () => {
   })
 
   it('设置快照从目录装配厂商与模型，CLI 展示审核后的有效画像', () => {
-    const snapshot = createSettingsSnapshot({ providers: {} })
+    const snapshot = createConnectionSettingsSnapshot({ providers: {} })
     assert.deepEqual(snapshot.providers.map((provider) => provider.id), BUILTIN_PROVIDERS.map((provider) => provider.id))
     for (const provider of snapshot.providers) {
       const profiles = MODEL_CATALOG.filter((model) => model.provider === provider.id)
@@ -247,13 +235,13 @@ describe('模型设置数据边界', () => {
         modelIds: [selected], modelRoutes: {},
       },
     }
-    const unavailable = createSettingsSnapshot(config).cliProxyApi.models
+    const unavailable = createConnectionSettingsSnapshot(config).cliProxyApi.models
     assert.deepEqual(unavailable.map((model) => [model.id, model.enabled]), [[selected, true]])
     assert.match(unavailable[0]!.unavailableReason!, /暂未提供/)
     config.cliProxyApi!.modelRoutes = {
       [selected]: 'gemini-3.1-pro-low', [available]: 'gpt-5.6-sol',
     }
-    const models = createSettingsSnapshot(config).cliProxyApi.models
+    const models = createConnectionSettingsSnapshot(config).cliProxyApi.models
     assert.deepEqual(models.map((model) => [model.id, model.enabled]), [[selected, true], [available, false]])
     assert.deepEqual(models[0]?.capabilities, getCliProxyEffectiveCapabilities(selected, 'gemini-3.1-pro-low'))
     assert.deepEqual(models[1]?.capabilities, getCliProxyEffectiveCapabilities(available, 'gpt-5.6-sol'))

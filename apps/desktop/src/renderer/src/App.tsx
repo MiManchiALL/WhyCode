@@ -36,7 +36,7 @@ import type {
   DeleteSessionOptions,
   DeleteSessionResult,
 } from '../../shared/session.ts'
-import type { ConnectionSettingsSnapshot, ModelListItem } from '../../shared/settings.ts'
+import type { ModelListItem } from '../../shared/settings.ts'
 import { attachmentFallbackText } from '../../shared/user-message.ts'
 import {
   workspaceDisplayDirectory,
@@ -208,11 +208,9 @@ export function App() {
   const [rightPanelFullscreen, setRightPanelFullscreen] = useState(false)
   const [terminalOpening, setTerminalOpening] = useState(false)
   const [rightPanelResizeActive, setRightPanelResizeActive] = useState(false)
-  const [showConnectionSettings, setShowConnectionSettings] = useState(false)
-  const [settingsSection, setSettingsSection] = useState<'general' | 'ssh'>('general')
+  const [settingsSection, setSettingsSection] = useState<'general' | 'ssh' | null>(null)
+  const showConnectionSettings = settingsSection !== null
   const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
-  const [connectionSettings, setConnectionSettings] =
-    useState<ConnectionSettingsSnapshot | null>(null)
   const [approval, setApproval] = useState<Approval | null>(null)
   const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
@@ -1492,7 +1490,6 @@ export function App() {
   const pickProject = useCallback((projectId?: string) => {
     if (projectId === 'ssh') {
       setSettingsSection('ssh')
-      void window.whycode.connectionSettings().then(snapshot => { setConnectionSettings(snapshot); setShowConnectionSettings(true) }).catch(error => showError(String(error)))
       return
     }
     if (!beginSessionTransition()) return
@@ -1838,13 +1835,7 @@ export function App() {
 
   const openConnectionSettings = useCallback(() => {
     setSettingsSection('general')
-    void window.whycode.connectionSettings().then((snapshot) => {
-      setConnectionSettings(snapshot)
-      setShowConnectionSettings(true)
-    }).catch((error) => {
-      showError(`连接设置读取失败：${error instanceof Error ? error.message : String(error)}`)
-    })
-  }, [showError])
+  }, [])
 
   const openCurrentWorkspaceFolder = useCallback(() => {
     const targetRuntimeId = runtimeIdRef.current
@@ -1861,8 +1852,7 @@ export function App() {
     })
   }, [showError, workspace.mode, showRightPanelPage])
 
-  const applyConnectionSettings = useCallback((snapshot: ConnectionSettingsSnapshot) => {
-    setConnectionSettings(snapshot)
+  const connectionSettingsChanged = useCallback(() => {
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshModelCatalog()
   }, [refreshModelCatalog])
@@ -2713,16 +2703,15 @@ export function App() {
         </div>
       </section>
 
-      {showConnectionSettings && connectionSettings && (
+      {settingsSection !== null && (
         <ConnectionSettingsPanel
           initialSection={settingsSection}
           onStartSession={startWorkspaceSession}
-          snapshot={connectionSettings}
           workspaceCleanup={workspaceCleanup}
           conversationFontSize={conversationFontSize}
           onConversationFontSizeChange={setConversationFontSize}
-          onClose={() => { setShowConnectionSettings(false); void refreshSessions() }}
-          onChanged={applyConnectionSettings}
+          onClose={() => { setSettingsSection(null); void refreshSessions() }}
+          onChanged={connectionSettingsChanged}
           onError={showError}
         />
       )}

@@ -1216,6 +1216,7 @@ html[data-wc-panel-resizing='true'] iframe { pointer-events: none; }
 }
 
 .wc-dialog-page[data-state='closed'] {
+  opacity: 0;
   animation: wc-fade-out 140ms ease-in;
 }
 
