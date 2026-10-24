@@ -18,6 +18,7 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
     if (mermaidSourceTooLarge(source)) throw new Error('图表过大，已显示源码')
     const { default: mermaid } = await import('mermaid')
     signal.throwIfAborted()
+    const style = getComputedStyle(document.documentElement)
     const config: MermaidConfig = {
       startOnLoad: false,
       securityLevel: 'strict',
@@ -29,8 +30,9 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
       flowchart: { htmlLabels: false },
       secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'htmlLabels', 'flowchart'],
       theme: 'base',
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--wc-font-family').trim(),
+      fontFamily: style.getPropertyValue('--wc-font-family').trim(),
       themeVariables: {
+        fontSize: style.getPropertyValue('--wc-mermaid-font-size').trim(),
         background: '#ffffff', primaryColor: '#f1f3f4', primaryTextColor: '#30322d',
         primaryBorderColor: '#aab4bd', lineColor: '#777c73', secondaryColor: '#e6edf2',
         tertiaryColor: '#f8f8f6', noteBkgColor: '#f8f8f6', noteTextColor: '#30322d',

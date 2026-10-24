@@ -37,6 +37,7 @@
   /* 不保留裸 monospace 兜底：Windows 中文会因此回退到宋体。 */
   --wc-font-family-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
     'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
+  --wc-mermaid-font-size: 16px;
   font-family: var(--wc-font-family);
   --wc-canvas: #f7f7f4;
   --wc-sidebar: #f0f0ec;
@@ -247,8 +248,8 @@ html[data-wc-panel-resizing='true'] .wc-resizable-panel:not([data-resize-transit
 .wc-fence-body[data-wrap='true'] .wc-fence-line { white-space: pre-wrap; overflow-wrap: anywhere; }
 .wc-mermaid-viewport { max-height: min(560px, 70vh); overflow: auto; background: white; }
 .wc-mermaid-image { display: flex; width: max-content; min-width: 100%; justify-content: center; padding: 16px; cursor: zoom-in; }
-/* 限制滚动视口而非 SVG 尺寸，长图和窄面板都保留图中文字的原始大小。 */
-.wc-mermaid-image img { display: block; flex: none; max-width: none; height: auto; }
+/* 随所在正文的字号缩放整个图表；zoom 同时调整布局占位，不必重新运行 Mermaid。 */
+.wc-mermaid-image img { display: block; flex: none; max-width: none; height: auto; zoom: calc(1em / var(--wc-mermaid-font-size)); }
 .wc-mermaid-measure { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
 
 .wc-right-panel-tabs::-webkit-scrollbar {
