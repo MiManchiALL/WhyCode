@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { parseHTML } from 'linkedom'
 import type { SkillCatalogSnapshot } from '@whycode/core/skills'
 import { createComposerCommands, useSkillComposer } from './use-skill-composer.ts'
+import { ComposerText } from './composer-text.ts'
 
 describe('输入框功能命令目录', () => {
   it('没有对话消息时仍可查看 MCP 状态，不提供压缩命令', () => {
@@ -74,6 +75,18 @@ describe('输入框功能命令目录', () => {
 })
 
 describe('输入框 Skill 目录刷新', () => {
+  it('选择 Skill 从最新文本移除触发词，不依赖整页重渲染或丢弃尾部内容', async t => {
+    const page = await composerFixture(t)
+    await act(async () => page.requests[0]!.resolve(connectedCatalog))
+    page.input.set('/review')
+    await act(async () => page.current.updateMenu('/review', 7))
+    page.input.set('/review 保留说明')
+    await act(async () => page.current.select({ kind: 'skill', skill: connectedCatalog.skills[0]! }))
+    assert.equal(page.input.getSnapshot(), '保留说明')
+    assert.equal(page.current.selected.length, 1)
+    assert.equal(page.current.trigger, null)
+  })
+
   it('SSH 连接后在当前会话开始读取，并用新目录替换未连接结果', async t => {
     const page = await composerFixture(t)
     await act(async () => page.requests[0]!.resolve(disconnectedCatalog))
@@ -167,7 +180,9 @@ async function composerFixture(t: TestContext) {
       return () => { listeners.delete(listener) }
     },
   }, configurable: true })
-  const globals = { window, document, IS_REACT_ACT_ENVIRONMENT: true }
+  const globals = { window, document, IS_REACT_ACT_ENVIRONMENT: true,
+    requestAnimationFrame: (callback: FrameRequestCallback) => { callback(0); return 0 },
+  }
   const originals = Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true })
   const root = createRoot(document.body)
@@ -180,7 +195,7 @@ async function composerFixture(t: TestContext) {
     assert.equal(listeners.size, 0)
   })
   const options: Parameters<typeof useSkillComposer>[0] = {
-    input: '', setInput: () => {}, inputRef: { current: '' },
+    input: new ComposerText(),
     runtimeId: 'ssh-session', runtimeIdRef: { current: 'ssh-session' },
     modelId: '', projectDir: '/home/test', workspaceMode: 'ssh', skillsEnabled: true,
     compactAvailable: false, compactDisabled: false, forkAvailable: false, forkDisabled: false,
@@ -190,7 +205,7 @@ async function composerFixture(t: TestContext) {
   function Composer() { current = useSkillComposer(options); return null }
   await act(async () => root.render(createElement(Composer)))
   return {
-    get current() { return current }, requests, listeners,
+    get current() { return current }, input: options.input, requests, listeners,
     switchRuntime: (runtimeId: string) => act(async () => {
       options.runtimeId = runtimeId; options.runtimeIdRef.current = runtimeId
       current.resetCatalog(); current.closeMenu()

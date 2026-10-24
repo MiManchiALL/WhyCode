@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Block } from '../../shared/conversation-state.ts'
 import { UserImageGallery } from './image-attachments.tsx'
@@ -8,6 +8,7 @@ import { MessageEditEffects, useMessageEditEffects } from './message-edit-effect
 import { MessageActions } from './message-actions.tsx'
 import { ComposerInput, type ComposerInputHandle } from './composer-input.tsx'
 import { splitPathReferences } from './path-reference.ts'
+import { ComposerText } from './composer-text.ts'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 
@@ -125,10 +126,9 @@ function UserMessageText({ text }: { text: string }) {
 
 interface MessageEditorState {
   editing: boolean
-  draft: string
+  draft: ComposerText
   submitting: boolean
   error: string | null
-  setDraft: (text: string) => void
   begin: () => void
   cancel: () => void
   submit: (allowed: boolean, restoreFiles: boolean) => Promise<void>
@@ -139,25 +139,25 @@ function useMessageEditor(
   onEdit: UserMessageCardProps['onEdit'],
 ): MessageEditorState {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(block.text)
+  const [draft] = useState(() => new ComposerText(block.text))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
-    if (!editing) setDraft(block.text)
-  }, [block.text, editing])
+    if (!editing) draft.set(block.text)
+  }, [block.text, editing, draft])
   const begin = () => {
-    setDraft(block.text)
+    draft.set(block.text)
     setError(null)
     setEditing(true)
   }
   const cancel = () => {
     if (submitting) return
-    setDraft(block.text)
+    draft.set(block.text)
     setError(null)
     setEditing(false)
   }
   const submit = async (allowed: boolean, restoreFiles: boolean) => {
-    const text = draft.trim()
+    const text = draft.getSnapshot().trim()
     if (!allowed || submitting || !text) return
     setSubmitting(true)
     setError(null)
@@ -170,7 +170,7 @@ function useMessageEditor(
       setSubmitting(false)
     }
   }
-  return { editing, draft, submitting, error, setDraft, begin, cancel, submit }
+  return { editing, draft, submitting, error, begin, cancel, submit }
 }
 
 function MessageEditor({
@@ -204,9 +204,8 @@ function MessageEditor({
         scopeKey={runtimeId}
         runtimeId={runtimeId}
         className="wc-scrollbar block max-h-40 min-h-16 w-full min-w-0 overflow-y-auto border-0 bg-transparent p-0 outline-none"
-        value={editor.draft}
+        text={editor.draft}
         disabled={disabled || editor.submitting}
-        onChange={text => editor.setDraft(text)}
         onKeyDown={(event) => handleEditorKeyDown(event, editor.cancel, submit)}
         aria-label="编辑用户消息"
       />
@@ -246,11 +245,12 @@ function EditorActions({
   submitting,
   onCancel,
 }: {
-  draft: string
+  draft: ComposerText
   disabled: boolean
   submitting: boolean
   onCancel: () => void
 }) {
+  const empty = useSyncExternalStore(draft.subscribe, draft.isEmpty)
   return (
     <div className="ml-auto flex shrink-0 justify-end gap-2 text-xs">
       <button
@@ -264,7 +264,7 @@ function EditorActions({
       <button
         type="submit"
         className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-2.5 py-1 text-white disabled:opacity-40"
-        disabled={disabled || submitting || !draft.trim()}
+        disabled={disabled || submitting || empty}
       >
         {submitting ? '发送中…' : '发送'}
       </button>
