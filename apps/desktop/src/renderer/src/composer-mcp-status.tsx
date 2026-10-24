@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { Plug, RefreshCw, X } from 'lucide-react'
 import type { McpConnectionStatus } from '../../shared/settings.ts'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 const CONNECTION_LABELS: Record<McpConnectionStatus['state'], string> = {
   idle: '未连接',
@@ -24,6 +25,7 @@ export function ComposerMcpStatus({ runtimeId, composerRef, onClose }: {
     loading: boolean
     error: string | null
   }>({ servers: [], loading: true, error: null })
+  const refresh = useRefreshFeedback(state.loading)
 
   useEffect(() => {
     let disposed = false
@@ -61,10 +63,11 @@ export function ComposerMcpStatus({ runtimeId, composerRef, onClose }: {
             className="wc-icon-button size-7"
             title="刷新状态"
             aria-label="刷新 MCP 状态"
-            disabled={state.loading}
-            onClick={() => setRevision((current) => current + 1)}
+            disabled={refresh.busy}
+            aria-busy={refresh.busy}
+            onClick={() => void refresh.run(() => setRevision((current) => current + 1))}
           >
-            <RefreshCw size={13} className={state.loading ? 'animate-spin' : ''} />
+            <RefreshCw size={13} className={refresh.busy ? 'animate-spin' : ''} />
           </button>
           <Dialog.Close className="wc-icon-button size-7" aria-label="关闭 MCP 状态">
             <X size={14} />

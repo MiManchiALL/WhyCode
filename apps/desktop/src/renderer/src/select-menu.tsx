@@ -1,6 +1,6 @@
 import { Check, ChevronDown } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 const SEARCH_RESULT_LIMIT = 200
 
@@ -35,8 +35,22 @@ export function SelectMenu({
   const [search, setSearch] = useState('')
   const searchInput = useRef<HTMLInputElement>(null)
   const filtered = options.filter(option => !searchable || option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
-  const selected = options.find((option) => option.value === value)
+  const selectedIndex = options.findIndex(option => option.value === value)
+  const selected = options[selectedIndex]
   const selectedLabel = selected?.label ?? '请选择'
+  const resultStart = searchable && !search
+    ? Math.max(0, Math.min(selectedIndex - SEARCH_RESULT_LIMIT / 2, options.length - SEARCH_RESULT_LIMIT))
+    : 0
+  const visible = searchable ? filtered.slice(resultStart, resultStart + SEARCH_RESULT_LIMIT) : filtered
+  const positionOptions = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return
+    // 等待菜单定位和限高完成，只滚动选项，不移动外层文件预览。
+    const frame = requestAnimationFrame(() => {
+      const checked = search ? null : node.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')
+      node.scrollTop = checked ? checked.offsetTop - (node.clientHeight - checked.offsetHeight) / 2 : 0
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [search])
   return (
     <DropdownMenu.Root onOpenChange={open => { if (!open) setSearch('') }}>
       <DropdownMenu.Trigger asChild>
@@ -59,7 +73,7 @@ export function SelectMenu({
           align={align}
           sideOffset={5}
           collisionPadding={8}
-          onFocus={event => { if (searchable && event.target === event.currentTarget) { event.preventDefault(); searchInput.current?.focus() } }}
+          onFocus={event => { if (searchable && event.target === event.currentTarget) { event.preventDefault(); searchInput.current?.focus({ preventScroll: true }) } }}
           onEscapeKeyDown={event => { if (event.isComposing) event.preventDefault() }}
         >
           {searchable && <input ref={searchInput} className="wc-settings-input mb-1 w-full" aria-label={`搜索${ariaLabel}`} placeholder="搜索…" value={search}
@@ -72,7 +86,7 @@ export function SelectMenu({
                 items?.[event.key === 'ArrowDown' ? 0 : items.length - 1]?.focus()
               }
             }} />}
-          <div className="wc-select-options wc-scrollbar min-h-0 max-h-64 overflow-y-auto" onKeyDown={event => {
+          <div ref={searchable ? positionOptions : undefined} className="wc-select-options wc-scrollbar relative min-h-0 max-h-64 overflow-y-auto" onKeyDown={event => {
             if (!searchable || event.nativeEvent.isComposing || event.key !== 'ArrowUp') return
             const first = event.currentTarget.querySelector('[role="menuitemradio"]:not([data-disabled])')
             if (event.target !== first) return
@@ -81,7 +95,7 @@ export function SelectMenu({
             searchInput.current?.focus({ preventScroll: true })
           }}>
           <DropdownMenu.RadioGroup value={value} onValueChange={onValueChange}>
-            {(searchable ? filtered.slice(0, SEARCH_RESULT_LIMIT) : filtered).map((option) => (
+            {visible.map((option) => (
               <DropdownMenu.RadioItem
                 key={option.value}
                 value={option.value}
@@ -108,7 +122,7 @@ export function SelectMenu({
             ))}
           </DropdownMenu.RadioGroup>
           {!filtered.length && <p className="px-2 py-3 text-xs text-[var(--wc-faint)]">没有匹配项</p>}
-          {searchable && filtered.length > SEARCH_RESULT_LIMIT && <p className="px-2 py-2 text-xs text-[var(--wc-faint)]">共 {filtered.length} 项，显示前 {SEARCH_RESULT_LIMIT} 项；输入名称筛选</p>}
+          {searchable && filtered.length > SEARCH_RESULT_LIMIT && <p className="px-2 py-2 text-xs text-[var(--wc-faint)]">共 {filtered.length} 项，显示第 {resultStart + 1}–{resultStart + visible.length} 项；输入名称筛选</p>}
           </div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

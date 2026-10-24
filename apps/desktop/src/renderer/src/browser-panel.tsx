@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowLeftRight, Copy, ExternalLink, Globe, LoaderCircle, MoreHorizontal, Plus, Minus, RotateCw, Search, X, MousePointer2 } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowLeftRight, Copy, ExternalLink, Globe, LoaderCircle, MoreHorizontal, Plus, Minus, RefreshCw, Search, X, MousePointer2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { WebviewTag } from 'electron'
 import { browserShortcut, isExternalBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
@@ -11,6 +11,7 @@ import { useBrowserReference } from './use-browser-reference.ts'
 import { BrowserReferenceEditor } from './browser-reference-editor.tsx'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { ImageDraft } from './image-draft.ts'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 type BrowserPage = Extract<RightPanelPage, { kind: 'browser' }>
 interface Props {
@@ -47,6 +48,7 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
     onRequestHandled: onReferenceHandled, onAdd: onReference,
     focusPage: () => browser.element.current?.focus() })
   const { state } = browser
+  const refresh = useRefreshFeedback(state.loading)
   useEffect(() => {
     if (document.activeElement !== addressRef.current) setAddress(state.url === 'about:blank' ? '' : state.url)
   }, [state.url])
@@ -64,8 +66,10 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
       case 'find': setFinding(true); findRef.current?.focus(); findRef.current?.select(); break
       case 'new-tab': onOpen('about:blank'); break
       case 'close-tab': onClose(); break
-      case 'reload': if (agent) onNavigate(state.url); else browser.reload(); break
-      case 'reload-clean': if (agent) onNavigate(state.url); else browser.reload(true); break
+      case 'reload':
+      case 'reload-clean':
+        if (state.ready) void refresh.run(() => { if (agent) onNavigate(state.url); else browser.reload(command === 'reload-clean') })
+        break
       case 'back': if (!agent) browser.run(view => { if (view.canGoBack()) view.goBack() }); break
       case 'forward': if (!agent) browser.run(view => { if (view.canGoForward()) view.goForward() }); break
       case 'zoom-in': if (!agent) browser.zoom(state.zoom + 0.1); break
@@ -91,8 +95,11 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
     <div className="flex min-w-0 shrink-0 items-center gap-0.5 border-b border-[var(--wc-line)] px-2 py-2">
       <button className="wc-preview-action" title="后退 (Alt+←)" aria-label="后退" disabled={agent || !state.ready || !state.back} onClick={() => shortcut('back')}><ArrowLeft size={15} /></button>
       <button className="wc-preview-action" title="前进 (Alt+→)" aria-label="前进" disabled={agent || !state.ready || !state.forward} onClick={() => shortcut('forward')}><ArrowRight size={15} /></button>
-      <button className="wc-preview-action" title={state.loading ? '停止加载' : '刷新 (Ctrl+R)'} aria-label={state.loading ? '停止加载' : '刷新网页'} disabled={!state.ready}
-        onClick={() => state.loading && !agent ? browser.run(view => view.stop()) : shortcut('reload')}>{state.loading ? <X size={15} /> : <RotateCw size={15} />}</button>
+      <button className="wc-preview-action" title={state.loading && !agent ? '停止加载' : '刷新 (Ctrl+R)'} aria-label={state.loading && !agent ? '停止加载' : '刷新网页'}
+        disabled={!state.ready || ((agent || !state.loading) && refresh.busy)} aria-busy={refresh.busy}
+        onClick={() => state.loading && !agent ? browser.run(view => view.stop()) : shortcut('reload')}>
+        {state.loading && !agent ? <X size={15} /> : <RefreshCw size={15} className={refresh.busy ? 'animate-spin' : ''} />}
+      </button>
       <form className="mx-1 flex min-w-0 flex-1 items-center rounded-lg bg-black/[0.035] px-2 focus-within:ring-1 focus-within:ring-[var(--wc-line)]"
         onSubmit={event => { event.preventDefault(); if (agent) onNavigate(address); else browser.navigate(address); browser.element.current?.focus() }}>
         <span className="mr-1.5 shrink-0 text-[var(--wc-faint)]" role="status" aria-label={state.loading ? '正在加载网页' : '网页'}>
@@ -154,7 +161,8 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
         {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--wc-surface)] px-6 text-center text-sm text-[var(--wc-muted)]">
           <Globe size={26} className="text-[var(--wc-faint)]" />
           <p className="max-w-sm break-words">{state.error ?? '输入网址，浏览网页或打开本机开发服务'}</p>
-          {state.error && state.ready && <button className="wc-focus-ring rounded-lg border border-[var(--wc-line)] px-3 py-1.5" onClick={() => shortcut('reload')}>重新加载</button>}
+          {state.error && state.ready && <button className="wc-focus-ring flex items-center gap-2 rounded-lg border border-[var(--wc-line)] px-3 py-1.5" disabled={refresh.busy} aria-busy={refresh.busy}
+            onClick={() => shortcut('reload')}><RefreshCw size={14} className={refresh.busy ? 'animate-spin' : ''} />重新加载</button>}
         </div>}
         <BrowserReferenceEditor reference={reference} boundary={stage} />
       </div>

@@ -22,6 +22,13 @@ import {
 } from './model-connections.ts'
 
 describe('模型连接解析', () => {
+  it('没有当前模型时拒绝连接，不隐式选用其它已配置模型', () => {
+    const value = config({ deepseek: { apiKey: 'key' } })
+    assert.deepEqual(resolveModelConnection(value, null), {
+      ok: false, error: '没有任何已配置 key 的模型可用',
+    })
+  })
+
   it('统一候选只包含当前可解析连接，并清理协商中的失效引用', () => {
     const value: WhycodeConfig = {
       providers: { deepseek: { apiKey: 'key' } },

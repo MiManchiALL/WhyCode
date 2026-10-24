@@ -16,6 +16,7 @@ export interface FilePreviewAction {
   label: string
   title?: string
   icon: LucideIcon
+  iconClassName?: string
   disabled?: boolean
   pending?: boolean
   pressed?: boolean
@@ -28,6 +29,8 @@ export function FilePreviewActions({ actions, mode }: {
   mode?: { value: 'preview' | 'code'; disabled: boolean; change: (value: 'preview' | 'code') => void }
 }) {
   const modes = [{ value: 'preview', label: '预览' }, { value: 'code', label: '代码' }] as const
+  const pending = actions.find(action => action.pending)
+  const MenuIcon = pending?.icon ?? MoreHorizontal
   return <>
     <div className="wc-file-preview-actions items-center gap-1">
       {mode && <div className="flex shrink-0 rounded-md bg-black/[0.035] p-0.5" aria-label="文件显示方式">
@@ -37,12 +40,12 @@ export function FilePreviewActions({ actions, mode }: {
       {actions.map(({ icon: Icon, ...action }) => <button key={action.label} type="button" className="wc-preview-action"
         title={action.title ?? action.label} aria-label={action.label} aria-pressed={action.pressed}
         disabled={action.disabled} aria-busy={action.pending} onClick={action.run}>
-        <Icon size={15} />{action.marked && <UpdateMark />}
+        <Icon size={15} className={action.iconClassName} />{action.marked && <UpdateMark />}
       </button>)}
     </div>
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild><button type="button" className="wc-preview-action wc-file-preview-menu" title="文件操作" aria-label="文件操作">
-        <MoreHorizontal size={16} />{actions.some(action => action.marked) && <UpdateMark />}
+      <DropdownMenu.Trigger asChild><button type="button" className="wc-preview-action wc-file-preview-menu" title="文件操作" aria-label="文件操作" aria-busy={Boolean(pending)}>
+        <MenuIcon size={16} className={pending?.iconClassName} />{actions.some(action => action.marked) && <UpdateMark />}
       </button></DropdownMenu.Trigger>
       <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content" align="end" sideOffset={6} collisionPadding={8}>
         {mode && <>
@@ -55,8 +58,8 @@ export function FilePreviewActions({ actions, mode }: {
         </>}
         {actions.map(({ icon: Icon, ...action }) => <DropdownMenu.Item key={action.label} className="wc-menu-item"
           role={action.pressed === undefined ? 'menuitem' : 'menuitemcheckbox'} aria-checked={action.pressed}
-          disabled={action.disabled} onSelect={action.run}>
-          <Icon size={14} />{action.label}{action.pressed && <Check size={14} className="ml-auto" />}
+          disabled={action.disabled} aria-busy={action.pending} onSelect={action.run}>
+          <Icon size={14} className={action.iconClassName} />{action.label}{action.pressed && <Check size={14} className="ml-auto" />}
         </DropdownMenu.Item>)}
       </DropdownMenu.Content></DropdownMenu.Portal>
     </DropdownMenu.Root>

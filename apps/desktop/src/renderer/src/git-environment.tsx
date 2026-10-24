@@ -4,15 +4,18 @@ import type { GitData } from './git-data.ts'
 import { GitNotFound } from './git-not-found.tsx'
 import { GitChangeCounts } from './file-change-summary.tsx'
 import { GitActions } from './git-actions.tsx'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
   runtimeId: string; workspace: RuntimeWorkspace; data: GitData; busy: boolean; onOpen: () => void
 }) {
+  const refresh = useRefreshFeedback(data.loading)
   const repo = data.snapshot?.repository
   const changes = data.snapshot?.changes
   if (workspace.mode === 'none' || workspace.mode.startsWith('pending-')) return null
   if (data.unavailableReason || !repo) return <div className="px-2 text-xs text-[var(--wc-faint)]">
-    {data.unavailableReason ?? (data.error ? <button className="wc-focus-ring w-full text-left" onClick={data.refresh} title={data.error}>Git 读取失败，点击重试</button>
+    {data.unavailableReason ?? (data.error ? <button className="wc-focus-ring flex w-full items-center gap-1 text-left" disabled={refresh.busy} aria-busy={refresh.busy}
+      onClick={() => void refresh.run(data.refresh)} title={data.error}><RefreshCw size={12} className={`shrink-0 ${refresh.busy ? 'animate-spin' : ''}`} />Git 读取失败，点击重试</button>
       : data.snapshot?.status === 'git-not-found' ? <GitNotFound loading={data.loading} onRetry={data.refresh} />
         : data.loading ? '正在读取仓库…' : '当前目录不是 Git 仓库')}
   </div>
@@ -31,7 +34,7 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
       </button>
       <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={data.refresh} />
     </div>
-    {(data.error || data.snapshot?.changesError) && <button type="button" className="wc-git-read-error" onClick={data.refresh}
-      title={data.error ?? data.snapshot?.changesError ?? ''}><RefreshCw size={12} />读取未完成，点击重试</button>}
+    {(data.error || data.snapshot?.changesError) && <button type="button" className="wc-git-read-error" disabled={refresh.busy} aria-busy={refresh.busy} onClick={() => void refresh.run(data.refresh)}
+      title={data.error ?? data.snapshot?.changesError ?? ''}><RefreshCw size={12} className={refresh.busy ? 'animate-spin' : ''} />读取未完成，点击重试</button>}
   </div>
 }

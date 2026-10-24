@@ -42,7 +42,6 @@
 .wc-slash-description { min-width: 0; flex: 1; overflow: hidden; color: var(--wc-muted); text-overflow: ellipsis; white-space: nowrap; }
 .wc-slash-scope { flex: none; color: var(--wc-faint); font-size: 11px; }
 .wc-slash-group-label { padding: 8px 10px 4px; color: var(--wc-faint); font-size: 11px; line-height: 16px; }
-.wc-slash-hint { display: flex; flex: none; gap: 12px; margin-top: 4px; padding: 5px 10px 3px; border-top: 1px solid var(--wc-line); color: var(--wc-faint); font-size: 11px; line-height: 16px; }
 
 @container (max-width: 24rem) {
   .wc-slash-copy { flex-direction: column; align-items: stretch; gap: 0; }

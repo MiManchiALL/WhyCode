@@ -6,10 +6,12 @@ import type { SshConnectionSnapshot, SshConnectionInput } from '../../shared/ssh
 import type { RemoteMcpProject, RemoteMcpSelection } from '../../shared/ssh-mcp.ts'
 import { SettingsButton } from './settings-layout.tsx'
 import { SshConnectionEditor } from './ssh-connection-editor.tsx'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 export function SshMcpDialog({ connection, onClose }: { connection: SshConnectionSnapshot; onClose: () => void }) {
   const [rows, setRows] = useState<RemoteMcpProject[]>([])
   const [busy, setBusy] = useState(false)
+  const refreshing = useRefreshFeedback(busy)
   const [error, setError] = useState<string | null>(null)
   const [credentials, setCredentials] = useState(false)
   const [selection, setSelection] = useState<RemoteMcpSelection[] | null>(null)
@@ -82,7 +84,8 @@ export function SshMcpDialog({ connection, onClose }: { connection: SshConnectio
           <SettingsButton type="submit" disabled={busy}>查找</SettingsButton>
         </form>}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex gap-2"><SettingsButton disabled={busy} aria-label="刷新 MCP 配置" onClick={() => void refresh()}><RefreshCw size={14} /></SettingsButton><SettingsButton disabled={busy} onClick={() => setLookup(value => value === null ? '' : null)}>查找项目</SettingsButton></div>
+          <div className="flex gap-2"><SettingsButton disabled={refreshing.busy} aria-busy={refreshing.busy} aria-label="刷新 MCP 配置"
+            onClick={() => void refreshing.run(() => refresh())}><RefreshCw size={14} className={refreshing.busy ? 'animate-spin' : ''} /></SettingsButton><SettingsButton disabled={busy} onClick={() => setLookup(value => value === null ? '' : null)}>查找项目</SettingsButton></div>
           {rows.length > 0 && <SettingsButton disabled={busy || removable.length !== rows.length} onClick={() => setSelection(removable)}>删除全部项目配置</SettingsButton>}
         </div>
       </Dialog.Content>
