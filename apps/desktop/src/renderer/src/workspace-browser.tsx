@@ -8,6 +8,7 @@ import type { WorkspaceDirectories } from './workspace-directories.ts'
 import { useScrollArea } from './use-scroll-area.ts'
 import { captureWorkspaceBrowserPosition, restoreWorkspaceBrowserPosition, type WorkspaceBrowserPosition } from './workspace-browser-position.ts'
 import { pathReferenceText, workspacePathReference, WORKSPACE_PATH_MIME, type PathReference } from './path-reference.ts'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 interface BrowserProps {
   runtimeId: string
@@ -23,6 +24,7 @@ interface BrowserProps {
 }
 
 export function WorkspaceBrowser(props: BrowserProps) {
+  const refresh = useRefreshFeedback()
   const { ref, onScroll, overscrollBehaviorY } = useScrollArea(props.expanded)
   const [restoring, setRestoring] = useState(() => props.position?.rootPath === props.rootPath ? props.position : null)
   const pendingPosition = useRef(restoring)
@@ -59,7 +61,8 @@ export function WorkspaceBrowser(props: BrowserProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <FilePreviewToolbar path={props.rootPath}>
-        <button type="button" className="wc-preview-action" title="刷新目录" aria-label="刷新目录" onClick={() => props.directories.refresh()}><RefreshCw size={15} /></button>
+        <button type="button" className="wc-preview-action" title="刷新目录" aria-label="刷新目录" disabled={refresh.busy} aria-busy={refresh.busy}
+          onClick={() => void refresh.run(() => props.directories.refresh())}><RefreshCw size={15} className={refresh.busy ? 'animate-spin' : ''} /></button>
       </FilePreviewToolbar>
       <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className="wc-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-2" aria-label="当前工作路径内容">
         <DirectoryLevel {...props} restoring={restoring} path="" />

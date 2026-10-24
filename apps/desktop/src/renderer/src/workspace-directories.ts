@@ -53,7 +53,7 @@ export class WorkspaceDirectories {
     this.revision = revision
     this.invalidate()
   }
-  refresh(): void { for (const level of this.levels.values()) void level.refresh() }
+  async refresh(): Promise<void> { await Promise.all([...this.levels.values()].map(level => level.refresh())) }
   close(): void {
     for (const level of this.levels.values()) level.close()
   }

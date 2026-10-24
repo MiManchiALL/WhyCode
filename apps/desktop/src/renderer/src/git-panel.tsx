@@ -14,6 +14,7 @@ import { useConversationFeedback } from './conversation-feedback.tsx'
 import { FileDiff } from './file-diff.tsx'
 import { FilePreviewMessage } from './file-preview-controls.tsx'
 import { useScrollArea } from './use-scroll-area.ts'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 const modes = [{ value: 'branch', label: '分支' }, { value: 'uncommitted', label: '未提交' },
   { value: 'unstaged', label: '未暂存' }, { value: 'staged', label: '已暂存' }, { value: 'commit', label: '已提交' }]
@@ -42,6 +43,7 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
   const bases = gitComparisonRefs(repo)
   const update = (patch: Partial<GitPage>) => onOpenPage({ ...page, ...patch })
   const refresh = () => { branchData.refresh(); selected.refresh() }
+  const refreshing = useRefreshFeedback(branchData.loading || (selectedEnabled && selected.loading))
   useEffect(() => {
     if (!branchData.unavailableReason && page.mode === 'branch' && repo && !branchData.loading && !bases.some(ref => ref.ref === (page.baseRef ?? repo.defaultBase))) {
       onOpenPage(gitOverviewPage(page, repo))
@@ -65,7 +67,8 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
       {page.mode === 'commit' && <GitHistoryPicker key={`${runtimeId}:${repo?.head ?? ''}`} runtimeId={runtimeId} head={repo?.head ?? null} selected={page.commit}
         onSelect={commit => update({ commit, expandedPaths: [], selectedPath: null })} />}
       <div className="wc-git-toolbar-actions flex shrink-0 items-center gap-1">
-        <button type="button" className="wc-preview-action" aria-label="刷新 Git" title="刷新 Git" disabled={data.loading} onClick={refresh}><RefreshCw size={14} className={data.loading ? 'animate-spin' : ''} /></button>
+        <button type="button" className="wc-preview-action" aria-label="刷新 Git" title="刷新 Git" disabled={refreshing.busy} aria-busy={refreshing.busy}
+          onClick={() => void refreshing.run(refresh)}><RefreshCw size={14} className={refreshing.busy ? 'animate-spin' : ''} /></button>
         {repo && <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={refresh} />}
       </div>
     </div>

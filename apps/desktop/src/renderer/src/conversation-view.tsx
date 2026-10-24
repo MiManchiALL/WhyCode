@@ -2,7 +2,7 @@ import type { SkillSummary } from '@whycode/core/skills'
 import { readPresentationResult } from '@whycode/core/presentation'
 import { ResponseFooter } from './response-footer.tsx'
 import { ResponseSourcesContext, responsePresentationResult, responseSources } from './response-presentation.ts'
-import { AlertCircle, GitFork } from 'lucide-react'
+import { AlertCircle, Split } from 'lucide-react'
 import { memo, useDeferredValue, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { SessionLoading } from './session-loading.tsx'
 import type { Block } from '../../shared/conversation-state.ts'
@@ -466,7 +466,7 @@ function ForkBoundary() {
     <div className="wc-type-caption mb-4 flex items-center gap-3 px-1 text-[var(--wc-faint)]">
       <span className="h-px flex-1 bg-[var(--wc-line)]" />
       <span className="flex items-center gap-1 text-[var(--wc-blue-ink)]">
-        <GitFork size={13} /> 从聊天中继续
+        <Split size={13} className="rotate-90" /> 从聊天中继续
       </span>
       <span className="h-px flex-1 bg-[var(--wc-line)]" />
     </div>

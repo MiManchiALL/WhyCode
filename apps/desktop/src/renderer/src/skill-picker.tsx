@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { SkillDiagnostic, SkillSummary } from '@whycode/core/skills'
-import { Archive, GitBranch, MessageCircle, Plug, Puzzle, X } from 'lucide-react'
+import { Archive, Split, MessageCircle, Plug, Puzzle, X } from 'lucide-react'
 import type { ComposerCommandId, ComposerMenuItem } from './skill-trigger.ts'
 
-const COMMAND_ICONS = { mcp: Plug, compact: Archive, fork: GitBranch, btw: MessageCircle, bbtw: MessageCircle } satisfies Record<ComposerCommandId, typeof Plug>
+const COMMAND_ICONS = { mcp: Plug, compact: Archive, fork: Split, btw: MessageCircle, bbtw: MessageCircle } satisfies Record<ComposerCommandId, typeof Plug>
 
 export const SKILL_SCOPE_LABEL = {
   project: '项目',
@@ -131,7 +131,6 @@ export function ComposerSlashMenu({
           </>
         )}
       </div>
-      <div className="wc-slash-hint" aria-hidden="true">↑↓ 选择 <span>Enter 确认</span> <span>Esc 关闭</span></div>
       {(loading || diagnostics.length > 0 || limitReached) && (
         <div
           role="status"
@@ -193,7 +192,7 @@ function ComposerMenuGroup(props: {
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => props.onSelect(item)}
           >
-            <Icon size={16} className="wc-slash-icon" aria-hidden="true" />
+            <Icon size={16} className={`wc-slash-icon${isCommand && item.command.id === 'fork' ? ' rotate-90' : ''}`} aria-hidden="true" />
             <span className="wc-slash-copy">
               <span className="wc-slash-name">{name}</span>
               <span className="wc-slash-description">{description}</span>

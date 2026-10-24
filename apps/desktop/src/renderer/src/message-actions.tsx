@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, GitFork, LoaderCircle, Pencil } from 'lucide-react'
+import { Check, Copy, Split, LoaderCircle, Pencil } from 'lucide-react'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 
 const MESSAGE_TIME = new Intl.DateTimeFormat(undefined, {
@@ -51,7 +51,7 @@ export function MessageActions({
           aria-label="在新对话中继续"
           onClick={onFork}
         >
-          {forkPending ? <LoaderCircle size={14} className="animate-spin" /> : <GitFork size={14} />}
+          {forkPending ? <LoaderCircle size={14} className="animate-spin" /> : <Split size={14} className="rotate-90" />}
         </button>
       ) : null}
     </div>

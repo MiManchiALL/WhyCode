@@ -9,6 +9,7 @@ import { SyntaxCode } from './syntax-code.tsx'
 import { contentLines } from './file-change-presentation.ts'
 import { MarkdownContent } from './markdown-content.tsx'
 import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
+import { useRefreshFeedback } from './use-refresh-feedback.ts'
 
 const PdfPreview = lazy(() => import('./pdf-preview.tsx'))
 type FilePage = Extract<RightPanelPage, { kind: 'file' }>
@@ -21,6 +22,7 @@ interface DocumentProps {
 
 export function DocumentPreview({ runtimeId, page, onChange, onReferenceInBrowser }: DocumentProps) {
   const file = useWorkspaceFile(runtimeId, page.path)
+  const refresh = useRefreshFeedback(file.loading)
   const currentPage = useRef(page)
   currentPage.current = page
   const document = file.view?.kind === 'file' ? file.view : null
@@ -40,7 +42,8 @@ export function DocumentPreview({ runtimeId, page, onChange, onReferenceInBrowse
     ...(code ? [{ label: '自动换行', title: wrap ? '关闭自动换行' : '开启自动换行', icon: WrapText,
       pressed: wrap, disabled: file.loading, run: () => { void file.check().then(ok => { if (ok && currentPage.current === page) onChange({ ...page, wrap: !wrap }) }) } }] : []),
     { label: '刷新文件', title: file.changed ? '文件已更新，点击刷新' : '刷新文件', icon: RefreshCw,
-      disabled: file.loading, marked: file.changed, run: () => { void file.refresh() } },
+      disabled: refresh.busy, pending: refresh.busy, iconClassName: refresh.busy ? 'animate-spin' : undefined,
+      marked: file.changed, run: () => { void refresh.run(() => file.refresh()) } },
     ...(!document?.remote ? [{ label: '在文件夹中显示', icon: FolderOpen, disabled: !document, run: file.reveal }] : []),
     ...(document?.remote ? [{ label: '保存到本机', icon: Download, disabled: save.pending, pending: save.pending,
       run: () => { void save.run('save') } }] : []),

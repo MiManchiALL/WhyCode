@@ -6,6 +6,35 @@ import { WorkspaceDirectories } from './workspace-directories.ts'
 import { WorkspaceFileResource } from './workspace-file-resource.ts'
 
 describe('目录标签的数据所有权', () => {
+  it('手动刷新等待所有展开目录读取完成，保留原有目录错误', async t => {
+    const api = fixture()
+    api.entries = ['nested/']
+    const tree = new WorkspaceDirectories(api, 'a', '0')
+    t.after(() => tree.close())
+    const root = tree.get('')
+    const nested = tree.get('nested')
+    await tree.refresh()
+    const read = api.readWorkspaceFile.bind(api)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    api.readWorkspaceFile = async request => {
+      if (api.views.get(request.id)?.path === 'nested') await gate
+      return read(request)
+    }
+    let finished = false
+    const refreshing = tree.refresh().then(() => { finished = true })
+    await setImmediate()
+    assert.equal(root.getSnapshot().loading, false)
+    assert.equal(nested.getSnapshot().loading, true)
+    assert.equal(finished, false)
+    api.failure = '目录暂时不可读'
+    release()
+    await refreshing
+    assert.equal(finished, true)
+    assert.equal(nested.getSnapshot().error, api.failure)
+    assert.equal(nested.getSnapshot().view?.kind, 'directory')
+  })
+
   it('文件删除后动作重读保留当前版本；主动刷新失败清除视图，重建后可刷新恢复', async () => {
     const api = fixture()
     const file = new WorkspaceFileResource(api, { runtimeId: 'a', kind: 'file', path: '/note.txt' })
