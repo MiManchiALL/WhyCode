@@ -1221,6 +1221,7 @@ export function App() {
   useEffect(() => {
     let disposed = false
     let hydrated = false
+    let liveEventSequence = -1
     const buffered: {
       event: CoreEvent
       sequence: number
@@ -1292,12 +1293,10 @@ export function App() {
     }
     const eventSubscription = subscribeRuntimeEventBatches((events) => {
       for (const envelope of events) {
-        // 只提示实时到达的完成事件；快照、水合缓冲和切换会话后的重放不补播。
-        if (hydrated && envelope.event.type === 'work-finished' && envelope.event.outcome === 'completed') {
-          const previousSequence = envelope.runtimeId === runtimeIdRef.current && hydratingRuntimeIdRef.current !== envelope.runtimeId
-            ? activeEventSequenceRef.current
-            : backgroundEventsRef.current.get(envelope.runtimeId)?.at(-1)?.sequence ?? -1
-          if (envelope.sequence > previousSequence) {
+        // 通知按实时端口去重；IPC 快照可能先到，不能拿聊天投影的进度过滤通知。
+        if (envelope.sequence > liveEventSequence) {
+          liveEventSequence = envelope.sequence
+          if (hydrated && envelope.event.type === 'work-finished' && envelope.event.outcome === 'completed') {
             void playCompletionSound().catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true))
           }
         }
