@@ -1875,6 +1875,11 @@ export function App() {
     void refreshModelCatalog()
   }, [refreshModelCatalog])
 
+  const selectedModel = models.find((model) => model.id === modelId)
+  const modelUnavailableReason = selectedModel?.available
+    ? null
+    : selectedModel?.unavailableReason ?? '当前没有可用模型'
+
   const send = useCallback((urgent = false) => {
     if (
       stopping
@@ -1885,6 +1890,7 @@ export function App() {
       || submissionPending
     ) return
     if (sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
+    if (modelUnavailableReason) { showError(modelUnavailableReason); return }
     const targetRuntimeId = runtimeIdRef.current
     if (!targetRuntimeId || composerSubmissions.getSnapshot().has(targetRuntimeId)) return
     const sentBtwMode = btwModeRef.current
@@ -2029,6 +2035,7 @@ export function App() {
     showError,
     submissionPending,
     sshSendUnavailableReason,
+    modelUnavailableReason,
     applyRuntimeSnapshot,
     bindComposerSession,
     blocks,
@@ -2115,7 +2122,6 @@ export function App() {
       : toggleExpanded(current, id))
   }, [])
 
-  const selectedModel = models.find((model) => model.id === modelId)
   const modelNeedsRefresh = Boolean(selectedModel?.hasKey && !selectedModel.available && !selectedModel.retired)
   useEffect(() => {
     if (!modelNeedsRefresh) return
@@ -2131,9 +2137,6 @@ export function App() {
       window.removeEventListener('focus', refresh)
     }
   }, [modelNeedsRefresh, refreshModelCatalog])
-  const modelUnavailableReason = selectedModel?.available
-    ? null
-    : selectedModel?.unavailableReason ?? '当前没有可用模型'
   const canAttachImages = Boolean(
     selectedModel?.available
       && (btwMode ? selectedModel.imageInputMode === 'native' : selectedModel.imageInputMode !== 'none'),
