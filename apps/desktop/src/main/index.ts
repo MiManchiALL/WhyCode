@@ -104,6 +104,7 @@ import {
   resolveAuxiliaryVisionModel,
   resolveModelConnection,
   resolveSubagentModelSelection,
+  type ResolvedModelConnection,
 } from './model-connections.ts'
 import { resolveConsensusAgentSetups } from './consensus-models.ts'
 import {
@@ -765,13 +766,17 @@ async function materializeWorkspace(runtime: DesktopSessionRuntime): Promise<Wor
   return binding
 }
 
-async function ensureSession(runtime: DesktopSessionRuntime): Promise<string | null> {
-  const config = loadAppConfig()
-  const modelId = resolveCurrentModelId(runtime)
-  if (!modelId) return '没有任何已配置 key 的模型可用'
-  const resolved = resolveModelConnection(config, modelId)
-  if (!resolved.ok) return resolved.error
-  const { entry, providerConfig } = resolved.value
+async function ensureSession(
+  runtime: DesktopSessionRuntime,
+  connection?: ResolvedModelConnection,
+): Promise<string | null> {
+  if (!connection) {
+    const resolved = resolveModelConnection(loadAppConfig(), resolveCurrentModelId(runtime))
+    if (!resolved.ok) return resolved.error
+    connection = resolved.value
+  }
+  const { entry, providerConfig } = connection
+  const modelId = entry.id
   runtime.reasoningEffort = normalizeReasoningEffortSelection(
     entry.capabilities,
     runtime.reasoningEffort,
@@ -1316,13 +1321,15 @@ async function handleEditUserMessageCommand(
 async function prepareUserMessage(
   runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
+  connection: ResolvedModelConnection,
 ): Promise<PreparedUserMessage> {
   const config = loadAppConfig()
+  const model = connection.entry
   if (!userMessageNeedsAttachmentPreparation(command)) {
     const skillsBeforeSession = runtime.projectDir === null
-      ? await prepareUserMessageSkills(runtime, command)
+      ? await prepareUserMessageSkills(runtime, command, model)
       : null
-    const error = await ensureSession(runtime)
+    const error = await ensureSession(runtime, connection)
     if (error) throw new Error(error)
     synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
     return {
@@ -1330,24 +1337,19 @@ async function prepareUserMessage(
       pdfAttachments: [],
       restoredInputIds: [],
       importedFiles: false,
-      skills: skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command),
+      skills: skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command, model),
     }
   }
 
-  const modelId = resolveCurrentModelId(runtime)
-  if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
-  const resolved = resolveModelConnection(config, modelId)
-  if (!resolved.ok) throw new Error(resolved.error)
-  const model = resolved.value.entry
   const skillsBeforeSession = runtime.projectDir === null
-    ? await prepareUserMessageSkills(runtime, command)
+    ? await prepareUserMessageSkills(runtime, command, model)
     : null
   const attachmentAbortSignal = runtime.beginAttachmentPreparation()
   try {
-    const error = await ensureSession(runtime)
+    const error = await ensureSession(runtime, connection)
     if (error) throw new Error(error)
     synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, config)
-    const preparedSkills = skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command)
+    const preparedSkills = skillsBeforeSession ?? await prepareUserMessageSkills(runtime, command, model)
     const journal = runtime.journal
     if (!journal) throw new Error('会话记录尚未初始化，无法保存附件')
     const prepared = await prepareAttachments({
@@ -1372,17 +1374,14 @@ async function prepareUserMessage(
 async function prepareUserMessageSkills(
   runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
+  model: ModelEntry,
 ): Promise<ActivatedSkill[]> {
   if (command.skills === undefined) return []
-  const modelId = resolveCurrentModelId(runtime)
-  if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
-  const resolved = resolveModelConnection(loadAppConfig(), modelId)
-  if (!resolved.ok) throw new Error(resolved.error)
   return prepareMessageSkills({
     catalog: await skillCatalogFor(runtime),
     locators: command.skills,
     projectDir: runtime.projectDir,
-    contextWindow: resolved.value.entry.capabilities.contextWindow,
+    contextWindow: model.capabilities.contextWindow,
     restoredInputIds: command.restoredInputIds,
     pendingInputs: runtime.journal?.pendingUserInputs,
   })
@@ -1410,13 +1409,13 @@ async function handleUserMessageCommand(
     try {
       await workStart.ready
       await sshWorkspaces.assertMessageAllowed(runtime.workspace)
+      const resolved = resolveModelConnection(loadAppConfig(), resolveCurrentModelId(runtime))
+      if (!resolved.ok) throw new Error(resolved.error)
       if (!runtime.sessionId) {
-        const modelId = resolveCurrentModelId(runtime)
-        if (!modelId) throw new Error('没有任何已配置 key 的模型可用')
         await sessions.preparations.register({
           sessionId: runtime.runtimeId,
           workspace: runtime.workspace,
-          modelId,
+          modelId: resolved.value.entry.id,
           reasoningEffort: runtime.reasoningEffort,
           lastUserText: command.text.trim().slice(0, 200),
         })
@@ -1427,7 +1426,7 @@ async function handleUserMessageCommand(
       }
       // 已有会话同样从消息准备开始计时，远端连接与附件读取都属于本次工作。
       runtime.beginWork()
-      prepared = await prepareUserMessage(runtime, command)
+      prepared = await prepareUserMessage(runtime, command, resolved.value)
     } catch (error) {
       if (!runtime.session) runtime.finishWork()
       return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))

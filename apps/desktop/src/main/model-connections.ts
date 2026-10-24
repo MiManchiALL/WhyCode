@@ -32,8 +32,9 @@ export type ModelConnectionListItem = ModelListItem
 
 export function resolveModelConnection(
   config: WhycodeConfig | null,
-  modelId: string,
+  modelId: string | null,
 ): ModelConnectionResolution {
+  if (!modelId) return { ok: false, error: '没有任何已配置 key 的模型可用' }
   const cliProxyBaseId = parseCliProxyModelId(modelId)
   if (cliProxyBaseId) return resolveCliProxyConnection(config, cliProxyBaseId)
 
