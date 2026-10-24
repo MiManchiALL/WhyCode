@@ -100,6 +100,7 @@ import {
 } from './pdf-draft.ts'
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerInput } from './composer-input.tsx'
+import { ComposerText } from './composer-text.ts'
 import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
 import {
   ComposerSubmissions,
@@ -175,7 +176,9 @@ import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
   const [view, setView] = useState(() => createConversationState())
-  const [input, setInput] = useState('')
+  const [input] = useState(() => new ComposerText())
+  const setInput = input.set
+  const inputEmpty = useSyncExternalStore(input.subscribe, input.isEmpty)
   const [btwMode, setBtwModeState] = useState<BtwMode | null>(null)
   const [status, setStatus] = useState<AgentStatus>('idle')
   const [workStartedAt, setWorkStartedAt] = useState<number | null>(null)
@@ -285,7 +288,6 @@ export function App() {
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
   const recentlyScrolledAway = useScrollIntent(scrollRef, () => { stickToBottom.current = false }, !loadingConversation)
-  const inputRef = useRef('')
   const btwModeRef = useRef<BtwMode | null>(null)
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
   const conversationEventBufferRef = useRef<ConversationEventBuffer | null>(null)
@@ -378,8 +380,6 @@ export function App() {
     handlePickerKeyDown,
   } = useSkillComposer({
     input,
-    setInput,
-    inputRef,
     runtimeId,
     runtimeIdRef,
     modelId,
@@ -477,15 +477,14 @@ export function App() {
     restore: restorePdfDrafts,
   } = usePdfDrafts(showError)
 
-
-  useEffect(() => {
-    inputRef.current = input
-  }, [input])
-
   useEffect(() => () => {
     conversationEventBufferRef.current?.clear()
     composerDraftsRef.current.dispose()
   }, [])
+
+  const draftStorageError = useCallback((error: unknown) => {
+    showError(`输入草稿保存或恢复失败：${error instanceof Error ? error.message : String(error)}`)
+  }, [showError])
 
   const stashActiveComposer = useCallback(() => {
     const currentRuntimeId = runtimeIdRef.current
@@ -493,25 +492,24 @@ export function App() {
     const currentSessionId = sessionIdRef.current
     const images = detachImageDrafts()
     const pdfs = detachPdfDrafts()
-    const text = inputRef.current
+    const text = input.getSnapshot()
     const skills = captureSkills()
     const currentBtwMode = btwModeRef.current
     const draft = {
       text, images, pdfs, skills, btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
     }
     const pending = composerSubmissions.getSnapshot().get(currentRuntimeId)
+    // 切换前保存当前所有者的最新输入，不能等新会话接管后再执行自动保存。
+    void composerDraftsRef.current.save(composerDraftKey(currentRuntimeId, currentSessionId),
+      pending ? prependComposerDraft(pending.draft, draft) : draft).catch(draftStorageError)
     if (pending) pending.remainder = draft
     else composerDraftsRef.current.cache(composerDraftKey(currentRuntimeId, currentSessionId), draft)
-  }, [captureSkills, composerSubmissions, detachImageDrafts, detachPdfDrafts])
-
-  const draftStorageError = useCallback((error: unknown) => {
-    showError(`输入草稿保存或恢复失败：${error instanceof Error ? error.message : String(error)}`)
-  }, [showError])
+  }, [input, captureSkills, composerSubmissions, detachImageDrafts, detachPdfDrafts, draftStorageError])
 
   const persistComposer = useCallback(async () => {
     if (!runtimeId || runtimeId !== runtimeIdRef.current) return
     const draft = {
-      text: inputRef.current, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
+      text: input.getSnapshot(), images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
       btwMode, restoredInputIds,
     }
     const pending = composerSubmissions.getSnapshot().get(runtimeId)
@@ -522,7 +520,19 @@ export function App() {
   const persistComposerRef = useRef(persistComposer)
   persistComposerRef.current = persistComposer
 
-  useEffect(() => { void persistComposer().catch(draftStorageError) }, [persistComposer, draftStorageError])
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => {
+      if (timer !== undefined) return
+      timer = setTimeout(() => {
+        timer = undefined
+        void persistComposer().catch(draftStorageError)
+      }, 250)
+    }
+    schedule()
+    const unsubscribe = input.subscribe(schedule)
+    return () => { unsubscribe(); clearTimeout(timer) }
+  }, [input, persistComposer, draftStorageError])
   useEffect(() => window.whycode.onBeforeClose(async () => {
     try {
       await persistComposerRef.current()
@@ -643,7 +653,7 @@ export function App() {
       restoredQueue.length === 0
       || restoredInputIds.length > 0
       || restoredSubmissionPending
-      || input.trim()
+      || !inputEmpty
       || imageDrafts.length > 0
       || pdfDrafts.length > 0
       || selectedSkills.length > 0
@@ -658,7 +668,8 @@ export function App() {
   }, [
     imageDrafts.length,
     pdfDrafts.length,
-    input,
+    inputEmpty,
+    setInput,
     restoreImageDrafts,
     restorePdfDrafts,
     replaceSkills,
@@ -819,7 +830,6 @@ export function App() {
         ? pending.remainder
         : composerDraftsRef.current.take(composerDraftKey(snapshot.runtimeId, snapshot.sessionId))
       if (pending) pending.remainder = undefined
-      inputRef.current = draft?.text ?? ''
       setInput(draft?.text ?? '')
       restoredIds = (draft?.restoredInputIds ?? []).filter((id) => validRestoredIds.has(id))
       setBtwMode(draft?.btwMode ?? null)
@@ -873,6 +883,7 @@ export function App() {
     setForkPendingTurnId(null)
   }, [
     setComposerSessionId,
+    setInput,
     composerSubmissions,
     applyBackgroundTaskState,
     applySubagentState,
@@ -1902,7 +1913,7 @@ export function App() {
       showError('BTW 不使用 PDF、Skill 或恢复队列输入')
       return
     }
-    const text = input.trim()
+    const text = input.getSnapshot().trim()
       || attachmentFallbackText(imageDrafts.length, sentBtwMode ? 0 : pdfDrafts.length)
       || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
     if (!text && imageDrafts.length === 0) return
@@ -1924,16 +1935,11 @@ export function App() {
     composerSubmissions.start(submission)
     setRestoredInputIds([])
     setInput('')
-    inputRef.current = ''
     clearSkills()
     setBtwMode(null)
     // 沿用发送前的浏览位置；只有原本贴底时，既有内容跟随才会继续滚动。
     const restoreRejectedInput = () => {
-      setInput((current) => {
-        const restored = text && current ? `${text}\n${current}` : text || current
-        inputRef.current = restored
-        return restored
-      })
+      setInput((current) => text && current ? `${text}\n${current}` : text || current)
       restoreImageDrafts(sentImageDrafts)
       restorePdfDrafts(sentPdfDrafts)
       mergeRestoredSkills(sentSkills)
@@ -2052,6 +2058,7 @@ export function App() {
     detachPdfDrafts,
     imageDrafts.length,
     input,
+    setInput,
     mergeRestoredSkills,
     pdfDrafts.length,
     restoredInputIds,
@@ -2181,7 +2188,7 @@ export function App() {
   const currentSession = sessions.find((session) => session.sessionId === sessionIdRef.current)
   const taskTitle = currentSession?.title
     || (blocks.length > 0 ? '当前会话' : '新会话')
-  const messageEmpty = !input.trim()
+  const messageEmpty = inputEmpty
     && imageDrafts.length === 0
     && pdfDrafts.length === 0
     && selectedSkills.length === 0
@@ -2211,7 +2218,7 @@ export function App() {
         skills: pendingDraft?.skills ?? [],
         btwMode: pendingDraft?.btwMode ?? null,
       }
-    : { text: input, images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
+    : { images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
 
   const panelSessionKey = composerKey(runtimeId, sessionIdRef.current)
   return (
@@ -2512,14 +2519,13 @@ export function App() {
                       scopeKey={resumingSessionId ?? runtimeId}
                       runtimeId={runtimeId}
                       className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
-                      value={composerDraft.text}
+                      text={input}
+                      previewText={loadingConversation ? composerDraft.text : undefined}
                       onChange={(text, cursor) => {
                         setShowMcpStatus(false)
-                        inputRef.current = text
-                        setInput(text)
                         updateSkillMenu(text, cursor)
                       }}
-                      onSelect={cursor => updateSkillMenu(inputRef.current, cursor)}
+                      onSelect={cursor => updateSkillMenu(input.getSnapshot(), cursor)}
                       onBlur={closeSkillMenu}
                       onPaste={pasteAttachments}
                       disabled={composerDisabled || resumingSessionId !== null}

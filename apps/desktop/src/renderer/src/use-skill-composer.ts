@@ -5,9 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type Dispatch,
   type MutableRefObject,
-  type SetStateAction,
 } from 'react'
 import {
   SKILL_MAX_SELECTIONS_PER_MESSAGE,
@@ -25,6 +23,7 @@ import {
 } from './skill-trigger.ts'
 import type { RuntimeWorkspace } from '../../shared/workspace.ts'
 import type { ComposerInputHandle } from './composer-input.tsx'
+import type { ComposerText } from './composer-text.ts'
 
 const EMPTY_CATALOG: SkillCatalogSnapshot = {
   revision: '',
@@ -35,9 +34,7 @@ const EMPTY_CATALOG: SkillCatalogSnapshot = {
 }
 
 interface UseSkillComposerOptions {
-  input: string
-  setInput: Dispatch<SetStateAction<string>>
-  inputRef: MutableRefObject<string>
+  input: ComposerText
   runtimeId: string
   runtimeIdRef: MutableRefObject<string>
   modelId: string
@@ -184,9 +181,8 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
         || selectedRef.current.length >= SKILL_MAX_SELECTIONS_PER_MESSAGE
       )
     ) return
-    const replacement = removeSlashTrigger(options.input, trigger)
-    options.inputRef.current = replacement.text
-    options.setInput(replacement.text)
+    const replacement = removeSlashTrigger(options.input.getSnapshot(), trigger)
+    options.input.set(replacement.text)
     if (item.kind === 'skill') {
       const next = [...selectedRef.current, structuredClone(item.skill)]
       selectedRef.current = next
@@ -200,7 +196,7 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
       editor.setCursor(replacement.cursor)
     })
     if (item.kind === 'command') options.onCommand(item.command.id)
-  }, [options.input, options.inputRef, options.onCommand, options.setInput, trigger])
+  }, [options.input, options.onCommand, trigger])
 
   const remove = useCallback((id: string) => {
     setSelected((current) => {

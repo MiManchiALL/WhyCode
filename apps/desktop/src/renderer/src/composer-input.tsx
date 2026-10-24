@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from 'react'
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin'
@@ -14,6 +14,7 @@ import { PathReferenceNode } from './path-reference-node.ts'
 import { $appendPathReference, $composerCursor, $composerNodes, $composerSelectionText, $composerText, $replaceComposerText, $selectComposerOffset } from './composer-input-state.ts'
 import { readWorkspacePathDrag, WORKSPACE_PATH_MIME, type PathReference } from './path-reference.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
+import type { ComposerText } from './composer-text.ts'
 
 export interface ComposerInputHandle {
   focus: () => void
@@ -25,14 +26,15 @@ interface ComposerInputProps {
   ref?: Ref<ComposerInputHandle>
   scopeKey: string
   runtimeId: string
-  value: string
+  text: ComposerText
+  previewText?: string
   disabled?: boolean
   className?: string
   placeholder?: string
   'aria-label'?: string
   'aria-controls'?: string
   'aria-activedescendant'?: string
-  onChange: (text: string, cursor: number | null) => void
+  onChange?: (text: string, cursor: number | null) => void
   onSelect?: (cursor: number | null) => void
   onBlur?: () => void
   onPaste?: (event: ClipboardEvent) => void
@@ -40,22 +42,25 @@ interface ComposerInputProps {
 }
 
 export function ComposerInput(props: ComposerInputProps) {
+  const text = useSyncExternalStore(props.text.subscribe, props.text.getSnapshot)
+  const value = props.previewText ?? text
   return <LexicalComposer initialConfig={{
     namespace: 'whycode-composer', nodes: [PathReferenceNode], editable: !props.disabled,
-    editorState: () => $replaceComposerText(props.value), onError: error => { throw error },
+    editorState: () => $replaceComposerText(value), onError: error => { throw error },
   }}>
-    <InputEditor {...props} />
+    <InputEditor {...props} value={value} />
     <HistoryPlugin />
   </LexicalComposer>
 }
 
 const EXTERNAL_VALUE = 'composer-external-value'
 
-function InputEditor(props: ComposerInputProps) {
+function InputEditor(props: ComposerInputProps & { value: string }) {
   const [editor] = useLexicalComposerContext()
   const latest = useRef(props)
   latest.current = props
   const scope = useRef(props.scopeKey)
+  const currentText = useRef(props.value)
   const [dragging, setDragging] = useState(false)
   const feedback = useConversationFeedback()
 
@@ -66,7 +71,8 @@ function InputEditor(props: ComposerInputProps) {
   useLayoutEffect(() => {
     const changedScope = scope.current !== props.scopeKey
     scope.current = props.scopeKey
-    if (!changedScope && editor.getEditorState().read($composerText) === props.value) return
+    if (!changedScope && currentText.current === props.value) return
+    currentText.current = props.value
     editor.update(() => {
       $replaceComposerText(props.value)
       $setSelection(null)
@@ -86,13 +92,16 @@ function InputEditor(props: ComposerInputProps) {
     },
   }), [editor])
 
-  useEffect(() => editor.registerUpdateListener(({ editorState, tags }) => {
+  useEffect(() => editor.registerUpdateListener(({ editorState, tags, dirtyElements, dirtyLeaves }) => {
     if (tags.has(EXTERNAL_VALUE) || scope.current !== latest.current.scopeKey) return
     editorState.read(() => {
-      const text = $composerText()
+      const text = dirtyElements.size || dirtyLeaves.size ? $composerText() : currentText.current
       const cursor = $composerCursor()
-      if (text !== latest.current.value) latest.current.onChange(text, cursor)
-      else latest.current.onSelect?.(cursor)
+      if (text !== currentText.current) {
+        currentText.current = text
+        latest.current.text.set(text)
+        latest.current.onChange?.(text, cursor)
+      } else latest.current.onSelect?.(cursor)
     })
   }), [editor])
 
