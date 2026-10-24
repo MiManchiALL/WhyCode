@@ -6,6 +6,7 @@ import type { RightPanelPage } from './right-panel-state.ts'
 import { fileIcon } from './file-preview-controls.tsx'
 import { fileName } from './local-files.ts'
 import { useWorkspaceFileAction } from './use-workspace-file-action.ts'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 
 type OpenFile = (page: Extract<RightPanelPage, { kind: 'file' }>) => void
 
@@ -32,6 +33,7 @@ function PresentedFileCard({ file, runtimeId, remote, onOpenFile }: {
   const name = fileName(file.path)
   const Icon = fileIcon(name)
   const { pending, run: nativeAction } = useWorkspaceFileAction(runtimeId, file.path)
+  const feedback = useConversationFeedback()
   const open = () => {
     onOpenFile?.({ kind: 'file', path: file.path, name, source: { kind: 'current' }, previewMode: 'preview' })
   }
@@ -61,7 +63,9 @@ function PresentedFileCard({ file, runtimeId, remote, onOpenFile }: {
             <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('reveal')}><FolderOpen size={14} />在文件夹中显示</DropdownMenu.Item>
           </>}
           {remote && <DropdownMenu.Item className="wc-menu-item" onSelect={() => void nativeAction('save')}><Download size={14} />保存到本机</DropdownMenu.Item>}
-          <DropdownMenu.Item className="wc-menu-item" onSelect={() => void navigator.clipboard.writeText(file.path).catch(() => undefined)}><Copy size={14} />复制路径</DropdownMenu.Item>
+          <DropdownMenu.Item className="wc-menu-item" onSelect={() => {
+            void navigator.clipboard.writeText(file.path).then(() => feedback('success', '路径已复制', true), error => feedback('error', `复制失败：${String(error)}`, true))
+          }}><Copy size={14} />复制路径</DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

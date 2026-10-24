@@ -109,6 +109,7 @@ export function PanelResizeHandle({
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerEnd)
       window.removeEventListener('pointercancel', handlePointerCancel)
+      handle.removeEventListener('lostpointercapture', handlePointerCancel)
       window.removeEventListener('blur', handleWindowBlur)
       window.removeEventListener('resize', handleWindowBlur)
       panel!.removeAttribute('data-resizing')
@@ -180,6 +181,7 @@ export function PanelResizeHandle({
     window.addEventListener('pointermove', handlePointerMove, { passive: false })
     window.addEventListener('pointerup', handlePointerEnd)
     window.addEventListener('pointercancel', handlePointerCancel)
+    handle.addEventListener('lostpointercapture', handlePointerCancel)
     window.addEventListener('blur', handleWindowBlur)
     window.addEventListener('resize', handleWindowBlur)
     for (const element of panels) {

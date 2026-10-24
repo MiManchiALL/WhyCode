@@ -74,6 +74,7 @@ import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 import { useSshWorkspaceConnection } from './use-ssh-workspace-connection.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import { useConversationFontSize } from './conversation-font-size.ts'
+import { useCompletionSound } from './use-completion-sound.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import { gitConnectionUnavailableReason, useGitSnapshot } from './git-data.ts'
 import { defaultGitPage } from './right-panel-state.ts'
@@ -212,6 +213,7 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<'general' | 'ssh' | null>(null)
   const showConnectionSettings = settingsSection !== null
   const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
+  const { enabled: completionSoundEnabled, setEnabled: setCompletionSoundEnabled, play: playCompletionSound } = useCompletionSound()
   const [approval, setApproval] = useState<Approval | null>(null)
   const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
@@ -1289,7 +1291,18 @@ export function App() {
       }
     }
     const eventSubscription = subscribeRuntimeEventBatches((events) => {
-      for (const event of events) acceptEvent(event)
+      for (const envelope of events) {
+        // 只提示实时到达的完成事件；快照、水合缓冲和切换会话后的重放不补播。
+        if (hydrated && envelope.event.type === 'work-finished' && envelope.event.outcome === 'completed') {
+          const previousSequence = envelope.runtimeId === runtimeIdRef.current && hydratingRuntimeIdRef.current !== envelope.runtimeId
+            ? activeEventSequenceRef.current
+            : backgroundEventsRef.current.get(envelope.runtimeId)?.at(-1)?.sequence ?? -1
+          if (envelope.sequence > previousSequence) {
+            void playCompletionSound().catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true))
+          }
+        }
+        acceptEvent(envelope)
+      }
     })
     void eventSubscription.ready.then(() => window.whycode.runtimeSnapshot()).then(async (snapshot) => {
       await prepareComposer(snapshot)
@@ -1322,6 +1335,8 @@ export function App() {
     refreshModelCatalog,
     refreshSessions,
     synchronizeUnownedResume,
+    playCompletionSound,
+    showConversationFeedback,
   ])
 
   const restoreConversationAfterRender = useCallback(() => {
@@ -2717,6 +2732,8 @@ export function App() {
           workspaceCleanup={workspaceCleanup}
           conversationFontSize={conversationFontSize}
           onConversationFontSizeChange={setConversationFontSize}
+          completionSound={{ enabled: completionSoundEnabled, setEnabled: setCompletionSoundEnabled,
+            preview: () => { void playCompletionSound().catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true)) } }}
           onClose={() => { setSettingsSection(null); void refreshSessions() }}
           onChanged={connectionSettingsChanged}
           onError={showError}

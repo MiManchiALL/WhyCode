@@ -2,6 +2,7 @@ import type { WebSource } from '@whycode/core/web-source'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Copy, ExternalLink, FileText, GitBranch, Globe2 } from 'lucide-react'
 import { sourceKindForUrl, type SourceKind } from './markdown-sources.ts'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 
 export function SourceIcon({ kind }: { kind: SourceKind }) {
   const Icon = kind === 'git' ? GitBranch : kind === 'document' ? FileText : Globe2
@@ -9,8 +10,9 @@ export function SourceIcon({ kind }: { kind: SourceKind }) {
 }
 
 export function SourceCapsule({ source }: { source: WebSource }) {
+  const feedback = useConversationFeedback()
   const copyLink = () => {
-    void navigator.clipboard.writeText(source.url).catch(() => undefined)
+    void navigator.clipboard.writeText(source.url).then(() => feedback('success', '链接已复制', true), error => feedback('error', `复制失败：${String(error)}`, true))
   }
 
   return (

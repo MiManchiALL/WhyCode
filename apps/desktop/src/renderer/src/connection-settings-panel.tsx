@@ -44,6 +44,7 @@ import {
 import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 import { GeneralSettings } from './general-settings.tsx'
+import type { CompletionSoundSetting } from './use-completion-sound.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 
@@ -52,6 +53,7 @@ interface ConnectionSettingsPanelProps {
   workspaceCleanup: RetainedWorkspaceCleanup
   conversationFontSize: number
   onConversationFontSizeChange: (value: number) => void
+  completionSound: CompletionSoundSetting
   onError: (message: string) => void
   onClose: () => void
   onChanged: () => void
@@ -230,7 +232,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     if (started) requestClose()
                     return started
                   }} />}
-                  {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
+                  {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} completionSound={props.completionSound} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
                   {section === 'models' && snapshot && (
                     <>

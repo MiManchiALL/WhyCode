@@ -129,7 +129,7 @@
 .wc-settings-switch:disabled { cursor: default; opacity: 0.4; }
 .wc-settings-switch > span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgb(0 0 0 / 14%); transition: transform var(--wc-motion-feedback) var(--wc-ease-out); }
 .wc-settings-switch[aria-checked='true'] > span { transform: translateX(14px); }
-.wc-font-size-setting { grid-template-columns: minmax(0, 1fr) auto; }
+.wc-settings-inline-row { grid-template-columns: minmax(0, 1fr) auto; }
 .wc-font-size-control { display: inline-flex; align-items: center; gap: 8px; padding: 3px; border: 1px solid var(--wc-line); border-radius: var(--wc-control-radius); }
 .wc-font-size-control output { min-width: 36px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 .wc-font-size-control button { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 5px; color: var(--wc-muted); }
@@ -141,7 +141,7 @@
   .wc-settings-columns, .wc-settings-model-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wc-settings-provider { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); align-items: start; }
   .wc-settings-provider-actions { grid-column: 2; }
-  .wc-font-size-setting { grid-template-columns: minmax(0, 1fr) auto; }
+  .wc-settings-inline-row { grid-template-columns: minmax(0, 1fr) auto; }
 }
 
 @media (max-width: 760px) {

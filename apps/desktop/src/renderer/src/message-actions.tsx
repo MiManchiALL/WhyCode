@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, GitFork, LoaderCircle, Pencil } from 'lucide-react'
+import { useConversationFeedback } from './conversation-feedback.tsx'
 
 const MESSAGE_TIME = new Intl.DateTimeFormat(undefined, {
   hour: '2-digit',
@@ -70,19 +71,29 @@ export function CopyButton({
   className?: string
 }) {
   const [copied, setCopied] = useState(false)
+  const feedback = useConversationFeedback()
+  const generation = useRef(0)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => {
-    if (resetTimer.current) clearTimeout(resetTimer.current)
-  }, [])
+  useEffect(() => {
+    setCopied(false)
+    return () => {
+      generation.current++
+      if (resetTimer.current) clearTimeout(resetTimer.current)
+    }
+  }, [text])
 
   const copy = async () => {
     if (!text) return
+    const request = ++generation.current
     try {
       await navigator.clipboard.writeText(text)
+      if (request !== generation.current) return
       setCopied(true)
       if (resetTimer.current) clearTimeout(resetTimer.current)
       resetTimer.current = setTimeout(() => setCopied(false), 1600)
-    } catch {}
+    } catch (error) {
+      if (request === generation.current) feedback('error', `复制失败：${String(error)}`, true)
+    }
   }
 
   return (
