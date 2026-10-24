@@ -173,7 +173,26 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
               返回 WhyCode
             </button>
             <div className="wc-settings-sidebar-title">设置</div>
-            <nav className="wc-settings-nav wc-scrollbar" aria-label="设置分类">
+            <nav className="wc-settings-nav wc-scrollbar" aria-label="设置分类" onKeyDown={event => {
+              if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+              const nav = event.currentTarget
+              const horizontal = getComputedStyle(nav).flexDirection === 'row'
+              const previous = horizontal ? 'ArrowLeft' : 'ArrowUp'
+              const next = horizontal ? 'ArrowRight' : 'ArrowDown'
+              if (![previous, next, 'Home', 'End'].includes(event.key)) return
+              const items = Array.from(nav.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+              const index = items.indexOf(event.target as HTMLButtonElement)
+              if (index < 0) return
+              event.preventDefault()
+              const target = items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+                : (index + (event.key === next ? 1 : -1) + items.length) % items.length]!
+              // 方向键只定位，Enter/Space 才切换分类；不因经过分类而触发读取。
+              target.focus({ preventScroll: true })
+              const bounds = nav.getBoundingClientRect()
+              const item = target.getBoundingClientRect()
+              if (horizontal) nav.scrollLeft += item.left < bounds.left ? item.left - bounds.left : Math.max(0, item.right - bounds.right)
+              else nav.scrollTop += item.top < bounds.top ? item.top - bounds.top : Math.max(0, item.bottom - bounds.bottom)
+            }}>
               <SettingsNavItem disabled={pending} active={section === 'general'} icon={<Settings size={16} />} label="通用" onClick={() => setSection('general')} />
               <SettingsNavItem
                 disabled={pending}

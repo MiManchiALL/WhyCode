@@ -960,7 +960,7 @@ html[data-wc-panel-resizing='true']::after {
 .wc-menu-content {
   z-index: 100;
   min-width: 13rem;
-  max-height: min(28rem, calc(100vh - 2rem));
+  max-height: min(28rem, calc(100vh - 2rem), var(--radix-dropdown-menu-content-available-height, var(--radix-popover-content-available-height, calc(100vh - 2rem))));
   overflow: auto;
   padding: 0.35rem;
   transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-popover-content-transform-origin));
@@ -1121,7 +1121,7 @@ html[data-wc-panel-resizing='true']::after {
   border-radius: 0.5rem;
 }
 
-.wc-select-search-menu .wc-select-options { max-height: min(15rem, 40vh); }
+.wc-select-search-menu .wc-select-options { max-height: min(15rem, 40vh); overscroll-behavior-y: contain; }
 .wc-select-detail { flex-shrink: 0; font-size: 11px; color: var(--wc-faint); }
 
 .wc-question-composer {

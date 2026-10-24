@@ -72,7 +72,14 @@ export function SelectMenu({
                 items?.[event.key === 'ArrowDown' ? 0 : items.length - 1]?.focus()
               }
             }} />}
-          <div className="wc-select-options wc-scrollbar min-h-0 max-h-64 overflow-y-auto">
+          <div className="wc-select-options wc-scrollbar min-h-0 max-h-64 overflow-y-auto" onKeyDown={event => {
+            if (!searchable || event.nativeEvent.isComposing || event.key !== 'ArrowUp') return
+            const first = event.currentTarget.querySelector('[role="menuitemradio"]:not([data-disabled])')
+            if (event.target !== first) return
+            event.preventDefault()
+            event.stopPropagation()
+            searchInput.current?.focus({ preventScroll: true })
+          }}>
           <DropdownMenu.RadioGroup value={value} onValueChange={onValueChange}>
             {(searchable ? filtered.slice(0, SEARCH_RESULT_LIMIT) : filtered).map((option) => (
               <DropdownMenu.RadioItem
@@ -82,6 +89,13 @@ export function SelectMenu({
                 disabled={option.disabled}
                 className="wc-menu-item min-w-0"
                 title={option.label}
+                onPointerMove={event => {
+                  // 搜索时鼠标经过结果不应抢走输入焦点；点击仍可直接选择。
+                  if (searchInput.current === document.activeElement) event.preventDefault()
+                }}
+                onPointerLeave={event => {
+                  if (searchInput.current === document.activeElement) event.preventDefault()
+                }}
               >
                 <span className="flex size-4 shrink-0 items-center justify-center">
                   <DropdownMenu.ItemIndicator>

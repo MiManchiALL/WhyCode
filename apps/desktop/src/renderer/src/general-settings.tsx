@@ -29,7 +29,7 @@ export function GeneralSettings({ fontSize, onFontSizeChange, completionSound }:
     </SettingsSection>
     <SettingsSection title="声音" description="按需开启任务完成提醒。">
       <SettingsPanel padded={false}>
-        <SettingsRow label="任务完成提示音" description="任务完成时播放一声轻提示" className="wc-settings-inline-row" divided={false}>
+        <SettingsRow label="任务完成提示音" description="会话正常完成时提示，后台会话也会播放" className="wc-settings-inline-row" divided={false}>
           <div className="flex items-center justify-end gap-3">
             <SettingsButton disabled={!completionSound.enabled} onClick={completionSound.preview}>试听</SettingsButton>
             <SettingsSwitch ariaLabel="任务完成提示音" checked={completionSound.enabled} onCheckedChange={completionSound.setEnabled} />

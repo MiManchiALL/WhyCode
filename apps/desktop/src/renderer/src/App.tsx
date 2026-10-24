@@ -2733,7 +2733,7 @@ export function App() {
           conversationFontSize={conversationFontSize}
           onConversationFontSizeChange={setConversationFontSize}
           completionSound={{ enabled: completionSoundEnabled, setEnabled: setCompletionSoundEnabled,
-            preview: () => { void playCompletionSound().catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true)) } }}
+            preview: () => { void playCompletionSound(true).catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true)) } }}
           onClose={() => { setSettingsSection(null); void refreshSessions() }}
           onChanged={connectionSettingsChanged}
           onError={showError}
