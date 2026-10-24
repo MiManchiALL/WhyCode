@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Maximize2 } from 'lucide-react'
+import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { ImagePreviewDialog } from './image-preview.tsx'
 import { mermaidSourceTooLarge, renderMermaid } from './mermaid-rendering.ts'
 
@@ -42,9 +43,11 @@ export function MermaidDiagram({ code, visible, source, actions, wrapAction }: {
       {(!url || showSource) && wrapAction}
       {actions}
     </div>
-    {url && !showSource ? <button type="button" className="wc-mermaid-image wc-focus-ring" aria-label="放大 Mermaid 图表" onClick={() => setPreview('diagram')}>
-      <img src={url} alt="Mermaid 图表" decoding="async" />
-    </button> : source}
+    {url && !showSource ? <FadedScrollArea className="wc-mermaid-viewport wc-scrollbar">
+      <button type="button" className="wc-mermaid-image wc-focus-ring" aria-label="放大 Mermaid 图表" onClick={() => setPreview('diagram')}>
+        <img src={url} alt="Mermaid 图表" decoding="async" />
+      </button>
+    </FadedScrollArea> : source}
     {url && <ImagePreviewDialog targets={[{ id: 'diagram', src: url, name: 'Mermaid 图表' }]} selectedId={preview} onSelect={setPreview} />}
   </>
 }
