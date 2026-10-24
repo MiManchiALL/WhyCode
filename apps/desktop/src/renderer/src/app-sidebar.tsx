@@ -75,7 +75,7 @@ export function AppSidebar(props: AppSidebarProps) {
   return (
     <aside
       ref={layout.refs.left}
-      className="wc-resizable-panel relative z-20 h-full shrink-0 transition-[width] duration-200 ease-out"
+      className="wc-resizable-panel relative z-20 h-full shrink-0 transition-[width] duration-[var(--wc-motion-layout)] ease-out"
       data-panel-open={!props.collapsed}
       style={{ width: props.collapsed ? SESSION_SIDEBAR_COLLAPSED_WIDTH : panelWidthExpression('left', layout.widths.left) }}
       aria-label="会话侧栏"

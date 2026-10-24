@@ -30,6 +30,8 @@ interface ComposerInputProps {
   className?: string
   placeholder?: string
   'aria-label'?: string
+  'aria-controls'?: string
+  'aria-activedescendant'?: string
   onChange: (text: string, cursor: number | null) => void
   onSelect?: (cursor: number | null) => void
   onBlur?: () => void
@@ -157,6 +159,10 @@ function InputEditor(props: ComposerInputProps) {
       contentEditable={<ContentEditable
         className={`wc-composer-editor ${props.className ?? ''}`}
         aria-label={props['aria-label'] ?? '输入消息'}
+        aria-controls={props['aria-controls']}
+        aria-activedescendant={props['aria-activedescendant']}
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
         aria-placeholder={props.placeholder ?? ''}
         placeholder={<div className="wc-composer-placeholder pointer-events-none absolute inset-0 text-[var(--wc-faint)]" aria-hidden="true">{props.placeholder}</div>}
         onBlur={props.onBlur}

@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { ImageViewport } from './image-viewport.tsx'
 
 export interface ImagePreviewTarget {
   id: string
@@ -63,15 +64,10 @@ export function ImagePreviewDialog({
               <X size={20} />
             </Dialog.Close>
           </div>
-          <div className={`relative flex min-h-20 items-center justify-center py-4 ${targets.length > 1 ? 'px-14' : 'px-4'}`}>
+          <div className={`relative flex min-h-0 flex-col pt-4 ${targets.length > 1 ? 'px-14' : 'px-4'}`}>
             {targets.length > 1 && <button type="button" className={`${navigationButtonClass} left-3`} disabled={!previous}
               onClick={() => move(-1)} aria-label="上一张图片" title="上一张（←）"><ChevronLeft size={20} /></button>}
-            <img
-              key={target.id}
-              src={target.src}
-              alt={target.name}
-              className="max-h-[calc(92vh-6rem)] max-w-full object-contain"
-            />
+            <ImageViewport key={`${target.id}:${target.src}`} src={target.src} name={target.name} />
             {targets.length > 1 && <button type="button" className={`${navigationButtonClass} right-3`} disabled={!next}
               onClick={() => move(1)} aria-label="下一张图片" title="下一张（→）"><ChevronRight size={20} /></button>}
           </div>

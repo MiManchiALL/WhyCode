@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   Bot,
   BrainCircuit,
-  Check,
   Folder,
   Globe2,
   Plug,
@@ -45,6 +44,7 @@ import {
 import { SelectMenu } from './select-menu.tsx'
 import { WebSearchSettingsEditor } from './web-search-settings.tsx'
 import { GeneralSettings } from './general-settings.tsx'
+import type { CompletionSoundSetting } from './use-completion-sound.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 import type { StartWorkspaceRequest } from '../../shared/workspace.ts'
 
@@ -53,6 +53,7 @@ interface ConnectionSettingsPanelProps {
   workspaceCleanup: RetainedWorkspaceCleanup
   conversationFontSize: number
   onConversationFontSizeChange: (value: number) => void
+  completionSound: CompletionSoundSetting
   onError: (message: string) => void
   onClose: () => void
   onChanged: () => void
@@ -152,7 +153,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
     >
       <Dialog.Portal>
         <Dialog.Content
-          className="wc-dialog-page wc-settings fixed inset-0 z-50 flex gap-1 overflow-hidden bg-[var(--wc-canvas)] p-1 text-[var(--wc-ink)] outline-none"
+          className="wc-dialog-page wc-settings"
           onEscapeKeyDown={event => { if (event.isComposing) event.preventDefault() }}
           onAnimationEnd={(event) => {
             if (
@@ -161,18 +162,37 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
             ) props.onClose()
           }}
         >
-          <aside className="wc-shell-panel flex w-[240px] shrink-0 flex-col bg-[var(--wc-sidebar)] p-3">
+          <aside className="wc-settings-sidebar">
             <button
               type="button"
-              className="wc-focus-ring flex h-10 items-center gap-2 rounded-[var(--wc-menu-radius)] px-2.5 text-sm text-[var(--wc-muted)] hover:bg-black/[0.04] hover:text-[var(--wc-ink)]"
+              className="wc-settings-back wc-focus-ring"
               onClick={requestClose}
               disabled={pending}
             >
               <ArrowLeft size={16} />
               返回 WhyCode
             </button>
-            <div className="mt-5 px-2 text-lg font-semibold tracking-tight">设置</div>
-            <nav className="mt-4 space-y-1" aria-label="设置分类">
+            <div className="wc-settings-sidebar-title">设置</div>
+            <nav className="wc-settings-nav wc-scrollbar" aria-label="设置分类" onKeyDown={event => {
+              if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+              const nav = event.currentTarget
+              const horizontal = getComputedStyle(nav).flexDirection === 'row'
+              const previous = horizontal ? 'ArrowLeft' : 'ArrowUp'
+              const next = horizontal ? 'ArrowRight' : 'ArrowDown'
+              if (![previous, next, 'Home', 'End'].includes(event.key)) return
+              const items = Array.from(nav.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+              const index = items.indexOf(event.target as HTMLButtonElement)
+              if (index < 0) return
+              event.preventDefault()
+              const target = items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+                : (index + (event.key === next ? 1 : -1) + items.length) % items.length]!
+              // 方向键只定位，Enter/Space 才切换分类；不因经过分类而触发读取。
+              target.focus({ preventScroll: true })
+              const bounds = nav.getBoundingClientRect()
+              const item = target.getBoundingClientRect()
+              if (horizontal) nav.scrollLeft += item.left < bounds.left ? item.left - bounds.left : Math.max(0, item.right - bounds.right)
+              else nav.scrollTop += item.top < bounds.top ? item.top - bounds.top : Math.max(0, item.bottom - bounds.bottom)
+            }}>
               <SettingsNavItem disabled={pending} active={section === 'general'} icon={<Settings size={16} />} label="通用" onClick={() => setSection('general')} />
               <SettingsNavItem
                 disabled={pending}
@@ -212,23 +232,17 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
               <SettingsNavItem disabled={pending} active={section === 'ssh'} icon={<Server size={16} />} label="SSH 连接" onClick={() => setSection('ssh')} />
               <SettingsNavItem disabled={pending} active={section === 'workspaces'} icon={<Folder size={16} />} label="保留工作区" onClick={() => setSection('workspaces')} />
             </nav>
-            <div className="mt-auto flex items-center gap-2 rounded-[var(--wc-menu-radius)] bg-black/[0.035] px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">
-              <Settings size={13} />
-              设置保存后立即生效
-            </div>
           </aside>
 
-          <main className="wc-shell-panel min-w-0 flex-1 bg-[var(--wc-surface)]">
-            <div className="wc-scrollbar h-full overflow-y-auto">
-              <div className="mx-auto w-full max-w-5xl px-8 py-10 lg:px-12">
-                <header className="mb-8 flex items-start justify-between gap-4">
-                  <div>
-                    <Dialog.Title className="text-xl font-semibold tracking-tight">{SETTINGS_META[section].title}</Dialog.Title>
-                    <Dialog.Description className="mt-1.5 text-[13px] leading-5 text-[var(--wc-muted)]">{SETTINGS_META[section].description}</Dialog.Description>
-                  </div>
+          <main className="wc-settings-main">
+            <div key={section} className="wc-settings-scroll wc-scrollbar">
+              <div className="wc-settings-content">
+                <header className="wc-settings-heading">
+                  <Dialog.Title>{SETTINGS_META[section].title}</Dialog.Title>
+                  <Dialog.Description>{SETTINGS_META[section].description}</Dialog.Description>
                 </header>
 
-                <div className="space-y-8" aria-busy={needsSnapshot && readState === 'loading'}>
+                <div className="wc-settings-sections" aria-busy={needsSnapshot && readState === 'loading'}>
                   {needsSnapshot && !hasSnapshot && <p role="status" className="text-sm text-[var(--wc-muted)]">
                     {readState === 'failed' ? '设置暂不可用，请重新进入此分类重试。' : '正在读取设置…'}
                   </p>}
@@ -237,7 +251,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                     if (started) requestClose()
                     return started
                   }} />}
-                  {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} />}
+                  {section === 'general' && <GeneralSettings fontSize={props.conversationFontSize} onFontSizeChange={props.onConversationFontSizeChange} completionSound={props.completionSound} />}
                   {section === 'workspaces' && <RetainedWorkspacesSettings cleanup={props.workspaceCleanup} onError={props.onError} />}
                   {section === 'models' && snapshot && (
                     <>
@@ -402,16 +416,12 @@ function SettingsNavItem(props: {
     <button
       type="button"
       disabled={props.disabled}
-      className={`wc-focus-ring flex h-10 w-full items-center gap-2.5 rounded-[var(--wc-menu-radius)] px-3 text-left text-sm transition-colors ${
-        props.active
-          ? 'bg-black/[0.055] text-[var(--wc-ink)]'
-          : 'text-[var(--wc-muted)] hover:bg-black/[0.04] hover:text-[var(--wc-ink)]'
-      }`}
+      className="wc-settings-nav-item wc-focus-ring"
+      aria-current={props.active ? 'page' : undefined}
       onClick={props.onClick}
     >
       {props.icon}
       <span className="flex-1">{props.label}</span>
-      {props.active && <Check size={14} className="text-[var(--wc-sage-ink)]" />}
     </button>
   )
 }
@@ -434,7 +444,7 @@ function ProviderEditor(props: {
   }
   return (
     <SettingsPanel>
-      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,0.8fr)_minmax(22rem,1.2fr)] lg:items-start">
+      <div className="wc-settings-provider">
         <div className="min-w-0">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -456,12 +466,14 @@ function ProviderEditor(props: {
           </div>
         </div>
         <div className="min-w-0">
-          <label className="block wc-type-caption text-neutral-600">API Key（留空保留现有密钥）</label>
-          <input className="wc-settings-input mt-1" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={props.disabled} autoComplete="new-password" />
-          <label className="mt-3 block wc-type-caption text-neutral-600">Base URL（留空使用官方端点；也可填写保持该厂商协议的中转地址）</label>
-          <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder={props.provider.defaultBaseURL} disabled={props.disabled} />
+          <label className="block wc-type-caption text-neutral-600">API Key（留空保留现有密钥）
+            <input className="wc-settings-input mt-1" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} disabled={props.disabled} autoComplete="new-password" />
+          </label>
+          <label className="mt-3 block wc-type-caption text-neutral-600">Base URL（留空使用官方端点；也可填写保持该厂商协议的中转地址）
+            <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder={props.provider.defaultBaseURL} disabled={props.disabled} />
+          </label>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 lg:col-start-2">
+        <div className="wc-settings-provider-actions">
           {props.provider.hasKey && <SettingsButton variant="danger" onClick={() => void submit(true)} disabled={props.disabled}>清除密钥</SettingsButton>}
           <SettingsButton variant="primary" onClick={() => void submit()} disabled={props.disabled}>保存</SettingsButton>
         </div>
@@ -507,7 +519,7 @@ function CliProxyApiEditor(props: {
       actions={<ConnectionStatus configured={props.settings.hasKey} />}
     >
       <SettingsPanel>
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="wc-settings-columns">
           <label className="block wc-type-caption text-neutral-600">
             Base URL（API 根地址，通常以 /v1 结尾）
             <input className="wc-settings-input mt-1" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} placeholder="http://127.0.0.1:8317/v1" disabled={props.disabled} />
@@ -518,9 +530,9 @@ function CliProxyApiEditor(props: {
           </label>
         </div>
         <p className="mt-3 wc-type-caption font-medium text-neutral-600">启用模型</p>
-        <div className="mt-1 grid gap-1.5 md:grid-cols-2">
+        <div className="wc-settings-model-options mt-2">
           {props.settings.models.map((model) => (
-            <label key={model.id} className="flex items-start gap-2 rounded-xl border border-[var(--wc-line)] bg-white/60 px-2.5 py-2 text-xs">
+            <label key={model.id} className="wc-settings-model-option text-xs">
               <input type="checkbox" className="mt-0.5" checked={modelIds.has(model.id)} onChange={() => toggleModel(model.id)} disabled={props.disabled} />
               <span>
                 <span className="block text-neutral-800">{model.displayName}</span>

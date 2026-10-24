@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -54,6 +55,7 @@ interface UseSkillComposerOptions {
 
 /** Skill 目录和输入触发状态独立于附件草稿，App 只负责消息事务编排。 */
 export function useSkillComposer(options: UseSkillComposerOptions) {
+  const menuId = useId()
   const [catalog, setCatalog] = useState<SkillCatalogSnapshot>(EMPTY_CATALOG)
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<SkillSummary[]>([])
@@ -259,6 +261,9 @@ export function useSkillComposer(options: UseSkillComposerOptions) {
   const closeMenu = useCallback(() => setTrigger(null), [])
 
   return {
+    menuId,
+    activeOptionId: trigger && matches[activeIndex] && !menuItemDisabled(matches[activeIndex]!, limitReached)
+      ? `${menuId}-${activeIndex}` : undefined,
     catalog,
     loading,
     selected,

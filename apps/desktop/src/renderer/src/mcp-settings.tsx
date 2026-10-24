@@ -92,7 +92,7 @@ export function McpSettingsEditor(props: McpSettingsEditorProps) {
                 key={`${server.scope}:${server.name}`}
                 className={index > 0 ? 'border-t border-[var(--wc-line-strong)]' : undefined}
               >
-                <header className="flex min-w-0 flex-wrap items-start justify-between gap-3 px-4 py-3">
+                <header className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 px-4 py-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <p className="min-w-0 break-all text-sm font-medium text-neutral-900">{server.name}</p>

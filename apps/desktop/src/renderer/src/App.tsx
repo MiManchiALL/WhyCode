@@ -74,6 +74,7 @@ import { ThinkingGapIndicator } from './thinking-gap-indicator.tsx'
 import { useSshWorkspaceConnection } from './use-ssh-workspace-connection.ts'
 import { ConnectionSettingsPanel } from './connection-settings-panel.tsx'
 import { useConversationFontSize } from './conversation-font-size.ts'
+import { useCompletionSound } from './use-completion-sound.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import { gitConnectionUnavailableReason, useGitSnapshot } from './git-data.ts'
 import { defaultGitPage } from './right-panel-state.ts'
@@ -111,6 +112,7 @@ import { PendingUserMessage } from './pending-user-message.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
+import { useScrollIntent } from './use-scroll-intent.ts'
 import { useSkillComposer } from './use-skill-composer.ts'
 import type { ComposerCommandId } from './skill-trigger.ts'
 import { AppSidebar } from './app-sidebar.tsx'
@@ -211,6 +213,7 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<'general' | 'ssh' | null>(null)
   const showConnectionSettings = settingsSection !== null
   const [conversationFontSize, setConversationFontSize] = useConversationFontSize()
+  const { enabled: completionSoundEnabled, setEnabled: setCompletionSoundEnabled, play: playCompletionSound } = useCompletionSound()
   const [approval, setApproval] = useState<Approval | null>(null)
   const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
@@ -281,6 +284,7 @@ export function App() {
   /** 贴底跟随：仅当用户本就在底部附近才自动滚动；往上翻阅时不打扰 */
   const stickToBottom = useRef(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
+  const recentlyScrolledAway = useScrollIntent(scrollRef, () => { stickToBottom.current = false }, !loadingConversation)
   const inputRef = useRef('')
   const btwModeRef = useRef<BtwMode | null>(null)
   const slashCommandRef = useRef<(command: ComposerCommandId) => void>(() => {})
@@ -351,6 +355,8 @@ export function App() {
     setBtwModeState(mode)
   }, [])
   const {
+    menuId: composerMenuId,
+    activeOptionId: composerActiveOptionId,
     catalog: skillCatalog,
     loading: skillCatalogLoading,
     selected: selectedSkills,
@@ -1215,6 +1221,7 @@ export function App() {
   useEffect(() => {
     let disposed = false
     let hydrated = false
+    let liveEventSequence = -1
     const buffered: {
       event: CoreEvent
       sequence: number
@@ -1285,7 +1292,16 @@ export function App() {
       }
     }
     const eventSubscription = subscribeRuntimeEventBatches((events) => {
-      for (const event of events) acceptEvent(event)
+      for (const envelope of events) {
+        // 通知按实时端口去重；IPC 快照可能先到，不能拿聊天投影的进度过滤通知。
+        if (envelope.sequence > liveEventSequence) {
+          liveEventSequence = envelope.sequence
+          if (hydrated && envelope.event.type === 'work-finished' && envelope.event.outcome === 'completed') {
+            void playCompletionSound().catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true))
+          }
+        }
+        acceptEvent(envelope)
+      }
     })
     void eventSubscription.ready.then(() => window.whycode.runtimeSnapshot()).then(async (snapshot) => {
       await prepareComposer(snapshot)
@@ -1318,6 +1334,8 @@ export function App() {
     refreshModelCatalog,
     refreshSessions,
     synchronizeUnownedResume,
+    playCompletionSound,
+    showConversationFeedback,
   ])
 
   const restoreConversationAfterRender = useCallback(() => {
@@ -1366,10 +1384,10 @@ export function App() {
       return
     }
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-    stickToBottom.current = nearBottom
-    setShowJumpBottom(!nearBottom)
+    stickToBottom.current = nearBottom && (!recentlyScrolledAway() || el.scrollHeight - el.scrollTop - el.clientHeight <= 1)
+    setShowJumpBottom(!stickToBottom.current)
     if (!nearBottom && el.scrollTop <= el.clientHeight) void history.loadOlder()
-  }, [history.loadOlder])
+  }, [history.loadOlder, recentlyScrolledAway])
 
   const jumpToBottom = useCallback(() => {
     history.cancel()
@@ -2425,6 +2443,7 @@ export function App() {
                     )}
                     {skillTrigger && !attachmentLocked && (
                       <ComposerSlashMenu
+                        id={composerMenuId}
                         items={composerMenuItems}
                         activeIndex={Math.min(skillActiveIndex, Math.max(0, composerMenuItems.length - 1))}
                         diagnostics={skillCatalog.diagnostics}
@@ -2485,6 +2504,8 @@ export function App() {
 
                     <ComposerInput
                       ref={composerInputRef}
+                      aria-controls={skillTrigger && !attachmentLocked ? composerMenuId : undefined}
+                      aria-activedescendant={skillTrigger && !attachmentLocked ? composerActiveOptionId : undefined}
                       scopeKey={resumingSessionId ?? runtimeId}
                       runtimeId={runtimeId}
                       className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
@@ -2589,7 +2610,7 @@ export function App() {
             data-panel-open={rightPanelState.open ? 'true' : 'false'}
             aria-busy={loadingConversation}
             inert={loadingConversation}
-            className="wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-200 ease-out"
+            className="wc-resizable-panel wc-right-panel-shell relative h-full shrink-0 overflow-clip bg-[var(--wc-surface)] transition-[width,margin-left] duration-[var(--wc-motion-layout)] ease-out"
             style={{
               width: rightPanelState.open
                 ? panelWidthExpression('right', panelLayout.widths.right)
@@ -2604,7 +2625,7 @@ export function App() {
               />
             )}
             <div
-              className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-200 ease-out ${
+              className={`absolute inset-y-0 left-0 w-[348px] transition-[opacity,transform] duration-[var(--wc-motion-layout)] ease-out ${
                 rightPanelState.open
                   ? 'pointer-events-none -translate-x-3 opacity-0'
                   : 'translate-x-0 opacity-100 max-[1440px]:opacity-0'
@@ -2632,7 +2653,7 @@ export function App() {
               />
             </div>
             <div
-              className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-200 ease-out ${
+              className={`absolute inset-y-0 right-0 w-full transition-[opacity,transform] duration-[var(--wc-motion-layout)] ease-out ${
                 rightPanelState.open
                   ? 'translate-x-0 opacity-100'
                   : 'pointer-events-none translate-x-8 opacity-0'
@@ -2710,6 +2731,8 @@ export function App() {
           workspaceCleanup={workspaceCleanup}
           conversationFontSize={conversationFontSize}
           onConversationFontSizeChange={setConversationFontSize}
+          completionSound={{ enabled: completionSoundEnabled, setEnabled: setCompletionSoundEnabled,
+            preview: () => { void playCompletionSound(true).catch(error => showConversationFeedback('error', `无法播放提示音：${String(error)}`, true)) } }}
           onClose={() => { setSettingsSection(null); void refreshSessions() }}
           onChanged={connectionSettingsChanged}
           onError={showError}

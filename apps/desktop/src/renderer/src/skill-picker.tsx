@@ -1,7 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import type { SkillDiagnostic, SkillSummary } from '@whycode/core/skills'
-import { Archive, Plug, Puzzle, X } from 'lucide-react'
-import type { ComposerMenuItem } from './skill-trigger.ts'
+import { Archive, GitBranch, MessageCircle, Plug, Puzzle, X } from 'lucide-react'
+import type { ComposerCommandId, ComposerMenuItem } from './skill-trigger.ts'
+
+const COMMAND_ICONS = { mcp: Plug, compact: Archive, fork: GitBranch, btw: MessageCircle, bbtw: MessageCircle } satisfies Record<ComposerCommandId, typeof Plug>
 
 export const SKILL_SCOPE_LABEL = {
   project: '项目',
@@ -62,6 +64,7 @@ export function SkillChips({
 }
 
 export function ComposerSlashMenu({
+  id,
   items,
   activeIndex,
   diagnostics,
@@ -70,6 +73,7 @@ export function ComposerSlashMenu({
   onSelect,
   onActivate,
 }: {
+  id: string
   items: readonly ComposerMenuItem[]
   activeIndex: number
   diagnostics: readonly SkillDiagnostic[]
@@ -79,25 +83,25 @@ export function ComposerSlashMenu({
   onActivate: (index: number) => void
 }) {
   const listRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    listRef.current
-      ?.querySelector<HTMLElement>(`[data-menu-index="${activeIndex}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex])
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const active = list?.querySelector<HTMLElement>(`[data-menu-index="${activeIndex}"]`)
+    if (!list || !active) return
+    // 只移动选项列表，避免 scrollIntoView 连带滚动输入框和会话外壳。
+    const bounds = list.getBoundingClientRect()
+    const item = active.getBoundingClientRect()
+    if (item.top < bounds.top) list.scrollTop += item.top - bounds.top
+    else if (item.bottom > bounds.bottom) list.scrollTop += item.bottom - bounds.bottom
+  }, [activeIndex, items])
   const indexedItems = items.map((item, index) => ({ item, index }))
   const commandItems = indexedItems.filter(({ item }) => item.kind === 'command')
   const skillItems = indexedItems.filter(({ item }) => item.kind === 'skill')
 
   return (
     <div
-      className="wc-menu-content absolute bottom-full left-0 z-30 mb-2 w-[min(34rem,calc(100vw-2rem))] overflow-hidden p-0"
-      role="listbox"
-      aria-label="功能与 Skill"
+      className="wc-slash-menu wc-menu-content"
     >
-      <div className="border-b border-[var(--wc-line)] px-3 py-2 wc-type-caption font-medium text-[var(--wc-faint)]">
-        输入筛选，Enter 选择
-      </div>
-      <div ref={listRef} className="wc-scrollbar max-h-72 overflow-y-auto p-1.5">
+      <div ref={listRef} id={id} role="listbox" aria-label="功能与 Skill" className="wc-slash-options wc-scrollbar">
         {items.length === 0 && !loading ? (
           <div className="px-3 py-5 text-center text-xs text-[var(--wc-faint)]">
             没有匹配的功能或 Skill
@@ -105,7 +109,9 @@ export function ComposerSlashMenu({
         ) : (
           <>
             <ComposerMenuGroup
+              id={id}
               label="功能"
+              showLabel={false}
               entries={commandItems}
               activeIndex={activeIndex}
               limitReached={limitReached}
@@ -113,7 +119,9 @@ export function ComposerSlashMenu({
               onActivate={onActivate}
             />
             <ComposerMenuGroup
+              id={id}
               label="Skills"
+              showLabel
               entries={skillItems}
               activeIndex={activeIndex}
               limitReached={limitReached}
@@ -123,6 +131,7 @@ export function ComposerSlashMenu({
           </>
         )}
       </div>
+      <div className="wc-slash-hint" aria-hidden="true">↑↓ 选择 <span>Enter 确认</span> <span>Esc 关闭</span></div>
       {(loading || diagnostics.length > 0 || limitReached) && (
         <div
           role="status"
@@ -147,7 +156,9 @@ export function ComposerSlashMenu({
 }
 
 function ComposerMenuGroup(props: {
+  id: string
   label: string
+  showLabel: boolean
   entries: readonly { item: ComposerMenuItem; index: number }[]
   activeIndex: number
   limitReached: boolean
@@ -156,51 +167,41 @@ function ComposerMenuGroup(props: {
 }) {
   if (props.entries.length === 0) return null
   return (
-    <section aria-label={props.label}>
-      <div className="px-2.5 pb-1 pt-1.5 wc-type-tiny font-medium uppercase tracking-[0.08em] text-[var(--wc-faint)]">
-        {props.label}
-      </div>
+    <div role="group" aria-label={props.label}>
+      {props.showLabel && <div className="wc-slash-group-label">{props.label}</div>}
       {props.entries.map(({ item, index }) => {
         const isCommand = item.kind === 'command'
         const disabled = isCommand ? item.command.disabled : props.limitReached
         const name = isCommand ? item.command.name : item.skill.name
         const description = isCommand ? item.command.description : item.skill.description
+        const Icon = isCommand ? COMMAND_ICONS[item.command.id] : Puzzle
         return (
           <button
             key={isCommand ? `command:${item.command.id}` : item.skill.id}
+            id={`${props.id}-${index}`}
             data-menu-index={index}
             type="button"
             role="option"
+            tabIndex={-1}
             aria-selected={index === props.activeIndex}
             disabled={disabled}
-            className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors disabled:opacity-40 ${
-              index === props.activeIndex ? 'bg-[var(--wc-blue)]' : 'hover:bg-black/[0.035]'
-            }`}
-            onMouseEnter={() => props.onActivate(index)}
+            title={`${name}\n${description}${isCommand ? '' : `\n${item.skill.path}`}`}
+            className="wc-slash-option"
+            onPointerMove={event => {
+              if (!disabled && event.pointerType !== 'touch' && (event.movementX || event.movementY)) props.onActivate(index)
+            }}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => props.onSelect(item)}
           >
-            <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border border-[var(--wc-line)] bg-white text-[var(--wc-muted)]">
-              {isCommand
-                ? item.command.id === 'mcp' ? <Plug size={14} /> : <Archive size={14} />
-                : <Puzzle size={14} />}
+            <Icon size={16} className="wc-slash-icon" aria-hidden="true" />
+            <span className="wc-slash-copy">
+              <span className="wc-slash-name">{name}</span>
+              <span className="wc-slash-description">{description}</span>
             </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2 text-sm font-medium text-[var(--wc-ink)]">
-                {isCommand ? `/${name}` : name}
-                {!isCommand && (
-                  <span className="rounded-md bg-black/[0.045] px-1.5 py-0.5 wc-type-tiny font-normal text-[var(--wc-faint)]">
-                    {SKILL_SCOPE_LABEL[item.skill.scope]}
-                  </span>
-                )}
-              </span>
-              <span className="mt-0.5 block line-clamp-2 wc-type-caption text-[var(--wc-muted)]">
-                {description}
-              </span>
-            </span>
+            {!isCommand && <span className="wc-slash-scope">{SKILL_SCOPE_LABEL[item.skill.scope]}</span>}
           </button>
         )
       })}
-    </section>
+    </div>
   )
 }
