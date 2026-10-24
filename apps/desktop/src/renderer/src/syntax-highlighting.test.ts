@@ -81,3 +81,14 @@ it('plain text and oversized source do not start a worker; failed workers can be
   assert.equal(failed.terminated, true)
   assert.equal(TestWorker.instances[1]!.terminated, false)
 })
+
+it('Markdown 语言标记与文件预览复用语法，未知标记不启动额外 Worker', () => {
+  setup()
+  for (const [hint, language] of [['ts', 'typescript'], ['shell', 'bash'], ['c++', 'cpp'], ['pwsh', 'powershell'], ['PYTHON', 'python']]) {
+    request(hint!, 'sample')
+    assert.equal((TestWorker.instances[0]!.requests.at(-1) as Extract<HighlightRequest, { type: 'highlight' }>).language, language)
+  }
+  request('unknown-language', 'sample')
+  assert.equal(TestWorker.instances.length, 1)
+  assert.equal(TestWorker.instances[0]!.requests.length, 5)
+})

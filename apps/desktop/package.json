@@ -39,6 +39,7 @@
     "lucide-react": "1.28.0",
     "mdast-util-math": "3.0.0",
     "mdast-util-to-string": "4.0.0",
+    "mermaid": "11.16.1",
     "micromark-extension-math": "3.1.0",
     "micromark-util-character": "2.1.1",
     "node-html-markdown": "2.0.0",
@@ -51,7 +52,7 @@
     "ssh2": "1.17.0",
     "streamdown": "^2.5.0",
     "unified": "11.0.5",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",

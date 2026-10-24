@@ -15,6 +15,7 @@ import { SiteIcon } from './site-icon.tsx'
 import { Streamdown, type Components } from 'streamdown'
 import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
 import { MarkdownTable } from './markdown-table.tsx'
+import { MarkdownCodeBlock } from './markdown-code-block.tsx'
 import { ResponseSourcesContext } from './response-presentation.ts'
 import { normalizeSourceUrl, WEB_SOURCE_CITATION_MARKER } from '@whycode/core/web-source'
 import {
@@ -77,6 +78,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 
   const components = useMemo<Components>(() => ({
     table: MarkdownTable,
+    pre: MarkdownCodeBlock,
     ul: ({ node, className, children, ...props }) => {
       return <MarkdownUnorderedList {...props} node={node} className={className}>{children}</MarkdownUnorderedList>
     },
@@ -88,6 +90,7 @@ export const MarkdownContent = memo(function MarkdownContent({
       <Streamdown
         className="wc-markdown-content"
         mode={effectiveStreaming ? 'streaming' : 'static'}
+        isAnimating={effectiveStreaming}
         controls={MARKDOWN_CONTROLS}
         components={components}
         linkSafety={LINK_SAFETY}
