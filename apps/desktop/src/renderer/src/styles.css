@@ -249,7 +249,7 @@ html[data-wc-panel-resizing='true'] .wc-resizable-panel:not([data-resize-transit
 .wc-mermaid-viewport { max-height: min(560px, 70vh); overflow: auto; background: white; }
 .wc-mermaid-image { display: flex; width: max-content; min-width: 100%; justify-content: center; padding: 16px; cursor: zoom-in; }
 /* 随所在正文的字号缩放整个图表；zoom 同时调整布局占位，不必重新运行 Mermaid。 */
-.wc-mermaid-image img { display: block; flex: none; max-width: none; height: auto; zoom: calc(1em / var(--wc-mermaid-font-size)); }
+.wc-mermaid-image img { display: block; flex: none; max-width: none; height: auto; zoom: calc((1em - 1px) / var(--wc-mermaid-font-size)); }
 .wc-mermaid-measure { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
 
 .wc-right-panel-tabs::-webkit-scrollbar {

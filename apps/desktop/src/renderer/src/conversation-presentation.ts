@@ -21,10 +21,11 @@ export interface ConversationScrollAnchor {
 
 const BOTTOM_THRESHOLD_PX = 60
 const MAX_CACHED_CONVERSATIONS = 32
-const MAX_EXPANDED_OVERRIDES = 256
+const MAX_BLOCK_PREFERENCES = 256
 
 interface ConversationPresentation {
   expandedOverrides: Map<string, boolean>
+  mermaidSources?: ReadonlySet<string>
   scroll?: ConversationScrollPosition
   historyStart?: string
   workspacePosition?: WorkspaceBrowserPosition
@@ -66,12 +67,24 @@ export class ConversationPresentationCache {
     const expandedOverrides = new Map(previous?.expandedOverrides)
     expandedOverrides.delete(id)
     expandedOverrides.set(id, expanded)
-    while (expandedOverrides.size > MAX_EXPANDED_OVERRIDES) {
+    while (expandedOverrides.size > MAX_BLOCK_PREFERENCES) {
       const oldest = expandedOverrides.keys().next().value
       if (oldest === undefined) break
       expandedOverrides.delete(oldest)
     }
     this.set(key, { ...previous, expandedOverrides })
+  }
+
+  setMermaidSource(key: string, id: string, showSource: boolean): void {
+    const previous = this.entries.get(key)
+    if (!previous && !showSource) return
+    const mermaidSources = new Set(previous?.mermaidSources)
+    mermaidSources.delete(id)
+    if (showSource) mermaidSources.add(id)
+    while (mermaidSources.size > MAX_BLOCK_PREFERENCES) {
+      mermaidSources.delete(mermaidSources.values().next().value!)
+    }
+    this.set(key, { ...previous, expandedOverrides: previous?.expandedOverrides ?? new Map(), mermaidSources })
   }
 
   delete(key: string): void {

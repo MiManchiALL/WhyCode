@@ -1,19 +1,22 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useState, type ReactNode } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { FadedScrollArea } from './faded-scroll-area.tsx'
 import { ImagePreviewDialog } from './image-preview.tsx'
 import { mermaidSourceTooLarge, renderMermaid } from './mermaid-rendering.ts'
+import { MarkdownViewOwnerContext } from './markdown-view-state.ts'
 
-export function MermaidDiagram({ code, visible, source, actions, wrapAction }: {
+export function MermaidDiagram({ code, visible, source, actions, wrapAction, viewId }: {
   code: string; visible: boolean; source: ReactNode; actions: ReactNode; wrapAction: ReactNode
+  viewId?: string
 }) {
+  const owner = useContext(MarkdownViewOwnerContext)
   const [result, setResult] = useState<{ svg: string } | { error: string } | null>(null)
   const [url, setUrl] = useState<string | null>(null)
-  const [showSource, setShowSource] = useState(false)
+  const [showSource, setShowSource] = useState(() => viewId !== undefined && !!owner?.cache.get(owner.key)?.mermaidSources?.has(viewId))
   const [preview, setPreview] = useState<string | null>(null)
   const tooLarge = mermaidSourceTooLarge(code)
   useEffect(() => {
-    if (!visible || result || tooLarge) return
+    if (!visible || showSource || result || tooLarge) return
     const controller = new AbortController()
     void renderMermaid(code, controller.signal).then(svg => {
       if (!controller.signal.aborted) setResult({ svg })
@@ -21,7 +24,7 @@ export function MermaidDiagram({ code, visible, source, actions, wrapAction }: {
       if (!controller.signal.aborted) setResult({ error: error instanceof Error ? error.message : String(error) })
     })
     return () => controller.abort()
-  }, [code, visible, result, tooLarge])
+  }, [code, visible, showSource, result, tooLarge])
   const svg = result && 'svg' in result ? result.svg : null
   useEffect(() => {
     if (!svg) return
@@ -33,13 +36,14 @@ export function MermaidDiagram({ code, visible, source, actions, wrapAction }: {
   return <>
     <div className="wc-fence-toolbar">
       <span className="min-w-0 flex-1 truncate" role="status" title={error ?? undefined}>
-        {tooLarge ? '图表过大，已显示源码' : error ? '图表无法渲染，已显示源码' : !url ? '正在准备图表…' : 'Mermaid'}
+        {tooLarge ? '图表过大，已显示源码' : error ? '图表无法渲染，已显示源码' : !url && !showSource ? '正在准备图表…' : 'Mermaid'}
       </span>
-      {url && <>
-        <button type="button" className="wc-focus-ring rounded px-2 py-1 hover:bg-black/5" aria-pressed={showSource}
-          onClick={() => setShowSource(value => !value)}>{showSource ? '图表' : '源码'}</button>
-        <button type="button" className="wc-icon-button size-7" title="放大图表" aria-label="放大图表" onClick={() => setPreview('diagram')}><Maximize2 size={14} /></button>
-      </>}
+      {!tooLarge && !error && (url || showSource) && <button type="button" className="wc-focus-ring rounded px-2 py-1 hover:bg-black/5" aria-pressed={showSource}
+        onClick={() => {
+          setShowSource(!showSource)
+          if (viewId !== undefined) owner?.cache.setMermaidSource(owner.key, viewId, !showSource)
+        }}>{showSource ? '图表' : '源码'}</button>}
+      {url && <button type="button" className="wc-icon-button size-7" title="放大图表" aria-label="放大图表" onClick={() => setPreview('diagram')}><Maximize2 size={14} /></button>}
       {(!url || showSource) && wrapAction}
       {actions}
     </div>
