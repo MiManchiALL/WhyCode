@@ -37,11 +37,13 @@ import { ToolBatchSegmentView } from './tool-batch-segment.tsx'
 import type { RightPanelPage } from './right-panel-state.ts'
 import { useCheckpointRestoreNavigation } from './checkpoint-restore-navigation.ts'
 import type { ConversationScrollAlignment } from './conversation-scroll.ts'
+import { MarkdownMessageIdContext, MarkdownViewOwnerContext, type MarkdownViewOwner } from './markdown-view-state.ts'
 
 interface ConversationViewProps {
   children?: ReactNode
   remote?: boolean
   runtimeId: string
+  markdownViewOwner?: MarkdownViewOwner
   pendingSessionId?: string | null
   onReady?: () => void
   active?: boolean
@@ -156,7 +158,7 @@ const ConversationContents = memo(function ConversationContents(props: Conversat
   const newlySealedSegmentIds = useNewlySealedToolSegmentIds(props.runtimeId, items)
 
   return (
-    <>
+    <MarkdownViewOwnerContext.Provider value={props.markdownViewOwner ?? null}>
       {items.map((item) => item.kind === 'section'
         ? (
             <ConversationSectionView
@@ -193,7 +195,7 @@ const ConversationContents = memo(function ConversationContents(props: Conversat
               animateOnMount={newlySealedSegmentIds.has(item.id)}
             />
           ))}
-    </>
+    </MarkdownViewOwnerContext.Provider>
   )
 })
 
@@ -416,22 +418,24 @@ const ConversationBlock = memo(function ConversationBlock({
   projectDir,
 }: ConversationBlockRenderProps) {
   return (
-    <BlockView
-      runtimeId={runtimeId}
-      block={block}
-      editable={editable}
-      expanded={expanded}
-      busy={busy}
-      showCheckpointRestore={showCheckpointRestore}
-      checkpointRestorePending={checkpointRestorePending}
-      streamingAssistantText={streamingAssistantText}
-      renderMath={renderMath}
-      onCheckpointRestoreRequest={onCheckpointRestoreRequest}
-      onEdit={onEdit}
-      onToggle={() => onToggle(block.id)}
-      skills={skills}
-      projectDir={projectDir}
-    />
+    <MarkdownMessageIdContext.Provider value={block.id}>
+      <BlockView
+        runtimeId={runtimeId}
+        block={block}
+        editable={editable}
+        expanded={expanded}
+        busy={busy}
+        showCheckpointRestore={showCheckpointRestore}
+        checkpointRestorePending={checkpointRestorePending}
+        streamingAssistantText={streamingAssistantText}
+        renderMath={renderMath}
+        onCheckpointRestoreRequest={onCheckpointRestoreRequest}
+        onEdit={onEdit}
+        onToggle={() => onToggle(block.id)}
+        skills={skills}
+        projectDir={projectDir}
+      />
+    </MarkdownMessageIdContext.Provider>
   )
 }, sameConversationBlockRenderProps)
 

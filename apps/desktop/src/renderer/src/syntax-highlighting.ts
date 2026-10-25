@@ -58,9 +58,14 @@ function languageForPath(path: string): HighlightLanguage | null {
   const extension = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : ''
   const aliases: Record<string, HighlightLanguage> = {
     bash: 'bash',
+    shell: 'bash',
+    shellscript: 'bash',
+    zsh: 'bash',
     c: 'c',
     cpp: 'cpp',
+    'c++': 'cpp',
     csharp: 'csharp',
+    'c#': 'csharp',
     css: 'css',
     diff: 'diff',
     go: 'go',
@@ -73,6 +78,7 @@ function languageForPath(path: string): HighlightLanguage | null {
     markdown: 'markdown',
     php: 'php',
     powershell: 'powershell',
+    pwsh: 'powershell',
     python: 'python',
     ruby: 'ruby',
     rust: 'rust',

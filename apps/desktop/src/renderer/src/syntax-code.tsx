@@ -63,13 +63,14 @@ export function SyntaxCode({
   )
 }
 
-function useHighlightedCode(path: string, source: string): HighlightedLines | null {
-  const [result, setResult] = useState<HighlightedLines | null>(null)
+export function useHighlightedCode(path: string, source: string, enabled = true): HighlightedLines | null {
+  const [result, setResult] = useState<{ path: string; source: string; lines: HighlightedLines } | null>(null)
   useEffect(() => {
     setResult(null)
+    if (!enabled) return
     return requestHighlight(path, source, lines => {
-      startTransition(() => setResult(lines))
+      startTransition(() => setResult({ path, source, lines }))
     })
-  }, [path, source])
-  return result
+  }, [path, source, enabled])
+  return enabled && result?.path === path && result.source === source ? result.lines : null
 }

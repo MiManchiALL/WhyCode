@@ -75,6 +75,7 @@ async function highlightSource(
     const { tokens } = highlighter.codeToTokens(source, {
       lang: language,
       themes: { light: 'github-light', dark: 'github-dark' },
+      tokenizeMaxLineLength: 2_000,
     })
     // 静态片段在线程内转义、序列化，避免主线程复制 token 对象并创建逐 token 的 React 树。
     const result: HighlightResponse = { id, lines: tokens.map(line => line.map(token =>

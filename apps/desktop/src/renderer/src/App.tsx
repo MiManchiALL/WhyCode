@@ -2221,6 +2221,10 @@ export function App() {
     : { images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
 
   const panelSessionKey = composerKey(runtimeId, sessionIdRef.current)
+  const markdownViewOwner = useMemo(() => ({
+    key: panelSessionKey,
+    cache: conversationPresentationsRef.current,
+  }), [panelSessionKey])
   return (
     <ConversationFeedbackContext value={showConversationFeedback}>
     <div
@@ -2339,6 +2343,7 @@ export function App() {
                   <ConversationView
                     remote={workspace.mode === 'ssh'}
                     runtimeId={runtimeId}
+                    markdownViewOwner={markdownViewOwner}
                     pendingSessionId={loadingConversation ? resumingSessionId : null}
                     onReady={restoreConversationAfterRender}
                     active={resumingSessionId === null}
