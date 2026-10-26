@@ -50,7 +50,7 @@ describe('工具卡片关键参数摘要', () => {
     ['ResumeTaskPlan', { plan_id: '12345678-1234-4234-8234-123456789abc' }, 'plan ID 12345678…'],
     ['UpdateTaskItem', { item_id: 'T2', status: 'completed', changes: [{ action: 'edit' }] }, 'T2 → complete · 1 plan change'],
     ['CloseTaskPlan', { plan_id: '12345678-1234-4234-8234-123456789abc' }, 'plan ID 12345678…'],
-    ['Subagent', { agent_id: 'explore', description: '检查工具摘要', prompt: 'hidden' }, 'explore'],
+    ['Subagent', { name: 'explore', description: '检查工具摘要', prompt: 'hidden' }, 'explore'],
     ['SendSubagentMessage', { subagent_id: '12345678-1234-4234-8234-123456789abc', prompt: '继续核对测试' }, '12345678…'],
     ['ListSubagents', {}, ''],
     ['ToolSearch', { query: 'GitHub file contents read', max_results: 5 }, '“GitHub file contents read” · max results 5'],

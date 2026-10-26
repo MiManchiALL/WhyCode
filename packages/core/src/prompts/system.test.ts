@@ -198,11 +198,7 @@ describe('通用 Agent 提示约束', () => {
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
-      subagents: {
-        definitions: [],
-        diagnostics: [],
-        modelContext: '<available_subagents>\n</available_subagents>',
-      },
+      subagentsEnabled: true,
     })
 
     assert.match(prompt, /不要与子代理重复同一工作/)
@@ -216,6 +212,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /只有任务本身完成时才综合并最终答复/)
     assert.match(prompt, /优先用稳定 subagent_id 继续/)
     assert.match(prompt, /ListSubagents/)
+    assert.doesNotMatch(prompt, /<available_subagents>/)
   })
 
   it('子代理只看到自己的身份、独立计划与固定工具档位', () => {

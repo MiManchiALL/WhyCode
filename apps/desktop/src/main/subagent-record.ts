@@ -115,7 +115,7 @@ export function subagentListEntry(manifest: SubagentManifest): SubagentListEntry
   const activation = manifest.activations.at(-1)!
   return {
     subagentId: manifest.id,
-    agentId: manifest.definition.id,
+    name: manifest.definition.name,
     description: manifest.taskDescription,
     status: activation.outcome ?? 'running',
   }

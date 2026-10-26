@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { createFixture, deferred, finalStream, listDirStream, toolContext, waitFor } from './subagent-test-fixture.ts'
+import { createFixture, deferred, finalStream, listDirStream, waitFor } from './subagent-test-fixture.ts'
 import { SubagentStorage } from './subagent-storage.ts'
 
 describe('子代理激活生命周期', () => {
@@ -15,8 +15,8 @@ describe('子代理激活生命周期', () => {
     )
 
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', description: '核对调用链', prompt: '检查调用链并给出证据' },
-      toolContext('turn-1', 'tool-1'),
+      { name: 'explore', description: '核对调用链', prompt: '检查调用链并给出证据' },
+      fixture.toolContext('turn-1', 'tool-1'),
     )
     assert.equal(launched.isError, false)
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
@@ -44,10 +44,10 @@ describe('子代理激活生命周期', () => {
     assert.equal(firstState.subagents[0]?.activationCount, 1)
     assert.equal(firstState.subagents[0]?.status, 'completed')
     assert.equal(firstState.subagents[0]?.description, '核对调用链')
-    const listed = await tools[2]!.execute({}, toolContext('turn-list', 'tool-list'))
+    const listed = await tools[2]!.execute({}, fixture.toolContext('turn-list', 'tool-list'))
     assert.equal(listed.isError, false)
     assert.deepEqual(JSON.parse(listed.data).subagents, [{
-      agent_id: 'explore',
+      name: 'explore',
       subagent_id: subagentId,
       description: '核对调用链',
       status: 'completed',
@@ -56,11 +56,11 @@ describe('子代理激活生命周期', () => {
     const continuations = await Promise.all([
       tools[1]!.execute(
         { subagent_id: subagentId, prompt: '继续核对遗漏的边界' },
-        toolContext('turn-2', 'tool-2'),
+        fixture.toolContext('turn-2', 'tool-2'),
       ),
       tools[1]!.execute(
         { subagent_id: subagentId, prompt: '继核对同一个遗漏边界' },
-        toolContext('turn-3', 'tool-3'),
+        fixture.toolContext('turn-3', 'tool-3'),
       ),
     ])
     const continued = continuations.find((result) => !result.isError)
@@ -107,7 +107,7 @@ describe('子代理激活生命周期', () => {
     assert.doesNotMatch(transcript, /父会话普通历史/)
 
     const request = JSON.stringify(fixture.modelCalls[0])
-    assert.match(request, /子代理身份：探索代理/)
+    assert.match(request, /子代理身份：explore/)
     assert.match(request, /CreateTaskPlan/)
     assert.match(request, /ReadFile/)
     assert.doesNotMatch(request, /AskUserQuestion/)
@@ -128,8 +128,8 @@ describe('子代理激活生命周期', () => {
       fixture.projectDir,
     )
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', description: '验证固定模型', prompt: '完成首次任务' },
-      toolContext('turn-model-1', 'tool-model-1'),
+      { name: 'explore', description: '验证固定模型', prompt: '完成首次任务' },
+      fixture.toolContext('turn-model-1', 'tool-model-1'),
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)
@@ -137,7 +137,7 @@ describe('子代理激活生命周期', () => {
 
     await tools[1]!.execute(
       { subagent_id: subagentId, prompt: '继续同一任务' },
-      toolContext('turn-model-2', 'tool-model-2'),
+      fixture.toolContext('turn-model-2', 'tool-model-2'),
     )
     await waitFor(() => fixture.settlements.length === 2)
 
@@ -157,8 +157,8 @@ describe('子代理激活生命周期', () => {
     )
     const results = await Promise.all(Array.from({ length: 9 }, (_, index) =>
       tools[0]!.execute(
-        { agent_id: 'explore', description: `并行调查 ${index + 1}`, prompt: `并行调查 ${index + 1}` },
-        toolContext(`turn-${index}`, `tool-${index}`),
+        { name: 'explore', description: `并行调查 ${index + 1}`, prompt: `并行调查 ${index + 1}` },
+        fixture.toolContext(`turn-${index}`, `tool-${index}`),
       )))
 
     assert.equal(results.filter((result) => !result.isError).length, 8)
@@ -166,6 +166,9 @@ describe('子代理激活生命周期', () => {
     assert.match(results.find((result) => result.isError)?.data ?? '', /8 个/)
     assert.equal(fixture.runtime.userRunBusy, false)
     await waitFor(() => fixture.settlements.length === 8)
+    const instances = await fixture.service.list(fixture.parentJournal.sessionId)
+    assert.equal(new Set(instances.map(instance => instance.subagentId)).size, 8)
+    assert.ok(instances.every(instance => instance.name === 'explore'))
     assert.equal(fixture.runtime.busy, false)
     await fixture.service.close()
   })
@@ -180,8 +183,8 @@ describe('子代理激活生命周期', () => {
     )
 
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', description: '持续检查证据', prompt: '持续检查直到证据充分' },
-      toolContext('turn-long', 'tool-long'),
+      { name: 'explore', description: '持续检查证据', prompt: '持续检查直到证据充分' },
+      fixture.toolContext('turn-long', 'tool-long'),
     )
 
     assert.equal(launched.isError, false)
@@ -199,8 +202,8 @@ describe('子代理激活生命周期', () => {
     })
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', description: '检查失败交付', prompt: '检查目录后给出结论' },
-      toolContext('turn-error', 'tool-error'),
+      { name: 'explore', description: '检查失败交付', prompt: '检查目录后给出结论' },
+      fixture.toolContext('turn-error', 'tool-error'),
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)
@@ -230,8 +233,8 @@ describe('子代理激活生命周期', () => {
       fixture.projectDir,
     )
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', description: '等待停止验证', prompt: '等待父会话停止' },
-      toolContext('turn-stop', 'tool-stop'),
+      { name: 'explore', description: '等待停止验证', prompt: '等待父会话停止' },
+      fixture.toolContext('turn-stop', 'tool-stop'),
     )
     assert.equal(launched.isError, false)
     await started.promise
@@ -269,8 +272,8 @@ describe('子代理激活生命周期', () => {
     })
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const launched = await tools[0]!.execute(
-      { agent_id: 'explore', description: '关闭时的调查', prompt: '检查当前项目' },
-      toolContext('turn-shutdown', 'tool-shutdown'),
+      { name: 'explore', description: '关闭时的调查', prompt: '检查当前项目' },
+      fixture.toolContext('turn-shutdown', 'tool-shutdown'),
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)

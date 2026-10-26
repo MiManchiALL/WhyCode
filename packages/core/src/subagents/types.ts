@@ -7,13 +7,14 @@ import {
 } from '../providers/catalog.ts'
 import type { ViewEvent } from '../session/view-events.ts'
 
-export const SUBAGENT_SCHEMA_VERSION = 2
+export const SUBAGENT_SCHEMA_VERSION = 3
 export const MAX_CONCURRENT_SUBAGENTS_PER_PARENT = 8
 export const MAX_SUBAGENT_DESCRIPTION_CHARS = 120
 export const MAX_SUBAGENT_PROMPT_CHARS = 64_000
 export const MAX_SUBAGENT_PROMPT_PREVIEW_CHARS = 2_000
 
 export const subagentProfileSchema = z.enum(['explore', 'reviewer', 'general'])
+export const subagentNameSchema = z.string().max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
 export const subagentDefinitionScopeSchema = z.enum(['builtin', 'user', 'project'])
 export const subagentOutcomeSchema = z.enum([
   'completed',
@@ -59,8 +60,7 @@ export const subagentTurnStateSchema = z.object({
 }).strict()
 
 export const subagentDefinitionSnapshotSchema = z.object({
-  id: z.string().min(1).max(160),
-  name: z.string().min(1).max(64),
+  name: subagentNameSchema,
   description: z.string().min(1).max(1_024),
   profile: subagentProfileSchema,
   scope: subagentDefinitionScopeSchema,
@@ -133,7 +133,6 @@ export interface SubagentDefinitionDiagnostic {
 export interface SubagentDefinitionCatalogSnapshot {
   definitions: SubagentDefinitionSnapshot[]
   diagnostics: SubagentDefinitionDiagnostic[]
-  modelContext: string
 }
 
 /** 父会话和 Renderer 共享的有界摘要；完整 prompt、结果和事件只在子会话目录中。 */
@@ -208,7 +207,7 @@ export interface SubagentLaunchResult {
 /** 提供给父模型的最小发现投影；不暴露 prompt、结果或 transcript。 */
 export interface SubagentListEntry {
   subagentId: string
-  agentId: string
+  name: string
   description: string
   status: SubagentStatus
 }

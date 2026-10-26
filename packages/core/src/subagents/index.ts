@@ -1,5 +1,4 @@
 export {
-  SUBAGENT_ALLOWED_TOOL_NAMES,
   SubagentDefinitionCatalogService,
   type SubagentDefinitionCatalogOptions,
 } from './catalog.ts'
@@ -30,6 +29,7 @@ export {
   subagentDefinitionScopeSchema,
   subagentDefinitionSnapshotSchema,
   subagentManifestSchema,
+  subagentNameSchema,
   subagentOutcomeSchema,
   subagentProfileSchema,
   subagentSettlementStateSchema,

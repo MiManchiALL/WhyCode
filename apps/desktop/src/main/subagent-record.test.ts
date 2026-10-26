@@ -21,15 +21,14 @@ function fixture(): SubagentManifest {
   const parentSessionId = randomUUID()
   const subagentId = randomUUID()
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: subagentId,
     parentSessionId,
     createdByTurnId: 'turn-1',
     createdByToolCallId: 'tool-1',
     taskDescription: '检查计时事实',
     definition: {
-      id: 'explore',
-      name: '探索代理',
+      name: 'explore',
       description: '只读调查',
       profile: 'explore',
       scope: 'builtin',

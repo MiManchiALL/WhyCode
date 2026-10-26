@@ -108,6 +108,7 @@ export async function createFixture(
     onParentIdle: () => undefined,
   }
   const service = new SubagentService(serviceOptions)
+  const catalog = await service.definitions.snapshot(projectDir, runtime.workspaceIO)
   cleanups.push(async () => {
     await service.close()
     await runtime.session?.dispose()
@@ -122,6 +123,9 @@ export async function createFixture(
     settlements,
     modelCalls,
     resolvedModelIds,
+    toolContext: (turnId: string, toolCallId: string) => ({
+      ...toolContext(turnId, toolCallId), subagentDefinitions: catalog.definitions,
+    }),
   }
 }
 
