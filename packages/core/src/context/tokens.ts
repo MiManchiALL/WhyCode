@@ -1,5 +1,4 @@
-import { asSchema, type ModelMessage, type ToolSet } from 'ai'
-import type { ContextUsageInfo } from '../events.ts'
+import type { ModelMessage } from 'ai'
 import type { ModelCapabilities } from '../providers/registry.ts'
 
 /**
@@ -75,40 +74,6 @@ export function estimateMessageTokens(message: ModelMessage): number {
 /** 粗估一组已经投影到 Provider 边界的消息。 */
 export function estimateMessagesTokens(messages: readonly ModelMessage[]): number {
   return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)
-}
-
-/**
- * 估算一次真实模型请求的固定开销。工具 schema 使用 AI SDK 将要发送的 JSON Schema；
- * 单个异常 schema 只退化为名称与说明估算，计量本身不能阻断模型请求。
- */
-export async function estimateRequestContextOverhead(
-  systemPrompt: string,
-  tools: ToolSet | undefined,
-): Promise<Pick<
-  ContextUsageInfo['breakdown'],
-  'systemPromptTokens' | 'toolTokens'
->> {
-  const toolTokens = await Promise.all(
-    Object.entries(tools ?? {}).map(async ([name, tool]) => {
-      if (tool.type === 'provider') {
-        return estimateTextTokens(JSON.stringify({ name, id: tool.id, args: tool.args }))
-      }
-      const description = typeof tool.description === 'string' ? tool.description : ''
-      try {
-        return estimateTextTokens(JSON.stringify({
-          name,
-          description,
-          inputSchema: await asSchema(tool.inputSchema).jsonSchema,
-        }))
-      } catch {
-        return estimateTextTokens(`${name}\n${description}`)
-      }
-    }),
-  )
-  return {
-    systemPromptTokens: estimateTextTokens(systemPrompt),
-    toolTokens: toolTokens.reduce((sum, tokens) => sum + tokens, 0),
-  }
 }
 
 export interface TokenBaseline {

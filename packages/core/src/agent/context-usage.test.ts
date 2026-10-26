@@ -29,6 +29,7 @@ describe('上下文用量的请求与恢复口径', () => {
       assert.ok(names.includes('ToolSearch'))
       assert.equal(names.includes('CaptureScreenshot'), local)
       assert.equal(initial.breakdown.toolTokens, requestToolTokens(model))
+      assert.deepEqual(initial.details.tools, { builtIn: initial.breakdown.toolTokens, mcp: 0 })
       assert.equal(latestUsage(events).breakdown.toolTokens, initial.breakdown.toolTokens)
       assert.equal(latestUsage(events).usedTokens, 50_100, '响应后由 Provider usage 校准总量')
 
@@ -47,6 +48,30 @@ describe('上下文用量的请求与恢复口径', () => {
       assert.equal(reopened.usedTokens, sumBreakdown(reopened), '冷恢复没有 Provider 基线，使用完整估算')
       assert.equal(await restored.handleUserMessage('继续'), 'completed')
       assert.equal(latestUsage(events).breakdown.toolTokens, initial.breakdown.toolTokens)
+    })
+  }
+
+  for (const mode of ['append', 'replace'] as const) {
+    it(`${mode} 模式在初始化和实际请求中使用同一自定义 System 快照计量`, async t => {
+      const content = '只使用当前任务提供的规则。'
+      const { session, events, model } = await fixture(t, false, { mode, content })
+      await session.initializeContextUsage()
+      const initial = latestUsage(events)
+      const requests: ContextUsageInfo[] = []
+      const doStream = model.doStream.bind(model)
+      model.doStream = async options => {
+        requests.push(latestUsage(events))
+        return doStream(options)
+      }
+      await session.handleUserMessage('你好')
+      const system = model.doStreamCalls[0]!.prompt[0]!
+      assert.ok(system.role === 'system')
+      assert.equal(initial.details.system.mode, mode)
+      assert.equal(initial.details.system.custom, estimateTextTokens(content))
+      assert.equal(initial.details.system.builtIn === 0, mode === 'replace')
+      assert.equal(initial.breakdown.systemPromptTokens, estimateTextTokens(system.content))
+      assert.deepEqual(requests[0]!.details.system, initial.details.system)
+      assert.deepEqual(latestUsage(events).details.system, initial.details.system)
     })
   }
 
@@ -140,7 +165,7 @@ describe('上下文用量的请求与恢复口径', () => {
   })
 })
 
-async function fixture(t: TestContext, local: boolean) {
+async function fixture(t: TestContext, local: boolean, customSystemPrompt?: AgentSessionOptions['customSystemPrompt']) {
   const temporaryDirectory = await realpath(tmpdir())
   const root = await mkdtemp(join(temporaryDirectory, 'whycode-context-usage-'))
   t.after(async () => {
@@ -168,7 +193,7 @@ async function fixture(t: TestContext, local: boolean) {
   const options = {
     model: entry, providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: root, osPlatform: local ? 'win32' : 'linux' },
-    sessionRecorder, mcpRuntime,
+    sessionRecorder, mcpRuntime, customSystemPrompt,
     captureScreenshot: local ? async () => { throw new Error('unused') } : undefined,
     emit: (event: CoreEvent) => events.push(event), requestApproval: async () => ({ approved: false }),
   } satisfies AgentSessionOptions

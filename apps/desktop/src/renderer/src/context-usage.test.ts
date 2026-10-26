@@ -13,6 +13,11 @@ describe('上下文圆环投影', () => {
         toolTokens: 8_000,
         messageTokens: 20_000,
       },
+      details: {
+        system: { builtIn: 2_000, custom: 0, mode: 'off' },
+        tools: { builtIn: 8_000, mcp: 0 },
+        messages: { agents: 0, subagents: 0, skills: 0, context: 20_000 },
+      },
     })
 
     assert.equal(presentation?.percent, 29)
@@ -34,18 +39,33 @@ describe('上下文圆环投影', () => {
       contextWindow: 0,
       autoCompactThreshold: 0,
       breakdown: { systemPromptTokens: 0, toolTokens: 0, messageTokens: 1 },
+      details: {
+        system: { builtIn: 0, custom: 0, mode: 'off' },
+        tools: { builtIn: 0, mcp: 0 },
+        messages: { agents: 0, subagents: 0, skills: 0, context: 1 },
+      },
     }), null)
     assert.equal(contextUsagePresentation({
       usedTokens: 150_000,
       contextWindow: 100_000,
       autoCompactThreshold: 80_000,
       breakdown: { systemPromptTokens: 0, toolTokens: 0, messageTokens: 150_000 },
+      details: {
+        system: { builtIn: 0, custom: 0, mode: 'off' },
+        tools: { builtIn: 0, mcp: 0 },
+        messages: { agents: 0, subagents: 0, skills: 0, context: 150_000 },
+      },
     })?.percent, 100)
     assert.equal(contextUsagePresentation({
       usedTokens: 85_000,
       contextWindow: 100_000,
       autoCompactThreshold: 80_000,
       breakdown: { systemPromptTokens: 5_000, toolTokens: 10_000, messageTokens: 70_000 },
+      details: {
+        system: { builtIn: 5_000, custom: 0, mode: 'off' },
+        tools: { builtIn: 10_000, mcp: 0 },
+        messages: { agents: 0, subagents: 0, skills: 0, context: 70_000 },
+      },
     })?.autoCompactPending, true)
     assert.equal(formatContextTokens(75_300), '75.3K')
     assert.equal(formatContextTokens(262_000), '262K')

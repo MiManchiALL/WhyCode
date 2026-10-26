@@ -5,8 +5,8 @@ import { z } from 'zod'
 import {
   estimateContextTokens,
   estimateMessageTokens,
-  estimateRequestContextOverhead,
 } from './tokens.ts'
+import { estimateRequestContextOverhead } from './usage.ts'
 
 describe('视觉上下文估算', () => {
   it('页面图不按 Base64 字符计费，并为高分辨率页面保留固定预算', () => {

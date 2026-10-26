@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
-import type { CoreEvent } from '../events.ts'
+import { estimateTextTokens } from '../context/tokens.ts'
+import type { ContextUsageInfo, CoreEvent } from '../events.ts'
 import type { McpConfiguration } from '../mcp/config.ts'
 import { MCP_TOOL_SEARCH_NAME, McpSessionRuntime } from '../mcp/runtime.ts'
 import type { ModelEntry } from '../providers/registry.ts'
@@ -38,8 +39,13 @@ describe('AgentSession MCP 生命周期', () => {
     let call = 0
     const visibleToolNames: string[][] = []
     const approvalToolNames: string[] = []
+    const events: CoreEvent[] = []
+    const usages: ContextUsageInfo[] = []
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
+        const event = events.findLast(event => event.type === 'context-usage')
+        assert.ok(event?.type === 'context-usage' && event.usage)
+        usages.push(event.usage)
         call++
         const tools = (options.tools ?? []).flatMap((tool) =>
           tool.type === 'function' ? [tool.name] : [])
@@ -65,7 +71,7 @@ describe('AgentSession MCP 生命周期', () => {
       promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       mcpRuntime: runtime,
       sessionRecorder: recorder,
-      emit: () => {},
+      emit: event => events.push(event),
       requestApproval: async (request) => {
         approvalToolNames.push(request.toolName)
         return { approved: true }
@@ -73,6 +79,18 @@ describe('AgentSession MCP 生命周期', () => {
     })
     try {
       assert.equal(await session.handleUserMessage('用 MCP 回显 session'), 'completed')
+      assert.equal(usages[0]!.details.tools.mcp, 0)
+      assert.ok(usages[1]!.details.tools.mcp > 0)
+      for (const [index, request] of model.doStreamCalls.entries()) {
+        const expected = { builtIn: 0, mcp: 0 }
+        for (const tool of request.tools ?? []) {
+          assert.ok(tool.type === 'function')
+          expected[tool.name.startsWith('Mcp__') ? 'mcp' : 'builtIn'] += estimateTextTokens(JSON.stringify({
+            name: tool.name, description: tool.description ?? '', inputSchema: tool.inputSchema,
+          }))
+        }
+        assert.deepEqual(usages[index]!.details.tools, expected)
+      }
       assert.equal(visibleToolNames[0]?.includes(MCP_TOOL_SEARCH_NAME), true)
       assert.equal(
         visibleToolNames[0]?.some((name) => name.startsWith('Mcp__')),
