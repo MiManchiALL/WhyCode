@@ -7,6 +7,7 @@ import type { ImageAttachment, ImageTransform } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ToolFileChange } from './file-changes.ts'
 import type { WorkspaceIO } from '../workspace/io.ts'
+import type { SubagentDefinitionSnapshot } from '../subagents/types.ts'
 
 /**
  * WhyCode 工具接口。内置工具继续用 Zod；运行时工具可直接使用带验证器的 JSON Schema。
@@ -74,6 +75,8 @@ export interface ToolContext {
   /** 当前父回合与工具调用的稳定身份；异步宿主任务用它建立可追溯所有权。 */
   turnId?: string
   toolCallId?: string
+  /** 当前模型请求冻结的定义；启动工具不能另读磁盘改变本步能力。 */
+  subagentDefinitions?: readonly SubagentDefinitionSnapshot[]
   /** 长时工具的增量输出回调（终端输出等） */
   onProgress?: (output: string) => void
 }

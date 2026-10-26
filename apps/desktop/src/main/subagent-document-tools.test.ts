@@ -10,7 +10,7 @@ import {
 import { documentProcessors, SMALL_JPEG } from './subagent-document-fixture.ts'
 import { SubagentService } from './subagent-service.ts'
 import { SubagentStorage } from './subagent-storage.ts'
-import { createFixture, finalStream, toolContext, toolStream, waitFor } from './subagent-test-fixture.ts'
+import { createFixture, finalStream, toolStream, waitFor } from './subagent-test-fixture.ts'
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>
 
@@ -53,6 +53,24 @@ describe('子代理文档与视觉工具', () => {
           assert.equal(names.includes(name), false, name)
         }
         assert.ok(names.includes('CreateTaskPlan'))
+        const definition = fixture.toolContext('turn', 'call').subagentDefinitions.find(item => item.name === role)!
+        const allowed = new Set([
+          ...definition.toolNames, 'CreateTaskPlan', 'ResumeTaskPlan', 'UpdateTaskItem', 'CloseTaskPlan',
+        ])
+        assert.ok(names.every(name => allowed.has(name)), '实际工具只能收窄目录声明的范围')
+        const system = JSON.stringify(fixture.modelCalls[0]!.prompt[0])
+        assert.doesNotMatch(system, /通用型桌面 AI Agent|首次调用前必须|移动或重命名文件使用/)
+        if (role === 'explore') {
+          assert.match(system, /从宽到窄搜索/)
+          assert.doesNotMatch(system, /RunCommand|不要用命令|命令绕过/)
+        } else if (role === 'reviewer') {
+          assert.match(system, /独立审查和验证/)
+          assert.match(system, /不得修改、删除或移动被审查的项目内容/)
+          assert.doesNotMatch(system, /修改已有文本用 EditFile/)
+        } else {
+          assert.match(system, /独立完成边界明确的委派/)
+          assert.match(system, /修改已有文本用 EditFile/)
+        }
         await fixture.service.close()
       })
     }
@@ -111,7 +129,7 @@ describe('子代理文档与视觉工具', () => {
     }
     await assert.rejects(coldService.attachmentDirectory(randomUUID(), id))
     const tools = coldService.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-    const result = await tools[1]!.execute({ subagent_id: id, prompt: '继续核验' }, toolContext('next', 'next'))
+    const result = await tools[1]!.execute({ subagent_id: id, prompt: '继续核验' }, fixture.toolContext('next', 'next'))
     assert.equal(result.isError, false)
     await waitFor(() => fixture.settlements.length === 2)
     assert.equal(fixture.settlements[1]?.outcome, 'completed')
@@ -146,7 +164,7 @@ describe('子代理文档与视觉工具', () => {
     await fixture.service.close()
     const coldService = new SubagentService(fixture.serviceOptions)
     const tools = coldService.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-    const continued = await tools[1]!.execute({ subagent_id: id, prompt: '读取已保存的 PDF' }, toolContext('next', 'next'))
+    const continued = await tools[1]!.execute({ subagent_id: id, prompt: '读取已保存的 PDF' }, fixture.toolContext('next', 'next'))
     assert.equal(continued.isError, false, continued.data)
     await waitFor(() => fixture.settlements.length === 2)
     assert.equal(fixture.settlements[1]?.outcome, 'completed')
@@ -175,7 +193,7 @@ describe('子代理文档与视觉工具', () => {
     manifest.definition.toolNames = ['ReadFile']
     await storage.writeManifest(manifest)
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-    await tools[1]!.execute({ subagent_id: id, prompt: '继续' }, toolContext('next', 'next'))
+    await tools[1]!.execute({ subagent_id: id, prompt: '继续' }, fixture.toolContext('next', 'next'))
     await waitFor(() => fixture.settlements.length === 2)
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
     assert.ok(names.includes('ReadFile'))
@@ -208,8 +226,8 @@ describe('子代理文档与视觉工具', () => {
 async function launch(fixture: Fixture, role = 'explore'): Promise<string> {
   const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
   const result = await tools[0]!.execute({
-    agent_id: role, description: '核验文档', prompt: '检查文档内容与版式',
-  }, toolContext('turn-doc', 'start-doc'))
+    name: role, description: '核验文档', prompt: '检查文档内容与版式',
+  }, fixture.toolContext('turn-doc', 'start-doc'))
   assert.equal(result.isError, false, result.data)
   const id = result.data.match(/[0-9a-f-]{36}/u)?.[0]
   assert.ok(id)

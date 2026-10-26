@@ -17,7 +17,7 @@ System 只包含会话内稳定内容：
 - 权限/讨论模式的稳定说明；
 - 当前 Provider 能力决定的少量协议变体。
 
-以下内容禁止拼进 System：TaskPlanState、日期时间、sessionId、随机数、当前进度、后台通知、项目指令、Skill 目录/正文和每请求变化的工具状态。它们必须使用版本化内部消息、工具结果或请求尾部投影，以保持缓存前缀稳定。
+以下内容禁止拼进 System：TaskPlanState、日期时间、sessionId、随机数、当前进度、后台通知、项目指令、子代理定义目录、Skill 目录/正文和每请求变化的工具状态。它们必须使用版本化内部消息、工具结果或请求尾部投影，以保持缓存前缀稳定。
 
 自定义 System、项目指令、Skill 和普通用户要求的优先级与生命周期不同，不能互相冒充或绕过权限。
 
@@ -52,13 +52,14 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 1. 会话冻结的 System；
 2. 最新项目指令内部 user 消息；
-3. 当前根任务冻结的 Skill 目录内部 user 消息；
-4. compact summary 与原始活动历史；
-5. 当前运行态内部提醒、canonical TaskPlanState；
-6. 最新真实 user、assistant、tool 内容及当前 turn 子代理状态投影；
-7. 当前激活 Skill 正文，以及本轮已加载的 Browser 指引（§3.4）。
+3. 子代理定义目录基线内部 user 消息；
+4. 当前根任务冻结的 Skill 目录内部 user 消息；
+5. compact summary 与原始活动历史，目录增量保留在各自出现的位置；
+6. 当前运行态内部提醒、canonical TaskPlanState；
+7. 最新真实 user、assistant、tool 内容及当前 turn 子代理状态投影；
+8. 当前激活 Skill 正文，以及本轮已加载的 Browser 指引（§3.4）。
 
-控制消息必须使用不可与普通用户文本混淆的版本化容器，并明确“不是新的用户要求”。配置或控制状态的同一语义只能存在一个活动版本；旧版本可以留在 append-only 审计事件中，但不得同时发给模型。日期提醒的历史时点语义见 §1.8。
+控制消息必须使用不可与普通用户文本混淆的版本化容器，并明确“不是新的用户要求”。配置或控制状态的同一语义只能有一个当前解释。项目指令替换旧活动版本；子代理目录由基线及后续增量共同解释（§6.2）；日期提醒保留历史时点语义（§1.8）。
 
 用户从文件树引用的路径属于普通 user 文本，格式为 `[名称](<完整路径>)`，目录目标以 `/` 结尾。SSH 引用保留服务器路径；路径和名称按 Markdown 语法转义，图标及名称缩略只属于显示层。引用不会自动注入文件正文、目录清单、附件或控制消息，模型按用户任务通过已有工具访问。
 
@@ -106,7 +107,7 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 ```
 
 - 项目、用户和系统目录均从工作区所属设备读取；来源和扫描顺序见文档二 §11.1。
-- 同名项保留不同 ID，不做隐式覆盖。目录按稳定顺序和 revision 进入项目指令之后、历史之前；模型目录预算最多为上下文的 2%。
+- 同名项保留不同 ID，不做隐式覆盖。目录按稳定顺序和 revision 进入项目指令与子代理目录基线之后、历史之前；模型目录预算最多为上下文的 2%。
 - `Skill {skillId,resourcePath?}` 只读取当前冻结目录。主 `SKILL.md` 激活后，其完整正文按激活顺序投影到请求尾部；工具原结果从下一请求起替换为稳定占位，避免双份正文。
 - 当前激活状态以本次请求尾部的 `<whycode-active-skill>` 正文为准；没有该正文即当前没有已激活的 Skill，历史调用不代表当前激活。根任务结束（含用户中断）即清除活动正文。执行或继续用户指定的 Skill 任务前，须先通过 Skill 工具加载并激活 SKILL.md；读取或使用其配套资源前也须确保该 Skill 当前已激活，已激活则直接遵循其流程。
 - 配套资源按 Skill 指引选用合适的工具。`Skill(resourcePath)` 读取包内文本须使用相对路径，拒绝绝对路径、`.`、`..`、可疑 Windows 路径、符号链接逃逸、非 UTF-8 和超过 512 KiB 的文本。
@@ -127,11 +128,11 @@ Renderer 对“过程/最终正文”的判断只依赖已提交步骤中是否�
 
 ### 1.9 上下文用量
 
-`ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此在消息分项与总量中均不计入。
+`ContextUsageInfo` 只描述当前 Main：`usedTokens/contextWindow` 驱动圆环，`autoCompactThreshold` 表示下一次模型请求前的压缩边界，`breakdown.systemPromptTokens/toolTokens/messageTokens` 提供近似解释。`messageTokens` 的语义是此刻模型请求中可见的 messages：真实请求已经装配时按 Provider 边界副本估算，空闲时投影下一次普通请求。普通 Main 的子代理目录基线、待追加增量与 Skill 目录属于该投影；活动 Skill 正文、当前根任务保留的 Skill 结果和子代理 turn 状态只在各自有效期内计入，根任务结束后必须消失。内部 MCP 状态不发给模型，因此在消息分项与总量中均不计入。
 
 工具分项与模型请求共用工具组装。初始化和冷恢复计入当前可用的内置工具、`ToolSearch` 与已解析的 MCP schema；SSH 等工作区能力差异按实际可用工具体现，不使用固定 token 常量。空闲计量只读取 MCP 目录快照，不启动或连接服务；冷恢复中尚未重新解析的 MCP 工具在真实请求恢复成功后、压缩判断前计入。实际检索、目录变化、模型能力变化可以改变工具用量，单纯开始或结束回复不应遗漏同一组工具。
 
-每次普通请求在当前输入、日期提醒、子代理状态、Skill、MCP 与附件完成装配及 Provider 适配后计量；该次 `usedTokens` 同时用于显示与压缩判断。压缩改变活动消息后重新装配与计量，再发出模型请求。有 Provider usage 时使用真实基线并补估其后稳定提交的消息、当前请求投影变化及 System/工具目录相对该次请求的增减；没有基线时才估算 System、工具目录和消息。基线同时保留逻辑投影和实际请求投影的差额：空闲估算无需读取附件，请求前则按实际展开内容计算，已被 usage 覆盖的页面不能重复计入。基线与其覆盖的消息边界、固定开销和投影差额一起更新、一起失效，工具开销不重复累计。分项不要求机械相加等于 Provider 总量。项目指令、日期提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
+每次普通请求在当前输入、日期提醒、子代理目录与状态、Skill、MCP 与附件完成装配及 Provider 适配后计量；该次 `usedTokens` 同时用于显示与压缩判断。压缩改变活动消息后重新装配与计量，再发出模型请求。有 Provider usage 时使用真实基线并补估其后稳定提交的消息、当前请求投影变化及 System/工具目录相对该次请求的增减；没有基线时才估算 System、工具目录和消息。基线同时保留逻辑投影和实际请求投影的差额：空闲估算无需读取附件，请求前则按实际展开内容计算，已被 usage 覆盖的页面不能重复计入。基线与其覆盖的消息边界、固定开销和投影差额一起更新、一起失效，工具开销不重复累计。分项不要求机械相加等于 Provider 总量。项目指令、子代理目录及增量、日期提醒、任务状态、打断标记与后台终态等一旦稳定提交即属于长期 messages；BTW、Renderer 事件和仅供恢复的内部状态不计入。
 
 `context-usage` 是可空 live CoreEvent。Desktop runtime 保存最新值并进入恢复快照，Renderer 不读取模型能力或历史自行重算；B/C 的独立窗口不计入。该状态不进入 ViewEvent、JSONL、摘要或 Fork，也不增加会话 schema。模型切换成功后才使旧值失效，展示计量失败只隐藏指示器，不能阻断普通请求。idle 会话即使最终输出越过阈值，也只说明“下次请求前压缩”，不额外制造模型调用；自动压缩连续失败必须显式提示。
 
@@ -241,9 +242,9 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `AskUserQuestion` | `{questions:[...]}`，1～6 问；每题标题、问题与 2～4 个互斥选项 |
 | `Present` | `{files:[{path,description?}]}`；声明本次最终回答的成品文件，精确约束见 §3.9 |
 | `Skill` | `{skillId,resourcePath?}`；只读当前根任务冻结 Skill |
-| `Subagent` | `{agent_id,description,prompt}`；异步启动并立即返回稳定 UUID |
+| `Subagent` | `{name,description,prompt}`；按唯一定义名称启动，立即返回实例的稳定 `subagent_id` |
 | `SendSubagentMessage` | `{subagent_id,prompt}`；仅继续当前父会话已终态子代理 |
-| `ListSubagents` | `{}`；列出当前父会话保留子代理的 agent_id、稳定 ID、任务描述与状态 |
+| `ListSubagents` | `{}`；列出当前父会话保留实例的 name、subagent_id、任务描述与状态 |
 
 `Glob` 与 `Grep` 每次执行共用 30 秒总预算，覆盖执行内的目录校验、搜索和回退；本地与 SSH 相同，不开放单次超时参数。到期取消搜索进程或匹配 Worker，返回明确的失败工具结果供模型继续处理；不把超时视为无匹配、成功的部分结果或用户停止，不取消所属 Agent 回合。原生搜索按路径排序以稳定分页；无路径分隔符的 glob 匹配各层文件名。
 
@@ -404,7 +405,7 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 专用摘要只回答：原始请求、早期进展、后续所需上下文。它不能替代常规历史摘要，也不包含尾部已逐字保留的内容。一次压缩请求可以要求模型分别输出两份内容；宿主分字段校验后再重建。
 
-重复压缩只压当前会发送给模型的活动上下文，增量更新摘要，不回读完整旧 transcript。项目指令、Skill 正文、MCP state、TaskPlanState 和自定义 System 不交给摘要模型续命，而在压缩后从权威状态重建。
+重复压缩只压当前会发送给模型的活动上下文，增量更新摘要，不回读完整旧 transcript。项目指令、子代理目录、Skill 正文、MCP state、TaskPlanState 和自定义 System 不交给摘要模型续命，而在压缩后从权威状态重建。子代理目录基线与全部增量均从摘要输入和保留尾部移除，完整压缩成功后重读配置并注入唯一基线；microcompact 不合并这些消息。完整压缩的活动历史在快照写稳后才替换，保存失败不采纳新摘要或目录基线。
 
 ## 5. TaskPlan 契约
 
@@ -470,11 +471,27 @@ full compact 以 token 而不是“至少保留几条文本消息”为边界：
 
 工程单源：`packages/core/src/subagents/`。
 
-父 Main 请求中提供稳定 `<available_subagents>`，当前画像为 explore/reviewer/general。`Subagent` 以 `description` 保存本次任务的 3～5 词语义名称并立即返回 subagent ID；`ListSubagents` 可在不暴露完整 prompt、结果或 transcript 的前提下重新发现当前会话的既有子代理。终态由运行时以 settlement 通知父会话，不依赖子模型主动调用汇报工具。settlement 的 outcome 为 `completed | error | aborted | limit | refusal`，结果最多保留 Unicode 安全的 48,000 字符。
+定义来自内置 explore/reviewer/general、本机用户目录 `~/.whycode/agents/*.md` 和当前工作区 `.whycode/agents/*.md`。Markdown 的 YAML frontmatter 仅接受必填 `name`、`description` 与可选 `profile`，正文作为私有系统指令。`name` 与文件名一致，为不超过 64 字符的小写字母、数字和单连字符组合，须在有效目录内唯一；同名自定义项全部排除并报告诊断，内置名称不能覆盖。`profile` 仅为 explore/reviewer/general，省略时为 general，固定工具上限；不接受 `tools` 或定义 ID。
+
+普通 Main 在项目指令之后、Skill 目录之前获得 `<whycode-subagent-catalog version="1">` 内的 `<available_subagents>`。每项只包含 `name`、`description` 和 `Tools`，不暴露 profile、私有指令或来源路径。`Tools` 列出该定义允许的工具范围及独立计划工具；实际提供项仍按子模型、宿主与资源能力收窄，调用沿用继承权限。
+
+目录与启动使用同一份请求快照：
+
+- 每次普通模型请求前重新读取有界目录；目录级读取失败阻止该请求，单个无效定义排除并报告诊断。
+- 缺少基线时注入初始目录；已有基线时保持顶部字节不变，新增、删除或同名公开信息变化仅在消息尾部追加 `<whycode-subagent-catalog-delta version="1">`，载荷为 `added/updated/removed`。只改私有指令不产生公开增量。
+- 通知与对应完整模型响应在同一稳定边界提交；未提交的失败或取消响应不记为已通知。启动工具从该请求的定义快照按 name 解析，不再独立读取磁盘；请求中途修改在下一请求生效。
+- 已通知状态仅由当前有效历史中的基线和增量还原，不保存独立的“已通知名称”集合。回滚或 Fork 移除通知而配置仍存在时，下一请求补发；冷恢复沿用相同规则。目录变化不单独唤醒模型。
+- 只有成功完整压缩才合并更新顶部基线，原基线和全部增量不参与摘要；microcompact、普通请求和恢复均不合并。
+
+`Subagent` 用 `name` 选择定义，同一 name 可同时启动多个实例；本次任务的 `description` 保存 3～5 词短描述，返回独立稳定的 `subagent_id`。`ListSubagents` 只提供实例的 name、subagent_id、任务描述和状态，不暴露完整 prompt、结果或 transcript；后续交互使用实例 ID。删除或修改定义不改变已创建实例的冻结快照。
+
+终态由运行时以 settlement 通知父会话，不依赖子模型主动调用汇报工具。settlement 的 outcome 为 `completed | error | aborted | limit | refusal`，结果最多保留 Unicode 安全的 48,000 字符。
 
 每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
 
 内置 Explore、Reviewer、General 均可用 `ReadFile` 读取文本与 PDF；具备视觉能力时可读取图片与 PDF 页面图，并提供本地 `CaptureScreenshot`。Reviewer 和 General 加载内置 Office Skill 时可自动准备环境，再通过命令执行工作流；Explore 没有命令权限，只获得环境未准备的说明。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
+
+子代理 System 由定义指令、独立上下文与交付约束、环境、来源引用和独立计划规则组成，不拼入 Main 的用户沟通与通用写入指引。Explore 聚焦定向搜索和事实定位；Reviewer 独立审查并运行必要验证，禁止修改项目，临时验证产物限自己的 scratch；General 按委派完成实现、调查或验证并报告实际结果。
 
 文档委派提供可访问的文件路径；父会话的 PDF 附件引用不能直接作为子代理附件使用。子代理自己通过 WebFetch 导入的 PDF 属于其独立会话，可经 `ReadFile` 读取并在后续激活中继续使用。无法查看页面图时，只报告文字或结构证据，视觉核验交给具备相应能力的代理。
 

@@ -1,5 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { isProjectInstructionsMessage } from '../instructions/project.ts'
+import { isSubagentCatalogSnapshotMessage } from '../subagents/context.ts'
 import type { ActivatedSkill, SkillTurnSnapshot } from './types.ts'
 import { escapeSkillXmlAttribute } from './xml.ts'
 
@@ -51,7 +52,10 @@ export function applySkillContext(
   const catalogReminder = catalog ? skillCatalogMessage(catalog) : null
   const activeReminder = activeSkillsMessage(activeSkills)
   if (!catalogReminder && !activeReminder) return projected
-  const firstConversationIndex = projected[0] && isProjectInstructionsMessage(projected[0]) ? 1 : 0
+  let firstConversationIndex = projected[0] && isProjectInstructionsMessage(projected[0]) ? 1 : 0
+  if (projected[firstConversationIndex] && isSubagentCatalogSnapshotMessage(projected[firstConversationIndex]!)) {
+    firstConversationIndex++
+  }
   return [
     ...projected.slice(0, firstConversationIndex),
     ...(catalogReminder ? [catalogReminder] : []),

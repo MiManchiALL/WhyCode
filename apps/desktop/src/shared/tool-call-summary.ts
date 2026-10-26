@@ -113,7 +113,7 @@ function knownToolSummary(
     case 'CloseTaskPlan':
       return prefixed('plan ID', shortId(text(input, 'plan_id')))
     case 'Subagent':
-      return text(input, 'agent_id')
+      return text(input, 'name')
     case 'SendSubagentMessage':
       return shortId(text(input, 'subagent_id'))
     case 'ListSubagents':

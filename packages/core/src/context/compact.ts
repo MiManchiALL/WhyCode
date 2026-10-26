@@ -22,6 +22,7 @@ import {
   type SummarySource,
 } from './compact-boundary.ts'
 import { estimateTextTokens } from './tokens.ts'
+import { withoutSubagentCatalog } from '../subagents/context.ts'
 import { modelRequestError, withModelRequestRetry, type ModelRequestRetry } from '../providers/model-request.ts'
 
 const REINJECT_MAX_FILES = 5
@@ -104,11 +105,11 @@ export async function compactMessages(
   io: WorkspaceIO = localWorkspaceIO,
 ): Promise<CompactResult> {
   const projectInstructions = findProjectInstructionsMessage(messages)
-  const conversationMessages = applyProjectInstructions(messages, null)
+  const conversationMessages = withoutSubagentCatalog(applyProjectInstructions(messages, null))
   const preparation = prepareCompaction(conversationMessages)
   if (!preparation) {
     return {
-      messages: applyProjectInstructions(conversationMessages, projectInstructions),
+      messages: [...messages],
       summaryText: '',
     }
   }
@@ -141,7 +142,7 @@ export async function compactMessages(
 
   if (!historySummary && !turnPrefixSummary) {
     return {
-      messages: applyProjectInstructions(conversationMessages, projectInstructions),
+      messages: [...messages],
       summaryText: '',
     }
   }

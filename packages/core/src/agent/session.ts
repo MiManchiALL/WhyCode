@@ -147,13 +147,20 @@ import { BrowserTurnContext, type BrowserDriver } from '../tools/browser/index.t
 import { createSkillTool, SKILL_TOOL_NAME } from '../tools/skill/index.ts'
 import { createCommandTaskNotificationMessage } from '../tools/background-command/notification.ts'
 import type { CommandTaskTerminalNotification } from '../tools/background-command/types.ts'
-import type { SubagentDefinitionCatalogService } from '../subagents/catalog.ts'
+import {
+  projectSubagentCatalog,
+  rebuildSubagentCatalog,
+  subagentCatalogUpdate,
+  withoutSubagentCatalog,
+} from '../subagents/context.ts'
 import { createSubagentSettlementMessage } from '../subagents/notification.ts'
 import {
   createSubagentTurnStateMessage,
   hasOutstandingSubagentActivations,
 } from '../subagents/turn-context.ts'
 import type {
+  SubagentDefinitionCatalogSnapshot,
+  SubagentDefinitionSnapshot,
   SubagentPermissionSnapshot,
   SubagentSettlementNotification,
   SubagentTurnState,
@@ -187,6 +194,7 @@ const MAX_COMPACT_FAILURES = 3
 
 interface PreparedRequestContext {
   dateReminder: ModelMessage | null
+  subagentCatalogReminder: ModelMessage | null
   persistentMessages: ModelMessage[]
   messages: ModelMessage[]
   projectionDelta: number
@@ -202,6 +210,7 @@ interface ToolStepContext {
   allowedToolNames?: ReadonlySet<string>
   /** 侧对话保留原有的文本文件读取边界，不创建视觉工具附件。 */
   textOnlyFileReads?: boolean
+  subagentDefinitions?: readonly SubagentDefinitionSnapshot[]
   planExecutionEngaged?: boolean
   onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
   onUserQuestion?: (question: UserQuestion) => void
@@ -249,8 +258,8 @@ export interface AgentSessionOptions {
   skillCatalog?: SkillCatalogService
   /** Skill 实际激活时由宿主准备环境；声明只进入本次正文投影。 */
   prepareSkillRuntime?: PrepareSkillRuntime
-  /** 普通 Main 每个根任务重新扫描的子代理定义目录；子代理自身不传入。 */
-  subagentCatalog?: SubagentDefinitionCatalogService
+  /** 普通 Main 请求边界读取定义和工具上限；子代理自身不传入。 */
+  loadSubagentCatalog?: () => Promise<SubagentDefinitionCatalogSnapshot>
   /** 子代理冷恢复时继承的父权限与已批准规则；角色工具白名单仍可继续收窄。 */
   initialPermission?: SubagentPermissionSnapshot
   /** 默认开启；子代理和协议运行体在构造时物理关闭。 */
@@ -421,6 +430,8 @@ export class AgentSession {
   private loopHealth = new LoopHealthMonitor()
   private readonly skillTurn: SkillTurnContext
   private readonly browserTurn = new BrowserTurnContext()
+  /** 最新一次目录读取；已通知状态始终从有效消息历史派生。 */
+  private subagentCatalog: SubagentDefinitionCatalogSnapshot | null = null
   /** 协商事务期间由 Orchestrator 关闭，避免协议内或执行包中途向用户提问。 */
   private userQuestionsEnabled: boolean
   /** 最近一个稳定模型步骤的结束原因，供一次性子代理激活映射可靠终态。 */
@@ -432,7 +443,10 @@ export class AgentSession {
   /** 独立模型会话的传输身份；恢复沿用会话 ID，内存代理按实例分配。 */
   private readonly transportSessionId: string
   constructor(options: AgentSessionOptions) {
-    this.options = options
+    this.options = {
+      ...options,
+      promptContext: { ...options.promptContext, subagentsEnabled: Boolean(options.loadSubagentCatalog) },
+    }
     this.transportSessionId = options.sessionRecorder?.sessionId ?? randomUUID()
     this.userQuestionsEnabled = options.userQuestionsEnabled ?? true
     this.skillTurn = new SkillTurnContext(options.skillCatalog, (skills) => {
@@ -572,6 +586,7 @@ export class AgentSession {
   private async prepareContextUsage(): Promise<void> {
     // 空闲态也按“下一次普通请求”投影 Skill 目录与 Skill 工具；Fork/恢复不能只算持久消息。
     if (!this.activeModelSelection) await this.prepareSkillTurn([])
+    if (!this.activeModelSelection) await this.refreshSubagentCatalog()
     const tools = this.buildToolSet(
       new AbortController().signal,
       { emit: this.options.emit, loopHealth: this.loopHealth },
@@ -1454,7 +1469,6 @@ export class AgentSession {
         recoverable: true,
       }),
     })
-    await this.refreshSubagentCatalog()
   }
 
   private skillRuntimeContext(abortSignal: AbortSignal, onProgress?: (message: string) => void): SkillRuntimeContext {
@@ -1467,23 +1481,22 @@ export class AgentSession {
   }
 
   private async refreshSubagentCatalog(): Promise<void> {
-    const catalog = this.options.subagentCatalog
-    if (!catalog || this.options.promptContext.discussion || this.options.promptContext.subagent) {
+    const load = this.options.loadSubagentCatalog
+    if (!load || this.options.promptContext.discussion || this.options.promptContext.subagent || this.protocolRound) {
+      this.subagentCatalog = null
       return
     }
-    try {
-      const snapshot = await catalog.snapshot(this.options.promptContext.projectDir, this.options.workspaceIO)
-      this.options = {
-        ...this.options,
-        promptContext: { ...this.options.promptContext, subagents: snapshot },
-      }
-    } catch (error) {
+    const snapshot = await load()
+    const diagnostics = JSON.stringify(snapshot.diagnostics) === JSON.stringify(this.subagentCatalog?.diagnostics)
+      ? [] : snapshot.diagnostics
+    for (const diagnostic of diagnostics) {
       this.options.emit({
         type: 'error',
-        message: `子代理定义目录刷新失败：${error instanceof Error ? error.message : String(error)}`,
+        message: `子代理定义不可用：${diagnostic.path}：${diagnostic.message}`,
         recoverable: true,
       })
     }
+    this.subagentCatalog = snapshot
   }
 
   abort(reason: TurnAbortReason = 'user-cancel', context?: TurnInterruptionContext): void {
@@ -2154,12 +2167,13 @@ export class AgentSession {
         this.options.workspaceIO,
       )
       if (result.summaryText || microcompacted) {
-        this.messages = carryMcpToolState(this.messages, result.messages)
-        await this.refreshProjectInstructions()
-        this.rebuildActivePdfAttachments()
-        await this.persist((recorder) =>
-          recorder.recordSnapshot('compact', this.messages, undefined, this.taskPlan?.stateSnapshot),
+        const messages = await this.prepareCompactedMessages(result.messages, Boolean(result.summaryText), signal)
+        await this.persistRequired((recorder) =>
+          recorder.recordSnapshot('compact', messages, undefined, this.taskPlan?.stateSnapshot),
+          '保存上下文压缩',
         )
+        this.messages = messages
+        this.rebuildActivePdfAttachments()
         this.tokenBaseline = null
         this.compactFailures = 0
         emit({
@@ -2223,7 +2237,7 @@ export class AgentSession {
     let request = prepared
     // 第一级：微清理旧工具输出（改写历史后基线失效，全量重估）
     if (this.microcompactCurrentMessages()) {
-      request = await this.commitAutoCompaction('micro', prepared.usedTokens, abortSignal)
+      request = await this.commitAutoCompaction('micro', prepared.usedTokens, abortSignal, this.messages)
       if (force
         ? estimateMessagesTokens(request.messages) < estimateMessagesTokens(prepared.messages)
         : request.usedTokens < threshold) {
@@ -2256,23 +2270,40 @@ export class AgentSession {
       this.recordAutoCompactFailure()
       return request
     }
-    this.messages = carryMcpToolState(this.messages, result.messages)
-    await this.refreshProjectInstructions()
-    this.rebuildActivePdfAttachments()
-    this.tokenBaseline = null
+    const messages = await this.prepareCompactedMessages(result.messages, true, abortSignal)
+    const compactedRequest = await this.commitAutoCompaction('full', request.usedTokens, abortSignal, messages)
     this.compactFailures = 0
-    return this.commitAutoCompaction('full', request.usedTokens, abortSignal)
+    return compactedRequest
+  }
+
+  /** 重建权威上下文但暂不替换活动历史；快照写稳后才能采纳压缩结果。 */
+  private async prepareCompactedMessages(
+    compacted: ModelMessage[],
+    full: boolean,
+    abortSignal: AbortSignal,
+  ): Promise<ModelMessage[]> {
+    if (full) await this.refreshSubagentCatalog()
+    await this.refreshProjectInstructions()
+    abortSignal.throwIfAborted()
+    const messages = applyProjectInstructions(
+      carryMcpToolState(this.messages, compacted), findProjectInstructionsMessage(this.messages),
+    )
+    return full ? rebuildSubagentCatalog(messages, this.subagentCatalog) : messages
   }
 
   private async commitAutoCompaction(
     level: 'micro' | 'full',
     preTokens: number,
     abortSignal: AbortSignal,
+    messages: ModelMessage[],
   ): Promise<PreparedRequestContext> {
     await this.persistRequired((recorder) =>
-      recorder.recordSnapshot('compact', this.messages, this.activeTurn!.id, this.taskPlan?.stateSnapshot),
+      recorder.recordSnapshot('compact', messages, this.activeTurn!.id, this.taskPlan?.stateSnapshot),
       '保存上下文压缩',
     )
+    this.messages = messages
+    this.rebuildActivePdfAttachments()
+    this.tokenBaseline = null
     const request = await this.prepareRequestContext(abortSignal)
     this.options.emit({
       type: 'context-compacted', level, preTokens, postTokens: request.usedTokens,
@@ -2348,18 +2379,26 @@ export class AgentSession {
     const subagentStateMessage = this.activeSubagentTurnState
       ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
       : null
+    const catalogReminder = this.subagentCatalog ? subagentCatalogUpdate(messages, this.subagentCatalog) : null
     return this.browserTurn.project(this.skillTurn.project(
-      withoutMcpToolState([
+      projectSubagentCatalog(withoutMcpToolState([
         ...messages,
+        ...(catalogReminder ? [catalogReminder] : []),
         ...(subagentStateMessage ? [subagentStateMessage] : []),
-      ]),
+      ])),
     ))
   }
 
   private async prepareRequestContext(abortSignal: AbortSignal): Promise<PreparedRequestContext> {
     abortSignal.throwIfAborted()
+    const subagentCatalogReminder = this.subagentCatalog
+      ? subagentCatalogUpdate(this.messages, this.subagentCatalog) : null
     const dateReminder = currentDateReminder(this.messages, new Date())
-    const persistentMessages = [...this.messages, ...(dateReminder ? [dateReminder] : [])]
+    const persistentMessages = [
+      ...this.messages,
+      ...(subagentCatalogReminder ? [subagentCatalogReminder] : []),
+      ...(dateReminder ? [dateReminder] : []),
+    ]
     const subagentMessage = this.activeSubagentTurnState
       ? createSubagentTurnStateMessage(this.activeSubagentTurnState)
       : null
@@ -2371,6 +2410,7 @@ export class AgentSession {
     const requestProjectionDelta = estimateMessagesTokens(messages) - persistentTokens
     return {
       dateReminder,
+      subagentCatalogReminder,
       persistentMessages,
       messages,
       projectionDelta: estimateMessagesTokens(this.projectContextMessages(persistentMessages)) - persistentTokens,
@@ -2419,8 +2459,10 @@ export class AgentSession {
     const model = this.currentModelSelection().model
     const supportsImages = model.capabilities.supportsImageInput
     const signal = abortSignal ?? new AbortController().signal
+    const catalogMessages = includeActiveContext
+      ? projectSubagentCatalog(messages) : withoutSubagentCatalog(messages)
     const modelMessages = this.browserTurn.project(this.skillTurn.project(
-      withoutMcpToolState(messages),
+      withoutMcpToolState(catalogMessages),
       includeActiveContext,
     ), includeActiveContext)
     const withPdfPages = supportsImages
@@ -2589,6 +2631,8 @@ export class AgentSession {
     let mcpStep: McpStepBinding | null = null
     this.taskPlan?.beginStep()
     try {
+      await this.refreshSubagentCatalog()
+      stepAbort.signal.throwIfAborted()
       mcpStep = await this.options.mcpRuntime?.beginStep(
         this.messages,
         stepAbort.signal,
@@ -2597,22 +2641,23 @@ export class AgentSession {
         this.options.promptContext,
         this.options.customSystemPrompt,
       )
+      const toolContext: ToolStepContext = {
+        emit,
+        loopHealth: this.loopHealth,
+        onToolExecutionStart: (id) => toolExecution!.start(id),
+        onToolExecutionEnd: (event) => toolExecution!.finish(event),
+        planExecutionEngaged,
+        onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
+        onUserQuestion: (question) => { userQuestion = question },
+        onTurnEndingTool: (reason) => { stepControl.toolEndReason = reason },
+        onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
+        onImageAttachments: (id, attachments, transform, limit) =>
+          stepAttachments.acceptImages(id, attachments, transform, limit),
+        onPdfAttachments: (id, attachments) => stepAttachments.acceptPdfs(id, attachments),
+      }
       const requestTools = this.buildToolSet(
         stepAbort.signal,
-        {
-          emit,
-          loopHealth: this.loopHealth,
-          onToolExecutionStart: (id) => toolExecution!.start(id),
-          onToolExecutionEnd: (event) => toolExecution!.finish(event),
-          planExecutionEngaged,
-          onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
-          onUserQuestion: (question) => { userQuestion = question },
-          onTurnEndingTool: (reason) => { stepControl.toolEndReason = reason },
-          onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
-          onImageAttachments: (id, attachments, transform, limit) =>
-            stepAttachments.acceptImages(id, attachments, transform, limit),
-          onPdfAttachments: (id, attachments) => stepAttachments.acceptPdfs(id, attachments),
-        },
+        toolContext,
         mcpStep?.toolDefinitions() ?? [],
       )
       const requestOverhead = await estimateRequestContextOverhead(
@@ -2635,7 +2680,12 @@ export class AgentSession {
         recovery.onRetry()
       }
       stepAbort.signal.throwIfAborted()
-      const { dateReminder, persistentMessages: persistentInputMessages, messages: requestMessages } = request
+      toolContext.subagentDefinitions = this.subagentCatalog?.definitions
+      const { dateReminder, subagentCatalogReminder, persistentMessages: persistentInputMessages, messages: requestMessages } = request
+      const requestReminders = [
+        ...(subagentCatalogReminder ? [subagentCatalogReminder] : []),
+        ...(dateReminder ? [dateReminder] : []),
+      ]
       const result = streamText({
         maxRetries: 0,
         onError: () => {},
@@ -2720,7 +2770,7 @@ export class AgentSession {
       }
       if (hadToolCalls) {
         const head = dehydrateImageMessages([
-          ...(dateReminder ? [dateReminder] : []),
+          ...requestReminders,
           ...canonicalResponseMessages,
         ])
         await this.persistRequired(
@@ -2812,7 +2862,7 @@ export class AgentSession {
       }
       const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
       const committedMessages = dehydrateImageMessages([
-        ...(!toolExecution && dateReminder ? [dateReminder] : []),
+        ...(!toolExecution ? requestReminders : []),
         ...(!toolExecution ? canonicalResponseMessages : []),
         ...stepAttachments.pdfReferences(),
         ...internalMarkers,
@@ -3023,6 +3073,7 @@ export class AgentSession {
           abortSignal,
           ...(this.activeTurn ? { turnId: this.activeTurn.id } : {}),
           toolCallId,
+          subagentDefinitions: context.subagentDefinitions,
           ...(planExecutionEngaged && this.taskPlan?.snapshot
             ? { engagedPlanId: this.taskPlan.snapshot.id }
             : {}),

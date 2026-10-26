@@ -1,9 +1,9 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
-import type { SubagentDefinitionCatalogService } from './catalog.ts'
 import {
   MAX_SUBAGENT_PROMPT_CHARS,
   subagentTaskDescriptionSchema,
+  subagentNameSchema,
   type SubagentContinueRequest,
   type SubagentListEntry,
   type SubagentLaunchRequest,
@@ -20,25 +20,21 @@ export interface SubagentToolHost {
   list(): Promise<SubagentListEntry[]>
 }
 
-export function createSubagentTools(
-  catalog: SubagentDefinitionCatalogService,
-  projectDir: string,
-  host: SubagentToolHost,
-): ToolDefinition[] {
+export function createSubagentTools(host: SubagentToolHost): ToolDefinition[] {
   return [
     buildTool({
       name: SUBAGENT_TOOL_NAME,
       description: '启动一个隔离的子代理处理边界明确的任务',
       prompt: [
         '把可独立并行、需要专门调查或能返回明确交付结果的工作委派给一个可用子代理。',
-        'agent_id 必须来自系统提示词中的 <available_subagents>；工具和权限由该定义及父会话边界固定，不能在调用参数中扩展。',
+        'name 必须来自消息中的 <available_subagents> 及其最新增量通知；它选择子代理定义，同一 name 可以启动多个独立实例。工具和权限由该定义及父会话边界固定，不能在调用参数中扩展。',
         '同一父会话最多并行运行 8 个子代理。工具会立即返回稳定 subagent_id；不要轮询，子代理终态会由 WhyCode 自动注入父会话。',
         'description 使用 3～5 个词概括本次子任务，作为后续发现和复用该子代理的稳定语义名称。',
         '委派必须自包含：交代目标及原因、已知事实和已排除方向、范围与禁区、期望结果及证据形式；实施任务另写明已知文件或符号、预期行为和验收标准，并明确只读或允许修改。',
         '不要把尚未完成的理解和方案选择整体交给子代理，也不要要求其向用户提问或再创建子代理。',
       ].join('\n'),
       inputSchema: z.object({
-        agent_id: z.string().min(1).max(160).describe('可用子代理定义 ID'),
+        name: subagentNameSchema.describe('可用子代理定义的唯一名称'),
         description: subagentTaskDescriptionSchema.describe('本次子任务的 3～5 个词短描述'),
         prompt: z.string().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).describe('自包含的委派任务'),
       }).strict(),
@@ -48,9 +44,8 @@ export function createSubagentTools(
         if (!ctx.turnId || !ctx.toolCallId) {
           return { data: '子代理调用缺少父回合身份', isError: true }
         }
-        const snapshot = await catalog.snapshot(projectDir, ctx.workspaceIO)
-        const definition = snapshot.definitions.find((item) => item.id === input.agent_id)
-        if (!definition) return { data: `未知或已移除的子代理：${input.agent_id}`, isError: true }
+        const definition = ctx.subagentDefinitions?.find((item) => item.name === input.name)
+        if (!definition) return { data: `本次请求没有可用的子代理定义：${input.name}`, isError: true }
         const result = await host.launch({
           definition,
           taskDescription: input.description,
@@ -95,7 +90,7 @@ export function createSubagentTools(
       description: '列出当前父会话保留的子代理及其状态',
       prompt: [
         '查看当前父会话直接拥有的子代理，以便按稳定 ID 复用职责和独立历史。',
-        '结果只包含 agent_id、subagent_id、短描述和状态，不包含完整 prompt、结果或 transcript。',
+        '结果只包含 name、subagent_id、短描述和状态，不包含完整 prompt、结果或 transcript。name 是定义名称，后续交互必须使用实例 subagent_id。',
         '终态会自动送达；不要用此工具轮询正在运行的子代理。',
       ].join('\n'),
       inputSchema: z.object({}).strict(),
@@ -106,7 +101,7 @@ export function createSubagentTools(
         return {
           data: JSON.stringify({
             subagents: subagents.map((subagent) => ({
-              agent_id: subagent.agentId,
+              name: subagent.name,
               subagent_id: subagent.subagentId,
               description: subagent.description,
               status: subagent.status,

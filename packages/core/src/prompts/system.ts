@@ -12,7 +12,6 @@ import {
 import { MANAGE_COMMAND_TOOL_NAME } from '../tools/background-command/constants.ts'
 import { RUN_COMMAND_TOOL_NAME } from '../tools/run-command/index.ts'
 import type { CustomSystemPromptSnapshot } from './custom-system.ts'
-import type { SubagentDefinitionCatalogSnapshot } from '../subagents/types.ts'
 import { BTW_SYSTEM_PROMPT } from './btw.ts'
 import { WEB_SOURCE_CITATION_MARKER } from '../web-source.ts'
 
@@ -31,8 +30,8 @@ export interface PromptContext {
   }
   /** 协商讨论阶段（M3）：当前 Agent 身份与临时工作区 */
   discussion?: { agentId: 'Main' | 'B' | 'C'; scratchDir: string }
-  /** 普通 Main 当前可委派的定义目录；每个根任务重新扫描。 */
-  subagents?: SubagentDefinitionCatalogSnapshot
+  /** 普通 Main 的稳定委派能力；动态目录由独立消息提供。 */
+  subagentsEnabled?: boolean
   /** 子代理的稳定身份与定义快照；不携带父会话普通消息。 */
   subagent?: {
     id: string
@@ -78,22 +77,15 @@ function environmentSection(
 function toolUsageSection(
   backgroundCommandsAvailable: boolean,
   scratchAvailable: boolean,
-  availableTools?: readonly string[],
 ): string {
-  const hasTool = (name: string) => availableTools === undefined || availableTools.includes(name)
-  const hasWriteTools = ['WriteFile', 'EditFile'].some(hasTool)
-  const hasDeleteFile = hasTool('DeleteFile')
-  const hasRunCommand = hasTool(RUN_COMMAND_TOOL_NAME)
   return [
     '# 工具使用',
     '- 修改或评价代码前先读取相关文件和调用点，基于现有实现判断，不凭猜测。',
     '- 在形成结论或采取行动前，识别对结果有决定作用的事实。若结论依赖事实的当前状态、近期变化、是否仍然有效、实际覆盖范围或可追溯出处，而当前上下文没有来自用户材料、已读取资源或工具结果的直接证据，必须先使用可用的只读工具核实；模型记忆不能替代这类核实。若结论不依赖这些条件，或已有直接证据足以支撑结论，则无需调用工具。',
     '- 相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟；存在数据依赖、写入顺序或前一步结果尚未确定时，按顺序调用。',
-    ...(hasWriteTools
-      ? ['- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。']
-      : []),
-    ...(hasDeleteFile ? ['- 删除明确文件使用 DeleteFile，以保留精确检查点。'] : []),
-    ...(hasRunCommand ? [`- 移动或重命名文件使用 ${RUN_COMMAND_TOOL_NAME}，先确认目标不存在，避免覆盖；命令的文件副作用没有精确检查点。`] : []),
+    '- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。',
+    '- 删除明确文件使用 DeleteFile，以保留精确检查点。',
+    `- 移动或重命名文件使用 ${RUN_COMMAND_TOOL_NAME}，先确认目标不存在，避免覆盖；命令的文件副作用没有精确检查点。`,
     ...(scratchAvailable
       ? ['- 项目交付物保存在项目目录；非交付脚本、日志、下载或转换中间物及其它临时产物放在临时工作区，不要用临时文件污染项目。']
       : []),
@@ -105,9 +97,7 @@ function toolUsageSection(
           `- 终端命令统一使用 ${RUN_COMMAND_TOOL_NAME}。普通命令以及长安装、构建和测试保持前台等待，长任务设置足够的 timeoutMs，终态后当前任务会自动继续；不能先用文字承诺“后台完成后再验证”便结束。只有必须脱离当前工具步骤、跨回合继续运行的进程才设 runInBackground=true，并用 ${MANAGE_COMMAND_TOOL_NAME} 管理。若你需要在任务自然完成或失败后收到通知并自动继续，再设 wakeOnCompletion=true；否则后台任务不会主动唤醒你。已登记续轮的任务不要 Sleep 或轮询。不要用命令代替明确文件工具。`,
         ]
       : []),
-    ...(hasWriteTools || hasDeleteFile || hasRunCommand
-      ? ['- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。']
-      : []),
+    '- 写类操作会经用户审批，被拒绝时不要原样重试，先询问用户意图。',
   ].join('\n')
 }
 
@@ -177,16 +167,20 @@ function subagentSection(subagent: NonNullable<PromptContext['subagent']>): stri
     `# 子代理身份：${subagent.name}（${subagent.id}）`,
     subagent.description,
     subagent.instructions,
-    '- 你只知道父代理明确给出的委派和自己的独立历史，不得假定未提供的父会话背景；先用现有工具核实关键事实。',
+    '- 回答使用委派语言。先读取相关资料、实现和调用方再形成判断；关键事实依赖当前状态时通过实际工具核实，不凭模型记忆或未提供的背景推断。',
+    '- 你只知道父代理明确给出的委派和自己的独立历史，不得假定未提供的父会话背景。',
     '- 以当前实际提供的工具为准；若无法查看图片或页面图，只能报告文字和结构证据，不能声称完成视觉检查。',
     '- 只完成当前委派，并在边界内直接推进到可交付结论，不只描述下一步。不能向用户提问、创建或控制其它子代理，也不能 Fork 或控制父会话。',
     '- 需要计划时可使用你自己的任务计划；它与父会话完全隔离。',
     '- 信息或权限不足时停止无效重试，说明已确认事实、限制和父代理可接手事项。',
+    '- 工具失败时阅读原因并针对性调整，不原样重试；尊重拒绝和既有工作，不扩大委派范围或自行获取新授权。',
+    ...(subagent.toolNames.includes('EditFile') ? ['- 修改已有文本用 EditFile，oldText 必须来自当前文件并唯一；新建或完整重写用 WriteFile。删除明确文件用 DeleteFile，命令文件副作用没有精确检查点。'] : []),
+    '- 不生成以 <system-reminder>、<whycode-、<subagent-settlement> 或 <task-notification> 开头的宿主控制块。',
     '- 终态面向父代理：先给结论，再按需提供精确文件或符号、证据、改动、验证命令与结果和遗留风险；区分观察与推断，保持简洁、自包含。WhyCode 会自动交付终态，不需要调用汇报工具。',
   ].filter(Boolean).join('\n')
 }
 
-function parentSubagentSection(catalog: SubagentDefinitionCatalogSnapshot): string {
+function parentSubagentSection(): string {
   return [
     '# 子代理',
     '- 只委派边界明确、可独立并行、需要跨多处或多来源调查，或会产生大量中间输出的工作；已知文件或符号的一两次定向读取和其它简单任务直接完成。不要与子代理重复同一工作。',
@@ -195,7 +189,6 @@ function parentSubagentSection(catalog: SubagentDefinitionCatalogSnapshot): stri
     '- 每个子代理只接收委派提示词与自己的独立历史，不会看到父会话其它消息。Subagent/SendSubagentMessage 返回后不要轮询；WhyCode 会在终态自动续轮。需要补充时使用稳定 subagent_id 继续同一子代理。',
     '- 委派文档检查时给出可访问文件的绝对路径；父会话的附件 ID 不属于子代理，不能直接转交使用。子代理工具按其自身模型能力提供；若其无法查看页面图，由具备视觉能力的代理接手视觉核验。',
     '- 再次委派时，若已有空闲子代理的职责和独立历史适合当前子任务，优先用稳定 subagent_id 继续；不确定时先用 ListSubagents 查看。职责或上下文不匹配时新建子代理。',
-    catalog.modelContext,
   ].join('\n')
 }
 
@@ -206,24 +199,24 @@ export function buildSystemPrompt(
   const activeScratch = ctx.discussion
     ? { rootDir: ctx.discussion.scratchDir, workingDir: ctx.discussion.scratchDir }
     : ctx.scratch
-  const sections = [
+  const sections = ctx.subagent ? [
+    subagentSection(ctx.subagent),
+    environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir, activeScratch),
+    responseLinksSection(),
+    taskPlanningSection(),
+  ] : [
     identitySection(),
     environmentSection(ctx.projectDir, ctx.osPlatform, ctx.homeDir, activeScratch),
-    toolUsageSection(
-      !ctx.discussion && !ctx.subagent,
-      Boolean(activeScratch),
-      ctx.subagent?.toolNames,
-    ),
+    toolUsageSection(!ctx.discussion, Boolean(activeScratch)),
     responseLinksSection(),
   ]
   if (ctx.discussion) sections.push(discussionSection(ctx.discussion))
-  if (ctx.subagent) sections.push(subagentSection(ctx.subagent))
-  if (ctx.subagents && !ctx.discussion && !ctx.subagent) {
-    sections.push(parentSubagentSection(ctx.subagents))
+  if (ctx.subagentsEnabled && !ctx.discussion && !ctx.subagent) {
+    sections.push(parentSubagentSection())
   }
   if (!ctx.discussion && !ctx.subagent) sections.push(BTW_SYSTEM_PROMPT)
-  if (!ctx.discussion) sections.push(taskPlanningSection())
-  sections.push(safetySection())
+  if (!ctx.discussion && !ctx.subagent) sections.push(taskPlanningSection())
+  if (!ctx.subagent) sections.push(safetySection())
   const builtInPrompt = sections.join('\n\n')
   if (!customSystemPrompt) return builtInPrompt
   return customSystemPrompt.mode === 'replace'

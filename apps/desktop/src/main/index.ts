@@ -916,7 +916,7 @@ async function createMainAgentSession(
       mcpRuntime,
       skillCatalog: await skillCatalogFor(runtime),
       prepareSkillRuntime: (skill, context) => workspaceDependencies.prepareSkill(skill, context),
-      subagentCatalog: subagentDefinitions,
+      loadSubagentCatalog: () => subagents.definitions.snapshot(targetProjectDir, runtime.workspaceIO),
       mainTools: [
         commandTools.manageCommand,
         ...subagents.createTools(runtime, recorder, targetProjectDir),

@@ -147,7 +147,7 @@ export class SubagentService {
     parentJournal: SessionJournal,
     projectDir: string,
   ): ToolDefinition[] {
-    return createSubagentTools(this.definitions, projectDir, {
+    return createSubagentTools({
       launch: (request) => this.launch(parentRuntime, parentJournal, projectDir, request),
       continue: (request) => this.continue(parentRuntime, parentJournal, projectDir, request),
       list: () => this.list(parentJournal.sessionId),
