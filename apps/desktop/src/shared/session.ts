@@ -59,7 +59,7 @@ export interface RuntimeSnapshot {
   permissionMode: PermissionMode
   /** Core 在当前模型请求边界给出的统一上下文估算。 */
   contextUsage: ContextUsageInfo | null
-  /** 当前连续工作的权威起点；结束后由持久化 work-finished 事件替代。 */
+  /** 当前准备或连续工作的起点；接受输入后结束才产生持久化 work-finished。 */
   workStartedAt: number | null
   status: AgentStatus
   busy: boolean

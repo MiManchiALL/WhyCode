@@ -14,6 +14,7 @@ export function shouldDeliverRuntimeEvent(
   if (runtime === selected || (runtime.sessionId !== null && runtime.sessionId === resumingSessionId)) return true
   switch (event.type) {
     case 'work-started':
+    case 'work-discarded':
     case 'turn-start':
     case 'work-finished':
     case 'turn-end':

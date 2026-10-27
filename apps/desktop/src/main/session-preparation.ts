@@ -24,10 +24,15 @@ export interface SessionPreparation {
 /** Journal 只能记录已经存在的工作区；创建前的登记与它共享目录、身份和删除边界。 */
 export class SessionPreparations {
   private readonly root: string
+  private readonly pending = new Map<string, Promise<void>>()
 
   constructor(root: string) { this.root = root }
 
-  async read(sessionId: string): Promise<SessionPreparation | null> {
+  read(sessionId: string): Promise<SessionPreparation | null> {
+    return this.enqueue(sessionId, () => this.readRecord(sessionId))
+  }
+
+  private async readRecord(sessionId: string): Promise<SessionPreparation | null> {
     validateSessionId(sessionId)
     const paths = getSessionPaths(this.root, sessionId)
     if (await hasSessionDeletionMarker(paths)) return null
@@ -53,28 +58,45 @@ export class SessionPreparations {
     }
   }
 
-  async register(input: Omit<SessionPreparation, 'createdAt'>): Promise<void> {
-    validateSessionId(input.sessionId)
-    const paths = getSessionPaths(this.root, input.sessionId)
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    await mkdir(paths.sessionDir, { mode: 0o700 })
-    try {
-      await this.write({ ...input, createdAt: new Date().toISOString() })
-    } catch (error) {
-      await rmdir(paths.sessionDir).catch(() => {})
-      throw error
-    }
+  register(input: Omit<SessionPreparation, 'createdAt'>): Promise<void> {
+    return this.enqueue(input.sessionId, async () => {
+      validateSessionId(input.sessionId)
+      const paths = getSessionPaths(this.root, input.sessionId)
+      await mkdir(this.root, { recursive: true, mode: 0o700 })
+      await mkdir(paths.sessionDir, { mode: 0o700 })
+      try {
+        await this.write({ ...input, createdAt: new Date().toISOString() })
+      } catch (error) {
+        await rmdir(paths.sessionDir).catch(() => {})
+        throw error
+      }
+    })
   }
 
-  async updateWorkspace(sessionId: string, workspace: RuntimeWorkspace): Promise<void> {
-    const record = await this.read(sessionId)
-    if (!record) throw new Error('会话准备记录不存在')
-    await this.write({ ...record, workspace })
+  updateWorkspace(sessionId: string, workspace: RuntimeWorkspace): Promise<void> {
+    return this.enqueue(sessionId, async () => {
+      const record = await this.readRecord(sessionId)
+      if (!record) throw new Error('会话准备记录不存在')
+      await this.write({ ...record, workspace })
+    })
   }
 
-  async finish(sessionId: string): Promise<void> {
-    validateSessionId(sessionId)
-    await rm(join(getSessionPaths(this.root, sessionId).sessionDir, 'preparation.json'), { force: true })
+  finish(sessionId: string): Promise<void> {
+    return this.enqueue(sessionId, async () => {
+      validateSessionId(sessionId)
+      await rm(join(getSessionPaths(this.root, sessionId).sessionDir, 'preparation.json'), { force: true })
+    })
+  }
+
+  /** Windows 替换文件前必须等列表读取关闭句柄；同一记录的读取、更新和移除共用队列。 */
+  private enqueue<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const result = (this.pending.get(sessionId) ?? Promise.resolve()).then(operation)
+    // 向调用方保留失败，同时让后续操作可继续；空队列不持有会话或文件内容。
+    const settled = result.then(() => {}, () => {}).then(() => {
+      if (this.pending.get(sessionId) === settled) this.pending.delete(sessionId)
+    })
+    this.pending.set(sessionId, settled)
+    return result
   }
 
   private async write(record: SessionPreparation): Promise<void> {

@@ -13,6 +13,7 @@ describe('后台运行时事件投影', () => {
   it('保留会话列表需要的开始、结束与终态事件', () => {
     const lifecycleEvents: CoreEvent[] = [
       { type: 'work-started', startedAt: 1_000 },
+      { type: 'work-discarded' },
       { type: 'turn-start', turnId: 'turn-1' },
       {
         type: 'turn-end',

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import fs, { access, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { it } from 'node:test'
@@ -14,6 +15,90 @@ import { WorktreeManager } from './worktree-manager.ts'
 import { restoreSubmittedWorkspace } from './runtime-workspace.ts'
 import { projectSessionListItems } from './session-list.ts'
 import type { RuntimeWorkspace } from '../shared/workspace.ts'
+
+it('列表读取关闭文件后才更新准备记录；其它会话不受阻塞，后续读取看到新工作区', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'whycode-preparation-read-write-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const sessions = new DesktopSessionRepository(root)
+  const sessionId = randomUUID()
+  const otherId = randomUUID()
+  const initial = localWorkspace('C:\\initial')
+  const updated = localWorkspace('C:\\updated')
+  for (const id of [sessionId, otherId]) {
+    await sessions.preparations.register({ sessionId: id, workspace: initial,
+      modelId: 'test:model', reasoningEffort: 'default', lastUserText: '首条消息' })
+  }
+  const target = join(root, sessionId, 'preparation.json')
+  let opened!: () => void
+  let release!: () => void
+  const reading = new Promise<void>(resolve => { opened = resolve })
+  const continueReading = new Promise<void>(resolve => { release = resolve })
+  const originalRead = fs.readFile
+  let targetReads = 0
+  const mockedRead = t.mock.method(fs, 'readFile', async (
+    path: Parameters<typeof fs.readFile>[0], options?: Parameters<typeof fs.readFile>[1],
+  ) => {
+    if (path !== target || ++targetReads !== 1) return originalRead(path, options)
+    const handle = await open(target, 'r')
+    try {
+      opened()
+      await continueReading
+      return await handle.readFile(options)
+    } finally {
+      await handle.close()
+    }
+  })
+  syncBuiltinESMExports()
+  t.after(() => { mockedRead.mock.restore(); syncBuiltinESMExports() })
+
+  const listing = sessions.list()
+  await reading
+  const update = sessions.preparations.updateWorkspace(sessionId, updated)
+  const afterUpdate = sessions.preparations.read(sessionId)
+  const pending = Promise.all([listing, update, afterUpdate])
+  // 若断言失败仍先关闭被控制的真实句柄，再等待所有读写退出。
+  void pending.catch(() => {})
+  try {
+    await sessions.preparations.updateWorkspace(otherId, updated)
+    assert.deepEqual((await sessions.preparations.read(otherId))?.workspace, updated)
+    assert.equal(targetReads, 1, '同一记录的读改写必须等待先前读取结束')
+  } finally {
+    release()
+    await pending
+  }
+  const [summaries, , record] = await pending
+  assert.deepEqual(summaries.find(item => item.sessionId === sessionId)?.workspace, initial)
+  assert.deepEqual(record?.workspace, updated)
+  assert.deepEqual(await readdir(join(root, sessionId)), ['preparation.json'])
+})
+
+it('Windows 原子替换失败保留原记录、释放队列，解除文件占用后可直接重试', {
+  skip: process.platform !== 'win32',
+}, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'whycode-preparation-locked-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const sessions = new DesktopSessionRepository(root)
+  const sessionId = randomUUID()
+  const initial = localWorkspace('C:\\initial')
+  const updated = localWorkspace('C:\\updated')
+  await sessions.preparations.register({ sessionId, workspace: initial,
+    modelId: 'test:model', reasoningEffort: 'default', lastUserText: '首条消息' })
+  const target = join(root, sessionId, 'preparation.json')
+  const original = await readFile(target, 'utf8')
+  const handle = await open(target, 'r')
+  try {
+    await assert.rejects(sessions.preparations.updateWorkspace(sessionId, updated), { code: 'EPERM' })
+    assert.equal(await readFile(target, 'utf8'), original)
+    assert.deepEqual(await readdir(join(root, sessionId)), ['preparation.json'])
+  } finally {
+    await handle.close()
+  }
+  await sessions.preparations.updateWorkspace(sessionId, updated)
+  assert.deepEqual((await sessions.preparations.read(sessionId))?.workspace, updated)
+  await sessions.preparations.finish(sessionId)
+  assert.equal(await sessions.preparations.read(sessionId), null)
+  assert.deepEqual(await readdir(join(root, sessionId)), [])
+})
 
 it('工作区创建未完成时就可从历史找到同一个运行时，另一个新草稿独立存在', async t => {
   const root = await mkdtemp(join(tmpdir(), 'whycode-register-session-'))
