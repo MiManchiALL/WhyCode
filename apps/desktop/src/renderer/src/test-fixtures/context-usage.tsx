@@ -15,7 +15,7 @@ export function mount(mode: 'append' | 'replace' | null = 'append') {
       messages: { agents: 1_200, subagents: 600, skills: 1_500, context: 11_700 },
     },
   }
-  root.render(<main>
+  root.render(<main data-mode={mode}>
     <button type="button" id="outside" style={{ margin: 24 }}>外部按钮</button>
     <div style={{ position: 'absolute', right: 64, bottom: 48 }}>
       <ContextUsageMeter usage={mode === null ? null : usage} />
