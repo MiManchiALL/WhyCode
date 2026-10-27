@@ -8,7 +8,8 @@ import { simulateReadableStream, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import { CLEARED_MESSAGE } from '../context/microcompact.ts'
-import type { CoreEvent } from '../events.ts'
+import { estimateMessageTokens } from '../context/tokens.ts'
+import type { ContextUsageInfo, CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
 import { SkillCatalogService } from '../skills/catalog.ts'
@@ -27,7 +28,11 @@ describe('子代理目录请求与恢复生命周期', () => {
   it('长任务每步发现增删改，冻结启动定义并保持 System、工具 schema 和顶部目录不变', async t => {
     const f = await fixture(t)
     let calls = 0
+    const usages: ContextUsageInfo[] = []
     f.setStream(async () => {
+      const event = f.events.findLast(event => event.type === 'context-usage')
+      assert.ok(event?.type === 'context-usage' && event.usage)
+      usages.push(event.usage)
       switch (++calls) {
         case 1:
           await f.writeDefinition('文档一', 'explore', '私有指令一')
@@ -56,6 +61,13 @@ describe('子代理目录请求与恢复生命周期', () => {
       assert.deepEqual(call.tools, f.model.doStreamCalls[0]!.tools)
       assert.equal(requests[index]!.filter(text => text.includes(DELTA)).length, [0, 1, 2, 2, 3][index])
       assert.doesNotMatch(requests[index]!.join('\n'), /私有指令/)
+      const { agents, subagents, skills, context } = usages[index]!.details.messages
+      assert.equal(agents, estimateMessageTokens({ role: 'user', content: requests[0]![1]! }))
+      assert.equal(subagents, estimateMessageTokens({ role: 'user', content: requests[0]![2]! }))
+      assert.equal(skills, estimateMessageTokens({ role: 'user', content: requests[0]![3]! }))
+      assert.equal(agents + subagents + skills + context, usages[index]!.breakdown.messageTokens)
+      assert.ok(context >= requests[index]!.filter(text => text.includes(DELTA))
+        .reduce((sum, content) => sum + estimateMessageTokens({ role: 'user', content }), 0))
     }
     assert.match(requests[1]!.find(text => text.includes(DELTA))!, /"added":\[\{"name":"docs"/)
     assert.match(requests[2]!.findLast(text => text.includes(DELTA))!, /"updated":\[\{"name":"docs","description":"文档二"/)

@@ -82,6 +82,12 @@ export interface ContextUsageInfo {
     toolTokens: number
     messageTokens: number
   }
+  /** 当前请求组成的估算；只传计量，不携带提示词或消息正文。 */
+  details: {
+    system: { builtIn: number; custom: number; mode: 'off' | 'append' | 'replace' }
+    tools: { builtIn: number; mcp: number }
+    messages: { agents: number; subagents: number; skills: number; context: number }
+  }
 }
 
 export interface UserQuestionOption {

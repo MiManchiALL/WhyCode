@@ -6,6 +6,13 @@ import { escapeSkillXmlAttribute } from './xml.ts'
 
 const EXPIRED_SKILL_RESULT = '[Skill 工具正文不作为长期历史；激活状态以本次请求末尾的活动 Skill 正文为准]'
 
+export function isSkillCatalogMessage(message: ModelMessage): boolean {
+  return message.role === 'user'
+    && typeof message.content === 'string'
+    && message.content.startsWith('<system-reminder>\n<whycode-skill-catalog revision="')
+    && message.content.endsWith('</whycode-skill-catalog>\n</system-reminder>')
+}
+
 export function skillCatalogMessage(snapshot: SkillTurnSnapshot): ModelMessage | null {
   if (!snapshot.modelContext) return null
   return {

@@ -357,10 +357,17 @@ describe('上下文用量运行态', () => {
         toolTokens: 2_000,
         messageTokens: 9_000,
       },
+      details: {
+        system: { builtIn: 1_000, custom: 0, mode: 'off' as const },
+        tools: { builtIn: 1_500, mcp: 500 },
+        messages: { agents: 1_000, subagents: 500, skills: 500, context: 7_000 },
+      },
     }
 
     runtime.emit({ type: 'context-usage', usage })
     assert.deepEqual(runtime.contextUsage, usage)
+    usage.details.messages.context = 0
+    assert.equal(runtime.contextUsage?.details.messages.context, 7_000, '明细随运行态快照隔离')
     runtime.emit({ type: 'context-usage', usage: null })
     assert.equal(runtime.contextUsage, null)
   })

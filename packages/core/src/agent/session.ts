@@ -3,7 +3,6 @@ import { stepCountIs, streamText, tool as aiTool, type ModelMessage } from 'ai'
 import { randomUUID } from 'node:crypto'
 import { modelMessageText } from '../text.ts'
 import type {
-  ContextUsageInfo,
   CoreEvent,
   QueuedUserMessage,
   StopReason,
@@ -35,9 +34,13 @@ import {
   autoCompactThreshold,
   estimateContextTokens,
   estimateMessagesTokens,
-  estimateRequestContextOverhead,
   type TokenBaseline,
 } from '../context/tokens.ts'
+import {
+  estimateMessageContextDetails,
+  estimateRequestContextOverhead,
+  type RequestContextOverhead,
+} from '../context/usage.ts'
 import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
 import type { SessionRecorder } from '../session/types.ts'
@@ -407,10 +410,7 @@ export class AgentSession {
   /** 父 transcript 已提交的终态；manifest 的 delivered 回写失败也不能让 turn 永久等待。 */
   private deliveredSubagentActivations = new Set<string>()
   /** 最近一次真实请求（或空闲态重建）的 System / 工具目录估算。 */
-  private contextOverhead: Pick<
-    ContextUsageInfo['breakdown'],
-    'systemPromptTokens' | 'toolTokens'
-  > | null = null
+  private contextOverhead: RequestContextOverhead | null = null
   /** 压缩熔断：连续失败 3 次后本会话停止尝试，成功清零 */
   private compactFailures = 0
   /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
@@ -595,6 +595,7 @@ export class AgentSession {
     this.contextOverhead = await estimateRequestContextOverhead(
       buildSystemPrompt(this.options.promptContext, this.options.customSystemPrompt),
       toolsForModel(tools),
+      this.options.customSystemPrompt,
     )
   }
 
@@ -2434,11 +2435,9 @@ export class AgentSession {
       this.options.emit({ type: 'context-usage', usage: null })
       return
     }
-    const breakdown: ContextUsageInfo['breakdown'] = {
-      ...this.contextOverhead,
-      // 真实请求已装配时直接计算其 Provider 边界 messages；其余时刻投影下一次请求。
-      messageTokens: estimateMessagesTokens(requestMessages ?? this.projectContextMessages(this.messages)),
-    }
+    // 真实请求已装配时计量 Provider 边界 messages；其余时刻投影下一次请求。
+    const messages = estimateMessageContextDetails(requestMessages ?? this.projectContextMessages(this.messages))
+    const { systemPromptTokens, toolTokens, system, tools } = this.contextOverhead
     const capabilities = this.currentModelSelection().model.capabilities
     this.options.emit({
       type: 'context-usage',
@@ -2446,7 +2445,12 @@ export class AgentSession {
         usedTokens: requestUsedTokens ?? this.estimateCurrentContextTokens(),
         contextWindow: capabilities.contextWindow,
         autoCompactThreshold: autoCompactThreshold(capabilities),
-        breakdown,
+        breakdown: {
+          systemPromptTokens,
+          toolTokens,
+          messageTokens: messages.agents + messages.subagents + messages.skills + messages.context,
+        },
+        details: { system, tools, messages },
       },
     })
   }
@@ -2663,6 +2667,7 @@ export class AgentSession {
       const requestOverhead = await estimateRequestContextOverhead(
         requestSystemPrompt,
         toolsForModel(requestTools),
+        this.options.customSystemPrompt,
       )
       this.contextOverhead = requestOverhead
       const prepared = await this.prepareRequestContext(stepAbort.signal)

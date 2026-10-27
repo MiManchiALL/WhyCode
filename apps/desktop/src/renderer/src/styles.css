@@ -638,11 +638,11 @@ html[data-wc-panel-resizing='true']::after {
 }
 
 .wc-context-meter-panel {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.5rem);
   z-index: 90;
   width: 16.5rem;
+  max-width: calc(100vw - 24px);
+  max-height: var(--radix-popover-content-available-height);
+  overflow-y: auto;
   border: 1px solid var(--wc-line-strong);
   border-radius: 0.9rem;
   background: rgb(255 255 253 / 96%);
@@ -670,6 +670,53 @@ html[data-wc-panel-resizing='true']::after {
 .wc-context-meter-row dd {
   color: var(--wc-ink);
   font-variant-numeric: tabular-nums;
+}
+
+.wc-context-meter-category {
+  width: 100%;
+  border: 0;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wc-context-meter-category:hover,
+.wc-context-meter-category[aria-expanded='true'] {
+  background: var(--wc-hover);
+}
+
+.wc-context-meter-row-label {
+  display: flex;
+  align-items: center;
+}
+
+.wc-context-meter-row-value {
+  flex: none;
+  color: var(--wc-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.wc-context-meter-detail {
+  max-width: min(calc(100vw - 24px), var(--radix-popover-content-available-width));
+}
+
+.wc-context-meter-detail-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+  border-bottom: 1px solid var(--wc-line);
+  padding-bottom: 0.45rem;
+}
+
+.wc-context-meter-detail-heading strong {
+  display: flex;
+  align-items: center;
+  color: var(--wc-ink);
+  font-weight: 500;
 }
 
 .wc-context-meter-total {

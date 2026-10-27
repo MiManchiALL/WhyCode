@@ -5,6 +5,7 @@ export const MCP_MAX_TOOLS_PER_SERVER = 2_000
 export const MCP_MAX_TOTAL_TOOLS = 10_000
 export const MCP_MAX_SCHEMA_BYTES = 256 * 1024
 export const MCP_MAX_LOADED_TOOLS = 64
+export const MCP_TOOL_NAME_PREFIX = 'Mcp__'
 
 const MODEL_TOOL_NAME_MAX_CHARS = 64
 const TOOL_DESCRIPTION_MAX_CHARS = 8_000
@@ -180,7 +181,7 @@ function uniqueExposedName(
   descriptorHash: string,
   usedNames: ReadonlySet<string>,
 ): string {
-  const prefix = `Mcp__${toolNamePart(serverName)}__${toolNamePart(rawName)}`
+  const prefix = `${MCP_TOOL_NAME_PREFIX}${toolNamePart(serverName)}__${toolNamePart(rawName)}`
   const suffix = `__${descriptorHash.slice(0, 8)}`
   const base = `${prefix.slice(0, MODEL_TOOL_NAME_MAX_CHARS - suffix.length)}${suffix}`
   if (!usedNames.has(base)) return base
