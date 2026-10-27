@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +14,39 @@ afterEach(async () => {
 })
 
 describe('DesktopSessionRepository 生命周期', () => {
+  it('列表读取与首次发送交错时，使用已经建立的 Journal 标题，不误报无法恢复', async t => {
+    const repository = await createRepository()
+    const sessionId = randomUUID()
+    const workspace = { mode: 'ssh' as const, target: 'test-server', label: '测试服务器', workingDirectory: '/' }
+    await repository.preparations.register({
+      sessionId, workspace, modelId: 'test:model', reasoningEffort: 'default', lastUserText: '你好',
+    })
+    let preparationReadStarted!: () => void
+    let resumeReading!: () => void
+    const readingPreparation = new Promise<void>(resolve => { preparationReadStarted = resolve })
+    const continueReading = new Promise<void>(resolve => { resumeReading = resolve })
+    const read = repository.preparations.read.bind(repository.preparations)
+    t.mock.method(repository.preparations, 'read', async (id: string) => {
+      preparationReadStarted()
+      await continueReading
+      return read(id)
+    })
+    const listing = repository.list()
+    await readingPreparation
+    try {
+      const journal = await repository.create(workspace, 'test:model', 'default', undefined, sessionId)
+      await journal.recordUserInput('你好', true)
+      await repository.preparations.finish(sessionId)
+    } finally {
+      resumeReading()
+    }
+    const [summary] = await listing
+    assert.equal(summary?.sessionId, sessionId)
+    assert.equal(summary?.title, '你好')
+    assert.equal(summary?.resumable, true)
+    assert.equal(summary?.status, 'interrupted')
+  })
+
   it('每个新会话分别固化创建时传入的自定义 System', async () => {
     const repository = await createRepository()
     const first = await repository.create(

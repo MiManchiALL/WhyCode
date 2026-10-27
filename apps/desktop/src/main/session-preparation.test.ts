@@ -74,7 +74,7 @@ it('创建失败的登记跨重启保留，删除标记不能被准备记录重�
   await assert.rejects(access(join(root, sessionId)), /ENOENT/)
 })
 
-it('Journal 建立后未清掉的准备记录不能覆盖正式工作区或开启第二次创建', async t => {
+it('Journal 建立后未清掉的准备记录不能覆盖正式工作区、开启第二次创建或掩盖损坏', async t => {
   const root = await mkdtemp(join(tmpdir(), 'whycode-preparation-journal-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const sessionId = randomUUID()
@@ -86,6 +86,10 @@ it('Journal 建立后未清掉的准备记录不能覆盖正式工作区或开�
   assert.equal(await restarted.preparations.read(sessionId), null)
   assert.equal((await restarted.list())[0]?.workspace?.mode, 'local')
   assert.equal((await restarted.prepareResume(sessionId)).sessionId, sessionId)
+  await writeFile(join(root, sessionId, 'transcript.jsonl'), '{broken')
+  const [unavailable] = await new DesktopSessionRepository(root).list()
+  assert.equal(unavailable?.resumable, false)
+  assert.equal(unavailable?.status, 'unavailable')
 })
 
 it('目录物化后的中断仍归已登记会话，恢复过程不重新创建或丢弃用户文件', async t => {
