@@ -245,7 +245,7 @@ describe('后台命令会话', () => {
 
   it('只有显式登记的后台任务自然结束后通知一次，模型停止不通知', { timeout: 15_000 }, async () => {
     const fixture = await createFixture(
-      `process.stdout.write('started\\n'); setTimeout(() => process.stdout.write('done\\n'), 100)`,
+      `process.stdout.write('started\\n'); process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('done\\n'))`,
     )
     const notifications: CommandTaskTerminalNotification[] = []
     let notify!: () => void
@@ -272,6 +272,7 @@ describe('后台命令会话', () => {
         task.command === fixture.command,
       )
       assert.ok(silentTask)
+      await manager.writeInput(SESSION_A, silentTask.id, '', true)
       assert.equal((await waitForTerminal(manager, silentTask.id)).task.status, 'completed')
       assert.equal(notifications.length, 0)
 
@@ -297,6 +298,7 @@ describe('后台命令会话', () => {
         true,
       )
       // ManageCommand read 接收终态会消费通知；这里仅观察生命周期，验证无人读取时的自动通知。
+      await manager.writeInput(SESSION_A, running.id, '', true)
       await firstNotification
       assert.equal(notifications[0]?.task.status, 'completed')
       assert.equal(
@@ -310,33 +312,22 @@ describe('后台命令会话', () => {
       assert.equal(notifications[0]?.task.id, running.id)
       assert.equal(notifications[0]?.engagedPlanId, '33333333-3333-4333-8333-333333333333')
 
-      // 用一个足够长但最终会自行退出的进程验证主动停止，避免测试失败时留下孤儿进程。
-      const persistent = await createFixture(`setTimeout(() => {}, 2_000)`)
-      try {
-        const stoppedStart = await run.execute({
-          command: persistent.command,
-          cwd: persistent.cwd,
-          runInBackground: true,
-          wakeOnCompletion: true,
-        }, {
-          projectDir: persistent.cwd,
-          additionalDirs: [],
-          abortSignal: new AbortController().signal,
-        })
-        assert.match(stoppedStart.data, /状态：running/)
-        const stoppedTask = (await manager.list(SESSION_A)).find((task) =>
-          task.status === 'running' && task.id !== running.id)
-        assert.ok(stoppedTask)
-        await manager.stop(SESSION_A, stoppedTask.id, { source: 'model' })
-        assert.equal(notifications.length, 1)
-      } finally {
-        await rm(persistent.root, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 100,
-        })
-      }
+      const stoppedStart = await run.execute({
+        command: fixture.command,
+        cwd: fixture.cwd,
+        runInBackground: true,
+        wakeOnCompletion: true,
+      }, {
+        projectDir: fixture.cwd,
+        additionalDirs: [],
+        abortSignal: new AbortController().signal,
+      })
+      assert.match(stoppedStart.data, /状态：running/)
+      const stoppedTask = (await manager.list(SESSION_A)).find((task) => task.status === 'running')
+      assert.ok(stoppedTask)
+      const stopped = await manager.stop(SESSION_A, stoppedTask.id, { source: 'model' })
+      assert.equal(stopped.status, 'stopped')
+      assert.equal(notifications.length, 1)
     } finally {
       await manager.shutdown()
       await rm(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
@@ -344,7 +335,8 @@ describe('后台命令会话', () => {
   })
 
   it('投影全部后台命令，并独立标记终态续轮能力', async () => {
-    const fixture = await createFixture(`setTimeout(() => {}, 2_000)`)
+    // 保持进程存活直到测试主动停止，避免慢机器上定时退出抢先产生 completed。
+    const fixture = await createFixture(`process.stdin.resume()`)
     const states: BackgroundTaskState[] = []
     const manager = new CommandSessionManager(fixture.storage, {
       onBackgroundTasksChanged: (state) => states.push(state),
@@ -404,7 +396,7 @@ describe('后台命令会话', () => {
   })
 
   it('运行任务按最早启动置顶，终态按最新结束下沉', async () => {
-    const fixture = await createFixture(`setTimeout(() => {}, 400)`)
+    const fixture = await createFixture(`process.stdin.resume()`)
     const manager = new CommandSessionManager(fixture.storage)
     try {
       const first = await manager.start({
@@ -413,7 +405,6 @@ describe('后台命令会话', () => {
         cwd: fixture.cwd,
       })
       await manager.armTerminalNotification(SESSION_A, first.id)
-      await new Promise((done) => setTimeout(done, 30))
       const second = await manager.start({
         sessionId: SESSION_A,
         command: fixture.command,
@@ -425,10 +416,14 @@ describe('后台命令会话', () => {
         [first.id, second.id],
       )
 
-      await Promise.all([
-        waitForTerminal(manager, first.id),
-        waitForTerminal(manager, second.id),
-      ])
+      await manager.writeInput(SESSION_A, first.id, '', true)
+      assert.equal((await waitForTerminal(manager, first.id)).task.status, 'completed')
+      assert.deepEqual(
+        (await manager.backgroundTasks(SESSION_A)).tasks.map((task) => [task.id, task.status]),
+        [[second.id, 'running'], [first.id, 'completed']],
+      )
+      await manager.writeInput(SESSION_A, second.id, '', true)
+      assert.equal((await waitForTerminal(manager, second.id)).task.status, 'completed')
       assert.deepEqual(
         (await manager.backgroundTasks(SESSION_A)).tasks.map((task) => task.id),
         [second.id, first.id],
