@@ -16,6 +16,11 @@
   line-height: calc(var(--wc-content-font-size, 14px) * 22 / 14);
 }
 
+/* 待确认消息也保留操作栏空间；高度容纳文字行或 14px 图标及其上下内边距。 */
+.wc-message-actions {
+  min-height: max(1lh, 18px);
+}
+
 .wc-conversation-copy,
 .wc-composer-text {
   font-size: var(--wc-content-font-size, 14px);
