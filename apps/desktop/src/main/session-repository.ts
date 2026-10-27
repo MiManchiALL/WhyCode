@@ -82,21 +82,23 @@ export class DesktopSessionRepository {
   async list(
     projectDir?: string | null,
   ): Promise<DesktopSessionSummary[]> {
-    const summaries = await this.store.list(
-      undefined,
-      [...this.opened.values()].map((journal) => journal.metadataSnapshot),
-    )
-    const entries = await Promise.all(summaries.map(async (summary) => {
-      if (summary.resumable) return summary
-      const preparation = await this.preparations.read(summary.sessionId).catch(() => null)
-      return preparation ? preparationSummary(preparation) : summary
+    const sessionIds = await this.store.listSessionIds()
+    const entries = await Promise.all(sessionIds.map(async (sessionId) => {
+      // 先识别宿主准备态，再读取正式记录；初始化期间不能把同一目录误判为损坏。
+      const preparation = this.opened.has(sessionId)
+        ? null
+        : await this.preparations.read(sessionId).catch(() => null)
+      if (preparation) return preparationSummary(preparation)
+      return this.store.readSummary(sessionId, this.opened.get(sessionId)?.metadataSnapshot)
     }))
-    return entries.filter(item => {
-      if (projectDir === undefined) return true
-      if (!item.workspace) return false
-      const directory = workspaceDisplayDirectory(item.workspace)
-      return directory === null || projectDir === null ? directory === projectDir : samePath(directory, projectDir)
-    })
+    return entries
+      .filter((item): item is DesktopSessionSummary => item !== null)
+      .filter(item => {
+        if (projectDir === undefined) return true
+        if (!item.workspace) return false
+        const directory = workspaceDisplayDirectory(item.workspace)
+        return directory === null || projectDir === null ? directory === projectDir : samePath(directory, projectDir)
+      })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 

@@ -300,10 +300,7 @@ export class SessionStore {
     return next
   }
 
-  async list(
-    projectDir?: string | null,
-    liveSessions: readonly SessionMetadata[] = [],
-  ): Promise<SessionSummary[]> {
+  async listSessionIds(): Promise<string[]> {
     await mkdir(this.rootDir, { recursive: true, mode: 0o700 })
     const entries = await readdir(this.rootDir, { withFileTypes: true })
     const markerEntries = await readdir(getSessionDeletionMarkersDir(this.rootDir), {
@@ -312,15 +309,22 @@ export class SessionStore {
       if (error.code === 'ENOENT') return []
       throw error
     })
-    const sessionIds = new Set([
+    return [...new Set([
       ...entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
       ...markerEntries.map((entry) => entry.name),
-    ].filter(isSessionId))
+    ].filter(isSessionId))]
+  }
+
+  async list(
+    projectDir?: string | null,
+    liveSessions: readonly SessionMetadata[] = [],
+  ): Promise<SessionSummary[]> {
+    const sessionIds = await this.listSessionIds()
     const liveSessionsById = new Map(
       liveSessions.map((session) => [session.sessionId, session] as const),
     )
     const sessions = await Promise.all(
-      [...sessionIds].map((sessionId) =>
+      sessionIds.map((sessionId) =>
         this.readSummary(sessionId, liveSessionsById.get(sessionId))),
     )
     return sessions
@@ -386,7 +390,7 @@ export class SessionStore {
     }
   }
 
-  private async readSummary(
+  async readSummary(
     sessionId: string,
     liveSession?: SessionMetadata,
   ): Promise<SessionSummary | null> {
