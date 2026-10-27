@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { localWorkspace, type AgentSession, type CoreEvent } from '@whycode/core'
+import { localWorkspace, toViewEvent, type AgentSession, type CoreEvent } from '@whycode/core'
+import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
 import { pendingManagedWorkspace, pendingWorktreeWorkspace } from '../shared/workspace.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { routeUserMessage } from './user-message-routing.ts'
@@ -56,6 +57,108 @@ describe('提交期间停止', () => {
 })
 
 describe('会话工作计时', () => {
+  for (const status of ['idle', 'error'] as const) {
+    it(`未接受的输入以 ${status} 收尾时撤销计时，不生成实时或持久完成记录`, () => {
+      const events: CoreEvent[] = []
+      const runtime = new DesktopSessionRuntime({
+        workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+        emit: (_runtime, event) => events.push(event),
+      })
+      // 连续重试失败也不能积累空的“已处理”分组。
+      for (let attempt = 0; attempt < 2; attempt++) {
+        runtime.beginWork('preparing')
+        runtime.emit({ type: 'error', message: '消息准备失败', recoverable: true })
+        runtime.emit({ type: 'agent-status', status }, false)
+        assert.equal(runtime.workStartedAt, null)
+      }
+      assert.equal(events.filter(event => event.type === 'work-discarded').length, 2)
+      assert.equal(events.some(event => event.type === 'work-finished'), false)
+      const live = events.reduce((state, event) => applyCoreEvent(state, event), createConversationState())
+      const restored = createConversationState(events.flatMap(event => toViewEvent(event) ?? []))
+      assert.deepEqual(live.blocks, [])
+      assert.deepEqual(restored.blocks, [])
+    })
+  }
+
+  it('输入落盘失败不接受消息，直接重试成功后沿用准备起点并只记录一次完成', async t => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    let now = 1_000
+    t.mock.method(Date, 'now', () => now)
+    runtime.beginWork('preparing')
+    await assert.rejects(routeUserMessage('请求', false, {
+      isBusy: () => runtime.executionBusy,
+      reserve: () => runtime.routingGate.reserve(),
+      record: async () => { throw new Error('磁盘写入失败') },
+      acceptRoot: () => assert.fail('未保存的输入不能被接受'),
+      deliver: () => assert.fail('未保存的输入不能交给模型'),
+    }), /磁盘写入失败/)
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+
+    now = 2_000
+    runtime.beginWork('preparing')
+    await routeUserMessage('请求', false, {
+      isBusy: () => runtime.executionBusy,
+      reserve: () => runtime.routingGate.reserve(),
+      record: async () => { now = 3_000 },
+      acceptRoot: (inputId, text) => {
+        runtime.beginWork()
+        runtime.emit({ type: 'user-message-accepted', inputId, text, startsTurn: true }, false)
+      },
+      deliver: () => {
+        assert.equal(runtime.workStartedAt, 2_000)
+        now = 4_000
+        runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+      },
+    })
+    assert.equal(events.filter(event => event.type === 'work-started').length, 2)
+    assert.equal(events.filter(event => event.type === 'work-discarded').length, 1)
+    const finished = events.filter(event => event.type === 'work-finished')
+    assert.deepEqual(finished, [{ type: 'work-finished', durationMs: 2_000, outcome: 'completed', forkTurnId: null }])
+    assert.equal(runtime.workStartedAt, null)
+  })
+
+  it('停止尚未发送的附件准备不产生完成记录，也不影响下一次工作', async () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    const reservation = runtime.routingGate.reserve()
+    runtime.beginWork('preparing')
+    const signal = runtime.beginAttachmentPreparation()
+    const stopping = runtime.abort()
+    assert.equal(signal.aborted, true)
+    runtime.endAttachmentPreparation()
+    reservation.release()
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+    await stopping
+    assert.equal(events.some(event => event.type === 'work-finished'), false)
+    assert.equal(runtime.workStartedAt, null)
+    runtime.beginWork()
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+    assert.equal(events.find(event => event.type === 'work-finished')?.outcome, 'completed')
+  })
+
+  it('运行中后续输入的准备失败不会撤销已接受的工作或重置计时', () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    runtime.beginWork()
+    const startedAt = runtime.workStartedAt
+    runtime.beginWork('preparing')
+    runtime.emit({ type: 'error', message: '后续图片无法读取', recoverable: true })
+    assert.equal(runtime.workStartedAt, startedAt)
+    assert.equal(events.some(event => event.type === 'work-discarded'), false)
+    runtime.emit({ type: 'agent-status', status: 'idle' }, false)
+    assert.equal(events.filter(event => event.type === 'work-finished').length, 1)
+  })
+
   it('失败原因随工作终点保留，之后成功或停止的工作不继承旧错误', () => {
     const events: CoreEvent[] = []
     const runtime = new DesktopSessionRuntime({

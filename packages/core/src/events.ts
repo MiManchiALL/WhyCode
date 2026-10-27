@@ -202,8 +202,10 @@ export type CoreEvent =
       suggestion?: { kind: 'add-dir'; dir: string } | { kind: 'allow-tool'; toolName: string }
     }
   | { type: 'turn-end'; turnId: string; usage: UsageInfo; stopReason: StopReason }
-  /** Main runtime 接受根输入后的权威起点；仅用于当前运行中的计时显示。 */
+  /** Main runtime 准备或开始工作的权威起点；仅用于当前运行中的计时显示。 */
   | { type: 'work-started'; startedAt: number }
+  /** 输入尚未被接受时准备失败或取消；只撤销实时计时，不产生历史终点。 */
+  | { type: 'work-discarded' }
   /** 整次连续工作结束后的固定时长与终止来源；进入可见时间线以供重启恢复。 */
   | {
       type: 'work-finished'

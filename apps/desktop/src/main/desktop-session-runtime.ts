@@ -63,7 +63,7 @@ export class DesktopSessionRuntime {
   reasoningEffort: ReasoningEffortSelection
   permissionMode: PermissionMode
   contextUsage: ContextUsageInfo | null = null
-  workStartedAt: number | null = null
+  private work: { startedAt: number; phase: 'preparing' | 'accepted' } | null = null
   private workOutcome: 'completed' | 'stopped' | 'error' = 'completed'
   private workError: string | undefined
   private forkTurnId: string | null = null
@@ -231,13 +231,21 @@ export class DesktopSessionRuntime {
     this.emit(event, bufferForSnapshot)
   }
 
-  beginWork(): void {
-    if (this.disposed || this.workStartedAt !== null) return
+  get workStartedAt(): number | null {
+    return this.work?.startedAt ?? null
+  }
+
+  beginWork(phase: 'preparing' | 'accepted' = 'accepted'): void {
+    if (this.disposed) return
+    if (this.work) {
+      if (phase === 'accepted') this.work.phase = phase
+      return
+    }
     this.workOutcome = 'completed'
     this.workError = undefined
     this.forkTurnId = null
-    this.workStartedAt = Date.now()
-    this.publish({ type: 'work-started', startedAt: this.workStartedAt }, false)
+    this.work = { startedAt: Date.now(), phase }
+    this.publish({ type: 'work-started', startedAt: this.work.startedAt }, false)
   }
 
   beginBtwWork(): void {
@@ -247,16 +255,21 @@ export class DesktopSessionRuntime {
   }
 
   finishWork(): void {
-    if (this.disposed || this.workStartedAt === null) return
-    const durationMs = Math.max(0, Date.now() - this.workStartedAt)
-    this.workStartedAt = null
+    if (this.disposed || !this.work) return
+    const { startedAt, phase } = this.work
+    const durationMs = Math.max(0, Date.now() - startedAt)
+    this.work = null
     const outcome = this.workOutcome
     const error = outcome === 'error' ? this.workError : undefined
     const forkTurnId = outcome === 'completed' ? this.forkTurnId : null
     this.workOutcome = 'completed'
     this.workError = undefined
     this.forkTurnId = null
-    this.publish({ type: 'work-finished', durationMs, outcome, forkTurnId, ...(error ? { error } : {}) }, true)
+    if (phase === 'preparing') {
+      this.publish({ type: 'work-discarded' }, false)
+    } else {
+      this.publish({ type: 'work-finished', durationMs, outcome, forkTurnId, ...(error ? { error } : {}) }, true)
+    }
   }
 
   /** BTW 的可见终点由独立 JSONL 事实恢复，不能再写一份 ViewTimeline 副本。 */
@@ -272,7 +285,7 @@ export class DesktopSessionRuntime {
   ): void {
     if (this.disposed || !this.btwWorkActive || this.workStartedAt === null) return
     this.btwWorkActive = false
-    this.workStartedAt = null
+    this.work = null
     const error = outcome === 'error' ? this.workError : undefined
     this.workOutcome = 'completed'
     this.workError = undefined

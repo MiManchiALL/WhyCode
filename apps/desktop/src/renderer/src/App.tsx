@@ -955,6 +955,10 @@ export function App() {
         setGitStatusRevision((revision) => revision + 1)
         void refreshSessions()
         break
+      case 'work-discarded':
+        setWorkStartedAt(null)
+        void refreshSessions()
+        break
       case 'tool-end':
         setGitStatusRevision((revision) => revision + 1)
         break
@@ -1267,6 +1271,7 @@ export function App() {
         consumeEvent(event, occurredAt)
       } else if (
         event.type === 'work-started'
+        || event.type === 'work-discarded'
         || event.type === 'turn-start'
         || event.type === 'work-finished'
         || event.type === 'turn-end'
