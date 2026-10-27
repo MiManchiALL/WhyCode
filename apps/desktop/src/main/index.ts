@@ -1376,7 +1376,7 @@ async function prepareUserMessageSkills(
   command: UserMessageCommand,
   model: ModelEntry,
 ): Promise<ActivatedSkill[]> {
-  if (command.skills === undefined) return []
+  if (!command.skills?.length) return []
   return prepareMessageSkills({
     catalog: await skillCatalogFor(runtime),
     locators: command.skills,

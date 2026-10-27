@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat } from 'node:fs/promises'
 import { renderSkillCatalog } from './catalog-context.ts'
-import { discoverSkillFiles, discoveryRoots, skillPathKey } from './discovery.ts'
+import { discoverSkillFiles, discoveryRoots, SKILL_IO_CONCURRENCY, skillPathKey } from './discovery.ts'
 import { parseSkillDocument } from './parser.ts'
 import { readBoundedWorkspaceFile } from '../workspace/read.ts'
 import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
@@ -75,22 +75,34 @@ export class SkillCatalogService {
 
     rootLoop: for (const root of roots) {
       const discovered = await discoverSkillFiles(root.path, diagnostics, undefined, this.io)
-      for (const path of discovered) {
+      const paths = discovered.filter(path => {
         const key = skillPathKey(path, this.io)
-        if (seenPaths.has(key)) continue
+        if (seenPaths.has(key)) return false
         seenPaths.add(key)
-        const parsed = await this.loadSkill(path, root.scope, diagnostics)
-        if (!parsed) continue
-        const contentBytes = Buffer.byteLength(parsed.content, 'utf8')
-        if (snapshotBytes + contentBytes > this.maxSnapshotBytes) {
-          diagnostics.push({
-            path,
-            message: `任务 Skill 正文达到 ${this.maxSnapshotBytes} 字节总预算，后续项已省略`,
-          })
-          break rootLoop
+        return true
+      })
+      for (let start = 0; start < paths.length; start += SKILL_IO_CONCURRENCY) {
+        const batch = paths.slice(start, start + SKILL_IO_CONCURRENCY)
+        const results = await Promise.all(batch.map(async path => {
+          const errors: SkillDiagnostic[] = []
+          return { parsed: await this.loadSkill(path, root.scope, errors), errors }
+        }))
+        // 只预读一批最多 8 个有界文件；完成顺序不改变目录优先级和总预算。
+        for (let index = 0; index < batch.length; index++) {
+          const { parsed, errors } = results[index]!
+          diagnostics.push(...errors)
+          if (!parsed) continue
+          const contentBytes = Buffer.byteLength(parsed.content, 'utf8')
+          if (snapshotBytes + contentBytes > this.maxSnapshotBytes) {
+            diagnostics.push({
+              path: batch[index]!,
+              message: `任务 Skill 正文达到 ${this.maxSnapshotBytes} 字节总预算，后续项已省略`,
+            })
+            break rootLoop
+          }
+          snapshotBytes += contentBytes
+          entries.push(parsed)
         }
-        snapshotBytes += contentBytes
-        entries.push(parsed)
       }
     }
 

@@ -16,6 +16,7 @@ export function PendingUserMessage({ draft }: { draft: ComposerDraft }) {
       <PdfDraftStrip drafts={draft.pdfs} variant="message" />
       <SkillBadges skills={draft.skills} />
       {draft.text && <UserMessageBubble text={draft.text} btw={Boolean(draft.btwMode)} />}
+      <div aria-hidden="true" className="wc-message-actions wc-type-caption -mt-1" />
     </div>
   )
 }
