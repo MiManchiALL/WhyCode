@@ -58,11 +58,11 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
       'claude-sonnet-4-6',
     )
     assert.equal(
-      getDefaultCliProxyRoute('google:gemini-3.1-pro-preview'),
-      'gemini-3.1-pro-preview',
+      getDefaultCliProxyRoute('google:gemini-4-argon'),
+      'gemini-4-argon',
     )
     assert.equal(
-      isCliProxyRoute('google:gemini-3.1-pro-preview', 'gemini-pro-agent'),
+      isCliProxyRoute('google:gemini-4-argon', 'gemini-4-argon-high'),
       true,
     )
     assert.equal(
@@ -73,35 +73,40 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
 
   it('只从当前实例实际公布的候选中选路由', () => {
     assert.deepEqual(resolveCliProxyRoutes(
-      ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
-      new Set(['gemini-pro-agent', 'gpt-5.6-sol']),
+      ['google:gemini-4-argon', 'openai:gpt-6.1-sol'],
+      new Set(['gemini-4-argon-high', 'gpt-6.1-sol']),
     ), {
-      'google:gemini-3.1-pro-preview': 'gemini-pro-agent',
-      'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+      'google:gemini-4-argon': 'gemini-4-argon-high',
+      'openai:gpt-6.1-sol': 'gpt-6.1-sol',
     })
     assert.deepEqual(resolveCliProxyRoutes(
-      ['google:gemini-3.1-pro-preview'],
+      ['google:gemini-4-argon'],
       new Set(['gemini-3-flash-agent']),
     ), {})
   })
 
   it('用 CLIProxyAPI 路由约束收窄厂商画像而不改写厂商目录', () => {
-    const official = getModelEntry('openai:gpt-5.6-sol').capabilities
-    const proxy = getCliProxyEffectiveCapabilities(
-      'openai:gpt-5.6-sol',
-      'gpt-5.6-sol',
-    )
-    assert.equal(official.contextWindow, 1_050_000)
-    assert.equal(official.reasoningEffort?.supported.includes('none'), true)
-    assert.equal(proxy?.contextWindow, 372_000)
-    assert.equal(proxy?.maxOutput, 128_000)
-    assert.equal(proxy?.structuredOutput, 'tool-based')
-    assert.equal(proxy?.supportsImageInput, true)
-    assert.equal(proxy?.supportsOriginalImageDetail, undefined)
-    assert.deepEqual(proxy?.reasoningEffort, {
-      supported: ['low', 'medium', 'high', 'xhigh', 'max'],
-      default: 'low',
-    })
+    for (const [modelId, contextWindow, supportsNone, defaultLevel] of [
+      ['gpt-6.1-sol', 272_000, false, 'low'],
+      ['gpt-6.1-terra', 500_000, true, 'low'],
+      ['gpt-6-astra', 272_000, false, 'medium'],
+    ] as const) {
+      const profileId = `openai:${modelId}`
+      const official = getModelEntry(profileId).capabilities
+      const proxy = getCliProxyEffectiveCapabilities(profileId, modelId)!
+      assert.equal(getDefaultCliProxyRoute(profileId), modelId)
+      assert.equal(official.contextWindow, 1_050_000)
+      assert.equal(official.reasoningEffort?.supported.includes('none'), supportsNone)
+      assert.equal(proxy.contextWindow, contextWindow)
+      assert.equal(proxy.maxOutput, 128_000)
+      assert.equal(proxy.structuredOutput, 'tool-based')
+      assert.equal(proxy.supportsImageInput, true)
+      assert.equal(proxy.supportsOriginalImageDetail, undefined)
+      assert.deepEqual(proxy.reasoningEffort, {
+        supported: ['low', 'medium', 'high', 'xhigh', 'max'],
+        default: defaultLevel,
+      })
+    }
   })
 
   it('按实际路由保留不同默认档位并使用更严格的上下文上限', () => {
@@ -114,18 +119,26 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
     )
     assert.equal(
       getCliProxyEffectiveCapabilities(
-        'google:gemini-3.1-pro-preview',
-        'gemini-pro-agent',
+        'google:gemini-4-argon',
+        'gemini-4-argon-high',
       )?.reasoningEffort?.default,
       'high',
     )
     assert.equal(
       getCliProxyEffectiveCapabilities(
-        'google:gemini-3.1-pro-preview',
-        'gemini-3.1-pro-low',
+        'google:gemini-4-argon',
+        'gemini-4-argon',
       )?.reasoningEffort?.default,
-      'low',
+      'medium',
     )
+    for (const route of ['gemini-4-argon', 'gemini-4-argon-high']) {
+      const capabilities = getCliProxyEffectiveCapabilities('google:gemini-4-argon', route)!
+      assert.equal(capabilities.contextWindow, 1_048_576)
+      assert.equal(capabilities.maxOutput, 65_536)
+      assert.equal(capabilities.structuredOutput, 'json-schema')
+      assert.equal(capabilities.supportsImageInput, true)
+      assert.deepEqual(capabilities.reasoningEffort?.supported, ['low', 'medium', 'high'])
+    }
     assert.deepEqual(
       getCliProxyEffectiveCapabilities(
         'google:gemini-3.8-flash',
@@ -145,25 +158,10 @@ describe('CLIProxyAPI 独立模型兼容目录', () => {
       false,
     )
     assert.equal(
-      getCliProxyEffectiveCapabilities('openai:gpt-5.6-sol', 'gpt-5.6'),
+      getCliProxyEffectiveCapabilities('openai:gpt-6.1-sol', 'test-unreviewed-route'),
       null,
     )
-  })
-
-  it('Astra 使用账号共同上限与 medium 默认，独立于 GPT-5.6', () => {
-    const official = getModelEntry('openai:gpt-6-astra').capabilities
-    const proxy = getCliProxyEffectiveCapabilities('openai:gpt-6-astra', 'gpt-6-astra')!
-    assert.equal(getDefaultCliProxyRoute('openai:gpt-6-astra'), 'gpt-6-astra')
-    assert.equal(official.contextWindow, 1_050_000)
-    assert.equal(proxy.contextWindow, 272_000)
-    assert.equal(proxy.maxOutput, 128_000)
-    assert.equal(proxy.structuredOutput, 'tool-based')
-    assert.equal(proxy.supportsImageInput, true)
-    assert.deepEqual(proxy.reasoningEffort, {
-      supported: ['low', 'medium', 'high', 'xhigh', 'max'],
-      default: 'medium',
-    })
-    assert.equal(isCliProxyRoute('openai:gpt-6-astra', 'gpt-5.6-sol'), false)
-    assert.equal(isCliProxyRoute('openai:gpt-5.6-sol', 'gpt-6-astra'), false)
+    assert.equal(isCliProxyRoute('openai:gpt-6-astra', 'gpt-6.1-sol'), false)
+    assert.equal(isCliProxyRoute('openai:gpt-6.1-sol', 'gpt-6-astra'), false)
   })
 })

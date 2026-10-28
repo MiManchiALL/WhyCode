@@ -146,7 +146,7 @@ describe('图片会话持久化', () => {
       const store = new SessionStore(root)
       const journal = await store.create({
         workspace: localWorkspace(null),
-        modelId: 'deepseek:deepseek-v4-flash',
+        modelId: 'deepseek:deepseek-v4-pro',
       })
       const source = join(root, 'source.png')
       await writeFile(source, ONE_PIXEL_PNG)

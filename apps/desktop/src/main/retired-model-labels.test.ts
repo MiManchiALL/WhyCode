@@ -5,12 +5,12 @@ import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 
 describe('历史模型显示名生命周期', () => {
   it('在型号仍受支持时按会话引用保存原名，未使用的型号不生成记录', () => {
-    const id = 'google:gemini-3.1-pro-preview'
+    const id = 'google:gemini-4-argon'
     const config: WhycodeConfig = { providers: {} }
     assert.equal(syncReferencedRetiredModelLabels(config, new Set()), config)
     const saved = syncReferencedRetiredModelLabels(config, new Set([id, cliProxyModelId(id)]))
     assert.deepEqual(saved.retiredModelLabels, {
-      [id]: 'Gemini 3.1 Pro Preview', [cliProxyModelId(id)]: 'Gemini 3.1 Pro Preview（CLIProxyAPI）',
+      [id]: 'Gemini 4 Argon', [cliProxyModelId(id)]: 'Gemini 4 Argon（CLIProxyAPI）',
     })
     assert.equal(config.retiredModelLabels, undefined)
     assert.equal(syncReferencedRetiredModelLabels(saved, new Set([id, cliProxyModelId(id)])), saved)

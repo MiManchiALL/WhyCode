@@ -8,7 +8,7 @@ import {
 
 describe('推理强度协议适配', () => {
   it('default 不覆盖厂商参数，显式档位按 Responses 与 Messages 协议翻译', () => {
-    const gpt = getModelEntry('openai:gpt-5.6-sol')
+    const gpt = getModelEntry('openai:gpt-6.1-sol')
     assert.deepEqual(providerOptionsWithReasoningEffort(gpt, 'default'), {
       openai: { forceReasoning: true, reasoningSummary: 'auto', store: false },
     })
@@ -60,10 +60,13 @@ describe('推理强度协议适配', () => {
     )
   })
 
-  it('Astra 拒绝 none/minimal，Gemini 3.8 拒绝 minimal，保留 GPT-5.6 的 none', () => {
+  it('不支持的推理档位不可选，Terra 保留官方 none 档位', () => {
     for (const [modelId, invalid] of [
       ['openai:gpt-6-astra', 'none'],
       ['openai:gpt-6-astra', 'minimal'],
+      ['openai:gpt-6.1-sol', 'none'],
+      ['openai:gpt-6.1-sol', 'minimal'],
+      ['google:gemini-4-argon', 'minimal'],
       ['google:gemini-3.8-flash', 'minimal'],
     ] as const) {
       const model = getModelEntry(modelId)
@@ -71,7 +74,7 @@ describe('推理强度协议适配', () => {
       assert.throws(() => providerOptionsWithReasoningEffort(model, invalid), /不支持推理强度/)
     }
     assert.equal(normalizeReasoningEffortSelection(
-      getModelEntry('openai:gpt-5.6-sol').capabilities,
+      getModelEntry('openai:gpt-6.1-terra').capabilities,
       'none',
     ), 'none')
   })

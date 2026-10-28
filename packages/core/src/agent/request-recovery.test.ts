@@ -165,7 +165,7 @@ describe('模型失败后的步骤恢复', () => {
 
 function createSession(model: MockLanguageModelV4, emit: (event: CoreEvent) => void): AgentSession {
   return new AgentSession({
-    model: { ...getModelEntry('openai:gpt-5.6-sol'), create: () => model },
+    model: { ...getModelEntry('openai:gpt-6.1-sol'), create: () => model },
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit, requestApproval: async () => ({ approved: true }),

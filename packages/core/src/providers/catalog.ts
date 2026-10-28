@@ -114,20 +114,6 @@ const GOOGLE_THINKING_SUMMARY_OPTIONS = {
   },
 } satisfies ProviderMetadata
 
-const DEEPSEEK_V4_CAPABILITIES = {
-  supportsNativeTools: true,
-  supportsImageInput: false,
-  reasoningExposure: 'field',
-  reasoningEffort: {
-    supported: ['high', 'max'],
-    default: 'high',
-  },
-  structuredOutput: 'json-object',
-  promptCaching: 'auto',
-  contextWindow: 1_000_000,
-  maxOutput: 384_000,
-} satisfies ModelCapabilities
-
 const DEEPSEEK_THINKING_OPTIONS = {
   deepseek: { thinking: { type: 'enabled' } },
 } satisfies ProviderMetadata
@@ -143,12 +129,12 @@ const OPENAI_REASONING_SUMMARY_OPTIONS = {
   },
 } satisfies ProviderMetadata
 
-const GPT_5_6_CAPABILITIES = {
+const OPENAI_REASONING_CAPABILITIES = {
   supportsNativeTools: true,
   supportsImageInput: true,
   reasoningExposure: 'summary',
   reasoningEffort: {
-    supported: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+    supported: ['low', 'medium', 'high', 'xhigh', 'max'],
     default: 'medium',
   },
   structuredOutput: 'json-schema',
@@ -187,25 +173,10 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     },
   },
   {
-    id: 'deepseek:deepseek-v4-flash',
-    modelId: 'deepseek-v4-flash',
-    displayName: 'DeepSeek V4 Flash',
-    provider: 'deepseek',
-    capabilities: DEEPSEEK_V4_CAPABILITIES,
-    providerOptions: DEEPSEEK_THINKING_OPTIONS,
-  },
-  {
-    id: 'deepseek:deepseek-v4-pro',
-    modelId: 'deepseek-v4-pro',
-    displayName: 'DeepSeek V4 Pro',
-    provider: 'deepseek',
-    capabilities: DEEPSEEK_V4_CAPABILITIES,
-    providerOptions: DEEPSEEK_THINKING_OPTIONS,
-  },
-  {
-    id: 'deepseek:deepseek-v4-flash-vision-exp',
-    modelId: 'deepseek-v4-flash-vision-exp',
-    displayName: 'DeepSeek V4 Flash Vision Exp',
+    // https://api-docs.deepseek.com/api/list-models/（2026-10-29）。
+    id: 'deepseek:deepseek-flash',
+    modelId: 'deepseek-flash',
+    displayName: 'DeepSeek-V4.1-Flash',
     provider: 'deepseek',
     capabilities: {
       supportsNativeTools: true,
@@ -217,15 +188,36 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       },
       structuredOutput: 'json-object',
       promptCaching: 'auto',
+      contextWindow: 1_048_576,
+      maxOutput: 393_216,
+    },
+    providerOptions: DEEPSEEK_THINKING_OPTIONS,
+  },
+  {
+    id: 'deepseek:deepseek-v4-pro',
+    modelId: 'deepseek-v4-pro',
+    displayName: 'DeepSeek V4 Pro',
+    provider: 'deepseek',
+    capabilities: {
+      supportsNativeTools: true,
+      supportsImageInput: false,
+      reasoningExposure: 'field',
+      reasoningEffort: {
+        supported: ['high', 'max'],
+        default: 'high',
+      },
+      structuredOutput: 'json-object',
+      promptCaching: 'auto',
       contextWindow: 1_000_000,
       maxOutput: 384_000,
     },
     providerOptions: DEEPSEEK_THINKING_OPTIONS,
   },
   {
-    id: 'google:gemini-3.1-pro-preview',
-    modelId: 'gemini-3.1-pro-preview',
-    displayName: 'Gemini 3.1 Pro Preview',
+    // https://ai.google.dev/gemini-api/docs/models/gemini-4-argon（2026-10-29）。
+    id: 'google:gemini-4-argon',
+    modelId: 'gemini-4-argon',
+    displayName: 'Gemini 4 Argon',
     provider: 'google',
     capabilities: {
       supportsNativeTools: true,
@@ -233,11 +225,12 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
       reasoningExposure: 'summary',
       reasoningEffort: {
         supported: ['low', 'medium', 'high'],
-        default: 'high',
+        default: 'medium',
       },
       structuredOutput: 'json-schema',
       promptCaching: 'auto',
       contextWindow: 1_048_576,
+      // 当前 Chat 流式入口使用同步上限；1M long decode 需要 Interactions 后台执行。
       maxOutput: 65_536,
     },
     providerOptions: GOOGLE_THINKING_SUMMARY_OPTIONS,
@@ -314,27 +307,27 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     providerOptions: { zhipu: { thinking: { type: 'disabled' } } },
   },
   {
-    id: 'openai:gpt-5.6-sol',
-    modelId: 'gpt-5.6-sol',
-    displayName: 'GPT-5.6 Sol',
+    // https://developers.openai.com/api/docs/models/gpt-6.1-sol（2026-10-29）。
+    id: 'openai:gpt-6.1-sol',
+    modelId: 'gpt-6.1-sol',
+    displayName: 'GPT-6.1 Sol',
     provider: 'openai',
-    capabilities: GPT_5_6_CAPABILITIES,
+    capabilities: OPENAI_REASONING_CAPABILITIES,
     providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
   },
   {
-    id: 'openai:gpt-5.6-terra',
-    modelId: 'gpt-5.6-terra',
-    displayName: 'GPT-5.6 Terra',
+    // https://developers.openai.com/api/docs/models/gpt-6.1-terra（2026-10-29）。
+    id: 'openai:gpt-6.1-terra',
+    modelId: 'gpt-6.1-terra',
+    displayName: 'GPT-6.1 Terra',
     provider: 'openai',
-    capabilities: GPT_5_6_CAPABILITIES,
-    providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
-  },
-  {
-    id: 'openai:gpt-5.6-luna',
-    modelId: 'gpt-5.6-luna',
-    displayName: 'GPT-5.6 Luna',
-    provider: 'openai',
-    capabilities: GPT_5_6_CAPABILITIES,
+    capabilities: {
+      ...OPENAI_REASONING_CAPABILITIES,
+      reasoningEffort: {
+        supported: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+        default: 'medium',
+      },
+    },
     providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
   },
   {
@@ -342,19 +335,7 @@ export const MODEL_CATALOG: readonly ModelProfile[] = [
     modelId: 'gpt-6-astra',
     displayName: 'GPT-6 Astra',
     provider: 'openai',
-    capabilities: {
-      supportsNativeTools: true,
-      supportsImageInput: true,
-      reasoningExposure: 'summary',
-      reasoningEffort: {
-        supported: ['low', 'medium', 'high', 'xhigh', 'max'],
-        default: 'medium',
-      },
-      structuredOutput: 'json-schema',
-      promptCaching: 'auto',
-      contextWindow: 1_050_000,
-      maxOutput: 128_000,
-    },
+    capabilities: OPENAI_REASONING_CAPABILITIES,
     providerOptions: OPENAI_REASONING_SUMMARY_OPTIONS,
   },
   {

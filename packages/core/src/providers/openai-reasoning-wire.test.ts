@@ -18,10 +18,10 @@ import { getModelEntry } from './registry.ts'
 
 describe('OpenAI Responses 推理摘要线格式', () => {
   it('内置 GPT 默认只请求摘要，不覆盖厂商默认推理强度', async () => {
-    const captured = await captureRequest(getModelEntry('openai:gpt-6-astra'))
+    const captured = await captureRequest(getModelEntry('openai:gpt-6.1-sol'))
 
     assert.equal(captured.path, '/v1/responses')
-    assert.equal(captured.body.model, 'gpt-6-astra')
+    assert.equal(captured.body.model, 'gpt-6.1-sol')
     assert.deepEqual(captured.body.reasoning, {
       summary: 'auto',
     })
@@ -36,15 +36,13 @@ describe('OpenAI Responses 推理摘要线格式', () => {
   })
 
   it('内置 GPT 把会话显式选档写入 Responses reasoning.effort', async () => {
-    const captured = await captureRequest(
-      getModelEntry('openai:gpt-6-astra'),
-      undefined,
-      'max',
-    )
-    assert.deepEqual(captured.body.reasoning, {
-      effort: 'max',
-      summary: 'auto',
-    })
+    for (const [modelId, effort] of [
+      ['openai:gpt-6.1-sol', 'max'],
+      ['openai:gpt-6.1-terra', 'none'],
+    ] as const) {
+      const captured = await captureRequest(getModelEntry(modelId), undefined, effort)
+      assert.deepEqual(captured.body.reasoning, { effort, summary: 'auto' })
+    }
   })
 
   it('无服务端存储时重放完整 encrypted reasoning，不发送失效 item 引用', async () => {

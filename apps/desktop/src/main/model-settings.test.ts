@@ -18,8 +18,8 @@ describe('模型设置数据边界', () => {
       cliProxyApi: {
         apiKey: 'proxy-secret',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'],
-        modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
+        modelIds: ['openai:gpt-6.1-sol'],
+        modelRoutes: { 'openai:gpt-6.1-sol': 'gpt-6.1-sol' },
       },
       webSearch: {
         activeProvider: 'tavily',
@@ -32,7 +32,7 @@ describe('模型设置数据边界', () => {
     assert.equal(snapshot.providers.find((item) => item.id === 'mimo')?.hasKey, true)
     assert.equal(snapshot.cliProxyApi.hasKey, true)
     assert.equal(
-      snapshot.cliProxyApi.models.find((model) => model.id === 'openai:gpt-5.6-sol')?.enabled,
+      snapshot.cliProxyApi.models.find((model) => model.id === 'openai:gpt-6.1-sol')?.enabled,
       true,
     )
     assert.equal(snapshot.webSearch.activeProvider, 'tavily')
@@ -77,7 +77,7 @@ describe('模型设置数据边界', () => {
     )
     assert.throws(
       () => updateAuxiliaryModelSettings(initial, {
-        visionModelId: 'deepseek:deepseek-v4-flash',
+        visionModelId: 'deepseek:deepseek-v4-pro',
         subagentModelId: null,
       }),
       /视觉辅助模型必须是当前已配置且可用的多模态模型/,
@@ -85,16 +85,16 @@ describe('模型设置数据边界', () => {
     assert.throws(
       () => updateAuxiliaryModelSettings(initial, {
         visionModelId: null,
-        subagentModelId: 'openai:gpt-5.6-sol',
+        subagentModelId: 'openai:gpt-6.1-sol',
       }),
       /子代理模型必须来自当前已配置且可用的模型连接/,
     )
     assert.deepEqual(
       updateAuxiliaryModelSettings(enabled, {
         visionModelId: null,
-        subagentModelId: 'deepseek:deepseek-v4-flash',
+        subagentModelId: 'deepseek:deepseek-flash',
       }).auxiliaryModels,
-      { subagentModelId: 'deepseek:deepseek-v4-flash' },
+      { subagentModelId: 'deepseek:deepseek-flash' },
     )
     assert.equal(
       updateAuxiliaryModelSettings(enabled, {
@@ -118,21 +118,21 @@ describe('模型设置数据边界', () => {
     assert.deepEqual(snapshot.consensusModels.models, snapshot.auxiliaryModels.subagentModels)
 
     const configured = updateConsensusModelSettings(initial, {
-      agentBModelId: 'deepseek:deepseek-v4-flash',
+      agentBModelId: 'deepseek:deepseek-flash',
       agentCModelId: 'google:gemini-3.8-flash',
     })
     assert.deepEqual(configured.consensusAgents, {
-      B: { modelId: 'deepseek:deepseek-v4-flash' },
+      B: { modelId: 'deepseek:deepseek-flash' },
       C: { modelId: 'google:gemini-3.8-flash' },
     })
     assert.deepEqual(createConnectionSettingsSnapshot(configured).consensusModels, {
-      agentBModelId: 'deepseek:deepseek-v4-flash',
+      agentBModelId: 'deepseek:deepseek-flash',
       agentCModelId: 'google:gemini-3.8-flash',
       models: snapshot.consensusModels.models,
     })
     assert.throws(
       () => updateConsensusModelSettings(initial, {
-        agentBModelId: 'openai:gpt-5.6-sol',
+        agentBModelId: 'openai:gpt-6.1-sol',
         agentCModelId: null,
       }),
       /必须来自当前已配置且可用的模型连接/,
@@ -163,12 +163,12 @@ describe('模型设置数据边界', () => {
     const next = updateCliProxyApiSettings(null, {
       baseURL: 'http://127.0.0.1:8317/v1/',
       apiKey: 'proxy-key',
-      modelIds: ['openai:gpt-5.6-sol', 'anthropic:claude-sonnet-4-6'],
+      modelIds: ['openai:gpt-6.1-sol', 'anthropic:claude-sonnet-4-6'],
     })
     assert.deepEqual(next.cliProxyApi, {
       apiKey: 'proxy-key',
       baseURL: 'http://127.0.0.1:8317/v1',
-      modelIds: ['anthropic:claude-sonnet-4-6', 'openai:gpt-5.6-sol'],
+      modelIds: ['anthropic:claude-sonnet-4-6', 'openai:gpt-6.1-sol'],
       modelRoutes: {},
     })
     assert.throws(
@@ -189,12 +189,12 @@ describe('模型设置数据边界', () => {
   it('CLIProxyAPI 清除密钥时保留地址和型号，但移除失效默认连接', () => {
     const initial: WhycodeConfig = {
       providers: {},
-      defaultModel: 'cliproxyapi:openai:gpt-5.6-sol',
+      defaultModel: 'cliproxyapi:openai:gpt-6.1-sol',
       cliProxyApi: {
         apiKey: 'proxy-key',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'],
-        modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
+        modelIds: ['openai:gpt-6.1-sol'],
+        modelRoutes: { 'openai:gpt-6.1-sol': 'gpt-6.1-sol' },
       },
     }
     const next = updateCliProxyApiSettings(initial, {
@@ -204,7 +204,7 @@ describe('模型设置数据边界', () => {
     })
     assert.equal(next.cliProxyApi?.apiKey, '')
     assert.equal(next.cliProxyApi?.baseURL, 'http://127.0.0.1:8317/v1')
-    assert.deepEqual(next.cliProxyApi?.modelIds, ['openai:gpt-5.6-sol'])
+    assert.deepEqual(next.cliProxyApi?.modelIds, ['openai:gpt-6.1-sol'])
     assert.deepEqual(next.cliProxyApi?.modelRoutes, {})
     assert.equal(next.defaultModel, undefined)
   })
@@ -228,8 +228,8 @@ describe('模型设置数据边界', () => {
   })
 
   it('设置快照保留已启用但暂时不可用的型号，并按实际路由展示能力', () => {
-    const selected = 'google:gemini-3.1-pro-preview'
-    const available = 'openai:gpt-5.6-sol'
+    const selected = 'google:gemini-4-argon'
+    const available = 'openai:gpt-6.1-sol'
     const config: WhycodeConfig = {
       providers: {},
       cliProxyApi: {
@@ -241,11 +241,11 @@ describe('模型设置数据边界', () => {
     assert.deepEqual(unavailable.map((model) => [model.id, model.enabled]), [[selected, true]])
     assert.match(unavailable[0]!.unavailableReason!, /暂未提供/)
     config.cliProxyApi!.modelRoutes = {
-      [selected]: 'gemini-3.1-pro-low', [available]: 'gpt-5.6-sol',
+      [selected]: 'gemini-4-argon', [available]: 'gpt-6.1-sol',
     }
     const models = createConnectionSettingsSnapshot(config).cliProxyApi.models
     assert.deepEqual(models.map((model) => [model.id, model.enabled]), [[selected, true], [available, false]])
-    assert.deepEqual(models[0]?.capabilities, getCliProxyEffectiveCapabilities(selected, 'gemini-3.1-pro-low'))
-    assert.deepEqual(models[1]?.capabilities, getCliProxyEffectiveCapabilities(available, 'gpt-5.6-sol'))
+    assert.deepEqual(models[0]?.capabilities, getCliProxyEffectiveCapabilities(selected, 'gemini-4-argon'))
+    assert.deepEqual(models[1]?.capabilities, getCliProxyEffectiveCapabilities(available, 'gpt-6.1-sol'))
   })
 })
