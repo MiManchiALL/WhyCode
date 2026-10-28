@@ -200,7 +200,7 @@ describe('Main 长任务端到端控制', () => {
     session.restoreTaskStateSnapshot(activeState())
     session.restoreMessageSnapshot([
       { role: 'user', content: '执行一个很长的计划' },
-      { role: 'assistant', content: 'x'.repeat(360_000) },
+      ...Array.from({ length: 3 }, (): ModelMessage => ({ role: 'assistant', content: 'x'.repeat(120_000) })),
       createUserQuestionMarker({
         id: 'compact-plan-question',
         questions: [{
@@ -240,7 +240,7 @@ describe('Main 长任务端到端控制', () => {
       session.restoreTaskStateSnapshot(state)
       session.restoreMessageSnapshot([
         { role: 'user', content: '更早的长对话' },
-        { role: 'assistant', content: 'x'.repeat(360_000) },
+        ...Array.from({ length: 3 }, (): ModelMessage => ({ role: 'assistant', content: 'x'.repeat(120_000) })),
       ])
 
       assert.equal(await session.handleUserMessage('TTL 是什么'), 'completed')

@@ -1,4 +1,5 @@
 import type { AgentSession } from '../agent/session.ts'
+import type { ModelMessage } from 'ai'
 import { createProtocolOutputTool, type ProtocolToolSpec } from './protocol-tool.ts'
 import type { ProtocolOutput } from './types.ts'
 
@@ -17,6 +18,7 @@ export async function runProtocolRound(
   session: AgentSession,
   roundInput: string,
   spec: ProtocolToolSpec,
+  userMessage?: ModelMessage,
 ): Promise<RoundResult> {
   let output: ProtocolOutput | null = null
   session.setExtraTools([createProtocolOutputTool(spec, (o) => (output = o))])
@@ -25,7 +27,7 @@ export async function runProtocolRound(
   try {
     let prompt = roundInput
     for (let attempt = 0; attempt <= MAX_SUBMIT_REMINDERS; attempt++) {
-      const stopReason = await session.handleUserMessage(prompt)
+      const stopReason = await session.handleExecutionMessage(prompt, [], [], attempt === 0 ? userMessage : undefined)
       if (stopReason === 'aborted') return { ok: false, error: 'aborted' }
       if (output) return { ok: true, output }
       prompt =

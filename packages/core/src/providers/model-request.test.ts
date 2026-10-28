@@ -7,6 +7,18 @@ import {
 } from './model-request.ts'
 
 describe('模型请求统一重试', () => {
+  it('在 I/O 分类时保留供应商 PTL 数字差额，不受展示错误截断影响', () => {
+    for (const message of [
+      'prompt is too long: 130,000 tokens > 128,000 maximum',
+      'prompt is too long: 130000 > 128000',
+      'This model has a maximum context length of 128000 tokens. However, you requested 130000 tokens.',
+      'The input token count (130000) exceeds the maximum number of tokens allowed (128000).',
+    ]) {
+      const error = modelRequestError(new APICallError({ message, url: 'http://localhost/model', requestBodyValues: {}, statusCode: 400 }))
+      assert.ok(error instanceof ModelContextOverflowError)
+      assert.equal(error.tokenGap, 2000)
+    }
+  })
   it('明确的上下文超限与普通参数、文件大小、配额和输出限制分别分类', async () => {
     for (const [statusCode, detail, expected] of [
       [400, { code: 'context_length_exceeded', message: 'Too many tokens' }, true],

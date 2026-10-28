@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
-import { CLEARED_MESSAGE } from '../context/microcompact.ts'
+import { TOOL_RESULT_PRUNED } from '../context/microcompact.ts'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
@@ -637,22 +637,25 @@ describe('用户中断后的新回合', () => {
     assert.equal(idleResolved, true)
   })
 
-  it('手动压缩与自动压缩共用微清理入口，短上下文只持久化微清理结果', async () => {
-    const model = new MockLanguageModelV4({})
+  it('手动压缩直接生成完整摘要，短上下文不走微清理', async () => {
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text', text: '<summary>已读取文件。</summary>' }],
+      finishReason: { unified: 'stop', raw: undefined }, usage: usage(), warnings: [],
+    }) })
     const events: CoreEvent[] = []
     const session = createMemorySession(model, undefined, (event) => events.push(event))
     session.restoreMessageSnapshot(microcompactableHistory())
 
     await session.compactNow()
 
-    assert.equal(model.doGenerateCalls.length, 0)
+    assert.equal(model.doGenerateCalls.length, 1)
     assert.equal(
-      events.some((event) => event.type === 'context-compacted' && event.level === 'micro'),
+      events.some((event) => event.type === 'context-compacted' && event.level === 'full'),
       true,
     )
     assert.equal(
-      JSON.stringify(session.captureMessageSnapshot()).includes(CLEARED_MESSAGE),
-      true,
+      JSON.stringify(session.captureMessageSnapshot()).includes(TOOL_RESULT_PRUNED.trim()),
+      false,
     )
   })
 
@@ -676,7 +679,7 @@ describe('用户中断后的新回合', () => {
     )
 
     const reopened = await store.open(journal.sessionId)
-    assert.equal(JSON.stringify(reopened.initialMessages).includes(CLEARED_MESSAGE), true)
+    assert.equal(JSON.stringify(reopened.initialMessages).includes(TOOL_RESULT_PRUNED.trim()), true)
   })
 
   it('被中止任务尚未创建计划时不靠隐藏 Create 阻止误续跑', async () => {

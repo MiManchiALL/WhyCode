@@ -1,5 +1,5 @@
 import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
-import { stepCountIs, streamText, tool as aiTool, type ModelMessage } from 'ai'
+import { stepCountIs, streamText, tool as aiTool, type ModelMessage, type ToolSet } from 'ai'
 import { randomUUID } from 'node:crypto'
 import { modelMessageText } from '../text.ts'
 import type {
@@ -43,6 +43,7 @@ import {
 } from '../context/usage.ts'
 import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
+import { latestUserTurnIndex, recentUserPdfIds, userTurn, withUserTurn, withoutConversationMetadata } from '../context/user-turn.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import {
   applyProjectInstructions,
@@ -81,9 +82,9 @@ import {
   type ScreenshotCaptureHandler,
 } from '../tools/capture-screenshot/index.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
-import { resolveAllowed } from '../tools/fs-utils.ts'
 import {
   compactPdfAttachmentContext,
+  projectPdfReferences,
   referencedPdfAttachmentIds,
   withPdfAttachmentReferences,
 } from '../pdf/messages.ts'
@@ -154,7 +155,6 @@ import {
   projectSubagentCatalog,
   rebuildSubagentCatalog,
   subagentCatalogUpdate,
-  withoutSubagentCatalog,
 } from '../subagents/context.ts'
 import { createSubagentSettlementMessage } from '../subagents/notification.ts'
 import {
@@ -218,7 +218,6 @@ interface ToolStepContext {
   onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
   onUserQuestion?: (question: UserQuestion) => void
   onTurnEndingTool?: (reason: 'completed' | 'waiting-user') => void
-  onReadFile?: (path: string) => void
   onImageAttachments?: (
     toolCallId: string, attachments: readonly ImageAttachment[],
     transform: ImageTransform | undefined, attachmentLimit: number,
@@ -413,8 +412,6 @@ export class AgentSession {
   private contextOverhead: RequestContextOverhead | null = null
   /** 压缩熔断：连续失败 3 次后本会话停止尝试，成功清零 */
   private compactFailures = 0
-  /** 会话内读过的文件（压缩后重注入用）：绝对路径 → 最后读取时间 */
-  private recentReadFiles = new Map<string, number>()
   /** 用户输入与图片工具导入的权威附件元数据；长期消息只保存其稳定引用。 */
   private imageAttachments = new Map<string, ImageAttachment>()
   /** 用户上传 PDF 的权威元数据；ReadFile 只通过此表解析不透明 ID。 */
@@ -1308,11 +1305,12 @@ export class AgentSession {
     }
   }
 
-  /** 协商执行包走同一模型意图路径，但不作为 urgent steering。 */
+  /** 协议提示与执行包不是新用户任务；首次协议回合可携带已标记的原始用户消息。 */
   handleExecutionMessage(
     text: string,
     steeringInputs: readonly QueuedUserMessage[] = [],
     skills: readonly ActivatedSkill[] = [],
+    userMessage?: ModelMessage,
   ): Promise<StopReason> | void {
     if (this.isBusy) throw new Error('Main 尚未空闲，不能启动协商执行阶段')
     const delivered = steeringInputs.map((input) => {
@@ -1342,16 +1340,24 @@ export class AgentSession {
       this.addPdfAttachments(pdfAttachments)
     }
     const notifications = this.drainTaskNotifications()
+    const root = userMessage ?? this.messages[latestUserTurnIndex(this.messages)]
+    const rootId = root && userTurn(root)?.id
     return this.startTurn(
       [
+        ...(userMessage ? [userMessage] : []),
         { role: 'user', content: text },
-        ...delivered.map(queuedMessageForModel),
+        ...delivered.map(input => {
+          const message = queuedMessageForModel(input)
+          return rootId ? withUserTurn(message, rootId, false, input.pdfAttachments.map(pdf => pdf.id)) : message
+        }),
         ...notifications.map((item) => item.message),
       ],
       delivered,
       undefined,
       skills,
       notifications,
+      false,
+      'internal',
     )
   }
 
@@ -1431,6 +1437,7 @@ export class AgentSession {
     skills: readonly ActivatedSkill[] = [],
     taskNotifications: readonly QueuedTaskNotification[] = [],
     resumeTaskPlanFromNotification = false,
+    inputSource: 'user' | 'internal' = 'user',
   ): Promise<StopReason> {
     const turnModelSelection: TurnModelSelection = {
       model: this.options.model,
@@ -1450,6 +1457,7 @@ export class AgentSession {
       skills,
       taskNotifications,
       resumeTaskPlanFromNotification,
+      inputSource,
     ).finally(() => {
       if (this.activeModelSelection === turnModelSelection) {
         this.activeModelSelection = null
@@ -1676,7 +1684,12 @@ export class AgentSession {
     const drained = this.drainQueue()
     const notifications = this.drainTaskNotifications()
     const injected: ModelMessage[] = [
-      ...drained.map(queuedMessageForModel),
+      ...drained.map(item => {
+        const message = queuedMessageForModel(item)
+        const root = this.messages[latestUserTurnIndex(this.messages)]
+        return withUserTurn(message, root ? userTurn(root)!.id : this.activeTurn!.id,
+          false, item.pdfAttachments.map(pdf => pdf.id))
+      }),
       ...notifications.map((item) => item.message),
     ]
     if (injected.length > 0 && this.activeTurn) {
@@ -1724,6 +1737,7 @@ export class AgentSession {
     skills: readonly ActivatedSkill[] = [],
     initialTaskNotifications: readonly QueuedTaskNotification[] = [],
     resumeTaskPlanFromNotification = false,
+    inputSource: 'user' | 'internal' = 'user',
   ): Promise<StopReason> {
     const { emit } = this.options
     this.abortRequestedDuringFinalization = false
@@ -1759,6 +1773,16 @@ export class AgentSession {
       if (!this.terminalStatusManaged) emit({ type: 'agent-status', status: 'error' })
       this.resolveIdleWaiters()
       return 'error'
+    }
+    if (inputSource === 'user') {
+      const notificationMessages = new Set(initialTaskNotifications.map(item => item.message))
+      let startsUserTurn = true
+      initialMessages = initialMessages.map(message => {
+        if (message.role !== 'user' || notificationMessages.has(message)) return message
+        const tagged = withUserTurn(message, turnId, startsUserTurn, referencedPdfAttachmentIds([message]))
+        startsUserTurn = false
+        return tagged
+      })
     }
     const pendingUserQuestion = findPendingUserQuestion(this.messages)
     const answersPendingUserQuestion = pendingUserQuestion !== null
@@ -2137,7 +2161,7 @@ export class AgentSession {
     }
   }
 
-  /** 手动压缩（用户主动触发，不看阈值）：统一先微清理，再尝试完整压缩。 */
+  /** 手动压缩直接总结全部活动历史，不运行微压缩或保留对话尾部。 */
   async compactNow(): Promise<void> {
     const { emit } = this.options
     if (this.isBusy) {
@@ -2155,20 +2179,19 @@ export class AgentSession {
     emit({ type: 'agent-status', status: 'working' })
     try {
       await this.refreshProjectInstructions()
-      const microcompacted = this.microcompactCurrentMessages()
-      const result = await compactMessages(
-        this.createLanguageModel(),
-        withoutMcpToolState(this.messages),
-        [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
-        signal,
-        this.compactApplicationContext(),
-        (messages) => this.messagesForCurrentModel(messages, signal, false),
-        this.requestProviderOptions(),
-        (retry) => emit({ type: 'model-request-retry', ...retry }),
-        this.options.workspaceIO,
-      )
-      if (result.summaryText || microcompacted) {
-        const messages = await this.prepareCompactedMessages(result.messages, Boolean(result.summaryText), signal)
+      const tools = this.buildToolSet(signal, { emit, loopHealth: this.loopHealth },
+        this.options.mcpRuntime?.toolDefinitions(this.messages) ?? [])
+      const result = await compactMessages({
+        model: this.createLanguageModel(), messages: this.messages,
+        capabilities: this.currentModelSelection().model.capabilities,
+        abortSignal: signal, mode: 'manual', tools: toolsForModel(tools),
+        applicationContext: this.compactApplicationContext(),
+        prepareMessagesForModel: messages => this.messagesForCurrentModel(messages, signal, false),
+        providerOptions: this.requestProviderOptions(),
+        onRetry: retry => emit({ type: 'model-request-retry', ...retry }),
+      })
+      if (result.summaryText) {
+        const messages = await this.prepareCompactedMessages(result.messages, signal)
         await this.persistRequired((recorder) =>
           recorder.recordSnapshot('compact', messages, undefined, this.taskPlan?.stateSnapshot),
           '保存上下文压缩',
@@ -2179,13 +2202,13 @@ export class AgentSession {
         this.compactFailures = 0
         emit({
           type: 'context-compacted',
-          level: result.summaryText ? 'full' : 'micro',
+          level: 'full',
           preTokens,
           postTokens: this.estimateCurrentContextTokens(),
         })
         this.emitContextUsage()
       } else {
-        emit({ type: 'error', message: '当前上下文已在精确保留预算内，无需压缩', recoverable: true })
+        emit({ type: 'error', message: '当前没有可压缩的对话历史', recoverable: true })
       }
     } catch (error) {
       emit({
@@ -2222,6 +2245,7 @@ export class AgentSession {
     abortSignal: AbortSignal,
     planExecutionEngaged: boolean,
     force: boolean,
+    tools: ToolSet | undefined,
   ): Promise<PreparedRequestContext> {
     const model = this.currentModelSelection().model
     const threshold = autoCompactThreshold(model.capabilities)
@@ -2236,12 +2260,12 @@ export class AgentSession {
     }
 
     let request = prepared
-    // 第一级：微清理旧工具输出（改写历史后基线失效，全量重估）
-    if (this.microcompactCurrentMessages()) {
-      request = await this.commitAutoCompaction('micro', prepared.usedTokens, abortSignal, this.messages)
-      if (force
-        ? estimateMessagesTokens(request.messages) < estimateMessagesTokens(prepared.messages)
-        : request.usedTokens < threshold) {
+    // 微压缩先写稳候选快照；保存失败不能改写活动历史。
+    const cleaned = microcompact(this.messages)
+    if (cleaned) {
+      request = await this.commitAutoCompaction('micro', prepared.usedTokens, abortSignal, cleaned)
+      if (request.usedTokens < threshold && (!force
+        || estimateMessagesTokens(request.messages) < estimateMessagesTokens(prepared.messages))) {
         this.compactFailures = 0
         return request
       }
@@ -2250,17 +2274,14 @@ export class AgentSession {
     // 第二级：全量摘要压缩
     let result: Awaited<ReturnType<typeof compactMessages>>
     try {
-      result = await compactMessages(
-        this.createLanguageModel(),
-        withoutMcpToolState(this.messages),
-        [...this.recentReadFiles].map(([path, readAt]) => ({ path, readAt })),
-        abortSignal,
-        this.compactApplicationContext(planExecutionEngaged, this.activeTurn!.id),
-        (messages) => this.messagesForCurrentModel(messages, abortSignal, false),
-        this.requestProviderOptions(),
-        (retry) => this.options.emit({ type: 'model-request-retry', ...retry }),
-        this.options.workspaceIO,
-      )
+      result = await compactMessages({
+        model: this.createLanguageModel(), messages: this.messages, capabilities: model.capabilities,
+        abortSignal, mode: 'auto', tools,
+        applicationContext: this.compactApplicationContext(planExecutionEngaged, this.activeTurn!.id),
+        prepareMessagesForModel: messages => this.messagesForCurrentModel(messages, abortSignal, false),
+        providerOptions: this.requestProviderOptions(),
+        onRetry: retry => this.options.emit({ type: 'model-request-retry', ...retry }),
+      })
     } catch (error) {
       if (abortSignal.aborted) throw error
       this.recordAutoCompactFailure()
@@ -2271,7 +2292,11 @@ export class AgentSession {
       this.recordAutoCompactFailure()
       return request
     }
-    const messages = await this.prepareCompactedMessages(result.messages, true, abortSignal)
+    const messages = await this.prepareCompactedMessages(result.messages, abortSignal)
+    const projected = await this.messagesForCurrentModel(messages, abortSignal)
+    if (estimateMessagesTokens(projected) >= estimateMessagesTokens(request.messages)) {
+      throw new Error('压缩后的原始用户输入、保留尾部与必要上下文仍无法缩小请求；请减少附件或选择更大的上下文')
+    }
     const compactedRequest = await this.commitAutoCompaction('full', request.usedTokens, abortSignal, messages)
     this.compactFailures = 0
     return compactedRequest
@@ -2280,16 +2305,15 @@ export class AgentSession {
   /** 重建权威上下文但暂不替换活动历史；快照写稳后才能采纳压缩结果。 */
   private async prepareCompactedMessages(
     compacted: ModelMessage[],
-    full: boolean,
     abortSignal: AbortSignal,
   ): Promise<ModelMessage[]> {
-    if (full) await this.refreshSubagentCatalog()
+    await this.refreshSubagentCatalog()
     await this.refreshProjectInstructions()
     abortSignal.throwIfAborted()
     const messages = applyProjectInstructions(
       carryMcpToolState(this.messages, compacted), findProjectInstructionsMessage(this.messages),
     )
-    return full ? rebuildSubagentCatalog(messages, this.subagentCatalog) : messages
+    return rebuildSubagentCatalog(messages, this.subagentCatalog)
   }
 
   private async commitAutoCompaction(
@@ -2323,15 +2347,6 @@ export class AgentSession {
     })
   }
 
-  /** 自动与手动压缩共用的唯一微清理入口。 */
-  private microcompactCurrentMessages(): boolean {
-    const cleaned = microcompact(this.messages)
-    if (!cleaned) return false
-    this.messages = cleaned
-    this.tokenBaseline = null
-    return true
-  }
-
   private compactApplicationContext(
     planExecutionEngaged = false,
     turnId?: string,
@@ -2345,7 +2360,7 @@ export class AgentSession {
             : undefined,
         )
       : undefined
-    const pdfContext = compactPdfAttachmentContext(this.sessionPdfAttachments())
+    const pdfContext = compactPdfAttachmentContext(this.sessionPdfAttachments(), recentUserPdfIds(this.messages))
     const sections = [taskContext, pdfContext].filter(
       (section): section is string => Boolean(section),
     )
@@ -2463,12 +2478,10 @@ export class AgentSession {
     const model = this.currentModelSelection().model
     const supportsImages = model.capabilities.supportsImageInput
     const signal = abortSignal ?? new AbortController().signal
-    const catalogMessages = includeActiveContext
-      ? projectSubagentCatalog(messages) : withoutSubagentCatalog(messages)
-    const modelMessages = this.browserTurn.project(this.skillTurn.project(
-      withoutMcpToolState(catalogMessages),
-      includeActiveContext,
-    ), includeActiveContext)
+    const recentPdfs = recentUserPdfIds(this.messages)
+    const modelMessages = projectPdfReferences(includeActiveContext
+      ? this.browserTurn.project(this.skillTurn.project(withoutMcpToolState(projectSubagentCatalog(messages))))
+      : messages, recentPdfs)
     const withPdfPages = supportsImages
       && this.options.pdfProcessor
       && this.options.sessionRecorder
@@ -2478,6 +2491,7 @@ export class AgentSession {
           this.options.sessionRecorder.attachmentDirectory,
           this.options.pdfProcessor,
           signal,
+          recentPdfs,
         )
       : modelMessages
     const withImages = await messagesForModel(
@@ -2488,7 +2502,7 @@ export class AgentSession {
       signal,
       Boolean(this.options.auxiliaryImageAnalyzer),
     )
-    return adaptMessagesForProvider(withImages, model.protocol)
+    return adaptMessagesForProvider(withoutConversationMetadata(withImages), model.protocol)
   }
 
   private sessionImageAttachments(): ImageAttachment[] {
@@ -2654,7 +2668,6 @@ export class AgentSession {
         onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
         onUserQuestion: (question) => { userQuestion = question },
         onTurnEndingTool: (reason) => { stepControl.toolEndReason = reason },
-        onReadFile: (path) => this.recentReadFiles.set(path, Date.now()),
         onImageAttachments: (id, attachments, transform, limit) =>
           stepAttachments.acceptImages(id, attachments, transform, limit),
         onPdfAttachments: (id, attachments) => stepAttachments.acceptPdfs(id, attachments),
@@ -2673,7 +2686,7 @@ export class AgentSession {
       const prepared = await this.prepareRequestContext(stepAbort.signal)
       this.emitContextUsage(prepared.messages, prepared.usedTokens)
       const request = await this.compactIfNeeded(
-        prepared, stepAbort.signal, planExecutionEngaged, Boolean(recovery),
+        prepared, stepAbort.signal, planExecutionEngaged, Boolean(recovery), toolsForModel(requestTools),
       )
       if (recovery) {
         if (estimateMessagesTokens(request.messages) >= estimateMessagesTokens(prepared.messages)) {
@@ -3243,15 +3256,6 @@ export class AgentSession {
               if (error) result = { data: error, isError: true }
               else if (!result.isError && readKind !== 'pdf') {
                 viewedAttachments = result.attachments
-              }
-            }
-            // 记录读过的文件（压缩后重注入，防失忆）
-            if (readKind === 'text' && !result.isError) {
-              try {
-                const abs = await resolveAllowed(toolCtx, (parsed.value as { path: string }).path)
-                context.onReadFile?.(abs)
-              } catch {
-                /* 越界读取已被权限层处理，这里忽略 */
               }
             }
             await finalizeCheckpoint()

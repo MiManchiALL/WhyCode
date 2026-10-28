@@ -102,12 +102,12 @@ export class SkillTurnContext {
     }
   }
 
-  project(messages: readonly ModelMessage[], includeActiveContext = true): ModelMessage[] {
+  project(messages: readonly ModelMessage[]): ModelMessage[] {
     return applySkillContext(
       messages,
-      includeActiveContext ? this.catalog : null,
-      includeActiveContext ? [...this.active.values()].map(projectedSkill) : [],
-      includeActiveContext ? this.visibleResultCallIds : new Set(),
+      this.catalog,
+      [...this.active.values()].map(projectedSkill),
+      this.visibleResultCallIds,
     )
   }
 

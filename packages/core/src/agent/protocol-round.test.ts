@@ -7,15 +7,20 @@ import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { buildTool } from '../tools/tool.ts'
 import { runProtocolRound } from '../consensus/run-round.ts'
+import { userTurn, withUserTurn } from '../context/user-turn.ts'
 import { AgentSession } from './session.ts'
 
 describe('协议回合终止语义', () => {
   it('成功提交协议后不再发起下一次模型调用', async () => {
     const model = mockModel([validSubmission('main_only')])
     const { session, events } = createSession(model)
-    const result = await runProtocolRound(session, '讨论今天吃什么', m1Spec)
+    const result = await runProtocolRound(session, '讨论今天吃什么', m1Spec,
+      withUserTurn({ role: 'user', content: '用户原始任务' }, 'task-1', true))
 
     assert.equal(result.ok, true)
+    const roots = session.captureMessageSnapshot().filter(message => userTurn(message)?.startsTurn)
+    assert.equal(roots.length, 1)
+    assert.equal(roots[0]?.content, '用户原始任务')
     assert.equal(model.doStreamCalls.length, 1)
     assert.equal(events.some((event) => event.type === 'text-delta'), false)
     assert.equal(

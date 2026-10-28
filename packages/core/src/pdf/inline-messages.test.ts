@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
+import { carryRecentPdfTurns, recentUserPdfIds, withUserTurn } from '../context/user-turn.ts'
+import { createCompactApplicationContextMessage, createCompactSummaryMessage } from '../prompts/compact.ts'
 import { withPdfAttachmentReferences } from './messages.ts'
 import { inlineSmallPdfMessages } from './inline-messages.ts'
 import type { PdfProcessor } from './processor.ts'
@@ -27,10 +29,7 @@ describe('小 PDF 请求期页面图展开', () => {
     await writeFile(join(root, attachment.storageName), '%PDF-test')
     let reads = 0
     const processor = renderingProcessor(() => { reads++ })
-    const original: ModelMessage[] = [{
-      role: 'user',
-      content: withPdfAttachmentReferences('请阅读论文', [attachment]),
-    }]
+    const original = [upload('A', '请阅读论文', [attachment])]
 
     const first = await inlineSmallPdfMessages(
       original, [attachment], root, processor, new AbortController().signal,
@@ -57,9 +56,9 @@ describe('小 PDF 请求期页面图展开', () => {
     ])
     let reads = 0
     const messages: ModelMessage[] = [
-      { role: 'user', content: withPdfAttachmentReferences('旧文档', [older]) },
+      upload('A', '旧文档', [older]),
       { role: 'assistant', content: '收到' },
-      { role: 'user', content: withPdfAttachmentReferences('新文档', [newer]) },
+      upload('B', '新文档', [newer]),
     ]
     const result = await inlineSmallPdfMessages(
       messages,
@@ -82,10 +81,7 @@ describe('小 PDF 请求期页面图展开', () => {
       writeFile(join(root, first.storageName), '%PDF-first'),
       writeFile(join(root, second.storageName), '%PDF-second'),
     ])
-    const messages: ModelMessage[] = [{
-      role: 'user',
-      content: withPdfAttachmentReferences('按顺序阅读', [first, second]),
-    }]
+    const messages = [upload('A', '按顺序阅读', [first, second])]
     const result = await inlineSmallPdfMessages(
       messages,
       [first, second],
@@ -103,13 +99,31 @@ describe('小 PDF 请求期页面图展开', () => {
     assert.ok(firstInline >= 0 && secondInline > firstInline)
   })
 
+  it('多份小 PDF 共享总字节预算，较新文件优先，超限引用仍能显式读取', async () => {
+    const directory = await tempRoot()
+    const older = pdfAttachment('66666666-6666-4666-8666-666666666666', 'older.pdf', 1)
+    const newer = pdfAttachment('77777777-7777-4777-8777-777777777777', 'newer.pdf', 1)
+    for (const attachment of [older, newer]) await writeFile(join(directory, attachment.storageName), '%PDF-test')
+    const comment = Buffer.alloc(60_004)
+    comment.writeUInt16BE(0xfffe, 0)
+    comment.writeUInt16BE(60_002, 2)
+    const jpeg = Buffer.concat([SMALL_JPEG.subarray(0, 2), ...Array.from({ length: 150 }, () => comment), SMALL_JPEG.subarray(2)])
+    const messages = [upload('A', '两份资料', [older, newer])]
+    const output = await inlineSmallPdfMessages(messages, [older, newer], directory,
+      renderingProcessor(() => {}, jpeg), new AbortController().signal)
+    const images = imageParts(output)
+    assert.equal(images.length, 1)
+    assert.ok(images[0]?.type === 'file' && images[0].filename?.startsWith(newer.id))
+    const text = output.flatMap(message => typeof message.content === 'string' ? [message.content]
+      : message.content.flatMap(part => part.type === 'text' ? [part.text] : [])).join('\n')
+    assert.match(text, /PDF 自动展开失败；请调用 ReadFile/)
+    assert.ok(text.includes(`attachment://${older.id}`))
+  })
+
   it('大 PDF 只保留稳定引用，等待模型按页调用 ReadFile', async () => {
     const root = await tempRoot()
     const attachment = pdfAttachment('44444444-4444-4444-8444-444444444444', 'large.pdf', 11)
-    const messages: ModelMessage[] = [{
-      role: 'user',
-      content: withPdfAttachmentReferences('阅读大文档', [attachment]),
-    }]
+    const messages = [upload('A', '阅读大文档', [attachment])]
     const result = await inlineSmallPdfMessages(
       messages,
       [attachment],
@@ -126,10 +140,7 @@ describe('小 PDF 请求期页面图展开', () => {
       ...pdfAttachment('88888888-8888-4888-8888-888888888888', 'remote.pdf', 2),
       origin: 'web',
     }
-    const messages: ModelMessage[] = [{
-      role: 'user',
-      content: withPdfAttachmentReferences('远程 PDF 已下载', [attachment]),
-    }]
+    const messages = [upload('A', '远程 PDF 已下载', [attachment])]
 
     const result = await inlineSmallPdfMessages(
       messages,
@@ -146,10 +157,7 @@ describe('小 PDF 请求期页面图展开', () => {
     const root = await tempRoot()
     const attachment = pdfAttachment('55555555-5555-4555-8555-555555555555', 'dense.pdf', 1)
     await writeFile(join(root, attachment.storageName), '%PDF-dense')
-    const messages: ModelMessage[] = [{
-      role: 'user',
-      content: withPdfAttachmentReferences('阅读密集文档', [attachment]),
-    }]
+    const messages = [upload('A', '阅读密集文档', [attachment])]
     const result = await inlineSmallPdfMessages(
       messages,
       [attachment],
@@ -162,9 +170,39 @@ describe('小 PDF 请求期页面图展开', () => {
     assert.match(manifest, /"version":3/)
     assert.doesNotMatch(manifest, /"text"|textClipped/)
   })
+
+  it('只展开最近三次正式 turn 的上传；插话、压缩与恢复不刷新窗口', async () => {
+    const directory = await tempRoot()
+    const older = pdfAttachment('22222222-2222-4222-8222-222222222222', 'early.pdf', 1)
+    const newer = pdfAttachment('33333333-3333-4333-8333-333333333333', 'recent.pdf', 1)
+    const steering = pdfAttachment('44444444-4444-4444-8444-444444444444', 'steering.pdf', 1)
+    for (const attachment of [older, newer, steering]) await writeFile(join(directory, attachment.storageName), '%PDF-test')
+    const history = [upload('A', '早期', [older]), upload('B', '稍后', [newer]), upload('C', '任务 C', []),
+      upload('D', '任务 D', []), upload('D', '补充资料', [steering], false)]
+    const summary = carryRecentPdfTurns(createCompactSummaryMessage({ historySummary: '历史', turnPrefixSummary: null, turnId: null }), history)
+    const references = createCompactApplicationContextMessage([withPdfAttachmentReferences('PDF 引用', [older, newer, steering])])
+    const restored: ModelMessage[] = JSON.parse(JSON.stringify([summary, history[3]!, references]))
+    assert.deepEqual(recentUserPdfIds(restored), new Set([newer.id, steering.id]))
+    const result = await inlineSmallPdfMessages(restored, [older, newer, steering], directory,
+      renderingProcessor(() => {}), new AbortController().signal)
+    assert.equal(imageParts(result).length, 2)
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(`whycode-pdf-inline attachment-id=\\\\"${older.id}`))
+    const twice = [carryRecentPdfTurns(createCompactSummaryMessage({ historySummary: '再次压缩', turnPrefixSummary: null, turnId: null }), restored), references]
+    assert.deepEqual(recentUserPdfIds(twice), new Set([newer.id, steering.id]))
+    twice.push(upload('E', '新任务 E', []))
+    assert.deepEqual(recentUserPdfIds(twice), new Set([steering.id]))
+    twice.push(upload('F', '新任务 F', []), upload('G', '新任务 G', []))
+    const aged = await inlineSmallPdfMessages(twice, [older, newer, steering], directory,
+      renderingProcessor(() => assert.fail('旧 PDF 不应因重注入而再次展开')), new AbortController().signal)
+    assert.equal(imageParts(aged).length, 0)
+  })
 })
 
-function renderingProcessor(onRead: () => void): PdfProcessor {
+function upload(id: string, text: string, pdfs: PdfAttachment[], startsTurn = true): ModelMessage {
+  return withUserTurn({ role: 'user', content: withPdfAttachmentReferences(text, pdfs) }, id, startsTurn, pdfs.map(pdf => pdf.id))
+}
+
+function renderingProcessor(onRead: () => void, jpeg = SMALL_JPEG): PdfProcessor {
   return {
     async inspect() {
       return { pageCount: 1, byteLength: 1 }
@@ -176,7 +214,7 @@ function renderingProcessor(onRead: () => void): PdfProcessor {
       const renderedPages = []
       for (let page = 1; page <= options.pageCount; page++) {
         const path = join(options.outputDirectory, `page-${String(page).padStart(4, '0')}.jpg`)
-        await writeFile(path, SMALL_JPEG)
+        await writeFile(path, jpeg)
         renderedPages.push({ pageNumber: page, path, width: 1, height: 1 })
       }
       return { mode: 'visual', pageCount: options.pageCount, renderedPages }

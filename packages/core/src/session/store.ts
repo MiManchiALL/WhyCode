@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, open as openFile, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, posix } from 'node:path'
 import type { ModelMessage } from 'ai'
+import { withUserTurn } from '../context/user-turn.ts'
 import { appendOrderedMessages } from './tool-execution.ts'
 import {
   consensusPersistedStateSchema,
@@ -1248,7 +1249,7 @@ export class SessionJournal implements SessionRecorder {
       this.activeConsensusTaskId = taskId
       this.activeConsensusBaseMessages = [
         ...this.messages,
-        { role: 'user', content: userText },
+        withUserTurn({ role: 'user', content: userText }, taskId, true),
       ]
       this.activeConsensusBaseTaskState = cloneTaskPlanState(this.taskState)
       this.activeConsensusBaseTurnIds = new Set(started.baseTurnIds)

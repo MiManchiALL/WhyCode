@@ -23,6 +23,7 @@ The current ownership boundaries are:
 - `04-START-HERE.md`: project orientation, how to establish current facts, development workflow, full asynchronous/error-handling and resource rules, and the complete document map. Link to `AGENTS.md` for general code-quality constraints instead of duplicating them.
 - `05-暂存区便签.md`: only current unfinished work, pending verification, blockers, and immediate next actions.
 - `06-依赖安全例外.md`: verified dependency security exceptions, review conditions, and audit ownership.
+- `decisions/context-compaction.md`: rationale, tradeoffs, and reference evidence for context compaction only; executable contracts stay in `03` and module ownership in `02`. This document does not establish a general decision-log workflow.
 
 Trigger-specific workflows live in project skills. `.agents/skills/whycode-model-catalog/SKILL.md` owns model catalog and CLIProxyAPI maintenance; standing instructions and `04` keep only the mandatory trigger link. Skills may add domain-specific evidence, but link to CONTRIBUTING rather than redefine the general test policy.
 

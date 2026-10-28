@@ -39,9 +39,11 @@ export class ModelRequestError extends Error {
 /** 模型明确拒绝了上下文大小；普通网络重试不能缩小请求。 */
 export class ModelContextOverflowError extends ModelRequestError {
   override readonly name = 'ModelContextOverflowError'
+  readonly tokenGap: number | undefined
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: ErrorOptions, tokenGap?: number) {
     super(message, false, undefined, options)
+    this.tokenGap = tokenGap
   }
 }
 
@@ -62,7 +64,7 @@ export function modelRequestError(error: unknown): ModelRequestError {
   // 仅识别供应商明确的上下文错误，不把通用 400/413、输出上限或速率配额当成可压缩历史。
   if ((status === undefined || [400, 413, 422].includes(status))
     && CONTEXT_OVERFLOW_PATTERNS.some(pattern => pattern.test(detail))) {
-    return new ModelContextOverflowError(message, { cause: error })
+    return new ModelContextOverflowError(message, { cause: error }, contextOverflowTokenGap(detail))
   }
   if (apiError) {
     const quota = /insufficient[_ ](?:quota|balance)|quota[_ ]exceeded|余额不足|欠费/iu.test(`${detail} ${apiError.message}`)
@@ -80,6 +82,18 @@ export function modelRequestError(error: unknown): ModelRequestError {
     )
   }
   return new ModelRequestError(message, false, undefined, { cause: error })
+}
+
+/** 只解析已被分类为 PTL 的供应商错误，不从展示用截断文案估算差额。 */
+function contextOverflowTokenGap(detail: string): number | undefined {
+  const text = detail.replaceAll(/(?<=\d)[,_](?=\d)/gu, '')
+  const direct = /(\d+)\s*(?:tokens?\s*)?>\s*(\d+)/iu.exec(text)
+    ?? /input token count\D*(\d+).*?maximum\D*(\d+)/iu.exec(text)
+  const openai = /maximum context length (?:is|of)\s*(\d+).*?(?:requested|resulted in)\s*(\d+)/iu.exec(text)
+  const actual = direct ? Number(direct[1]) : openai ? Number(openai[2]) : 0
+  const limit = direct ? Number(direct[2]) : openai ? Number(openai[1]) : 0
+  return Number.isSafeInteger(actual) && Number.isSafeInteger(limit) && limit > 0 && actual > limit
+    ? actual - limit : undefined
 }
 
 export function emptyModelResponse(finishReason?: string | null): ModelRequestError {

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
+import { withUserTurn } from '../context/user-turn.ts'
 import type { BtwToolStep } from './btw.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { ConsensusPersistedState } from '../consensus/types.ts'
@@ -827,7 +828,7 @@ describe('SessionStore', () => {
     const consensusReopened = await store.open(consensusJournal.sessionId)
     assert.deepEqual(consensusReopened.initialMessages, [
       message('user', '共识前未交付消息'),
-      message('user', '正式共识请求'),
+      withUserTurn(message('user', '正式共识请求'), 'task-order', true),
     ])
     assert.equal(consensusReopened.undeliveredUserInputIds.length, 1)
 
@@ -841,7 +842,7 @@ describe('SessionStore', () => {
     await lateJournal.recordUserInput('共识起点后的未交付消息', true)
     const lateReopened = await store.open(lateJournal.sessionId)
     assert.deepEqual(lateReopened.initialMessages, [
-      message('user', '原始共识请求'),
+      withUserTurn(message('user', '原始共识请求'), 'task-late-input', true),
       message('user', '共识起点后的未交付消息'),
     ])
     assert.equal(lateReopened.undeliveredUserInputIds.length, 1)
@@ -1278,7 +1279,7 @@ describe('SessionStore', () => {
     assert.deepEqual(reopened.initialConsensusState, state)
     assert.deepEqual(reopened.initialMessages, [
       ...baseMessages,
-      message('user', consensusRequest),
+      withUserTurn(message('user', consensusRequest), 'task-1', true),
     ])
     assert.deepEqual(reopened.messagesBeforeTurn('base'), [])
     assert.equal(reopened.messagesBeforeTurn('m1'), null)
@@ -1289,7 +1290,7 @@ describe('SessionStore', () => {
     assert.equal(recovered.metadataSnapshot.status, 'idle')
     assert.deepEqual(recovered.initialMessages.slice(0, -1), [
       ...baseMessages,
-      message('user', consensusRequest),
+      withUserTurn(message('user', consensusRequest), 'task-1', true),
     ])
     assert.equal(isTurnAbortedMessage(recovered.initialMessages.at(-1)!), true)
     assert.equal(recovered.messagesBeforeTurn('m1'), null)
@@ -1523,7 +1524,7 @@ describe('SessionStore', () => {
     assert.equal(reopened.interruptedConsensusTaskId, 'task-1')
     assert.equal(reopened.undeliveredUserInputIds.length, 0)
     assert.deepEqual(reopened.initialConsensusState, state)
-    assert.deepEqual(reopened.initialMessages, [message('user', '压缩中的共识请求')])
+    assert.deepEqual(reopened.initialMessages, [withUserTurn(message('user', '压缩中的共识请求'), 'task-1', true)])
   })
 
   it('活动共识快照后的未交付根输入在取消恢复时只出现一次，且重放不修改记录', async () => {
@@ -1548,7 +1549,7 @@ describe('SessionStore', () => {
 
     assert.deepEqual(entries, originalEntries)
     assert.deepEqual(first.messages.slice(0, -1), [
-      message('user', '原始共识请求'),
+      withUserTurn(message('user', '原始共识请求'), 'task-snapshot-root', true),
       message('user', '快照后的未交付消息'),
     ])
     assert.equal(first.messages.filter((entry) =>
@@ -1579,7 +1580,7 @@ describe('SessionStore', () => {
     assert.equal(reopened.metadataSnapshot.status, 'idle')
     assert.deepEqual(reopened.initialMessages.slice(0, -1), [
       ...baseMessages,
-      message('user', '分析新请求'),
+      withUserTurn(message('user', '分析新请求'), 'task-1', true),
     ])
     assert.equal(isTurnAbortedMessage(reopened.initialMessages.at(-1)!), true)
     assert.equal(reopened.messagesBeforeTurn('m1'), null)

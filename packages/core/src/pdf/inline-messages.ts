@@ -1,7 +1,8 @@
 import type { ModelMessage, UserContent } from 'ai'
 import { escapePdfAttribute } from './content.ts'
 import { loadInlinePdfPages } from './inline-cache.ts'
-import { PDF_INLINE_VISUAL_MAX_PAGES } from './limits.ts'
+import { PDF_INLINE_VISUAL_MAX_BYTES, PDF_INLINE_VISUAL_MAX_PAGES } from './limits.ts'
+import { recentUserPdfIds } from '../context/user-turn.ts'
 import { referencedPdfAttachmentIds } from './messages.ts'
 import type { PdfProcessor } from './processor.ts'
 import type { PdfAttachment } from './types.ts'
@@ -23,11 +24,13 @@ export async function inlineSmallPdfMessages(
   attachmentDirectory: string,
   processor: PdfProcessor,
   abortSignal: AbortSignal,
+  recentIds: ReadonlySet<string> = recentUserPdfIds(messages),
 ): Promise<ModelMessage[]> {
-  const selections = selectInlineAttachments(messages, attachments)
+  const selections = selectInlineAttachments(messages, attachments, recentIds)
   if (selections.length === 0) return [...messages]
   const appended = new Map<number, UserParts>()
-  for (const selection of selections) {
+  let remainingBytes = PDF_INLINE_VISUAL_MAX_BYTES
+  for (const selection of [...selections].reverse()) {
     try {
       const pages = await loadInlinePdfPages(
         attachmentDirectory,
@@ -35,6 +38,9 @@ export async function inlineSmallPdfMessages(
         processor,
         abortSignal,
       )
+      const bytes = pages.reduce((total, page) => total + page.bytes.byteLength, 0)
+      if (bytes > remainingBytes) throw new Error('PDF 自动展开超过本次请求的总字节预算')
+      remainingBytes -= bytes
       const parts: UserParts = [{
         type: 'text',
         text: [
@@ -56,8 +62,8 @@ export async function inlineSmallPdfMessages(
       }
       parts.push({ type: 'text', text: '</whycode-pdf-inline>' })
       appended.set(selection.messageIndex, [
-        ...(appended.get(selection.messageIndex) ?? []),
         ...parts,
+        ...(appended.get(selection.messageIndex) ?? []),
       ])
     } catch (error) {
       if (abortSignal.aborted) throw error
@@ -83,6 +89,7 @@ export async function inlineSmallPdfMessages(
 function selectInlineAttachments(
   messages: readonly ModelMessage[],
   attachments: readonly PdfAttachment[],
+  recentIds: ReadonlySet<string>,
 ): Selection[] {
   const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]))
   const seen = new Set<string>()
@@ -92,12 +99,13 @@ function selectInlineAttachments(
     const message = messages[index]!
     if (message.role !== 'user') continue
     const selected: Selection[] = []
-    for (const id of referencedPdfAttachmentIds([message])) {
+    for (const id of [...referencedPdfAttachmentIds([message])].reverse()) {
       if (seen.has(id)) continue
       seen.add(id)
       const attachment = byId.get(id)
       if (
         !attachment
+        || !recentIds.has(id)
         || attachment.origin === 'web'
         || attachment.pageCount > PDF_INLINE_VISUAL_MAX_PAGES
         || attachment.pageCount > remainingPages
@@ -105,7 +113,7 @@ function selectInlineAttachments(
       selected.push({ messageIndex: index, attachment })
       remainingPages -= attachment.pageCount
     }
-    if (selected.length > 0) selectedByMessage.push(selected)
+    if (selected.length > 0) selectedByMessage.push(selected.reverse())
   }
   return selectedByMessage.reverse().flat()
 }

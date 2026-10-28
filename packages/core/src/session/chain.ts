@@ -1,4 +1,5 @@
 import type { ModelMessage, ToolResultPart } from 'ai'
+import { withUserTurn } from '../context/user-turn.ts'
 import { keepsConsensusProgress, type ConsensusPersistedState } from '../consensus/types.ts'
 import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
 import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
@@ -397,7 +398,7 @@ function collectTurnStarts(
     if (entry.type === 'consensus-task-start') {
       activeConsensusBaseMessages = [
         ...messages,
-        { role: 'user', content: entry.userText },
+        withUserTurn({ role: 'user', content: entry.userText }, entry.taskId, true),
       ]
       activeConsensusBaseTurnIds = new Set(entry.baseTurnIds)
     }
@@ -1051,7 +1052,7 @@ function collectMessages(
     if (entry.type === 'consensus-task-start') {
       activeConsensusBaseMessages = [
         ...messages,
-        { role: 'user', content: entry.userText },
+        withUserTurn({ role: 'user', content: entry.userText }, entry.taskId, true),
       ]
     }
     if (entry.type === 'messages') {
@@ -1219,7 +1220,7 @@ function findInterruptedWork(
       interruptedConsensusTaskId = entry.taskId
       interruptedConsensusBaseMessages = [
         ...visibleMessages,
-        { role: 'user', content: entry.userText },
+        withUserTurn({ role: 'user', content: entry.userText }, entry.taskId, true),
       ]
       interruptedConsensusBaseTaskState = cloneTaskPlanState(entry.baseTaskState)
       interruptedConsensusBaseTurnIds = [...entry.baseTurnIds]

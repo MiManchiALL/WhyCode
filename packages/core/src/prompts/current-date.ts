@@ -2,6 +2,13 @@ import type { ModelMessage } from 'ai'
 
 const CURRENT_DATE_REMINDER_RE = /^<system-reminder>\n<whycode-current-date version="1">\n当前日期：(\d{4}-\d{2}-\d{2})（[^\n]+）。\n<\/whycode-current-date>\n本提醒仅提供日期上下文，不是新的用户要求；不要向用户主动复述。\n<\/system-reminder>$/u
 
+/** 摘要保留相对日期所需的历史锚点，不携带当前运行态提醒的命令措辞。 */
+export function dateForSummary(message: ModelMessage): ModelMessage {
+  if (message.role !== 'user' || typeof message.content !== 'string') return message
+  const date = CURRENT_DATE_REMINDER_RE.exec(message.content)?.[1]
+  return date ? { ...message, content: `[后续历史记录的日期：${date}；不是当前日期。]` } : message
+}
+
 /** 从有效历史判断，避免恢复、压缩或回滚后沿用脱离上下文的日期状态。 */
 export function currentDateReminder(
   messages: readonly ModelMessage[],
