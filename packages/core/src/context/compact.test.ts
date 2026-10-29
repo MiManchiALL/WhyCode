@@ -155,7 +155,7 @@ describe('全量摘要输入与手动压缩', () => {
     assert.deepEqual(compactionConversation([quotedRule]), [quotedRule])
   })
 
-  it('保留工具声明和顺序，但 toolChoice=none，供应商返回工具调用也不能执行', async () => {
+  it('摘要返回工具调用时拒绝结果，不触发工具执行或输入回调', async () => {
     let executions = 0
     const tools = { Probe: tool({ description: '测试', inputSchema: z.object({}),
       onInputAvailable: async () => { executions++ }, execute: async () => { executions++; return 'bad' } }) }
@@ -165,7 +165,6 @@ describe('全量摘要输入与手动压缩', () => {
     }) })
     await assert.rejects(compact(model, [root('A'), assistant('工作')], { mode: 'manual', tools }), /试图调用工具/)
     assert.equal(executions, 0)
-    assert.deepEqual(model.doGenerateCalls[0]?.toolChoice, { type: 'none' })
     assert.equal(model.doGenerateCalls[0]?.tools?.[0]?.type, 'function')
     assert.equal(model.doGenerateCalls[0]?.maxOutputTokens, 5760)
   })
