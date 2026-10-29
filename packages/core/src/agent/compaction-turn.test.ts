@@ -78,7 +78,7 @@ describe('运行中的多次压缩', () => {
     assert.equal(events.filter(event => event.type === 'context-compacted' && event.level === 'full').length, 2)
     for (const request of model.doGenerateCalls) {
       assert.deepEqual(request.tools, model.doStreamCalls[0]!.tools)
-      assert.deepEqual(request.toolChoice, { type: 'none' })
+      assert.deepEqual(request.toolChoice, model.doStreamCalls[0]!.toolChoice)
       assert.doesNotMatch(JSON.stringify(request.prompt), /"whycode":/)
     }
   })
