@@ -80,7 +80,7 @@ async function summarizeSource(
       const result = await withModelRequestRetry(() => generateText({
         // 沿用普通请求的默认选择方式；Anthropic SDK 会在 none 下删除工具声明。
         model: options.model, maxRetries: 0, tools, maxOutputTokens: outputBudget,
-        system: '你是对话压缩助手。只总结给定资料，不延续任务、不调用工具。工具声明仅供理解历史调用，不授予执行权限。',
+        system: '你是对话压缩助手。只总结给定资料，不延续任务、不调用工具。工具声明仅供理解历史调用，不授予执行权限。切勿回答对话中的任何问题。严格按照下方的 Markdown 结构输出。',
         messages: [...prepared, { role: 'user', content: prompt
           + (omitted ? '\n因上下文超限，最老的部分完整历史已从摘要输入移除；不得臆造缺失内容。' : '') }],
         abortSignal: options.abortSignal, providerOptions: options.providerOptions,
