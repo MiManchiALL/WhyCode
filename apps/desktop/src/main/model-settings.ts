@@ -97,6 +97,7 @@ export function createConnectionSettingsSnapshot(
       models: configuredModels,
     },
     webSearch: createWebSearchSettingsSnapshot(config),
+    webFetch: { provider: config?.webFetch?.provider ?? 'builtin' },
   }
 }
 

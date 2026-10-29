@@ -1,20 +1,19 @@
-import { WebSearchError } from '@whycode/core'
+export const WEB_API_TIMEOUT_MS = 20_000
+export const WEB_API_MAX_RESPONSE_BYTES = 2_000_000
 
-export const SEARCH_REQUEST_TIMEOUT_MS = 20_000
-export const SEARCH_MAX_RESPONSE_BYTES = 2_000_000
-
-interface SearchJsonRequest {
+interface WebJsonRequest {
   endpoint: string
   apiKey: string
   body: Record<string, unknown>
   serviceName: string
   signal: AbortSignal
-  statusError: (status: number) => WebSearchError
+  statusError: (status: number) => Error
+  error: (message: string) => Error
   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>
   maxResponseBytes?: number
 }
 
-export async function postSearchJson(options: SearchJsonRequest): Promise<unknown> {
+export async function postWebJson(options: WebJsonRequest): Promise<unknown> {
   const response = await (options.fetchImpl ?? fetch)(options.endpoint, {
     method: 'POST',
     headers: {
@@ -24,6 +23,7 @@ export async function postSearchJson(options: SearchJsonRequest): Promise<unknow
     },
     body: JSON.stringify(options.body),
     cache: 'no-store',
+    credentials: 'omit',
     redirect: 'error',
     referrerPolicy: 'no-referrer',
     signal: options.signal,
@@ -35,13 +35,14 @@ export async function postSearchJson(options: SearchJsonRequest): Promise<unknow
 
   const body = await readBoundedResponse(
     response,
-    options.maxResponseBytes ?? SEARCH_MAX_RESPONSE_BYTES,
+    options.maxResponseBytes ?? WEB_API_MAX_RESPONSE_BYTES,
     options.serviceName,
+    options.error,
   )
   try {
     return JSON.parse(body) as unknown
   } catch {
-    throw new WebSearchError(`${options.serviceName}返回了无效 JSON`)
+    throw options.error(`${options.serviceName}返回了无效 JSON`)
   }
 }
 
@@ -49,13 +50,14 @@ async function readBoundedResponse(
   response: Response,
   maxBytes: number,
   serviceName: string,
+  error: (message: string) => Error,
 ): Promise<string> {
   const declaredLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     await response.body?.cancel().catch(() => {})
-    throw new WebSearchError(`${serviceName}响应超过安全大小限制`)
+    throw error(`${serviceName}响应超过安全大小限制`)
   }
-  if (!response.body) throw new WebSearchError(`${serviceName}返回了空响应`)
+  if (!response.body) throw error(`${serviceName}返回了空响应`)
 
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -67,7 +69,7 @@ async function readBoundedResponse(
       totalBytes += chunk.value.byteLength
       if (totalBytes > maxBytes) {
         await reader.cancel()
-        throw new WebSearchError(`${serviceName}响应超过安全大小限制`)
+        throw error(`${serviceName}响应超过安全大小限制`)
       }
       chunks.push(chunk.value)
     }

@@ -14,6 +14,7 @@ describe('网页搜索后端分派', () => {
         activeProvider: 'perplexity',
         perplexity: { apiKey: 'perplexity-key' },
         tavily: { apiKey: 'tavily-key', searchDepth: 'advanced' },
+        deepseek: { apiKey: 'deepseek-web-key' },
       },
     }
     const calls: string[] = []
@@ -34,12 +35,16 @@ describe('网页搜索后端分派', () => {
     }
     await handler(request, activeSignal)
 
+    config = { ...config, webSearch: { ...config.webSearch!, activeProvider: 'deepseek' } }
+    await handler(request, activeSignal)
     assert.deepEqual(calls, [
       'https://api.perplexity.ai/search',
       'https://api.tavily.com/search',
+      'https://api.deepseek.com/v1/tools/search',
     ])
     assert.equal(bodies[1]?.search_depth, 'advanced')
     assert.equal(bodies[1]?.auto_parameters, true)
+    assert.equal(bodies[2]?.need_content, false)
   })
 
   it('损坏的活动选择不会越过已有密钥调用未配置后端', async () => {

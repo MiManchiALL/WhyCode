@@ -63,6 +63,7 @@ import type {
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
+  SaveWebFetchSettingsRequest,
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
@@ -209,6 +210,9 @@ const api = {
   saveWebSearchSettings: (
     request: SaveWebSearchSettingsRequest,
   ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebSearchSettings, request),
+  saveWebFetchSettings: (
+    request: SaveWebFetchSettingsRequest,
+  ): Promise<SettingsMutationResult> => ipcRenderer.invoke(IPC.saveWebFetchSettings, request),
   setMcpServerEnabled: (
     request: SetMcpServerEnabledRequest,
   ): Promise<SettingsMutationResult<McpSettingsItem>> => ipcRenderer.invoke(IPC.setMcpServerEnabled, request),

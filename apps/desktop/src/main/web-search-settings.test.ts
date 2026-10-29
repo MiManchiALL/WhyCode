@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   createWebSearchSettingsSnapshot,
   updateWebSearchSettings,
+  updateWebFetchSettings,
 } from './web-search-settings.ts'
 import type { WhycodeConfig } from './config.ts'
 
@@ -30,6 +31,7 @@ describe('网页搜索设置边界', () => {
           hasKey: true,
           searchDepth: 'advanced',
         },
+        { id: 'deepseek', displayName: 'DeepSeek Search API', hasKey: false },
       ],
     })
     assert.doesNotMatch(JSON.stringify(snapshot), /private-perplexity-key|private-tavily-key/)
@@ -132,5 +134,29 @@ describe('网页搜索设置边界', () => {
       apiKey: 'new-key',
     })
     assert.equal(initial.webSearch?.perplexity?.apiKey, 'old-key')
+  })
+
+  it('DeepSeek 密钥供搜索和抓取共用，选择抓取不改变搜索后端', () => {
+    const initial = updateWebSearchSettings(null, { provider: 'perplexity', apiKey: 'pplx-key' })
+    const configured = updateWebSearchSettings(initial, { provider: 'deepseek', apiKey: ' ds-key ' })
+    const fetching = updateWebFetchSettings(configured, { provider: 'deepseek' })
+    assert.equal(fetching.webSearch?.activeProvider, 'perplexity')
+    assert.equal(fetching.webSearch?.deepseek?.apiKey, 'ds-key')
+    assert.equal(fetching.webFetch?.provider, 'deepseek')
+    assert.equal(configured.webFetch, undefined)
+    const searching = updateWebSearchSettings(fetching, { provider: 'deepseek', setActive: true })
+    assert.equal(searching.webSearch?.activeProvider, 'deepseek')
+    const cleared = updateWebSearchSettings(searching, { provider: 'deepseek', clearApiKey: true })
+    assert.equal(cleared.webSearch?.deepseek, undefined)
+    assert.equal(cleared.webSearch?.activeProvider, 'perplexity')
+    // 保留抓取选择，调用时报缺少密钥，不能静默切换外部服务。
+    assert.equal(cleared.webFetch?.provider, 'deepseek')
+    assert.equal(updateWebFetchSettings(cleared, { provider: 'builtin' }).webFetch?.provider, 'builtin')
+  })
+
+  it('抓取设置拒绝未知后端和无密钥的 DeepSeek', () => {
+    assert.throws(() => updateWebFetchSettings(null, { provider: 'unknown' as 'builtin' }), /未知/)
+    assert.throws(() => updateWebFetchSettings(null, { provider: 'deepseek' }), /请先配置/)
+    assert.equal(updateWebFetchSettings(null, { provider: 'builtin' }).webFetch?.provider, 'builtin')
   })
 })

@@ -6,9 +6,9 @@ import {
   type WebSearchResult,
 } from '@whycode/core'
 import {
-  postSearchJson,
-  SEARCH_REQUEST_TIMEOUT_MS,
-} from './http.ts'
+  postWebJson,
+  WEB_API_TIMEOUT_MS,
+} from '../web-http.ts'
 
 const PERPLEXITY_SEARCH_ENDPOINT = 'https://api.perplexity.ai/search'
 
@@ -22,22 +22,23 @@ export function createPerplexitySearchHandler(
   options: PerplexitySearchOptions,
 ): WebSearchHandler {
   return async (request, abortSignal) => {
-    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? SEARCH_REQUEST_TIMEOUT_MS)
+    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? WEB_API_TIMEOUT_MS)
     const signal = AbortSignal.any([abortSignal, timeoutSignal])
     try {
       const apiKey = options.getApiKey()?.trim()
       if (!apiKey) {
         throw new WebSearchError(
-          '尚未配置 Perplexity Search API key，请在“⚙ 连接 → 网页搜索”中配置',
+          '尚未配置 Perplexity Search API key，请在“设置 → 网页搜索与抓取”中配置',
         )
       }
-      const response = await postSearchJson({
+      const response = await postWebJson({
         endpoint: PERPLEXITY_SEARCH_ENDPOINT,
         apiKey,
         body: perplexityRequestBody(request),
         serviceName: 'Perplexity 搜索',
         signal,
         statusError,
+        error: (message) => new WebSearchError(message),
         ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       })
       return parseSearchResponse(

@@ -1,5 +1,6 @@
 import type {
   SaveWebSearchSettingsRequest,
+  SaveWebFetchSettingsRequest,
   TavilySearchDepth,
   WebSearchProviderId,
   WebSearchSettingsItem,
@@ -18,6 +19,7 @@ const TAVILY_SEARCH_DEPTHS = [
 const WEB_SEARCH_PROVIDERS = [
   { id: 'perplexity', displayName: 'Perplexity Search API' },
   { id: 'tavily', displayName: 'Tavily Search API' },
+  { id: 'deepseek', displayName: 'DeepSeek Search API' },
 ] as const satisfies readonly {
   id: WebSearchProviderId
   displayName: string
@@ -72,7 +74,7 @@ export function updateWebSearchSettings(
           ?? 'basic',
       }
     } else {
-      webSearch.perplexity = { apiKey }
+      webSearch[request.provider] = { apiKey }
     }
   } else {
     delete webSearch[request.provider]
@@ -94,5 +96,20 @@ export function updateWebSearchSettings(
         : configured[0]!
     next.webSearch = webSearch
   }
+  return next
+}
+
+export function updateWebFetchSettings(
+  config: WhycodeConfig | null,
+  request: SaveWebFetchSettingsRequest,
+): WhycodeConfig {
+  if (request?.provider !== 'builtin' && request?.provider !== 'deepseek') {
+    throw new Error('未知的网页抓取服务')
+  }
+  if (request.provider === 'deepseek' && !config?.webSearch?.deepseek?.apiKey) {
+    throw new Error('请先配置上方的 DeepSeek API Key，搜索与抓取共用此密钥')
+  }
+  const next: WhycodeConfig = config ? structuredClone(config) : { providers: {} }
+  next.webFetch = { provider: request.provider }
   return next
 }

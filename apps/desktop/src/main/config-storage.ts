@@ -57,7 +57,9 @@ interface StoredConfig {
     activeProvider?: string
     perplexity?: StoredCredential
     tavily?: StoredCredential & { searchDepth?: string }
+    deepseek?: StoredCredential
   }
+  webFetch?: WhycodeConfig['webFetch']
   mcpSecretHeaders?: Array<{
     serverName?: unknown
     connectionFingerprint?: unknown
@@ -104,6 +106,7 @@ export function loadConfig(
   const auxiliaryModels = parseAuxiliaryModels(stored.auxiliaryModels)
   const consensusAgents = parseConsensusAgents(stored.consensusAgents)
   const webSearch = parseWebSearch(stored.webSearch, codec)
+  const webFetch = parseWebFetch(stored.webFetch)
   const mcpSecretHeaders = parseStoredMcpSecretHeaders(stored.mcpSecretHeaders, codec)
   const mcpOAuthSessions = parseStoredMcpOAuthSessions(stored.mcpOAuthSessions, codec)
   const permissionMode = parsePermissionMode(stored.permissionMode)
@@ -116,6 +119,7 @@ export function loadConfig(
     ...(auxiliaryModels ? { auxiliaryModels } : {}),
     ...(consensusAgents ? { consensusAgents } : {}),
     ...(webSearch ? { webSearch } : {}),
+    ...(webFetch ? { webFetch } : {}),
     ...(mcpSecretHeaders ? { mcpSecretHeaders } : {}),
     ...(mcpOAuthSessions ? { mcpOAuthSessions } : {}),
   }
@@ -186,6 +190,9 @@ export async function saveConfig(
         ...(config.webSearch.perplexity
           ? { perplexity: storeCredential(config.webSearch.perplexity, codec) }
           : {}),
+        ...(config.webSearch.deepseek
+          ? { deepseek: storeCredential(config.webSearch.deepseek, codec) }
+          : {}),
         ...(config.webSearch.tavily
           ? {
               tavily: {
@@ -196,6 +203,7 @@ export async function saveConfig(
           : {}),
       },
     } : {}),
+    ...(config.webFetch ? { webFetch: config.webFetch } : {}),
     ...(config.mcpSecretHeaders?.length ? {
       mcpSecretHeaders: storeMcpSecretHeaders(config.mcpSecretHeaders, codec),
     } : {}),
@@ -286,19 +294,22 @@ function parseWebSearch(
   if (!isRecord(value)) throw new ConfigReadError('搜索配置格式无效')
   const parsedPerplexity = parseCredential(value.perplexity, codec)
   const parsedTavily = parseCredential(value.tavily, codec)
+  const parsedDeepSeek = parseCredential(value.deepseek, codec)
   const perplexity = parsedPerplexity?.apiKey ? parsedPerplexity : null
   const tavily = parsedTavily?.apiKey ? parsedTavily : null
-  if (!perplexity && !tavily) return undefined
+  const deepseek = parsedDeepSeek?.apiKey ? parsedDeepSeek : null
+  if (!perplexity && !tavily && !deepseek) return undefined
 
   const requested = webSearchProviderId(value.activeProvider)
-  const activeProvider = requested && (requested === 'perplexity' ? perplexity : tavily)
+  const activeProvider = requested && { perplexity, tavily, deepseek }[requested]
     ? requested
     : perplexity
       ? 'perplexity'
-      : 'tavily'
+      : tavily ? 'tavily' : 'deepseek'
   return {
     activeProvider,
     ...(perplexity ? { perplexity: { apiKey: perplexity.apiKey } } : {}),
+    ...(deepseek ? { deepseek: { apiKey: deepseek.apiKey } } : {}),
     ...(tavily ? {
       tavily: {
         apiKey: tavily.apiKey,
@@ -306,6 +317,14 @@ function parseWebSearch(
       },
     } : {}),
   }
+}
+
+function parseWebFetch(value: unknown): WhycodeConfig['webFetch'] {
+  if (value === undefined) return undefined
+  if (!isRecord(value) || (value.provider !== 'builtin' && value.provider !== 'deepseek')) {
+    throw new ConfigReadError('网页抓取配置格式无效')
+  }
+  return { provider: value.provider }
 }
 
 function parseStoredMcpSecretHeaders(
@@ -495,7 +514,7 @@ function safeLabel(value: unknown, maxLength: number): string | undefined {
 }
 
 function webSearchProviderId(value: unknown): WebSearchProviderId | undefined {
-  return value === 'perplexity' || value === 'tavily' ? value : undefined
+  return value === 'perplexity' || value === 'tavily' || value === 'deepseek' ? value : undefined
 }
 
 function storeCredential(value: ProviderConnectionConfig, codec: ConfigSecretCodec): StoredCredential {
