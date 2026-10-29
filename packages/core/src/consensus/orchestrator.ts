@@ -1,4 +1,5 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
+import { withUserTurn } from '../context/user-turn.ts'
 import type { CoreEvent, CoreEventSink, QueuedUserMessage, StopReason } from '../events.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
@@ -358,11 +359,12 @@ export class ConsensusCoordinator {
     mainSession.setTerminalStatusManaged(true)
     mainSession.setUserQuestionsEnabled(false)
     const taskId = `task-${++this.taskCounter}`
+    const userMessage = withUserTurn({ role: 'user', content: userText }, taskId, true)
     const startState = this.snapshotState()
     const startMessages = mainSession.captureMessageSnapshot()
     const interruptedBaseMessages = [
       ...startMessages,
-      { role: 'user' as const, content: userText },
+      userMessage,
     ]
     const startTaskState = mainSession.captureTaskStateSnapshot()
     let outcome: ConsensusTaskOutcome = 'error'
@@ -414,6 +416,7 @@ export class ConsensusCoordinator {
           requireProtocolMode: true,
           forcedProtocolMode: forceFullConsensus ? 'full_consensus' : undefined,
         },
+        userMessage,
       )
       if (this.abortReason) {
         outcome = 'aborted'

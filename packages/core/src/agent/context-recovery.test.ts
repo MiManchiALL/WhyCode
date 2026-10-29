@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import { APICallError, simulateReadableStream, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
-import { CLEARED_MESSAGE } from '../context/microcompact.ts'
+import { TOOL_RESULT_PRUNED } from '../context/microcompact.ts'
 import type { CoreEvent } from '../events.ts'
 import { getModelEntry } from '../providers/registry.ts'
 import { buildTool } from '../tools/tool.ts'
@@ -70,7 +70,7 @@ describe('上下文超限的有限恢复', () => {
     assert.equal(await session.handleUserMessage('继续'), 'completed')
     assert.equal(requests, 2)
     assert.equal(model.doGenerateCalls.length, 0)
-    assert.ok(JSON.stringify(model.doStreamCalls[1]!.prompt).includes(CLEARED_MESSAGE))
+    assert.ok(JSON.stringify(model.doStreamCalls[1]!.prompt).includes(TOOL_RESULT_PRUNED.trim()))
     assert.deepEqual(events.filter(event => event.type === 'context-compacted').map(event => event.level), ['micro'])
   })
 
@@ -163,7 +163,9 @@ describe('上下文超限的有限恢复', () => {
 function fixture(model: MockLanguageModelV4, onEvent?: (event: CoreEvent) => void) {
   const events: CoreEvent[] = []
   const session = new AgentSession({
-    model: { ...getModelEntry('openai:gpt-5.6-sol'), create: () => model },
+    model: { ...getModelEntry('openai:gpt-5.6-sol'),
+      capabilities: { ...getModelEntry('openai:gpt-5.6-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 },
+      create: () => model },
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit: event => { events.push(event); onEvent?.(event) }, requestApproval: async () => ({ approved: true }),

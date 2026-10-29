@@ -1,216 +1,118 @@
+import { generateText, type LanguageModel, type ModelMessage, type ProviderMetadata, type ToolSet } from 'ai'
 import {
-  generateText,
-  type LanguageModel,
-  type ModelMessage,
-  type ProviderMetadata,
-} from 'ai'
-import { localWorkspaceIO, type WorkspaceIO } from '../workspace/io.ts'
-import {
-  COMPACT_HISTORY_SUMMARY_PROMPT,
-  COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
-  compactSummaryReference,
-  createCompactApplicationContextMessage,
-  createCompactSummaryMessage,
+  COMPACT_HISTORY_SUMMARY_PROMPT, COMPACT_TURN_PREFIX_SUMMARY_PROMPT,
+  compactSummaryReference, createCompactApplicationContextMessage, createCompactSummaryMessage,
 } from '../prompts/compact.ts'
-import {
-  applyProjectInstructions,
-  findProjectInstructionsMessage,
-} from '../instructions/project.ts'
-import {
-  findTrailingTurnInputBatchStart,
-  prepareCompaction,
-  type SummarySource,
-} from './compact-boundary.ts'
-import { estimateTextTokens } from './tokens.ts'
-import { withoutSubagentCatalog } from '../subagents/context.ts'
-import { modelRequestError, withModelRequestRetry, type ModelRequestRetry } from '../providers/model-request.ts'
+import { applyProjectInstructions, findProjectInstructionsMessage } from '../instructions/project.ts'
+import { ModelContextOverflowError, modelRequestError, withModelRequestRetry, type ModelRequestRetry } from '../providers/model-request.ts'
+import type { ModelCapabilities } from '../providers/registry.ts'
+import { findTrailingTurnInputBatchStart, prepareCompaction, type SummarySource } from './compact-boundary.ts'
+import { compactionConversation } from './compact-context.ts'
+import { COMPACT_PTL_MAX_RETRIES, trimSummaryInput } from './compact-retry.ts'
+import { compactTailBudget, estimateTextTokens } from './tokens.ts'
+import { carryRecentPdfTurns, userTurn } from './user-turn.ts'
+import { dateForSummary } from '../prompts/current-date.ts'
 
-const REINJECT_MAX_FILES = 5
-const REINJECT_TOKEN_BUDGET = 50_000
-const REINJECT_MAX_TOKENS_PER_FILE = 5_000
-
-export interface CompactResult {
+export interface CompactResult { messages: ModelMessage[]; summaryText: string }
+export interface CompactOptions {
+  model: LanguageModel
   messages: ModelMessage[]
-  summaryText: string
+  capabilities: Pick<ModelCapabilities, 'contextWindow' | 'maxOutput'>
+  abortSignal: AbortSignal
+  mode: 'auto' | 'manual'
+  tools?: ToolSet
+  applicationContext?: string
+  prepareMessagesForModel?: (messages: ModelMessage[]) => ModelMessage[] | Promise<ModelMessage[]>
+  providerOptions?: ProviderMetadata
+  onRetry?: (retry: ModelRequestRetry) => void
 }
-
 type SummaryKind = 'history' | 'turn-prefix'
 
-/** 调用当前模型生成一种摘要（关工具），剥掉可选的 analysis 草稿。 */
-async function summarize(
-  model: LanguageModel,
-  messages: ModelMessage[],
-  kind: SummaryKind,
-  abortSignal: AbortSignal,
-  providerOptions?: ProviderMetadata,
-  onRetry?: (retry: ModelRequestRetry) => void,
-): Promise<string> {
-  const prompt = kind === 'history'
-    ? COMPACT_HISTORY_SUMMARY_PROMPT
-    : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
-  const result = await withModelRequestRetry(() => generateText({
-    maxRetries: 0,
-    model,
-    system: '你是对话压缩助手。忠实总结给定范围，不延续任务，不调用工具。',
-    messages: [...messages, { role: 'user', content: prompt }],
-    abortSignal,
-    providerOptions,
-  }).catch((error: unknown) => { throw modelRequestError(error) }), abortSignal, onRetry)
-  const match = /<summary>([\s\S]*?)(<\/summary>|$)/u.exec(result.text)
-  const summary = (match
-    ? match[1]!
-    : result.text.replace(/<analysis>[\s\S]*?<\/analysis>/u, '')
-  ).trim()
-  if (!summary) throw new Error(`${kind === 'history' ? '历史' : 'turn 前缀'}摘要为空`)
-  return summary
-}
-
-/** 重注入最近读过的文件（新鲜内容重读，防压缩后失忆）。 */
-async function buildFileReinjection(
-  recentReadFiles: { path: string; readAt: number }[],
-  io: WorkspaceIO,
-): Promise<string | null> {
-  const sorted = [...recentReadFiles].sort((a, b) => b.readAt - a.readAt).slice(0, REINJECT_MAX_FILES)
-  let budget = REINJECT_TOKEN_BUDGET
-  const sections: string[] = []
-  for (const file of sorted) {
-    const content = await io.fs.readFile(file.path, 'utf8').catch(() => null)
-    if (content === null) continue
-    let text = content
-    while (estimateTextTokens(text) > REINJECT_MAX_TOKENS_PER_FILE) {
-      text = `${text.slice(0, Math.floor(text.length * 0.8))}\n[已截断]`
-    }
-    const cost = estimateTextTokens(text)
-    if (cost > budget) continue
-    budget -= cost
-    sections.push(`### ${file.path}\n${text}`)
-  }
-  return sections.length > 0
-    ? `压缩前最近读过的文件（当前最新内容）：\n\n${sections.join('\n\n')}`
-    : null
-}
-
-/** 执行完整压缩并重建当前模型消息链。 */
-export async function compactMessages(
-  model: LanguageModel,
-  messages: ModelMessage[],
-  recentReadFiles: { path: string; readAt: number }[],
-  abortSignal: AbortSignal,
-  applicationContext?: string,
-  prepareMessagesForModel?: (
-    messages: ModelMessage[],
-  ) => ModelMessage[] | Promise<ModelMessage[]>,
-  providerOptions?: ProviderMetadata,
-  onRetry?: (retry: ModelRequestRetry) => void,
-  io: WorkspaceIO = localWorkspaceIO,
-): Promise<CompactResult> {
-  const projectInstructions = findProjectInstructionsMessage(messages)
-  const conversationMessages = withoutSubagentCatalog(applyProjectInstructions(messages, null))
-  const preparation = prepareCompaction(conversationMessages)
-  if (!preparation) {
-    return {
-      messages: [...messages],
-      summaryText: '',
-    }
-  }
-
+/** 先完成全部摘要和校验，再返回候选链；调用者负责原子保存，失败不采纳任何半份摘要。 */
+export async function compactMessages(options: CompactOptions): Promise<CompactResult> {
+  const { messages, capabilities } = options
+  const preparation = prepareCompaction(compactionConversation(messages),
+    compactTailBudget(capabilities), options.mode === 'manual')
+  if (!preparation) return { messages: [...messages], summaryText: '' }
+  const totalBudget = Math.min(12_000, capabilities.maxOutput,
+    Math.max(512, Math.floor((capabilities.contextWindow - Math.min(capabilities.maxOutput, 20_000)) * 0.08)))
   let historySummary = preparation.carriedHistorySummary
-  if (preparation.historySource) {
-    historySummary = await summarizeSource(
-      model,
-      preparation.historySource,
-      'history',
-      projectInstructions,
-      abortSignal,
-      prepareMessagesForModel,
-      providerOptions,
-      onRetry,
-    )
-  }
-  const turnPrefixSummary = preparation.turnPrefixSource
-    ? await summarizeSource(
-        model,
-        preparation.turnPrefixSource,
-        'turn-prefix',
-        projectInstructions,
-        abortSignal,
-        prepareMessagesForModel,
-        providerOptions,
-        onRetry,
-      )
-    : null
-
-  if (!historySummary && !turnPrefixSummary) {
-    return {
-      messages: [...messages],
-      summaryText: '',
-    }
-  }
+  if (preparation.historySource) historySummary = await summarizeSource(
+    options, preparation.historySource, 'history', Math.max(1, Math.floor(totalBudget * 2 / 3)),
+  )
+  const turnPrefixSummary = preparation.turnPrefixSource ? await summarizeSource(
+    options, preparation.turnPrefixSource, 'turn-prefix', Math.max(1, Math.floor(totalBudget / 3)),
+  ) : null
   const rebuilt: ModelMessage[] = [
-    createCompactSummaryMessage({ historySummary, turnPrefixSummary }),
+    ...(historySummary ? [createCompactSummaryMessage({ historySummary, turnPrefixSummary: null, turnId: null })] : []),
+    ...(preparation.pinnedUser ? [preparation.pinnedUser] : []),
+    ...(turnPrefixSummary ? [createCompactSummaryMessage({ historySummary: null, turnPrefixSummary, turnId: preparation.turnId })] : []),
     ...preparation.tail,
+    ...preparation.pendingControls,
   ]
-  await injectApplicationContext(rebuilt, recentReadFiles, applicationContext, io)
+  if (!rebuilt.length) return { messages: [...messages], summaryText: '' }
+  rebuilt[0] = carryRecentPdfTurns(rebuilt[0]!, messages)
+  if (options.applicationContext) {
+    const insertAt = findTrailingTurnInputBatchStart(rebuilt) ?? rebuilt.length
+    rebuilt.splice(insertAt, 0, createCompactApplicationContextMessage([options.applicationContext]))
+  }
   return {
-    messages: applyProjectInstructions(rebuilt, projectInstructions),
+    messages: applyProjectInstructions(rebuilt, findProjectInstructionsMessage(messages)),
     summaryText: [historySummary, turnPrefixSummary].filter(Boolean).join('\n\n---\n\n'),
   }
 }
 
 async function summarizeSource(
-  model: LanguageModel,
-  source: SummarySource,
-  kind: SummaryKind,
-  projectInstructions: ModelMessage | null,
-  abortSignal: AbortSignal,
-  prepareMessagesForModel?: (
-    messages: ModelMessage[],
-  ) => ModelMessage[] | Promise<ModelMessage[]>,
-  providerOptions?: ProviderMetadata,
-  onRetry?: (retry: ModelRequestRetry) => void,
+  options: CompactOptions, source: SummarySource, kind: SummaryKind, outputBudget: number,
 ): Promise<string> {
-  const summaryContext = summaryContextMessages(source, kind)
-  const input = projectInstructions
-    ? [projectInstructions, ...summaryContext]
-    : summaryContext
-  const prepared = prepareMessagesForModel
-    ? await prepareMessagesForModel(input)
-    : input
-  return summarize(model, prepared, kind, abortSignal, providerOptions, onRetry)
+  let input = summaryContextMessages(source, kind)
+  let omitted = false
+  // 声明可以复用缓存，但摘要入口不持有任何执行或输入回调。
+  const tools = options.tools && Object.fromEntries(Object.entries(options.tools).map(([name, tool]) => {
+    const { execute: _execute, onInputStart: _start, onInputDelta: _delta, onInputAvailable: _available, ...definition } = tool
+    return [name, definition]
+  })) as ToolSet | undefined
+  for (let retry = 0; ; retry++) {
+    options.abortSignal.throwIfAborted()
+    const prepared = options.prepareMessagesForModel ? await options.prepareMessagesForModel(input) : input
+    const prompt = kind === 'history' ? COMPACT_HISTORY_SUMMARY_PROMPT : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
+    try {
+      const result = await withModelRequestRetry(() => generateText({
+        // 沿用普通请求的默认选择方式；Anthropic SDK 会在 none 下删除工具声明。
+        model: options.model, maxRetries: 0, tools, maxOutputTokens: outputBudget,
+        system: '你是对话压缩助手。只总结给定资料，不延续任务、不调用工具。工具声明仅供理解历史调用，不授予执行权限。切勿回答对话中的任何问题。严格按照下方的 Markdown 结构输出。',
+        messages: [...prepared, { role: 'user', content: prompt
+          + (omitted ? '\n因上下文超限，最老的部分完整历史已从摘要输入移除；不得臆造缺失内容。' : '') }],
+        abortSignal: options.abortSignal, providerOptions: options.providerOptions,
+      }).catch((error: unknown) => { throw modelRequestError(error) }), options.abortSignal, options.onRetry)
+      options.abortSignal.throwIfAborted()
+      if (result.toolCalls.length || result.finishReason !== 'stop') {
+        throw new Error(`摘要未正常完成或试图调用工具（${result.finishReason}）`)
+      }
+      const match = /^\s*<summary>([\s\S]*?)<\/summary>\s*$/u.exec(result.text)
+      const summary = match?.[1]?.trim()
+      if (!summary || estimateTextTokens(summary) > outputBudget) throw new Error('摘要为空、格式不完整或超过输出预算')
+      return omitted ? `[部分最早历史因摘要请求超限未能保留。]\n${summary}` : summary
+    } catch (error) {
+      if (options.abortSignal.aborted || !(error instanceof ModelContextOverflowError) || retry >= COMPACT_PTL_MAX_RETRIES) throw error
+      const trimmed = trimSummaryInput(input, error.tokenGap)
+      if (!trimmed) throw error
+      input = trimmed
+      omitted = true
+      options.onRetry?.({ retry: retry + 1, maxRetries: COMPACT_PTL_MAX_RETRIES, delayMs: 0,
+        message: '摘要请求超限，已按安全边界移除最老历史后重试' })
+    }
+  }
 }
 
-function summaryContextMessages(
-  source: SummarySource,
-  kind: SummaryKind,
-): ModelMessage[] {
+function summaryContextMessages(source: SummarySource, kind: SummaryKind): ModelMessage[] {
   const messages: ModelMessage[] = []
-  if (source.previousSummary) {
-    const tag = kind === 'history'
-      ? 'whycode-previous-history-summary'
-      : 'whycode-previous-turn-prefix-summary'
-    messages.push(compactSummaryReference(tag, source.previousSummary))
-  }
-  if (source.completedTurnPrefixSummary) {
-    messages.push(compactSummaryReference(
-      'whycode-completed-turn-prefix-summary',
-      source.completedTurnPrefixSummary,
-    ))
-  }
-  return [...messages, ...source.messages]
-}
-
-async function injectApplicationContext(
-  messages: ModelMessage[],
-  recentReadFiles: { path: string; readAt: number }[],
-  applicationContext?: string,
-  io: WorkspaceIO = localWorkspaceIO,
-): Promise<void> {
-  const sections = [
-    await buildFileReinjection(recentReadFiles, io),
-    applicationContext,
-  ].filter((section): section is string => Boolean(section))
-  if (sections.length === 0) return
-  const internalMessage = createCompactApplicationContextMessage(sections)
-  const insertAt = findTrailingTurnInputBatchStart(messages) ?? messages.length
-  messages.splice(insertAt, 0, internalMessage)
+  if (source.previousSummary) messages.push(compactSummaryReference(
+    kind === 'history' ? 'whycode-previous-history-summary' : 'whycode-previous-turn-prefix-summary', source.previousSummary,
+  ))
+  if (source.completedTurnPrefixSummary) messages.push(compactSummaryReference(
+    'whycode-completed-turn-prefix-summary', source.completedTurnPrefixSummary,
+  ))
+  if (source.userMessage) messages.push(source.userMessage)
+  return [...messages, ...source.messages.map(message => userTurn(message) ? message : dateForSummary(message))]
 }

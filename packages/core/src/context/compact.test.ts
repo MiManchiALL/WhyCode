@@ -1,429 +1,254 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { describe, it } from 'node:test'
-import type { ModelMessage } from 'ai'
+import { APICallError, tool, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
-import {
-  createTurnAbortedConsumedMessage,
-  createTurnAbortedMessage,
-} from '../session/interruption.ts'
+import { z } from 'zod'
+import { createTurnAbortedMessage, createTurnAbortedConsumedMessage } from '../session/interruption.ts'
 import { createUserQuestionMarker } from '../tasks/answer-resume.ts'
-import {
-  createCompactApplicationContextMessage,
-  createCompactSummaryMessage,
-  parseCompactSummaryMessage,
-} from '../prompts/compact.ts'
-import { isProjectInstructionsMessage } from '../instructions/project.ts'
-import { compactMessages } from './compact.ts'
-import {
-  pickBudgetStart,
-  prepareCompaction,
-} from './compact-boundary.ts'
+import { createCompactApplicationContextMessage, createCompactSummaryMessage, parseCompactSummaryMessage } from '../prompts/compact.ts'
+import { compactMessages, type CompactOptions } from './compact.ts'
+import { prepareCompaction, pickBudgetStart } from './compact-boundary.ts'
+import { compactTailBudget } from './tokens.ts'
+import { userTurn, withUserTurn } from './user-turn.ts'
+import { compactionConversation } from './compact-context.ts'
 
-describe('约 20k 精确保留边界', () => {
-  it('只按 token 预算选择尾部，不要求文本消息数量或回退到 user turn', () => {
-    const messages: ModelMessage[] = [
-      { role: 'user', content: '执行一个很长的任务' },
-      { role: 'assistant', content: '早期进展' },
-      { role: 'assistant', content: 'x'.repeat(100_000) },
-      { role: 'assistant', content: '最新发现' },
-    ]
+const capabilities = { contextWindow: 128_000, maxOutput: 20_000 }
+const tail = { role: 'assistant' as const, content: 'TAIL_ONLY_' + 'x'.repeat(75_000) }
+const assistant = (content: string): ModelMessage => ({ role: 'assistant', content })
+const root = (id: string, content = id): ModelMessage => withUserTurn({ role: 'user', content }, id, true)
+const state = (historySummary: string | null, turnPrefixSummary: string | null = null, turnId: string | null = null) =>
+  createCompactSummaryMessage({ historySummary, turnPrefixSummary, turnId })
 
-    assert.equal(pickBudgetStart(messages), 2)
-    const preparation = prepareCompaction(messages)
-    assert.deepEqual(preparation?.tail, messages.slice(2))
-    assert.deepEqual(preparation?.turnPrefixSource?.messages, messages.slice(0, 2))
+describe('按预算划分历史与当前正式 turn', () => {
+  it('尾部为可用输入预算的 16%，不受工具次数影响', () => {
+    assert.equal(compactTailBudget(capabilities), 17_280)
+    assert.equal(compactTailBudget({ contextWindow: 200_000, maxOutput: 64_000 }), 28_800)
+    const messages = [root('A'), assistant('进展'), tail]
+    assert.equal(pickBudgetStart(messages, compactTailBudget(capabilities)), 2)
+    assert.deepEqual(prepareCompaction(messages, 17_280)?.tail, [tail])
   })
 
-  it('预算命中 tool result 时向前扩到 assistant tool call，保持调用与结果配对', () => {
-    const messages = [
-      { role: 'user', content: '读取两个文件' },
-      { role: 'assistant', content: '早期说明' },
-      assistantToolCall('read-1'),
-      toolResult('read-1', 'x'.repeat(100_000)),
-      { role: 'assistant', content: '读取完成' },
-    ] as ModelMessage[]
-
-    assert.equal(pickBudgetStart(messages), 2)
-    const tail = prepareCompaction(messages)?.tail ?? []
-    assert.equal(tail[0]?.role, 'assistant')
-    assert.equal(tail[1]?.role, 'tool')
-    assert.match(JSON.stringify(tail.slice(0, 2)), /"toolCallId":"read-1"/u)
+  it('切点不能拆开多工具批次，即使调用和结果之间插有通知', () => {
+    const call: ModelMessage = { role: 'assistant', content: ['a', 'b'].map(id => ({
+      type: 'tool-call', toolCallId: id, toolName: 'ReadFile', input: { path: `${id}.txt` },
+    })) }
+    const messages = [root('A'), assistant('早期'), call, result('a', '内容'),
+      { role: 'user' as const, content: '<system-reminder>工具等待</system-reminder>' },
+      result('b', 'x'.repeat(75_000)), assistant('结束')]
+    assert.equal(pickBudgetStart(messages, 17_280), 2)
+    assert.deepEqual(prepareCompaction(messages, 17_280)?.tail, messages.slice(2))
   })
 
-  it('连续多个 tool result 命中预算时保留同一 assistant 的整组配对', () => {
-    const messages = [
-      { role: 'user', content: '并行读取两个文件' },
-      {
-        role: 'assistant',
-        content: [
-          toolCallPart('read-a'),
-          toolCallPart('read-b'),
-        ],
-      },
-      toolResult('read-a', 'a'.repeat(40_000)),
-      toolResult('read-b', 'b'.repeat(40_000)),
-      { role: 'assistant', content: '读取完成' },
-    ] as ModelMessage[]
-
-    assert.equal(pickBudgetStart(messages), 1)
-    assert.deepEqual(prepareCompaction(messages)?.tail, messages.slice(1))
+  it('B 在尾部中时只压缩旧历史，即使切点位于 A 的回复中', () => {
+    const messages = [root('A'), assistant('旧记录'), tail, root('B'), assistant('刚开始 B')]
+    const prepared = prepareCompaction(messages, 17_280)!
+    assert.equal(prepared.turnPrefixSource, null)
+    assert.equal(prepared.pinnedUser, null)
+    assert.deepEqual(prepared.historySource?.messages, messages.slice(0, 2))
   })
 
-  it('预算内含真实用户消息时只生成历史摘要，不生成 turn 前缀摘要', () => {
-    const messages: ModelMessage[] = [
-      { role: 'user', content: '第一项任务' },
-      { role: 'assistant', content: 'x'.repeat(100_000) },
-      { role: 'user', content: '第二项任务' },
-      { role: 'assistant', content: 'y'.repeat(40_000) },
-    ]
-
-    const preparation = prepareCompaction(messages)
-    assert.equal(preparation?.turnPrefixSource, null)
-    assert.equal(preparation?.tail.includes(messages[2]!), true)
-    assert.equal(preparation?.historySource?.messages.includes(messages[2]!), false)
-  })
-
-  it('未消费中断、提问和尾部输入形成逐字保护边界', () => {
-    const question = createUserQuestionMarker({
-      id: 'question-1',
-      questions: [{
-        header: '运行系统',
-        question: '你使用哪个系统？',
-        options: [
-          { label: 'Windows', description: '按 Windows 处理' },
-          { label: 'macOS', description: '按 macOS 处理' },
-        ],
-      }],
-    }, true)
-    for (const protectedMessage of [createTurnAbortedMessage(), question]) {
-      const messages: ModelMessage[] = [
-        { role: 'user', content: '早期任务' },
-        { role: 'assistant', content: 'x'.repeat(120_000) },
-        protectedMessage,
-        { role: 'user', content: '最新要求' },
-      ]
-      const tail = prepareCompaction(messages)?.tail ?? []
-      const protectedIndex = tail.indexOf(protectedMessage)
-      assert.notEqual(protectedIndex, -1)
-      assert.deepEqual(tail.slice(protectedIndex), messages.slice(2))
-    }
-  })
-
-  it('已消费中断不再永久钉住精确尾部', () => {
-    const messages: ModelMessage[] = [
-      { role: 'user', content: '旧任务' },
-      createTurnAbortedMessage(),
-      { role: 'user', content: '解释 TTL' },
-      { role: 'assistant', content: 'TTL 是 Time to Live。' },
-      createTurnAbortedConsumedMessage(),
-      { role: 'assistant', content: 'x'.repeat(100_000) },
-    ]
-
-    assert.equal(prepareCompaction(messages)?.tail[0]?.role, 'assistant')
-  })
-})
-
-describe('历史摘要与同 turn 前缀摘要', () => {
-  it('切分同一 turn 时分别请求历史九节摘要和 Pi 式三节前缀摘要', async () => {
-    const model = summaryModel(['历史摘要', '当前 turn 前缀摘要'])
-    const messages: ModelMessage[] = [
-      { role: 'user', content: '较早任务' },
-      { role: 'assistant', content: '较早结果' },
-      { role: 'user', content: '当前长任务' },
-      { role: 'assistant', content: '早期工作' },
-      { role: 'assistant', content: 'x'.repeat(100_000) },
-    ]
-
-    const result = await compactMessages(
-      model,
-      messages,
-      [],
-      new AbortController().signal,
-    )
-    const state = parseCompactSummaryMessage(result.messages[0]!)
-
-    assert.deepEqual(state, {
-      historySummary: '历史摘要',
-      turnPrefixSummary: '当前 turn 前缀摘要',
-    })
+  it('尾部插话不替代正式用户起点；B 原文完整保留一次', async () => {
+    const b = root('B', '严格保留的原始请求')
+    const steering = withUserTurn({ role: 'user', content: '补充：先检查取消路径' }, 'B', false)
+    const input = [root('A'), assistant('A 完成'), b, assistant('B 早期记录'), tail, steering]
+    const model = summaryModel(['历史 A', 'B 前缀'])
+    const output = await compact(model, input)
     assert.equal(model.doGenerateCalls.length, 2)
-    const historyRequest = JSON.stringify(model.doGenerateCalls[0]?.prompt)
-    const turnRequest = JSON.stringify(model.doGenerateCalls[1]?.prompt)
-    assert.match(historyRequest, /较早任务/u)
-    assert.match(historyRequest, /历史任务与意图/u)
-    assert.doesNotMatch(historyRequest, /当前长任务/u)
-    assert.match(turnRequest, /当前长任务/u)
-    assert.match(turnRequest, /后续所需上下文/u)
-    assert.doesNotMatch(turnRequest, /历史摘要|较早任务/u)
+    assert.equal(output.messages.filter(message => userTurn(message)?.startsTurn && userTurn(message)?.id === 'B').length, 1)
+    assert.equal(output.messages[1]?.content, b.content)
+    assert.equal(parseCompactSummaryMessage(output.messages[2]!)?.turnId, 'B')
+    assert.deepEqual(output.messages.slice(3), [tail, steering])
+    assert.doesNotMatch(JSON.stringify(model.doGenerateCalls), /TAIL_ONLY_|补充：先检查取消路径/)
+    assert.doesNotMatch(JSON.stringify(model.doGenerateCalls[0]!.prompt), /B 早期记录|严格保留的原始请求/)
+    assert.match(JSON.stringify(model.doGenerateCalls[1]!.prompt), /严格保留的原始请求|B 早期记录/)
   })
 
-  it('没有更早完整历史时只请求 turn 前缀摘要', async () => {
-    const model = summaryModel(['当前 turn 前缀摘要'])
-    const result = await compactMessages(
-      model,
-      [
-        { role: 'user', content: '当前长任务' },
-        { role: 'assistant', content: '早期工作' },
-        { role: 'assistant', content: 'x'.repeat(100_000) },
-      ],
-      [],
-      new AbortController().signal,
-    )
-
+  it('同一 turn 多次压缩只更新前缀，已有摘要不占尾部切点', async () => {
+    const model = summaryModel(['P_A2'])
+    const h = state('H1')
+    const messages = [h, root('A'), state(null, 'P_A1', 'A'), assistant('新增记录'), tail]
+    const output = await compact(model, messages)
     assert.equal(model.doGenerateCalls.length, 1)
-    assert.deepEqual(parseCompactSummaryMessage(result.messages[0]!), {
-      historySummary: null,
-      turnPrefixSummary: '当前 turn 前缀摘要',
-    })
+    assert.match(JSON.stringify(model.doGenerateCalls[0]!.prompt), /P_A1|新增记录/)
+    assert.doesNotMatch(JSON.stringify(model.doGenerateCalls[0]!.prompt), /H1|TAIL_ONLY_/)
+    assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, 'H1')
+    assert.equal(parseCompactSummaryMessage(output.messages[2]!)?.turnPrefixSummary, 'P_A2')
+    assert.equal(output.messages.at(-1), tail)
   })
 
-  it('重复压缩同一 turn 时增量更新既有前缀摘要，历史摘要直接沿用', async () => {
-    const model = summaryModel(['更新后的前缀摘要'])
-    const previous = createCompactSummaryMessage({
-      historySummary: '既有历史摘要',
-      turnPrefixSummary: '既有前缀摘要',
-    })
-    const result = await compactMessages(
-      model,
-      [
-        previous,
-        { role: 'assistant', content: '新进展' },
-        { role: 'assistant', content: 'x'.repeat(100_000) },
-      ],
-      [],
-      new AbortController().signal,
-    )
-    const request = JSON.stringify(model.doGenerateCalls[0]?.prompt)
-
-    assert.equal(model.doGenerateCalls.length, 1)
-    assert.match(request, /既有前缀摘要/u)
-    assert.doesNotMatch(request, /既有历史摘要/u)
-    assert.deepEqual(parseCompactSummaryMessage(result.messages[0]!), {
-      historySummary: '既有历史摘要',
-      turnPrefixSummary: '更新后的前缀摘要',
-    })
+  it('切入 B 时旧 H 与 P_A 一起归入历史，P_B 从 B 新建', async () => {
+    const model = summaryModel(['H2', 'P_B'])
+    const messages = [state('H1'), root('A'), state(null, 'P_A', 'A'), assistant('A 后续结果'),
+      root('B'), assistant('B 新工作'), tail]
+    const output = await compact(model, messages)
+    const h = JSON.stringify(model.doGenerateCalls[0]!.prompt)
+    const p = JSON.stringify(model.doGenerateCalls[1]!.prompt)
+    assert.match(h, /H1/); assert.match(h, /P_A/); assert.match(h, /A 后续结果/)
+    assert.doesNotMatch(h, /B 新工作/)
+    assert.match(p, /B 新工作/); assert.doesNotMatch(p, /P_A|H1|A 后续结果/)
+    assert.equal(parseCompactSummaryMessage(output.messages[2]!)?.turnId, 'B')
   })
 
-  it('跨入后续 turn 时把旧 turn 前缀并入历史，不再保留前缀摘要', async () => {
-    const model = summaryModel(['更新后的历史摘要'])
-    const previous = createCompactSummaryMessage({
-      historySummary: '既有历史摘要',
-      turnPrefixSummary: '上一个 turn 的早期摘要',
-    })
-    const result = await compactMessages(
-      model,
-      [
-        previous,
-        { role: 'assistant', content: '上一个 turn 的后续结果'.repeat(5_000) },
-        { role: 'user', content: '中间任务' },
-        { role: 'assistant', content: '中间任务结果'.repeat(5_000) },
-        { role: 'user', content: '新任务' },
-        { role: 'assistant', content: 'x'.repeat(40_000) },
-      ],
-      [],
-      new AbortController().signal,
-    )
-    const request = JSON.stringify(model.doGenerateCalls[0]?.prompt)
-
-    assert.match(request, /既有历史摘要/u)
-    assert.match(request, /上一个 turn 的早期摘要/u)
-    assert.deepEqual(parseCompactSummaryMessage(result.messages[0]!), {
-      historySummary: '更新后的历史摘要',
-      turnPrefixSummary: null,
-    })
-  })
-
-  it('项目指令只作为每个摘要请求的控制上下文，结果重读后仍唯一置顶', async () => {
-    const model = summaryModel(['历史摘要', '前缀摘要'])
-    const instructions = projectInstructionsMessage('必须先运行测试')
-    const result = await compactMessages(
-      model,
-      [
-        instructions,
-        { role: 'user', content: '较早任务' },
-        { role: 'assistant', content: '较早结果' },
-        instructions,
-        { role: 'user', content: '当前长任务' },
-        { role: 'assistant', content: '早期进展' },
-        { role: 'assistant', content: 'x'.repeat(100_000) },
-      ],
-      [],
-      new AbortController().signal,
-    )
-
-    assert.equal(result.messages.filter(isProjectInstructionsMessage).length, 1)
-    assert.deepEqual(result.messages[0], instructions)
-    for (const call of model.doGenerateCalls) {
-      const request = JSON.stringify(call.prompt)
-      assert.equal(request.split('必须先运行测试').length - 1, 1)
-      assert.match(request, /不得复述、改写或归纳/u)
-    }
-  })
-})
-
-describe('压缩后应用上下文', () => {
-  it('应用上下文插在整批未处理 user 消息之前且不会被下次摘要', async () => {
-    const firstModel = summaryModel(['历史摘要'])
-    const messages: ModelMessage[] = [
-      { role: 'user', content: '较早请求' },
-      { role: 'assistant', content: 'x'.repeat(120_000) },
-      { role: 'user', content: '先改用 SQLite' },
-      { role: 'user', content: '测试也要覆盖回滚' },
-    ]
-    const applicationContext = '<whycode-task-state>{"version":9}</whycode-task-state>'
-    const first = await compactMessages(
-      firstModel,
-      messages,
-      [],
-      new AbortController().signal,
-      applicationContext,
-    )
-    const applicationIndex = first.messages.findIndex((message) =>
-      messageText(message).includes(applicationContext),
-    )
-
-    assert.equal(applicationIndex, first.messages.length - 3)
-    assert.equal(messageText(first.messages.at(-2)!), '先改用 SQLite')
-    assert.equal(messageText(first.messages.at(-1)!), '测试也要覆盖回滚')
-
-    const secondInput = [
-      ...first.messages,
-      { role: 'assistant', content: 'y'.repeat(120_000) },
-    ] as ModelMessage[]
-    const preparation = prepareCompaction(secondInput)
-    assert.equal(
-      preparation?.historySource?.messages.some((message) =>
-        messageText(message).includes(applicationContext)),
-      false,
-    )
-  })
-
-  it('应用上下文位于同批后台通知和真实用户输入之前', async () => {
-    const notification = backgroundTaskNotification()
-    const model = summaryModel(['历史摘要'])
-    const result = await compactMessages(
-      model,
-      [
-        { role: 'user', content: '较早请求' },
-        { role: 'assistant', content: 'x'.repeat(120_000) },
-        notification,
-        { role: 'user', content: '同时补充的要求' },
-      ],
-      [],
-      new AbortController().signal,
-      '<whycode-task-state>{"version":10}</whycode-task-state>',
-    )
-    const notificationIndex = result.messages.indexOf(notification)
-    const applicationIndex = result.messages.findIndex((message) =>
-      messageText(message).includes('whycode-task-state'),
-    )
-
-    assert.equal(applicationIndex, notificationIndex - 1)
-    assert.equal(messageText(result.messages.at(-1)!), '同时补充的要求')
-  })
-
-  it('摘要和应用上下文使用可识别的独立内部消息', () => {
-    const summary = createCompactSummaryMessage({ historySummary: '历史', turnPrefixSummary: null })
-    const application = createCompactApplicationContextMessage(['当前状态'])
-
-    assert.equal(parseCompactSummaryMessage(summary)?.historySummary, '历史')
-    assert.equal(parseCompactSummaryMessage(application), null)
-  })
-
-  it('低于 20k 时不调用摘要模型，也不制造更大的上下文', async () => {
+  it('仅有巨大旧摘要或原始请求时不循环重压摘要，不切进摘要文本', async () => {
     const model = summaryModel([])
-    const messages: ModelMessage[] = [
-      { role: 'user', content: '简短问题' },
-      { role: 'assistant', content: '简短回答' },
-    ]
-    const result = await compactMessages(
-      model,
-      messages,
-      [],
-      new AbortController().signal,
-    )
-
-    assert.equal(result.summaryText, '')
-    assert.deepEqual(result.messages, messages)
+    for (const messages of [[state('x'.repeat(120_000)), root('A'), assistant('短尾部')], [root('A'), tail]]) {
+      const output = await compact(model, messages)
+      assert.equal(output.summaryText, '')
+    }
     assert.equal(model.doGenerateCalls.length, 0)
   })
+
+  it('自动压缩保留未消费中断、完整问题与最新输入；消费标记解除边界', () => {
+    const stop = createTurnAbortedMessage()
+    const question = createUserQuestionMarker({ id: 'q', questions: [{ header: '选择', question: '选择方案？',
+      options: [{ label: 'A', description: '方案 A' }, { label: 'B', description: '方案 B' }] }] }, true)
+    for (const marker of [stop, question]) {
+      const messages = [root('A'), assistant('早期'), tail, marker, root('B')]
+      const kept = prepareCompaction(messages, 17_280)!.tail
+      assert.ok(kept.includes(marker)); assert.ok(kept.includes(messages.at(-1)!))
+    }
+    const messages = [root('A'), stop, root('B'), assistant('意图已确认'), createTurnAbortedConsumedMessage(), tail]
+    assert.deepEqual(prepareCompaction(messages, 17_280)?.tail, [tail])
+  })
 })
 
-function summaryModel(outputs: string[]) {
-  let index = 0
-  return new MockLanguageModelV4({
-    doGenerate: async () => ({
-      content: [{ type: 'text', text: `<summary>${outputs[index++] ?? ''}</summary>` }],
-      finishReason: { unified: 'stop', raw: undefined },
-      usage: usage(),
-      warnings: [],
-    }),
+describe('全量摘要输入与手动压缩', () => {
+  it('手动压缩短历史也调用模型，不剪枝、不保留尾部或固定旧用户消息', async () => {
+    const model = summaryModel(['所有阶段摘要'])
+    const messages = [root('A'), call('r', 'ReadFile', { path: 'file.txt' }), result('r', 'LONG_TEXT_' + 'x'.repeat(9000)), assistant('完成')]
+    const output = await compact(model, messages, { mode: 'manual' })
+    assert.equal(model.doGenerateCalls.length, 1)
+    assert.match(JSON.stringify(model.doGenerateCalls[0]!.prompt), /LONG_TEXT_/)
+    assert.ok(JSON.stringify(model.doGenerateCalls[0]!.prompt).includes('x'.repeat(9000)))
+    assert.equal(output.messages.length, 1)
+    assert.equal(userTurn(output.messages[0]!), undefined)
+    assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.turnPrefixSummary, null)
   })
-}
 
-function assistantToolCall(toolCallId: string): ModelMessage {
-  return {
-    role: 'assistant',
-    content: [toolCallPart(toolCallId)],
-  }
-}
+  it('手动压缩重新生成完整旧 H/P，同时精确保留尚有效的控制边界', async () => {
+    const model = summaryModel(['整合历史'])
+    const marker = createTurnAbortedMessage()
+    const output = await compact(model, [state('H'), root('A'), state(null, 'P_A', 'A'), assistant('工作'), marker], { mode: 'manual' })
+    assert.equal(model.doGenerateCalls.length, 1)
+    assert.match(JSON.stringify(model.doGenerateCalls[0]!.prompt), /P_A/)
+    assert.deepEqual(output.messages.slice(1), [marker])
+  })
 
-function toolCallPart(toolCallId: string) {
-  return {
-    type: 'tool-call' as const,
-    toolCallId,
-    toolName: 'ReadFile',
-    input: { path: 'README.md' },
-  }
-}
+  it('剥离可重建的规范、计划快照，但保留 Skill 独有资料、错误和操作结果', async () => {
+    const messages: ModelMessage[] = [root('A'),
+      createCompactApplicationContextMessage(['旧计划全文']),
+      call('skill-body', 'Skill', { skillId: 'example' }), result('skill-body', 'SKILL_BODY_UNIQUE', 'Skill'),
+      call('reference', 'Skill', { skillId: 'example', resourcePath: 'references/api-details.md' }),
+      result('reference', '独有 API 参考资料', 'Skill'),
+      call('failed', 'Skill', { skillId: 'missing' }),
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'failed', toolName: 'Skill', output: { type: 'error-text', value: '资源不存在' } }] },
+      call('plan', 'UpdateTaskItem', { itemId: '1', status: 'completed' }),
+      result('plan', '<whycode-task-result schema-version="1">\n{"ok":true,"message":"验证完成"}\n</whycode-task-result>\n<whycode-task-state schema-version="1">\n整份计划\n</whycode-task-state>', 'UpdateTaskItem'),
+      assistant('阶段完成'),
+    ]
+    const model = summaryModel(['摘要'])
+    await compact(model, messages, { mode: 'manual' })
+    const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
+    assert.doesNotMatch(prompt, /旧计划全文|SKILL_BODY_UNIQUE|整份计划/)
+    assert.match(prompt, /独有 API 参考资料/); assert.match(prompt, /资源不存在/); assert.match(prompt, /验证完成/)
+    const quotedRule = root('B', '<system-reminder>\n<whycode-task-state schema-version="1">\n请修改此格式')
+    assert.deepEqual(compactionConversation([quotedRule]), [quotedRule])
+  })
 
-function toolResult(toolCallId: string, value: string): ModelMessage {
-  return {
-    role: 'tool',
-    content: [{
-      type: 'tool-result',
-      toolCallId,
-      toolName: 'ReadFile',
-      output: { type: 'text', value },
-    }],
-  }
-}
+  it('摘要返回工具调用时拒绝结果，不触发工具执行或输入回调', async () => {
+    let executions = 0
+    const tools = { Probe: tool({ description: '测试', inputSchema: z.object({}),
+      onInputAvailable: async () => { executions++ }, execute: async () => { executions++; return 'bad' } }) }
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'tool-call', toolCallId: 'bad', toolName: 'Probe', input: '{}' }],
+      finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
+    }) })
+    await assert.rejects(compact(model, [root('A'), assistant('工作')], { mode: 'manual', tools }), /试图调用工具/)
+    assert.equal(executions, 0)
+    assert.equal(model.doGenerateCalls[0]?.tools?.[0]?.type, 'function')
+    assert.equal(model.doGenerateCalls[0]?.maxOutputTokens, 5760)
+  })
 
-function backgroundTaskNotification(): ModelMessage {
-  return {
-    role: 'user',
-    content: [
-      '<task-notification source="background-command" version="1">',
-      '{"task_id":"22222222-2222-4222-8222-222222222222","status":"completed"}',
-      '这是应用生成的后台任务终态，不是用户输入。',
-      '</task-notification>',
-    ].join('\n'),
-  }
-}
+  it('空摘要、未闭合摘要和截断结果拒绝；第二份摘要失败不改写输入', async () => {
+    for (const text of ['', '<summary>未闭合', '<summary></summary>']) {
+      const model = summaryModel([], text)
+      await assert.rejects(compact(model, [root('A'), assistant('工作')], { mode: 'manual' }), /摘要为空、格式不完整/)
+    }
+    const truncated = new MockLanguageModelV4({ doGenerate: async () => ({ ...response('看似完整的部分结果'),
+      finishReason: { unified: 'length', raw: undefined } }) })
+    await assert.rejects(compact(truncated, [root('A'), assistant('工作')], { mode: 'manual' }), /摘要未正常完成/)
+    const messages = [root('A'), assistant('A 结果'), root('B'), assistant('B 记录'), tail]
+    const before = structuredClone(messages)
+    await assert.rejects(compact(summaryModel(['历史', '']), messages))
+    assert.deepEqual(messages, before)
+  })
+})
 
-function messageText(message: ModelMessage): string {
-  if (typeof message.content === 'string') return message.content
-  return message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n')
-}
+describe('摘要请求 PTL 有界逃逸', () => {
+  it('单个超长任务按完整模型步骤退避，保留用户原文和最后工具批次', async () => {
+    let calls = 0
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      if (++calls === 1) throw ptl('prompt is too long: 130000 > 128000')
+      return response('有损历史摘要')
+    } })
+    await compact(model, [root('A', '完整原始任务'), call('old', 'ReadFile', { path: 'old.txt' }),
+      result('old', 'x'.repeat(12_000)), call('last', 'ReadFile', { path: 'last.txt' }), result('last', '最后证据')], { mode: 'manual' })
+    const prompt = JSON.stringify(model.doGenerateCalls[1]!.prompt)
+    assert.match(prompt, /完整原始任务/); assert.match(prompt, /最后证据/)
+    assert.doesNotMatch(prompt, /old\.txt/)
+    assert.equal(model.doGenerateCalls[1]!.prompt.filter(message => message.role === 'tool').length, 1)
+  })
+  it('按供应商 token gap 移除足量旧完整 turn，不拆工具配对且不改原历史', async () => {
+    let calls = 0
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      if (++calls === 1) throw ptl('prompt is too long: 130000 tokens > 128000 maximum')
+      return response('保留可用历史')
+    } })
+    const messages = [root('A'), call('a', 'ReadFile', { path: 'old.txt' }), result('a', 'x'.repeat(12_000)),
+      root('B'), assistant('B 记录'), root('C'), assistant('C 记录')]
+    const before = structuredClone(messages)
+    const output = await compact(model, messages, { mode: 'manual' })
+    assert.equal(calls, 2)
+    assert.doesNotMatch(JSON.stringify(model.doGenerateCalls[1]!.prompt), /old\.txt/)
+    assert.match(JSON.stringify(model.doGenerateCalls[1]!.prompt), /B 记录|C 记录/)
+    assert.match(output.summaryText, /部分最早历史/)
+    assert.deepEqual(messages, before)
+  })
 
-function usage() {
-  return {
-    inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
-    outputTokens: { total: 5, text: 5, reasoning: undefined },
-  }
-}
+  it('无数字差额按比例移除，最多初次请求加 3 次重试；取消立即停止', async () => {
+    const model = new MockLanguageModelV4({ doGenerate: async () => { throw ptl('prompt is too long') } })
+    const messages = Array.from({ length: 12 }, (_, i) => [root(`T${i}`), assistant('x'.repeat(1000))]).flat()
+    await assert.rejects(compact(model, messages, { mode: 'manual' }), /prompt is too long/)
+    assert.equal(model.doGenerateCalls.length, 4)
+    const abort = new AbortController()
+    const cancelled = new MockLanguageModelV4({ doGenerate: async () => { abort.abort(); throw ptl('prompt is too long') } })
+    await assert.rejects(compact(cancelled, messages, { mode: 'manual', abortSignal: abort.signal }))
+    assert.equal(cancelled.doGenerateCalls.length, 1)
+    const lateAbort = new AbortController()
+    const late = new MockLanguageModelV4({ doGenerate: async () => { lateAbort.abort(); return response('迟到摘要') } })
+    await assert.rejects(compact(late, messages, { mode: 'manual', abortSignal: lateAbort.signal }))
+  })
+})
 
-function projectInstructionsMessage(body: string): ModelMessage {
-  const version = `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`
-  return {
-    role: 'user',
-    content: [
-      '<system-reminder>',
-      `<whycode-project-instructions version="${version}">`,
-      body,
-      '</whycode-project-instructions>',
-      '</system-reminder>',
-    ].join('\n'),
-  }
+function compact(model: MockLanguageModelV4, messages: ModelMessage[], options: Partial<CompactOptions> = {}) {
+  return compactMessages({ model, messages, capabilities, abortSignal: new AbortController().signal, mode: 'auto', ...options })
+}
+function summaryModel(outputs: string[], raw?: string) {
+  let index = 0
+  return new MockLanguageModelV4({ doGenerate: async () => response(outputs[index++] ?? '', raw) })
+}
+function response(text: string, raw?: string) {
+  return { content: [{ type: 'text' as const, text: raw ?? `<summary>${text}</summary>` }],
+    finishReason: { unified: 'stop' as const, raw: undefined }, usage, warnings: [] }
+}
+const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 5, text: 5, reasoning: undefined } }
+function call(id: string, toolName: string, input: unknown): ModelMessage {
+  return { role: 'assistant', content: [{ type: 'tool-call', toolCallId: id, toolName, input }] }
+}
+function result(id: string, value: string, toolName = 'ReadFile'): ModelMessage {
+  return { role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName, output: { type: 'text', value } }] }
+}
+function ptl(message: string) {
+  return new APICallError({ message, statusCode: 400, url: 'http://localhost/model', requestBodyValues: {} })
 }

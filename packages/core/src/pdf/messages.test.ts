@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { ModelMessage } from 'ai'
 import { COMPACT_CONTINUATION_PREFIX } from '../prompts/compact.ts'
-import { pdfAttachmentReferenceBlock, referencedPdfAttachmentIds } from './messages.ts'
+import { compactPdfAttachmentContext, pdfAttachmentReferenceBlock, projectPdfReferences, referencedPdfAttachmentIds } from './messages.ts'
 import type { PdfAttachment } from './types.ts'
 
 const ATTACHMENT: PdfAttachment = {
@@ -17,6 +17,27 @@ const ATTACHMENT: PdfAttachment = {
 }
 
 describe('PDF 模型引用', () => {
+  it('近期大 PDF 带主动读取提示，窗口老化后清除标签但保留引用', () => {
+    const pdf = { ...ATTACHMENT, pageCount: 200 }
+    const context: ModelMessage = { role: 'user', content: compactPdfAttachmentContext([pdf], new Set([pdf.id]))! }
+    assert.match(context.content as string, /"recentUserUpload":true/)
+    assert.match(context.content as string, /主动用 ReadFile/)
+    const aged = projectPdfReferences([context], new Set())
+    assert.doesNotMatch(aged[0]!.content as string, /"recentUserUpload":true/)
+    assert.deepEqual(referencedPdfAttachmentIds(aged), new Set([pdf.id]))
+    assert.match(context.content as string, /"recentUserUpload":true/, '请求投影不改写原引用')
+  })
+
+  it('20,000 字符预算按最新引用选取，超限不截断 JSON 行', () => {
+    const attachments = Array.from({ length: 300 }, (_, i) => ({ ...ATTACHMENT,
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, name: '论文'.repeat(40) + `${i}.pdf` }))
+    const text = compactPdfAttachmentContext(attachments)!
+    const lines = text.split('\n').filter(line => line.startsWith('{'))
+    assert.ok(lines.reduce((total, line) => total + line.length, 0) <= 20_000)
+    assert.ok(lines.length > 50 && lines.length < attachments.length)
+    assert.equal(JSON.parse(lines.at(-1)!).name, attachments.at(-1)!.name)
+    assert.match(text, /较早的 .* PDF 引用未重注入/)
+  })
   it('只从 user 引用块恢复附件身份，不采信普通文字或 assistant 工具参数', () => {
     const messages: ModelMessage[] = [
       { role: 'user', content: `普通文字提到 ${ATTACHMENT.id}` },

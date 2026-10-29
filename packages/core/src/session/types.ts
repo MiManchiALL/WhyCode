@@ -1,5 +1,6 @@
 import { modelMessageSchema, type ModelMessage } from 'ai'
 import { z } from 'zod'
+import { conversationMetadataSchema } from '../context/user-turn.ts'
 import {
   consensusPersistedStateSchema,
   type ConsensusPersistedState,
@@ -56,12 +57,12 @@ import {
   type BtwTurnSettlement,
 } from './btw.ts'
 
-export const SESSION_SCHEMA_VERSION = 16
+export const SESSION_SCHEMA_VERSION = 17
 
 const sessionIdSchema = z.string().uuid()
 const entryIdSchema = z.string().uuid()
 const timestampSchema = z.string().datetime()
-const messagesSchema = z.array(modelMessageSchema)
+const messagesSchema = z.array(modelMessageSchema.and(z.object({ whycode: conversationMetadataSchema.optional() })))
 const reasoningEffortSelectionSchema = z.enum(['default', ...REASONING_EFFORT_LEVELS])
 export const sessionForkOriginSchema = z.object({
   familyId: sessionIdSchema,

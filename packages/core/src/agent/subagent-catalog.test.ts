@@ -7,7 +7,7 @@ import { describe, it, type TestContext } from 'node:test'
 import { simulateReadableStream, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
-import { CLEARED_MESSAGE } from '../context/microcompact.ts'
+import { TOOL_RESULT_PRUNED } from '../context/microcompact.ts'
 import { estimateMessageTokens } from '../context/tokens.ts'
 import type { ContextUsageInfo, CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
@@ -180,7 +180,7 @@ describe('子代理目录请求与恢复生命周期', () => {
     })
   }
 
-  it('microcompact 只清理旧工具输出，不合并目录和增量；下一请求再通知变化', async t => {
+  it('自动 microcompact 不合并目录和增量，当前请求继续追加目录变化', async t => {
     const f = await fixture(t)
     await f.session.handleUserMessage('建立基线')
     await f.writeDefinition('第一版')
@@ -188,20 +188,19 @@ describe('子代理目录请求与恢复生命周期', () => {
     const before = f.session.captureMessageSnapshot()
     const reads = Array.from({ length: 7 }, (_, index): ModelMessage[] => [
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: `read-${index}`, toolName: 'ReadFile', input: { path: 'a.txt' } }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: `read-${index}`, toolName: 'ReadFile', output: { type: 'text', value: '文件内容'.repeat(50) } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: `read-${index}`, toolName: 'ReadFile', output: { type: 'text', value: index === 0 ? 'x'.repeat(400_000) : '文件内容' } }] },
     ]).flat()
     f.session.restoreMessageSnapshot([...before, ...reads, { role: 'assistant', content: '读取结束。' }])
     await f.writeDefinition('第二版', 'reviewer')
-    await f.session.compactNow()
+    assert.equal(await f.session.handleUserMessage('继续'), 'completed')
     const after = f.session.captureMessageSnapshot()
     assert.ok(f.events.some(event => event.type === 'context-compacted' && event.level === 'micro'))
     assert.equal(f.model.doGenerateCalls.length, 0)
-    assert.ok(JSON.stringify(after).includes(CLEARED_MESSAGE))
+    assert.ok(JSON.stringify(after).includes(TOOL_RESULT_PRUNED.trim()))
     assert.deepEqual(notices(after, BASELINE), notices(before, BASELINE))
-    assert.deepEqual(notices(after, DELTA), notices(before, DELTA))
-    await f.session.handleUserMessage('继续')
-    assert.equal(notices(f.session.captureMessageSnapshot(), DELTA).length, 2)
-    assert.match(notices(f.session.captureMessageSnapshot(), DELTA).at(-1)!, /第二版/)
+    assert.deepEqual(notices(after, DELTA).slice(0, -1), notices(before, DELTA))
+    assert.equal(notices(after, DELTA).length, 2)
+    assert.match(notices(after, DELTA).at(-1)!, /第二版/)
     assert.deepEqual(notices(f.session.captureMessageSnapshot(), BASELINE), notices(before, BASELINE))
   })
 

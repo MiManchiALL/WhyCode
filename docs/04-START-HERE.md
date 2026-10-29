@@ -26,6 +26,7 @@ WhyCode 是一款 Windows 优先的通用桌面 Agent，尤其擅长代码与工
 | `04-START-HERE.md` | 项目导览、事实确认、工作流程、异步资源规范与文档地图 | 定位资料、修改异步资源逻辑或整理文档时 |
 | `05-暂存区便签.md` | 当前尚未完成、待验证、阻塞和下一步 | 每次开工与交接时 |
 | [06-依赖安全例外.md](06-依赖安全例外.md) | 经核实的依赖安全例外与复查条件 | 依赖升级、审计和例外评估时 |
+| [decisions/context-compaction.md](decisions/context-compaction.md) | 上下文压缩这一项设计的理由、取舍与参考依据；精确契约仍归文档三 | 修改压缩策略、摘要范围或附件恢复方式时 |
 | `E:\Agent\multi-agent-decision-protocol.md` | Main/B/C 协商的外部协议原文 | 修改 `packages/core/src/consensus/` 时 |
 
 文档治理与文字规范位于 `.agents/skills/whycode-doc-standards/` 和 `.agents/skills/whycode-prose-standard/`。进行正式文档整理时必须按 Skill 执行。

@@ -112,3 +112,7 @@ export function autoCompactThreshold(capabilities: ModelCapabilities): number {
   const buffer = Math.max(13_000, Math.round(capabilities.contextWindow * 0.07))
   return capabilities.contextWindow - reservedOutput - buffer
 }
+
+export function compactTailBudget(capabilities: Pick<ModelCapabilities, 'contextWindow' | 'maxOutput'>): number {
+  return Math.floor((capabilities.contextWindow - Math.min(capabilities.maxOutput, 20_000)) * 0.16)
+}

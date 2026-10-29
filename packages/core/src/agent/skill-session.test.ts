@@ -29,6 +29,28 @@ afterEach(async () => {
 })
 
 describe('Agent Skill 根任务生命周期', () => {
+  it('根任务结束后完整压缩仍收到 Skill 参考资料，主规范由应用管理', async () => {
+    const fixture = await skillFixture()
+    const catalog = new SkillCatalogService({ homeDir: fixture.home })
+    const selected = (await catalog.snapshot(fixture.project)).entries[0]!
+    let step = 0
+    const model = new MockLanguageModelV4({
+      doStream: async () => ++step === 1 ? toolStep(selected.id)
+        : step === 2 ? toolStep(selected.id, 'references/guide.md', 'reference') : finalStep(),
+      doGenerate: async () => ({ content: [{ type: 'text', text: '<summary>已读取参考资料</summary>' }],
+        finishReason: { unified: 'stop', raw: undefined }, usage: usage(), warnings: [] }),
+    })
+    const session = createSession(model, fixture, catalog)
+    await session.handleUserMessage('读取参考资料')
+    assert.deepEqual(session.activeSkills, [])
+    await session.compactNow()
+    assert.equal(model.doGenerateCalls.length, 1)
+    const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
+    assert.match(prompt, new RegExp(RESOURCE_BODY))
+    assert.doesNotMatch(prompt, new RegExp(BODY))
+    assert.doesNotMatch(prompt, /<whycode-skill-catalog|<whycode-active-skill/)
+  })
+
   it('显式选择自动准备环境并在正文末尾声明，目录枚举不安装，快照与下一任务不携带路径', async () => {
     const fixture = await skillFixture()
     const catalog = new SkillCatalogService({ homeDir: fixture.home })
