@@ -103,26 +103,43 @@ describe('摘要 PTL 扩大原样保留尾部', () => {
     assert.deepEqual(output.messages.slice(3), [...batch, tail])
   })
 
-  it('切点退过最新 U 后重建 H，把旧 P 合入历史而不复用原 H 请求结果', async () => {
+  it('P 的唯一工作批次退入尾部后省略空 P，直接采用已经完成的 H', async () => {
     let calls = 0
     const model = new MockLanguageModelV4({ doGenerate: async () => {
-      calls++
-      if (calls === 2) throw overflow(20_000)
-      return response(calls === 1 ? '原范围 H' : '重新合并 H')
+      if (++calls === 2) throw overflow(2000)
+      return response('已完成 H')
     } })
     const latest = root('B')
-    const batch = toolBatch(['B-prefix'], 4000)
-    const messages = [oldSummary('H1'), root('A'), assistant('A 结果'), latest,
-      oldSummary(null, 'P_B1', 'B'), ...batch, tail]
+    const batch = toolBatch(['B-prefix'], 12_000)
+    const messages = [oldSummary('H1'), root('A'), assistant('A 结果'), latest, ...batch, tail]
     const output = await compact(model, messages)
-    assert.equal(calls, 3)
-    assert.doesNotMatch(prompt(model, 0), /P_B1/)
-    assert.match(prompt(model, 2), /whycode-completed-turn-prefix-summary/)
-    assert.match(prompt(model, 2), /P_B1/)
-    assert.doesNotMatch(prompt(model, 2), /任务 B|B-prefix|原始尾部/)
-    assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, '重新合并 H')
+    assert.equal(calls, 2, 'P 超限后既不再请求空 P，也不重新请求输入未变的 H')
+    assert.equal(output.summaryText, '已完成 H')
     assert.deepEqual(output.messages.slice(1), [latest, ...batch, tail])
   })
+
+  for (const gap of [2000, 20_000]) {
+    it(`PTL 差额 ${gap} 退到 U 或其后首批次时，将旧 P 合入 H`, async () => {
+      let calls = 0
+      const model = new MockLanguageModelV4({ doGenerate: async () => {
+        calls++
+        if (calls === 2) throw overflow(gap)
+        return response(calls === 1 ? '原范围 H' : '重新合并 H')
+      } })
+      const latest = root('B')
+      const batch = toolBatch(['B-prefix'], 12_000)
+      const messages = [oldSummary('H1'), root('A'), assistant('A 结果'), latest,
+        oldSummary(null, 'P_B1', 'B'), ...batch, tail]
+      const output = await compact(model, messages)
+      assert.equal(calls, 3)
+      assert.doesNotMatch(prompt(model, 0), /P_B1/)
+      assert.match(prompt(model, 2), /whycode-completed-turn-prefix-summary/)
+      assert.match(prompt(model, 2), /P_B1/)
+      assert.doesNotMatch(prompt(model, 2), /任务 B|B-prefix|原始尾部/)
+      assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, '重新合并 H')
+      assert.deepEqual(output.messages.slice(1), [latest, ...batch, tail])
+    })
+  }
 
   it('无 token 差额以 16% 尾部预算退避，仍超限时共用最多 3 次额度', async () => {
     const retries: number[] = []
@@ -181,6 +198,19 @@ describe('摘要 PTL 扩大原样保留尾部', () => {
     const late = new MockLanguageModelV4({ doGenerate: async () => { lateAbort.abort(); return response('迟到摘要') } })
     await assert.rejects(compact(late, messages, { mode: 'manual', abortSignal: lateAbort.signal }))
     assert.deepEqual(messages, before)
+
+    const cachedAbort = new AbortController()
+    let calls = 0
+    const cached = new MockLanguageModelV4({ doGenerate: async () => {
+      if (++calls === 2) throw overflow(100)
+      return response('已完成但未采纳的 H')
+    } })
+    const onlyStep = [root('old'), assistant('旧任务完成'), root('A'), ...toolBatch(['only'], 12_000), tail]
+    const original = structuredClone(onlyStep)
+    await assert.rejects(compact(cached, onlyStep, { abortSignal: cachedAbort.signal,
+      onRetry: () => cachedAbort.abort() }), { name: 'AbortError' })
+    assert.equal(calls, 2, '取消后即使只需复用 H、没有新的摘要请求，也不能返回候选')
+    assert.deepEqual(onlyStep, original)
   })
 })
 

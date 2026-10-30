@@ -47,6 +47,28 @@ describe('按预算划分历史与当前正式 turn', () => {
     assert.deepEqual(prepared.historySource?.messages, messages.slice(0, 2))
   })
 
+  it('切点紧随 U 时把 U 一并留在尾部，不为没有工作记录的前缀请求 P', async () => {
+    for (const previousPrefix of [null, '旧 P_B']) {
+      const latest = root('B', '完整任务 B')
+      const batch = [call('B-first', 'ReadFile', { path: 'example.pdf' }), result('B-first', 'x'.repeat(75_000))]
+      const messages = [state('H1'), root('A'), assistant('A 已完成'), latest,
+        ...(previousPrefix ? [state(null, previousPrefix, 'B')] : []), ...batch]
+      const model = summaryModel(['新 H'])
+      const output = await compact(model, messages)
+      assert.equal(model.doGenerateCalls.length, 1)
+      const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt)
+      assert.match(prompt, /H1/)
+      assert.match(prompt, /A 已完成/)
+      assert.doesNotMatch(prompt, /完整任务 B|B-first/)
+      if (previousPrefix) {
+        assert.match(prompt, /whycode-completed-turn-prefix-summary/)
+        assert.match(prompt, /旧 P_B/)
+      }
+      assert.equal(output.summaryText, '新 H')
+      assert.deepEqual(output.messages.slice(1), [latest, ...batch])
+    }
+  })
+
   it('尾部插话不替代正式用户起点；B 原文完整保留一次', async () => {
     const b = root('B', '严格保留的原始请求')
     const steering = withUserTurn({ role: 'user', content: '补充：先检查取消路径' }, 'B', false)
@@ -91,9 +113,11 @@ describe('按预算划分历史与当前正式 turn', () => {
 
   it('仅有巨大旧摘要或原始请求时不循环重压摘要，不切进摘要文本', async () => {
     const model = summaryModel([])
-    for (const messages of [[state('x'.repeat(120_000)), root('A'), assistant('短尾部')], [root('A'), tail]]) {
+    for (const messages of [[state('x'.repeat(120_000)), root('A'), assistant('短尾部')], [root('A'), tail],
+      [state('H1'), root('A'), state(null, 'P_A1', 'A'), tail]]) {
       const output = await compact(model, messages)
       assert.equal(output.summaryText, '')
+      assert.deepEqual(output.messages, messages)
     }
     assert.equal(model.doGenerateCalls.length, 0)
   })
@@ -189,6 +213,16 @@ describe('全量摘要输入与手动压缩', () => {
       const output = await compact(summaryModel([], raw), [root('A'), assistant('工作')], { mode: 'manual' })
       assert.equal(output.summaryText, '有效摘要')
       assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, '有效摘要')
+    }
+  })
+
+  it('摘要正文引用结束标签时保留引用及其后的完整内容', async () => {
+    for (const body of ['已修复 `<summary>...</summary>` 的提取逻辑。\n下一步：验证 PTL。',
+      '结束标记是 `</summary>`。\n```xml\n<summary>示例</summary>\n```\n仍需保留的约束：禁止执行工具。']) {
+      const raw = `以下是摘要：\n\`\`\`markdown\n<summary>\n${body}\n</summary>\n\`\`\`\n整理完毕。`
+      const output = await compact(summaryModel([], raw), [root('A'), assistant('修改标签提取')], { mode: 'manual' })
+      assert.equal(output.summaryText, body)
+      assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, body)
     }
   })
 

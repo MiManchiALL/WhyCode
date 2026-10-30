@@ -42,6 +42,7 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
   // P 退避未改变 H 的输入时复用本次已生成的 H；只在整次压缩成功后提交。
   let historyResult: { source: SummarySource; text: string } | null = null
   for (let retry = 0; ; retry++) {
+    options.abortSignal.throwIfAborted()
     let source = preparation.historySource
     try {
       historySummary = preparation.carriedHistorySummary
@@ -110,7 +111,8 @@ async function summarizeSource(
   if (result.toolCalls.length || result.finishReason !== 'stop') {
     throw new Error(`摘要未正常完成或试图调用工具（${result.finishReason}）`)
   }
-  const match = /<summary>([\s\S]*?)<\/summary>/u.exec(result.text)
+  // 单个外层摘要内可能引用 </summary>，应取最后一个结束标签，避免静默截掉后文。
+  const match = /<summary>([\s\S]*)<\/summary>/u.exec(result.text)
   const summary = match?.[1]?.trim()
   if (!summary) throw new Error('摘要为空或格式不完整')
   return summary
