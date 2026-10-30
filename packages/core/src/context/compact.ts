@@ -8,8 +8,8 @@ import { ModelContextOverflowError, modelRequestError, withModelRequestRetry, ty
 import type { ModelCapabilities } from '../providers/registry.ts'
 import { findTrailingTurnInputBatchStart, prepareCompaction, type SummarySource } from './compact-boundary.ts'
 import { compactionConversation } from './compact-context.ts'
-import { COMPACT_PTL_MAX_RETRIES, trimSummaryInput } from './compact-retry.ts'
-import { compactTailBudget, estimateTextTokens } from './tokens.ts'
+import { COMPACT_PTL_MAX_RETRIES, expandCompactionTail } from './compact-retry.ts'
+import { compactTailBudget } from './tokens.ts'
 import { carryRecentPdfTurns, userTurn } from './user-turn.ts'
 import { dateForSummary } from '../prompts/current-date.ts'
 
@@ -31,18 +31,44 @@ type SummaryKind = 'history' | 'turn-prefix'
 /** 先完成全部摘要和校验，再返回候选链；调用者负责原子保存，失败不采纳任何半份摘要。 */
 export async function compactMessages(options: CompactOptions): Promise<CompactResult> {
   const { messages, capabilities } = options
-  const preparation = prepareCompaction(compactionConversation(messages),
-    compactTailBudget(capabilities), options.mode === 'manual')
+  const conversation = compactionConversation(messages)
+  const tailBudget = compactTailBudget(capabilities)
+  let preparation = prepareCompaction(conversation, tailBudget, options.mode === 'manual')
   if (!preparation) return { messages: [...messages], summaryText: '' }
   const totalBudget = Math.min(12_000, capabilities.maxOutput,
     Math.max(512, Math.floor((capabilities.contextWindow - Math.min(capabilities.maxOutput, 20_000)) * 0.08)))
-  let historySummary = preparation.carriedHistorySummary
-  if (preparation.historySource) historySummary = await summarizeSource(
-    options, preparation.historySource, 'history', Math.max(1, Math.floor(totalBudget * 2 / 3)),
-  )
-  const turnPrefixSummary = preparation.turnPrefixSource ? await summarizeSource(
-    options, preparation.turnPrefixSource, 'turn-prefix', Math.max(1, Math.floor(totalBudget / 3)),
-  ) : null
+  let historySummary: string | null = null
+  let turnPrefixSummary: string | null = null
+  // P 退避未改变 H 的输入时复用本次已生成的 H；只在整次压缩成功后提交。
+  let historyResult: { source: SummarySource; text: string } | null = null
+  for (let retry = 0; ; retry++) {
+    options.abortSignal.throwIfAborted()
+    let source = preparation.historySource
+    try {
+      historySummary = preparation.carriedHistorySummary
+      if (source) {
+        if (!historyResult || !sameSummarySource(historyResult.source, source)) {
+          historyResult = { source, text: await summarizeSource(
+            options, source, 'history', Math.max(1, Math.floor(totalBudget * 2 / 3)),
+          ) }
+        }
+        historySummary = historyResult.text
+      }
+      source = preparation.turnPrefixSource
+      turnPrefixSummary = source ? await summarizeSource(
+        options, source, 'turn-prefix', Math.max(1, Math.floor(totalBudget / 3)),
+      ) : null
+      break
+    } catch (error) {
+      if (options.abortSignal.aborted || !(error instanceof ModelContextOverflowError)
+        || !source || retry >= COMPACT_PTL_MAX_RETRIES) throw error
+      const next = expandCompactionTail(conversation, source, tailBudget, error.tokenGap)
+      if (!next) throw error
+      preparation = next
+      options.onRetry?.({ retry: retry + 1, maxRetries: COMPACT_PTL_MAX_RETRIES, delayMs: 0,
+        message: '摘要请求超限，已将较新的完整记录移至保留尾部后重试' })
+    }
+  }
   const rebuilt: ModelMessage[] = [
     ...(historySummary ? [createCompactSummaryMessage({ historySummary, turnPrefixSummary: null, turnId: null })] : []),
     ...(preparation.pinnedUser ? [preparation.pinnedUser] : []),
@@ -65,44 +91,39 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
 async function summarizeSource(
   options: CompactOptions, source: SummarySource, kind: SummaryKind, outputBudget: number,
 ): Promise<string> {
-  let input = summaryContextMessages(source, kind)
-  let omitted = false
+  options.abortSignal.throwIfAborted()
+  const input = summaryContextMessages(source, kind)
   // 声明可以复用缓存，但摘要入口不持有任何执行或输入回调。
   const tools = options.tools && Object.fromEntries(Object.entries(options.tools).map(([name, tool]) => {
     const { execute: _execute, onInputStart: _start, onInputDelta: _delta, onInputAvailable: _available, ...definition } = tool
     return [name, definition]
   })) as ToolSet | undefined
-  for (let retry = 0; ; retry++) {
-    options.abortSignal.throwIfAborted()
-    const prepared = options.prepareMessagesForModel ? await options.prepareMessagesForModel(input) : input
-    const prompt = kind === 'history' ? COMPACT_HISTORY_SUMMARY_PROMPT : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
-    try {
-      const result = await withModelRequestRetry(() => generateText({
-        // 沿用普通请求的默认选择方式；Anthropic SDK 会在 none 下删除工具声明。
-        model: options.model, maxRetries: 0, tools, maxOutputTokens: outputBudget,
-        system: '你是对话压缩助手。只总结给定资料，不延续任务、不调用工具。工具声明仅供理解历史调用，不授予执行权限。切勿回答对话中的任何问题。严格按照下方的 Markdown 结构输出。',
-        messages: [...prepared, { role: 'user', content: prompt
-          + (omitted ? '\n因上下文超限，最老的部分完整历史已从摘要输入移除；不得臆造缺失内容。' : '') }],
-        abortSignal: options.abortSignal, providerOptions: options.providerOptions,
-      }).catch((error: unknown) => { throw modelRequestError(error) }), options.abortSignal, options.onRetry)
-      options.abortSignal.throwIfAborted()
-      if (result.toolCalls.length || result.finishReason !== 'stop') {
-        throw new Error(`摘要未正常完成或试图调用工具（${result.finishReason}）`)
-      }
-      const match = /^\s*<summary>([\s\S]*?)<\/summary>\s*$/u.exec(result.text)
-      const summary = match?.[1]?.trim()
-      if (!summary || estimateTextTokens(summary) > outputBudget) throw new Error('摘要为空、格式不完整或超过输出预算')
-      return omitted ? `[部分最早历史因摘要请求超限未能保留。]\n${summary}` : summary
-    } catch (error) {
-      if (options.abortSignal.aborted || !(error instanceof ModelContextOverflowError) || retry >= COMPACT_PTL_MAX_RETRIES) throw error
-      const trimmed = trimSummaryInput(input, error.tokenGap)
-      if (!trimmed) throw error
-      input = trimmed
-      omitted = true
-      options.onRetry?.({ retry: retry + 1, maxRetries: COMPACT_PTL_MAX_RETRIES, delayMs: 0,
-        message: '摘要请求超限，已按安全边界移除最老历史后重试' })
-    }
+  const prepared = options.prepareMessagesForModel ? await options.prepareMessagesForModel(input) : input
+  const prompt = kind === 'history' ? COMPACT_HISTORY_SUMMARY_PROMPT : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
+  const result = await withModelRequestRetry(() => generateText({
+    // 沿用普通请求的默认选择方式；Anthropic SDK 会在 none 下删除工具声明。
+    model: options.model, maxRetries: 0, tools, maxOutputTokens: outputBudget,
+    system: '你是对话压缩助手。只总结给定资料，不延续任务、不调用工具。工具声明仅供理解历史调用，不授予执行权限。切勿回答对话中的任何问题。严格按照下方的 Markdown 结构输出。',
+    messages: [...prepared, { role: 'user', content: prompt }],
+    abortSignal: options.abortSignal, providerOptions: options.providerOptions,
+  }).catch((error: unknown) => { throw modelRequestError(error) }), options.abortSignal, options.onRetry)
+  options.abortSignal.throwIfAborted()
+  if (result.toolCalls.length || result.finishReason !== 'stop') {
+    throw new Error(`摘要未正常完成或试图调用工具（${result.finishReason}）`)
   }
+  // 单个外层摘要内可能引用 </summary>，应取最后一个结束标签，避免静默截掉后文。
+  const match = /<summary>([\s\S]*)<\/summary>/u.exec(result.text)
+  const summary = match?.[1]?.trim()
+  if (!summary) throw new Error('摘要为空或格式不完整')
+  return summary
+}
+
+function sameSummarySource(left: SummarySource, right: SummarySource): boolean {
+  return left.previousSummary === right.previousSummary
+    && left.completedTurnPrefixSummary === right.completedTurnPrefixSummary
+    && left.userMessage === right.userMessage
+    && left.messages.length === right.messages.length
+    && left.messages.every((message, index) => message === right.messages[index])
 }
 
 function summaryContextMessages(source: SummarySource, kind: SummaryKind): ModelMessage[] {

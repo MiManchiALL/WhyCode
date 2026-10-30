@@ -30,6 +30,7 @@ export function prepareCompaction(
   messages: ModelMessage[],
   keepRecentTokens: number,
   manual = false,
+  firstKeptMessage?: ModelMessage,
 ): CompactionPreparation | null {
   const summary: CompactSummaryState = { historySummary: null, turnPrefixSummary: null, turnId: null }
   const raw = messages.filter(message => {
@@ -44,8 +45,13 @@ export function prepareCompaction(
     return false
   })
   const protectedStart = earliestProtectedIndex(raw)
-  const tailStart = manual ? raw.length
-    : safeBoundaryBefore(raw, Math.min(pickBudgetStart(raw, keepRecentTokens), protectedStart ?? raw.length))
+  const turnStart = latestUserTurnIndex(raw)
+  // PTL 的切点由原始消息身份指定，重新划分 H/U/P/T，不局部拼接某份摘要的尾部。
+  const budgetStart = firstKeptMessage ? raw.indexOf(firstKeptMessage) : pickBudgetStart(raw, keepRecentTokens)
+  let tailStart = manual ? raw.length
+    : safeBoundaryBefore(raw, Math.min(budgetStart, protectedStart ?? raw.length))
+  // U 后没有被移出的工作记录时，把 U 一起留在尾部；旧 P 沿用归入 H 的规则。
+  if (!manual && turnStart >= 0 && tailStart === turnStart + 1) tailStart = safeBoundaryBefore(raw, turnStart)
   const pendingControls = manual ? [findPendingTurnAbortedIndex(raw), findPendingUserQuestionIndex(raw)]
     .filter((index): index is number => index !== null).map(index => raw[index]!) : []
   const trailingInput = manual ? findTrailingTurnInputBatchStart(raw) : null
@@ -53,7 +59,6 @@ export function prepareCompaction(
   if (!manual && tailStart === 0) return null
   if (manual && raw.length === 0 && !summary.historySummary && !summary.turnPrefixSummary) return null
 
-  const turnStart = latestUserTurnIndex(raw)
   const splitCurrentTurn = !manual && turnStart >= 0 && turnStart < tailStart
   const turnId = splitCurrentTurn ? userTurn(raw[turnStart]!)!.id : null
   const sameTurn = turnId !== null && turnId === summary.turnId
@@ -64,8 +69,6 @@ export function prepareCompaction(
     ? { previousSummary: summary.historySummary, completedTurnPrefixSummary: completedPrefix, messages: historyMessages }
     : null
   const prefixMessages = splitCurrentTurn ? raw.slice(turnStart + 1, tailStart) : []
-  // 只移动原始请求而没有逐出工作记录不能降低压力，避免反复生成摘要。
-  if (!manual && !historySource && prefixMessages.length === 0) return null
   return {
     carriedHistorySummary: summary.historySummary,
     historySource,
