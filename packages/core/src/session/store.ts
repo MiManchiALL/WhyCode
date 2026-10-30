@@ -65,6 +65,7 @@ import {
   isSessionId,
   metadataFromStart,
   readMetadataCache,
+  removeMetadataCache,
   resumableSessionSummary,
   sameProject,
   SESSION_DELETION_PENDING_REASON,
@@ -1706,7 +1707,7 @@ export class SessionJournal implements SessionRecorder {
     try {
       await writeMetadata(this.paths.metadata, this.metadata)
     } catch {
-      await rm(this.paths.metadata, { force: true }).catch(() => {})
+      await removeMetadataCache(this.paths.metadata).catch(() => {})
     }
   }
 
