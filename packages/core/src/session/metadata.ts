@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { copyFile, lstat, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
@@ -18,6 +18,7 @@ const ATTACHMENTS_DIR = 'attachments'
 const UNAVAILABLE_SESSION_REASON = '会话版本不兼容或数据损坏，无法恢复；可以安全删除'
 export const SESSION_DELETION_PENDING_REASON = '会话删除未完成，仅可重试删除'
 const DELETION_MARKERS_DIR = '.deleting'
+const pendingMetadataAccess = new Map<string, Promise<void>>()
 
 const sessionMetadataCacheSchema = sessionMetadataSchema.extend({
   transcriptIdentity: z.string().min(1),
@@ -87,47 +88,47 @@ export async function writeMetadata(
   metadata: SessionMetadata,
 ): Promise<void> {
   const parsed = sessionMetadataSchema.parse(metadata)
-  const transcriptIdentity = await fileIdentity(join(dirname(path), TRANSCRIPT_FILE))
-  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(tempPath, `${JSON.stringify({ ...parsed, transcriptIdentity }, null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600,
-    flush: true,
-  })
-  try {
-    await rename(tempPath, path)
-  } catch (error) {
-    if (!isWindowsReplaceError(error)) {
-      await rm(tempPath, { force: true }).catch(() => {})
-      throw error
-    }
+  return withMetadataAccess(path, async () => {
+    const transcriptIdentity = await fileIdentity(join(dirname(path), TRANSCRIPT_FILE))
+    const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
     try {
-      // metadata 是可重建缓存；Windows 不支持 rename 覆盖现有文件时直接覆写目标。
-      await copyFile(tempPath, path)
+      await writeFile(tempPath, `${JSON.stringify({ ...parsed, transcriptIdentity }, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+        flag: 'wx',
+        flush: true,
+      })
+      await rename(tempPath, path)
     } finally {
       await rm(tempPath, { force: true })
     }
-  }
+  })
+}
+
+export function removeMetadataCache(path: string): Promise<void> {
+  return withMetadataAccess(path, () => rm(path, { force: true }))
 }
 
 /** metadata 只是派生列表缓存；只在它精确对应当前 transcript 时采用。 */
-export async function readMetadataCache(
+export function readMetadataCache(
   paths: SessionPaths,
   expectedSessionId: string,
 ): Promise<SessionMetadata | null> {
-  try {
-    const parsed = sessionMetadataCacheSchema.safeParse(
-      JSON.parse(await readFile(paths.metadata, 'utf8')),
-    )
-    if (
-      !parsed.success
-      || parsed.data.sessionId !== expectedSessionId
-      || parsed.data.transcriptIdentity !== await fileIdentity(paths.transcript)
-    ) return null
-    return sessionMetadataSchema.parse(parsed.data)
-  } catch {
-    return null
-  }
+  return withMetadataAccess(paths.metadata, async () => {
+    try {
+      const parsed = sessionMetadataCacheSchema.safeParse(
+        JSON.parse(await readFile(paths.metadata, 'utf8')),
+      )
+      if (
+        !parsed.success
+        || parsed.data.sessionId !== expectedSessionId
+        || parsed.data.transcriptIdentity !== await fileIdentity(paths.transcript)
+      ) return null
+      return sessionMetadataSchema.parse(parsed.data)
+    } catch {
+      return null
+    }
+  })
 }
 
 export function resumableSessionSummary(metadata: SessionMetadata): SessionSummary {
@@ -196,16 +197,30 @@ export function sameProject(
   return normalizePath(workingDirectory) === normalizePath(projectDir)
 }
 
-async function readLooseMetadata(
+function readLooseMetadata(
   path: string,
   expectedSessionId: string,
 ): Promise<z.infer<typeof looseSessionMetadataSchema> | null> {
-  try {
-    const parsed = looseSessionMetadataSchema.safeParse(JSON.parse(await readFile(path, 'utf8')))
-    return parsed.success && parsed.data.sessionId === expectedSessionId ? parsed.data : null
-  } catch {
-    return null
-  }
+  return withMetadataAccess(path, async () => {
+    try {
+      const parsed = looseSessionMetadataSchema.safeParse(JSON.parse(await readFile(path, 'utf8')))
+      return parsed.success && parsed.data.sessionId === expectedSessionId ? parsed.data : null
+    } catch {
+      return null
+    }
+  })
+}
+
+/** 多个 Store/Journal 也共享文件访问顺序，Windows 替换前须等读取句柄关闭。 */
+function withMetadataAccess<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const key = normalizePath(path)
+  const result = (pendingMetadataAccess.get(key) ?? Promise.resolve()).then(operation)
+  // 调用方仍收到原始失败；后续操作继续，空队列释放路径和闭包。
+  const settled = result.then(() => {}, () => {}).then(() => {
+    if (pendingMetadataAccess.get(key) === settled) pendingMetadataAccess.delete(key)
+  })
+  pendingMetadataAccess.set(key, settled)
+  return result
 }
 
 function normalizePath(path: string): string {
@@ -220,9 +235,4 @@ async function fileIdentity(path: string): Promise<string> {
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
-}
-
-function isWindowsReplaceError(error: unknown): boolean {
-  if (process.platform !== 'win32' || !error || typeof error !== 'object') return false
-  return 'code' in error && (error.code === 'EPERM' || error.code === 'EEXIST')
 }
