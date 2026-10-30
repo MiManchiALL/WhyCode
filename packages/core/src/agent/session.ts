@@ -2161,7 +2161,7 @@ export class AgentSession {
     }
   }
 
-  /** 手动压缩直接总结全部活动历史，不运行微压缩或保留对话尾部。 */
+  /** 手动先全量摘要；只有摘要请求超限时才退为保留尾部，不运行微压缩。 */
   async compactNow(): Promise<void> {
     const { emit } = this.options
     if (this.isBusy) {

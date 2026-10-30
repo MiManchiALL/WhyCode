@@ -30,6 +30,7 @@ export function prepareCompaction(
   messages: ModelMessage[],
   keepRecentTokens: number,
   manual = false,
+  firstKeptMessage?: ModelMessage,
 ): CompactionPreparation | null {
   const summary: CompactSummaryState = { historySummary: null, turnPrefixSummary: null, turnId: null }
   const raw = messages.filter(message => {
@@ -44,8 +45,10 @@ export function prepareCompaction(
     return false
   })
   const protectedStart = earliestProtectedIndex(raw)
+  // PTL 的切点由原始消息身份指定，重新划分 H/U/P/T，不局部拼接某份摘要的尾部。
+  const budgetStart = firstKeptMessage ? raw.indexOf(firstKeptMessage) : pickBudgetStart(raw, keepRecentTokens)
   const tailStart = manual ? raw.length
-    : safeBoundaryBefore(raw, Math.min(pickBudgetStart(raw, keepRecentTokens), protectedStart ?? raw.length))
+    : safeBoundaryBefore(raw, Math.min(budgetStart, protectedStart ?? raw.length))
   const pendingControls = manual ? [findPendingTurnAbortedIndex(raw), findPendingUserQuestionIndex(raw)]
     .filter((index): index is number => index !== null).map(index => raw[index]!) : []
   const trailingInput = manual ? findTrailingTurnInputBatchStart(raw) : null

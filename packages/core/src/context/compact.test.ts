@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { APICallError, tool, type ModelMessage } from 'ai'
+import { tool, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import { createTurnAbortedMessage, createTurnAbortedConsumedMessage } from '../session/interruption.ts'
@@ -170,9 +170,9 @@ describe('全量摘要输入与手动压缩', () => {
   })
 
   it('空摘要、未闭合摘要和截断结果拒绝；第二份摘要失败不改写输入', async () => {
-    for (const text of ['', '<summary>未闭合', '<summary></summary>']) {
+    for (const text of ['', '没有标签的摘要', '<summary>未闭合', '<summary> \n </summary>']) {
       const model = summaryModel([], text)
-      await assert.rejects(compact(model, [root('A'), assistant('工作')], { mode: 'manual' }), /摘要为空、格式不完整/)
+      await assert.rejects(compact(model, [root('A'), assistant('工作')], { mode: 'manual' }), /摘要为空或格式不完整/)
     }
     const truncated = new MockLanguageModelV4({ doGenerate: async () => ({ ...response('看似完整的部分结果'),
       finishReason: { unified: 'length', raw: undefined } }) })
@@ -182,51 +182,26 @@ describe('全量摘要输入与手动压缩', () => {
     await assert.rejects(compact(summaryModel(['历史', '']), messages))
     assert.deepEqual(messages, before)
   })
-})
 
-describe('摘要请求 PTL 有界逃逸', () => {
-  it('单个超长任务按完整模型步骤退避，保留用户原文和最后工具批次', async () => {
-    let calls = 0
-    const model = new MockLanguageModelV4({ doGenerate: async () => {
-      if (++calls === 1) throw ptl('prompt is too long: 130000 > 128000')
-      return response('有损历史摘要')
-    } })
-    await compact(model, [root('A', '完整原始任务'), call('old', 'ReadFile', { path: 'old.txt' }),
-      result('old', 'x'.repeat(12_000)), call('last', 'ReadFile', { path: 'last.txt' }), result('last', '最后证据')], { mode: 'manual' })
-    const prompt = JSON.stringify(model.doGenerateCalls[1]!.prompt)
-    assert.match(prompt, /完整原始任务/); assert.match(prompt, /最后证据/)
-    assert.doesNotMatch(prompt, /old\.txt/)
-    assert.equal(model.doGenerateCalls[1]!.prompt.filter(message => message.role === 'tool').length, 1)
-  })
-  it('按供应商 token gap 移除足量旧完整 turn，不拆工具配对且不改原历史', async () => {
-    let calls = 0
-    const model = new MockLanguageModelV4({ doGenerate: async () => {
-      if (++calls === 1) throw ptl('prompt is too long: 130000 tokens > 128000 maximum')
-      return response('保留可用历史')
-    } })
-    const messages = [root('A'), call('a', 'ReadFile', { path: 'old.txt' }), result('a', 'x'.repeat(12_000)),
-      root('B'), assistant('B 记录'), root('C'), assistant('C 记录')]
-    const before = structuredClone(messages)
-    const output = await compact(model, messages, { mode: 'manual' })
-    assert.equal(calls, 2)
-    assert.doesNotMatch(JSON.stringify(model.doGenerateCalls[1]!.prompt), /old\.txt/)
-    assert.match(JSON.stringify(model.doGenerateCalls[1]!.prompt), /B 记录|C 记录/)
-    assert.match(output.summaryText, /部分最早历史/)
-    assert.deepEqual(messages, before)
+  it('只提取完整摘要，允许标签外的说明和代码围栏', async () => {
+    for (const raw of ['以下是摘要：\n<summary> 有效摘要 </summary>\n已整理完毕。',
+      '```xml\n<summary>有效摘要</summary>\n```']) {
+      const output = await compact(summaryModel([], raw), [root('A'), assistant('工作')], { mode: 'manual' })
+      assert.equal(output.summaryText, '有效摘要')
+      assert.equal(parseCompactSummaryMessage(output.messages[0]!)?.historySummary, '有效摘要')
+    }
   })
 
-  it('无数字差额按比例移除，最多初次请求加 3 次重试；取消立即停止', async () => {
-    const model = new MockLanguageModelV4({ doGenerate: async () => { throw ptl('prompt is too long') } })
-    const messages = Array.from({ length: 12 }, (_, i) => [root(`T${i}`), assistant('x'.repeat(1000))]).flat()
-    await assert.rejects(compact(model, messages, { mode: 'manual' }), /prompt is too long/)
-    assert.equal(model.doGenerateCalls.length, 4)
-    const abort = new AbortController()
-    const cancelled = new MockLanguageModelV4({ doGenerate: async () => { abort.abort(); throw ptl('prompt is too long') } })
-    await assert.rejects(compact(cancelled, messages, { mode: 'manual', abortSignal: abort.signal }))
-    assert.equal(cancelled.doGenerateCalls.length, 1)
-    const lateAbort = new AbortController()
-    const late = new MockLanguageModelV4({ doGenerate: async () => { lateAbort.abort(); return response('迟到摘要') } })
-    await assert.rejects(compact(late, messages, { mode: 'manual', abortSignal: lateAbort.signal }))
+  it('正常完成的摘要不再被字符估算拒绝，usage 缺省也不影响有效正文', async () => {
+    const text = 'x'.repeat(24_000) // 本地估算 6000，超过本例请求预算 5760。
+    for (const total of [4000, undefined]) {
+      const model = new MockLanguageModelV4({ doGenerate: async () => ({ ...response(text),
+        usage: { ...usage, outputTokens: { total, text: total, reasoning: undefined } },
+      }) })
+      const output = await compact(model, [root('A'), assistant('工作')], { mode: 'manual' })
+      assert.equal(model.doGenerateCalls[0]!.maxOutputTokens, 5760)
+      assert.equal(output.summaryText, text)
+    }
   })
 })
 
@@ -248,7 +223,4 @@ function call(id: string, toolName: string, input: unknown): ModelMessage {
 }
 function result(id: string, value: string, toolName = 'ReadFile'): ModelMessage {
   return { role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName, output: { type: 'text', value } }] }
-}
-function ptl(message: string) {
-  return new APICallError({ message, statusCode: 400, url: 'http://localhost/model', requestBodyValues: {} })
 }

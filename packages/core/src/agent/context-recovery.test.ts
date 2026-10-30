@@ -74,6 +74,40 @@ describe('上下文超限的有限恢复', () => {
     assert.deepEqual(events.filter(event => event.type === 'context-compacted').map(event => event.level), ['micro'])
   })
 
+  it('主请求和摘要先后超限时分别计数，摘要尾部原样进入恢复请求', async t => {
+    let summaries = 0
+    let requests = 0
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        if (++summaries === 1) throw new APICallError({
+          message: 'prompt is too long: 128100 tokens > 128000 maximum',
+          statusCode: 400, url: 'http://localhost/model', requestBodyValues: {},
+        })
+        return summary('已完成最早任务')
+      },
+      doStream: async () => {
+        if (++requests === 1) throw overflow()
+        return finalStep()
+      },
+    })
+    const { session, events } = fixture(model)
+    t.after(() => session.dispose())
+    assert.equal(await session.handleUserMessage('继续'), 'completed')
+    assert.equal(requests, 2)
+    assert.equal(summaries, 2)
+    const retrySummary = JSON.stringify(model.doGenerateCalls[1]!.prompt)
+    assert.match(retrySummary, /旧任务 0/)
+    assert.doesNotMatch(retrySummary, /旧任务 1|旧任务 2/)
+    const resumed = JSON.stringify(model.doStreamCalls[1]!.prompt)
+    assert.match(resumed, /已完成最早任务/)
+    assert.ok(resumed.includes(`旧任务 1：${'x'.repeat(64_000)}`))
+    assert.ok(resumed.includes(`旧任务 2：${'x'.repeat(64_000)}`))
+    assert.deepEqual(events.filter(event => event.type === 'model-request-retry')
+      .map(event => [event.retry, event.maxRetries]), [[1, 3], [1, 1]])
+    const compacted = events.find(event => event.type === 'context-compacted')
+    assert.ok(compacted?.type === 'context-compacted' && compacted.postTokens < compacted.preTokens)
+  })
+
   it('恢复后的请求仍然超限时停止，同一步不再次压缩', async (t) => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => summary(), doStream: async () => { throw overflow() },
@@ -102,7 +136,9 @@ describe('上下文超限的有限恢复', () => {
       assert.equal(model.doStreamCalls.length, 1)
       assert.equal(model.doGenerateCalls.length, outcome === 'no-history' ? 0 : 1)
       assert.equal(events.some(event => event.type === 'model-request-retry'), false)
-      assert.match(events.findLast(event => event.type === 'error')?.message ?? '', /未能缩小请求/)
+      assert.equal(events.some(event => event.type === 'context-compacted'), false)
+      assert.match(events.findLast(event => event.type === 'error')?.message ?? '', outcome === 'larger-summary'
+        ? /压缩后的原始用户输入、保留尾部与必要上下文仍无法缩小请求/ : /未能缩小请求/)
     })
   }
 
