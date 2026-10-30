@@ -10,30 +10,34 @@ import { useConversationFeedback } from './conversation-feedback.tsx'
 type ActionKind = GitMutation['action']['kind']
 const titles = { create: '创建并切换分支', switch: '切换分支', commit: '提交改动', push: '推送分支' }
 
-export function GitActions({ runtimeId, repository, busy, onChanged }: {
-  runtimeId: string; repository: GitRepositoryInfo; busy: boolean; onChanged: () => void
+export function GitActions({ runtimeId, repository, busy, loading, error, onChanged }: {
+  runtimeId: string; repository: GitRepositoryInfo; busy: boolean; loading: boolean; error: string | null; onChanged: () => void
 }) {
   const [dialog, setDialog] = useState<ActionKind | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
+  const blocked = busy || loading || !!error
   return <>
-    <DropdownMenu.Root>
+    <DropdownMenu.Root onOpenChange={open => { if (open) onChanged() }}>
       <DropdownMenu.Trigger asChild>
-        <button ref={trigger} type="button" className="wc-preview-action wc-git-actions" aria-label="Git 操作" title={busy ? '任务结束后可操作 Git' : repository.branch ?? '分离 HEAD'} disabled={busy}>
+        <button ref={trigger} type="button" className="wc-preview-action wc-git-actions" aria-label="Git 操作" title={busy ? '任务结束后可操作 Git' : loading ? '正在读取仓库…' : repository.branch ?? '分离 HEAD'} disabled={busy || loading}>
           <GitBranch size={15} />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal><DropdownMenu.Content className="wc-menu-content min-w-36" side="left" align="start" sideOffset={6}
         onCloseAutoFocus={event => { if (dialog) event.preventDefault() }}>
-        <DropdownMenu.Item className="wc-menu-item" disabled={!repository.branch || repository.conflicts > 0 || !(repository.staged + repository.unstaged + repository.untracked)} onSelect={() => setDialog('commit')}>
+        <DropdownMenu.Item className="wc-menu-item" disabled={blocked || !repository.branch || repository.conflicts > 0 || !(repository.staged + repository.unstaged + repository.untracked)} onSelect={() => setDialog('commit')}>
           <GitCommitHorizontal size={14} />提交…
         </DropdownMenu.Item>
-        <DropdownMenu.Item className="wc-menu-item" disabled={!repository.branch || !repository.head || !repository.remotes.length} onSelect={() => setDialog('push')}><ArrowUp size={14} />推送…</DropdownMenu.Item>
+        <DropdownMenu.Item className="wc-menu-item" disabled={blocked || !repository.branch || !repository.head || !repository.remotes.length} onSelect={() => setDialog('push')}><ArrowUp size={14} />推送…</DropdownMenu.Item>
         <DropdownMenu.Separator className="my-1 h-px bg-[var(--wc-line)]" />
-        <DropdownMenu.Item className="wc-menu-item" onSelect={() => setDialog('create')}><Plus size={14} />创建分支…</DropdownMenu.Item>
-        <DropdownMenu.Item className="wc-menu-item" disabled={!repository.refs.length} onSelect={() => setDialog('switch')}><GitBranch size={14} />切换分支…</DropdownMenu.Item>
+        <DropdownMenu.Item className="wc-menu-item" disabled={blocked} onSelect={() => setDialog('create')}><Plus size={14} />创建分支…</DropdownMenu.Item>
+        <DropdownMenu.Item className="wc-menu-item" disabled={blocked || !repository.refs.length} onSelect={() => setDialog('switch')}><GitBranch size={14} />切换分支…</DropdownMenu.Item>
+        {loading ? <p role="status" className="p-2 text-xs text-[var(--wc-faint)]">正在读取仓库…</p>
+          : error && <DropdownMenu.Item className="wc-menu-item text-[var(--wc-danger)]" title={error}
+            onSelect={event => { event.preventDefault(); onChanged() }}>读取失败，点击重试</DropdownMenu.Item>}
       </DropdownMenu.Content></DropdownMenu.Portal>
     </DropdownMenu.Root>
-    {dialog && <GitActionDialog key={dialog} kind={dialog} runtimeId={runtimeId} repository={repository} busy={busy}
+    {dialog && <GitActionDialog key={dialog} kind={dialog} runtimeId={runtimeId} repository={repository} busy={busy || loading}
       onChanged={onChanged} onClose={() => setDialog(null)} onRestoreFocus={() => trigger.current?.focus()} />}
   </>
 }

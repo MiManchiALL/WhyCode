@@ -69,7 +69,7 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
       <div className="wc-git-toolbar-actions flex shrink-0 items-center gap-1">
         <button type="button" className="wc-preview-action" aria-label="刷新 Git" title="刷新 Git" disabled={refreshing.busy} aria-busy={refreshing.busy}
           onClick={() => void refreshing.run(refresh)}><RefreshCw size={14} className={refreshing.busy ? 'animate-spin' : ''} /></button>
-        {repo && <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={refresh} />}
+        {repo && <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy} loading={data.loading} error={data.error} onChanged={refresh} />}
       </div>
     </div>
     {data.error || data.snapshot?.changesError ? <FilePreviewMessage>{data.error ?? data.snapshot?.changesError}</FilePreviewMessage>
