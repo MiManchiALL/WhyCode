@@ -14,7 +14,6 @@ describe('对话即时提示生命周期', () => {
     const events: CoreEvent[] = [
       { type: 'error', message: '附件能力不可用', recoverable: true },
       { type: 'checkpoint-disabled', reason: '检查点不可用' },
-      { type: 'context-compacted', level: 'full', preTokens: 12_000, postTokens: 4_000 },
       { type: 'consensus-skipped', reason: 'image-input' },
       { type: 'negotiation-started', taskId: 'task', mode: 'quick_review' },
       { type: 'round-started', taskId: 'task', round: 2 },
@@ -23,8 +22,15 @@ describe('对话即时提示生命周期', () => {
     const view = events.reduce((state, event) => applyCoreEvent(state, event), createConversationState())
     assert.deepEqual(view.blocks, [])
     assert.deepEqual(events.map((event) => conversationEventFeedback(event)?.tone),
-      ['error', 'info', 'success', 'info', 'info', 'info', 'info'])
+      ['error', 'info', 'info', 'info', 'info', 'info'])
     assert.equal(conversationEventFeedback({ type: 'text-delta', text: '正文' }), null)
+  })
+
+  it('压缩不弹浮动提示：微压缩无感，完整压缩由时间线横条承载', () => {
+    for (const level of ['micro', 'full'] as const) {
+      assert.equal(conversationEventFeedback({ type: 'context-compacted', level,
+        preTokens: 12_000, postTokens: 4_000 }), null)
+    }
   })
 
   it('三秒内悬浮会保持，离开后立即进入退出', () => {

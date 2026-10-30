@@ -24,6 +24,7 @@ import { compactViewEvent, viewEventSchema, type ViewEvent } from './view-events
 import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createSessionFork } from './fork.ts'
+import { readSessionCompaction, type SessionCompactionSummary } from './compaction-summary.ts'
 import { readSessionStartOrigin } from './fork-origin.ts'
 import { createTurnAbortedMessage, type TurnAbortReason } from './interruption.ts'
 import { attachmentValidationSignature } from './attachment-validation-cache.ts'
@@ -666,6 +667,12 @@ export class SessionJournal implements SessionRecorder {
     })
     this.writeQueue = operation.catch(() => {})
     return operation.then(() => snapshot!)
+  }
+
+  readCompactionSummary(index: number): Promise<SessionCompactionSummary> {
+    const operation = this.writeQueue.then(() => readSessionCompaction(this.paths.transcript, index))
+    this.writeQueue = operation.then(() => undefined, () => undefined)
+    return operation
   }
 
   recordUserInput(

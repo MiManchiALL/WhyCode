@@ -22,6 +22,27 @@ function work(index: number): ViewEvent[] {
 function works(count: number): ViewEvent[] { return Array.from({ length: count }, (_, i) => work(i)).flat() }
 
 describe('会话历史分页', () => {
+  it('压缩序号不受历史分页、补载和回滚影响', () => {
+    const compact = { type: 'context-compacted' as const, level: 'full' as const,
+      preTokens: 40_000, postTokens: 10_000 }
+    const full = createConversationState([
+      ...work(-1), core(compact), ...works(25), core(compact),
+    ])
+    const tail = conversationHistoryWindow(full)
+    assert.notEqual(tail.before, null)
+    let view = restoreConversationSnapshot(tail.view)
+    assert.equal(view.compactionCount, 2)
+    assert.deepEqual(view.blocks.filter(block => block.kind === 'compaction').map(block => block.index), [2])
+    view = applyCoreEvent(view, compact)
+    view = prependConversationHistory(view, conversationHistoryWindow(full, { before: tail.before! }).view)
+    assert.deepEqual(view.blocks.filter(block => block.kind === 'compaction').map(block => block.index), [1, 2, 3])
+    view = applyCoreEvent(view, { type: 'checkpoint-restored', turnId: 'turn-24', toolUseId: 'tool-24',
+      scope: 'files-and-chat', ok: true })
+    view = applyCoreEvent(view, compact)
+    assert.equal(view.compactionCount, 4)
+    const last = view.blocks.at(-1)
+    assert.equal(last?.kind === 'compaction' && last.index, 4)
+  })
   it('首批只发最近 20 个完整工作，逐页补载与完整投影一致', () => {
     const full = createConversationState(works(65))
     let page = conversationHistoryWindow(full)

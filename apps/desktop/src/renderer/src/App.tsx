@@ -1138,6 +1138,10 @@ export function App() {
     updateRightPanelState(next)
   }, [updateRightPanelState, showConversationFeedback])
 
+  const openCompactionSummary = useCallback((index: number) => {
+    void showRightPanelPage({ kind: 'compaction', index })
+  }, [showRightPanelPage])
+
   const openFilePreview = useCallback((
     page: Extract<RightPanelPage, { kind: 'file' }>,
   ) => {
@@ -2370,6 +2374,7 @@ export function App() {
                     onFork={forkConversation}
                     onOpenFilePreview={openFilePreview}
                     onOpenChanges={showRightPanelPage}
+                    onOpenCompaction={openCompactionSummary}
                     onToggle={toggle}
                   >
                     {pendingMessage && <PendingUserMessage draft={pendingMessage} />}

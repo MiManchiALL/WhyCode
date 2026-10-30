@@ -50,6 +50,19 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('同一会话的多次压缩复用摘要标签，不同会话独立保存选择', () => {
+    const storage = new MemoryStorage()
+    const store = new RightPanelSessionStore(storage)
+    let state = openRightPanelPage(emptyState(), { kind: 'compaction', index: 1 })
+    state = openRightPanelPage(state, { kind: 'compaction', index: 3 })
+    assert.equal(state.tabs.length, 1)
+    assert.deepEqual(activeRightPanelPage(state), { kind: 'compaction', index: 3 })
+    store.set('session-a', state)
+    store.set('session-b', openRightPanelPage(emptyState(), { kind: 'compaction', index: 2 }))
+    const restored = new RightPanelSessionStore(storage)
+    assert.deepEqual(activeRightPanelPage(restored.get('session-a')), { kind: 'compaction', index: 3 })
+    assert.deepEqual(activeRightPanelPage(restored.get('session-b')), { kind: 'compaction', index: 2 })
+  })
   it('Git 比较和文件选择随会话保存，独立于本轮改动且不持久化正文', () => {
     const storage = new MemoryStorage()
     const store = new RightPanelSessionStore(storage)

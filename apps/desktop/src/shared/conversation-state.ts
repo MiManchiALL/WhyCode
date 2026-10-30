@@ -82,6 +82,7 @@ export type Block =
       error?: string
     }
   | { kind: 'model-request-retry'; id: string; retry: number; maxRetries: number; message: string }
+  | { kind: 'compaction'; id: string; index: number; preTokens: number; postTokens: number }
   | { kind: 'tool'; id: string; call: ToolCall }
   | { kind: 'candidate'; id: string; candidate: CandidateBlockData }
   | { kind: 'peer'; id: string; peer: PeerBlockData }
@@ -98,6 +99,8 @@ export interface ConversationState {
   blocks: Block[]
   expanded: Set<string>
   nextId: number
+  /** 完整压缩事件的单调序号；分页和回滚不能使历史摘要定位发生变化。 */
+  compactionCount: number
   pendingTurnStart: number | null
   turnStartBlocks: Map<string, number>
   /** 当前/最近一个结构化计划；独立于聊天块，避免频繁进度更新刷屏。 */
@@ -133,6 +136,7 @@ export function createConversationState(
     blocks: [],
     expanded: new Set(),
     nextId: 0,
+    compactionCount: 0,
     pendingTurnStart: null,
     turnStartBlocks: new Map(),
     taskPlan: null,
@@ -295,6 +299,14 @@ function applyStableCoreEvent(
         kind: 'model-request-retry', id: nextBlockId(state),
         retry: event.retry, maxRetries: event.maxRetries, message: event.message,
       })
+    case 'context-compacted': {
+      if (event.level === 'micro') return state
+      const index = state.compactionCount + 1
+      return appendBlock({ ...state, compactionCount: index }, {
+        kind: 'compaction', id: nextBlockId(state), index,
+        preTokens: event.preTokens, postTokens: event.postTokens,
+      })
+    }
     case 'work-finished': {
       const completedState = completeTerminalResponse(state, event.outcome, timestamp)
       const durationId = nextBlockId(state)

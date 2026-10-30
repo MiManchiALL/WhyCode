@@ -13,10 +13,6 @@ export function conversationEventFeedback(
   switch (event.type) {
     case 'error': return { tone: 'error', message: event.message }
     case 'checkpoint-disabled': return { tone: 'info', message: `检查点已禁用：${event.reason}` }
-    case 'context-compacted': return {
-      tone: 'success',
-      message: `上下文已压缩（${event.level === 'full' ? '摘要' : '清理'}：${Math.round(event.preTokens / 1000)}k → ${Math.round(event.postTokens / 1000)}k tokens）`,
-    }
     case 'checkpoint-restored': return {
       tone: event.ok ? 'success' : 'error',
       message: event.ok

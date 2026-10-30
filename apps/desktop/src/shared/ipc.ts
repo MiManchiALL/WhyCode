@@ -87,6 +87,7 @@ export const IPC = {
   /** Renderer 重载/崩溃恢复：重新取得当前会话、稳定时间线与主进程运行态。 */
   runtimeSnapshot: 'whycode:runtime-snapshot',
   conversationHistory: 'whycode:conversation-history',
+  compactionSummary: 'whycode:compaction-summary',
   /** Renderer → Main：查询协商可用状态（M3） */
   consensusStatus: 'whycode:consensus-status',
   /** Renderer → Main：会话列表与生命周期（M4） */

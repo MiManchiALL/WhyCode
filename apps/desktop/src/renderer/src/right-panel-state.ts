@@ -25,6 +25,7 @@ export type RightPanelPage =
   | { kind: 'browser'; id: string; url: string; title: string; workspaceFile?: boolean; referenceRequest?: BrowserReferenceRequest }
   | { kind: 'workspace'; expanded: string[] }
   | { kind: 'changes'; checkpointIds: string[]; expandedPaths: string[]; selectedPath: string | null }
+  | { kind: 'compaction'; index: number }
   | GitPage
   | { kind: 'subagent-overview' }
   | { kind: 'subagent-transcript'; subagentId: string }
@@ -298,6 +299,8 @@ export function rightPanelTabId(page: RightPanelPage): string {
       return 'workspace'
     case 'changes':
       return 'changes'
+    case 'compaction':
+      return 'compaction'
     case 'git':
       return 'git'
     case 'terminal':
@@ -384,6 +387,10 @@ function parsePage(value: unknown): RightPanelPage | null {
     return result.mode === 'commit' && result.commit === null || gitComparisonSchema.safeParse(gitPageComparison(result)).success ? result : null
   }
   if (page.kind === 'subagent-overview') return { kind: page.kind }
+  if (page.kind === 'compaction' && typeof page.index === 'number'
+    && Number.isSafeInteger(page.index) && page.index > 0) {
+    return { kind: page.kind, index: page.index }
+  }
   if (page.kind === 'subagent-transcript' && typeof page.subagentId === 'string') {
     return { kind: page.kind, subagentId: page.subagentId }
   }

@@ -1,5 +1,5 @@
 import type { SkillSummary } from '@whycode/core/skills'
-import { Check, LoaderCircle, RotateCcw, X } from 'lucide-react'
+import { Check, ChevronRight, LoaderCircle, RotateCcw, X } from 'lucide-react'
 import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 import { RestoreButton } from './checkpoint-restore-button.tsx'
 import type { Block } from '../../shared/conversation-state.ts'
@@ -24,6 +24,7 @@ export function BlockView({
   streamingAssistantText,
   renderMath,
   onCheckpointRestoreRequest,
+  onOpenCompaction,
   onEdit,
   onToggle,
   skills,
@@ -39,6 +40,7 @@ export function BlockView({
   streamingAssistantText: boolean
   renderMath: boolean
   onCheckpointRestoreRequest: CheckpointRestoreRequest
+  onOpenCompaction?: (index: number) => void
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string, restoreFiles: boolean) => Promise<boolean>
   onToggle: () => void
   skills: readonly SkillSummary[]
@@ -121,6 +123,25 @@ export function BlockView({
           模型请求重试 {block.retry}/{block.maxRetries} · {block.message}
         </span>
       </div>
+    )
+  }
+  if (block.kind === 'compaction') {
+    return (
+      <button
+        type="button"
+        className="wc-compaction-summary wc-focus-ring wc-type-caption mb-4"
+        data-conversation-scroll-block={block.id}
+        title={`查看第 ${block.index} 次完整压缩的摘要`}
+        disabled={!onOpenCompaction}
+        onClick={() => onOpenCompaction?.(block.index)}
+      >
+        <span className="shrink-0 font-semibold">上下文已压缩</span>
+        <span aria-hidden="true" className="opacity-55">·</span>
+        <span className="min-w-0 flex-1 truncate">
+          {Math.round(block.preTokens / 1000)}k → {Math.round(block.postTokens / 1000)}k tokens
+        </span>
+        {onOpenCompaction && <ChevronRight size={14} className="shrink-0" aria-hidden="true" />}
+      </button>
     )
   }
 

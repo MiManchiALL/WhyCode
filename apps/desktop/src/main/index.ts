@@ -84,6 +84,7 @@ import {
 } from './checkpoint-history.ts'
 import { createConversationState } from '../shared/conversation-state.ts'
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
+import { compactionSummaryRequestSchema, type CompactionSummaryResult } from '../shared/compaction-summary.ts'
 import { IPC } from '../shared/ipc.ts'
 import { attachmentFallbackText } from '../shared/user-message.ts'
 import {
@@ -3118,6 +3119,17 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.runtimeSnapshot, (_e, runtimeId?: string) =>
     runtimeSnapshot(runtimeForId(runtimeId)))
+  ipcMain.handle(IPC.compactionSummary, async (_e, value: unknown): Promise<CompactionSummaryResult> => {
+    try {
+      const request = compactionSummaryRequestSchema.parse(value)
+      const runtime = runtimeForId(request.runtimeId)
+      if (!runtime.journal) throw new Error('当前会话没有压缩记录')
+      await runtime.timeline.flush()
+      return { ok: true, summary: await runtime.journal.readCompactionSummary(request.index) }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
   ipcMain.handle(IPC.subagentTranscript, (
     _e,
     parentSessionId: string,

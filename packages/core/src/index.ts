@@ -265,6 +265,7 @@ export type {
 } from './consensus/types.ts'
 export { consensusPersistedStateSchema } from './consensus/types.ts'
 export { SessionStore, SessionJournal } from './session/store.ts'
+export type { SessionCompactionSummary } from './session/compaction-summary.ts'
 export type {
   TurnAbortReason,
   TurnInterruptedSubagent,

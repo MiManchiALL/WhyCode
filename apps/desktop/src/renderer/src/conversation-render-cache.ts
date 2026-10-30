@@ -15,6 +15,7 @@ export interface ConversationBlockRenderProps {
   skills: readonly SkillSummary[]
   projectDir: string | null
   onCheckpointRestoreRequest: CheckpointRestoreRequest
+  onOpenCompaction?: (index: number) => void
   onEdit: (block: Extract<Block, { kind: 'user' }>, text: string, restoreFiles: boolean) => Promise<boolean>
   onToggle: (id: string) => void
 }
@@ -84,5 +85,6 @@ export function sameConversationBlockRenderProps(
     )
   }
 
-  return true
+  return next.block.kind !== 'compaction'
+    || previous.onOpenCompaction === next.onOpenCompaction
 }
