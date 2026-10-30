@@ -220,6 +220,7 @@ import type {
   SaveProviderSettingsRequest,
   SaveMcpSecretHeaderRequest,
   SaveWebSearchSettingsRequest,
+  SaveWebFetchSettingsRequest,
   SetMcpServerEnabledRequest,
   SettingsMutationResult,
 } from '../shared/settings.ts'
@@ -228,12 +229,13 @@ import {
   type McpRegisteredOAuthClient,
 } from './mcp-oauth.ts'
 import { createConfiguredWebSearchHandler } from './web-search/configured.ts'
-import { updateWebSearchSettings } from './web-search-settings.ts'
+import { updateWebSearchSettings, updateWebFetchSettings } from './web-search-settings.ts'
 import {
   createElectronWebHostResolver,
   createElectronWebPageFetch,
 } from './web-page/electron-fetch.ts'
 import { createWebDocumentFetcher } from './web-page/network.ts'
+import { createConfiguredWebDocumentFetcher } from './web-page/configured.ts'
 import { createWebPageReader } from './web-page/reader.ts'
 import {
   extractWebTextDocument,
@@ -339,11 +341,17 @@ const webSearchTool = createWebSearchTool({
 
 function createSessionWebPageTools(recorder: SessionJournal) {
   const fetchImpl = createElectronWebPageFetch((options) => net.request(options))
-  const fetchDocument = createWebDocumentFetcher({
-    fetchImpl,
-    // 预检与实际请求共用 Chromium 的解析缓存和网络栈；重定向仍逐跳重新校验。
-    resolveHost: createElectronWebHostResolver((hostname, options) =>
-      net.resolveHost(hostname, options)),
+  const resolveHost = createElectronWebHostResolver((hostname, options) =>
+    net.resolveHost(hostname, options))
+  const fetchDocument = createConfiguredWebDocumentFetcher({
+    getConfig: loadAppConfig,
+    fetchImpl: (input, init) => net.fetch(input, init),
+    resolveHost,
+    fetchBuiltin: createWebDocumentFetcher({
+      fetchImpl,
+      // 预检与实际请求共用 Chromium 的解析缓存和网络栈；重定向仍逐跳重新校验。
+      resolveHost,
+    }),
   })
   const reader = createWebPageReader({
     fetchDocument,
@@ -1935,6 +1943,14 @@ async function saveWebSearchConnectionSettings(
   }, currentConnectionSettingsSnapshot)
 }
 
+async function saveWebFetchConnectionSettings(
+  request: SaveWebFetchSettingsRequest,
+): Promise<SettingsMutationResult> {
+  return mutateConnectionSettings(async () => {
+    await persistConnectionConfig(updateWebFetchSettings(loadAppConfig(), request))
+  }, currentConnectionSettingsSnapshot)
+}
+
 async function setMcpServerConnectionState(
   request: SetMcpServerEnabledRequest,
 ): Promise<SettingsMutationResult<McpSettingsItem>> {
@@ -3089,6 +3105,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
   )
   ipcMain.handle(IPC.saveWebSearchSettings, (_e, request: SaveWebSearchSettingsRequest) =>
     saveWebSearchConnectionSettings(request))
+  ipcMain.handle(IPC.saveWebFetchSettings, (_e, request: SaveWebFetchSettingsRequest) =>
+    saveWebFetchConnectionSettings(request))
   ipcMain.handle(IPC.setMcpServerEnabled, (_e, request: SetMcpServerEnabledRequest) =>
     setMcpServerConnectionState(request))
   ipcMain.handle(IPC.addMcpServer, (_e, request: AddMcpServerRequest) =>

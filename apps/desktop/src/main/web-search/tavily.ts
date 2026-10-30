@@ -7,10 +7,10 @@ import {
 } from '@whycode/core'
 import type { TavilySearchDepth } from '../../shared/settings.ts'
 import {
-  postSearchJson,
-  SEARCH_MAX_RESPONSE_BYTES,
-  SEARCH_REQUEST_TIMEOUT_MS,
-} from './http.ts'
+  postWebJson,
+  WEB_API_MAX_RESPONSE_BYTES,
+  WEB_API_TIMEOUT_MS,
+} from '../web-http.ts'
 
 const TAVILY_SEARCH_ENDPOINT = 'https://api.tavily.com/search'
 
@@ -34,27 +34,28 @@ type TavilyQueryOutcome =
 
 export function createTavilySearchHandler(options: TavilySearchOptions): WebSearchHandler {
   return async (request, abortSignal) => {
-    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? SEARCH_REQUEST_TIMEOUT_MS)
+    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? WEB_API_TIMEOUT_MS)
     const signal = AbortSignal.any([abortSignal, timeoutSignal])
     const apiKey = options.getApiKey()?.trim()
     if (!apiKey) {
       throw new WebSearchError(
-        '尚未配置 Tavily Search API key，请在“⚙ 连接 → 网页搜索”中配置',
+        '尚未配置 Tavily Search API key，请在“设置 → 网页搜索与抓取”中配置',
       )
     }
     const maxResponseBytes = Math.floor(
-      SEARCH_MAX_RESPONSE_BYTES / request.queries.length,
+      WEB_API_MAX_RESPONSE_BYTES / request.queries.length,
     )
     const outcomes = await Promise.all(request.queries.map(
       async (query, queryIndex): Promise<TavilyQueryOutcome> => {
         try {
-          const response = await postSearchJson({
+          const response = await postWebJson({
             endpoint: TAVILY_SEARCH_ENDPOINT,
             apiKey,
             body: tavilyRequestBody(request, query, options.searchDepth),
             serviceName: 'Tavily 搜索',
             signal,
             statusError,
+            error: (message) => new WebSearchError(message),
             maxResponseBytes,
             ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
           })

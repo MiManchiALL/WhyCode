@@ -25,6 +25,7 @@ describe('模型设置数据边界', () => {
         activeProvider: 'tavily',
         perplexity: { apiKey: 'perplexity-secret' },
         tavily: { apiKey: 'tavily-secret' },
+        deepseek: { apiKey: 'deepseek-web-secret' },
       },
     }
     const snapshot = createConnectionSettingsSnapshot(config)
@@ -35,13 +36,14 @@ describe('模型设置数据边界', () => {
       true,
     )
     assert.equal(snapshot.webSearch.activeProvider, 'tavily')
+    assert.equal(snapshot.webFetch.provider, 'builtin')
     assert.equal(
       snapshot.webSearch.providers.every((provider) => provider.hasKey),
       true,
     )
     assert.doesNotMatch(
       JSON.stringify(snapshot),
-      /secret-key|proxy-secret|perplexity-secret|tavily-secret/,
+      /secret-key|proxy-secret|perplexity-secret|tavily-secret|deepseek-web-secret/,
     )
   })
 

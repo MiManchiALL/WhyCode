@@ -4,8 +4,8 @@ import {
   runUtilityProcessJob,
   UtilityProcessJobError,
 } from '../utility-process-job.ts'
-import type { ExtractedWebPage } from './content.ts'
-import type { WebTextDocument } from './network.ts'
+import { createExtractedWebPage, type ExtractedWebPage } from './content.ts'
+import { isHtmlContentType, type WebTextDocument } from './network.ts'
 import {
   isWebPageWorkerResponse,
   type WebPageWorkerRequest,
@@ -17,6 +17,10 @@ export async function extractWebTextDocument(
   document: WebTextDocument,
   abortSignal: AbortSignal,
 ): Promise<ExtractedWebPage> {
+  if (abortSignal.aborted) throw new WebPageError('网页读取已取消')
+  if (!isHtmlContentType(document.contentType)) {
+    return createExtractedWebPage(document, document.text, { title: document.title })
+  }
   const request: WebPageWorkerRequest = { id: randomUUID(), document }
   try {
     const response = await runUtilityProcessJob({

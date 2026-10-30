@@ -2,6 +2,7 @@ import type { WebSearchHandler } from '@whycode/core'
 import { resolveWebSearchProvider, type WhycodeConfig } from '../config.ts'
 import { createPerplexitySearchHandler } from './perplexity.ts'
 import { createTavilySearchHandler } from './tavily.ts'
+import { createDeepSeekSearchHandler } from './deepseek.ts'
 
 interface ConfiguredWebSearchOptions {
   getConfig: () => WhycodeConfig | null
@@ -18,6 +19,7 @@ export function createConfiguredWebSearchHandler(
       getApiKey: () => config?.webSearch?.[provider]?.apiKey,
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     }
+    if (provider === 'deepseek') return createDeepSeekSearchHandler(common)(request, abortSignal)
     return provider === 'tavily'
       ? createTavilySearchHandler({
           ...common,

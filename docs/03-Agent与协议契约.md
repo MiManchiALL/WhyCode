@@ -290,8 +290,9 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 - 每查询目标默认 5、最多 10 条，总结果最多 20；recency 为 hour/day/week/month/year，domains 最多 10 个域名。
 - 用于搜索和核实公开网页的当前事实、官方资料和来源。模型记忆不能替代需要核实的事实，但已有充分依据且核实不实质提高可靠性时无需搜索。
 - 搜索后端、score 和厂商字段不进入模型 schema；结果按规范 URL 去重并提供可复用的引用链接。
+- DeepSeek 保留服务排序，优先使用 `summary`，为空时使用 `snippet`；不请求搜索全文，单条摘要沿用 1,200 字符上限。批量查询分别请求并保留成功结果，失败项明确返回原因。域名与日期转换为 `site:`、`after:`；组合后的查询最多 128 个 Unicode 字符，超限要求缩短或减少筛选，不截断查询。日期筛选按 UTC 日历日表达，month/year 分别取 30/365 天；不支持小时精度时明确要求改用 day 或核对来源时间。
 
-`WebFetch {url,offset?,limit?}` 只读取无需登录的公开 HTTP(S) 页面。已知 URL 直接读取，不先搜索；正文转为带稳定行号的 Markdown，单次最多 100 行/9k 字符，并返回总行数与下一 offset。命中 PDF 时导入为当前会话 PDF 附件，再用 `ReadFile`。
+`WebFetch {url,offset?,limit?}` 只读取无需登录的公开 HTTP(S) 页面。已知 URL 直接读取，不先搜索；正文转为带稳定行号的 Markdown，单次最多 100 行/9k 字符，并返回总行数与下一 offset。内置下载命中 PDF 时导入为当前会话 PDF 附件，再用 `ReadFile`；DeepSeek 与 PDF 的分派边界见文档二 §11.2。
 
 `WebFind {url,pattern,context=2,max_results=10}` 只在本会话已缓存的同一 WebFetch 正文中做字面查找，不联网、不重新抓取、不查 PDF。
 

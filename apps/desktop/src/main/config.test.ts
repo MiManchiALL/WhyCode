@@ -155,6 +155,25 @@ describe('网页搜索后端选择', () => {
 })
 
 describe('配置密钥存储', () => {
+  it('DeepSeek 选择和共享密钥跨重载保留，未知抓取后端拒绝读取', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-web-config-'))
+    const path = join(root, 'config.json')
+    try {
+      await saveConfig({
+        providers: {},
+        webSearch: { activeProvider: 'deepseek', deepseek: { apiKey: 'web-secret' } },
+        webFetch: { provider: 'deepseek' },
+      }, codec, path)
+      const loaded = loadConfig(path, codec)
+      assert.equal(resolveWebSearchProvider(loaded), 'deepseek')
+      assert.equal(loaded?.webFetch?.provider, 'deepseek')
+      assert.equal(loaded?.webSearch?.deepseek?.apiKey, 'web-secret')
+      await writeFile(path, JSON.stringify({ providers: {}, webFetch: { provider: 'unknown' } }))
+      await assert.rejects(saveConfig({ providers: {} }, codec, path), /网页抓取配置格式无效/)
+      assert.throws(() => loadConfig(path, codec), /网页抓取配置格式无效/)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
   it('只有不存在的文件视为未配置，其它读取失败会保留原文件', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-config-read-'))
     const path = join(root, 'config.json')
@@ -193,6 +212,10 @@ describe('配置密钥存储', () => {
       },
     }],
     ['网页搜索', { providers: {}, webSearch: { tavily: { apiKey: 'search-secret' } } }],
+    ['DeepSeek 网页服务', {
+      providers: {}, webSearch: { deepseek: { apiKey: 'deepseek-web-secret' } },
+      webFetch: { provider: 'deepseek' },
+    }],
     ['MCP 请求头', {
       providers: {},
       mcpSecretHeaders: [{
@@ -336,7 +359,9 @@ describe('配置密钥存储', () => {
         activeProvider: 'tavily',
         perplexity: { apiKey: 'perplexity-secret' },
         tavily: { apiKey: 'tavily-secret', searchDepth: 'advanced' },
+        deepseek: { apiKey: 'deepseek-web-secret' },
       },
+      webFetch: { provider: 'deepseek' },
       permissionMode: 'auto',
       mcpSecretHeaders: [{
         serverName: 'context7',
@@ -365,7 +390,7 @@ describe('配置密钥存储', () => {
       const raw = await readFile(path, 'utf-8')
       assert.doesNotMatch(
         raw,
-        /official-secret|proxy-secret|perplexity-secret|tavily-secret|context7-secret|github-client-secret|github-oauth-token|github-refresh-token/,
+        /official-secret|proxy-secret|perplexity-secret|tavily-secret|deepseek-web-secret|context7-secret|github-client-secret|github-oauth-token|github-refresh-token/,
       )
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
@@ -385,6 +410,8 @@ describe('配置密钥存储', () => {
       assert.equal(loaded?.webSearch?.perplexity?.apiKey, 'perplexity-secret')
       assert.equal(loaded?.webSearch?.tavily?.apiKey, 'tavily-secret')
       assert.equal(loaded?.webSearch?.tavily?.searchDepth, 'advanced')
+      assert.equal(loaded?.webSearch?.deepseek?.apiKey, 'deepseek-web-secret')
+      assert.equal(loaded?.webFetch?.provider, 'deepseek')
       assert.equal(loaded?.permissionMode, 'auto')
       assert.deepEqual(loaded?.mcpSecretHeaders, [{
         serverName: 'context7',

@@ -56,6 +56,7 @@ export interface ConnectionSettingsSnapshot {
   auxiliaryModels: AuxiliaryModelsSettingsItem
   consensusModels: ConsensusModelsSettingsItem
   webSearch: WebSearchSettingsItem
+  webFetch: WebFetchSettingsItem
 }
 
 export interface AuxiliaryModelsSettingsItem {
@@ -90,7 +91,12 @@ export interface SaveConsensusModelSettingsRequest {
   agentCModelId: string | null
 }
 
-export type WebSearchProviderId = 'perplexity' | 'tavily'
+export type WebSearchProviderId = 'perplexity' | 'tavily' | 'deepseek'
+export type WebFetchProviderId = 'builtin' | 'deepseek'
+export interface WebFetchSettingsItem {
+  provider: WebFetchProviderId
+}
+export type SaveWebFetchSettingsRequest = WebFetchSettingsItem
 export type TavilySearchDepth = 'basic' | 'advanced'
 
 export interface WebSearchSettingsItem {

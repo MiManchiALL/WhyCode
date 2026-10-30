@@ -42,7 +42,7 @@ import {
   SettingsSection,
 } from './settings-layout.tsx'
 import { SelectMenu } from './select-menu.tsx'
-import { WebSearchSettingsEditor } from './web-search-settings.tsx'
+import { WebSearchSettingsEditor, WebFetchSettingsEditor } from './web-search-settings.tsx'
 import { GeneralSettings } from './general-settings.tsx'
 import type { CompletionSoundSetting } from './use-completion-sound.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
@@ -219,7 +219,7 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                 disabled={pending}
                 active={section === 'search'}
                 icon={<Globe2 size={16} />}
-                label="网页搜索"
+                label="网页搜索与抓取"
                 onClick={() => setSection('search')}
               />
               <SettingsNavItem
@@ -287,11 +287,19 @@ export function ConnectionSettingsPanel(props: ConnectionSettingsPanelProps) {
                   )}
 
                   {section === 'search' && snapshot && (
-                    <WebSearchSettingsEditor
-                      settings={snapshot.webSearch}
-                      disabled={disabled}
-                      onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request), receiveConnections)}
-                    />
+                    <>
+                      <WebSearchSettingsEditor
+                        settings={snapshot.webSearch}
+                        disabled={disabled}
+                        onSave={(request) => mutate(() => window.whycode.saveWebSearchSettings(request), receiveConnections)}
+                      />
+                      <WebFetchSettingsEditor
+                        settings={snapshot.webFetch}
+                        deepseekHasKey={snapshot.webSearch.providers.some((provider) => provider.id === 'deepseek' && provider.hasKey)}
+                        disabled={disabled}
+                        onSave={(request) => mutate(() => window.whycode.saveWebFetchSettings(request), receiveConnections)}
+                      />
+                    </>
                   )}
 
                   {section === 'mcp' && mcpSnapshot && (
@@ -396,8 +404,8 @@ const SETTINGS_META: Record<SettingsSectionId, { title: string; description: str
     description: '从统一模型连接中选择协商评审员 B 和 C 使用的模型。',
   },
   search: {
-    title: '网页搜索',
-    description: '配置 Agent 联网检索时使用的搜索服务。',
+    title: '网页搜索与抓取',
+    description: '配置 Agent 搜索来源与读取网页正文时使用的服务。',
   },
   mcp: {
     title: 'MCP',

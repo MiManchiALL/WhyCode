@@ -68,6 +68,7 @@ export const IPC = {
   saveAuxiliaryModelSettings: 'whycode:save-auxiliary-model-settings',
   saveConsensusModelSettings: 'whycode:save-consensus-model-settings',
   saveWebSearchSettings: 'whycode:save-web-search-settings',
+  saveWebFetchSettings: 'whycode:save-web-fetch-settings',
   setMcpServerEnabled: 'whycode:set-mcp-server-enabled',
   addMcpServer: 'whycode:add-mcp-server',
   saveMcpSecretHeader: 'whycode:save-mcp-secret-header',

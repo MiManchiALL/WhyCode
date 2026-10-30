@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import type {
   SaveWebSearchSettingsRequest,
+  SaveWebFetchSettingsRequest,
+  WebFetchSettingsItem,
+  WebFetchProviderId,
   TavilySearchDepth,
   WebSearchProviderId,
   WebSearchSettingsItem,
@@ -127,7 +130,8 @@ function SearchProviderEditor(props: {
           onChange={(event) => setApiKey(event.target.value)}
           disabled={props.disabled}
           autoComplete="new-password"
-          placeholder={props.provider.id === 'tavily' ? 'tvly-…' : 'pplx-…'}
+          aria-label={`${props.provider.displayName} API Key`}
+          placeholder={props.provider.id === 'deepseek' ? 'sk-…' : props.provider.id === 'tavily' ? 'tvly-…' : 'pplx-…'}
         />
       </SettingsRow>
       {props.provider.id === 'tavily' && (
@@ -169,8 +173,46 @@ function SearchProviderEditor(props: {
 }
 
 function providerDescription(provider: WebSearchProviderId): string {
+  if (provider === 'deepseek') {
+    return '搜索摘要，按需抓取全文；此密钥同时用于下方的 DeepSeek 网页抓取。'
+  }
   if (provider === 'tavily') {
     return '自动选择 general/news/finance 主题；搜索深度由质量档位固定，批量查询允许部分成功。'
   }
   return '固定 low 搜索上下文；密钥只在主进程解密使用。'
+}
+
+export function WebFetchSettingsEditor(props: {
+  settings: WebFetchSettingsItem
+  deepseekHasKey: boolean
+  disabled: boolean
+  onSave: (request: SaveWebFetchSettingsRequest) => Promise<boolean>
+}) {
+  return (
+    <SettingsSection title="网页抓取" description="选择网页正文的读取方式，搜索与抓取可以使用不同服务。">
+      <SettingsPanel padded={false}>
+        <SettingsRow label="抓取方式" description="内置抓取直接读取公开网页，无需 API Key。" divided={false}>
+          <SelectMenu
+            value={props.settings.provider}
+            options={[
+              { value: 'builtin', label: '内置抓取（默认）' },
+              {
+                value: 'deepseek',
+                label: `DeepSeek Fetch API${props.deepseekHasKey ? '' : '（未配置）'}`,
+                disabled: !props.deepseekHasKey,
+              },
+            ]}
+            onValueChange={(value) => void props.onSave({ provider: value as WebFetchProviderId })}
+            ariaLabel="网页抓取方式"
+            disabled={props.disabled}
+            className="w-full"
+          />
+        </SettingsRow>
+        <p className="px-4 pb-4 wc-type-caption text-neutral-500">
+          DeepSeek 使用上方配置的密钥，将网页地址发送给 DeepSeek 获取正文，按请求计费。
+          已知 PDF 链接仍由内置抓取下载并导入附件。
+        </p>
+      </SettingsPanel>
+    </SettingsSection>
+  )
 }

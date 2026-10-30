@@ -54,7 +54,7 @@ const markdownConverter = new NodeHtmlMarkdown({
 export function extractWebPage(document: WebTextDocument): ExtractedWebPage {
   const extracted = isHtmlContentType(document.contentType)
     ? extractHtml(document.text, document.finalUrl)
-    : { markdown: document.text }
+    : { markdown: document.text, title: cleanTitle(document.title) }
   return createExtractedWebPage(document, extracted.markdown, {
     ...(extracted.title ? { title: extracted.title } : {}),
   })

@@ -8,6 +8,7 @@ import type { PermissionMode } from '@whycode/core/permissions'
 import type {
   TavilySearchDepth,
   WebSearchProviderId,
+  WebFetchSettingsItem,
 } from '../shared/settings.ts'
 import { getCliProxyModelCompatibility, isCliProxyRoute } from './cli-proxy-models.ts'
 import type { McpOAuthSession } from './mcp-oauth-state.ts'
@@ -35,6 +36,8 @@ export interface WebSearchConfig {
   activeProvider?: WebSearchProviderId
   perplexity?: WebSearchProviderConfig
   tavily?: TavilyWebSearchProviderConfig
+  /** 搜索与抓取共用，独立于模型连接的凭据。 */
+  deepseek?: WebSearchProviderConfig
 }
 
 export interface CliProxyApiConfig {
@@ -65,6 +68,7 @@ export interface WhycodeConfig {
   auxiliaryModels?: AuxiliaryModelsConfig
   consensusAgents?: Partial<Record<'B' | 'C', ConsensusAgentConfig>>
   webSearch?: WebSearchConfig
+  webFetch?: WebFetchSettingsItem
   /** MCP 结构仍在 mcp.json；这里只保存经 safeStorage 加密的全局 HTTP header 密钥。 */
   mcpSecretHeaders?: McpSecretHeader[]
   /** OAuth 客户端注册信息与令牌整体加密，并按服务器名称和 URL 指纹绑定。 */
@@ -117,6 +121,7 @@ export function resolveWebSearchProvider(
   }
   if (webSearch?.perplexity?.apiKey) return 'perplexity'
   if (webSearch?.tavily?.apiKey) return 'tavily'
+  if (webSearch?.deepseek?.apiKey) return 'deepseek'
   return webSearch?.activeProvider ?? 'perplexity'
 }
 

@@ -24,6 +24,7 @@ interface WebDocumentBase {
 
 export interface WebTextDocument extends WebDocumentBase {
   kind: 'text'
+  title?: string
   text: string
 }
 
