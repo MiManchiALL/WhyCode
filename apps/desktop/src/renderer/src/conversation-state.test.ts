@@ -888,15 +888,18 @@ describe('会话界面时间线重建', () => {
     assert.equal(filesAndChat.fileRollbackBoundaryTurnId, null)
   })
 
-  it('上下文压缩通知不写入对话历史', () => {
-    const state = createConversationState([core({
-      type: 'context-compacted',
-      level: 'full',
-      preTokens: 49_000,
-      postTokens: 26_000,
-    })])
-
-    assert.deepEqual(state.blocks, [])
+  it('完整压缩保留可重放记录，微压缩不显示且不占摘要序号', () => {
+    const events = (['micro', 'full', 'micro', 'full'] as const).map(level => ({
+      type: 'context-compacted' as const, level, preTokens: 49_000, postTokens: 26_000,
+    }))
+    const live = events.reduce((state, event) => applyCoreEvent(state, event), createConversationState())
+    const replay = createConversationState(events.map(core))
+    assert.deepEqual(replay.blocks, live.blocks)
+    assert.equal(replay.compactionCount, 2)
+    assert.deepEqual(replay.blocks, [
+      { kind: 'compaction', id: 'b0', index: 1, preTokens: 49_000, postTokens: 26_000 },
+      { kind: 'compaction', id: 'b1', index: 2, preTokens: 49_000, postTokens: 26_000 },
+    ])
   })
 
   it('回滚失败不追加到对话时间线', () => {

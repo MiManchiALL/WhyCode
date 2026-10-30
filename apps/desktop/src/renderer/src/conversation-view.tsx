@@ -64,6 +64,7 @@ interface ConversationViewProps {
   onFork: (turnId: string) => void
   onOpenFilePreview?: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
   onOpenChanges?: (page: Extract<RightPanelPage, { kind: 'changes' }>) => void
+  onOpenCompaction?: (index: number) => void
   onNavigate?: (target: HTMLElement, alignment: ConversationScrollAlignment) => void
   onToggle: (id: string) => void
 }
@@ -316,6 +317,9 @@ function WorkSection({
               ))}
         </div>
       )}
+      {!expanded && section.activityBlocks.filter(block => block.kind === 'compaction').map(block => (
+        <ConversationBlock key={block.id} {...conversationBlockProps(props, block)} />
+      ))}
       {section.kind === 'completed-work' && section.duration.outcome === 'error' && section.duration.error && (
         <div className="wc-type-caption mb-4 flex items-start gap-2 px-1 text-[var(--wc-muted)]" role="status">
           <AlertCircle size={15} className="mt-0.5 shrink-0 text-[var(--wc-danger)]" />
@@ -412,6 +416,7 @@ const ConversationBlock = memo(function ConversationBlock({
   streamingAssistantText,
   renderMath,
   onCheckpointRestoreRequest,
+  onOpenCompaction,
   onEdit,
   onToggle,
   skills,
@@ -430,6 +435,7 @@ const ConversationBlock = memo(function ConversationBlock({
         streamingAssistantText={streamingAssistantText}
         renderMath={renderMath}
         onCheckpointRestoreRequest={onCheckpointRestoreRequest}
+        onOpenCompaction={onOpenCompaction}
         onEdit={onEdit}
         onToggle={() => onToggle(block.id)}
         skills={skills}
@@ -460,6 +466,7 @@ function conversationBlockProps(
     skills: props.skills,
     projectDir: props.projectDir,
     onCheckpointRestoreRequest: props.onCheckpointRestoreRequest,
+    onOpenCompaction: props.onOpenCompaction,
     onEdit: props.onEdit,
     onToggle: props.onToggle,
   }

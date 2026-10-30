@@ -4,6 +4,7 @@ import { FolderOpen, Globe, Maximize2, Minimize2, PanelRightClose, Plus, SquareT
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { RightPanelFilePreview } from './right-panel-file.tsx'
 import { RightPanelChanges } from './right-panel-changes.tsx'
+import { CompactionSummaryPanel } from './compaction-summary-panel.tsx'
 import { GitPanel } from './git-panel.tsx'
 import type { GitData } from './git-data.ts'
 import { WorkspaceBrowser } from './workspace-browser.tsx'
@@ -169,6 +170,9 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
       return props.active ? <GitPanel key={props.runtimeId} runtimeId={props.runtimeId} page={page}
         branchData={props.gitData} revision={props.gitRevision} busy={props.busy} remote={props.remote} onOpenPage={props.onOpenPage} /> : null
     case 'browser': return null
+    case 'compaction':
+      return props.active ? <CompactionSummaryPanel key={`${props.runtimeId}:${page.index}`}
+        runtimeId={props.runtimeId} index={page.index} /> : null
     case 'changes':
       return props.active ? <RightPanelChanges key={`${props.runtimeId}:${page.checkpointIds.join(',')}`}
         runtimeId={props.runtimeId} projectDir={props.projectDir} remote={props.remote} page={page} onOpenPage={props.onOpenPage} />

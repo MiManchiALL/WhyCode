@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { SubagentSummary } from '@whycode/core'
-import { Bot, FileDiff, FileText, FolderOpen, Globe, SquareTerminal, Volume2, X } from 'lucide-react'
+import { Archive, Bot, FileDiff, FileText, FolderOpen, Globe, SquareTerminal, Volume2, X } from 'lucide-react'
 import {
   closestCenter, defaultDropAnimationSideEffects, DndContext, DragOverlay,
   KeyboardSensor, PointerSensor, useSensor, useSensors,
@@ -120,6 +120,7 @@ function SortableTab({ tab, title, active, status, onSelect, onClose }: {
 
 function TabLabel({ tab, title, status }: { tab: RightPanelTab; title: string; status: TabStatus }) {
   const Icon = tab.page.kind === 'file' ? FileText : tab.page.kind === 'terminal' ? SquareTerminal
+    : tab.page.kind === 'compaction' ? Archive
     : tab.page.kind === 'browser' ? Globe
     : tab.page.kind === 'workspace' ? FolderOpen : tab.page.kind === 'changes' || tab.page.kind === 'git' ? FileDiff : Bot
   return <><Icon size={13} className="shrink-0 text-[var(--wc-muted)]" /><span className="truncate">{title}</span>
@@ -134,6 +135,7 @@ function tabTitle(tab: RightPanelTab, subagents: readonly SubagentSummary[]): st
   const page = tab.page
   if (page.kind === 'workspace') return '当前工作路径'
   if (page.kind === 'changes') return '本轮改动'
+  if (page.kind === 'compaction') return '压缩摘要'
   if (page.kind === 'git') return '变更'
   if (page.kind === 'file') return page.name
   if (page.kind === 'terminal') return page.terminal.title

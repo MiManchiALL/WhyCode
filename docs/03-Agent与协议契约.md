@@ -549,6 +549,7 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 - `conversationHistory({runtimeId,before,targetId?})` 只读取指定运行时的可见历史；`before` 表示已加载窗口前的块数，返回其之前的完整工作分组。普通读取约 20 组，定位读取每批最多 100 组；连续 BTW 链按一组计算。没有更早内容时 `before=null`。
 - `resumeSession(sessionId,historyStart?)` 可传此前阅读窗口的块身份以恢复已加载范围；正文、工具结果和任务状态不作为 Renderer 本地缓存落盘。Main 从恢复请求成立起投递目标会话的完整实时事件，覆盖读取快照到提交选择的间隙；Renderer 按快照游标接续，不能漏掉工具封口或步骤提交。未选中且未在恢复的会话只投递生命周期事件。
 - 更早页只扩展显示前缀，不覆盖实时控制状态、当前输出或步骤提交/丢弃边界；分页不生成模型消息、不改变持久化 schema，也不取代模型的完整上下文恢复。
+- `compactionSummary({runtimeId,index})` 校验运行时身份与正整数序号，等待展示事件写稳后，只返回该会话第 `index` 次完整压缩的历史摘要、turn 前缀摘要、时间和前后 token 数。微压缩不计数；没有对应成功事件或摘要快照时明确报错。摘要不含原始保留尾部和应用重注入内容，不改写会话或重新调用模型；类型单源为 `shared/compaction-summary.ts`。
 
 ### 7.2 未发送输入草稿
 

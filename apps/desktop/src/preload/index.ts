@@ -14,6 +14,7 @@ import type {
   SubagentTranscriptSnapshot,
 } from '@whycode/core'
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
+import type { CompactionSummaryRequest, CompactionSummaryResult } from '../shared/compaction-summary.ts'
 import { IPC } from '../shared/ipc.ts'
 import type { RenameSessionRequest, RenameSessionResult } from '../shared/session-name.ts'
 import type { SessionSidebarSnapshot } from '../shared/projects.ts'
@@ -233,6 +234,8 @@ const api = {
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   conversationHistory: (request: ConversationHistoryRequest): Promise<ConversationHistoryResult> =>
     ipcRenderer.invoke(IPC.conversationHistory, request),
+  compactionSummary: (request: CompactionSummaryRequest): Promise<CompactionSummaryResult> =>
+    ipcRenderer.invoke(IPC.compactionSummary, request),
   runtimeSnapshot: (runtimeId?: string): Promise<RuntimeSnapshot> =>
     ipcRenderer.invoke(IPC.runtimeSnapshot, runtimeId),
   subagentTranscript: (

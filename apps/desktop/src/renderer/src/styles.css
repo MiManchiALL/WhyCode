@@ -440,7 +440,8 @@ html[data-wc-panel-resizing='true']::after {
     repeating-linear-gradient(to bottom, var(--wc-btw-line) 0 var(--wc-btw-vertical-dash), transparent var(--wc-btw-vertical-dash) var(--wc-btw-vertical-cycle)) top right / 1px 100% no-repeat;
 }
 
-.wc-btw-history-summary {
+.wc-btw-history-summary,
+.wc-compaction-summary {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -457,6 +458,15 @@ html[data-wc-panel-resizing='true']::after {
 
 .wc-btw-history-summary:hover {
   background: color-mix(in srgb, var(--wc-blue) 86%, var(--wc-blue-ink));
+}
+
+.wc-compaction-summary {
+  background: var(--wc-sage);
+  color: var(--wc-sage-ink);
+}
+
+.wc-compaction-summary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wc-sage) 86%, var(--wc-sage-ink));
 }
 
 .wc-btw-history-label,
