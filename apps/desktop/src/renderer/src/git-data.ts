@@ -34,10 +34,8 @@ export function useGitSnapshot(runtimeId: string, comparison: GitComparison, rev
     let active = true, running = false, dirty = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const read = async () => {
-      dirty = true
       if (running) return
       running = true
-      setState(previous => ({ key, snapshot: previous.key === key ? previous.snapshot : null, loading: true, error: null }))
       while (dirty && active) {
         dirty = false
         try {
@@ -52,7 +50,12 @@ export function useGitSnapshot(runtimeId: string, comparison: GitComparison, rev
       }
       running = false
     }
-    const schedule = () => { clearTimeout(timer); timer = setTimeout(() => void read(), 120) }
+    const schedule = () => {
+      dirty = true
+      setState(previous => ({ key, snapshot: previous.key === key ? previous.snapshot : null, loading: true, error: null }))
+      clearTimeout(timer)
+      if (!running) timer = setTimeout(() => void read(), 120)
+    }
     refreshRef.current = schedule
     schedule()
     return () => { active = false; clearTimeout(timer); refreshRef.current = () => {} }

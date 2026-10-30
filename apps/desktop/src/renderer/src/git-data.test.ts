@@ -9,6 +9,10 @@ import type { WorkspaceActionResult } from '../../shared/workspace.ts'
 import { gitConnectionUnavailableReason, useGitSnapshot, type GitData } from './git-data.ts'
 
 const snapshot: GitSnapshot = { status: 'not-repository', repository: null, changes: null, changesError: null }
+const ready: GitSnapshot = { status: 'ready', repository: {
+  root: '/project', name: 'project', branch: 'main', head: null, upstream: null, ahead: 0, behind: 0,
+  refs: [], remotes: [], defaultBase: null, staged: 0, unstaged: 0, untracked: 0, conflicts: 0,
+}, changes: null, changesError: null }
 
 describe('Git 读取与 SSH 状态', () => {
   it('连接状态未就绪时不读取，刷新也不会连接服务器；连接完成后自动读取', async t => {
@@ -63,14 +67,48 @@ describe('Git 读取与 SSH 状态', () => {
     assert.equal(page.current.snapshot, snapshot)
   })
 
+  it('刷新立即进入等待状态，合并连续刷新并更新外部变更的分支列表', async t => {
+    const page = await gitFixture(t)
+    await page.render({ remote: false })
+    await page.tick()
+    const old: GitSnapshot = { ...ready, repository: { ...ready.repository,
+      refs: [{ ref: 'refs/heads/deleted', name: 'deleted', remote: false }],
+    } }
+    await act(async () => page.requests[0]!.resolve({ ok: true, value: old }))
+    await act(async () => page.current.refresh())
+    assert.equal(page.current.loading, true)
+    assert.equal(page.requests.length, 1)
+    await act(async () => { page.current.refresh(); page.current.refresh() })
+    await page.tick()
+    assert.equal(page.requests.length, 2)
+    await act(async () => page.requests[1]!.resolve({ ok: true, value: ready }))
+    assert.deepEqual(page.current.snapshot?.repository?.refs, [])
+    assert.equal(page.current.loading, false)
+    await page.tick()
+    assert.equal(page.requests.length, 2)
+  })
+
+  it('在途读取收到刷新后忽略旧结果，随后只追加一次读取', async t => {
+    const page = await gitFixture(t)
+    await page.render({ remote: false })
+    await page.tick()
+    await act(async () => { page.current.refresh(); page.current.refresh() })
+    assert.equal(page.requests.length, 1)
+    await act(async () => page.requests[0]!.resolve({ ok: true, value: snapshot }))
+    assert.equal(page.current.snapshot, null)
+    assert.equal(page.current.loading, true)
+    assert.equal(page.requests.length, 2)
+    await act(async () => page.requests[1]!.resolve({ ok: true, value: ready }))
+    assert.equal(page.current.snapshot, ready)
+    assert.equal(page.current.loading, false)
+    await page.tick()
+    assert.equal(page.requests.length, 2)
+  })
+
   it('缺少 Git 清除旧仓库，重新检测成功后恢复；断线提示仍由 SSH 状态决定', async t => {
     const page = await gitFixture(t)
     await page.render({ status: 'connected', loading: false })
     await page.tick()
-    const ready: GitSnapshot = { status: 'ready', repository: {
-      root: '/project', name: 'project', branch: 'main', head: null, upstream: null, ahead: 0, behind: 0,
-      refs: [], remotes: [], defaultBase: null, staged: 0, unstaged: 0, untracked: 0, conflicts: 0,
-    }, changes: null, changesError: null }
     await act(async () => page.requests[0]!.resolve({ ok: true, value: ready }))
     await act(async () => page.current.refresh())
     await page.tick()

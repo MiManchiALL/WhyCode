@@ -32,7 +32,7 @@ export function GitEnvironment({ runtimeId, workspace, data, busy, onOpen }: {
           {changes ? <GitChangeCounts changes={changes} /> : <span className="text-xs text-[var(--wc-faint)]">查看</span>}
         </span>
       </button>
-      <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy || data.loading} onChanged={data.refresh} />
+      <GitActions key={runtimeId} runtimeId={runtimeId} repository={repo} busy={busy} loading={data.loading} error={data.error} onChanged={data.refresh} />
     </div>
     {(data.error || data.snapshot?.changesError) && <button type="button" className="wc-git-read-error" disabled={refresh.busy} aria-busy={refresh.busy} onClick={() => void refresh.run(data.refresh)}
       title={data.error ?? data.snapshot?.changesError ?? ''}><RefreshCw size={12} className={refresh.busy ? 'animate-spin' : ''} />读取未完成，点击重试</button>}
