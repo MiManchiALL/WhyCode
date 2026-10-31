@@ -29,9 +29,13 @@ async function until(predicate, label) {
   throw new Error(`等待失败: ${label}`)
 }
 app.whenReady().then(async () => {
-  const guests = new BrowserGuests()
+  const guests = new BrowserGuests('http://localhost:43123')
   const agent = new BrowserAgent(guests)
-  guests.register(async () => undefined)
+  const workspaceLookups = new Map()
+  guests.register(async runtimeId => {
+    if (runtimeId === 'file-unavailable') throw new Error('工作区连接不可用')
+    return workspaceLookups.get(runtimeId)?.()
+  })
   agent.pages.register()
   const win = new BrowserWindow({ show: false, width: 1000, height: 800,
     webPreferences: { preload: path.join(directory, 'preload.cjs'), webviewTag: true, sandbox: true, contextIsolation: true } })
@@ -60,7 +64,7 @@ app.whenReady().then(async () => {
   win.hide()
   win.setOpacity(1)
   await checkBrowserReadiness({ directory, run, finish, agent, guests })
-  await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests })
+  await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests, workspaceLookups })
   await checkBrowserTabIndicators({ run, finish, execute, until, agent, guests, url, win })
   await execute('fixture.session("alpha")')
   await until(() => execute('fixture.state().tabs.length===0'), 'clear cold descriptor')
@@ -137,23 +141,21 @@ app.whenReady().then(async () => {
   await until(() => guests.get(personal.id)?.getURL() === url + 'second', 'user navigation')
   await until(() => execute('!!document.querySelector(\'[aria-label="内置浏览器"] [aria-label="刷新网页"]\')'), 'personal page ready before reference')
   assert.equal(originalGuest.getURL(), url)
-  await execute(`(() => {
-    const view = document.querySelector('[aria-label="内置浏览器"] webview');
-    const load = view.loadURL.bind(view);
-    view.loadURL = address => {
-      view.loadURL = load;
-      return new Promise((resolve, reject) => {
-        window.continueReferenceNavigation = () => load(address).then(resolve, reject);
-      });
-    };
-  })()`)
+  const navigate = guests.navigate.bind(guests)
+  let continueReferenceNavigation
+  guests.navigate = (...args) => {
+    guests.navigate = navigate
+    return new Promise((resolve, reject) => {
+      continueReferenceNavigation = () => navigate(...args).then(resolve, reject)
+    })
+  }
   await execute('fixture.file()')
   await execute(`fixture.reference(${JSON.stringify(url)})`)
-  await until(() => execute('!!window.continueReferenceNavigation'), 'reference navigation requested')
+  await until(() => !!continueReferenceNavigation, 'reference navigation requested')
   await execute(`fixture.flush(() => document.querySelector('[aria-label="内置浏览器"] webview').dispatchEvent(new Event('page-title-updated')))`)
   assert.equal(await execute('fixture.state().tabs.some(tab => tab.page.referenceRequest)'), true, '旧文档的迟到事件不能提前消费引用请求')
   assert.equal(await execute('!!document.querySelector(\'[aria-label="退出引用"]\')'), false, '导航完成前不在旧页面开启引用')
-  await execute('window.continueReferenceNavigation()')
+  await continueReferenceNavigation()
   await until(() => execute('!!document.querySelector(\'[aria-label="退出引用"]\')'), 'file reference enters personal page')
   assert.equal(guests.get(personal.id).getURL(), url, '引用绑定导航后的用户文档')
   await until(() => execute('!fixture.state().tabs.some(tab => tab.page.referenceRequest)'), 'reference request consumed after readiness')

@@ -12,7 +12,10 @@ import { clearBrowserSession } from './browser-data.ts'
 import { BrowserReferences } from './browser-references.ts'
 import type { WorkspaceIO } from '@whycode/core'
 
-interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents; references?: BrowserReferences; loadError?: Error }
+interface GuestLease {
+  owner: WebContents; attached: boolean; navigation: number
+  guest?: WebContents; references?: BrowserReferences; loadError?: Error
+}
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
 export class BrowserGuests {
@@ -36,15 +39,28 @@ export class BrowserGuests {
 
   loadError(id: string): Error | undefined { return this.leases.get(id)?.loadError }
 
-  async prepare(id: string, url: string, runtimeId?: string): Promise<string> {
-    if (!this.get(id)) throw new Error('浏览器标签已关闭')
-    if (!url.startsWith('file:')) {
-      if (!browserNavigationAllowed(url, this.applicationUrl)) throw new Error('不支持此网页地址')
-      return url
+  async navigate(id: string, url: string, runtimeId?: string, signal?: AbortSignal): Promise<void> {
+    const lease = this.leases.get(id), guest = this.get(id)
+    if (!lease || !guest) throw new Error('浏览器标签已关闭')
+    const navigation = ++lease.navigation
+    try {
+      signal?.throwIfAborted()
+      let target = url
+      if (url.startsWith('file:')) {
+        const io = runtimeId ? await this.workspaceFor?.(runtimeId) : undefined
+        signal?.throwIfAborted()
+        if (this.get(id) !== guest) throw new Error('浏览器标签已关闭')
+        if (navigation !== lease.navigation) throw new Error('网页导航已被新的请求替代')
+        target = this.files.open(id, url, io)
+      } else if (!browserNavigationAllowed(url, this.applicationUrl)) throw new Error(`不支持此网页地址：${url}`)
+      await guest.loadURL(target)
+    } catch (error) {
+      // 策略、文件准备和原生导航共享错误出口；旧请求不能覆盖新导航的结果。
+      if (this.get(id) === guest && navigation === lease.navigation && !signal?.aborted) {
+        lease.loadError = error instanceof Error ? error : new Error(String(error))
+      }
+      throw error
     }
-    const io = runtimeId ? await this.workspaceFor?.(runtimeId) : undefined
-    if (!this.get(id)) throw new Error('浏览器标签已关闭')
-    return this.files.open(id, url, io)
   }
 
   acquire(owner: WebContents): BrowserLease {
@@ -53,7 +69,7 @@ export class BrowserGuests {
       throw new Error('内置浏览器标签过多，请先关闭部分标签')
     }
     const id = randomUUID()
-    this.leases.set(id, { owner, attached: false })
+    this.leases.set(id, { owner, attached: false, navigation: 0 })
     return { id, partition: BROWSER_PARTITION }
   }
 
@@ -84,13 +100,12 @@ export class BrowserGuests {
       if (mode !== 'cache' && mode !== 'all') throw new Error('未知的浏览器清理方式')
       return this.clearData(mode)
     })
-    ipcMain.handle(IPC.prepareBrowserFile, async (event, id: unknown, url: unknown, runtimeId: unknown) => {
+    ipcMain.handle(IPC.navigateBrowserPage, async (event, id: unknown, url: unknown, runtimeId: unknown) => {
       this.requireOwner(event)
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (typeof id !== 'string' || typeof url !== 'string' || lease?.owner !== event.sender
         || !lease.guest || lease.guest.isDestroyed()) throw new Error('浏览器标签已关闭')
-      if (!url.startsWith('file:')) throw new Error('此入口仅接受文件地址')
-      return this.prepare(id, url, typeof runtimeId === 'string' ? runtimeId : undefined)
+      return this.navigate(id, url, typeof runtimeId === 'string' ? runtimeId : undefined)
     })
     ipcMain.handle(IPC.pickBrowserTarget, (event, id: unknown, options: unknown) => {
       this.requireOwner(event)

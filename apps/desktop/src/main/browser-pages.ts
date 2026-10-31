@@ -157,9 +157,9 @@ export class BrowserPages {
     for (let count = 0; count < 200; count++) {
       signal.throwIfAborted(); turn.abort.signal.throwIfAborted()
       const error = this.guests.loadError(turn.surfaceId)
-      if (error && !allowFailedNavigation) throw error
+      if (error && !allowFailedNavigation) throw new Error(`${error.message}\n使用 browser.navigate({url}) 重试或换网址；browser.open 不会重新加载本轮页面。`, { cause: error })
       const guest = this.guests.get(turn.surfaceId)
-      if (guest && !guest.isLoading() && !guest.getURL().startsWith('about:blank#')) return guest
+      if (guest && (allowFailedNavigation || (!guest.isLoading() && !guest.getURL().startsWith('about:blank#')))) return guest
       await new Promise<void>(resolve => setTimeout(resolve, 50))
     }
     throw new Error('网页尚未准备好，请重试 browser.snapshot()')
@@ -167,14 +167,11 @@ export class BrowserPages {
 
   async navigate(turn: BrowserTurnPage, url: string, signal: AbortSignal): Promise<void> {
     const value = this.surface(turn)
-    const guest = this.guests.get(value.id)
-    if (!guest) throw new Error('网页尚未准备好')
     const address = browserAddress(url)
-    const target = await this.guests.prepare(value.id, address, address.startsWith('file:') ? turn.runtimeId : undefined)
     signal.throwIfAborted(); turn.abort.signal.throwIfAborted()
     value.page = { ...value.page, url: address, workspaceFile: address.startsWith('file:') }
     this.publish(turn.owner)
-    await guest.loadURL(target)
+    await this.guests.navigate(value.id, address, address.startsWith('file:') ? turn.runtimeId : undefined, signal)
   }
 
   async finish(turnId: string): Promise<void> {

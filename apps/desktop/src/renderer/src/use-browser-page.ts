@@ -125,13 +125,9 @@ export function useBrowserPage(props: Props) {
     }
     const request = ++navigation.current
     const revision = callbacks.current.navigationRevision
-    run(webview => {
+    run(() => {
       setState(value => ({ ...value, settledNavigation: null, error: null, url, loading: true }))
-      const target = url.startsWith('file:') && lease ? window.whycode.prepareBrowserFile(lease.id, url, callbacks.current.workspaceRuntimeId) : Promise.resolve(url)
-      void target.then(async value => {
-        if (request !== navigation.current || !ready.current) return
-        // 导航失败由 did-fail-load 单一投影；旧 loadURL 的拒绝不能覆盖新导航。
-        await webview.loadURL(value).catch(() => {})
+      void window.whycode.navigateBrowserPage(lease.id, url, callbacks.current.workspaceRuntimeId).then(() => {
         if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision }))
       }, error => {
         if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision, loading: false, error: String(error) }))
