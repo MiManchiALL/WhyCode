@@ -10,6 +10,7 @@ import { checkBrowserObservation } from './browser-observation.mjs'
 import { checkBrowserPageEndings } from './browser-page-endings.mjs'
 import { checkBrowserReadiness } from './browser-readiness.mjs'
 import { checkBrowserLoadErrors } from './browser-load-errors.mjs'
+import { checkBrowserNavigationInterruption } from './browser-navigation-interruption.mjs'
 import { checkBrowserTabIndicators } from './browser-tab-indicators.mjs'
 
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
@@ -64,6 +65,7 @@ app.whenReady().then(async () => {
   win.hide()
   win.setOpacity(1)
   await checkBrowserReadiness({ directory, run, finish, agent, guests })
+  await checkBrowserNavigationInterruption({ directory, run, finish, execute, until, agent, guests })
   await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests, workspaceLookups })
   await checkBrowserTabIndicators({ run, finish, execute, until, agent, guests, url, win })
   await execute('fixture.session("alpha")')
