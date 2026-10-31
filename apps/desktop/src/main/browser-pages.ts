@@ -153,9 +153,11 @@ export class BrowserPages {
     return turn
   }
 
-  async guest(turn: BrowserTurnPage, signal: AbortSignal): Promise<WebContents> {
+  async guest(turn: BrowserTurnPage, signal: AbortSignal, allowFailedNavigation = false): Promise<WebContents> {
     for (let count = 0; count < 200; count++) {
       signal.throwIfAborted(); turn.abort.signal.throwIfAborted()
+      const error = this.guests.loadError(turn.surfaceId)
+      if (error && !allowFailedNavigation) throw error
       const guest = this.guests.get(turn.surfaceId)
       if (guest && !guest.isLoading() && !guest.getURL().startsWith('about:blank#')) return guest
       await new Promise<void>(resolve => setTimeout(resolve, 50))

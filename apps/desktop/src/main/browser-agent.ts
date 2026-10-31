@@ -39,7 +39,8 @@ export class BrowserAgent {
           ...['navigate', 'snapshot', 'click', 'fill', 'type', 'press', 'scroll', 'evaluate', 'wait', 'screenshot'].map(name => ({
             name, run: async (input: unknown, signal: AbortSignal) => {
               const turn = connect()
-              const guest = await this.pages.guest(turn, signal)
+              // 新导航可恢复失败页面；其余操作不能把错误文档当作有效网页。
+              const guest = await this.pages.guest(turn, signal, name === 'navigate')
               const automation = this.automation.get(turnId) ?? new BrowserAutomation(guest)
               this.automation.set(turnId, automation)
               signal.throwIfAborted()
