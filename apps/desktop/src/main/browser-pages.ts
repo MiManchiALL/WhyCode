@@ -159,7 +159,10 @@ export class BrowserPages {
       const error = this.guests.loadError(turn.surfaceId)
       if (error && !allowFailedNavigation) throw new Error(`${error.message}\n使用 browser.navigate({url}) 重试或换网址；browser.open 不会重新加载本轮页面。`, { cause: error })
       const guest = this.guests.get(turn.surfaceId)
-      if (guest && (allowFailedNavigation || (!guest.isLoading() && !guest.getURL().startsWith('about:blank#')))) return guest
+      if (guest) {
+        if (!allowFailedNavigation) await this.guests.waitForDocument(turn.surfaceId, AbortSignal.any([signal, turn.abort.signal]))
+        return guest
+      }
       await new Promise<void>(resolve => setTimeout(resolve, 50))
     }
     throw new Error('网页尚未准备好，请重试 browser.snapshot()')

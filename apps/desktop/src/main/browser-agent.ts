@@ -5,6 +5,7 @@ import { executeBrowserScript, type BrowserOperation } from './browser-execution
 import { BrowserPages } from './browser-pages.ts'
 import type { BrowserGuests } from './browser-guests.ts'
 import { captureBrowserPage } from './browser-capture.ts'
+import { browserDisplayUrl } from '../shared/browser.ts'
 
 export class BrowserAgent {
   readonly pages: BrowserPages
@@ -33,8 +34,9 @@ export class BrowserAgent {
             const target = z.object({ id: z.string().optional(), url: z.string().optional() }).parse(input ?? {})
             const turn = this.pages.open(runtimeId, turnId, target)
             connect()
-            await this.pages.guest(turn, signal)
-            return this.pages.list(runtimeId).find(page => page.id === turn.surfaceId)
+            const guest = await this.pages.guest(turn, signal)
+            return { ...this.pages.list(runtimeId).find(page => page.id === turn.surfaceId),
+              url: browserDisplayUrl(guest.getURL()), title: guest.getTitle(), loading: guest.isLoading() }
           } },
           ...['navigate', 'snapshot', 'click', 'fill', 'type', 'press', 'scroll', 'evaluate', 'wait', 'screenshot'].map(name => ({
             name, run: async (input: unknown, signal: AbortSignal) => {
@@ -46,7 +48,9 @@ export class BrowserAgent {
               signal.throwIfAborted()
               return automation.perform(async () => {
                 switch (name) {
-                  case 'navigate': await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal); return { url: guest.getURL() }
+                  case 'navigate':
+                    await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal)
+                    return { url: browserDisplayUrl(guest.getURL()), loading: guest.isLoading() }
                   case 'snapshot': await automation.observe(signal); return automation.snapshot(input, signal)
                   case 'click': await automation.click(input, signal); break
                   case 'fill': await automation.fill(input, signal); break
