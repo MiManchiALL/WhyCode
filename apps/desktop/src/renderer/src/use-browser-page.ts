@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
-import { browserAddress, browserDisplayUrl, isBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
+import { browserAddress, browserDisplayUrl, browserLoadErrorMessage, isBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 
 export interface BrowserPageState {
@@ -93,7 +93,7 @@ export function useBrowserPage(props: Props) {
       const failure = event as Event & { isMainFrame: boolean; errorCode: number; errorDescription: string; validatedURL: string }
       if (!failure.isMainFrame || failure.errorCode === -3) return
       setState(value => ({ ...value, loading: false, url: browserDisplayUrl(failure.validatedURL),
-        error: `页面加载失败（${failure.errorDescription}），请检查网址或网络后重试` }))
+        error: browserLoadErrorMessage(failure.errorCode, failure.errorDescription, failure.validatedURL) }))
     })
     listen('render-process-gone', () => {
       setState(value => ({ ...value, loading: false, error: '网页进程已退出，请刷新重试' }))
@@ -127,8 +127,9 @@ export function useBrowserPage(props: Props) {
     const revision = callbacks.current.navigationRevision
     run(() => {
       setState(value => ({ ...value, settledNavigation: null, error: null, url, loading: true }))
-      void window.whycode.navigateBrowserPage(lease.id, url, callbacks.current.workspaceRuntimeId).then(() => {
-        if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision }))
+      void window.whycode.navigateBrowserPage(lease.id, url, callbacks.current.workspaceRuntimeId).then(result => {
+        if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision,
+          ...(result.status === 'failed' ? { loading: false, error: result.error } : {}) }))
       }, error => {
         if (request === navigation.current && ready.current) setState(value => ({ ...value, settledNavigation: revision, loading: false, error: String(error) }))
       })

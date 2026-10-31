@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { it } from 'node:test'
-import { browserAddress, browserDisplayUrl, browserShortcut, isBrowserUrl, isExternalBrowserUrl, MAX_BROWSER_DATA_URL_LENGTH } from '../shared/browser.ts'
+import { browserAddress, browserDisplayUrl, browserLoadErrorMessage, browserShortcut, isBrowserUrl, isExternalBrowserUrl, MAX_BROWSER_DATA_URL_LENGTH } from '../shared/browser.ts'
 import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowed } from './browser-policy.ts'
 
 it('地址栏区分网址、本机服务与搜索，拒绝脚本和内嵌凭据', () => {
@@ -38,6 +38,11 @@ it('data 页面使用独立大小限制，空白页可导航，系统浏览器�
   assert.equal(browserAddress('ABOUT:blank#anchor'), 'about:blank#anchor')
   for (const value of [data, 'file:///C:/demo/a.exe', 'about:blank']) assert.equal(isExternalBrowserUrl(value), false)
   assert.equal(isExternalBrowserUrl('https://example.com/'), true)
+})
+
+it('加载错误保留错误码与公开文件路径，不暴露内部文件 origin', () => {
+  assert.equal(browserLoadErrorMessage(-2, 'ERR_FAILED', 'whycode-browser-file://internal/C:/demo/a%20b.html'),
+    '页面加载失败（ERR_FAILED，-2）：file:///C:/demo/a%20b.html')
 })
 
 it('网页允许网络、表单与内存资源，不能读取应用页面或自定义文件协议', () => {

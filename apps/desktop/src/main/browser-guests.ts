@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, clipboard, ipcMain, Menu, net, session, shell, webContents, type DownloadItem, type WebContents } from 'electron'
 import { pathToFileURL } from 'node:url'
 import {
-  BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserShortcut, isExternalBrowserUrl,
-  type BrowserDataClearMode, type BrowserDataState, type BrowserEvent, type BrowserEventPayload, type BrowserLease,
+  BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserLoadErrorMessage, browserShortcut, isExternalBrowserUrl,
+  type BrowserDataClearMode, type BrowserDataState, type BrowserEvent, type BrowserEventPayload, type BrowserLease, type BrowserNavigationResult,
 } from '../shared/browser.ts'
 import { IPC } from '../shared/ipc.ts'
 import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowed } from './browser-policy.ts'
@@ -15,6 +15,12 @@ import type { WorkspaceIO } from '@whycode/core'
 interface GuestLease {
   owner: WebContents; attached: boolean; navigation: number
   guest?: WebContents; references?: BrowserReferences; loadError?: Error
+}
+
+class BrowserNavigationInterruptedError extends Error {
+  constructor(cause: Error) {
+    super('网页导航未完成：请求已中止、被替代或转为下载；不能确认目标页面已加载。', { cause })
+  }
 }
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
@@ -37,7 +43,15 @@ export class BrowserGuests {
     return guest && !guest.isDestroyed() ? guest : undefined
   }
 
-  loadError(id: string): Error | undefined { return this.leases.get(id)?.loadError }
+  loadError(id: string): Error | undefined {
+    const error = this.leases.get(id)?.loadError
+    if (error instanceof BrowserNavigationInterruptedError) {
+      const url = this.get(id)?.getURL()
+      // 中断属于这次导航；已有页面仍可使用，启动空白页则不能当作目标网页。
+      if (url && url !== `about:blank#${id}`) return undefined
+    }
+    return error
+  }
 
   async navigate(id: string, url: string, runtimeId?: string, signal?: AbortSignal): Promise<void> {
     const lease = this.leases.get(id), guest = this.get(id)
@@ -55,11 +69,19 @@ export class BrowserGuests {
       } else if (!browserNavigationAllowed(url, this.applicationUrl)) throw new Error(`不支持此网页地址：${url}`)
       await guest.loadURL(target)
     } catch (error) {
+      let failure = error instanceof Error ? error : new Error(String(error))
+      if ('errno' in failure && typeof failure.errno === 'number' && 'code' in failure && typeof failure.code === 'string'
+        && 'url' in failure && typeof failure.url === 'string') {
+        // 停止或下载也会让 loadURL 以 -2 拒绝；优先保留原生失败事件，否则区分导航中断。
+        if (lease.loadError) failure = new Error(lease.loadError.message, { cause: error })
+        else if (failure.errno === -3 || failure.errno === -2) failure = new BrowserNavigationInterruptedError(failure)
+        else failure = new Error(browserLoadErrorMessage(failure.errno, failure.code, failure.url), { cause: error })
+      }
       // 策略、文件准备和原生导航共享错误出口；旧请求不能覆盖新导航的结果。
       if (this.get(id) === guest && navigation === lease.navigation && !signal?.aborted) {
-        lease.loadError = error instanceof Error ? error : new Error(String(error))
+        lease.loadError = failure
       }
-      throw error
+      throw failure
     }
   }
 
@@ -100,12 +122,16 @@ export class BrowserGuests {
       if (mode !== 'cache' && mode !== 'all') throw new Error('未知的浏览器清理方式')
       return this.clearData(mode)
     })
-    ipcMain.handle(IPC.navigateBrowserPage, async (event, id: unknown, url: unknown, runtimeId: unknown) => {
+    ipcMain.handle(IPC.navigateBrowserPage, async (event, id: unknown, url: unknown, runtimeId: unknown): Promise<BrowserNavigationResult> => {
       this.requireOwner(event)
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (typeof id !== 'string' || typeof url !== 'string' || lease?.owner !== event.sender
         || !lease.guest || lease.guest.isDestroyed()) throw new Error('浏览器标签已关闭')
-      return this.navigate(id, url, typeof runtimeId === 'string' ? runtimeId : undefined)
+      return this.navigate(id, url, typeof runtimeId === 'string' ? runtimeId : undefined).then(
+        () => ({ status: 'completed' }),
+        error => error instanceof BrowserNavigationInterruptedError ? { status: 'interrupted' }
+          : { status: 'failed', error: error instanceof Error ? error.message : String(error) },
+      )
     })
     ipcMain.handle(IPC.pickBrowserTarget, (event, id: unknown, options: unknown) => {
       this.requireOwner(event)
@@ -171,7 +197,7 @@ export class BrowserGuests {
         if (event.isMainFrame && !event.isSameDocument) delete lease.loadError
       })
       guest.on('did-fail-load', (_event, code, description, url, mainFrame) => {
-        if (mainFrame && code !== -3) lease.loadError = new Error(`页面加载失败（${description}，${code}）：${browserDisplayUrl(url)}`)
+        if (mainFrame && code !== -3) lease.loadError = new Error(browserLoadErrorMessage(code, description, url))
       })
       guest.once('destroyed', () => {
         this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭')

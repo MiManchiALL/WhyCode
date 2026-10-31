@@ -5,6 +5,7 @@ export const BROWSER_FILE_SCHEME = 'whycode-browser-file'
 export const MAX_BROWSER_DATA_URL_LENGTH = 1024 * 1024
 
 export interface BrowserLease { id: string; partition: string }
+export type BrowserNavigationResult = { status: 'completed' | 'interrupted' } | { status: 'failed'; error: string }
 export type BrowserDataClearMode = 'cache' | 'all'
 export interface BrowserDataState { clearing: BrowserDataClearMode | null }
 export type BrowserShortcut = 'address' | 'find' | 'reload' | 'reload-clean' | 'back' | 'forward'
@@ -60,6 +61,10 @@ export function browserDisplayUrl(value: string): string {
   if (!value.startsWith(`${BROWSER_FILE_SCHEME}:`)) return value
   const url = new URL(value)
   return `file://${url.pathname}${url.search}${url.hash}`
+}
+
+export function browserLoadErrorMessage(code: number, description: string, url: string): string {
+  return `页面加载失败（${description}，${code}）：${browserDisplayUrl(url)}`
 }
 
 export function isExternalBrowserUrl(value: string): boolean {

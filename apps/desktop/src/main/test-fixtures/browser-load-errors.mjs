@@ -19,6 +19,7 @@ export async function checkBrowserLoadErrors({ run, finish, execute, until, agen
     const failed = await run('load-error', `await browser.open({url:${JSON.stringify(failedUrl)}}); ${read}`)
     assert.equal(failed.isError, true, '首次加载失败必须返回工具错误，不能成功读取错误页的空正文')
     assert.match(failed.text, /ERR_EMPTY_RESPONSE/)
+    assert.match(failed.text, /页面加载失败（ERR_EMPTY_RESPONSE，-324）/)
     assert.ok(failed.text.includes(failedUrl), '保留失败网址')
     assert.match(failed.text, /"operation":"open","status":"failed"/)
     assert.doesNotMatch(failed.text, /"operation":"evaluate"/, 'open 失败后不执行依赖读取')
@@ -37,6 +38,8 @@ export async function checkBrowserLoadErrors({ run, finish, execute, until, agen
     const navigateFailed = await run('load-error', `await browser.navigate({url:${JSON.stringify(failedUrl)}}); ${read}`)
     assert.equal(navigateFailed.isError, true)
     assert.match(navigateFailed.text, /ERR_EMPTY_RESPONSE/)
+    assert.equal(guests.loadError(agent.pages.current('load-error').surfaceId)?.message, `页面加载失败（ERR_EMPTY_RESPONSE，-324）：${failedUrl}`)
+    assert.match(navigateFailed.text, /页面加载失败（ERR_EMPTY_RESPONSE，-324）/, 'navigate 的错误格式与缓存、原生事件一致')
     assert.doesNotMatch(navigateFailed.text, /"operation":"evaluate"/)
     const afterFailure = await run('load-error', read)
     assert.equal(afterFailure.isError, true, '后续调用仍须报告主页面失败')
@@ -88,6 +91,10 @@ export async function checkBrowserLoadErrors({ run, finish, execute, until, agen
 
     await execute(`fixture.open(${JSON.stringify(failedUrl)})`)
     await until(() => execute('Array.from(document.querySelectorAll("[aria-label=\'内置浏览器\'] button")).some(button=>button.textContent==="重新加载")'), 'failed user page')
+    await until(() => execute('!!document.querySelector("[aria-label=\'内置浏览器\'] [aria-label=\'刷新网页\']")'), 'failed user navigation settled')
+    const visibleError = await execute('document.querySelector("[aria-label=\'内置浏览器\']").textContent')
+    assert.ok(visibleError.includes(`页面加载失败（ERR_EMPTY_RESPONSE，-324）：${failedUrl}`), visibleError)
+    assert.doesNotMatch(visibleError, /Error invoking|loading '/, 'IPC 拒绝包装不能覆盖已格式化的页面错误')
     const userPage = agent.pages.list('alpha')[0]
     const claimed = await run('claim-failed', `await browser.open({url:${JSON.stringify(failedUrl)}}); ${read}`)
     assert.equal(claimed.isError, true, '接管已有失败用户页时仍能获取此前的导航错误')

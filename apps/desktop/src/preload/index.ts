@@ -20,7 +20,7 @@ import type { RenameSessionRequest, RenameSessionResult } from '../shared/sessio
 import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
 import type { TerminalControl, TerminalEvent, TerminalInfo } from '../shared/terminal.ts'
-import type { BrowserDataClearMode, BrowserDataState, BrowserEvent } from '../shared/browser.ts'
+import type { BrowserDataClearMode, BrowserDataState, BrowserEvent, BrowserNavigationResult } from '../shared/browser.ts'
 import type { BrowserHostState, BrowserViewRequest, BrowserViewAction } from '../shared/browser-agent.ts'
 import type { BrowserPickOptions, BrowserTargetCapture, BrowserReferenceSelection, BrowserReferenceProjection } from '../shared/browser-reference.ts'
 import type {
@@ -267,7 +267,7 @@ const api = {
     ipcRenderer.on(IPC.browserHostChanged, listener)
     return () => ipcRenderer.removeListener(IPC.browserHostChanged, listener)
   },
-  navigateBrowserPage: (id: string, url: string, runtimeId?: string): Promise<void> => ipcRenderer.invoke(IPC.navigateBrowserPage, id, url, runtimeId),
+  navigateBrowserPage: (id: string, url: string, runtimeId?: string): Promise<BrowserNavigationResult> => ipcRenderer.invoke(IPC.navigateBrowserPage, id, url, runtimeId),
   pickBrowserTarget: (id: string, options: BrowserPickOptions): Promise<BrowserTargetCapture | null> => ipcRenderer.invoke(IPC.pickBrowserTarget, id, options),
   displayBrowserReference: (id: string, options: BrowserReferenceSelection): Promise<BrowserReferenceProjection | null> => ipcRenderer.invoke(IPC.displayBrowserReference, id, options),
   cancelBrowserReference: (id: string): void => ipcRenderer.send(IPC.cancelBrowserReference, id),
