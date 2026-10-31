@@ -30,5 +30,6 @@ export async function checkBrowserNavigationOrder({ guest, guests, id, url, work
     await rejected
     assert.equal(guest.getURL(), currentUrl, '取消文件准备后不再派发导航')
     assert.equal(guests.loadError(id), undefined, '取消不覆盖原页面的状态')
+    await guests.waitForDocument(id, new AbortController().signal)
   } finally { workspaceLookups.delete(runtime) }
 }

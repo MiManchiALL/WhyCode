@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, clipboard, ipcMain, Menu, net, session, shell, webContents, type DownloadItem, type WebContents } from 'electron'
 import { pathToFileURL } from 'node:url'
 import {
-  BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserLoadErrorMessage, browserShortcut, isExternalBrowserUrl,
+  BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserShortcut, isExternalBrowserUrl,
   type BrowserDataClearMode, type BrowserDataState, type BrowserEvent, type BrowserEventPayload, type BrowserLease, type BrowserNavigationResult,
 } from '../shared/browser.ts'
 import { IPC } from '../shared/ipc.ts'
@@ -10,17 +10,12 @@ import { browserGuestPreferences, browserNavigationAllowed, browserRequestAllowe
 import { BrowserFiles } from './browser-files.ts'
 import { clearBrowserSession } from './browser-data.ts'
 import { BrowserReferences } from './browser-references.ts'
+import { BrowserNavigation, BrowserNavigationInterruptedError } from './browser-navigation.ts'
 import type { WorkspaceIO } from '@whycode/core'
 
 interface GuestLease {
-  owner: WebContents; attached: boolean; navigation: number
-  guest?: WebContents; references?: BrowserReferences; loadError?: Error
-}
-
-class BrowserNavigationInterruptedError extends Error {
-  constructor(cause: Error) {
-    super('网页导航未完成：请求已中止、被替代或转为下载；不能确认目标页面已加载。', { cause })
-  }
+  owner: WebContents; attached: boolean
+  guest?: WebContents; references?: BrowserReferences; navigation?: BrowserNavigation
 }
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
@@ -43,46 +38,33 @@ export class BrowserGuests {
     return guest && !guest.isDestroyed() ? guest : undefined
   }
 
-  loadError(id: string): Error | undefined {
-    const error = this.leases.get(id)?.loadError
-    if (error instanceof BrowserNavigationInterruptedError) {
-      const url = this.get(id)?.getURL()
-      // 中断属于这次导航；已有页面仍可使用，启动空白页则不能当作目标网页。
-      if (url && url !== `about:blank#${id}`) return undefined
-    }
-    return error
+  loadError(id: string): Error | undefined { return this.leases.get(id)?.navigation?.error }
+
+  waitForDocument(id: string, signal: AbortSignal): Promise<void> {
+    const navigation = this.leases.get(id)?.navigation
+    if (!navigation) throw new Error('浏览器标签已关闭')
+    return navigation.wait(signal)
   }
 
   async navigate(id: string, url: string, runtimeId?: string, signal?: AbortSignal): Promise<void> {
     const lease = this.leases.get(id), guest = this.get(id)
-    if (!lease || !guest) throw new Error('浏览器标签已关闭')
-    const navigation = ++lease.navigation
+    if (!lease?.navigation || !guest) throw new Error('浏览器标签已关闭')
+    const navigation = lease.navigation, request = navigation.begin()
+    let target = url
     try {
       signal?.throwIfAborted()
-      let target = url
       if (url.startsWith('file:')) {
         const io = runtimeId ? await this.workspaceFor?.(runtimeId) : undefined
         signal?.throwIfAborted()
-        if (this.get(id) !== guest) throw new Error('浏览器标签已关闭')
-        if (navigation !== lease.navigation) throw new Error('网页导航已被新的请求替代')
+        navigation.check(request)
         target = this.files.open(id, url, io)
       } else if (!browserNavigationAllowed(url, this.applicationUrl)) throw new Error(`不支持此网页地址：${url}`)
-      await guest.loadURL(target)
     } catch (error) {
-      let failure = error instanceof Error ? error : new Error(String(error))
-      if ('errno' in failure && typeof failure.errno === 'number' && 'code' in failure && typeof failure.code === 'string'
-        && 'url' in failure && typeof failure.url === 'string') {
-        // 停止或下载也会让 loadURL 以 -2 拒绝；优先保留原生失败事件，否则区分导航中断。
-        if (lease.loadError) failure = new Error(lease.loadError.message, { cause: error })
-        else if (failure.errno === -3 || failure.errno === -2) failure = new BrowserNavigationInterruptedError(failure)
-        else failure = new Error(browserLoadErrorMessage(failure.errno, failure.code, failure.url), { cause: error })
-      }
-      // 策略、文件准备和原生导航共享错误出口；旧请求不能覆盖新导航的结果。
-      if (this.get(id) === guest && navigation === lease.navigation && !signal?.aborted) {
-        lease.loadError = failure
-      }
-      throw failure
+      navigation.fail(request, signal?.aborted
+        ? new BrowserNavigationInterruptedError(new Error('导航准备已取消', { cause: error })) : error)
+      throw error
     }
+    await navigation.load(request, target, signal)
   }
 
   acquire(owner: WebContents): BrowserLease {
@@ -91,7 +73,7 @@ export class BrowserGuests {
       throw new Error('内置浏览器标签过多，请先关闭部分标签')
     }
     const id = randomUUID()
-    this.leases.set(id, { owner, attached: false, navigation: 0 })
+    this.leases.set(id, { owner, attached: false })
     return { id, partition: BROWSER_PARTITION }
   }
 
@@ -103,6 +85,7 @@ export class BrowserGuests {
       : Promise.resolve()
     this.leases.delete(id)
     this.onClosed?.(id, 'page_closed: 网页已关闭')
+    lease.navigation?.close()
     lease.references?.cancel()
     this.files.release(id)
     // 撤销租约后由 Renderer 卸载 webview，Electron 随 DOM 分离销毁 guest。
@@ -192,14 +175,9 @@ export class BrowserGuests {
       if (!lease || lease.owner !== window.webContents || lease.guest) return
       id = key; lease.guest = guest
       lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
-      // 从用户页建立时开始保留加载失败，接管页面的 Agent 也必须能读取该事实。
-      guest.on('did-start-navigation', event => {
-        if (event.isMainFrame && !event.isSameDocument) delete lease.loadError
-      })
-      guest.on('did-fail-load', (_event, code, description, url, mainFrame) => {
-        if (mainFrame && code !== -3) lease.loadError = new Error(browserLoadErrorMessage(code, description, url))
-      })
+      lease.navigation = new BrowserNavigation(guest)
       guest.once('destroyed', () => {
+        lease.navigation?.close()
         this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭')
       })
       guest.on('render-process-gone', () => this.release(window.webContents, key))
