@@ -9,6 +9,7 @@ import { BrowserAgent } from '../browser-agent.ts'
 import { checkBrowserObservation } from './browser-observation.mjs'
 import { checkBrowserPageEndings } from './browser-page-endings.mjs'
 import { checkBrowserReadiness } from './browser-readiness.mjs'
+import { checkBrowserDomReadiness } from './browser-dom-readiness.mjs'
 import { checkBrowserLoadErrors } from './browser-load-errors.mjs'
 import { checkBrowserNavigationInterruption } from './browser-navigation-interruption.mjs'
 import { checkBrowserTabIndicators } from './browser-tab-indicators.mjs'
@@ -65,6 +66,7 @@ app.whenReady().then(async () => {
   win.hide()
   win.setOpacity(1)
   await checkBrowserReadiness({ directory, run, finish, agent, guests })
+  await checkBrowserDomReadiness({ run, finish, agent, guests, until })
   await checkBrowserNavigationInterruption({ directory, run, finish, execute, until, agent, guests })
   await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests, workspaceLookups })
   await checkBrowserTabIndicators({ run, finish, execute, until, agent, guests, url, win })
@@ -121,7 +123,7 @@ app.whenReady().then(async () => {
   win.hide()
   win.setOpacity(1)
   const invalidWait = await run('one', 'await browser.wait({timeoutMs:5});')
-  assert.match(invalidWait.text, /ref 或 text/)
+  assert.match(invalidWait.text, /ref、text 或 expression/)
   const invalidExpression = await run('one', 'await browser.evaluate(() => document.title);')
   assert.match(invalidExpression.text, /不能传入函数/)
   assert.equal(win.isVisible(), false, '浏览器操作不显示宿主窗口')

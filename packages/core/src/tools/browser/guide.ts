@@ -4,6 +4,7 @@ Browser executes a fresh JavaScript script on every call. Use await for every br
 The browser runs on the desktop host: localhost refers to that computer; file URLs opened by the Agent use this conversation's workspace.
 
 Start each Turn with browser.open({url}) using the known target URL, even if the user may have it open. WhyCode automatically reuses the matching user page or creates a background page. No sidebar preparation or tabs lookup is needed for a known URL. Later calls can directly continue this Turn's page; use browser.navigate for a different destination.
+Operations wait for the current main document's DOM to be ready, not every image or frame. open, navigate and snapshot return loading: true while resources are still loading. DOM readiness or loading: false does not guarantee asynchronous article/data completeness; inspect the result and wait for the task's expected content when needed.
 
 API (arguments are JSON objects, not functions):
 - browser.tabs(): list this conversation's live pages and their IDs.
@@ -14,7 +15,7 @@ API (arguments are JSON objects, not functions):
 - browser.click({x, y}), browser.type({text}): for canvas or frames absent from the accessibility snapshot, click coordinates observed in the latest screenshot, then type into the focused field. Prefer element references; confirm unnamed buttons against their position in the screenshot, not their order. File upload is unsupported; opening a file chooser cancels it and returns an error.
 - browser.scroll({x?, y?, ref?}): send wheel deltas in pixels (default y=600), at an observed ref or the viewport center. Use ref for a specific nested scroll area.
 - browser.evaluate({expression}): evaluate a JavaScript expression STRING in the page's isolated world and return JSON, e.g. {expression: 'document.title'}. Page JS globals are not available; inspect observed DOM, return only needed fields, and serialize rectangles with .toJSON().
-- browser.wait({ref?, text?, timeoutMs?}): wait for an observed element or page text, at most 10 seconds. ref or text is REQUIRED; timeoutMs is a deadline, not a sleep. Snapshots and screenshots briefly wait for visible content; for asynchronous actions, wait for the expected new state rather than text already present.
+- browser.wait({ref?, text?, expression?, timeoutMs?}): provide exactly one condition: an observed element, expected page text, or a JavaScript expression STRING returning a boolean synchronously in the isolated world (e.g. an observed article has nonempty text or a known loading indicator disappears). At most 10 seconds; timeoutMs is a deadline, not a sleep. Snapshots and screenshots briefly wait for visible content; for asynchronous actions, wait for the expected new state rather than text already present.
 - browser.screenshot(): return an image of the browser viewport, 1280 pixels wide and at least 800 high; height fills the available panel. Use the returned viewport/image dimensions for coordinates. Pass it to image(), not text().
 
 Example: await browser.open({url: "http://localhost:3000"}); text(await browser.snapshot()); image(await browser.screenshot());

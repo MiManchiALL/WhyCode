@@ -118,7 +118,8 @@ export class BrowserAutomation {
       if (ref) this.refs.set(ref, node.backendDOMNodeId!)
       items.push(item)
     }
-    return { url: browserDisplayUrl(this.guest.getURL()), title: this.guest.getTitle(), viewport: await this.viewport(signal), nodes: items,
+    return { url: browserDisplayUrl(this.guest.getURL()), title: this.guest.getTitle(), loading: this.guest.isLoading(),
+      viewport: await this.viewport(signal), nodes: items,
       total: visible.length, ...(offset + items.length < visible.length ? { nextOffset: offset + items.length } : {}) }
   }
 
@@ -177,10 +178,15 @@ export class BrowserAutomation {
   async evaluate(input: unknown, signal: AbortSignal): Promise<unknown> {
     const { expression } = z.object({ expression: z.string().max(20_000) },
       { error: 'browser.evaluate 需要 {expression: "JavaScript 表达式"}，不能传入函数' }).parse(input)
+    return this.evaluateExpression(expression, signal)
+  }
+
+  private async evaluateExpression(expression: string, signal: AbortSignal,
+    options = { awaitPromise: true, timeout: 10_000 }): Promise<unknown> {
     const { frameTree } = await this.command('Page.getFrameTree', {}, signal)
     const { executionContextId } = await this.command('Page.createIsolatedWorld', { frameId: frameTree.frame.id, worldName: 'whycode-browser' }, signal)
     const response = await this.command('Runtime.evaluate', { expression, contextId: executionContextId,
-      returnByValue: true, awaitPromise: true, timeout: 10_000 }, signal)
+      returnByValue: true, ...options }, signal)
     if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description ?? response.exceptionDetails.text)
     const value = response.result?.value ?? null
     if (JSON.stringify(value).length > 60_000) throw new Error('网页结果过长，请缩小查询范围')
@@ -188,17 +194,25 @@ export class BrowserAutomation {
   }
 
   async wait(input: unknown, signal: AbortSignal): Promise<unknown> {
-    const options = z.object({ ref: z.string().optional(), text: z.string().min(1).max(1000).optional(),
-      timeoutMs: z.number().int().min(1).max(10_000).default(5000) }).refine(v => v.ref || v.text,
-      'browser.wait 必须提供 ref 或 text；timeoutMs 是等待条件的期限，不是固定延时').parse(input)
+    const options = z.object({ ref: z.string().min(1).max(80).optional(), text: z.string().min(1).max(1000).optional(),
+      expression: z.string().min(1).max(20_000).optional(),
+      timeoutMs: z.number().int().min(1).max(10_000).default(5000) })
+      .refine(v => [v.ref, v.text, v.expression].filter(value => value !== undefined).length === 1,
+        'browser.wait 必须提供 ref、text 或 expression 其中一个条件；timeoutMs 是期限，不是固定延时').parse(input)
     const deadline = Date.now() + options.timeoutMs
     do {
       signal.throwIfAborted()
       if (options.ref) {
         const objectId = await this.resolve(options.ref, signal)
         if (await this.call(objectId, browserNodeGeometry, [], signal)) return { visible: true }
-      } else if (await this.evaluate({ expression: `document.body.innerText.includes(${JSON.stringify(options.text)})` }, signal)) return { found: true }
-      await new Promise<void>(resolve => setTimeout(resolve, 100))
+      } else {
+        const expression = options.expression ?? `document.body.innerText.includes(${JSON.stringify(options.text)})`
+        const matched = await this.evaluateExpression(expression, signal,
+          { awaitPromise: false, timeout: Math.max(1, deadline - Date.now()) })
+        if (typeof matched !== 'boolean') throw new Error('browser.wait 的 expression 必须返回布尔值')
+        if (matched) return options.expression === undefined ? { found: true } : { matched: true }
+      }
+      await delay(Math.max(1, Math.min(100, deadline - Date.now())), undefined, { signal })
     } while (Date.now() < deadline)
     throw new Error('等待网页条件超时')
   }
