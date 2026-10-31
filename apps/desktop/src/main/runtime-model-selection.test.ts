@@ -11,7 +11,7 @@ import { selectRuntimeModel, synchronizeRuntimeModelSelection } from './runtime-
 
 const profileId = 'google:gemini-3.8-flash'
 const selectedId = cliProxyModelId(profileId)
-const alternativeId = 'deepseek:deepseek-v4-flash'
+const alternativeId = 'deepseek:deepseek-flash'
 
 function config(): WhycodeConfig {
   return {

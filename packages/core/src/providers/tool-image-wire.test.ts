@@ -69,12 +69,12 @@ describe('Provider 多模态工具结果线格式', () => {
     history.push({ role: 'assistant', content: '已查看。' })
     history.push({ role: 'user', content: '继续分析。' })
     const restored = z.array(modelMessageSchema).parse(JSON.parse(JSON.stringify(history)))
-    const entry = getModelEntry('deepseek:deepseek-v4-flash-vision-exp')
+    const entry = getModelEntry('deepseek:deepseek-flash')
     const body = await captureRequest(
       (baseURL) => entry.create({ apiKey: 'test', baseURL }),
       adaptMessagesForProvider(restored, entry.protocol),
     )
-    assert.equal(body.model, 'deepseek-v4-flash-vision-exp')
+    assert.equal(body.model, 'deepseek-flash')
     const messages = records(body.messages)
     const assistants = messages.filter((message) => message.role === 'assistant')
     assert.equal(assistants[0]?.reasoning_content, '先查看截图。')

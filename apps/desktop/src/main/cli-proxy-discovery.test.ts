@@ -17,11 +17,11 @@ describe('CLIProxyAPI 实例模型目录', () => {
     }, async (input, init) => {
       request = { input, init }
       return Response.json({ data: [
-        { id: 'gemini-pro-agent' },
+        { id: 'gemini-4-argon-high' },
         { id: 'gemini-3.8-flash' },
         { id: 'gemini-3.8-flash-high' },
-        { id: 'gpt-5.6-sol' },
-        { id: 'gpt-5.6-terra' },
+        { id: 'gpt-6.1-sol' },
+        { id: 'gpt-6.1-terra' },
         { id: 'gpt-6-astra' },
         { id: 'unreviewed-model' },
       ] })
@@ -31,10 +31,10 @@ describe('CLIProxyAPI 实例模型目录', () => {
     assert.equal(new Headers(request?.init?.headers).get('authorization'), 'Bearer secret')
     assert.equal(request?.init?.redirect, 'error')
     assert.deepEqual(routes, {
-      'google:gemini-3.1-pro-preview': 'gemini-pro-agent',
+      'google:gemini-4-argon': 'gemini-4-argon-high',
       'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
-      'openai:gpt-5.6-sol': 'gpt-5.6-sol',
-      'openai:gpt-5.6-terra': 'gpt-5.6-terra',
+      'openai:gpt-6.1-sol': 'gpt-6.1-sol',
+      'openai:gpt-6.1-terra': 'gpt-6.1-terra',
       'openai:gpt-6-astra': 'gpt-6-astra',
     })
   })

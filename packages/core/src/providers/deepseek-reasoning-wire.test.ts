@@ -10,9 +10,8 @@ import { getModelEntry } from './registry.ts'
 describe('DeepSeek 推理强度线格式', () => {
   it('默认启用推理且不覆盖官方默认强度', async () => {
     for (const [profileId, wireModelId] of [
-      ['deepseek:deepseek-v4-flash', 'deepseek-v4-flash'],
+      ['deepseek:deepseek-flash', 'deepseek-flash'],
       ['deepseek:deepseek-v4-pro', 'deepseek-v4-pro'],
-      ['deepseek:deepseek-v4-flash-vision-exp', 'deepseek-v4-flash-vision-exp'],
     ] as const) {
       const body = await captureRequest(profileId, 'default')
       assert.equal(body.model, wireModelId)
@@ -30,8 +29,8 @@ describe('DeepSeek 推理强度线格式', () => {
 
   it('视觉模型使用独立的 low/high/max 闭集，不发送兼容别名', async () => {
     for (const effort of ['low', 'high', 'max'] as const) {
-      const body = await captureRequest('deepseek:deepseek-v4-flash-vision-exp', effort)
-      assert.equal(body.model, 'deepseek-v4-flash-vision-exp')
+      const body = await captureRequest('deepseek:deepseek-flash', effort)
+      assert.equal(body.model, 'deepseek-flash')
       assert.equal(body.reasoning_effort, effort)
     }
   })

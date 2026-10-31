@@ -11,7 +11,7 @@ describe('协商评审员模型解析', () => {
         google: { apiKey: 'google-key' },
       },
       consensusAgents: {
-        B: { modelId: 'deepseek:deepseek-v4-flash' },
+        B: { modelId: 'deepseek:deepseek-flash' },
         C: { modelId: 'google:gemini-3.8-flash' },
       },
     }
@@ -20,7 +20,7 @@ describe('协商评审员模型解析', () => {
 
     assert.equal(result.ok, true)
     if (!result.ok) return
-    assert.equal(result.value.B.model.id, 'deepseek:deepseek-v4-flash')
+    assert.equal(result.value.B.model.id, 'deepseek:deepseek-flash')
     assert.deepEqual(result.value.B.providerConfig, config.providers.deepseek)
     assert.equal(result.value.C.model.id, 'google:gemini-3.8-flash')
     assert.deepEqual(result.value.C.providerConfig, config.providers.google)
@@ -34,7 +34,7 @@ describe('协商评审员模型解析', () => {
     const invalid = resolveConsensusAgentSetups({
       providers: {},
       consensusAgents: {
-        B: { modelId: 'deepseek:deepseek-v4-flash' },
+        B: { modelId: 'deepseek:deepseek-flash' },
         C: { modelId: 'google:gemini-3.8-flash' },
       },
     })

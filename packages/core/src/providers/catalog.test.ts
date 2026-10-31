@@ -6,17 +6,15 @@ import { BUILTIN_PROVIDERS, MODEL_CATALOG, getModelProfile } from './catalog.ts'
 // 当前型号与已核实边界的独立预期，只在这里维护；消费层测试只验证装配与筛选。
 const expectedProfiles: readonly (readonly [id: string, image: boolean, contextWindow?: number, maxOutput?: number])[] = [
   ['anthropic:claude-sonnet-4-6', true, 1_000_000, 64_000],
-  ['deepseek:deepseek-v4-flash', false, 1_000_000, 384_000],
+  ['deepseek:deepseek-flash', true, 1_048_576, 393_216],
   ['deepseek:deepseek-v4-pro', false, 1_000_000, 384_000],
-  ['deepseek:deepseek-v4-flash-vision-exp', true, 1_000_000, 384_000],
-  ['google:gemini-3.1-pro-preview', true, 1_048_576, 65_536],
+  ['google:gemini-4-argon', true, 1_048_576, 65_536],
   ['google:gemini-3.8-flash', true, 1_048_576, 65_536],
   ['mimo:mimo-v2.5', true, 1_048_576, 131_072],
   ['zhipu:glm-5v-turbo', true],
   ['zhipu:glm-4.7', false, 200_000, 128_000],
-  ['openai:gpt-5.6-sol', true, 1_050_000, 128_000],
-  ['openai:gpt-5.6-terra', true, 1_050_000, 128_000],
-  ['openai:gpt-5.6-luna', true, 1_050_000, 128_000],
+  ['openai:gpt-6.1-sol', true, 1_050_000, 128_000],
+  ['openai:gpt-6.1-terra', true, 1_050_000, 128_000],
   ['openai:gpt-6-astra', true, 1_050_000, 128_000],
   ['openai:gpt-5.5', true, 1_050_000, 128_000],
 ]
@@ -70,17 +68,24 @@ describe('模型目录单一事实源', () => {
         assert.equal(model.capabilities.structuredOutput, 'json-object')
         assert.equal(model.capabilities.promptCaching, 'auto')
         assert.equal(model.capabilities.supportsOriginalImageDetail, undefined)
-        assert.equal(autoCompactThreshold(model.capabilities), 910_000)
-        assert.deepEqual(effort, {
-          supported: model.capabilities.supportsImageInput ? ['low', 'high', 'max'] : ['high', 'max'],
-          default: 'high',
-        })
         assert.deepEqual(model.providerOptions, { deepseek: { thinking: { type: 'enabled' } } })
       }
     }
     assert.deepEqual(getModelProfile('anthropic:claude-sonnet-4-6').capabilities.reasoningEffort, {
       supported: ['low', 'medium', 'high', 'max'], default: 'high',
     })
+    for (const [id, supported, defaultLevel] of [
+      ['deepseek:deepseek-flash', ['low', 'high', 'max'], 'high'],
+      ['deepseek:deepseek-v4-pro', ['high', 'max'], 'high'],
+      ['google:gemini-4-argon', ['low', 'medium', 'high'], 'medium'],
+      ['openai:gpt-6.1-sol', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+      ['openai:gpt-6.1-terra', ['none', 'low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ] as const) {
+      assert.deepEqual(getModelProfile(id).capabilities.reasoningEffort,
+        { supported, default: defaultLevel }, id)
+    }
+    assert.equal(autoCompactThreshold(getModelProfile('deepseek:deepseek-flash').capabilities), 955_176)
+    assert.equal(autoCompactThreshold(getModelProfile('deepseek:deepseek-v4-pro').capabilities), 910_000)
     const mimo = getModelProfile('mimo:mimo-v2.5')
     assert.equal(mimo.capabilities.supportsNativeTools, true)
     assert.equal(mimo.capabilities.supportsOriginalImageDetail, true)

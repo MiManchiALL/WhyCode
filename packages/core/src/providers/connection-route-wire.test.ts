@@ -22,7 +22,7 @@ describe('受控连接路由与推理线格式', () => {
 
   it('OpenAI Chat 同时使用覆盖路由与 reasoning_effort', async () => {
     const captured = await captureRequest(
-      'google:gemini-3.1-pro-preview',
+      'google:gemini-4-argon',
       'proxy-gemini-route',
       'medium',
     )
@@ -33,7 +33,7 @@ describe('受控连接路由与推理线格式', () => {
 
   it('OpenAI Responses 同时使用覆盖路由与 reasoning.effort', async () => {
     const captured = await captureRequest(
-      'openai:gpt-5.6-sol',
+      'openai:gpt-6.1-sol',
       'proxy-gpt-route',
       'xhigh',
     )

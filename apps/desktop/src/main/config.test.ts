@@ -37,9 +37,9 @@ describe('默认模型选择', () => {
           anthropic: { apiKey: 'anthropic-key' },
           deepseek: { apiKey: 'deepseek-key' },
         },
-        'deepseek:deepseek-v4-flash',
+        'deepseek:deepseek-flash',
       )),
-      'deepseek:deepseek-v4-flash',
+      'deepseek:deepseek-flash',
     )
   })
 
@@ -49,7 +49,7 @@ describe('默认模型选择', () => {
         { deepseek: { apiKey: 'deepseek-key' } },
         'anthropic:claude-sonnet-4-6',
       )),
-      'deepseek:deepseek-v4-flash',
+      'deepseek:deepseek-flash',
     )
     assert.equal(
       resolveDefaultModelId(config(
@@ -61,13 +61,13 @@ describe('默认模型选择', () => {
   })
 
   it('已启用的 CLIProxyAPI 模型可作为显式默认连接', () => {
-    const modelId = cliProxyModelId('openai:gpt-5.6-sol')
+    const modelId = cliProxyModelId('openai:gpt-6.1-sol')
     const value = config({}, modelId)
     value.cliProxyApi = {
       apiKey: 'proxy-key',
       baseURL: 'http://127.0.0.1:8317/v1',
-      modelIds: ['openai:gpt-5.6-sol'],
-      modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
+      modelIds: ['openai:gpt-6.1-sol'],
+      modelRoutes: { 'openai:gpt-6.1-sol': 'gpt-6.1-sol' },
     }
     assert.equal(resolveDefaultModelId(value), modelId)
   })
@@ -80,13 +80,13 @@ describe('默认模型选择', () => {
       modelIds: ['google:gemini-3.8-flash'], modelRoutes: {},
     }
     assert.equal(resolveDefaultModelId(value), modelId)
-    assert.equal(resolveDefaultModelId({ ...value, defaultModel: 'deepseek:deepseek-v4-flash' }, modelId), modelId)
+    assert.equal(resolveDefaultModelId({ ...value, defaultModel: 'deepseek:deepseek-flash' }, modelId), modelId)
     for (const connection of [
       undefined,
       { ...value.cliProxyApi, apiKey: '' },
       { ...value.cliProxyApi, modelIds: [] },
     ]) {
-      assert.equal(resolveDefaultModelId({ ...value, cliProxyApi: connection }, modelId), 'deepseek:deepseek-v4-flash')
+      assert.equal(resolveDefaultModelId({ ...value, cliProxyApi: connection }, modelId), 'deepseek:deepseek-flash')
     }
     assert.equal(resolveDefaultModelId(value, 'test:removed-selection'), modelId)
   })
@@ -96,15 +96,15 @@ describe('默认模型选择', () => {
     value.cliProxyApi = {
       apiKey: 'proxy-key',
       baseURL: 'http://127.0.0.1:8317/v1',
-      modelIds: ['google:gemini-3.1-pro-preview', 'openai:gpt-5.6-sol'],
+      modelIds: ['google:gemini-4-argon', 'openai:gpt-6.1-sol'],
       modelRoutes: {
-        'google:gemini-3.1-pro-preview': 'gemini-pro-agent',
-        'openai:gpt-5.6-sol': 'gpt-5.6-sol',
+        'google:gemini-4-argon': 'gemini-4-argon-high',
+        'openai:gpt-6.1-sol': 'gpt-6.1-sol',
       },
     }
     assert.equal(
       resolveDefaultModelId(value),
-      cliProxyModelId('google:gemini-3.1-pro-preview'),
+      cliProxyModelId('google:gemini-4-argon'),
     )
   })
 
@@ -208,7 +208,7 @@ describe('配置密钥存储', () => {
       providers: {},
       cliProxyApi: {
         apiKey: 'proxy-secret', baseURL: 'http://localhost:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'], modelRoutes: { 'openai:gpt-5.6-sol': 'gpt-5.6-sol' },
+        modelIds: ['openai:gpt-6.1-sol'], modelRoutes: { 'openai:gpt-6.1-sol': 'gpt-6.1-sol' },
       },
     }],
     ['网页搜索', { providers: {}, webSearch: { tavily: { apiKey: 'search-secret' } } }],
@@ -341,10 +341,10 @@ describe('配置密钥存储', () => {
       cliProxyApi: {
         apiKey: 'proxy-secret',
         baseURL: 'http://127.0.0.1:8317/v1',
-        modelIds: ['openai:gpt-5.6-sol'],
+        modelIds: ['openai:gpt-6.1-sol'],
         modelRoutes: {
-          'openai:gpt-5.6-sol': 'gpt-5.6-sol',
-          'openai:gpt-5.6-terra': 'gpt-5.6-terra',
+          'openai:gpt-6.1-sol': 'gpt-6.1-sol',
+          'openai:gpt-6.1-terra': 'gpt-6.1-terra',
         },
       },
       retiredModelLabels: { 'legacy:model': 'Legacy Model' },
@@ -395,10 +395,10 @@ describe('配置密钥存储', () => {
       const loaded = loadConfig(path, codec)
       assert.equal(loaded?.providers.mimo?.apiKey, 'official-secret')
       assert.equal(loaded?.cliProxyApi?.apiKey, 'proxy-secret')
-      assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['openai:gpt-5.6-sol'])
+      assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['openai:gpt-6.1-sol'])
       assert.deepEqual(loaded?.cliProxyApi?.modelRoutes, {
-        'openai:gpt-5.6-sol': 'gpt-5.6-sol',
-        'openai:gpt-5.6-terra': 'gpt-5.6-terra',
+        'openai:gpt-6.1-sol': 'gpt-6.1-sol',
+        'openai:gpt-6.1-terra': 'gpt-6.1-terra',
       })
       assert.equal(loaded?.retiredModelLabels?.['legacy:model'], 'Legacy Model')
       assert.deepEqual(loaded?.auxiliaryModels, {
@@ -535,7 +535,7 @@ describe('配置密钥存储', () => {
         providers: {},
         consensusAgents: {
           B: {
-            model: 'deepseek:deepseek-v4-flash',
+            model: 'deepseek:deepseek-flash',
             baseURL: 'https://old-b.example/v1',
             encryptedApiKey: bEncrypted,
           },
@@ -568,12 +568,12 @@ describe('配置密钥存储', () => {
         cliProxyApi: {
           apiKey: 'proxy-secret',
           baseURL: 'http://127.0.0.1:8317/v1',
-          modelIds: ['google:gemini-3.1-pro-preview'],
+          modelIds: ['google:gemini-4-argon'],
         },
       }))
       assert.equal(await migrateLegacyConfig(codec, path), true)
       const loaded = loadConfig(path, codec)
-      assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['google:gemini-3.1-pro-preview'])
+      assert.deepEqual(loaded?.cliProxyApi?.modelIds, ['google:gemini-4-argon'])
       assert.deepEqual(loaded?.cliProxyApi?.modelRoutes, {})
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -598,12 +598,12 @@ describe('配置密钥存储', () => {
           modelIds: [
             'unknown:model',
             'google:gemini-3.8-flash',
-            'openai:gpt-5.6-sol',
+            'openai:gpt-6.1-sol',
           ],
           modelRoutes: {
             'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
-            'openai:gpt-5.6-sol': 'gpt-5.6-sol',
-            'openai:gpt-5.6-terra': 'gpt-5.6-terra',
+            'openai:gpt-6.1-sol': 'gpt-6.1-sol',
+            'openai:gpt-6.1-terra': 'gpt-6.1-terra',
           },
         },
         webSearch: {
@@ -620,12 +620,12 @@ describe('配置密钥存储', () => {
       assert.equal(loaded.providers.mimo?.apiKey, 'valid')
       assert.deepEqual(loaded.cliProxyApi?.modelIds, [
         'google:gemini-3.8-flash',
-        'openai:gpt-5.6-sol',
+        'openai:gpt-6.1-sol',
       ])
       assert.deepEqual(loaded.cliProxyApi?.modelRoutes, {
         'google:gemini-3.8-flash': 'gemini-3.8-flash-high',
-        'openai:gpt-5.6-sol': 'gpt-5.6-sol',
-        'openai:gpt-5.6-terra': 'gpt-5.6-terra',
+        'openai:gpt-6.1-sol': 'gpt-6.1-sol',
+        'openai:gpt-6.1-terra': 'gpt-6.1-terra',
       })
       assert.equal(loaded.webSearch?.activeProvider, 'perplexity')
       assert.equal(loaded.webSearch?.perplexity?.apiKey, 'legacy-search-key')

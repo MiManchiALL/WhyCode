@@ -199,8 +199,8 @@ describe('上下文超限的有限恢复', () => {
 function fixture(model: MockLanguageModelV4, onEvent?: (event: CoreEvent) => void) {
   const events: CoreEvent[] = []
   const session = new AgentSession({
-    model: { ...getModelEntry('openai:gpt-5.6-sol'),
-      capabilities: { ...getModelEntry('openai:gpt-5.6-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 },
+    model: { ...getModelEntry('openai:gpt-6.1-sol'),
+      capabilities: { ...getModelEntry('openai:gpt-6.1-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 },
       create: () => model },
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },

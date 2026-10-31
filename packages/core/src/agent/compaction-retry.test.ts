@@ -21,7 +21,7 @@ describe('手动压缩 PTL 的会话提交与恢复', () => {
       const directory = await mkdtemp(join(tmpdir(), 'whycode-compact-retry-'))
       t.after(() => rm(directory, { recursive: true, force: true }))
       const store = new SessionStore(directory)
-      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'openai:gpt-5.6-sol' })
+      const journal = await store.create({ workspace: localWorkspace(null), modelId: 'openai:gpt-6.1-sol' })
       let calls = 0
       const model = new MockLanguageModelV4({ doGenerate: async () => {
         if (++calls === 1) throw new APICallError({
@@ -37,7 +37,7 @@ describe('手动压缩 PTL 的会话提交与恢复', () => {
         }
       } })
       const events: CoreEvent[] = []
-      const entry = getModelEntry('openai:gpt-5.6-sol')
+      const entry = getModelEntry('openai:gpt-6.1-sol')
       const session = new AgentSession({
         model: { ...entry, capabilities: { ...entry.capabilities, contextWindow: 128_000, maxOutput: 20_000 }, create: () => model },
         providerConfig: { apiKey: 'test' }, promptContext: { projectDir: directory, osPlatform: 'win32' },

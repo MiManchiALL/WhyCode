@@ -116,8 +116,8 @@ function summary(sessionId: string, order: number): SessionSummary {
     updatedAt: new Date(order).toISOString(),
     resumable: true,
     workspace: localWorkspace(process.cwd()),
-    modelId: 'deepseek:deepseek-v4-flash',
-    referencedModelIds: ['deepseek:deepseek-v4-flash'],
+    modelId: 'deepseek:deepseek-flash',
+    referencedModelIds: ['deepseek:deepseek-flash'],
     reasoningEffort: 'default',
     status: 'idle',
   }

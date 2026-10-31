@@ -39,12 +39,14 @@ export interface CliProxyModelCompatibility {
   routes: readonly [CliProxyModelRoute, ...CliProxyModelRoute[]]
 }
 
-const GPT_5_6_ROUTE_CONSTRAINTS = {
-  maxContextWindow: 372_000,
+// v8.0.46（9717e325）；router-for-me/models@85c37137 的目录与 Codex 客户端元数据
+// （2026-10-29）。两型号的默认都是 low；ultra 不是通用 API 推理档位。
+const GPT_6_1_ROUTE_CONSTRAINTS = {
   maxOutputTokens: 128_000,
-  supportsNativeTools: true,
-  supportsImageInput: true,
-  supportsOriginalImageDetail: true,
+  reasoningEffort: {
+    supported: ['low', 'medium', 'high', 'xhigh', 'max'],
+    default: 'low',
+  },
   structuredOutputAtMost: 'tool-based',
 } satisfies CliProxyRouteCapabilityConstraints
 
@@ -54,7 +56,7 @@ const GPT_5_6_ROUTE_CONSTRAINTS = {
  * 连接保存时必须再与该实例的 `/models` 结果求交集；静态候选只证明型号等价，
  * 不能证明某个用户的 CLIProxyAPI 账号已经开放该路由。能力约束核对自
  * CLIProxyAPI v7.2.78（768b4c49）的 Codex 客户端目录、官方远程模型目录
- * 8b32755e（2026-07-21）。Gemini 3.8 与 Astra 的更新依据见各项旁的注释；
+ * 8b32755e（2026-07-21）。后续型号的审核依据见各项旁的注释；
  * 标准 `/models` 只用于确认可用 ID，不生成能力画像。
  */
 export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[] = [
@@ -70,10 +72,12 @@ export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[
     }],
   },
   {
-    profileId: 'google:gemini-3.1-pro-preview',
+    // v8.0.46（9717e325）Gemini/Antigravity 转换器；远程目录 85c37137（2026-10-29）。
+    // 标准路由使用 Gemini/Vertex 共同契约；同步 Chat 入口不开放后台 long decode。
+    profileId: 'google:gemini-4-argon',
     routes: [
       {
-        modelId: 'gemini-3.1-pro-preview',
+        modelId: 'gemini-4-argon',
         constraints: {
           maxContextWindow: 1_048_576,
           maxOutputTokens: 65_536,
@@ -81,24 +85,13 @@ export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[
         },
       },
       {
-        modelId: 'gemini-pro-agent',
+        modelId: 'gemini-4-argon-high',
         constraints: {
           maxContextWindow: 1_048_576,
-          maxOutputTokens: 65_535,
+          maxOutputTokens: 65_536,
           reasoningEffort: {
             supported: ['low', 'medium', 'high'],
             default: 'high',
-          },
-        },
-      },
-      {
-        modelId: 'gemini-3.1-pro-low',
-        constraints: {
-          maxContextWindow: 1_048_576,
-          maxOutputTokens: 65_535,
-          reasoningEffort: {
-            supported: ['low', 'medium', 'high'],
-            default: 'low',
           },
         },
       },
@@ -120,41 +113,24 @@ export const CLI_PROXY_MODEL_COMPATIBILITY: readonly CliProxyModelCompatibility[
     }],
   },
   {
-    profileId: 'openai:gpt-5.6-sol',
+    // Team/Plus/Pro 的目录共同上限为 272K；客户端窗口不能扩大路由保证。
+    profileId: 'openai:gpt-6.1-sol',
     routes: [{
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
       constraints: {
-        ...GPT_5_6_ROUTE_CONSTRAINTS,
-        reasoningEffort: {
-          supported: ['low', 'medium', 'high', 'xhigh', 'max'],
-          default: 'low',
-        },
+        ...GPT_6_1_ROUTE_CONSTRAINTS,
+        maxContextWindow: 272_000,
       },
     }],
   },
   {
-    profileId: 'openai:gpt-5.6-terra',
+    // Free/Team/Plus/Pro 的目录共同上限为 500K；Codex 路由不支持官方 API 的 none。
+    profileId: 'openai:gpt-6.1-terra',
     routes: [{
-      modelId: 'gpt-5.6-terra',
+      modelId: 'gpt-6.1-terra',
       constraints: {
-        ...GPT_5_6_ROUTE_CONSTRAINTS,
-        reasoningEffort: {
-          supported: ['low', 'medium', 'high', 'xhigh', 'max'],
-          default: 'medium',
-        },
-      },
-    }],
-  },
-  {
-    profileId: 'openai:gpt-5.6-luna',
-    routes: [{
-      modelId: 'gpt-5.6-luna',
-      constraints: {
-        ...GPT_5_6_ROUTE_CONSTRAINTS,
-        reasoningEffort: {
-          supported: ['low', 'medium', 'high', 'xhigh', 'max'],
-          default: 'medium',
-        },
+        ...GPT_6_1_ROUTE_CONSTRAINTS,
+        maxContextWindow: 500_000,
       },
     }],
   },

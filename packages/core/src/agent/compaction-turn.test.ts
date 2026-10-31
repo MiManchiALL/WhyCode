@@ -21,7 +21,7 @@ describe('运行中的多次压缩', () => {
       { type: 'text-start', id: 'answer' }, { type: 'text-delta', id: 'answer', delta: '完成' }, { type: 'text-end', id: 'answer' },
       { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: usage(10) },
     ] }) }) })
-    const session = new AgentSession({ model: { ...getModelEntry('openai:gpt-5.6-sol'), create: () => model },
+    const session = new AgentSession({ model: { ...getModelEntry('openai:gpt-6.1-sol'), create: () => model },
       providerConfig: { apiKey: 'test' }, promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: () => {}, requestApproval: async () => ({ approved: true }) })
     t.after(() => session.dispose())
@@ -55,8 +55,8 @@ describe('运行中的多次压缩', () => {
       },
     })
     const events: CoreEvent[] = []
-    const session = new AgentSession({ model: { ...getModelEntry('openai:gpt-5.6-sol'),
-      capabilities: { ...getModelEntry('openai:gpt-5.6-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 }, create: () => model },
+    const session = new AgentSession({ model: { ...getModelEntry('openai:gpt-6.1-sol'),
+      capabilities: { ...getModelEntry('openai:gpt-6.1-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 }, create: () => model },
       providerConfig: { apiKey: 'test' }, promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
       emit: event => events.push(event), requestApproval: async () => ({ approved: true }),
     })
@@ -87,11 +87,11 @@ describe('运行中的多次压缩', () => {
     const directory = await mkdtemp(join(tmpdir(), 'whycode-micro-commit-'))
     t.after(() => rm(directory, { recursive: true, force: true }))
     const store = new SessionStore(directory)
-    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'openai:gpt-5.6-sol' })
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'openai:gpt-6.1-sol' })
     const model = new MockLanguageModelV4({})
     const events: CoreEvent[] = []
-    const session = new AgentSession({ model: { ...getModelEntry('openai:gpt-5.6-sol'),
-      capabilities: { ...getModelEntry('openai:gpt-5.6-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 }, create: () => model },
+    const session = new AgentSession({ model: { ...getModelEntry('openai:gpt-6.1-sol'),
+      capabilities: { ...getModelEntry('openai:gpt-6.1-sol').capabilities, contextWindow: 128_000, maxOutput: 20_000 }, create: () => model },
       providerConfig: { apiKey: 'test' }, promptContext: { projectDir: process.cwd(), osPlatform: 'win32' }, sessionRecorder: journal,
       emit: event => events.push(event), requestApproval: async () => ({ approved: true }) })
     t.after(() => session.dispose())
