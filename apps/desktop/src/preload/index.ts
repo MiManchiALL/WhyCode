@@ -267,7 +267,7 @@ const api = {
     ipcRenderer.on(IPC.browserHostChanged, listener)
     return () => ipcRenderer.removeListener(IPC.browserHostChanged, listener)
   },
-  prepareBrowserFile: (id: string, url: string, runtimeId?: string): Promise<string> => ipcRenderer.invoke(IPC.prepareBrowserFile, id, url, runtimeId),
+  navigateBrowserPage: (id: string, url: string, runtimeId?: string): Promise<void> => ipcRenderer.invoke(IPC.navigateBrowserPage, id, url, runtimeId),
   pickBrowserTarget: (id: string, options: BrowserPickOptions): Promise<BrowserTargetCapture | null> => ipcRenderer.invoke(IPC.pickBrowserTarget, id, options),
   displayBrowserReference: (id: string, options: BrowserReferenceSelection): Promise<BrowserReferenceProjection | null> => ipcRenderer.invoke(IPC.displayBrowserReference, id, options),
   cancelBrowserReference: (id: string): void => ipcRenderer.send(IPC.cancelBrowserReference, id),
