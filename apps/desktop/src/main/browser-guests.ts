@@ -12,7 +12,7 @@ import { clearBrowserSession } from './browser-data.ts'
 import { BrowserReferences } from './browser-references.ts'
 import type { WorkspaceIO } from '@whycode/core'
 
-interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents; references?: BrowserReferences }
+interface GuestLease { owner: WebContents; attached: boolean; guest?: WebContents; references?: BrowserReferences; loadError?: Error }
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
 export class BrowserGuests {
@@ -33,6 +33,8 @@ export class BrowserGuests {
     const guest = this.leases.get(id)?.guest
     return guest && !guest.isDestroyed() ? guest : undefined
   }
+
+  loadError(id: string): Error | undefined { return this.leases.get(id)?.loadError }
 
   async prepare(id: string, url: string, runtimeId?: string): Promise<string> {
     if (!this.get(id)) throw new Error('浏览器标签已关闭')
@@ -149,6 +151,13 @@ export class BrowserGuests {
       if (!lease || lease.owner !== window.webContents || lease.guest) return
       id = key; lease.guest = guest
       lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
+      // 从用户页建立时开始保留加载失败，接管页面的 Agent 也必须能读取该事实。
+      guest.on('did-start-navigation', event => {
+        if (event.isMainFrame && !event.isSameDocument) delete lease.loadError
+      })
+      guest.on('did-fail-load', (_event, code, description, url, mainFrame) => {
+        if (mainFrame && code !== -3) lease.loadError = new Error(`页面加载失败（${description}，${code}）：${browserDisplayUrl(url)}`)
+      })
       guest.once('destroyed', () => {
         this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭')
       })
