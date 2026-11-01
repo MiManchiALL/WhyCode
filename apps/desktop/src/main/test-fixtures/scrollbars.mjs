@@ -28,6 +28,12 @@ app.whenReady().then(async () => {
   try {
     await win.loadFile(path.join(directory, 'index.html'))
     await until('document.querySelector("#inline")', 'fixture mounted')
+    await run(`(() => {
+      const inline=document.querySelector('#inline');window.inlineFades=[];
+      new MutationObserver(()=>{
+        if(inline.dataset.wcScrollbar==='idle')window.inlineFades.push(inline.getAnimations().length>0);
+      }).observe(inline,{attributes:true,attributeFilter:['data-wc-scrollbar']});
+    })()`)
     assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.07)')
     assert.equal(await run('document.querySelector("#inline").style.getPropertyValue("--wc-scrollbar-height")'), '8px')
@@ -38,23 +44,30 @@ app.whenReady().then(async () => {
     const point = await run(`(()=>{const el=document.querySelector('#inline'),r=el.getBoundingClientRect();return {x:Math.floor(r.right-4),y:Math.floor(r.top+25)}})()`)
     assert.ok((await pixel(point.x,point.y)).every(channel=>channel>200 && channel<230), 'active native thumb is dark gray')
     assert.ok((await pixel(340,186)).every(channel=>channel>200 && channel<230), 'bottom fade does not lighten horizontal thumb')
+    // 截图可能跨过空闲期限；以新的真实滚动建立悬浮计时起点。
+    await run(`new Promise(resolve=>{
+      const inline=document.querySelector('#inline');inline.addEventListener('scroll',()=>resolve(),{once:true});
+      inline.scrollTop=41;document.querySelector('#panel').scrollLeft=41;
+    })`)
+    const activityStarted = Date.now()
     win.webContents.sendInputEvent({ type: 'mouseMove', ...point })
-    await until('document.querySelector("#panel").dataset.wcScrollbar==="idle" && document.querySelector("#panel").getAnimations().length===0', 'three second inactivity')
+    await until('document.querySelector("#panel").dataset.wcScrollbar==="idle" && document.querySelector("#panel").getAnimations().length===0', '1.5 second inactivity')
+    assert.ok(Date.now()-activityStarted < 2500, 'inactivity no longer waits three seconds')
     assert.equal(await run('document.querySelector("#inline").dataset.wcScrollbar'), 'scrolling', 'hover holds activity until leaving the scrollbar')
     const hovered = await pixel(point.x,point.y)
-    assert.ok(hovered.every(channel=>channel<70), 'hovered thumb stays black after idle timeout')
+    assert.ok(hovered.every(channel=>channel>90 && channel<125), 'hovered thumb stays medium gray after idle timeout')
     win.webContents.sendInputEvent({ type:'mouseMove', x:700, y:400 })
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'hover exit settles an expired timer')
-    assert.ok(await run('document.querySelector("#inline").getAnimations().length>0'), 'hover exit also fades')
+    assert.equal(await run('window.inlineFades.at(-1)'), true, 'hover exit also fades')
     await until('document.querySelector("#inline").getAnimations().length===0', 'hover exit fade completes')
     win.webContents.sendInputEvent({ type:'mouseMove', ...point })
     win.webContents.sendInputEvent({ type:'mouseDown', button:'left', clickCount:1, ...point })
     win.webContents.sendInputEvent({ type:'mouseMove', x:point.x, y:point.y+60, movementY:60 })
     win.webContents.sendInputEvent({ type:'mouseUp', button:'left', clickCount:1, x:point.x, y:point.y+60 })
-    await until('document.querySelector("#inline").scrollTop>40', 'native thumb dragging remains usable')
+    await until('document.querySelector("#inline").scrollTop>41', 'native thumb dragging remains usable')
     win.webContents.sendInputEvent({ type:'mouseMove', x:700, y:400 })
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'second idle timeout')
-    assert.ok(await run('document.querySelector("#inline").getAnimations().length>0'), 'idle change fades rather than disappearing immediately')
+    assert.equal(await run('window.inlineFades.at(-1)'), true, 'idle change fades rather than disappearing immediately')
     await until('document.querySelector("#inline").getAnimations().length===0', 'second fade completes')
     assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.07)')
@@ -77,10 +90,10 @@ app.whenReady().then(async () => {
       const svg=await fixture.renderMermaid(source,new AbortController().signal);
       const diagram=new DOMParser().parseFromString(svg,'image/svg+xml');
       const preview=document.importNode(diagram.documentElement,true);document.querySelector('#root').append(preview);
-      const labels=[...preview.querySelectorAll('.edgeLabel rect.background')].map(rect=>({opacity:getComputedStyle(rect).opacity,stroke:getComputedStyle(rect).stroke,
+      const labels=[...preview.querySelectorAll('.edgeLabel rect.background')].map(rect=>({opacity:getComputedStyle(rect).opacity,stroke:getComputedStyle(rect).stroke,fill:getComputedStyle(rect).fill,
         text:getComputedStyle(rect.parentElement.querySelector('text')).fill}));
       preview.remove();
-      if(labels.length!==2 || labels.some(label=>label.opacity!=='1' || label.stroke!=='rgb(215, 220, 210)' || label.text!=='rgb(98, 103, 95)'))throw new Error('连线标签应有不透明底色、灰色边框和中灰文字');
+      if(labels.length!==2 || labels.some(label=>label.opacity!=='1' || label.stroke!=='rgb(210, 214, 205)' || label.fill!=='rgb(236, 238, 234)' || label.text!=='rgb(112, 118, 107)'))throw new Error('连线标签应有不透明浅灰底色、灰色边框和中灰文字');
       const image=document.createElement('img');image.style.cssText='display:block;margin:30px auto;width:360px';
       const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));image.src=url;document.querySelector('#root').append(image);await image.decode();URL.revokeObjectURL(url);
       return [...diagram.querySelectorAll('.flowchart-link')].map(edge=>edge.getAttribute('d'));

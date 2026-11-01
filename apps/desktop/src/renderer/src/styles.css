@@ -1324,7 +1324,7 @@ html[data-wc-panel-resizing='true']::after {
   background-clip: padding-box !important;
 }
 .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
-.xterm .xterm-scrollable-element > .scrollbar > .slider.active { background-color: #292a27 !important; }
+.xterm .xterm-scrollable-element > .scrollbar > .slider.active { background-color: var(--wc-scrollbar-hover) !important; }
 .xterm, .xterm * { --wc-scrollbar-thumb: inherit; }
 
 .wc-image-viewport { position: relative; display: flex; min-height: 80px; min-width: 0; align-items: center; justify-content: center; overflow: hidden; touch-action: none; overscroll-behavior: contain; outline: none; }

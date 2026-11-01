@@ -43,6 +43,11 @@ export async function checkBrowserDomReadiness({ run, finish, agent, guests, unt
     assert.match(first.text, /"loading":true/)
     assert.equal(first.images.length, 1)
     const id = agent.pages.current('dom-ready').surfaceId, guest = guests.get(id)
+    const evaluate = async expression => {
+      const { result, exceptionDetails } = await guest.debugger.sendCommand('Runtime.evaluate', { expression, returnByValue: true })
+      assert.equal(exceptionDetails, undefined)
+      return result.value
+    }
     assert.equal(guest.isLoading(), true, '主文档可读时，图片仍在加载')
     await firstImage
     const scrollbar = await run('dom-ready', `text(await browser.evaluate({expression:\`(() => {
@@ -57,6 +62,14 @@ export async function checkBrowserDomReadiness({ run, finish, agent, guests, unt
     assert.match(scrollbar.text, /"color":"auto"/)
     assert.match(scrollbar.text, /"node":"undefined"/, scrollbar.text)
     assert.match(scrollbar.text, /"host":"undefined"/, scrollbar.text)
+
+    await evaluate('document.body.style.height="2400px";document.body.style.background="white";window.scrollTo(0,40)')
+    await until(() => evaluate('document.scrollingElement.dataset.wcScrollbar === "scrolling"'), 'viewport scrollbar activity')
+    const viewport = await evaluate(`({width:innerWidth,height:innerHeight,
+      html:getComputedStyle(document.documentElement,'::-webkit-scrollbar-thumb').backgroundColor,
+      body:getComputedStyle(document.body,'::-webkit-scrollbar-thumb').backgroundColor})`)
+    const viewportPixel = [...(await guest.capturePage({x:viewport.width-4,y:50,width:1,height:1})).toBitmap().subarray(0,3)]
+    assert.ok(viewportPixel.every(channel=>channel>200 && channel<230), JSON.stringify({viewport,viewportPixel}))
 
     const nextImage = hold('/image/next')
     const next = await run('dom-ready', `${navigation('/next')} ${read}`)
