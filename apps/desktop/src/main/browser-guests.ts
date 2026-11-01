@@ -44,6 +44,8 @@ export class BrowserGuests {
 
   loadError(id: string): Error | undefined { return this.leases.get(id)?.navigation?.error }
 
+  pendingCertificate(id: string) { return this.leases.get(id)?.certificates?.pending }
+
   waitForDocument(id: string, signal: AbortSignal): Promise<void> {
     const navigation = this.leases.get(id)?.navigation
     if (!navigation) throw new Error('浏览器标签已关闭')
@@ -82,14 +84,14 @@ export class BrowserGuests {
     return { id, partition: BROWSER_PARTITION }
   }
 
-  release(owner: WebContents, id: string): Promise<void> {
+  release(owner: WebContents, id: string, reason = 'page_closed: 网页已关闭，关闭原因未知'): Promise<void> {
     const lease = this.leases.get(id)
     if (!lease || lease.owner !== owner) return Promise.resolve()
     const destroyed = lease.guest && !lease.guest.isDestroyed()
       ? new Promise<void>(resolve => lease.guest!.once('destroyed', () => resolve()))
       : Promise.resolve()
     this.leases.delete(id)
-    this.onClosed?.(id, 'page_closed: 网页已关闭')
+    this.onClosed?.(id, reason)
     lease.navigation?.close()
     lease.certificates?.close()
     lease.references?.cancel()
@@ -194,9 +196,9 @@ export class BrowserGuests {
       lease.certificates = this.certificates.bind(guest, certificate => send({ type: 'certificate', certificate }))
       guest.once('destroyed', () => {
         lease.navigation?.close()
-        this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭')
+        this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭，关闭原因未知')
       })
-      guest.on('render-process-gone', () => this.release(window.webContents, key))
+      guest.on('render-process-gone', (_event, details) => this.release(window.webContents, key, `page_crashed: 网页进程已退出（${details.reason}）`))
     })
     const allowed = (url: string) => browserNavigationAllowed(url, this.applicationUrl) || (!!id && this.files.allows(id, url))
     const open = (url: string) => {

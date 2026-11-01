@@ -11,6 +11,8 @@ interface AxNode {
 }
 const refSchema = z.object({ ref: z.string().max(80) })
 const fillSchema = refSchema.extend({ value: z.string().max(100_000) })
+const dialogSchema = z.object({ type: z.enum(['alert', 'confirm', 'prompt', 'beforeunload']),
+  message: z.string().transform(text => text.slice(0, 2000)) })
 const keyCodes: Record<string, number> = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35 }
 
@@ -19,27 +21,43 @@ export class BrowserAutomation {
   private readonly refs = new Map<string, number>()
   private revision = 0
   private readonly originalZoom: number
-  private readonly guest: WebContents
+  readonly guest: WebContents
+  private initialized = false
+  private pendingDialog: z.infer<typeof dialogSchema> | null = null
+  private readonly dialogChanged = (_event: unknown, method: string, params: unknown) => {
+    if (method === 'Page.javascriptDialogOpening') this.pendingDialog = dialogSchema.parse(params)
+    if (method === 'Page.javascriptDialogClosed') this.pendingDialog = null
+  }
   private readonly invalidate = () => { this.revision++; this.refs.clear() }
+  private readonly detached = () => { this.initialized = false; this.pendingDialog = null; this.invalidate() }
 
   constructor(guest: WebContents) {
     this.guest = guest
     this.originalZoom = guest.getZoomFactor()
     guest.on('did-navigate', this.invalidate)
     guest.on('did-navigate-in-page', this.invalidate)
-    guest.debugger.on('detach', this.invalidate)
+    guest.debugger.on('detach', this.detached)
+    guest.debugger.on('message', this.dialogChanged)
   }
 
-  async prepare(signal?: AbortSignal): Promise<void> {
+  async prepare(signal?: AbortSignal, dialogOnly = false): Promise<void> {
     signal?.throwIfAborted()
     if (this.guest.isDestroyed()) throw new Error('网页已关闭')
-    if (this.guest.getZoomFactor() !== 1) this.guest.setZoomFactor(1)
     if (!this.guest.debugger.isAttached()) {
+      this.pendingDialog = null
       this.guest.debugger.attach('1.3')
+      await this.guest.debugger.sendCommand('Page.enable')
+      signal?.throwIfAborted()
+    }
+    // 弹窗响应不依赖焦点模拟或网页脚本，关闭后再完成输入设置。
+    if (dialogOnly || this.pendingDialog) return
+    if (this.guest.getZoomFactor() !== 1) this.guest.setZoomFactor(1)
+    if (!this.initialized) {
       // 只模拟网页内的焦点；隐藏页输入不激活宿主窗口或抢占用户的系统焦点。
       await this.guest.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
-      await this.guest.debugger.sendCommand('Page.enable')
+      signal?.throwIfAborted()
       await this.guest.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true, cancel: true })
+      this.initialized = true
     }
     signal?.throwIfAborted()
   }
@@ -50,17 +68,39 @@ export class BrowserAutomation {
   }
 
   async perform<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
-    await this.prepare(signal)
     let fileChooser = false
-    const observe = (_event: unknown, method: string) => { if (method === 'Page.fileChooserOpened') fileChooser = true }
+    let rejectDialog: (error: Error) => void
+    const interrupted = new Promise<never>((_resolve, reject) => { rejectDialog = reject })
+    const observe = (_event: unknown, method: string) => {
+      if (method === 'Page.fileChooserOpened') fileChooser = true
+      if (method === 'Page.javascriptDialogOpening') rejectDialog(this.dialogError())
+    }
     this.guest.debugger.on('message', observe)
     try {
-      const result = await operation()
-      // 输入确认早于 Chromium 的文件框通知；同一页面提交新帧后再结束操作观察。
-      await this.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => resolve(null)))' }, signal)
-      if (fileChooser) throw new Error('该操作打开了文件选择器，已取消选择。Browser 暂不支持上传文件；请重新观察并确认目标控件。')
-      return result
+      return await Promise.race([interrupted, (async () => {
+        await this.prepare(signal)
+        if (this.pendingDialog) throw this.dialogError()
+        const result = await operation()
+        // 输入确认早于 Chromium 的文件框通知；同一页面提交新帧后再结束操作观察。
+        await this.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => resolve(null)))' }, signal)
+        if (fileChooser) throw new Error('该操作打开了文件选择器，已取消选择。Browser 暂不支持上传文件；请重新观察并确认目标控件。')
+        return result
+      })()])
     } finally { this.guest.debugger.removeListener('message', observe) }
+  }
+
+  private dialogError(): Error {
+    return new Error(`javascript_dialog_open: ${JSON.stringify(this.pendingDialog)}。请先用 browser.dialog() 查看并处理弹窗，再继续操作；触发弹窗的动作可能已经执行。`)
+  }
+
+  async dialog(input: unknown, signal: AbortSignal): Promise<unknown> {
+    const { accept } = z.object({ accept: z.boolean().optional() }).strict().parse(input ?? {})
+    await this.prepare(signal, true)
+    const dialog = this.pendingDialog
+    if (accept === undefined) return { dialog }
+    if (!dialog) throw new Error('当前网页没有待处理的 JavaScript 弹窗')
+    await this.command('Page.handleJavaScriptDialog', { accept }, signal)
+    return { handled: true, type: dialog.type, accepted: accept }
   }
 
   async viewport(signal: AbortSignal): Promise<{ width: number; height: number }> {
@@ -218,10 +258,12 @@ export class BrowserAutomation {
   }
 
   close(): void {
+    this.pendingDialog = null
     if (this.guest.isDestroyed()) return
     this.guest.removeListener('did-navigate', this.invalidate)
     this.guest.removeListener('did-navigate-in-page', this.invalidate)
-    this.guest.debugger.removeListener('detach', this.invalidate)
+    this.guest.debugger.removeListener('detach', this.detached)
+    this.guest.debugger.removeListener('message', this.dialogChanged)
     if (this.guest.debugger.isAttached()) this.guest.debugger.detach()
     this.guest.setZoomFactor(this.originalZoom)
   }

@@ -162,7 +162,7 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
         {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center overflow-y-auto bg-[var(--wc-surface)] px-6 py-6 text-center text-sm text-[var(--wc-muted)]">
           <div className="my-auto flex w-full flex-col items-center gap-3">
             {state.error && state.certificate ? <BrowserCertificateWarning key={state.certificate.id} certificate={state.certificate} leaseId={lease.id}
-              onContinue={url => { if (agent) onNavigate(url); else browser.navigate(url) }} /> : <>
+              onContinue={browser.navigate} /> : <>
               <Globe size={26} className="text-[var(--wc-faint)]" />
               <p className="max-w-sm break-words">{state.error ?? '输入网址，浏览网页或打开本机开发服务'}</p>
             </>}

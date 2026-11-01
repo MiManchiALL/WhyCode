@@ -35,4 +35,19 @@ export async function checkBrowserPageEndings({ run, finish, execute, until, age
   assert.equal(personal.isDestroyed(), true, '切走会话后结束释放 Agent DOM')
   await execute('fixture.session("alpha")')
   await until(() => execute('fixture.state().tabs.length===0'), 'endings fixture reset')
+
+  assert.equal((await run('crashed', `await browser.open({url:${JSON.stringify(url)}});`)).isError, false)
+  const crashed = guests.get(agent.pages.current('crashed').surfaceId)
+  let waiting
+  const started = new Promise(resolve => { waiting = resolve })
+  const pending = run('crashed', 'await browser.wait({text:"never appears",timeoutMs:10000});', undefined,
+    message => { if (message === '浏览器：wait') waiting() })
+  await started
+  crashed.forcefullyCrashRenderer()
+  const result = await pending
+  assert.equal(result.isError, true)
+  assert.match(result.text, /page_crashed/)
+  assert.doesNotMatch(result.text, /user_closed/)
+  await until(() => crashed.isDestroyed(), 'crashed guest released')
+  await finish('crashed')
 }

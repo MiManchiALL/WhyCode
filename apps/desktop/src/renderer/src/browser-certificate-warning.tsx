@@ -32,7 +32,7 @@ export function BrowserCertificateWarning({ certificate, leaseId, onContinue }: 
           <div><dt className="inline text-[var(--wc-faint)]">有效期：</dt><dd className="inline">{new Date(certificate.validStart * 1000).toLocaleDateString()} — {new Date(certificate.validExpiry * 1000).toLocaleDateString()}</dd></div>
           <div><dt className="text-[var(--wc-faint)]">SHA-256 指纹</dt><dd className="break-all font-mono">{certificate.fingerprint}</dd></div>
         </dl>
-        <p>仅在确认这是你要访问的设备后继续。本次允许仅适用于此站点的当前证书，重启应用或清除全部浏览器数据后失效。</p>
+        <p>仅在确认这是你要访问的设备后继续。本次允许适用于此主机各端口使用相同证书的 HTTPS 和安全 WebSocket 连接，重启应用或清除全部浏览器数据后失效。</p>
         <button className="wc-focus-ring rounded-lg border border-[var(--wc-line)] px-3 py-1.5 text-sm text-[var(--wc-ink)]"
           disabled={busy} aria-busy={busy} onClick={() => void proceed()}>继续访问（不安全）</button>
       </div>

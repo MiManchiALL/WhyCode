@@ -7,6 +7,7 @@ export interface BrowserSurface extends BrowserLease {
   runtimeId: string
   page: BrowserPageDescriptor
   turnId?: string
+  parentId?: string
   navigation: number
   audible: boolean
 }
