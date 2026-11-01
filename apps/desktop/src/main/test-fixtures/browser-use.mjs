@@ -13,6 +13,7 @@ import { checkBrowserDomReadiness } from './browser-dom-readiness.mjs'
 import { checkBrowserLoadErrors } from './browser-load-errors.mjs'
 import { checkBrowserNavigationInterruption } from './browser-navigation-interruption.mjs'
 import { checkBrowserTabIndicators } from './browser-tab-indicators.mjs'
+import { checkBrowserCertificates } from './browser-certificates.mjs'
 
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
 app.setPath('userData', path.join(directory, 'profile'))
@@ -69,6 +70,7 @@ app.whenReady().then(async () => {
   await checkBrowserDomReadiness({ run, finish, agent, guests, until })
   await checkBrowserNavigationInterruption({ directory, run, finish, execute, until, agent, guests })
   await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests, workspaceLookups })
+  await checkBrowserCertificates({ directory, execute, until, agent, guests, run, finish, win })
   await checkBrowserTabIndicators({ run, finish, execute, until, agent, guests, url, win })
   await execute('fixture.session("alpha")')
   await until(() => execute('fixture.state().tabs.length===0'), 'clear cold descriptor')

@@ -12,6 +12,7 @@ import { BrowserReferenceEditor } from './browser-reference-editor.tsx'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { ImageDraft } from './image-draft.ts'
 import { useRefreshFeedback } from './use-refresh-feedback.ts'
+import { BrowserCertificateWarning } from './browser-certificate-warning.tsx'
 
 type BrowserPage = Extract<RightPanelPage, { kind: 'browser' }>
 interface Props {
@@ -158,11 +159,16 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
             style={agent ? { display: 'flex', position: 'absolute', width: BROWSER_VIEWPORT.width, height: '100%' }
               : { display: 'flex', position: 'absolute', width: '100%', height: '100%' }} aria-label="网页内容" />}
         </div>
-        {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--wc-surface)] px-6 text-center text-sm text-[var(--wc-muted)]">
-          <Globe size={26} className="text-[var(--wc-faint)]" />
-          <p className="max-w-sm break-words">{state.error ?? '输入网址，浏览网页或打开本机开发服务'}</p>
-          {state.error && state.ready && <button className="wc-focus-ring flex items-center gap-2 rounded-lg border border-[var(--wc-line)] px-3 py-1.5" disabled={refresh.busy} aria-busy={refresh.busy}
-            onClick={() => shortcut('reload')}><RefreshCw size={14} className={refresh.busy ? 'animate-spin' : ''} />重新加载</button>}
+        {(state.error || state.url === 'about:blank') && <div className="absolute inset-0 flex flex-col items-center overflow-y-auto bg-[var(--wc-surface)] px-6 py-6 text-center text-sm text-[var(--wc-muted)]">
+          <div className="my-auto flex w-full flex-col items-center gap-3">
+            {state.error && state.certificate ? <BrowserCertificateWarning key={state.certificate.id} certificate={state.certificate} leaseId={lease.id}
+              onContinue={url => { if (agent) onNavigate(url); else browser.navigate(url) }} /> : <>
+              <Globe size={26} className="text-[var(--wc-faint)]" />
+              <p className="max-w-sm break-words">{state.error ?? '输入网址，浏览网页或打开本机开发服务'}</p>
+            </>}
+            {state.error && state.ready && <button className="wc-focus-ring flex items-center gap-2 rounded-lg border border-[var(--wc-line)] px-3 py-1.5" disabled={refresh.busy} aria-busy={refresh.busy}
+              onClick={() => shortcut('reload')}><RefreshCw size={14} className={refresh.busy ? 'animate-spin' : ''} />重新加载</button>}
+          </div>
         </div>}
         <BrowserReferenceEditor reference={reference} boundary={stage} />
       </div>

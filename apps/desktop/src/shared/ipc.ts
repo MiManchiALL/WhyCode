@@ -47,6 +47,7 @@ export const IPC = {
   syncBrowserView: 'whycode:sync-browser-view',
   browserViewAction: 'whycode:browser-view-action',
   navigateBrowserPage: 'whycode:navigate-browser-page',
+  trustBrowserCertificate: 'whycode:trust-browser-certificate',
   pickBrowserTarget: 'whycode:pick-browser-target',
   displayBrowserReference: 'whycode:display-browser-reference',
   cancelBrowserReference: 'whycode:cancel-browser-reference',

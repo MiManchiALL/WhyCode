@@ -12,11 +12,13 @@ import { BrowserFiles } from './browser-files.ts'
 import { clearBrowserSession } from './browser-data.ts'
 import { BrowserReferences } from './browser-references.ts'
 import { BrowserNavigation, BrowserNavigationInterruptedError } from './browser-navigation.ts'
+import { BrowserCertificates, type BrowserCertificatePage } from './browser-certificates.ts'
 import type { WorkspaceIO } from '@whycode/core'
 
 interface GuestLease {
   owner: WebContents; attached: boolean
   guest?: WebContents; references?: BrowserReferences; navigation?: BrowserNavigation
+  certificates?: BrowserCertificatePage
 }
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
@@ -28,6 +30,7 @@ export class BrowserGuests {
   private readonly leases = new Map<string, GuestLease>()
   private readonly files = new BrowserFiles()
   private readonly downloads = new Set<DownloadItem>()
+  private readonly certificates = new BrowserCertificates()
   private clearing: BrowserDataClearMode | null = null
   private readonly applicationUrl: string | undefined
   private workspaceFor?: (runtimeId: string) => Promise<WorkspaceIO>
@@ -51,6 +54,7 @@ export class BrowserGuests {
     const lease = this.leases.get(id), guest = this.get(id)
     if (!lease?.navigation || !guest) throw new Error('浏览器标签已关闭')
     const navigation = lease.navigation, request = navigation.begin()
+    lease.certificates?.reset()
     let target = url
     try {
       signal?.throwIfAborted()
@@ -87,6 +91,7 @@ export class BrowserGuests {
     this.leases.delete(id)
     this.onClosed?.(id, 'page_closed: 网页已关闭')
     lease.navigation?.close()
+    lease.certificates?.close()
     lease.references?.cancel()
     this.files.release(id)
     // 撤销租约后由 Renderer 卸载 webview，Electron 随 DOM 分离销毁 guest。
@@ -122,6 +127,14 @@ export class BrowserGuests {
       const lease = typeof id === 'string' ? this.leases.get(id) : undefined
       if (lease?.owner !== event.sender || !lease.references) throw new Error('浏览器标签已关闭')
       return lease.references.pick(options)
+    })
+    ipcMain.handle(IPC.trustBrowserCertificate, (event, id: unknown, certificateId: unknown) => {
+      this.requireOwner(event)
+      const lease = typeof id === 'string' ? this.leases.get(id) : undefined
+      if (lease?.owner !== event.sender || !lease.certificates || typeof certificateId !== 'string') {
+        throw new Error('证书确认已失效，请重新加载页面')
+      }
+      return lease.certificates.trust(certificateId)
     })
     ipcMain.handle(IPC.displayBrowserReference, (event, id: unknown, options: unknown) => {
       this.requireOwner(event)
@@ -169,7 +182,7 @@ export class BrowserGuests {
   private attach(window: BrowserWindow, guest: WebContents): void {
     let id: string | null = null
     const send = (event: BrowserEventPayload) => {
-      if (id && !window.webContents.isDestroyed()) window.webContents.send(IPC.browserEvent, { id, ...event })
+      if (id && this.leases.get(id)?.guest === guest && !window.webContents.isDestroyed()) window.webContents.send(IPC.browserEvent, { id, ...event })
     }
     guest.once('dom-ready', () => {
       const key = guest.getURL().slice('about:blank#'.length)
@@ -178,6 +191,7 @@ export class BrowserGuests {
       id = key; lease.guest = guest
       lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
       lease.navigation = new BrowserNavigation(guest)
+      lease.certificates = this.certificates.bind(guest, certificate => send({ type: 'certificate', certificate }))
       guest.once('destroyed', () => {
         lease.navigation?.close()
         this.leases.delete(key); this.files.release(key); this.onClosed?.(key, 'page_closed: 网页已关闭')
@@ -288,6 +302,7 @@ export class BrowserGuests {
     try {
       const browser = session.fromPartition(BROWSER_PARTITION)
       if (mode === 'all') {
+        this.certificates.clear()
         for (const item of this.downloads) item.cancel()
         // 包含尚未 dom-ready、还未写回租约的 guest；关闭旧页面后再清理，防止重新写入。
         const destroyed = Promise.all(webContents.getAllWebContents()

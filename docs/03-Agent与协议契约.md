@@ -636,7 +636,9 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 `navigateBrowserPage(id,url,runtimeId?)` 仅由所属窗口的主 Frame 请求导航已挂载的 guest；Main 校验地址策略、准备文件地址并等待主文档就绪。响应区分 `completed`、`interrupted` 和带可读错误的 `failed`；`completed` 不代表子资源全部加载完毕，Renderer 的加载图标仍跟随 Chromium 进度。Renderer 不把中断显示为页面错误，也不以 IPC 异常包装覆盖加载原因；调用方或租约校验失败仍拒绝请求。file 地址省略 runtimeId 时使用本机 IO，从工作区文件进入时由 Main 解析所属 runtime 的 IO；不接受网络共享或调用者构造的内部协议。网页资源请求继续校验租约归属、发起页面和目录范围；Renderer 只将公开 file 地址投影到地址栏与标签记录。标签释放后撤销全部目录授权，迟到准备结果不能触发已关闭或已变更目标的导航，也不能覆盖新导航的结果。
 
-`browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键或下载/权限反馈；标签关闭后不再应用迟到事件。`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；普通浏览不产生 CoreCommand 或模型消息。UI、网络限制和资源生命周期见文档二 §12.6。
+`browserEvent` 只发给资源所属窗口，使用租约 ID 关联弹出网址、浏览器快捷键、下载/权限反馈及证书待确认信息；标签关闭后不再应用迟到事件。证书事件投影 Main 持有的确认 ID、目标与证书摘要，null 表示撤销。`trustBrowserCertificate(id,certificateId)` 仅由所属主窗口的主 Frame 调用，必须匹配该租约当前待确认记录；不接受 Renderer 提供的证书、指纹或目标网址。成功后返回 Main 记录的目标，由 UI 沿已有导航入口继续，Agent 页仍沿原有停止确认流程；失效或跨窗口确认直接拒绝。证书允许范围与清理机制见文档二 §12.6。
+
+`openBrowserExternally(id)` 由 Main 读取所属 guest 的真实 HTTP(S) 地址并校验，不接受 Renderer 传入任意系统协议。网页没有调用这些 IPC 的 Preload 能力；普通浏览不产生 CoreCommand 或模型消息。UI、网络限制和资源生命周期见文档二 §12.6。
 
 `pickBrowserTarget(id,{selected,parent?})` 只接受所属主窗口对已挂载 guest 的有界选取请求，不接收可执行脚本。返回元素或区域元数据、实际页面来源、裁剪坐标与截图字节；父元素请求替换最后一个元素目标并保留 ID，取消返回 null，失败拒绝。`displayBrowserReference(id,{selected,reveal?})` 按确认后的列表统一投影选框与编号，返回无法定位的目标 ID 和当前弹层锚点；reveal 用于重新编辑时展示目标。锚点只用于界面定位，不改写截图事实。`cancelBrowserReference(id)` 幂等取消同一租约的待选请求、覆盖层和光标样式；导航或销毁使旧结果失效。页面只能响应真实用户选取事件，不能调用宿主 IPC。
 
