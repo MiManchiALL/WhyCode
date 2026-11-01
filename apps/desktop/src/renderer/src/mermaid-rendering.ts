@@ -3,6 +3,7 @@ import type { MermaidConfig } from 'mermaid'
 const MERMAID_MAX_SOURCE_CHARS = 20_000
 const MERMAID_MAX_LINES = 500
 const MERMAID_MAX_EDGES = 200
+const FLOWCHART_PADDING = 10
 
 let queue: Promise<unknown> = Promise.resolve()
 let nextId = 0
@@ -27,10 +28,15 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
       maxEdges: MERMAID_MAX_EDGES,
       // 图片展示不支持 foreignObject；使用 SVG 原生文字以支持缩放与导出。
       htmlLabels: false,
-      flowchart: { htmlLabels: false, wrappingWidth: 400, padding: 10, nodeSpacing: 32, rankSpacing: 36, curve: 'step' },
+      flowchart: { htmlLabels: false, wrappingWidth: 400, padding: FLOWCHART_PADDING, nodeSpacing: 32, rankSpacing: 36, curve: 'step' },
       secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'htmlLabels', 'flowchart'],
       theme: 'base',
-      themeCSS: `.edgeLabel rect.background { opacity: 1; stroke: #d9d9d9 !important; stroke-width: 1px; rx: 8px; ry: 8px; }
+      // 分支背景默认仅留 2px。几何样式在 Mermaid 测量前生效，让标签与矩形节点共用留白并参与布局。
+      themeCSS: `.edgeLabel rect.background {
+        opacity: 1; stroke: #d9d9d9 !important; stroke-width: 1px; rx: 8px; ry: 8px;
+        x: calc(attr(x px) - ${FLOWCHART_PADDING * 2 - 2}px); y: calc(attr(y px) - ${FLOWCHART_PADDING - 2}px);
+        width: calc(attr(width px) + ${(FLOWCHART_PADDING * 2 - 2) * 2}px); height: calc(attr(height px) + ${(FLOWCHART_PADDING - 2) * 2}px);
+      }
         .edgeLabel .label text { fill: #292a27; }`,
       fontFamily: style.getPropertyValue('--wc-font-family').trim(),
       themeVariables: {
