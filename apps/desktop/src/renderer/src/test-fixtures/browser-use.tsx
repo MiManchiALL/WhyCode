@@ -35,7 +35,7 @@ function Fixture() {
     session: (id: string) => { setRuntimeId(id); setState(blank) },
     visible: (value: boolean) => setState(current => ({ ...current, open: value })),
     close: () => close(display.activeTabId!), state: () => state, display: () => display,
-    narrow: () => setWidth(300),
+    narrow: (value = 300) => setWidth(value),
     tall: (value: boolean) => setHeight(value ? 1150 : 700),
   }
   return <ConversationFeedbackContext value={feedback}>

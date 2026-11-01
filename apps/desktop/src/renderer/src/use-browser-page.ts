@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
-import { browserAddress, browserDisplayUrl, browserLoadErrorMessage, isBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
+import { browserAddress, browserDisplayUrl, browserLoadErrorMessage, isBrowserUrl, type BrowserCertificateError, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 
 export interface BrowserPageState {
   url: string; title: string; loading: boolean; ready: boolean; back: boolean; forward: boolean
   error: string | null; zoom: number; match: { current: number; total: number } | null
+  certificate: BrowserCertificateError | null
 }
 interface Props {
   lease: BrowserLease
@@ -29,7 +30,7 @@ export function useBrowserPage(props: Props) {
   const lease = props.lease
   const [state, setState] = useState<BrowserPageState & { settledNavigation: number | null }>({ settledNavigation: null,
     url: props.url, title: '', loading: props.url !== 'about:blank',
-    ready: false, back: false, forward: false, error: null, zoom: 1, match: null })
+    ready: false, back: false, forward: false, error: null, certificate: null, zoom: 1, match: null })
   useEffect(() => {
     if (props.active && ready.current && element.current) {
       const zoom = element.current.getZoomFactor()
@@ -106,6 +107,7 @@ export function useBrowserPage(props: Props) {
       if (event.id !== lease.id) return
       if (event.type === 'open') callbacks.current.onOpen(event.url)
       else if (event.type === 'shortcut') callbacks.current.onShortcut(event.command)
+      else if (event.type === 'certificate') setState(value => ({ ...value, certificate: event.certificate }))
       else feedback(event.error ? 'error' : 'info', event.message, true)
     })
     return () => { closed = true; ready.current = false; navigation.current++; removers.forEach(remove => remove()); unsubscribe() }

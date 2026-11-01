@@ -8,12 +8,17 @@ export interface BrowserLease { id: string; partition: string }
 export type BrowserNavigationResult = { status: 'completed' | 'interrupted' } | { status: 'failed'; error: string }
 export type BrowserDataClearMode = 'cache' | 'all'
 export interface BrowserDataState { clearing: BrowserDataClearMode | null }
+export interface BrowserCertificateError {
+  id: string; url: string; error: string; fingerprint: string
+  subjectName: string; issuerName: string; validStart: number; validExpiry: number
+}
 export type BrowserShortcut = 'address' | 'find' | 'reload' | 'reload-clean' | 'back' | 'forward'
   | 'new-tab' | 'close-tab' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'escape'
 export type BrowserEventPayload =
   | { type: 'open'; url: string }
   | { type: 'shortcut'; command: BrowserShortcut }
   | { type: 'notice'; message: string; error: boolean }
+  | { type: 'certificate'; certificate: BrowserCertificateError | null }
 export type BrowserEvent = { id: string } & BrowserEventPayload
 
 export function browserAddress(input: string): string {

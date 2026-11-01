@@ -29,7 +29,7 @@ export function BrowserDataSettings() {
       <SettingsRow label="清除内置浏览器缓存" description="释放缓存空间，保留登录状态和网站本地数据。" divided={false}>
         <div className="flex sm:justify-end"><SettingsButton disabled={busy} onClick={() => void clear('cache')}>清除缓存</SettingsButton></div>
       </SettingsRow>
-      <SettingsRow label="清除全部浏览器数据" description="关闭内置浏览器标签，清除登录、网站数据和缓存。">
+      <SettingsRow label="清除全部浏览器数据" description="关闭内置浏览器标签，清除登录、网站数据、缓存和证书例外。">
         <div className="flex sm:justify-end"><AlertDialog.Trigger asChild><SettingsButton variant="danger" disabled={busy}>清除全部数据</SettingsButton></AlertDialog.Trigger></div>
       </SettingsRow>
     </SettingsPanel>
@@ -42,7 +42,7 @@ export function BrowserDataSettings() {
       <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] max-h-[90vh] w-[min(92vw,480px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto p-5 outline-none">
         <AlertDialog.Title className="text-base font-semibold">清除全部浏览器数据？</AlertDialog.Title>
         <AlertDialog.Description className="mt-3 text-sm leading-6 text-[var(--wc-muted)]">
-          关闭所有会话中的内置浏览器标签，停止未完成的下载，并删除 Cookie、网站本地数据及缓存。所有网站将退出登录，此操作无法撤销。<br />
+          关闭所有会话中的内置浏览器标签，停止未完成的下载，并删除 Cookie、网站本地数据、缓存及临时证书例外。所有网站将退出登录，此操作无法撤销。<br />
           会话记录、工作区文件和已保存的下载文件保留。
         </AlertDialog.Description>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
