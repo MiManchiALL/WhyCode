@@ -9,41 +9,24 @@ app.commandLine.appendSwitch('force-device-scale-factor', '1')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false, width: 760, height: 560, webPreferences: { backgroundThrottling: false } })
-  const run = async expression => {
-    const { result, exceptionDetails } = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
-      expression, returnByValue: true, awaitPromise: true,
-    })
-    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text)
-    return result.value
-  }
+  // 仅本地测试夹具启用 Node，以使用内置 MockTimers；应用窗口配置不变。
+  const win = new BrowserWindow({ show: false, width: 760, height: 560,
+    webPreferences: { backgroundThrottling: false, nodeIntegration: true, contextIsolation: false },
+  })
+  const run = expression => win.webContents.executeJavaScript(expression)
   const setMotionPreference = value => win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
     features: [{ name: 'prefers-reduced-motion', value }],
   })
-  const advance = async budget => {
-    let onMessage
-    const expired = new Promise(resolve => {
-      onMessage = (_event, method) => { if (method === 'Emulation.virtualTimeBudgetExpired') resolve() }
-      win.webContents.debugger.on('message', onMessage)
-    })
-    try {
-      await win.webContents.debugger.sendCommand('Emulation.setVirtualTimePolicy', { policy: 'advance', budget })
-      await expired
-    } finally { win.webContents.debugger.off('message', onMessage) }
-  }
+  const advance = milliseconds => run(`window.clock.tick(${milliseconds})`)
   const until = async (condition, label) => {
     const deadline = Date.now() + 7000
     while (!await run(`Boolean(${condition})`)) {
       assert.ok(Date.now() < deadline, label)
-      await advance(16)
       await new Promise(resolve => setTimeout(resolve, 25))
     }
   }
   const color = (id, pseudo = '') => run(`getComputedStyle(document.getElementById(${JSON.stringify(id)}),${JSON.stringify(pseudo)}).getPropertyValue('--wc-scrollbar-thumb').trim()`)
-  const paint = async () => {
-    await run('window.paintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>window.paintReady=true));undefined')
-    await until('window.paintReady', 'frame painted')
-  }
+  const paint = () => run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
   const pixel = async (x, y) => {
     const image = await win.webContents.capturePage({ x, y, width: 1, height: 1 })
     return [...image.toBitmap().subarray(0, 3)]
@@ -53,12 +36,13 @@ app.whenReady().then(async () => {
     win.webContents.debugger.attach('1.3')
     // 分别验证两种动画偏好，不继承本机或 Windows CI 的系统设置。
     await setMotionPreference('no-preference')
+    // 慢渲染下也必须能推进测试，不能让计时控制阻塞页面调度。
+    await win.webContents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: 6 })
     await until('document.querySelector("#inline")', 'fixture mounted')
-    // 截图与跨进程检查不消耗空闲期限；用 Chromium 时钟验证完整的一秒和淡出。
-    await win.webContents.debugger.sendCommand('Emulation.setVirtualTimePolicy', { policy: 'pause' })
+    // 只控制 JS 定时器，布局、动画帧和图片解码继续使用真实时钟。
+    await run('window.clock=require("node:test").mock.timers;window.clock.enable({apis:["setTimeout"]})')
     await run(`(() => {
       const inline=document.querySelector('#inline');window.inlineFades=[];
-      document.querySelector('#panel').addEventListener('scroll',()=>window.panelScrolledAt=Date.now());
       new MutationObserver(()=>{
         if(inline.dataset.wcScrollbar==='idle')window.inlineFades.push(inline.getAnimations().length>0);
       }).observe(inline,{attributes:true,attributeFilter:['data-wc-scrollbar']});
@@ -78,11 +62,10 @@ app.whenReady().then(async () => {
     assert.ok(horizontalPixel.every(channel=>channel>200 && channel<230), `bottom fade does not lighten horizontal thumb: ${horizontalPixel}`)
     win.webContents.sendInputEvent({ type: 'mouseMove', ...point })
     await paint()
-    await advance(await run('999-(Date.now()-window.panelScrolledAt)'))
+    await advance(999)
     assert.equal(await run('document.querySelector("#panel").dataset.wcScrollbar'), 'scrolling', 'activity lasts a full second')
     await advance(1)
     assert.equal(await run('document.querySelector("#panel").dataset.wcScrollbar'), 'idle', 'one second inactivity')
-    await advance(160)
     await until('document.querySelector("#panel").dataset.wcScrollbar==="idle" && document.querySelector("#panel").getAnimations().length===0', 'one second inactivity')
     assert.equal(await run('document.querySelector("#inline").dataset.wcScrollbar'), 'scrolling', 'hover holds activity until leaving the scrollbar')
     const hovered = await pixel(point.x,point.y)
@@ -90,7 +73,6 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type:'mouseMove', x:700, y:400 })
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'hover exit settles an expired timer')
     assert.equal(await run('window.inlineFades.at(-1)'), true, 'hover exit also fades')
-    await advance(160)
     await until('document.querySelector("#inline").getAnimations().length===0', 'hover exit fade completes')
     win.webContents.sendInputEvent({ type:'mouseMove', ...point })
     win.webContents.sendInputEvent({ type:'mouseDown', button:'left', clickCount:1, ...point })
@@ -102,7 +84,6 @@ app.whenReady().then(async () => {
     await advance(1000)
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'second idle timeout')
     assert.equal(await run('window.inlineFades.at(-1)'), true, 'idle change fades rather than disappearing immediately')
-    await advance(160)
     await until('document.querySelector("#inline").getAnimations().length===0', 'second fade completes')
     assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.07)')
@@ -129,11 +110,17 @@ app.whenReady().then(async () => {
     })()`)
     await advance(50)
     await until('document.querySelector("#terminal [data-wc-scrollbar=scrolling]")', 'xterm activity uses same state')
-    await advance(1160)
+    await advance(1000)
     await until('document.querySelector("#terminal [data-wc-scrollbar=idle]")?.getAnimations().length===0', 'xterm idle state')
     assert.equal(await run('getComputedStyle(document.querySelector("#terminal .slider")).backgroundColor'), 'rgba(56, 59, 53, 0.07)')
     assert.equal(await run('getComputedStyle(document.querySelector("#terminal .scrollbar.vertical")).opacity'), '1')
     await run('window.detachTerminal();fixture.disposeTerminalView("scrollbar-test");document.querySelector("#terminal").remove()')
+    await run('document.querySelector("#panel").scrollTop=10')
+    await until('document.querySelector("#panel").dataset.wcScrollbar==="scrolling"', 'active before teardown')
+    await run('window.fixture.scrollbars.dispose()')
+    assert.equal(await run('document.querySelector("#panel").hasAttribute("data-wc-scrollbar")'), false)
+    await run('window.clock.reset()')
+    await win.webContents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: 1 })
     const edges = await run(`(async()=>{
       const source='flowchart TD\\nA[发送请求] -->|成功| B[进入下一步]\\nA -->|"超出上下文预算<br/>ModelContextOverflowError"| C[重新压缩]\\nC --> D[重发请求]';
       const svg=await fixture.renderMermaid(source,new AbortController().signal);
@@ -172,16 +159,7 @@ app.whenReady().then(async () => {
       await new Promise(resolve=>setTimeout(resolve,100))
       await writeFile(process.env.WHYCODE_UI_CAPTURE,(await win.webContents.capturePage()).toPNG())
     }
-    await run('document.querySelector("#panel").scrollTop=10')
-    await until('document.querySelector("#panel").dataset.wcScrollbar==="scrolling"', 'active before teardown')
-    await run('window.fixture.scrollbars.dispose()')
-    assert.equal(await run('document.querySelector("#panel").hasAttribute("data-wc-scrollbar")'), false)
     console.log('scrollbars passed')
-  } finally {
-    if (win.webContents.debugger.isAttached()) {
-      await win.webContents.debugger.sendCommand('Emulation.setVirtualTimePolicy', { policy: 'advance' })
-    }
-    win.destroy()
-  }
+  } finally { win.destroy() }
   app.quit()
 }).catch(error => { console.error(error); app.exit(1) })
