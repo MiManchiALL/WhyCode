@@ -27,15 +27,16 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
       maxEdges: MERMAID_MAX_EDGES,
       // 图片展示不支持 foreignObject；使用 SVG 原生文字以支持缩放与导出。
       htmlLabels: false,
-      flowchart: { htmlLabels: false },
+      flowchart: { htmlLabels: false, wrappingWidth: 400, padding: 10, nodeSpacing: 32, rankSpacing: 36 },
       secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'htmlLabels', 'flowchart'],
       theme: 'base',
       fontFamily: style.getPropertyValue('--wc-font-family').trim(),
       themeVariables: {
         fontSize: style.getPropertyValue('--wc-mermaid-font-size').trim(),
-        background: '#ffffff', primaryColor: '#f1f3f4', primaryTextColor: '#30322d',
-        primaryBorderColor: '#aab4bd', lineColor: '#777c73', secondaryColor: '#e6edf2',
-        tertiaryColor: '#f8f8f6', noteBkgColor: '#f8f8f6', noteTextColor: '#30322d',
+        background: '#ffffff', primaryColor: '#f5f6f4', primaryTextColor: '#292a27',
+        primaryBorderColor: '#c5cac1', lineColor: '#858b80', secondaryColor: '#edf1eb',
+        tertiaryColor: '#fafbf9', noteBkgColor: '#f5f6f4', noteTextColor: '#292a27',
+        edgeLabelBackground: '#ffffff',
       },
     }
     mermaid.initialize(config)
