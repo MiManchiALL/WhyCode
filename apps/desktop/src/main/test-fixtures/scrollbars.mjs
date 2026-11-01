@@ -11,6 +11,9 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 760, height: 560, webPreferences: { backgroundThrottling: false } })
   const run = code => win.webContents.executeJavaScript(code)
+  const setMotionPreference = value => win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-reduced-motion', value }],
+  })
   const until = async (condition, label) => {
     const deadline = Date.now() + 7000
     while (!await run(condition)) {
@@ -26,6 +29,9 @@ app.whenReady().then(async () => {
   }
   try {
     await win.loadFile(path.join(directory, 'index.html'))
+    win.webContents.debugger.attach('1.3')
+    // 分别验证两种动画偏好，不继承本机或 Windows CI 的系统设置。
+    await setMotionPreference('no-preference')
     await until('document.querySelector("#inline")', 'fixture mounted')
     await run(`(() => {
       const inline=document.querySelector('#inline');window.inlineFades=[];
@@ -70,6 +76,17 @@ app.whenReady().then(async () => {
     await until('document.querySelector("#inline").getAnimations().length===0', 'second fade completes')
     assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.07)')
+    await setMotionPreference('reduce')
+    assert.equal(await run('matchMedia("(prefers-reduced-motion: reduce)").matches'), true)
+    await run('window.inlineFades.length=0;document.querySelector("#inline").scrollTop=20;document.querySelector("#panel").scrollTop=20')
+    await until('[...document.querySelectorAll("#inline,#panel")].every(element=>element.dataset.wcScrollbar==="scrolling")', 'reduced motion retains scroll activity')
+    assert.equal(await color('inline'), 'rgba(56, 59, 53, 0.2)')
+    assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.2)')
+    await until('[...document.querySelectorAll("#inline,#panel")].every(element=>element.dataset.wcScrollbar==="idle")', 'reduced motion restores idle state')
+    assert.equal(await run('window.inlineFades.at(-1)'), false, 'reduced motion restores the thumb without an animation')
+    assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
+    assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.07)')
+    await setMotionPreference('no-preference')
     await run('document.querySelector("#inline").firstElementChild.style.width="100px"')
     await until('document.querySelector("#inline").style.getPropertyValue("--wc-scrollbar-height")==="0px"', 'no gap in fade without horizontal overflow')
     await run(`(() => {

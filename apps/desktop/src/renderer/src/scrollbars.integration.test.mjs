@@ -12,7 +12,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 const require = createRequire(import.meta.url)
 const desktop = path.resolve(import.meta.dirname, '../../..')
-test('滚动条区分正文与面板：双轴活动、淡出、悬浮、原生拖动和终端', {
+test('滚动条区分正文与面板：双轴活动、动画偏好、悬浮、原生拖动和终端', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY,
 }, async t => {
