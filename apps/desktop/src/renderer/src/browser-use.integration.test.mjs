@@ -30,8 +30,9 @@ test('Browser 真实 webview：接管、后台操作、视图切换、交还、�
       name: 'BrowserUseFixture', formats: ['iife'], fileName: () => 'renderer.js', cssFileName: 'renderer',
     } } })
   for (const [entry, output, format] of [
-    ['src/main/test-fixtures/browser-use.mjs', 'main.mjs', 'es'],
+    ['src/main/test-fixtures/browser-use.mjs', 'main/main.mjs', 'es'],
     ['src/preload/index.ts', 'preload.cjs', 'cjs'],
+    ['src/preload/browser.ts', 'preload/browser.cjs', 'cjs'],
   ]) await build({ ...common, ssr: { noExternal: true, external: ['electron', '@earendil-works/pi-codemode', ...(format === 'es' ? ['@whycode/core'] : [])] },
     build: { ssr: path.join(desktop, entry), outDir: directory, emptyOutDir: false, minify: false,
       rollupOptions: { external: id => id === 'electron' || id === '@earendil-works/pi-codemode' || (format === 'es' && id.startsWith('@whycode/core')),
@@ -40,7 +41,7 @@ test('Browser 真实 webview：接管、后台操作、视图切换、交还、�
   const html = await readFile(path.join(desktop, 'src/renderer/index.html'), 'utf8')
   await writeFile(path.join(directory, 'index.html'), html.replace('<script type="module" src="/src/main.tsx"></script>',
     '<link rel="stylesheet" href="./renderer.css"><script src="./renderer.js"></script>'))
-  await writeFile(path.join(directory, 'start.mjs'), "import { app } from 'electron'; import('./main.mjs').catch(error => { process.stderr.write(String(error.stack)); app.exit(1) });")
+  await writeFile(path.join(directory, 'start.mjs'), "import { app } from 'electron'; import('./main/main.mjs').catch(error => { process.stderr.write(String(error.stack)); app.exit(1) });")
   const env = { ...process.env, WHYCODE_BROWSER_TEST_DIR: directory }
   delete env.ELECTRON_RUN_AS_NODE
   const { stdout, stderr } = await promisify(execFile)(require('electron'), [path.join(directory, 'start.mjs')], {

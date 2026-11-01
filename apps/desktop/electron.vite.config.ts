@@ -21,6 +21,10 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
+        input: {
+          index: fileURLToPath(new URL('src/preload/index.ts', import.meta.url)),
+          browser: fileURLToPath(new URL('src/preload/browser.ts', import.meta.url)),
+        },
         // sandbox 开启时 Electron 的 preload 只支持 CJS，强制 .cjs 产物
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },

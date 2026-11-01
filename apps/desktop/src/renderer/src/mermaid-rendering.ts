@@ -27,16 +27,18 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
       maxEdges: MERMAID_MAX_EDGES,
       // 图片展示不支持 foreignObject；使用 SVG 原生文字以支持缩放与导出。
       htmlLabels: false,
-      flowchart: { htmlLabels: false, wrappingWidth: 400, padding: 10, nodeSpacing: 32, rankSpacing: 36 },
+      flowchart: { htmlLabels: false, wrappingWidth: 400, padding: 10, nodeSpacing: 32, rankSpacing: 36, curve: 'step' },
       secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'htmlLabels', 'flowchart'],
       theme: 'base',
+      themeCSS: `.edgeLabel rect.background { opacity: 1; stroke: #d7dcd2 !important; stroke-width: 1px; rx: 2px; ry: 2px; }
+        .edgeLabel .label text { fill: #62675f; }`,
       fontFamily: style.getPropertyValue('--wc-font-family').trim(),
       themeVariables: {
         fontSize: style.getPropertyValue('--wc-mermaid-font-size').trim(),
         background: '#ffffff', primaryColor: '#f5f6f4', primaryTextColor: '#292a27',
         primaryBorderColor: '#c5cac1', lineColor: '#858b80', secondaryColor: '#edf1eb',
         tertiaryColor: '#fafbf9', noteBkgColor: '#f5f6f4', noteTextColor: '#292a27',
-        edgeLabelBackground: '#ffffff',
+        edgeLabelBackground: '#f8f9f7',
       },
     }
     mermaid.initialize(config)
@@ -52,6 +54,18 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
       if (viewBox?.length === 4 && viewBox[2]! > 0 && viewBox[3]! > 0) {
         image.setAttribute('width', String(viewBox[2]))
         image.setAttribute('height', String(viewBox[3]))
+      }
+      // Mermaid 的阶梯插值会重复端点；Chromium 会把零长度末段的箭头转为朝右。
+      // 仅移除直角折线中连续重合的点，保留路径几何与用户指定的其它曲线。
+      for (const edge of image.querySelectorAll('.flowchart-link')) {
+        const data = edge.getAttribute('d') ?? ''
+        if (!/^M-?[\d.]+,-?[\d.]+(?:L-?[\d.]+,-?[\d.]+)+$/u.test(data)) continue
+        let previous = ''
+        edge.setAttribute('d', data.replace(/[ML](-?[\d.]+,-?[\d.]+)/gu, (segment: string, point: string) => {
+          const duplicate = point === previous
+          previous = point
+          return duplicate ? '' : segment
+        }))
       }
       image.setAttribute('style', `${image.getAttribute('style') ?? ''}; background: white;`)
       return new XMLSerializer().serializeToString(image)

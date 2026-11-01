@@ -45,6 +45,18 @@ export async function checkBrowserDomReadiness({ run, finish, agent, guests, unt
     const id = agent.pages.current('dom-ready').surfaceId, guest = guests.get(id)
     assert.equal(guest.isLoading(), true, '主文档可读时，图片仍在加载')
     await firstImage
+    const scrollbar = await run('dom-ready', `text(await browser.evaluate({expression:\`(() => {
+      const style=document.createElement('style');style.textContent='*{scrollbar-color:hotpink blue!important}';document.head.append(style);
+      const box=document.createElement('div');box.id='scrollbar-test';box.style.cssText='overflow:auto;width:200px;height:80px';
+      box.innerHTML='<div style="width:400px;height:400px">滚动内容</div>';document.body.append(box);box.scrollTop=40;
+      return {width:getComputedStyle(box,'::-webkit-scrollbar').width,color:getComputedStyle(box).scrollbarColor,
+        node:typeof require,host:typeof window.whycode};
+    })()\`})); await browser.wait({expression:'document.querySelector("#scrollbar-test").dataset.wcScrollbar === "scrolling"'});`)
+    assert.equal(scrollbar.isError, false, scrollbar.text)
+    assert.match(scrollbar.text, /"width":"8px"/)
+    assert.match(scrollbar.text, /"color":"auto"/)
+    assert.match(scrollbar.text, /"node":"undefined"/, scrollbar.text)
+    assert.match(scrollbar.text, /"host":"undefined"/, scrollbar.text)
 
     const nextImage = hold('/image/next')
     const next = await run('dom-ready', `${navigation('/next')} ${read}`)
@@ -52,6 +64,9 @@ export async function checkBrowserDomReadiness({ run, finish, agent, guests, unt
     assert.match(next.text, /"loading":true/)
     assert.match(next.text, /\/next content/)
     await nextImage
+    const nextScrollbar = await run('dom-ready', 'text(await browser.evaluate({expression:"getComputedStyle(document.documentElement).getPropertyValue(\'--wc-scrollbar-thumb\').trim()"}));')
+    assert.equal(nextScrollbar.isError, false, nextScrollbar.text)
+    assert.match(nextScrollbar.text, /0.07/, '新文档重新应用浅灰默认样式')
     assert.equal(guests.loadError(id), undefined, '旧 loadURL 的迟到中断不污染新文档')
     // 停止剩余图片加载后，已就绪的当前文档继续可用。
     guest.stop()

@@ -2337,7 +2337,7 @@ export function App() {
               >
                 <div
                   ref={conversationContentRef}
-                  className="wc-conversation-balanced-content mx-auto w-full max-w-4xl"
+                  className="wc-conversation-content wc-conversation-balanced-content mx-auto w-full max-w-4xl"
                 >
                   {!loadingConversation && !conversationStarted && !pendingMessage && (
                     <div className="mx-auto mt-[18vh] max-w-md text-center">
