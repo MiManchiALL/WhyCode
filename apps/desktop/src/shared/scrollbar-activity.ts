@@ -23,7 +23,7 @@ export function createScrollbarActivity(document: Document) {
     if (element.getAttribute('data-wc-scrollbar') !== 'scrolling') element.setAttribute('data-wc-scrollbar', 'scrolling')
     const entry: Activity = {}
     pending.set(element, entry)
-    entry.timer = setTimeout(() => settle(element, entry), 1500)
+    entry.timer = setTimeout(() => settle(element, entry), 1000)
   }
   const onScroll = (event: Event) => {
     const element = event.target === document ? document.scrollingElement : event.target

@@ -51,8 +51,8 @@ app.whenReady().then(async () => {
     })`)
     const activityStarted = Date.now()
     win.webContents.sendInputEvent({ type: 'mouseMove', ...point })
-    await until('document.querySelector("#panel").dataset.wcScrollbar==="idle" && document.querySelector("#panel").getAnimations().length===0', '1.5 second inactivity')
-    assert.ok(Date.now()-activityStarted < 2500, 'inactivity no longer waits three seconds')
+    await until('document.querySelector("#panel").dataset.wcScrollbar==="idle" && document.querySelector("#panel").getAnimations().length===0', 'one second inactivity')
+    assert.ok(Date.now()-activityStarted < 2000, 'idle feedback settles promptly')
     assert.equal(await run('document.querySelector("#inline").dataset.wcScrollbar'), 'scrolling', 'hover holds activity until leaving the scrollbar')
     const hovered = await pixel(point.x,point.y)
     assert.ok(hovered.every(channel=>channel>90 && channel<125), 'hovered thumb stays medium gray after idle timeout')
@@ -65,7 +65,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type:'mouseMove', x:point.x, y:point.y+60, movementY:60 })
     win.webContents.sendInputEvent({ type:'mouseUp', button:'left', clickCount:1, x:point.x, y:point.y+60 })
     await until('document.querySelector("#inline").scrollTop>41', 'native thumb dragging remains usable')
-    win.webContents.sendInputEvent({ type:'mouseMove', x:700, y:400 })
+    win.webContents.sendInputEvent({ type:'mouseLeave', x:700, y:400 })
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'second idle timeout')
     assert.equal(await run('window.inlineFades.at(-1)'), true, 'idle change fades rather than disappearing immediately')
     await until('document.querySelector("#inline").getAnimations().length===0', 'second fade completes')
@@ -90,10 +90,10 @@ app.whenReady().then(async () => {
       const svg=await fixture.renderMermaid(source,new AbortController().signal);
       const diagram=new DOMParser().parseFromString(svg,'image/svg+xml');
       const preview=document.importNode(diagram.documentElement,true);document.querySelector('#root').append(preview);
-      const labels=[...preview.querySelectorAll('.edgeLabel rect.background')].map(rect=>({opacity:getComputedStyle(rect).opacity,stroke:getComputedStyle(rect).stroke,fill:getComputedStyle(rect).fill,
+      const labels=[...preview.querySelectorAll('.edgeLabel rect.background')].map(rect=>({opacity:getComputedStyle(rect).opacity,stroke:getComputedStyle(rect).stroke,fill:getComputedStyle(rect).fill,rx:getComputedStyle(rect).rx,
         text:getComputedStyle(rect.parentElement.querySelector('text')).fill}));
       preview.remove();
-      if(labels.length!==2 || labels.some(label=>label.opacity!=='1' || label.stroke!=='rgb(210, 214, 205)' || label.fill!=='rgb(236, 238, 234)' || label.text!=='rgb(112, 118, 107)'))throw new Error('连线标签应有不透明浅灰底色、灰色边框和中灰文字');
+      if(labels.length!==2 || labels.some(label=>label.opacity!=='1' || label.stroke!=='rgb(217, 217, 217)' || label.fill!=='rgb(255, 255, 255)' || label.text!=='rgb(41, 42, 39)' || label.rx!=='8px'))throw new Error('连线标签应有不透明白底、浅灰圆角边框和正文文字色');
       const image=document.createElement('img');image.style.cssText='display:block;margin:30px auto;width:360px';
       const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));image.src=url;document.querySelector('#root').append(image);await image.decode();URL.revokeObjectURL(url);
       return [...diagram.querySelectorAll('.flowchart-link')].map(edge=>edge.getAttribute('d'));
