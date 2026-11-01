@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -82,6 +83,7 @@ export async function createFixture(
     requestApproval: async () => ({ approved: false }),
   })
   const settlements: SubagentSettlementNotification[] = []
+  let nextSettlement = deferred<void>()
   const resolvedModelIds: string[] = []
   const serviceOptions: SubagentServiceOptions = {
     sessionsRoot,
@@ -104,7 +106,11 @@ export async function createFixture(
     hostOperations: new HostOperationScheduler(),
     onState: () => undefined,
     onEvent: () => undefined,
-    onSettlement: (notification) => settlements.push(notification),
+    onSettlement: (notification) => {
+      settlements.push(notification)
+      nextSettlement.resolve()
+      nextSettlement = deferred<void>()
+    },
     onParentIdle: () => undefined,
   }
   const service = new SubagentService(serviceOptions)
@@ -121,6 +127,11 @@ export async function createFixture(
     projectDir,
     sessionsRoot,
     settlements,
+    async waitForSettlements(count: number) {
+      // 等待真实终态通知，持久化耗时由测试运行器的整体超时约束。
+      while (settlements.length < count) await nextSettlement.promise
+      assert.equal(settlements.length, count)
+    },
     modelCalls,
     resolvedModelIds,
     toolContext: (turnId: string, toolCallId: string) => ({
@@ -215,14 +226,6 @@ export function toolContext(turnId: string, toolCallId: string) {
     abortSignal: new AbortController().signal,
     turnId,
     toolCallId,
-  }
-}
-
-export async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('等待子代理终态超时')
-    await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
 
