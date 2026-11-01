@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 
-/** 捕获原生滚动，不接管滚轮和拖动；只为最近活动的容器持有三秒计时器。 */
+/** 捕获原生滚动，不接管滚轮和拖动；只为最近活动的容器持有计时器。 */
 export function createScrollbarActivity(document: Document) {
   type Activity = { timer?: ReturnType<typeof setTimeout>; animation?: Animation }
   const pending = new Map<Element, Activity>()
@@ -23,7 +23,7 @@ export function createScrollbarActivity(document: Document) {
     if (element.getAttribute('data-wc-scrollbar') !== 'scrolling') element.setAttribute('data-wc-scrollbar', 'scrolling')
     const entry: Activity = {}
     pending.set(element, entry)
-    entry.timer = setTimeout(() => settle(element, entry), 3000)
+    entry.timer = setTimeout(() => settle(element, entry), 1500)
   }
   const onScroll = (event: Event) => {
     const element = event.target === document ? document.scrollingElement : event.target

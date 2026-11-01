@@ -30,15 +30,15 @@ export function renderMermaid(source: string, signal: AbortSignal): Promise<stri
       flowchart: { htmlLabels: false, wrappingWidth: 400, padding: 10, nodeSpacing: 32, rankSpacing: 36, curve: 'step' },
       secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'htmlLabels', 'flowchart'],
       theme: 'base',
-      themeCSS: `.edgeLabel rect.background { opacity: 1; stroke: #d7dcd2 !important; stroke-width: 1px; rx: 2px; ry: 2px; }
-        .edgeLabel .label text { fill: #62675f; }`,
+      themeCSS: `.edgeLabel rect.background { opacity: 1; stroke: #d2d6cd !important; stroke-width: 1px; rx: 2px; ry: 2px; }
+        .edgeLabel .label text { fill: #70766b; }`,
       fontFamily: style.getPropertyValue('--wc-font-family').trim(),
       themeVariables: {
         fontSize: style.getPropertyValue('--wc-mermaid-font-size').trim(),
         background: '#ffffff', primaryColor: '#f5f6f4', primaryTextColor: '#292a27',
         primaryBorderColor: '#c5cac1', lineColor: '#858b80', secondaryColor: '#edf1eb',
         tertiaryColor: '#fafbf9', noteBkgColor: '#f5f6f4', noteTextColor: '#292a27',
-        edgeLabelBackground: '#f8f9f7',
+        edgeLabelBackground: '#eceeea',
       },
     }
     mermaid.initialize(config)
