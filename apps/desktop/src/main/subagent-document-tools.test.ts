@@ -10,11 +10,11 @@ import {
 import { documentProcessors, SMALL_JPEG } from './subagent-document-fixture.ts'
 import { SubagentService } from './subagent-service.ts'
 import { SubagentStorage } from './subagent-storage.ts'
-import { createFixture, finalStream, toolStream, waitFor } from './subagent-test-fixture.ts'
+import { createFixture, finalStream, toolStream } from './subagent-test-fixture.ts'
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>
 
-describe('子代理文档与视觉工具', () => {
+describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
   for (const role of ['explore', 'general']) {
     it(`${role} 的 Skill 声明遵循子代理自身命令权限`, async () => {
       let skillId = ''
@@ -131,7 +131,7 @@ describe('子代理文档与视觉工具', () => {
     const tools = coldService.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const result = await tools[1]!.execute({ subagent_id: id, prompt: '继续核验' }, fixture.toolContext('next', 'next'))
     assert.equal(result.isError, false)
-    await waitFor(() => fixture.settlements.length === 2)
+    await fixture.waitForSettlements(2)
     assert.equal(fixture.settlements[1]?.outcome, 'completed')
     await coldService.close()
   })
@@ -166,7 +166,7 @@ describe('子代理文档与视觉工具', () => {
     const tools = coldService.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const continued = await tools[1]!.execute({ subagent_id: id, prompt: '读取已保存的 PDF' }, fixture.toolContext('next', 'next'))
     assert.equal(continued.isError, false, continued.data)
-    await waitFor(() => fixture.settlements.length === 2)
+    await fixture.waitForSettlements(2)
     assert.equal(fixture.settlements[1]?.outcome, 'completed')
     assert.match(JSON.stringify(fixture.modelCalls.at(-1)?.prompt), /第一页正文/)
     assert.deepEqual(documents.operations, ['pdf:text'])
@@ -194,7 +194,7 @@ describe('子代理文档与视觉工具', () => {
     await storage.writeManifest(manifest)
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     await tools[1]!.execute({ subagent_id: id, prompt: '继续' }, fixture.toolContext('next', 'next'))
-    await waitFor(() => fixture.settlements.length === 2)
+    await fixture.waitForSettlements(2)
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
     assert.ok(names.includes('ReadFile'))
     assert.ok(names.includes('CreateTaskPlan'))
@@ -231,7 +231,7 @@ async function launch(fixture: Fixture, role = 'explore'): Promise<string> {
   assert.equal(result.isError, false, result.data)
   const id = result.data.match(/[0-9a-f-]{36}/u)?.[0]
   assert.ok(id)
-  await waitFor(() => fixture.settlements.length === 1)
+  await fixture.waitForSettlements(1)
   assert.equal(fixture.settlements[0]?.outcome, 'completed', fixture.settlements[0]?.resultText)
   return id
 }

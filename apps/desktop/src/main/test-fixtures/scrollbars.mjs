@@ -10,19 +10,40 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 760, height: 560, webPreferences: { backgroundThrottling: false } })
-  const run = code => win.webContents.executeJavaScript(code)
+  const run = async expression => {
+    const { result, exceptionDetails } = await win.webContents.debugger.sendCommand('Runtime.evaluate', {
+      expression, returnByValue: true, awaitPromise: true,
+    })
+    if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text)
+    return result.value
+  }
   const setMotionPreference = value => win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
     features: [{ name: 'prefers-reduced-motion', value }],
   })
+  const advance = async budget => {
+    let onMessage
+    const expired = new Promise(resolve => {
+      onMessage = (_event, method) => { if (method === 'Emulation.virtualTimeBudgetExpired') resolve() }
+      win.webContents.debugger.on('message', onMessage)
+    })
+    try {
+      await win.webContents.debugger.sendCommand('Emulation.setVirtualTimePolicy', { policy: 'advance', budget })
+      await expired
+    } finally { win.webContents.debugger.off('message', onMessage) }
+  }
   const until = async (condition, label) => {
     const deadline = Date.now() + 7000
-    while (!await run(condition)) {
+    while (!await run(`Boolean(${condition})`)) {
       assert.ok(Date.now() < deadline, label)
+      await advance(16)
       await new Promise(resolve => setTimeout(resolve, 25))
     }
   }
   const color = (id, pseudo = '') => run(`getComputedStyle(document.getElementById(${JSON.stringify(id)}),${JSON.stringify(pseudo)}).getPropertyValue('--wc-scrollbar-thumb').trim()`)
-  const paint = () => run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+  const paint = async () => {
+    await run('window.paintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>window.paintReady=true));undefined')
+    await until('window.paintReady', 'frame painted')
+  }
   const pixel = async (x, y) => {
     const image = await win.webContents.capturePage({ x, y, width: 1, height: 1 })
     return [...image.toBitmap().subarray(0, 3)]
@@ -33,8 +54,11 @@ app.whenReady().then(async () => {
     // 分别验证两种动画偏好，不继承本机或 Windows CI 的系统设置。
     await setMotionPreference('no-preference')
     await until('document.querySelector("#inline")', 'fixture mounted')
+    // 截图与跨进程检查不消耗空闲期限；用 Chromium 时钟验证完整的一秒和淡出。
+    await win.webContents.debugger.sendCommand('Emulation.setVirtualTimePolicy', { policy: 'pause' })
     await run(`(() => {
       const inline=document.querySelector('#inline');window.inlineFades=[];
+      document.querySelector('#panel').addEventListener('scroll',()=>window.panelScrolledAt=Date.now());
       new MutationObserver(()=>{
         if(inline.dataset.wcScrollbar==='idle')window.inlineFades.push(inline.getAnimations().length>0);
       }).observe(inline,{attributes:true,attributeFilter:['data-wc-scrollbar']});
@@ -47,32 +71,38 @@ app.whenReady().then(async () => {
     assert.equal(await color('inline'), 'rgba(56, 59, 53, 0.2)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.2)')
     const point = await run(`(()=>{const el=document.querySelector('#inline'),r=el.getBoundingClientRect();return {x:Math.floor(r.right-4),y:Math.floor(r.top+25)}})()`)
-    assert.ok((await pixel(point.x,point.y)).every(channel=>channel>200 && channel<230), 'active native thumb is dark gray')
-    assert.ok((await pixel(340,186)).every(channel=>channel>200 && channel<230), 'bottom fade does not lighten horizontal thumb')
-    // 截图可能跨过空闲期限；以新的真实滚动建立悬浮计时起点。
-    await run(`new Promise(resolve=>{
-      const inline=document.querySelector('#inline');inline.addEventListener('scroll',()=>resolve(),{once:true});
-      inline.scrollTop=41;document.querySelector('#panel').scrollLeft=41;
-    })`)
-    const activityStarted = Date.now()
+    await paint()
+    const activePixel = await pixel(point.x,point.y)
+    assert.ok(activePixel.every(channel=>channel>200 && channel<230), `active native thumb is dark gray: ${activePixel}`)
+    const horizontalPixel = await pixel(340,186)
+    assert.ok(horizontalPixel.every(channel=>channel>200 && channel<230), `bottom fade does not lighten horizontal thumb: ${horizontalPixel}`)
     win.webContents.sendInputEvent({ type: 'mouseMove', ...point })
+    await paint()
+    await advance(await run('999-(Date.now()-window.panelScrolledAt)'))
+    assert.equal(await run('document.querySelector("#panel").dataset.wcScrollbar'), 'scrolling', 'activity lasts a full second')
+    await advance(1)
+    assert.equal(await run('document.querySelector("#panel").dataset.wcScrollbar'), 'idle', 'one second inactivity')
+    await advance(160)
     await until('document.querySelector("#panel").dataset.wcScrollbar==="idle" && document.querySelector("#panel").getAnimations().length===0', 'one second inactivity')
-    assert.ok(Date.now()-activityStarted < 2000, 'idle feedback settles promptly')
     assert.equal(await run('document.querySelector("#inline").dataset.wcScrollbar'), 'scrolling', 'hover holds activity until leaving the scrollbar')
     const hovered = await pixel(point.x,point.y)
     assert.ok(hovered.every(channel=>channel>90 && channel<125), 'hovered thumb stays medium gray after idle timeout')
     win.webContents.sendInputEvent({ type:'mouseMove', x:700, y:400 })
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'hover exit settles an expired timer')
     assert.equal(await run('window.inlineFades.at(-1)'), true, 'hover exit also fades')
+    await advance(160)
     await until('document.querySelector("#inline").getAnimations().length===0', 'hover exit fade completes')
     win.webContents.sendInputEvent({ type:'mouseMove', ...point })
     win.webContents.sendInputEvent({ type:'mouseDown', button:'left', clickCount:1, ...point })
     win.webContents.sendInputEvent({ type:'mouseMove', x:point.x, y:point.y+60, movementY:60 })
     win.webContents.sendInputEvent({ type:'mouseUp', button:'left', clickCount:1, x:point.x, y:point.y+60 })
-    await until('document.querySelector("#inline").scrollTop>41', 'native thumb dragging remains usable')
+    await until('document.querySelector("#inline").scrollTop>40', 'native thumb dragging remains usable')
     win.webContents.sendInputEvent({ type:'mouseLeave', x:700, y:400 })
+    await paint()
+    await advance(1000)
     await until('document.querySelector("#inline").dataset.wcScrollbar==="idle"', 'second idle timeout')
     assert.equal(await run('window.inlineFades.at(-1)'), true, 'idle change fades rather than disappearing immediately')
+    await advance(160)
     await until('document.querySelector("#inline").getAnimations().length===0', 'second fade completes')
     assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.07)')
@@ -82,6 +112,7 @@ app.whenReady().then(async () => {
     await until('[...document.querySelectorAll("#inline,#panel")].every(element=>element.dataset.wcScrollbar==="scrolling")', 'reduced motion retains scroll activity')
     assert.equal(await color('inline'), 'rgba(56, 59, 53, 0.2)')
     assert.equal(await color('panel'), 'rgba(56, 59, 53, 0.2)')
+    await advance(1000)
     await until('[...document.querySelectorAll("#inline,#panel")].every(element=>element.dataset.wcScrollbar==="idle")', 'reduced motion restores idle state')
     assert.equal(await run('window.inlineFades.at(-1)'), false, 'reduced motion restores the thumb without an animation')
     assert.equal(await color('inline'), 'rgba(0, 0, 0, 0)')
@@ -96,7 +127,9 @@ app.whenReady().then(async () => {
       window.detachTerminal=fixture.attachTerminal({id:'scrollbar-test',title:'终端',cwd:'/'},host);
       deliver({terminalId:'scrollbar-test',type:'data',data:'line\\r\\n'.repeat(70)});
     })()`)
+    await advance(50)
     await until('document.querySelector("#terminal [data-wc-scrollbar=scrolling]")', 'xterm activity uses same state')
+    await advance(1160)
     await until('document.querySelector("#terminal [data-wc-scrollbar=idle]")?.getAnimations().length===0', 'xterm idle state')
     assert.equal(await run('getComputedStyle(document.querySelector("#terminal .slider")).backgroundColor'), 'rgba(56, 59, 53, 0.07)')
     assert.equal(await run('getComputedStyle(document.querySelector("#terminal .scrollbar.vertical")).opacity'), '1')
@@ -144,6 +177,11 @@ app.whenReady().then(async () => {
     await run('window.fixture.scrollbars.dispose()')
     assert.equal(await run('document.querySelector("#panel").hasAttribute("data-wc-scrollbar")'), false)
     console.log('scrollbars passed')
-  } finally { win.destroy() }
+  } finally {
+    if (win.webContents.debugger.isAttached()) {
+      await win.webContents.debugger.sendCommand('Emulation.setVirtualTimePolicy', { policy: 'advance' })
+    }
+    win.destroy()
+  }
   app.quit()
 }).catch(error => { console.error(error); app.exit(1) })

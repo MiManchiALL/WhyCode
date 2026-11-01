@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { createFixture, deferred, finalStream, listDirStream, waitFor } from './subagent-test-fixture.ts'
+import { createFixture, deferred, finalStream, listDirStream } from './subagent-test-fixture.ts'
 import { SubagentStorage } from './subagent-storage.ts'
 
-describe('子代理激活生命周期', () => {
+describe('子代理激活生命周期', { timeout: 90_000 }, () => {
   it('冷启动独立 transcript，结束即释放，并可用同一稳定 ID 继续', async () => {
     const fixture = await createFixture(['第一次调查完成。', '补充调查完成。'])
     const tools = fixture.service.createTools(
@@ -21,7 +21,7 @@ describe('子代理激活生命周期', () => {
     assert.equal(launched.isError, false)
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)
-    await waitFor(() => fixture.settlements.length === 1)
+    await fixture.waitForSettlements(1)
 
     assert.equal(fixture.runtime.busy, false)
     assert.equal(fixture.settlements[0]?.outcome, 'completed')
@@ -70,7 +70,7 @@ describe('子代理激活生命周期', () => {
     assert.equal(continued.isError, false)
     assert.match(continued.data, new RegExp(subagentId, 'u'))
     assert.match(rejected.data, /仍在运行/)
-    await waitFor(() => fixture.settlements.length === 2)
+    await fixture.waitForSettlements(2)
 
     const snapshot = await fixture.service.transcript(
       fixture.parentJournal.sessionId,
@@ -133,13 +133,13 @@ describe('子代理激活生命周期', () => {
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)
-    await waitFor(() => fixture.settlements.length === 1)
+    await fixture.waitForSettlements(1)
 
     await tools[1]!.execute(
       { subagent_id: subagentId, prompt: '继续同一任务' },
       fixture.toolContext('turn-model-2', 'tool-model-2'),
     )
-    await waitFor(() => fixture.settlements.length === 2)
+    await fixture.waitForSettlements(2)
 
     assert.deepEqual(fixture.resolvedModelIds, [
       'test:fixed-subagent',
@@ -165,7 +165,7 @@ describe('子代理激活生命周期', () => {
     assert.equal(results.filter((result) => result.isError).length, 1)
     assert.match(results.find((result) => result.isError)?.data ?? '', /8 个/)
     assert.equal(fixture.runtime.userRunBusy, false)
-    await waitFor(() => fixture.settlements.length === 8)
+    await fixture.waitForSettlements(8)
     const instances = await fixture.service.list(fixture.parentJournal.sessionId)
     assert.equal(new Set(instances.map(instance => instance.subagentId)).size, 8)
     assert.ok(instances.every(instance => instance.name === 'explore'))
@@ -188,7 +188,7 @@ describe('子代理激活生命周期', () => {
     )
 
     assert.equal(launched.isError, false)
-    await waitFor(() => fixture.settlements.length === 1, 30_000)
+    await fixture.waitForSettlements(1)
     assert.equal(fixture.modelCalls.length, 82)
     assert.equal(fixture.settlements[0]?.outcome, 'completed')
     assert.equal(fixture.settlements[0]?.resultText, '长任务自然完成。')
@@ -207,7 +207,7 @@ describe('子代理激活生命周期', () => {
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)
-    await waitFor(() => fixture.settlements.length === 1)
+    await fixture.waitForSettlements(1)
     assert.equal(fixture.modelCalls.length, 2)
     assert.equal(fixture.settlements[0]?.outcome, 'error')
     assert.match(fixture.settlements[0]?.resultText ?? '', /模型认证失败：测试凭据已失效/u)
