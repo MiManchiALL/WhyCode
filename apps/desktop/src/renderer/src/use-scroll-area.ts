@@ -14,6 +14,8 @@ export function useScrollArea(
   const updateFades = useCallback(() => {
     const element = ref.current
     if (!element) return
+    element.style.setProperty('--wc-scrollbar-width', element.scrollHeight > element.clientHeight ? '8px' : '0px')
+    element.style.setProperty('--wc-scrollbar-height', element.scrollWidth > element.clientWidth ? '8px' : '0px')
     const next = scrollAreaFades(element)
     setFades((previous) => previous.top === next.top && previous.bottom === next.bottom
       ? previous

@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { scrollbars } from './scrollbars.ts'
 import {
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_INPUT,
@@ -49,6 +50,7 @@ function createView(info: TerminalInfo, host: HTMLDivElement): TerminalView {
   terminal.element!.style.width = 'max-content'
   terminal.element!.style.minWidth = '100%'
   terminal.textarea?.setAttribute('aria-label', `${info.title}输入`)
+  terminal.onScroll(() => scrollbars.pulse(element))
   terminal.onData((data) => {
     for (let start = 0; start < data.length;) {
       let end = Math.min(data.length, start + TERMINAL_MAX_INPUT)

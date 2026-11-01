@@ -1,0 +1,27 @@
+@property --wc-scrollbar-thumb {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(56, 59, 53, 0.07);
+}
+
+:where(*) {
+  --wc-scrollbar-thumb: var(--wc-scrollbar-idle, rgb(56 59 53 / 7%));
+  scrollbar-color: auto !important;
+  scrollbar-width: auto !important;
+}
+
+[data-wc-scrollbar='scrolling'] {
+  --wc-scrollbar-thumb: rgb(56 59 53 / 20%);
+}
+
+::-webkit-scrollbar { width: 8px !important; height: 8px !important; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent !important; }
+::-webkit-scrollbar-button { display: none !important; }
+::-webkit-scrollbar-thumb {
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  background: var(--wc-scrollbar-thumb) !important;
+  background-clip: padding-box !important;
+  box-shadow: none !important;
+}
+::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background-color: #292a27 !important; }

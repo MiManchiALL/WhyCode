@@ -6,6 +6,7 @@
 @import './browser-reference.css';
 @import './browser-panel.css';
 @import './git.css';
+@import '../../shared/scrollbars.css';
 /* Streamdown 组件内部类名需要纳入 Tailwind 扫描 */
 @source '../../../node_modules/streamdown/dist/*.js';
 @source '../../../node_modules/@streamdown/cjk/dist/*.js';
@@ -173,10 +174,6 @@ html[data-wc-panel-resizing='true'] .wc-resizable-panel:not([data-resize-transit
   .wc-right-panel-shell[data-panel-open='false'] { pointer-events: none; }
 }
 
-.wc-right-panel-tabs {
-  scrollbar-width: none;
-}
-
 .wc-panel-tab {
   display: flex;
   flex-shrink: 0;
@@ -251,10 +248,6 @@ html[data-wc-panel-resizing='true'] .wc-resizable-panel:not([data-resize-transit
 /* 图表沿用独立阅读密度；zoom 同时缩放文字与布局占位，放大预览仍使用原始 SVG。 */
 .wc-mermaid-image img { display: block; flex: none; max-width: none; height: auto; zoom: calc(12px / var(--wc-mermaid-font-size)); }
 .wc-mermaid-measure { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
-
-.wc-right-panel-tabs::-webkit-scrollbar {
-  display: none;
-}
 
 .wc-panel-resize-handle {
   position: absolute;
@@ -1320,10 +1313,19 @@ html[data-wc-panel-resizing='true']::after {
   animation: wc-fade-out var(--wc-motion-exit) ease-in;
 }
 
-.wc-scrollbar {
-  scrollbar-color: rgb(56 59 53 / 20%) transparent;
-  scrollbar-width: thin;
+.wc-conversation-content { --wc-scrollbar-idle: transparent; }
+
+/* xterm 自绘纵向滑块，沿用原生滚动条的活动状态和颜色。 */
+.xterm .xterm-scrollable-element > .scrollbar.vertical { opacity: 1; pointer-events: auto; }
+.xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: var(--wc-scrollbar-thumb) !important;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box !important;
 }
+.xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
+.xterm .xterm-scrollable-element > .scrollbar > .slider.active { background-color: #292a27 !important; }
+.xterm, .xterm * { --wc-scrollbar-thumb: inherit; }
 
 .wc-image-viewport { position: relative; display: flex; min-height: 80px; min-width: 0; align-items: center; justify-content: center; overflow: hidden; touch-action: none; overscroll-behavior: contain; outline: none; }
 .wc-image-viewport:focus-visible { outline: 2px solid rgb(255 255 255 / 50%); outline-offset: -2px; }
@@ -1335,18 +1337,6 @@ html[data-wc-panel-resizing='true']::after {
 .wc-image-action:hover:not(:disabled) { color: white; background: rgb(255 255 255 / 10%); }
 .wc-image-action:focus-visible { outline: 2px solid white; outline-offset: 1px; }
 .wc-image-action:disabled { opacity: .35; }
-
-.wc-scrollbar::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.wc-scrollbar::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: rgb(56 59 53 / 18%);
-  background-clip: padding-box;
-}
 
 .wc-tool-batch-summary {
   color: var(--wc-faint);
@@ -1576,10 +1566,10 @@ html[data-wc-panel-resizing='true']::after {
     #000 calc(100% - var(--wc-fade-bottom)), #000000d9 calc(100% - var(--wc-fade-bottom) * .87),
     #000000b3 calc(100% - var(--wc-fade-bottom) * .75), #00000080 calc(100% - var(--wc-fade-bottom) * .6),
     #0000004d calc(100% - var(--wc-fade-bottom) * .45), #00000026 calc(100% - var(--wc-fade-bottom) * .3),
-    #0000000d calc(100% - var(--wc-fade-bottom) * .15), transparent), linear-gradient(#000, #000);
-  /* 第二层保留滚动条，避免内容羽化同时淡化滑块和滚动箭头。 */
-  mask-size: calc(100% - 10px) 100%, 10px 100%;
-  mask-position: left top, right top;
+    #0000000d calc(100% - var(--wc-fade-bottom) * .15), transparent), linear-gradient(#000, #000), linear-gradient(#000, #000);
+  /* 分别保留右侧与底部滚动条，不让内容羽化改变滑块颜色。 */
+  mask-size: calc(100% - var(--wc-scrollbar-width, 0px)) calc(100% - var(--wc-scrollbar-height, 0px)), var(--wc-scrollbar-width, 0px) 100%, 100% var(--wc-scrollbar-height, 0px);
+  mask-position: left top, right top, left bottom;
   mask-repeat: no-repeat;
 }
 

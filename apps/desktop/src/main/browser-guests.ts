@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow, clipboard, ipcMain, Menu, net, session, shell, webContents, type DownloadItem, type WebContents } from 'electron'
 import { pathToFileURL } from 'node:url'
+import path from 'node:path'
 import {
   BROWSER_FILE_SCHEME, BROWSER_PARTITION, MAX_BROWSER_GUESTS, browserDisplayUrl, browserShortcut, isExternalBrowserUrl,
   type BrowserDataClearMode, type BrowserDataState, type BrowserEvent, type BrowserEventPayload, type BrowserLease, type BrowserNavigationResult,
@@ -152,6 +153,7 @@ export class BrowserGuests {
       }
       lease.attached = true
       browserGuestPreferences(preferences as Record<string, unknown>, BROWSER_PARTITION)
+      preferences.preload = path.join(import.meta.dirname, '../preload/browser.cjs')
       preferences.backgroundThrottling = !this.isAgent?.(id)
       params.httpreferrer = ''
     })
