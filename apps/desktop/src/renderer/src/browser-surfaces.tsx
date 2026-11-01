@@ -52,6 +52,8 @@ export function BrowserSurfaces(props: Props) {
       if (surface.runtimeId !== props.runtimeId) continue
       const descriptor = pages.find(page => page.id === surface.page.id)
       const agent = state.agents.find(agent => agent.runtimeId === surface.runtimeId && agent.page.id === surface.page.id)
+      if (surface.turnId && agent?.surfaceId !== surface.id) continue
+      if (!surface.turnId && state.surfaces.some(child => child.parentId === surface.id)) continue
       if (!descriptor || (agent && !!surface.turnId !== (agent.view === 'agent'))) continue
       if (descriptor.url !== surface.page.url || descriptor.title !== surface.page.title || descriptor.workspaceFile !== surface.page.workspaceFile) {
         props.onUpdate({ ...surface.page, kind: 'browser', workspaceFile: surface.page.workspaceFile })

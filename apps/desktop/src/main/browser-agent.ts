@@ -38,14 +38,19 @@ export class BrowserAgent {
             return { ...this.pages.list(runtimeId).find(page => page.id === turn.surfaceId),
               url: browserDisplayUrl(guest.getURL()), title: guest.getTitle(), loading: guest.isLoading() }
           } },
-          ...['navigate', 'snapshot', 'click', 'fill', 'type', 'press', 'scroll', 'evaluate', 'wait', 'screenshot'].map(name => ({
+          ...['navigate', 'snapshot', 'click', 'fill', 'type', 'press', 'scroll', 'evaluate', 'wait', 'screenshot', 'dialog'].map(name => ({
             name, run: async (input: unknown, signal: AbortSignal) => {
               const turn = connect()
-              // 新导航可恢复失败页面；其余操作不能把错误文档当作有效网页。
-              const guest = await this.pages.guest(turn, signal, name === 'navigate')
-              const automation = this.automation.get(turnId) ?? new BrowserAutomation(guest)
+              // 导航和弹窗响应无需等待主文档；网页读写仍须确认文档就绪。
+              const guest = await this.pages.guest(turn, signal, name === 'navigate' || name === 'dialog')
+              let automation = this.automation.get(turnId)
+              if (automation?.guest !== guest) {
+                automation?.close()
+                automation = new BrowserAutomation(guest)
+              }
               this.automation.set(turnId, automation)
               signal.throwIfAborted()
+              if (name === 'dialog') return automation.dialog(input, signal)
               return automation.perform(async () => {
                 switch (name) {
                   case 'navigate':

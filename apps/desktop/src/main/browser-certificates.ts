@@ -3,6 +3,7 @@ import type { Certificate, Event, WebContents } from 'electron'
 import type { BrowserCertificateError } from '../shared/browser.ts'
 
 export interface BrowserCertificatePage {
+  readonly pending: BrowserCertificateError | null
   reset(): void
   trust(id: string): string
   close(): void
@@ -28,10 +29,9 @@ export class BrowserCertificates {
       if (!overridableErrors.has(code)) return
       const address = new URL(url)
       if (address.protocol !== 'https:' && address.protocol !== 'wss:') return
-      // 同站点的安全 WebSocket 与 HTTPS 共用证书，端口仍是授权边界。
-      const origin = address.origin.replace(/^wss:/u, 'https:')
       const fingerprint = new X509Certificate(certificate.data).fingerprint256
-      if (this.trusted.get(origin) === fingerprint) {
+      // 同一设备可通过不同端口提供 HTTPS 与 WSS，仍须匹配用户确认的证书。
+      if (this.trusted.get(address.hostname) === fingerprint) {
         event.preventDefault()
         callback(true)
         return
@@ -52,12 +52,12 @@ export class BrowserCertificates {
     guest.on('certificate-error', failed)
     guest.on('did-start-navigation', started)
     guest.once('destroyed', close)
-    return { reset, close, trust: id => {
+    return { get pending() { return pending }, reset, close, trust: id => {
       if (!pending || pending.id !== id || guest.isDestroyed()) throw new Error('证书确认已失效，请重新加载页面')
       const { url, fingerprint } = pending
-      const origin = new URL(url).origin
-      this.trusted.delete(origin)
-      this.trusted.set(origin, fingerprint)
+      const hostname = new URL(url).hostname
+      this.trusted.delete(hostname)
+      this.trusted.set(hostname, fingerprint)
       if (this.trusted.size > 64) this.trusted.delete(this.trusted.keys().next().value!)
       reset()
       return url
