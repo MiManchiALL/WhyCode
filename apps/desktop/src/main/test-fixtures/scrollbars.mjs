@@ -21,7 +21,6 @@ app.whenReady().then(async () => {
   const color = (id, pseudo = '') => run(`getComputedStyle(document.getElementById(${JSON.stringify(id)}),${JSON.stringify(pseudo)}).getPropertyValue('--wc-scrollbar-thumb').trim()`)
   const paint = () => run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
   const pixel = async (x, y) => {
-    await paint()
     const image = await win.webContents.capturePage({ x, y, width: 1, height: 1 })
     return [...image.toBitmap().subarray(0, 3)]
   }
@@ -86,12 +85,23 @@ app.whenReady().then(async () => {
     assert.equal(await run('getComputedStyle(document.querySelector("#terminal .scrollbar.vertical")).opacity'), '1')
     await run('window.detachTerminal();fixture.disposeTerminalView("scrollbar-test");document.querySelector("#terminal").remove()')
     const edges = await run(`(async()=>{
-      const source='flowchart TD\\nA[发送请求] -->|成功| B[进入下一步]\\nA -->|超出上下文预算| C[重新压缩]\\nC --> D[重发请求]';
+      const source='flowchart TD\\nA[发送请求] -->|成功| B[进入下一步]\\nA -->|"超出上下文预算<br/>ModelContextOverflowError"| C[重新压缩]\\nC --> D[重发请求]';
       const svg=await fixture.renderMermaid(source,new AbortController().signal);
       const diagram=new DOMParser().parseFromString(svg,'image/svg+xml');
       const preview=document.importNode(diagram.documentElement,true);document.querySelector('#root').append(preview);
       const labels=[...preview.querySelectorAll('.edgeLabel rect.background')].map(rect=>({opacity:getComputedStyle(rect).opacity,stroke:getComputedStyle(rect).stroke,fill:getComputedStyle(rect).fill,rx:getComputedStyle(rect).rx,
         text:getComputedStyle(rect.parentElement.querySelector('text')).fill}));
+      const node=preview.querySelector('.node'),nodeBox=node.querySelector('rect').getBBox(),nodeText=node.querySelector('text').getBBox();
+      const nodePadding=[(nodeBox.width-nodeText.width)/2,(nodeBox.height-nodeText.height)/2];
+      const boxes=[...preview.querySelectorAll('.node rect')].map(rect=>rect.getBoundingClientRect());
+      for(const rect of preview.querySelectorAll('.edgeLabel rect.background')) {
+        const box=rect.getBBox(),text=rect.parentElement.querySelector('text').getBBox();
+        const padding=[text.x-box.x,text.y-box.y,box.x+box.width-text.x-text.width,box.y+box.height-text.y-text.height];
+        if(padding.some((value,index)=>Math.abs(value-nodePadding[index%2])>.05))throw new Error('分支标签与矩形节点的四边留白应一致：'+JSON.stringify({padding,nodePadding}));
+        const bounds=rect.getBoundingClientRect();
+        if(boxes.some(other=>Math.min(bounds.right,other.right)>Math.max(bounds.left,other.left) && Math.min(bounds.bottom,other.bottom)>Math.max(bounds.top,other.top)))throw new Error('分支标签扩大后不能与节点或其他标签重叠');
+        boxes.push(bounds);
+      }
       preview.remove();
       if(labels.length!==2 || labels.some(label=>label.opacity!=='1' || label.stroke!=='rgb(217, 217, 217)' || label.fill!=='rgb(255, 255, 255)' || label.text!=='rgb(41, 42, 39)' || label.rx!=='8px'))throw new Error('连线标签应有不透明白底、浅灰圆角边框和正文文字色');
       const image=document.createElement('img');image.style.cssText='display:block;margin:30px auto;width:360px';
