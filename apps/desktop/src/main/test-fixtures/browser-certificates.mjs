@@ -109,7 +109,7 @@ export async function checkBrowserCertificates({ directory, execute, until, agen
     const denied = await run('certificate-agent', `await browser.open({url:${JSON.stringify(untrustedUrl)}});`)
     assert.equal(denied.isError, true, 'Agent 不能自行放行未确认站点')
     assert.match(denied.text, /certificate_confirmation_required/)
-    assert.match(denied.text, /等待用户/)
+    assert.match(denied.text, /需要用户手动确认证书。请告知用户/)
     assert.doesNotMatch(denied.text, /重试或换网址/)
     const agentPage = agent.pages.current('certificate-agent'), agentGuest = guests.get(agentPage.surfaceId)
     for (const code of ['text(await browser.snapshot());', 'image(await browser.screenshot());', `await browser.navigate({url:${JSON.stringify(untrustedUrl)}});`]) {

@@ -204,7 +204,7 @@ export class BrowserPages {
     if (!failure || error !== failure) return error
     const certificate = this.guests.pendingCertificate(id)
     return new Error(certificate
-      ? `certificate_confirmation_required: ${new URL(certificate.url).origin}（${certificate.error}）。等待用户在浏览器中点击“高级 → 继续访问”，确认后继续操作当前网页。`
+      ? `certificate_confirmation_required: ${new URL(certificate.url).origin}（${certificate.error}）。此页面需要用户手动确认证书。请告知用户在右侧浏览器点击“高级 → 继续访问”，用户确认后再继续操作当前网页。`
       : `${failure.message}\n使用 browser.navigate({url}) 重试或换网址；browser.open 不会重新加载本轮页面。`, { cause: error })
   }
 
