@@ -23,6 +23,7 @@ export class BrowserAgent {
         const previousPages = this.reportedPages.get(turnId) ?? new Set(this.pages.list(runtimeId).map(page => page.id))
         const controller = new AbortController()
         const signal = AbortSignal.any([context.abortSignal, controller.signal])
+        const observations: (Awaited<ReturnType<BrowserAutomation['observe']>> & { pageId: string; operation: string })[] = []
         let connected = false
         const connect = () => {
           const turn = this.pages.current(turnId)
@@ -46,6 +47,7 @@ export class BrowserAgent {
               const turn = connect()
               // 导航和弹窗响应无需等待主文档；网页读写仍须确认文档就绪。
               const guest = await this.pages.guest(turn, signal, name === 'navigate' || name === 'dialog')
+              const pageId = turn.surfaceId
               let automation = this.automation.get(turnId)
               if (automation?.guest !== guest) {
                 automation?.close()
@@ -59,7 +61,11 @@ export class BrowserAgent {
                   case 'navigate':
                     await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal)
                     return { url: browserDisplayUrl(guest.getURL()), loading: guest.isLoading() }
-                  case 'snapshot': await automation.observe(signal); return automation.snapshot(input, signal)
+                  case 'snapshot': {
+                    const observation = await automation.observe(signal)
+                    observations.push({ pageId, operation: name, ...observation })
+                    return { ...await automation.snapshot(input, signal), observation }
+                  }
                   case 'click': await automation.click(input, signal); break
                   case 'fill': await automation.fill(input, signal); break
                   case 'type': await automation.type(input, signal); break
@@ -68,7 +74,7 @@ export class BrowserAgent {
                   case 'evaluate': return automation.evaluate(input, signal)
                   case 'wait': return automation.wait(input, signal)
                   case 'screenshot':
-                    await automation.observe(signal)
+                    observations.push({ pageId, operation: name, ...await automation.observe(signal) })
                     return captureBrowserPage(guest, signal, await automation.viewport(signal))
                 }
                 return { completed: true }
@@ -81,9 +87,9 @@ export class BrowserAgent {
           const pages = this.pages.list(runtimeId)
           const ids = new Set(pages.map(page => page.id))
           const state = { selectedPageId: pages.find(page => page.selected)?.id ?? null,
-            newPageIds: [...ids].filter(id => !previousPages.has(id)), removedPageIds: [...previousPages].filter(id => !ids.has(id)) }
+            newPages: pages.filter(page => !previousPages.has(page.id)), removedPageIds: [...previousPages].filter(id => !ids.has(id)) }
           this.reportedPages.set(turnId, ids)
-          return { ...result, text: `${result.text}\n网页状态：${JSON.stringify(state)}` }
+          return { ...result, text: `${result.text}${observations.length ? `\n网页观察：${JSON.stringify(observations)}` : ''}\n网页状态：${JSON.stringify(state)}` }
         }
         finally { controller.abort() }
       },

@@ -106,18 +106,21 @@ export class BrowserAutomation {
     return await this.evaluate({ expression: '({width: innerWidth, height: innerHeight})' }, signal) as { width: number; height: number }
   }
 
-  async observe(signal: AbortSignal): Promise<void> {
+  async observe(signal: AbortSignal): Promise<{ document: 'ready' | 'loading'; content: 'visible' | 'timed_out' }> {
     // 页面可能合法为空；预算耗尽后保留真实空白，不制造内容或把读操作判为失败。
     const deadline = Date.now() + 3000
-    while (!await this.evaluate({ expression: browserHasVisibleContent }, signal)) {
+    let visible = false
+    while (!(visible = !!await this.evaluate({ expression: browserHasVisibleContent }, signal))) {
       if (Date.now() >= deadline) break
       await delay(Math.max(1, Math.min(100, deadline - Date.now())), undefined, { signal })
     }
     // DOM 已可见仍不等于画面已提交；同一步操作后的截图也经过这一绘制边界。
     await this.evaluate({ expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))))' }, signal)
+    return { document: await this.evaluate({ expression: 'document.readyState' }, signal) === 'loading' ? 'loading' : 'ready',
+      content: visible ? 'visible' : 'timed_out' }
   }
 
-  async snapshot(input: unknown, signal: AbortSignal): Promise<unknown> {
+  async snapshot(input: unknown, signal: AbortSignal) {
     const { offset, limit } = z.object({ offset: z.number().int().min(0).default(0),
       limit: z.number().int().min(1).max(200).default(100) }).parse(input ?? {})
     this.invalidate()

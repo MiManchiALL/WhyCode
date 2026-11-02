@@ -20,14 +20,15 @@ test('观察等待空文档的异步内容，已有内容立即进入绘制边�
     let visible = initiallyVisible, complete = false
     t.mock.method(page, 'evaluate', async ({ expression }: { expression: string }) => {
       if (expression === browserHasVisibleContent) { checked.resolve(); return visible }
+      if (expression === 'document.readyState') return 'complete'
       await painted.promise
     })
-    const pending = page.observe(new AbortController().signal).then(() => { complete = true })
+    const pending = page.observe(new AbortController().signal).then(result => { complete = true; return result })
     await checked.promise
     assert.equal(complete, false, '不能把空文档或尚未绘制的 DOM 当作最终观察')
     visible = true
     painted.resolve()
-    await pending
+    assert.deepEqual(await pending, { document: 'ready', content: 'visible' })
     assert.equal(complete, true)
   })
 })
@@ -38,10 +39,21 @@ test('合法空白页有等待上限，仍然允许捕获真实空白', async t 
   let contentChecks = 0
   t.mock.method(page, 'evaluate', async ({ expression }: { expression: string }) => {
     if (expression === browserHasVisibleContent) { contentChecks++; t.mock.timers.tick(3000); return false }
+    if (expression === 'document.readyState') return 'interactive'
     return null
   })
-  await page.observe(new AbortController().signal)
+  assert.deepEqual(await page.observe(new AbortController().signal), { document: 'ready', content: 'timed_out' })
   assert.equal(contentChecks, 1, '等待预算耗尽后不反复尝试或伪造失败')
+})
+
+test('可见内容不代表文档已完成解析', async t => {
+  const page = automation()
+  t.mock.method(page, 'evaluate', async ({ expression }: { expression: string }) => {
+    if (expression === browserHasVisibleContent) return true
+    if (expression === 'document.readyState') return 'loading'
+    return null
+  })
+  assert.deepEqual(await page.observe(new AbortController().signal), { document: 'loading', content: 'visible' })
 })
 
 test('空白页等待可取消，取消后不继续读取或截图', async t => {

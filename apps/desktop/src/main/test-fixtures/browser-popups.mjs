@@ -20,7 +20,8 @@ export async function checkBrowserPopups({ run, finish, execute, until, agent, g
     const childId = agent.pages.current(turnId).surfaceId, child = guests.get(childId)
     assert.notEqual(childId, parentId)
     const reported = JSON.parse(launched.text.split('网页状态：')[1])
-    assert.deepEqual(reported.newPageIds, [childId], '即使脚本没有输出 click 返回值也报告新网页')
+    assert.deepEqual(reported.newPages, [{ id: childId, url: url + 'child', title: 'Popup', agent: true,
+      selected: true, openerId: parentId, active: false }], '即使脚本没有输出 click 返回值也报告新网页的身份与归属')
     assert.equal(reported.selectedPageId, childId)
     assert.equal(agent.pages.list('alpha').find(page => page.id === childId).selected, true)
     assert.equal(agent.pages.list('alpha').find(page => page.id === childId).openerId, parentId)
@@ -100,9 +101,9 @@ export async function checkBrowserPopups({ run, finish, execute, until, agent, g
     const laterId = agent.pages.current('popup-delayed').surfaceId
     const later = await run('popup-delayed', 'text(await browser.snapshot());')
     assert.equal(later.isError, false, later.text)
-    assert.deepEqual(JSON.parse(later.text.split('网页状态：')[1]).newPageIds, [laterId], '跨调用的异步弹出页仍会报告')
+    assert.deepEqual(JSON.parse(later.text.split('网页状态：')[1]).newPages.map(page => page.id), [laterId], '跨调用的异步弹出页仍会报告')
     const unchanged = await run('popup-delayed', 'text(await browser.tabs());')
-    assert.deepEqual(JSON.parse(unchanged.text.split('网页状态：')[1]).newPageIds, [], '已报告的页面不反复提示新增')
+    assert.deepEqual(JSON.parse(unchanged.text.split('网页状态：')[1]).newPages, [], '已报告的页面不反复提示新增')
   } finally {
     for (const turnId of ['popup-visible', 'popup-reclaim', 'popup-parent-visible', 'popup-hidden', 'popup-personal', 'popup-stopped', 'popup-delayed']) await finish(turnId)
     await execute('fixture.session("alpha")')
