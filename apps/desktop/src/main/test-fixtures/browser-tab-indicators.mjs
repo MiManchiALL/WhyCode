@@ -38,8 +38,8 @@ export async function checkBrowserTabIndicators({ run, finish, execute, until, a
   await until(async () => (await status())?.agent, 'controlled tab blue')
   const blue = (await status()).color
   assert.notEqual(blue, gray)
-  assert.equal(await execute(`getComputedStyle(document.querySelector('[aria-label="切换到我的网页"]')).backgroundColor`),
-    blue, 'Agent 切换按钮与活动标签共用同一雾霾蓝')
+  assert.equal(await execute(`getComputedStyle(document.querySelector('[aria-label="Agent 正在操作此网页"]')).backgroundColor`),
+    blue, 'Agent 状态标记与活动标签共用同一雾霾蓝')
   assert.equal((await status()).audible, true, '接管保留原网页的声音状态')
   await execute('fixture.narrow()')
   await until(() => execute(`document.querySelector('[aria-label="Agent 浏览器"]').getBoundingClientRect().width === 300`), 'narrow tab layout ready')
@@ -59,15 +59,6 @@ export async function checkBrowserTabIndicators({ run, finish, execute, until, a
     await writeFile(path.join(process.env.WHYCODE_BROWSER_REVIEW_DIR, 'tab-agent-audio.png'),
       (await win.webContents.capturePage({ x: 100, y: 0, width: 300, height: 130 })).toPNG())
   }
-  await execute('document.querySelector(\'[aria-label="切换到我的网页"]\').click()')
-  await until(async () => (await status())?.agent === false, 'user view restores gray')
-  assert.equal((await status()).color, gray)
-  assert.equal((await status()).audible, true, '后台 Agent 仍发声时标签保留声音图标')
-  await until(() => execute('!!document.querySelector(\'[aria-label="切换到 Agent 网页"]\')'), 'agent view switch ready')
-  await execute('document.querySelector(\'[aria-label="切换到 Agent 网页"]\').click()')
-  await until(async () => (await status())?.agent, 'switch back restores blue')
-  assert.equal((await status()).color, blue)
-
   await finish('indicators')
   await until(async () => (await status())?.agent === false, 'handoff restores gray')
   assert.equal((await status()).color, gray)

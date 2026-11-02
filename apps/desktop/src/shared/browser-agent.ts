@@ -11,25 +11,23 @@ export interface BrowserSurface extends BrowserLease {
   navigation: number
   audible: boolean
 }
-export interface BrowserAgentPage {
-  runtimeId: string; turnId: string; surfaceId: string; page: BrowserPageDescriptor; view: 'user' | 'agent'
-}
 export interface BrowserHostState {
   revision: number
   surfaces: BrowserSurface[]
-  agents: BrowserAgentPage[]
+  sessions: { runtimeId: string; sessionId: string | null }[]
   visibleId: string | null
 }
 export interface BrowserViewRequest {
   runtimeId: string
+  sessionId: string | null
   pages: BrowserPageDescriptor[]
+  maxBrowserPages: number
   activePageId: string | null
   visible: boolean
 }
 export type BrowserViewAction =
   | { type: 'user'; runtimeId: string; page: BrowserPageDescriptor }
-  | { type: 'switch'; runtimeId: string; view: 'agent' | 'user' }
-  | { type: 'stop'; runtimeId: string }
+  | { type: 'stop'; runtimeId: string; pageId: string }
   | { type: 'update'; id: string; url: string; title: string }
 
 export const BROWSER_VIEWPORT = { width: 1280, height: 800 } as const

@@ -37,8 +37,9 @@ export async function checkBrowserDialogs({ run, finish, agent, guests, until })
     await finish('dialogs')
 
     assert.equal((await run('existing-dialog', `await browser.open({url:${JSON.stringify(url)}});`)).isError, false)
-    const existing = guests.get(agent.pages.current('existing-dialog').surfaceId)
-    // 原生弹窗使该调用悬挂；这里只验证取消与 guest 销毁，不把迟到返回视为响应成功。
+    const turn = agent.pages.current('existing-dialog'), pageId = agent.pages.surface(turn).page.id
+    const existing = guests.get(turn.surfaceId)
+    // 原生弹窗使该调用悬挂；取消查询不能被表示为响应成功。
     void existing.executeJavaScript('confirm("Already open")').catch(() => {})
     const controller = new AbortController()
     const reading = run('existing-dialog', 'text(await browser.dialog());', controller.signal)
@@ -47,8 +48,9 @@ export async function checkBrowserDialogs({ run, finish, agent, guests, until })
     const cancelled = await reading
     assert.equal(cancelled.isError, true)
     assert.match(cancelled.text, /cancel dialog inspection/)
-    // 接入前的原生弹窗由 Electron 持有；取消查询不会假报已处理，结束时完整释放。
     await finish('existing-dialog')
-    assert.equal(existing.isDestroyed(), true)
+    assert.equal(existing.isDestroyed(), false, '原生弹窗随页面交还用户，不隐式确认或关闭')
+    agent.pages.action(turn.owner, { type: 'stop', runtimeId: 'alpha', pageId })
+    await until(() => existing.isDestroyed(), 'explicit close releases native dialog')
   } finally { await finish('dialogs'); await finish('existing-dialog') }
 }

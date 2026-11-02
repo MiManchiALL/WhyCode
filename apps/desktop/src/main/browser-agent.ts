@@ -2,14 +2,14 @@ import { z } from 'zod'
 import type { BrowserDriver } from '@whycode/core'
 import { BrowserAutomation } from './browser-automation.ts'
 import { executeBrowserScript, type BrowserOperation } from './browser-execution.ts'
-import { BrowserPages } from './browser-pages.ts'
+import { BrowserPages, type BrowserTurnPage } from './browser-pages.ts'
 import type { BrowserGuests } from './browser-guests.ts'
 import { captureBrowserPage } from './browser-capture.ts'
 import { browserDisplayUrl } from '../shared/browser.ts'
 
 export class BrowserAgent {
   readonly pages: BrowserPages
-  private readonly automation = new Map<string, BrowserAutomation>()
+  private readonly automation = new Map<string, Map<string, BrowserAutomation>>()
   // 只记录上次报告过的 ID，用于跨调用报告异步出现的网页；页面事实仍由 BrowserPages 持有。
   private readonly reportedPages = new Map<string, Set<string>>()
 
@@ -17,6 +17,7 @@ export class BrowserAgent {
 
   forRuntime(runtimeId: string): BrowserDriver {
     return {
+      listPages: () => this.pages.list(runtimeId),
       execute: async (code, context) => {
         if (!context.turnId) throw new Error('Browser 只能在当前主会话 Turn 内执行')
         const turnId = context.turnId
@@ -24,61 +25,64 @@ export class BrowserAgent {
         const controller = new AbortController()
         const signal = AbortSignal.any([context.abortSignal, controller.signal])
         const observations: (Awaited<ReturnType<BrowserAutomation['observe']>> & { pageId: string; operation: string })[] = []
-        let connected = false
-        const connect = () => {
-          const turn = this.pages.current(turnId)
-          const abort = () => controller.abort(turn.abort.signal.reason)
-          if (!connected) { turn.abort.signal.addEventListener('abort', abort, { once: true, signal }); connected = true }
-          if (turn.abort.signal.aborted) abort()
-          return turn
+        const withPage = async <T>(turn: BrowserTurnPage, operation: () => Promise<T>): Promise<T> => {
+          const pageSignal = this.pages.signal(turn)
+          const abort = () => controller.abort(pageSignal.reason)
+          pageSignal.addEventListener('abort', abort, { once: true })
+          try { pageSignal.throwIfAborted(); return await operation() }
+          finally { pageSignal.removeEventListener('abort', abort) }
         }
         const operations: BrowserOperation[] = [
           { name: 'tabs', run: async () => this.pages.list(runtimeId) },
           { name: 'open', run: async (input, signal) => {
             const target = z.object({ id: z.string().optional(), url: z.string().optional() }).parse(input ?? {})
             const turn = this.pages.open(runtimeId, turnId, target)
-            connect()
-            const guest = await this.pages.guest(turn, signal)
-            return { ...this.pages.list(runtimeId).find(page => page.id === turn.surfaceId),
-              url: browserDisplayUrl(guest.getURL()), title: guest.getTitle(), loading: guest.isLoading() }
+            return withPage(turn, async () => {
+              const guest = await this.pages.guest(turn, signal)
+              return { ...this.pages.list(runtimeId).find(page => page.id === turn.surfaceId),
+                url: browserDisplayUrl(guest.getURL()), title: guest.getTitle(), loading: guest.isLoading() }
+            })
           } },
           ...['navigate', 'snapshot', 'click', 'fill', 'type', 'press', 'scroll', 'evaluate', 'wait', 'screenshot', 'dialog'].map(name => ({
             name, run: async (input: unknown, signal: AbortSignal) => {
-              const turn = connect()
-              // 导航和弹窗响应无需等待主文档；网页读写仍须确认文档就绪。
-              const guest = await this.pages.guest(turn, signal, name === 'navigate' || name === 'dialog')
-              const pageId = turn.surfaceId
-              let automation = this.automation.get(turnId)
-              if (automation?.guest !== guest) {
-                automation?.close()
-                automation = new BrowserAutomation(guest)
-              }
-              this.automation.set(turnId, automation)
-              signal.throwIfAborted()
-              if (name === 'dialog') return automation.dialog(input, signal)
-              return automation.perform(async () => {
-                switch (name) {
-                  case 'navigate':
-                    await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal)
-                    return { url: browserDisplayUrl(guest.getURL()), loading: guest.isLoading() }
-                  case 'snapshot': {
-                    const observation = await automation.observe(signal)
-                    observations.push({ pageId, operation: name, ...observation })
-                    return { ...await automation.snapshot(input, signal), observation }
-                  }
-                  case 'click': await automation.click(input, signal); break
-                  case 'fill': await automation.fill(input, signal); break
-                  case 'type': await automation.type(input, signal); break
-                  case 'press': await automation.press(input, signal); break
-                  case 'scroll': await automation.scroll(input, signal); break
-                  case 'evaluate': return automation.evaluate(input, signal)
-                  case 'wait': return automation.wait(input, signal)
-                  case 'screenshot':
-                    observations.push({ pageId, operation: name, ...await automation.observe(signal) })
-                    return captureBrowserPage(guest, signal, await automation.viewport(signal))
+              const turn = this.pages.current(turnId)
+              return withPage(turn, async () => {
+                // 导航和弹窗响应无需等待主文档；网页读写仍须确认文档就绪。
+                const guest = await this.pages.guest(turn, signal, name === 'navigate' || name === 'dialog')
+                const pageId = turn.surfaceId
+                const pages = this.automation.get(turnId) ?? new Map<string, BrowserAutomation>()
+                let automation = pages.get(pageId)
+                if (!automation) {
+                  automation = new BrowserAutomation(guest)
+                  pages.set(pageId, automation)
+                  this.automation.set(turnId, pages)
                 }
-                return { completed: true }
-              }, signal)
+                signal.throwIfAborted()
+                if (name === 'dialog') return automation.dialog(input, signal)
+                return automation.perform(async () => {
+                  switch (name) {
+                    case 'navigate':
+                      await this.pages.navigate(turn, z.object({ url: z.string() }).parse(input).url, signal)
+                      return { url: browserDisplayUrl(guest.getURL()), loading: guest.isLoading() }
+                    case 'snapshot': {
+                      const observation = await automation.observe(signal)
+                      observations.push({ pageId, operation: name, ...observation })
+                      return { ...await automation.snapshot(input, signal), observation }
+                    }
+                    case 'click': await automation.click(input, signal); break
+                    case 'fill': await automation.fill(input, signal); break
+                    case 'type': await automation.type(input, signal); break
+                    case 'press': await automation.press(input, signal); break
+                    case 'scroll': await automation.scroll(input, signal); break
+                    case 'evaluate': return automation.evaluate(input, signal)
+                    case 'wait': return automation.wait(input, signal)
+                    case 'screenshot':
+                      observations.push({ pageId, operation: name, ...await automation.observe(signal) })
+                      return captureBrowserPage(guest, signal, await automation.viewport(signal))
+                  }
+                  return { completed: true }
+                }, signal)
+              })
             },
           })),
         ]
@@ -94,7 +98,7 @@ export class BrowserAgent {
         finally { controller.abort() }
       },
       finishTurn: async turnId => {
-        try { this.automation.get(turnId)?.close() }
+        try { for (const page of this.automation.get(turnId)?.values() ?? []) page.close() }
         finally { this.automation.delete(turnId); this.reportedPages.delete(turnId); await this.pages.finish(turnId) }
       },
     }

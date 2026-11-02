@@ -1,5 +1,5 @@
 .wc-browser-panel { container: browser-panel / inline-size; }
-.wc-browser-view-toggle { white-space: nowrap; }
+.wc-browser-agent-status { white-space: nowrap; }
 .wc-browser-view-dot {
   width: 5px;
   height: 5px;
@@ -7,7 +7,7 @@
   background: currentColor;
   opacity: 0.5;
 }
-.wc-browser-panel[data-agent='true'] .wc-browser-view-toggle {
+.wc-browser-panel[data-agent='true'] .wc-browser-agent-status {
   background: var(--wc-browser-agent);
   color: var(--wc-blue-ink);
 }
@@ -38,7 +38,7 @@
 }
 @container browser-panel (max-width: 420px) {
   .wc-browser-reference-label { display: none; }
-  .wc-browser-view-toggle { gap: 3px; }
+  .wc-browser-agent-status { gap: 3px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .wc-browser-viewport::after { transition: none; }

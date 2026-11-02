@@ -148,7 +148,7 @@ export class BrowserAutomation {
     let length = 0
     const items = []
     for (const { node, geometry } of visible.slice(offset, offset + limit)) {
-      const ref = node.backendDOMNodeId ? `e${this.revision}-${this.refs.size + 1}` : undefined
+      const ref = node.backendDOMNodeId ? `e${this.guest.id}-${this.revision}-${this.refs.size + 1}` : undefined
       const state = Object.fromEntries((node.properties ?? [])
         .filter(property => ['disabled', 'checked', 'selected', 'expanded', 'required', 'focused', 'readonly'].includes(property.name))
         .map(property => [property.name, property.value.value]))

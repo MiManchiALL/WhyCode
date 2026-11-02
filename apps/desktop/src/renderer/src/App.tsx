@@ -142,6 +142,7 @@ import {
   openRightPanelPage as openRightPanelPageState,
   RightPanelSessionStore,
   rightPanelSessionKey,
+  registerBrowserPage,
   selectRightPanelTab as selectRightPanelTabState,
   type RightPanelPage,
   type RightPanelSessionState,
@@ -749,6 +750,7 @@ export function App() {
   ) => {
     const current = rightPanelStateRef.current
     const next = typeof update === 'function' ? update(current) : update
+    if (next === current) return
     rightPanelStateRef.current = next
     setRightPanelState(next)
     const currentRuntimeId = runtimeIdRef.current
@@ -1162,7 +1164,7 @@ export function App() {
       return
     }
     const close = () => updateRightPanelState((current) => closeRightPanelTab(current, tabId))
-    if (tab?.page.kind === 'browser') guardBrowserAction(runtimeIdRef.current, tab.page.id, close)
+    if (tab?.page.kind === 'browser') guardBrowserAction(runtimeIdRef.current, tab.page.id, 'close', close, error => showConversationFeedback('error', String(error)))
     else close()
   }, [updateRightPanelState, showConversationFeedback])
 
@@ -2707,11 +2709,15 @@ export function App() {
                 onCollapse={() => changePanelOpen('right', false)}
                 onOpenPage={showRightPanelPage}
                 onUpdatePage={page => updateRightPanelState(current => updateRightPanelPage(current, page))}
-                onRegisterBrowserPage={page => updateRightPanelState(current => {
-                  if (current.tabs.some(tab => tab.page.kind === 'browser' && tab.page.id === page.id)) return current
-                  const next = openRightPanelPageState(current, page)
-                  return { ...next, open: current.open, activeTabId: current.activeTabId ?? next.activeTabId }
-                })}
+                onRegisterBrowserPage={(owner, sessionId, page) => {
+                  if (owner === runtimeIdRef.current) updateRightPanelState(current => registerBrowserPage(current, page))
+                  else {
+                    const store = rightPanelSessionStoreRef.current!
+                    const key = rightPanelSessionKey(owner, sessionId)
+                    const current = store.get(key), next = registerBrowserPage(current, page)
+                    if (next !== current) store.set(key, next)
+                  }
+                }}
                 onSelectTab={selectRightPanelTab}
                 onCloseTab={closeRightPanelPage}
                 onMoveTab={(id, targetId) => updateRightPanelState(current => moveRightPanelTab(current, id, targetId))}

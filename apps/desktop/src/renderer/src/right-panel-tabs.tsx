@@ -41,7 +41,7 @@ export function RightPanelTabs(props: Props) {
     const page = tab.page
     if (page.kind !== 'browser') return { agentControlled: false, audible: false }
     return {
-      agentControlled: props.browserHost.agents.some(agent => agent.runtimeId === props.runtimeId && agent.page.id === page.id && agent.view === 'agent'),
+      agentControlled: props.browserHost.surfaces.some(surface => surface.runtimeId === props.runtimeId && surface.page.id === page.id && !!surface.turnId),
       audible: props.browserHost.surfaces.some(surface => surface.runtimeId === props.runtimeId && surface.page.id === page.id && surface.audible),
     }
   }

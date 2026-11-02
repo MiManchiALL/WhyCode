@@ -63,7 +63,7 @@ export async function checkBrowserLoadErrors({ run, finish, execute, until, agen
     assert.ok(retryRequests > failedRequests, '同一网址的 navigate 重试必须发出新的请求')
     await checkBrowserNavigationOrder({ guest, guests, id: agent.pages.current('load-error').surfaceId, url, workspaceLookups })
     await finish('load-error')
-    assert.equal(guest.isDestroyed(), true)
+    assert.equal(guest.isDestroyed(), false, '结束后交还用户')
 
     const blocked = await run('blocked-url', 'await browser.open({url:"http://127.0.0.1:43123/"});')
     assert.equal(blocked.isError, true)

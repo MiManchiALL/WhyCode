@@ -3,8 +3,8 @@ import type { BrowserHostState, BrowserViewAction } from '../../shared/browser-a
 import type { RightPanelPage } from './right-panel-state.ts'
 
 type Page = Extract<RightPanelPage, { kind: 'browser' }>
-type Confirmation = { runtimeId: string; proceed: () => void } | null
-let state: BrowserHostState = { revision: -1, surfaces: [], agents: [], visibleId: null }
+type Confirmation = { runtimeId: string; pageId: string; proceed: () => void } | null
+let state: BrowserHostState = { revision: -1, surfaces: [], sessions: [], visibleId: null }
 let confirmation: Confirmation = null
 const listeners = new Set<() => void>()
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
@@ -26,15 +26,17 @@ export function browserAction(action: BrowserViewAction): Promise<void> {
 }
 
 export async function routeBrowserPage(runtimeId: string, page: Page): Promise<Page> {
-  const agent = state.agents.find(agent => agent.runtimeId === runtimeId)
-  const routed = agent ? { ...page, id: agent.page.id } : page
-  await browserAction({ type: 'user', runtimeId, page: routed })
-  return routed
+  await browserAction({ type: 'user', runtimeId, page })
+  return page
 }
 
 /** 所有破坏 Agent 当前文档的用户导航/关闭共用这一处确认。 */
-export function guardBrowserAction(runtimeId: string, pageId: string, proceed: () => void): void {
-  const agent = state.agents.find(agent => agent.runtimeId === runtimeId && agent.page.id === pageId && agent.view === 'agent')
-  if (!agent) { proceed(); return }
-  confirmation = { runtimeId, proceed }; notify()
+export function guardBrowserAction(runtimeId: string, pageId: string, action: 'close' | 'navigate', proceed: () => void, fail: (error: unknown) => void): void {
+  const agent = state.surfaces.find(page => page.runtimeId === runtimeId && page.page.id === pageId && page.turnId)
+  if (!agent) {
+    if (action === 'close') void browserAction({ type: 'stop', runtimeId, pageId }).then(proceed, fail)
+    else proceed()
+    return
+  }
+  confirmation = { runtimeId, pageId, proceed }; notify()
 }

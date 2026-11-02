@@ -3,7 +3,6 @@ import type { TerminalInfo } from '../../shared/terminal.ts'
 import { MAX_PREVIEW_VIEWS } from '../../shared/workspace-files.ts'
 import { browserDisplayUrl } from '../../shared/browser.ts'
 import { gitComparisonSchema, type GitComparison } from '../../shared/git.ts'
-import type { BrowserAgentPage } from '../../shared/browser-agent.ts'
 
 // 根目录之外，为文件预览及用户的保存/定位操作各留一个视图。
 export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
@@ -84,13 +83,12 @@ const STORAGE_KEY = 'whycode:right-panel-sessions:v1'
 const MAX_STORED_SESSIONS = 200
 export const MAX_RIGHT_PANEL_TABS = 12
 
-/** 未查看的 Agent 页只随运行时投影，不写入会话标签偏好。 */
-export function withAgentBrowserTab(state: RightPanelSessionState, agent?: BrowserAgentPage): RightPanelSessionState {
-  if (!agent || agent.view !== 'agent' || state.tabs.length >= MAX_RIGHT_PANEL_TABS) return state
-  const page: RightPanelPage = { kind: 'browser', ...agent.page }
-  const id = rightPanelTabId(page)
-  if (state.tabs.some(tab => tab.id === id)) return state
-  return { ...state, tabs: [...state.tabs, { id, page }], activeTabId: state.activeTabId ?? id }
+/** 新网页获得独立标签但不展开侧栏；已有网页的更新不改变选择。 */
+export function registerBrowserPage(state: RightPanelSessionState, page: Extract<RightPanelPage, { kind: 'browser' }>): RightPanelSessionState {
+  const existing = state.tabs.find(tab => tab.id === rightPanelTabId(page))?.page
+  if (existing?.kind === 'browser' && existing.url === page.url && existing.title === page.title && existing.workspaceFile === page.workspaceFile) return state
+  const next = existing ? updateRightPanelPage(state, page) : openRightPanelPage(state, page)
+  return { ...next, open: state.open }
 }
 
 const DEFAULT_STATE: RightPanelSessionState = {
