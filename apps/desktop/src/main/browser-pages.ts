@@ -121,8 +121,10 @@ export class BrowserPages {
   list(runtimeId: string) {
     const owner = this.owners.get(runtimeId)
     const view = owner && this.views.get(owner)
+    const selected = this.agent(runtimeId)?.surfaceId
     return [...this.surfaces.values()].filter(s => s.value.runtimeId === runtimeId && (s.value.turnId || !this.hasChild(s.value.id))).map(({ value }) => ({
       id: value.id, url: value.page.url, title: value.page.title, agent: !!value.turnId,
+      selected: selected === value.id, openerId: value.parentId,
       active: view?.runtimeId === runtimeId && view.activePageId === value.page.id && this.visible(owner!) === value.id,
     }))
   }

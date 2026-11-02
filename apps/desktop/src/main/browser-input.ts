@@ -20,7 +20,7 @@ export const browserInputFunction = `function(text, replace) {
     if (element.value !== next) throw Error('网页未保留输入内容，请重新观察');
     return {value:element.value};
   }
-  if (!element.isContentEditable) throw Error('当前焦点不是可编辑文本，请先选择输入框');
+  if (!element.isContentEditable) throw Error('当前焦点不是可编辑文本；请先选择输入框。画布等接收按键的界面使用 browser.type({text,mode:"keys"}) 或 browser.press({key})。');
   if (replace) {
     const range = document.createRange(); range.selectNodeContents(element);
     const selection = document.getSelection(); selection.removeAllRanges(); selection.addRange(range);

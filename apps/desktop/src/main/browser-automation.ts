@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { browserDisplayUrl } from '../shared/browser.ts'
 import { browserInputFunction, focusedBrowserElement } from './browser-input.ts'
+import { browserKeyStroke, dispatchBrowserKey } from './browser-keyboard.ts'
 import { browserHasVisibleContent, browserNodeGeometry, type BrowserNodeGeometry } from './browser-visibility.ts'
 
 interface AxNode {
@@ -13,8 +14,6 @@ const refSchema = z.object({ ref: z.string().max(80) })
 const fillSchema = refSchema.extend({ value: z.string().max(100_000) })
 const dialogSchema = z.object({ type: z.enum(['alert', 'confirm', 'prompt', 'beforeunload']),
   message: z.string().transform(text => text.slice(0, 2000)) })
-const keyCodes: Record<string, number> = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46,
-  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35 }
 
 /** 使用 Chromium 的可访问性树与输入协议；节点引用仅属于当前文档和最近一次观察。 */
 export class BrowserAutomation {
@@ -186,18 +185,19 @@ export class BrowserAutomation {
   }
 
   async type(input: unknown, signal: AbortSignal): Promise<unknown> {
-    const { text } = z.object({ text: z.string().max(100_000) }).parse(input)
+    const { text, mode } = z.object({ text: z.string().max(100_000), mode: z.enum(['text', 'keys']).default('text') })
+      .refine(value => value.mode !== 'keys' || value.text.length <= 10_000, '按键输入最多 10000 字符').parse(input)
+    if (mode === 'keys') {
+      const keys = Array.from(text.replace(/\r\n/g, '\n'), char => browserKeyStroke(char === '\n' || char === '\r' ? 'Enter' : char === '\t' ? 'Tab' : char))
+      for (const key of keys) await dispatchBrowserKey(this.guest, key, signal)
+      return
+    }
     return this.evaluate({ expression: `(${browserInputFunction}).call(${focusedBrowserElement}, ${JSON.stringify(text)}, false)` }, signal)
   }
 
   async press(input: unknown, signal: AbortSignal): Promise<void> {
     const { key } = z.object({ key: z.string().max(40) }).parse(input)
-    const selectAll = key === 'Control+A'
-    const code = selectAll ? 65 : keyCodes[key]
-    if (!code) throw new Error('不支持此按键，请参照浏览器指引')
-    const params = { key: selectAll ? 'a' : key, windowsVirtualKeyCode: code, modifiers: selectAll ? 2 : 0 }
-    await this.command('Input.dispatchKeyEvent', { type: 'keyDown', ...params }, signal)
-    await this.command('Input.dispatchKeyEvent', { type: 'keyUp', ...params }, signal)
+    await dispatchBrowserKey(this.guest, browserKeyStroke(key), signal)
   }
 
   async scroll(input: unknown, signal: AbortSignal): Promise<void> {
