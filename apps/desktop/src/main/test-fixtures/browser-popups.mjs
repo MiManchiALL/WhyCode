@@ -5,7 +5,7 @@ export async function checkBrowserPopups({ run, finish, execute, until, agent, g
   const server = createServer((request, response) => {
     response.end(request.url === '/child'
       ? '<!doctype html><title>Popup</title><h1>Popup content</h1><button onclick="this.textContent=\'Clicked\'">Child action</button>'
-      : '<!doctype html><title>Parent</title><input aria-label="Draft"><button onclick="window.open(\'/child\')">Open popup</button>')
+      : '<!doctype html><title>Parent</title><input aria-label="Draft"><button onclick="document.body.dataset.blocked=String(!window.open(\'/child\'))">Open popup</button>')
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${server.address().port}/`
@@ -19,6 +19,12 @@ export async function checkBrowserPopups({ run, finish, execute, until, agent, g
     assert.match(launched.text, /Popup content/)
     const childId = agent.pages.current(turnId).surfaceId, child = guests.get(childId)
     assert.notEqual(childId, parentId)
+    const reported = JSON.parse(launched.text.split('网页状态：')[1])
+    assert.deepEqual(reported.newPageIds, [childId], '即使脚本没有输出 click 返回值也报告新网页')
+    assert.equal(reported.selectedPageId, childId)
+    assert.equal(agent.pages.list('alpha').find(page => page.id === childId).selected, true)
+    assert.equal(agent.pages.list('alpha').find(page => page.id === childId).openerId, parentId)
+    assert.equal(await parent.executeJavaScript('document.body.dataset.blocked'), 'true', '保留 window.open 的真实返回语义，不伪造原生窗口')
     assert.equal(parent.getURL(), url, '弹窗不能导航或卸载发起页')
     assert.equal(await parent.executeJavaScript('document.querySelector("input").value'), 'parent-draft')
     assert.equal(agent.pages.list('alpha').length, 2)
@@ -87,8 +93,18 @@ export async function checkBrowserPopups({ run, finish, execute, until, agent, g
     await until(() => stopped.child.isDestroyed() && stopped.parent.isDestroyed(), 'stop releases all turn pages')
     const ended = await run('popup-stopped', 'text(await browser.snapshot());')
     assert.match(ended.text, /user_closed/)
+
+    const delayed = await launch('popup-delayed')
+    await delayed.parent.executeJavaScript('window.open("/child"); null')
+    await until(() => agent.pages.current('popup-delayed').surfaceId !== delayed.childId, 'popup opens between tool calls')
+    const laterId = agent.pages.current('popup-delayed').surfaceId
+    const later = await run('popup-delayed', 'text(await browser.snapshot());')
+    assert.equal(later.isError, false, later.text)
+    assert.deepEqual(JSON.parse(later.text.split('网页状态：')[1]).newPageIds, [laterId], '跨调用的异步弹出页仍会报告')
+    const unchanged = await run('popup-delayed', 'text(await browser.tabs());')
+    assert.deepEqual(JSON.parse(unchanged.text.split('网页状态：')[1]).newPageIds, [], '已报告的页面不反复提示新增')
   } finally {
-    for (const turnId of ['popup-visible', 'popup-reclaim', 'popup-parent-visible', 'popup-hidden', 'popup-personal', 'popup-stopped']) await finish(turnId)
+    for (const turnId of ['popup-visible', 'popup-reclaim', 'popup-parent-visible', 'popup-hidden', 'popup-personal', 'popup-stopped', 'popup-delayed']) await finish(turnId)
     await execute('fixture.session("alpha")')
     await new Promise(resolve => server.close(resolve))
   }

@@ -16,6 +16,7 @@ import { checkBrowserTabIndicators } from './browser-tab-indicators.mjs'
 import { checkBrowserCertificates } from './browser-certificates.mjs'
 import { checkBrowserPopups } from './browser-popups.mjs'
 import { checkBrowserDialogs } from './browser-dialogs.mjs'
+import { checkBrowserKeyboard } from './browser-keyboard.mjs'
 
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
 app.setPath('userData', path.join(directory, 'profile'))
@@ -74,6 +75,7 @@ app.whenReady().then(async () => {
   await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests, workspaceLookups })
   await checkBrowserCertificates({ directory, execute, until, agent, guests, run, finish, win })
   await checkBrowserPopups({ run, finish, execute, until, agent, guests })
+  await checkBrowserKeyboard({ run, finish, agent, guests, until })
   await checkBrowserTabIndicators({ run, finish, execute, until, agent, guests, url, win })
   await execute('fixture.session("alpha")')
   await until(() => execute('fixture.state().tabs.length===0'), 'clear cold descriptor')

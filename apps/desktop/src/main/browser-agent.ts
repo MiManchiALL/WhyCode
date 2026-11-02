@@ -10,6 +10,8 @@ import { browserDisplayUrl } from '../shared/browser.ts'
 export class BrowserAgent {
   readonly pages: BrowserPages
   private readonly automation = new Map<string, BrowserAutomation>()
+  // 只记录上次报告过的 ID，用于跨调用报告异步出现的网页；页面事实仍由 BrowserPages 持有。
+  private readonly reportedPages = new Map<string, Set<string>>()
 
   constructor(guests: BrowserGuests) { this.pages = new BrowserPages(guests) }
 
@@ -18,6 +20,7 @@ export class BrowserAgent {
       execute: async (code, context) => {
         if (!context.turnId) throw new Error('Browser 只能在当前主会话 Turn 内执行')
         const turnId = context.turnId
+        const previousPages = this.reportedPages.get(turnId) ?? new Set(this.pages.list(runtimeId).map(page => page.id))
         const controller = new AbortController()
         const signal = AbortSignal.any([context.abortSignal, controller.signal])
         let connected = false
@@ -73,12 +76,20 @@ export class BrowserAgent {
             },
           })),
         ]
-        try { return await executeBrowserScript(code, operations, signal, context.onProgress) }
+        try {
+          const result = await executeBrowserScript(code, operations, signal, context.onProgress)
+          const pages = this.pages.list(runtimeId)
+          const ids = new Set(pages.map(page => page.id))
+          const state = { selectedPageId: pages.find(page => page.selected)?.id ?? null,
+            newPageIds: [...ids].filter(id => !previousPages.has(id)), removedPageIds: [...previousPages].filter(id => !ids.has(id)) }
+          this.reportedPages.set(turnId, ids)
+          return { ...result, text: `${result.text}\n网页状态：${JSON.stringify(state)}` }
+        }
         finally { controller.abort() }
       },
       finishTurn: async turnId => {
         try { this.automation.get(turnId)?.close() }
-        finally { this.automation.delete(turnId); await this.pages.finish(turnId) }
+        finally { this.automation.delete(turnId); this.reportedPages.delete(turnId); await this.pages.finish(turnId) }
       },
     }
   }
