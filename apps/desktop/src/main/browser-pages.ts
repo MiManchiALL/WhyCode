@@ -3,28 +3,28 @@ import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import { z } from 'zod'
 import { IPC } from '../shared/ipc.ts'
 import { browserAddress, browserDisplayUrl } from '../shared/browser.ts'
-import type { BrowserAgentPage, BrowserHostState, BrowserSurface, BrowserViewAction, BrowserViewRequest } from '../shared/browser-agent.ts'
+import type { BrowserHostState, BrowserSurface, BrowserViewAction, BrowserViewRequest } from '../shared/browser-agent.ts'
 import type { BrowserGuests } from './browser-guests.ts'
 
 const pageSchema = z.object({ id: z.string().max(100), url: z.string().max(1024 * 1024), title: z.string().max(256), workspaceFile: z.boolean().optional() })
-const viewSchema = z.object({ runtimeId: z.string().max(100), pages: z.array(pageSchema).max(12), activePageId: z.string().nullable(), visible: z.boolean() })
+const viewSchema = z.object({ runtimeId: z.string().max(100), sessionId: z.string().nullable(), pages: z.array(pageSchema).max(12),
+  maxBrowserPages: z.number().int().min(0).max(12), activePageId: z.string().nullable(), visible: z.boolean() })
 const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('user'), runtimeId: z.string(), page: pageSchema }),
-  z.object({ type: z.literal('switch'), runtimeId: z.string(), view: z.enum(['agent', 'user']) }),
-  z.object({ type: z.literal('stop'), runtimeId: z.string() }),
+  z.object({ type: z.literal('stop'), runtimeId: z.string(), pageId: z.string() }),
   z.object({ type: z.literal('update'), id: z.string(), url: z.string().max(1024 * 1024), title: z.string().max(256) }),
 ])
-interface Surface { owner: WebContents; value: BrowserSurface }
+interface Surface { owner: WebContents; value: BrowserSurface; abort: AbortController }
 export interface BrowserTurnPage {
-  owner: WebContents; runtimeId: string; turnId: string
-  surfaceId: string; view: 'user' | 'agent'; abort: AbortController
+  owner: WebContents; runtimeId: string; turnId: string; surfaceId: string
+  closed: Map<string, { url: string; reason: Error }>
 }
 
-/** 主进程管理物理网页；Renderer 只决定哪一个表面显示在侧栏槽位。 */
+/** 每个标签持有一个网页；Turn 只选择操作目标和临时接管页面。 */
 export class BrowserPages {
   private readonly surfaces = new Map<string, Surface>()
   private readonly views = new Map<WebContents, BrowserViewRequest>()
-  private readonly owners = new Map<string, WebContents>()
+  private readonly runtimes = new Map<string, { owner: WebContents; sessionId: string | null; pageIds: string[]; maxBrowserPages: number }>()
   private readonly turns = new Map<string, BrowserTurnPage>()
   private readonly ownerThrottling = new Map<WebContents, boolean>()
   private revision = 0
@@ -39,19 +39,15 @@ export class BrowserPages {
     }
     guests.isAgent = id => !!this.surfaces.get(id)?.value.turnId
     guests.onOpen = (id, url) => {
-      const source = this.surfaces.get(id)?.value
-      if (!source?.turnId) return false
-      const turn = this.turns.get(source.turnId)
-      if (!turn || turn.abort.signal.aborted) return false
-      // 保留发起页的会话和卸载语义；弹窗由同一 Turn 持有并沿用侧栏入口。
+      const source = this.surfaces.get(id)
+      if (!source) return false
       try {
         const address = browserDisplayUrl(url)
-        const child = this.create(turn.owner, turn.runtimeId, { ...source.page, url: address, title: '', workspaceFile: address.startsWith('file:') }, id)
-        child.turnId = turn.turnId
-        turn.surfaceId = child.id
-        this.publish(turn.owner)
+        this.create(source.owner, source.value.runtimeId,
+          { id: randomUUID(), url: address, title: '', workspaceFile: source.value.page.workspaceFile && address.startsWith('file:') }, id)
+        this.publish(source.owner)
       } catch (error) {
-        if (!turn.owner.isDestroyed()) turn.owner.send(IPC.browserEvent, { id, type: 'notice', error: true, message: String(error) })
+        if (!source.owner.isDestroyed()) source.owner.send(IPC.browserEvent, { id, type: 'notice', error: true, message: String(error) })
       }
       return true
     }
@@ -71,19 +67,17 @@ export class BrowserPages {
     if (!this.views.has(owner)) owner.once('destroyed', () => {
       this.views.delete(owner)
       this.ownerThrottling.delete(owner)
-      for (const [id, current] of this.owners) if (current === owner) this.owners.delete(id)
+      for (const [id, runtime] of this.runtimes) if (runtime.owner === owner) this.runtimes.delete(id)
     })
     this.views.set(owner, view)
-    if (view.runtimeId) this.owners.set(view.runtimeId, owner)
-    for (const [id, surface] of this.surfaces) {
-      if (surface.owner !== owner || surface.value.turnId) continue
-      if (surface.value.runtimeId !== view.runtimeId || !view.pages.some(page => page.id === surface.value.page.id)) this.remove(id)
+    if (view.runtimeId) this.runtimes.set(view.runtimeId, { owner, sessionId: view.sessionId,
+      pageIds: view.pages.map(page => page.id), maxBrowserPages: view.maxBrowserPages })
+    for (const [id, { value, owner: pageOwner }] of this.surfaces) {
+      if (pageOwner !== owner || value.turnId) continue
+      if (value.runtimeId !== view.runtimeId && !this.agentAncestor(value)) void this.remove(id)
     }
     const page = view.pages.find(page => page.id === view.activePageId)
-    const agent = this.agent(view.runtimeId)
-    if (page && view.visible && (!agent || agent.view === 'user' || this.surface(agent).page.id !== page.id)) {
-      if (!this.userSurface(view.runtimeId, page.id)) this.create(owner, view.runtimeId, page)
-    }
+    if (page && view.visible && !this.page(view.runtimeId, page.id)) this.create(owner, view.runtimeId, page)
     this.publish(owner)
   }
 
@@ -94,92 +88,85 @@ export class BrowserPages {
       if (surface.owner !== owner) throw new Error('网页不属于当前窗口')
       surface.value.page = { ...surface.value.page, url: action.url, title: action.title }
     } else {
-      if (this.owners.get(action.runtimeId) !== owner) throw new Error('网页不属于当前窗口')
-      const agent = this.agent(action.runtimeId)
+      if (this.runtimes.get(action.runtimeId)?.owner !== owner) throw new Error('网页不属于当前窗口')
       if (action.type === 'stop') {
-        if (agent) { agent.abort.abort(new Error('user_closed: 用户停止了 Agent 网页')); this.remove(agent.surfaceId) }
-      } else if (action.type === 'switch') {
-        if (!agent) throw new Error('本轮浏览器操作已结束')
-        agent.view = action.view
-        if (action.view === 'user' && !this.userSurface(action.runtimeId, this.surface(agent).page.id)) {
-          this.create(owner, action.runtimeId, this.surface(agent).page, this.surface(agent).parentId)
-        }
+        const page = this.page(action.runtimeId, action.pageId)
+        if (page) void this.remove(page.id, 'user_closed: 用户关闭了此网页')
       } else {
-        if (agent) agent.view = 'user'
-        const page = { ...action.page, id: agent ? this.surface(agent).page.id : action.page.id, url: browserAddress(action.page.url) }
-        const existing = this.userSurface(action.runtimeId, page.id)
+        const page = { ...action.page, url: browserAddress(action.page.url) }
+        const existing = this.page(action.runtimeId, page.id)
+        if (existing?.turnId) {
+          if (existing.page.url !== page.url) throw new Error('Agent 正在操作此网页，请先停止该网页操作')
+          return
+        }
         if (existing) {
           if (existing.page.url !== page.url) existing.navigation++
           existing.page = page
-        }
-        else this.create(owner, action.runtimeId, page, agent ? this.surface(agent).parentId : undefined)
+        } else this.create(owner, action.runtimeId, page)
       }
     }
     this.publish(owner)
   }
 
   list(runtimeId: string) {
-    const owner = this.owners.get(runtimeId)
-    const view = owner && this.views.get(owner)
-    const selected = this.agent(runtimeId)?.surfaceId
-    return [...this.surfaces.values()].filter(s => s.value.runtimeId === runtimeId && (s.value.turnId || !this.hasChild(s.value.id))).map(({ value }) => ({
+    const owner = this.runtimes.get(runtimeId)?.owner
+    const selected = [...this.turns.values()].find(turn => turn.runtimeId === runtimeId)?.surfaceId
+    return [...this.surfaces.values()].filter(s => s.value.runtimeId === runtimeId).map(({ value }) => ({
       id: value.id, url: value.page.url, title: value.page.title, agent: !!value.turnId,
-      selected: selected === value.id, openerId: value.parentId,
-      active: view?.runtimeId === runtimeId && view.activePageId === value.page.id && this.visible(owner!) === value.id,
+      selected: selected === value.id, openerId: value.parentId, active: !!owner && this.visible(owner) === value.id,
     }))
   }
 
   open(runtimeId: string, turnId: string, target: { id?: string; url?: string }): BrowserTurnPage {
     const current = this.turns.get(turnId)
-    if (current) {
-      current.abort.signal.throwIfAborted()
-      if (!target.id || current.surfaceId === target.id) return current
-      const selected = this.surfaces.get(target.id)?.value
-      if (!selected || selected.turnId !== turnId || (target.url && browserAddress(target.url) !== selected.page.url)) {
-        throw new Error('本轮只能切换到所属网页，请从 browser.tabs() 中选择 id')
-      }
-      current.surfaceId = selected.id
-      this.publish(current.owner)
-      return current
-    }
-    const owner = this.owners.get(runtimeId)
-    if (!owner || owner.isDestroyed()) throw new Error('会话窗口不可用')
+    const runtime = this.runtimes.get(runtimeId)
+    if (!runtime || runtime.owner.isDestroyed()) throw new Error('会话窗口不可用')
+    if (target.id && current?.closed.has(target.id)) throw current.closed.get(target.id)!.reason
+    if (current && !target.id && target.url === undefined) { this.surface(current); return current }
     const url = target.url === undefined ? undefined : browserAddress(target.url)
-    const candidates = this.list(runtimeId).filter(page => !page.agent && (!target.id || page.id === target.id)
-      && (!url || page.url === url))
-    const candidate = candidates.find(page => page.active) ?? (candidates.length === 1 ? candidates[0] : undefined)
+    const candidates = this.list(runtimeId).filter(page => (!target.id || page.id === target.id) && (!url || page.url === url))
+    const candidate = candidates.find(page => page.id === current?.surfaceId) ?? candidates.find(page => page.active)
+      ?? (candidates.length === 1 ? candidates[0] : undefined)
     if (target.id && !candidate) throw new Error('指定页面已关闭或与网址不符，请重新列出网页')
     if (!candidate && candidates.length > 1) throw new Error('有多个匹配页面，请从 browser.tabs() 中选择 id')
     if (!candidate && !url) throw new Error('本轮没有已打开的网页，请调用 browser.open({url: "目标网址"})；无需用户打开侧栏')
+    const closed = !candidate && [...current?.closed.values() ?? []].find(page => page.url === url)
+    if (closed) throw closed.reason
     const value = candidate ? this.surfaces.get(candidate.id)!.value
-      : this.create(owner, runtimeId, { id: randomUUID(), url: url!, title: '', workspaceFile: url!.startsWith('file:') })
-    for (const id of this.family(value.id)) this.surfaces.get(id)!.value.turnId = turnId
-    const turn: BrowserTurnPage = { owner, runtimeId, turnId, surfaceId: value.id, view: 'agent', abort: new AbortController() }
+      : this.create(runtime.owner, runtimeId, { id: randomUUID(), url: url!, title: '', workspaceFile: url!.startsWith('file:') })
+    if (value.turnId && value.turnId !== turnId) throw new Error('此网页正在被另一轮操作占用')
+    value.turnId = turnId
+    const turn = current ?? { owner: runtime.owner, runtimeId, turnId, surfaceId: value.id, closed: new Map() }
+    turn.surfaceId = value.id
     this.turns.set(turnId, turn)
-    // guest 能执行脚本不代表宿主会提交画面；两层都保持绘制，截图才不依赖侧栏和窗口可见性。
-    if (!this.ownerThrottling.has(owner)) {
-      this.ownerThrottling.set(owner, owner.getBackgroundThrottling())
-      owner.setBackgroundThrottling(false)
+    if (!this.ownerThrottling.has(turn.owner)) {
+      this.ownerThrottling.set(turn.owner, turn.owner.getBackgroundThrottling())
+      turn.owner.setBackgroundThrottling(false)
     }
     this.guests.get(value.id)?.setBackgroundThrottling(false)
-    this.publish(owner)
+    this.publish(turn.owner)
     return turn
   }
 
   current(turnId: string): BrowserTurnPage {
     const turn = this.turns.get(turnId)
-    if (!turn) throw new Error('本轮尚未选择网页，请先调用 browser.open({url: "目标网址"})')
-    turn.abort.signal.throwIfAborted()
+    if (!turn) throw new Error('本轮尚未选择网页，请先调用 browser.open({id}) 或 browser.open({url})')
+    this.surface(turn)
     return turn
+  }
+
+  signal(turn: BrowserTurnPage): AbortSignal {
+    this.surface(turn)
+    return this.surfaces.get(turn.surfaceId)!.abort.signal
   }
 
   async guest(turn: BrowserTurnPage, signal: AbortSignal, allowFailedNavigation = false): Promise<WebContents> {
     for (let count = 0; count < 200; count++) {
-      signal.throwIfAborted(); turn.abort.signal.throwIfAborted()
+      signal.throwIfAborted()
       const guest = this.guests.get(turn.surfaceId)
       if (guest) {
         if (!allowFailedNavigation) {
-          try { await this.guests.waitForDocument(turn.surfaceId, AbortSignal.any([signal, turn.abort.signal])) }
+          try { await this.guests.waitForDocument(turn.surfaceId, signal) }
           catch (error) { throw this.navigationError(turn.surfaceId, error) }
         }
         return guest
@@ -190,9 +177,8 @@ export class BrowserPages {
   }
 
   async navigate(turn: BrowserTurnPage, url: string, signal: AbortSignal): Promise<void> {
-    const value = this.surface(turn)
-    const address = browserAddress(url)
-    signal.throwIfAborted(); turn.abort.signal.throwIfAborted()
+    const value = this.surface(turn), address = browserAddress(url)
+    signal.throwIfAborted()
     value.page = { ...value.page, url: address, workspaceFile: address.startsWith('file:') }
     this.publish(turn.owner)
     try { await this.guests.navigate(value.id, address, address.startsWith('file:') ? turn.runtimeId : undefined, signal) }
@@ -204,85 +190,74 @@ export class BrowserPages {
     if (!failure || error !== failure) return error
     const certificate = this.guests.pendingCertificate(id)
     return new Error(certificate
-      ? `certificate_confirmation_required: ${new URL(certificate.url).origin}（${certificate.error}）。此页面需要用户手动确认证书。请告知用户在右侧浏览器点击“高级 → 继续访问”，用户确认后再继续操作当前网页。`
-      : `${failure.message}\n使用 browser.navigate({url}) 重试或换网址；browser.open 不会重新加载本轮页面。`, { cause: error })
+      ? `certificate_confirmation_required: ${new URL(certificate.url).origin}（${certificate.error}）。此页面需要用户手动确认证书。请告知用户打开右侧栏的对应浏览器标签，点击“高级 → 继续访问”，用户确认后再继续操作当前网页。`
+      : `${failure.message}\n使用 browser.navigate({url}) 重试或换网址；browser.open 不会重新加载页面。`, { cause: error })
   }
 
   async finish(turnId: string): Promise<void> {
     const turn = this.turns.get(turnId)
     if (!turn) return
-    const value = this.surfaces.get(turn.surfaceId)?.value
-    const visible = this.visible(turn.owner) === turn.surfaceId
     this.turns.delete(turnId)
-    turn.abort.abort(new Error('turn_ended: 本轮浏览器操作已结束'))
     const released: Promise<void>[] = []
-    if (value && visible) {
-      const previous = this.userSurface(turn.runtimeId, value.page.id)
-      if (previous) released.push(this.remove(previous.id))
+    for (const { value } of this.surfaces.values()) if (value.turnId === turnId) {
       delete value.turnId
       this.guests.get(value.id)?.setBackgroundThrottling(true)
     }
-    released.push(this.releaseTurnPages(turnId))
+    for (const { value } of this.surfaces.values()) {
+      if (value.runtimeId === turn.runtimeId && !value.turnId && this.views.get(turn.owner)?.runtimeId !== turn.runtimeId) {
+        released.push(this.remove(value.id))
+      }
+    }
     this.publish(turn.owner)
     await Promise.all(released)
     this.releaseActivity(turn.owner)
   }
 
   surface(turn: BrowserTurnPage): BrowserSurface {
+    const closed = turn.closed.get(turn.surfaceId)
+    if (closed) throw closed.reason
     const value = this.surfaces.get(turn.surfaceId)?.value
-    if (!value) throw new Error('Agent 网页已关闭')
+    if (!value) throw new Error('page_closed: 网页已关闭')
     return value
   }
 
-  private agent(runtimeId: string) { return [...this.turns.values()].find(turn => turn.runtimeId === runtimeId && !turn.abort.signal.aborted) }
-  private userSurface(runtimeId: string, pageId: string) {
-    return [...this.surfaces.values()].find(s => s.value.runtimeId === runtimeId && s.value.page.id === pageId && !s.value.turnId && !this.hasChild(s.value.id))?.value
+  private page(runtimeId: string, pageId: string) {
+    return [...this.surfaces.values()].find(s => s.value.runtimeId === runtimeId && s.value.page.id === pageId)?.value
   }
-  private hasChild(id: string) { return [...this.surfaces.values()].some(s => s.value.parentId === id) }
-  private family(id: string): string[] {
-    const ids: string[] = []
-    for (let value = this.surfaces.get(id)?.value; value; value = value.parentId ? this.surfaces.get(value.parentId)?.value : undefined) ids.push(value.id)
-    return ids
+  private agentAncestor(value: BrowserSurface): boolean {
+    for (let parent = value.parentId; parent;) {
+      const source = this.surfaces.get(parent)?.value
+      if (source?.turnId) return true
+      parent = source?.parentId
+    }
+    return false
   }
   private create(owner: WebContents, runtimeId: string, page: BrowserSurface['page'], parentId?: string): BrowserSurface {
+    const runtime = this.runtimes.get(runtimeId)!
+    const ids = new Set([...runtime.pageIds,
+      ...[...this.surfaces.values()].filter(s => s.value.runtimeId === runtimeId).map(s => s.value.page.id)])
+    if (!ids.has(page.id) && ids.size >= runtime.maxBrowserPages) throw new Error('标签页已满，请先关闭部分标签')
     const value: BrowserSurface = { ...this.guests.acquire(owner), runtimeId, page: { ...page }, parentId, navigation: 0, audible: false }
-    this.surfaces.set(value.id, { owner, value })
+    this.surfaces.set(value.id, { owner, value, abort: new AbortController() })
     return value
   }
-  private remove(id: string, retained?: ReadonlySet<string>): Promise<void> {
+  private remove(id: string, reason?: string): Promise<void> {
     const surface = this.surfaces.get(id)
-    if (!surface) return Promise.resolve()
-    this.surfaces.delete(id)
-    return Promise.all([this.guests.release(surface.owner, id), this.releaseParent(surface.value.parentId, retained)]).then(() => {})
+    return surface ? this.guests.release(surface.owner, id, reason) : Promise.resolve()
   }
   private closed(id: string, reason: string): void {
     const surface = this.surfaces.get(id)
+    if (!surface) return
     this.surfaces.delete(id)
-    for (const turn of this.turns.values()) if (turn.surfaceId === id) {
-      turn.abort.abort(new Error(reason))
-      this.releaseTurnPages(turn.turnId)
-      this.releaseActivity(turn.owner)
-    }
-    if (surface) this.releaseParent(surface.value.parentId)
-    if (surface) this.publish(surface.owner)
-  }
-  private releaseParent(id?: string, retained?: ReadonlySet<string>): Promise<void> | undefined {
-    const parent = id && this.surfaces.get(id)?.value
-    if (parent && !parent.turnId && !retained?.has(parent.id) && !this.hasChild(parent.id)) return this.remove(parent.id, retained)
-  }
-  private async releaseTurnPages(turnId: string): Promise<void> {
-    const retained = new Set([...this.surfaces.values()].filter(s => !s.value.turnId).flatMap(s => this.family(s.value.id)))
-    const released: Promise<void>[] = []
-    for (const [id, surface] of this.surfaces) if (surface.value.turnId === turnId) {
-      if (retained.has(id)) {
-        delete surface.value.turnId
-        this.guests.get(id)?.setBackgroundThrottling(true)
-      } else released.push(this.remove(id, retained))
-    }
-    await Promise.all(released)
+    const error = new Error(reason)
+    const turn = surface.value.turnId && this.turns.get(surface.value.turnId)
+    if (turn) turn.closed.set(id, { url: surface.value.page.url, reason: error })
+    surface.abort.abort(error)
+    this.releaseActivity(surface.owner)
+    this.publish(surface.owner)
   }
   private releaseActivity(owner: WebContents): void {
-    if ([...this.turns.values()].some(turn => turn.owner === owner && !turn.abort.signal.aborted)) return
+    if ([...this.surfaces.values()].some(surface => surface.owner === owner && surface.value.turnId)) return
     const throttling = this.ownerThrottling.get(owner)
     if (throttling === undefined) return
     this.ownerThrottling.delete(owner)
@@ -290,15 +265,12 @@ export class BrowserPages {
   }
   private visible(owner: WebContents): string | null {
     const view = this.views.get(owner)
-    if (!view?.visible) return null
-    const agent = this.agent(view.runtimeId)
-    if (agent?.view === 'agent' && this.surface(agent).page.id === view.activePageId) return agent.surfaceId
-    return this.userSurface(view.runtimeId, view.activePageId ?? '')?.id ?? null
+    return view?.visible ? this.page(view.runtimeId, view.activePageId ?? '')?.id ?? null : null
   }
   private snapshot(owner: WebContents): BrowserHostState {
-    const agents: BrowserAgentPage[] = [...this.turns.values()].filter(t => t.owner === owner && !t.abort.signal.aborted)
-      .map(t => ({ runtimeId: t.runtimeId, turnId: t.turnId, surfaceId: t.surfaceId, page: this.surface(t).page, view: t.view }))
-    return { revision: this.revision, surfaces: [...this.surfaces.values()].filter(s => s.owner === owner).map(s => s.value), agents, visibleId: this.visible(owner) }
+    return { revision: this.revision, surfaces: [...this.surfaces.values()].filter(s => s.owner === owner).map(s => s.value),
+      sessions: [...this.runtimes].filter(([, r]) => r.owner === owner).map(([runtimeId, r]) => ({ runtimeId, sessionId: r.sessionId })),
+      visibleId: this.visible(owner) }
   }
   private publish(owner: WebContents): void { this.revision++; if (!owner.isDestroyed()) owner.send(IPC.browserHostChanged, this.snapshot(owner)) }
   private requireOwner(event: Electron.IpcMainInvokeEvent): void {

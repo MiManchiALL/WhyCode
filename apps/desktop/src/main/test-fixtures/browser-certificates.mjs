@@ -61,7 +61,9 @@ export async function checkBrowserCertificates({ directory, execute, until, agen
     await execute('Array.from(document.querySelectorAll(\'[role="alert"] button\')).find(button=>button.textContent==="继续访问（不安全）").click()')
   }
   try {
-    await execute('fixture.session("alpha"); window.certificateEvents=[]; window.stopCertificateEvents=window.whycode.onBrowserEvent(event=>{if(event.type==="certificate")window.certificateEvents.push(event)}); undefined')
+    await execute('fixture.session("alpha")')
+    await execute('window.certificateEvents=[]; window.stopCertificateEvents=window.whycode.onBrowserEvent(event=>{if(event.type==="certificate")window.certificateEvents.push(event)}); undefined')
+    assert.equal(agent.pages.list('alpha').length, 0, '证书测试从空会话开始')
     await execute(`fixture.open(${JSON.stringify(url)})`)
     await until(warning, 'certificate error page')
     const blocked = await issue()
@@ -102,7 +104,8 @@ export async function checkBrowserCertificates({ directory, execute, until, agen
     await assert.rejects(guests.navigate(current.id, untrustedUrl), /ERR_CERT_/, '相同证书的另一个主机仍需确认')
     await until(warning, 'other host remains blocked')
     const beforeClose = await issue()
-    await execute('fixture.session("alpha"); fixture.narrow(420)')
+    await execute('fixture.session("alpha")')
+    await execute('fixture.narrow(420)')
     await until(() => !guests.get(current.id), 'closed certificate page')
     await assert.rejects(trust(beforeClose.id, beforeClose.certificate.id), /证书确认已失效/, '关闭标签撤销待确认记录')
 
@@ -124,7 +127,7 @@ export async function checkBrowserCertificates({ directory, execute, until, agen
     await accept()
     await until(() => agentGuest.getTitle() === 'Certificate fixture', 'user confirms agent page')
     assert.equal(await execute('!!document.querySelector(\'[role="alertdialog"]\')'), false, '协助确认证书不弹停止 Agent 确认')
-    assert.equal(agentPage.abort.signal.aborted, false)
+    assert.equal(agent.pages.signal(agentPage).aborted, false)
     assert.equal(guests.get(agentPage.surfaceId), agentGuest, '确认后保留同一 Agent 网页')
     const allowed = await run('certificate-agent', 'text(await browser.snapshot()); image(await browser.screenshot());')
     assert.equal(allowed.isError, false, allowed.text)

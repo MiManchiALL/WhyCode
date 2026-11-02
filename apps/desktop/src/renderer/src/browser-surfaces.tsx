@@ -1,21 +1,21 @@
-import { useEffect } from 'react'
+import { useEffect, useEffectEvent } from 'react'
 import { createPortal } from 'react-dom'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import { BrowserPanel } from './browser-panel.tsx'
 import { browserAction, completeBrowserConfirmation, dismissBrowserConfirmation, guardBrowserAction, updateBrowserHost, useBrowserConfirmation, useBrowserHostState } from './browser-host-state.ts'
 import { useConversationFeedback } from './conversation-feedback.tsx'
-import { rightPanelTabId, type RightPanelPage, type RightPanelSessionState } from './right-panel-state.ts'
+import { MAX_RIGHT_PANEL_TABS, rightPanelTabId, type RightPanelPage, type RightPanelSessionState } from './right-panel-state.ts'
 import type { ImageDraft } from './image-draft.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { BrowserViewRequest } from '../../shared/browser-agent.ts'
 import { useBrowserBounds } from './use-browser-bounds.ts'
 
 interface Props {
-  runtimeId: string; active: boolean; fullscreen?: boolean; state: RightPanelSessionState
+  runtimeId: string; sessionId: string | null; active: boolean; fullscreen?: boolean; state: RightPanelSessionState
   canReference: boolean; referenceDrafts: readonly ImageDraft[]
   onReference: (owner: string, image: BrowserReferenceImage, replaceId?: string) => boolean
   onUpdate: (page: RightPanelPage) => void
-  onRegister: (page: Extract<RightPanelPage, { kind: 'browser' }>) => void
+  onRegister: (runtimeId: string, sessionId: string | null, page: Extract<RightPanelPage, { kind: 'browser' }>) => void
   onOpen: (page: RightPanelPage) => void
   onClose: (tabId: string) => void
 }
@@ -28,7 +28,8 @@ export function BrowserSurfaces(props: Props) {
   const { anchor, bounds } = useBrowserBounds(props.active)
   const pages = props.state.tabs.flatMap(tab => tab.page.kind === 'browser' ? [tab.page] : [])
   const activePage = props.state.tabs.find(tab => tab.id === props.state.activeTabId)?.page
-  const view: BrowserViewRequest = { runtimeId: props.runtimeId, pages,
+  const view: BrowserViewRequest = { runtimeId: props.runtimeId, sessionId: props.sessionId, pages,
+    maxBrowserPages: MAX_RIGHT_PANEL_TABS - props.state.tabs.filter(tab => tab.page.kind === 'terminal').length,
     activePageId: activePage?.kind === 'browser' ? activePage.id : null, visible: props.active }
   const serializedView = JSON.stringify(view)
   useEffect(() => {
@@ -42,29 +43,17 @@ export function BrowserSurfaces(props: Props) {
   useEffect(() => {
     if (confirmation && confirmation.runtimeId !== props.runtimeId) dismissBrowserConfirmation()
   }, [confirmation, props.runtimeId])
-  useEffect(() => {
-    // 后台页面只投影临时标签；用户真正查看后才进入会话偏好。
-    const agent = state.agents.find(agent => agent.runtimeId === props.runtimeId && agent.surfaceId === state.visibleId)
-    if (props.active && agent) props.onRegister({ kind: 'browser', ...agent.page })
-  }, [state.agents, state.visibleId, props.active, props.runtimeId, props.onRegister])
-  useEffect(() => {
+  const register = useEffectEvent(() => {
     for (const surface of state.surfaces) {
-      if (surface.runtimeId !== props.runtimeId) continue
-      const descriptor = pages.find(page => page.id === surface.page.id)
-      const agent = state.agents.find(agent => agent.runtimeId === surface.runtimeId && agent.page.id === surface.page.id)
-      if (surface.turnId && agent?.surfaceId !== surface.id) continue
-      if (!surface.turnId && state.surfaces.some(child => child.parentId === surface.id)) continue
-      if (!descriptor || (agent && !!surface.turnId !== (agent.view === 'agent'))) continue
-      if (descriptor.url !== surface.page.url || descriptor.title !== surface.page.title || descriptor.workspaceFile !== surface.page.workspaceFile) {
-        props.onUpdate({ ...surface.page, kind: 'browser', workspaceFile: surface.page.workspaceFile })
-      }
+      const session = state.sessions.find(session => session.runtimeId === surface.runtimeId)!
+      props.onRegister(surface.runtimeId, session.sessionId, { ...surface.page, kind: 'browser' })
     }
-  }, [state.surfaces, state.agents, props.runtimeId, props.onUpdate, serializedView])
+  })
+  useEffect(() => { register() }, [state.surfaces, state.sessions])
   const fail = (error: unknown) => feedback('error', String(error), true)
   return <>
     <div ref={anchor} aria-hidden style={{ position: 'absolute', inset: '44px 0 0', pointerEvents: 'none' }} />
     {createPortal(state.surfaces.map(surface => {
-      const agent = state.agents.find(agent => agent.runtimeId === surface.runtimeId && agent.page.id === surface.page.id)
       const shown = state.visibleId === surface.id && props.active && props.runtimeId === surface.runtimeId
       const descriptor = pages.find(page => page.id === surface.page.id)
       const page = { kind: 'browser' as const, ...surface.page, ...(shown ? { referenceRequest: descriptor?.referenceRequest } : {}) }
@@ -79,8 +68,7 @@ export function BrowserSurfaces(props: Props) {
           onReferenceHandled={() => props.onUpdate({ ...page, referenceRequest: undefined })}
           onOpen={url => props.onOpen({ kind: 'browser', id: crypto.randomUUID(), url, title: '', workspaceFile: surface.page.workspaceFile && url.startsWith('file:') })}
           onClose={() => props.onClose(rightPanelTabId(page))}
-          onNavigate={address => guardBrowserAction(surface.runtimeId, surface.page.id, () => props.onOpen({ ...page, url: address, referenceRequest: undefined }))}
-          switchView={agent ? () => { void browserAction({ type: 'switch', runtimeId: surface.runtimeId, view: surface.turnId ? 'user' : 'agent' }).catch(fail) } : undefined}
+          onNavigate={address => guardBrowserAction(surface.runtimeId, surface.page.id, 'navigate', () => props.onOpen({ ...page, url: address, referenceRequest: undefined }), fail)}
         />
       </div>
     }), document.body)}
@@ -88,14 +76,13 @@ export function BrowserSurfaces(props: Props) {
       <AlertDialog.Portal><AlertDialog.Overlay className="wc-dialog-overlay fixed inset-0 z-[90] bg-black/20 backdrop-blur-[1px]" />
         <AlertDialog.Content className="wc-dialog-card wc-menu-surface fixed left-1/2 top-1/2 z-[91] w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">
           <AlertDialog.Title className="text-base font-medium">停止 Agent 网页操作？</AlertDialog.Title>
-          <AlertDialog.Description className="mt-3 text-sm text-[var(--wc-muted)]">此操作会关闭 Agent 当前网页，已经完成的网页操作不会撤销。</AlertDialog.Description>
-          <p className="mt-2 text-xs text-[var(--wc-faint)]">切换回“我的网页”后再关闭，不会停止 Agent 操作。</p>
+          <AlertDialog.Description className="mt-3 text-sm text-[var(--wc-muted)]">此操作会关闭这个网页，已经完成的操作不会撤销，其他网页不受影响。</AlertDialog.Description>
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel className="wc-focus-ring rounded-lg px-3 py-2 text-sm">取消</AlertDialog.Cancel>
             <button className="wc-focus-ring rounded-lg bg-[var(--wc-ink)] px-3 py-2 text-sm text-[var(--wc-surface)]" onClick={() => {
               if (!confirmation) return
               const pending = confirmation
-              void browserAction({ type: 'stop', runtimeId: pending.runtimeId }).then(() => {
+              void browserAction({ type: 'stop', runtimeId: pending.runtimeId, pageId: pending.pageId }).then(() => {
                 completeBrowserConfirmation(pending)
               }, fail)
             }}>停止并继续</button>

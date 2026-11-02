@@ -31,5 +31,5 @@ export async function checkBrowserReadiness({ directory, run, finish, agent, gue
   assert.match(content.text, /Loaded content/)
   assert.equal(content.images.length, 1)
   await finish('readiness')
-  assert.equal(guest.isDestroyed(), true)
+  assert.equal(guest.isDestroyed(), false, '结束后交还用户')
 }

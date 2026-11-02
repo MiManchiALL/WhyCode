@@ -13,7 +13,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 const require = createRequire(import.meta.url)
 const desktop = path.resolve(import.meta.dirname, '../../..')
-test('Browser 真实 webview：接管、后台操作、视图切换、交还、取消与清理', {
+test('Browser 真实 webview：独立多页、后台操作、持久标签、交还、取消与清理', {
   timeout: 120_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY,
 }, async t => {

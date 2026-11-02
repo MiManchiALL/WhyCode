@@ -1,11 +1,11 @@
-import { StrictMode, useState } from 'react'
+import { StrictMode, useState, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { BrowserSurfaces } from '../browser-surfaces.tsx'
 import { RightPanelTabs } from '../right-panel-tabs.tsx'
 import { ConversationFeedbackContext } from '../conversation-feedback.tsx'
-import { guardBrowserAction, routeBrowserPage, useBrowserHostState } from '../browser-host-state.ts'
-import { closeRightPanelTab, moveRightPanelTab, openRightPanelPage, selectRightPanelTab, updateRightPanelPage, withAgentBrowserTab, type RightPanelPage, type RightPanelSessionState } from '../right-panel-state.ts'
+import { browserAction, guardBrowserAction, routeBrowserPage, useBrowserHostState } from '../browser-host-state.ts'
+import { closeRightPanelTab, moveRightPanelTab, openRightPanelPage, selectRightPanelTab, updateRightPanelPage, registerBrowserPage, RightPanelSessionStore, browserReferencePage, type RightPanelPage, type RightPanelSessionState } from '../right-panel-state.ts'
 import '../styles.css'
 
 const blank: RightPanelSessionState = { open: false, tabs: [], activeTabId: null, inspectorView: 'plan' }
@@ -16,7 +16,8 @@ function Fixture() {
   const [width, setWidth] = useState(420)
   const [height, setHeight] = useState(700)
   const host = useBrowserHostState()
-  const display = withAgentBrowserTab(state, host.agents.find(agent => agent.runtimeId === runtimeId))
+  const display = state
+  const store = useRef(new RightPanelSessionStore(null))
   const open = async (page: RightPanelPage) => {
     if (page.kind === 'browser') page = await routeBrowserPage(runtimeId, page)
     flushSync(() => setState(current => openRightPanelPage(current, page)))
@@ -24,19 +25,32 @@ function Fixture() {
   const close = (id: string) => {
     const page = display.tabs.find(tab => tab.id === id)?.page
     const proceed = () => setState(current => closeRightPanelTab(current, id))
-    if (page?.kind === 'browser') guardBrowserAction(runtimeId, page.id, proceed)
+    if (page?.kind === 'browser') guardBrowserAction(runtimeId, page.id, 'close', proceed, error => feedback('error', String(error)))
     else proceed()
   }
   ;(window as any).fixture = {
     flush: flushSync,
     open: (url: string) => open({ kind: 'browser', id: crypto.randomUUID(), url, title: '' }),
     file: () => open({ kind: 'file', path: 'fixture.html', name: 'fixture.html', source: { kind: 'current' } }),
-    reference: (url: string) => open({ kind: 'browser', id: crypto.randomUUID(), url, title: '', referenceRequest: { kind: 'new' } }),
-    session: (id: string) => { setRuntimeId(id); setState(blank) },
+    reference: (url: string, id?: string) => {
+      const existing = state.tabs.find(tab => tab.id === id)?.page
+      return open(existing?.kind === 'browser' ? { ...existing, url, referenceRequest: { kind: 'new' } } : browserReferencePage(state, url, false, { kind: 'new' }))
+    },
+    session: async (id: string) => {
+      if (id === runtimeId) for (const surface of host.surfaces.filter(s => s.runtimeId === id && !s.turnId)) {
+        await browserAction({ type: 'stop', runtimeId: id, pageId: surface.page.id })
+      }
+      store.current.set(runtimeId, state); setRuntimeId(id); setState(blank)
+    },
+    resume: (id: string) => { store.current.set(runtimeId, state); setRuntimeId(id); setState(store.current.get(id)) },
+    saved: (id: string) => store.current.get(id),
+    select: (id: string) => setState(current => selectRightPanelTab(current, id)),
+    closeId: close,
     visible: (value: boolean) => setState(current => ({ ...current, open: value })),
     close: () => close(display.activeTabId!), state: () => state, display: () => display,
-    narrow: (value = 300) => setWidth(value),
-    tall: (value: boolean) => setHeight(value ? 1150 : 700),
+    // 隐藏测试窗口不会持续投递 ResizeObserver；尺寸变化后同步触发窗口布局信号。
+    narrow: (value = 300) => { flushSync(() => setWidth(value)); window.dispatchEvent(new Event('resize')) },
+    tall: (value: boolean) => { flushSync(() => setHeight(value ? 1150 : 700)); window.dispatchEvent(new Event('resize')) },
   }
   return <ConversationFeedbackContext value={feedback}>
     <div style={{ position: 'fixed', inset: 0, background: 'var(--wc-surface)' }} />
@@ -46,12 +60,12 @@ function Fixture() {
           onSelect={id => setState(current => selectRightPanelTab(current, id))} onClose={close}
           onMove={(id, targetId) => setState(current => moveRightPanelTab(current, id, targetId))}>{null}</RightPanelTabs>
       </div>
-      <BrowserSurfaces runtimeId={runtimeId} active={state.open} state={display} canReference referenceDrafts={[]}
+      <BrowserSurfaces runtimeId={runtimeId} sessionId={runtimeId} active={state.open} state={display} canReference referenceDrafts={[]}
         onReference={() => true} onUpdate={page => setState(current => updateRightPanelPage(current, page))}
-        onRegister={page => setState(current => {
-          if (current.tabs.some(tab => tab.page.kind === 'browser' && tab.page.id === page.id)) return current
-          return { ...openRightPanelPage(current, page), open: current.open, activeTabId: current.activeTabId ?? `browser:${page.id}` }
-        })} onOpen={open} onClose={close} />
+        onRegister={(owner, _sessionId, page) => {
+          if (owner === runtimeId) setState(current => registerBrowserPage(current, page))
+          else store.current.set(owner, registerBrowserPage(store.current.get(owner), page))
+        }} onOpen={open} onClose={close} />
     </div>
   </ConversationFeedbackContext>
 }

@@ -60,13 +60,15 @@ export async function checkBrowserNavigationInterruption({ directory, run, finis
       assert.match(current.text, /Target article/)
     }
     const firstDownload = download(guest, 'initial-download.txt')
+    await finish('interruption')
+    await execute('fixture.session("alpha")')
     const initialDownload = await run('initial-download', `await browser.open({url:${JSON.stringify(`${url}/download`)}});`)
     assert.equal(initialDownload.isError, true, '没有实际文档时，启动空白页不能代表下载目标已打开')
     assert.match(initialDownload.text, /网页导航未完成/)
     assert.doesNotMatch(initialDownload.text, /网页尚未准备好/)
     assert.equal(await firstDownload, 'completed')
     await finish('initial-download')
-    await finish('interruption')
+    await execute('fixture.session("alpha")')
 
     await execute(`fixture.open(${JSON.stringify(`${url}/article`)})`)
     await until(() => execute('!!document.querySelector("[aria-label=\'内置浏览器\'] [aria-label=\'刷新网页\']")'), 'user page ready')

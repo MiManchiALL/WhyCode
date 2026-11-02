@@ -9,6 +9,7 @@ import {
   canAddRightPanelTab,
   MAX_RIGHT_PANEL_TABS,
   openRightPanelPage,
+  registerBrowserPage,
   moveRightPanelTab,
   RightPanelSessionStore,
   rightPanelSessionKey,
@@ -50,6 +51,26 @@ function snapshotPage(
 }
 
 describe('右侧栏会话配置', () => {
+  it('未查看的网页仍保存到会话，新页独立选择，标题更新不改变选择', () => {
+    const storage = new MemoryStorage(), store = new RightPanelSessionStore(storage)
+    const first = { kind: 'browser' as const, id: 'first', url: 'https://example.test/', title: 'First' }
+    let state = registerBrowserPage(emptyState(), first)
+    state = registerBrowserPage(state, { ...first, id: 'second', title: 'Second' })
+    const selected = state.activeTabId
+    assert.equal(state.open, false)
+    assert.equal(selected, 'browser:second')
+    state = updateRightPanelPage(state, { ...first, referenceRequest: { kind: 'new' } })
+    state = registerBrowserPage(state, { ...first, title: 'Updated' })
+    assert.equal(state.activeTabId, selected)
+    assert.equal(state.tabs[0]?.page.kind === 'browser' && state.tabs[0].page.referenceRequest?.kind, 'new')
+    assert.equal(registerBrowserPage(state, { ...first, title: 'Updated' }), state, '相同投影不反复保存')
+    store.set('unviewed', state)
+    const restored = new RightPanelSessionStore(storage).get('unviewed')
+    assert.equal(restored.tabs.length, 2)
+    assert.equal(restored.open, false)
+    assert.equal(restored.activeTabId, selected)
+    assert.equal(restored.tabs[0]?.page.kind === 'browser' && restored.tabs[0].page.title, 'Updated')
+  })
   it('同一会话的多次压缩复用摘要标签，不同会话独立保存选择', () => {
     const storage = new MemoryStorage()
     const store = new RightPanelSessionStore(storage)

@@ -10,7 +10,12 @@ export interface BrowserExecution {
   isError: boolean
   images: { name: string; bytes: Uint8Array }[]
 }
+export interface BrowserPage {
+  id: string; url: string; title: string
+  agent: boolean; selected: boolean; active: boolean; openerId?: string
+}
 export interface BrowserDriver {
+  listPages(): BrowserPage[]
   execute(code: string, context: Pick<ToolContext, 'abortSignal' | 'turnId' | 'toolCallId' | 'onProgress'>): Promise<BrowserExecution>
   finishTurn(turnId: string): Promise<void>
 }
@@ -32,7 +37,7 @@ export class BrowserTurnContext {
     return buildTool({
       name: 'Browser',
       description: '浏览和操作内置网页',
-      prompt: 'Inspect and interact with built-in browser pages using JavaScript. First call without code to load the API guide. Then list this conversation\'s pages with browser.tabs(), claim the relevant page by its observed id, or open the target URL if none fits. Scripts are independent; pages last for the current Turn. Use this tool for browser screenshots, CaptureScreenshot for external applications.',
+      prompt: 'Inspect and interact with built-in browser pages using JavaScript. First call without code to load the API guide and this conversation\'s current pages. Prefer claiming a relevant existing page by its observed id; open a URL if none fits. Use browser.tabs() to refresh the list when needed. Scripts are independent; pages are handed back to the user after the Turn. Use this tool for browser screenshots, CaptureScreenshot for external applications.',
       inputSchema: z.object({
         code: z.string().max(32_000).optional().describe('JavaScript using the loaded browser API; omit on first use'),
         description: z.string().max(120).optional().describe('Brief description of this browser action'),
@@ -43,8 +48,9 @@ export class BrowserTurnContext {
       execute: async (input, ctx) => {
         ctx.abortSignal.throwIfAborted()
         if (!this.active || !input.code) {
+          const pages = options.driver.listPages()
           this.active = true
-          return { data: '浏览器指引已加入本轮上下文；本次未执行网页操作。', isError: false }
+          return { data: `浏览器指引已加入本轮上下文；本次未执行网页操作。\n当前会话网页：${JSON.stringify(pages)}`, isError: false }
         }
         const result = await options.driver.execute(input.code, ctx)
         try {

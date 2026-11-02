@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowLeftRight, Copy, ExternalLink, Globe, LoaderCircle, MoreHorizontal, Plus, Minus, RefreshCw, Search, X, MousePointer2 } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, ExternalLink, Globe, LoaderCircle, MoreHorizontal, Plus, Minus, RefreshCw, Search, X, MousePointer2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { WebviewTag } from 'electron'
 import { browserShortcut, isExternalBrowserUrl, type BrowserLease, type BrowserShortcut } from '../../shared/browser.ts'
@@ -18,7 +18,6 @@ type BrowserPage = Extract<RightPanelPage, { kind: 'browser' }>
 interface Props {
   page: BrowserPage; active: boolean
   lease: BrowserLease; navigationRevision: number; agent: boolean
-  switchView?: () => void
   onNavigate: (url: string) => void
   runtimeId: string
   canReference: boolean
@@ -30,7 +29,7 @@ interface Props {
   onClose: () => void
 }
 
-export function BrowserPanel({ page, active, lease, navigationRevision, agent, switchView, onNavigate, runtimeId, canReference, onReference, referenceDrafts, onChange, onReferenceHandled, onOpen, onClose }: Props) {
+export function BrowserPanel({ page, active, lease, navigationRevision, agent, onNavigate, runtimeId, canReference, onReference, referenceDrafts, onChange, onReferenceHandled, onOpen, onClose }: Props) {
   const addressRef = useRef<HTMLInputElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const [address, setAddress] = useState(page.url === 'about:blank' ? '' : page.url)
@@ -111,10 +110,10 @@ export function BrowserPanel({ page, active, lease, navigationRevision, agent, s
           aria-label="网址或搜索" placeholder="输入网址或搜索" spellCheck={false} autoCapitalize="off" autoCorrect="off"
           onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault() }} />
       </form>
-      {switchView && <button className="wc-preview-action wc-browser-view-toggle !w-auto gap-1 px-1.5" onClick={switchView}
-        title={agent ? '正在查看 Agent 网页；切换到我的网页' : '切换到 Agent 正在操作的网页'} aria-label={agent ? '切换到我的网页' : '切换到 Agent 网页'} aria-pressed={agent}>
-        <span className="wc-browser-view-dot" aria-hidden /><span className="text-xs">{agent ? 'Agent' : '我的网页'}</span><ArrowLeftRight size={12} />
-      </button>}
+      {agent && <span className="wc-browser-agent-status inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5"
+        title="Agent 正在操作此网页" aria-label="Agent 正在操作此网页">
+        <span className="wc-browser-view-dot" aria-hidden /><span className="text-xs">Agent</span>
+      </span>}
       <button className={`wc-preview-action !w-auto gap-1 px-1.5 ${reference.mode !== 'off' ? 'wc-browser-reference-active' : ''}`}
         title="引用网页元素或区域" aria-label="引用网页元素或区域" aria-pressed={reference.mode !== 'off'}
         disabled={!canReference || !state.ready || state.loading || !!state.error || state.url === 'about:blank'}

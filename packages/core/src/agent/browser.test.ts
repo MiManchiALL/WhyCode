@@ -36,12 +36,12 @@ test('Browser 指引仅投影当前 Turn 尾部，工具目录与 System 不变�
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = new SessionStore(root)
   const recorder = await store.create({ workspace: localWorkspace(null), modelId: 'test:browser' })
-  const model = new MockLanguageModelV4({ doStream: [step({}), step({ code: 'text(await browser.tabs())' }), step(), step()] })
+  const model = new MockLanguageModelV4({ doStream: [step({}), step({ code: 'await browser.open({id:"current-page"})' }), step(), step()] })
   const completed: string[] = []
   const executed: string[] = []
   const session = new AgentSession({ model: entry(model), providerConfig: { apiKey: 'test' }, sessionRecorder: recorder,
     promptContext: { projectDir: root, osPlatform: 'win32' }, emit: () => {}, requestApproval: async () => ({ approved: true, remember: true }),
-    browser: { execute: async (_code, context) => {
+    browser: { listPages: () => [{ id: 'current-page', title: 'Existing draft', url: 'https://example.test/draft', agent: false, selected: false, active: true }], execute: async (_code, context) => {
       executed.push(context.turnId!); return { text: 'browser-result', isError: false, images: [] }
     }, finishTurn: async turn => { completed.push(turn) } },
   })
@@ -50,6 +50,8 @@ test('Browser 指引仅投影当前 Turn 尾部，工具目录与 System 不变�
   assert.equal(completed[0], executed[0])
   const [initial, guided, afterTool] = model.doStreamCalls
   assert.ok(initial && guided && afterTool)
+  assert.match(JSON.stringify(guided.prompt), /current-page/)
+  assert.match(JSON.stringify(guided.prompt), /Existing draft/)
   assert.equal(JSON.stringify(initial.prompt).includes(marker), false)
   for (const call of [guided, afterTool]) {
     assert.equal(JSON.stringify(call.prompt).split(marker).length - 1, 1)
@@ -73,7 +75,7 @@ test('停止 Browser 工具后仍结束浏览器生命周期，下一轮不残�
   let finished = 0
   const session = new AgentSession({ model: entry(model), providerConfig: { apiKey: 'test' }, sessionRecorder: recorder,
     promptContext: { projectDir: root, osPlatform: 'win32' }, emit: () => {}, requestApproval: async () => ({ approved: true }),
-    browser: { execute: async (_code, context) => {
+    browser: { listPages: () => [], execute: async (_code, context) => {
       session.abort()
       context.abortSignal.throwIfAborted()
       throw new Error('停止应取消工具')
