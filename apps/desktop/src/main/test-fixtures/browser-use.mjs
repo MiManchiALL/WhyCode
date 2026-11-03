@@ -30,9 +30,9 @@ const server = createServer((_request, response) => response.end(`<!doctype html
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const url = `http://127.0.0.1:${server.address().port}/`
 const delay = () => new Promise(resolve => setTimeout(resolve, 30))
-async function until(predicate, label) {
+async function until(predicate, label, diagnostics) {
   for (let count = 0; count < 300; count++) { if (await predicate()) return; await delay() }
-  throw new Error(`等待失败: ${label}`)
+  throw new Error(`等待失败: ${label}${diagnostics ? `\n${JSON.stringify(await diagnostics())}` : ''}`)
 }
 app.whenReady().then(async () => {
   const guests = new BrowserGuests('http://localhost:43123')
@@ -78,7 +78,13 @@ app.whenReady().then(async () => {
   await execute('fixture.session("alpha")')
   await checkBrowserLoadErrors({ run, finish, execute, until, agent, guests, workspaceLookups })
   await execute('fixture.session("alpha")')
-  await checkBrowserCertificates({ directory, execute, until, agent, guests, run, finish, win })
+  // 用户页布局需要绘制帧：显示以同步原生可见性，期间不因并发测试窗口遮挡而节流。
+  assert.equal(win.webContents.getBackgroundThrottling(), true)
+  win.webContents.setBackgroundThrottling(false)
+  win.setOpacity(0)
+  win.showInactive()
+  try { await checkBrowserCertificates({ directory, execute, until, agent, guests, run, finish, win }) }
+  finally { win.webContents.setBackgroundThrottling(true); win.hide(); win.setOpacity(1) }
   await execute('fixture.session("alpha")')
   await checkBrowserPopups({ directory, workspaceLookups, run, finish, execute, until, agent, guests })
   await execute('fixture.session("alpha")')
