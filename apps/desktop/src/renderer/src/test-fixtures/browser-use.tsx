@@ -48,9 +48,15 @@ function Fixture() {
     closeId: close,
     visible: (value: boolean) => setState(current => ({ ...current, open: value })),
     close: () => close(display.activeTabId!), state: () => state, display: () => display,
-    // 隐藏测试窗口不会持续投递 ResizeObserver；尺寸变化后同步触发窗口布局信号。
-    narrow: (value = 300) => { flushSync(() => setWidth(value)); window.dispatchEvent(new Event('resize')) },
-    tall: (value: boolean) => { flushSync(() => setHeight(value ? 1150 : 700)); window.dispatchEvent(new Event('resize')) },
+    // 隐藏窗口不会持续投递 ResizeObserver；先提交容器尺寸，再同步提交 resize 触发的测量结果。
+    narrow: (value = 300) => {
+      flushSync(() => setWidth(value))
+      flushSync(() => window.dispatchEvent(new Event('resize')))
+    },
+    tall: (value: boolean) => {
+      flushSync(() => setHeight(value ? 1150 : 700))
+      flushSync(() => window.dispatchEvent(new Event('resize')))
+    },
   }
   return <ConversationFeedbackContext value={feedback}>
     <div style={{ position: 'fixed', inset: 0, background: 'var(--wc-surface)' }} />
