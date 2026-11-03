@@ -84,8 +84,11 @@ export async function checkBrowserCertificates({ directory, execute, until, agen
     await until(warning, 'new certificate challenge')
     const current = await issue()
     assert.notEqual(current.certificate.id, blocked.certificate.id)
-    await execute('document.querySelector(\'[role="alert"] summary\').click(); fixture.narrow()')
-    await until(() => execute('document.querySelector(\'[aria-label="内置浏览器"]\').getBoundingClientRect().width===300'), 'narrow certificate error')
+    assert.equal(await execute(`(() => {
+      document.querySelector('[role="alert"] summary').click();
+      fixture.narrow();
+      return document.querySelector('[aria-label="内置浏览器"]').getBoundingClientRect().width;
+    })()`), 300, '尺寸调整完成后证书面板必须同步到新宽度')
     assert.equal(await execute('(() => {const alert=document.querySelector(\'[role="alert"]\');return alert.scrollWidth<=alert.clientWidth})()'), true, '证书长指纹不撑破窄栏')
     if (process.env.WHYCODE_BROWSER_REVIEW_DIR) {
       await mkdir(process.env.WHYCODE_BROWSER_REVIEW_DIR, { recursive: true })
