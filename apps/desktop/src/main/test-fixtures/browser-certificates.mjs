@@ -84,11 +84,18 @@ export async function checkBrowserCertificates({ directory, execute, until, agen
     await until(warning, 'new certificate challenge')
     const current = await issue()
     assert.notEqual(current.certificate.id, blocked.certificate.id)
-    assert.equal(await execute(`(() => {
-      document.querySelector('[role="alert"] summary').click();
-      fixture.narrow();
-      return document.querySelector('[aria-label="内置浏览器"]').getBoundingClientRect().width;
-    })()`), 300, '尺寸调整完成后证书面板必须同步到新宽度')
+    assert.equal(await execute('document.visibilityState'), 'visible', '证书布局在可绘制窗口中验证')
+    await execute('document.querySelector(\'[role="alert"] summary\').click(); fixture.narrow()')
+    await until(() => execute('document.querySelector(\'[aria-label="内置浏览器"]\').getBoundingClientRect().width===300'),
+      'narrow certificate error', () => execute(`(() => {
+        const container = document.getElementById('root').lastElementChild;
+        return { visibility: document.visibilityState, container: container.getBoundingClientRect().toJSON(),
+          style: container.style.cssText, anchor: container.lastElementChild.getBoundingClientRect().toJSON(),
+          panels: Array.from(document.querySelectorAll('.wc-browser-panel')).map(panel => ({
+            width: panel.getBoundingClientRect().width, style: panel.parentElement.style.cssText,
+            hidden: panel.parentElement.getAttribute('aria-hidden'),
+          })) };
+      })()`))
     assert.equal(await execute('(() => {const alert=document.querySelector(\'[role="alert"]\');return alert.scrollWidth<=alert.clientWidth})()'), true, '证书长指纹不撑破窄栏')
     if (process.env.WHYCODE_BROWSER_REVIEW_DIR) {
       await mkdir(process.env.WHYCODE_BROWSER_REVIEW_DIR, { recursive: true })
