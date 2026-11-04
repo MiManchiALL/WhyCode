@@ -23,6 +23,7 @@ interface GuestLease {
 
 /** 网页只持有隔离的 Chromium 会话；窗口和标签释放时撤销 guest 所有权。 */
 export class BrowserGuests {
+  onAttached?: (id: string, guest: WebContents) => void
   onClosed?: (id: string, reason: string) => void
   onOpen?: (id: string, url: string) => boolean
   onAudioStateChanged?: (id: string, audible: boolean) => void
@@ -191,6 +192,7 @@ export class BrowserGuests {
       const lease = this.leases.get(key)
       if (!lease || lease.owner !== window.webContents || lease.guest) return
       id = key; lease.guest = guest
+      this.onAttached?.(key, guest)
       lease.references = new BrowserReferences(guest, url => this.files.source(key, url))
       lease.navigation = new BrowserNavigation(guest)
       lease.certificates = this.certificates.bind(guest, certificate => send({ type: 'certificate', certificate }))

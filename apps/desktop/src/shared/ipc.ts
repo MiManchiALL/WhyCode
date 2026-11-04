@@ -3,6 +3,12 @@
  * 命令走 invoke/handle，高频运行事件走长期 MessagePort，其余低频状态走 send。
  */
 export const IPC = {
+  diagnosticsState: 'whycode:diagnostics-state',
+  diagnosticsChanged: 'whycode:diagnostics-changed',
+  diagnosticsOpen: 'whycode:diagnostics-open',
+  diagnosticsExport: 'whycode:diagnostics-export',
+  diagnosticsClear: 'whycode:diagnostics-clear',
+  rendererDiagnostic: 'whycode:renderer-diagnostic',
   ssh: 'whycode:ssh',
   sshChanged: 'whycode:ssh-changed',
   sshSkillsChanged: 'whycode:ssh-skills-changed',

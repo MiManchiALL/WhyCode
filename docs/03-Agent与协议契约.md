@@ -667,6 +667,12 @@ SSH 工作区绑定为 `{mode:'ssh',target,label,workingDirectory}`；持久历�
 
 普通 Git 命令默认 30 秒与每条输出流 1 MiB 上限；变更/状态清单允许 4 MiB，最多返回 2,000 个变更文件，截断明确标记且统计仅覆盖已列出的文件。提交与推送最多 180 秒，正常完成后的 hook 输出截断不改报操作失败。进程退出释放输出与计时器；SSH 中断不自动重放写入。界面和比较语义见文档二 §12.7。
 
+### 7.10 本地诊断 IPC
+
+诊断管理和 Renderer 异常上报只接受宿主主窗口的主 Frame。Renderer 不传日志目录或任意文件名，导出路径由 Main 的保存对话框确定；异常上报在 Main 校验固定种类和有界文本字段，不接受网页上报。状态与界面类型由 `shared/diagnostics.ts` 持有，设置先订阅再读取快照，迟到快照不覆盖操作通知。
+
+诊断不生成 CoreCommand、模型消息或会话 Journal 事件，不参与恢复、Fork 和压缩。清理成功不清除会话记录、工作区、浏览器数据和用户已导出的文件；清理或导出失败返回真实错误。容量、磁盘与队列生命周期见文档二 §3.5。
+
 ## 8. 推理与模型选择
 
 Provider 把 Anthropic thinking block、DeepSeek/MiMo/GLM reasoning field 和 OpenAI reasoning summary 统一映射为 `thinking-delta`，但后续回传仍遵守各厂商原协议和 metadata。B/C reasoning 不进入紫色候选卡片。
