@@ -633,7 +633,6 @@ export interface SessionRecorder {
     messages: ModelMessage[],
     engagedPlanId?: string,
     deliveredInputIds?: readonly string[],
-    projectInstructions?: ProjectInstructionsUpdate,
     rootInputId?: string,
     skills?: readonly ActivatedSkill[],
   ): Promise<void>

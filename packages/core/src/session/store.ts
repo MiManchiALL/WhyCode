@@ -985,7 +985,6 @@ export class SessionJournal implements SessionRecorder {
     messages: ModelMessage[],
     engagedPlanId?: string,
     deliveredInputIds: readonly string[] = [],
-    projectInstructions?: ProjectInstructionsUpdate,
     rootInputId?: string,
     skills: readonly ActivatedSkill[] = [],
   ): Promise<void> {
@@ -994,9 +993,6 @@ export class SessionJournal implements SessionRecorder {
       this.assertPendingInputs(deliveredInputIds, 'queued', '送达')
       if (rootInputId && !this.undeliveredUserInputIdSet.has(rootInputId)) {
         throw new Error(`无法确认不属于当前活动根输入的消息：${rootInputId}`)
-      }
-      if (projectInstructions && !validateProjectInstructionsUpdate(projectInstructions)) {
-        throw new Error('项目指令更新无效')
       }
       const parentUuid = this.leafUuid
       const messagesBeforeTurn = [...this.messages]
@@ -1017,17 +1013,7 @@ export class SessionJournal implements SessionRecorder {
         },
         started.uuid,
       )
-      const instructionEntry = projectInstructions
-        ? this.entry(
-            {
-              type: 'project-instructions',
-              version: projectInstructions.version,
-              message: projectInstructions.message,
-            },
-            batch.uuid,
-          )
-        : null
-      await this.appendEntries(instructionEntry ? [started, batch, instructionEntry] : [started, batch])
+      await this.appendEntries([started, batch])
       this.turnStartMessages.set(turnId, messagesBeforeTurn)
       this.turnStartTaskStates.set(turnId, taskStateBeforeTurn)
       this.turnStartConsensusStates.set(
@@ -1039,12 +1025,9 @@ export class SessionJournal implements SessionRecorder {
       this.undeliveredUserInputIdSet.delete(rootInputId ?? parentUuid)
       this.deletePendingInputs(deliveredInputIds)
       appendOrderedMessages(this.messages, recordedMessages)
-      if (instructionEntry?.type === 'project-instructions') {
-        this.applyProjectInstructionsUpdate(instructionEntry)
-      }
       this.activeTurnId = turnId
       this.activeTurnEngagedPlanId = engagedPlanId ?? null
-      this.metadata.updatedAt = instructionEntry?.timestamp ?? started.timestamp
+      this.metadata.updatedAt = started.timestamp
       this.metadata.status = 'running'
       await this.refreshMetadataCache()
     })

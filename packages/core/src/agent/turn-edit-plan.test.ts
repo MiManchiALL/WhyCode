@@ -28,7 +28,7 @@ function plan(status: TaskPlan['status']): TaskPlan {
 async function recordTurn(journal: SessionJournal, turnId: string, displayPlan?: TaskPlan) {
   const inputId = randomUUID()
   await journal.recordUserInputWithId(inputId, turnId, true)
-  await journal.recordTurnStart(turnId, [{ role: 'user', content: turnId }], undefined, [], undefined, inputId)
+  await journal.recordTurnStart(turnId, [{ role: 'user', content: turnId }], undefined, [], inputId)
   await journal.recordViewEvents([{ type: 'core-event', event: { type: 'turn-start', turnId } }])
   await journal.recordStep(turnId, [{ role: 'assistant', content: `${turnId} 已处理` }], displayPlan
     ? { ...emptyTaskPlanState(), version: 3, activePlan: displayPlan.status === 'active' ? displayPlan : null }

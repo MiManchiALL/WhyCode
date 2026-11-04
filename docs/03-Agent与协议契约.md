@@ -159,6 +159,8 @@ BTW 编辑只允许最新侧输入，保留其图片、`conversationId`、`turnI
 
 `inspect-user-message-edit {turnId}` 从本机历史和检查点只读返回最新 Main 用户根回合全部内部 turn 的 `hasFileChanges` 与 `hasUntrackedEffects`，不要求可用模型或 SSH 连接；文件恢复范围由 Core 的活动历史和精确检查点决定，不接受 Renderer 提供的文件或检查点列表。
 
+最新 Main 根回合在模型请求前准备失败，也保留可编辑的回合身份。编辑仍要求 Agent 空闲且没有未确认交付、排队或退回草稿的输入；已结束的准备失败不属于待处理输入，不阻止后续最新消息编辑。
+
 `edit-user-message` 以 `main turnId` 或 `btw inputId` 作为互斥目标。Main 目标可携带 `restoreFiles`，省略或 false 只替换对话；true 在同一次提交中恢复本轮已跟踪的文件改动。命令等未跟踪副作用只提醒、不撤销，也不禁止重新编辑。恢复或持久化失败不得替换活动对话或启动模型；文件外部改动仍按 after 状态校验并拒绝覆盖。原工具 `files-and-chat` 仍拒绝跨越未跟踪副作用。
 
 BTW 的编辑身份与轮次规则见 §1.10。

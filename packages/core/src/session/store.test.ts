@@ -92,7 +92,6 @@ describe('SessionStore', () => {
       [{ role: 'user', content: '原问题' }],
       undefined,
       [],
-      undefined,
       inputId,
       [skill],
     )
@@ -248,7 +247,6 @@ describe('SessionStore', () => {
       undefined,
       [steeringInputId],
       undefined,
-      undefined,
       [rootSkill, steeringSkill],
     )
     await journal.recordTurnEnd(turnId, 'completed')
@@ -274,7 +272,6 @@ describe('SessionStore', () => {
       [message('user', '下一排队根')],
       undefined,
       [queuedInputId],
-      undefined,
       undefined,
       [steeringSkill],
     )
@@ -332,10 +329,8 @@ describe('SessionStore', () => {
     await journal.recordTurnStart(
       'turn-project-instructions',
       [message('user', '开始任务')],
-      undefined,
-      [],
-      { version: first.version, message: first.message },
     )
+    await journal.recordProjectInstructions({ version: first.version, message: first.message })
     await journal.recordStep(
       'turn-project-instructions',
       [message('assistant', '处理中')],
@@ -439,7 +434,6 @@ describe('SessionStore', () => {
       [message('user', '开始')],
       undefined,
       [],
-      undefined,
       rootInputId,
     )
     const firstId = randomUUID()
@@ -1076,7 +1070,6 @@ describe('SessionStore', () => {
       [message('user', '旧问题')],
       undefined,
       [],
-      undefined,
       oldInputId,
     )
     await journal.recordViewEvents([
@@ -1115,7 +1108,6 @@ describe('SessionStore', () => {
       [message('user', '编辑后的问题')],
       undefined,
       [],
-      undefined,
       editedInputId,
     )
     await journal.recordStep('turn-edited', [message('assistant', '新答案')])
@@ -1187,7 +1179,6 @@ describe('SessionStore', () => {
       [message('user', '第一问')],
       undefined,
       [],
-      undefined,
       firstInputId,
     )
     await journal.recordViewEvents([
@@ -1202,7 +1193,6 @@ describe('SessionStore', () => {
       [message('user', '第二问')],
       undefined,
       [],
-      undefined,
       secondInputId,
     )
     await journal.recordViewEvents([

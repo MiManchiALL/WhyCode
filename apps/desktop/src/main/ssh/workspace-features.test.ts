@@ -117,7 +117,7 @@ it('SSH 历史支持编辑和冲突保护，Fork 重定位 POSIX 临时文件与
     await io.fs.writeFile(file, 'before')
     const id = randomUUID()
     await journal.recordUserInputWithId(id, 'original question', true)
-    await journal.recordTurnStart('turn', [{ role: 'user', content: 'original question' }], undefined, [], undefined, id)
+    await journal.recordTurnStart('turn', [{ role: 'user', content: 'original question' }], undefined, [], id)
     await journal.recordViewEvents([{ type: 'core-event', event: { type: 'turn-start', turnId: 'turn' } }])
     const checkpoints = new CheckpointManager({ sessionId: journal.sessionId, sessionDir: journal.checkpointDirectory, workspaceIO: io })
     const prepared = await checkpoints.prepare('write', 'turn', { kind: 'exact-files', paths: [file] })
