@@ -228,16 +228,10 @@ function SubagentTranscript({
     () => presentBtwConversations(sections, view.expanded),
     [sections, view.expanded],
   )
-  if (loading) {
-    return <div className="flex flex-1 items-center justify-center text-xs text-[var(--wc-faint)]">正在读取子代理记录…</div>
-  }
-  if (error) {
-    return <div className="m-3 rounded-xl bg-[#f3e8e3] px-3 py-2 text-xs text-[var(--wc-danger)]">{error}</div>
-  }
   return (
-    <div className="wc-conversation wc-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3"
+    <div className="wc-conversation flex min-h-0 flex-1 flex-col"
       style={{ '--wc-content-font-size': `${conversationFontSize}px` } as CSSProperties}>
-      <div className="mb-3 flex items-center gap-2 border-b border-[var(--wc-line)] pb-3">
+      <div className="mx-4 flex shrink-0 items-center gap-2 border-b border-[var(--wc-line)] py-3">
         <button
           type="button"
           className="wc-focus-ring flex size-7 shrink-0 items-center justify-center rounded-full bg-black/[0.04] text-[var(--wc-muted)] hover:bg-black/[0.07] hover:text-[var(--wc-ink)]"
@@ -262,25 +256,33 @@ function SubagentTranscript({
           <span>{subagentStatusLabel(subagent.status)}</span>
         </span>
       </div>
-      <ConversationView
-        runtimeId={runtimeId}
-        items={presentation.items}
-        latestBtwConversationId={presentation.latestBtwConversationId}
-        expandedIds={view.expanded}
-        editableBlockId={null}
-        busy={false}
-        checkpointRestoreAnchorIds={EMPTY_IDS}
-        checkpointRestoreToolUseId={null}
-        fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
-        forkSourceTurnId={null}
-        forkPendingTurnId={null}
-        skills={skills}
-        projectDir={projectDir}
-        onCheckpointRestoreRequest={async () => false}
-        onEdit={async () => false}
-        onFork={() => {}}
-        onToggle={(id) => setView((previous) => toggleExpanded(previous, id))}
-      />
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center text-xs text-[var(--wc-faint)]">正在读取子代理记录…</div>
+      ) : error ? (
+        <div className="m-3 rounded-xl bg-[#f3e8e3] px-3 py-2 text-xs text-[var(--wc-danger)]">{error}</div>
+      ) : (
+        <div className="wc-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          <ConversationView
+            runtimeId={runtimeId}
+            items={presentation.items}
+            latestBtwConversationId={presentation.latestBtwConversationId}
+            expandedIds={view.expanded}
+            editableBlockId={null}
+            busy={false}
+            checkpointRestoreAnchorIds={EMPTY_IDS}
+            checkpointRestoreToolUseId={null}
+            fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
+            forkSourceTurnId={null}
+            forkPendingTurnId={null}
+            skills={skills}
+            projectDir={projectDir}
+            onCheckpointRestoreRequest={async () => false}
+            onEdit={async () => false}
+            onFork={() => {}}
+            onToggle={(id) => setView((previous) => toggleExpanded(previous, id))}
+          />
+        </div>
+      )}
     </div>
   )
 }

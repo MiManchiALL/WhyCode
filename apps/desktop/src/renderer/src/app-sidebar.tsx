@@ -65,7 +65,8 @@ export function AppSidebar(props: AppSidebarProps) {
   const { pinned: pinnedSessions, recent: recentSessions, byProject } = useMemo(
     () => groupSidebarSessions(props.sessions, props.projects), [props.sessions, props.projects],
   )
-  const hasUnreadCompletion = props.sessions.some((session) => session.hasUnreadCompletion)
+  const needsAttention = props.sessions.some((session) =>
+    session.status === 'waiting-user' || session.hasUnreadCompletion)
   const renderSessions = (sessions: readonly SessionListItem[]) => <SessionItems
     sessions={sessions} selectedSessionId={props.selectedSessionId} busy={props.busy}
     navigationLocked={props.navigationLocked} deletingSessionIds={props.deletingSessionIds}
@@ -136,12 +137,12 @@ export function AppSidebar(props: AppSidebarProps) {
             <button
               type="button"
               className="wc-icon-button relative"
-              aria-label={hasUnreadCompletion ? '展开并查看有新结果的会话' : '展开并查看会话'}
+              aria-label={needsAttention ? '展开并查看待处理的会话' : '展开并查看会话'}
               title="会话"
               onClick={() => props.onCollapsedChange(false)}
             >
               <MessageSquare size={17} />
-              {hasUnreadCompletion && (
+              {needsAttention && (
                 <span className="absolute right-1 top-1 size-2 rounded-full bg-[var(--wc-status-running)]" />
               )}
             </button>
