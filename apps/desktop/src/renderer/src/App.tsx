@@ -2203,7 +2203,7 @@ export function App() {
   })
   const currentSession = sessions.find((session) => session.sessionId === sessionIdRef.current)
   const taskTitle = currentSession?.title
-    || (blocks.length > 0 ? '当前会话' : '新会话')
+    || (blocks.length > 0 ? '未命名会话' : '新会话')
   const messageEmpty = inputEmpty
     && imageDrafts.length === 0
     && pdfDrafts.length === 0

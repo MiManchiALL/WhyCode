@@ -1,4 +1,4 @@
-import { Folder, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
+import { Folder, MessageCircleQuestionMark, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { SessionListItem } from '../../shared/session.ts'
 import { workspaceDisplayDirectory } from '../../shared/workspace.ts'
@@ -82,7 +82,8 @@ function SessionItem({
         title={session.resumable ? directory ?? undefined : session.unavailableReason}
         aria-current={selected ? 'page' : undefined}
         aria-label={`${selected ? '当前' : '打开'}会话 ${session.title || '未命名会话'}${
-          session.running ? '，运行中' : session.hasUnreadCompletion ? '，有已完成结果待查看' : ''
+          session.status === 'waiting-user' ? '，等待你的回答'
+            : session.running ? '，运行中' : session.hasUnreadCompletion ? '，有已完成结果待查看' : ''
         }`}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -148,8 +149,11 @@ const SESSION_ACTIVITY_CELLS: readonly (readonly [number, number])[] = [
 
 function SessionMarker({ session }: { session: SessionListItem }) {
   return (
-    <span className="flex size-2.5 shrink-0 items-center justify-center" aria-hidden="true">
-      {session.running ? (
+    <span className="flex size-2.5 shrink-0 items-center justify-center" aria-hidden="true"
+      title={session.status === 'waiting-user' ? '等待你的回答' : undefined}>
+      {session.status === 'waiting-user' ? (
+        <MessageCircleQuestionMark size={14} className="shrink-0 text-[var(--wc-muted)]" />
+      ) : session.running ? (
         <svg
           className="wc-session-running-indicator"
           width="10"
@@ -186,11 +190,11 @@ function relativeTime(value: string): string {
 }
 
 function statusLabel(session: SessionListItem): string {
+  if (session.status === 'waiting-user') return '等待你的回答'
   if (session.running) return '运行中'
   const { status } = session
   if (status === 'unavailable') return '当前不可恢复'
   if (status === 'interrupted') return '上次意外中断'
-  if (status === 'waiting-user') return '等待你的回答'
   if (status === 'paused') return '已安全暂停'
   if (status === 'max-turns') return '可继续'
   if (status === 'running') return '运行中'
