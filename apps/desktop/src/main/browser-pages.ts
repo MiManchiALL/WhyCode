@@ -64,7 +64,8 @@ export class BrowserPages {
   }
 
   sync(owner: WebContents, view: BrowserViewRequest): void {
-    if (!this.views.has(owner)) owner.once('destroyed', () => {
+    const previous = this.views.get(owner)
+    if (!previous) owner.once('destroyed', () => {
       this.views.delete(owner)
       this.ownerThrottling.delete(owner)
       for (const [id, runtime] of this.runtimes) if (runtime.owner === owner) this.runtimes.delete(id)
@@ -77,7 +78,10 @@ export class BrowserPages {
       if (value.runtimeId !== view.runtimeId && !this.agentAncestor(value)) void this.remove(id)
     }
     const page = view.pages.find(page => page.id === view.activePageId)
-    if (page && view.visible && !this.page(view.runtimeId, page.id)) this.create(owner, view.runtimeId, page)
+    // 元数据同步不表示重新激活，不能把刚关闭的网页重新创建。
+    const activated = view.visible && (!previous?.visible || previous.runtimeId !== view.runtimeId
+      || previous.activePageId !== view.activePageId)
+    if (page && activated && !this.page(view.runtimeId, page.id)) this.create(owner, view.runtimeId, page)
     this.publish(owner)
   }
 
