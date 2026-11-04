@@ -66,7 +66,8 @@ export function AppSidebar(props: AppSidebarProps) {
     () => groupSidebarSessions(props.sessions, props.projects), [props.sessions, props.projects],
   )
   const needsAttention = props.sessions.some((session) =>
-    session.status === 'waiting-user' || session.hasUnreadCompletion)
+    session.hasUnreadCompletion
+    || (session.status === 'waiting-user' && session.sessionId !== props.selectedSessionId))
   const renderSessions = (sessions: readonly SessionListItem[]) => <SessionItems
     sessions={sessions} selectedSessionId={props.selectedSessionId} busy={props.busy}
     navigationLocked={props.navigationLocked} deletingSessionIds={props.deletingSessionIds}
