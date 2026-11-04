@@ -74,8 +74,6 @@ function knownToolSummary(
       return text(input, 'path')
     case 'EditFile':
       return fileCount(editPaths(input))
-    case 'DeleteFile':
-      return fileCount(unique(stringArray(input, 'paths')))
     case 'RunCommand':
       return compact(text(input, 'command'))
     case 'ManageCommand':
@@ -143,8 +141,6 @@ export function toolCallDetails(
   switch (toolName) {
     case 'EditFile':
       return editPaths(value).join('\n')
-    case 'DeleteFile':
-      return unique(stringArray(value, 'paths')).join('\n')
     case 'Present': {
       const presentation = result ? readPresentationResult(result) : null
       return presentation ? presentation.files.map(file => file.description ? `${file.path} — ${file.description}` : file.path)
@@ -172,8 +168,6 @@ export function toolCallFilePaths(toolName: string, input: unknown): string[] {
     }
     case 'EditFile':
       return exactEditPaths(value)
-    case 'DeleteFile':
-      return unique(exactStringArray(value, 'paths'))
     default:
       return []
   }
@@ -336,18 +330,6 @@ function number(input: ToolInput, key: string): number | null {
   return typeof input[key] === 'number' && Number.isFinite(input[key])
     ? input[key] as number
     : null
-}
-
-function stringArray(input: ToolInput, key: string): string[] {
-  return Array.isArray(input[key])
-    ? input[key].filter((item): item is string => typeof item === 'string').map(compact)
-    : []
-}
-
-function exactStringArray(input: ToolInput, key: string): string[] {
-  return Array.isArray(input[key])
-    ? input[key].filter((item): item is string => typeof item === 'string')
-    : []
 }
 
 function primitiveSummary(value: unknown): string {

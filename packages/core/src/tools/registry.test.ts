@@ -1,28 +1,28 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { DELETE_FILE_TOOL_NAME } from './file-lifecycle/index.ts'
 import { GREP_TOOL_NAME } from './grep/index.ts'
 import { GLOB_TOOL_NAME } from './list-glob/index.ts'
 import { BUILTIN_TOOLS } from './registry.ts'
 import { RUN_COMMAND_TOOL_NAME } from './run-command/index.ts'
-import { EDIT_FILE_TOOL_NAME } from './write-edit/index.ts'
+import { EDIT_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME } from './write-edit/index.ts'
 
 describe('内置工具注册表', () => {
-  it('注册名唯一，并包含搜索、编辑和删除工具', () => {
+  it('注册名唯一，并包含搜索、写入和编辑工具', () => {
     const names = BUILTIN_TOOLS.map((tool) => tool.name)
     assert.equal(new Set(names).size, names.length)
     for (const name of [
       GLOB_TOOL_NAME,
       GREP_TOOL_NAME,
       EDIT_FILE_TOOL_NAME,
-      DELETE_FILE_TOOL_NAME,
+      WRITE_FILE_TOOL_NAME,
     ]) {
       assert.ok(names.includes(name), `${name} 未注册`)
     }
+    assert.equal(names.includes('DeleteFile'), false)
   })
 
   it('结构化写工具均声明串行语义和精确检查点', () => {
-    for (const name of [EDIT_FILE_TOOL_NAME, DELETE_FILE_TOOL_NAME]) {
+    for (const name of [EDIT_FILE_TOOL_NAME, WRITE_FILE_TOOL_NAME]) {
       const tool = BUILTIN_TOOLS.find((candidate) => candidate.name === name)
       assert.ok(tool)
       assert.equal(tool.isReadOnly, false)

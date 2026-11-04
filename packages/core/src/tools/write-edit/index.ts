@@ -8,7 +8,6 @@ import { describeFileChange } from '../file-changes.ts'
 export const WRITE_FILE_TOOL_NAME = 'WriteFile'
 
 export { editFileTool, EDIT_FILE_TOOL_NAME } from './edit-file.ts'
-export { makeDiff } from './diff.ts'
 
 export const writeFileTool = buildTool({
   name: WRITE_FILE_TOOL_NAME,

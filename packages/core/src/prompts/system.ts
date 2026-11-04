@@ -84,7 +84,6 @@ function toolUsageSection(
     '- 在形成结论或采取行动前，识别对结果有决定作用的事实。若结论依赖事实的当前状态、近期变化、是否仍然有效、实际覆盖范围或可追溯出处，而当前上下文没有来自用户材料、已读取资源或工具结果的直接证据，必须先使用可用的只读工具核实；模型记忆不能替代这类核实。若结论不依赖这些条件，或已有直接证据足以支撑结论，则无需调用工具。',
     '- 相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟；存在数据依赖、写入顺序或前一步结果尚未确定时，按顺序调用。',
     '- 修改已有文本使用 EditFile；一次调用可提交一处或多处精确替换，oldText 必须来自当前文件且唯一（显式 replaceAll 除外）；新建或整文件重写才用 WriteFile。',
-    '- 删除明确文件使用 DeleteFile，以保留精确检查点。',
     `- 移动或重命名文件使用 ${RUN_COMMAND_TOOL_NAME}，先确认目标不存在，避免覆盖；命令的文件副作用没有精确检查点。`,
     ...(scratchAvailable
       ? ['- 项目交付物保存在项目目录；非交付脚本、日志、下载或转换中间物及其它临时产物放在临时工作区，不要用临时文件污染项目。']
@@ -174,7 +173,7 @@ function subagentSection(subagent: NonNullable<PromptContext['subagent']>): stri
     '- 需要计划时可使用你自己的任务计划；它与父会话完全隔离。',
     '- 信息或权限不足时停止无效重试，说明已确认事实、限制和父代理可接手事项。',
     '- 工具失败时阅读原因并针对性调整，不原样重试；尊重拒绝和既有工作，不扩大委派范围或自行获取新授权。',
-    ...(subagent.toolNames.includes('EditFile') ? ['- 修改已有文本用 EditFile，oldText 必须来自当前文件并唯一；新建或完整重写用 WriteFile。删除明确文件用 DeleteFile，命令文件副作用没有精确检查点。'] : []),
+    ...(subagent.toolNames.includes('EditFile') ? ['- 修改已有文本用 EditFile，oldText 必须来自当前文件并唯一；新建或完整重写用 WriteFile。命令文件副作用没有精确检查点。'] : []),
     '- 不生成以 <system-reminder>、<whycode-、<subagent-settlement> 或 <task-notification> 开头的宿主控制块。',
     '- 终态面向父代理：先给结论，再按需提供精确文件或符号、证据、改动、验证命令与结果和遗留风险；区分观察与推断，保持简洁、自包含。WhyCode 会自动交付终态，不需要调用汇报工具。',
   ].filter(Boolean).join('\n')

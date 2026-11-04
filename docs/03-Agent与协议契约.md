@@ -243,7 +243,6 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `ReadFile` | `path` 加可选 `offset`、`limit`、`pages`；统一读取文本、图片和 PDF |
 | `WriteFile` | `{path,content}`；只用于新建或整文件重写 |
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
-| `DeleteFile` | `{paths}`，1～50 个普通文件；全量预检后作为一个回滚单元，支持二进制和大文件；文本预览与统计边界见文档二 §5.2 |
 | `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与 `ManageCommand` 管理，`wakeOnCompletion=true` 登记自然终态续轮，用户手动停止独立通知；不扫描工作区、不建文件检查点 |
 | `ManageCommand` | `{action,taskId?,input?,offset?,waitMs?,reason?}`；`list/read/write/close/stop` 管理当前会话的后台命令 |
 | `AskUserQuestion` | `{questions:[...]}`，1～6 问；每题标题、问题与 2～4 个互斥选项 |

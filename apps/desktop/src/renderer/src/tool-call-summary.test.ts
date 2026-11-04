@@ -26,7 +26,6 @@ describe('工具卡片关键参数摘要', () => {
     ['Grep', { pattern: 'summarizeInput', path: 'apps', include: '*.tsx' }, '“summarizeInput” · apps · include *.tsx'],
     ['WriteFile', { path: 'src/new.ts', content: 'hidden' }, 'src/new.ts'],
     ['EditFile', { edits: [{ path: 'a.ts' }, { path: 'a.ts' }, { path: 'b.ts' }] }, '2 files'],
-    ['DeleteFile', { paths: ['a.ts', 'b.ts'] }, '2 files'],
     ['RunCommand', { command: 'pnpm test', cwd: 'E:\\Agent\\WhyCode', runInBackground: true, wakeOnCompletion: true }, 'pnpm test'],
     ['ManageCommand', { action: 'list' }, 'list'],
     ['ManageCommand', { action: 'read', taskId: '12345678-1234-4234-8234-123456789abc', offset: 4096 }, 'read · task ID 12345678… · offset 4096'],
@@ -143,9 +142,6 @@ describe('工具卡片关键参数摘要', () => {
     assert.equal(toolCallDetails('EditFile', {
       edits: [{ path: 'a.ts' }, { path: 'a.ts' }, { path: 'b.ts' }],
     }, '已完成', false), 'a.ts\nb.ts')
-    assert.equal(toolCallDetails('DeleteFile', {
-      paths: ['a.ts', 'b.ts'],
-    }, '已删除', false), 'a.ts\nb.ts')
     assert.equal(toolCallDetails('Subagent', {
       description: '核对摘要展示',
     }, '已启动子代理（subagent_id: 12345678-1234-4234-8234-123456789abc）。', false), [

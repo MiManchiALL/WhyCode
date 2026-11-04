@@ -37,6 +37,8 @@ describe('子代理定义与父工具协议', () => {
     assert.equal(reviewer.toolNames.includes('RunCommand'), true)
     assert.equal(reviewer.toolNames.includes('WriteFile'), false)
     assert.equal(general.toolNames.includes('WriteFile'), true)
+    assert.equal(general.toolNames.includes('RunCommand'), true)
+    assert.equal(snapshot.definitions.some(item => item.toolNames.includes('DeleteFile')), false)
     assert.match(explore.instructions, /从宽到窄搜索/)
     assert.match(reviewer.instructions, /严重度、位置、触发条件、证据和影响/)
     assert.match(general.instructions, /不留半成品，也不额外扩展/)

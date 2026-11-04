@@ -40,8 +40,7 @@ describe('通用 Agent 提示约束', () => {
       /相互独立的只读工具尽可能优先并行化而不是顺序工具调用，这有助于减少往返延迟/,
     )
     assert.match(prompt, /一次调用可提交一处或多处精确替换/)
-    assert.doesNotMatch(prompt, /BatchEdit/)
-    assert.match(prompt, /DeleteFile/)
+    assert.doesNotMatch(prompt, /BatchEdit|DeleteFile/)
     assert.match(prompt, /文件副作用没有精确检查点/)
     assert.match(prompt, /对每个需要调用工具的用户请求，首次调用前必须用一小段话说明立即动作/)
     assert.doesNotMatch(prompt, /首次调用前始终用一句话/)
@@ -241,7 +240,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /CreateTaskPlan/)
     assert.doesNotMatch(prompt, /<available_subagents>/)
     assert.doesNotMatch(prompt, /AskUserQuestion|SendSubagentMessage/)
-    assert.doesNotMatch(prompt, /EditFile|WriteFile|DeleteFile|RunCommand/)
+    assert.doesNotMatch(prompt, /EditFile|WriteFile|RunCommand/)
   })
 
   it('M1 模式选择不再把所有任务强制解释为代码问题', () => {
