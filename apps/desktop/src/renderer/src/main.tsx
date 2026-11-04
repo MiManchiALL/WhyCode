@@ -3,8 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { App } from './App.tsx'
 import './styles.css'
 import './scrollbars.ts'
+import { installRendererDiagnostics, rendererErrorHandlers } from './renderer-diagnostics.ts'
 
-createRoot(document.getElementById('root')!).render(
+installRendererDiagnostics()
+createRoot(document.getElementById('root')!, rendererErrorHandlers).render(
   <StrictMode>
     <App />
   </StrictMode>,

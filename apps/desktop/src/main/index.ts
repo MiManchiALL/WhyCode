@@ -8,6 +8,8 @@ import { remoteMcpSaveSchema } from '../shared/ssh-mcp.ts'
 import type { OpenMcpConfigResult } from '../shared/settings.ts'
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts'
 import { registerWorkspaceLifecycleIpc } from './workspace-lifecycle-ipc.ts'
+import { DesktopDiagnostics } from './diagnostics/host.ts'
+import { registerDiagnosticIpc } from './diagnostics/ipc.ts'
 import {
   app,
   BrowserWindow,
@@ -374,6 +376,13 @@ function createSessionWebPageTools(recorder: SessionJournal) {
 
 const browserGuests = new BrowserGuests(process.env.ELECTRON_RENDERER_URL)
 const browserAgent = new BrowserAgent(browserGuests)
+let diagnostics: DesktopDiagnostics | undefined
+browserGuests.onAttached = (id, guest) => diagnostics?.observe(guest, 'browser', id)
+
+function logHostIssue(level: 'warn' | 'error', message: string, error?: unknown): void {
+  console[level](message, error)
+  diagnostics?.store.log({ level, source: 'main', event: 'host-error', details: { message, error } })
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -391,6 +400,7 @@ function createWindow(): BrowserWindow {
     },
   })
 
+  diagnostics?.observeWindow(win)
   win.once('ready-to-show', () => win.show())
   installTerminalWindowLifecycle(win, terminals)
   installWorkspaceFileLifecycle(win, workspaceFiles)
@@ -423,6 +433,8 @@ function createWindow(): BrowserWindow {
   win.webContents.on('did-finish-load', () => rendererRecovery.rendererLoaded())
   win.webContents.on('render-process-gone', (_event, details) => {
     const recoveryScheduled = rendererRecovery.rendererGone(details)
+    diagnostics?.store.log({ level: 'info', source: 'renderer', event: 'recovery-scheduled',
+      details: { webContentsId: win.webContents.id, recoveryScheduled, ...details } })
     console.error(
       `[renderer] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}; `
       + (recoveryScheduled ? '已安排从运行时快照恢复' : '未安排恢复'),
@@ -444,6 +456,7 @@ function broadcastRuntimeEvent(
   event: CoreEvent,
   occurredAt: string,
 ): void {
+  diagnostics?.runtime.record(runtime.runtimeId, runtime.sessionId, event, occurredAt)
   if (event.type === 'work-finished') runtimeRegistry.markWorkFinished(runtime)
   const sequence = ++runtimeEventSequence
   if (shouldDeliverRuntimeEvent(event, runtime, runtimeRegistry.selected, sessionNavigation.sessionId)) {
@@ -479,7 +492,7 @@ function provideRuntimeEventPort(sender: WebContents): void {
   } catch (error) {
     runtimeEventPorts.detach(sender.id)
     channel.port1.close()
-    console.warn('运行时事件端口创建失败：', error)
+    logHostIssue('warn', '运行时事件端口创建失败：', error)
   }
 }
 
@@ -520,7 +533,7 @@ let defaultWorkspaceDir: string | null = null
 /** Renderer 可以重载，权威运行态必须保留在不会随页面消失的主进程。 */
 let runtimeEventSequence = 0
 const runtimeEventPorts = new RuntimeEventPortHub({
-  onPublishError: (error) => console.warn('运行时事件端口推送失败：', error),
+  onPublishError: (error) => logHostIssue('warn', '运行时事件端口推送失败：', error),
 })
 const runtimeEventBatcher = new RuntimeEventBatcher({
   publish: publishRuntimeEventBatch,
@@ -575,7 +588,7 @@ const sessionNavigation = new SessionNavigation({
     const previous = runtimeRegistry.select(runtime)
     if (previous && previous !== runtime) {
       void runtimeRegistry.removeUnselectedDraft(previous)
-        .catch((error) => console.error('旧草稿释放失败：', error))
+        .catch((error) => logHostIssue('error', '旧草稿释放失败：', error))
     }
   },
   settled: (runtime) => {
@@ -2746,7 +2759,7 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
           : projects.detachSession(sessionId),
       ])
       for (const cleanup of sidebarCleanup) {
-        if (cleanup.status === 'rejected') console.warn('会话已删除，但侧栏信息清理失败：', cleanup.reason)
+        if (cleanup.status === 'rejected') logHostIssue('warn', '会话已删除，但侧栏信息清理失败：', cleanup.reason)
       }
       broadcastSessionDeletion({ sessionId, status: 'completed', warning: result.warning })
     }).catch((error) => {
@@ -2788,6 +2801,7 @@ const primaryInstance = app.requestSingleInstanceLock()
 if (!primaryInstance) {
   app.quit()
 } else {
+  diagnostics = new DesktopDiagnostics(() => shutdownStarted)
   app.on('second-instance', () => {
     const win = BrowserWindow.getAllWindows()[0]
     if (!win) return
@@ -2798,17 +2812,19 @@ if (!primaryInstance) {
 }
 
 if (primaryInstance) void app.whenReady().then(async () => {
+  registerDiagnosticIpc(diagnostics!.store, state => broadcastToWindows(IPC.diagnosticsChanged, state, '诊断日志状态推送失败：'))
+  diagnostics!.sample()
   await migrateLegacyConfig(configSecretCodec, getConfigPath())
-    .catch((error) => console.error('配置安全迁移失败：', error))
+    .catch((error) => logHostIssue('error', '配置安全迁移失败：', error))
   preferredPermissionMode = loadDisplayConfig()?.permissionMode ?? 'default'
   await ensureCustomSystemPromptTemplate(customSystemPromptConfigPath)
-    .catch((error) => console.warn('自定义 System 模板初始化失败：', error))
+    .catch((error) => logHostIssue('warn', '自定义 System 模板初始化失败：', error))
   await ensureMcpConfigTemplate(mcpGlobalConfigPath)
-    .catch((error) => console.warn('MCP 配置模板初始化失败：', error))
+    .catch((error) => logHostIssue('warn', 'MCP 配置模板初始化失败：', error))
   await installSystemSkills(app.getPath('home'))
-    .catch((error) => console.warn('内置 Skill 初始化失败：', error))
+    .catch((error) => logHostIssue('warn', '内置 Skill 初始化失败：', error))
   await synchronizeConfiguredCliProxyRoutes()
-    .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+    .catch((error) => logHostIssue('warn', 'CLIProxyAPI 模型目录同步失败：', error))
   // 旧命令快照已退出事实源，可以在启动时安全清理；会话 scratch 由下方按事实源定向回收。
   void rm(join(app.getPath('userData'), 'checkpoints'), { recursive: true, force: true })
     .catch(() => {})
@@ -2886,7 +2902,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     return
   }
   await worktrees.pruneEmptyRepositoryDirectories()
-    .catch((error) => console.warn('Worktree 空仓库目录清理失败：', error))
+    .catch((error) => logHostIssue('warn', 'Worktree 空仓库目录清理失败：', error))
   try {
     const summaries = await sessions.list()
     for (const summary of summaries) {
@@ -2896,7 +2912,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
           worktrees, managedWorkspaces, binding => sessions.preparations.updateWorkspace(summary.sessionId, binding))
         if (summary.workspace.mode === 'worktree') worktrees.release(summary.workspace, summary.sessionId)
       } catch (error) {
-        console.warn('会话准备目录恢复失败：', error)
+        logHostIssue('warn', '会话准备目录恢复失败：', error)
       }
     }
     await sessionSidebarState.initialize(new Set(summaries.map((summary) => summary.sessionId)))
@@ -2942,10 +2958,10 @@ if (primaryInstance) void app.whenReady().then(async () => {
       console.warn(`会话临时工作区清理跳过：${warning}`)
     }
   } catch (error) {
-    console.warn('受管资源启动清理失败：', error)
+    logHostIssue('warn', '受管资源启动清理失败：', error)
   }
   runtimeRegistry = new SessionRuntimeRegistry({
-    onDisposeError: (error) => console.error('会话运行时清理失败：', error),
+    onDisposeError: (error) => logHostIssue('error', '会话运行时清理失败：', error),
     retainDraft: (runtime) => newSessionState.value?.runtimeId === runtime.runtimeId,
     onRemoved: async (runtime) => {
       workspaceFiles.closeRuntime(runtime.runtimeId)
@@ -2967,7 +2983,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   const initialRuntime = await getNewSessionRuntime()
   runtimeRegistry.select(initialRuntime)
   await syncRetiredModelLabels()
-    .catch((error) => console.warn('历史模型显示名同步失败：', error))
+    .catch((error) => logHostIssue('warn', '历史模型显示名同步失败：', error))
   registerAttachmentProtocol(async (sessionId) => {
     const journal = runtimeRegistry.findBySessionId(sessionId)?.journal
     if (journal) return journal.attachmentDirectory
@@ -2988,7 +3004,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),
     deliveryBlocked: internalNotificationDeliveryBlocked,
     deliver: deliverBackgroundTaskNotification,
-    onError: (error) => console.error('后台任务完成通知调度失败：', error),
+    onError: (error) => logHostIssue('error', '后台任务完成通知调度失败：', error),
   })
   subagents = new SubagentService({
     sessionsRoot,
@@ -3014,7 +3030,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       runtimeRegistry.runtimeBecameIdle(runtime)
       nudgeNotificationQueues()
     },
-    onError: (error) => console.error('子代理运行失败：', error),
+    onError: (error) => logHostIssue('error', '子代理运行失败：', error),
   })
   subagentWakeups = new SessionNotificationWakeQueue({
     key: (notification) => `${notification.parentSessionId}:${notification.activationId}`,
@@ -3024,7 +3040,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     deliveryBlocked: internalNotificationDeliveryBlocked,
     deliver: deliverSubagentSettlement,
     onDrop: (notification) => subagents.markSettlementDelivered(notification),
-    onError: (error) => console.error('子代理终态通知调度失败：', error),
+    onError: (error) => logHostIssue('error', '子代理终态通知调度失败：', error),
   })
   commandSessions = new CommandSessionManager(
     join(app.getPath('userData'), 'command-tasks'),
@@ -3052,7 +3068,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.listModels, async (_e, runtimeId?: string) => {
     await synchronizeConfiguredCliProxyRoutes()
-      .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+      .catch((error) => logHostIssue('warn', 'CLIProxyAPI 模型目录同步失败：', error))
     const runtime = runtimeForId(runtimeId)
     return listModelConnections(loadAppConfig(), resolveCurrentModelId(runtime))
   })
@@ -3084,7 +3100,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   ipcMain.handle(IPC.connectionSettings, async () => {
     if (!mcpOAuthController.isAuthorizing()) {
       await synchronizeConfiguredCliProxyRoutes()
-        .catch((error) => console.warn('CLIProxyAPI 模型目录同步失败：', error))
+        .catch((error) => logHostIssue('warn', 'CLIProxyAPI 模型目录同步失败：', error))
     }
     return currentConnectionSettingsSnapshot()
   })
@@ -3407,7 +3423,15 @@ app.on('will-quit', (event) => {
   terminals.closeOwner({})
   runtimeEventBatcher.flush()
   runtimeEventPorts.closeAll()
-  if (shutdownStarted || !commandSessions) return
+  if (shutdownStarted) return
+  if (!commandSessions) {
+    if (diagnostics) {
+      event.preventDefault()
+      shutdownStarted = true
+      void diagnostics.close().finally(() => app.quit())
+    }
+    return
+  }
   event.preventDefault()
   shutdownStarted = true
   const closeWakeups = Promise.all([
@@ -3415,16 +3439,20 @@ app.on('will-quit', (event) => {
     subagentWakeups?.close() ?? Promise.resolve(),
   ])
   void closeWakeups
-    .catch((error) => console.error('内部通知队列退出清理失败：', error))
+    .catch((error) => logHostIssue('error', '内部通知队列退出清理失败：', error))
     .then(() => Promise.all([
       subagents.close()
-        .catch((error) => console.error('子代理退出清理失败：', error)),
+        .catch((error) => logHostIssue('error', '子代理退出清理失败：', error)),
       commandSessions.shutdown()
-        .catch((error) => console.error('后台命令退出清理失败：', error)),
+        .catch((error) => logHostIssue('error', '后台命令退出清理失败：', error)),
       runtimeRegistry.closeAll()
-        .catch((error) => console.error('会话运行时退出清理失败：', error)),
+        .catch((error) => logHostIssue('error', '会话运行时退出清理失败：', error)),
       mcpOAuthController.close()
-        .catch((error) => console.error('MCP OAuth 退出清理失败：', error)),
+        .catch((error) => logHostIssue('error', 'MCP OAuth 退出清理失败：', error)),
     ]))
-    .finally(() => { sshWorkspaces?.connections.close(); app.quit() })
+    .finally(async () => {
+      sshWorkspaces?.connections.close()
+      await diagnostics?.close()
+      app.quit()
+    })
 })

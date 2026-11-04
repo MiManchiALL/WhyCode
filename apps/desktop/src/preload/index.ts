@@ -16,6 +16,7 @@ import type {
 import type { ConversationHistoryRequest, ConversationHistoryResult } from '../shared/conversation-history.ts'
 import type { CompactionSummaryRequest, CompactionSummaryResult } from '../shared/compaction-summary.ts'
 import { IPC } from '../shared/ipc.ts'
+import type { DiagnosticState, RendererDiagnostic } from '../shared/diagnostics.ts'
 import type { RenameSessionRequest, RenameSessionResult } from '../shared/session-name.ts'
 import type { SessionSidebarSnapshot } from '../shared/projects.ts'
 import type { OpenWorkspaceFileRequest, ReadWorkspaceFileRequest, WorkspaceFileChange, WorkspaceFileResult } from '../shared/workspace-files.ts'
@@ -130,6 +131,16 @@ preloadWindow.addEventListener('message', (event) => {
 
 /** 暴露给 Renderer 的类型安全 API（window.whycode） */
 const api = {
+  getDiagnosticState: (): Promise<DiagnosticState> => ipcRenderer.invoke(IPC.diagnosticsState),
+  openDiagnosticDirectory: (): Promise<void> => ipcRenderer.invoke(IPC.diagnosticsOpen),
+  exportDiagnostics: (): Promise<boolean> => ipcRenderer.invoke(IPC.diagnosticsExport),
+  clearDiagnostics: (): Promise<void> => ipcRenderer.invoke(IPC.diagnosticsClear),
+  reportRendererDiagnostic: (report: RendererDiagnostic): void => ipcRenderer.send(IPC.rendererDiagnostic, report),
+  onDiagnosticsChanged: (callback: (state: DiagnosticState) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, state: DiagnosticState) => callback(state)
+    ipcRenderer.on(IPC.diagnosticsChanged, listener)
+    return () => ipcRenderer.off(IPC.diagnosticsChanged, listener)
+  },
   ssh: (request: import('../shared/ssh.ts').SshRequest): Promise<import('../shared/ssh.ts').SshResult> => ipcRenderer.invoke(IPC.ssh, request),
   onSshSkillsChanged: (listener: () => void): (() => void) => {
     const wrapped = () => listener()

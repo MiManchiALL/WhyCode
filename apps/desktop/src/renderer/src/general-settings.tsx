@@ -2,6 +2,7 @@ import { Minus, Plus } from 'lucide-react'
 import { CONVERSATION_FONT_SIZE } from './conversation-font-size.ts'
 import { SettingsButton, SettingsPanel, SettingsRow, SettingsSection, SettingsSwitch } from './settings-layout.tsx'
 import { BrowserDataSettings } from './browser-data-settings.tsx'
+import { DiagnosticSettings } from './diagnostic-settings.tsx'
 import type { CompletionSoundSetting } from './use-completion-sound.ts'
 
 export function GeneralSettings({ fontSize, onFontSizeChange, completionSound }: {
@@ -38,5 +39,6 @@ export function GeneralSettings({ fontSize, onFontSizeChange, completionSound }:
       </SettingsPanel>
     </SettingsSection>
     <BrowserDataSettings />
+    <DiagnosticSettings />
   </>
 }
