@@ -26,26 +26,24 @@ export function RightPanelFilePreview(props: FileProps) {
 
 function SnapshotFile({ runtimeId, refreshRevision, page, onChange }: Omit<FileProps, 'page'> & { page: SnapshotPage }) {
   const match = useCheckpointFileCurrentMatch(runtimeId, page.source.toolUseId, page.path, refreshRevision)
-  const current = match.status === 'ready' && match.matches && page.source.toolName !== 'DeleteFile'
+  const current = match.status === 'ready' && match.matches
   useEffect(() => {
     if (current) onChange({ ...page, source: { kind: 'current' } })
   }, [current, onChange, page])
   if (current || match.status === 'loading') return <FilePreviewMessage>正在读取文件…</FilePreviewMessage>
-  return <FileSnapshot runtimeId={runtimeId} page={page} onChange={onChange} matches={match.status === 'ready' && match.matches} />
+  return <FileSnapshot runtimeId={runtimeId} page={page} onChange={onChange} />
 }
 
-function FileSnapshot({ runtimeId, page, onChange, matches }: Omit<FileProps, 'page' | 'refreshRevision'> & { page: SnapshotPage; matches: boolean }) {
+function FileSnapshot({ runtimeId, page, onChange }: Omit<FileProps, 'page' | 'refreshRevision'> & { page: SnapshotPage }) {
   const state = useCheckpointFilePreview(runtimeId, page.source.toolUseId, page.path)
   const wrap = page.wrap ?? false
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <FilePreviewToolbar path={page.path}>
-        {!matches && (
-          <button type="button" className="wc-preview-action" title="打开当前文件" aria-label="打开当前文件"
-            onClick={() => onChange({ ...page, source: { kind: 'current' } })}>
-            <FileSearch size={15} />
-          </button>
-        )}
+        <button type="button" className="wc-preview-action" title="打开当前文件" aria-label="打开当前文件"
+          onClick={() => onChange({ ...page, source: { kind: 'current' } })}>
+          <FileSearch size={15} />
+        </button>
         <FileWrapButton wrap={wrap} onChange={wrap => onChange({ ...page, wrap })} />
         <span className="shrink-0 whitespace-nowrap rounded-md bg-black/[0.045] px-1.5 py-0.5 text-[var(--wc-faint)]">操作后快照</span>
       </FilePreviewToolbar>
@@ -66,7 +64,6 @@ function SnapshotCode({ page, preview, wrap }: { page: SnapshotPage; preview: Ch
     page.source.toolName === 'EditFile' && beforeContent !== null && afterContent !== null
       ? firstChangedLine(beforeContent, afterContent) : null
   ), [page.source.toolName, beforeContent, afterContent])
-  if (page.source.toolName === 'DeleteFile') return <FilePreviewMessage>该版本中不存在此文件</FilePreviewMessage>
   if (!after.ok) return <FilePreviewMessage>{after.message}</FilePreviewMessage>
   return <SyntaxCode path={page.path} lines={lines} focusLine={focusLine} wrap={wrap} className="flex-1" />
 }

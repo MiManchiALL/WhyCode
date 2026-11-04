@@ -232,7 +232,7 @@ describe('工具批次折叠投影', () => {
       [['RunCommand'], '运行了命令', 'command'],
       [['ReadFile'], '调用了工具', 'other'],
       [['EditFile', 'RunCommand'], '编辑文件并运行了命令', 'files'],
-      [['DeleteFile', 'Glob'], '编辑文件并调用了工具', 'files'],
+      [['EditFile', 'Glob'], '编辑文件并调用了工具', 'files'],
       [['RunCommand', 'Grep'], '运行命令并调用了工具', 'command'],
     ]
     for (const [names, label, icon] of cases) {

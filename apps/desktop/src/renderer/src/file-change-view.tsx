@@ -30,8 +30,8 @@ export function InlineFileChange({
 }) {
   const [wrap, setWrap] = useState(false)
   const state = useCheckpointFilePreview(runtimeId, toolUseId, path)
-  const copyText = state.status === 'ready'
-    ? previewTextForTool(state.preview, toolName)
+  const copyText = state.status === 'ready' && state.preview.after.kind === 'text'
+    ? state.preview.after.content
     : null
   return (
     <div className="wc-tool-details wc-file-change-detail overflow-hidden rounded-xl">
@@ -73,14 +73,8 @@ function InlinePreviewContent({
   if (toolName === 'WriteFile') {
     const after = previewTextState(preview.after)
     return after.ok
-      ? <FullFilePreview path={path} content={after.content} tone="added" wrap={wrap} />
+      ? <FullFilePreview path={path} content={after.content} wrap={wrap} />
       : <PreviewMessage>{after.message}</PreviewMessage>
-  }
-  if (toolName === 'DeleteFile') {
-    const before = previewTextState(preview.before)
-    return before.ok
-      ? <FullFilePreview path={path} content={before.content} tone="removed" wrap={wrap} />
-      : <PreviewMessage>{before.message}</PreviewMessage>
   }
   return <FileDiff path={path} preview={preview} wrap={wrap} className="max-h-72" />
 }
@@ -88,15 +82,13 @@ function InlinePreviewContent({
 function FullFilePreview({
   path,
   content,
-  tone,
   wrap,
 }: {
   wrap: boolean
   path: string
   content: string
-  tone: 'added' | 'removed'
 }) {
-  const lines = useMemo(() => contentLines(content, tone), [content, tone])
+  const lines = useMemo(() => contentLines(content, 'added'), [content])
   return <SyntaxCode path={path} lines={lines} wrap={wrap} className="max-h-64" />
 }
 
@@ -135,12 +127,4 @@ function FileChangeHeader({
       ) : null}
     </div>
   )
-}
-
-function previewTextForTool(
-  preview: CheckpointFilePreview,
-  toolName: FilePreviewToolName,
-): string | null {
-  const state = toolName === 'DeleteFile' ? preview.before : preview.after
-  return state.kind === 'text' ? state.content : null
 }

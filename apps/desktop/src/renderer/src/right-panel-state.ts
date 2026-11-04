@@ -7,7 +7,7 @@ import { gitComparisonSchema, type GitComparison } from '../../shared/git.ts'
 // 根目录之外，为文件预览及用户的保存/定位操作各留一个视图。
 export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
 
-export type FilePreviewToolName = 'WriteFile' | 'EditFile' | 'DeleteFile'
+export type FilePreviewToolName = 'WriteFile' | 'EditFile'
 
 export type RightPanelFileSource =
   | {
@@ -439,5 +439,4 @@ function assertNever(value: never): never {
 export function isFilePreviewToolName(value: unknown): value is FilePreviewToolName {
   return value === 'WriteFile'
     || value === 'EditFile'
-    || value === 'DeleteFile'
 }

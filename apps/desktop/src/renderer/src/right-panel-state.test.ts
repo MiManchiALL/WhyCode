@@ -40,7 +40,7 @@ const emptyState = (): RightPanelSessionState => ({
 function snapshotPage(
   path: string,
   toolUseId: string,
-  toolName: 'WriteFile' | 'EditFile' | 'DeleteFile' = 'EditFile',
+  toolName: 'WriteFile' | 'EditFile' = 'EditFile',
 ): Extract<RightPanelPage, { kind: 'file' }> {
   return {
     kind: 'file',
@@ -285,7 +285,7 @@ describe('右侧栏会话配置', () => {
     fileState = openRightPanelPage(fileState, snapshotPage(
       'C:\\repo\\src\\other.ts',
       'tool-2',
-      'DeleteFile',
+      'WriteFile',
     ))
     store.set('session-a', fileState)
     store.set('session-b', openRightPanelPage(emptyState(), {
@@ -298,7 +298,7 @@ describe('右侧栏会话配置', () => {
     assert.deepEqual(activeRightPanelPage(restored.get('session-a')), snapshotPage(
       'C:\\repo\\src\\other.ts',
       'tool-2',
-      'DeleteFile',
+      'WriteFile',
     ))
     assert.deepEqual(activeRightPanelPage(restored.get('session-b')), {
       kind: 'subagent-transcript',

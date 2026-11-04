@@ -29,7 +29,7 @@ const PROFILE_TOOLS: Record<SubagentProfile, readonly string[]> = {
     'CaptureScreenshot',
   ],
   general: [
-    'ReadFile', 'ListDir', 'Glob', 'Grep', 'WriteFile', 'EditFile', 'DeleteFile',
+    'ReadFile', 'ListDir', 'Glob', 'Grep', 'WriteFile', 'EditFile',
     'RunCommand', 'WebSearch', 'WebFetch', 'WebFind', 'CaptureScreenshot', 'Skill',
   ],
 }

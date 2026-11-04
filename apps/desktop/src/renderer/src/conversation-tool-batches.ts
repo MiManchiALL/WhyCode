@@ -57,7 +57,7 @@ export interface ToolBatchRow extends Partial<ToolFileRow> {
 }
 
 /** 输入结构支持按文件拆行的工具；完整的文件修改分类由检查点事实补齐。 */
-const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile', 'DeleteFile'])
+const FILE_PATH_ROW_TOOL_NAMES = new Set(['WriteFile', 'EditFile'])
 
 /**
  * 用户消息、模型正文和工作终点统一封口前一批工具。
