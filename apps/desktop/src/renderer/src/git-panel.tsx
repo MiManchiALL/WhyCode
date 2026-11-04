@@ -44,11 +44,6 @@ export function GitPanel({ runtimeId, page, branchData, revision, busy, remote, 
   const update = (patch: Partial<GitPage>) => onOpenPage({ ...page, ...patch })
   const refresh = () => { branchData.refresh(); selected.refresh() }
   const refreshing = useRefreshFeedback(branchData.loading || (selectedEnabled && selected.loading))
-  useEffect(() => {
-    if (!branchData.unavailableReason && page.mode === 'branch' && repo && !branchData.loading && !bases.some(ref => ref.ref === (page.baseRef ?? repo.defaultBase))) {
-      onOpenPage(gitOverviewPage(page, repo))
-    }
-  }, [page, repo, branchData.loading, branchData.unavailableReason, onOpenPage])
   if (branchData.unavailableReason) return <FilePreviewMessage>{branchData.unavailableReason}</FilePreviewMessage>
   if (gitNotFound && !data.error) return <FilePreviewMessage><GitNotFound loading={branchData.loading || (selectedEnabled && selected.loading)} onRetry={refresh} /></FilePreviewMessage>
   return <div className="wc-git-panel wc-changes-panel flex min-h-0 flex-1 flex-col">

@@ -78,7 +78,7 @@ import { useCompletionSound } from './use-completion-sound.ts'
 import { RetainedWorkspaceCleanup } from './retained-workspace-cleanup.ts'
 import { gitConnectionUnavailableReason, useGitSnapshot } from './git-data.ts'
 import { defaultGitPage } from './right-panel-state.ts'
-import { gitOverviewPage } from './git-comparison.ts'
+import { gitOverviewPage, useGitComparisonRecovery } from './git-comparison.ts'
 import {
   ImageDraftStrip,
   useImageDrafts,
@@ -761,6 +761,11 @@ export function App() {
       )
     }
   }, [])
+
+  const changeRightPanelPage = useCallback((page: RightPanelPage) => {
+    updateRightPanelState(current => updateRightPanelPage(current, page))
+  }, [updateRightPanelState])
+  useGitComparisonRecovery(!loadingConversation && gitPage?.kind === 'git' ? gitPage : undefined, gitData, changeRightPanelPage)
 
   const changePanelOpen = useCallback((side: PanelSide, open: boolean) => {
     if (side === 'left') setSidebarCollapsed(!open)
@@ -2708,7 +2713,7 @@ export function App() {
                 onToggleFullscreen={() => setRightPanelFullscreen(value => !value)}
                 onCollapse={() => changePanelOpen('right', false)}
                 onOpenPage={showRightPanelPage}
-                onUpdatePage={page => updateRightPanelState(current => updateRightPanelPage(current, page))}
+                onUpdatePage={changeRightPanelPage}
                 onRegisterBrowserPage={(owner, sessionId, page) => {
                   if (owner === runtimeIdRef.current) updateRightPanelState(current => registerBrowserPage(current, page))
                   else {
