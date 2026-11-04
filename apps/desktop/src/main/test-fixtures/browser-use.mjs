@@ -21,7 +21,7 @@ import { checkBrowserKeyboard } from './browser-keyboard.mjs'
 const directory = process.env.WHYCODE_BROWSER_TEST_DIR
 app.setPath('userData', path.join(directory, 'profile'))
 protocol.registerSchemesAsPrivileged([{ scheme: 'whycode-browser-file', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
-const timeout = setTimeout(() => app.exit(1), 80_000)
+const timeout = setTimeout(() => { process.stderr.write('Browser fixture exceeded its 80 second deadline\n'); app.exit(1) }, 80_000)
 const server = createServer((_request, response) => response.end(`<!doctype html><html><head><meta charset="utf-8"><title>Browser fixture</title></head><body style="background:#bada55">
   <label>Username <input aria-label="Username" value=""></label>
   <button onclick="document.querySelector('output').textContent=++window.count;document.body.style.background='rgb(100,150,200)'">Increment</button><output>0</output>

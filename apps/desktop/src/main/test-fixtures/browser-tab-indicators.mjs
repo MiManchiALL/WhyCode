@@ -64,10 +64,33 @@ export async function checkBrowserTabIndicators({ run, finish, execute, until, a
   assert.equal((await status()).color, gray)
   assert.equal((await status()).audible, true, '交还同一 DOM 后声音图标保留')
   assert.equal(guest.isDestroyed(), false)
-  await guest.loadURL('about:blank')
-  await until(async () => !(await status())?.audible, 'navigation clears sound indicator')
-  await execute('fixture.close()')
-  await until(() => execute('!document.querySelector("[data-panel-tab]")'), 'closed tab removed')
+  const sync = agent.pages.sync.bind(agent.pages)
+  const action = agent.pages.action.bind(agent.pages)
+  let resumeView
+  let closed = false
+  // 固定关闭与导航元数据的交错：旧视图同步在关闭之后抵达 Main。
+  agent.pages.sync = (owner, view) => {
+    if (!resumeView && view.pages.some(page => page.url === 'about:blank')) {
+      resumeView = () => sync(owner, view)
+      agent.pages.sync = sync
+    } else sync(owner, view)
+  }
+  agent.pages.action = (owner, request) => {
+    action(owner, request)
+    if (request.type === 'stop') { resumeView(); closed = true }
+  }
+  try {
+    await guest.loadURL('about:blank')
+    await until(() => !!resumeView, 'navigation metadata queued')
+    await until(async () => !(await status())?.audible, 'navigation clears sound indicator')
+    await execute('fixture.close()')
+    await until(() => closed, 'close reaches host')
+    assert.equal(agent.pages.list('alpha').length, 0, '关闭后的元数据同步不得重新创建网页')
+  } finally { agent.pages.sync = sync; agent.pages.action = action }
+  await until(() => execute('!document.querySelector("[data-panel-tab]")'), 'closed tab removed', async () => ({
+    state: await execute('fixture.state()'), pages: agent.pages.list('alpha'), destroyed: guest.isDestroyed(),
+    feedback: await execute('window.lastFeedback'), confirmation: await execute('document.querySelector("[role=alertdialog]")?.textContent'),
+  }))
   await until(() => guest.isDestroyed(), 'audio guest released')
   guests.onAudioStateChanged(page.id, true)
   assert.equal(await execute(`!!document.querySelector('[aria-label="正在播放声音"]')`), false, '关闭后的迟到声音通知不恢复标签')
