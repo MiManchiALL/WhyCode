@@ -30,7 +30,7 @@ async function fixture(files: boolean, command: boolean, internalTurns = false) 
   const turnIds = internalTurns ? ['first', 'internal'] : ['first']
   for (const [index, turnId] of turnIds.entries()) {
     await recorder.recordTurnStart(turnId, index === 0 ? [{ role: 'user', content: '原始问题' }] : [],
-      undefined, [], undefined, index === 0 ? inputId : undefined)
+      undefined, [], index === 0 ? inputId : undefined)
     await recorder.recordViewEvents([{ type: 'core-event', event: { type: 'turn-start', turnId } }])
     if (files) {
       const checkpoint = await manager.prepare(`write-${turnId}`, turnId, { kind: 'exact-files', paths: [path] })

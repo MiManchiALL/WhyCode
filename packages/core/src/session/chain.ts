@@ -764,7 +764,7 @@ interface UndeliveredUserInput {
   partialTurnId: string | null
 }
 
-/** 根用户输入只有进入完整 messages 批次或共识起点后才算已交付给模型。 */
+/** 根用户输入进入正式回合的完整 messages 批次或共识起点后才算已交付。 */
 function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[] {
   const childByParent = new Map<string, SessionEntry>()
   const deliveredRootInputIds = new Set(chain.flatMap((entry) =>

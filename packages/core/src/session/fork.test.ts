@@ -127,7 +127,6 @@ describe('SessionStore Fork', () => {
       [message('user', '完成一次新对话')],
       undefined,
       [],
-      undefined,
       rootInputId,
     )
     await source.recordStep('turn-after-draft', [message('assistant', '完整回答')])
@@ -169,7 +168,6 @@ describe('SessionStore Fork', () => {
       [message('user', '重新提交后的问题')],
       undefined,
       [],
-      undefined,
       rootInputId,
     )
     await source.recordStep('turn-consuming-draft', [message('assistant', '重新提交后的回答')])

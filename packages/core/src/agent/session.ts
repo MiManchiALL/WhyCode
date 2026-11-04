@@ -1745,35 +1745,7 @@ export class AgentSession {
     this.activeSubagentTurnState = null
     this.deliveredSubagentActivations.clear()
     const turnId = crypto.randomUUID()
-    const previousProjectInstructions = findProjectInstructionsMessage(this.messages)
-    let projectInstructions: ProjectInstructionsUpdate | null = null
-    let initialMessageCount = this.messages.length
-    await this.prepareSkillTurn(skills)
-    try {
-      const resolved = await this.resolveProjectInstructions()
-      projectInstructions = resolved.update
-      this.applyResolvedProjectInstructions(resolved.message)
-      initialMessageCount = this.messages.length
-    } catch (error) {
-      if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
-      if (initialTaskNotifications.length > 0) {
-        this.taskNotifications = [...initialTaskNotifications, ...this.taskNotifications]
-      }
-      this.opAbort = null
-      this.running = false
-      this.activeSubagentTurnState = null
-      this.turnInterruptionContext = null
-      this.skillTurn.finish()
-      this.emitContextUsage()
-      emit({
-        type: 'error',
-        message: `无法读取项目指令：${error instanceof Error ? error.message : String(error)}`,
-        recoverable: true,
-      })
-      if (!this.terminalStatusManaged) emit({ type: 'agent-status', status: 'error' })
-      this.resolveIdleWaiters()
-      return 'error'
-    }
+    const initialMessageCount = this.messages.length
     if (inputSource === 'user') {
       const notificationMessages = new Set(initialTaskNotifications.map(item => item.message))
       let startsUserTurn = true
@@ -1820,7 +1792,7 @@ export class AgentSession {
             ...initialMessages,
           ]
       : initialMessages
-    // turn 起点先于 initialMessages 入栈：对话回滚锚定这里，触发指令一并移除
+    // 先写稳回合和输入，再读取工作区；准备失败也必须有可恢复、可编辑的终态。
     this.activeTurn = { id: turnId, fileChanges: new Map() }
     this.messages.push(...initialContext)
     try {
@@ -1830,7 +1802,6 @@ export class AgentSession {
           initialContext,
           planExecutionEngaged ? this.taskPlan?.snapshot?.id : undefined,
           deliveredInputs.filter((input) => input.persisted).map((input) => input.id),
-          projectInstructions ?? undefined,
           rootInputId,
           skills,
         ),
@@ -1838,7 +1809,6 @@ export class AgentSession {
       )
     } catch (error) {
       this.messages.length = initialMessageCount
-      this.messages = applyProjectInstructions(this.messages, previousProjectInstructions)
       if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
       if (initialTaskNotifications.length > 0) {
         this.taskNotifications = [...initialTaskNotifications, ...this.taskNotifications]
@@ -1877,18 +1847,18 @@ export class AgentSession {
     const interruptedBoundaryPending = findPendingTurnAbortedIndex(this.messages) !== null
 
     try {
+      await this.prepareSkillTurn(skills)
       let steps = 0
       let finishedNaturally = false
       let interruptionBoundaryConsumed = false
       let steeringDecisionPending = false
       let stepsSincePlanMutation = 0
       let stepsSincePlanReminder = 0
-      let projectInstructionsFresh = true
       // 未结束计划跨 turn 保留，但执行权只属于当前 runLoop。每个新 turn 默认休眠；
       // 只有稳定提交 Create/Resume，或回答计划自身的问题卡，才接合计划执行生命周期。
       while (maxSteps === null || steps < maxSteps) {
-        if (!projectInstructionsFresh) await this.refreshProjectInstructions()
-        projectInstructionsFresh = false
+        abortSignal.throwIfAborted()
+        await this.refreshProjectInstructions()
         if (
           planExecutionEngaged
           && this.taskPlan?.hasUnfinishedWork()
@@ -3572,6 +3542,8 @@ export class AgentSession {
       workspaceIO: this.options.workspaceIO,
       homeDir: this.options.promptContext.homeDir,
       projectDir: this.options.promptContext.projectDir,
+    }).catch((error: unknown) => {
+      throw new Error(`无法读取项目指令：${error instanceof Error ? error.message : String(error)}`, { cause: error })
     })
     const update = projectInstructionsUpdate(this.messages, snapshot)
     return {
