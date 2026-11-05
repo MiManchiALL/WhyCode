@@ -527,9 +527,10 @@ function collectViewEvents(entries: SessionEntry[]): {
           event.type === 'user-message' && event.inputId ? [event.inputId] : [])
       : []))
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     if (entry.type === 'view-events' || entry.type === 'turn-end' || entry.type === 'btw-response') {
-      for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
+      const messages = entry.type === 'view-events' ? recordedStepMessages(entries, index, entry) : undefined
+      for (const event of responseViewEvents(entry, messages)) push(event, entry.timestamp)
       continue
     }
     if (entry.type === 'btw-input') {
@@ -612,6 +613,24 @@ function collectViewEvents(entries: SessionEntry[]): {
   return { events, timestamps }
 }
 
+/** 可见批次的直接父链依次包含本步收尾、工具结果和模型响应，到前一批次即止。 */
+function recordedStepMessages(
+  entries: readonly SessionEntry[],
+  index: number,
+  batch: Extract<SessionEntry, { type: 'view-events' }>,
+): readonly ModelMessage[] | undefined {
+  const text = batch.events.flatMap(item =>
+    item.type === 'core-event' && item.event.type === 'text-delta' ? [item.event] : [])
+  if (!text.length || text.some(event => event.textBlock !== undefined)) return
+  let parent = batch.parentUuid
+  for (let i = index - 1; i >= 0; i--) {
+    const entry = entries[i]!
+    if (entry.uuid !== parent || entry.type !== 'messages') return
+    if (entry.messages.some(message => message.role === 'assistant')) return entry.messages
+    parent = entry.parentUuid
+  }
+}
+
 interface CollectedPendingBtw {
   input: Extract<SessionEntry, { type: 'btw-input' }>
   history: BtwConversationTurn[]
@@ -683,7 +702,7 @@ function collectBtwState(entries: readonly SessionEntry[]): {
       text: input.text,
       attachments: structuredClone(input.attachments ?? []),
       outcome: entry.outcome,
-      assistantText: entry.assistantText,
+      assistantText: Array.isArray(entry.assistantText) ? structuredClone(entry.assistantText) : entry.assistantText,
       ...(entry.toolSteps ? { toolSteps: structuredClone(entry.toolSteps) } : {}),
       ...(entry.interruptionReason
         ? { interruptionReason: entry.interruptionReason }

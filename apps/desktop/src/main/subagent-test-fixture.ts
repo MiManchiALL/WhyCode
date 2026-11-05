@@ -170,13 +170,16 @@ export function modelEntry(model: ReturnType<ModelEntry['create']>, supportsImag
   }
 }
 
-export function finalStream(text: string) {
+export function finalStream(text: string | string[]) {
   return Promise.resolve({
     stream: new ReadableStream({
       start(controller) {
-        controller.enqueue({ type: 'text-start', id: 'answer' })
-        controller.enqueue({ type: 'text-delta', id: 'answer', delta: text })
-        controller.enqueue({ type: 'text-end', id: 'answer' })
+        for (const [index, part] of (typeof text === 'string' ? [text] : text).entries()) {
+          const id = `answer-${index}`
+          controller.enqueue({ type: 'text-start', id })
+          controller.enqueue({ type: 'text-delta', id, delta: part })
+          controller.enqueue({ type: 'text-end', id })
+        }
         controller.enqueue({
           type: 'finish',
           finishReason: { unified: 'stop', raw: undefined },

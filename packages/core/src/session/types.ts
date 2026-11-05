@@ -48,6 +48,7 @@ import {
   BTW_MAX_TURNS,
   btwModeSchema,
   btwToolStepSchema,
+  btwAssistantTextSchema,
   type BtwConversation,
   type BtwConversationTurn,
   type BtwContinuation,
@@ -229,7 +230,7 @@ const btwResponseSchema = chainedEntrySchema.extend({
   conversationId: sessionIdSchema,
   turnIndex: z.number().int().min(1).max(BTW_MAX_TURNS),
   outcome: z.enum(['completed', 'stopped', 'error']),
-  assistantText: z.string(),
+  assistantText: btwAssistantTextSchema,
   toolSteps: z.array(btwToolStepSchema).optional(),
   reasoningText: z.string(),
   reasoningDurationMs: z.number().nonnegative(),
@@ -248,7 +249,9 @@ const btwResponseSchema = chainedEntrySchema.extend({
       }
     })
   })
-  if (response.outcome === 'completed' && !response.assistantText.trim()) {
+  const hasAnswer = typeof response.assistantText === 'string' ? Boolean(response.assistantText.trim())
+    : response.assistantText.some(part => part.text.trim())
+  if (response.outcome === 'completed' && !hasAnswer) {
     ctx.addIssue({ code: 'custom', path: ['assistantText'], message: '完成的 BTW 必须包含答复' })
   }
   if (response.outcome === 'error' && !response.error) {

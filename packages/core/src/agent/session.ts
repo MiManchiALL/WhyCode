@@ -875,7 +875,7 @@ export class AgentSession {
     let reasoningText = ''
     let reasoningStartedAt: number | null = null
     let reasoningDurationMs = 0
-    let emittedText = ''
+    const textBlocks: { type: 'text'; text: string }[] = []
     let finishReason: string | null = null
     let hadToolCalls = false
     const toolErrors: string[] = []
@@ -911,9 +911,11 @@ export class AgentSession {
         providerOptions: this.requestProviderOptions(),
         abortSignal: stepAbort.signal,
       })
-      const textGate = new AssistantTextGate((text) => {
-        emittedText += text
-        emit({ type: 'text-delta', text })
+      const textGate = new AssistantTextGate((event) => {
+        const block = textBlocks[event.textBlock]
+        if (block) block.text += event.text
+        else textBlocks.push({ type: 'text', text: event.text })
+        emit(event)
       })
       for await (const part of readModelStream(stream.fullStream)) {
         if (part.type === 'reasoning-delta') {
@@ -931,7 +933,7 @@ export class AgentSession {
             emit({ type: 'agent-status', status: 'working' })
           }
         } else if (part.type === 'text-delta') {
-          textGate.push(part.text)
+          textGate.push(part)
         } else if (part.type === 'tool-call' && !part.providerExecuted) {
           hadToolCalls = true
         } else if (part.type === 'finish') {
@@ -953,7 +955,7 @@ export class AgentSession {
       if (sanitized.rejected || (!hadToolCalls && !hasDeliverableModelText(sanitized.messages))) {
         throw emptyModelResponse(finishReason)
       }
-      const assistantText = sanitized.messages.map(modelMessageText).join('\n').trim()
+      const assistantText = textBlocks.length > 1 ? textBlocks : sanitized.messages.map(modelMessageText).join('\n').trim()
       const stepMessages = [...sanitized.messages]
       if (hadToolCalls) {
         toolExecution = new ToolExecutionBatch({
@@ -996,11 +998,11 @@ export class AgentSession {
       }
     } catch (error) {
       if (stepAbort.signal.aborted) {
-        if (emittedText) emit({ type: 'step-output-retained' })
+        if (textBlocks.length) emit({ type: 'step-output-retained' })
         emit({ type: 'step-discarded' })
         return {
           outcome: 'stopped',
-          assistantText: emittedText,
+          assistantText: textBlocks.length > 1 ? textBlocks : textBlocks[0]?.text ?? '',
           reasoningText: '',
           reasoningDurationMs: 0,
           durationMs: Math.max(0, Date.now() - startedAt),
@@ -2691,8 +2693,8 @@ export class AgentSession {
       let thinkingStartedAt: number | null = null
       let stepTotalTokens = 0
       let finishReason: string | null = null
-      const textGate = new AssistantTextGate((text) => {
-        if (!this.protocolRound) emit({ type: 'text-delta', text })
+      const textGate = new AssistantTextGate((event) => {
+        if (!this.protocolRound) emit(event)
       })
 
       for await (const part of readModelStream(result.fullStream)) {
@@ -2714,7 +2716,7 @@ export class AgentSession {
             break
           }
           case 'text-delta':
-            textGate.push(part.text)
+            textGate.push(part)
             break
           case 'tool-call':
             if (part.providerExecuted === true) break

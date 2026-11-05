@@ -44,8 +44,12 @@ const toolEndSchema = z.object({
   fileChanges: z.array(toolFileChangeSchema).optional(),
 })
 
+const textDeltaSchema = z.object({
+  type: z.literal('text-delta'), text: z.string(), textBlock: z.number().int().nonnegative().optional(),
+})
+
 const peerInnerEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('text-delta'), text: z.string() }),
+  textDeltaSchema,
   toolStartSchema,
   toolEndSchema,
 ])
@@ -112,7 +116,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
       continuationAvailable: z.boolean(),
     }).strict().optional(),
   }),
-  z.object({ type: z.literal('text-delta'), text: z.string() }),
+  textDeltaSchema,
   z.object({ type: z.literal('thinking-delta'), text: z.string() }),
   z.object({ type: z.literal('thinking-end'), durationMs: z.number().nonnegative() }),
   toolStartSchema,
