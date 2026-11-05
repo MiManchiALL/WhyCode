@@ -2438,12 +2438,6 @@ export function App() {
                     </div>
                   )}
 
-                  {restoredQueue.length > 0 && (
-                    <div className="mb-2 rounded-xl bg-[var(--wc-sand)] px-3 py-2 text-xs text-[var(--wc-sand-ink)]">
-                      另有 {restoredQueue.length} 条中断输入已安全保留；当前恢复输入提交后会按原顺序继续恢复。
-                    </div>
-                  )}
-
                   {workStartedAt !== null && (
                     <div className="mb-1.5 grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] items-center gap-3 px-2 text-xs">
                       <span className="whitespace-nowrap text-[var(--wc-faint)]">
