@@ -1218,6 +1218,32 @@ describe('SessionStore', () => {
     )
   })
 
+  it('已合并的可见正文只按同一步逐字匹配的模型输出恢复分块', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const turn = 'multiple-text-parts'
+    await journal.recordTurnStart(turn, [message('user', '核对结果')])
+    await journal.recordStep(turn, [{ role: 'assistant', content: [
+      { type: 'text', text: '第一条' }, { type: 'text', text: '第二条' },
+    ] }])
+    await journal.recordViewEvents([
+      { type: 'core-event', event: { type: 'text-delta', text: '第一' } },
+      { type: 'core-event', event: { type: 'thinking-end', durationMs: 2 } },
+      { type: 'core-event', event: { type: 'text-delta', text: '条第二条' } },
+    ])
+    await journal.recordStep(turn, [{ role: 'assistant', content: [
+      { type: 'text', text: '可见' }, { type: 'text', text: '其余未展示' },
+    ] }])
+    await journal.recordViewEvents([{ type: 'core-event', event: { type: 'text-delta', text: '可见' } }])
+    await journal.recordTurnEnd(turn, 'completed')
+    const reopened = await store.open(journal.sessionId)
+    const text = reopened.initialViewEvents.flatMap(item =>
+      item.type === 'core-event' && item.event.type === 'text-delta' ? [item.event] : [])
+    assert.deepEqual(text.map(delta => [delta.text, delta.textBlock]), [
+      ['第一', 0], ['条', 0], ['第二条', 1], ['可见', undefined],
+    ])
+  })
+
   it('模型压缩换根后仍完整保留用户可见时间线', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
@@ -1765,9 +1791,10 @@ describe('SessionStore', () => {
       reasoningDurationMs: 0,
       toolErrors: [],
     }]
+    const answerParts = [{ type: 'text' as const, text: '第一条回答' }, { type: 'text' as const, text: '补充依据' }]
     await journal.recordBtwResponse(first, {
       outcome: 'completed',
-      assistantText: '第一条回答',
+      assistantText: answerParts,
       toolSteps,
       reasoningText: '',
       reasoningDurationMs: 0,
@@ -1776,13 +1803,16 @@ describe('SessionStore', () => {
 
     const resumed = await store.open(journal.sessionId)
     assert.deepEqual(resumed.btwContinuation?.turns[0]?.toolSteps, toolSteps)
+    assert.deepEqual(resumed.initialViewEvents.flatMap(event =>
+      event.type === 'core-event' && event.event.type === 'text-delta' ? [[event.event.textBlock, event.event.text]] : []),
+    [[0, '第一条回答'], [1, '补充依据']])
     assert.deepEqual(resumed.initialMessages, [])
     const second = await journal.recordBtwInput('bbtw', '继续追问')
     assert.equal(second.conversationId, first.conversationId)
     assert.equal(second.turnIndex, 2)
     assert.deepEqual(second.history[0]?.toolSteps, toolSteps)
     assert.deepEqual(second.history.map((turn) => [turn.text, turn.assistantText]), [
-      ['第一条题外问题', '第一条回答'],
+      ['第一条题外问题', answerParts],
     ])
     await journal.recordBtwResponse(second, {
       outcome: 'completed',

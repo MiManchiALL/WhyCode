@@ -70,6 +70,7 @@ export type Block =
        * 才转为 final；继续执行、等待后停止及工具步骤的正文都属于 activity。
        */
       phase: 'pending' | 'response' | 'activity' | 'final'
+      textBlock?: number
       timestamp?: string
     }
   | { kind: 'thinking'; id: string; text: string; durationMs: number | null }
@@ -299,7 +300,7 @@ function applyStableCoreEvent(
     case 'btw-message-edited':
       return applyBtwMessageEdited(state, event, timestamp)
     case 'text-delta':
-      return appendText(state, event.text, timestamp)
+      return appendText(state, event.text, timestamp, event.textBlock)
     case 'thinking-delta':
       return appendThinking(state, event.text)
     case 'thinking-end':
@@ -473,16 +474,12 @@ function beginPendingStep(state: ConversationState): ConversationState {
 function retainStepOutput(state: ConversationState): ConversationState {
   const snapshot = state.pendingStep
   if (!snapshot) return state
-  const retained = { ...state, ...snapshot, pendingStep: null }
-  const output = state.blocks.slice(snapshot.blocks.length).filter(block => block.kind === 'text')
-  if (!output.length) return retained
-  // 推理与工具随草稿撤销。只拼回本次请求的正文，保持与此前进度之间的边界。
-  const timestamp = output.at(-1)?.timestamp
-  return appendBlock(retained, {
-    kind: 'text', id: nextBlockId(retained), phase: 'activity',
-    text: output.map(block => block.text).join(''),
-    ...(timestamp ? { timestamp } : {}),
-  })
+  let retained: ConversationState = { ...state, ...snapshot, pendingStep: null }
+  const start = snapshot.blocks.length
+  for (const block of state.blocks.slice(start)) {
+    if (block.kind === 'text') retained = appendText(retained, block.text, block.timestamp, block.textBlock)
+  }
+  return { ...retained, blocks: updateWorkText(retained.blocks, block => ({ ...block, phase: 'activity' }), start) }
 }
 
 export function appendUserMessage(
@@ -821,23 +818,29 @@ function appendText(
   state: ConversationState,
   text: string,
   timestamp?: string,
+  textBlock?: number,
 ): ConversationState {
-  const last = state.blocks.at(-1)
-  if (last?.kind === 'text' && last.phase === 'pending') {
-    return {
-      ...state,
-      blocks: [...state.blocks.slice(0, -1), {
-        ...last,
-        text: last.text + text,
-        ...(timestamp ? { timestamp } : {}),
-      }],
+  let index = state.blocks.length - 1
+  if (textBlock !== undefined) {
+    // 同一步骤可交错传递不同正文的片段。按模型正文身份续写，已提交的步骤封口。
+    for (; index >= 0; index--) {
+      const block = state.blocks[index]!
+      if (block.kind === 'work-duration' || block.kind === 'user') break
+      if (block.kind === 'text' && (block.phase !== 'pending' || block.textBlock === textBlock)) break
     }
+  }
+  const previous = state.blocks[index]
+  if (previous?.kind === 'text' && previous.phase === 'pending' && previous.textBlock === textBlock) {
+    const blocks = [...state.blocks]
+    blocks[index] = { ...previous, text: previous.text + text, ...(timestamp ? { timestamp } : {}) }
+    return { ...state, blocks }
   }
   return appendBlock(state, {
     kind: 'text',
     id: nextBlockId(state),
     text,
     phase: 'pending',
+    ...(textBlock !== undefined ? { textBlock } : {}),
     ...(timestamp ? { timestamp } : {}),
   })
 }

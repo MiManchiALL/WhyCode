@@ -30,7 +30,7 @@ describe('BTW 独立侧对话', () => {
       doStream: [
         finalStep('主回答'),
         readFileStep(),
-        finalStep('第一轮侧回答'),
+        finalStep(['第一轮侧回答', '补充依据']),
         finalStep('第二轮侧回答'),
       ],
     })
@@ -48,7 +48,9 @@ describe('BTW 独立侧对话', () => {
     const first = btwContext('btw', '第一轮侧问题', [])
     const firstSettled: BtwTurnResult[] = []
     assert.equal(await session.handleBtwMessage(first, lifecycle(firstSettled)), 'completed')
-    assert.equal(firstSettled[0]?.assistantText, '第一轮侧回答')
+    assert.deepEqual(firstSettled[0]?.assistantText, [
+      { type: 'text', text: '第一轮侧回答' }, { type: 'text', text: '补充依据' },
+    ])
     assert.deepEqual(session.captureMessageSnapshot(), mainSnapshot)
 
     const second = btwContext('bbtw', '第二轮侧问题', [{
@@ -59,7 +61,7 @@ describe('BTW 独立侧对话', () => {
       text: first.text,
       attachments: [],
       outcome: 'completed',
-      assistantText: '第一轮侧回答',
+      assistantText: firstSettled[0]!.assistantText,
       toolSteps: firstSettled[0]!.toolSteps,
     }], first.conversationId, 2)
     const secondSettled: BtwTurnResult[] = []
@@ -323,13 +325,16 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
   }
 }
 
-function finalStep(text: string) {
+function finalStep(text: string | string[]) {
+  const parts = typeof text === 'string' ? [text] : text
   return {
     stream: simulateReadableStream({
       chunks: [
-        { type: 'text-start' as const, id: 'final' },
-        { type: 'text-delta' as const, id: 'final', delta: text },
-        { type: 'text-end' as const, id: 'final' },
+        ...parts.flatMap((delta, index) => [
+          { type: 'text-start' as const, id: String(index) },
+          { type: 'text-delta' as const, id: String(index), delta },
+          { type: 'text-end' as const, id: String(index) },
+        ]),
         {
           type: 'finish' as const,
           finishReason: { unified: 'stop' as const, raw: undefined },

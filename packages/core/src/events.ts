@@ -167,7 +167,8 @@ export type CoreEvent =
   | { type: 'step-discarded' }
   /** 停止或最终失败时仅保留已展示正文；工具、推理、问题和计划仍由随后 discard 撤销。 */
   | { type: 'step-output-retained' }
-  | { type: 'text-delta'; text: string }
+  /** textBlock 标识本模型步骤内的独立正文，同一正文的多个增量共享序号。 */
+  | { type: 'text-delta'; text: string; textBlock?: number }
   | { type: 'thinking-delta'; text: string }
   | { type: 'thinking-end'; durationMs: number }
   | { type: 'tool-start'; toolUseId: string; toolName: string; input: unknown }
@@ -397,7 +398,7 @@ export function coalesceAdjacentCoreEvent(
   previous: CoreEvent,
   next: CoreEvent,
 ): CoalescibleCoreEvent | null {
-  if (previous.type === 'text-delta' && next.type === 'text-delta') {
+  if (previous.type === 'text-delta' && next.type === 'text-delta' && previous.textBlock === next.textBlock) {
     return { ...previous, text: previous.text + next.text }
   }
   if (previous.type === 'thinking-delta' && next.type === 'thinking-delta') {
@@ -416,6 +417,7 @@ export function coalesceAdjacentCoreEvent(
     && previous.agentId === next.agentId
     && previous.event.type === 'text-delta'
     && next.event.type === 'text-delta'
+    && previous.event.textBlock === next.event.textBlock
   ) {
     return {
       ...previous,

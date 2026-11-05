@@ -833,7 +833,7 @@ export class SessionJournal implements SessionRecorder {
       text: context.text,
       attachments: structuredClone(context.attachments),
       outcome: result.outcome,
-      assistantText: result.assistantText,
+      assistantText: Array.isArray(result.assistantText) ? structuredClone(result.assistantText) : result.assistantText,
       ...(result.toolSteps ? { toolSteps: structuredClone(result.toolSteps) } : {}),
       ...(result.interruptionReason
         ? { interruptionReason: result.interruptionReason }

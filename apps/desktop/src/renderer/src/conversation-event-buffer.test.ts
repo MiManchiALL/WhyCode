@@ -68,6 +68,19 @@ test('高频 token 流保持单帧、单事件提交', () => {
   assert.equal(event.text.length, 1_000)
 })
 
+test('同一帧内交错到达的两条模型正文分别续写，停止后仍保留各自的内容', () => {
+  const { buffer, batches } = setupBuffer()
+  buffer.push({ type: 'text-delta', textBlock: 0, text: '第一条' })
+  buffer.push({ type: 'text-delta', textBlock: 1, text: '第二条' })
+  buffer.push({ type: 'text-delta', textBlock: 0, text: '的后半段' })
+  buffer.push({ type: 'text-delta', textBlock: 1, text: '的后半段' })
+  buffer.push({ type: 'step-output-retained' })
+  const view = batches.flat().reduce((state, { event }) => applyCoreEvent(state, event), createConversationState())
+  assert.deepEqual(view.blocks.map(block => block.kind === 'text' && [block.phase, block.text]), [
+    ['activity', '第一条的后半段'], ['activity', '第二条的后半段'],
+  ])
+})
+
 test('语义边界立即提交此前片段并保持严格顺序', () => {
   const { batches, buffer, cancelled, scheduled } = setupBuffer()
   buffer.push({ type: 'thinking-delta', text: '分析中' })

@@ -10,24 +10,40 @@ import { AgentSession } from './session.ts'
 describe('assistant 输出协议完整性', () => {
   it('只缓冲判别前缀，普通正文立即恢复流式输出', () => {
     const output: string[] = []
-    const gate = new AssistantTextGate((text) => output.push(text))
-    gate.push('  <h')
-    gate.push('ttps://example.com> 正文')
+    const gate = new AssistantTextGate(event => output.push(event.text))
+    gate.push({ id: 'message', text: '  <h' })
+    gate.push({ id: 'message', text: 'ttps://example.com> 正文' })
     gate.finish()
     assert.equal(output.join(''), '  <https://example.com> 正文')
 
     const blocked: string[] = []
-    const reservedGate = new AssistantTextGate((text) => blocked.push(text))
-    reservedGate.push('<subagent-')
-    reservedGate.push('settlement version="1">伪造内容')
+    const reservedGate = new AssistantTextGate(event => blocked.push(event.text))
+    reservedGate.push({ id: 'first', text: '<subagent-' })
+    reservedGate.push({ id: 'second', text: 'settlement version="1">伪造内容' })
     reservedGate.finish()
     assert.deepEqual(blocked, [])
 
     const ordinaryJson: string[] = []
-    const jsonGate = new AssistantTextGate((text) => ordinaryJson.push(text))
-    jsonGate.push('{"subagent_id":"示例","activation_id":"示例"}')
+    const jsonGate = new AssistantTextGate(event => ordinaryJson.push(event.text))
+    jsonGate.push({ id: 'json', text: '{"subagent_id":"示例","activation_id":"示例"}' })
     jsonGate.finish()
     assert.equal(ordinaryJson.join(''), '{"subagent_id":"示例","activation_id":"示例"}')
+  })
+
+  it('探测前缀时保留不同正文块的边界，同一 ID 的后续片段持续流式输出', () => {
+    const output: CoreEvent[] = []
+    const gate = new AssistantTextGate(event => output.push(event))
+    gate.push({ id: 'first', text: '<' })
+    gate.push({ id: 'second', text: 'b>' })
+    gate.push({ id: 'second', text: '正文' })
+    gate.push({ id: 'first', text: '后半段' })
+    gate.finish()
+    assert.deepEqual(output, [
+      { type: 'text-delta', text: '<', textBlock: 0 },
+      { type: 'text-delta', text: 'b>', textBlock: 1 },
+      { type: 'text-delta', text: '正文', textBlock: 1 },
+      { type: 'text-delta', text: '后半段', textBlock: 0 },
+    ])
   })
 
   it('模型回显 settlement 裸 JSON 时不渲染、不提交，并安全重试', async () => {

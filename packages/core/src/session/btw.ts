@@ -9,6 +9,11 @@ import type { TurnInterruptionReason } from './interruption.ts'
 export const BTW_MAX_TURNS = 3
 export const btwModeSchema = z.enum(['btw', 'bbtw'])
 export type BtwMode = z.infer<typeof btwModeSchema>
+export const btwAssistantTextSchema = z.union([
+  z.string(),
+  z.array(z.object({ type: z.literal('text'), text: z.string().min(1) })).min(2),
+])
+type BtwAssistantText = z.infer<typeof btwAssistantTextSchema>
 
 export const btwToolStepSchema = z.object({
   messages: z.array(modelMessageSchema),
@@ -31,7 +36,7 @@ export interface BtwConversationTurn {
   text: string
   attachments: ImageAttachment[]
   outcome: 'completed' | 'stopped' | 'error'
-  assistantText: string
+  assistantText: BtwAssistantText
   toolSteps?: BtwToolStep[]
   interruptionReason?: BtwInterruptionReason
   error?: string
@@ -57,7 +62,7 @@ export interface BtwTurnContext {
 
 export interface BtwTurnResult {
   outcome: 'completed' | 'stopped' | 'error'
-  assistantText: string
+  assistantText: BtwAssistantText
   toolSteps?: BtwToolStep[]
   reasoningText: string
   reasoningDurationMs: number
@@ -74,11 +79,14 @@ export function btwToolStepEvents(steps: readonly BtwToolStep[]): BtwToolEvent[]
   return steps.flatMap((step) => {
     const events: BtwToolEvent[] = []
     let reasoningEnded = false
+    let textBlock = 0
     for (const message of step.messages) {
       if (message.role !== 'assistant' && message.role !== 'tool') continue
       if (!Array.isArray(message.content)) continue
       for (const part of message.content) {
-        if (part.type === 'text') events.push({ type: 'text-delta', text: part.text })
+        if (part.type === 'text' && part.text) {
+          events.push({ type: 'text-delta', text: part.text, textBlock: textBlock++ })
+        }
         if (part.type === 'reasoning') {
           events.push({ type: 'thinking-delta', text: part.text })
           events.push({ type: 'thinking-end', durationMs: reasoningEnded ? 0 : step.reasoningDurationMs })

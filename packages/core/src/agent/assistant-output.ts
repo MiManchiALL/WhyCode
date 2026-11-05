@@ -1,5 +1,8 @@
 import type { AssistantModelMessage, ModelMessage } from 'ai'
+import type { CoreEvent } from '../events.ts'
 import { modelMessageText } from '../text.ts'
+
+type ModelTextDelta = Extract<CoreEvent, { type: 'text-delta' }> & { textBlock: number }
 
 const RESERVED_HOST_PREFIXES = [
   '<system-reminder',
@@ -20,26 +23,33 @@ const TERMINAL_OUTCOME_FIELD = /"outcome"\s*:\s*"(?:completed|error|aborted|limi
  */
 export class AssistantTextGate {
   private buffer = ''
+  // 控制前缀必须跨片段识别，放行时仍按原正文身份发出。
+  private readonly bufferedParts: { id: string; start: number }[] = []
+  private readonly textBlockById = new Map<string, number>()
   private state: 'probing' | 'allowed' | 'blocked' = 'probing'
-  private readonly emit: (text: string) => void
+  private readonly emit: (event: ModelTextDelta) => void
 
-  constructor(emit: (text: string) => void) {
+  constructor(emit: (event: ModelTextDelta) => void) {
     this.emit = emit
   }
 
-  push(text: string): void {
+  push({ id, text }: { id: string; text: string }): void {
     if (!text) return
     if (this.state === 'allowed') {
-      this.emit(text)
+      this.publish(id, text)
       return
     }
     if (this.state === 'blocked') return
+    if (this.bufferedParts.at(-1)?.id !== id) {
+      this.bufferedParts.push({ id, start: this.buffer.length })
+    }
     this.buffer += text
     const candidate = this.buffer.trimStart()
     if (!candidate) return
     if (isReservedHostOutput(candidate)) {
       this.state = 'blocked'
       this.buffer = ''
+      this.bufferedParts.length = 0
       return
     }
     if (RESERVED_HOST_PREFIXES.some((prefix) => prefix.startsWith(candidate))) return
@@ -47,8 +57,7 @@ export class AssistantTextGate {
     // 看到协议唯一字段组合就拦截；普通 JSON 最多延迟少量前导字符。
     if (candidate.startsWith('{') && candidate.length < JSON_PROBE_LIMIT) return
     this.state = 'allowed'
-    this.emit(this.buffer)
-    this.buffer = ''
+    this.flush()
   }
 
   finish(): void {
@@ -56,8 +65,24 @@ export class AssistantTextGate {
       this.state === 'probing'
       && this.buffer
       && !isReservedHostOutput(this.buffer.trimStart())
-    ) this.emit(this.buffer)
+    ) this.flush()
+  }
+
+  private flush(): void {
+    for (const [index, part] of this.bufferedParts.entries()) {
+      this.publish(part.id, this.buffer.slice(part.start, this.bufferedParts[index + 1]?.start))
+    }
     this.buffer = ''
+    this.bufferedParts.length = 0
+  }
+
+  private publish(id: string, text: string): void {
+    let textBlock = this.textBlockById.get(id)
+    if (textBlock === undefined) {
+      textBlock = this.textBlockById.size
+      this.textBlockById.set(id, textBlock)
+    }
+    this.emit({ type: 'text-delta', text, textBlock })
   }
 }
 

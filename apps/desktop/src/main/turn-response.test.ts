@@ -15,7 +15,7 @@ it('父轮次等待子代理、接收插话后只折叠到最终回复，切换�
   const store = new SessionStore(root)
   const workspace = localWorkspace(root)
   const journal = await store.create({ workspace, modelId: 'test:subagent' })
-  const progress = ['等待核查结果。', '补充要求已收到，仍在核查。']
+  const progress = [['已核查第一项。', '等待其余结果。'], ['补充要求已收到。', '仍在核查。']]
   const answer = '核查完成。\n\n| 项目 | 结果 |\n| --- | --- |\n| 第一项 | 通过 |'
   const replies = [...progress, answer]
   const commits = progress.map(() => deferred<void>())
@@ -68,7 +68,7 @@ it('父轮次等待子代理、接收插话后只折叠到最终回复，切换�
     for (const view of [live, snapshot.state]) {
       const rows = conversationSections(view.blocks, runtime.workStartedAt)
       assert.ok(rows.every(row => row.kind === 'block'))
-      assert.deepEqual(view.blocks.filter(block => block.kind === 'text').map(block => block.text), progress.slice(0, index + 1))
+      assert.deepEqual(view.blocks.filter(block => block.kind === 'text').map(block => block.text), progress.slice(0, index + 1).flat())
     }
     if (index === 0) session.handleUserMessage('请再比较两者的结果')
   }
@@ -82,7 +82,7 @@ it('父轮次等待子代理、接收插话后只折叠到最终回复，切换�
     const section = conversationSections(view.blocks).at(-1)
     assert.ok(section?.kind === 'completed-work')
     assert.equal(view.expanded.has(section.id), false)
-    assert.deepEqual(section.activityBlocks.filter(block => block.kind === 'text').map(block => block.text), progress)
+    assert.deepEqual(section.activityBlocks.filter(block => block.kind === 'text').map(block => block.text), progress.flat())
     assert.deepEqual(section.finalBlocks.filter(block => block.kind === 'text').map(block => block.text), [answer])
   }
 })
