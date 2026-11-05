@@ -87,7 +87,7 @@ export function UserPdfGallery({
   )
 }
 
-export function QueuedPdfStrip({ attachments }: { attachments?: readonly PdfAttachment[] }) {
+export function QueuedPdfStrip({ attachments }: { attachments?: readonly (PdfAttachment | PdfDraft)[] }) {
   if (!attachments?.length) return null
   return (
     <div className="mt-1 flex max-w-full flex-wrap gap-2">
