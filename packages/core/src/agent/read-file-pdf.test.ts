@@ -20,6 +20,54 @@ const SMALL_JPEG = Buffer.from(
 )
 
 describe('ReadFile PDF Agent 链路', () => {
+  it('排队的 PDF 只在所属输入获得回合后才能被模型读取', async t => {
+    const root = await mkdtemp(join(tmpdir(), 'whycode-queued-pdf-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const source = join(root, 'queued-only.pdf')
+    await writeFile(source, '%PDF-1.4\nqueued bytes')
+    let reads = 0
+    const processor = fakeProcessor(() => { reads++ })
+    const journal = await new SessionStore(join(root, 'sessions')).create({
+      workspace: localWorkspace(null), modelId: 'test:text',
+    })
+    const transaction = await preparePdfAttachmentImport([{ kind: 'path', path: source }],
+      journal.attachmentDirectory, journal.sessionId, processor, new AbortController().signal)
+    await transaction.commit()
+    const pdf = transaction.attachments[0]!
+    let step = 0
+    const model: MockLanguageModelV4 = new MockLanguageModelV4({ doStream: async options => {
+      const prompt = JSON.stringify(options.prompt)
+      switch (++step) {
+        case 1: {
+          const id = crypto.randomUUID()
+          await journal.recordUserInputWithId(id, '后续 PDF 问题', false, [], [], [pdf])
+          session.handleUserMessage('后续 PDF 问题', false, [], id, [pdf])
+          return readPdfStep(pdf.id, 'before-delivery')
+        }
+        case 2:
+          assert.match(prompt, /PDF 附件不存在或不属于当前会话/)
+          assert.doesNotMatch(prompt, /后续 PDF 问题|queued-only\.pdf/)
+          assert.equal(reads, 0)
+          return finalStep('当前任务结束。')
+        case 3:
+          assert.match(prompt, /后续 PDF 问题/)
+          assert.match(prompt, /queued-only\.pdf/)
+          return readPdfStep(pdf.id, 'after-delivery')
+        default:
+          assert.match(prompt, /第一页正文/)
+          return finalStep('文档已读取。')
+      }
+    } })
+    const session = new AgentSession({
+      model: modelEntry(model), providerConfig: { apiKey: 'test' }, pdfProcessor: processor,
+      sessionRecorder: journal, promptContext: { projectDir: root, osPlatform: 'win32' },
+      emit: () => {}, requestApproval: async () => ({ approved: false }),
+    })
+    assert.equal(await session.handleUserMessage('当前任务'), 'completed')
+    assert.equal(step, 4)
+    assert.equal(reads, 1)
+  })
+
   it('项目指令加载和更新不影响按附件 ID 读取 PDF，且 PDF 字节不进入模型上下文', async () => {
     const root = await mkdtemp(join(tmpdir(), 'whycode-agent-pdf-'))
     try {

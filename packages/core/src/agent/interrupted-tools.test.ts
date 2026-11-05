@@ -101,7 +101,7 @@ describe('中断工具批次的执行事实', () => {
           return { data: '等待结束', isError: context.abortSignal.aborted }
         },
       })
-      const model = new MockLanguageModelV4({ doStream: [batchStep(), finalStep()] })
+      const model = new MockLanguageModelV4({ doStream: [batchStep(), finalStep(), finalStep()] })
       const events: CoreEvent[] = []
       const session = createSession(fixture, model, (event) => events.push(event))
       session.setExtraTools([blocker])
@@ -123,7 +123,11 @@ describe('中断工具批次的执行事实', () => {
       }
       assert.deepEqual(await readdir(fixture.projectDir), mode === 'queued'
         ? ['first.txt', 'later-3.txt', 'later-4.txt', 'later-5.txt'] : ['first.txt'])
-      const next = JSON.stringify(model.doStreamCalls[1]!.prompt)
+      if (mode === 'queued') {
+        assert.doesNotMatch(JSON.stringify(model.doStreamCalls[1]!.prompt), /接下来只查看执行记录/)
+        assert.equal(events.filter(event => event.type === 'turn-start').length, 2)
+      }
+      const next = JSON.stringify(model.doStreamCalls.at(-1)!.prompt)
       assert.match(next, /first.txt/)
       assert.match(next, /接下来只查看执行记录/)
       const reopened = await fixture.store.open(fixture.journal.sessionId)

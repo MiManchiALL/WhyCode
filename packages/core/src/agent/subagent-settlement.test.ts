@@ -83,7 +83,7 @@ describe('子代理终态续轮', () => {
     assert.equal(delivered, 1)
   })
 
-  it('同一 turn 逐个接收终态、允许用户插话，并等待全部交付后才结束', async (context) => {
+  it('等待子代理时只响应立即插话与终态，普通输入在全部交付后另开回合', async (context) => {
     context.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 25, 10).getTime() })
     const events: CoreEvent[] = []
     const calls = [deferred<void>(), deferred<void>(), deferred<void>(), deferred<void>()]
@@ -97,6 +97,11 @@ describe('子代理终态续轮', () => {
         const prompt = JSON.stringify(options.prompt)
         calls[index]?.resolve()
         assert.equal(prompt.split('当前日期：').length - 1, 1)
+        if (index === 4) {
+          assert.match(prompt, /下一回合的独立问题/)
+          return finalStep('已处理独立问题。')
+        }
+        assert.doesNotMatch(prompt, /下一回合的独立问题/)
         if (index === 0) {
           assert.match(prompt, /whycode-subagent-turn-state/)
           assert.match(prompt, /用一次简短说明结束当前响应并等待，不要重复播报/)
@@ -120,6 +125,7 @@ describe('子代理终态续轮', () => {
       },
     })
     const session = createSession(model, events, async (turnId) => {
+      if (parentTurnId && parentTurnId !== turnId) return { parentTurnId: turnId, activations: [] }
       parentTurnId = turnId
       return turnState(turnId, delivered)
     })
@@ -131,7 +137,10 @@ describe('子代理终态续轮', () => {
     assert.equal(model.doStreamCalls.length, 1)
     assert.equal(ended, false)
 
-    assert.equal(session.handleUserMessage('补充检查边界条件'), undefined)
+    session.handleUserMessage('下一回合的独立问题')
+    await eventLoopTurn()
+    assert.equal(model.doStreamCalls.length, 1)
+    assert.equal(session.handleUserMessage('补充检查边界条件', true), undefined)
     await calls[1]!.promise
     await eventLoopTurn()
     assert.equal(model.doStreamCalls.length, 2)
@@ -152,9 +161,9 @@ describe('子代理终态续轮', () => {
     )
     await calls[3]!.promise
     assert.equal(await running, 'completed')
-    assert.equal(model.doStreamCalls.length, 4)
-    assert.equal(events.filter((event) => event.type === 'turn-start').length, 1)
-    assert.equal(events.filter((event) => event.type === 'turn-end').length, 1)
+    assert.equal(model.doStreamCalls.length, 5)
+    assert.equal(events.filter((event) => event.type === 'turn-start').length, 2)
+    assert.equal(events.filter((event) => event.type === 'turn-end').length, 2)
   })
 
   it('等待子代理期间 Stop 直接结束，不额外发起模型请求', async () => {

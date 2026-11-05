@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { describe, it } from 'node:test'
 import type { AgentSession } from '../agent/session.ts'
+import type { QueuedMessage } from '../agent/user-input.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
-import type { CoreEvent, QueuedUserMessage } from '../events.ts'
+import type { CoreEvent } from '../events.ts'
 import type { ActivatedSkill } from '../skills/types.ts'
 import { ConsensusCoordinator } from './orchestrator.ts'
 
@@ -18,9 +19,9 @@ interface MainCall {
 }
 
 describe('共识模式附件路由', () => {
-  it('协调器空闲时图片跳过 B/C；Main 忙时仍直接进入自身 steering', () => {
+  it('协调器空闲时图片跳过 B/C；Main 忙时立即补图直接进入自身 steering', async () => {
     const harness = createHarness()
-    harness.coordinator.handleUserMessage('先看图片', false, [harness.attachment], 'input-1')
+    const running = harness.coordinator.handleUserMessage('先看图片', false, [harness.attachment], 'input-1')
     assert.equal(harness.calls.length, 1)
     assert.equal(harness.events.some((event) =>
       event.type === 'consensus-skipped' && event.reason === 'image-input'), true)
@@ -34,60 +35,54 @@ describe('共识模式附件路由', () => {
       attachments: [harness.attachment],
       inputId: 'input-2',
     })
+    await running
   })
 
-  it('B/C 评审时普通图片只进入 Main 执行输入，并保留附件与身份', () => {
+  it('B/C 评审时普通图片保留在队列，用户停止可完整取回', async () => {
     const harness = createHarness()
     const internals = harness.coordinator as unknown as {
       running: boolean
       peerPhase: boolean
-      takePendingInputs(text: string): { text: string; inputs: QueuedUserMessage[] }
     }
     internals.running = true
     internals.peerPhase = true
 
     harness.coordinator.handleUserMessage('按这张图调整', false, [harness.attachment], 'input-peer')
     assert.equal(harness.calls.length, 0)
-    const execution = internals.takePendingInputs('execution package')
-    assert.equal(execution.text, 'execution package')
-    assert.deepEqual(execution.inputs, [{
+    await harness.coordinator.abort()
+    assert.deepEqual(harness.events.find(event => event.type === 'queue-restored')?.items, [{
       id: 'input-peer',
       text: '按这张图调整',
       attachments: [harness.attachment],
-      imageDelivery: 'native',
     }])
   })
 
-  it('PDF 始终只交给 Main，并用独立原因声明未让 B/C 读取', () => {
+  it('连续排队的 PDF 逐条交给 Main，并用独立原因声明未让 B/C 读取', async () => {
     const harness = createHarness()
-    harness.coordinator.handleUserMessage(
+    const running = harness.coordinator.handleUserMessage(
       '总结 PDF', false, [], 'input-pdf', [harness.pdfAttachment],
     )
-    assert.deepEqual(harness.calls, [{
+    assert.deepEqual(harness.calls[0], {
       text: '总结 PDF',
       urgent: false,
       attachments: [],
       inputId: 'input-pdf',
       pdfAttachments: [harness.pdfAttachment],
-    }])
+    })
     assert.equal(harness.events.some((event) =>
       event.type === 'consensus-skipped' && event.reason === 'pdf-input'), true)
 
-    const internals = harness.coordinator as unknown as {
-      running: boolean
-      peerPhase: boolean
-      takePendingInputs(text: string): { inputs: QueuedUserMessage[] }
-    }
-    internals.running = true
-    internals.peerPhase = true
     harness.coordinator.handleUserMessage(
-      '评审期间补充 PDF', false, [], 'input-pdf-peer', [harness.pdfAttachment],
+      '第二份 PDF', false, [], 'input-pdf-two', [harness.pdfAttachment],
     )
-    assert.deepEqual(internals.takePendingInputs('execute').inputs, [{
-      id: 'input-pdf-peer',
-      text: '评审期间补充 PDF',
-      pdfAttachments: [harness.pdfAttachment],
-    }])
+    harness.coordinator.handleUserMessage(
+      '第三份 PDF', false, [], 'input-pdf-three', [harness.pdfAttachment], [harness.skill],
+    )
+    assert.equal(harness.calls.length, 1)
+    await running
+    assert.deepEqual(harness.calls.map(call => call.inputId), ['input-pdf', 'input-pdf-two', 'input-pdf-three'])
+    assert.deepEqual(harness.calls[2]?.skills, [harness.skill])
+    assert.equal(harness.events.filter(event => event.type === 'consensus-skipped').length, 3)
   })
 
   it('B/C 评审时 urgent 图片中止半截共识，留到回滚后由 Main 处理', () => {
@@ -113,41 +108,22 @@ describe('共识模式附件路由', () => {
     const harness = createHarness({
       onInputsRestored: async () => { throw new Error('disk full') },
     })
-    const internals = harness.coordinator as unknown as {
-      restoreQueuedMessages(messages: Array<{
-        id: string
-        persistedInputId: string
-        text: string
-        attachments: ImageAttachment[]
-        pdfAttachments: PdfAttachment[]
-        skills: ActivatedSkill[]
-      }>): Promise<void>
-    }
-
-    await internals.restoreQueuedMessages([{
-      id: 'input-persisted',
-      persistedInputId: 'input-persisted',
-      text: '保留这张图',
-      attachments: [harness.attachment],
-      pdfAttachments: [],
-      skills: [],
-    }])
+    const running = harness.coordinator.handleUserMessage('当前图片', false, [harness.attachment])
+    harness.coordinator.handleUserMessage('保留这张图', false, [harness.attachment], 'input-persisted')
+    await harness.coordinator.abort()
+    await running
 
     assert.equal(harness.events.some((event) => event.type === 'queue-restored'), false)
     assert.equal(harness.events.some((event) =>
       event.type === 'error' && event.message.includes('队列恢复')), true)
   })
 
-  it('M1 讨论期间保管 Skill，最终 Main 执行边界才交付完整快照', () => {
+  it('M1 讨论期间排队的 Skill 独立保管，重新编辑可取回原输入', async () => {
     const harness = createHarness()
     const internals = harness.coordinator as unknown as {
       running: boolean
       peerPhase: boolean
       executionPhase: boolean
-      takePendingInputs(
-        text: string,
-        rootSkills?: readonly ActivatedSkill[],
-      ): { inputs: QueuedUserMessage[]; skills: ActivatedSkill[] }
     }
     internals.running = true
     internals.peerPhase = false
@@ -164,9 +140,9 @@ describe('共识模式附件路由', () => {
       [harness.skill.id],
     )
 
-    const execution = internals.takePendingInputs('execution')
-    assert.deepEqual(execution.skills, [harness.skill])
-    assert.deepEqual(execution.inputs[0]?.skills?.map((skill) => skill.id), [harness.skill.id])
+    assert.equal(await harness.coordinator.restoreQueuedMessage('input-skill'), true)
+    const edited = harness.events.find(event => event.type === 'queued-message-edit-ready')
+    assert.deepEqual(edited?.item.skills?.map(skill => skill.id), [harness.skill.id])
   })
 
   it('Main 已进入执行阶段时，Skill steering 直接进入当前根任务', () => {
@@ -238,21 +214,17 @@ function createHarness(options: {
   const state = { busy: false, running: false }
   const aborts = { value: 0 }
   const main = {
+    setTerminalStatusManaged() {},
+    isQueuedUserInput: () => false,
     get isBusy() { return state.busy },
     get isRunning() { return state.running },
-    handleUserMessage(
-      text: string,
-      urgent: boolean,
-      attachments: readonly ImageAttachment[],
-      inputId?: string,
-      pdfAttachments: readonly PdfAttachment[] = [],
-      skills: readonly ActivatedSkill[] = [],
-    ) {
+    receiveUserInput(message: QueuedMessage, { urgent = false } = {}) {
+      const { text, attachments, pdfAttachments, skills } = message
       calls.push({
         text,
         urgent,
         attachments: [...attachments],
-        ...(inputId ? { inputId } : {}),
+        ...(message.persisted ? { inputId: message.id } : {}),
         ...(pdfAttachments.length ? { pdfAttachments: [...pdfAttachments] } : {}),
         ...(skills.length ? { skills: skills.map((skill) => structuredClone(skill)) } : {}),
       })

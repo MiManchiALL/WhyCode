@@ -13,6 +13,7 @@ import { SessionStore } from '../session/store.ts'
 import { localWorkspace } from '../workspace/types.ts'
 import { buildTool } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
+import { createUserInput } from './user-input.ts'
 import type { CoreEvent } from '../events.ts'
 
 describe('运行中的多次压缩', () => {
@@ -28,7 +29,7 @@ describe('运行中的多次压缩', () => {
     const original = withUserTurn({ role: 'user', content: '完整用户原文' }, 'task-1', true)
     await session.handleExecutionMessage('第一轮协议', [], [], original)
     await session.handleExecutionMessage('后续协议提醒')
-    await session.handleExecutionMessage('执行包', [{ id: 'steering', text: '执行时的用户补充' }])
+    await session.handleExecutionMessage('执行包', [createUserInput('执行时的用户补充', [], undefined, [], [])])
     const messages = session.captureMessageSnapshot()
     assert.deepEqual(recentPdfUserTurns(messages).map(turn => turn.id), ['task-1'])
     assert.equal(messages.filter(message => userTurn(message)?.startsTurn).length, 1)
@@ -63,7 +64,7 @@ describe('运行中的多次压缩', () => {
     t.after(() => session.dispose())
     session.setExtraTools([buildTool({ name: 'WorkProbe', description: '工作探针', prompt: '工作探针',
       inputSchema: z.object({ step: z.number() }), isReadOnly: true, kind: 'read', execute: async () => {
-        if (step === 3) session.handleUserMessage('插话纠正：保留取消路径')
+        if (step === 3) session.handleUserMessage('插话纠正：保留取消路径', true)
         return { data: `工作证据 ${step}`, isError: false }
       } })])
     assert.equal(await session.handleUserMessage('完整正式任务原文'), 'completed')

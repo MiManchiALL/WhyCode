@@ -1,6 +1,7 @@
 import type { AgentSession, ApprovalHandler } from '../agent/session.ts'
+import { createUserInput, queuedUserMessage, type QueuedMessage } from '../agent/user-input.ts'
 import { withUserTurn } from '../context/user-turn.ts'
-import type { CoreEvent, CoreEventSink, QueuedUserMessage, StopReason } from '../events.ts'
+import type { CoreEvent, CoreEventSink, StopReason } from '../events.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
@@ -9,7 +10,7 @@ import {
   type TurnAbortReason,
   type TurnInterruptionContext,
 } from '../session/interruption.ts'
-import { skillSummary, type ActivatedSkill } from '../skills/types.ts'
+import type { ActivatedSkill } from '../skills/types.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
@@ -80,28 +81,7 @@ export interface ConsensusCoordinatorOptions {
   /** 用户显式丢弃 Coordinator 自持队列时同步更新会话事实源。 */
   onInputsDiscarded?: (inputIds: readonly string[]) => Promise<void>
   /** Main 忙碌期间暂存的正常消息真正开始新任务时，宿主重建独立工作计时。 */
-  onDeferredTaskStart?: () => void
-}
-
-interface CoordinatorMessage {
-  id: string
-  persistedInputId?: string
-  text: string
-  attachments: ImageAttachment[]
-  imageDelivery?: ImageDeliveryMode
-  pdfAttachments: PdfAttachment[]
-  /** 输入被接受时冻结的完整快照；讨论/协议阶段只保管，不向模型暴露。 */
-  skills: ActivatedSkill[]
-}
-
-function queuedUserMessage(message: CoordinatorMessage): QueuedUserMessage {
-  return {
-    id: message.id,
-    text: message.text,
-    ...(message.attachments.length ? { attachments: message.attachments } : {}),
-    ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
-    ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
-  }
+  onQueuedTurnStart?: () => void
 }
 
 /**
@@ -115,10 +95,10 @@ export class ConsensusCoordinator {
   private taskCounter = 0
   private peers: PeerAgent[] = []
   private running = false
-  /** B/C 工作期间（Main 空闲）用户插话暂存，注入执行阶段输入包 */
-  private pendingTexts: CoordinatorMessage[] = []
-  /** Main 已结束、协调器仍在提交任务终点时到达的消息；任务提交后按新协商任务交接。 */
-  private deferredTaskMessages: CoordinatorMessage[] = []
+  /** B/C 评审期间，显式立即补充的文字只交给 Main 执行。 */
+  private pendingTexts: QueuedMessage[] = []
+  /** 普通输入逐条等待完整的协商或附件任务结束。 */
+  private deferredTaskMessages: QueuedMessage[] = []
   private peerPhase = false
   /** 区分 Main 的 M1 讨论与最终执行，保证 Skill 只进入普通执行工具面。 */
   private executionPhase = false
@@ -157,7 +137,6 @@ export class ConsensusCoordinator {
     if (state) this.restoreState(state)
   }
 
-  /** 用户消息入口：空闲开新协商任务；Main 探索中走会话自身 steering；B/C 工作中暂存 */
   handleUserMessage(
     text: string,
     urgent = false,
@@ -167,94 +146,37 @@ export class ConsensusCoordinator {
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
   ): Promise<StopReason | void> | void {
-    const message = this.coordinatorMessage(
+    const message = createUserInput(
       text, attachments, persistedInputId, pdfAttachments, skills, imageDelivery,
     )
-    if (attachments.length > 0 || pdfAttachments.length > 0) {
-      if (!this.running && !this.options.mainSession.isBusy) {
-        this.options.emit({
-          type: 'consensus-skipped',
-          reason: pdfAttachments.length > 0 ? 'pdf-input' : 'image-input',
-        })
-        return this.options.mainSession.handleUserMessage(
-          text,
-          urgent,
-          attachments,
-          persistedInputId,
-          pdfAttachments,
-          skills,
-          imageDelivery,
-        )
-      }
-      // 协调器空闲但 Main 仍在处理上一条附件任务时，附件仍是同一任务的 steering。
-      if (!this.running) {
-        return this.options.mainSession.handleUserMessage(
-          text,
-          urgent,
-          attachments,
-          persistedInputId,
-          pdfAttachments,
-          skills,
-          imageDelivery,
-        )
-      }
-      if (this.peerPhase) {
-        if (urgent) {
-          this.deferredTaskMessages.push(message)
-          this.emitQueued(message)
-          this.interruptForDeferredInput()
-        } else {
-          // B/C 永远不接收附件；补充消息只在后续 Main 执行边界原样注入。
-          this.pendingTexts.push(message)
-          this.emitQueued(message)
-        }
-        return
-      }
-      if (this.options.mainSession.isRunning) {
-        if (!this.executionPhase && message.skills.length > 0) {
-          return this.queueUntilExecution(message, urgent)
-        }
-        return this.options.mainSession.handleUserMessage(
-          text,
-          urgent,
-          attachments,
-          persistedInputId,
-          pdfAttachments,
-          skills,
-          imageDelivery,
-        )
-      }
-      this.deferredTaskMessages.push(message)
-      this.emitQueued(message)
-      if (urgent) this.interruptForDeferredInput()
-      return
-    }
-    if (!this.running) {
-      if (this.options.mainSession.isBusy) return this.deferUntilMainIdle(message)
-      return this.runTask(text, [], skills)
-    }
-    if (this.peerPhase) {
+    const main = this.options.mainSession
+    if (!this.running && !main.isBusy) return this.runTasks(message)
+    if (urgent && this.canSteerMain(message)) return main.receiveUserInput(message, { urgent: true })
+    if (urgent && this.peerPhase && !attachments.length && !pdfAttachments.length && !skills.length) {
       this.pendingTexts.push(message)
-      this.emitQueued(message)
-      return
-    }
-    if (!this.options.mainSession.isRunning) {
+    } else if (urgent) {
+      this.deferredTaskMessages.unshift(message)
+      this.interruptForDeferredInput()
+    } else {
       this.deferredTaskMessages.push(message)
-      this.emitQueued(message)
-      return
     }
-    if (!this.executionPhase && message.skills.length > 0) {
-      return this.queueUntilExecution(message, urgent)
-    }
-    this.options.mainSession.handleUserMessage(text, urgent, [], persistedInputId, [], skills)
+    this.options.emit({ type: 'message-queued', ...queuedUserMessage(message) })
+    if (!this.running) return this.runTasks()
+  }
+
+  private canSteerMain(message: QueuedMessage): boolean {
+    return this.options.mainSession.isRunning && !this.peerPhase && (
+      this.executionPhase || !this.running
+      || (!message.skills.length && !message.attachments.length && !message.pdfAttachments.length)
+    )
   }
 
   async restoreQueuedMessage(id: string, replacesRestoredInputIds?: readonly string[]): Promise<boolean> {
     const queued = this.takeQueuedMessage(id)
     if (!queued) return this.options.mainSession.restoreQueuedMessage(id, replacesRestoredInputIds)
     try {
-      if (queued.message.persistedInputId) {
-        await this.options.onInputsRestored?.([queued.message.persistedInputId], replacesRestoredInputIds)
+      if (queued.message.persisted) {
+        await this.options.onInputsRestored?.([id], replacesRestoredInputIds)
       }
     } catch (error) {
       this.putQueuedMessageBack(queued)
@@ -268,8 +190,8 @@ export class ConsensusCoordinator {
     const queued = this.takeQueuedMessage(id)
     if (!queued) return this.options.mainSession.discardQueuedMessage(id)
     try {
-      if (queued.message.persistedInputId) {
-        await this.options.onInputsDiscarded?.([queued.message.persistedInputId])
+      if (queued.message.persisted) {
+        await this.options.onInputsDiscarded?.([id])
       }
     } catch (error) {
       this.putQueuedMessageBack(queued)
@@ -283,19 +205,9 @@ export class ConsensusCoordinator {
     const queued = this.takeQueuedMessage(id)
     if (!queued) return this.options.mainSession.sendQueuedMessageNow(id)
     const message = queued.message
-    if (!this.peerPhase && this.options.mainSession.isRunning && (
-      this.executionPhase || message.skills.length === 0
-    )) {
+    if (this.canSteerMain(message)) {
       try {
-        this.options.mainSession.handleUserMessage(
-          message.text,
-          true,
-          message.attachments,
-          message.persistedInputId,
-          message.pdfAttachments,
-          message.skills,
-          message.imageDelivery,
-        )
+        this.options.mainSession.receiveUserInput(message, { urgent: true, alreadyQueued: true })
       } catch (error) {
         this.putQueuedMessageBack(queued)
         throw error
@@ -307,32 +219,36 @@ export class ConsensusCoordinator {
     return true
   }
 
-  private queueUntilExecution(message: CoordinatorMessage, urgent: boolean): void {
-    if (urgent) {
-      this.deferredTaskMessages.push(message)
-      this.emitQueued(message)
-      this.interruptForDeferredInput()
-      return
-    }
-    this.pendingTexts.push(message)
-    this.emitQueued(message)
-  }
-
-  private async deferUntilMainIdle(message: CoordinatorMessage): Promise<void> {
-    this.deferredTaskMessages.push(message)
+  private async runTasks(first?: QueuedMessage): Promise<StopReason | void> {
+    const { mainSession, emit } = this.options
     this.running = true
     this.abortReason = null
-    this.emitQueued(message)
-    await this.options.mainSession.waitUntilIdle()
-    if (this.abortReason) {
+    let result: StopReason | void = undefined
+    try {
+      if (!first) await mainSession.waitUntilIdle()
+      mainSession.setTerminalStatusManaged(true)
+      let next = first ?? this.deferredTaskMessages.shift()
+      while (next) {
+        this.abortReason = null
+        const queued = next !== first || (next.persisted && mainSession.isQueuedUserInput(next.id))
+        if (queued) this.options.onQueuedTurnStart?.()
+        if (next.attachments.length || next.pdfAttachments.length) {
+          this.executionPhase = true
+          emit({ type: 'consensus-skipped', reason: next.pdfAttachments.length ? 'pdf-input' : 'image-input' })
+          result = await mainSession.receiveUserInput(next, { alreadyQueued: queued })
+          this.executionPhase = false
+        } else {
+          result = await this.runTask(next, queued)
+        }
+        next = this.deferredTaskMessages.shift()
+      }
+      return result
+    } finally {
+      mainSession.setTerminalStatusManaged(false)
+      this.executionPhase = false
       this.running = false
-      this.options.emit({ type: 'agent-status', status: 'idle' })
-      return
+      emit({ type: 'agent-status', status: result === 'error' ? 'error' : 'idle' })
     }
-    const next = this.deferredTaskMessages.shift()
-    this.running = false
-    if (!next) return
-    await this.deliverDeferredMessage(next)
   }
 
   /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
@@ -346,16 +262,10 @@ export class ConsensusCoordinator {
     await this.restoreQueuedMessages(queued)
   }
 
-  private async runTask(
-    userText: string,
-    deliveredInputIds: readonly string[] = [],
-    skills: readonly ActivatedSkill[] = [],
-  ): Promise<void> {
+  private async runTask(input: QueuedMessage, queued: boolean): Promise<void> {
+    const { text: userText, skills } = input
     const { mainSession, emit } = this.options
-    this.running = true
-    this.abortReason = null
     emit({ type: 'agent-status', status: 'working' })
-    mainSession.setTerminalStatusManaged(true)
     mainSession.setUserQuestionsEnabled(false)
     const taskId = `task-${++this.taskCounter}`
     const userMessage = withUserTurn({ role: 'user', content: userText }, taskId, true)
@@ -374,19 +284,11 @@ export class ConsensusCoordinator {
         taskId,
         startState,
         userText,
-        deliveredInputIds,
+        queued && input.persisted ? [input.id] : [],
         skills,
       )
       if (!taskBoundaryStarted) return
-      for (const inputId of deliveredInputIds) {
-        emit({
-          type: 'message-injected',
-          id: inputId,
-          text: userText,
-          startsTurn: true,
-          ...(skills.length ? { skills: skills.map(skillSummary) } : {}),
-        })
-      }
+      if (queued) emit({ type: 'message-injected', ...queuedUserMessage(input), startsTurn: true })
       if (this.abortReason) {
         outcome = 'aborted'
         return
@@ -451,14 +353,8 @@ export class ConsensusCoordinator {
         this.restoreExecution()
         emit({ type: 'execution-started', taskId })
         this.executionPhase = true
-        const execution = this.takePendingInputs(
-          buildMainOnlyExecutionPrompt(userText, m1.candidate),
-          skills,
-        )
         const stopReason = await mainSession.handleExecutionMessage(
-          execution.text,
-          execution.inputs,
-          execution.skills,
+          buildMainOnlyExecutionPrompt(userText, m1.candidate), this.pendingTexts.splice(0), skills,
         )
         outcome = this.executionOutcome(stopReason)
         return
@@ -497,11 +393,8 @@ export class ConsensusCoordinator {
       this.restoreExecution()
       emit({ type: 'execution-started', taskId })
       this.executionPhase = true
-      const execution = this.takePendingInputs(packageText, skills)
       const stopReason = await mainSession.handleExecutionMessage(
-        execution.text,
-        execution.inputs,
-        execution.skills,
+        packageText, this.pendingTexts.splice(0), skills,
       )
       outcome = this.executionOutcome(stopReason)
     } catch (error) {
@@ -536,17 +429,9 @@ export class ConsensusCoordinator {
       }
       this.restoreExecution()
       mainSession.setUserQuestionsEnabled(true)
-      mainSession.setTerminalStatusManaged(false)
       this.peers = []
       this.peerPhase = false
       this.executionPhase = false
-      this.running = false
-      // 收尾兜底：此时无任何在跑的回合，状态归位（对 UI 幂等）
-      emit({ type: 'agent-status', status: 'idle' })
-      const nextTask = this.deferredTaskMessages.shift()
-      if (nextTask) {
-        await this.deliverDeferredMessage(nextTask)
-      }
     }
   }
 
@@ -658,64 +543,8 @@ export class ConsensusCoordinator {
     return peer
   }
 
-  /** B/C 期间的补充保持独立消息顺序，附件只在 Main 执行边界解引用。 */
-  private takePendingInputs(
-    packageText: string,
-    rootSkills: readonly ActivatedSkill[] = [],
-  ): { text: string; inputs: QueuedUserMessage[]; skills: ActivatedSkill[] } {
-    if (this.pendingTexts.length === 0) {
-      return { text: packageText, inputs: [], skills: cloneUniqueSkills(rootSkills) }
-    }
-    const pending = this.pendingTexts.splice(0)
-    return {
-      text: packageText,
-      inputs: pending.map((input) => ({
-        id: input.persistedInputId ?? input.id,
-        text: input.text,
-        ...(input.attachments.length ? { attachments: input.attachments } : {}),
-        ...(input.attachments.length ? { imageDelivery: input.imageDelivery } : {}),
-        ...(input.pdfAttachments.length ? { pdfAttachments: input.pdfAttachments } : {}),
-        ...(input.skills.length ? { skills: input.skills.map(skillSummary) } : {}),
-      })),
-      skills: cloneUniqueSkills([
-        ...rootSkills,
-        ...pending.flatMap((input) => input.skills),
-      ]),
-    }
-  }
-
-  private coordinatorMessage(
-    text: string,
-    attachments: readonly ImageAttachment[],
-    persistedInputId: string | undefined,
-    pdfAttachments: readonly PdfAttachment[],
-    skills: readonly ActivatedSkill[],
-    imageDelivery?: ImageDeliveryMode,
-  ): CoordinatorMessage {
-    return {
-      id: persistedInputId ?? `cq-${Date.now()}-${this.pendingTexts.length + this.deferredTaskMessages.length}`,
-      ...(persistedInputId ? { persistedInputId } : {}),
-      text,
-      attachments: [...attachments],
-      ...(attachments.length ? { imageDelivery: imageDelivery ?? 'native' } : {}),
-      pdfAttachments: [...pdfAttachments],
-      skills: skills.map((skill) => structuredClone(skill)),
-    }
-  }
-
-  private emitQueued(message: CoordinatorMessage): void {
-    this.options.emit({
-      type: 'message-queued',
-      id: message.id,
-      text: message.text,
-      ...(message.attachments.length ? { attachments: message.attachments } : {}),
-      ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
-      ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
-    })
-  }
-
   private takeQueuedMessage(id: string): {
-    message: CoordinatorMessage
+    message: QueuedMessage
     queue: 'pending' | 'deferred'
     index: number
   } | null {
@@ -733,7 +562,7 @@ export class ConsensusCoordinator {
   }
 
   private putQueuedMessageBack(queued: {
-    message: CoordinatorMessage
+    message: QueuedMessage
     queue: 'pending' | 'deferred'
     index: number
   }): void {
@@ -747,10 +576,10 @@ export class ConsensusCoordinator {
     this.options.mainSession.abort(this.abortReason)
   }
 
-  private async restoreQueuedMessages(messages: CoordinatorMessage[]): Promise<void> {
+  private async restoreQueuedMessages(messages: QueuedMessage[]): Promise<void> {
     if (messages.length === 0) return
     const persistedIds = messages.flatMap((message) =>
-      message.persistedInputId ? [message.persistedInputId] : [])
+      message.persisted ? [message.id] : [])
     try {
       await this.options.onInputsRestored?.(persistedIds)
     } catch (error) {
@@ -763,52 +592,6 @@ export class ConsensusCoordinator {
       text: messages.map((message) => message.text).join('\n'),
       items: messages.map(queuedUserMessage),
     })
-  }
-
-  private async deliverDeferredMessage(message: CoordinatorMessage): Promise<void> {
-    this.options.onDeferredTaskStart?.()
-    if (message.attachments.length > 0 || message.pdfAttachments.length > 0) {
-      this.options.emit({
-        type: 'consensus-skipped',
-        reason: message.pdfAttachments.length > 0 ? 'pdf-input' : 'image-input',
-      })
-      if (!message.persistedInputId) {
-        this.options.emit({
-          type: 'message-injected',
-          id: message.id,
-          text: message.text,
-          startsTurn: true,
-          attachments: message.attachments,
-          ...(message.pdfAttachments.length
-            ? { pdfAttachments: message.pdfAttachments }
-            : {}),
-          ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
-        })
-      }
-      await this.options.mainSession.handleUserMessage(
-        message.text,
-        false,
-        message.attachments,
-        message.persistedInputId,
-        message.pdfAttachments,
-        message.skills,
-        message.imageDelivery,
-      )
-      return
-    }
-    if (!message.persistedInputId) {
-      this.options.emit({
-        type: 'message-injected',
-        id: message.id,
-        text: message.text,
-        startsTurn: true,
-      })
-    }
-    await this.runTask(
-      message.text,
-      message.persistedInputId ? [message.persistedInputId] : [],
-      message.skills,
-    )
   }
 
   private restoreExecution(): void {
@@ -876,10 +659,4 @@ export class ConsensusCoordinator {
       recoverable: true,
     })
   }
-}
-
-function cloneUniqueSkills(skills: readonly ActivatedSkill[]): ActivatedSkill[] {
-  const unique = new Map<string, ActivatedSkill>()
-  for (const skill of skills) unique.set(skill.id, structuredClone(skill))
-  return [...unique.values()]
 }

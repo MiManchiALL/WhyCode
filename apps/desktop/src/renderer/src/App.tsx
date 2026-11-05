@@ -164,7 +164,7 @@ import {
 import { ConversationEventBuffer } from './conversation-event-buffer.ts'
 import { subscribeRuntimeEventBatches } from './runtime-event-stream.ts'
 import {
-  QueuedMessageCard,
+  QueuedMessageList,
   type QueuedMessageAction,
 } from './queued-message-card.tsx'
 import {
@@ -2443,19 +2443,15 @@ export function App() {
                   )}
 
                   {(queued.length > 0 || pendingQueuedMessage) && (
-                    <div className="mb-2 space-y-1">
-                      {queued.map((queuedMessage) => (
-                        <QueuedMessageCard
-                          key={queuedMessage.id}
-                          message={queuedMessage}
-                          confirmOverwrite={hasComposerDraft}
-                          editDisabled={attachmentLocked}
-                          pendingAction={queuedActionPending[queuedMessage.id]}
-                          onAction={(id, action) => void actOnQueuedMessage(id, action)}
-                        />
-                      ))}
-                      {pendingQueuedMessage && <QueuedMessageCard draft={pendingQueuedMessage} />}
-                    </div>
+                    <QueuedMessageList
+                      key={runtimeId}
+                      messages={queued}
+                      submitting={pendingQueuedMessage}
+                      confirmOverwrite={hasComposerDraft}
+                      editDisabled={attachmentLocked}
+                      pendingActions={queuedActionPending}
+                      onAction={actOnQueuedMessage}
+                    />
                   )}
 
                   {workStartedAt !== null && (

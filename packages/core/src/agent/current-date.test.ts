@@ -56,7 +56,7 @@ describe('Agent 当前日期上下文', () => {
     assert.ok(userIndex >= 0 && userIndex < reminderIndex && reminderIndex < assistantIndex)
   })
 
-  it('同一 turn 收到新的用户插话后，同日不重复追加日期', async () => {
+  it('工具续步和排队的新回合在同日复用日期提醒', async () => {
     const firstCallStarted = createDeferred<void>()
     const releaseFirstCall = createDeferred<void>()
     let calls = 0
@@ -80,10 +80,10 @@ describe('Agent 当前日期上下文', () => {
     releaseFirstCall.resolve()
 
     assert.equal(await running, 'completed')
-    assert.equal(model.doStreamCalls.length, 2)
-    assert.equal(reminderCount(model.doStreamCalls[1]?.prompt), 1)
-    const secondPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt)
-    assert.ok(secondPrompt.indexOf(CURRENT_DATE_TEXT) < secondPrompt.indexOf('补充：也考虑最新变化'))
+    assert.equal(model.doStreamCalls.length, 3)
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[1]?.prompt), /补充：也考虑最新变化/)
+    assert.equal(reminderCount(model.doStreamCalls[2]?.prompt), 1)
+    assert.match(JSON.stringify(model.doStreamCalls[2]?.prompt), /补充：也考虑最新变化/)
   })
 
   it('中止的模型步骤不持久化孤立提醒，继续后只提交一次', async () => {

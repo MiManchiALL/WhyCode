@@ -1,5 +1,5 @@
 import type { ModelMessage, ToolResultPart } from 'ai'
-import { withUserTurn } from '../context/user-turn.ts'
+import { userTurn, withUserTurn } from '../context/user-turn.ts'
 import { keepsConsensusProgress, type ConsensusPersistedState } from '../consensus/types.ts'
 import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
 import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
@@ -588,7 +588,13 @@ function collectViewEvents(entries: SessionEntry[]): {
       }
     }
     if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
-      for (const inputId of entry.deliveredInputIds ?? []) {
+      const delivered = entry.deliveredInputIds ?? []
+      if (!delivered.length) continue
+      const startsTurn = entry.type === 'consensus-task-start' || entry.messages.some(message => {
+        const turn = userTurn(message)
+        return turn?.startsTurn && turn.id === entry.turnId
+      })
+      for (const [index, inputId] of delivered.entries()) {
         if (visibleInputIds.has(inputId)) continue
         const input = inputs.get(inputId)
         if (!input || input.startsTurn) continue
@@ -596,11 +602,11 @@ function collectViewEvents(entries: SessionEntry[]): {
           type: 'user-message',
           inputId,
           text: input.text,
-          startsTurn: false,
+          startsTurn: startsTurn && index === 0,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
           ...(input.skills?.length ? { skills: input.skills.map(skillSummary) } : {}),
-        }, input.timestamp)
+        }, entry.timestamp)
         visibleInputIds.add(inputId)
       }
     }
