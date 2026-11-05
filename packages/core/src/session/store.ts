@@ -20,7 +20,8 @@ import {
 } from '../tasks/types.ts'
 import { createTaskContextMessage } from '../tasks/context.ts'
 import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
-import { compactViewEvent, viewEventSchema, type ViewEvent } from './view-events.ts'
+import { compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
+import { responseViewEvents } from './response-view.ts'
 import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
 import { createSessionFork } from './fork.ts'
@@ -49,7 +50,6 @@ import { skillSummary } from '../skills/types.ts'
 import {
   BTW_MAX_TURNS,
   canContinueBtw,
-  btwToolStepEvents,
   type BtwConversation,
   type BtwConversationTurn,
   type BtwContinuation,
@@ -500,7 +500,7 @@ export class SessionJournal implements SessionRecorder {
     this.leafUuid = leafUuid
     const projectInstructions = findProjectInstructionsMessage(messages)
     this.messages = applyProjectInstructions(messages, projectInstructions)
-    this.viewEvents = viewEvents.map(compactViewEvent)
+    this.viewEvents = viewEvents.map(event => event.type === 'core-event' ? compactViewEvent(event) : event)
     if (viewEvents.length !== viewEventTimestamps.length) {
       throw new Error('会话可见事件与时间轴不一致')
     }
@@ -871,9 +871,7 @@ export class SessionJournal implements SessionRecorder {
     this.addPdfAttachments(pdfAttachments)
     this.pendingBtwInputs.delete(context.inputId)
     this.btwConversationState = conversation
-    const events = btwResponseViewEvents(response)
-    this.viewEvents.push(...events)
-    this.viewEventTimestamps.push(...events.map(() => response.timestamp))
+    this.appendResponseView(response)
     this.metadata.updatedAt = response.timestamp
     this.metadata.status = result.outcome === 'error' ? 'error' : 'idle'
     await this.refreshMetadataCache()
@@ -969,14 +967,20 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
-  recordViewEvents(events: ViewEvent[]): Promise<void> {
+  private appendResponseView(entry: SessionEntry): void {
+    for (const event of responseViewEvents(entry)) {
+      this.viewEvents.push(event)
+      this.viewEventTimestamps.push(entry.timestamp)
+    }
+  }
+
+  recordViewEvents(events: RecordedViewEvent[]): Promise<void> {
     if (events.length === 0) return Promise.resolve()
     const parsed = events.map((event) => viewEventSchema.parse(compactViewEvent(event)))
     return this.enqueue(async () => {
       const entry = this.entry({ type: 'view-events', events: parsed })
       await this.appendEntries([entry])
-      this.viewEvents.push(...parsed)
-      this.viewEventTimestamps.push(...parsed.map(() => entry.timestamp))
+      this.appendResponseView(entry)
     })
   }
 
@@ -1097,6 +1101,7 @@ export class SessionJournal implements SessionRecorder {
     return this.enqueue(async () => {
       const ended = this.entry({ type: 'turn-end', turnId, stopReason })
       await this.appendEntries([ended])
+      this.appendResponseView(ended)
       if (this.activeTurnId === turnId) {
         this.activeTurnId = null
         this.activeTurnEngagedPlanId = null
@@ -1889,51 +1894,6 @@ function btwEditViewEvent(
       },
     },
   }
-}
-
-function btwResponseViewEvents(
-  response: Extract<SessionEntry, { type: 'btw-response' }>,
-): ViewEvent[] {
-  const events: ViewEvent[] = btwToolStepEvents(response.toolSteps ?? [])
-    .map((event) => ({ type: 'core-event', event }))
-  if (response.reasoningText) {
-    events.push({
-      type: 'core-event',
-      event: { type: 'thinking-delta', text: response.reasoningText },
-    })
-    events.push({
-      type: 'core-event',
-      event: { type: 'thinking-end', durationMs: response.reasoningDurationMs },
-    })
-  }
-  if (response.assistantText) {
-    events.push({
-      type: 'core-event',
-      event: { type: 'text-delta', text: response.assistantText },
-    })
-  }
-  if (response.error) {
-    events.push({
-      type: 'core-event',
-      event: { type: 'error', message: response.error, recoverable: true },
-    })
-  }
-  events.push({
-    type: 'core-event',
-    event: {
-      type: 'work-finished',
-      durationMs: response.durationMs,
-      outcome: response.outcome,
-      ...(response.error ? { error: response.error } : {}),
-      forkTurnId: null,
-      btw: {
-        conversationId: response.conversationId,
-        turnIndex: response.turnIndex,
-        continuationAvailable: response.continuationAvailable,
-      },
-    },
-  })
-  return events
 }
 
 function turnEditViewEvent(

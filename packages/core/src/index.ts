@@ -372,7 +372,7 @@ export {
   viewEventSchema,
   visibleCoreEventSchema,
 } from './session/view-events.ts'
-export type { ViewEvent, VisibleCoreEvent } from './session/view-events.ts'
+export type { RecordedViewEvent, ViewEvent, VisibleCoreEvent } from './session/view-events.ts'
 export {
   BTW_MAX_TURNS,
   btwModeSchema,

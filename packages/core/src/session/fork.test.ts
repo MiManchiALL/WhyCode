@@ -229,7 +229,8 @@ describe('SessionStore Fork', () => {
       source,
       'turn-batched-boundary',
     )
-    assert.equal(source.initialViewEvents.length, 3)
+    assert.deepEqual(source.initialViewEvents.at(1), { type: 'turn-completed' })
+    assert.equal(source.initialViewEvents.length, 4)
     assert.deepEqual(forked.initialViewEvents, source.initialViewEvents.slice(0, -1))
   })
 

@@ -161,6 +161,7 @@ export interface SubagentState {
 export interface SubagentTranscriptSnapshot {
   subagent: SubagentSummary
   viewEvents: ViewEvent[]
+  committedEventCount: number
   viewEventTimestamps: string[]
   eventSequence: number
 }

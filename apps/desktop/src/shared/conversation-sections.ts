@@ -105,13 +105,12 @@ function appendActiveWork(
   startedAt: number,
 ): boolean {
   const { leading, work } = splitLeadingBlocks(segment)
-  const finalIndexes = terminalResponseIndexes(work)
-  if (finalIndexes.size === 0) return false
+  if (!work.some(isTerminalResponseBlock)) return false
   appendBlocks(sections, leading)
   sections.push({
     kind: 'active-work',
     id: workSectionId(work[0], `active-${startedAt}`),
-    ...sectionBlocks(work, finalIndexes),
+    ...sectionBlocks(work),
   })
   return true
 }
@@ -123,13 +122,12 @@ function appendCompletedWork(
 ): void {
   const { leading, work } = splitLeadingBlocks(segment)
   appendBlocks(sections, leading)
-  const finalIndexes = terminalResponseIndexes(work)
   sections.push({
     kind: 'completed-work',
     id: workSectionId(work[0], duration.id),
     forkTurnId: duration.forkTurnId,
     duration,
-    ...sectionBlocks(work, finalIndexes),
+    ...sectionBlocks(work),
   })
 }
 
@@ -149,32 +147,15 @@ function splitLeadingBlocks(segment: readonly Block[]): {
 
 function sectionBlocks(
   segment: readonly Block[],
-  finalIndexes: ReadonlySet<number>,
 ): Pick<
   Extract<ConversationSection, { kind: 'active-work' }>,
   'userBlocks' | 'activityBlocks' | 'finalBlocks'
 > {
   return {
     userBlocks: segment.filter((block) => block.kind === 'user'),
-    activityBlocks: segment.filter((block, index) =>
-      block.kind !== 'user' && !finalIndexes.has(index)),
-    finalBlocks: segment.filter((_block, index) => finalIndexes.has(index)),
+    activityBlocks: segment.filter(block => block.kind !== 'user' && !isTerminalResponseBlock(block)),
+    finalBlocks: segment.filter(isTerminalResponseBlock),
   }
-}
-
-function terminalResponseIndexes(blocks: readonly Block[]): ReadonlySet<number> {
-  const lastIndex = blocks.length - 1
-  const lastBlock = blocks[lastIndex]
-  if (!isTerminalResponseBlock(lastBlock)) return new Set()
-
-  const indexes = new Set<number>()
-  for (let index = lastIndex; index >= 0; index--) {
-    const block = blocks[index]
-    if (block?.kind === 'user') break
-    if (!isTerminalResponseBlock(block)) break
-    indexes.add(index)
-  }
-  return indexes
 }
 
 function appendBlocks(sections: ConversationSection[], blocks: readonly Block[]): void {

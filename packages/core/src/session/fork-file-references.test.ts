@@ -12,7 +12,7 @@ import { forkScratchPathMapper } from './fork-resources.ts'
 import { forkFileReferences } from './fork-file-references.ts'
 import { parseTranscript } from './chain.ts'
 import { SessionStore } from './store.ts'
-import type { ViewEvent } from './view-events.ts'
+import type { RecordedViewEvent } from './view-events.ts'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -35,7 +35,7 @@ function messages(declaration: Presentation): ModelMessage[] {
   return [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'delivery', toolName: 'Present', input: declaration }] },
     { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'delivery', toolName: 'Present', output: { type: 'text', value: JSON.stringify(declaration) } }] }]
 }
-function view(declaration: Presentation): ViewEvent[] {
+function view(declaration: Presentation): RecordedViewEvent[] {
   return [{ type: 'core-event', event: { type: 'tool-start', toolUseId: 'delivery', toolName: 'Present', input: declaration } },
     { type: 'core-event', event: { type: 'tool-end', toolUseId: 'delivery', isError: false, result: JSON.stringify(declaration) } }]
 }
@@ -131,7 +131,7 @@ it('only structured paths move; external paths, relative inputs, file contents, 
   assert.deepEqual(refs.messages([cited]), [cited])
   assert.deepEqual(forkFileReferences(forkScratchPathMapper()).messages(messages(declaration)), messages(declaration))
   const unrelated = view(declaration).map(value => value.type === 'core-event' && value.event.type === 'tool-start'
-    ? { ...value, event: { ...value.event, toolName: 'ReadFile' } } : value) as ViewEvent[]
+    ? { ...value, event: { ...value.event, toolName: 'ReadFile' } } : value) as RecordedViewEvent[]
   assert.deepEqual(unrelated.map(forkFileReferences(rebase).view), unrelated)
   const failed = view(declaration).map(value => value.type === 'core-event' && value.event.type === 'tool-end'
     ? { ...value, event: { ...value.event, isError: true } } : value)

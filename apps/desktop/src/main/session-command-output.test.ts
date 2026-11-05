@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { it } from 'node:test'
-import { AgentSession, localWorkspace, toViewEvent, type CoreEvent, type ViewEvent } from '@whycode/core'
+import { AgentSession, localWorkspace, toViewEvent, type CoreEvent } from '@whycode/core'
 import { readCommandOutputResult } from '@whycode/core/command-output'
 import { toolCallDetails } from '../shared/tool-call-summary.ts'
 import { DesktopSessionRepository } from './session-repository.ts'
@@ -59,7 +59,7 @@ it('长命令日志经模型工具读取、恢复和 Fork 保留，删除会话�
   const turn = events.find(event => event.type === 'turn-start')
   assert.ok(turn?.type === 'turn-start')
   await journal.recordViewEvents([
-    ...events.map(toViewEvent).filter((event): event is ViewEvent => event !== null),
+    ...events.map(toViewEvent).filter(event => event !== null),
     { type: 'core-event', event: { type: 'work-finished', durationMs: 1, outcome: 'completed', forkTurnId: turn.turnId } },
   ])
   const full = await readFile(log, 'utf8')

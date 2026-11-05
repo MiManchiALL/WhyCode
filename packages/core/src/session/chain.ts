@@ -11,6 +11,7 @@ import {
   type SessionEntry,
 } from './types.ts'
 import type { ViewEvent } from './view-events.ts'
+import { responseViewEvents } from './response-view.ts'
 import { latestVisibleTaskPlan, taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { appendOrderedMessages, interruptedToolResults } from './tool-execution.ts'
 import { createImageUserMessage } from '../attachments/messages.ts'
@@ -27,7 +28,6 @@ import {
 } from '../instructions/project.ts'
 import {
   canContinueBtw,
-  btwToolStepEvents,
   type BtwConversation,
   type BtwConversationTurn,
   type BtwTurnContext,
@@ -528,8 +528,8 @@ function collectViewEvents(entries: SessionEntry[]): {
       : []))
 
   for (const entry of entries) {
-    if (entry.type === 'view-events') {
-      for (const event of entry.events) push(event, entry.timestamp)
+    if (entry.type === 'view-events' || entry.type === 'turn-end' || entry.type === 'btw-response') {
+      for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
       continue
     }
     if (entry.type === 'btw-input') {
@@ -561,37 +561,6 @@ function collectViewEvents(entries: SessionEntry[]): {
           },
         }, entry.timestamp)
       }
-      continue
-    }
-    if (entry.type === 'btw-response') {
-      for (const event of btwToolStepEvents(entry.toolSteps ?? [])) {
-        push({ type: 'core-event', event }, entry.timestamp)
-      }
-      if (entry.reasoningText) {
-        push({ type: 'core-event', event: { type: 'thinking-delta', text: entry.reasoningText } }, entry.timestamp)
-        push({ type: 'core-event', event: { type: 'thinking-end', durationMs: entry.reasoningDurationMs } }, entry.timestamp)
-      }
-      if (entry.assistantText) {
-        push({ type: 'core-event', event: { type: 'text-delta', text: entry.assistantText } }, entry.timestamp)
-      }
-      if (entry.error) {
-        push({ type: 'core-event', event: { type: 'error', message: entry.error, recoverable: true } }, entry.timestamp)
-      }
-      push({
-        type: 'core-event',
-        event: {
-          type: 'work-finished',
-          durationMs: entry.durationMs,
-          outcome: entry.outcome,
-          ...(entry.error ? { error: entry.error } : {}),
-          forkTurnId: null,
-          btw: {
-            conversationId: entry.conversationId,
-            turnIndex: entry.turnIndex,
-            continuationAvailable: entry.continuationAvailable,
-          },
-        },
-      }, entry.timestamp)
       continue
     }
     if (entry.type === 'user-input') inputs.set(entry.uuid, entry)
@@ -808,6 +777,7 @@ function pendingVisibleQuestionId(events: ViewEvent[]): string | null {
       pendingQuestionId = null
       continue
     }
+    if (entry.type !== 'core-event') continue
     const event = entry.event
     if (event.type === 'user-question') pendingQuestionId = event.question.id
     if (

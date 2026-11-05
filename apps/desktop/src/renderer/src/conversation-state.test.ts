@@ -103,6 +103,7 @@ describe('会话界面时间线重建', () => {
     state = applyCoreEvent(state, { type: 'step-committed' })
 
     assert.equal(state.pendingStep, null)
+    state = applyCoreEvent(state, completedTurn())
     const finalBlock = state.blocks.at(-1)
     assert.equal(finalBlock?.kind, 'text')
     assert.equal(
@@ -113,7 +114,7 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /out:default_api/)
   })
 
-  it('中途正文与同一步工具始终属于展开过程，纯文本 step 提交后才收起最终回答', () => {
+  it('含工具的正文与等待中的纯文本都留在展开过程，回合完成后才收起', () => {
     let state = createConversationState([
       { type: 'user-message', text: '汇总四个项目', startsTurn: true },
     ])
@@ -148,6 +149,8 @@ describe('会话界面时间线重建', () => {
     state = applyCoreEvent(state, { type: 'text-delta', text: '核心结论如下。' })
     state = applyCoreEvent(state, { type: 'step-committed' })
 
+    assert.ok(conversationSections(state.blocks, 1_000).every(section => section.kind === 'block'))
+    state = applyCoreEvent(state, completedTurn())
     const sections = conversationSections(state.blocks, 1_000)
     assert.equal(sections.length, 1)
     const active = sections[0]
@@ -177,7 +180,10 @@ describe('会话界面时间线重建', () => {
         input: { path: 'README.md' },
       }),
       core({ type: 'tool-end', toolUseId: 'verify', result: 'ok', isError: false }),
+      { type: 'step-committed', hasToolCalls: true },
       core({ type: 'text-delta', text: '最终结论。' }),
+      { type: 'step-committed', hasToolCalls: false },
+      { type: 'turn-completed' },
       core({
         type: 'work-finished', durationMs: 1_500, outcome: 'completed', forkTurnId: null,
       }),
@@ -190,20 +196,57 @@ describe('会话界面时间线重建', () => {
     ])
   })
 
+  it('等待中的已提交回复在停止或暂停后仍可展开查看', () => {
+    for (const stopReason of ['aborted', 'paused'] as const) {
+      let state = createConversationState()
+      state = applyCoreEvent(state, { type: 'text-delta', text: '第一份结果已到。' })
+      state = applyCoreEvent(state, { type: 'step-committed' })
+      state = applyCoreEvent(state, { ...completedTurn(), stopReason })
+      state = applyCoreEvent(state, {
+        type: 'work-finished', outcome: stopReason === 'aborted' ? 'stopped' : 'completed',
+        durationMs: 500, forkTurnId: null,
+      })
+      const section = conversationSections(state.blocks)[0]
+      assert.ok(section?.kind === 'completed-work')
+      assert.deepEqual(section.finalBlocks, [])
+      assert.equal(state.expanded.has(section.id), true)
+      assert.deepEqual(section.activityBlocks.map(block => block.kind === 'text' && block.text), ['第一份结果已到。'])
+    }
+  })
+
+  it('同一最终步骤由推理隔开的两段正文完整留在过程外', () => {
+    const state = createConversationState([
+      core({ type: 'text-delta', text: '等待结果' }), { type: 'step-committed', hasToolCalls: false },
+      core({ type: 'text-delta', text: '结论' }),
+      core({ type: 'thinking-delta', text: '复核' }), core({ type: 'thinking-end', durationMs: 20 }),
+      core({ type: 'text-delta', text: '依据' }), { type: 'step-committed', hasToolCalls: false },
+      { type: 'turn-completed' },
+      core({ type: 'work-finished', durationMs: 500, outcome: 'completed', forkTurnId: null }),
+    ])
+    const section = conversationSections(state.blocks)[0]
+    assert.ok(section?.kind === 'completed-work')
+    assert.deepEqual(section.finalBlocks.map(block => block.kind === 'text' && block.text), ['结论', '依据'])
+    assert.deepEqual(section.activityBlocks.map(block => block.kind), ['text', 'thinking'])
+  })
+
   it('后续任务完成时不覆盖上一轮最终回答的完成时间', () => {
     const state = createConversationState([
       { type: 'user-message', text: '第一问', startsTurn: true },
       core({ type: 'text-delta', text: '第一答' }),
+      { type: 'step-committed', hasToolCalls: false },
+      { type: 'turn-completed' },
       core({ type: 'work-finished', durationMs: 500, outcome: 'completed', forkTurnId: null }),
       { type: 'user-message', text: '第二问', startsTurn: true },
       core({ type: 'text-delta', text: '第二答' }),
+      { type: 'step-committed', hasToolCalls: false },
+      { type: 'turn-completed' },
       core({ type: 'work-finished', durationMs: 700, outcome: 'completed', forkTurnId: null }),
     ], [
       '2026-08-09T01:00:00.000Z',
-      '2026-08-09T01:00:01.000Z',
+      '2026-08-09T01:00:01.000Z', '', '',
       '2026-08-09T01:00:02.000Z',
       '2026-08-09T02:00:00.000Z',
-      '2026-08-09T02:00:01.000Z',
+      '2026-08-09T02:00:01.000Z', '', '',
       '2026-08-09T02:00:02.000Z',
     ])
 
@@ -614,10 +657,12 @@ describe('会话界面时间线重建', () => {
       { type: 'user-message', inputId: 'input-1', text: '旧问题', startsTurn: true },
       core({ type: 'turn-start', turnId: 'turn-1' }),
       core({ type: 'text-delta', text: '完整回答' }),
+      { type: 'step-committed', hasToolCalls: false },
+      { type: 'turn-completed' },
       core({
         type: 'work-finished', durationMs: 2_000, outcome: 'completed', forkTurnId: 'turn-1',
       }),
-    ], [inputAt, turnAt, textAt, finishedAt])
+    ], [inputAt, turnAt, textAt, textAt, finishedAt, finishedAt])
 
     assert.equal(state.blocks[0]?.kind === 'user' && state.blocks[0].timestamp, inputAt)
     assert.equal(state.blocks[1]?.kind === 'text' && state.blocks[1].timestamp, finishedAt)
@@ -1306,6 +1351,11 @@ describe('会话界面时间线重建', () => {
     ])
   })
 })
+
+function completedTurn(): Extract<CoreEvent, { type: 'turn-end' }> {
+  return { type: 'turn-end', turnId: 'turn-main', stopReason: 'completed',
+    usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 } }
+}
 
 function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {
   return { type: 'core-event', event }

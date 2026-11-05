@@ -288,7 +288,7 @@ function rehomeViewEvent(event: ViewEvent, sessionId: string): ViewEvent {
         : {}),
     }
   }
-  if (event.event.type !== 'image-viewed') return structuredClone(event)
+  if (event.type !== 'core-event' || event.event.type !== 'image-viewed') return structuredClone(event)
   return {
     type: 'core-event',
     event: {
