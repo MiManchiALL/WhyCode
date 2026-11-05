@@ -1,23 +1,24 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import type { ViewEvent } from '@whycode/core'
+import type { RecordedViewEvent, ViewEvent } from '@whycode/core'
+import { committedViewBatch } from '../../../../packages/core/src/session/response-view.ts'
 import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
 import { conversationHistoryWindow } from './conversation-history.ts'
 import { restoreConversationSnapshot } from '../shared/conversation-history.ts'
 import { ViewTimeline, type ViewEventWriter } from './view-timeline.ts'
 
 class Writer implements ViewEventWriter {
-  batches: ViewEvent[][] = []
+  batches: RecordedViewEvent[][] = []
 
   get initialViewEvents(): readonly ViewEvent[] {
-    return this.batches.flat()
+    return this.batches.flatMap(committedViewBatch)
   }
 
   get initialViewEventTimestamps(): readonly string[] {
     return this.initialViewEvents.map(() => 'persisted-at')
   }
 
-  async recordViewEvents(events: ViewEvent[]): Promise<void> {
+  async recordViewEvents(events: RecordedViewEvent[]): Promise<void> {
     this.batches.push(structuredClone(events))
   }
 }
@@ -32,6 +33,8 @@ describe('ViewTimeline', () => {
       { type: 'text-delta', text: '已完成步骤的说明。' },
       { type: 'tool-start', toolUseId: 'read', toolName: 'ReadFile', input: { path: 'README.md' } },
       { type: 'tool-end', toolUseId: 'read', result: '已读取文件', isError: false },
+      { type: 'step-committed' },
+      { type: 'text-delta', text: '仍在等待核查。' },
       { type: 'step-committed' },
       { type: 'text-delta', text: '应丢弃的首次草稿' },
       { type: 'step-discarded' },
@@ -51,7 +54,7 @@ describe('ViewTimeline', () => {
     const replay = createConversationState(writer.initialViewEvents)
     assert.deepEqual(replay.blocks, live.blocks)
     assert.deepEqual(replay.blocks.filter(block => block.kind === 'text').map(block => [block.text, block.phase]), [
-      ['已完成步骤的说明。', 'activity'], ['失败前已展示的正文。', 'activity'],
+      ['已完成步骤的说明。', 'activity'], ['仍在等待核查。', 'activity'], ['失败前已展示的正文。', 'activity'],
     ])
     assert.doesNotMatch(JSON.stringify(replay.blocks), /应丢弃的首次草稿|未完成的推理/)
     assert.match(JSON.stringify(replay.blocks), /已读取文件/)
@@ -116,7 +119,7 @@ describe('ViewTimeline', () => {
       get initialViewEvents() {
         return committed
       },
-      async recordViewEvents(events: ViewEvent[]) {
+      async recordViewEvents(events: RecordedViewEvent[]) {
         await new Promise<void>((resolve) => releases.push(resolve))
         committed.push(...structuredClone(events))
       },
@@ -198,6 +201,9 @@ describe('ViewTimeline', () => {
       'persisted-at',
       '2026-08-08T10:00:02.000Z',
     ])
+    const restored = createConversationState(snapshot.events, snapshot.eventTimestamps, snapshot.committedEventCount)
+    assert.ok(restored.pendingStep)
+    assert.deepEqual(applyCoreEvent(restored, { type: 'step-discarded' }).blocks, [])
   })
 
   it('只在 step 提交后写入并合并流式文本', async () => {

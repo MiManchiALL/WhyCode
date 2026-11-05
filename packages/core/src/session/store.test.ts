@@ -491,6 +491,7 @@ describe('SessionStore', () => {
         startsTurn: false,
       },
       { type: 'core-event', event: { type: 'text-delta', text: '后续稳定事件' } },
+      { type: 'step-committed', hasToolCalls: false },
     ])
     assert.equal(reopened.initialViewEventTimestamps.length, reopened.initialViewEvents.length)
     for (const timestamp of reopened.initialViewEventTimestamps) {
@@ -1233,6 +1234,7 @@ describe('SessionStore', () => {
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(reopened.initialViewEvents, [
       ...visible,
+      { type: 'step-committed', hasToolCalls: false },
       { type: 'user-message', text: '新问题', startsTurn: true },
     ])
     assert.deepEqual(reopened.initialMessages, [message('user', '模型摘要')])

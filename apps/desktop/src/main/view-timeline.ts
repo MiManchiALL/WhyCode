@@ -3,6 +3,7 @@ import {
   pushCoalescedViewEvent,
   toViewEvent,
   type CoreEvent,
+  type RecordedViewEvent,
   type ViewEvent,
 } from '@whycode/core'
 
@@ -12,14 +13,14 @@ import { ConversationHistoryProjection } from './conversation-history.ts'
 export interface ViewEventWriter {
   readonly initialViewEvents: readonly ViewEvent[]
   readonly initialViewEventTimestamps?: readonly string[]
-  recordViewEvents(events: ViewEvent[]): Promise<void>
+  recordViewEvents(events: RecordedViewEvent[]): Promise<void>
 }
 
 type Channel = 'Main' | 'B' | 'C'
 
 interface PendingStep {
   writer: ViewEventWriter | null
-  events: ViewEvent[]
+  events: RecordedViewEvent[]
   timestamps: string[]
   order: number[]
 }
@@ -98,17 +99,19 @@ export class ViewTimeline {
   async snapshotAt<T>(
     writer: ViewEventWriter,
     readBoundary: () => T,
-  ): Promise<{ events: ViewEvent[]; eventTimestamps: string[]; boundary: T }> {
+  ): Promise<{ events: ViewEvent[]; eventTimestamps: string[]; committedEventCount: number; boundary: T }> {
     // 等待期间可能又提交新的稳定事件；必须排空到同一同步边界，事件序号才能
     // 与快照形成无缺口的接续点。
     await this.flush()
     const pending = this.pendingSnapshot(writer)
+    const committed = writer.initialViewEvents
     return {
-      events: [...writer.initialViewEvents.map((event) => structuredClone(event)), ...pending.events],
+      events: [...committed.map((event) => structuredClone(event)), ...pending.events],
       eventTimestamps: [
-        ...(writer.initialViewEventTimestamps ?? writer.initialViewEvents.map(() => '')),
+        ...(writer.initialViewEventTimestamps ?? committed.map(() => '')),
         ...pending.eventTimestamps,
       ],
+      committedEventCount: committed.length,
       boundary: readBoundary(),
     }
   }
@@ -150,7 +153,7 @@ export class ViewTimeline {
   private buffer(
     channel: Channel,
     writer: ViewEventWriter,
-    event: ViewEvent,
+    event: RecordedViewEvent,
     occurredAt: string,
   ): void {
     const pending = this.pending[channel]
@@ -196,7 +199,7 @@ export class ViewTimeline {
     this.pending[channel] = { writer: null, events: [], timestamps: [], order: [] }
   }
 
-  private write(writer: ViewEventWriter, events: ViewEvent[]): void {
+  private write(writer: ViewEventWriter, events: RecordedViewEvent[]): void {
     let pending: Promise<void>
     pending = writer.recordViewEvents(events)
       .catch((error) => this.onWriteError(error))

@@ -13,7 +13,7 @@ import {
   pushCoalescedViewEvent,
   toViewEvent,
   viewEventSchema,
-  type ViewEvent,
+  type RecordedViewEvent,
 } from './view-events.ts'
 
 describe('用户可见事件契约', () => {
@@ -116,7 +116,7 @@ describe('用户可见事件契约', () => {
   })
 
   it('合并连续文本但保持工具边界', () => {
-    const events: ViewEvent[] = []
+    const events: RecordedViewEvent[] = []
     pushCoalescedViewEvent(events, core({ type: 'text-delta', text: '前半' }))
     pushCoalescedViewEvent(events, core({ type: 'text-delta', text: '后半' }))
     pushCoalescedViewEvent(
@@ -129,7 +129,7 @@ describe('用户可见事件契约', () => {
   })
 
   it('工具进度的可见投影有界并保留 Unicode 安全的最新尾部', () => {
-    const events: ViewEvent[] = []
+    const events: RecordedViewEvent[] = []
     pushCoalescedViewEvent(events, core({
       type: 'tool-progress',
       toolUseId: 'tool-1',
@@ -375,6 +375,6 @@ describe('用户可见事件契约', () => {
   })
 })
 
-function core(event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent {
+function core(event: Extract<RecordedViewEvent, { type: 'core-event' }>['event']): RecordedViewEvent {
   return { type: 'core-event', event }
 }

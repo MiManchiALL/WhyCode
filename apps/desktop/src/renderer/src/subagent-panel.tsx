@@ -195,6 +195,7 @@ function SubagentTranscript({
         setView(createConversationState(
           snapshot.viewEvents,
           snapshot.viewEventTimestamps,
+          snapshot.committedEventCount,
         ))
         hydrated = true
         for (const envelope of pending.splice(0).sort((left, right) => left.sequence - right.sequence)) {

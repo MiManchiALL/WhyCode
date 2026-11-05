@@ -231,17 +231,21 @@ export const viewEventSchema = z.discriminatedUnion('type', [
 ])
 
 export type VisibleCoreEvent = z.infer<typeof visibleCoreEventSchema>
-export type ViewEvent = z.infer<typeof viewEventSchema>
+export type RecordedViewEvent = z.infer<typeof viewEventSchema>
+/** 步骤边界和回合完成从现有 JSONL 记录投影，不写入可见事件批次。 */
+export type ViewEvent = RecordedViewEvent
+  | { type: 'step-committed'; hasToolCalls: boolean }
+  | { type: 'turn-completed' }
 
 /** 对话卡片只承载展示摘要；完整工具结果仍由模型消息与工具日志持有。 */
-export function compactViewEvent(event: ViewEvent): ViewEvent {
+export function compactViewEvent(event: RecordedViewEvent): RecordedViewEvent {
   if (event.type !== 'core-event') return event
   const compacted = compactVisibleCoreEvent(event.event) as VisibleCoreEvent
   return compacted === event.event ? event : { type: 'core-event', event: compacted }
 }
 
 /** CoreEvent → 可持久化的用户可见事件；运行态、审批和已失效检查点不会进入时间线。 */
-export function toViewEvent(event: CoreEvent): ViewEvent | null {
+export function toViewEvent(event: CoreEvent): RecordedViewEvent | null {
   if (event.type === 'message-injected') {
     return {
       type: 'user-message',
@@ -294,7 +298,7 @@ export function toViewEvent(event: CoreEvent): ViewEvent | null {
 }
 
 /** 合并高频流式片段，避免一个 token 对应一条内存事件。 */
-export function pushCoalescedViewEvent(events: ViewEvent[], next: ViewEvent): void {
+export function pushCoalescedViewEvent(events: RecordedViewEvent[], next: RecordedViewEvent): void {
   next = compactViewEvent(next)
   const previous = events.at(-1)
   if (!previous || previous.type !== 'core-event' || next.type !== 'core-event') {

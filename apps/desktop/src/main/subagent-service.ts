@@ -236,6 +236,7 @@ export class SubagentService {
     const timeline = live
       ? await live.timeline.snapshotAt(journal, () => this.eventSequence)
       : {
+          committedEventCount: journal.initialViewEvents.length,
           events: journal.initialViewEvents.map((event) => structuredClone(event)),
           eventTimestamps: [...journal.initialViewEventTimestamps],
           boundary: this.eventSequence,
@@ -243,6 +244,7 @@ export class SubagentService {
     return {
       subagent: subagentSummary(manifest),
       viewEvents: timeline.events,
+      committedEventCount: timeline.committedEventCount,
       viewEventTimestamps: timeline.eventTimestamps,
       eventSequence: timeline.boundary,
     }

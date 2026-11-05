@@ -547,6 +547,8 @@ Fork 保留来源工作区绑定，不复制或回退项目文件。复制 scrat
 
 所有恢复都从已提交事件和 canonical snapshot 重建。ViewEvent 缓存、Renderer 展开状态、模型自述和摘要都不能补造业务状态。当前开发 schema 不兼容旧格式；不支持的旧会话明确不可打开但仍可删除。
 
+会话时间线从已提交的 `view-events` 批次还原模型步骤边界，从正常完成的 `turn-end` 还原回合终点。这两项投影只用于显示，直接复用 JSONL 中已有的记录。子代理详情快照同时标明已提交事件的数量，后续流式片段仍可随当前步骤提交或撤销。
+
 工作计时的 `work-started` 与 `work-discarded` 只投递实时状态，不进入 ViewEvent；后者表示输入尚未接受时准备失败或取消，清除当前计时而不追加历史分组。只有已接受的工作才能产生持久化 `work-finished`。当前、后台及正在恢复的会话接收相同的生命周期事件；发送准备与接受边界见文档二 §7.1。
 
 会话 schema 17 的 snapshot 只保存一份 `messages`；`turnStarts` 中每项为 `{turnId,messageCount,taskState}`，引用该历史的 `[0,messageCount)` 前缀，不重复保存正文。`messageCount` 必须是非负整数且小于快照消息数，`turnId` 不得重复，并须引用此前已有的回合。回滚和恢复快照保留仍有效的边界，压缩快照清空旧边界。Fork 的路径重定位与 MCP 项目信任清理保持消息条数和顺序，保证各前缀仍对应原回合及当时的工具目录。

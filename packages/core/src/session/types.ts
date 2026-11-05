@@ -13,7 +13,7 @@ import {
   type TaskPlanState,
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
-import { viewEventSchema, type ViewEvent } from './view-events.ts'
+import { viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import {
   createImageAttachmentsSchema,
   imageDeliveryModeSchema,
@@ -627,7 +627,7 @@ export interface SessionRecorder {
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
   ): Promise<void>
-  recordViewEvents(events: ViewEvent[]): Promise<void>
+  recordViewEvents(events: RecordedViewEvent[]): Promise<void>
   recordTurnStart(
     turnId: string,
     messages: ModelMessage[],

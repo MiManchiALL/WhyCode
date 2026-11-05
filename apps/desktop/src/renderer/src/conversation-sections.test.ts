@@ -14,7 +14,7 @@ describe('已完成任务的会话展示投影', () => {
   it('把处理过程折叠在时长标题下，并把最终回答留在标题之后', () => {
     const sections = conversationSections([
       user('user-1', 'turn-1'),
-      text('commentary', '先检查项目'),
+      text('commentary', '先检查项目', 'activity'),
       thinking('thinking-1'),
       tool('tool-1'),
       text('answer', '已完成'),
@@ -161,7 +161,7 @@ describe('已完成任务的会话展示投影', () => {
   it('用户插话会切断此前正文，只有插话后的终态正文留在折叠区外', () => {
     const sections = conversationSections([
       user('user-1', 'turn-1'),
-      text('earlier-text', '插话前的阶段回复'),
+      text('earlier-text', '插话前的阶段回复', 'activity'),
       user('steering-1'),
       text('answer', '按新约束完成'),
       duration('duration-1'),
@@ -184,7 +184,7 @@ describe('已完成任务的会话展示投影', () => {
     assert.deepEqual(sections.map((section) => section.id), ids(blocks))
   })
 
-  it('纯文本 step 确认提交后把运行中的处理过程投影为折叠区', () => {
+  it('执行层确认最终答复后把处理过程投影为折叠区', () => {
     const sections = conversationSections([
       user('user-1', 'turn-1'),
       thinking('thinking-1'),
@@ -214,7 +214,7 @@ describe('已完成任务的会话展示投影', () => {
   it('正文后继续调用工具时恢复运行中逐块展示', () => {
     const blocks = [
       user('user-1', 'turn-1'),
-      text('commentary', '再检查一个文件'),
+      text('commentary', '再检查一个文件', 'activity'),
       tool('tool-1'),
     ]
     const sections = conversationSections(blocks, 1_000)
@@ -319,8 +319,8 @@ function user(id: string, turnId?: string): Block {
   return { kind: 'user', id, text: id, ...(turnId ? { turnId } : {}) }
 }
 
-function text(id: string, value: string): Block {
-  return { kind: 'text', id, text: value, phase: 'final' }
+function text(id: string, value: string, phase: 'activity' | 'final' = 'final'): Block {
+  return { kind: 'text', id, text: value, phase }
 }
 
 function pendingText(id: string, value: string): Block {
