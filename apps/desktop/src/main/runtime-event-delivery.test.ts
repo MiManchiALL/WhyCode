@@ -51,8 +51,11 @@ describe('后台运行时事件投影', () => {
     const target = { runtimeId: 'target', sessionId: 'target' } as DesktopSessionRuntime
     let selected = current
     const stream: CoreEvent[] = []
-    const initial = applyCoreEvent(createConversationState([{ type: 'user-message', text: '操作网页', startsTurn: true }]),
-      { type: 'tool-start', toolName: 'Browser', toolUseId: 'browser', input: { code: 'await browser.snapshot()' } })
+    const turnId = 'turn-browser'
+    const initial = applyCoreEvent(createConversationState([
+      { type: 'user-message', text: '操作网页', startsTurn: true },
+      { type: 'core-event', event: { type: 'turn-start', turnId } },
+    ]), { type: 'tool-start', toolName: 'Browser', toolUseId: 'browser', input: { code: 'await browser.snapshot()' } })
     const snapshot = { runtimeId: target.runtimeId, sessionId: target.sessionId } as RuntimeSnapshot
     let captured!: () => void
     const capturedSnapshot = new Promise<void>(resolve => { captured = resolve })
@@ -74,10 +77,15 @@ describe('后台运行时事件投影', () => {
     complete()
     assert.equal((await restoring).ok, true)
     let restored = stream.reduce((state, event) => applyCoreEvent(state, event), initial)
+    assert.ok(restored.blocks.some(block => block.kind === 'tool' && block.call.id === 'browser' && block.call.status === 'done'))
     for (const event of [
-      { type: 'text-delta', text: '浏览器操作已完成。' },
+      { type: 'text-delta', textBlock: 0, text: '浏览器操作已完成。' },
       { type: 'step-committed' },
-      { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: null },
+      {
+        type: 'turn-end', turnId, stopReason: 'completed',
+        usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0 },
+      },
+      { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: turnId },
     ] satisfies CoreEvent[]) restored = applyCoreEvent(restored, event)
     assert.ok(restored.blocks.some(block => block.kind === 'text' && block.phase === 'final' && block.text === '浏览器操作已完成。'))
     assert.equal(restored.expanded.has('work-b0'), false)

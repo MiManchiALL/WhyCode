@@ -14,11 +14,13 @@ import {
 describe('会话展示偏好', () => {
   it('重新发送后在后台完成，切回不继承旧一轮的手动展开，但保留其它轮次的选择', () => {
     let state = createConversationState()
+    const usage = { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, costUsd: 0 }
     for (const id of ['earlier', 'old']) {
       state = applyCoreEvent(state, { type: 'user-message-accepted', inputId: id, text: '操作网页', startsTurn: true })
       state = applyCoreEvent(state, { type: 'turn-start', turnId: id })
-      state = applyCoreEvent(state, { type: 'text-delta', text: '已完成' })
+      state = applyCoreEvent(state, { type: 'text-delta', textBlock: 0, text: '已完成' })
       state = applyCoreEvent(state, { type: 'step-committed' })
+      state = applyCoreEvent(state, { type: 'turn-end', turnId: id, stopReason: 'completed', usage })
       state = applyCoreEvent(state, { type: 'work-finished', durationMs: 100, outcome: 'completed', forkTurnId: id })
     }
     const [earlier, old] = conversationSections(state.blocks)
@@ -28,8 +30,9 @@ describe('会话展示偏好', () => {
     const userId = state.blocks.find(block => block.kind === 'user' && block.inputId === 'old')!.id
     state = applyCoreEvent(state, { type: 'user-message-edited', previousTurnId: 'old', inputId: 'retry', text: '操作网页', taskPlan: null })
     state = applyCoreEvent(state, { type: 'turn-start', turnId: 'retry' })
-    state = applyCoreEvent(state, { type: 'text-delta', text: '已重新完成' })
+    state = applyCoreEvent(state, { type: 'text-delta', textBlock: 0, text: '已重新完成' })
     state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, { type: 'turn-end', turnId: 'retry', stopReason: 'completed', usage })
     state = applyCoreEvent(state, { type: 'work-finished', durationMs: 200, outcome: 'completed', forkTurnId: 'retry' })
     const snapshot = conversationHistoryWindow(state).view
     const retry = conversationSections(snapshot.blocks).at(-1)!
