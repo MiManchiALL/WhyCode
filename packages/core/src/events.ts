@@ -17,6 +17,7 @@ import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
 import type { ReasoningEffortSelection } from './providers/catalog.ts'
 import type { SkillLocator, SkillSummary } from './skills/types.ts'
 import type { BtwMode } from './session/btw.ts'
+import type { QueuedMessageActionCommand } from './session/types.ts'
 import type { ToolFileChange } from './tools/file-changes.ts'
 import { unicodeSafeSuffix } from './text.ts'
 
@@ -283,7 +284,9 @@ export type CoreEvent =
     }
   /** 用户主动丢弃尚未送达的排队消息；只改变队列，不进入对话时间线。 */
   | { type: 'message-dequeued'; id: string }
-  /** 把排队文本安全还给输入框（中断恢复或用户主动重新编辑）。 */
+  /** 所选排队消息已成功取回，交给发起重新编辑的输入框。 */
+  | { type: 'queued-message-edit-ready'; item: QueuedUserMessage }
+  /** 中断时将剩余队列交还给输入框，按顺序恢复。 */
   | { type: 'queue-restored'; text: string; items?: QueuedUserMessage[] }
   // --- 检查点（M2-c）---
   /** 写类工具的 before/after 资源清单已持久化；hash 当前承载稳定 checkpointId。 */
@@ -471,11 +474,7 @@ export type CoreCommand =
       skills?: SkillLocator[]
     }
   /** 对已经写稳、尚未送达的排队消息执行就地操作。 */
-  | {
-      type: 'queued-message-action'
-      id: string
-      action: 'edit' | 'discard' | 'send-now'
-    }
+  | QueuedMessageActionCommand
   | {
       type: 'btw-message'
       mode: BtwMode

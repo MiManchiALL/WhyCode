@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { describe, it } from 'node:test'
+import { queuedMessageActionSchema } from '@whycode/core'
 import { routeUserMessage, UserMessageRoutingGate } from './user-message-routing.ts'
 
 describe('桌面输入权威路由', () => {
+  it('只有重新编辑接受要覆盖的恢复身份，未知操作不能作为立即发送', () => {
+    const edit = { type: 'queued-message-action', id: randomUUID(), action: 'edit', replacesRestoredInputIds: [randomUUID()] }
+    assert.deepEqual(queuedMessageActionSchema.parse(edit), edit)
+    assert.equal(queuedMessageActionSchema.safeParse({ ...edit, action: 'send-now' }).success, false)
+    assert.equal(queuedMessageActionSchema.safeParse({ ...edit, action: 'unknown' }).success, false)
+    assert.equal(queuedMessageActionSchema.safeParse({ ...edit, replacesRestoredInputIds: [null] }).success, false)
+  })
+
   it('快速 A/B 只有第一条建立根消息，第二条按运行中输入交付', async () => {
     let busy = false
     const gate = new UserMessageRoutingGate()

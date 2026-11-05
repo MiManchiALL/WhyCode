@@ -557,7 +557,10 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 
 进程恢复按活动链中的完整调用、`startedToolCallId` 和真实结果补齐未结算调用：存在执行入口而缺结果的是“结果未知”，没有入口的是“未执行”。已有结果和供应商推理元数据保持原样；恢复快照固化同一配对历史，不自动重试工具，也不从文件或展示卡片猜测成功。
 
-运行中的普通输入先以 `user-input(startsTurn=false)` 写稳并进入 canonical pending inputs。`queued-message-action` 只能引用仍为 `queued` 的稳定输入 ID：`edit` 追加 `user-input-restored` 并通过 `queue-restored` 退回原消息草稿，重新提交时原子消费旧 ID；`discard` 追加 `user-input-discarded` 并删除 pending 身份，实时界面只接收非持久的 `message-dequeued`；`send-now` 不创建第二条输入，只复用 urgent steering 中断当前步骤并在安全边界交付原 ID。任何持久化失败都必须保留原队列，不能先向 Renderer 宣称成功。
+运行中的普通输入以 `user-input(startsTurn=false)` 写稳后进入 canonical pending inputs。`queued-message-action` 按当前会话中仍为 `queued` 的输入 ID 操作。
+
+- `edit` 写入 `user-input-restored`。若输入框原先在编辑已退回的消息，`replacesRestoredInputIds` 指定要替换的 `restored` 身份，其 `user-input-discarded` 记录与本次取回一起提交。取回成功后发出 `queued-message-edit-ready`，重新发送时只消费当前草稿持有的 ID。目标已送达、覆盖身份失效或写入失败时保留原草稿。中断引起的批量退回使用 `queue-restored`。
+- `discard` 写入 `user-input-discarded`，移除排队身份并通知界面 `message-dequeued`。`send-now` 复用 urgent steering，在安全边界交付原 ID。队列的持久化变更成功后才发布，写入失败时将消息放回原位。
 
 ### 7.1 桌面会话历史窗口
 
@@ -571,7 +574,7 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 
 ### 7.2 未发送输入草稿
 
-草稿是 Desktop 的用户输入状态，不是 Core 会话事实，不写 JSONL、模型 messages、Fork 或压缩摘要。Renderer 独立保存文本、图片数据、PDF 引用、Skill 选择、BTW 模式与退回输入的消费 ID；恢复后只保留当前 canonical restored inputs 仍存在的 ID，并从待恢复队列排除已经放入输入框的项。
+草稿是 Desktop 的用户输入状态，不写 JSONL、模型 messages、Fork 或压缩摘要。Renderer 独立保存文本、图片数据、PDF 引用、Skill 选择、BTW 模式与退回输入的消费 ID。清空正在编辑的退回消息时，空草稿也保存该身份。恢复时只保留当前 canonical restored inputs 仍存在的 ID，并从待恢复队列排除已放入输入框的项。
 
 `newSession()` 返回尚未发送的新会话，重复请求复用同一准备事务、运行时与工作区；`newSession({workspace})` 显式更换项目，`workspace:null` 表示移除项目并回到待创建的默认目录。Main 在 `userData/new-session.json` 保存这份工作区身份，输入内容由 Renderer 的草稿存储持有。首次发送登记后释放新会话入口；`RuntimeSnapshot.sessionId` 和运行事件在工作区准备期间就携带持久身份，草稿随该身份转移，生命周期见文档二 §7.2。仅点击新建或输入未发送内容不会建立 Journal 或发送请求。窗口关闭通过 `composerPersistence` 通道握手，Main 只接受所属主 Frame 的保存完成确认；握手不传递草稿内容，不经过 Core 命令或事件。
 

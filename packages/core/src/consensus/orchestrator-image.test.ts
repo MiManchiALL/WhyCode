@@ -188,19 +188,19 @@ describe('共识模式附件路由', () => {
   })
 
   it('B/C 阶段的队列支持单条编辑、丢弃与马上发送', async () => {
-    const restored: string[][] = []
+    const restored: Array<{ ids: readonly string[]; replaced?: readonly string[] }> = []
     const discarded: string[][] = []
     const editHarness = createHarness({
-      onInputsRestored: async (ids) => { restored.push([...ids]) },
+      onInputsRestored: async (ids, replaced) => { restored.push({ ids, replaced }) },
     })
     const editInternals = editHarness.coordinator as unknown as { running: boolean; peerPhase: boolean }
     editInternals.running = true
     editInternals.peerPhase = true
     editHarness.coordinator.handleUserMessage('重新编辑', false, [], 'queue-edit')
-    assert.equal(await editHarness.coordinator.restoreQueuedMessage('queue-edit'), true)
-    assert.deepEqual(restored, [['queue-edit']])
+    assert.equal(await editHarness.coordinator.restoreQueuedMessage('queue-edit', ['draft']), true)
+    assert.deepEqual(restored, [{ ids: ['queue-edit'], replaced: ['draft'] }])
     assert.equal(editHarness.events.some((event) =>
-      event.type === 'queue-restored' && event.items?.[0]?.id === 'queue-edit'), true)
+      event.type === 'queued-message-edit-ready' && event.item.id === 'queue-edit'), true)
 
     const discardHarness = createHarness({
       onInputsDiscarded: async (ids) => { discarded.push([...ids]) },
@@ -230,7 +230,7 @@ describe('共识模式附件路由', () => {
 })
 
 function createHarness(options: {
-  onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
+  onInputsRestored?: (inputIds: readonly string[], replaced?: readonly string[]) => Promise<void>
   onInputsDiscarded?: (inputIds: readonly string[]) => Promise<void>
 } = {}) {
   const calls: MainCall[] = []

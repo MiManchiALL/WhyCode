@@ -75,6 +75,7 @@ import {
   type WorkspaceBinding,
   type WorktreeWorkspaceBinding,
   validateSessionId,
+  queuedMessageActionSchema,
 } from '@whycode/core'
 import type { PermissionMode } from '@whycode/core/permissions'
 import { conversationHistoryWindow } from './conversation-history.ts'
@@ -1042,7 +1043,7 @@ function createCoordinator(
       journal.recordConsensusTaskStart(taskId, state, userText, deliveredInputIds, skills),
     onTaskEnd: (taskId, outcome, state, interruptionReason) =>
       journal.recordConsensusTaskEnd(taskId, outcome, state, interruptionReason),
-    onInputsRestored: (inputIds) => journal.markUserInputsRestored(inputIds),
+    onInputsRestored: (inputIds, replacedIds) => journal.markUserInputsRestored(inputIds, replacedIds),
     onInputsDiscarded: (inputIds) => journal.markUserInputsDiscarded(inputIds),
     onDeferredTaskStart: () => runtime.beginWork(),
   })
@@ -1067,8 +1068,10 @@ async function handleCommand(
   switch (command.type) {
     case 'user-message':
       return handleUserMessageCommand(runtime, command)
-    case 'queued-message-action':
-      return handleQueuedMessageAction(runtime, command)
+    case 'queued-message-action': {
+      const parsed = queuedMessageActionSchema.safeParse(command)
+      return parsed.success ? handleQueuedMessageAction(runtime, parsed.data) : { ok: false, error: '排队消息操作参数无效' }
+    }
     case 'btw-message':
       return handleBtwMessageCommand(runtime, command)
     case 'inspect-user-message-edit': {
@@ -1533,31 +1536,24 @@ async function handleQueuedMessageAction(
   try {
     await reservation.ready
     const target = runtime.coordinator ?? runtime.session
-    if (!target) {
-      runtime.emit({ type: 'error', message: '当前会话尚未就绪，无法操作排队消息', recoverable: true })
-      return { ok: false, workspace: runtime.workspace }
-    }
+    if (!target) return { ok: false, error: '当前会话尚未就绪，无法操作排队消息' }
     const handled = command.action === 'edit'
-      ? await target.restoreQueuedMessage(command.id)
+      ? await target.restoreQueuedMessage(command.id, command.replacesRestoredInputIds)
       : command.action === 'discard'
         ? await target.discardQueuedMessage(command.id)
         : target.sendQueuedMessageNow(command.id)
     if (handled) return { ok: true, workspace: runtime.workspace }
 
-    // 消息可能恰好在点击时完成注入；事实源已不再排队就视为幂等成功。
+    // 编辑只有在实际取回后才能覆盖草稿。已经离队的消息无需再丢弃或催发。
     const stillQueued = runtime.journal?.pendingUserInputs.some(
       (input) => input.id === command.id && input.state === 'queued',
     ) ?? false
-    if (!stillQueued) return { ok: true, workspace: runtime.workspace }
-    runtime.emit({ type: 'error', message: '排队消息状态已经变化，请重试', recoverable: true })
-    return { ok: false, workspace: runtime.workspace }
+    if (!stillQueued) return command.action === 'edit'
+      ? { ok: false, error: '这条消息已离开队列' }
+      : { ok: true, workspace: runtime.workspace }
+    return { ok: false, error: '排队消息状态已经变化，请重试' }
   } catch (error) {
-    runtime.emit({
-      type: 'error',
-      message: `排队消息操作失败：${error instanceof Error ? error.message : String(error)}`,
-      recoverable: true,
-    })
-    return { ok: false, workspace: runtime.workspace }
+    return { ok: false, error: `排队消息操作失败：${error instanceof Error ? error.message : String(error)}` }
   } finally {
     reservation.release()
   }
