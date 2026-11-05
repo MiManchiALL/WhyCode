@@ -20,8 +20,9 @@ export function composerDraftKey(runtimeId: string, sessionId: string | null): s
   return sessionId ?? `draft:${runtimeId}`
 }
 
-function hasContent(draft: ComposerDraft): boolean {
-  return Boolean(draft.text || draft.images.length || draft.pdfs.length || draft.skills.length || draft.btwMode)
+function hasDraftState(draft: ComposerDraft): boolean {
+  // 已取回的消息可以改成空白，切回会话仍需保留这次编辑的身份。
+  return Boolean(draft.restoredInputIds.length || draft.text || draft.images.length || draft.pdfs.length || draft.skills.length || draft.btwMode)
 }
 
 /** IndexedDB 持有持久草稿与 File；内存仅缓存最近切走的 32 份预览，淘汰不删除草稿。 */
@@ -52,7 +53,7 @@ export class ComposerDraftStore {
     const previous = this.cached.get(key)
     if (previous && previous !== draft) releaseImageDrafts(previous.images)
     this.cached.delete(key)
-    if (hasContent(draft)) this.cached.set(key, draft)
+    if (hasDraftState(draft)) this.cached.set(key, draft)
     else releaseImageDrafts(draft.images)
     while (this.cached.size > 32) {
       const oldest = this.cached.keys().next().value!
@@ -110,7 +111,7 @@ export class ComposerDraftStore {
   }
 
   save(key: string, draft: ComposerDraft): Promise<void> {
-    return this.write(key, hasContent(draft) ? draft : null)
+    return this.write(key, hasDraftState(draft) ? draft : null)
   }
 
   delete(key: string): Promise<void> {

@@ -118,6 +118,18 @@ const pendingUserInputSchema = z.object({
   state: z.enum(['queued', 'restored']),
 }).superRefine(validateUserInputContent)
 
+export const queuedMessageActionSchema = z.discriminatedUnion('action', [
+  z.strictObject({
+    type: z.literal('queued-message-action'), action: z.literal('edit'), id: entryIdSchema,
+    replacesRestoredInputIds: z.array(entryIdSchema).optional(),
+  }),
+  z.strictObject({ type: z.literal('queued-message-action'), action: z.enum(['discard', 'send-now']), id: entryIdSchema }),
+])
+export type QueuedMessageActionCommand = z.infer<typeof queuedMessageActionSchema>
+
+/** 覆盖目标在提交前已失效，此时日志尚未写入，用户可以重新选择。 */
+export class RestoredDraftConflictError extends Error {}
+
 const chainedEntrySchema = z.object({
   schemaVersion: z.literal(SESSION_SCHEMA_VERSION),
   sessionId: sessionIdSchema,
@@ -666,7 +678,7 @@ export interface SessionRecorder {
     deliveredInputIds?: readonly string[],
     skills?: readonly ActivatedSkill[],
   ): Promise<void>
-  markUserInputsRestored(inputIds: readonly string[]): Promise<void>
+  markUserInputsRestored(inputIds: readonly string[], replacesRestoredInputIds?: readonly string[]): Promise<void>
   markUserInputsDiscarded(inputIds: readonly string[]): Promise<void>
   recordConsensusTaskEnd(
     taskId: string,

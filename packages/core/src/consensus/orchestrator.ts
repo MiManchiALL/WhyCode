@@ -76,7 +76,7 @@ export interface ConsensusCoordinatorOptions {
     interruptionReason: TurnAbortReason | null,
   ) => Promise<void>
   /** Coordinator 自持队列在停止时先持久化为 Renderer 草稿，再发送恢复事件。 */
-  onInputsRestored?: (inputIds: readonly string[]) => Promise<void>
+  onInputsRestored?: (inputIds: readonly string[], replacesRestoredInputIds?: readonly string[]) => Promise<void>
   /** 用户显式丢弃 Coordinator 自持队列时同步更新会话事实源。 */
   onInputsDiscarded?: (inputIds: readonly string[]) => Promise<void>
   /** Main 忙碌期间暂存的正常消息真正开始新任务时，宿主重建独立工作计时。 */
@@ -249,19 +249,18 @@ export class ConsensusCoordinator {
     this.options.mainSession.handleUserMessage(text, urgent, [], persistedInputId, [], skills)
   }
 
-  async restoreQueuedMessage(id: string): Promise<boolean> {
+  async restoreQueuedMessage(id: string, replacesRestoredInputIds?: readonly string[]): Promise<boolean> {
     const queued = this.takeQueuedMessage(id)
-    if (!queued) return this.options.mainSession.restoreQueuedMessage(id)
+    if (!queued) return this.options.mainSession.restoreQueuedMessage(id, replacesRestoredInputIds)
     try {
       if (queued.message.persistedInputId) {
-        await this.options.onInputsRestored?.([queued.message.persistedInputId])
+        await this.options.onInputsRestored?.([queued.message.persistedInputId], replacesRestoredInputIds)
       }
     } catch (error) {
       this.putQueuedMessageBack(queued)
       throw error
     }
-    const item = queuedUserMessage(queued.message)
-    this.options.emit({ type: 'queue-restored', text: item.text, items: [item] })
+    this.options.emit({ type: 'queued-message-edit-ready', item: queuedUserMessage(queued.message) })
     return true
   }
 

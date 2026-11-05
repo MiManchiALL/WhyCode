@@ -300,11 +300,7 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
 
     if (entry.type === 'user-input-discarded') {
       for (const inputId of entry.inputIds) {
-        const input = pending.get(inputId)
-        if (!input || input.state !== 'queued') {
-          throw new SessionCorruptError(`只能丢弃仍在排队的输入：${inputId}`)
-        }
-        pending.delete(inputId)
+        if (!pending.delete(inputId)) throw new SessionCorruptError(`只能丢弃仍待处理的输入：${inputId}`)
       }
       continue
     }

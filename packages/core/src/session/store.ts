@@ -76,6 +76,7 @@ import {
 } from './metadata.ts'
 import {
   SESSION_SCHEMA_VERSION,
+  RestoredDraftConflictError,
   sessionEntrySchema,
   type SessionCreateInput,
   type SessionEntry,
@@ -1257,17 +1258,27 @@ export class SessionJournal implements SessionRecorder {
     })
   }
 
-  markUserInputsRestored(inputIds: readonly string[]): Promise<void> {
+  markUserInputsRestored(inputIds: readonly string[], replacesRestoredInputIds: readonly string[] = []): Promise<void> {
     if (inputIds.length === 0) return Promise.resolve()
     return this.enqueue(async () => {
       this.assertPendingInputs(inputIds, 'queued', '恢复')
       const restored = this.entry({ type: 'user-input-restored', inputIds })
-      await this.appendEntries([restored])
+      let updatedAt = restored.timestamp
+      if (replacesRestoredInputIds.length > 0) {
+        this.assertPendingInputs(replacesRestoredInputIds, 'restored', '替换', RestoredDraftConflictError)
+        const discarded = this.entry({ type: 'user-input-discarded', inputIds: replacesRestoredInputIds }, restored.uuid)
+        await this.appendEntries([restored, discarded], true)
+        updatedAt = discarded.timestamp
+        this.deletePendingInputs(replacesRestoredInputIds)
+        this.metadata.lastUserText = clip(this.latestPendingOrVisibleUserText())
+      } else {
+        await this.appendEntries([restored])
+      }
       for (const inputId of inputIds) {
         const input = this.pendingUserInputMap.get(inputId)!
         this.pendingUserInputMap.set(inputId, { ...input, state: 'restored' })
       }
-      this.metadata.updatedAt = restored.timestamp
+      this.metadata.updatedAt = updatedAt
       this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
         ? 'running'
         : hasPendingUserQuestion(this.messages)
@@ -1656,13 +1667,14 @@ export class SessionJournal implements SessionRecorder {
     inputIds: readonly string[],
     expectedState: PendingUserInput['state'],
     action: string,
+    Conflict: new (message: string) => Error = Error,
   ): void {
     const unique = new Set(inputIds)
-    if (unique.size !== inputIds.length) throw new Error(`${action}的输入 ID 不能重复`)
+    if (unique.size !== inputIds.length) throw new Conflict(`${action}的输入 ID 不能重复`)
     for (const inputId of inputIds) {
       const input = this.pendingUserInputMap.get(inputId)
       if (!input || input.state !== expectedState) {
-        throw new Error(`无法${action}不属于当前会话或状态已变化的输入：${inputId}`)
+        throw new Conflict(`无法${action}不属于当前会话或状态已变化的输入：${inputId}`)
       }
     }
   }
@@ -1794,7 +1806,7 @@ export class SessionJournal implements SessionRecorder {
 
   private async appendEntries(entries: SessionEntry[], rollbackOnFailure = false): Promise<void> {
     const text = entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n'
-    if (rollbackOnFailure) await appendTurnEdit(this.paths.transcript, text)
+    if (rollbackOnFailure) await appendEdit(this.paths.transcript, text)
     else await appendFile(this.paths.transcript, text, { encoding: 'utf8', flush: true })
     for (const entry of entries) {
       if ('modelId' in entry && !this.metadata.referencedModelIds.includes(entry.modelId)) {
@@ -1811,8 +1823,8 @@ export class SessionJournal implements SessionRecorder {
   }
 }
 
-/** 编辑的换根与新输入必须一起落盘；写入或 flush 失败时恢复提交前的日志尾部。 */
-async function appendTurnEdit(path: string, text: string): Promise<void> {
+/** 同一次编辑的记录一起落盘，写入或 flush 失败时恢复提交前的日志尾部。 */
+async function appendEdit(path: string, text: string): Promise<void> {
   const file = await openFile(path, 'a')
   try {
     const { size } = await file.stat()

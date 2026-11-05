@@ -16,7 +16,6 @@ export function usePdfDrafts(onError: (message: string) => void) {
     draftsRef.current = next
     setDrafts(next)
   }, [])
-  const clear = useCallback(() => replace([]), [replace])
   const remove = useCallback((id: string) => {
     replace(draftsRef.current.filter((draft) => draft.id !== id))
   }, [replace])
@@ -36,7 +35,7 @@ export function usePdfDrafts(onError: (message: string) => void) {
     replace(result.drafts)
     if (result.errors.length > 0) onError(`部分 PDF 未添加（${result.errors.join('；')}）`)
   }, [onError, replace])
-  return { drafts, addFiles, remove, clear, detach, restore }
+  return { drafts, addFiles, remove, replace, detach, restore }
 }
 
 export function PdfDraftStrip({

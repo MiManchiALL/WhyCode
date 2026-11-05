@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { composerDraftKey, type ComposerDraft } from './composer-drafts.ts'
+import { ComposerDraftStore, composerDraftKey, type ComposerDraft } from './composer-drafts.ts'
 import { ComposerSubmissions, composerInputIds, composerSubmissionPreview, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
 import { applyCoreEvent, createConversationState, type Block } from '../../shared/conversation-state.ts'
 import type { QueuedUserMessage } from '@whycode/core/events'
 
 describe('跨会话提交归属', () => {
+  it('切走已清空的恢复草稿后仍保存编辑身份，普通空输入不占缓存', () => {
+    const store = new ComposerDraftStore()
+    const empty = draft('')
+    store.cache('edited', { ...empty, restoredInputIds: ['old'] })
+    store.cache('blank', empty)
+    assert.deepEqual(store.take('edited'), { ...empty, restoredInputIds: ['old'] })
+    assert.equal(store.take('blank'), undefined)
+  })
+
   it('Worktree 创建未完成时，另一会话可独立提交，源请求结束不解除另一请求', () => {
     const submissions = new ComposerSubmissions()
     const creating = submission('creating', null)

@@ -22,9 +22,9 @@ export function useImageDrafts(onError: (message: string) => void) {
     setDrafts(next)
   }, [])
 
-  const clear = useCallback(() => {
+  const replaceAll = useCallback((next: ImageDraft[]) => {
     releaseImageDrafts(draftsRef.current)
-    replace([])
+    replace(next)
   }, [replace])
 
   const addFiles = useCallback((files: FileList | readonly File[] | null) => {
@@ -80,7 +80,7 @@ export function useImageDrafts(onError: (message: string) => void) {
     return true
   }, [onError, replace])
 
-  return { drafts, addFiles, remove, clear, detach, restore, addReference }
+  return { drafts, addFiles, remove, replaceAll, detach, restore, addReference }
 }
 
 export function ImageDraftStrip({

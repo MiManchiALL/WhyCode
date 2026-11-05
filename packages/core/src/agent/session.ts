@@ -44,7 +44,7 @@ import {
 import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
 import { latestUserTurnIndex, recentUserPdfIds, userTurn, withUserTurn, withoutConversationMetadata } from '../context/user-turn.ts'
-import type { SessionRecorder } from '../session/types.ts'
+import { RestoredDraftConflictError, type SessionRecorder } from '../session/types.ts'
 import {
   applyProjectInstructions,
   findProjectInstructionsMessage,
@@ -1065,13 +1065,13 @@ export class AgentSession {
   }
 
   /** 把单条排队消息安全退回 Renderer，供用户重新编辑后原子重提。 */
-  async restoreQueuedMessage(id: string): Promise<boolean> {
+  async restoreQueuedMessage(id: string, replacesRestoredInputIds?: readonly string[]): Promise<boolean> {
     const queued = this.takeQueuedMessage(id)
     if (!queued) return false
     try {
       if (queued.message.persisted) {
         await this.persistRequired(
-          (recorder) => recorder.markUserInputsRestored([queued.message.id]),
+          (recorder) => recorder.markUserInputsRestored([queued.message.id], replacesRestoredInputIds),
           '恢复排队输入',
         )
       }
@@ -1079,8 +1079,7 @@ export class AgentSession {
       this.putQueuedMessageBack(queued)
       throw error
     }
-    const item = queuedUserMessage(queued.message)
-    this.options.emit({ type: 'queue-restored', text: item.text, items: [item] })
+    this.options.emit({ type: 'queued-message-edit-ready', item: queuedUserMessage(queued.message) })
     return true
   }
 
@@ -3617,6 +3616,7 @@ export class AgentSession {
     try {
       await action(recorder)
     } catch (error) {
+      if (error instanceof RestoredDraftConflictError) throw error
       this.persistenceFailed = true
       throw new Error(
         `会话持久化失败，已停止${boundary}以避免重复执行：${error instanceof Error ? error.message : String(error)}`,

@@ -225,19 +225,27 @@ describe('忙时图片 steering', () => {
       await firstStarted.promise
 
       const editId = randomUUID()
+      const nextId = randomUUID()
       const discardId = randomUUID()
       await journal.recordUserInputWithId(editId, '重新编辑我', false)
       session.handleUserMessage('重新编辑我', false, [], editId)
+      await journal.recordUserInputWithId(nextId, '下一条草稿', false)
+      session.handleUserMessage('下一条草稿', false, [], nextId)
       await journal.recordUserInputWithId(discardId, '丢弃我', false)
       session.handleUserMessage('丢弃我', false, [], discardId)
 
       assert.equal(await session.restoreQueuedMessage(editId), true)
+      assert.equal(await session.restoreQueuedMessage(randomUUID(), [editId]), false)
+      await assert.rejects(session.restoreQueuedMessage(nextId, [discardId]), /状态已变化/)
+      assert.deepEqual(journal.pendingUserInputs.map(input => [input.id, input.state]), [
+        [editId, 'restored'], [nextId, 'queued'], [discardId, 'queued'],
+      ])
+      assert.equal(await session.restoreQueuedMessage(nextId, [editId]), true)
       assert.equal(await session.discardQueuedMessage(discardId), true)
       assert.deepEqual(journal.pendingUserInputs.map(({ id, state }) => ({ id, state })), [
-        { id: editId, state: 'restored' },
+        { id: nextId, state: 'restored' },
       ])
-      assert.equal(events.some((event) =>
-        event.type === 'queue-restored' && event.items?.[0]?.id === editId), true)
+      assert.deepEqual(events.flatMap(event => event.type === 'queued-message-edit-ready' ? [event.item.id] : []), [editId, nextId])
       assert.equal(events.some((event) =>
         event.type === 'message-dequeued' && event.id === discardId), true)
 
@@ -245,8 +253,10 @@ describe('忙时图片 steering', () => {
       assert.equal(await running, 'aborted')
       const reopened = await store.open(journal.sessionId)
       assert.deepEqual(reopened.pendingUserInputs.map(({ id, state }) => ({ id, state })), [
-        { id: editId, state: 'restored' },
+        { id: nextId, state: 'restored' },
       ])
+      await reopened.recordUserInputWithId(randomUUID(), '修改后的下一条', true, [], [nextId])
+      assert.deepEqual((await store.open(journal.sessionId)).pendingUserInputs, [])
     })
   })
 

@@ -224,6 +224,7 @@ export function App() {
   const [queuedActionPending, setQueuedActionPending] = useState<
     Partial<Record<string, QueuedMessageAction>>
   >({})
+  const queueEditPending = Object.values(queuedActionPending).includes('edit')
   const [restoredInputIds, setRestoredInputIds] = useState<string[]>([])
   const [restoredQueue, setRestoredQueue] = useState<QueuedUserMessage[]>([])
   const [permMode, setPermMode] = useState<PermissionMode>('default')
@@ -469,6 +470,7 @@ export function App() {
     remove: removeImageDraft,
     detach: detachImageDrafts,
     restore: restoreImageDrafts,
+    replaceAll: replaceImageDrafts,
     addReference: addBrowserReference,
   } = useImageDrafts(showError)
   const {
@@ -477,7 +479,20 @@ export function App() {
     remove: removePdfDraft,
     detach: detachPdfDrafts,
     restore: restorePdfDrafts,
+    replace: replacePdfDrafts,
   } = usePdfDrafts(showError)
+
+  const messageEmpty = inputEmpty && imageDrafts.length === 0 && pdfDrafts.length === 0 && selectedSkills.length === 0
+  const hasComposerDraft = !messageEmpty || btwMode !== null
+  const editRestoredInput = useCallback((item: QueuedUserMessage) => {
+    setInput(item.text)
+    replaceImageDrafts(restoredImageDrafts([item]))
+    replacePdfDrafts(restoredPdfDrafts([item]))
+    replaceSkills(item.skills ?? [])
+    closeSkillMenu()
+    setBtwMode(null)
+    setRestoredInputIds([item.id])
+  }, [setInput, replaceImageDrafts, replacePdfDrafts, replaceSkills, closeSkillMenu, setBtwMode])
 
   useEffect(() => () => {
     conversationEventBufferRef.current?.clear()
@@ -625,21 +640,23 @@ export function App() {
     id: string,
     action: QueuedMessageAction,
   ) => {
+    const owner = runtimeIdRef.current
+    if (action === 'edit' && (queueEditPending || composerSubmissions.getSnapshot().has(owner))) return
     setQueuedActionPending((current) => ({ ...current, [id]: action }))
     try {
-      const result = await sendRuntimeCommand({ type: 'queued-message-action', id, action })
-      if (result?.ok) {
-        if (action !== 'send-now') {
-          setQueuedActionPending((current) => withoutQueuedAction(current, id))
-        }
-        return
-      }
+      const oldIds = restoredInputIdsRef.current
+      const result = await sendRuntimeCommand(action === 'edit'
+        ? { type: 'queued-message-action', id, action, ...(oldIds.length ? { replacesRestoredInputIds: oldIds } : {}) }
+        : { type: 'queued-message-action', id, action })
+      if (owner !== runtimeIdRef.current || (result?.ok && action !== 'discard')) return
       setQueuedActionPending((current) => withoutQueuedAction(current, id))
+      if (result?.error) showError(result.error)
     } catch {
+      if (owner !== runtimeIdRef.current) return
       setQueuedActionPending((current) => withoutQueuedAction(current, id))
       showError('排队消息操作失败，请重试')
     }
-  }, [showError, sendRuntimeCommand])
+  }, [composerSubmissions, queueEditPending, sendRuntimeCommand, showError])
 
   const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
     if (items.length === 0) return
@@ -649,36 +666,25 @@ export function App() {
     })
   }, [])
 
-  // 恢复输入保持原消息边界：一条确认提交后才激活下一条，避免多条各 4 图被扁平截断。
+  // 中断退回按顺序填入空草稿。手动重新编辑通过宿主的单条确认直接替换输入框。
   useEffect(() => {
     if (
       restoredQueue.length === 0
       || restoredInputIds.length > 0
       || restoredSubmissionPending
-      || !inputEmpty
-      || imageDrafts.length > 0
-      || pdfDrafts.length > 0
-      || selectedSkills.length > 0
+      || queueEditPending
+      || hasComposerDraft
     ) return
     const next = restoredQueue[0]!
     setRestoredQueue((previous) => previous.filter((item) => item.id !== next.id))
-    setInput(next.text)
-    restoreImageDrafts(restoredImageDrafts([next]))
-    restorePdfDrafts(restoredPdfDrafts([next]))
-    replaceSkills(next.skills ?? [])
-    setRestoredInputIds([next.id])
+    editRestoredInput(next)
   }, [
-    imageDrafts.length,
-    pdfDrafts.length,
-    inputEmpty,
-    setInput,
-    restoreImageDrafts,
-    restorePdfDrafts,
-    replaceSkills,
+    editRestoredInput,
+    hasComposerDraft,
+    queueEditPending,
     restoredInputIds.length,
     restoredQueue,
     restoredSubmissionPending,
-    selectedSkills.length,
   ])
 
   const refreshSessions = useCallback(async () => {
@@ -1017,6 +1023,16 @@ export function App() {
           return next
         })
         break
+      case 'queued-message-edit-ready': {
+        const { item } = event
+        setQueued(previous => previous.filter(message => message.id !== item.id))
+        setQueuedActionPending(current => withoutQueuedAction(current, item.id))
+        setRestoredQueue(previous => previous.filter(message => message.id !== item.id))
+        editRestoredInput(item)
+        const owner = runtimeIdRef.current
+        requestAnimationFrame(() => { if (runtimeIdRef.current === owner) composerInputRef.current?.focus() })
+        break
+      }
       case 'message-injected':
       case 'message-dequeued':
         setQueued((prev) => prev.filter((q) => q.id !== event.id))
@@ -1068,6 +1084,8 @@ export function App() {
   }, [
     applyConversationEvent,
     composerSubmissions,
+    composerInputRef,
+    editRestoredInput,
     refreshSessions,
     restoreQueuedDrafts,
     showConversationFeedback,
@@ -1440,12 +1458,14 @@ export function App() {
     ? editableUserBlockId(blocks)
     : null
   const composerDisabled = !runtimeId || stopping
+    || queueEditPending
     || sessionTransitionPending
     || deletionBlocksRuntime
     || checkpointRestoreToolUseId !== null
   const composerControlsLocked = composerDisabled || submissionPending
   const attachmentLocked = composerControlsLocked || resumingSessionId !== null
   const sessionNavigationLocked = sessionTransitionPending
+    || queueEditPending
     || checkpointRestoreToolUseId !== null
   const sessionChangeLocked = sessionNavigationLocked
     || (submissionPending && sessionIdRef.current === null) || resumingSessionId !== null
@@ -1917,6 +1937,7 @@ export function App() {
       || resumingSessionId
       || checkpointRestoreToolUseId
       || submissionPending
+      || queueEditPending
     ) return
     if (sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
     if (modelUnavailableReason) { showError(modelUnavailableReason); return }
@@ -2059,6 +2080,7 @@ export function App() {
   }, [
     showError,
     submissionPending,
+    queueEditPending,
     sshSendUnavailableReason,
     modelUnavailableReason,
     applyRuntimeSnapshot,
@@ -2208,10 +2230,6 @@ export function App() {
   const currentSession = sessions.find((session) => session.sessionId === sessionIdRef.current)
   const taskTitle = currentSession?.title
     || (blocks.length > 0 ? '未命名会话' : '新会话')
-  const messageEmpty = inputEmpty
-    && imageDrafts.length === 0
-    && pdfDrafts.length === 0
-    && selectedSkills.length === 0
   const sendDisabled = composerControlsLocked || messageEmpty || Boolean(sshSendUnavailableReason)
   const primaryAction = composerPrimaryAction({
     busy: workActive,
@@ -2430,6 +2448,8 @@ export function App() {
                         <QueuedMessageCard
                           key={queuedMessage.id}
                           message={queuedMessage}
+                          confirmOverwrite={hasComposerDraft}
+                          editDisabled={attachmentLocked}
                           pendingAction={queuedActionPending[queuedMessage.id]}
                           onAction={(id, action) => void actOnQueuedMessage(id, action)}
                         />
@@ -2537,7 +2557,7 @@ export function App() {
                       ref={composerInputRef}
                       aria-controls={skillTrigger && !attachmentLocked ? composerMenuId : undefined}
                       aria-activedescendant={skillTrigger && !attachmentLocked ? composerActiveOptionId : undefined}
-                      scopeKey={resumingSessionId ?? runtimeId}
+                      scopeKey={resumingSessionId ?? `${runtimeId}:${restoredInputIds.join(',')}`}
                       runtimeId={runtimeId}
                       className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
                       text={input}
