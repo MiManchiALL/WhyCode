@@ -196,16 +196,18 @@ function ImageGallery({ targets, variant }: {
   )
 }
 
-export function QueuedImageStrip({ attachments }: { attachments?: readonly ImageAttachment[] }) {
+export function QueuedImageStrip({ attachments }: { attachments?: readonly (ImageAttachment | ImageDraft)[] }) {
   if (!attachments?.length) return null
   return (
     <div className="mt-1 flex gap-1">
       {attachments.map((attachment) => (
         <img
           key={attachment.id}
-          src={`whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`}
+          src={'previewUrl' in attachment
+            ? attachment.previewUrl
+            : `whycode-attachment://${attachment.sessionId}/${encodeURIComponent(attachment.storageName)}`}
           alt={attachment.name}
-          title={`${attachment.name} · ${attachment.width}×${attachment.height}`}
+          title={'width' in attachment ? `${attachment.name} · ${attachment.width}×${attachment.height}` : attachment.name}
           className="h-10 w-10 rounded border border-neutral-200 bg-white object-cover"
         />
       ))}

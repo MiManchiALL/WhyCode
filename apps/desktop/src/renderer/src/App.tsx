@@ -105,7 +105,7 @@ import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
 import {
   ComposerSubmissions,
   composerInputIds,
-  composerSubmissionVisible,
+  composerSubmissionPreview,
   prependComposerDraft,
   type ComposerSubmission,
 } from './composer-submissions.ts'
@@ -308,8 +308,9 @@ export function App() {
     conversationEventBufferRef.current!.push(event, occurredAt)
   }, [])
   const blocks = view.blocks
-  const pendingMessage = activeSubmission && composerSubmissionVisible(activeSubmission, blocks, queued)
-    ? activeSubmission.draft : null
+  const submissionPreview = composerSubmissionPreview(activeSubmission, blocks, queued)
+  const pendingMessage = submissionPreview?.location === 'conversation' ? submissionPreview.draft : null
+  const pendingQueuedMessage = submissionPreview?.location === 'queue' ? submissionPreview.draft : null
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const conversationStarted = blocks.some((block) => block.kind === 'user')
@@ -1426,6 +1427,7 @@ export function App() {
   }, [history.cancel, releaseConversationScroll])
 
   const busy = status !== 'idle' && status !== 'error'
+  const workActive = busy || workStartedAt !== null
   const deletionBlocksRuntime = sessionIdRef.current !== null
     && deletingSessionIds.has(sessionIdRef.current)
   const interactionBusy = busy
@@ -1939,6 +1941,7 @@ export function App() {
     const submission: ComposerSubmission = {
       runtimeId: targetRuntimeId,
       sessionId: sessionIdRef.current,
+      workActiveAtSubmit: workActive,
       previousInputIds: composerInputIds(blocks, [...queued, ...restoredQueue]),
       abortController: new AbortController(),
       draft: {
@@ -2084,6 +2087,7 @@ export function App() {
     sessionTransitionPending,
     stopping,
     setBtwMode,
+    workActive,
     workspace,
   ])
 
@@ -2210,7 +2214,7 @@ export function App() {
     && selectedSkills.length === 0
   const sendDisabled = composerControlsLocked || messageEmpty || Boolean(sshSendUnavailableReason)
   const primaryAction = composerPrimaryAction({
-    busy: busy || workStartedAt !== null,
+    busy: workActive,
     submissionPending,
     hasDraft: !messageEmpty,
   })
@@ -2420,7 +2424,7 @@ export function App() {
                     </div>
                   )}
 
-                  {queued.length > 0 && (
+                  {(queued.length > 0 || pendingQueuedMessage) && (
                     <div className="mb-2 space-y-1">
                       {queued.map((queuedMessage) => (
                         <QueuedMessageCard
@@ -2430,6 +2434,7 @@ export function App() {
                           onAction={(id, action) => void actOnQueuedMessage(id, action)}
                         />
                       ))}
+                      {pendingQueuedMessage && <QueuedMessageCard draft={pendingQueuedMessage} />}
                     </div>
                   )}
 

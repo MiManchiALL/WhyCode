@@ -6,6 +6,7 @@ export interface ComposerSubmission {
   readonly runtimeId: string
   sessionId: string | null
   readonly draft: ComposerDraft
+  readonly workActiveAtSubmit: boolean
   readonly previousInputIds: ReadonlySet<string>
   readonly abortController: AbortController
   receivedInputId?: string
@@ -86,16 +87,19 @@ export function composerInputIds(blocks: readonly Block[], queued: readonly Queu
   ])
 }
 
-/** 以正式输入身份接替预览；重复文本和此前排队输入都不能提前隐藏当前提交。 */
-export function composerSubmissionVisible(
+/** 预览位置由点击发送时的工作状态决定，同一输入的正式气泡或队列卡片接替它。 */
+export function composerSubmissionPreview(
   submission: ComposerSubmission | undefined,
   blocks: readonly Block[],
   queued: readonly QueuedUserMessage[],
-): boolean {
-  if (!submission) return false
-  const inputId = submission.receivedInputId
-  return !inputId || (!blocks.some(block => block.kind === 'user' && block.inputId === inputId)
-    && !queued.some(input => input.id === inputId))
+): { location: 'conversation' | 'queue'; draft: ComposerDraft } | null {
+  if (!submission) return null
+  const { receivedInputId, draft } = submission
+  if (receivedInputId && (
+    blocks.some(block => block.kind === 'user' && block.inputId === receivedInputId)
+    || queued.some(input => input.id === receivedInputId)
+  )) return null
+  return { location: submission.workActiveAtSubmit && !draft.btwMode ? 'queue' : 'conversation', draft }
 }
 
 export function prependComposerDraft(sent: ComposerDraft, current?: ComposerDraft): ComposerDraft {
