@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto'
 import { modelMessageText } from '../text.ts'
 import type {
   CoreEvent,
-  QueuedUserMessage,
   StopReason,
   UsageInfo,
   UserQuestion,
@@ -61,7 +60,6 @@ import {
   type TurnInterruptionContext,
 } from '../session/interruption.ts'
 import {
-  createImageUserMessage,
   dehydrateImageMessages,
   messagesForModel,
   referencedImageAttachmentIds,
@@ -138,8 +136,6 @@ import type { McpManagerSnapshot } from '../mcp/manager.ts'
 import { carryMcpToolState, withoutMcpToolState } from '../mcp/state.ts'
 import { inspectLatestTurnEdit, latestTurnEditContext } from './turn-edit.ts'
 import {
-  activatedSkillSchema,
-  skillSummary,
   type ActivatedSkill,
   type SkillSummary,
   type PrepareSkillRuntime,
@@ -170,6 +166,7 @@ import type {
 } from '../subagents/types.ts'
 import { subagentTurnStateSchema } from '../subagents/types.ts'
 import { AssistantTextGate, sanitizeAssistantControlOutput } from './assistant-output.ts'
+import { createUserInput, queuedMessageForModel, queuedUserMessage, type QueuedMessage } from './user-input.ts'
 import { ToolExecutionBatch, toolsForModel, type StepToolSet, type PreparedToolCall, type ToolEndEvent } from './tool-execution.ts'
 import { ToolStepAttachments } from './tool-step-attachments.ts'
 import { appendOrderedMessages, TOOL_NOT_STARTED } from '../session/tool-execution.ts'
@@ -280,6 +277,8 @@ export interface AgentSessionOptions {
   ) => Promise<T>
   /** 事件出口（宿主注入） */
   emit: (event: CoreEvent) => void
+  /** 一个工作回合结束并交接给下一条排队请求时，宿主切分工作计时。 */
+  onQueuedTurnStart?: () => void
   /** 审批回调（宿主注入）：返回用户的决定 */
   requestApproval: ApprovalHandler
 }
@@ -305,17 +304,6 @@ export interface BtwTurnLifecycle {
   onSettled: (result: BtwTurnResult, continuesWithMainWork: boolean) => Promise<void>
 }
 
-interface QueuedMessage {
-  id: string
-  text: string
-  attachments: ImageAttachment[]
-  imageDelivery: ImageDeliveryMode
-  pdfAttachments: PdfAttachment[]
-  skills: ActivatedSkill[]
-  /** Desktop 预写了 user-input 时，送达/恢复必须携带同一稳定 ID。 */
-  persisted: boolean
-}
-
 type ContinuationNotification = CommandTaskTerminalNotification | SubagentSettlementNotification
 
 interface QueuedTaskNotification {
@@ -331,23 +319,6 @@ interface TurnModelSelection {
   reasoningEffort: ReasoningEffortSelection
 }
 
-function queuedMessageForModel(message: QueuedMessage): ModelMessage {
-  const text = withPdfAttachmentReferences(message.text, message.pdfAttachments)
-  return message.attachments.length
-    ? createImageUserMessage(text, message.attachments, message.imageDelivery)
-    : { role: 'user', content: text }
-}
-
-function queuedUserMessage(message: QueuedMessage): QueuedUserMessage {
-  return {
-    id: message.id,
-    text: message.text,
-    ...(message.attachments.length ? { attachments: message.attachments } : {}),
-    ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
-    ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),
-  }
-}
-
 interface StepResult {
   committed: boolean
   hadToolCalls: boolean
@@ -360,13 +331,7 @@ interface StepResult {
   awaitingTaskPlanContinuation: boolean
 }
 
-/**
- * Agent 会话（M2-a：自持外层循环 + steering 消息队列）。
- *
- * 循环架构（对齐文档二 §5.1 / 文档一 §3.1）：外层循环每次 streamText 只跑一步
- * （stepCountIs(1)，工具仍由 AI SDK 在步内执行），消息数组由本类维护——
- * 步骤间因此可以注入排队的用户消息（steering）、后续可做压缩改写（M2-d）。
- */
+/** 每次模型请求推进一步。会话在稳定步骤边界处理立即插话，在回合边界调度后续用户请求。 */
 export class AgentSession {
   private messages: ModelMessage[] = []
   private queue: QueuedMessage[] = []
@@ -416,7 +381,7 @@ export class AgentSession {
   private imageAttachments = new Map<string, ImageAttachment>()
   /** 用户上传 PDF 的权威元数据；ReadFile 只通过此表解析不透明 ID。 */
   private pdfAttachments = new Map<string, PdfAttachment>()
-  /** 当前模型活动历史或待处理输入仍引用的 PDF；回滚后不得重新注入已离开分支的附件。 */
+  /** 只有已交付输入和工具结果中的 PDF 可供当前模型读取或压缩重注入。 */
   private activePdfAttachmentIds = new Set<string>()
   /** 持久化失败后本会话降级内存模式，避免每个 step 重复报错 */
   private persistenceFailed = false
@@ -1039,8 +1004,7 @@ export class AgentSession {
   }
 
   /**
-   * 用户消息统一入口：空闲时开始新 turn；运行中/压缩中则排队（steering）。
-   * urgent = 打断当前步骤立即注入（Claude Code 的 now 语义），默认等当前步骤结束（next 语义）。
+   * 默认输入逐条开启新用户回合；仅立即插话可以进入正在运行的回合。
    */
   handleUserMessage(
     text: string,
@@ -1051,17 +1015,9 @@ export class AgentSession {
     skills: readonly ActivatedSkill[] = [],
     imageDelivery: ImageDeliveryMode = 'native',
   ): Promise<StopReason> | void {
-    if (imageAttachments.length > 0) {
-      if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
-      this.addImageAttachments(imageAttachments)
-    }
-    if (pdfAttachments.length > 0) {
-      if (!this.options.sessionRecorder) throw new Error('PDF 消息需要会话级附件存储')
-      this.addPdfAttachments(pdfAttachments)
-    }
-    return this.handleMessage(
-      text, urgent, imageAttachments, persistedInputId, pdfAttachments, skills, imageDelivery,
-    )
+    return this.receiveUserInput(createUserInput(
+      text, imageAttachments, persistedInputId, pdfAttachments, skills, imageDelivery,
+    ), { urgent })
   }
 
   /** 把单条排队消息安全退回 Renderer，供用户重新编辑后原子重提。 */
@@ -1102,12 +1058,17 @@ export class AgentSession {
     return true
   }
 
-  /** 复用 urgent steering：中断当前模型步骤，在下一个稳定边界注入现有队列。 */
   sendQueuedMessageNow(id: string): boolean {
-    if (!this.queue.some((message) => message.id === id)) return false
-    this.wakeRunLoop()
-    if (this.running) this.currentStepAbort?.abort('interrupt')
+    const message = this.queue.find((item) => item.id === id)
+    if (!message) return false
+    this.requestImmediateDelivery(message)
     return true
+  }
+
+  private requestImmediateDelivery(message: QueuedMessage): void {
+    message.urgent = true
+    this.wakeRunLoop()
+    this.currentStepAbort?.abort('interrupt')
   }
 
   /** 宿主生成的后台任务终态：运行中在稳定步骤边界注入，空闲时开启隐藏续轮。 */
@@ -1213,6 +1174,7 @@ export class AgentSession {
     // ReadFile 在编辑后的首个模型步骤仍能读取原附件。
     this.addImageAttachments(resources.attachments)
     this.addPdfAttachments(resources.pdfAttachments)
+    this.activatePdfAttachments(resources.pdfAttachments)
     this.tokenBaseline = null
     this.emitContextUsage()
     const message = queuedMessageForModel({
@@ -1306,40 +1268,19 @@ export class AgentSession {
     }
   }
 
-  /** 协议提示与执行包不是新用户任务；首次协议回合可携带已标记的原始用户消息。 */
+  isQueuedUserInput(id: string): boolean {
+    return this.options.sessionRecorder?.pendingUserInputs.some(input => input.id === id && input.state === 'queued') ?? false
+  }
+
+  /** 协议提示与执行包沿用协商根任务，评审期间的立即文字插话在执行边界交付。 */
   handleExecutionMessage(
     text: string,
-    steeringInputs: readonly QueuedUserMessage[] = [],
+    steeringInputs: readonly QueuedMessage[] = [],
     skills: readonly ActivatedSkill[] = [],
     userMessage?: ModelMessage,
   ): Promise<StopReason> | void {
     if (this.isBusy) throw new Error('Main 尚未空闲，不能启动协商执行阶段')
-    const delivered = steeringInputs.map((input) => {
-      if (input.attachments?.length && !input.imageDelivery) {
-        throw new Error('协商执行输入缺少图片交付方式')
-      }
-      return {
-        id: input.id,
-        text: input.text,
-        attachments: [...(input.attachments ?? [])],
-        imageDelivery: input.imageDelivery ?? 'native',
-        pdfAttachments: [...(input.pdfAttachments ?? [])],
-        skills: [],
-        persisted: this.options.sessionRecorder?.pendingUserInputs.some(
-          (pending) => pending.id === input.id && pending.state === 'queued',
-        ) ?? false,
-      }
-    })
-    const attachments = delivered.flatMap((input) => input.attachments)
-    const pdfAttachments = delivered.flatMap((input) => input.pdfAttachments)
-    if (attachments.length > 0) {
-      if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
-      this.addImageAttachments(attachments)
-    }
-    if (pdfAttachments.length > 0) {
-      if (!this.options.sessionRecorder) throw new Error('PDF 消息需要会话级附件存储')
-      this.addPdfAttachments(pdfAttachments)
-    }
+    for (const input of steeringInputs) this.registerInputAttachments(input)
     const notifications = this.drainTaskNotifications()
     const root = userMessage ?? this.messages[latestUserTurnIndex(this.messages)]
     const rootId = root && userTurn(root)?.id
@@ -1347,13 +1288,13 @@ export class AgentSession {
       [
         ...(userMessage ? [userMessage] : []),
         { role: 'user', content: text },
-        ...delivered.map(input => {
+        ...steeringInputs.map(input => {
           const message = queuedMessageForModel(input)
           return rootId ? withUserTurn(message, rootId, false, input.pdfAttachments.map(pdf => pdf.id)) : message
         }),
         ...notifications.map((item) => item.message),
       ],
-      delivered,
+      steeringInputs,
       undefined,
       skills,
       notifications,
@@ -1362,70 +1303,41 @@ export class AgentSession {
     )
   }
 
-  private handleMessage(
-    text: string,
-    urgent: boolean,
-    imageAttachments: readonly ImageAttachment[] = [],
-    persistedInputId?: string,
-    pdfAttachments: readonly PdfAttachment[] = [],
-    skills: readonly ActivatedSkill[] = [],
-    imageDelivery: ImageDeliveryMode = 'native',
+  private registerInputAttachments(item: QueuedMessage): void {
+    if (item.attachments.length) {
+      if (!this.options.sessionRecorder) throw new Error('图片消息需要会话级附件存储')
+      this.addImageAttachments(item.attachments)
+    }
+    if (item.pdfAttachments.length) {
+      if (!this.options.sessionRecorder) throw new Error('PDF 消息需要会话级附件存储')
+      this.addPdfAttachments(item.pdfAttachments)
+    }
+  }
+
+  receiveUserInput(
+    item: QueuedMessage, { urgent = false, alreadyQueued = false }: { urgent?: boolean; alreadyQueued?: boolean },
   ): Promise<StopReason> | void {
-    const parsedSkills = skills.map((skill) => activatedSkillSchema.parse(skill))
-    if (parsedSkills.length > 0 && (this.options.promptContext.discussion || this.protocolRound)) {
+    if (item.skills.length && (this.options.promptContext.discussion || this.protocolRound)) {
       throw new Error('Skill 只在 Main 执行阶段可用')
     }
+    this.registerInputAttachments(item)
     if (this.isBusy) {
-      const item: QueuedMessage = {
-        id: persistedInputId ?? crypto.randomUUID(),
-        text,
-        attachments: [...imageAttachments],
-        imageDelivery,
-        pdfAttachments: [...pdfAttachments],
-        skills: parsedSkills.map((skill) => structuredClone(skill)),
-        persisted: persistedInputId !== undefined,
-      }
       this.queue.push(item)
-      this.options.emit({
-        type: 'message-queued',
-        id: item.id,
-        text,
-        ...(item.attachments.length ? { attachments: item.attachments } : {}),
-        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
-        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
-      })
-      this.wakeRunLoop()
-      if (urgent && this.running) {
-        // 立即插话中止生成或派发，已开始的工具收尾并保存结果后再注入排队消息。
-        this.currentStepAbort?.abort('interrupt')
-      }
+      if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
+      if (urgent) this.requestImmediateDelivery(item)
       return
     }
-    const content = withPdfAttachmentReferences(text, pdfAttachments)
-    const message = imageAttachments.length
-      ? createImageUserMessage(content, imageAttachments, imageDelivery)
-      : { role: 'user' as const, content }
-    const rootInputId = persistedInputId
-      && this.options.sessionRecorder?.undeliveredUserInputIds.includes(persistedInputId)
-      ? persistedInputId
+    const rootInputId = item.persisted && this.options.sessionRecorder?.undeliveredUserInputIds.includes(item.id)
+      ? item.id
       : undefined
-    const delivered = persistedInputId && !rootInputId
-      ? [{
-          id: persistedInputId,
-          text,
-          attachments: [...imageAttachments],
-          imageDelivery,
-          pdfAttachments: [...pdfAttachments],
-          skills: parsedSkills.map((skill) => structuredClone(skill)),
-          persisted: true,
-        }]
-      : []
+    const delivered = (alreadyQueued || item.persisted) && !rootInputId ? [item] : []
+    if (!delivered.length) this.activatePdfAttachments(item.pdfAttachments)
     const notifications = this.drainTaskNotifications()
     return this.startTurn(
-      [message, ...notifications.map((item) => item.message)],
+      [queuedMessageForModel(item), ...notifications.map((notification) => notification.message)],
       delivered,
       rootInputId,
-      parsedSkills,
+      item.skills,
       notifications,
     )
   }
@@ -1551,7 +1463,6 @@ export class AgentSession {
     }
     const restoredIds = new Set(items.map((item) => item.id))
     this.queue = this.queue.filter((item) => !restoredIds.has(item.id))
-    this.rebuildActivePdfAttachments()
     this.options.emit({
       type: 'queue-restored',
       text: items.map((item) => item.text).join('\n'),
@@ -1564,20 +1475,11 @@ export class AgentSession {
     if (index < 0) return null
     const [message] = this.queue.splice(index, 1)
     if (!message) return null
-    this.rebuildActivePdfAttachments()
     return { message, index }
   }
 
   private putQueuedMessageBack(queued: { message: QueuedMessage; index: number }): void {
     this.queue.splice(Math.min(queued.index, this.queue.length), 0, queued.message)
-    this.rebuildActivePdfAttachments()
-  }
-
-  /** 取出全部排队消息（清空队列） */
-  private drainQueue(): QueuedMessage[] {
-    const drained = this.queue
-    this.queue = []
-    return drained
   }
 
   private drainTaskNotifications(): QueuedTaskNotification[] {
@@ -1590,35 +1492,26 @@ export class AgentSession {
     return this.queue.length > 0 || this.taskNotifications.length > 0
   }
 
+  private hasMidTurnInput(): boolean {
+    return this.taskNotifications.length > 0 || this.queue.some((item) => item.urgent)
+  }
+
   private startPendingTurn(): Promise<StopReason> {
-    const users = this.drainQueue()
+    // 收尾期间收到的立即插话已无法进入上一回合，优先交付该条。
+    const index = this.queue.findIndex((item) => item.urgent)
+    const [next] = this.queue.splice(Math.max(0, index), 1)
     const notifications = this.drainTaskNotifications()
     return this.startTurn(
       [
-        ...users.map(queuedMessageForModel),
+        ...(next ? [queuedMessageForModel(next)] : []),
         ...notifications.map((item) => item.message),
       ],
-      users,
+      next ? [next] : [],
       undefined,
-      users.flatMap((item) => item.skills),
+      next?.skills,
       notifications,
-      users.length === 0,
+      !next,
     )
-  }
-
-  /** 一批跨边界消息形成一个新 turn：只有第一条建立可见回滚锚点。 */
-  private emitDrainedMessages(messages: QueuedMessage[]): void {
-    messages.forEach((item, index) => {
-      this.options.emit({
-        type: 'message-injected',
-        id: item.id,
-        text: item.text,
-        startsTurn: index === 0,
-        ...(item.attachments.length ? { attachments: item.attachments } : {}),
-        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
-        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
-      })
-    })
   }
 
   private resolveIdleWaiters(): void {
@@ -1633,7 +1526,7 @@ export class AgentSession {
 
   /** 等待用户插话或内部终态；注册后再次检查，封住检查与订阅之间的竞态。 */
   private waitForRunLoopWake(abortSignal: AbortSignal): Promise<void> {
-    if (this.hasPendingMessages() || abortSignal.aborted) return Promise.resolve()
+    if (this.hasMidTurnInput() || abortSignal.aborted) return Promise.resolve()
     if (this.runLoopWake) throw new Error('runLoop 已经在等待唤醒')
     return new Promise((resolve) => {
       let settled = false
@@ -1646,7 +1539,7 @@ export class AgentSession {
       }
       this.runLoopWake = finish
       abortSignal.addEventListener('abort', finish, { once: true })
-      if (this.hasPendingMessages() || abortSignal.aborted) finish()
+      if (this.hasMidTurnInput() || abortSignal.aborted) finish()
     })
   }
 
@@ -1682,7 +1575,8 @@ export class AgentSession {
 
   /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
   private async injectQueuedMidTurn(): Promise<boolean> {
-    const drained = this.drainQueue()
+    const drained = this.queue.filter((item) => item.urgent)
+    if (drained.length) this.queue = this.queue.filter((item) => !item.urgent)
     const notifications = this.drainTaskNotifications()
     const injected: ModelMessage[] = [
       ...drained.map(item => {
@@ -1714,22 +1608,16 @@ export class AgentSession {
         throw error
       }
       this.messages.push(...injected)
+      for (const item of drained) this.activatePdfAttachments(item.pdfAttachments)
       this.rememberDeliveredSubagentNotifications(notifications, this.activeTurn.id)
       await this.confirmNotificationsDelivered(notifications)
       this.skillTurn.add(drained.flatMap((item) => item.skills))
-      drained.forEach((item) => this.options.emit({
-        type: 'message-injected',
-        id: item.id,
-        text: item.text,
-        ...(item.attachments.length ? { attachments: item.attachments } : {}),
-        ...(item.pdfAttachments.length ? { pdfAttachments: item.pdfAttachments } : {}),
-        ...(item.skills.length ? { skills: item.skills.map(skillSummary) } : {}),
-      }))
+      for (const item of drained) this.options.emit({ type: 'message-injected', ...queuedUserMessage(item) })
     }
     return drained.length > 0
   }
 
-  /** 外层循环：turn（含 steering 续跑）→ step → 工具，直到无工具调用且队列为空 */
+  /** 当前 turn 只消费立即插话和内部通知，普通排队请求留到回合结束。 */
   private async runLoop(
     initialMessages: ModelMessage[],
     abortSignal: AbortSignal,
@@ -1810,6 +1698,7 @@ export class AgentSession {
       )
     } catch (error) {
       this.messages.length = initialMessageCount
+      this.rebuildActivePdfAttachments()
       if (deliveredInputs.length > 0) this.queue = [...deliveredInputs, ...this.queue]
       if (initialTaskNotifications.length > 0) {
         this.taskNotifications = [...initialTaskNotifications, ...this.taskNotifications]
@@ -1831,9 +1720,12 @@ export class AgentSession {
       this.resolveIdleWaiters()
       return 'error'
     }
+    for (const item of deliveredInputs) this.activatePdfAttachments(item.pdfAttachments)
     this.rememberDeliveredSubagentNotifications(initialTaskNotifications, turnId)
     await this.confirmNotificationsDelivered(initialTaskNotifications)
-    if (deliveredInputs.length > 0) this.emitDrainedMessages([...deliveredInputs])
+    for (const [index, item] of deliveredInputs.entries()) {
+      emit({ type: 'message-injected', ...queuedUserMessage(item), startsTurn: inputSource === 'user' && index === 0 })
+    }
 
     emit({ type: 'turn-start', turnId })
     emit({ type: 'agent-status', status: 'working' })
@@ -1870,7 +1762,7 @@ export class AgentSession {
           stepsSincePlanReminder = 0
         }
         await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
-        if (this.hasPendingMessages()) {
+        if (this.hasMidTurnInput()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
           if (injectedUserMessage) steeringDecisionPending = true
           await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
@@ -1917,21 +1809,21 @@ export class AgentSession {
           break
         }
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
-        if (this.hasPendingMessages()) {
-          if (abortSignal.aborted) {
-            if (
-              !step.hadToolCalls
-              && !planExecutionEngaged
-              && !hasOutstandingSubagentActivations(subagentState)
-            ) {
-              this.abortRequestedDuringFinalization = true
-              stopReason = 'completed'
-              finishedNaturally = true
-            } else {
-              stopReason = 'aborted'
-            }
-            break
+        if (abortSignal.aborted && this.hasPendingMessages()) {
+          if (
+            !step.hadToolCalls
+            && !planExecutionEngaged
+            && !hasOutstandingSubagentActivations(subagentState)
+          ) {
+            this.abortRequestedDuringFinalization = true
+            stopReason = 'completed'
+            finishedNaturally = true
+          } else {
+            stopReason = 'aborted'
           }
+          break
+        }
+        if (this.hasMidTurnInput()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
           if (injectedUserMessage) steeringDecisionPending = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
@@ -2047,6 +1939,7 @@ export class AgentSession {
       && !this.persistenceFailed
       && (this.queue.length > 0 || stopReason !== 'waiting-user')
     ) {
+      if (this.queue.length > 0) this.options.onQueuedTurnStart?.()
       return this.startPendingTurn()
     }
 
@@ -2792,6 +2685,7 @@ export class AgentSession {
             appendOrderedMessages(this.messages, messages)
             this.addImageAttachments(attachments)
             this.addPdfAttachments(pdfAttachments)
+            this.activatePdfAttachments(pdfAttachments)
             durableTaskState = taskState
           },
         })
@@ -2804,7 +2698,7 @@ export class AgentSession {
         !hadToolCalls
         && planExecutionEngaged
         && !preserveTaskPlanOnFinalText
-        && !this.hasPendingMessages()
+        && !this.hasMidTurnInput()
       ) {
         const activePlan = this.taskPlan?.snapshot
         if (activePlan) {
@@ -3503,8 +3397,11 @@ export class AgentSession {
     for (const value of values) {
       const attachment = pdfAttachmentSchema.parse(value)
       this.pdfAttachments.set(attachment.storageName, attachment)
-      this.activePdfAttachmentIds.add(attachment.id)
     }
+  }
+
+  private activatePdfAttachments(attachments: readonly PdfAttachment[]): void {
+    for (const attachment of attachments) this.activePdfAttachmentIds.add(attachment.id)
   }
 
   private assertPdfAttachmentsCompatible(values: readonly PdfAttachment[]): void {
@@ -3524,15 +3421,7 @@ export class AgentSession {
   }
 
   private rebuildActivePdfAttachments(): void {
-    const referencedIds = referencedPdfAttachmentIds(this.messages)
-    const queuedIds = new Set(this.queue.flatMap((item) =>
-      item.pdfAttachments.map((attachment) => attachment.id)))
-    this.activePdfAttachmentIds = new Set(
-      [...this.pdfAttachments.values()].flatMap((attachment) =>
-        referencedIds.has(attachment.id) || queuedIds.has(attachment.id)
-          ? [attachment.id]
-          : []),
-    )
+    this.activePdfAttachmentIds = referencedPdfAttachmentIds(this.messages)
   }
 
   private async resolveProjectInstructions(): Promise<{

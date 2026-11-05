@@ -957,6 +957,7 @@ async function createMainAgentSession(
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation, runtime.workspaceIO?.identity),
       emit: (event) => runtime.emit(event),
+      onQueuedTurnStart: () => runtime.beginQueuedTurn(),
       requestApproval: (request, signal) => runtime.requestApproval(request, signal),
     })
     next.setPermissionMode(runtime.permissionMode)
@@ -1045,7 +1046,7 @@ function createCoordinator(
       journal.recordConsensusTaskEnd(taskId, outcome, state, interruptionReason),
     onInputsRestored: (inputIds, replacedIds) => journal.markUserInputsRestored(inputIds, replacedIds),
     onInputsDiscarded: (inputIds) => journal.markUserInputsDiscarded(inputIds),
-    onDeferredTaskStart: () => runtime.beginWork(),
+    onQueuedTurnStart: () => runtime.beginQueuedTurn(),
   })
   return { ok: true, value }
 }

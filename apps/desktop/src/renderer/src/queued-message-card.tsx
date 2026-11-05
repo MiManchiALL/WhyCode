@@ -1,7 +1,7 @@
 import type { QueuedUserMessage } from '@whycode/core/events'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
-import { LoaderCircle, Pencil, SendHorizontal, Trash2 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ChevronDown, ListCollapse, LoaderCircle, Pencil, SendHorizontal, Trash2 } from 'lucide-react'
+import { useId, useState, type ReactNode } from 'react'
 import type { ComposerDraft } from './composer-drafts.ts'
 import { QueuedImageStrip } from './image-attachments.tsx'
 import { QueuedPdfStrip } from './pdf-attachments.tsx'
@@ -17,7 +17,53 @@ interface QueuedMessageProps {
   onAction: (id: string, action: QueuedMessageAction) => void
 }
 
-export function QueuedMessageCard(props: QueuedMessageProps | { draft: ComposerDraft }) {
+export function QueuedMessageList({
+  messages, submitting, confirmOverwrite, editDisabled, pendingActions, onAction,
+}: Pick<QueuedMessageProps, 'confirmOverwrite' | 'editDisabled' | 'onAction'> & {
+  messages: readonly QueuedUserMessage[]
+  submitting: ComposerDraft | null
+  pendingActions: Partial<Record<string, QueuedMessageAction>>
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  const listId = useId()
+  const count = messages.length + (submitting ? 1 : 0)
+  const showCount = count > 3
+  const expanded = !showCount || !collapsed
+  return (
+    <div className="mb-2">
+      {showCount && (
+        <button
+          type="button" aria-expanded={expanded} aria-controls={listId}
+          className="wc-focus-ring mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-1 text-xs text-[var(--wc-muted)] hover:bg-black/[0.04]"
+          onClick={() => setCollapsed(value => !value)}
+        >
+          <ListCollapse size={14} />
+          <span>{count} 条排队消息</span>
+          <ChevronDown size={14} className={`ml-auto ${expanded ? '' : '-rotate-90'}`} />
+        </button>
+      )}
+      <div
+        id={listId}
+        hidden={!expanded}
+        className={`space-y-1 overflow-y-auto overscroll-contain ${showCount ? 'max-h-[min(7rem,25dvh)]' : 'max-h-[25dvh]'}`}
+      >
+        {expanded && messages.map(message => (
+          <QueuedMessageCard
+            key={message.id}
+            message={message}
+            confirmOverwrite={confirmOverwrite}
+            editDisabled={editDisabled}
+            pendingAction={pendingActions[message.id]}
+            onAction={onAction}
+          />
+        ))}
+        {expanded && submitting && <QueuedMessageCard draft={submitting} />}
+      </div>
+    </div>
+  )
+}
+
+function QueuedMessageCard(props: QueuedMessageProps | { draft: ComposerDraft }) {
   const submitting = 'draft' in props
   const message = submitting ? props.draft : props.message
   return (

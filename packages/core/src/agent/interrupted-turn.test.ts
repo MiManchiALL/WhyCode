@@ -989,7 +989,7 @@ describe('用户中断后的新回合', () => {
 
     const running = session.handleUserMessage('继续刚才的任务')
     await waitFor(() => model.doStreamCalls.length === 2)
-    session.handleUserMessage('先停一下，暂时不要继续')
+    session.handleUserMessage('先停一下，暂时不要继续', true)
     releaseCurrentStep()
 
     assert.equal(await running, 'completed')

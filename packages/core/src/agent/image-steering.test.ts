@@ -7,6 +7,7 @@ import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { importImageAttachments } from '../attachments/storage.ts'
+import { ConsensusCoordinator } from '../consensus/orchestrator.ts'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
@@ -19,36 +20,55 @@ const ONE_PIXEL_PNG = Buffer.from(
 )
 
 describe('忙时图片 steering', () => {
-  it('B/C 期间暂存的图片在执行边界作为独立 Main 消息交付', async () => {
-    await withImageSession(async ({ store, journal, attachments }) => {
-      const inputId = randomUUID()
-      let call = 0
-      const model = new MockLanguageModelV4({
-        doStream: async (options) => {
-          call++
-          const prompt = JSON.stringify(options.prompt)
-          assert.match(prompt, /协商执行包/)
-          assert.match(prompt, /协商期间补充图片/)
-          assert.equal(prompt.includes(ONE_PIXEL_PNG.toString('base64')), true)
-          return finalStep('已在 Main 执行阶段处理补图。')
-        },
+  it('协商期间排入的图片与文本各自开新任务，图片只在轮到它时交给 Main', async () => {
+    await withImageSession(async ({ store, journal, attachments, root }) => {
+      const reviewStarted = deferred<void>()
+      const releaseReview = deferred<void>()
+      const peer = { model: modelEntry(new MockLanguageModelV4({ doStream: async () => {
+        reviewStarted.resolve()
+        await releaseReview.promise
+        return protocolStep({ vote: 'accept', reason: '已核对' })
+      } })), providerConfig: { apiKey: 'test' } }
+      const candidate = { summary: '核查结论', final_answer_or_plan: '提交结果' }
+      const main = new MockLanguageModelV4({ doStream: [
+        protocolStep({ protocol_mode: 'quick_review', candidate }), finalStep('原任务完成'),
+        finalStep('图片任务完成'), protocolStep({ protocol_mode: 'main_only', candidate }), finalStep('文本任务完成'),
+      ] })
+      const events: CoreEvent[] = []
+      const session = createSession(main, journal, events)
+      const coordinator = new ConsensusCoordinator({
+        mainSession: session, agents: { B: peer, C: peer }, projectDir: root,
+        sessionScratchDir: join(root, 'scratch'), osPlatform: 'win32',
+        emit: event => events.push(event), requestApproval: async () => ({ approved: false }),
+        onTaskStart: (...args) => journal.recordConsensusTaskStart(...args),
+        onTaskEnd: (...args) => journal.recordConsensusTaskEnd(...args),
       })
-      const session = createSession(model, journal, [])
-      await journal.recordUserInputWithId(inputId, '协商期间补充图片', false, attachments)
-
-      const result = session.handleExecutionMessage('协商执行包', [{
-        id: inputId,
-        text: '协商期间补充图片',
-        attachments,
-        imageDelivery: 'native',
-      }])
-      assert.equal(await result, 'completed')
-      assert.equal(call, 1)
+      await journal.recordUserInput('原始请求', true)
+      const run = coordinator.handleUserMessage('原始请求')
+      try {
+        await reviewStarted.promise
+        const imageId = randomUUID(), textId = randomUUID()
+        await journal.recordUserInputWithId(imageId, '后续图片请求', false, attachments)
+        coordinator.handleUserMessage('后续图片请求', false, attachments, imageId)
+        await journal.recordUserInputWithId(textId, '后续文本请求', false)
+        coordinator.handleUserMessage('后续文本请求', false, [], textId)
+        assert.deepEqual(journal.pendingUserInputs.map(input => input.id), [imageId, textId])
+      } finally { releaseReview.resolve() }
+      await run
+      const prompts = main.doStreamCalls.map(call => JSON.stringify(call.prompt))
+      assert.equal(prompts.length, 5)
+      assert.doesNotMatch(prompts[1]!, /后续图片请求|后续文本请求/)
+      assert.match(prompts[2]!, /后续图片请求/)
+      assert.ok(prompts[2]!.includes(ONE_PIXEL_PNG.toString('base64')))
+      assert.doesNotMatch(prompts[2]!, /后续文本请求/)
+      assert.match(prompts[3]!, /后续文本请求/)
+      assert.deepEqual(events.flatMap(event => event.type === 'message-injected' ? [[event.text, event.startsTurn]] : []),
+        [['后续图片请求', true], ['后续文本请求', true]])
       assert.deepEqual((await store.open(journal.sessionId)).pendingUserInputs, [])
     })
   })
 
-  it('正文与图片按 FIFO 在稳定步骤间一起注入并原子确认送达', async () => {
+  it('普通排队图片随正文开启新回合并原子确认送达', async () => {
     await withImageSession(async ({ store, journal, attachments }) => {
       const firstStarted = deferred<void>()
       const releaseFirst = deferred<void>()
@@ -84,12 +104,13 @@ describe('忙时图片 steering', () => {
       const injected = events.find((event) => event.type === 'message-injected')
       assert.deepEqual(queued?.type === 'message-queued' ? queued.attachments : undefined, attachments)
       assert.deepEqual(injected?.type === 'message-injected' ? injected.attachments : undefined, attachments)
+      assert.equal(injected?.startsTurn, true)
       const reopened = await store.open(journal.sessionId)
       assert.deepEqual(reopened.pendingUserInputs, [])
       assert.equal(
         reopened.initialViewEvents.some((event) =>
           event.type === 'user-message'
-          && event.text === '补充看这张图'
+          && event.text === '补充看这张图' && event.startsTurn
           && event.attachments?.[0]?.id === attachments[0]?.id),
         true,
       )
@@ -117,11 +138,10 @@ describe('忙时图片 steering', () => {
 
       const inputId = randomUUID()
       await journal.recordUserInputWithId(inputId, '必须先落盘的补图', false, attachments)
-      const recordStep = journal.recordStep.bind(journal)
-      journal.recordStep = async (...args: Parameters<typeof recordStep>) => {
-        const deliveredInputIds = args[4]?.deliveredInputIds ?? []
-        if (deliveredInputIds.includes(inputId)) throw new Error('simulated fsync failure')
-        await recordStep(...args)
+      const recordStart = journal.recordTurnStart.bind(journal)
+      journal.recordTurnStart = async (...args: Parameters<typeof recordStart>) => {
+        if (args[3]?.includes(inputId)) throw new Error('simulated fsync failure')
+        await recordStart(...args)
       }
       session.handleUserMessage('必须先落盘的补图', false, attachments, inputId)
       releaseFirst.resolve()
@@ -260,8 +280,8 @@ describe('忙时图片 steering', () => {
     })
   })
 
-  it('马上发送会复用 urgent steering 并中断当前模型步骤', async () => {
-    await withImageSession(async ({ journal }) => {
+  it('只将选中的消息立即插入当前回合，剩余请求按 FIFO 各开一轮', async () => {
+    await withImageSession(async ({ store, journal }) => {
       const firstStarted = deferred<void>()
       let call = 0
       const model = new MockLanguageModelV4({
@@ -272,8 +292,7 @@ describe('忙时图片 steering', () => {
             await aborted(options.abortSignal)
             return finalStep('这段不应提交。')
           }
-          assert.match(JSON.stringify(options.prompt), /现在发送/)
-          return finalStep('已处理插话。')
+          return finalStep(`第 ${call} 次模型回复`)
         },
       })
       const events: CoreEvent[] = []
@@ -281,15 +300,30 @@ describe('忙时图片 steering', () => {
       await journal.recordUserInput('开始', true)
       const running = session.handleUserMessage('开始')
       await firstStarted.promise
-      const inputId = randomUUID()
-      await journal.recordUserInputWithId(inputId, '现在发送', false)
-      session.handleUserMessage('现在发送', false, [], inputId)
+      const inputs = ['队首 A', '马上发送 B', '队尾 C', '队尾 D']
+      const ids = inputs.map(() => randomUUID())
+      for (const [index, input] of inputs.entries()) {
+        await journal.recordUserInputWithId(ids[index]!, input, false)
+        session.handleUserMessage(input, false, [], ids[index])
+      }
 
-      assert.equal(session.sendQueuedMessageNow(inputId), true)
+      assert.equal(session.sendQueuedMessageNow(ids[1]!), true)
       assert.equal(await running, 'completed')
-      assert.equal(call, 2)
-      assert.equal(events.some((event) =>
-        event.type === 'message-injected' && event.id === inputId), true)
+      assert.deepEqual(model.doStreamCalls.map(request => inputs.filter(input =>
+        JSON.stringify(request.prompt).includes(input))), [
+        [], [inputs[1]], inputs.slice(0, 2), inputs.slice(0, 3), inputs,
+      ])
+      assert.deepEqual(events.flatMap(event => event.type === 'message-injected' ? [[event.id, !!event.startsTurn]] : []),
+        [[ids[1], false], [ids[0], true], [ids[2], true], [ids[3], true]])
+      const starts = events.filter(event => event.type === 'turn-start').map(event => event.turnId)
+      assert.equal(new Set(starts).size, 4)
+      assert.deepEqual(events.filter(event => event.type === 'turn-end').map(event => event.turnId), starts)
+      const cold = await store.open(journal.sessionId)
+      assert.deepEqual(cold.pendingUserInputs, [])
+      assert.deepEqual(cold.initialViewEvents.flatMap(event => event.type === 'user-message'
+        ? [[event.text, event.startsTurn]] : []), [
+        ['开始', true], [inputs[1], false], [inputs[0], true], [inputs[2], true], [inputs[3], true],
+      ])
     })
   })
 })
@@ -366,6 +400,13 @@ function finalStep(text: string) {
       ],
     }),
   }
+}
+
+function protocolStep(input: Record<string, unknown>) {
+  return { stream: simulateReadableStream({ chunks: [
+    { type: 'tool-call' as const, toolCallId: randomUUID(), toolName: 'SubmitProtocolOutput', input: JSON.stringify(input) },
+    { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: usage() },
+  ] }) }
 }
 
 function usage() {

@@ -195,6 +195,7 @@ export class DesktopSessionRuntime {
 
   emit(event: CoreEvent, persistView = true): void {
     if (this.disposed) return
+    if (event.type === 'message-injected' && event.startsTurn) this.beginWork()
     if (event.type === 'context-usage') {
       this.contextUsage = event.usage ? structuredClone(event.usage) : null
     }
@@ -251,6 +252,11 @@ export class DesktopSessionRuntime {
   beginBtwWork(): void {
     if (this.btwWorkActive) throw new Error('BTW 工作边界重复启动')
     this.btwWorkActive = true
+    this.beginWork()
+  }
+
+  beginQueuedTurn(): void {
+    this.finishWork()
     this.beginWork()
   }
 

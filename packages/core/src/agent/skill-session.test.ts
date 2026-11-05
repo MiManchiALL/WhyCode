@@ -148,7 +148,7 @@ describe('Agent Skill 根任务生命周期', () => {
     assert.deepEqual(session.activeSkills, [])
   })
 
-  it('中途插话新选择 Skill 时，在接续模型请求前追加运行声明', async () => {
+  it('普通排队输入选择的 Skill 在该输入的新回合准备', async () => {
     const fixture = await skillFixture()
     const catalog = new SkillCatalogService({ homeDir: fixture.home })
     const selected = (await catalog.snapshot(fixture.project)).entries[0]!

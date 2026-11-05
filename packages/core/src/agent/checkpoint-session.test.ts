@@ -40,7 +40,7 @@ afterEach(async () => {
 })
 
 describe('Agent 资源检查点联动', () => {
-  it('净变化通过运行态实时投影，插队不重置，结束和新 turn 不残留统计', async () => {
+  it('净变化通过运行态实时投影，立即插话不重置，结束和新 turn 不残留统计', async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'whycode-turn-changes-'))
     roots.push(root)
     const path = join(root, 'net.txt')
@@ -76,7 +76,7 @@ describe('Agent 资源检查点联动', () => {
       requestApproval: async () => ({ approved: true, remember: false }),
       emit: event => {
         events.push(event)
-        if (event.type === 'turn-file-changes' && step === 1) session.handleUserMessage('补充：继续完成')
+        if (event.type === 'turn-file-changes' && step === 1) session.handleUserMessage('补充：继续完成', true)
       },
     })
     assert.equal(await session.handleUserMessage('追加后撤销五行'), 'completed')

@@ -36,7 +36,11 @@ export async function createSessionFork(
   const sourcePrefix = withoutPendingInputs(
     forkPrefix(input.sourceEntries, input.sourceTurnId),
   )
-  const sourceWorkspace = buildLoadedSession(sourcePrefix).metadata.workspace
+  const { metadata } = buildLoadedSession(sourcePrefix)
+  if (metadata.status !== 'idle') {
+    throw new Error('模型回复之后仍有未完成的会话事务，不能创建分支')
+  }
+  const sourceWorkspace = metadata.workspace
   const rebase = forkScratchPathMapper(input.scratchCopy, sourceWorkspace.mode === 'ssh' ? path.posix : path)
   const presentations = forkFileReferences(rebase)
   const entries = sourcePrefix.map((entry) =>
@@ -122,10 +126,6 @@ function forkPrefix(entries: readonly SessionEntry[], sourceTurnId: string): Ses
     ...boundaryEntry,
     events: boundaryEntry.events.slice(0, boundary.eventIndex + 1),
   }))
-  const loaded = buildLoadedSession(prefix)
-  if (loaded.metadata.status !== 'idle') {
-    throw new Error('模型回复之后仍有未完成的会话事务，不能创建分支')
-  }
   return prefix
 }
 
@@ -239,6 +239,13 @@ function withoutPendingInputs(entries: SessionEntry[]): SessionEntry[] {
   )
   if (pendingIds.size === 0) return entries
 
+  // 未送达的输入可能来自重新编辑。移除它时，也移除只有它消费过的旧草稿。
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!
+    if (entry.type === 'user-input' && pendingIds.has(entry.uuid)) {
+      for (const id of entry.consumesInputIds ?? []) pendingIds.add(id)
+    }
+  }
   const redirectedParents = new Map<string, string | null>()
   const resolveParent = (parentUuid: string | null): string | null => {
     let current = parentUuid

@@ -10,7 +10,6 @@
 import type { TaskPlan } from './tasks/types.ts'
 import type {
   ImageAttachment,
-  ImageDeliveryMode,
   ImageMessageAttachmentInput,
 } from './attachments/types.ts'
 import type { PdfAttachment, PdfMessageAttachmentInput } from './pdf/types.ts'
@@ -142,7 +141,6 @@ export interface QueuedUserMessage {
   id: string
   text: string
   attachments?: ImageAttachment[]
-  imageDelivery?: ImageDeliveryMode
   pdfAttachments?: PdfAttachment[]
   skills?: SkillSummary[]
 }
@@ -462,7 +460,7 @@ export type CoreCommand =
   | {
       type: 'user-message'
       text: string
-      /** true = 立即插话：打断当前步骤马上注入（Claude Code 的 now 语义）；默认排队到步骤间 */
+      /** 默认排队等待独立回合。true 表示中断当前步骤并在收尾后交付这条输入。 */
       urgent?: boolean
       /** 有序图片来源；剪贴板 Base64 在主进程落盘后不得持久化。 */
       attachments?: ImageMessageAttachmentInput[]

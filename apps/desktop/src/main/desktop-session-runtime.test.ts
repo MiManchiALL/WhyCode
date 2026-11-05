@@ -57,6 +57,41 @@ describe('提交期间停止', () => {
 })
 
 describe('会话工作计时', () => {
+  it('排队消息开新回合时分别保存两次最终回复、用时与 Fork 边界', t => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model',
+      emit: (_runtime, event) => events.push(event),
+    })
+    let now = 1000
+    t.mock.method(Date, 'now', () => now)
+    const finishTurn = (turnId: string, reply: string) => {
+      runtime.emit({ type: 'text-delta', text: reply })
+      runtime.emit({ type: 'step-committed' })
+      runtime.emit({ type: 'turn-end', turnId, stopReason: 'completed',
+        usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 } })
+    }
+    runtime.beginWork()
+    runtime.emit({ type: 'user-message-accepted', inputId: 'first', text: '第一项', startsTurn: true })
+    runtime.emit({ type: 'turn-start', turnId: 'turn-1' })
+    runtime.emit({ type: 'message-queued', id: 'second', text: '第二项' })
+    now += 50
+    finishTurn('turn-1', '第一项完成')
+    runtime.beginQueuedTurn()
+    runtime.emit({ type: 'message-injected', id: 'second', text: '第二项', startsTurn: true })
+    runtime.emit({ type: 'turn-start', turnId: 'turn-2' })
+    now += 80
+    finishTurn('turn-2', '第二项完成')
+    runtime.emit({ type: 'agent-status', status: 'idle' })
+
+    assert.deepEqual(events.flatMap(event => event.type === 'work-finished' ? [[event.forkTurnId, event.durationMs]] : []),
+      [['turn-1', 50], ['turn-2', 80]])
+    assert.equal(events.filter(event => event.type === 'work-started').length, 2)
+    const view = events.reduce((state, event) => applyCoreEvent(state, event), createConversationState())
+    assert.deepEqual(view.blocks.flatMap(block => block.kind === 'text' && block.phase === 'final' ? [block.text] : []),
+      ['第一项完成', '第二项完成'])
+  })
+
   for (const status of ['idle', 'error'] as const) {
     it(`未接受的输入以 ${status} 收尾时撤销计时，不生成实时或持久完成记录`, () => {
       const events: CoreEvent[] = []

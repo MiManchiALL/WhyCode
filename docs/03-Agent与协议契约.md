@@ -437,7 +437,7 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 
 压缩后只重新声明仍有效的 PDF 引用，不重读最近代码文件或普遍重注入历史图片。PDF 引用行总预算为 20,000 字符，优先较新附件，较早引用超限时省略。引用保留名称、页数、字节数与 `attachment://` 入口；这是按需读取索引，不是 PDF 全文。
 
-最近三个正式用户 turn 上传的 PDF 标为 `recentUserUpload: true`。模型在任务相关且现有内容不足时应主动 `ReadFile`；符合 §3.7 条件的小 PDF 可自动展开。steering 上传归属当前正式 turn；没有 PDF 的正式 turn 同样推进窗口。压缩、重注入、冷恢复、Fork 和后台唤醒不刷新上传时点，标记在请求投影时按当前窗口更新。
+最近三个正式用户 turn 上传的 PDF 标为 `recentUserUpload: true`。模型在任务相关且现有内容不足时应主动 `ReadFile`；符合 §3.7 条件的小 PDF 可自动展开。排队 PDF 在对应输入实际送达后才进入可读取范围。立即插话中的 PDF 归属当前正式 turn，普通排队输入中的 PDF 归属它开启的新 turn。没有 PDF 的正式 turn 同样推进窗口。压缩、重注入、冷恢复、Fork 和后台唤醒不刷新上传时点，标记在请求投影时按当前窗口更新。
 
 该窗口仅携带最近三个 turn 的 ID 和 PDF ID，随 canonical 消息保存；它不保存第二份用户正文，不恢复已被压缩清除的回滚锚点。最新 U 因自动压缩被完整保留时，其原始媒体关联仍有效；这不构成对全部历史图片的重注入。
 
@@ -557,10 +557,10 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 
 进程恢复按活动链中的完整调用、`startedToolCallId` 和真实结果补齐未结算调用：存在执行入口而缺结果的是“结果未知”，没有入口的是“未执行”。已有结果和供应商推理元数据保持原样；恢复快照固化同一配对历史，不自动重试工具，也不从文件或展示卡片猜测成功。
 
-运行中的普通输入以 `user-input(startsTurn=false)` 写稳后进入 canonical pending inputs。`queued-message-action` 按当前会话中仍为 `queued` 的输入 ID 操作。
+运行中提交的用户输入以 `user-input(startsTurn=false)` 写稳后进入 canonical pending inputs。普通输入在下一用户回合的起点随首批消息交付，每次只消费一个 ID。立即插话在当前回合的步骤边界交付。两者都在送达记录写稳后发出 `message-injected`。其 `startsTurn` 取实际交付边界，冷恢复按同一边界重建时间线。`queued-message-action` 按当前会话中仍为 `queued` 的输入 ID 操作。
 
 - `edit` 写入 `user-input-restored`。若输入框原先在编辑已退回的消息，`replacesRestoredInputIds` 指定要替换的 `restored` 身份，其 `user-input-discarded` 记录与本次取回一起提交。取回成功后发出 `queued-message-edit-ready`，重新发送时只消费当前草稿持有的 ID。目标已送达、覆盖身份失效或写入失败时保留原草稿。中断引起的批量退回使用 `queue-restored`。
-- `discard` 写入 `user-input-discarded`，移除排队身份并通知界面 `message-dequeued`。`send-now` 复用 urgent steering，在安全边界交付原 ID。队列的持久化变更成功后才发布，写入失败时将消息放回原位。
+- `discard` 写入 `user-input-discarded`，移除排队身份并通知界面 `message-dequeued`。`send-now` 仅将指定 ID 提升为立即插话，其余普通输入保持 FIFO 顺序。队列的持久化变更成功后才发布，写入失败时将消息放回原位。
 
 ### 7.1 桌面会话历史窗口
 

@@ -185,6 +185,27 @@ describe('SessionStore Fork', () => {
     ])
   })
 
+  it('从队列交接前的回复 Fork 只保留已交付消息，排队消息和被替换的草稿留给源会话', async () => {
+    const store = await createStore()
+    const source = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    await source.recordUserInput('最初的问题', true)
+    await source.recordTurnStart('first', [message('user', '最初的问题')])
+    const draftId = randomUUID()
+    const nextId = randomUUID()
+    await source.recordUserInputWithId(draftId, '原排队消息', false)
+    await source.markUserInputsRestored([draftId])
+    await source.recordUserInputWithId(nextId, '新的排队消息', false, [], [draftId])
+    await source.recordStep('first', [message('assistant', '首个回答')])
+    await source.recordTurnEnd('first', 'completed')
+    await recordForkBoundary(source, 'first')
+    await source.recordTurnStart('next', [message('user', '新的排队消息')], undefined, [nextId])
+    await source.recordStep('next', [message('assistant', '第二个回答')])
+    await source.recordTurnEnd('next', 'completed')
+    const fork = await store.fork(source, 'first')
+    assert.deepEqual(fork.pendingUserInputs, [])
+    assert.deepEqual(fork.initialMessages, [message('user', '最初的问题'), message('assistant', '首个回答')])
+  })
+
   it('完整 turn 仍须具有持久化的完整工作边界', async () => {
     const store = await createStore()
     const source = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
