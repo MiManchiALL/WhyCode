@@ -221,6 +221,7 @@ export function App() {
   const [approval, setApproval] = useState<Approval | null>(null)
   const [workspace, setWorkspace] = useState<RuntimeWorkspace>({ mode: 'none' })
   const [queued, setQueued] = useState<QueuedUserMessage[]>([])
+  const [queuedMessagesCollapsed, setQueuedMessagesCollapsed] = useState(false)
   const [queuedActionPending, setQueuedActionPending] = useState<
     Partial<Record<string, QueuedMessageAction>>
   >({})
@@ -856,6 +857,7 @@ export function App() {
     const presentation = conversationPresentationsRef.current.get(
       composerKey(snapshot.runtimeId, snapshot.sessionId),
     )
+    setQueuedMessagesCollapsed(presentation?.queuedMessagesCollapsed ?? false)
     const replayedView = restoreConversationSnapshot(snapshot.history.view)
     composerSubmissions.receiveSnapshot(snapshot.runtimeId, replayedView.blocks, snapshot.queuedInputs)
     history.reset(snapshot.runtimeId, snapshot.history)
@@ -2171,6 +2173,12 @@ export function App() {
       : toggleExpanded(current, id))
   }, [])
 
+  const changeQueuedMessagesCollapsed = useCallback((collapsed: boolean) => {
+    const key = composerKey(runtimeIdRef.current, sessionIdRef.current)
+    conversationPresentationsRef.current.setQueuedMessagesCollapsed(key, collapsed)
+    setQueuedMessagesCollapsed(collapsed)
+  }, [])
+
   const modelNeedsRefresh = Boolean(selectedModel?.hasKey && !selectedModel.available && !selectedModel.retired)
   useEffect(() => {
     if (!modelNeedsRefresh) return
@@ -2447,6 +2455,8 @@ export function App() {
                       key={runtimeId}
                       messages={queued}
                       submitting={pendingQueuedMessage}
+                      collapsed={queuedMessagesCollapsed}
+                      onCollapsedChange={changeQueuedMessagesCollapsed}
                       confirmOverwrite={hasComposerDraft}
                       editDisabled={attachmentLocked}
                       pendingActions={queuedActionPending}

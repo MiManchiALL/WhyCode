@@ -26,6 +26,7 @@ const MAX_BLOCK_PREFERENCES = 256
 interface ConversationPresentation {
   expandedOverrides: Map<string, boolean>
   mermaidSources?: ReadonlySet<string>
+  queuedMessagesCollapsed?: boolean
   scroll?: ConversationScrollPosition
   historyStart?: string
   workspacePosition?: WorkspaceBrowserPosition
@@ -60,6 +61,15 @@ export class ConversationPresentationCache {
     const previous = this.entries.get(key)
     if (!previous && !workspacePosition) return
     this.set(key, { ...previous, expandedOverrides: previous?.expandedOverrides ?? new Map(), workspacePosition })
+  }
+
+  setQueuedMessagesCollapsed(key: string, collapsed: boolean): void {
+    const previous = this.entries.get(key)
+    this.set(key, {
+      ...previous,
+      expandedOverrides: previous?.expandedOverrides ?? new Map(),
+      queuedMessagesCollapsed: collapsed,
+    })
   }
 
   setExpanded(key: string, id: string, expanded: boolean): void {
