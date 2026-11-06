@@ -335,6 +335,8 @@ interface StepResult {
 export class AgentSession {
   private messages: ModelMessage[] = []
   private queue: QueuedMessage[] = []
+  /** 仅显式用户输入恢复自动接续；停止和冷恢复保留队列，但不授权执行。 */
+  private queueAutoDrain = false
   private taskNotifications: QueuedTaskNotification[] = []
   private running = false
   /** 当前步骤的中止器：turn 级取消与 urgent 插话都经由它，用 reason 区分意图 */
@@ -708,6 +710,7 @@ export class AgentSession {
     abortSignal: AbortSignal,
   ): Promise<StopReason> {
     const startedAt = Date.now()
+    this.abortRequestedDuringFinalization = false
     lifecycle.emit({ type: 'agent-status', status: 'working' })
     let result: BtwTurnResult
     try {
@@ -734,37 +737,27 @@ export class AgentSession {
 
     this.opAbort = null
     this.currentStepAbort = null
-    const continuesWithMainWork = result.outcome !== 'error'
+    const continuesWithMainWork = result.outcome === 'completed'
       && !abortSignal.aborted
-      && this.hasPendingMessages()
+      && this.hasRunnablePendingMessages()
     try {
       await lifecycle.onSettled(result, continuesWithMainWork)
     } catch (error) {
       this.running = false
-      if (this.queue.length > 0) await this.restoreQueuedInput().catch(() => {})
+      this.pauseQueuedInputs()
       lifecycle.emit({ type: 'agent-status', status: 'error' })
       this.resolveIdleWaiters()
       throw error
     }
-    if (continuesWithMainWork) {
+    if (continuesWithMainWork && !this.abortRequestedDuringFinalization && this.hasRunnablePendingMessages()) {
       this.running = false
       this.activeModelSelection = null
       return this.startPendingTurn()
     }
 
     this.running = false
-    if (this.queue.length > 0) {
-      try {
-        await this.restoreQueuedInput()
-      } catch (error) {
-        lifecycle.emit({
-          type: 'error',
-          message: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        })
-        result = { ...result, outcome: 'error' }
-      }
-    }
+    this.abortRequestedDuringFinalization = false
+    this.pauseQueuedInputs()
     lifecycle.emit({ type: 'agent-status', status: result.outcome === 'error' ? 'error' : 'idle' })
     this.resolveIdleWaiters()
     return result.outcome === 'completed'
@@ -1058,9 +1051,15 @@ export class AgentSession {
     return true
   }
 
-  sendQueuedMessageNow(id: string): boolean {
+  sendQueuedMessageNow(id: string): boolean | Promise<StopReason> {
     const message = this.queue.find((item) => item.id === id)
     if (!message) return false
+    this.queueAutoDrain = true
+    if (!this.isBusy) {
+      message.urgent = true
+      this.options.onQueuedTurnStart?.()
+      return this.startPendingTurn()
+    }
     this.requestImmediateDelivery(message)
     return true
   }
@@ -1082,7 +1081,7 @@ export class AgentSession {
       notification: structuredClone(notification),
       message: createCommandTaskNotificationMessage(notification),
     }
-    if (this.isBusy || this.queue.length > 0 || findPendingUserQuestion(this.messages)) {
+    if (this.isBusy || findPendingUserQuestion(this.messages)) {
       this.taskNotifications.push(item)
       this.wakeRunLoop()
       return
@@ -1114,7 +1113,7 @@ export class AgentSession {
       message: createSubagentSettlementMessage(notification),
       onDelivered,
     }
-    if (this.isBusy || this.queue.length > 0 || findPendingUserQuestion(this.messages)) {
+    if (this.isBusy || findPendingUserQuestion(this.messages)) {
       this.taskNotifications.push(item)
       this.wakeRunLoop()
       return
@@ -1269,7 +1268,8 @@ export class AgentSession {
   }
 
   isQueuedUserInput(id: string): boolean {
-    return this.options.sessionRecorder?.pendingUserInputs.some(input => input.id === id && input.state === 'queued') ?? false
+    return this.queue.some(input => input.id === id)
+      || (this.options.sessionRecorder?.pendingUserInputs.some(input => input.id === id && input.state === 'queued') ?? false)
   }
 
   /** 协议提示与执行包沿用协商根任务，评审期间的立即文字插话在执行边界交付。 */
@@ -1321,6 +1321,7 @@ export class AgentSession {
       throw new Error('Skill 只在 Main 执行阶段可用')
     }
     this.registerInputAttachments(item)
+    this.queueAutoDrain = true
     if (this.isBusy) {
       this.queue.push(item)
       if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
@@ -1422,6 +1423,7 @@ export class AgentSession {
   }
 
   abort(reason: TurnAbortReason = 'user-cancel', context?: TurnInterruptionContext): void {
+    this.pauseQueuedInputs()
     if (context?.interruptedSubagents.length && (this.running || this.activeTurn)) {
       this.turnInterruptionContext = {
         interruptedSubagents: context.interruptedSubagents.map((subagent) => ({ ...subagent })),
@@ -1450,24 +1452,24 @@ export class AgentSession {
     if (discarded.length > 0) void this.confirmNotificationsDelivered(discarded)
   }
 
-  /** 不能安全自动接续时，排队消息弹回输入框，不静默丢弃。 */
-  private async restoreQueuedInput(): Promise<void> {
-    const items = [...this.queue]
-    if (items.length === 0) return
-    const persistedIds = items.filter((item) => item.persisted).map((item) => item.id)
-    if (persistedIds.length > 0) {
-      await this.persistRequired(
-        (recorder) => recorder.markUserInputsRestored(persistedIds),
-        '恢复排队输入',
-      )
-    }
-    const restoredIds = new Set(items.map((item) => item.id))
-    this.queue = this.queue.filter((item) => !restoredIds.has(item.id))
-    this.options.emit({
-      type: 'queue-restored',
-      text: items.map((item) => item.text).join('\n'),
-      items: items.map(queuedUserMessage),
-    })
+  private pauseQueuedInputs(): void {
+    this.queueAutoDrain = false
+    for (const item of this.queue) item.urgent = false
+  }
+
+  /** 协商任务只在执行期间接管队列；空闲后归还 Main，切换模式无需重建输入。 */
+  takePendingUserInputs(): QueuedMessage[] {
+    if (this.isBusy) throw new Error('Agent 工作中，不能移交排队输入')
+    this.queueAutoDrain = false
+    return this.queue.splice(0)
+  }
+
+  retainPendingUserInputs(inputs: readonly QueuedMessage[]): void {
+    if (this.isBusy) throw new Error('Agent 工作中，不能归还排队输入')
+    this.queue.push(...inputs)
+    const order = new Map(this.options.sessionRecorder?.pendingUserInputs.map((input, index) => [input.id, index]))
+    this.queue.sort((a, b) => (order.get(a.id) ?? order.size) - (order.get(b.id) ?? order.size))
+    this.pauseQueuedInputs()
   }
 
   private takeQueuedMessage(id: string): { message: QueuedMessage; index: number } | null {
@@ -1492,6 +1494,11 @@ export class AgentSession {
     return this.queue.length > 0 || this.taskNotifications.length > 0
   }
 
+  private hasRunnablePendingMessages(): boolean {
+    return (this.queueAutoDrain && this.queue.length > 0)
+      || (this.taskNotifications.length > 0 && !findPendingUserQuestion(this.messages))
+  }
+
   private hasMidTurnInput(): boolean {
     return this.taskNotifications.length > 0 || this.queue.some((item) => item.urgent)
   }
@@ -1499,7 +1506,7 @@ export class AgentSession {
   private startPendingTurn(): Promise<StopReason> {
     // 收尾期间收到的立即插话已无法进入上一回合，优先交付该条。
     const index = this.queue.findIndex((item) => item.urgent)
-    const [next] = this.queue.splice(Math.max(0, index), 1)
+    const [next] = this.queueAutoDrain ? this.queue.splice(Math.max(0, index), 1) : []
     const notifications = this.drainTaskNotifications()
     return this.startTurn(
       [
@@ -1706,6 +1713,7 @@ export class AgentSession {
       this.activeTurn = null
       this.opAbort = null
       this.running = false
+      this.pauseQueuedInputs()
       this.activeSubagentTurnState = null
       this.skillTurn.finish()
       this.emitContextUsage()
@@ -1932,14 +1940,14 @@ export class AgentSession {
 
     // 收尾持久化窗口进入的消息也必须有确定归宿；普通 Main 作为新 turn 接续。
     if (
-      this.hasPendingMessages()
-      && stopReason !== 'aborted'
+      this.hasRunnablePendingMessages()
+      && stopReason === 'completed'
       && !this.protocolRound
+      && !this.terminalStatusManaged
       && !this.abortRequestedDuringFinalization
       && !this.persistenceFailed
-      && (this.queue.length > 0 || stopReason !== 'waiting-user')
     ) {
-      if (this.queue.length > 0) this.options.onQueuedTurnStart?.()
+      if (this.queueAutoDrain && this.queue.length > 0) this.options.onQueuedTurnStart?.()
       return this.startPendingTurn()
     }
 
@@ -1952,19 +1960,9 @@ export class AgentSession {
     }
     this.running = false
     this.abortRequestedDuringFinalization = false
-    if (this.queue.length > 0 && !this.persistenceFailed) {
-      try {
-        await this.restoreQueuedInput()
-      } catch (error) {
-        stopReason = 'error'
-        emit({
-          type: 'error',
-          message: error instanceof Error ? error.message : String(error),
-          recoverable: true,
-        })
-      }
-    }
+    // 协商队列由协调器接管，移交前保留收尾期间收到的立即发送优先级。
     if (!this.terminalStatusManaged) {
+      this.pauseQueuedInputs()
       emit({ type: 'agent-status', status: stopReason === 'error' ? 'error' : 'idle' })
     }
     this.resolveIdleWaiters()
@@ -2040,6 +2038,7 @@ export class AgentSession {
     this.opAbort = new AbortController()
     const signal = this.opAbort.signal
     const preTokens = this.estimateCurrentContextTokens()
+    let completed = false
     emit({ type: 'agent-status', status: 'working' })
     try {
       await this.refreshProjectInstructions()
@@ -2071,6 +2070,7 @@ export class AgentSession {
           postTokens: this.estimateCurrentContextTokens(),
         })
         this.emitContextUsage()
+        completed = true
       } else {
         emit({ type: 'error', message: '当前没有可压缩的对话历史', recoverable: true })
       }
@@ -2086,16 +2086,12 @@ export class AgentSession {
     this.compacting = false
     this.opAbort = null
 
-    // 压缩期间排队的消息：取消则弹回输入框；正常结束则在新上下文上接续为新 turn
-    if (signal.aborted) {
-      await this.restoreQueuedInput()
-    } else if (
-      this.hasPendingMessages()
-      && (this.queue.length > 0 || !findPendingUserQuestion(this.messages))
-    ) {
+    // 仅接续用户在本次操作期间明确提交的工作；旧的暂停队列不会因压缩而启动。
+    if (!signal.aborted && completed && this.hasRunnablePendingMessages()) {
       await this.startPendingTurn()
       return
     }
+    this.pauseQueuedInputs()
     emit({ type: 'agent-status', status: 'idle' })
     this.resolveIdleWaiters()
   }
@@ -3278,10 +3274,7 @@ export class AgentSession {
       }
     } finally {
       this.restoringCheckpointToolUseId = null
-      if (
-        this.hasPendingMessages()
-        && (this.queue.length > 0 || !findPendingUserQuestion(this.messages))
-      ) {
+      if (this.hasRunnablePendingMessages()) {
         await this.startPendingTurn()
       }
       this.resolveIdleWaiters()

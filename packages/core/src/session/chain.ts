@@ -131,7 +131,6 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     interruptedTurnId,
     interruptedConsensusTaskId,
     undeliveredUserInputs.length > 0,
-    pendingUserInputs.some((input) => input.state === 'queued'),
     pendingUserQuestion !== null,
   )
   const discardedInputIds = new Set(entries.flatMap((entry) =>
@@ -1251,14 +1250,12 @@ function deriveStatus(
   interruptedTurnId: string | null,
   interruptedConsensusTaskId: string | null,
   hasUndeliveredUserInput: boolean,
-  hasQueuedUserInput: boolean,
   hasPendingUserQuestion: boolean,
 ): 'idle' | 'waiting-user' | 'paused' | 'max-turns' | 'interrupted' | 'error' {
   if (
     interruptedTurnId
     || interruptedConsensusTaskId
     || hasUndeliveredUserInput
-    || hasQueuedUserInput
   ) {
     return 'interrupted'
   }

@@ -284,8 +284,6 @@ export type CoreEvent =
   | { type: 'message-dequeued'; id: string }
   /** 所选排队消息已成功取回，交给发起重新编辑的输入框。 */
   | { type: 'queued-message-edit-ready'; item: QueuedUserMessage }
-  /** 中断时将剩余队列交还给输入框，按顺序恢复。 */
-  | { type: 'queue-restored'; text: string; items?: QueuedUserMessage[] }
   // --- 检查点（M2-c）---
   /** 写类工具的 before/after 资源清单已持久化；hash 当前承载稳定 checkpointId。 */
   | {
@@ -466,7 +464,7 @@ export type CoreCommand =
       attachments?: ImageMessageAttachmentInput[]
       /** PDF 只跨 IPC 传路径或已恢复的附件 ID，不允许 inline Base64。 */
       pdfAttachments?: PdfMessageAttachmentInput[]
-      /** 重新提交 queue-restored 草稿时原子消费的旧输入；只能引用当前会话事实源。 */
+      /** 重新提交取回编辑的草稿时原子消费的旧输入；只能引用当前会话事实源。 */
       restoredInputIds?: string[]
       /** Renderer 只提交目录中的精确 locator；主进程在落盘前解析为不可变 Skill 快照。 */
       skills?: SkillLocator[]

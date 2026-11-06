@@ -107,16 +107,16 @@ it('读取项目指令期间停止会结束回合，并保留真正排队输入�
   assert.equal(f.session.isBusy, false)
   assert.deepEqual(f.journal.undeliveredUserInputIds, [])
   assert.deepEqual(f.journal.pendingUserInputs.map(({ id, state }) => ({ id, state })), [
-    { id: queuedId, state: 'restored' },
+    { id: queuedId, state: 'queued' },
   ])
-  assert.ok(f.events.some(event => event.type === 'queue-restored'
-    && event.items?.[0]?.id === queuedId))
-  await assert.rejects(f.session.inspectLatestTurnEdit(f.latestTurnId()), /待处理输入/)
+  assert.equal(f.session.isQueuedUserInput(queuedId), true)
+  await assert.rejects(f.session.inspectLatestTurnEdit(f.latestTurnId()), /尚未空闲/)
   const cold = await f.store.open(f.journal.sessionId)
   assert.deepEqual(cold.pendingUserInputs, f.journal.pendingUserInputs)
   await assert.rejects(inspectLatestTurnEdit(cold, f.latestTurnId()), /待处理输入/)
 
   read.mock.restore()
+  assert.equal(await f.session.restoreQueuedMessage(queuedId), true)
   assert.equal((await f.send('重新提交排队输入', [queuedId])).outcome, 'completed')
   assert.deepEqual(f.journal.pendingUserInputs, [])
   await f.session.inspectLatestTurnEdit(f.latestTurnId())

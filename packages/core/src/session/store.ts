@@ -754,8 +754,10 @@ export class SessionJournal implements SessionRecorder {
       this.metadata.lastUserText = clipped
       if (!this.metadata.title) this.metadata.title = clipped
       this.metadata.updatedAt = input.timestamp
-      if (input.type === 'user-input') {
+      if (input.type === 'user-input' && input.startsTurn) {
         this.metadata.status = 'interrupted'
+      } else if (this.activeTurnId || this.activeConsensusTaskId) {
+        this.metadata.status = 'running'
       }
       await this.refreshMetadataCache()
     })
@@ -1113,7 +1115,7 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeConsensusTaskId
             ? 'running'
-            : this.hasRuntimePendingInput()
+            : this.undeliveredUserInputIdSet.size > 0
               ? 'interrupted'
               : stopReason === 'waiting-user'
                 ? 'waiting-user'
@@ -1206,7 +1208,7 @@ export class SessionJournal implements SessionRecorder {
         for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true
         this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
           ? 'running'
-          : this.hasRuntimePendingInput()
+          : this.undeliveredUserInputIdSet.size > 0
             ? 'interrupted'
           : hasPendingUserQuestion(messages)
             ? 'waiting-user'
@@ -1372,7 +1374,7 @@ export class SessionJournal implements SessionRecorder {
           ? 'error'
           : this.activeTurnId
             ? 'running'
-            : this.hasRuntimePendingInput()
+            : this.undeliveredUserInputIdSet.size > 0
               ? 'interrupted'
               : outcome === 'paused'
                 ? 'paused'
@@ -1400,7 +1402,6 @@ export class SessionJournal implements SessionRecorder {
         !this.activeTurnId
         && !this.activeConsensusTaskId
         && this.undeliveredUserInputIdSet.size === 0
-        && !this.hasRuntimePendingInput()
       ) return
       const hadInterruptedWork = Boolean(
         this.activeTurnId
@@ -1442,10 +1443,7 @@ export class SessionJournal implements SessionRecorder {
           modelId: this.metadata.modelId,
           reasoningEffort: this.metadata.reasoningEffort,
           messages: dehydrateImageMessages(recoveredMessages),
-          pendingUserInputs: this.pendingUserInputs.map((input) => ({
-            ...input,
-            state: input.state === 'queued' ? 'restored' as const : input.state,
-          })),
+          pendingUserInputs: this.pendingUserInputs,
           turnStarts: runtimeTurnStarts.map((start) => ({
             turnId: start.turnId,
             taskState: start.taskState,
@@ -1460,11 +1458,6 @@ export class SessionJournal implements SessionRecorder {
       this.activeTurnId = null
       this.activeTurnEngagedPlanId = null
       this.undeliveredUserInputIdSet.clear()
-      for (const [inputId, input] of this.pendingUserInputMap) {
-        if (input.state === 'queued') {
-          this.pendingUserInputMap.set(inputId, { ...input, state: 'restored' })
-        }
-      }
       this.activeConsensusTaskId = null
       this.activeConsensusBaseMessages = null
       this.activeConsensusBaseTaskState = null
@@ -1656,11 +1649,6 @@ export class SessionJournal implements SessionRecorder {
     if (!this.metadata.title) this.metadata.title = clipped
     this.metadata.updatedAt = transaction.input.timestamp
     this.metadata.status = 'interrupted'
-  }
-
-  private hasRuntimePendingInput(): boolean {
-    if (this.undeliveredUserInputIdSet.size > 0) return true
-    return [...this.pendingUserInputMap.values()].some((input) => input.state === 'queued')
   }
 
   private assertPendingInputs(

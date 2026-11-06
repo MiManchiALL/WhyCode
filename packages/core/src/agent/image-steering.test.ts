@@ -193,7 +193,7 @@ describe('忙时图片 steering', () => {
     })
   })
 
-  it('停止和重启把图片队列恢复为可重提草稿且 JSONL 不含 Base64', async () => {
+  it('停止和重启保留图片队列且 JSONL 不含 Base64', async () => {
     await withImageSession(async ({ store, journal, attachments, root }) => {
       const firstStarted = deferred<void>()
       const model = new MockLanguageModelV4({
@@ -214,14 +214,11 @@ describe('忙时图片 steering', () => {
       session.abort()
 
       assert.equal(await running, 'aborted')
-      const restoredEvent = events.find((event) => event.type === 'queue-restored')
-      assert.equal(restoredEvent?.type === 'queue-restored' ? restoredEvent.items?.[0]?.id : '', inputId)
-      assert.deepEqual(
-        restoredEvent?.type === 'queue-restored' ? restoredEvent.items?.[0]?.attachments : undefined,
-        attachments,
-      )
+      assert.equal(session.isQueuedUserInput(inputId), true)
+      assert.deepEqual(journal.pendingUserInputs[0]?.attachments, attachments)
       const reopened = await store.open(journal.sessionId)
-      assert.equal(reopened.pendingUserInputs[0]?.state, 'restored')
+      await reopened.recoverInterruptedWork()
+      assert.equal(reopened.pendingUserInputs[0]?.state, 'queued')
       assert.equal(reopened.pendingUserInputs[0]?.attachments?.[0]?.id, attachments[0]?.id)
       const transcript = await readFile(join(root, journal.sessionId, 'transcript.jsonl'), 'utf8')
       assert.doesNotMatch(transcript, /iVBORw0KGgo/)
