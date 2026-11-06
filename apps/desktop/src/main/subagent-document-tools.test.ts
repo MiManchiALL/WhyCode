@@ -129,7 +129,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
     }
     await assert.rejects(coldService.attachmentDirectory(randomUUID(), id))
     const tools = coldService.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-    const result = await tools[1]!.execute({ subagent_id: id, prompt: '继续核验' }, fixture.toolContext('next', 'next'))
+    const result = await tools[0]!.execute({ action: 'send', subagent_id: id, prompt: '继续核验' }, fixture.toolContext('next', 'next'))
     assert.equal(result.isError, false)
     await fixture.waitForSettlements(2)
     assert.equal(fixture.settlements[1]?.outcome, 'completed')
@@ -164,7 +164,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
     await fixture.service.close()
     const coldService = new SubagentService(fixture.serviceOptions)
     const tools = coldService.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-    const continued = await tools[1]!.execute({ subagent_id: id, prompt: '读取已保存的 PDF' }, fixture.toolContext('next', 'next'))
+    const continued = await tools[0]!.execute({ action: 'send', subagent_id: id, prompt: '读取已保存的 PDF' }, fixture.toolContext('next', 'next'))
     assert.equal(continued.isError, false, continued.data)
     await fixture.waitForSettlements(2)
     assert.equal(fixture.settlements[1]?.outcome, 'completed')
@@ -193,7 +193,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
     manifest.definition.toolNames = ['ReadFile']
     await storage.writeManifest(manifest)
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
-    await tools[1]!.execute({ subagent_id: id, prompt: '继续' }, fixture.toolContext('next', 'next'))
+    await tools[0]!.execute({ action: 'send', subagent_id: id, prompt: '继续' }, fixture.toolContext('next', 'next'))
     await fixture.waitForSettlements(2)
     const names = fixture.modelCalls.at(-1)!.tools!.map((tool) => tool.name)
     assert.ok(names.includes('ReadFile'))
@@ -226,7 +226,7 @@ describe('子代理文档与视觉工具', { timeout: 90_000 }, () => {
 async function launch(fixture: Fixture, role = 'explore'): Promise<string> {
   const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
   const result = await tools[0]!.execute({
-    name: role, description: '核验文档', prompt: '检查文档内容与版式',
+    action: 'spawn', name: role, description: '核验文档', prompt: '检查文档内容与版式',
   }, fixture.toolContext('turn-doc', 'start-doc'))
   assert.equal(result.isError, false, result.data)
   const id = result.data.match(/[0-9a-f-]{36}/u)?.[0]

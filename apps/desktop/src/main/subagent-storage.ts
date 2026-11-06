@@ -92,23 +92,26 @@ export class SubagentStorage {
   }
 
   async listManifests(parentSessionId: string): Promise<SubagentManifest[]> {
+    const manifests: SubagentManifest[] = []
+    for await (const manifest of this.manifests(parentSessionId)) manifests.push(manifest)
+    return manifests.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  }
+
+  async *manifests(parentSessionId: string): AsyncGenerator<SubagentManifest> {
     validateSessionId(parentSessionId)
     const root = this.subagentsDirectory(parentSessionId)
     const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
-    const manifests: SubagentManifest[] = []
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       try {
         validateSessionId(entry.name)
-        manifests.push(await this.readManifest(parentSessionId, entry.name))
+        yield await this.readManifest(parentSessionId, entry.name)
       } catch {}
     }
-    return manifests.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
-  async listAllManifests(): Promise<SubagentManifest[]> {
+  async *allManifests(): AsyncGenerator<SubagentManifest> {
     const parents = await readdir(this.sessionsRoot, { withFileTypes: true }).catch(() => [])
-    const manifests: SubagentManifest[] = []
     for (const parent of parents) {
       if (!parent.isDirectory()) continue
       try {
@@ -116,9 +119,8 @@ export class SubagentStorage {
       } catch {
         continue
       }
-      manifests.push(...await this.listManifests(parent.name))
+      yield* this.manifests(parent.name)
     }
-    return manifests
   }
 
   private sessionStore(parentSessionId: string): SessionStore {

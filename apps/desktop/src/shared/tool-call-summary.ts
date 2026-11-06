@@ -111,11 +111,7 @@ function knownToolSummary(
     case 'CloseTaskPlan':
       return prefixed('plan ID', shortId(text(input, 'plan_id')))
     case 'Subagent':
-      return text(input, 'name')
-    case 'SendSubagentMessage':
-      return shortId(text(input, 'subagent_id'))
-    case 'ListSubagents':
-      return ''
+      return parts(text(input, 'action'), text(input, 'name') || shortId(text(input, 'subagent_id')))
     case 'ToolSearch':
       return parts(quote(text(input, 'query')), fixed(numberLabel(input, 'max_results', 'max results')))
     case 'SubmitProtocolOutput':
@@ -149,9 +145,7 @@ export function toolCallDetails(
     case 'AskUserQuestion':
       return answeredQuestionDetails(value, result)
     case 'Subagent':
-      return subagentDetails(value, result)
-    case 'SendSubagentMessage':
-      return text(value, 'prompt')
+      return value.action === 'send' ? text(value, 'prompt') : subagentDetails(value, result)
     default:
       return null
   }

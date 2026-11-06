@@ -8,7 +8,9 @@ import type {
   SubagentSettlementNotification,
   SubagentTurnState,
 } from '../subagents/types.ts'
-import { AgentSession } from './session.ts'
+import { AgentSession, type AgentSessionOptions } from './session.ts'
+import { estimateMessageTokens, estimateTextTokens, compactTailBudget } from '../context/tokens.ts'
+import { isSubagentSettlementText } from '../subagents/notification.ts'
 import { ModelRequestError } from '../providers/model-request.ts'
 
 describe('子代理终态续轮', () => {
@@ -20,15 +22,18 @@ describe('子代理终态续轮', () => {
       if (++requests <= 4) throw new ModelRequestError('读取响应数据超时', true, 0)
       return finalStep('已使用保存的子代理结果继续。')
     } })
-    const session = createSession(model, [])
-    assert.equal(await session.handleSubagentSettlement(notification(), () => { delivered++ }), 'error')
+    const session = createSession(model, [], undefined, {
+      pendingSubagentSettlements: async function* () { if (!delivered) yield notification() },
+      onSubagentSettlementDelivered: async () => { delivered++ },
+    })
+    assert.equal(await session.handleUserMessage('处理已有结果'), 'error')
     assert.equal(delivered, 1)
     assert.equal(requests, 4)
     assert.equal(await session.handleUserMessage('继续'), 'completed')
     assert.equal(requests, 5)
     assert.equal(delivered, 1)
   })
-  it('空闲父会话由宿主消息自动续轮，并在交接提交后确认 delivered', async () => {
+  it('空闲和重启不发起模型请求，下一次用户输入才交付保存的结果', async () => {
     const events: CoreEvent[] = []
     let delivered = false
     const model = new MockLanguageModelV4({
@@ -39,12 +44,18 @@ describe('子代理终态续轮', () => {
         return finalStep('已结合子代理结果完成父任务。')
       },
     })
-    const session = createSession(model, events)
+    const session = createSession(model, events, undefined, {
+      pendingSubagentSettlements: async function* () { if (!delivered) yield notification() },
+      onSubagentSettlementDelivered: async () => { delivered = true },
+    })
 
     assert.equal(
       await session.handleSubagentSettlement(notification(), () => { delivered = true }),
-      'completed',
+      undefined,
     )
+    assert.equal(delivered, false)
+    assert.equal(model.doStreamCalls.length, 0)
+    assert.equal(await session.handleUserMessage('请总结已有结果'), 'completed')
     assert.equal(delivered, true)
     assert.equal(model.doStreamCalls.length, 1)
     assert.equal(events.some((event) => event.type === 'message-queued'), false)
@@ -83,6 +94,27 @@ describe('子代理终态续轮', () => {
     assert.equal(delivered, 1)
   })
 
+  it('协商协议阶段保留待交付结果，恢复 Main 执行后正常接收', async () => {
+    let delivered = 0
+    let loads = 0
+    const model = new MockLanguageModelV4({ doStream: async () => finalStep('阶段完成。') })
+    const session = createSession(model, [], undefined, {
+      pendingSubagentSettlements: async function* () { loads++; yield notification() },
+      onSubagentSettlementDelivered: async () => { delivered++ },
+    })
+    session.setProtocolRound(true)
+    session.handleSubagentSettlement(notification())
+    assert.equal(await session.handleExecutionMessage('分析当前请求'), 'completed')
+    assert.equal(loads, 0)
+    assert.equal(delivered, 0)
+    assert.doesNotMatch(JSON.stringify(model.doStreamCalls[0]!.prompt), /已确认两个调用点/)
+    session.setProtocolRound(false)
+    assert.equal(await session.handleExecutionMessage('执行当前请求'), 'completed')
+    assert.equal(loads, 1)
+    assert.equal(delivered, 1)
+    assert.match(JSON.stringify(model.doStreamCalls[1]!.prompt), /已确认两个调用点/)
+  })
+
   it('等待子代理时只响应立即插话与终态，普通输入在全部交付后另开回合', async (context) => {
     context.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 8, 25, 10).getTime() })
     const events: CoreEvent[] = []
@@ -104,7 +136,7 @@ describe('子代理终态续轮', () => {
         assert.doesNotMatch(prompt, /下一回合的独立问题/)
         if (index === 0) {
           assert.match(prompt, /whycode-subagent-turn-state/)
-          assert.match(prompt, /用一次简短说明结束当前响应并等待，不要重复播报/)
+          assert.match(prompt, /remaining 大于 0 时仍需等待结果交付/)
           assert.match(prompt, /\\"remaining\\":2/)
           return finalStep('本地检查已经完成，继续等待子代理。')
         }
@@ -179,7 +211,6 @@ describe('子代理终态续轮', () => {
       activations: [turnActivation(
         FIRST_SUBAGENT_ID,
         FIRST_ACTIVATION_ID,
-        1,
         new Set<string>(),
       )],
     }))
@@ -190,6 +221,46 @@ describe('子代理终态续轮', () => {
     session.abort()
     assert.equal(await running, 'aborted')
     assert.equal(model.doStreamCalls.length, 1)
+  })
+
+  it('多个大结果分批交付并压缩历史，不把未消费的结果挤出窗口', async () => {
+    const items = Array.from({ length: 8 }, (_, index) => ({
+      ...notification(), activationId: crypto.randomUUID(), subagentId: crypto.randomUUID(),
+      resultText: `结果${index}：` + '证据'.repeat(60_000),
+    }))
+    const delivered = new Set<string>()
+    const observed = new Set<string>()
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: 'text', text: '<summary>已核实此前交付的调查结果。</summary>' }],
+        finishReason: { unified: 'stop', raw: undefined }, warnings: [],
+        usage: { inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 30, text: 30, reasoning: undefined } },
+      }),
+      doStream: async (options) => {
+        const text = JSON.stringify(options.prompt)
+        assert.ok(estimateTextTokens(text) < 100_000, '请求仍在父模型窗口内')
+        const messages = options.prompt.flatMap(message => typeof message.content === 'string'
+          ? [message.content] : message.content.flatMap(part => part.type === 'text' ? [part.text] : []))
+        const fresh = messages.filter(isSubagentSettlementText).filter(content => !observed.has(content))
+        assert.ok(fresh.length > 0)
+        assert.ok(fresh.reduce((total, content) => total + estimateMessageTokens({ role: 'user', content }), 0)
+          <= compactTailBudget(modelEntry(model).capabilities))
+        for (const result of fresh) {
+          assert.match(result, /后文已截断/)
+          observed.add(result)
+        }
+        return finalStep('已核验本批结果。', estimateTextTokens(text))
+      },
+    })
+    const session = createSession(model, [], undefined, {
+      pendingSubagentSettlements: async function* () { yield* items },
+      onSubagentSettlementDelivered: async item => { delivered.add(item.activationId) },
+    })
+    assert.equal(await session.handleUserMessage('汇总调查'), 'completed')
+    assert.equal(delivered.size, items.length)
+    assert.equal(observed.size, items.length)
+    assert.ok(model.doGenerateCalls.length > 0, '旧历史确实进入自动压缩')
   })
 })
 
@@ -204,7 +275,6 @@ function notification(): SubagentSettlementNotification {
     parentTurnId: 'parent-turn-1',
     subagentId: '22222222-2222-4222-8222-222222222222',
     activationId: '33333333-3333-4333-8333-333333333333',
-    name: '探索代理',
     description: '核对调用链',
     outcome: 'completed',
     resultText: '已确认两个调用点。',
@@ -223,7 +293,6 @@ function notificationFor(
       ? FIRST_SUBAGENT_ID
       : SECOND_SUBAGENT_ID,
     activationId,
-    name: '探索代理',
     description: '核对调用链',
     outcome: 'completed',
     resultText,
@@ -234,8 +303,8 @@ function turnState(parentTurnId: string, delivered: ReadonlySet<string>): Subage
   return {
     parentTurnId,
     activations: [
-      turnActivation(FIRST_SUBAGENT_ID, FIRST_ACTIVATION_ID, 1, delivered),
-      turnActivation(SECOND_SUBAGENT_ID, SECOND_ACTIVATION_ID, 1, delivered),
+      turnActivation(FIRST_SUBAGENT_ID, FIRST_ACTIVATION_ID, delivered),
+      turnActivation(SECOND_SUBAGENT_ID, SECOND_ACTIVATION_ID, delivered),
     ],
   }
 }
@@ -243,15 +312,12 @@ function turnState(parentTurnId: string, delivered: ReadonlySet<string>): Subage
 function turnActivation(
   subagentId: string,
   activationId: string,
-  sequence: number,
   delivered: ReadonlySet<string>,
 ): SubagentTurnState['activations'][number] {
   return {
     subagentId,
     activationId,
-    name: '探索代理',
     description: '核对调用链',
-    sequence,
     ...(delivered.has(activationId)
       ? { outcome: 'completed' as const, settlement: 'delivered' as const }
       : {}),
@@ -262,6 +328,7 @@ function createSession(
   model: MockLanguageModelV4,
   events: CoreEvent[],
   getSubagentTurnState?: (turnId: string) => Promise<SubagentTurnState>,
+  options: Partial<AgentSessionOptions> = {},
 ): AgentSession {
   return new AgentSession({
     model: modelEntry(model),
@@ -270,6 +337,7 @@ function createSession(
     ...(getSubagentTurnState ? { getSubagentTurnState } : {}),
     emit: (event) => events.push(event),
     requestApproval: async () => ({ approved: false }),
+    ...options,
   })
 }
 
@@ -292,7 +360,7 @@ function modelEntry(model: MockLanguageModelV4): ModelEntry {
   }
 }
 
-function finalStep(text: string) {
+function finalStep(text: string, inputTokens = 10) {
   return {
     stream: simulateReadableStream({
       chunks: [
@@ -303,7 +371,7 @@ function finalStep(text: string) {
           type: 'finish' as const,
           finishReason: { unified: 'stop' as const, raw: undefined },
           usage: {
-            inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+            inputTokens: { total: inputTokens, noCache: inputTokens, cacheRead: undefined, cacheWrite: undefined },
             outputTokens: { total: 5, text: 5, reasoning: undefined },
           },
         },

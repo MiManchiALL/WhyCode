@@ -55,6 +55,7 @@ describe('用户中断后的新回合', () => {
     session.abort()
 
     assert.equal(await running, 'aborted')
+    assert.equal(session.latestTurnAssistantText, '已经展示的部分')
     const retained = events.findIndex((event) => event.type === 'step-output-retained')
     const discarded = events.findIndex((event) => event.type === 'step-discarded')
     assert.ok(retained >= 0 && retained < discarded)

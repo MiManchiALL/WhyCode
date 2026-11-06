@@ -44,9 +44,7 @@ export const subagentTaskDescriptionSchema = z.string()
 export const subagentTurnActivationSchema = z.object({
   subagentId: idSchema,
   activationId: idSchema,
-  name: z.string().min(1).max(64),
   description: subagentTaskDescriptionSchema,
-  sequence: z.number().int().positive(),
   outcome: subagentOutcomeSchema.optional(),
   settlement: subagentSettlementStateSchema.optional(),
 }).strict().superRefine((activation, ctx) => {
@@ -200,7 +198,6 @@ export interface SubagentContinueRequest {
 export interface SubagentLaunchResult {
   ok: boolean
   subagentId?: string
-  name?: string
   description?: string
   error?: string
 }
@@ -208,7 +205,6 @@ export interface SubagentLaunchResult {
 /** 提供给父模型的最小发现投影；不暴露 prompt、结果或 transcript。 */
 export interface SubagentListEntry {
   subagentId: string
-  name: string
   description: string
   status: SubagentStatus
 }
@@ -218,7 +214,6 @@ export interface SubagentSettlementNotification {
   parentTurnId: string
   subagentId: string
   activationId: string
-  name: string
   description: string
   outcome: SubagentOutcome
   resultText: string

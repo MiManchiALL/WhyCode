@@ -11,119 +11,86 @@ import {
 } from './types.ts'
 
 export const SUBAGENT_TOOL_NAME = 'Subagent'
-export const SEND_SUBAGENT_MESSAGE_TOOL_NAME = 'SendSubagentMessage'
-export const LIST_SUBAGENTS_TOOL_NAME = 'ListSubagents'
 
 export interface SubagentToolHost {
   launch(request: SubagentLaunchRequest): Promise<SubagentLaunchResult>
-  continue(request: SubagentContinueRequest): Promise<SubagentLaunchResult>
+  send(request: SubagentContinueRequest): Promise<SubagentLaunchResult>
+  stop(subagentId: string): Promise<SubagentLaunchResult>
   list(): Promise<SubagentListEntry[]>
 }
 
+const inputSchema = z.object({
+  action: z.enum(['spawn', 'send', 'stop', 'list']),
+  name: subagentNameSchema.optional().describe('spawn：可用子代理定义名称'),
+  description: subagentTaskDescriptionSchema.optional().describe('spawn：本次子任务的短描述'),
+  prompt: z.string().trim().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).optional().describe('spawn 或 send：任务或追加消息'),
+  subagent_id: z.string().uuid().optional().describe('send 或 stop：已有子代理 ID'),
+}).strict().superRefine((input, ctx) => {
+  const fields: readonly string[] = {
+    spawn: ['name', 'description', 'prompt'],
+    send: ['subagent_id', 'prompt'],
+    stop: ['subagent_id'],
+    list: [],
+  }[input.action]
+  for (const key of ['name', 'description', 'prompt', 'subagent_id'] as const) {
+    if (fields.includes(key) !== (input[key] !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: [key], message: fields.includes(key)
+        ? `${input.action} 需要 ${key}` : `${input.action} 不接受 ${key}` })
+    }
+  }
+})
+
 export function createSubagentTools(host: SubagentToolHost): ToolDefinition[] {
-  return [
-    buildTool({
-      name: SUBAGENT_TOOL_NAME,
-      description: '启动一个隔离的子代理处理边界明确的任务',
-      prompt: [
-        '把可独立并行、需要专门调查或能返回明确交付结果的工作委派给一个可用子代理。',
-        'name 必须来自消息中的 <available_subagents> 及其最新增量通知；它选择子代理定义，同一 name 可以启动多个独立实例。工具和权限由该定义及父会话边界固定，不能在调用参数中扩展。',
-        '同一父会话最多并行运行 8 个子代理。工具会立即返回稳定 subagent_id；不要轮询，子代理终态会由 WhyCode 自动注入父会话。',
-        'description 使用 3～5 个词概括本次子任务，作为后续发现和复用该子代理的稳定语义名称。',
-        '委派必须自包含：交代目标及原因、已知事实和已排除方向、范围与禁区、期望结果及证据形式；实施任务另写明已知文件或符号、预期行为和验收标准，并明确只读或允许修改。',
-        '不要把尚未完成的理解和方案选择整体交给子代理，也不要要求其向用户提问或再创建子代理。',
-      ].join('\n'),
-      inputSchema: z.object({
-        name: subagentNameSchema.describe('可用子代理定义的唯一名称'),
-        description: subagentTaskDescriptionSchema.describe('本次子任务的 3～5 个词短描述'),
-        prompt: z.string().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).describe('自包含的委派任务'),
-      }).strict(),
-      isReadOnly: false,
-      kind: 'control',
-      async execute(input, ctx) {
-        if (!ctx.turnId || !ctx.toolCallId) {
-          return { data: '子代理调用缺少父回合身份', isError: true }
-        }
-        const definition = ctx.subagentDefinitions?.find((item) => item.name === input.name)
-        if (!definition) return { data: `本次请求没有可用的子代理定义：${input.name}`, isError: true }
-        const result = await host.launch({
-          definition,
-          taskDescription: input.description,
-          prompt: input.prompt,
-          parentTurnId: ctx.turnId,
-          parentToolCallId: ctx.toolCallId,
-          ...(ctx.engagedPlanId ? { engagedPlanId: ctx.engagedPlanId } : {}),
-        })
-        return toolResult(result, '已启动')
-      },
-    }),
-    buildTool({
-      name: SEND_SUBAGENT_MESSAGE_TOOL_NAME,
-      description: '按稳定 ID 继续一个已结束的子代理',
-      prompt: [
-        '向当前父会话拥有的既有子代理追加一条消息。WhyCode 会从磁盘冷恢复其独立 transcript，完成本次激活后立即释放运行体。',
-        '只能继续已结束的子代理；同一子代理不能并发激活。工具会立即返回，终态仍由 WhyCode 自动注入，不要轮询。',
-        '若忘记稳定 ID 或需要判断职责是否匹配，先用 ListSubagents 查看当前会话保留的子代理。',
-      ].join('\n'),
-      inputSchema: z.object({
-        subagent_id: z.string().uuid().describe('此前 Subagent 返回的稳定 ID'),
-        prompt: z.string().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).describe('追加给子代理的消息'),
-      }).strict(),
-      isReadOnly: false,
-      kind: 'control',
-      async execute(input, ctx) {
-        if (!ctx.turnId || !ctx.toolCallId) {
-          return { data: '子代理调用缺少父回合身份', isError: true }
-        }
-        const result = await host.continue({
-          subagentId: input.subagent_id,
-          prompt: input.prompt,
-          parentTurnId: ctx.turnId,
-          parentToolCallId: ctx.toolCallId,
-          ...(ctx.engagedPlanId ? { engagedPlanId: ctx.engagedPlanId } : {}),
-        })
-        return toolResult(result, '已继续')
-      },
-    }),
-    buildTool({
-      name: LIST_SUBAGENTS_TOOL_NAME,
-      description: '列出当前父会话保留的子代理及其状态',
-      prompt: [
-        '查看当前父会话直接拥有的子代理，以便按稳定 ID 复用职责和独立历史。',
-        '结果只包含 name、subagent_id、短描述和状态，不包含完整 prompt、结果或 transcript。name 是定义名称，后续交互必须使用实例 subagent_id。',
-        '终态会自动送达；不要用此工具轮询正在运行的子代理。',
-      ].join('\n'),
-      inputSchema: z.object({}).strict(),
-      isReadOnly: true,
-      kind: 'control',
-      async execute() {
+  return [buildTool({
+    name: SUBAGENT_TOOL_NAME,
+    description: '启动、发送消息、停止或查看当前会话的子代理',
+    prompt: [
+      'action=spawn：把可独立并行、需要专门调查或能返回明确结果的任务委派给子代理；填写 name、description、prompt。',
+      'name 来自 <available_subagents> 及最新增量通知；同一 name 可创建多个实例。description 简短标识本次任务。定义决定工具与权限，调用参数不能扩展。',
+      '委派必须自包含：交代目标、已知事实、范围与禁区、期望结果和证据；实施任务还需写明文件或符号、预期行为、验收标准及是否允许修改。子代理看不到父会话其它消息。',
+      'action=send：填写 subagent_id、prompt；运行中在下一稳定步骤交付，已结束则沿用独立历史继续。',
+      'action=stop：填写 subagent_id；停止该实例并保留已产生的结果与历史，后续仍可 send 继续。',
+      'action=list：不填其它字段，查看当前会话保留实例的 ID、描述与状态；复用职责匹配的实例。',
+      '当前会话最多同时运行 8 个子代理。启动与发送立即返回稳定 ID，终态自动交付到正在执行的父回合，不要轮询。',
+      '不要把尚未完成的理解和方案选择整体交给子代理，也不要要求子代理向用户提问或再创建子代理。',
+    ].join('\n'),
+    inputSchema,
+    isReadOnly: false,
+    kind: 'control',
+    behavior: (input) => ({ kind: 'control', isReadOnly: input.action === 'list' }),
+    async execute(input, ctx) {
+      if (input.action === 'list') {
         const subagents = await host.list()
-        return {
-          data: JSON.stringify({
-            subagents: subagents.map((subagent) => ({
-              name: subagent.name,
-              subagent_id: subagent.subagentId,
-              description: subagent.description,
-              status: subagent.status,
-            })),
-          }),
-          isError: false,
-        }
-      },
-    }),
-  ]
+        return { data: JSON.stringify({ subagents: subagents.map(item => ({
+          subagent_id: item.subagentId, description: item.description, status: item.status,
+        })) }), isError: false }
+      }
+      if (input.action === 'stop') return toolResult(await host.stop(input.subagent_id!), '已停止')
+      if (!ctx.turnId || !ctx.toolCallId) {
+        return { data: '子代理调用缺少父回合身份', isError: true }
+      }
+      const request = {
+        prompt: input.prompt!,
+        parentTurnId: ctx.turnId,
+        parentToolCallId: ctx.toolCallId,
+        ...(ctx.engagedPlanId ? { engagedPlanId: ctx.engagedPlanId } : {}),
+      }
+      if (input.action === 'send') {
+        return toolResult(await host.send({ ...request, subagentId: input.subagent_id! }), '已发送消息给')
+      }
+      const definition = ctx.subagentDefinitions?.find(item => item.name === input.name)
+      if (!definition) return { data: `本次请求没有可用的子代理定义：${input.name}`, isError: true }
+      return toolResult(await host.launch({ ...request, definition, taskDescription: input.description! }), '已启动')
+    },
+  })]
 }
 
 function toolResult(result: SubagentLaunchResult, verb: string) {
   if (!result.ok || !result.subagentId) {
-    return { data: result.error ?? '子代理启动失败', isError: true }
+    return { data: result.error ?? '子代理操作失败', isError: true }
   }
-  const label = [
-    result.name ?? '',
-    result.description ? `「${result.description}」` : '',
-  ].join('')
   return {
-    data: `${verb}子代理 ${label}（subagent_id: ${result.subagentId}）。终态将由 WhyCode 自动送达。`,
+    data: `${verb}子代理「${result.description ?? ''}」（subagent_id: ${result.subagentId}）。`,
     isError: false,
   }
 }

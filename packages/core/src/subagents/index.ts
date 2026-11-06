@@ -4,6 +4,8 @@ export {
 } from './catalog.ts'
 export {
   createSubagentSettlementMessage,
+  boundedSubagentResult,
+  MAX_SUBAGENT_RESULT_CHARS,
   isSubagentSettlementText,
   SUBAGENT_SETTLEMENT_CLOSE,
   SUBAGENT_SETTLEMENT_OPEN,
@@ -14,8 +16,6 @@ export {
 } from './turn-context.ts'
 export {
   createSubagentTools,
-  LIST_SUBAGENTS_TOOL_NAME,
-  SEND_SUBAGENT_MESSAGE_TOOL_NAME,
   SUBAGENT_TOOL_NAME,
   type SubagentToolHost,
 } from './tools.ts'

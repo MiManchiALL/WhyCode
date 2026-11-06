@@ -271,7 +271,7 @@ async function fixture(t: TestContext) {
           launched.push(request)
           return { ok: true, subagentId: randomUUID(), name: request.definition.name, description: request.taskDescription }
         },
-        continue: async request => ({ ok: true, subagentId: request.subagentId }), list: async () => [],
+        send: async request => ({ ok: true, subagentId: request.subagentId }), list: async () => [], stop: async subagentId => ({ ok: true, subagentId }),
       }),
     ],
   }
@@ -310,7 +310,7 @@ function largeHistory(): ModelMessage[] {
   ]).flat()
 }
 
-const delegation = { name: 'docs', description: '核实文档', prompt: '检查文档与实现是否一致。' }
+const delegation = { action: 'spawn', name: 'docs', description: '核实文档', prompt: '检查文档与实现是否一致。' }
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 5, text: 5, reasoning: undefined },

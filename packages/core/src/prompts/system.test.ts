@@ -209,8 +209,8 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /WhyCode 会保持本 turn 并允许用户插话/)
     assert.match(prompt, /全部终态交付只是允许最终答复的必要条件/)
     assert.match(prompt, /只有任务本身完成时才综合并最终答复/)
-    assert.match(prompt, /优先用稳定 subagent_id 继续/)
-    assert.match(prompt, /ListSubagents/)
+    assert.match(prompt, /优先使用同一 subagent_id/)
+    assert.match(prompt, /action=list/)
     assert.doesNotMatch(prompt, /<available_subagents>/)
   })
 
@@ -239,7 +239,7 @@ describe('通用 Agent 提示约束', () => {
     assert.match(prompt, /自动交付终态/)
     assert.match(prompt, /CreateTaskPlan/)
     assert.doesNotMatch(prompt, /<available_subagents>/)
-    assert.doesNotMatch(prompt, /AskUserQuestion|SendSubagentMessage/)
+    assert.doesNotMatch(prompt, /AskUserQuestion|action=send/)
     assert.doesNotMatch(prompt, /EditFile|WriteFile|RunCommand/)
   })
 

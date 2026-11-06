@@ -14,7 +14,6 @@ const RESERVED_HOST_PREFIXES = [
 const JSON_PROBE_LIMIT = 512
 const UUID_VALUE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}'
 const SUBAGENT_ID_FIELD = new RegExp(`"subagent_id"\\s*:\\s*"${UUID_VALUE}"`)
-const ACTIVATION_ID_FIELD = new RegExp(`"activation_id"\\s*:\\s*"${UUID_VALUE}"`)
 const TERMINAL_OUTCOME_FIELD = /"outcome"\s*:\s*"(?:completed|error|aborted|limit|refusal)"/
 
 /**
@@ -117,6 +116,7 @@ function isReservedHostOutput(text: string): boolean {
   if (RESERVED_HOST_PREFIXES.some((prefix) => text.startsWith(prefix))) return true
   if (!text.startsWith('{')) return false
   return SUBAGENT_ID_FIELD.test(text)
-    && ACTIVATION_ID_FIELD.test(text)
     && TERMINAL_OUTCOME_FIELD.test(text)
+    && /"description"\s*:/.test(text)
+    && /"result"\s*:/.test(text)
 }

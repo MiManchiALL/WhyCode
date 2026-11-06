@@ -32,15 +32,19 @@ describe('最终请求的压缩计量', () => {
   })
 
   it('本步新读到的子代理状态在请求前计入压缩边界', async (t) => {
+    let delivered = false
     const { session, events, entry, model } = await fixture(t, {
       getSubagentTurnState: async parentTurnId => ({
         parentTurnId,
-        activations: Array.from({ length: 12 }, (_, index) => ({
-          subagentId: randomUUID(), activationId: randomUUID(), name: `子代理 ${index}`,
-          description: '已完成状态检查', sequence: 1, outcome: 'completed', settlement: 'delivered',
+        activations: Array.from({ length: 8 }, () => ({
+          subagentId: randomUUID(), activationId: randomUUID(),
+          description: '检查本步尚未完成的源码与测试状态'.repeat(3),
+          ...(delivered ? { outcome: 'completed' as const, settlement: 'delivered' as const } : {}),
         })),
       }),
     })
+    const stream = model.doStream.bind(model)
+    model.doStream = async options => { delivered = true; return stream(options) }
     await session.initializeContextUsage()
     entry.capabilities.contextWindow = latestUsage(events).usedTokens + 17_500
     assert.equal(await session.handleUserMessage('继续'), 'completed')
