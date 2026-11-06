@@ -49,9 +49,10 @@ describe('工具卡片关键参数摘要', () => {
     ['ResumeTaskPlan', { plan_id: '12345678-1234-4234-8234-123456789abc' }, 'plan ID 12345678…'],
     ['UpdateTaskItem', { item_id: 'T2', status: 'completed', changes: [{ action: 'edit' }] }, 'T2 → complete · 1 plan change'],
     ['CloseTaskPlan', { plan_id: '12345678-1234-4234-8234-123456789abc' }, 'plan ID 12345678…'],
-    ['Subagent', { name: 'explore', description: '检查工具摘要', prompt: 'hidden' }, 'explore'],
-    ['SendSubagentMessage', { subagent_id: '12345678-1234-4234-8234-123456789abc', prompt: '继续核对测试' }, '12345678…'],
-    ['ListSubagents', {}, ''],
+    ['Subagent', { action: 'spawn', name: 'explore', description: '检查工具摘要', prompt: 'hidden' }, 'spawn · explore'],
+    ['Subagent', { action: 'send', subagent_id: '12345678-1234-4234-8234-123456789abc', prompt: '继续核对测试' }, 'send · 12345678…'],
+    ['Subagent', { action: 'stop', subagent_id: '12345678-1234-4234-8234-123456789abc' }, 'stop · 12345678…'],
+    ['Subagent', { action: 'list' }, 'list'],
     ['ToolSearch', { query: 'GitHub file contents read', max_results: 5 }, '“GitHub file contents read” · max results 5'],
     ['SubmitProtocolOutput', { candidate: { summary: '采用统一摘要器' } }, '“采用统一摘要器”'],
   ]
@@ -148,7 +149,8 @@ describe('工具卡片关键参数摘要', () => {
       'subagent_id: 12345678-1234-4234-8234-123456789abc',
       'description: 核对摘要展示',
     ].join('\n'))
-    assert.equal(toolCallDetails('SendSubagentMessage', {
+    assert.equal(toolCallDetails('Subagent', {
+      action: 'send',
       prompt: '继续核对剩余工具',
     }, '已继续', false), '继续核对剩余工具')
   })

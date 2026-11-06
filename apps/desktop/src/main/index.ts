@@ -164,7 +164,6 @@ import {
   BackgroundTaskWakeQueue,
   type BackgroundTaskRuntimeResolution,
 } from './background-task-wakeup.ts'
-import { SessionNotificationWakeQueue } from './session-notification-wakeup.ts'
 import { SubagentService } from './subagent-service.ts'
 import { HostOperationScheduler } from './host-operation-scheduler.ts'
 import { captureDesktopScreenshot } from './screenshot-capture.ts'
@@ -527,7 +526,6 @@ function broadcastToWindows(channel: string, payload: unknown, failureMessage: s
 
 function nudgeNotificationQueues(): void {
   void backgroundTaskWakeups?.nudge()
-  void subagentWakeups?.nudge()
 }
 
 /** 当前工作文件夹；app ready 后始终有值，启动默认目录与用户选择目录共享同一工具语义。 */
@@ -550,8 +548,6 @@ let projects: ProjectStore
 let commandSessions: CommandSessionManager
 /** 后台命令终态的内部通知队列；只负责调度，模型消息仍由 AgentSession 持久化。 */
 let backgroundTaskWakeups: BackgroundTaskWakeQueue | null = null
-/** 子代理终态的持久化唤醒队列；完整结果由子会话保存，队列只持有有界通知。 */
-let subagentWakeups: SessionNotificationWakeQueue<SubagentSettlementNotification> | null = null
 /** 子代理定义目录与运行时服务均由主进程单例持有。 */
 let subagentDefinitions: SubagentDefinitionCatalogService
 let subagents: SubagentService
@@ -955,6 +951,8 @@ async function createMainAgentSession(
         commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
         || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
       getSubagentTurnState: (turnId) => subagents.turnState(recorder.sessionId, turnId),
+      pendingSubagentSettlements: () => subagents.pendingSettlements(recorder.sessionId),
+      onSubagentSettlementDelivered: (notification) => subagents.markSettlementDelivered(notification),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation, runtime.workspaceIO?.identity),
       emit: (event) => runtime.emit(event),
@@ -2598,18 +2596,11 @@ function deliverSubagentSettlement(
   const session = runtime.session
   if (!session) throw new Error('子代理所属父会话尚未建立 Agent')
   synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
-  let handling: ReturnType<AgentSession['handleSubagentSettlement']>
   try {
-    handling = session.handleSubagentSettlement(
-      notification,
-      () => subagents.markSettlementDelivered(notification),
-    )
+    session.handleSubagentSettlement(notification)
   } catch (error) {
     reportSubagentDeliveryError(runtime, error)
-    return
   }
-  if (handling) runtime.beginWork()
-  void Promise.resolve(handling).catch((error) => reportSubagentDeliveryError(runtime, error))
 }
 
 function reportSubagentDeliveryError(
@@ -2718,7 +2709,6 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
       return { ok: false, error: '会话不存在' }
     }
     backgroundTaskWakeups?.discardSession(sessionId)
-    subagentWakeups?.discardSession(sessionId)
     if (runtimeRegistry.selected?.sessionId === sessionId) {
       const replacement = await getNewSessionRuntime()
       // 远端清理期间可以切换会话；迟到的删除结果不能覆盖用户的新选择。
@@ -3006,22 +2996,15 @@ if (primaryInstance) void app.whenReady().then(async () => {
     hostOperations,
     onState: broadcastSubagents,
     onEvent: broadcastSubagentEvent,
-    onSettlement: (notification) => subagentWakeups?.enqueue(notification),
+    onSettlement: (notification) => {
+      const runtime = runtimeRegistry.findBySessionId(notification.parentSessionId)
+      if (runtime?.session) deliverSubagentSettlement(runtime, notification)
+    },
     onParentIdle: (runtime) => {
       runtimeRegistry.runtimeBecameIdle(runtime)
       nudgeNotificationQueues()
     },
     onError: (error) => logHostIssue('error', '子代理运行失败：', error),
-  })
-  subagentWakeups = new SessionNotificationWakeQueue({
-    key: (notification) => `${notification.parentSessionId}:${notification.activationId}`,
-    sessionId: (notification) => notification.parentSessionId,
-    resolveRuntime: resolveBackgroundTaskRuntime,
-    reserveWorkStart: (runtime) => runtimeRegistry.reserveWorkStart(runtime),
-    deliveryBlocked: internalNotificationDeliveryBlocked,
-    deliver: deliverSubagentSettlement,
-    onDrop: (notification) => subagents.markSettlementDelivered(notification),
-    onError: (error) => logHostIssue('error', '子代理终态通知调度失败：', error),
   })
   commandSessions = new CommandSessionManager(
     join(app.getPath('userData'), 'command-tasks'),
@@ -3415,10 +3398,7 @@ app.on('will-quit', (event) => {
   }
   event.preventDefault()
   shutdownStarted = true
-  const closeWakeups = Promise.all([
-    backgroundTaskWakeups?.close() ?? Promise.resolve(),
-    subagentWakeups?.close() ?? Promise.resolve(),
-  ])
+  const closeWakeups = backgroundTaskWakeups?.close() ?? Promise.resolve()
   void closeWakeups
     .catch((error) => logHostIssue('error', '内部通知队列退出清理失败：', error))
     .then(() => Promise.all([

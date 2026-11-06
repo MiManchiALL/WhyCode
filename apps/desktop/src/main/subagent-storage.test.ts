@@ -30,7 +30,7 @@ describe('子代理独立持久化', () => {
 
     assert.deepEqual(await storage.readManifest(parentSessionId, journal.sessionId), manifest)
     assert.deepEqual(await storage.listManifests(parentSessionId), [manifest])
-    assert.equal((await storage.listAllManifests())[0]?.id, journal.sessionId)
+    assert.equal((await storage.allManifests().next()).value?.id, journal.sessionId)
     const directory = join(sessionsRoot, parentSessionId, 'subagents', journal.sessionId)
     await access(join(directory, 'subagent.json'))
     assert.match(await readFile(join(directory, 'transcript.jsonl'), 'utf8'), /调查调用链/)

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import {
   MAX_CONCURRENT_SUBAGENTS_PER_PARENT,
   MAX_SUBAGENT_PROMPT_PREVIEW_CHARS,
@@ -23,6 +22,7 @@ import {
   type SubagentSettlementNotification,
   type SubagentState,
   type SubagentTranscriptSnapshot,
+  type SubagentTurnActivation,
   type SubagentTurnState,
   type ToolDefinition,
   type TurnInterruptedSubagent,
@@ -38,7 +38,8 @@ import {
   createSubagentActivation,
   markSubagentSettlementDelivered,
   subagentContinuationKey,
-  subagentFallbackResult,
+  subagentResult,
+  interruptedSubagentText,
   subagentListEntry,
   subagentOutcome,
   subagentSettlement,
@@ -59,6 +60,7 @@ interface ActiveActivation {
   journal: SessionJournal
   timeline: ViewTimeline
   session: AgentSession | null
+  ready: Promise<AgentSession | null>
   cancelRequested: boolean
   suppressSettlement: boolean
   terminalReached: boolean
@@ -109,7 +111,7 @@ export class SubagentService {
   private readonly active = new Map<string, ActiveActivation>()
   private readonly preparations = new Set<ActivationPreparation>()
   private readonly activeCounts = new Map<string, number>()
-  private readonly continuationCounts = new Map<string, number>()
+  private readonly continuations = new Map<string, string>()
   private readonly coldTranscriptLoads = new Map<string, Promise<SubagentTranscriptSnapshot>>()
   private stateRevision = 0
   private eventSequence = 0
@@ -122,22 +124,20 @@ export class SubagentService {
   }
 
   async initialize(): Promise<void> {
-    for (const manifest of await this.storage.listAllManifests()) {
+    for await (const manifest of this.storage.allManifests()) {
       let current = manifest
       const last = current.activations.at(-1)!
       if (!last.outcome) {
+        const journal = await this.storage.open(current.parentSessionId, current.id)
+        const text = interruptedSubagentText(journal.initialViewEvents, last.id)
+        await journal.recoverInterruptedWork()
         current = completeSubagentManifest(
           current,
           last.id,
-          'error',
-          'WhyCode 上次退出时该子代理仍在运行，原激活无法安全重连。',
+          'aborted',
+          subagentResult('aborted', text, '应用退出时子代理尚未完成，原运行已中断。'),
         )
         await this.storage.writeManifest(current)
-      }
-      for (const activation of current.activations) {
-        if (activation.settlement !== 'pending' || !activation.outcome) continue
-        this.addContinuation(current.parentSessionId, activation.engagedPlanId)
-        this.options.onSettlement(subagentSettlement(current, activation))
       }
     }
   }
@@ -149,13 +149,15 @@ export class SubagentService {
   ): ToolDefinition[] {
     return createSubagentTools({
       launch: (request) => this.launch(parentRuntime, parentJournal, projectDir, request),
-      continue: (request) => this.continue(parentRuntime, parentJournal, projectDir, request),
+      send: (request) => this.send(parentRuntime, parentJournal, projectDir, request),
+      stop: (subagentId) => this.stop(parentJournal.sessionId, subagentId),
       list: () => this.list(parentJournal.sessionId),
     })
   }
 
   hasPendingPlanContinuation(parentSessionId: string, planId: string): boolean {
-    return (this.continuationCounts.get(subagentContinuationKey(parentSessionId, planId)) ?? 0) > 0
+    const key = subagentContinuationKey(parentSessionId, planId)
+    return [...this.continuations.values()].includes(key)
   }
 
   /** 应用级权限收窄必须同步到正在运行的子代理，不能等下一次冷激活才生效。 */
@@ -176,27 +178,70 @@ export class SubagentService {
     return (await this.storage.listManifests(parentSessionId)).map(subagentListEntry)
   }
 
+  async *pendingSettlements(parentSessionId: string): AsyncGenerator<SubagentSettlementNotification> {
+    for await (const manifest of this.storage.manifests(parentSessionId)) {
+      for (const activation of manifest.activations) {
+        if (activation.outcome && activation.settlement === 'pending') {
+          yield subagentSettlement(manifest, activation)
+        }
+      }
+    }
+  }
+
+  private async send(
+    runtime: DesktopSessionRuntime, journal: SessionJournal, projectDir: string,
+    request: SubagentContinueRequest,
+  ): Promise<SubagentLaunchResult> {
+    const active = this.ownedActivation(journal.sessionId, request.subagentId)
+    if (active) {
+      const session = await active.ready
+      if (active.cancelRequested) return { ok: false, error: '该子代理正在停止，请在停止后继续' }
+      if (session?.steerSubagent(request.prompt)) {
+        return { ok: true, subagentId: request.subagentId, description: active.taskDescription }
+      }
+      await active.done
+    }
+    return this.continue(runtime, journal, projectDir, request)
+  }
+
+  private async stop(parentSessionId: string, subagentId: string): Promise<SubagentLaunchResult> {
+    const manifest = await this.storage.readManifest(parentSessionId, subagentId)
+    const active = this.ownedActivation(parentSessionId, subagentId)
+    const preparation = [...this.preparations].find(item =>
+      item.parentSessionId === parentSessionId && item.subagentId === subagentId)
+    if (preparation) preparation.cancelled = true
+    if (active && !active.terminalReached) {
+      active.cancelRequested = true
+      active.session?.abort()
+    }
+    await preparation?.done
+    await active?.done
+    return { ok: true, subagentId, description: manifest.taskDescription }
+  }
+
   async attachmentDirectory(parentSessionId: string, subagentId: string): Promise<string> {
     return this.storage.attachmentDirectory(parentSessionId, subagentId)
   }
 
   /** 当前父 turn 的轻量事实投影；manifest 仍是唯一持久事实源。 */
   async turnState(parentSessionId: string, parentTurnId: string): Promise<SubagentTurnState> {
-    const activations = (await this.storage.listManifests(parentSessionId))
-      .flatMap((manifest) => manifest.activations
-        .filter((activation) => activation.parentTurnId === parentTurnId)
-        .map((activation) => ({
+    const entries: { startedAt: string; value: SubagentTurnActivation }[] = []
+    for await (const manifest of this.storage.manifests(parentSessionId)) {
+      for (const activation of manifest.activations) {
+        if (activation.parentTurnId !== parentTurnId) continue
+        entries.push({
           startedAt: activation.startedAt,
           value: {
             subagentId: manifest.id,
             activationId: activation.id,
-            name: manifest.definition.name,
             description: manifest.taskDescription,
-            sequence: activation.sequence,
             ...(activation.outcome ? { outcome: activation.outcome } : {}),
             ...(activation.settlement ? { settlement: activation.settlement } : {}),
           },
-        })))
+        })
+      }
+    }
+    const activations = entries
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
       .map((item) => item.value)
     return { parentTurnId, activations }
@@ -266,7 +311,7 @@ export class SubagentService {
       manifest,
       notification.activationId,
     ))
-    this.removeContinuation(manifest.parentSessionId, activation.engagedPlanId)
+    this.continuations.delete(activation.id)
   }
 
   beginParentAbort(parentSessionId: string): ParentSubagentAbort {
@@ -300,8 +345,8 @@ export class SubagentService {
 
   async forgetParent(parentSessionId: string): Promise<void> {
     await this.beginParentAbort(parentSessionId).done
-    for (const key of [...this.continuationCounts.keys()]) {
-      if (key.startsWith(`${parentSessionId}:`)) this.continuationCounts.delete(key)
+    for (const [activationId, key] of this.continuations) {
+      if (key.startsWith(`${parentSessionId}:`)) this.continuations.delete(activationId)
     }
   }
 
@@ -338,7 +383,7 @@ export class SubagentService {
     }
     const preparation = this.beginPreparation(parentJournal.sessionId)
     let journal: SessionJournal | null = null
-    let continuationAdded = false
+    let activationId: string | undefined
     try {
       this.assertPreparation(preparation, parentRuntime, parentJournal)
       const parentModelId = parentRuntime.modelId
@@ -362,6 +407,7 @@ export class SubagentService {
         now,
         MAX_SUBAGENT_PROMPT_PREVIEW_CHARS,
       )
+      activationId = activation.id
       const permission = parentRuntime.session?.permissionSnapshot
       if (!permission) throw new Error('父会话权限上下文尚未建立')
       const manifest: SubagentManifest = {
@@ -383,20 +429,16 @@ export class SubagentService {
       this.assertPreparation(preparation, parentRuntime, parentJournal)
       await this.options.scratch.ensureSubagent(parentJournal.sessionId, journal.sessionId)
       this.assertPreparation(preparation, parentRuntime, parentJournal)
-      this.addContinuation(parentJournal.sessionId, request.engagedPlanId)
-      continuationAdded = true
+      this.addContinuation(parentJournal.sessionId, activation.id, request.engagedPlanId)
       this.startActivation(parentRuntime, projectDir, manifest, journal, request.prompt)
       await this.publishState(parentJournal.sessionId)
       return {
         ok: true,
         subagentId: journal.sessionId,
-        name: request.definition.name,
         description: request.taskDescription,
       }
     } catch (error) {
-      if (continuationAdded) {
-        this.removeContinuation(parentJournal.sessionId, request.engagedPlanId)
-      }
+      if (activationId) this.continuations.delete(activationId)
       if (journal) {
         await this.storage.remove(parentJournal.sessionId, journal.sessionId).catch(() => {})
       }
@@ -424,7 +466,7 @@ export class SubagentService {
     }
     const preparation = this.beginPreparation(parentJournal.sessionId, request.subagentId)
     let previousManifest: SubagentManifest | null = null
-    let continuationAdded = false
+    let activationId: string | undefined
     try {
       this.assertPreparation(preparation, parentRuntime, parentJournal)
       let manifest = await this.storage.readManifest(parentJournal.sessionId, request.subagentId)
@@ -442,6 +484,7 @@ export class SubagentService {
         now,
         MAX_SUBAGENT_PROMPT_PREVIEW_CHARS,
       )
+      activationId = activation.id
       manifest = {
         ...manifest,
         updatedAt: now,
@@ -451,20 +494,16 @@ export class SubagentService {
       this.assertPreparation(preparation, parentRuntime, parentJournal)
       await this.options.scratch.ensureSubagent(parentJournal.sessionId, request.subagentId)
       this.assertPreparation(preparation, parentRuntime, parentJournal)
-      this.addContinuation(parentJournal.sessionId, request.engagedPlanId)
-      continuationAdded = true
+      this.addContinuation(parentJournal.sessionId, activation.id, request.engagedPlanId)
       this.startActivation(parentRuntime, projectDir, manifest, journal, request.prompt)
       await this.publishState(parentJournal.sessionId)
       return {
         ok: true,
         subagentId: request.subagentId,
-        name: manifest.definition.name,
         description: manifest.taskDescription,
       }
     } catch (error) {
-      if (continuationAdded) {
-        this.removeContinuation(parentJournal.sessionId, request.engagedPlanId)
-      }
+      if (activationId) this.continuations.delete(activationId)
       if (previousManifest) {
         await this.storage.writeManifest(previousManifest).catch((rollbackError) => {
           this.report(rollbackError)
@@ -488,6 +527,8 @@ export class SubagentService {
     const activation = manifest.activations.at(-1)!
     const timeline = new ViewTimeline((error) => this.report(error))
     let resolveDone!: () => void
+    let resolveReady!: (session: AgentSession | null) => void
+    const ready = new Promise<AgentSession | null>(resolve => { resolveReady = resolve })
     const done = new Promise<void>((resolve) => { resolveDone = resolve })
     const active: ActiveActivation = {
       parentRuntime,
@@ -498,6 +539,7 @@ export class SubagentService {
       journal,
       timeline,
       session: null,
+      ready,
       cancelRequested: false,
       suppressSettlement: false,
       terminalReached: false,
@@ -505,7 +547,7 @@ export class SubagentService {
     }
     this.active.set(manifest.id, active)
     parentRuntime.beginExternalWork()
-    void this.runActivation(active, projectDir, manifest, prompt)
+    void this.runActivation(active, projectDir, manifest, prompt, resolveReady)
       .catch((error) => this.report(error))
       .finally(() => resolveDone())
   }
@@ -515,6 +557,7 @@ export class SubagentService {
     projectDir: string,
     initialManifest: SubagentManifest,
     prompt: string,
+    resolveReady: (session: AgentSession | null) => void,
   ): Promise<void> {
     let outcome: SubagentOutcome = 'error'
     let resultText = ''
@@ -542,7 +585,7 @@ export class SubagentService {
       })
       active.session = session
       if (active.cancelRequested) throw new Error('父会话已停止，本次子代理激活已取消。')
-      const inputId = randomUUID()
+      const inputId = active.activationId
       await active.journal.recordUserInputWithId(inputId, prompt, true)
       if (active.cancelRequested) throw new Error('父会话已停止，本次子代理激活已取消。')
       this.broadcastChildEvent(active, {
@@ -552,19 +595,20 @@ export class SubagentService {
         startsTurn: true,
       })
       const handling = session.handleUserMessage(prompt, false, [], inputId)
+      resolveReady(session)
       const stopReason = handling ? await handling : 'error'
       resultText = session.latestTurnAssistantText
       outcome = subagentOutcome(stopReason, session.modelFinishReason)
-      if (outcome === 'error' && errorMessage) resultText = errorMessage
     } catch (error) {
       outcome = active.cancelRequested ? 'aborted' : 'error'
-      resultText = error instanceof Error ? error.message : String(error)
-      errorMessage = resultText
+      resultText = session?.latestTurnAssistantText ?? ''
+      errorMessage = error instanceof Error ? error.message : String(error)
     } finally {
+      resolveReady(null)
       active.session = null
       active.terminalReached = true
-      if (!resultText.trim()) resultText = subagentFallbackResult(outcome)
-      let manifest = await this.finishActivation(
+      resultText = subagentResult(outcome, resultText, outcome === 'completed' ? undefined : errorMessage)
+      const manifest = await this.finishActivation(
         initialManifest.parentSessionId,
         initialManifest.id,
         active.activationId,
@@ -599,10 +643,8 @@ export class SubagentService {
       await this.publishState(active.parentSessionId)
       if (manifest) {
         const activation = manifest.activations.find((item) => item.id === active.activationId)!
-        if (active.suppressSettlement) {
-          manifest = markSubagentSettlementDelivered(manifest, active.activationId)
-          await this.storage.writeManifest(manifest).catch((error) => this.report(error))
-          this.removeContinuation(manifest.parentSessionId, activation.engagedPlanId)
+        if (active.suppressSettlement || this.closing) {
+          this.continuations.delete(activation.id)
         } else {
           try {
             this.options.onSettlement(subagentSettlement(manifest, activation))
@@ -731,18 +773,9 @@ export class SubagentService {
     else this.activeCounts.set(parentSessionId, count - 1)
   }
 
-  private addContinuation(parentSessionId: string, planId?: string): void {
+  private addContinuation(parentSessionId: string, activationId: string, planId?: string): void {
     if (!planId) return
-    const key = subagentContinuationKey(parentSessionId, planId)
-    this.continuationCounts.set(key, (this.continuationCounts.get(key) ?? 0) + 1)
-  }
-
-  private removeContinuation(parentSessionId: string, planId?: string): void {
-    if (!planId) return
-    const key = subagentContinuationKey(parentSessionId, planId)
-    const count = this.continuationCounts.get(key) ?? 0
-    if (count <= 1) this.continuationCounts.delete(key)
-    else this.continuationCounts.set(key, count - 1)
+    this.continuations.set(activationId, subagentContinuationKey(parentSessionId, planId))
   }
 
   private report(error: unknown): void {

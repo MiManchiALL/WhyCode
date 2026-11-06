@@ -15,7 +15,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     )
 
     const launched = await tools[0]!.execute(
-      { name: 'explore', description: '核对调用链', prompt: '检查调用链并给出证据' },
+      { action: 'spawn', name: 'explore', description: '核对调用链', prompt: '检查调用链并给出证据' },
       fixture.toolContext('turn-1', 'tool-1'),
     )
     assert.equal(launched.isError, false)
@@ -44,22 +44,21 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     assert.equal(firstState.subagents[0]?.activationCount, 1)
     assert.equal(firstState.subagents[0]?.status, 'completed')
     assert.equal(firstState.subagents[0]?.description, '核对调用链')
-    const listed = await tools[2]!.execute({}, fixture.toolContext('turn-list', 'tool-list'))
+    const listed = await tools[0]!.execute({ action: 'list' }, fixture.toolContext('turn-list', 'tool-list'))
     assert.equal(listed.isError, false)
     assert.deepEqual(JSON.parse(listed.data).subagents, [{
-      name: 'explore',
       subagent_id: subagentId,
       description: '核对调用链',
       status: 'completed',
     }])
 
     const continuations = await Promise.all([
-      tools[1]!.execute(
-        { subagent_id: subagentId, prompt: '继续核对遗漏的边界' },
+      tools[0]!.execute(
+        { action: 'send', subagent_id: subagentId, prompt: '继续核对遗漏的边界' },
         fixture.toolContext('turn-2', 'tool-2'),
       ),
-      tools[1]!.execute(
-        { subagent_id: subagentId, prompt: '继核对同一个遗漏边界' },
+      tools[0]!.execute(
+        { action: 'send', subagent_id: subagentId, prompt: '继核对同一个遗漏边界' },
         fixture.toolContext('turn-3', 'tool-3'),
       ),
     ])
@@ -112,7 +111,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     assert.match(request, /ReadFile/)
     assert.doesNotMatch(request, /AskUserQuestion/)
     assert.doesNotMatch(request, /RunCommand/)
-    assert.doesNotMatch(request, /SendSubagentMessage/)
+    assert.ok(!fixture.modelCalls[0]?.tools?.some(tool => tool.name === 'Subagent'))
     await fixture.service.close()
   })
 
@@ -128,15 +127,15 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
       fixture.projectDir,
     )
     const launched = await tools[0]!.execute(
-      { name: 'explore', description: '验证固定模型', prompt: '完成首次任务' },
+      { action: 'spawn', name: 'explore', description: '验证固定模型', prompt: '完成首次任务' },
       fixture.toolContext('turn-model-1', 'tool-model-1'),
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
     assert.ok(subagentId)
     await fixture.waitForSettlements(1)
 
-    await tools[1]!.execute(
-      { subagent_id: subagentId, prompt: '继续同一任务' },
+    await tools[0]!.execute(
+      { action: 'send', subagent_id: subagentId, prompt: '继续同一任务' },
       fixture.toolContext('turn-model-2', 'tool-model-2'),
     )
     await fixture.waitForSettlements(2)
@@ -157,7 +156,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     )
     const results = await Promise.all(Array.from({ length: 9 }, (_, index) =>
       tools[0]!.execute(
-        { name: 'explore', description: `并行调查 ${index + 1}`, prompt: `并行调查 ${index + 1}` },
+        { action: 'spawn', name: 'explore', description: `并行调查 ${index + 1}`, prompt: `并行调查 ${index + 1}` },
         fixture.toolContext(`turn-${index}`, `tool-${index}`),
       )))
 
@@ -168,7 +167,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     await fixture.waitForSettlements(8)
     const instances = await fixture.service.list(fixture.parentJournal.sessionId)
     assert.equal(new Set(instances.map(instance => instance.subagentId)).size, 8)
-    assert.ok(instances.every(instance => instance.name === 'explore'))
+    assert.ok(instances.every(instance => instance.status === 'completed'))
     assert.equal(fixture.runtime.busy, false)
     await fixture.service.close()
   })
@@ -183,7 +182,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     )
 
     const launched = await tools[0]!.execute(
-      { name: 'explore', description: '持续检查证据', prompt: '持续检查直到证据充分' },
+      { action: 'spawn', name: 'explore', description: '持续检查证据', prompt: '持续检查直到证据充分' },
       fixture.toolContext('turn-long', 'tool-long'),
     )
 
@@ -202,7 +201,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     })
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const launched = await tools[0]!.execute(
-      { name: 'explore', description: '检查失败交付', prompt: '检查目录后给出结论' },
+      { action: 'spawn', name: 'explore', description: '检查失败交付', prompt: '检查目录后给出结论' },
       fixture.toolContext('turn-error', 'tool-error'),
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
@@ -219,7 +218,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     await fixture.service.close()
   })
 
-  it('父会话停止会取消激活并确认终态，但不再触发自动续轮', async () => {
+  it('父会话停止会取消激活并保留待交付终态，不触发自动续轮', async () => {
     const started = deferred<void>()
     const release = deferred<void>()
     const fixture = await createFixture([], async () => {
@@ -233,7 +232,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
       fixture.projectDir,
     )
     const launched = await tools[0]!.execute(
-      { name: 'explore', description: '等待停止验证', prompt: '等待父会话停止' },
+      { action: 'spawn', name: 'explore', description: '等待停止验证', prompt: '等待父会话停止' },
       fixture.toolContext('turn-stop', 'tool-stop'),
     )
     assert.equal(launched.isError, false)
@@ -253,7 +252,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
       'turn-stop',
     )
     assert.equal(state.activations[0]?.outcome, 'aborted')
-    assert.equal(state.activations[0]?.settlement, 'delivered')
+    assert.equal(state.activations[0]?.settlement, 'pending')
     await fixture.service.close()
   })
 
@@ -272,7 +271,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     })
     const tools = fixture.service.createTools(fixture.runtime, fixture.parentJournal, fixture.projectDir)
     const launched = await tools[0]!.execute(
-      { name: 'explore', description: '关闭时的调查', prompt: '检查当前项目' },
+      { action: 'spawn', name: 'explore', description: '关闭时的调查', prompt: '检查当前项目' },
       fixture.toolContext('turn-shutdown', 'tool-shutdown'),
     )
     const subagentId = launched.data.match(/[0-9a-f-]{36}/u)?.[0]
@@ -284,6 +283,6 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     const history = JSON.stringify(journal.initialMessages)
     assert.match(history, /whycode-turn-aborted.*process-interruption/)
     assert.doesNotMatch(history, /用户主动停止/)
-    assert.equal(fixture.settlements[0]?.outcome, 'aborted')
+    assert.equal(fixture.settlements.length, 0)
   })
 })

@@ -53,8 +53,7 @@ describe('assistant 输出协议完整性', () => {
       doStream: async () => call++ === 0
         ? finalStep(JSON.stringify({
             subagent_id: '22222222-2222-4222-8222-222222222222',
-            activation_id: '33333333-3333-4333-8333-333333333333',
-            name: '探索代理',
+            description: '调查调用链',
             outcome: 'completed',
             result: '不应展示',
           }))

@@ -31,6 +31,8 @@ import {
 } from '../checkpoints/manager.ts'
 import {
   autoCompactThreshold,
+  compactTailBudget,
+  estimateMessageTokens,
   estimateContextTokens,
   estimateMessagesTokens,
   type TokenBaseline,
@@ -42,6 +44,7 @@ import {
 } from '../context/usage.ts'
 import { microcompact } from '../context/microcompact.ts'
 import { compactMessages } from '../context/compact.ts'
+import { findTrailingTurnInputBatchStart } from '../context/compact-boundary.ts'
 import { latestUserTurnIndex, recentUserPdfIds, userTurn, withUserTurn, withoutConversationMetadata } from '../context/user-turn.ts'
 import { RestoredDraftConflictError, type SessionRecorder } from '../session/types.ts'
 import {
@@ -152,7 +155,7 @@ import {
   rebuildSubagentCatalog,
   subagentCatalogUpdate,
 } from '../subagents/context.ts'
-import { createSubagentSettlementMessage } from '../subagents/notification.ts'
+import { createSubagentSettlementMessage, isSubagentSettlementText } from '../subagents/notification.ts'
 import {
   createSubagentTurnStateMessage,
   hasOutstandingSubagentActivations,
@@ -249,6 +252,9 @@ export interface AgentSessionOptions {
   hasPendingTaskPlanContinuation?: (planId: string) => boolean
   /** 宿主从持久事实源投影当前父 turn 的子代理激活状态。 */
   getSubagentTurnState?: (turnId: string) => Promise<SubagentTurnState>
+  /** 用户请求的 Main 执行阶段按需扫描待交付结果；冷恢复本身不请求模型。 */
+  pendingSubagentSettlements?: () => AsyncIterable<SubagentSettlementNotification>
+  onSubagentSettlementDelivered?: (notification: SubagentSettlementNotification) => Promise<void>
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
@@ -338,6 +344,7 @@ export class AgentSession {
   /** 仅显式用户输入恢复自动接续；停止和冷恢复保留队列，但不授权执行。 */
   private queueAutoDrain = false
   private taskNotifications: QueuedTaskNotification[] = []
+  private pendingSubagentResults: AsyncIterator<SubagentSettlementNotification> | null = null
   private running = false
   /** 当前步骤的中止器：turn 级取消与 urgent 插话都经由它，用 reason 区分意图 */
   private currentStepAbort: AbortController | null = null
@@ -400,7 +407,7 @@ export class AgentSession {
   private userQuestionsEnabled: boolean
   /** 最近一个稳定模型步骤的结束原因，供一次性子代理激活映射可靠终态。 */
   private lastFinishReason: string | null = null
-  /** 当前 turn 最近一个已提交的 assistant 正文；新 turn 清空，不能回落到历史回复。 */
+  /** 当前 turn 最近一份正文，包含最终失败/停止时保留的草稿；不回落到历史激活。 */
   private lastTurnAssistantText = ''
   /** 完整共识任务期间由 Coordinator 持有最终 idle，避免 Main 与任务终点之间出现假空闲。 */
   private terminalStatusManaged = false
@@ -1086,39 +1093,39 @@ export class AgentSession {
       this.wakeRunLoop()
       return
     }
-    return this.startTurn([item.message], [], undefined, [], [item], true)
+    return this.startTurn([item.message], [], undefined, [], [item], true, 'internal')
   }
 
-  /** 子代理终态与后台命令共用稳定步骤注入语义，但保留独立协议和交接确认。 */
+  /** 只唤醒正在运行的父回合；空闲或已停止时由磁盘保留到下一次用户输入。 */
   handleSubagentSettlement(
     notification: SubagentSettlementNotification,
     onDelivered?: () => void | Promise<void>,
-  ): Promise<StopReason> | void {
+  ): void {
     if (this.options.promptContext.discussion || this.protocolRound || this.options.promptContext.subagent) {
-      throw new Error('子代理终态只在父 Main 执行阶段可用')
-    }
-    if (
-      notification.parentTurnId === this.activeTurn?.id
-      && (this.opAbort?.signal.aborted || this.abortRequestedDuringFinalization)
-    ) {
-      void (async () => { await onDelivered?.() })().catch((error) => this.options.emit({
-        type: 'error',
-        message: `丢弃已停止 turn 的子代理终态失败：${error instanceof Error ? error.message : String(error)}`,
-        recoverable: true,
-      }))
       return
     }
+    if (!this.running || !this.opAbort || this.opAbort.signal.aborted || this.abortRequestedDuringFinalization) return
+    if (this.deliveredSubagentActivations.has(notification.activationId)
+      || this.taskNotifications.some(item => 'activationId' in item.notification
+        && item.notification.activationId === notification.activationId)) return
     const item: QueuedTaskNotification = {
-      notification: structuredClone(notification),
+      notification,
       message: createSubagentSettlementMessage(notification),
-      onDelivered,
+      onDelivered: onDelivered ?? (() => this.options.onSubagentSettlementDelivered?.(notification)),
     }
-    if (this.isBusy || findPendingUserQuestion(this.messages)) {
-      this.taskNotifications.push(item)
-      this.wakeRunLoop()
-      return
-    }
-    return this.startTurn([item.message], [], undefined, [], [item], true)
+    this.taskNotifications.push(item)
+    this.wakeRunLoop()
+  }
+
+  /** 父模型追加给运行中子代理的任务指示；不取消当前工具。 */
+  steerSubagent(text: string): boolean {
+    if (!this.options.promptContext.subagent) throw new Error('只有子代理可以接收父模型指示')
+    if (!this.running || !this.opAbort || this.opAbort.signal.aborted) return false
+    const item = createUserInput(text, [], undefined, [], [])
+    item.urgent = true
+    this.queue.push(item)
+    this.wakeRunLoop()
+    return true
   }
 
   /** 只读检查最新用户根回合的全部内部 turn，不由 Renderer 推测文件或命令副作用。 */
@@ -1255,7 +1262,7 @@ export class AgentSession {
         if (startedMain) throw new Error('编辑后的回合已经启动')
         startedMain = true
         accept()
-        const notifications = this.drainTaskNotifications()
+        const notifications = this.drainTaskNotifications([message])
         return this.startTurn(
           [message, ...notifications.map((item) => item.message)],
           [],
@@ -1333,9 +1340,10 @@ export class AgentSession {
       : undefined
     const delivered = (alreadyQueued || item.persisted) && !rootInputId ? [item] : []
     if (!delivered.length) this.activatePdfAttachments(item.pdfAttachments)
-    const notifications = this.drainTaskNotifications()
+    const message = queuedMessageForModel(item)
+    const notifications = this.drainTaskNotifications([message])
     return this.startTurn(
-      [queuedMessageForModel(item), ...notifications.map((notification) => notification.message)],
+      [message, ...notifications.map((notification) => notification.message)],
       delivered,
       rootInputId,
       item.skills,
@@ -1431,25 +1439,8 @@ export class AgentSession {
     }
     if (this.opAbort) this.opAbort.abort(reason)
     else if (this.running) this.abortRequestedDuringFinalization = true
-    this.discardCurrentTurnSubagentNotifications()
+    this.taskNotifications = this.taskNotifications.filter(item => !('activationId' in item.notification))
     this.wakeRunLoop()
-  }
-
-  private discardCurrentTurnSubagentNotifications(): void {
-    const turnId = this.activeTurn?.id
-    if (!turnId) return
-    const retained: QueuedTaskNotification[] = []
-    const discarded: QueuedTaskNotification[] = []
-    for (const item of this.taskNotifications) {
-      const notification = item.notification
-      if ('activationId' in notification && notification.parentTurnId === turnId) {
-        discarded.push(item)
-      } else {
-        retained.push(item)
-      }
-    }
-    this.taskNotifications = retained
-    if (discarded.length > 0) void this.confirmNotificationsDelivered(discarded)
   }
 
   private pauseQueuedInputs(): void {
@@ -1484,10 +1475,37 @@ export class AgentSession {
     this.queue.splice(Math.min(queued.index, this.queue.length), 0, queued.message)
   }
 
-  private drainTaskNotifications(): QueuedTaskNotification[] {
-    const drained = this.taskNotifications
-    this.taskNotifications = []
+  private drainTaskNotifications(extraInputs: readonly ModelMessage[] = []): QueuedTaskNotification[] {
+    const start = findTrailingTurnInputBatchStart(this.messages)
+    const unconsumed = start === null ? [] : this.messages.slice(start)
+    let budget = compactTailBudget(this.currentModelSelection().model.capabilities)
+      - estimateMessagesTokens(unconsumed)
+      - estimateMessagesTokens(extraInputs)
+    const drained: QueuedTaskNotification[] = []
+    while (this.taskNotifications.length) {
+      const next = this.taskNotifications[0]!
+      if ('activationId' in next.notification) {
+        // 先完整交付能放下的结果；本批已有消息时把下一份留到模型消费之后。
+        if (estimateMessageTokens(next.message) > budget) {
+          if (drained.length || unconsumed.some(message => isSubagentSettlementText(modelMessageText(message)))) break
+          if (budget < estimateMessageTokens(createSubagentSettlementMessage({ ...next.notification, resultText: '' })) + 64) break
+          next.message = createSubagentSettlementMessage(next.notification, budget)
+        }
+      }
+      budget -= estimateMessageTokens(next.message)
+      drained.push(this.taskNotifications.shift()!)
+    }
     return drained
+  }
+
+  private async loadPendingSubagentResults(): Promise<void> {
+    // 持久结果按需预取，内存不驻留整个历史的结果正文。
+    while (this.pendingSubagentResults && this.taskNotifications.length < 8) {
+      const next = await this.pendingSubagentResults.next()
+      if (next.done) this.pendingSubagentResults = null
+      else this.handleSubagentSettlement(next.value)
+      if (this.opAbort?.signal.aborted) break
+    }
   }
 
   private hasPendingMessages(): boolean {
@@ -1496,7 +1514,7 @@ export class AgentSession {
 
   private hasRunnablePendingMessages(): boolean {
     return (this.queueAutoDrain && this.queue.length > 0)
-      || (this.taskNotifications.length > 0 && !findPendingUserQuestion(this.messages))
+      || (this.taskNotifications.some(item => !('activationId' in item.notification)) && !findPendingUserQuestion(this.messages))
   }
 
   private hasMidTurnInput(): boolean {
@@ -1507,10 +1525,11 @@ export class AgentSession {
     // 收尾期间收到的立即插话已无法进入上一回合，优先交付该条。
     const index = this.queue.findIndex((item) => item.urgent)
     const [next] = this.queueAutoDrain ? this.queue.splice(Math.max(0, index), 1) : []
-    const notifications = this.drainTaskNotifications()
+    const input = next ? [queuedMessageForModel(next)] : []
+    const notifications = this.drainTaskNotifications(input)
     return this.startTurn(
       [
-        ...(next ? [queuedMessageForModel(next)] : []),
+        ...input,
         ...notifications.map((item) => item.message),
       ],
       next ? [next] : [],
@@ -1518,6 +1537,7 @@ export class AgentSession {
       next?.skills,
       notifications,
       !next,
+      next ? 'user' : 'internal',
     )
   }
 
@@ -1570,11 +1590,10 @@ export class AgentSession {
 
   private rememberDeliveredSubagentNotifications(
     notifications: readonly QueuedTaskNotification[],
-    turnId: string,
   ): void {
     for (const item of notifications) {
       const notification = item.notification
-      if ('activationId' in notification && notification.parentTurnId === turnId) {
+      if ('activationId' in notification) {
         this.deliveredSubagentActivations.add(notification.activationId)
       }
     }
@@ -1584,7 +1603,7 @@ export class AgentSession {
   private async injectQueuedMidTurn(): Promise<boolean> {
     const drained = this.queue.filter((item) => item.urgent)
     if (drained.length) this.queue = this.queue.filter((item) => !item.urgent)
-    const notifications = this.drainTaskNotifications()
+    const notifications = this.drainTaskNotifications(drained.map(queuedMessageForModel))
     const injected: ModelMessage[] = [
       ...drained.map(item => {
         const message = queuedMessageForModel(item)
@@ -1616,7 +1635,7 @@ export class AgentSession {
       }
       this.messages.push(...injected)
       for (const item of drained) this.activatePdfAttachments(item.pdfAttachments)
-      this.rememberDeliveredSubagentNotifications(notifications, this.activeTurn.id)
+      this.rememberDeliveredSubagentNotifications(notifications)
       await this.confirmNotificationsDelivered(notifications)
       this.skillTurn.add(drained.flatMap((item) => item.skills))
       for (const item of drained) this.options.emit({ type: 'message-injected', ...queuedUserMessage(item) })
@@ -1640,6 +1659,9 @@ export class AgentSession {
     this.turnInterruptionContext = null
     this.activeSubagentTurnState = null
     this.deliveredSubagentActivations.clear()
+    // 用户请求及其协商执行阶段可以读取历史结果，后台任务通知不获得此授权。
+    this.pendingSubagentResults = resumeTaskPlanFromNotification || this.protocolRound || this.options.promptContext.discussion
+      ? null : this.options.pendingSubagentSettlements?.()[Symbol.asyncIterator]() ?? null
     const turnId = crypto.randomUUID()
     const initialMessageCount = this.messages.length
     if (inputSource === 'user') {
@@ -1715,6 +1737,8 @@ export class AgentSession {
       this.running = false
       this.pauseQueuedInputs()
       this.activeSubagentTurnState = null
+      await this.pendingSubagentResults?.return?.()
+      this.pendingSubagentResults = null
       this.skillTurn.finish()
       this.emitContextUsage()
       this.abortRequestedDuringFinalization = false
@@ -1729,7 +1753,7 @@ export class AgentSession {
       return 'error'
     }
     for (const item of deliveredInputs) this.activatePdfAttachments(item.pdfAttachments)
-    this.rememberDeliveredSubagentNotifications(initialTaskNotifications, turnId)
+    this.rememberDeliveredSubagentNotifications(initialTaskNotifications)
     await this.confirmNotificationsDelivered(initialTaskNotifications)
     for (const [index, item] of deliveredInputs.entries()) {
       emit({ type: 'message-injected', ...queuedUserMessage(item), startsTurn: inputSource === 'user' && index === 0 })
@@ -1770,6 +1794,7 @@ export class AgentSession {
           stepsSincePlanReminder = 0
         }
         await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
+        await this.loadPendingSubagentResults()
         if (this.hasMidTurnInput()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
           if (injectedUserMessage) steeringDecisionPending = true
@@ -1831,6 +1856,7 @@ export class AgentSession {
           }
           break
         }
+        await this.loadPendingSubagentResults()
         if (this.hasMidTurnInput()) {
           const injectedUserMessage = await this.injectQueuedMidTurn()
           if (injectedUserMessage) steeringDecisionPending = true
@@ -1931,6 +1957,8 @@ export class AgentSession {
     this.activeTurn = null
     this.opAbort = null
     this.activeSubagentTurnState = null
+    await this.pendingSubagentResults?.return?.()
+    this.pendingSubagentResults = null
     this.turnInterruptionContext = null
     this.deliveredSubagentActivations.clear()
     this.skillTurn.finish()
@@ -2406,10 +2434,15 @@ export class AgentSession {
   ): Promise<StepResult> {
     const { emit } = this.options
     let uncommittedStepFailed = false
+    let failedOutput = ''
     let contextRecoveryUsed = false
     const discardFailedStep = (retainOutput: boolean) => {
       if (!uncommittedStepFailed) return
-      if (retainOutput) emit({ type: 'step-output-retained' })
+      if (retainOutput) {
+        if (failedOutput.trim()) this.lastTurnAssistantText = failedOutput.trim()
+        emit({ type: 'step-output-retained' })
+      }
+      failedOutput = ''
       emit({ type: 'step-discarded' })
       uncommittedStepFailed = false
     }
@@ -2421,7 +2454,10 @@ export class AgentSession {
         const attempt = (recovery?: { error: ModelContextOverflowError; onRetry: () => void }) =>
           this.runOneStepAttempt(
             usage, stepAbort, planExecutionEngaged, consumeInterruptionBoundary,
-            preserveTaskPlanOnFinalText, () => { uncommittedStepFailed = true }, recovery,
+            preserveTaskPlanOnFinalText, (text) => {
+              uncommittedStepFailed = true
+              failedOutput = text
+            }, recovery,
           )
         try {
           return await attempt()
@@ -2485,7 +2521,7 @@ export class AgentSession {
     planExecutionEngaged: boolean,
     consumeInterruptionBoundary: boolean,
     preserveTaskPlanOnFinalText: boolean,
-    onUncommittedFailure: () => void,
+    onUncommittedFailure: (text: string) => void,
     recovery?: { error: ModelContextOverflowError; onRetry: () => void },
   ): Promise<StepResult> {
     if (this.options.sessionRecorder && this.persistenceFailed) {
@@ -2507,6 +2543,11 @@ export class AgentSession {
     let toolExecution: ToolExecutionBatch | null = null
     let taskPlanFinalized = false
     let mcpStep: McpStepBinding | null = null
+    const textBlocks: string[] = []
+    const textGate = new AssistantTextGate((event) => {
+      textBlocks[event.textBlock] = (textBlocks[event.textBlock] ?? '') + event.text
+      if (!this.protocolRound) emit(event)
+    })
     this.taskPlan?.beginStep()
     try {
       await this.refreshSubagentCatalog()
@@ -2581,10 +2622,6 @@ export class AgentSession {
       let thinkingStartedAt: number | null = null
       let stepTotalTokens = 0
       let finishReason: string | null = null
-      const textGate = new AssistantTextGate((event) => {
-        if (!this.protocolRound) emit(event)
-      })
-
       for await (const part of readModelStream(result.fullStream)) {
         switch (part.type) {
           case 'reasoning-delta': {
@@ -2656,6 +2693,7 @@ export class AgentSession {
           '保存工具调用',
         )
         appendOrderedMessages(this.messages, head)
+        this.updateLastTurnAssistantText(canonicalResponseMessages)
         toolExecution = new ToolExecutionBatch({
           messages: canonicalResponseMessages,
           abort: stepAbort,
@@ -2807,7 +2845,10 @@ export class AgentSession {
         this.taskPlan?.discardStep()
       }
       if (toolExecution) emit({ type: 'step-committed' })
-      else onUncommittedFailure()
+      else {
+        textGate.finish()
+        onUncommittedFailure(textBlocks.join('\n\n'))
+      }
       throw error
     }
   }

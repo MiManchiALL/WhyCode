@@ -31,7 +31,7 @@ it('父轮次等待子代理、接收立即插话后只折叠到最终回复，�
     },
   })
   runtime.journal = journal
-  const child = { subagentId: randomUUID(), activationId: randomUUID(), name: 'explore', description: '核查资料' }
+  const child = { subagentId: randomUUID(), activationId: randomUUID(), description: '核查资料' }
   let delivered = false
   const session = new AgentSession({
     model: modelEntry(languageModel(() => finalStream(replies.shift() ?? assert.fail('意外的模型请求')))),
@@ -43,7 +43,6 @@ it('父轮次等待子代理、接收立即插话后只折叠到最终回复，�
       parentTurnId,
       activations: [{
         ...child,
-        sequence: 1,
         ...(delivered ? { outcome: 'completed', settlement: 'delivered' } as const : {}),
       }],
     }),

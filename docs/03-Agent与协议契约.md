@@ -248,9 +248,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `AskUserQuestion` | `{questions:[...]}`，1～6 问；每题标题、问题与 2～4 个互斥选项 |
 | `Present` | `{files:[{path,description?}]}`；声明本次最终回答的成品文件，精确约束见 §3.9 |
 | `Skill` | `{skillId,resourcePath?}`；只读当前根任务冻结 Skill |
-| `Subagent` | `{name,description,prompt}`；按唯一定义名称启动，立即返回实例的稳定 `subagent_id` |
-| `SendSubagentMessage` | `{subagent_id,prompt}`；仅继续当前父会话已终态子代理 |
-| `ListSubagents` | `{}`；列出当前父会话保留实例的 name、subagent_id、任务描述与状态 |
+| `Subagent` | `{action,name?,description?,prompt?,subagent_id?}`；`spawn/send/stop/list` 启动、发送消息、停止或发现当前会话的子代理，参数组合见 §6.2 |
 
 `Glob` 与 `Grep` 每次执行共用 30 秒总预算，覆盖执行内的目录校验、搜索和回退；本地与 SSH 相同，不开放单次超时参数。到期取消搜索进程或匹配 Worker，返回明确的失败工具结果供模型继续处理；不把超时视为无匹配、成功的部分结果或用户停止，不取消所属 Agent 回合。原生搜索按路径排序以稳定分页；无路径分隔符的 glob 匹配各层文件名。
 
@@ -517,11 +515,22 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 - 已通知状态仅由当前有效历史中的基线和增量还原，不保存独立的“已通知名称”集合。回滚或 Fork 移除通知而配置仍存在时，下一请求补发；冷恢复沿用相同规则。目录变化不单独唤醒模型。
 - 只有成功完整压缩才合并更新顶部基线，原基线和全部增量不参与摘要；microcompact、普通请求和恢复均不合并。
 
-`Subagent` 用 `name` 选择定义，同一 name 可同时启动多个实例；本次任务的 `description` 保存 3～5 词短描述，返回独立稳定的 `subagent_id`。`ListSubagents` 只提供实例的 name、subagent_id、任务描述和状态，不暴露完整 prompt、结果或 transcript；后续交互使用实例 ID。删除或修改定义不改变已创建实例的冻结快照。
+`Subagent` 只接受对应 action 的参数：
 
-终态由运行时以 settlement 通知父会话，不依赖子模型主动调用汇报工具。settlement 的 outcome 为 `completed | error | aborted | limit | refusal`，结果最多保留 Unicode 安全的 48,000 字符。
+- `spawn`：`name,description,prompt`。按名称选择定义，短描述标识本次任务，返回稳定 `subagent_id`；同一 name 可同时启动多个实例。
+- `send`：`subagent_id,prompt`。运行中在下一稳定步骤边界追加，不打断当前工具；已结束则从同一实例历史冷启动新 activation。
+- `stop`：`subagent_id`。仅停止当前父会话拥有的指定实例，等待资源释放，保留结果和历史，之后仍可 send 继续。
+- `list`：无其它参数。只返回当前会话保留实例的 `subagent_id,description,status`，不返回完整 prompt、结果或 transcript。
 
-每次 activation 有独立 transcript、TaskPlanState 和 scratch；新建激活只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载。`SendSubagentMessage` 只能继续当前父会话拥有且已终态的 ID，从 transcript 冷启动；不能并发激活同一 ID。子代理不能提问用户、Fork、操作父计划或扩权。
+后续交互使用实例 ID。删除或修改定义不改变已创建实例的冻结快照，不能并发激活同一 ID。
+
+终态由运行时生成，不依赖子模型主动汇报。模型可见 settlement 只含 `subagent_id,description,outcome,result`；outcome 为 `completed | error | aborted | limit | refusal`，父 turn 和 activation 身份仅供内部归属与交付确认。结果不附带继续旧任务的指令。
+
+结果正文最多保留 120,000 个 UTF-16 长度单位，不截断 Unicode 代理对。正常结束采用最近一次可交付正文；取消或最终失败也保留本次运行已产生的最近正文及半截文本，并附未完成说明，不混入推理、工具参数或失败重试已丢弃的草稿。流式片段不能证明模型已完成，只有持久终态确认 completed。进程中断只能恢复已落盘正文，未写入的片段不可恢复；恢复为 aborted，真正的执行失败仍为 error。
+
+父请求按现有压缩尾部预算接收结果：可放下的正文完整交付，多份过长结果留待后续模型步骤；单份仍超预算时进一步裁剪。截断说明置于 result 末尾，未完成结果即使截断也保留未完成说明。子会话时间线保留已记录全文；父历史压缩不能摘要或拆散尚未消费的交付消息。
+
+每个实例有独立 transcript、TaskPlanState 和 scratch；新建实例只接收父模型的自包含委派，不复制父完整历史、父计划、用户问题卡或临时控制状态。终态后 AgentSession 立即卸载，后续 activation 沿用该实例的独立历史。子代理不能提问用户、Fork、操作父计划或扩权。
 
 内置 Explore、Reviewer、General 均可用 `ReadFile` 读取文本与 PDF；具备视觉能力时可读取图片与 PDF 页面图，并提供本地 `CaptureScreenshot`。Reviewer 和 General 加载内置 Office Skill 时可自动准备环境，再通过命令执行工作流；Explore 没有命令权限，只获得环境未准备的说明。Reviewer 无专用文件写入工具；动态视觉能力仍由子代理自身模型决定。越界访问和截图沿用父会话审批链。
 
@@ -531,9 +540,9 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 
 新建子代理的模型在宿主创建边界冻结：未固定时继承父会话当前模型，固定时只能引用当前已配置连接；推理档位收敛到目标模型能力闭集。后续 continuation 使用 manifest 中的原模型快照，不重新继承父模型或读取新的全局选择。
 
-settlement 先随子 manifest 持久化为 pending；父 transcript 写稳通知后才标记 delivered。父会话运行中时在下一稳定边界插入，空闲恢复产生的旧终态才开启隐藏续轮；完整压缩不能摘要或拆散未消费通知。父 Stop 或删除会中止激活并直接确认取消终态，不再唤醒父会话；仅当 Stop 实际取消未完成子代理时，同一持久中断标记附带这些子代理的稳定 ID 与任务描述。应用退出产生的未交付终态留待下次恢复，单纯切换会话不影响运行。
+settlement 先随子 manifest 持久化为 pending；父 transcript 写稳通知后才标记 delivered。运行中的父回合在稳定边界接收终态；空闲、Stop 或应用重启均不因子代理结果自动请求模型。完整、中断及混合结果统一保留到下一次用户请求，沿用正常工具目录和中断标记，不另开报告回合。父 Stop 会中止未结束激活并保留未交付结果；仅当本次确实取消了子代理时，同一持久中断标记附带其稳定 ID 与任务描述。删除父会话同时清理子记录，单纯切换会话不影响运行。
 
-同一父 turn 内以 `(parentTurnId, activationId)` 跟踪启动和继续产生的全部 activation。每次模型请求在尾部投影当前总数、终态数、已交付数、任务描述和逐 activation 状态；投影不写入 transcript，turn 结束后不再出现，结果正文只存在于 settlement 消息。
+同一父 turn 内以 `(parentTurnId, activationId)` 跟踪启动和继续产生的 activation。每次请求尾部的模型投影仅含 `remaining` 和 `subagents`；列表只保留尚未交付的 `subagent_id,description,status`。status 为 running 或终态尚待交付的 awaiting_delivery，已交付项省略；本 turn 全部交付后返回零与空列表。投影不写入 transcript，turn 结束后不再出现，结果正文只存在于 settlement 消息。
 
 父代理派发后继续执行不与子任务交叉的本地工作；每个 settlement 到达即可作为阶段进展进入下一模型步骤，不等待最慢子代理批量汇总。若父代理已经无事可做但仍有未交付 activation，`runLoop` 保持同一 turn 进入一次性事件等待，不发起空模型请求；用户 steering、任务通知、子代理终态或 Stop 都可唤醒。直接插入用户消息仍属于同一 turn，并在后续请求继续携带更新后的子代理状态；显式 Stop 是硬边界，会取消本会话全部运行中子代理并结束父 turn，下一条用户消息开启新 turn。只有本 turn 全部 activation 终态已交付后，无工具正文才允许自然结束；这只解除等待闸门，不要求立即结束，父代理仍须完成必要工作、核验和最终交付。
 

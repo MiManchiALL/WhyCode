@@ -97,6 +97,7 @@ describe('模型失败后的步骤恢复', () => {
       })])
       assert.equal(await session.handleUserMessage('先修改再解释'), 'error')
       assert.equal(requests, retryable ? 5 : 2)
+      assert.equal(session.latestTurnAssistantText, `本次已显示的正文 ${requests}`)
       assert.equal(writes, 1)
       assert.deepEqual(events.filter(event => [
         'step-committed', 'step-discarded', 'step-output-retained', 'error',

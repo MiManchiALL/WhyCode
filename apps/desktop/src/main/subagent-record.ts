@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   unicodeSafePrefix,
+  boundedSubagentResult,
   type StopReason,
   type SubagentActivation,
   type SubagentContinueRequest,
@@ -10,9 +11,8 @@ import {
   type SubagentOutcome,
   type SubagentSettlementNotification,
   type SubagentSummary,
+  type ViewEvent,
 } from '@whycode/core'
-
-const MAX_SETTLEMENT_RESULT_CHARS = 48_000
 
 export function createSubagentActivation(
   request: SubagentLaunchRequest | SubagentContinueRequest,
@@ -45,7 +45,7 @@ export function completeSubagentManifest(
     ...activations[index]!,
     endedAt,
     outcome,
-    resultText: unicodeSafePrefix(resultText, MAX_SETTLEMENT_RESULT_CHARS),
+    resultText: boundedSubagentResult(resultText, outcome),
     settlement: 'pending',
   }
   return { ...manifest, updatedAt: endedAt, activations }
@@ -75,7 +75,6 @@ export function subagentSettlement(
     parentTurnId: activation.parentTurnId,
     subagentId: manifest.id,
     activationId: activation.id,
-    name: manifest.definition.name,
     description: manifest.taskDescription,
     outcome: activation.outcome,
     resultText: activation.resultText,
@@ -115,7 +114,6 @@ export function subagentListEntry(manifest: SubagentManifest): SubagentListEntry
   const activation = manifest.activations.at(-1)!
   return {
     subagentId: manifest.id,
-    name: manifest.definition.name,
     description: manifest.taskDescription,
     status: activation.outcome ?? 'running',
   }
@@ -145,6 +143,32 @@ export function subagentFallbackResult(outcome: SubagentOutcome): string {
     case 'refusal': return '子代理请求被模型安全策略拒绝。'
     case 'error': return '子代理运行失败，且没有返回更多错误信息。'
   }
+}
+
+export function subagentResult(outcome: SubagentOutcome, text: string, error?: string): string {
+  const body = text.trim()
+  if (!body) return error || subagentFallbackResult(outcome)
+  return [body, ...(outcome === 'completed' ? [] : ['[输出中断，以上内容尚未完成。]']),
+    ...(error ? [error] : [])].join('\n\n')
+}
+
+/** 只读取本次激活已经落盘的正文；不能拿上一轮结果代替本轮未完成输出。 */
+export function interruptedSubagentText(events: readonly ViewEvent[], activationId: string): string {
+  const start = events.findIndex(event => event.type === 'user-message' && event.inputId === activationId)
+  if (start < 0) return ''
+  let latest = ''
+  let blocks: string[] = []
+  for (let index = start + 1; index < events.length; index++) {
+    const event = events[index]!
+    if (event.type === 'step-committed') {
+      if (blocks.length) latest = blocks.join('\n\n')
+      blocks = []
+    } else if (event.type === 'core-event' && event.event.type === 'text-delta') {
+      const block = event.event.textBlock ?? 0
+      blocks[block] = (blocks[block] ?? '') + event.event.text
+    }
+  }
+  return blocks.length ? blocks.join('\n\n') : latest
 }
 
 export function subagentContinuationKey(parentSessionId: string, planId: string): string {
