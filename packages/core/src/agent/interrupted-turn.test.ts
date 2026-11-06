@@ -577,11 +577,9 @@ describe('用户中断后的新回合', () => {
     assert.equal(await running, 'completed')
     assert.equal(session.captureMessageSnapshot().some(isTurnAbortedMessage), false)
     assert.equal(model.doStreamCalls.length, 1)
-    assert.equal(
-      events.some((event) =>
-        event.type === 'queue-restored' && event.text === '下一条消息先不要执行'),
-      true,
-    )
+    const queued = events.find(event => event.type === 'message-queued')
+    assert.ok(queued)
+    assert.equal(session.isQueuedUserInput(queued.id), true)
   })
 
   it('手动压缩期间收到的首条消息会在压缩后作为新 turn 接续', async () => {
@@ -1067,7 +1065,7 @@ describe('用户中断后的新回合', () => {
     assert.equal(toolNames(model.doStreamCalls[2]).includes(CREATE_TASK_PLAN_TOOL_NAME), true)
   })
 
-  it('终止型工具收尾时进入队列的消息会自动交接到新回合', async () => {
+  it('等待用户回答时保留收尾期间进入的队列，不自动启动新回合', async () => {
     const model = new MockLanguageModelV4({
       doStream: [questionStep(), finalStep('TTL 是 Time to Live。')],
     })
@@ -1086,15 +1084,17 @@ describe('用户中断后的新回合', () => {
 
     const result = await session.handleUserMessage('帮我选择一个礼物')
 
-    assert.equal(result, 'completed')
-    assert.equal(model.doStreamCalls.length, 2)
-    assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), /TTL是什么意思/)
+    assert.equal(result, 'waiting-user')
+    assert.equal(model.doStreamCalls.length, 1)
+    const queued = events.find(event => event.type === 'message-queued')
+    assert.ok(queued)
+    assert.equal(session.isQueuedUserInput(queued.id), true)
     assert.equal(
       events.some((event) =>
         event.type === 'message-injected'
         && event.text === 'TTL是什么意思'
         && event.startsTurn === true),
-      true,
+      false,
     )
   })
 

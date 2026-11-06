@@ -659,15 +659,7 @@ export function App() {
     }
   }, [composerSubmissions, queueEditPending, sendRuntimeCommand, showError])
 
-  const restoreQueuedDrafts = useCallback((items: readonly QueuedUserMessage[]) => {
-    if (items.length === 0) return
-    setRestoredQueue((previous) => {
-      const known = new Set(previous.map((item) => item.id))
-      return [...previous, ...items.filter((item) => !known.has(item.id))]
-    })
-  }, [])
-
-  // 中断退回按顺序填入空草稿。手动重新编辑通过宿主的单条确认直接替换输入框。
+  // 恢复此前已取回编辑的输入；实时取回仍由宿主确认后替换草稿。
   useEffect(() => {
     if (
       restoredQueue.length === 0
@@ -1040,22 +1032,6 @@ export function App() {
         setQueued((prev) => prev.filter((q) => q.id !== event.id))
         setQueuedActionPending((current) => withoutQueuedAction(current, event.id))
         break
-      case 'queue-restored':
-        if (event.items?.length) {
-          const restoredIds = new Set(event.items.map((item) => item.id))
-          setQueued((previous) => previous.filter((item) => !restoredIds.has(item.id)))
-          setQueuedActionPending((current) => {
-            let next = current
-            for (const id of restoredIds) next = withoutQueuedAction(next, id)
-            return next
-          })
-        } else {
-          setQueued([])
-          setQueuedActionPending({})
-        }
-        if (event.items?.length) restoreQueuedDrafts(event.items)
-        else setInput((prev) => (prev ? `${prev}\n${event.text}` : event.text))
-        break
       case 'approval-request':
         setApproval({
           requestId: event.requestId,
@@ -1089,7 +1065,6 @@ export function App() {
     composerInputRef,
     editRestoredInput,
     refreshSessions,
-    restoreQueuedDrafts,
     showConversationFeedback,
     history.cancel,
   ])

@@ -557,7 +557,7 @@ export interface LoadedSession {
   interruptedTurnEngagedPlanId: string | null
   /** 已展示但尚未进入完整 turn/messages 或共识起点的根用户输入。 */
   undeliveredUserInputIds: string[]
-  /** 尚未送达的 steering；restored 状态由 Renderer 持有为可恢复草稿。 */
+  /** 未送达的排队输入；仅用户取回编辑的输入处于 restored 状态。 */
   pendingUserInputs: PendingUserInput[]
   interruptedConsensusTaskId: string | null
   interruptedConsensusBaseMessages: ModelMessage[] | null

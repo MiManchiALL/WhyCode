@@ -76,7 +76,7 @@ export interface ConsensusCoordinatorOptions {
     state: ConsensusPersistedState,
     interruptionReason: TurnAbortReason | null,
   ) => Promise<void>
-  /** Coordinator 自持队列在停止时先持久化为 Renderer 草稿，再发送恢复事件。 */
+  /** 用户取回单条输入编辑时，先提交持久状态再发布事件。 */
   onInputsRestored?: (inputIds: readonly string[], replacesRestoredInputIds?: readonly string[]) => Promise<void>
   /** 用户显式丢弃 Coordinator 自持队列时同步更新会话事实源。 */
   onInputsDiscarded?: (inputIds: readonly string[]) => Promise<void>
@@ -103,6 +103,8 @@ export class ConsensusCoordinator {
   /** 区分 Main 的 M1 讨论与最终执行，保证 Skill 只进入普通执行工具面。 */
   private executionPhase = false
   private abortReason: TurnAbortReason | null = null
+  /** 立即发送可中止当前协商并启动选中输入；用户 Stop 会撤销这次接续。 */
+  private continueAfterInterrupt = false
   /** 对话级累计分数（协议 §5.3：跨任务保留，新对话随协调器重建而重置） */
   private sessionScore: Record<ConsensusAgentId, number> = { Main: 0, B: 0, C: 0 }
   /** B/C 跨任务记忆（协议 §10：任务结束只留结构化摘要，下任务注入） */
@@ -155,7 +157,8 @@ export class ConsensusCoordinator {
     if (urgent && this.peerPhase && !attachments.length && !pdfAttachments.length && !skills.length) {
       this.pendingTexts.push(message)
     } else if (urgent) {
-      this.deferredTaskMessages.unshift(message)
+      message.urgent = true
+      this.deferredTaskMessages.push(message)
       this.interruptForDeferredInput()
     } else {
       this.deferredTaskMessages.push(message)
@@ -201,7 +204,11 @@ export class ConsensusCoordinator {
     return true
   }
 
-  sendQueuedMessageNow(id: string): boolean {
+  sendQueuedMessageNow(id: string): boolean | Promise<StopReason> {
+    if (!this.running && !this.options.mainSession.isBusy) {
+      if (!this.options.mainSession.isQueuedUserInput(id)) return false
+      return this.runTasks(undefined, id)
+    }
     const queued = this.takeQueuedMessage(id)
     if (!queued) return this.options.mainSession.sendQueuedMessageNow(id)
     const message = queued.message
@@ -214,36 +221,51 @@ export class ConsensusCoordinator {
       }
       return true
     }
-    this.deferredTaskMessages.unshift(message)
+    message.urgent = true
+    this.deferredTaskMessages.push(message)
     this.interruptForDeferredInput()
     return true
   }
 
-  private async runTasks(first?: QueuedMessage): Promise<StopReason | void> {
+  private async runTasks(first?: QueuedMessage, selectedId?: string): Promise<StopReason> {
     const { mainSession, emit } = this.options
     this.running = true
     this.abortReason = null
-    let result: StopReason | void = undefined
+    let result: StopReason = 'completed'
     try {
-      if (!first) await mainSession.waitUntilIdle()
+      if (!first && mainSession.isBusy) await mainSession.waitUntilIdle()
+      this.deferredTaskMessages.unshift(...mainSession.takePendingUserInputs())
       mainSession.setTerminalStatusManaged(true)
-      let next = first ?? this.deferredTaskMessages.shift()
+      if (this.abortReason && !this.continueAfterInterrupt) return 'aborted'
+      const selectedIndex = selectedId ? this.deferredTaskMessages.findIndex(input => input.id === selectedId) : 0
+      let next = first ?? this.deferredTaskMessages.splice(selectedIndex, 1)[0]
       while (next) {
         this.abortReason = null
+        this.continueAfterInterrupt = false
         const queued = next !== first || (next.persisted && mainSession.isQueuedUserInput(next.id))
         if (queued) this.options.onQueuedTurnStart?.()
         if (next.attachments.length || next.pdfAttachments.length) {
           this.executionPhase = true
           emit({ type: 'consensus-skipped', reason: next.pdfAttachments.length ? 'pdf-input' : 'image-input' })
-          result = await mainSession.receiveUserInput(next, { alreadyQueued: queued })
+          result = await mainSession.receiveUserInput(next, { alreadyQueued: queued }) ?? 'error'
           this.executionPhase = false
         } else {
           result = await this.runTask(next, queued)
         }
-        next = this.deferredTaskMessages.shift()
+        if (this.abortReason && !this.continueAfterInterrupt) break
+        if (result !== 'completed' && !this.continueAfterInterrupt) break
+        this.deferredTaskMessages.push(...mainSession.takePendingUserInputs())
+        const urgentIndex = this.deferredTaskMessages.findIndex(input => input.urgent)
+        next = this.deferredTaskMessages.splice(Math.max(0, urgentIndex), 1)[0]
       }
       return result
+    } catch (error) {
+      result = 'error'
+      throw error
     } finally {
+      mainSession.retainPendingUserInputs([...this.pendingTexts, ...this.deferredTaskMessages])
+      this.pendingTexts = []
+      this.deferredTaskMessages = []
       mainSession.setTerminalStatusManaged(false)
       this.executionPhase = false
       this.running = false
@@ -251,18 +273,15 @@ export class ConsensusCoordinator {
     }
   }
 
-  /** 取消整个协商（含 B/C）；暂存的插话文本还给输入框 */
-  async abort(reason: TurnAbortReason = 'user-cancel', context?: TurnInterruptionContext): Promise<void> {
+  /** 取消整个协商（含 B/C）；未送达输入在任务退出后归还 Main 保留。 */
+  abort(reason: TurnAbortReason = 'user-cancel', context?: TurnInterruptionContext): void {
+    this.continueAfterInterrupt = false
     this.abortReason ??= reason
     for (const peer of this.peers) peer.abort(this.abortReason)
     this.options.mainSession.abort(this.abortReason, context)
-    const queued = [...this.pendingTexts, ...this.deferredTaskMessages]
-    this.pendingTexts = []
-    this.deferredTaskMessages = []
-    await this.restoreQueuedMessages(queued)
   }
 
-  private async runTask(input: QueuedMessage, queued: boolean): Promise<void> {
+  private async runTask(input: QueuedMessage, queued: boolean): Promise<ConsensusTaskOutcome> {
     const { text: userText, skills } = input
     const { mainSession, emit } = this.options
     emit({ type: 'agent-status', status: 'working' })
@@ -287,11 +306,14 @@ export class ConsensusCoordinator {
         queued && input.persisted ? [input.id] : [],
         skills,
       )
-      if (!taskBoundaryStarted) return
+      if (!taskBoundaryStarted) {
+        if (queued) this.deferredTaskMessages.unshift(input)
+        return outcome
+      }
       if (queued) emit({ type: 'message-injected', ...queuedUserMessage(input), startsTurn: true })
       if (this.abortReason) {
         outcome = 'aborted'
-        return
+        return outcome
       }
       const scratch = await createConsensusTaskScratch(
         this.options.sessionScratchDir,
@@ -299,7 +321,7 @@ export class ConsensusCoordinator {
       )
       if (this.abortReason) {
         outcome = 'aborted'
-        return
+        return outcome
       }
 
       // 第一步：Main 讨论档输出 M1 + protocol_mode（协议 §1.1：模式只出现在首个 M1）
@@ -321,11 +343,11 @@ export class ConsensusCoordinator {
       )
       if (this.abortReason) {
         outcome = 'aborted'
-        return
+        return outcome
       }
       if (!m1Result.ok) {
         emit({ type: 'error', message: `协商失败（Main 未产出 M1）：${m1Result.error}`, recoverable: true })
-        return
+        return outcome
       }
       const m1 = m1Result.output
       // 协议 §1.1：用户显式要求多视角/共识、或命中硬性风险词时，Orchestrator 强制升级 full_consensus（只升不降）
@@ -357,7 +379,7 @@ export class ConsensusCoordinator {
           buildMainOnlyExecutionPrompt(userText, m1.candidate), this.pendingTexts.splice(0), skills,
         )
         outcome = this.executionOutcome(stopReason)
-        return
+        return outcome
       }
 
       // 需评审的模式：B/C 开始工作，全局状态由协调器接管
@@ -386,7 +408,7 @@ export class ConsensusCoordinator {
       this.peerPhase = false
       if (this.abortReason || packageText === null) {
         outcome = this.abortReason ? 'aborted' : 'error'
-        return
+        return outcome
       }
 
       // 执行阶段：被选中候选与支持票一次性注入 Main（协议 §15.2），恢复执行档
@@ -417,22 +439,19 @@ export class ConsensusCoordinator {
         if (startTaskState) mainSession.restoreTaskStateSnapshot(startTaskState)
         taskPlanRolledBack = true
       }
-      if (taskBoundaryStarted) {
-        await this.persistTaskEnd(taskId, outcome, this.snapshotState(), interruptionReason)
-      }
       if (taskPlanRolledBack) {
         emit({ type: 'task-plan-restored', plan: startTaskState?.activePlan ?? null })
-      }
-      if (!keepsConsensusProgress(outcome) && this.pendingTexts.length > 0) {
-        const pending = this.pendingTexts.splice(0)
-        await this.restoreQueuedMessages(pending)
       }
       this.restoreExecution()
       mainSession.setUserQuestionsEnabled(true)
       this.peers = []
       this.peerPhase = false
       this.executionPhase = false
+      if (taskBoundaryStarted) {
+        await this.persistTaskEnd(taskId, outcome, this.snapshotState(), interruptionReason)
+      }
     }
+    return outcome
   }
 
   /** quick_review：B、C 并行快评 → 执行包（协议 §1.2；不更新 session_score） */
@@ -571,27 +590,10 @@ export class ConsensusCoordinator {
   }
 
   private interruptForDeferredInput(): void {
+    this.continueAfterInterrupt = true
     this.abortReason ??= 'user-cancel'
     for (const peer of this.peers) peer.abort(this.abortReason)
     this.options.mainSession.abort(this.abortReason)
-  }
-
-  private async restoreQueuedMessages(messages: QueuedMessage[]): Promise<void> {
-    if (messages.length === 0) return
-    const persistedIds = messages.flatMap((message) =>
-      message.persisted ? [message.id] : [])
-    try {
-      await this.options.onInputsRestored?.(persistedIds)
-    } catch (error) {
-      this.reportPersistenceError('队列恢复', error)
-      // 事实源仍是 queued 时不能向 UI 宣称已恢复，否则下一次提交必然因身份状态不符失败。
-      return
-    }
-    this.options.emit({
-      type: 'queue-restored',
-      text: messages.map((message) => message.text).join('\n'),
-      items: messages.map(queuedUserMessage),
-    })
   }
 
   private restoreExecution(): void {
@@ -649,6 +651,7 @@ export class ConsensusCoordinator {
       await this.options.onTaskEnd?.(taskId, outcome, state, interruptionReason)
     } catch (error) {
       this.reportPersistenceError('终点', error)
+      throw error
     }
   }
 

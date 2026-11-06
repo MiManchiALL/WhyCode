@@ -233,6 +233,35 @@ describe('BTW 独立侧对话', () => {
     }
   })
 
+  it('BTW 回复提交期间停止，已排队输入保留且不启动空白或后续请求', async () => {
+    let onSettling!: () => void, release!: () => void
+    const settling = new Promise<void>(resolve => { onSettling = resolve })
+    const settled = new Promise<void>(resolve => { release = resolve })
+    const model = new MockLanguageModelV4({ doStream: async () => finalStep('完成') })
+    const events: CoreEvent[] = []
+    const session = createSession(model, { emit: event => events.push(event) })
+    let queued = false
+    const running = session.handleBtwMessage(btwContext('btw', '侧问题', []), {
+      emit: event => {
+        if (event.type === 'text-delta' && !queued) {
+          queued = true
+          session.handleUserMessage('后续请求')
+        }
+      },
+      onSettled: async () => { onSettling(); await settled },
+    })
+    await settling
+    session.abort()
+    release()
+    assert.equal(await running, 'completed')
+    assert.equal(model.doStreamCalls.length, 1)
+    const input = events.find(event => event.type === 'message-queued')
+    assert.ok(input)
+    assert.equal(session.isQueuedUserInput(input.id), true)
+    assert.equal(await session.handleUserMessage('新请求'), 'completed')
+    assert.equal(model.doStreamCalls.length, 3)
+  })
+
   for (const reason of ['user-cancel', 'process-interruption'] as const) {
     it(`停止 BTW 保留原因，并取消正在等待的网页工具：${reason}`, async () => {
       let onStarted!: () => void

@@ -50,11 +50,12 @@ describe('共识模式附件路由', () => {
     harness.coordinator.handleUserMessage('按这张图调整', false, [harness.attachment], 'input-peer')
     assert.equal(harness.calls.length, 0)
     await harness.coordinator.abort()
-    assert.deepEqual(harness.events.find(event => event.type === 'queue-restored')?.items, [{
+    assert.equal(await harness.coordinator.restoreQueuedMessage('input-peer'), true)
+    assert.deepEqual(harness.events.find(event => event.type === 'queued-message-edit-ready')?.item, {
       id: 'input-peer',
       text: '按这张图调整',
       attachments: [harness.attachment],
-    }])
+    })
   })
 
   it('连续排队的 PDF 逐条交给 Main，并用独立原因声明未让 B/C 读取', async () => {
@@ -104,7 +105,7 @@ describe('共识模式附件路由', () => {
     assert.deepEqual(queued?.type === 'message-queued' ? queued.attachments : undefined, [harness.attachment])
   })
 
-  it('队列恢复写盘失败时不向界面伪报图片已回到草稿', async () => {
+  it('停止只保留输入，不依赖一次额外的草稿写盘', async () => {
     const harness = createHarness({
       onInputsRestored: async () => { throw new Error('disk full') },
     })
@@ -113,9 +114,9 @@ describe('共识模式附件路由', () => {
     await harness.coordinator.abort()
     await running
 
-    assert.equal(harness.events.some((event) => event.type === 'queue-restored'), false)
-    assert.equal(harness.events.some((event) =>
-      event.type === 'error' && event.message.includes('队列恢复')), true)
+    assert.deepEqual(harness.retained.map(input => input.id), ['input-persisted'])
+    assert.equal(harness.events.some(event => event.type === 'queued-message-edit-ready'), false)
+    assert.equal(harness.events.some(event => event.type === 'error'), false)
   })
 
   it('M1 讨论期间排队的 Skill 独立保管，重新编辑可取回原输入', async () => {
@@ -213,8 +214,11 @@ function createHarness(options: {
   const events: CoreEvent[] = []
   const state = { busy: false, running: false }
   const aborts = { value: 0 }
+  const retained: QueuedMessage[] = []
   const main = {
     setTerminalStatusManaged() {},
+    takePendingUserInputs: () => retained.splice(0),
+    retainPendingUserInputs: (inputs: QueuedMessage[]) => { retained.push(...inputs) },
     isQueuedUserInput: () => false,
     get isBusy() { return state.busy },
     get isRunning() { return state.running },
@@ -228,6 +232,7 @@ function createHarness(options: {
         ...(pdfAttachments.length ? { pdfAttachments: [...pdfAttachments] } : {}),
         ...(skills.length ? { skills: skills.map((skill) => structuredClone(skill)) } : {}),
       })
+      return Promise.resolve('completed')
     },
     abort() { aborts.value++ },
   } as unknown as AgentSession
@@ -276,5 +281,5 @@ function createHarness(options: {
     digest: `sha256:${'d'.repeat(64)}`,
     content: '---\nname: verify\ndescription: 验证结果\n---\nVERIFY',
   }
-  return { coordinator, calls, events, state, aborts, attachment, pdfAttachment, skill }
+  return { coordinator, calls, events, state, aborts, retained, attachment, pdfAttachment, skill }
 }

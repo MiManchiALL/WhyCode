@@ -559,8 +559,10 @@ canonical 消息的 `whycode` 元数据保存正式用户 turn 身份及有界�
 
 运行中提交的用户输入以 `user-input(startsTurn=false)` 写稳后进入 canonical pending inputs。普通输入在下一用户回合的起点随首批消息交付，每次只消费一个 ID。立即插话在当前回合的步骤边界交付。两者都在送达记录写稳后发出 `message-injected`。其 `startsTurn` 取实际交付边界，冷恢复按同一边界重建时间线。`queued-message-action` 按当前会话中仍为 `queued` 的输入 ID 操作。
 
-- `edit` 写入 `user-input-restored`。若输入框原先在编辑已退回的消息，`replacesRestoredInputIds` 指定要替换的 `restored` 身份，其 `user-input-discarded` 记录与本次取回一起提交。取回成功后发出 `queued-message-edit-ready`，重新发送时只消费当前草稿持有的 ID。目标已送达、覆盖身份失效或写入失败时保留原草稿。中断引起的批量退回使用 `queue-restored`。
-- `discard` 写入 `user-input-discarded`，移除排队身份并通知界面 `message-dequeued`。`send-now` 仅将指定 ID 提升为立即插话，其余普通输入保持 FIFO 顺序。队列的持久化变更成功后才发布，写入失败时将消息放回原位。
+只有当前用户请求正常完成才自动交付下一条普通输入。停止、最终失败、等待用户回答、暂停或达到执行上限均保留未送达输入的 ID、顺序和附件，关闭自动接续。正常退出和进程中断恢复保持 `queued`，不将队列退回草稿、不重放已交付输入，也不自动发送。空闲时显式提交的新用户请求优先开启回合，正常完成后恢复原队列 FIFO；会话恢复、历史压缩、回滚及后台通知本身不授权消费暂停队列。协商模式在完整任务终点使用相同规则。
+
+- `edit` 写入 `user-input-restored`。若输入框原先在编辑已退回的消息，`replacesRestoredInputIds` 指定要替换的 `restored` 身份，其 `user-input-discarded` 记录与本次取回一起提交。取回成功后发出 `queued-message-edit-ready`，重新发送时只消费当前草稿持有的 ID。目标已送达、覆盖身份失效或写入失败时保留原草稿。
+- `discard` 写入 `user-input-discarded`，移除排队身份并通知界面 `message-dequeued`。`send-now` 在运行中仅将指定 ID 提升为立即插话；空闲时以该输入开启新回合，正常完成后继续剩余队列。其余普通输入保持 FIFO 顺序。队列的持久化变更成功后才发布，写入失败时将消息放回原位。
 
 ### 7.1 桌面会话历史窗口
 

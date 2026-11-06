@@ -499,7 +499,7 @@ describe('SessionStore', () => {
     }
   })
 
-  it('停止时把 steering 原子退回草稿，重新提交只消费当前会话的恢复身份', async () => {
+  it('重新编辑将单条输入原子退回草稿，重提只消费当前会话的恢复身份', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const queuedId = randomUUID()
@@ -546,7 +546,7 @@ describe('SessionStore', () => {
     )
   })
 
-  it('进程中断把尚未送达的 steering 恢复为草稿而不注入模型历史', async () => {
+  it('进程中断保留尚未送达的队列而不注入模型历史', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     await journal.recordUserInput('开始', true)
@@ -558,7 +558,7 @@ describe('SessionStore', () => {
     await interrupted.recoverInterruptedWork()
     const recovered = await store.open(journal.sessionId)
     assert.deepEqual(recovered.pendingUserInputs.map(({ id, text, state }) => ({ id, text, state })), [
-      { id: inputId, text: '崩溃前插话', state: 'restored' },
+      { id: inputId, text: '崩溃前插话', state: 'queued' },
     ])
     assert.equal(recovered.initialMessages.some((entry) => modelText(entry) === '崩溃前插话'), false)
   })

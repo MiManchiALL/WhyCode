@@ -89,6 +89,34 @@ describe('后台任务终态续轮', () => {
     })
   }
 
+  it('暂停的用户队列不阻挡独立后台通知，也不被其自动消费', async () => {
+    const started = deferred<void>()
+    const model: MockLanguageModelV4 = new MockLanguageModelV4({ doStream: async options => {
+      if (model.doStreamCalls.length === 1) {
+        started.resolve()
+        await new Promise<void>(resolve => options.abortSignal!.addEventListener('abort', () => resolve(), { once: true }))
+      }
+      return finalStep('完成')
+    } })
+    const events: CoreEvent[] = []
+    const session = createSession(model, events)
+    const running = session.handleUserMessage('当前请求')
+    await started.promise
+    session.handleUserMessage('暂停保留的输入')
+    session.abort()
+    assert.equal(await running, 'aborted')
+    const queued = events.find(event => event.type === 'message-queued')
+    assert.ok(queued)
+    assert.equal(await session.handleTaskNotification(notification()), 'completed')
+    assert.equal(model.doStreamCalls.length, 2)
+    assert.match(JSON.stringify(model.doStreamCalls[1]?.prompt), /task-notification/)
+    assert.equal(session.isQueuedUserInput(queued.id), true)
+    assert.equal(events.some(event => event.type === 'message-injected'), false)
+    assert.equal(await session.handleUserMessage('新的用户请求'), 'completed')
+    assert.equal(model.doStreamCalls.length, 4)
+    assert.equal(session.isQueuedUserInput(queued.id), false)
+  })
+
   it('等待用户问题时保持通知排队，直到真实用户消息到达才一并交付', async () => {
     const model = new MockLanguageModelV4({
       doStream: async (options) => {

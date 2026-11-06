@@ -109,7 +109,7 @@ describe('SessionStore Fork', () => {
     assert.equal((await store.list()).length, 1)
   })
 
-  it('分支不继承未送达模型的恢复草稿', async () => {
+  it('分支不继承未送达模型的排队输入', async () => {
     const store = await createStore()
     const source = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
     const draftId = randomUUID()
@@ -117,7 +117,7 @@ describe('SessionStore Fork', () => {
     await source.recoverInterruptedWork()
     assert.deepEqual(source.pendingUserInputs.map(({ id, state }) => ({ id, state })), [{
       id: draftId,
-      state: 'restored',
+      state: 'queued',
     }])
 
     const rootInputId = randomUUID()
@@ -144,7 +144,7 @@ describe('SessionStore Fork', () => {
     ])
     assert.deepEqual(source.pendingUserInputs.map(({ id, state }) => ({ id, state })), [{
       id: draftId,
-      state: 'restored',
+      state: 'queued',
     }])
   })
 
@@ -154,6 +154,7 @@ describe('SessionStore Fork', () => {
     const draftId = randomUUID()
     await source.recordUserInputWithId(draftId, '崩溃前草稿', false)
     await source.recoverInterruptedWork()
+    await source.markUserInputsRestored([draftId])
 
     const rootInputId = randomUUID()
     await source.recordUserInputWithId(

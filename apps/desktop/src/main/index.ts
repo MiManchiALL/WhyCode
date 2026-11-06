@@ -152,6 +152,7 @@ import {
 } from './custom-system-prompt.ts'
 import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
+import { handleQueuedMessageAction } from './queued-message-actions.ts'
 import { deliverEditedUserMessage, startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
@@ -1071,7 +1072,21 @@ async function handleCommand(
       return handleUserMessageCommand(runtime, command)
     case 'queued-message-action': {
       const parsed = queuedMessageActionSchema.safeParse(command)
-      return parsed.success ? handleQueuedMessageAction(runtime, parsed.data) : { ok: false, error: '排队消息操作参数无效' }
+      if (!parsed.success) return { ok: false, error: '排队消息操作参数无效' }
+      return handleQueuedMessageAction(runtime, parsed.data, {
+        reserveWorkStart: () => runtimeRegistry.reserveWorkStart(runtime),
+        prepareExecution: async () => {
+          if (settingsMutationInProgress) throw new Error('连接设置处理中，请等待完成后再发送消息')
+          if (runtimeExecutionBusy(runtime)) return
+          await sshWorkspaces.assertMessageAllowed(runtime.workspace)
+          const resolved = resolveModelConnection(loadAppConfig(), resolveCurrentModelId(runtime))
+          if (!resolved.ok) throw new Error(resolved.error)
+          const error = await ensureSession(runtime, resolved.value)
+          if (error) throw new Error(error)
+          synchronizeRuntimeAuxiliaryImageAnalyzer(runtime, loadAppConfig())
+        },
+        onDeliveryError: error => reportUserMessageDeliveryError(runtime, error),
+      })
     }
     case 'btw-message':
       return handleBtwMessageCommand(runtime, command)
@@ -1526,37 +1541,6 @@ async function handleUserMessageCommand(
     // 若后台终态正因 AskUserQuestion 等待真实回答，此时用户输入已优先完成路由，
     // 可在下一稳定步骤边界把通知交给同一 Agent，而不占用第二套轮询或计时器。
     nudgeNotificationQueues()
-  }
-}
-
-async function handleQueuedMessageAction(
-  runtime: DesktopSessionRuntime,
-  command: Extract<CoreCommand, { type: 'queued-message-action' }>,
-): Promise<RuntimeCommandResult> {
-  const reservation = runtime.routingGate.reserve()
-  try {
-    await reservation.ready
-    const target = runtime.coordinator ?? runtime.session
-    if (!target) return { ok: false, error: '当前会话尚未就绪，无法操作排队消息' }
-    const handled = command.action === 'edit'
-      ? await target.restoreQueuedMessage(command.id, command.replacesRestoredInputIds)
-      : command.action === 'discard'
-        ? await target.discardQueuedMessage(command.id)
-        : target.sendQueuedMessageNow(command.id)
-    if (handled) return { ok: true, workspace: runtime.workspace }
-
-    // 编辑只有在实际取回后才能覆盖草稿。已经离队的消息无需再丢弃或催发。
-    const stillQueued = runtime.journal?.pendingUserInputs.some(
-      (input) => input.id === command.id && input.state === 'queued',
-    ) ?? false
-    if (!stillQueued) return command.action === 'edit'
-      ? { ok: false, error: '这条消息已离开队列' }
-      : { ok: true, workspace: runtime.workspace }
-    return { ok: false, error: '排队消息状态已经变化，请重试' }
-  } catch (error) {
-    return { ok: false, error: `排队消息操作失败：${error instanceof Error ? error.message : String(error)}` }
-  } finally {
-    reservation.release()
   }
 }
 
