@@ -10,7 +10,7 @@ import { applyCoreEvent, createConversationState } from '../shared/conversation-
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { deferred, finalStream, languageModel, modelEntry } from './subagent-test-fixture.ts'
 
-it('父轮次等待子代理、接收插话后只折叠到最终回复，切换和重开会话得到相同结果', async (t) => {
+it('父轮次等待子代理、接收立即插话后只折叠到最终回复，切换和重开会话得到相同结果', { timeout: 30_000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'whycode-turn-response-'))
   const store = new SessionStore(root)
   const workspace = localWorkspace(root)
@@ -70,7 +70,7 @@ it('父轮次等待子代理、接收插话后只折叠到最终回复，切换�
       assert.ok(rows.every(row => row.kind === 'block'))
       assert.deepEqual(view.blocks.filter(block => block.kind === 'text').map(block => block.text), progress.slice(0, index + 1).flat())
     }
-    if (index === 0) session.handleUserMessage('请再比较两者的结果')
+    if (index === 0) session.handleUserMessage('请再比较两者的结果', true)
   }
   session.handleSubagentSettlement({
     ...child, parentSessionId: journal.sessionId, parentTurnId: turnId, outcome: 'completed', resultText: '核查通过',
