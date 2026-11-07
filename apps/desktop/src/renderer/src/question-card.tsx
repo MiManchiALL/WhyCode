@@ -1,7 +1,8 @@
 import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ChevronLeft, ChevronRight, MessageCircleQuestionMark, Pencil, X } from 'lucide-react'
-import type { PendingQuestion, QuestionResolution } from '@whycode/core/events'
+import type { PendingQuestion, QuestionSubmission } from '@whycode/core/events'
 import type { ComposerValue } from './composer-text.ts'
+import { questionSubmission } from './question-progress.ts'
 import type { QuestionDraft } from './composer-drafts.ts'
 
 interface QuestionCardProps {
@@ -9,7 +10,7 @@ interface QuestionCardProps {
   input: ComposerValue<QuestionDraft | undefined>
   disabled: boolean
   stopControl?: ReactNode
-  onResolve: (resolution: QuestionResolution) => Promise<void>
+  onResolve: (resolutions: QuestionSubmission) => Promise<void>
 }
 
 export function QuestionCard({ questions, input, disabled, stopControl, onResolve }: QuestionCardProps) {
@@ -20,25 +21,31 @@ export function QuestionCard({ questions, input, disabled, stopControl, onResolv
   const question = questions[index]
   if (!question) return null
   const answers = draft?.answers ?? {}
-  const text = answers[question.id] ?? ''
-  const select = (id: string) => input.replace({ answers, currentId: id })
-  const edit = (answer: string) => input.replace({ currentId: question.id, answers: { ...answers, [question.id]: answer } })
+  const value = answers[question.id]
+  const text = value ?? ''
+  const last = index === questions.length - 1
+  const submission = last ? questionSubmission(questions, answers) : null
   const blocked = disabled || submitting
-  const resolve = async (answer: string | null) => {
+  const select = (id: string) => input.replace({ answers, currentId: id })
+  const edit = (answer: string | null, advance = false) => input.replace({
+    currentId: advance && !last ? questions[index + 1]!.id : question.id,
+    answers: { ...answers, [question.id]: answer },
+  })
+  const advance = async () => {
     if (blocked || sending.current) return
+    if (!last) {
+      if (value === null || text.trim()) select(questions[index + 1]!.id)
+      return
+    }
+    if (!submission) return
     sending.current = true
     setSubmitting(true)
-    try { await onResolve({ id: question.id, answer }) }
+    try { await onResolve(submission) }
     finally { sending.current = false; setSubmitting(false) }
   }
-  if (draft?.collapsed) return (
-    <button type="button" className="wc-question-summary wc-focus-ring" onClick={() => select(question.id)}>
-      <MessageCircleQuestionMark size={15} />{questions.length} 个待答问题
-    </button>
-  )
   return <form className="wc-question-composer" onSubmit={event => {
     event.preventDefault()
-    if (text.trim()) void resolve(text.trim())
+    void advance()
   }}>
     <div className="wc-question-heading">
       <MessageCircleQuestionMark size={15} /><span className="min-w-0 flex-1 truncate">{question.item.header}</span>
@@ -55,7 +62,7 @@ export function QuestionCard({ questions, input, disabled, stopControl, onResolv
     <div className="wc-question-title">{question.item.question}</div>
     {question.item.options?.length && <div className="wc-question-options">
       {question.item.options.map((option, i) => <button key={i} type="button" className="wc-question-option wc-focus-ring"
-        aria-pressed={text === option.label} disabled={blocked} onClick={() => edit(option.label)}>
+        aria-pressed={text === option.label} disabled={blocked} onClick={() => edit(option.label, true)}>
         <span className="wc-question-option-index" aria-hidden="true">{i + 1}</span>
         <span><span className="block font-medium">{option.label}</span>
           {option.description && <span className="wc-question-description">{option.description}</span>}</span>
@@ -63,14 +70,14 @@ export function QuestionCard({ questions, input, disabled, stopControl, onResolv
     </div>}
     <div className="wc-question-controls">
       <label className="wc-question-field"><Pencil size={14} />
-        <input aria-label="当前问题的回答" placeholder="写下你的回答…" value={text} disabled={blocked}
+        <input aria-label="当前问题的回答" placeholder={value === null ? '已跳过，可重新填写' : '写下你的回答…'} value={text} disabled={blocked}
           onChange={event => edit(event.target.value)}
           onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault() }} />
       </label>
-      {stopControl}
       <button type="button" className="wc-settings-button wc-focus-ring" disabled={blocked}
-        onClick={() => void resolve(null)}>跳过</button>
-      <button type="submit" className="wc-settings-button wc-focus-ring" data-variant="primary" disabled={blocked || !text.trim()}>发送</button>
+        aria-pressed={value === null} onClick={() => edit(null, true)}>跳过</button>
+      <button type="submit" className="wc-settings-button wc-focus-ring" data-variant="primary" disabled={blocked || (last ? !submission : value !== null && !text.trim())}>{last ? '发送' : '下一个'}</button>
+      {stopControl}
     </div>
   </form>
 }

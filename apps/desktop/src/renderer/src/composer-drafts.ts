@@ -6,7 +6,7 @@ import type { PdfDraft } from './pdf-draft.ts'
 export interface QuestionDraft {
   currentId?: string
   collapsed?: boolean
-  answers: Record<string, string>
+  answers: Record<string, string | null>
 }
 
 export interface ComposerDraft {

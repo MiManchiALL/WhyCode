@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
   type CSSProperties,
 } from 'react'
+import { MessageCircleQuestionMark } from 'lucide-react'
 // 注意：Renderer 只能从浏览器安全的子路径导入运行时值；从 '@whycode/core' 根导入值会把
 // Node 内置模块拖进渲染端导致白屏（types 导入不受此限）
 import type { PermissionMode } from '@whycode/core/permissions'
@@ -22,7 +23,7 @@ import type {
   SubagentSummary,
 } from '@whycode/core'
 import {
-  type QuestionResolution,
+  type QuestionSubmission,
   type AgentStatus,
   type ContextUsageInfo,
   type CoreEvent,
@@ -957,6 +958,7 @@ export function App() {
         setWorkStartedAt(event.startedAt)
         void refreshSessions()
         break
+      case 'user-question':
       case 'user-question-resolved':
         void refreshSessions()
         break
@@ -1013,6 +1015,7 @@ export function App() {
           const item = {
             id: event.id,
             text: event.text,
+            ...(event.questionIds ? { questionIds: event.questionIds } : {}),
             ...(event.attachments?.length ? { attachments: event.attachments } : {}),
             ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
             ...(event.skills?.length ? { skills: event.skills } : {}),
@@ -1026,6 +1029,7 @@ export function App() {
         break
       case 'queued-message-edit-ready': {
         const { item } = event
+        if (item.questionIds) void refreshSessions()
         setQueued(previous => previous.filter(message => message.id !== item.id))
         setQueuedActionPending(current => withoutQueuedAction(current, item.id))
         setRestoredQueue(previous => previous.filter(message => message.id !== item.id))
@@ -1036,6 +1040,7 @@ export function App() {
       }
       case 'message-injected':
       case 'message-dequeued':
+        if (event.type === 'message-dequeued') void refreshSessions()
         setQueued((prev) => prev.filter((q) => q.id !== event.id))
         setQueuedActionPending((current) => withoutQueuedAction(current, event.id))
         break
@@ -1285,7 +1290,8 @@ export function App() {
         consumeEvent(event, occurredAt)
       } else if (
         event.type === 'work-started'
-        || event.type === 'user-question-resolved'
+        || event.type === 'user-question' || event.type === 'user-question-resolved'
+        || (event.type === 'message-queued' && !!event.questionIds) || event.type === 'queued-message-edit-ready' || event.type === 'message-dequeued'
         || event.type === 'work-discarded'
         || event.type === 'turn-start'
         || event.type === 'work-finished'
@@ -2105,11 +2111,16 @@ export function App() {
     if (next !== current) questionInput.replace(next)
   }, [loadingConversation, runtimeId, view.pendingQuestions, questionInput])
 
-  const answerQuestion = useCallback(async (resolution: QuestionResolution) => {
-    if (resolution.answer !== null && sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
+  const answerableQuestions = useMemo(() => {
+    const reserved = new Set(queued.flatMap(item => item.questionIds ?? []))
+    return reserved.size ? view.pendingQuestions.filter(item => !reserved.has(item.id)) : view.pendingQuestions
+  }, [queued, view.pendingQuestions])
+
+  const answerQuestion = useCallback(async (resolutions: QuestionSubmission) => {
+    if (resolutions.some(item => item.answer !== null) && sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
     const owner = runtimeIdRef.current
     try {
-      const result = await sendRuntimeCommand({ type: 'resolve-user-question', resolution })
+      const result = await sendRuntimeCommand({ type: 'resolve-user-question', resolutions })
       if (!result?.ok) throw new Error(result?.error ?? '问题处理失败，请重试')
     } catch (error) {
       if (runtimeIdRef.current === owner) showError(error instanceof Error ? error.message : String(error))
@@ -2466,14 +2477,14 @@ export function App() {
                   inert={resumingSessionId !== null}
                 >
                   <div hidden={loadingConversation}>
-                    {view.pendingQuestions.length > 0 && <QuestionCard key={runtimeId}
-                      questions={view.pendingQuestions} input={questionInput} disabled={composerControlsLocked}
+                    {!questionCollapsed && answerableQuestions.length > 0 && <QuestionCard key={runtimeId}
+                      questions={answerableQuestions} input={questionInput} disabled={composerControlsLocked}
                       onResolve={answerQuestion}
                       stopControl={workActive && <ComposerActionButton runtimeId={runtimeId} workStartedAt={workStartedAt}
                         primaryAction="stop" runningSubagentCount={subagents.filter(item => isSubagentRunning(item.status)).length}
                         stopping={stopping} stopDisabled={composerDisabled} sendDisabled={false} onSend={() => send(false)} onStop={stop} />} />}
                   </div>
-                  <div hidden={!loadingConversation && view.pendingQuestions.length > 0 && !questionCollapsed}>
+                  <div hidden={!loadingConversation && answerableQuestions.length > 0 && !questionCollapsed}>
                     {showMcpStatus && !skillTrigger && !attachmentLocked && (
                       <ComposerMcpStatus
                         key={`mcp:${runtimeId}`}
@@ -2519,12 +2530,17 @@ export function App() {
                           !!draft.source.page.file?.remote, { kind: 'edit', draftId: id }, draft.browserId, workspace.mode === 'ssh'))
                       } catch (error) { showError(String(error)) }
                     }} />
-                    <PdfDraftStrip drafts={composerDraft.pdfs} onRemove={removePdfDraft} />
-                    <SkillChips
-                      skills={composerDraft.skills}
-                      disabled={composerControlsLocked}
-                      onRemove={removeSelectedSkill}
-                    />
+                    <div className="wc-composer-chips">
+                      {!loadingConversation && questionCollapsed && answerableQuestions.length > 0 && <button type="button" className="wc-question-summary wc-focus-ring"
+                        onClick={() => {
+                          const draft = questionInput.getSnapshot()
+                          if (draft) questionInput.replace({ ...draft, collapsed: false })
+                        }}>
+                        <MessageCircleQuestionMark size={14} />{answerableQuestions.length} 个待答问题
+                      </button>}
+                      <PdfDraftStrip drafts={composerDraft.pdfs} onRemove={removePdfDraft} />
+                      <SkillChips skills={composerDraft.skills} disabled={composerControlsLocked} onRemove={removeSelectedSkill} />
+                    </div>
 
                     {composerDraft.btwMode && (
                       <div className="mb-1 flex items-center px-1.5">

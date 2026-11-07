@@ -9,5 +9,5 @@ export function questionResult(batch: { id: string; questions: UserQuestionItem[
 
 export function answerFirstQuestion(session: AgentSession, answer: string) {
   const question = session.pendingQuestions[0]!
-  return session.handleUserMessage(formatQuestionAnswer(question, answer), false, [], undefined, [], [], 'native', { id: question.id, answer })
+  return session.handleUserMessage(formatQuestionAnswer(question, answer), false, [], undefined, [], [], 'native', [{ id: question.id, answer }])
 }

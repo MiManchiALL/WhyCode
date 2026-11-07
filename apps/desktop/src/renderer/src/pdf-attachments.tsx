@@ -49,7 +49,7 @@ export function PdfDraftStrip({
 }) {
   if (drafts.length === 0) return null
   return (
-    <div className={`flex max-w-full flex-wrap gap-2 ${variant === 'composer' ? 'mb-2 w-full [&>*]:max-w-[calc((100%_-_0.5rem)/2)]' : 'justify-end'}`}>
+    <div className={variant === 'composer' ? 'contents' : 'flex max-w-full flex-wrap justify-end gap-2'}>
       {drafts.map((draft) => (
         <PdfChip key={draft.id} name={draft.name} byteLength={draft.byteLength}
           onRemove={onRemove ? () => onRemove(draft.id) : undefined} />

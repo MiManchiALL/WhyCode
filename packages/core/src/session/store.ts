@@ -1,3 +1,4 @@
+import type { ConversationMessage } from '../context/user-turn.ts'
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, open as openFile, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, posix } from 'node:path'
@@ -19,9 +20,9 @@ import {
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
 import { createTaskContextMessage } from '../tasks/context.ts'
-import type { QuestionResolution } from '../user-questions.ts'
-import { hasPendingUserQuestion, pendingUserQuestions, skippedQuestionMessage, carryPendingQuestions } from '../context/question-state.ts'
-import { compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
+import type { QuestionSubmission } from '../user-questions.ts'
+import { availableQuestions, hasPendingUserQuestion, pendingUserQuestions, applyQuestionSkips, carryPendingQuestions } from '../context/question-state.ts'
+import { latestVisibleRootTurn, compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import { responseViewEvents } from './response-view.ts'
 import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
 import { buildLoadedSession, parseTranscript } from './chain.ts'
@@ -724,13 +725,13 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionResolution,
+    questionReply?: QuestionSubmission,
   ): Promise<void> {
     return this.enqueue(async () => {
       const resolvedImageDelivery = attachments.length
         ? imageDelivery ?? 'native'
         : undefined
-      if (questionReply) this.assertOpenQuestion(questionReply.id)
+      if (questionReply) this.assertOpenQuestions(questionReply.map(item => item.id))
       this.assertPendingInputs(consumesInputIds, 'restored', '消费')
       this.assertImageAttachmentsCompatible(attachments)
       this.assertPdfAttachmentsCompatible(pdfAttachments)
@@ -970,7 +971,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionResolution,
+    questionReply?: QuestionSubmission,
   ): Promise<void> {
     const recordedMessages = structuredClone(rollbackMessages)
     return this.enqueue(async () => {
@@ -1013,19 +1014,17 @@ export class SessionJournal implements SessionRecorder {
     }
   }
 
-  private assertOpenQuestion(id: string): void {
-    if (!pendingUserQuestions(this.messages).some(question => question.id === id)
-      || [...this.pendingUserInputMap.values()].some(input => input.questionReply?.id === id)) {
-      throw new Error('这道问题已经处理')
-    }
+  private assertOpenQuestions(ids: readonly string[]): void {
+    const available = new Set(availableQuestions(pendingUserQuestions(this.messages), this.pendingUserInputMap.values()).map(item => item.id))
+    if (ids.some(id => !available.delete(id))) throw new Error('提交包含已处理的问题')
   }
 
-  recordQuestionSkip(id: string): Promise<void> {
+  recordQuestionSkips(ids: string[]): Promise<void> {
     return this.enqueue(async () => {
-      this.assertOpenQuestion(id)
-      const skipped = this.entry({ type: 'question-skipped', questionId: id })
+      this.assertOpenQuestions(ids)
+      const skipped = this.entry({ type: 'question-skipped', questionIds: ids })
       await this.appendEntries([skipped])
-      this.messages.push(skippedQuestionMessage(id))
+      applyQuestionSkips(this.messages, ids)
       this.appendResponseView(skipped)
       if (this.metadata.status === 'waiting-user' && !hasPendingUserQuestion(this.messages)) this.metadata.status = 'idle'
       await this.refreshMetadataCache()
@@ -1076,6 +1075,7 @@ export class SessionJournal implements SessionRecorder {
         started.uuid,
       )
       await this.appendEntries([started, batch])
+      this.appendResponseView(batch)
       this.turnStartMessages.set(turnId, messagesBeforeTurn)
       this.turnStartTaskStates.set(turnId, taskStateBeforeTurn)
       this.turnStartConsensusStates.set(
@@ -1152,7 +1152,7 @@ export class SessionJournal implements SessionRecorder {
       if (taskState !== undefined) this.taskState = cloneTaskPlanState(taskState)
       if (engagedPlanId !== undefined) this.activeTurnEngagedPlanId = engagedPlanId
       this.metadata.updatedAt = batch.timestamp
-      await this.refreshMetadataCache()
+      await this.refreshMetadataCache(recordedMessages.some((message: ConversationMessage) => message.whycode?.questionBatch || message.whycode?.questionReply))
     })
   }
 
@@ -1572,7 +1572,7 @@ export class SessionJournal implements SessionRecorder {
     if (this.undeliveredUserInputIdSet.size > 0 || this.pendingUserInputMap.size > 0) {
       throw new Error('存在尚未处理的用户输入，不能编辑最新消息')
     }
-    this.assertLatestVisibleRootTurn(previousTurnId)
+    latestVisibleRootTurn(this.viewEvents, previousTurnId)
     const expectedMessages = this.messagesBeforeTurn(previousTurnId)
     const expectedTaskState = this.taskStateBeforeTurn(previousTurnId)
     if (
@@ -1586,29 +1586,6 @@ export class SessionJournal implements SessionRecorder {
     }
   }
 
-  private assertLatestVisibleRootTurn(turnId: string): void {
-    const targetIndex = this.viewEvents.findIndex((entry) =>
-      entry.type === 'core-event'
-      && entry.event.type === 'turn-start'
-      && entry.event.turnId === turnId)
-    if (targetIndex < 0) throw new Error('找不到目标回合的可见起点')
-    const rootIndex = this.viewEvents
-      .slice(0, targetIndex)
-      .findLastIndex((entry) => entry.type === 'user-message' && entry.startsTurn)
-    if (rootIndex < 0) throw new Error('找不到目标回合的根用户消息')
-    const absoluteRootIndex = rootIndex
-    const firstTurn = this.viewEvents.slice(absoluteRootIndex + 1).find((entry) =>
-      entry.type === 'core-event' && entry.event.type === 'turn-start')
-    if (
-      firstTurn?.type !== 'core-event'
-      || firstTurn.event.type !== 'turn-start'
-      || firstTurn.event.turnId !== turnId
-      || this.viewEvents.slice(absoluteRootIndex + 1).some((entry) => entry.type === 'user-message')
-    ) {
-      throw new Error('只能编辑最新一条用户消息')
-    }
-  }
-
   private createTurnEditTransaction(
     previousTurnId: string,
     inputId: string,
@@ -1619,7 +1596,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[],
     skills: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionResolution,
+    questionReply?: QuestionSubmission,
   ): TurnEditTransaction {
     const messages = applyProjectInstructions(
       rollbackMessages,
@@ -1750,7 +1727,8 @@ export class SessionJournal implements SessionRecorder {
    * transcript 是事实源；它已 flush 后，派生 metadata 刷新失败不能把整笔提交伪装成失败。
    * 删除可能陈旧的缓存后，SessionStore.list/open 会按既有恢复路径从 JSONL 重建。
    */
-  private async refreshMetadataCache(): Promise<void> {
+  private async refreshMetadataCache(questionsChanged = true): Promise<void> {
+    if (questionsChanged) this.metadata.hasPendingQuestions = availableQuestions(pendingUserQuestions(this.messages), this.pendingUserInputMap.values()).length > 0
     try {
       await writeMetadata(this.paths.metadata, this.metadata)
     } catch {

@@ -82,7 +82,7 @@ function SessionItem({
         title={session.resumable ? directory ?? undefined : session.unavailableReason}
         aria-current={selected ? 'page' : undefined}
         aria-label={`${selected ? '当前' : '打开'}会话 ${session.title || '未命名会话'}${
-          session.status === 'waiting-user' ? '，等待你的回答'
+          session.hasPendingQuestions ? '，等待你的回答'
             : session.running ? '，运行中' : session.hasUnreadCompletion ? '，有已完成结果待查看' : ''
         }`}
       >
@@ -150,8 +150,8 @@ const SESSION_ACTIVITY_CELLS: readonly (readonly [number, number])[] = [
 function SessionMarker({ session }: { session: SessionListItem }) {
   return (
     <span className="flex size-2.5 shrink-0 items-center justify-center" aria-hidden="true"
-      title={session.status === 'waiting-user' ? '等待你的回答' : undefined}>
-      {session.status === 'waiting-user' ? (
+      title={session.hasPendingQuestions ? '等待你的回答' : undefined}>
+      {session.hasPendingQuestions ? (
         <MessageCircleQuestionMark size={14} className="shrink-0 text-[var(--wc-muted)]" />
       ) : session.running ? (
         <svg
@@ -190,7 +190,7 @@ function relativeTime(value: string): string {
 }
 
 function statusLabel(session: SessionListItem): string {
-  if (session.status === 'waiting-user') return '等待你的回答'
+  if (session.hasPendingQuestions) return '等待你的回答'
   if (session.running) return '运行中'
   const { status } = session
   if (status === 'unavailable') return '当前不可恢复'

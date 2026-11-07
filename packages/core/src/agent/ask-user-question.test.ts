@@ -3,6 +3,12 @@ import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { SessionStore, type SessionJournal } from '../session/store.ts'
+import { localWorkspace } from '../workspace/types.ts'
+import { formatQuestionSubmission } from '../user-questions.ts'
 import { userTurn } from '../context/user-turn.ts'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
@@ -50,9 +56,9 @@ describe('Main 主动提问', () => {
     assert.equal(model.doStreamCalls.length, 2)
     assert.equal(session.pendingQuestions.length, 3)
     const [first, second, third] = session.pendingQuestions
-    await session.skipUserQuestion(second!.id)
+    await session.skipUserQuestions([second!.id])
     await session.handleUserMessage('回答「你更看重哪一点？」：简单可靠', false, [], undefined, [], [], 'native',
-      { id: first!.id, answer: '简单可靠' })
+      [{ id: first!.id, answer: '简单可靠' }])
     assert.deepEqual(session.pendingQuestions.map(item => item.id), [third!.id])
     assert.equal(events.filter(event => event.type === 'turn-start').length, 2)
     assert.equal(model.doStreamCalls.length, 3)
@@ -73,10 +79,14 @@ describe('Main 主动提问', () => {
     const work = session.handleUserMessage('开始任务')
     const signal = await Promise.race([started, Promise.resolve(work).then(() => { throw new Error('读取工具没有启动') })])
     try {
-      const question = session.pendingQuestions[0]!
+      const [question, ...skipped] = session.pendingQuestions
+      assert.ok(question)
+      const roles = session.captureMessageSnapshot().map(message => message.role)
+      await session.skipUserQuestions(skipped.map(item => item.id))
+      assert.deepEqual(session.captureMessageSnapshot().map(message => message.role), roles)
       assert.equal(question.toolUseId, 'ask-1')
       session.handleUserMessage('回答「你更看重哪一点？」：可靠', false, [], undefined, [], [], 'native',
-        { id: question.id, answer: '可靠' })
+        [{ id: question.id, answer: '可靠' }])
       assert.equal(signal.aborted, false)
       assert.equal(model.doStreamCalls.length, 1)
     } finally { release() }
@@ -93,6 +103,65 @@ describe('Main 主动提问', () => {
     assert.ok(model.doStreamCalls[0]!.tools?.some(tool => tool.type === 'function'
       && tool.name === ASK_USER_QUESTION_TOOL_NAME && tool.description?.includes('一个或多个简短问题')))
   })
+
+  for (const outcome of ['aborted', 'error'] as const) {
+    it(`已排队的一组答案在 ${outcome} 时记入原回合，重启可见且编辑根会同时撤回插话`, { timeout: 15_000 }, async (t) => {
+      const dir = await mkdtemp(join(tmpdir(), 'whycode-question-delivery-'))
+      t.after(() => rm(dir, { recursive: true, force: true }))
+      const store = new SessionStore(dir)
+      const journal = await store.create({ modelId: 'test:ask-user', workspace: localWorkspace(null) })
+      let entered!: () => void, release!: () => void
+      const ready = new Promise<void>(resolve => { entered = resolve })
+      const gate = new Promise<void>(resolve => { release = resolve })
+      let requests = 0
+      const model = new MockLanguageModelV4({ doStream: async () => {
+        requests++
+        if (requests === 1) return questionStep()
+        if (requests > 2) return finalStep('重新处理。')
+        entered()
+        await gate
+        if (outcome === 'error') throw new Error('invalid synthetic model request')
+        return finalStep('原回合')
+      } })
+      const events: CoreEvent[] = []
+      const session = createSession(model, events, undefined, journal)
+      const rootId = crypto.randomUUID()
+      await journal.recordUserInputWithId(rootId, '旧根请求', true)
+      const work = session.handleUserMessage('旧根请求', false, [], rootId)
+      await Promise.race([ready, Promise.resolve(work).then(() => { throw new Error('没有进入下一次模型请求') })])
+      const turn = events.find(event => event.type === 'turn-start')!
+      assert.ok(turn.type === 'turn-start')
+      await journal.recordViewEvents([{ type: 'core-event', event: turn }])
+      const pending = session.pendingQuestions
+      assert.equal(journal.metadataSnapshot.hasPendingQuestions, true)
+      const replies = pending.map((item, i) => ({ id: item.id, answer: i === 1 ? null : '选项' + i }))
+      const text = formatQuestionSubmission(pending, replies)
+      assert.ok(text)
+      const inputId = crypto.randomUUID()
+      try {
+        await journal.recordUserInputWithId(inputId, text, false, [], [], [], [], undefined, replies)
+        session.handleUserMessage(text, false, [], inputId, [], [], 'native', replies)
+        assert.ok(events.some(event => event.type === 'message-queued' && event.id === inputId))
+        assert.equal(journal.metadataSnapshot.hasPendingQuestions, false)
+        if (outcome === 'aborted') session.abort()
+      } finally { release() }
+      assert.equal(await work, outcome)
+      assert.equal(model.doStreamCalls.length, 2)
+      assert.equal(journal.pendingUserInputs.length, 0)
+      assert.equal(session.availableQuestions.length, 0)
+      assert.deepEqual(session.captureMessageSnapshot().map(userTurn).filter(Boolean).map(turn => turn!.startsTurn), [true, false])
+      assert.ok(events.some(event => event.type === 'message-injected' && event.id === inputId))
+      const reopened = await store.open(journal.sessionId)
+      assert.ok(reopened.initialViewEvents.some(event => event.type === 'user-message' && !event.startsTurn && event.text === text))
+      const edit = await session.prepareLatestTurnEdit(turn.turnId, '改写根请求')
+      edit.accept()
+      await edit.startMain()
+      const edited = await store.open(journal.sessionId)
+      assert.ok(!JSON.stringify(edited.initialMessages).includes('选项0'))
+      assert.ok(!JSON.stringify(edited.initialMessages).includes('旧根请求'))
+      assert.deepEqual(edited.initialMessages.map(userTurn).filter(Boolean).map(turn => turn!.startsTurn), [true])
+    })
+  }
 
   it('讨论 Agent 不获得主动提问工具', async () => {
     const model = new MockLanguageModelV4({ doStream: [finalStep()] })
@@ -127,9 +196,9 @@ describe('Main 主动提问', () => {
   })
 })
 
-function createSession(model: MockLanguageModelV4, events: CoreEvent[], baseTools?: ToolDefinition[]): AgentSession {
+function createSession(model: MockLanguageModelV4, events: CoreEvent[], baseTools?: ToolDefinition[], sessionRecorder?: SessionJournal): AgentSession {
   return new AgentSession({
-    model: modelEntry(model), baseTools,
+    model: modelEntry(model), baseTools, sessionRecorder,
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit: (event) => events.push(event),

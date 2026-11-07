@@ -1224,7 +1224,9 @@ html[data-wc-panel-resizing='true']::after {
 .wc-question-heading, .wc-question-summary, .wc-question-controls { display: flex; align-items: center; gap: 6px; }
 .wc-question-heading, .wc-question-summary { color: var(--wc-muted); font-size: 12px; }
 .wc-question-heading .wc-icon-button { width: 24px; height: 24px; }
-.wc-question-summary { border-radius: 8px; padding: 5px 8px; }
+.wc-composer-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.wc-composer-chips:not(:empty) { margin-bottom: 4px; }
+.wc-question-summary { border: 1px solid var(--wc-line); border-radius: 999px; padding: 4px 9px; }
 .wc-question-summary:hover, .wc-question-option:hover:not(:disabled) { background: var(--wc-hover); }
 .wc-question-title { margin: 8px 0 10px; font-size: var(--wc-content-font-size, 14px); font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 .wc-question-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 8px; }

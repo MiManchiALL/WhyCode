@@ -91,10 +91,11 @@ export interface ContextUsageInfo {
 }
 
 export * from './user-questions.ts'
-import type { PendingQuestion, QuestionResolution, UserQuestion } from './user-questions.ts'
+import type { PendingQuestion, QuestionSubmission, UserQuestion } from './user-questions.ts'
 
 /** 忙时输入始终把正文和附件作为一个有序单元传递、恢复和展示。 */
 export interface QueuedUserMessage {
+  questionIds?: string[]
   id: string
   text: string
   attachments?: ImageAttachment[]
@@ -181,7 +182,7 @@ export type CoreEvent =
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
-  | { type: 'user-question-resolved'; resolution: QuestionResolution }
+  | { type: 'user-question-resolved'; resolutions: QuestionSubmission }
   /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
   | {
       type: 'user-message-accepted'
@@ -208,7 +209,7 @@ export type CoreEvent =
   | {
       type: 'user-message-edited'
       questions?: PendingQuestion[]
-      questionReply?: QuestionResolution
+      questionReply?: QuestionSubmission
       previousTurnId: string
       inputId: string
       text: string
@@ -223,23 +224,8 @@ export type CoreEvent =
       btw: { conversationId: string; turnIndex: number; mode: BtwMode }
     }
   // --- steering（M2-a）：运行中插话 ---
-  | {
-      type: 'message-queued'
-      id: string
-      text: string
-      attachments?: ImageAttachment[]
-      pdfAttachments?: PdfAttachment[]
-      skills?: SkillSummary[]
-    }
-  | {
-      type: 'message-injected'
-      id: string
-      text: string
-      startsTurn?: boolean
-      attachments?: ImageAttachment[]
-      pdfAttachments?: PdfAttachment[]
-      skills?: SkillSummary[]
-    }
+  | ({ type: 'message-queued' } & QueuedUserMessage)
+  | ({ type: 'message-injected'; startsTurn?: boolean } & QueuedUserMessage)
   /** 用户主动丢弃尚未送达的排队消息；只改变队列，不进入对话时间线。 */
   | { type: 'message-dequeued'; id: string }
   /** 所选排队消息已成功取回，交给发起重新编辑的输入框。 */
@@ -430,7 +416,7 @@ export type CoreCommand =
     }
   /** 对已经写稳、尚未送达的排队消息执行就地操作。 */
   | QueuedMessageActionCommand
-  | { type: 'resolve-user-question'; resolution: QuestionResolution }
+  | { type: 'resolve-user-question'; resolutions: QuestionSubmission }
   | {
       type: 'btw-message'
       mode: BtwMode

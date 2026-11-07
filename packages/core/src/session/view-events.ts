@@ -4,7 +4,7 @@ import {
   coalesceAdjacentCoreEvent,
   userQuestionSchema,
   pendingQuestionSchema,
-  questionResolutionSchema,
+  questionSubmissionSchema,
   type CoreEvent,
 } from '../events.ts'
 import { taskPlanSchema } from '../tasks/types.ts'
@@ -74,7 +74,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('user-message-edited'),
     questions: z.array(pendingQuestionSchema).optional(),
-    questionReply: questionResolutionSchema.optional(),
+    questionReply: questionSubmissionSchema.optional(),
     previousTurnId: z.string().min(1),
     inputId: z.string().min(1),
     text: z.string().min(1),
@@ -141,7 +141,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('error'), message: z.string(), recoverable: z.boolean() }),
   z.object({ type: z.literal('user-question'), question: userQuestionSchema }),
-  z.object({ type: z.literal('user-question-resolved'), resolution: questionResolutionSchema }),
+  z.object({ type: z.literal('user-question-resolved'), resolutions: questionSubmissionSchema }),
   z.object({
     type: z.literal('peer-event'),
     agentId: z.enum(['B', 'C']),
@@ -229,6 +229,19 @@ export type ViewEvent = RecordedViewEvent
   | { type: 'step-committed'; hasToolCalls: boolean }
   | { type: 'turn-completed' }
   | { type: 'pending-questions'; questions: import('../user-questions.ts').PendingQuestion[] }
+
+/** 普通插话属于根回合；后续根消息和独立 BTW 输入才会取代编辑目标。 */
+export function latestVisibleRootTurn(events: readonly ViewEvent[], turnId: string) {
+  const index = events.findLastIndex(entry => entry.type === 'user-message' && (entry.startsTurn || entry.btw))
+  const root = events[index]
+  const afterRoot = events.slice(index + 1)
+  const first = afterRoot.find(entry => entry.type === 'core-event' && entry.event.type === 'turn-start')
+  if (root?.type !== 'user-message' || !root.startsTurn || first?.type !== 'core-event'
+    || first.event.type !== 'turn-start' || first.event.turnId !== turnId) {
+    throw new Error('只能编辑最新一条用户消息')
+  }
+  return { root, afterRoot }
+}
 
 /** 对话卡片只承载展示摘要；完整工具结果仍由模型消息与工具日志持有。 */
 export function compactViewEvent(event: RecordedViewEvent): RecordedViewEvent {

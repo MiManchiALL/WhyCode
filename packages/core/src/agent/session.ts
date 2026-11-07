@@ -82,7 +82,7 @@ import {
   createCaptureScreenshotTool,
   type ScreenshotCaptureHandler,
 } from '../tools/capture-screenshot/index.ts'
-import { formatQuestionAnswer, type QuestionResolution } from '../user-questions.ts'
+import { editedQuestionSubmission, type QuestionSubmission } from '../user-questions.ts'
 import type { ConversationMessage } from '../context/user-turn.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import {
@@ -126,7 +126,7 @@ import {
   taskContextBlock,
 } from '../tasks/context.ts'
 import {
-  hasPendingUserQuestion, pendingUserQuestions, withQuestionBatch, skippedQuestionMessage, carryPendingQuestions, answersPlanQuestion,
+  hasPendingUserQuestion, pendingUserQuestions, availableQuestions, withQuestionBatch, applyQuestionSkips, carryPendingQuestions, answersPlanQuestion,
 } from '../context/question-state.ts'
 import {
   createPermissionContext,
@@ -641,22 +641,20 @@ export class AgentSession {
 
   get pendingQuestions() { return pendingUserQuestions(this.messages) }
 
-  findAvailableQuestion(id: string) {
-    if (this.queue.some(item => item.questionReply?.id === id)) return undefined
-    return this.pendingQuestions.find(question => question.id === id)
-  }
+  get availableQuestions() { return availableQuestions(this.pendingQuestions, this.queue) }
 
-  async skipUserQuestion(id: string): Promise<void> {
-    if (!this.findAvailableQuestion(id)) throw new Error('这道问题已经处理')
-    await this.persistRequired(recorder => recorder.recordQuestionSkip(id), '跳过问题')
-    const resolution = { id, answer: null }
-    this.messages.push(skippedQuestionMessage(id))
-    this.options.emit({ type: 'user-question-resolved', resolution })
+  async skipUserQuestions(ids: string[]): Promise<void> {
+    if (this.compacting || this.restoringCheckpointToolUseId || this.editingTurn) throw new Error('会话正在更改历史，请稍后再提交')
+    const available = new Set(this.availableQuestions.map(item => item.id))
+    if (ids.some(id => !available.delete(id))) throw new Error('提交包含已处理的问题')
+    await this.persistRequired(recorder => recorder.recordQuestionSkips(ids), '跳过问题')
+    applyQuestionSkips(this.messages, ids)
+    this.options.emit({ type: 'user-question-resolved', resolutions: ids.map(id => ({ id, answer: null })) })
   }
 
   /** 空闲时优先等待用户输入，后台通知不会另启模型回合。 */
   get waitingForUserInput(): boolean {
-    return !this.isBusy && hasPendingUserQuestion(this.messages)
+    return !this.isBusy && this.availableQuestions.length > 0
   }
 
   get checkpointRestoreToolUseId(): string | null {
@@ -1027,15 +1025,13 @@ export class AgentSession {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery: ImageDeliveryMode = 'native',
-    questionReply?: QuestionResolution,
+    questionReply?: QuestionSubmission,
   ): Promise<StopReason> | void {
     const item = createUserInput(
       text, imageAttachments, persistedInputId, pdfAttachments, skills, imageDelivery,
     )
     item.questionReply = questionReply
-    const handling = this.receiveUserInput(item, { urgent })
-    if (questionReply) this.options.emit({ type: 'user-question-resolved', resolution: questionReply })
-    return handling
+    return this.receiveUserInput(item, { urgent })
   }
 
   /** 把单条排队消息安全退回 Renderer，供用户重新编辑后原子重提。 */
@@ -1189,10 +1185,7 @@ export class AgentSession {
     { recorder, rollbackMessages, rollbackTaskState, skills, resources }: ReturnType<typeof latestTurnEditContext>,
   ): Promise<PreparedLatestTurnEdit> {
     const inputId = crypto.randomUUID()
-    const question = pendingUserQuestions(rollbackMessages).find(item => item.id === resources.questionId)
-    const prefix = question ? formatQuestionAnswer(question, '') : ''
-    const reply = question ? { id: question.id, answer: nextText.startsWith(prefix) ? nextText.slice(prefix.length).trim() : nextText } : undefined
-    if (reply && !reply.answer) throw new Error('回答不能为空')
+    const reply = editedQuestionSubmission(pendingUserQuestions(rollbackMessages), resources.questionReply, nextText)
     const commit = () => recorder.recordTurnEditInput(
       turnId, inputId, nextText, rollbackMessages, rollbackTaskState,
       resources.attachments, resources.pdfAttachments, skills, resources.imageDelivery, reply,
@@ -1364,7 +1357,7 @@ export class AgentSession {
     this.queueAutoDrain = true
     if (this.isBusy) {
       this.queue.push(item)
-      if (!alreadyQueued && !item.questionReply) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
+      if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
       if (item.questionReply) {
         item.urgent = true
         this.wakeRunLoop()
@@ -1644,11 +1637,20 @@ export class AgentSession {
     }
   }
 
+  private emitQuestionReplies(messages: readonly ConversationMessage[]): void {
+    for (const message of messages) {
+      if (message.role === 'user' && message.whycode?.questionReply) {
+        this.options.emit({ type: 'user-question-resolved', resolutions: message.whycode.questionReply })
+      }
+    }
+  }
+
   /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
-  private async injectQueuedMidTurn(): Promise<{ userInput: boolean; resumesPlan: boolean }> {
-    const drained = this.queue.filter((item) => item.urgent)
-    if (drained.length) this.queue = this.queue.filter((item) => !item.urgent)
-    const notifications = this.drainTaskNotifications(drained.map(queuedMessageForModel))
+  private async injectQueuedMidTurn(ending = false): Promise<{ userInput: boolean; resumesPlan: boolean }> {
+    const ready = (item: QueuedMessage) => ending ? Boolean(item.questionReply) : item.urgent
+    const drained = this.queue.filter(ready)
+    if (drained.length) this.queue = this.queue.filter(item => !ready(item))
+    const notifications = ending ? [] : this.drainTaskNotifications(drained.map(queuedMessageForModel))
     const injected: ModelMessage[] = [
       ...drained.map(item => {
         const message = queuedMessageForModel(item)
@@ -1658,7 +1660,7 @@ export class AgentSession {
       }),
       ...notifications.map((item) => item.message),
     ]
-    const resumesPlan = drained.some(item => item.questionReply) && !this.taskPlan?.stateSnapshot.resumeRequired
+    const resumesPlan = !ending && drained.some(item => item.questionReply) && !this.taskPlan?.stateSnapshot.resumeRequired
       && answersPlanQuestion(this.pendingQuestions, injected, this.taskPlan?.snapshot?.id)
     if (injected.length > 0 && this.activeTurn) {
       try {
@@ -1681,6 +1683,7 @@ export class AgentSession {
         throw error
       }
       this.messages.push(...injected)
+      this.emitQuestionReplies(injected)
       for (const item of drained) this.activatePdfAttachments(item.pdfAttachments)
       this.rememberDeliveredSubagentNotifications(notifications)
       await this.confirmNotificationsDelivered(notifications, this.activeTurn.id)
@@ -1803,6 +1806,7 @@ export class AgentSession {
       this.resolveIdleWaiters()
       return 'error'
     }
+    this.emitQuestionReplies(initialContext)
     for (const item of deliveredInputs) this.activatePdfAttachments(item.pdfAttachments)
     this.rememberDeliveredSubagentNotifications(initialTaskNotifications)
     await this.confirmNotificationsDelivered(initialTaskNotifications, turnId)
@@ -1945,7 +1949,7 @@ export class AgentSession {
             }
             continue
           }
-          if (hasPendingUserQuestion(this.messages)) {
+          if (!this.protocolRound && !this.options.promptContext.discussion && hasPendingUserQuestion(this.messages)) {
             stopReason = 'waiting-user'
             break
           }
@@ -1987,6 +1991,13 @@ export class AgentSession {
 
     // 循环已产生稳定终态；后续短暂持久化窗口不再接受“停止”去回滚已提交 step。
     this.opAbort = null
+    // 已收下的提问回答在工具全部退出后记入原回合。停止或失败时只提交输入，不再启动模型请求。
+    if ((stopReason === 'aborted' || stopReason === 'error') && !this.persistenceFailed && this.queue.some(item => item.questionReply)) {
+      try { await this.injectQueuedMidTurn(true) }
+      catch (error) {
+        emit({ type: 'error', message: error instanceof Error ? error.message : String(error), recoverable: true })
+      }
+    }
     if (stopReason === 'aborted') {
       const interruptionReason = turnAbortReason(abortSignal)
       const interruptedState = planExecutionEngaged
