@@ -59,6 +59,7 @@
   --wc-link: #2563b5;
   --wc-rollback: #eee2e1;
   --wc-rollback-ink: #755a58;
+  --wc-success: #55815b;
   --wc-danger: #b95f5b;
   --wc-status-running: #279447;
   --wc-status-running-ring: rgb(39 148 71 / 42%);
@@ -1421,7 +1422,7 @@ html[data-wc-panel-resizing='true']::after {
 }
 
 .wc-tool-lines-added {
-  color: #55815b;
+  color: var(--wc-success);
 }
 
 .wc-tool-lines-removed {
