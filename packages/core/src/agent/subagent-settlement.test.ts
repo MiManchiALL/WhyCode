@@ -269,9 +269,12 @@ describe('子代理终态续轮', () => {
     }))
     const delivered = new Set<string>()
     let firstTurn = true
+    let asked = false
     const model = new MockLanguageModelV4({ doStream: async () => {
       if (!firstTurn) return finalStep('已处理。')
       if (reason === 'error') throw new Error('请求失败')
+      if (asked) return finalStep('请确认调查范围。')
+      asked = true
       return { stream: simulateReadableStream({ chunks: [
         { type: 'tool-call' as const, toolCallId: 'ask', toolName: 'AskUserQuestion', input: JSON.stringify({
           questions: [{ header: '调查范围', question: '核对哪个项目？', options: [
@@ -284,7 +287,8 @@ describe('子代理终态续轮', () => {
     } })
     const session = createSession(model, [], undefined, {
       pendingSubagentSettlements: async function* () {
-        for (const item of items) if (!delivered.has(item.activationId)) yield item
+        const available = firstTurn && reason === 'waiting-user' ? items.slice(0, 1) : items
+        for (const item of available) if (!delivered.has(item.activationId)) yield item
       },
       onSubagentSettlementDelivered: async item => { delivered.add(item.activationId) },
     })
@@ -295,7 +299,9 @@ describe('子代理终态续轮', () => {
     assert.equal(await session.handleExecutionMessage('讨论新请求'), 'completed')
     assert.equal(delivered.size, 1)
     session.setProtocolRound(false)
-    assert.equal(await session.handleUserMessage('继续查看调查'), 'completed')
+    const question = session.pendingQuestions[0]
+    const replies = question ? [{ id: question.id, answer: '甲' }] : undefined
+    assert.equal(await session.handleUserMessage('继续查看调查', false, [], undefined, [], [], 'native', replies), 'completed')
     assert.equal(delivered.size, 3)
   })
 })

@@ -76,6 +76,7 @@ export function metadataFromStart(
     reasoningEffort: entry.reasoningEffort ?? 'default',
     title: entry.title ?? '',
     lastUserText: '',
+    hasPendingQuestions: false,
     createdAt: entry.forkOrigin?.createdAt ?? entry.timestamp,
     updatedAt: entry.forkOrigin?.createdAt ?? entry.timestamp,
     status: 'idle',

@@ -3,7 +3,7 @@ import { questionsForBatch } from '../user-questions.ts'
 import { userTurn, withUserTurn } from '../context/user-turn.ts'
 import { keepsConsensusProgress, type ConsensusPersistedState } from '../consensus/types.ts'
 import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
-import { pendingUserQuestions, withQuestionReply, skippedQuestionMessage } from '../context/question-state.ts'
+import { availableQuestions, pendingUserQuestions, withQuestionReply, applyQuestionSkips } from '../context/question-state.ts'
 import {
   SESSION_SCHEMA_VERSION,
   sessionEntrySchema,
@@ -98,18 +98,17 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   const planEventCount = viewEvents.length
   reconcileTaskPlanView(viewEvents, taskState)
   if (viewEvents.length > planEventCount) viewEventTimestamps.push(chain.at(-1)!.timestamp)
-  const acceptedAnswers = new Set(pendingUserInputs.flatMap(input => input.questionReply ? [input.questionReply.id] : []))
-  const pendingQuestions = pendingUserQuestions(messages).filter(question => !acceptedAnswers.has(question.id))
+  const pendingQuestions = pendingUserQuestions(messages)
   const visible = new Set<string>()
   for (const entry of viewEvents) {
     if (entry.type !== 'core-event') continue
     const event = entry.event
     if (event.type === 'user-question') for (const question of questionsForBatch(event.question)) visible.add(question.id)
-    if (event.type === 'user-question-resolved') visible.delete(event.resolution.id)
+    if (event.type === 'user-question-resolved') for (const reply of event.resolutions) visible.delete(reply.id)
     if (event.type === 'user-message-edited' || (event.type === 'checkpoint-restored' && event.ok && event.scope === 'files-and-chat')) {
       visible.clear()
       for (const question of event.questions ?? []) visible.add(question.id)
-      if (event.type === 'user-message-edited' && event.questionReply) visible.delete(event.questionReply.id)
+      if (event.type === 'user-message-edited') for (const reply of event.questionReply ?? []) visible.delete(reply.id)
     }
   }
   if (visible.size !== pendingQuestions.length || pendingQuestions.some(question => !visible.has(question.id))) {
@@ -183,6 +182,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       createdAt,
       updatedAt: last.timestamp > createdAt ? last.timestamp : createdAt,
       status,
+      hasPendingQuestions: availableQuestions(pendingQuestions, pendingUserInputs).length > 0,
       forkOrigin: start.forkOrigin,
     },
   }
@@ -388,7 +388,7 @@ function collectTurnStarts(
       }
     }
     if (entry.type === 'question-skipped') {
-      messages.push(skippedQuestionMessage(entry.questionId))
+      applyQuestionSkips(messages, entry.questionIds)
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(
@@ -1007,7 +1007,7 @@ function collectMessages(
       }
     }
     if (entry.type === 'question-skipped') {
-      messages.push(skippedQuestionMessage(entry.questionId))
+      applyQuestionSkips(messages, entry.questionIds)
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(
@@ -1164,7 +1164,7 @@ function findInterruptedWork(
       }
     }
     if (entry.type === 'question-skipped') {
-      visibleMessages.push(skippedQuestionMessage(entry.questionId))
+      applyQuestionSkips(visibleMessages, entry.questionIds)
     }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(

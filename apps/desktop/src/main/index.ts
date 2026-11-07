@@ -152,7 +152,7 @@ import {
 } from './custom-system-prompt.ts'
 import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
-import { questionResolutionSchema, formatQuestionAnswer, type QuestionResolution } from '@whycode/core/events'
+import { questionSubmissionSchema, formatQuestionSubmission, type QuestionSubmission } from '@whycode/core/events'
 import { handleQueuedMessageAction } from './queued-message-actions.ts'
 import { deliverEditedUserMessage, startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
@@ -1070,19 +1070,20 @@ async function handleCommand(
     case 'user-message':
       return handleUserMessageCommand(runtime, command)
     case 'resolve-user-question': {
-      const result = questionResolutionSchema.safeParse(command.resolution)
+      const result = questionSubmissionSchema.safeParse(command.resolutions)
       if (!result.success) return { ok: false, error: '问题回答无效' }
-      const resolution = result.data
-      if (resolution.answer !== null) return handleUserMessageCommand(runtime,
-        { type: 'user-message', text: resolution.answer }, resolution)
+      const resolutions = result.data
+      const text = resolutions.flatMap(item => item.answer === null ? [] : [item.answer]).join('\n')
+      if (text) return handleUserMessageCommand(runtime, { type: 'user-message', text }, resolutions)
+      const ids = resolutions.map(item => item.id)
       const reservation = runtime.routingGate.reserve()
       try {
         await reservation.ready
-        if (runtime.session) await runtime.session.skipUserQuestion(resolution.id)
+        if (runtime.session) await runtime.session.skipUserQuestions(ids)
         else {
           if (!runtime.journal) throw new Error('问题所属会话不可用')
-          await runtime.journal.recordQuestionSkip(resolution.id)
-          runtime.emit({ type: 'user-question-resolved', resolution }, false)
+          await runtime.journal.recordQuestionSkips(ids)
+          runtime.emit({ type: 'user-question-resolved', resolutions }, false)
         }
         return { ok: true }
       } catch (error) {
@@ -1450,7 +1451,7 @@ async function prepareUserMessageSkills(
 async function handleUserMessageCommand(
   runtime: DesktopSessionRuntime,
   command: UserMessageCommand,
-  questionReply?: QuestionResolution,
+  questionReply?: QuestionSubmission,
 ): Promise<RuntimeCommandResult> {
   if (settingsMutationInProgress) {
     return rejectUserMessage(runtime, '连接设置处理中，请等待完成后再发送消息')
@@ -1492,16 +1493,13 @@ async function handleUserMessageCommand(
       return rejectUserMessage(runtime, error instanceof Error ? error.message : String(error))
     }
 
-    const question = questionReply ? runtime.session?.findAvailableQuestion(questionReply.id) : undefined
-    if (questionReply && (!question || !questionReply.answer)) {
+    const userText = questionReply
+      ? formatQuestionSubmission(runtime.session?.availableQuestions ?? [], questionReply)
+      : command.text.trim() || attachmentFallbackText(prepared.attachments.length, prepared.pdfAttachments.length)
+    if (userText === null) {
       if (!runtime.executionBusy) runtime.finishWork()
-      return { ok: false, error: '这道问题已经处理' }
+      return { ok: false, error: '提交包含已处理的问题' }
     }
-    const userText = question && questionReply?.answer ? formatQuestionAnswer(question, questionReply.answer) : command.text.trim()
-      || attachmentFallbackText(
-        prepared.attachments.length,
-        prepared.pdfAttachments.length,
-      )
     if (!userText && prepared.attachments.length === 0) {
       return rejectUserMessage(runtime, '消息不能为空')
     }
@@ -1827,7 +1825,7 @@ function deliverUserMessage(
   imageDelivery: ImageDeliveryMode | undefined,
   pdfAttachments: readonly PdfAttachment[],
   skills: readonly ActivatedSkill[],
-  questionReply?: QuestionResolution,
+  questionReply?: QuestionSubmission,
 ): Promise<unknown> | void {
   const persistedInputId = startsTurn ? undefined : inputId
   if (runtime.consensusEnabled && runtime.coordinator) {
@@ -2170,7 +2168,7 @@ async function recordUserInput(
   consumesInputIds: readonly string[] = [],
   pdfAttachments: readonly PdfAttachment[] = [],
   skills: readonly ActivatedSkill[] = [],
-  questionReply?: QuestionResolution,
+  questionReply?: QuestionSubmission,
 ): Promise<void> {
   const journal = runtime.journal
   if (!journal) throw new Error('会话记录尚未初始化，无法保存用户消息')
@@ -2239,7 +2237,7 @@ async function runtimeSnapshot(
     resumingSessionId,
     sessionId: runtime.sessionId,
     history: conversationHistoryWindow(timeline.state, { from: historyStart }),
-    queuedInputs: journal ? pendingInputs(journal, 'queued', runtime.executionBusy) : [],
+    queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: runtime.approval,
     eventSequence: timeline.boundary,
@@ -2650,19 +2648,20 @@ function reportSubagentDeliveryError(
 function pendingInputs(
   journal: SessionJournal,
   state: 'queued' | 'restored',
-  hideInFlightAnswers = false,
 ): {
   id: string
   text: string
   attachments?: ImageAttachment[]
   pdfAttachments?: PdfAttachment[]
   skills?: ReturnType<typeof skillSummary>[]
+  questionIds?: string[]
 }[] {
   return journal.pendingUserInputs
-    .filter(input => input.state === state && !(hideInFlightAnswers && input.questionReply))
+    .filter(input => input.state === state)
     .map((input) => ({
       id: input.id,
       text: input.text,
+      ...(input.questionReply ? { questionIds: input.questionReply.map(item => item.id) } : {}),
       ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
       ...(input.pdfAttachments?.length
         ? { pdfAttachments: [...input.pdfAttachments] }

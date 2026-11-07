@@ -39,7 +39,7 @@ export function SkillChips({
 }) {
   if (skills.length === 0) return null
   return (
-    <div className="mb-2 flex flex-wrap gap-1.5" aria-label="已选择的 Skill">
+    <div className="contents" role="group" aria-label="已选择的 Skill">
       {skills.map((skill) => (
         <span
           key={skill.id}

@@ -1,7 +1,7 @@
 import type { ConversationMessage } from '../context/user-turn.ts'
 import { btwToolStepEvents } from './btw.ts'
 import type { SessionEntry } from './types.ts'
-import type { RecordedViewEvent, ViewEvent } from './view-events.ts'
+import type { RecordedViewEvent, VisibleCoreEvent, ViewEvent } from './view-events.ts'
 
 export function committedViewBatch(events: RecordedViewEvent[]): ViewEvent[] {
   const hasToolCalls = events.some(item => item.type === 'core-event' && item.event.type === 'tool-start')
@@ -14,16 +14,23 @@ export function committedViewBatch(events: RecordedViewEvent[]): ViewEvent[] {
 /** Journal 已按模型步骤提交可见事件。展开记录时保留批次和回合边界，不重复落盘。 */
 export function responseViewEvents(entry: SessionEntry): ViewEvent[] {
   if (entry.type === 'messages') {
-    return entry.messages.flatMap((message: ConversationMessage) => message.whycode?.questionBatch
-      ? [{ type: 'core-event', event: { type: 'user-question', question: message.whycode.questionBatch } } as const]
-      : [])
+    return entry.messages.flatMap((message: ConversationMessage) => {
+      const events: VisibleCoreEvent[] = []
+      const meta = message.whycode
+      if (meta?.questionBatch) events.push({ type: 'user-question', question: meta.questionBatch })
+      if (entry.deliveredInputIds?.length && message.role === 'user' && meta?.questionReply) events.push({ type: 'user-question-resolved', resolutions: meta.questionReply })
+      return events.map(event => ({ type: 'core-event' as const, event }))
+    })
   }
-  if (entry.type === 'question-skipped' || (entry.type === 'user-input' && entry.questionReply)) {
-    const resolution = entry.type === 'question-skipped' ? { id: entry.questionId, answer: null } : entry.questionReply!
-    return [{ type: 'core-event', event: { type: 'user-question-resolved', resolution } }]
+  if (entry.type === 'user-input' && entry.startsTurn && entry.questionReply) {
+    return [{ type: 'core-event', event: { type: 'user-question-resolved', resolutions: entry.questionReply } }]
+  }
+  if (entry.type === 'question-skipped') {
+    return [{ type: 'core-event', event: { type: 'user-question-resolved',
+      resolutions: entry.questionIds.map(id => ({ id, answer: null })) } }]
   }
   if (entry.type === 'turn-end') {
-    return entry.stopReason === 'completed' ? [{ type: 'turn-completed' }] : []
+    return entry.stopReason === 'completed' || entry.stopReason === 'waiting-user' ? [{ type: 'turn-completed' }] : []
   }
   if (entry.type === 'view-events') return committedViewBatch(entry.events)
   if (entry.type !== 'btw-response') return []

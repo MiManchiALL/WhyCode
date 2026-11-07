@@ -3,7 +3,7 @@ import type { ModelMessage } from 'ai'
 import { createImageUserMessage } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { QueuedUserMessage } from '../events.ts'
-import type { QuestionResolution } from '../user-questions.ts'
+import type { QuestionSubmission } from '../user-questions.ts'
 import { withQuestionReply } from '../context/question-state.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
@@ -18,7 +18,7 @@ export interface QueuedMessage {
   skills: ActivatedSkill[]
   persisted: boolean
   urgent?: boolean
-  questionReply?: QuestionResolution
+  questionReply?: QuestionSubmission
 }
 
 /** Main 与协调器移交同一条输入，内存会话也保留最初的队列 ID。 */
@@ -53,6 +53,7 @@ export function queuedUserMessage(message: QueuedMessage): QueuedUserMessage {
   return {
     id: message.id,
     text: message.text,
+    ...(message.questionReply ? { questionIds: message.questionReply.map(item => item.id) } : {}),
     ...(message.attachments.length ? { attachments: message.attachments } : {}),
     ...(message.pdfAttachments.length ? { pdfAttachments: message.pdfAttachments } : {}),
     ...(message.skills.length ? { skills: message.skills.map(skillSummary) } : {}),

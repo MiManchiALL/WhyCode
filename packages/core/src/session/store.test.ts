@@ -606,7 +606,37 @@ describe('SessionStore', () => {
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.metadataSnapshot.status, 'waiting-user')
-    assert.deepEqual(reopened.initialViewEvents, [question])
+    assert.deepEqual(reopened.initialViewEvents, [question, { type: 'turn-completed' }])
+  })
+
+  it('运行中整组跳过只更新题目，乱序完成的工具在实时历史和重启后都按调用顺序相邻', async () => {
+    const store = await createStore()
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
+    const batch = { id: 'ask', questions: [{ header: '一', question: '一？' }, { header: '二', question: '二？' }] }
+    await journal.recordTurnStart('running', [message('user', '调查')])
+    await journal.recordStep('running', [{ role: 'assistant', content: [
+      { type: 'tool-call', toolCallId: 'read', toolName: 'ReadFile', input: {} },
+      { type: 'tool-call', toolCallId: 'ask', toolName: 'AskUserQuestion', input: { questions: batch.questions } },
+    ] }])
+    await journal.recordStep('running', [questionResult(batch, null)])
+    assert.equal((await store.readSummary(journal.sessionId, journal.metadataSnapshot))?.hasPendingQuestions, true)
+    const ids = questionsForBatch(batch).map(item => item.id)
+    await assert.rejects(journal.recordQuestionSkips([ids[0]!, 'missing']), /已处理/)
+    assert.equal(journal.metadataSnapshot.hasPendingQuestions, true)
+    await journal.recordQuestionSkips(ids)
+    assert.equal(journal.metadataSnapshot.hasPendingQuestions, false)
+    await journal.recordStep('running', [{ role: 'tool', content: [
+      { type: 'tool-result', toolCallId: 'read', toolName: 'ReadFile', output: { type: 'text', value: '完成' } },
+    ] }])
+    await journal.recordTurnEnd('running', 'completed')
+    const reopened = await store.open(journal.sessionId)
+    for (const saved of [journal, reopened]) {
+      const messages = saved.initialMessages
+      assert.deepEqual(messages.map(item => item.role), ['user', 'assistant', 'tool', 'tool'])
+      assert.deepEqual(messages.flatMap(item => item.role === 'tool' ? item.content.flatMap(part =>
+        part.type === 'tool-result' ? [part.toolCallId] : []) : []), ['read', 'ask'])
+      assert.equal(hasPendingUserQuestion(messages), false)
+    }
   })
 
   it('问题 step 已提交但 turn-end 前崩溃时，恢复后仍保持 waiting-user', async () => {
@@ -656,7 +686,7 @@ describe('SessionStore', () => {
     assert.deepEqual(interrupted.initialMessages.at(-1), answerMessage)
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
     assert.deepEqual(interrupted.initialViewEvents, [
-      questionEvent, resolvedEvent,
+      questionEvent, { type: 'turn-completed' }, resolvedEvent,
       {
         type: 'user-message',
         inputId: interrupted.undeliveredUserInputIds[0],
@@ -768,7 +798,7 @@ describe('SessionStore', () => {
     assert.equal(countMessage(interrupted.initialMessages, answerMessage), 1)
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
     assert.deepEqual(interrupted.initialViewEvents, [
-      questionEvent, resolvedEvent,
+      questionEvent, { type: 'turn-completed' }, resolvedEvent,
       { type: 'user-message', inputId: answerInputId, text: answer, startsTurn: true },
     ])
 
@@ -2033,9 +2063,9 @@ async function waitingQuestionSession() {
   const questionEvent = { type: 'core-event' as const, event: { type: 'user-question' as const, question } }
   const answer = '回答「你使用哪个系统？」：Windows'
   const resolution = { id: questions[0]!.id, answer: 'Windows' }
-  const resolvedEvent = { type: 'core-event' as const, event: { type: 'user-question-resolved' as const, resolution } }
-  const answerMessage = withQuestionReply(message('user', answer), resolution)
-  const recordAnswer = () => journal.recordUserInputWithId(randomUUID(), answer, true, [], [], [], [], undefined, resolution)
+  const resolvedEvent = { type: 'core-event' as const, event: { type: 'user-question-resolved' as const, resolutions: [resolution] } }
+  const answerMessage = withQuestionReply(message('user', answer), [resolution])
+  const recordAnswer = () => journal.recordUserInputWithId(randomUUID(), answer, true, [], [], [], [], undefined, [resolution])
   await journal.recordTurnStart('question-turn', [message('user', '继续任务')])
   await journal.recordStep('question-turn', [result])
   await journal.recordTurnEnd('question-turn', 'waiting-user')

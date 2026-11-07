@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
-import { pendingQuestionSchema, userQuestionSchema, questionResolutionSchema } from '../user-questions.ts'
+import { pendingQuestionSchema, userQuestionSchema, questionSubmissionSchema } from '../user-questions.ts'
 
 export const RECENT_PDF_USER_TURNS = 3
 const pdfTurnSchema = z.object({ id: z.string().min(1), pdfIds: z.array(z.string().uuid()) }).strict()
@@ -8,7 +8,7 @@ export const conversationMetadataSchema = z.object({
   userTurn: pdfTurnSchema.extend({ startsTurn: z.boolean() }).optional(),
   pendingQuestions: z.array(pendingQuestionSchema).optional(),
   questionBatch: userQuestionSchema.optional(),
-  questionReply: questionResolutionSchema.optional(),
+  questionReply: questionSubmissionSchema.optional(),
   recentUserTurns: z.array(pdfTurnSchema).max(RECENT_PDF_USER_TURNS).optional(),
 }).strict()
 type ConversationMetadata = z.infer<typeof conversationMetadataSchema>
@@ -60,7 +60,7 @@ export function carryRecentPdfTurns(message: ModelMessage, source: readonly Mode
 
 /** 元数据随 canonical messages 持久化，但绝不作为 Provider 参数或提示词发送。 */
 export function withoutConversationMetadata(messages: readonly ModelMessage[]): ModelMessage[] {
-  return messages.filter(message => (message as ConversationMessage).whycode?.questionReply?.answer !== null).map(message => {
+  return messages.map(message => {
     const { whycode: _metadata, ...plain } = message as ConversationMessage
     return plain as ModelMessage
   })

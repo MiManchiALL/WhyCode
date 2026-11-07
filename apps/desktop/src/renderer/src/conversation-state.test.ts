@@ -388,7 +388,7 @@ describe('会话界面时间线重建', () => {
     )
   })
 
-  it('仍有待答题时保留已结束工作的过程和逐题答案', () => {
+  it('有待答题时也在真实回合结束后折叠过程并保留最终正文', () => {
     const question = {
       id: 'question-waiting',
       questions: [{
@@ -430,6 +430,10 @@ describe('会话界面时间线重建', () => {
     const questions = questionsForBatch(question)
     state = applyCoreEvent(state, { type: 'user-question', question })
     state = applyCoreEvent(state, { type: 'step-committed' })
+    state = applyCoreEvent(state, { type: 'text-delta', text: '等你确认文件名。' })
+    state = applyCoreEvent(state, { type: 'step-committed' })
+    assert.ok(state.blocks.some(block => block.kind === 'text' && block.phase === 'response'))
+    state = applyCoreEvent(state, { type: 'turn-end', turnId: 'main', usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 }, stopReason: 'waiting-user' })
     state = applyCoreEvent(state, {
       type: 'work-finished',
       durationMs: 1_500,
@@ -439,14 +443,11 @@ describe('会话界面时间线重建', () => {
 
     const completed = conversationSections(state.blocks)[0]
     assert.equal(completed?.kind, 'completed-work')
-    assert.equal(state.expanded.has('work-b0'), true)
-    assert.equal(
-      completed?.kind === 'completed-work' ? completed.finalBlocks.length : -1,
-      0,
-    )
+    assert.equal(state.expanded.has('work-b0'), false)
+    assert.ok(completed?.kind === 'completed-work' && completed.finalBlocks.some(block => block.kind === 'text' && block.text === '等你确认文件名。'))
     assert.deepEqual(state.pendingQuestions, questions)
     const id = questions[1]!.id
-    state = applyCoreEvent(state, { type: 'user-question-resolved', resolution: { id, answer: '包含测试' } })
+    state = applyCoreEvent(state, { type: 'user-question-resolved', resolutions: [{ id, answer: '包含测试' }] })
     state = appendUserMessage(state, '回答「是否包含测试？」：包含测试', true)
     assert.deepEqual(state.pendingQuestions, [questions[0]])
     const askTool = state.blocks.find(block => block.kind === 'tool' && block.call.id === 'ask-1')
@@ -460,7 +461,7 @@ describe('会话界面时间线重建', () => {
     const resolved = { id: first[0]!.id, answer: 'Linux' }
     let state = createConversationState([
       core({ type: 'user-question', question: batchA }), core({ type: 'user-question', question: batchB }),
-      core({ type: 'user-question-resolved', resolution: resolved }),
+      core({ type: 'user-question-resolved', resolutions: [resolved] }),
       core({ type: 'tool-start', toolUseId: 'ask-a', toolName: 'AskUserQuestion', input: { questions: [item] } }),
       { type: 'step-committed', hasToolCalls: true },
     ])
@@ -468,9 +469,33 @@ describe('会话界面时间线重建', () => {
     assert.equal(tool?.kind === 'tool' && tool.call.questionAnswers?.[resolved.id], 'Linux')
     assert.deepEqual(state.pendingQuestions, second)
     state = applyCoreEvent(state, { type: 'text-delta', text: '处理中' })
-    state = applyCoreEvent(state, { type: 'user-question-resolved', resolution: { id: second[0]!.id, answer: null } })
+    state = applyCoreEvent(state, { type: 'user-question-resolved', resolutions: [{ id: second[0]!.id, answer: null }] })
     state = applyCoreEvent(state, { type: 'step-discarded' })
     assert.deepEqual(state.pendingQuestions, [])
+  })
+
+  it('回滚与编辑重发只清除重新待答题的旧工具详情', () => {
+    const items = [{ header: '一', question: '一？' }, { header: '二', question: '二？' }]
+    const batch = { id: 'ask', questions: items }
+    const [first, second] = questionsForBatch(batch)
+    const answered = createConversationState([
+      { type: 'user-message', text: '提问', startsTurn: true }, core({ type: 'turn-start', turnId: 'root' }),
+      core({ type: 'tool-start', toolUseId: 'ask', toolName: 'AskUserQuestion', input: { questions: items } }),
+      { type: 'step-committed', hasToolCalls: true }, core({ type: 'user-question', question: batch }),
+      core({ type: 'user-question-resolved', resolutions: [{ id: first!.id, answer: '保留' }] }),
+      { type: 'user-message', text: '后续回合', startsTurn: true }, core({ type: 'turn-start', turnId: 'later' }),
+      core({ type: 'user-question-resolved', resolutions: [{ id: second!.id, answer: null }] }),
+    ])
+    const actions: CoreEvent[] = [
+      { type: 'checkpoint-restored', ok: true, turnId: 'later', toolUseId: 'write', scope: 'files-and-chat', questions: [second!] },
+      { type: 'user-message-edited', previousTurnId: 'later', inputId: 'edit', text: '新请求', taskPlan: null, questions: [second!] },
+    ]
+    for (const action of actions) {
+      const result = applyCoreEvent(answered, action)
+      assert.deepEqual(result.pendingQuestions, [second])
+      const tool = result.blocks.find(block => block.kind === 'tool')
+      assert.deepEqual(tool?.kind === 'tool' && tool.call.questionAnswers, { [first!.id]: '保留' })
+    }
   })
 
   it('CloseTaskPlan 卡片保留调用当时的活动计划 ID', () => {
@@ -745,7 +770,7 @@ describe('会话界面时间线重建', () => {
       text: '后续用户消息',
       startsTurn: false,
     })
-    assert.equal(editableUserBlockId(state.blocks), null)
+    assert.equal(editableUserBlockId(state.blocks), state.blocks[0]?.id)
   })
 
   it('重放中的编辑输入副本与实时编辑事件走同一 reducer 且不重复显示', () => {

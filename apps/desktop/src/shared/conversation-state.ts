@@ -13,7 +13,7 @@ import {
   type CoreEvent,
   type ToolFileChange,
   type PendingQuestion,
-  type QuestionResolution,
+  type QuestionSubmission,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot } from './session.ts'
 import { summarizeToolCall } from './tool-call-summary.ts'
@@ -55,6 +55,7 @@ export type Block =
       id: string
       inputId?: string
       turnId?: string
+      startsTurn?: true
       timestamp?: string
       text: string
       attachments?: ImageAttachment[]
@@ -205,7 +206,7 @@ export function applyViewEvent(
   if (event.type === 'step-committed') {
     return { ...state, blocks: commitResponseText(state.blocks, event.hasToolCalls) }
   }
-  if (event.type === 'pending-questions') return { ...state, pendingQuestions: event.questions }
+  if (event.type === 'pending-questions') return resetPendingQuestions(state, event.questions)
   if (event.type === 'turn-completed') return confirmTurnResponse(state)
   return event.type === 'user-message'
     ? appendUserMessage(
@@ -249,7 +250,7 @@ function applyStableCoreEvent(
 ): ConversationState {
   switch (event.type) {
     case 'turn-end':
-      return event.stopReason === 'completed' ? confirmTurnResponse(state) : state
+      return event.stopReason === 'completed' || event.stopReason === 'waiting-user' ? confirmTurnResponse(state) : state
     case 'turn-start': {
       state = continueWork(state)
       if (state.pendingTurnStart === null) return state
@@ -416,7 +417,7 @@ function applyStableCoreEvent(
     case 'user-question':
       return { ...state, pendingQuestions: [...state.pendingQuestions, ...questionsForBatch(event.question)] }
     case 'user-question-resolved':
-      return resolveQuestion(state, event.resolution)
+      return resolveQuestions(state, event.resolutions)
     case 'peer-event':
       return applyPeerCoreEvent(state, event.agentId, event.event)
     case 'vote-cast':
@@ -517,6 +518,7 @@ export function appendUserMessage(
     kind: 'user',
     id: nextBlockId(state),
     ...(inputId ? { inputId } : {}),
+    ...(startsTurn ? { startsTurn: true } : {}),
     ...(timestamp ? { timestamp } : {}),
     text,
     ...(attachments.length ? { attachments: attachments.map((item) => structuredClone(item)) } : {}),
@@ -543,30 +545,51 @@ function visibleToolInput(
   return { ...input, plan_id: state.taskPlan.id }
 }
 
-function resolveQuestion(state: ConversationState, resolution: QuestionResolution): ConversationState {
-  const question = state.pendingQuestions.find(item => item.id === resolution.id)
-  if (!question) return state
-  let found = false
+function resetPendingQuestions(state: ConversationState, questions: PendingQuestion[]): ConversationState {
+  const open = new Set(questions.map(item => item.id))
+  const blocks = state.blocks.map(block => {
+    if (block.kind !== 'tool' || !block.call.questionAnswers) return block
+    const entries = Object.entries(block.call.questionAnswers)
+    const retained = entries.filter(([id]) => !open.has(id))
+    return entries.length === retained.length ? block : { ...block, call: { ...block.call, questionAnswers: Object.fromEntries(retained) } }
+  })
+  return { ...state, blocks, pendingQuestions: questions, questionAnswersBeforeTool: {} }
+}
+
+function resolveQuestions(state: ConversationState, resolutions: QuestionSubmission): ConversationState {
+  const answers = new Map(resolutions.map(item => [item.id, item.answer]))
+  const byTool = new Map<string, Record<string, string | null>>()
+  const pendingQuestions = state.pendingQuestions.filter(question => {
+    const answer = answers.get(question.id)
+    if (answer === undefined) return true
+    const group = byTool.get(question.toolUseId)
+    if (group) group[question.id] = answer
+    else byTool.set(question.toolUseId, { [question.id]: answer })
+    return false
+  })
+  if (!byTool.size) return state
+  const beforeTool = { ...state.questionAnswersBeforeTool }
   const attach = (blocks: Block[]): Block[] => {
-    const index = blocks.findLastIndex(block => block.kind === 'tool' && block.call.id === question.toolUseId)
-    const block = blocks[index]
-    if (block?.kind !== 'tool') return blocks
-    found = true
-    const next = [...blocks]
-    next[index] = { ...block, call: { ...block.call, questionAnswers: { ...block.call.questionAnswers, [question.id]: resolution.answer } } }
-    return next
+    let updated = blocks
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i]!
+      if (block.kind !== 'tool') continue
+      const group = byTool.get(block.call.id)
+      if (!group) continue
+      if (updated === blocks) updated = [...blocks]
+      updated[i] = { ...block, call: { ...block.call, questionAnswers: { ...block.call.questionAnswers, ...group } } }
+      delete beforeTool[block.call.id]
+    }
+    return updated
   }
+  for (const [id, group] of byTool) beforeTool[id] = { ...beforeTool[id], ...group }
   const blocks = attach(state.blocks)
   const pendingStep = state.pendingStep && { ...state.pendingStep, blocks: attach(state.pendingStep.blocks) }
-  const beforeTool = state.questionAnswersBeforeTool
-  return { ...state, blocks, pendingStep, pendingQuestions: state.pendingQuestions.filter(item => item.id !== resolution.id),
-    questionAnswersBeforeTool: found ? beforeTool : { ...beforeTool,
-      [question.toolUseId]: { ...beforeTool[question.toolUseId], [question.id]: resolution.answer } } }
-
+  return { ...state, blocks, pendingStep, pendingQuestions, questionAnswersBeforeTool: beforeTool }
 }
 
 export function editableUserBlockId(blocks: readonly Block[]): string | null {
-  const candidate = blocks.findLast((block) => block.kind === 'user')
+  const candidate = blocks.findLast(block => block.kind === 'user' && (block.startsTurn || block.turnId || block.btw))
   return candidate?.kind === 'user'
     && (candidate.turnId || (candidate.btw && candidate.inputId))
     ? candidate.id
@@ -646,7 +669,6 @@ function applyUserMessageEdited(
   const edited = {
     ...state,
     blocks,
-    pendingQuestions: event.questions ?? [],
     expanded: new Set([...state.expanded].filter((id) => retainedIds.has(id))),
     pendingTurnStart: previousIndex,
     turnStartBlocks,
@@ -654,7 +676,8 @@ function applyUserMessageEdited(
     fileRollbackBoundaryTurnId: null,
     pendingStep: null,
   }
-  return event.questionReply ? resolveQuestion(edited, event.questionReply) : edited
+  const restored = resetPendingQuestions(edited, event.questions ?? [])
+  return event.questionReply ? resolveQuestions(restored, event.questionReply) : restored
 }
 
 export function toggleExpanded(state: ConversationState, id: string): ConversationState {
@@ -809,14 +832,14 @@ function applyCheckpointRestored(
   const taskPlan = event.scope === 'files-and-chat' && event.taskPlan !== undefined
     ? structuredClone(event.taskPlan)
     : state.taskPlan
-  return {
+  const restored = {
     ...state,
     blocks,
     taskPlan,
     fileRollbackBoundaryTurnId: event.scope === 'files' ? event.turnId : null,
     fileSystemRevision: state.fileSystemRevision + 1,
-    pendingQuestions: event.scope === 'files-and-chat' ? event.questions ?? [] : state.pendingQuestions,
   }
+  return event.scope === 'files-and-chat' ? resetPendingQuestions(restored, event.questions ?? []) : restored
 }
 
 function appendText(

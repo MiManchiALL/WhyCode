@@ -21,6 +21,13 @@ describe('最新根消息编辑资格', () => {
     )
   })
 
+  it('普通插话不取代根消息，独立 BTW 输入仍会取代它', () => {
+    const steering: ViewEvent = { type: 'user-message', text: '补充条件', startsTurn: false }
+    assert.deepEqual(latestTurnEditResources(messages, [...rootAndTurn, steering], 'turn-old', 0).turnIds, ['turn-old'])
+    const btw: ViewEvent = { ...steering, inputId: 'side', btw: { conversationId: 'side', turnIndex: 1, mode: 'btw' } }
+    assert.throws(() => latestTurnEditResources(messages, [...rootAndTurn, btw], 'turn-old', 0), /只能编辑最新/)
+  })
+
   it('出现更新回合后禁止改写旧消息', () => {
     assert.throws(
       () => latestTurnEditResources(messages, [

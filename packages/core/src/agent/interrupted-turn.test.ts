@@ -366,7 +366,7 @@ describe('用户中断后的新回合', () => {
     const session = createSession(model, journal, event => events.push(event))
     const question = session.pendingQuestions[0]!
     const inputId = crypto.randomUUID()
-    const answer = { id: question.id, answer: 'Windows' }
+    const answer = [{ id: question.id, answer: 'Windows' }]
     const text = '回答「你使用哪个系统？」：Windows'
     await journal.recordUserInputWithId(inputId, text, true, [], [], [], [], undefined, answer)
     await session.handleUserMessage(text, false, [], inputId, [], [], 'native', answer)
@@ -378,8 +378,7 @@ describe('用户中断后的新回合', () => {
     await edit.startMain()
     const reopened = await store.open(journal.sessionId)
     assert.deepEqual(pendingUserQuestions(reopened.initialMessages), [])
-    assert.ok(events.some(event => event.type === 'user-message-edited' && event.questionReply?.id === question.id
-      && event.questionReply.answer === 'Linux'))
+    assert.ok(events.some(event => event.type === 'user-message-edited' && event.questionReply?.some(item => item.id === question.id && item.answer === 'Linux')))
     assert.ok(!JSON.stringify(reopened.initialMessages).includes('：Windows'))
   })
 

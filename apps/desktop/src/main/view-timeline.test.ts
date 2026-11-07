@@ -396,7 +396,7 @@ describe('ViewTimeline', () => {
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
     const question = { id: 'q', questions: [{ header: '选择', question: '哪一个？' }] }
     timeline.capture(writer, { type: 'user-question', question })
-    timeline.capture(writer, { type: 'user-question-resolved', resolution: { id: JSON.stringify([question.id, 0]), answer: null } })
+    timeline.capture(writer, { type: 'user-question-resolved', resolutions: [{ id: JSON.stringify([question.id, 0]), answer: null }] })
     timeline.capture(writer, { type: 'step-committed' })
     await timeline.flush()
     assert.deepEqual(writer.batches, [])

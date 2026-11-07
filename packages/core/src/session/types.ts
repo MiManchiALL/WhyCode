@@ -1,6 +1,6 @@
 import { modelMessageSchema, type ModelMessage } from 'ai'
 import { z } from 'zod'
-import { questionResolutionSchema, type QuestionResolution } from '../user-questions.ts'
+import { questionSubmissionSchema, type QuestionSubmission } from '../user-questions.ts'
 import { conversationMetadataSchema } from '../context/user-turn.ts'
 import {
   consensusPersistedStateSchema,
@@ -116,7 +116,7 @@ const pendingUserInputSchema = z.object({
   imageDelivery: imageDeliveryModeSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
   skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
-  questionReply: questionResolutionSchema.optional(),
+  questionReply: questionSubmissionSchema.optional(),
   state: z.enum(['queued', 'restored']),
 }).superRefine(validateUserInputContent)
 
@@ -177,7 +177,7 @@ const userInputSchema = chainedEntrySchema.extend({
   consumesInputIds: z.array(entryIdSchema).min(1).optional(),
   /** 该根输入原位替换的旧回合；只由“中止后编辑”事务写入。 */
   replacesTurnId: z.string().min(1).optional(),
-  questionReply: questionResolutionSchema.optional(),
+  questionReply: questionSubmissionSchema.optional(),
 }).superRefine((input, ctx) => {
   validateUserInputContent(input, ctx)
   if (input.replacesTurnId && !input.startsTurn) {
@@ -300,7 +300,7 @@ const btwResponseSchema = chainedEntrySchema.extend({
 
 const questionSkippedSchema = chainedEntrySchema.extend({
   type: z.literal('question-skipped'),
-  questionId: z.string().min(1),
+  questionIds: z.array(z.string().min(1)).nonempty(),
 })
 
 const modelChangeSchema = chainedEntrySchema.extend({
@@ -486,6 +486,7 @@ export const sessionMetadataSchema = z.object({
   reasoningEffort: reasoningEffortSelectionSchema,
   title: z.string(),
   lastUserText: z.string(),
+  hasPendingQuestions: z.boolean(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   status: z.enum([
@@ -508,6 +509,7 @@ interface SessionSummaryBase {
   referencedModelIds: string[]
   title: string
   lastUserText: string
+  hasPendingQuestions?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -625,7 +627,7 @@ export interface SessionRecorder {
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionResolution,
+    questionReply?: QuestionSubmission,
   ): Promise<void>
   recordBtwInput(
     mode: BtwMode,
@@ -651,9 +653,9 @@ export interface SessionRecorder {
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionResolution,
+    questionReply?: QuestionSubmission,
   ): Promise<void>
-  recordQuestionSkip(id: string): Promise<void>
+  recordQuestionSkips(ids: string[]): Promise<void>
   recordViewEvents(events: RecordedViewEvent[]): Promise<void>
   recordTurnStart(
     turnId: string,

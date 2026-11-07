@@ -1,9 +1,10 @@
+import type { QuestionSubmission } from '../user-questions.ts'
 import { userTurn, type ConversationMessage } from '../context/user-turn.ts'
 import type { ModelMessage } from 'ai'
 import { imageDeliveryModeFromMessage } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
-import type { ViewEvent } from '../session/view-events.ts'
+import { latestVisibleRootTurn, type ViewEvent } from '../session/view-events.ts'
 import type { SessionRecorder } from '../session/types.ts'
 import { CheckpointManager, type TurnEditEffects } from '../checkpoints/manager.ts'
 
@@ -30,7 +31,7 @@ export function latestTurnEditContext(recorder: SessionRecorder, turnId: string,
 }
 
 export interface LatestTurnEditResources {
-  questionId?: string
+  questionReply?: QuestionSubmission
   turnIds: string[]
   attachments: ImageAttachment[]
   imageDelivery?: ImageDeliveryMode
@@ -47,29 +48,7 @@ export function latestTurnEditResources(
   turnId: string,
   rollbackMessageCount: number,
 ): LatestTurnEditResources {
-  const turnEventIndex = viewEvents.findLastIndex((entry) =>
-    entry.type === 'core-event'
-    && entry.event.type === 'turn-start'
-    && entry.event.turnId === turnId)
-  if (turnEventIndex < 0) throw new Error('找不到目标回合的可见起点')
-  const rootInputIndex = viewEvents
-    .slice(0, turnEventIndex)
-    .findLastIndex((entry) => entry.type === 'user-message' && entry.startsTurn)
-  const rootInput = viewEvents[rootInputIndex]
-  if (!rootInput || rootInput.type !== 'user-message') {
-    throw new Error('找不到目标回合的根用户消息')
-  }
-  const afterRoot = viewEvents.slice(rootInputIndex + 1)
-  const firstTurn = afterRoot.find((entry) =>
-    entry.type === 'core-event' && entry.event.type === 'turn-start')
-  if (
-    firstTurn?.type !== 'core-event'
-    || firstTurn.event.type !== 'turn-start'
-    || firstTurn.event.turnId !== turnId
-    || afterRoot.some((entry) => entry.type === 'user-message')
-  ) {
-    throw new Error('只能编辑最新一条用户消息')
-  }
+  const { root: rootInput, afterRoot } = latestVisibleRootTurn(viewEvents, turnId)
   const attachments = (rootInput.attachments ?? []).map((item) => structuredClone(item))
   const sourceMessage = messages.slice(rollbackMessageCount)
     .find((message) => message.role === 'user')
@@ -81,7 +60,7 @@ export function latestTurnEditResources(
   }
   const rootMessage = messages.slice(rollbackMessageCount).find(item => userTurn(item)?.startsTurn) as ConversationMessage | undefined
   return {
-    questionId: rootMessage?.whycode?.questionReply?.id,
+    ...(rootMessage?.whycode?.questionReply ? { questionReply: rootMessage.whycode.questionReply } : {}),
     turnIds: afterRoot.flatMap((entry) => entry.type === 'core-event'
       && entry.event.type === 'turn-start' ? [entry.event.turnId] : []),
     attachments,
