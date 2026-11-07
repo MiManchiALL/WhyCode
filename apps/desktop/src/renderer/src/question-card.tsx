@@ -1,198 +1,76 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
-import {
-  type UserQuestion,
-  type UserQuestionItem,
-} from '@whycode/core/events'
-import {
-  advanceQuestionProgress,
-  previousQuestionIndex,
-} from './question-progress.ts'
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { ChevronLeft, ChevronRight, MessageCircleQuestionMark, Pencil, X } from 'lucide-react'
+import type { PendingQuestion, QuestionResolution } from '@whycode/core/events'
+import type { ComposerValue } from './composer-text.ts'
+import type { QuestionDraft } from './composer-drafts.ts'
 
 interface QuestionCardProps {
-  question: UserQuestion
+  questions: readonly PendingQuestion[]
+  input: ComposerValue<QuestionDraft | undefined>
   disabled: boolean
-  onAnswer: (answers: string[]) => void
+  stopControl?: ReactNode
+  onResolve: (resolution: QuestionResolution) => Promise<void>
 }
 
-interface QuestionProgress {
-  currentIndex: number
-  current: UserQuestionItem
-  currentAnswer: string
-  isLast: boolean
-  updateCurrent: (answer: string) => void
-  advance: (answer?: string) => void
-  previous: () => void
-}
-
-export function QuestionCard({ question, disabled, onAnswer }: QuestionCardProps) {
-  const items = question.questions
-  const progress = useQuestionProgress(items, disabled, onAnswer)
-  return (
-    <form
-      className="wc-question-composer"
-      onSubmit={(event) => submitQuestion(event, progress.advance)}
-    >
-      <QuestionHeading
-        item={progress.current}
-        currentIndex={progress.currentIndex}
-        total={items.length}
-      />
-      <QuestionOptions
-        item={progress.current}
-        answer={progress.currentAnswer}
-        disabled={disabled}
-        onSelect={progress.updateCurrent}
-        onAdvance={progress.advance}
-      />
-      <QuestionControls progress={progress} disabled={disabled} />
-    </form>
+export function QuestionCard({ questions, input, disabled, stopControl, onResolve }: QuestionCardProps) {
+  const draft = useSyncExternalStore(input.subscribe, input.getSnapshot)
+  const [submitting, setSubmitting] = useState(false)
+  const sending = useRef(false)
+  const index = Math.max(0, questions.findIndex(item => item.id === draft?.currentId))
+  const question = questions[index]
+  if (!question) return null
+  const answers = draft?.answers ?? {}
+  const text = answers[question.id] ?? ''
+  const select = (id: string) => input.replace({ answers, currentId: id })
+  const edit = (answer: string) => input.replace({ currentId: question.id, answers: { ...answers, [question.id]: answer } })
+  const blocked = disabled || submitting
+  const resolve = async (answer: string | null) => {
+    if (blocked || sending.current) return
+    sending.current = true
+    setSubmitting(true)
+    try { await onResolve({ id: question.id, answer }) }
+    finally { sending.current = false; setSubmitting(false) }
+  }
+  if (draft?.collapsed) return (
+    <button type="button" className="wc-question-summary wc-focus-ring" onClick={() => select(question.id)}>
+      <MessageCircleQuestionMark size={15} />{questions.length} 个待答问题
+    </button>
   )
-}
-
-function useQuestionProgress(
-  items: readonly UserQuestionItem[],
-  disabled: boolean,
-  onAnswer: (answers: string[]) => void,
-): QuestionProgress {
-  const [currentIndex, setCurrentIndex] = useState(0)
-  const [answers, setAnswers] = useState(() => items.map(() => ''))
-  const current = items[currentIndex]!
-  const currentAnswer = answers[currentIndex] ?? ''
-  const isLast = currentIndex === items.length - 1
-  const updateCurrent = (answer: string) => {
-    setAnswers((previous) => previous.map((value, index) =>
-      index === currentIndex ? answer : value))
-  }
-  const advance = (selectedAnswer?: string) => {
-    if (disabled) return
-    const advanced = advanceQuestionProgress(
-      answers,
-      currentIndex,
-      selectedAnswer ?? currentAnswer,
-    )
-    if (!advanced) return
-    if (advanced.complete) onAnswer(advanced.answers)
-    else {
-      setAnswers(advanced.answers)
-      setCurrentIndex(advanced.nextIndex)
-    }
-  }
-  return {
-    currentIndex,
-    current,
-    currentAnswer,
-    isLast,
-    updateCurrent,
-    advance,
-    previous: () => setCurrentIndex(previousQuestionIndex),
-  }
-}
-
-function QuestionHeading({
-  item,
-  currentIndex,
-  total,
-}: {
-  item: UserQuestionItem
-  currentIndex: number
-  total: number
-}) {
-  return (
-    <>
-      <div className="wc-question-eyebrow mb-0.5 flex items-center justify-between gap-3 font-medium text-[var(--wc-blue-ink)]">
-        <span>{item.header}</span>
-        {total > 1 && <span>{currentIndex + 1} / {total}</span>}
-      </div>
-      <div className="wc-question-title mb-2 font-medium text-[var(--wc-ink)]">{item.question}</div>
-    </>
-  )
-}
-
-function QuestionOptions({
-  item,
-  answer,
-  disabled,
-  onSelect,
-  onAdvance,
-}: {
-  item: UserQuestionItem
-  answer: string
-  disabled: boolean
-  onSelect: (answer: string) => void
-  onAdvance: (answer: string) => void
-}) {
-  return (
-    <div className="wc-question-options mb-2 grid gap-1">
-      {item.options.map((option, index) => (
-        <button
-          key={`${index}-${option.label}`}
-          type="button"
-          className="wc-menu-item wc-question-option wc-focus-ring disabled:opacity-40"
-          disabled={disabled}
-          aria-pressed={answer === option.label}
-          onClick={() => onSelect(option.label)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            onAdvance(option.label)
-          }}
-        >
-          <span className="wc-question-option-index" aria-hidden="true">{index + 1}</span>
-          <span className="min-w-0">
-            <span className="block font-medium text-[var(--wc-ink)]">{option.label}</span>
-            <span className="block text-[var(--wc-muted)]">{option.description}</span>
-          </span>
-        </button>
-      ))}
+  return <form className="wc-question-composer" onSubmit={event => {
+    event.preventDefault()
+    if (text.trim()) void resolve(text.trim())
+  }}>
+    <div className="wc-question-heading">
+      <MessageCircleQuestionMark size={15} /><span className="min-w-0 flex-1 truncate">{question.item.header}</span>
+      {questions.length > 1 && <>
+        <button type="button" className="wc-icon-button" aria-label="上一题" disabled={index === 0 || submitting}
+          onClick={() => select(questions[index - 1]!.id)}><ChevronLeft size={14} /></button>
+        <span className="tabular-nums">{index + 1} / {questions.length}</span>
+        <button type="button" className="wc-icon-button" aria-label="下一题" disabled={index + 1 === questions.length || submitting}
+          onClick={() => select(questions[index + 1]!.id)}><ChevronRight size={14} /></button>
+      </>}
+      <button type="button" className="wc-icon-button" aria-label="收起待答问题" title="收起待答问题"
+        onClick={() => input.replace({ currentId: question.id, answers, collapsed: true })}><X size={14} /></button>
     </div>
-  )
-}
-
-function QuestionControls({
-  progress,
-  disabled,
-}: {
-  progress: QuestionProgress
-  disabled: boolean
-}) {
-  const preventComposingSubmit = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault()
-  }
-  return (
-    <div className="flex gap-2">
-      {progress.currentIndex > 0 && (
-        <button
-          type="button"
-          className="wc-question-control wc-focus-ring rounded-lg border border-[var(--wc-line)] bg-white px-2.5 py-1.5 text-[var(--wc-muted)] disabled:opacity-40"
-          disabled={disabled}
-          onClick={progress.previous}
-        >
-          上一个
-        </button>
-      )}
-      <input
-        key={progress.currentIndex}
-        className="wc-question-control wc-focus-ring min-w-0 flex-1 rounded-lg border border-[var(--wc-line)] bg-white px-2.5 py-1.5 outline-none"
-        value={progress.currentAnswer}
-        disabled={disabled}
-        autoFocus
-        aria-label="当前问题的回答"
-        placeholder="选择一个答案，或者直接输入"
-        onChange={(event) => progress.updateCurrent(event.target.value)}
-        onKeyDown={preventComposingSubmit}
-      />
-      <button
-        type="submit"
-        className="wc-question-control wc-focus-ring rounded-lg bg-[var(--wc-ink)] px-2.5 py-1.5 text-white disabled:opacity-40"
-        disabled={disabled || !progress.currentAnswer.trim()}
-      >
-        {progress.isLast ? '回答' : '下一个'}
-      </button>
+    <div className="wc-question-title">{question.item.question}</div>
+    {question.item.options?.length && <div className="wc-question-options">
+      {question.item.options.map((option, i) => <button key={i} type="button" className="wc-question-option wc-focus-ring"
+        aria-pressed={text === option.label} disabled={blocked} onClick={() => edit(option.label)}>
+        <span className="wc-question-option-index" aria-hidden="true">{i + 1}</span>
+        <span><span className="block font-medium">{option.label}</span>
+          {option.description && <span className="wc-question-description">{option.description}</span>}</span>
+      </button>)}
+    </div>}
+    <div className="wc-question-controls">
+      <label className="wc-question-field"><Pencil size={14} />
+        <input aria-label="当前问题的回答" placeholder="写下你的回答…" value={text} disabled={blocked}
+          onChange={event => edit(event.target.value)}
+          onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault() }} />
+      </label>
+      {stopControl}
+      <button type="button" className="wc-settings-button wc-focus-ring" disabled={blocked}
+        onClick={() => void resolve(null)}>跳过</button>
+      <button type="submit" className="wc-settings-button wc-focus-ring" data-variant="primary" disabled={blocked || !text.trim()}>发送</button>
     </div>
-  )
-}
-
-function submitQuestion(event: FormEvent, advance: (answer?: string) => void): void {
-  event.preventDefault()
-  advance()
+  </form>
 }

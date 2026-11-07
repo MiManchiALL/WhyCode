@@ -1,10 +1,10 @@
+import { questionResult, answerFirstQuestion } from '../test-fixtures/user-questions.ts'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
-import { createUserQuestionMarker } from '../tasks/answer-resume.ts'
 import type { TaskPlanState } from '../tasks/types.ts'
 import {
   createCommandTaskNotificationMessage,
@@ -129,7 +129,7 @@ describe('后台任务终态续轮', () => {
     const session = createSession(model, [])
     session.restoreMessageSnapshot([
       { role: 'user', content: '开始任务' },
-      createUserQuestionMarker({
+      questionResult({
         id: 'background-waiting-question',
         questions: [{
           header: '运行系统',
@@ -139,14 +139,14 @@ describe('后台任务终态续轮', () => {
             { label: 'macOS', description: '按 macOS 处理' },
           ],
         }],
-      }, false),
+      }, null),
     ])
 
     assert.equal(session.waitingForUserInput, true)
     assert.equal(session.handleTaskNotification(notification(undefined, 'stopped')), undefined)
     assert.equal(model.doStreamCalls.length, 0)
     assert.equal(
-      await session.handleUserMessage('回答「你使用哪个系统？」：Windows'),
+      await answerFirstQuestion(session, 'Windows'),
       'completed',
     )
     assert.equal(session.waitingForUserInput, false)

@@ -1,10 +1,11 @@
+import { questionResult } from '../test-fixtures/user-questions.ts'
+import { pendingUserQuestions } from './question-state.ts'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { tool, type ModelMessage } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
 import { createTurnAbortedMessage, createTurnAbortedConsumedMessage } from '../session/interruption.ts'
-import { createUserQuestionMarker } from '../tasks/answer-resume.ts'
 import { createCompactApplicationContextMessage, createCompactSummaryMessage, parseCompactSummaryMessage } from '../prompts/compact.ts'
 import { compactMessages, type CompactOptions } from './compact.ts'
 import { prepareCompaction, pickBudgetStart } from './compact-boundary.ts'
@@ -122,21 +123,29 @@ describe('按预算划分历史与当前正式 turn', () => {
     assert.equal(model.doGenerateCalls.length, 0)
   })
 
-  it('自动压缩保留未消费中断、完整问题与最新输入；消费标记解除边界', () => {
+  it('自动压缩保留未消费中断与最新输入，消费标记解除边界', () => {
     const stop = createTurnAbortedMessage()
-    const question = createUserQuestionMarker({ id: 'q', questions: [{ header: '选择', question: '选择方案？',
-      options: [{ label: 'A', description: '方案 A' }, { label: 'B', description: '方案 B' }] }] }, true)
-    for (const marker of [stop, question]) {
-      const messages = [root('A'), assistant('早期'), tail, marker, root('B')]
-      const kept = prepareCompaction(messages, 17_280)!.tail
-      assert.ok(kept.includes(marker)); assert.ok(kept.includes(messages.at(-1)!))
-    }
+    const source = [root('A'), assistant('早期'), tail, stop, root('B')]
+    const kept = prepareCompaction(source, 17_280)!.tail
+    assert.ok(kept.includes(stop)); assert.ok(kept.includes(source.at(-1)!))
     const messages = [root('A'), stop, root('B'), assistant('意图已确认'), createTurnAbortedConsumedMessage(), tail]
     assert.deepEqual(prepareCompaction(messages, 17_280)?.tail, [tail])
   })
 })
 
 describe('全量摘要输入与手动压缩', () => {
+  it('尚未回答的早期问题不固定整个历史，自动和手动压缩均可按 ID 恢复', async () => {
+    const item = { header: '环境', question: '使用哪个环境？' }
+    const issue = questionResult({ id: 'early', questions: [item] }, null)
+    for (const mode of ['auto', 'manual'] as const) {
+      const messages = [root('A'), call('early', 'AskUserQuestion', { questions: [item] }), issue,
+        assistant('工作记录'), root('B'), tail]
+      const result = await compact(summaryModel(['历史摘要', '前缀摘要']), messages, { mode })
+      assert.deepEqual(pendingUserQuestions(result.messages), pendingUserQuestions([issue]))
+      assert.ok(!result.messages.includes(issue), '原提问步骤可以进入摘要')
+    }
+  })
+
   it('手动压缩短历史也调用模型，不剪枝、不保留尾部或固定旧用户消息', async () => {
     const model = summaryModel(['所有阶段摘要'])
     const messages = [root('A'), call('r', 'ReadFile', { path: 'file.txt' }), result('r', 'LONG_TEXT_' + 'x'.repeat(9000)), assistant('完成')]

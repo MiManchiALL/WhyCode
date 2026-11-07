@@ -1,3 +1,4 @@
+import { questionResult, answerFirstQuestion } from '../test-fixtures/user-questions.ts'
 import assert from 'node:assert/strict'
 import {
   access,
@@ -21,7 +22,6 @@ import { applySkillContext } from '../skills/context.ts'
 import { visibleCoreEventSchema } from '../session/view-events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import { SessionStore } from '../session/store.ts'
-import { createUserQuestionMarker } from '../tasks/answer-resume.ts'
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
@@ -177,7 +177,7 @@ describe('Agent 资源检查点联动', () => {
       ],
     }
     await recorder.recordTurnStart('question-turn', [{ role: 'user', content: '继续任务' }])
-    await recorder.recordStep('question-turn', [createUserQuestionMarker(question, false)])
+    await recorder.recordStep('question-turn', [questionResult(question, null)])
     await recorder.recordTurnEnd('question-turn', 'waiting-user')
     const events: CoreEvent[] = []
     const session = new AgentSession({
@@ -190,7 +190,7 @@ describe('Agent 资源检查点联动', () => {
     })
 
     assert.equal(
-      await session.handleUserMessage('回答「采用哪种实现？」：简单实现'),
+      await answerFirstQuestion(session, '简单实现'),
       'completed',
     )
     const checkpoint = events.find((event) => event.type === 'checkpoint-created')
@@ -199,7 +199,7 @@ describe('Agent 资源检查点联动', () => {
 
     const restored = events.findLast((event) => event.type === 'checkpoint-restored')
     assert.ok(restored?.type === 'checkpoint-restored' && restored.ok)
-    assert.deepEqual(restored.question, question)
+    assert.deepEqual(restored.questions?.map(item => item.item), question.questions)
     await assert.rejects(access(target))
   })
 

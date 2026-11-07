@@ -1,3 +1,4 @@
+import type { ConversationMessage } from '../context/user-turn.ts'
 import { btwToolStepEvents } from './btw.ts'
 import type { SessionEntry } from './types.ts'
 import type { RecordedViewEvent, ViewEvent } from './view-events.ts'
@@ -12,6 +13,15 @@ export function committedViewBatch(events: RecordedViewEvent[]): ViewEvent[] {
 
 /** Journal 已按模型步骤提交可见事件。展开记录时保留批次和回合边界，不重复落盘。 */
 export function responseViewEvents(entry: SessionEntry): ViewEvent[] {
+  if (entry.type === 'messages') {
+    return entry.messages.flatMap((message: ConversationMessage) => message.whycode?.questionBatch
+      ? [{ type: 'core-event', event: { type: 'user-question', question: message.whycode.questionBatch } } as const]
+      : [])
+  }
+  if (entry.type === 'question-skipped' || (entry.type === 'user-input' && entry.questionReply)) {
+    const resolution = entry.type === 'question-skipped' ? { id: entry.questionId, answer: null } : entry.questionReply!
+    return [{ type: 'core-event', event: { type: 'user-question-resolved', resolution } }]
+  }
   if (entry.type === 'turn-end') {
     return entry.stopReason === 'completed' ? [{ type: 'turn-completed' }] : []
   }

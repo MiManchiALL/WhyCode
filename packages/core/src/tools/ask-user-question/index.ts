@@ -1,56 +1,20 @@
-import { z } from 'zod'
-import {
-  MAX_USER_QUESTIONS,
-  type UserQuestion,
-} from '../../events.ts'
+import { askUserQuestionSchema, type UserQuestionItem } from '../../user-questions.ts'
 import { buildTool } from '../tool.ts'
 
 export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
 
-const optionSchema = z.object({
-  label: z.string().min(1).max(40).describe('简短选项名称'),
-  description: z.string().min(1).max(240).describe('这个选项的影响或取舍'),
-}).strict()
-
-const questionSchema = z.object({
-  header: z.string().min(1).max(12).describe('问题卡的短标题，不超过 12 个字符'),
-  question: z.string().min(1).max(500).describe('需要用户明确回答的问题'),
-  options: z.array(optionSchema).min(2).max(4).describe('2~4 个互斥建议选项；界面会自动提供自由输入'),
-}).strict()
-
-const inputSchema = z.object({
-  questions: z.array(questionSchema).min(1).max(MAX_USER_QUESTIONS)
-    .describe('1~6 个都对继续行动必不可少的问题，按回答顺序排列'),
-}).strict()
-
-export function createAskUserQuestionTool(
-  onQuestion: (question: UserQuestion) => void,
-) {
-  let questionSubmitted = false
+export function createAskUserQuestionTool(onQuestion: (id: string, items: UserQuestionItem[]) => void) {
   return buildTool({
     name: ASK_USER_QUESTION_TOOL_NAME,
-    description: '暂停尚未完成的任务，并向用户请求继续所必需的决策',
-    prompt:
-      '仅当用户回答会实质改变下一步行动，且无法从现有上下文或只读工具查明时使用。若存在安全、合理且容易撤销的默认选择，应直接继续并说明假设。已有休眠任务计划时，如果最新用户只提出另一个复杂目标、但没有明确是否放弃当前计划，可以询问用户保留当前计划，还是先结束它再处理新目标；用户已明确放弃或切换时不要重复确认。若当前请求已经可以完整交付，不得调用本工具；应正常完成，并在最终文本中说明可选方向。不得用本工具询问用户是否满意、是否还需要帮助，或对已经明确的恢复意图再次确认。一次提交 1~6 个都对继续行动必不可少的问题；每题提供 2~4 个互斥选项及具体取舍，不要添加“其它”，界面会自动提供自由输入。调用成功会暂停当前回合，等待用户回答完整批次。',
-    inputSchema,
+    description: '向用户提出一个或多个简短问题',
+    prompt: '工作中需要补充信息、确认用户偏好或约束、澄清意图或取得批准，且无法从现有上下文或可用工具确定答案时，用此工具提出一个或多个简短问题。使用用户熟悉的语言，让每个问题都包含回答所需的背景。界面会自动提供自由输入，无需添加“其它”选项。调用会立即返回，当前回合可以继续执行。用户的回答会异步作为用户消息送达。等待期间，继续完成已获授权且不依赖回答的工作。如果剩余工作都依赖用户答复，可以结束当前回合等待。需要批准的操作须等用户明确同意后再执行。',
+    inputSchema: askUserQuestionSchema,
     isReadOnly: false,
     kind: 'control',
-    endsTurnOnSuccess: true,
-    turnEndReasonOnSuccess: 'waiting-user',
-    async execute(input) {
-      if (questionSubmitted) {
-        return {
-          data: '本回合已经提交了一个问题；请等待用户回答，不要重复提问。',
-          isError: true,
-        }
-      }
-      questionSubmitted = true
-      const questions = input.questions
-      onQuestion({ id: crypto.randomUUID(), questions })
-      return {
-        data: '问题批次已展示给用户；当前回合结束，等待用户全部回答后继续。',
-        isError: false,
-      }
+    async execute(input, context) {
+      if (!context.toolCallId) throw new Error('提问缺少工具调用 ID')
+      onQuestion(context.toolCallId, input.questions)
+      return { data: '问题已提交。', isError: false }
     },
   })
 }

@@ -105,6 +105,7 @@ export function composerSubmissionPreview(
 export function prependComposerDraft(sent: ComposerDraft, current?: ComposerDraft): ComposerDraft {
   if (!current) return sent
   return {
+    question: current.question,
     text: [sent.text, current.text].filter(Boolean).join('\n'),
     images: [...sent.images, ...current.images],
     pdfs: [...sent.pdfs, ...current.pdfs],

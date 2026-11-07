@@ -1,21 +1,25 @@
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
+import { pendingQuestionSchema, userQuestionSchema, questionResolutionSchema } from '../user-questions.ts'
 
 export const RECENT_PDF_USER_TURNS = 3
 const pdfTurnSchema = z.object({ id: z.string().min(1), pdfIds: z.array(z.string().uuid()) }).strict()
 export const conversationMetadataSchema = z.object({
   userTurn: pdfTurnSchema.extend({ startsTurn: z.boolean() }).optional(),
+  pendingQuestions: z.array(pendingQuestionSchema).optional(),
+  questionBatch: userQuestionSchema.optional(),
+  questionReply: questionResolutionSchema.optional(),
   recentUserTurns: z.array(pdfTurnSchema).max(RECENT_PDF_USER_TURNS).optional(),
 }).strict()
 type ConversationMetadata = z.infer<typeof conversationMetadataSchema>
 export type PdfUserTurn = z.infer<typeof pdfTurnSchema>
-type ConversationMessage = ModelMessage & { whycode?: ConversationMetadata }
+export type ConversationMessage = ModelMessage & { whycode?: ConversationMetadata }
 
 /** 宿主输入入口提供身份；不从 role、提示词标签或自然语言猜测正式 turn。 */
 export function withUserTurn(
   message: ModelMessage, id: string, startsTurn: boolean, pdfIds: Iterable<string> = [],
 ): ModelMessage {
-  return { ...message, whycode: { userTurn: { id, pdfIds: [...pdfIds], startsTurn } } } as ConversationMessage
+  return { ...message, whycode: { ...(message as ConversationMessage).whycode, userTurn: { id, pdfIds: [...pdfIds], startsTurn } } } as ConversationMessage
 }
 
 export function userTurn(message: ModelMessage): ConversationMetadata['userTurn'] {
@@ -56,7 +60,7 @@ export function carryRecentPdfTurns(message: ModelMessage, source: readonly Mode
 
 /** 元数据随 canonical messages 持久化，但绝不作为 Provider 参数或提示词发送。 */
 export function withoutConversationMetadata(messages: readonly ModelMessage[]): ModelMessage[] {
-  return messages.map(message => {
+  return messages.filter(message => (message as ConversationMessage).whycode?.questionReply?.answer !== null).map(message => {
     const { whycode: _metadata, ...plain } = message as ConversationMessage
     return plain as ModelMessage
   })

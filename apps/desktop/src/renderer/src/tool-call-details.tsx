@@ -44,7 +44,7 @@ export function ToolCallDetails({
   }
   const taskResult = parseTaskToolResult(call)
   if (taskResult) return <TaskToolDetails key={`${runtimeId}:${call.id}`} result={taskResult} />
-  const customDetails = toolCallDetails(call.name, call.input, call.result, call.status === 'error')
+  const customDetails = toolCallDetails(call.name, call.input, call.result, call.status === 'error', call)
   const details = customDetails ?? call.result ?? call.progress
   const command = call.name === 'RunCommand' ? runCommand(call.input) : null
   if (!details && !call.attachments?.length && command === null) return null

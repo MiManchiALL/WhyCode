@@ -7,13 +7,13 @@ import type {
   ViewEvent,
 } from '@whycode/core'
 import {
-  appendVisibleToolOutput,
+  appendVisibleToolOutput, questionsForBatch,
   isStepScopedCoreEvent,
-  userQuestionAnswerPrefix,
   visibleToolResult,
   type CoreEvent,
   type ToolFileChange,
-  type UserQuestion,
+  type PendingQuestion,
+  type QuestionResolution,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot } from './session.ts'
 import { summarizeToolCall } from './tool-call-summary.ts'
@@ -24,6 +24,7 @@ export interface ToolCall {
   input: unknown
   status: 'running' | 'done' | 'error'
   result?: string
+  questionAnswers?: Record<string, string | null>
   progress: string
   /** 文件写入工具实际落盘后的逐文件增删行统计。 */
   fileChanges?: ToolFileChange[]
@@ -92,7 +93,6 @@ interface PendingStepSnapshot {
   blocks: Block[]
   nextId: number
   taskPlan: TaskPlan | null
-  pendingQuestion: UserQuestion | null
   fileRollbackBoundaryTurnId: string | null
 }
 
@@ -107,7 +107,9 @@ export interface ConversationState {
   /** 当前/最近一个结构化计划；独立于聊天块，避免频繁进度更新刷屏。 */
   taskPlan: TaskPlan | null
   /** 最近一个尚未被用户消息回答的问题；由可见事件重放恢复。 */
-  pendingQuestion: UserQuestion | null
+  pendingQuestions: PendingQuestion[]
+  /** 工具批次的可见步骤可能晚于已经持久化的问答。 */
+  questionAnswersBeforeTool: Record<string, Record<string, string | null>>
   /** 最近一次仅文件回滚的 turn 边界；后续首次成功文件修改会清除。 */
   fileRollbackBoundaryTurnId: string | null
   /** 当前会话文件状态发生确定变化的单调版本；只用于刷新活动文件预览。 */
@@ -142,7 +144,8 @@ export function createConversationState(
     pendingTurnStart: null,
     turnStartBlocks: new Map(),
     taskPlan: null,
-    pendingQuestion: null,
+    pendingQuestions: [],
+    questionAnswersBeforeTool: {},
     fileRollbackBoundaryTurnId: null,
     fileSystemRevision: 0,
     pendingStep: null,
@@ -202,6 +205,7 @@ export function applyViewEvent(
   if (event.type === 'step-committed') {
     return { ...state, blocks: commitResponseText(state.blocks, event.hasToolCalls) }
   }
+  if (event.type === 'pending-questions') return { ...state, pendingQuestions: event.questions }
   if (event.type === 'turn-completed') return confirmTurnResponse(state)
   return event.type === 'user-message'
     ? appendUserMessage(
@@ -346,20 +350,28 @@ function applyStableCoreEvent(
       if (hasCurrentWorkFinalText(blocks)) return settled
       const expanded = new Set(settled.expanded)
       expanded.add(currentWorkSectionId(blocks, durationId))
-      return { ...settled, expanded }
+      return { ...settled, expanded, questionAnswersBeforeTool: {} }
     }
-    case 'tool-start':
+    case 'tool-start': {
+      const answers = state.questionAnswersBeforeTool[event.toolUseId]
+      if (answers) {
+        const remaining = { ...state.questionAnswersBeforeTool }
+        delete remaining[event.toolUseId]
+        state = { ...state, questionAnswersBeforeTool: remaining }
+      }
       return appendBlock(state, {
         kind: 'tool',
         id: nextBlockId(state),
         call: {
           id: event.toolUseId,
           name: event.toolName,
+          ...(answers ? { questionAnswers: answers } : {}),
           input: visibleToolInput(state, event.toolName, event.input),
           status: 'running',
           progress: '',
         },
       })
+    }
     case 'tool-progress':
       return updateTool(state, event.toolUseId, (call) => ({
         ...call,
@@ -402,7 +414,9 @@ function applyStableCoreEvent(
     case 'checkpoint-restored':
       return applyCheckpointRestored(state, event)
     case 'user-question':
-      return { ...state, pendingQuestion: structuredClone(event.question) }
+      return { ...state, pendingQuestions: [...state.pendingQuestions, ...questionsForBatch(event.question)] }
+    case 'user-question-resolved':
+      return resolveQuestion(state, event.resolution)
     case 'peer-event':
       return applyPeerCoreEvent(state, event.agentId, event.event)
     case 'vote-cast':
@@ -434,7 +448,6 @@ function snapshotConversation(state: ConversationState): PendingStepSnapshot {
     blocks: state.blocks,
     nextId: state.nextId,
     taskPlan: state.taskPlan,
-    pendingQuestion: state.pendingQuestion,
     fileRollbackBoundaryTurnId: state.fileRollbackBoundaryTurnId,
   }
 }
@@ -495,14 +508,9 @@ export function appendUserMessage(
 ): ConversationState {
   state = continueWork(state)
   const pendingTurnStart = startsTurn ? state.blocks.length : state.pendingTurnStart
-  const blocks = state.pendingQuestion
-    ? attachQuestionAnswer(state.blocks, state.pendingQuestion, text)
-    : state.blocks
   return appendBlock({
     ...state,
-    blocks,
     pendingTurnStart,
-    pendingQuestion: null,
     pendingBtw: btw ? structuredClone(btw) : null,
     btwContinuation: null,
   }, {
@@ -535,27 +543,26 @@ function visibleToolInput(
   return { ...input, plan_id: state.taskPlan.id }
 }
 
-function attachQuestionAnswer(
-  blocks: Block[],
-  question: UserQuestion,
-  answerText: string,
-): Block[] {
-  const index = blocks.findLastIndex((block) =>
-    block.kind === 'tool' && block.call.name === 'AskUserQuestion')
-  if (index < 0) return blocks
-  const block = blocks[index]
-  if (block?.kind !== 'tool') return blocks
-  const answerLines = answerText.split('\n')
-  const details = question.questions.map((item, itemIndex) => {
-    const prefix = userQuestionAnswerPrefix(item, itemIndex, question.questions.length)
-    const line = answerLines[itemIndex] ?? ''
-    const answer = line.startsWith(prefix) ? line.slice(prefix.length) : line
-    const label = item.question.replace(/\s+/gu, ' ').trim()
-    return [`Question: ${label}`, `Answer: ${answer || answerText}`].join('\n')
-  }).join('\n\n')
-  const next = [...blocks]
-  next[index] = { ...block, call: { ...block.call, result: details } }
-  return next
+function resolveQuestion(state: ConversationState, resolution: QuestionResolution): ConversationState {
+  const question = state.pendingQuestions.find(item => item.id === resolution.id)
+  if (!question) return state
+  let found = false
+  const attach = (blocks: Block[]): Block[] => {
+    const index = blocks.findLastIndex(block => block.kind === 'tool' && block.call.id === question.toolUseId)
+    const block = blocks[index]
+    if (block?.kind !== 'tool') return blocks
+    found = true
+    const next = [...blocks]
+    next[index] = { ...block, call: { ...block.call, questionAnswers: { ...block.call.questionAnswers, [question.id]: resolution.answer } } }
+    return next
+  }
+  const blocks = attach(state.blocks)
+  const pendingStep = state.pendingStep && { ...state.pendingStep, blocks: attach(state.pendingStep.blocks) }
+  const beforeTool = state.questionAnswersBeforeTool
+  return { ...state, blocks, pendingStep, pendingQuestions: state.pendingQuestions.filter(item => item.id !== resolution.id),
+    questionAnswersBeforeTool: found ? beforeTool : { ...beforeTool,
+      [question.toolUseId]: { ...beforeTool[question.toolUseId], [question.id]: resolution.answer } } }
+
 }
 
 export function editableUserBlockId(blocks: readonly Block[]): string | null {
@@ -601,7 +608,6 @@ function applyBtwMessageEdited(
     turnStartBlocks: new Map(
       [...state.turnStartBlocks].filter(([, index]) => index < previousIndex),
     ),
-    pendingQuestion: null,
     pendingStep: null,
     btwContinuation: null,
     pendingBtw: structuredClone(event.btw),
@@ -637,17 +643,18 @@ function applyUserMessageEdited(
   const turnStartBlocks = new Map(
     [...state.turnStartBlocks].filter(([, index]) => index < previousIndex),
   )
-  return {
+  const edited = {
     ...state,
     blocks,
+    pendingQuestions: event.questions ?? [],
     expanded: new Set([...state.expanded].filter((id) => retainedIds.has(id))),
     pendingTurnStart: previousIndex,
     turnStartBlocks,
     taskPlan: structuredClone(event.taskPlan),
-    pendingQuestion: null,
     fileRollbackBoundaryTurnId: null,
     pendingStep: null,
   }
+  return event.questionReply ? resolveQuestion(edited, event.questionReply) : edited
 }
 
 export function toggleExpanded(state: ConversationState, id: string): ConversationState {
@@ -808,9 +815,7 @@ function applyCheckpointRestored(
     taskPlan,
     fileRollbackBoundaryTurnId: event.scope === 'files' ? event.turnId : null,
     fileSystemRevision: state.fileSystemRevision + 1,
-    pendingQuestion: event.scope === 'files-and-chat'
-      ? structuredClone(event.question ?? null)
-      : state.pendingQuestion,
+    pendingQuestions: event.scope === 'files-and-chat' ? event.questions ?? [] : state.pendingQuestions,
   }
 }
 

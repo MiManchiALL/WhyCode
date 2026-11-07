@@ -1,7 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { parseCompactSummaryMessage, type CompactSummaryState } from '../prompts/compact.ts'
 import { findPendingTurnAbortedIndex } from '../session/interruption.ts'
-import { findPendingUserQuestionIndex } from '../tasks/answer-resume.ts'
 import { isCommandTaskNotificationText } from '../tools/background-command/notification.ts'
 import { isSubagentSettlementText } from '../subagents/notification.ts'
 import { modelMessageText } from '../text.ts'
@@ -52,7 +51,7 @@ export function prepareCompaction(
     : safeBoundaryBefore(raw, Math.min(budgetStart, protectedStart ?? raw.length))
   // U 后没有被移出的工作记录时，把 U 一起留在尾部；旧 P 沿用归入 H 的规则。
   if (!manual && turnStart >= 0 && tailStart === turnStart + 1) tailStart = safeBoundaryBefore(raw, turnStart)
-  const pendingControls = manual ? [findPendingTurnAbortedIndex(raw), findPendingUserQuestionIndex(raw)]
+  const pendingControls = manual ? [findPendingTurnAbortedIndex(raw)]
     .filter((index): index is number => index !== null).map(index => raw[index]!) : []
   const trailingInput = manual ? findTrailingTurnInputBatchStart(raw) : null
   if (trailingInput !== null) pendingControls.push(...raw.slice(trailingInput).filter(message => !userTurn(message)))
@@ -120,7 +119,7 @@ export function safeBoundaryBefore(messages: readonly ModelMessage[], index: num
 }
 
 function earliestProtectedIndex(messages: ModelMessage[]): number | null {
-  const indexes = [findPendingTurnAbortedIndex(messages), findPendingUserQuestionIndex(messages),
+  const indexes = [findPendingTurnAbortedIndex(messages),
     findTrailingTurnInputBatchStart(messages)].filter((index): index is number => index !== null)
   return indexes.length ? Math.min(...indexes) : null
 }

@@ -2,7 +2,9 @@ import { z } from 'zod'
 import {
   compactVisibleCoreEvent,
   coalesceAdjacentCoreEvent,
-  MAX_USER_QUESTIONS,
+  userQuestionSchema,
+  pendingQuestionSchema,
+  questionResolutionSchema,
   type CoreEvent,
 } from '../events.ts'
 import { taskPlanSchema } from '../tasks/types.ts'
@@ -60,23 +62,6 @@ const candidateDetailsSchema = z.object({
   knownRisks: z.array(z.string()).optional(),
 })
 
-const userQuestionItemSchema = z.object({
-  header: z.string().min(1),
-  question: z.string().min(1),
-  options: z
-    .array(z.object({
-      label: z.string().min(1),
-      description: z.string().min(1),
-    }).strict())
-    .min(2)
-    .max(4),
-}).strict()
-
-const userQuestionSchema = z.object({
-  id: z.string().min(1),
-  questions: z.array(userQuestionItemSchema).min(1).max(MAX_USER_QUESTIONS),
-}).strict()
-
 export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('turn-start'), turnId: z.string() }),
   z.object({
@@ -88,6 +73,8 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('user-message-edited'),
+    questions: z.array(pendingQuestionSchema).optional(),
+    questionReply: questionResolutionSchema.optional(),
     previousTurnId: z.string().min(1),
     inputId: z.string().min(1),
     text: z.string().min(1),
@@ -144,7 +131,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
     error: z.string().optional(),
     invalidatedToolUseIds: z.array(z.string()).optional(),
     taskPlan: taskPlanSchema.nullable().optional(),
-    question: userQuestionSchema.nullable().optional(),
+    questions: z.array(pendingQuestionSchema).optional(),
   }),
   z.object({
     type: z.literal('context-compacted'),
@@ -154,6 +141,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('error'), message: z.string(), recoverable: z.boolean() }),
   z.object({ type: z.literal('user-question'), question: userQuestionSchema }),
+  z.object({ type: z.literal('user-question-resolved'), resolution: questionResolutionSchema }),
   z.object({
     type: z.literal('peer-event'),
     agentId: z.enum(['B', 'C']),
@@ -240,6 +228,7 @@ export type RecordedViewEvent = z.infer<typeof viewEventSchema>
 export type ViewEvent = RecordedViewEvent
   | { type: 'step-committed'; hasToolCalls: boolean }
   | { type: 'turn-completed' }
+  | { type: 'pending-questions'; questions: import('../user-questions.ts').PendingQuestion[] }
 
 /** 对话卡片只承载展示摘要；完整工具结果仍由模型消息与工具日志持有。 */
 export function compactViewEvent(event: RecordedViewEvent): RecordedViewEvent {
@@ -285,7 +274,6 @@ export function toViewEvent(event: CoreEvent): RecordedViewEvent | null {
     case 'checkpoint-restored':
     case 'context-compacted':
     case 'error':
-    case 'user-question':
     case 'candidate-submitted':
     case 'vote-cast':
     case 'negotiation-started':

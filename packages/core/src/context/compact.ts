@@ -6,6 +6,7 @@ import {
 import { applyProjectInstructions, findProjectInstructionsMessage } from '../instructions/project.ts'
 import { ModelContextOverflowError, modelRequestError, withModelRequestRetry, type ModelRequestRetry } from '../providers/model-request.ts'
 import type { ModelCapabilities } from '../providers/registry.ts'
+import { carryPendingQuestions } from './question-state.ts'
 import { findTrailingTurnInputBatchStart, prepareCompaction, type SummarySource } from './compact-boundary.ts'
 import { compactionConversation } from './compact-context.ts'
 import { COMPACT_PTL_MAX_RETRIES, expandCompactionTail } from './compact-retry.ts'
@@ -77,6 +78,7 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
     ...preparation.pendingControls,
   ]
   if (!rebuilt.length) return { messages: [...messages], summaryText: '' }
+  carryPendingQuestions(rebuilt, messages)
   rebuilt[0] = carryRecentPdfTurns(rebuilt[0]!, messages)
   if (options.applicationContext) {
     const insertAt = findTrailingTurnInputBatchStart(rebuilt) ?? rebuilt.length

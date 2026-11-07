@@ -19,7 +19,8 @@ import {
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
 import { createTaskContextMessage } from '../tasks/context.ts'
-import { hasPendingUserQuestion } from '../tasks/answer-resume.ts'
+import type { QuestionResolution } from '../user-questions.ts'
+import { hasPendingUserQuestion, pendingUserQuestions, skippedQuestionMessage, carryPendingQuestions } from '../context/question-state.ts'
 import { compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import { responseViewEvents } from './response-view.ts'
 import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
@@ -723,17 +724,20 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
+    questionReply?: QuestionResolution,
   ): Promise<void> {
     return this.enqueue(async () => {
       const resolvedImageDelivery = attachments.length
         ? imageDelivery ?? 'native'
         : undefined
+      if (questionReply) this.assertOpenQuestion(questionReply.id)
       this.assertPendingInputs(consumesInputIds, 'restored', '消费')
       this.assertImageAttachmentsCompatible(attachments)
       this.assertPdfAttachmentsCompatible(pdfAttachments)
       const input = this.entry(
         {
           type: 'user-input',
+          ...(questionReply ? { questionReply } : {}),
           text,
           startsTurn,
           ...(attachments.length ? { attachments } : {}),
@@ -746,6 +750,7 @@ export class SessionJournal implements SessionRecorder {
         inputId,
       )
       await this.appendEntries([input])
+      this.appendResponseView(input)
       this.addImageAttachments(attachments)
       this.addPdfAttachments(pdfAttachments)
       for (const consumedId of consumesInputIds) this.pendingUserInputMap.delete(consumedId)
@@ -765,6 +770,7 @@ export class SessionJournal implements SessionRecorder {
         this.pendingUserInputMap.set(input.uuid, {
           id: input.uuid,
           text: input.text,
+          ...(input.questionReply ? { questionReply: input.questionReply } : {}),
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.attachments?.length ? { imageDelivery: input.imageDelivery } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
@@ -964,6 +970,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
+    questionReply?: QuestionResolution,
   ): Promise<void> {
     const recordedMessages = structuredClone(rollbackMessages)
     return this.enqueue(async () => {
@@ -985,6 +992,7 @@ export class SessionJournal implements SessionRecorder {
         pdfAttachments,
         skills,
         resolvedImageDelivery,
+        questionReply,
       )
       await this.appendEntries([transaction.snapshot, transaction.input], true)
       for (const id of [...this.turnStartMessages.keys()].reverse()) {
@@ -1003,6 +1011,25 @@ export class SessionJournal implements SessionRecorder {
       this.viewEvents.push(event)
       this.viewEventTimestamps.push(entry.timestamp)
     }
+  }
+
+  private assertOpenQuestion(id: string): void {
+    if (!pendingUserQuestions(this.messages).some(question => question.id === id)
+      || [...this.pendingUserInputMap.values()].some(input => input.questionReply?.id === id)) {
+      throw new Error('这道问题已经处理')
+    }
+  }
+
+  recordQuestionSkip(id: string): Promise<void> {
+    return this.enqueue(async () => {
+      this.assertOpenQuestion(id)
+      const skipped = this.entry({ type: 'question-skipped', questionId: id })
+      await this.appendEntries([skipped])
+      this.messages.push(skippedQuestionMessage(id))
+      this.appendResponseView(skipped)
+      if (this.metadata.status === 'waiting-user' && !hasPendingUserQuestion(this.messages)) this.metadata.status = 'idle'
+      await this.refreshMetadataCache()
+    })
   }
 
   recordViewEvents(events: RecordedViewEvent[]): Promise<void> {
@@ -1117,6 +1144,7 @@ export class SessionJournal implements SessionRecorder {
         ...(resources.startedToolCallId ? { startedToolCallId: resources.startedToolCallId } : {}),
       })
       await this.appendEntries([batch])
+      this.appendResponseView(batch)
       appendOrderedMessages(this.messages, recordedMessages)
       this.addImageAttachments(attachments)
       this.addPdfAttachments(pdfAttachments)
@@ -1171,6 +1199,7 @@ export class SessionJournal implements SessionRecorder {
         recordedMessages,
         findProjectInstructionsMessage(this.messages),
       )
+      if (reason === 'compact') carryPendingQuestions(normalizedMessages, this.messages)
       const runtimeTurnStarts = reason === 'rollback'
         ? this.turnStartsWithin(normalizedMessages)
         : []
@@ -1590,6 +1619,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[],
     skills: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
+    questionReply?: QuestionResolution,
   ): TurnEditTransaction {
     const messages = applyProjectInstructions(
       rollbackMessages,
@@ -1624,6 +1654,7 @@ export class SessionJournal implements SessionRecorder {
       text,
       startsTurn: true,
       replacesTurnId: previousTurnId,
+      ...(questionReply ? { questionReply } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(attachments.length ? { imageDelivery: imageDelivery ?? 'native' } : {}),
       ...(pdfAttachments.length ? { pdfAttachments } : {}),
@@ -1669,7 +1700,7 @@ export class SessionJournal implements SessionRecorder {
     this.addPdfAttachments(pdfAttachments)
     this.viewEvents.push(
       userMessageViewEvent(transaction.input),
-      turnEditViewEvent(transaction.input, taskState, this.viewEvents),
+      turnEditViewEvent(transaction.input, taskState, this.viewEvents, transaction.messages),
     )
     this.viewEventTimestamps.push(transaction.input.timestamp, transaction.input.timestamp)
     const clipped = clip(transaction.input.text)
@@ -1928,12 +1959,16 @@ function turnEditViewEvent(
   input: Extract<SessionEntry, { type: 'user-input' }>,
   taskState: TaskPlanState,
   viewEvents: readonly ViewEvent[],
+  messages: ModelMessage[],
 ): ViewEvent {
   if (!input.replacesTurnId) throw new Error('编辑输入缺少旧回合身份')
+  const questions = pendingUserQuestions(messages)
   return {
     type: 'core-event',
     event: {
       type: 'user-message-edited',
+      ...(questions.length ? { questions } : {}),
+      ...(input.questionReply ? { questionReply: input.questionReply } : {}),
       previousTurnId: input.replacesTurnId,
       inputId: input.uuid,
       text: input.text,
