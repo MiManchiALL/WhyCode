@@ -1,3 +1,4 @@
+import { userTurn, type ConversationMessage } from '../context/user-turn.ts'
 import type { ModelMessage } from 'ai'
 import { imageDeliveryModeFromMessage } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
@@ -29,6 +30,7 @@ export function latestTurnEditContext(recorder: SessionRecorder, turnId: string,
 }
 
 export interface LatestTurnEditResources {
+  questionId?: string
   turnIds: string[]
   attachments: ImageAttachment[]
   imageDelivery?: ImageDeliveryMode
@@ -77,7 +79,9 @@ export function latestTurnEditResources(
   if (attachments.length && !imageDelivery) {
     throw new Error('目标回合缺少图片交付方式')
   }
+  const rootMessage = messages.slice(rollbackMessageCount).find(item => userTurn(item)?.startsTurn) as ConversationMessage | undefined
   return {
+    questionId: rootMessage?.whycode?.questionReply?.id,
     turnIds: afterRoot.flatMap((entry) => entry.type === 'core-event'
       && entry.event.type === 'turn-start' ? [entry.event.turnId] : []),
     attachments,

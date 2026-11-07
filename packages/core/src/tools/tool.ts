@@ -35,8 +35,6 @@ export interface ToolDefinition<
   endsTurnOnSuccess: boolean
   /** 隐私或信任边界首次使用也需审批；会话记住或全自动档仍服从常规硬拒绝。 */
   initialApprovalReason?: string
-  /** 终止型工具成功后的语义；waiting-user 会保留计划并等待下一条用户消息。 */
-  turnEndReasonOnSuccess: 'completed' | 'waiting-user'
   /** 本次调用涉及的路径（原始输入值），权限引擎据此做边界与敏感检查 */
   extractPaths?: (input: InferSchema<InputSchema>) => string[]
   /**
@@ -100,7 +98,6 @@ const CONSERVATIVE_DEFAULTS = {
   kind: 'execute' as const,
   requiresStandaloneStep: false,
   endsTurnOnSuccess: false,
-  turnEndReasonOnSuccess: 'completed' as const,
 }
 
 /** 集中填充 fail-closed 默认值 */

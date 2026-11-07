@@ -3,6 +3,8 @@ import type { ModelMessage } from 'ai'
 import { createImageUserMessage } from '../attachments/messages.ts'
 import type { ImageAttachment, ImageDeliveryMode } from '../attachments/types.ts'
 import type { QueuedUserMessage } from '../events.ts'
+import type { QuestionResolution } from '../user-questions.ts'
+import { withQuestionReply } from '../context/question-state.ts'
 import { withPdfAttachmentReferences } from '../pdf/messages.ts'
 import type { PdfAttachment } from '../pdf/types.ts'
 import { activatedSkillSchema, skillSummary, type ActivatedSkill } from '../skills/types.ts'
@@ -16,6 +18,7 @@ export interface QueuedMessage {
   skills: ActivatedSkill[]
   persisted: boolean
   urgent?: boolean
+  questionReply?: QuestionResolution
 }
 
 /** Main 与协调器移交同一条输入，内存会话也保留最初的队列 ID。 */
@@ -40,6 +43,7 @@ export function createUserInput(
 
 export function queuedMessageForModel(message: QueuedMessage): ModelMessage {
   const text = withPdfAttachmentReferences(message.text, message.pdfAttachments)
+  if (message.questionReply) return withQuestionReply({ role: 'user', content: text }, message.questionReply)
   return message.attachments.length
     ? createImageUserMessage(text, message.attachments, message.imageDelivery)
     : { role: 'user', content: text }

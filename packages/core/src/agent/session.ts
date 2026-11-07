@@ -6,7 +6,7 @@ import type {
   CoreEvent,
   StopReason,
   UsageInfo,
-  UserQuestion,
+  UserQuestionItem,
 } from '../events.ts'
 import type { ModelEntry, ProviderConfig } from '../providers/registry.ts'
 import type { ReasoningEffortSelection } from '../providers/catalog.ts'
@@ -82,6 +82,8 @@ import {
   createCaptureScreenshotTool,
   type ScreenshotCaptureHandler,
 } from '../tools/capture-screenshot/index.ts'
+import { formatQuestionAnswer, type QuestionResolution } from '../user-questions.ts'
+import type { ConversationMessage } from '../context/user-turn.ts'
 import { createAskUserQuestionTool } from '../tools/ask-user-question/index.ts'
 import {
   compactPdfAttachmentContext,
@@ -124,10 +126,8 @@ import {
   taskContextBlock,
 } from '../tasks/context.ts'
 import {
-  createUserQuestionMarker,
-  findPendingUserQuestion,
-  isUserQuestionAnswer,
-} from '../tasks/answer-resume.ts'
+  hasPendingUserQuestion, pendingUserQuestions, withQuestionBatch, skippedQuestionMessage, carryPendingQuestions, answersPlanQuestion,
+} from '../context/question-state.ts'
 import {
   createPermissionContext,
   type ApprovalSuggestion,
@@ -216,8 +216,8 @@ interface ToolStepContext {
   subagentDefinitions?: readonly SubagentDefinitionSnapshot[]
   planExecutionEngaged?: boolean
   onTaskPlanEngagement?: (action: TaskPlanEngagementAction) => void
-  onUserQuestion?: (question: UserQuestion) => void
-  onTurnEndingTool?: (reason: 'completed' | 'waiting-user') => void
+  onUserQuestion?: (id: string, items: UserQuestionItem[]) => void
+  onTurnEndingTool?: () => void
   onImageAttachments?: (
     toolCallId: string, attachments: readonly ImageAttachment[],
     transform: ImageTransform | undefined, attachmentLimit: number,
@@ -330,7 +330,7 @@ interface StepResult {
   hadToolCalls: boolean
   /** 仅保存既有计划进度，不代表模型决定忽略最新 steering 继续实质执行。 */
   hadOnlyTaskProgressUpdates: boolean
-  toolEndReason: 'completed' | 'waiting-user' | null
+  endedByTool: boolean
   taskPlanChanged: boolean
   taskPlanEngagement: TaskPlanEngagementAction | null
   interruptionBoundaryConsumed: boolean
@@ -439,6 +439,7 @@ export class AgentSession {
         imageDelivery: input.attachments?.length ? input.imageDelivery! : 'native',
         pdfAttachments: [...(input.pdfAttachments ?? [])],
         skills: [...(input.skills ?? [])].map((skill) => structuredClone(skill)),
+        questionReply: input.questionReply,
         persisted: true,
       }))
     this.rebuildActivePdfAttachments()
@@ -638,9 +639,24 @@ export class AgentSession {
     return this.running || this.compacting || this.restoringCheckpointToolUseId !== null || this.editingTurn
   }
 
-  /** 空闲但仍在等待 AskUserQuestion 的真实回答；宿主应让用户输入先进入路由。 */
+  get pendingQuestions() { return pendingUserQuestions(this.messages) }
+
+  findAvailableQuestion(id: string) {
+    if (this.queue.some(item => item.questionReply?.id === id)) return undefined
+    return this.pendingQuestions.find(question => question.id === id)
+  }
+
+  async skipUserQuestion(id: string): Promise<void> {
+    if (!this.findAvailableQuestion(id)) throw new Error('这道问题已经处理')
+    await this.persistRequired(recorder => recorder.recordQuestionSkip(id), '跳过问题')
+    const resolution = { id, answer: null }
+    this.messages.push(skippedQuestionMessage(id))
+    this.options.emit({ type: 'user-question-resolved', resolution })
+  }
+
+  /** 空闲时优先等待用户输入，后台通知不会另启模型回合。 */
   get waitingForUserInput(): boolean {
-    return !this.isBusy && findPendingUserQuestion(this.messages) !== null
+    return !this.isBusy && hasPendingUserQuestion(this.messages)
   }
 
   get checkpointRestoreToolUseId(): string | null {
@@ -688,9 +704,6 @@ export class AgentSession {
     if (this.isBusy || this.activeTurn) throw new Error('Agent 工作中，不能启动 BTW')
     if (this.options.promptContext.discussion || this.protocolRound) {
       throw new Error('协议或讨论阶段不能启动 BTW')
-    }
-    if (findPendingUserQuestion(this.messages)) {
-      throw new Error('当前问题尚未回答，不能启动 BTW')
     }
     const turnModelSelection: TurnModelSelection = {
       model: this.options.model,
@@ -1014,10 +1027,15 @@ export class AgentSession {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery: ImageDeliveryMode = 'native',
+    questionReply?: QuestionResolution,
   ): Promise<StopReason> | void {
-    return this.receiveUserInput(createUserInput(
+    const item = createUserInput(
       text, imageAttachments, persistedInputId, pdfAttachments, skills, imageDelivery,
-    ), { urgent })
+    )
+    item.questionReply = questionReply
+    const handling = this.receiveUserInput(item, { urgent })
+    if (questionReply) this.options.emit({ type: 'user-question-resolved', resolution: questionReply })
+    return handling
   }
 
   /** 把单条排队消息安全退回 Renderer，供用户重新编辑后原子重提。 */
@@ -1088,7 +1106,7 @@ export class AgentSession {
       notification: structuredClone(notification),
       message: createCommandTaskNotificationMessage(notification),
     }
-    if (this.isBusy || findPendingUserQuestion(this.messages)) {
+    if (this.isBusy || hasPendingUserQuestion(this.messages)) {
       this.taskNotifications.push(item)
       this.wakeRunLoop()
       return
@@ -1171,9 +1189,13 @@ export class AgentSession {
     { recorder, rollbackMessages, rollbackTaskState, skills, resources }: ReturnType<typeof latestTurnEditContext>,
   ): Promise<PreparedLatestTurnEdit> {
     const inputId = crypto.randomUUID()
+    const question = pendingUserQuestions(rollbackMessages).find(item => item.id === resources.questionId)
+    const prefix = question ? formatQuestionAnswer(question, '') : ''
+    const reply = question ? { id: question.id, answer: nextText.startsWith(prefix) ? nextText.slice(prefix.length).trim() : nextText } : undefined
+    if (reply && !reply.answer) throw new Error('回答不能为空')
     const commit = () => recorder.recordTurnEditInput(
       turnId, inputId, nextText, rollbackMessages, rollbackTaskState,
-      resources.attachments, resources.pdfAttachments, skills, resources.imageDelivery,
+      resources.attachments, resources.pdfAttachments, skills, resources.imageDelivery, reply,
     )
     if (restoreFiles) {
       if (!this.checkpoints) throw new Error('当前会话没有可回滚的文件检查点')
@@ -1194,6 +1216,7 @@ export class AgentSession {
     const message = queuedMessageForModel({
       id: inputId,
       text: nextText,
+      questionReply: reply,
       attachments: resources.attachments,
       imageDelivery: resources.imageDelivery ?? 'native',
       pdfAttachments: resources.pdfAttachments,
@@ -1248,6 +1271,8 @@ export class AgentSession {
       accepted = true
       this.options.emit({
         type: 'user-message-edited',
+        questions: this.pendingQuestions,
+        questionReply: (message as ConversationMessage).whycode?.questionReply,
         previousTurnId,
         inputId,
         text,
@@ -1339,8 +1364,11 @@ export class AgentSession {
     this.queueAutoDrain = true
     if (this.isBusy) {
       this.queue.push(item)
-      if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
-      if (urgent) this.requestImmediateDelivery(item)
+      if (!alreadyQueued && !item.questionReply) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
+      if (item.questionReply) {
+        item.urgent = true
+        this.wakeRunLoop()
+      } else if (urgent) this.requestImmediateDelivery(item)
       return
     }
     const rootInputId = item.persisted && this.options.sessionRecorder?.undeliveredUserInputIds.includes(item.id)
@@ -1348,6 +1376,8 @@ export class AgentSession {
       : undefined
     const delivered = (alreadyQueued || item.persisted) && !rootInputId ? [item] : []
     if (!delivered.length) this.activatePdfAttachments(item.pdfAttachments)
+    // 已提交却随上轮停止的回答，在下一次用户主动开始工作时进入稳定步骤。
+    for (const retained of this.queue) if (retained.questionReply) retained.urgent = true
     const message = queuedMessageForModel(item)
     const notifications = this.drainTaskNotifications([message])
     return this.startTurn(
@@ -1529,7 +1559,7 @@ export class AgentSession {
 
   private hasRunnablePendingMessages(): boolean {
     return (this.queueAutoDrain && this.queue.length > 0)
-      || (this.taskNotifications.some(item => !('activationId' in item.notification)) && !findPendingUserQuestion(this.messages))
+      || (this.taskNotifications.some(item => !('activationId' in item.notification)) && !hasPendingUserQuestion(this.messages))
   }
 
   private hasMidTurnInput(): boolean {
@@ -1615,7 +1645,7 @@ export class AgentSession {
   }
 
   /** 步骤间注入真实用户消息；其语义由模型结合当前计划状态自行判断。 */
-  private async injectQueuedMidTurn(): Promise<boolean> {
+  private async injectQueuedMidTurn(): Promise<{ userInput: boolean; resumesPlan: boolean }> {
     const drained = this.queue.filter((item) => item.urgent)
     if (drained.length) this.queue = this.queue.filter((item) => !item.urgent)
     const notifications = this.drainTaskNotifications(drained.map(queuedMessageForModel))
@@ -1628,6 +1658,8 @@ export class AgentSession {
       }),
       ...notifications.map((item) => item.message),
     ]
+    const resumesPlan = drained.some(item => item.questionReply) && !this.taskPlan?.stateSnapshot.resumeRequired
+      && answersPlanQuestion(this.pendingQuestions, injected, this.taskPlan?.snapshot?.id)
     if (injected.length > 0 && this.activeTurn) {
       try {
         await this.persistRequired(
@@ -1635,7 +1667,7 @@ export class AgentSession {
             this.activeTurn!.id,
             injected,
             undefined,
-            undefined,
+            resumesPlan ? this.taskPlan?.snapshot?.id : undefined,
             {
               attachments: drained.flatMap((item) => item.attachments),
               deliveredInputIds: drained.filter((item) => item.persisted).map((item) => item.id),
@@ -1655,7 +1687,7 @@ export class AgentSession {
       this.skillTurn.add(drained.flatMap((item) => item.skills))
       for (const item of drained) this.options.emit({ type: 'message-injected', ...queuedUserMessage(item) })
     }
-    return drained.length > 0
+    return { userInput: drained.length > 0, resumesPlan }
   }
 
   /** 当前 turn 只消费立即插话和内部通知，普通排队请求留到回合结束。 */
@@ -1700,13 +1732,7 @@ export class AgentSession {
         deliveredInputs = [...retained, ...deliveredInputs]
       }
     }
-    const pendingUserQuestion = findPendingUserQuestion(this.messages)
-    const answersPendingUserQuestion = pendingUserQuestion !== null
-      && initialMessages.some((message) =>
-        message.role === 'user'
-        && isUserQuestionAnswer(pendingUserQuestion, modelMessageText(message)))
-    const resumesUserQuestion = answersPendingUserQuestion
-      && pendingUserQuestion.resumesTaskPlan
+    const resumesUserQuestion = answersPlanQuestion(this.pendingQuestions, initialMessages, this.taskPlan?.snapshot?.id)
     const notificationContinuationPlanId = resumeTaskPlanFromNotification
       ? initialTaskNotifications
           .map((item) => item.notification.engagedPlanId)
@@ -1821,8 +1847,9 @@ export class AgentSession {
         await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
         await this.loadPendingSubagentResults()
         if (this.hasMidTurnInput()) {
-          const injectedUserMessage = await this.injectQueuedMidTurn()
-          if (injectedUserMessage) steeringDecisionPending = true
+          const injected = await this.injectQueuedMidTurn()
+          if (injected.userInput) steeringDecisionPending = true
+          if (injected.resumesPlan) planExecutionEngaged = true
           await this.skillTurn.prepare(this.options.prepareSkillRuntime, this.skillRuntimeContext(abortSignal))
         }
         const subagentState = await this.subagentTurnState(turnId)
@@ -1860,10 +1887,10 @@ export class AgentSession {
           stepsSincePlanMutation = 0
           stepsSincePlanReminder = 0
         }
-        if (step.toolEndReason) {
+        if (step.endedByTool) {
           if (abortSignal.aborted) this.abortRequestedDuringFinalization = true
           endedByTool = true
-          stopReason = step.toolEndReason
+          stopReason = 'completed'
           break
         }
         // 注入点：本步工具结果已收齐、下一次模型请求前（文档一 §3.1）
@@ -1883,8 +1910,9 @@ export class AgentSession {
         }
         await this.loadPendingSubagentResults()
         if (this.hasMidTurnInput()) {
-          const injectedUserMessage = await this.injectQueuedMidTurn()
-          if (injectedUserMessage) steeringDecisionPending = true
+          const injected = await this.injectQueuedMidTurn()
+          if (injected.userInput) steeringDecisionPending = true
+          if (injected.resumesPlan) planExecutionEngaged = true
           continue // 有新消息注入时，即使模型没调工具也要续一步来回应
         }
         if (abortSignal.aborted && step.hadToolCalls) {
@@ -1916,6 +1944,10 @@ export class AgentSession {
               break
             }
             continue
+          }
+          if (hasPendingUserQuestion(this.messages)) {
+            stopReason = 'waiting-user'
+            break
           }
           if (step.awaitingTaskPlanContinuation) {
             stopReason = 'paused'
@@ -1992,7 +2024,7 @@ export class AgentSession {
     // 收尾持久化窗口进入的消息也必须有确定归宿；普通 Main 作为新 turn 接续。
     if (
       this.hasRunnablePendingMessages()
-      && stopReason === 'completed'
+      && (stopReason === 'completed' || (stopReason === 'waiting-user' && this.queue.some(item => item.questionReply && item.urgent)))
       && !this.protocolRound
       && !this.terminalStatusManaged
       && !this.abortRequestedDuringFinalization
@@ -2111,6 +2143,7 @@ export class AgentSession {
           recorder.recordSnapshot('compact', messages, undefined, this.taskPlan?.stateSnapshot),
           '保存上下文压缩',
         )
+        carryPendingQuestions(messages, this.messages)
         this.messages = messages
         this.rebuildActivePdfAttachments()
         this.tokenBaseline = null
@@ -2238,6 +2271,7 @@ export class AgentSession {
       recorder.recordSnapshot('compact', messages, this.activeTurn!.id, this.taskPlan?.stateSnapshot),
       '保存上下文压缩',
     )
+    carryPendingQuestions(messages, this.messages)
     this.messages = messages
     this.rebuildActivePdfAttachments()
     this.tokenBaseline = null
@@ -2504,7 +2538,7 @@ export class AgentSession {
         committed: false,
         hadToolCalls: false,
         hadOnlyTaskProgressUpdates: false,
-        toolEndReason: null,
+        endedByTool: false,
         taskPlanChanged: false,
         taskPlanEngagement: null,
         interruptionBoundaryConsumed: false,
@@ -2554,13 +2588,13 @@ export class AgentSession {
     const { emit } = this.options
 
     const stepControl: {
-      toolEndReason: StepResult['toolEndReason']
+      endedByTool: boolean
       taskPlanEngagement: TaskPlanEngagementAction | null
     } = {
-      toolEndReason: null,
+      endedByTool: false,
       taskPlanEngagement: null,
     }
-    let userQuestion: UserQuestion | null = null
+    const asked = new Map<string, UserQuestionItem[]>()
     const stepAttachments = new ToolStepAttachments(this.options.sessionRecorder, this.imageAttachments, this.pdfAttachments)
     let stepCommitted = false
     let durableTaskState = this.taskPlan?.stateSnapshot
@@ -2591,8 +2625,8 @@ export class AgentSession {
         onToolExecutionEnd: (event) => toolExecution!.finish(event),
         planExecutionEngaged,
         onTaskPlanEngagement: (action) => { stepControl.taskPlanEngagement = action },
-        onUserQuestion: (question) => { userQuestion = question },
-        onTurnEndingTool: (reason) => { stepControl.toolEndReason = reason },
+        onUserQuestion: (id, items) => { asked.set(id, items) },
+        onTurnEndingTool: () => { stepControl.endedByTool = true },
         onImageAttachments: (id, attachments, transform, limit) =>
           stepAttachments.acceptImages(id, attachments, transform, limit),
         onPdfAttachments: (id, attachments) => stepAttachments.acceptPdfs(id, attachments),
@@ -2730,6 +2764,11 @@ export class AgentSession {
             const { messages, attachments, pdfAttachments } = stepAttachments.forTool(event.toolUseId, message)
             const taskState = this.taskPlan?.stateSnapshot
             const changedTaskState = taskState?.version !== durableTaskState?.version ? taskState : undefined
+            const items = asked.get(event.toolUseId)
+            const planId = (planExecutionEngaged || stepControl.taskPlanEngagement || changedTaskState) && taskState?.activePlan?.id
+            const question = items && !event.isError
+              ? { id: event.toolUseId, questions: items, ...(planId ? { planId } : {}) } : undefined
+            if (question) messages[0] = withQuestionBatch(messages[0]!, question)
             this.assertImageAttachmentsCompatible(attachments)
             this.assertPdfAttachmentsCompatible(pdfAttachments)
             await this.persistRequired(
@@ -2744,17 +2783,19 @@ export class AgentSession {
             this.addImageAttachments(attachments)
             this.addPdfAttachments(pdfAttachments)
             this.activatePdfAttachments(pdfAttachments)
+            if (question) emit({ type: 'user-question', question })
             durableTaskState = taskState
           },
         })
         await toolExecution.run(requestTools)
-        if (stepAbort.signal.aborted) stepControl.toolEndReason = null
+        if (stepAbort.signal.aborted) stepControl.endedByTool = false
       }
       let awaitingTaskPlanContinuation = false
       let taskPlanClosedNaturally = false
       if (
         !hadToolCalls
         && planExecutionEngaged
+        && !pendingUserQuestions(this.messages).some(question => question.planId === this.taskPlan?.snapshot?.id)
         && !preserveTaskPlanOnFinalText
         && !this.hasMidTurnInput()
       ) {
@@ -2777,29 +2818,12 @@ export class AgentSession {
         throw new Error('自然结束任务计划后未生成状态提交')
       }
       taskPlanFinalized = Boolean(this.taskPlan)
-      const planRemainsActive = Boolean(
-        taskPlanCommit ? taskPlanCommit.state.activePlan : this.taskPlan?.snapshot,
-      )
-      const questionResumesTaskPlan = userQuestion !== null
-        && stepControl.toolEndReason === 'waiting-user'
-        && planRemainsActive
-        && (
-          planExecutionEngaged
-          || stepControl.taskPlanEngagement?.type === 'resume'
-          || taskPlanCommit !== undefined
-        )
       const internalMarkers: ModelMessage[] = []
       if (naturallyClosedTaskState) {
         internalMarkers.push(createTaskStateMessage(naturallyClosedTaskState))
       }
       if (consumeInterruptionBoundary) {
         internalMarkers.push(createTurnAbortedConsumedMessage())
-      }
-      if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
-        internalMarkers.push(createUserQuestionMarker(
-          userQuestion,
-          questionResumesTaskPlan,
-        ))
       }
       const mcpCommitMessages = mcpStep?.messagesOnCommit() ?? []
       const committedMessages = dehydrateImageMessages([
@@ -2823,9 +2847,6 @@ export class AgentSession {
       )
       stepCommitted = true
       this.messages.push(...committedMessages)
-      if (userQuestion && stepControl.toolEndReason === 'waiting-user') {
-        emit({ type: 'user-question', question: userQuestion })
-      }
       if (taskPlanCommit) {
         emit({ type: 'task-plan-updated', plan: taskPlanCommit.plan })
       }
@@ -2854,7 +2875,7 @@ export class AgentSession {
         committed: true,
         hadToolCalls,
         hadOnlyTaskProgressUpdates: hadToolCalls && !hadNonProgressToolCalls,
-        toolEndReason: stepControl.toolEndReason,
+        endedByTool: stepControl.endedByTool,
         taskPlanChanged: taskPlanCommit !== undefined,
         taskPlanEngagement: stepControl.taskPlanEngagement,
         interruptionBoundaryConsumed: consumeInterruptionBoundary,
@@ -2898,7 +2919,7 @@ export class AgentSession {
       && !this.options.promptContext.discussion
       && !this.protocolRound
         ? [
-            createAskUserQuestionTool((question) => context.onUserQuestion?.(question)),
+            createAskUserQuestionTool((id, items) => context.onUserQuestion?.(id, items)),
           ]
         : []
     const mainTools = !this.options.promptContext.discussion
@@ -3196,7 +3217,7 @@ export class AgentSession {
               this.skillTurn.recordToolResult(toolCallId, parsed.value, !result.isError)
             }
             if (def.endsTurnOnSuccess && !result.isError) {
-              context.onTurnEndingTool?.(def.turnEndReasonOnSuccess)
+              context.onTurnEndingTool?.()
             }
             loopHealth.record(def.name, parsed.value, result.data, result.isError)
             return finishTool(toolCallId, result.data, result.isError, result.fileChanges ? [...result.fileChanges] : undefined)
@@ -3383,7 +3404,7 @@ export class AgentSession {
     const originalTaskState = this.taskPlan?.stateSnapshot
     const rollbackQuestion = rollbackMessages === null
       ? undefined
-      : findPendingUserQuestion(rollbackMessages)?.question ?? null
+      : pendingUserQuestions(rollbackMessages)
     const result = await this.checkpoints!.restore(
       toolUseId,
       scope,
@@ -3413,7 +3434,7 @@ export class AgentSession {
       error: result.error,
       invalidatedToolUseIds: result.invalidatedToolUseIds,
       ...(result.ok && scope === 'files-and-chat'
-        ? { taskPlan: rollbackTaskState?.activePlan ?? null, question: rollbackQuestion ?? null }
+        ? { taskPlan: rollbackTaskState?.activePlan ?? null, questions: rollbackQuestion ?? [] }
         : {}),
     })
     if (result.ok && scope === 'files-and-chat') this.emitContextUsage()

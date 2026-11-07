@@ -391,33 +391,17 @@ describe('ViewTimeline', () => {
     assert.doesNotMatch(JSON.stringify(writer.batches), /task-plan-replaced/)
   })
 
-  it('待回答问题只在所属 step 提交后写入历史', async () => {
+  it('问题状态由工具结果及用户操作持久化，时间线不重复写入', async () => {
     const writer = new Writer()
     const timeline = new ViewTimeline(() => assert.fail('不应写入失败'))
-    const event = {
-      type: 'user-question' as const,
-      question: {
-        id: 'question-1',
-        questions: [{
-          header: '实现偏好',
-          question: '你更看重哪一点？',
-          options: [
-            { label: '简单可靠', description: '减少复杂度' },
-            { label: '功能完整', description: '覆盖更多场景' },
-          ],
-        }],
-      },
-    }
-
-    timeline.capture(writer, event)
-    timeline.capture(writer, { type: 'step-discarded' })
-    timeline.capture(writer, event)
+    const question = { id: 'q', questions: [{ header: '选择', question: '哪一个？' }] }
+    timeline.capture(writer, { type: 'user-question', question })
+    timeline.capture(writer, { type: 'user-question-resolved', resolution: { id: JSON.stringify([question.id, 0]), answer: null } })
     timeline.capture(writer, { type: 'step-committed' })
-    await Promise.resolve()
-
-    assert.equal(writer.batches.length, 1)
-    assert.match(JSON.stringify(writer.batches), /你更看重哪一点/)
+    await timeline.flush()
+    assert.deepEqual(writer.batches, [])
   })
+
 })
 
 function taskPlan() {

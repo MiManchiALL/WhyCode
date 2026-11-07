@@ -6,7 +6,7 @@ import { SKILL_FILE_NAME } from '../skills/types.ts'
 import { withoutSubagentCatalog } from '../subagents/context.ts'
 import { withoutMcpToolState } from '../mcp/state.ts'
 import { BROWSER_GUIDE } from '../tools/browser/guide.ts'
-import { userTurn } from './user-turn.ts'
+import { type ConversationMessage, userTurn } from './user-turn.ts'
 
 /** 按应用拥有的结构剥离可重建控制上下文；普通用户正文和实际读取资料不按标签搜索删除。 */
 export function compactionConversation(messages: readonly ModelMessage[]): ModelMessage[] {
@@ -23,6 +23,7 @@ export function compactionConversation(messages: readonly ModelMessage[]): Model
   }
   const conversation = new Set(withoutSubagentCatalog(withoutMcpToolState(messages)))
   return messages.flatMap(message => {
+    if ((message as ConversationMessage).whycode?.questionReply?.answer === null) return []
     if (userTurn(message)) return [message]
     if (!conversation.has(message)) return []
     if (isProjectInstructionsMessage(message) || isSkillCatalogMessage(message)

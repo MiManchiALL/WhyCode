@@ -1,3 +1,4 @@
+import { questionResult, answerFirstQuestion } from '../test-fixtures/user-questions.ts'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { simulateReadableStream, type ModelMessage } from 'ai'
@@ -5,9 +6,8 @@ import { MockLanguageModelV4 } from 'ai/test'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import {
-  createUserQuestionMarker,
-  findPendingUserQuestion,
-} from '../tasks/answer-resume.ts'
+  pendingUserQuestions,
+} from '../context/question-state.ts'
 import {
   activeTaskPlanSchema,
   type ActiveTaskPlan,
@@ -201,7 +201,7 @@ describe('Main 长任务端到端控制', () => {
     session.restoreMessageSnapshot([
       { role: 'user', content: '执行一个很长的计划' },
       ...Array.from({ length: 3 }, (): ModelMessage => ({ role: 'assistant', content: 'x'.repeat(120_000) })),
-      createUserQuestionMarker({
+      questionResult({
         id: 'compact-plan-question',
         questions: [{
           header: '运行系统',
@@ -211,11 +211,11 @@ describe('Main 长任务端到端控制', () => {
             { label: 'macOS', description: '按 macOS 处理' },
           ],
         }],
-      }, true),
+      }, activePlan().id),
     ])
     const answer = '回答「你使用哪个系统？」：Windows'
 
-    assert.equal(await session.handleUserMessage(answer), 'completed')
+    assert.equal(await answerFirstQuestion(session, 'Windows'), 'completed')
     const request = JSON.stringify(model.doStreamCalls[0]?.prompt)
     assert.match(request, /whycode-compact-summary/)
     assert.match(request, /whycode-task-state/)
@@ -473,6 +473,7 @@ describe('Main 长任务端到端控制', () => {
           ],
         }],
       }),
+      finalStep('请确认是否切换任务。'),
       toolStep(CLOSE_TASK_PLAN_TOOL_NAME, {}),
       toolStep('ListDir', { path: '.', limit: 20 }),
       toolStep(CREATE_TASK_PLAN_TOOL_NAME, {
@@ -492,16 +493,16 @@ describe('Main 长任务端到端控制', () => {
       await first.handleUserMessage('你现在给我完整开发一个 CSGO 枪战游戏'),
       'waiting-user',
     )
-    const pendingQuestion = findPendingUserQuestion(first.captureMessageSnapshot())
-    assert.equal(pendingQuestion?.resumesTaskPlan, false)
+    const [pendingQuestion] = pendingUserQuestions(first.captureMessageSnapshot())
+    assert.equal(pendingQuestion?.planId, null)
 
     const reopened = createSession(model, 'E:\\Test').session
     reopened.restoreMessageSnapshot(first.captureMessageSnapshot())
     reopened.restoreTaskStateSnapshot(first.captureTaskStateSnapshot()!)
-    const result = await reopened.handleUserMessage(`回答「${question}」：确认切换`)
+    const result = await answerFirstQuestion(reopened, '确认切换')
 
     assert.equal(result, 'completed')
-    const answerTools = toolNames(model.doStreamCalls[1])
+    const answerTools = toolNames(model.doStreamCalls[2])
     assertStableTaskPlanTools(answerTools)
     assertOrdinaryProjectTools(answerTools)
     assert.equal(reopened.captureTaskStateSnapshot()?.activePlan, null)

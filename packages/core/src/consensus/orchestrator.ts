@@ -14,6 +14,7 @@ import type { ActivatedSkill } from '../skills/types.ts'
 import { PeerAgent } from './peer-agent.ts'
 import { runProtocolRound } from './run-round.ts'
 import { runFullConsensus } from './full-consensus.ts'
+import type { QuestionResolution } from '../user-questions.ts'
 import { extractMemorySummary, formatMemories } from './memory.ts'
 import {
   buildConversationDigest,
@@ -147,11 +148,17 @@ export class ConsensusCoordinator {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
+    questionReply?: QuestionResolution,
   ): Promise<StopReason | void> | void {
     const message = createUserInput(
       text, attachments, persistedInputId, pdfAttachments, skills, imageDelivery,
     )
     const main = this.options.mainSession
+    if (questionReply) {
+      message.questionReply = questionReply
+      this.options.emit({ type: 'user-question-resolved', resolution: questionReply })
+      if (this.canSteerMain(message)) return main.receiveUserInput(message, {})
+    }
     if (!this.running && !main.isBusy) return this.runTasks(message)
     if (urgent && this.canSteerMain(message)) return main.receiveUserInput(message, { urgent: true })
     if (urgent && this.peerPhase && !attachments.length && !pdfAttachments.length && !skills.length) {
@@ -244,9 +251,9 @@ export class ConsensusCoordinator {
         this.continueAfterInterrupt = false
         const queued = next !== first || (next.persisted && mainSession.isQueuedUserInput(next.id))
         if (queued) this.options.onQueuedTurnStart?.()
-        if (next.attachments.length || next.pdfAttachments.length) {
+        if (next.questionReply || next.attachments.length || next.pdfAttachments.length) {
           this.executionPhase = true
-          emit({ type: 'consensus-skipped', reason: next.pdfAttachments.length ? 'pdf-input' : 'image-input' })
+          if (!next.questionReply) emit({ type: 'consensus-skipped', reason: next.pdfAttachments.length ? 'pdf-input' : 'image-input' })
           result = await mainSession.receiveUserInput(next, { alreadyQueued: queued }) ?? 'error'
           this.executionPhase = false
         } else {

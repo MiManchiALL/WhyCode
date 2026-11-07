@@ -1,8 +1,9 @@
 import type { ModelMessage, ToolResultPart } from 'ai'
+import { questionsForBatch } from '../user-questions.ts'
 import { userTurn, withUserTurn } from '../context/user-turn.ts'
 import { keepsConsensusProgress, type ConsensusPersistedState } from '../consensus/types.ts'
 import { cloneTaskPlanState, emptyTaskPlanState, type TaskPlanState } from '../tasks/types.ts'
-import { findPendingUserQuestion } from '../tasks/answer-resume.ts'
+import { pendingUserQuestions, withQuestionReply, skippedQuestionMessage } from '../context/question-state.ts'
 import {
   SESSION_SCHEMA_VERSION,
   sessionEntrySchema,
@@ -97,20 +98,22 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
   const planEventCount = viewEvents.length
   reconcileTaskPlanView(viewEvents, taskState)
   if (viewEvents.length > planEventCount) viewEventTimestamps.push(chain.at(-1)!.timestamp)
-  const pendingUserQuestion = findPendingUserQuestion(messages)
-  if (
-    pendingUserQuestion
-    && pendingVisibleQuestionId(viewEvents) !== pendingUserQuestion.question.id
-  ) {
-    // 模型 step 已落盘、ViewTimeline 尚未来得及提交就崩溃时，从同一 step 的
-    // 完整绑定恢复唯一可回答的问题卡，避免 UI 与模型事实源分裂。
-    viewEvents.push({
-      type: 'core-event',
-      event: {
-        type: 'user-question',
-        question: structuredClone(pendingUserQuestion.question),
-      },
-    })
+  const acceptedAnswers = new Set(pendingUserInputs.flatMap(input => input.questionReply ? [input.questionReply.id] : []))
+  const pendingQuestions = pendingUserQuestions(messages).filter(question => !acceptedAnswers.has(question.id))
+  const visible = new Set<string>()
+  for (const entry of viewEvents) {
+    if (entry.type !== 'core-event') continue
+    const event = entry.event
+    if (event.type === 'user-question') for (const question of questionsForBatch(event.question)) visible.add(question.id)
+    if (event.type === 'user-question-resolved') visible.delete(event.resolution.id)
+    if (event.type === 'user-message-edited' || (event.type === 'checkpoint-restored' && event.ok && event.scope === 'files-and-chat')) {
+      visible.clear()
+      for (const question of event.questions ?? []) visible.add(question.id)
+      if (event.type === 'user-message-edited' && event.questionReply) visible.delete(event.questionReply.id)
+    }
+  }
+  if (visible.size !== pendingQuestions.length || pendingQuestions.some(question => !visible.has(question.id))) {
+    viewEvents.push({ type: 'pending-questions', questions: pendingQuestions })
     viewEventTimestamps.push(chain.at(-1)!.timestamp)
   }
   const modelSelection = collectModelSelection(
@@ -131,7 +134,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     interruptedTurnId,
     interruptedConsensusTaskId,
     undeliveredUserInputs.length > 0,
-    pendingUserQuestion !== null,
+    pendingQuestions.length > 0,
   )
   const discardedInputIds = new Set(entries.flatMap((entry) =>
     entry.type === 'user-input-discarded' ? entry.inputIds : []))
@@ -276,6 +279,7 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
         pending.set(entry.uuid, {
           id: entry.uuid,
           text: entry.text,
+          ...(entry.questionReply ? { questionReply: entry.questionReply } : {}),
           ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
           ...(entry.attachments?.length ? { imageDelivery: entry.imageDelivery } : {}),
           ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),
@@ -383,12 +387,16 @@ function collectTurnStarts(
         starts.set(turnId, applyProjectInstructions(start, entry.message))
       }
     }
+    if (entry.type === 'question-skipped') {
+      messages.push(skippedQuestionMessage(entry.questionId))
+    }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(
         entry.text, entry.attachments, entry.imageDelivery, entry.pdfAttachments,
       )
-      messages.push(message)
-      activeConsensusBaseMessages?.push(message)
+      const input = entry.questionReply ? withQuestionReply(message, entry.questionReply) : message
+      messages.push(input)
+      activeConsensusBaseMessages?.push(input)
     }
     if (entry.type === 'consensus-task-start') {
       activeConsensusBaseMessages = [
@@ -523,6 +531,9 @@ function collectViewEvents(entries: SessionEntry[]): {
       : []))
 
   for (const entry of entries) {
+    if (entry.type === 'messages' || entry.type === 'user-input' || entry.type === 'question-skipped') {
+      for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
+    }
     if (entry.type === 'view-events' || entry.type === 'turn-end' || entry.type === 'btw-response') {
       for (const event of responseViewEvents(entry)) push(event, entry.timestamp)
       continue
@@ -574,11 +585,14 @@ function collectViewEvents(entries: SessionEntry[]): {
         if (parent?.type !== 'snapshot' || parent.reason !== 'rollback') {
           throw new SessionCorruptError('编辑输入必须直接跟随回滚快照')
         }
+        const questions = pendingUserQuestions(parent.messages)
         push({
           type: 'core-event',
           event: {
             type: 'user-message-edited',
             previousTurnId: entry.replacesTurnId,
+            ...(questions.length ? { questions } : {}),
+            ...(entry.questionReply ? { questionReply: entry.questionReply } : {}),
             inputId: entry.uuid,
             text: entry.text,
             taskPlan: taskPlanViewBeforeTurn(events, entry.replacesTurnId, parent.taskState),
@@ -770,26 +784,6 @@ function findUndeliveredUserInputs(chain: SessionEntry[]): UndeliveredUserInput[
   })
 }
 
-function pendingVisibleQuestionId(events: ViewEvent[]): string | null {
-  let pendingQuestionId: string | null = null
-  for (const entry of events) {
-    if (entry.type === 'user-message') {
-      pendingQuestionId = null
-      continue
-    }
-    if (entry.type !== 'core-event') continue
-    const event = entry.event
-    if (event.type === 'user-question') pendingQuestionId = event.question.id
-    if (
-      event.type === 'checkpoint-restored'
-      && event.ok
-      && event.scope === 'files-and-chat'
-    ) {
-      pendingQuestionId = event.question?.id ?? null
-    }
-  }
-  return pendingQuestionId
-}
 
 function findLastContentIndex(lines: string[]): number {
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -1012,12 +1006,16 @@ function collectMessages(
         )
       }
     }
+    if (entry.type === 'question-skipped') {
+      messages.push(skippedQuestionMessage(entry.questionId))
+    }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(
         entry.text, entry.attachments, entry.imageDelivery, entry.pdfAttachments,
       )
-      messages.push(message)
-      activeConsensusBaseMessages?.push(message)
+      const input = entry.questionReply ? withQuestionReply(message, entry.questionReply) : message
+      messages.push(input)
+      activeConsensusBaseMessages?.push(input)
     }
     if (entry.type === 'consensus-task-start') {
       activeConsensusBaseMessages = [
@@ -1165,12 +1163,16 @@ function findInterruptedWork(
         )
       }
     }
+    if (entry.type === 'question-skipped') {
+      visibleMessages.push(skippedQuestionMessage(entry.questionId))
+    }
     if (entry.type === 'user-input' && undeliveredById.has(entry.uuid)) {
       const message = userInputMessage(
         entry.text, entry.attachments, entry.imageDelivery, entry.pdfAttachments,
       )
-      visibleMessages.push(message)
-      interruptedConsensusBaseMessages?.push(message)
+      const input = entry.questionReply ? withQuestionReply(message, entry.questionReply) : message
+      visibleMessages.push(input)
+      interruptedConsensusBaseMessages?.push(input)
     }
     if (entry.type === 'messages') {
       visibleMessages.push(...entry.messages)
@@ -1264,7 +1266,6 @@ function deriveStatus(
     .find((entry) => entry.type === 'turn-end' || entry.type === 'consensus-task-end')
   if (lastEnd?.type === 'turn-end') {
     if (lastEnd.stopReason === 'error') return 'error'
-    if (lastEnd.stopReason === 'waiting-user') return 'waiting-user'
     if (lastEnd.stopReason === 'paused') return 'paused'
     return lastEnd.stopReason === 'max-turns' ? 'max-turns' : 'idle'
   }

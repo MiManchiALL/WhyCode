@@ -1,3 +1,4 @@
+import { questionsForBatch } from '@whycode/core/events'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { CoreEvent, ViewEvent } from '@whycode/core'
@@ -387,7 +388,7 @@ describe('会话界面时间线重建', () => {
     )
   })
 
-  it('提问工具结束当前 turn 时保持处理过程展开', () => {
+  it('仍有待答题时保留已结束工作的过程和逐题答案', () => {
     const question = {
       id: 'question-waiting',
       questions: [{
@@ -422,9 +423,11 @@ describe('会话界面时间线重建', () => {
     state = applyCoreEvent(state, {
       type: 'tool-end',
       toolUseId: 'ask-1',
-      result: '等待用户回答',
+      result: '问题已提交。',
       isError: false,
     })
+    question.id = 'ask-1'
+    const questions = questionsForBatch(question)
     state = applyCoreEvent(state, { type: 'user-question', question })
     state = applyCoreEvent(state, { type: 'step-committed' })
     state = applyCoreEvent(state, {
@@ -441,25 +444,33 @@ describe('会话界面时间线重建', () => {
       completed?.kind === 'completed-work' ? completed.finalBlocks.length : -1,
       0,
     )
-    assert.deepEqual(state.pendingQuestion, question)
+    assert.deepEqual(state.pendingQuestions, questions)
+    const id = questions[1]!.id
+    state = applyCoreEvent(state, { type: 'user-question-resolved', resolution: { id, answer: '包含测试' } })
+    state = appendUserMessage(state, '回答「是否包含测试？」：包含测试', true)
+    assert.deepEqual(state.pendingQuestions, [questions[0]])
+    const askTool = state.blocks.find(block => block.kind === 'tool' && block.call.id === 'ask-1')
+    assert.deepEqual(askTool?.kind === 'tool' && askTool.call.questionAnswers, { [id]: '包含测试' })
+  })
 
-    state = appendUserMessage(
-      state,
-      '1. 回答「你更看重哪一点？」：简单可靠\n2. 回答「是否包含测试？」：包含测试',
-      true,
-    )
-    const askTool = state.blocks.find((block) =>
-      block.kind === 'tool' && block.call.id === 'ask-1')
-    assert.equal(
-      askTool?.kind === 'tool' ? askTool.call.result : null,
-      [
-        'Question: 你更看重哪一点？',
-        'Answer: 简单可靠',
-        '',
-        'Question: 是否包含测试？',
-        'Answer: 包含测试',
-      ].join('\n'),
-    )
+  it('先结算的回答在重放工具步骤时仍属于原工具，同名的后续题不受影响', () => {
+    const item = { header: '环境', question: '使用哪个环境？' }
+    const batchA = { id: 'ask-a', questions: [item] }, batchB = { id: 'ask-b', questions: [item] }
+    const first = questionsForBatch(batchA), second = questionsForBatch(batchB)
+    const resolved = { id: first[0]!.id, answer: 'Linux' }
+    let state = createConversationState([
+      core({ type: 'user-question', question: batchA }), core({ type: 'user-question', question: batchB }),
+      core({ type: 'user-question-resolved', resolution: resolved }),
+      core({ type: 'tool-start', toolUseId: 'ask-a', toolName: 'AskUserQuestion', input: { questions: [item] } }),
+      { type: 'step-committed', hasToolCalls: true },
+    ])
+    const tool = state.blocks.find(block => block.kind === 'tool')
+    assert.equal(tool?.kind === 'tool' && tool.call.questionAnswers?.[resolved.id], 'Linux')
+    assert.deepEqual(state.pendingQuestions, second)
+    state = applyCoreEvent(state, { type: 'text-delta', text: '处理中' })
+    state = applyCoreEvent(state, { type: 'user-question-resolved', resolution: { id: second[0]!.id, answer: null } })
+    state = applyCoreEvent(state, { type: 'step-discarded' })
+    assert.deepEqual(state.pendingQuestions, [])
   })
 
   it('CloseTaskPlan 卡片保留调用当时的活动计划 ID', () => {
@@ -1054,7 +1065,7 @@ describe('会话界面时间线重建', () => {
     assert.doesNotMatch(JSON.stringify(state.blocks), /plan-replaced|用户明确切换游戏/)
   })
 
-  it('恢复待回答问题，并在下一条用户消息出现后清除等待卡', () => {
+  it('普通用户输入保留待答题，回滚使用指定的待答集合', () => {
     const question = {
       id: 'question-1',
       questions: [{
@@ -1066,14 +1077,15 @@ describe('会话界面时间线重建', () => {
         ],
       }],
     }
+    const questions = questionsForBatch(question)
     const waiting = createConversationState([core({ type: 'user-question', question })])
-    assert.deepEqual(waiting.pendingQuestion, question)
+    assert.deepEqual(waiting.pendingQuestions, questions)
 
     const answered = createConversationState([
       core({ type: 'user-question', question }),
       { type: 'user-message', text: '选择简单可靠', startsTurn: true },
     ])
-    assert.equal(answered.pendingQuestion, null)
+    assert.deepEqual(answered.pendingQuestions, questions)
 
     const restored = createConversationState([
       core({ type: 'user-question', question }),
@@ -1084,10 +1096,10 @@ describe('会话界面时间线重建', () => {
         turnId: 'turn-after-answer',
         scope: 'files-and-chat',
         ok: true,
-        question,
+        questions,
       }),
     ])
-    assert.deepEqual(restored.pendingQuestion, question)
+    assert.deepEqual(restored.pendingQuestions, questions)
   })
 
   it('恢复图片缩略图元数据，并明确显示本轮跳过协商', () => {

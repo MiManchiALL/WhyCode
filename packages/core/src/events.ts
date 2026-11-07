@@ -90,51 +90,8 @@ export interface ContextUsageInfo {
   }
 }
 
-export interface UserQuestionOption {
-  label: string
-  description: string
-}
-
-export const MAX_USER_QUESTIONS = 6
-
-export interface UserQuestionItem {
-  header: string
-  question: string
-  options: UserQuestionOption[]
-}
-
-/** Main 需要用户决策时展示的可恢复问题卡。 */
-export interface UserQuestion {
-  id: string
-  questions: UserQuestionItem[]
-}
-
-export function formatUserQuestionAnswer(
-  question: UserQuestion,
-  answers: readonly string[],
-): string {
-  const items = question.questions
-  if (answers.length !== items.length || answers.some((answer) => !answer.trim())) {
-    throw new Error('每个问题都需要非空回答')
-  }
-  return items
-    .map((item, index) =>
-      `${userQuestionAnswerPrefix(item, index, items.length)}${normalizeInlineText(answers[index]!)}`)
-    .join('\n')
-}
-
-export function userQuestionAnswerPrefix(
-  item: UserQuestionItem,
-  index: number,
-  total: number,
-): string {
-  const label = normalizeInlineText(item.question)
-  return total === 1 ? `回答「${label}」：` : `${index + 1}. 回答「${label}」：`
-}
-
-function normalizeInlineText(text: string): string {
-  return text.replaceAll(/\s+/g, ' ').trim()
-}
+export * from './user-questions.ts'
+import type { PendingQuestion, QuestionResolution, UserQuestion } from './user-questions.ts'
 
 /** 忙时输入始终把正文和附件作为一个有序单元传递、恢复和展示。 */
 export interface QueuedUserMessage {
@@ -224,6 +181,7 @@ export type CoreEvent =
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
+  | { type: 'user-question-resolved'; resolution: QuestionResolution }
   /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
   | {
       type: 'user-message-accepted'
@@ -249,6 +207,8 @@ export type CoreEvent =
    */
   | {
       type: 'user-message-edited'
+      questions?: PendingQuestion[]
+      questionReply?: QuestionResolution
       previousTurnId: string
       inputId: string
       text: string
@@ -306,7 +266,7 @@ export type CoreEvent =
       /** 文件+对话回滚后的活动任务计划；省略表示本次未改变任务状态。 */
       taskPlan?: TaskPlan | null
       /** 文件+对话回滚后重新生效的等待问题；null 表示回滚点没有待回答问题。 */
-      question?: UserQuestion | null
+      questions?: PendingQuestion[]
     }
   /** 精确文件检查点建立失败；同一会话只提示一次 */
   | { type: 'checkpoint-disabled'; reason: string }
@@ -437,7 +397,6 @@ const STEP_SCOPED_CORE_EVENT_TYPES = new Set<CoreEvent['type']>([
   'checkpoint-created',
   'checkpoint-disabled',
   'task-plan-updated',
-  'user-question',
 ])
 
 /** 这些事件只有在所属模型步骤提交后才能成为稳定可见事实。 */
@@ -471,6 +430,7 @@ export type CoreCommand =
     }
   /** 对已经写稳、尚未送达的排队消息执行就地操作。 */
   | QueuedMessageActionCommand
+  | { type: 'resolve-user-question'; resolution: QuestionResolution }
   | {
       type: 'btw-message'
       mode: BtwMode

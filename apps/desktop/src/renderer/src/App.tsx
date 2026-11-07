@@ -22,7 +22,7 @@ import type {
   SubagentSummary,
 } from '@whycode/core'
 import {
-  formatUserQuestionAnswer,
+  type QuestionResolution,
   type AgentStatus,
   type ContextUsageInfo,
   type CoreEvent,
@@ -58,6 +58,8 @@ import {
   isCurrentSessionDeletion,
   updateDeletingSessions,
 } from './session-deletion-state.ts'
+import { reconcileQuestionDraft } from './question-progress.ts'
+import { ComposerActionButton } from './composer-action-button.tsx'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
@@ -100,8 +102,8 @@ import {
 } from './pdf-draft.ts'
 import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerInput } from './composer-input.tsx'
-import { ComposerText } from './composer-text.ts'
-import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts'
+import { ComposerText, ComposerValue } from './composer-text.ts'
+import { ComposerDraftStore, composerDraftKey, type QuestionDraft } from './composer-drafts.ts'
 import {
   ComposerSubmissions,
   composerInputIds,
@@ -185,7 +187,8 @@ export function App() {
   const [workStartedAt, setWorkStartedAt] = useState<number | null>(null)
   const [stopping, setStopping] = useState(false)
   const [sessionTransitionPending, setSessionTransitionPending] = useState(false)
-  const [questionSubmitting, setQuestionSubmitting] = useState(false)
+  const [questionInput] = useState(() => new ComposerValue<QuestionDraft | undefined>(undefined))
+  const questionCollapsed = useSyncExternalStore(questionInput.subscribe, () => Boolean(questionInput.getSnapshot()?.collapsed))
   const [composerSubmissions] = useState(() => new ComposerSubmissions())
   const pendingSubmissions = useSyncExternalStore(composerSubmissions.subscribe, composerSubmissions.getSnapshot)
   const activeSubmission = pendingSubmissions.get(runtimeId)
@@ -250,7 +253,6 @@ export function App() {
   if (!rightPanelSessionStoreRef.current) {
     rightPanelSessionStoreRef.current = new RightPanelSessionStore()
   }
-  const questionSubmittingRef = useRef(false)
   const sessionTransitionPendingRef = useRef<{ promise: Promise<void>; finish: () => void } | null>(null)
   const resumingSessionIdRef = useRef<string | null>(null)
   const resumeRequestRef = useRef<Promise<void> | null>(null)
@@ -514,7 +516,7 @@ export function App() {
     const skills = captureSkills()
     const currentBtwMode = btwModeRef.current
     const draft = {
-      text, images, pdfs, skills, btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
+      question: questionInput.getSnapshot(), text, images, pdfs, skills, btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
     }
     const pending = composerSubmissions.getSnapshot().get(currentRuntimeId)
     // 切换前保存当前所有者的最新输入，不能等新会话接管后再执行自动保存。
@@ -522,19 +524,19 @@ export function App() {
       pending ? prependComposerDraft(pending.draft, draft) : draft).catch(draftStorageError)
     if (pending) pending.remainder = draft
     else composerDraftsRef.current.cache(composerDraftKey(currentRuntimeId, currentSessionId), draft)
-  }, [input, captureSkills, composerSubmissions, detachImageDrafts, detachPdfDrafts, draftStorageError])
+  }, [input, captureSkills, questionInput, composerSubmissions, detachImageDrafts, detachPdfDrafts, draftStorageError])
 
   const persistComposer = useCallback(async () => {
     if (!runtimeId || runtimeId !== runtimeIdRef.current) return
     const draft = {
-      text: input.getSnapshot(), images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
+      question: questionInput.getSnapshot(), text: input.getSnapshot(), images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
       btwMode, restoredInputIds,
     }
     const pending = composerSubmissions.getSnapshot().get(runtimeId)
     await composerDraftsRef.current.save(composerDraftKey(runtimeId, sessionIdRef.current),
       pending ? prependComposerDraft(pending.draft, draft) : draft)
   }, [runtimeId, input, imageDrafts, pdfDrafts, selectedSkills, btwMode, restoredInputIds,
-    submissionPending, composerSubmissions])
+    submissionPending, composerSubmissions, questionInput])
   const persistComposerRef = useRef(persistComposer)
   persistComposerRef.current = persistComposer
 
@@ -549,8 +551,9 @@ export function App() {
     }
     schedule()
     const unsubscribe = input.subscribe(schedule)
-    return () => { unsubscribe(); clearTimeout(timer) }
-  }, [input, persistComposer, draftStorageError])
+    const unsubscribeQuestions = questionInput.subscribe(schedule)
+    return () => { unsubscribe(); unsubscribeQuestions(); clearTimeout(timer) }
+  }, [input, persistComposer, questionInput, draftStorageError])
   useEffect(() => window.whycode.onBeforeClose(async () => {
     try {
       await persistComposerRef.current()
@@ -837,6 +840,7 @@ export function App() {
         ? pending.remainder
         : composerDraftsRef.current.take(composerDraftKey(snapshot.runtimeId, snapshot.sessionId))
       if (pending) pending.remainder = undefined
+      questionInput.replace(reconcileQuestionDraft(draft?.question, snapshot.history.view.pendingQuestions))
       setInput(draft?.text ?? '')
       restoredIds = (draft?.restoredInputIds ?? []).filter((id) => validRestoredIds.has(id))
       setBtwMode(draft?.btwMode ?? null)
@@ -902,7 +906,7 @@ export function App() {
     setBtwMode,
     setDeletingSession,
     setResumingSessionId,
-    stashActiveComposer,
+    stashActiveComposer, questionInput,
     stashActivePresentation,
     history.reset,
   ])
@@ -951,6 +955,9 @@ export function App() {
     switch (event.type) {
       case 'work-started':
         setWorkStartedAt(event.startedAt)
+        void refreshSessions()
+        break
+      case 'user-question-resolved':
         void refreshSessions()
         break
       case 'turn-start':
@@ -1278,6 +1285,7 @@ export function App() {
         consumeEvent(event, occurredAt)
       } else if (
         event.type === 'work-started'
+        || event.type === 'user-question-resolved'
         || event.type === 'work-discarded'
         || event.type === 'turn-start'
         || event.type === 'work-finished'
@@ -1943,7 +1951,7 @@ export function App() {
       previousInputIds: composerInputIds(blocks, [...queued, ...restoredQueue]),
       abortController: new AbortController(),
       draft: {
-        text, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills,
+        question: questionInput.getSnapshot(), text, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills,
         btwMode: sentBtwMode, restoredInputIds: sentRestoredInputIds,
       },
       ...(!conversationStarted && workspace.mode === 'pending-worktree'
@@ -2090,20 +2098,23 @@ export function App() {
     workspace,
   ])
 
-  const answerQuestion = useCallback((answers: string[]) => {
-    const question = view.pendingQuestion
-    if (!question || interactionBusy || stopping || questionSubmittingRef.current) return
-    if (sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
-    const text = formatUserQuestionAnswer(question, answers)
-    questionSubmittingRef.current = true
-    setQuestionSubmitting(true)
-    stickToBottom.current = true
-    setShowJumpBottom(false)
-    void sendRuntimeCommand({ type: 'user-message', text }).finally(() => {
-      questionSubmittingRef.current = false
-      setQuestionSubmitting(false)
-    })
-  }, [interactionBusy, sendRuntimeCommand, showError, sshSendUnavailableReason, stopping, view.pendingQuestion])
+  useEffect(() => {
+    if (loadingConversation || runtimeId !== runtimeIdRef.current) return
+    const current = questionInput.getSnapshot()
+    const next = reconcileQuestionDraft(current, view.pendingQuestions)
+    if (next !== current) questionInput.replace(next)
+  }, [loadingConversation, runtimeId, view.pendingQuestions, questionInput])
+
+  const answerQuestion = useCallback(async (resolution: QuestionResolution) => {
+    if (resolution.answer !== null && sshSendUnavailableReason) { showError(sshSendUnavailableReason); return }
+    const owner = runtimeIdRef.current
+    try {
+      const result = await sendRuntimeCommand({ type: 'resolve-user-question', resolution })
+      if (!result?.ok) throw new Error(result?.error ?? '问题处理失败，请重试')
+    } catch (error) {
+      if (runtimeIdRef.current === owner) showError(error instanceof Error ? error.message : String(error))
+    }
+  }, [sendRuntimeCommand, showError, sshSendUnavailableReason])
 
   const editUserMessage = useCallback(async (
     block: Extract<Block, { kind: 'user' }>,
@@ -2455,16 +2466,14 @@ export function App() {
                   inert={resumingSessionId !== null}
                 >
                   <div hidden={loadingConversation}>
-                    {view.pendingQuestion && (
-                      <QuestionCard
-                        key={view.pendingQuestion.id}
-                        question={view.pendingQuestion}
-                        disabled={interactionBusy || stopping || questionSubmitting}
-                        onAnswer={answerQuestion}
-                      />
-                    )}
+                    {view.pendingQuestions.length > 0 && <QuestionCard key={runtimeId}
+                      questions={view.pendingQuestions} input={questionInput} disabled={composerControlsLocked}
+                      onResolve={answerQuestion}
+                      stopControl={workActive && <ComposerActionButton runtimeId={runtimeId} workStartedAt={workStartedAt}
+                        primaryAction="stop" runningSubagentCount={subagents.filter(item => isSubagentRunning(item.status)).length}
+                        stopping={stopping} stopDisabled={composerDisabled} sendDisabled={false} onSend={() => send(false)} onStop={stop} />} />}
                   </div>
-                  <div hidden={!loadingConversation && view.pendingQuestion !== null}>
+                  <div hidden={!loadingConversation && view.pendingQuestions.length > 0 && !questionCollapsed}>
                     {showMcpStatus && !skillTrigger && !attachmentLocked && (
                       <ComposerMcpStatus
                         key={`mcp:${runtimeId}`}

@@ -126,6 +126,7 @@ export function toolCallDetails(
   input: unknown,
   result: string | undefined,
   isError: boolean,
+  questionCall?: { id: string; questionAnswers?: Record<string, string | null> },
 ): string | null {
   if (toolName === 'RunCommand' && result) {
     const command = readCommandOutputResult(result)
@@ -143,7 +144,7 @@ export function toolCallDetails(
         .join('\n') || '本次回答未列出成品文件' : null
     }
     case 'AskUserQuestion':
-      return answeredQuestionDetails(value, result)
+      return answeredQuestionDetails(value, questionCall)
     case 'Subagent':
       if (value.action === 'spawn') return subagentDetails(value, result)
       if (value.action === 'send') return text(value, 'prompt')
@@ -236,15 +237,13 @@ function skillNameFromResult(result: string | undefined): string {
   return match?.[1] ?? ''
 }
 
-function answeredQuestionDetails(input: ToolInput, result: string | undefined): string {
-  const questions = Array.isArray(input.questions)
-    ? input.questions.filter((item): item is ToolInput => record(item) !== null)
-    : []
-  if (result?.startsWith('Question: ')) return result
-  return questions.map((question) => [
-    `Question: ${text(question, 'question')}`,
-    'Answer: Waiting for response',
-  ].join('\n')).join('\n\n')
+function answeredQuestionDetails(input: ToolInput, call?: { id: string; questionAnswers?: Record<string, string | null> }): string {
+  const items = Array.isArray(input.questions) ? input.questions : []
+  return items.map((item, index) => {
+    const answer = call?.questionAnswers?.[JSON.stringify([call.id, index])]
+    const question = record(item)
+    return question ? [text(question, 'question'), answer === null ? '已跳过' : answer ?? '待回答'].join('\n') : ''
+  }).filter(Boolean).join('\n\n')
 }
 
 function subagentDetails(input: ToolInput, result: string | undefined): string {

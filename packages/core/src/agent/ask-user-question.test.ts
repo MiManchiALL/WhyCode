@@ -3,26 +3,23 @@ import { describe, it } from 'node:test'
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { z } from 'zod'
+import { userTurn } from '../context/user-turn.ts'
 import type { CoreEvent } from '../events.ts'
 import type { ModelEntry } from '../providers/registry.ts'
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   createAskUserQuestionTool,
 } from '../tools/ask-user-question/index.ts'
-import { validateToolInput } from '../tools/tool.ts'
+import { buildTool, validateToolInput, type ToolDefinition } from '../tools/tool.ts'
 import { AgentSession } from './session.ts'
 
 describe('Main 主动提问', () => {
-  it('工具说明只在必要决策和目标切换不明确时提问，不重复确认明确意图', () => {
-    const prompt = createAskUserQuestionTool(() => {}).prompt
-
-    assert.match(prompt, /实质改变下一步行动/)
-    assert.match(prompt, /保留当前计划，还是先结束它再处理新目标/)
-    assert.match(prompt, /明确放弃或切换时不要重复确认/)
-    assert.match(prompt, /当前请求已经可以完整交付，不得调用本工具/)
-    assert.match(prompt, /不得用本工具询问用户是否满意、是否还需要帮助/)
-    assert.match(prompt, /已经明确的恢复意图再次确认/)
-    assert.match(prompt, /1~6/)
+  it('指引说明自由输入、异步送达和独立工作', () => {
+    const tool = createAskUserQuestionTool(() => {})
+    assert.match(tool.description, /一个或多个简短问题/)
+    assert.match(tool.prompt, /自动提供自由输入，无需添加“其它”/)
+    assert.match(tool.prompt, /不依赖回答/)
+    assert.equal(tool.endsTurnOnSuccess, false)
   })
 
   it('工具参数接受 1~6 问并拒绝空批次或第 7 问', async () => {
@@ -45,48 +42,56 @@ describe('Main 主动提问', () => {
     assert.equal(z.toJSONSchema(tool.inputSchema).type, 'object')
   })
 
-  it('提交问题后结束 turn 并等待用户回答', async () => {
-    const model = new MockLanguageModelV4({ doStream: [questionStep(), finalStep()] })
+  it('同一步的两次提问立即返回，空闲回答开启独立回合并只消费选中题目', async () => {
+    const model = new MockLanguageModelV4({ doStream: [questionStep(), finalStep('等你确认。'), finalStep('收到。')] })
     const events: CoreEvent[] = []
     const session = createSession(model, events)
-
-    const stopReason = await session.handleUserMessage('帮我选一个实现方向')
-
-    assert.equal(stopReason, 'waiting-user')
-    assert.equal(model.doStreamCalls.length, 1)
-    const questions = events.filter((event) => event.type === 'user-question')
-    assert.equal(questions.length, 1)
-    assert.equal(
-      questions[0]?.type === 'user-question'
-        ? questions[0].question.questions[0]?.question
-        : '',
-      '你更看重哪一点？',
-    )
-    assert.equal(
-      questions[0]?.type === 'user-question' ? questions[0].question.questions.length : 0,
-      2,
-    )
-    assert.equal(
-      events.some(
-        (event) =>
-          event.type === 'tool-end' &&
-          event.isError &&
-          String(event.result).includes('已经提交了一个问题'),
-      ),
-      true,
-    )
-    assert.equal(events.filter((event) => event.type === 'step-committed').length, 1)
-
-    const resumedReason = await session.handleUserMessage('我选择简单可靠')
-
-    assert.equal(resumedReason, 'completed')
+    assert.equal(await session.handleUserMessage('帮我选一个实现方向'), 'waiting-user')
     assert.equal(model.doStreamCalls.length, 2)
-    assert.equal(
-      model.doStreamCalls[1]?.prompt.some(
-        (message) => message.role === 'user' && JSON.stringify(message.content).includes('简单可靠'),
-      ),
-      true,
-    )
+    assert.equal(session.pendingQuestions.length, 3)
+    const [first, second, third] = session.pendingQuestions
+    await session.skipUserQuestion(second!.id)
+    await session.handleUserMessage('回答「你更看重哪一点？」：简单可靠', false, [], undefined, [], [], 'native',
+      { id: first!.id, answer: '简单可靠' })
+    assert.deepEqual(session.pendingQuestions.map(item => item.id), [third!.id])
+    assert.equal(events.filter(event => event.type === 'turn-start').length, 2)
+    assert.equal(model.doStreamCalls.length, 3)
+  })
+
+  it('耗时工具执行期间的回答不打断工具，下一次模型请求在原回合收到答案', { timeout: 10_000 }, async () => {
+    let entered!: (signal: AbortSignal) => void
+    const started = new Promise<AbortSignal>(resolve => { entered = resolve })
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { release = resolve })
+    const gate = buildTool({
+      name: 'ReadFixture', description: '读取资料', prompt: '读取资料', inputSchema: z.strictObject({}), isReadOnly: true, kind: 'read',
+      async execute(_, context) { entered(context.abortSignal); await reading; return { data: '资料已就绪', isError: false } },
+    })
+    const model = new MockLanguageModelV4({ doStream: [questionStep(true), finalStep('收到插话答案。')] })
+    const events: CoreEvent[] = []
+    const session = createSession(model, events, [gate])
+    const work = session.handleUserMessage('开始任务')
+    const signal = await Promise.race([started, Promise.resolve(work).then(() => { throw new Error('读取工具没有启动') })])
+    try {
+      const question = session.pendingQuestions[0]!
+      assert.equal(question.toolUseId, 'ask-1')
+      session.handleUserMessage('回答「你更看重哪一点？」：可靠', false, [], undefined, [], [], 'native',
+        { id: question.id, answer: '可靠' })
+      assert.equal(signal.aborted, false)
+      assert.equal(model.doStreamCalls.length, 1)
+    } finally { release() }
+    await work
+    assert.equal(events.filter(event => event.type === 'turn-start').length, 1)
+    assert.equal(model.doStreamCalls.length, 2)
+    const prompt = model.doStreamCalls[1]!.prompt
+    assert.ok(prompt.some(msg => msg.role === 'user' && JSON.stringify(msg.content).includes('：可靠')))
+    assert.ok(prompt.some(msg => msg.role === 'tool' && JSON.stringify(msg.content).includes('资料已就绪')))
+    const turns = session.captureMessageSnapshot().map(userTurn).filter(Boolean)
+    assert.deepEqual(turns.map(turn => turn!.startsTurn), [true, false])
+    assert.equal(turns[0]!.id, turns[1]!.id)
+    assert.equal(events.filter(event => event.type === 'tool-end' && !event.isError).length, 3)
+    assert.ok(model.doStreamCalls[0]!.tools?.some(tool => tool.type === 'function'
+      && tool.name === ASK_USER_QUESTION_TOOL_NAME && tool.description?.includes('一个或多个简短问题')))
   })
 
   it('讨论 Agent 不获得主动提问工具', async () => {
@@ -122,9 +127,9 @@ describe('Main 主动提问', () => {
   })
 })
 
-function createSession(model: MockLanguageModelV4, events: CoreEvent[]): AgentSession {
+function createSession(model: MockLanguageModelV4, events: CoreEvent[], baseTools?: ToolDefinition[]): AgentSession {
   return new AgentSession({
-    model: modelEntry(model),
+    model: modelEntry(model), baseTools,
     providerConfig: { apiKey: 'test' },
     promptContext: { projectDir: process.cwd(), osPlatform: 'win32' },
     emit: (event) => events.push(event),
@@ -132,7 +137,7 @@ function createSession(model: MockLanguageModelV4, events: CoreEvent[]): AgentSe
   })
 }
 
-function questionStep() {
+function questionStep(read = false) {
   return {
     stream: simulateReadableStream({
       chunks: [
@@ -167,15 +172,16 @@ function questionStep() {
           toolName: ASK_USER_QUESTION_TOOL_NAME,
           input: JSON.stringify({
             questions: [{
-              header: '重复问题',
-              question: '是否重复提问？',
+              header: '验证范围',
+              question: '在哪个环境验证？',
               options: [
-                { label: '不要', description: '只保留第一个问题' },
-                { label: '仍然不要', description: '避免多个等待卡片' },
+                { label: '本地', description: '使用开发环境' },
+                { label: '预发布', description: '使用预发布环境' },
               ],
             }],
           }),
         },
+        ...(read ? [{ type: 'tool-call' as const, toolCallId: 'read', toolName: 'ReadFixture', input: '{}' }] : []),
         {
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },

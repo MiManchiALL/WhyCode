@@ -1,5 +1,6 @@
 import { modelMessageSchema, type ModelMessage } from 'ai'
 import { z } from 'zod'
+import { questionResolutionSchema, type QuestionResolution } from '../user-questions.ts'
 import { conversationMetadataSchema } from '../context/user-turn.ts'
 import {
   consensusPersistedStateSchema,
@@ -115,6 +116,7 @@ const pendingUserInputSchema = z.object({
   imageDelivery: imageDeliveryModeSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
   skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
+  questionReply: questionResolutionSchema.optional(),
   state: z.enum(['queued', 'restored']),
 }).superRefine(validateUserInputContent)
 
@@ -175,6 +177,7 @@ const userInputSchema = chainedEntrySchema.extend({
   consumesInputIds: z.array(entryIdSchema).min(1).optional(),
   /** 该根输入原位替换的旧回合；只由“中止后编辑”事务写入。 */
   replacesTurnId: z.string().min(1).optional(),
+  questionReply: questionResolutionSchema.optional(),
 }).superRefine((input, ctx) => {
   validateUserInputContent(input, ctx)
   if (input.replacesTurnId && !input.startsTurn) {
@@ -293,6 +296,11 @@ const btwResponseSchema = chainedEntrySchema.extend({
       message: '失败或达到轮次上限的 BTW 不能继续',
     })
   }
+})
+
+const questionSkippedSchema = chainedEntrySchema.extend({
+  type: z.literal('question-skipped'),
+  questionId: z.string().min(1),
 })
 
 const modelChangeSchema = chainedEntrySchema.extend({
@@ -448,6 +456,7 @@ const snapshotSchema = chainedEntrySchema.extend({
 
 export const sessionEntrySchema = z.discriminatedUnion('type', [
   sessionStartSchema,
+  questionSkippedSchema,
   userInputSchema,
   userInputRestoredSchema,
   userInputDiscardedSchema,
@@ -616,6 +625,7 @@ export interface SessionRecorder {
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
+    questionReply?: QuestionResolution,
   ): Promise<void>
   recordBtwInput(
     mode: BtwMode,
@@ -641,7 +651,9 @@ export interface SessionRecorder {
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
+    questionReply?: QuestionResolution,
   ): Promise<void>
+  recordQuestionSkip(id: string): Promise<void>
   recordViewEvents(events: RecordedViewEvent[]): Promise<void>
   recordTurnStart(
     turnId: string,

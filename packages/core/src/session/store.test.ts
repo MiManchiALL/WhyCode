@@ -1,3 +1,5 @@
+import { questionsForBatch } from '../user-questions.ts'
+import { questionResult } from '../test-fixtures/user-questions.ts'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { access, appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -10,9 +12,8 @@ import type { BtwToolStep } from './btw.ts'
 import type { ImageAttachment } from '../attachments/types.ts'
 import type { ConsensusPersistedState } from '../consensus/types.ts'
 import {
-  createUserQuestionMarker,
-  hasPendingUserQuestion,
-} from '../tasks/answer-resume.ts'
+  hasPendingUserQuestion, withQuestionReply,
+} from '../context/question-state.ts'
 import {
   activeTaskPlanSchema,
   type ActiveTaskPlan,
@@ -597,25 +598,10 @@ describe('SessionStore', () => {
   it('持久化等待用户状态和问题卡', async () => {
     const store = await createStore()
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:model' })
-    const question = {
-      type: 'core-event' as const,
-      event: {
-        type: 'user-question' as const,
-        question: {
-          id: 'question-1',
-          questions: [{
-            header: '实现偏好',
-            question: '你更看重哪一点？',
-            options: [
-              { label: '简单可靠', description: '减少复杂度' },
-              { label: '功能完整', description: '覆盖更多场景' },
-            ],
-          }],
-        },
-      },
-    }
+    const result = questionResult({ id: 'question-1', questions: [{ header: '选择', question: '哪一个？' }] }, null)
+    const question = { type: 'core-event', event: { type: 'user-question', question: result.whycode!.questionBatch! } }
     await journal.recordTurnStart('turn-question', [message('user', '帮我选择')])
-    await journal.recordViewEvents([question])
+    await journal.recordStep('turn-question', [result])
     await journal.recordTurnEnd('turn-question', 'waiting-user')
 
     const reopened = await store.open(journal.sessionId)
@@ -640,7 +626,7 @@ describe('SessionStore', () => {
     await journal.recordTurnStart('turn-question-crash', [message('user', '继续配置')])
     await journal.recordStep(
       'turn-question-crash',
-      [createUserQuestionMarker(question, false)],
+      [questionResult(question, null)],
     )
 
     const interrupted = await store.open(journal.sessionId)
@@ -661,16 +647,16 @@ describe('SessionStore', () => {
   })
 
   it('尚未建立 turn 的根用户回答按中断输入恢复，不丢回答或重开问题卡', async () => {
-    const { store, journal, questionEvent, answer } = await waitingQuestionSession()
-    await journal.recordUserInput(answer, true)
+    const { store, journal, questionEvent, answer, recordAnswer, resolvedEvent, answerMessage } = await waitingQuestionSession()
+    await recordAnswer()
 
     const interrupted = await store.open(journal.sessionId)
     assert.equal(interrupted.metadataSnapshot.status, 'interrupted')
     assert.equal(interrupted.undeliveredUserInputIds.length, 1)
-    assert.deepEqual(interrupted.initialMessages.at(-1), message('user', answer))
+    assert.deepEqual(interrupted.initialMessages.at(-1), answerMessage)
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
     assert.deepEqual(interrupted.initialViewEvents, [
-      questionEvent,
+      questionEvent, resolvedEvent,
       {
         type: 'user-message',
         inputId: interrupted.undeliveredUserInputIds[0],
@@ -683,17 +669,17 @@ describe('SessionStore', () => {
     const recovered = await store.open(journal.sessionId)
     assert.equal(recovered.metadataSnapshot.status, 'idle')
     assert.equal(recovered.undeliveredUserInputIds.length, 0)
-    assert.deepEqual(recovered.initialMessages.at(-2), message('user', answer))
+    assert.deepEqual(recovered.initialMessages.at(-2), answerMessage)
     assert.equal(isTurnAbortedMessage(recovered.initialMessages.at(-1)!), true)
 
     const restartedAgain = await store.open(journal.sessionId)
     assert.equal(restartedAgain.initialMessages.filter(isTurnAbortedMessage).length, 1)
-    assert.equal(countMessage(restartedAgain.initialMessages, message('user', answer)), 1)
+    assert.equal(countMessage(restartedAgain.initialMessages, answerMessage), 1)
   })
 
   it('turn-start 已落而首批 messages 尾行截断时仍恢复根用户回答', async () => {
-    const { store, journal, answer } = await waitingQuestionSession()
-    await journal.recordUserInput(answer, true)
+    const { store, journal, recordAnswer, answerMessage } = await waitingQuestionSession()
+    await recordAnswer()
     const transcript = join(storeRoots.get(store)!, journal.sessionId, 'transcript.jsonl')
     const entries = (await readFile(transcript, 'utf8')).trimEnd().split('\n')
     const input = sessionEntrySchema.parse(JSON.parse(entries.at(-1)!))
@@ -717,7 +703,7 @@ describe('SessionStore', () => {
     const interrupted = await store.open(journal.sessionId)
     assert.equal(interrupted.interruptedTurnId, 'answer-partial-turn')
     assert.equal(interrupted.undeliveredUserInputIds.length, 1)
-    assert.deepEqual(interrupted.initialMessages.at(-1), message('user', answer))
+    assert.deepEqual(interrupted.initialMessages.at(-1), answerMessage)
     assert.equal(interrupted.messagesBeforeTurn('answer-partial-turn'), null)
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
 
@@ -725,7 +711,7 @@ describe('SessionStore', () => {
     const recovered = await store.open(journal.sessionId)
     assert.equal(recovered.interruptedTurnId, null)
     assert.equal(recovered.undeliveredUserInputIds.length, 0)
-    assert.equal(countMessage(recovered.initialMessages, message('user', answer)), 1)
+    assert.equal(countMessage(recovered.initialMessages, answerMessage), 1)
     assert.equal(recovered.initialMessages.filter(isTurnAbortedMessage).length, 1)
   })
 
@@ -771,24 +757,24 @@ describe('SessionStore', () => {
   })
 
   it('完整回答 messages 落盘后只保留一份回答，旧问题卡保持关闭', async () => {
-    const { store, journal, questionEvent, answer } = await waitingQuestionSession()
-    await journal.recordUserInput(answer, true)
+    const { store, journal, questionEvent, answer, recordAnswer, resolvedEvent, answerMessage } = await waitingQuestionSession()
+    await recordAnswer()
     const answerInputId = journal.undeliveredUserInputIds[0]!
-    await journal.recordTurnStart('answer-complete-turn', [message('user', answer)])
+    await journal.recordTurnStart('answer-complete-turn', [answerMessage])
 
     const interrupted = await store.open(journal.sessionId)
     assert.equal(interrupted.interruptedTurnId, 'answer-complete-turn')
     assert.equal(interrupted.undeliveredUserInputIds.length, 0)
-    assert.equal(countMessage(interrupted.initialMessages, message('user', answer)), 1)
+    assert.equal(countMessage(interrupted.initialMessages, answerMessage), 1)
     assert.equal(hasPendingUserQuestion([...interrupted.initialMessages]), false)
     assert.deepEqual(interrupted.initialViewEvents, [
-      questionEvent,
+      questionEvent, resolvedEvent,
       { type: 'user-message', inputId: answerInputId, text: answer, startsTurn: true },
     ])
 
     await interrupted.recoverInterruptedWork()
     const recovered = await store.open(journal.sessionId)
-    assert.equal(countMessage(recovered.initialMessages, message('user', answer)), 1)
+    assert.equal(countMessage(recovered.initialMessages, answerMessage), 1)
     assert.equal(recovered.initialMessages.filter(isTurnAbortedMessage).length, 1)
   })
 
@@ -844,10 +830,10 @@ describe('SessionStore', () => {
   })
 
   it('文件和对话回滚到提问点后，重启会恢复待回答问题卡', async () => {
-    const { store, journal, questionEvent, answer } = await waitingQuestionSession()
+    const { store, journal, questionEvent, recordAnswer, answerMessage } = await waitingQuestionSession()
     const rollbackMessages = [...journal.initialMessages]
-    await journal.recordUserInput(answer, true)
-    await journal.recordTurnStart('answer-rollback-turn', [message('user', answer)])
+    await recordAnswer()
+    await journal.recordTurnStart('answer-rollback-turn', [answerMessage])
     await journal.recordStep('answer-rollback-turn', [message('assistant', '继续执行并修改文件')])
     await journal.recordTurnEnd('answer-rollback-turn', 'completed')
     await journal.recordSnapshot('rollback', rollbackMessages)
@@ -860,16 +846,17 @@ describe('SessionStore', () => {
         turnId: 'answer-rollback-turn',
         scope: 'files-and-chat',
         ok: true,
+        questions: questionsForBatch(questionEvent.event.question),
       },
     }])
 
     const reopened = await store.open(journal.sessionId)
     assert.equal(hasPendingUserQuestion([...reopened.initialMessages]), true)
-    assert.deepEqual(reopened.initialViewEvents.at(-1), questionEvent)
+    assert.ok(reopened.initialViewEvents.some(entry => entry.type === 'core-event' && entry.event.type === 'checkpoint-restored' && entry.event.questions?.length === 1))
     assert.equal(
       reopened.initialViewEvents.filter((entry) =>
         entry.type === 'core-event' && entry.event.type === 'user-question').length,
-      2,
+      1,
     )
   })
 
@@ -2041,16 +2028,18 @@ async function waitingQuestionSession() {
       ],
     }],
   }
-  const questionEvent = {
-    type: 'core-event' as const,
-    event: { type: 'user-question' as const, question },
-  }
+  const result = questionResult(question, null)
+  const questions = questionsForBatch(question)
+  const questionEvent = { type: 'core-event' as const, event: { type: 'user-question' as const, question } }
   const answer = '回答「你使用哪个系统？」：Windows'
+  const resolution = { id: questions[0]!.id, answer: 'Windows' }
+  const resolvedEvent = { type: 'core-event' as const, event: { type: 'user-question-resolved' as const, resolution } }
+  const answerMessage = withQuestionReply(message('user', answer), resolution)
+  const recordAnswer = () => journal.recordUserInputWithId(randomUUID(), answer, true, [], [], [], [], undefined, resolution)
   await journal.recordTurnStart('question-turn', [message('user', '继续任务')])
-  await journal.recordStep('question-turn', [createUserQuestionMarker(question, true)])
-  await journal.recordViewEvents([questionEvent])
+  await journal.recordStep('question-turn', [result])
   await journal.recordTurnEnd('question-turn', 'waiting-user')
-  return { store, journal, questionEvent, answer }
+  return { store, journal, questionEvent, answer, recordAnswer, resolvedEvent, answerMessage }
 }
 
 function message(role: 'user' | 'assistant', content: string): ModelMessage {

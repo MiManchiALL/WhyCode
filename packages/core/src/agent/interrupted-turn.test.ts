@@ -1,3 +1,4 @@
+import { questionResult, answerFirstQuestion } from '../test-fixtures/user-questions.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,10 +17,9 @@ import {
 import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/ask-user-question/index.ts'
 import { LIST_DIR_TOOL_NAME } from '../tools/list-glob/index.ts'
 import {
-  createUserQuestionMarker,
-  findPendingUserQuestion,
+  pendingUserQuestions,
   hasPendingUserQuestion,
-} from '../tasks/answer-resume.ts'
+} from '../context/question-state.ts'
 import {
   CLOSE_TASK_PLAN_TOOL_NAME,
   CREATE_TASK_PLAN_TOOL_NAME,
@@ -350,11 +350,37 @@ describe('用户中断后的新回合', () => {
     })
     const session = createSession(model, reopened)
 
-    const result = await session.handleUserMessage('回答「你使用哪个系统？」：Windows 11')
+    const result = await answerFirstQuestion(session, 'Windows 11')
 
     assert.equal(result, 'completed')
     assert.equal(toolNames(model.doStreamCalls[0]).includes(CLOSE_TASK_PLAN_TOOL_NAME), true)
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
+  })
+
+  it('空闲回答可编辑重发，重启后仍关联同一题并只保留新的回答', async () => {
+    const store = new SessionStore(await temporaryDirectory())
+    const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
+    await seedActivePlan(journal, 'waiting-user')
+    const model = new MockLanguageModelV4({ doStream: [finalStep('收到。'), finalStep('已更新。')] })
+    const events: CoreEvent[] = []
+    const session = createSession(model, journal, event => events.push(event))
+    const question = session.pendingQuestions[0]!
+    const inputId = crypto.randomUUID()
+    const answer = { id: question.id, answer: 'Windows' }
+    const text = '回答「你使用哪个系统？」：Windows'
+    await journal.recordUserInputWithId(inputId, text, true, [], [], [], [], undefined, answer)
+    await session.handleUserMessage(text, false, [], inputId, [], [], 'native', answer)
+    const start = events.find(event => event.type === 'turn-start')
+    assert.ok(start?.type === 'turn-start')
+    await journal.recordViewEvents([{ type: 'core-event', event: start }])
+    const edit = await session.prepareLatestTurnEdit(start.turnId, '回答「你使用哪个系统？」：Linux')
+    edit.accept()
+    await edit.startMain()
+    const reopened = await store.open(journal.sessionId)
+    assert.deepEqual(pendingUserQuestions(reopened.initialMessages), [])
+    assert.ok(events.some(event => event.type === 'user-message-edited' && event.questionReply?.id === question.id
+      && event.questionReply.answer === 'Linux'))
+    assert.ok(!JSON.stringify(reopened.initialMessages).includes('：Windows'))
   })
 
   it('计划问题卡在进程中断后仍服从 interrupted 闸门', async () => {
@@ -366,7 +392,7 @@ describe('用户中断后的新回合', () => {
       'crashed-question',
       [
         { role: 'assistant', content: '需要确认运行系统。' },
-        createUserQuestionMarker({
+        questionResult({
           id: 'question-after-crash',
           questions: [
             {
@@ -378,7 +404,7 @@ describe('用户中断后的新回合', () => {
               ],
             },
           ],
-        }, true),
+        }, activePlan().id),
       ],
       activeState(),
       activePlan().id,
@@ -392,7 +418,7 @@ describe('用户中断后的新回合', () => {
     const session = createSession(model, recovered)
 
     assert.equal(
-      await session.handleUserMessage('回答「你使用哪个系统？」：Windows'),
+      await answerFirstQuestion(session, 'Windows'),
       'completed',
     )
     assert.equal(session.captureTaskStateSnapshot()?.resumeRequired, true)
@@ -414,7 +440,7 @@ describe('用户中断后的新回合', () => {
 
     const result = await session.handleUserMessage('TTL是什么意思')
 
-    assert.equal(result, 'completed')
+    assert.equal(result, 'waiting-user')
     assert.equal(model.doStreamCalls.length, 1)
     assert.deepEqual(session.captureTaskStateSnapshot()?.activePlan, activePlan())
   })
@@ -447,7 +473,7 @@ describe('用户中断后的新回合', () => {
     const crashView = await store.open(journal.sessionId)
     assert.equal(hasPendingUserQuestion([...crashView.initialMessages]), true)
     assert.equal(
-      findPendingUserQuestion([...crashView.initialMessages])?.resumesTaskPlan,
+      Boolean(pendingUserQuestions([...crashView.initialMessages])[0]?.planId),
       true,
     )
     assert.equal(
@@ -458,10 +484,10 @@ describe('用户中断后的新回合', () => {
 
     session.abort()
     releaseStep.resolve()
-    assert.equal(await running, 'waiting-user')
+    assert.equal(await running, 'aborted')
     const reopened = await store.open(journal.sessionId)
     assert.equal(hasPendingUserQuestion([...reopened.initialMessages]), true)
-    assert.equal(reopened.initialMessages.some(isTurnAbortedMessage), false)
+    assert.equal(reopened.initialMessages.some(isTurnAbortedMessage), true)
   })
 
   it('没有活动计划的问题卡也会完整落盘，并在重启后恢复等待状态', async () => {
@@ -469,17 +495,17 @@ describe('用户中断后的新回合', () => {
     const store = new SessionStore(root)
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     const events: CoreEvent[] = []
-    const model = new MockLanguageModelV4({ doStream: [questionStep()] })
+    const model = new MockLanguageModelV4({ doStream: [questionStep(), finalStep('请确认预算。')] })
     const session = createSession(model, journal, (event) => events.push(event))
 
     assert.equal(await session.handleUserMessage('帮我选择一份礼物'), 'waiting-user')
 
-    const binding = findPendingUserQuestion(session.captureMessageSnapshot())
-    assert.equal(binding?.resumesTaskPlan, false)
-    assert.equal(binding?.question.questions[0]?.question, '预算大约是多少？')
+    const binding = pendingUserQuestions(session.captureMessageSnapshot())[0]
+    assert.equal(Boolean(binding?.planId), false)
+    assert.equal(binding?.item.question, '预算大约是多少？')
     const reopened = await store.open(journal.sessionId)
     assert.equal(reopened.metadataSnapshot.status, 'waiting-user')
-    assert.equal(findPendingUserQuestion([...reopened.initialMessages])?.resumesTaskPlan, false)
+    assert.equal(Boolean(pendingUserQuestions([...reopened.initialMessages])[0]?.planId), false)
     const restoredQuestions = reopened.initialViewEvents.filter((entry) =>
       entry.type === 'core-event' && entry.event.type === 'user-question')
     assert.equal(restoredQuestions.length, 1)
@@ -493,12 +519,12 @@ describe('用户中断后的新回合', () => {
     assert.equal(events.filter((event) => event.type === 'user-question').length, 1)
   })
 
-  it('问题工具执行后若 step 尚未稳定提交就被停止，不显示或恢复幽灵问题卡', async () => {
+  it('提问结果已提交后停止，已展示的问题仍可恢复', async () => {
     const root = await temporaryDirectory()
     const store = new SessionStore(root)
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     const events: CoreEvent[] = []
-    const model = new MockLanguageModelV4({ doStream: [questionStep()] })
+    const model = new MockLanguageModelV4({ doStream: [questionStep(), finalStep('请确认预算。')] })
     let session!: AgentSession
     session = createSession(model, journal, (event) => {
       events.push(event)
@@ -508,14 +534,14 @@ describe('用户中断后的新回合', () => {
 
     assert.equal(await session.handleUserMessage('帮我选择一份礼物'), 'aborted')
     assert.equal(events.some((event) => event.type === 'tool-end'), true)
-    assert.equal(hasPendingUserQuestion(session.captureMessageSnapshot()), false)
-    assert.equal(events.some((event) => event.type === 'user-question'), false)
+    assert.equal(hasPendingUserQuestion(session.captureMessageSnapshot()), true)
+    assert.equal(events.some((event) => event.type === 'user-question'), true)
     const reopened = await store.open(journal.sessionId)
-    assert.equal(hasPendingUserQuestion([...reopened.initialMessages]), false)
+    assert.equal(hasPendingUserQuestion([...reopened.initialMessages]), true)
     assert.equal(
       reopened.initialViewEvents.some((entry) =>
         entry.type === 'core-event' && entry.event.type === 'user-question'),
-      false,
+      true,
     )
   })
 
@@ -1038,9 +1064,9 @@ describe('用户中断后的新回合', () => {
     assert.equal(session.captureTaskStateSnapshot()?.activePlan, null)
   })
 
-  it('终止型问题工具完成稳定回合后会消费中断边界', async () => {
+  it('异步提问后的模型步骤消费中断边界', async () => {
     let firstRequest = true
-    const remainingSteps = [questionStep(), finalStep('已开始新的任务。')]
+    const remainingSteps = [questionStep(), finalStep('请回答问题。'), finalStep('已开始新的任务。')]
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
         if (firstRequest) {
@@ -1062,8 +1088,8 @@ describe('用户中断后的新回合', () => {
 
     const result = await session.handleUserMessage('制作另一个复杂游戏')
 
-    assert.equal(result, 'completed')
-    assert.equal(toolNames(model.doStreamCalls[2]).includes(CREATE_TASK_PLAN_TOOL_NAME), true)
+    assert.equal(result, 'waiting-user')
+    assert.equal(toolNames(model.doStreamCalls[3]).includes(CREATE_TASK_PLAN_TOOL_NAME), true)
   })
 
   it('等待用户回答时保留收尾期间进入的队列，不自动启动新回合', async () => {
@@ -1086,7 +1112,7 @@ describe('用户中断后的新回合', () => {
     const result = await session.handleUserMessage('帮我选择一个礼物')
 
     assert.equal(result, 'waiting-user')
-    assert.equal(model.doStreamCalls.length, 1)
+    assert.equal(model.doStreamCalls.length, 2)
     const queued = events.find(event => event.type === 'message-queued')
     assert.ok(queued)
     assert.equal(session.isQueuedUserInput(queued.id), true)
@@ -1105,7 +1131,7 @@ describe('用户中断后的新回合', () => {
     const journal = await store.create({ workspace: localWorkspace(null), modelId: 'test:interruption' })
     await seedActivePlan(journal)
     const model = new MockLanguageModelV4({
-      doStream: [questionStep(), finalStep('预算收到，我按 100 元推荐礼物。')],
+      doStream: [questionStep(), finalStep('请输入预算。'), finalStep('预算收到，我按 100 元推荐礼物。')],
     })
     const session = createSession(model, journal)
 
@@ -1113,12 +1139,12 @@ describe('用户中断后的新回合', () => {
     assert.equal(waiting, 'waiting-user')
 
     const reopened = await store.open(journal.sessionId)
-    assert.equal(findPendingUserQuestion([...reopened.initialMessages])?.resumesTaskPlan, false)
+    assert.equal(Boolean(pendingUserQuestions([...reopened.initialMessages])[0]?.planId), false)
     const resumed = createSession(model, reopened)
-    const result = await resumed.handleUserMessage('100 元')
+    const result = await answerFirstQuestion(resumed, '100 元')
 
     assert.equal(result, 'completed')
-    assert.equal(model.doStreamCalls.length, 2)
+    assert.equal(model.doStreamCalls.length, 3)
     assert.equal(resumed.captureTaskStateSnapshot()?.activePlan?.revision, 3)
   })
 })
@@ -1134,7 +1160,7 @@ async function seedActivePlan(
     activeState(),
   )
   if (stopReason === 'waiting-user') {
-    await journal.recordStep('seed-plan', [createUserQuestionMarker({
+    await journal.recordStep('seed-plan', [questionResult({
       id: 'question-plan-system',
       questions: [
         {
@@ -1146,7 +1172,7 @@ async function seedActivePlan(
           ],
         },
       ],
-    }, true)])
+    }, activePlan().id)])
   }
   await journal.recordTurnEnd('seed-plan', stopReason)
 }
