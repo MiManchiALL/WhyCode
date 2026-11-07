@@ -100,7 +100,10 @@ function SubagentList({
                 className="wc-focus-ring flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left hover:bg-black/[0.045]"
                 onClick={() => onSelect(subagent.id)}
               >
-                <span className="mt-0.5 text-[var(--wc-muted)]">
+                <span
+                  data-status={subagent.status}
+                  className="mt-0.5 text-[var(--wc-danger)] data-[status=completed]:text-[var(--wc-success)] data-[status=running]:text-[var(--wc-muted)]"
+                >
                   <SubagentStatusIcon status={subagent.status} />
                 </span>
                 <span className="min-w-0 flex-1">

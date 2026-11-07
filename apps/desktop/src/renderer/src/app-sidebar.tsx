@@ -115,7 +115,7 @@ export function AppSidebar(props: AppSidebarProps) {
         <div className="px-2">
           <button
             type="button"
-            className="wc-focus-ring relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-xl border border-[var(--wc-line)] bg-white px-3 text-sm shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-colors hover:border-[var(--wc-line-strong)]"
+            className="wc-focus-ring relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-xl border border-[var(--wc-line)] bg-[var(--wc-surface-strong)] px-3 text-sm shadow-[1px_2px_0_rgb(43_46_41_/_5%)] transition-colors enabled:hover:border-[var(--wc-line-strong)] enabled:hover:bg-[var(--wc-hover)]"
             disabled={props.busy}
             onClick={props.onNewSession}
             title="新建会话"

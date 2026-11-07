@@ -156,7 +156,7 @@ function SubagentMenu({
   return (
     <button
       type="button"
-      className="wc-menu-item wc-focus-ring w-full text-left"
+      className="wc-menu-item wc-focus-ring w-full text-left hover:bg-black/[0.04] focus-visible:bg-black/[0.04]"
       onClick={onOpen}
     >
       <span className="min-w-0 flex-1">
