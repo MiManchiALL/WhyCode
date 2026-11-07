@@ -112,6 +112,10 @@ it('勾选恢复覆盖用户整轮内部 turn，工具的命令屏障仍禁止�
   assert.equal(await prepared.startMain(), 'completed')
   const reopened = await f.store.open(f.recorder.sessionId)
   assert.doesNotMatch(JSON.stringify(reopened.initialMessages), /原始问题|原始回答/)
+  for (const journal of [f.recorder, reopened]) {
+    assert.ok(journal.wasTurnEditedOut('first'))
+    assert.ok(journal.wasTurnEditedOut('internal'))
+  }
 })
 
 it('恢复冲突保留原对话、外部改动和检查点，不启动模型；取消勾选后可以提交', async () => {

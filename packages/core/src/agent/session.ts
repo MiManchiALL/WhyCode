@@ -254,7 +254,7 @@ export interface AgentSessionOptions {
   getSubagentTurnState?: (turnId: string) => Promise<SubagentTurnState>
   /** 用户请求的 Main 执行阶段按需扫描待交付结果；冷恢复本身不请求模型。 */
   pendingSubagentSettlements?: () => AsyncIterable<SubagentSettlementNotification>
-  onSubagentSettlementDelivered?: (notification: SubagentSettlementNotification) => Promise<void>
+  onSubagentSettlementDelivered?: (notification: SubagentSettlementNotification, turnId: string) => Promise<void>
   /** M4：稳定边界会话记录器；不传则保持纯内存会话 */
   sessionRecorder?: SessionRecorder
   /** Main 会话级 MCP 运行时；讨论/协议回合仍由工具装配边界物理移除。 */
@@ -316,7 +316,7 @@ interface QueuedTaskNotification {
   notification: ContinuationNotification
   message: ModelMessage
   /** 父 transcript 已稳定记录通知后确认交接；崩溃重放据此保持至少一次。 */
-  onDelivered?: () => void | Promise<void>
+  onDelivered?: (turnId: string) => void | Promise<void>
 }
 
 interface TurnModelSelection {
@@ -1099,7 +1099,7 @@ export class AgentSession {
   /** 只唤醒正在运行的父回合；空闲或已停止时由磁盘保留到下一次用户输入。 */
   handleSubagentSettlement(
     notification: SubagentSettlementNotification,
-    onDelivered?: () => void | Promise<void>,
+    onDelivered?: (turnId: string) => void | Promise<void>,
   ): void {
     if (this.options.promptContext.discussion || this.protocolRound || this.options.promptContext.subagent) {
       return
@@ -1111,20 +1111,28 @@ export class AgentSession {
     const item: QueuedTaskNotification = {
       notification,
       message: createSubagentSettlementMessage(notification),
-      onDelivered: onDelivered ?? (() => this.options.onSubagentSettlementDelivered?.(notification)),
+      onDelivered: onDelivered ?? (turnId => this.options.onSubagentSettlementDelivered?.(notification, turnId)),
     }
     this.taskNotifications.push(item)
     this.wakeRunLoop()
   }
 
   /** 父模型追加给运行中子代理的任务指示；不取消当前工具。 */
-  steerSubagent(text: string): boolean {
+  async steerSubagent(text: string): Promise<boolean> {
     if (!this.options.promptContext.subagent) throw new Error('只有子代理可以接收父模型指示')
     if (!this.running || !this.opAbort || this.opAbort.signal.aborted) return false
-    const item = createUserInput(text, [], undefined, [], [])
+    const recorder = this.options.sessionRecorder
+    const item = createUserInput(text, [], recorder ? randomUUID() : undefined, [], [])
     item.urgent = true
+    // 先登记写入，再把同一 ID 放入队列。稳定步骤的送达记录在这次写入之后提交。
+    const recorded = recorder?.recordUserInputWithId(item.id, text, false)
     this.queue.push(item)
     this.wakeRunLoop()
+    try { await recorded }
+    catch (error) {
+      this.takeQueuedMessage(item.id)
+      throw error
+    }
     return true
   }
 
@@ -1508,6 +1516,13 @@ export class AgentSession {
     }
   }
 
+  private async releaseSubagentResults(): Promise<void> {
+    this.taskNotifications = this.taskNotifications.filter(item => !('activationId' in item.notification))
+    await this.pendingSubagentResults?.return?.()
+    this.pendingSubagentResults = null
+    this.deliveredSubagentActivations.clear()
+  }
+
   private hasPendingMessages(): boolean {
     return this.queue.length > 0 || this.taskNotifications.length > 0
   }
@@ -1636,7 +1651,7 @@ export class AgentSession {
       this.messages.push(...injected)
       for (const item of drained) this.activatePdfAttachments(item.pdfAttachments)
       this.rememberDeliveredSubagentNotifications(notifications)
-      await this.confirmNotificationsDelivered(notifications)
+      await this.confirmNotificationsDelivered(notifications, this.activeTurn.id)
       this.skillTurn.add(drained.flatMap((item) => item.skills))
       for (const item of drained) this.options.emit({ type: 'message-injected', ...queuedUserMessage(item) })
     }
@@ -1673,6 +1688,17 @@ export class AgentSession {
         startsUserTurn = false
         return tagged
       })
+      if (rootInputId && this.options.promptContext.subagent && this.queue.length) {
+        // 显式继续子代理时，之前已接受但未送达的指示按原顺序置于新要求之前。
+        const retained = this.queue.splice(0)
+        const previous = this.messages[latestUserTurnIndex(this.messages)]
+        const previousId = previous && userTurn(previous)?.id
+        initialMessages = [
+          ...retained.map(input => withUserTurn(queuedMessageForModel(input), previousId ?? turnId, false)),
+          ...initialMessages,
+        ]
+        deliveredInputs = [...retained, ...deliveredInputs]
+      }
     }
     const pendingUserQuestion = findPendingUserQuestion(this.messages)
     const answersPendingUserQuestion = pendingUserQuestion !== null
@@ -1737,8 +1763,7 @@ export class AgentSession {
       this.running = false
       this.pauseQueuedInputs()
       this.activeSubagentTurnState = null
-      await this.pendingSubagentResults?.return?.()
-      this.pendingSubagentResults = null
+      await this.releaseSubagentResults()
       this.skillTurn.finish()
       this.emitContextUsage()
       this.abortRequestedDuringFinalization = false
@@ -1754,9 +1779,9 @@ export class AgentSession {
     }
     for (const item of deliveredInputs) this.activatePdfAttachments(item.pdfAttachments)
     this.rememberDeliveredSubagentNotifications(initialTaskNotifications)
-    await this.confirmNotificationsDelivered(initialTaskNotifications)
+    await this.confirmNotificationsDelivered(initialTaskNotifications, turnId)
     for (const [index, item] of deliveredInputs.entries()) {
-      emit({ type: 'message-injected', ...queuedUserMessage(item), startsTurn: inputSource === 'user' && index === 0 })
+      emit({ type: 'message-injected', ...queuedUserMessage(item), startsTurn: inputSource === 'user' && !rootInputId && index === 0 })
     }
 
     emit({ type: 'turn-start', turnId })
@@ -1957,10 +1982,8 @@ export class AgentSession {
     this.activeTurn = null
     this.opAbort = null
     this.activeSubagentTurnState = null
-    await this.pendingSubagentResults?.return?.()
-    this.pendingSubagentResults = null
+    await this.releaseSubagentResults()
     this.turnInterruptionContext = null
-    this.deliveredSubagentActivations.clear()
     this.skillTurn.finish()
 
     this.emitContextUsage()
@@ -1999,10 +2022,11 @@ export class AgentSession {
 
   private async confirmNotificationsDelivered(
     notifications: readonly QueuedTaskNotification[],
+    turnId: string,
   ): Promise<void> {
     for (const notification of notifications) {
       try {
-        await notification.onDelivered?.()
+        await notification.onDelivered?.(turnId)
       } catch (error) {
         this.options.emit({
           type: 'error',

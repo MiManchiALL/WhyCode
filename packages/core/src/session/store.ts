@@ -170,6 +170,7 @@ export class SessionStore {
       emptyTaskPlanState(),
       null,
       null,
+      new Set(),
     )
   }
 
@@ -249,6 +250,7 @@ export class SessionStore {
       loaded.taskState,
       loaded.btwConversation,
       loaded.interruptedBtw,
+      editedOutTurnIds(loaded.entries),
     )
   }
 
@@ -432,10 +434,26 @@ export class SessionStore {
   }
 }
 
+/** 编辑换根撤回目标及其后续内部回合。压缩也会移除回滚锚点，但不会撤回已交付的结果。 */
+function editedOutTurnIds(entries: readonly SessionEntry[]): Set<string> {
+  const replaced = new Set<string>()
+  const boundaries = new Set<string>()
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!
+    if (entry.type === 'user-input' && entry.replacesTurnId) boundaries.add(entry.replacesTurnId)
+    if (entry.type === 'turn-start' && boundaries.size) {
+      replaced.add(entry.turnId)
+      boundaries.delete(entry.turnId)
+    }
+  }
+  return replaced
+}
+
 export class SessionJournal implements SessionRecorder {
   readonly sessionId: string
   private readonly paths: SessionPaths
   private readonly customSystemPromptSnapshot: CustomSystemPromptSnapshot | undefined
+  private readonly editedTurns: Set<string>
   private metadata: SessionMetadata
   private leafUuid: string
   private messages: ModelMessage[]
@@ -491,8 +509,10 @@ export class SessionJournal implements SessionRecorder {
     taskState: TaskPlanState,
     btwConversation: BtwConversation | null,
     interruptedBtw: { context: BtwTurnContext; invalidated: boolean } | null,
+    editedTurns: Set<string>,
   ) {
     this.paths = paths
+    this.editedTurns = editedTurns
     this.metadata = metadata
     this.sessionId = metadata.sessionId
     this.customSystemPromptSnapshot = customSystemPrompt
@@ -604,6 +624,10 @@ export class SessionJournal implements SessionRecorder {
 
   get initialViewEvents(): readonly ViewEvent[] {
     return this.viewEvents
+  }
+
+  wasTurnEditedOut(turnId: string): boolean {
+    return this.editedTurns.has(turnId)
   }
 
   get initialViewEventTimestamps(): readonly string[] {
@@ -963,6 +987,10 @@ export class SessionJournal implements SessionRecorder {
         resolvedImageDelivery,
       )
       await this.appendEntries([transaction.snapshot, transaction.input], true)
+      for (const id of [...this.turnStartMessages.keys()].reverse()) {
+        this.editedTurns.add(id)
+        if (id === previousTurnId) break
+      }
       this.applyTurnEditTransaction(transaction, rollbackTaskState, attachments, pdfAttachments)
       this.btwConversationState = null
       for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true

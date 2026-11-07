@@ -951,8 +951,8 @@ async function createMainAgentSession(
         commandSessions.hasPendingPlanContinuation(recorder.sessionId, planId)
         || subagents.hasPendingPlanContinuation(recorder.sessionId, planId),
       getSubagentTurnState: (turnId) => subagents.turnState(recorder.sessionId, turnId),
-      pendingSubagentSettlements: () => subagents.pendingSettlements(recorder.sessionId),
-      onSubagentSettlementDelivered: (notification) => subagents.markSettlementDelivered(notification),
+      pendingSubagentSettlements: () => subagents.pendingSettlements(recorder),
+      onSubagentSettlementDelivered: (notification, turnId) => subagents.markSettlementDelivered(notification, turnId),
       scheduleProjectMutation: (_mutation, abortSignal, operation) =>
         hostOperations.runProjectWrite(requireRuntimeProjectDir(runtime), abortSignal, operation, runtime.workspaceIO?.identity),
       emit: (event) => runtime.emit(event),

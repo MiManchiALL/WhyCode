@@ -33,7 +33,7 @@ describe('子代理激活生命周期', { timeout: 90_000 }, () => {
     )
     assert.equal(pendingTurnState.activations[0]?.outcome, 'completed')
     assert.equal(pendingTurnState.activations[0]?.settlement, 'pending')
-    await fixture.service.markSettlementDelivered(fixture.settlements[0]!)
+    await fixture.service.markSettlementDelivered(fixture.settlements[0]!, 'turn-1')
     const deliveredTurnState = await fixture.service.turnState(
       fixture.parentJournal.sessionId,
       'turn-1',

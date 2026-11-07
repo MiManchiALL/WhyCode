@@ -79,6 +79,7 @@ export const subagentActivationSchema = z.object({
   outcome: subagentOutcomeSchema.optional(),
   resultText: z.string().optional(),
   settlement: subagentSettlementStateSchema.optional(),
+  deliveredToTurnId: z.string().min(1).optional(),
 }).superRefine((activation, ctx) => {
   const terminalFields = [activation.endedAt, activation.outcome, activation.resultText]
   const terminalCount = terminalFields.filter((value) => value !== undefined).length
@@ -90,6 +91,9 @@ export const subagentActivationSchema = z.object({
   }
   if (terminalCount > 0 && activation.settlement === undefined) {
     ctx.addIssue({ code: 'custom', message: '子代理激活终态必须记录 settlement 状态' })
+  }
+  if (activation.deliveredToTurnId && activation.settlement !== 'delivered') {
+    ctx.addIssue({ code: 'custom', message: '只有已交付结果可以记录接收回合' })
   }
 })
 

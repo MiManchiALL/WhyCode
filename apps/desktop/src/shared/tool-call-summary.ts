@@ -145,7 +145,9 @@ export function toolCallDetails(
     case 'AskUserQuestion':
       return answeredQuestionDetails(value, result)
     case 'Subagent':
-      return value.action === 'send' ? text(value, 'prompt') : subagentDetails(value, result)
+      if (value.action === 'spawn') return subagentDetails(value, result)
+      if (value.action === 'send') return text(value, 'prompt')
+      return null
     default:
       return null
   }

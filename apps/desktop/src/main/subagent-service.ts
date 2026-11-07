@@ -178,10 +178,16 @@ export class SubagentService {
     return (await this.storage.listManifests(parentSessionId)).map(subagentListEntry)
   }
 
-  async *pendingSettlements(parentSessionId: string): AsyncGenerator<SubagentSettlementNotification> {
-    for await (const manifest of this.storage.manifests(parentSessionId)) {
+  async *pendingSettlements(parent: SessionJournal): AsyncGenerator<SubagentSettlementNotification> {
+    for await (const manifest of this.storage.manifests(parent.sessionId)) {
       for (const activation of manifest.activations) {
-        if (activation.outcome && activation.settlement === 'pending') {
+        if (!activation.outcome) continue
+        if (parent.wasTurnEditedOut(activation.parentTurnId)) {
+          this.continuations.delete(activation.id)
+          continue
+        }
+        if (activation.settlement === 'pending'
+          || (activation.deliveredToTurnId && parent.wasTurnEditedOut(activation.deliveredToTurnId))) {
           yield subagentSettlement(manifest, activation)
         }
       }
@@ -196,7 +202,7 @@ export class SubagentService {
     if (active) {
       const session = await active.ready
       if (active.cancelRequested) return { ok: false, error: '该子代理正在停止，请在停止后继续' }
-      if (session?.steerSubagent(request.prompt)) {
+      if (session && await session.steerSubagent(request.prompt)) {
         return { ok: true, subagentId: request.subagentId, description: active.taskDescription }
       }
       await active.done
@@ -295,7 +301,7 @@ export class SubagentService {
     }
   }
 
-  async markSettlementDelivered(notification: SubagentSettlementNotification): Promise<void> {
+  async markSettlementDelivered(notification: SubagentSettlementNotification, turnId: string): Promise<void> {
     let manifest: SubagentManifest
     try {
       manifest = await this.storage.readManifest(
@@ -306,11 +312,9 @@ export class SubagentService {
       return
     }
     const activation = manifest.activations.find((item) => item.id === notification.activationId)
-    if (!activation || activation.settlement === 'delivered') return
-    await this.storage.writeManifest(markSubagentSettlementDelivered(
-      manifest,
-      notification.activationId,
-    ))
+    if (!activation) return
+    const updated = markSubagentSettlementDelivered(manifest, activation.id, turnId)
+    if (updated !== manifest) await this.storage.writeManifest(updated)
     this.continuations.delete(activation.id)
   }
 
@@ -584,10 +588,10 @@ export class SubagentService {
         },
       })
       active.session = session
-      if (active.cancelRequested) throw new Error('父会话已停止，本次子代理激活已取消。')
+      if (active.cancelRequested) throw new Error('本次子代理运行已停止。')
       const inputId = active.activationId
       await active.journal.recordUserInputWithId(inputId, prompt, true)
-      if (active.cancelRequested) throw new Error('父会话已停止，本次子代理激活已取消。')
+      if (active.cancelRequested) throw new Error('本次子代理运行已停止。')
       this.broadcastChildEvent(active, {
         type: 'user-message-accepted',
         inputId,
@@ -599,6 +603,8 @@ export class SubagentService {
       const stopReason = handling ? await handling : 'error'
       resultText = session.latestTurnAssistantText
       outcome = subagentOutcome(stopReason, session.modelFinishReason)
+      // 执行失败和循环保护暂停会给出终止诊断。其它停止原因不应附带此前的告警。
+      if (stopReason !== 'error' && stopReason !== 'paused') errorMessage = undefined
     } catch (error) {
       outcome = active.cancelRequested ? 'aborted' : 'error'
       resultText = session?.latestTurnAssistantText ?? ''
@@ -607,7 +613,7 @@ export class SubagentService {
       resolveReady(null)
       active.session = null
       active.terminalReached = true
-      resultText = subagentResult(outcome, resultText, outcome === 'completed' ? undefined : errorMessage)
+      resultText = subagentResult(outcome, resultText, errorMessage)
       const manifest = await this.finishActivation(
         initialManifest.parentSessionId,
         initialManifest.id,

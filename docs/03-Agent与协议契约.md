@@ -518,7 +518,7 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 `Subagent` 只接受对应 action 的参数：
 
 - `spawn`：`name,description,prompt`。按名称选择定义，短描述标识本次任务，返回稳定 `subagent_id`；同一 name 可同时启动多个实例。
-- `send`：`subagent_id,prompt`。运行中在下一稳定步骤边界追加，不打断当前工具；已结束则从同一实例历史冷启动新 activation。
+- `send`：`subagent_id,prompt`。运行中先写稳追加消息，再向父模型确认发送。当前工具结束后在稳定步骤边界交付。如果交付前停止或失败，消息保留在子会话中，下次显式继续时按原顺序放在新要求之前。已结束的实例沿用自身历史启动新 activation。
 - `stop`：`subagent_id`。仅停止当前父会话拥有的指定实例，等待资源释放，保留结果和历史，之后仍可 send 继续。
 - `list`：无其它参数。只返回当前会话保留实例的 `subagent_id,description,status`，不返回完整 prompt、结果或 transcript。
 
@@ -543,6 +543,8 @@ P 的摘要输入包含 U 完整原文、同一正式 turn 的旧 P（如有）�
 settlement 先随子 manifest 持久化为 pending；父 transcript 写稳通知后才标记 delivered。运行中的父回合在稳定边界接收终态；空闲、Stop 或应用重启均不因子代理结果自动请求模型。完整、中断及混合结果统一保留到下一次用户请求，沿用正常工具目录和中断标记，不另开报告回合。父 Stop 会中止未结束激活并保留未交付结果；仅当本次确实取消了子代理时，同一持久中断标记附带其稳定 ID 与任务描述。删除父会话同时清理子记录，单纯切换会话不影响运行。
 
 同一父 turn 内以 `(parentTurnId, activationId)` 跟踪启动和继续产生的 activation。每次请求尾部的模型投影仅含 `remaining` 和 `subagents`；列表只保留尚未交付的 `subagent_id,description,status`。status 为 running 或终态尚待交付的 awaiting_delivery，已交付项省略；本 turn 全部交付后返回零与空列表。投影不写入 transcript，turn 结束后不再出现，结果正文只存在于 settlement 消息。
+
+交付确认记录实际接收结果的父回合。编辑重发撤回这个回合时，较早委派的结果按原预算重新交付，由撤回回合发起的委派不带入新请求。历史压缩保留交付确认。父回合终止时释放尚未写入其历史的预取结果，下次用户请求从子记录重新读取。
 
 父代理派发后继续执行不与子任务交叉的本地工作；每个 settlement 到达即可作为阶段进展进入下一模型步骤，不等待最慢子代理批量汇总。若父代理已经无事可做但仍有未交付 activation，`runLoop` 保持同一 turn 进入一次性事件等待，不发起空模型请求；用户 steering、任务通知、子代理终态或 Stop 都可唤醒。直接插入用户消息仍属于同一 turn，并在后续请求继续携带更新后的子代理状态；显式 Stop 是硬边界，会取消本会话全部运行中子代理并结束父 turn，下一条用户消息开启新 turn。只有本 turn 全部 activation 终态已交付后，无工具正文才允许自然结束；这只解除等待闸门，不要求立即结束，父代理仍须完成必要工作、核验和最终交付。
 
