@@ -262,6 +262,42 @@ describe('子代理终态续轮', () => {
     assert.equal(observed.size, items.length)
     assert.ok(model.doGenerateCalls.length > 0, '旧历史确实进入自动压缩')
   })
+
+  for (const reason of ['error', 'waiting-user'] as const) it(`父回合以 ${reason} 结束后不把预取结果带入协议回合`, async () => {
+    const items = Array.from({ length: 3 }, (_, index) => ({
+      ...notification(), activationId: crypto.randomUUID(), resultText: `历史调查 ${index}：` + '证据'.repeat(40_000),
+    }))
+    const delivered = new Set<string>()
+    let firstTurn = true
+    const model = new MockLanguageModelV4({ doStream: async () => {
+      if (!firstTurn) return finalStep('已处理。')
+      if (reason === 'error') throw new Error('请求失败')
+      return { stream: simulateReadableStream({ chunks: [
+        { type: 'tool-call' as const, toolCallId: 'ask', toolName: 'AskUserQuestion', input: JSON.stringify({
+          questions: [{ header: '调查范围', question: '核对哪个项目？', options: [
+            { label: '甲', description: '核对项目甲' }, { label: '乙', description: '核对项目乙' },
+          ] }],
+        }) },
+        { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined },
+          usage: modelUsage() },
+      ] }) }
+    } })
+    const session = createSession(model, [], undefined, {
+      pendingSubagentSettlements: async function* () {
+        for (const item of items) if (!delivered.has(item.activationId)) yield item
+      },
+      onSubagentSettlementDelivered: async item => { delivered.add(item.activationId) },
+    })
+    assert.equal(await session.handleUserMessage('处理调查'), reason)
+    assert.equal(delivered.size, 1)
+    firstTurn = false
+    session.setProtocolRound(true)
+    assert.equal(await session.handleExecutionMessage('讨论新请求'), 'completed')
+    assert.equal(delivered.size, 1)
+    session.setProtocolRound(false)
+    assert.equal(await session.handleUserMessage('继续查看调查'), 'completed')
+    assert.equal(delivered.size, 3)
+  })
 })
 
 const FIRST_SUBAGENT_ID = '22222222-2222-4222-8222-222222222222'
@@ -370,13 +406,17 @@ function finalStep(text: string, inputTokens = 10) {
         {
           type: 'finish' as const,
           finishReason: { unified: 'stop' as const, raw: undefined },
-          usage: {
-            inputTokens: { total: inputTokens, noCache: inputTokens, cacheRead: undefined, cacheWrite: undefined },
-            outputTokens: { total: 5, text: 5, reasoning: undefined },
-          },
+          usage: modelUsage(inputTokens),
         },
       ],
     }),
+  }
+}
+
+function modelUsage(inputTokens = 10) {
+  return {
+    inputTokens: { total: inputTokens, noCache: inputTokens, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 5, text: 5, reasoning: undefined },
   }
 }
 

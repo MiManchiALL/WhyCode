@@ -144,6 +144,7 @@ describe('工具卡片关键参数摘要', () => {
       edits: [{ path: 'a.ts' }, { path: 'a.ts' }, { path: 'b.ts' }],
     }, '已完成', false), 'a.ts\nb.ts')
     assert.equal(toolCallDetails('Subagent', {
+      action: 'spawn',
       description: '核对摘要展示',
     }, '已启动子代理（subagent_id: 12345678-1234-4234-8234-123456789abc）。', false), [
       'subagent_id: 12345678-1234-4234-8234-123456789abc',
@@ -153,6 +154,8 @@ describe('工具卡片关键参数摘要', () => {
       action: 'send',
       prompt: '继续核对剩余工具',
     }, '已继续', false), '继续核对剩余工具')
+    assert.equal(toolCallDetails('Subagent', { action: 'list' }, '{"subagents":[]}', false), null)
+    assert.equal(toolCallDetails('Subagent', { action: 'stop', subagent_id: 'id' }, undefined, false), null)
   })
 
   it('为动态工具选择高优先级参数并隐藏密钥', () => {

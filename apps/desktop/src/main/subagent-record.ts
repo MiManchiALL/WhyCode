@@ -54,12 +54,13 @@ export function completeSubagentManifest(
 export function markSubagentSettlementDelivered(
   manifest: SubagentManifest,
   activationId: string,
+  turnId: string,
 ): SubagentManifest {
   const index = manifest.activations.findIndex((item) => item.id === activationId)
   const activation = manifest.activations[index]
-  if (!activation || activation.settlement === 'delivered') return manifest
+  if (!activation || activation.deliveredToTurnId === turnId) return manifest
   const activations = [...manifest.activations]
-  activations[index] = { ...activation, settlement: 'delivered' }
+  activations[index] = { ...activation, settlement: 'delivered', deliveredToTurnId: turnId }
   return { ...manifest, activations }
 }
 

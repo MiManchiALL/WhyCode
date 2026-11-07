@@ -199,15 +199,16 @@ export function listDirStream(index: number) {
 }
 
 export function toolStream(toolName: string, input: unknown, toolCallId = 'doc-tool') {
+  return toolCallsStream([{ toolName, input, toolCallId }])
+}
+
+export function toolCallsStream(calls: readonly { toolName: string; input: unknown; toolCallId: string }[]) {
   return Promise.resolve({
     stream: new ReadableStream({
       start(controller) {
-        controller.enqueue({
-          type: 'tool-call' as const,
-          toolCallId,
-          toolName,
-          input: JSON.stringify(input),
-        })
+        for (const { toolCallId, toolName, input } of calls) {
+          controller.enqueue({ type: 'tool-call' as const, toolCallId, toolName, input: JSON.stringify(input) })
+        }
         controller.enqueue({
           type: 'finish' as const,
           finishReason: { unified: 'tool-calls' as const, raw: undefined },

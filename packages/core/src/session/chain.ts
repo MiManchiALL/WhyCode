@@ -589,10 +589,9 @@ function collectViewEvents(entries: SessionEntry[]): {
     if (entry.type === 'messages' || entry.type === 'consensus-task-start') {
       const delivered = entry.deliveredInputIds ?? []
       if (!delivered.length) continue
-      const startsTurn = entry.type === 'consensus-task-start' || entry.messages.some(message => {
-        const turn = userTurn(message)
-        return turn?.startsTurn && turn.id === entry.turnId
-      })
+      const firstTagged = entry.type === 'messages' ? entry.messages.find(message => userTurn(message)) : undefined
+      const firstTurn = firstTagged ? userTurn(firstTagged) : undefined
+      const startsTurn = entry.type === 'consensus-task-start' || (firstTurn?.startsTurn === true && firstTurn.id === entry.turnId)
       for (const [index, inputId] of delivered.entries()) {
         if (visibleInputIds.has(inputId)) continue
         const input = inputs.get(inputId)
