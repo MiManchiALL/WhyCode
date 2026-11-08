@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 import { z } from 'zod'
-import { pendingQuestionSchema, userQuestionSchema, questionSubmissionSchema } from '../user-questions.ts'
+import { pendingQuestionSchema, userQuestionSchema, questionReplySchema } from '../user-questions.ts'
 
 export const RECENT_PDF_USER_TURNS = 3
 const pdfTurnSchema = z.object({ id: z.string().min(1), pdfIds: z.array(z.string().uuid()) }).strict()
@@ -8,7 +8,8 @@ export const conversationMetadataSchema = z.object({
   userTurn: pdfTurnSchema.extend({ startsTurn: z.boolean() }).optional(),
   pendingQuestions: z.array(pendingQuestionSchema).optional(),
   questionBatch: userQuestionSchema.optional(),
-  questionReply: questionSubmissionSchema.optional(),
+  skippedQuestionIds: z.array(z.string().min(1)).optional(),
+  questionReply: questionReplySchema.optional(),
   recentUserTurns: z.array(pdfTurnSchema).max(RECENT_PDF_USER_TURNS).optional(),
 }).strict()
 type ConversationMetadata = z.infer<typeof conversationMetadataSchema>

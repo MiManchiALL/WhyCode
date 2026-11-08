@@ -639,6 +639,10 @@ export class AgentSession {
     return this.running || this.compacting || this.restoringCheckpointToolUseId !== null || this.editingTurn
   }
 
+  get questionAnswerTurnId(): string | undefined {
+    return this.opAbort && !this.protocolRound && !this.options.promptContext.discussion ? this.activeTurn?.id : undefined
+  }
+
   get pendingQuestions() { return pendingUserQuestions(this.messages) }
 
   get availableQuestions() { return availableQuestions(this.pendingQuestions, this.queue) }
@@ -646,7 +650,7 @@ export class AgentSession {
   async skipUserQuestions(ids: string[]): Promise<void> {
     if (this.compacting || this.restoringCheckpointToolUseId || this.editingTurn) throw new Error('会话正在更改历史，请稍后再提交')
     const available = new Set(this.availableQuestions.map(item => item.id))
-    if (ids.some(id => !available.delete(id))) throw new Error('提交包含已处理的问题')
+    if (!ids.length || ids.some(id => !available.delete(id))) throw new Error('提交包含已处理的问题')
     await this.persistRequired(recorder => recorder.recordQuestionSkips(ids), '跳过问题')
     applyQuestionSkips(this.messages, ids)
     this.options.emit({ type: 'user-question-resolved', resolutions: ids.map(id => ({ id, answer: null })) })
@@ -1357,7 +1361,9 @@ export class AgentSession {
     this.queueAutoDrain = true
     if (this.isBusy) {
       this.queue.push(item)
-      if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item) })
+      if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item),
+        ...(item.questionReply && this.questionAnswerTurnId ? { answerTurnId: this.questionAnswerTurnId } : {}),
+      })
       if (item.questionReply) {
         item.urgent = true
         this.wakeRunLoop()

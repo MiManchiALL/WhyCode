@@ -114,3 +114,16 @@ export function prependComposerDraft(sent: ComposerDraft, current?: ComposerDraf
     restoredInputIds: [...new Set([...sent.restoredInputIds, ...current.restoredInputIds])],
   }
 }
+
+/** 已接收的回答在工具下方展示；只有稳定交付的消息才能参加工作分组、封口工具批次。 */
+export function presentPendingInputs(blocks: readonly Block[], queued: QueuedUserMessage[], active: boolean) {
+  const answers: QueuedUserMessage[] = []
+  if (!active || !queued.some(input => input.answerTurnId)) return { answers, queue: queued }
+  const visible = new Set(blocks.flatMap(block => block.kind === 'user' && block.inputId ? [block.inputId] : []))
+  const queue: QueuedUserMessage[] = []
+  for (const item of queued) {
+    if (!item.answerTurnId) queue.push(item)
+    else if (!visible.has(item.id)) answers.push(item)
+  }
+  return { answers, queue }
+}

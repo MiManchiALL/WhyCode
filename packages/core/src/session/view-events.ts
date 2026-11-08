@@ -4,7 +4,7 @@ import {
   coalesceAdjacentCoreEvent,
   userQuestionSchema,
   pendingQuestionSchema,
-  questionSubmissionSchema,
+  questionReplySchema,
   type CoreEvent,
 } from '../events.ts'
 import { taskPlanSchema } from '../tasks/types.ts'
@@ -74,7 +74,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('user-message-edited'),
     questions: z.array(pendingQuestionSchema).optional(),
-    questionReply: questionSubmissionSchema.optional(),
+    questionReply: questionReplySchema.optional(),
     previousTurnId: z.string().min(1),
     inputId: z.string().min(1),
     text: z.string().min(1),
@@ -141,7 +141,7 @@ export const visibleCoreEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('error'), message: z.string(), recoverable: z.boolean() }),
   z.object({ type: z.literal('user-question'), question: userQuestionSchema }),
-  z.object({ type: z.literal('user-question-resolved'), resolutions: questionSubmissionSchema }),
+  z.object({ type: z.literal('user-question-resolved'), resolutions: questionReplySchema }),
   z.object({
     type: z.literal('peer-event'),
     agentId: z.enum(['B', 'C']),

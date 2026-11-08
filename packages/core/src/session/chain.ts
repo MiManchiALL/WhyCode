@@ -280,6 +280,7 @@ function collectPendingUserInputs(chain: SessionEntry[]): PendingUserInput[] {
           id: entry.uuid,
           text: entry.text,
           ...(entry.questionReply ? { questionReply: entry.questionReply } : {}),
+          ...(entry.answerTurnId ? { answerTurnId: entry.answerTurnId } : {}),
           ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
           ...(entry.attachments?.length ? { imageDelivery: entry.imageDelivery } : {}),
           ...(entry.pdfAttachments?.length ? { pdfAttachments: entry.pdfAttachments } : {}),

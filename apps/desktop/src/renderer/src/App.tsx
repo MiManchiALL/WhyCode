@@ -109,6 +109,7 @@ import {
   ComposerSubmissions,
   composerInputIds,
   composerSubmissionPreview,
+  presentPendingInputs,
   prependComposerDraft,
   type ComposerSubmission,
 } from './composer-submissions.ts'
@@ -319,6 +320,7 @@ export function App() {
   const projectDir = workspaceDisplayDirectory(workspace)
   const explicitProjectSelected = workspace.mode !== 'pending-managed' && Boolean(projectDir)
   const conversationStarted = blocks.some((block) => block.kind === 'user')
+  const presentedInputs = useMemo(() => presentPendingInputs(blocks, queued, workStartedAt !== null), [blocks, queued, workStartedAt])
   const sections = useMemo(
     () => conversationSections(blocks, workStartedAt),
     [blocks, workStartedAt],
@@ -1016,6 +1018,7 @@ export function App() {
             id: event.id,
             text: event.text,
             ...(event.questionIds ? { questionIds: event.questionIds } : {}),
+            ...(event.answerTurnId ? { answerTurnId: event.answerTurnId } : {}),
             ...(event.attachments?.length ? { attachments: event.attachments } : {}),
             ...(event.pdfAttachments?.length ? { pdfAttachments: event.pdfAttachments } : {}),
             ...(event.skills?.length ? { skills: event.skills } : {}),
@@ -2411,6 +2414,7 @@ export function App() {
                     onOpenCompaction={openCompactionSummary}
                     onToggle={toggle}
                   >
+                    {presentedInputs.answers.map(answer => <PendingUserMessage key={answer.id} answer={answer.text} />)}
                     {pendingMessage && <PendingUserMessage draft={pendingMessage} />}
                     {!conversationStarted && pendingMessage && worktreePreparation && (
                       <WorktreePreparation baseRef={worktreePreparation.baseRef} />
@@ -2447,10 +2451,10 @@ export function App() {
                     </div>
                   )}
 
-                  {(queued.length > 0 || pendingQueuedMessage) && (
+                  {(presentedInputs.queue.length > 0 || pendingQueuedMessage) && (
                     <QueuedMessageList
                       key={runtimeId}
-                      messages={queued}
+                      messages={presentedInputs.queue}
                       submitting={pendingQueuedMessage}
                       collapsed={queuedMessagesCollapsed}
                       onCollapsedChange={changeQueuedMessagesCollapsed}

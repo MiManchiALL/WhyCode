@@ -152,7 +152,7 @@ import {
 } from './custom-system-prompt.ts'
 import { syncReferencedRetiredModelLabels } from './retired-model-labels.ts'
 import { routeUserMessage } from './user-message-routing.ts'
-import { questionSubmissionSchema, formatQuestionSubmission, type QuestionSubmission } from '@whycode/core/events'
+import { questionSubmissionSchema, formatQuestionSubmission, type QuestionSubmission, type QueuedUserMessage } from '@whycode/core/events'
 import { handleQueuedMessageAction } from './queued-message-actions.ts'
 import { deliverEditedUserMessage, startEditedUserMessage } from './user-message-edit.ts'
 import { prepareMessageSkills } from './skill-message.ts'
@@ -2182,6 +2182,7 @@ async function recordUserInput(
     skills,
     imageDelivery,
     questionReply,
+    questionReply && !startsTurn ? runtime.session?.questionAnswerTurnId : undefined,
   )
 }
 
@@ -2237,7 +2238,7 @@ async function runtimeSnapshot(
     resumingSessionId,
     sessionId: runtime.sessionId,
     history: conversationHistoryWindow(timeline.state, { from: historyStart }),
-    queuedInputs: journal ? pendingInputs(journal, 'queued') : [],
+    queuedInputs: journal ? pendingInputs(journal, 'queued', runtime.session?.questionAnswerTurnId) : [],
     restoredInputs: journal ? pendingInputs(journal, 'restored') : [],
     approval: runtime.approval,
     eventSequence: timeline.boundary,
@@ -2648,19 +2649,14 @@ function reportSubagentDeliveryError(
 function pendingInputs(
   journal: SessionJournal,
   state: 'queued' | 'restored',
-): {
-  id: string
-  text: string
-  attachments?: ImageAttachment[]
-  pdfAttachments?: PdfAttachment[]
-  skills?: ReturnType<typeof skillSummary>[]
-  questionIds?: string[]
-}[] {
+  activeAnswerTurnId?: string,
+): QueuedUserMessage[] {
   return journal.pendingUserInputs
     .filter(input => input.state === state)
     .map((input) => ({
       id: input.id,
       text: input.text,
+      ...(input.answerTurnId && input.answerTurnId === activeAnswerTurnId ? { answerTurnId: input.answerTurnId } : {}),
       ...(input.questionReply ? { questionIds: input.questionReply.map(item => item.id) } : {}),
       ...(input.attachments?.length ? { attachments: [...input.attachments] } : {}),
       ...(input.pdfAttachments?.length

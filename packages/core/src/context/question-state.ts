@@ -1,6 +1,6 @@
 import type { ModelMessage } from 'ai'
 import type { ConversationMessage } from './user-turn.ts'
-import { questionsForBatch, type PendingQuestion, type QuestionSubmission, type UserQuestion } from '../user-questions.ts'
+import { questionsForBatch, type PendingQuestion, type QuestionReply, type UserQuestion } from '../user-questions.ts'
 
 /** 题目来自已提交的工具结果，回答来自宿主接收的输入。普通消息不能凭文字匹配结题。 */
 export function pendingUserQuestions(messages: readonly ConversationMessage[]): PendingQuestion[] {
@@ -11,6 +11,7 @@ export function pendingUserQuestions(messages: readonly ConversationMessage[]): 
     }
     const reply = message.whycode?.questionReply
     if (reply) for (const item of reply) pending.delete(item.id)
+    for (const id of message.whycode?.skippedQuestionIds ?? []) pending.delete(id)
     if (message.whycode?.pendingQuestions) {
       pending.clear()
       for (const question of message.whycode.pendingQuestions) pending.set(question.id, question)
@@ -19,7 +20,7 @@ export function pendingUserQuestions(messages: readonly ConversationMessage[]): 
   return [...pending.values()]
 }
 
-export function availableQuestions(pending: PendingQuestion[], inputs: Iterable<{ questionReply?: QuestionSubmission; state?: 'queued' | 'restored' }>): PendingQuestion[] {
+export function availableQuestions(pending: PendingQuestion[], inputs: Iterable<{ questionReply?: QuestionReply; state?: 'queued' | 'restored' }>): PendingQuestion[] {
   const reserved = new Set<string>()
   for (const input of inputs) {
     if (input.state !== 'restored') for (const reply of input.questionReply ?? []) reserved.add(reply.id)
@@ -35,24 +36,19 @@ export function withQuestionBatch(message: ConversationMessage, questionBatch: U
   return { ...message, whycode: { ...message.whycode, questionBatch } }
 }
 
-export function withQuestionReply(message: ConversationMessage, reply: QuestionSubmission): ConversationMessage {
+export function withQuestionReply(message: ConversationMessage, reply: QuestionReply): ConversationMessage {
   return { ...message, whycode: { ...message.whycode, questionReply: reply } }
 }
 
-/** 跳过只更新提问结果或压缩快照的宿主元数据，不改变模型消息的数量、顺序或正文。 */
+/** 把跳过记在发生时的历史末尾。改写早先的工具结果会使已保存的回合前缀失效。 */
 export function applyQuestionSkips(messages: ConversationMessage[], ids: readonly string[]): void {
-  const remaining = new Set(ids)
-  for (let i = messages.length - 1; i >= 0 && remaining.size; i--) {
-    const message = messages[i]!
-    const meta = message.whycode
-    if (meta?.pendingQuestions) {
-      messages[i] = { ...message, whycode: { ...meta, pendingQuestions: meta.pendingQuestions.filter(item => !remaining.has(item.id)) } }
-      break
-    }
-    if (!meta?.questionBatch) continue
-    const skipped = questionsForBatch(meta.questionBatch).filter(item => remaining.delete(item.id))
-    if (skipped.length) messages[i] = withQuestionReply(message, [...(meta.questionReply ?? []), ...skipped.map(item => ({ id: item.id, answer: null }))])
-  }
+  const last = messages.at(-1)
+  if (!last) return
+  const meta = last.whycode
+  const skippedQuestionIds = [...new Set([...(meta?.skippedQuestionIds ?? []), ...ids])]
+  messages[messages.length - 1] = { ...last, whycode: { ...meta, skippedQuestionIds,
+    ...(meta?.pendingQuestions ? { pendingQuestions: meta.pendingQuestions.filter(item => !ids.includes(item.id)) } : {}),
+  } }
 }
 
 export function answersPlanQuestion(pending: readonly PendingQuestion[], inputs: readonly ConversationMessage[], planId?: string): boolean {

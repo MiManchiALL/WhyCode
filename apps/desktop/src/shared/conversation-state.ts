@@ -13,7 +13,7 @@ import {
   type CoreEvent,
   type ToolFileChange,
   type PendingQuestion,
-  type QuestionSubmission,
+  type QuestionReply,
 } from '@whycode/core/events'
 import type { RuntimeSnapshot } from './session.ts'
 import { summarizeToolCall } from './tool-call-summary.ts'
@@ -556,12 +556,13 @@ function resetPendingQuestions(state: ConversationState, questions: PendingQuest
   return { ...state, blocks, pendingQuestions: questions, questionAnswersBeforeTool: {} }
 }
 
-function resolveQuestions(state: ConversationState, resolutions: QuestionSubmission): ConversationState {
+function resolveQuestions(state: ConversationState, resolutions: QuestionReply): ConversationState {
   const answers = new Map(resolutions.map(item => [item.id, item.answer]))
   const byTool = new Map<string, Record<string, string | null>>()
   const pendingQuestions = state.pendingQuestions.filter(question => {
-    const answer = answers.get(question.id)
-    if (answer === undefined) return true
+    const value = answers.get(question.id)
+    if (value === undefined) return true
+    const answer = value !== null && typeof value === 'object' ? '见用户回复' : value
     const group = byTool.get(question.toolUseId)
     if (group) group[question.id] = answer
     else byTool.set(question.toolUseId, { [question.id]: answer })

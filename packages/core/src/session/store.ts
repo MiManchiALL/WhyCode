@@ -20,7 +20,7 @@ import {
   type TaskPlanStepUpdate,
 } from '../tasks/types.ts'
 import { createTaskContextMessage } from '../tasks/context.ts'
-import type { QuestionSubmission } from '../user-questions.ts'
+import type { QuestionReply } from '../user-questions.ts'
 import { availableQuestions, hasPendingUserQuestion, pendingUserQuestions, applyQuestionSkips, carryPendingQuestions } from '../context/question-state.ts'
 import { latestVisibleRootTurn, compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import { responseViewEvents } from './response-view.ts'
@@ -725,7 +725,8 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionSubmission,
+    questionReply?: QuestionReply,
+    answerTurnId?: string,
   ): Promise<void> {
     return this.enqueue(async () => {
       const resolvedImageDelivery = attachments.length
@@ -739,6 +740,7 @@ export class SessionJournal implements SessionRecorder {
         {
           type: 'user-input',
           ...(questionReply ? { questionReply } : {}),
+          ...(answerTurnId && questionReply && !startsTurn ? { answerTurnId } : {}),
           text,
           startsTurn,
           ...(attachments.length ? { attachments } : {}),
@@ -772,6 +774,7 @@ export class SessionJournal implements SessionRecorder {
           id: input.uuid,
           text: input.text,
           ...(input.questionReply ? { questionReply: input.questionReply } : {}),
+          ...(input.answerTurnId ? { answerTurnId: input.answerTurnId } : {}),
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           ...(input.attachments?.length ? { imageDelivery: input.imageDelivery } : {}),
           ...(input.pdfAttachments?.length ? { pdfAttachments: input.pdfAttachments } : {}),
@@ -971,7 +974,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[] = [],
     skills: readonly ActivatedSkill[] = [],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionSubmission,
+    questionReply?: QuestionReply,
   ): Promise<void> {
     const recordedMessages = structuredClone(rollbackMessages)
     return this.enqueue(async () => {
@@ -1596,7 +1599,7 @@ export class SessionJournal implements SessionRecorder {
     pdfAttachments: readonly PdfAttachment[],
     skills: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionSubmission,
+    questionReply?: QuestionReply,
   ): TurnEditTransaction {
     const messages = applyProjectInstructions(
       rollbackMessages,
@@ -1947,6 +1950,7 @@ function turnEditViewEvent(
       type: 'user-message-edited',
       ...(questions.length ? { questions } : {}),
       ...(input.questionReply ? { questionReply: input.questionReply } : {}),
+      ...(input.answerTurnId ? { answerTurnId: input.answerTurnId } : {}),
       previousTurnId: input.replacesTurnId,
       inputId: input.uuid,
       text: input.text,
