@@ -1,6 +1,7 @@
 import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ChevronLeft, ChevronRight, MessageCircleQuestionMark, Pencil, X } from 'lucide-react'
 import type { PendingQuestion, QuestionSubmission } from '@whycode/core/events'
+import { composerKeyAction } from './composer-key.ts'
 import type { ComposerValue } from './composer-text.ts'
 import { questionSubmission } from './question-progress.ts'
 import type { QuestionDraft } from './composer-drafts.ts'
@@ -70,9 +71,15 @@ export function QuestionCard({ questions, input, disabled, stopControl, onResolv
     </div>}
     <div className="wc-question-controls">
       <label className="wc-question-field"><Pencil size={14} />
-        <input aria-label="当前问题的回答" placeholder={value === null ? '已跳过，可重新填写' : '写下你的回答…'} value={text} disabled={blocked}
+        <textarea rows={1} className="wc-scrollbar max-h-40" aria-label="当前问题的回答"
+          placeholder={value === null ? '已跳过，可重新填写' : '写下你的回答…'} value={text} disabled={blocked}
           onChange={event => edit(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault() }} />
+          onKeyDown={event => {
+            const action = composerKeyAction(event.nativeEvent)
+            if (action === 'ignore' || action === 'newline') return
+            event.preventDefault()
+            event.currentTarget.form?.requestSubmit()
+          }} />
       </label>
       <button type="button" className="wc-settings-button wc-focus-ring" disabled={blocked}
         aria-pressed={value === null} onClick={() => edit(null, true)}>跳过</button>

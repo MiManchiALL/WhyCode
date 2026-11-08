@@ -2569,7 +2569,7 @@ export function App() {
                       aria-activedescendant={skillTrigger && !attachmentLocked ? composerActiveOptionId : undefined}
                       scopeKey={resumingSessionId ?? `${runtimeId}:${restoredInputIds.join(',')}`}
                       runtimeId={runtimeId}
-                      className="wc-composer-text wc-scrollbar max-h-40 min-h-[66px] w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
+                      className="wc-composer-text wc-scrollbar max-h-40 w-full overflow-y-auto bg-transparent px-1.5 py-1 text-[var(--wc-ink)] caret-[var(--wc-ink)] outline-none"
                       text={input}
                       previewText={loadingConversation ? composerDraft.text : undefined}
                       onChange={(text, cursor) => {
