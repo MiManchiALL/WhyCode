@@ -14,11 +14,11 @@ it('追加同名题保留所选题和草稿，已提交的题释放', () => {
   assert.equal(reconcileQuestionDraft(draft, []), undefined)
 })
 
-it('整组按题目顺序提交，自由输入去空格，显式跳过可提交，未答不可提交', () => {
+it('整组按题目顺序提交，保留回答内部的换行和空行，未答题须填写或跳过', () => {
   const questions = questionsForBatch({ id: '同组', questions: Array(3).fill({ header: '选择', question: '哪个？' }) })
   const [a, b, c] = questions.map(q => q.id) as [string, string, string]
-  assert.equal(questionSubmission(questions, { [a]: '选项一', [b]: '  ' }), null)
-  assert.deepEqual(questionSubmission(questions, { [b]: null, [a]: ' 选项一 ', [c]: '末题' }), [
-    { id: a, answer: '选项一' }, { id: b, answer: null }, { id: c, answer: '末题' },
+  assert.equal(questionSubmission(questions, { [a]: '已回答', [b]: ' \n ', [c]: '末题' }), null)
+  assert.deepEqual(questionSubmission(questions, { [b]: null, [a]: ' 第一行\n\n第三行 ', [c]: '末题' }), [
+    { id: a, answer: '第一行\n\n第三行' }, { id: b, answer: null }, { id: c, answer: '末题' },
   ])
 })
