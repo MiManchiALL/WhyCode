@@ -1,4 +1,4 @@
-import type { QuestionSubmission } from '../user-questions.ts'
+import type { QuestionReply } from '../user-questions.ts'
 import { userTurn, type ConversationMessage } from '../context/user-turn.ts'
 import type { ModelMessage } from 'ai'
 import { imageDeliveryModeFromMessage } from '../attachments/messages.ts'
@@ -31,7 +31,7 @@ export function latestTurnEditContext(recorder: SessionRecorder, turnId: string,
 }
 
 export interface LatestTurnEditResources {
-  questionReply?: QuestionSubmission
+  questionReply?: QuestionReply
   turnIds: string[]
   attachments: ImageAttachment[]
   imageDelivery?: ImageDeliveryMode
@@ -50,17 +50,23 @@ export function latestTurnEditResources(
 ): LatestTurnEditResources {
   const { root: rootInput, afterRoot } = latestVisibleRootTurn(viewEvents, turnId)
   const attachments = (rootInput.attachments ?? []).map((item) => structuredClone(item))
-  const sourceMessage = messages.slice(rollbackMessageCount)
-    .find((message) => message.role === 'user')
+  const suffix: ConversationMessage[] = messages.slice(rollbackMessageCount)
+  const sourceMessage = suffix.find(message => message.role === 'user')
   const imageDelivery = attachments.length && sourceMessage
     ? imageDeliveryModeFromMessage(sourceMessage)
     : null
   if (attachments.length && !imageDelivery) {
     throw new Error('目标回合缺少图片交付方式')
   }
-  const rootMessage = messages.slice(rollbackMessageCount).find(item => userTurn(item)?.startsTurn) as ConversationMessage | undefined
+  const rootMessage = suffix.find(item => userTurn(item)?.startsTurn)
+  const replies = new Map(rootMessage?.whycode?.questionReply?.map(item => [item.id, item]))
+  for (const message of suffix) {
+    for (const id of message.whycode?.skippedQuestionIds ?? []) {
+      if (!replies.has(id)) replies.set(id, { id, answer: null })
+    }
+  }
   return {
-    ...(rootMessage?.whycode?.questionReply ? { questionReply: rootMessage.whycode.questionReply } : {}),
+    ...(replies.size ? { questionReply: [...replies.values()] } : {}),
     turnIds: afterRoot.flatMap((entry) => entry.type === 'core-event'
       && entry.event.type === 'turn-start' ? [entry.event.turnId] : []),
     attachments,

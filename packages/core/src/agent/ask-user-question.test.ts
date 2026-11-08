@@ -139,9 +139,10 @@ describe('Main 主动提问', () => {
       assert.ok(text)
       const inputId = crypto.randomUUID()
       try {
-        await journal.recordUserInputWithId(inputId, text, false, [], [], [], [], undefined, replies)
+        await journal.recordUserInputWithId(inputId, text, false, [], [], [], [], undefined, replies, session.questionAnswerTurnId)
         session.handleUserMessage(text, false, [], inputId, [], [], 'native', replies)
-        assert.ok(events.some(event => event.type === 'message-queued' && event.id === inputId))
+        assert.ok(events.some(event => event.type === 'message-queued' && event.id === inputId && event.answerTurnId === turn.turnId))
+        assert.equal(journal.pendingUserInputs.find(item => item.id === inputId)?.answerTurnId, turn.turnId)
         assert.equal(journal.metadataSnapshot.hasPendingQuestions, false)
         if (outcome === 'aborted') session.abort()
       } finally { release() }
@@ -160,6 +161,58 @@ describe('Main 主动提问', () => {
       assert.ok(!JSON.stringify(edited.initialMessages).includes('选项0'))
       assert.ok(!JSON.stringify(edited.initialMessages).includes('旧根请求'))
       assert.deepEqual(edited.initialMessages.map(userTurn).filter(Boolean).map(turn => turn!.startsTurn), [true])
+    })
+  }
+
+  for (const skippedLater of [false, true]) {
+    it('整组答复自由改写后可连续编辑，重启保留用户已处理的问题（随后全部跳过：' + skippedLater + '）', async (t) => {
+      const dir = await mkdtemp(join(tmpdir(), 'whycode-question-edit-'))
+      t.after(() => rm(dir, { recursive: true, force: true }))
+      const store = new SessionStore(dir)
+      let journal = await store.create({ modelId: 'test:ask-user', workspace: localWorkspace(null) })
+      const model = new MockLanguageModelV4({ doStream: [questionStep(), finalStep(), finalStep(), finalStep(), finalStep()] })
+      const events: CoreEvent[] = []
+      let session = createSession(model, events, undefined, journal)
+      const sendRoot = async (text: string, replies?: Parameters<typeof session.handleUserMessage>[7]) => {
+        const id = crypto.randomUUID()
+        await journal.recordUserInputWithId(id, text, true, [], [], [], [], undefined, replies)
+        return session.handleUserMessage(text, false, [], id, [], [], 'native', replies)
+      }
+      const recordStart = async () => {
+        const start = events.findLast(event => event.type === 'turn-start')!
+        await journal.recordViewEvents([{ type: 'core-event', event: start }])
+        return start.turnId
+      }
+      assert.equal(await sendRoot('请提问'), 'waiting-user')
+      await recordStart()
+      const questions = session.pendingQuestions
+      const ids = questions.map(item => item.id)
+      const answers = ids.map((id, index) => ({ id, answer: index === 1 ? null : '选项' + index }))
+      const text = formatQuestionSubmission(questions, answers)!
+      if (skippedLater) {
+        assert.equal(await sendRoot('稍后再答'), 'waiting-user')
+      } else {
+        assert.equal(await sendRoot(text, answers), 'completed')
+      }
+      let latest = await recordStart()
+      if (skippedLater) await session.skipUserQuestions(ids)
+      for (const userText of ['好的，我等一下再回答你', '我刚刚都说了什么呢']) {
+        journal = await store.open(journal.sessionId)
+        assert.ok(journal.messagesBeforeTurn(latest))
+        session = createSession(model, events, undefined, journal)
+        const edit = await session.prepareLatestTurnEdit(latest, userText)
+        edit.accept()
+        assert.equal(await edit.startMain(), 'completed')
+        latest = await recordStart()
+        assert.deepEqual(session.pendingQuestions, [])
+        assert.equal(journal.metadataSnapshot.hasPendingQuestions, false)
+        const prompt = model.doStreamCalls.at(-1)!.prompt
+        assert.equal(prompt.filter(msg => msg.role === 'user' && JSON.stringify(msg.content).includes(userText)).length, 1)
+        assert.ok(!JSON.stringify(prompt).includes('选项0'))
+      }
+      const reopened = await store.open(journal.sessionId)
+      assert.deepEqual(createSession(model, [], undefined, reopened).pendingQuestions, [])
+      assert.ok(reopened.messagesBeforeTurn(latest))
     })
   }
 

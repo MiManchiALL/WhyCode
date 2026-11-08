@@ -4,18 +4,22 @@ import { PdfDraftStrip } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
 import { UserMessageBubble } from './user-message-card.tsx'
 
-/** 提交归属仍由 ComposerSubmissions 持有；这里仅展示，不能编辑或写入会话历史。 */
-export function PendingUserMessage({ draft }: { draft: ComposerDraft }) {
+/** 单条输入只在正式时间线接替前显示预览。 */
+export function PendingUserMessage(props: { draft: ComposerDraft } | { answer: string }) {
+  const draft = 'draft' in props ? props.draft : undefined
+  const text = 'answer' in props ? props.answer : props.draft.text
   return (
     <div
-      aria-label="正在提交的消息"
-      aria-busy="true"
+      aria-label={draft ? '正在提交的消息' : '已提交的回答'}
+      aria-busy={draft ? true : undefined}
       className="wc-user-message-copy mb-2 ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2"
     >
-      <PendingImageGallery drafts={draft.images} />
-      <PdfDraftStrip drafts={draft.pdfs} variant="message" />
-      <SkillBadges skills={draft.skills} />
-      {draft.text && <UserMessageBubble text={draft.text} btw={Boolean(draft.btwMode)} />}
+      {draft && <>
+        <PendingImageGallery drafts={draft.images} />
+        <PdfDraftStrip drafts={draft.pdfs} variant="message" />
+        <SkillBadges skills={draft.skills} />
+      </>}
+      {text && <UserMessageBubble text={text} btw={Boolean(draft?.btwMode)} />}
       <div aria-hidden="true" className="wc-message-actions wc-type-caption -mt-1" />
     </div>
   )

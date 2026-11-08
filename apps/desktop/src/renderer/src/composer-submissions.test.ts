@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { ComposerDraftStore, composerDraftKey, type ComposerDraft } from './composer-drafts.ts'
-import { ComposerSubmissions, composerInputIds, composerSubmissionPreview, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
+import { ComposerSubmissions, presentPendingInputs, composerInputIds, composerSubmissionPreview, prependComposerDraft, type ComposerSubmission } from './composer-submissions.ts'
 import { applyCoreEvent, createConversationState, type Block } from '../../shared/conversation-state.ts'
 import type { QueuedUserMessage } from '@whycode/core/events'
 
@@ -172,3 +172,18 @@ function submission(runtimeId: string, sessionId: string | null): ComposerSubmis
 function draft(text: string): ComposerDraft {
   return { text, images: [], pdfs: [], skills: [], btwMode: null, restoredInputIds: [] }
 }
+
+it('本回合已接收的回答显示一个气泡，普通输入保留队列，正式注入及快照重放不重复', () => {
+  const working: Block[] = [{ kind: 'user', id: 'root', inputId: 'root', startsTurn: true, turnId: 'turn', text: '请求' }]
+  const answer = { id: 'answer', text: '已选择', answerTurnId: 'turn', questionIds: ['q'] }
+  const ordinary = { id: 'later', text: '下轮输入' }
+  const received = presentPendingInputs(working, [ordinary, answer], true)
+  assert.deepEqual(received.queue, [ordinary])
+  assert.equal(working.length, 1)
+  assert.deepEqual(received.answers, [answer])
+  const delivered: Block[] = [...working, { kind: 'user', id: 'canonical', inputId: answer.id, text: answer.text }]
+  assert.deepEqual(presentPendingInputs(delivered, [ordinary, answer], true).answers, [])
+  assert.deepEqual(presentPendingInputs(working, [answer], false).queue, [answer])
+  const deferred = { id: 'deferred', text: '稍后送达的回答', questionIds: ['q'] }
+  assert.deepEqual(presentPendingInputs(working, [deferred], true).queue, [deferred])
+})

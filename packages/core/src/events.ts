@@ -91,10 +91,12 @@ export interface ContextUsageInfo {
 }
 
 export * from './user-questions.ts'
-import type { PendingQuestion, QuestionSubmission, UserQuestion } from './user-questions.ts'
+import type { PendingQuestion, QuestionReply, QuestionSubmission, UserQuestion } from './user-questions.ts'
 
 /** 忙时输入始终把正文和附件作为一个有序单元传递、恢复和展示。 */
 export interface QueuedUserMessage {
+  /** 已接收、等待当前 Main 步骤结束的回答。普通排队输入没有这个归属。 */
+  answerTurnId?: string
   questionIds?: string[]
   id: string
   text: string
@@ -182,7 +184,7 @@ export type CoreEvent =
   | { type: 'agent-status'; status: AgentStatus }
   | { type: 'error'; message: string; recoverable: boolean }
   | { type: 'user-question'; question: UserQuestion }
-  | { type: 'user-question-resolved'; resolutions: QuestionSubmission }
+  | { type: 'user-question-resolved'; resolutions: QuestionReply }
   /** 宿主已把空闲输入权威分类为新根消息；仅供当前窗口即时显示，不进入 ViewTimeline。 */
   | {
       type: 'user-message-accepted'
@@ -209,7 +211,7 @@ export type CoreEvent =
   | {
       type: 'user-message-edited'
       questions?: PendingQuestion[]
-      questionReply?: QuestionSubmission
+      questionReply?: QuestionReply
       previousTurnId: string
       inputId: string
       text: string

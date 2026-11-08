@@ -1,6 +1,6 @@
 import { modelMessageSchema, type ModelMessage } from 'ai'
 import { z } from 'zod'
-import { questionSubmissionSchema, type QuestionSubmission } from '../user-questions.ts'
+import { questionReplySchema, type QuestionReply } from '../user-questions.ts'
 import { conversationMetadataSchema } from '../context/user-turn.ts'
 import {
   consensusPersistedStateSchema,
@@ -82,9 +82,15 @@ function validateUserInputContent(
     text: string
     attachments?: readonly ImageAttachment[]
     imageDelivery?: ImageDeliveryMode
+    answerTurnId?: string
+    questionReply?: QuestionReply
+    startsTurn?: boolean
   },
   ctx: z.RefinementCtx,
 ): void {
+  if (input.answerTurnId && (!input.questionReply || input.startsTurn)) {
+    ctx.addIssue({ code: 'custom', path: ['answerTurnId'], message: '只有回合内的提问回答可指定交付回合' })
+  }
   const hasAttachments = Boolean(input.attachments?.length)
   if (input.text.length === 0 && !hasAttachments) {
     ctx.addIssue({
@@ -116,7 +122,8 @@ const pendingUserInputSchema = z.object({
   imageDelivery: imageDeliveryModeSchema.optional(),
   pdfAttachments: pdfAttachmentsSchema.optional(),
   skills: z.array(activatedSkillSchema).min(1).max(SKILL_MAX_SELECTIONS_PER_MESSAGE).optional(),
-  questionReply: questionSubmissionSchema.optional(),
+  questionReply: questionReplySchema.optional(),
+  answerTurnId: z.string().min(1).optional(),
   state: z.enum(['queued', 'restored']),
 }).superRefine(validateUserInputContent)
 
@@ -177,7 +184,8 @@ const userInputSchema = chainedEntrySchema.extend({
   consumesInputIds: z.array(entryIdSchema).min(1).optional(),
   /** 该根输入原位替换的旧回合；只由“中止后编辑”事务写入。 */
   replacesTurnId: z.string().min(1).optional(),
-  questionReply: questionSubmissionSchema.optional(),
+  questionReply: questionReplySchema.optional(),
+  answerTurnId: z.string().min(1).optional(),
 }).superRefine((input, ctx) => {
   validateUserInputContent(input, ctx)
   if (input.replacesTurnId && !input.startsTurn) {
@@ -627,7 +635,8 @@ export interface SessionRecorder {
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionSubmission,
+    questionReply?: QuestionReply,
+    answerTurnId?: string,
   ): Promise<void>
   recordBtwInput(
     mode: BtwMode,
@@ -653,7 +662,7 @@ export interface SessionRecorder {
     pdfAttachments?: readonly PdfAttachment[],
     skills?: readonly ActivatedSkill[],
     imageDelivery?: ImageDeliveryMode,
-    questionReply?: QuestionSubmission,
+    questionReply?: QuestionReply,
   ): Promise<void>
   recordQuestionSkips(ids: string[]): Promise<void>
   recordViewEvents(events: RecordedViewEvent[]): Promise<void>
