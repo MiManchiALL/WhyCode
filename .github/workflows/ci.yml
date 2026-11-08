@@ -92,6 +92,18 @@ jobs:
         if: steps.scope.outputs.code == 'true'
         run: pnpm typecheck
 
+      - name: Install Electron for desktop tests
+        if: steps.scope.outputs.code == 'true'
+        timeout-minutes: 8
+        run: |
+          pnpm --filter @whycode/desktop exec install-electron
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'Retrying Electron installation from npmmirror using the checksums bundled with Electron.'
+            $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
+            $env:ELECTRON_CUSTOM_DIR = '{{ version }}'
+            pnpm --filter @whycode/desktop exec install-electron
+          }
+
       - name: Test
         if: steps.scope.outputs.code == 'true'
         timeout-minutes: 15
