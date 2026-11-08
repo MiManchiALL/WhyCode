@@ -117,7 +117,10 @@ describe('子代理定义与父工具协议', () => {
     })
     assert.match(tools[0]!.prompt, /目标、已知事实、范围与禁区/)
     assert.match(tools[0]!.prompt, /预期行为、验收标准/)
-    assert.match(tools[0]!.prompt, /不要把尚未完成的理解和方案选择整体交给子代理/)
+    assert.match(tools[0]!.prompt, /可访问的绝对路径.*附件 ID 无法转交/)
+    assert.match(tools[0]!.prompt, /优先复用职责和历史匹配的实例/)
+    assert.match(tools[0]!.prompt, /结果自动交付到正在执行的父回合/)
+    assert.doesNotMatch(tools[0]!.prompt, /过度使用|轮询/)
     assert.equal((await validateToolInput(tools[0]!, {
       name: 'explore',
       prompt: '旧版缺少任务描述',
