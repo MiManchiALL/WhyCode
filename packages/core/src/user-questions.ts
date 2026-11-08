@@ -71,12 +71,6 @@ export function editedQuestionSubmission(questions: PendingQuestion[], previous:
   const answered = retained.filter(item => item.answer !== null)
   if (!answered.length) return retained
   const linked = () => retained.map(item => item.answer === null ? item : { id: item.id, answer: { source: 'message' as const } })
-  if (answered.length === 1) {
-    const id = answered[0]!.id
-    const prefix = formatQuestionAnswer(byId.get(id)!, '')
-    const answer = (text.startsWith(prefix) ? text.slice(prefix.length) : text).trim()
-    return answer ? retained.map(item => item.id === id ? { id, answer } : item) : linked()
-  }
   const prefixes = answered.map(item => formatQuestionAnswer(byId.get(item.id)!, ''))
   const updates = new Map<string, string>()
   let offset = 0

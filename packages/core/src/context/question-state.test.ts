@@ -14,6 +14,18 @@ describe('异步提问身份', () => {
     assert.deepEqual(pendingUserQuestions(messages), [...first, ...second])
     assert.deepEqual(pendingUserQuestions([...messages, withQuestionReply(messages[2]!, [{ id: first[0]!.id, answer: 'Linux' }])]), second)
   })
+  it('只有一题作答时，自由改写指向用户消息，保留原题格式才显示逐题答案', () => {
+    for (const questions of [first, [...first, ...second]]) {
+      const original = questions.map((item, i) => ({ id: item.id, answer: i === 0 ? 'Windows' : null }))
+      const linked = original.map(item => item.answer === null ? item : { id: item.id, answer: { source: 'message' } })
+      const free = editedQuestionSubmission(questions, original, '等一下我告诉你')
+      assert.deepEqual(free, linked)
+      const updated = original.map(item => item.answer === null ? item : { ...item, answer: 'Linux' })
+      const formatted = formatQuestionSubmission(questions, updated)
+      assert.ok(formatted)
+      assert.deepEqual(editedQuestionSubmission(questions, free, formatted), updated)
+    }
+  })
   it('整组答复保留同名题、跳过与多段正文，自由改写和再次编辑仍对应原题', () => {
     const all = [...first, ...second, ...questionsForBatch(batch('c'))]
     const answers = all.map((item, i) => ({ id: item.id, answer: i === 1 ? null : '第' + i + '个回答' }))
