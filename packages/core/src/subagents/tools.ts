@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { buildTool, type ToolDefinition } from '../tools/tool.ts'
 import {
+  MAX_CONCURRENT_SUBAGENTS_PER_PARENT,
   MAX_SUBAGENT_PROMPT_CHARS,
   subagentTaskDescriptionSchema,
   subagentNameSchema,
@@ -45,14 +46,13 @@ export function createSubagentTools(host: SubagentToolHost): ToolDefinition[] {
     name: SUBAGENT_TOOL_NAME,
     description: '启动、发送消息、停止或查看当前会话的子代理',
     prompt: [
-      'action=spawn：把可独立并行、需要专门调查或能返回明确结果的任务委派给子代理；填写 name、description、prompt。',
-      'name 来自 <available_subagents> 及最新增量通知；同一 name 可创建多个实例。description 简短标识本次任务。定义决定工具与权限，调用参数不能扩展。',
-      '委派必须自包含：交代目标、已知事实、范围与禁区、期望结果和证据；实施任务还需写明文件或符号、预期行为、验收标准及是否允许修改。子代理看不到父会话其它消息。',
-      'action=send：填写 subagent_id、prompt；运行中在下一稳定步骤交付，已结束则沿用独立历史继续。',
-      'action=stop：填写 subagent_id；停止该实例并保留已产生的结果与历史，后续仍可 send 继续。',
-      'action=list：不填其它字段，查看当前会话保留实例的 ID、描述与状态；复用职责匹配的实例。',
-      '当前会话最多同时运行 8 个子代理。启动与发送立即返回稳定 ID，终态自动交付到正在执行的父回合，不要轮询。',
-      '不要把尚未完成的理解和方案选择整体交给子代理，也不要要求子代理向用户提问或再创建子代理。',
+      'action=spawn 按 <available_subagents> 及最新增量选择 name，用 description 简述任务。同一定义可创建多个实例。',
+      '新实例看不到父会话的其它消息。prompt 写明目标、已知事实、范围与禁区、期望结果和证据。实施任务还需写明文件或符号、预期行为、验收标准及是否允许修改。',
+      '工具与权限受定义和宿主约束。检查文档时提供可访问的绝对路径，父会话的附件 ID 无法转交。视觉核验交给具备视觉能力的代理，向用户提问或进一步委派由父代理负责。',
+      'action=send 用 subagent_id 和 prompt 补充任务。运行中的实例在下一稳定步骤收到消息，已结束的实例沿用自己的历史继续。',
+      'action=stop 用 subagent_id 停止指定实例，保留已有结果和历史，之后仍可用 send 继续。',
+      'action=list 只填 action，返回当前会话保留实例的 ID、任务描述和状态。优先复用职责和历史匹配的实例。',
+      `每个父会话最多同时运行 ${MAX_CONCURRENT_SUBAGENTS_PER_PARENT} 个子代理。spawn 和 send 立即返回稳定的 subagent_id，结果自动交付到正在执行的父回合。`,
     ].join('\n'),
     inputSchema,
     isReadOnly: false,

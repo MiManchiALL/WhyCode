@@ -193,25 +193,21 @@ describe('通用 Agent 提示约束', () => {
     assert.doesNotMatch(prompt, /PauseTaskPlan/)
   })
 
-  it('父代理并行委派后继续不重叠工作，并保留最终综合责任', () => {
+  it('父代理按需并行委派，在当前回合等待结果并完成用户任务', () => {
     const prompt = buildSystemPrompt({
       projectDir: 'C:\\work\\demo',
       osPlatform: 'win32',
       subagentsEnabled: true,
     })
 
-    assert.match(prompt, /不要与子代理重复同一工作/)
-    assert.match(prompt, /多个互不依赖的委派在同一模型步骤并行启动/)
-    assert.match(prompt, /优先继续用户目标中不依赖且不重叠的工作/)
-    assert.match(prompt, /每个终态到达时把结果作为阶段进展/)
-    assert.match(prompt, /当前 turn 仍有未交付激活时，不得猜测、抢跑或给出最终结论/)
-    assert.match(prompt, /用一次简短说明结束当前响应并等待，不要重复播报/)
-    assert.match(prompt, /WhyCode 会保持本 turn 并允许用户插话/)
-    assert.match(prompt, /全部终态交付只是允许最终答复的必要条件/)
-    assert.match(prompt, /只有任务本身完成时才综合并最终答复/)
-    assert.match(prompt, /优先使用同一 subagent_id/)
-    assert.match(prompt, /action=list/)
-    assert.doesNotMatch(prompt, /<available_subagents>/)
+    assert.match(prompt, /并行处理独立查询.*保护主会话的上下文/)
+    assert.match(prompt, /避免过度使用子代理.*不要重复已委派的工作/)
+    assert.match(prompt, /同一模型步骤并行委派.*继续做不依赖这些结果的工作/)
+    assert.match(prompt, /每份结果到达时.*按需核验.*综合结果并决定方案/)
+    assert.match(prompt, /只剩等待时.*结束本次响应.*当前回合等待结果或用户插话/)
+    assert.match(prompt, /不要用 sleep 或轮询/)
+    assert.match(prompt, /收齐本回合的子代理结果后.*继续推进.*再给最终答复/)
+    assert.doesNotMatch(prompt, /<available_subagents>|subagent_id|action=spawn/)
   })
 
   it('子代理只看到自己的身份、独立计划与固定工具档位', () => {
