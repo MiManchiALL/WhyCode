@@ -56,6 +56,11 @@ describe('子代理目录请求与恢复生命周期', () => {
     assert.match(requests[0]![2]!, /<available_subagents>/)
     assert.match(requests[0]![3]!, /whycode-skill-catalog/)
     assert.doesNotMatch(requests[0]![0]!, /available_subagents|"profile"/)
+    const subagentTool = f.model.doStreamCalls[0]!.tools?.find(tool => tool.name === 'Subagent')
+    assert.ok(subagentTool?.type === 'function')
+    const idParameter = subagentTool.inputSchema.properties?.subagent_id
+    assert.ok(idParameter && typeof idParameter === 'object')
+    assert.match(idParameter.description ?? '', /依赖.*先前的工作上下文.*send 复用该实例/)
     for (const [index, call] of f.model.doStreamCalls.entries()) {
       assert.deepEqual(requests[index]!.slice(0, 4), requests[0]!.slice(0, 4))
       assert.deepEqual(call.tools, f.model.doStreamCalls[0]!.tools)
