@@ -25,7 +25,9 @@ const inputSchema = z.object({
   name: subagentNameSchema.optional().describe('spawn：可用子代理定义名称'),
   description: subagentTaskDescriptionSchema.optional().describe('spawn：本次子任务的短描述'),
   prompt: z.string().trim().min(1).max(MAX_SUBAGENT_PROMPT_CHARS).optional().describe('spawn 或 send：任务或追加消息'),
-  subagent_id: z.string().uuid().optional().describe('send 或 stop：已有子代理 ID'),
+  subagent_id: z.string().uuid().optional().describe(
+    'send 或 stop 的目标实例 ID。后续任务依赖某个子代理先前的工作上下文时，优先用 send 复用该实例。',
+  ),
 }).strict().superRefine((input, ctx) => {
   const fields: readonly string[] = {
     spawn: ['name', 'description', 'prompt'],
@@ -51,7 +53,7 @@ export function createSubagentTools(host: SubagentToolHost): ToolDefinition[] {
       '工具与权限受定义和宿主约束。检查文档时提供可访问的绝对路径，父会话的附件 ID 无法转交。视觉核验交给具备视觉能力的代理，向用户提问或进一步委派由父代理负责。',
       'action=send 用 subagent_id 和 prompt 补充任务。运行中的实例在下一稳定步骤收到消息，已结束的实例沿用自己的历史继续。',
       'action=stop 用 subagent_id 停止指定实例，保留已有结果和历史，之后仍可用 send 继续。',
-      'action=list 只填 action，返回当前会话保留实例的 ID、任务描述和状态。优先复用职责和历史匹配的实例。',
+      'action=list 只填 action，返回当前会话保留实例的 ID、任务描述和状态。',
       `每个父会话最多同时运行 ${MAX_CONCURRENT_SUBAGENTS_PER_PARENT} 个子代理。spawn 和 send 立即返回稳定的 subagent_id，结果自动交付到正在执行的父回合。`,
     ].join('\n'),
     inputSchema,
