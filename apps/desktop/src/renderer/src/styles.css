@@ -1477,6 +1477,11 @@ html[data-wc-panel-resizing='true']::after {
   background: #e7f5e9;
 }
 
+.wc-code-line[data-tone='context'][data-focus-line] {
+  border-left-color: var(--wc-blue-ink);
+  background: var(--wc-blue);
+}
+
 .wc-code-line[data-tone='removed'] {
   border-left-color: #cf493f;
   background: #fae7e4;
@@ -1594,6 +1599,12 @@ html[data-wc-panel-resizing='true']::after {
 .wc-markdown .wc-web-link:hover,
 .wc-markdown .wc-web-link:focus-visible {
   text-decoration-color: currentColor;
+}
+
+.wc-markdown .wc-file-link:hover,
+.wc-markdown .wc-file-link:focus-visible {
+  border-color: var(--wc-blue-ink);
+  background: var(--wc-blue);
 }
 
 .wc-site-icon {

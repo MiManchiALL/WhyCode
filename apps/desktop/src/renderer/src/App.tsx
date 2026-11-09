@@ -115,6 +115,7 @@ import {
 } from './composer-submissions.ts'
 import { PendingUserMessage } from './pending-user-message.tsx'
 import { WorkspaceContextBar } from './workspace-context-bar.tsx'
+import { ConversationFileLinks } from './markdown-content.tsx'
 import { canChangeSessionWorkspace } from './workspace-selection.ts'
 import { SkillChips, ComposerSlashMenu } from './skill-picker.tsx'
 import { useScrollIntent } from './use-scroll-intent.ts'
@@ -2388,41 +2389,43 @@ export function App() {
                       </p>
                     </div>
                   )}
-                  <ConversationView
-                    remote={workspace.mode === 'ssh'}
-                    runtimeId={runtimeId}
-                    markdownViewOwner={markdownViewOwner}
-                    pendingSessionId={loadingConversation ? resumingSessionId : null}
-                    onReady={restoreConversationAfterRender}
-                    active={resumingSessionId === null}
-                    items={btwPresentation.items}
-                    latestBtwConversationId={btwPresentation.latestBtwConversationId}
-                    expandedIds={view.expanded}
-                    editableBlockId={editableBlockId}
-                    busy={interactionBusy}
-                    checkpointRestoreAnchorIds={checkpointRestoreAnchors}
-                    checkpointRestoreToolUseId={checkpointRestoreToolUseId}
-                    fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
-                    forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
-                    forkPendingTurnId={forkPendingTurnId}
-                    skills={skillCatalog.skills}
-                    projectDir={projectDir}
-                    onCheckpointRestoreRequest={requestCheckpointRestore}
-                    onNavigate={navigateConversation}
-                    onEdit={editUserMessage}
-                    onFork={forkConversation}
-                    onOpenFilePreview={openFilePreview}
-                    onOpenChanges={showRightPanelPage}
-                    onOpenCompaction={openCompactionSummary}
-                    onToggle={toggle}
-                  >
-                    {presentedInputs.answers.map(answer => <PendingUserMessage key={answer.id} answer={answer.text} />)}
-                    {pendingMessage && <PendingUserMessage draft={pendingMessage} />}
-                    {!conversationStarted && pendingMessage && worktreePreparation && (
-                      <WorktreePreparation baseRef={worktreePreparation.baseRef} />
-                    )}
-                    {thinkingGapVisible && <ThinkingGapIndicator />}
-                  </ConversationView>
+                  <ConversationFileLinks projectDir={projectDir} onOpenFile={openFilePreview}>
+                    <ConversationView
+                      remote={workspace.mode === 'ssh'}
+                      runtimeId={runtimeId}
+                      markdownViewOwner={markdownViewOwner}
+                      pendingSessionId={loadingConversation ? resumingSessionId : null}
+                      onReady={restoreConversationAfterRender}
+                      active={resumingSessionId === null}
+                      items={btwPresentation.items}
+                      latestBtwConversationId={btwPresentation.latestBtwConversationId}
+                      expandedIds={view.expanded}
+                      editableBlockId={editableBlockId}
+                      busy={interactionBusy}
+                      checkpointRestoreAnchorIds={checkpointRestoreAnchors}
+                      checkpointRestoreToolUseId={checkpointRestoreToolUseId}
+                      fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
+                      forkSourceTurnId={forkOrigin?.sourceTurnId ?? null}
+                      forkPendingTurnId={forkPendingTurnId}
+                      skills={skillCatalog.skills}
+                      projectDir={projectDir}
+                      onCheckpointRestoreRequest={requestCheckpointRestore}
+                      onNavigate={navigateConversation}
+                      onEdit={editUserMessage}
+                      onFork={forkConversation}
+                      onOpenFilePreview={openFilePreview}
+                      onOpenChanges={showRightPanelPage}
+                      onOpenCompaction={openCompactionSummary}
+                      onToggle={toggle}
+                    >
+                      {presentedInputs.answers.map(answer => <PendingUserMessage key={answer.id} answer={answer.text} />)}
+                      {pendingMessage && <PendingUserMessage draft={pendingMessage} />}
+                      {!conversationStarted && pendingMessage && worktreePreparation && (
+                        <WorktreePreparation baseRef={worktreePreparation.baseRef} />
+                      )}
+                      {thinkingGapVisible && <ThinkingGapIndicator />}
+                    </ConversationView>
+                  </ConversationFileLinks>
                 </div>
               </main>
             </div>

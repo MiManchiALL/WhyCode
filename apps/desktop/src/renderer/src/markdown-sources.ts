@@ -1,8 +1,9 @@
 import { normalizeSourceUrl, WEB_SOURCE_CITATION_MARKER, type WebSource } from '@whycode/core/web-source'
 import type { Definition, Link, LinkReference, Nodes, Root } from 'mdast'
-import type { Nodes as HtmlNodes, Root as HtmlRoot } from 'hast'
+import type { Nodes as HtmlNodes, Properties, Root as HtmlRoot } from 'hast'
 import { toString } from 'mdast-util-to-string'
 import type { Plugin } from 'unified'
+import { markdownFileTarget } from './markdown-file-links.ts'
 
 export type SourceKind = 'git' | 'document' | 'web'
 
@@ -12,38 +13,64 @@ export interface SourceCitation {
   definition?: Definition
 }
 
-/** 汇总和渲染共用语法树中的显式链接标记，不扫描代码、HTML 或链接文字。 */
-export function sourceCitations(tree: Root): SourceCitation[] {
+function* markdownLinks(tree: Root) {
   const definitions = new Map<string, Definition>()
   for (const node of nodes(tree)) {
     if (node.type === 'definition' && !definitions.has(node.identifier)) definitions.set(node.identifier, node)
   }
-  const citations: SourceCitation[] = []
   for (const node of nodes(tree)) {
     if (node.type !== 'link' && node.type !== 'linkReference') continue
     const definition = node.type === 'linkReference' ? definitions.get(node.identifier) : undefined
     const target = node.type === 'link' ? node : definition
-    if (target?.title !== WEB_SOURCE_CITATION_MARKER) continue
-    const url = normalizeSourceUrl(target.url)
-    const title = toString(node).replace(/\s+/gu, ' ').trim()
-    if (url && title) citations.push({ node, source: { title, url }, ...(definition ? { definition } : {}) })
+    if (target) yield { node, target, definition }
+  }
+}
+
+function linkSource(node: Link | LinkReference, target: Link | Definition): WebSource | null {
+  if (target.title !== WEB_SOURCE_CITATION_MARKER) return null
+  const url = normalizeSourceUrl(target.url)
+  const title = toString(node).replace(/\s+/gu, ' ').trim()
+  return url && title ? { url, title } : null
+}
+
+/** 汇总和渲染共用语法树中的显式链接标记，不扫描代码、HTML 或链接文字。 */
+export function sourceCitations(tree: Root): SourceCitation[] {
+  const citations: SourceCitation[] = []
+  for (const { node, target, definition } of markdownLinks(tree)) {
+    const source = linkSource(node, target)
+    if (source) citations.push({ node, source, ...(definition ? { definition } : {}) })
   }
   return citations
 }
 
-export const remarkSourceCitations: Plugin<[], Root> = () => (tree, file) => {
-  file.data.whycodeSourceCitations = new Map(sourceCitations(tree).flatMap(({ node, source }) =>
-    node.position ? [[node.position.start.offset, source.url]] : []))
+export const remarkResponseLinks: Plugin<[{ files?: boolean }?], Root> = (options) => (tree, file) => {
+  const links = new Map<number, Properties>()
+  for (const { node, target } of markdownLinks(tree)) {
+    const offset = node.position?.start.offset
+    if (offset === undefined) continue
+    const source = linkSource(node, target)
+    if (source) {
+      links.set(offset, { 'data-source-citation-url': source.url })
+    } else if (options?.files) {
+      const reference = markdownFileTarget(target.url)
+      if (!reference) continue
+      // Streamdown 会把相对路径解析成网站根路径，并拦截盘符。文件只由预览按钮打开。
+      node.data ??= {}
+      node.data.hProperties = { ...node.data.hProperties, href: '#workspace-file' }
+      links.set(offset, { 'data-file-path': reference.path, 'data-file-line': reference.line })
+    }
+  }
+  file.data.whycodeResponseLinks = links
 }
 
-/** 在安全清洗之后标注实际 Markdown 链接，HTML 不能伪造引用属性。 */
-export const rehypeSourceCitations: Plugin<[], HtmlRoot> = () => (tree, file) => {
-  const citations = file.data.whycodeSourceCitations as Map<number, string>
+/** 清洗后只给同一位置的 Markdown 链接补属性，原始 HTML 不能伪造文件或来源。 */
+export const rehypeResponseLinks: Plugin<[], HtmlRoot> = () => (tree, file) => {
+  const links = file.data.whycodeResponseLinks as Map<number, Properties>
   for (const node of nodes(tree)) {
     if (node.type !== 'element' || node.tagName !== 'a') continue
     const start = node.position?.start.offset
-    const url = start === undefined ? undefined : citations.get(start)
-    if (url) node.properties['data-source-citation-url'] = url
+    const properties = start === undefined ? undefined : links.get(start)
+    if (properties) Object.assign(node.properties, properties)
   }
 }
 

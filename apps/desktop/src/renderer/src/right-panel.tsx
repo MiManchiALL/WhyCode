@@ -16,6 +16,7 @@ import {
   type RightPanelSessionState,
 } from './right-panel-state.ts'
 import { SubagentPanelContent } from './subagent-panel.tsx'
+import { ConversationFileLinks } from './markdown-content.tsx'
 import { RightPanelTabs } from './right-panel-tabs.tsx'
 import { TerminalPanel } from './terminal-panel.tsx'
 import type { WorkspaceBrowserPosition } from './workspace-browser-position.ts'
@@ -191,18 +192,20 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
     case 'subagent-overview':
     case 'subagent-transcript':
       return (
-        <SubagentPanelContent
-          active={props.active}
-          runtimeId={props.runtimeId}
-          parentSessionId={props.parentSessionId}
-          subagents={props.subagents}
-          conversationFontSize={props.conversationFontSize}
-          skills={props.skills}
-          projectDir={props.projectDir}
-          page={page}
-          onSelect={(subagentId) => props.onOpenPage({ kind: 'subagent-transcript', subagentId })}
-          onBack={() => props.onOpenPage({ kind: 'subagent-overview' })}
-        />
+        <ConversationFileLinks projectDir={props.projectDir} onOpenFile={props.onOpenPage}>
+          <SubagentPanelContent
+            active={props.active}
+            runtimeId={props.runtimeId}
+            parentSessionId={props.parentSessionId}
+            subagents={props.subagents}
+            conversationFontSize={props.conversationFontSize}
+            skills={props.skills}
+            projectDir={props.projectDir}
+            page={page}
+            onSelect={(subagentId) => props.onOpenPage({ kind: 'subagent-transcript', subagentId })}
+            onBack={() => props.onOpenPage({ kind: 'subagent-overview' })}
+          />
+        </ConversationFileLinks>
       )
   }
 }

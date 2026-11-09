@@ -77,6 +77,7 @@ describe('通用 Agent 提示约束', () => {
     const prompt = buildSystemPrompt({ projectDir: 'C:\\work\\demo', osPlatform: 'win32' })
 
     assert.equal(prompt.match(/# 正文链接与来源引用/gu)?.length, 1)
+    assert.match(prompt, /项目相对路径或绝对路径.*\[入口\]\(<src\/main.ts#L24>\)/u)
     assert.match(prompt, /普通链接使用 \[可读名称\]\(真实URL\)，提供可点击文字。任何任务中都可以使用/)
     assert.match(prompt, /仅当最终交付是调研、搜索、资料汇总或事实比较时引用来源；执行任务的中间查证不列来源。/)
     assert.match(prompt, /完整句子或分句后使用 \[来源名称\]\(真实URL "whycode:source"\)/)
@@ -228,6 +229,7 @@ describe('通用 Agent 提示约束', () => {
     })
 
     assert.match(prompt, /# 子代理身份：探索代理/)
+    assert.match(prompt, /\[入口\]\(<src\/main.ts#L24>\)/u)
     assert.match(prompt, /不得假定未提供的父会话背景/)
     assert.match(prompt, /直接推进到可交付结论/)
     assert.match(prompt, /需要计划时可使用你自己的任务计划/)

@@ -8,24 +8,26 @@ import { requestHighlight, type HighlightedLines } from './syntax-highlighting.t
 import { renderCodeLines } from './syntax-code-html.ts'
 import type { FileDiffLine } from './file-change-presentation.ts'
 import { useScrollArea } from './use-scroll-area.ts'
+import type { FileLineLocation } from './right-panel-state.ts'
 
 export function SyntaxCode({
   path,
   lines,
-  focusLine = null,
+  location,
   scroll = true,
   wrap = false,
   className = '',
 }: {
   path: string
   lines: readonly FileDiffLine[]
-  focusLine?: number | null
+  location?: FileLineLocation
   scroll?: boolean
   wrap?: boolean
   className?: string
 }) {
   const source = useMemo(() => lines.map((line) => line.text).join('\n'), [lines])
   const highlighted = useHighlightedCode(path, source)
+  const focusLine = location?.line ?? null
   const markup = useMemo(
     () => ({ __html: renderCodeLines(lines, highlighted, focusLine) }),
     [lines, highlighted, focusLine],
@@ -33,10 +35,10 @@ export function SyntaxCode({
   const { ref: scrollRef, onScroll, overscrollBehaviorY } = useScrollArea(lines, { enabled: scroll })
 
   useEffect(() => {
-    if (focusLine === null) return
+    if (!location) return
     const frame = window.requestAnimationFrame(() => {
       const container = scrollRef.current
-      const row = container?.querySelector<HTMLElement>(`[data-focus-line="${focusLine}"]`)
+      const row = container?.querySelector<HTMLElement>(`[data-focus-line="${location.line}"]`)
       if (!container || !row) return
       const top = row.getBoundingClientRect().top
         - container.getBoundingClientRect().top
@@ -44,7 +46,7 @@ export function SyntaxCode({
       container.scrollTop = Math.max(0, top - container.clientHeight * 0.32)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [focusLine, lines])
+  }, [location, lines])
 
   return (
     <div

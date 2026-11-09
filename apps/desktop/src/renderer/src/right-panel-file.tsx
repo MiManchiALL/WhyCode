@@ -60,10 +60,11 @@ function SnapshotCode({ page, preview, wrap }: { page: SnapshotPage; preview: Ch
   const beforeContent = before.ok ? before.content : null
   const afterContent = after.ok ? after.content : null
   const lines = useMemo(() => contentLines(afterContent ?? ''), [afterContent])
-  const focusLine = useMemo(() => (
-    page.source.toolName === 'EditFile' && beforeContent !== null && afterContent !== null
-      ? firstChangedLine(beforeContent, afterContent) : null
-  ), [page.source.toolName, beforeContent, afterContent])
+  const location = useMemo(() => {
+    if (page.source.toolName !== 'EditFile' || beforeContent === null || afterContent === null) return undefined
+    const line = firstChangedLine(beforeContent, afterContent)
+    return line === null ? undefined : { line }
+  }, [page.source.toolName, beforeContent, afterContent])
   if (!after.ok) return <FilePreviewMessage>{after.message}</FilePreviewMessage>
-  return <SyntaxCode path={page.path} lines={lines} focusLine={focusLine} wrap={wrap} className="flex-1" />
+  return <SyntaxCode path={page.path} lines={lines} location={location} wrap={wrap} className="flex-1" />
 }

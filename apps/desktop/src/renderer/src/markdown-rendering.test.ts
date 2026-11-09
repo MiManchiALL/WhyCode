@@ -8,6 +8,7 @@ import {
   markdownPluginsFor,
   markdownRemarkPlugins,
   MARKDOWN_REHYPE_PLUGINS,
+  MARKDOWN_REMEND_OPTIONS,
   normalizeMathDelimiters,
   parseMarkdown,
 } from './markdown-rendering.ts'
@@ -117,6 +118,39 @@ describe('Markdown 渲染', () => {
       const links = [...document.querySelectorAll('a')]
       assert.deepEqual(links.map(link => link.getAttribute('data-source-citation-url')), ['https://example.com/docs', null, null])
     }
+  })
+  it('会话文件链接保留清洗前的路径、行号和显示名称', () => {
+    const source = '[**实验对照**](</srv/project/reports/5 秒与 10 秒.md>) '
+      + '[入口](src/main.ts:24:3) [说明](<C:/工作/test%231.md#L7-L12>) [日志](notes.md) '
+      + '[行尾](./notes%3A24) [无效行](./app.ts#L0)'
+    for (const streaming of [true, false]) {
+      const doc = renderedDocument(source, streaming, true)
+      const links = [...doc.querySelectorAll('a[data-file-path]')]
+      assert.equal(links[0]?.textContent, '实验对照')
+      assert.deepEqual(links.map(link => [link.getAttribute('data-file-path'), link.getAttribute('data-file-line')]), [
+        ['/srv/project/reports/5 秒与 10 秒.md', null], ['src/main.ts', '24'], ['C:/工作/test#1.md', '7'],
+        ['notes.md', null], ['./notes:24', null], ['./app.ts', null],
+      ])
+    }
+    const definition = renderedDocument('[报告][r]\n\n[r]: <./目录/报告.md#L3>', false, true)
+    assert.equal(definition.querySelector('[data-file-path]')?.getAttribute('data-file-line'), '3')
+    assert.equal(renderedDocument(source, false).querySelector('[data-file-path]'), null)
+  })
+  it('文件入口只接受完整的 Markdown 文件链接，保持网页、来源和 HTML 的既有语义', () => {
+    const source = [
+      '[网页](https://example.com/report.md#L2) [来源](https://example.com "whycode:source")',
+      '[站点](//example.com/a.md) [锚](#L3) [脚本](javascript:24) [协议](file:///c:/a.md)',
+      '`[示例](./a.ts:3)` <a href="#workspace-file" data-file-path="/a.ts">HTML</a>',
+    ].join('\n\n')
+    for (const streaming of [true, false]) {
+      const doc = renderedDocument(source, streaming, true)
+      assert.equal(doc.querySelector('[data-file-path]'), null)
+      assert.equal(doc.querySelector('a')?.getAttribute('href'), 'https://example.com/report.md#L2')
+      assert.equal(doc.querySelector('[data-source-citation-url]')?.textContent, '来源')
+    }
+    const incomplete = renderedDocument('[入口](./src/main.ts#L', true, true)
+    assert.equal(incomplete.body.textContent, '入口')
+    assert.equal(incomplete.querySelector('a'), null)
   })
   it('公式规范化保留链接标题、定义和嵌套代码中的转义字面量', () => {
     const link = '[规范 \\[正式版\\]](https://example.com/docs "whycode:source")'
@@ -398,19 +432,20 @@ $Y_u$ 为 $3 \times 3$ 的复矩阵。`
   })
 })
 
-function renderedDocument(source: string, streaming: boolean) {
-  const html = renderedHtml(source, streaming, !streaming)
+function renderedDocument(source: string, streaming: boolean, fileLinks = false) {
+  const html = renderedHtml(source, streaming, !streaming, fileLinks)
   return parseHTML(`<!doctype html><html><body>${html}</body></html>`).document
 }
 
-function renderedHtml(source: string, streaming: boolean, renderMath: boolean) {
+function renderedHtml(source: string, streaming: boolean, renderMath: boolean, fileLinks = false) {
   const renderedSource = renderMath ? normalizeMathDelimiters(source) : source
   return renderToStaticMarkup(createElement(
     Streamdown,
     {
       mode: streaming ? 'streaming' : 'static',
       plugins: markdownPluginsFor(renderMath),
-      remarkPlugins: markdownRemarkPlugins(streaming),
+      remend: MARKDOWN_REMEND_OPTIONS,
+      remarkPlugins: markdownRemarkPlugins(streaming, fileLinks),
       rehypePlugins: MARKDOWN_REHYPE_PLUGINS,
       linkSafety: { enabled: false },
     },

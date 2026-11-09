@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FolderOpen, RefreshCw, WrapText, MousePointer2 } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
 import { MAX_TEXT_PREVIEW_BYTES, PREVIEW_SANDBOX } from '../../shared/workspace-files.ts'
-import type { RightPanelPage } from './right-panel-state.ts'
+import type { FileLineLocation, RightPanelPage } from './right-panel-state.ts'
 import { FilePreviewActions, FilePreviewMessage, FilePreviewToolbar, type FilePreviewAction } from './file-preview-controls.tsx'
 import { useWorkspaceFile } from './use-workspace-file.ts'
 import { SyntaxCode } from './syntax-code.tsx'
@@ -55,13 +55,14 @@ export function DocumentPreview({ runtimeId, page, onChange, onReferenceInBrowse
       } : undefined} />
     </FilePreviewToolbar>
     {document ? (
-      <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally} />
+      <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally}
+        location={page.source.kind === 'current' ? page.source.location : undefined} />
     ) : <FilePreviewMessage>{file.error ?? '正在读取文件…'}</FilePreviewMessage>}
   </div>
 }
 
-function DocumentBody({ document, code, wrap, onOpenExternally }: {
-  document: WorkspaceDocument; code: boolean; wrap: boolean; onOpenExternally: () => void
+function DocumentBody({ document, code, wrap, location, onOpenExternally }: {
+  document: WorkspaceDocument; code: boolean; wrap: boolean; location?: FileLineLocation; onOpenExternally: () => void
 }) {
   if (!document.url) return <FilePreviewMessage>
     <div>
@@ -70,7 +71,8 @@ function DocumentBody({ document, code, wrap, onOpenExternally }: {
         onClick={onOpenExternally}>用默认应用打开</button>}
     </div>
   </FilePreviewMessage>
-  if (code || document.format === 'markdown') return <TextDocument key={document.url} url={document.url} path={document.path} markdown={!code} wrap={wrap} />
+  if (code || document.format === 'markdown') return <TextDocument key={document.url} url={document.url}
+    path={document.path} markdown={!code} wrap={wrap} location={location} />
   // credentialless 让原生存储仅存于临时上下文，不为每个预览源留下持久数据。
   if (document.format === 'html') return (
     <iframe key={document.url} {...{ credentialless: true }} src={document.url} sandbox={PREVIEW_SANDBOX} title={document.name}
@@ -85,7 +87,9 @@ function DocumentBody({ document, code, wrap, onOpenExternally }: {
   return null
 }
 
-function TextDocument({ url, path, markdown, wrap }: { url: string; path: string; markdown: boolean; wrap: boolean }) {
+function TextDocument({ url, path, markdown, wrap, location }: {
+  url: string; path: string; markdown: boolean; wrap: boolean; location?: FileLineLocation
+}) {
   const [text, setText] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -110,7 +114,7 @@ function TextDocument({ url, path, markdown, wrap }: { url: string; path: string
   if (markdown) return (
     <div className="wc-scrollbar min-h-0 flex-1 overflow-auto p-4"><MarkdownContent text={text} /></div>
   )
-  return <SyntaxCode path={path} lines={lines} wrap={wrap} className="flex-1" />
+  return <SyntaxCode path={path} lines={lines} wrap={wrap} location={location} className="flex-1" />
 }
 
 function ImageDocument({ url, name }: { url: string; name: string }) {
