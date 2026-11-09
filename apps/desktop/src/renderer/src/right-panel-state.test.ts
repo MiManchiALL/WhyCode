@@ -444,4 +444,9 @@ it('工具与交付入口显式选择代码和预览，仍复用同一文件标�
   assert.equal(current.previewMode, 'code')
   state = openRightPanelPage(state, { ...page, previewMode: 'preview' })
   assert.deepEqual(activeRightPanelPage(state), { ...page, previewMode: 'preview', wrap: true })
+  const target = { ...page, source: { kind: 'current' as const, location: { line: 24 } }, previewMode: 'code' as const }
+  state = openRightPanelPage(state, target)
+  const storage = new MemoryStorage()
+  new RightPanelSessionStore(storage).set('test', state)
+  assert.deepEqual(activeRightPanelPage(new RightPanelSessionStore(storage).get('test')), { ...target, wrap: true })
 })

@@ -1,5 +1,5 @@
 import type { SkillSummary } from '@whycode/core/skills'
-import { fileName } from './local-files.ts'
+import { fileName, resolveWorkspaceFilePath } from './local-files.ts'
 import type { Block, ToolCall } from '../../shared/conversation-state.ts'
 import type { ConversationDisplayItem } from './conversation-btw-groups.ts'
 import {
@@ -206,7 +206,7 @@ export function toolCallFileRows(call: ToolCall, projectDir: string | null): Too
   )
   return paths.map((path) => {
     const change = changes.get(pathKey(path))
-    const fullPath = resolveDisplayPath(path, projectDir)
+    const fullPath = resolveWorkspaceFilePath(path, projectDir)
     return {
       summary: fileName(path),
       fullPath,
@@ -294,34 +294,4 @@ function appendThinkingText(current: string, next: string): string {
 
 function pathKey(path: string): string {
   return path.replaceAll('\\', '/')
-}
-
-function resolveDisplayPath(path: string, projectDir: string | null): string {
-  if (!projectDir || isAbsolutePath(path)) return path
-
-  const separator = projectDir.includes('\\') ? '\\' : '/'
-  const normalizedBase = projectDir.replaceAll('\\', '/')
-  const normalizedPath = path.replaceAll('\\', '/')
-  const drive = normalizedBase.match(/^([A-Za-z]:)\//u)?.[1] ?? ''
-  const unc = normalizedBase.startsWith('//')
-  const rooted = normalizedBase.startsWith('/')
-  const prefix = drive ? `${drive}/` : unc ? '//' : rooted ? '/' : ''
-  const baseWithoutRoot = normalizedBase.slice(prefix.length)
-  const parts = baseWithoutRoot.split('/').filter(Boolean)
-  const protectedParts = unc ? Math.min(2, parts.length) : 0
-
-  for (const part of normalizedPath.split('/')) {
-    if (!part || part === '.') continue
-    if (part === '..') {
-      if (parts.length > protectedParts) parts.pop()
-      continue
-    }
-    parts.push(part)
-  }
-
-  return `${prefix}${parts.join('/')}`.replaceAll('/', separator)
-}
-
-function isAbsolutePath(path: string): boolean {
-  return /^[A-Za-z]:[\\/]/u.test(path) || /^[\\/]{2}/u.test(path) || path.startsWith('/')
 }

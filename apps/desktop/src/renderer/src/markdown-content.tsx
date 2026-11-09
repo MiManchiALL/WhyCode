@@ -1,4 +1,5 @@
 import {
+  createContext,
   memo,
   startTransition,
   useCallback,
@@ -9,11 +10,12 @@ import {
   useState,
   type ComponentProps,
   type MouseEvent,
+  type ReactNode,
 } from 'react'
 import { SourceIcon } from './source-capsules.tsx'
 import { SiteIcon } from './site-icon.tsx'
 import { Streamdown, type Components } from 'streamdown'
-import { MarkdownAnchor, MarkdownUnorderedList } from './markdown-elements.ts'
+import { MarkdownAnchor, MarkdownFileLink, MarkdownUnorderedList, type FileLinkNavigation } from './markdown-elements.ts'
 import { MarkdownTable } from './markdown-table.tsx'
 import { MarkdownCodeBlock } from './markdown-code-block.tsx'
 import { ResponseSourcesContext } from './response-presentation.ts'
@@ -22,6 +24,7 @@ import {
   markdownPluginsFor,
   markdownRemarkPlugins,
   MARKDOWN_REHYPE_PLUGINS,
+  MARKDOWN_REMEND_OPTIONS,
   normalizeMathDelimiters,
 } from './markdown-rendering.ts'
 import {
@@ -31,6 +34,15 @@ import {
 
 const MARKDOWN_CONTROLS = { table: false } as const
 const LINK_SAFETY = { enabled: false } as const
+
+const FileLinkContext = createContext<FileLinkNavigation | null>(null)
+
+export function ConversationFileLinks({ projectDir, onOpenFile, children }: {
+  projectDir: string | null; onOpenFile: FileLinkNavigation['onOpenFile']; children: ReactNode
+}) {
+  const value = useMemo(() => projectDir ? { projectDir, onOpenFile } : null, [projectDir, onOpenFile])
+  return <FileLinkContext value={value}>{children}</FileLinkContext>
+}
 
 export const MarkdownContent = memo(function MarkdownContent({
   text,
@@ -42,6 +54,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   renderMath?: boolean
 }) {
   const response = useContext(ResponseSourcesContext)
+  const fileLinks = useContext(FileLinkContext)
   const rootRef = useRef<HTMLDivElement>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -95,7 +108,8 @@ export const MarkdownContent = memo(function MarkdownContent({
         components={components}
         linkSafety={LINK_SAFETY}
         plugins={markdownPluginsFor(mathEnabled)}
-        remarkPlugins={markdownRemarkPlugins(effectiveStreaming)}
+        remend={MARKDOWN_REMEND_OPTIONS}
+        remarkPlugins={markdownRemarkPlugins(effectiveStreaming, !!fileLinks)}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
       >
         {renderedText}
@@ -105,9 +119,15 @@ export const MarkdownContent = memo(function MarkdownContent({
 })
 
 /** 链接直接订阅回答投影，流式块缓存也能在正常完成时切换到引用展示。 */
-function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-citation-url': citationUrl, ...props }:
-  ComponentProps<typeof MarkdownAnchor> & { onSourceClick: (url: string) => void; 'data-source-citation-url'?: string }) {
+function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-citation-url': citationUrl,
+  'data-file-path': filePath, 'data-file-line': line, ...props }: ComponentProps<typeof MarkdownAnchor> & {
+    onSourceClick: (url: string) => void; 'data-source-citation-url'?: string; 'data-file-path'?: string; 'data-file-line'?: number
+  }) {
   const response = useContext(ResponseSourcesContext)
+  const navigation = useContext(FileLinkContext)
+  if (filePath && navigation) {
+    return <MarkdownFileLink {...navigation} path={filePath} line={line}>{children}</MarkdownFileLink>
+  }
   const sourceUrl = normalizeSourceUrl(href)
   const source = citationUrl ? response?.sources.find(source => source.url === citationUrl) : undefined
   const siteOrigin = sourceUrl && !citationUrl ? new URL(sourceUrl).origin : null

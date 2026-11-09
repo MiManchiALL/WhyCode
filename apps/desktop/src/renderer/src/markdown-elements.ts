@@ -1,4 +1,7 @@
-import { createElement, type ComponentProps } from 'react'
+import { createElement, type ComponentProps, type ReactNode } from 'react'
+import { fileName, resolveWorkspaceFilePath, isWindowsAbsolutePath } from './local-files.ts'
+import type { RightPanelPage } from './right-panel-state.ts'
+import type { MarkdownFileTarget } from './markdown-file-links.ts'
 
 type MarkdownElementProps<Tag extends 'a' | 'ul'> = ComponentProps<Tag> & {
   node?: unknown
@@ -38,8 +41,28 @@ export function MarkdownAnchor({
       className,
       inlineSource ? 'wc-inline-source' : webLink ? 'wc-web-link wc-focus-ring' : 'underline',
     ),
-    'data-incomplete': href === 'streamdown:incomplete-link',
     'data-streamdown': 'link',
+  }, children)
+}
+
+export interface FileLinkNavigation {
+  projectDir: string
+  onOpenFile: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
+}
+
+export function MarkdownFileLink({ path, line, projectDir, onOpenFile, children }:
+  MarkdownFileTarget & FileLinkNavigation & { children?: ReactNode }) {
+  // Windows 会把 POSIX 根路径解释到当前盘符，两种工作区的绝对路径不能互换。
+  if (isWindowsAbsolutePath(projectDir) ? path.startsWith('/') : isWindowsAbsolutePath(path)) return children
+  const fullPath = resolveWorkspaceFilePath(path, projectDir)
+  return createElement('button', {
+    type: 'button',
+    className: 'wc-path-reference wc-file-link wc-focus-ring',
+    title: line ? `${fullPath}:${line}` : fullPath,
+    onClick: () => onOpenFile({
+      kind: 'file', path: fullPath, name: fileName(fullPath), previewMode: line ? 'code' : 'preview',
+      source: { kind: 'current', ...(line ? { location: { line } } : {}) },
+    }),
   }, children)
 }
 

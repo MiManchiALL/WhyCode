@@ -9,13 +9,15 @@ export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
 
 export type FilePreviewToolName = 'WriteFile' | 'EditFile'
 
+export interface FileLineLocation { line: number }
+
 export type RightPanelFileSource =
   | {
       kind: 'snapshot'
       toolUseId: string
       toolName: FilePreviewToolName
     }
-  | { kind: 'current' }
+  | { kind: 'current'; location?: FileLineLocation }
 
 export type BrowserReferenceRequest = { kind: 'new' } | { kind: 'edit'; draftId: string }
 
@@ -408,7 +410,13 @@ function parsePage(value: unknown): RightPanelPage | null {
 function parseFileSource(value: unknown): RightPanelFileSource | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const source = value as Record<string, unknown>
-  if (source.kind === 'current') return { kind: source.kind }
+  if (source.kind === 'current') {
+    if (source.location === undefined) return { kind: source.kind }
+    const location = source.location
+    return location && typeof location === 'object' && 'line' in location
+      && typeof location.line === 'number' && Number.isSafeInteger(location.line) && location.line > 0
+      ? { kind: source.kind, location: { line: location.line } } : null
+  }
   if (
     source.kind === 'snapshot'
     && typeof source.toolUseId === 'string'

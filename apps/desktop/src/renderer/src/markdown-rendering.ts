@@ -6,7 +6,7 @@ import remarkFrontmatter from 'remark-frontmatter'
 import remarkParse from 'remark-parse'
 import { unified, type Pluggable } from 'unified'
 import { defaultRehypePlugins, defaultRemarkPlugins } from 'streamdown'
-import { rehypeSourceCitations, remarkSourceCitations } from './markdown-sources.ts'
+import { rehypeResponseLinks, remarkResponseLinks } from './markdown-sources.ts'
 import { remarkMathSyntax } from './markdown-math.ts'
 
 // GFM 和中文扩展各自注册删除线语法，两处都必须保留数值范围中的单波浪号。
@@ -19,14 +19,15 @@ const MARKDOWN_CJK = {
   remarkPlugins: [...cjk.remarkPluginsBefore, ...CJK_REMARK_PLUGINS_AFTER],
 }
 const BASE_MARKDOWN_PLUGINS = { cjk: MARKDOWN_CJK } as const
-const STREAMING_REMARK_PLUGINS = [
-  ...Object.entries(defaultRemarkPlugins).map(([name, plugin]) =>
-    name === 'gfm' ? doubleTildeOnly(plugin) : plugin,
-  ),
-  remarkSourceCitations,
-]
+const BASE_REMARK_PLUGINS = Object.entries(defaultRemarkPlugins).map(([name, plugin]) =>
+  name === 'gfm' ? doubleTildeOnly(plugin) : plugin,
+)
+const STREAMING_REMARK_PLUGINS = [...BASE_REMARK_PLUGINS, remarkResponseLinks]
 const MARKDOWN_REMARK_PLUGINS = [...STREAMING_REMARK_PLUGINS, remarkFrontmatter]
-export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeSourceCitations]
+const STREAMING_FILE_REMARK_PLUGINS: Pluggable[] = [...BASE_REMARK_PLUGINS, [remarkResponseLinks, { files: true }]]
+const FILE_REMARK_PLUGINS = [...STREAMING_FILE_REMARK_PLUGINS, remarkFrontmatter]
+export const MARKDOWN_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeResponseLinks]
+export const MARKDOWN_REMEND_OPTIONS = { linkMode: 'text-only' } as const
 
 const SETTLED_MARKDOWN_PLUGINS = {
   ...BASE_MARKDOWN_PLUGINS,
@@ -54,7 +55,8 @@ export function markdownPluginsFor(renderMath: boolean) {
   return renderMath ? SETTLED_MARKDOWN_PLUGINS : BASE_MARKDOWN_PLUGINS
 }
 
-export function markdownRemarkPlugins(streaming = false) {
+export function markdownRemarkPlugins(streaming = false, fileLinks = false) {
+  if (fileLinks) return streaming ? STREAMING_FILE_REMARK_PLUGINS : FILE_REMARK_PLUGINS
   return streaming ? STREAMING_REMARK_PLUGINS : MARKDOWN_REMARK_PLUGINS
 }
 
