@@ -347,18 +347,20 @@ export function App() {
     return true
   }, [releaseConversationScroll])
   const history = useConversationHistory({
-    prepend: (pages, isCurrent) => {
-      if (!isCurrent()) return
+    prepend: (pages) => {
       const scroller = scrollRef.current
       if (scroller) pendingScrollRestoreRef.current = captureConversationScrollPosition(scroller)
-      setView((current) => isCurrent() ? pages.reduce(prependConversationHistory, current) : current)
+      setView((current) => pages.reduce(prependConversationHistory, current))
     },
     onError: (message) => showError(message),
   })
   const navigateConversation = useCallback((targetId: string | HTMLElement, alignment: ConversationScrollAlignment = 'start') => {
-    history.cancel()
     pendingScrollRestoreRef.current = null
-    if (!scrollToConversation(targetId, alignment) && typeof targetId === 'string') void history.loadOlder(targetId)
+    if (!scrollToConversation(targetId, alignment) && typeof targetId === 'string') {
+      void history.loadOlder(targetId)
+    } else {
+      history.cancel()
+    }
   }, [history.cancel, history.loadOlder, scrollToConversation])
   const latestForkTurnId = useMemo(() => findLatestForkTurnId(sections), [sections])
   const setBtwMode = useCallback((mode: BtwMode | null) => {
