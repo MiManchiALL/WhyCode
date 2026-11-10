@@ -2,7 +2,9 @@ import { useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CodeReviewSurface } from '../code-review.tsx'
 import { CodeReferenceChips } from '../code-reference-chips.tsx'
-import { codePreviewVersion, codeReferenceMessage, ComposerCodeReferences, retainedCodeComments } from '../code-reference.ts'
+import { codePreviewVersion, codeReferenceMessage, ComposerCodeReferences } from '../code-reference.ts'
+import { UserMessageCard } from '../user-message-card.tsx'
+import { QueuedMessageList } from '../queued-message-card.tsx'
 import { ComposerDraftStore, type ComposerDraft } from '../composer-drafts.ts'
 import { DocumentPreview } from '../document-preview.tsx'
 import { FileDiff } from '../file-diff.tsx'
@@ -15,9 +17,11 @@ const workspace = '/project'
 const path = workspace + '/sample.ts'
 const samples = Array.from({ length: 110 }, (_, i) => `const value${i + 1} = ${i + 1};`)
 samples.splice(63, 3, 'const first = 1;', '  const second = 42;', '  return second + 1;')
+samples[62] = '// ' + 'wrapped code '.repeat(14)
 const url = URL.createObjectURL(new Blob([samples.join('\n')], { type: 'text/plain' }))
 Object.assign(window, { whycode: {
   onWorkspaceFileChanged: () => () => {}, closeWorkspaceFile() {},
+  checkWorkspaceFile: async () => ({ ok: true }),
   openWorkspaceFile: async () => ({ ok: true, view: { id: 'file', kind: 'file', path, name: 'sample.ts', format: 'code', url, size: 3000, mediaType: 'text/plain' } }),
 } })
 const references = new ComposerCodeReferences()
@@ -33,18 +37,25 @@ function Fixture() {
   const page = activeRightPanelPage(state)
   const version = codePreviewVersion(page)
   const open = (next: RightPanelPage) => setState(current => openRightPanelPage(current, next))
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState(() => sessionStorage.getItem('sent') ?? '')
+  const [queued, setQueued] = useState(false)
+  const saveMessage = (text: string) => { setMessage(text); sessionStorage.setItem('sent', text) }
   return <div className="grid h-screen grid-cols-[minmax(240px,1fr)_minmax(320px,1.3fr)]">
     <main className="space-y-4 p-5">
       <MarkdownFileLink path={path} projectDir={workspace} line={64} endLine={66} onOpenFile={open}>样例代码</MarkdownFileLink>
       <p id="prose">正文可单独选择。</p>
       <button id="outside" onMouseDown={e => e.preventDefault()}>其它区域</button>
-      <div className="wc-composer-chips"><CodeReferenceChips items={items} onRemove={references.remove} /></div>
+      <div id="composer" className="wc-composer-chips"><CodeReferenceChips items={items} onRemove={references.remove} /></div>
       <button id="submit" onClick={() => {
-        setMessage(codeReferenceMessage('请核对', items))
-        references.replace(retainedCodeComments(items))
+        saveMessage(codeReferenceMessage('', items))
+        references.replace([])
       }}>提交样例</button>
-      <output id="message" className="block max-h-40 overflow-auto whitespace-pre-wrap">{message}</output>
+      <button id="queue" onClick={() => setQueued(value => !value)}>排队视图</button>
+      <div id="message">{message && (queued
+        ? <QueuedMessageList messages={[{ id: 'sample', text: message }]} submitting={null} collapsed={false} onCollapsedChange={() => {}}
+            confirmOverwrite={false} editDisabled={false} pendingActions={{}} onAction={() => {}} />
+        : <UserMessageCard runtimeId="test" block={{ kind: 'user', id: 'sample', text: message }} editable disabled={false}
+            onEdit={async (_block, text) => { saveMessage(text); return true }} />)}</div>
       <button id="save" onClick={async e => {
         const button = e.currentTarget
         await drafts.save(key, { ...draft, codeReferences: references.getSnapshot() })

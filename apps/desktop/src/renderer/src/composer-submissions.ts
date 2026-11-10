@@ -1,5 +1,5 @@
 import type { ComposerDraft } from './composer-drafts.ts'
-import { codeReferenceMessage, restoreCodeReferences } from './code-reference.ts'
+import { codeReferenceMessage } from './code-reference.ts'
 import type { CoreEvent, QueuedUserMessage } from '@whycode/core/events'
 import type { Block } from '../../shared/conversation-state.ts'
 
@@ -112,7 +112,7 @@ export function prependComposerDraft(sent: ComposerDraft, current?: ComposerDraf
     pdfs: [...sent.pdfs, ...current.pdfs],
     skills: [...new Map([...sent.skills, ...current.skills].map(skill => [skill.id, skill])).values()],
     ...(sent.codeReferences?.length || current.codeReferences?.length
-      ? { codeReferences: restoreCodeReferences(sent.codeReferences ?? [], current.codeReferences ?? []) } : {}),
+      ? { codeReferences: [...(sent.codeReferences ?? []), ...(current.codeReferences ?? [])] } : {}),
     btwMode: sent.btwMode ?? current.btwMode,
     restoredInputIds: [...new Set([...sent.restoredInputIds, ...current.restoredInputIds])],
   }

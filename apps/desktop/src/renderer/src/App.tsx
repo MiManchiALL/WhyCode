@@ -105,7 +105,7 @@ import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerInput } from './composer-input.tsx'
 import { ComposerText, ComposerValue } from './composer-text.ts'
 import { ComposerDraftStore, composerDraftKey, type QuestionDraft } from './composer-drafts.ts'
-import { ComposerCodeReferences, codeReferenceMessage, restoreCodeReferences, retainedCodeComments } from './code-reference.ts'
+import { ComposerCodeReferences, codeReferenceMessage, draftCodeReference, splitCodeReferenceMessage } from './code-reference.ts'
 import { CodeReferenceChips } from './code-reference-chips.tsx'
 import type { CodeReview } from './code-review.tsx'
 import {
@@ -496,11 +496,12 @@ export function App() {
     replace: replacePdfDrafts,
   } = usePdfDrafts(showError)
 
-  const messageEmpty = inputEmpty && imageDrafts.length === 0 && pdfDrafts.length === 0 && selectedSkills.length === 0 && !codeItems.some(item => item.pending)
+  const messageEmpty = inputEmpty && imageDrafts.length === 0 && pdfDrafts.length === 0 && selectedSkills.length === 0 && codeItems.length === 0
   const hasComposerDraft = !messageEmpty || btwMode !== null
   const editRestoredInput = useCallback((item: QueuedUserMessage) => {
-    setInput(item.text)
-    codeReferences.replace(retainedCodeComments(codeReferences.getSnapshot()))
+    const { text, references } = splitCodeReferenceMessage(item.text)
+    setInput(text)
+    codeReferences.replace(references.map(draftCodeReference))
     replaceImageDrafts(restoredImageDrafts([item]))
     replacePdfDrafts(restoredPdfDrafts([item]))
     replaceSkills(item.skills ?? [])
@@ -1961,8 +1962,7 @@ export function App() {
     const body = input.getSnapshot().trim()
       || attachmentFallbackText(imageDrafts.length, sentBtwMode ? 0 : pdfDrafts.length)
       || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
-    const originalReferences = codeReferences.getSnapshot()
-    const sentReferences = originalReferences.filter(item => item.pending)
+    const sentReferences = codeReferences.getSnapshot()
     const text = codeReferenceMessage(body, sentReferences)
     if (!text && imageDrafts.length === 0) return
     const sentImageDrafts = detachImageDrafts()
@@ -1982,7 +1982,7 @@ export function App() {
         ? { worktreeBaseRef: workspace.baseRef } : {}),
     }
     composerSubmissions.start(submission)
-    codeReferences.replace(retainedCodeComments(originalReferences))
+    codeReferences.replace([])
     setRestoredInputIds([])
     setInput('')
     clearSkills()
@@ -1990,7 +1990,7 @@ export function App() {
     // 沿用发送前的浏览位置；只有原本贴底时，既有内容跟随才会继续滚动。
     const restoreRejectedInput = () => {
       setInput((current) => body && current ? `${body}\n${current}` : body || current)
-      codeReferences.replace(restoreCodeReferences(sentReferences, codeReferences.getSnapshot()))
+      codeReferences.replace([...sentReferences, ...codeReferences.getSnapshot()])
       restoreImageDrafts(sentImageDrafts)
       restorePdfDrafts(sentPdfDrafts)
       mergeRestoredSkills(sentSkills)
@@ -2004,7 +2004,7 @@ export function App() {
       const { signal } = submission.abortController
       try {
         await composerDraftsRef.current.save(
-          composerDraftKey(targetRuntimeId, submission.sessionId), { ...submission.draft, codeReferences: originalReferences },
+          composerDraftKey(targetRuntimeId, submission.sessionId), submission.draft,
         )
         signal.throwIfAborted()
         const attachments = await prepareImageDrafts(sentImageDrafts, signal)

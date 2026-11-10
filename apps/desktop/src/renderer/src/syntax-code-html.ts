@@ -1,6 +1,12 @@
 import type { FileDiffLine } from './file-change-presentation.ts'
 import type { HighlightedLines } from './syntax-highlighting.ts'
 
+const CODE_CHUNK_LINES = 64
+
+export function codeRowAt(root: HTMLElement, index: number): Element | undefined {
+  return root.children[Math.floor(index / CODE_CHUNK_LINES)]?.children[index % CODE_CHUNK_LINES]
+}
+
 const HTML_ESCAPES: Record<string, string> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '\r': '&#13;',
 }
@@ -23,8 +29,8 @@ export function renderCodeLines(
   })
   // 逐行隔离会阻止 Chromium 合并固定行号的图层；分组仍跳过离屏布局。
   const chunks: string[] = []
-  for (let offset = 0; offset < rows.length; offset += 64) {
-    const chunk = rows.slice(offset, offset + 64)
+  for (let offset = 0; offset < rows.length; offset += CODE_CHUNK_LINES) {
+    const chunk = rows.slice(offset, offset + CODE_CHUNK_LINES)
     chunks.push(`<div class="wc-code-chunk" style="--wc-code-chunk-lines:${chunk.length}">${chunk.join('')}</div>`)
   }
   return chunks.join('')

@@ -8,6 +8,7 @@ import { codeExcerpt, excerptRow, readCodeRange } from './code-selection.ts'
 import type { FileDiffLine } from './file-change-presentation.ts'
 import { fileName, filePathKey } from './local-files.ts'
 import type { HighlightedLines } from './syntax-highlighting.ts'
+import { codeRowAt } from './syntax-code-html.ts'
 
 export interface CodeReview {
   workspace: string
@@ -16,7 +17,7 @@ export interface CodeReview {
   items: readonly CodeReference[]
   disabled: boolean
   add: (reference: CodeReferenceInput) => boolean
-  remove: (id: string) => void
+  remove: (item: CodeReference) => void
 }
 export const CodeReviewContext = createContext<CodeReview | null>(null)
 
@@ -27,6 +28,9 @@ export function CodeReviewSurface({ review, children }: { review: CodeReview | n
     if (!enabled) return
     const clear = (event: PointerEvent) => {
       if (event.button !== 0 || event.shiftKey || !(event.target instanceof Element) || event.target.closest('[data-code-selection-menu]')) return
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && focused.matches('.wc-code-scroll') && surface.current?.contains(focused)
+        && !focused.contains(event.target.closest('[data-code-row]'))) focused.blur()
       const selection = document.getSelection()
       if (!selection || selection.isCollapsed) return
       const node = selection.anchorNode
@@ -81,7 +85,7 @@ export function CodeReviewControls({ review, path, lines, diff, body, highlighte
     const root = body.current
     if (!root || review.disabled) return
     const doc = root.ownerDocument
-    // 链接定位也使用原生选区。只在用户从代码内开始拖选并松开时打开操作菜单。
+    // 仅完成主动文本选取时弹出操作菜单。
     const finish = (event: PointerEvent) => {
       cancel()
       const range = readCodeRange(root)
@@ -169,7 +173,7 @@ export function CodeReviewControls({ review, path, lines, diff, body, highlighte
 }
 
 function GutterNotes({ notes, lines, body, highlighted, onRemove }: Pick<ReviewProps, 'lines' | 'body' | 'highlighted'> & {
-  notes: CodeReference[]; onRemove?: (id: string) => void
+  notes: CodeReference[]; onRemove?: (item: CodeReference) => void
 }) {
   const [anchors, setAnchors] = useState<Map<HTMLElement, CodeReference[]>>(new Map())
   // 高亮器替换静态行节点后重新取得行号槽。批注开合与增删本身不会重建代码 DOM。
@@ -178,7 +182,7 @@ function GutterNotes({ notes, lines, body, highlighted, onRemove }: Pick<ReviewP
     for (const note of notes) {
       const row = excerptRow(lines, note)
       if (row === null) continue
-      const gutter = body.current?.querySelector<HTMLElement>(`[data-code-row="${row}"] > .wc-code-line-number`)
+      const gutter = body.current && codeRowAt(body.current, row)?.querySelector<HTMLElement>('.wc-code-line-number')
       if (!gutter) continue
       const existing = next.get(gutter)
       if (existing) existing.push(note)
