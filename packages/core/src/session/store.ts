@@ -1572,8 +1572,8 @@ export class SessionJournal implements SessionRecorder {
     if (this.activeTurnId || this.activeConsensusTaskId) {
       throw new Error('仍有活动回合，不能编辑最新消息')
     }
-    if (this.undeliveredUserInputIdSet.size > 0 || this.pendingUserInputMap.size > 0) {
-      throw new Error('存在尚未处理的用户输入，不能编辑最新消息')
+    if (this.undeliveredUserInputIdSet.size > 0) {
+      throw new Error('新提交的根消息尚未交付，不能编辑最新消息')
     }
     latestVisibleRootTurn(this.viewEvents, previousTurnId)
     const expectedMessages = this.messagesBeforeTurn(previousTurnId)
@@ -1622,7 +1622,7 @@ export class SessionJournal implements SessionRecorder {
       modelId: this.metadata.modelId,
       reasoningEffort: this.metadata.reasoningEffort,
       messages: dehydrateImageMessages(messages),
-      pendingUserInputs: [],
+      pendingUserInputs: this.pendingUserInputs,
       turnStarts: turnStarts.map((start) => ({
         turnId: start.turnId,
         taskState: start.taskState,

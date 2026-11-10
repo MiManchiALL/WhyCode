@@ -83,7 +83,7 @@ it('启动失败不会阻止后续普通输入完成和编辑，失败回合有�
   await inspectLatestTurnEdit(cold, latestTurn)
 })
 
-it('读取项目指令期间停止会结束回合，并保留真正排队输入的恢复与编辑保护', async t => {
+it('读取项目指令期间停止后可检查最新消息，编辑重发失败仍保留排队输入', async t => {
   const f = await fixture(t)
   const reading = deferred()
   const release = deferred()
@@ -98,6 +98,7 @@ it('读取项目指令期间停止会结束回合，并保留真正排队输入�
     await reading.promise
     await f.journal.recordUserInputWithId(queuedId, '保留的排队输入', false)
     f.session.handleUserMessage('保留的排队输入', false, [], queuedId)
+    await assert.rejects(inspectLatestTurnEdit(await f.store.open(f.journal.sessionId), f.latestTurnId()), /仍有活动回合/)
     f.session.abort()
   } finally {
     release.resolve()
@@ -110,10 +111,16 @@ it('读取项目指令期间停止会结束回合，并保留真正排队输入�
     { id: queuedId, state: 'queued' },
   ])
   assert.equal(f.session.isQueuedUserInput(queuedId), true)
-  await assert.rejects(f.session.inspectLatestTurnEdit(f.latestTurnId()), /尚未空闲/)
+  await f.session.inspectLatestTurnEdit(f.latestTurnId())
   const cold = await f.store.open(f.journal.sessionId)
   assert.deepEqual(cold.pendingUserInputs, f.journal.pendingUserInputs)
-  await assert.rejects(inspectLatestTurnEdit(cold, f.latestTurnId()), /待处理输入/)
+  await inspectLatestTurnEdit(cold, f.latestTurnId())
+
+  const edit = await f.session.prepareLatestTurnEdit(f.latestTurnId(), '修改后仍然读取失败')
+  assert.equal(await edit.startMain(), 'error')
+  await f.flushEvents()
+  assert.deepEqual((await f.store.open(f.journal.sessionId)).pendingUserInputs, cold.pendingUserInputs)
+  assert.equal(f.model.doStreamCalls.length, 0)
 
   read.mock.restore()
   assert.equal(await f.session.restoreQueuedMessage(queuedId), true)
@@ -122,11 +129,11 @@ it('读取项目指令期间停止会结束回合，并保留真正排队输入�
   await f.session.inspectLatestTurnEdit(f.latestTurnId())
 })
 
-it('启动失败不清除用户主动退回草稿的输入', async t => {
+it('取回的草稿不妨碍重发最新消息，保留到用户单独提交', async t => {
   const f = await fixture(t)
   const reading = deferred()
   const release = deferred()
-  t.mock.method(f.io.fs, 'readFile', async () => {
+  const read = t.mock.method(f.io.fs, 'readFile', async () => {
     reading.resolve()
     await release.promise
     throw new Error('读取失败')
@@ -145,7 +152,18 @@ it('启动失败不清除用户主动退回草稿的输入', async t => {
   assert.deepEqual(f.journal.undeliveredUserInputIds, [])
   assert.equal(f.journal.pendingUserInputs[0]?.id, restoredId)
   assert.equal(f.journal.pendingUserInputs[0]?.state, 'restored')
-  await assert.rejects(f.session.inspectLatestTurnEdit(f.latestTurnId()), /待处理输入/)
+  read.mock.restore()
+  await f.session.inspectLatestTurnEdit(f.latestTurnId())
+  const edit = await f.session.prepareLatestTurnEdit(f.latestTurnId(), '重发当前问题')
+  assert.equal(await edit.startMain(), 'completed')
+  await f.flushEvents()
+  assert.equal(f.model.doStreamCalls.length, 1)
+  assert.doesNotMatch(JSON.stringify(f.model.doStreamCalls[0]?.prompt), /待编辑草稿/)
+  const cold = await f.store.open(f.journal.sessionId)
+  assert.deepEqual(cold.pendingUserInputs.map(({ id, state }) => [id, state]), [[restoredId, 'restored']])
+  await inspectLatestTurnEdit(cold, f.latestTurnId())
+  assert.equal((await f.send('重新填写的草稿', [restoredId])).outcome, 'completed')
+  assert.deepEqual((await f.store.open(f.journal.sessionId)).pendingUserInputs, [])
 })
 
 it('回合起点保存失败仍保留未交付输入，不读取工作区或调用模型', async t => {

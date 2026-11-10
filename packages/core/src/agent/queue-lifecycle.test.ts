@@ -42,6 +42,43 @@ for (const reason of ['user-cancel', 'process-interruption'] as const) {
   })
 }
 
+it('停止后重发最新消息，编辑回合完成才按原顺序交付队列，取回的草稿独立保留', async t => {
+  const started = deferred()
+  const model: MockLanguageModelV4 = new MockLanguageModelV4({ doStream: async options => {
+    if (model.doStreamCalls.length === 1) {
+      started.resolve()
+      await aborted(options.abortSignal)
+    }
+    return finalStep()
+  } })
+  const f = await fixture(t, model)
+  const running = f.send('停止前的问题')
+  await started.promise
+  await f.enqueue('排队甲')
+  const draftId = await f.enqueue('取回的草稿')
+  await f.enqueue('排队乙')
+  f.session.abort()
+  assert.equal(await running, 'aborted')
+  const original = f.events.find(event => event.type === 'turn-start')
+  assert.ok(original)
+  await f.journal.recordViewEvents([{ type: 'core-event', event: original }])
+  await f.session.inspectLatestTurnEdit(original.turnId)
+  assert.equal(await f.session.restoreQueuedMessage(draftId), true)
+  const pending = f.journal.pendingUserInputs
+
+  const edit = await f.session.prepareLatestTurnEdit(original.turnId, '编辑后的问题')
+  assert.deepEqual((await f.store.open(f.journal.sessionId)).pendingUserInputs, pending)
+  assert.equal(model.doStreamCalls.length, 1)
+  const beforeStart = f.events.length
+  assert.equal(await edit.startMain(), 'completed')
+  assert.deepEqual(roots(f.session), ['编辑后的问题', '排队甲', '排队乙'])
+  const deliveries = f.events.slice(beforeStart).filter(event => event.type === 'turn-end' || event.type === 'message-injected')
+  assert.deepEqual(deliveries.map(event => event.type === 'turn-end' ? event.stopReason : event.text),
+    ['completed', '排队甲', 'completed', '排队乙', 'completed'])
+  const cold = await f.store.open(f.journal.sessionId)
+  assert.deepEqual(cold.pendingUserInputs.map(input => [input.id, input.state]), [[draftId, 'restored']])
+})
+
 it('最终请求失败保留队列，恢复后的新请求完成才接续', async t => {
   const started = deferred(), release = deferred()
   const model = new MockLanguageModelV4({ doStream: async () => {
