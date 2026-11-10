@@ -26,13 +26,14 @@ Object.assign(window, { whycode: {
 } })
 const references = new ComposerCodeReferences()
 const drafts = new ComposerDraftStore()
+const panels = new RightPanelSessionStore()
 const key = 'code-review-fixture'
 const draft: ComposerDraft = { text: '', images: [], pdfs: [], skills: [], restoredInputIds: [], btwMode: null }
 await drafts.load(key)
 references.replace(drafts.take(key)?.codeReferences ?? [])
 
 function Fixture() {
-  const [state, setState] = useState(() => new RightPanelSessionStore(null).get(key))
+  const [state, setState] = useState(() => panels.get(key))
   const items = useSyncExternalStore(references.subscribe, references.getSnapshot)
   const page = activeRightPanelPage(state)
   const version = codePreviewVersion(page)
@@ -58,9 +59,11 @@ function Fixture() {
             onEdit={async (_block, text) => { saveMessage(text); return true }} />)}</div>
       <button id="save" onClick={async e => {
         const button = e.currentTarget
-        await drafts.save(key, { ...draft, codeReferences: references.getSnapshot() })
-        button.dataset.saved = 'true'
-      }}>保存草稿</button>
+        const codeReferences = references.getSnapshot()
+        panels.set(key, state)
+        await drafts.save(key, { ...draft, codeReferences })
+        button.dataset.saved = String(codeReferences.length)
+      }}>保存会话</button>
     </main>
     <aside className="flex min-h-0 flex-col border-l border-[var(--wc-line)]">
       <div className="flex h-10 items-center gap-4 p-2"><span>文件预览</span>

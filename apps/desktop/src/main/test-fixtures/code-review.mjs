@@ -9,6 +9,7 @@ app.whenReady().then(async () => {
   // 离屏绘制让原生拖选与悬停按帧更新，同时保持测试窗口隐藏。
   const win = new BrowserWindow({ show: false, width: 880, height: 620,
     webPreferences: { offscreen: true, backgroundThrottling: false } })
+  const page = path.join(process.env.WHYCODE_REVIEW_TEST_DIR, 'index.html')
   const web = win.webContents
   web.debugger.attach('1.3')
   const errors = []
@@ -24,7 +25,10 @@ app.whenReady().then(async () => {
       const result = await run(expression)
       if (result) return result
       if (Date.now() >= deadline) throw new Error(`${label}: ${JSON.stringify({
-        errors, view: await run('({ selection: getSelection().toString().slice(0, 160), rows: document.querySelectorAll("[data-code-row]").length })'),
+        errors, view: await run(`({
+          selection: getSelection().toString().slice(0, 160), rows: document.querySelectorAll('[data-code-row]').length,
+          tabs: document.getElementById('tab-count')?.textContent, preview: document.querySelector('aside')?.innerText.slice(0, 180),
+        })`),
       })}`)
       await new Promise(resolve => setTimeout(resolve, 30))
     }
@@ -79,8 +83,24 @@ app.whenReady().then(async () => {
     assert.ok(await run('getSelection().isCollapsed'))
     assert.equal(await run('document.querySelector("[data-code-selection-menu]")'), null)
   }
+  const fileReady = `document.querySelector('[data-code-row="63"] > code')?.textContent === 'const first = 1;'`
+  const reopenTab = async () => {
+    await clicked(await center('#close'))
+    await until('document.getElementById("tab-count").textContent === "0" && !document.querySelector(".wc-code-lines")', 'tab closed')
+    await clicked(await center('#reopen'))
+    await until(fileReady, 'sample file reopened')
+  }
+  const reloadSession = async expectedReferences => {
+    await clicked(await center('#save'))
+    await until(`document.getElementById('save').dataset.saved === '${expectedReferences}'`, 'session saved')
+    const previousDocument = await run('performance.timeOrigin')
+    await win.loadFile(page)
+    assert.notEqual(await run('performance.timeOrigin'), previousDocument)
+    await until(fileReady, 'sample file restored from session')
+    assert.equal(await run('document.getElementById("tab-count").textContent'), '1')
+  }
   try {
-    await win.loadURL(process.env.WHYCODE_REVIEW_TEST_URL)
+    await win.loadFile(page)
     await until('document.querySelector(".wc-file-link")', 'fixture ready')
     await jump()
     await until(element('[data-code-row="63"] code span'), 'worker colours the selected code')
@@ -134,21 +154,14 @@ app.whenReady().then(async () => {
       return label.getBoundingClientRect().left - mark.getBoundingClientRect().right
     })()`)
     assert.ok(gutterGap >= 0 && gutterGap < 5, `marker is ${gutterGap}px from the line number`)
-    await clicked(await center('#close'))
-    await until('!document.querySelector(".wc-code-lines")', 'tab closed')
-    await clicked(await center('#reopen'))
+    await reopenTab()
     await until('document.querySelector(".wc-code-note-marker")', 'annotation retained when file reopened')
     assert.equal(await run('getSelection().isCollapsed'), true)
     await mouse('mouseMoved', await center('[aria-label="1 条代码批注"]'))
     await until('document.querySelector(".wc-reference-list")?.innerText.includes("核对这两行")', 'hover shows the comment')
     assert.equal(await run('document.querySelector(".wc-code-excerpt").textContent'), 'first = 1;\n  const second')
     await clicked(await center('#outside'))
-    await clicked(await center('#save'))
-    await until('document.querySelector("#save").dataset.saved', 'unsent notes stored')
-    stage = 'reopen session'
-    await win.loadURL(process.env.WHYCODE_REVIEW_TEST_URL)
-    await until('document.querySelector("#reopen")', 'session restored')
-    await clicked(await center('#reopen'))
+    await reloadSession(2)
     await until('document.querySelector(".wc-code-note-marker")', 'unsent note restored from IndexedDB')
     await run('document.querySelector(".wc-code-note-marker").scrollIntoView({block:"center"})')
     await clicked(await center('.wc-code-note-marker'))
@@ -171,13 +184,10 @@ app.whenReady().then(async () => {
     await collapsed()
     await clicked(await center('#queue'))
     await collapsed()
-    await clicked(await center('#save'))
-    await until('document.querySelector("#save").dataset.saved', 'submitted draft stored')
-    await win.loadURL(process.env.WHYCODE_REVIEW_TEST_URL)
-    await until(element('#reopen'), 'history restored')
-    await clicked(await center('#reopen'))
-    await until(element('[data-code-row="63"]'), 'submitted file reopened')
-    assert.equal(await run('document.querySelector(".wc-code-note-marker")'), null)
+    await reopenTab()
+    assert.equal(await run(element('.wc-code-note-marker')), null)
+    await reloadSession(0)
+    assert.equal(await run(element('#composer .wc-reference-chip, .wc-code-note-marker')), null)
     await collapsed()
     await mouse('mouseMoved', await center('#message .wc-user-message-copy'))
     await clicked(await center('#message [aria-label="编辑消息"]'))
