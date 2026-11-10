@@ -6,7 +6,9 @@ app.setPath('userData', path.join(process.env.WHYCODE_REVIEW_TEST_DIR, 'profile'
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false, width: 880, height: 620, webPreferences: { backgroundThrottling: false } })
+  // 离屏绘制让原生拖选与悬停按帧更新，同时保持测试窗口隐藏。
+  const win = new BrowserWindow({ show: false, width: 880, height: 620,
+    webPreferences: { offscreen: true, backgroundThrottling: false } })
   const web = win.webContents
   web.debugger.attach('1.3')
   const errors = []
@@ -15,16 +17,19 @@ app.whenReady().then(async () => {
   web.on('console-message', details => { if (details.level === 'error') errors.push(details.message) })
   const run = expression => web.executeJavaScript(expression)
   const element = selector => `document.querySelector(${JSON.stringify(selector)})`
-  const until = async (expression, label) => {
+  const waitFor = async (expression, label) => {
     stage = label
     const deadline = Date.now() + 25000
-    while (!await run(`Boolean(${expression})`)) {
+    for (;;) {
+      const result = await run(expression)
+      if (result) return result
       if (Date.now() >= deadline) throw new Error(`${label}: ${JSON.stringify({
         errors, view: await run('({ selection: getSelection().toString().slice(0, 160), rows: document.querySelectorAll("[data-code-row]").length })'),
       })}`)
       await new Promise(resolve => setTimeout(resolve, 30))
     }
   }
+  const until = (expression, label) => waitFor(`Boolean(${expression})`, label)
   const mouse = (type, point, pressed = false) => web.debugger.sendCommand('Input.dispatchMouseEvent', {
     type, ...point, buttons: pressed ? 1 : 0,
     button: type === 'mouseMoved' && !pressed ? 'none' : 'left',
@@ -35,10 +40,14 @@ app.whenReady().then(async () => {
     await mouse('mousePressed', point, true)
     await mouse('mouseReleased', point)
   }
-  const center = selector => run(`(() => {
-    const rect = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()
-    return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) }
-  })()`)
+  // Radix 先在屏外测量弹层。只向浏览器实际能命中目标的坐标派发鼠标事件。
+  const center = selector => waitFor(`(() => {
+    const target = document.querySelector(${JSON.stringify(selector)})
+    if (!target) return null
+    const rect = target.getBoundingClientRect()
+    const point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) }
+    return target.contains(document.elementFromPoint(point.x, point.y)) ? point : null
+  })()`, `pointer can reach ${selector}`)
   const pointInCode = (row, column) => run(`(() => {
     const code = document.querySelector('[data-code-row="${row}"] > code')
     const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT)
@@ -170,6 +179,7 @@ app.whenReady().then(async () => {
     await until(element('[data-code-row="63"]'), 'submitted file reopened')
     assert.equal(await run('document.querySelector(".wc-code-note-marker")'), null)
     await collapsed()
+    await mouse('mouseMoved', await center('#message .wc-user-message-copy'))
     await clicked(await center('#message [aria-label="编辑消息"]'))
     await until('document.activeElement?.getAttribute("aria-label") === "编辑用户消息"', 'edit opens just the user text')
     assert.equal(await run('document.activeElement.textContent.trim()'), '')
