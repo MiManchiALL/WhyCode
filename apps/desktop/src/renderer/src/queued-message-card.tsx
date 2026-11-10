@@ -1,12 +1,13 @@
 import type { QueuedUserMessage } from '@whycode/core/events'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import { ChevronDown, ListCollapse, LoaderCircle, Pencil, SendHorizontal, Trash2 } from 'lucide-react'
-import { useId, type ReactNode } from 'react'
+import { useId, useMemo, type ReactNode } from 'react'
 import type { ComposerDraft } from './composer-drafts.ts'
 import { QueuedImageStrip } from './image-attachments.tsx'
 import { QueuedPdfStrip } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
 import { CodeReferenceChips } from './code-reference-chips.tsx'
+import { splitCodeReferenceMessage } from './code-reference.ts'
 
 export type QueuedMessageAction = 'edit' | 'discard' | 'send-now'
 
@@ -65,14 +66,16 @@ export function QueuedMessageList({
 function QueuedMessageCard(props: QueuedMessageProps | { draft: ComposerDraft }) {
   const submitting = 'draft' in props
   const message = submitting ? props.draft : props.message
+  const sent = useMemo(() => submitting ? null : splitCodeReferenceMessage(message.text), [submitting, message.text])
+  const text = sent?.text ?? message.text
   return (
     <div aria-busy={submitting || undefined} className="group rounded-xl bg-black/[0.04] px-3 py-1.5 text-xs text-[var(--wc-muted)]">
       <div className="flex min-h-5.5 min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1 truncate">{submitting ? '正在提交' : '已排队'} · {message.text}</div>
+        <div className="min-w-0 flex-1 truncate">{submitting ? '正在提交' : '已排队'}{text && ` · ${text}`}</div>
         {!submitting && <QueuedMessageActions {...props} />}
       </div>
       <SkillBadges skills={message.skills} />
-      {submitting && <CodeReferenceChips items={props.draft.codeReferences} />}
+      <CodeReferenceChips items={submitting ? props.draft.codeReferences : sent?.references} />
       <QueuedImageStrip attachments={submitting ? props.draft.images : props.message.attachments} />
       <QueuedPdfStrip attachments={submitting ? props.draft.pdfs : props.message.pdfAttachments} />
     </div>

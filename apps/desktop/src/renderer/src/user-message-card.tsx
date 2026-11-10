@@ -9,6 +9,8 @@ import { MessageActions } from './message-actions.tsx'
 import { ComposerInput, type ComposerInputHandle } from './composer-input.tsx'
 import { splitPathReferences } from './path-reference.ts'
 import { ComposerText } from './composer-text.ts'
+import { codeReferenceMessage, splitCodeReferenceMessage, type CodeReferenceInput } from './code-reference.ts'
+import { CodeReferenceChips } from './code-reference-chips.tsx'
 
 type UserBlock = Extract<Block, { kind: 'user' }>
 
@@ -23,7 +25,8 @@ interface UserMessageCardProps {
 }
 
 export function UserMessageCard(props: UserMessageCardProps) {
-  const editor = useMessageEditor(props.block, props.onEdit)
+  const message = useMemo(() => splitCodeReferenceMessage(props.block.text), [props.block.text])
+  const editor = useMessageEditor(props.block, message, props.onEdit)
   return (
     <div
       data-conversation-navigator-target={props.block.id}
@@ -34,6 +37,7 @@ export function UserMessageCard(props: UserMessageCardProps) {
       <UserImageGallery attachments={props.block.attachments} />
       <UserPdfGallery runtimeId={props.runtimeId} attachments={props.block.pdfAttachments} />
       <SkillBadges skills={props.block.skills} />
+      <CodeReferenceChips items={editor.references} onRemove={editor.editing && !editor.submitting ? editor.removeReference : undefined} />
       {editor.editing
         ? (
           <div className={`wc-user-message-bubble wc-user-message-editor w-full min-w-0 px-3.5 py-2.5 ${
@@ -48,8 +52,8 @@ export function UserMessageCard(props: UserMessageCardProps) {
             />
           </div>
         )
-        : props.block.text && (
-          <UserMessageBubble text={props.block.text} btw={Boolean(props.block.btw)} />
+        : message.text && (
+          <UserMessageBubble text={message.text} btw={Boolean(props.block.btw)} />
         )}
       {!editor.editing ? (
         <MessageActions
@@ -127,6 +131,8 @@ function UserMessageText({ text }: { text: string }) {
 interface MessageEditorState {
   editing: boolean
   draft: ComposerText
+  references: readonly CodeReferenceInput[]
+  removeReference: (item: CodeReferenceInput) => void
   submitting: boolean
   error: string | null
   begin: () => void
@@ -136,33 +142,36 @@ interface MessageEditorState {
 
 function useMessageEditor(
   block: UserBlock,
+  message: { text: string; references: readonly CodeReferenceInput[] },
   onEdit: UserMessageCardProps['onEdit'],
 ): MessageEditorState {
-  const [editing, setEditing] = useState(false)
-  const [draft] = useState(() => new ComposerText(block.text))
+  const [editedReferences, setEditedReferences] = useState<readonly CodeReferenceInput[] | null>(null)
+  const editing = editedReferences !== null
+  const references = editedReferences ?? message.references
+  const [draft] = useState(() => new ComposerText(message.text))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
-    if (!editing) draft.set(block.text)
-  }, [block.text, editing, draft])
+    if (!editing) draft.set(message.text)
+  }, [message.text, editing, draft])
   const begin = () => {
-    draft.set(block.text)
+    draft.set(message.text)
     setError(null)
-    setEditing(true)
+    setEditedReferences(message.references)
   }
   const cancel = () => {
     if (submitting) return
-    draft.set(block.text)
+    draft.set(message.text)
     setError(null)
-    setEditing(false)
+    setEditedReferences(null)
   }
   const submit = async (allowed: boolean, restoreFiles: boolean) => {
-    const text = draft.getSnapshot().trim()
+    const text = codeReferenceMessage(draft.getSnapshot().trim(), references)
     if (!allowed || submitting || !text) return
     setSubmitting(true)
     setError(null)
     try {
-      if (await onEdit(block, text, restoreFiles)) setEditing(false)
+      if (await onEdit(block, text, restoreFiles)) setEditedReferences(null)
       else setError('重新发送失败，请重试')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '重新发送失败，请重试')
@@ -170,7 +179,8 @@ function useMessageEditor(
       setSubmitting(false)
     }
   }
-  return { editing, draft, submitting, error, begin, cancel, submit }
+  const removeReference = (item: CodeReferenceInput) => setEditedReferences(current => current?.filter(ref => ref !== item) ?? null)
+  return { editing, draft, references, removeReference, submitting, error, begin, cancel, submit }
 }
 
 function MessageEditor({
@@ -215,6 +225,7 @@ function MessageEditor({
           disabled={!allowed || editor.submitting} onChange={setRestoreFiles} />}
         <EditorActions
           draft={editor.draft}
+          hasReferences={editor.references.length > 0}
           disabled={!allowed}
           submitting={editor.submitting}
           onCancel={editor.cancel}
@@ -241,11 +252,13 @@ function handleEditorKeyDown(
 
 function EditorActions({
   draft,
+  hasReferences,
   disabled,
   submitting,
   onCancel,
 }: {
   draft: ComposerText
+  hasReferences: boolean
   disabled: boolean
   submitting: boolean
   onCancel: () => void
@@ -264,7 +277,7 @@ function EditorActions({
       <button
         type="submit"
         className="wc-focus-ring rounded-xl bg-[var(--wc-ink)] px-2.5 py-1 text-white disabled:opacity-40"
-        disabled={disabled || submitting || empty}
+        disabled={disabled || submitting || (empty && !hasReferences)}
       >
         {submitting ? '发送中…' : '发送'}
       </button>

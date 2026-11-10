@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react'
 import { requestHighlight, type HighlightedLines } from './syntax-highlighting.ts'
-import { renderCodeLines } from './syntax-code-html.ts'
+import { codeRowAt, renderCodeLines } from './syntax-code-html.ts'
 import type { FileDiffLine } from './file-change-presentation.ts'
 import { useScrollArea } from './use-scroll-area.ts'
 import type { FileLineLocation } from './right-panel-state.ts'
@@ -38,6 +38,7 @@ export function SyntaxCode({
   const highlighted = useHighlightedCode(path, source)
   const body = useRef<HTMLDivElement>(null)
   const previousLines = useRef<readonly FileDiffLine[]>(undefined)
+  const [focused, setFocused] = useState<FileLineLocation | null>(null)
   const review = useContext(CodeReviewContext)
   const { ref: scrollRef, onScroll, overscrollBehaviorY } = useScrollArea(lines, { enabled: scroll })
 
@@ -50,15 +51,40 @@ export function SyntaxCode({
     if (selection) selectCodeRange(root, selection)
   }, [lines, highlighted])
 
+  useLayoutEffect(() => setFocused(null), [lines])
+
+  useLayoutEffect(() => {
+    if (!focused) return
+    const root = body.current!
+    const mark = (active: boolean) => {
+      for (let row = focused.line - 1; row < (focused.endLine ?? focused.line); row++) {
+        codeRowAt(root, row)?.toggleAttribute('data-line-focus', active)
+      }
+    }
+    mark(true)
+    return () => mark(false)
+  }, [focused, highlighted, lines])
+
+  useEffect(() => {
+    if (!focused) return
+    const root = body.current!
+    const doc = root.ownerDocument
+    const selecting = () => {
+      const selection = doc.getSelection()
+      if (selection && !selection.isCollapsed && root.contains(selection.anchorNode)) setFocused(null)
+    }
+    doc.addEventListener('selectionchange', selecting)
+    return () => doc.removeEventListener('selectionchange', selecting)
+  }, [focused])
+
   useLayoutEffect(() => {
     if (!location) return
     const root = body.current!, container = scrollRef.current!
-    const start = location.line - 1
-    const last = Math.min(location.endLine ?? location.line, lines.length) - 1
-    const row = root.querySelector<HTMLElement>(`[data-code-row="${start}"]`)
-    if (row && last >= start) {
+    const row = codeRowAt(root, location.line - 1)
+    if (row) {
       container.focus({ preventScroll: true })
-      selectCodeRange(root, { start: { row: start, offset: 0 }, end: { row: last, offset: lines[last]!.text.length || 1 }, backward: false })
+      root.ownerDocument.getSelection()?.removeAllRanges()
+      setFocused({ line: location.line, endLine: Math.min(location.endLine ?? location.line, lines.length) })
       const top = row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
       container.scrollTop = Math.max(0, top - container.clientHeight * 0.32)
     }
@@ -71,12 +97,22 @@ export function SyntaxCode({
       tabIndex={-1}
       data-code-review={review ? true : undefined}
       data-wrap={wrap}
+      onPointerDown={event => {
+        if (!review || event.button !== 0 || !(event.target instanceof Element) || event.target.closest('button')) return
+        const row = event.target.closest<HTMLElement>('[data-code-row]')
+        if (row && body.current?.contains(row)) {
+          event.currentTarget.focus({ preventScroll: true })
+          setFocused({ line: Number(row.dataset.codeRow) + 1 })
+        }
+      }}
+      onBlur={event => { if (event.target === event.currentTarget) setFocused(null) }}
       onScroll={onScroll}
       onCopy={event => {
         if (!review) return
         const range = body.current && readCodeRange(body.current)
-        const excerpt = range && codeExcerpt(lines, range, diff)
-        if (excerpt) { event.preventDefault(); event.clipboardData.setData('text/plain', excerpt.text) }
+        const text = range ? codeExcerpt(lines, range, diff)?.text
+          : focused && lines.slice(focused.line - 1, focused.endLine ?? focused.line).map(row => row.text).join('\n')
+        if (text != null) { event.preventDefault(); event.clipboardData.setData('text/plain', text) }
       }}
       style={{ overscrollBehaviorY }}
       className={`wc-code-scroll wc-scrollbar relative min-h-0 ${scroll ? 'overflow-auto' : 'overflow-visible'} ${className}`}

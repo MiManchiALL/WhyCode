@@ -16,10 +16,10 @@ export function PendingUserMessage(props: { draft: ComposerDraft } | { answer: s
       className="wc-user-message-copy mb-2 ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2"
     >
       {draft && <>
-        <CodeReferenceChips items={draft.codeReferences} />
         <PendingImageGallery drafts={draft.images} />
         <PdfDraftStrip drafts={draft.pdfs} variant="message" />
         <SkillBadges skills={draft.skills} />
+        <CodeReferenceChips items={draft.codeReferences} />
       </>}
       {text && <UserMessageBubble text={text} btw={Boolean(draft?.btwMode)} />}
       <div aria-hidden="true" className="wc-message-actions wc-type-caption -mt-1" />
