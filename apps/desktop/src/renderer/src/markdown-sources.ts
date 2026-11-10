@@ -57,7 +57,7 @@ export const remarkResponseLinks: Plugin<[{ files?: boolean }?], Root> = (option
       // Streamdown 会把相对路径解析成网站根路径，并拦截盘符。文件只由预览按钮打开。
       node.data ??= {}
       node.data.hProperties = { ...node.data.hProperties, href: '#workspace-file' }
-      links.set(offset, { 'data-file-path': reference.path, 'data-file-line': reference.line })
+      links.set(offset, { 'data-file-path': reference.path, 'data-file-line': reference.line, 'data-file-end-line': reference.endLine })
     }
   }
   file.data.whycodeResponseLinks = links

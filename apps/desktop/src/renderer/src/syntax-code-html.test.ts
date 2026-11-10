@@ -15,7 +15,7 @@ it('source is inert text, including HTML tags, entities, quotes, tabs and Unicod
 	const emoji = "😀";
 
 last line`
-  const view = body(renderCodeLines(contentLines(source), null, null))
+  const view = body(renderCodeLines(contentLines(source), null))
   assert.equal(view.querySelector('script, img'), null)
   assert.deepEqual([...view.querySelectorAll('code')].map(node => node.textContent),
     source.split('\n').map(line => line || ' '))
@@ -27,31 +27,30 @@ it('highlighted HTML retains syntax style without interpreting token content or 
   const text = `</span><img onerror="alert(1)" src=x> & "quoted"`
   const style = `color:red" onmouseover="alert(1)`
   const highlighted = [`<span style="${escapeCodeHtml(style)}">${escapeCodeHtml(text)}</span>`]
-  const view = body(renderCodeLines(contentLines(text), highlighted, 1))
+  const view = body(renderCodeLines(contentLines(text), highlighted))
   assert.equal(view.querySelector('code')!.textContent, text)
   assert.equal(view.querySelector('img, [onmouseover]'), null)
   assert.equal(view.querySelector('code span')!.getAttribute('style'), style)
-  assert.equal(view.querySelector('[data-focus-line="1"]')!.getAttribute('data-tone'), 'context')
+  assert.equal(view.querySelector('[data-code-row="0"]')!.getAttribute('data-tone'), 'context')
 })
 
-it('diff rows retain both line number sequences and focus the new version', () => {
+it('diff rows retain both line number sequences and distinct selectable rows', () => {
   const hunk = buildFileDiffHunks('before\nstays', 'after\nstays')[0]!
-  const view = body(renderCodeLines(hunk.lines, null, 1))
+  const view = body(renderCodeLines(hunk.lines, null))
   assert.deepEqual([...view.querySelectorAll('.wc-code-line')].map(node => [
     node.getAttribute('data-tone'), node.querySelector('.wc-code-line-number')!.textContent,
   ]), [['removed', '1'], ['added', '1'], ['context', '2']])
-  assert.equal(view.querySelectorAll('[data-focus-line]').length, 1)
-  assert.equal(view.querySelector('[data-focus-line]')!.getAttribute('data-tone'), 'added')
-  assert.equal(body(renderCodeLines([], null, null)).textContent, '空文件')
+  assert.equal(view.querySelector('[data-code-row="1"]')!.getAttribute('data-tone'), 'added')
+  assert.equal(body(renderCodeLines([], null)).textContent, '空文件')
 })
 
-it('long code keeps every line, highlight and focus target across rendering groups', () => {
+it('long code keeps every line, syntax colour and row index across rendering groups', () => {
   const source = Array.from({ length: 130 }, (_, index) => `line ${index + 1}`)
   const highlighted = source.map(text => `<span style="color:red">${text}</span>`)
-  const view = body(renderCodeLines(contentLines(source.join('\n')), highlighted, 65))
+  const view = body(renderCodeLines(contentLines(source.join('\n')), highlighted))
   assert.deepEqual([...view.querySelectorAll('code')].map(node => node.textContent), source)
   assert.deepEqual([...view.querySelectorAll('.wc-code-line-number')].map(node => node.textContent), source.map((_, index) => String(index + 1)))
-  const focused = view.querySelector('[data-focus-line="65"]')!
+  const focused = view.querySelector('[data-code-row="64"]')!
   assert.equal(focused.querySelector('code span')!.textContent, 'line 65')
   assert.equal(focused.querySelector('code span')!.getAttribute('style'), 'color:red')
   assert.equal(view.querySelectorAll('code span').length, 130)

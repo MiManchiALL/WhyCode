@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FolderOpen, RefreshCw, WrapText, MousePointer2 } from 'lucide-react'
 import type { WorkspaceDocument } from '../../shared/workspace-files.ts'
 import { MAX_TEXT_PREVIEW_BYTES, PREVIEW_SANDBOX } from '../../shared/workspace-files.ts'
@@ -25,6 +25,10 @@ export function DocumentPreview({ runtimeId, page, onChange, onReferenceInBrowse
   const refresh = useRefreshFeedback(file.loading)
   const currentPage = useRef(page)
   currentPage.current = page
+  const consumeLocation = useCallback(() => {
+    const current = currentPage.current
+    if (current.source.kind === 'current' && current.source.location) onChange({ ...current, source: { kind: 'current' } })
+  }, [onChange])
   const document = file.view?.kind === 'file' ? file.view : null
   const save = useWorkspaceFileAction(runtimeId, page.path)
   const hasModes = document && document.size <= MAX_TEXT_PREVIEW_BYTES
@@ -56,13 +60,13 @@ export function DocumentPreview({ runtimeId, page, onChange, onReferenceInBrowse
     </FilePreviewToolbar>
     {document ? (
       <DocumentBody document={document} code={code} wrap={wrap} onOpenExternally={file.openExternally}
-        location={page.source.kind === 'current' ? page.source.location : undefined} />
+        location={page.source.kind === 'current' ? page.source.location : undefined} onLocated={consumeLocation} />
     ) : <FilePreviewMessage>{file.error ?? '正在读取文件…'}</FilePreviewMessage>}
   </div>
 }
 
-function DocumentBody({ document, code, wrap, location, onOpenExternally }: {
-  document: WorkspaceDocument; code: boolean; wrap: boolean; location?: FileLineLocation; onOpenExternally: () => void
+function DocumentBody({ document, code, wrap, location, onLocated, onOpenExternally }: {
+  document: WorkspaceDocument; code: boolean; wrap: boolean; location?: FileLineLocation; onLocated: () => void; onOpenExternally: () => void
 }) {
   if (!document.url) return <FilePreviewMessage>
     <div>
@@ -72,7 +76,7 @@ function DocumentBody({ document, code, wrap, location, onOpenExternally }: {
     </div>
   </FilePreviewMessage>
   if (code || document.format === 'markdown') return <TextDocument key={document.url} url={document.url}
-    path={document.path} markdown={!code} wrap={wrap} location={location} />
+    path={document.path} markdown={!code} wrap={wrap} location={location} onLocated={onLocated} />
   // credentialless 让原生存储仅存于临时上下文，不为每个预览源留下持久数据。
   if (document.format === 'html') return (
     <iframe key={document.url} {...{ credentialless: true }} src={document.url} sandbox={PREVIEW_SANDBOX} title={document.name}
@@ -87,8 +91,8 @@ function DocumentBody({ document, code, wrap, location, onOpenExternally }: {
   return null
 }
 
-function TextDocument({ url, path, markdown, wrap, location }: {
-  url: string; path: string; markdown: boolean; wrap: boolean; location?: FileLineLocation
+function TextDocument({ url, path, markdown, wrap, location, onLocated }: {
+  url: string; path: string; markdown: boolean; wrap: boolean; location?: FileLineLocation; onLocated: () => void
 }) {
   const [text, setText] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -114,7 +118,7 @@ function TextDocument({ url, path, markdown, wrap, location }: {
   if (markdown) return (
     <div className="wc-scrollbar min-h-0 flex-1 overflow-auto p-4"><MarkdownContent text={text} /></div>
   )
-  return <SyntaxCode path={path} lines={lines} wrap={wrap} location={location} className="flex-1" />
+  return <SyntaxCode path={path} lines={lines} wrap={wrap} location={location} onLocated={onLocated} className="flex-1" />
 }
 
 function ImageDocument({ url, name }: { url: string; name: string }) {

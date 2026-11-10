@@ -2,6 +2,7 @@ import type { BtwMode } from '@whycode/core'
 import type { SkillSummary } from '@whycode/core/skills'
 import { releaseImageDrafts, type ImageDraft } from './image-draft.ts'
 import type { PdfDraft } from './pdf-draft.ts'
+import { storedCodeReferences, type CodeReference } from './code-reference.ts'
 
 export interface QuestionDraft {
   currentId?: string
@@ -15,6 +16,7 @@ export interface ComposerDraft {
   images: ImageDraft[]
   pdfs: PdfDraft[]
   skills: SkillSummary[]
+  codeReferences?: CodeReference[]
   btwMode: BtwMode | null
   restoredInputIds: string[]
 }
@@ -29,7 +31,8 @@ export function composerDraftKey(runtimeId: string, sessionId: string | null): s
 
 function hasDraftState(draft: ComposerDraft): boolean {
   // 已取回的消息可以改成空白，切回会话仍需保留这次编辑的身份。
-  return Boolean(draft.question || draft.restoredInputIds.length || draft.text || draft.images.length || draft.pdfs.length || draft.skills.length || draft.btwMode)
+  return Boolean(draft.question || draft.restoredInputIds.length || draft.text || draft.images.length || draft.pdfs.length
+    || draft.skills.length || draft.codeReferences?.length || draft.btwMode)
 }
 
 /** IndexedDB 持有持久草稿与 File；内存仅缓存最近切走的 32 份预览，淘汰不删除草稿。 */
@@ -111,6 +114,7 @@ export class ComposerDraftStore {
     }
     await completed(transaction)
     if (!stored) return undefined
+    if (stored.codeReferences !== undefined) stored.codeReferences = storedCodeReferences.parse(stored.codeReferences)
     if (stored.images.some((image) => image.kind !== 'stored' && !files.has(image.id))) {
       throw new Error('草稿图片数据不完整')
     }

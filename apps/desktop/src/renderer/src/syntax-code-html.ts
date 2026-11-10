@@ -13,14 +13,11 @@ export function escapeCodeHtml(text: string): string {
 export function renderCodeLines(
   lines: readonly FileDiffLine[],
   highlighted: HighlightedLines | null,
-  focusLine: number | null,
 ): string {
   if (lines.length === 0) return '<div class="px-3 py-6 text-center text-[var(--wc-faint)]">空文件</div>'
   const rows = lines.map((line, index) => {
     const displayLine = line.kind === 'removed' ? line.oldLine : line.newLine
-    const focus = focusLine !== null && line.kind !== 'removed' && line.newLine === focusLine
-    const focusAttribute = focus ? ` data-focus-line="${escapeCodeHtml(String(focusLine))}"` : ''
-    return `<div class="wc-code-line flex min-w-full" data-tone="${escapeCodeHtml(line.kind)}"${focusAttribute}>`
+    return `<div class="wc-code-line flex min-w-full" data-code-row="${index}" data-tone="${escapeCodeHtml(line.kind)}">`
       + `<span class="wc-code-line-number sticky left-0 w-14 shrink-0 select-none pr-3 text-right tabular-nums">${escapeCodeHtml(String(displayLine ?? ''))}</span>`
       + `<code class="wc-code-text block min-w-0 flex-1 pr-5">${highlighted?.[index] || escapeCodeHtml(line.text || ' ')}</code></div>`
   })

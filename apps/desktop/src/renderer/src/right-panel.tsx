@@ -27,8 +27,12 @@ import type { PathReference } from './path-reference.ts'
 import { browserAddress } from '../../shared/browser.ts'
 import type { BrowserReferenceImage } from '../../shared/browser-reference.ts'
 import type { ImageDraft } from './image-draft.ts'
+import { CodeReviewSurface, type CodeReview } from './code-review.tsx'
+import { codePreviewVersion } from './code-reference.ts'
+import { CodeCommentMarker } from './code-reference-chips.tsx'
 
 interface RightPanelProps {
+  codeReview: Omit<CodeReview, 'version'> | null
   gitData: GitData
   gitRevision: string
   busy: boolean
@@ -67,6 +71,9 @@ interface RightPanelProps {
 export function RightPanel(props: RightPanelProps) {
   const host = useBrowserHostState()
   const state = props.state
+  const version = codePreviewVersion(activeRightPanelPage(state))
+  const review = useMemo(() => version && props.codeReview ? { ...props.codeReview, version } : null, [version, props.codeReview])
+  const comments = useMemo(() => props.codeReview?.items.filter(item => item.comment) ?? [], [props.codeReview?.items])
   const workspacePage = props.state.tabs.find(tab => tab.page.kind === 'workspace')?.page
   const expanded = workspacePage?.kind === 'workspace' ? workspacePage.expanded : undefined
   const hasWorkspace = expanded !== undefined
@@ -119,14 +126,15 @@ export function RightPanel(props: RightPanelProps) {
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
         </RightPanelTabs>
+        {!props.loading && <CodeCommentMarker items={comments} onRemove={props.codeReview?.disabled ? undefined : props.codeReview?.remove} />}
         <button type="button" className="wc-preview-action" title={props.fullscreen ? '退出全屏' : '全屏'} aria-label={props.fullscreen ? '退出全屏' : '全屏'} onClick={props.onToggleFullscreen}>
           {props.fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
         </button>
         {props.fullscreen && <button type="button" className="wc-preview-action" title="收起右侧栏" aria-label="收起右侧栏" onClick={props.onCollapse}><PanelRightClose size={15} /></button>}
       </div>
-      {!props.loading && <>
+      {!props.loading && <CodeReviewSurface review={props.active ? review : null}>
         <RightPanelContent {...props} state={state} directories={directories} />
-      </>}
+      </CodeReviewSurface>}
       <BrowserSurfaces runtimeId={props.runtimeId} sessionId={props.parentSessionId} active={!props.loading && props.active} fullscreen={props.fullscreen} state={state}
         canReference={props.canReferenceBrowser} referenceDrafts={props.referenceDrafts} onReference={props.onReferenceBrowser}
         onUpdate={props.onUpdatePage} onRegister={props.onRegisterBrowserPage} onOpen={props.onOpenPage} onClose={props.onCloseTab} />
@@ -184,7 +192,7 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
           runtimeId={props.runtimeId}
           refreshRevision={props.refreshRevision}
           page={page}
-          onChange={props.onOpenPage}
+          onChange={props.onUpdatePage}
           onReferenceInBrowser={props.canReferenceBrowser
             ? path => props.onOpenPage(browserReferencePage(props.state, browserAddress(path), true, { kind: 'new' }, undefined, props.remote)) : undefined}
         />

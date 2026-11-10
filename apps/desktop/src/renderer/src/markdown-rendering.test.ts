@@ -122,15 +122,16 @@ describe('Markdown 渲染', () => {
   it('会话文件链接保留清洗前的路径、行号和显示名称', () => {
     const source = '[**实验对照**](</srv/project/reports/5 秒与 10 秒.md>) '
       + '[入口](src/main.ts:24:3) [说明](<C:/工作/test%231.md#L7-L12>) [日志](notes.md) '
-      + '[行尾](./notes%3A24) [无效行](./app.ts#L0)'
+      + '[行尾](./notes%3A24) [无效行](./app.ts#L0) [范围](./app.ts:31-35)'
     for (const streaming of [true, false]) {
       const doc = renderedDocument(source, streaming, true)
       const links = [...doc.querySelectorAll('a[data-file-path]')]
       assert.equal(links[0]?.textContent, '实验对照')
       assert.deepEqual(links.map(link => [link.getAttribute('data-file-path'), link.getAttribute('data-file-line')]), [
         ['/srv/project/reports/5 秒与 10 秒.md', null], ['src/main.ts', '24'], ['C:/工作/test#1.md', '7'],
-        ['notes.md', null], ['./notes:24', null], ['./app.ts', null],
+        ['notes.md', null], ['./notes:24', null], ['./app.ts', null], ['./app.ts', '31'],
       ])
+      assert.deepEqual(links.map(link => link.getAttribute('data-file-end-line')), [null, null, '12', null, null, null, '35'])
     }
     const definition = renderedDocument('[报告][r]\n\n[r]: <./目录/报告.md#L3>', false, true)
     assert.equal(definition.querySelector('[data-file-path]')?.getAttribute('data-file-line'), '3')

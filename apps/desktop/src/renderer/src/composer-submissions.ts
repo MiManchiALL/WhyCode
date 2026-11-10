@@ -1,4 +1,5 @@
 import type { ComposerDraft } from './composer-drafts.ts'
+import { codeReferenceMessage, restoreCodeReferences } from './code-reference.ts'
 import type { CoreEvent, QueuedUserMessage } from '@whycode/core/events'
 import type { Block } from '../../shared/conversation-state.ts'
 
@@ -62,7 +63,7 @@ export class ComposerSubmissions {
   private receive(runtimeId: string, inputId: string, text: string, btw: boolean): void {
     const submission = this.pending.get(runtimeId)
     if (!submission || submission.receivedInputId || submission.previousInputIds.has(inputId)
-      || submission.draft.text !== text || Boolean(submission.draft.btwMode) !== btw) return
+      || Boolean(submission.draft.btwMode) !== btw || codeReferenceMessage(submission.draft.text, submission.draft.codeReferences) !== text) return
     submission.receivedInputId = inputId
     this.publish(new Map(this.pending))
   }
@@ -110,6 +111,8 @@ export function prependComposerDraft(sent: ComposerDraft, current?: ComposerDraf
     images: [...sent.images, ...current.images],
     pdfs: [...sent.pdfs, ...current.pdfs],
     skills: [...new Map([...sent.skills, ...current.skills].map(skill => [skill.id, skill])).values()],
+    ...(sent.codeReferences?.length || current.codeReferences?.length
+      ? { codeReferences: restoreCodeReferences(sent.codeReferences ?? [], current.codeReferences ?? []) } : {}),
     btwMode: sent.btwMode ?? current.btwMode,
     restoredInputIds: [...new Set([...sent.restoredInputIds, ...current.restoredInputIds])],
   }

@@ -24,7 +24,7 @@ export function FileDiff({ path, preview, wrap = false, className = '' }: {
   return <div ref={ref} onScroll={onScroll} style={{ overscrollBehaviorY }} className={`wc-scrollbar overflow-auto ${className}`}>
     {hunks.map((hunk, index) => <div key={hunk.id}>
       {index > 0 && <div className="wc-diff-hunk-gap" aria-label="另一处改动">···</div>}
-      <SyntaxCode path={path} lines={hunk.lines} scroll={false} wrap={wrap} />
+      <SyntaxCode path={path} lines={hunk.lines} diff scroll={false} wrap={wrap} />
     </div>)}
   </div>
 }
