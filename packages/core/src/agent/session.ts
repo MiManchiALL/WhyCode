@@ -1235,7 +1235,7 @@ export class AgentSession {
   private turnEditRecorder(): SessionRecorder {
     const recorder = this.options.sessionRecorder
     if (!recorder) throw new Error('当前会话没有可回滚的持久记录')
-    if (this.isBusy || this.activeTurn || this.queue.length > 0) {
+    if (this.isBusy || this.activeTurn) {
       throw new Error('Agent 尚未空闲，不能编辑最新消息')
     }
     if (
@@ -1246,7 +1246,7 @@ export class AgentSession {
       throw new Error('协商或评审回合不能使用单回合编辑')
     }
     if (this.persistenceFailed) {
-      throw new Error('会话仍有待处理输入，不能编辑最新消息')
+      throw new Error('会话记录写入失败，不能编辑最新消息')
     }
     return recorder
   }
@@ -1292,14 +1292,7 @@ export class AgentSession {
         if (startedMain) throw new Error('编辑后的回合已经启动')
         startedMain = true
         accept()
-        const notifications = this.drainTaskNotifications([message])
-        return this.startTurn(
-          [message, ...notifications.map((item) => item.message)],
-          [],
-          inputId,
-          skills,
-          notifications,
-        )
+        return this.startUserTurn(message, [], inputId, skills)
       },
     }
   }
@@ -1358,8 +1351,8 @@ export class AgentSession {
       throw new Error('Skill 只在 Main 执行阶段可用')
     }
     this.registerInputAttachments(item)
-    this.queueAutoDrain = true
     if (this.isBusy) {
+      this.queueAutoDrain = true
       this.queue.push(item)
       if (!alreadyQueued) this.options.emit({ type: 'message-queued', ...queuedUserMessage(item),
         ...(item.questionReply && this.questionAnswerTurnId ? { answerTurnId: this.questionAnswerTurnId } : {}),
@@ -1377,13 +1370,22 @@ export class AgentSession {
     if (!delivered.length) this.activatePdfAttachments(item.pdfAttachments)
     // 已提交却随上轮停止的回答，在下一次用户主动开始工作时进入稳定步骤。
     for (const retained of this.queue) if (retained.questionReply) retained.urgent = true
-    const message = queuedMessageForModel(item)
+    return this.startUserTurn(queuedMessageForModel(item), delivered, rootInputId, item.skills)
+  }
+
+  private startUserTurn(
+    message: ModelMessage,
+    delivered: readonly QueuedMessage[],
+    rootInputId: string | undefined,
+    skills: readonly ActivatedSkill[],
+  ): Promise<StopReason> {
+    this.queueAutoDrain = true
     const notifications = this.drainTaskNotifications([message])
     return this.startTurn(
       [message, ...notifications.map((notification) => notification.message)],
       delivered,
       rootInputId,
-      item.skills,
+      skills,
       notifications,
     )
   }

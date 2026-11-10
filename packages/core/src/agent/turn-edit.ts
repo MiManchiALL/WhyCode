@@ -17,8 +17,9 @@ export async function inspectLatestTurnEdit(recorder: SessionRecorder, turnId: s
 
 export function latestTurnEditContext(recorder: SessionRecorder, turnId: string, messages = recorder.initialMessages) {
   if (recorder.interruptedConsensusTaskId) throw new Error('协商或评审回合不能使用单回合编辑')
-  if (recorder.undeliveredUserInputIds.length > 0 || recorder.pendingUserInputs.length > 0) {
-    throw new Error('会话仍有待处理输入，不能编辑最新消息')
+  if (recorder.interruptedTurnId) throw new Error('仍有活动回合，不能编辑最新消息')
+  if (recorder.undeliveredUserInputIds.length > 0) {
+    throw new Error('新提交的根消息尚未交付，不能编辑最新消息')
   }
   const rollbackMessages = recorder.messagesBeforeTurn(turnId)
   const rollbackTaskState = recorder.taskStateBeforeTurn(turnId)
