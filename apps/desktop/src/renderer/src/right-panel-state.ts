@@ -9,7 +9,7 @@ export const MAX_EXPANDED_WORKSPACE_DIRECTORIES = MAX_PREVIEW_VIEWS - 3
 
 export type FilePreviewToolName = 'WriteFile' | 'EditFile'
 
-export interface FileLineLocation { line: number }
+export interface FileLineLocation { line: number; endLine?: number }
 
 export type RightPanelFileSource =
   | {
@@ -177,7 +177,14 @@ export class RightPanelSessionStore {
         [...this.states].map(([key, state]) => {
           const tabs = state.tabs.filter((tab) => tab.page.kind !== 'terminal'
             && !(tab.page.kind === 'browser' && tab.page.url.startsWith('data:')))
-            .map(tab => tab.page.kind === 'browser' ? { ...tab, page: { ...tab.page, referenceRequest: undefined } } : tab)
+            .map(tab => {
+              const { page } = tab
+              if (page.kind === 'browser') return { ...tab, page: { ...page, referenceRequest: undefined } }
+              if (page.kind === 'file' && page.source.kind === 'current' && page.source.location) {
+                return { ...tab, page: { ...page, source: { kind: 'current' } } }
+              }
+              return tab
+            })
           return {
             key, open: state.open, tabs, inspectorView: state.inspectorView,
             activeTabId: tabs.some((tab) => tab.id === state.activeTabId)
@@ -410,13 +417,7 @@ function parsePage(value: unknown): RightPanelPage | null {
 function parseFileSource(value: unknown): RightPanelFileSource | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const source = value as Record<string, unknown>
-  if (source.kind === 'current') {
-    if (source.location === undefined) return { kind: source.kind }
-    const location = source.location
-    return location && typeof location === 'object' && 'line' in location
-      && typeof location.line === 'number' && Number.isSafeInteger(location.line) && location.line > 0
-      ? { kind: source.kind, location: { line: location.line } } : null
-  }
+  if (source.kind === 'current') return { kind: source.kind }
   if (
     source.kind === 'snapshot'
     && typeof source.toolUseId === 'string'

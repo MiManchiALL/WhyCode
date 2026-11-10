@@ -6,6 +6,7 @@ import type { ComposerDraft } from './composer-drafts.ts'
 import { QueuedImageStrip } from './image-attachments.tsx'
 import { QueuedPdfStrip } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
+import { CodeReferenceChips } from './code-reference-chips.tsx'
 
 export type QueuedMessageAction = 'edit' | 'discard' | 'send-now'
 
@@ -71,6 +72,7 @@ function QueuedMessageCard(props: QueuedMessageProps | { draft: ComposerDraft })
         {!submitting && <QueuedMessageActions {...props} />}
       </div>
       <SkillBadges skills={message.skills} />
+      {submitting && <CodeReferenceChips items={props.draft.codeReferences} />}
       <QueuedImageStrip attachments={submitting ? props.draft.images : props.message.attachments} />
       <QueuedPdfStrip attachments={submitting ? props.draft.pdfs : props.message.pdfAttachments} />
     </div>

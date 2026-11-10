@@ -50,7 +50,7 @@ export interface FileLinkNavigation {
   onOpenFile: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
 }
 
-export function MarkdownFileLink({ path, line, projectDir, onOpenFile, children }:
+export function MarkdownFileLink({ path, line, endLine, projectDir, onOpenFile, children }:
   MarkdownFileTarget & FileLinkNavigation & { children?: ReactNode }) {
   // Windows 会把 POSIX 根路径解释到当前盘符，两种工作区的绝对路径不能互换。
   if (isWindowsAbsolutePath(projectDir) ? path.startsWith('/') : isWindowsAbsolutePath(path)) return children
@@ -58,10 +58,10 @@ export function MarkdownFileLink({ path, line, projectDir, onOpenFile, children 
   return createElement('button', {
     type: 'button',
     className: 'wc-path-reference wc-file-link wc-focus-ring',
-    title: line ? `${fullPath}:${line}` : fullPath,
+    title: line ? `${fullPath}:${line}${endLine ? `–${endLine}` : ''}` : fullPath,
     onClick: () => onOpenFile({
       kind: 'file', path: fullPath, name: fileName(fullPath), previewMode: line ? 'code' : 'preview',
-      source: { kind: 'current', ...(line ? { location: { line } } : {}) },
+      source: { kind: 'current', ...(line ? { location: { line, ...(endLine ? { endLine } : {}) } } : {}) },
     }),
   }, children)
 }

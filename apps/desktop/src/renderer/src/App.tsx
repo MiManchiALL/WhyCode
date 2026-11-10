@@ -105,6 +105,9 @@ import { composerKeyAction, composerPrimaryAction } from './composer-key.ts'
 import { ComposerInput } from './composer-input.tsx'
 import { ComposerText, ComposerValue } from './composer-text.ts'
 import { ComposerDraftStore, composerDraftKey, type QuestionDraft } from './composer-drafts.ts'
+import { ComposerCodeReferences, codeReferenceMessage, restoreCodeReferences, retainedCodeComments } from './code-reference.ts'
+import { CodeReferenceChips } from './code-reference-chips.tsx'
+import type { CodeReview } from './code-review.tsx'
 import {
   ComposerSubmissions,
   composerInputIds,
@@ -183,6 +186,8 @@ export function App() {
   const [runtimeId, setRuntimeId] = useState('')
   const [view, setView] = useState(() => createConversationState())
   const [input] = useState(() => new ComposerText())
+  const [codeReferences] = useState(() => new ComposerCodeReferences())
+  const codeItems = useSyncExternalStore(codeReferences.subscribe, codeReferences.getSnapshot)
   const setInput = input.set
   const inputEmpty = useSyncExternalStore(input.subscribe, input.isEmpty)
   const [btwMode, setBtwModeState] = useState<BtwMode | null>(null)
@@ -491,17 +496,18 @@ export function App() {
     replace: replacePdfDrafts,
   } = usePdfDrafts(showError)
 
-  const messageEmpty = inputEmpty && imageDrafts.length === 0 && pdfDrafts.length === 0 && selectedSkills.length === 0
+  const messageEmpty = inputEmpty && imageDrafts.length === 0 && pdfDrafts.length === 0 && selectedSkills.length === 0 && !codeItems.some(item => item.pending)
   const hasComposerDraft = !messageEmpty || btwMode !== null
   const editRestoredInput = useCallback((item: QueuedUserMessage) => {
     setInput(item.text)
+    codeReferences.replace(retainedCodeComments(codeReferences.getSnapshot()))
     replaceImageDrafts(restoredImageDrafts([item]))
     replacePdfDrafts(restoredPdfDrafts([item]))
     replaceSkills(item.skills ?? [])
     closeSkillMenu()
     setBtwMode(null)
     setRestoredInputIds([item.id])
-  }, [setInput, replaceImageDrafts, replacePdfDrafts, replaceSkills, closeSkillMenu, setBtwMode])
+  }, [setInput, codeReferences, replaceImageDrafts, replacePdfDrafts, replaceSkills, closeSkillMenu, setBtwMode])
 
   useEffect(() => () => {
     conversationEventBufferRef.current?.clear()
@@ -522,7 +528,8 @@ export function App() {
     const skills = captureSkills()
     const currentBtwMode = btwModeRef.current
     const draft = {
-      question: questionInput.getSnapshot(), text, images, pdfs, skills, btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
+      question: questionInput.getSnapshot(), text, images, pdfs, skills, codeReferences: codeReferences.getSnapshot(),
+      btwMode: currentBtwMode, restoredInputIds: restoredInputIdsRef.current,
     }
     const pending = composerSubmissions.getSnapshot().get(currentRuntimeId)
     // 切换前保存当前所有者的最新输入，不能等新会话接管后再执行自动保存。
@@ -530,19 +537,19 @@ export function App() {
       pending ? prependComposerDraft(pending.draft, draft) : draft).catch(draftStorageError)
     if (pending) pending.remainder = draft
     else composerDraftsRef.current.cache(composerDraftKey(currentRuntimeId, currentSessionId), draft)
-  }, [input, captureSkills, questionInput, composerSubmissions, detachImageDrafts, detachPdfDrafts, draftStorageError])
+  }, [input, captureSkills, codeReferences, questionInput, composerSubmissions, detachImageDrafts, detachPdfDrafts, draftStorageError])
 
   const persistComposer = useCallback(async () => {
     if (!runtimeId || runtimeId !== runtimeIdRef.current) return
     const draft = {
       question: questionInput.getSnapshot(), text: input.getSnapshot(), images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills,
-      btwMode, restoredInputIds,
+      codeReferences: codeReferences.getSnapshot(), btwMode, restoredInputIds,
     }
     const pending = composerSubmissions.getSnapshot().get(runtimeId)
     await composerDraftsRef.current.save(composerDraftKey(runtimeId, sessionIdRef.current),
       pending ? prependComposerDraft(pending.draft, draft) : draft)
   }, [runtimeId, input, imageDrafts, pdfDrafts, selectedSkills, btwMode, restoredInputIds,
-    submissionPending, composerSubmissions, questionInput])
+    submissionPending, composerSubmissions, questionInput, codeReferences])
   const persistComposerRef = useRef(persistComposer)
   persistComposerRef.current = persistComposer
 
@@ -558,8 +565,9 @@ export function App() {
     schedule()
     const unsubscribe = input.subscribe(schedule)
     const unsubscribeQuestions = questionInput.subscribe(schedule)
-    return () => { unsubscribe(); unsubscribeQuestions(); clearTimeout(timer) }
-  }, [input, persistComposer, questionInput, draftStorageError])
+    const unsubscribeCode = codeReferences.subscribe(schedule)
+    return () => { unsubscribe(); unsubscribeQuestions(); unsubscribeCode(); clearTimeout(timer) }
+  }, [input, persistComposer, questionInput, codeReferences, draftStorageError])
   useEffect(() => window.whycode.onBeforeClose(async () => {
     try {
       await persistComposerRef.current()
@@ -848,6 +856,7 @@ export function App() {
       if (pending) pending.remainder = undefined
       questionInput.replace(reconcileQuestionDraft(draft?.question, snapshot.history.view.pendingQuestions))
       setInput(draft?.text ?? '')
+      codeReferences.replace(draft?.codeReferences ?? [])
       restoredIds = (draft?.restoredInputIds ?? []).filter((id) => validRestoredIds.has(id))
       setBtwMode(draft?.btwMode ?? null)
       replaceSkills(draft?.skills ?? [])
@@ -912,7 +921,7 @@ export function App() {
     setBtwMode,
     setDeletingSession,
     setResumingSessionId,
-    stashActiveComposer, questionInput,
+    stashActiveComposer, questionInput, codeReferences,
     stashActivePresentation,
     history.reset,
   ])
@@ -1949,9 +1958,12 @@ export function App() {
       showError('BTW 不使用 PDF、Skill 或恢复队列输入')
       return
     }
-    const text = input.getSnapshot().trim()
+    const body = input.getSnapshot().trim()
       || attachmentFallbackText(imageDrafts.length, sentBtwMode ? 0 : pdfDrafts.length)
       || (imageDrafts.length === 0 && sentSkills.length ? '请按所选 Skill 执行。' : '')
+    const originalReferences = codeReferences.getSnapshot()
+    const sentReferences = originalReferences.filter(item => item.pending)
+    const text = codeReferenceMessage(body, sentReferences)
     if (!text && imageDrafts.length === 0) return
     const sentImageDrafts = detachImageDrafts()
     const sentPdfDrafts = detachPdfDrafts()
@@ -1963,20 +1975,22 @@ export function App() {
       previousInputIds: composerInputIds(blocks, [...queued, ...restoredQueue]),
       abortController: new AbortController(),
       draft: {
-        question: questionInput.getSnapshot(), text, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills,
+        question: questionInput.getSnapshot(), text: body, images: sentImageDrafts, pdfs: sentPdfDrafts, skills: sentSkills, codeReferences: sentReferences,
         btwMode: sentBtwMode, restoredInputIds: sentRestoredInputIds,
       },
       ...(!conversationStarted && workspace.mode === 'pending-worktree'
         ? { worktreeBaseRef: workspace.baseRef } : {}),
     }
     composerSubmissions.start(submission)
+    codeReferences.replace(retainedCodeComments(originalReferences))
     setRestoredInputIds([])
     setInput('')
     clearSkills()
     setBtwMode(null)
     // 沿用发送前的浏览位置；只有原本贴底时，既有内容跟随才会继续滚动。
     const restoreRejectedInput = () => {
-      setInput((current) => text && current ? `${text}\n${current}` : text || current)
+      setInput((current) => body && current ? `${body}\n${current}` : body || current)
+      codeReferences.replace(restoreCodeReferences(sentReferences, codeReferences.getSnapshot()))
       restoreImageDrafts(sentImageDrafts)
       restorePdfDrafts(sentPdfDrafts)
       mergeRestoredSkills(sentSkills)
@@ -1990,7 +2004,7 @@ export function App() {
       const { signal } = submission.abortController
       try {
         await composerDraftsRef.current.save(
-          composerDraftKey(targetRuntimeId, submission.sessionId), submission.draft,
+          composerDraftKey(targetRuntimeId, submission.sessionId), { ...submission.draft, codeReferences: originalReferences },
         )
         signal.throwIfAborted()
         const attachments = await prepareImageDrafts(sentImageDrafts, signal)
@@ -2089,6 +2103,7 @@ export function App() {
     draftStorageError,
     captureSkills,
     checkpointRestoreToolUseId,
+    codeReferences,
     clearSkills,
     conversationStarted,
     deletionBlocksRuntime,
@@ -2265,9 +2280,30 @@ export function App() {
         images: pendingDraft?.images ?? [],
         pdfs: pendingDraft?.pdfs ?? [],
         skills: pendingDraft?.skills ?? [],
+        codeReferences: pendingDraft?.codeReferences,
         btwMode: pendingDraft?.btwMode ?? null,
       }
-    : { images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, btwMode }
+    : { images: imageDrafts, pdfs: pdfDrafts, skills: selectedSkills, codeReferences: codeItems, btwMode }
+
+  const sshTarget = workspace.mode === 'ssh' ? workspace.target : undefined
+  const codeReview = useMemo<Omit<CodeReview, 'version'> | null>(() => projectDir ? {
+    workspace: projectDir, sshTarget, items: codeItems, disabled: attachmentLocked,
+    add(reference) {
+      if (runtimeIdRef.current !== runtimeId || attachmentLocked) return false
+      if (!codeReferences.add(reference)) {
+        showError('代码引用空间已满，请缩小选区或移除已有引用。')
+        return false
+      }
+      if (!reference.comment) {
+        if (panelFullscreen) {
+          setRightPanelFullscreen(false)
+          requestAnimationFrame(() => { if (runtimeId === runtimeIdRef.current) composerInputRef.current?.focus() })
+        } else composerInputRef.current?.focus()
+      }
+      return true
+    },
+    remove: codeReferences.remove,
+  } : null, [projectDir, sshTarget, codeItems, attachmentLocked, runtimeId, codeReferences, showError, panelFullscreen])
 
   const panelSessionKey = composerKey(runtimeId, sessionIdRef.current)
   const markdownViewOwner = useMemo(() => ({
@@ -2540,6 +2576,7 @@ export function App() {
                       } catch (error) { showError(String(error)) }
                     }} />
                     <div className="wc-composer-chips">
+                      <CodeReferenceChips items={composerDraft.codeReferences} onRemove={attachmentLocked ? undefined : codeReferences.remove} />
                       {!loadingConversation && questionCollapsed && answerableQuestions.length > 0 && <button type="button" className="wc-question-summary wc-focus-ring"
                         onClick={() => {
                           const draft = questionInput.getSnapshot()
@@ -2728,6 +2765,7 @@ export function App() {
 
             >
               <RightPanel
+                codeReview={codeReview}
                 gitData={gitData}
                 gitRevision={gitRevision}
                 busy={interactionBusy}

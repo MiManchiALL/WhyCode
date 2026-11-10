@@ -120,13 +120,13 @@ export const MarkdownContent = memo(function MarkdownContent({
 
 /** 链接直接订阅回答投影，流式块缓存也能在正常完成时切换到引用展示。 */
 function MarkdownLink({ children, href, onClick, onSourceClick, 'data-source-citation-url': citationUrl,
-  'data-file-path': filePath, 'data-file-line': line, ...props }: ComponentProps<typeof MarkdownAnchor> & {
-    onSourceClick: (url: string) => void; 'data-source-citation-url'?: string; 'data-file-path'?: string; 'data-file-line'?: number
+  'data-file-path': filePath, 'data-file-line': line, 'data-file-end-line': endLine, ...props }: ComponentProps<typeof MarkdownAnchor> & {
+    onSourceClick: (url: string) => void; 'data-source-citation-url'?: string; 'data-file-path'?: string; 'data-file-line'?: number; 'data-file-end-line'?: number
   }) {
   const response = useContext(ResponseSourcesContext)
   const navigation = useContext(FileLinkContext)
   if (filePath && navigation) {
-    return <MarkdownFileLink {...navigation} path={filePath} line={line}>{children}</MarkdownFileLink>
+    return <MarkdownFileLink {...navigation} path={filePath} line={line} endLine={endLine}>{children}</MarkdownFileLink>
   }
   const sourceUrl = normalizeSourceUrl(href)
   const source = citationUrl ? response?.sources.find(source => source.url === citationUrl) : undefined

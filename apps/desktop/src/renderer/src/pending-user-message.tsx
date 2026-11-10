@@ -3,6 +3,7 @@ import { PendingImageGallery } from './image-attachments.tsx'
 import { PdfDraftStrip } from './pdf-attachments.tsx'
 import { SkillBadges } from './skill-picker.tsx'
 import { UserMessageBubble } from './user-message-card.tsx'
+import { CodeReferenceChips } from './code-reference-chips.tsx'
 
 /** 单条输入只在正式时间线接替前显示预览。 */
 export function PendingUserMessage(props: { draft: ComposerDraft } | { answer: string }) {
@@ -15,6 +16,7 @@ export function PendingUserMessage(props: { draft: ComposerDraft } | { answer: s
       className="wc-user-message-copy mb-2 ml-auto flex w-full min-w-0 max-w-[84%] flex-col items-end gap-2"
     >
       {draft && <>
+        <CodeReferenceChips items={draft.codeReferences} />
         <PendingImageGallery drafts={draft.images} />
         <PdfDraftStrip drafts={draft.pdfs} variant="message" />
         <SkillBadges skills={draft.skills} />
