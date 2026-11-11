@@ -242,7 +242,7 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 | `ListDir` | `{path,offset?,limit?}`；有界目录分页 |
 | `Glob` | `{path,pattern,offset?,limit?}`；有界文件名匹配 |
 | `Grep` | `{path,pattern,outputMode?,include?,caseSensitive?,literal?,context?,offset?,limit?}` |
-| `ReadFile` | `path` 加可选 `offset`、`limit`、`pages`；统一读取文本、图片和 PDF |
+| `ReadFile` | `path` 加可选 `offset`、`limit`、`column`、`pages`，统一读取文本、图片和 PDF |
 | `WriteFile` | `{path,content}`；只用于新建或整文件重写 |
 | `EditFile` | `{edits:[{path,oldText,newText,replaceAll?}]}`，1～50 项，基于调用开始时原快照原子预检 |
 | `RunCommand` | `{command,cwd?,timeoutMs?,runInBackground?,wakeOnCompletion?}`；默认前台非交互等待且无 stdin；后台任务由 Header 与 `ManageCommand` 管理，`wakeOnCompletion=true` 登记自然终态续轮，用户手动停止独立通知；不扫描工作区、不建文件检查点 |
@@ -254,7 +254,9 @@ JSONL 按结果完成时刻追加，规范历史在同一连续工具结果组�
 
 `Glob` 与 `Grep` 每次执行共用 30 秒总预算，覆盖执行内的目录校验、搜索和回退；本地与 SSH 相同，不开放单次超时参数。到期取消搜索进程或匹配 Worker，返回明确的失败工具结果供模型继续处理；不把超时视为无匹配、成功的部分结果或用户停止，不取消所属 Agent 回合。原生搜索按路径排序以稳定分页；无路径分隔符的 glob 匹配各层文件名。
 
-`ReadFile` 的 `path` 接受工作区相对路径、已授权的绝对路径或当前会话提供的 `attachment://<UUID>` PDF 引用。文本返回带行号的 UTF-8 内容；省略 `offset`、`limit` 时尝试完整读取，单次输出受 256 KiB 和约 25,000 token 限制，超限明确失败并提示缩小范围。指定行范围可流式读取大文件，不静默截断字符或行；成功结果说明后续起始行。`offset`、`limit` 只用于文本，`pages` 只用于 PDF，错用参数明确拒绝。图片和 PDF 的返回方式见 §3.6–3.7。
+`ReadFile` 的 `path` 接受工作区相对路径、已授权的绝对路径或当前会话提供的 `attachment://<UUID>` PDF 引用。文本、图片和 PDF 按文件类型校验参数，`pages` 仅用于 PDF。图片和 PDF 的返回方式见 §3.6–3.7。
+
+文本返回带行号的 UTF-8 正文。`offset` 指定起始行，默认为 1。`limit` 指定最多行数，省略时尝试读至文件末尾。单次输出连同续读提示最多 256 KiB、约 25,000 token。还有后文时优先返回完整行和下一行的 `offset`。起始行本身放不下时，返回标记为片段的正文、同一行的 `offset` 和下一列 `column`。列号按 Unicode 码点从 1 计数，仅作用于起始行，续段标为 `行号:列号`。容量不足以读完指定范围时，提示中的 `limit` 为该范围剩余行数。
 
 `RunCommand` 前台输出以 UTF-8 字节和行数双重约束，最多预览尾部 50 KiB、2000 行。未超限时直接返回文本，不创建日志；超限时返回 `command-output` JSON，schema 单源为 `tools/run-command/output-result.ts`，包含 `output`、`totalBytes`、`totalLines`，仅在完整写入并关闭文件后提供 `fullOutputPath`，终态或保存失败说明置于 `diagnostic`。预览保留完整字符与整行，EOF 的无换行末行可保留；超限单行整行省略，JSON 转义超过结果预算时继续省略最早整行，文件内容不受影响。模型可用 `ReadFile` 分页读取或 `Grep` 搜索日志；Renderer 按同一结构展示预览、路径与诊断。取消和超时仍可返回停止前已完整保存的输出，保存失败使工具失败且不声称日志完整；磁盘上的部分文件仍归会话清理。日志位置、背压与释放机制见文档二 §5.2、§7.2。
 
