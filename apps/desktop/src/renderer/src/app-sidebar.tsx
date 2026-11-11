@@ -180,11 +180,7 @@ export function AppSidebar(props: AppSidebarProps) {
             <SidebarProjects projects={props.projects}
               busy={props.busy || props.navigationLocked} onSelect={props.onSelectProject}
               onRename={props.onRenameProject} onRemove={props.onRemoveProject}
-              renderSessions={project => {
-                const items = byProject.get(project.id)!
-                return items.length ? renderSessions(items)
-                  : <p className="px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">暂无会话</p>
-              }} />
+              sessionsByProject={byProject} renderSessions={renderSessions} />
             {recentSessions.length > 0 && (
               <section className="mb-4">
                 <h2 className="mb-1 whitespace-nowrap px-2 wc-type-caption font-medium tracking-wide text-[var(--wc-faint)]">

@@ -3,17 +3,21 @@ import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Server
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as AlertDialog from '@radix-ui/react-alert-dialog'
 import { MAX_PROJECT_NAME_LENGTH, type SidebarProject } from '../../shared/projects.ts'
+import type { SessionListItem } from '../../shared/session.ts'
 import { NameEditorDialog } from './name-editor.tsx'
 import { useSidebarGroupCollapsed } from './sidebar-collapse.ts'
 import { SettingsButton } from './settings-layout.tsx'
 
+const PROJECT_SESSION_PREVIEW_LIMIT = 4
+
 interface SidebarProjectsProps {
   projects: readonly SidebarProject[]
+  sessionsByProject: ReadonlyMap<string, readonly SessionListItem[]>
   busy: boolean
   onSelect: (projectId?: string) => void
   onRename: (id: string, name: string) => Promise<boolean>
   onRemove: (id: string) => void
-  renderSessions: (project: SidebarProject) => ReactNode
+  renderSessions: (sessions: readonly SessionListItem[]) => ReactNode
 }
 
 export function SidebarProjects(props: SidebarProjectsProps) {
@@ -30,22 +34,48 @@ export function SidebarProjects(props: SidebarProjectsProps) {
         aria-label="添加项目" title="添加项目" disabled={props.busy}
         onClick={() => { setCollapsed(false); props.onSelect() }}><Plus size={15} /></button>
     </div>
-    {!collapsed && (props.projects.length ? <div className="space-y-1">
+    <div className="space-y-1">
       {props.projects.map(project => <ProjectGroup key={project.id} project={project}
-        busy={props.busy} onSelect={props.onSelect} onRename={() => setRenameId(project.id)} onRemove={props.onRemove}>
-        {props.renderSessions(project)}
-      </ProjectGroup>)}
-    </div> : <p className="px-2 py-2 wc-type-caption text-[var(--wc-faint)]">没有项目</p>)}
+        hidden={collapsed} sessions={props.sessionsByProject.get(project.id)!} renderSessions={props.renderSessions}
+        busy={props.busy} onSelect={props.onSelect} onRename={() => setRenameId(project.id)} onRemove={props.onRemove} />)}
+      {!collapsed && !props.projects.length && <p className="px-2 py-2 wc-type-caption text-[var(--wc-faint)]">没有项目</p>}
+    </div>
     {renamed && <NameEditorDialog key={renamed.id} id={renamed.id} title={renamed.name} label="项目"
       description="只更改显示名称，文件夹路径保持不变。" maxLength={MAX_PROJECT_NAME_LENGTH}
       onRename={props.onRename} onClose={() => setRenameId(null)} />}
   </section>
 }
 
-function ProjectGroup({ project, busy, onSelect, onRename, onRemove, children }: {
-  project: SidebarProject; busy: boolean
-  onSelect: (id: string) => void; onRename: () => void; onRemove: (id: string) => void; children: ReactNode
+interface ProjectFolderProps {
+  project: SidebarProject
+  busy: boolean
+  onSelect: (id: string) => void
+  onRename: () => void
+  onRemove: (id: string) => void
+}
+
+function ProjectGroup({ hidden, sessions, renderSessions, ...folder }: ProjectFolderProps & {
+  hidden: boolean
+  sessions: readonly SessionListItem[]
+  renderSessions: SidebarProjectsProps['renderSessions']
 }) {
+  const [showAllSessions, setShowAllSessions] = useState(false)
+  if (hidden) return null
+  const hasMoreSessions = sessions.length > PROJECT_SESSION_PREVIEW_LIMIT
+  const visibleSessions = hasMoreSessions && !showAllSessions ? sessions.slice(0, PROJECT_SESSION_PREVIEW_LIMIT) : sessions
+  return <ProjectFolder {...folder}>
+    {visibleSessions.length
+      ? renderSessions(visibleSessions)
+      : <p className="px-3 py-2 wc-type-tiny text-[var(--wc-faint)]">暂无会话</p>}
+    {hasMoreSessions && <button type="button" aria-expanded={showAllSessions}
+      className="wc-focus-ring w-full rounded-lg py-1.5 pl-7 pr-2 text-left wc-type-control text-[var(--wc-muted)] hover:bg-[var(--wc-hover)] hover:text-[var(--wc-ink)]"
+      onClick={() => setShowAllSessions(show => !show)}>
+      {showAllSessions ? '收起' : '展开显示'}<span className="sr-only"> {folder.project.name} 的更多会话</span>
+    </button>}
+  </ProjectFolder>
+}
+
+function ProjectFolder({ project, busy, onSelect, onRename, onRemove, children }: ProjectFolderProps & { children: ReactNode }) {
   const [collapsed, setCollapsed] = useSidebarGroupCollapsed(`project:${project.id}`)
   const [confirmRemove, setConfirmRemove] = useState(false)
   const menuTrigger = useRef<HTMLButtonElement>(null)
