@@ -21,6 +21,7 @@ it('长命令结果展示预览、完整日志路径和失败诊断，复制文�
 describe('工具卡片关键参数摘要', () => {
   const cases: Array<[string, Record<string, unknown>, string]> = [
     ['ReadFile', { path: 'src/app.ts', offset: 11, limit: 20 }, 'src/app.ts · lines 11–30'],
+    ['ReadFile', { path: 'logs.jsonl', offset: 70, column: 4001 }, 'logs.jsonl · from line 70 · column 4001'],
     ['ListDir', { path: 'src' }, 'src'],
     ['Glob', { pattern: '**/*.tsx', path: 'apps' }, '“**/*.tsx” · apps'],
     ['Grep', { pattern: 'summarizeInput', path: 'apps', include: '*.tsx' }, '“summarizeInput” · apps · include *.tsx'],

@@ -23,13 +23,14 @@ export function createReadFileTool(options: ReadFileToolOptions = {}) {
       path: z.string().min(1).describe('工作区相对路径、已授权的绝对路径，或当前会话提供的附件引用'),
       offset: z.number().int().min(1).optional().describe('文本起始行号，从 1 开始（适合长文件）'),
       limit: z.number().int().min(1).optional().describe('最多读取的文本行数（适合长文件）'),
+      column: z.number().int().min(1).optional().describe('文本起始行的起始列，按 Unicode 码点从 1 计数；续读长行时使用结果给出的值'),
       pages: z.string().optional().describe('PDF 页码或连续页段，例如 "3"、"1-5"；最多 20 页'),
     }).superRefine((input, ctx) => {
       const kind = fileReadKind(input.path)
       if (isAttachmentReference(input.path) && !attachmentReferenceId(input.path)) {
         ctx.addIssue({ code: 'custom', path: ['path'], message: '附件引用必须使用 attachment:// 后接当前会话提供的附件 UUID' })
       }
-      for (const key of ['offset', 'limit'] as const) {
+      for (const key of ['offset', 'limit', 'column'] as const) {
         if (kind !== 'text' && input[key] !== undefined) {
           ctx.addIssue({ code: 'custom', path: [key], message: `${key} 仅用于文本文件` })
         }

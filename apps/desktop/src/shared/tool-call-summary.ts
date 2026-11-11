@@ -59,7 +59,7 @@ function knownToolSummary(
     case 'ReadFile':
       if (fileReadKind(exactText(input, 'path')) === 'image') return parts(text(input, 'path'), fixed('high'))
       if (fileReadKind(exactText(input, 'path')) === 'pdf') return readPdfSummary(input)
-      return parts(text(input, 'path'), fixed(lineRange(input, 'offset', 'limit')))
+      return parts(text(input, 'path'), fixed(lineRange(input, 'offset', 'limit')), fixed(numberLabel(input, 'column', 'column')))
     case 'ListDir':
       return text(input, 'path') || context.projectDir || '.'
     case 'Glob':

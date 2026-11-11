@@ -9,7 +9,7 @@ import { readBoundedWorkspaceFile } from '../../../../../packages/core/src/works
 import { sshFixture } from './ssh-test-fixture.ts'
 import { copyDirectorySnapshot } from '../directory-snapshot.ts'
 import { WorkspaceFiles } from '../workspace-files.ts'
-import { languageModel, modelEntry, finalStream } from '../subagent-test-fixture.ts'
+import { languageModel, modelEntry, finalStream, toolStream } from '../subagent-test-fixture.ts'
 
 async function withWorkspace(t: TestContext, run: (env: Awaited<ReturnType<typeof sshFixture>>, io: WorkspaceIO, ctx: ToolContext) => Promise<void>) {
   const env = await sshFixture(t)
@@ -20,6 +20,43 @@ async function withWorkspace(t: TestContext, run: (env: Awaited<ReturnType<typeo
     await run(env, io, { workspaceIO: io, projectDir: env.project, additionalDirs: [], abortSignal: new AbortController().signal })
   })
 }
+
+it('SSH 会话按模型收到的行列提示续读超长文本', async t => {
+  await withWorkspace(t, async (env, io) => {
+    const path = 'records.txt'
+    await writeFile(join(env.root, 'project', path), `首行\r\n${'中😀'.repeat(32_000)}行尾标记\r\n末行`)
+    let calls = 0
+    const session = new AgentSession({
+      workspaceIO: io, promptContext: { projectDir: env.project, osPlatform: 'linux' },
+      providerConfig: { apiKey: 'test' }, emit: () => {}, requestApproval: async () => ({ approved: true }),
+      model: modelEntry(languageModel(async ({ prompt }) => {
+        calls++
+        if (calls === 1) return toolStream('ReadFile', { path, offset: 1, limit: 2 }, 'read-page')
+        const result = JSON.stringify(prompt.findLast(message => message.role === 'tool')?.content)
+        if (calls === 2) {
+          assert.match(result, /首行/)
+          const line = /offset=(\d+)/u.exec(result)
+          assert.ok(line)
+          return toolStream('ReadFile', { path, offset: Number(line[1]), limit: 1 }, 'read-long-line')
+        }
+        if (calls === 3) {
+          const cursor = /offset=(\d+), column=(\d+)/u.exec(result)
+          assert.ok(cursor)
+          return toolStream('ReadFile', { path, offset: Number(cursor[1]), column: Number(cursor[2]) }, 'read-fragment')
+        }
+        assert.match(result, /行尾标记/)
+        assert.match(result, /末行/)
+        return finalStream('已读到末行')
+      })),
+    })
+    try {
+      assert.equal(await session.handleUserMessage('读取 records.txt'), 'completed')
+      assert.equal(calls, 4)
+    } finally {
+      await session.dispose()
+    }
+  })
+})
 
 it('SSH Skill 从项目与两个远端用户目录发现、选择和读取资源，同名来源独立且等长修改立即更新', async t => {
   await withWorkspace(t, async (env, io, ctx) => {

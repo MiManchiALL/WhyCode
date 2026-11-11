@@ -194,7 +194,7 @@ describe('ReadFile PDF', () => {
     const properties = schema.properties ?? {}
     assert.equal('oneOf' in schema, false)
     assert.equal('anyOf' in schema, false)
-    assert.deepEqual(Object.keys(properties), ['path', 'offset', 'limit', 'pages'])
+    assert.deepEqual(Object.keys(properties), ['path', 'offset', 'limit', 'column', 'pages'])
     assert.deepEqual(schema.required, ['path'])
     assert.deepEqual(tool.extractPaths?.({ path: `attachment://${ATTACHMENT_ID}` }), [])
     assert.deepEqual(tool.extractPaths?.(input), ['docs/reference.pdf'])
