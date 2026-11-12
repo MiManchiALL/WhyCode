@@ -7,12 +7,13 @@ import {
   type Block,
   type ConversationState,
 } from '../shared/conversation-state.ts'
-import { conversationSections } from '../shared/conversation-sections.ts'
+import { conversationSections, findLatestForkTurnId } from '../shared/conversation-sections.ts'
 import { conversationNavigationEntries } from '../shared/conversation-navigation.ts'
 import type { ConversationHistoryWindow } from '../shared/conversation-history.ts'
 
 const HISTORY_WORKS_PER_PAGE = 20
 const HISTORY_JUMP_WORKS_PER_PAGE = 100
+const INITIAL_HISTORY_TEXT_BUDGET = 4_096
 
 /** 与 Renderer 共用唯一事件投影；仅补算新提交的事件，随运行时一起释放。 */
 export class ConversationHistoryProjection {
@@ -64,6 +65,7 @@ export function conversationHistoryWindow(
   const starts = historyWorkStarts(blocks).filter((index) => index < end)
   const size = options.targetId ? HISTORY_JUMP_WORKS_PER_PAGE : HISTORY_WORKS_PER_PAGE
   let start = starts[Math.max(0, starts.length - size)] ?? 0
+  if (options.before === undefined) start = initialHistoryStart(blocks, starts, start)
   if (options.from) {
     const restored = blocks.findIndex((block) => block.id === options.from)
     if (restored >= 0) start = Math.min(start, workStartAt(starts, restored))
@@ -95,6 +97,23 @@ export function conversationHistoryWindow(
       pendingStep,
     },
   }
+}
+
+/** 首屏按正文量回溯，到达预算时仍保留整轮。向上翻页沿用正常批量。 */
+function initialHistoryStart(blocks: readonly Block[], starts: readonly number[], pageStart: number): number {
+  let textLength = 0
+  for (let index = blocks.length - 1; index >= pageStart; index--) {
+    const block = blocks[index]!
+    if (block.kind === 'text' || block.kind === 'user') textLength += block.text.length
+    if (textLength < INITIAL_HISTORY_TEXT_BUDGET) continue
+    // Fork 和 BTW 入口从已展示的完整回复取来源。最后一轮很长但未完成时保留该来源。
+    const forkTurnId = findLatestForkTurnId(conversationSections(blocks.slice(pageStart)))
+    const forkEnd = forkTurnId === null ? index : blocks.findLastIndex(
+      block => block.kind === 'work-duration' && block.forkTurnId === forkTurnId,
+    )
+    return workStartAt(starts, Math.min(index, forkEnd))
+  }
+  return pageStart
 }
 
 function historyWorkStarts(blocks: readonly Block[]): number[] {
