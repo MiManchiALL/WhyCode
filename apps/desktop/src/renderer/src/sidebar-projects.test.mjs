@@ -5,7 +5,7 @@ import { act, createElement, createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createServer } from 'vite'
 
-test('项目会话按组展示四条，独立展开，重启恢复预览', async t => {
+test('项目会话按组展示三条，独立展开，重启恢复预览', async t => {
   const vite = await createServer({
     root: import.meta.dirname, configFile: false, esbuild: { jsx: 'automatic' },
     server: { middlewareMode: true, hmr: false, watch: null },
@@ -33,16 +33,16 @@ test('项目会话按组展示四条，独立展开，重启恢复预览', async
     sessionId: group + i, title: group + i, updatedAt: '2026-01-01', resumable: true, pinned: group === '置顶',
   }))
   const local = items('本地', 6)
-  const ssh = items('远端', 5)
-  const four = items('四条', 4)
+  const ssh = items('远端', 4)
+  const three = items('三条', 3)
   const pinned = items('置顶', 5)
   const project = (name, sessions) => ({ id: name, name, directory: '/' + name, sessionIds: sessions.map(s => s.sessionId) })
   const props = {
     projects: [
       project('本地', local), { ...project('远端', ssh), remote: { target: 'ssh', label: '服务器' } },
-      project('四条', [...four, ...pinned]), project('空项目', []),
+      project('三条', [...three, ...pinned]), project('空项目', []),
     ],
-    sessions: [...pinned, ...local, ...ssh, ...four, ...items('最近', 5)],
+    sessions: [...pinned, ...local, ...ssh, ...three, ...items('最近', 5)],
     layout: { refs: { left: createRef() }, widths: { left: 260 } }, deletingSessionIds: new Set(),
     onResume: id => { props.selectedSessionId = id },
   }
@@ -57,10 +57,10 @@ test('项目会话按组展示四条，独立展开，重启恢复预览', async
   const folder = title => document.querySelector(`button[title="${title}"][aria-expanded]`)
   try {
     await render()
-    assert.deepEqual(rows('本地').map(b => b.getAttribute('aria-label')), ['打开会话 本地0', '打开会话 本地1', '打开会话 本地2', '打开会话 本地3'])
-    assert.equal(rows('远端').length, 4)
-    assert.equal(rows('四条').length, 4)
-    assert.equal(more('四条'), undefined)
+    assert.deepEqual(rows('本地').map(b => b.getAttribute('aria-label')), ['打开会话 本地0', '打开会话 本地1', '打开会话 本地2'])
+    assert.equal(rows('远端').length, 3)
+    assert.equal(rows('三条').length, 3)
+    assert.equal(more('三条'), undefined)
     assert.ok(document.body.textContent.includes('暂无会话'))
     assert.equal(rows('置顶').length, 5)
     assert.equal(rows('最近').length, 5)
@@ -68,28 +68,28 @@ test('项目会话按组展示四条，独立展开，重启恢复预览', async
     await click(more('本地'))
     assert.equal(rows('本地').length, 6)
     assert.equal(more('本地').getAttribute('aria-expanded'), 'true')
-    assert.equal(rows('远端').length, 4)
+    assert.equal(rows('远端').length, 3)
     await click(rows('本地').at(-1))
     await render()
     assert.equal(document.querySelector('[aria-current="page"]').getAttribute('aria-label'), '当前会话 本地5')
     await click(more('本地'))
-    assert.equal(rows('本地').length, 4)
+    assert.equal(rows('本地').length, 3)
     await click(more('远端'))
     await click(folder('服务器 · /远端'))
     assert.equal(rows('远端').length, 0)
     await click(folder('服务器 · /远端'))
     await click(document.querySelector('[aria-label="收起项目"]'))
     await click(document.querySelector('[aria-label="展开项目"]'))
-    assert.equal(rows('远端').length, 5)
+    assert.equal(rows('远端').length, 4)
 
-    await click(folder('/四条'))
+    await click(folder('/三条'))
     // 用同一份偏好存储重新挂载，区分文件夹折叠和项目内的条数限制。
     await act(() => root.unmount())
     root = createRoot(document.body)
     await render()
-    assert.equal(rows('远端').length, 4)
+    assert.equal(rows('远端').length, 3)
     assert.equal(more('远端').getAttribute('aria-expanded'), 'false')
-    assert.equal(folder('/四条').getAttribute('aria-expanded'), 'false')
+    assert.equal(folder('/三条').getAttribute('aria-expanded'), 'false')
   } finally {
     await act(() => root.unmount())
   }
