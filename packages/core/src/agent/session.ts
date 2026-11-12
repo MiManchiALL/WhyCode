@@ -2127,32 +2127,36 @@ export class AgentSession {
   }
 
   /** 手动先全量摘要；只有摘要请求超限时才退为保留尾部，不运行微压缩。 */
-  async compactNow(): Promise<void> {
+  async compactNow(startedCompactionId?: string): Promise<void> {
     const { emit } = this.options
-    if (this.isBusy) {
-      emit({ type: 'error', message: 'Agent 工作中，请先停止再压缩', recoverable: true })
-      return
-    }
-    if (this.messages.length < 2) {
-      emit({ type: 'error', message: '对话太短，无需压缩', recoverable: true })
+    if (this.isBusy || this.messages.length < 2) {
+      if (startedCompactionId) {
+        emit({ type: 'context-compaction', compactionId: startedCompactionId, status: 'failed' })
+        if (!this.isBusy) emit({ type: 'agent-status', status: 'idle' })
+      }
+      emit({ type: 'error', message: this.isBusy ? 'Agent 工作中，请先停止再压缩' : '对话太短，无需压缩', recoverable: true })
       return
     }
     this.compacting = true
     this.opAbort = new AbortController()
     const signal = this.opAbort.signal
-    const preTokens = this.estimateCurrentContextTokens()
+    const compactionId = startedCompactionId ?? randomUUID()
     let completed = false
-    emit({ type: 'agent-status', status: 'working' })
+    if (!startedCompactionId) {
+      emit({ type: 'agent-status', status: 'working' })
+      emit({ type: 'context-compaction', compactionId, status: 'running' })
+    }
     try {
+      const preTokens = this.estimateCurrentContextTokens()
       await this.refreshProjectInstructions()
       const tools = this.buildToolSet(signal, { emit, loopHealth: this.loopHealth },
         this.options.mcpRuntime?.toolDefinitions(this.messages) ?? [])
-      completed = await this.runFullCompaction('manual', signal, toolsForModel(tools), false, async (messages, compactionId) => {
+      completed = await this.runFullCompaction('manual', signal, toolsForModel(tools), false, async (messages) => {
         const postTokens = this.estimateCurrentContextTokens(messages, undefined, null)
         await this.commitCompaction(messages, signal, { type: 'context-compacted', level: 'full', compactionId, preTokens, postTokens })
         this.emitContextUsage(undefined, postTokens)
         return true
-      }) ?? false
+      }, compactionId) ?? false
       if (!completed) {
         emit({ type: 'error', message: '当前没有可压缩的对话历史', recoverable: true })
       }
@@ -2163,6 +2167,7 @@ export class AgentSession {
         recoverable: true,
       })
     }
+    if (!completed) emit({ type: 'context-compaction', compactionId, status: signal.aborted ? 'stopped' : 'failed' })
     this.compacting = false
     this.opAbort = null
 
@@ -2218,9 +2223,9 @@ export class AgentSession {
   private async runFullCompaction<T>(
     mode: 'auto' | 'manual', abortSignal: AbortSignal, tools: ToolSet | undefined,
     planExecutionEngaged: boolean, commit: (messages: ModelMessage[], compactionId: string) => Promise<T>,
+    compactionId: string = randomUUID(),
   ): Promise<T | null> {
     const { emit } = this.options
-    const compactionId = randomUUID()
     let inProgress = false
     try {
       const result = await compactMessages({
@@ -2229,7 +2234,8 @@ export class AgentSession {
         applicationContext: this.compactApplicationContext(planExecutionEngaged, this.activeTurn?.id),
         prepareMessagesForModel: messages => this.messagesForCurrentModel(messages, abortSignal, false),
         providerOptions: this.requestProviderOptions(),
-        onStart: () => {
+        onSummaryRequest: () => {
+          if (mode === 'manual' || inProgress) return
           inProgress = true
           emit({ type: 'context-compaction', compactionId, status: 'running' })
         },

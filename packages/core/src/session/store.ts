@@ -25,7 +25,7 @@ import { availableQuestions, hasPendingUserQuestion, pendingUserQuestions, apply
 import { latestVisibleRootTurn, compactViewEvent, viewEventSchema, type RecordedViewEvent, type ViewEvent } from './view-events.ts'
 import { responseViewEvents } from './response-view.ts'
 import { taskPlanViewBeforeTurn } from './task-plan-view.ts'
-import { buildLoadedSession, parseTranscript } from './chain.ts'
+import { buildLoadedSession, clipSessionText, parseTranscript, sessionUserTextMetadata } from './chain.ts'
 import { createSessionFork } from './fork.ts'
 import { readSessionCompaction, type SessionCompactionSummary } from './compaction-summary.ts'
 import { readSessionStartOrigin } from './fork-origin.ts'
@@ -683,7 +683,9 @@ export class SessionJournal implements SessionRecorder {
   }
 
   get metadataSnapshot(): SessionMetadata {
-    return { ...this.metadata, referencedModelIds: [...this.metadata.referencedModelIds] }
+    // Core 可直接记录模型回合；没有独立 user-input 时，标题和末条输入与冷恢复共用同一投影。
+    const labels = !this.metadata.title && this.messages.length ? sessionUserTextMetadata(this.messages) : undefined
+    return { ...this.metadata, ...labels, referencedModelIds: [...this.metadata.referencedModelIds] }
   }
 
   /** 所有可见事件写稳后，把派生列表缓存封存在同一 transcript 边界。 */
@@ -787,7 +789,7 @@ export class SessionJournal implements SessionRecorder {
       }
       this.btwConversationState = null
       for (const pending of this.pendingBtwInputs.values()) pending.invalidated = true
-      const clipped = clip(text)
+      const clipped = clipSessionText(text)
       this.metadata.lastUserText = clipped
       if (!this.metadata.title) this.metadata.title = clipped
       this.metadata.updatedAt = input.timestamp
@@ -1338,7 +1340,7 @@ export class SessionJournal implements SessionRecorder {
         await this.appendEntries([restored, discarded], true)
         updatedAt = discarded.timestamp
         this.deletePendingInputs(replacesRestoredInputIds)
-        this.metadata.lastUserText = clip(this.latestPendingOrVisibleUserText())
+        this.metadata.lastUserText = clipSessionText(this.latestPendingOrVisibleUserText())
       } else {
         await this.appendEntries([restored])
       }
@@ -1363,7 +1365,7 @@ export class SessionJournal implements SessionRecorder {
       const discarded = this.entry({ type: 'user-input-discarded', inputIds })
       await this.appendEntries([discarded])
       this.deletePendingInputs(inputIds)
-      this.metadata.lastUserText = clip(this.latestPendingOrVisibleUserText())
+      this.metadata.lastUserText = clipSessionText(this.latestPendingOrVisibleUserText())
       this.metadata.updatedAt = discarded.timestamp
       this.metadata.status = this.activeTurnId || this.activeConsensusTaskId
         ? 'running'
@@ -1689,7 +1691,7 @@ export class SessionJournal implements SessionRecorder {
       turnEditViewEvent(transaction.input, taskState, this.viewEvents, transaction.messages),
     )
     this.viewEventTimestamps.push(transaction.input.timestamp, transaction.input.timestamp)
-    const clipped = clip(transaction.input.text)
+    const clipped = clipSessionText(transaction.input.text)
     this.metadata.lastUserText = clipped
     if (!this.metadata.title) this.metadata.title = clipped
     this.metadata.updatedAt = transaction.input.timestamp
@@ -1739,7 +1741,7 @@ export class SessionJournal implements SessionRecorder {
   private async refreshMetadataCache(questionsChanged = true): Promise<void> {
     if (questionsChanged) this.metadata.hasPendingQuestions = availableQuestions(pendingUserQuestions(this.messages), this.pendingUserInputMap.values()).length > 0
     try {
-      await writeMetadata(this.paths.metadata, this.metadata)
+      await writeMetadata(this.paths.metadata, this.metadataSnapshot)
     } catch {
       await removeMetadataCache(this.paths.metadata).catch(() => {})
     }
@@ -1963,11 +1965,6 @@ function turnEditViewEvent(
       taskPlan: taskPlanViewBeforeTurn(viewEvents, input.replacesTurnId, taskState),
     },
   }
-}
-
-function clip(text: string): string {
-  const flat = text.replaceAll(/\s+/g, ' ').trim()
-  return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat
 }
 
 function isNotFound(error: unknown): boolean {

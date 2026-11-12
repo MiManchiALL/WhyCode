@@ -25,7 +25,7 @@ export interface CompactOptions {
   applicationContext?: string
   prepareMessagesForModel?: (messages: ModelMessage[]) => ModelMessage[] | Promise<ModelMessage[]>
   providerOptions?: ProviderMetadata
-  onStart?: () => void
+  onSummaryRequest?: () => void
   onRetry?: (retry: ModelRequestRetry) => void
 }
 type SummaryKind = 'history' | 'turn-prefix'
@@ -38,7 +38,6 @@ export async function compactMessages(options: CompactOptions): Promise<CompactR
   let preparation = prepareCompaction(conversation, tailBudget, options.mode === 'manual')
   if (!preparation) return { messages: [...messages], summaryText: '' }
   options.abortSignal.throwIfAborted()
-  options.onStart?.()
   const totalBudget = Math.min(12_000, capabilities.maxOutput,
     Math.max(512, Math.floor((capabilities.contextWindow - Math.min(capabilities.maxOutput, 20_000)) * 0.08)))
   let historySummary: string | null = null
@@ -105,6 +104,8 @@ async function summarizeSource(
   })) as ToolSet | undefined
   const prepared = options.prepareMessagesForModel ? await options.prepareMessagesForModel(input) : input
   const prompt = kind === 'history' ? COMPACT_HISTORY_SUMMARY_PROMPT : COMPACT_TURN_PREFIX_SUMMARY_PROMPT
+  options.abortSignal.throwIfAborted()
+  options.onSummaryRequest?.()
   const result = await withModelRequestRetry(() => generateText({
     // 沿用普通请求的默认选择方式；Anthropic SDK 会在 none 下删除工具声明。
     model: options.model, maxRetries: 0, tools, maxOutputTokens: outputBudget,

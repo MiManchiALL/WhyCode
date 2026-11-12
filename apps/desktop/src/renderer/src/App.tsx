@@ -66,6 +66,7 @@ import { ComposerActionButton } from './composer-action-button.tsx'
 import { QuestionCard } from './question-card.tsx'
 import { ProcessingTime } from './processing-time.ts'
 import { ConversationView } from './conversation-view.tsx'
+import { prepareBottomFileChanges, type ResponseFileChangesResult } from './response-file-changes-data.ts'
 import { prependConversationHistory, restoreConversationSnapshot } from '../../shared/conversation-history.ts'
 import { useConversationHistory } from './use-conversation-history.ts'
 import { ConversationNavigator } from './conversation-navigator.tsx'
@@ -187,6 +188,7 @@ import type { CheckpointRestoreRequest } from './checkpoint-restore-controls.ts'
 export function App() {
   const [runtimeId, setRuntimeId] = useState('')
   const [view, setView] = useState(() => createConversationState())
+  const [initialFileChanges, setInitialFileChanges] = useState<ResponseFileChangesResult>()
   const [input] = useState(() => new ComposerText())
   const [codeReferences] = useState(() => new ComposerCodeReferences())
   const codeItems = useSyncExternalStore(codeReferences.subscribe, codeReferences.getSnapshot)
@@ -308,7 +310,13 @@ export function App() {
     scroller.scrollTop = followedBottom.current
   }, [])
   const [showJumpBottom, setShowJumpBottom] = useState(false)
+  const releaseConversationScroll = useCallback(() => {
+    const release = conversationScrollReleaseRef.current
+    conversationScrollReleaseRef.current = null
+    release?.()
+  }, [])
   const recentlyScrolledAway = useScrollIntent(scrollRef, () => {
+    if (followedBottom.current !== null) releaseConversationScroll()
     followedBottom.current = null
     pendingScrollRestoreRef.current = null
   }, !loadingConversation)
@@ -346,11 +354,6 @@ export function App() {
     () => presentBtwConversations(sections, view.expanded),
     [sections, view.expanded],
   )
-  const releaseConversationScroll = useCallback(() => {
-    const release = conversationScrollReleaseRef.current
-    conversationScrollReleaseRef.current = null
-    release?.()
-  }, [])
   useEffect(() => releaseConversationScroll, [releaseConversationScroll])
   const scrollToConversation = useCallback((targetId: string | HTMLElement, alignment: ConversationScrollAlignment = 'start') => {
     const scroller = scrollRef.current
@@ -599,12 +602,17 @@ export function App() {
     if (promoted) return composerDraftsRef.current.move(composerDraftKey(ownerRuntimeId, null), sessionId)
   }, [composerSubmissions])
 
-  const prepareComposer = useCallback(async (snapshot: RuntimeSnapshot) => {
+  const prepareConversation = useCallback(async (snapshot: RuntimeSnapshot) => {
     await bindComposerSession(snapshot.runtimeId, snapshot.sessionId)
     const key = composerDraftKey(snapshot.runtimeId, snapshot.sessionId)
     if (runtimeIdRef.current && key === composerDraftKey(runtimeIdRef.current, sessionIdRef.current)) return
     // 待确认输入只在磁盘中用于崩溃恢复；切回时输入框仍展示提交之后新写的草稿。
-    if (!composerSubmissions.getSnapshot().has(snapshot.runtimeId)) await composerDraftsRef.current.load(key)
+    const presentation = conversationPresentationsRef.current.get(composerKey(snapshot.runtimeId, snapshot.sessionId))
+    const [changes] = await Promise.all([
+      prepareBottomFileChanges(snapshot.runtimeId, snapshot.history.view.blocks, presentation),
+      composerSubmissions.getSnapshot().has(snapshot.runtimeId) ? undefined : composerDraftsRef.current.load(key),
+    ])
+    return changes
   }, [bindComposerSession, composerSubmissions])
 
   const setComposerSessionId = useCallback((sessionId: string | null) => {
@@ -805,12 +813,17 @@ export function App() {
   }, [updateRightPanelState])
   const panelLayout = usePanelLayout(rightPanelState.open, changePanelOpen)
 
-  const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot) => {
+  const applyRuntimeSnapshot = useCallback((snapshot: RuntimeSnapshot, initialChanges?: ResponseFileChangesResult) => {
     const previousRuntimeId = runtimeIdRef.current
     const previousSessionId = sessionIdRef.current
     const changingRuntime = previousRuntimeId !== snapshot.runtimeId
     const changingSession = previousSessionId !== snapshot.sessionId
     if (changingRuntime) {
+      setInitialFileChanges(initialChanges)
+      if (initialChanges?.state.status === 'ready') {
+        conversationPresentationsRef.current.saveFileChanges(composerKey(snapshot.runtimeId, snapshot.sessionId),
+          initialChanges.checkpoints, initialChanges.state.changes)
+      }
       stashActiveComposer()
       if (!resumingSessionIdRef.current) stashActivePresentation()
     }
@@ -944,9 +957,9 @@ export function App() {
       const snapshot = await window.whycode.runtimeSnapshot()
       if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
       if (resumeTargetCommitted(snapshot, targetSessionId)) {
-        await prepareComposer(snapshot)
+        const changes = await prepareConversation(snapshot)
         if (resumeRequestRef.current || resumingSessionIdRef.current !== targetSessionId) return
-        applyRuntimeSnapshot(snapshot)
+        applyRuntimeSnapshot(snapshot, changes)
         void window.whycode.consensusStatus().then(setConsensus)
         void refreshSessions()
         void refreshModelCatalog()
@@ -965,7 +978,7 @@ export function App() {
   }, [
     showError,
     applyRuntimeSnapshot,
-    prepareComposer,
+    prepareConversation,
     refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
@@ -1367,9 +1380,9 @@ export function App() {
       }
     })
     void eventSubscription.ready.then(() => window.whycode.runtimeSnapshot()).then(async (snapshot) => {
-      await prepareComposer(snapshot)
+      const changes = await prepareConversation(snapshot)
       if (disposed) return
-      applyRuntimeSnapshot(snapshot)
+      applyRuntimeSnapshot(snapshot, changes)
       hydrated = true
       const pendingEvents = runtimeEventsAfterSnapshot(
         buffered.splice(0),
@@ -1391,7 +1404,7 @@ export function App() {
     applyRuntimeSnapshot,
     bindComposerSession,
     draftStorageError,
-    prepareComposer,
+    prepareConversation,
     setComposerSessionId,
     consumeEvent,
     refreshModelCatalog,
@@ -1451,10 +1464,11 @@ export function App() {
     const distance = bottom - el.scrollTop
     const nearBottom = distance < 60
     const following = nearBottom && (!recentlyScrolledAway() || distance <= 1)
+    if (!following && followedBottom.current !== null) releaseConversationScroll()
     followedBottom.current = following ? bottom : null
     setShowJumpBottom(!following)
     if (!nearBottom && el.scrollTop <= el.clientHeight) void history.loadOlder()
-  }, [history.loadOlder, recentlyScrolledAway, scrollToEnd])
+  }, [history.loadOlder, recentlyScrolledAway, releaseConversationScroll, scrollToEnd])
 
   const jumpToBottom = useCallback(() => {
     history.cancel()
@@ -1565,14 +1579,14 @@ export function App() {
       if (replacedDraft === runtimeIdRef.current) await persistComposerRef.current()
       await composerDraftsRef.current.move(composerDraftKey(replacedDraft, null), composerDraftKey(result.snapshot.runtimeId, null))
     }
-    await prepareComposer(result.snapshot)
-    applyRuntimeSnapshot(result.snapshot)
+    const changes = await prepareConversation(result.snapshot)
+    applyRuntimeSnapshot(result.snapshot, changes)
     if (replacedDraft) void composerDraftsRef.current.delete(composerDraftKey(replacedDraft, null)).catch(draftStorageError)
     void window.whycode.consensusStatus().then(setConsensus)
     void refreshSessions()
     void refreshModelCatalog()
     return true
-  }, [showError, applyRuntimeSnapshot, prepareComposer, refreshModelCatalog, refreshSessions, draftStorageError])
+  }, [showError, applyRuntimeSnapshot, prepareConversation, refreshModelCatalog, refreshSessions, draftStorageError])
 
   const pickProject = useCallback((projectId?: string) => {
     if (projectId === 'ssh') {
@@ -1690,9 +1704,9 @@ export function App() {
         showError(result.error)
         return
       }
-      await prepareComposer(result.snapshot)
+      const changes = await prepareConversation(result.snapshot)
       if (resumeRequestRef.current !== request) return
-      applyRuntimeSnapshot(result.snapshot)
+      applyRuntimeSnapshot(result.snapshot, changes)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
       void refreshModelCatalog()
@@ -1709,7 +1723,7 @@ export function App() {
   }, [
     showError,
     applyRuntimeSnapshot,
-    prepareComposer,
+    prepareConversation,
     refreshModelCatalog,
     refreshSessions,
     setResumingSessionId,
@@ -1736,10 +1750,10 @@ export function App() {
       const stillViewingTarget = () => sessionIdRef.current === sessionId
         && !resumingSessionIdRef.current && !sessionTransitionPendingRef.current
       if (result.deletedCurrent && result.snapshot && stillViewingTarget()) {
-        await prepareComposer(result.snapshot)
+        const changes = await prepareConversation(result.snapshot)
         // 清理可能持续数秒，完成时只替换仍停留在删除目标上的视图。
         if (stillViewingTarget()) {
-          applyRuntimeSnapshot(result.snapshot)
+          applyRuntimeSnapshot(result.snapshot, changes)
           void window.whycode.consensusStatus().then(setConsensus)
         }
       }
@@ -1764,7 +1778,7 @@ export function App() {
     }
   }, [
     applyRuntimeSnapshot,
-    prepareComposer,
+    prepareConversation,
     draftStorageError,
     refreshSessions,
     history.cancel,
@@ -1818,8 +1832,8 @@ export function App() {
         showError(result.error)
         return
       }
-      await prepareComposer(result.snapshot)
-      applyRuntimeSnapshot(result.snapshot)
+      const changes = await prepareConversation(result.snapshot)
+      applyRuntimeSnapshot(result.snapshot, changes)
       void window.whycode.consensusStatus().then(setConsensus)
       void refreshSessions()
       void refreshModelCatalog()
@@ -1830,7 +1844,7 @@ export function App() {
   }, [
     showError,
     applyRuntimeSnapshot,
-    prepareComposer,
+    prepareConversation,
     beginSessionTransition,
     endSessionTransition,
     refreshModelCatalog,
@@ -2323,7 +2337,8 @@ export function App() {
   const markdownViewOwner = useMemo(() => ({
     key: panelSessionKey,
     cache: conversationPresentationsRef.current,
-  }), [panelSessionKey])
+    initialFileChanges,
+  }), [panelSessionKey, initialFileChanges])
   return (
     <ConversationFeedbackContext value={showConversationFeedback}>
     <div

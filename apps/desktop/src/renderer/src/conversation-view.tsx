@@ -141,7 +141,8 @@ export const ConversationView = memo(function ConversationView(props: Conversati
   return (
     <>
       {pending && <SessionLoading />}
-      <div hidden={pending} inert={props.active === false}>
+      <div className={pending ? 'wc-conversation-leaving' : undefined}
+        aria-hidden={pending || undefined} inert={pending || props.active === false}>
         <ConversationContents {...contents} />
         {children}
       </div>

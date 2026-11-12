@@ -1230,14 +1230,7 @@ async function handleCommand(
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
-      if (runtime.attachmentPreparationInProgress) return { ok: false, error: '附件消息准备中，请等待提交完成后再压缩' }
-      if (!runtime.session && !runtime.journal) {
-        return { ok: false, error: '还没有对话，无需压缩' }
-      }
-      const error = await ensureSession(runtime)
-      if (error) return { ok: false, error }
-      await runtime.session!.compactNow()
-      break
+      return runtime.compact(() => ensureSession(runtime))
     }
     case 'set-model': {
       if (settingsMutationInProgress) {
@@ -2338,13 +2331,11 @@ async function forkSession(value: unknown): Promise<ForkSessionResult> {
       error: error instanceof Error ? error.message : String(error),
     }
   }
-  if (sessionDeletionLock.busy || sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
-    return {
-      ok: false,
-      error: sessionDeletionLock.busy
-        ? '会话数据删除中，请等待完成后再创建分支'
-        : sessionPreparationInProgressMessage('创建会话分支'),
-    }
+  if (sessionDeletionLock.blocksSession(request.sourceSessionId)) {
+    return { ok: false, error: '源会话正在删除，无法创建分支' }
+  }
+  if (sessionPreparationLock.sessionId || sessionNavigation.sessionId) {
+    return { ok: false, error: sessionPreparationInProgressMessage('创建会话分支') }
   }
   const sourceRuntime = runtimeRegistry.findBySessionId(request.sourceSessionId)
   const release = sessionPreparationLock.acquire(request.sourceSessionId, 'fork')
@@ -2666,10 +2657,10 @@ function pendingInputs(
 
 async function deleteSession(sessionId: string, options: DeleteSessionOptions): Promise<DeleteSessionResult> {
   const targetRuntime = runtimeRegistry.findBySessionId(sessionId)
+  const preparingTarget = sessionPreparationLock.sessionId === sessionId || sessionNavigation.sessionId === sessionId
   if (
     sessionDeletionLock.blocksSession(sessionId)
-    || sessionPreparationLock.sessionId
-    || sessionNavigation.sessionId
+    || preparingTarget
     || mcpOAuthController.isAuthorizing()
     || targetRuntime?.busy
   ) {
@@ -2677,7 +2668,7 @@ async function deleteSession(sessionId: string, options: DeleteSessionOptions): 
       ok: false,
       error: sessionDeletionLock.blocksSession(sessionId)
         ? '此会话正在删除，请等待完成'
-        : sessionPreparationLock.sessionId || sessionNavigation.sessionId
+        : preparingTarget
           ? sessionPreparationInProgressMessage('删除会话')
         : mcpOAuthController.isAuthorizing()
           ? mcpOAuthInProgressMessage('删除会话')

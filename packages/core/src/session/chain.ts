@@ -139,7 +139,7 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
     entry.type === 'user-input-discarded' ? entry.inputIds : []))
   const recordedInputs = entries.flatMap((entry) =>
     entry.type === 'user-input' && !discardedInputIds.has(entry.uuid) ? [entry.text] : [])
-  const userTexts = recordedInputs.length > 0 ? recordedInputs : messages.flatMap(userText)
+  const userTextMetadata = sessionUserTextMetadata(messages, recordedInputs)
   const createdAt = start.forkOrigin?.createdAt ?? start.timestamp
 
   return {
@@ -177,8 +177,8 @@ export function buildLoadedSession(entries: SessionEntry[]): LoadedSession {
       referencedModelIds: [...new Set(entries.flatMap((entry) =>
         'modelId' in entry ? [entry.modelId] : []))],
       reasoningEffort: modelSelection.reasoningEffort,
-      title: start.title ?? clip(userTexts[0] ?? ''),
-      lastUserText: clip(userTexts.at(-1) ?? ''),
+      title: start.title ?? userTextMetadata.title,
+      lastUserText: userTextMetadata.lastUserText,
       createdAt,
       updatedAt: last.timestamp > createdAt ? last.timestamp : createdAt,
       status,
@@ -1291,6 +1291,11 @@ function deriveStatus(
   return 'idle'
 }
 
+export function sessionUserTextMetadata(messages: readonly ModelMessage[], recordedInputs: readonly string[] = []) {
+  const texts = recordedInputs.length ? recordedInputs : messages.flatMap(userText)
+  return { title: clipSessionText(texts[0] ?? ''), lastUserText: clipSessionText(texts.at(-1) ?? '') }
+}
+
 function userText(message: ModelMessage): string[] {
   if (message.role !== 'user' || isProjectInstructionsMessage(message)) return []
   if (typeof message.content === 'string') return [message.content]
@@ -1308,7 +1313,7 @@ function nextSemanticChild(
   return child
 }
 
-function clip(text: string): string {
+export function clipSessionText(text: string): string {
   const flat = text.replaceAll(/\s+/g, ' ').trim()
   return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat
 }

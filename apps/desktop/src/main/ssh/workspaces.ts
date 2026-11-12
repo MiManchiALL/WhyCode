@@ -6,6 +6,7 @@ import type { SessionScratchPaths } from '../session-scratch.ts'
 import type { DesktopSessionRuntime } from '../desktop-session-runtime.ts'
 import { SshConnections, type ConnectedHost } from './connections.ts'
 import { SshConnectionMissingError } from './store.ts'
+import { removeRemoteDirectory } from './provision.ts'
 import type { TerminalPty } from '../terminal-sessions.ts'
 import type { RemoteCleanupFailure } from '../../shared/session.ts'
 import { sshMessageUnavailableReason } from '../../shared/ssh.ts'
@@ -82,13 +83,13 @@ export class SshWorkspaces {
     return this.removeScratchOnTarget(sessionId, workspace.target)
   }
   private async removeScratchOnTarget(sessionId: string, target: string): Promise<void> {
-    return this.connections.connectionIdForTarget(target).then(id => this.connections.withFiles(id, async (fs, home) => {
+    return this.connections.connectionIdForTarget(target).then(id => this.connections.withFiles(id, async (fs, home, client) => {
       const { rootDirectory } = sshScratchPaths(home, sessionId)
       const parent = posix.dirname(rootDirectory)
       const canonical = await fs.realpath(parent).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
       if (canonical === null) return
       if (canonical !== parent) throw new Error('远端临时目录不能经过符号链接，已保留文件')
-      await fs.rm(rootDirectory, { recursive: true, force: true })
+      await removeRemoteDirectory(client, rootDirectory)
       await fs.rmdir(parent).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error
       })

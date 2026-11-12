@@ -188,8 +188,7 @@ function RightPanelContent(props: RightPanelProps & { directories: WorkspaceDire
       return <TerminalPanel key={page.terminal.id} terminal={page.terminal} active={props.active} />
     case 'file':
       return props.active ? (
-        <MarkdownNavigation baseDir={resolveWorkspaceFilePath('..', page.path)} onOpenFile={props.onOpenPage}
-          onOpenWeb={url => openBrowser(props, url)}>
+        <MarkdownNavigation baseDir={resolveWorkspaceFilePath('..', page.path)} onOpenFile={props.onOpenPage}>
           <RightPanelFilePreview
             key={filePageKey(props.runtimeId, page)}
             runtimeId={props.runtimeId}
@@ -237,7 +236,6 @@ function openWorkspace(props: RightPanelProps): void {
   props.onOpenPage(existing?.page ?? { kind: 'workspace', expanded: [] })
 }
 
-function openBrowser(props: RightPanelProps, url = 'about:blank'): void {
-  const existing = url !== 'about:blank' && props.state.tabs.find(tab => tab.page.kind === 'browser' && tab.page.url === url)
-  props.onOpenPage(existing ? existing.page : { kind: 'browser', id: crypto.randomUUID(), url, title: '' })
+function openBrowser(props: RightPanelProps): void {
+  props.onOpenPage({ kind: 'browser', id: crypto.randomUUID(), url: 'about:blank', title: '' })
 }

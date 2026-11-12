@@ -13,15 +13,21 @@ export function execChannel(client: Client, command: string): Promise<ClientChan
   return new Promise((resolve, reject) => client.exec(command, (error, channel) => error ? reject(error) : resolve(channel)))
 }
 
-/** 大型受管环境在服务器删除，避免逐文件 SFTP 往返；调用方先验证归属。 */
 export async function removeRemoteEnvironment(client: Client, directory: string): Promise<void> {
   if (!posix.isAbsolute(directory) || !directory.endsWith('/.cache/whycode-remote/office') || posix.normalize(directory) !== directory) throw new Error('远端环境清理路径无效')
+  return removeRemoteDirectory(client, directory)
+}
+
+/** 路径归属由调用方验证。让服务器遍历目录树，SSH 往返次数与文件数无关。 */
+export async function removeRemoteDirectory(client: Client, directory: string): Promise<void> {
   const channel = await execChannel(client, `rm -rf -- ${quoteShell(directory)}`)
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => { channel.close(); reject(new Error('远端运行环境清理超时，可重试清理')) }, 120_000)
-    channel.resume(); channel.stderr.resume()
+    const timer = setTimeout(() => { reject(new Error('远端目录清理超时，可重试清理')); channel.close() }, 120_000)
+    let diagnostic = ''
+    channel.resume()
+    channel.stderr.setEncoding('utf8').on('data', (text: string) => { diagnostic = (diagnostic + text).slice(-1024) })
     channel.once('error', (error: Error) => { clearTimeout(timer); reject(error) })
-    channel.once('close', (code: number) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('远端运行环境清理失败')) })
+    channel.once('close', (code: number) => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(diagnostic.trim() || '远端目录清理失败')) })
   })
 }
 

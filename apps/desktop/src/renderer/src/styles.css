@@ -1653,17 +1653,7 @@ button.wc-compaction-summary:hover:enabled {
   text-decoration-color: currentColor;
 }
 
-.wc-markdown .wc-document-web-link {
-  padding-inline-start: 0.45em;
-  color: var(--wc-blue-ink);
-  text-decoration: none;
-}
-
-.wc-document-web-link::before {
-  content: none;
-}
-
-.wc-markdown :is(.wc-file-link, .wc-document-web-link):is(:hover, :focus-visible) {
+.wc-markdown .wc-file-link:is(:hover, :focus-visible) {
   border-color: var(--wc-blue-ink);
   background: var(--wc-blue);
 }
@@ -2026,6 +2016,15 @@ button.wc-compaction-summary:hover:enabled {
 .wc-session-loading {
   animation: wc-session-loading-reveal 0s 250ms backwards,
     wc-session-loading-shine 3s 250ms ease-in-out infinite;
+}
+
+/* 快速切换保留原来的只读画面；慢切换在同一时刻交给加载提示。 */
+.wc-conversation-leaving {
+  animation: wc-conversation-leave 0s 250ms forwards;
+}
+
+@keyframes wc-conversation-leave {
+  to { visibility: hidden; }
 }
 
 @keyframes wc-session-loading-reveal {

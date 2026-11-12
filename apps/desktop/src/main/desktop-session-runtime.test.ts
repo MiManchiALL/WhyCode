@@ -1,12 +1,39 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { localWorkspace, toViewEvent, type AgentSession, type CoreEvent } from '@whycode/core'
+import { AgentSession, localWorkspace, toViewEvent, type CoreEvent } from '@whycode/core'
 import { applyCoreEvent, createConversationState } from '../shared/conversation-state.ts'
 import { pendingManagedWorkspace, pendingWorktreeWorkspace } from '../shared/workspace.ts'
 import { DesktopSessionRuntime } from './desktop-session-runtime.ts'
 import { routeUserMessage } from './user-message-routing.ts'
+import { deferred, languageModel, modelEntry } from './subagent-test-fixture.ts'
 
 describe('提交期间停止', () => {
+  for (const stopped of [true, false]) it(`手动压缩在准备前显示，准备${stopped ? '取消' : '失败'}收束同一横条`, async () => {
+    const events: CoreEvent[] = []
+    const runtime = new DesktopSessionRuntime({
+      workspace: localWorkspace('C:\\WhyCode'), modelId: 'test:model', emit: (_runtime, event) => events.push(event),
+    })
+    runtime.session = new AgentSession({
+      model: modelEntry(languageModel(async () => assert.fail('准备未完成不应请求模型'))),
+      providerConfig: { apiKey: 'test' }, promptContext: { projectDir: 'C:\\WhyCode', osPlatform: 'win32' },
+      requestApproval: async () => ({ approved: true }), emit: event => runtime.emit(event),
+    })
+    const prepared = deferred<string | null>()
+    const compacting = runtime.compact(() => prepared.promise)
+    assert.equal(runtime.busy, true)
+    const progress = () => events.filter(event => event.type === 'context-compaction')
+    assert.deepEqual(progress().map(event => event.status), ['running'])
+    const stopping = stopped ? runtime.abort() : undefined
+    prepared.resolve('准备失败')
+    assert.deepEqual(await compacting, stopped ? { ok: true } : { ok: false, error: '准备失败' })
+    await stopping
+    assert.deepEqual(progress().map(event => event.status), ['running', stopped ? 'stopped' : 'failed'])
+    assert.equal(progress()[0]!.compactionId, progress()[1]!.compactionId)
+    assert.equal(runtime.busy, false)
+    assert.equal(runtime.status, 'idle')
+    await runtime.dispose()
+  })
+
   it('会话尚未初始化时的停止等待消息交付，不会被随后启动的 Agent 遗漏', async () => {
     const events: CoreEvent[] = []
     const calls: string[] = []

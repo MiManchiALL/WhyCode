@@ -48,7 +48,6 @@ export function MarkdownAnchor({
 export interface FileLinkNavigation {
   baseDir: string
   onOpenFile: (page: Extract<RightPanelPage, { kind: 'file' }>) => void
-  onOpenWeb?: (url: string) => void
 }
 
 export function MarkdownFileLink({ path, line, endLine, baseDir, onOpenFile, children }:
