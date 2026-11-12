@@ -16,8 +16,8 @@ export async function copyForkAttachments(
   ])
   if (storageNames.size === 0) return
   await mkdir(target.attachments, { recursive: true, mode: 0o700 })
-  await Promise.all([...storageNames].map((storageName) =>
-    copyFile(join(source.attachments, storageName), join(target.attachments, storageName))))
+  await writeForkResources([...storageNames], storageName =>
+    copyFile(join(source.attachments, storageName), join(target.attachments, storageName)))
 }
 
 export async function copyForkCheckpoints(
@@ -42,18 +42,24 @@ export async function copyForkCheckpoints(
 
   const targetStore = new CheckpointManifestStore(target.checkpoints)
   const blobHashes = new Set<string>()
-  for (const manifest of manifests) {
+  await writeForkResources(manifests, manifest => {
     collectManifestBlobs(manifest, blobHashes)
-    await targetStore.put(rehomeCheckpointManifest(
-      manifest,
-      targetSessionId,
-      rebase,
-    ))
-  }
+    return targetStore.put(rehomeCheckpointManifest(manifest, targetSessionId, rebase))
+  })
   if (blobHashes.size === 0) return
   await mkdir(targetStore.blobDir, { recursive: true, mode: 0o700 })
-  await Promise.all([...blobHashes].map((hash) =>
-    copyFile(join(sourceStore.blobDir, hash), join(targetStore.blobDir, hash))))
+  await writeForkResources([...blobHashes], hash =>
+    copyFile(join(sourceStore.blobDir, hash), join(targetStore.blobDir, hash)))
+}
+
+// 限制同时写入的文件数，出错时等本批关闭文件后再回收暂存目录。
+async function writeForkResources<T>(items: readonly T[], write: (item: T) => Promise<void>): Promise<void> {
+  const batchSize = 8
+  for (let i = 0; i < items.length; i += batchSize) {
+    const results = await Promise.allSettled(items.slice(i, i + batchSize).map(write))
+    const failure = results.find(result => result.status === 'rejected')
+    if (failure) throw failure.reason
+  }
 }
 
 function rehomeCheckpointManifest(

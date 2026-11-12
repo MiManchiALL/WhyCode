@@ -2013,13 +2013,17 @@ button.wc-compaction-summary:hover:enabled {
 
 }
 
-.wc-session-loading {
+.wc-shimmer-text {
   color: var(--wc-muted);
   background: linear-gradient(110deg, var(--wc-muted) 35%, #fff 50%, var(--wc-muted) 65%);
   background-size: 250% 100%;
   background-position: 150% 0;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  animation: wc-session-loading-shine 3s ease-in-out infinite;
+}
+
+.wc-session-loading {
   animation: wc-session-loading-reveal 0s 250ms backwards,
     wc-session-loading-shine 3s 250ms ease-in-out infinite;
 }
@@ -2034,10 +2038,13 @@ button.wc-compaction-summary:hover:enabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wc-session-loading {
-    animation-name: wc-session-loading-reveal;
+  .wc-shimmer-text {
+    animation: none;
     background: none;
     -webkit-text-fill-color: currentColor;
+  }
+  .wc-session-loading {
+    animation: wc-session-loading-reveal 0s 250ms backwards;
   }
 }
 

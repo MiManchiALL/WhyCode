@@ -8,6 +8,22 @@ import {
 } from './conversation-scroll.ts'
 
 describe('会话滚动锚定', () => {
+  it('恢复贴底时保留实际定位的底部，即使离屏内容在设置 scrollTop 后展开', () => {
+    const { document } = parseHTML('<main></main>')
+    const scroller = document.querySelector<HTMLElement>('main')!
+    let scrollTop = 0
+    let height = 1200
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 400 },
+      scrollHeight: { get: () => height },
+      scrollTop: { get: () => scrollTop, set: (top: number) => { scrollTop = top; height = 1800 } },
+    })
+    const restored = restoreConversationScrollPosition({ atBottom: true, scrollTop: 0 }, scroller)
+    assert.deepEqual(restored.position, { atBottom: true, scrollTop: 800 })
+    assert.equal(scroller.scrollTop, 800)
+    restored.release()
+  })
+
   it('定位工具区元素时同时揭示内层滚动目标，不接受其它会话的节点', () => {
     const { document } = parseHTML(`<main><div>
       <section class="wc-completed-work-section" data-conversation-scroll-section="work">

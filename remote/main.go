@@ -66,6 +66,17 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if len(os.Args) != 4 || os.Args[1] != "copy-scratch" {
+			fmt.Fprintln(os.Stderr, "invalid scratch copy arguments")
+			os.Exit(2)
+		}
+		if err := copyScratch(os.Args[2], os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	s := &server{tasks: make(map[string]*task), output: make(chan response, 64), control: make(chan response, 64), closing: make(chan struct{})}
 	s.lastPing.Store(time.Now().Unix())
 	go s.write()

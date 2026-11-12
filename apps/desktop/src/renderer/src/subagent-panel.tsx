@@ -277,7 +277,6 @@ function SubagentTranscript({
             checkpointRestoreToolUseId={null}
             fileRollbackBoundaryTurnId={view.fileRollbackBoundaryTurnId}
             forkSourceTurnId={null}
-            forkPendingTurnId={null}
             skills={skills}
             projectDir={projectDir}
             onCheckpointRestoreRequest={async () => false}

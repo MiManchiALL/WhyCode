@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, Split, LoaderCircle, Pencil } from 'lucide-react'
+import { Check, Copy, Split, Pencil } from 'lucide-react'
 import { useConversationFeedback } from './conversation-feedback.tsx'
 
 const MESSAGE_TIME = new Intl.DateTimeFormat(undefined, {
@@ -14,7 +14,6 @@ export function MessageActions({
   editable = false,
   onEdit,
   onFork,
-  forkPending = false,
   className = '',
 }: {
   timestamp?: string
@@ -22,7 +21,6 @@ export function MessageActions({
   editable?: boolean
   onEdit?: () => void
   onFork?: () => void
-  forkPending?: boolean
   className?: string
 }) {
   return (
@@ -45,13 +43,12 @@ export function MessageActions({
       {onFork ? (
         <button
           type="button"
-          className="wc-focus-ring rounded-md p-0.5 hover:text-[var(--wc-ink)] disabled:opacity-40"
-          disabled={forkPending}
+          className="wc-focus-ring rounded-md p-0.5 hover:text-[var(--wc-ink)]"
           title="在新对话中继续"
           aria-label="在新对话中继续"
           onClick={onFork}
         >
-          {forkPending ? <LoaderCircle size={14} className="animate-spin" /> : <Split size={14} className="rotate-90" />}
+          <Split size={14} className="rotate-90" />
         </button>
       ) : null}
     </div>
