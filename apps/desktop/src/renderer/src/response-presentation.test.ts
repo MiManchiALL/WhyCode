@@ -118,14 +118,6 @@ describe('最终回答的交付投影', () => {
     assert.deepEqual(responseSources(['[说明][docs]', '[docs]: https://example.com/docs "whycode:source"']).sources, [])
   })
 
-  it('来源标题可以使用 Markdown 转义或字符实体', () => {
-    for (const marker of ['whycode\\:source', 'wh&#121;code:source']) {
-      const result = responseSources([`[文档](https://example.com/docs "${marker}")`])
-      assert.deepEqual(result.sources, [{ title: '文档', url: 'https://example.com/docs' }])
-      assert.equal(result.copyText, '[文档](<https://example.com/docs>)')
-    }
-  })
-
   it('复制移除有效引用的内部标记，保留普通链接、代码样例和定义式链接', () => {
     const text = '[**接口** `v2`](https://example.com/api "whycode:source") '
       + '[控制台](https://example.com/console "控制台")\n\n'

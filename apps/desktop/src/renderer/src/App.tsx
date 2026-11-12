@@ -163,7 +163,6 @@ import { ComposerFileChanges } from './composer-file-changes.tsx'
 import { ApprovalCard, type Approval } from './approval-card.tsx'
 import {
   applyExpandedOverrides,
-  BOTTOM_THRESHOLD_PX,
   ConversationPresentationCache,
   type ConversationScrollPosition,
 } from './conversation-presentation.ts'
@@ -1442,13 +1441,11 @@ export function App() {
       if (pendingScrollRestoreRef.current || followedBottom.current === null) return
       scrollToEnd()
       setShowJumpBottom(false)
-      // 最后一轮可能很长却处于折叠状态。首屏缺少可滚动空间时，继续补齐历史。
-      if (scrollElement.scrollHeight - scrollElement.clientHeight < BOTTOM_THRESHOLD_PX) void history.loadOlder()
     })
     observer.observe(scrollElement)
     observer.observe(contentElement)
     return () => observer.disconnect()
-  }, [resumingSessionId, scrollToEnd, history.loadOlder])
+  }, [resumingSessionId, scrollToEnd])
 
   useEffect(() => {
     if (!resumingSessionId && !pendingScrollRestoreRef.current && followedBottom.current !== null) {
@@ -1465,7 +1462,7 @@ export function App() {
       return
     }
     const distance = bottom - el.scrollTop
-    const nearBottom = distance < BOTTOM_THRESHOLD_PX
+    const nearBottom = distance < 60
     const following = nearBottom && (!recentlyScrolledAway() || distance <= 1)
     if (!following && followedBottom.current !== null) releaseConversationScroll()
     followedBottom.current = following ? bottom : null
