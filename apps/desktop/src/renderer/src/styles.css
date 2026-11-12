@@ -2035,9 +2035,17 @@ button.wc-compaction-summary:hover:enabled {
     inset: 0;
     z-index: 1;
     pointer-events: none;
-    background: color-mix(in srgb, var(--wc-surface) 82%, transparent);
+    background: var(--wc-surface);
     opacity: 0;
-    animation: wc-fade-out 180ms ease-out;
+    transition: opacity var(--wc-motion-exit) var(--wc-ease-out);
+  }
+
+  @starting-style {
+    .wc-conversation-reveal { opacity: 0.24; }
+  }
+
+  .wc-conversation-leaving .wc-conversation-reveal {
+    opacity: 0.45;
   }
 }
 

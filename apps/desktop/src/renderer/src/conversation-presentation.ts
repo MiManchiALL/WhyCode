@@ -20,7 +20,7 @@ export interface ConversationScrollAnchor {
   offset: number
 }
 
-const BOTTOM_THRESHOLD_PX = 60
+export const BOTTOM_THRESHOLD_PX = 60
 const MAX_CACHED_CONVERSATIONS = 32
 const MAX_BLOCK_PREFERENCES = 256
 const MAX_FILE_CHANGE_ROWS = 256
