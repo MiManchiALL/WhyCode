@@ -1,5 +1,5 @@
 import { PRESENT_TOOL_NAME, readPresentationResult, type Presentation } from '@whycode/core/presentation'
-import { WEB_SOURCE_CITATION_MARKER, type WebSource } from '@whycode/core/web-source'
+import type { WebSource } from '@whycode/core/web-source'
 import { createContext } from 'react'
 import type { Link } from 'mdast'
 import type { Block } from '../../shared/conversation-state.ts'
@@ -18,8 +18,6 @@ export const ResponseSourcesContext = createContext<ResponseSources | null>(null
 export function responseSources(texts: readonly string[]): ResponseSources {
   const sources = new Map<string, WebSource>()
   const copyTexts = texts.map(text => {
-    // 标题里的转义和字符实体须交给 Markdown 解码。普通正文直接复用原文。
-    if (!text.includes('[') || (!text.includes(WEB_SOURCE_CITATION_MARKER) && !/[\\&]/u.test(text))) return text
     const markdown = normalizeMathDelimiters(text)
     const citations = sourceCitations(parseMarkdown(markdown))
     if (!citations.length) return text

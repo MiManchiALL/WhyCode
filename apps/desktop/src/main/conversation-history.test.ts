@@ -6,19 +6,16 @@ import { ConversationHistoryProjection, conversationHistoryWindow } from './conv
 import { applyCoreEvent, applyViewEvent, createConversationState } from '../shared/conversation-state.ts'
 import { prependConversationHistory, restoreConversationSnapshot } from '../shared/conversation-history.ts'
 import { conversationNavigationEntries } from '../shared/conversation-navigation.ts'
-import { conversationSections, findLatestForkTurnId } from '../shared/conversation-sections.ts'
+import { conversationSections } from '../shared/conversation-sections.ts'
 
 const core = (event: Extract<ViewEvent, { type: 'core-event' }>['event']): ViewEvent => ({ type: 'core-event', event })
-function work(index: number, answer = `回答 ${index}`): ViewEvent[] {
+function work(index: number): ViewEvent[] {
   return [
     { type: 'user-message', text: `问题 ${index}`, startsTurn: true, inputId: `input-${index}` },
     core({ type: 'turn-start', turnId: `turn-${index}` }),
     core({ type: 'tool-start', toolUseId: `tool-${index}`, toolName: 'ReadFile', input: { path: 'README.md' } }),
     core({ type: 'tool-end', toolUseId: `tool-${index}`, result: `内容 ${index}`, isError: false }),
-    { type: 'step-committed', hasToolCalls: true },
-    core({ type: 'text-delta', text: answer }),
-    { type: 'step-committed', hasToolCalls: false },
-    { type: 'turn-completed' },
+    core({ type: 'text-delta', text: `回答 ${index}` }),
     core({ type: 'work-finished', durationMs: 1_000, outcome: 'completed', forkTurnId: `turn-${index}` }),
   ]
 }
@@ -46,7 +43,7 @@ describe('会话历史分页', () => {
     const last = view.blocks.at(-1)
     assert.equal(last?.kind === 'compaction' && last.index, 4)
   })
-  it('简短回答的首批最多 20 个完整工作，逐页补载与完整投影一致', () => {
+  it('首批只发最近 20 个完整工作，逐页补载与完整投影一致', () => {
     const full = createConversationState(works(65))
     let page = conversationHistoryWindow(full)
     let view = restoreConversationSnapshot(structuredClone(page.view))
@@ -62,30 +59,6 @@ describe('会话历史分页', () => {
     }
     assert.deepEqual(view, full)
     assert.equal(new Set(view.blocks.map((block) => block.id)).size, full.blocks.length)
-  })
-
-  it('长回复缩小首屏窗口，整轮可读，翻页和切回阅读位置仍可取回完整历史', () => {
-    const events = works(30)
-    const full = createConversationState([...events, ...work(30, '长'.repeat(8_000))])
-    const tail = conversationHistoryWindow(full)
-    assert.deepEqual(tail.view.blocks, full.blocks.slice(createConversationState(events).blocks.length))
-    assert.equal(tail.earlierEntries.length, 30)
-    const previous = conversationHistoryWindow(full, { before: tail.before! })
-    assert.equal(previous.view.blocks.filter(block => block.kind === 'user').length, 20)
-    const restored = conversationHistoryWindow(full, { from: previous.view.blocks[0]!.id })
-    assert.deepEqual(restored.view.blocks, [...previous.view.blocks, ...tail.view.blocks])
-  })
-
-  it('长时间工作被停止后仍可从上一条完整回复发起 Fork 和 BTW', () => {
-    const full = createConversationState([
-      ...works(22),
-      { type: 'user-message', text: '继续', startsTurn: true },
-      core({ type: 'text-delta', text: '正在处理'.repeat(2_000) }),
-      core({ type: 'work-finished', durationMs: 1_000, outcome: 'stopped', forkTurnId: null }),
-    ])
-    const tail = conversationHistoryWindow(full)
-    assert.equal(tail.earlierEntries.length, 21)
-    assert.equal(findLatestForkTurnId(conversationSections(tail.view.blocks)), 'turn-21')
   })
 
   it('一轮中的插话、工具和连续 BTW 问答保持完整分组', () => {
